@@ -3,6 +3,7 @@
 #include "core/bench/FrameStats.hpp"
 #include "core/map/TileAtlas.hpp"
 #include "core/model/Model.hpp"
+#include "core/scene/UnitBatch.hpp"
 #include "core/scene/UnitPlacement.hpp"
 #include "core/texture/Dds.hpp"
 #include "core/mesh/TerrainMesh.hpp"
@@ -36,9 +37,7 @@ public:
     void setGroundTexture(const TileAtlas& atlas);
 
     // Units to draw on the terrain. See Renderer::setUnits.
-    void setUnits(const Model& model, std::span<const UnitInstance> instances);
-    void setUnitTexture(const dds::Texture& texture);
-    void setUnitShadingTexture(const dds::Texture& texture);
+    void setUnits(std::span<const dds::Texture> textures, std::span<const UnitBatch> batches);
 
     /// Points the camera at a world position. See Renderer::focusOn.
     void focusOn(std::array<float, 3> target, float distance);

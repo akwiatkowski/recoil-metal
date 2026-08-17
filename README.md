@@ -124,10 +124,19 @@ BAR=~/projects/llm/games/forged-alliance-reborn/reference/BAR/objects3d/Units
 # --focus frames the first instance instead of the whole map, because a unit is
 # under 1% of an 8192-elmo map's width and otherwise renders as a few pixels
 ./build/recoil-metal path/to/map.smf --units $BAR/corgantbig.s3o 40 --focus
+
+# repeat --units for more models; textures shared between them upload once
+./build/recoil-metal path/to/map.smf \
+    --units $BAR/corgantbig.s3o 30 --units $BAR/armstump.s3o 60 \
+    --units $BAR/corraid.s3o 60 --focus
+# scene: 3 models, 4 textures uploaded, 2 texture binds per frame
 ```
 
-`--units <model.s3o> [count] [scale]`. Textures are resolved by the name the
-`.s3o` carries, under BAR's `unittextures/`.
+`--units <model.s3o> [count] [scale]`, repeatable. Textures are resolved by the
+name the `.s3o` carries, under BAR's `unittextures/`; models naming the same
+file share one upload, and the draws are ordered so each texture *pair* is bound
+once per frame rather than once per model — which is the unit Recoil batches on
+too. The first `--units` takes the map's start positions; the rest are scattered.
 
 ### Screenshots
 

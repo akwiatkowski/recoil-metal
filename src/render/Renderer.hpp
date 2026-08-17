@@ -4,6 +4,7 @@
 #include "core/camera/OrbitCamera.hpp"
 #include "core/map/TileAtlas.hpp"
 #include "core/model/Model.hpp"
+#include "core/scene/UnitBatch.hpp"
 #include "core/scene/UnitPlacement.hpp"
 #include "core/texture/Dds.hpp"
 #include "core/mesh/TerrainMesh.hpp"
@@ -61,22 +62,22 @@ public:
     // natively, so there is no decode or transcode step.
     void setGroundTexture(const TileAtlas& atlas);
 
-    // Uploads a model and the instances to draw it at. One instanced draw call
-    // covers every instance; the bone hierarchy is applied on the GPU by
-    // indexing a per-bone offset buffer from the vertex, which is what keeps
-    // vertices shareable across instances.
+    // Uploads several models, the instances to draw each at, and the textures
+    // they share. One instanced draw call covers every instance of a model; the
+    // bone hierarchy is applied on the GPU by indexing a per-bone offset buffer
+    // from the vertex, which is what keeps vertices shareable across instances.
     //
-    // Replaces any previously set units. An empty instance list clears them.
-    void setUnits(const Model& model, std::span<const UnitInstance> instances);
-
-    /// Optional diffuse texture for the units. Without it they shade flat grey.
-    /// Its alpha channel is the team-colour mask, not transparency.
-    void setUnitTexture(const dds::Texture& texture);
-
-    /// Optional shading texture — S3O's tex2, and the slot Supreme Commander's
-    /// `_specTeam` texture will take. Carries self-illumination and
-    /// reflectivity; without it a model is flat-lit and never shines.
-    void setUnitShadingTexture(const dds::Texture& texture);
+    // Textures are named by index into `textures`, so two models using the same
+    // file cost one upload, and the draws are ordered so each texture pair is
+    // bound once (core/scene/UnitBatch.hpp).
+    //
+    // Slot 0 is the diffuse, whose alpha is the team-colour mask; slot 1 is the
+    // shading texture — S3O's tex2, and the slot Supreme Commander's `_specTeam`
+    // will take. Either may be absent: the shader has a defined fallback for
+    // each, flat grey and flat-lit respectively.
+    //
+    // Replaces any previously set units. An empty batch list clears them.
+    void setUnits(std::span<const dds::Texture> textures, std::span<const UnitBatch> batches);
 
     // The camera is mutated by input handlers on the main thread. That is safe
     // because CAMetalDisplayLink was added to the *main* run loop, so
@@ -174,14 +175,21 @@ private:
     MTL::SamplerState* groundSampler_ = nullptr; // owned
 
     MTL::RenderPipelineState* unitPipeline_ = nullptr;  // owned
-    MTL::Texture* unitTexture_ = nullptr;      // owned; falls back to the grey block
-    MTL::Texture* unitShadingTexture_ = nullptr; // owned; null means flat-lit
-    MTL::Buffer* unitVertexBuffer_ = nullptr;  // owned
-    MTL::Buffer* unitIndexBuffer_ = nullptr;   // owned
-    MTL::Buffer* unitBoneBuffer_ = nullptr;    // owned
-    MTL::Buffer* unitInstanceBuffer_ = nullptr; // owned
-    std::size_t unitIndexCount_ = 0;
-    std::size_t unitInstanceCount_ = 0;
+
+    // One model's uploaded geometry. Held in draw order, so encodeScene walks
+    // the vector straight through and rebinds only when the pair changes.
+    struct GpuUnitBatch {
+        MTL::Buffer* vertexBuffer = nullptr;    // owned
+        MTL::Buffer* indexBuffer = nullptr;     // owned
+        MTL::Buffer* boneBuffer = nullptr;      // owned
+        MTL::Buffer* instanceBuffer = nullptr;  // owned
+        std::size_t indexCount = 0;
+        std::size_t instanceCount = 0;
+        TexturePair textures;
+    };
+
+    std::vector<GpuUnitBatch> unitBatches_;
+    std::vector<MTL::Texture*> unitTextures_;  // owned, indexed by TexturePair
 
     MTL::Buffer* vertexBuffer_ = nullptr;      // owned
     MTL::Buffer* indexBuffer_ = nullptr;       // owned

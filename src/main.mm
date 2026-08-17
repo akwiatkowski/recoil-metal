@@ -17,8 +17,10 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
+#include <deque>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <optional>
 #include <span>
 #include <string>
@@ -179,79 +181,157 @@ constexpr const char* kBarTextureDir =
 /// on a map means seeing many of them.
 constexpr std::size_t kDefaultUnitCount = 800;
 
-struct UnitScene {
-    rm::Model model;
-    std::vector<rm::UnitInstance> instances;
-    std::optional<rm::dds::Texture> diffuse;  ///< tex1: albedo + team-colour mask
-    std::optional<rm::dds::Texture> shading;  ///< tex2: self-illum + reflectivity
+/// Seed for the scatter. Fixed, because a benchmark whose scene changes between
+/// runs is not a benchmark; each extra model offsets it so two models do not
+/// land in exactly the same places.
+constexpr std::uint32_t kScatterSeed = 20260817u;
+
+// Loads each texture once, however many models name it.
+//
+// This is the half of batching that actually saves something: BAR unit textures
+// are 4096x4096, and a faction's models overwhelmingly share one pair, so a
+// dozen models cost one upload rather than a dozen. The renderer's job is only
+// to avoid rebinding them.
+class TextureRegistry {
+public:
+    /// Index for a named texture, loading it on first sight. -1 when the model
+    /// named none or the file could not be read.
+    [[nodiscard]] int resolve(const std::string& name, const char* slot) {
+        if (name.empty()) {
+            return -1;
+        }
+
+        const auto known = indexByName_.find(name);
+        if (known != indexByName_.end()) {
+            return known->second;
+        }
+
+        // S3O names its textures but does not carry them; they live under
+        // unittextures/ (FAR report 05 §5.3).
+        const char* home = std::getenv("HOME");
+        const std::filesystem::path path =
+            std::filesystem::path{home == nullptr ? "" : home} / kBarTextureDir / name;
+
+        auto texture = rm::dds::loadFile(path);
+        if (!texture) {
+            // Not fatal: the shader has a defined fallback for each slot, and
+            // half a model's shading beats no model. Remembered as -1 so a
+            // second model naming the same missing file does not retry it.
+            std::fprintf(stderr, "  no %s texture (%s): %s\n", slot, name.c_str(),
+                         texture.error().message.c_str());
+            indexByName_.emplace(name, -1);
+            return -1;
+        }
+
+        std::printf("  %s %s: %dx%d, %d mips\n", slot, name.c_str(), texture->width,
+                    texture->height, texture->mipLevels);
+
+        const auto index = static_cast<int>(textures_.size());
+        textures_.push_back(std::move(*texture));
+        indexByName_.emplace(name, index);
+        return index;
+    }
+
+    [[nodiscard]] std::span<const rm::dds::Texture> all() const noexcept { return textures_; }
+    [[nodiscard]] std::size_t size() const noexcept { return textures_.size(); }
+
+private:
+    std::vector<rm::dds::Texture> textures_;
+    std::map<std::string, int> indexByName_;
 };
 
-/// Loads one of a model's named textures from BAR's unittextures/.
+// Everything the renderer needs to draw units, owned in one place.
+//
+// models and instances are held in deques, NOT vectors: the batches point into
+// them, and a vector that reallocates while later models load would leave every
+// batch built so far dangling. A deque never moves what it already holds.
+struct UnitScene {
+    std::deque<rm::Model> models;
+    std::deque<std::vector<rm::UnitInstance>> instances;
+    std::vector<rm::UnitBatch> batches;
+    TextureRegistry textures;
+};
+
+/// One `--units` argument: a model, how many of it, and how big.
+struct UnitOptions {
+    std::filesystem::path modelPath;
+    std::size_t count = kDefaultUnitCount;
+    float scale = 1.0f;
+};
+
+/// Loads every requested model, resolves its textures, and places instances.
 ///
-/// S3O names its textures but does not carry them (FAR report 05 §5.3). A
-/// missing one is reported and skipped, not fatal: the shader has a defined
-/// fallback for each, and half a model's shading is better than no model.
-[[nodiscard]] std::optional<rm::dds::Texture> resolveModelTexture(const std::string& name,
-                                                                  const char* slot) {
-    if (name.empty()) {
-        return std::nullopt;
-    }
-
-    const char* home = std::getenv("HOME");
-    const std::filesystem::path path =
-        std::filesystem::path{home == nullptr ? "" : home} / kBarTextureDir / name;
-
-    auto texture = rm::dds::loadFile(path);
-    if (!texture) {
-        std::fprintf(stderr, "  no %s texture (%s): %s\n", slot, name.c_str(),
-                     texture.error().message.c_str());
-        return std::nullopt;
-    }
-
-    std::printf("  %s %s: %dx%d, %d mips\n", slot, name.c_str(), texture->width,
-                texture->height, texture->mipLevels);
-    return std::move(*texture);
-}
-
-/// Loads a model, resolves its diffuse texture, and places instances.
-///
-/// Placement is start positions first when the map declares them, then a
-/// deterministic scatter to make up the count — spawn points read as meaningful
-/// and the scatter makes the map look inhabited.
-[[nodiscard]] std::optional<UnitScene> resolveUnits(const std::filesystem::path& modelPath,
-                                                   const rm::HeightField& field,
-                                                   std::size_t count, float scale,
-                                                   std::span<const rm::mapinfo::StartPosition> starts) {
-    auto model = rm::s3o::loadFile(modelPath);
-    if (!model) {
-        std::fprintf(stderr, "failed to load model \"%s\": %s\n",
-                     modelPath.string().c_str(), model.error().message.c_str());
-        return std::nullopt;
-    }
-
+/// The first model takes the map's start positions and fills the rest of its
+/// count by scatter; every later model is scattered alone. Spawn points read as
+/// meaningful, and a second model landing on top of the first at every spawn
+/// would not.
+[[nodiscard]] UnitScene resolveUnits(std::span<const UnitOptions> requests,
+                                     const rm::HeightField& field,
+                                     std::span<const rm::mapinfo::StartPosition> starts) {
     UnitScene scene;
-    std::printf("model %s: %zu bones, %zu vertices, %zu triangles, radius %.1f\n",
-                model->name.c_str(), model->bones.size(), model->vertices.size(),
-                model->triangleCount(), static_cast<double>(model->radius));
 
-    // Both textures, not just the diffuse: tex2 carries the self-illumination
-    // and reflectivity the model was authored with, and tex1's alpha is the
-    // team-colour mask that only means something once tex2's shading is there
-    // to light it.
-    scene.diffuse = resolveModelTexture(model->textures[0], "diffuse");
-    scene.shading = resolveModelTexture(model->textures[1], "shading");
+    for (std::size_t i = 0; i < requests.size(); ++i) {
+        const UnitOptions& request = requests[i];
 
-    scene.instances = rm::atStartPositions(field, starts, scale);
-    const std::size_t remaining = count > scene.instances.size()
-                                      ? count - scene.instances.size()
-                                      : 0;
-    const auto scattered = rm::scatterOnLand(field, remaining, /*seed=*/20260817u, scale);
-    scene.instances.insert(scene.instances.end(), scattered.begin(), scattered.end());
+        auto model = rm::s3o::loadFile(request.modelPath);
+        if (!model) {
+            std::fprintf(stderr, "failed to load model \"%s\": %s\n",
+                         request.modelPath.string().c_str(), model.error().message.c_str());
+            continue;  // one bad model should not cost the whole scene
+        }
 
-    std::printf("  %zu instances (%zu at start positions, %zu scattered)\n",
-                scene.instances.size(), starts.size(), scattered.size());
+        std::printf("model %s: %zu bones, %zu vertices, %zu triangles, radius %.1f\n",
+                    model->name.c_str(), model->bones.size(), model->vertices.size(),
+                    model->triangleCount(), static_cast<double>(model->radius));
 
-    scene.model = std::move(*model);
+        // Both textures, not just the diffuse: tex2 carries the self-illumination
+        // and reflectivity the model was authored with, and tex1's alpha is the
+        // team-colour mask that only means something once tex2's shading is
+        // there to light it.
+        const rm::TexturePair pair{
+            .diffuse = scene.textures.resolve(model->textures[0], "diffuse"),
+            .shading = scene.textures.resolve(model->textures[1], "shading"),
+        };
+
+        std::vector<rm::UnitInstance> placed;
+        const bool takesStarts = (i == 0);
+        if (takesStarts) {
+            placed = rm::atStartPositions(field, starts, request.scale);
+        }
+        const std::size_t remaining =
+            request.count > placed.size() ? request.count - placed.size() : 0;
+        const auto scattered = rm::scatterOnLand(
+            field, remaining, kScatterSeed + static_cast<std::uint32_t>(i), request.scale);
+        placed.insert(placed.end(), scattered.begin(), scattered.end());
+
+        std::printf("  %zu instances (%zu at start positions, %zu scattered)\n", placed.size(),
+                    takesStarts ? starts.size() : 0u, scattered.size());
+
+        scene.models.push_back(std::move(*model));
+        scene.instances.push_back(std::move(placed));
+        scene.batches.push_back(rm::UnitBatch{
+            .model = &scene.models.back(),
+            .instances = scene.instances.back(),
+            .textures = pair,
+        });
+    }
+
+    if (scene.batches.size() > 1) {
+        // Reports what the batching bought. The renderer orders the draws
+        // itself; this recomputes the same thing purely to say it out loud,
+        // which is the only way the saving is visible at all — a renderer that
+        // rebound per model would produce an identical image.
+        std::vector<rm::TexturePair> pairs;
+        pairs.reserve(scene.batches.size());
+        for (const rm::UnitBatch& batch : scene.batches) {
+            pairs.push_back(batch.textures);
+        }
+
+        std::printf("scene: %zu models, %zu textures uploaded, %zu texture binds per frame\n",
+                    scene.batches.size(), scene.textures.size(),
+                    rm::textureBindCount(pairs, rm::orderByTexturePair(pairs)));
+    }
+
     return scene;
 }
 
@@ -288,49 +368,76 @@ struct ShotOptions {
     return options;
 }
 
-struct UnitOptions {
-    std::filesystem::path modelPath;
-    std::size_t count = kDefaultUnitCount;
-    float scale = 1.0f;
-    bool focus = false;  ///< frame the first instance instead of the whole map
-};
+/// Every `--units <model> [count] [scale]` on the command line, in order.
+///
+/// Repeatable: one flag per model, which is how a scene with several models is
+/// described. `--focus` is a scene-wide flag and is read separately, since it
+/// may appear before, between or after the positional arguments.
+[[nodiscard]] std::vector<UnitOptions> parseUnits(int argc, const char* argv[]) {
+    std::vector<UnitOptions> requests;
 
-[[nodiscard]] UnitOptions parseUnits(int argc, const char* argv[]) {
-    UnitOptions options;
     for (int i = 1; i < argc; ++i) {
-        if (std::string{argv[i]} == "--focus") {
-            options.focus = true;
-            continue;
-        }
         if (std::string{argv[i]} != "--units") {
             continue;
         }
+
+        UnitOptions options;
         if (i + 1 < argc) {
             options.modelPath = argv[i + 1];
         }
-        if (i + 2 < argc) {
+        // Positional arguments stop at the next flag, so `--units a.s3o --units
+        // b.s3o` does not read "--units" as a count.
+        if (i + 2 < argc && argv[i + 2][0] != '-') {
             const int parsed = std::atoi(argv[i + 2]);
             if (parsed > 0) {
                 options.count = static_cast<std::size_t>(parsed);
             }
         }
-        if (i + 3 < argc) {
+        if (i + 3 < argc && argv[i + 3][0] != '-') {
             const double parsed = std::atof(argv[i + 3]);
             if (parsed > 0.0) {
                 options.scale = static_cast<float>(parsed);
             }
         }
-        break;
-    }
 
-    // --focus may appear after --units' positional arguments, so it gets its own
-    // pass rather than relying on ordering.
-    for (int i = 1; i < argc; ++i) {
-        if (std::string{argv[i]} == "--focus") {
-            options.focus = true;
+        if (!options.modelPath.empty()) {
+            requests.push_back(std::move(options));
         }
     }
-    return options;
+
+    return requests;
+}
+
+/// Whether `--focus` was given: frame the first instance instead of the map.
+[[nodiscard]] bool parseFocus(int argc, const char* argv[]) {
+    for (int i = 1; i < argc; ++i) {
+        if (std::string{argv[i]} == "--focus") {
+            return true;
+        }
+    }
+    return false;
+}
+
+/// Points the camera at the first instance of the first model.
+///
+/// Framing the whole map makes a unit about two pixels across, which says
+/// nothing about whether it is textured correctly. Templated on the target
+/// because Window and Renderer both offer focusOn and neither shares a base
+/// class — a one-method interface would be ceremony for two call sites.
+template <typename Target>
+void focusOnFirstUnit(Target& target, const UnitScene& scene) {
+    if (scene.batches.empty() || scene.batches.front().instances.empty()
+        || scene.batches.front().model == nullptr) {
+        return;
+    }
+
+    /// How far back to sit, in model radii.
+    constexpr float kRadiiBack = 2.5f;
+
+    const rm::UnitBatch& batch = scene.batches.front();
+    const rm::UnitInstance& first = batch.instances.front();
+    target.focusOn(first.position,
+                   std::max(batch.model->radius, 1.0f) * kRadiiBack * first.scale);
 }
 
 struct BenchOptions {
@@ -492,12 +599,9 @@ int main(int argc, const char* argv[]) {
             }
         }
 
-        const UnitOptions unitOptions = parseUnits(argc, argv);
-        std::optional<UnitScene> units;
-        if (!unitOptions.modelPath.empty()) {
-            units = resolveUnits(unitOptions.modelPath, *field, unitOptions.count,
-                                 unitOptions.scale, starts);
-        }
+        const std::vector<UnitOptions> unitRequests = parseUnits(argc, argv);
+        const bool focus = parseFocus(argc, argv);
+        const UnitScene units = resolveUnits(unitRequests, *field, starts);
 
         const rm::TerrainMesh mesh = rm::buildTerrainMesh(*field);
         std::printf("terrain: %zu vertices, %zu triangles, height %.1f..%.1f elmos\n",
@@ -518,15 +622,7 @@ int main(int argc, const char* argv[]) {
                     renderer.setGroundTexture(*atlas);
                 }
             }
-            if (units) {
-                renderer.setUnits(units->model, units->instances);
-                if (units->diffuse) {
-                    renderer.setUnitTexture(*units->diffuse);
-                }
-                if (units->shading) {
-                    renderer.setUnitShadingTexture(*units->shading);
-                }
-            }
+            renderer.setUnits(units.textures.all(), units.batches);
 
             std::printf("offscreen benchmark: %ux%u, %zu frames (discarding %zu warmup),"
                         " %zu frames in flight, no vsync\n",
@@ -554,21 +650,9 @@ int main(int argc, const char* argv[]) {
                     renderer.setGroundTexture(*atlas);
                 }
             }
-            if (units) {
-                renderer.setUnits(units->model, units->instances);
-                if (units->diffuse) {
-                    renderer.setUnitTexture(*units->diffuse);
-                }
-                if (units->shading) {
-                    renderer.setUnitShadingTexture(*units->shading);
-                }
-                if (unitOptions.focus && !units->instances.empty()) {
-                    constexpr float kRadiiBack = 2.5f;
-                    const auto& first = units->instances.front();
-                    renderer.focusOn(first.position,
-                                     std::max(units->model.radius, 1.0f) * kRadiiBack
-                                         * unitOptions.scale);
-                }
+            renderer.setUnits(units.textures.all(), units.batches);
+            if (focus) {
+                focusOnFirstUnit(renderer, units);
             }
 
             const auto image = renderer.renderToImage(shot.width, shot.height);
@@ -590,25 +674,9 @@ int main(int argc, const char* argv[]) {
                 window.setGroundTexture(*atlas);
             }
         }
-        if (units) {
-            window.setUnits(units->model, units->instances);
-            if (units->diffuse) {
-                window.setUnitTexture(*units->diffuse);
-            }
-            if (units->shading) {
-                window.setUnitShadingTexture(*units->shading);
-            }
-
-            // Framing the whole map makes a unit about two pixels across, which
-            // says nothing about whether it is textured correctly. --focus looks
-            // at the first instance from a few model-radii out instead.
-            if (unitOptions.focus && !units->instances.empty()) {
-                constexpr float kRadiiBack = 2.5f;
-                const auto& first = units->instances.front();
-                window.focusOn(first.position,
-                               std::max(units->model.radius, 1.0f) * kRadiiBack
-                                   * unitOptions.scale);
-            }
+        window.setUnits(units.textures.all(), units.batches);
+        if (focus) {
+            focusOnFirstUnit(window, units);
         }
         window.show();
 

@@ -62,7 +62,8 @@ add_library(rm_core STATIC
     src/core/bench/FrameStats.cpp
     src/core/model/S3o.cpp
     src/core/texture/Dds.cpp
-    src/core/scene/UnitPlacement.cpp)
+    src/core/scene/UnitPlacement.cpp
+    src/core/scene/UnitBatch.cpp)
 target_include_directories(rm_core PUBLIC src)
 target_link_libraries(rm_core PUBLIC rm_project_warnings)
 
@@ -104,6 +105,7 @@ if(BUILD_TESTING)
         tests/test_dds.cpp
         tests/test_unit_placement.cpp
         tests/test_team_colours.cpp
+        tests/test_unit_batch.cpp
         tests/test_real_map.cpp
         tests/support/SmfWriter.cpp
         tests/support/S3oWriter.cpp)

@@ -465,9 +465,7 @@ Renderer::Renderer(CA::MetalLayer* layer)
 Renderer::~Renderer() {
     // Reverse acquisition order; all are +1 objects from newXxx()/CreateXxx.
     releaseTerrainBuffers();
-    releaseUnitBuffers();
-    if (unitShadingTexture_ != nullptr) unitShadingTexture_->release();
-    if (unitTexture_ != nullptr) unitTexture_->release();
+    releaseUnitBuffers();  // frees the unit textures too
     unitPipeline_->release();
     if (groundTexture_ != nullptr) groundTexture_->release();
     groundSampler_->release();
@@ -532,52 +530,95 @@ void Renderer::setTerrain(const TerrainMesh& mesh) {
 }
 
 void Renderer::releaseUnitBuffers() noexcept {
-    if (unitInstanceBuffer_ != nullptr) { unitInstanceBuffer_->release(); unitInstanceBuffer_ = nullptr; }
-    if (unitBoneBuffer_ != nullptr)     { unitBoneBuffer_->release();     unitBoneBuffer_ = nullptr; }
-    if (unitIndexBuffer_ != nullptr)    { unitIndexBuffer_->release();    unitIndexBuffer_ = nullptr; }
-    if (unitVertexBuffer_ != nullptr)   { unitVertexBuffer_->release();   unitVertexBuffer_ = nullptr; }
-    unitIndexCount_ = 0;
-    unitInstanceCount_ = 0;
+    for (GpuUnitBatch& batch : unitBatches_) {
+        if (batch.instanceBuffer != nullptr) batch.instanceBuffer->release();
+        if (batch.boneBuffer != nullptr)     batch.boneBuffer->release();
+        if (batch.indexBuffer != nullptr)    batch.indexBuffer->release();
+        if (batch.vertexBuffer != nullptr)   batch.vertexBuffer->release();
+    }
+    unitBatches_.clear();
+
+    for (MTL::Texture* texture : unitTextures_) {
+        if (texture != nullptr) {
+            texture->release();
+        }
+    }
+    unitTextures_.clear();
 }
 
-void Renderer::setUnits(const Model& model, std::span<const UnitInstance> instances) {
+void Renderer::setUnits(std::span<const dds::Texture> textures,
+                        std::span<const UnitBatch> batches) {
     releaseUnitBuffers();
 
-    if (model.empty() || instances.empty() || model.bones.empty()) {
+    if (batches.empty()) {
         return;
     }
 
-    // Bone offsets as packed 3-floats, indexed straight from the vertex. The
-    // globalOffset is already accumulated to the root by the loader, so the
-    // shader needs no hierarchy walk.
-    std::vector<std::array<float, 3>> boneOffsets;
-    boneOffsets.reserve(model.bones.size());
-    for (const ModelBone& bone : model.bones) {
-        boneOffsets.push_back(bone.globalOffset);
+    // Textures first: a failed upload here should leave nothing half-built, and
+    // the batches below reference these by index.
+    unitTextures_.reserve(textures.size());
+    for (const dds::Texture& texture : textures) {
+        // A texture that failed to load is kept as a null slot rather than
+        // renumbering everything after it — the indices in the batches were
+        // decided by the caller and must keep meaning what they meant.
+        unitTextures_.push_back(texture.data.empty() ? nullptr
+                                                     : uploadTexture(texture, "unit"));
     }
 
-    const std::size_t vertexBytes = model.vertices.size() * sizeof(ModelVertex);
-    const std::size_t indexBytes = model.indices.size() * sizeof(std::uint32_t);
-    const std::size_t boneBytes = boneOffsets.size() * sizeof(std::array<float, 3>);
-    const std::size_t instanceBytes = instances.size() * sizeof(UnitInstance);
-
-    unitVertexBuffer_ = device_->newBuffer(model.vertices.data(), vertexBytes,
-                                          MTL::ResourceStorageModeShared);
-    unitIndexBuffer_ = device_->newBuffer(model.indices.data(), indexBytes,
-                                         MTL::ResourceStorageModeShared);
-    unitBoneBuffer_ = device_->newBuffer(boneOffsets.data(), boneBytes,
-                                         MTL::ResourceStorageModeShared);
-    unitInstanceBuffer_ = device_->newBuffer(instances.data(), instanceBytes,
-                                            MTL::ResourceStorageModeShared);
-
-    if (unitVertexBuffer_ == nullptr || unitIndexBuffer_ == nullptr
-        || unitBoneBuffer_ == nullptr || unitInstanceBuffer_ == nullptr) {
-        releaseUnitBuffers();
-        throw RendererError{"failed to allocate unit buffers"};
+    // Upload in the order the draws will run, so encodeScene is a plain walk.
+    std::vector<TexturePair> pairs;
+    pairs.reserve(batches.size());
+    for (const UnitBatch& batch : batches) {
+        pairs.push_back(batch.textures);
     }
+    const std::vector<std::size_t> order = orderByTexturePair(pairs);
 
-    unitIndexCount_ = model.indices.size();
-    unitInstanceCount_ = instances.size();
+    unitBatches_.reserve(batches.size());
+    for (const std::size_t index : order) {
+        const UnitBatch& batch = batches[index];
+        if (batch.model == nullptr || batch.model->empty() || batch.model->bones.empty()
+            || batch.instances.empty()) {
+            continue;
+        }
+        const Model& model = *batch.model;
+
+        // Bone offsets as packed 3-floats, indexed straight from the vertex. The
+        // globalOffset is already accumulated to the root by the loader, so the
+        // shader needs no hierarchy walk.
+        std::vector<std::array<float, 3>> boneOffsets;
+        boneOffsets.reserve(model.bones.size());
+        for (const ModelBone& bone : model.bones) {
+            boneOffsets.push_back(bone.globalOffset);
+        }
+
+        GpuUnitBatch uploaded;
+        uploaded.textures = batch.textures;
+        uploaded.vertexBuffer =
+            device_->newBuffer(model.vertices.data(), model.vertices.size() * sizeof(ModelVertex),
+                               MTL::ResourceStorageModeShared);
+        uploaded.indexBuffer =
+            device_->newBuffer(model.indices.data(), model.indices.size() * sizeof(std::uint32_t),
+                               MTL::ResourceStorageModeShared);
+        uploaded.boneBuffer =
+            device_->newBuffer(boneOffsets.data(), boneOffsets.size() * sizeof(std::array<float, 3>),
+                               MTL::ResourceStorageModeShared);
+        uploaded.instanceBuffer =
+            device_->newBuffer(batch.instances.data(), batch.instances.size() * sizeof(UnitInstance),
+                               MTL::ResourceStorageModeShared);
+        uploaded.indexCount = model.indices.size();
+        uploaded.instanceCount = batch.instances.size();
+
+        if (uploaded.vertexBuffer == nullptr || uploaded.indexBuffer == nullptr
+            || uploaded.boneBuffer == nullptr || uploaded.instanceBuffer == nullptr) {
+            // Push what was allocated so releaseUnitBuffers frees it — throwing
+            // with buffers stranded in locals would leak them.
+            unitBatches_.push_back(uploaded);
+            releaseUnitBuffers();
+            throw RendererError{"failed to allocate unit buffers for " + model.name};
+        }
+
+        unitBatches_.push_back(uploaded);
+    }
 }
 
 MTL::Texture* Renderer::uploadTexture(const dds::Texture& texture, const char* what) {
@@ -615,30 +656,6 @@ MTL::Texture* Renderer::uploadTexture(const dds::Texture& texture, const char* w
     }
 
     return created;
-}
-
-void Renderer::setUnitTexture(const dds::Texture& texture) {
-    if (texture.width <= 0 || texture.height <= 0 || texture.data.empty()) {
-        return;
-    }
-
-    MTL::Texture* created = uploadTexture(texture, "unit diffuse");
-    if (unitTexture_ != nullptr) {
-        unitTexture_->release();
-    }
-    unitTexture_ = created;
-}
-
-void Renderer::setUnitShadingTexture(const dds::Texture& texture) {
-    if (texture.width <= 0 || texture.height <= 0 || texture.data.empty()) {
-        return;
-    }
-
-    MTL::Texture* created = uploadTexture(texture, "unit shading");
-    if (unitShadingTexture_ != nullptr) {
-        unitShadingTexture_->release();
-    }
-    unitShadingTexture_ = created;
 }
 
 void Renderer::setGroundTexture(const TileAtlas& atlas) {
@@ -947,35 +964,63 @@ void Renderer::encodeScene(MTL::RenderCommandEncoder* encoder, unsigned int widt
     // Deliberately NOT nested inside the terrain branch: a model should be
     // viewable with no map loaded, and the first version of this got that wrong
     // in a way that silently drew nothing at all.
-    if (unitInstanceCount_ > 0 && unitIndexCount_ > 0) {
-        TerrainUniforms unitUniforms = uniforms;
-        unitUniforms.hasTexture = unitTexture_ != nullptr ? 1.0f : 0.0f;
-        unitUniforms.hasTexture2 = unitShadingTexture_ != nullptr ? 1.0f : 0.0f;
-
+    if (!unitBatches_.empty()) {
         encoder->setRenderPipelineState(unitPipeline_);
         encoder->setDepthStencilState(depthState_);
-
-        encoder->setVertexBuffer(unitVertexBuffer_, 0, kVertexBufferIndex);
-        encoder->setVertexBytes(&unitUniforms, sizeof(unitUniforms), kUniformBufferIndex);
-        encoder->setVertexBuffer(unitInstanceBuffer_, 0, kInstanceBufferIndex);
-        encoder->setVertexBuffer(unitBoneBuffer_, 0, kBoneBufferIndex);
-        encoder->setFragmentBytes(&unitUniforms, sizeof(unitUniforms), kUniformBufferIndex);
-        // Both slots are always bound — referencing an unbound texture is
-        // undefined even on a branch that does not sample it — so the fallback
-        // block stands in for whichever the model does not carry.
-        encoder->setFragmentTexture(unitTexture_ != nullptr ? unitTexture_ : groundTexture_,
-                                    kGroundTextureIndex);
-        encoder->setFragmentTexture(
-            unitShadingTexture_ != nullptr ? unitShadingTexture_ : groundTexture_,
-            kShadingTextureIndex);
         encoder->setFragmentSamplerState(groundSampler_, kGroundSamplerIndex);
 
-        // One call for every instance — the whole point of the instance buffer.
-        encoder->drawIndexedPrimitives(MTL::PrimitiveType::PrimitiveTypeTriangle,
-                                       static_cast<NS::UInteger>(unitIndexCount_),
-                                       MTL::IndexType::IndexTypeUInt32, unitIndexBuffer_,
-                                       /*indexBufferOffset=*/0,
-                                       static_cast<NS::UInteger>(unitInstanceCount_));
+        // The vertex stage reads only the view-projection out of the uniforms,
+        // which is the same for every batch, so it is set once here. The
+        // fragment stage's copy carries the per-pair hasTexture flags and is
+        // re-set whenever the pair changes.
+        encoder->setVertexBytes(&uniforms, sizeof(uniforms), kUniformBufferIndex);
+
+        // Impossible pair, so the first batch always binds. The batches arrive
+        // grouped by pair (setUnits ordered them), so this rebinds once per
+        // distinct pair rather than once per model.
+        TexturePair bound{-2, -2};
+
+        for (const GpuUnitBatch& batch : unitBatches_) {
+            if (!(batch.textures == bound)) {
+                bound = batch.textures;
+
+                const auto textureAt = [this](int index) -> MTL::Texture* {
+                    if (index < 0 || static_cast<std::size_t>(index) >= unitTextures_.size()) {
+                        return nullptr;
+                    }
+                    return unitTextures_[static_cast<std::size_t>(index)];
+                };
+
+                MTL::Texture* diffuse = textureAt(bound.diffuse);
+                MTL::Texture* shading = textureAt(bound.shading);
+
+                TerrainUniforms unitUniforms = uniforms;
+                unitUniforms.hasTexture = diffuse != nullptr ? 1.0f : 0.0f;
+                unitUniforms.hasTexture2 = shading != nullptr ? 1.0f : 0.0f;
+                encoder->setFragmentBytes(&unitUniforms, sizeof(unitUniforms),
+                                          kUniformBufferIndex);
+
+                // Both slots are always bound — referencing an unbound texture
+                // is undefined even on a branch that does not sample it — so the
+                // fallback block stands in for whichever the model lacks.
+                encoder->setFragmentTexture(diffuse != nullptr ? diffuse : groundTexture_,
+                                            kGroundTextureIndex);
+                encoder->setFragmentTexture(shading != nullptr ? shading : groundTexture_,
+                                            kShadingTextureIndex);
+            }
+
+            encoder->setVertexBuffer(batch.vertexBuffer, 0, kVertexBufferIndex);
+            encoder->setVertexBuffer(batch.instanceBuffer, 0, kInstanceBufferIndex);
+            encoder->setVertexBuffer(batch.boneBuffer, 0, kBoneBufferIndex);
+
+            // One call for every instance — the whole point of the instance
+            // buffer.
+            encoder->drawIndexedPrimitives(MTL::PrimitiveType::PrimitiveTypeTriangle,
+                                           static_cast<NS::UInteger>(batch.indexCount),
+                                           MTL::IndexType::IndexTypeUInt32, batch.indexBuffer,
+                                           /*indexBufferOffset=*/0,
+                                           static_cast<NS::UInteger>(batch.instanceCount));
+        }
     }
 
     // --- Water -------------------------------------------------------------
