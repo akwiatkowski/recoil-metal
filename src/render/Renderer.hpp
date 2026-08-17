@@ -70,7 +70,13 @@ public:
     void setUnits(const Model& model, std::span<const UnitInstance> instances);
 
     /// Optional diffuse texture for the units. Without it they shade flat grey.
+    /// Its alpha channel is the team-colour mask, not transparency.
     void setUnitTexture(const dds::Texture& texture);
+
+    /// Optional shading texture — S3O's tex2, and the slot Supreme Commander's
+    /// `_specTeam` texture will take. Carries self-illumination and
+    /// reflectivity; without it a model is flat-lit and never shines.
+    void setUnitShadingTexture(const dds::Texture& texture);
 
     // The camera is mutated by input handlers on the main thread. That is safe
     // because CAMetalDisplayLink was added to the *main* run loop, so
@@ -142,6 +148,10 @@ private:
     void releaseTerrainBuffers() noexcept;
     void releaseUnitBuffers() noexcept;
 
+    /// Uploads a decoded DDS as a Metal texture, mips and all. Returns a +1
+    /// object the caller owns. Throws if the allocation fails.
+    [[nodiscard]] MTL::Texture* uploadTexture(const dds::Texture& texture, const char* what);
+
     /// Encodes the whole scene — terrain then water — into an active encoder.
     /// Shared by the windowed and offscreen paths so they cannot drift apart
     /// and quietly benchmark different work.
@@ -165,6 +175,7 @@ private:
 
     MTL::RenderPipelineState* unitPipeline_ = nullptr;  // owned
     MTL::Texture* unitTexture_ = nullptr;      // owned; falls back to the grey block
+    MTL::Texture* unitShadingTexture_ = nullptr; // owned; null means flat-lit
     MTL::Buffer* unitVertexBuffer_ = nullptr;  // owned
     MTL::Buffer* unitIndexBuffer_ = nullptr;   // owned
     MTL::Buffer* unitBoneBuffer_ = nullptr;    // owned

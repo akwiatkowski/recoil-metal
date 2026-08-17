@@ -103,6 +103,7 @@ if(BUILD_TESTING)
         tests/test_real_model.cpp
         tests/test_dds.cpp
         tests/test_unit_placement.cpp
+        tests/test_team_colours.cpp
         tests/test_real_map.cpp
         tests/support/SmfWriter.cpp
         tests/support/S3oWriter.cpp)

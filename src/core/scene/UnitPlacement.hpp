@@ -2,6 +2,7 @@
 
 #include "core/map/HeightField.hpp"
 #include "core/map/MapInfo.hpp"
+#include "core/scene/TeamColours.hpp"
 
 #include <array>
 #include <cstdint>
@@ -11,20 +12,26 @@
 namespace rm {
 
 // One drawn instance of a model. Uploaded straight to the GPU as per-instance
-// data, so the layout is fixed: 12 + 4 + 4 = 20 bytes, tightly packed.
+// data, so the layout is fixed: 12 + 4 + 4 + 16 = 36 bytes, tightly packed.
 //
 // Rotation is a single yaw because that is all ground units need and all the
 // S3O hierarchy can express anyway (the format carries no rotation at all —
 // s3o.h:20-22). A full transform belongs here when animation arrives.
+//
+// The team colour is per instance rather than per draw because that is the
+// cheapest thing that lets one instanced draw cover several armies. Both
+// engines treat it the same way — as a tint applied through a mask channel the
+// texture carries — so this field serves .s3o and .scm alike.
 struct UnitInstance {
     std::array<float, 3> position;  ///< world, elmos
     float rotationY;                ///< radians about +Y
     float scale;
+    TeamColour teamColour = kTeamColours[0];
 };
 
-static_assert(sizeof(UnitInstance) == 20,
+static_assert(sizeof(UnitInstance) == 36,
               "UnitInstance must stay tightly packed — the shader reads it as a "
-              "packed_float3 and two floats");
+              "packed_float3, two floats and a packed_float4");
 
 // Scatters instances across the map's land, sitting on the terrain.
 //

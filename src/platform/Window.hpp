@@ -38,6 +38,7 @@ public:
     // Units to draw on the terrain. See Renderer::setUnits.
     void setUnits(const Model& model, std::span<const UnitInstance> instances);
     void setUnitTexture(const dds::Texture& texture);
+    void setUnitShadingTexture(const dds::Texture& texture);
 
     /// Points the camera at a world position. See Renderer::focusOn.
     void focusOn(std::array<float, 3> target, float distance);

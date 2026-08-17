@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <set>
 #include <vector>
 
 using Catch::Approx;
@@ -173,4 +174,45 @@ TEST_CASE("start positions outside the map are clamped by the height sampler") {
 
 TEST_CASE("no start positions yields no instances") {
     REQUIRE(rm::atStartPositions(mixedField(), {}).empty());
+}
+
+TEST_CASE("each start position wears its own team's colour") {
+    const std::vector<rm::mapinfo::StartPosition> positions{
+        {0, 100.0f, 200.0f},
+        {1, 500.0f, 600.0f},
+        {2, 700.0f, 300.0f},
+    };
+
+    const auto instances = rm::atStartPositions(mixedField(), positions);
+
+    REQUIRE(instances.size() == 3);
+    REQUIRE(instances[0].teamColour == rm::teamColour(0));
+    REQUIRE(instances[1].teamColour == rm::teamColour(1));
+    REQUIRE(instances[2].teamColour == rm::teamColour(2));
+}
+
+TEST_CASE("scattered instances are spread across the palette, reproducibly") {
+    const auto field = mixedField();
+    const auto instances = rm::scatterOnLand(field, 200, 42);
+    REQUIRE(instances.size() > 20);
+
+    std::set<std::size_t> used;
+    for (const rm::UnitInstance& instance : instances) {
+        for (std::size_t team = 0; team < rm::kTeamColours.size(); ++team) {
+            if (instance.teamColour == rm::teamColour(team)) {
+                used.insert(team);
+            }
+        }
+    }
+    // A single-colour scatter would be a silently broken distribution rather
+    // than an obviously broken one, so pin that more than one team appears.
+    REQUIRE(used.size() > 1);
+
+    // Colours come from the same seeded generator as the positions, so the
+    // whole scene — screenshots and benchmarks alike — replays identically.
+    const auto again = rm::scatterOnLand(field, 200, 42);
+    REQUIRE(again.size() == instances.size());
+    for (std::size_t i = 0; i < instances.size(); ++i) {
+        REQUIRE(again[i].teamColour == instances[i].teamColour);
+    }
 }

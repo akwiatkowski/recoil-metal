@@ -33,12 +33,17 @@ struct TerrainUniforms {
     float mapWidth;
     float mapDepth;
     float hasTexture;  ///< float, not bool: bool packing across the ABI is a trap
+    simd_float3 cameraPosition;  ///< eye in world space, for the specular half-vector
+    float hasTexture2;           ///< the model's shading texture, if it has one
 };
 
-static_assert(sizeof(TerrainUniforms) == 112, "TerrainUniforms must match the MSL layout");
+static_assert(sizeof(TerrainUniforms) == 144, "TerrainUniforms must match the MSL layout");
 static_assert(offsetof(TerrainUniforms, sunDirection) == 64, "float3 is 16-byte aligned in MSL");
 static_assert(offsetof(TerrainUniforms, minHeight) == 80, "unexpected padding before minHeight");
 static_assert(offsetof(TerrainUniforms, hasTexture) == 96, "unexpected padding before hasTexture");
+static_assert(offsetof(TerrainUniforms, cameraPosition) == 112,
+              "float3 realigns to 16 bytes, leaving 12 bytes of pad after hasTexture");
+static_assert(offsetof(TerrainUniforms, hasTexture2) == 128, "unexpected padding before hasTexture2");
 
 // Buffer/texture binding indices, shared between the C++ and MSL sides.
 constexpr NS::UInteger kVertexBufferIndex = 0;
@@ -46,6 +51,9 @@ constexpr NS::UInteger kUniformBufferIndex = 1;
 constexpr NS::UInteger kInstanceBufferIndex = 2;
 constexpr NS::UInteger kBoneBufferIndex = 3;
 constexpr NS::UInteger kGroundTextureIndex = 0;
+/// The model shading texture — S3O's tex2, and the same slot Supreme Commander's
+/// `_specTeam` texture will take.
+constexpr NS::UInteger kShadingTextureIndex = 1;
 constexpr NS::UInteger kGroundSamplerIndex = 0;
 
 // Compiled from source at runtime — there is no Xcode on this machine, hence no
@@ -70,6 +78,8 @@ struct Uniforms {
     float mapWidth;
     float mapDepth;
     float hasTexture;
+    float3 cameraPosition;
+    float hasTexture2;
 };
 
 struct VertexOut {
@@ -161,13 +171,31 @@ struct UnitInstanceIn {
     packed_float3 position;
     float rotationY;
     float scale;
+    packed_float4 teamColour;
 };
 
 struct UnitOut {
     float4 position [[position]];
     float3 normal;
     float2 uv;
+    float3 world;             // for the view vector the specular term needs
+    float4 teamColour [[flat]];  // per instance, so never interpolated
 };
+
+// Recoil's own defaults for model lighting, from mapinfo.lua's `lighting` table
+// (rts/Map/MapInfo.cpp:215-220). A map may override all of these; we do not read
+// that table yet, so these stand in — and being the engine's defaults, they are
+// what a map that says nothing gets there too.
+constant float3 kUnitAmbient = float3(0.4);   // unitAmbientColor
+constant float3 kUnitDiffuse = float3(0.7);   // unitDiffuseColor
+constant float3 kUnitSpecular = float3(0.7);  // unitSpecularColor, defaults to diffuse
+constant float kSpecularExponent = 100.0;     // specularExponent (MapInfo.cpp:221)
+
+// Stands in for Recoil's reflection cubemap, which the shading texture's green
+// channel mixes into the light (ModelFragProgGL4.glsl:130). We have no env cube
+// yet, so a shiny surface reflects a flat sky — the same colour the frame is
+// cleared to. Swapping a real cubemap in later changes this one line.
+constant float3 kEnvironment = float3(0.09, 0.12, 0.18);
 
 vertex UnitOut unitVertex(uint vid [[vertex_id]],
                           uint iid [[instance_id]],
@@ -194,6 +222,8 @@ vertex UnitOut unitVertex(uint vid [[vertex_id]],
     UnitOut out;
     out.position = u.viewProjection * float4(world, 1.0);
     out.normal = spunNormal;
+    out.world = world;
+    out.teamColour = float4(inst.teamColour);
     // S3O texture coordinates are authored against OpenGL, whose texture origin
     // is bottom-left; Metal's is top-left and the DDS is uploaded unflipped, so
     // V is inverted here. Flipping the compressed blocks instead would mean
@@ -202,22 +232,60 @@ vertex UnitOut unitVertex(uint vid [[vertex_id]],
     return out;
 }
 
+// Ported from Recoil's own model shader (ModelFragProgGL4.glsl:92-131), which is
+// the authority on what the two textures mean:
+//
+//   tex1  rgb = albedo, a = TEAM COLOUR MASK  (1 = fully team-coloured)
+//   tex2  r = self-illumination, g = reflectivity/specular strength,
+//         a = a one-bit alpha mask, b unused by the forward path
+//
+// Without tex2 a model is flat-lit and never shines — which is why every BAR
+// unit looked like painted cardboard until this landed.
 fragment float4 unitFragment(UnitOut in [[stage_in]],
                              constant Uniforms& u [[buffer(1)]],
                              texture2d<float> diffuse [[texture(0)]],
-                             sampler diffuseSampler [[sampler(0)]]) {
-    const float3 normal = normalize(in.normal);
-    const float lambert = saturate(dot(normal, u.sunDirection));
-
-    // hasTexture doubles for units: without a .dds they shade flat grey, which
-    // is also what a model whose texture is missing should look like.
-    float3 albedo = float3(0.62, 0.62, 0.60);
+                             texture2d<float> shading [[texture(1)]],
+                             sampler texSampler [[sampler(0)]]) {
+    // Without a diffuse the model shades flat grey with no team colour, since
+    // the mask lives in that texture's alpha and there is nothing to read.
+    float4 tex1 = float4(0.62, 0.62, 0.60, 0.0);
     if (u.hasTexture > 0.5) {
-        albedo = diffuse.sample(diffuseSampler, in.uv).rgb;
+        tex1 = diffuse.sample(texSampler, in.uv);
     }
 
-    const float ambient = 0.35;
-    return float4(albedo * (ambient + lambert * 0.8), 1.0);
+    // Neutral shading texture: no self-illumination, no reflectivity, mask open.
+    float4 tex2 = float4(0.0, 0.0, 0.0, 1.0);
+    if (u.hasTexture2 > 0.5) {
+        tex2 = shading.sample(texSampler, in.uv);
+    }
+
+    const float3 albedo = mix(tex1.rgb, in.teamColour.rgb, tex1.a);
+
+    const float3 N = normalize(in.normal);
+    const float3 L = u.sunDirection;
+    const float3 V = normalize(u.cameraPosition - in.world);
+    const float3 H = normalize(L + V);
+
+    const float NdotL = saturate(dot(N, L));
+    const float HdotN = saturate(dot(N, H));
+
+    float3 light = kUnitAmbient + NdotL * kUnitDiffuse;
+
+    // Blinn-Phong at 2.5x the Phong exponent, plus a wide low lobe — the exact
+    // expression the engine uses, comment and all.
+    float3 specular = kUnitSpecular * min(pow(HdotN, 2.5 * kSpecularExponent)
+                                              + 0.3 * pow(HdotN, 2.0 * 3.0),
+                                          1.0);
+    specular *= tex2.g * 4.0;
+
+    light = mix(light, kEnvironment, tex2.g);  // reflection
+    light += tex2.rrr;                         // self-illum
+
+    // tex2.a is a one-bit mask the engine only *discards* on in its alpha pass,
+    // where alphaCtrl is set (ModelFragProgGL4.glsl:62-70,97). The default
+    // control always passes, so an opaque pass — which is all we have — must not
+    // discard, or every unit with a masked tex2 loses geometry it should keep.
+    return float4(albedo * light + specular, 1.0);
 }
 )MSL";
 
@@ -398,6 +466,7 @@ Renderer::~Renderer() {
     // Reverse acquisition order; all are +1 objects from newXxx()/CreateXxx.
     releaseTerrainBuffers();
     releaseUnitBuffers();
+    if (unitShadingTexture_ != nullptr) unitShadingTexture_->release();
     if (unitTexture_ != nullptr) unitTexture_->release();
     unitPipeline_->release();
     if (groundTexture_ != nullptr) groundTexture_->release();
@@ -511,11 +580,7 @@ void Renderer::setUnits(const Model& model, std::span<const UnitInstance> instan
     unitInstanceCount_ = instances.size();
 }
 
-void Renderer::setUnitTexture(const dds::Texture& texture) {
-    if (texture.width <= 0 || texture.height <= 0 || texture.data.empty()) {
-        return;
-    }
-
+MTL::Texture* Renderer::uploadTexture(const dds::Texture& texture, const char* what) {
     // DXT1/3/5 map one-to-one onto BC1/BC2/BC3, all natively sampleable here, so
     // the payload goes up untouched exactly like the terrain atlas.
     MTL::PixelFormat format = MTL::PixelFormat::PixelFormatBC1_RGBA;
@@ -534,7 +599,7 @@ void Renderer::setUnitTexture(const dds::Texture& texture) {
 
     MTL::Texture* created = device_->newTexture(descriptor);
     if (created == nullptr) {
-        throw RendererError{"failed to allocate the unit diffuse texture"};
+        throw RendererError{std::string{"failed to allocate the "} + what + " texture"};
     }
 
     for (int level = 0; level < texture.mipLevels; ++level) {
@@ -549,10 +614,31 @@ void Renderer::setUnitTexture(const dds::Texture& texture) {
             static_cast<NS::UInteger>(texture.mipBytesPerRow(level)));
     }
 
+    return created;
+}
+
+void Renderer::setUnitTexture(const dds::Texture& texture) {
+    if (texture.width <= 0 || texture.height <= 0 || texture.data.empty()) {
+        return;
+    }
+
+    MTL::Texture* created = uploadTexture(texture, "unit diffuse");
     if (unitTexture_ != nullptr) {
         unitTexture_->release();
     }
     unitTexture_ = created;
+}
+
+void Renderer::setUnitShadingTexture(const dds::Texture& texture) {
+    if (texture.width <= 0 || texture.height <= 0 || texture.data.empty()) {
+        return;
+    }
+
+    MTL::Texture* created = uploadTexture(texture, "unit shading");
+    if (unitShadingTexture_ != nullptr) {
+        unitShadingTexture_->release();
+    }
+    unitShadingTexture_ = created;
 }
 
 void Renderer::setGroundTexture(const TileAtlas& atlas) {
@@ -825,6 +911,8 @@ void Renderer::encodeScene(MTL::RenderCommandEncoder* encoder, unsigned int widt
         .mapWidth = mapWidth_,
         .mapDepth = mapDepth_,
         .hasTexture = hasGroundTexture_ ? 1.0f : 0.0f,
+        .cameraPosition = camera_.eye(),
+        .hasTexture2 = 0.0f,
     };
 
     // Culling stays off: the camera is free to dip below the terrain, and a
@@ -862,6 +950,7 @@ void Renderer::encodeScene(MTL::RenderCommandEncoder* encoder, unsigned int widt
     if (unitInstanceCount_ > 0 && unitIndexCount_ > 0) {
         TerrainUniforms unitUniforms = uniforms;
         unitUniforms.hasTexture = unitTexture_ != nullptr ? 1.0f : 0.0f;
+        unitUniforms.hasTexture2 = unitShadingTexture_ != nullptr ? 1.0f : 0.0f;
 
         encoder->setRenderPipelineState(unitPipeline_);
         encoder->setDepthStencilState(depthState_);
@@ -871,8 +960,14 @@ void Renderer::encodeScene(MTL::RenderCommandEncoder* encoder, unsigned int widt
         encoder->setVertexBuffer(unitInstanceBuffer_, 0, kInstanceBufferIndex);
         encoder->setVertexBuffer(unitBoneBuffer_, 0, kBoneBufferIndex);
         encoder->setFragmentBytes(&unitUniforms, sizeof(unitUniforms), kUniformBufferIndex);
+        // Both slots are always bound — referencing an unbound texture is
+        // undefined even on a branch that does not sample it — so the fallback
+        // block stands in for whichever the model does not carry.
         encoder->setFragmentTexture(unitTexture_ != nullptr ? unitTexture_ : groundTexture_,
                                     kGroundTextureIndex);
+        encoder->setFragmentTexture(
+            unitShadingTexture_ != nullptr ? unitShadingTexture_ : groundTexture_,
+            kShadingTextureIndex);
         encoder->setFragmentSamplerState(groundSampler_, kGroundSamplerIndex);
 
         // One call for every instance — the whole point of the instance buffer.

@@ -72,8 +72,10 @@ reimplemented.*
    validated against all **2034** BAR `.s3o` models and **2552** `.dds`
    textures, placed at map start positions plus a deterministic scatter.
    800 instances of a 3980-triangle model costs 2.29 ms/frame (436 fps)
-   against 0.69 ms for terrain alone. Still to do: `.sca`-style animation and
-   the second (spec/team) texture channel.
+   against 0.69 ms for terrain alone. Both texture channels are honoured —
+   tex1's alpha is the team-colour mask, tex2 carries self-illumination and
+   reflectivity — shaded by a port of the engine's own model shader
+   (`ModelFragProgGL4.glsl`). Still to do: `.sca`-style animation.
 
    Deliberately *not* glTF. The engine must eventually handle both Recoil and
    Forged Alliance content, but glTF is nobody's native format — it is FAR's

@@ -40,6 +40,11 @@ std::vector<UnitInstance> scatterOnLand(const HeightField& field, std::size_t co
     std::uniform_real_distribution<float> alongX{0.0f, field.widthElmos()};
     std::uniform_real_distribution<float> alongZ{0.0f, field.depthElmos()};
     std::uniform_real_distribution<float> yaw{0.0f, 2.0f * std::numbers::pi_v<float>};
+    // Scattered units are spread across every team rather than all wearing one
+    // colour: the point of the scatter is to show what a populated map looks
+    // like, and a real one is not single-army. Drawn from the same generator so
+    // the whole scene stays reproducible from the seed alone.
+    std::uniform_int_distribution<std::size_t> team{0, kTeamColours.size() - 1};
 
     for (std::size_t placed = 0; placed < count; ++placed) {
         for (int attempt = 0; attempt < kMaxAttemptsPerInstance; ++attempt) {
@@ -55,6 +60,7 @@ std::vector<UnitInstance> scatterOnLand(const HeightField& field, std::size_t co
                 .position = {{x, y, z}},
                 .rotationY = yaw(rng),
                 .scale = scale,
+                .teamColour = teamColour(team(rng)),
             });
             break;
         }
@@ -69,6 +75,9 @@ std::vector<UnitInstance> atStartPositions(const HeightField& field,
     std::vector<UnitInstance> instances;
     instances.reserve(positions.size());
 
+    // The nth start position belongs to the nth team, which is exactly how both
+    // engines read the list, so the index is the team index.
+    std::size_t team = 0;
     for (const mapinfo::StartPosition& start : positions) {
         instances.push_back(UnitInstance{
             .position = {{start.x, groundHeight(field, start.x, start.z), start.z}},
@@ -76,7 +85,9 @@ std::vector<UnitInstance> atStartPositions(const HeightField& field,
             // clearly than a random one, and there is no facing data to honour.
             .rotationY = 0.0f,
             .scale = scale,
+            .teamColour = teamColour(team),
         });
+        ++team;
     }
 
     return instances;

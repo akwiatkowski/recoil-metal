@@ -182,8 +182,36 @@ constexpr std::size_t kDefaultUnitCount = 800;
 struct UnitScene {
     rm::Model model;
     std::vector<rm::UnitInstance> instances;
-    std::optional<rm::dds::Texture> diffuse;
+    std::optional<rm::dds::Texture> diffuse;  ///< tex1: albedo + team-colour mask
+    std::optional<rm::dds::Texture> shading;  ///< tex2: self-illum + reflectivity
 };
+
+/// Loads one of a model's named textures from BAR's unittextures/.
+///
+/// S3O names its textures but does not carry them (FAR report 05 §5.3). A
+/// missing one is reported and skipped, not fatal: the shader has a defined
+/// fallback for each, and half a model's shading is better than no model.
+[[nodiscard]] std::optional<rm::dds::Texture> resolveModelTexture(const std::string& name,
+                                                                  const char* slot) {
+    if (name.empty()) {
+        return std::nullopt;
+    }
+
+    const char* home = std::getenv("HOME");
+    const std::filesystem::path path =
+        std::filesystem::path{home == nullptr ? "" : home} / kBarTextureDir / name;
+
+    auto texture = rm::dds::loadFile(path);
+    if (!texture) {
+        std::fprintf(stderr, "  no %s texture (%s): %s\n", slot, name.c_str(),
+                     texture.error().message.c_str());
+        return std::nullopt;
+    }
+
+    std::printf("  %s %s: %dx%d, %d mips\n", slot, name.c_str(), texture->width,
+                texture->height, texture->mipLevels);
+    return std::move(*texture);
+}
 
 /// Loads a model, resolves its diffuse texture, and places instances.
 ///
@@ -206,23 +234,12 @@ struct UnitScene {
                 model->name.c_str(), model->bones.size(), model->vertices.size(),
                 model->triangleCount(), static_cast<double>(model->radius));
 
-    // S3O names its textures but does not carry them; they live under
-    // unittextures/ (FAR report 05 section 5.3).
-    if (!model->textures[0].empty()) {
-        const char* home = std::getenv("HOME");
-        const std::filesystem::path texturePath =
-            std::filesystem::path{home == nullptr ? "" : home} / kBarTextureDir
-            / model->textures[0];
-
-        if (auto texture = rm::dds::loadFile(texturePath)) {
-            std::printf("  texture %s: %dx%d, %d mips\n", model->textures[0].c_str(),
-                        texture->width, texture->height, texture->mipLevels);
-            scene.diffuse = std::move(*texture);
-        } else {
-            std::fprintf(stderr, "  no texture (%s): %s\n", model->textures[0].c_str(),
-                         texture.error().message.c_str());
-        }
-    }
+    // Both textures, not just the diffuse: tex2 carries the self-illumination
+    // and reflectivity the model was authored with, and tex1's alpha is the
+    // team-colour mask that only means something once tex2's shading is there
+    // to light it.
+    scene.diffuse = resolveModelTexture(model->textures[0], "diffuse");
+    scene.shading = resolveModelTexture(model->textures[1], "shading");
 
     scene.instances = rm::atStartPositions(field, starts, scale);
     const std::size_t remaining = count > scene.instances.size()
@@ -506,6 +523,9 @@ int main(int argc, const char* argv[]) {
                 if (units->diffuse) {
                     renderer.setUnitTexture(*units->diffuse);
                 }
+                if (units->shading) {
+                    renderer.setUnitShadingTexture(*units->shading);
+                }
             }
 
             std::printf("offscreen benchmark: %ux%u, %zu frames (discarding %zu warmup),"
@@ -539,6 +559,9 @@ int main(int argc, const char* argv[]) {
                 if (units->diffuse) {
                     renderer.setUnitTexture(*units->diffuse);
                 }
+                if (units->shading) {
+                    renderer.setUnitShadingTexture(*units->shading);
+                }
                 if (unitOptions.focus && !units->instances.empty()) {
                     constexpr float kRadiiBack = 2.5f;
                     const auto& first = units->instances.front();
@@ -571,6 +594,9 @@ int main(int argc, const char* argv[]) {
             window.setUnits(units->model, units->instances);
             if (units->diffuse) {
                 window.setUnitTexture(*units->diffuse);
+            }
+            if (units->shading) {
+                window.setUnitShadingTexture(*units->shading);
             }
 
             // Framing the whole map makes a unit about two pixels across, which

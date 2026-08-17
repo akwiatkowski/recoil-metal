@@ -170,6 +170,10 @@ void Window::setUnits(const Model& model, std::span<const UnitInstance> instance
     impl_->renderer->setUnits(model, instances);
 }
 
+void Window::setUnitShadingTexture(const dds::Texture& texture) {
+    impl_->renderer->setUnitShadingTexture(texture);
+}
+
 void Window::setUnitTexture(const dds::Texture& texture) {
     impl_->renderer->setUnitTexture(texture);
 }
