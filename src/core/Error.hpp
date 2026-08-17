@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdexcept>
+#include <string>
 
 namespace rm {
 
@@ -11,6 +12,25 @@ namespace rm {
 class RendererError : public std::runtime_error {
 public:
     using std::runtime_error::runtime_error;
+};
+
+// Why a value and not an exception: a malformed map is a *recoverable* input
+// error — the app can report it and carry on — which is the split this header
+// already declared above. Loaders therefore return std::expected<T, MapError>.
+//
+// The code exists so tests can assert on the failure *kind* without pinning
+// exact message text (brittle); the message carries the actionable detail for
+// humans, in the spirit of Recoil's own "corrupt header for X (v=%d ts=%d …)".
+struct MapError {
+    enum class Code {
+        NotSmf,       ///< magic string absent — not a Spring/Recoil map at all
+        BadHeader,    ///< version/tilesize/texelPerSquare/squareSize rejected
+        BadGeometry,  ///< mapx/mapy not positive multiples of 128
+        Truncated,    ///< a section pointer or its length runs past end-of-file
+    };
+
+    Code code;
+    std::string message;
 };
 
 } // namespace rm

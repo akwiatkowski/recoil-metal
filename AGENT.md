@@ -83,3 +83,21 @@ formats, built test-first in modern C++, as both research and a C++ showcase.
   link owns the drawable pool and throws `CAMetalLayerInvalidOperation`.
   Take the drawable from the `CAMetalDisplayLinkUpdate` instead. (Learned
   the hard way at milestone 1: it compiles fine and crashes at runtime.)
+- **The `.smf` binary header is NOT the authority on vertical scale.**
+  `mapinfo.lua`'s `smf.minheight`/`smf.maxheight` override it entirely
+  (`MapInfo.cpp:405-418` → `SMFReadMap.cpp:133-158`). BAR's Angel Crossing 1.4
+  ships a header saying `minHeight=850, maxHeight=-150` — inverted — and fixes
+  it in Lua. Honour only the header and the map renders **upside down**: every
+  hill becomes a pit, silently and plausibly. Found at milestone 2 by testing
+  against a real map; no synthetic fixture would ever have shown it.
+- **Height decode divides by 65536, not 65535.** `0xFFFF` never quite reaches
+  `maxHeight`. Getting this wrong is a fraction of a percent of error — small
+  enough to look fine and never be noticed.
+- **`std::from_chars` for floating point is still deleted in Apple's libc++.**
+  Use `strtof`. The integer overloads are fine.
+- **Screenshots: capture the window by ID, not the screen.** With two displays
+  and Spaces, `screencapture -x out.png` repeatedly grabbed bare wallpaper
+  while the app was demonstrably presenting frames. Get the id from
+  `CGWindowListCopyWindowInfo` and use `screencapture -o -l <id>`. Note also
+  that AppleScript/`osascript` has no Accessibility permission here, so
+  `System Events` window queries fail — use CoreGraphics directly.

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "core/mesh/TerrainMesh.hpp"
+
 #include <memory>
 
 namespace rm {
@@ -19,6 +21,9 @@ public:
     Window& operator=(const Window&) = delete;
     Window(Window&&) noexcept;
     Window& operator=(Window&&) noexcept;
+
+    // Uploads terrain for the renderer to draw and frames the camera on it.
+    void setTerrain(const TerrainMesh& mesh);
 
     void show();
 

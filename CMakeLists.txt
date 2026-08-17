@@ -46,7 +46,12 @@ target_link_libraries(metal_cpp INTERFACE
 # --- rm_core: pure C++, no Metal, no AppKit --------------------------------
 # Everything in here is unit-testable on any machine, even one without a GPU.
 add_library(rm_core STATIC
-    src/core/ClearColor.cpp)
+    src/core/map/HeightField.cpp
+    src/core/map/MapInfo.cpp
+    src/core/map/ProceduralField.cpp
+    src/core/map/Smf.cpp
+    src/core/mesh/TerrainMesh.cpp
+    src/core/camera/OrbitCamera.cpp)
 target_include_directories(rm_core PUBLIC src)
 target_link_libraries(rm_core PUBLIC rm_project_warnings)
 
@@ -73,7 +78,16 @@ if(BUILD_TESTING)
     FetchContent_MakeAvailable(Catch2)
     list(APPEND CMAKE_MODULE_PATH ${catch2_SOURCE_DIR}/extras)
 
-    add_executable(rm_tests tests/test_clear_color.cpp)
+    add_executable(rm_tests
+        tests/test_smf.cpp
+        tests/test_terrain_mesh.cpp
+        tests/test_orbit_camera.cpp
+        tests/test_map_info.cpp
+        tests/test_real_map.cpp
+        tests/support/SmfWriter.cpp)
+    # tests/ on the include path so fixtures resolve as "support/SmfWriter.hpp",
+    # matching how src/ headers resolve as "core/...".
+    target_include_directories(rm_tests PRIVATE tests)
     target_link_libraries(rm_tests PRIVATE rm_core Catch2::Catch2WithMain)
 
     include(Catch)
