@@ -14,6 +14,7 @@
 
 #include <simd/simd.h>
 
+#include <chrono>
 #include <string>
 
 namespace {
@@ -414,6 +415,23 @@ void Renderer::setGroundTexture(const TileAtlas& atlas) {
     hasGroundTexture_ = true;
 }
 
+void Renderer::beginBenchmark(std::size_t warmupFrames) {
+    const std::lock_guard lock{benchMutex_};
+    recorder_ = bench::FrameRecorder{warmupFrames};
+    recording_ = true;
+    lastFrameStart_ = 0.0;
+}
+
+bench::FrameRecorder Renderer::benchmarkSnapshot() const {
+    const std::lock_guard lock{benchMutex_};
+    return recorder_;
+}
+
+std::size_t Renderer::recordedFrames() const {
+    const std::lock_guard lock{benchMutex_};
+    return recorder_.recorded();
+}
+
 void Renderer::ensureDepthTexture(unsigned int width, unsigned int height) noexcept {
     if (depthTexture_ != nullptr && depthWidth_ == width && depthHeight_ == height) {
         return;
@@ -442,6 +460,22 @@ void Renderer::drawFrame(CA::MetalDrawable* drawable) noexcept {
     // The drawable is autoreleased by the display link, so every frame needs
     // its own pool or frame objects accumulate until the app exits.
     NS::AutoreleasePool* pool = NS::AutoreleasePool::alloc()->init();
+
+    // Wall time between successive frame starts. With CAMetalDisplayLink this
+    // is the display's cadence, not the renderer's throughput — see the comment
+    // on the completed handler below.
+    double cpuMs = 0.0;
+    if (recording_) {
+        // steady_clock rather than CACurrentMediaTime: same monotonic guarantee,
+        // no extra QuartzCore ObjC header in this translation unit.
+        const double now = std::chrono::duration<double>(
+                               std::chrono::steady_clock::now().time_since_epoch())
+                               .count();
+        if (lastFrameStart_ > 0.0) {
+            cpuMs = (now - lastFrameStart_) * 1000.0;
+        }
+        lastFrameStart_ = now;
+    }
 
     if (drawable != nullptr) {
         MTL::Texture* colorTexture = drawable->texture();
@@ -523,6 +557,26 @@ void Renderer::drawFrame(CA::MetalDrawable* drawable) noexcept {
         }
 
         encoder->endEncoding();
+
+        if (recording_ && cpuMs > 0.0) {
+            // GPUEndTime - GPUStartTime is the driver's own measurement of the
+            // work, so it is unaffected by vsync pacing. That makes it the
+            // meaningful number here: the CPU figure is pinned to the display
+            // refresh by CAMetalDisplayLink and says nothing about how fast the
+            // renderer could go.
+            //
+            // The handler runs on a Metal-owned thread, hence the mutex. It is
+            // taken once per frame, not per draw.
+            // Explicit HandlerFunction: a bare lambda is ambiguous between the
+            // std::function and ObjC-block overloads.
+            commandBuffer->addCompletedHandler(MTL::HandlerFunction{
+                [this, cpuMs](MTL::CommandBuffer* completed) {
+                    const double gpuMs =
+                        (completed->GPUEndTime() - completed->GPUStartTime()) * 1000.0;
+                    const std::lock_guard lock{benchMutex_};
+                    recorder_.add(bench::FrameSample{cpuMs, gpuMs});
+                }});
+        }
 
         commandBuffer->presentDrawable(drawable);
         commandBuffer->commit();

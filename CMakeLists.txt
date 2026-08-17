@@ -55,7 +55,8 @@ add_library(rm_core STATIC
     src/core/map/ProceduralField.cpp
     src/core/map/Smf.cpp
     src/core/mesh/TerrainMesh.cpp
-    src/core/camera/OrbitCamera.cpp)
+    src/core/camera/OrbitCamera.cpp
+    src/core/bench/FrameStats.cpp)
 target_include_directories(rm_core PUBLIC src)
 target_link_libraries(rm_core PUBLIC rm_project_warnings)
 
@@ -90,6 +91,7 @@ if(BUILD_TESTING)
         tests/test_lua_table.cpp
         tests/test_smt.cpp
         tests/test_tile_atlas.cpp
+        tests/test_frame_stats.cpp
         tests/test_real_map.cpp
         tests/support/SmfWriter.cpp)
     # tests/ on the include path so fixtures resolve as "support/SmfWriter.hpp",

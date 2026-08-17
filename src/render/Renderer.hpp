@@ -1,8 +1,11 @@
 #pragma once
 
+#include "core/bench/FrameStats.hpp"
 #include "core/camera/OrbitCamera.hpp"
 #include "core/map/TileAtlas.hpp"
 #include "core/mesh/TerrainMesh.hpp"
+
+#include <mutex>
 
 // Forward declarations keep Metal types out of the header: anything including
 // this file stays pure C++ and test-compilable without frameworks.
@@ -58,6 +61,16 @@ public:
     // this.
     [[nodiscard]] OrbitCamera& camera() noexcept { return camera_; }
 
+    // Starts recording per-frame CPU and GPU timings. GPU time comes from the
+    // command buffer's own GPUStartTime/GPUEndTime, which is the driver's
+    // measurement of the work itself rather than a wall-clock guess around it.
+    void beginBenchmark(std::size_t warmupFrames);
+
+    /// Thread-safe copy of the run so far. Metal invokes completion handlers on
+    /// its own thread, so callers must not hold a reference into the recorder.
+    [[nodiscard]] bench::FrameRecorder benchmarkSnapshot() const;
+    [[nodiscard]] std::size_t recordedFrames() const;
+
     // Renders one frame into drawable. The drawable comes FROM the
     // CAMetalDisplayLinkUpdate — with CAMetalDisplayLink, calling
     // nextDrawable() yourself throws CAMetalLayerInvalidOperation; the link
@@ -103,6 +116,14 @@ private:
     bool hasGroundTexture_ = false;
 
     OrbitCamera camera_;
+
+    // Benchmark state. recorder_ is written from the completion handler, which
+    // Metal may invoke on an internal thread — see drawFrame for how that is
+    // kept safe.
+    mutable std::mutex benchMutex_;
+    bench::FrameRecorder recorder_;
+    bool recording_ = false;
+    double lastFrameStart_ = 0.0;
 };
 
 } // namespace rm

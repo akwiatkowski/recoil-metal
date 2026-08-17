@@ -63,7 +63,11 @@ reimplemented.*
    fixed y=0 water plane. **✔ done**
 4. **Benchmark harness.** Frame-time capture to CSV; same map in Recoil GL
    (via zink) vs recoil-metal. This is where the research question gets its
-   answer. **← current**
+   answer. **← current** — capture side done (`--bench N out.csv`, per-frame
+   CPU and GPU ms). First result on Angel Crossing: **GPU 1.58 ms mean, 3.18 p95**
+   for 2.1M triangles and a 42 MiB BC1 atlas. Still needed: an unthrottled
+   offscreen mode (CAMetalDisplayLink pins wall-clock to the display, so the CPU
+   column measures vsync, not the renderer) and the Recoil GL baseline.
 5. **Units.** glTF/S3O loading, instanced rendering, skinning (Recoil's
    vertex format already carries bone IDs/weights — see FAR's docs).
 
@@ -84,6 +88,9 @@ mise exec -- ctest --test-dir build --output-on-failure
 
 ./build/recoil-metal                    # procedural terrain, no assets needed
 ./build/recoil-metal path/to/map.smf    # a real Recoil map
+
+# Benchmark: 600 frames after 60 warmup, per-frame timings to CSV
+./build/recoil-metal path/to/map.smf --bench 600 docs/bench.csv
 ```
 
 Drag to orbit, scroll to zoom.

@@ -8,8 +8,11 @@
 #include "core/mesh/TerrainMesh.hpp"
 #include "platform/Window.hpp"
 
+#include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <optional>
 #include <string>
 #include <vector>
@@ -159,7 +162,73 @@ constexpr float kDemoMaxHeight = 360.0f;
     return std::move(*atlas);
 }
 
+/// Parsed --bench arguments.
+struct BenchOptions {
+    bool enabled = false;
+    std::size_t frames = 600;
+    std::size_t warmup = 60;
+    std::string csvPath;
+};
+
+/// Recognises `--bench <frames> <out.csv>` anywhere after the map path.
+[[nodiscard]] BenchOptions parseBench(int argc, const char* argv[]) {
+    BenchOptions options;
+    for (int i = 1; i < argc; ++i) {
+        if (std::string{argv[i]} != "--bench") {
+            continue;
+        }
+        options.enabled = true;
+        if (i + 1 < argc) {
+            options.frames = static_cast<std::size_t>(std::max(1, std::atoi(argv[i + 1])));
+        }
+        if (i + 2 < argc) {
+            options.csvPath = argv[i + 2];
+        }
+        break;
+    }
+    return options;
+}
+
 } // namespace
+
+// Polls the renderer and quits once the benchmark has collected enough frames.
+// A timer rather than a counter inside drawFrame: the display link owns the
+// frame loop, and terminating from inside its callback is asking for trouble.
+@interface RMBenchWatcher : NSObject
+@property(nonatomic, assign) rm::Window* window;
+@property(nonatomic, assign) NSUInteger targetFrames;
+@property(nonatomic, copy) NSString* csvPath;
+@end
+
+@implementation RMBenchWatcher
+
+- (void)tick:(NSTimer*)timer {
+    if (self.window->recordedFrames() < self.targetFrames) {
+        return;
+    }
+    [timer invalidate];
+
+    const rm::bench::FrameRecorder recorder = self.window->benchmarkSnapshot();
+    std::printf("%s\n", recorder.summaryLine("recoil-metal").c_str());
+    std::printf("  note: cpu ms is display-paced by CAMetalDisplayLink; gpu ms is the\n"
+                "        renderer's own cost and is the number worth comparing.\n");
+
+    if (self.csvPath.length > 0) {
+        const std::string csv = recorder.toCsv();
+        std::ofstream out{self.csvPath.UTF8String, std::ios::binary};
+        if (out) {
+            out << csv;
+            std::printf("  wrote %s (%zu frames)\n", self.csvPath.UTF8String,
+                        recorder.recorded());
+        } else {
+            std::fprintf(stderr, "  could not write %s\n", self.csvPath.UTF8String);
+        }
+    }
+
+    [NSApp terminate:nil];
+}
+
+@end
 
 int main(int argc, const char* argv[]) {
     @autoreleasepool {
@@ -189,6 +258,26 @@ int main(int argc, const char* argv[]) {
             }
         }
         window.show();
+
+        const BenchOptions bench = parseBench(argc, argv);
+        RMBenchWatcher* watcher = nil;
+        if (bench.enabled) {
+            std::printf("benchmarking %zu frames (discarding %zu warmup)\n",
+                        bench.frames, bench.warmup);
+            window.beginBenchmark(bench.warmup);
+
+            watcher = [[RMBenchWatcher alloc] init];
+            watcher.window = &window;
+            watcher.targetFrames = bench.frames;
+            watcher.csvPath = bench.csvPath.empty()
+                                  ? @""
+                                  : [NSString stringWithUTF8String:bench.csvPath.c_str()];
+            [NSTimer scheduledTimerWithTimeInterval:0.1
+                                             target:watcher
+                                           selector:@selector(tick:)
+                                           userInfo:nil
+                                            repeats:YES];
+        }
 
         [app activateIgnoringOtherApps:YES];
         [app run]; // never returns until the app quits

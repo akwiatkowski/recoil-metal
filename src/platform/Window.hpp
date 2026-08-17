@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/bench/FrameStats.hpp"
 #include "core/map/TileAtlas.hpp"
 #include "core/mesh/TerrainMesh.hpp"
 
@@ -28,6 +29,11 @@ public:
 
     // Uploads the map ground texture. Optional — see Renderer::setGroundTexture.
     void setGroundTexture(const TileAtlas& atlas);
+
+    // Benchmark control. See Renderer::beginBenchmark.
+    void beginBenchmark(std::size_t warmupFrames);
+    [[nodiscard]] std::size_t recordedFrames() const;
+    [[nodiscard]] bench::FrameRecorder benchmarkSnapshot() const;
 
     void show();
 

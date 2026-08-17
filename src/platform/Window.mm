@@ -154,6 +154,18 @@ void Window::setGroundTexture(const TileAtlas& atlas) {
     impl_->renderer->setGroundTexture(atlas);
 }
 
+void Window::beginBenchmark(std::size_t warmupFrames) {
+    impl_->renderer->beginBenchmark(warmupFrames);
+}
+
+std::size_t Window::recordedFrames() const {
+    return impl_->renderer->recordedFrames();
+}
+
+bench::FrameRecorder Window::benchmarkSnapshot() const {
+    return impl_->renderer->benchmarkSnapshot();
+}
+
 void Window::show() {
     [impl_->window makeKeyAndOrderFront:nil];
 }
