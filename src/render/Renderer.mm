@@ -35,6 +35,7 @@ struct TerrainUniforms {
     float hasTexture;  ///< float, not bool: bool packing across the ABI is a trap
     simd_float3 cameraPosition;  ///< eye in world space, for the specular half-vector
     float hasTexture2;           ///< the model's shading texture, if it has one
+    float waterLevel;            ///< elmos; Recoil's is always 0, SupCom's is per map
 };
 
 static_assert(sizeof(TerrainUniforms) == 144, "TerrainUniforms must match the MSL layout");
@@ -44,6 +45,7 @@ static_assert(offsetof(TerrainUniforms, hasTexture) == 96, "unexpected padding b
 static_assert(offsetof(TerrainUniforms, cameraPosition) == 112,
               "float3 realigns to 16 bytes, leaving 12 bytes of pad after hasTexture");
 static_assert(offsetof(TerrainUniforms, hasTexture2) == 128, "unexpected padding before hasTexture2");
+static_assert(offsetof(TerrainUniforms, waterLevel) == 132, "unexpected padding before waterLevel");
 
 // Buffer/texture binding indices, shared between the C++ and MSL sides.
 constexpr NS::UInteger kVertexBufferIndex = 0;
@@ -80,6 +82,7 @@ struct Uniforms {
     float hasTexture;
     float3 cameraPosition;
     float hasTexture2;
+    float waterLevel;
 };
 
 struct VertexOut {
@@ -131,9 +134,9 @@ fragment float4 terrainFragment(VertexOut in [[stage_in]],
 }
 
 // --- Water ------------------------------------------------------------------
-// Recoil's water is a plane hard-coded at y = 0 (rts/Map/Ground.h:32) — there is
-// no dynamic water level. Four vertices generated from the map extents; no
-// buffer needed.
+// Recoil's water is a plane hard-coded at y = 0 (rts/Map/Ground.h:32); Supreme
+// Commander stores an elevation per map. One uniform covers both. Four vertices
+// generated from the map extents; no buffer needed.
 struct WaterOut {
     float4 position [[position]];
     float3 world;
@@ -142,7 +145,7 @@ struct WaterOut {
 vertex WaterOut waterVertex(uint vid [[vertex_id]], constant Uniforms& u [[buffer(1)]]) {
     // Triangle strip: (0,0) (1,0) (0,1) (1,1).
     const float2 corner = float2(float(vid & 1u), float((vid >> 1) & 1u));
-    const float3 world = float3(corner.x * u.mapWidth, 0.0, corner.y * u.mapDepth);
+    const float3 world = float3(corner.x * u.mapWidth, u.waterLevel, corner.y * u.mapDepth);
 
     WaterOut out;
     out.position = u.viewProjection * float4(world, 1.0);
@@ -698,6 +701,43 @@ void Renderer::setGroundTexture(const TileAtlas& atlas) {
     hasGroundTexture_ = true;
 }
 
+void Renderer::setGroundColourMap(const ColourImage& image) {
+    if (image.width <= 0 || image.height <= 0 || image.empty()) {
+        return;
+    }
+
+    // RGBA8 rather than the terrain path's BC1: this image is generated here,
+    // not decoded from an asset, and compressing it would cost a block encoder
+    // to save memory a terrain-type map does not use much of — a 2048-square map
+    // is 16 MiB.
+    MTL::TextureDescriptor* descriptor = MTL::TextureDescriptor::texture2DDescriptor(
+        MTL::PixelFormat::PixelFormatRGBA8Unorm, static_cast<NS::UInteger>(image.width),
+        static_cast<NS::UInteger>(image.height), /*mipmapped=*/false);
+    descriptor->setUsage(MTL::TextureUsageShaderRead);
+    descriptor->setStorageMode(MTL::StorageModeShared);
+
+    MTL::Texture* texture = device_->newTexture(descriptor);
+    if (texture == nullptr) {
+        throw RendererError{"failed to allocate the ground colour map"};
+    }
+
+    texture->replaceRegion(MTL::Region::Make2D(0, 0, static_cast<NS::UInteger>(image.width),
+                                               static_cast<NS::UInteger>(image.height)),
+                           0, image.rgba.data(),
+                           static_cast<NS::UInteger>(image.width) * 4);
+
+    if (groundTexture_ != nullptr) {
+        groundTexture_->release();
+    }
+    groundTexture_ = texture;
+    hasGroundTexture_ = true;
+}
+
+void Renderer::setWater(bool enabled, float levelElmos) noexcept {
+    hasWater_ = enabled;
+    waterLevel_ = levelElmos;
+}
+
 Renderer::CapturedImage Renderer::renderToImage(unsigned int width, unsigned int height) {
     CapturedImage image;
     if (width == 0 || height == 0) {
@@ -930,6 +970,7 @@ void Renderer::encodeScene(MTL::RenderCommandEncoder* encoder, unsigned int widt
         .hasTexture = hasGroundTexture_ ? 1.0f : 0.0f,
         .cameraPosition = camera_.eye(),
         .hasTexture2 = 0.0f,
+        .waterLevel = waterLevel_,
     };
 
     // Culling stays off: the camera is free to dip below the terrain, and a
@@ -1026,7 +1067,7 @@ void Renderer::encodeScene(MTL::RenderCommandEncoder* encoder, unsigned int widt
     // --- Water -------------------------------------------------------------
     // Last, so it blends over whatever terrain and units sit below y = 0. Only
     // worth drawing when something actually is below it.
-    if (indexCount_ > 0 && terrainMinY_ < 0.0f) {
+    if (indexCount_ > 0 && hasWater_ && terrainMinY_ < waterLevel_) {
         encoder->setRenderPipelineState(waterPipeline_);
         encoder->setDepthStencilState(waterDepthState_);
         encoder->setVertexBytes(&uniforms, sizeof(uniforms), kUniformBufferIndex);

@@ -24,9 +24,11 @@ public:
 struct MapError {
     enum class Code {
         NotSmf,       ///< magic string absent — not a Spring/Recoil map at all
+        NotScmap,     ///< magic absent — not a Supreme Commander map either
         BadHeader,    ///< version/tilesize/texelPerSquare/squareSize rejected
         BadGeometry,  ///< mapx/mapy not positive multiples of 128
         Truncated,    ///< a section pointer or its length runs past end-of-file
+        TooLarge,     ///< valid, but beyond what this renderer can hold at once
     };
 
     Code code;

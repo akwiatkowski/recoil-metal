@@ -57,6 +57,8 @@ add_library(rm_core STATIC
     src/core/lua/LuaTable.cpp
     src/core/map/ProceduralField.cpp
     src/core/map/Smf.cpp
+    src/core/map/Scmap.cpp
+    src/core/map/TerrainType.cpp
     src/core/mesh/TerrainMesh.cpp
     src/core/camera/OrbitCamera.cpp
     src/core/bench/FrameStats.cpp
@@ -107,6 +109,8 @@ if(BUILD_TESTING)
         tests/test_team_colours.cpp
         tests/test_unit_batch.cpp
         tests/test_real_map.cpp
+        tests/test_terrain_type.cpp
+        tests/test_real_scmap.cpp
         tests/support/SmfWriter.cpp
         tests/support/S3oWriter.cpp)
     # tests/ on the include path so fixtures resolve as "support/SmfWriter.hpp",

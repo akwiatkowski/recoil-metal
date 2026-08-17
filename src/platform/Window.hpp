@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/bench/FrameStats.hpp"
+#include "core/map/TerrainType.hpp"
 #include "core/map/TileAtlas.hpp"
 #include "core/model/Model.hpp"
 #include "core/scene/UnitBatch.hpp"
@@ -35,6 +36,11 @@ public:
 
     // Uploads the map ground texture. Optional — see Renderer::setGroundTexture.
     void setGroundTexture(const TileAtlas& atlas);
+
+    // The Supreme Commander ground path and the per-map water plane.
+    // See Renderer::setGroundColourMap and Renderer::setWater.
+    void setGroundColourMap(const ColourImage& image);
+    void setWater(bool enabled, float levelElmos);
 
     // Units to draw on the terrain. See Renderer::setUnits.
     void setUnits(std::span<const dds::Texture> textures, std::span<const UnitBatch> batches);

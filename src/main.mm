@@ -4,8 +4,10 @@
 
 #include "core/map/MapInfo.hpp"
 #include "core/map/ProceduralField.hpp"
+#include "core/map/Scmap.hpp"
 #include "core/map/Smf.hpp"
 #include "core/map/Smt.hpp"
+#include "core/map/TerrainType.hpp"
 #include "core/model/S3o.hpp"
 #include "core/scene/UnitPlacement.hpp"
 #include "core/texture/Dds.hpp"
@@ -56,17 +58,10 @@ constexpr int kDemoSquares = 256;
 constexpr float kDemoMinHeight = -40.0f;
 constexpr float kDemoMaxHeight = 360.0f;
 
-/// Loads the map named on the command line, or synthesises one if none is given.
-/// Returns std::nullopt only when an explicitly requested map failed to load —
-/// falling back silently there would hide the error the user needs to see.
-[[nodiscard]] std::optional<rm::HeightField> resolveHeightField(int argc, const char* argv[]) {
-    if (argc < 2) {
-        std::printf("no map given, rendering a procedural field\n"
-                    "  usage: recoil-metal <path/to/map.smf>\n");
-        return rm::makeSineHills(kDemoSquares, kDemoSquares, kDemoMinHeight, kDemoMaxHeight);
-    }
-
-    const std::string path = argv[1];
+/// Loads a Recoil `.smf` heightmap, honouring mapinfo.lua's vertical range.
+/// Returns std::nullopt when the map failed to load — falling back silently
+/// there would hide the error the user needs to see.
+[[nodiscard]] std::optional<rm::HeightField> resolveSmfHeightField(const std::string& path) {
     auto field = rm::smf::loadFile(path);
     if (!field) {
         std::fprintf(stderr, "failed to load \"%s\": %s\n",
@@ -171,6 +166,125 @@ constexpr float kDemoMaxHeight = 360.0f;
     return std::move(*atlas);
 }
 
+// Everything a loaded map contributes to the scene, whichever family it came
+// from. The renderer takes the same calls either way — the point of the whole
+// HeightField seam.
+struct LoadedMap {
+    rm::HeightField field;
+
+    std::optional<rm::TileAtlas> atlas;       ///< SMF: a baked BC1 ground texture
+    std::optional<rm::ColourImage> colours;   ///< .scmap: terrain-type bands
+
+    std::vector<rm::mapinfo::StartPosition> starts;
+
+    // Recoil's water is a fixed plane at y = 0 that every map shares; Supreme
+    // Commander stores a level per map, and 17 of the 60 stock maps are dry.
+    bool hasWater = true;
+    float waterLevel = 0.0f;
+};
+
+/// Loads a Supreme Commander `.scmap`.
+///
+/// No mapinfo.lua equivalent and no start positions: those live in the map's
+/// `_scenario.lua`, which is a later milestone. Units therefore scatter rather
+/// than spawning at bases on these maps.
+[[nodiscard]] std::optional<LoadedMap> resolveScmap(const std::string& path) {
+    auto map = rm::scmap::loadFile(path);
+    if (!map) {
+        std::fprintf(stderr, "failed to load \"%s\": %s\n", path.c_str(),
+                     map.error().message.c_str());
+        return std::nullopt;
+    }
+
+    std::printf("loaded %s: %d x %d squares (%.0f x %.0f elmos), Supreme Commander v%d\n",
+                path.c_str(), map->field.squaresX, map->field.squaresZ,
+                static_cast<double>(map->field.widthElmos()),
+                static_cast<double>(map->field.depthElmos()), rm::scmap::kVersionMinor);
+
+    if (!map->endsExactlyAtEof) {
+        // Not fatal — everything drawn is read before the last two sections —
+        // but it means a field width above them is wrong, and saying so is the
+        // whole value of parsing them.
+        std::fprintf(stderr, "  warning: the sequential parse did not land on EOF; a "
+                             "section width is wrong\n");
+    }
+
+    LoadedMap loaded;
+    loaded.hasWater = map->hasWater;
+    loaded.waterLevel = map->waterElevation;
+    std::printf("  water: %s at %.1f elmos\n", map->hasWater ? "yes" : "none (dry map)",
+                static_cast<double>(map->waterElevation));
+
+    rm::ColourImage colours =
+        rm::colourTerrainTypes(map->terrainType, map->typesX, map->typesZ);
+    if (colours.empty()) {
+        std::fprintf(stderr, "  no terrain-type colouring; shading by elevation instead\n");
+    } else {
+        std::printf("  ground: %d x %d terrain-type bands (%zu MiB RGBA8)\n", colours.width,
+                    colours.height, colours.rgba.size() / (1024 * 1024));
+        loaded.colours = std::move(colours);
+    }
+
+    loaded.field = std::move(map->field);
+    return loaded;
+}
+
+/// Reads a file's first bytes, for telling the two map families apart.
+[[nodiscard]] std::vector<std::byte> readMagic(const std::filesystem::path& path,
+                                               std::size_t count) {
+    std::vector<std::byte> magic(count);
+    std::ifstream file{path, std::ios::binary};
+    if (!file) {
+        return {};
+    }
+    file.read(reinterpret_cast<char*>(magic.data()), static_cast<std::streamsize>(count));
+    magic.resize(static_cast<std::size_t>(file.gcount()));
+    return magic;
+}
+
+/// The map named on the command line, or a synthesised one if none is given.
+///
+/// Which family a file belongs to is decided by its MAGIC, not its extension:
+/// `.smf` opens with "spring map file" and `.scmap` with "Map\x1a". Sniffing
+/// costs four bytes and means neither needs its own flag — and everything
+/// downstream, renderer included, cannot tell which one it got. That is the
+/// whole return on having built HeightField format-agnostic at milestone 2.
+[[nodiscard]] std::optional<LoadedMap> resolveMap(int argc, const char* argv[]) {
+    if (argc < 2) {
+        std::printf("no map given, rendering a procedural field\n"
+                    "  usage: recoil-metal <path/to/map.smf | path/to/map.scmap>\n");
+        LoadedMap loaded;
+        loaded.field = rm::makeSineHills(kDemoSquares, kDemoSquares, kDemoMinHeight,
+                                         kDemoMaxHeight);
+        return loaded;
+    }
+
+    const std::string path = argv[1];
+
+    if (rm::scmap::looksLikeScmap(readMagic(path, sizeof(rm::scmap::kMagic)))) {
+        return resolveScmap(path);
+    }
+
+    auto field = resolveSmfHeightField(path);
+    if (!field) {
+        return std::nullopt;
+    }
+
+    LoadedMap loaded;
+    loaded.field = std::move(*field);
+    loaded.atlas = resolveAtlas(path);
+
+    // Start positions come from the same mapinfo.lua already consulted for the
+    // height range, so this costs one extra parse and no new plumbing.
+    if (const auto infoPath = rm::mapinfo::findBesideMap(path)) {
+        if (const auto info = rm::mapinfo::parseFile(*infoPath)) {
+            loaded.starts = info->startPositions;
+        }
+    }
+
+    return loaded;
+}
+
 // Where BAR's reference content lives. Used only to resolve a model's texture
 // names, which S3O carries but does not contain.
 constexpr const char* kBarTextureDir =
@@ -267,7 +381,8 @@ struct UnitOptions {
 /// would not.
 [[nodiscard]] UnitScene resolveUnits(std::span<const UnitOptions> requests,
                                      const rm::HeightField& field,
-                                     std::span<const rm::mapinfo::StartPosition> starts) {
+                                     std::span<const rm::mapinfo::StartPosition> starts,
+                                     float landAbove) {
     UnitScene scene;
 
     for (std::size_t i = 0; i < requests.size(); ++i) {
@@ -300,8 +415,9 @@ struct UnitOptions {
         }
         const std::size_t remaining =
             request.count > placed.size() ? request.count - placed.size() : 0;
-        const auto scattered = rm::scatterOnLand(
-            field, remaining, kScatterSeed + static_cast<std::uint32_t>(i), request.scale);
+        const auto scattered =
+            rm::scatterOnLand(field, remaining, kScatterSeed + static_cast<std::uint32_t>(i),
+                              request.scale, landAbove);
         placed.insert(placed.end(), scattered.begin(), scattered.end());
 
         std::printf("  %zu instances (%zu at start positions, %zu scattered)\n", placed.size(),
@@ -416,6 +532,20 @@ struct ShotOptions {
         }
     }
     return false;
+}
+
+/// Applies whichever ground the map brought, plus its water plane.
+///
+/// Templated on the target for the same reason focusOnFirstUnit is: Window and
+/// Renderer both offer these and share no base class.
+template <typename Target>
+void applyGround(Target& target, const LoadedMap& map) {
+    if (map.atlas) {
+        target.setGroundTexture(*map.atlas);   // SMF: a baked BC1 atlas
+    } else if (map.colours) {
+        target.setGroundColourMap(*map.colours);  // .scmap: terrain-type bands
+    }
+    target.setWater(map.hasWater, map.waterLevel);
 }
 
 /// Points the camera at the first instance of the first model.
@@ -583,27 +713,20 @@ void writeCsv(const std::string& path, const rm::bench::FrameRecorder& recorder)
 
 int main(int argc, const char* argv[]) {
     @autoreleasepool {
-        const auto field = resolveHeightField(argc, argv);
-        if (!field) {
+        const auto map = resolveMap(argc, argv);
+        if (!map) {
             return 1;
-        }
-
-        // Start positions come from the same mapinfo.lua already consulted for
-        // the height range, so this costs one extra parse and no new plumbing.
-        std::vector<rm::mapinfo::StartPosition> starts;
-        if (argc >= 2) {
-            if (const auto infoPath = rm::mapinfo::findBesideMap(argv[1])) {
-                if (const auto info = rm::mapinfo::parseFile(*infoPath)) {
-                    starts = info->startPositions;
-                }
-            }
         }
 
         const std::vector<UnitOptions> unitRequests = parseUnits(argc, argv);
         const bool focus = parseFocus(argc, argv);
-        const UnitScene units = resolveUnits(unitRequests, *field, starts);
+        // Land above the water, whatever the map calls water: Recoil's plane is
+        // always y = 0, Supreme Commander's is per map and 140 elmos on most.
+        // Scattering above 0 on a FA map drowns most of the units.
+        const UnitScene units = resolveUnits(unitRequests, map->field, map->starts,
+                                             map->hasWater ? map->waterLevel : 0.0f);
 
-        const rm::TerrainMesh mesh = rm::buildTerrainMesh(*field);
+        const rm::TerrainMesh mesh = rm::buildTerrainMesh(map->field);
         std::printf("terrain: %zu vertices, %zu triangles, height %.1f..%.1f elmos\n",
                     mesh.vertices.size(), mesh.triangleCount(),
                     static_cast<double>(mesh.minY), static_cast<double>(mesh.maxY));
@@ -617,11 +740,7 @@ int main(int argc, const char* argv[]) {
         if (bench.enabled && bench.offscreen) {
             rm::Renderer renderer{nullptr};
             renderer.setTerrain(mesh);
-            if (argc >= 2) {
-                if (auto atlas = resolveAtlas(argv[1])) {
-                    renderer.setGroundTexture(*atlas);
-                }
-            }
+            applyGround(renderer, *map);
             renderer.setUnits(units.textures.all(), units.batches);
 
             std::printf("offscreen benchmark: %ux%u, %zu frames (discarding %zu warmup),"
@@ -645,11 +764,7 @@ int main(int argc, const char* argv[]) {
         if (shot.enabled) {
             rm::Renderer renderer{nullptr};
             renderer.setTerrain(mesh);
-            if (argc >= 2) {
-                if (auto atlas = resolveAtlas(argv[1])) {
-                    renderer.setGroundTexture(*atlas);
-                }
-            }
+            applyGround(renderer, *map);
             renderer.setUnits(units.textures.all(), units.batches);
             if (focus) {
                 focusOnFirstUnit(renderer, units);
@@ -669,11 +784,7 @@ int main(int argc, const char* argv[]) {
         // 1280x720 points: comfortable debug size on a laptop screen.
         rm::Window window{1280, 720, "recoil-metal — m5: units on SMF terrain"};
         window.setTerrain(mesh);
-        if (argc >= 2) {
-            if (auto atlas = resolveAtlas(argv[1])) {
-                window.setGroundTexture(*atlas);
-            }
-        }
+        applyGround(window, *map);
         window.setUnits(units.textures.all(), units.batches);
         if (focus) {
             focusOnFirstUnit(window, units);

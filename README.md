@@ -86,6 +86,18 @@ reimplemented.*
    model struct, so the FA path is additive rather than a rewrite. See
    [ADR-004](ADR_DECISIONS.md).
 
+6. **Supreme Commander maps.** `.scmap` v60, decoded byte-exactly and validated
+   to EOF on all 60 retail stock maps. The heightmap lands in the *same*
+   `HeightField` the SMF loader fills — that seam was designed for this at
+   milestone 2 and cost nothing to collect on. Which loader runs is decided by
+   the file's magic, not its extension, so nothing downstream knows which family
+   a map came from. **✔ done** — geometry, terrain-type ground colour, and the
+   per-map water plane (17 of the 60 stock maps are dry; Recoil's is a fixed
+   plane at y=0). Still to do: the real splat shader — SupCom bakes no ground
+   texture, it blends nine strata through two masks at runtime — and start
+   positions from `_scenario.lua`. Maps above 2048 squares are refused rather
+   than half-loaded: their mesh alone would want ~800 MB and there is no LOD yet.
+
 Stage B (sim semantics, only if milestones 1–5 prove out) is deliberately not
 planned. The cliff is real; plan when we're on it.
 
@@ -137,6 +149,22 @@ name the `.s3o` carries, under BAR's `unittextures/`; models naming the same
 file share one upload, and the draws are ordered so each texture *pair* is bound
 once per frame rather than once per model — which is the unit Recoil batches on
 too. The first `--units` takes the map's start positions; the rest are scattered.
+
+### Supreme Commander maps
+
+Same binary, same arguments — the format is sniffed from the file's magic:
+
+```sh
+FA="/Volumes/Samsung_T5/faf/Supreme Commander Forged Alliance/maps"
+./build/recoil-metal "$FA/SCMP_009/SCMP_009.scmap"
+
+# BAR units on a Forged Alliance map: both content families in one scene
+./build/recoil-metal "$FA/SCMP_009/SCMP_009.scmap" --units $BAR/corgantbig.s3o 250
+```
+
+Ground colour comes from the map's terrain-type array rather than a texture:
+`.scmap` ships no baked ground, so until the splat shader exists those bands are
+the stand-in. No game assets are read from anywhere but the retail install.
 
 ### Screenshots
 

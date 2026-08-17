@@ -166,6 +166,14 @@ bench::FrameRecorder Window::benchmarkSnapshot() const {
     return impl_->renderer->benchmarkSnapshot();
 }
 
+void Window::setGroundColourMap(const ColourImage& image) {
+    impl_->renderer->setGroundColourMap(image);
+}
+
+void Window::setWater(bool enabled, float levelElmos) {
+    impl_->renderer->setWater(enabled, levelElmos);
+}
+
 void Window::setUnits(std::span<const dds::Texture> textures,
                       std::span<const UnitBatch> batches) {
     impl_->renderer->setUnits(textures, batches);

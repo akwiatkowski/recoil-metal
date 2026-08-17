@@ -2,6 +2,7 @@
 
 #include "core/bench/FrameStats.hpp"
 #include "core/camera/OrbitCamera.hpp"
+#include "core/map/TerrainType.hpp"
 #include "core/map/TileAtlas.hpp"
 #include "core/model/Model.hpp"
 #include "core/scene/UnitBatch.hpp"
@@ -61,6 +62,19 @@ public:
     // gets. BC1 blocks are uploaded verbatim — Apple Silicon samples them
     // natively, so there is no decode or transcode step.
     void setGroundTexture(const TileAtlas& atlas);
+
+    // Uploads an uncompressed ground colour map, the Supreme Commander path's
+    // equivalent of the above. A .scmap bakes no ground texture at all — it
+    // names strata that live in the game's archives and blends them at runtime —
+    // so until that splat shader exists the terrain-type array supplies the
+    // colour (core/map/TerrainType.hpp). Same texture slot, same shader; only
+    // the pixel format differs, and that lives in the texture object.
+    void setGroundColourMap(const ColourImage& image);
+
+    // The water plane. Recoil hard-codes it at y = 0 (rts/Map/Ground.h:32),
+    // which is the default here; Supreme Commander stores a level per map and 17
+    // of its 60 stock maps have no water at all, so both are expressible.
+    void setWater(bool enabled, float levelElmos) noexcept;
 
     // Uploads several models, the instances to draw each at, and the textures
     // they share. One instanced draw call covers every instance of a model; the
@@ -204,6 +218,11 @@ private:
     float mapDepth_ = 0.0f;
 
     bool hasGroundTexture_ = false;
+
+    // Water plane state. Defaults match Recoil, whose water is a fixed plane at
+    // y = 0 that every SMF map shares.
+    bool hasWater_ = true;
+    float waterLevel_ = 0.0f;
 
     OrbitCamera camera_;
 
