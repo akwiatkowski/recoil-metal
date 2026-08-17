@@ -53,10 +53,53 @@ struct ModelBone {
 
     std::array<float, 3> offset{{0.0f, 0.0f, 0.0f}};        ///< relative to parent
     std::array<float, 3> globalOffset{{0.0f, 0.0f, 0.0f}};  ///< accumulated to root
+
+    // Rotation relative to the parent, as a quaternion (w, x, y, z), and the
+    // same accumulated to the root.
+    //
+    // Identity for every .s3o: the format carries no rotation whatsoever, which
+    // is why milestone 5 could add a vector and be done. .scm carries one per
+    // bone, so accumulating the hierarchy became real composition rather than
+    // addition — and this is the rest pose a .sca animates away from.
+    std::array<float, 4> rotation{{1.0f, 0.0f, 0.0f, 0.0f}};
+    std::array<float, 4> globalRotation{{1.0f, 0.0f, 0.0f, 0.0f}};
+};
+
+/// Rotates a vector by a quaternion (w, x, y, z). Free-standing because both
+/// the loader and anything walking a hierarchy needs it.
+[[nodiscard]] std::array<float, 3> rotateByQuaternion(const std::array<float, 4>& q,
+                                                      const std::array<float, 3>& v) noexcept;
+
+/// Quaternion product, parent-first: the rotation of `b` applied within `a`.
+[[nodiscard]] std::array<float, 4> multiplyQuaternions(const std::array<float, 4>& a,
+                                                       const std::array<float, 4>& b) noexcept;
+
+// Which engine's conventions a model was authored under.
+//
+// Both families reduce to the same bones/vertices/indices, which is what makes
+// one struct honest — but two things genuinely differ, and both are invisible
+// rather than wrong-looking if guessed:
+//
+//   vertex space  .s3o partitions geometry per rigid piece and stores each
+//                 piece's vertices relative to that piece, so a bone offset is
+//                 added at draw time. .scm stores every vertex in MODEL space
+//                 already; adding the offset would scatter the model. Verified
+//                 against the retail corpus, not assumed.
+//   team mask     .s3o puts it in tex1's alpha (ModelFragProgGL4.glsl:101).
+//                 Supreme Commander puts it in the alpha of the `_SpecTeam`
+//                 texture — which is what the name says, and what the data
+//                 shows: its albedo is frequently DXT1 and has no usable alpha.
+//
+// A per-format loader could not express either difference without this, and a
+// renderer cannot infer them from the geometry.
+enum class Family {
+    Recoil,            ///< .s3o — Recoil / Beyond All Reason
+    SupremeCommander,  ///< .scm — Supreme Commander / Forged Alliance
 };
 
 struct Model {
     std::string name;
+    Family family = Family::Recoil;
 
     std::vector<ModelBone> bones;
     std::vector<ModelVertex> vertices;
@@ -84,6 +127,14 @@ struct Model {
 
     /// Largest extent from the origin, used when the file supplies no radius.
     [[nodiscard]] float computedRadius() const noexcept;
+
+    /// A vertex's position in model space, which is where the two families
+    /// differ: Recoil's are bone-local and need the bone's accumulated offset,
+    /// Supreme Commander's are already there. See Family.
+    [[nodiscard]] std::array<float, 3> modelSpacePosition(const ModelVertex& vertex) const noexcept;
 };
+
+/// Fills boundsMin/boundsMax from the vertices, honouring the model's family.
+void computeBounds(Model& model) noexcept;
 
 } // namespace rm

@@ -335,18 +335,6 @@ std::expected<void, MapError> loadPiece(Walk& walk, std::size_t offset, int pare
 
 namespace rm {
 
-float Model::computedRadius() const noexcept {
-    float longest = 0.0f;
-    for (const ModelVertex& vertex : vertices) {
-        const ModelBone& bone = bones[vertex.boneIndex];
-        const float x = vertex.position[0] + bone.globalOffset[0];
-        const float y = vertex.position[1] + bone.globalOffset[1];
-        const float z = vertex.position[2] + bone.globalOffset[2];
-        longest = std::max(longest, x * x + y * y + z * z);
-    }
-    return std::sqrt(longest);
-}
-
 namespace s3o {
 
 std::expected<Model, MapError> load(std::span<const std::byte> bytes) {
@@ -397,26 +385,7 @@ std::expected<Model, MapError> load(std::span<const std::byte> bytes) {
         return std::unexpected(root.error());
     }
 
-    // --- Bounds ------------------------------------------------------------
-    if (!model.vertices.empty()) {
-        std::array<float, 3> lo{{std::numeric_limits<float>::max(),
-                                 std::numeric_limits<float>::max(),
-                                 std::numeric_limits<float>::max()}};
-        std::array<float, 3> hi{{std::numeric_limits<float>::lowest(),
-                                 std::numeric_limits<float>::lowest(),
-                                 std::numeric_limits<float>::lowest()}};
-
-        for (const ModelVertex& vertex : model.vertices) {
-            const ModelBone& bone = model.bones[vertex.boneIndex];
-            for (std::size_t axis = 0; axis < 3; ++axis) {
-                const float value = vertex.position[axis] + bone.globalOffset[axis];
-                lo[axis] = std::min(lo[axis], value);
-                hi[axis] = std::max(hi[axis], value);
-            }
-        }
-        model.boundsMin = lo;
-        model.boundsMax = hi;
-    }
+    computeBounds(model);
 
     // The engine derives these from the geometry when the header leaves them at
     // (near) zero (S3OParser.cpp:79-80). Same rule here so callers need not know

@@ -62,7 +62,9 @@ add_library(rm_core STATIC
     src/core/mesh/TerrainMesh.cpp
     src/core/camera/OrbitCamera.cpp
     src/core/bench/FrameStats.cpp
+    src/core/model/Model.cpp
     src/core/model/S3o.cpp
+    src/core/model/Scm.cpp
     src/core/texture/Dds.cpp
     src/core/scene/UnitPlacement.cpp
     src/core/scene/UnitBatch.cpp)
@@ -104,6 +106,7 @@ if(BUILD_TESTING)
         tests/test_frame_stats.cpp
         tests/test_s3o.cpp
         tests/test_real_model.cpp
+        tests/test_real_scm.cpp
         tests/test_dds.cpp
         tests/test_unit_placement.cpp
         tests/test_team_colours.cpp

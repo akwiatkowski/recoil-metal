@@ -36,6 +36,7 @@ struct TerrainUniforms {
     simd_float3 cameraPosition;  ///< eye in world space, for the specular half-vector
     float hasTexture2;           ///< the model's shading texture, if it has one
     float waterLevel;            ///< elmos; Recoil's is always 0, SupCom's is per map
+    float supremeCommanderShading;  ///< 1 when the model follows SupCom's channel layout
 };
 
 static_assert(sizeof(TerrainUniforms) == 144, "TerrainUniforms must match the MSL layout");
@@ -46,6 +47,8 @@ static_assert(offsetof(TerrainUniforms, cameraPosition) == 112,
               "float3 realigns to 16 bytes, leaving 12 bytes of pad after hasTexture");
 static_assert(offsetof(TerrainUniforms, hasTexture2) == 128, "unexpected padding before hasTexture2");
 static_assert(offsetof(TerrainUniforms, waterLevel) == 132, "unexpected padding before waterLevel");
+static_assert(offsetof(TerrainUniforms, supremeCommanderShading) == 136,
+              "unexpected padding before supremeCommanderShading");
 
 // Buffer/texture binding indices, shared between the C++ and MSL sides.
 constexpr NS::UInteger kVertexBufferIndex = 0;
@@ -83,6 +86,7 @@ struct Uniforms {
     float3 cameraPosition;
     float hasTexture2;
     float waterLevel;
+    float supremeCommanderShading;
 };
 
 struct VertexOut {
@@ -262,7 +266,23 @@ fragment float4 unitFragment(UnitOut in [[stage_in]],
         tex2 = shading.sample(texSampler, in.uv);
     }
 
-    const float3 albedo = mix(tex1.rgb, in.teamColour.rgb, tex1.a);
+    // Where the team-colour mask lives, and what the shading texture's channels
+    // mean, differ between the two content families — see Family in Model.hpp.
+    //
+    //   Recoil  tex1.a is the mask; tex2.r is self-illumination and tex2.g is
+    //           reflectivity (ModelFragProgGL4.glsl:101,129-131).
+    //   SupCom  the mask is the alpha of `_SpecTeam`, which is what the name
+    //           says and what the data shows — its albedo is frequently DXT1
+    //           and carries no usable alpha at all. Its red channel is the
+    //           specular strength. Green and blue are left alone: no reference
+    //           this project has verified says what they hold, and inventing a
+    //           meaning would look like shading rather than read as a bug.
+    const bool supCom = u.supremeCommanderShading > 0.5;
+    const float teamMask = supCom ? tex2.a : tex1.a;
+    const float selfIllum = supCom ? 0.0 : tex2.r;
+    const float shininess = supCom ? tex2.r : tex2.g;
+
+    const float3 albedo = mix(tex1.rgb, in.teamColour.rgb, teamMask);
 
     const float3 N = normalize(in.normal);
     const float3 L = u.sunDirection;
@@ -279,10 +299,10 @@ fragment float4 unitFragment(UnitOut in [[stage_in]],
     float3 specular = kUnitSpecular * min(pow(HdotN, 2.5 * kSpecularExponent)
                                               + 0.3 * pow(HdotN, 2.0 * 3.0),
                                           1.0);
-    specular *= tex2.g * 4.0;
+    specular *= shininess * 4.0;
 
-    light = mix(light, kEnvironment, tex2.g);  // reflection
-    light += tex2.rrr;                         // self-illum
+    light = mix(light, kEnvironment, shininess);  // reflection
+    light += float3(selfIllum);                   // self-illum
 
     // tex2.a is a one-bit mask the engine only *discards* on in its alpha pass,
     // where alphaCtrl is set (ModelFragProgGL4.glsl:62-70,97). The default
@@ -588,14 +608,23 @@ void Renderer::setUnits(std::span<const dds::Texture> textures,
         // Bone offsets as packed 3-floats, indexed straight from the vertex. The
         // globalOffset is already accumulated to the root by the loader, so the
         // shader needs no hierarchy walk.
+        //
+        // Zero for a model whose vertices are already in model space: .scm
+        // stores them that way and adding the bone's offset would scatter the
+        // model across its own hierarchy. The bone data itself stays intact —
+        // it is the rest pose, and animation will need it — so this zeroes the
+        // buffer rather than the model.
+        const bool boneLocal = model.family == Family::Recoil;
         std::vector<std::array<float, 3>> boneOffsets;
         boneOffsets.reserve(model.bones.size());
         for (const ModelBone& bone : model.bones) {
-            boneOffsets.push_back(bone.globalOffset);
+            boneOffsets.push_back(boneLocal ? bone.globalOffset
+                                            : std::array<float, 3>{{0.0f, 0.0f, 0.0f}});
         }
 
         GpuUnitBatch uploaded;
         uploaded.textures = batch.textures;
+        uploaded.supremeCommanderShading = model.family == Family::SupremeCommander;
         uploaded.vertexBuffer =
             device_->newBuffer(model.vertices.data(), model.vertices.size() * sizeof(ModelVertex),
                                MTL::ResourceStorageModeShared);
@@ -971,6 +1000,7 @@ void Renderer::encodeScene(MTL::RenderCommandEncoder* encoder, unsigned int widt
         .cameraPosition = camera_.eye(),
         .hasTexture2 = 0.0f,
         .waterLevel = waterLevel_,
+        .supremeCommanderShading = 0.0f,
     };
 
     // Culling stays off: the camera is free to dip below the terrain, and a
@@ -1021,25 +1051,19 @@ void Renderer::encodeScene(MTL::RenderCommandEncoder* encoder, unsigned int widt
         // distinct pair rather than once per model.
         TexturePair bound{-2, -2};
 
+        const auto textureAt = [this](int index) -> MTL::Texture* {
+            if (index < 0 || static_cast<std::size_t>(index) >= unitTextures_.size()) {
+                return nullptr;
+            }
+            return unitTextures_[static_cast<std::size_t>(index)];
+        };
+
         for (const GpuUnitBatch& batch : unitBatches_) {
+            MTL::Texture* diffuse = textureAt(batch.textures.diffuse);
+            MTL::Texture* shading = textureAt(batch.textures.shading);
+
             if (!(batch.textures == bound)) {
                 bound = batch.textures;
-
-                const auto textureAt = [this](int index) -> MTL::Texture* {
-                    if (index < 0 || static_cast<std::size_t>(index) >= unitTextures_.size()) {
-                        return nullptr;
-                    }
-                    return unitTextures_[static_cast<std::size_t>(index)];
-                };
-
-                MTL::Texture* diffuse = textureAt(bound.diffuse);
-                MTL::Texture* shading = textureAt(bound.shading);
-
-                TerrainUniforms unitUniforms = uniforms;
-                unitUniforms.hasTexture = diffuse != nullptr ? 1.0f : 0.0f;
-                unitUniforms.hasTexture2 = shading != nullptr ? 1.0f : 0.0f;
-                encoder->setFragmentBytes(&unitUniforms, sizeof(unitUniforms),
-                                          kUniformBufferIndex);
 
                 // Both slots are always bound — referencing an unbound texture
                 // is undefined even on a branch that does not sample it — so the
@@ -1049,6 +1073,16 @@ void Renderer::encodeScene(MTL::RenderCommandEncoder* encoder, unsigned int widt
                 encoder->setFragmentTexture(shading != nullptr ? shading : groundTexture_,
                                             kShadingTextureIndex);
             }
+
+            // Per batch, not per pair: which family's channel layout to read is
+            // a property of the MODEL, and two models could share a texture pair
+            // without sharing a family. Under 4 KB, so Metal copies this into
+            // the command buffer inline — there is no buffer to rebind.
+            TerrainUniforms unitUniforms = uniforms;
+            unitUniforms.hasTexture = diffuse != nullptr ? 1.0f : 0.0f;
+            unitUniforms.hasTexture2 = shading != nullptr ? 1.0f : 0.0f;
+            unitUniforms.supremeCommanderShading = batch.supremeCommanderShading ? 1.0f : 0.0f;
+            encoder->setFragmentBytes(&unitUniforms, sizeof(unitUniforms), kUniformBufferIndex);
 
             encoder->setVertexBuffer(batch.vertexBuffer, 0, kVertexBufferIndex);
             encoder->setVertexBuffer(batch.instanceBuffer, 0, kInstanceBufferIndex);

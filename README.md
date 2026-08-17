@@ -150,6 +150,25 @@ file share one upload, and the draws are ordered so each texture *pair* is bound
 once per frame rather than once per model — which is the unit Recoil batches on
 too. The first `--units` takes the map's start positions; the rest are scattered.
 
+### Supreme Commander models
+
+`.scm` loads into the same `Model` struct `.s3o` does, and the same magic sniff
+picks the loader:
+
+```sh
+FA=~/projects/llm/input/faf/units
+./build/recoil-metal "$MAP" --units $FA/UEL0201/UEL0201_LOD0.scm 40 --focus
+
+# both content families in one scene, one draw each
+./build/recoil-metal "$MAP" --units $FA/UEL0201/UEL0201_LOD0.scm 40 \
+    --units $BAR/armstump.s3o 40
+```
+
+Models are extracted once from the retail install's `units.scd` (a ZIP) into
+`~/projects/llm/input/faf/` — see `tests/test_real_scm.cpp` for the command.
+Textures are found beside the model by Supreme Commander's naming convention
+(`_Albedo`, `_SpecTeam`), since `.scm` names none.
+
 ### Supreme Commander maps
 
 Same binary, same arguments — the format is sniffed from the file's magic:

@@ -9,6 +9,7 @@
 #include "core/map/Smt.hpp"
 #include "core/map/TerrainType.hpp"
 #include "core/model/S3o.hpp"
+#include "core/model/Scm.hpp"
 #include "core/scene/UnitPlacement.hpp"
 #include "core/texture/Dds.hpp"
 #include "core/map/TileAtlas.hpp"
@@ -19,10 +20,12 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <deque>
 #include <filesystem>
 #include <fstream>
 #include <map>
+#include <expected>
 #include <optional>
 #include <span>
 #include <string>
@@ -290,6 +293,17 @@ struct LoadedMap {
 constexpr const char* kBarTextureDir =
     "projects/llm/games/forged-alliance-reborn/reference/BAR/unittextures";
 
+// Supreme Commander's world unit is the ogrid, eight elmos across, exactly as on
+// its maps (core/map/Scmap.hpp). A .scm's vertices are in ogrids, so a model
+// drawn at scale 1 next to Recoil content would be a eighth of its proper size.
+constexpr float kOgridScale = 8.0f;
+
+// A .scm names no textures at all — Supreme Commander resolves them by
+// convention from the model's own file name, which is what these reproduce.
+// `_normalsTS` exists too and is not read: there is no normal-map path yet.
+constexpr const char* kScmDiffuseSuffix = "_Albedo.dds";
+constexpr const char* kScmShadingSuffix = "_SpecTeam.dds";
+
 /// How many scattered instances by default. A single unit is well under 1% of an
 /// 8192-elmo map's width and effectively invisible when framed, so seeing units
 /// on a map means seeing many of them.
@@ -308,41 +322,41 @@ constexpr std::uint32_t kScatterSeed = 20260817u;
 // to avoid rebinding them.
 class TextureRegistry {
 public:
-    /// Index for a named texture, loading it on first sight. -1 when the model
+    /// Index for a texture file, loading it on first sight. -1 when the model
     /// named none or the file could not be read.
-    [[nodiscard]] int resolve(const std::string& name, const char* slot) {
-        if (name.empty()) {
+    ///
+    /// Keyed by full path rather than by the name a model used, because the two
+    /// families name textures completely differently — .s3o carries a file name
+    /// resolved under BAR's unittextures/, .scm carries nothing and its textures
+    /// are found by convention beside it — and only the path is comparable.
+    [[nodiscard]] int resolve(const std::filesystem::path& path, const char* slot) {
+        if (path.empty()) {
             return -1;
         }
 
-        const auto known = indexByName_.find(name);
-        if (known != indexByName_.end()) {
+        const std::string key = path.string();
+        const auto known = indexByPath_.find(key);
+        if (known != indexByPath_.end()) {
             return known->second;
         }
-
-        // S3O names its textures but does not carry them; they live under
-        // unittextures/ (FAR report 05 §5.3).
-        const char* home = std::getenv("HOME");
-        const std::filesystem::path path =
-            std::filesystem::path{home == nullptr ? "" : home} / kBarTextureDir / name;
 
         auto texture = rm::dds::loadFile(path);
         if (!texture) {
             // Not fatal: the shader has a defined fallback for each slot, and
             // half a model's shading beats no model. Remembered as -1 so a
             // second model naming the same missing file does not retry it.
-            std::fprintf(stderr, "  no %s texture (%s): %s\n", slot, name.c_str(),
-                         texture.error().message.c_str());
-            indexByName_.emplace(name, -1);
+            std::fprintf(stderr, "  no %s texture (%s): %s\n", slot,
+                         path.filename().string().c_str(), texture.error().message.c_str());
+            indexByPath_.emplace(key, -1);
             return -1;
         }
 
-        std::printf("  %s %s: %dx%d, %d mips\n", slot, name.c_str(), texture->width,
-                    texture->height, texture->mipLevels);
+        std::printf("  %s %s: %dx%d, %d mips\n", slot, path.filename().string().c_str(),
+                    texture->width, texture->height, texture->mipLevels);
 
         const auto index = static_cast<int>(textures_.size());
         textures_.push_back(std::move(*texture));
-        indexByName_.emplace(name, index);
+        indexByPath_.emplace(key, index);
         return index;
     }
 
@@ -351,8 +365,71 @@ public:
 
 private:
     std::vector<rm::dds::Texture> textures_;
-    std::map<std::string, int> indexByName_;
+    std::map<std::string, int> indexByPath_;
 };
+
+/// Where a Recoil model's named texture lives: under BAR's unittextures/.
+[[nodiscard]] std::filesystem::path barTexturePath(const std::string& name) {
+    if (name.empty()) {
+        return {};
+    }
+    const char* home = std::getenv("HOME");
+    return std::filesystem::path{home == nullptr ? "" : home} / kBarTextureDir / name;
+}
+
+/// Where a Supreme Commander model's texture lives: beside the model, named
+/// after it.
+///
+/// The LOD suffix is part of the texture name for every level EXCEPT lod0, whose
+/// textures drop it — `DAA0206_lod0.scm` uses `DAA0206_Albedo.dds` while
+/// `DAA0206_lod1.scm` uses `DAA0206_lod1_Albedo.dds`. Both spellings are tried
+/// rather than assuming, since the exception is the common case.
+[[nodiscard]] std::filesystem::path scmTexturePath(const std::filesystem::path& modelPath,
+                                                   const char* suffix) {
+    const std::string stem = modelPath.stem().string();
+    const std::filesystem::path dir = modelPath.parent_path();
+
+    static constexpr std::string_view kLod0 = "_lod0";
+    if (stem.size() > kLod0.size()) {
+        const std::string tail = stem.substr(stem.size() - kLod0.size());
+        // Case-insensitive: the corpus spells it "_lod0" but nothing guarantees
+        // that for content from elsewhere.
+        std::string lowered = tail;
+        std::transform(lowered.begin(), lowered.end(), lowered.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        if (lowered == kLod0) {
+            const std::filesystem::path base =
+                dir / (stem.substr(0, stem.size() - kLod0.size()) + suffix);
+            std::error_code ec;
+            if (std::filesystem::is_regular_file(base, ec)) {
+                return base;
+            }
+        }
+    }
+
+    return dir / (stem + suffix);
+}
+
+/// Loads a model of either family, chosen by the file's magic rather than its
+/// extension — the same rule the map path uses.
+[[nodiscard]] std::expected<rm::Model, rm::MapError> loadModel(
+    const std::filesystem::path& path) {
+    std::ifstream file{path, std::ios::binary};
+    if (!file) {
+        return std::unexpected(
+            rm::MapError{rm::MapError::Code::Truncated,
+                         "could not open \"" + path.string() + "\""});
+    }
+
+    char magic[4] = {};
+    file.read(magic, sizeof(magic));
+    file.close();
+
+    if (std::memcmp(magic, rm::scm::kMagic, sizeof(magic)) == 0) {
+        return rm::scm::loadFile(path);
+    }
+    return rm::s3o::loadFile(path);
+}
 
 // Everything the renderer needs to draw units, owned in one place.
 //
@@ -388,36 +465,51 @@ struct UnitOptions {
     for (std::size_t i = 0; i < requests.size(); ++i) {
         const UnitOptions& request = requests[i];
 
-        auto model = rm::s3o::loadFile(request.modelPath);
+        auto model = loadModel(request.modelPath);
         if (!model) {
             std::fprintf(stderr, "failed to load model \"%s\": %s\n",
                          request.modelPath.string().c_str(), model.error().message.c_str());
             continue;  // one bad model should not cost the whole scene
         }
 
-        std::printf("model %s: %zu bones, %zu vertices, %zu triangles, radius %.1f\n",
-                    model->name.c_str(), model->bones.size(), model->vertices.size(),
-                    model->triangleCount(), static_cast<double>(model->radius));
+        const bool supCom = model->family == rm::Family::SupremeCommander;
+        std::printf("model %s (%s): %zu bones, %zu vertices, %zu triangles, radius %.1f\n",
+                    model->name.c_str(), supCom ? "Supreme Commander" : "Recoil",
+                    model->bones.size(), model->vertices.size(), model->triangleCount(),
+                    static_cast<double>(model->radius));
 
-        // Both textures, not just the diffuse: tex2 carries the self-illumination
-        // and reflectivity the model was authored with, and tex1's alpha is the
-        // team-colour mask that only means something once tex2's shading is
-        // there to light it.
-        const rm::TexturePair pair{
-            .diffuse = scene.textures.resolve(model->textures[0], "diffuse"),
-            .shading = scene.textures.resolve(model->textures[1], "shading"),
-        };
+        // Both textures, not just the diffuse. The two families disagree on
+        // where they live and on what the second one's channels mean, and that
+        // is all they disagree on — see Family in Model.hpp.
+        const rm::TexturePair pair =
+            supCom ? rm::TexturePair{
+                         .diffuse = scene.textures.resolve(
+                             scmTexturePath(request.modelPath, kScmDiffuseSuffix), "albedo"),
+                         .shading = scene.textures.resolve(
+                             scmTexturePath(request.modelPath, kScmShadingSuffix), "specTeam"),
+                     }
+                   : rm::TexturePair{
+                         .diffuse = scene.textures.resolve(barTexturePath(model->textures[0]),
+                                                           "diffuse"),
+                         .shading = scene.textures.resolve(barTexturePath(model->textures[1]),
+                                                           "shading"),
+                     };
+
+        // A .scm's vertices are in ogrids, the same unit its maps use, so it
+        // takes the same x8 the terrain does. Applying it to the instance rather
+        // than to the vertices keeps the loader's output faithful to the file.
+        const float scale = request.scale * (supCom ? kOgridScale : 1.0f);
 
         std::vector<rm::UnitInstance> placed;
         const bool takesStarts = (i == 0);
         if (takesStarts) {
-            placed = rm::atStartPositions(field, starts, request.scale);
+            placed = rm::atStartPositions(field, starts, scale);
         }
         const std::size_t remaining =
             request.count > placed.size() ? request.count - placed.size() : 0;
         const auto scattered =
             rm::scatterOnLand(field, remaining, kScatterSeed + static_cast<std::uint32_t>(i),
-                              request.scale, landAbove);
+                              scale, landAbove);
         placed.insert(placed.end(), scattered.begin(), scattered.end());
 
         std::printf("  %zu instances (%zu at start positions, %zu scattered)\n", placed.size(),

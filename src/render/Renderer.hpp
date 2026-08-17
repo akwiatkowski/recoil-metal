@@ -200,6 +200,8 @@ private:
         std::size_t indexCount = 0;
         std::size_t instanceCount = 0;
         TexturePair textures;
+        /// Which family's channel layout the fragment shader should read.
+        bool supremeCommanderShading = false;
     };
 
     std::vector<GpuUnitBatch> unitBatches_;
