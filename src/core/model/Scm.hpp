@@ -39,6 +39,12 @@ inline constexpr char kSkeletonMarker[4] = {'S', 'K', 'E', 'L'};
 inline constexpr char kVertexMarker[4] = {'V', 'T', 'X', 'L'};
 inline constexpr char kIndexMarker[4] = {'T', 'R', 'I', 'S'};
 
+// The layout below was derived byte-by-byte from the retail corpus and then
+// found to agree, field for field, with the reference reader ADR-004 cites —
+// FAR's `tools/scstudio/sc_io.py:36-42`, whose struct strings are `4s11I` for
+// the header, `16f3f4f4i` per bone and `3f3f3f3f2f2f4B` per vertex. Two
+// independent derivations agreeing is worth more than either alone.
+//
 // Parses a Supreme Commander .scm into the shared Model representation.
 //
 // The whole point of ADR-004: this fills the same struct the .s3o loader does,

@@ -58,10 +58,11 @@ struct Animation {
     std::vector<Frame> frames;
 
     // A single position/rotation record sits between the DATA marker and the
-    // first frame. Its purpose is not established — it is identity on the
-    // animations examined — so it is decoded and exposed rather than skipped
-    // silently or given a meaning it may not have.
-    Key reference;
+    // first frame. It is identity on every animation examined here, and the
+    // reference reader ADR-004 cites (FAR's `tools/scstudio/sc_io.py:101,120`)
+    // calls it the root and writes it as a fixed identity — so it is decoded
+    // and exposed rather than skipped, but nothing reads it.
+    Key root;
 
     [[nodiscard]] bool empty() const noexcept { return frames.empty() || boneNames.empty(); }
     [[nodiscard]] std::size_t boneCount() const noexcept { return boneNames.size(); }

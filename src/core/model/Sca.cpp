@@ -98,7 +98,7 @@ std::expected<Animation, MapError> load(std::span<const std::byte> bytes) {
                         + ")");
     }
 
-    // One reference record sits between the marker and the first frame; the
+    // One root record sits between the marker and the first frame; the
     // frames then run to the last byte. Requiring EXACTLY that is the same acid
     // test the .scmap reader uses, and it holds on all 474 retail animations.
     const std::size_t end = dataOffset + kKeySize + frameCount * frameStride;
@@ -149,7 +149,7 @@ std::expected<Animation, MapError> load(std::span<const std::byte> bytes) {
     }
 
     // --- Frames ------------------------------------------------------------
-    animation.reference = readKey(bytes, dataOffset);
+    animation.root = readKey(bytes, dataOffset);
 
     animation.frames.reserve(frameCount);
     float previousTime = -1.0f;

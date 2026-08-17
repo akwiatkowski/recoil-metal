@@ -141,6 +141,14 @@ duplicates the entire draw path to express two booleans. Deriving the family fro
 the file extension at the call site — rejected for the same reason the map path
 sniffs magic: the extension is not load-bearing and the loader already knows.
 
+**Corroboration.** Both layouts were derived byte-by-byte from the retail corpus
+before the reference reader ADR-004 cites was located. They then agreed with
+`sc_io.py` field for field — `4s11I`, `16f3f4f4i`, `3f3f3f3f2f2f4B` for `.scm`;
+`4sIIfIIIII`, a 28-byte root record and `fI` + 7 floats per bone per frame for
+`.sca`. Two independent derivations agreeing is worth more than either alone,
+and it is the reason the vertex-space and team-mask findings above can be stated
+as fact rather than as inference.
+
 **Consequences.** Adding a third family means one enum value and two switches,
 both of which the compiler will point at. The cost is that `Family` is a lie
 waiting to happen if a future format mixes conventions — at which point it should
