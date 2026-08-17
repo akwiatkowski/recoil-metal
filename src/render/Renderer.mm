@@ -15,6 +15,8 @@
 #include <simd/simd.h>
 
 #include <chrono>
+#include <mutex>
+#include <semaphore>
 #include <string>
 
 namespace {
@@ -239,8 +241,12 @@ Renderer::Renderer(CA::MetalLayer* layer)
             ".smt tiles are stored in"};
     }
 
-    layer_->setDevice(device_);
-    layer_->setPixelFormat(kColorFormat);
+    // Null layer = headless (offscreen benchmarking). Everything else below is
+    // layer-independent.
+    if (layer_ != nullptr) {
+        layer_->setDevice(device_);
+        layer_->setPixelFormat(kColorFormat);
+    }
 
     commandQueue_ = device_->newCommandQueue();
     if (commandQueue_ == nullptr) {
@@ -456,6 +462,164 @@ void Renderer::ensureDepthTexture(unsigned int width, unsigned int height) noexc
     depthHeight_ = height;
 }
 
+bench::FrameRecorder Renderer::runOffscreenBenchmark(unsigned int width, unsigned int height,
+                                                     std::size_t frames,
+                                                     std::size_t warmupFrames) {
+    bench::FrameRecorder recorder{warmupFrames};
+    if (indexCount_ == 0 || width == 0 || height == 0 || frames == 0) {
+        return recorder;
+    }
+
+    NS::AutoreleasePool* setupPool = NS::AutoreleasePool::alloc()->init();
+
+    // Offscreen colour target. Private storage: nothing reads it back, the
+    // point is to make the GPU do the work, not to keep the image.
+    MTL::TextureDescriptor* colorDescriptor =
+        MTL::TextureDescriptor::texture2DDescriptor(kColorFormat, width, height,
+                                                    /*mipmapped=*/false);
+    colorDescriptor->setUsage(MTL::TextureUsageRenderTarget);
+    colorDescriptor->setStorageMode(MTL::StorageModePrivate);
+    MTL::Texture* colorTarget = device_->newTexture(colorDescriptor);
+
+    ensureDepthTexture(width, height);
+
+    if (colorTarget == nullptr || depthTexture_ == nullptr) {
+        if (colorTarget != nullptr) colorTarget->release();
+        setupPool->release();
+        throw RendererError{"failed to allocate offscreen benchmark targets"};
+    }
+    setupPool->release();
+
+    // Bound in-flight frames. Without this the loop would queue every frame at
+    // once, measuring how fast the CPU can encode rather than how fast the GPU
+    // can draw.
+    std::counting_semaphore<static_cast<std::ptrdiff_t>(kMaxFramesInFlight)> inFlight{
+        static_cast<std::ptrdiff_t>(kMaxFramesInFlight)};
+
+    std::mutex recordMutex;
+    double previousStart = 0.0;
+
+    const auto nowSeconds = [] {
+        return std::chrono::duration<double>(
+                   std::chrono::steady_clock::now().time_since_epoch())
+            .count();
+    };
+
+    for (std::size_t frame = 0; frame < frames; ++frame) {
+        inFlight.acquire();
+
+        NS::AutoreleasePool* framePool = NS::AutoreleasePool::alloc()->init();
+
+        const double start = nowSeconds();
+        double cpuMs = 0.0;
+        if (previousStart > 0.0) {
+            cpuMs = (start - previousStart) * 1000.0;
+        }
+        previousStart = start;
+
+        MTL::CommandBuffer* commandBuffer = commandQueue_->commandBuffer();
+
+        MTL::RenderPassDescriptor* pass = MTL::RenderPassDescriptor::alloc()->init();
+        MTL::RenderPassColorAttachmentDescriptor* color0 = pass->colorAttachments()->object(0);
+        color0->setTexture(colorTarget);
+        color0->setLoadAction(MTL::LoadAction::LoadActionClear);
+        // DontCare: the image is never presented or read, so on a tile-based GPU
+        // this avoids a full-framebuffer writeback that would not happen in the
+        // windowed path either.
+        color0->setStoreAction(MTL::StoreAction::StoreActionDontCare);
+        color0->setClearColor(MTL::ClearColor::Make(kSkyR, kSkyG, kSkyB, 1.0));
+
+        MTL::RenderPassDepthAttachmentDescriptor* depth = pass->depthAttachment();
+        depth->setTexture(depthTexture_);
+        depth->setLoadAction(MTL::LoadAction::LoadActionClear);
+        depth->setStoreAction(MTL::StoreAction::StoreActionDontCare);
+        depth->setClearDepth(1.0);
+
+        MTL::RenderCommandEncoder* encoder = commandBuffer->renderCommandEncoder(pass);
+        encodeScene(encoder, width, height);
+        encoder->endEncoding();
+
+        commandBuffer->addCompletedHandler(MTL::HandlerFunction{
+            [&recorder, &recordMutex, &inFlight, cpuMs](MTL::CommandBuffer* completed) {
+                const double gpuMs =
+                    (completed->GPUEndTime() - completed->GPUStartTime()) * 1000.0;
+                {
+                    const std::lock_guard lock{recordMutex};
+                    recorder.add(bench::FrameSample{cpuMs, gpuMs});
+                }
+                inFlight.release();
+            }});
+
+        commandBuffer->commit();
+
+        pass->release();
+        framePool->release();
+    }
+
+    // Drain: reacquire every slot so all completion handlers have run before the
+    // recorder is read or the targets are freed.
+    for (std::size_t i = 0; i < kMaxFramesInFlight; ++i) {
+        inFlight.acquire();
+    }
+
+    colorTarget->release();
+
+    const std::lock_guard lock{recordMutex};
+    return recorder;
+}
+
+void Renderer::encodeScene(MTL::RenderCommandEncoder* encoder, unsigned int width,
+                           unsigned int height) noexcept {
+    if (indexCount_ > 0 && height > 0) {
+        const float aspect = static_cast<float>(width) / static_cast<float>(height);
+
+        const TerrainUniforms uniforms{
+            .viewProjection = camera_.viewProjection(aspect),
+            .sunDirection = kSunDirection,
+            .minHeight = terrainMinY_,
+            .maxHeight = terrainMaxY_,
+            .mapWidth = mapWidth_,
+            .mapDepth = mapDepth_,
+            .hasTexture = hasGroundTexture_ ? 1.0f : 0.0f,
+        };
+
+        encoder->setRenderPipelineState(terrainPipeline_);
+        encoder->setDepthStencilState(depthState_);
+        // Culling stays off: the camera is free to dip below the terrain,
+        // and a heightfield seen from underneath should still be visible
+        // rather than vanishing. The mesh winding is nonetheless
+        // consistent (pinned by tests) so enabling culling later is a
+        // one-line change.
+        encoder->setCullMode(MTL::CullMode::CullModeNone);
+        encoder->setFrontFacingWinding(MTL::Winding::WindingCounterClockwise);
+
+        encoder->setVertexBuffer(vertexBuffer_, 0, kVertexBufferIndex);
+        // setVertexBytes/setFragmentBytes for a small, per-frame struct:
+        // under 4 KB Metal copies it into the command buffer directly, so
+        // there is no uniform buffer to allocate or synchronise.
+        encoder->setVertexBytes(&uniforms, sizeof(uniforms), kUniformBufferIndex);
+        encoder->setFragmentBytes(&uniforms, sizeof(uniforms), kUniformBufferIndex);
+        encoder->setFragmentTexture(groundTexture_, kGroundTextureIndex);
+        encoder->setFragmentSamplerState(groundSampler_, kGroundSamplerIndex);
+
+        encoder->drawIndexedPrimitives(MTL::PrimitiveType::PrimitiveTypeTriangle,
+                                       static_cast<NS::UInteger>(indexCount_),
+                                       MTL::IndexType::IndexTypeUInt32,
+                                       indexBuffer_,
+                                       /*indexBufferOffset=*/0);
+
+        // Water last, so it blends over whatever terrain sits below y = 0.
+        // Only worth drawing when some terrain actually is below it.
+        if (terrainMinY_ < 0.0f) {
+            encoder->setRenderPipelineState(waterPipeline_);
+            encoder->setDepthStencilState(waterDepthState_);
+            encoder->setVertexBytes(&uniforms, sizeof(uniforms), kUniformBufferIndex);
+            encoder->drawPrimitives(MTL::PrimitiveType::PrimitiveTypeTriangleStrip,
+                                    NS::UInteger{0}, NS::UInteger{4});
+        }
+    }
+}
+
 void Renderer::drawFrame(CA::MetalDrawable* drawable) noexcept {
     // The drawable is autoreleased by the display link, so every frame needs
     // its own pool or frame objects accumulate until the app exits.
@@ -507,54 +671,7 @@ void Renderer::drawFrame(CA::MetalDrawable* drawable) noexcept {
         // render pass with LoadActionClear is what performs the clear.
         MTL::RenderCommandEncoder* encoder = commandBuffer->renderCommandEncoder(pass);
 
-        if (indexCount_ > 0 && height > 0) {
-            const float aspect = static_cast<float>(width) / static_cast<float>(height);
-
-            const TerrainUniforms uniforms{
-                .viewProjection = camera_.viewProjection(aspect),
-                .sunDirection = kSunDirection,
-                .minHeight = terrainMinY_,
-                .maxHeight = terrainMaxY_,
-                .mapWidth = mapWidth_,
-                .mapDepth = mapDepth_,
-                .hasTexture = hasGroundTexture_ ? 1.0f : 0.0f,
-            };
-
-            encoder->setRenderPipelineState(terrainPipeline_);
-            encoder->setDepthStencilState(depthState_);
-            // Culling stays off: the camera is free to dip below the terrain,
-            // and a heightfield seen from underneath should still be visible
-            // rather than vanishing. The mesh winding is nonetheless
-            // consistent (pinned by tests) so enabling culling later is a
-            // one-line change.
-            encoder->setCullMode(MTL::CullMode::CullModeNone);
-            encoder->setFrontFacingWinding(MTL::Winding::WindingCounterClockwise);
-
-            encoder->setVertexBuffer(vertexBuffer_, 0, kVertexBufferIndex);
-            // setVertexBytes/setFragmentBytes for a small, per-frame struct:
-            // under 4 KB Metal copies it into the command buffer directly, so
-            // there is no uniform buffer to allocate or synchronise.
-            encoder->setVertexBytes(&uniforms, sizeof(uniforms), kUniformBufferIndex);
-            encoder->setFragmentBytes(&uniforms, sizeof(uniforms), kUniformBufferIndex);
-            encoder->setFragmentTexture(groundTexture_, kGroundTextureIndex);
-            encoder->setFragmentSamplerState(groundSampler_, kGroundSamplerIndex);
-
-            encoder->drawIndexedPrimitives(MTL::PrimitiveType::PrimitiveTypeTriangle,
-                                           static_cast<NS::UInteger>(indexCount_),
-                                           MTL::IndexType::IndexTypeUInt32,
-                                           indexBuffer_,
-                                           /*indexBufferOffset=*/0);
-
-            // Water last, so it blends over whatever terrain sits below y = 0.
-            // Only worth drawing when some terrain actually is below it.
-            if (terrainMinY_ < 0.0f) {
-                encoder->setRenderPipelineState(waterPipeline_);
-                encoder->setDepthStencilState(waterDepthState_);
-                encoder->setVertexBytes(&uniforms, sizeof(uniforms), kUniformBufferIndex);
-                encoder->drawPrimitives(MTL::PrimitiveType::PrimitiveTypeTriangleStrip,
-                                        NS::UInteger{0}, NS::UInteger{4});
-            }
-        }
+        encodeScene(encoder, width, height);
 
         encoder->endEncoding();
 

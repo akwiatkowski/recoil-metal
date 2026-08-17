@@ -18,6 +18,7 @@ class DepthStencilState;
 class Texture;
 class Buffer;
 class SamplerState;
+class RenderCommandEncoder;
 }
 
 namespace rm {
@@ -32,7 +33,8 @@ namespace rm {
 class Renderer {
 public:
     // layer is NOT owned; it belongs to the window's content view and must
-    // outlive the Renderer.
+    // outlive the Renderer. Pass nullptr for a headless renderer — valid for
+    // offscreen benchmarking, where there is no window and no display link.
     explicit Renderer(CA::MetalLayer* layer);
     ~Renderer();
 
@@ -66,6 +68,24 @@ public:
     // measurement of the work itself rather than a wall-clock guess around it.
     void beginBenchmark(std::size_t warmupFrames);
 
+    // Unthrottled offscreen benchmark. No window, no display link, hence no
+    // vsync — this is the only mode whose CPU numbers describe the renderer
+    // rather than the display refresh, and therefore the only one comparable
+    // against another engine's frame times.
+    //
+    // Up to kMaxFramesInFlight frames are kept in flight so the measurement
+    // reflects a pipelined frame loop; waiting for each frame to complete would
+    // measure latency instead of throughput.
+    [[nodiscard]] bench::FrameRecorder runOffscreenBenchmark(unsigned int width,
+                                                            unsigned int height,
+                                                            std::size_t frames,
+                                                            std::size_t warmupFrames);
+
+    /// Frames the GPU may be working on at once during an offscreen run. Three
+    /// is the conventional depth: enough to keep the GPU fed, few enough that a
+    /// stall shows up in the numbers instead of being absorbed.
+    static constexpr std::size_t kMaxFramesInFlight = 3;
+
     /// Thread-safe copy of the run so far. Metal invokes completion handlers on
     /// its own thread, so callers must not hold a reference into the recorder.
     [[nodiscard]] bench::FrameRecorder benchmarkSnapshot() const;
@@ -85,6 +105,12 @@ private:
     void ensureDepthTexture(unsigned int width, unsigned int height) noexcept;
 
     void releaseTerrainBuffers() noexcept;
+
+    /// Encodes the whole scene — terrain then water — into an active encoder.
+    /// Shared by the windowed and offscreen paths so they cannot drift apart
+    /// and quietly benchmark different work.
+    void encodeScene(MTL::RenderCommandEncoder* encoder, unsigned int width,
+                     unsigned int height) noexcept;
 
     CA::MetalLayer* layer_;                    // not owned
     MTL::Device* device_ = nullptr;            // owned

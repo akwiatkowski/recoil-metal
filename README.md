@@ -61,15 +61,15 @@ reimplemented.*
 3. **Textured terrain.** SMT tile decoding, an 8192x8192 BC1 ground atlas
    uploaded without transcoding, a real `mapinfo.lua` reader, and Recoil's
    fixed y=0 water plane. **✔ done**
-4. **Benchmark harness.** Frame-time capture to CSV; same map in Recoil GL
-   (via zink) vs recoil-metal. This is where the research question gets its
-   answer. **← current** — capture side done (`--bench N out.csv`, per-frame
-   CPU and GPU ms). First result on Angel Crossing: **GPU 1.58 ms mean, 3.18 p95**
-   for 2.1M triangles and a 42 MiB BC1 atlas. Still needed: an unthrottled
-   offscreen mode (CAMetalDisplayLink pins wall-clock to the display, so the CPU
-   column measures vsync, not the renderer) and the Recoil GL baseline.
+4. **Benchmark harness.** Same map, both renderers, vsync off on both.
+   **✔ done** — Recoil through zink: **7.416 ms/frame mean**. recoil-metal
+   native: **0.554 ms**. A 13.4× gap, with the scope limits spelled out in
+   [`docs/benchmark-m4.md`](docs/benchmark-m4.md) — it is a full engine frame
+   against a terrain draw, not the same work through two APIs. Enough headroom
+   to justify continuing, which is what this milestone existed to decide.
 5. **Units.** glTF/S3O loading, instanced rendering, skinning (Recoil's
    vertex format already carries bone IDs/weights — see FAR's docs).
+   **← current**
 
 Stage B (sim semantics, only if milestones 1–5 prove out) is deliberately not
 planned. The cliff is real; plan when we're on it.
@@ -89,8 +89,13 @@ mise exec -- ctest --test-dir build --output-on-failure
 ./build/recoil-metal                    # procedural terrain, no assets needed
 ./build/recoil-metal path/to/map.smf    # a real Recoil map
 
-# Benchmark: 600 frames after 60 warmup, per-frame timings to CSV
+# Benchmark. --bench is windowed and vsync-limited (use it to eyeball GPU ms);
+# --bench-offscreen is headless and unthrottled, and is the comparable number.
 ./build/recoil-metal path/to/map.smf --bench 600 docs/bench.csv
+./build/recoil-metal path/to/map.smf --bench-offscreen 2060 docs/bench.csv
+
+# The Recoil OpenGL baseline for the same map (needs FAR's zink build)
+tools/bench_recoil_gl.sh docs/bench-recoil-gl.csv
 ```
 
 Drag to orbit, scroll to zoom.

@@ -7,6 +7,7 @@
 #include "core/map/TileAtlas.hpp"
 #include "core/mesh/TerrainMesh.hpp"
 #include "platform/Window.hpp"
+#include "render/Renderer.hpp"
 
 #include <algorithm>
 #include <cstdio>
@@ -162,11 +163,14 @@ constexpr float kDemoMaxHeight = 360.0f;
     return std::move(*atlas);
 }
 
-/// Parsed --bench arguments.
+/// Parsed --bench / --bench-offscreen arguments.
 struct BenchOptions {
     bool enabled = false;
+    bool offscreen = false;  ///< no window, no vsync
     std::size_t frames = 600;
     std::size_t warmup = 60;
+    unsigned int width = 1920;
+    unsigned int height = 1080;
     std::string csvPath;
 };
 
@@ -174,10 +178,12 @@ struct BenchOptions {
 [[nodiscard]] BenchOptions parseBench(int argc, const char* argv[]) {
     BenchOptions options;
     for (int i = 1; i < argc; ++i) {
-        if (std::string{argv[i]} != "--bench") {
+        const std::string arg = argv[i];
+        if (arg != "--bench" && arg != "--bench-offscreen") {
             continue;
         }
         options.enabled = true;
+        options.offscreen = (arg == "--bench-offscreen");
         if (i + 1 < argc) {
             options.frames = static_cast<std::size_t>(std::max(1, std::atoi(argv[i + 1])));
         }
@@ -230,6 +236,20 @@ struct BenchOptions {
 
 @end
 
+/// Writes a recorder's per-frame CSV, reporting rather than throwing on failure.
+void writeCsv(const std::string& path, const rm::bench::FrameRecorder& recorder) {
+    if (path.empty()) {
+        return;
+    }
+    std::ofstream out{path, std::ios::binary};
+    if (!out) {
+        std::fprintf(stderr, "  could not write %s\n", path.c_str());
+        return;
+    }
+    out << recorder.toCsv();
+    std::printf("  wrote %s (%zu frames)\n", path.c_str(), recorder.recorded());
+}
+
 int main(int argc, const char* argv[]) {
     @autoreleasepool {
         const auto field = resolveHeightField(argc, argv);
@@ -241,6 +261,35 @@ int main(int argc, const char* argv[]) {
         std::printf("terrain: %zu vertices, %zu triangles, height %.1f..%.1f elmos\n",
                     mesh.vertices.size(), mesh.triangleCount(),
                     static_cast<double>(mesh.minY), static_cast<double>(mesh.maxY));
+
+        const BenchOptions bench = parseBench(argc, argv);
+
+        // --- Headless offscreen benchmark ----------------------------------
+        // No NSApplication, no window, no display link, hence no vsync. This is
+        // the only mode whose CPU numbers describe the renderer instead of the
+        // display, so it is the one comparable against another engine.
+        if (bench.enabled && bench.offscreen) {
+            rm::Renderer renderer{nullptr};
+            renderer.setTerrain(mesh);
+            if (argc >= 2) {
+                if (auto atlas = resolveAtlas(argv[1])) {
+                    renderer.setGroundTexture(*atlas);
+                }
+            }
+
+            std::printf("offscreen benchmark: %ux%u, %zu frames (discarding %zu warmup),"
+                        " %zu frames in flight, no vsync\n",
+                        bench.width, bench.height, bench.frames, bench.warmup,
+                        rm::Renderer::kMaxFramesInFlight);
+
+            const rm::bench::FrameRecorder recorder =
+                renderer.runOffscreenBenchmark(bench.width, bench.height, bench.frames,
+                                               bench.warmup);
+
+            std::printf("%s\n", recorder.summaryLine("recoil-metal offscreen").c_str());
+            writeCsv(bench.csvPath, recorder);
+            return 0;
+        }
 
         NSApplication* app = [NSApplication sharedApplication];
         // Regular = real Dock icon and keyboard focus; without this a
@@ -259,7 +308,6 @@ int main(int argc, const char* argv[]) {
         }
         window.show();
 
-        const BenchOptions bench = parseBench(argc, argv);
         RMBenchWatcher* watcher = nil;
         if (bench.enabled) {
             std::printf("benchmarking %zu frames (discarding %zu warmup)\n",
