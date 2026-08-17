@@ -24,7 +24,8 @@ public:
 struct MapError {
     enum class Code {
         NotSmf,       ///< magic string absent — not a Spring/Recoil map at all
-        NotScmap,     ///< magic absent — not a Supreme Commander map either
+        NotScmap,     ///< magic absent — not the Supreme Commander file expected
+                      ///< (shared by .scmap, .scm and .sca; the message says which)
         BadHeader,    ///< version/tilesize/texelPerSquare/squareSize rejected
         BadGeometry,  ///< mapx/mapy not positive multiples of 128
         Truncated,    ///< a section pointer or its length runs past end-of-file

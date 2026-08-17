@@ -19,6 +19,7 @@
 #include "render/Renderer.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -610,8 +611,23 @@ struct ShotOptions {
 [[nodiscard]] std::vector<UnitOptions> parseUnits(int argc, const char* argv[]) {
     std::vector<UnitOptions> requests;
 
+    // ONE pass, because `--animate` attaches to the `--units` it follows and two
+    // passes can disagree about which that is: a bare `--units` with no path is
+    // dropped from the list but would still be counted while attaching, landing
+    // the animation on the previous model.
     for (int i = 1; i < argc; ++i) {
-        if (std::string{argv[i]} != "--units") {
+        const std::string arg = argv[i];
+
+        if (arg == "--animate") {
+            if (i + 1 < argc && !requests.empty()) {
+                requests.back().animationPath = argv[i + 1];
+            } else if (requests.empty()) {
+                std::fprintf(stderr, "--animate before any --units; ignored\n");
+            }
+            continue;
+        }
+
+        if (arg != "--units") {
             continue;
         }
 
@@ -634,24 +650,11 @@ struct ShotOptions {
             }
         }
 
-        if (!options.modelPath.empty()) {
-            requests.push_back(std::move(options));
-        }
-    }
-
-    // `--animate` attaches to the --units it follows, so a scene can play a
-    // different animation on each model.
-    std::size_t attachTo = 0;
-    for (int i = 1; i < argc; ++i) {
-        const std::string arg = argv[i];
-        if (arg == "--units") {
-            ++attachTo;
+        if (options.modelPath.empty()) {
+            std::fprintf(stderr, "--units with no model path; ignored\n");
             continue;
         }
-        if (arg == "--animate" && i + 1 < argc && attachTo > 0
-            && attachTo <= requests.size()) {
-            requests[attachTo - 1].animationPath = argv[i + 1];
-        }
+        requests.push_back(std::move(options));
     }
 
     return requests;
