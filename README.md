@@ -67,9 +67,17 @@ reimplemented.*
    [`docs/benchmark-m4.md`](docs/benchmark-m4.md) — it is a full engine frame
    against a terrain draw, not the same work through two APIs. Enough headroom
    to justify continuing, which is what this milestone existed to decide.
-5. **Units.** glTF/S3O loading, instanced rendering, skinning (Recoil's
-   vertex format already carries bone IDs/weights — see FAR's docs).
-   **← current**
+5. **Units — Recoil content first.** `.s3o` loading, piece hierarchy, instanced
+   rendering. **← current**
+
+   Deliberately *not* glTF. The engine must eventually handle both Recoil and
+   Forged Alliance content, but glTF is nobody's native format — it is FAR's
+   Blender-produced intermediate, it costs a JSON dependency, and Recoil discards
+   glTF animation tracks entirely. Supreme Commander's own `.scm`/`.sca` are plain
+   fixed-stride binary (608 and 139 files on disk, 228-line reference reader) and
+   carry the animation glTF loses. Both native formats decode into one shared
+   model struct, so the FA path is additive rather than a rewrite. See
+   [ADR-004](ADR_DECISIONS.md).
 
 Stage B (sim semantics, only if milestones 1–5 prove out) is deliberately not
 planned. The cliff is real; plan when we're on it.
