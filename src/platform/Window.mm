@@ -150,6 +150,10 @@ void Window::setTerrain(const TerrainMesh& mesh) {
     impl_->renderer->setTerrain(mesh);
 }
 
+void Window::setGroundTexture(const TileAtlas& atlas) {
+    impl_->renderer->setGroundTexture(atlas);
+}
+
 void Window::show() {
     [impl_->window makeKeyAndOrderFront:nil];
 }

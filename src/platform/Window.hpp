@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/map/TileAtlas.hpp"
 #include "core/mesh/TerrainMesh.hpp"
 
 #include <memory>
@@ -24,6 +25,9 @@ public:
 
     // Uploads terrain for the renderer to draw and frames the camera on it.
     void setTerrain(const TerrainMesh& mesh);
+
+    // Uploads the map ground texture. Optional — see Renderer::setGroundTexture.
+    void setGroundTexture(const TileAtlas& atlas);
 
     void show();
 

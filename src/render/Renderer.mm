@@ -18,29 +18,34 @@
 
 namespace {
 
-// Uniforms shared by both shader stages. The layout must match the MSL struct
-// below exactly; the static_asserts below are the enforcement, because a
-// mismatch here produces geometry that is subtly wrong rather than absent,
-// which is much harder to notice.
+// Uniforms shared by every stage. The layout must match the MSL struct below
+// exactly; the static_asserts are the enforcement, because a mismatch produces
+// geometry that is subtly wrong rather than absent — much harder to notice.
 struct TerrainUniforms {
     simd_float4x4 viewProjection;
     simd_float3 sunDirection;
     float minHeight;
     float maxHeight;
+    float mapWidth;
+    float mapDepth;
+    float hasTexture;  ///< float, not bool: bool packing across the ABI is a trap
 };
 
-static_assert(sizeof(TerrainUniforms) == 96, "TerrainUniforms must match the MSL layout");
+static_assert(sizeof(TerrainUniforms) == 112, "TerrainUniforms must match the MSL layout");
 static_assert(offsetof(TerrainUniforms, sunDirection) == 64, "float3 is 16-byte aligned in MSL");
 static_assert(offsetof(TerrainUniforms, minHeight) == 80, "unexpected padding before minHeight");
+static_assert(offsetof(TerrainUniforms, hasTexture) == 96, "unexpected padding before hasTexture");
 
-// Buffer binding indices, shared between the C++ and MSL sides.
+// Buffer/texture binding indices, shared between the C++ and MSL sides.
 constexpr NS::UInteger kVertexBufferIndex = 0;
 constexpr NS::UInteger kUniformBufferIndex = 1;
+constexpr NS::UInteger kGroundTextureIndex = 0;
+constexpr NS::UInteger kGroundSamplerIndex = 0;
 
 // Compiled from source at runtime — there is no Xcode on this machine, hence no
 // offline `metal` compiler. Metal's runtime compiler ships with macOS itself,
 // which also buys shader hot-reload later with no build step.
-constexpr const char* kTerrainShaderSource = R"MSL(
+constexpr const char* kShaderSource = R"MSL(
 #include <metal_stdlib>
 using namespace metal;
 
@@ -56,11 +61,15 @@ struct Uniforms {
     float3 sunDirection;
     float minHeight;
     float maxHeight;
+    float mapWidth;
+    float mapDepth;
+    float hasTexture;
 };
 
 struct VertexOut {
     float4 position [[position]];
     float3 normal;
+    float2 uv;
     float height;
 };
 
@@ -72,36 +81,70 @@ vertex VertexOut terrainVertex(uint vid [[vertex_id]],
     VertexOut out;
     out.position = u.viewProjection * float4(worldPosition, 1.0);
     out.normal = float3(vertices[vid].normal);
+    // The ground texture covers the map exactly — 1 texel per elmo — so the UV
+    // is just the world position normalised by the map extent. No per-vertex UV
+    // needs storing, which saves 8 MB on a million-vertex map.
+    out.uv = float2(worldPosition.x / u.mapWidth, worldPosition.z / u.mapDepth);
     out.height = worldPosition.y;
     return out;
 }
 
 fragment float4 terrainFragment(VertexOut in [[stage_in]],
-                                constant Uniforms& u [[buffer(1)]]) {
+                                constant Uniforms& u [[buffer(1)]],
+                                texture2d<float> ground [[texture(0)]],
+                                sampler groundSampler [[sampler(0)]]) {
     // Interpolating unit normals across a triangle does not preserve length.
     const float3 normal = normalize(in.normal);
 
-    // Lambert against a fixed sun. Milestone 2 is solid shading only; the SMT
-    // tile textures arrive in milestone 3.
+    // Lambert against a fixed sun.
     const float lambert = saturate(dot(normal, u.sunDirection));
 
-    // Colour by elevation so relief reads clearly without textures: low ground
-    // green, high ground bare rock.
-    const float span = max(u.maxHeight - u.minHeight, 1.0);
-    const float t = saturate((in.height - u.minHeight) / span);
-    const float3 lowland = float3(0.18, 0.34, 0.16);
-    const float3 highland = float3(0.66, 0.62, 0.55);
-    const float3 albedo = mix(lowland, highland, t);
+    float3 albedo;
+    if (u.hasTexture > 0.5) {
+        albedo = ground.sample(groundSampler, in.uv).rgb;
+    } else {
+        // No .smt: fall back to colouring by elevation so relief still reads.
+        const float span = max(u.maxHeight - u.minHeight, 1.0);
+        const float t = saturate((in.height - u.minHeight) / span);
+        albedo = mix(float3(0.18, 0.34, 0.16), float3(0.66, 0.62, 0.55), t);
+    }
 
     // A little ambient so slopes facing away from the sun stay readable.
-    const float ambient = 0.28;
-    return float4(albedo * (ambient + lambert * 0.85), 1.0);
+    const float ambient = 0.35;
+    return float4(albedo * (ambient + lambert * 0.8), 1.0);
+}
+
+// --- Water ------------------------------------------------------------------
+// Recoil's water is a plane hard-coded at y = 0 (rts/Map/Ground.h:32) — there is
+// no dynamic water level. Four vertices generated from the map extents; no
+// buffer needed.
+struct WaterOut {
+    float4 position [[position]];
+    float3 world;
+};
+
+vertex WaterOut waterVertex(uint vid [[vertex_id]], constant Uniforms& u [[buffer(1)]]) {
+    // Triangle strip: (0,0) (1,0) (0,1) (1,1).
+    const float2 corner = float2(float(vid & 1u), float((vid >> 1) & 1u));
+    const float3 world = float3(corner.x * u.mapWidth, 0.0, corner.y * u.mapDepth);
+
+    WaterOut out;
+    out.position = u.viewProjection * float4(world, 1.0);
+    out.world = world;
+    return out;
+}
+
+fragment float4 waterFragment(WaterOut in [[stage_in]]) {
+    // Flat translucent blue. Depth-based tinting would need the depth buffer as
+    // an input attachment; that belongs with the rest of the water treatment in
+    // a later milestone, not smuggled in here.
+    return float4(0.09, 0.22, 0.38, 0.62);
 }
 )MSL";
 
 // Sun direction, pointing from the ground *towards* the sun so the fragment
-// shader can dot it against the surface normal directly. Chosen high and to one
-// side so slopes on both axes are differently lit.
+// shader can dot it against the surface normal directly. High and to one side
+// so slopes on both axes are differently lit.
 const simd_float3 kSunDirection = simd_normalize(simd_make_float3(0.45f, 0.78f, 0.44f));
 
 // Sky colour behind the terrain. Fixed rather than animated: a screenshot is
@@ -112,6 +155,13 @@ constexpr double kSkyB = 0.18;
 
 constexpr MTL::PixelFormat kColorFormat = MTL::PixelFormat::PixelFormatBGRA8Unorm;
 constexpr MTL::PixelFormat kDepthFormat = MTL::PixelFormat::PixelFormatDepth32Float;
+constexpr MTL::PixelFormat kGroundFormat = MTL::PixelFormat::PixelFormatBC1_RGBA;
+
+// A single BC1 block of mid-grey, used as the always-bound fallback so the
+// fragment shader never references an unbound texture (which is undefined even
+// on the branch that does not sample it). RGB565 0x8410 in both endpoints with
+// all-zero selectors = one flat colour.
+constexpr unsigned char kFallbackBlock[8] = {0x10, 0x84, 0x10, 0x84, 0x00, 0x00, 0x00, 0x00};
 
 // Wraps NS::Error text into our exception type. [[noreturn]] so call sites
 // read as plain control flow: `if (!x) throwMetalError(...);`.
@@ -122,6 +172,46 @@ constexpr MTL::PixelFormat kDepthFormat = MTL::PixelFormat::PixelFormatDepth32Fl
         message += err->localizedDescription()->utf8String();
     }
     throw rm::RendererError{message};
+}
+
+/// Builds a pipeline from two named functions in an already-compiled library.
+[[nodiscard]] MTL::RenderPipelineState* makePipeline(MTL::Device* device, MTL::Library* library,
+                                                     const char* vertexName,
+                                                     const char* fragmentName, bool blend) {
+    MTL::Function* vertexFn =
+        library->newFunction(NS::String::string(vertexName, NS::UTF8StringEncoding));
+    MTL::Function* fragmentFn =
+        library->newFunction(NS::String::string(fragmentName, NS::UTF8StringEncoding));
+
+    auto* descriptor = MTL::RenderPipelineDescriptor::alloc()->init();
+    descriptor->setVertexFunction(vertexFn);
+    descriptor->setFragmentFunction(fragmentFn);
+
+    MTL::RenderPipelineColorAttachmentDescriptor* color0 =
+        descriptor->colorAttachments()->object(0);
+    color0->setPixelFormat(kColorFormat);
+    if (blend) {
+        color0->setBlendingEnabled(true);
+        color0->setSourceRGBBlendFactor(MTL::BlendFactor::BlendFactorSourceAlpha);
+        color0->setDestinationRGBBlendFactor(MTL::BlendFactor::BlendFactorOneMinusSourceAlpha);
+        color0->setSourceAlphaBlendFactor(MTL::BlendFactor::BlendFactorSourceAlpha);
+        color0->setDestinationAlphaBlendFactor(MTL::BlendFactor::BlendFactorOneMinusSourceAlpha);
+    }
+    // The pipeline must know the depth format or the render pass silently
+    // refuses to write depth.
+    descriptor->setDepthAttachmentPixelFormat(kDepthFormat);
+
+    NS::Error* error = nullptr;
+    MTL::RenderPipelineState* pipeline = device->newRenderPipelineState(descriptor, &error);
+
+    descriptor->release();
+    if (vertexFn != nullptr) vertexFn->release();
+    if (fragmentFn != nullptr) fragmentFn->release();
+
+    if (pipeline == nullptr) {
+        throwMetalError("failed to create render pipeline", error);
+    }
+    return pipeline;
 }
 
 } // namespace
@@ -139,6 +229,15 @@ Renderer::Renderer(CA::MetalLayer* layer)
         throw RendererError{"no Metal-capable GPU found"};
     }
 
+    // BC1 is what .smt tiles already are. Apple Silicon supports it natively,
+    // so the tiles reach the GPU untouched; checking here means a machine
+    // without it fails loudly at startup instead of rendering garbage.
+    if (!device_->supportsBCTextureCompression()) {
+        throw RendererError{
+            "this GPU cannot sample BC1 textures, which is the format Recoil's "
+            ".smt tiles are stored in"};
+    }
+
     layer_->setDevice(device_);
     layer_->setPixelFormat(kColorFormat);
 
@@ -147,58 +246,78 @@ Renderer::Renderer(CA::MetalLayer* layer)
         throw RendererError{"failed to create Metal command queue"};
     }
 
-    // --- Terrain pipeline, compiled from source at runtime ------------------
+    // --- Pipelines, compiled from source at runtime -------------------------
     NS::Error* error = nullptr;
     MTL::Library* library = device_->newLibrary(
-        NS::String::string(kTerrainShaderSource, NS::UTF8StringEncoding),
+        NS::String::string(kShaderSource, NS::UTF8StringEncoding),
         nullptr, // default compile options
         &error);
     if (library == nullptr) {
         throwMetalError("runtime shader compilation failed", error);
     }
 
-    MTL::Function* vertexFn = library->newFunction(
-        NS::String::string("terrainVertex", NS::UTF8StringEncoding));
-    MTL::Function* fragmentFn = library->newFunction(
-        NS::String::string("terrainFragment", NS::UTF8StringEncoding));
-
-    auto* descriptor = MTL::RenderPipelineDescriptor::alloc()->init();
-    descriptor->setVertexFunction(vertexFn);
-    descriptor->setFragmentFunction(fragmentFn);
-    descriptor->colorAttachments()->object(0)->setPixelFormat(kColorFormat);
-    // The pipeline must know the depth format or the render pass silently
-    // refuses to write depth.
-    descriptor->setDepthAttachmentPixelFormat(kDepthFormat);
-
-    terrainPipeline_ = device_->newRenderPipelineState(descriptor, &error);
-
-    // The pipeline retains the functions, so every temporary is released now.
-    descriptor->release();
-    if (vertexFn != nullptr) vertexFn->release();
-    if (fragmentFn != nullptr) fragmentFn->release();
+    terrainPipeline_ = makePipeline(device_, library, "terrainVertex", "terrainFragment",
+                                    /*blend=*/false);
+    waterPipeline_ = makePipeline(device_, library, "waterVertex", "waterFragment",
+                                  /*blend=*/true);
     library->release();
-
-    if (terrainPipeline_ == nullptr) {
-        throwMetalError("failed to create terrain render pipeline", error);
-    }
 
     // --- Depth state -------------------------------------------------------
     auto* depthDescriptor = MTL::DepthStencilDescriptor::alloc()->init();
     depthDescriptor->setDepthCompareFunction(MTL::CompareFunction::CompareFunctionLess);
     depthDescriptor->setDepthWriteEnabled(true);
     depthState_ = device_->newDepthStencilState(depthDescriptor);
+
+    // Water tests against terrain but does not write depth: it is translucent,
+    // so writing would occlude anything drawn behind it later.
+    depthDescriptor->setDepthWriteEnabled(false);
+    waterDepthState_ = device_->newDepthStencilState(depthDescriptor);
     depthDescriptor->release();
 
-    if (depthState_ == nullptr) {
+    if (depthState_ == nullptr || waterDepthState_ == nullptr) {
         throw RendererError{"failed to create depth-stencil state"};
     }
+
+    // --- Ground sampler ----------------------------------------------------
+    auto* samplerDescriptor = MTL::SamplerDescriptor::alloc()->init();
+    samplerDescriptor->setMinFilter(MTL::SamplerMinMagFilter::SamplerMinMagFilterLinear);
+    samplerDescriptor->setMagFilter(MTL::SamplerMinMagFilter::SamplerMinMagFilterLinear);
+    samplerDescriptor->setMipFilter(MTL::SamplerMipFilter::SamplerMipFilterLinear);
+    // Clamp, not repeat: the atlas covers the map exactly, and repeating would
+    // wrap the far edge back onto the near one.
+    samplerDescriptor->setSAddressMode(MTL::SamplerAddressMode::SamplerAddressModeClampToEdge);
+    samplerDescriptor->setTAddressMode(MTL::SamplerAddressMode::SamplerAddressModeClampToEdge);
+    samplerDescriptor->setMaxAnisotropy(8);  // terrain is viewed at grazing angles
+    groundSampler_ = device_->newSamplerState(samplerDescriptor);
+    samplerDescriptor->release();
+
+    if (groundSampler_ == nullptr) {
+        throw RendererError{"failed to create ground sampler state"};
+    }
+
+    // --- Fallback ground texture -------------------------------------------
+    // Always bound, so the shader never names an unbound texture even on the
+    // branch that does not sample it.
+    MTL::TextureDescriptor* fallback =
+        MTL::TextureDescriptor::texture2DDescriptor(kGroundFormat, 4, 4, /*mipmapped=*/false);
+    fallback->setUsage(MTL::TextureUsageShaderRead);
+    groundTexture_ = device_->newTexture(fallback);
+    if (groundTexture_ == nullptr) {
+        throw RendererError{"failed to create fallback ground texture"};
+    }
+    groundTexture_->replaceRegion(MTL::Region::Make2D(0, 0, 4, 4), 0, kFallbackBlock,
+                                  sizeof(kFallbackBlock));
 }
 
 Renderer::~Renderer() {
     // Reverse acquisition order; all are +1 objects from newXxx()/CreateXxx.
     releaseTerrainBuffers();
+    if (groundTexture_ != nullptr) groundTexture_->release();
+    groundSampler_->release();
     if (depthTexture_ != nullptr) depthTexture_->release();
+    waterDepthState_->release();
     depthState_->release();
+    waterPipeline_->release();
     terrainPipeline_->release();
     commandQueue_->release();
     device_->release();
@@ -244,13 +363,55 @@ void Renderer::setTerrain(const TerrainMesh& mesh) {
     indexCount_ = mesh.indices.size();
     terrainMinY_ = mesh.minY;
     terrainMaxY_ = mesh.maxY;
+    mapWidth_ = mesh.maxX - mesh.minX;
+    mapDepth_ = mesh.maxZ - mesh.minZ;
 
     camera_.frame(simd_make_float3(mesh.minX, mesh.minY, mesh.minZ),
                   simd_make_float3(mesh.maxX, mesh.maxY, mesh.maxZ));
 
     // The far plane must clear the map diagonal from any orbit position, or the
     // far edge of a large map is clipped away.
-    camera_.farZ = camera_.distance * 4.0f + (mesh.maxX - mesh.minX) * 2.0f;
+    camera_.farZ = camera_.distance * 4.0f + mapWidth_ * 2.0f;
+}
+
+void Renderer::setGroundTexture(const TileAtlas& atlas) {
+    if (atlas.widthTexels <= 0 || atlas.heightTexels <= 0 || atlas.data.empty()) {
+        return;
+    }
+
+    MTL::TextureDescriptor* descriptor = MTL::TextureDescriptor::texture2DDescriptor(
+        kGroundFormat, static_cast<NS::UInteger>(atlas.widthTexels),
+        static_cast<NS::UInteger>(atlas.heightTexels), /*mipmapped=*/false);
+    descriptor->setMipmapLevelCount(static_cast<NS::UInteger>(atlas.mipLevels));
+    descriptor->setUsage(MTL::TextureUsageShaderRead);
+    descriptor->setStorageMode(MTL::StorageModeShared);
+
+    MTL::Texture* texture = device_->newTexture(descriptor);
+    if (texture == nullptr) {
+        throw RendererError{"failed to allocate the "
+                            + std::to_string(atlas.data.size() / (1024 * 1024))
+                            + " MiB ground texture"};
+    }
+
+    // The .smt supplies four mip levels per tile, so the atlas has four too.
+    // Each is uploaded whole — the blocks are already in the layout Metal wants.
+    for (int level = 0; level < atlas.mipLevels; ++level) {
+        const std::span<const std::byte> mip = atlas.mip(level);
+        if (mip.empty()) {
+            continue;
+        }
+        texture->replaceRegion(
+            MTL::Region::Make2D(0, 0, static_cast<NS::UInteger>(atlas.mipWidth(level)),
+                                static_cast<NS::UInteger>(atlas.mipHeight(level))),
+            static_cast<NS::UInteger>(level), mip.data(),
+            static_cast<NS::UInteger>(atlas.mipBytesPerRow(level)));
+    }
+
+    if (groundTexture_ != nullptr) {
+        groundTexture_->release();
+    }
+    groundTexture_ = texture;
+    hasGroundTexture_ = true;
 }
 
 void Renderer::ensureDepthTexture(unsigned int width, unsigned int height) noexcept {
@@ -320,6 +481,9 @@ void Renderer::drawFrame(CA::MetalDrawable* drawable) noexcept {
                 .sunDirection = kSunDirection,
                 .minHeight = terrainMinY_,
                 .maxHeight = terrainMaxY_,
+                .mapWidth = mapWidth_,
+                .mapDepth = mapDepth_,
+                .hasTexture = hasGroundTexture_ ? 1.0f : 0.0f,
             };
 
             encoder->setRenderPipelineState(terrainPipeline_);
@@ -338,12 +502,24 @@ void Renderer::drawFrame(CA::MetalDrawable* drawable) noexcept {
             // there is no uniform buffer to allocate or synchronise.
             encoder->setVertexBytes(&uniforms, sizeof(uniforms), kUniformBufferIndex);
             encoder->setFragmentBytes(&uniforms, sizeof(uniforms), kUniformBufferIndex);
+            encoder->setFragmentTexture(groundTexture_, kGroundTextureIndex);
+            encoder->setFragmentSamplerState(groundSampler_, kGroundSamplerIndex);
 
             encoder->drawIndexedPrimitives(MTL::PrimitiveType::PrimitiveTypeTriangle,
                                            static_cast<NS::UInteger>(indexCount_),
                                            MTL::IndexType::IndexTypeUInt32,
                                            indexBuffer_,
                                            /*indexBufferOffset=*/0);
+
+            // Water last, so it blends over whatever terrain sits below y = 0.
+            // Only worth drawing when some terrain actually is below it.
+            if (terrainMinY_ < 0.0f) {
+                encoder->setRenderPipelineState(waterPipeline_);
+                encoder->setDepthStencilState(waterDepthState_);
+                encoder->setVertexBytes(&uniforms, sizeof(uniforms), kUniformBufferIndex);
+                encoder->drawPrimitives(MTL::PrimitiveType::PrimitiveTypeTriangleStrip,
+                                        NS::UInteger{0}, NS::UInteger{4});
+            }
         }
 
         encoder->endEncoding();

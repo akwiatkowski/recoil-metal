@@ -58,11 +58,12 @@ reimplemented.*
    normals, depth buffer, Lambert shading coloured by elevation, orbit camera.
    Verified against a real BAR map (Angel Crossing 1.4: 1024×1024 squares,
    1.05M vertices, 2.1M triangles). **✔ done**
-3. **Textured terrain.** SMT tile decoding (DDS), texture arrays, and a proper
-   `mapinfo.lua` reader to replace the two-key height-override scanner.
-   **← current**
+3. **Textured terrain.** SMT tile decoding, an 8192x8192 BC1 ground atlas
+   uploaded without transcoding, a real `mapinfo.lua` reader, and Recoil's
+   fixed y=0 water plane. **✔ done**
 4. **Benchmark harness.** Frame-time capture to CSV; same map in Recoil GL
-   vs recoil-metal. This is where the research question gets its answer.
+   (via zink) vs recoil-metal. This is where the research question gets its
+   answer. **← current**
 5. **Units.** glTF/S3O loading, instanced rendering, skinning (Recoil's
    vertex format already carries bone IDs/weights — see FAR's docs).
 
@@ -97,11 +98,13 @@ To provide it:
 ```sh
 mkdir -p ~/projects/llm/input/recoil/maps && cd $_
 curl -sLO "https://files-cdn.beyondallreason.dev/file/9fc29b4e9dd666d9f9866280fb3c0861/angel_crossing_1.4.sd7"
-7zz e -y angel_crossing_1.4.sd7 maps/aw04.smf mapinfo.lua -o.
+7zz e -y angel_crossing_1.4.sd7 maps/aw04.smf maps/aw04.smt mapinfo.lua -o.
 ```
 
-Extract `mapinfo.lua` alongside the `.smf`, not just the `.smf` — it carries the
-authoritative height range. See the note in the Gotchas section of `AGENT.md`.
+Extract all three, not just the `.smf`: `mapinfo.lua` carries the authoritative
+height range (the binary header's is wrong on this map), and `aw04.smt` is the
+ground texture. Without the `.smt` the terrain still renders, shaded by
+elevation — which is also what the engine does for a missing tile file.
 
 ## Layout
 
@@ -110,6 +113,10 @@ recoil-metal/
 ├── CMakeLists.txt      single build file, sections commented
 ├── src/
 │   ├── core/           pure C++ — no Metal, no AppKit, fully unit-tested
+│   │   ├── map/        SMF/SMT loaders, mapinfo.lua, tile atlas
+│   │   ├── lua/        Lua table-literal reader (data, not programs)
+│   │   ├── mesh/       heightfield triangulation
+│   │   └── camera/     orbit camera + projection
 │   ├── render/         Metal renderer (Objective-C++ where bridging)
 │   ├── platform/       AppKit window + display link (pImpl hides ObjC)
 │   └── main.mm         thin entry point

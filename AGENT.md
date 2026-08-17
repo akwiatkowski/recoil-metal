@@ -95,6 +95,20 @@ formats, built test-first in modern C++, as both research and a C++ showcase.
   enough to look fine and never be noticed.
 - **`std::from_chars` for floating point is still deleted in Apple's libc++.**
   Use `strtof`. The integer overloads are fine.
+- **BC1/DXT1 is native on Apple Silicon** (`MTLDevice::supportsBCTextureCompression`
+  is true on an M4 Pro), so `.smt` tiles go to the GPU verbatim. Recoil's ETC1
+  transcode pass for drivers without S3TC (`SMFGroundTextures.cpp:290-317`) has
+  no counterpart here — do not port it.
+- **A map has far more tiles than Metal allows array layers** (65 536 vs 2 048),
+  so the ground texture is an *atlas*, not a texture array. It works out because
+  tiles tile the map exactly at 1 texel per elmo.
+- **`Nil` and `Boolean` are taken by system headers** (`<objc/objc.h>`,
+  `<MacTypes.h>`). Even scoped enumerators lose to the preprocessor, so any
+  header that might be included from a `.mm` must avoid those spellings.
+- **Do not test binary payloads by counting a sentinel byte.** `0xAA` is the
+  engine's missing-tile fill *and* an entirely ordinary DXT1 selector byte
+  (`0b10101010`) — it occurs in ~2.8% of real tile data. Assert exact placement
+  against the source bytes instead.
 - **Screenshots: capture the window by ID, not the screen.** With two displays
   and Spaces, `screencapture -x out.png` repeatedly grabbed bare wallpaper
   while the app was demonstrably presenting frames. Get the id from

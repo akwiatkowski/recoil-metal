@@ -1,42 +1,13 @@
 #include "core/map/Smf.hpp"
 
-#include <bit>
-#include <cstdint>
+#include "core/map/ByteReader.hpp"
+
 #include <cstdio>
 #include <cstring>
 #include <fstream>
-#include <string>
+#include <iterator>
 
 namespace {
-
-// --- Little-endian scalar reads --------------------------------------------
-//
-// SMF is little-endian on disk; Recoil reads it field-by-field through
-// swab*() helpers that are no-ops on little-endian hosts (SMFMapFile.cpp:295-312).
-// We do the same rather than memcpy'ing into a struct, for three reasons:
-// the on-disk layout then needs no packing pragma or static_assert to stay
-// honest, alignment is irrelevant because we only ever touch bytes, and the
-// reads are explicit about width and signedness (which -Wconversion enforces).
-
-[[nodiscard]] std::uint32_t readU32(std::span<const std::byte> b, std::size_t off) noexcept {
-    return std::to_integer<std::uint32_t>(b[off])
-         | (std::to_integer<std::uint32_t>(b[off + 1]) << 8)
-         | (std::to_integer<std::uint32_t>(b[off + 2]) << 16)
-         | (std::to_integer<std::uint32_t>(b[off + 3]) << 24);
-}
-
-[[nodiscard]] std::int32_t readI32(std::span<const std::byte> b, std::size_t off) noexcept {
-    return std::bit_cast<std::int32_t>(readU32(b, off));
-}
-
-[[nodiscard]] float readF32(std::span<const std::byte> b, std::size_t off) noexcept {
-    return std::bit_cast<float>(readU32(b, off));
-}
-
-[[nodiscard]] std::uint16_t readU16(std::span<const std::byte> b, std::size_t off) noexcept {
-    return static_cast<std::uint16_t>(std::to_integer<std::uint32_t>(b[off])
-                                    | (std::to_integer<std::uint32_t>(b[off + 1]) << 8));
-}
 
 // Field byte offsets within SMFHeader, in declaration order (SMFFormat.h:49-70).
 // Named constants beat arithmetic-in-place: a wrong offset here is the single
@@ -50,6 +21,7 @@ constexpr std::size_t kOffTileSize       = 40;
 constexpr std::size_t kOffMinHeight      = 44;
 constexpr std::size_t kOffMaxHeight      = 48;
 constexpr std::size_t kOffHeightmapPtr   = 52;
+constexpr std::size_t kOffTilesPtr       = 60;
 
 // Values the engine demands. Anything else is rejected outright, exactly as
 // CheckHeader does (SMFMapFile.cpp:16-28).
@@ -62,32 +34,44 @@ constexpr std::int32_t kRequiredTileSize       = 32;
 // CSMFReadMap divides by it to get numBigTexX/Y (SMFReadMap.cpp:113-130).
 constexpr std::int32_t kBigSquareSize = 128;
 
-} // namespace
+// A tile-file name is a NUL-terminated string of unbounded length on paper. Cap
+// it so a corrupt file cannot make us walk the whole map looking for a NUL.
+constexpr std::size_t kMaxTileFileNameLength = 260;
 
-namespace rm::smf {
+/// The fields of SMFHeader both loaders need, already validated.
+struct Header {
+    std::int32_t mapx = 0;
+    std::int32_t mapy = 0;
+    float minHeight = 0.0f;
+    float maxHeight = 0.0f;
+    std::size_t heightmapPtr = 0;
+    std::size_t tilesPtr = 0;
+};
 
-std::expected<HeightField, MapError> load(std::span<const std::byte> bytes) {
-    if (bytes.size() < kHeaderSize) {
+[[nodiscard]] std::expected<Header, rm::MapError> parseHeader(std::span<const std::byte> bytes) {
+    using rm::MapError;
+
+    if (bytes.size() < rm::smf::kHeaderSize) {
         return std::unexpected(MapError{
             MapError::Code::Truncated,
             "file is " + std::to_string(bytes.size()) + " bytes, shorter than the "
-                + std::to_string(kHeaderSize) + "-byte SMF header"});
+                + std::to_string(rm::smf::kHeaderSize) + "-byte SMF header"});
     }
 
     // Recoil compares the magic as a C string, so the field is the 15 characters
     // plus their terminating NUL — a full 16-byte match (SMFMapFile.cpp:26).
-    if (std::memcmp(bytes.data(), kMagic, sizeof(kMagic)) != 0) {
+    if (std::memcmp(bytes.data(), rm::smf::kMagic, sizeof(rm::smf::kMagic)) != 0) {
         return std::unexpected(MapError{
             MapError::Code::NotSmf,
             "not a Recoil SMF map: expected magic \"spring map file\""});
     }
 
-    const std::int32_t version        = readI32(bytes, kOffVersion);
-    const std::int32_t mapx           = readI32(bytes, kOffMapX);
-    const std::int32_t mapy           = readI32(bytes, kOffMapY);
-    const std::int32_t squareSize     = readI32(bytes, kOffSquareSize);
-    const std::int32_t texelPerSquare = readI32(bytes, kOffTexelPerSquare);
-    const std::int32_t tilesize       = readI32(bytes, kOffTileSize);
+    const std::int32_t version        = rm::readI32(bytes, kOffVersion);
+    const std::int32_t mapx           = rm::readI32(bytes, kOffMapX);
+    const std::int32_t mapy           = rm::readI32(bytes, kOffMapY);
+    const std::int32_t squareSize     = rm::readI32(bytes, kOffSquareSize);
+    const std::int32_t texelPerSquare = rm::readI32(bytes, kOffTexelPerSquare);
+    const std::int32_t tilesize       = rm::readI32(bytes, kOffTileSize);
 
     if (version != kRequiredVersion || tilesize != kRequiredTileSize
         || texelPerSquare != kRequiredTexelPerSquare || squareSize != kRequiredSquareSize) {
@@ -112,53 +96,181 @@ std::expected<HeightField, MapError> load(std::span<const std::byte> bytes) {
                 + std::to_string(kBigSquareSize)});
     }
 
+    return Header{
+        .mapx = mapx,
+        .mapy = mapy,
+        .minHeight = rm::readF32(bytes, kOffMinHeight),
+        .maxHeight = rm::readF32(bytes, kOffMaxHeight),
+        .heightmapPtr = static_cast<std::size_t>(rm::readI32(bytes, kOffHeightmapPtr)),
+        .tilesPtr = static_cast<std::size_t>(rm::readI32(bytes, kOffTilesPtr)),
+    };
+}
+
+/// Bounds check for a section: does `length` bytes fit at `offset`?
+[[nodiscard]] bool sectionFits(std::span<const std::byte> bytes, std::size_t offset,
+                               std::size_t length) noexcept {
+    return offset <= bytes.size() && length <= bytes.size() - offset;
+}
+
+[[nodiscard]] std::vector<char> slurp(const std::filesystem::path& path) {
+    std::ifstream in{path, std::ios::binary};
+    if (!in) {
+        return {};
+    }
+    return std::vector<char>{std::istreambuf_iterator<char>{in},
+                             std::istreambuf_iterator<char>{}};
+}
+
+} // namespace
+
+namespace rm::smf {
+
+std::size_t TileIndex::indexCount() const noexcept {
+    if (tilesX <= 0 || tilesZ <= 0) {
+        return 0;
+    }
+    return static_cast<std::size_t>(tilesX) * static_cast<std::size_t>(tilesZ);
+}
+
+std::expected<HeightField, MapError> load(std::span<const std::byte> bytes) {
+    const auto header = parseHeader(bytes);
+    if (!header) {
+        return std::unexpected(header.error());
+    }
+
     HeightField field;
-    field.squaresX = mapx;
-    field.squaresZ = mapy;
+    field.squaresX = header->mapx;
+    field.squaresZ = header->mapy;
 
     // The header's range is reported as-is. It is NOT necessarily the truth:
     // mapinfo.lua overrides it entirely when present, and real maps ship
     // inverted headers relying on exactly that (core/map/MapInfo.hpp). Applying
     // the override is the caller's job because it needs a second file.
-    field.setVerticalRange(readF32(bytes, kOffMinHeight), readF32(bytes, kOffMaxHeight));
+    field.setVerticalRange(header->minHeight, header->maxHeight);
 
     // Every section is addressed by an absolute file offset, so the heightmap
     // need not follow the header — Recoil's own generator puts a vegetation
     // extra header and grass map in between (BlankMapGenerator.cpp:180-221).
-    const auto heightmapPtr = static_cast<std::size_t>(readI32(bytes, kOffHeightmapPtr));
     const std::size_t samples = field.sampleCount();
     const std::size_t heightmapBytes = samples * sizeof(std::uint16_t);
 
-    if (heightmapPtr > bytes.size() || heightmapBytes > bytes.size() - heightmapPtr) {
+    if (!sectionFits(bytes, header->heightmapPtr, heightmapBytes)) {
         return std::unexpected(MapError{
             MapError::Code::Truncated,
             "heightmap needs " + std::to_string(heightmapBytes) + " bytes at offset "
-                + std::to_string(heightmapPtr) + " but the file is only "
+                + std::to_string(header->heightmapPtr) + " but the file is only "
                 + std::to_string(bytes.size()) + " bytes"});
     }
 
     field.raw.resize(samples);
     for (std::size_t i = 0; i < samples; ++i) {
-        field.raw[i] = readU16(bytes, heightmapPtr + i * sizeof(std::uint16_t));
+        field.raw[i] = readU16(bytes, header->heightmapPtr + i * sizeof(std::uint16_t));
     }
 
     return field;
 }
 
+std::expected<TileIndex, MapError> loadTileIndex(std::span<const std::byte> bytes) {
+    const auto header = parseHeader(bytes);
+    if (!header) {
+        return std::unexpected(header.error());
+    }
+
+    // MapTileHeader { int numTileFiles; int numTiles; } (SMFFormat.h:123-127).
+    constexpr std::size_t kMapTileHeaderSize = 8;
+    if (!sectionFits(bytes, header->tilesPtr, kMapTileHeaderSize)) {
+        return std::unexpected(MapError{
+            MapError::Code::Truncated,
+            "tile section header at offset " + std::to_string(header->tilesPtr)
+                + " runs past the end of a " + std::to_string(bytes.size()) + "-byte file"});
+    }
+
+    const std::int32_t numTileFiles = readI32(bytes, header->tilesPtr);
+    const std::int32_t numTiles = readI32(bytes, header->tilesPtr + 4);
+
+    if (numTileFiles < 0 || numTiles < 0) {
+        return std::unexpected(MapError{
+            MapError::Code::BadGeometry,
+            "tile section declares " + std::to_string(numTileFiles) + " files and "
+                + std::to_string(numTiles) + " tiles"});
+    }
+
+    TileIndex index;
+    index.tilesX = header->mapx / kSquaresPerTile;
+    index.tilesZ = header->mapy / kSquaresPerTile;
+    index.totalTiles = numTiles;
+
+    // Then numTileFiles records of { int32 tilesInThisFile; char name[] '\0' }
+    // (SMFGroundTextures.cpp:135-137).
+    std::size_t cursor = header->tilesPtr + kMapTileHeaderSize;
+    index.smtFileNames.reserve(static_cast<std::size_t>(numTileFiles));
+
+    for (std::int32_t file = 0; file < numTileFiles; ++file) {
+        if (!sectionFits(bytes, cursor, 4)) {
+            return std::unexpected(MapError{
+                MapError::Code::Truncated,
+                "tile file record " + std::to_string(file) + " runs past end of file"});
+        }
+        cursor += 4;  // tilesInThisFile — the running total is implied by order
+
+        std::string name;
+        while (true) {
+            if (cursor >= bytes.size()) {
+                return std::unexpected(MapError{
+                    MapError::Code::Truncated,
+                    "unterminated tile file name in record " + std::to_string(file)});
+            }
+            const auto c = static_cast<char>(bytes[cursor]);
+            ++cursor;
+            if (c == '\0') {
+                break;
+            }
+            if (name.size() >= kMaxTileFileNameLength) {
+                return std::unexpected(MapError{
+                    MapError::Code::BadHeader,
+                    "tile file name in record " + std::to_string(file) + " exceeds "
+                        + std::to_string(kMaxTileFileNameLength) + " characters"});
+            }
+            name.push_back(c);
+        }
+        index.smtFileNames.push_back(std::move(name));
+    }
+
+    // Then int32[mapx/4 * mapy/4] global tile indices (SMFGroundTextures.cpp:172).
+    const std::size_t count = index.indexCount();
+    const std::size_t indexBytes = count * sizeof(std::int32_t);
+    if (!sectionFits(bytes, cursor, indexBytes)) {
+        return std::unexpected(MapError{
+            MapError::Code::Truncated,
+            "tile index array needs " + std::to_string(indexBytes) + " bytes at offset "
+                + std::to_string(cursor) + " but the file is only "
+                + std::to_string(bytes.size()) + " bytes"});
+    }
+
+    index.indices.resize(count);
+    for (std::size_t i = 0; i < count; ++i) {
+        index.indices[i] = readI32(bytes, cursor + i * sizeof(std::int32_t));
+    }
+
+    return index;
+}
+
 std::expected<HeightField, MapError> loadFile(const std::filesystem::path& path) {
-    std::ifstream in{path, std::ios::binary};
-    if (!in) {
+    const std::vector<char> data = slurp(path);
+    if (data.empty()) {
         return std::unexpected(MapError{
             MapError::Code::Truncated, "could not open \"" + path.string() + "\""});
     }
-
-    // istreambuf_iterator over the whole file: maps are a few MB, and this keeps
-    // load() a pure function of bytes, which is what makes it unit-testable
-    // without any file on disk.
-    const std::vector<char> data{std::istreambuf_iterator<char>{in},
-                                 std::istreambuf_iterator<char>{}};
-
     return load(std::as_bytes(std::span{data}));
+}
+
+std::expected<TileIndex, MapError> loadTileIndexFile(const std::filesystem::path& path) {
+    const std::vector<char> data = slurp(path);
+    if (data.empty()) {
+        return std::unexpected(MapError{
+            MapError::Code::Truncated, "could not open \"" + path.string() + "\""});
+    }
+    return loadTileIndex(std::as_bytes(std::span{data}));
 }
 
 } // namespace rm::smf

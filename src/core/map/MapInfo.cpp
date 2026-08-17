@@ -2,16 +2,11 @@
 
 #include <algorithm>
 #include <cctype>
-#include <cstdlib>
 #include <fstream>
 #include <iterator>
-#include <string>
 
 namespace {
 
-/// ASCII lower-case copy. mapinfo.lua keys are conventionally lower-case, but
-/// the engine's own docs spell them minHeight/maxHeight, so matching is done
-/// case-insensitively rather than betting on one convention.
 [[nodiscard]] std::string toLower(std::string_view text) {
     std::string lowered;
     lowered.reserve(text.size());
@@ -20,89 +15,92 @@ namespace {
     return lowered;
 }
 
-/// Reads `<key> = <number>` and returns the number.
+/// Case-insensitive child lookup.
 ///
-/// Deliberately literal: it finds the key, steps over whitespace and a single
-/// '=', and parses a float. Anything else — a computed expression, a variable,
-/// a string — fails and yields nullopt, which is the honest answer for a
-/// scanner that is not a Lua interpreter.
-[[nodiscard]] std::optional<float> findNumericAssignment(const std::string& haystack,
-                                                         std::string_view key) {
-    std::size_t searchFrom = 0;
-
-    while (true) {
-        const std::size_t keyPos = haystack.find(key, searchFrom);
-        if (keyPos == std::string::npos) {
-            return std::nullopt;
-        }
-        searchFrom = keyPos + key.size();
-
-        // Reject a match that is part of a longer identifier, so looking for
-        // "height" cannot latch onto "maxheight" (and vice versa).
-        const bool precededByIdent =
-            keyPos > 0 && (std::isalnum(static_cast<unsigned char>(haystack[keyPos - 1])) != 0
-                           || haystack[keyPos - 1] == '_');
-        if (precededByIdent) {
-            continue;
-        }
-
-        std::size_t cursor = searchFrom;
-        while (cursor < haystack.size()
-               && std::isspace(static_cast<unsigned char>(haystack[cursor])) != 0) {
-            ++cursor;
-        }
-        if (cursor >= haystack.size() || haystack[cursor] != '=') {
-            continue;
-        }
-        ++cursor;
-        while (cursor < haystack.size()
-               && std::isspace(static_cast<unsigned char>(haystack[cursor])) != 0) {
-            ++cursor;
-        }
-
-        // std::from_chars for floating point is still unimplemented in Apple's
-        // libc++ (the overload is explicitly deleted), so strtof it is. Safe
-        // here because haystack is a std::string and therefore NUL-terminated.
-        const char* first = haystack.c_str() + cursor;
-        char* parseEnd = nullptr;
-        const float value = std::strtof(first, &parseEnd);
-        if (parseEnd != first) {
-            return value;
-        }
-        // Not a plain number (an expression, a string, ...) — keep looking in
-        // case a later occurrence is usable.
+/// Lua itself is case-sensitive, but map authors are not consistent: the engine
+/// documents these keys as minHeight/maxHeight while every real file writes
+/// minheight/maxheight. Matching loosely here costs nothing and avoids silently
+/// ignoring an override because of its capitalisation — which would put us back
+/// to rendering the map upside down.
+[[nodiscard]] const rm::lua::Value* findLoose(const rm::lua::Value& table,
+                                              std::string_view key) {
+    if (!table.isTable()) {
+        return nullptr;
     }
+    const std::string wanted = toLower(key);
+    for (const auto& field : table.fields) {
+        if (toLower(field.key) == wanted) {
+            return &field.value;
+        }
+    }
+    return nullptr;
 }
 
 } // namespace
 
 namespace rm::mapinfo {
 
-std::optional<VerticalRange> findVerticalRange(std::string_view lua) {
-    const std::string lowered = toLower(lua);
-
-    const std::optional<float> minHeight = findNumericAssignment(lowered, "minheight");
-    const std::optional<float> maxHeight = findNumericAssignment(lowered, "maxheight");
-
-    // Both or neither: a half-override would silently mix a Lua value with a
-    // header value, and the engine treats the two keys independently only
-    // because it has real defaults to fall back on. We do not.
-    if (!minHeight.has_value() || !maxHeight.has_value()) {
-        return std::nullopt;
+std::expected<MapInfo, lua::ParseError> parse(std::string_view luaSource) {
+    auto root = lua::parseTable(luaSource);
+    if (!root) {
+        return std::unexpected(root.error());
     }
 
-    return VerticalRange{*minHeight, *maxHeight};
+    MapInfo info;
+
+    const lua::Value* smf = findLoose(*root, "smf");
+    if (smf != nullptr) {
+        const lua::Value* minValue = findLoose(*smf, "minheight");
+        const lua::Value* maxValue = findLoose(*smf, "maxheight");
+
+        // Both or neither. A half-override would mix a Lua minimum with a
+        // header maximum and produce a plausible but wrong vertical scale.
+        if (minValue != nullptr && maxValue != nullptr) {
+            const auto minHeight = minValue->asNumber();
+            const auto maxHeight = maxValue->asNumber();
+            if (minHeight.has_value() && maxHeight.has_value()) {
+                info.verticalRange = VerticalRange{static_cast<float>(*minHeight),
+                                                   static_cast<float>(*maxHeight)};
+            }
+        }
+
+        if (const lua::Value* mapFile = findLoose(*smf, "mapfile")) {
+            if (const auto text = mapFile->asString()) {
+                info.mapFile = std::string{*text};
+            }
+        }
+
+        // smtFileName0, smtFileName1, ... contiguous from zero; the engine only
+        // applies them when the count matches the .smf's embedded list
+        // (SMFGroundTextures.cpp:122-127), so a gap ends the sequence.
+        for (int index = 0;; ++index) {
+            const std::string key = "smtfilename" + std::to_string(index);
+            const lua::Value* entry = findLoose(*smf, key);
+            if (entry == nullptr) {
+                break;
+            }
+            const auto text = entry->asString();
+            if (!text.has_value()) {
+                break;
+            }
+            info.smtFileNames.emplace_back(*text);
+        }
+    }
+
+    info.root = std::move(*root);
+    return info;
 }
 
-std::optional<VerticalRange> findVerticalRangeInFile(const std::filesystem::path& path) {
+std::expected<MapInfo, lua::ParseError> parseFile(const std::filesystem::path& path) {
     std::ifstream in{path, std::ios::binary};
     if (!in) {
-        return std::nullopt;
+        return std::unexpected(
+            lua::ParseError{"could not open \"" + path.string() + "\"", 0});
     }
 
     const std::string contents{std::istreambuf_iterator<char>{in},
                                std::istreambuf_iterator<char>{}};
-    return findVerticalRange(contents);
+    return parse(contents);
 }
 
 std::optional<std::filesystem::path> findBesideMap(const std::filesystem::path& smfPath) {

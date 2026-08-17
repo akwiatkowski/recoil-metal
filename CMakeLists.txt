@@ -48,6 +48,10 @@ target_link_libraries(metal_cpp INTERFACE
 add_library(rm_core STATIC
     src/core/map/HeightField.cpp
     src/core/map/MapInfo.cpp
+    src/core/map/Smt.cpp
+    src/core/map/TileAtlas.cpp
+    src/core/lua/LuaValue.cpp
+    src/core/lua/LuaTable.cpp
     src/core/map/ProceduralField.cpp
     src/core/map/Smf.cpp
     src/core/mesh/TerrainMesh.cpp
@@ -83,6 +87,9 @@ if(BUILD_TESTING)
         tests/test_terrain_mesh.cpp
         tests/test_orbit_camera.cpp
         tests/test_map_info.cpp
+        tests/test_lua_table.cpp
+        tests/test_smt.cpp
+        tests/test_tile_atlas.cpp
         tests/test_real_map.cpp
         tests/support/SmfWriter.cpp)
     # tests/ on the include path so fixtures resolve as "support/SmfWriter.hpp",

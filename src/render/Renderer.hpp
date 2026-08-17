@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/camera/OrbitCamera.hpp"
+#include "core/map/TileAtlas.hpp"
 #include "core/mesh/TerrainMesh.hpp"
 
 // Forward declarations keep Metal types out of the header: anything including
@@ -13,6 +14,7 @@ class RenderPipelineState;
 class DepthStencilState;
 class Texture;
 class Buffer;
+class SamplerState;
 }
 
 namespace rm {
@@ -42,6 +44,12 @@ public:
     // any previously set terrain. Throws RendererError if a buffer cannot be
     // allocated — that is startup-fatal, unlike a bad map file.
     void setTerrain(const TerrainMesh& mesh);
+
+    // Uploads the map's ground texture. Optional: without it the terrain is
+    // shaded by elevation alone, which is also what a map with a missing .smt
+    // gets. BC1 blocks are uploaded verbatim — Apple Silicon samples them
+    // natively, so there is no decode or transcode step.
+    void setGroundTexture(const TileAtlas& atlas);
 
     // The camera is mutated by input handlers on the main thread. That is safe
     // because CAMetalDisplayLink was added to the *main* run loop, so
@@ -75,6 +83,11 @@ private:
     unsigned int depthWidth_ = 0;
     unsigned int depthHeight_ = 0;
 
+    MTL::DepthStencilState* waterDepthState_ = nullptr;   // owned
+    MTL::RenderPipelineState* waterPipeline_ = nullptr;   // owned
+    MTL::Texture* groundTexture_ = nullptr;    // owned, null until setGroundTexture
+    MTL::SamplerState* groundSampler_ = nullptr; // owned
+
     MTL::Buffer* vertexBuffer_ = nullptr;      // owned
     MTL::Buffer* indexBuffer_ = nullptr;       // owned
     std::size_t indexCount_ = 0;
@@ -82,6 +95,12 @@ private:
     // Vertical range of the loaded terrain, used to colour it by elevation.
     float terrainMinY_ = 0.0f;
     float terrainMaxY_ = 0.0f;
+
+    // World extent in elmos, used for texture UVs and the water quad.
+    float mapWidth_ = 0.0f;
+    float mapDepth_ = 0.0f;
+
+    bool hasGroundTexture_ = false;
 
     OrbitCamera camera_;
 };

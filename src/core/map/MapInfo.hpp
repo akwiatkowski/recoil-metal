@@ -1,8 +1,12 @@
 #pragma once
 
+#include "core/lua/LuaTable.hpp"
+
+#include <expected>
 #include <filesystem>
 #include <optional>
-#include <string_view>
+#include <string>
+#include <vector>
 
 namespace rm::mapinfo {
 
@@ -12,35 +16,45 @@ struct VerticalRange {
     float maxHeight;
 };
 
-// Extracts smf.minheight / smf.maxheight from a map's mapinfo.lua.
+// The parts of mapinfo.lua the renderer currently needs.
 //
-// WHY THIS EXISTS, because it looks like scope creep and is not:
-// the .smf binary header carries minHeight/maxHeight, but mapinfo.lua
-// *overrides them entirely* when present (rts/Map/MapInfo.cpp:405-418,
-// consumed at SMFReadMap.cpp:133-158). The header is therefore NOT the
-// authority on vertical scale, and real maps rely on that.
+// WHY THIS EXISTS: the .smf binary header is not the authority on its own
+// contents. mapinfo.lua overrides the vertical range entirely
+// (rts/Map/MapInfo.cpp:405-418 -> SMFReadMap.cpp:133-158) and can rename the
+// tile files (smf.smtFileName0..N, MapInfo.cpp:420-427 consumed at
+// SMFGroundTextures.cpp:122-127).
 //
-// This is not academic. BAR's "Angel Crossing 1.4" (maps/aw04.smf) ships a
-// header saying minHeight=850, maxHeight=-150 — inverted — and corrects it in
-// mapinfo.lua to -150/850. Honouring only the header renders that map upside
-// down: every hill becomes a pit, silently and plausibly.
+// Not academic: BAR's "Angel Crossing 1.4" ships a header saying
+// minHeight=850, maxHeight=-150 — inverted — and corrects it in Lua. Honour
+// only the header and the map renders upside down, plausibly enough that
+// nothing flags it.
 //
-// SCOPE: this is a targeted two-key extractor, NOT a Lua parser. mapinfo.lua is
-// a real Lua program that can compute these values, and a map that does so will
-// not be understood here — findVerticalRange returns nullopt and the caller
-// falls back to the header. A proper mapinfo reader belongs with the rest of
-// the map metadata in milestone 3.
-[[nodiscard]] std::optional<VerticalRange> findVerticalRange(std::string_view lua);
+// Backed by core/lua, which parses Lua *data* and refuses Lua *programs*. A
+// mapinfo.lua that computes a value yields a ParseError and the caller keeps
+// the header's values; see LuaTable.hpp for why that is the honest failure.
+struct MapInfo {
+    std::optional<VerticalRange> verticalRange;
 
-/// Same, reading from a file. Returns nullopt if the file is absent or has no
-/// usable override — both are ordinary, not errors.
-[[nodiscard]] std::optional<VerticalRange> findVerticalRangeInFile(
+    /// smf.smtFileName0, 1, ... in index order. Empty means "use the names
+    /// embedded in the .smf tile section".
+    std::vector<std::string> smtFileNames;
+
+    /// smf.mapfile, when present (e.g. "maps/aw04.smf").
+    std::optional<std::string> mapFile;
+
+    /// The whole parsed table, for keys this struct does not model yet
+    /// (water, lighting, splats — milestone 3+).
+    lua::Value root;
+};
+
+[[nodiscard]] std::expected<MapInfo, lua::ParseError> parse(std::string_view lua);
+
+[[nodiscard]] std::expected<MapInfo, lua::ParseError> parseFile(
     const std::filesystem::path& path);
 
-/// Locates the mapinfo.lua that belongs to an .smf, if one is on disk.
-/// Checks beside the map file and one directory up, which covers both a flat
-/// extraction and the `maps/foo.smf` + `mapinfo.lua` layout used inside .sd7
-/// archives.
+/// Locates the mapinfo.lua belonging to an .smf, if one is on disk. Checks
+/// beside the map file and one directory up, covering both a flat extraction
+/// and the `maps/foo.smf` + `mapinfo.lua` layout used inside .sd7 archives.
 [[nodiscard]] std::optional<std::filesystem::path> findBesideMap(
     const std::filesystem::path& smfPath);
 
