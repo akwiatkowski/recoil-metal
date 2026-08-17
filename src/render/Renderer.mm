@@ -181,6 +181,22 @@ struct UnitInstanceIn {
     packed_float4 teamColour;
 };
 
+// One bone's contribution: a rotation and a translation, no scale. Matches the
+// C++ BoneTransform exactly (32 bytes) — a quaternion rather than a matrix, so
+// there is no row/column convention to get backwards between the two languages.
+struct BoneTransformIn {
+    packed_float4 rotation;     // w, x, y, z
+    packed_float3 translation;
+    float padding;
+};
+
+/// Rotates a vector by a quaternion, the same sandwich the C++ side uses.
+static float3 rotateBy(float4 q, float3 v) {
+    const float3 u = q.yzw;
+    const float3 t = cross(u, v) + q.x * v;
+    return v + 2.0 * cross(u, t);
+}
+
 struct UnitOut {
     float4 position [[position]];
     float3 normal;
@@ -209,13 +225,18 @@ vertex UnitOut unitVertex(uint vid [[vertex_id]],
                           const device UnitVertexIn* vertices [[buffer(0)]],
                           constant Uniforms& u [[buffer(1)]],
                           const device UnitInstanceIn* instances [[buffer(2)]],
-                          const device packed_float3* boneOffsets [[buffer(3)]]) {
+                          const device BoneTransformIn* bones [[buffer(3)]]) {
     const UnitVertexIn v = vertices[vid];
     const UnitInstanceIn inst = instances[iid];
 
-    // The bone hierarchy is applied here rather than baked into the vertices, so
-    // one vertex buffer serves every instance. S3O bones carry translation only.
-    const float3 local = float3(v.position) + float3(boneOffsets[v.boneIndex]);
+    // The bone transform is applied here rather than baked into the vertices, so
+    // one vertex buffer serves every instance AND every frame of an animation.
+    // At rest this is a translation for Recoil content and the identity for
+    // Supreme Commander content, whose vertices are already posed
+    // (core/model/Pose.hpp); under animation it is the full rigid transform.
+    const BoneTransformIn bone = bones[v.boneIndex];
+    const float4 boneRotation = float4(bone.rotation);
+    const float3 local = rotateBy(boneRotation, float3(v.position)) + float3(bone.translation);
 
     const float s = sin(inst.rotationY);
     const float c = cos(inst.rotationY);
@@ -223,7 +244,8 @@ vertex UnitOut unitVertex(uint vid [[vertex_id]],
                                -s * local.x + c * local.z);
     const float3 world = spun * inst.scale + float3(inst.position);
 
-    const float3 n = float3(v.normal);
+    // The normal takes the bone's rotation but not its translation.
+    const float3 n = rotateBy(boneRotation, float3(v.normal));
     const float3 spunNormal = float3(c * n.x + s * n.z, n.y, -s * n.x + c * n.z);
 
     UnitOut out;
@@ -605,35 +627,51 @@ void Renderer::setUnits(std::span<const dds::Texture> textures,
         }
         const Model& model = *batch.model;
 
-        // Bone offsets as packed 3-floats, indexed straight from the vertex. The
-        // globalOffset is already accumulated to the root by the loader, so the
-        // shader needs no hierarchy walk.
+        // Every pose the batch will ever need, baked now and concatenated into
+        // one buffer: the rest pose alone, or one pose per keyframe when an
+        // animation is attached. Playing it back is then a buffer offset — no
+        // per-frame CPU work, and nothing writes to a buffer the GPU may still
+        // be reading from a frame in flight.
         //
-        // Zero for a model whose vertices are already in model space: .scm
-        // stores them that way and adding the bone's offset would scatter the
-        // model across its own hierarchy. The bone data itself stays intact —
-        // it is the rest pose, and animation will need it — so this zeroes the
-        // buffer rather than the model.
-        const bool boneLocal = model.family == Family::Recoil;
-        std::vector<std::array<float, 3>> boneOffsets;
-        boneOffsets.reserve(model.bones.size());
-        for (const ModelBone& bone : model.bones) {
-            boneOffsets.push_back(boneLocal ? bone.globalOffset
-                                            : std::array<float, 3>{{0.0f, 0.0f, 0.0f}});
+        // restPose is where the two families' vertex conventions are reconciled
+        // (core/model/Pose.hpp): a translation for Recoil's bone-local vertices,
+        // the identity for Supreme Commander's model-space ones.
+        std::vector<BoneTransform> poses = restPose(model);
+        std::size_t poseCount = 1;
+        float duration = 0.0f;
+
+        if (batch.animation != nullptr && !batch.animation->empty()) {
+            const std::vector<int> boneMap = mapBonesToAnimation(model, *batch.animation);
+            const bool drivesAnything =
+                std::any_of(boneMap.begin(), boneMap.end(), [](int i) { return i >= 0; });
+
+            if (drivesAnything) {
+                poses.clear();
+                poses.reserve(model.bones.size() * batch.animation->frames.size());
+                for (const sca::Frame& frame : batch.animation->frames) {
+                    const std::vector<BoneTransform> pose =
+                        poseAt(model, *batch.animation, boneMap, frame.time);
+                    poses.insert(poses.end(), pose.begin(), pose.end());
+                }
+                poseCount = batch.animation->frames.size();
+                duration = batch.animation->duration;
+            }
         }
 
         GpuUnitBatch uploaded;
         uploaded.textures = batch.textures;
         uploaded.supremeCommanderShading = model.family == Family::SupremeCommander;
+        uploaded.poseCount = poseCount;
+        uploaded.boneStrideBytes = model.bones.size() * sizeof(BoneTransform);
+        uploaded.duration = duration;
         uploaded.vertexBuffer =
             device_->newBuffer(model.vertices.data(), model.vertices.size() * sizeof(ModelVertex),
                                MTL::ResourceStorageModeShared);
         uploaded.indexBuffer =
             device_->newBuffer(model.indices.data(), model.indices.size() * sizeof(std::uint32_t),
                                MTL::ResourceStorageModeShared);
-        uploaded.boneBuffer =
-            device_->newBuffer(boneOffsets.data(), boneOffsets.size() * sizeof(std::array<float, 3>),
-                               MTL::ResourceStorageModeShared);
+        uploaded.boneBuffer = device_->newBuffer(poses.data(), poses.size() * sizeof(BoneTransform),
+                                                 MTL::ResourceStorageModeShared);
         uploaded.instanceBuffer =
             device_->newBuffer(batch.instances.data(), batch.instances.size() * sizeof(UnitInstance),
                                MTL::ResourceStorageModeShared);
@@ -760,6 +798,26 @@ void Renderer::setGroundColourMap(const ColourImage& image) {
     }
     groundTexture_ = texture;
     hasGroundTexture_ = true;
+}
+
+std::size_t Renderer::poseOffsetFor(const GpuUnitBatch& batch) const noexcept {
+    if (batch.poseCount <= 1 || batch.duration <= 0.0f) {
+        return 0;
+    }
+
+    // Poses were baked one per keyframe, so playback picks the keyframe whose
+    // time has passed rather than interpolating on the GPU. Retail animations
+    // key at 30 Hz, which is where the source data's own resolution ends —
+    // interpolating between them per frame would cost CPU work every frame to
+    // invent detail the file does not contain.
+    float phase = std::fmod(animationTime_, batch.duration);
+    if (phase < 0.0f) {
+        phase += batch.duration;
+    }
+
+    const auto frame = static_cast<std::size_t>(
+        (phase / batch.duration) * static_cast<float>(batch.poseCount));
+    return std::min(frame, batch.poseCount - 1) * batch.boneStrideBytes;
 }
 
 void Renderer::setWater(bool enabled, float levelElmos) noexcept {
@@ -1086,7 +1144,12 @@ void Renderer::encodeScene(MTL::RenderCommandEncoder* encoder, unsigned int widt
 
             encoder->setVertexBuffer(batch.vertexBuffer, 0, kVertexBufferIndex);
             encoder->setVertexBuffer(batch.instanceBuffer, 0, kInstanceBufferIndex);
-            encoder->setVertexBuffer(batch.boneBuffer, 0, kBoneBufferIndex);
+            // Playback is this offset and nothing else. The stride is a multiple
+            // of 32 bytes, which satisfies the buffer-offset alignment Apple
+            // silicon requires (4).
+            encoder->setVertexBuffer(batch.boneBuffer,
+                                     static_cast<NS::UInteger>(poseOffsetFor(batch)),
+                                     kBoneBufferIndex);
 
             // One call for every instance — the whole point of the instance
             // buffer.
@@ -1114,6 +1177,19 @@ void Renderer::drawFrame(CA::MetalDrawable* drawable) noexcept {
     // The drawable is autoreleased by the display link, so every frame needs
     // its own pool or frame objects accumulate until the app exits.
     NS::AutoreleasePool* pool = NS::AutoreleasePool::alloc()->init();
+
+    // Animation advances only here, in the windowed path. Offscreen captures
+    // and benchmarks keep whatever time was set explicitly, because a scene
+    // that moves between runs cannot be compared to itself.
+    {
+        const double now = std::chrono::duration<double>(
+                               std::chrono::steady_clock::now().time_since_epoch())
+                               .count();
+        if (lastAnimationTick_ > 0.0) {
+            animationTime_ += static_cast<float>(now - lastAnimationTick_);
+        }
+        lastAnimationTick_ = now;
+    }
 
     // Wall time between successive frame starts. With CAMetalDisplayLink this
     // is the display's cadence, not the renderer's throughput — see the comment

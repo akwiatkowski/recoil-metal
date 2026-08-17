@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/model/Model.hpp"
+#include "core/model/Sca.hpp"
 #include "core/scene/UnitPlacement.hpp"
 
 #include <cstddef>
@@ -36,6 +37,12 @@ struct UnitBatch {
     const Model* model = nullptr;
     std::span<const UnitInstance> instances;
     TexturePair textures;
+
+    // Optional animation to play. Its bones are matched to the model's by name,
+    // so a mismatched pair moves only what it can rather than knotting the
+    // model. Every instance of a batch shares one clock — enough to see an
+    // animation run, and far short of per-unit state, which belongs with a sim.
+    const sca::Animation* animation = nullptr;
 };
 
 // Draw order that visits every batch exactly once with identical texture pairs

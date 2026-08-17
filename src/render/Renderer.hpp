@@ -5,6 +5,7 @@
 #include "core/map/TerrainType.hpp"
 #include "core/map/TileAtlas.hpp"
 #include "core/model/Model.hpp"
+#include "core/model/Pose.hpp"
 #include "core/scene/UnitBatch.hpp"
 #include "core/scene/UnitPlacement.hpp"
 #include "core/texture/Dds.hpp"
@@ -119,6 +120,15 @@ public:
     /// at units, which are ~2 pixels across when the whole map is framed.
     void focusOn(std::array<float, 3> target, float distance) noexcept;
 
+    // Where in their animations the units are, in seconds. Wraps per batch at
+    // that animation's own duration.
+    //
+    // Set explicitly for a screenshot or a benchmark, where a scene that moves
+    // between runs would be useless. The windowed path advances it itself, so a
+    // running app animates without the caller doing anything.
+    void setAnimationTime(float seconds) noexcept { animationTime_ = seconds; }
+    [[nodiscard]] float animationTime() const noexcept { return animationTime_; }
+
     // Starts recording per-frame CPU and GPU timings. GPU time comes from the
     // command buffer's own GPUStartTime/GPUEndTime, which is the driver's
     // measurement of the work itself rather than a wall-clock guess around it.
@@ -167,6 +177,7 @@ private:
     /// object the caller owns. Throws if the allocation fails.
     [[nodiscard]] MTL::Texture* uploadTexture(const dds::Texture& texture, const char* what);
 
+
     /// Encodes the whole scene — terrain then water — into an active encoder.
     /// Shared by the windowed and offscreen paths so they cannot drift apart
     /// and quietly benchmark different work.
@@ -202,7 +213,19 @@ private:
         TexturePair textures;
         /// Which family's channel layout the fragment shader should read.
         bool supremeCommanderShading = false;
+
+        // Animation, baked at upload. boneBuffer holds poseCount consecutive
+        // poses of boneStrideBytes each; playing it is a buffer OFFSET, not a
+        // rewrite — so there is no per-frame CPU work, and no buffer being
+        // written while the GPU may still be reading last frame's copy.
+        std::size_t poseCount = 1;
+        std::size_t boneStrideBytes = 0;
+        float duration = 0.0f;  ///< seconds; 0 when the batch does not animate
     };
+
+    /// Byte offset of the pose to draw a batch with at the current time.
+    /// Declared after GpuUnitBatch because it takes one by reference.
+    [[nodiscard]] std::size_t poseOffsetFor(const GpuUnitBatch& batch) const noexcept;
 
     std::vector<GpuUnitBatch> unitBatches_;
     std::vector<MTL::Texture*> unitTextures_;  // owned, indexed by TexturePair
@@ -227,6 +250,9 @@ private:
     float waterLevel_ = 0.0f;
 
     OrbitCamera camera_;
+
+    float animationTime_ = 0.0f;
+    double lastAnimationTick_ = 0.0;  ///< steady-clock seconds, windowed path only
 
     // Benchmark state. recorder_ is written from the completion handler, which
     // Metal may invoke on an internal thread — see drawFrame for how that is

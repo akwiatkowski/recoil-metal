@@ -9,6 +9,7 @@
 #include "core/map/Smt.hpp"
 #include "core/map/TerrainType.hpp"
 #include "core/model/S3o.hpp"
+#include "core/model/Sca.hpp"
 #include "core/model/Scm.hpp"
 #include "core/scene/UnitPlacement.hpp"
 #include "core/texture/Dds.hpp"
@@ -439,15 +440,18 @@ private:
 struct UnitScene {
     std::deque<rm::Model> models;
     std::deque<std::vector<rm::UnitInstance>> instances;
+    std::deque<rm::sca::Animation> animations;
     std::vector<rm::UnitBatch> batches;
     TextureRegistry textures;
 };
 
-/// One `--units` argument: a model, how many of it, and how big.
+/// One `--units` argument: a model, how many of it, how big, and optionally an
+/// animation to play on it.
 struct UnitOptions {
     std::filesystem::path modelPath;
     std::size_t count = kDefaultUnitCount;
     float scale = 1.0f;
+    std::filesystem::path animationPath;
 };
 
 /// Loads every requested model, resolves its textures, and places instances.
@@ -481,6 +485,27 @@ struct UnitOptions {
         // Both textures, not just the diffuse. The two families disagree on
         // where they live and on what the second one's channels mean, and that
         // is all they disagree on — see Family in Model.hpp.
+        // An animation is optional and, when present, must outlive the upload.
+        // It lives in the scene's deque for the same reason the models do.
+        const rm::sca::Animation* animation = nullptr;
+        if (!request.animationPath.empty()) {
+            auto loaded = rm::sca::loadFile(request.animationPath);
+            if (!loaded) {
+                std::fprintf(stderr, "  no animation (%s): %s\n",
+                             request.animationPath.filename().string().c_str(),
+                             loaded.error().message.c_str());
+            } else {
+                const auto map = rm::mapBonesToAnimation(*model, *loaded);
+                const auto driven = static_cast<std::size_t>(
+                    std::count_if(map.begin(), map.end(), [](int b) { return b >= 0; }));
+                std::printf("  animation %s: %.2fs, %zu keyframes, %zu of %zu bones driven\n",
+                            loaded->name.c_str(), static_cast<double>(loaded->duration),
+                            loaded->frames.size(), driven, model->bones.size());
+                scene.animations.push_back(std::move(*loaded));
+                animation = &scene.animations.back();
+            }
+        }
+
         const rm::TexturePair pair =
             supCom ? rm::TexturePair{
                          .diffuse = scene.textures.resolve(
@@ -521,6 +546,7 @@ struct UnitOptions {
             .model = &scene.models.back(),
             .instances = scene.instances.back(),
             .textures = pair,
+            .animation = animation,
         });
     }
 
@@ -613,7 +639,36 @@ struct ShotOptions {
         }
     }
 
+    // `--animate` attaches to the --units it follows, so a scene can play a
+    // different animation on each model.
+    std::size_t attachTo = 0;
+    for (int i = 1; i < argc; ++i) {
+        const std::string arg = argv[i];
+        if (arg == "--units") {
+            ++attachTo;
+            continue;
+        }
+        if (arg == "--animate" && i + 1 < argc && attachTo > 0
+            && attachTo <= requests.size()) {
+            requests[attachTo - 1].animationPath = argv[i + 1];
+        }
+    }
+
     return requests;
+}
+
+/// `--time <seconds>`: where in their animations to freeze the units.
+///
+/// Only meaningful for a screenshot or a benchmark. The windowed app advances
+/// its own clock, because an animation that needs a flag to move is not one
+/// anybody would notice working.
+[[nodiscard]] float parseAnimationTime(int argc, const char* argv[]) {
+    for (int i = 1; i + 1 < argc; ++i) {
+        if (std::string{argv[i]} == "--time") {
+            return static_cast<float>(std::atof(argv[i + 1]));
+        }
+    }
+    return 0.0f;
 }
 
 /// Whether `--focus` was given: frame the first instance instead of the map.
@@ -812,6 +867,7 @@ int main(int argc, const char* argv[]) {
 
         const std::vector<UnitOptions> unitRequests = parseUnits(argc, argv);
         const bool focus = parseFocus(argc, argv);
+        const float animationTime = parseAnimationTime(argc, argv);
         // Land above the water, whatever the map calls water: Recoil's plane is
         // always y = 0, Supreme Commander's is per map and 140 elmos on most.
         // Scattering above 0 on a FA map drowns most of the units.
@@ -834,6 +890,7 @@ int main(int argc, const char* argv[]) {
             renderer.setTerrain(mesh);
             applyGround(renderer, *map);
             renderer.setUnits(units.textures.all(), units.batches);
+            renderer.setAnimationTime(animationTime);
 
             std::printf("offscreen benchmark: %ux%u, %zu frames (discarding %zu warmup),"
                         " %zu frames in flight, no vsync\n",
@@ -858,6 +915,7 @@ int main(int argc, const char* argv[]) {
             renderer.setTerrain(mesh);
             applyGround(renderer, *map);
             renderer.setUnits(units.textures.all(), units.batches);
+            renderer.setAnimationTime(animationTime);
             if (focus) {
                 focusOnFirstUnit(renderer, units);
             }

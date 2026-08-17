@@ -116,3 +116,58 @@ becomes two more loaders filling the same struct, and gains real skeletal
 animation rather than losing it. If glTF is ever genuinely wanted — to consume
 FAR's existing converted output as-is — the JSON dependency question is deferred,
 not answered, and nothing built here has to change to accommodate it.
+
+## ADR-005 — Both content families in one struct, with two recorded differences
+
+**Context.** ADR-004 predicted `.scm`/`.sca` would be "two more loaders filling
+the same struct". Implementing them showed the prediction was right about the
+shape and wrong to think it was free: two conventions genuinely differ, and both
+are *invisible* rather than wrong-looking if guessed. `.s3o` stores vertices
+relative to their piece; `.scm` stores them in model space, so adding the bone
+offset scatters the model. `.s3o` puts the team-colour mask in tex1's alpha;
+Supreme Commander puts it in `_SpecTeam`'s alpha — its albedo is frequently DXT1
+and carries no usable alpha at all.
+
+**Decision.** `Model` records which family it came from, and exactly two things
+read that field: `restPose` (which transform a bone contributes) and the fragment
+shader (which channel the mask is in). Everything else — placement, batching, the
+instanced draw, the texture cache — is family-blind. Both differences were
+verified against the retail corpora rather than assumed.
+
+**Alternatives considered.** Normalising at load time by baking bone offsets into
+`.scm` vertices — rejected: it destroys the rest pose that `.sca` animates away
+from. A `Family` field on nothing, with per-format renderers — rejected: it
+duplicates the entire draw path to express two booleans. Deriving the family from
+the file extension at the call site — rejected for the same reason the map path
+sniffs magic: the extension is not load-bearing and the loader already knows.
+
+**Consequences.** Adding a third family means one enum value and two switches,
+both of which the compiler will point at. The cost is that `Family` is a lie
+waiting to happen if a future format mixes conventions — at which point it should
+become two independent fields, which is a mechanical change.
+
+## ADR-006 — Poses baked per keyframe at upload, played back as a buffer offset
+
+**Context.** `.sca` is the only keyframed animation any format in scope
+delivers. Playing it needs a per-bone transform per frame; the obvious
+implementation rewrites a GPU buffer every frame, which races the frames already
+in flight and needs either rotating buffers or a fence.
+
+**Decision.** Compute every keyframe's pose once, at upload, and concatenate them
+into one immutable buffer. Playback selects a keyframe by *offsetting the bind*.
+Nothing is written after upload, so there is no race to synchronise and no
+per-frame CPU cost. Bone transforms are a quaternion plus a translation (32
+bytes), not a 4x4: both families are rigid, and there is no row/column convention
+to get backwards between C++ and MSL.
+
+**Alternatives considered.** Per-frame CPU pose evaluation into a triple-buffered
+ring — rejected as more moving parts for work that is identical every loop.
+Skinning matrices on the GPU from raw keys — rejected: it puts the family-specific
+rest-pose inverse into the shader, where ADR-005 works to keep it out.
+
+**Consequences.** Memory is bones x 32 B x keyframes per batch — 45 KB for a
+20-bone, 71-keyframe walk cycle, which is nothing. Playback snaps to the source's
+own 30 Hz keys instead of interpolating per display frame; interpolating would
+cost CPU work every frame to invent detail the file does not contain. Every
+instance in a batch shares one clock: enough to see an animation run, and far
+short of per-unit state, which belongs with a sim.

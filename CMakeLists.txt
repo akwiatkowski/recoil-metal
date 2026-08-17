@@ -65,6 +65,8 @@ add_library(rm_core STATIC
     src/core/model/Model.cpp
     src/core/model/S3o.cpp
     src/core/model/Scm.cpp
+    src/core/model/Sca.cpp
+    src/core/model/Pose.cpp
     src/core/texture/Dds.cpp
     src/core/scene/UnitPlacement.cpp
     src/core/scene/UnitBatch.cpp)
@@ -107,6 +109,8 @@ if(BUILD_TESTING)
         tests/test_s3o.cpp
         tests/test_real_model.cpp
         tests/test_real_scm.cpp
+        tests/test_pose.cpp
+        tests/test_real_sca.cpp
         tests/test_dds.cpp
         tests/test_unit_placement.cpp
         tests/test_team_colours.cpp

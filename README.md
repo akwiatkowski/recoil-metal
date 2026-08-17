@@ -75,7 +75,8 @@ reimplemented.*
    against 0.69 ms for terrain alone. Both texture channels are honoured —
    tex1's alpha is the team-colour mask, tex2 carries self-illumination and
    reflectivity — shaded by a port of the engine's own model shader
-   (`ModelFragProgGL4.glsl`). Still to do: `.sca`-style animation.
+   (`ModelFragProgGL4.glsl`). Several models per scene, ordered so each texture
+   *pair* binds once a frame — the unit Recoil batches on too.
 
    Deliberately *not* glTF. The engine must eventually handle both Recoil and
    Forged Alliance content, but glTF is nobody's native format — it is FAR's
@@ -97,6 +98,21 @@ reimplemented.*
    texture, it blends nine strata through two masks at runtime — and start
    positions from `_scenario.lua`. Maps above 2048 squares are refused rather
    than half-loaded: their mesh alone would want ~800 MB and there is no LOD yet.
+
+7. **Supreme Commander models and animation.** `.scm` loads into the *same*
+   `Model` struct `.s3o` does — validated against all **1148** retail models
+   (8379 bones, 1.23M vertices, 838471 triangles), cross-checked against an
+   independent Python read. `.sca` gives what glTF would have lost: real
+   keyframed bone animation, all **474** retail animations decoding to the byte.
+   **✔ done** — a walk cycle plays on a Supreme Commander bot standing on a
+   Supreme Commander map, next to Beyond All Reason units, in one scene and one
+   binary.
+
+   Two conventions genuinely differ between the families and `Model` records
+   which one a model follows — vertices are bone-local in `.s3o` and model-space
+   in `.scm`, and the team-colour mask lives in tex1's alpha versus
+   `_SpecTeam`'s. Everything else is family-blind. See
+   [ADR-005](ADR_DECISIONS.md) and [ADR-006](ADR_DECISIONS.md).
 
 Stage B (sim semantics, only if milestones 1–5 prove out) is deliberately not
 planned. The cliff is real; plan when we're on it.
@@ -168,6 +184,24 @@ Models are extracted once from the retail install's `units.scd` (a ZIP) into
 `~/projects/llm/input/faf/` — see `tests/test_real_scm.cpp` for the command.
 Textures are found beside the model by Supreme Commander's naming convention
 (`_Albedo`, `_SpecTeam`), since `.scm` names none.
+
+### Animation
+
+`--animate <file.sca>` attaches an animation to the `--units` before it. The
+windowed app advances its own clock; `--time <seconds>` freezes it, which is what
+makes a screenshot or a benchmark of an animated scene reproducible.
+
+```sh
+./build/recoil-metal "$MAP" \
+    --units $FA/DEL0204/DEL0204_lod0.scm 1 \
+    --animate $FA/DEL0204/DEL0204_awalk.sca --focus
+#   animation DEL0204_awalk: 2.33s, 71 keyframes, 19 of 20 bones driven
+```
+
+Every keyframe's pose is computed once at upload and playback is a buffer
+offset, so 800 animated units cost 0.70 ms/frame — the same as 800 static ones.
+`.s3o` has no equivalent: the format carries no rotation at all, and Recoil
+drives unit motion from scripts instead.
 
 ### Supreme Commander maps
 
