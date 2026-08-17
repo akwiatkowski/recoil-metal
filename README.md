@@ -68,7 +68,12 @@ reimplemented.*
    against a terrain draw, not the same work through two APIs. Enough headroom
    to justify continuing, which is what this milestone existed to decide.
 5. **Units — Recoil content first.** `.s3o` loading, piece hierarchy, instanced
-   rendering. **← current**
+   rendering, DDS textures. **← current** — models render on the terrain:
+   validated against all **2034** BAR `.s3o` models and **2552** `.dds`
+   textures, placed at map start positions plus a deterministic scatter.
+   800 instances of a 3980-triangle model costs 2.29 ms/frame (436 fps)
+   against 0.69 ms for terrain alone. Still to do: `.sca`-style animation and
+   the second (spec/team) texture channel.
 
    Deliberately *not* glTF. The engine must eventually handle both Recoil and
    Forged Alliance content, but glTF is nobody's native format — it is FAR's
@@ -105,6 +110,35 @@ mise exec -- ctest --test-dir build --output-on-failure
 # The Recoil OpenGL baseline for the same map (needs FAR's zink build)
 tools/bench_recoil_gl.sh docs/bench-recoil-gl.csv
 ```
+
+### Units on a map
+
+```sh
+BAR=~/projects/llm/games/forged-alliance-reborn/reference/BAR/objects3d/Units
+
+# 800 instances: one per map start position, the rest scattered on land
+./build/recoil-metal path/to/map.smf --units $BAR/corgantbig.s3o 800
+
+# --focus frames the first instance instead of the whole map, because a unit is
+# under 1% of an 8192-elmo map's width and otherwise renders as a few pixels
+./build/recoil-metal path/to/map.smf --units $BAR/corgantbig.s3o 40 --focus
+```
+
+`--units <model.s3o> [count] [scale]`. Textures are resolved by the name the
+`.s3o` carries, under BAR's `unittextures/`.
+
+### Screenshots
+
+`--screenshot` renders one frame offscreen and writes a PNG. No window, so it
+works regardless of which Space is active — capturing the app's own window by id
+fails outright for a window on an inactive Space, which is why this exists.
+
+```sh
+./build/recoil-metal path/to/map.smf --units $BAR/corgantbig.s3o 40 --focus \
+    --screenshot docs/images/units.png 2000 1200
+```
+
+PNG encoding goes through ImageIO, which is part of the OS — not a dependency.
 
 Drag to orbit, scroll to zoom.
 

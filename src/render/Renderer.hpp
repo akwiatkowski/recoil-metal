@@ -3,9 +3,14 @@
 #include "core/bench/FrameStats.hpp"
 #include "core/camera/OrbitCamera.hpp"
 #include "core/map/TileAtlas.hpp"
+#include "core/model/Model.hpp"
+#include "core/scene/UnitPlacement.hpp"
+#include "core/texture/Dds.hpp"
 #include "core/mesh/TerrainMesh.hpp"
 
 #include <mutex>
+#include <span>
+#include <vector>
 
 // Forward declarations keep Metal types out of the header: anything including
 // this file stays pure C++ and test-compilable without frameworks.
@@ -56,12 +61,42 @@ public:
     // natively, so there is no decode or transcode step.
     void setGroundTexture(const TileAtlas& atlas);
 
+    // Uploads a model and the instances to draw it at. One instanced draw call
+    // covers every instance; the bone hierarchy is applied on the GPU by
+    // indexing a per-bone offset buffer from the vertex, which is what keeps
+    // vertices shareable across instances.
+    //
+    // Replaces any previously set units. An empty instance list clears them.
+    void setUnits(const Model& model, std::span<const UnitInstance> instances);
+
+    /// Optional diffuse texture for the units. Without it they shade flat grey.
+    void setUnitTexture(const dds::Texture& texture);
+
     // The camera is mutated by input handlers on the main thread. That is safe
     // because CAMetalDisplayLink was added to the *main* run loop, so
     // drawFrame runs on the main thread too — there is no render thread to
     // race with. Moving the link to its own thread would require revisiting
     // this.
     [[nodiscard]] OrbitCamera& camera() noexcept { return camera_; }
+
+    // One offscreen frame, read back as BGRA8 pixels.
+    //
+    // Exists because capturing the app's window is unreliable: with multiple
+    // displays and Spaces, a window on an inactive Space cannot be captured by
+    // id at all. Rendering to a texture and encoding it sidesteps the window
+    // server completely, and doubles as a way to record what a change looks
+    // like without interrupting whoever is at the machine.
+    struct CapturedImage {
+        int width = 0;
+        int height = 0;
+        std::vector<std::uint8_t> bgra;  ///< tightly packed, width * height * 4
+    };
+
+    [[nodiscard]] CapturedImage renderToImage(unsigned int width, unsigned int height);
+
+    /// Points the camera at a world position from a given distance. Used to look
+    /// at units, which are ~2 pixels across when the whole map is framed.
+    void focusOn(std::array<float, 3> target, float distance) noexcept;
 
     // Starts recording per-frame CPU and GPU timings. GPU time comes from the
     // command buffer's own GPUStartTime/GPUEndTime, which is the driver's
@@ -105,6 +140,7 @@ private:
     void ensureDepthTexture(unsigned int width, unsigned int height) noexcept;
 
     void releaseTerrainBuffers() noexcept;
+    void releaseUnitBuffers() noexcept;
 
     /// Encodes the whole scene — terrain then water — into an active encoder.
     /// Shared by the windowed and offscreen paths so they cannot drift apart
@@ -126,6 +162,15 @@ private:
     MTL::RenderPipelineState* waterPipeline_ = nullptr;   // owned
     MTL::Texture* groundTexture_ = nullptr;    // owned, null until setGroundTexture
     MTL::SamplerState* groundSampler_ = nullptr; // owned
+
+    MTL::RenderPipelineState* unitPipeline_ = nullptr;  // owned
+    MTL::Texture* unitTexture_ = nullptr;      // owned; falls back to the grey block
+    MTL::Buffer* unitVertexBuffer_ = nullptr;  // owned
+    MTL::Buffer* unitIndexBuffer_ = nullptr;   // owned
+    MTL::Buffer* unitBoneBuffer_ = nullptr;    // owned
+    MTL::Buffer* unitInstanceBuffer_ = nullptr; // owned
+    std::size_t unitIndexCount_ = 0;
+    std::size_t unitInstanceCount_ = 0;
 
     MTL::Buffer* vertexBuffer_ = nullptr;      // owned
     MTL::Buffer* indexBuffer_ = nullptr;       // owned

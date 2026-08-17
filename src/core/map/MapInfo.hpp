@@ -16,6 +16,14 @@ struct VerticalRange {
     float maxHeight;
 };
 
+// A team's spawn point, in elmos. Only X and Z are given — the Y comes from
+// sampling the heightmap, which is what the engine does too.
+struct StartPosition {
+    int team = 0;
+    float x = 0.0f;
+    float z = 0.0f;
+};
+
 // The parts of mapinfo.lua the renderer currently needs.
 //
 // WHY THIS EXISTS: the .smf binary header is not the authority on its own
@@ -41,6 +49,10 @@ struct MapInfo {
 
     /// smf.mapfile, when present (e.g. "maps/aw04.smf").
     std::optional<std::string> mapFile;
+
+    /// `teams[N].startPos` in team order, contiguous from team 0. Real maps
+    /// declare one per supported player: Angel Crossing has eight.
+    std::vector<StartPosition> startPositions;
 
     /// The whole parsed table, for keys this struct does not model yet
     /// (water, lighting, splats — milestone 3+).

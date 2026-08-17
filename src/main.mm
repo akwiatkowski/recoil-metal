@@ -1,9 +1,14 @@
 #import <AppKit/AppKit.h>
+#import <CoreGraphics/CoreGraphics.h>
+#import <ImageIO/ImageIO.h>
 
 #include "core/map/MapInfo.hpp"
 #include "core/map/ProceduralField.hpp"
 #include "core/map/Smf.hpp"
 #include "core/map/Smt.hpp"
+#include "core/model/S3o.hpp"
+#include "core/scene/UnitPlacement.hpp"
+#include "core/texture/Dds.hpp"
 #include "core/map/TileAtlas.hpp"
 #include "core/mesh/TerrainMesh.hpp"
 #include "platform/Window.hpp"
@@ -15,6 +20,7 @@
 #include <filesystem>
 #include <fstream>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -163,7 +169,153 @@ constexpr float kDemoMaxHeight = 360.0f;
     return std::move(*atlas);
 }
 
+// Where BAR's reference content lives. Used only to resolve a model's texture
+// names, which S3O carries but does not contain.
+constexpr const char* kBarTextureDir =
+    "projects/llm/games/forged-alliance-reborn/reference/BAR/unittextures";
+
+/// How many scattered instances by default. A single unit is well under 1% of an
+/// 8192-elmo map's width and effectively invisible when framed, so seeing units
+/// on a map means seeing many of them.
+constexpr std::size_t kDefaultUnitCount = 800;
+
+struct UnitScene {
+    rm::Model model;
+    std::vector<rm::UnitInstance> instances;
+    std::optional<rm::dds::Texture> diffuse;
+};
+
+/// Loads a model, resolves its diffuse texture, and places instances.
+///
+/// Placement is start positions first when the map declares them, then a
+/// deterministic scatter to make up the count — spawn points read as meaningful
+/// and the scatter makes the map look inhabited.
+[[nodiscard]] std::optional<UnitScene> resolveUnits(const std::filesystem::path& modelPath,
+                                                   const rm::HeightField& field,
+                                                   std::size_t count, float scale,
+                                                   std::span<const rm::mapinfo::StartPosition> starts) {
+    auto model = rm::s3o::loadFile(modelPath);
+    if (!model) {
+        std::fprintf(stderr, "failed to load model \"%s\": %s\n",
+                     modelPath.string().c_str(), model.error().message.c_str());
+        return std::nullopt;
+    }
+
+    UnitScene scene;
+    std::printf("model %s: %zu bones, %zu vertices, %zu triangles, radius %.1f\n",
+                model->name.c_str(), model->bones.size(), model->vertices.size(),
+                model->triangleCount(), static_cast<double>(model->radius));
+
+    // S3O names its textures but does not carry them; they live under
+    // unittextures/ (FAR report 05 section 5.3).
+    if (!model->textures[0].empty()) {
+        const char* home = std::getenv("HOME");
+        const std::filesystem::path texturePath =
+            std::filesystem::path{home == nullptr ? "" : home} / kBarTextureDir
+            / model->textures[0];
+
+        if (auto texture = rm::dds::loadFile(texturePath)) {
+            std::printf("  texture %s: %dx%d, %d mips\n", model->textures[0].c_str(),
+                        texture->width, texture->height, texture->mipLevels);
+            scene.diffuse = std::move(*texture);
+        } else {
+            std::fprintf(stderr, "  no texture (%s): %s\n", model->textures[0].c_str(),
+                         texture.error().message.c_str());
+        }
+    }
+
+    scene.instances = rm::atStartPositions(field, starts, scale);
+    const std::size_t remaining = count > scene.instances.size()
+                                      ? count - scene.instances.size()
+                                      : 0;
+    const auto scattered = rm::scatterOnLand(field, remaining, /*seed=*/20260817u, scale);
+    scene.instances.insert(scene.instances.end(), scattered.begin(), scattered.end());
+
+    std::printf("  %zu instances (%zu at start positions, %zu scattered)\n",
+                scene.instances.size(), starts.size(), scattered.size());
+
+    scene.model = std::move(*model);
+    return scene;
+}
+
 /// Parsed --bench / --bench-offscreen arguments.
+/// Parsed --units arguments.
+/// Parsed --screenshot arguments.
+struct ShotOptions {
+    bool enabled = false;
+    std::string path;
+    unsigned int width = 1920;
+    unsigned int height = 1080;
+};
+
+[[nodiscard]] ShotOptions parseShot(int argc, const char* argv[]) {
+    ShotOptions options;
+    for (int i = 1; i < argc; ++i) {
+        if (std::string{argv[i]} != "--screenshot") {
+            continue;
+        }
+        options.enabled = true;
+        if (i + 1 < argc) {
+            options.path = argv[i + 1];
+        }
+        if (i + 3 < argc) {
+            const int w = std::atoi(argv[i + 2]);
+            const int h = std::atoi(argv[i + 3]);
+            if (w > 0 && h > 0) {
+                options.width = static_cast<unsigned int>(w);
+                options.height = static_cast<unsigned int>(h);
+            }
+        }
+        break;
+    }
+    return options;
+}
+
+struct UnitOptions {
+    std::filesystem::path modelPath;
+    std::size_t count = kDefaultUnitCount;
+    float scale = 1.0f;
+    bool focus = false;  ///< frame the first instance instead of the whole map
+};
+
+[[nodiscard]] UnitOptions parseUnits(int argc, const char* argv[]) {
+    UnitOptions options;
+    for (int i = 1; i < argc; ++i) {
+        if (std::string{argv[i]} == "--focus") {
+            options.focus = true;
+            continue;
+        }
+        if (std::string{argv[i]} != "--units") {
+            continue;
+        }
+        if (i + 1 < argc) {
+            options.modelPath = argv[i + 1];
+        }
+        if (i + 2 < argc) {
+            const int parsed = std::atoi(argv[i + 2]);
+            if (parsed > 0) {
+                options.count = static_cast<std::size_t>(parsed);
+            }
+        }
+        if (i + 3 < argc) {
+            const double parsed = std::atof(argv[i + 3]);
+            if (parsed > 0.0) {
+                options.scale = static_cast<float>(parsed);
+            }
+        }
+        break;
+    }
+
+    // --focus may appear after --units' positional arguments, so it gets its own
+    // pass rather than relying on ordering.
+    for (int i = 1; i < argc; ++i) {
+        if (std::string{argv[i]} == "--focus") {
+            options.focus = true;
+        }
+    }
+    return options;
+}
+
 struct BenchOptions {
     bool enabled = false;
     bool offscreen = false;  ///< no window, no vsync
@@ -236,6 +388,61 @@ struct BenchOptions {
 
 @end
 
+/// Writes BGRA8 pixels to a PNG via ImageIO — part of the OS, so no new
+/// dependency. Reports rather than throwing on failure.
+bool writePng(const std::string& path, const rm::Renderer::CapturedImage& image) {
+    if (image.width <= 0 || image.height <= 0 || image.bgra.empty()) {
+        std::fprintf(stderr, "nothing to write to %s\n", path.c_str());
+        return false;
+    }
+
+    CGColorSpaceRef space = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+    CFDataRef data = CFDataCreate(nullptr, image.bgra.data(),
+                                 static_cast<CFIndex>(image.bgra.size()));
+    CGDataProviderRef provider = CGDataProviderCreateWithCFData(data);
+
+    // The drawable is BGRA8; premultiplied-first + little-endian is how
+    // CoreGraphics spells that.
+    CGImageRef cgImage = CGImageCreate(
+        static_cast<std::size_t>(image.width), static_cast<std::size_t>(image.height), 8, 32,
+        static_cast<std::size_t>(image.width) * 4, space,
+        // Cast to the bitmap-info type before OR-ing: the two constants come from
+        // different enums and mixing them directly is deprecated.
+        static_cast<CGBitmapInfo>(kCGImageAlphaNoneSkipFirst)
+            | static_cast<CGBitmapInfo>(kCGBitmapByteOrder32Little),
+        provider, nullptr, false,
+        kCGRenderingIntentDefault);
+
+    bool ok = false;
+    if (cgImage != nullptr) {
+        CFStringRef cfPath = CFStringCreateWithCString(nullptr, path.c_str(),
+                                                       kCFStringEncodingUTF8);
+        CFURLRef url = CFURLCreateWithFileSystemPath(nullptr, cfPath, kCFURLPOSIXPathStyle,
+                                                     false);
+        CGImageDestinationRef destination =
+            CGImageDestinationCreateWithURL(url, CFSTR("public.png"), 1, nullptr);
+        if (destination != nullptr) {
+            CGImageDestinationAddImage(destination, cgImage, nullptr);
+            ok = CGImageDestinationFinalize(destination);
+            CFRelease(destination);
+        }
+        CFRelease(url);
+        CFRelease(cfPath);
+        CGImageRelease(cgImage);
+    }
+
+    CGDataProviderRelease(provider);
+    CFRelease(data);
+    CGColorSpaceRelease(space);
+
+    if (ok) {
+        std::printf("wrote %s (%dx%d)\n", path.c_str(), image.width, image.height);
+    } else {
+        std::fprintf(stderr, "failed to encode %s\n", path.c_str());
+    }
+    return ok;
+}
+
 /// Writes a recorder's per-frame CSV, reporting rather than throwing on failure.
 void writeCsv(const std::string& path, const rm::bench::FrameRecorder& recorder) {
     if (path.empty()) {
@@ -257,6 +464,24 @@ int main(int argc, const char* argv[]) {
             return 1;
         }
 
+        // Start positions come from the same mapinfo.lua already consulted for
+        // the height range, so this costs one extra parse and no new plumbing.
+        std::vector<rm::mapinfo::StartPosition> starts;
+        if (argc >= 2) {
+            if (const auto infoPath = rm::mapinfo::findBesideMap(argv[1])) {
+                if (const auto info = rm::mapinfo::parseFile(*infoPath)) {
+                    starts = info->startPositions;
+                }
+            }
+        }
+
+        const UnitOptions unitOptions = parseUnits(argc, argv);
+        std::optional<UnitScene> units;
+        if (!unitOptions.modelPath.empty()) {
+            units = resolveUnits(unitOptions.modelPath, *field, unitOptions.count,
+                                 unitOptions.scale, starts);
+        }
+
         const rm::TerrainMesh mesh = rm::buildTerrainMesh(*field);
         std::printf("terrain: %zu vertices, %zu triangles, height %.1f..%.1f elmos\n",
                     mesh.vertices.size(), mesh.triangleCount(),
@@ -276,6 +501,12 @@ int main(int argc, const char* argv[]) {
                     renderer.setGroundTexture(*atlas);
                 }
             }
+            if (units) {
+                renderer.setUnits(units->model, units->instances);
+                if (units->diffuse) {
+                    renderer.setUnitTexture(*units->diffuse);
+                }
+            }
 
             std::printf("offscreen benchmark: %ux%u, %zu frames (discarding %zu warmup),"
                         " %zu frames in flight, no vsync\n",
@@ -291,6 +522,36 @@ int main(int argc, const char* argv[]) {
             return 0;
         }
 
+        // --- Headless screenshot -------------------------------------------
+        // No window, so this works regardless of which Space is active — the
+        // reason it exists.
+        const ShotOptions shot = parseShot(argc, argv);
+        if (shot.enabled) {
+            rm::Renderer renderer{nullptr};
+            renderer.setTerrain(mesh);
+            if (argc >= 2) {
+                if (auto atlas = resolveAtlas(argv[1])) {
+                    renderer.setGroundTexture(*atlas);
+                }
+            }
+            if (units) {
+                renderer.setUnits(units->model, units->instances);
+                if (units->diffuse) {
+                    renderer.setUnitTexture(*units->diffuse);
+                }
+                if (unitOptions.focus && !units->instances.empty()) {
+                    constexpr float kRadiiBack = 2.5f;
+                    const auto& first = units->instances.front();
+                    renderer.focusOn(first.position,
+                                     std::max(units->model.radius, 1.0f) * kRadiiBack
+                                         * unitOptions.scale);
+                }
+            }
+
+            const auto image = renderer.renderToImage(shot.width, shot.height);
+            return writePng(shot.path, image) ? 0 : 1;
+        }
+
         NSApplication* app = [NSApplication sharedApplication];
         // Regular = real Dock icon and keyboard focus; without this a
         // terminal-launched app is a background agent that can't take focus.
@@ -299,11 +560,28 @@ int main(int argc, const char* argv[]) {
         [app finishLaunching];
 
         // 1280x720 points: comfortable debug size on a laptop screen.
-        rm::Window window{1280, 720, "recoil-metal — m3: textured SMF terrain"};
+        rm::Window window{1280, 720, "recoil-metal — m5: units on SMF terrain"};
         window.setTerrain(mesh);
         if (argc >= 2) {
             if (auto atlas = resolveAtlas(argv[1])) {
                 window.setGroundTexture(*atlas);
+            }
+        }
+        if (units) {
+            window.setUnits(units->model, units->instances);
+            if (units->diffuse) {
+                window.setUnitTexture(*units->diffuse);
+            }
+
+            // Framing the whole map makes a unit about two pixels across, which
+            // says nothing about whether it is textured correctly. --focus looks
+            // at the first instance from a few model-radii out instead.
+            if (unitOptions.focus && !units->instances.empty()) {
+                constexpr float kRadiiBack = 2.5f;
+                const auto& first = units->instances.front();
+                window.focusOn(first.position,
+                               std::max(units->model.radius, 1.0f) * kRadiiBack
+                                   * unitOptions.scale);
             }
         }
         window.show();

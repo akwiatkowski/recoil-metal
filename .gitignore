@@ -3,3 +3,9 @@ third_party/metal-cpp/
 .DS_Store
 # clangd index, generated from compile_commands.json
 .cache/
+
+# Screenshots are deterministic and regenerable with one --screenshot command
+# (see README), so they are documented rather than committed. Benchmark CSVs
+# *are* committed: those are measurements of a particular machine on a
+# particular day and cannot be reproduced.
+docs/images/

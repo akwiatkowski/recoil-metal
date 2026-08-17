@@ -36,6 +36,9 @@ find_library(FOUNDATION_FW Foundation REQUIRED)
 find_library(APPKIT_FW AppKit REQUIRED)
 find_library(METAL_FW Metal REQUIRED)
 find_library(QUARTZCORE_FW QuartzCore REQUIRED)
+# ImageIO: PNG encoding for --screenshot. Part of the OS, not a dependency.
+find_library(IMAGEIO_FW ImageIO REQUIRED)
+find_library(COREGRAPHICS_FW CoreGraphics REQUIRED)
 
 add_library(metal_cpp INTERFACE)
 target_include_directories(metal_cpp SYSTEM INTERFACE
@@ -57,7 +60,9 @@ add_library(rm_core STATIC
     src/core/mesh/TerrainMesh.cpp
     src/core/camera/OrbitCamera.cpp
     src/core/bench/FrameStats.cpp
-    src/core/model/S3o.cpp)
+    src/core/model/S3o.cpp
+    src/core/texture/Dds.cpp
+    src/core/scene/UnitPlacement.cpp)
 target_include_directories(rm_core PUBLIC src)
 target_link_libraries(rm_core PUBLIC rm_project_warnings)
 
@@ -67,7 +72,8 @@ add_executable(recoil-metal
     src/platform/Window.mm
     src/render/Renderer.mm)
 target_link_libraries(recoil-metal PRIVATE
-    rm_core rm_project_warnings metal_cpp ${APPKIT_FW})
+    rm_core rm_project_warnings metal_cpp ${APPKIT_FW}
+    ${IMAGEIO_FW} ${COREGRAPHICS_FW})
 # ARC for the Objective-C side only. metal-cpp objects are C++ and unaffected
 # (they are manually retained/released — see AGENT.md gotchas).
 target_compile_options(recoil-metal PRIVATE
@@ -95,6 +101,8 @@ if(BUILD_TESTING)
         tests/test_frame_stats.cpp
         tests/test_s3o.cpp
         tests/test_real_model.cpp
+        tests/test_dds.cpp
+        tests/test_unit_placement.cpp
         tests/test_real_map.cpp
         tests/support/SmfWriter.cpp
         tests/support/S3oWriter.cpp)

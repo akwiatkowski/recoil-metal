@@ -2,9 +2,14 @@
 
 #include "core/bench/FrameStats.hpp"
 #include "core/map/TileAtlas.hpp"
+#include "core/model/Model.hpp"
+#include "core/scene/UnitPlacement.hpp"
+#include "core/texture/Dds.hpp"
 #include "core/mesh/TerrainMesh.hpp"
 
 #include <memory>
+#include <array>
+#include <span>
 
 namespace rm {
 
@@ -29,6 +34,13 @@ public:
 
     // Uploads the map ground texture. Optional — see Renderer::setGroundTexture.
     void setGroundTexture(const TileAtlas& atlas);
+
+    // Units to draw on the terrain. See Renderer::setUnits.
+    void setUnits(const Model& model, std::span<const UnitInstance> instances);
+    void setUnitTexture(const dds::Texture& texture);
+
+    /// Points the camera at a world position. See Renderer::focusOn.
+    void focusOn(std::array<float, 3> target, float distance);
 
     // Benchmark control. See Renderer::beginBenchmark.
     void beginBenchmark(std::size_t warmupFrames);

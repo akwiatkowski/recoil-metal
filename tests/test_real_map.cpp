@@ -276,3 +276,29 @@ TEST_CASE("the real map assembles into a full-resolution atlas", "[real-map]") {
         }
     }
 }
+
+TEST_CASE("the real map declares eight team start positions", "[real-map]") {
+    if (!haveRealMap()) {
+        SKIP("real map not present");
+    }
+
+    const auto infoPath = rm::mapinfo::findBesideMap(realMapPath());
+    REQUIRE(infoPath.has_value());
+    const auto info = rm::mapinfo::parseFile(*infoPath);
+    REQUIRE(info.has_value());
+
+    // Angel Crossing is an 8-player map.
+    REQUIRE(info->startPositions.size() == 8);
+
+    // Every spawn must land inside the map, which is the check that would fire
+    // if x and z were swapped or scaled wrongly.
+    const auto field = rm::smf::loadFile(realMapPath());
+    REQUIRE(field.has_value());
+
+    for (const auto& start : info->startPositions) {
+        REQUIRE(start.x >= 0.0f);
+        REQUIRE(start.z >= 0.0f);
+        REQUIRE(start.x <= field->widthElmos());
+        REQUIRE(start.z <= field->depthElmos());
+    }
+}

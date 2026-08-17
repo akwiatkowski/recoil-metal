@@ -87,6 +87,34 @@ std::expected<MapInfo, lua::ParseError> parse(std::string_view luaSource) {
         }
     }
 
+    // teams = { [0] = { startPos = { x = 1500, z = 1500 } }, ... }
+    // Bracketed numeric keys are stored under their decimal spelling by the Lua
+    // reader, so team 0 is the child named "0".
+    if (const lua::Value* teams = findLoose(*root, "teams")) {
+        for (int team = 0;; ++team) {
+            const lua::Value* entry = findLoose(*teams, std::to_string(team));
+            if (entry == nullptr) {
+                break;
+            }
+            const lua::Value* startPos = findLoose(*entry, "startpos");
+            if (startPos == nullptr) {
+                break;
+            }
+            const lua::Value* x = findLoose(*startPos, "x");
+            const lua::Value* z = findLoose(*startPos, "z");
+            if (x == nullptr || z == nullptr) {
+                break;
+            }
+            const auto xv = x->asNumber();
+            const auto zv = z->asNumber();
+            if (!xv.has_value() || !zv.has_value()) {
+                break;
+            }
+            info.startPositions.push_back(StartPosition{team, static_cast<float>(*xv),
+                                                        static_cast<float>(*zv)});
+        }
+    }
+
     info.root = std::move(*root);
     return info;
 }

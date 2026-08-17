@@ -120,3 +120,47 @@ TEST_CASE("an absent file yields an error, and an absent mapinfo yields no path"
     REQUIRE_FALSE(rm::mapinfo::parseFile("/nonexistent/mapinfo.lua").has_value());
     REQUIRE_FALSE(rm::mapinfo::findBesideMap("/nonexistent/maps/foo.smf").has_value());
 }
+
+TEST_CASE("team start positions are read in order") {
+    // Real maps declare one per supported player. Angel Crossing has eight, as
+    // `teams = { [0] = {startPos = {x = ..., z = ...}}, ... }`. The Lua reader
+    // stores bracketed numeric keys under their decimal spelling, so team 0 is
+    // the child named "0".
+    const auto info = rm::mapinfo::parse(R"(
+        local t = {
+            teams = {
+                [0] = {startPos = {x = 1500, z = 1500}},
+                [1] = {startPos = {x = 6692, z = 6692}},
+                [2] = {startPos = {x = 3200, z = 1200}},
+            },
+        }
+    )");
+
+    REQUIRE(info.has_value());
+    REQUIRE(info->startPositions.size() == 3);
+    REQUIRE(info->startPositions[0].team == 0);
+    REQUIRE(info->startPositions[0].x == Approx(1500.0f));
+    REQUIRE(info->startPositions[1].x == Approx(6692.0f));
+    REQUIRE(info->startPositions[2].z == Approx(1200.0f));
+}
+
+TEST_CASE("a gap in the team numbering ends the sequence") {
+    // Same rule as the smt file names: compacting past a hole would silently
+    // renumber teams.
+    const auto info = rm::mapinfo::parse(R"(
+        local t = { teams = {
+            [0] = {startPos = {x = 100, z = 100}},
+            [2] = {startPos = {x = 300, z = 300}},
+        } }
+    )");
+
+    REQUIRE(info.has_value());
+    REQUIRE(info->startPositions.size() == 1);
+}
+
+TEST_CASE("a map with no teams block yields no start positions") {
+    const auto info = rm::mapinfo::parse("local t = { smf = { minheight = 0, maxheight = 1 } }");
+
+    REQUIRE(info.has_value());
+    REQUIRE(info->startPositions.empty());
+}

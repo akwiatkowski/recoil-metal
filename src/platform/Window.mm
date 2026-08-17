@@ -166,6 +166,18 @@ bench::FrameRecorder Window::benchmarkSnapshot() const {
     return impl_->renderer->benchmarkSnapshot();
 }
 
+void Window::setUnits(const Model& model, std::span<const UnitInstance> instances) {
+    impl_->renderer->setUnits(model, instances);
+}
+
+void Window::setUnitTexture(const dds::Texture& texture) {
+    impl_->renderer->setUnitTexture(texture);
+}
+
+void Window::focusOn(std::array<float, 3> target, float distance) {
+    impl_->renderer->focusOn(target, distance);
+}
+
 void Window::show() {
     [impl_->window makeKeyAndOrderFront:nil];
 }

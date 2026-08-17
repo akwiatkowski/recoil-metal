@@ -14,6 +14,7 @@
 
 #include <simd/simd.h>
 
+#include <algorithm>
 #include <chrono>
 #include <mutex>
 #include <semaphore>
@@ -42,6 +43,8 @@ static_assert(offsetof(TerrainUniforms, hasTexture) == 96, "unexpected padding b
 // Buffer/texture binding indices, shared between the C++ and MSL sides.
 constexpr NS::UInteger kVertexBufferIndex = 0;
 constexpr NS::UInteger kUniformBufferIndex = 1;
+constexpr NS::UInteger kInstanceBufferIndex = 2;
+constexpr NS::UInteger kBoneBufferIndex = 3;
 constexpr NS::UInteger kGroundTextureIndex = 0;
 constexpr NS::UInteger kGroundSamplerIndex = 0;
 
@@ -142,6 +145,79 @@ fragment float4 waterFragment(WaterOut in [[stage_in]]) {
     // an input attachment; that belongs with the rest of the water treatment in
     // a later milestone, not smuggled in here.
     return float4(0.09, 0.22, 0.38, 0.62);
+}
+
+// --- Units ------------------------------------------------------------------
+// packed_float2 for the UV, NOT float2: float2 is 8-byte aligned and would pad
+// this struct to 40 bytes against the C++ ModelVertex's 36, shearing the stream.
+struct UnitVertexIn {
+    packed_float3 position;
+    packed_float3 normal;
+    packed_float2 uv;
+    uint boneIndex;
+};
+
+struct UnitInstanceIn {
+    packed_float3 position;
+    float rotationY;
+    float scale;
+};
+
+struct UnitOut {
+    float4 position [[position]];
+    float3 normal;
+    float2 uv;
+};
+
+vertex UnitOut unitVertex(uint vid [[vertex_id]],
+                          uint iid [[instance_id]],
+                          const device UnitVertexIn* vertices [[buffer(0)]],
+                          constant Uniforms& u [[buffer(1)]],
+                          const device UnitInstanceIn* instances [[buffer(2)]],
+                          const device packed_float3* boneOffsets [[buffer(3)]]) {
+    const UnitVertexIn v = vertices[vid];
+    const UnitInstanceIn inst = instances[iid];
+
+    // The bone hierarchy is applied here rather than baked into the vertices, so
+    // one vertex buffer serves every instance. S3O bones carry translation only.
+    const float3 local = float3(v.position) + float3(boneOffsets[v.boneIndex]);
+
+    const float s = sin(inst.rotationY);
+    const float c = cos(inst.rotationY);
+    const float3 spun = float3(c * local.x + s * local.z, local.y,
+                               -s * local.x + c * local.z);
+    const float3 world = spun * inst.scale + float3(inst.position);
+
+    const float3 n = float3(v.normal);
+    const float3 spunNormal = float3(c * n.x + s * n.z, n.y, -s * n.x + c * n.z);
+
+    UnitOut out;
+    out.position = u.viewProjection * float4(world, 1.0);
+    out.normal = spunNormal;
+    // S3O texture coordinates are authored against OpenGL, whose texture origin
+    // is bottom-left; Metal's is top-left and the DDS is uploaded unflipped, so
+    // V is inverted here. Flipping the compressed blocks instead would mean
+    // reordering bits inside every one of them.
+    out.uv = float2(v.uv.x, 1.0 - v.uv.y);
+    return out;
+}
+
+fragment float4 unitFragment(UnitOut in [[stage_in]],
+                             constant Uniforms& u [[buffer(1)]],
+                             texture2d<float> diffuse [[texture(0)]],
+                             sampler diffuseSampler [[sampler(0)]]) {
+    const float3 normal = normalize(in.normal);
+    const float lambert = saturate(dot(normal, u.sunDirection));
+
+    // hasTexture doubles for units: without a .dds they shade flat grey, which
+    // is also what a model whose texture is missing should look like.
+    float3 albedo = float3(0.62, 0.62, 0.60);
+    if (u.hasTexture > 0.5) {
+        albedo = diffuse.sample(diffuseSampler, in.uv).rgb;
+    }
+
+    const float ambient = 0.35;
+    return float4(albedo * (ambient + lambert * 0.8), 1.0);
 }
 )MSL";
 
@@ -267,6 +343,8 @@ Renderer::Renderer(CA::MetalLayer* layer)
                                     /*blend=*/false);
     waterPipeline_ = makePipeline(device_, library, "waterVertex", "waterFragment",
                                   /*blend=*/true);
+    unitPipeline_ = makePipeline(device_, library, "unitVertex", "unitFragment",
+                                 /*blend=*/false);
     library->release();
 
     // --- Depth state -------------------------------------------------------
@@ -319,6 +397,9 @@ Renderer::Renderer(CA::MetalLayer* layer)
 Renderer::~Renderer() {
     // Reverse acquisition order; all are +1 objects from newXxx()/CreateXxx.
     releaseTerrainBuffers();
+    releaseUnitBuffers();
+    if (unitTexture_ != nullptr) unitTexture_->release();
+    unitPipeline_->release();
     if (groundTexture_ != nullptr) groundTexture_->release();
     groundSampler_->release();
     if (depthTexture_ != nullptr) depthTexture_->release();
@@ -381,6 +462,99 @@ void Renderer::setTerrain(const TerrainMesh& mesh) {
     camera_.farZ = camera_.distance * 4.0f + mapWidth_ * 2.0f;
 }
 
+void Renderer::releaseUnitBuffers() noexcept {
+    if (unitInstanceBuffer_ != nullptr) { unitInstanceBuffer_->release(); unitInstanceBuffer_ = nullptr; }
+    if (unitBoneBuffer_ != nullptr)     { unitBoneBuffer_->release();     unitBoneBuffer_ = nullptr; }
+    if (unitIndexBuffer_ != nullptr)    { unitIndexBuffer_->release();    unitIndexBuffer_ = nullptr; }
+    if (unitVertexBuffer_ != nullptr)   { unitVertexBuffer_->release();   unitVertexBuffer_ = nullptr; }
+    unitIndexCount_ = 0;
+    unitInstanceCount_ = 0;
+}
+
+void Renderer::setUnits(const Model& model, std::span<const UnitInstance> instances) {
+    releaseUnitBuffers();
+
+    if (model.empty() || instances.empty() || model.bones.empty()) {
+        return;
+    }
+
+    // Bone offsets as packed 3-floats, indexed straight from the vertex. The
+    // globalOffset is already accumulated to the root by the loader, so the
+    // shader needs no hierarchy walk.
+    std::vector<std::array<float, 3>> boneOffsets;
+    boneOffsets.reserve(model.bones.size());
+    for (const ModelBone& bone : model.bones) {
+        boneOffsets.push_back(bone.globalOffset);
+    }
+
+    const std::size_t vertexBytes = model.vertices.size() * sizeof(ModelVertex);
+    const std::size_t indexBytes = model.indices.size() * sizeof(std::uint32_t);
+    const std::size_t boneBytes = boneOffsets.size() * sizeof(std::array<float, 3>);
+    const std::size_t instanceBytes = instances.size() * sizeof(UnitInstance);
+
+    unitVertexBuffer_ = device_->newBuffer(model.vertices.data(), vertexBytes,
+                                          MTL::ResourceStorageModeShared);
+    unitIndexBuffer_ = device_->newBuffer(model.indices.data(), indexBytes,
+                                         MTL::ResourceStorageModeShared);
+    unitBoneBuffer_ = device_->newBuffer(boneOffsets.data(), boneBytes,
+                                         MTL::ResourceStorageModeShared);
+    unitInstanceBuffer_ = device_->newBuffer(instances.data(), instanceBytes,
+                                            MTL::ResourceStorageModeShared);
+
+    if (unitVertexBuffer_ == nullptr || unitIndexBuffer_ == nullptr
+        || unitBoneBuffer_ == nullptr || unitInstanceBuffer_ == nullptr) {
+        releaseUnitBuffers();
+        throw RendererError{"failed to allocate unit buffers"};
+    }
+
+    unitIndexCount_ = model.indices.size();
+    unitInstanceCount_ = instances.size();
+}
+
+void Renderer::setUnitTexture(const dds::Texture& texture) {
+    if (texture.width <= 0 || texture.height <= 0 || texture.data.empty()) {
+        return;
+    }
+
+    // DXT1/3/5 map one-to-one onto BC1/BC2/BC3, all natively sampleable here, so
+    // the payload goes up untouched exactly like the terrain atlas.
+    MTL::PixelFormat format = MTL::PixelFormat::PixelFormatBC1_RGBA;
+    switch (texture.format) {
+        case dds::BlockFormat::Bc1: format = MTL::PixelFormat::PixelFormatBC1_RGBA; break;
+        case dds::BlockFormat::Bc2: format = MTL::PixelFormat::PixelFormatBC2_RGBA; break;
+        case dds::BlockFormat::Bc3: format = MTL::PixelFormat::PixelFormatBC3_RGBA; break;
+    }
+
+    MTL::TextureDescriptor* descriptor = MTL::TextureDescriptor::texture2DDescriptor(
+        format, static_cast<NS::UInteger>(texture.width),
+        static_cast<NS::UInteger>(texture.height), /*mipmapped=*/false);
+    descriptor->setMipmapLevelCount(static_cast<NS::UInteger>(texture.mipLevels));
+    descriptor->setUsage(MTL::TextureUsageShaderRead);
+    descriptor->setStorageMode(MTL::StorageModeShared);
+
+    MTL::Texture* created = device_->newTexture(descriptor);
+    if (created == nullptr) {
+        throw RendererError{"failed to allocate the unit diffuse texture"};
+    }
+
+    for (int level = 0; level < texture.mipLevels; ++level) {
+        const std::span<const std::byte> mip = texture.mip(level);
+        if (mip.empty()) {
+            continue;
+        }
+        created->replaceRegion(
+            MTL::Region::Make2D(0, 0, static_cast<NS::UInteger>(texture.mipWidth(level)),
+                                static_cast<NS::UInteger>(texture.mipHeight(level))),
+            static_cast<NS::UInteger>(level), mip.data(),
+            static_cast<NS::UInteger>(texture.mipBytesPerRow(level)));
+    }
+
+    if (unitTexture_ != nullptr) {
+        unitTexture_->release();
+    }
+    unitTexture_ = created;
+}
+
 void Renderer::setGroundTexture(const TileAtlas& atlas) {
     if (atlas.widthTexels <= 0 || atlas.heightTexels <= 0 || atlas.data.empty()) {
         return;
@@ -419,6 +593,73 @@ void Renderer::setGroundTexture(const TileAtlas& atlas) {
     }
     groundTexture_ = texture;
     hasGroundTexture_ = true;
+}
+
+Renderer::CapturedImage Renderer::renderToImage(unsigned int width, unsigned int height) {
+    CapturedImage image;
+    if (width == 0 || height == 0) {
+        return image;
+    }
+
+    NS::AutoreleasePool* pool = NS::AutoreleasePool::alloc()->init();
+
+    // Shared storage, unlike the benchmark's private target: this one is read
+    // back on the CPU.
+    MTL::TextureDescriptor* descriptor = MTL::TextureDescriptor::texture2DDescriptor(
+        kColorFormat, width, height, /*mipmapped=*/false);
+    descriptor->setUsage(MTL::TextureUsageRenderTarget | MTL::TextureUsageShaderRead);
+    descriptor->setStorageMode(MTL::StorageModeShared);
+
+    MTL::Texture* target = device_->newTexture(descriptor);
+    ensureDepthTexture(width, height);
+
+    if (target == nullptr || depthTexture_ == nullptr) {
+        if (target != nullptr) target->release();
+        pool->release();
+        throw RendererError{"failed to allocate an offscreen capture target"};
+    }
+
+    MTL::CommandBuffer* commandBuffer = commandQueue_->commandBuffer();
+
+    MTL::RenderPassDescriptor* pass = MTL::RenderPassDescriptor::alloc()->init();
+    MTL::RenderPassColorAttachmentDescriptor* color0 = pass->colorAttachments()->object(0);
+    color0->setTexture(target);
+    color0->setLoadAction(MTL::LoadAction::LoadActionClear);
+    color0->setStoreAction(MTL::StoreAction::StoreActionStore);  // kept, unlike the benchmark
+    color0->setClearColor(MTL::ClearColor::Make(kSkyR, kSkyG, kSkyB, 1.0));
+
+    MTL::RenderPassDepthAttachmentDescriptor* depth = pass->depthAttachment();
+    depth->setTexture(depthTexture_);
+    depth->setLoadAction(MTL::LoadAction::LoadActionClear);
+    depth->setStoreAction(MTL::StoreAction::StoreActionDontCare);
+    depth->setClearDepth(1.0);
+
+    MTL::RenderCommandEncoder* encoder = commandBuffer->renderCommandEncoder(pass);
+    encodeScene(encoder, width, height);
+    encoder->endEncoding();
+
+    commandBuffer->commit();
+    commandBuffer->waitUntilCompleted();  // a capture wants the result, not throughput
+
+    image.width = static_cast<int>(width);
+    image.height = static_cast<int>(height);
+    image.bgra.resize(static_cast<std::size_t>(width) * height * 4);
+    target->getBytes(image.bgra.data(), static_cast<NS::UInteger>(width) * 4,
+                     MTL::Region::Make2D(0, 0, width, height), 0);
+
+    pass->release();
+    target->release();
+    pool->release();
+
+    return image;
+}
+
+void Renderer::focusOn(std::array<float, 3> target, float distance) noexcept {
+    camera_.target = simd_make_float3(target[0], target[1], target[2]);
+    camera_.distance = std::clamp(distance, OrbitCamera::kMinDistance,
+                                  OrbitCamera::kMaxDistance);
+    // Keep the far plane clear of the map behind the new target.
+    camera_.farZ = camera_.distance * 4.0f + mapWidth_ * 2.0f;
 }
 
 void Renderer::beginBenchmark(std::size_t warmupFrames) {
@@ -570,33 +811,38 @@ bench::FrameRecorder Renderer::runOffscreenBenchmark(unsigned int width, unsigne
 
 void Renderer::encodeScene(MTL::RenderCommandEncoder* encoder, unsigned int width,
                            unsigned int height) noexcept {
-    if (indexCount_ > 0 && height > 0) {
-        const float aspect = static_cast<float>(width) / static_cast<float>(height);
+    if (height == 0) {
+        return;
+    }
 
-        const TerrainUniforms uniforms{
-            .viewProjection = camera_.viewProjection(aspect),
-            .sunDirection = kSunDirection,
-            .minHeight = terrainMinY_,
-            .maxHeight = terrainMaxY_,
-            .mapWidth = mapWidth_,
-            .mapDepth = mapDepth_,
-            .hasTexture = hasGroundTexture_ ? 1.0f : 0.0f,
-        };
+    const float aspect = static_cast<float>(width) / static_cast<float>(height);
 
+    TerrainUniforms uniforms{
+        .viewProjection = camera_.viewProjection(aspect),
+        .sunDirection = kSunDirection,
+        .minHeight = terrainMinY_,
+        .maxHeight = terrainMaxY_,
+        .mapWidth = mapWidth_,
+        .mapDepth = mapDepth_,
+        .hasTexture = hasGroundTexture_ ? 1.0f : 0.0f,
+    };
+
+    // Culling stays off: the camera is free to dip below the terrain, and a
+    // heightfield seen from underneath should still be visible rather than
+    // vanishing. The mesh winding is nonetheless consistent (pinned by tests)
+    // so enabling culling later is a one-line change.
+    encoder->setCullMode(MTL::CullMode::CullModeNone);
+    encoder->setFrontFacingWinding(MTL::Winding::WindingCounterClockwise);
+
+    // --- Terrain -----------------------------------------------------------
+    if (indexCount_ > 0) {
         encoder->setRenderPipelineState(terrainPipeline_);
         encoder->setDepthStencilState(depthState_);
-        // Culling stays off: the camera is free to dip below the terrain,
-        // and a heightfield seen from underneath should still be visible
-        // rather than vanishing. The mesh winding is nonetheless
-        // consistent (pinned by tests) so enabling culling later is a
-        // one-line change.
-        encoder->setCullMode(MTL::CullMode::CullModeNone);
-        encoder->setFrontFacingWinding(MTL::Winding::WindingCounterClockwise);
 
         encoder->setVertexBuffer(vertexBuffer_, 0, kVertexBufferIndex);
-        // setVertexBytes/setFragmentBytes for a small, per-frame struct:
-        // under 4 KB Metal copies it into the command buffer directly, so
-        // there is no uniform buffer to allocate or synchronise.
+        // setVertexBytes/setFragmentBytes for a small, per-frame struct: under
+        // 4 KB Metal copies it into the command buffer directly, so there is no
+        // uniform buffer to allocate or synchronise.
         encoder->setVertexBytes(&uniforms, sizeof(uniforms), kUniformBufferIndex);
         encoder->setFragmentBytes(&uniforms, sizeof(uniforms), kUniformBufferIndex);
         encoder->setFragmentTexture(groundTexture_, kGroundTextureIndex);
@@ -607,16 +853,45 @@ void Renderer::encodeScene(MTL::RenderCommandEncoder* encoder, unsigned int widt
                                        MTL::IndexType::IndexTypeUInt32,
                                        indexBuffer_,
                                        /*indexBufferOffset=*/0);
+    }
 
-        // Water last, so it blends over whatever terrain sits below y = 0.
-        // Only worth drawing when some terrain actually is below it.
-        if (terrainMinY_ < 0.0f) {
-            encoder->setRenderPipelineState(waterPipeline_);
-            encoder->setDepthStencilState(waterDepthState_);
-            encoder->setVertexBytes(&uniforms, sizeof(uniforms), kUniformBufferIndex);
-            encoder->drawPrimitives(MTL::PrimitiveType::PrimitiveTypeTriangleStrip,
-                                    NS::UInteger{0}, NS::UInteger{4});
-        }
+    // --- Units -------------------------------------------------------------
+    // Deliberately NOT nested inside the terrain branch: a model should be
+    // viewable with no map loaded, and the first version of this got that wrong
+    // in a way that silently drew nothing at all.
+    if (unitInstanceCount_ > 0 && unitIndexCount_ > 0) {
+        TerrainUniforms unitUniforms = uniforms;
+        unitUniforms.hasTexture = unitTexture_ != nullptr ? 1.0f : 0.0f;
+
+        encoder->setRenderPipelineState(unitPipeline_);
+        encoder->setDepthStencilState(depthState_);
+
+        encoder->setVertexBuffer(unitVertexBuffer_, 0, kVertexBufferIndex);
+        encoder->setVertexBytes(&unitUniforms, sizeof(unitUniforms), kUniformBufferIndex);
+        encoder->setVertexBuffer(unitInstanceBuffer_, 0, kInstanceBufferIndex);
+        encoder->setVertexBuffer(unitBoneBuffer_, 0, kBoneBufferIndex);
+        encoder->setFragmentBytes(&unitUniforms, sizeof(unitUniforms), kUniformBufferIndex);
+        encoder->setFragmentTexture(unitTexture_ != nullptr ? unitTexture_ : groundTexture_,
+                                    kGroundTextureIndex);
+        encoder->setFragmentSamplerState(groundSampler_, kGroundSamplerIndex);
+
+        // One call for every instance — the whole point of the instance buffer.
+        encoder->drawIndexedPrimitives(MTL::PrimitiveType::PrimitiveTypeTriangle,
+                                       static_cast<NS::UInteger>(unitIndexCount_),
+                                       MTL::IndexType::IndexTypeUInt32, unitIndexBuffer_,
+                                       /*indexBufferOffset=*/0,
+                                       static_cast<NS::UInteger>(unitInstanceCount_));
+    }
+
+    // --- Water -------------------------------------------------------------
+    // Last, so it blends over whatever terrain and units sit below y = 0. Only
+    // worth drawing when something actually is below it.
+    if (indexCount_ > 0 && terrainMinY_ < 0.0f) {
+        encoder->setRenderPipelineState(waterPipeline_);
+        encoder->setDepthStencilState(waterDepthState_);
+        encoder->setVertexBytes(&uniforms, sizeof(uniforms), kUniformBufferIndex);
+        encoder->drawPrimitives(MTL::PrimitiveType::PrimitiveTypeTriangleStrip,
+                                NS::UInteger{0}, NS::UInteger{4});
     }
 }
 
