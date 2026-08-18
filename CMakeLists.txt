@@ -73,7 +73,8 @@ add_library(rm_core STATIC
     src/core/scene/UnitBatch.cpp
     src/core/scene/Picking.cpp
     src/core/sim/Movement.cpp
-    src/core/sim/Pathfinding.cpp)
+    src/core/sim/Pathfinding.cpp
+    src/core/unit/UnitDef.cpp)
 target_include_directories(rm_core PUBLIC src)
 target_link_libraries(rm_core PUBLIC rm_project_warnings)
 
@@ -121,6 +122,8 @@ if(BUILD_TESTING)
         tests/test_movement.cpp
         tests/test_picking.cpp
         tests/test_pathfinding.cpp
+        tests/test_unit_def.cpp
+        tests/test_real_unitdefs.cpp
         tests/test_team_colours.cpp
         tests/test_unit_batch.cpp
         tests/test_real_map.cpp

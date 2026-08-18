@@ -16,6 +16,7 @@
 #include "core/scene/UnitPlacement.hpp"
 #include "core/sim/Movement.hpp"
 #include "core/sim/Pathfinding.hpp"
+#include "core/unit/UnitDef.hpp"
 #include "core/texture/Dds.hpp"
 #include "core/map/TileAtlas.hpp"
 #include "core/mesh/TerrainMesh.hpp"
@@ -638,6 +639,59 @@ struct UnitOptions {
     std::filesystem::path animationPath;
 };
 
+/// The `objects3d` directory a unit definition's model lives under.
+///
+/// Found by walking up from the definition rather than asking for a game root:
+/// `units/ArmBots/armpw.lua` and `objects3d/Units/armpw.s3o` are siblings a few
+/// levels apart, so the layout answers the question and there is no new flag to
+/// get wrong.
+[[nodiscard]] std::filesystem::path findObjects3d(const std::filesystem::path& defPath) {
+    for (std::filesystem::path dir = defPath.parent_path(); !dir.empty() && dir != dir.root_path();
+         dir = dir.parent_path()) {
+        const std::filesystem::path candidate = dir / "objects3d";
+        if (std::filesystem::is_directory(candidate)) {
+            return candidate;
+        }
+    }
+    return {};
+}
+
+/// Resolves a `--units` argument that names a unit DEFINITION rather than a
+/// model, returning the model to load and the stats to move it with.
+///
+/// A `.lua` argument is the interesting path: the definition names its own
+/// model and carries the speed and turn rate the game authored for it, which is
+/// how a scene stops moving every unit at the one speed this engine used to
+/// hardcode.
+[[nodiscard]] std::optional<rm::unitdef::UnitDef> resolveUnitDef(
+    const std::filesystem::path& path, std::filesystem::path& modelOut) {
+    if (path.extension() != ".lua") {
+        return std::nullopt;
+    }
+
+    const auto def = rm::unitdef::loadFile(path);
+    if (!def) {
+        std::fprintf(stderr, "unit definition \"%s\" not read: %s\n",
+                     path.filename().string().c_str(), def.error().message.c_str());
+        return std::nullopt;
+    }
+
+    const std::filesystem::path objects = findObjects3d(path);
+    modelOut = rm::unitdef::resolveModel(objects, def->modelPath);
+    if (modelOut.empty()) {
+        std::fprintf(stderr, "unit \"%s\" names model \"%s\", which is not under %s\n",
+                     def->name.c_str(), def->modelPath.c_str(), objects.string().c_str());
+        return std::nullopt;
+    }
+
+    std::printf("unit %s: %.0f elmos/s, %.2f rad/s, footprint %d x %d squares, %.0f hp%s\n",
+                def->name.c_str(), static_cast<double>(def->speedElmosPerSecond),
+                static_cast<double>(def->turnRateRadiansPerSecond), def->footprintSquaresX,
+                def->footprintSquaresZ, static_cast<double>(def->health),
+                def->canFly ? " (flies)" : "");
+    return *def;
+}
+
 /// Loads every requested model, resolves its textures, and places instances.
 ///
 /// The first model takes the map's start positions and fills the rest of its
@@ -653,10 +707,21 @@ struct UnitOptions {
     for (std::size_t i = 0; i < requests.size(); ++i) {
         const UnitOptions& request = requests[i];
 
-        auto model = loadModel(request.modelPath);
+        // `--units` takes either a model or a unit DEFINITION. A definition
+        // names its own model and brings the stats the game authored for it,
+        // which is the whole point: otherwise every unit moves at the one speed
+        // this engine used to hardcode.
+        std::filesystem::path modelPath = request.modelPath;
+        const std::optional<rm::unitdef::UnitDef> def =
+            resolveUnitDef(request.modelPath, modelPath);
+        if (request.modelPath.extension() == ".lua" && !def) {
+            continue;  // the definition said something that could not be honoured
+        }
+
+        auto model = loadModel(modelPath);
         if (!model) {
             std::fprintf(stderr, "failed to load model \"%s\": %s\n",
-                         request.modelPath.string().c_str(), model.error().message.c_str());
+                         modelPath.string().c_str(), model.error().message.c_str());
             continue;  // one bad model should not cost the whole scene
         }
 
@@ -729,6 +794,18 @@ struct UnitOptions {
         // Idle, in step with the instances just placed. Nothing moves until
         // something is ordered to.
         scene.motion.emplace_back(scene.instances.back().size());
+
+        // A definition's speed and turn rate reach every instance of it. Slope
+        // and depth limits do NOT yet: passability is one grid for the whole
+        // scene, so honouring them per unit type would mean a grid per type.
+        if (def && def->isMobile()) {
+            for (rm::sim::MoveState& state : scene.motion.back()) {
+                state.speedElmosPerSecond = def->speedElmosPerSecond;
+                if (def->turnRateRadiansPerSecond > 0.0f) {
+                    state.turnRateRadiansPerSecond = def->turnRateRadiansPerSecond;
+                }
+            }
+        }
         scene.batches.push_back(rm::UnitBatch{
             .model = &scene.models.back(),
             .instances = scene.instances.back(),

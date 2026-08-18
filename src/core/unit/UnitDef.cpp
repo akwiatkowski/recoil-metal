@@ -1,0 +1,156 @@
+#include "core/unit/UnitDef.hpp"
+
+#include "core/sim/Movement.hpp"
+
+#include <algorithm>
+#include <cctype>
+#include <numbers>
+#include <system_error>
+#include <utility>
+
+namespace {
+
+/// Circle divisions in a full turn — SPRING_MAX_HEADING << 1
+/// (rts/System/SpringMath.h:16-17). Turn rates are authored in these per frame.
+constexpr float kCircleDivisions = 65536.0f;
+
+/// Reads a number, or leaves the default alone. Absence is ordinary: a building
+/// has no speed, and most definitions omit most fields.
+[[nodiscard]] float numberOr(const rm::lua::Value& table, std::string_view key,
+                             float fallback) noexcept {
+    const std::optional<double> value = table.numberAt(key);
+    return value ? static_cast<float>(*value) : fallback;
+}
+
+[[nodiscard]] std::string lowercased(std::string_view text) {
+    std::string out{text};
+    std::transform(out.begin(), out.end(), out.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
+    return out;
+}
+
+} // namespace
+
+namespace rm::unitdef {
+
+float UnitDef::footprintRadiusElmos() const noexcept {
+    const int squares = std::max(footprintSquaresX, footprintSquaresZ);
+    return 0.5f * static_cast<float>(squares) * static_cast<float>(kSquareSize);
+}
+
+std::expected<std::vector<UnitDef>, lua::ParseError> loadFileAll(
+    const std::filesystem::path& path) {
+    auto parsed = lua::parseTableFile(path.string());
+    if (!parsed) {
+        return std::unexpected{parsed.error()};
+    }
+
+    // Every top-level entry must be a table — a file maps unit NAMES to unit
+    // definitions. That one rule does all the discriminating: a file which
+    // generates its units leaves a plain settings table as its first literal,
+    // whose entries are scalars, and is refused rather than yielding a unit
+    // called "maxacc".
+    if (!parsed->isTable() || parsed->fields.empty()) {
+        return std::unexpected{lua::ParseError{
+            "expected `return { name = { ... } }`; found no named entries", 0}};
+    }
+
+    std::vector<UnitDef> defs;
+    defs.reserve(parsed->fields.size());
+
+    for (const lua::Field& entry : parsed->fields) {
+        // A unit with no name is not a unit. BAR has one file whose first
+        // literal is a template keyed by the empty string — `[""] = { ... }` —
+        // with the real units built from it further down.
+        if (entry.key.empty()) {
+            return std::unexpected{
+                lua::ParseError{"a unit definition entry has an empty name", 0}};
+        }
+        if (!entry.value.isTable()) {
+            return std::unexpected{lua::ParseError{
+                "entry \"" + entry.key + "\" is not a unit definition table", 0}};
+        }
+
+        const lua::Value& table = entry.value;
+
+        UnitDef def;
+        def.name = entry.key;
+        if (const std::optional<std::string_view> object = table.stringAt("objectname")) {
+            def.modelPath = std::string{*object};
+        }
+
+        def.speedElmosPerSecond = numberOr(table, "speed", 0.0f);
+
+        // Circle divisions per frame to radians per second.
+        const float turnRate = numberOr(table, "turnrate", 0.0f);
+        def.turnRateRadiansPerSecond = turnRate / kCircleDivisions * 2.0f
+                                     * std::numbers::pi_v<float>
+                                     * static_cast<float>(sim::kTicksPerSecond);
+
+        def.maxSlopeDegrees = numberOr(table, "maxslope", 0.0f);
+        def.maxWaterDepthElmos = numberOr(table, "maxwaterdepth", 0.0f);
+        def.health = numberOr(table, "health", 0.0f);
+
+        if (const lua::Value* flies = table.find("canfly")) {
+            def.canFly = flies->asBoolean().value_or(false);
+        }
+
+        // SPRING_FOOTPRINT_SCALE, applied here so nothing downstream has to
+        // know that the file's units are half of the engine's
+        // (UnitDef.cpp:671-672). The lower clamp is the engine's too, and it
+        // earns its keep: several BAR definitions declare `footprintx = 0`,
+        // which without the max would be a unit occupying no space at all.
+        constexpr int kFootprintScale = 2;
+        const auto footprint = [&table, kFootprintScale](std::string_view key) {
+            return std::max(kFootprintScale,
+                            static_cast<int>(numberOr(table, key, 1.0f)) * kFootprintScale);
+        };
+        def.footprintSquaresX = footprint("footprintx");
+        def.footprintSquaresZ = footprint("footprintz");
+
+        defs.push_back(std::move(def));
+    }
+
+    return defs;
+}
+
+std::expected<UnitDef, lua::ParseError> loadFile(const std::filesystem::path& path) {
+    auto all = loadFileAll(path);
+    if (!all) {
+        return std::unexpected{all.error()};
+    }
+    return all->front();
+}
+
+std::filesystem::path resolveModel(const std::filesystem::path& objects3dDir,
+                                   std::string_view objectName) {
+    if (objectName.empty() || objects3dDir.empty()) {
+        return {};
+    }
+
+    // Definitions name a path (`Units/ARMPW.s3o`) whose case matches neither the
+    // file nor, always, the directory it sits in. Matching on the basename
+    // alone, case-insensitively, is what actually resolves across the corpus.
+    const std::string wanted = lowercased(std::filesystem::path{objectName}.filename().string());
+
+    std::error_code error;
+    std::filesystem::recursive_directory_iterator walk{
+        objects3dDir, std::filesystem::directory_options::skip_permission_denied, error};
+    if (error) {
+        return {};
+    }
+
+    for (const std::filesystem::directory_entry& entry : walk) {
+        if (!entry.is_regular_file(error)) {
+            continue;
+        }
+        if (lowercased(entry.path().filename().string()) == wanted) {
+            return entry.path();
+        }
+    }
+
+    return {};
+}
+
+} // namespace rm::unitdef
