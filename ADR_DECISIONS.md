@@ -456,3 +456,84 @@ The pairing also made the milestone verifiable. A marched scene is now
 independent of `--time` — two renders half a cycle apart are pixel-identical
 when distance-driven and differ over the model when clock-driven, which is a
 deterministic offscreen test of the whole path from sim to shader.
+
+## ADR-015 — The shadow map follows the camera, and the bias lives in the shader
+
+**Context.** Units and terrain were lit but cast nothing, which reads as models
+pasted onto a picture rather than standing on ground. One directional light and
+one shadow map is the whole requirement: the sun does not move, and an RTS
+camera looks at the same ground from a fairly constant height.
+
+**Decision.** A depth-only pass from the sun into a 2048² depth texture,
+sampled with a comparison sampler, four taps. The light's orthographic box is
+sized and centred on the **camera**, not the map. The depth bias is applied in
+the fragment shader, scaled by how obliquely the sun strikes the surface.
+
+**Alternatives considered.** Both rejected alternatives were what the first
+implementation actually did, and it rendered no shadows at all.
+
+*A light box covering the whole map* is the tidier-sounding option and is much
+worse. On an 8192-elmo map a 2048-texel shadow map is 4 elmos per texel and the
+depth range spans the map's diagonal — so the bias needed to stop the ground
+shadowing itself is several elmos, which is most of a tank's height. The shadow
+lifts clean off its caster and nothing appears.
+
+*`setDepthBias` on the encoder* takes its constant term in units of the depth
+format's smallest resolvable step, which for a 32-bit float over a map-sized
+orthographic range is not a quantity worth guessing at. Applying the bias in the
+shader puts it in units this code chose.
+
+*Cascades* would be the answer if the camera could be both close and far in one
+frame. It cannot: the box is sized from the orbit distance, and one level is
+enough at every zoom the camera allows.
+
+**Consequences.** The light matrix is rebuilt every frame, which is a handful of
+matrix operations against a pass that draws the whole scene. Shadows exist only
+within the box, so a shadow cast from outside it is missing — invisible in
+practice because the box is sized to what the camera can see.
+
+The pass costs 1.060 → 1.668 ms GPU on a 200-unit scene at 1920×1080. It
+re-submits all 2.1M terrain triangles even though the box now covers a fraction
+of the map, so culling to the box is the obvious next saving and was not taken.
+
+Shadow attenuates the sun only. Ambient stands in for sky light, which reaches
+into shade; dimming it too makes shadowed ground black, which is a different
+wrongness from no shadows at all.
+
+## ADR-016 — Water carries its depth in its vertices
+
+**Context.** The water was a four-vertex translucent quad, with a comment saying
+depth-based tinting "would need the depth buffer as an input attachment". Flat
+water is the single most obviously fake thing left on screen: it ends at the
+shore in a hard line, and a puddle looks exactly like an ocean.
+
+**Decision.** The surface is a 256-span grid whose every vertex carries how deep
+the water is there, sampled from the terrain when it is uploaded. Depth drives
+the colour ramp and the alpha; Schlick's approximation drives reflectance.
+
+**Alternatives considered.** *Reading the depth buffer* — the option the old
+comment assumed was necessary. It needs either a second pass or framebuffer
+fetch, and it answers a question the CPU already knows the answer to: the
+terrain height under a point on the water plane does not change.
+
+*Sampling a height texture per fragment* would work and costs an upload sized by
+the map — 134 MB on an 8192-square one — to compute something that varies
+slowly enough to interpolate across a triangle.
+
+*Keeping the quad and fading by distance from shore* has no shore to measure
+from without the same data.
+
+**Consequences.** The depths are cached at the grid's own resolution rather than
+holding the terrain mesh, because `setWater` arrives *after* `setTerrain` and a
+surface built only in the latter bakes the default level of zero into every map.
+
+Two numbers came from looking rather than reasoning. At 128 spans the depth ramp
+interpolates over 64-elmo triangles on a large map and the shoreline visibly
+facets, so the grid is 256 — 131k triangles against the terrain's two million,
+and free within measurement noise. And the two wave trains run at oblique,
+incommensurable angles: aligned to X and Z, the obvious choice, their crests
+intersect on a regular lattice and open water reads as tiled graph paper.
+
+The waves perturb the normal only. Displacing the surface would need a mesh fine
+enough to show it and a shoreline that moved with the waves, and the depth ramp
+assumes a flat plane.

@@ -268,6 +268,61 @@ reimplemented.*
    Still not done: slope alignment, and unit-unit collision — units mass at a
    rally point by standing inside each other.
 
+10. **Content, volume, scale and light.** **✔ done** — five things that each
+    removed a lie the renderer was telling.
+
+    **Units read their own definitions.** BAR ships 968 Lua files; 943 units
+    parse out of them. Speed is already elmos/second in the modern field, turn
+    rate is circle divisions per *frame* over 65536 to the circle, and
+    footprints carry the engine's scale of 2 plus its lower clamp — which earns
+    its keep, since several units declare `footprintx = 0` and would otherwise
+    occupy no space at all. 36 files are refused, every one for the Lua
+    reader's stated contract: a value needing evaluation, an expression calling
+    into the engine, or units built in a loop. Aircraft turned out to carry a
+    `turnradius` and no turn rate at all, so `canFly` is read too.
+
+    **Units have volume.** A rally point used to be 93 models standing inside
+    each other. Overlapping pairs are pushed apart by half the overlap each,
+    over a uniform grid two radii across. Exactly coincident units — which is
+    precisely what a rally order produces — take a direction from their pair of
+    indices, so a stack fans out instead of collapsing onto one axis.
+
+    **Large maps load.** Above 2048 squares a map was refused outright: the
+    mesh wanted 806 MB. The builder now decimates at load, so a 4096-square map
+    costs what a 1024-square one does. The cap moved to 8192 and now bounds the
+    *heightfield*, which is not decimated. Lifting it also made an old corpus
+    test come true — it asserted the embedded normal map is always one DXT5
+    tile, noting that only the three 4096-square maps store four and that they
+    were refused for size "so that the day it is not, this says so". It did.
+
+    **Shadows.** A depth-only pass from the sun, four-tap filtered through a
+    comparison sampler. Two things had to be right and the first attempt got
+    both wrong. The light box follows the *camera*, not the map: covering the
+    whole map is 4 elmos per shadow texel and a depth range spanning the map's
+    diagonal, so the bias needed to stop the ground shadowing itself is most of
+    a tank's height — the shadow lifts off its caster and nothing renders. And
+    the bias is applied in the shader, scaled by how obliquely the sun strikes
+    the surface, because a single constant either leaves oblique faces striped
+    with acne or lifts the shadows off everywhere else.
+
+    **Water.** Was a flat translucent quad. It is now a grid whose vertices
+    carry their own depth, so shorelines fade rather than ending in a line;
+    shallow water is green-grey and deep water blue, because water absorbs the
+    red end first. Reflectance follows Schlick — 0.02 head-on, a mirror at
+    grazing angles — which is most of what makes water look wet. The two wave
+    trains run at oblique, incommensurable angles: aligned to X and Z their
+    crests intersect on a regular lattice and open water reads as graph paper.
+
+    Shadows cost 1.060 → 1.668 ms GPU on 200 units at 1920×1080 (1492 → 783
+    fps); water is free within noise at 1.681 ms. The shadow pass re-submits
+    all 2.1M terrain triangles even though the light box covers a fraction of
+    the map, so culling to the box is the obvious next saving.
+
+    Also in: an asset search path with `.sdz` extraction, slope alignment, and
+    multi-unit selection. Still absent: per-unit passability (one grid serves
+    the whole scene, so a unit's own `maxslope` is not honoured), and units of
+    different models still pass through each other.
+
 Stage B (sim semantics, only if milestones 1–5 prove out) is deliberately not
 planned. The cliff is real; plan when we're on it.
 
