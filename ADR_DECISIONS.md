@@ -340,3 +340,46 @@ edge can miss it and a click in the gap between two small ones can hit. A ray
 grazing a thin ridge can tunnel through it — acceptable at once per click, not at
 once per frame. The bilinear sampler that picking and the sim share is also why
 the nearest-corner sampler from milestone 5 had to go.
+
+## ADR-012 — `_SpecTeam`'s four channels, from `mesh.fx` rather than from inference
+
+**Context.** ADR-005 established that Supreme Commander's team-colour mask lives in
+`_SpecTeam`'s alpha, and read its red channel as specular strength. Green and blue
+were deliberately left unused: nothing verified said what they held, and a guessed
+operator renders as *shading* rather than as a bug. ADR-009 then found the game
+ships its HLSL uncompiled in `gamedata/effects.scd` and concluded that
+`effects/mesh.fx` was the likely authority. This is that file, read.
+
+**Decision.** `NormalMappedPS` (mesh.fx:2184-2201) settles all four channels:
+
+    albedo.rgb          = lerp(teamColour, albedo.rgb, 1 - spec.a)
+    phongAdditive       = NormalMappedPhongCoeff * pow(phongAmount, 2) * spec.g
+    phongMultiplicative = 2 * environment * spec.r
+    emissive            = glowMultiplier * spec.b
+    colour              = albedo * (emissive + light + phongMultiplicative) + phongAdditive
+
+So **red multiplies the environment reflection, green scales an additive Phong
+highlight, blue is emissive, alpha is the team mask** — with
+`NormalMappedPhongCoeff = float3(0.6, 0.80, 0.90)` (a *colour*, so highlights are
+faintly blue) and `glowMultiplier = 2.0`. The SupCom branch of the model fragment
+shader now follows this exactly, and the Recoil branch is untouched; each family is
+a port of its own engine's shader.
+
+**Alternatives considered.** Keeping red as specular and leaving green and blue
+unused — which is what ADR-005 chose in the absence of a source, and which conflated
+two independent channels: it drove both the highlight and the reflection from red,
+and rendered every emissive surface unlit. Also considered keeping the shared
+Blinn-Phong lobe for both families for simplicity, and rejected: having the exact
+expression and not using it is the mistake ADR-009 exists to prevent.
+
+**Consequences.** Emissive and reflection join the light sum and are therefore
+tinted by the albedo, while only the highlight is added on top. That grouping is
+the non-obvious part — adding emissive after the albedo multiply washes glowing
+panels toward white instead of letting them burn in their own colour.
+
+Two normal-map conventions came out of the same read, and they differ, so neither
+could have been assumed from the other. **Model** normal maps are DXT5nm-style
+swizzled — `2 * tex2D(source, uv).gaa - 1` with Z reconstructed as
+`sqrt(1 - x^2 - y^2)` (mesh.fx:565-571), i.e. X in green and Y in alpha, the two
+channels DXT5 stores well. The **per-map** normal map is not: `terrain.fx` reads it
+`.xyz * 2 - 1` straight. Decals use a third spelling, `.ag`.

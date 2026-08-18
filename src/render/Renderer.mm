@@ -309,6 +309,16 @@ constant float kSpecularExponent = 100.0;     // specularExponent (MapInfo.cpp:2
 // cleared to. Swapping a real cubemap in later changes this one line.
 constant float3 kEnvironment = float3(0.09, 0.12, 0.18);
 
+// Supreme Commander's own model constants, read from the game's HLSL rather
+// than guessed — `effects/mesh.fx` in `gamedata/effects.scd`, which ADR-009
+// established should be consulted before inferring anything about rendering.
+//
+// The phong coefficient is a *colour*, not a scalar (mesh.fx:97), so the
+// engine's highlights are faintly blue. Glow multiplies the emissive channel
+// (mesh.fx:56) before it joins the light sum.
+constant float3 kSupComPhongCoeff = float3(0.6, 0.80, 0.90);  // NormalMappedPhongCoeff
+constant float kSupComGlowMultiplier = 2.0;                   // glowMultiplier
+
 vertex UnitOut unitVertex(uint vid [[vertex_id]],
                           uint iid [[instance_id]],
                           const device UnitVertexIn* vertices [[buffer(0)]],
@@ -379,31 +389,54 @@ fragment float4 unitFragment(UnitOut in [[stage_in]],
 
     // Where the team-colour mask lives, and what the shading texture's channels
     // mean, differ between the two content families — see Family in Model.hpp.
-    //
-    //   Recoil  tex1.a is the mask; tex2.r is self-illumination and tex2.g is
-    //           reflectivity (ModelFragProgGL4.glsl:101,129-131).
-    //   SupCom  the mask is the alpha of `_SpecTeam`, which is what the name
-    //           says and what the data shows — its albedo is frequently DXT1
-    //           and carries no usable alpha at all. Its red channel is the
-    //           specular strength. Green and blue are left alone: no reference
-    //           this project has verified says what they hold, and inventing a
-    //           meaning would look like shading rather than read as a bug.
+    // Each branch below is a port of that family's OWN shader, so neither is
+    // inferred from what the data looks like.
     const bool supCom = u.supremeCommanderShading > 0.5;
     const float teamMask = supCom ? tex2.a : tex1.a;
-    const float selfIllum = supCom ? 0.0 : tex2.r;
-    const float shininess = supCom ? tex2.r : tex2.g;
 
     const float3 albedo = mix(tex1.rgb, in.teamColour.rgb, teamMask);
 
     const float3 N = normalize(in.normal);
     const float3 L = u.sunDirection;
     const float3 V = normalize(u.cameraPosition - in.world);
-    const float3 H = normalize(L + V);
 
     const float NdotL = saturate(dot(N, L));
-    const float HdotN = saturate(dot(N, H));
-
     float3 light = kUnitAmbient + NdotL * kUnitDiffuse;
+
+    if (supCom) {
+        // Supreme Commander, from `effects/mesh.fx`'s NormalMappedPS
+        // (mesh.fx:2184-2201). `_SpecTeam` carries four independent things:
+        //
+        //   .r  multiplies the environment reflection
+        //   .g  scales an ADDITIVE Phong highlight
+        //   .b  emissive, scaled by glowMultiplier
+        //   .a  the team-colour mask (already applied above)
+        //
+        // Emissive and reflection join the light sum and are therefore tinted
+        // by the albedo; only the highlight is added on top. Getting that
+        // grouping wrong makes glowing panels wash out to white instead of
+        // burning in their own colour.
+        //
+        // Classic Phong, not Blinn: the engine reflects the sun about the
+        // normal and dots against the view. Note it writes
+        // `dot(reflect(sunDirection, N), -viewDirection)`, which is the same
+        // value as reflecting the incident direction and dotting the direction
+        // to the camera — the two negations cancel.
+        const float phongAmount = saturate(dot(reflect(-L, N), V));
+        const float3 phongAdditive = kSupComPhongCoeff * pow(phongAmount, 2.0) * tex2.g;
+        const float3 phongMultiplicative = 2.0 * kEnvironment * tex2.r;
+        const float emissive = kSupComGlowMultiplier * tex2.b;
+
+        return float4(albedo * (emissive + light + phongMultiplicative) + phongAdditive, 1.0);
+    }
+
+    // Recoil: tex1.a is the mask; tex2.r is self-illumination and tex2.g is
+    // reflectivity (ModelFragProgGL4.glsl:101,129-131).
+    const float selfIllum = tex2.r;
+    const float shininess = tex2.g;
+
+    const float3 H = normalize(L + V);
+    const float HdotN = saturate(dot(N, H));
 
     // Blinn-Phong at 2.5x the Phong exponent, plus a wide low lobe — the exact
     // expression the engine uses, comment and all.

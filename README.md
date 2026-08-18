@@ -142,10 +142,9 @@ reimplemented.*
    reads instead of one — and leaves the Recoil path untouched at 0.546 ms.
 
    Deliberately not done: the shipped per-map DXT5 normal map is parsed and
-   validated but unused, pending its channel convention. Same call as the
-   `_SpecTeam` green and blue channels in milestone 5c — a guessed operator
-   renders as *shading* rather than as a bug. `effects/mesh.fx` in the same
-   archive is the likely answer for both, and has not been read yet.
+   validated but unused. Its convention is now known — `terrain.fx` reads it
+   `.xyz * 2 - 1`, straight, with no swizzle — so what remains is wiring it into
+   the terrain lighting rather than a question about the data.
 
    Maps above 2048 squares are still refused rather than half-loaded: their mesh
    alone would want ~800 MB and there is no LOD yet.
