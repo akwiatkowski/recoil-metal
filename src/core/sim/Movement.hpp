@@ -110,6 +110,25 @@ struct MoveState {
 /// and both mean stay put.
 void orderAlongPath(MoveState& state, std::span<const std::array<float, 2>> path);
 
+// One model's units, for the collision pass.
+//
+// Instances are held per model — one array each, because that is how they reach
+// the GPU — so separating a mixed crowd means handing the pass all of them at
+// once. Spans rather than a merged copy: the pass writes positions back, and
+// copying them out and in again would be both slower and a chance to lose an
+// update.
+struct CollisionGroup {
+    std::span<UnitInstance> instances;
+    std::span<const MoveState> motion;
+};
+
+/// Pushes overlapping units apart across every group, once.
+///
+/// The multi-group form is the real one: run per group and two units of
+/// different models can stand in exactly the same spot, each invisible to the
+/// other's pass.
+void resolveCollisions(std::span<const CollisionGroup> groups, const HeightField& field);
+
 /// Pushes overlapping units apart, once.
 ///
 /// Separate from `tick` on purpose, and for two reasons. Collision is the only

@@ -216,7 +216,27 @@ std::array<float, 2> slopeAlignment(const HeightField& field, float x, float z,
 
 void resolveCollisions(std::span<UnitInstance> instances, std::span<const MoveState> motion,
                        const HeightField& field) {
-    const std::size_t count = std::min(instances.size(), motion.size());
+    const CollisionGroup group{instances, motion};
+    resolveCollisions(std::span<const CollisionGroup>{&group, 1}, field);
+}
+
+void resolveCollisions(std::span<const CollisionGroup> groups, const HeightField& field) {
+    // One flat index space over every group, so a unit's neighbours are all the
+    // units near it rather than all the units near it OF THE SAME MODEL.
+    struct Entry {
+        UnitInstance* unit;
+        float radius;
+    };
+
+    std::vector<Entry> units;
+    for (const CollisionGroup& group : groups) {
+        const std::size_t n = std::min(group.instances.size(), group.motion.size());
+        for (std::size_t i = 0; i < n; ++i) {
+            units.push_back(Entry{&group.instances[i], group.motion[i].radiusElmos});
+        }
+    }
+
+    const std::size_t count = units.size();
     if (count < 2) {
         return;
     }
@@ -227,7 +247,7 @@ void resolveCollisions(std::span<UnitInstance> instances, std::span<const MoveSt
     // the hundreds a rally order gathers.
     float largestRadius = 0.0f;
     for (std::size_t i = 0; i < count; ++i) {
-        largestRadius = std::max(largestRadius, motion[i].radiusElmos);
+        largestRadius = std::max(largestRadius, units[i].radius);
     }
     if (largestRadius <= 0.0f) {
         return;  // nothing here occupies any space
@@ -251,23 +271,24 @@ void resolveCollisions(std::span<UnitInstance> instances, std::span<const MoveSt
     };
 
     for (std::size_t i = 0; i < count; ++i) {
-        if (motion[i].radiusElmos <= 0.0f) {
+        if (units[i].radius <= 0.0f) {
             continue;
         }
-        buckets[key(cellOf(instances[i].position[0]), cellOf(instances[i].position[2]))]
+        buckets[key(cellOf(units[i].unit->position[0]), cellOf(units[i].unit->position[2]))]
             .push_back(i);
     }
 
     // Ascending index order, resolving each pair as it is found, so the result
     // does not depend on how the buckets happened to be laid out.
     for (std::size_t a = 0; a < count; ++a) {
-        const float radiusA = motion[a].radiusElmos;
+        const float radiusA = units[a].radius;
         if (radiusA <= 0.0f) {
             continue;
         }
+        UnitInstance& unitA = *units[a].unit;
 
-        const int cx = cellOf(instances[a].position[0]);
-        const int cz = cellOf(instances[a].position[2]);
+        const int cx = cellOf(unitA.position[0]);
+        const int cz = cellOf(unitA.position[2]);
 
         for (int dz = -1; dz <= 1; ++dz) {
             for (int dx = -1; dx <= 1; ++dx) {
@@ -282,13 +303,14 @@ void resolveCollisions(std::span<UnitInstance> instances, std::span<const MoveSt
                         continue;
                     }
 
-                    const float radiusB = motion[b].radiusElmos;
+                    const float radiusB = units[b].radius;
                     if (radiusB <= 0.0f) {
                         continue;
                     }
+                    UnitInstance& unitB = *units[b].unit;
 
-                    float dxWorld = instances[b].position[0] - instances[a].position[0];
-                    float dzWorld = instances[b].position[2] - instances[a].position[2];
+                    float dxWorld = unitB.position[0] - unitA.position[0];
+                    float dzWorld = unitB.position[2] - unitA.position[2];
                     const float wanted = radiusA + radiusB;
                     float distance = std::hypot(dxWorld, dzWorld);
 
@@ -317,10 +339,10 @@ void resolveCollisions(std::span<UnitInstance> instances, std::span<const MoveSt
                     const float nx = dxWorld / distance;
                     const float nz = dzWorld / distance;
 
-                    instances[a].position[0] -= nx * push;
-                    instances[a].position[2] -= nz * push;
-                    instances[b].position[0] += nx * push;
-                    instances[b].position[2] += nz * push;
+                    unitA.position[0] -= nx * push;
+                    unitA.position[2] -= nz * push;
+                    unitB.position[0] += nx * push;
+                    unitB.position[2] += nz * push;
                 }
             }
         }
@@ -329,10 +351,10 @@ void resolveCollisions(std::span<UnitInstance> instances, std::span<const MoveSt
     // Put everyone back on the map and on the ground. Done once at the end
     // rather than per push, since a unit may be moved by several neighbours.
     for (std::size_t i = 0; i < count; ++i) {
-        if (motion[i].radiusElmos <= 0.0f) {
+        if (units[i].radius <= 0.0f) {
             continue;
         }
-        UnitInstance& unit = instances[i];
+        UnitInstance& unit = *units[i].unit;
         unit.position[0] = std::clamp(unit.position[0], 0.0f, field.widthElmos());
         unit.position[2] = std::clamp(unit.position[2], 0.0f, field.depthElmos());
         unit.position[1] = field.heightAtWorld(unit.position[0], unit.position[2]);

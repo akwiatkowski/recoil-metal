@@ -1036,11 +1036,17 @@ void march(UnitScene& scene, const rm::HeightField& field,
     // to land on exactly the same state every run.
     const auto ticks = static_cast<int>(options.seconds
                                         * static_cast<float>(rm::sim::kTicksPerSecond));
+    std::vector<rm::sim::CollisionGroup> groups;
+    groups.reserve(scene.instances.size());
+    for (std::size_t batch = 0; batch < scene.instances.size(); ++batch) {
+        groups.push_back(rm::sim::CollisionGroup{scene.instances[batch], scene.motion[batch]});
+    }
+
     for (int i = 0; i < ticks; ++i) {
         for (std::size_t batch = 0; batch < scene.instances.size(); ++batch) {
             rm::sim::tick(scene.instances[batch], scene.motion[batch], field);
-            rm::sim::resolveCollisions(scene.instances[batch], scene.motion[batch], field);
         }
+        rm::sim::resolveCollisions(groups, field);
     }
 
     // A marched scene has been walked, so its walk cycles are paced by the
@@ -1503,16 +1509,23 @@ int main(int argc, const char* argv[]) {
         // whenever it was skipped (Renderer::setInstances).
         window.onFrame([&](float elapsed) {
             const int ticks = clock.advance(elapsed);
+            // Built once, outside the tick loop: the spans do not move, only
+            // what they point at.
+            std::vector<rm::sim::CollisionGroup> groups;
+            groups.reserve(units.instances.size());
+            for (std::size_t batch = 0; batch < units.instances.size(); ++batch) {
+                groups.push_back(rm::sim::CollisionGroup{units.instances[batch],
+                                                         units.motion[batch]});
+            }
+
             for (int i = 0; i < ticks; ++i) {
                 for (std::size_t batch = 0; batch < units.instances.size(); ++batch) {
                     rm::sim::tick(units.instances[batch], units.motion[batch], map->field);
-                    // Per batch, so units of one model separate from each
-                    // other. Across batches they still interpenetrate — the
-                    // instances live in separate arrays, and merging them into
-                    // one for the pass is the next step rather than this one.
-                    rm::sim::resolveCollisions(units.instances[batch], units.motion[batch],
-                                               map->field);
                 }
+                // Every model at once. Run per batch, two units of different
+                // models can stand in exactly the same spot with neither
+                // pass able to see the other.
+                rm::sim::resolveCollisions(groups, map->field);
             }
 
             for (std::size_t batch = 0; batch < units.instances.size(); ++batch) {
