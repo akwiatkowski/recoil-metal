@@ -460,3 +460,120 @@ TEST_CASE("a new order abandons the path it was following") {
     CHECK_FALSE(motion[0].moving);
     CHECK(instances[0].position[2] < 120.0f);
 }
+
+TEST_CASE("units pushed together are separated") {
+    const HeightField field = flatField();
+
+    SECTION("two units at the same spot end up a radius apart") {
+        std::vector<UnitInstance> instances{unitAt(400.0f, 400.0f), unitAt(400.0f, 400.0f)};
+        std::vector<MoveState> motion(2);
+
+        // Exactly coincident is the degenerate case: there is no direction to
+        // push along, and a naive normalise divides by zero.
+        rm::sim::resolveCollisions(instances, motion, field);
+
+        const float apart = std::hypot(instances[0].position[0] - instances[1].position[0],
+                                       instances[0].position[2] - instances[1].position[2]);
+        CHECK(apart > 0.0f);
+        CHECK(std::isfinite(instances[0].position[0]));
+        CHECK(std::isfinite(instances[1].position[0]));
+
+        // A few passes should reach the full separation.
+        for (int i = 0; i < 20; ++i) {
+            rm::sim::resolveCollisions(instances, motion, field);
+        }
+        const float settled = std::hypot(instances[0].position[0] - instances[1].position[0],
+                                         instances[0].position[2] - instances[1].position[2]);
+        CHECK(settled >= Approx(motion[0].radiusElmos + motion[1].radiusElmos).epsilon(0.05));
+    }
+
+    SECTION("units already clear of each other do not move") {
+        std::vector<UnitInstance> instances{unitAt(100.0f, 100.0f), unitAt(500.0f, 500.0f)};
+        std::vector<MoveState> motion(2);
+
+        rm::sim::resolveCollisions(instances, motion, field);
+
+        CHECK(instances[0].position[0] == Approx(100.0f));
+        CHECK(instances[1].position[0] == Approx(500.0f));
+    }
+
+    SECTION("a crowd spreads out instead of stacking") {
+        // Thirty units dumped on one point, which is exactly what a rally order
+        // produces once pathfinding works.
+        std::vector<UnitInstance> instances;
+        for (int i = 0; i < 30; ++i) {
+            instances.push_back(unitAt(400.0f, 400.0f));
+        }
+        std::vector<MoveState> motion(instances.size());
+
+        for (int i = 0; i < 120; ++i) {
+            rm::sim::resolveCollisions(instances, motion, field);
+        }
+
+        std::size_t overlapping = 0;
+        for (std::size_t a = 0; a < instances.size(); ++a) {
+            for (std::size_t b = a + 1; b < instances.size(); ++b) {
+                const float d = std::hypot(instances[a].position[0] - instances[b].position[0],
+                                           instances[a].position[2] - instances[b].position[2]);
+                if (d < (motion[a].radiusElmos + motion[b].radiusElmos) * 0.8f) {
+                    ++overlapping;
+                }
+            }
+        }
+        CHECK(overlapping == 0);
+    }
+
+    SECTION("separation keeps units on the map and on the ground") {
+        const HeightField ramp = rampField();
+        std::vector<UnitInstance> instances{unitAt(0.0f, 0.0f), unitAt(0.0f, 0.0f),
+                                            unitAt(0.0f, 0.0f)};
+        std::vector<MoveState> motion(3);
+
+        for (int i = 0; i < 30; ++i) {
+            rm::sim::resolveCollisions(instances, motion, ramp);
+        }
+
+        for (const UnitInstance& unit : instances) {
+            CHECK(unit.position[0] >= 0.0f);
+            CHECK(unit.position[2] >= 0.0f);
+            CHECK(unit.position[0] <= ramp.widthElmos());
+            CHECK(unit.position[2] <= ramp.depthElmos());
+            CHECK(unit.position[1]
+                  == Approx(ramp.heightAtWorld(unit.position[0], unit.position[2])));
+        }
+    }
+
+    SECTION("it is deterministic") {
+        const auto play = [&field]() {
+            std::vector<UnitInstance> instances;
+            for (int i = 0; i < 12; ++i) {
+                instances.push_back(unitAt(400.0f + static_cast<float>(i % 3),
+                                           400.0f + static_cast<float>(i % 2)));
+            }
+            std::vector<MoveState> motion(instances.size());
+            for (int i = 0; i < 40; ++i) {
+                rm::sim::resolveCollisions(instances, motion, field);
+            }
+            return instances;
+        };
+
+        const auto first = play();
+        const auto second = play();
+        for (std::size_t i = 0; i < first.size(); ++i) {
+            CHECK(first[i].position[0] == second[i].position[0]);
+            CHECK(first[i].position[2] == second[i].position[2]);
+        }
+    }
+
+    SECTION("a unit with no radius is left alone") {
+        std::vector<UnitInstance> instances{unitAt(400.0f, 400.0f), unitAt(400.0f, 400.0f)};
+        std::vector<MoveState> motion(2);
+        motion[0].radiusElmos = 0.0f;
+        motion[1].radiusElmos = 0.0f;
+
+        rm::sim::resolveCollisions(instances, motion, field);
+
+        CHECK(instances[0].position[0] == Approx(400.0f));
+        CHECK(instances[1].position[0] == Approx(400.0f));
+    }
+}

@@ -798,11 +798,16 @@ struct UnitOptions {
         // A definition's speed and turn rate reach every instance of it. Slope
         // and depth limits do NOT yet: passability is one grid for the whole
         // scene, so honouring them per unit type would mean a grid per type.
-        if (def && def->isMobile()) {
+        if (def) {
             for (rm::sim::MoveState& state : scene.motion.back()) {
-                state.speedElmosPerSecond = def->speedElmosPerSecond;
-                if (def->turnRateRadiansPerSecond > 0.0f) {
-                    state.turnRateRadiansPerSecond = def->turnRateRadiansPerSecond;
+                // The footprint is what a unit takes up, whether or not it
+                // moves — a building is still something to be pushed out of.
+                state.radiusElmos = def->footprintRadiusElmos();
+                if (def->isMobile()) {
+                    state.speedElmosPerSecond = def->speedElmosPerSecond;
+                    if (def->turnRateRadiansPerSecond > 0.0f) {
+                        state.turnRateRadiansPerSecond = def->turnRateRadiansPerSecond;
+                    }
                 }
             }
         }
@@ -1005,6 +1010,7 @@ void march(UnitScene& scene, const rm::HeightField& field,
     for (int i = 0; i < ticks; ++i) {
         for (std::size_t batch = 0; batch < scene.instances.size(); ++batch) {
             rm::sim::tick(scene.instances[batch], scene.motion[batch], field);
+            rm::sim::resolveCollisions(scene.instances[batch], scene.motion[batch], field);
         }
     }
 
@@ -1419,6 +1425,12 @@ int main(int argc, const char* argv[]) {
             for (int i = 0; i < ticks; ++i) {
                 for (std::size_t batch = 0; batch < units.instances.size(); ++batch) {
                     rm::sim::tick(units.instances[batch], units.motion[batch], map->field);
+                    // Per batch, so units of one model separate from each
+                    // other. Across batches they still interpenetrate — the
+                    // instances live in separate arrays, and merging them into
+                    // one for the pass is the next step rather than this one.
+                    rm::sim::resolveCollisions(units.instances[batch], units.motion[batch],
+                                               map->field);
                 }
             }
 

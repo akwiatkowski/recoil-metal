@@ -12,11 +12,11 @@ namespace rm::sim {
 
 // The first thing in this engine whose state changes between frames.
 //
-// It is movement and nothing else: units walk straight lines to where they are
-// told, and pass through each other and through cliffs on the way. Pathfinding
-// and collision are the sim proper, which the README deliberately declines to
-// plan until the renderer has earned it. What lives here is the smallest thing
-// that makes an order visible on screen.
+// Units follow a route (core/sim/Pathfinding.hpp), turn at a bounded rate, hug
+// the terrain, and push each other apart on arrival. What is still absent is
+// everything that makes a game of it: no combat, no economy, no orders beyond
+// "go there", and no reaction to being blocked — a unit whose route is occupied
+// leans on whoever is in the way rather than re-routing.
 
 /// Simulation ticks per second.
 ///
@@ -54,6 +54,9 @@ inline constexpr float kDefaultTurnRateRadiansPerSecond = 3.4934f;
 /// relying on this constant to cover every speed.
 inline constexpr float kArrivalRadiusElmos = 4.0f;
 
+/// Default collision radius, in elmos — see MoveState::radiusElmos.
+inline constexpr float kDefaultRadiusElmos = 16.0f;
+
 // What a unit is doing. UnitInstance carries what the GPU needs — position,
 // yaw, scale, colour — and this carries what the sim needs and the GPU must
 // never see. Kept as a parallel array rather than folded into UnitInstance
@@ -66,6 +69,13 @@ struct MoveState {
 
     float speedElmosPerSecond = kDefaultSpeedElmosPerSecond;
     float turnRateRadiansPerSecond = kDefaultTurnRateRadiansPerSecond;
+
+    /// How much room this unit takes up, in elmos. Zero opts out of collision
+    /// entirely, which is what a marker or a decorative instance wants.
+    ///
+    /// The default is BAR's Pawn again: `footprintx = 2`, doubled by the
+    /// engine's footprint scale to 4 squares, half of which is 16 elmos.
+    float radiusElmos = kDefaultRadiusElmos;
 
     // Ground distance covered since this unit was created, in elmos. Only ever
     // increases.
@@ -99,6 +109,25 @@ struct MoveState {
 /// "no route exists" and "walk to where you already are" are the same answer,
 /// and both mean stay put.
 void orderAlongPath(MoveState& state, std::span<const std::array<float, 2>> path);
+
+/// Pushes overlapping units apart, once.
+///
+/// Separate from `tick` on purpose, and for two reasons. Collision is the only
+/// pairwise thing here — every other rule is per unit — and it is the only part
+/// that needs scratch space, so keeping it out leaves `tick` noexcept and
+/// allocation-free. Callers run it after ticking.
+///
+/// One pass relieves overlap rather than resolving it: a pile settles over
+/// several ticks, which is both cheaper and steadier than solving a crowd
+/// exactly and having it explode apart in a single frame. Units keep their
+/// order, so the result is the same every run.
+///
+/// This is separation, not physics — no momentum, no friction, and a unit
+/// being pushed does not push back on whatever is driving it. That is enough
+/// to stop a rally point from being a stack of models in the same spot, which
+/// is the visible lie it exists to fix.
+void resolveCollisions(std::span<UnitInstance> instances, std::span<const MoveState> motion,
+                       const HeightField& field);
 
 /// How close counts as reaching an intermediate waypoint, in elmos.
 ///

@@ -2,7 +2,10 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <numbers>
+#include <unordered_map>
+#include <vector>
 
 namespace {
 
@@ -157,6 +160,131 @@ int TickClock::advance(float seconds) noexcept {
     }
 
     return ticks;
+}
+
+void resolveCollisions(std::span<UnitInstance> instances, std::span<const MoveState> motion,
+                       const HeightField& field) {
+    const std::size_t count = std::min(instances.size(), motion.size());
+    if (count < 2) {
+        return;
+    }
+
+    // A uniform grid over the map, so a unit only tests the neighbours that
+    // could actually reach it. Without one this is every pair against every
+    // other, which is fine for the forty units a demo places and quadratic for
+    // the hundreds a rally order gathers.
+    float largestRadius = 0.0f;
+    for (std::size_t i = 0; i < count; ++i) {
+        largestRadius = std::max(largestRadius, motion[i].radiusElmos);
+    }
+    if (largestRadius <= 0.0f) {
+        return;  // nothing here occupies any space
+    }
+
+    // Cells two radii across: any pair that overlaps is then either in the same
+    // cell or in touching ones, so eight neighbours is the whole search.
+    const float cellSize = largestRadius * 2.0f;
+    const auto cellOf = [cellSize](float value) {
+        return static_cast<int>(std::floor(value / cellSize));
+    };
+
+    // Keyed on the packed cell coordinates. A map rather than a dense grid
+    // because a crowd occupies a handful of cells out of the tens of thousands
+    // a map has, and the dense version would cost more to clear than to search.
+    std::unordered_map<std::int64_t, std::vector<std::size_t>> buckets;
+    buckets.reserve(count);
+
+    const auto key = [](int x, int z) {
+        return (static_cast<std::int64_t>(x) << 32) ^ static_cast<std::uint32_t>(z);
+    };
+
+    for (std::size_t i = 0; i < count; ++i) {
+        if (motion[i].radiusElmos <= 0.0f) {
+            continue;
+        }
+        buckets[key(cellOf(instances[i].position[0]), cellOf(instances[i].position[2]))]
+            .push_back(i);
+    }
+
+    // Ascending index order, resolving each pair as it is found, so the result
+    // does not depend on how the buckets happened to be laid out.
+    for (std::size_t a = 0; a < count; ++a) {
+        const float radiusA = motion[a].radiusElmos;
+        if (radiusA <= 0.0f) {
+            continue;
+        }
+
+        const int cx = cellOf(instances[a].position[0]);
+        const int cz = cellOf(instances[a].position[2]);
+
+        for (int dz = -1; dz <= 1; ++dz) {
+            for (int dx = -1; dx <= 1; ++dx) {
+                const auto bucket = buckets.find(key(cx + dx, cz + dz));
+                if (bucket == buckets.end()) {
+                    continue;
+                }
+
+                for (const std::size_t b : bucket->second) {
+                    // Each pair once, and never a unit against itself.
+                    if (b <= a) {
+                        continue;
+                    }
+
+                    const float radiusB = motion[b].radiusElmos;
+                    if (radiusB <= 0.0f) {
+                        continue;
+                    }
+
+                    float dxWorld = instances[b].position[0] - instances[a].position[0];
+                    float dzWorld = instances[b].position[2] - instances[a].position[2];
+                    const float wanted = radiusA + radiusB;
+                    float distance = std::hypot(dxWorld, dzWorld);
+
+                    if (distance >= wanted) {
+                        continue;
+                    }
+
+                    // Exactly coincident, which a rally order produces the
+                    // moment two units are given the same destination. There is
+                    // no direction to separate along, so one is invented from
+                    // the pair's indices — deterministic, and different for
+                    // each pair, so a stack fans out instead of picking one
+                    // axis and forming a line.
+                    if (distance < 1e-4f) {
+                        const auto spread = static_cast<float>((a * 7 + b * 13) % 360);
+                        const float angle = spread * (std::numbers::pi_v<float> / 180.0f);
+                        dxWorld = std::cos(angle);
+                        dzWorld = std::sin(angle);
+                        distance = 1.0f;
+                    }
+
+                    // Half the overlap each: neither unit outranks the other,
+                    // and moving only one would let a unit under orders shove
+                    // its way through a crowd untouched.
+                    const float push = (wanted - distance) * 0.5f;
+                    const float nx = dxWorld / distance;
+                    const float nz = dzWorld / distance;
+
+                    instances[a].position[0] -= nx * push;
+                    instances[a].position[2] -= nz * push;
+                    instances[b].position[0] += nx * push;
+                    instances[b].position[2] += nz * push;
+                }
+            }
+        }
+    }
+
+    // Put everyone back on the map and on the ground. Done once at the end
+    // rather than per push, since a unit may be moved by several neighbours.
+    for (std::size_t i = 0; i < count; ++i) {
+        if (motion[i].radiusElmos <= 0.0f) {
+            continue;
+        }
+        UnitInstance& unit = instances[i];
+        unit.position[0] = std::clamp(unit.position[0], 0.0f, field.widthElmos());
+        unit.position[2] = std::clamp(unit.position[2], 0.0f, field.depthElmos());
+        unit.position[1] = field.heightAtWorld(unit.position[0], unit.position[2]);
+    }
 }
 
 } // namespace rm::sim
