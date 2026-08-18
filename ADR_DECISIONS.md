@@ -537,3 +537,80 @@ intersect on a regular lattice and open water reads as tiled graph paper.
 The waves perturb the normal only. Displacing the surface would need a mesh fine
 enough to show it and a shoreline that moved with the waves, and the depth ramp
 assumes a flat plane.
+
+## ADR-017 — Cull the shadow pass by chunk, and merge the survivors
+
+**Context.** The shadow pass re-submitted the whole terrain — 2.1M triangles —
+even though ADR-015 had already shrunk the light's box to what the camera can
+see. It was the only measured regression in the project: shadows took a
+200-unit scene from 1492 to 783 fps.
+
+**Decision.** `buildTerrainMesh` emits the terrain in 64-square chunks, each a
+contiguous range of the index buffer carrying its own bounding box. The shadow
+pass tests each chunk's bounding sphere against the light's box *in the light's
+own axes* and draws only those that survive, merging consecutive survivors into
+single draws.
+
+**Alternatives considered.** *A world-space axis-aligned test* — wrong, because
+the box is oriented along the sun and only happens to be axis-aligned when the
+sun is straight overhead. *Per-triangle or per-square culling* — the CPU cost
+would exceed the GPU saving. *Frustum culling the visible pass too* — worth
+doing and not done here; this ADR is about the pass that was measurably wrong.
+
+**Consequences.** Close camera: 1.082 → 0.705 ms GPU. Whole-map camera: 1.792 →
+1.747 ms, which is about noise — every chunk survives, as it should.
+
+The run-merging is not an optimisation, it is what makes the change a win at
+all. Without it, culling replaces one draw of the terrain with one per chunk,
+and at a camera distance that keeps them all it is *slower than not culling* —
+which is what the first version measured, and what nearly had the whole idea
+discarded as a mistake.
+
+Chunk order matters as much: emitting chunk-by-chunk rather than row-by-row is
+what makes a chunk's triangles contiguous. Row-major order interleaves every
+chunk in a row and makes ranges impossible.
+
+A chunk's bounding sphere is deliberately generous. Too generous costs a draw
+that renders nothing visible; too tight drops shadows, and only from certain
+camera angles.
+
+## ADR-018 — Port water and sky from the game's shaders, with named stand-ins
+
+**Context.** ADR-009 established that Supreme Commander ships its HLSL
+uncompiled and that guessing at rendering behaviour has cost this project twice.
+Every shader here is now a port with a `file:line` citation — except the water,
+which was written from first principles, and the sky, which did not exist.
+
+**Decision.** Port the composition and constants of `effects/water2.fx`'s
+`HighFidelityPS` and `effects/sky.fx`'s `AtmospherePS`, substituting named
+stand-ins for the three inputs this renderer does not have: the refraction
+target becomes the depth ramp, the sky cubemap becomes the sky function, and
+four scrolling normal maps become two oblique wave trains.
+
+**Alternatives considered.** *Implementing refraction and planar reflection
+first* — two more passes, and the engine's own low-fidelity path proves the
+composition stands without them. *Keeping the hand-written water* — it looked
+plausible, which is exactly the failure mode ADR-009 exists to prevent. *Waiting
+for per-map colours* — the skybox block is parsed but not exposed, and the
+structure is worth having before the values.
+
+**Consequences.** Three of the engine's constants contradict what a physically
+minded implementation would choose, and would not have been guessed:
+
+- `waterLerp` is `clamp(waterDepth, 0.3, 0.3)` — a **constant** 0.3 of
+  `waterColor`, not a depth ramp. The depth dependence lives in
+  `skyreflectionAmount * saturate(waterDepth * 10)` instead.
+- Fresnel comes from a lookup texture built from bias 0.1 and power **1.5**,
+  far softer than a physical Schlick 5. That is why the engine's water reflects
+  noticeably even viewed straight down.
+- `waterColor` is `float3(0, 0.7, 1.5)` — a value above 1, so it brightens as
+  well as tints.
+
+One deviation is deliberate and marked: the wave-crest term is rarer and fainter
+than the engine's, because two sine trains crest on a regular grid and at full
+strength that reads as polka dots. The engine avoids it by summing four scrolling
+normal-map textures, which is the thing being stood in for.
+
+The sky function is shared by the sky pass and the water's reflection, so the sea
+reflects the sky that is actually above it rather than a constant chosen to look
+similar.

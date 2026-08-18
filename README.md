@@ -323,6 +323,49 @@ reimplemented.*
     the whole scene, so a unit's own `maxslope` is not honoured), and units of
     different models still pass through each other.
 
+11. **Closing the loose ends.** **✔ done** — five items that were each a known
+    lie or a measured cost.
+
+    **Collision sees across models.** Instances are held one array per model,
+    and the separation pass ran once per array — so two units of *different*
+    models could stand in exactly the same spot with neither pass able to see
+    the other. It now takes a list of groups and flattens them into one index
+    space.
+
+    **Each unit routes on the map its own limits see.** Definitions had
+    supplied `maxslope` and `maxwaterdepth` since they were read, but one grid
+    served the whole scene. Grids are now built per distinct pair of limits and
+    cached — keyed on the limits, not the unit type, since the grid depends on
+    nothing else. On Angel Crossing that is 59% of the map walkable to BAR's
+    Pawn against 55% to its Stumpy tank.
+
+    **The shadow pass is culled to the light box** — 1.082 → 0.705 ms GPU on a
+    close camera, a third off. The terrain is emitted in 64-square chunks, each
+    a contiguous range of the index buffer with its own bounds. Two details
+    matter: chunks are emitted chunk-by-chunk rather than row-by-row, or their
+    triangles are not contiguous and cannot be drawn alone; and survivors are
+    merged into runs, without which culling trades one draw of the terrain for
+    one per chunk and is *slower* whenever the camera is far enough back to
+    keep them all — which is exactly what the first version measured.
+
+    **A sky, and water ported from `water2.fx`.** Every other shader here is a
+    port with a `file:line` citation; the water was mine. Three of the engine's
+    constants are not what one would guess: `waterLerp` is
+    `clamp(depth, 0.3, 0.3)` — a *constant* 0.3 of `waterColor`, not a depth
+    ramp — the depth dependence living in `skyreflectionAmount * saturate(depth
+    * 10)` instead; and Fresnel is bias 0.1 with power 1.5, far softer than a
+    physical Schlick 5, which is why the engine's water reflects noticeably
+    even looked at straight down. The sky is `AtmospherePS`'s horizon-to-zenith
+    lerp, drawn as one full-screen triangle at the far plane, and the water
+    reflects the same function — so the sea and the sky above it agree.
+
+    ![sky and water on a Recoil map](docs/images/m11-sky-water.png)
+    ![the same on a Supreme Commander map](docs/images/m11-sky-water-fa.png)
+
+    Still absent: per-map sky and water colours (a `.scmap` carries them in its
+    skybox block, which the loader parses but does not expose), refraction and
+    planar reflection, and dynamic per-patch terrain LOD.
+
 Stage B (sim semantics, only if milestones 1–5 prove out) is deliberately not
 planned. The cliff is real; plan when we're on it.
 
