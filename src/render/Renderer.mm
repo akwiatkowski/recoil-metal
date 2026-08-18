@@ -692,13 +692,15 @@ void Renderer::setUnits(std::span<const dds::Texture> textures,
 }
 
 MTL::Texture* Renderer::uploadTexture(const dds::Texture& texture, const char* what) {
-    // DXT1/3/5 map one-to-one onto BC1/BC2/BC3, all natively sampleable here, so
-    // the payload goes up untouched exactly like the terrain atlas.
+    // DXT1/3/5 map one-to-one onto BC1/BC2/BC3, and BGRA8 onto BGRA8Unorm — all
+    // natively sampleable here, so the payload goes up untouched exactly like
+    // the terrain atlas.
     MTL::PixelFormat format = MTL::PixelFormat::PixelFormatBC1_RGBA;
     switch (texture.format) {
-        case dds::BlockFormat::Bc1: format = MTL::PixelFormat::PixelFormatBC1_RGBA; break;
-        case dds::BlockFormat::Bc2: format = MTL::PixelFormat::PixelFormatBC2_RGBA; break;
-        case dds::BlockFormat::Bc3: format = MTL::PixelFormat::PixelFormatBC3_RGBA; break;
+        case dds::Format::Bc1: format = MTL::PixelFormat::PixelFormatBC1_RGBA; break;
+        case dds::Format::Bc2: format = MTL::PixelFormat::PixelFormatBC2_RGBA; break;
+        case dds::Format::Bc3: format = MTL::PixelFormat::PixelFormatBC3_RGBA; break;
+        case dds::Format::Bgra8: format = MTL::PixelFormat::PixelFormatBGRA8Unorm; break;
     }
 
     MTL::TextureDescriptor* descriptor = MTL::TextureDescriptor::texture2DDescriptor(

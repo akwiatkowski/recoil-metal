@@ -19,15 +19,28 @@ constexpr std::size_t kOffWidth        = 16;
 constexpr std::size_t kOffMipCount     = 28;
 constexpr std::size_t kOffPixelFlags   = 80;
 constexpr std::size_t kOffFourCc       = 84;
+// DDS_PIXELFORMAT's uncompressed description, used only when DDPF_FOURCC is off.
+constexpr std::size_t kOffRgbBitCount  = 88;
+constexpr std::size_t kOffRedMask      = 92;
+constexpr std::size_t kOffGreenMask    = 96;
+constexpr std::size_t kOffBlueMask     = 100;
 
 /// DDSD_MIPMAPCOUNT — whether dwMipMapCount is meaningful.
 constexpr std::uint32_t kFlagMipMapCount = 0x00020000u;
 /// DDPF_FOURCC — whether the pixel format names a fourcc rather than masks.
 constexpr std::uint32_t kPixelFlagFourCc = 0x00000004u;
 
-constexpr int kBlockTexels = 4;
-
 using rm::MapError;
+
+[[nodiscard]] const char* formatName(rm::dds::Format format) {
+    switch (format) {
+        case rm::dds::Format::Bc1: return "DXT1";
+        case rm::dds::Format::Bc2: return "DXT3";
+        case rm::dds::Format::Bc3: return "DXT5";
+        case rm::dds::Format::Bgra8: return "BGRA8";
+    }
+    return "unknown";
+}
 
 [[nodiscard]] std::string fourCcText(std::span<const std::byte> bytes, std::size_t offset) {
     std::string text;
@@ -51,14 +64,14 @@ int Texture::mipHeight(int level) const noexcept {
 }
 
 std::size_t Texture::mipBytesPerRow(int level) const noexcept {
-    const auto blocks = static_cast<std::size_t>((mipWidth(level) + kBlockTexels - 1)
-                                                 / kBlockTexels);
-    return blocks * blockBytes(format);
+    const int texels = blockTexels(format);
+    const auto blocks = static_cast<std::size_t>((mipWidth(level) + texels - 1) / texels);
+    return blocks * bytesPerBlock(format);
 }
 
 std::size_t Texture::mipBytes(int level) const noexcept {
-    const auto rows = static_cast<std::size_t>((mipHeight(level) + kBlockTexels - 1)
-                                               / kBlockTexels);
+    const int texels = blockTexels(format);
+    const auto rows = static_cast<std::size_t>((mipHeight(level) + texels - 1) / texels);
     return mipBytesPerRow(level) * rows;
 }
 
@@ -103,27 +116,39 @@ std::expected<Texture, MapError> load(std::span<const std::byte> bytes) {
     }
 
     const std::uint32_t pixelFlags = readU32(bytes, kOffPixelFlags);
-    if ((pixelFlags & kPixelFlagFourCc) == 0) {
-        // Uncompressed DDS. Perfectly legal, just not something this reader
-        // handles — and guessing at the channel masks would be worse than saying
-        // so, since nothing downstream can consume an uncompressed surface yet.
-        return std::unexpected(MapError{
-            MapError::Code::BadHeader,
-            "DDS is uncompressed (no FOURCC in its pixel format); only DXT1/3/5 are supported"});
-    }
 
-    BlockFormat format{};
-    if (std::memcmp(bytes.data() + kOffFourCc, "DXT1", 4) == 0) {
-        format = BlockFormat::Bc1;
+    Format format{};
+    if ((pixelFlags & kPixelFlagFourCc) == 0) {
+        // Uncompressed. Supreme Commander's embedded splat masks are stored this
+        // way, and only in one layout: 32 bits per texel with the red channel at
+        // 0x00FF0000, which is B G R A in memory order and a native Metal
+        // format. Any other uncompressed layout is refused rather than
+        // reinterpreted, because a channel order guessed wrong is a recoloured
+        // image rather than an error anyone would notice.
+        const std::uint32_t bits = readU32(bytes, kOffRgbBitCount);
+        const std::uint32_t redMask = readU32(bytes, kOffRedMask);
+        const std::uint32_t greenMask = readU32(bytes, kOffGreenMask);
+        const std::uint32_t blueMask = readU32(bytes, kOffBlueMask);
+
+        if (bits != 32 || redMask != 0x00FF0000u || greenMask != 0x0000FF00u
+            || blueMask != 0x000000FFu) {
+            return std::unexpected(MapError{
+                MapError::Code::BadHeader,
+                "uncompressed DDS is " + std::to_string(bits)
+                    + "-bit with an unrecognised channel layout; only 32-bit BGRA is handled"});
+        }
+        format = Format::Bgra8;
+    } else if (std::memcmp(bytes.data() + kOffFourCc, "DXT1", 4) == 0) {
+        format = Format::Bc1;
     } else if (std::memcmp(bytes.data() + kOffFourCc, "DXT3", 4) == 0) {
-        format = BlockFormat::Bc2;
+        format = Format::Bc2;
     } else if (std::memcmp(bytes.data() + kOffFourCc, "DXT5", 4) == 0) {
-        format = BlockFormat::Bc3;
+        format = Format::Bc3;
     } else {
         return std::unexpected(MapError{
             MapError::Code::BadHeader,
             "unsupported DDS FOURCC \"" + fourCcText(bytes, kOffFourCc)
-                + "\"; only DXT1, DXT3 and DXT5 are handled"
+                + "\"; only DXT1, DXT3, DXT5 and uncompressed BGRA8 are handled"
                   " (DX10-extended headers included)"});
     }
 
@@ -172,7 +197,7 @@ std::expected<Texture, MapError> load(std::span<const std::byte> bytes) {
             MapError::Code::Truncated,
             "DDS payload is " + std::to_string(available) + " bytes, too small for even level 0 of a "
                 + std::to_string(width) + "x" + std::to_string(height) + " "
-                + (format == BlockFormat::Bc1 ? "DXT1" : "DXT3/5") + " image"});
+                + formatName(format) + " image"});
     }
 
     texture.data.assign(bytes.begin() + static_cast<std::ptrdiff_t>(kDataOffset),

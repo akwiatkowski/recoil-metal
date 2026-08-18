@@ -35,11 +35,18 @@ struct DdsSpec {
     std::uint32_t headerSize = 124;
     /// Payload bytes to write; -1 means "exactly what the mip chain needs".
     std::int64_t payloadBytes = -1;
+    /// Uncompressed 32-bit BGRA, the layout SupCom's embedded splat masks use.
+    /// Clears the FOURCC flag and writes the channel masks the reader checks.
+    bool bgra8 = false;
+    /// Only meaningful with bgra8: writes a different channel order, to prove
+    /// the reader checks rather than assumes.
+    bool wrongChannelOrder = false;
 };
 
-[[nodiscard]] std::size_t blocksFor(std::uint32_t w, std::uint32_t h, std::size_t blockSize) {
-    return static_cast<std::size_t>((std::max(1u, w) + 3) / 4)
-         * static_cast<std::size_t>((std::max(1u, h) + 3) / 4) * blockSize;
+[[nodiscard]] std::size_t blocksFor(std::uint32_t w, std::uint32_t h, std::size_t blockSize,
+                                    std::uint32_t blockSpan = 4) {
+    return static_cast<std::size_t>((std::max(1u, w) + blockSpan - 1) / blockSpan)
+         * static_cast<std::size_t>((std::max(1u, h) + blockSpan - 1) / blockSpan) * blockSize;
 }
 
 [[nodiscard]] std::vector<std::byte> writeDds(const DdsSpec& spec) {
@@ -56,16 +63,28 @@ struct DdsSpec {
     putU32(out, 16, spec.width);
     putU32(out, 28, spec.mipCount);
     putU32(out, 76, 32);                                       // DDS_PIXELFORMAT.dwSize
-    putU32(out, 80, spec.fourCcFlagSet ? 0x00000004u : 0u);    // DDPF_FOURCC
+    const bool fourCcFlag = spec.fourCcFlagSet && !spec.bgra8;
+    putU32(out, 80, fourCcFlag ? 0x00000004u : 0u);            // DDPF_FOURCC
     for (std::size_t i = 0; i < 4 && i < spec.fourCc.size(); ++i) {
         out[84 + i] = static_cast<std::byte>(spec.fourCc[i]);
     }
 
-    // Payload: the full declared mip chain unless overridden.
-    const std::size_t blockSize = (spec.fourCc == "DXT1") ? 8u : 16u;
+    if (spec.bgra8) {
+        putU32(out, 88, 32);  // dwRGBBitCount
+        // Red at 0x00FF0000 is B G R A in memory order — what SupCom writes.
+        putU32(out, 92, spec.wrongChannelOrder ? 0x000000FFu : 0x00FF0000u);
+        putU32(out, 96, 0x0000FF00u);
+        putU32(out, 100, spec.wrongChannelOrder ? 0x00FF0000u : 0x000000FFu);
+        putU32(out, 104, 0xFF000000u);
+    }
+
+    // Payload: the full declared mip chain unless overridden. An uncompressed
+    // format is a 1x1-block format, which is exactly how the reader sizes it.
+    const std::size_t blockSize = spec.bgra8 ? 4u : ((spec.fourCc == "DXT1") ? 8u : 16u);
+    const std::uint32_t blockSpan = spec.bgra8 ? 1u : 4u;
     std::size_t needed = 0;
     for (std::uint32_t level = 0; level < std::max(1u, spec.mipCount); ++level) {
-        needed += blocksFor(spec.width >> level, spec.height >> level, blockSize);
+        needed += blocksFor(spec.width >> level, spec.height >> level, blockSize, blockSpan);
     }
 
     const std::size_t payload =
@@ -86,7 +105,7 @@ TEST_CASE("a DXT1 texture reports its dimensions and format") {
     REQUIRE(texture.has_value());
     REQUIRE(texture->width == 16);
     REQUIRE(texture->height == 16);
-    REQUIRE(texture->format == rm::dds::BlockFormat::Bc1);
+    REQUIRE(texture->format == rm::dds::Format::Bc1);
     REQUIRE(texture->mipLevels == 1);
 }
 
@@ -94,24 +113,24 @@ TEST_CASE("each DXT variant maps to the right block format and size") {
     // DXT1 is 8 bytes per 4x4 block; DXT3 and DXT5 are 16.
     struct Case {
         std::string fourCc;
-        rm::dds::BlockFormat format;
-        std::size_t blockBytes;
+        rm::dds::Format format;
+        std::size_t bytesPerBlock;
     };
 
-    for (const Case& c : {Case{"DXT1", rm::dds::BlockFormat::Bc1, 8u},
-                          Case{"DXT3", rm::dds::BlockFormat::Bc2, 16u},
-                          Case{"DXT5", rm::dds::BlockFormat::Bc3, 16u}}) {
+    for (const Case& c : {Case{"DXT1", rm::dds::Format::Bc1, 8u},
+                          Case{"DXT3", rm::dds::Format::Bc2, 16u},
+                          Case{"DXT5", rm::dds::Format::Bc3, 16u}}) {
         DdsSpec spec;
         spec.fourCc = c.fourCc;
 
         const auto texture = rm::dds::load(writeDds(spec));
         REQUIRE(texture.has_value());
         REQUIRE(texture->format == c.format);
-        REQUIRE(rm::dds::blockBytes(texture->format) == c.blockBytes);
+        REQUIRE(rm::dds::bytesPerBlock(texture->format) == c.bytesPerBlock);
 
         // 16x16 = 4x4 blocks.
-        REQUIRE(texture->mipBytes(0) == 16 * c.blockBytes);
-        REQUIRE(texture->mipBytesPerRow(0) == 4 * c.blockBytes);
+        REQUIRE(texture->mipBytes(0) == 16 * c.bytesPerBlock);
+        REQUIRE(texture->mipBytesPerRow(0) == 4 * c.bytesPerBlock);
     }
 }
 
@@ -205,15 +224,52 @@ TEST_CASE("a file without the DDS magic is rejected") {
     REQUIRE(texture.error().code == rm::MapError::Code::NotSmf);
 }
 
-TEST_CASE("an uncompressed DDS is declined with a specific reason") {
-    // Legal, just not handled — and guessing at channel masks would be worse
-    // than saying so.
+TEST_CASE("an uncompressed BGRA8 DDS loads, sized as 1x1 blocks") {
+    // The layout SupCom embeds its two splat weight masks in. Sizing is the
+    // thing to get right: 4 bytes per texel with no 4x4 rounding, so a 16x16
+    // surface is 1024 bytes and its row is 64 — not the 128-byte row a
+    // block-compressed format of the same width would have.
     DdsSpec spec;
-    spec.fourCcFlagSet = false;
+    spec.bgra8 = true;
 
     const auto texture = rm::dds::load(writeDds(spec));
+
+    REQUIRE(texture.has_value());
+    REQUIRE(texture->format == rm::dds::Format::Bgra8);
+    REQUIRE(texture->width == 16);
+    REQUIRE(texture->height == 16);
+    REQUIRE(texture->mipBytesPerRow(0) == 16 * 4);
+    REQUIRE(texture->mipBytes(0) == 16 * 16 * 4);
+    REQUIRE(texture->mip(0).size() == 16 * 16 * 4);
+}
+
+TEST_CASE("a non-square uncompressed surface is not rounded up to blocks") {
+    // 6x3 is the case that separates the two sizings: as 1x1 blocks it is
+    // 6*3*4 = 72 bytes, but rounded to 4x4 blocks it would be 2*1 blocks.
+    DdsSpec spec;
+    spec.bgra8 = true;
+    spec.width = 6;
+    spec.height = 3;
+
+    const auto texture = rm::dds::load(writeDds(spec));
+
+    REQUIRE(texture.has_value());
+    REQUIRE(texture->mipBytesPerRow(0) == 6 * 4);
+    REQUIRE(texture->mipBytes(0) == 6 * 3 * 4);
+}
+
+TEST_CASE("an uncompressed DDS in another channel order is declined") {
+    // BGRA is accepted because it is what SupCom writes and what Metal takes
+    // natively. RGBA is legal DDS and would load as a recoloured image — which
+    // reads as an art bug, not a reader bug — so it is refused instead.
+    DdsSpec spec;
+    spec.bgra8 = true;
+    spec.wrongChannelOrder = true;
+
+    const auto texture = rm::dds::load(writeDds(spec));
+
     REQUIRE_FALSE(texture.has_value());
-    REQUIRE(texture.error().message.find("uncompressed") != std::string::npos);
+    REQUIRE(texture.error().message.find("channel layout") != std::string::npos);
 }
 
 TEST_CASE("an unsupported FOURCC names itself in the error") {
@@ -283,6 +339,7 @@ TEST_CASE("the real BAR texture corpus parses", "[real-model]") {
     std::size_t bc1 = 0;
     std::size_t bc2 = 0;
     std::size_t bc3 = 0;
+    std::size_t bgra8 = 0;
     std::vector<std::string> declined;
 
     for (const auto& path : files) {
@@ -293,9 +350,10 @@ TEST_CASE("the real BAR texture corpus parses", "[real-model]") {
         }
 
         switch (texture->format) {
-            case rm::dds::BlockFormat::Bc1: ++bc1; break;
-            case rm::dds::BlockFormat::Bc2: ++bc2; break;
-            case rm::dds::BlockFormat::Bc3: ++bc3; break;
+            case rm::dds::Format::Bc1: ++bc1; break;
+            case rm::dds::Format::Bc2: ++bc2; break;
+            case rm::dds::Format::Bc3: ++bc3; break;
+            case rm::dds::Format::Bgra8: ++bgra8; break;
         }
 
         // Every declared level must be sliceable — this is the check that fires
@@ -311,7 +369,7 @@ TEST_CASE("the real BAR texture corpus parses", "[real-model]") {
     // optional. Recorded as a proportion rather than a count so a corpus refresh
     // does not fail the test.
     REQUIRE(bc3 > bc1);
-    REQUIRE(bc1 + bc2 + bc3 > files.size() / 2);
+    REQUIRE(bc1 + bc2 + bc3 + bgra8 > files.size() / 2);
 
     // Anything declined should be a genuinely exotic format, not a bulk failure.
     if (declined.size() > files.size() / 10) {
