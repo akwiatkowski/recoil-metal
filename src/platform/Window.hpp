@@ -2,6 +2,7 @@
 
 #include "core/bench/FrameStats.hpp"
 #include "core/map/TerrainType.hpp"
+#include "core/map/GroundSplat.hpp"
 #include "core/map/TileAtlas.hpp"
 #include "core/model/Model.hpp"
 #include "core/scene/UnitBatch.hpp"
@@ -41,6 +42,10 @@ public:
     // See Renderer::setGroundColourMap and Renderer::setWater.
     void setGroundColourMap(const ColourImage& image);
     void setWater(bool enabled, float levelElmos);
+
+    // The Supreme Commander ground splat. See Renderer::setSplat.
+    void setSplat(std::span<const SplatLayer> layers, const dds::Texture& maskA,
+                  const dds::Texture& maskB);
 
     // Units to draw on the terrain. See Renderer::setUnits.
     void setUnits(std::span<const dds::Texture> textures, std::span<const UnitBatch> batches);

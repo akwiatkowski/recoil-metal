@@ -213,3 +213,35 @@ call-with-table sugar, `GROUP { ... }` with no parentheses, so the survey that
 found the other five by grepping for `(` missed it entirely. Campaign maps yield
 zero start positions, correctly — their armies are named for factions and spawned
 by mission script — and the renderer falls back to its scatter.
+
+## ADR-008 — Splat layers bind individually, not as a texture array
+
+**Context.** The staged `.scmap` plan called for the nine ground strata to go
+into a `texture2d_array`, which is the textbook shape for "N textures indexed in
+a shader" and what the S3 plan assumed.
+
+**Decision.** Bind them as nine separate `texture2d<float>` arguments, gathered
+into an MSL `array<texture2d<float>, 9>` at the call site. Thirteen fragment
+textures in total with the two masks and the fallback, far inside what Apple
+silicon allows.
+
+**Alternatives considered.** The planned `texture2d_array` — rejected by the
+corpus. A texture array requires every slice to share one size and one pixel
+format, and across the stock maps the albedo strata come in **eight** distinct
+combinations: 256², 512² and 1024², in BC1, BC2, BC3 and uncompressed BGRA8.
+Fitting them into an array would mean transcoding every stratum to one format and
+rescaling to one size at load, which costs a block encoder, loses mip levels, and
+buys nothing — the binding limit was never the constraint.
+
+**Consequences.** The shader indexes the array dynamically in its blend loop,
+which Apple silicon supports. Adding a tenth layer (the macrotexture) is a
+constant and one more binding. The cost measured 1.952 ms GPU against 0.864 for
+the single-fetch path on Seton's Clutch — eleven texture reads instead of one —
+with the Recoil path unchanged at 0.546 ms CPU.
+
+**Related.** The layers also needed their own *sampler*. The existing one clamps,
+correctly, because the ground atlas and both masks cover the map exactly; a
+stratum tiles every few dozen elmos, so its uv reaches into the hundreds, and
+under clamping every repeat past the first samples the edge texel. That renders
+as a smooth smear — which reads as a missing texture rather than as a wrong
+sampler, and was found by looking at a close-up rather than by any test.

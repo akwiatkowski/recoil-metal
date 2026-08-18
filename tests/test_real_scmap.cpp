@@ -12,6 +12,7 @@
 #include "core/lua/LuaTable.hpp"
 #include "core/map/ScenarioSave.hpp"
 #include "core/map/Scmap.hpp"
+#include "core/texture/Dds.hpp"
 #include "core/mesh/TerrainMesh.hpp"
 
 #include <algorithm>
@@ -397,4 +398,164 @@ TEST_CASE("on skirmish maps the army markers ARE the playable armies") {
     }
 
     REQUIRE(compared >= 50);
+}
+
+// --- the ground splat -------------------------------------------------------
+
+TEST_CASE("every stock map names a base ground layer and ships both masks") {
+    // The splat is a recipe, not an image: without the base layer or either mask
+    // there is nothing to assemble, and the renderer must fall back rather than
+    // draw a plausible-looking wrong thing.
+    const auto maps = corpus();
+    if (maps.empty()) {
+        SKIP("retail Forged Alliance maps not mounted");
+    }
+
+    std::size_t withUpperStrata = 0;
+
+    for (const std::filesystem::path& path : maps) {
+        const auto map = rm::scmap::loadFile(path);
+        if (!map) {
+            continue;  // the oversized ones
+        }
+        INFO("map: " << path.filename().string());
+
+        REQUIRE_FALSE(map->albedo[0].empty());
+        REQUIRE(map->albedo[0].scale > 0.0f);
+        REQUIRE_FALSE(map->maskA.empty());
+        REQUIRE_FALSE(map->maskB.empty());
+
+        // A layer with a path must have a usable tile size; a scale of zero
+        // would divide by zero when the shader builds the layer UV.
+        for (const rm::scmap::TextureRef& layer : map->albedo) {
+            if (!layer.empty()) {
+                REQUIRE(layer.scale > 0.0f);
+            }
+        }
+
+        for (std::size_t i = 5; i <= 8; ++i) {
+            if (!map->albedo[i].empty()) {
+                ++withUpperStrata;
+                break;
+            }
+        }
+    }
+
+    // Mask B is not decoration: without it these maps lose half their strata.
+    REQUIRE(withUpperStrata >= 10);
+}
+
+TEST_CASE("the embedded masks decode as half-resolution BGRA8") {
+    const auto maps = corpus();
+    if (maps.empty()) {
+        SKIP("retail Forged Alliance maps not mounted");
+    }
+
+    for (const std::filesystem::path& path : maps) {
+        const auto map = rm::scmap::loadFile(path);
+        if (!map) {
+            continue;
+        }
+        INFO("map: " << path.filename().string());
+
+        for (const std::vector<std::byte>* blob : {&map->maskA, &map->maskB}) {
+            const auto mask = rm::dds::load(*blob);
+            REQUIRE(mask.has_value());
+            // Uncompressed, and specifically BGRA — the order Metal takes
+            // natively, so the masks upload without a conversion pass.
+            REQUIRE(mask->format == rm::dds::Format::Bgra8);
+            // Half the map's resolution on both axes, on every stock map.
+            REQUIRE(mask->width == map->field.squaresX / 2);
+            REQUIRE(mask->height == map->field.squaresZ / 2);
+        }
+    }
+}
+
+TEST_CASE("the embedded normal map is one DXT5 tile at map resolution") {
+    // Tiling is what a naive parser trips over: every map up to 2048 squares
+    // stores one tile, and only the three 4096-square maps store four. Those
+    // three are refused for size before reaching here, so within what this
+    // renderer loads the count is always one — asserted rather than assumed, so
+    // that the day it is not, this says so.
+    const auto maps = corpus();
+    if (maps.empty()) {
+        SKIP("retail Forged Alliance maps not mounted");
+    }
+
+    for (const std::filesystem::path& path : maps) {
+        const auto map = rm::scmap::loadFile(path);
+        if (!map) {
+            continue;
+        }
+        INFO("map: " << path.filename().string());
+
+        REQUIRE(map->normalMapTiles.size() == 1);
+
+        const auto normals = rm::dds::load(map->normalMapTiles.front());
+        REQUIRE(normals.has_value());
+        REQUIRE(normals->format == rm::dds::Format::Bc3);
+        REQUIRE(normals->width == map->field.squaresX);
+        REQUIRE(normals->height == map->field.squaresZ);
+    }
+}
+
+TEST_CASE("every stratum texture a stock map names is on disk") {
+    // The layer textures are NOT in the map file — they are paths into env.scd,
+    // extracted once (see README). This is the test that catches a map naming
+    // something the extraction missed, which would otherwise show up as one
+    // stratum silently absent from the blend.
+    const auto maps = corpus();
+    if (maps.empty()) {
+        SKIP("retail Forged Alliance maps not mounted");
+    }
+
+    const char* home = std::getenv("HOME");
+    if (home == nullptr) {
+        SKIP("no HOME");
+    }
+    const std::filesystem::path root = std::filesystem::path{home} / "projects/llm/input/faf";
+
+    std::error_code ec;
+    if (!std::filesystem::is_directory(root / "env", ec)) {
+        SKIP("extracted Forged Alliance env textures not present");
+    }
+
+    std::set<std::string> missing;
+    std::size_t checked = 0;
+
+    for (const std::filesystem::path& path : maps) {
+        const auto map = rm::scmap::loadFile(path);
+        if (!map) {
+            continue;
+        }
+
+        for (const rm::scmap::TextureRef& layer : map->albedo) {
+            if (layer.empty()) {
+                continue;
+            }
+            std::string relative = layer.path;
+            if (relative.front() == '/') {
+                relative.erase(0, 1);
+            }
+            if (!std::filesystem::is_regular_file(root / relative, ec)) {
+                missing.insert(layer.path);
+                continue;
+            }
+            // Present is not enough — it has to decode, since a stratum that
+            // fails to load drops out of the blend without an error on screen.
+            const auto texture = rm::dds::loadFile(root / relative);
+            INFO("layer: " << layer.path);
+            REQUIRE(texture.has_value());
+            ++checked;
+        }
+    }
+
+    if (!missing.empty()) {
+        std::string report = std::to_string(missing.size()) + " stratum textures missing:";
+        for (const std::string& name : missing) {
+            report += "\n  " + name;
+        }
+        FAIL(report);
+    }
+    REQUIRE(checked > 300);
 }

@@ -94,10 +94,50 @@ reimplemented.*
    the file's magic, not its extension, so nothing downstream knows which family
    a map came from. **✔ done** — geometry, terrain-type ground colour, and the
    per-map water plane (17 of the 60 stock maps are dry; Recoil's is a fixed
-   plane at y=0). Still to do: the real splat shader — SupCom bakes no ground
-   texture, it blends nine strata through two masks at runtime — and start
-   positions from `_scenario.lua`. Maps above 2048 squares are refused rather
-   than half-loaded: their mesh alone would want ~800 MB and there is no LOD yet.
+   plane at y=0), and start positions.
+
+   Start positions were the surprise: `.scmap` carries none, and neither does
+   the `_scenario.lua` that looks like it should. They live in `<map>_save.lua`
+   as `ARMY_<n>` markers, alongside dozens of transport and mass markers. That
+   file wraps every leaf in a data constructor — `VECTOR3( 672.5, 18.7, 346.5 )`,
+   `GROUP { ... }` — so the Lua reader learned exactly six of them by name, which
+   is data in call syntax rather than an interpreter. All 61 stock `_save.lua`
+   files parse; the 54 skirmish maps yield starts and the 7 campaign maps
+   correctly yield none, because their armies are spawned by mission script.
+
+   **The ground splat, too.** SupCom bakes no ground texture: a `.scmap` names
+   nine tiled layers that live in `env.scd` and embeds only the two masks that
+   weight them, so the ground is assembled every frame from a recipe rather than
+   loaded as a picture. Layer 0 covers the map; layers 1-8 are laid over it in
+   order, weighted per texel by mask A's `rgba` then mask B's — a chain of mixes
+   rather than a weighted sum, since a sum washes out wherever two strata meet.
+   18 of the 57 loadable stock maps use the upper four strata, so mask B is not
+   decoration.
+
+   Three things the corpus decided rather than the plan. The stratum `scale` is
+   **ogrids per texture repeat**, not repeats per map — the stock maps set the
+   macrotexture to 128 on 256- and 2048-square maps alike, which is only sensible
+   as a physical size. The layers are **not** a `texture2d_array` as planned:
+   they come in eight distinct size/format combinations (256²-1024², BC1/BC2/BC3
+   and uncompressed BGRA8), and an array demands one of each, so they bind
+   individually — no transcode, no lost mips. And they need their **own repeating
+   sampler**: the existing one clamps, correctly, because the atlas and both
+   masks cover the map exactly, but a layer's uv reaches into the hundreds and
+   under clamping every repeat past the first samples the edge texel, which
+   renders as a smooth smear that reads as a missing texture rather than a wrong
+   sampler.
+
+   Costs 1.952 ms GPU against 0.864 for the single-fetch path — eleven texture
+   reads instead of one — and leaves the Recoil path untouched at 0.546 ms.
+
+   Deliberately not done: the macrotexture (slot 9) and the shipped per-map DXT5
+   normal map are both parsed and validated but unused, because the operator that
+   combines them is not established anywhere this project has checked. Same call
+   as the `_SpecTeam` green and blue channels in milestone 5c, for the same
+   reason — a guessed operator renders as *shading* rather than as a bug.
+
+   Maps above 2048 squares are still refused rather than half-loaded: their mesh
+   alone would want ~800 MB and there is no LOD yet.
 
 7. **Supreme Commander models and animation.** `.scm` loads into the *same*
    `Model` struct `.s3o` does — validated against all **1148** retail models
@@ -184,6 +224,27 @@ Models are extracted once from the retail install's `units.scd` (a ZIP) into
 `~/projects/llm/input/faf/` — see `tests/test_real_scm.cpp` for the command.
 Textures are found beside the model by Supreme Commander's naming convention
 (`_Albedo`, `_SpecTeam`), since `.scm` names none.
+
+### Ground layer textures
+
+The splat's layers are paths into `env.scd`, another ZIP. Only the layer
+directories are extracted — 402 files and 135 MiB of the archive's 1.15 GiB of
+DDS, of which the stock maps name 184 — so a ZIP reader stays deferred:
+
+```sh
+python3 - <<'PY'
+import zipfile, os
+scd = '/Volumes/Samsung_T5/faf/Supreme Commander Forged Alliance/gamedata/env.scd'
+dest = os.path.expanduser('~/projects/llm/input/faf')
+z = zipfile.ZipFile(scd)
+for n in z.namelist():
+    if n.lower().startswith('env/') and '/layers/' in n.lower() and n.lower().endswith('.dds'):
+        z.extract(n, dest)
+PY
+```
+
+Without them the map still draws: the terrain-type colour bands from milestone 6
+stay loaded as the fallback, and the splat simply does not switch on.
 
 ### Animation
 

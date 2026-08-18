@@ -199,6 +199,11 @@ void Window::setGroundColourMap(const ColourImage& image) {
     impl_->renderer->setGroundColourMap(image);
 }
 
+void Window::setSplat(std::span<const SplatLayer> layers, const dds::Texture& maskA,
+                      const dds::Texture& maskB) {
+    impl_->renderer->setSplat(layers, maskA, maskB);
+}
+
 void Window::setWater(bool enabled, float levelElmos) {
     impl_->renderer->setWater(enabled, levelElmos);
 }

@@ -3,6 +3,7 @@
 #include "core/bench/FrameStats.hpp"
 #include "core/camera/OrbitCamera.hpp"
 #include "core/map/TerrainType.hpp"
+#include "core/map/GroundSplat.hpp"
 #include "core/map/TileAtlas.hpp"
 #include "core/model/Model.hpp"
 #include "core/model/Pose.hpp"
@@ -12,6 +13,7 @@
 #include "core/mesh/TerrainMesh.hpp"
 
 #include <mutex>
+#include <array>
 #include <span>
 #include <vector>
 
@@ -71,6 +73,22 @@ public:
     // colour (core/map/TerrainType.hpp). Same texture slot, same shader; only
     // the pixel format differs, and that lives in the texture object.
     void setGroundColourMap(const ColourImage& image);
+
+    // Uploads the Supreme Commander ground splat: a base layer covering the whole
+    // map with up to eight strata blended over it, weighted per texel by two
+    // masks. This is what a .scmap has instead of a baked ground texture — the
+    // layer textures are not in the map file at all, they are named paths into
+    // the game's archives, and only the masks are embedded.
+    //
+    // Layer 0 is the base; layers 1-8 take their weight from maskA's r,g,b,a then
+    // maskB's r,g,b,a, in that order. Absent layers are skipped rather than
+    // blended as black, because a map that names four strata still ships masks
+    // whose unused channels are not reliably zero.
+    //
+    // Replaces the ground texture set by either setGroundTexture or
+    // setGroundColourMap. An empty layer list clears the splat and falls back.
+    void setSplat(std::span<const SplatLayer> layers, const dds::Texture& maskA,
+                  const dds::Texture& maskB);
 
     // The water plane. Recoil hard-codes it at y = 0 (rts/Map/Ground.h:32),
     // which is the default here; Supreme Commander stores a level per map and 17
@@ -198,6 +216,20 @@ private:
     MTL::RenderPipelineState* waterPipeline_ = nullptr;   // owned
     MTL::Texture* groundTexture_ = nullptr;    // owned, null until setGroundTexture
     MTL::SamplerState* groundSampler_ = nullptr; // owned
+    MTL::SamplerState* splatSampler_ = nullptr;  // owned; repeats, unlike the above
+
+    // The Supreme Commander ground splat. Every layer slot is bound every frame
+    // — an unbound texture in a shader that references one is undefined, so
+    // absent layers hold the same 4x4 fallback groundTexture_ does, and their
+    // weight is forced to zero by the uniforms rather than by what they sample.
+    std::array<MTL::Texture*, kSplatLayers> splatLayers_{};  // owned
+    std::array<float, kSplatLayers> splatTileElmos_{};
+    std::array<float, kSplatLayers> splatPresent_{};
+    MTL::Texture* splatMaskA_ = nullptr;  // owned
+    MTL::Texture* splatMaskB_ = nullptr;  // owned
+    bool splatEnabled_ = false;
+
+    void releaseSplat() noexcept;
 
     MTL::RenderPipelineState* unitPipeline_ = nullptr;  // owned
 

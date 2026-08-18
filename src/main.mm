@@ -181,6 +181,13 @@ struct LoadedMap {
     std::optional<rm::TileAtlas> atlas;       ///< SMF: a baked BC1 ground texture
     std::optional<rm::ColourImage> colours;   ///< .scmap: terrain-type bands
 
+    // .scmap: the ground splat — nine tiled layers plus the two masks that
+    // weight them. Empty when the layer textures are not on disk, in which case
+    // `colours` above still carries the terrain-type placeholder.
+    std::vector<rm::SplatLayer> splat;
+    rm::dds::Texture splatMaskA;
+    rm::dds::Texture splatMaskB;
+
     std::vector<rm::mapinfo::StartPosition> starts;
 
     // Recoil's water is a fixed plane at y = 0 that every map shares; Supreme
@@ -188,6 +195,87 @@ struct LoadedMap {
     bool hasWater = true;
     float waterLevel = 0.0f;
 };
+
+// Where Supreme Commander's ground layer textures live once extracted.
+//
+// A .scmap names its strata as game-relative paths ("/env/Evergreen/Layers/...")
+// into env.scd, a 1.3 GB ZIP. Rather than add a ZIP reader, the 184 textures the
+// stock maps actually reference — 65 MiB of the archive's 1.15 GiB of DDS — are
+// extracted once, mirroring the call the model path already made for units.scd.
+// See README for the extraction command.
+constexpr const char* kFaEnvDir = "projects/llm/input/faf";
+
+/// The decoded ground splat: layers in blend order, plus the two weight masks.
+struct LoadedSplat {
+    std::vector<rm::SplatLayer> layers;
+    rm::dds::Texture maskA;
+    rm::dds::Texture maskB;
+};
+
+/// Resolves a .scmap's stratum table into uploaded-ready textures.
+///
+/// Returns nullopt when the base layer or either mask is missing — a splat
+/// without those would render as something plausible rather than as something
+/// absent, and the terrain-type placeholder is the honest fallback.
+[[nodiscard]] std::optional<LoadedSplat> resolveSplat(const rm::scmap::Map& map) {
+    const char* home = std::getenv("HOME");
+    const std::filesystem::path root =
+        std::filesystem::path{home == nullptr ? "" : home} / kFaEnvDir;
+
+    LoadedSplat splat;
+
+    // Slots 0..8 are the base plus the eight strata, in the order the masks
+    // weight them. Slot 9 is the macrotexture, deliberately left out — see
+    // README on why an operator that is not established is worse than absent.
+    for (std::size_t i = 0; i < rm::kSplatLayers; ++i) {
+        rm::SplatLayer layer;
+
+        const rm::scmap::TextureRef& ref = map.albedo[i];
+        if (!ref.empty()) {
+            // Paths are absolute within the game's virtual filesystem, so the
+            // leading slash has to go before joining or the concatenation
+            // resolves to the real filesystem root.
+            std::string relative = ref.path;
+            if (!relative.empty() && relative.front() == '/') {
+                relative.erase(0, 1);
+            }
+
+            if (auto texture = rm::dds::loadFile(root / relative)) {
+                layer.texture = std::move(*texture);
+                // The file stores ogrids; the renderer works in elmos.
+                layer.tileElmos = ref.scale * rm::scmap::kElmosPerOgrid;
+            } else {
+                std::fprintf(stderr, "  splat layer %zu (%s) unavailable: %s\n", i,
+                             ref.path.c_str(), texture.error().message.c_str());
+            }
+        }
+
+        splat.layers.push_back(std::move(layer));
+    }
+
+    if (!splat.layers.front().present()) {
+        return std::nullopt;
+    }
+
+    const auto maskA = rm::dds::load(map.maskA);
+    const auto maskB = rm::dds::load(map.maskB);
+    if (!maskA || !maskB) {
+        std::fprintf(stderr, "  splat masks did not decode; falling back to terrain-type "
+                             "colouring\n");
+        return std::nullopt;
+    }
+    splat.maskA = *maskA;
+    splat.maskB = *maskB;
+
+    std::size_t used = 0;
+    for (const rm::SplatLayer& layer : splat.layers) {
+        used += layer.present() ? 1 : 0;
+    }
+    std::printf("  splat: %zu of %zu layers, masks %dx%d\n", used, splat.layers.size(),
+                splat.maskA.width, splat.maskA.height);
+
+    return splat;
+}
 
 /// Loads a Supreme Commander `.scmap`.
 ///
@@ -229,6 +317,15 @@ struct LoadedMap {
         std::printf("  ground: %d x %d terrain-type bands (%zu MiB RGBA8)\n", colours.width,
                     colours.height, colours.rgba.size() / (1024 * 1024));
         loaded.colours = std::move(colours);
+    }
+
+    // The ground splat. SupCom bakes no ground image: the map names nine tiled
+    // layers that live in env.scd and embeds only the two masks that weight
+    // them, so this assembles a recipe rather than loading a picture.
+    if (auto splat = resolveSplat(*map)) {
+        loaded.splat = std::move(splat->layers);
+        loaded.splatMaskA = std::move(splat->maskA);
+        loaded.splatMaskB = std::move(splat->maskB);
     }
 
     // Start positions, from the _save.lua beside the map. The .scmap itself
@@ -714,6 +811,12 @@ void applyGround(Target& target, const LoadedMap& map) {
         target.setGroundTexture(*map.atlas);   // SMF: a baked BC1 atlas
     } else if (map.colours) {
         target.setGroundColourMap(*map.colours);  // .scmap: terrain-type bands
+    }
+    // Set after the colour map, not instead of it: the terrain-type bands stay
+    // loaded as the fallback the shader uses whenever the splat is off, so a map
+    // whose layer textures are missing still draws something map-shaped.
+    if (!map.splat.empty()) {
+        target.setSplat(map.splat, map.splatMaskA, map.splatMaskB);
     }
     target.setWater(map.hasWater, map.waterLevel);
 }

@@ -50,16 +50,47 @@ static_assert(offsetof(TerrainUniforms, waterLevel) == 132, "unexpected padding 
 static_assert(offsetof(TerrainUniforms, supremeCommanderShading) == 136,
               "unexpected padding before supremeCommanderShading");
 
+// The splat's constant buffer. Must match `SplatUniforms` in the MSL below.
+//
+// Plain float arrays rather than float4s: MSL lays out a struct in the constant
+// address space with C rules, so `float[9]` is 36 contiguous bytes on both
+// sides. The static_assert is what keeps that claim honest.
+constexpr std::size_t kSplatLayerCount = 9;
+
+struct SplatUniforms {
+    float tileElmos[kSplatLayerCount];
+    float present[kSplatLayerCount];
+    float enabled;
+};
+
+static_assert(sizeof(SplatUniforms) == 76, "SplatUniforms must match the MSL layout");
+static_assert(offsetof(SplatUniforms, present) == 36, "float[9] must pack contiguously");
+static_assert(offsetof(SplatUniforms, enabled) == 72, "unexpected padding before enabled");
+
 // Buffer/texture binding indices, shared between the C++ and MSL sides.
 constexpr NS::UInteger kVertexBufferIndex = 0;
 constexpr NS::UInteger kUniformBufferIndex = 1;
 constexpr NS::UInteger kInstanceBufferIndex = 2;
 constexpr NS::UInteger kBoneBufferIndex = 3;
+// The splat's own constant buffer, kept separate from the shared Uniforms
+// rather than appended to it: Uniforms' layout is pinned by static_asserts that
+// several stages depend on, and growing it to serve one stage would mean
+// re-verifying all of them. Index 2 collides with kInstanceBufferIndex only in
+// spelling — that one is a vertex binding and this is a fragment binding, and
+// the two stages have separate binding spaces.
+constexpr NS::UInteger kSplatUniformBufferIndex = 2;
+
 constexpr NS::UInteger kGroundTextureIndex = 0;
+constexpr NS::UInteger kSplatMaskAIndex = 1;
+constexpr NS::UInteger kSplatMaskBIndex = 2;
+/// The nine layer textures occupy indices 3..11, matching the array in the MSL.
+constexpr NS::UInteger kSplatLayerBaseIndex = 3;
 /// The model shading texture — S3O's tex2, and the same slot Supreme Commander's
 /// `_specTeam` texture will take.
 constexpr NS::UInteger kShadingTextureIndex = 1;
 constexpr NS::UInteger kGroundSamplerIndex = 0;
+/// The repeating sampler the splat layers need — see where it is created.
+constexpr NS::UInteger kSplatSamplerIndex = 1;
 
 // Compiled from source at runtime — there is no Xcode on this machine, hence no
 // offline `metal` compiler. Metal's runtime compiler ships with macOS itself,
@@ -112,10 +143,24 @@ vertex VertexOut terrainVertex(uint vid [[vertex_id]],
     return out;
 }
 
+// The Supreme Commander ground splat. Nine tiled layers, the upper eight
+// weighted per texel by two masks — SupCom bakes no ground image, so this is
+// assembled every frame from textures that live in the game's archives.
+struct SplatUniforms {
+    float tileElmos[9];  ///< ground covered by one repeat of each layer
+    float present[9];    ///< 0 for an unused slot, whose mask channel is unreliable
+    float enabled;
+};
+
 fragment float4 terrainFragment(VertexOut in [[stage_in]],
                                 constant Uniforms& u [[buffer(1)]],
+                                constant SplatUniforms& s [[buffer(2)]],
                                 texture2d<float> ground [[texture(0)]],
-                                sampler groundSampler [[sampler(0)]]) {
+                                texture2d<float> maskA [[texture(1)]],
+                                texture2d<float> maskB [[texture(2)]],
+                                array<texture2d<float>, 9> layers [[texture(3)]],
+                                sampler groundSampler [[sampler(0)]],
+                                sampler splatSampler [[sampler(1)]]) {
     // Interpolating unit normals across a triangle does not preserve length.
     const float3 normal = normalize(in.normal);
 
@@ -123,7 +168,34 @@ fragment float4 terrainFragment(VertexOut in [[stage_in]],
     const float lambert = saturate(dot(normal, u.sunDirection));
 
     float3 albedo;
-    if (u.hasTexture > 0.5) {
+    if (s.enabled > 0.5) {
+        // Layer UVs are WORLD space, not map-normalised: a layer repeats every
+        // tileElmos regardless of how big the map is. The world position is
+        // recovered from the map-normalised uv rather than interpolated
+        // separately, which keeps the vertex format unchanged.
+        const float2 world = float2(in.uv.x * u.mapWidth, in.uv.y * u.mapDepth);
+
+        float3 colour = layers[0].sample(splatSampler, world / s.tileElmos[0]).rgb;
+
+        // The masks are map-wide, so they use the normalised uv. Metal presents
+        // a BGRA8 texture as rgba in the shader — the format describes memory
+        // order, not channel meaning — so no swizzle is needed here.
+        const float4 a = maskA.sample(groundSampler, in.uv);
+        const float4 b = maskB.sample(groundSampler, in.uv);
+        const float weights[8] = {a.r, a.g, a.b, a.a, b.r, b.g, b.b, b.a};
+
+        // Strictly ordered: each stratum is laid over everything beneath it, so
+        // this is a chain of mixes and not a weighted sum. A sum would wash out
+        // wherever two strata overlap, which on these maps is most edges.
+        for (uint i = 0; i < 8; ++i) {
+            const float weight = weights[i] * s.present[i + 1];
+            const float3 layer =
+                layers[i + 1].sample(splatSampler, world / s.tileElmos[i + 1]).rgb;
+            colour = mix(colour, layer, weight);
+        }
+
+        albedo = colour;
+    } else if (u.hasTexture > 0.5) {
         albedo = ground.sample(groundSampler, in.uv).rgb;
     } else {
         // No .smt: fall back to colouring by elevation so relief still reads.
@@ -487,6 +559,20 @@ Renderer::Renderer(CA::MetalLayer* layer)
     samplerDescriptor->setTAddressMode(MTL::SamplerAddressMode::SamplerAddressModeClampToEdge);
     samplerDescriptor->setMaxAnisotropy(8);  // terrain is viewed at grazing angles
     groundSampler_ = device_->newSamplerState(samplerDescriptor);
+
+    // A second sampler that REPEATS, for the splat layers alone.
+    //
+    // The two addressing modes are not a preference, they are a consequence of
+    // what each texture is. The atlas and the two masks cover the map exactly,
+    // so their uv never leaves 0..1 and clamping is right. A splat layer covers
+    // a few dozen elmos and is meant to tile across the whole map, so its uv
+    // reaches into the hundreds — under clamping every texel past the first
+    // repeat samples the texture's edge, which renders as a smooth smear that
+    // looks like a missing texture rather than a wrong sampler.
+    samplerDescriptor->setSAddressMode(MTL::SamplerAddressMode::SamplerAddressModeRepeat);
+    samplerDescriptor->setTAddressMode(MTL::SamplerAddressMode::SamplerAddressModeRepeat);
+    splatSampler_ = device_->newSamplerState(samplerDescriptor);
+
     samplerDescriptor->release();
 
     if (groundSampler_ == nullptr) {
@@ -512,8 +598,10 @@ Renderer::~Renderer() {
     releaseTerrainBuffers();
     releaseUnitBuffers();  // frees the unit textures too
     unitPipeline_->release();
+    releaseSplat();
     if (groundTexture_ != nullptr) groundTexture_->release();
     groundSampler_->release();
+    if (splatSampler_ != nullptr) splatSampler_->release();
     if (depthTexture_ != nullptr) depthTexture_->release();
     waterDepthState_->release();
     depthState_->release();
@@ -768,6 +856,58 @@ void Renderer::setGroundTexture(const TileAtlas& atlas) {
     }
     groundTexture_ = texture;
     hasGroundTexture_ = true;
+}
+
+void Renderer::releaseSplat() noexcept {
+    for (MTL::Texture*& layer : splatLayers_) {
+        if (layer != nullptr) {
+            layer->release();
+            layer = nullptr;
+        }
+    }
+    if (splatMaskA_ != nullptr) {
+        splatMaskA_->release();
+        splatMaskA_ = nullptr;
+    }
+    if (splatMaskB_ != nullptr) {
+        splatMaskB_->release();
+        splatMaskB_ = nullptr;
+    }
+    splatEnabled_ = false;
+}
+
+void Renderer::setSplat(std::span<const SplatLayer> layers, const dds::Texture& maskA,
+                        const dds::Texture& maskB) {
+    releaseSplat();
+
+    // Both masks are required. Without them every stratum weight is undefined
+    // and the map would render as its base layer alone — which looks like a
+    // finished image rather than like a missing one, so refuse instead.
+    if (layers.empty() || maskA.width <= 0 || maskB.width <= 0) {
+        return;
+    }
+
+    splatMaskA_ = uploadTexture(maskA, "splat mask A");
+    splatMaskB_ = uploadTexture(maskB, "splat mask B");
+
+    for (std::size_t i = 0; i < kSplatLayers; ++i) {
+        const bool have = i < layers.size() && layers[i].present();
+
+        // Every slot must be bound: sampling an unbound texture is undefined,
+        // and the shader references all nine unconditionally. Unused slots get
+        // the same 4x4 fallback the ground texture uses, and are weighted to
+        // zero by `present` so what they hold never reaches the image.
+        splatLayers_[i] = have ? uploadTexture(layers[i].texture, "splat layer") : nullptr;
+        splatPresent_[i] = have ? 1.0f : 0.0f;
+
+        // Never zero, even for an absent layer: the shader divides by this to
+        // build the layer UV, and a division by zero would produce NaNs that
+        // survive the multiply by a zero weight.
+        splatTileElmos_[i] = (have && layers[i].tileElmos > 0.0f) ? layers[i].tileElmos : 1.0f;
+    }
+
+    // The base layer is not optional — everything else is laid over it.
+    splatEnabled_ = splatPresent_[0] > 0.5f;
 }
 
 void Renderer::setGroundColourMap(const ColourImage& image) {
@@ -1083,6 +1223,26 @@ void Renderer::encodeScene(MTL::RenderCommandEncoder* encoder, unsigned int widt
         encoder->setFragmentBytes(&uniforms, sizeof(uniforms), kUniformBufferIndex);
         encoder->setFragmentTexture(groundTexture_, kGroundTextureIndex);
         encoder->setFragmentSamplerState(groundSampler_, kGroundSamplerIndex);
+        encoder->setFragmentSamplerState(splatSampler_, kSplatSamplerIndex);
+
+        // The splat. Every slot is bound whether or not the map uses one,
+        // because the fragment shader names all nine layers and both masks
+        // unconditionally, and sampling an unbound texture is undefined even
+        // when the result is multiplied away.
+        SplatUniforms splat{};
+        splat.enabled = splatEnabled_ ? 1.0f : 0.0f;
+        for (std::size_t i = 0; i < kSplatLayers; ++i) {
+            splat.tileElmos[i] = splatTileElmos_[i];
+            splat.present[i] = splatPresent_[i];
+            encoder->setFragmentTexture(
+                splatLayers_[i] != nullptr ? splatLayers_[i] : groundTexture_,
+                kSplatLayerBaseIndex + static_cast<NS::UInteger>(i));
+        }
+        encoder->setFragmentTexture(splatMaskA_ != nullptr ? splatMaskA_ : groundTexture_,
+                                    kSplatMaskAIndex);
+        encoder->setFragmentTexture(splatMaskB_ != nullptr ? splatMaskB_ : groundTexture_,
+                                    kSplatMaskBIndex);
+        encoder->setFragmentBytes(&splat, sizeof(splat), kSplatUniformBufferIndex);
 
         encoder->drawIndexedPrimitives(MTL::PrimitiveType::PrimitiveTypeTriangle,
                                        static_cast<NS::UInteger>(indexCount_),

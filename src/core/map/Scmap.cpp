@@ -68,6 +68,19 @@ public:
         }
     }
 
+    /// The same, keeping the text.
+    [[nodiscard]] std::string cstring() {
+        std::string text;
+        while (ok_) {
+            const std::uint8_t c = u8();
+            if (c == 0) {
+                break;
+            }
+            text.push_back(static_cast<char>(c));
+        }
+        return text;
+    }
+
     /// uint32-length-prefixed, not NUL-terminated (decal paths only).
     void skipLengthString() noexcept {
         const std::int32_t length = i32();
@@ -81,6 +94,14 @@ public:
         const std::int32_t length = i32();
         if (length < 0) { ok_ = false; return; }
         skip(static_cast<std::size_t>(length));
+    }
+
+    /// The same, keeping the bytes.
+    [[nodiscard]] std::vector<std::byte> sizedBlock() {
+        const std::int32_t length = i32();
+        if (length < 0) { ok_ = false; return {}; }
+        const std::span<const std::byte> view = raw(static_cast<std::size_t>(length));
+        return std::vector<std::byte>{view.begin(), view.end()};
     }
 
     /// A view of the next n bytes, advancing past them.
@@ -103,11 +124,12 @@ private:
 
 /// Reads the sections between the heightmap and the terrain-type array.
 ///
-/// None of it is used for rendering yet, but all of it must be walked exactly:
-/// the terrain-type array sits behind every one of these, and the whole point of
-/// a sequential reader is that there is no offset to jump to. Field widths are
-/// from docs/recoil-metal/scmap-v60-format.md, validated to EOF on 60 maps.
-void skipToTerrainType(Cursor& cursor, bool& hasWater, float& waterElevation) {
+/// Most of it is still walked rather than kept, but all of it must be walked
+/// exactly: the terrain-type array sits behind every one of these, and the whole
+/// point of a sequential reader is that there is no offset to jump to. Field
+/// widths are from docs/recoil-metal/scmap-v60-format.md, validated to EOF on 60
+/// maps.
+void readToTerrainType(Cursor& cursor, rm::scmap::Map& map) {
     // --- shader name and environment paths ---------------------------------
     (void)cursor.u8();  // one unexplained byte, 0 on every map checked
     cursor.skipCString();  // shader
@@ -124,8 +146,8 @@ void skipToTerrainType(Cursor& cursor, bool& hasWater, float& waterElevation) {
     cursor.skipFloats(1 + 3 + 3 + 3 + 3 + 4 + 1 + 3 + 1 + 1);
 
     // --- water block -------------------------------------------------------
-    hasWater = cursor.u8() != 0;
-    waterElevation = cursor.f32() * rm::scmap::kElmosPerOgrid;
+    map.hasWater = cursor.u8() != 0;
+    map.waterElevation = cursor.f32() * rm::scmap::kElmosPerOgrid;
     cursor.skipFloats(2);  // elevation deep, elevation abyss
     // surface colour (3), colour lerp (2), refraction scale, fresnel bias and
     // power, unit and sky reflection, sun shininess/strength, sun direction (3),
@@ -162,13 +184,13 @@ void skipToTerrainType(Cursor& cursor, bool& hasWater, float& waterElevation) {
     // Fixed-length, NOT count-prefixed: always 10 albedo entries (base + 8
     // strata + macrotexture) then 9 normal entries. Unused slots hold an empty
     // string and a float, so all 19 must be read.
-    for (int i = 0; i < 10 && cursor.ok(); ++i) {
-        cursor.skipCString();
-        cursor.skipFloats(1);
+    for (std::size_t i = 0; i < rm::scmap::kAlbedoSlots && cursor.ok(); ++i) {
+        map.albedo[i].path = cursor.cstring();
+        map.albedo[i].scale = cursor.f32();
     }
-    for (int i = 0; i < 9 && cursor.ok(); ++i) {
-        cursor.skipCString();
-        cursor.skipFloats(1);
+    for (std::size_t i = 0; i < rm::scmap::kNormalSlots && cursor.ok(); ++i) {
+        map.normals[i].path = cursor.cstring();
+        map.normals[i].scale = cursor.f32();
     }
     cursor.skip(8);  // two unidentified int32s
 
@@ -197,10 +219,10 @@ void skipToTerrainType(Cursor& cursor, bool& hasWater, float& waterElevation) {
     // TILED: the three 4096-square maps store four 2048 tiles here and every
     // other size stores one. That single count is what a naive parser trips on.
     for (std::int32_t i = 0, n = cursor.i32(); cursor.ok() && i < n; ++i) {
-        cursor.skipSizedBlock();
+        map.normalMapTiles.push_back(cursor.sizedBlock());
     }
-    cursor.skipSizedBlock();  // texture mask A, strata 1-4
-    cursor.skipSizedBlock();  // texture mask B, strata 5-8
+    map.maskA = cursor.sizedBlock();  // strata 1-4
+    map.maskB = cursor.sizedBlock();  // strata 5-8
     cursor.skip(4);           // an int32 that is 1 on all 60 maps
     cursor.skipSizedBlock();  // water map — present even on maps with no water
 }
@@ -298,7 +320,7 @@ std::expected<Map, MapError> load(std::span<const std::byte> bytes) {
     }
 
     // --- everything between, walked exactly --------------------------------
-    skipToTerrainType(cursor, map.hasWater, map.waterElevation);
+    readToTerrainType(cursor, map);
 
     // Three uint8 masks at half resolution: foam, flatness, depth bias.
     const auto halfX = static_cast<std::size_t>(squaresX / 2);

@@ -3,11 +3,13 @@
 #include "core/Error.hpp"
 #include "core/map/HeightField.hpp"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <expected>
 #include <filesystem>
 #include <span>
+#include <string>
 #include <vector>
 
 namespace rm::scmap {
@@ -35,6 +37,28 @@ inline constexpr float kElmosPerOgrid = 8.0f;
 // ≤201 MB. Refusing loudly beats an allocation failure three layers down.
 inline constexpr int kMaxSquares = 2048;
 
+// One entry of the stratum table: where the texture lives and how often it
+// repeats across the map.
+//
+// Unused slots hold an empty path and a scale, which is why the table must be
+// read in full rather than stopped at the first blank.
+struct TextureRef {
+    std::string path;      ///< game-relative, e.g. "/env/Evergreen/Layers/Sand01_albedo.dds"
+    float scale = 0.0f;
+
+    [[nodiscard]] bool empty() const noexcept { return path.empty(); }
+};
+
+// Slot counts, fixed by the format rather than counted in the file.
+//
+// Ten albedo entries: [0] is the base layer that covers the whole map, [1..8]
+// are the strata blended over it by the two weight masks, and [9] is the
+// macrotexture laid over everything. Nine normal entries, one per layer bar the
+// macrotexture.
+inline constexpr std::size_t kAlbedoSlots = 10;
+inline constexpr std::size_t kNormalSlots = 9;
+inline constexpr std::size_t kStrataSlots = 8;
+
 // A decoded Supreme Commander map.
 //
 // The heightmap lands in the same format-agnostic HeightField the SMF loader
@@ -42,6 +66,26 @@ inline constexpr int kMaxSquares = 2048;
 // Everything else here is what SMF has no counterpart for.
 struct Map {
     HeightField field;
+
+    // --- ground shading ----------------------------------------------------
+    //
+    // SMF bakes its ground into a tile atlas; Supreme Commander bakes nothing
+    // and blends nine tiled layers at runtime through two weight masks. So
+    // where the SMF path gets a finished image, this path gets a recipe: the
+    // layer textures live outside the map file entirely (in env.scd), and only
+    // the masks are embedded.
+    std::array<TextureRef, kAlbedoSlots> albedo;
+    std::array<TextureRef, kNormalSlots> normals;
+
+    // Embedded DDS blobs, kept as raw file bytes — header included — so the DDS
+    // reader parses them exactly as it parses one off disk.
+    //
+    // The normal map is TILED: one tile for every map up to 2048 squares, and
+    // four for the three 4096-square maps. That single count is what a naive
+    // parser trips over on the big maps.
+    std::vector<std::vector<std::byte>> normalMapTiles;  ///< DXT5
+    std::vector<std::byte> maskA;  ///< BGRA8, strata 1-4 in r,g,b,a
+    std::vector<std::byte> maskB;  ///< BGRA8, strata 5-8 in r,g,b,a
 
     // Terrain type, one byte per square at full map resolution. Undocumented
     // semantically — the engine uses it for movement and effects — but it is
