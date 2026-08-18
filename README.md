@@ -68,7 +68,7 @@ reimplemented.*
    against a terrain draw, not the same work through two APIs. Enough headroom
    to justify continuing, which is what this milestone existed to decide.
 5. **Units — Recoil content first.** `.s3o` loading, piece hierarchy, instanced
-   rendering, DDS textures. **← current** — models render on the terrain:
+   rendering, DDS textures. **✔ done** — models render on the terrain:
    validated against all **2034** BAR `.s3o` models and **2552** `.dds`
    textures, placed at map start positions plus a deterministic scatter.
    800 instances of a 3980-triangle model costs 2.29 ms/frame (436 fps)
