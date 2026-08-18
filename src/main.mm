@@ -15,6 +15,7 @@
 #include "core/scene/Picking.hpp"
 #include "core/scene/UnitPlacement.hpp"
 #include "core/sim/Movement.hpp"
+#include "core/sim/Pathfinding.hpp"
 #include "core/texture/Dds.hpp"
 #include "core/map/TileAtlas.hpp"
 #include "core/mesh/TerrainMesh.hpp"
@@ -890,11 +891,33 @@ struct MarchOptions {
     return options;
 }
 
+/// Sends one unit to a world position, routed around whatever is in the way.
+///
+/// Falls back to nothing rather than to a straight line when no route exists:
+/// walking into a cliff because the search failed is worse than standing still,
+/// and standing still is at least legible as "it cannot get there".
+[[nodiscard]] bool orderRouted(rm::sim::MoveState& state, const rm::UnitInstance& unit,
+                               const rm::sim::PassabilityGrid& grid, float toX, float toZ) {
+    const auto path = rm::sim::findPath(grid, unit.position[0], unit.position[2], toX, toZ);
+    if (path.empty()) {
+        return false;
+    }
+    rm::sim::orderAlongPath(state, path);
+    return true;
+}
+
 /// Orders every unit in the scene to a point, and runs the sim for a while.
-void march(UnitScene& scene, const rm::HeightField& field, const MarchOptions& options) {
+void march(UnitScene& scene, const rm::HeightField& field,
+           const rm::sim::PassabilityGrid& grid, const MarchOptions& options) {
+    std::size_t routed = 0;
+    std::size_t total = 0;
     for (std::size_t batch = 0; batch < scene.motion.size(); ++batch) {
-        for (rm::sim::MoveState& state : scene.motion[batch]) {
-            rm::sim::orderTo(state, field, options.x, options.z);
+        for (std::size_t i = 0; i < scene.motion[batch].size(); ++i) {
+            ++total;
+            if (orderRouted(scene.motion[batch][i], scene.instances[batch][i], grid, options.x,
+                            options.z)) {
+                ++routed;
+            }
         }
     }
 
@@ -919,8 +942,12 @@ void march(UnitScene& scene, const rm::HeightField& field, const MarchOptions& o
         scene.batches[batch].animationDrivenByInstance = true;
     }
 
-    std::printf("march: every unit ordered to (%.0f, %.0f), %d ticks simulated\n",
-                static_cast<double>(options.x), static_cast<double>(options.z), ticks);
+    // Saying how many found a route matters on a map like aw04, where most
+    // units are on islands: a unit that cannot walk there stays put, and
+    // without this line that reads as the sim being broken.
+    std::printf("march: %zu of %zu units routed to (%.0f, %.0f), %d ticks simulated\n",
+                routed, total, static_cast<double>(options.x), static_cast<double>(options.z),
+                ticks);
 }
 
 /// Whether `--focus` was given: frame the first instance instead of the map.
@@ -1167,9 +1194,23 @@ int main(int argc, const char* argv[]) {
         // Before anything is uploaded: setUnits seeds every ring slot from the
         // instances as they stand, so a marched scene is correct even on the
         // paths that never push an instance update.
+        // Where a ground unit may stand. Built once: it depends only on the
+        // terrain and the water level, neither of which changes.
+        const rm::sim::PassabilityGrid passability = rm::sim::buildPassability(
+            map->field, map->hasWater ? map->waterLevel : 0.0f);
+        std::printf("passability: %d x %d cells of %.0f elmos, %zu%% walkable\n",
+                    passability.cellsX, passability.cellsZ,
+                    static_cast<double>(passability.elmosPerCell),
+                    passability.passable.empty()
+                        ? 0u
+                        : 100u * static_cast<std::size_t>(std::count(passability.passable.begin(),
+                                                                     passability.passable.end(),
+                                                                     std::uint8_t{1}))
+                              / passability.passable.size());
+
         const MarchOptions marchOptions = parseMarch(argc, argv);
         if (marchOptions.enabled) {
-            march(units, map->field, marchOptions);
+            march(units, map->field, passability, marchOptions);
         }
 
         const rm::TerrainMesh mesh = rm::buildTerrainMesh(map->field);
@@ -1283,8 +1324,11 @@ int main(int argc, const char* argv[]) {
                 return;  // clicked the sky, or past the edge of the map
             }
 
-            rm::sim::orderTo(units.motion[selected->batch][selected->instance], map->field,
-                             ground->x, ground->z);
+            if (!orderRouted(units.motion[selected->batch][selected->instance],
+                             units.instances[selected->batch][selected->instance], passability,
+                             ground->x, ground->z)) {
+                std::printf("no route there\n");
+            }
         });
 
         // --- The frame loop ------------------------------------------------

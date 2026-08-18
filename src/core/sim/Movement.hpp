@@ -3,7 +3,10 @@
 #include "core/map/HeightField.hpp"
 #include "core/scene/UnitPlacement.hpp"
 
+#include <array>
+#include <cstddef>
 #include <span>
+#include <vector>
 
 namespace rm::sim {
 
@@ -78,7 +81,33 @@ struct MoveState {
     // the spawn is not the distance walked: a unit that goes out and comes back
     // has covered twice what its displacement says.
     float distanceTravelledElmos = 0.0f;
+
+    // The route still to walk, as world (x, z) waypoints, and how far along it
+    // the unit is. Empty for a unit heading straight at a point.
+    //
+    // Held per unit rather than shared because two units ordered to the same
+    // place start from different corners of the map. A vector per unit is
+    // cheap here — this never reaches the GPU, and the instance data that does
+    // stays exactly as tightly packed as it was.
+    std::vector<std::array<float, 2>> path;
+    std::size_t pathIndex = 0;
 };
+
+/// Sends a unit along a route, aiming it at the first waypoint.
+///
+/// An empty path stops the unit rather than leaving it heading wherever it was:
+/// "no route exists" and "walk to where you already are" are the same answer,
+/// and both mean stay put.
+void orderAlongPath(MoveState& state, std::span<const std::array<float, 2>> path);
+
+/// How close counts as reaching an intermediate waypoint, in elmos.
+///
+/// Far looser than arriving: a waypoint is a hint about which way to go, not a
+/// place to stand. Half a pathfinding cell lets a unit round a corner in a
+/// smooth arc instead of driving to each cell centre and pivoting there, and it
+/// costs nothing in accuracy because the FINAL waypoint still uses the tight
+/// radius.
+inline constexpr float kWaypointRadiusElmos = 32.0f;
 
 /// Orders a unit to a world position, clamped onto the map.
 ///

@@ -404,3 +404,59 @@ TEST_CASE("a unit accumulates the ground distance it has covered") {
         }
     }
 }
+
+TEST_CASE("a unit walks a path waypoint by waypoint") {
+    const HeightField field = flatField();
+    std::vector<UnitInstance> instances{unitAt(50.0f, 50.0f)};
+    std::vector<MoveState> motion{MoveState{}};
+
+    // An L: due +Z, then due +X. A unit that ignored the corner and cut
+    // straight to the end would arrive too, so the corner is what is checked.
+    const std::vector<std::array<float, 2>> path{
+        {{50.0f, 400.0f}}, {{400.0f, 400.0f}},
+    };
+    rm::sim::orderAlongPath(motion[0], path);
+
+    REQUIRE(motion[0].moving);
+
+    // Partway through it should be near the corner, not on the diagonal.
+    run(instances, motion, field, 2 * rm::sim::kTicksPerSecond);
+    CHECK(instances[0].position[0] < 150.0f);
+    CHECK(instances[0].position[2] > 150.0f);
+
+    run(instances, motion, field, 10 * rm::sim::kTicksPerSecond);
+    CHECK_FALSE(motion[0].moving);
+    CHECK(instances[0].position[0] == Approx(400.0f).margin(rm::sim::kArrivalRadiusElmos));
+    CHECK(instances[0].position[2] == Approx(400.0f).margin(rm::sim::kArrivalRadiusElmos));
+}
+
+TEST_CASE("an empty path leaves a unit where it stands") {
+    const HeightField field = flatField();
+    std::vector<UnitInstance> instances{unitAt(100.0f, 100.0f)};
+    std::vector<MoveState> motion{MoveState{}};
+
+    rm::sim::orderAlongPath(motion[0], {});
+
+    CHECK_FALSE(motion[0].moving);
+    run(instances, motion, field, 60);
+    CHECK(instances[0].position[0] == Approx(100.0f));
+    CHECK(instances[0].position[2] == Approx(100.0f));
+}
+
+TEST_CASE("a new order abandons the path it was following") {
+    const HeightField field = flatField();
+    std::vector<UnitInstance> instances{unitAt(50.0f, 50.0f)};
+    std::vector<MoveState> motion{MoveState{}};
+
+    const std::vector<std::array<float, 2>> path{{{50.0f, 700.0f}}, {{700.0f, 700.0f}}};
+    rm::sim::orderAlongPath(motion[0], path);
+    run(instances, motion, field, 10);
+
+    // A plain order must clear the route, or the unit resumes the old one after
+    // reaching the new destination.
+    rm::sim::orderTo(motion[0], field, 50.0f, 60.0f);
+    run(instances, motion, field, 4 * rm::sim::kTicksPerSecond);
+
+    CHECK_FALSE(motion[0].moving);
+    CHECK(instances[0].position[2] < 120.0f);
+}

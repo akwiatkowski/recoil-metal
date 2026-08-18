@@ -31,6 +31,25 @@ void orderTo(MoveState& state, const HeightField& field, float x, float z) noexc
     state.destinationX = std::clamp(x, 0.0f, field.widthElmos());
     state.destinationZ = std::clamp(z, 0.0f, field.depthElmos());
     state.moving = true;
+
+    // A direct order supersedes a route. Without this the unit would reach the
+    // new destination and then carry on with whatever it was doing before.
+    state.path.clear();
+    state.pathIndex = 0;
+}
+
+void orderAlongPath(MoveState& state, std::span<const std::array<float, 2>> path) {
+    state.path.assign(path.begin(), path.end());
+    state.pathIndex = 0;
+
+    if (state.path.empty()) {
+        state.moving = false;
+        return;
+    }
+
+    state.destinationX = state.path.front()[0];
+    state.destinationZ = state.path.front()[1];
+    state.moving = true;
 }
 
 void tick(std::span<UnitInstance> instances, std::span<MoveState> motion,
@@ -49,13 +68,29 @@ void tick(std::span<UnitInstance> instances, std::span<MoveState> motion,
         const float dz = state.destinationZ - unit.position[2];
         const float distance = std::hypot(dx, dz);
 
-        // Arrived. The threshold is the arrival radius or one tick of travel,
-        // whichever is larger: a unit fast enough to cross the radius in a
-        // single tick would otherwise step past the goal, turn round, step past
-        // it again, and jitter there for the rest of the game.
+        // Reached this waypoint. The threshold is the radius or one tick of
+        // travel, whichever is larger: a unit fast enough to cross the radius in
+        // a single tick would otherwise step past, turn round, step past again,
+        // and jitter there for the rest of the game.
+        //
+        // An intermediate waypoint uses the loose radius, so a unit rounds a
+        // corner rather than driving into each cell centre; the last one uses
+        // the tight radius, because that is where it was actually sent.
+        const bool onFinalWaypoint = state.pathIndex + 1 >= state.path.size();
+        const float radius = onFinalWaypoint ? kArrivalRadiusElmos : kWaypointRadiusElmos;
         const float travel = state.speedElmosPerSecond * kTickSeconds;
-        if (distance <= std::max(kArrivalRadiusElmos, travel)) {
+
+        if (distance <= std::max(radius, travel)) {
+            if (!onFinalWaypoint) {
+                ++state.pathIndex;
+                state.destinationX = state.path[state.pathIndex][0];
+                state.destinationZ = state.path[state.pathIndex][1];
+                continue;  // aim at the next one on the following tick
+            }
+
             state.moving = false;
+            state.path.clear();
+            state.pathIndex = 0;
             continue;
         }
 
