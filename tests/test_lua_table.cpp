@@ -134,6 +134,123 @@ TEST_CASE("a function call is refused") {
     REQUIRE_FALSE(root.has_value());
 }
 
+// --- Supreme Commander data constructors -----------------------------------
+//
+// `<map>_save.lua` wraps every leaf in one of five constructors. They are data,
+// not computation — each takes literal arguments and returns them — so reading
+// them keeps the "data, not programs" line rather than crossing it. Anything
+// outside the closed set is still refused, which is what the last case here
+// defends.
+
+TEST_CASE("the scalar data constructors unwrap to their argument") {
+    const auto root = rm::lua::parseTable(R"(
+        Scenario = {
+            colour = STRING( 'ff800080' ),
+            radius = FLOAT( 70.000000 ),
+            hidden = BOOLEAN( true ),
+        }
+    )");
+
+    REQUIRE(root.has_value());
+    REQUIRE(root->stringAt("colour") == "ff800080");
+    REQUIRE(root->numberAt("radius") == Approx(70.0));
+    REQUIRE(root->find("hidden")->asBoolean() == true);
+}
+
+TEST_CASE("VECTOR3 and RECTANGLE become positional tables") {
+    const auto root = rm::lua::parseTable(R"(
+        Scenario = {
+            position = VECTOR3( 672.5, 18.6797, 346.5 ),
+            area = RECTANGLE( 4, 120, 508, 396 ),
+        }
+    )");
+
+    REQUIRE(root.has_value());
+
+    const Value* position = root->find("position");
+    REQUIRE(position != nullptr);
+    REQUIRE(position->isTable());
+    REQUIRE(position->items.size() == 3);
+    REQUIRE(position->items[0].asNumber() == Approx(672.5));
+    REQUIRE(position->items[1].asNumber() == Approx(18.6797));
+    REQUIRE(position->items[2].asNumber() == Approx(346.5));
+
+    const Value* area = root->find("area");
+    REQUIRE(area != nullptr);
+    REQUIRE(area->items.size() == 4);
+    REQUIRE(area->items[3].asNumber() == Approx(396.0));
+}
+
+TEST_CASE("a data constructor given the wrong argument type is refused") {
+    // STRING( 3 ) would mean the format is not what this reader believes it is.
+    // Coercing it to "3" would hide that; the house rule is to be loud.
+    const auto root = rm::lua::parseTable("Scenario = { colour = STRING( 3 ) }");
+
+    REQUIRE_FALSE(root.has_value());
+    REQUIRE(root.error().message.find("STRING") != std::string::npos);
+}
+
+TEST_CASE("a data constructor given the wrong number of arguments is refused") {
+    const auto root = rm::lua::parseTable("Scenario = { position = VECTOR3( 1, 2 ) }");
+
+    REQUIRE_FALSE(root.has_value());
+    REQUIRE(root.error().message.find("VECTOR3") != std::string::npos);
+}
+
+TEST_CASE("GROUP uses Lua's call-with-table sugar and yields the table") {
+    // `f{...}` is `f({...})` — no parentheses, which is exactly why a survey of
+    // "identifier followed by (" misses this one. It cost a corpus run to find.
+    const auto root = rm::lua::parseTable(R"(
+        Scenario = {
+            ['Units'] = GROUP {
+                orders = '',
+                Units = {
+                    ['INITIAL'] = GROUP { orders = 'hold' },
+                },
+            },
+        }
+    )");
+
+    REQUIRE(root.has_value());
+
+    const Value* units = root->find("Units");
+    REQUIRE(units != nullptr);
+    REQUIRE(units->isTable());
+    REQUIRE(units->stringAt("orders") == "");
+
+    // Nested, because the real files nest them.
+    REQUIRE(units->path("Units", "INITIAL", "orders") != nullptr);
+    REQUIRE(units->path("Units", "INITIAL")->stringAt("orders") == "hold");
+}
+
+TEST_CASE("the table-call sugar is not granted to every identifier") {
+    // GROUP is allowed this spelling; nothing else is, or the reader would
+    // silently accept `SomeFunction { ... }` as data.
+    const auto root = rm::lua::parseTable("Scenario = { x = Helper { a = 1 } }");
+
+    REQUIRE_FALSE(root.has_value());
+    REQUIRE(root.error().message.find("requires evaluation") != std::string::npos);
+}
+
+TEST_CASE("a call outside the closed set is still refused") {
+    // The allow-list must not become a general "identifier followed by (" rule.
+    const auto root = rm::lua::parseTable("Scenario = { x = GetTerrainHeight( 4, 4 ) }");
+
+    REQUIRE_FALSE(root.has_value());
+    REQUIRE(root.error().message.find("requires evaluation") != std::string::npos);
+}
+
+TEST_CASE("constructor arguments may themselves be nested data") {
+    // Not seen in the stock corpus, but the recursion falls out of parseValue
+    // and pinning it down costs one case.
+    const auto root =
+        rm::lua::parseTable("Scenario = { v = VECTOR3( 1, 2, 3 ), s = STRING( 'a\\nb' ) }");
+
+    REQUIRE(root.has_value());
+    REQUIRE(root->find("v")->items.size() == 3);
+    REQUIRE(root->stringAt("s") == "a\nb");
+}
+
 TEST_CASE("an unterminated table is an error, not a partial result") {
     const auto root = rm::lua::parseTable("local t = { a = 1, b = 2");
 

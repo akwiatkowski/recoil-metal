@@ -58,6 +58,7 @@ add_library(rm_core STATIC
     src/core/map/ProceduralField.cpp
     src/core/map/Smf.cpp
     src/core/map/Scmap.cpp
+    src/core/map/ScenarioSave.cpp
     src/core/map/TerrainType.cpp
     src/core/mesh/TerrainMesh.cpp
     src/core/camera/OrbitCamera.cpp
@@ -118,6 +119,7 @@ if(BUILD_TESTING)
         tests/test_real_map.cpp
         tests/test_terrain_type.cpp
         tests/test_real_scmap.cpp
+        tests/test_scenario_save.cpp
         tests/support/SmfWriter.cpp
         tests/support/S3oWriter.cpp)
     # tests/ on the include path so fixtures resolve as "support/SmfWriter.hpp",

@@ -179,3 +179,37 @@ own 30 Hz keys instead of interpolating per display frame; interpolating would
 cost CPU work every frame to invent detail the file does not contain. Every
 instance in a batch shares one clock: enough to see an animation run, and far
 short of per-unit state, which belongs with a sim.
+
+## ADR-007 — Start positions come from `_save.lua`, and the Lua reader learns six data constructors
+
+**Context.** `.scmap` carries no start positions. The obvious companion file,
+`<map>_scenario.lua`, carries none either — it names the armies and groups them
+into teams, and that is all. The coordinates are in `<map>_save.lua`, under
+`Scenario.MasterChain._MASTERCHAIN_.Markers`, as markers keyed `ARMY_<n>` mixed
+in with dozens of transport, rally and mass markers. That file wraps every leaf
+in a constructor call — `VECTOR3( 672.5, 18.7, 346.5 )`, `STRING( 'ff800080' )`,
+`GROUP { ... }` — and `core/lua/LuaTable.hpp` exists precisely to refuse calls.
+
+**Decision.** Read `_save.lua`, and teach the Lua reader exactly six constructors
+by name: `STRING`, `FLOAT`, `BOOLEAN`, `VECTOR3`, `RECTANGLE`, `GROUP`. Each
+takes literal arguments and hands them back, so they are data written in call
+syntax rather than computation, and reading them holds the file's stated line
+instead of crossing it. Every other call is refused exactly as before, as are
+wrong argument counts and wrong argument types. The set is closed by evidence:
+those six are the only calls appearing anywhere in the 61 stock maps' `_save.lua`,
+which the corpus tests recheck.
+
+**Alternatives considered.** Reading `_scenario.lua` as well, to learn which
+armies are playable — rejected on measurement: many stock maps declare an extra
+`ARMY_9 NEUTRAL_CIVILIAN`, and it has no marker on any of them, so the marker set
+already *is* the playable set. Asserted in the corpus tests rather than assumed.
+A regex or ad-hoc scan for `ARMY_<n>` positions — rejected as exactly the
+guess-the-format habit the sequential readers exist to avoid. Embedding a real
+Lua interpreter — still a dependency this repo does not want.
+
+**Consequences.** The reader is now slightly more than a table-literal parser, and
+the header says so. `GROUP` cost a corpus run to find: it is spelled with Lua's
+call-with-table sugar, `GROUP { ... }` with no parentheses, so the survey that
+found the other five by grepping for `(` missed it entirely. Campaign maps yield
+zero start positions, correctly — their armies are named for factions and spawned
+by mission script — and the renderer falls back to its scatter.

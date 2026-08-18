@@ -25,12 +25,22 @@ struct ParseError {
 // positional entries, `[key] =` entries, and both `,` and `;` separators.
 //
 // It does NOT evaluate anything: no arithmetic, no concatenation, no variables,
-// no function calls, no `VFS.DirList` merge hooks. A mapinfo.lua that *computes*
-// a value gets a ParseError rather than a guess, and callers fall back to
-// whatever the binary header said. That is the honest failure mode; embedding a
-// real Lua interpreter would be a dependency this repo does not want, and
-// guessing at computed values would reintroduce exactly the silent-wrongness
-// bug that motivated reading mapinfo.lua in the first place.
+// no `VFS.DirList` merge hooks. A mapinfo.lua that *computes* a value gets a
+// ParseError rather than a guess, and callers fall back to whatever the binary
+// header said. That is the honest failure mode; embedding a real Lua interpreter
+// would be a dependency this repo does not want, and guessing at computed values
+// would reintroduce exactly the silent-wrongness bug that motivated reading
+// mapinfo.lua in the first place.
+//
+// THE ONE EXCEPTION, and why it is not a hole in the rule. Supreme Commander's
+// map files wrap every leaf in a *data constructor* — `VECTOR3( 1, 2, 3 )`,
+// `STRING( 'x' )`, `GROUP { ... }` — which take literal arguments and hand them
+// straight back. Those are data written in call syntax, not computation, so
+// this reader evaluates exactly six of them by name and refuses every other
+// call as before. The set is closed by evidence rather than by taste: they are
+// the only calls appearing anywhere in the 61 stock maps' _save.lua, which the
+// corpus tests re-check. Wrong argument counts and wrong argument types are
+// errors too, so a file that disagrees with this reader says so.
 //
 // Bracketed numeric keys are stored under their decimal spelling, so `[0]` and
 // `["0"]` collide. Harmless for map metadata; noted rather than hidden.

@@ -32,6 +32,107 @@ public:
     }
 
 private:
+    // Supreme Commander's map files wrap every leaf in a constructor:
+    //
+    //     ['position'] = VECTOR3( 672.5, 18.6797, 346.5 ),
+    //     ['color'] = STRING( 'ff800080' ),
+    //
+    // These are data, not computation — each takes literal arguments and hands
+    // them straight back — so reading them holds the line this file draws
+    // (LuaTable.hpp) rather than crossing it. The set is CLOSED, and closed by
+    // evidence: these five are the only calls appearing anywhere in the 60 stock
+    // maps' _save.lua. An identifier followed by '(' that is not on this list
+    // is still refused, so the allow-list cannot quietly widen into "evaluate
+    // any call".
+    struct DataConstructor {
+        std::string_view name;
+        std::size_t arity;
+        // The type a one-argument constructor must receive. Wrong types are
+        // refused rather than coerced: STRING( 3 ) means the format is not what
+        // this reader believes, and "3" would hide that. Ignored when arity > 1,
+        // where every argument is a number by construction.
+        Value::Type scalar;
+    };
+
+    // The sixth constructor, and the only one written with Lua's
+    // call-with-table sugar:
+    //
+    //     ['Units'] = GROUP { orders = '', platoon = '', Units = { ... } },
+    //
+    // `f{...}` is exactly `f({...})`, so there are no parentheses to look for —
+    // which is why a survey of "identifier followed by (" misses it entirely.
+    // It wraps a table and yields it, so reading it as that table is the whole
+    // of its meaning here. 524 occurrences across the stock corpus, all under
+    // the army section this renderer does not use — but the reader parses the
+    // whole file, so it must still be understood rather than stumbled over.
+    static constexpr std::string_view kGroupConstructor = "GROUP";
+
+    static constexpr DataConstructor kDataConstructors[] = {
+        {"STRING", 1, Value::Type::Text},
+        {"FLOAT", 1, Value::Type::Number},
+        {"BOOLEAN", 1, Value::Type::Bool},
+        // Aggregates keep their arguments positionally, in `items` — the same
+        // place a Lua array literal would land, so callers read them one way.
+        {"VECTOR3", 3, Value::Type::Table},
+        {"RECTANGLE", 4, Value::Type::Table},
+    };
+
+    [[nodiscard]] static const DataConstructor* findDataConstructor(std::string_view name) noexcept {
+        for (const DataConstructor& ctor : kDataConstructors) {
+            if (ctor.name == name) {
+                return &ctor;
+            }
+        }
+        return nullptr;
+    }
+
+    /// Reads `( a, b, ... )` after the name has been consumed.
+    [[nodiscard]] std::expected<Value, ParseError> parseDataConstructor(const DataConstructor& ctor) {
+        advance();  // '('
+
+        std::vector<Value> arguments;
+        while (true) {
+            skipTrivia();
+            if (atEnd()) {
+                return fail(std::string{ctor.name} + "( ... ) is never closed");
+            }
+            if (peek() == ')') {
+                advance();
+                break;
+            }
+
+            auto argument = parseValue();
+            if (!argument) {
+                return std::unexpected(argument.error());
+            }
+            arguments.push_back(std::move(*argument));
+
+            skipTrivia();
+            if (peek() == ',') {
+                advance();
+            } else if (peek() != ')') {
+                return fail("expected ',' or ')' in " + std::string{ctor.name} + "( ... )");
+            }
+        }
+
+        if (arguments.size() != ctor.arity) {
+            return fail(std::string{ctor.name} + " takes " + std::to_string(ctor.arity)
+                        + " argument(s), got " + std::to_string(arguments.size()));
+        }
+
+        if (ctor.arity == 1) {
+            if (arguments[0].type != ctor.scalar) {
+                return fail(std::string{ctor.name} + " was given the wrong type of argument");
+            }
+            return std::move(arguments[0]);
+        }
+
+        Value aggregate;
+        aggregate.type = Value::Type::Table;
+        aggregate.items = std::move(arguments);
+        return aggregate;
+    }
+
     std::string_view source_;
     std::size_t pos_ = 0;
     std::size_t line_ = 1;
@@ -244,6 +345,24 @@ private:
             if (name == "nil") {
                 return Value{};
             }
+
+            // A call to one of Supreme Commander's data constructors is still
+            // data — see kDataConstructors. Anything else falls through.
+            const std::size_t afterName = pos_;
+            const std::size_t afterNameLine = line_;
+            skipTrivia();
+
+            if (name == kGroupConstructor && peek() == '{') {
+                return parseTable();
+            }
+            if (peek() == '(') {
+                if (const DataConstructor* ctor = findDataConstructor(name)) {
+                    return parseDataConstructor(*ctor);
+                }
+            }
+
+            pos_ = afterName;
+            line_ = afterNameLine;
 
             // An identifier here means a variable, a call, or an expression —
             // all of which need evaluation. Refuse rather than guess.

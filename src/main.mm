@@ -4,6 +4,7 @@
 
 #include "core/map/MapInfo.hpp"
 #include "core/map/ProceduralField.hpp"
+#include "core/map/ScenarioSave.hpp"
 #include "core/map/Scmap.hpp"
 #include "core/map/Smf.hpp"
 #include "core/map/Smt.hpp"
@@ -228,6 +229,25 @@ struct LoadedMap {
         std::printf("  ground: %d x %d terrain-type bands (%zu MiB RGBA8)\n", colours.width,
                     colours.height, colours.rgba.size() / (1024 * 1024));
         loaded.colours = std::move(colours);
+    }
+
+    // Start positions, from the _save.lua beside the map. The .scmap itself
+    // carries none — unlike .smf, whose mapinfo.lua holds them — so this is the
+    // only source. Campaign maps legitimately have none at all, which leaves
+    // `starts` empty and falls back to the scatter, exactly as before.
+    if (const auto savePath = rm::scenario::findSaveBesideMap(path)) {
+        const auto starts = rm::scenario::loadStartPositionsFile(*savePath);
+        if (starts) {
+            loaded.starts = *starts;
+            std::printf("  starts: %zu, from %s\n", loaded.starts.size(),
+                        savePath->filename().string().c_str());
+        } else {
+            // Worth a word: a map whose starts fail to read still draws, but
+            // its units land in a scatter and it is not obvious why.
+            std::fprintf(stderr, "  warning: could not read start positions from %s: %s\n",
+                         savePath->filename().string().c_str(),
+                         starts.error().message.c_str());
+        }
     }
 
     loaded.field = std::move(map->field);
