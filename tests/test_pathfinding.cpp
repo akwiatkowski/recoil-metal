@@ -217,3 +217,36 @@ TEST_CASE("pathfinding is deterministic") {
         CHECK(first[i][1] == second[i][1]);
     }
 }
+
+TEST_CASE("different unit limits give genuinely different passability") {
+    // The reason for building a grid per limit pair rather than one per scene:
+    // a slope one unit can climb is a wall to another, and a depth one can ford
+    // drowns another. If these came out identical the whole exercise would be
+    // pointless.
+    HeightField field = flatField(64);
+
+    // A moderate ramp: passable to something that climbs 40 degrees, not to
+    // something that climbs 5.
+    for (int z = 0; z < field.verticesZ(); ++z) {
+        for (int x = 0; x < field.verticesX(); ++x) {
+            field.raw[static_cast<std::size_t>(z) * static_cast<std::size_t>(field.verticesX())
+                      + static_cast<std::size_t>(x)] = static_cast<std::uint16_t>(x * 4);
+        }
+    }
+
+    const PassabilityGrid nimble = rm::sim::buildPassability(field, -1000.0f, 40.0f);
+    const PassabilityGrid clumsy = rm::sim::buildPassability(field, -1000.0f, 5.0f);
+
+    CHECK(nimble.passableAt(3, 3));
+    CHECK_FALSE(clumsy.passableAt(3, 3));
+}
+
+TEST_CASE("a deeper wader reaches ground a shallower one cannot") {
+    const HeightField field = flatField(64, -20.0f);  // 20 elmos under the water line
+
+    const PassabilityGrid amphibious = rm::sim::buildPassability(field, 0.0f, 60.0f, 40.0f);
+    const PassabilityGrid landlubber = rm::sim::buildPassability(field, 0.0f, 60.0f, 5.0f);
+
+    CHECK(amphibious.passableAt(0, 0));
+    CHECK_FALSE(landlubber.passableAt(0, 0));
+}

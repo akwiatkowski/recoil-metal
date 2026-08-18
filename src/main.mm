@@ -580,6 +580,52 @@ struct UnitScene {
     // UnitInstance because that struct's layout is read verbatim by the vertex
     // shader and pinned by a static_assert.
     std::deque<std::vector<rm::sim::MoveState>> motion;
+
+    // Each batch's slope and wading limits, from its unit definition. Held per
+    // batch because a batch is exactly one unit type, and used to pick which
+    // passability grid routes it: a slope one unit climbs is a wall to another.
+    std::vector<float> maxSlopeDegrees;
+    std::vector<float> maxWaterDepthElmos;
+};
+
+// The passability grids a scene needs, one per distinct pair of limits.
+//
+// Keyed on the LIMITS rather than on the unit type, because the grid depends on
+// nothing else — every unit that climbs 17 degrees and wades 12 elmos sees the
+// same map, whatever model it wears. On a scene of a dozen unit types that is
+// usually two or three grids rather than a dozen.
+class PassabilitySet {
+public:
+    PassabilitySet(const rm::HeightField& field, float waterLevel)
+        : field_{&field}, waterLevel_{waterLevel} {}
+
+    [[nodiscard]] const rm::sim::PassabilityGrid& gridFor(float slopeDegrees, float depthElmos) {
+        const auto key = std::make_pair(slopeDegrees, depthElmos);
+        const auto existing = grids_.find(key);
+        if (existing != grids_.end()) {
+            return existing->second;
+        }
+
+        rm::sim::PassabilityGrid grid =
+            rm::sim::buildPassability(*field_, waterLevel_, slopeDegrees, depthElmos);
+        std::printf("passability: %d x %d cells of %.0f elmos, %zu%% walkable"
+                    " (maxslope %.0f deg, maxwaterdepth %.0f)\n",
+                    grid.cellsX, grid.cellsZ, static_cast<double>(grid.elmosPerCell),
+                    grid.passable.empty()
+                        ? 0u
+                        : 100u * static_cast<std::size_t>(std::count(grid.passable.begin(),
+                                                                     grid.passable.end(),
+                                                                     std::uint8_t{1}))
+                              / grid.passable.size(),
+                    static_cast<double>(slopeDegrees), static_cast<double>(depthElmos));
+
+        return grids_.emplace(key, std::move(grid)).first->second;
+    }
+
+private:
+    const rm::HeightField* field_;
+    float waterLevel_;
+    std::map<std::pair<float, float>, rm::sim::PassabilityGrid> grids_;
 };
 
 // Which units the user has selected.
@@ -674,8 +720,28 @@ struct UnitOptions {
     }
 
     modelOut = rm::unitdef::resolveModel(search, def->modelPath);
+
     if (modelOut.empty()) {
-        std::fprintf(stderr, "unit \"%s\" names model \"%s\", which was not found\n",
+        // Nothing in the search path — which is the usual case, since pointing
+        // at a definition by its full path is how this is used and needs no
+        // --data-dir. Walk up from the definition to a sibling objects3d:
+        // `units/ArmBots/armpw.lua` and `objects3d/Units/armpw.s3o` are a few
+        // levels apart, so the layout answers the question.
+        rm::vfs::AssetSearch beside;
+        for (std::filesystem::path dir = path.parent_path();
+             !dir.empty() && dir != dir.root_path(); dir = dir.parent_path()) {
+            const std::filesystem::path candidate = dir / "objects3d";
+            if (std::filesystem::is_directory(candidate)) {
+                beside.addRoot(candidate);
+                break;
+            }
+        }
+        modelOut = rm::unitdef::resolveModel(beside, def->modelPath);
+    }
+
+    if (modelOut.empty()) {
+        std::fprintf(stderr, "unit \"%s\" names model \"%s\", which was not found"
+                             " (try --data-dir)\n",
                      def->name.c_str(), def->modelPath.c_str());
         return std::nullopt;
     }
@@ -791,6 +857,17 @@ struct UnitOptions {
         // Idle, in step with the instances just placed. Nothing moves until
         // something is ordered to.
         scene.motion.emplace_back(scene.instances.back().size());
+
+        // A definition that omits these — or a building, whose maxslope is 0 —
+        // falls back to the defaults rather than to a grid nothing can cross.
+        const float slope = def && def->maxSlopeDegrees > 0.0f
+                                ? def->maxSlopeDegrees
+                                : rm::sim::kDefaultMaxSlopeDegrees;
+        const float depth = def && def->maxWaterDepthElmos > 0.0f
+                                ? def->maxWaterDepthElmos
+                                : rm::sim::kDefaultMaxWaterDepthElmos;
+        scene.maxSlopeDegrees.push_back(slope);
+        scene.maxWaterDepthElmos.push_back(depth);
 
         // A definition's speed and turn rate reach every instance of it. Slope
         // and depth limits do NOT yet: passability is one grid for the whole
@@ -1018,13 +1095,15 @@ struct MarchOptions {
 }
 
 /// Orders every unit in the scene to a point, and runs the sim for a while.
-void march(UnitScene& scene, const rm::HeightField& field,
-           const rm::sim::PassabilityGrid& grid, const MarchOptions& options) {
+void march(UnitScene& scene, const rm::HeightField& field, PassabilitySet& passability,
+           const MarchOptions& options) {
     std::size_t routed = 0;
     std::size_t total = 0;
     for (std::size_t batch = 0; batch < scene.motion.size(); ++batch) {
         for (std::size_t i = 0; i < scene.motion[batch].size(); ++i) {
             ++total;
+            const rm::sim::PassabilityGrid& grid =
+                passability.gridFor(scene.maxSlopeDegrees[batch], scene.maxWaterDepthElmos[batch]);
             if (orderRouted(scene.motion[batch][i], scene.instances[batch][i], grid, options.x,
                             options.z)) {
                 ++routed;
@@ -1326,19 +1405,10 @@ int main(int argc, const char* argv[]) {
         // Before anything is uploaded: setUnits seeds every ring slot from the
         // instances as they stand, so a marched scene is correct even on the
         // paths that never push an instance update.
-        // Where a ground unit may stand. Built once: it depends only on the
-        // terrain and the water level, neither of which changes.
-        const rm::sim::PassabilityGrid passability = rm::sim::buildPassability(
-            map->field, map->hasWater ? map->waterLevel : 0.0f);
-        std::printf("passability: %d x %d cells of %.0f elmos, %zu%% walkable\n",
-                    passability.cellsX, passability.cellsZ,
-                    static_cast<double>(passability.elmosPerCell),
-                    passability.passable.empty()
-                        ? 0u
-                        : 100u * static_cast<std::size_t>(std::count(passability.passable.begin(),
-                                                                     passability.passable.end(),
-                                                                     std::uint8_t{1}))
-                              / passability.passable.size());
+        // Where a ground unit may stand. One grid per distinct pair of limits,
+        // built on first use: the terrain and water level never change, and a
+        // unit's own maxslope/maxwaterdepth decide which map it sees.
+        PassabilitySet passability{map->field, map->hasWater ? map->waterLevel : 0.0f};
 
         const MarchOptions marchOptions = parseMarch(argc, argv);
         if (marchOptions.enabled) {
@@ -1490,8 +1560,14 @@ int main(int argc, const char* argv[]) {
 
             std::size_t failed = 0;
             for (const Selection& sel : selected) {
+                // Each unit routes on the map ITS limits see. Two units given
+                // the same order can legitimately get different answers, and
+                // one of them can be "no route" while the other walks off.
+                const rm::sim::PassabilityGrid& grid =
+                    passability.gridFor(units.maxSlopeDegrees[sel.batch],
+                                        units.maxWaterDepthElmos[sel.batch]);
                 if (!orderRouted(units.motion[sel.batch][sel.instance],
-                                 units.instances[sel.batch][sel.instance], passability,
+                                 units.instances[sel.batch][sel.instance], grid,
                                  ground->x, ground->z)) {
                     ++failed;
                 }
