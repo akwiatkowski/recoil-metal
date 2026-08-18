@@ -39,9 +39,17 @@ struct TerrainUniforms {
     float hasTexture2;           ///< the model's shading texture, if it has one
     float waterLevel;            ///< elmos; Recoil's is always 0, SupCom's is per map
     float supremeCommanderShading;  ///< 1 when the model follows SupCom's channel layout
+
+    // Appended rather than inserted: every offsetof below pins a field's place
+    // in the MSL layout, and adding in the middle would move all of them.
+    simd_float4x4 lightViewProjection;  ///< world -> shadow map clip space
+    float hasShadows;                   ///< 0 when no shadow map is bound
 };
 
-static_assert(sizeof(TerrainUniforms) == 144, "TerrainUniforms must match the MSL layout");
+static_assert(sizeof(TerrainUniforms) == 224, "TerrainUniforms must match the MSL layout");
+static_assert(offsetof(TerrainUniforms, lightViewProjection) == 144,
+              "the light matrix must follow the existing fields, not displace them");
+static_assert(offsetof(TerrainUniforms, hasShadows) == 208, "unexpected padding before hasShadows");
 static_assert(offsetof(TerrainUniforms, sunDirection) == 64, "float3 is 16-byte aligned in MSL");
 static_assert(offsetof(TerrainUniforms, minHeight) == 80, "unexpected padding before minHeight");
 static_assert(offsetof(TerrainUniforms, hasTexture) == 96, "unexpected padding before hasTexture");
@@ -75,6 +83,10 @@ constexpr NS::UInteger kUniformBufferIndex = 1;
 constexpr NS::UInteger kInstanceBufferIndex = 2;
 constexpr NS::UInteger kBoneBufferIndex = 3;
 constexpr NS::UInteger kPoseUniformBufferIndex = 4;
+
+// Well clear of the splat's ten layer slots, which run from kSplatLayerBaseIndex.
+constexpr NS::UInteger kShadowTextureIndex = 13;
+constexpr NS::UInteger kShadowSamplerIndex = 2;
 
 // Mirrors the MSL PoseUniforms exactly. Small and per batch, so it goes up with
 // setVertexBytes rather than as a buffer.
@@ -130,13 +142,71 @@ struct Uniforms {
     float hasTexture2;
     float waterLevel;
     float supremeCommanderShading;
+    float4x4 lightViewProjection;
+    float hasShadows;
 };
+
+// How much of the sun a shadowed fragment keeps. Not zero: shadows in daylight
+// are lit by the sky, and a black shadow reads as a hole in the ground rather
+// than as shade.
+constant float kShadowedLight = 0.35;
+
+/// Fraction of the sun reaching a world position, 1 outside the shadow map.
+///
+/// Four taps in a rotated square rather than one, which is the cheapest thing
+/// that stops a shadow edge from being a staircase of shadow-map texels. The
+/// comparison is done by the sampler, so each tap is already a 0/1 the hardware
+/// filters — a plain sample and manual compare would give hard edges however
+/// many taps it took.
+static float sunlightAt(float3 world, float ndotl, constant Uniforms& u,
+                        depth2d<float> shadowMap, sampler shadowSampler) {
+    if (u.hasShadows < 0.5) {
+        return 1.0;
+    }
+
+    const float4 lightClip = u.lightViewProjection * float4(world, 1.0);
+    if (lightClip.w <= 0.0) {
+        return 1.0;
+    }
+    const float3 ndc = lightClip.xyz / lightClip.w;
+
+    // Metal's clip space is x,y in [-1,1] with +Y up, and a texture's origin is
+    // top-left — hence the flip on V. Depth is already [0,1].
+    const float2 uv = float2(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
+    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0 || ndc.z > 1.0) {
+        return 1.0;  // outside what the shadow map covers
+    }
+
+    // Bias against shadow acne — a surface shadowing itself because one shadow
+    // texel covers several elmos of ground and stores a single depth for all of
+    // it. Applied here rather than through setDepthBias, whose units are the
+    // depth format's smallest resolvable step and not a quantity worth guessing
+    // at over a map-sized orthographic range.
+    //
+    // Scaled by how obliquely the sun strikes the surface: a face nearly edge-on
+    // to the light spans far more depth across one texel than one facing it, and
+    // a single constant either leaves the oblique case striped or lifts shadows
+    // clean off the ground everywhere else.
+    const float slopeFactor = saturate(1.0 - ndotl);
+    const float compareDepth = ndc.z - (2.0e-4 + 2.0e-3 * slopeFactor);
+
+    const float texel = 1.0 / float(shadowMap.get_width());
+    float sum = 0.0;
+    sum += shadowMap.sample_compare(shadowSampler, uv + float2(-texel, -texel), compareDepth);
+    sum += shadowMap.sample_compare(shadowSampler, uv + float2( texel, -texel), compareDepth);
+    sum += shadowMap.sample_compare(shadowSampler, uv + float2(-texel,  texel), compareDepth);
+    sum += shadowMap.sample_compare(shadowSampler, uv + float2( texel,  texel), compareDepth);
+    const float lit = sum * 0.25;
+
+    return mix(kShadowedLight, 1.0, lit);
+}
 
 struct VertexOut {
     float4 position [[position]];
     float3 normal;
     float2 uv;
     float height;
+    float3 world;   // for the shadow lookup
 };
 
 vertex VertexOut terrainVertex(uint vid [[vertex_id]],
@@ -152,6 +222,7 @@ vertex VertexOut terrainVertex(uint vid [[vertex_id]],
     // needs storing, which saves 8 MB on a million-vertex map.
     out.uv = float2(worldPosition.x / u.mapWidth, worldPosition.z / u.mapDepth);
     out.height = worldPosition.y;
+    out.world = worldPosition;
     return out;
 }
 
@@ -171,8 +242,10 @@ fragment float4 terrainFragment(VertexOut in [[stage_in]],
                                 texture2d<float> maskA [[texture(1)]],
                                 texture2d<float> maskB [[texture(2)]],
                                 array<texture2d<float>, 10> layers [[texture(3)]],
+                                depth2d<float> shadowMap [[texture(13)]],
                                 sampler groundSampler [[sampler(0)]],
-                                sampler splatSampler [[sampler(1)]]) {
+                                sampler splatSampler [[sampler(1)]],
+                                sampler shadowSampler [[sampler(2)]]) {
     // Interpolating unit normals across a triangle does not preserve length.
     const float3 normal = normalize(in.normal);
 
@@ -233,7 +306,10 @@ fragment float4 terrainFragment(VertexOut in [[stage_in]],
 
     // A little ambient so slopes facing away from the sun stay readable.
     const float ambient = 0.35;
-    return float4(albedo * (ambient + lambert * 0.8), 1.0);
+    // Shadow attenuates the SUN only. Ambient is the sky, which reaches into
+    // shade — dimming it too would make shadowed ground black.
+    const float sun = sunlightAt(in.world, lambert, u, shadowMap, shadowSampler);
+    return float4(albedo * (ambient + lambert * 0.8 * sun), 1.0);
 }
 
 // --- Water ------------------------------------------------------------------
@@ -342,6 +418,40 @@ constant float3 kEnvironment = float3(0.09, 0.12, 0.18);
 constant float3 kSupComPhongCoeff = float3(0.6, 0.80, 0.90);  // NormalMappedPhongCoeff
 constant float kSupComGlowMultiplier = 2.0;                   // glowMultiplier
 
+/// Which keyframe an instance is on. Shared so the shadow pass poses a unit
+/// exactly as the visible pass does — a unit casting the shadow of a different
+/// frame of its walk cycle is the kind of wrongness nobody would think to look
+/// for.
+static uint poseIndexFor(PoseUniforms p, float animationPhase) {
+    if (p.poseCount <= 1 || p.duration <= 0.0) {
+        return 0;
+    }
+    const float phase = fract(p.time / p.duration + animationPhase);
+    return min(uint(phase * float(p.poseCount)), p.poseCount - 1);
+}
+
+/// Rolls, pitches and yaws a model-space direction into world space. Applied to
+/// positions and normals alike, which is why it takes a direction and the
+/// caller adds the instance's position.
+static float3 unitOrient(float3 local, UnitInstanceIn inst) {
+    const float cosR = cos(inst.rotationZ);
+    const float sinR = sin(inst.rotationZ);
+    const float3 rolled = float3(cosR * local.x - sinR * local.y,
+                                 sinR * local.x + cosR * local.y,
+                                 local.z);
+
+    const float cosP = cos(inst.rotationX);
+    const float sinP = sin(inst.rotationX);
+    const float3 pitched = float3(rolled.x,
+                                  cosP * rolled.y - sinP * rolled.z,
+                                  sinP * rolled.y + cosP * rolled.z);
+
+    const float s = sin(inst.rotationY);
+    const float c = cos(inst.rotationY);
+    return float3(c * pitched.x + s * pitched.z, pitched.y,
+                  -s * pitched.x + c * pitched.z);
+}
+
 vertex UnitOut unitVertex(uint vid [[vertex_id]],
                           uint iid [[instance_id]],
                           const device UnitVertexIn* vertices [[buffer(0)]],
@@ -361,11 +471,7 @@ vertex UnitOut unitVertex(uint vid [[vertex_id]],
     // once at upload (ADR-006), and the per-instance part is a constant offset
     // added to a clock that advances by itself. fract, so a phase of any
     // magnitude or sign lands somewhere sensible in the cycle.
-    uint poseIndex = 0;
-    if (p.poseCount > 1 && p.duration > 0.0) {
-        const float phase = fract(p.time / p.duration + inst.animationPhase);
-        poseIndex = min(uint(phase * float(p.poseCount)), p.poseCount - 1);
-    }
+    const uint poseIndex = poseIndexFor(p, inst.animationPhase);
 
     // The bone transform is applied here rather than baked into the vertices, so
     // one vertex buffer serves every instance AND every frame of an animation.
@@ -376,41 +482,14 @@ vertex UnitOut unitVertex(uint vid [[vertex_id]],
     const float4 boneRotation = float4(bone.rotation);
     const float3 local = rotateBy(boneRotation, float3(v.position)) + float3(bone.translation);
 
-    // Roll (Z), then pitch (X), then yaw (Y), all as world-axis rotations.
-    // The C++ side computes pitch/roll in the unit's local frame (after undoing
-    // yaw) so that the model's up axis aligns with the terrain normal under its
-    // feet, whatever direction the unit is facing.
-    const float roll = inst.rotationZ;
-    const float cosR = cos(roll);
-    const float sinR = sin(roll);
-    const float3 rolled = float3(cosR * local.x - sinR * local.y,
-                                 sinR * local.x + cosR * local.y,
-                                 local.z);
-
-    const float pitch = inst.rotationX;
-    const float cosP = cos(pitch);
-    const float sinP = sin(pitch);
-    const float3 pitched = float3(rolled.x,
-                                  cosP * rolled.y - sinP * rolled.z,
-                                  sinP * rolled.y + cosP * rolled.z);
-
-    const float yaw = inst.rotationY;
-    const float s = sin(yaw);
-    const float c = cos(yaw);
-    const float3 spun = float3(c * pitched.x + s * pitched.z, pitched.y,
-                               -s * pitched.x + c * pitched.z);
-    const float3 world = spun * inst.scale + float3(inst.position);
+    // Roll (Z), then pitch (X), then yaw (Y). The C++ side computes pitch/roll
+    // in the unit's local frame (after undoing yaw) so that the model's up axis
+    // aligns with the terrain normal under its feet, whatever direction the
+    // unit is facing.
+    const float3 world = unitOrient(local, inst) * inst.scale + float3(inst.position);
 
     // The normal takes the bone's rotation but not its translation.
-    const float3 n = rotateBy(boneRotation, float3(v.normal));
-    const float3 nRolled = float3(cosR * n.x - sinR * n.y,
-                                  sinR * n.x + cosR * n.y,
-                                  n.z);
-    const float3 nPitched = float3(nRolled.x,
-                                   cosP * nRolled.y - sinP * nRolled.z,
-                                   sinP * nRolled.y + cosP * nRolled.z);
-    const float3 spunNormal = float3(c * nPitched.x + s * nPitched.z, nPitched.y,
-                                     -s * nPitched.x + c * nPitched.z);
+    const float3 spunNormal = unitOrient(rotateBy(boneRotation, float3(v.normal)), inst);
 
     UnitOut out;
     out.position = u.viewProjection * float4(world, 1.0);
@@ -423,6 +502,36 @@ vertex UnitOut unitVertex(uint vid [[vertex_id]],
     // reordering bits inside every one of them.
     out.uv = float2(v.uv.x, 1.0 - v.uv.y);
     return out;
+}
+
+// --- Shadow pass -------------------------------------------------------------
+// Depth only, from the sun's point of view. No fragment shader at all: the
+// depth attachment is the entire output, and Metal is happy to run a pipeline
+// with none.
+
+vertex float4 terrainShadowVertex(uint vid [[vertex_id]],
+                                  const device TerrainVertexIn* vertices [[buffer(0)]],
+                                  constant Uniforms& u [[buffer(1)]]) {
+    return u.lightViewProjection * float4(float3(vertices[vid].position), 1.0);
+}
+
+vertex float4 unitShadowVertex(uint vid [[vertex_id]],
+                               uint iid [[instance_id]],
+                               const device UnitVertexIn* vertices [[buffer(0)]],
+                               constant Uniforms& u [[buffer(1)]],
+                               const device UnitInstanceIn* instances [[buffer(2)]],
+                               const device BoneTransformIn* bones [[buffer(3)]],
+                               constant PoseUniforms& p [[buffer(4)]]) {
+    const UnitVertexIn v = vertices[vid];
+    const UnitInstanceIn inst = instances[iid];
+
+    const uint poseIndex = poseIndexFor(p, inst.animationPhase);
+    const BoneTransformIn bone = bones[poseIndex * p.boneCount + v.boneIndex];
+    const float3 local =
+        rotateBy(float4(bone.rotation), float3(v.position)) + float3(bone.translation);
+
+    const float3 world = unitOrient(local, inst) * inst.scale + float3(inst.position);
+    return u.lightViewProjection * float4(world, 1.0);
 }
 
 // Ported from Recoil's own model shader (ModelFragProgGL4.glsl:92-131), which is
@@ -438,7 +547,9 @@ fragment float4 unitFragment(UnitOut in [[stage_in]],
                              constant Uniforms& u [[buffer(1)]],
                              texture2d<float> diffuse [[texture(0)]],
                              texture2d<float> shading [[texture(1)]],
-                             sampler texSampler [[sampler(0)]]) {
+                             depth2d<float> shadowMap [[texture(13)]],
+                             sampler texSampler [[sampler(0)]],
+                             sampler shadowSampler [[sampler(2)]]) {
     // Without a diffuse the model shades flat grey with no team colour, since
     // the mask lives in that texture's alpha and there is nothing to read.
     float4 tex1 = float4(0.62, 0.62, 0.60, 0.0);
@@ -470,7 +581,9 @@ fragment float4 unitFragment(UnitOut in [[stage_in]],
     const float3 L = u.sunDirection;
     const float3 V = normalize(u.cameraPosition - in.world);
 
-    const float NdotL = saturate(dot(N, L));
+    const float rawNdotL = saturate(dot(N, L));
+    const float sun = sunlightAt(in.world, rawNdotL, u, shadowMap, shadowSampler);
+    const float NdotL = rawNdotL * sun;
     float3 light = kUnitAmbient + NdotL * kUnitDiffuse;
 
     if (supCom) {
@@ -539,6 +652,14 @@ constexpr double kSkyB = 0.18;
 
 constexpr MTL::PixelFormat kColorFormat = MTL::PixelFormat::PixelFormatBGRA8Unorm;
 constexpr MTL::PixelFormat kDepthFormat = MTL::PixelFormat::PixelFormatDepth32Float;
+
+/// The shadow map's format and size. 2048 across the whole map is ~16 elmos per
+/// texel on a 1024-square map — coarse enough to be cheap, fine enough that a
+/// unit-sized shadow is several texels rather than one.
+constexpr MTL::PixelFormat kShadowFormat = MTL::PixelFormat::PixelFormatDepth32Float;
+constexpr unsigned int kShadowResolution = 2048;
+
+
 constexpr MTL::PixelFormat kGroundFormat = MTL::PixelFormat::PixelFormatBC1_RGBA;
 
 // A single BC1 block of mid-grey, used as the always-bound fallback so the
@@ -559,6 +680,30 @@ constexpr unsigned char kFallbackBlock[8] = {0x10, 0x84, 0x10, 0x84, 0x00, 0x00,
 }
 
 /// Builds a pipeline from two named functions in an already-compiled library.
+/// A pipeline with no colour attachment and no fragment shader: the depth
+/// buffer is the whole output. That is what a shadow map is, and Metal is
+/// perfectly happy to rasterise with nothing bound to write colour into.
+[[nodiscard]] MTL::RenderPipelineState* makeDepthOnlyPipeline(MTL::Device* device,
+                                                              MTL::Library* library,
+                                                              const char* vertexName) {
+    MTL::Function* vertexFn =
+        library->newFunction(NS::String::string(vertexName, NS::UTF8StringEncoding));
+
+    auto* descriptor = MTL::RenderPipelineDescriptor::alloc()->init();
+    descriptor->setVertexFunction(vertexFn);
+    descriptor->setDepthAttachmentPixelFormat(kShadowFormat);
+
+    NS::Error* error = nullptr;
+    MTL::RenderPipelineState* pipeline = device->newRenderPipelineState(descriptor, &error);
+
+    descriptor->release();
+    if (vertexFn != nullptr) vertexFn->release();
+    if (pipeline == nullptr) {
+        throwMetalError("failed to create shadow pipeline", error);
+    }
+    return pipeline;
+}
+
 [[nodiscard]] MTL::RenderPipelineState* makePipeline(MTL::Device* device, MTL::Library* library,
                                                      const char* vertexName,
                                                      const char* fragmentName, bool blend) {
@@ -644,6 +789,8 @@ Renderer::Renderer(CA::MetalLayer* layer)
         throwMetalError("runtime shader compilation failed", error);
     }
 
+    terrainShadowPipeline_ = makeDepthOnlyPipeline(device_, library, "terrainShadowVertex");
+    unitShadowPipeline_ = makeDepthOnlyPipeline(device_, library, "unitShadowVertex");
     terrainPipeline_ = makePipeline(device_, library, "terrainVertex", "terrainFragment",
                                     /*blend=*/false);
     waterPipeline_ = makePipeline(device_, library, "waterVertex", "waterFragment",
@@ -657,6 +804,34 @@ Renderer::Renderer(CA::MetalLayer* layer)
     depthDescriptor->setDepthCompareFunction(MTL::CompareFunction::CompareFunctionLess);
     depthDescriptor->setDepthWriteEnabled(true);
     depthState_ = device_->newDepthStencilState(depthDescriptor);
+
+    // --- Shadow map --------------------------------------------------------
+    {
+        auto* shadowDescriptor = MTL::TextureDescriptor::alloc()->init();
+        shadowDescriptor->setTextureType(MTL::TextureType::TextureType2D);
+        shadowDescriptor->setPixelFormat(kShadowFormat);
+        shadowDescriptor->setWidth(kShadowResolution);
+        shadowDescriptor->setHeight(kShadowResolution);
+        // Written by the shadow pass, read by both fragment shaders.
+        shadowDescriptor->setUsage(MTL::TextureUsageRenderTarget
+                                   | MTL::TextureUsageShaderRead);
+        shadowDescriptor->setStorageMode(MTL::StorageModePrivate);
+        shadowMap_ = device_->newTexture(shadowDescriptor);
+        shadowDescriptor->release();
+
+        // A COMPARISON sampler: the hardware does the depth test per tap and
+        // filters the results, which is what makes four taps a soft edge rather
+        // than four hard ones. Clamp-to-edge would smear the border, so anything
+        // outside is treated as lit by the shader instead.
+        auto* samplerDescriptor = MTL::SamplerDescriptor::alloc()->init();
+        samplerDescriptor->setMinFilter(MTL::SamplerMinMagFilter::SamplerMinMagFilterLinear);
+        samplerDescriptor->setMagFilter(MTL::SamplerMinMagFilter::SamplerMinMagFilterLinear);
+        samplerDescriptor->setSAddressMode(MTL::SamplerAddressMode::SamplerAddressModeClampToEdge);
+        samplerDescriptor->setTAddressMode(MTL::SamplerAddressMode::SamplerAddressModeClampToEdge);
+        samplerDescriptor->setCompareFunction(MTL::CompareFunction::CompareFunctionLessEqual);
+        shadowSampler_ = device_->newSamplerState(samplerDescriptor);
+        samplerDescriptor->release();
+    }
 
     // Water tests against terrain but does not write depth: it is translucent,
     // so writing would occlude anything drawn behind it later.
@@ -715,6 +890,10 @@ Renderer::Renderer(CA::MetalLayer* layer)
 
 Renderer::~Renderer() {
     // Reverse acquisition order; all are +1 objects from newXxx()/CreateXxx.
+    if (shadowSampler_ != nullptr) shadowSampler_->release();
+    if (shadowMap_ != nullptr) shadowMap_->release();
+    if (unitShadowPipeline_ != nullptr) unitShadowPipeline_->release();
+    if (terrainShadowPipeline_ != nullptr) terrainShadowPipeline_->release();
     releaseTerrainBuffers();
     releaseUnitBuffers();  // frees the unit textures too
     unitPipeline_->release();
@@ -780,6 +959,10 @@ void Renderer::setTerrain(const TerrainMesh& mesh) {
     // The far plane must clear the map diagonal from any orbit position, or the
     // far edge of a large map is clipped away.
     camera_.farZ = camera_.distance * 4.0f + mapWidth_ * 2.0f;
+
+    // The sun and the map are both fixed, so the light's frame is settled here
+    // rather than rebuilt per frame.
+    updateLightMatrix();
 }
 
 void Renderer::releaseUnitBuffers() noexcept {
@@ -1150,6 +1333,8 @@ Renderer::CapturedImage Renderer::renderToImage(unsigned int width, unsigned int
 
     MTL::CommandBuffer* commandBuffer = commandQueue_->commandBuffer();
 
+    encodeShadowPass(commandBuffer);
+
     MTL::RenderPassDescriptor* pass = MTL::RenderPassDescriptor::alloc()->init();
     MTL::RenderPassColorAttachmentDescriptor* color0 = pass->colorAttachments()->object(0);
     color0->setTexture(target);
@@ -1189,6 +1374,10 @@ void Renderer::focusOn(std::array<float, 3> target, float distance) noexcept {
                                   OrbitCamera::kMaxDistance);
     // Keep the far plane clear of the map behind the new target.
     camera_.farZ = camera_.distance * 4.0f + mapWidth_ * 2.0f;
+
+    // The sun and the map are both fixed, so the light's frame is settled here
+    // rather than rebuilt per frame.
+    updateLightMatrix();
 }
 
 void Renderer::beginBenchmark(std::size_t warmupFrames) {
@@ -1289,6 +1478,8 @@ bench::FrameRecorder Renderer::runOffscreenBenchmark(unsigned int width, unsigne
 
         MTL::CommandBuffer* commandBuffer = commandQueue_->commandBuffer();
 
+        encodeShadowPass(commandBuffer);
+
         MTL::RenderPassDescriptor* pass = MTL::RenderPassDescriptor::alloc()->init();
         MTL::RenderPassColorAttachmentDescriptor* color0 = pass->colorAttachments()->object(0);
         color0->setTexture(colorTarget);
@@ -1358,6 +1549,8 @@ void Renderer::encodeScene(MTL::RenderCommandEncoder* encoder, unsigned int widt
         .hasTexture2 = 0.0f,
         .waterLevel = waterLevel_,
         .supremeCommanderShading = 0.0f,
+        .lightViewProjection = lightViewProjection_,
+        .hasShadows = hasShadows_ ? 1.0f : 0.0f,
     };
 
     // Culling stays off: the camera is free to dip below the terrain, and a
@@ -1381,6 +1574,8 @@ void Renderer::encodeScene(MTL::RenderCommandEncoder* encoder, unsigned int widt
         encoder->setFragmentTexture(groundTexture_, kGroundTextureIndex);
         encoder->setFragmentSamplerState(groundSampler_, kGroundSamplerIndex);
         encoder->setFragmentSamplerState(splatSampler_, kSplatSamplerIndex);
+        encoder->setFragmentTexture(shadowMap_, kShadowTextureIndex);
+        encoder->setFragmentSamplerState(shadowSampler_, kShadowSamplerIndex);
 
         // The splat. Every slot is bound whether or not the map uses one,
         // because the fragment shader names all nine layers and both masks
@@ -1460,6 +1655,8 @@ void Renderer::encodeScene(MTL::RenderCommandEncoder* encoder, unsigned int widt
             unitUniforms.hasTexture2 = shading != nullptr ? 1.0f : 0.0f;
             unitUniforms.supremeCommanderShading = batch.supremeCommanderShading ? 1.0f : 0.0f;
             encoder->setFragmentBytes(&unitUniforms, sizeof(unitUniforms), kUniformBufferIndex);
+            encoder->setFragmentTexture(shadowMap_, kShadowTextureIndex);
+            encoder->setFragmentSamplerState(shadowSampler_, kShadowSamplerIndex);
 
             encoder->setVertexBuffer(batch.vertexBuffer, 0, kVertexBufferIndex);
             // This frame's ring slot: an offset, not a rebind. UnitInstance is
@@ -1506,6 +1703,128 @@ void Renderer::encodeScene(MTL::RenderCommandEncoder* encoder, unsigned int widt
         encoder->drawPrimitives(MTL::PrimitiveType::PrimitiveTypeTriangleStrip,
                                 NS::UInteger{0}, NS::UInteger{4});
     }
+}
+
+void Renderer::updateLightMatrix() noexcept {
+    hasShadows_ = false;
+    if (shadowMap_ == nullptr || indexCount_ == 0) {
+        return;
+    }
+
+    // The light's box follows the CAMERA, not the map.
+    //
+    // Covering the whole map sounds tidier and is much worse: on an 8192-elmo
+    // map a 2048-texel shadow map is 4 elmos per texel, and the depth range
+    // spans the map's diagonal — so the bias needed to stop the ground
+    // shadowing itself is several elmos, which is most of a tank's height. The
+    // shadow then lifts clean off its caster and nothing appears at all.
+    //
+    // Sized to what the camera can actually see, the same map is fractions of
+    // an elmo per texel and the bias costs nothing visible.
+    const float extent = std::clamp(camera_.distance, 100.0f, 6000.0f);
+    const simd_float3 centre = camera_.target;
+
+    // Stand the light off far enough to catch anything that could cast into
+    // view, and give the box enough depth to hold it.
+    const float depthRange = extent * 8.0f;
+    const simd_float3 eye = centre + kSunDirection * extent * 4.0f;
+
+    const simd_float3 forward = simd_normalize(centre - eye);
+    const simd_float3 reference =
+        std::abs(forward.y) > 0.99f ? simd_make_float3(0, 0, 1) : simd_make_float3(0, 1, 0);
+    const simd_float3 right = simd_normalize(simd_cross(reference, forward));
+    const simd_float3 up = simd_cross(forward, right);
+
+    const simd_float4x4 view = simd_matrix(
+        simd_make_float4(right.x, up.x, forward.x, 0.0f),
+        simd_make_float4(right.y, up.y, forward.y, 0.0f),
+        simd_make_float4(right.z, up.z, forward.z, 0.0f),
+        simd_make_float4(-simd_dot(right, eye), -simd_dot(up, eye), -simd_dot(forward, eye),
+                         1.0f));
+
+    // Orthographic, with Metal's [0, 1] depth range — the same convention the
+    // camera's perspective matrix uses, and for the same reason.
+    const simd_float4x4 projection = simd_matrix(
+        simd_make_float4(1.0f / extent, 0.0f, 0.0f, 0.0f),
+        simd_make_float4(0.0f, 1.0f / extent, 0.0f, 0.0f),
+        simd_make_float4(0.0f, 0.0f, 1.0f / depthRange, 0.0f),
+        simd_make_float4(0.0f, 0.0f, 0.0f, 1.0f));
+
+    lightViewProjection_ = simd_mul(projection, view);
+    hasShadows_ = true;
+}
+
+void Renderer::encodeShadowPass(MTL::CommandBuffer* commandBuffer) noexcept {
+    // The box follows the camera, so it is rebuilt every frame — a handful of
+    // matrix operations against a pass that draws the whole scene.
+    updateLightMatrix();
+    if (!hasShadows_ || shadowMap_ == nullptr || commandBuffer == nullptr) {
+        return;
+    }
+
+    MTL::RenderPassDescriptor* pass = MTL::RenderPassDescriptor::alloc()->init();
+    MTL::RenderPassDepthAttachmentDescriptor* depth = pass->depthAttachment();
+    depth->setTexture(shadowMap_);
+    depth->setLoadAction(MTL::LoadAction::LoadActionClear);
+    depth->setStoreAction(MTL::StoreAction::StoreActionStore);  // the fragment shaders read it
+    depth->setClearDepth(1.0);
+
+    MTL::RenderCommandEncoder* encoder = commandBuffer->renderCommandEncoder(pass);
+
+    // Only the light matrix is read by the shadow vertex shaders, but the whole
+    // struct goes up: one layout, one place to get it wrong.
+    TerrainUniforms uniforms{};
+    uniforms.lightViewProjection = lightViewProjection_;
+    uniforms.hasShadows = 1.0f;
+
+    // No encoder depth bias: setDepthBias works in units of the depth format's
+    // smallest resolvable step, which for a 32-bit float over a map-sized
+    // orthographic range is not a quantity worth guessing at. The bias is
+    // applied in the shader instead, in clip-space units this code chooses.
+    encoder->setDepthStencilState(depthState_);
+    encoder->setCullMode(MTL::CullMode::CullModeNone);
+    encoder->setVertexBytes(&uniforms, sizeof(uniforms), kUniformBufferIndex);
+
+    if (indexCount_ > 0) {
+        encoder->setRenderPipelineState(terrainShadowPipeline_);
+        encoder->setVertexBuffer(vertexBuffer_, 0, kVertexBufferIndex);
+        encoder->drawIndexedPrimitives(MTL::PrimitiveType::PrimitiveTypeTriangle,
+                                       static_cast<NS::UInteger>(indexCount_),
+                                       MTL::IndexType::IndexTypeUInt32, indexBuffer_,
+                                       NS::UInteger{0});
+    }
+
+    encoder->setRenderPipelineState(unitShadowPipeline_);
+    for (const GpuUnitBatch& batch : unitBatches_) {
+        if (batch.instanceCount == 0) {
+            continue;
+        }
+
+        encoder->setVertexBuffer(batch.vertexBuffer, 0, kVertexBufferIndex);
+        encoder->setVertexBuffer(
+            batch.instanceBuffer,
+            static_cast<NS::UInteger>(instanceSlot_ * batch.instanceCapacity
+                                      * sizeof(UnitInstance)),
+            kInstanceBufferIndex);
+        encoder->setVertexBuffer(batch.boneBuffer, 0, kBoneBufferIndex);
+
+        PoseUniforms pose;
+        pose.poseCount = static_cast<std::uint32_t>(batch.poseCount);
+        pose.boneCount =
+            static_cast<std::uint32_t>(batch.boneStrideBytes / sizeof(BoneTransform));
+        pose.duration = batch.duration;
+        pose.time = batch.animationDrivenByInstance ? 0.0f : animationTime_;
+        encoder->setVertexBytes(&pose, sizeof(pose), kPoseUniformBufferIndex);
+
+        encoder->drawIndexedPrimitives(MTL::PrimitiveType::PrimitiveTypeTriangle,
+                                       static_cast<NS::UInteger>(batch.indexCount),
+                                       MTL::IndexType::IndexTypeUInt32, batch.indexBuffer,
+                                       /*indexBufferOffset=*/0,
+                                       static_cast<NS::UInteger>(batch.instanceCount));
+    }
+
+    encoder->endEncoding();
+    pass->release();
 }
 
 void Renderer::drawFrame(CA::MetalDrawable* drawable) noexcept {
@@ -1556,6 +1875,8 @@ void Renderer::drawFrame(CA::MetalDrawable* drawable) noexcept {
         ensureDepthTexture(width, height);
 
         MTL::CommandBuffer* commandBuffer = commandQueue_->commandBuffer();
+
+        encodeShadowPass(commandBuffer);
 
         MTL::RenderPassDescriptor* pass = MTL::RenderPassDescriptor::alloc()->init();
 

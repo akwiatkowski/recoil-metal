@@ -30,6 +30,7 @@ class Texture;
 class Buffer;
 class SamplerState;
 class RenderCommandEncoder;
+class CommandBuffer;
 }
 
 namespace rm {
@@ -263,6 +264,23 @@ private:
     void releaseSplat() noexcept;
 
     MTL::RenderPipelineState* unitPipeline_ = nullptr;  // owned
+
+    // Shadows. One directional light, one map, covering the whole terrain —
+    // the sun does not move and an RTS camera looks at the same ground from a
+    // fairly constant height, so cascades would buy detail nobody is close
+    // enough to see.
+    MTL::RenderPipelineState* terrainShadowPipeline_ = nullptr;  // owned
+    MTL::RenderPipelineState* unitShadowPipeline_ = nullptr;     // owned
+    MTL::Texture* shadowMap_ = nullptr;                          // owned
+    MTL::SamplerState* shadowSampler_ = nullptr;                 // owned
+    simd_float4x4 lightViewProjection_{};
+    bool hasShadows_ = false;
+
+    /// Recomputes the light's orthographic frame around the loaded terrain.
+    void updateLightMatrix() noexcept;
+
+    /// Draws terrain and units into the shadow map, from the sun.
+    void encodeShadowPass(MTL::CommandBuffer* commandBuffer) noexcept;
 
     // One model's uploaded geometry. Held in draw order, so encodeScene walks
     // the vector straight through and rebinds only when the pair changes.
