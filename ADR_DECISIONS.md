@@ -383,3 +383,76 @@ swizzled — `2 * tex2D(source, uv).gaa - 1` with Z reconstructed as
 `sqrt(1 - x^2 - y^2)` (mesh.fx:565-571), i.e. X in green and Y in alpha, the two
 channels DXT5 stores well. The **per-map** normal map is not: `terrain.fx` reads it
 `.xyz * 2 - 1` straight. Decals use a third spelling, `.ag`.
+
+## ADR-013 — Pathfinding is a coarse grid A*, and passability comes from slope and depth
+
+**Context.** Milestone 8's units walked straight lines through cliffs and water.
+The obvious source for "where can a unit walk" is the `.scmap` terrain-type
+array, which the ground already reads for colour — but `Scmap.hpp` records its
+semantics as undocumented, and guessing it would repeat exactly the mistake
+ADR-009 exists to record.
+
+**Decision.** Passability is derived from the heightfield instead, by the two
+rules the engine itself uses. Slope: a face's steepness is `1 - normal.y`
+(`ReadMap.cpp:765-778`), compared against
+`1 - cos(clamp(degrees, 0, 60) * 1.5)` (`MoveDefHandler.cpp:84-95`). Depth:
+ground under more than `maxWaterDepth` elmos is out, since Recoil's rule is a
+depth limit rather than a water line. Defaults are BAR's Pawn — `maxslope 17`,
+`maxwaterdepth 12`. The search is A* over an 8-connected grid of 8x8-square
+cells with an octile heuristic.
+
+**Alternatives considered.** *The terrain-type array* — undocumented, and unit
+movement definitions live in `.bp` blueprints inside `units.scd`, a separate
+archive and out of scope. *One node per heightmap square* — a million nodes on a
+1024-square map, for a search whose answer is a route around an island. *Flow
+fields* — the right structure once fifty units share one destination, and
+premature while a single selected unit is all that can be ordered.
+
+**Consequences.** A cell is passable only when every square in it is, so one
+cliff face blocks a 64-elmo cell. That errs toward routing around things, which
+is the right direction to be wrong in at this resolution, but it will refuse
+gaps a unit could actually fit through. Waypoints sit at cell centres and
+intermediate ones use a loose arrival radius, so units round corners rather than
+driving into each centre and pivoting.
+
+The visible consequence is that an unreachable destination now does nothing.
+On an island map most units cannot reach most places, so the app reports how
+many found a route — without that line, 27 of 120 units standing still reads as
+a broken sim rather than as a correct answer.
+
+Still absent, and deliberately: unit-unit collision. Units mass at a rally point
+by standing inside one another. Collision changes what a path *means* — it stops
+being a property of the terrain alone — and is a milestone rather than a detail.
+
+## ADR-014 — A walk cycle is paced by distance, not by a clock
+
+**Context.** Animation playback was a clock: `animationTime` advanced with wall
+time and every unit read it. That is correct for a scene being inspected and
+wrong for one being simulated, because feet slide whenever the cycle and the
+ground disagree — and they disagree constantly. A unit standing still keeps
+striding; one pivoting on the spot keeps striding; one that has arrived strides
+forever.
+
+**Decision.** The sim accumulates the horizontal ground distance each unit has
+walked, and the phase is `distance / (speed * duration)` — stride being the
+distance one cycle covers at full speed. Each batch declares whether its
+instances' phases are the whole answer or an offset added to the renderer's
+clock.
+
+**Alternatives considered.** *A playback-rate multiplier per unit* — expresses
+"walk slower" but not "stop", and needs rewriting the moment a unit turns.
+*Deriving distance from displacement* — wrong for a unit that goes out and comes
+back, which has covered twice what its displacement says. *Always driving from
+the CPU* — would freeze the animation in headless captures, which have no sim
+stepping them and where `--time` is the whole point.
+
+**Consequences.** Stride length is an assumption, not data: it says the
+animation was authored for the unit's top speed. Real content carries no such
+field for this engine to read, and the assumption is exactly right at full speed
+and gracefully wrong below it. A batch pushed intermittently holds its pose,
+which is the honest result of nothing driving it.
+
+The pairing also made the milestone verifiable. A marched scene is now
+independent of `--time` — two renders half a cycle apart are pixel-identical
+when distance-driven and differ over the model when clock-driven, which is a
+deterministic offscreen test of the whole path from sim to shader.

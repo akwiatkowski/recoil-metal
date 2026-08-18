@@ -212,12 +212,61 @@ reimplemented.*
    ![units rallying, 5 seconds in](docs/images/m8-rally-05s.png)
    ![the same order 50 seconds in](docs/images/m8-rally-50s.png)
 
-   Deliberately not done: **slope alignment** (`UnitInstance` carries a single
-   yaw by design, so tilting to the terrain means growing a struct the shader
-   reads verbatim), **per-instance animation phase** (every instance in a batch
-   shares one clock, so a squad walks in perfect unison — fixing it means the
-   vertex shader indexing the bone buffer per instance), and **foot sliding**,
-   since nothing matches walk speed to animation playback rate.
+   Deliberately not done at the time: **slope alignment** (`UnitInstance`
+   carries a single yaw by design, so tilting to the terrain means growing a
+   struct the shader reads verbatim). The other two deferrals — per-instance
+   animation phase and foot sliding — are milestone 9.
+
+9. **Squads, pathfinding, and the unit shader's last guess.** **✔ done.**
+
+   **Each instance gets its own animation phase.** Playback used to bind the
+   bone buffer at one pose's offset for the whole batch, so every unit in it
+   shared a clock and a squad walked in perfect lockstep — which reads as one
+   unit drawn several times. The whole keyframe buffer is now bound and the
+   vertex shader indexes it per instance. ADR-006's bargain survives: poses are
+   still baked once at upload, and nothing is written per frame.
+
+   **The walk cycle is paced by ground covered, not by wall time.** A clock and
+   a walk cycle disagree constantly — a unit standing still keeps striding, one
+   pivoting on the spot keeps striding, one that has arrived strides forever.
+   Distance has none of those cases. The stride is `speed * duration`, the
+   distance one cycle covers at full speed, which is the assumption the
+   animation was authored under; at top speed the cadence is exactly what the
+   clock gave, and every slower case falls out for free. A batch declares which
+   of the two drives it, so headless captures stay on the clock and `--time`
+   keeps meaning something.
+
+   **Units route instead of walking through things.** Passability is a coarse
+   grid — 8×8 heightmap squares per cell, so a 1024-square map searches 16k
+   nodes rather than a million — from two of the engine's own rules. A face's
+   slope is `1 - normal.y`, the quantity Recoil's slope map holds
+   (`ReadMap.cpp:778`), compared against `1 - cos(clamp(deg, 0, 60) * 1.5)`
+   exactly as `MoveDefHandler.cpp:84` computes it — the 1.5 and the clamp mean a
+   unit def's nominal 0..60 really spans 0..90 degrees of ground. Water is a
+   *depth* limit rather than a line, because a unit fords shallows. Both
+   defaults are BAR's Pawn again: `maxslope 17`, `maxwaterdepth 12`.
+
+   The search is A* with an octile heuristic; diagonal steps require both
+   orthogonal neighbours open, or units clip the corners of cliffs. An
+   unreachable destination means the unit stays put rather than setting off into
+   the sea — on an island map like Angel Crossing that is 27 of 120 units
+   standing still, which the app says out loud so it does not read as a bug.
+
+   **And `_SpecTeam`'s channels are no longer guessed.** ADR-005 left green and
+   blue unused because nothing verified said what they held. `effects/mesh.fx`
+   settles all four: red multiplies the environment reflection, green scales an
+   additive Phong highlight, blue is emissive at `glowMultiplier` 2.0, alpha is
+   the team mask. The old reading conflated two independent channels — it drove
+   both the highlight and the reflection from red — and rendered every emissive
+   surface unlit. It also exposed a fallback bug: a model with no `_SpecTeam`
+   defaulted to alpha 1, which under that layout means *paint the whole thing in
+   the team's colour*. Both normal-map conventions came out of the same read and
+   they differ, so neither could have been assumed from the other: model normal
+   maps are DXT5nm-swizzled (`.gaa`, Z reconstructed), the per-map one is
+   straight `.xyz`. See [ADR-012](ADR_DECISIONS.md).
+
+   Still not done: slope alignment, and unit-unit collision — units mass at a
+   rally point by standing inside each other.
 
 Stage B (sim semantics, only if milestones 1–5 prove out) is deliberately not
 planned. The cliff is real; plan when we're on it.

@@ -130,6 +130,18 @@ formats, built test-first in modern C++, as both research and a C++ showcase.
   height for four elmos and then jumps the full height difference of the square.
   Placement and the sim must share ONE sampler, or a unit jumps on its first
   tick because the two disagreed about where the ground was.
+- **A missing texture's fallback alpha is not free.** The neutral shading
+  texture defaulted to alpha 1, which is harmless for Recoil (its mask is in
+  tex1) and catastrophic for Supreme Commander, where alpha IS the team mask: a
+  model with no `_SpecTeam` rendered painted entirely in its team's colour with
+  no albedo at all. When two families read the same slot differently, a fallback
+  has to be neutral for BOTH.
+- **Do not verify anything by capturing the app window while it has focus.** The
+  app calls `activateIgnoringOtherApps`, so a stray trackpad touch orbits or
+  zooms the camera between two captures and the whole frame differs. Two runs
+  gave contradictory answers this way. Prefer `--screenshot`, which is offscreen
+  and deterministic — a terrain-only capture is byte-identical across frames, so
+  any real difference shows up as a pixel diff you can trust.
 - **Screenshots: capture the window by ID, not the screen.** With two displays
   and Spaces, `screencapture -x out.png` repeatedly grabbed bare wallpaper
   while the app was demonstrably presenting frames. Get the id from
