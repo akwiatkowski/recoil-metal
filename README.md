@@ -232,7 +232,12 @@ fails outright for a window on an inactive Space, which is why this exists.
 
 PNG encoding goes through ImageIO, which is part of the OS — not a dependency.
 
-Drag to orbit, scroll to zoom.
+Drag to orbit, scroll to zoom, right-drag (or shift-drag, for a trackpad) to
+pan. Panning drags the ground under the cursor rather than moving by a tuned
+constant — the step comes from the frustum's width at the camera's target, so it
+keeps pace with the pointer at any zoom. The target is held inside the map, since
+at a whole-map framing one point of mouse travel is ~18 elmos and a single
+ordinary drag would otherwise leave the map with nothing to navigate back by.
 
 Catch2 is fetched by CMake at configure time.
 

@@ -46,6 +46,35 @@ struct OrbitCamera {
     /// Scales the orbit distance, clamped. factor > 1 moves away.
     void zoom(float factor) noexcept;
 
+    // Horizontal bounds the target is held within, in elmos. `frame` sets these
+    // to whatever it framed; until it runs they are infinite, so a camera that
+    // was never framed pans freely rather than being pinned to the origin.
+    //
+    // This exists because panning is fast by design — at a whole-map framing one
+    // point of mouse travel is ~18 elmos, so a single ordinary drag crosses most
+    // of the map. Off the edge there is no landmark to navigate back by, and the
+    // window goes blank; a limit is the difference between a camera that is fast
+    // and one that is lost.
+    simd_float2 panMin = {-INFINITY, -INFINITY};
+    simd_float2 panMax = {INFINITY, INFINITY};
+
+    // Slides the orbited point across the ground plane, in elmos.
+    //
+    // Without this the camera can only ever inspect wherever `frame` last put
+    // the target, which on an 8192-elmo map means the centre and nothing else.
+    //
+    // The basis is the camera's own, flattened to the ground: +right is screen
+    // right, +forward is the direction the camera looks, with pitch projected
+    // out so that panning never changes the target's height. The result is
+    // clamped into [panMin, panMax] on X and Z; Y is never touched.
+    void pan(float right, float forward) noexcept;
+
+    /// Elmos spanned by one screen point at the target's depth. Panning by this
+    /// per point of mouse travel keeps the ground pinned under the cursor, which
+    /// is what makes a drag feel like grabbing the terrain rather than nudging
+    /// it. Scales with distance, so it holds at every zoom level.
+    [[nodiscard]] float elmosPerPoint(float viewportHeightPoints) const noexcept;
+
     /// Places the camera so an axis-aligned world box comfortably fills the view.
     void frame(simd_float3 boxMin, simd_float3 boxMax) noexcept;
 

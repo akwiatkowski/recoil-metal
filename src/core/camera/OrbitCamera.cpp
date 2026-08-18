@@ -17,8 +17,42 @@ void OrbitCamera::zoom(float factor) noexcept {
     distance = std::clamp(distance * factor, kMinDistance, kMaxDistance);
 }
 
+void OrbitCamera::pan(float right, float forward) noexcept {
+    // The view basis, flattened. viewMatrix's xAxis is cross(up, zAxis), which
+    // is already horizontal for any pitch — so this IS the screen-right vector,
+    // not an approximation of it. Forward is the horizontal part of the eye ->
+    // target direction, which is the negated horizontal part of the offset in
+    // eye(): dropping the y component is what keeps a pan level.
+    const simd_float3 rightAxis{std::cos(yaw), 0.0f, -std::sin(yaw)};
+    const simd_float3 forwardAxis{-std::sin(yaw), 0.0f, -std::cos(yaw)};
+
+    target += rightAxis * right + forwardAxis * forward;
+
+    // Clamped after the move rather than by rejecting it, so sliding along an
+    // edge still works: a diagonal drag at the map's north border keeps its
+    // east-west component instead of stopping dead.
+    target.x = std::clamp(target.x, panMin.x, panMax.x);
+    target.z = std::clamp(target.z, panMin.y, panMax.y);
+}
+
+float OrbitCamera::elmosPerPoint(float viewportHeightPoints) const noexcept {
+    if (viewportHeightPoints <= 0.0f) {
+        return 0.0f;
+    }
+    // The view frustum's height at the target's depth, divided over the points
+    // that show it. tan(fovY/2) * distance is the half-height, hence the 2.
+    return 2.0f * distance * std::tan(fovY * 0.5f) / viewportHeightPoints;
+}
+
 void OrbitCamera::frame(simd_float3 boxMin, simd_float3 boxMax) noexcept {
     target = (boxMin + boxMax) * 0.5f;
+
+    // Whatever was framed is what panning may explore. Taking the limit from
+    // here rather than from a map handed to the camera keeps core/camera free of
+    // any notion of a map — the same reason `frame` takes a box and not a
+    // HeightField.
+    panMin = simd_make_float2(std::min(boxMin.x, boxMax.x), std::min(boxMin.z, boxMax.z));
+    panMax = simd_make_float2(std::max(boxMin.x, boxMax.x), std::max(boxMin.z, boxMax.z));
 
     // Pull back far enough that the box's bounding sphere fits inside the
     // vertical field of view, with a little headroom so the map does not touch

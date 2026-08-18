@@ -52,12 +52,41 @@
     if (self.renderer == nullptr) {
         return;
     }
+    // Shift is the trackpad's way in: a right-drag needs a second button, and a
+    // two-finger click-drag on a trackpad is awkward enough that binding pan to
+    // it alone would leave laptop use without a pan at all.
+    if ((event.modifierFlags & NSEventModifierFlagShift) != 0) {
+        [self panBy:event];
+        return;
+    }
     // Tuned so a drag across the window is a little under a half-turn. Dragging
     // right swings the camera right (the world appears to move left), which is
     // the convention Recoil and most RTS cameras use.
     constexpr float kRadiansPerPoint = 0.008f;
     self.renderer->camera().orbit(static_cast<float>(-event.deltaX) * kRadiansPerPoint,
                                   static_cast<float>(event.deltaY) * kRadiansPerPoint);
+}
+
+- (void)rightMouseDragged:(NSEvent*)event {
+    [self panBy:event];
+}
+
+// Drags the ground under the cursor, rather than nudging the camera by a tuned
+// constant. Because the step is derived from the frustum's width at the target
+// (OrbitCamera::elmosPerPoint), terrain keeps pace with the pointer at every
+// zoom level — there is no sensitivity constant here to get wrong.
+- (void)panBy:(NSEvent*)event {
+    if (self.renderer == nullptr) {
+        return;
+    }
+    rm::OrbitCamera& camera = self.renderer->camera();
+    const float scale = camera.elmosPerPoint(static_cast<float>(self.bounds.size.height));
+
+    // Both signs are negated because the camera moves opposite to the ground:
+    // pulling the terrain right means walking the target left. AppKit's deltaY
+    // is positive downwards, which is the same sense `orbit` above relies on.
+    camera.pan(static_cast<float>(-event.deltaX) * scale,
+               static_cast<float>(event.deltaY) * scale);
 }
 
 - (void)scrollWheel:(NSEvent*)event {
