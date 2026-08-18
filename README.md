@@ -165,6 +165,61 @@ reimplemented.*
    `_SpecTeam`'s. Everything else is family-blind. See
    [ADR-005](ADR_DECISIONS.md) and [ADR-006](ADR_DECISIONS.md).
 
+8. **Movable units.** Click to select, right-click to order. **✔ done** — the
+   first thing in the engine whose state changes between frames.
+
+   Everything before this was static once uploaded. Instances were baked into a
+   GPU buffer at load and never touched again, and animation playback is
+   deliberately a *buffer offset* into pre-baked poses so that a moving model
+   costs no per-frame CPU work at all. Movement is what finally needs the other
+   path, and it needs it safely: instance storage is `StorageModeShared`, so
+   rewriting it while the GPU may still be reading last frame's copy is a plain
+   data race. It became a three-deep ring with a completion-handler semaphore —
+   the same `kMaxFramesInFlight` the offscreen benchmark already ran on — and
+   drawing picks a slot by offset, exactly as animation picks a pose.
+
+   The sim is movement and nothing else: units walk straight lines and pass
+   through each other and through cliffs. Pathfinding and collision are the
+   Stage B cliff below. It ticks at **30 Hz**, matching Recoil's own `GAME_SPEED`
+   (`GlobalConstants.h:52`) — worth matching exactly rather than picking
+   something convenient, because every speed and turn rate in the content is
+   authored against that rate. Speed and turn rate default to BAR's Pawn (87
+   elmos/second, and a `turnrate` of 1214.4 converted out of Recoil's circle
+   divisions per frame to 3.49 rad/s), so the numbers are representative rather
+   than invented.
+
+   Three things fell out of building it that a plan would not have predicted.
+   Facing is `atan2(dx, dz)`, not the usual `atan2(z, x)` — the vertex shader
+   maps a model's local +Z to `(sin yaw, cos yaw)`, and swapping the arguments
+   compiles, runs, and renders every unit walking sideways. Forward speed scales
+   with `cos` of the remaining heading error, which makes a unit pivot in place
+   before setting off instead of driving away and arcing back, and needs no
+   arbitrary "turn until aligned" threshold because the cosine already is one.
+   And `setUnits` **reorders** batches by texture pair, so the caller's batch
+   index is not the renderer's slot index — pushing instances by the wrong one
+   silently moves the wrong model.
+
+   The nearest-corner ground sampler from milestone 5 had to go: it is exact at
+   every corner and wrong everywhere between, and a unit crossing a square held
+   its height for four elmos and then jumped the whole difference. Placement and
+   the sim now share one interpolating sampler, because if they disagree about
+   where the ground is a unit jumps the instant it is first stepped.
+
+   Picking is arithmetic on the heightfield rather than a read-back of a depth
+   or ID buffer: marched at half-square steps and bisected, which costs a GPU
+   round-trip nothing and makes "does clicking there select that unit" a test
+   instead of something to squint at.
+
+   ![units rallying, 5 seconds in](docs/images/m8-rally-05s.png)
+   ![the same order 50 seconds in](docs/images/m8-rally-50s.png)
+
+   Deliberately not done: **slope alignment** (`UnitInstance` carries a single
+   yaw by design, so tilting to the terrain means growing a struct the shader
+   reads verbatim), **per-instance animation phase** (every instance in a batch
+   shares one clock, so a squad walks in perfect unison — fixing it means the
+   vertex shader indexing the bone buffer per instance), and **foot sliding**,
+   since nothing matches walk speed to animation playback rate.
+
 Stage B (sim semantics, only if milestones 1–5 prove out) is deliberately not
 planned. The cliff is real; plan when we're on it.
 
@@ -209,6 +264,23 @@ BAR=~/projects/llm/games/forged-alliance-reborn/reference/BAR/objects3d/Units
     --units $BAR/corgantbig.s3o 30 --units $BAR/armstump.s3o 60 \
     --units $BAR/corraid.s3o 60 --focus
 # scene: 3 models, 4 textures uploaded, 2 texture binds per frame
+```
+
+### Moving units
+
+Left-click selects the unit under the cursor (it turns white); right-click
+orders it to the ground under the cursor. Drags still belong to the camera —
+only a press and release that stayed put counts as a click.
+
+```sh
+# --march <x> <z> <seconds>: order EVERY unit to a point and pre-run the sim.
+# Click-to-move cannot be screenshotted, so this is the reproducible way in:
+# the same orders and the same tick count give the same scene every run.
+./build/recoil-metal "$MAP" --units $BAR/armstump.s3o 200 --march 1500 1500 0 --focus
+
+# ...and the same scene frozen 14 seconds later, headless
+./build/recoil-metal "$MAP" --units $BAR/armstump.s3o 40 \
+    --march 2000 2000 14 --focus --screenshot /tmp/marched.png 1200 800
 ```
 
 `--units <model.s3o> [count] [scale]`, repeatable. Textures are resolved by the

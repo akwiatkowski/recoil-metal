@@ -281,3 +281,62 @@ left unread, and for the per-map normal map convention. The corpus-derived
 reconstruction was a good method in the absence of a source, and it got the
 structure right — but it cost two wrong details that ten minutes of reading would
 have prevented.
+
+## ADR-010 — Instances get a frames-in-flight ring, not a second buffer or a stall
+
+**Context.** Until milestone 8 nothing in a scene changed between frames:
+instances were uploaded once at `setUnits`, and animation playback is a buffer
+offset into poses baked at upload (ADR-006), so a moving model costs no per-frame
+CPU work. Movable units need the instance buffer rewritten every frame. It is
+`StorageModeShared` — CPU and GPU see the same memory on Apple silicon, which is
+what makes the upload free and also what makes writing it while the GPU may
+still be reading last frame's copy a plain data race.
+
+**Decision.** The buffer holds `kMaxFramesInFlight` (3) consecutive copies of the
+instances. `beginFrame` acquires a counting semaphore released by the command
+buffer's completion handler, then advances the slot; drawing selects the slot by
+buffer offset. `setUnits` seeds every slot with the initial instances, so a batch
+that is never pushed still draws correctly from whichever slot a frame lands on.
+
+**Alternatives considered.** *Waiting for the GPU each frame* — correct, trivial,
+and throws away the pipelining the offscreen benchmark exists to measure.
+*Double buffering* — one fewer slot for the same machinery, and the display
+link's own drawable pool is three deep, so three is the number that matches what
+actually paces the frame loop. *Relying on that drawable pool alone to throttle
+the CPU* — true in practice today, undocumented, and silently wrong the moment
+the link is moved off the main run loop. *A fresh buffer per frame from a pool* —
+allocation in the frame loop, to avoid a memcpy of 36 bytes per unit.
+
+**Consequences.** The pairing is a real footgun: every `beginFrame` must be
+followed by exactly one `drawFrame`, including on the path where there is no
+drawable at all, or the ring starves after three frames and the app stops
+rendering with no error anywhere. `Window` owns the pairing so nothing else has
+to. The instance count may shrink per frame but never grow past what was
+uploaded, and a batch must be pushed every frame or never — one pushed
+intermittently shows a slot three frames stale whenever it is skipped.
+
+## ADR-011 — Picking is a march on the heightfield, not a GPU read-back
+
+**Context.** Click-to-move needs two answers: which unit is under the cursor, and
+which point of ground is. The usual RTS answer is to render an ID or depth buffer
+and read the pixel back.
+
+**Decision.** Both are computed on the CPU. A screen point becomes a world ray by
+inverting the camera's view-projection; the ground hit is found by marching the
+ray at half-square steps and bisecting the first crossing; the unit is the
+instance nearest the ray within a radius.
+
+**Alternatives considered.** *Depth or ID buffer read-back* — exact, handles the
+model's real silhouette, and costs a GPU round-trip plus a frame of latency on
+every click. More decisively, it cannot be tested without a device, and this
+repo's rule is that anything pure gets a failing test first. *Ray-triangle
+intersection against the terrain mesh* — the heightfield has no triangles until
+the mesh builder makes some, and a march does not care how the surface was
+triangulated.
+
+**Consequences.** Picking is fifteen unit tests instead of a screenshot. Units
+are points with a radius rather than silhouettes, so a click near a large model's
+edge can miss it and a click in the gap between two small ones can hit. A ray
+grazing a thin ridge can tunnel through it — acceptable at once per click, not at
+once per frame. The bilinear sampler that picking and the sim share is also why
+the nearest-corner sampler from milestone 5 had to go.

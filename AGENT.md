@@ -109,6 +109,27 @@ formats, built test-first in modern C++, as both research and a C++ showcase.
   engine's missing-tile fill *and* an entirely ordinary DXT1 selector byte
   (`0b10101010`) — it occurs in ~2.8% of real tile data. Assert exact placement
   against the source bytes instead.
+- **A unit's facing is `atan2(dx, dz)`, not `atan2(dz, dx)`.** The vertex shader
+  maps a model's local +Z to `(sin yaw, cos yaw)`, so yaw is measured from +Z
+  toward +X. Swapping the arguments compiles, runs, and renders every unit
+  walking sideways — which reads as a model-orientation bug, not a maths one.
+- **`setUnits` reorders batches by texture pair**, so the caller's batch index
+  is NOT the renderer's slot index, and empty batches are skipped entirely.
+  Anything addressing a batch after upload (`setInstances`) must go through the
+  mapping the renderer keeps, or it silently drives the wrong model.
+- **Instance data is `StorageModeShared`, so per-frame writes need a ring AND a
+  fence.** Overwriting the buffer while the GPU may still be reading last
+  frame's copy tears the transform of whatever unit is being written — it shows
+  up as a single unit at the origin for one frame, which looks exactly like a
+  fluke worth ignoring. `beginFrame` waits on a `kMaxFramesInFlight` semaphore
+  released by the command buffer's completion handler. Every path that opens a
+  frame must close it, including the one where there is no drawable: leak the
+  permit three times and the app stops rendering with no error anywhere.
+- **Nearest-corner ground sampling is fine until something moves.** It is exact
+  at every corner and wrong everywhere between, so a moving unit holds its
+  height for four elmos and then jumps the full height difference of the square.
+  Placement and the sim must share ONE sampler, or a unit jumps on its first
+  tick because the two disagreed about where the ground was.
 - **Screenshots: capture the window by ID, not the screen.** With two displays
   and Spaces, `screencapture -x out.png` repeatedly grabbed bare wallpaper
   while the app was demonstrably presenting frames. Get the id from
