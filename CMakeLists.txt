@@ -70,7 +70,8 @@ add_library(rm_core STATIC
     src/core/model/Pose.cpp
     src/core/texture/Dds.cpp
     src/core/scene/UnitPlacement.cpp
-    src/core/scene/UnitBatch.cpp)
+    src/core/scene/UnitBatch.cpp
+    src/core/sim/Movement.cpp)
 target_include_directories(rm_core PUBLIC src)
 target_link_libraries(rm_core PUBLIC rm_project_warnings)
 
@@ -115,6 +116,7 @@ if(BUILD_TESTING)
         tests/test_real_sca.cpp
         tests/test_dds.cpp
         tests/test_unit_placement.cpp
+        tests/test_movement.cpp
         tests/test_team_colours.cpp
         tests/test_unit_batch.cpp
         tests/test_real_map.cpp
