@@ -12,7 +12,9 @@
 #include "core/model/S3o.hpp"
 #include "core/model/Sca.hpp"
 #include "core/model/Scm.hpp"
+#include "core/scene/Picking.hpp"
 #include "core/scene/UnitPlacement.hpp"
+#include "core/sim/Movement.hpp"
 #include "core/texture/Dds.hpp"
 #include "core/map/TileAtlas.hpp"
 #include "core/mesh/TerrainMesh.hpp"
@@ -561,7 +563,37 @@ struct UnitScene {
     std::deque<rm::sca::Animation> animations;
     std::vector<rm::UnitBatch> batches;
     TextureRegistry textures;
+
+    // One MoveState per instance, in the same order, so batch b's instance i is
+    // driven by motion[b][i]. Parallel arrays rather than a field on
+    // UnitInstance because that struct's layout is read verbatim by the vertex
+    // shader and pinned by a static_assert.
+    std::deque<std::vector<rm::sim::MoveState>> motion;
 };
+
+// Which unit the user has selected, if any.
+//
+// One unit rather than a set: box-selection and group orders are UI, and what
+// this milestone has to prove is that an order reaches the sim and the sim
+// reaches the screen. A set changes nothing about that path.
+struct Selection {
+    std::size_t batch = 0;
+    std::size_t instance = 0;
+    rm::TeamColour originalColour{};
+};
+
+/// The colour a selected unit is tinted.
+///
+/// Reusing the team-colour field is what makes selection feedback free: it is
+/// already per instance, already uploaded every frame, and already read by both
+/// families' shaders through their team-colour mask. A ring drawn on the ground
+/// would read better and costs geometry, a pipeline and a pass — worth doing
+/// once there is a UI to put it in.
+///
+/// Pure white at full brightness, which no team colour in the palette is (the
+/// white team is 0.92) so a selected unit is distinguishable even from an
+/// unselected white one.
+inline constexpr rm::TeamColour kSelectionColour{{1.0f, 1.0f, 1.0f, 1.0f}};
 
 /// One `--units` argument: a model, how many of it, how big, and optionally an
 /// animation to play on it.
@@ -660,6 +692,9 @@ struct UnitOptions {
 
         scene.models.push_back(std::move(*model));
         scene.instances.push_back(std::move(placed));
+        // Idle, in step with the instances just placed. Nothing moves until
+        // something is ordered to.
+        scene.motion.emplace_back(scene.instances.back().size());
         scene.batches.push_back(rm::UnitBatch{
             .model = &scene.models.back(),
             .instances = scene.instances.back(),
@@ -789,6 +824,59 @@ struct ShotOptions {
         }
     }
     return 0.0f;
+}
+
+/// `--march <x> <z> <seconds>`: order every unit to a world position and run the
+/// sim that long before the first frame.
+///
+/// Click-to-move cannot be screenshotted — there is no click in a headless
+/// capture, and no way to script one here (AppleScript has no Accessibility
+/// permission on this machine). This gives the same path a reproducible
+/// entry point: the same orders and the same number of fixed ticks produce the
+/// same scene every run, which is what makes a screenshot or a benchmark of
+/// moving units worth comparing. Same rationale as `--time` for animation.
+struct MarchOptions {
+    bool enabled = false;
+    float x = 0.0f;
+    float z = 0.0f;
+    float seconds = 0.0f;
+};
+
+[[nodiscard]] MarchOptions parseMarch(int argc, const char* argv[]) {
+    MarchOptions options;
+    for (int i = 2; i + 3 < argc; ++i) {
+        if (std::string{argv[i]} != "--march") {
+            continue;
+        }
+        options.enabled = true;
+        options.x = static_cast<float>(std::atof(argv[i + 1]));
+        options.z = static_cast<float>(std::atof(argv[i + 2]));
+        options.seconds = static_cast<float>(std::atof(argv[i + 3]));
+        break;
+    }
+    return options;
+}
+
+/// Orders every unit in the scene to a point, and runs the sim for a while.
+void march(UnitScene& scene, const rm::HeightField& field, const MarchOptions& options) {
+    for (std::size_t batch = 0; batch < scene.motion.size(); ++batch) {
+        for (rm::sim::MoveState& state : scene.motion[batch]) {
+            rm::sim::orderTo(state, field, options.x, options.z);
+        }
+    }
+
+    // Whole ticks from a duration, rather than feeding a wall clock: this has
+    // to land on exactly the same state every run.
+    const auto ticks = static_cast<int>(options.seconds
+                                        * static_cast<float>(rm::sim::kTicksPerSecond));
+    for (int i = 0; i < ticks; ++i) {
+        for (std::size_t batch = 0; batch < scene.instances.size(); ++batch) {
+            rm::sim::tick(scene.instances[batch], scene.motion[batch], field);
+        }
+    }
+
+    std::printf("march: every unit ordered to (%.0f, %.0f), %d ticks simulated\n",
+                static_cast<double>(options.x), static_cast<double>(options.z), ticks);
 }
 
 /// Whether `--focus` was given: frame the first instance instead of the map.
@@ -984,6 +1072,37 @@ void writeCsv(const std::string& path, const rm::bench::FrameRecorder& recorder)
     std::printf("  wrote %s (%zu frames)\n", path.c_str(), recorder.recorded());
 }
 
+namespace {
+
+/// The unit nearest the ray across every batch, or nothing.
+///
+/// pickUnit searches one array at a time because that is how the instances are
+/// held — one per model. Comparing its winners across batches is what makes the
+/// nearest unit on SCREEN win, rather than the nearest one in whichever model
+/// happened to load first.
+[[nodiscard]] std::optional<Selection> pickAcrossBatches(const rm::Ray& ray,
+                                                         const UnitScene& scene) {
+    std::optional<Selection> best;
+    float bestDistance = rm::kDefaultPickRadiusElmos;
+
+    for (std::size_t batch = 0; batch < scene.instances.size(); ++batch) {
+        const std::vector<rm::UnitInstance>& instances = scene.instances[batch];
+        const std::optional<std::size_t> hit = rm::pickUnit(ray, instances, bestDistance);
+        if (!hit) {
+            continue;
+        }
+
+        const rm::UnitInstance& unit = instances[*hit];
+        bestDistance = rm::distanceToRay(
+            ray, simd_make_float3(unit.position[0], unit.position[1], unit.position[2]));
+        best = Selection{.batch = batch, .instance = *hit, .originalColour = unit.teamColour};
+    }
+
+    return best;
+}
+
+} // namespace
+
 int main(int argc, const char* argv[]) {
     @autoreleasepool {
         const auto map = resolveMap(argc, argv);
@@ -997,8 +1116,17 @@ int main(int argc, const char* argv[]) {
         // Land above the water, whatever the map calls water: Recoil's plane is
         // always y = 0, Supreme Commander's is per map and 140 elmos on most.
         // Scattering above 0 on a FA map drowns most of the units.
-        const UnitScene units = resolveUnits(unitRequests, map->field, map->starts,
-                                             map->hasWater ? map->waterLevel : 0.0f);
+        // Not const: the windowed path steps this scene every frame.
+        UnitScene units = resolveUnits(unitRequests, map->field, map->starts,
+                                       map->hasWater ? map->waterLevel : 0.0f);
+
+        // Before anything is uploaded: setUnits seeds every ring slot from the
+        // instances as they stand, so a marched scene is correct even on the
+        // paths that never push an instance update.
+        const MarchOptions marchOptions = parseMarch(argc, argv);
+        if (marchOptions.enabled) {
+            march(units, map->field, marchOptions);
+        }
 
         const rm::TerrainMesh mesh = rm::buildTerrainMesh(map->field);
         std::printf("terrain: %zu vertices, %zu triangles, height %.1f..%.1f elmos\n",
@@ -1058,13 +1186,74 @@ int main(int argc, const char* argv[]) {
         [app finishLaunching];
 
         // 1280x720 points: comfortable debug size on a laptop screen.
-        rm::Window window{1280, 720, "recoil-metal — m5: units on SMF terrain"};
+        rm::Window window{1280, 720, "recoil-metal — m8: movable units"};
         window.setTerrain(mesh);
         applyGround(window, *map);
         window.setUnits(units.textures.all(), units.batches);
         if (focus) {
             focusOnFirstUnit(window, units);
         }
+
+        // --- Click to move -------------------------------------------------
+        // Left selects the unit under the cursor, right orders the selection to
+        // the ground under it. Both arrive as a world ray; what it hit is
+        // decided here, where the map and the units are.
+        //
+        // Captured by reference: everything named outlives the window, which is
+        // destroyed at the end of this scope before any of them.
+        std::optional<Selection> selected;
+        rm::sim::TickClock clock;
+
+        window.onClick([&](const rm::Ray& ray, rm::MouseButton button) {
+            if (button == rm::MouseButton::Left) {
+                // Deselect first, so clicking empty ground clears the tint
+                // rather than leaving a unit lit with nothing selected.
+                if (selected) {
+                    units.instances[selected->batch][selected->instance].teamColour =
+                        selected->originalColour;
+                    selected.reset();
+                }
+
+                selected = pickAcrossBatches(ray, units);
+                if (selected) {
+                    units.instances[selected->batch][selected->instance].teamColour =
+                        kSelectionColour;
+                }
+                return;
+            }
+
+            if (!selected) {
+                return;  // an order with nothing selected is not an error
+            }
+
+            const std::optional<simd_float3> ground = rm::pickGround(ray, map->field);
+            if (!ground) {
+                return;  // clicked the sky, or past the edge of the map
+            }
+
+            rm::sim::orderTo(units.motion[selected->batch][selected->instance], map->field,
+                             ground->x, ground->z);
+        });
+
+        // --- The frame loop ------------------------------------------------
+        // Ticks the sim at its own fixed rate, then hands every batch's
+        // instances to the renderer. Pushing unconditionally rather than only
+        // when something moved: the ring slot rotates every frame regardless,
+        // and a batch pushed only sometimes would show a slot three frames old
+        // whenever it was skipped (Renderer::setInstances).
+        window.onFrame([&](float elapsed) {
+            const int ticks = clock.advance(elapsed);
+            for (int i = 0; i < ticks; ++i) {
+                for (std::size_t batch = 0; batch < units.instances.size(); ++batch) {
+                    rm::sim::tick(units.instances[batch], units.motion[batch], map->field);
+                }
+            }
+
+            for (std::size_t batch = 0; batch < units.instances.size(); ++batch) {
+                window.setInstances(batch, units.instances[batch]);
+            }
+        });
+
         window.show();
 
         RMBenchWatcher* watcher = nil;
