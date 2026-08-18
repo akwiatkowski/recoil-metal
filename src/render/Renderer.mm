@@ -1031,6 +1031,7 @@ void Renderer::setTerrain(const TerrainMesh& mesh) {
     }
 
     indexCount_ = mesh.indices.size();
+    terrainChunks_ = mesh.chunks;
     terrainMinY_ = mesh.minY;
     terrainMaxY_ = mesh.maxY;
     mapWidth_ = mesh.maxX - mesh.minX;
@@ -1931,6 +1932,8 @@ void Renderer::updateLightMatrix() noexcept {
         simd_make_float4(0.0f, 0.0f, 0.0f, 1.0f));
 
     lightViewProjection_ = simd_mul(projection, view);
+    lightCentre_ = centre;
+    lightExtent_ = extent;
     hasShadows_ = true;
 }
 
@@ -1968,10 +1971,66 @@ void Renderer::encodeShadowPass(MTL::CommandBuffer* commandBuffer) noexcept {
     if (indexCount_ > 0) {
         encoder->setRenderPipelineState(terrainShadowPipeline_);
         encoder->setVertexBuffer(vertexBuffer_, 0, kVertexBufferIndex);
-        encoder->drawIndexedPrimitives(MTL::PrimitiveType::PrimitiveTypeTriangle,
-                                       static_cast<NS::UInteger>(indexCount_),
-                                       MTL::IndexType::IndexTypeUInt32, indexBuffer_,
-                                       NS::UInteger{0});
+
+        // Only the chunks the light's box touches. The box follows the camera
+        // and covers a fraction of the map, so on a large map this is a handful
+        // of chunks against sixteen by sixteen — and it was the whole reason
+        // the shadow pass cost as much as it did.
+        //
+        // Tested in the light's own axes as a sphere against the box: the box
+        // is oriented along the sun, so an axis-aligned test in world space
+        // would be wrong, and a chunk's bounding sphere is cheap and never too
+        // small. Too generous is harmless here; too tight drops shadows.
+        // Surviving chunks are merged into contiguous RUNS before drawing.
+        // Without that this trades one draw of the whole terrain for one per
+        // chunk, and when the camera is pulled back far enough to keep them all
+        // — which the benchmark does — it is measurably slower than not culling
+        // at all. Merged, the far case costs a handful of draws and the near
+        // case one or two.
+        std::size_t runFirst = 0;
+        std::size_t runCount = 0;
+
+        const auto flush = [&] {
+            if (runCount == 0) {
+                return;
+            }
+            encoder->drawIndexedPrimitives(
+                MTL::PrimitiveType::PrimitiveTypeTriangle,
+                static_cast<NS::UInteger>(runCount), MTL::IndexType::IndexTypeUInt32,
+                indexBuffer_, static_cast<NS::UInteger>(runFirst * sizeof(std::uint32_t)));
+            runCount = 0;
+        };
+
+        for (const TerrainChunk& chunk : terrainChunks_) {
+            const simd_float3 chunkCentre = simd_make_float3((chunk.minX + chunk.maxX) * 0.5f,
+                                                             (chunk.minY + chunk.maxY) * 0.5f,
+                                                             (chunk.minZ + chunk.maxZ) * 0.5f);
+            const float chunkRadius =
+                0.5f * simd_length(simd_make_float3(chunk.maxX - chunk.minX,
+                                                    chunk.maxY - chunk.minY,
+                                                    chunk.maxZ - chunk.minZ));
+
+            // Tested in the light's own axes as a sphere against the box: the
+            // box is oriented along the sun, so an axis-aligned world-space
+            // test would be wrong, and a chunk's bounding sphere is cheap and
+            // never too small. Too generous is harmless; too tight drops
+            // shadows.
+            const simd_float3 offset = chunkCentre - lightCentre_;
+            const simd_float3 along = kSunDirection * simd_dot(offset, kSunDirection);
+            const bool visible =
+                simd_length(offset - along) <= lightExtent_ + chunkRadius;
+
+            if (!visible) {
+                flush();
+                continue;
+            }
+
+            if (runCount == 0) {
+                runFirst = chunk.firstIndex;
+            }
+            runCount += chunk.indexCount;
+        }
+        flush();
     }
 
     encoder->setRenderPipelineState(unitShadowPipeline_);

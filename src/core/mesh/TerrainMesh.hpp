@@ -22,10 +22,36 @@ static_assert(sizeof(TerrainVertex) == 24,
               "TerrainVertex must stay tightly packed — the shader reads it as "
               "two packed_float3s and any padding would shear the stream");
 
+// One square block of the terrain, as a range of the index buffer plus the box
+// that contains it.
+//
+// This is what makes the terrain cullable. Without it the ground is one draw of
+// two million triangles, and a shadow pass covering a fraction of the map still
+// pays for all of them.
+struct TerrainChunk {
+    std::size_t firstIndex = 0;
+    std::size_t indexCount = 0;
+
+    float minX = 0.0f, maxX = 0.0f;
+    float minY = 0.0f, maxY = 0.0f;
+    float minZ = 0.0f, maxZ = 0.0f;
+};
+
+/// Squares along each side of a terrain chunk (at the mesh's own stride).
+///
+/// 64 gives 16x16 chunks on a 1024-square map: fine enough that a camera-sized
+/// shadow box touches a handful of them, coarse enough that the draw-call count
+/// stays in the hundreds rather than the thousands.
+inline constexpr int kChunkSquares = 64;
+
 // A triangulated heightfield, ready for a vertex/index buffer pair.
 struct TerrainMesh {
     std::vector<TerrainVertex> vertices;
     std::vector<std::uint32_t> indices;  ///< triangle list, 3 per triangle
+
+    /// Contiguous, in order, and together covering every index exactly once —
+    /// so drawing all of them is drawing the whole mesh.
+    std::vector<TerrainChunk> chunks;
 
     // The grid's dimensions, so a consumer can index `vertices` by (x, z)
     // rather than reverse-engineering the stride from the bounds. The water

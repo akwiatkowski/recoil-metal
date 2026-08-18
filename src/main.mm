@@ -1440,6 +1440,13 @@ int main(int argc, const char* argv[]) {
             applyGround(renderer, *map);
             renderer.setUnits(units.textures.all(), units.batches);
             renderer.setAnimationTime(animationTime);
+            // --focus works here too, so the benchmark can measure a close
+            // camera as well as a whole-map one. They are different workloads:
+            // anything that culls to what the camera sees is invisible at full
+            // zoom and everything up close.
+            if (focus) {
+                focusOnFirstUnit(renderer, units);
+            }
 
             std::printf("offscreen benchmark: %ux%u, %zu frames (discarding %zu warmup),"
                         " %zu frames in flight, no vsync\n",

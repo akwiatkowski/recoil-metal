@@ -237,3 +237,81 @@ TEST_CASE("the stride is chosen to keep a map inside the vertex budget") {
         CHECK(squares / stride + 1 <= rm::kMaxVerticesPerSide);
     }
 }
+
+TEST_CASE("the mesh is split into chunks that cover every triangle exactly once") {
+    const HeightField field = makeField(64, 64, [] {
+        std::vector<std::uint16_t> raw(65 * 65);
+        for (int z = 0; z < 65; ++z) {
+            for (int x = 0; x < 65; ++x) {
+                raw[static_cast<std::size_t>(z) * 65 + static_cast<std::size_t>(x)] =
+                    static_cast<std::uint16_t>((x * z) % 400);
+            }
+        }
+        return raw;
+    }());
+
+    const rm::TerrainMesh mesh = rm::buildTerrainMesh(field);
+
+    REQUIRE_FALSE(mesh.chunks.empty());
+
+    // The chunks partition the index buffer: contiguous, in order, no gaps and
+    // no overlap. A gap drops terrain; an overlap draws it twice.
+    std::size_t expected = 0;
+    for (const rm::TerrainChunk& chunk : mesh.chunks) {
+        REQUIRE(chunk.firstIndex == expected);
+        REQUIRE(chunk.indexCount > 0);
+        expected += chunk.indexCount;
+    }
+    CHECK(expected == mesh.indices.size());
+}
+
+TEST_CASE("a chunk's bounds contain the vertices it indexes") {
+    // What culling relies on. Bounds too small and terrain vanishes when it is
+    // still on screen — the kind of bug that only shows at one camera angle.
+    const HeightField field = makeField(64, 64, [] {
+        std::vector<std::uint16_t> raw(65 * 65);
+        for (int z = 0; z < 65; ++z) {
+            for (int x = 0; x < 65; ++x) {
+                raw[static_cast<std::size_t>(z) * 65 + static_cast<std::size_t>(x)] =
+                    static_cast<std::uint16_t>((x + 2 * z) * 20);
+            }
+        }
+        return raw;
+    }());
+
+    const rm::TerrainMesh mesh = rm::buildTerrainMesh(field);
+
+    for (const rm::TerrainChunk& chunk : mesh.chunks) {
+        REQUIRE(chunk.minX <= chunk.maxX);
+        REQUIRE(chunk.minY <= chunk.maxY);
+        REQUIRE(chunk.minZ <= chunk.maxZ);
+
+        for (std::size_t i = chunk.firstIndex; i < chunk.firstIndex + chunk.indexCount; ++i) {
+            const rm::TerrainVertex& v = mesh.vertices[mesh.indices[i]];
+            REQUIRE(v.position[0] >= Approx(chunk.minX));
+            REQUIRE(v.position[0] <= Approx(chunk.maxX));
+            REQUIRE(v.position[1] >= Approx(chunk.minY));
+            REQUIRE(v.position[1] <= Approx(chunk.maxY));
+            REQUIRE(v.position[2] >= Approx(chunk.minZ));
+            REQUIRE(v.position[2] <= Approx(chunk.maxZ));
+        }
+    }
+}
+
+TEST_CASE("chunk bounds together cover the whole map") {
+    const HeightField field = flatField(64);
+    const rm::TerrainMesh mesh = rm::buildTerrainMesh(field);
+
+    float minX = 1e9f, maxX = -1e9f, minZ = 1e9f, maxZ = -1e9f;
+    for (const rm::TerrainChunk& chunk : mesh.chunks) {
+        minX = std::min(minX, chunk.minX);
+        maxX = std::max(maxX, chunk.maxX);
+        minZ = std::min(minZ, chunk.minZ);
+        maxZ = std::max(maxZ, chunk.maxZ);
+    }
+
+    CHECK(minX == Approx(mesh.minX));
+    CHECK(maxX == Approx(mesh.maxX));
+    CHECK(minZ == Approx(mesh.minZ));
+    CHECK(maxZ == Approx(mesh.maxZ));
+}

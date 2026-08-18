@@ -97,21 +97,55 @@ TerrainMesh buildTerrainMesh(const HeightField& field, int stride) {
         static_cast<std::size_t>(squaresX) * static_cast<std::size_t>(squaresZ);
     mesh.indices.reserve(squares * 6);
 
-    for (int z = 0; z < squaresZ; ++z) {
-        for (int x = 0; x < squaresX; ++x) {
-            const auto row = static_cast<std::uint32_t>(nx);
-            const auto v00 = static_cast<std::uint32_t>(z) * row + static_cast<std::uint32_t>(x);
-            const std::uint32_t v10 = v00 + 1;
-            const std::uint32_t v01 = v00 + row;
-            const std::uint32_t v11 = v01 + 1;
+    // Emitted chunk by chunk rather than row by row, so each chunk's triangles
+    // are one contiguous range of the index buffer and can be drawn on their
+    // own. Row-major order would interleave every chunk in a row.
+    for (int chunkZ = 0; chunkZ < squaresZ; chunkZ += kChunkSquares) {
+        for (int chunkX = 0; chunkX < squaresX; chunkX += kChunkSquares) {
+            const int endX = std::min(chunkX + kChunkSquares, squaresX);
+            const int endZ = std::min(chunkZ + kChunkSquares, squaresZ);
 
-            mesh.indices.push_back(v00);
-            mesh.indices.push_back(v01);
-            mesh.indices.push_back(v11);
+            TerrainChunk chunk;
+            chunk.firstIndex = mesh.indices.size();
+            chunk.minX = static_cast<float>(chunkX) * kSpacing * static_cast<float>(step);
+            chunk.maxX = static_cast<float>(endX) * kSpacing * static_cast<float>(step);
+            chunk.minZ = static_cast<float>(chunkZ) * kSpacing * static_cast<float>(step);
+            chunk.maxZ = static_cast<float>(endZ) * kSpacing * static_cast<float>(step);
+            chunk.minY = std::numeric_limits<float>::max();
+            chunk.maxY = std::numeric_limits<float>::lowest();
 
-            mesh.indices.push_back(v00);
-            mesh.indices.push_back(v11);
-            mesh.indices.push_back(v10);
+            for (int z = chunkZ; z < endZ; ++z) {
+                for (int x = chunkX; x < endX; ++x) {
+                    const auto row = static_cast<std::uint32_t>(nx);
+                    const auto v00 =
+                        static_cast<std::uint32_t>(z) * row + static_cast<std::uint32_t>(x);
+                    const std::uint32_t v10 = v00 + 1;
+                    const std::uint32_t v01 = v00 + row;
+                    const std::uint32_t v11 = v01 + 1;
+
+                    mesh.indices.push_back(v00);
+                    mesh.indices.push_back(v01);
+                    mesh.indices.push_back(v11);
+
+                    mesh.indices.push_back(v00);
+                    mesh.indices.push_back(v11);
+                    mesh.indices.push_back(v10);
+
+                    // The vertical extent has to come from the vertices the
+                    // chunk actually indexes — a chunk over a valley and one
+                    // over a peak share nothing but their footprint.
+                    for (const std::uint32_t v : {v00, v10, v01, v11}) {
+                        const float y = mesh.vertices[v].position[1];
+                        chunk.minY = std::min(chunk.minY, y);
+                        chunk.maxY = std::max(chunk.maxY, y);
+                    }
+                }
+            }
+
+            chunk.indexCount = mesh.indices.size() - chunk.firstIndex;
+            if (chunk.indexCount > 0) {
+                mesh.chunks.push_back(chunk);
+            }
         }
     }
 

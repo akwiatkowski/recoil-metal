@@ -359,6 +359,15 @@ private:
     MTL::Buffer* indexBuffer_ = nullptr;       // owned
     std::size_t indexCount_ = 0;
 
+    /// The terrain's chunks, kept so the shadow pass can draw only the ones the
+    /// light's box touches instead of the whole two million triangles.
+    std::vector<TerrainChunk> terrainChunks_;
+
+    /// World-space half-extent and centre of the light's box, in the light's
+    /// own axes — enough to reject a chunk without rebuilding the matrix.
+    simd_float3 lightCentre_{};
+    float lightExtent_ = 0.0f;
+
     // Vertical range of the loaded terrain, used to colour it by elevation.
     float terrainMinY_ = 0.0f;
     float terrainMaxY_ = 0.0f;
