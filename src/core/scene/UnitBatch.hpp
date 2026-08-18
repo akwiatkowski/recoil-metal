@@ -40,9 +40,24 @@ struct UnitBatch {
 
     // Optional animation to play. Its bones are matched to the model's by name,
     // so a mismatched pair moves only what it can rather than knotting the
-    // model. Every instance of a batch shares one clock — enough to see an
-    // animation run, and far short of per-unit state, which belongs with a sim.
+    // model. Where in the animation each instance is comes from its own
+    // UnitInstance::animationPhase, so a batch is a squad rather than one unit
+    // drawn many times.
     const sca::Animation* animation = nullptr;
+
+    // Whether the phase in each instance is the WHOLE answer, or an offset
+    // added to a clock the renderer advances.
+    //
+    // False (the default) suits a scene nobody is stepping: the renderer's
+    // clock runs, every instance keeps its constant offset, and the animation
+    // plays. True hands control to whoever writes the instances — which is what
+    // a sim wants, because a walk cycle should be paced by ground covered
+    // rather than by wall time. Feet then stop when the unit stops, and slow
+    // when it turns, neither of which a clock can express.
+    //
+    // A batch set to true whose instances are never written simply holds its
+    // pose, which is the honest result of nothing driving it.
+    bool animationDrivenByInstance = false;
 };
 
 // Draw order that visits every batch exactly once with identical texture pairs

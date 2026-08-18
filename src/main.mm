@@ -582,6 +582,39 @@ struct Selection {
     rm::TeamColour originalColour{};
 };
 
+/// Paces each unit's walk cycle by the ground it has covered.
+///
+/// The alternative — a wall clock — slides feet whenever the two disagree, and
+/// they disagree constantly: a unit standing still keeps striding, one pivoting
+/// on the spot keeps striding, and one that arrives keeps striding forever.
+/// Distance has none of those cases because a unit that covers no ground
+/// advances no legs.
+///
+/// The stride is `speed * duration`: the distance the unit covers in one cycle
+/// at full speed. That is the assumption the animation was authored under — at
+/// top speed the cadence is exactly what the clock used to give — and it makes
+/// every slower case fall out for free rather than needing a table of per-unit
+/// stride lengths this engine has nowhere to read from.
+void paceAnimationByDistance(std::vector<rm::UnitInstance>& instances,
+                             std::span<const rm::sim::MoveState> motion, float durationSeconds) {
+    if (durationSeconds <= 0.0f) {
+        return;  // the batch has no animation; the phase is nobody's business
+    }
+
+    const std::size_t count = std::min(instances.size(), motion.size());
+    for (std::size_t i = 0; i < count; ++i) {
+        const float strideElmos = motion[i].speedElmosPerSecond * durationSeconds;
+        if (strideElmos <= 0.0f) {
+            continue;
+        }
+        // Not wrapped to 0..1 here: the shader takes the fractional part, and
+        // wrapping on the CPU would only add a chance of the two disagreeing
+        // about where a cycle starts.
+        instances[i].animationPhase =
+            motion[i].distanceTravelledElmos / strideElmos;
+    }
+}
+
 /// The colour a selected unit is tinted.
 ///
 /// Reusing the team-colour field is what makes selection feedback free: it is
@@ -873,6 +906,17 @@ void march(UnitScene& scene, const rm::HeightField& field, const MarchOptions& o
         for (std::size_t batch = 0; batch < scene.instances.size(); ++batch) {
             rm::sim::tick(scene.instances[batch], scene.motion[batch], field);
         }
+    }
+
+    // A marched scene has been walked, so its walk cycles are paced by the
+    // ground covered — the same rule the windowed path follows. This is also
+    // what makes such a screenshot independent of `--time`: the sim decided
+    // where the legs are, not the clock.
+    for (std::size_t batch = 0; batch < scene.instances.size(); ++batch) {
+        const rm::sca::Animation* animation = scene.batches[batch].animation;
+        paceAnimationByDistance(scene.instances[batch], scene.motion[batch],
+                                animation != nullptr ? animation->duration : 0.0f);
+        scene.batches[batch].animationDrivenByInstance = true;
     }
 
     std::printf("march: every unit ordered to (%.0f, %.0f), %d ticks simulated\n",
@@ -1189,6 +1233,14 @@ int main(int argc, const char* argv[]) {
         rm::Window window{1280, 720, "recoil-metal — m8: movable units"};
         window.setTerrain(mesh);
         applyGround(window, *map);
+
+        // Only the windowed path steps the sim, so only it can pace a walk
+        // cycle by distance. The headless paths — screenshots and benchmarks —
+        // stay on the renderer's clock, which is what makes `--time` mean
+        // something there and keeps a captured frame reproducible.
+        for (rm::UnitBatch& batch : units.batches) {
+            batch.animationDrivenByInstance = true;
+        }
         window.setUnits(units.textures.all(), units.batches);
         if (focus) {
             focusOnFirstUnit(window, units);
@@ -1250,6 +1302,9 @@ int main(int argc, const char* argv[]) {
             }
 
             for (std::size_t batch = 0; batch < units.instances.size(); ++batch) {
+                const rm::sca::Animation* animation = units.batches[batch].animation;
+                paceAnimationByDistance(units.instances[batch], units.motion[batch],
+                                        animation != nullptr ? animation->duration : 0.0f);
                 window.setInstances(batch, units.instances[batch]);
             }
         });

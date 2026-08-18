@@ -80,6 +80,9 @@ void tick(std::span<UnitInstance> instances, std::span<MoveState> motion,
         // Never step past the destination, however fast the unit is.
         const float step = std::min(travel * alignment, distance);
 
+        const float previousX = unit.position[0];
+        const float previousZ = unit.position[2];
+
         unit.position[0] += std::sin(unit.rotationY) * step;
         unit.position[2] += std::cos(unit.rotationY) * step;
 
@@ -87,6 +90,12 @@ void tick(std::span<UnitInstance> instances, std::span<MoveState> motion,
         // need not be — a unit pivoting near a border can swing outside it.
         unit.position[0] = std::clamp(unit.position[0], 0.0f, field.widthElmos());
         unit.position[2] = std::clamp(unit.position[2], 0.0f, field.depthElmos());
+
+        // Measured after the clamp, so a unit pressed against the border stops
+        // striding instead of walking on the spot forever. Horizontal only: a
+        // walk cycle is paced by ground covered, not by height climbed.
+        state.distanceTravelledElmos +=
+            std::hypot(unit.position[0] - previousX, unit.position[2] - previousZ);
 
         // Sit on the ground. Interpolated, so crossing a square does not pop —
         // that is the whole reason HeightField::heightAtWorld exists.

@@ -849,6 +849,7 @@ void Renderer::setUnits(std::span<const dds::Texture> textures,
         uploaded.poseCount = poseCount;
         uploaded.boneStrideBytes = model.bones.size() * sizeof(BoneTransform);
         uploaded.duration = duration;
+        uploaded.animationDrivenByInstance = batch.animationDrivenByInstance;
         uploaded.vertexBuffer =
             device_->newBuffer(model.vertices.data(), model.vertices.size() * sizeof(ModelVertex),
                                MTL::ResourceStorageModeShared);
@@ -1453,7 +1454,8 @@ void Renderer::encodeScene(MTL::RenderCommandEncoder* encoder, unsigned int widt
             pose.boneCount = static_cast<std::uint32_t>(
                 batch.boneStrideBytes / sizeof(BoneTransform));
             pose.duration = batch.duration;
-            pose.time = animationTime_;
+            // Zero hands the whole decision to the instances — see UnitBatch.
+            pose.time = batch.animationDrivenByInstance ? 0.0f : animationTime_;
             encoder->setVertexBytes(&pose, sizeof(pose), kPoseUniformBufferIndex);
 
             // One call for every instance — the whole point of the instance

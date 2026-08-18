@@ -295,6 +295,10 @@ private:
         std::size_t poseCount = 1;
         std::size_t boneStrideBytes = 0;
         float duration = 0.0f;  ///< seconds; 0 when the batch does not animate
+
+        /// When set, the renderer's clock contributes nothing and each
+        /// instance's phase is the whole answer — see UnitBatch.
+        bool animationDrivenByInstance = false;
     };
 
     std::vector<GpuUnitBatch> unitBatches_;

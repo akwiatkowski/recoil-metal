@@ -351,3 +351,56 @@ TEST_CASE("TickClock ignores time going backwards") {
     // And the negative time is not banked against future ticks.
     CHECK(clock.advance(rm::sim::kTickSeconds) == 1);
 }
+
+TEST_CASE("a unit accumulates the ground distance it has covered") {
+    // What drives the walk cycle. Time cannot: a unit that is turning on the
+    // spot, or stopped, must not keep striding, and one crossing a slope covers
+    // less ground per second than one on the flat.
+    const HeightField field = flatField();
+    std::vector<UnitInstance> instances{unitAt(100.0f, 100.0f)};
+    std::vector<MoveState> motion{MoveState{}};
+
+    SECTION("an idle unit covers nothing") {
+        run(instances, motion, field, 60);
+        CHECK(motion[0].distanceTravelledElmos == Approx(0.0f));
+    }
+
+    SECTION("a unit already facing its destination covers speed x time") {
+        rm::sim::orderTo(motion[0], field, 100.0f, 700.0f);
+        run(instances, motion, field, rm::sim::kTicksPerSecond);
+        // One second at 87 elmos/s, give or take the first tick's turn.
+        CHECK(motion[0].distanceTravelledElmos
+              == Approx(rm::sim::kDefaultSpeedElmosPerSecond).margin(3.0));
+    }
+
+    SECTION("a unit turning on the spot covers almost nothing") {
+        // Ordered directly behind: alignment is near zero, so it pivots rather
+        // than travels, and the legs should barely move with it.
+        rm::sim::orderTo(motion[0], field, 100.0f, -400.0f);
+        run(instances, motion, field, 3);
+        CHECK(motion[0].distanceTravelledElmos < 2.0f);
+    }
+
+    SECTION("it stops accumulating once it has arrived") {
+        rm::sim::orderTo(motion[0], field, 100.0f, 300.0f);
+        run(instances, motion, field, 4 * rm::sim::kTicksPerSecond);
+        REQUIRE_FALSE(motion[0].moving);
+
+        const float onArrival = motion[0].distanceTravelledElmos;
+        REQUIRE(onArrival > 150.0f);
+        run(instances, motion, field, 60);
+        CHECK(motion[0].distanceTravelledElmos == Approx(onArrival));
+    }
+
+    SECTION("it never goes backwards") {
+        // Monotonic, because the walk cycle is driven straight off it — a
+        // decrease would run a unit's legs in reverse.
+        rm::sim::orderTo(motion[0], field, 600.0f, 600.0f);
+        float previous = 0.0f;
+        for (int i = 0; i < 3 * rm::sim::kTicksPerSecond; ++i) {
+            rm::sim::tick(instances, motion, field);
+            REQUIRE(motion[0].distanceTravelledElmos >= previous);
+            previous = motion[0].distanceTravelledElmos;
+        }
+    }
+}

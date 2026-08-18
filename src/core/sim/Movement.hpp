@@ -63,6 +63,21 @@ struct MoveState {
 
     float speedElmosPerSecond = kDefaultSpeedElmosPerSecond;
     float turnRateRadiansPerSecond = kDefaultTurnRateRadiansPerSecond;
+
+    // Ground distance covered since this unit was created, in elmos. Only ever
+    // increases.
+    //
+    // This is what a walk cycle should be driven by. Wall time cannot do the
+    // job: a unit pivoting on the spot or standing still would keep striding,
+    // which is the same foot-sliding artefact as a mismatched playback rate,
+    // just more obvious. Distance also handles the cases nothing else does —
+    // slowing into a turn, stopping on arrival — without any special casing,
+    // because a unit that covers no ground advances no legs.
+    //
+    // Kept here rather than derived from position because a straight line from
+    // the spawn is not the distance walked: a unit that goes out and comes back
+    // has covered twice what its displacement says.
+    float distanceTravelledElmos = 0.0f;
 };
 
 /// Orders a unit to a world position, clamped onto the map.
