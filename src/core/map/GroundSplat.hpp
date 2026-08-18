@@ -24,7 +24,8 @@ struct SplatLayer {
     [[nodiscard]] bool present() const noexcept { return texture.width > 0; }
 };
 
-/// Layers a splat blends: the base plus eight strata, in mask order.
-inline constexpr std::size_t kSplatLayers = 9;
+/// Layers a splat blends: the base, eight strata in mask order, then the
+/// macrotexture that goes over everything.
+inline constexpr std::size_t kSplatLayers = 10;
 
 } // namespace rm

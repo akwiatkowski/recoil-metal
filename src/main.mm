@@ -225,8 +225,8 @@ struct LoadedSplat {
     LoadedSplat splat;
 
     // Slots 0..8 are the base plus the eight strata, in the order the masks
-    // weight them. Slot 9 is the macrotexture, deliberately left out — see
-    // README on why an operator that is not established is worse than absent.
+    // weight them; slot 9 is the macrotexture, laid over everything and keyed
+    // on its own alpha rather than on a mask channel.
     for (std::size_t i = 0; i < rm::kSplatLayers; ++i) {
         rm::SplatLayer layer;
 

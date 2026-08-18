@@ -245,3 +245,39 @@ stratum tiles every few dozen elmos, so its uv reaches into the hundreds, and
 under clamping every repeat past the first samples the edge texel. That renders
 as a smooth smear — which reads as a missing texture rather than as a wrong
 sampler, and was found by looking at a close-up rather than by any test.
+
+## ADR-009 — Port the terrain blend from the engine's own shader, once it was found
+
+**Context.** Milestone 6's splat was reconstructed from the map corpus, because
+no reference for the blend was known. Two pieces were left deliberately unread:
+the macrotexture's combine operator, and whether the masks are used raw. The
+macrotexture was recorded as "deferred on principle — a guessed operator renders
+as shading rather than as a bug".
+
+**Decision.** The reference existed on disk the whole time. Supreme Commander
+ships its HLSL inside `gamedata/effects.scd`; `effects/terrain.fx` contains
+`TerrainAlbedoXP`, which is exactly this renderer's path — eight strata through
+two masks. Its semantics are now ported rather than inferred.
+
+It confirmed the reconstruction's blend chain (`lerp` per stratum, in order,
+lower -> strata 0-7 via `mask0.xyzw` then `mask1.xyzw`) and the `WRAP` addressing
+the repeating sampler supplies. It corrected two things: masks are read as
+`saturate(m * 2 - 1)`, and the macrotexture is `lerp(albedo, upper.rgb, upper.w)`
+— keyed on its own alpha, not multiplied and not mask-driven.
+
+**Alternatives considered.** Continuing to defer the macrotexture — moot once the
+source was found. Guessing a multiply — which is what would have been guessed,
+and is wrong.
+
+**Consequences.** The mask expansion is not cosmetic: with raw masks every
+stratum contributes across the whole map at up to half strength, which reads as a
+muddy wash rather than as distinct ground. One more texture fetch takes the splat
+to 2.063 ms GPU from 1.952.
+
+The wider consequence is that **the engine's shaders are available locally and
+should be consulted first from now on**. `effects/mesh.fx` in the same archive is
+the likely authority for the `_SpecTeam` green and blue channels that ADR-005
+left unread, and for the per-map normal map convention. The corpus-derived
+reconstruction was a good method in the absence of a source, and it got the
+structure right — but it cost two wrong details that ten minutes of reading would
+have prevented.

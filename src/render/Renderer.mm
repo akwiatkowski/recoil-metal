@@ -55,7 +55,7 @@ static_assert(offsetof(TerrainUniforms, supremeCommanderShading) == 136,
 // Plain float arrays rather than float4s: MSL lays out a struct in the constant
 // address space with C rules, so `float[9]` is 36 contiguous bytes on both
 // sides. The static_assert is what keeps that claim honest.
-constexpr std::size_t kSplatLayerCount = 9;
+constexpr std::size_t kSplatLayerCount = 10;
 
 struct SplatUniforms {
     float tileElmos[kSplatLayerCount];
@@ -63,9 +63,9 @@ struct SplatUniforms {
     float enabled;
 };
 
-static_assert(sizeof(SplatUniforms) == 76, "SplatUniforms must match the MSL layout");
-static_assert(offsetof(SplatUniforms, present) == 36, "float[9] must pack contiguously");
-static_assert(offsetof(SplatUniforms, enabled) == 72, "unexpected padding before enabled");
+static_assert(sizeof(SplatUniforms) == 84, "SplatUniforms must match the MSL layout");
+static_assert(offsetof(SplatUniforms, present) == 40, "float[10] must pack contiguously");
+static_assert(offsetof(SplatUniforms, enabled) == 80, "unexpected padding before enabled");
 
 // Buffer/texture binding indices, shared between the C++ and MSL sides.
 constexpr NS::UInteger kVertexBufferIndex = 0;
@@ -83,7 +83,7 @@ constexpr NS::UInteger kSplatUniformBufferIndex = 2;
 constexpr NS::UInteger kGroundTextureIndex = 0;
 constexpr NS::UInteger kSplatMaskAIndex = 1;
 constexpr NS::UInteger kSplatMaskBIndex = 2;
-/// The nine layer textures occupy indices 3..11, matching the array in the MSL.
+/// The ten layer textures occupy indices 3..12, matching the array in the MSL.
 constexpr NS::UInteger kSplatLayerBaseIndex = 3;
 /// The model shading texture — S3O's tex2, and the same slot Supreme Commander's
 /// `_specTeam` texture will take.
@@ -147,8 +147,8 @@ vertex VertexOut terrainVertex(uint vid [[vertex_id]],
 // weighted per texel by two masks — SupCom bakes no ground image, so this is
 // assembled every frame from textures that live in the game's archives.
 struct SplatUniforms {
-    float tileElmos[9];  ///< ground covered by one repeat of each layer
-    float present[9];    ///< 0 for an unused slot, whose mask channel is unreliable
+    float tileElmos[10];  ///< ground covered by one repeat of each layer
+    float present[10];    ///< 0 for an unused slot, whose mask channel is unreliable
     float enabled;
 };
 
@@ -158,7 +158,7 @@ fragment float4 terrainFragment(VertexOut in [[stage_in]],
                                 texture2d<float> ground [[texture(0)]],
                                 texture2d<float> maskA [[texture(1)]],
                                 texture2d<float> maskB [[texture(2)]],
-                                array<texture2d<float>, 9> layers [[texture(3)]],
+                                array<texture2d<float>, 10> layers [[texture(3)]],
                                 sampler groundSampler [[sampler(0)]],
                                 sampler splatSampler [[sampler(1)]]) {
     // Interpolating unit normals across a triangle does not preserve length.
@@ -180,8 +180,14 @@ fragment float4 terrainFragment(VertexOut in [[stage_in]],
         // The masks are map-wide, so they use the normalised uv. Metal presents
         // a BGRA8 texture as rgba in the shader — the format describes memory
         // order, not channel meaning — so no swizzle is needed here.
-        const float4 a = maskA.sample(groundSampler, in.uv);
-        const float4 b = maskB.sample(groundSampler, in.uv);
+        //
+        // EXPANDED, not raw: the engine's own shader reads every mask as
+        // saturate(m * 2 - 1) (terrain.fx, TerrainAlbedoXP). So the bottom half
+        // of the range means "absent" rather than "a little", and only 0.5..1.0
+        // carries weight. Using the raw value bleeds every stratum across the
+        // whole map at up to half strength.
+        const float4 a = saturate(maskA.sample(groundSampler, in.uv) * 2.0 - 1.0);
+        const float4 b = saturate(maskB.sample(groundSampler, in.uv) * 2.0 - 1.0);
         const float weights[8] = {a.r, a.g, a.b, a.a, b.r, b.g, b.b, b.a};
 
         // Strictly ordered: each stratum is laid over everything beneath it, so
@@ -192,6 +198,15 @@ fragment float4 terrainFragment(VertexOut in [[stage_in]],
             const float3 layer =
                 layers[i + 1].sample(splatSampler, world / s.tileElmos[i + 1]).rgb;
             colour = mix(colour, layer, weight);
+        }
+
+        // The macrotexture, last and over everything, keyed on its OWN alpha
+        // rather than on a mask channel — `lerp(albedo, upper.rgb, upper.w)` in
+        // terrain.fx. It is the one layer whose coverage travels with the
+        // texture instead of with the map.
+        if (s.present[9] > 0.5) {
+            const float4 upper = layers[9].sample(splatSampler, world / s.tileElmos[9]);
+            colour = mix(colour, upper.rgb, upper.a);
         }
 
         albedo = colour;

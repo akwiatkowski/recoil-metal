@@ -127,14 +127,25 @@ reimplemented.*
    renders as a smooth smear that reads as a missing texture rather than a wrong
    sampler.
 
-   Costs 1.952 ms GPU against 0.864 for the single-fetch path — eleven texture
+   Two details come from the engine's own shader rather than from inference.
+   Supreme Commander ships its HLSL in `gamedata/effects.scd`, and
+   `effects/terrain.fx` contains `TerrainAlbedoXP` — exactly this path, eight
+   strata through two masks. It confirms the blend chain, and settles two things
+   guessing had got wrong or left out. The masks are **expanded**, not raw:
+   `saturate(mask * 2 - 1)`, so the bottom half of the range means *absent*
+   rather than *a little*, and using the raw value bleeds every stratum across
+   the map at up to half strength. And the macrotexture (slot 9) is lerped over
+   the result **keyed on its own alpha**, not on a mask channel and not
+   multiplied — `lerp(albedo, upper.rgb, upper.w)`.
+
+   Costs 2.063 ms GPU against 0.864 for the single-fetch path — twelve texture
    reads instead of one — and leaves the Recoil path untouched at 0.546 ms.
 
-   Deliberately not done: the macrotexture (slot 9) and the shipped per-map DXT5
-   normal map are both parsed and validated but unused, because the operator that
-   combines them is not established anywhere this project has checked. Same call
-   as the `_SpecTeam` green and blue channels in milestone 5c, for the same
-   reason — a guessed operator renders as *shading* rather than as a bug.
+   Deliberately not done: the shipped per-map DXT5 normal map is parsed and
+   validated but unused, pending its channel convention. Same call as the
+   `_SpecTeam` green and blue channels in milestone 5c — a guessed operator
+   renders as *shading* rather than as a bug. `effects/mesh.fx` in the same
+   archive is the likely answer for both, and has not been read yet.
 
    Maps above 2048 squares are still refused rather than half-loaded: their mesh
    alone would want ~800 MB and there is no LOD yet.
