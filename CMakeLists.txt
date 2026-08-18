@@ -100,6 +100,7 @@ if(BUILD_TESTING)
 
     add_executable(rm_tests
         tests/test_smf.cpp
+        tests/test_height_field.cpp
         tests/test_terrain_mesh.cpp
         tests/test_orbit_camera.cpp
         tests/test_map_info.cpp

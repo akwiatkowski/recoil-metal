@@ -63,6 +63,24 @@ struct HeightField {
     /// want at the map edges.
     [[nodiscard]] float heightAt(int x, int z) const noexcept;
 
+    /// Decoded height in elmos at a world position, bilinearly interpolated
+    /// between the four surrounding corners. Outside the map it clamps, so a
+    /// position past the border reads the edge rather than reading out of
+    /// bounds.
+    ///
+    /// The interpolating counterpart to heightAt, and the one anything that
+    /// *moves* must use. Nearest-corner sampling is exact at every corner and
+    /// wrong everywhere between, and the error is not subtle: on a slope of any
+    /// consequence a unit walking across a square holds its height for four
+    /// elmos and then jumps the whole difference at the midpoint. Interpolating
+    /// costs three extra lerps and removes the discontinuity entirely.
+    ///
+    /// The surface this describes is bilinear, whereas the rendered mesh is two
+    /// triangles per square — so a unit can sit up to a few centimetres off the
+    /// drawn ground in the middle of a steep square. That is invisible at 8
+    /// elmos per square and far cheaper than picking the right triangle.
+    [[nodiscard]] float heightAtWorld(float x, float z) const noexcept;
+
     /// World extent in elmos. Note this spans *squares*, not vertices: a
     /// 128-square map is 1024 elmos wide and has 129 height samples.
     [[nodiscard]] float widthElmos() const noexcept;

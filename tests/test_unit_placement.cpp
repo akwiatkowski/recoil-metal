@@ -40,11 +40,12 @@ TEST_CASE("scattered instances sit on the terrain") {
         REQUIRE(instance.position[2] >= 0.0f);
         REQUIRE(instance.position[2] <= field.depthElmos());
 
-        // On the ground, not floating or buried: the Y must be a height the
-        // field actually reports at that spot.
-        const int gx = static_cast<int>(std::lround(instance.position[0] / rm::kSquareSize));
-        const int gz = static_cast<int>(std::lround(instance.position[2] / rm::kSquareSize));
-        REQUIRE(instance.position[1] == Approx(field.heightAt(gx, gz)));
+        // On the ground, not floating or buried: the Y must be the height the
+        // field reports at exactly that spot. Interpolated, not nearest-corner —
+        // placement and the movement sim must agree on where the ground is, or
+        // a unit jumps the moment it is first stepped.
+        REQUIRE(instance.position[1]
+                == Approx(field.heightAtWorld(instance.position[0], instance.position[2])));
     }
 }
 
@@ -151,9 +152,7 @@ TEST_CASE("start positions become one instance each, dropped onto the ground") {
     REQUIRE(instances[1].position[0] == Approx(500.0f));
 
     // Y sampled from the terrain, since mapinfo.lua supplies only X and Z.
-    const int gx = static_cast<int>(std::lround(100.0f / rm::kSquareSize));
-    const int gz = static_cast<int>(std::lround(200.0f / rm::kSquareSize));
-    REQUIRE(instances[0].position[1] == Approx(field.heightAt(gx, gz)));
+    REQUIRE(instances[0].position[1] == Approx(field.heightAtWorld(100.0f, 200.0f)));
 
     // Spawn markers face a consistent direction; there is no facing data to
     // honour and a random one reads as noise.

@@ -6,17 +6,6 @@
 
 namespace {
 
-/// Samples the terrain at a world position by nearest grid corner.
-///
-/// Nearest-corner rather than bilinear: at 8 elmos per square a unit-sized
-/// object spans several corners anyway, and an interpolating sampler is a
-/// separate thing worth having once units need to sit flush on slopes.
-[[nodiscard]] float groundHeight(const rm::HeightField& field, float x, float z) {
-    const auto gx = static_cast<int>(std::lround(x / static_cast<float>(rm::kSquareSize)));
-    const auto gz = static_cast<int>(std::lround(z / static_cast<float>(rm::kSquareSize)));
-    return field.heightAt(gx, gz);  // heightAt clamps, so edges are safe
-}
-
 /// Cap on resampling attempts per requested instance. A map that is almost
 /// entirely underwater would otherwise spin here.
 constexpr int kMaxAttemptsPerInstance = 32;
@@ -50,7 +39,7 @@ std::vector<UnitInstance> scatterOnLand(const HeightField& field, std::size_t co
         for (int attempt = 0; attempt < kMaxAttemptsPerInstance; ++attempt) {
             const float x = alongX(rng);
             const float z = alongZ(rng);
-            const float y = groundHeight(field, x, z);
+            const float y = field.heightAtWorld(x, z);
 
             if (y < minHeight) {
                 continue;  // underwater; try elsewhere
@@ -80,7 +69,7 @@ std::vector<UnitInstance> atStartPositions(const HeightField& field,
     std::size_t team = 0;
     for (const mapinfo::StartPosition& start : positions) {
         instances.push_back(UnitInstance{
-            .position = {{start.x, groundHeight(field, start.x, start.z), start.z}},
+            .position = {{start.x, field.heightAtWorld(start.x, start.z), start.z}},
             // Unrotated: a spawn marker facing a consistent direction reads more
             // clearly than a random one, and there is no facing data to honour.
             .rotationY = 0.0f,
