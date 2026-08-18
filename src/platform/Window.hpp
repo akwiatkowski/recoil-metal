@@ -10,11 +10,19 @@
 #include "core/texture/Dds.hpp"
 #include "core/mesh/TerrainMesh.hpp"
 
+#include "core/scene/Picking.hpp"
+
 #include <memory>
 #include <array>
+#include <functional>
 #include <span>
 
 namespace rm {
+
+// Which button a click came from. Named rather than a bool because the two mean
+// different things to an RTS — select and order — and `click(ray, true)` at a
+// call site says nothing about which is which.
+enum class MouseButton { Left, Right };
 
 // Owns the NSWindow, its CAMetalLayer, the vsync display link, and the
 // Renderer. The pImpl idiom keeps every Objective-C type out of this header:
@@ -49,6 +57,30 @@ public:
 
     // Units to draw on the terrain. See Renderer::setUnits.
     void setUnits(std::span<const dds::Texture> textures, std::span<const UnitBatch> batches);
+
+    /// Replaces one batch's instances for this frame. See Renderer::setInstances.
+    /// Only meaningful from inside an onFrame callback, which is the only point
+    /// at which a ring slot is open for writing.
+    void setInstances(std::size_t batchIndex, std::span<const UnitInstance> instances);
+
+    // Called once per displayed frame, before the scene is encoded, with the
+    // seconds elapsed since the previous frame. This is the app's opportunity
+    // to advance a simulation and push new instances.
+    //
+    // The display link runs on the main run loop, so this arrives on the main
+    // thread — the same one the input handlers run on. There is no render
+    // thread here and nothing to synchronise against.
+    void onFrame(std::function<void(float seconds)> callback);
+
+    // Called when the user clicks without dragging, with the world ray under
+    // the cursor.
+    //
+    // A ray rather than a screen position, and a ray rather than a resolved
+    // pick: building it needs the camera and the viewport, which live here,
+    // while deciding what it hit needs the map and the units, which do not.
+    // Drags are already spoken for by the camera (orbit and pan), so only a
+    // press and release that stayed put is reported.
+    void onClick(std::function<void(const Ray& ray, MouseButton button)> callback);
 
     /// Points the camera at a world position. See Renderer::focusOn.
     void focusOn(std::array<float, 3> target, float distance);

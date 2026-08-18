@@ -14,6 +14,7 @@
 
 #include <mutex>
 #include <array>
+#include <semaphore>
 #include <span>
 #include <vector>
 
@@ -111,6 +112,36 @@ public:
     //
     // Replaces any previously set units. An empty batch list clears them.
     void setUnits(std::span<const dds::Texture> textures, std::span<const UnitBatch> batches);
+
+    // Opens a frame that is going to push new instance data, blocking until the
+    // GPU has finished with the ring slot about to be overwritten.
+    //
+    // Must be called before any setInstances for a frame, and each call must be
+    // followed by exactly one drawFrame — that pairing is what releases the
+    // slot again. Window owns the pairing; nothing else should call this.
+    //
+    // Without the wait this would be a plain data race: instance storage is
+    // StorageModeShared, so writing it while the GPU may still be reading last
+    // frame's copy tears the transform of whatever unit is being written. It
+    // renders as an occasional unit at the origin for a single frame, which is
+    // exactly the kind of bug that gets dismissed as a fluke.
+    void beginFrame() noexcept;
+
+    // Replaces the instances of one batch for this frame.
+    //
+    // `batchIndex` indexes the batch list as the CALLER passed it to setUnits,
+    // not the internal draw order — setUnits sorts batches by texture pair, so
+    // the two disagree and using the wrong one moves the wrong model.
+    //
+    // Instances beyond the count the batch was uploaded with are dropped: the
+    // ring is sized once, and growing it mid-frame would mean allocating on a
+    // buffer the GPU is reading.
+    //
+    // Either push a batch every frame or never push it at all. A batch that is
+    // never pushed keeps the instances it was uploaded with, because setUnits
+    // seeds every ring slot with them; one pushed intermittently would show a
+    // frame from three frames ago whenever it is skipped.
+    void setInstances(std::size_t batchIndex, std::span<const UnitInstance> instances) noexcept;
 
     // The camera is mutated by input handlers on the main thread. That is safe
     // because CAMetalDisplayLink was added to the *main* run loop, so
@@ -242,6 +273,12 @@ private:
         MTL::Buffer* instanceBuffer = nullptr;  // owned
         std::size_t indexCount = 0;
         std::size_t instanceCount = 0;
+
+        // The instance buffer holds kMaxFramesInFlight consecutive copies of
+        // `instanceCapacity` instances — one ring slot per frame that may be in
+        // flight. Drawing picks a slot by buffer offset, exactly as animation
+        // picks a pose, so a moving scene costs one memcpy and no allocation.
+        std::size_t instanceCapacity = 0;
         TexturePair textures;
         /// Which family's channel layout the fragment shader should read.
         bool supremeCommanderShading = false;
@@ -261,6 +298,21 @@ private:
 
     std::vector<GpuUnitBatch> unitBatches_;
     std::vector<MTL::Texture*> unitTextures_;  // owned, indexed by TexturePair
+
+    /// Caller batch index -> index into unitBatches_, or kNoBatch for one that
+    /// was skipped at upload (no model, no geometry, no instances). setUnits
+    /// reorders batches by texture pair, so this mapping is the only way back
+    /// from the index the caller knows to the batch actually drawn.
+    static constexpr std::size_t kNoBatch = static_cast<std::size_t>(-1);
+    std::vector<std::size_t> batchForSourceIndex_;
+
+    // Which ring slot this frame's instances live in, and how many frames the
+    // GPU is allowed to be behind. Starts full: the first kMaxFramesInFlight
+    // frames may be opened without waiting for anything.
+    std::size_t instanceSlot_ = 0;
+    bool frameOpen_ = false;
+    std::counting_semaphore<static_cast<std::ptrdiff_t>(kMaxFramesInFlight)> framesInFlight_{
+        static_cast<std::ptrdiff_t>(kMaxFramesInFlight)};
 
     MTL::Buffer* vertexBuffer_ = nullptr;      // owned
     MTL::Buffer* indexBuffer_ = nullptr;       // owned

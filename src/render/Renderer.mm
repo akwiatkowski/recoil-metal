@@ -16,6 +16,8 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstddef>
+#include <cstring>
 #include <mutex>
 #include <semaphore>
 #include <string>
@@ -692,6 +694,7 @@ void Renderer::releaseUnitBuffers() noexcept {
         }
     }
     unitTextures_.clear();
+    batchForSourceIndex_.clear();
 }
 
 void Renderer::setUnits(std::span<const dds::Texture> textures,
@@ -701,6 +704,10 @@ void Renderer::setUnits(std::span<const dds::Texture> textures,
     if (batches.empty()) {
         return;
     }
+
+    // Every caller index starts unmapped, so a batch skipped below stays that
+    // way and setInstances on it is a no-op rather than a stray write.
+    batchForSourceIndex_.assign(batches.size(), kNoBatch);
 
     // Textures first: a failed upload here should leave nothing half-built, and
     // the batches below reference these by index.
@@ -775,9 +782,21 @@ void Renderer::setUnits(std::span<const dds::Texture> textures,
                                MTL::ResourceStorageModeShared);
         uploaded.boneBuffer = device_->newBuffer(poses.data(), poses.size() * sizeof(BoneTransform),
                                                  MTL::ResourceStorageModeShared);
-        uploaded.instanceBuffer =
-            device_->newBuffer(batch.instances.data(), batch.instances.size() * sizeof(UnitInstance),
-                               MTL::ResourceStorageModeShared);
+        // kMaxFramesInFlight copies of the instances, not one: a scene whose
+        // units move rewrites this every frame, and a single copy would be
+        // written while the GPU is still reading it. Seeded with the same data
+        // in every slot so a batch that is never updated draws correctly from
+        // whichever slot the frame lands on.
+        uploaded.instanceCapacity = batch.instances.size();
+        const std::size_t instanceBytes = uploaded.instanceCapacity * sizeof(UnitInstance);
+        uploaded.instanceBuffer = device_->newBuffer(instanceBytes * kMaxFramesInFlight,
+                                                     MTL::ResourceStorageModeShared);
+        if (uploaded.instanceBuffer != nullptr) {
+            auto* slots = static_cast<std::byte*>(uploaded.instanceBuffer->contents());
+            for (std::size_t slot = 0; slot < kMaxFramesInFlight; ++slot) {
+                std::memcpy(slots + slot * instanceBytes, batch.instances.data(), instanceBytes);
+            }
+        }
         uploaded.indexCount = model.indices.size();
         uploaded.instanceCount = batch.instances.size();
 
@@ -790,8 +809,47 @@ void Renderer::setUnits(std::span<const dds::Texture> textures,
             throw RendererError{"failed to allocate unit buffers for " + model.name};
         }
 
+        batchForSourceIndex_[index] = unitBatches_.size();
         unitBatches_.push_back(uploaded);
     }
+}
+
+void Renderer::beginFrame() noexcept {
+    // Blocks until at most kMaxFramesInFlight - 1 frames are still outstanding,
+    // which is precisely the condition for the slot chosen next to be free: it
+    // was last used kMaxFramesInFlight frames ago, and that frame's completion
+    // handler has now run.
+    framesInFlight_.acquire();
+    instanceSlot_ = (instanceSlot_ + 1) % kMaxFramesInFlight;
+    frameOpen_ = true;
+}
+
+void Renderer::setInstances(std::size_t batchIndex,
+                            std::span<const UnitInstance> instances) noexcept {
+    if (batchIndex >= batchForSourceIndex_.size()) {
+        return;
+    }
+
+    const std::size_t target = batchForSourceIndex_[batchIndex];
+    if (target == kNoBatch || target >= unitBatches_.size()) {
+        return;  // the batch was skipped at upload; nothing to move
+    }
+
+    GpuUnitBatch& batch = unitBatches_[target];
+    if (batch.instanceBuffer == nullptr || batch.instanceCapacity == 0) {
+        return;
+    }
+
+    const std::size_t count = std::min(instances.size(), batch.instanceCapacity);
+    const std::size_t slotBytes = batch.instanceCapacity * sizeof(UnitInstance);
+
+    auto* slots = static_cast<std::byte*>(batch.instanceBuffer->contents());
+    std::memcpy(slots + instanceSlot_ * slotBytes, instances.data(),
+                count * sizeof(UnitInstance));
+
+    // Drawing fewer than were uploaded is fine — the tail of the slot simply
+    // goes unread — so a caller may shrink a batch without reallocating.
+    batch.instanceCount = count;
 }
 
 MTL::Texture* Renderer::uploadTexture(const dds::Texture& texture, const char* what) {
@@ -1320,7 +1378,15 @@ void Renderer::encodeScene(MTL::RenderCommandEncoder* encoder, unsigned int widt
             encoder->setFragmentBytes(&unitUniforms, sizeof(unitUniforms), kUniformBufferIndex);
 
             encoder->setVertexBuffer(batch.vertexBuffer, 0, kVertexBufferIndex);
-            encoder->setVertexBuffer(batch.instanceBuffer, 0, kInstanceBufferIndex);
+            // This frame's ring slot, exactly as animation picks a pose: an
+            // offset, not a rebind. UnitInstance is 36 bytes, so a slot's stride
+            // is a multiple of 4 and satisfies Apple silicon's buffer-offset
+            // alignment.
+            encoder->setVertexBuffer(
+                batch.instanceBuffer,
+                static_cast<NS::UInteger>(instanceSlot_ * batch.instanceCapacity
+                                          * sizeof(UnitInstance)),
+                kInstanceBufferIndex);
             // Playback is this offset and nothing else. The stride is a multiple
             // of 32 bytes, which satisfies the buffer-offset alignment Apple
             // silicon requires (4).
@@ -1354,6 +1420,13 @@ void Renderer::drawFrame(CA::MetalDrawable* drawable) noexcept {
     // The drawable is autoreleased by the display link, so every frame needs
     // its own pool or frame objects accumulate until the app exits.
     NS::AutoreleasePool* pool = NS::AutoreleasePool::alloc()->init();
+
+    // Whether beginFrame opened this one, and therefore whether this call owes
+    // the semaphore a release. Cleared here so that every path out of this
+    // function — including the one where there is no drawable to draw into —
+    // settles the debt exactly once.
+    const bool opened = frameOpen_;
+    frameOpen_ = false;
 
     // Animation advances only here, in the windowed path. Offscreen captures
     // and benchmarks keep whatever time was set explicitly, because a scene
@@ -1418,6 +1491,14 @@ void Renderer::drawFrame(CA::MetalDrawable* drawable) noexcept {
 
         encoder->endEncoding();
 
+        // Releases the ring slot this frame read its instances from. Metal runs
+        // this on its own thread; std::counting_semaphore is the synchronisation
+        // primitive, so no further locking is needed.
+        if (opened) {
+            commandBuffer->addCompletedHandler(
+                MTL::HandlerFunction{[this](MTL::CommandBuffer*) { framesInFlight_.release(); }});
+        }
+
         if (recording_ && cpuMs > 0.0) {
             // GPUEndTime - GPUStartTime is the driver's own measurement of the
             // work, so it is unaffected by vsync pacing. That makes it the
@@ -1442,6 +1523,12 @@ void Renderer::drawFrame(CA::MetalDrawable* drawable) noexcept {
         commandBuffer->commit();
 
         pass->release();
+    } else if (opened) {
+        // No drawable this frame — a minimised window, or a layer with no
+        // size. Nothing was committed, so no completion handler will ever run
+        // and the slot has to be handed back here or the ring starves after
+        // kMaxFramesInFlight such frames and the app stops rendering entirely.
+        framesInFlight_.release();
     }
 
     pool->release();
