@@ -22,14 +22,6 @@ constexpr float kCircleDivisions = 65536.0f;
     return value ? static_cast<float>(*value) : fallback;
 }
 
-[[nodiscard]] std::string lowercased(std::string_view text) {
-    std::string out{text};
-    std::transform(out.begin(), out.end(), out.begin(), [](unsigned char c) {
-        return static_cast<char>(std::tolower(c));
-    });
-    return out;
-}
-
 } // namespace
 
 namespace rm::unitdef {
@@ -123,34 +115,24 @@ std::expected<UnitDef, lua::ParseError> loadFile(const std::filesystem::path& pa
     return all->front();
 }
 
-std::filesystem::path resolveModel(const std::filesystem::path& objects3dDir,
+std::filesystem::path resolveModel(const vfs::AssetSearch& search,
                                    std::string_view objectName) {
-    if (objectName.empty() || objects3dDir.empty()) {
+    if (objectName.empty() || search.empty()) {
         return {};
     }
 
     // Definitions name a path (`Units/ARMPW.s3o`) whose case matches neither the
-    // file nor, always, the directory it sits in. Matching on the basename
-    // alone, case-insensitively, is what actually resolves across the corpus.
-    const std::string wanted = lowercased(std::filesystem::path{objectName}.filename().string());
-
-    std::error_code error;
-    std::filesystem::recursive_directory_iterator walk{
-        objects3dDir, std::filesystem::directory_options::skip_permission_denied, error};
-    if (error) {
-        return {};
+    // file nor, always, the directory it sits in. Try the conventional
+    // `objects3d/<name>` path first, then fall back to a case-insensitive
+    // basename search across all roots.
+    const std::filesystem::path objectPath{objectName};
+    if (std::filesystem::path candidate = search.resolve(std::filesystem::path{"objects3d"}
+                                                         / objectPath);
+        !candidate.empty()) {
+        return candidate;
     }
 
-    for (const std::filesystem::directory_entry& entry : walk) {
-        if (!entry.is_regular_file(error)) {
-            continue;
-        }
-        if (lowercased(entry.path().filename().string()) == wanted) {
-            return entry.path();
-        }
-    }
-
-    return {};
+    return search.resolveByName(objectPath.filename().string());
 }
 
 } // namespace rm::unitdef

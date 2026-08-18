@@ -138,6 +138,15 @@ void resolveCollisions(std::span<UnitInstance> instances, std::span<const MoveSt
 /// radius.
 inline constexpr float kWaypointRadiusElmos = 32.0f;
 
+/// Pitch (rotationX) and roll (rotationZ) that align a unit's up axis with the
+/// terrain normal under its feet.
+///
+/// The unit's yaw is preserved: the slope is expressed in the unit's local
+/// frame so a unit facing any direction plants both feet on the same slope.
+/// Returns {rotationX, rotationZ} in radians.
+[[nodiscard]] std::array<float, 2> slopeAlignment(const HeightField& field, float x, float z,
+                                                  float yaw) noexcept;
+
 /// Orders a unit to a world position, clamped onto the map.
 ///
 /// Clamped here rather than in the tick so that an order is a fact about a

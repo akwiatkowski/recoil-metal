@@ -8,6 +8,7 @@
 
 #include "core/sim/Movement.hpp"
 #include "core/unit/UnitDef.hpp"
+#include "core/vfs/AssetSearch.hpp"
 
 #include <cstdlib>
 #include <filesystem>
@@ -166,7 +167,9 @@ TEST_CASE("a unit definition's model resolves on disk", "[corpus]") {
 
     // `Units/ARMPW.s3o` against `objects3d/Units/armpw.s3o` — the case differs,
     // which is the whole reason resolution is not a path join.
-    const std::filesystem::path model = rm::unitdef::resolveModel(objects, def->modelPath);
+    rm::vfs::AssetSearch search;
+    search.addRoot(objects);
+    const std::filesystem::path model = rm::unitdef::resolveModel(search, def->modelPath);
     REQUIRE_FALSE(model.empty());
     CHECK(model.extension() == ".s3o");
     CHECK(std::filesystem::exists(model));

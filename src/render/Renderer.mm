@@ -279,6 +279,8 @@ struct UnitInstanceIn {
     float scale;
     packed_float4 teamColour;
     float animationPhase;   // cycles, added to the batch clock
+    float rotationX;        // pitch, radians about +X
+    float rotationZ;        // roll, radians about +Z
 };
 
 // Everything the vertex shader needs to find one instance's pose inside the
@@ -374,15 +376,41 @@ vertex UnitOut unitVertex(uint vid [[vertex_id]],
     const float4 boneRotation = float4(bone.rotation);
     const float3 local = rotateBy(boneRotation, float3(v.position)) + float3(bone.translation);
 
-    const float s = sin(inst.rotationY);
-    const float c = cos(inst.rotationY);
-    const float3 spun = float3(c * local.x + s * local.z, local.y,
-                               -s * local.x + c * local.z);
+    // Roll (Z), then pitch (X), then yaw (Y), all as world-axis rotations.
+    // The C++ side computes pitch/roll in the unit's local frame (after undoing
+    // yaw) so that the model's up axis aligns with the terrain normal under its
+    // feet, whatever direction the unit is facing.
+    const float roll = inst.rotationZ;
+    const float cosR = cos(roll);
+    const float sinR = sin(roll);
+    const float3 rolled = float3(cosR * local.x - sinR * local.y,
+                                 sinR * local.x + cosR * local.y,
+                                 local.z);
+
+    const float pitch = inst.rotationX;
+    const float cosP = cos(pitch);
+    const float sinP = sin(pitch);
+    const float3 pitched = float3(rolled.x,
+                                  cosP * rolled.y - sinP * rolled.z,
+                                  sinP * rolled.y + cosP * rolled.z);
+
+    const float yaw = inst.rotationY;
+    const float s = sin(yaw);
+    const float c = cos(yaw);
+    const float3 spun = float3(c * pitched.x + s * pitched.z, pitched.y,
+                               -s * pitched.x + c * pitched.z);
     const float3 world = spun * inst.scale + float3(inst.position);
 
     // The normal takes the bone's rotation but not its translation.
     const float3 n = rotateBy(boneRotation, float3(v.normal));
-    const float3 spunNormal = float3(c * n.x + s * n.z, n.y, -s * n.x + c * n.z);
+    const float3 nRolled = float3(cosR * n.x - sinR * n.y,
+                                  sinR * n.x + cosR * n.y,
+                                  n.z);
+    const float3 nPitched = float3(nRolled.x,
+                                   cosP * nRolled.y - sinP * nRolled.z,
+                                   sinP * nRolled.y + cosP * nRolled.z);
+    const float3 spunNormal = float3(c * nPitched.x + s * nPitched.z, nPitched.y,
+                                     -s * nPitched.x + c * nPitched.z);
 
     UnitOut out;
     out.position = u.viewProjection * float4(world, 1.0);

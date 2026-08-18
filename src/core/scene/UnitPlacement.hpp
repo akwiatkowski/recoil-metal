@@ -24,7 +24,7 @@ namespace rm {
 // texture carries — so this field serves .s3o and .scm alike.
 struct UnitInstance {
     std::array<float, 3> position;  ///< world, elmos
-    float rotationY;                ///< radians about +Y
+    float rotationY;                ///< radians about +Y (yaw)
     float scale;
     TeamColour teamColour = kTeamColours[0];
 
@@ -39,11 +39,18 @@ struct UnitInstance {
     // the offset is constant, and the clock it is added to already advances on
     // its own.
     float animationPhase = 0.0f;
+
+    // Slope alignment: pitch (rotation about +X) and roll (rotation about +Z).
+    // These tilt the model to match the terrain under its feet. They are
+    // derived from the terrain normal and the unit's yaw, so a unit facing any
+    // direction plants both feet on the same slope.
+    float rotationX = 0.0f;
+    float rotationZ = 0.0f;
 };
 
-static_assert(sizeof(UnitInstance) == 40,
+static_assert(sizeof(UnitInstance) == 48,
               "UnitInstance must stay tightly packed — the shader reads it as a "
-              "packed_float3, two floats, a packed_float4 and a float");
+              "packed_float3, two floats, a packed_float4 and three floats");
 
 // Scatters instances across the map's land, sitting on the terrain.
 //

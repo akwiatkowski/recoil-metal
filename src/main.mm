@@ -17,6 +17,7 @@
 #include "core/sim/Movement.hpp"
 #include "core/sim/Pathfinding.hpp"
 #include "core/unit/UnitDef.hpp"
+#include "core/vfs/AssetSearch.hpp"
 #include "core/texture/Dds.hpp"
 #include "core/map/TileAtlas.hpp"
 #include "core/mesh/TerrainMesh.hpp"
@@ -491,11 +492,19 @@ private:
     std::map<std::string, int> indexByPath_;
 };
 
-/// Where a Recoil model's named texture lives: under BAR's unittextures/.
-[[nodiscard]] std::filesystem::path barTexturePath(const std::string& name) {
+/// Where a Recoil model's named texture lives, resolved against the search roots.
+[[nodiscard]] std::filesystem::path barTexturePath(const rm::vfs::AssetSearch& search,
+                                                   const std::string& name) {
     if (name.empty()) {
         return {};
     }
+    const std::filesystem::path relative = std::filesystem::path{"unittextures"} / name;
+    std::filesystem::path found = search.resolve(relative);
+    if (!found.empty()) {
+        return found;
+    }
+    // Fallback to the historical hard-coded BAR reference layout for backwards
+    // compatibility with existing command lines.
     const char* home = std::getenv("HOME");
     return std::filesystem::path{home == nullptr ? "" : home} / kBarTextureDir / name;
 }
@@ -573,16 +582,20 @@ struct UnitScene {
     std::deque<std::vector<rm::sim::MoveState>> motion;
 };
 
-// Which unit the user has selected, if any.
+// Which units the user has selected.
 //
-// One unit rather than a set: box-selection and group orders are UI, and what
-// this milestone has to prove is that an order reaches the sim and the sim
-// reaches the screen. A set changes nothing about that path.
+// Multi-selection: Shift- or Command-click adds or removes a unit; a plain
+// click replaces the set with the unit under the cursor. Right-click orders
+// every selected unit to the ground under the cursor.
 struct Selection {
     std::size_t batch = 0;
     std::size_t instance = 0;
     rm::TeamColour originalColour{};
 };
+
+[[nodiscard]] bool operator==(const Selection& a, const Selection& b) noexcept {
+    return a.batch == b.batch && a.instance == b.instance;
+}
 
 /// Paces each unit's walk cycle by the ground it has covered.
 ///
@@ -639,23 +652,6 @@ struct UnitOptions {
     std::filesystem::path animationPath;
 };
 
-/// The `objects3d` directory a unit definition's model lives under.
-///
-/// Found by walking up from the definition rather than asking for a game root:
-/// `units/ArmBots/armpw.lua` and `objects3d/Units/armpw.s3o` are siblings a few
-/// levels apart, so the layout answers the question and there is no new flag to
-/// get wrong.
-[[nodiscard]] std::filesystem::path findObjects3d(const std::filesystem::path& defPath) {
-    for (std::filesystem::path dir = defPath.parent_path(); !dir.empty() && dir != dir.root_path();
-         dir = dir.parent_path()) {
-        const std::filesystem::path candidate = dir / "objects3d";
-        if (std::filesystem::is_directory(candidate)) {
-            return candidate;
-        }
-    }
-    return {};
-}
-
 /// Resolves a `--units` argument that names a unit DEFINITION rather than a
 /// model, returning the model to load and the stats to move it with.
 ///
@@ -664,7 +660,8 @@ struct UnitOptions {
 /// how a scene stops moving every unit at the one speed this engine used to
 /// hardcode.
 [[nodiscard]] std::optional<rm::unitdef::UnitDef> resolveUnitDef(
-    const std::filesystem::path& path, std::filesystem::path& modelOut) {
+    const std::filesystem::path& path, const rm::vfs::AssetSearch& search,
+    std::filesystem::path& modelOut) {
     if (path.extension() != ".lua") {
         return std::nullopt;
     }
@@ -676,11 +673,10 @@ struct UnitOptions {
         return std::nullopt;
     }
 
-    const std::filesystem::path objects = findObjects3d(path);
-    modelOut = rm::unitdef::resolveModel(objects, def->modelPath);
+    modelOut = rm::unitdef::resolveModel(search, def->modelPath);
     if (modelOut.empty()) {
-        std::fprintf(stderr, "unit \"%s\" names model \"%s\", which is not under %s\n",
-                     def->name.c_str(), def->modelPath.c_str(), objects.string().c_str());
+        std::fprintf(stderr, "unit \"%s\" names model \"%s\", which was not found\n",
+                     def->name.c_str(), def->modelPath.c_str());
         return std::nullopt;
     }
 
@@ -701,7 +697,8 @@ struct UnitOptions {
 [[nodiscard]] UnitScene resolveUnits(std::span<const UnitOptions> requests,
                                      const rm::HeightField& field,
                                      std::span<const rm::mapinfo::StartPosition> starts,
-                                     float landAbove) {
+                                     float landAbove,
+                                     const rm::vfs::AssetSearch& search) {
     UnitScene scene;
 
     for (std::size_t i = 0; i < requests.size(); ++i) {
@@ -713,7 +710,7 @@ struct UnitOptions {
         // this engine used to hardcode.
         std::filesystem::path modelPath = request.modelPath;
         const std::optional<rm::unitdef::UnitDef> def =
-            resolveUnitDef(request.modelPath, modelPath);
+            resolveUnitDef(request.modelPath, search, modelPath);
         if (request.modelPath.extension() == ".lua" && !def) {
             continue;  // the definition said something that could not be honoured
         }
@@ -763,10 +760,10 @@ struct UnitOptions {
                              scmTexturePath(request.modelPath, kScmShadingSuffix), "specTeam"),
                      }
                    : rm::TexturePair{
-                         .diffuse = scene.textures.resolve(barTexturePath(model->textures[0]),
-                                                           "diffuse"),
-                         .shading = scene.textures.resolve(barTexturePath(model->textures[1]),
-                                                           "shading"),
+                         .diffuse = scene.textures.resolve(
+                             barTexturePath(search, model->textures[0]), "diffuse"),
+                         .shading = scene.textures.resolve(
+                             barTexturePath(search, model->textures[1]), "shading"),
                      };
 
         // A .scm's vertices are in ogrids, the same unit its maps use, so it
@@ -926,6 +923,38 @@ struct ShotOptions {
     }
 
     return requests;
+}
+
+/// Builds the asset search path from `--data-dir <dir>` and `--archive <sdz>`.
+///
+/// `.sdz` files are ZIP archives; they are extracted to a temporary directory
+/// and that directory is added to the search path. This keeps the existing
+/// loaders — which expect real filesystem paths — unchanged while still letting
+/// archived content load.
+[[nodiscard]] rm::vfs::AssetSearch parseAssetSearch(int argc, const char* argv[]) {
+    rm::vfs::AssetSearch search;
+
+    for (int i = 1; i + 1 < argc; ++i) {
+        const std::string arg = argv[i];
+        if (arg == "--data-dir") {
+            search.addRoot(argv[i + 1]);
+        } else if (arg == "--archive") {
+            const std::filesystem::path archive = argv[i + 1];
+            const std::string stem = archive.stem().string();
+            const std::filesystem::path tmp =
+                std::filesystem::temp_directory_path() / ("recoil-metal-" + stem);
+            std::printf("extracting %s -> %s\n", archive.string().c_str(),
+                        tmp.string().c_str());
+            if (rm::vfs::extractZip(archive, tmp)) {
+                search.addRoot(tmp);
+            } else {
+                std::fprintf(stderr, "failed to extract archive %s\n",
+                             archive.string().c_str());
+            }
+        }
+    }
+
+    return search;
 }
 
 /// `--time <seconds>`: where in their animations to freeze the units.
@@ -1265,6 +1294,7 @@ int main(int argc, const char* argv[]) {
         }
 
         const std::vector<UnitOptions> unitRequests = parseUnits(argc, argv);
+        const rm::vfs::AssetSearch assetSearch = parseAssetSearch(argc, argv);
         const bool focus = parseFocus(argc, argv);
         const float animationTime = parseAnimationTime(argc, argv);
         // Land above the water, whatever the map calls water: Recoil's plane is
@@ -1272,7 +1302,20 @@ int main(int argc, const char* argv[]) {
         // Scattering above 0 on a FA map drowns most of the units.
         // Not const: the windowed path steps this scene every frame.
         UnitScene units = resolveUnits(unitRequests, map->field, map->starts,
-                                       map->hasWater ? map->waterLevel : 0.0f);
+                                       map->hasWater ? map->waterLevel : 0.0f,
+                                       assetSearch);
+
+        // Tilt every unit onto its slope once, here, because the headless paths
+        // never tick the sim: a screenshot of a scattered scene would otherwise
+        // show every unit standing horizontally on its hillside.
+        for (std::size_t batch = 0; batch < units.instances.size(); ++batch) {
+            for (rm::UnitInstance& unit : units.instances[batch]) {
+                const std::array<float, 2> align = rm::sim::slopeAlignment(
+                    map->field, unit.position[0], unit.position[2], unit.rotationY);
+                unit.rotationX = align[0];
+                unit.rotationZ = align[1];
+            }
+        }
 
         // Before anything is uploaded: setUnits seeds every ring slot from the
         // instances as they stand, so a marched scene is correct even on the
@@ -1385,28 +1428,52 @@ int main(int argc, const char* argv[]) {
         //
         // Captured by reference: everything named outlives the window, which is
         // destroyed at the end of this scope before any of them.
-        std::optional<Selection> selected;
+        std::vector<Selection> selected;
         rm::sim::TickClock clock;
 
-        window.onClick([&](const rm::Ray& ray, rm::MouseButton button) {
+        window.onClick([&](const rm::Ray& ray, rm::MouseButton button,
+                           rm::MouseModifiers mods) {
             if (button == rm::MouseButton::Left) {
-                // Deselect first, so clicking empty ground clears the tint
-                // rather than leaving a unit lit with nothing selected.
-                if (selected) {
-                    units.instances[selected->batch][selected->instance].teamColour =
-                        selected->originalColour;
-                    selected.reset();
+                const std::optional<Selection> hit = pickAcrossBatches(ray, units);
+                const bool addToSet = mods.shift || mods.command || mods.control;
+
+                if (!hit) {
+                    if (!addToSet) {
+                        // Clicking empty ground clears the whole selection.
+                        for (const Selection& sel : selected) {
+                            units.instances[sel.batch][sel.instance].teamColour =
+                                sel.originalColour;
+                        }
+                        selected.clear();
+                    }
+                    return;
                 }
 
-                selected = pickAcrossBatches(ray, units);
-                if (selected) {
-                    units.instances[selected->batch][selected->instance].teamColour =
-                        kSelectionColour;
+                const auto existing =
+                    std::find(selected.begin(), selected.end(), *hit);
+                if (existing != selected.end()) {
+                    // Clicking an already-selected unit removes it.
+                    units.instances[existing->batch][existing->instance].teamColour =
+                        existing->originalColour;
+                    selected.erase(existing);
+                    return;
                 }
+
+                if (!addToSet) {
+                    // Plain click: replace the selection.
+                    for (const Selection& sel : selected) {
+                        units.instances[sel.batch][sel.instance].teamColour =
+                            sel.originalColour;
+                    }
+                    selected.clear();
+                }
+
+                selected.push_back(*hit);
+                units.instances[hit->batch][hit->instance].teamColour = kSelectionColour;
                 return;
             }
 
-            if (!selected) {
+            if (selected.empty()) {
                 return;  // an order with nothing selected is not an error
             }
 
@@ -1415,10 +1482,16 @@ int main(int argc, const char* argv[]) {
                 return;  // clicked the sky, or past the edge of the map
             }
 
-            if (!orderRouted(units.motion[selected->batch][selected->instance],
-                             units.instances[selected->batch][selected->instance], passability,
-                             ground->x, ground->z)) {
-                std::printf("no route there\n");
+            std::size_t failed = 0;
+            for (const Selection& sel : selected) {
+                if (!orderRouted(units.motion[sel.batch][sel.instance],
+                                 units.instances[sel.batch][sel.instance], passability,
+                                 ground->x, ground->z)) {
+                    ++failed;
+                }
+            }
+            if (failed > 0) {
+                std::printf("no route there for %zu of %zu units\n", failed, selected.size());
             }
         });
 

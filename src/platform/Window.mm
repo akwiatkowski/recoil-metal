@@ -69,7 +69,7 @@
 @property(nonatomic, assign) rm::Renderer* renderer;  // not owned
 // Window::Impl's click callback, by pointer — see RMDisplayLinkDelegate.
 @property(nonatomic, assign)
-    const std::function<void(const rm::Ray&, rm::MouseButton)>* clickCallback;
+    const std::function<void(const rm::Ray&, rm::MouseButton, rm::MouseModifiers)>* clickCallback;
 @end
 
 @implementation RMTerrainView {
@@ -105,7 +105,12 @@ static constexpr CGFloat kClickSlopPoints = 3.0;
                                       static_cast<float>(local.y),
                                       static_cast<float>(self.bounds.size.width),
                                       static_cast<float>(self.bounds.size.height));
-    (*self.clickCallback)(ray, button);
+    const rm::MouseModifiers mods{
+        .shift = (event.modifierFlags & NSEventModifierFlagShift) != 0,
+        .command = (event.modifierFlags & NSEventModifierFlagCommand) != 0,
+        .control = (event.modifierFlags & NSEventModifierFlagControl) != 0,
+    };
+    (*self.clickCallback)(ray, button, mods);
 }
 
 - (void)mouseDown:(NSEvent*)event {
@@ -198,7 +203,7 @@ struct rm::Window::Impl {
     // so that installing one after construction takes effect immediately: the
     // view and the delegate hold pointers to these very objects.
     std::function<void(float)> frameCallback;
-    std::function<void(const rm::Ray&, rm::MouseButton)> clickCallback;
+    std::function<void(const rm::Ray&, rm::MouseButton, rm::MouseModifiers)> clickCallback;
 
     Impl(int width, int height, const char* title) {
         constexpr NSUInteger style = NSWindowStyleMaskTitled
@@ -316,7 +321,8 @@ void Window::onFrame(std::function<void(float seconds)> callback) {
     impl_->frameCallback = std::move(callback);
 }
 
-void Window::onClick(std::function<void(const Ray& ray, MouseButton button)> callback) {
+void Window::onClick(
+    std::function<void(const Ray& ray, MouseButton button, MouseModifiers mods)> callback) {
     impl_->clickCallback = std::move(callback);
 }
 

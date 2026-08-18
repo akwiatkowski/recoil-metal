@@ -139,6 +139,21 @@ void tick(std::span<UnitInstance> instances, std::span<MoveState> motion,
         // that is the whole reason HeightField::heightAtWorld exists.
         unit.position[1] = field.heightAtWorld(unit.position[0], unit.position[2]);
     }
+
+    // Tilt every unit onto the ground underneath it — NOT just the ones that
+    // moved. A scene of scattered units has ordered none of them, and gating
+    // this on movement would leave all of them sticking out horizontally on
+    // their hillsides, which is the whole thing alignment exists to fix.
+    //
+    // A separate pass rather than a line in the loop above, because it applies
+    // to a different set: the loop moves what is moving, this tilts everything.
+    for (std::size_t i = 0; i < count; ++i) {
+        UnitInstance& unit = instances[i];
+        const std::array<float, 2> align =
+            slopeAlignment(field, unit.position[0], unit.position[2], unit.rotationY);
+        unit.rotationX = align[0];
+        unit.rotationZ = align[1];
+    }
 }
 
 int TickClock::advance(float seconds) noexcept {
@@ -160,6 +175,43 @@ int TickClock::advance(float seconds) noexcept {
     }
 
     return ticks;
+}
+
+std::array<float, 2> slopeAlignment(const HeightField& field, float x, float z,
+                                    float yaw) noexcept {
+    // Surface y = h(x, z). The unnormalised normal is (-dh/dx, 1, -dh/dz).
+    // A fixed 1-elmo sample distance is small compared to an 8-elmo square and
+    // large enough not to drown in quantisation.
+    constexpr float kSampleDistance = 1.0f;
+    const float dx = (field.heightAtWorld(x + kSampleDistance, z)
+                      - field.heightAtWorld(x - kSampleDistance, z))
+                   / (2.0f * kSampleDistance);
+    const float dz = (field.heightAtWorld(x, z + kSampleDistance)
+                      - field.heightAtWorld(x, z - kSampleDistance))
+                   / (2.0f * kSampleDistance);
+
+    const float normalLength = std::sqrt(dx * dx + 1.0f + dz * dz);
+    if (!(normalLength > 0.0f)) {
+        return {{0.0f, 0.0f}};
+    }
+    const float nx = -dx / normalLength;
+    const float ny = 1.0f / normalLength;
+    const float nz = -dz / normalLength;
+
+    // Transform the world normal into the unit's local frame by undoing yaw.
+    const float c = std::cos(yaw);
+    const float s = std::sin(yaw);
+    const float nxLocal = nx * c - nz * s;
+    const float nyLocal = ny;
+    const float nzLocal = nx * s + nz * c;
+
+    // Roll (rotationZ) then pitch (rotationX) in the local frame maps local +Y
+    // toward the local normal. Clamp asin input for vertical walls.
+    const float roll = -std::asin(std::clamp(nxLocal, -1.0f, 1.0f));
+    const float cosRoll = std::cos(roll);
+    const float pitch = cosRoll > 1e-4f ? std::atan2(nzLocal, nyLocal) : 0.0f;
+
+    return {{pitch, roll}};
 }
 
 void resolveCollisions(std::span<UnitInstance> instances, std::span<const MoveState> motion,

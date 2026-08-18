@@ -24,6 +24,15 @@ namespace rm {
 // call site says nothing about which is which.
 enum class MouseButton { Left, Right };
 
+// Modifier keys held during a click. macOS conventions: Shift and Command are
+// the usual "add to selection" modifiers; Control is treated the same as
+// Command for selection purposes.
+struct MouseModifiers {
+    bool shift = false;
+    bool command = false;
+    bool control = false;
+};
+
 // Owns the NSWindow, its CAMetalLayer, the vsync display link, and the
 // Renderer. The pImpl idiom keeps every Objective-C type out of this header:
 // the rest of the codebase (and the test target) never includes AppKit.
@@ -73,14 +82,14 @@ public:
     void onFrame(std::function<void(float seconds)> callback);
 
     // Called when the user clicks without dragging, with the world ray under
-    // the cursor.
+    // the cursor and the modifier keys held.
     //
     // A ray rather than a screen position, and a ray rather than a resolved
     // pick: building it needs the camera and the viewport, which live here,
     // while deciding what it hit needs the map and the units, which do not.
     // Drags are already spoken for by the camera (orbit and pan), so only a
     // press and release that stayed put is reported.
-    void onClick(std::function<void(const Ray& ray, MouseButton button)> callback);
+    void onClick(std::function<void(const Ray& ray, MouseButton button, MouseModifiers mods)> callback);
 
     /// Points the camera at a world position. See Renderer::focusOn.
     void focusOn(std::array<float, 3> target, float distance);

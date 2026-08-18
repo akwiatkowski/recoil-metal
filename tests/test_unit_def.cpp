@@ -6,6 +6,7 @@
 
 #include "core/sim/Movement.hpp"
 #include "core/unit/UnitDef.hpp"
+#include "core/vfs/AssetSearch.hpp"
 
 #include <cmath>
 #include <cstdio>
@@ -133,11 +134,17 @@ TEST_CASE("model resolution is by basename and case-insensitive") {
     std::filesystem::create_directories(root / "Units");
     { std::ofstream out{root / "Units" / "armpw.s3o"}; out << "x"; }
 
-    CHECK(rm::unitdef::resolveModel(root, "Units/ARMPW.s3o").filename() == "armpw.s3o");
-    CHECK(rm::unitdef::resolveModel(root, "somewhere/else/ArmPw.S3O").filename() == "armpw.s3o");
-    CHECK(rm::unitdef::resolveModel(root, "Units/NOSUCH.s3o").empty());
-    CHECK(rm::unitdef::resolveModel(root, "").empty());
-    CHECK(rm::unitdef::resolveModel("/nonexistent", "Units/ARMPW.s3o").empty());
+    rm::vfs::AssetSearch search;
+    search.addRoot(root);
+    CHECK(rm::unitdef::resolveModel(search, "Units/ARMPW.s3o").filename() == "armpw.s3o");
+    CHECK(rm::unitdef::resolveModel(search, "somewhere/else/ArmPw.S3O").filename() ==
+          "armpw.s3o");
+    CHECK(rm::unitdef::resolveModel(search, "Units/NOSUCH.s3o").empty());
+    CHECK(rm::unitdef::resolveModel(search, "").empty());
+
+    rm::vfs::AssetSearch emptySearch;
+    emptySearch.addRoot("/nonexistent");
+    CHECK(rm::unitdef::resolveModel(emptySearch, "Units/ARMPW.s3o").empty());
 
     std::filesystem::remove_all(root);
 }

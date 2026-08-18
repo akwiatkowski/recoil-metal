@@ -577,3 +577,70 @@ TEST_CASE("units pushed together are separated") {
         CHECK(instances[1].position[0] == Approx(400.0f));
     }
 }
+
+TEST_CASE("slope alignment tilts a unit onto the ground beneath it") {
+    SECTION("flat ground needs no tilt") {
+        const HeightField field = flatField();
+        const auto align = rm::sim::slopeAlignment(field, 400.0f, 400.0f, 0.0f);
+        CHECK(align[0] == Approx(0.0f).margin(1e-5));
+        CHECK(align[1] == Approx(0.0f).margin(1e-5));
+    }
+
+    SECTION("a ramp along +X rolls a unit facing +Z") {
+        // Facing +Z (yaw 0) with the slope rising to the right, the unit banks
+        // sideways: that is roll, and pitch stays level.
+        const HeightField field = rampField();  // climbs along +X
+        const auto align = rm::sim::slopeAlignment(field, 400.0f, 400.0f, 0.0f);
+        CHECK(align[0] == Approx(0.0f).margin(1e-4));  // pitch
+        CHECK(std::abs(align[1]) > 0.1f);              // roll
+    }
+
+    SECTION("the same slope pitches a unit facing up it") {
+        // Turned to face +X — straight up the ramp — the same ground becomes
+        // pitch instead of roll. Getting this backwards is the bug that makes
+        // units lean sideways going uphill, and no flat-ground test finds it.
+        const HeightField field = rampField();
+        const auto align = rm::sim::slopeAlignment(field, 400.0f, 400.0f, kPi / 2.0f);
+        CHECK(std::abs(align[0]) > 0.1f);              // pitch
+        CHECK(align[1] == Approx(0.0f).margin(1e-4));  // roll
+    }
+
+    SECTION("the tilt magnitude matches the slope's angle") {
+        // rampField climbs 10 raw units per square at 1 elmo per raw unit, so
+        // 10 elmos of rise over 8 of run — about 51 degrees.
+        const HeightField field = rampField();
+        const auto align = rm::sim::slopeAlignment(field, 400.0f, 400.0f, kPi / 2.0f);
+        const float expected = std::atan2(10.0f, 8.0f);
+        CHECK(std::abs(align[0]) == Approx(expected).margin(0.05));
+    }
+
+    SECTION("it stays finite on a vertical wall") {
+        // A cliff face makes the gradient enormous; asin must not be handed
+        // something outside [-1, 1] and the result must not be a NaN that
+        // spreads into every vertex of the model.
+        HeightField field = flatField();
+        for (int z = 0; z < field.verticesZ(); ++z) {
+            field.raw[static_cast<std::size_t>(z) * static_cast<std::size_t>(field.verticesX())
+                      + 50] = 60000;
+        }
+        for (float yaw : {0.0f, kPi / 2.0f, kPi}) {
+            const auto align = rm::sim::slopeAlignment(field, 400.0f, 400.0f, yaw);
+            CHECK(std::isfinite(align[0]));
+            CHECK(std::isfinite(align[1]));
+        }
+    }
+}
+
+TEST_CASE("a unit standing still is still tilted onto its slope") {
+    // The whole point of alignment is that a unit placed on a hill does not
+    // stick out horizontally — and a scene of scattered units has ordered none
+    // of them. Gating this on movement would leave every static scene flat.
+    const HeightField field = rampField();
+    std::vector<UnitInstance> instances{unitAt(400.0f, 400.0f, kPi / 2.0f)};
+    std::vector<MoveState> motion{MoveState{}};
+
+    REQUIRE_FALSE(motion[0].moving);
+    run(instances, motion, field, 1);
+
+    CHECK(std::abs(instances[0].rotationX) > 0.1f);
+}

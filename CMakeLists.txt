@@ -1,6 +1,6 @@
 # recoil-metal — single-file build, sections in dependency order.
 cmake_minimum_required(VERSION 3.25)
-project(recoil-metal VERSION 0.1.0 LANGUAGES CXX OBJCXX)
+project(recoil-metal VERSION 0.1.0 LANGUAGES CXX C OBJCXX)
 
 # --- Language level --------------------------------------------------------
 # C++23: the showcase goal. Apple clang accepts -std=c++23 from Xcode 16 /
@@ -32,6 +32,13 @@ if(NOT EXISTS ${CMAKE_SOURCE_DIR}/third_party/metal-cpp/Metal/Metal.hpp)
         "  git clone --depth 1 https://github.com/apple/metal-cpp third_party/metal-cpp")
 endif()
 
+# --- miniz (single-file ZIP support for .sdz archives) ----------------------
+if(NOT EXISTS ${CMAKE_SOURCE_DIR}/third_party/miniz/miniz.h)
+    message(FATAL_ERROR
+        "miniz not found. Download it once:\n"
+        "  mkdir -p third_party/miniz && curl -L https://github.com/richgel999/miniz/releases/download/3.0.2/miniz-3.0.2.zip | tar -xf - -C third_party/miniz")
+endif()
+
 find_library(FOUNDATION_FW Foundation REQUIRED)
 find_library(APPKIT_FW AppKit REQUIRED)
 find_library(METAL_FW Metal REQUIRED)
@@ -45,6 +52,15 @@ target_include_directories(metal_cpp SYSTEM INTERFACE
     ${CMAKE_SOURCE_DIR}/third_party/metal-cpp)
 target_link_libraries(metal_cpp INTERFACE
     ${FOUNDATION_FW} ${METAL_FW} ${QUARTZCORE_FW})
+
+add_library(miniz INTERFACE)
+target_include_directories(miniz SYSTEM INTERFACE
+    ${CMAKE_SOURCE_DIR}/third_party/miniz)
+
+# miniz is a single-file C library. Compile it as C in its own target so the
+# project's strict C++ warnings do not fire inside third-party code.
+add_library(miniz_impl STATIC ${CMAKE_SOURCE_DIR}/third_party/miniz/miniz.c)
+target_include_directories(miniz_impl PUBLIC ${CMAKE_SOURCE_DIR}/third_party/miniz)
 
 # --- rm_core: pure C++, no Metal, no AppKit --------------------------------
 # Everything in here is unit-testable on any machine, even one without a GPU.
@@ -74,9 +90,10 @@ add_library(rm_core STATIC
     src/core/scene/Picking.cpp
     src/core/sim/Movement.cpp
     src/core/sim/Pathfinding.cpp
-    src/core/unit/UnitDef.cpp)
+    src/core/unit/UnitDef.cpp
+    src/core/vfs/AssetSearch.cpp)
 target_include_directories(rm_core PUBLIC src)
-target_link_libraries(rm_core PUBLIC rm_project_warnings)
+target_link_libraries(rm_core PUBLIC rm_project_warnings miniz miniz_impl)
 
 # --- recoil-metal: the app --------------------------------------------------
 add_executable(recoil-metal
@@ -123,6 +140,7 @@ if(BUILD_TESTING)
         tests/test_picking.cpp
         tests/test_pathfinding.cpp
         tests/test_unit_def.cpp
+        tests/test_asset_search.cpp
         tests/test_real_unitdefs.cpp
         tests/test_team_colours.cpp
         tests/test_unit_batch.cpp

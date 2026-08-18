@@ -1,5 +1,10 @@
 build/
-third_party/metal-cpp/
+
+# Nothing under third_party/ is ours: metal-cpp is cloned and miniz downloaded,
+# both by one command the CMake error message prints when they are missing.
+# Vendoring them into history would bury the project's own code under someone
+# else's and make "what did we write" unanswerable.
+third_party/
 .DS_Store
 # clangd index, generated from compile_commands.json
 .cache/

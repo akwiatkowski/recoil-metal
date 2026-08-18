@@ -1,11 +1,11 @@
 #pragma once
 
 #include "core/lua/LuaTable.hpp"
+#include "core/vfs/AssetSearch.hpp"
 
 #include <expected>
 #include <filesystem>
 #include <string>
-#include <string_view>
 #include <vector>
 
 namespace rm::unitdef {
@@ -86,13 +86,13 @@ struct UnitDef {
 /// The first unit a file declares — the common case, where there is only one.
 [[nodiscard]] std::expected<UnitDef, lua::ParseError> loadFile(const std::filesystem::path& path);
 
-/// Finds the model file a definition names, under an `objects3d` directory.
+/// Finds the model file a definition names, searching the asset roots.
 ///
 /// Resolution is by BASENAME and case-insensitive: definitions say
 /// `Units/ARMPW.s3o` while the file on disk is `armpw.s3o`, and the
 /// subdirectory in the name does not always match the one it lives in either.
 /// Returns an empty path when nothing matches.
-[[nodiscard]] std::filesystem::path resolveModel(const std::filesystem::path& objects3dDir,
+[[nodiscard]] std::filesystem::path resolveModel(const vfs::AssetSearch& search,
                                                  std::string_view objectName);
 
 } // namespace rm::unitdef

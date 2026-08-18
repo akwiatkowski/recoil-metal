@@ -276,8 +276,15 @@ planned. The cliff is real; plan when we're on it.
 Requires: CMake + Ninja (brew), Apple clang (CLT — no Xcode needed), macOS 14+.
 
 ```sh
-# One-time dependency: Apple's official C++ bindings for Metal.
+# One-time dependencies, both vendored into third_party/ and neither committed.
+# Apple's official C++ bindings for Metal:
 git clone --depth 1 https://github.com/apple/metal-cpp third_party/metal-cpp
+
+# miniz, a single-file MIT ZIP reader — Recoil ships content in .sdz archives,
+# which are ZIPs. CMake fails with this exact command if either is missing.
+mkdir -p third_party/miniz && curl -L \
+  https://github.com/richgel999/miniz/releases/download/3.0.2/miniz-3.0.2.zip \
+  | tar -xf - -C third_party/miniz
 
 mise exec -- cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
 mise exec -- cmake --build build
@@ -312,6 +319,20 @@ BAR=~/projects/llm/games/forged-alliance-reborn/reference/BAR/objects3d/Units
     --units $BAR/corgantbig.s3o 30 --units $BAR/armstump.s3o 60 \
     --units $BAR/corraid.s3o 60 --focus
 # scene: 3 models, 4 textures uploaded, 2 texture binds per frame
+```
+
+### Finding content
+
+`--data-dir <dir>` adds a directory to the asset search path, and `--archive
+<file.sdz>` extracts a Recoil archive to a temporary directory and searches
+that. Both are repeatable and searched in the order given. Model and texture
+lookups fall back to the historical hard-coded BAR layout, so existing command
+lines keep working.
+
+```sh
+# A unit definition names its own model, found through the search path
+./build/recoil-metal "$MAP" --data-dir ~/games/bar \
+    --units ~/games/bar/units/ArmBots/armpw.lua 40
 ```
 
 ### Moving units
