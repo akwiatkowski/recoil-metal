@@ -34,6 +34,9 @@ std::vector<UnitInstance> scatterOnLand(const HeightField& field, std::size_t co
     // like, and a real one is not single-army. Drawn from the same generator so
     // the whole scene stays reproducible from the seed alone.
     std::uniform_int_distribution<std::size_t> team{0, kTeamColours.size() - 1};
+    // Drawn from the same generator, so a scattered crowd is desynchronised
+    // reproducibly rather than by wall time.
+    std::uniform_real_distribution<float> phase{0.0f, 1.0f};
 
     for (std::size_t placed = 0; placed < count; ++placed) {
         for (int attempt = 0; attempt < kMaxAttemptsPerInstance; ++attempt) {
@@ -50,6 +53,7 @@ std::vector<UnitInstance> scatterOnLand(const HeightField& field, std::size_t co
                 .rotationY = yaw(rng),
                 .scale = scale,
                 .teamColour = teamColour(team(rng)),
+                .animationPhase = phase(rng),
             });
             break;
         }
@@ -75,6 +79,15 @@ std::vector<UnitInstance> atStartPositions(const HeightField& field,
             .rotationY = 0.0f,
             .scale = scale,
             .teamColour = teamColour(team),
+            // Spread evenly around the cycle rather than left at zero. Facing
+            // wants consistency; animation is the opposite — a row of bots
+            // stepping in perfect time reads as one unit drawn several times.
+            // Even spacing rather than random keeps this reproducible without
+            // needing a generator here.
+            .animationPhase = positions.empty()
+                                  ? 0.0f
+                                  : static_cast<float>(team)
+                                        / static_cast<float>(positions.size()),
         });
         ++team;
     }

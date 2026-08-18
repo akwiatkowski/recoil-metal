@@ -284,17 +284,18 @@ private:
         bool supremeCommanderShading = false;
 
         // Animation, baked at upload. boneBuffer holds poseCount consecutive
-        // poses of boneStrideBytes each; playing it is a buffer OFFSET, not a
-        // rewrite — so there is no per-frame CPU work, and no buffer being
-        // written while the GPU may still be reading last frame's copy.
+        // poses of boneStrideBytes each, and stays immutable for the batch's
+        // life — so there is no per-frame CPU work and no buffer being written
+        // while the GPU may still be reading last frame's copy.
+        //
+        // The whole buffer is bound and the vertex shader INDEXES it per
+        // instance. Binding it at one pose's offset instead would be marginally
+        // cheaper and would give every unit in the batch the same clock, which
+        // is what made squads walk in lockstep.
         std::size_t poseCount = 1;
         std::size_t boneStrideBytes = 0;
         float duration = 0.0f;  ///< seconds; 0 when the batch does not animate
     };
-
-    /// Byte offset of the pose to draw a batch with at the current time.
-    /// Declared after GpuUnitBatch because it takes one by reference.
-    [[nodiscard]] std::size_t poseOffsetFor(const GpuUnitBatch& batch) const noexcept;
 
     std::vector<GpuUnitBatch> unitBatches_;
     std::vector<MTL::Texture*> unitTextures_;  // owned, indexed by TexturePair

@@ -74,6 +74,16 @@ constexpr NS::UInteger kVertexBufferIndex = 0;
 constexpr NS::UInteger kUniformBufferIndex = 1;
 constexpr NS::UInteger kInstanceBufferIndex = 2;
 constexpr NS::UInteger kBoneBufferIndex = 3;
+constexpr NS::UInteger kPoseUniformBufferIndex = 4;
+
+// Mirrors the MSL PoseUniforms exactly. Small and per batch, so it goes up with
+// setVertexBytes rather than as a buffer.
+struct PoseUniforms {
+    std::uint32_t poseCount = 1;
+    std::uint32_t boneCount = 0;
+    float duration = 0.0f;
+    float time = 0.0f;
+};
 // The splat's own constant buffer, kept separate from the shared Uniforms
 // rather than appended to it: Uniforms' layout is pinned by static_asserts that
 // several stages depend on, and growing it to serve one stage would mean
@@ -268,6 +278,17 @@ struct UnitInstanceIn {
     float rotationY;
     float scale;
     packed_float4 teamColour;
+    float animationPhase;   // cycles, added to the batch clock
+};
+
+// Everything the vertex shader needs to find one instance's pose inside the
+// batch's baked keyframe buffer. Per batch and under 4 KB, so it rides in the
+// command buffer via setVertexBytes rather than needing a buffer of its own.
+struct PoseUniforms {
+    uint poseCount;   // 1 when the batch does not animate
+    uint boneCount;   // stride, in bones, between consecutive poses
+    float duration;   // seconds; 0 when the batch does not animate
+    float time;       // the batch clock, in seconds
 };
 
 // One bone's contribution: a rotation and a translation, no scale. Matches the
@@ -324,16 +345,32 @@ vertex UnitOut unitVertex(uint vid [[vertex_id]],
                           const device UnitVertexIn* vertices [[buffer(0)]],
                           constant Uniforms& u [[buffer(1)]],
                           const device UnitInstanceIn* instances [[buffer(2)]],
-                          const device BoneTransformIn* bones [[buffer(3)]]) {
+                          const device BoneTransformIn* bones [[buffer(3)]],
+                          constant PoseUniforms& p [[buffer(4)]]) {
     const UnitVertexIn v = vertices[vid];
     const UnitInstanceIn inst = instances[iid];
+
+    // Which keyframe this INSTANCE is on. The whole buffer is bound and the
+    // pose is chosen here, per instance, rather than the CPU binding the buffer
+    // at one pose's offset for the whole batch — that gave every unit in a
+    // batch the same clock, so a squad walked in perfect lockstep.
+    //
+    // Still no per-frame CPU work and still nothing written: poses were baked
+    // once at upload (ADR-006), and the per-instance part is a constant offset
+    // added to a clock that advances by itself. fract, so a phase of any
+    // magnitude or sign lands somewhere sensible in the cycle.
+    uint poseIndex = 0;
+    if (p.poseCount > 1 && p.duration > 0.0) {
+        const float phase = fract(p.time / p.duration + inst.animationPhase);
+        poseIndex = min(uint(phase * float(p.poseCount)), p.poseCount - 1);
+    }
 
     // The bone transform is applied here rather than baked into the vertices, so
     // one vertex buffer serves every instance AND every frame of an animation.
     // At rest this is a translation for Recoil content and the identity for
     // Supreme Commander content, whose vertices are already posed
     // (core/model/Pose.hpp); under animation it is the full rigid transform.
-    const BoneTransformIn bone = bones[v.boneIndex];
+    const BoneTransformIn bone = bones[poseIndex * p.boneCount + v.boneIndex];
     const float4 boneRotation = float4(bone.rotation);
     const float3 local = rotateBy(boneRotation, float3(v.position)) + float3(bone.translation);
 
@@ -381,8 +418,13 @@ fragment float4 unitFragment(UnitOut in [[stage_in]],
         tex1 = diffuse.sample(texSampler, in.uv);
     }
 
-    // Neutral shading texture: no self-illumination, no reflectivity, mask open.
-    float4 tex2 = float4(0.0, 0.0, 0.0, 1.0);
+    // Neutral shading texture: no self-illumination, no reflectivity, and no
+    // team colour. The alpha matters more than it looks — under Supreme
+    // Commander's layout it IS the team mask (ADR-012), so a model whose
+    // `_SpecTeam` is missing would be painted ENTIRELY in its team's colour if
+    // this defaulted to 1, losing its albedo completely. Recoil reads its mask
+    // from tex1 and is unaffected either way.
+    float4 tex2 = float4(0.0, 0.0, 0.0, 0.0);
     if (u.hasTexture2 > 0.5) {
         tex2 = shading.sample(texSampler, in.uv);
     }
@@ -1048,26 +1090,6 @@ void Renderer::setGroundColourMap(const ColourImage& image) {
     hasGroundTexture_ = true;
 }
 
-std::size_t Renderer::poseOffsetFor(const GpuUnitBatch& batch) const noexcept {
-    if (batch.poseCount <= 1 || batch.duration <= 0.0f) {
-        return 0;
-    }
-
-    // Poses were baked one per keyframe, so playback picks the keyframe whose
-    // time has passed rather than interpolating on the GPU. Retail animations
-    // key at 30 Hz, which is where the source data's own resolution ends —
-    // interpolating between them per frame would cost CPU work every frame to
-    // invent detail the file does not contain.
-    float phase = std::fmod(animationTime_, batch.duration);
-    if (phase < 0.0f) {
-        phase += batch.duration;
-    }
-
-    const auto frame = static_cast<std::size_t>(
-        (phase / batch.duration) * static_cast<float>(batch.poseCount));
-    return std::min(frame, batch.poseCount - 1) * batch.boneStrideBytes;
-}
-
 void Renderer::setWater(bool enabled, float levelElmos) noexcept {
     hasWater_ = enabled;
     waterLevel_ = levelElmos;
@@ -1411,21 +1433,28 @@ void Renderer::encodeScene(MTL::RenderCommandEncoder* encoder, unsigned int widt
             encoder->setFragmentBytes(&unitUniforms, sizeof(unitUniforms), kUniformBufferIndex);
 
             encoder->setVertexBuffer(batch.vertexBuffer, 0, kVertexBufferIndex);
-            // This frame's ring slot, exactly as animation picks a pose: an
-            // offset, not a rebind. UnitInstance is 36 bytes, so a slot's stride
-            // is a multiple of 4 and satisfies Apple silicon's buffer-offset
-            // alignment.
+            // This frame's ring slot: an offset, not a rebind. UnitInstance is
+            // 40 bytes, so a slot's stride is a multiple of 4 and satisfies
+            // Apple silicon's buffer-offset alignment.
             encoder->setVertexBuffer(
                 batch.instanceBuffer,
                 static_cast<NS::UInteger>(instanceSlot_ * batch.instanceCapacity
                                           * sizeof(UnitInstance)),
                 kInstanceBufferIndex);
-            // Playback is this offset and nothing else. The stride is a multiple
-            // of 32 bytes, which satisfies the buffer-offset alignment Apple
-            // silicon requires (4).
-            encoder->setVertexBuffer(batch.boneBuffer,
-                                     static_cast<NS::UInteger>(poseOffsetFor(batch)),
-                                     kBoneBufferIndex);
+
+            // The WHOLE keyframe buffer, not one pose's worth. Which pose to
+            // read is now decided per instance in the vertex shader, so that a
+            // batch is a squad rather than one unit drawn many times; binding
+            // at a pose offset here is what used to force them into lockstep.
+            encoder->setVertexBuffer(batch.boneBuffer, 0, kBoneBufferIndex);
+
+            PoseUniforms pose;
+            pose.poseCount = static_cast<std::uint32_t>(batch.poseCount);
+            pose.boneCount = static_cast<std::uint32_t>(
+                batch.boneStrideBytes / sizeof(BoneTransform));
+            pose.duration = batch.duration;
+            pose.time = animationTime_;
+            encoder->setVertexBytes(&pose, sizeof(pose), kPoseUniformBufferIndex);
 
             // One call for every instance — the whole point of the instance
             // buffer.

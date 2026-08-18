@@ -6,6 +6,7 @@
 #include "core/scene/UnitPlacement.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <set>
 #include <vector>
@@ -214,4 +215,49 @@ TEST_CASE("scattered instances are spread across the palette, reproducibly") {
     for (std::size_t i = 0; i < instances.size(); ++i) {
         REQUIRE(again[i].teamColour == instances[i].teamColour);
     }
+}
+
+TEST_CASE("scattered instances are desynchronised, reproducibly") {
+    const auto field = mixedField();
+    const auto instances = rm::scatterOnLand(field, 40, 7);
+    REQUIRE(instances.size() > 4);
+
+    // Every phase is a legal fraction of a cycle.
+    for (const rm::UnitInstance& instance : instances) {
+        REQUIRE(instance.animationPhase >= 0.0f);
+        REQUIRE(instance.animationPhase < 1.0f);
+    }
+
+    // And they genuinely differ — a constant would leave the whole crowd
+    // stepping in time, which is the thing this field exists to prevent and
+    // which every other assertion here would still pass.
+    const float first = instances.front().animationPhase;
+    REQUIRE(std::any_of(instances.begin(), instances.end(),
+                        [first](const rm::UnitInstance& i) {
+                            return std::abs(i.animationPhase - first) > 0.01f;
+                        }));
+
+    // Same seed, same phases: screenshots and benchmarks stay comparable.
+    const auto again = rm::scatterOnLand(field, 40, 7);
+    REQUIRE(again.size() == instances.size());
+    for (std::size_t i = 0; i < instances.size(); ++i) {
+        REQUIRE(again[i].animationPhase == instances[i].animationPhase);
+    }
+}
+
+TEST_CASE("start positions are spread around the animation cycle") {
+    const auto field = mixedField();
+    const std::vector<rm::mapinfo::StartPosition> positions{
+        {0, 100.0f, 100.0f}, {1, 200.0f, 200.0f},
+        {2, 300.0f, 300.0f}, {3, 400.0f, 400.0f},
+    };
+
+    const auto instances = rm::atStartPositions(field, positions);
+
+    REQUIRE(instances.size() == 4);
+    // Evenly spaced, deterministically — no generator involved.
+    REQUIRE(instances[0].animationPhase == Approx(0.0f));
+    REQUIRE(instances[1].animationPhase == Approx(0.25f));
+    REQUIRE(instances[2].animationPhase == Approx(0.5f));
+    REQUIRE(instances[3].animationPhase == Approx(0.75f));
 }

@@ -27,11 +27,23 @@ struct UnitInstance {
     float rotationY;                ///< radians about +Y
     float scale;
     TeamColour teamColour = kTeamColours[0];
+
+    // Where this instance is in its animation, in CYCLES rather than seconds —
+    // the shader adds it to the batch's clock and keeps the fractional part, so
+    // any value is legal and 0.25 means "a quarter of the way in" whatever the
+    // animation's duration turns out to be.
+    //
+    // Per instance because otherwise a batch shares one clock and a squad walks
+    // in perfect lockstep, which reads as a single unit smeared across the map
+    // rather than as several units. It costs four bytes and no per-frame work:
+    // the offset is constant, and the clock it is added to already advances on
+    // its own.
+    float animationPhase = 0.0f;
 };
 
-static_assert(sizeof(UnitInstance) == 36,
+static_assert(sizeof(UnitInstance) == 40,
               "UnitInstance must stay tightly packed — the shader reads it as a "
-              "packed_float3, two floats and a packed_float4");
+              "packed_float3, two floats, a packed_float4 and a float");
 
 // Scatters instances across the map's land, sitting on the terrain.
 //
