@@ -27,6 +27,16 @@ struct TerrainMesh {
     std::vector<TerrainVertex> vertices;
     std::vector<std::uint32_t> indices;  ///< triangle list, 3 per triangle
 
+    // The grid's dimensions, so a consumer can index `vertices` by (x, z)
+    // rather than reverse-engineering the stride from the bounds. The water
+    // plane needs exactly that: it samples the ground under itself to know how
+    // deep it is.
+    int verticesX = 0;
+    int verticesZ = 0;
+
+    /// Height at a grid corner, in elmos. Out-of-range indices clamp.
+    [[nodiscard]] float heightAt(int x, int z) const noexcept;
+
     // World-space bounds in elmos. The camera uses these to frame the map, so
     // they are computed here rather than rediscovered by the renderer.
     float minX = 0.0f, maxX = 0.0f;

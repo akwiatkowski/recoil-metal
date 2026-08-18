@@ -44,12 +44,15 @@ struct TerrainUniforms {
     // in the MSL layout, and adding in the middle would move all of them.
     simd_float4x4 lightViewProjection;  ///< world -> shadow map clip space
     float hasShadows;                   ///< 0 when no shadow map is bound
+    float animationTime;                ///< seconds; the water's wave clock
 };
 
 static_assert(sizeof(TerrainUniforms) == 224, "TerrainUniforms must match the MSL layout");
 static_assert(offsetof(TerrainUniforms, lightViewProjection) == 144,
               "the light matrix must follow the existing fields, not displace them");
 static_assert(offsetof(TerrainUniforms, hasShadows) == 208, "unexpected padding before hasShadows");
+static_assert(offsetof(TerrainUniforms, animationTime) == 212,
+              "animationTime must pack against hasShadows, not start a new 16-byte slot");
 static_assert(offsetof(TerrainUniforms, sunDirection) == 64, "float3 is 16-byte aligned in MSL");
 static_assert(offsetof(TerrainUniforms, minHeight) == 80, "unexpected padding before minHeight");
 static_assert(offsetof(TerrainUniforms, hasTexture) == 96, "unexpected padding before hasTexture");
@@ -144,6 +147,7 @@ struct Uniforms {
     float supremeCommanderShading;
     float4x4 lightViewProjection;
     float hasShadows;
+    float animationTime;
 };
 
 // How much of the sun a shadowed fragment keeps. Not zero: shadows in daylight
@@ -319,24 +323,92 @@ fragment float4 terrainFragment(VertexOut in [[stage_in]],
 struct WaterOut {
     float4 position [[position]];
     float3 world;
+    float depth;
 };
 
-vertex WaterOut waterVertex(uint vid [[vertex_id]], constant Uniforms& u [[buffer(1)]]) {
-    // Triangle strip: (0,0) (1,0) (0,1) (1,1).
-    const float2 corner = float2(float(vid & 1u), float((vid >> 1) & 1u));
-    const float3 world = float3(corner.x * u.mapWidth, u.waterLevel, corner.y * u.mapDepth);
+// One water vertex: a position on the plane, and how deep the water is there.
+// Depth is baked at upload from the terrain under it — cheaper than sampling a
+// height texture per fragment, and it is what makes a shoreline fade instead of
+// ending in a hard blue line.
+struct WaterVertexIn {
+    packed_float3 position;
+    float depth;   ///< elmos of water above the ground; <= 0 on dry land
+};
+
+vertex WaterOut waterVertex(uint vid [[vertex_id]],
+                            const device WaterVertexIn* vertices [[buffer(0)]],
+                            constant Uniforms& u [[buffer(1)]]) {
+    const float3 world = float3(vertices[vid].position);
 
     WaterOut out;
     out.position = u.viewProjection * float4(world, 1.0);
     out.world = world;
+    out.depth = vertices[vid].depth;
     return out;
 }
 
-fragment float4 waterFragment(WaterOut in [[stage_in]]) {
-    // Flat translucent blue. Depth-based tinting would need the depth buffer as
-    // an input attachment; that belongs with the rest of the water treatment in
-    // a later milestone, not smuggled in here.
-    return float4(0.09, 0.22, 0.38, 0.62);
+// Water colour at the two ends of the depth ramp. Shallow water shows the
+// ground through it and reads green-grey; deep water absorbs the red end of the
+// spectrum first, which is why the sea is blue and why these are not just two
+// brightnesses of one hue.
+constant float3 kShallowWater = float3(0.18, 0.34, 0.36);
+constant float3 kDeepWater = float3(0.03, 0.10, 0.22);
+
+/// Elmos of water below which the surface is treated as fully deep.
+constant float kWaterDepthRange = 60.0;
+
+fragment float4 waterFragment(WaterOut in [[stage_in]], constant Uniforms& u [[buffer(1)]]) {
+    // Above the waterline there is nothing to draw. The mesh covers the whole
+    // map so that one buffer serves any water level, and the dry part is
+    // discarded rather than uploaded conditionally.
+    if (in.depth <= 0.0) {
+        discard_fragment();
+    }
+
+    const float deep = saturate(in.depth / kWaterDepthRange);
+    const float3 body = mix(kShallowWater, kDeepWater, deep);
+
+    // Two crossing wave trains, perturbing the NORMAL only: displacing the
+    // surface would need a mesh fine enough to show it and a shoreline that
+    // moved with the waves.
+    //
+    // Both run obliquely, and at incommensurable angles. Aligning them to X and
+    // Z — the obvious thing — makes the crests intersect on a regular lattice,
+    // and open water reads as tiled graph paper rather than as sea.
+    const float t = u.animationTime;
+    const float2 first = float2(0.92f, 0.39f);
+    const float2 second = float2(-0.36f, 0.93f);
+    const float phase1 = dot(in.world.xz, first) * 0.021 + t * 0.9;
+    const float phase2 = dot(in.world.xz, second) * 0.017 - t * 0.7;
+
+    const float2 slope = (first * cos(phase1) * 0.021 + second * cos(phase2) * 0.017) * 2.4;
+    const float3 normal = normalize(float3(-slope.x, 1.0, -slope.y));
+
+    const float3 view = normalize(u.cameraPosition - in.world);
+
+    // Schlick's approximation. Water's reflectance at normal incidence is about
+    // 0.02 — looking straight down it is nearly clear, and at a grazing angle it
+    // becomes a mirror. That variation is most of what makes water look wet.
+    const float cosTheta = saturate(dot(normal, view));
+    const float fresnel = 0.02 + 0.98 * pow(1.0 - cosTheta, 5.0);
+
+    // No reflection probe, so the sky colour stands in — the same constant the
+    // frame is cleared to, which is what a real reflection would mostly show.
+    const float3 sky = float3(0.09, 0.12, 0.18) * 2.2;
+
+    // A sun glint, sharper than the units' specular because water is smooth.
+    const float3 halfVector = normalize(u.sunDirection + view);
+    const float glint = pow(saturate(dot(normal, halfVector)), 220.0);
+
+    // The glint alone carries the waves. An additive term on the crests as well
+    // makes the pattern legible as a pattern, which is the opposite of the
+    // point.
+    const float3 colour = mix(body, sky, fresnel) + float3(glint) * 0.5;
+
+    // Shallow water is more transparent, so the ground shows through at the
+    // shore and the edge dissolves rather than ending in a line.
+    const float alpha = mix(0.35, 0.90, deep) + fresnel * 0.1;
+    return float4(colour, saturate(alpha));
 }
 
 // --- Units ------------------------------------------------------------------
@@ -659,6 +731,16 @@ constexpr MTL::PixelFormat kDepthFormat = MTL::PixelFormat::PixelFormatDepth32Fl
 constexpr MTL::PixelFormat kShadowFormat = MTL::PixelFormat::PixelFormatDepth32Float;
 constexpr unsigned int kShadowResolution = 2048;
 
+/// Spans across the water surface grid. Far coarser than the terrain: the
+/// surface is flat and its depth varies slowly, so this exists only to carry
+/// depth to the fragment shader and give the shoreline somewhere to fade
+/// across.
+///
+/// 256 rather than 128: at 128 the depth ramp is interpolated over 64-elmo
+/// triangles on a large map and the shoreline visibly facets. Even at 256 this
+/// is 131k triangles against the terrain's two million.
+constexpr int kWaterSpans = 256;
+
 
 constexpr MTL::PixelFormat kGroundFormat = MTL::PixelFormat::PixelFormatBC1_RGBA;
 
@@ -890,6 +972,7 @@ Renderer::Renderer(CA::MetalLayer* layer)
 
 Renderer::~Renderer() {
     // Reverse acquisition order; all are +1 objects from newXxx()/CreateXxx.
+    releaseWaterBuffers();
     if (shadowSampler_ != nullptr) shadowSampler_->release();
     if (shadowMap_ != nullptr) shadowMap_->release();
     if (unitShadowPipeline_ != nullptr) unitShadowPipeline_->release();
@@ -960,9 +1043,97 @@ void Renderer::setTerrain(const TerrainMesh& mesh) {
     // far edge of a large map is clipped away.
     camera_.farZ = camera_.distance * 4.0f + mapWidth_ * 2.0f;
 
-    // The sun and the map are both fixed, so the light's frame is settled here
-    // rather than rebuilt per frame.
-    updateLightMatrix();
+    // The water surface samples the ground under it, so it is rebuilt with the
+    // terrain rather than kept as a fixed quad.
+    cacheWaterGround(mesh);
+    buildWaterMesh();
+}
+
+void Renderer::releaseWaterBuffers() noexcept {
+    if (waterIndexBuffer_ != nullptr) waterIndexBuffer_->release();
+    if (waterVertexBuffer_ != nullptr) waterVertexBuffer_->release();
+    waterIndexBuffer_ = nullptr;
+    waterVertexBuffer_ = nullptr;
+    waterIndexCount_ = 0;
+}
+
+void Renderer::cacheWaterGround(const TerrainMesh& mesh) {
+    waterGroundHeights_.clear();
+    if (mesh.verticesX <= 1 || mesh.verticesZ <= 1) {
+        return;
+    }
+
+    waterGroundHeights_.reserve(static_cast<std::size_t>(kWaterSpans + 1)
+                                * static_cast<std::size_t>(kWaterSpans + 1));
+    for (int z = 0; z <= kWaterSpans; ++z) {
+        for (int x = 0; x <= kWaterSpans; ++x) {
+            const float u = static_cast<float>(x) / static_cast<float>(kWaterSpans);
+            const float v = static_cast<float>(z) / static_cast<float>(kWaterSpans);
+
+            // Nearest terrain vertex. The water grid is much coarser than the
+            // terrain, so interpolating here would only blur a value that is
+            // already interpolated across the water triangle.
+            const int tx = static_cast<int>(std::lround(u * static_cast<float>(mesh.verticesX - 1)));
+            const int tz = static_cast<int>(std::lround(v * static_cast<float>(mesh.verticesZ - 1)));
+            waterGroundHeights_.push_back(mesh.heightAt(tx, tz));
+        }
+    }
+}
+
+void Renderer::buildWaterMesh() {
+    releaseWaterBuffers();
+    if (waterGroundHeights_.empty()) {
+        return;
+    }
+
+    constexpr int kSpans = kWaterSpans;
+
+    struct WaterVertex {
+        std::array<float, 3> position;
+        float depth;
+    };
+    static_assert(sizeof(WaterVertex) == 16, "must match the MSL WaterVertexIn");
+
+    std::vector<WaterVertex> vertices;
+    vertices.reserve(static_cast<std::size_t>(kSpans + 1) * static_cast<std::size_t>(kSpans + 1));
+
+    for (int z = 0; z <= kSpans; ++z) {
+        for (int x = 0; x <= kSpans; ++x) {
+            const float u = static_cast<float>(x) / static_cast<float>(kSpans);
+            const float v = static_cast<float>(z) / static_cast<float>(kSpans);
+            const auto index = static_cast<std::size_t>(z) * static_cast<std::size_t>(kSpans + 1)
+                             + static_cast<std::size_t>(x);
+
+            vertices.push_back(WaterVertex{
+                .position = {u * mapWidth_, waterLevel_, v * mapDepth_},
+                .depth = waterLevel_ - waterGroundHeights_[index],
+            });
+        }
+    }
+
+    std::vector<std::uint32_t> indices;
+    indices.reserve(static_cast<std::size_t>(kSpans) * static_cast<std::size_t>(kSpans) * 6);
+    for (int z = 0; z < kSpans; ++z) {
+        for (int x = 0; x < kSpans; ++x) {
+            const auto row = static_cast<std::uint32_t>(kSpans + 1);
+            const auto v00 = static_cast<std::uint32_t>(z) * row + static_cast<std::uint32_t>(x);
+            const std::uint32_t v10 = v00 + 1;
+            const std::uint32_t v01 = v00 + row;
+            const std::uint32_t v11 = v01 + 1;
+
+            indices.insert(indices.end(), {v00, v01, v11, v00, v11, v10});
+        }
+    }
+
+    waterVertexBuffer_ = device_->newBuffer(vertices.data(), vertices.size() * sizeof(WaterVertex),
+                                            MTL::ResourceStorageModeShared);
+    waterIndexBuffer_ = device_->newBuffer(indices.data(), indices.size() * sizeof(std::uint32_t),
+                                           MTL::ResourceStorageModeShared);
+    if (waterVertexBuffer_ == nullptr || waterIndexBuffer_ == nullptr) {
+        releaseWaterBuffers();
+        throw RendererError{"failed to allocate water buffers"};
+    }
+    waterIndexCount_ = indices.size();
 }
 
 void Renderer::releaseUnitBuffers() noexcept {
@@ -1303,8 +1474,16 @@ void Renderer::setGroundColourMap(const ColourImage& image) {
 }
 
 void Renderer::setWater(bool enabled, float levelElmos) noexcept {
+    const bool levelChanged = waterLevel_ != levelElmos;
     hasWater_ = enabled;
     waterLevel_ = levelElmos;
+
+    // The surface bakes the level into its vertices and its depths, and this
+    // call arrives AFTER setTerrain — so without the rebuild every map would
+    // wear the default level of zero.
+    if (levelChanged && !waterGroundHeights_.empty()) {
+        buildWaterMesh();
+    }
 }
 
 Renderer::CapturedImage Renderer::renderToImage(unsigned int width, unsigned int height) {
@@ -1374,10 +1553,6 @@ void Renderer::focusOn(std::array<float, 3> target, float distance) noexcept {
                                   OrbitCamera::kMaxDistance);
     // Keep the far plane clear of the map behind the new target.
     camera_.farZ = camera_.distance * 4.0f + mapWidth_ * 2.0f;
-
-    // The sun and the map are both fixed, so the light's frame is settled here
-    // rather than rebuilt per frame.
-    updateLightMatrix();
 }
 
 void Renderer::beginBenchmark(std::size_t warmupFrames) {
@@ -1551,6 +1726,7 @@ void Renderer::encodeScene(MTL::RenderCommandEncoder* encoder, unsigned int widt
         .supremeCommanderShading = 0.0f,
         .lightViewProjection = lightViewProjection_,
         .hasShadows = hasShadows_ ? 1.0f : 0.0f,
+        .animationTime = animationTime_,
     };
 
     // Culling stays off: the camera is free to dip below the terrain, and a
@@ -1696,12 +1872,16 @@ void Renderer::encodeScene(MTL::RenderCommandEncoder* encoder, unsigned int widt
     // --- Water -------------------------------------------------------------
     // Last, so it blends over whatever terrain and units sit below y = 0. Only
     // worth drawing when something actually is below it.
-    if (indexCount_ > 0 && hasWater_ && terrainMinY_ < waterLevel_) {
+    if (waterIndexCount_ > 0 && hasWater_ && terrainMinY_ < waterLevel_) {
         encoder->setRenderPipelineState(waterPipeline_);
         encoder->setDepthStencilState(waterDepthState_);
+        encoder->setVertexBuffer(waterVertexBuffer_, 0, kVertexBufferIndex);
         encoder->setVertexBytes(&uniforms, sizeof(uniforms), kUniformBufferIndex);
-        encoder->drawPrimitives(MTL::PrimitiveType::PrimitiveTypeTriangleStrip,
-                                NS::UInteger{0}, NS::UInteger{4});
+        encoder->setFragmentBytes(&uniforms, sizeof(uniforms), kUniformBufferIndex);
+        encoder->drawIndexedPrimitives(MTL::PrimitiveType::PrimitiveTypeTriangle,
+                                       static_cast<NS::UInteger>(waterIndexCount_),
+                                       MTL::IndexType::IndexTypeUInt32, waterIndexBuffer_,
+                                       NS::UInteger{0});
     }
 }
 

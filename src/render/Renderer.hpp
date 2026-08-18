@@ -246,6 +246,24 @@ private:
 
     MTL::DepthStencilState* waterDepthState_ = nullptr;   // owned
     MTL::RenderPipelineState* waterPipeline_ = nullptr;   // owned
+
+    // The water surface is a grid rather than a quad, because each vertex
+    // carries how deep the water is there — which is what lets a shoreline
+    // fade out instead of ending in a hard line. Rebuilt whenever the terrain
+    // or the water level changes, since both decide the depths.
+    MTL::Buffer* waterVertexBuffer_ = nullptr;  // owned
+    MTL::Buffer* waterIndexBuffer_ = nullptr;   // owned
+    std::size_t waterIndexCount_ = 0;
+
+    /// Ground height at each water-grid corner, sampled once when the terrain
+    /// is uploaded. Kept so the surface can be rebuilt when the water LEVEL
+    /// changes without holding on to the whole terrain mesh — setWater arrives
+    /// after setTerrain, so a mesh built only there would bake a stale level.
+    std::vector<float> waterGroundHeights_;
+
+    void cacheWaterGround(const TerrainMesh& mesh);
+    void buildWaterMesh();
+    void releaseWaterBuffers() noexcept;
     MTL::Texture* groundTexture_ = nullptr;    // owned, null until setGroundTexture
     MTL::SamplerState* groundSampler_ = nullptr; // owned
     MTL::SamplerState* splatSampler_ = nullptr;  // owned; repeats, unlike the above

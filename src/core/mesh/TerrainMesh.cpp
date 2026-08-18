@@ -115,6 +115,8 @@ TerrainMesh buildTerrainMesh(const HeightField& field, int stride) {
         }
     }
 
+    mesh.verticesX = nx;
+    mesh.verticesZ = nz;
     mesh.minX = 0.0f;
     mesh.maxX = field.widthElmos();
     mesh.minZ = 0.0f;
@@ -123,6 +125,17 @@ TerrainMesh buildTerrainMesh(const HeightField& field, int stride) {
     mesh.maxY = maxY;
 
     return mesh;
+}
+
+float TerrainMesh::heightAt(int x, int z) const noexcept {
+    if (verticesX <= 0 || verticesZ <= 0 || vertices.empty()) {
+        return 0.0f;
+    }
+    const int cx = std::clamp(x, 0, verticesX - 1);
+    const int cz = std::clamp(z, 0, verticesZ - 1);
+    const auto index = static_cast<std::size_t>(cz) * static_cast<std::size_t>(verticesX)
+                     + static_cast<std::size_t>(cx);
+    return index < vertices.size() ? vertices[index].position[1] : 0.0f;
 }
 
 } // namespace rm
