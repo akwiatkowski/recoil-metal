@@ -1296,10 +1296,18 @@ int main(int argc, const char* argv[]) {
             march(units, map->field, passability, marchOptions);
         }
 
-        const rm::TerrainMesh mesh = rm::buildTerrainMesh(map->field);
-        std::printf("terrain: %zu vertices, %zu triangles, height %.1f..%.1f elmos\n",
+        // Full detail up to the vertex budget, halved per doubling beyond it —
+        // which is what lets a 4096-square map load at all.
+        const int stride = rm::chooseStride(map->field);
+        const rm::TerrainMesh mesh = rm::buildTerrainMesh(map->field, stride);
+        std::printf("terrain: %zu vertices, %zu triangles, height %.1f..%.1f elmos",
                     mesh.vertices.size(), mesh.triangleCount(),
                     static_cast<double>(mesh.minY), static_cast<double>(mesh.maxY));
+        if (stride > 1) {
+            std::printf(" (every %dth sample: %d squares exceeds the %d-vertex budget)",
+                        stride, map->field.squaresX, rm::kMaxVerticesPerSide);
+        }
+        std::printf("\n");
 
         const BenchOptions bench = parseBench(argc, argv);
 

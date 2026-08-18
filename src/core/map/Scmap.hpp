@@ -30,12 +30,19 @@ inline constexpr std::int32_t kVersionMinor = 60;
 // the same 8 or the terrain comes out flat by a factor of eight.
 inline constexpr float kElmosPerOgrid = 8.0f;
 
-// Largest map this loads. The three 4096-square stock maps (Setons-scale and
-// up) would need 16.8M vertices at 24 B each plus uint32 indices — about 806 MB
-// on the GPU and the same again CPU-side while the mesh is built — and there is
-// no LOD or streaming yet. 57 of the 60 stock maps are 2048 or under and fit in
-// ≤201 MB. Refusing loudly beats an allocation failure three layers down.
-inline constexpr int kMaxSquares = 2048;
+// Largest map this loads.
+//
+// This used to be 2048, because the three 4096-square stock maps would have
+// needed 16.8M vertices — about 806 MB on the GPU and the same again while the
+// mesh was built — and refusing loudly beat an allocation failure three layers
+// down. The mesh builder now decimates instead (core/mesh/TerrainMesh.hpp), so
+// a 4096-square map costs exactly what a 1024-square one does and the limit is
+// no longer about the mesh at all.
+//
+// What it still bounds is the HEIGHTFIELD, which is not decimated: 8192 squares
+// is 8193^2 samples at 2 bytes, or 134 MB, plus a passability grid over the
+// same ground. Beyond that a map wants streaming rather than a bigger number.
+inline constexpr int kMaxSquares = 8192;
 
 // One entry of the stratum table: where the texture lives and how often it
 // repeats across the map.

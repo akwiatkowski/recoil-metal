@@ -290,9 +290,9 @@ std::expected<Map, MapError> load(std::span<const std::byte> bytes) {
         return fail(MapError::Code::TooLarge,
                     std::to_string(squaresX) + " x " + std::to_string(squaresZ)
                         + " squares exceeds the " + std::to_string(kMaxSquares)
-                        + "-square limit: its terrain mesh would need roughly "
+                        + "-square limit: its heightfield alone would need roughly "
                         + std::to_string((static_cast<std::size_t>(squaresX + 1)
-                                          * static_cast<std::size_t>(squaresZ + 1) * 24)
+                                          * static_cast<std::size_t>(squaresZ + 1) * 2)
                                          / (1024 * 1024))
                         + " MiB of vertices alone, and there is no LOD yet");
     }

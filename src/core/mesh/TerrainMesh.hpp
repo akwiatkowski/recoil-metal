@@ -36,16 +36,40 @@ struct TerrainMesh {
     [[nodiscard]] std::size_t triangleCount() const noexcept { return indices.size() / 3; }
 };
 
-// Builds a full-resolution triangle mesh from a decoded heightfield.
+/// The most vertices this renderer will put along one side of a terrain mesh.
+///
+/// 1025 is a 1024-square map at full detail — the size everything here has been
+/// developed and benchmarked against, at 1.05M vertices and 25 MB. Larger maps
+/// are decimated to fit rather than refused, which is what lifts the old
+/// hard cap: a 4096-square map at stride 4 costs exactly what a 1024-square map
+/// costs today.
+inline constexpr int kMaxVerticesPerSide = 1025;
+
+/// The sample step that keeps a field inside kMaxVerticesPerSide.
+///
+/// Always a power of two, so it divides the 128-multiple dimensions SMF
+/// requires and the power-of-two ones .scmap uses — an uneven step would leave
+/// a ragged strip along the far edge.
+[[nodiscard]] int chooseStride(const HeightField& field) noexcept;
+
+// Builds a triangle mesh from a decoded heightfield, sampling every `stride`th
+// height.
 //
-// One vertex per height sample and two triangles per square — no level of
-// detail. Recoil uses ROAM for this (rts/Map/SMF/ROAM/) but a 1024x1024 map is
-// only ~2.1M triangles, which an Apple Silicon GPU renders without complaint;
-// LOD is a milestone-4 optimisation to be justified by the benchmark, not
-// assumed now.
+// `stride` 1 is one vertex per height sample and two triangles per square: the
+// full-detail mesh, and what every map up to 1024 squares gets. Above that the
+// step doubles, which is level of detail in its crudest useful form — chosen
+// once at load, uniform across the map.
 //
-// Normals come from central differences over the height grid, which is why
-// HeightField::heightAt clamps rather than bounds-checks.
-[[nodiscard]] TerrainMesh buildTerrainMesh(const HeightField& field);
+// That uniformity is the deliberate limitation. Recoil uses ROAM
+// (rts/Map/SMF/ROAM/) to vary detail with distance, and per-patch LOD would do
+// better here too, but it brings crack-stitching between neighbouring patches
+// at different levels, and none of that is needed to make a large map render at
+// all — which is the problem this solves.
+//
+// Normals come from central differences over the height grid AT THE SAME
+// STRIDE, so a decimated mesh is shaded by the slope it actually has rather
+// than by detail it no longer carries. That is why HeightField::heightAt clamps
+// rather than bounds-checks.
+[[nodiscard]] TerrainMesh buildTerrainMesh(const HeightField& field, int stride = 1);
 
 } // namespace rm

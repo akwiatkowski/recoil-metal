@@ -149,3 +149,91 @@ TEST_CASE("an empty or degenerate field yields an empty mesh") {
     REQUIRE(mesh.vertices.empty());
     REQUIRE(mesh.indices.empty());
 }
+
+TEST_CASE("a stride decimates the mesh without moving the map") {
+    // 64 squares so the strides below divide it exactly, which is the case
+    // every real map hits (SMF is a multiple of 128, .scmap a power of two).
+    const HeightField field = makeField(64, 64, [] {
+        std::vector<std::uint16_t> raw(65 * 65);
+        for (int z = 0; z < 65; ++z) {
+            for (int x = 0; x < 65; ++x) {
+                raw[static_cast<std::size_t>(z) * 65 + static_cast<std::size_t>(x)] =
+                    static_cast<std::uint16_t>((x + z) * 16);
+            }
+        }
+        return raw;
+    }());
+
+    const rm::TerrainMesh full = rm::buildTerrainMesh(field);
+    const rm::TerrainMesh half = rm::buildTerrainMesh(field, 2);
+    const rm::TerrainMesh quarter = rm::buildTerrainMesh(field, 4);
+
+    // One vertex per sample at each step: 65, 33, 17 along a side.
+    CHECK(full.vertices.size() == 65 * 65);
+    CHECK(half.vertices.size() == 33 * 33);
+    CHECK(quarter.vertices.size() == 17 * 17);
+
+    // Four times fewer triangles each step, which is the point.
+    CHECK(half.triangleCount() == full.triangleCount() / 4);
+    CHECK(quarter.triangleCount() == full.triangleCount() / 16);
+
+    // The map still occupies exactly the same ground. A decimated mesh that
+    // shrank would put the terrain and the units on different maps.
+    CHECK(half.maxX == Approx(full.maxX));
+    CHECK(half.maxZ == Approx(full.maxZ));
+    CHECK(quarter.maxX == Approx(full.maxX));
+
+    // Every vertex still sits on the real surface — decimation drops samples,
+    // it does not approximate them.
+    for (const rm::TerrainVertex& v : quarter.vertices) {
+        REQUIRE(v.position[1] == Approx(field.heightAtWorld(v.position[0], v.position[2])));
+    }
+}
+
+TEST_CASE("decimated normals describe the slope the mesh actually has") {
+    // A ramp along +X, so the normals genuinely lean.
+    const HeightField field = makeField(64, 64, [] {
+        std::vector<std::uint16_t> raw(65 * 65);
+        for (int z = 0; z < 65; ++z) {
+            for (int x = 0; x < 65; ++x) {
+                raw[static_cast<std::size_t>(z) * 65 + static_cast<std::size_t>(x)] =
+                    static_cast<std::uint16_t>(x * 200);
+            }
+        }
+        return raw;
+    }());
+
+    const rm::TerrainMesh quarter = rm::buildTerrainMesh(field, 4);
+    for (const rm::TerrainVertex& v : quarter.vertices) {
+        const float length = std::sqrt(v.normal[0] * v.normal[0] + v.normal[1] * v.normal[1]
+                                       + v.normal[2] * v.normal[2]);
+        REQUIRE(length == Approx(1.0f).margin(1e-4));
+        REQUIRE(v.normal[1] > 0.0f);  // never inverted
+    }
+}
+
+TEST_CASE("the stride is chosen to keep a map inside the vertex budget") {
+    const auto sized = [](int squares) {
+        HeightField field;
+        field.squaresX = squares;
+        field.squaresZ = squares;
+        field.heightScale = 1.0f;
+        field.raw.assign(field.sampleCount(), std::uint16_t{0});
+        return field;
+    };
+
+    // Everything up to the budget stays at full detail.
+    CHECK(rm::chooseStride(sized(256)) == 1);
+    CHECK(rm::chooseStride(sized(1024)) == 1);
+
+    // Beyond it the step doubles — a 4096-square map costs what a 1024 does.
+    CHECK(rm::chooseStride(sized(2048)) == 2);
+    CHECK(rm::chooseStride(sized(4096)) == 4);
+    CHECK(rm::chooseStride(sized(8192)) == 8);
+
+    for (const int squares : {2048, 4096, 8192}) {
+        const HeightField field = sized(squares);
+        const int stride = rm::chooseStride(field);
+        CHECK(squares / stride + 1 <= rm::kMaxVerticesPerSide);
+    }
+}

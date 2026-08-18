@@ -22,14 +22,32 @@ namespace {
 
 namespace rm {
 
-TerrainMesh buildTerrainMesh(const HeightField& field) {
+int chooseStride(const HeightField& field) noexcept {
+    int stride = 1;
+    while (field.squaresX / stride + 1 > kMaxVerticesPerSide
+           || field.squaresZ / stride + 1 > kMaxVerticesPerSide) {
+        stride *= 2;
+    }
+    return stride;
+}
+
+TerrainMesh buildTerrainMesh(const HeightField& field, int stride) {
     TerrainMesh mesh;
 
-    const int nx = field.verticesX();
-    const int nz = field.verticesZ();
     if (field.squaresX <= 0 || field.squaresZ <= 0 || field.raw.empty()) {
         return mesh;
     }
+
+    const int step = std::max(1, stride);
+
+    // Squares along each axis AT THIS STRIDE. Rounded up, so a dimension the
+    // step does not divide keeps its far edge instead of losing a strip — the
+    // last row of squares is then slightly wider in samples, which no map in
+    // either format actually hits (both are multiples of 128 or powers of two).
+    const int squaresX = (field.squaresX + step - 1) / step;
+    const int squaresZ = (field.squaresZ + step - 1) / step;
+    const int nx = squaresX + 1;
+    const int nz = squaresZ + 1;
 
     // --- Vertices ----------------------------------------------------------
     mesh.vertices.reserve(static_cast<std::size_t>(nx) * static_cast<std::size_t>(nz));
@@ -42,8 +60,12 @@ TerrainMesh buildTerrainMesh(const HeightField& field) {
     constexpr float kSpacing = static_cast<float>(kSquareSize);
     constexpr float kCentralSpan = 2.0f * kSpacing;
 
-    for (int z = 0; z < nz; ++z) {
-        for (int x = 0; x < nx; ++x) {
+    for (int zi = 0; zi < nz; ++zi) {
+        for (int xi = 0; xi < nx; ++xi) {
+            // Clamped so the final row samples the map's true edge rather than
+            // running past it when the step does not divide the dimension.
+            const int x = std::min(xi * step, field.squaresX);
+            const int z = std::min(zi * step, field.squaresZ);
             const float height = field.heightAt(x, z);
             minY = std::min(minY, height);
             maxY = std::max(maxY, height);
@@ -52,8 +74,11 @@ TerrainMesh buildTerrainMesh(const HeightField& field) {
             // heightAt clamps at the borders, so edge vertices see a one-sided
             // slope mirrored — the "flat continuation" that keeps map edges from
             // developing a false lip.
-            const float dhdx = (field.heightAt(x + 1, z) - field.heightAt(x - 1, z)) / kCentralSpan;
-            const float dhdz = (field.heightAt(x, z + 1) - field.heightAt(x, z - 1)) / kCentralSpan;
+            const float span = kCentralSpan * static_cast<float>(step);
+            const float dhdx =
+                (field.heightAt(x + step, z) - field.heightAt(x - step, z)) / span;
+            const float dhdz =
+                (field.heightAt(x, z + step) - field.heightAt(x, z - step)) / span;
 
             // For a surface y = h(x, z), the upward normal is (-dh/dx, 1, -dh/dz).
             mesh.vertices.push_back(TerrainVertex{
@@ -69,11 +94,11 @@ TerrainMesh buildTerrainMesh(const HeightField& field) {
     // Two triangles per square, counter-clockwise when viewed from above (+Y),
     // which is the winding the render pipeline declares as front-facing.
     const std::size_t squares =
-        static_cast<std::size_t>(field.squaresX) * static_cast<std::size_t>(field.squaresZ);
+        static_cast<std::size_t>(squaresX) * static_cast<std::size_t>(squaresZ);
     mesh.indices.reserve(squares * 6);
 
-    for (int z = 0; z < field.squaresZ; ++z) {
-        for (int x = 0; x < field.squaresX; ++x) {
+    for (int z = 0; z < squaresZ; ++z) {
+        for (int x = 0; x < squaresX; ++x) {
             const auto row = static_cast<std::uint32_t>(nx);
             const auto v00 = static_cast<std::uint32_t>(z) * row + static_cast<std::uint32_t>(x);
             const std::uint32_t v10 = v00 + 1;

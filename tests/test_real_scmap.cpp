@@ -471,12 +471,14 @@ TEST_CASE("the embedded masks decode as half-resolution BGRA8") {
     }
 }
 
-TEST_CASE("the embedded normal map is one DXT5 tile at map resolution") {
+TEST_CASE("the embedded normal map is DXT5, in one tile or four") {
     // Tiling is what a naive parser trips over: every map up to 2048 squares
-    // stores one tile, and only the three 4096-square maps store four. Those
-    // three are refused for size before reaching here, so within what this
-    // renderer loads the count is always one — asserted rather than assumed, so
-    // that the day it is not, this says so.
+    // stores one tile, and the three 4096-square maps store four 2048 ones.
+    //
+    // This test used to assert a count of exactly one, because those three maps
+    // were refused for size before ever reaching here — with a comment saying
+    // so, and that the day it stopped being true this should say so. Terrain
+    // decimation lifted the size limit, and it duly did.
     const auto maps = corpus();
     if (maps.empty()) {
         SKIP("retail Forged Alliance maps not mounted");
@@ -489,13 +491,19 @@ TEST_CASE("the embedded normal map is one DXT5 tile at map resolution") {
         }
         INFO("map: " << path.filename().string());
 
-        REQUIRE(map->normalMapTiles.size() == 1);
+        // Four tiles means a 2x2 arrangement, so each covers half the map on
+        // each axis; one tile covers all of it.
+        const std::size_t tiles = map->normalMapTiles.size();
+        REQUIRE((tiles == 1 || tiles == 4));
+        const int perAxis = tiles == 4 ? 2 : 1;
 
-        const auto normals = rm::dds::load(map->normalMapTiles.front());
-        REQUIRE(normals.has_value());
-        REQUIRE(normals->format == rm::dds::Format::Bc3);
-        REQUIRE(normals->width == map->field.squaresX);
-        REQUIRE(normals->height == map->field.squaresZ);
+        for (const auto& tile : map->normalMapTiles) {
+            const auto normals = rm::dds::load(tile);
+            REQUIRE(normals.has_value());
+            REQUIRE(normals->format == rm::dds::Format::Bc3);
+            REQUIRE(normals->width == map->field.squaresX / perAxis);
+            REQUIRE(normals->height == map->field.squaresZ / perAxis);
+        }
     }
 }
 
