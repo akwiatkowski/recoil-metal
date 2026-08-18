@@ -45,14 +45,17 @@ struct TerrainUniforms {
     simd_float4x4 lightViewProjection;  ///< world -> shadow map clip space
     float hasShadows;                   ///< 0 when no shadow map is bound
     float animationTime;                ///< seconds; the water's wave clock
+    simd_float4x4 inverseViewProjection; ///< clip -> world, for the sky's rays
 };
 
-static_assert(sizeof(TerrainUniforms) == 224, "TerrainUniforms must match the MSL layout");
+static_assert(sizeof(TerrainUniforms) == 288, "TerrainUniforms must match the MSL layout");
 static_assert(offsetof(TerrainUniforms, lightViewProjection) == 144,
               "the light matrix must follow the existing fields, not displace them");
 static_assert(offsetof(TerrainUniforms, hasShadows) == 208, "unexpected padding before hasShadows");
 static_assert(offsetof(TerrainUniforms, animationTime) == 212,
               "animationTime must pack against hasShadows, not start a new 16-byte slot");
+static_assert(offsetof(TerrainUniforms, inverseViewProjection) == 224,
+              "a float4x4 realigns to 16 bytes after the two trailing floats");
 static_assert(offsetof(TerrainUniforms, sunDirection) == 64, "float3 is 16-byte aligned in MSL");
 static_assert(offsetof(TerrainUniforms, minHeight) == 80, "unexpected padding before minHeight");
 static_assert(offsetof(TerrainUniforms, hasTexture) == 96, "unexpected padding before hasTexture");
@@ -148,7 +151,71 @@ struct Uniforms {
     float4x4 lightViewProjection;
     float hasShadows;
     float animationTime;
+    float4x4 inverseViewProjection;
 };
+
+// The sky, as Supreme Commander's own `effects/sky.fx` builds it: a lerp
+// between a horizon colour and a zenith colour, driven by elevation
+// (`AtmospherePS`, sky.fx:229-236). The engine drives the blend through a
+// lookup texture and takes both colours per map; a `.scmap` carries them in
+// its skybox block, which this loader parses but does not yet expose — so
+// these are stand-ins with the engine's structure rather than its values.
+constant float3 kHorizonColour = float3(0.52, 0.60, 0.70);
+constant float3 kZenithColour = float3(0.11, 0.24, 0.48);
+
+/// Sky colour along a view direction. Shared by the sky pass and the water's
+/// reflection, so the sea reflects the sky that is actually there.
+static float3 skyColour(float3 direction, float3 sunDirection) {
+    const float3 d = normalize(direction);
+
+    // Elevation drives the gradient. The power biases the blend toward the
+    // horizon, where a real sky spends most of its visible area.
+    const float elevation = saturate(d.y);
+    float3 colour = mix(kHorizonColour, kZenithColour, pow(elevation, 0.55));
+
+    // A sun, and the broad glow around it that makes a sky look lit rather
+    // than painted.
+    const float towardSun = saturate(dot(d, sunDirection));
+    colour += float3(1.0, 0.86, 0.66) * pow(towardSun, 8.0) * 0.18;
+    colour += float3(1.0, 0.94, 0.82) * pow(towardSun, 900.0) * 3.0;
+
+    // Below the horizon there is no sky to describe, but an RTS camera looks
+    // DOWN — so most of the frame is below-horizon rays and holding one flat
+    // colour there makes the whole background a single slab. Fade gently
+    // toward a dimmer ground haze instead, which reads as distance.
+    if (d.y < 0.0) {
+        const float belowness = saturate(-d.y * 1.6);
+        colour = mix(colour, kHorizonColour * 0.72, belowness);
+    }
+    return colour;
+}
+
+struct SkyOut {
+    float4 position [[position]];
+    float3 direction;
+};
+
+// A full-screen triangle, generated from the vertex id — no buffer, no mesh.
+// Bigger than the screen on purpose: one triangle rasterises without the seam
+// two would leave down the diagonal.
+vertex SkyOut skyVertex(uint vid [[vertex_id]], constant Uniforms& u [[buffer(1)]]) {
+    const float2 corners[3] = {float2(-1.0, -1.0), float2(3.0, -1.0), float2(-1.0, 3.0)};
+    const float2 ndc = corners[vid];
+
+    // Unproject the far plane to get the world-space ray through this pixel.
+    const float4 far = u.inverseViewProjection * float4(ndc, 1.0, 1.0);
+
+    SkyOut out;
+    // z = 1 puts the sky at the far plane, so anything in the scene wins the
+    // depth test against it without the sky needing to be drawn last.
+    out.position = float4(ndc, 1.0, 1.0);
+    out.direction = far.xyz / far.w - u.cameraPosition;
+    return out;
+}
+
+fragment float4 skyFragment(SkyOut in [[stage_in]], constant Uniforms& u [[buffer(1)]]) {
+    return float4(skyColour(in.direction, u.sunDirection), 1.0);
+}
 
 // How much of the sun a shadowed fragment keeps. Not zero: shadows in daylight
 // are lit by the sky, and a black shadow reads as a hole in the ground rather
@@ -347,10 +414,32 @@ vertex WaterOut waterVertex(uint vid [[vertex_id]],
     return out;
 }
 
-// Water colour at the two ends of the depth ramp. Shallow water shows the
-// ground through it and reads green-grey; deep water absorbs the red end of the
-// spectrum first, which is why the sea is blue and why these are not just two
-// brightnesses of one hue.
+// Supreme Commander's own water constants, from `effects/water2.fx`. The names
+// are the file's; the values are the file's defaults.
+//
+//   waterColor         (132)  the tint mixed into what is seen THROUGH the water
+//   waterLerp          (138)  how much of it — 0.3, and note the engine's
+//                             clamp(depth, 0.3, 0.3) makes this a constant, not
+//                             a depth ramp, which is not what one would guess
+//   fresnelBias/Power  (148)  the engine reads Fresnel from a lookup texture
+//                             built from these; this evaluates them directly
+//   skyreflectionAmount(160)  scaled by saturate(depth * 10), so shallow water
+//                             reflects less sky — that IS the depth dependence
+//   SunShininess/Color (181)  a tight, warm glint
+constant float3 kWaterColour = float3(0.0, 0.7, 1.5);
+constant float kWaterLerp = 0.3;
+constant float kFresnelBias = 0.1;
+constant float kFresnelPower = 1.5;
+constant float kSkyReflectionAmount = 1.5;
+constant float kSunShininess = 50.0;
+constant float3 kWaterSunColour = float3(0.80, 0.47, 0.33);   // normalize(1.2, 0.7, 0.5)
+constant float3 kWaveCrestColour = float3(1.0, 1.0, 1.0);
+
+// What the water is seen to be sitting on, at the two ends of the depth ramp.
+// This stands in for the engine's REFRACTION target — the scene rendered behind
+// the water — which needs a second pass this renderer does not have. Shallow
+// water shows the ground and reads green-grey; deep water absorbs the red end
+// first, which is why the sea is blue.
 constant float3 kShallowWater = float3(0.18, 0.34, 0.36);
 constant float3 kDeepWater = float3(0.03, 0.10, 0.22);
 
@@ -366,15 +455,11 @@ fragment float4 waterFragment(WaterOut in [[stage_in]], constant Uniforms& u [[b
     }
 
     const float deep = saturate(in.depth / kWaterDepthRange);
-    const float3 body = mix(kShallowWater, kDeepWater, deep);
 
-    // Two crossing wave trains, perturbing the NORMAL only: displacing the
-    // surface would need a mesh fine enough to show it and a shoreline that
-    // moved with the waves.
-    //
-    // Both run obliquely, and at incommensurable angles. Aligning them to X and
-    // Z — the obvious thing — makes the crests intersect on a regular lattice,
-    // and open water reads as tiled graph paper rather than as sea.
+    // Two crossing wave trains standing in for the engine's four scrolling
+    // normal maps, perturbing the NORMAL only. Both run obliquely and at
+    // incommensurable angles: aligned to X and Z their crests intersect on a
+    // regular lattice, and open water reads as tiled graph paper.
     const float t = u.animationTime;
     const float2 first = float2(0.92f, 0.39f);
     const float2 second = float2(-0.36f, 0.93f);
@@ -385,25 +470,40 @@ fragment float4 waterFragment(WaterOut in [[stage_in]], constant Uniforms& u [[b
     const float3 normal = normalize(float3(-slope.x, 1.0, -slope.y));
 
     const float3 view = normalize(u.cameraPosition - in.world);
+    const float3 mirrored = reflect(-view, normal);
 
-    // Schlick's approximation. Water's reflectance at normal incidence is about
-    // 0.02 — looking straight down it is nearly clear, and at a grazing angle it
-    // becomes a mirror. That variation is most of what makes water look wet.
-    const float cosTheta = saturate(dot(normal, view));
-    const float fresnel = 0.02 + 0.98 * pow(1.0 - cosTheta, 5.0);
+    // The engine reads Fresnel from a texture indexed by (depth, N.V); this
+    // evaluates the bias and power that texture is built from. Note how much
+    // softer it is than a physical Schlick term — power 1.5 against 5 — which
+    // is why the engine's water reflects noticeably even looking straight down.
+    const float NdotV = saturate(dot(normal, view));
+    const float fresnel = kFresnelBias + (1.0 - kFresnelBias) * pow(1.0 - NdotV, kFresnelPower);
 
-    // No reflection probe, so the sky colour stands in — the same constant the
-    // frame is cleared to, which is what a real reflection would mostly show.
-    const float3 sky = float3(0.09, 0.12, 0.18) * 2.2;
+    // What is seen through the water, tinted as water2.fx tints it: a fixed
+    // 0.3 of waterColor regardless of depth.
+    float3 through = mix(kShallowWater, kDeepWater, deep);
+    through = mix(through, kWaterColour, kWaterLerp);
 
-    // A sun glint, sharper than the units' specular because water is smooth.
-    const float3 halfVector = normalize(u.sunDirection + view);
-    const float glint = pow(saturate(dot(normal, halfVector)), 220.0);
+    // The sky the surface actually reflects — the same function the sky pass
+    // draws with, so the sea and the sky above it agree.
+    const float3 reflected = skyColour(mirrored, u.sunDirection);
 
-    // The glint alone carries the waves. An additive term on the crests as well
-    // makes the pattern legible as a pattern, which is the opposite of the
-    // point.
-    const float3 colour = mix(body, sky, fresnel) + float3(glint) * 0.5;
+    // Shallow water reflects less sky. This is where the engine's depth
+    // dependence lives, rather than in the tint.
+    const float skyAmount = kSkyReflectionAmount * saturate(in.depth * 0.1);
+    float3 colour = mix(through, reflected, saturate(skyAmount * fresnel));
+
+    // A tight warm glint, added through the Fresnel term as the engine does.
+    const float3 glint = pow(saturate(dot(mirrored, u.sunDirection)), kSunShininess)
+                       * kWaterSunColour;
+    colour += glint * fresnel;
+
+    // Wave crests, from the same trains that made the normal. The engine gates
+    // these on a threshold too (waveCrestThreshold, water2.fx:21); kept rare
+    // and faint here, because two sine trains crest on a regular grid and a
+    // strong term turns that into visible polka dots.
+    const float crest = saturate((sin(phase1) + sin(phase2)) * 0.5 - 0.8);
+    colour = mix(colour, kWaveCrestColour, crest * 0.10);
 
     // Shallow water is more transparent, so the ground shows through at the
     // shore and the edge dissolves rather than ending in a line.
@@ -875,6 +975,7 @@ Renderer::Renderer(CA::MetalLayer* layer)
     unitShadowPipeline_ = makeDepthOnlyPipeline(device_, library, "unitShadowVertex");
     terrainPipeline_ = makePipeline(device_, library, "terrainVertex", "terrainFragment",
                                     /*blend=*/false);
+    skyPipeline_ = makePipeline(device_, library, "skyVertex", "skyFragment", /*blend=*/false);
     waterPipeline_ = makePipeline(device_, library, "waterVertex", "waterFragment",
                                   /*blend=*/true);
     unitPipeline_ = makePipeline(device_, library, "unitVertex", "unitFragment",
@@ -886,6 +987,18 @@ Renderer::Renderer(CA::MetalLayer* layer)
     depthDescriptor->setDepthCompareFunction(MTL::CompareFunction::CompareFunctionLess);
     depthDescriptor->setDepthWriteEnabled(true);
     depthState_ = device_->newDepthStencilState(depthDescriptor);
+
+    // The sky writes no depth and passes only where nothing has been drawn:
+    // it sits at the far plane, so everything else beats it on depth and it
+    // fills whatever is left. That lets it be drawn FIRST, which keeps it out
+    // of the blended water's way.
+    {
+        auto* skyDepth = MTL::DepthStencilDescriptor::alloc()->init();
+        skyDepth->setDepthCompareFunction(MTL::CompareFunction::CompareFunctionLessEqual);
+        skyDepth->setDepthWriteEnabled(false);
+        skyDepthState_ = device_->newDepthStencilState(skyDepth);
+        skyDepth->release();
+    }
 
     // --- Shadow map --------------------------------------------------------
     {
@@ -973,6 +1086,8 @@ Renderer::Renderer(CA::MetalLayer* layer)
 Renderer::~Renderer() {
     // Reverse acquisition order; all are +1 objects from newXxx()/CreateXxx.
     releaseWaterBuffers();
+    if (skyDepthState_ != nullptr) skyDepthState_->release();
+    if (skyPipeline_ != nullptr) skyPipeline_->release();
     if (shadowSampler_ != nullptr) shadowSampler_->release();
     if (shadowMap_ != nullptr) shadowMap_->release();
     if (unitShadowPipeline_ != nullptr) unitShadowPipeline_->release();
@@ -1728,7 +1843,18 @@ void Renderer::encodeScene(MTL::RenderCommandEncoder* encoder, unsigned int widt
         .lightViewProjection = lightViewProjection_,
         .hasShadows = hasShadows_ ? 1.0f : 0.0f,
         .animationTime = animationTime_,
+        .inverseViewProjection = simd_inverse(camera_.viewProjection(aspect)),
     };
+
+    // --- Sky ---------------------------------------------------------------
+    // First, at the far plane, writing no depth. Everything else then draws
+    // over it by winning the depth test rather than by being drawn later.
+    encoder->setRenderPipelineState(skyPipeline_);
+    encoder->setDepthStencilState(skyDepthState_);
+    encoder->setVertexBytes(&uniforms, sizeof(uniforms), kUniformBufferIndex);
+    encoder->setFragmentBytes(&uniforms, sizeof(uniforms), kUniformBufferIndex);
+    encoder->drawPrimitives(MTL::PrimitiveType::PrimitiveTypeTriangle, NS::UInteger{0},
+                            NS::UInteger{3});
 
     // Culling stays off: the camera is free to dip below the terrain, and a
     // heightfield seen from underneath should still be visible rather than

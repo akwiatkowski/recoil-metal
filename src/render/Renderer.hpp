@@ -245,6 +245,8 @@ private:
     unsigned int depthHeight_ = 0;
 
     MTL::DepthStencilState* waterDepthState_ = nullptr;   // owned
+    MTL::RenderPipelineState* skyPipeline_ = nullptr;     // owned
+    MTL::DepthStencilState* skyDepthState_ = nullptr;     // owned
     MTL::RenderPipelineState* waterPipeline_ = nullptr;   // owned
 
     // The water surface is a grid rather than a quad, because each vertex
