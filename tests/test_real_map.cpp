@@ -313,3 +313,63 @@ TEST_CASE("the real map declares eight team start positions", "[real-map]") {
         REQUIRE(start.z <= field->depthElmos());
     }
 }
+
+// --- Features, across the BAR corpus -----------------------------------------
+// This is the evidence that settled a question recorded as "blocked" for three
+// milestones: whether it is worth rendering the objects a .smf places.
+
+TEST_CASE("BAR's maps declare the standard tree table and place none of it") {
+    // Five maps, and the answer is the same on all of them: sixteen TreeTypeN
+    // entries present and unused. The only features any of them actually place are
+    // GEOVENTS — two, on Altair Crossing — which are build sites rather than
+    // scenery. BAR puts its trees down from a runtime Lua gadget instead, and this
+    // is what that looks like from the map file's side.
+    //
+    // So SMF feature RENDERING has nothing to render, and the item is retired
+    // rather than unblocked. The parser stays because the section is real, the
+    // geovents are real data, and a map from outside BAR may well use it.
+    const char* home = std::getenv("HOME");
+    if (home == nullptr) {
+        SKIP("no HOME");
+    }
+    const std::filesystem::path root =
+        std::filesystem::path{home} / "projects/llm/input/recoil/maps/bar";
+
+    std::error_code ec;
+    if (!std::filesystem::is_directory(root, ec)) {
+        SKIP("BAR map corpus not downloaded — see README");
+    }
+
+    std::size_t maps = 0;
+    std::size_t placements = 0;
+    std::size_t treePlacements = 0;
+
+    for (const auto& entry : std::filesystem::recursive_directory_iterator{root, ec}) {
+        if (!entry.is_regular_file(ec) || entry.path().extension() != ".smf") {
+            continue;
+        }
+        const auto features = rm::smf::loadFeaturesFile(entry.path());
+        INFO("map: " << entry.path().filename().string());
+        REQUIRE(features.has_value());
+        ++maps;
+
+        // Every map ships the table whether or not it uses it.
+        CHECK(features->types.size() >= 16);
+
+        for (const rm::smf::MapFeatures::Placement& placement : features->placements) {
+            ++placements;
+            const std::string& type = features->types[static_cast<std::size_t>(placement.type)];
+            if (type.starts_with("TreeType")) {
+                ++treePlacements;
+            }
+        }
+    }
+
+    if (maps == 0) {
+        SKIP("no .smf extracted from the BAR corpus");
+    }
+
+    INFO(maps << " maps, " << placements << " placements, " << treePlacements << " of them trees");
+    // The finding, as an assertion: whatever else these maps place, it is not trees.
+    CHECK(treePlacements == 0);
+}

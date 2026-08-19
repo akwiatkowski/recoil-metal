@@ -842,6 +842,27 @@ PY
 Without them the map still draws: the terrain-type colour bands from milestone 6
 stay loaded as the fallback, and the splat simply does not switch on.
 
+### More Recoil maps
+
+The feature question needed a corpus rather than one map. BAR publishes a validated
+index of live maps with direct download URLs, which is the only part of this worth
+scripting:
+
+```sh
+mkdir -p ~/projects/llm/input/recoil/maps/bar && cd ~/projects/llm/input/recoil/maps/bar
+curl -s -o /tmp/live_maps.json \
+  https://maps-metadata.beyondallreason.dev/latest/live_maps.validated.json
+python3 -c "import json;[print(d['downloadURL']) for d in json.load(open('/tmp/live_maps.json'))]" \
+  | head -8 | while read -r u; do
+      curl -s --max-filesize 45000000 -O "$u"   # most are 25-85 MB
+    done
+for f in *.sd7; do 7zz e -y "$f" -o"${f%.sd7}" "maps/*.smf" >/dev/null; done
+```
+
+What they say is in the milestone notes: sixteen `TreeTypeN` entries declared and
+never used, on every map checked. Only the `.smf` is extracted, because the feature
+list is the only thing this corpus was fetched to answer.
+
 ### Prop meshes
 
 The same archive, and the same deal — a `.scmap`'s props name blueprints
