@@ -296,6 +296,15 @@ private:
     simd_float4x4 lightViewProjection_{};
     bool hasShadows_ = false;
 
+    /// Draws the terrain chunks a predicate accepts, merging consecutive
+    /// survivors into single draws.
+    ///
+    /// The merge is not a nicety: without it culling replaces one draw of the
+    /// terrain with one per chunk, and whenever the camera keeps them all that
+    /// is slower than not culling at all.
+    template <typename Predicate>
+    void drawTerrainChunks(MTL::RenderCommandEncoder* encoder, Predicate keep) noexcept;
+
     /// Recomputes the light's orthographic frame around the loaded terrain.
     void updateLightMatrix() noexcept;
 

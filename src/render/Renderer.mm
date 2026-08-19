@@ -11,6 +11,7 @@
 #include "render/Renderer.hpp"
 
 #include "core/Error.hpp"
+#include "core/camera/Frustum.hpp"
 
 #include <simd/simd.h>
 
@@ -1899,11 +1900,15 @@ void Renderer::encodeScene(MTL::RenderCommandEncoder* encoder, unsigned int widt
                                     kSplatMaskBIndex);
         encoder->setFragmentBytes(&splat, sizeof(splat), kSplatUniformBufferIndex);
 
-        encoder->drawIndexedPrimitives(MTL::PrimitiveType::PrimitiveTypeTriangle,
-                                       static_cast<NS::UInteger>(indexCount_),
-                                       MTL::IndexType::IndexTypeUInt32,
-                                       indexBuffer_,
-                                       /*indexBufferOffset=*/0);
+        // The same cull-and-merge as the shadow pass, against the view frustum
+        // instead of the light's box. Conservative: a chunk that merely
+        // straddles a plane is kept, because culling anything not wholly
+        // inside clips terrain at the edge of the screen.
+        const Frustum frustum = frustumOf(camera_.viewProjection(aspect));
+        drawTerrainChunks(encoder, [&frustum](const TerrainChunk& chunk) {
+            return frustum.intersectsBox(simd_make_float3(chunk.minX, chunk.minY, chunk.minZ),
+                                         simd_make_float3(chunk.maxX, chunk.maxY, chunk.maxZ));
+        });
     }
 
     // --- Units -------------------------------------------------------------
@@ -2012,6 +2017,35 @@ void Renderer::encodeScene(MTL::RenderCommandEncoder* encoder, unsigned int widt
     }
 }
 
+template <typename Predicate>
+void Renderer::drawTerrainChunks(MTL::RenderCommandEncoder* encoder, Predicate keep) noexcept {
+    std::size_t runFirst = 0;
+    std::size_t runCount = 0;
+
+    const auto flush = [&] {
+        if (runCount == 0) {
+            return;
+        }
+        encoder->drawIndexedPrimitives(
+            MTL::PrimitiveType::PrimitiveTypeTriangle, static_cast<NS::UInteger>(runCount),
+            MTL::IndexType::IndexTypeUInt32, indexBuffer_,
+            static_cast<NS::UInteger>(runFirst * sizeof(std::uint32_t)));
+        runCount = 0;
+    };
+
+    for (const TerrainChunk& chunk : terrainChunks_) {
+        if (!keep(chunk)) {
+            flush();
+            continue;
+        }
+        if (runCount == 0) {
+            runFirst = chunk.firstIndex;
+        }
+        runCount += chunk.indexCount;
+    }
+    flush();
+}
+
 void Renderer::updateLightMatrix() noexcept {
     hasShadows_ = false;
     if (shadowMap_ == nullptr || indexCount_ == 0) {
@@ -2107,56 +2141,26 @@ void Renderer::encodeShadowPass(MTL::CommandBuffer* commandBuffer) noexcept {
         // is oriented along the sun, so an axis-aligned test in world space
         // would be wrong, and a chunk's bounding sphere is cheap and never too
         // small. Too generous is harmless here; too tight drops shadows.
-        // Surviving chunks are merged into contiguous RUNS before drawing.
-        // Without that this trades one draw of the whole terrain for one per
-        // chunk, and when the camera is pulled back far enough to keep them all
-        // — which the benchmark does — it is measurably slower than not culling
-        // at all. Merged, the far case costs a handful of draws and the near
-        // case one or two.
-        std::size_t runFirst = 0;
-        std::size_t runCount = 0;
-
-        const auto flush = [&] {
-            if (runCount == 0) {
-                return;
-            }
-            encoder->drawIndexedPrimitives(
-                MTL::PrimitiveType::PrimitiveTypeTriangle,
-                static_cast<NS::UInteger>(runCount), MTL::IndexType::IndexTypeUInt32,
-                indexBuffer_, static_cast<NS::UInteger>(runFirst * sizeof(std::uint32_t)));
-            runCount = 0;
-        };
-
-        for (const TerrainChunk& chunk : terrainChunks_) {
-            const simd_float3 chunkCentre = simd_make_float3((chunk.minX + chunk.maxX) * 0.5f,
-                                                             (chunk.minY + chunk.maxY) * 0.5f,
-                                                             (chunk.minZ + chunk.maxZ) * 0.5f);
-            const float chunkRadius =
-                0.5f * simd_length(simd_make_float3(chunk.maxX - chunk.minX,
-                                                    chunk.maxY - chunk.minY,
-                                                    chunk.maxZ - chunk.minZ));
-
-            // Tested in the light's own axes as a sphere against the box: the
-            // box is oriented along the sun, so an axis-aligned world-space
-            // test would be wrong, and a chunk's bounding sphere is cheap and
-            // never too small. Too generous is harmless; too tight drops
-            // shadows.
-            const simd_float3 offset = chunkCentre - lightCentre_;
+        // Only the chunks the light's box touches. The box follows the camera
+        // and covers a fraction of the map, so this is usually a handful of
+        // chunks against sixteen by sixteen — and it is why the shadow pass no
+        // longer costs what it did.
+        //
+        // Tested as a sphere against the box in the LIGHT's axes: the box is
+        // oriented along the sun, so an axis-aligned world-space test would be
+        // wrong. A chunk's bounding sphere is cheap and never too small, and
+        // here too generous is harmless while too tight drops shadows.
+        drawTerrainChunks(encoder, [this](const TerrainChunk& chunk) {
+            const simd_float3 centre = simd_make_float3((chunk.minX + chunk.maxX) * 0.5f,
+                                                        (chunk.minY + chunk.maxY) * 0.5f,
+                                                        (chunk.minZ + chunk.maxZ) * 0.5f);
+            const float radius = 0.5f * simd_length(simd_make_float3(chunk.maxX - chunk.minX,
+                                                                     chunk.maxY - chunk.minY,
+                                                                     chunk.maxZ - chunk.minZ));
+            const simd_float3 offset = centre - lightCentre_;
             const simd_float3 along = kSunDirection * simd_dot(offset, kSunDirection);
-            const bool visible =
-                simd_length(offset - along) <= lightExtent_ + chunkRadius;
-
-            if (!visible) {
-                flush();
-                continue;
-            }
-
-            if (runCount == 0) {
-                runFirst = chunk.firstIndex;
-            }
-            runCount += chunk.indexCount;
-        }
-        flush();
+            return simd_length(offset - along) <= lightExtent_ + radius;
+        });
     }
 
     encoder->setRenderPipelineState(unitShadowPipeline_);

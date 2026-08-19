@@ -78,6 +78,7 @@ add_library(rm_core STATIC
     src/core/map/TerrainType.cpp
     src/core/mesh/TerrainMesh.cpp
     src/core/camera/OrbitCamera.cpp
+    src/core/camera/Frustum.cpp
     src/core/bench/FrameStats.cpp
     src/core/model/Model.cpp
     src/core/model/S3o.cpp
@@ -124,6 +125,7 @@ if(BUILD_TESTING)
         tests/test_height_field.cpp
         tests/test_terrain_mesh.cpp
         tests/test_orbit_camera.cpp
+        tests/test_frustum.cpp
         tests/test_map_info.cpp
         tests/test_lua_table.cpp
         tests/test_smt.cpp
