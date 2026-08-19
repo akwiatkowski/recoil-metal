@@ -105,15 +105,24 @@ static_assert(offsetof(TerrainUniforms, supremeCommanderShading) == 136,
 // sides. The static_assert is what keeps that claim honest.
 constexpr std::size_t kSplatLayerCount = 10;
 
+constexpr std::size_t kSplatNormalCount = 9;
+
 struct SplatUniforms {
     float tileElmos[kSplatLayerCount];
     float present[kSplatLayerCount];
+    float normalTileElmos[kSplatNormalCount];
+    float normalPresent[kSplatNormalCount];
     float enabled;
+    /// How strongly the blended stratum normal tilts the geometric one.
+    float normalStrength;
 };
 
-static_assert(sizeof(SplatUniforms) == 84, "SplatUniforms must match the MSL layout");
+static_assert(sizeof(SplatUniforms) == 160, "SplatUniforms must match the MSL layout");
 static_assert(offsetof(SplatUniforms, present) == 40, "float[10] must pack contiguously");
-static_assert(offsetof(SplatUniforms, enabled) == 80, "unexpected padding before enabled");
+static_assert(offsetof(SplatUniforms, normalTileElmos) == 80, "the normal block follows");
+static_assert(offsetof(SplatUniforms, normalPresent) == 116, "float[9] must pack contiguously");
+static_assert(offsetof(SplatUniforms, enabled) == 152, "unexpected padding before enabled");
+static_assert(offsetof(SplatUniforms, normalStrength) == 156, "normalStrength packs after it");
 
 // Buffer/texture binding indices, shared between the C++ and MSL sides.
 constexpr NS::UInteger kVertexBufferIndex = 0;
@@ -149,6 +158,25 @@ constexpr NS::UInteger kSplatMaskAIndex = 1;
 constexpr NS::UInteger kSplatMaskBIndex = 2;
 /// The ten layer textures occupy indices 3..12, matching the array in the MSL.
 constexpr NS::UInteger kSplatLayerBaseIndex = 3;
+/// The nine stratum normal maps, past the shadow and reflection slots: 15..23.
+constexpr NS::UInteger kSplatNormalBaseIndex = 15;
+
+/// How far the blended stratum normal tilts the geometric one.
+///
+/// Not from the engine, and it cannot be: SupCom renders terrain normals to a
+/// screen-space buffer where the stratum normal simply IS the surface normal,
+/// because its ground gets its slope from a map-wide normal map rather than
+/// from geometry. This mesh already carries the real slope in its vertices, so
+/// the stratum map is detail added on top — a different composition, which
+/// needs a weight the original has no reason to state.
+///
+/// Chosen by measurement rather than taste. At 0.6 the mean pixel difference
+/// against no normal maps at all is 1.13/255 over a close view — present in
+/// the numbers, invisible on the screen, which is the worst of both. 2.5 reads
+/// as noise on open ground. 1.5 puts grain in grass and relief on a hillside
+/// at the scale a unit stands on, which is the scale a heightfield sample
+/// (8 elmos) cannot express at all.
+constexpr float kStratumNormalStrength = 1.5f;
 /// The model shading texture — S3O's tex2, and the same slot Supreme Commander's
 /// `_specTeam` texture will take.
 constexpr NS::UInteger kShadingTextureIndex = 1;
@@ -350,8 +378,63 @@ vertex VertexOut terrainVertex(uint vid [[vertex_id]],
 struct SplatUniforms {
     float tileElmos[10];  ///< ground covered by one repeat of each layer
     float present[10];    ///< 0 for an unused slot, whose mask channel is unreliable
+    float normalTileElmos[9];  ///< the normal maps repeat on their own scale
+    float normalPresent[9];
     float enabled;
+    float normalStrength;
 };
+
+// The blended stratum normal, in the surface's tangent frame.
+//
+// Ported from terrain.fx's TerrainNormalsXP: the same chain of lerps as the
+// albedo, in the same order, over `sample * 2 - 1`.
+//
+// One asymmetry is faithfully reproduced and is NOT a typo. The albedo pass
+// reads its masks EXPANDED — `saturate(mask * 2 - 1)`, which is what ADR-009
+// corrected — while the normals pass reads them RAW. Both are in the same file,
+// twenty lines apart. Expanding the masks here as well would look tidier and
+// would make every stratum's relief cut off at half weight rather than fading
+// in across the whole range.
+//
+// Blue is the up axis, measured across the real textures rather than inferred
+// from a shader that never says so (tests/test_real_stratum_normals.cpp) — a
+// normal map read on the wrong axis lights bumps as dents, which survives a
+// look at the screen.
+static float3 blendedStratumNormal(float2 world, float4 mask0, float4 mask1,
+                                   constant SplatUniforms& s,
+                                   array<texture2d<float>, 9> normals,
+                                   sampler splatSampler) {
+    const float weights[8] = {mask0.r, mask0.g, mask0.b, mask0.a,
+                              mask1.r, mask1.g, mask1.b, mask1.a};
+
+    // Flat — straight up in tangent space — is the honest starting point for a
+    // base layer that ships no normal map.
+    float3 blended = float3(0.0, 0.0, 1.0);
+    if (s.normalPresent[0] > 0.5) {
+        blended = normals[0].sample(splatSampler, world / s.normalTileElmos[0]).xyz * 2.0 - 1.0;
+    }
+
+    for (uint i = 0; i < 8; ++i) {
+        // Two skips, both of which leave the result bit-identical — mixing by
+        // zero is what the arithmetic would have done anyway — and which
+        // between them halve the cost on a real map.
+        //
+        // The first is uniform across the draw: a map naming five strata has
+        // four slots bound to a fallback texture whose contents are then
+        // multiplied away, and sampling those is pure waste. The second is per
+        // fragment but spatially coherent, since a stratum covers regions
+        // rather than speckle: away from its region its mask weight is zero.
+        if (s.normalPresent[i + 1] < 0.5 || weights[i] <= 0.0) {
+            continue;
+        }
+
+        const float3 layer =
+            normals[i + 1].sample(splatSampler, world / s.normalTileElmos[i + 1]).xyz * 2.0 - 1.0;
+        blended = mix(blended, layer, weights[i]);
+    }
+
+    return normalize(blended);
+}
 
 fragment float4 terrainFragment(VertexOut in [[stage_in]],
                                 constant Uniforms& u [[buffer(1)]],
@@ -361,6 +444,7 @@ fragment float4 terrainFragment(VertexOut in [[stage_in]],
                                 texture2d<float> maskB [[texture(2)]],
                                 array<texture2d<float>, 10> layers [[texture(3)]],
                                 depth2d<float> shadowMap [[texture(13)]],
+                                array<texture2d<float>, 9> layerNormals [[texture(15)]],
                                 sampler groundSampler [[sampler(0)]],
                                 sampler splatSampler [[sampler(1)]],
                                 sampler shadowSampler [[sampler(2)]]) {
@@ -372,10 +456,7 @@ fragment float4 terrainFragment(VertexOut in [[stage_in]],
     }
 
     // Interpolating unit normals across a triangle does not preserve length.
-    const float3 normal = normalize(in.normal);
-
-    // Lambert against a fixed sun.
-    const float lambert = saturate(dot(normal, u.sunDirection));
+    float3 normal = normalize(in.normal);
 
     float3 albedo;
     if (s.enabled > 0.5) {
@@ -396,8 +477,14 @@ fragment float4 terrainFragment(VertexOut in [[stage_in]],
         // of the range means "absent" rather than "a little", and only 0.5..1.0
         // carries weight. Using the raw value bleeds every stratum across the
         // whole map at up to half strength.
-        const float4 a = saturate(maskA.sample(groundSampler, in.uv) * 2.0 - 1.0);
-        const float4 b = saturate(maskB.sample(groundSampler, in.uv) * 2.0 - 1.0);
+        //
+        // The RAW samples are kept as well, because the normals pass reads them
+        // unexpanded — see blendedStratumNormal. Two readings of one texture,
+        // twenty lines apart in the engine's own file.
+        const float4 rawA = maskA.sample(groundSampler, in.uv);
+        const float4 rawB = maskB.sample(groundSampler, in.uv);
+        const float4 a = saturate(rawA * 2.0 - 1.0);
+        const float4 b = saturate(rawB * 2.0 - 1.0);
         const float weights[8] = {a.r, a.g, a.b, a.a, b.r, b.g, b.b, b.a};
 
         // Strictly ordered: each stratum is laid over everything beneath it, so
@@ -420,6 +507,27 @@ fragment float4 terrainFragment(VertexOut in [[stage_in]],
         }
 
         albedo = colour;
+
+        // The strata's own relief, over the heightfield's. A height sample is 8
+        // elmos across, so every feature smaller than a tank — gravel, ripples
+        // in sand, the grain of rock — has no geometry it could be expressed in
+        // and has to arrive this way or not at all.
+        //
+        // Perturbing the geometric normal rather than replacing it, which is
+        // what the engine effectively does: SupCom's terrain gets its slope
+        // from a map-wide normal map, whereas this mesh already carries the
+        // real slope in its vertices, and throwing that away to trust a tiled
+        // texture would flatten every hillside.
+        //
+        // The tangent frame needs no basis vectors because the layer uv IS
+        // world x and z — the parameterisation is axis-aligned by construction,
+        // so tangent x maps to world x, tangent y to world z, and tangent z
+        // (blue) to the surface normal.
+        if (s.normalStrength > 0.0) {
+            const float3 detail = blendedStratumNormal(world, rawA, rawB, s, layerNormals,
+                                                       splatSampler);
+            normal = normalize(normal + float3(detail.x, 0.0, detail.y) * s.normalStrength);
+        }
     } else if (u.hasTexture > 0.5) {
         albedo = ground.sample(groundSampler, in.uv).rgb;
     } else {
@@ -428,6 +536,12 @@ fragment float4 terrainFragment(VertexOut in [[stage_in]],
         const float t = saturate((in.height - u.minHeight) / span);
         albedo = mix(float3(0.18, 0.34, 0.16), float3(0.66, 0.62, 0.55), t);
     }
+
+    // Lambert against a fixed sun. Computed here rather than beside the normal's
+    // declaration, because the splat branch above may have tilted that normal —
+    // and lighting the ground by the slope it had BEFORE its stratum relief was
+    // applied would compute the detail and then throw it away.
+    const float lambert = saturate(dot(normal, u.sunDirection));
 
     // A little ambient so slopes facing away from the sun stay readable.
     const float ambient = 0.35;
@@ -1662,6 +1776,12 @@ void Renderer::releaseSplat() noexcept {
             layer = nullptr;
         }
     }
+    for (MTL::Texture*& normal : splatNormals_) {
+        if (normal != nullptr) {
+            normal->release();
+            normal = nullptr;
+        }
+    }
     if (splatMaskA_ != nullptr) {
         splatMaskA_->release();
         splatMaskA_ = nullptr;
@@ -1701,6 +1821,20 @@ void Renderer::setSplat(std::span<const SplatLayer> layers, const dds::Texture& 
         // build the layer UV, and a division by zero would produce NaNs that
         // survive the multiply by a zero weight.
         splatTileElmos_[i] = (have && layers[i].tileElmos > 0.0f) ? layers[i].tileElmos : 1.0f;
+
+        // The stratum's normal map, on its own texture and its own tile size —
+        // a .scmap scales the two independently. Slot 9 is the macrotexture,
+        // which has no normal entry in the format at all.
+        const bool haveNormal =
+            i < kSplatNormalLayers && i < layers.size() && layers[i].hasNormal();
+        if (i < kSplatNormalLayers) {
+            splatNormals_[i] =
+                haveNormal ? uploadTexture(layers[i].normal, "splat normal") : nullptr;
+            splatNormalPresent_[i] = haveNormal ? 1.0f : 0.0f;
+            splatNormalTileElmos_[i] =
+                (haveNormal && layers[i].normalTileElmos > 0.0f) ? layers[i].normalTileElmos
+                                                                 : 1.0f;
+        }
     }
 
     // The base layer is not optional — everything else is laid over it.
@@ -2064,12 +2198,20 @@ void Renderer::encodeScene(MTL::RenderCommandEncoder* encoder, unsigned int widt
         // when the result is multiplied away.
         SplatUniforms splat{};
         splat.enabled = splatEnabled_ ? 1.0f : 0.0f;
+        splat.normalStrength = stratumNormalsEnabled_ ? kStratumNormalStrength : 0.0f;
         for (std::size_t i = 0; i < kSplatLayers; ++i) {
             splat.tileElmos[i] = splatTileElmos_[i];
             splat.present[i] = splatPresent_[i];
             encoder->setFragmentTexture(
                 splatLayers_[i] != nullptr ? splatLayers_[i] : groundTexture_,
                 kSplatLayerBaseIndex + static_cast<NS::UInteger>(i));
+        }
+        for (std::size_t i = 0; i < kSplatNormalLayers; ++i) {
+            splat.normalTileElmos[i] = splatNormalTileElmos_[i];
+            splat.normalPresent[i] = splatNormalPresent_[i];
+            encoder->setFragmentTexture(
+                splatNormals_[i] != nullptr ? splatNormals_[i] : groundTexture_,
+                kSplatNormalBaseIndex + static_cast<NS::UInteger>(i));
         }
         encoder->setFragmentTexture(splatMaskA_ != nullptr ? splatMaskA_ : groundTexture_,
                                     kSplatMaskAIndex);

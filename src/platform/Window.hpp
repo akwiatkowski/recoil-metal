@@ -106,6 +106,10 @@ public:
     void setReflections(bool enabled);
     [[nodiscard]] bool reflectionsEnabled() const;
 
+    /// The stratum normal-map setting. See Renderer::setStratumNormals.
+    void setStratumNormals(bool enabled);
+    [[nodiscard]] bool stratumNormalsEnabled() const;
+
     /// Points the camera at a world position. See Renderer::focusOn.
     void focusOn(std::array<float, 3> target, float distance);
 

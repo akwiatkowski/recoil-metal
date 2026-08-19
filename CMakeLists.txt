@@ -151,6 +151,7 @@ if(BUILD_TESTING)
         tests/test_real_map.cpp
         tests/test_terrain_type.cpp
         tests/test_real_scmap.cpp
+        tests/test_real_stratum_normals.cpp
         tests/test_scenario_save.cpp
         tests/support/SmfWriter.cpp
         tests/support/S3oWriter.cpp)

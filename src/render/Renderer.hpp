@@ -133,6 +133,15 @@ public:
     void setReflections(bool enabled) noexcept { reflectionsEnabled_ = enabled; }
     [[nodiscard]] bool reflectionsEnabled() const noexcept { return reflectionsEnabled_; }
 
+    // Whether the strata's normal maps perturb the ground's shading.
+    //
+    // Also a quality setting: it costs nine more texture fetches per terrain
+    // fragment, which is the same order as the albedo splat itself. Off, the
+    // ground is lit by the heightfield's own slope alone — correct at the scale
+    // a height sample can express (8 elmos) and flat below it.
+    void setStratumNormals(bool enabled) noexcept { stratumNormalsEnabled_ = enabled; }
+    [[nodiscard]] bool stratumNormalsEnabled() const noexcept { return stratumNormalsEnabled_; }
+
     // Uploads several models, the instances to draw each at, and the textures
     // they share. One instanced draw call covers every instance of a model; the
     // bone hierarchy is applied on the GPU by indexing a per-bone offset buffer
@@ -333,6 +342,16 @@ private:
     std::array<MTL::Texture*, kSplatLayers> splatLayers_{};  // owned
     std::array<float, kSplatLayers> splatTileElmos_{};
     std::array<float, kSplatLayers> splatPresent_{};
+
+    // The strata's normal maps, blended by the same masks as the albedo and
+    // giving the ground the fine relief a heightfield cannot carry: a
+    // heightfield sample is 8 elmos across, so anything smaller than a tank has
+    // no geometry to be expressed in.
+    //
+    // Nine, not ten — the macrotexture has no normal entry in the format.
+    std::array<MTL::Texture*, kSplatNormalLayers> splatNormals_{};  // owned
+    std::array<float, kSplatNormalLayers> splatNormalTileElmos_{};
+    std::array<float, kSplatNormalLayers> splatNormalPresent_{};
     MTL::Texture* splatMaskA_ = nullptr;  // owned
     MTL::Texture* splatMaskB_ = nullptr;  // owned
     bool splatEnabled_ = false;
@@ -452,6 +471,7 @@ private:
     float waterLevel_ = 0.0f;
     Environment environment_{};
     bool reflectionsEnabled_ = true;
+    bool stratumNormalsEnabled_ = true;
 
     OrbitCamera camera_;
 

@@ -237,26 +237,46 @@ struct LoadedSplat {
     // Slots 0..8 are the base plus the eight strata, in the order the masks
     // weight them; slot 9 is the macrotexture, laid over everything and keyed
     // on its own alpha rather than on a mask channel.
+    // Paths are absolute within the game's virtual filesystem, so the leading
+    // slash has to go before joining, or the concatenation resolves to the real
+    // filesystem root.
+    const auto resolve = [&root](const rm::scmap::TextureRef& ref, const char* what,
+                                 std::size_t slot) -> std::optional<rm::dds::Texture> {
+        if (ref.empty()) {
+            return std::nullopt;
+        }
+        std::string relative = ref.path;
+        if (!relative.empty() && relative.front() == '/') {
+            relative.erase(0, 1);
+        }
+
+        auto texture = rm::dds::loadFile(root / relative);
+        if (!texture) {
+            std::fprintf(stderr, "  splat %s %zu (%s) unavailable: %s\n", what, slot,
+                         ref.path.c_str(), texture.error().message.c_str());
+            return std::nullopt;
+        }
+        return std::move(*texture);
+    };
+
     for (std::size_t i = 0; i < rm::kSplatLayers; ++i) {
         rm::SplatLayer layer;
 
-        const rm::scmap::TextureRef& ref = map.albedo[i];
-        if (!ref.empty()) {
-            // Paths are absolute within the game's virtual filesystem, so the
-            // leading slash has to go before joining or the concatenation
-            // resolves to the real filesystem root.
-            std::string relative = ref.path;
-            if (!relative.empty() && relative.front() == '/') {
-                relative.erase(0, 1);
-            }
+        const rm::scmap::TextureRef& albedo = map.albedo[i];
+        if (auto texture = resolve(albedo, "layer", i)) {
+            layer.texture = std::move(*texture);
+            // The file stores ogrids; the renderer works in elmos.
+            layer.tileElmos = albedo.scale * rm::scmap::kElmosPerOgrid;
+        }
 
-            if (auto texture = rm::dds::loadFile(root / relative)) {
-                layer.texture = std::move(*texture);
-                // The file stores ogrids; the renderer works in elmos.
-                layer.tileElmos = ref.scale * rm::scmap::kElmosPerOgrid;
-            } else {
-                std::fprintf(stderr, "  splat layer %zu (%s) unavailable: %s\n", i,
-                             ref.path.c_str(), texture.error().message.c_str());
+        // The macrotexture has no normal entry — nine normals against ten
+        // albedos — so the loop stops one short of the array rather than
+        // indexing past it.
+        if (i < rm::kSplatNormalLayers) {
+            const rm::scmap::TextureRef& normal = map.normals[i];
+            if (auto texture = resolve(normal, "normal", i)) {
+                layer.normal = std::move(*texture);
+                layer.normalTileElmos = normal.scale * rm::scmap::kElmosPerOgrid;
             }
         }
 
@@ -278,11 +298,13 @@ struct LoadedSplat {
     splat.maskB = *maskB;
 
     std::size_t used = 0;
+    std::size_t normals = 0;
     for (const rm::SplatLayer& layer : splat.layers) {
         used += layer.present() ? 1 : 0;
+        normals += layer.hasNormal() ? 1 : 0;
     }
-    std::printf("  splat: %zu of %zu layers, masks %dx%d\n", used, splat.layers.size(),
-                splat.maskA.width, splat.maskA.height);
+    std::printf("  splat: %zu of %zu layers, %zu normal maps, masks %dx%d\n", used,
+                splat.layers.size(), normals, splat.maskA.width, splat.maskA.height);
 
     return splat;
 }
@@ -1482,6 +1504,7 @@ int main(int argc, const char* argv[]) {
             renderer.setUnits(units.textures.all(), units.batches);
             renderer.setAnimationTime(animationTime);
             renderer.setReflections(!hasFlag(argc, argv, "--no-reflections"));
+            renderer.setStratumNormals(!hasFlag(argc, argv, "--no-stratum-normals"));
             // --focus works here too, so the benchmark can measure a close
             // camera as well as a whole-map one. They are different workloads:
             // anything that culls to what the camera sees is invisible at full
@@ -1515,6 +1538,7 @@ int main(int argc, const char* argv[]) {
             renderer.setUnits(units.textures.all(), units.batches);
             renderer.setAnimationTime(animationTime);
             renderer.setReflections(!hasFlag(argc, argv, "--no-reflections"));
+            renderer.setStratumNormals(!hasFlag(argc, argv, "--no-stratum-normals"));
             if (focus) {
                 focusOnFirstUnit(renderer, units);
             }
@@ -1555,14 +1579,21 @@ int main(int argc, const char* argv[]) {
         if (hasFlag(argc, argv, "--no-reflections")) {
             window.setReflections(false);
         }
+        if (hasFlag(argc, argv, "--no-stratum-normals")) {
+            window.setStratumNormals(false);
+        }
         window.onKey([&window](char key) {
-            if (key != 'r') {
-                return;
+            if (key == 'r') {
+                const bool enabled = !window.reflectionsEnabled();
+                window.setReflections(enabled);
+                std::printf("reflections %s\n", enabled ? "on" : "off");
+                std::fflush(stdout);
+            } else if (key == 'n') {
+                const bool enabled = !window.stratumNormalsEnabled();
+                window.setStratumNormals(enabled);
+                std::printf("stratum normals %s\n", enabled ? "on" : "off");
+                std::fflush(stdout);
             }
-            const bool enabled = !window.reflectionsEnabled();
-            window.setReflections(enabled);
-            std::printf("reflections %s\n", enabled ? "on" : "off");
-            std::fflush(stdout);
         });
 
         // --- Click to move -------------------------------------------------

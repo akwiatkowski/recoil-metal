@@ -370,6 +370,14 @@ bool Window::reflectionsEnabled() const {
     return impl_->renderer->reflectionsEnabled();
 }
 
+void Window::setStratumNormals(bool enabled) {
+    impl_->renderer->setStratumNormals(enabled);
+}
+
+bool Window::stratumNormalsEnabled() const {
+    return impl_->renderer->stratumNormalsEnabled();
+}
+
 void Window::focusOn(std::array<float, 3> target, float distance) {
     impl_->renderer->focusOn(target, distance);
 }

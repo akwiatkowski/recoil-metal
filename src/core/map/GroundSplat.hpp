@@ -21,11 +21,28 @@ struct SplatLayer {
     dds::Texture texture;     ///< a zero-width texture means the slot is unused
     float tileElmos = 1.0f;
 
+    // The stratum's normal map, and how much ground one repeat of it covers.
+    //
+    // A separate texture and a separate tile size, because a `.scmap` gives
+    // each its own entry and its own scale — the two are not obliged to repeat
+    // together, and several stock maps set them differently.
+    //
+    // Optional independently of the albedo: a stratum may name one and not the
+    // other, and the macrotexture (slot 9) has no normal entry at all.
+    dds::Texture normal;
+    float normalTileElmos = 1.0f;
+
     [[nodiscard]] bool present() const noexcept { return texture.width > 0; }
+    [[nodiscard]] bool hasNormal() const noexcept { return normal.width > 0; }
 };
 
 /// Layers a splat blends: the base, eight strata in mask order, then the
 /// macrotexture that goes over everything.
 inline constexpr std::size_t kSplatLayers = 10;
+
+/// Layers carrying a normal map: the base and the eight strata. The
+/// macrotexture has none — `.scmap` stores nine normal entries against ten
+/// albedo ones, and terrain.fx's TerrainNormalsXP blends exactly those nine.
+inline constexpr std::size_t kSplatNormalLayers = 9;
 
 } // namespace rm
