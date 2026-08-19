@@ -22,6 +22,7 @@
 #include "core/scene/UnitPlacement.hpp"
 #include "core/sim/Army.hpp"
 #include "core/sim/Combat.hpp"
+#include "core/sim/Economy.hpp"
 #include "core/sim/Movement.hpp"
 #include "core/sim/Pathfinding.hpp"
 #include "core/unit/UnitBlueprint.hpp"
@@ -203,6 +204,11 @@ struct LoadedMap {
     rm::dds::Texture splatMaskB;
 
     std::vector<rm::mapinfo::StartPosition> starts;
+
+    /// Everything the map annotates itself with — 19310 markers across the 60 stock maps.
+    /// The mass deposits are what an economy stands on; the rest is read because it is
+    /// nearly free once the table is being walked at all.
+    std::vector<rm::scenario::Marker> markers;
 
     // .scmap: the props the map places — trees, rocks, wrecks. Kept as the map
     // stated them; resolving each blueprint to a mesh is a separate step, because
@@ -430,7 +436,22 @@ struct LoadedSplat {
         const auto starts = rm::scenario::loadStartPositionsFile(*savePath);
         if (starts) {
             loaded.starts = *starts;
-            std::printf("  starts: %zu, from %s\n", loaded.starts.size(),
+
+            std::size_t massSites = 0;
+            std::ifstream save{*savePath, std::ios::binary};
+            const std::string lua{std::istreambuf_iterator<char>(save),
+                                  std::istreambuf_iterator<char>()};
+            if (auto markers = rm::scenario::loadMarkers(lua)) {
+                loaded.markers = std::move(*markers);
+                for (const rm::scenario::Marker& marker : loaded.markers) {
+                    if (marker.isType("Mass")) {
+                        ++massSites;
+                    }
+                }
+            }
+
+            std::printf("  starts: %zu, markers: %zu (%zu mass), from %s\n",
+                        loaded.starts.size(), loaded.markers.size(), massSites,
                         savePath->filename().string().c_str());
         } else {
             // Worth a word: a map whose starts fail to read still draws, but
@@ -994,6 +1015,17 @@ struct UnitScene {
     /// Shots in flight.
     std::vector<rm::sim::Projectile> projectiles;
 
+    /// One economy per army, indexed by army. Empty outside a skirmish.
+    std::vector<rm::sim::Economy> economies;
+
+    /// Everything under construction, all armies together. Partitioned per army each tick
+    /// rather than held per army, because a build is a thing in the world and belongs with
+    /// the others rather than filed under its owner.
+    std::vector<rm::sim::Construction> building;
+
+    /// The blueprint each Construction becomes, by its `blueprintIndex`.
+    std::vector<rm::unitdef::UnitDef> buildable;
+
     /// The combat pass's view of the scene, rebuilt when the batch list changes rather
     /// than every tick — the spans are stable because the deques never reallocate.
     [[nodiscard]] std::vector<rm::sim::CombatGroup> combatGroups() {
@@ -1430,8 +1462,103 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
         scene.batches[i].instances = scene.instances[i];
     }
 
+    // Each army starts with the commander's trickle and one extractor's worth of storage,
+    // which is what makes the first build affordable — see kCommanderTrickle.
+    scene.economies.assign(scene.armies.size(), rm::sim::Economy{});
+    for (rm::sim::Economy& economy : scene.economies) {
+        economy.incomePerSecond = rm::sim::kCommanderTrickle;
+        economy.storage = {.mass = 650.0f, .energy = 5000.0f};
+    }
+
     std::printf("skirmish: %zu armies, %zu commander model(s)\n", scene.armies.size(),
                 batchForFaction.size());
+}
+
+/// Orders every commander to build a mass extractor on its nearest deposit.
+///
+/// The whole of this milestone's build order, and deliberately not an AI: one structure,
+/// on the site the MAP names, paid for out of the trickle a commander produces. What it
+/// demonstrates is the chain — a marker becomes a site, a blueprint becomes a cost, and
+/// the cost is met over time rather than at once.
+///
+/// The extractor is the right first thing for the same reason it is in the game: it is the
+/// cheapest structure that pays for the next one.
+void orderFirstExtractors(UnitScene& scene, std::span<const rm::scenario::Marker> markers,
+                          const rm::vfs::Vfs& content) {
+    if (scene.armies.empty()) {
+        return;
+    }
+
+    // The extractor blueprint, once. Read per FACTION in the game — each has its own — but
+    // the UEF one serves here: this milestone is about the economy rather than about
+    // faction-specific structures, and pretending otherwise would mean four blueprints
+    // where one demonstrates the same thing.
+    const auto extractor = rm::unitbp::load(
+        [&] {
+            const auto bytes = content.read("/units/UEB1103/UEB1103_unit.bp");
+            return bytes ? std::string{reinterpret_cast<const char*>(bytes->data()),
+                                       bytes->size()}
+                         : std::string{};
+        }(),
+        "/units/UEB1103/UEB1103_unit.bp");
+    if (!extractor) {
+        std::fprintf(stderr, "economy: no mass extractor blueprint in the mounted content\n");
+        return;
+    }
+
+    scene.buildable.push_back(*extractor);
+    const std::size_t blueprintIndex = scene.buildable.size() - 1;
+
+    // Which commander is where, so each can be sent to its OWN nearest deposit rather than
+    // all of them to one.
+    for (std::size_t batch = 0; batch < scene.motion.size(); ++batch) {
+        const rm::unitdef::UnitDef* def = batch < scene.defs.size() ? scene.defs[batch] : nullptr;
+        if (def == nullptr || !def->isBuilder()) {
+            continue;
+        }
+
+        for (std::size_t i = 0; i < scene.motion[batch].size(); ++i) {
+            const int army = scene.motion[batch][i].armyIndex;
+            if (army == rm::sim::kNoArmy) {
+                continue;
+            }
+
+            const std::array<float, 3> from = scene.instances[batch][i].position;
+            const rm::scenario::Marker* nearest = nullptr;
+            float nearestDistance = 0.0f;
+            for (const rm::scenario::Marker& marker : markers) {
+                if (!marker.isType("Mass")) {
+                    continue;
+                }
+                const float distance = rm::sim::groundDistanceElmos(from, marker.position);
+                if (nearest == nullptr || distance < nearestDistance) {
+                    nearest = &marker;
+                    nearestDistance = distance;
+                }
+            }
+            if (nearest == nullptr) {
+                continue;  // a map with no mass on it: nothing to extract
+            }
+
+            scene.building.push_back(rm::sim::Construction{
+                .armyIndex = army,
+                .position = nearest->position,
+                .cost = {.mass = extractor->buildCostMass,
+                         .energy = extractor->buildCostEnergy},
+                .buildTimeRemaining = extractor->buildTime,
+                .totalBuildTime = extractor->buildTime,
+                .buildRate = def->buildRate,
+                .blueprintIndex = blueprintIndex,
+            });
+        }
+    }
+
+    std::printf("economy: %zu extractor(s) ordered on the map's own deposits,"
+                " %.0f mass / %.0f energy each over %.0fs\n",
+                scene.building.size(), static_cast<double>(extractor->buildCostMass),
+                static_cast<double>(extractor->buildCostEnergy),
+                static_cast<double>(extractor->buildTime
+                                    / std::max(1.0f, scene.defs.front()->buildRate)));
 }
 
 /// Loads every requested model, resolves its textures, and places instances.
@@ -1913,6 +2040,7 @@ void march(UnitScene& scene, const rm::HeightField& field, PassabilitySet& passa
     std::size_t routed = 0;
     std::size_t total = 0;
     std::size_t shotsFired = 0;
+    std::size_t completedBuilds = 0;
     for (std::size_t batch = 0; batch < scene.motion.size(); ++batch) {
         for (std::size_t i = 0; i < scene.motion[batch].size(); ++i) {
             ++total;
@@ -1955,6 +2083,45 @@ void march(UnitScene& scene, const rm::HeightField& field, PassabilitySet& passa
             shotsFired += rm::sim::fireWeapons(combat, scene.armies, scene.projectiles);
             rm::sim::advanceProjectiles(scene.projectiles, combat, scene.armies, field);
             retireDead(scene);
+        }
+
+        // The economy, per army. Constructions are partitioned by owner here rather than
+        // held per army, because `tickEconomy` is documented to be given one army's work
+        // and charging the wrong one is a caller's mistake to avoid.
+        for (std::size_t army = 0; army < scene.economies.size(); ++army) {
+            std::vector<rm::sim::Construction> mine;
+            for (const rm::sim::Construction& work : scene.building) {
+                if (work.armyIndex == static_cast<int>(army)) {
+                    mine.push_back(work);
+                }
+            }
+            rm::sim::tickEconomy(scene.economies[army], mine);
+
+            // Written back, and the finished ones start paying: an extractor that is done
+            // adds its production to the army that built it, which is the loop closing.
+            std::size_t at = 0;
+            for (rm::sim::Construction& work : scene.building) {
+                if (work.armyIndex != static_cast<int>(army)) {
+                    continue;
+                }
+                const bool wasFinished = work.finished();
+                work = mine[at++];
+                if (!wasFinished && work.finished()) {
+                    // What it produces starts arriving, and what it COSTS to run does
+                    // not: `MaintenanceConsumptionPerSecondEnergy` is stated by 104 units
+                    // — an extractor burns 2 energy a second — and is read nowhere yet, so
+                    // an economy here runs slightly richer than the game's. Upkeep is the
+                    // next thing, and it is what makes power generation a decision rather
+                    // than a formality.
+                    const rm::unitdef::UnitDef& built = scene.buildable[work.blueprintIndex];
+                    scene.economies[army].incomePerSecond.mass += built.producesMassPerSecond;
+                    scene.economies[army].incomePerSecond.energy +=
+                        built.producesEnergyPerSecond;
+                    scene.economies[army].storage.mass += built.storageMass;
+                    scene.economies[army].storage.energy += built.storageEnergy;
+                    ++completedBuilds;
+                }
+            }
         }
 
         // Dust as the walk happens, aged as the walk continues, so what a capture
@@ -2014,6 +2181,18 @@ void march(UnitScene& scene, const rm::HeightField& field, PassabilitySet& passa
                     " %.0f of %.0f hp left\n",
                     shotsFired, scene.projectiles.size(), dead.size(),
                     static_cast<double>(remaining), static_cast<double>(maximum));
+    }
+
+    if (!scene.economies.empty()) {
+        const rm::sim::Economy& first = scene.economies.front();
+        std::printf("economy: %zu of %zu build(s) complete; army 0 holds %.0f mass /"
+                    " %.0f energy, earning %.1f / %.1f a second, %.0f%% funded\n",
+                    completedBuilds, scene.building.size(),
+                    static_cast<double>(first.stored.mass),
+                    static_cast<double>(first.stored.energy),
+                    static_cast<double>(first.incomePerSecond.mass),
+                    static_cast<double>(first.incomePerSecond.energy),
+                    static_cast<double>(first.fundedFraction * 100.0f));
     }
 }
 
@@ -2327,6 +2506,7 @@ int main(int argc, const char* argv[]) {
         // hold both a match and a crowd of test units.
         if (hasFlag(argc, argv, "--skirmish")) {
             spawnCommanders(units, map->field, map->starts, content);
+            orderFirstExtractors(units, map->markers, content);
         }
 
         // Tilt every unit onto its slope once, here, because the headless paths

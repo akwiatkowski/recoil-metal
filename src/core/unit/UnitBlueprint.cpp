@@ -202,6 +202,18 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
                               ? squaresFrom(numberOr(*footprint, "SizeZ", 1.0f))
                               : squaresFrom(sizeZ);
 
+    // --- economy -----------------------------------------------------------
+    if (const lua::Value* economy = parsed->path("Economy")) {
+        def.buildCostMass = numberOr(*economy, "BuildCostMass", 0.0f);
+        def.buildCostEnergy = numberOr(*economy, "BuildCostEnergy", 0.0f);
+        def.buildTime = numberOr(*economy, "BuildTime", 0.0f);
+        def.buildRate = numberOr(*economy, "BuildRate", 0.0f);
+        def.producesMassPerSecond = numberOr(*economy, "ProductionPerSecondMass", 0.0f);
+        def.producesEnergyPerSecond = numberOr(*economy, "ProductionPerSecondEnergy", 0.0f);
+        def.storageMass = numberOr(*economy, "StorageMass", 0.0f);
+        def.storageEnergy = numberOr(*economy, "StorageEnergy", 0.0f);
+    }
+
     // --- weapons -----------------------------------------------------------
     //
     // A Lua ARRAY, so the entries are positional. 247 of the 568 units carry one;

@@ -202,3 +202,48 @@ TEST_CASE("a UEF medium tank reads as the vehicle it is", "[corpus]") {
     REQUIRE_FALSE(mesh.empty());
     CHECK(std::filesystem::exists(mesh));
 }
+
+TEST_CASE("the economy the blueprints state is the economy the game plays", "[corpus]") {
+    // The numbers milestone 19 is built on, checked against the units the plan names
+    // rather than against a range — a reader that found zeros everywhere would pass any
+    // bounds check.
+    struct Expected {
+        const char* id;
+        float mass;
+        float energy;
+        float buildTime;
+        float producesMass;
+        float producesEnergy;
+    };
+    // From the retail blueprints, read by hand.
+    const Expected cases[] = {
+        {"UEB1103", 36.0f, 360.0f, 60.0f, 2.0f, 0.0f},    // Mass Extractor
+        {"UEB1101", 75.0f, 750.0f, 125.0f, 0.0f, 20.0f},  // Power Generator
+        {"UEB0101", 240.0f, 2100.0f, 300.0f, 0.0f, 0.0f}, // Land Factory
+    };
+
+    for (const Expected& expected : cases) {
+        const std::filesystem::path path =
+            unitRoot() / expected.id / (std::string{expected.id} + "_unit.bp");
+        if (!std::filesystem::exists(path)) {
+            SKIP(std::string{"no "} + expected.id + " blueprint");
+        }
+        const auto def = rm::unitbp::loadFile(path);
+        REQUIRE(def.has_value());
+
+        CHECK(def->buildCostMass == Catch::Approx(expected.mass));
+        CHECK(def->buildCostEnergy == Catch::Approx(expected.energy));
+        CHECK(def->buildTime == Catch::Approx(expected.buildTime));
+        CHECK(def->producesMassPerSecond == Catch::Approx(expected.producesMass));
+        CHECK(def->producesEnergyPerSecond == Catch::Approx(expected.producesEnergy));
+    }
+
+    // A commander builds at 10, which is what makes the extractor above a six-second job.
+    const std::filesystem::path acu = unitRoot() / "UEL0001/UEL0001_unit.bp";
+    if (std::filesystem::exists(acu)) {
+        const auto def = rm::unitbp::loadFile(acu);
+        REQUIRE(def.has_value());
+        CHECK(def->buildRate == Catch::Approx(10.0f));
+        CHECK(def->isBuilder());
+    }
+}

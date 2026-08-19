@@ -114,6 +114,34 @@ struct UnitDef {
     /// that family does state.
     MotionType motion = MotionType::None;
 
+    // --- economy -----------------------------------------------------------
+    //
+    // What it costs to make and what it makes. All four are stated by essentially every
+    // shipped unit (718 state a cost, 703 a build time), which is why they are read
+    // unconditionally rather than behind a check.
+
+    /// What building this costs in total, and how many build units of work it takes.
+    /// A builder's `buildRate` divided into `buildTime` gives the seconds.
+    float buildCostMass = 0.0f;
+    float buildCostEnergy = 0.0f;
+    float buildTime = 0.0f;
+
+    /// How fast this unit builds, in build units per second. 143 units state one — the
+    /// commanders, engineers and factories. Zero means it cannot build.
+    float buildRate = 0.0f;
+
+    /// What it produces per second once standing. 37 units make mass and 33 make energy;
+    /// a mass extractor is 2 a second, a power generator 20.
+    float producesMassPerSecond = 0.0f;
+    float producesEnergyPerSecond = 0.0f;
+
+    /// How much of each it lets its owner hold. 62 units state storage.
+    float storageMass = 0.0f;
+    float storageEnergy = 0.0f;
+
+    /// Whether this unit can build anything at all.
+    [[nodiscard]] bool isBuilder() const noexcept { return buildRate > 0.0f; }
+
     /// What this unit shoots with. Empty for the 321 shipped units that shoot nothing,
     /// and for every BAR unit — that family states its weapons in a shape this engine
     /// does not read yet, and an empty list is the honest report of that.
