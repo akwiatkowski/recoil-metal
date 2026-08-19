@@ -629,7 +629,10 @@ lines keep working.
 ### Moving units
 
 Left-click selects the unit under the cursor (a ring appears under it);
-right-click orders it to the ground under the cursor. Drags still belong to the
+right-click orders it to the ground under the cursor and marks the spot — a
+crossed amber ring that shrinks toward the point and fades over a second and a
+half. A cross rather than another ring, because the two appear on the same ground
+within a second of each other and colour alone is one distinction too few. Drags still belong to the
 camera — only a press and release that stayed put counts as a click.
 
 ```sh

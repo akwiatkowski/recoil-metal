@@ -200,7 +200,7 @@ constexpr NS::UInteger kSplatNormalBaseIndex = 15;
 /// selection larger than that is a select-all on a big army, where the rings
 /// would be a solid mat of colour and the ones that go missing are the ones
 /// nobody could have picked out anyway.
-constexpr std::size_t kMaxRingVertices = 65536;
+constexpr std::size_t kMaxDecalVertices = 65536;
 
 /// How far the blended stratum normal tilts the geometric one.
 ///
@@ -1020,32 +1020,32 @@ vertex UnitOut unitVertex(uint vid [[vertex_id]],
 
 // --- Selection rings ---------------------------------------------------------
 // A band on the ground under each selected unit, built on the CPU to follow the
-// terrain (core/scene/SelectionRing.hpp) and drawn as one triangle list.
+// terrain (core/scene/GroundDecals.hpp) and drawn as one triangle list.
 //
 // Deliberately unlit and unshadowed. This is interface, not scenery: a ring that
 // dimmed in shade or on a slope facing away from the sun would be least visible
 // exactly where a unit is hardest to pick out.
 
-struct RingVertexIn {
+struct DecalVertexIn {
     packed_float3 position;
     packed_float4 colour;
 };
 
-struct RingOut {
+struct DecalOut {
     float4 position [[position]];
     float4 colour;
 };
 
-vertex RingOut ringVertex(uint vid [[vertex_id]],
-                          const device RingVertexIn* vertices [[buffer(0)]],
+vertex DecalOut decalVertex(uint vid [[vertex_id]],
+                          const device DecalVertexIn* vertices [[buffer(0)]],
                           constant Uniforms& u [[buffer(1)]]) {
-    RingOut out;
+    DecalOut out;
     out.position = u.viewProjection * float4(float3(vertices[vid].position), 1.0);
     out.colour = float4(vertices[vid].colour);
     return out;
 }
 
-fragment float4 ringFragment(RingOut in [[stage_in]]) {
+fragment float4 decalFragment(DecalOut in [[stage_in]]) {
     return in.colour;
 }
 
@@ -1385,7 +1385,7 @@ Renderer::Renderer(CA::MetalLayer* layer)
                                  /*blend=*/false);
     // Blended, unlike everything else here: a selection ring is interface laid
     // over the ground, and a solid band would hide the terrain it marks.
-    ringPipeline_ = makePipeline(device_, library, "ringVertex", "ringFragment",
+    decalPipeline_ = makePipeline(device_, library, "decalVertex", "decalFragment",
                                  /*blend=*/true);
     library->release();
 
@@ -1475,10 +1475,10 @@ Renderer::Renderer(CA::MetalLayer* layer)
     // test loses that fight wherever the lift rounds away at distance. No depth
     // write because a ring must not occlude the unit standing inside it.
     depthDescriptor->setDepthCompareFunction(MTL::CompareFunction::CompareFunctionLessEqual);
-    ringDepthState_ = device_->newDepthStencilState(depthDescriptor);
+    decalDepthState_ = device_->newDepthStencilState(depthDescriptor);
     depthDescriptor->release();
 
-    if (depthState_ == nullptr || waterDepthState_ == nullptr || ringDepthState_ == nullptr) {
+    if (depthState_ == nullptr || waterDepthState_ == nullptr || decalDepthState_ == nullptr) {
         throw RendererError{"failed to create depth-stencil state"};
     }
 
@@ -1488,9 +1488,9 @@ Renderer::Renderer(CA::MetalLayer* layer)
     // what makes that safe, exactly as for unit instances.
     {
         const std::size_t bytes =
-            kMaxRingVertices * sizeof(RingVertex) * kMaxFramesInFlight;
-        ringBuffer_ = device_->newBuffer(bytes, MTL::ResourceStorageModeShared);
-        if (ringBuffer_ == nullptr) {
+            kMaxDecalVertices * sizeof(DecalVertex) * kMaxFramesInFlight;
+        decalBuffer_ = device_->newBuffer(bytes, MTL::ResourceStorageModeShared);
+        if (decalBuffer_ == nullptr) {
             throw RendererError{"failed to allocate the selection ring buffer"};
         }
     }
@@ -1552,9 +1552,9 @@ Renderer::~Renderer() {
     if (shadowMap_ != nullptr) shadowMap_->release();
     if (unitShadowPipeline_ != nullptr) unitShadowPipeline_->release();
     if (terrainShadowPipeline_ != nullptr) terrainShadowPipeline_->release();
-    if (ringBuffer_ != nullptr) ringBuffer_->release();
-    if (ringDepthState_ != nullptr) ringDepthState_->release();
-    if (ringPipeline_ != nullptr) ringPipeline_->release();
+    if (decalBuffer_ != nullptr) decalBuffer_->release();
+    if (decalDepthState_ != nullptr) decalDepthState_->release();
+    if (decalPipeline_ != nullptr) decalPipeline_->release();
     if (sceneColour_ != nullptr) sceneColour_->release();
     releaseTerrainBuffers();
     releasePropBuffers();  // before the units: acquired after them
@@ -1984,7 +1984,7 @@ void Renderer::beginFrame() noexcept {
     // point the draw at whatever a different slot happens to hold. Clearing
     // here means the only way to get that wrong is to push rings before
     // beginFrame, which the header forbids.
-    ringVertexCount_ = 0;
+    decalVertexCount_ = 0;
 }
 
 void Renderer::setInstances(std::size_t batchIndex,
@@ -2015,9 +2015,9 @@ void Renderer::setInstances(std::size_t batchIndex,
     batch.instanceCount = count;
 }
 
-void Renderer::setSelectionRings(std::span<const RingVertex> vertices) noexcept {
-    ringVertexCount_ = 0;
-    if (ringBuffer_ == nullptr || vertices.empty()) {
+void Renderer::setGroundDecals(std::span<const DecalVertex> vertices) noexcept {
+    decalVertexCount_ = 0;
+    if (decalBuffer_ == nullptr || vertices.empty()) {
         return;
     }
 
@@ -2025,15 +2025,15 @@ void Renderer::setSelectionRings(std::span<const RingVertex> vertices) noexcept 
     // two other frames may still be reading it. Truncated to whole triangles so
     // the tail is never a partial one, which would render as a stray sliver
     // rather than as a missing ring.
-    const std::size_t fits = std::min(vertices.size(), kMaxRingVertices);
-    ringVertexCount_ = fits - (fits % 3u);
-    if (ringVertexCount_ == 0) {
+    const std::size_t fits = std::min(vertices.size(), kMaxDecalVertices);
+    decalVertexCount_ = fits - (fits % 3u);
+    if (decalVertexCount_ == 0) {
         return;
     }
 
-    auto* base = static_cast<RingVertex*>(ringBuffer_->contents());
-    std::memcpy(base + instanceSlot_ * kMaxRingVertices, vertices.data(),
-                ringVertexCount_ * sizeof(RingVertex));
+    auto* base = static_cast<DecalVertex*>(decalBuffer_->contents());
+    std::memcpy(base + instanceSlot_ * kMaxDecalVertices, vertices.data(),
+                decalVertexCount_ * sizeof(DecalVertex));
 }
 
 MTL::Texture* Renderer::uploadTexture(const dds::Texture& texture, const char* what) {
@@ -2793,16 +2793,16 @@ void Renderer::encodeScene(MTL::CommandBuffer* commandBuffer, MTL::RenderPassDes
     //
     // Skipped in the reflection pass: a mirror showing the interface would be
     // the interface appearing twice.
-    if (ringVertexCount_ > 0 && ringPipeline_ != nullptr && override == nullptr) {
-        encoder->setRenderPipelineState(ringPipeline_);
-        encoder->setDepthStencilState(ringDepthState_);
+    if (decalVertexCount_ > 0 && decalPipeline_ != nullptr && override == nullptr) {
+        encoder->setRenderPipelineState(decalPipeline_);
+        encoder->setDepthStencilState(decalDepthState_);
         encoder->setVertexBuffer(
-            ringBuffer_,
-            static_cast<NS::UInteger>(instanceSlot_ * kMaxRingVertices * sizeof(RingVertex)),
+            decalBuffer_,
+            static_cast<NS::UInteger>(instanceSlot_ * kMaxDecalVertices * sizeof(DecalVertex)),
             kVertexBufferIndex);
         encoder->setVertexBytes(&uniforms, sizeof(uniforms), kUniformBufferIndex);
         encoder->drawPrimitives(MTL::PrimitiveType::PrimitiveTypeTriangle, NS::UInteger{0},
-                                static_cast<NS::UInteger>(ringVertexCount_));
+                                static_cast<NS::UInteger>(decalVertexCount_));
     }
 
     // --- The grab ----------------------------------------------------------

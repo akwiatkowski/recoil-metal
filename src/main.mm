@@ -17,7 +17,7 @@
 #include "core/scene/PropBatch.hpp"
 #include "core/scene/Selection.hpp"
 #include "core/settings/Settings.hpp"
-#include "core/scene/SelectionRing.hpp"
+#include "core/scene/GroundDecals.hpp"
 #include "core/scene/UnitPlacement.hpp"
 #include "core/sim/Movement.hpp"
 #include "core/sim/Pathfinding.hpp"
@@ -898,6 +898,14 @@ inline constexpr std::array<float, 4> kSelectionRingColour{{0.35f, 1.0f, 0.45f, 
 /// A ring exactly on the radius touches the model's feet and reads as part of
 /// it. A little outside reads as a marker on the ground, which is what it is.
 inline constexpr float kSelectionRingMargin = 1.35f;
+
+/// The colour of the marker where a move order was given.
+///
+/// Amber against the rings' green, and a cross rather than a plain ring, because
+/// the two appear on the same ground within a second of each other — a right-click
+/// follows a left-click — and one distinction would not be enough in the one place
+/// the player is looking. Two, so it survives being small or being colour-blind.
+inline constexpr std::array<float, 4> kOrderMarkerColour{{1.0f, 0.72f, 0.20f, 0.85f}};
 
 /// One `--units` argument: a model, how many of it, how big, and optionally an
 /// animation to play on it.
@@ -1798,7 +1806,7 @@ int main(int argc, const char* argv[]) {
             // otherwise the one piece of interface this renderer draws is the
             // one thing no screenshot can show.
             if (const std::size_t rings = parseCount(argc, argv, "--select"); rings > 0) {
-                std::vector<rm::RingVertex> vertices;
+                std::vector<rm::DecalVertex> vertices;
                 std::size_t made = 0;
                 for (std::size_t batch = 0; batch < units.instances.size() && made < rings;
                      ++batch) {
@@ -1815,7 +1823,17 @@ int main(int argc, const char* argv[]) {
                 // renderToImage instead. Without it the slot stays 0, which is
                 // the same slot encodeScene will read — consistent, because
                 // nothing here is pipelined.
-                renderer.setSelectionRings(vertices);
+                // An order marker too, where --march sent them. A right-click
+                // cannot be screenshotted any more than a left-click can, and
+                // --march already names the destination, so the flag that orders
+                // the move is also the one that marks it.
+                if (marchOptions.enabled) {
+                    rm::appendOrderMarker(vertices, map->field,
+                                          {{marchOptions.x, 0.0f, marchOptions.z}},
+                                          kOrderMarkerColour, /*age=*/0.0f);
+                }
+
+                renderer.setGroundDecals(vertices);
                 std::printf("  selected %zu units for the capture\n", made);
             }
 
@@ -1897,9 +1915,19 @@ int main(int argc, const char* argv[]) {
         std::vector<rm::SelectionEntry> selected;
         rm::sim::TickClock clock;
 
+        // Where the last few orders landed, and when. Markers expire on their own
+        // (GroundDecals.hpp), so this only ever grows to the number of orders
+        // given inside kOrderMarkerSecondsToLive — a handful at a click a second,
+        // and bounded below by nothing needing to be cleaned up on a schedule.
+        struct OrderMark {
+            std::array<float, 3> position{};
+            float age = 0.0f;
+        };
+        std::vector<OrderMark> orderMarks;
+
         // Reused across frames so that rebuilding the rings costs no
         // allocation — the capacity settles after the first large selection.
-        std::vector<rm::RingVertex> ringVertices;
+        std::vector<rm::DecalVertex> decalVertices;
 
         window.onClick([&](const rm::Ray& ray, rm::MouseButton button,
                            rm::MouseModifiers mods) {
@@ -1921,6 +1949,15 @@ int main(int argc, const char* argv[]) {
             if (!ground) {
                 return;  // clicked the sky, or past the edge of the map
             }
+
+            // Marked before the routing is attempted, and deliberately: the mark
+            // answers "did that click land, and where", which is true even if
+            // every unit then reports no route. A marker that appeared only on
+            // success would leave the player unsure whether the click registered.
+            orderMarks.push_back(OrderMark{
+                .position = {ground->x, ground->y, ground->z},
+                .age = 0.0f,
+            });
 
             std::size_t failed = 0;
             for (const rm::SelectionEntry& sel : selected) {
@@ -1977,14 +2014,31 @@ int main(int argc, const char* argv[]) {
             // The buffer is reused rather than reallocated so that a frame
             // costs no heap traffic; it is declared outside this lambda for
             // exactly that reason.
-            ringVertices.clear();
+            decalVertices.clear();
             for (const rm::SelectionEntry& sel : selected) {
                 const rm::UnitInstance& instance = units.instances[sel.batch][sel.instance];
                 const float radius = units.motion[sel.batch][sel.instance].radiusElmos;
-                rm::appendSelectionRing(ringVertices, map->field, instance.position,
+                rm::appendSelectionRing(decalVertices, map->field, instance.position,
                                         radius * kSelectionRingMargin, kSelectionRingColour);
             }
-            window.setSelectionRings(ringVertices);
+
+            // ...and a marker wherever an order was given recently. Aged by the
+            // frame's own elapsed time rather than a wall clock, so a marker
+            // fades over the same span whatever the frame rate — and by the same
+            // reasoning that paces the walk cycles by distance covered.
+            for (OrderMark& mark : orderMarks) {
+                mark.age += elapsed;
+                rm::appendOrderMarker(decalVertices, map->field, mark.position,
+                                      kOrderMarkerColour, mark.age);
+            }
+            // Dropped once they have nothing left to draw. The append above is
+            // silent past its lifetime, so this is housekeeping rather than
+            // correctness — without it the list grows for as long as the app runs.
+            std::erase_if(orderMarks, [](const OrderMark& mark) {
+                return mark.age >= rm::kOrderMarkerSecondsToLive;
+            });
+
+            window.setGroundDecals(decalVertices);
         });
 
         window.show();

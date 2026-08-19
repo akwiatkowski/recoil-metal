@@ -7,7 +7,7 @@
 #include "core/map/TileAtlas.hpp"
 #include "core/model/Model.hpp"
 #include "core/model/Pose.hpp"
-#include "core/scene/SelectionRing.hpp"
+#include "core/scene/GroundDecals.hpp"
 #include "core/scene/PropBatch.hpp"
 #include "core/scene/UnitBatch.hpp"
 #include "core/scene/UnitPlacement.hpp"
@@ -204,10 +204,10 @@ public:
     // cleared would be worse than no rings, and a count that outlived its
     // frame would point the draw at another slot's contents.
     //
-    // Vertices beyond kMaxRingVertices are dropped rather than growing the
+    // Vertices beyond kMaxDecalVertices are dropped rather than growing the
     // buffer, which cannot be resized while the GPU may be reading it. That is
     // roughly 300 units selected at once.
-    void setSelectionRings(std::span<const RingVertex> vertices) noexcept;
+    void setGroundDecals(std::span<const DecalVertex> vertices) noexcept;
 
     // Uploads several models, the instances to draw each at, and the textures
     // they share. One instanced draw call covers every instance of a model; the
@@ -605,10 +605,10 @@ private:
     //
     // Fixed capacity, allocated once. Growing it would mean freeing a buffer
     // that up to two other frames still reference.
-    MTL::RenderPipelineState* ringPipeline_ = nullptr;  // owned
-    MTL::DepthStencilState* ringDepthState_ = nullptr;  // owned
-    MTL::Buffer* ringBuffer_ = nullptr;                 // owned
-    std::size_t ringVertexCount_ = 0;
+    MTL::RenderPipelineState* decalPipeline_ = nullptr;  // owned
+    MTL::DepthStencilState* decalDepthState_ = nullptr;  // owned
+    MTL::Buffer* decalBuffer_ = nullptr;                 // owned
+    std::size_t decalVertexCount_ = 0;
 
     OrbitCamera camera_;
 

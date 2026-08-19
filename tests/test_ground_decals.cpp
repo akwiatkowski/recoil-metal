@@ -1,11 +1,12 @@
-// Selection-ring geometry. A ring is the one piece of interface this renderer
-// draws, and "is the unit I clicked the one that is highlighted" is a question
-// nobody can answer from a screenshot when two units stand close together — so
-// the shape is pinned here rather than judged by looking.
+// Ground-decal geometry: the ring under a selected unit, and the marker where an
+// order was given. These are the interface this renderer draws, and "is the unit I
+// clicked the one that is highlighted" is a question nobody can answer from a
+// screenshot when two units stand close together — so the shapes are pinned here
+// rather than judged by looking.
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
-#include "core/scene/SelectionRing.hpp"
+#include "core/scene/GroundDecals.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -14,7 +15,7 @@
 
 using Catch::Approx;
 using rm::HeightField;
-using rm::RingVertex;
+using rm::DecalVertex;
 
 namespace {
 
@@ -52,7 +53,7 @@ constexpr std::array<float, 4> kWhite{{1.0f, 1.0f, 1.0f, 1.0f}};
 } // namespace
 
 TEST_CASE("a ring is two triangles per segment and nothing else") {
-    std::vector<RingVertex> out;
+    std::vector<DecalVertex> out;
     rm::appendSelectionRing(out, flatAt(16, 0), {{64.0f, 0.0f, 64.0f}}, 10.0f, kWhite);
 
     CHECK(out.size() == rm::ringVertexCount());
@@ -61,7 +62,7 @@ TEST_CASE("a ring is two triangles per segment and nothing else") {
 
 TEST_CASE("appending accumulates rather than replacing") {
     // One buffer holds the whole selection, so a second call must add to it.
-    std::vector<RingVertex> out;
+    std::vector<DecalVertex> out;
     const HeightField field = flatAt(16, 0);
 
     rm::appendSelectionRing(out, field, {{32.0f, 0.0f, 32.0f}}, 8.0f, kWhite);
@@ -77,14 +78,14 @@ TEST_CASE("every vertex lands in the band, at the right distance from the centre
     const float thickness = rm::kRingThicknessElmos;
     const std::array<float, 3> centre{{100.0f, 0.0f, 100.0f}};
 
-    std::vector<RingVertex> out;
+    std::vector<DecalVertex> out;
     rm::appendSelectionRing(out, flatAt(64, 0), centre, radius, kWhite);
 
     REQUIRE_FALSE(out.empty());
 
     bool sawInner = false;
     bool sawOuter = false;
-    for (const RingVertex& v : out) {
+    for (const DecalVertex& v : out) {
         const float dx = v.position[0] - centre[0];
         const float dz = v.position[2] - centre[2];
         const float distance = std::sqrt(dx * dx + dz * dz);
@@ -107,14 +108,14 @@ TEST_CASE("the ring closes") {
     // The last segment must join the first. An off-by-one in the angle step
     // leaves a gap that reads as the ring being for a different unit.
     const std::array<float, 3> centre{{100.0f, 0.0f, 100.0f}};
-    std::vector<RingVertex> out;
+    std::vector<DecalVertex> out;
     rm::appendSelectionRing(out, flatAt(64, 0), centre, 20.0f, kWhite);
 
     // Angles of every vertex, sorted: consecutive ones must never be further
     // apart than one segment.
     std::vector<float> angles;
     angles.reserve(out.size());
-    for (const RingVertex& v : out) {
+    for (const DecalVertex& v : out) {
         angles.push_back(std::atan2(v.position[2] - centre[2], v.position[0] - centre[0]));
     }
     std::sort(angles.begin(), angles.end());
@@ -135,12 +136,12 @@ TEST_CASE("the ring follows the ground rather than the unit standing on it") {
     const HeightField field = rampAlongX(64);
 
     const std::array<float, 3> centre{{200.0f, 0.0f, 200.0f}};
-    std::vector<RingVertex> out;
+    std::vector<DecalVertex> out;
     rm::appendSelectionRing(out, field, centre, 30.0f, kWhite);
 
     float lowest = 1e9f;
     float highest = -1e9f;
-    for (const RingVertex& v : out) {
+    for (const DecalVertex& v : out) {
         lowest = std::min(lowest, v.position[1]);
         highest = std::max(highest, v.position[1]);
 
@@ -159,10 +160,10 @@ TEST_CASE("the ring clears the ground it sits on") {
     const HeightField field = flatAt(64, 800);
     const float ground = field.heightAtWorld(100.0f, 100.0f);
 
-    std::vector<RingVertex> out;
+    std::vector<DecalVertex> out;
     rm::appendSelectionRing(out, field, {{100.0f, 0.0f, 100.0f}}, 15.0f, kWhite);
 
-    for (const RingVertex& v : out) {
+    for (const DecalVertex& v : out) {
         CHECK(v.position[1] > ground);
     }
 }
@@ -170,10 +171,10 @@ TEST_CASE("the ring clears the ground it sits on") {
 TEST_CASE("the colour is carried on every vertex") {
     // Per vertex, so one draw covers a mixed selection.
     const std::array<float, 4> teal{{0.0f, 0.8f, 0.7f, 0.55f}};
-    std::vector<RingVertex> out;
+    std::vector<DecalVertex> out;
     rm::appendSelectionRing(out, flatAt(16, 0), {{64.0f, 0.0f, 64.0f}}, 8.0f, teal);
 
-    for (const RingVertex& v : out) {
+    for (const DecalVertex& v : out) {
         CHECK(v.colour[0] == Approx(teal[0]));
         CHECK(v.colour[1] == Approx(teal[1]));
         CHECK(v.colour[2] == Approx(teal[2]));
@@ -185,7 +186,7 @@ TEST_CASE("a nonsensical ring produces nothing rather than garbage") {
     const HeightField field = flatAt(16, 0);
     const std::array<float, 3> centre{{64.0f, 0.0f, 64.0f}};
 
-    std::vector<RingVertex> out;
+    std::vector<DecalVertex> out;
     rm::appendSelectionRing(out, field, centre, 0.0f, kWhite);
     CHECK(out.empty());
 
@@ -203,13 +204,118 @@ TEST_CASE("a ring wider than its radius does not turn inside out") {
     // Clamped rather than allowed to produce a negative inner radius, which
     // would fold the band through the centre and render as a bow tie.
     const std::array<float, 3> centre{{100.0f, 0.0f, 100.0f}};
-    std::vector<RingVertex> out;
+    std::vector<DecalVertex> out;
     rm::appendSelectionRing(out, flatAt(64, 0), centre, 4.0f, kWhite, /*thickness=*/20.0f);
 
     REQUIRE_FALSE(out.empty());
-    for (const RingVertex& v : out) {
+    for (const DecalVertex& v : out) {
         const float dx = v.position[0] - centre[0];
         const float dz = v.position[2] - centre[2];
         CHECK(std::sqrt(dx * dx + dz * dz) >= Approx(0.0f).margin(1e-4));
     }
+}
+
+// --- Order markers -----------------------------------------------------------
+// Where a right-click landed. A ring like a selection's, plus a cross through it,
+// shrinking and fading over a second and a half.
+
+TEST_CASE("an order marker is a ring and a cross, all on the ground") {
+    std::vector<DecalVertex> out;
+    rm::appendOrderMarker(out, flatAt(64, 800), {{200.0f, 0.0f, 200.0f}}, kWhite, /*age=*/0.0f);
+
+    // A ring's worth, plus two bars of four quads each.
+    REQUIRE(out.size() == rm::ringVertexCount() + 2u * 4u * 6u);
+
+    const float ground = 800.0f * kElmosPerRawUnit + rm::kRingLiftElmos;
+    for (const DecalVertex& vertex : out) {
+        CHECK(vertex.position[1] == Approx(ground));
+    }
+}
+
+TEST_CASE("an order marker takes its height from the ground under each point") {
+    // The same rule the ring follows, and it matters more for the cross: a bar is
+    // 20 elmos long across a heightfield whose squares are 8, so a bar drawn at
+    // one height chords over two and a half squares of relief and sinks into any
+    // slope. Segmented along its length for exactly this.
+    std::vector<DecalVertex> out;
+    rm::appendOrderMarker(out, rampAlongX(64), {{200.0f, 0.0f, 200.0f}}, kWhite, 0.0f);
+    REQUIRE_FALSE(out.empty());
+
+    float lowest = out.front().position[1];
+    float highest = lowest;
+    for (const DecalVertex& vertex : out) {
+        lowest = std::min(lowest, vertex.position[1]);
+        highest = std::max(highest, vertex.position[1]);
+    }
+    // The ramp climbs 200 raw units per square, which is 12.5 elmos, and the
+    // marker spans about three squares — so a flat marker would be metres out.
+    CHECK(highest - lowest > 10.0f);
+}
+
+TEST_CASE("an order marker shrinks toward the point it marks, and fades") {
+    const HeightField field = flatAt(64, 0);
+    const std::array<float, 3> centre{{200.0f, 0.0f, 200.0f}};
+
+    const auto spanOf = [](const std::vector<DecalVertex>& out) {
+        float lowX = out.front().position[0];
+        float highX = lowX;
+        for (const DecalVertex& vertex : out) {
+            lowX = std::min(lowX, vertex.position[0]);
+            highX = std::max(highX, vertex.position[0]);
+        }
+        return highX - lowX;
+    };
+
+    std::vector<DecalVertex> fresh;
+    rm::appendOrderMarker(fresh, field, centre, kWhite, 0.0f);
+    std::vector<DecalVertex> old;
+    rm::appendOrderMarker(old, field, centre, kWhite, rm::kOrderMarkerSecondsToLive * 0.9f);
+
+    REQUIRE_FALSE(fresh.empty());
+    REQUIRE_FALSE(old.empty());
+    CHECK(spanOf(old) < spanOf(fresh));
+    // ...but never to a dot: the last visible frame is still a marker.
+    CHECK(spanOf(old) > 0.3f * spanOf(fresh));
+
+    CHECK(old.front().colour[3] < fresh.front().colour[3]);
+    CHECK(fresh.front().colour[3] == Approx(kWhite[3]));
+}
+
+TEST_CASE("an expired order marker contributes nothing, and says so by staying silent") {
+    // So the app can hold one marker per order and offer them every frame without
+    // tracking which have run out.
+    const HeightField field = flatAt(64, 0);
+    std::vector<DecalVertex> out;
+
+    rm::appendOrderMarker(out, field, {{200.0f, 0.0f, 200.0f}}, kWhite,
+                          rm::kOrderMarkerSecondsToLive);
+    CHECK(out.empty());
+
+    rm::appendOrderMarker(out, field, {{200.0f, 0.0f, 200.0f}}, kWhite, 999.0f);
+    CHECK(out.empty());
+
+    // A negative age is a clock that went backwards, not a marker from the
+    // future: refused rather than drawn at full size.
+    rm::appendOrderMarker(out, field, {{200.0f, 0.0f, 200.0f}}, kWhite, -0.5f);
+    CHECK(out.empty());
+}
+
+TEST_CASE("an order marker's cross is diagonal, not axis-aligned") {
+    // A cross along X and Z reads as a grid artefact on terrain built from an
+    // axis-aligned heightfield. Checked by looking for vertices off both axes:
+    // the bars run at 45 degrees, so the four arm tips are the extremes in x AND z
+    // at once, which an axis-aligned cross would never produce.
+    std::vector<DecalVertex> out;
+    rm::appendOrderMarker(out, flatAt(64, 0), {{0.0f, 0.0f, 0.0f}}, kWhite, 0.0f);
+
+    bool foundDiagonalTip = false;
+    for (const DecalVertex& vertex : out) {
+        const float x = std::abs(vertex.position[0]);
+        const float z = std::abs(vertex.position[2]);
+        if (x > 0.5f * rm::kOrderMarkerRadiusElmos && z > 0.5f * rm::kOrderMarkerRadiusElmos) {
+            foundDiagonalTip = true;
+            break;
+        }
+    }
+    CHECK(foundDiagonalTip);
 }
