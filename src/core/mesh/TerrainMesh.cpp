@@ -97,71 +97,99 @@ TerrainMesh buildTerrainMesh(const HeightField& field, int stride) {
         static_cast<std::size_t>(squaresX) * static_cast<std::size_t>(squaresZ);
     mesh.indices.reserve(squares * 6);
 
-    // Emitted chunk by chunk rather than row by row, so each chunk's triangles
-    // are one contiguous range of the index buffer and can be drawn on their
-    // own. Row-major order would interleave every chunk in a row.
+    // The chunk grid, in the order the renderer walks it. Squares rather than
+    // world units, because the index emission below is grid arithmetic.
+    struct ChunkSquares {
+        int firstX = 0, firstZ = 0, endX = 0, endZ = 0;
+    };
+    std::vector<ChunkSquares> grid;
     for (int chunkZ = 0; chunkZ < squaresZ; chunkZ += kChunkSquares) {
         for (int chunkX = 0; chunkX < squaresX; chunkX += kChunkSquares) {
-            const int endX = std::min(chunkX + kChunkSquares, squaresX);
-            const int endZ = std::min(chunkZ + kChunkSquares, squaresZ);
+            grid.push_back(ChunkSquares{
+                .firstX = chunkX,
+                .firstZ = chunkZ,
+                .endX = std::min(chunkX + kChunkSquares, squaresX),
+                .endZ = std::min(chunkZ + kChunkSquares, squaresZ),
+            });
+        }
+    }
 
-            TerrainChunk chunk;
-            chunk.minX = static_cast<float>(chunkX) * kSpacing * static_cast<float>(step);
-            chunk.maxX = static_cast<float>(endX) * kSpacing * static_cast<float>(step);
-            chunk.minZ = static_cast<float>(chunkZ) * kSpacing * static_cast<float>(step);
-            chunk.maxZ = static_cast<float>(endZ) * kSpacing * static_cast<float>(step);
-            chunk.minY = std::numeric_limits<float>::max();
-            chunk.maxY = std::numeric_limits<float>::lowest();
+    mesh.chunks.resize(grid.size());
+    for (std::size_t c = 0; c < grid.size(); ++c) {
+        const ChunkSquares& squaresIn = grid[c];
+        TerrainChunk& chunk = mesh.chunks[c];
+        const float worldStep = kSpacing * static_cast<float>(step);
+        chunk.minX = static_cast<float>(squaresIn.firstX) * worldStep;
+        chunk.maxX = static_cast<float>(squaresIn.endX) * worldStep;
+        chunk.minZ = static_cast<float>(squaresIn.firstZ) * worldStep;
+        chunk.maxZ = static_cast<float>(squaresIn.endZ) * worldStep;
+        chunk.minY = std::numeric_limits<float>::max();
+        chunk.maxY = std::numeric_limits<float>::lowest();
+    }
 
-            // One index set per detail level, emitted back to back so each is
-            // its own contiguous range and can be drawn alone.
-            for (int lod = 0; lod < kLodLevels; ++lod) {
-                const int span = 1 << lod;
-                chunk.lods[static_cast<std::size_t>(lod)].firstIndex = mesh.indices.size();
+    // LEVEL outer, chunk inner — and this order is the whole point.
+    //
+    // The renderer merges a chunk's draw into the previous one only while their
+    // index ranges stay adjacent. Emitting all of one chunk's levels together
+    // (the obvious order, and what this did until the adjacency was tested) puts
+    // chunk N's coarse levels between chunk N's fine range and chunk N+1's, so
+    // no two chunks are ever adjacent at the level they are actually drawn at
+    // and the merge never fires. Terrain then costs one draw per chunk — which
+    // renders an identical image, and is slower than not culling at all.
+    for (int lod = 0; lod < kLodLevels; ++lod) {
+        const int span = 1 << lod;
 
-                for (int z = chunkZ; z + span <= endZ; z += span) {
-                    for (int x = chunkX; x + span <= endX; x += span) {
-                        const auto row = static_cast<std::uint32_t>(nx);
-                        const auto stepX = static_cast<std::uint32_t>(span);
-                        const auto stepZ = static_cast<std::uint32_t>(span) * row;
+        for (std::size_t c = 0; c < grid.size(); ++c) {
+            const ChunkSquares& squaresIn = grid[c];
+            TerrainChunk& chunk = mesh.chunks[c];
+            TerrainChunk::Lod& range = chunk.lods[static_cast<std::size_t>(lod)];
+            range.firstIndex = mesh.indices.size();
 
-                        const auto v00 =
-                            static_cast<std::uint32_t>(z) * row + static_cast<std::uint32_t>(x);
-                        const std::uint32_t v10 = v00 + stepX;
-                        const std::uint32_t v01 = v00 + stepZ;
-                        const std::uint32_t v11 = v01 + stepX;
+            for (int z = squaresIn.firstZ; z + span <= squaresIn.endZ; z += span) {
+                for (int x = squaresIn.firstX; x + span <= squaresIn.endX; x += span) {
+                    const auto row = static_cast<std::uint32_t>(nx);
+                    const auto stepX = static_cast<std::uint32_t>(span);
+                    const auto stepZ = static_cast<std::uint32_t>(span) * row;
 
-                        mesh.indices.push_back(v00);
-                        mesh.indices.push_back(v01);
-                        mesh.indices.push_back(v11);
+                    const auto v00 =
+                        static_cast<std::uint32_t>(z) * row + static_cast<std::uint32_t>(x);
+                    const std::uint32_t v10 = v00 + stepX;
+                    const std::uint32_t v01 = v00 + stepZ;
+                    const std::uint32_t v11 = v01 + stepX;
 
-                        mesh.indices.push_back(v00);
-                        mesh.indices.push_back(v11);
-                        mesh.indices.push_back(v10);
+                    mesh.indices.push_back(v00);
+                    mesh.indices.push_back(v01);
+                    mesh.indices.push_back(v11);
 
-                        // The vertical extent comes from the FINEST level: a
-                        // coarse level skips the very peaks and valleys that
-                        // decide whether a chunk is visible.
-                        if (lod == 0) {
-                            for (const std::uint32_t v : {v00, v10, v01, v11}) {
-                                const float y = mesh.vertices[v].position[1];
-                                chunk.minY = std::min(chunk.minY, y);
-                                chunk.maxY = std::max(chunk.maxY, y);
-                            }
+                    mesh.indices.push_back(v00);
+                    mesh.indices.push_back(v11);
+                    mesh.indices.push_back(v10);
+
+                    // The vertical extent comes from the FINEST level: a coarse
+                    // level skips the very peaks and valleys that decide
+                    // whether a chunk is visible.
+                    if (lod == 0) {
+                        for (const std::uint32_t v : {v00, v10, v01, v11}) {
+                            const float y = mesh.vertices[v].position[1];
+                            chunk.minY = std::min(chunk.minY, y);
+                            chunk.maxY = std::max(chunk.maxY, y);
                         }
                     }
                 }
-
-                chunk.lods[static_cast<std::size_t>(lod)].indexCount =
-                    mesh.indices.size() - chunk.lods[static_cast<std::size_t>(lod)].firstIndex;
             }
 
-            chunk.firstIndex = chunk.lods[0].firstIndex;
-            chunk.indexCount = chunk.lods[0].indexCount;
-            if (chunk.indexCount > 0) {
-                mesh.chunks.push_back(chunk);
-            }
+            range.indexCount = mesh.indices.size() - range.firstIndex;
         }
+    }
+
+    // A chunk with no triangles at all would leave its bounds at the sentinel
+    // values and cull wrongly, so it is dropped rather than kept empty.
+    std::erase_if(mesh.chunks, [](const TerrainChunk& chunk) {
+        return chunk.lods[0].indexCount == 0;
+    });
+    for (TerrainChunk& chunk : mesh.chunks) {
+        chunk.firstIndex = chunk.lods[0].firstIndex;
+        chunk.indexCount = chunk.lods[0].indexCount;
     }
 
     mesh.verticesX = nx;

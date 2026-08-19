@@ -338,3 +338,26 @@ TEST_CASE("chunk bounds together cover the whole map") {
     CHECK(minZ == Approx(mesh.minZ));
     CHECK(maxZ == Approx(mesh.maxZ));
 }
+
+TEST_CASE("consecutive chunks are adjacent in the buffer at the same level") {
+    // What the renderer's cull-and-merge relies on. It merges chunk N's draw
+    // into chunk N-1's only while the index ranges stay adjacent; where they do
+    // not, culling replaces one draw of the terrain with one per chunk, which
+    // is SLOWER than not culling at all whenever the camera keeps them all.
+    //
+    // Nothing on screen can show this. A renderer issuing 256 draws where one
+    // would do renders exactly the same image.
+    const HeightField field = flatField(256);
+    const rm::TerrainMesh mesh = rm::buildTerrainMesh(field);
+
+    REQUIRE(mesh.chunks.size() > 1);
+
+    for (std::size_t lod = 0; lod < rm::kLodLevels; ++lod) {
+        for (std::size_t i = 1; i < mesh.chunks.size(); ++i) {
+            const rm::TerrainChunk::Lod& previous = mesh.chunks[i - 1].lods[lod];
+            const rm::TerrainChunk::Lod& current = mesh.chunks[i].lods[lod];
+            INFO("level " << lod << ", chunk " << i);
+            REQUIRE(previous.firstIndex + previous.indexCount == current.firstIndex);
+        }
+    }
+}
