@@ -248,11 +248,31 @@ private:
     [[nodiscard]] MTL::Texture* uploadTexture(const dds::Texture& texture, const char* what);
 
 
+    // What a scene pass should do differently from the ordinary one.
+    //
+    // The reflection pass renders the world mirrored in the water plane, from
+    // a camera reflected in it, with everything below the surface clipped away
+    // — otherwise the seabed appears in the reflection, which is exactly what
+    // a mirror cannot show. It also skips the water itself: water reflecting
+    // water is either recursive or wrong.
+    struct SceneOverride {
+        simd_float4x4 viewProjection{};
+        float clipBelowY = 0.0f;
+        bool skipWater = false;
+    };
+
+    MTL::Texture* reflectionColour_ = nullptr;  // owned
+    MTL::Texture* reflectionDepth_ = nullptr;   // owned
+    MTL::SamplerState* reflectionSampler_ = nullptr;  // owned
+
+    /// Renders the world mirrored in the water plane, for the water to sample.
+    void encodeReflectionPass(MTL::CommandBuffer* commandBuffer) noexcept;
+
     /// Encodes the whole scene — terrain then water — into an active encoder.
     /// Shared by the windowed and offscreen paths so they cannot drift apart
     /// and quietly benchmark different work.
     void encodeScene(MTL::RenderCommandEncoder* encoder, unsigned int width,
-                     unsigned int height) noexcept;
+                     unsigned int height, const SceneOverride* override = nullptr) noexcept;
 
     CA::MetalLayer* layer_;                    // not owned
     MTL::Device* device_ = nullptr;            // owned

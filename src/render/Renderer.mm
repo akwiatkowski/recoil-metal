@@ -59,9 +59,13 @@ struct TerrainUniforms {
     float waterColourLerp;
     float waterSkyReflection;
     float waterSunShininess;
+    float clipBelowY;   ///< the reflection pass discards anything under this
+    simd_float2 viewportSize;  ///< pixels, so the water can find its own screen position
 };
 
-static_assert(sizeof(TerrainUniforms) == 384, "TerrainUniforms must match the MSL layout");
+
+static_assert(offsetof(TerrainUniforms, clipBelowY) == 380, "clipBelowY packs into the tail");
+static_assert(sizeof(TerrainUniforms) == 400, "a float2 realigns to 8 bytes after clipBelowY");
 static_assert(offsetof(TerrainUniforms, fogColour) == 288, "the map block follows the matrices");
 // A float3 is sixteen bytes AND sixteen-aligned, so the float after one does
 // NOT pack into its tail — it starts a fresh slot and the next float3 realigns
@@ -112,6 +116,8 @@ constexpr NS::UInteger kPoseUniformBufferIndex = 4;
 // Well clear of the splat's ten layer slots, which run from kSplatLayerBaseIndex.
 constexpr NS::UInteger kShadowTextureIndex = 13;
 constexpr NS::UInteger kShadowSamplerIndex = 2;
+constexpr NS::UInteger kReflectionTextureIndex = 14;
+constexpr NS::UInteger kReflectionSamplerIndex = 3;
 
 // Mirrors the MSL PoseUniforms exactly. Small and per batch, so it goes up with
 // setVertexBytes rather than as a buffer.
@@ -179,6 +185,8 @@ struct Uniforms {
     float waterColourLerp;
     float waterSkyReflection;
     float waterSunShininess;
+    float clipBelowY;
+    float2 viewportSize;
 };
 
 // The sky, as Supreme Commander's own `effects/sky.fx` builds it: a lerp
@@ -346,6 +354,13 @@ fragment float4 terrainFragment(VertexOut in [[stage_in]],
                                 sampler groundSampler [[sampler(0)]],
                                 sampler splatSampler [[sampler(1)]],
                                 sampler shadowSampler [[sampler(2)]]) {
+    // The reflection pass clips everything below the water: a mirror cannot
+    // show the seabed, and without this the reflection is of the ground under
+    // the water rather than the world above it.
+    if (in.world.y < u.clipBelowY) {
+        discard_fragment();
+    }
+
     // Interpolating unit normals across a triangle does not preserve length.
     const float3 normal = normalize(in.normal);
 
@@ -475,7 +490,20 @@ constant float3 kDeepWater = float3(0.03, 0.10, 0.22);
 /// Elmos of water below which the surface is treated as fully deep.
 constant float kWaterDepthRange = 60.0;
 
-fragment float4 waterFragment(WaterOut in [[stage_in]], constant Uniforms& u [[buffer(1)]]) {
+// `behind` is the colour already in the framebuffer — the terrain and units
+// drawn under the water this frame. Reading the render target inside the
+// fragment shader is free on a tile-based GPU: the value is still in tile
+// memory and never went to main memory at all.
+//
+// This is the engine's REFRACTION input arriving without the render-to-texture
+// pass water2.fx needs, and it is what lets the water absorb what is actually
+// under it rather than a depth ramp standing in for it. What it cannot do is
+// the engine's refraction OFFSET — a framebuffer fetch reads this pixel and no
+// other, so bending the view needs a copy of the target to sample freely.
+fragment float4 waterFragment(WaterOut in [[stage_in]], float4 behind [[color(0)]],
+                              constant Uniforms& u [[buffer(1)]],
+                              texture2d<float> reflection [[texture(14)]],
+                              sampler reflectionSampler [[sampler(3)]]) {
     // Above the waterline there is nothing to draw. The mesh covers the whole
     // map so that one buffer serves any water level, and the dry part is
     // discarded rather than uploaded conditionally.
@@ -509,14 +537,39 @@ fragment float4 waterFragment(WaterOut in [[stage_in]], constant Uniforms& u [[b
     const float fresnel = u.waterFresnelBias
                         + (1.0 - u.waterFresnelBias) * pow(1.0 - NdotV, u.waterFresnelPower);
 
-    // What is seen through the water, tinted as water2.fx tints it: a fixed
-    // 0.3 of waterColor regardless of depth.
-    float3 through = mix(kShallowWater, kDeepWater, deep);
-    through = mix(through, u.waterSurfaceColour, u.waterColourLerp);
+    // What is seen through the water: the real scene behind it, absorbed with
+    // depth. Beer-Lambert rather than a lerp to a colour — water removes light
+    // exponentially with the distance travelled through it, and the red end
+    // goes first, which is why a shallow sandy bottom stays sandy and a deep
+    // one goes blue without either being painted that way.
+    //
+    // The path length is doubled: light goes down to the bottom and back up.
+    const float3 absorption = float3(0.030, 0.012, 0.008);
+    const float3 transmitted = behind.rgb * exp(-absorption * in.depth * 2.0);
 
-    // The sky the surface actually reflects — the same function the sky pass
-    // draws with, so the sea and the sky above it agree.
-    const float3 reflected = skyColour(mirrored, u.sunDirection, u.fogColour);
+    // The engine's tint over the top, at its fixed lerp.
+    float3 through = mix(transmitted, u.waterSurfaceColour, u.waterColourLerp);
+
+    // What the surface reflects. The planar pass has the world mirrored in the
+    // water plane, which is the only thing that can show a cliff standing in
+    // its own reflection — but it only covers what was on screen, so where it
+    // has nothing the sky function fills in.
+    //
+    // Sampled at this fragment's own screen position, perturbed by the wave
+    // normal. That perturbation is what makes the reflection ripple rather than
+    // sit on the water like a decal.
+    const float2 screen = in.position.xy / float2(u.viewportSize);
+    // A few pixels of wobble, not a few hundred. The slope is a gradient, so
+    // scaling it into UV space needs a small number: 0.35 shifts the sample by
+    // a third of the screen and the reflection dapples with whatever happens to
+    // be there.
+    const float2 reflectionUv = saturate(screen + slope * 0.012);
+    const float4 planar = reflection.sample(reflectionSampler, reflectionUv);
+
+    const float3 sky = skyColour(mirrored, u.sunDirection, u.fogColour);
+    // Alpha is the mirror's coverage: 1 where it drew world, 0 where it drew
+    // nothing and the sky is the truthful answer.
+    const float3 reflected = mix(sky, planar.rgb, planar.a);
 
     // Shallow water reflects less sky. This is where the engine's depth
     // dependence lives, rather than in the tint.
@@ -535,10 +588,15 @@ fragment float4 waterFragment(WaterOut in [[stage_in]], constant Uniforms& u [[b
     const float crest = saturate((sin(phase1) + sin(phase2)) * 0.5 - 0.8);
     colour = mix(colour, kWaveCrestColour, crest * 0.10);
 
-    // Shallow water is more transparent, so the ground shows through at the
-    // shore and the edge dissolves rather than ending in a line.
-    const float alpha = mix(0.35, 0.90, deep) + fresnel * 0.1;
-    return float4(colour, saturate(alpha));
+    // Composited here rather than by the blender: the shader already holds
+    // what is behind, so hardware blending would be a second, redundant mix —
+    // and doing it here is what lets the absorption above be a function of
+    // depth rather than a single alpha.
+    //
+    // Very shallow water still fades out, so the shoreline dissolves instead
+    // of ending in a line.
+    const float shoreline = saturate(in.depth * 0.25);
+    return float4(mix(behind.rgb, colour, shoreline), 1.0);
 }
 
 // --- Units ------------------------------------------------------------------
@@ -752,6 +810,10 @@ fragment float4 unitFragment(UnitOut in [[stage_in]],
                              depth2d<float> shadowMap [[texture(13)]],
                              sampler texSampler [[sampler(0)]],
                              sampler shadowSampler [[sampler(2)]]) {
+    if (in.world.y < u.clipBelowY) {
+        discard_fragment();
+    }
+
     // Without a diffuse the model shades flat grey with no team colour, since
     // the mask lives in that texture's alpha and there is nothing to read.
     float4 tex1 = float4(0.62, 0.62, 0.60, 0.0);
@@ -870,6 +932,12 @@ constexpr unsigned int kShadowResolution = 2048;
 /// triangles on a large map and the shoreline visibly facets. Even at 256 this
 /// is 131k triangles against the terrain's two million.
 constexpr int kWaterSpans = 256;
+
+/// The reflection target's size. Half of 1080p in each axis: a reflection seen
+/// through a rippling surface cannot be examined closely, and this quarters the
+/// cost of the extra scene pass that fills it.
+constexpr unsigned int kReflectionWidth = 960;
+constexpr unsigned int kReflectionHeight = 540;
 
 
 constexpr MTL::PixelFormat kGroundFormat = MTL::PixelFormat::PixelFormatBC1_RGBA;
@@ -1006,8 +1074,11 @@ Renderer::Renderer(CA::MetalLayer* layer)
     terrainPipeline_ = makePipeline(device_, library, "terrainVertex", "terrainFragment",
                                     /*blend=*/false);
     skyPipeline_ = makePipeline(device_, library, "skyVertex", "skyFragment", /*blend=*/false);
+    // No hardware blending: the water shader reads the framebuffer itself and
+    // composites, which is what lets it absorb by depth rather than by a single
+    // alpha. Leaving blending on would mix the result a second time.
     waterPipeline_ = makePipeline(device_, library, "waterVertex", "waterFragment",
-                                  /*blend=*/true);
+                                  /*blend=*/false);
     unitPipeline_ = makePipeline(device_, library, "unitVertex", "unitFragment",
                                  /*blend=*/false);
     library->release();
@@ -1056,6 +1127,34 @@ Renderer::Renderer(CA::MetalLayer* layer)
         samplerDescriptor->setCompareFunction(MTL::CompareFunction::CompareFunctionLessEqual);
         shadowSampler_ = device_->newSamplerState(samplerDescriptor);
         samplerDescriptor->release();
+    }
+
+    // --- Reflection target -------------------------------------------------
+    // Half resolution in each axis. A reflection seen through a rippling
+    // surface is the one thing in a frame nobody can examine closely, and this
+    // quarters what the extra scene pass costs.
+    {
+        auto* descriptor = MTL::TextureDescriptor::alloc()->init();
+        descriptor->setTextureType(MTL::TextureType::TextureType2D);
+        descriptor->setPixelFormat(kColorFormat);
+        descriptor->setWidth(kReflectionWidth);
+        descriptor->setHeight(kReflectionHeight);
+        descriptor->setUsage(MTL::TextureUsageRenderTarget | MTL::TextureUsageShaderRead);
+        descriptor->setStorageMode(MTL::StorageModePrivate);
+        reflectionColour_ = device_->newTexture(descriptor);
+
+        descriptor->setPixelFormat(kDepthFormat);
+        descriptor->setUsage(MTL::TextureUsageRenderTarget);
+        reflectionDepth_ = device_->newTexture(descriptor);
+        descriptor->release();
+
+        auto* sampler = MTL::SamplerDescriptor::alloc()->init();
+        sampler->setMinFilter(MTL::SamplerMinMagFilter::SamplerMinMagFilterLinear);
+        sampler->setMagFilter(MTL::SamplerMinMagFilter::SamplerMinMagFilterLinear);
+        sampler->setSAddressMode(MTL::SamplerAddressMode::SamplerAddressModeClampToEdge);
+        sampler->setTAddressMode(MTL::SamplerAddressMode::SamplerAddressModeClampToEdge);
+        reflectionSampler_ = device_->newSamplerState(sampler);
+        sampler->release();
     }
 
     // Water tests against terrain but does not write depth: it is translucent,
@@ -1116,6 +1215,9 @@ Renderer::Renderer(CA::MetalLayer* layer)
 Renderer::~Renderer() {
     // Reverse acquisition order; all are +1 objects from newXxx()/CreateXxx.
     releaseWaterBuffers();
+    if (reflectionSampler_ != nullptr) reflectionSampler_->release();
+    if (reflectionDepth_ != nullptr) reflectionDepth_->release();
+    if (reflectionColour_ != nullptr) reflectionColour_->release();
     if (skyDepthState_ != nullptr) skyDepthState_->release();
     if (skyPipeline_ != nullptr) skyPipeline_->release();
     if (shadowSampler_ != nullptr) shadowSampler_->release();
@@ -1663,6 +1765,7 @@ Renderer::CapturedImage Renderer::renderToImage(unsigned int width, unsigned int
     MTL::CommandBuffer* commandBuffer = commandQueue_->commandBuffer();
 
     encodeShadowPass(commandBuffer);
+    encodeReflectionPass(commandBuffer);
 
     MTL::RenderPassDescriptor* pass = MTL::RenderPassDescriptor::alloc()->init();
     MTL::RenderPassColorAttachmentDescriptor* color0 = pass->colorAttachments()->object(0);
@@ -1804,6 +1907,7 @@ bench::FrameRecorder Renderer::runOffscreenBenchmark(unsigned int width, unsigne
         MTL::CommandBuffer* commandBuffer = commandQueue_->commandBuffer();
 
         encodeShadowPass(commandBuffer);
+        encodeReflectionPass(commandBuffer);
 
         MTL::RenderPassDescriptor* pass = MTL::RenderPassDescriptor::alloc()->init();
         MTL::RenderPassColorAttachmentDescriptor* color0 = pass->colorAttachments()->object(0);
@@ -1855,7 +1959,7 @@ bench::FrameRecorder Renderer::runOffscreenBenchmark(unsigned int width, unsigne
 }
 
 void Renderer::encodeScene(MTL::RenderCommandEncoder* encoder, unsigned int width,
-                           unsigned int height) noexcept {
+                           unsigned int height, const SceneOverride* override) noexcept {
     if (height == 0) {
         return;
     }
@@ -1863,7 +1967,8 @@ void Renderer::encodeScene(MTL::RenderCommandEncoder* encoder, unsigned int widt
     const float aspect = static_cast<float>(width) / static_cast<float>(height);
 
     TerrainUniforms uniforms{
-        .viewProjection = camera_.viewProjection(aspect),
+        .viewProjection = override != nullptr ? override->viewProjection
+                                              : camera_.viewProjection(aspect),
         .sunDirection = kSunDirection,
         .minHeight = terrainMinY_,
         .maxHeight = terrainMaxY_,
@@ -1891,6 +1996,10 @@ void Renderer::encodeScene(MTL::RenderCommandEncoder* encoder, unsigned int widt
         .waterColourLerp = environment_.waterColourLerp,
         .waterSkyReflection = environment_.waterSkyReflection,
         .waterSunShininess = environment_.waterSunShininess,
+        // Far below any map by default, so nothing is clipped unless a pass
+        // asks for it.
+        .clipBelowY = override != nullptr ? override->clipBelowY : -1.0e9f,
+        .viewportSize = simd_make_float2(static_cast<float>(width), static_cast<float>(height)),
     };
 
     // --- Sky ---------------------------------------------------------------
@@ -1950,7 +2059,7 @@ void Renderer::encodeScene(MTL::RenderCommandEncoder* encoder, unsigned int widt
         // instead of the light's box. Conservative: a chunk that merely
         // straddles a plane is kept, because culling anything not wholly
         // inside clips terrain at the edge of the screen.
-        const Frustum frustum = frustumOf(camera_.viewProjection(aspect));
+        const Frustum frustum = frustumOf(uniforms.viewProjection);
         drawTerrainChunks(encoder, [&frustum](const TerrainChunk& chunk) {
             return frustum.intersectsBox(simd_make_float3(chunk.minX, chunk.minY, chunk.minZ),
                                          simd_make_float3(chunk.maxX, chunk.maxY, chunk.maxZ));
@@ -2050,9 +2159,12 @@ void Renderer::encodeScene(MTL::RenderCommandEncoder* encoder, unsigned int widt
     // --- Water -------------------------------------------------------------
     // Last, so it blends over whatever terrain and units sit below y = 0. Only
     // worth drawing when something actually is below it.
-    if (waterIndexCount_ > 0 && hasWater_ && terrainMinY_ < waterLevel_) {
+    if (waterIndexCount_ > 0 && hasWater_ && terrainMinY_ < waterLevel_
+        && (override == nullptr || !override->skipWater)) {
         encoder->setRenderPipelineState(waterPipeline_);
         encoder->setDepthStencilState(waterDepthState_);
+        encoder->setFragmentTexture(reflectionColour_, kReflectionTextureIndex);
+        encoder->setFragmentSamplerState(reflectionSampler_, kReflectionSamplerIndex);
         encoder->setVertexBuffer(waterVertexBuffer_, 0, kVertexBufferIndex);
         encoder->setVertexBytes(&uniforms, sizeof(uniforms), kUniformBufferIndex);
         encoder->setFragmentBytes(&uniforms, sizeof(uniforms), kUniformBufferIndex);
@@ -2141,6 +2253,64 @@ void Renderer::updateLightMatrix() noexcept {
     lightCentre_ = centre;
     lightExtent_ = extent;
     hasShadows_ = true;
+}
+
+void Renderer::encodeReflectionPass(MTL::CommandBuffer* commandBuffer) noexcept {
+    if (reflectionColour_ == nullptr || commandBuffer == nullptr || indexCount_ == 0
+        || !hasWater_ || terrainMinY_ >= waterLevel_) {
+        return;
+    }
+
+    MTL::RenderPassDescriptor* pass = MTL::RenderPassDescriptor::alloc()->init();
+    MTL::RenderPassColorAttachmentDescriptor* colour = pass->colorAttachments()->object(0);
+    colour->setTexture(reflectionColour_);
+    colour->setLoadAction(MTL::LoadAction::LoadActionClear);
+    colour->setStoreAction(MTL::StoreAction::StoreActionStore);
+    // Cleared to ZERO alpha, which is how the water tells "the mirror saw
+    // something here" from "the mirror saw nothing". Clearing to the sky
+    // colour with alpha 1 makes every texel look like geometry, and the water
+    // then reflects the clear colour everywhere the world is not.
+    colour->setClearColor(MTL::ClearColor::Make(0.0, 0.0, 0.0, 0.0));
+
+    MTL::RenderPassDepthAttachmentDescriptor* depth = pass->depthAttachment();
+    depth->setTexture(reflectionDepth_);
+    depth->setLoadAction(MTL::LoadAction::LoadActionClear);
+    depth->setStoreAction(MTL::StoreAction::StoreActionDontCare);
+    depth->setClearDepth(1.0);
+
+    MTL::RenderCommandEncoder* encoder = commandBuffer->renderCommandEncoder(pass);
+
+    // The view matrix, composed with a reflection in the water plane.
+    //
+    // NOT a mirrored OrbitCamera: that camera derives its eye from a pitch it
+    // clamps to a positive band, and a reflected camera looks UP from below the
+    // surface — a negative pitch it cannot express at all. Reflecting the
+    // matrix sidesteps the parameterisation entirely.
+    //
+    //   y' = 2 * waterLevel - y
+    //
+    // as a matrix, applied to the world before the ordinary view transform.
+    const simd_float4x4 reflect = simd_matrix(
+        simd_make_float4(1.0f, 0.0f, 0.0f, 0.0f),
+        simd_make_float4(0.0f, -1.0f, 0.0f, 0.0f),
+        simd_make_float4(0.0f, 0.0f, 1.0f, 0.0f),
+        simd_make_float4(0.0f, 2.0f * waterLevel_, 0.0f, 1.0f));
+
+    const float aspect =
+        static_cast<float>(kReflectionWidth) / static_cast<float>(kReflectionHeight);
+
+    SceneOverride override;
+    override.viewProjection =
+        simd_mul(camera_.projectionMatrix(aspect), simd_mul(camera_.viewMatrix(), reflect));
+    // Anything under the surface is not in the mirror. A little above it, so
+    // the shoreline itself does not shimmer in and out along the seam.
+    override.clipBelowY = waterLevel_ - 1.0f;
+    override.skipWater = true;
+
+    encodeScene(encoder, kReflectionWidth, kReflectionHeight, &override);
+
+    encoder->endEncoding();
+    pass->release();
 }
 
 void Renderer::encodeShadowPass(MTL::CommandBuffer* commandBuffer) noexcept {
@@ -2292,6 +2462,7 @@ void Renderer::drawFrame(CA::MetalDrawable* drawable) noexcept {
         MTL::CommandBuffer* commandBuffer = commandQueue_->commandBuffer();
 
         encodeShadowPass(commandBuffer);
+        encodeReflectionPass(commandBuffer);
 
         MTL::RenderPassDescriptor* pass = MTL::RenderPassDescriptor::alloc()->init();
 
