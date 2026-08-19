@@ -66,8 +66,15 @@ return {
     // Turn rate is circle divisions per FRAME, over 65536 to the circle, at 30
     // frames a second. Read as radians per second it would be ~700 revolutions
     // a second; read as degrees per second, still 300x too fast.
+    //
+    // The 30 is RECOIL'S frame rate, a fact about how BAR's content is authored,
+    // and it is spelled out here rather than taken from `sim::kTicksPerSecond` —
+    // which is what this used to do, and which silently made the two facts one
+    // number. They parted company when the sim moved to 10 Hz; the absolute
+    // check below is what proves this expression, not the other way round.
+    constexpr float kRecoilFramesPerSecond = 30.0f;
     const float expectedTurn = 1214.40002f / 65536.0f * 2.0f * std::numbers::pi_v<float>
-                             * static_cast<float>(rm::sim::kTicksPerSecond);
+                             * kRecoilFramesPerSecond;
     CHECK(def->turnRateRadiansPerSecond == Approx(expectedTurn));
     CHECK(def->turnRateRadiansPerSecond == Approx(3.4934f).margin(0.01));
 

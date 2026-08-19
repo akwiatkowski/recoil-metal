@@ -3,6 +3,7 @@
 #include "core/map/HeightField.hpp"
 #include "core/scene/UnitPlacement.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <span>
@@ -20,11 +21,27 @@ namespace rm::sim {
 
 /// Simulation ticks per second.
 ///
-/// 30, matching Recoil's own `GAME_SPEED` (rts/Sim/Misc/GlobalConstants.h:52).
-/// Worth matching exactly rather than picking something convenient: every unit
-/// speed and turn rate in the content is authored against this rate, so any
-/// other value silently rescales the whole game's movement.
-inline constexpr int kTicksPerSecond = 30;
+/// TEN, matching Supreme Commander, whose scripts hardcode it: `WaitSeconds(n)`
+/// is `WaitTicks(n * 10)` (mohodata/lua/simInit.lua:37). This was 30 — Recoil's
+/// `GAME_SPEED` (rts/Sim/Misc/GlobalConstants.h:52) — and the two games disagree,
+/// so one of them had to be chosen.
+///
+/// WHY THE SLOWER ONE WINS. Nothing here needs 30: this engine has no lockstep
+/// multiplayer, which is the constraint that fixed both games' rates in the first
+/// place, and the renderer has never been coupled to the tick. What 10 buys is
+/// that Supreme Commander's own gameplay scripts could later run on this sim
+/// unmodified, and a 30 Hz sim would run every one of their timings three times
+/// fast. That is not a constant to change later: by then every value tuned against
+/// the rate would have to move with it, which is a far bigger job than this line.
+/// See PLAN.md, "Designing for a Lua host that does not exist yet".
+///
+/// Content is unaffected either way, and this is the part worth being careful
+/// about: both families author speeds in units PER SECOND, so nothing is rescaled
+/// by the change. The one exception was a `turnrate` in Recoil frames, which is a
+/// fact about BAR's authoring rather than about our rate and now has its own
+/// constant in UnitDef.cpp — using this one made two different facts share a
+/// number, which held only while the values agreed.
+inline constexpr int kTicksPerSecond = 10;
 inline constexpr float kTickSeconds = 1.0f / static_cast<float>(kTicksPerSecond);
 
 /// Default ground speed, in elmos per second.
@@ -47,12 +64,21 @@ inline constexpr float kDefaultTurnRateRadiansPerSecond = 3.4934f;
 
 /// How close counts as arrived, in elmos.
 ///
-/// Four elmos is half a heightmap square — the finest the terrain itself
-/// resolves, so aiming tighter than this asks for precision the ground does not
-/// have. It also has to exceed one tick of travel or a unit steps past the goal
-/// and turns back forever; the tick guards that case explicitly rather than
-/// relying on this constant to cover every speed.
-inline constexpr float kArrivalRadiusElmos = 4.0f;
+/// TWO requirements, and which one binds depends on the tick rate, so it is
+/// written as the larger rather than as whichever happened to win.
+///
+/// Half a heightmap square, four elmos, is the finest the terrain itself
+/// resolves, so aiming tighter asks for precision the ground does not have.
+/// And it must exceed ONE TICK OF TRAVEL, or a unit steps past the goal every
+/// tick and never lands inside the radius at all.
+///
+/// At 30 ticks a second the first bound won: a tick was 2.9 elmos and the
+/// constant was a flat 4. At 10 it is 8.7, so the second binds, and hard-coding
+/// the 4 would have left every ordered unit stopping on the tick's overshoot
+/// guard instead of on arrival — a constant that had quietly stopped doing its
+/// job. Exactly the kind of value PLAN.md warns grows up around a tick rate.
+inline constexpr float kArrivalRadiusElmos =
+    std::max(0.5f * static_cast<float>(kSquareSize), kDefaultSpeedElmosPerSecond * kTickSeconds);
 
 /// Default collision radius, in elmos — see MoveState::radiusElmos.
 inline constexpr float kDefaultRadiusElmos = 16.0f;

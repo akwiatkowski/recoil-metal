@@ -14,6 +14,17 @@ namespace {
 /// (rts/System/SpringMath.h:16-17). Turn rates are authored in these per frame.
 constexpr float kCircleDivisions = 65536.0f;
 
+/// Frames per second the BAR content is AUTHORED against — Recoil's `GAME_SPEED`
+/// (rts/Sim/Misc/GlobalConstants.h:52).
+///
+/// NOT this engine's tick rate, which is what stood here and is a different fact
+/// that merely had the same value. A `turnrate` is per Recoil frame, so converting
+/// it to radians per second needs Recoil's frame rate; using ours would rescale
+/// every BAR unit's turning the moment the two stopped agreeing — silently, and in
+/// the direction of units that arc lazily instead of turning. They stopped agreeing
+/// when this engine's sim moved to Supreme Commander's 10 Hz.
+constexpr float kRecoilFramesPerSecond = 30.0f;
+
 /// Reads a number, or leaves the default alone. Absence is ordinary: a building
 /// has no speed, and most definitions omit most fields.
 [[nodiscard]] float numberOr(const rm::lua::Value& table, std::string_view key,
@@ -120,8 +131,7 @@ std::expected<std::vector<UnitDef>, lua::ParseError> loadFileAll(
         // Circle divisions per frame to radians per second.
         const float turnRate = numberOr(table, "turnrate", 0.0f);
         def.turnRateRadiansPerSecond = turnRate / kCircleDivisions * 2.0f
-                                     * std::numbers::pi_v<float>
-                                     * static_cast<float>(sim::kTicksPerSecond);
+                                     * std::numbers::pi_v<float> * kRecoilFramesPerSecond;
 
         def.maxSlopeDegrees = numberOr(table, "maxslope", 0.0f);
         def.maxWaterDepthElmos = numberOr(table, "maxwaterdepth", 0.0f);

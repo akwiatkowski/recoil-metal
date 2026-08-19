@@ -105,14 +105,16 @@ TEST_CASE("an ordered unit closes on its destination") {
     rm::sim::orderTo(motion[0], field, 100.0f, 400.0f);
 
     const float before = distanceToOrder(instances[0], motion[0]);
-    run(instances, motion, field, 10);
+    // A whole second, expressed as one, so the expectation below does not have to
+    // know the tick rate — an earlier version ran a flat 10 ticks and called it a
+    // third of a second, which stopped being true at 10 Hz.
+    run(instances, motion, field, rm::sim::kTicksPerSecond);
     const float after = distanceToOrder(instances[0], motion[0]);
 
     CHECK(after < before);
-    // Already facing +Z, so it should be travelling at very nearly full speed
-    // from the first tick: 10 ticks is a third of a second.
-    const float expected = rm::sim::kDefaultSpeedElmosPerSecond / 3.0f;
-    CHECK(before - after == Approx(expected).margin(1.0f));
+    // Already facing +Z, so it travels at very nearly full speed from the first
+    // tick: one second of it.
+    CHECK(before - after == Approx(rm::sim::kDefaultSpeedElmosPerSecond).margin(1.0f));
 }
 
 TEST_CASE("a unit arrives and then stops") {
