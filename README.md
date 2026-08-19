@@ -562,6 +562,42 @@ BAR=~/projects/llm/games/forged-alliance-reborn/reference/BAR/objects3d/Units
 # scene: 3 models, 4 textures uploaded, 2 texture binds per frame
 ```
 
+### Quality settings
+
+Three switches, all on by default, all one keypress away:
+
+| key | flag | costs |
+|---|---|---|
+| `r` | `--no-reflections` | +0.50 ms |
+| `n` | `--no-stratum-normals` | +0.21 ms |
+| `p` | `--no-props` | +2.8 ms at 5182 props, +6.2 ms at 46 971 |
+
+Defaults are **looks-best**, deliberately. The cheap-by-default argument is the
+usual one and it is wrong here: what is being demonstrated is how the content
+looks when a Metal renderer draws it, and a reader who runs this should see what
+the screenshots show. What that does oblige is that the benchmark states which
+switches were on, since otherwise two of its own numbers are not comparable —
+which it now does.
+
+To state a preference rather than pass a flag, write a Lua table to
+`~/Library/Application Support/recoil-metal/settings.lua`. It is read by the same
+data reader that reads `mapinfo.lua`; a missing file is the ordinary case, and a
+key of the wrong type is reported rather than coerced.
+
+```lua
+-- a machine that would rather have the frame rate
+{
+    reflections = false,
+    stratum_normals = true,
+    props = false,
+}
+```
+
+Flags beat the file: a flag is somebody asking for this run, the file is somebody
+stating a preference. There is no `--reflections` to turn one back on, because the
+defaults are already on and the only thing a flag has ever needed to say is "not
+this time".
+
 ### Finding content
 
 `--data-dir <dir>` adds a directory to the asset search path, and `--archive

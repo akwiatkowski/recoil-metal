@@ -96,7 +96,8 @@ add_library(rm_core STATIC
     src/core/sim/Movement.cpp
     src/core/sim/Pathfinding.cpp
     src/core/unit/UnitDef.cpp
-    src/core/vfs/AssetSearch.cpp)
+    src/core/vfs/AssetSearch.cpp
+    src/core/settings/Settings.cpp)
 target_include_directories(rm_core PUBLIC src)
 target_link_libraries(rm_core PUBLIC rm_project_warnings miniz miniz_impl)
 
@@ -157,6 +158,7 @@ if(BUILD_TESTING)
         tests/test_terrain_type.cpp
         tests/test_real_scmap.cpp
         tests/test_prop_blueprint.cpp
+        tests/test_settings.cpp
         tests/test_real_stratum_normals.cpp
         tests/test_scenario_save.cpp
         tests/support/SmfWriter.cpp

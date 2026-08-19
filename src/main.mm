@@ -16,6 +16,7 @@
 #include "core/map/PropBlueprint.hpp"
 #include "core/scene/PropBatch.hpp"
 #include "core/scene/Selection.hpp"
+#include "core/settings/Settings.hpp"
 #include "core/scene/SelectionRing.hpp"
 #include "core/scene/UnitPlacement.hpp"
 #include "core/sim/Movement.hpp"
@@ -681,6 +682,26 @@ struct PropScene {
     }
     std::printf("\n");
     return scene;
+}
+
+/// The quality switches in force, for a benchmark to state alongside its number.
+///
+/// Not decoration. The three switches are worth 0.21, 0.50 and up to 6.2 ms of a
+/// frame between them, so two figures from this renderer are not comparable
+/// unless both say what was on — and the whole point of the benchmark harness is
+/// comparing figures, against Recoil and against this renderer's own past.
+[[nodiscard]] std::string describeQuality(const rm::Settings& settings, std::size_t propCount) {
+    std::string text = "quality: reflections ";
+    text += settings.reflections ? "on" : "off";
+    text += ", stratum normals ";
+    text += settings.stratumNormals ? "on" : "off";
+    text += ", props ";
+    if (!settings.props) {
+        text += "off";
+    } else {
+        text += std::to_string(propCount);
+    }
+    return text;
 }
 
 /// Where a Recoil model's named texture lives, resolved against the search roots.
@@ -1658,6 +1679,27 @@ int main(int argc, const char* argv[]) {
         }
         std::printf("\n");
 
+        // --- Quality settings ----------------------------------------------
+        // The file first, then the command line over the top: a flag is somebody
+        // asking for this run, a file is somebody stating a preference, and the
+        // more specific of the two wins. There is no --reflections to turn one
+        // back ON, deliberately — the defaults are already on, so the only thing
+        // a flag has ever needed to express is "not this time".
+        std::vector<std::string> settingsProblems;
+        rm::Settings settings = rm::loadSettings(rm::settingsPath(), settingsProblems);
+        for (const std::string& problem : settingsProblems) {
+            std::fprintf(stderr, "%s\n", problem.c_str());
+        }
+        if (hasFlag(argc, argv, "--no-reflections")) {
+            settings.reflections = false;
+        }
+        if (hasFlag(argc, argv, "--no-stratum-normals")) {
+            settings.stratumNormals = false;
+        }
+        if (hasFlag(argc, argv, "--no-props")) {
+            settings.props = false;
+        }
+
         // The map's own scenery: trees, rocks, wrecks. Loaded once here and
         // shared by all three modes below, because it is the same scene however
         // it gets to the screen.
@@ -1666,11 +1708,21 @@ int main(int argc, const char* argv[]) {
         // BAR's own maps declare it empty and place their objects through a
         // runtime Lua gadget, so there is nothing there to read yet.
         const char* propHome = std::getenv("HOME");
+        // Not loaded at all when switched off, rather than loaded and hidden: the
+        // meshes and textures are the cost, and a run that has decided against
+        // scenery should not pay it. The live `p` toggle therefore only reaches
+        // what a run did load — which is the honest behaviour for a switch whose
+        // purpose is comparing two frames.
         const PropScene props =
-            hasFlag(argc, argv, "--no-props")
-                ? PropScene{}
-                : loadProps(*map, std::filesystem::path{propHome == nullptr ? "" : propHome}
-                                      / kFaEnvDir);
+            settings.props ? loadProps(*map,
+                                       std::filesystem::path{propHome == nullptr ? "" : propHome}
+                                           / kFaEnvDir)
+                           : PropScene{};
+
+        std::size_t propInstances = 0;
+        for (const rm::PropBatch& batch : props.batches) {
+            propInstances += batch.instances.size();
+        }
 
         const BenchOptions bench = parseBench(argc, argv);
 
@@ -1685,8 +1737,8 @@ int main(int argc, const char* argv[]) {
             renderer.setUnits(units.textures.all(), units.batches);
             renderer.setProps(props.textures.all(), props.batches);
             renderer.setAnimationTime(animationTime);
-            renderer.setReflections(!hasFlag(argc, argv, "--no-reflections"));
-            renderer.setStratumNormals(!hasFlag(argc, argv, "--no-stratum-normals"));
+            renderer.setReflections(settings.reflections);
+            renderer.setStratumNormals(settings.stratumNormals);
             // --focus works here too, so the benchmark can measure a close
             // camera as well as a whole-map one. They are different workloads:
             // anything that culls to what the camera sees is invisible at full
@@ -1699,6 +1751,7 @@ int main(int argc, const char* argv[]) {
                         " %zu frames in flight, no vsync\n",
                         bench.width, bench.height, bench.frames, bench.warmup,
                         rm::Renderer::kMaxFramesInFlight);
+            std::printf("  %s\n", describeQuality(settings, propInstances).c_str());
 
             const rm::bench::FrameRecorder recorder =
                 renderer.runOffscreenBenchmark(bench.width, bench.height, bench.frames,
@@ -1720,8 +1773,8 @@ int main(int argc, const char* argv[]) {
             renderer.setUnits(units.textures.all(), units.batches);
             renderer.setProps(props.textures.all(), props.batches);
             renderer.setAnimationTime(animationTime);
-            renderer.setReflections(!hasFlag(argc, argv, "--no-reflections"));
-            renderer.setStratumNormals(!hasFlag(argc, argv, "--no-stratum-normals"));
+            renderer.setReflections(settings.reflections);
+            renderer.setStratumNormals(settings.stratumNormals);
             if (focus > 0.0f) {
                 focusOnFirstUnit(renderer, units, focus);
             }
@@ -1787,12 +1840,8 @@ int main(int argc, const char* argv[]) {
         // `r` flips it live, which is the only way to judge whether it is worth
         // its cost — a side-by-side of two runs cannot show the difference
         // moving.
-        if (hasFlag(argc, argv, "--no-reflections")) {
-            window.setReflections(false);
-        }
-        if (hasFlag(argc, argv, "--no-stratum-normals")) {
-            window.setStratumNormals(false);
-        }
+        window.setReflections(settings.reflections);
+        window.setStratumNormals(settings.stratumNormals);
         window.onKey([&window](char key) {
             if (key == 'r') {
                 const bool enabled = !window.reflectionsEnabled();
@@ -1923,8 +1972,9 @@ int main(int argc, const char* argv[]) {
 
         RMBenchWatcher* watcher = nil;
         if (bench.enabled) {
-            std::printf("benchmarking %zu frames (discarding %zu warmup)\n",
-                        bench.frames, bench.warmup);
+            std::printf("benchmarking %zu frames (discarding %zu warmup)\n  %s\n",
+                        bench.frames, bench.warmup,
+                        describeQuality(settings, propInstances).c_str());
             window.beginBenchmark(bench.warmup);
 
             watcher = [[RMBenchWatcher alloc] init];
