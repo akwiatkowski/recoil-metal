@@ -30,6 +30,9 @@ struct MapError {
         BadGeometry,  ///< mapx/mapy not positive multiples of 128
         Truncated,    ///< a section pointer or its length runs past end-of-file
         TooLarge,     ///< valid, but beyond what this renderer can hold at once
+        MissingMesh,  ///< a prop blueprint that parses but names no geometry —
+                      ///< which is what a particle emitter's blueprint IS, so
+                      ///< this is a legitimate answer rather than a corruption
     };
 
     Code code;

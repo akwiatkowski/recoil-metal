@@ -71,6 +71,9 @@ public:
     // Units to draw on the terrain. See Renderer::setUnits.
     void setUnits(std::span<const dds::Texture> textures, std::span<const UnitBatch> batches);
 
+    // The map's scenery. See Renderer::setProps.
+    void setProps(std::span<const dds::Texture> textures, std::span<const PropBatch> batches);
+
     /// Replaces one batch's instances for this frame. See Renderer::setInstances.
     /// Only meaningful from inside an onFrame callback, which is the only point
     /// at which a ring slot is open for writing.
@@ -105,6 +108,10 @@ public:
     /// The planar reflection quality setting. See Renderer::setReflections.
     void setReflections(bool enabled);
     [[nodiscard]] bool reflectionsEnabled() const;
+
+    /// Whether the map's scenery is drawn. See Renderer::setPropsVisible.
+    void setPropsVisible(bool visible);
+    [[nodiscard]] bool propsVisible() const;
 
     /// The stratum normal-map setting. See Renderer::setStratumNormals.
     void setStratumNormals(bool enabled);

@@ -62,6 +62,16 @@ struct TerrainUniforms {
     float clipBelowY;   ///< the reflection pass discards anything under this
     simd_float2 viewportSize;  ///< pixels, so the water can find its own screen position
     float hasReflection;       ///< 0 when the planar pass did not run this frame
+
+    /// 1 when the diffuse texture's alpha is OPACITY rather than a team-colour
+    /// mask — which is what it is for every Supreme Commander prop.
+    ///
+    /// The two families disagree about that channel and a prop disagrees with
+    /// both: Recoil puts its team mask in tex1's alpha, SupCom puts it in
+    /// `_SpecTeam`, and a prop's albedo alpha cuts the shape of a leaf out of the
+    /// quad it is drawn on. Read as a mask, a palm frond renders as a solid green
+    /// card painted in the player's colour.
+    float alphaIsOpacity;
 };
 
 
@@ -74,7 +84,12 @@ static_assert(offsetof(TerrainUniforms, clipBelowY) == 380, "clipBelowY packs in
 static_assert(offsetof(TerrainUniforms, viewportSize) == 384, "float2 realigns to 8 bytes");
 static_assert(offsetof(TerrainUniforms, hasReflection) == 392,
               "hasReflection must land in the tail padding, not grow the struct");
-static_assert(sizeof(TerrainUniforms) == 400, "a float2 realigns to 8 bytes after clipBelowY");
+static_assert(offsetof(TerrainUniforms, alphaIsOpacity) == 396,
+              "alphaIsOpacity must pack against hasReflection in the tail");
+static_assert(sizeof(TerrainUniforms) == 400,
+              "alphaIsOpacity fits the padding the struct already had — the NEXT "
+              "field added here grows it to 416, which is fine, but it must go at "
+              "the END for the same reason the light matrix did");
 static_assert(offsetof(TerrainUniforms, fogColour) == 288, "the map block follows the matrices");
 // A float3 is sixteen bytes AND sixteen-aligned, so the float after one does
 // NOT pack into its tail — it starts a fresh slot and the next float3 realigns
@@ -233,6 +248,7 @@ struct Uniforms {
     float clipBelowY;
     float2 viewportSize;
     float hasReflection;
+    float alphaIsOpacity;
 };
 
 // The sky, as Supreme Commander's own `effects/sky.fx` builds it: a lerp
@@ -1003,12 +1019,29 @@ fragment float4 unitFragment(UnitOut in [[stage_in]],
         tex2 = shading.sample(texSampler, in.uv);
     }
 
+    // A PROP's alpha is opacity, not a mask. Trees and bushes are quads with the
+    // shape of a leaf cut out of them, so the cutout has to happen before
+    // anything else reads that channel — and it is a `discard` rather than a
+    // blend because these are scenery drawn in arbitrary order, and alpha
+    // blending without sorting puts a near frond behind a far one. A cutout is
+    // order-independent, which is what makes 4000 trees a single instanced draw.
+    //
+    // Threshold rather than 0: the fringe of a DXT-compressed alpha channel is
+    // noisy, and keeping everything above zero leaves a halo of interpolated
+    // background around every leaf.
+    if (u.alphaIsOpacity > 0.5 && tex1.a < 0.5) {
+        discard_fragment();
+    }
+
     // Where the team-colour mask lives, and what the shading texture's channels
     // mean, differ between the two content families — see Family in Model.hpp.
     // Each branch below is a port of that family's OWN shader, so neither is
-    // inferred from what the data looks like.
+    // inferred from what the data looks like. A prop is a third case: its alpha
+    // was just spent on the cutout, so it has no mask at all and keeps its own
+    // colours.
     const bool supCom = u.supremeCommanderShading > 0.5;
-    const float teamMask = supCom ? tex2.a : tex1.a;
+    const float teamMask =
+        u.alphaIsOpacity > 0.5 ? 0.0 : (supCom ? tex2.a : tex1.a);
 
     const float3 albedo = mix(tex1.rgb, in.teamColour.rgb, teamMask);
 
@@ -1425,6 +1458,7 @@ Renderer::~Renderer() {
     if (ringDepthState_ != nullptr) ringDepthState_->release();
     if (ringPipeline_ != nullptr) ringPipeline_->release();
     releaseTerrainBuffers();
+    releasePropBuffers();  // before the units: acquired after them
     releaseUnitBuffers();  // frees the unit textures too
     unitPipeline_->release();
     releaseSplat();
@@ -1600,6 +1634,119 @@ void Renderer::releaseUnitBuffers() noexcept {
     }
     unitTextures_.clear();
     batchForSourceIndex_.clear();
+}
+
+void Renderer::releasePropBuffers() noexcept {
+    for (GpuUnitBatch& batch : propBatches_) {
+        if (batch.instanceBuffer != nullptr) batch.instanceBuffer->release();
+        if (batch.boneBuffer != nullptr)     batch.boneBuffer->release();
+        if (batch.indexBuffer != nullptr)    batch.indexBuffer->release();
+        if (batch.vertexBuffer != nullptr)   batch.vertexBuffer->release();
+    }
+    propBatches_.clear();
+
+    for (MTL::Texture* texture : propTextures_) {
+        if (texture != nullptr) {
+            texture->release();
+        }
+    }
+    propTextures_.clear();
+}
+
+// WHAT IS NOT DONE HERE, measured and named rather than left as a surprise.
+//
+// Every prop is drawn at its finest LOD, always. The blueprints ship three
+// meshes each and state the distances the game switches between them at —
+// `LODCutoff` of 30, 200 and 750 ogrids — so the data for this is already parsed
+// and thrown away. It costs 2.8 ms of a 7.6 ms frame on a 5182-prop map and
+// 6.2 ms of 11.2 on the 46 971-prop one, which is where the whole gap is: 47 000
+// trees at a thousand triangles each, most of them covering a handful of pixels.
+//
+// Doing it properly means choosing a level per prop per frame, which means
+// rebuilding instance lists every frame for geometry that never moves — so the
+// cheap version is to choose ONE level for the whole scene from the camera's
+// distance, which is exactly right for the case that costs the most (a whole-map
+// framing, where every prop is far away) and wrong for nothing a player looks at.
+// Until then, setPropsVisible is the honest switch.
+void Renderer::setProps(std::span<const dds::Texture> textures,
+                        std::span<const PropBatch> batches) {
+    releasePropBuffers();
+
+    if (batches.empty()) {
+        return;
+    }
+
+    propTextures_.reserve(textures.size());
+    for (const dds::Texture& texture : textures) {
+        // A null slot rather than renumbering, exactly as the units do: the
+        // indices in the batches were decided by the caller.
+        propTextures_.push_back(texture.data.empty() ? nullptr
+                                                     : uploadTexture(texture, "prop"));
+    }
+
+    // No reordering by texture. Units are sorted so each texture pair binds once
+    // a frame, which is worth doing when a scene holds a handful of models; a map
+    // holds up to 80 distinct props and every one has its own albedo, so there is
+    // nothing to group — the sort would be a no-op over a list where no two
+    // entries share a key. The caller's order stands.
+    propBatches_.reserve(batches.size());
+    for (const PropBatch& batch : batches) {
+        if (batch.model == nullptr || batch.model->empty() || batch.model->bones.empty()
+            || batch.instances.empty()) {
+            continue;
+        }
+        const Model& model = *batch.model;
+
+        // The rest pose, and only ever the rest pose. A prop has no animation —
+        // the blueprint's script class may say "Tree" and the game may topple it
+        // when shot, but nothing here shoots anything. restPose is still needed
+        // rather than skippable: it is where the two families' vertex conventions
+        // are reconciled, and the vertex shader always indexes a bone.
+        const std::vector<BoneTransform> poses = restPose(model);
+
+        GpuUnitBatch uploaded;
+        // A prop's albedo goes in the diffuse slot; the shading slot stays empty,
+        // so the fragment shader takes its neutral fallback and the prop is lit by
+        // sun and ambient alone. Its normal map is deliberately unused — the
+        // convention differs from the stratum maps' (measured while extracting
+        // the content: endpoint means near 148 with red equal to blue, against a
+        // stratum map's near-255 blue), and reading one on an unverified axis
+        // lights bumps as dents.
+        uploaded.textures = TexturePair{batch.albedo, -1};
+        uploaded.supremeCommanderShading = model.family == Family::SupremeCommander;
+        uploaded.alphaIsOpacity = true;
+        uploaded.poseCount = 1;
+        uploaded.boneStrideBytes = model.bones.size() * sizeof(BoneTransform);
+        uploaded.duration = 0.0f;
+        uploaded.vertexBuffer =
+            device_->newBuffer(model.vertices.data(), model.vertices.size() * sizeof(ModelVertex),
+                               MTL::ResourceStorageModeShared);
+        uploaded.indexBuffer =
+            device_->newBuffer(model.indices.data(), model.indices.size() * sizeof(std::uint32_t),
+                               MTL::ResourceStorageModeShared);
+        uploaded.boneBuffer = device_->newBuffer(poses.data(), poses.size() * sizeof(BoneTransform),
+                                                 MTL::ResourceStorageModeShared);
+        // ONE copy of the instances, not kMaxFramesInFlight. Nothing rewrites
+        // them, so there is no frame in flight to race with — and on the busiest
+        // stock map the two spare copies would be 4.5 MB written once and read
+        // forever. instanceCapacity stays 0 to say so: the draw offsets by
+        // instanceSlot_ * capacity, which is then 0 whatever the slot.
+        uploaded.instanceCapacity = 0;
+        uploaded.instanceBuffer =
+            device_->newBuffer(batch.instances.data(), batch.instances.size() * sizeof(UnitInstance),
+                               MTL::ResourceStorageModeShared);
+        uploaded.indexCount = model.indices.size();
+        uploaded.instanceCount = batch.instances.size();
+
+        if (uploaded.vertexBuffer == nullptr || uploaded.indexBuffer == nullptr
+            || uploaded.boneBuffer == nullptr || uploaded.instanceBuffer == nullptr) {
+            propBatches_.push_back(uploaded);  // so releasePropBuffers frees it
+            releasePropBuffers();
+            throw RendererError{"failed to allocate prop buffers for " + model.name};
+        }
+
+        propBatches_.push_back(uploaded);
+    }
 }
 
 void Renderer::setUnits(std::span<const dds::Texture> textures,
@@ -2381,6 +2528,7 @@ void Renderer::encodeScene(MTL::RenderCommandEncoder* encoder, unsigned int widt
             unitUniforms.hasTexture = diffuse != nullptr ? 1.0f : 0.0f;
             unitUniforms.hasTexture2 = shading != nullptr ? 1.0f : 0.0f;
             unitUniforms.supremeCommanderShading = batch.supremeCommanderShading ? 1.0f : 0.0f;
+            unitUniforms.alphaIsOpacity = batch.alphaIsOpacity ? 1.0f : 0.0f;
             encoder->setFragmentBytes(&unitUniforms, sizeof(unitUniforms), kUniformBufferIndex);
             encoder->setFragmentTexture(shadowMap_, kShadowTextureIndex);
             encoder->setFragmentSamplerState(shadowSampler_, kShadowSamplerIndex);
@@ -2412,6 +2560,74 @@ void Renderer::encodeScene(MTL::RenderCommandEncoder* encoder, unsigned int widt
 
             // One call for every instance — the whole point of the instance
             // buffer.
+            encoder->drawIndexedPrimitives(MTL::PrimitiveType::PrimitiveTypeTriangle,
+                                           static_cast<NS::UInteger>(batch.indexCount),
+                                           MTL::IndexType::IndexTypeUInt32, batch.indexBuffer,
+                                           /*indexBufferOffset=*/0,
+                                           static_cast<NS::UInteger>(batch.instanceCount));
+        }
+    }
+
+    // --- Props -------------------------------------------------------------
+    // The map's own scenery. Same pipeline and same shaders as the units — a
+    // prop is a static model with one texture — so this differs only in what it
+    // binds and in the alpha flag that turns the team-colour mask into a cutout.
+    //
+    // AFTER the units rather than before, which costs nothing and is worth
+    // stating: every prop fragment that fails its cutout is discarded, so the
+    // pipeline cannot reject them by depth before shading. Drawing the opaque
+    // units first means the depth buffer is already dense where they stand, and
+    // a tree behind a building is rejected on depth before its alpha is sampled.
+    if (!propBatches_.empty() && propsVisible_) {
+        encoder->setRenderPipelineState(unitPipeline_);
+        encoder->setDepthStencilState(depthState_);
+        encoder->setFragmentSamplerState(groundSampler_, kGroundSamplerIndex);
+        encoder->setVertexBytes(&uniforms, sizeof(uniforms), kUniformBufferIndex);
+        encoder->setFragmentTexture(shadowMap_, kShadowTextureIndex);
+        encoder->setFragmentSamplerState(shadowSampler_, kShadowSamplerIndex);
+
+        for (const GpuUnitBatch& batch : propBatches_) {
+            MTL::Texture* albedo = nullptr;
+            if (batch.textures.diffuse >= 0
+                && static_cast<std::size_t>(batch.textures.diffuse) < propTextures_.size()) {
+                albedo = propTextures_[static_cast<std::size_t>(batch.textures.diffuse)];
+            }
+
+            // Both slots bound whatever happens: sampling an unbound texture is
+            // undefined even on a branch that does not run.
+            encoder->setFragmentTexture(albedo != nullptr ? albedo : groundTexture_,
+                                        kGroundTextureIndex);
+            encoder->setFragmentTexture(groundTexture_, kShadingTextureIndex);
+
+            TerrainUniforms propUniforms = uniforms;
+            propUniforms.hasTexture = albedo != nullptr ? 1.0f : 0.0f;
+            // No shading texture ever: a prop blueprint names an albedo and
+            // sometimes a normal map, never the second channel set a unit's
+            // shading texture carries. The shader's neutral fallback then lights
+            // it by sun and ambient alone, which is what a tree wants.
+            propUniforms.hasTexture2 = 0.0f;
+            propUniforms.supremeCommanderShading = batch.supremeCommanderShading ? 1.0f : 0.0f;
+            propUniforms.alphaIsOpacity = 1.0f;
+            encoder->setFragmentBytes(&propUniforms, sizeof(propUniforms), kUniformBufferIndex);
+
+            encoder->setVertexBuffer(batch.vertexBuffer, 0, kVertexBufferIndex);
+            // Offset 0 always: instanceCapacity is 0 for a prop batch, because
+            // one copy of static instances needs no ring.
+            encoder->setVertexBuffer(batch.instanceBuffer,
+                                     static_cast<NS::UInteger>(instanceSlot_
+                                                               * batch.instanceCapacity
+                                                               * sizeof(UnitInstance)),
+                                     kInstanceBufferIndex);
+            encoder->setVertexBuffer(batch.boneBuffer, 0, kBoneBufferIndex);
+
+            PoseUniforms pose;
+            pose.poseCount = 1;
+            pose.boneCount =
+                static_cast<std::uint32_t>(batch.boneStrideBytes / sizeof(BoneTransform));
+            pose.duration = 0.0f;
+            pose.time = 0.0f;
+            encoder->setVertexBytes(&pose, sizeof(pose), kPoseUniformBufferIndex);
+
             encoder->drawIndexedPrimitives(MTL::PrimitiveType::PrimitiveTypeTriangle,
                                            static_cast<NS::UInteger>(batch.indexCount),
                                            MTL::IndexType::IndexTypeUInt32, batch.indexBuffer,
@@ -2671,6 +2887,14 @@ void Renderer::encodeShadowPass(MTL::CommandBuffer* commandBuffer) noexcept {
         }, lightCentre_, /*varyDetail=*/false);
     }
 
+    // Units cast shadows; PROPS DO NOT, and that is a decision rather than an
+    // omission. The shadow pipeline has no fragment shader at all — the depth
+    // attachment is its entire output — so it cannot honour an alpha cutout, and
+    // a tree pushed through it would cast the shadow of the untrimmed quads its
+    // leaves are painted on: a scatter of hard rectangles across the ground,
+    // which is far worse than no tree shadow. Giving the shadow pass a fragment
+    // shader that discards would fix it and would cost every shadow-casting
+    // surface its early-depth rejection, for scenery.
     encoder->setRenderPipelineState(unitShadowPipeline_);
     for (const GpuUnitBatch& batch : unitBatches_) {
         if (batch.instanceCount == 0) {

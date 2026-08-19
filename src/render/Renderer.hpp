@@ -8,6 +8,7 @@
 #include "core/model/Model.hpp"
 #include "core/model/Pose.hpp"
 #include "core/scene/SelectionRing.hpp"
+#include "core/scene/PropBatch.hpp"
 #include "core/scene/UnitBatch.hpp"
 #include "core/scene/UnitPlacement.hpp"
 #include "core/texture/Dds.hpp"
@@ -144,6 +145,20 @@ public:
     void setStratumNormals(bool enabled) noexcept { stratumNormalsEnabled_ = enabled; }
     [[nodiscard]] bool stratumNormalsEnabled() const noexcept { return stratumNormalsEnabled_; }
 
+    // Whether the map's scenery is drawn.
+    //
+    // The most expensive quality setting there is, and by a distance: 5182 props
+    // cost 2.8 ms of a 7.6 ms frame on SCMP_009, and the busiest stock map's
+    // 46 971 cost 6.2 ms of 11.2. Every one is drawn at its finest LOD, and every
+    // fragment is alpha-tested — so nothing can be rejected on depth before it is
+    // shaded, and a whole-map framing pays for 47 000 trees each covering a few
+    // pixels. See setProps for what remains to be done about that.
+    //
+    // A toggle rather than a rebuild: the geometry stays uploaded, so this can be
+    // flipped per frame.
+    void setPropsVisible(bool visible) noexcept { propsVisible_ = visible; }
+    [[nodiscard]] bool propsVisible() const noexcept { return propsVisible_; }
+
     // The rings marking which units are selected, for this frame.
     //
     // Rebuilt and pushed every frame, like instances and for the same reason: a
@@ -177,6 +192,23 @@ public:
     //
     // Replaces any previously set units. An empty batch list clears them.
     void setUnits(std::span<const dds::Texture> textures, std::span<const UnitBatch> batches);
+
+    // Uploads the map's scenery: trees, rocks and wrecks, one instanced draw per
+    // distinct mesh. Static — a prop never moves, so this is called once and
+    // there is no per-frame counterpart to setInstances.
+    //
+    // Held apart from the units rather than folded into them, for a reason that
+    // is about the SIM rather than the GPU: everything in the unit list is
+    // ticked, collided and pickable, so a tree in it would be shoved aside by
+    // passing infantry and would accept a move order. See PropBatch.hpp.
+    //
+    // One texture per batch, and its ALPHA IS OPACITY — the shape of a leaf cut
+    // out of the quad it is drawn on. Both unit families keep a team-colour mask
+    // in an alpha channel somewhere, so this distinction is the difference
+    // between a palm tree and a solid green card in the player's colour.
+    //
+    // Replaces any previously set props. An empty batch list clears them.
+    void setProps(std::span<const dds::Texture> textures, std::span<const PropBatch> batches);
 
     // Opens a frame that is going to push new instance data, blocking until the
     // GPU has finished with the ring slot about to be overwritten.
@@ -286,6 +318,7 @@ private:
 
     void releaseTerrainBuffers() noexcept;
     void releaseUnitBuffers() noexcept;
+    void releasePropBuffers() noexcept;
 
     /// Uploads a decoded DDS as a Metal texture, mips and all. Returns a +1
     /// object the caller owns. Throws if the allocation fails.
@@ -448,10 +481,26 @@ private:
         /// When set, the renderer's clock contributes nothing and each
         /// instance's phase is the whole answer — see UnitBatch.
         bool animationDrivenByInstance = false;
+
+        /// When set, the diffuse texture's alpha is opacity rather than a
+        /// team-colour mask, and the fragment shader cuts the fragment out
+        /// instead of tinting it. Props only.
+        bool alphaIsOpacity = false;
     };
 
     std::vector<GpuUnitBatch> unitBatches_;
     std::vector<MTL::Texture*> unitTextures_;  // owned, indexed by TexturePair
+
+    // Scenery, in the same GPU shape as a unit batch but held apart — see
+    // PropBatch.hpp for why props must not be in the list the sim ticks.
+    //
+    // Their instance buffers hold ONE copy rather than kMaxFramesInFlight: a
+    // prop never moves, so nothing rewrites them and there is nothing for a
+    // frame in flight to race against. On the busiest stock map that is 47k
+    // instances, so the two spare copies units need would be 4.5 MB of buffer
+    // that is written once and read forever.
+    std::vector<GpuUnitBatch> propBatches_;
+    std::vector<MTL::Texture*> propTextures_;  // owned, indexed by PropBatch::albedo
 
     /// Caller batch index -> index into unitBatches_, or kNoBatch for one that
     /// was skipped at upload (no model, no geometry, no instances). setUnits
@@ -498,6 +547,7 @@ private:
     Environment environment_{};
     bool reflectionsEnabled_ = true;
     bool stratumNormalsEnabled_ = true;
+    bool propsVisible_ = true;
 
     // Selection rings. One buffer with a slot per frame in flight, exactly like
     // the unit instances and for the same reason: the vertices are rewritten

@@ -269,3 +269,33 @@ TEST_CASE("errors carry a line number that points at the problem") {
     REQUIRE_FALSE(root.has_value());
     REQUIRE(root.error().line == 3);
 }
+
+// --- '#' line comments -------------------------------------------------------
+// Not Lua. Real Lua allows '#' only on a file's first line and otherwise reads
+// it as the length operator — but Supreme Commander's prop blueprints use it as
+// an ordinary line comment, in 47 of the 335 that ship, so the game's own reader
+// evidently accepts it.
+
+TEST_CASE("a '#' at the start of a line is a comment") {
+    const auto table = rm::lua::parseTable(R"LUA(
+{
+    # share other rock's albedo and specteam
+    scale = 0.04,
+#            ShaderName = 'Metal',
+    cutoff = 100,
+}
+)LUA");
+    REQUIRE(table.has_value());
+    CHECK(table->numberAt("scale") == 0.04);
+    CHECK(table->numberAt("cutoff") == 100.0);
+    // The commented-out assignment did not arrive.
+    CHECK(table->find("ShaderName") == nullptr);
+}
+
+TEST_CASE("a '#' in value position is still refused") {
+    // The deliberate limit. Lua's '#' is the length operator, which needs
+    // evaluating; treating it as a comment ANYWHERE would make this swallow the
+    // rest of the line and quietly drop `scale` instead of saying so.
+    const auto table = rm::lua::parseTable("{ count = #items, scale = 2 }");
+    REQUIRE_FALSE(table.has_value());
+}

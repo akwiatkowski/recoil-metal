@@ -13,6 +13,8 @@
 #include "core/model/Sca.hpp"
 #include "core/model/Scm.hpp"
 #include "core/scene/Picking.hpp"
+#include "core/map/PropBlueprint.hpp"
+#include "core/scene/PropBatch.hpp"
 #include "core/scene/Selection.hpp"
 #include "core/scene/SelectionRing.hpp"
 #include "core/scene/UnitPlacement.hpp"
@@ -196,6 +198,11 @@ struct LoadedMap {
     rm::dds::Texture splatMaskB;
 
     std::vector<rm::mapinfo::StartPosition> starts;
+
+    // .scmap: the props the map places — trees, rocks, wrecks. Kept as the map
+    // stated them; resolving each blueprint to a mesh is a separate step, because
+    // it reads files the map only names.
+    std::vector<rm::scmap::Prop> props;
 
     // Recoil's water is a fixed plane at y = 0 that every map shares; Supreme
     // Commander stores a level per map, and 17 of the 60 stock maps are dry.
@@ -407,6 +414,11 @@ struct LoadedSplat {
         }
     }
 
+    loaded.props = std::move(map->props);
+    if (!loaded.props.empty()) {
+        std::printf("  props: %zu placed\n", loaded.props.size());
+    }
+
     loaded.field = std::move(map->field);
     return loaded;
 }
@@ -546,6 +558,130 @@ private:
     std::vector<rm::dds::Texture> textures_;
     std::map<std::string, int> indexByPath_;
 };
+
+// Everything the map's scenery contributes to the scene: one mesh per distinct
+// blueprint, and the instances to draw each at.
+//
+// Held in deques for the same reason the units are: PropBatch keeps a pointer to
+// the model and a span over the instances, so neither may be reallocated once a
+// batch has been built.
+struct PropScene {
+    std::deque<rm::Model> models;
+    std::deque<std::vector<rm::UnitInstance>> instances;
+    std::vector<rm::PropBatch> batches;
+    TextureRegistry textures;
+};
+
+/// The yaw of a prop's stored rotation basis.
+///
+/// The basis is 3x3 and the instance format carries Euler angles, so something
+/// has to give. 98.4% of the 418 942 props in the stock corpus are rotations
+/// about +Y alone — the map editor spins a tree, it does not tip one over — so
+/// yaw is very nearly the whole of it. The 1.6% that are genuinely tilted are
+/// tree GROUPS, and losing their tilt leaves a clump of trees standing straight
+/// instead of leaning; the alternative, decomposing an arbitrary basis into the
+/// shader's roll-pitch-yaw order, is real work for a sixth of one percent of the
+/// scenery leaning the wrong way.
+///
+/// HANDEDNESS IS NOT VERIFIED, and this comment is the honest place to say so.
+/// The file states a basis and nothing states whether its columns or its rows are
+/// the axes, and the corpus cannot settle it: getting it backwards mirrors each
+/// prop about its own vertical axis, and a mirrored pine is a pine. Should a
+/// distinctive asymmetric prop ever turn up, this is the line to check.
+[[nodiscard]] float propYaw(const rm::scmap::Prop& prop) noexcept {
+    return std::atan2(prop.rotationX[2], prop.rotationX[0]);
+}
+
+/// Loads every prop mesh a map names, and the instances to draw them at.
+///
+/// Grouped by blueprint, so a map placing 14 000 pines costs one mesh, one
+/// texture and one instanced draw. That grouping is the whole reason this is
+/// affordable: the busiest stock map places 46 971 props, and one draw each would
+/// be more draw calls than everything else in the frame put together.
+[[nodiscard]] PropScene loadProps(const LoadedMap& map, const std::filesystem::path& root) {
+    PropScene scene;
+    if (map.props.empty()) {
+        return scene;
+    }
+
+    // Blueprint -> the instances placed with it, in first-seen order so that a
+    // screenshot does not depend on how a hash table happened to bucket.
+    std::map<std::string, std::vector<rm::UnitInstance>> byBlueprint;
+    for (const rm::scmap::Prop& prop : map.props) {
+        byBlueprint[prop.blueprint].push_back(rm::UnitInstance{
+            .position = prop.position,
+            .rotationY = propYaw(prop),
+            // The MAP's scale, which is 1.0 for every prop in the retail corpus —
+            // the size that matters comes from the blueprint and is applied below,
+            // multiplied rather than substituted so a map that does set one is
+            // still honoured.
+            .scale = prop.scale[0],
+        });
+    }
+
+    std::size_t emitters = 0;
+    std::size_t unreadable = 0;
+    std::size_t drawn = 0;
+
+    for (auto& [blueprint, instances] : byBlueprint) {
+        const auto info = rm::prop::loadFile(root, blueprint);
+        if (!info) {
+            // An emitter is not a failure: eight of the blueprints the stock maps
+            // name are particle effects with no geometry at all.
+            if (info.error().code == rm::MapError::Code::MissingMesh) {
+                ++emitters;
+            } else {
+                ++unreadable;
+                std::fprintf(stderr, "  prop %s: %s\n", blueprint.c_str(),
+                             info.error().message.c_str());
+            }
+            continue;
+        }
+
+        auto model = rm::scm::loadFile(info->mesh);
+        if (!model) {
+            ++unreadable;
+            std::fprintf(stderr, "  prop mesh %s: %s\n",
+                         info->mesh.filename().string().c_str(), model.error().message.c_str());
+            continue;
+        }
+
+        // Two conversions, and both are needed.
+        //
+        // UniformScale takes the mesh to OGRIDS — Supreme Commander's world unit,
+        // not this renderer's. Cross-checked against the blueprints themselves:
+        // the palm and the pine both declare SizeY = 1, the collision height in
+        // ogrids, and their meshes measure 0.96 and 1.18 once scaled. Then an
+        // ogrid is 8 elmos, the same factor the map's prop POSITIONS take when
+        // they are read (Scmap.cpp), so the two agree about the world they land
+        // in. Applying only the first leaves a pine 1.2 elmos tall — visible as a
+        // scatter of dark specks, which reads as a texture problem rather than a
+        // units one.
+        for (rm::UnitInstance& instance : instances) {
+            instance.scale *= info->uniformScale * rm::scmap::kElmosPerOgrid;
+        }
+
+        scene.models.push_back(std::move(*model));
+        scene.instances.push_back(std::move(instances));
+        scene.batches.push_back(rm::PropBatch{
+            .model = &scene.models.back(),
+            .instances = scene.instances.back(),
+            .albedo = scene.textures.resolve(info->albedo, "prop albedo"),
+        });
+        drawn += scene.instances.back().size();
+    }
+
+    std::printf("  props: %zu meshes, %zu instances, %zu textures", scene.batches.size(), drawn,
+                scene.textures.size());
+    if (emitters > 0) {
+        std::printf(", %zu emitters skipped", emitters);
+    }
+    if (unreadable > 0) {
+        std::printf(", %zu unreadable", unreadable);
+    }
+    std::printf("\n");
+    return scene;
+}
 
 /// Where a Recoil model's named texture lives, resolved against the search roots.
 [[nodiscard]] std::filesystem::path barTexturePath(const rm::vfs::AssetSearch& search,
@@ -1522,6 +1658,20 @@ int main(int argc, const char* argv[]) {
         }
         std::printf("\n");
 
+        // The map's own scenery: trees, rocks, wrecks. Loaded once here and
+        // shared by all three modes below, because it is the same scene however
+        // it gets to the screen.
+        //
+        // Only a .scmap has any — a Recoil .smf carries a feature list too, but
+        // BAR's own maps declare it empty and place their objects through a
+        // runtime Lua gadget, so there is nothing there to read yet.
+        const char* propHome = std::getenv("HOME");
+        const PropScene props =
+            hasFlag(argc, argv, "--no-props")
+                ? PropScene{}
+                : loadProps(*map, std::filesystem::path{propHome == nullptr ? "" : propHome}
+                                      / kFaEnvDir);
+
         const BenchOptions bench = parseBench(argc, argv);
 
         // --- Headless offscreen benchmark ----------------------------------
@@ -1533,6 +1683,7 @@ int main(int argc, const char* argv[]) {
             renderer.setTerrain(mesh);
             applyGround(renderer, *map);
             renderer.setUnits(units.textures.all(), units.batches);
+            renderer.setProps(props.textures.all(), props.batches);
             renderer.setAnimationTime(animationTime);
             renderer.setReflections(!hasFlag(argc, argv, "--no-reflections"));
             renderer.setStratumNormals(!hasFlag(argc, argv, "--no-stratum-normals"));
@@ -1567,6 +1718,7 @@ int main(int argc, const char* argv[]) {
             renderer.setTerrain(mesh);
             applyGround(renderer, *map);
             renderer.setUnits(units.textures.all(), units.batches);
+            renderer.setProps(props.textures.all(), props.batches);
             renderer.setAnimationTime(animationTime);
             renderer.setReflections(!hasFlag(argc, argv, "--no-reflections"));
             renderer.setStratumNormals(!hasFlag(argc, argv, "--no-stratum-normals"));
@@ -1616,6 +1768,7 @@ int main(int argc, const char* argv[]) {
         rm::Window window{1280, 720, "recoil-metal — m8: movable units"};
         window.setTerrain(mesh);
         applyGround(window, *map);
+        window.setProps(props.textures.all(), props.batches);
 
         // Only the windowed path steps the sim, so only it can pace a walk
         // cycle by distance. The headless paths — screenshots and benchmarks —
@@ -1650,6 +1803,11 @@ int main(int argc, const char* argv[]) {
                 const bool enabled = !window.stratumNormalsEnabled();
                 window.setStratumNormals(enabled);
                 std::printf("stratum normals %s\n", enabled ? "on" : "off");
+                std::fflush(stdout);
+            } else if (key == 'p') {
+                const bool visible = !window.propsVisible();
+                window.setPropsVisible(visible);
+                std::printf("props %s\n", visible ? "on" : "off");
                 std::fflush(stdout);
             }
         });

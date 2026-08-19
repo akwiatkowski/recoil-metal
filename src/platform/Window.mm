@@ -340,6 +340,11 @@ void Window::setWater(bool enabled, float levelElmos) {
     impl_->renderer->setWater(enabled, levelElmos);
 }
 
+void Window::setProps(std::span<const dds::Texture> textures,
+                      std::span<const PropBatch> batches) {
+    impl_->renderer->setProps(textures, batches);
+}
+
 void Window::setUnits(std::span<const dds::Texture> textures,
                       std::span<const UnitBatch> batches) {
     impl_->renderer->setUnits(textures, batches);
@@ -368,6 +373,14 @@ void Window::setReflections(bool enabled) {
 
 bool Window::reflectionsEnabled() const {
     return impl_->renderer->reflectionsEnabled();
+}
+
+void Window::setPropsVisible(bool visible) {
+    impl_->renderer->setPropsVisible(visible);
+}
+
+bool Window::propsVisible() const {
+    return impl_->renderer->propsVisible();
 }
 
 void Window::setStratumNormals(bool enabled) {

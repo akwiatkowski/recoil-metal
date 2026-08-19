@@ -65,7 +65,33 @@ private:
     // of its meaning here. 524 occurrences across the stock corpus, all under
     // the army section this renderer does not use — but the reader parses the
     // whole file, so it must still be understood rather than stumbled over.
-    static constexpr std::string_view kGroupConstructor = "GROUP";
+    // ...and it is not alone. Supreme Commander's blueprints are written the
+    // same way: a prop's `.bp` file IS one of these calls, wrapping the whole
+    // blueprint, with `Sound { ... }` nested wherever it names an audio cue.
+    //
+    // Closed by evidence like the list above: these are the only names appearing
+    // in call-with-table position across the 335 prop blueprints in env.scd and
+    // the 61 stock maps' _save.lua. (A survey by regex also turns up "Sand",
+    // which is a false positive from `HelpText = 'Desert Blowing Sand (dark)'` —
+    // worth stating, because it is the kind of thing that quietly widens an
+    // allow-list.) MeshBlueprint appears once, in a DevTest sphere no map
+    // references, and is accepted because excluding it would be a special case
+    // rather than a rule.
+    static constexpr std::string_view kTableConstructors[] = {
+        "GROUP",           // _save.lua army groups
+        "PropBlueprint",   // a prop's .bp, 334 of 335
+        "MeshBlueprint",   // the remaining one
+        "Sound",           // nested in a blueprint's Audio table
+    };
+
+    [[nodiscard]] static bool isTableConstructor(std::string_view name) noexcept {
+        for (const std::string_view known : kTableConstructors) {
+            if (known == name) {
+                return true;
+            }
+        }
+        return false;
+    }
 
     static constexpr DataConstructor kDataConstructors[] = {
         {"STRING", 1, Value::Type::Text},
@@ -147,6 +173,25 @@ private:
         return pos_ + ahead < source_.size() ? source_[pos_ + ahead] : '\0';
     }
 
+    /// Whether nothing but whitespace stands between here and the line's start.
+    ///
+    /// Looked up by scanning back rather than tracked in a member, because the
+    /// parser rewinds pos_ when a lookahead does not pan out (see the data
+    /// constructors) and a flag would survive the rewind while the position did
+    /// not. The scan stops at the first non-space, so it costs the indentation.
+    [[nodiscard]] bool atLineStart() const noexcept {
+        for (std::size_t back = pos_; back > 0; --back) {
+            const char c = source_[back - 1];
+            if (c == '\n') {
+                return true;
+            }
+            if (std::isspace(static_cast<unsigned char>(c)) == 0) {
+                return false;
+            }
+        }
+        return true;  // start of the buffer
+    }
+
     void advance() noexcept {
         if (pos_ < source_.size() && source_[pos_] == '\n') {
             ++line_;
@@ -166,6 +211,25 @@ private:
             const char c = peek();
             if (std::isspace(static_cast<unsigned char>(c)) != 0) {
                 advance();
+                continue;
+            }
+
+            // A '#' comment, which is NOT Lua. Real Lua allows '#' only on a
+            // file's first line (the shebang concession) and otherwise reads it
+            // as the length operator. Supreme Commander's blueprints use it as an
+            // ordinary line comment anyway — 47 of the 335 shipped prop
+            // blueprints do, mostly "# share other rock's albedo and specteam",
+            // and two to comment out a whole assignment — so the game's own
+            // reader must accept it and so must this one.
+            //
+            // Only at the START of a line, which is where all 47 occurrences sit.
+            // Accepting it anywhere would make `Foo = #bar,` swallow the rest of
+            // the line and quietly drop a field, where today it is an error that
+            // says so.
+            if (c == '#' && atLineStart()) {
+                while (!atEnd() && peek() != '\n') {
+                    advance();
+                }
                 continue;
             }
             if (c == '-' && peek(1) == '-') {
@@ -352,7 +416,7 @@ private:
             const std::size_t afterNameLine = line_;
             skipTrivia();
 
-            if (name == kGroupConstructor && peek() == '{') {
+            if (isTableConstructor(name) && peek() == '{') {
                 return parseTable();
             }
             if (peek() == '(') {
