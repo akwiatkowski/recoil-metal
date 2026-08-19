@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -68,6 +69,30 @@ struct Army {
     /// part.
     bool defeated = false;
 };
+
+/// Whether a blueprint id names a commander.
+///
+/// The victory condition rests on this, so it is a lookup against the four rather than a
+/// pattern match on the id: `UEL0001` is a commander and `UEL0101` is a tank, one
+/// character apart, and a prefix rule would end a match when a tank died.
+[[nodiscard]] bool isCommanderId(std::string_view blueprintId) noexcept;
+
+/// Marks every army with no commander left as defeated, and returns how many newly fell.
+///
+/// `commandersAlive` is indexed by army: how many living commanders each still has. An
+/// army that never had one — nothing spawned for it — is NOT defeated by this, because
+/// "never had" and "lost it" are different states and a scene that spawns no commanders
+/// at all should not declare everyone dead on the first tick.
+[[nodiscard]] std::size_t applyDefeats(std::vector<Army>& armies,
+                                       std::span<const int> commandersAlive,
+                                       std::span<const int> commandersEver);
+
+/// Who has won, or nothing while the match is still on.
+///
+/// A TEAM rather than an army, since allies win together. Nothing when two or more teams
+/// survive, and nothing when none does — that last is a draw, which is a legitimate
+/// outcome (two commanders inside one blast) rather than an error.
+[[nodiscard]] std::optional<int> winningTeam(const std::vector<Army>& armies) noexcept;
 
 /// Whether two armies are on the same side. An army is allied with itself, which
 /// matters because "do not shoot allies" would otherwise have every unit shoot

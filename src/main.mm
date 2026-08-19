@@ -1026,6 +1026,32 @@ struct UnitScene {
     /// The blueprint each Construction becomes, by its `blueprintIndex`.
     std::vector<rm::unitdef::UnitDef> buildable;
 
+    /// How many commanders each army STARTED with, indexed by army. The win condition
+    /// needs it to tell "lost its commander" from "never had one" — a `--units` crowd must
+    /// not be declared a draw on the first tick.
+    std::vector<int> commandersEver;
+
+    /// Living commanders per army, recounted each tick.
+    [[nodiscard]] std::vector<int> countCommanders() const {
+        std::vector<int> alive(armies.size(), 0);
+        for (std::size_t b = 0; b < motion.size(); ++b) {
+            const rm::unitdef::UnitDef* def = b < defs.size() ? defs[b] : nullptr;
+            if (def == nullptr || !rm::sim::isCommanderId(def->name)) {
+                continue;
+            }
+            for (std::size_t i = 0; i < motion[b].size(); ++i) {
+                const int army = motion[b][i].armyIndex;
+                if (army < 0 || static_cast<std::size_t>(army) >= alive.size()) {
+                    continue;
+                }
+                if (b < health.size() && i < health[b].size() && health[b][i].alive()) {
+                    ++alive[static_cast<std::size_t>(army)];
+                }
+            }
+        }
+        return alive;
+    }
+
     /// The combat pass's view of the scene, rebuilt when the batch list changes rather
     /// than every tick — the spans are stable because the deques never reallocate.
     [[nodiscard]] std::vector<rm::sim::CombatGroup> combatGroups() {
@@ -1464,6 +1490,7 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
 
     // Each army starts with the commander's trickle and one extractor's worth of storage,
     // which is what makes the first build affordable — see kCommanderTrickle.
+    scene.commandersEver = scene.countCommanders();
     scene.economies.assign(scene.armies.size(), rm::sim::Economy{});
     for (rm::sim::Economy& economy : scene.economies) {
         economy.incomePerSecond = rm::sim::kCommanderTrickle;
@@ -2041,6 +2068,8 @@ void march(UnitScene& scene, const rm::HeightField& field, PassabilitySet& passa
     std::size_t total = 0;
     std::size_t shotsFired = 0;
     std::size_t completedBuilds = 0;
+    bool matchOver = false;
+    std::vector<bool> announced(scene.armies.size(), false);
     for (std::size_t batch = 0; batch < scene.motion.size(); ++batch) {
         for (std::size_t i = 0; i < scene.motion[batch].size(); ++i) {
             ++total;
@@ -2083,6 +2112,41 @@ void march(UnitScene& scene, const rm::HeightField& field, PassabilitySet& passa
             shotsFired += rm::sim::fireWeapons(combat, scene.armies, scene.projectiles);
             rm::sim::advanceProjectiles(scene.projectiles, combat, scene.armies, field);
             retireDead(scene);
+
+            // The match, checked every tick rather than at the end: an army that loses its
+            // commander stops being a target and stops shooting from that moment, which is
+            // what `hostile()` already reads, so a late check would leave a dead side
+            // fighting on.
+            const std::vector<int> alive = scene.countCommanders();
+            if (rm::sim::applyDefeats(scene.armies, alive, scene.commandersEver) > 0) {
+                for (const rm::sim::Army& army : scene.armies) {
+                    if (army.defeated && !announced[static_cast<std::size_t>(army.index)]) {
+                        announced[static_cast<std::size_t>(army.index)] = true;
+                        std::printf("  [%6.1fs] army %d (%s) has lost its commander\n",
+                                    static_cast<double>(static_cast<float>(i)
+                                                        * rm::sim::kTickSeconds),
+                                    army.index,
+                                    std::string{rm::sim::factionName(army.faction)}.c_str());
+                    }
+                }
+            }
+            if (!matchOver && !scene.armies.empty()) {
+                const std::optional<int> winner = rm::sim::winningTeam(scene.armies);
+                const std::size_t left = rm::sim::survivorCount(scene.armies);
+                if (left <= 1) {
+                    matchOver = true;
+                    if (winner) {
+                        std::printf("  [%6.1fs] team %d WINS\n",
+                                    static_cast<double>(static_cast<float>(i)
+                                                        * rm::sim::kTickSeconds),
+                                    *winner);
+                    } else {
+                        std::printf("  [%6.1fs] a DRAW: every army lost its commander\n",
+                                    static_cast<double>(static_cast<float>(i)
+                                                        * rm::sim::kTickSeconds));
+                    }
+                }
+            }
         }
 
         // The economy, per army. Constructions are partitioned by owner here rather than

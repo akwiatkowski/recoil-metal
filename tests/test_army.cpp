@@ -128,3 +128,73 @@ TEST_CASE("no armies at all is an empty list, not a crash") {
     CHECK(rm::sim::freeForAll(0).empty());
     CHECK(rm::sim::survivorCount({}) == 0);
 }
+
+TEST_CASE("a commander is identified by its exact id, not by a pattern") {
+    // The victory condition rests on this. `UEL0001` is a commander and `UEL0101` is a
+    // tank — one character apart — so a prefix rule would end a match when a tank died.
+    CHECK(rm::sim::isCommanderId("UEL0001"));
+    CHECK(rm::sim::isCommanderId("UAL0001"));
+    CHECK(rm::sim::isCommanderId("URL0001"));
+    CHECK(rm::sim::isCommanderId("XSL0001"));
+
+    CHECK_FALSE(rm::sim::isCommanderId("UEL0101"));  // a tank
+    CHECK_FALSE(rm::sim::isCommanderId("UEL0201"));  // the medium tank used throughout
+    CHECK_FALSE(rm::sim::isCommanderId("UEB1103"));  // a mass extractor
+    CHECK_FALSE(rm::sim::isCommanderId(""));
+}
+
+TEST_CASE("losing your commander loses you the match") {
+    std::vector<Army> armies = rm::sim::freeForAll(3);
+    const std::vector<int> ever{1, 1, 1};
+
+    // Everyone still has theirs.
+    CHECK(rm::sim::applyDefeats(armies, std::vector<int>{1, 1, 1}, ever) == 0);
+    CHECK(rm::sim::survivorCount(armies) == 3);
+    CHECK_FALSE(rm::sim::winningTeam(armies).has_value());  // the match is on
+
+    // Army 1's falls.
+    CHECK(rm::sim::applyDefeats(armies, std::vector<int>{1, 0, 1}, ever) == 1);
+    CHECK(armies[1].defeated);
+    CHECK(rm::sim::survivorCount(armies) == 2);
+    CHECK_FALSE(rm::sim::winningTeam(armies).has_value());  // still two teams
+
+    // ...and army 2's. Army 0 wins.
+    CHECK(rm::sim::applyDefeats(armies, std::vector<int>{1, 0, 0}, ever) == 1);
+    const auto winner = rm::sim::winningTeam(armies);
+    REQUIRE(winner.has_value());
+    CHECK(*winner == armies[0].team);
+
+    // And a defeat is not re-counted on a later tick, or the report would climb forever.
+    CHECK(rm::sim::applyDefeats(armies, std::vector<int>{1, 0, 0}, ever) == 0);
+}
+
+TEST_CASE("allies win together") {
+    std::vector<Army> armies = rm::sim::freeForAll(4);
+    armies[1].team = armies[0].team;  // 0 and 1 are allies
+
+    const std::vector<int> ever{1, 1, 1, 1};
+    (void)rm::sim::applyDefeats(armies, std::vector<int>{1, 1, 0, 0}, ever);
+
+    // Two armies left, but ONE team — so the match is over and they won together.
+    CHECK(rm::sim::survivorCount(armies) == 2);
+    const auto winner = rm::sim::winningTeam(armies);
+    REQUIRE(winner.has_value());
+    CHECK(*winner == armies[0].team);
+}
+
+TEST_CASE("everyone dying at once is a draw, not a winner") {
+    // Two commanders inside one blast. A legitimate outcome rather than an error.
+    std::vector<Army> armies = rm::sim::freeForAll(2);
+    (void)rm::sim::applyDefeats(armies, std::vector<int>{0, 0}, std::vector<int>{1, 1});
+
+    CHECK(rm::sim::survivorCount(armies) == 0);
+    CHECK_FALSE(rm::sim::winningTeam(armies).has_value());
+}
+
+TEST_CASE("an army that never had a commander is not defeated by not having one") {
+    // Otherwise a `--units` crowd, or a map with no spawns, declares every army defeated
+    // on the first tick and announces a draw before anything has happened.
+    std::vector<Army> armies = rm::sim::freeForAll(2);
+    CHECK(rm::sim::applyDefeats(armies, std::vector<int>{0, 0}, std::vector<int>{0, 0}) == 0);
+    CHECK(rm::sim::survivorCount(armies) == 2);
+}

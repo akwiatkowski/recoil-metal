@@ -64,6 +64,51 @@ std::string commanderBlueprintPath(Faction faction) {
     return "/units/" + id + "/" + id + "_unit.bp";
 }
 
+bool isCommanderId(std::string_view blueprintId) noexcept {
+    for (const FactionInfo& info : kFactions) {
+        if (info.commanderId == blueprintId) {
+            return true;
+        }
+    }
+    return false;
+}
+
+std::size_t applyDefeats(std::vector<Army>& armies, std::span<const int> commandersAlive,
+                         std::span<const int> commandersEver) {
+    std::size_t newlyDefeated = 0;
+    for (Army& army : armies) {
+        if (army.defeated) {
+            continue;
+        }
+        const auto i = static_cast<std::size_t>(army.index);
+        if (i >= commandersAlive.size() || i >= commandersEver.size()) {
+            continue;
+        }
+        // Only an army that HAD a commander can lose it. Without this a scene with no
+        // commanders at all — a `--units` crowd, or a map with no spawns — declares every
+        // army defeated on the first tick and announces a draw before anything happens.
+        if (commandersEver[i] > 0 && commandersAlive[i] == 0) {
+            army.defeated = true;
+            ++newlyDefeated;
+        }
+    }
+    return newlyDefeated;
+}
+
+std::optional<int> winningTeam(const std::vector<Army>& armies) noexcept {
+    std::optional<int> survivor;
+    for (const Army& army : armies) {
+        if (army.defeated) {
+            continue;
+        }
+        if (survivor && *survivor != army.team) {
+            return std::nullopt;  // two teams still standing: the match is on
+        }
+        survivor = army.team;
+    }
+    return survivor;  // nullopt when nobody is left, which is a draw
+}
+
 bool allied(const Army& a, const Army& b) noexcept { return a.team == b.team; }
 
 bool hostile(const Army& a, const Army& b) noexcept {
