@@ -3,6 +3,7 @@
 #include "core/Error.hpp"
 
 #include <expected>
+#include <limits>
 #include <filesystem>
 #include <string_view>
 
@@ -36,6 +37,21 @@ struct Blueprint {
     /// a palm's is 0.04. Skip this and every tree renders twenty-five times too
     /// big, which reads as a units bug in the mesh loader.
     float uniformScale = 1.0f;
+
+    /// Beyond this distance from the camera the prop is not drawn at all, in
+    /// elmos. Infinity when the blueprint states no cutoff.
+    ///
+    /// The game's own answer to "how much scenery is worth drawing", and it is
+    /// GRADED per prop: a blueprint's LOD table gives a cutoff distance per level,
+    /// and the furthest is where the engine stops drawing it. Across the 335
+    /// shipped blueprints those run from 10 to 1000 — a shrub disappears at 100
+    /// where a big tree survives to 1000 — so zooming out thins the small detail
+    /// first and keeps the landmarks, which is what a person would ask for and
+    /// happens to be free because the numbers are already in the file.
+    ///
+    /// Stated in ogrids by the file, converted here, for the same reason the
+    /// positions are: everything downstream of the loaders is in elmos.
+    float drawDistanceElmos = std::numeric_limits<float>::infinity();
 };
 
 /// Reads a blueprint, resolving its mesh and texture against the extracted game

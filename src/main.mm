@@ -670,12 +670,29 @@ struct PropScene {
             .model = &scene.models.back(),
             .instances = scene.instances.back(),
             .albedo = scene.textures.resolve(info->albedo, "prop albedo"),
+            // The blueprint's own furthest LOD cutoff: how far out the game keeps
+            // drawing this prop. Graded per prop, so zooming out loses the shrubs
+            // before the landmark trees.
+            .drawDistanceElmos = info->drawDistanceElmos,
         });
         drawn += scene.instances.back().size();
     }
 
+    // The draw distances, since they decide what a zoomed-out frame costs. Reported
+    // as a range because they are graded per prop rather than one number.
+    float nearest = std::numeric_limits<float>::infinity();
+    float furthest = 0.0f;
+    for (const rm::PropBatch& batch : scene.batches) {
+        nearest = std::min(nearest, batch.drawDistanceElmos);
+        furthest = std::max(furthest, batch.drawDistanceElmos);
+    }
+
     std::printf("  props: %zu meshes, %zu instances, %zu textures", scene.batches.size(), drawn,
                 scene.textures.size());
+    if (!scene.batches.empty()) {
+        std::printf(", drawn within %.0f..%.0f elmos", static_cast<double>(nearest),
+                    static_cast<double>(furthest));
+    }
     if (emitters > 0) {
         std::printf(", %zu emitters skipped", emitters);
     }

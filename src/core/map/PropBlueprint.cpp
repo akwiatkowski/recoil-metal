@@ -1,6 +1,9 @@
 #include "core/map/PropBlueprint.hpp"
 
 #include "core/lua/LuaTable.hpp"
+#include "core/map/Scmap.hpp"
+
+#include <algorithm>
 
 #include <string>
 #include <utility>
@@ -93,18 +96,42 @@ std::expected<Blueprint, MapError> loadFile(const std::filesystem::path& root,
         blueprint.uniformScale = static_cast<float>(*scale);
     }
 
-    // The FIRST LOD's albedo. `LODs` is a Lua array, so its entries are
-    // positional and land in `items`; they run finest-first, and only the mesh's
-    // LOD 0 is ever drawn here.
+    // The LOD table, which carries two things this renderer wants and one it does
+    // not. `LODs` is a Lua array, so its entries are positional and land in
+    // `items`, and they run finest-first.
     if (const lua::Value* lods = table->path("Display", "Mesh", "LODs");
         lods != nullptr && !lods->items.empty()) {
-        if (const std::optional<std::string_view> albedo = lods->items.front().stringAt("AlbedoName")) {
+        // The FIRST entry's albedo, because only the mesh's LOD 0 is ever drawn
+        // here — pairing it with a later LOD's texture would put a low-resolution
+        // image on full-resolution geometry, subtly soft with nothing on screen to
+        // say why.
+        if (const std::optional<std::string_view> albedo =
+                lods->items.front().stringAt("AlbedoName")) {
             // Named relative to the blueprint's own directory, not to the game
             // root — the LOD table gives a bare file name.
             const std::filesystem::path texture = path.parent_path() / *albedo;
             if (std::filesystem::is_regular_file(texture, ec)) {
                 blueprint.albedo = texture;
             }
+        }
+
+        // ...and the FURTHEST cutoff, which is where the engine stops drawing the
+        // prop at all. A non-positive cutoff means no limit — only the four
+        // DevTest blueprints do that, and no stock map references them, but
+        // reading -1 as "cull at -8 elmos" would make them permanently invisible
+        // instead of permanently visible.
+        float furthest = 0.0f;
+        bool unlimited = false;
+        for (const lua::Value& lod : lods->items) {
+            const std::optional<double> cutoff = lod.numberAt("LODCutoff");
+            if (!cutoff || *cutoff <= 0.0) {
+                unlimited = true;
+                break;
+            }
+            furthest = std::max(furthest, static_cast<float>(*cutoff));
+        }
+        if (!unlimited && furthest > 0.0f) {
+            blueprint.drawDistanceElmos = furthest * scmap::kElmosPerOgrid;
         }
     }
 

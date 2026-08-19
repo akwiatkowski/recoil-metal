@@ -90,6 +90,7 @@ add_library(rm_core STATIC
     src/core/texture/Dds.cpp
     src/core/scene/UnitPlacement.cpp
     src/core/scene/UnitBatch.cpp
+    src/core/scene/PropBatch.cpp
     src/core/scene/Picking.cpp
     src/core/scene/Selection.cpp
     src/core/scene/GroundDecals.cpp
@@ -150,6 +151,7 @@ if(BUILD_TESTING)
         tests/test_selection.cpp
         tests/test_ground_decals.cpp
         tests/test_particles.cpp
+        tests/test_prop_culling.cpp
         tests/test_pathfinding.cpp
         tests/test_unit_def.cpp
         tests/test_asset_search.cpp

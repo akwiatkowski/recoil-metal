@@ -922,11 +922,33 @@ leaves are painted on: hard rectangles scattered over the ground, worse than
 nothing. Giving that pass a discarding fragment shader would cost every
 shadow-casting surface its early-depth rejection, for scenery.
 
-And they are expensive: +2.8 ms of a 7.6 ms frame at 5182 props, +6.2 of 11.2 at
-46 971, because every one draws at its finest LOD. The blueprints ship three meshes
-each and state the distances to switch between them, so the data is already parsed;
-choosing one level per scene from the camera distance is the cheap version and is
-named in `setProps`. Until then, `p` turns them off.
+**And they are culled by distance, per prop, per frame**, using the furthest LOD
+cutoff their own blueprint states — 10 to 1000 ogrids across the 335 shipped ones,
+so a shrub goes at 800 elmos and a landmark tree survives to 8000.
+
+This is why they stopped being expensive. Before it, 5182 props cost 2.8 ms of a
+7.6 ms frame and the busiest map's 46 971 cost 6.2 of 11.2 — paid at exactly the
+framing where a tree is a pixel. After it, a whole-map view costs nothing
+measurable (4.156 ms against 4.263 with the feature off) and a working zoom costs
+0.17 ms for scenery that is actually visible.
+
+The cull is a per-frame CPU pass over every prop, which sounds like the wrong trade
+and is not: the test is a squared distance, the OUTPUT is small in both regimes
+(almost nothing survives when zoomed out, and only what is near survives when zoomed
+in), and it buys back six milliseconds of vertex shading. It needs the instances kept
+CPU-side to filter from — 2.2 MB on the busiest map — and it turns the prop instance
+buffer into a per-frame ring like the units', since what is in it now changes even
+though the props do not move.
+
+Nothing pops, and not by luck: graded cutoffs spread the disappearance across the
+zoom range. Measured as the share of pixels the scenery accounts for while pulling
+back — 12.1%, 8.6%, 2.6%, 1.11%, 0.33%, 0.05%, none — so the last props to go are
+contributing a twentieth of one percent of the frame.
+
+What remains is the mesh LODs: a prop that IS drawn is drawn at its finest level,
+and using the other two cutoffs would need a batch per (blueprint, level) with the
+level chosen per prop per frame. That buys the mid-range, which is the 0.17 ms still
+on the table.
 
 ---
 

@@ -545,6 +545,25 @@ reimplemented.*
     second and a pine is 1.2 elmos tall: a scatter of dark specks that reads as a
     texture problem rather than a units one. See [ADR-024](ADR_DECISIONS.md).
 
+    **Props are culled by distance, per prop, using the cutoff their own blueprint
+    states** — which is what makes zooming out free. A blueprint's LOD table gives a
+    cutoff per level, and across the 335 shipped ones the furthest runs from 10 to
+    1000 ogrids: a shrub stops being drawn at 800 elmos where a landmark tree
+    survives to 8000. So the scenery thins from the small detail upwards as the
+    camera pulls back, and at a whole-map framing every prop is past its own cutoff.
+
+    | view | props on | props off | before the cull |
+    |---|---|---|---|
+    | SCMP_009 whole-map, 5182 props | 4.036 ms | 4.051 ms | +2.8 ms |
+    | SCMP_005 whole-map, 46 971 props | 4.156 ms | 4.263 ms | +6.2 ms |
+    | SCMP_009 at a working zoom | 10.700 ms | 10.530 ms | +2.8 ms |
+
+    Nothing pops, and not by luck: because the cutoffs are graded per prop the
+    disappearance is spread over the zoom range rather than being a cliff. Measured
+    as the share of pixels the scenery accounts for while pulling back — 12.1% at a
+    close zoom, 8.6%, 2.6%, then 1.11%, 0.33%, 0.05% and nothing. The last props to
+    go are contributing a twentieth of one percent of the frame.
+
     Reading a blueprint needed two things of the Lua data reader. Its
     call-with-table allow-list grew from `GROUP` alone to the four names that appear
     across 335 blueprints and 61 stock maps. And `#` became a line comment, which is
@@ -701,7 +720,7 @@ Three switches, all on by default, all one keypress away:
 |---|---|---|---|
 | `r` | `--no-reflections` | on | +0.50 ms |
 | `n` | `--no-stratum-normals` | on | +0.21 ms |
-| `p` | `--no-props` | on | +2.8 ms at 5182 props, +6.2 ms at 46 971 |
+| `p` | `--no-props` | on | +0.17 ms at a working zoom, nothing zoomed out |
 | `f` | `--refraction` | **off** | +0.17 to +0.28 ms |
 
 Defaults are **looks-best**, deliberately. The cheap-by-default argument is the

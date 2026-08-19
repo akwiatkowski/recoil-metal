@@ -22,7 +22,7 @@ namespace rm {
 //
 //   planar reflection    +0.50 ms
 //   stratum normals      +0.21 ms
-//   props                +2.8 ms at 5182 of them, +6.2 ms at 46 971
+//   props                +0.17 ms at a working zoom, nothing when zoomed out
 //   water refraction     +0.17 to +0.28 ms, and it splits the render pass in two
 //
 // One of the four defaults OFF rather than on, which is the same rule rather than

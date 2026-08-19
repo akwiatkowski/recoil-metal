@@ -16,6 +16,7 @@
 #include "core/mesh/ChunkDraws.hpp"
 #include "core/mesh/TerrainMesh.hpp"
 
+#include <limits>
 #include <mutex>
 #include <array>
 #include <semaphore>
@@ -153,12 +154,14 @@ public:
 
     // Whether the map's scenery is drawn.
     //
-    // The most expensive quality setting there is, and by a distance: 5182 props
-    // cost 2.8 ms of a 7.6 ms frame on SCMP_009, and the busiest stock map's
-    // 46 971 cost 6.2 ms of 11.2. Every one is drawn at its finest LOD, and every
-    // fragment is alpha-tested — so nothing can be rejected on depth before it is
-    // shaded, and a whole-map framing pays for 47 000 trees each covering a few
-    // pixels. See setProps for what remains to be done about that.
+    // No longer the expensive setting it was. Props are culled per frame against
+    // the draw distance each blueprint states, so a zoomed-out frame pays nothing:
+    // the busiest stock map's 46 971 props cost 4.156 ms at a whole-map framing
+    // against 4.263 with them off, and 0.17 ms at a working zoom where they are
+    // actually visible. Before the cull those figures were +6.2 and +2.8 ms.
+    //
+    // Kept as a switch anyway, because comparing two frames is what a switch is
+    // for.
     //
     // A toggle rather than a rebuild: the geometry stays uploaded, so this can be
     // flipped per frame.
@@ -554,6 +557,10 @@ private:
         /// team-colour mask, and the fragment shader cuts the fragment out
         /// instead of tinting it. Props only.
         bool alphaIsOpacity = false;
+
+        /// Beyond this distance from the camera the batch's instances are not
+        /// drawn — the blueprint's own cutoff. Props only; a unit is always drawn.
+        float drawDistanceElmos = std::numeric_limits<float>::infinity();
     };
 
     std::vector<GpuUnitBatch> unitBatches_;
@@ -569,6 +576,24 @@ private:
     // that is written once and read forever.
     std::vector<GpuUnitBatch> propBatches_;
     std::vector<MTL::Texture*> propTextures_;  // owned, indexed by PropBatch::albedo
+
+    /// Every prop instance as uploaded, kept CPU-side per batch so that each frame
+    /// can pick the ones worth drawing from where the camera now is.
+    ///
+    /// 2.2 MB on the busiest stock map, against the 6 ms of GPU the cull saves at a
+    /// zoomed-out framing. The list itself never changes — props do not move — so
+    /// this is a source to filter FROM rather than state to keep in step.
+    std::vector<std::vector<UnitInstance>> propInstances_;
+
+    /// Scratch for the survivors, reused so a frame costs no allocation.
+    std::vector<UnitInstance> visibleProps_;
+
+    /// Picks the props worth drawing and writes them into this frame's slot.
+    ///
+    /// Once per frame, before anything is encoded — not inside encodeScene, which
+    /// runs twice (the reflection pass, then the main one) and would be writing
+    /// buffers the GPU may already be reading from the first of them.
+    void cullProps() noexcept;
 
     /// Caller batch index -> index into unitBatches_, or kNoBatch for one that
     /// was skipped at upload (no model, no geometry, no instances). setUnits

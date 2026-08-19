@@ -3,7 +3,9 @@
 #include "core/model/Model.hpp"
 #include "core/scene/UnitPlacement.hpp"
 
+#include <array>
 #include <cstddef>
+#include <limits>
 #include <span>
 
 namespace rm {
@@ -33,6 +35,30 @@ struct PropBatch {
     /// of the quad — so the renderer must be told not to read it as the
     /// team-colour mask both unit families keep somewhere.
     int albedo = -1;
+
+    /// Beyond this distance from the camera, instances of this prop are not drawn.
+    ///
+    /// The blueprint's own furthest LOD cutoff (PropBlueprint.hpp). Graded per
+    /// prop, which is what makes zooming out thin the small detail first: at a
+    /// whole-map framing every one of them is past its cutoff and the scenery
+    /// costs nothing, while a shrub has already gone at a working zoom where a
+    /// landmark tree is still there.
+    float drawDistanceElmos = std::numeric_limits<float>::infinity();
 };
+
+/// Copies the instances worth drawing from `eye` into `out`, returning how many.
+///
+/// Pure, and in core/, because this is the whole of the decision and none of it
+/// needs a GPU — and because what it gets wrong is invisible in the good case and
+/// looks like missing content in the bad one. `out` must be at least as long as
+/// `instances`; the survivors keep their relative order so that a capture does not
+/// depend on how a partition happened to fall.
+///
+/// Distance is measured to the instance's own position rather than to a bounding
+/// sphere: a prop is a handful of elmos across and the cutoffs are hundreds, so the
+/// difference is far below the threshold's own precision.
+[[nodiscard]] std::size_t cullPropsByDistance(std::span<const UnitInstance> instances,
+                                              std::array<float, 3> eye, float drawDistanceElmos,
+                                              std::span<UnitInstance> out) noexcept;
 
 } // namespace rm

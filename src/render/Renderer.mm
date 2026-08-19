@@ -1908,6 +1908,7 @@ void Renderer::releasePropBuffers() noexcept {
         if (batch.vertexBuffer != nullptr)   batch.vertexBuffer->release();
     }
     propBatches_.clear();
+    propInstances_.clear();
 
     for (MTL::Texture* texture : propTextures_) {
         if (texture != nullptr) {
@@ -1917,21 +1918,18 @@ void Renderer::releasePropBuffers() noexcept {
     propTextures_.clear();
 }
 
-// WHAT IS NOT DONE HERE, measured and named rather than left as a surprise.
+// Props are CULLED BY DISTANCE every frame, using the cutoff each blueprint states
+// — see cullProps below. That is what makes a zoomed-out frame free rather than
+// expensive: at a whole-map framing every prop on the map is past its own cutoff,
+// so 46 971 of them cost 4.156 ms against 4.263 with the whole feature switched
+// off, where before this they cost 6.2 ms.
 //
-// Every prop is drawn at its finest LOD, always. The blueprints ship three
-// meshes each and state the distances the game switches between them at —
-// `LODCutoff` of 30, 200 and 750 ogrids — so the data for this is already parsed
-// and thrown away. It costs 2.8 ms of a 7.6 ms frame on a 5182-prop map and
-// 6.2 ms of 11.2 on the 46 971-prop one, which is where the whole gap is: 47 000
-// trees at a thousand triangles each, most of them covering a handful of pixels.
-//
-// Doing it properly means choosing a level per prop per frame, which means
-// rebuilding instance lists every frame for geometry that never moves — so the
-// cheap version is to choose ONE level for the whole scene from the camera's
-// distance, which is exactly right for the case that costs the most (a whole-map
-// framing, where every prop is far away) and wrong for nothing a player looks at.
-// Until then, setPropsVisible is the honest switch.
+// WHAT IS STILL NOT DONE, named rather than left as a surprise: a prop that IS
+// drawn is always drawn at its finest LOD. The blueprints ship three meshes each
+// and state a cutoff per level; only the furthest is used here, as a draw distance.
+// Using the other two would need a batch per (blueprint, level) and a level chosen
+// per prop per frame, and it would buy the mid-range — the close view still costs
+// 0.17 ms, which is what is left to win.
 void Renderer::setProps(std::span<const dds::Texture> textures,
                         std::span<const PropBatch> batches) {
     releasePropBuffers();
@@ -1990,17 +1988,26 @@ void Renderer::setProps(std::span<const dds::Texture> textures,
                                MTL::ResourceStorageModeShared);
         uploaded.boneBuffer = device_->newBuffer(poses.data(), poses.size() * sizeof(BoneTransform),
                                                  MTL::ResourceStorageModeShared);
-        // ONE copy of the instances, not kMaxFramesInFlight. Nothing rewrites
-        // them, so there is no frame in flight to race with — and on the busiest
-        // stock map the two spare copies would be 4.5 MB written once and read
-        // forever. instanceCapacity stays 0 to say so: the draw offsets by
-        // instanceSlot_ * capacity, which is then 0 whatever the slot.
-        uploaded.instanceCapacity = 0;
-        uploaded.instanceBuffer =
-            device_->newBuffer(batch.instances.data(), batch.instances.size() * sizeof(UnitInstance),
-                               MTL::ResourceStorageModeShared);
+        // kMaxFramesInFlight copies, like the units. This buffer DOES get
+        // rewritten every frame — not because props move, but because which of them
+        // are close enough to be worth drawing changes as the camera does, and a
+        // single copy written while the GPU may still be reading last frame's would
+        // tear a prop's transform.
+        uploaded.instanceCapacity = batch.instances.size();
+        const std::size_t instanceBytes = uploaded.instanceCapacity * sizeof(UnitInstance);
+        uploaded.instanceBuffer = device_->newBuffer(instanceBytes * kMaxFramesInFlight,
+                                                     MTL::ResourceStorageModeShared);
+        if (uploaded.instanceBuffer != nullptr) {
+            // Seeded in every slot, so a frame that never calls cullProps — a
+            // headless capture — still draws the scenery rather than nothing.
+            auto* slots = static_cast<std::byte*>(uploaded.instanceBuffer->contents());
+            for (std::size_t slot = 0; slot < kMaxFramesInFlight; ++slot) {
+                std::memcpy(slots + slot * instanceBytes, batch.instances.data(), instanceBytes);
+            }
+        }
         uploaded.indexCount = model.indices.size();
         uploaded.instanceCount = batch.instances.size();
+        uploaded.drawDistanceElmos = batch.drawDistanceElmos;
 
         if (uploaded.vertexBuffer == nullptr || uploaded.indexBuffer == nullptr
             || uploaded.boneBuffer == nullptr || uploaded.instanceBuffer == nullptr) {
@@ -2010,6 +2017,34 @@ void Renderer::setProps(std::span<const dds::Texture> textures,
         }
 
         propBatches_.push_back(uploaded);
+        propInstances_.emplace_back(batch.instances.begin(), batch.instances.end());
+    }
+}
+
+void Renderer::cullProps() noexcept {
+    if (propBatches_.empty() || !propsVisible_) {
+        return;
+    }
+
+    const simd_float3 eyeVector = camera_.eye();
+    const std::array<float, 3> eye{{eyeVector.x, eyeVector.y, eyeVector.z}};
+
+    for (std::size_t i = 0; i < propBatches_.size(); ++i) {
+        GpuUnitBatch& batch = propBatches_[i];
+        const std::vector<UnitInstance>& source = propInstances_[i];
+
+        visibleProps_.resize(source.size());
+        const std::size_t kept =
+            cullPropsByDistance(source, eye, batch.drawDistanceElmos, visibleProps_);
+        batch.instanceCount = kept;
+
+        if (kept == 0 || batch.instanceBuffer == nullptr) {
+            continue;  // nothing to write, and a zero-instance draw is skipped
+        }
+
+        auto* slots = static_cast<std::byte*>(batch.instanceBuffer->contents());
+        std::memcpy(slots + instanceSlot_ * batch.instanceCapacity * sizeof(UnitInstance),
+                    visibleProps_.data(), kept * sizeof(UnitInstance));
     }
 }
 
@@ -2446,6 +2481,11 @@ Renderer::CapturedImage Renderer::renderToImage(unsigned int width, unsigned int
 
     MTL::CommandBuffer* commandBuffer = commandQueue_->commandBuffer();
 
+    // Which props are close enough to be worth drawing, decided once for the whole
+    // frame — before the shadow and reflection passes, so every pass agrees about
+    // what the scenery is.
+    cullProps();
+
     encodeShadowPass(commandBuffer);
     encodeReflectionPass(commandBuffer);
 
@@ -2585,6 +2625,10 @@ bench::FrameRecorder Renderer::runOffscreenBenchmark(unsigned int width, unsigne
         previousStart = start;
 
         MTL::CommandBuffer* commandBuffer = commandQueue_->commandBuffer();
+
+        // Which props are worth drawing from where the camera is, decided once for
+        // the whole frame so every pass agrees about what the scenery is.
+        cullProps();
 
         encodeShadowPass(commandBuffer);
         encodeReflectionPass(commandBuffer);
@@ -2921,6 +2965,10 @@ void Renderer::encodeScene(MTL::CommandBuffer* commandBuffer, MTL::RenderPassDes
         encoder->setFragmentSamplerState(shadowSampler_, kShadowSamplerIndex);
 
         for (const GpuUnitBatch& batch : propBatches_) {
+            if (batch.instanceCount == 0) {
+                continue;  // every instance of this prop is past its cutoff
+            }
+
             MTL::Texture* albedo = nullptr;
             if (batch.textures.diffuse >= 0
                 && static_cast<std::size_t>(batch.textures.diffuse) < propTextures_.size()) {
@@ -3372,6 +3420,10 @@ void Renderer::drawFrame(CA::MetalDrawable* drawable) noexcept {
         ensureDepthTexture(width, height);
 
         MTL::CommandBuffer* commandBuffer = commandQueue_->commandBuffer();
+
+        // Which props are worth drawing from where the camera is, decided once for
+        // the whole frame so every pass agrees about what the scenery is.
+        cullProps();
 
         encodeShadowPass(commandBuffer);
         encodeReflectionPass(commandBuffer);
