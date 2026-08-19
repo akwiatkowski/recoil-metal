@@ -658,6 +658,7 @@ struct PropScene {
             levels.push_back(rm::PropLevel{
                 .model = &scene.models.back(),
                 .albedo = scene.textures.resolve(lod.albedo, "prop albedo"),
+                .normals = scene.textures.resolve(lod.normals, "prop normals"),
                 // The blueprint's own cutoff: how far out this level is the right
                 // one, and for the coarsest, how far out the prop is drawn at all.
                 .cutoffElmos = lod.cutoffElmos,

@@ -582,6 +582,7 @@ private:
         std::size_t indexCount = 0;
         std::size_t boneStrideBytes = 0;
         int albedo = -1;
+        int normals = -1;  ///< the two-channel tangent-space map, or -1
         bool supremeCommanderShading = false;
 
         /// Drawn at this level while the camera is nearer than this.

@@ -119,6 +119,16 @@ std::expected<Blueprint, MapError> loadFile(const std::filesystem::path& root,
             }
         }
 
+        // ...and its normal map, when the blueprint names one. 244 of the shipped
+        // levels do.
+        if (const std::optional<std::string_view> normals =
+                lods->items[level].stringAt("NormalsName")) {
+            const std::filesystem::path texture = path.parent_path() / *normals;
+            if (std::filesystem::is_regular_file(texture, ec)) {
+                lod.normals = texture;
+            }
+        }
+
         // A non-positive cutoff means no limit — only the four DevTest blueprints
         // do that, and no stock map references them, but reading -1 as "stop
         // drawing at -8 elmos" would make them permanently invisible instead of

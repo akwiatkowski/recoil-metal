@@ -1003,3 +1003,51 @@ It was caught by a line of output disagreeing with itself: `0 of 60 units routed
 alongside `840 dust particles still in the air`. Reading a capability as a state is
 a whole class of bug, and the reason `DustEmitter` now names both fields for what
 they are.
+
+---
+
+## ADR-026 — A prop normal map carries two axes, and the third is reconstructed
+
+**Context.** Prop blueprints name a normal map (`NormalsName`, on 244 of the shipped
+levels) and the loader was dropping it. ADR-020 established for the STRATUM maps
+that the convention has to be measured rather than inferred, since reading one on
+the wrong axis lights bumps as dents. The prop maps are a different convention
+again — extracting them broke the stratum corpus test, which was the first hint.
+
+**Decision.** Two channels, third reconstructed:
+`x = a·2−1`, `y = grey·2−1`, `z = √(1 − x² − y²)`.
+
+**Measured, over all 221 prop normal maps in the extracted content.** Every one is
+BC3, and in every one *red, green and blue are equal* — one value replicated across
+the colour channels, with a second in alpha. Means across the corpus: 131 for the
+grey, 127 for alpha, both within a few counts of neutral, which is what a normal map
+averages to and confirms the reading. A stratum map by contrast puts z in blue near
+255. Two channels rather than three because BC3's alpha block is a better encoder
+than its RGB565 colour block, so an axis kept there survives compression where a
+third of a packed triple does not.
+
+**WHAT IS NOT MEASURED, stated plainly.** Which of the two is x and which is y, and
+their signs. The layout implies the DXT5nm convention — x in alpha, y in the
+replicated colour — and that is what this uses, but the corpus cannot settle it: both
+axes average zero by construction, so no per-channel statistic distinguishes a swap
+or a flip. Nor could it be settled by eye here, because the props with real relief
+(rocks, wrecks) are placed sparsely and far from anywhere a camera can be put by the
+flags this app has. It matters: with the map on, a close view differs from the same
+view without by a mean of 3.381/255 across 9.22% of its pixels, which is more than
+the stratum maps move. A prop whose relief is unmistakable, viewed close, would
+settle it in one screenshot.
+
+**Alternatives considered.** Per-vertex tangents, which is the textbook way and which
+the data supports — `.scm` carries a tangent and a binormal per vertex and this
+loader reads past them. Rejected on cost: plumbing them through would grow
+`ModelVertex` from 36 bytes to 60 for EVERY model in the project, 2000 BAR unit
+meshes included, to normal-map scenery. The basis is instead derived per pixel from
+screen-space derivatives of world position and uv, Gram-Schmidt'd against the
+interpolated normal — a few instructions on the prop path alone and no memory
+anywhere.
+
+**Consequences.** The prop path now reads the shading texture slot as a normal map,
+which is why `hasTexture2` means something different there than on the unit path and
+why `alphaIsOpacity` is what distinguishes them. The reconstruction clamps its
+radicand: a compressed pair can leave the unit disc, and a negative one would come
+back NaN and paint the fragment black.

@@ -37,6 +37,13 @@ struct PropLevel {
     /// team-colour mask both unit families keep somewhere.
     int albedo = -1;
 
+    /// Index of the tangent-space normal map, or -1 for none.
+    ///
+    /// Two-channel: one axis replicated across rgb, the other in alpha, with the
+    /// third reconstructed — measured across all 221 of them, and NOT what the
+    /// stratum maps do. See BlueprintLod::normals.
+    int normals = -1;
+
     /// Drawn at this level while the camera is nearer than this. The coarsest
     /// level's cutoff is therefore also the distance past which the prop is not
     /// drawn at all.

@@ -26,6 +26,22 @@ namespace rm::prop {
 struct BlueprintLod {
     std::filesystem::path mesh;    ///< absolute; never empty
     std::filesystem::path albedo;  ///< absolute, or empty when none resolved
+
+    /// The tangent-space normal map, absolute, or empty.
+    ///
+    /// NOT the convention the stratum maps use, and measuring that was the whole of
+    /// the work here. All 221 prop normal maps in the extracted content are BC3 with
+    /// red, green and blue EQUAL — one value replicated across the colour channels
+    /// and a second in alpha, means of 131 and 127 across the corpus. So they carry
+    /// two axes, not three: the third is reconstructed. A stratum map by contrast
+    /// puts z in blue near 255 (ADR-020), and reading one of these as though it were
+    /// one of those lights every prop from a direction the artist never chose.
+    ///
+    /// Two channels because BC3's alpha block is a better encoder than its RGB565
+    /// colour block, so an axis kept in alpha survives compression where a third of
+    /// a packed RGB triple does not.
+    std::filesystem::path normals;
+
     float cutoffElmos = std::numeric_limits<float>::infinity();
 };
 

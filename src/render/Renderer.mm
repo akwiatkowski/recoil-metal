@@ -1217,6 +1217,52 @@ fragment float4 unitFragment(UnitOut in [[stage_in]],
         tex2 = shading.sample(texSampler, in.uv);
     }
 
+    // A PROP's normal map, when it has one. The shading slot carries it rather than
+    // a unit's channel set — a prop blueprint never names one of those — so
+    // hasTexture2 means "there is a normal map here" on this path and "there is a
+    // shading texture here" on the unit path, which is why alphaIsOpacity gates it.
+    //
+    // TWO CHANNELS, and this is the measured part. All 221 prop normal maps in the
+    // shipped content are BC3 with red, green and blue equal: one axis replicated
+    // across the colour channels, a second in alpha, and the third reconstructed
+    // from them. BC3's alpha block is a better encoder than its RGB565 colour block,
+    // so an axis kept there survives compression. Read as a stratum map — z in blue
+    // (ADR-020) — a prop would be lit from a direction nobody chose.
+    //
+    // The BASIS comes from screen-space derivatives rather than from per-vertex
+    // tangents. The .scm format does carry a tangent and a binormal per vertex, and
+    // this loader reads past them, deliberately: plumbing them through would grow
+    // ModelVertex from 36 bytes to 60 for EVERY model in the project — 2000 BAR unit
+    // meshes included — to normal-map scenery. Derivatives cost a few instructions
+    // on this path alone and no memory anywhere.
+    float3 shadingNormal = normalize(in.normal);
+    if (u.alphaIsOpacity > 0.5 && u.hasTexture2 > 0.5) {
+        const float2 packed = float2(tex2.a, tex2.g) * 2.0 - 1.0;
+        // Reconstructed rather than stored, which is the point of keeping two:
+        // clamped because a compressed pair can leave the unit disc, and a negative
+        // radicand would come back NaN and paint the fragment black.
+        const float z = sqrt(saturate(1.0 - dot(packed, packed)));
+        const float3 tangentNormal = float3(packed, z);
+
+        // The tangent frame, per pixel, from how the world position and the uv change
+        // across the triangle. Gram-Schmidt against the interpolated normal so the
+        // frame stays orthogonal where the derivatives disagree with it.
+        const float3 dpdx = dfdx(in.world);
+        const float3 dpdy = dfdy(in.world);
+        const float2 dudx = dfdx(in.uv);
+        const float2 dudy = dfdy(in.uv);
+
+        const float determinant = dudx.x * dudy.y - dudy.x * dudx.y;
+        if (abs(determinant) > 1e-12) {
+            const float3 tangent =
+                normalize((dpdx * dudy.y - dpdy * dudx.y) / determinant);
+            const float3 T = normalize(tangent - shadingNormal * dot(shadingNormal, tangent));
+            const float3 B = cross(shadingNormal, T);
+            shadingNormal = normalize(T * tangentNormal.x + B * tangentNormal.y
+                                      + shadingNormal * tangentNormal.z);
+        }
+    }
+
     // A PROP's alpha is opacity, not a mask. Trees and bushes are quads with the
     // shape of a leaf cut out of them, so the cutout has to happen before
     // anything else reads that channel — and it is a `discard` rather than a
@@ -1243,7 +1289,7 @@ fragment float4 unitFragment(UnitOut in [[stage_in]],
 
     const float3 albedo = mix(tex1.rgb, in.teamColour.rgb, teamMask);
 
-    const float3 N = normalize(in.normal);
+    const float3 N = shadingNormal;
     const float3 L = u.sunDirection;
     const float3 V = normalize(u.cameraPosition - in.world);
 
@@ -1976,6 +2022,7 @@ void Renderer::setProps(std::span<const dds::Texture> textures,
             // so the fragment shader takes its neutral fallback and the prop is lit
             // by sun and ambient alone.
             level.albedo = source.albedo;
+            level.normals = source.normals;
             level.cutoffElmos = source.cutoffElmos;
             level.supremeCommanderShading = model.family == Family::SupremeCommander;
             level.boneStrideBytes = model.bones.size() * sizeof(BoneTransform);
@@ -2983,25 +3030,29 @@ void Renderer::encodeScene(MTL::CommandBuffer* commandBuffer, MTL::RenderPassDes
                     continue;  // no prop of this blueprint is at this level right now
                 }
 
-                MTL::Texture* albedo = nullptr;
-                if (level.albedo >= 0
-                    && static_cast<std::size_t>(level.albedo) < propTextures_.size()) {
-                    albedo = propTextures_[static_cast<std::size_t>(level.albedo)];
-                }
+                const auto propTextureAt = [this](int index) -> MTL::Texture* {
+                    if (index < 0 || static_cast<std::size_t>(index) >= propTextures_.size()) {
+                        return nullptr;
+                    }
+                    return propTextures_[static_cast<std::size_t>(index)];
+                };
+                MTL::Texture* albedo = propTextureAt(level.albedo);
+                MTL::Texture* normals = propTextureAt(level.normals);
 
                 // Both slots bound whatever happens: sampling an unbound texture is
-                // undefined even on a branch that does not run.
+                // undefined even on a branch that does not run. The shading slot
+                // carries the NORMAL MAP on this path — a prop blueprint never names
+                // the channel set a unit's shading texture holds.
                 encoder->setFragmentTexture(albedo != nullptr ? albedo : groundTexture_,
                                             kGroundTextureIndex);
-                encoder->setFragmentTexture(groundTexture_, kShadingTextureIndex);
+                encoder->setFragmentTexture(normals != nullptr ? normals : groundTexture_,
+                                            kShadingTextureIndex);
 
                 TerrainUniforms propUniforms = uniforms;
                 propUniforms.hasTexture = albedo != nullptr ? 1.0f : 0.0f;
-                // No shading texture ever: a prop blueprint names an albedo and
-                // sometimes a normal map, never the second channel set a unit's
-                // shading texture carries. The shader's neutral fallback then lights
-                // it by sun and ambient alone, which is what a tree wants.
-                propUniforms.hasTexture2 = 0.0f;
+                // On this path hasTexture2 means "the shading slot holds a normal
+                // map", which alphaIsOpacity below is what distinguishes.
+                propUniforms.hasTexture2 = normals != nullptr ? 1.0f : 0.0f;
                 propUniforms.supremeCommanderShading =
                     level.supremeCommanderShading ? 1.0f : 0.0f;
                 propUniforms.alphaIsOpacity = 1.0f;
