@@ -13,6 +13,7 @@
 #include "core/model/Sca.hpp"
 #include "core/model/Scm.hpp"
 #include "core/scene/Picking.hpp"
+#include "core/scene/Selection.hpp"
 #include "core/scene/UnitPlacement.hpp"
 #include "core/sim/Movement.hpp"
 #include "core/sim/Pathfinding.hpp"
@@ -669,10 +670,6 @@ struct Selection {
     std::size_t instance = 0;
     rm::TeamColour originalColour{};
 };
-
-[[nodiscard]] bool operator==(const Selection& a, const Selection& b) noexcept {
-    return a.batch == b.batch && a.instance == b.instance;
-}
 
 /// Paces each unit's walk cycle by the ground it has covered.
 ///
@@ -1554,39 +1551,50 @@ int main(int argc, const char* argv[]) {
                 const std::optional<Selection> hit = pickAcrossBatches(ray, units);
                 const bool addToSet = mods.shift || mods.command || mods.control;
 
-                if (!hit) {
-                    if (!addToSet) {
-                        // Clicking empty ground clears the whole selection.
-                        for (const Selection& sel : selected) {
-                            units.instances[sel.batch][sel.instance].teamColour =
-                                sel.originalColour;
-                        }
-                        selected.clear();
+                // What the click MEANS is decided in core/scene/Selection.hpp,
+                // where it can be tested; all that is left here is repainting
+                // the units that entered or left the set.
+                std::vector<rm::SelectionEntry> before;
+                before.reserve(selected.size());
+                for (const Selection& sel : selected) {
+                    before.push_back(rm::SelectionEntry{sel.batch, sel.instance});
+                }
+
+                const std::optional<rm::SelectionEntry> hitEntry =
+                    hit ? std::optional{rm::SelectionEntry{hit->batch, hit->instance}}
+                        : std::nullopt;
+                const std::vector<rm::SelectionEntry> after =
+                    rm::applyClick(before, hitEntry, addToSet);
+
+                // Restore everything that left the selection...
+                for (const Selection& sel : selected) {
+                    const rm::SelectionEntry entry{sel.batch, sel.instance};
+                    if (std::find(after.begin(), after.end(), entry) == after.end()) {
+                        units.instances[sel.batch][sel.instance].teamColour = sel.originalColour;
                     }
-                    return;
                 }
 
-                const auto existing =
-                    std::find(selected.begin(), selected.end(), *hit);
-                if (existing != selected.end()) {
-                    // Clicking an already-selected unit removes it.
-                    units.instances[existing->batch][existing->instance].teamColour =
-                        existing->originalColour;
-                    selected.erase(existing);
-                    return;
+                // ...and tint everything that is in it now, remembering the
+                // colour to put back. Looked up from the OLD list where it is
+                // already known, so a unit that stays selected does not have
+                // its tint recorded as its original colour.
+                std::vector<Selection> updated;
+                updated.reserve(after.size());
+                for (const rm::SelectionEntry& entry : after) {
+                    const auto previous =
+                        std::find_if(selected.begin(), selected.end(), [&entry](const Selection& s) {
+                            return s.batch == entry.batch && s.instance == entry.instance;
+                        });
+
+                    Selection sel{entry.batch, entry.instance,
+                                  previous != selected.end()
+                                      ? previous->originalColour
+                                      : units.instances[entry.batch][entry.instance].teamColour};
+                    units.instances[sel.batch][sel.instance].teamColour = kSelectionColour;
+                    updated.push_back(sel);
                 }
 
-                if (!addToSet) {
-                    // Plain click: replace the selection.
-                    for (const Selection& sel : selected) {
-                        units.instances[sel.batch][sel.instance].teamColour =
-                            sel.originalColour;
-                    }
-                    selected.clear();
-                }
-
-                selected.push_back(*hit);
-                units.instances[hit->batch][hit->instance].teamColour = kSelectionColour;
+                selected = std::move(updated);
                 return;
             }
 
@@ -1618,12 +1626,6 @@ int main(int argc, const char* argv[]) {
             }
         });
 
-        // --- The frame loop ------------------------------------------------
-        // Ticks the sim at its own fixed rate, then hands every batch's
-        // instances to the renderer. Pushing unconditionally rather than only
-        // when something moved: the ring slot rotates every frame regardless,
-        // and a batch pushed only sometimes would show a slot three frames old
-        // whenever it was skipped (Renderer::setInstances).
         window.onFrame([&](float elapsed) {
             const int ticks = clock.advance(elapsed);
             // Built once, outside the tick loop: the spans do not move, only

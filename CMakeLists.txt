@@ -89,6 +89,7 @@ add_library(rm_core STATIC
     src/core/scene/UnitPlacement.cpp
     src/core/scene/UnitBatch.cpp
     src/core/scene/Picking.cpp
+    src/core/scene/Selection.cpp
     src/core/sim/Movement.cpp
     src/core/sim/Pathfinding.cpp
     src/core/unit/UnitDef.cpp
@@ -140,6 +141,7 @@ if(BUILD_TESTING)
         tests/test_unit_placement.cpp
         tests/test_movement.cpp
         tests/test_picking.cpp
+        tests/test_selection.cpp
         tests/test_pathfinding.cpp
         tests/test_unit_def.cpp
         tests/test_asset_search.cpp
