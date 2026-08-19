@@ -749,3 +749,70 @@ did.
 The tint's genuine advantage is now genuinely lost: at a low camera angle a
 crowd's rings are hidden behind the units standing on them. That is the argument
 for outlines rather than the argument for tinting a team colour.
+
+---
+
+## ADR-022 — The LOD thresholds are set by a screenshot diff, not by an error budget
+
+**Context.** Milestone 12 introduced per-chunk detail levels with the transitions
+at 8 and 20 chunk widths, and milestone 13 discovered that the cull-and-merge
+those numbers were chosen alongside had never fired: each chunk's three levels
+were emitted back to back, so no two chunks were adjacent at the level they were
+drawn at. The thresholds were therefore tuned against a cost model where a change
+of level was free, and needed revisiting now that one costs a broken run.
+
+**Decision.** 6 and 14, chosen by measurement. The merge itself moved out of
+`Renderer.mm` into `core/mesh/ChunkDraws.hpp` so that a draw count is a test
+rather than something nothing can see.
+
+Two measurements, both on aw04 with the real camera: `--bench-offscreen` GPU time
+at 1920x1080 with 200 units, and the mean per-channel difference of a screenshot
+against the same view with detail levels off entirely.
+
+| near/far | whole-map GPU | draws | triangles | whole-map diff | focus-60 diff |
+|---|---|---|---|---|---|
+| off | 2.598 ms | 1 | 2 097 152 | — | — |
+| 16 / 40 | 1.693 ms | 1 | 524 288 | 0.247/255 | 0.000/255 |
+| 8 / 20 (shipped) | 1.510 ms | 6 | 235 520 | 0.385/255 | 0.000/255 |
+| **6 / 14** | **1.380 ms** | **1** | **131 072** | 0.452/255 | 0.000/255 |
+| 4 / 10 | 1.384 ms | 1 | 131 072 | 0.452/255 | 0.258/255 |
+
+**The premise turned out to be wrong, which is the useful part.** The worry was
+that band boundaries were breaking runs and costing draw calls. They were — and
+it does not matter. 8/20 issues six draws against 6/14's one and is still 0.13 ms
+*slower*, because it draws 80% more triangles. A whole-map framing is vertex-bound
+and half a dozen extra draw calls do not register against 100k triangles. The
+merge's value is that it makes the threshold cheap to get wrong, not that it is
+itself fast.
+
+6 is where the near threshold stops being free. At `--focus 60` — a mid-range
+working camera — 6 renders an image byte-identical to full detail, no pixel off by
+more than 3, while 4 moves 1.23% of them by up to 207. Below 6 there is nothing
+to win: 4/10 measured no faster, because both already put the whole overview at
+level 2.
+
+**Alternatives considered.** Deriving the thresholds from a projected-error
+budget, which was the first attempt and is the textbook answer. A level-1 chord
+on this map is 13 elmos out at the median chunk and 92 at the worst; at 800 pixels
+of viewport and a 60-degree field of view, holding that under one pixel demands a
+threshold near 60 chunk widths — four times the width of the entire map. The model
+says "never use LOD" and the screenshots say the error is invisible, because it
+hides under ground texture and shadow. Where a model and the corpus disagree this
+project has a rule about which wins.
+
+Ordering the chunks along a space-filling curve so that distance bands are
+contiguous in the buffer, and boundaries cost one run break instead of one per
+row, was the other option. It is the right fix for the problem the measurement
+says we do not have.
+
+**Consequences.** 47% off the whole-map frame against no detail levels, 8.6%
+against the shipped thresholds, for a mean difference of 0.45/255 — under a fifth
+of one step of an 8-bit channel. Close and mid cameras are untouched: every chunk
+within 3072 elmos of the eye is at full detail, which is more than fills such a
+view, so LOD does not engage at all where the player is working.
+
+Also settled while reading it: the shadow pass draws terrain at level 0
+deliberately, not at the cheapest level as its comment had claimed. A shadow map
+records the surface the main pass will shade, and a coarser one disagrees with it
+by the whole chord error of that level — 13 elmos at the median here, far more
+than any depth bias absorbs. The ground would shadow itself in bands.

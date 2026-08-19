@@ -11,6 +11,7 @@
 #include "core/scene/UnitBatch.hpp"
 #include "core/scene/UnitPlacement.hpp"
 #include "core/texture/Dds.hpp"
+#include "core/mesh/ChunkDraws.hpp"
 #include "core/mesh/TerrainMesh.hpp"
 
 #include <mutex>
@@ -389,15 +390,22 @@ private:
     simd_float4x4 lightViewProjection_{};
     bool hasShadows_ = false;
 
-    /// Draws the terrain chunks a predicate accepts, merging consecutive
-    /// survivors into single draws.
+    /// Draws the terrain chunks a predicate accepts, at the detail level their
+    /// distance from `detailFrom` earns, merging consecutive survivors into
+    /// single draws.
     ///
-    /// The merge is not a nicety: without it culling replaces one draw of the
-    /// terrain with one per chunk, and whenever the camera keeps them all that
-    /// is slower than not culling at all.
+    /// WHICH draws those work out to is decided by `appendChunkDraws` in core/,
+    /// where a draw count can be asserted; this only encodes them. The merge is
+    /// not a nicety — without it culling replaces one draw of the terrain with
+    /// one per chunk, and whenever the camera keeps them all that is slower than
+    /// not culling at all.
     template <typename Predicate>
     void drawTerrainChunks(MTL::RenderCommandEncoder* encoder, Predicate keep,
                            simd_float3 detailFrom, bool varyDetail = true) noexcept;
+
+    /// Scratch space for the above, reused between frames and passes so that
+    /// planning the terrain costs no allocation once the capacity has settled.
+    std::vector<ChunkDraw> chunkDraws_;
 
     /// Recomputes the light's orthographic frame around the loaded terrain.
     void updateLightMatrix() noexcept;

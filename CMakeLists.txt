@@ -77,6 +77,7 @@ add_library(rm_core STATIC
     src/core/map/ScenarioSave.cpp
     src/core/map/TerrainType.cpp
     src/core/mesh/TerrainMesh.cpp
+    src/core/mesh/ChunkDraws.cpp
     src/core/camera/OrbitCamera.cpp
     src/core/camera/Frustum.cpp
     src/core/bench/FrameStats.cpp
@@ -126,6 +127,7 @@ if(BUILD_TESTING)
         tests/test_smf.cpp
         tests/test_height_field.cpp
         tests/test_terrain_mesh.cpp
+        tests/test_chunk_draws.cpp
         tests/test_orbit_camera.cpp
         tests/test_frustum.cpp
         tests/test_map_info.cpp

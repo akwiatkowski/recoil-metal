@@ -2458,68 +2458,31 @@ void Renderer::encodeScene(MTL::RenderCommandEncoder* encoder, unsigned int widt
     }
 }
 
-/// Detail level for a chunk, by how far its centre is from a point.
-///
-/// The thresholds are in chunk widths rather than elmos, so the same numbers
-/// hold whatever a chunk works out to on a given map. Halving detail every
-/// eight chunks keeps the transition far enough away that the seam between two
-/// levels is a few pixels of terrain rather than a visible step.
-[[nodiscard]] int lodForDistance(float distance, float chunkWidth) noexcept {
-    if (!(chunkWidth > 0.0f)) {
-        return 0;
-    }
-    const float inChunks = distance / chunkWidth;
-    if (inChunks < 8.0f) {
-        return 0;
-    }
-    return inChunks < 20.0f ? 1 : 2;
-}
-
 template <typename Predicate>
 void Renderer::drawTerrainChunks(MTL::RenderCommandEncoder* encoder, Predicate keep,
                                  simd_float3 detailFrom, bool varyDetail) noexcept {
-    std::size_t runFirst = 0;
-    std::size_t runCount = 0;
+    // Which ranges to draw is arithmetic over the chunk bounds, and lives in
+    // core/ where a draw count is a test rather than something nothing can see.
+    chunkDraws_.clear();
+    appendChunkDraws(chunkDraws_, terrainChunks_, keep,
+                     [detailFrom, varyDetail](const TerrainChunk& chunk) {
+                         if (!varyDetail) {
+                             return 0;  // the shadow pass: shade needs no detail
+                         }
+                         const simd_float3 centre =
+                             simd_make_float3((chunk.minX + chunk.maxX) * 0.5f,
+                                              (chunk.minY + chunk.maxY) * 0.5f,
+                                              (chunk.minZ + chunk.maxZ) * 0.5f);
+                         return lodForDistance(simd_distance(centre, detailFrom),
+                                               chunk.maxX - chunk.minX);
+                     });
 
-    const auto flush = [&] {
-        if (runCount == 0) {
-            return;
-        }
+    for (const ChunkDraw& draw : chunkDraws_) {
         encoder->drawIndexedPrimitives(
-            MTL::PrimitiveType::PrimitiveTypeTriangle, static_cast<NS::UInteger>(runCount),
-            MTL::IndexType::IndexTypeUInt32, indexBuffer_,
-            static_cast<NS::UInteger>(runFirst * sizeof(std::uint32_t)));
-        runCount = 0;
-    };
-
-    for (const TerrainChunk& chunk : terrainChunks_) {
-        if (!keep(chunk)) {
-            flush();
-            continue;
-        }
-
-        int lod = 0;
-        if (varyDetail) {
-            const simd_float3 centre = simd_make_float3((chunk.minX + chunk.maxX) * 0.5f,
-                                                        (chunk.minY + chunk.maxY) * 0.5f,
-                                                        (chunk.minZ + chunk.maxZ) * 0.5f);
-            lod = lodForDistance(simd_distance(centre, detailFrom), chunk.maxX - chunk.minX);
-        }
-        const TerrainChunk::Lod& range = chunk.lods[static_cast<std::size_t>(lod)];
-
-        // A run can only continue while the ranges stay adjacent, which they do
-        // for neighbouring chunks at the SAME level and never across a change
-        // of level — the levels are interleaved in the buffer.
-        if (runCount > 0 && runFirst + runCount == range.firstIndex) {
-            runCount += range.indexCount;
-            continue;
-        }
-
-        flush();
-        runFirst = range.firstIndex;
-        runCount = range.indexCount;
+            MTL::PrimitiveType::PrimitiveTypeTriangle,
+            static_cast<NS::UInteger>(draw.indexCount), MTL::IndexType::IndexTypeUInt32,
+            indexBuffer_, static_cast<NS::UInteger>(draw.firstIndex * sizeof(std::uint32_t)));
     }
-    flush();
 }
 
 void Renderer::updateLightMatrix() noexcept {
@@ -2684,8 +2647,17 @@ void Renderer::encodeShadowPass(MTL::CommandBuffer* commandBuffer) noexcept {
         // oriented along the sun, so an axis-aligned world-space test would be
         // wrong. A chunk's bounding sphere is cheap and never too small, and
         // here too generous is harmless while too tight drops shadows.
-        // The shadow map is coarse and seen only as shade, so it takes the
-        // cheapest level everywhere — detail there buys nothing at all.
+        // Full detail everywhere, deliberately, and NOT the cheapest level —
+        // which is what "varyDetail = false" buys, since level 0 is the finest.
+        //
+        // A shadow map is a record of the surface the main pass will shade. Draw
+        // a coarser surface into it and the two disagree by the whole chord
+        // error of that level (13 elmos at the median on aw04, 92 at the worst),
+        // which is far more than any depth bias can absorb: the ground shadows
+        // itself in bands wherever the coarse surface sits above the fine one,
+        // and contact shadows lift off wherever it sits below. Cheap here would
+        // cost more than it saves — the light's box already culls this pass to a
+        // fraction of the map, which is where the shadow saving came from.
         drawTerrainChunks(encoder, [this](const TerrainChunk& chunk) {
             const simd_float3 centre = simd_make_float3((chunk.minX + chunk.maxX) * 0.5f,
                                                         (chunk.minY + chunk.maxY) * 0.5f,
