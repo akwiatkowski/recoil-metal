@@ -860,3 +860,78 @@ TEST_CASE("every stock map's sky block reads as plausible colours") {
     INFO(distinctCirrus << " distinct cirrus colours across " << maps.size() << " maps");
     CHECK(distinctCirrus > 5);
 }
+
+TEST_CASE("every stock map annotates itself with mass deposits", "[corpus]") {
+    // What milestone 19's economy stands on, and the reason the whole marker table is
+    // read rather than only the spawns. Asserted across the corpus because the counts
+    // are the fact: a reader that silently found none would still pass a range check.
+    const std::vector<std::filesystem::path> maps = corpus();
+    if (maps.empty()) {
+        SKIP(std::string{"no Supreme Commander map corpus at "} + kCorpusRoot);
+    }
+
+    std::size_t mapsWithMass = 0;
+    std::size_t mass = 0;
+    std::size_t hydrocarbon = 0;
+    std::size_t landPathNodes = 0;
+    std::size_t total = 0;
+    std::size_t withSave = 0;
+
+    for (const std::filesystem::path& map : maps) {
+        const auto save = rm::scenario::findSaveBesideMap(map);
+        if (!save) {
+            continue;
+        }
+        ++withSave;
+
+        std::ifstream in{*save, std::ios::binary};
+        const std::string lua{std::istreambuf_iterator<char>(in),
+                              std::istreambuf_iterator<char>()};
+        const auto markers = rm::scenario::loadMarkers(lua);
+        REQUIRE(markers.has_value());
+
+        total += markers->size();
+        std::size_t here = 0;
+        for (const rm::scenario::Marker& marker : *markers) {
+            if (marker.isType("Mass")) {
+                ++here;
+            } else if (marker.isType("Hydrocarbon")) {
+                ++hydrocarbon;
+            } else if (marker.isType("Land Path Node")) {
+                ++landPathNodes;
+            }
+
+            // Every marker read must land on the map. A unit conversion missed here —
+            // ogrids taken for elmos — would put a deposit at an eighth of its
+            // distance from the origin, which is inside the map and so invisible to a
+            // bounds check on one marker.
+            CHECK(marker.position[0] >= 0.0f);
+            CHECK(marker.position[2] >= 0.0f);
+        }
+
+        mass += here;
+        if (here > 0) {
+            ++mapsWithMass;
+        }
+    }
+
+    // SIXTY, not the 61 `_save.lua` files on the disk. The odd one out is `X1CA_TUT`,
+    // a campaign tutorial that ships a save, a scenario and a script but no `.scmap` of
+    // its own — so it is not a map, and it carries the 8 mass markers that separate a
+    // count of saves from a count of maps.
+    CHECK(withSave == 60);
+
+    // EVERY stock map has mass on it, which is what makes an economy possible on any of
+    // them rather than on a chosen few.
+    CHECK(mapsWithMass == 60);
+    CHECK(mass == 3500);
+
+    // And the map ships the navigation graph the game's own AI walks — a free second
+    // opinion on this engine's pathfinding, whenever that is worth checking.
+    CHECK(landPathNodes == 1974);
+
+    // The total is dominated by 'Blank Marker', which is what an ARMY_ spawn is typed
+    // as — so the spawns are in this table too rather than in one of their own.
+    CHECK(total == 19310);
+    CHECK(hydrocarbon > 0);
+}

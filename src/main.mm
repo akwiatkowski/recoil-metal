@@ -20,6 +20,7 @@
 #include "core/settings/Settings.hpp"
 #include "core/scene/GroundDecals.hpp"
 #include "core/scene/UnitPlacement.hpp"
+#include "core/sim/Army.hpp"
 #include "core/sim/Movement.hpp"
 #include "core/sim/Pathfinding.hpp"
 #include "core/unit/UnitBlueprint.hpp"
@@ -969,6 +970,22 @@ struct UnitScene {
     // passability grid routes it: a slope one unit climbs is a wall to another.
     std::vector<float> maxSlopeDegrees;
     std::vector<float> maxWaterDepthElmos;
+
+    // The sides in the match, empty outside a skirmish. Held with the scene rather
+    // than beside it because every question that needs an army — may I select this,
+    // may I shoot that, who banks the mass — starts from a unit.
+    std::vector<rm::sim::Army> armies;
+
+    /// The army the mouse belongs to. Only its units may be selected.
+    int playerArmy = rm::sim::kNoArmy;
+
+    /// The army that owns instance `instance` of batch `batch`, or kNoArmy.
+    [[nodiscard]] int armyOf(std::size_t batch, std::size_t instance) const noexcept {
+        if (batch >= motion.size() || instance >= motion[batch].size()) {
+            return rm::sim::kNoArmy;
+        }
+        return motion[batch][instance].armyIndex;
+    }
 };
 
 // The passability grids a scene needs, one per distinct pair of limits.
@@ -1277,6 +1294,102 @@ struct VfsUnit {
         .albedoPath = scmTextureInVfs(meshPath, kScmDiffuseSuffix, content),
         .shadingPath = scmTextureInVfs(meshPath, kScmShadingSuffix, content),
     };
+}
+
+/// Spawns one commander per start position: a skirmish's opening position.
+///
+/// The map decides how many sides there are — its `ARMY_<n>` markers, which
+/// `scenario::loadStartPositions` already reads — and the factions are dealt
+/// round-robin so the same map yields the same match every run.
+///
+/// Commanders of the same faction SHARE A BATCH, because a batch is one model and two
+/// UEF armies field the same one. What distinguishes them is the instance's colour,
+/// which is exactly the split UnitInstance was built for: the GPU gets the army's
+/// colour and never its index.
+void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
+                     std::span<const rm::mapinfo::StartPosition> starts,
+                     const rm::vfs::Vfs& content) {
+    if (starts.empty()) {
+        std::fprintf(stderr, "skirmish: the map declares no start positions\n");
+        return;
+    }
+
+    scene.armies = rm::sim::freeForAll(starts.size());
+    scene.playerArmy = 0;
+
+    // Faction -> the batch already holding that faction's commander, so four models
+    // serve eight armies, and the scale that model needs.
+    std::map<rm::sim::Faction, std::size_t> batchForFaction;
+    std::map<rm::sim::Faction, float> scaleForFaction;
+
+    for (const rm::sim::Army& army : scene.armies) {
+        const std::string path = rm::sim::commanderBlueprintPath(army.faction);
+
+        const auto existing = batchForFaction.find(army.faction);
+        if (existing == batchForFaction.end()) {
+            const auto unit = resolveUnitFromContent(path, content);
+            if (!unit) {
+                std::fprintf(stderr, "skirmish: no commander for %s\n",
+                             std::string{rm::sim::factionName(army.faction)}.c_str());
+                continue;
+            }
+
+            scene.models.push_back(unit->model);
+            scene.instances.emplace_back();
+            scene.motion.emplace_back();
+            scene.maxSlopeDegrees.push_back(unit->def.maxSlopeDegrees > 0.0f
+                                                ? unit->def.maxSlopeDegrees
+                                                : rm::sim::kDefaultMaxSlopeDegrees);
+            scene.maxWaterDepthElmos.push_back(unit->def.maxWaterDepthElmos);
+
+            scene.batches.push_back(rm::UnitBatch{
+                .model = &scene.models.back(),
+                .instances = {},
+                .textures = rm::TexturePair{
+                    .diffuse = scene.textures.resolve(content, unit->albedoPath, "albedo"),
+                    .shading = scene.textures.resolve(content, unit->shadingPath, "specTeam"),
+                },
+            });
+            batchForFaction.emplace(army.faction, scene.batches.size() - 1);
+            scaleForFaction.emplace(army.faction, unit->def.meshToElmos);
+
+            std::printf("army %d: %s commander %s, %.0f hp\n", army.index,
+                        std::string{rm::sim::factionName(army.faction)}.c_str(),
+                        unit->def.name.c_str(), static_cast<double>(unit->def.health));
+        }
+
+        const std::size_t batch = batchForFaction.at(army.faction);
+        const rm::mapinfo::StartPosition& start = starts[static_cast<std::size_t>(army.index)];
+
+        // One commander, on the ground, in its army's colour. `atStartPositions` would
+        // place one per start in one call, but each needs a DIFFERENT colour and army,
+        // so they are placed one at a time.
+        // The blueprint's own scale, NOT 1: a `.scm`'s vertices are not in elmos, and
+        // taking them for elmos draws a commander an order of magnitude too big. Same
+        // trap as the tanks, one commit earlier (AGENT.md).
+        std::vector<rm::UnitInstance> one =
+            rm::atStartPositions(field, std::span{&start, 1}, scaleForFaction.at(army.faction));
+        if (one.empty()) {
+            continue;
+        }
+        one.front().teamColour = army.colour;
+
+        rm::sim::MoveState motion;
+        motion.armyIndex = army.index;
+
+        scene.instances[batch].push_back(one.front());
+        scene.motion[batch].push_back(motion);
+    }
+
+    // The spans in each batch are rebuilt after every push_back, because a vector that
+    // grew has moved its storage and the batch would point at freed memory — the same
+    // hazard the deques above exist to avoid for the models.
+    for (std::size_t i = 0; i < scene.batches.size(); ++i) {
+        scene.batches[i].instances = scene.instances[i];
+    }
+
+    std::printf("skirmish: %zu armies, %zu commander model(s)\n", scene.armies.size(),
+                batchForFaction.size());
 }
 
 /// Loads every requested model, resolves its textures, and places instances.
@@ -2054,6 +2167,19 @@ namespace {
             continue;
         }
 
+        // A unit belongs to whoever the sim says, and only the player's own may be
+        // selected. Filtered HERE rather than inside pickUnit, which is pure over
+        // instances and has no business knowing about armies.
+        //
+        // Note what this deliberately does NOT do: it does not skip an enemy and keep
+        // looking behind it. Clicking an enemy selects nothing, because that is what
+        // was clicked — the alternative reaches through the thing under the cursor to
+        // grab something else, which is worse than a null answer.
+        if (scene.playerArmy != rm::sim::kNoArmy
+            && scene.armyOf(batch, *hit) != scene.playerArmy) {
+            continue;
+        }
+
         const rm::UnitInstance& unit = instances[*hit];
         bestDistance = rm::distanceToRay(
             ray, simd_make_float3(unit.position[0], unit.position[1], unit.position[2]));
@@ -2088,6 +2214,13 @@ int main(int argc, const char* argv[]) {
         UnitScene units = resolveUnits(unitRequests, map->field, map->starts,
                                        map->hasWater ? map->waterLevel : 0.0f, assetSearch,
                                        content);
+
+        // `--skirmish`: one commander per start position, each its own army. Appended
+        // to whatever `--units` asked for rather than replacing it, so a scene can
+        // hold both a match and a crowd of test units.
+        if (hasFlag(argc, argv, "--skirmish")) {
+            spawnCommanders(units, map->field, map->starts, content);
+        }
 
         // Tilt every unit onto its slope once, here, because the headless paths
         // never tick the sim: a screenshot of a scattered scene would otherwise

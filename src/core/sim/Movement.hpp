@@ -88,7 +88,23 @@ inline constexpr float kDefaultRadiusElmos = 16.0f;
 // never see. Kept as a parallel array rather than folded into UnitInstance
 // because that struct's layout is pinned by a static_assert and read verbatim
 // by the vertex shader.
+/// The army index of something nobody owns.
+///
+/// Not 0, which would be a real army: a scattered decorative unit, a prop that found
+/// its way into the list, or a spawn whose owner was never set would all silently
+/// belong to the first player. Unowned things are neither selectable nor shootable,
+/// so the wrong default here reads as the enemy having units it never built.
+inline constexpr int kNoArmy = -1;
+
 struct MoveState {
+    /// Who owns this unit. See kNoArmy.
+    ///
+    /// Lives on the SIM state rather than on UnitInstance because UnitInstance's
+    /// layout is pinned by a static_assert and read verbatim by the vertex shader —
+    /// the GPU needs the army's colour, which it already has, and must never need its
+    /// index.
+    int armyIndex = kNoArmy;
+
     float destinationX = 0.0f;
     float destinationZ = 0.0f;
     bool moving = false;

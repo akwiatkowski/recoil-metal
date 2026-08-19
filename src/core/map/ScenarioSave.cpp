@@ -46,6 +46,71 @@ constexpr std::string_view kArmyPrefix = "ARMY_";
 
 namespace rm::scenario {
 
+bool Marker::isType(std::string_view wanted) const noexcept {
+    return std::ranges::equal(type, wanted, [](char a, char b) {
+        const auto lower = [](char c) {
+            return (c >= 'A' && c <= 'Z') ? static_cast<char>(c + ('a' - 'A')) : c;
+        };
+        return lower(a) == lower(b);
+    });
+}
+
+std::expected<std::vector<Marker>, lua::ParseError> loadMarkers(std::string_view lua) {
+    const auto root = rm::lua::parseTable(lua);
+    if (!root) {
+        return std::unexpected(root.error());
+    }
+
+    const Value* markers = root->path("MasterChain", "_MASTERCHAIN_", "Markers");
+    if (markers == nullptr || !markers->isTable()) {
+        return fail("no Scenario.MasterChain._MASTERCHAIN_.Markers table: this does not look "
+                    "like a Supreme Commander _save.lua");
+    }
+
+    std::vector<Marker> found;
+    found.reserve(markers->fields.size());
+
+    for (const lua::Field& entry : markers->fields) {
+        const Value* position = entry.value.find("position");
+        const bool usable = position != nullptr && position->isTable()
+                         && position->items.size() == 3;
+
+        if (!usable) {
+            // Fatal only for the markers the engine depends on. See the header.
+            if (armyNumber(entry.key).has_value()) {
+                return fail("marker '" + entry.key
+                            + "' has no VECTOR3 position; the _save.lua layout is not what "
+                              "this reader expects");
+            }
+            continue;
+        }
+
+        const std::optional<double> x = position->items[0].asNumber();
+        const std::optional<double> y = position->items[1].asNumber();
+        const std::optional<double> z = position->items[2].asNumber();
+        if (!x || !y || !z) {
+            if (armyNumber(entry.key).has_value()) {
+                return fail("marker '" + entry.key + "' has a non-numeric position");
+            }
+            continue;
+        }
+
+        // The stored Y is KEPT here, unlike in loadStartPositions, and for the same
+        // reason it is dropped there: a spawn belongs on the terrain, so its height is
+        // sampled — but a marker is an annotation of a place, and a caller comparing it
+        // against the heightmap wants to see what the map actually said.
+        found.push_back(Marker{
+            .name = entry.key,
+            .type = std::string{entry.value.stringAt("type").value_or("")},
+            .position = {static_cast<float>(*x) * scmap::kElmosPerOgrid,
+                         static_cast<float>(*y) * scmap::kElmosPerOgrid,
+                         static_cast<float>(*z) * scmap::kElmosPerOgrid},
+        });
+    }
+
+    return found;
+}
+
 std::expected<std::vector<mapinfo::StartPosition>, lua::ParseError> loadStartPositions(
     std::string_view lua) {
     const auto root = rm::lua::parseTable(lua);

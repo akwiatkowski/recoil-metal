@@ -9,6 +9,8 @@
 
 #include "core/map/ScenarioSave.hpp"
 
+#include <algorithm>
+
 #include <string>
 
 using Catch::Approx;
@@ -122,4 +124,70 @@ TEST_CASE("a marker merely starting with ARMY_ is not an army") {
     REQUIRE(positions.has_value());
     REQUIRE(positions->size() == 1);
     REQUIRE((*positions)[0].team == 1);
+}
+
+TEST_CASE("the whole marker table is read, not only the armies") {
+    // A map's marker table is its own annotation of itself, and only the spawns were
+    // ever read from it. The mass deposits are what milestone 19's economy stands on.
+    const auto markers = rm::scenario::loadMarkers(R"(
+Scenario = {
+    MasterChain = {
+        ['_MASTERCHAIN_'] = {
+            Markers = {
+                ['ARMY_1'] = { ['type'] = STRING( 'Blank Marker' ),
+                               ['position'] = VECTOR3( 100, 20, 200 ) },
+                ['Mass 07'] = { ['type'] = STRING( 'Mass' ),
+                                ['position'] = VECTOR3( 50, 10, 60 ) },
+                ['Land Path Node 3'] = { ['type'] = STRING( 'Land Path Node' ),
+                                         ['position'] = VECTOR3( 1, 2, 3 ) },
+            },
+        },
+    },
+}
+)");
+
+    REQUIRE(markers.has_value());
+    REQUIRE(markers->size() == 3);
+
+    // Ogrids to elmos, on all three axes.
+    const auto mass = std::ranges::find_if(
+        *markers, [](const rm::scenario::Marker& m) { return m.isType("Mass"); });
+    REQUIRE(mass != markers->end());
+    CHECK(mass->name == "Mass 07");
+    CHECK(mass->position[0] == Catch::Approx(50.0f * 8.0f));
+    CHECK(mass->position[1] == Catch::Approx(10.0f * 8.0f));
+    CHECK(mass->position[2] == Catch::Approx(60.0f * 8.0f));
+
+    // Type matching ignores case; the corpus is consistent and a mod need not be.
+    CHECK(mass->isType("mass"));
+    CHECK_FALSE(mass->isType("Massive"));
+}
+
+TEST_CASE("a marker this reader knows nothing about is skipped, not fatal") {
+    // The table holds kinds with no position at all, and refusing a whole map over one
+    // unexpected annotation trades a working map for a pedantic one. An ARMY_ marker
+    // missing its position is still an error — see the test above this pair.
+    const auto markers = rm::scenario::loadMarkers(R"(
+Scenario = { MasterChain = { ['_MASTERCHAIN_'] = { Markers = {
+    ['Camera Info'] = { ['type'] = STRING( 'Camera' ) },
+    ['Mass 01'] = { ['type'] = STRING( 'Mass' ), ['position'] = VECTOR3( 1, 1, 1 ) },
+} } } }
+)");
+
+    REQUIRE(markers.has_value());
+    REQUIRE(markers->size() == 1);
+    CHECK(markers->front().isType("Mass"));
+}
+
+TEST_CASE("an army marker with no position is still fatal when reading every marker") {
+    // The one kind the engine depends on. A silently absent spawn shows up much later
+    // as a map that starts one team short.
+    const auto markers = rm::scenario::loadMarkers(R"(
+Scenario = { MasterChain = { ['_MASTERCHAIN_'] = { Markers = {
+    ['ARMY_2'] = { ['type'] = STRING( 'Blank Marker' ) },
+} } } }
+)");
+
+    REQUIRE_FALSE(markers.has_value());
+    CHECK(markers.error().message.find("ARMY_2") != std::string::npos);
 }
