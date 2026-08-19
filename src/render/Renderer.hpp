@@ -97,6 +97,26 @@ public:
     // of its 60 stock maps have no water at all, so both are expressible.
     void setWater(bool enabled, float levelElmos) noexcept;
 
+    // The map's own lighting and water settings, from the blocks a `.scmap`
+    // carries for exactly this. Without them every map's sea and sky are
+    // identical — a map that declares a green lagoon and a hazy orange horizon
+    // renders as stock blue on both counts.
+    //
+    // Optional: an SMF map has no such blocks, and the defaults are the
+    // engine's own shader defaults rather than invented ones.
+    struct Environment {
+        std::array<float, 3> fogColour{{0.52f, 0.60f, 0.70f}};
+        std::array<float, 3> waterSurfaceColour{{0.0f, 0.7f, 1.5f}};
+        std::array<float, 3> waterSunColour{{0.80f, 0.47f, 0.33f}};
+        float waterColourLerp = 0.3f;
+        float waterFresnelBias = 0.1f;
+        float waterFresnelPower = 1.5f;
+        float waterSkyReflection = 1.5f;
+        float waterSunShininess = 50.0f;
+    };
+
+    void setEnvironment(const Environment& environment) noexcept;
+
     // Uploads several models, the instances to draw each at, and the textures
     // they share. One instanced draw call covers every instance of a model; the
     // bone hierarchy is applied on the GPU by indexing a per-bone offset buffer
@@ -393,6 +413,7 @@ private:
     // y = 0 that every SMF map shares.
     bool hasWater_ = true;
     float waterLevel_ = 0.0f;
+    Environment environment_{};
 
     OrbitCamera camera_;
 

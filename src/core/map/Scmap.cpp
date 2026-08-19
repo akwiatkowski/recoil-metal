@@ -141,18 +141,48 @@ void readToTerrainType(Cursor& cursor, rm::scmap::Map& map) {
     }
 
     // --- lighting block ----------------------------------------------------
-    // multiplier, sun direction/ambience/colour, shadow fill, specular (4),
-    // bloom, fog colour, fog start, fog end.
-    cursor.skipFloats(1 + 3 + 3 + 3 + 3 + 4 + 1 + 3 + 1 + 1);
+    // Read rather than skipped: the fog colour is what the sky fades to, and
+    // the sun's direction and colour are the map's, not the renderer's.
+    const auto vec3 = [&cursor] {
+        std::array<float, 3> v{};
+        v[0] = cursor.f32();
+        v[1] = cursor.f32();
+        v[2] = cursor.f32();
+        return v;
+    };
+
+    map.lighting.multiplier = cursor.f32();
+    map.lighting.sunDirection = vec3();
+    map.lighting.sunAmbience = vec3();
+    map.lighting.sunColour = vec3();
+    map.lighting.shadowFill = vec3();
+    for (float& channel : map.lighting.specularColour) {
+        channel = cursor.f32();
+    }
+    map.lighting.bloom = cursor.f32();
+    map.lighting.fogColour = vec3();
+    map.lighting.fogStart = cursor.f32();
+    map.lighting.fogEnd = cursor.f32();
 
     // --- water block -------------------------------------------------------
     map.hasWater = cursor.u8() != 0;
     map.waterElevation = cursor.f32() * rm::scmap::kElmosPerOgrid;
     cursor.skipFloats(2);  // elevation deep, elevation abyss
-    // surface colour (3), colour lerp (2), refraction scale, fresnel bias and
-    // power, unit and sky reflection, sun shininess/strength, sun direction (3),
-    // sun colour (3), sun reflection, sun glow.
-    cursor.skipFloats(3 + 2 + 1 + 2 + 2 + 2 + 3 + 3 + 2);
+    // The uniforms effects/water2.fx reads, in the order the file stores them.
+    map.water.surfaceColour = vec3();
+    map.water.colourLerp[0] = cursor.f32();
+    map.water.colourLerp[1] = cursor.f32();
+    map.water.refractionScale = cursor.f32();
+    map.water.fresnelBias = cursor.f32();
+    map.water.fresnelPower = cursor.f32();
+    map.water.unitReflection = cursor.f32();
+    map.water.skyReflection = cursor.f32();
+    map.water.sunShininess = cursor.f32();
+    map.water.sunStrength = cursor.f32();
+    map.water.sunDirection = vec3();
+    map.water.sunColour = vec3();
+    map.water.sunReflection = cursor.f32();
+    map.water.sunGlow = cursor.f32();
     cursor.skipCString();  // cubemap
     cursor.skipCString();  // water ramp
     // All four wave-repeat scalars come first, THEN four (movement, path)

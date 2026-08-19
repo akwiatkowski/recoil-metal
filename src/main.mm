@@ -199,6 +199,10 @@ struct LoadedMap {
     // Commander stores a level per map, and 17 of the 60 stock maps are dry.
     bool hasWater = true;
     float waterLevel = 0.0f;
+
+    // The map's own sky and water settings. Empty for an SMF map, which carries
+    // no such block — the renderer then keeps the engine's shader defaults.
+    std::optional<rm::Renderer::Environment> environment;
 };
 
 // Where Supreme Commander's ground layer textures live once extracted.
@@ -311,6 +315,33 @@ struct LoadedSplat {
     LoadedMap loaded;
     loaded.hasWater = map->hasWater;
     loaded.waterLevel = map->waterElevation;
+
+    // The map states its own horizon and sea, so use them rather than the
+    // shader's stock values — that is the difference between every map looking
+    // the same and each looking like itself.
+    rm::Renderer::Environment environment;
+    environment.fogColour = map->lighting.fogColour;
+    environment.waterSurfaceColour = map->water.surfaceColour;
+    environment.waterSunColour = map->water.sunColour;
+    // The engine clamps the water depth into [min, max] and the retail maps set
+    // both to the same value, which makes it a constant rather than a ramp.
+    environment.waterColourLerp = map->water.colourLerp[0];
+    environment.waterFresnelBias = map->water.fresnelBias;
+    environment.waterFresnelPower = map->water.fresnelPower;
+    environment.waterSkyReflection = map->water.skyReflection;
+    environment.waterSunShininess = map->water.sunShininess;
+    loaded.environment = environment;
+
+    std::printf("  sky/water: fog (%.2f %.2f %.2f), surface (%.2f %.2f %.2f),"
+                " fresnel %.2f^%.2f\n",
+                static_cast<double>(environment.fogColour[0]),
+                static_cast<double>(environment.fogColour[1]),
+                static_cast<double>(environment.fogColour[2]),
+                static_cast<double>(environment.waterSurfaceColour[0]),
+                static_cast<double>(environment.waterSurfaceColour[1]),
+                static_cast<double>(environment.waterSurfaceColour[2]),
+                static_cast<double>(environment.waterFresnelBias),
+                static_cast<double>(environment.waterFresnelPower));
     std::printf("  water: %s at %.1f elmos\n", map->hasWater ? "yes" : "none (dry map)",
                 static_cast<double>(map->waterElevation));
 
@@ -1175,6 +1206,9 @@ void applyGround(Target& target, const LoadedMap& map) {
         target.setSplat(map.splat, map.splatMaskA, map.splatMaskB);
     }
     target.setWater(map.hasWater, map.waterLevel);
+    if (map.environment) {
+        target.setEnvironment(*map.environment);
+    }
 }
 
 /// Points the camera at the first instance of the first model.

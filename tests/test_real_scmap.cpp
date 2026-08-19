@@ -567,3 +567,75 @@ TEST_CASE("every stratum texture a stock map names is on disk") {
     }
     REQUIRE(checked > 300);
 }
+
+TEST_CASE("every retail map's lighting and water settings read as sane values") {
+    // These blocks were skipped for six milestones; reading them means the
+    // byte layout either was already right or was never exercised. Across 60
+    // maps a misread field shows up as a colour outside 0..1 or a nonsense
+    // exponent long before it shows up on screen.
+    const auto maps = corpus();
+    if (maps.empty()) {
+        SKIP("retail Forged Alliance maps not mounted");
+    }
+
+    std::size_t withWater = 0;
+    std::size_t distinctFog = 0;
+    std::array<float, 3> lastFog{{-1.0f, -1.0f, -1.0f}};
+
+    for (const std::filesystem::path& path : maps) {
+        const auto map = rm::scmap::loadFile(path);
+        if (!map) {
+            continue;
+        }
+        INFO("map: " << path.filename().string());
+
+        // Colours are 0..1 channels. A field read one float early or late here
+        // lands on an elevation or an exponent and blows straight past 1.
+        for (const float channel : map->lighting.fogColour) {
+            REQUIRE(channel >= 0.0f);
+            REQUIRE(channel <= 1.0f);
+        }
+        for (const float channel : map->lighting.sunColour) {
+            REQUIRE(channel >= 0.0f);
+            REQUIRE(channel <= 4.0f);  // sun colour may exceed 1; it is a light
+        }
+
+        REQUIRE(map->lighting.fogEnd >= map->lighting.fogStart);
+
+        // The sun direction is a direction.
+        const float sunLength = std::sqrt(map->lighting.sunDirection[0] * map->lighting.sunDirection[0]
+                                        + map->lighting.sunDirection[1] * map->lighting.sunDirection[1]
+                                        + map->lighting.sunDirection[2] * map->lighting.sunDirection[2]);
+        REQUIRE(sunLength > 0.5f);
+        REQUIRE(sunLength < 2.0f);
+
+        if (map->hasWater) {
+            ++withWater;
+            // water2.fx's own defaults are bias 0.1, power 1.5; maps vary them
+            // but not wildly.
+            REQUIRE(map->water.fresnelPower > 0.0f);
+            REQUIRE(map->water.fresnelPower < 20.0f);
+            REQUIRE(map->water.fresnelBias >= 0.0f);
+            REQUIRE(map->water.fresnelBias <= 1.0f);
+            // Zero is legitimate — a map may want no sun glint at all, and at
+            // least one retail map asks for exactly that.
+            REQUIRE(map->water.sunShininess >= 0.0f);
+            REQUIRE(map->water.sunShininess < 2000.0f);
+            for (const float channel : map->water.surfaceColour) {
+                REQUIRE(channel >= 0.0f);
+                REQUIRE(channel <= 8.0f);  // waterColor is HDR-ish; 1.5 is stock
+            }
+        }
+
+        if (map->lighting.fogColour != lastFog) {
+            ++distinctFog;
+            lastFog = map->lighting.fogColour;
+        }
+    }
+
+    INFO(withWater << " maps with water, " << distinctFog << " distinct fog colours");
+    CHECK(withWater > 30);
+    // The point of reading these at all: maps genuinely differ. If every map
+    // came back with the same fog the parse is landing on a constant.
+    CHECK(distinctFog > 5);
+}

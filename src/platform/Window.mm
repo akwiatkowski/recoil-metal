@@ -304,6 +304,10 @@ void Window::setSplat(std::span<const SplatLayer> layers, const dds::Texture& ma
     impl_->renderer->setSplat(layers, maskA, maskB);
 }
 
+void Window::setEnvironment(const Renderer::Environment& environment) {
+    impl_->renderer->setEnvironment(environment);
+}
+
 void Window::setWater(bool enabled, float levelElmos) {
     impl_->renderer->setWater(enabled, levelElmos);
 }

@@ -11,6 +11,7 @@
 #include "core/mesh/TerrainMesh.hpp"
 
 #include "core/scene/Picking.hpp"
+#include "render/Renderer.hpp"
 
 #include <memory>
 #include <array>
@@ -59,6 +60,9 @@ public:
     // See Renderer::setGroundColourMap and Renderer::setWater.
     void setGroundColourMap(const ColourImage& image);
     void setWater(bool enabled, float levelElmos);
+
+    /// The map's lighting and water settings. See Renderer::setEnvironment.
+    void setEnvironment(const Renderer::Environment& environment);
 
     // The Supreme Commander ground splat. See Renderer::setSplat.
     void setSplat(std::span<const SplatLayer> layers, const dds::Texture& maskA,

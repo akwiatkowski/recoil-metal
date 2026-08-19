@@ -47,9 +47,27 @@ struct TerrainUniforms {
     float hasShadows;                   ///< 0 when no shadow map is bound
     float animationTime;                ///< seconds; the water's wave clock
     simd_float4x4 inverseViewProjection; ///< clip -> world, for the sky's rays
+
+    // The map's own settings, from its lighting and water blocks. Defaulted to
+    // water2.fx's stock values so an SMF map — which has no such blocks — still
+    // gets the engine's look rather than black.
+    simd_float3 fogColour;
+    float waterFresnelBias;
+    simd_float3 waterSurfaceColour;
+    float waterFresnelPower;
+    simd_float3 waterSunColour;
+    float waterColourLerp;
+    float waterSkyReflection;
+    float waterSunShininess;
 };
 
-static_assert(sizeof(TerrainUniforms) == 288, "TerrainUniforms must match the MSL layout");
+static_assert(sizeof(TerrainUniforms) == 384, "TerrainUniforms must match the MSL layout");
+static_assert(offsetof(TerrainUniforms, fogColour) == 288, "the map block follows the matrices");
+// A float3 is sixteen bytes AND sixteen-aligned, so the float after one does
+// NOT pack into its tail — it starts a fresh slot and the next float3 realigns
+// past it. Assuming otherwise costs 16 bytes of silent shear per pair.
+static_assert(offsetof(TerrainUniforms, waterSurfaceColour) == 320, "float3 realignment");
+static_assert(offsetof(TerrainUniforms, waterSunColour) == 352, "float3 realignment");
 static_assert(offsetof(TerrainUniforms, lightViewProjection) == 144,
               "the light matrix must follow the existing fields, not displace them");
 static_assert(offsetof(TerrainUniforms, hasShadows) == 208, "unexpected padding before hasShadows");
@@ -153,6 +171,14 @@ struct Uniforms {
     float hasShadows;
     float animationTime;
     float4x4 inverseViewProjection;
+    float3 fogColour;
+    float waterFresnelBias;
+    float3 waterSurfaceColour;
+    float waterFresnelPower;
+    float3 waterSunColour;
+    float waterColourLerp;
+    float waterSkyReflection;
+    float waterSunShininess;
 };
 
 // The sky, as Supreme Commander's own `effects/sky.fx` builds it: a lerp
@@ -161,18 +187,18 @@ struct Uniforms {
 // lookup texture and takes both colours per map; a `.scmap` carries them in
 // its skybox block, which this loader parses but does not yet expose — so
 // these are stand-ins with the engine's structure rather than its values.
-constant float3 kHorizonColour = float3(0.52, 0.60, 0.70);
+constant float3 kHorizonColour = float3(0.52, 0.60, 0.70);   // fallback; maps override
 constant float3 kZenithColour = float3(0.11, 0.24, 0.48);
 
 /// Sky colour along a view direction. Shared by the sky pass and the water's
 /// reflection, so the sea reflects the sky that is actually there.
-static float3 skyColour(float3 direction, float3 sunDirection) {
+static float3 skyColour(float3 direction, float3 sunDirection, float3 horizonColour) {
     const float3 d = normalize(direction);
 
     // Elevation drives the gradient. The power biases the blend toward the
     // horizon, where a real sky spends most of its visible area.
     const float elevation = saturate(d.y);
-    float3 colour = mix(kHorizonColour, kZenithColour, pow(elevation, 0.55));
+    float3 colour = mix(horizonColour, kZenithColour, pow(elevation, 0.55));
 
     // A sun, and the broad glow around it that makes a sky look lit rather
     // than painted.
@@ -186,7 +212,7 @@ static float3 skyColour(float3 direction, float3 sunDirection) {
     // toward a dimmer ground haze instead, which reads as distance.
     if (d.y < 0.0) {
         const float belowness = saturate(-d.y * 1.6);
-        colour = mix(colour, kHorizonColour * 0.72, belowness);
+        colour = mix(colour, horizonColour * 0.72, belowness);
     }
     return colour;
 }
@@ -215,7 +241,9 @@ vertex SkyOut skyVertex(uint vid [[vertex_id]], constant Uniforms& u [[buffer(1)
 }
 
 fragment float4 skyFragment(SkyOut in [[stage_in]], constant Uniforms& u [[buffer(1)]]) {
-    return float4(skyColour(in.direction, u.sunDirection), 1.0);
+    // The map's own fog colour is what its horizon fades to — stated by the
+    // .scmap's lighting block rather than chosen here.
+    return float4(skyColour(in.direction, u.sunDirection, u.fogColour), 1.0);
 }
 
 // How much of the sun a shadowed fragment keeps. Not zero: shadows in daylight
@@ -478,25 +506,26 @@ fragment float4 waterFragment(WaterOut in [[stage_in]], constant Uniforms& u [[b
     // softer it is than a physical Schlick term — power 1.5 against 5 — which
     // is why the engine's water reflects noticeably even looking straight down.
     const float NdotV = saturate(dot(normal, view));
-    const float fresnel = kFresnelBias + (1.0 - kFresnelBias) * pow(1.0 - NdotV, kFresnelPower);
+    const float fresnel = u.waterFresnelBias
+                        + (1.0 - u.waterFresnelBias) * pow(1.0 - NdotV, u.waterFresnelPower);
 
     // What is seen through the water, tinted as water2.fx tints it: a fixed
     // 0.3 of waterColor regardless of depth.
     float3 through = mix(kShallowWater, kDeepWater, deep);
-    through = mix(through, kWaterColour, kWaterLerp);
+    through = mix(through, u.waterSurfaceColour, u.waterColourLerp);
 
     // The sky the surface actually reflects — the same function the sky pass
     // draws with, so the sea and the sky above it agree.
-    const float3 reflected = skyColour(mirrored, u.sunDirection);
+    const float3 reflected = skyColour(mirrored, u.sunDirection, u.fogColour);
 
     // Shallow water reflects less sky. This is where the engine's depth
     // dependence lives, rather than in the tint.
-    const float skyAmount = kSkyReflectionAmount * saturate(in.depth * 0.1);
+    const float skyAmount = u.waterSkyReflection * saturate(in.depth * 0.1);
     float3 colour = mix(through, reflected, saturate(skyAmount * fresnel));
 
     // A tight warm glint, added through the Fresnel term as the engine does.
-    const float3 glint = pow(saturate(dot(mirrored, u.sunDirection)), kSunShininess)
-                       * kWaterSunColour;
+    const float3 glint = pow(saturate(dot(mirrored, u.sunDirection)), max(u.waterSunShininess, 1.0))
+                       * u.waterSunColour;
     colour += glint * fresnel;
 
     // Wave crests, from the same trains that made the normal. The engine gates
@@ -1590,6 +1619,10 @@ void Renderer::setGroundColourMap(const ColourImage& image) {
     hasGroundTexture_ = true;
 }
 
+void Renderer::setEnvironment(const Environment& environment) noexcept {
+    environment_ = environment;
+}
+
 void Renderer::setWater(bool enabled, float levelElmos) noexcept {
     const bool levelChanged = waterLevel_ != levelElmos;
     hasWater_ = enabled;
@@ -1845,6 +1878,19 @@ void Renderer::encodeScene(MTL::RenderCommandEncoder* encoder, unsigned int widt
         .hasShadows = hasShadows_ ? 1.0f : 0.0f,
         .animationTime = animationTime_,
         .inverseViewProjection = simd_inverse(camera_.viewProjection(aspect)),
+        .fogColour = simd_make_float3(environment_.fogColour[0], environment_.fogColour[1],
+                                      environment_.fogColour[2]),
+        .waterFresnelBias = environment_.waterFresnelBias,
+        .waterSurfaceColour = simd_make_float3(environment_.waterSurfaceColour[0],
+                                               environment_.waterSurfaceColour[1],
+                                               environment_.waterSurfaceColour[2]),
+        .waterFresnelPower = environment_.waterFresnelPower,
+        .waterSunColour = simd_make_float3(environment_.waterSunColour[0],
+                                           environment_.waterSunColour[1],
+                                           environment_.waterSunColour[2]),
+        .waterColourLerp = environment_.waterColourLerp,
+        .waterSkyReflection = environment_.waterSkyReflection,
+        .waterSunShininess = environment_.waterSunShininess,
     };
 
     // --- Sky ---------------------------------------------------------------

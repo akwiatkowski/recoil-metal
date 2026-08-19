@@ -44,6 +44,46 @@ inline constexpr float kElmosPerOgrid = 8.0f;
 // same ground. Beyond that a map wants streaming rather than a bigger number.
 inline constexpr int kMaxSquares = 8192;
 
+// The map's own water settings, read from the block a `.scmap` carries for
+// exactly this purpose.
+//
+// These are the uniforms `effects/water2.fx` reads — the same names, in the
+// same order the file stores them. The renderer used the shader's *defaults*
+// before this existed, which made every map's sea identical; a map that
+// declares a green shallow lagoon got the stock blue ocean.
+struct WaterSettings {
+    std::array<float, 3> surfaceColour{{0.0f, 0.7f, 1.5f}};
+    std::array<float, 2> colourLerp{{0.3f, 0.3f}};  ///< min/max; the engine clamps depth into it
+    float refractionScale = 0.015f;
+    float fresnelBias = 0.1f;
+    float fresnelPower = 1.5f;
+    float unitReflection = 0.5f;
+    float skyReflection = 1.5f;
+    float sunShininess = 50.0f;
+    float sunStrength = 10.0f;
+    std::array<float, 3> sunDirection{{0.0f, -1.0f, 0.0f}};
+    std::array<float, 3> sunColour{{0.81f, 0.81f, 0.81f}};
+    float sunReflection = 5.0f;
+    float sunGlow = 0.1f;
+};
+
+// The map's lighting, from the block preceding the water one.
+//
+// Fog is what the sky needs: a map states the colour its horizon fades to, and
+// guessing it is why every map here shared one blue-grey.
+struct MapLighting {
+    float multiplier = 1.0f;
+    std::array<float, 3> sunDirection{{0.7f, 0.5f, 0.5f}};
+    std::array<float, 3> sunAmbience{{0.2f, 0.2f, 0.2f}};
+    std::array<float, 3> sunColour{{1.0f, 1.0f, 1.0f}};
+    std::array<float, 3> shadowFill{{0.2f, 0.2f, 0.3f}};
+    std::array<float, 4> specularColour{{0.0f, 0.0f, 0.0f, 0.0f}};
+    float bloom = 0.0f;
+    std::array<float, 3> fogColour{{0.5f, 0.6f, 0.7f}};
+    float fogStart = 0.0f;
+    float fogEnd = 1000.0f;
+};
+
 // One entry of the stratum table: where the texture lives and how often it
 // repeats across the map.
 //
@@ -117,6 +157,9 @@ struct Map {
     // everything this renderer needs is read before the last two sections — a
     // map whose skybox block we misread is still a map we can draw.
     bool endsExactlyAtEof = false;
+
+    MapLighting lighting;
+    WaterSettings water;
 };
 
 /// Whether a buffer opens with the .scmap magic. Used to tell the two map
