@@ -1185,6 +1185,16 @@ void march(UnitScene& scene, const rm::HeightField& field, PassabilitySet& passa
     return false;
 }
 
+/// Whether a bare flag appears anywhere in the arguments.
+[[nodiscard]] bool hasFlag(int argc, const char* argv[], std::string_view flag) {
+    for (int i = 1; i < argc; ++i) {
+        if (argv[i] == flag) {
+            return true;
+        }
+    }
+    return false;
+}
+
 /// Applies whichever ground the map brought, plus its water plane.
 ///
 /// Templated on the target for the same reason focusOnFirstUnit is: Window and
@@ -1471,6 +1481,7 @@ int main(int argc, const char* argv[]) {
             applyGround(renderer, *map);
             renderer.setUnits(units.textures.all(), units.batches);
             renderer.setAnimationTime(animationTime);
+            renderer.setReflections(!hasFlag(argc, argv, "--no-reflections"));
             // --focus works here too, so the benchmark can measure a close
             // camera as well as a whole-map one. They are different workloads:
             // anything that culls to what the camera sees is invisible at full
@@ -1503,6 +1514,7 @@ int main(int argc, const char* argv[]) {
             applyGround(renderer, *map);
             renderer.setUnits(units.textures.all(), units.batches);
             renderer.setAnimationTime(animationTime);
+            renderer.setReflections(!hasFlag(argc, argv, "--no-reflections"));
             if (focus) {
                 focusOnFirstUnit(renderer, units);
             }
@@ -1534,6 +1546,24 @@ int main(int argc, const char* argv[]) {
         if (focus) {
             focusOnFirstUnit(window, units);
         }
+
+        // The planar reflection is half the frame for something Fresnel largely
+        // hides at this camera angle, so it is a setting rather than a fact.
+        // `r` flips it live, which is the only way to judge whether it is worth
+        // its cost — a side-by-side of two runs cannot show the difference
+        // moving.
+        if (hasFlag(argc, argv, "--no-reflections")) {
+            window.setReflections(false);
+        }
+        window.onKey([&window](char key) {
+            if (key != 'r') {
+                return;
+            }
+            const bool enabled = !window.reflectionsEnabled();
+            window.setReflections(enabled);
+            std::printf("reflections %s\n", enabled ? "on" : "off");
+            std::fflush(stdout);
+        });
 
         // --- Click to move -------------------------------------------------
         // Left selects the unit under the cursor, right orders the selection to

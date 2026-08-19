@@ -117,6 +117,22 @@ public:
 
     void setEnvironment(const Environment& environment) noexcept;
 
+    // Whether to render the planar reflection.
+    //
+    // A quality setting rather than a correctness one. The pass renders the
+    // whole scene a second time, mirrored, and costs about 0.75 ms of a 1.5 ms
+    // frame — half the frame for something the Fresnel term largely hides at
+    // the angle an RTS camera actually looks from. Off, the water falls back to
+    // the analytic sky, which is what it reflected before the pass existed and
+    // is convincing on open sea; what is lost is a cliff standing in its own
+    // reflection, which only reads near a shoreline.
+    //
+    // Switching it off does not free the reflection texture: it is allocated
+    // once at startup, and keeping it means the setting can be flipped per
+    // frame without reallocating mid-flight.
+    void setReflections(bool enabled) noexcept { reflectionsEnabled_ = enabled; }
+    [[nodiscard]] bool reflectionsEnabled() const noexcept { return reflectionsEnabled_; }
+
     // Uploads several models, the instances to draw each at, and the textures
     // they share. One instanced draw call covers every instance of a model; the
     // bone hierarchy is applied on the GPU by indexing a per-bone offset buffer
@@ -435,6 +451,7 @@ private:
     bool hasWater_ = true;
     float waterLevel_ = 0.0f;
     Environment environment_{};
+    bool reflectionsEnabled_ = true;
 
     OrbitCamera camera_;
 

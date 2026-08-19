@@ -95,6 +95,17 @@ public:
     // press and release that stayed put is reported.
     void onClick(std::function<void(const Ray& ray, MouseButton button, MouseModifiers mods)> callback);
 
+    // Called on a printable keypress, lowercased. Modifiers are not reported:
+    // a binding that needed one would belong in a menu rather than here.
+    //
+    // A plain char rather than a key code, so that nothing downstream has to
+    // include AppKit to ask "was that R".
+    void onKey(std::function<void(char key)> callback);
+
+    /// The planar reflection quality setting. See Renderer::setReflections.
+    void setReflections(bool enabled);
+    [[nodiscard]] bool reflectionsEnabled() const;
+
     /// Points the camera at a world position. See Renderer::focusOn.
     void focusOn(std::array<float, 3> target, float distance);
 

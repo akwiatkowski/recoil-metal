@@ -8,6 +8,7 @@
 
 #include <QuartzCore/QuartzCore.hpp> // metal-cpp decl of CA::MetalLayer (no impl defines here!)
 
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <functional>
@@ -70,6 +71,7 @@
 // Window::Impl's click callback, by pointer — see RMDisplayLinkDelegate.
 @property(nonatomic, assign)
     const std::function<void(const rm::Ray&, rm::MouseButton, rm::MouseModifiers)>* clickCallback;
+@property(nonatomic, assign) const std::function<void(char)>* keyCallback;
 @end
 
 @implementation RMTerrainView {
@@ -111,6 +113,29 @@ static constexpr CGFloat kClickSlopPoints = 3.0;
         .control = (event.modifierFlags & NSEventModifierFlagControl) != 0,
     };
     (*self.clickCallback)(ray, button, mods);
+}
+
+/// Reports a printable keypress, lowercased, to the app.
+///
+/// Deliberately a plain char rather than an NSEvent or a key code: the app is
+/// C++ that includes no AppKit, and every use so far is "did the user press r".
+/// Modifiers are not forwarded — a toggle that needed one would be a menu item,
+/// not a keypress.
+///
+/// Nothing is passed to super, so AppKit does not beep at an unhandled key.
+- (void)keyDown:(NSEvent*)event {
+    if (self.keyCallback == nullptr || !*self.keyCallback) {
+        return;
+    }
+    NSString* characters = event.charactersIgnoringModifiers;
+    if (characters.length == 0) {
+        return;
+    }
+    const unichar first = [characters characterAtIndex:0];
+    if (first > 127) {
+        return;  // not something a `char` can carry
+    }
+    (*self.keyCallback)(static_cast<char>(std::tolower(static_cast<int>(first))));
 }
 
 - (void)mouseDown:(NSEvent*)event {
@@ -204,6 +229,7 @@ struct rm::Window::Impl {
     // view and the delegate hold pointers to these very objects.
     std::function<void(float)> frameCallback;
     std::function<void(const rm::Ray&, rm::MouseButton, rm::MouseModifiers)> clickCallback;
+    std::function<void(char)> keyCallback;
 
     Impl(int width, int height, const char* title) {
         constexpr NSUInteger style = NSWindowStyleMaskTitled
@@ -242,6 +268,7 @@ struct rm::Window::Impl {
 
         view.renderer = renderer.get();
         view.clickCallback = &clickCallback;
+        view.keyCallback = &keyCallback;
 
         delegate = [[RMDisplayLinkDelegate alloc] init];
         delegate.renderer = renderer.get();
@@ -260,6 +287,7 @@ struct rm::Window::Impl {
         [displayLink invalidate];
         view.renderer = nullptr;
         view.clickCallback = nullptr;
+        view.keyCallback = nullptr;
         delegate.frameCallback = nullptr;
         renderer.reset();
     }
@@ -328,6 +356,18 @@ void Window::onFrame(std::function<void(float seconds)> callback) {
 void Window::onClick(
     std::function<void(const Ray& ray, MouseButton button, MouseModifiers mods)> callback) {
     impl_->clickCallback = std::move(callback);
+}
+
+void Window::onKey(std::function<void(char key)> callback) {
+    impl_->keyCallback = std::move(callback);
+}
+
+void Window::setReflections(bool enabled) {
+    impl_->renderer->setReflections(enabled);
+}
+
+bool Window::reflectionsEnabled() const {
+    return impl_->renderer->reflectionsEnabled();
 }
 
 void Window::focusOn(std::array<float, 3> target, float distance) {

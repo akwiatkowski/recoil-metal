@@ -61,10 +61,19 @@ struct TerrainUniforms {
     float waterSunShininess;
     float clipBelowY;   ///< the reflection pass discards anything under this
     simd_float2 viewportSize;  ///< pixels, so the water can find its own screen position
+    float hasReflection;       ///< 0 when the planar pass did not run this frame
 };
 
 
 static_assert(offsetof(TerrainUniforms, clipBelowY) == 380, "clipBelowY packs into the tail");
+// hasReflection went into the eight bytes the struct was already padding out to
+// its 16-byte alignment, so the size did NOT change and every offset below still
+// holds. That is luck rather than design — the next field added here will grow
+// the struct to 416 and is fine, but it must be added at the END for the same
+// reason the light matrix was.
+static_assert(offsetof(TerrainUniforms, viewportSize) == 384, "float2 realigns to 8 bytes");
+static_assert(offsetof(TerrainUniforms, hasReflection) == 392,
+              "hasReflection must land in the tail padding, not grow the struct");
 static_assert(sizeof(TerrainUniforms) == 400, "a float2 realigns to 8 bytes after clipBelowY");
 static_assert(offsetof(TerrainUniforms, fogColour) == 288, "the map block follows the matrices");
 // A float3 is sixteen bytes AND sixteen-aligned, so the float after one does
@@ -187,6 +196,7 @@ struct Uniforms {
     float waterSunShininess;
     float clipBelowY;
     float2 viewportSize;
+    float hasReflection;
 };
 
 // The sky, as Supreme Commander's own `effects/sky.fx` builds it: a lerp
@@ -558,13 +568,21 @@ fragment float4 waterFragment(WaterOut in [[stage_in]], float4 behind [[color(0)
     // Sampled at this fragment's own screen position, perturbed by the wave
     // normal. That perturbation is what makes the reflection ripple rather than
     // sit on the water like a decal.
-    const float2 screen = in.position.xy / float2(u.viewportSize);
-    // A few pixels of wobble, not a few hundred. The slope is a gradient, so
-    // scaling it into UV space needs a small number: 0.35 shifts the sample by
-    // a third of the screen and the reflection dapples with whatever happens to
-    // be there.
-    const float2 reflectionUv = saturate(screen + slope * 0.012);
-    const float4 planar = reflection.sample(reflectionSampler, reflectionUv);
+    //
+    // With the planar pass switched off the texture still exists but holds
+    // whatever was last rendered into it, so its coverage must be forced to
+    // zero here rather than trusted — otherwise disabling reflections freezes
+    // a stale mirror on the water instead of falling back to the sky.
+    float4 planar = float4(0.0);
+    if (u.hasReflection > 0.5) {
+        const float2 screen = in.position.xy / float2(u.viewportSize);
+        // A few pixels of wobble, not a few hundred. The slope is a gradient,
+        // so scaling it into UV space needs a small number: 0.35 shifts the
+        // sample by a third of the screen and the reflection dapples with
+        // whatever happens to be there.
+        const float2 reflectionUv = saturate(screen + slope * 0.012);
+        planar = reflection.sample(reflectionSampler, reflectionUv);
+    }
 
     const float3 sky = skyColour(mirrored, u.sunDirection, u.fogColour);
     // Alpha is the mirror's coverage: 1 where it drew world, 0 where it drew
@@ -2000,6 +2018,10 @@ void Renderer::encodeScene(MTL::RenderCommandEncoder* encoder, unsigned int widt
         // asks for it.
         .clipBelowY = override != nullptr ? override->clipBelowY : -1.0e9f,
         .viewportSize = simd_make_float2(static_cast<float>(width), static_cast<float>(height)),
+        // Must agree with encodeReflectionPass's own guard: the water reads
+        // this to decide whether the reflection texture holds this frame's
+        // mirror or last frame's leftovers.
+        .hasReflection = reflectionsEnabled_ ? 1.0f : 0.0f,
     };
 
     // --- Sky ---------------------------------------------------------------
@@ -2291,8 +2313,8 @@ void Renderer::updateLightMatrix() noexcept {
 }
 
 void Renderer::encodeReflectionPass(MTL::CommandBuffer* commandBuffer) noexcept {
-    if (reflectionColour_ == nullptr || commandBuffer == nullptr || indexCount_ == 0
-        || !hasWater_ || terrainMinY_ >= waterLevel_) {
+    if (!reflectionsEnabled_ || reflectionColour_ == nullptr || commandBuffer == nullptr
+        || indexCount_ == 0 || !hasWater_ || terrainMinY_ >= waterLevel_) {
         return;
     }
 
