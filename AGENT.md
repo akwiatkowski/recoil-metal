@@ -195,9 +195,15 @@ formats, built test-first in modern C++, as both research and a C++ showcase.
   judge sprite sizes on screen rather than in elmos.
 - **Supreme Commander's `.bp` blueprints use `#` as a line comment**, which is not
   Lua — real Lua allows it only on a first line and otherwise reads it as the
-  length operator. 47 of the 335 shipped prop blueprints do it, so the game's own
-  reader must accept it. `core/lua` accepts it at the START of a line only; taken
-  anywhere it would swallow the rest of a line and quietly drop a field.
+  length operator. So the game's own reader must accept it and so does `core/lua`:
+  **anywhere except directly after `=`**. The exception is the whole point. A `#`
+  where a value is due would be Lua's length operator, and treating it as a
+  comment there swallows the rest of the line and quietly drops the *next* field —
+  `count = #items, scale = 2` would lose `scale` instead of erroring. Measured
+  across all 4065 shipped `.bp` files: 209 mid-line `#` comments (208 of them the
+  trailing `# R,G,B,A` notes in effects.scd, one in `XSS0302_unit.bp`) against
+  **zero** length operators. The line-start-only rule this started with read all
+  335 prop blueprints and choked on exactly one unit.
 - **A prop's normal maps are not a stratum's.** Endpoint means come out near 148
   with red exactly equal to blue, against a stratum map's near-255 blue. Two
   conventions under one directory tree, which is why the stratum corpus test

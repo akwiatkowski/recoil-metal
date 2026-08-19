@@ -179,17 +179,29 @@ private:
     /// parser rewinds pos_ when a lookahead does not pan out (see the data
     /// constructors) and a flag would survive the rewind while the position did
     /// not. The scan stops at the first non-space, so it costs the indentation.
-    [[nodiscard]] bool atLineStart() const noexcept {
-        for (std::size_t back = pos_; back > 0; --back) {
+    /// Whether the grammar is waiting for a VALUE at `at` — i.e. the last
+    /// significant character was '='.
+    ///
+    /// Looked up by scanning back rather than tracked in a member, because the
+    /// parser rewinds pos_ when a lookahead does not pan out (see the data
+    /// constructors) and a flag would survive the rewind while the position did
+    /// not. The scan stops at the first non-space, so it costs the indentation.
+    ///
+    /// Scanned over whitespace only, with two stated blind spots and no shipped
+    /// file in either: a '#' separated from its '=' by an intervening `--`
+    /// comment is misjudged, and array-element position (`{ #items }`) is a value
+    /// position in Lua that this does not detect. In the second, a '#' is far
+    /// more likely to be one of the corpus's 209 comments than the only length
+    /// operator in 4065 files.
+    [[nodiscard]] bool valueExpectedBefore(std::size_t at) const noexcept {
+        for (std::size_t back = at; back > 0; --back) {
             const char c = source_[back - 1];
-            if (c == '\n') {
-                return true;
+            if (std::isspace(static_cast<unsigned char>(c)) != 0) {
+                continue;
             }
-            if (std::isspace(static_cast<unsigned char>(c)) == 0) {
-                return false;
-            }
+            return c == '=';
         }
-        return true;  // start of the buffer
+        return false;  // start of the buffer: nothing has asked for a value
     }
 
     void advance() noexcept {
@@ -217,16 +229,24 @@ private:
             // A '#' comment, which is NOT Lua. Real Lua allows '#' only on a
             // file's first line (the shebang concession) and otherwise reads it
             // as the length operator. Supreme Commander's blueprints use it as an
-            // ordinary line comment anyway — 47 of the 335 shipped prop
-            // blueprints do, mostly "# share other rock's albedo and specteam",
-            // and two to comment out a whole assignment — so the game's own
-            // reader must accept it and so must this one.
+            // ordinary line comment anyway, so the game's own reader must accept
+            // it and so must this one.
             //
-            // Only at the START of a line, which is where all 47 occurrences sit.
-            // Accepting it anywhere would make `Foo = #bar,` swallow the rest of
-            // the line and quietly drop a field, where today it is an error that
-            // says so.
-            if (c == '#' && atLineStart()) {
+            // ANYWHERE A VALUE IS NOT EXPECTED, which is the distinction that
+            // matters rather than the line position this once tested. Measured
+            // across all 4065 shipped `.bp` files: 209 mid-line '#' comments —
+            // `NukeCharge = Sound { # added for sound bug` in XSS0302_unit.bp and
+            // 208 trailing `# R,G,B,A` notes in effects.scd — against ZERO uses of
+            // '#' as the length operator. So the permissive reading is what the
+            // content needs.
+            //
+            // The one place it stays refused is directly after '=', where Lua
+            // would be reading a length operator and this reader would otherwise
+            // swallow the rest of the line and quietly drop the NEXT field:
+            // `count = #items, scale = 2` would lose `scale` rather than say so.
+            // That is the failure mode this repo keeps paying for elsewhere, so
+            // it is worth one character of lookback.
+            if (c == '#' && !valueExpectedBefore(pos_)) {
                 while (!atEnd() && peek() != '\n') {
                     advance();
                 }

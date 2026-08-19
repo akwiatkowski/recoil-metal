@@ -223,6 +223,74 @@ TEST_CASE("GROUP uses Lua's call-with-table sugar and yields the table") {
     REQUIRE(units->path("Units", "INITIAL")->stringAt("orders") == "hold");
 }
 
+TEST_CASE("a unit blueprint's shape reads without widening the allow-list") {
+    // `UnitBlueprint { ... }` wraps all 568 unit blueprints in units.scd, and it
+    // needs no entry in kTableConstructors: the reader scans to the FIRST table
+    // literal, so a top-level wrapper's name is never looked at — the identical
+    // source with any other name parses too. The allow-list governs only calls
+    // in *value* position, and `UnitBlueprint` appears exactly once per file.
+    // `Sound { ... }` is the one that genuinely nests here (3446 times across the
+    // corpus), and it was already allowed for the props.
+    const auto root = rm::lua::parseTable(R"(
+        UnitBlueprint {
+            Audio = {
+                Destroyed = Sound { Bank = 'UELDestroy', Cue = 'UEL_Destroy_Med_Land' },
+            },
+            Defense = { MaxHealth = 1200 },
+            Physics = { MaxSpeed = 2.5, MotionType = 'RULEUMT_Land', TurnRate = 45 },
+            Footprint = { SizeX = 1, SizeZ = 1 },
+        }
+    )");
+
+    REQUIRE(root.has_value());
+    REQUIRE(root->path("Defense")->numberAt("MaxHealth") == 1200.0);
+    REQUIRE(root->path("Physics")->stringAt("MotionType") == "RULEUMT_Land");
+    REQUIRE(root->path("Audio", "Destroyed")->stringAt("Bank") == "UELDestroy");
+}
+
+TEST_CASE("a '#' comment may start mid-line, not only at a line's start") {
+    // The line-start-only rule was the conservative reading, and one unit
+    // blueprint disagrees: XSS0302 writes `NukeCharge = Sound { # added for
+    // sound bug brute51`. Widening it is safe by measurement rather than by
+    // hope — across all 4065 shipped `.bp` files there are 209 mid-line '#'
+    // comments (208 of them in effects.scd) and ZERO uses of '#' as Lua's
+    // length operator in value position, which is the case that would make
+    // this swallow a field.
+    const auto root = rm::lua::parseTable(R"(
+        UnitBlueprint {
+            Audio = {
+                NukeCharge = Sound { # added for sound bug
+                    Bank = 'XSS',
+                },
+            },
+            Lifetime = 0.575, ###Set this to last 1.5 seconds
+            Physics = { MaxSpeed = 2.5 },
+        }
+    )");
+
+    REQUIRE(root.has_value());
+    REQUIRE(root->path("Audio", "NukeCharge")->stringAt("Bank") == "XSS");
+    REQUIRE(root->numberAt("Lifetime") == 0.575);
+    REQUIRE(root->path("Physics")->numberAt("MaxSpeed") == 2.5);
+}
+
+TEST_CASE("a '#' inside a string is data, not the start of a comment") {
+    // Four unit blueprints carry one, in display text like 'Mech Marine #2'.
+    // The lexer reads strings before trivia, so this holds — but it holds by
+    // construction rather than on purpose, which is worth a test now that '#'
+    // is accepted anywhere a token could begin.
+    const auto root = rm::lua::parseTable(R"(
+        UnitBlueprint {
+            Description = 'Mech Marine #2',
+            Physics = { MaxSpeed = 3.2 },
+        }
+    )");
+
+    REQUIRE(root.has_value());
+    REQUIRE(root->stringAt("Description") == "Mech Marine #2");
+    REQUIRE(root->path("Physics")->numberAt("MaxSpeed") == 3.2);
+}
+
 TEST_CASE("the table-call sugar is not granted to every identifier") {
     // GROUP is allowed this spelling; nothing else is, or the reader would
     // silently accept `SomeFunction { ... }` as data.
