@@ -45,10 +45,23 @@ namespace {
         if (!entry.is_regular_file(ec) || entry.path().extension() != ".dds") {
             continue;
         }
-        std::string name = entry.path().filename().string();
-        std::transform(name.begin(), name.end(), name.begin(),
+        // Lowercased whole path, not just the file name, because the directory
+        // is load-bearing: this test is about STRATUM normal maps, the ones
+        // `terrain.fx` reads, and those live under a layer directory.
+        //
+        // It used to match any file under env/ with "normal" in its name, which
+        // was the same set while only the layer directories had been extracted.
+        // Extracting the props (milestone 14) added 1500 files and broke it —
+        // usefully, because a PROP normal map is not the same thing at all: the
+        // prop shaders read a tangent-space map whose endpoint means come out
+        // around 148 with red exactly equal to blue, nothing like the near-255
+        // blue a stratum map has. Two conventions under one directory tree, and
+        // a filename substring cannot tell them apart.
+        std::string path = entry.path().string();
+        std::transform(path.begin(), path.end(), path.begin(),
                        [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-        if (name.find("normal") != std::string::npos) {
+        if (path.find("/layers/") != std::string::npos
+            && path.find("normal") != std::string::npos) {
             found.push_back(entry.path());
         }
     }

@@ -394,11 +394,44 @@ std::expected<Map, MapError> load(std::span<const std::byte> bytes) {
     }
     cursor.skipFloats(1);
 
-    for (std::int32_t i = 0, n = cursor.i32(); cursor.ok() && i < n; ++i) {
-        cursor.skipCString();           // blueprint path
-        cursor.skipFloats(3);           // position
-        cursor.skipFloats(3 + 3 + 3);   // rotation basis
-        cursor.skipFloats(3);           // scale
+    // --- props --------------------------------------------------------------
+    // Trees, rocks and wrecks. Kept rather than skipped: this is the section
+    // that decides whether a map looks inhabited, and there is nothing else in
+    // either format that carries it.
+    //
+    // The count is trusted only as far as the file goes — `cursor.ok()` stops
+    // the loop at EOF, so a corrupt count reads what is there and reports the
+    // shortfall through endsExactlyAtEof rather than allocating on a bad number.
+    const std::int32_t propCount = cursor.i32();
+    if (propCount > 0 && cursor.ok()) {
+        map.props.reserve(static_cast<std::size_t>(propCount));
+    }
+    for (std::int32_t i = 0; cursor.ok() && i < propCount; ++i) {
+        Prop prop;
+        prop.blueprint = cursor.cstring();
+
+        // Positions are ogrids like every other coordinate in the file, and the
+        // heightmap has already been scaled to elmos — a prop left in ogrids
+        // lands at an eighth of its distance from the origin, which reads as
+        // every tree on the map bunched into one corner.
+        for (float& axis : prop.position) {
+            axis = cursor.f32() * kElmosPerOgrid;
+        }
+        for (std::array<float, 3>* basis : {&prop.rotationX, &prop.rotationY, &prop.rotationZ}) {
+            for (float& component : *basis) {
+                component = cursor.f32();
+            }
+        }
+        // Scale is a ratio, so it does NOT take the ogrid conversion. Applying
+        // it here as well would make every prop eight times its size — which
+        // looks like a mesh-units problem and is not one.
+        for (float& axis : prop.scale) {
+            axis = cursor.f32();
+        }
+
+        if (cursor.ok()) {
+            map.props.push_back(std::move(prop));
+        }
     }
 
     map.endsExactlyAtEof = cursor.ok() && cursor.at() == cursor.size();

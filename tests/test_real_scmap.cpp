@@ -7,6 +7,7 @@
 //
 // The corpus is the stock maps of a retail Steam install:
 //   /Volumes/Samsung_T5/faf/Supreme Commander Forged Alliance/maps/SCMP_0NN/
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 #include "core/lua/LuaTable.hpp"
@@ -23,6 +24,8 @@
 #include <set>
 #include <string>
 #include <vector>
+
+using Catch::Approx;
 
 namespace {
 
@@ -641,4 +644,162 @@ TEST_CASE("every retail map's lighting and water settings read as sane values") 
     // The point of reading these at all: maps genuinely differ. If every map
     // came back with the same fog the parse is landing on a constant.
     CHECK(distinctFog > 5);
+}
+
+// --- Props -------------------------------------------------------------------
+// The trees, rocks and wrecks scattered over a map. This section used to be
+// walked and thrown away, which is how the map corpus came to be described as
+// having no static objects: the Recoil side genuinely has none to speak of (BAR's
+// aw04 declares zero features in its SMF block and places its objects through a
+// runtime Lua gadget), and the Supreme Commander side was never counted.
+
+TEST_CASE("the stock maps carry props, and they land on the map") {
+    const auto maps = corpus();
+    if (maps.empty()) {
+        SKIP("retail Forged Alliance maps not mounted");
+    }
+
+    std::size_t total = 0;
+    std::size_t mapsWithProps = 0;
+
+    for (const std::filesystem::path& path : maps) {
+        const auto map = rm::scmap::loadFile(path);
+        REQUIRE(map.has_value());
+        INFO("map: " << path.filename().string());
+
+        // Parsing the props must not disturb the acid test: the section is the
+        // last one in the file, so reading it wrong is exactly what would stop
+        // the parse landing on the final byte.
+        CHECK(map->endsExactlyAtEof);
+
+        total += map->props.size();
+        if (!map->props.empty()) {
+            ++mapsWithProps;
+        }
+
+        const float width =
+            static_cast<float>(map->field.squaresX) * static_cast<float>(rm::kSquareSize);
+        const float depth =
+            static_cast<float>(map->field.squaresZ) * static_cast<float>(rm::kSquareSize);
+
+        float furthestX = 0.0f;
+        float furthestZ = 0.0f;
+
+        for (const rm::scmap::Prop& prop : map->props) {
+            INFO("prop: " << prop.blueprint);
+            // A blueprint is an absolute path in the game's virtual filesystem.
+            REQUIRE_FALSE(prop.blueprint.empty());
+            CHECK(prop.blueprint.front() == '/');
+            CHECK(prop.blueprint.ends_with(".bp"));
+
+            // Loosely on the map. NOT tightly: a real map dresses the ground
+            // outside its playable area, and the stock corpus puts props as much
+            // as 322 elmos past the heightmap's edge (SCMP_007) and 3 elmos past
+            // the far one (SCMP_004). Those are deliberate, so the bound here is
+            // a sanity check against a wild value rather than a border patrol.
+            CHECK(prop.position[0] >= -0.1f * width);
+            CHECK(prop.position[0] <= 1.1f * width);
+            CHECK(prop.position[2] >= -0.1f * depth);
+            CHECK(prop.position[2] <= 1.1f * depth);
+
+            furthestX = std::max(furthestX, prop.position[0]);
+            furthestZ = std::max(furthestZ, prop.position[2]);
+        }
+
+        // THIS is what catches the ogrid conversion being forgotten, and no
+        // bounds check can do it: a prop left in ogrids lands at an eighth of its
+        // distance from the origin, which is still comfortably inside the map. A
+        // map's props have to reach across it. Only asked of maps carrying enough
+        // props to have spread — a handful could legitimately sit in one corner.
+        if (map->props.size() >= 100) {
+            CHECK(furthestX > 0.5f * width);
+            CHECK(furthestZ > 0.5f * depth);
+        }
+    }
+
+    // 59 of the 60 stock maps carry props — 418 942 of them, a median of 4 355
+    // per map and 46 971 on the busiest. Asserted as a floor rather than the
+    // exact figure so the test survives a corpus that is missing a map, while
+    // still failing outright if the section stops being read.
+    CHECK(mapsWithProps >= 55);
+    CHECK(total > 400000);
+}
+
+TEST_CASE("a prop's rotation is kept as the basis the file stores") {
+    const auto maps = corpus();
+    if (maps.empty()) {
+        SKIP("retail Forged Alliance maps not mounted");
+    }
+
+    // Almost every prop is upright and axis-aligned, and the ones that are not
+    // are rotated about Y only — a map editor spins a tree, it does not tip it
+    // over. What matters is that the basis read back is a rotation at all: three
+    // unit-length columns. A misread stride here would give lengths nowhere near
+    // one, which is the cheapest possible check that the field widths are right.
+    std::size_t checked = 0;
+    for (const std::filesystem::path& path : maps) {
+        const auto map = rm::scmap::loadFile(path);
+        REQUIRE(map.has_value());
+
+        for (const rm::scmap::Prop& prop : map->props) {
+            for (const std::array<float, 3>& column :
+                 {prop.rotationX, prop.rotationY, prop.rotationZ}) {
+                const float length = std::sqrt(column[0] * column[0] + column[1] * column[1]
+                                               + column[2] * column[2]);
+                INFO("map: " << path.filename().string() << ", prop: " << prop.blueprint);
+                REQUIRE(length == Approx(1.0f).margin(0.01f));
+            }
+            ++checked;
+            if (checked > 20000) {
+                return;  // enough of the corpus to prove the layout
+            }
+        }
+    }
+}
+
+TEST_CASE("every prop blueprint a stock map names is on disk") {
+    // The same test the stratum textures get, for the same reason: the meshes
+    // live in env.scd and are extracted once (see README). A blueprint the
+    // extraction missed would show up as a prop silently absent from the map.
+    const auto maps = corpus();
+    if (maps.empty()) {
+        SKIP("retail Forged Alliance maps not mounted");
+    }
+    const char* home = std::getenv("HOME");
+    if (home == nullptr) {
+        SKIP("no HOME");
+    }
+    const std::filesystem::path root = std::filesystem::path{home} / "projects/llm/input/faf";
+
+    std::error_code ec;
+    if (!std::filesystem::is_directory(root / "env", ec)) {
+        SKIP("extracted Forged Alliance env content not present");
+    }
+
+    std::set<std::string> distinct;
+    for (const std::filesystem::path& path : maps) {
+        const auto map = rm::scmap::loadFile(path);
+        if (!map) {
+            continue;
+        }
+        for (const rm::scmap::Prop& prop : map->props) {
+            distinct.insert(prop.blueprint);
+        }
+    }
+    REQUIRE(distinct.size() > 150);
+
+    std::set<std::string> missing;
+    for (const std::string& blueprint : distinct) {
+        std::string relative = blueprint;
+        if (!relative.empty() && relative.front() == '/') {
+            relative.erase(0, 1);
+        }
+        if (!std::filesystem::is_regular_file(root / relative, ec)) {
+            missing.insert(blueprint);
+        }
+    }
+
+    INFO("missing " << missing.size() << " of " << distinct.size()
+                    << ", first: " << (missing.empty() ? std::string{} : *missing.begin()));
+    CHECK(missing.empty());
 }

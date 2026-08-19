@@ -106,6 +106,22 @@ inline constexpr std::size_t kAlbedoSlots = 10;
 inline constexpr std::size_t kNormalSlots = 9;
 inline constexpr std::size_t kStrataSlots = 8;
 
+// One static object placed on the map: a tree, a rock, a wreck.
+//
+// The transform is stored as a full 3x3 basis rather than a yaw, and it is kept
+// that way here rather than reduced to one: the columns are not guaranteed to be
+// a pure rotation (a map author can scale or mirror a prop through the editor),
+// and recovering an angle from a basis that is not orthonormal silently
+// straightens whatever was crooked on purpose.
+struct Prop {
+    std::string blueprint;  ///< game-relative, e.g. "/env/Evergreen/props/Tree01_prop.bp"
+    std::array<float, 3> position{};  ///< elmos, converted from ogrids on load
+    std::array<float, 3> rotationX{{1.0f, 0.0f, 0.0f}};
+    std::array<float, 3> rotationY{{0.0f, 1.0f, 0.0f}};
+    std::array<float, 3> rotationZ{{0.0f, 0.0f, 1.0f}};
+    std::array<float, 3> scale{{1.0f, 1.0f, 1.0f}};
+};
+
 // A decoded Supreme Commander map.
 //
 // The heightmap lands in the same format-agnostic HeightField the SMF loader
@@ -148,6 +164,17 @@ struct Map {
     // dry map under a blue sheet.
     bool hasWater = false;
     float waterElevation = 0.0f;  ///< elmos
+
+    // --- props -------------------------------------------------------------
+    //
+    // The static objects scattered over the map: trees, rocks, wrecks. Supreme
+    // Commander's answer to Recoil's SMF feature list, and the section that
+    // makes a map look inhabited rather than like a heightfield.
+    //
+    // A prop names a BLUEPRINT (`/env/Evergreen/props/Tree01_prop.bp`), not a
+    // mesh — the mesh is named inside the blueprint, one directory over. Only
+    // the placement is here.
+    std::vector<Prop> props;
 
     // Whether the sequential parse landed exactly on the last byte.
     //

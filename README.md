@@ -639,6 +639,29 @@ PY
 Without them the map still draws: the terrain-type colour bands from milestone 6
 stay loaded as the fallback, and the splat simply does not switch on.
 
+### Prop meshes
+
+The same archive, and the same deal — a `.scmap`'s props name blueprints
+(`/env/Tropical/Props/Trees/Palm02_s1_prop.bp`) whose meshes and textures sit
+beside them. 1511 files and 160 MiB, against 335 blueprints the stock maps
+between them reference:
+
+```sh
+python3 - <<'PY'
+import zipfile, os
+scd = '/Volumes/Samsung_T5/faf/Supreme Commander Forged Alliance/gamedata/env.scd'
+dest = os.path.expanduser('~/projects/llm/input/faf')
+z = zipfile.ZipFile(scd)
+for n in z.namelist():
+    if n.lower().startswith('env/') and '/props/' in n.lower() \
+            and n.lower().endswith(('.bp', '.scm', '.dds')):
+        z.extract(n, dest)
+PY
+```
+
+Without them the map draws bare: the prop list is still parsed and counted, and
+every blueprint that fails to resolve is reported once.
+
 ### Animation
 
 `--animate <file.sca>` attaches an animation to the `--units` before it. The
