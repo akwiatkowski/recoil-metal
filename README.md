@@ -44,6 +44,8 @@ Commander `.scmap` maps with `.scm` models.
 | **Refraction and planar reflection** — the sea absorbs by Beer-Lambert, so a shallow sandy bottom stays sandy | A **4096-square** map, decimated to fit rather than refused |
 | ![selection rings](docs/images/m13-selection-rings.jpg) | ![stratum normal maps](docs/images/m13-stratum-normals.jpg) |
 | **Selection rings** that follow the ground rather than hovering flat over it | **Per-stratum normal maps**, at the scale an 8-elmo height sample cannot reach |
+| ![a forested Supreme Commander map](docs/images/m14-props-forest.jpg) | ![dust behind a moving tank](docs/images/m14-dust.jpg) |
+| **The scenery a map places** — 5182 props here, and 46 971 on the busiest stock map | **Dust**, aged entirely in the vertex shader |
 
 More in the milestone notes below: [`m5-units-close`](docs/images/m5-units-close.jpg),
 [`m5-units-wide`](docs/images/m5-units-wide.jpg),
@@ -508,6 +510,135 @@ reimplemented.*
     away, and a stratum's weight is zero across most of the map — both skips
     leave the image bit-identical in intent, and take 6.5× off the feature's
     cost.
+
+14. **Scenery, and the answers to three open questions.** **✔ done.**
+
+    **Props.** The map corpus turned out to be full of scenery nobody had counted.
+    Feature rendering had been recorded as blocked because BAR's aw04 declares zero
+    features in its SMF block and places its objects through a runtime Lua gadget —
+    but the Supreme Commander side was never looked at, and **59 of the 60 stock
+    maps carry props: 418 942 of them**, a median of 4355 per map and 46 971 on the
+    busiest, across 207 distinct blueprints. The section was already being walked to
+    prove the parse reached EOF, so reading it replaced four skips with four reads.
+
+    | | |
+    |---|---|
+    | ![a forested map](docs/images/m14-props-forest.jpg) | ![individual conifers](docs/images/m14-props-close.jpg) |
+    | **5182 props from 19 meshes and 5 textures** on SCMP_009 | Alpha cutouts up close — the leaf shape, not the quad |
+
+    A prop is a static model with one texture, so it shares the unit pipeline and
+    differs in two flagged things: no shading texture, and its albedo's alpha is a
+    CUTOUT rather than a team-colour mask. That second one matters more than it
+    sounds — both families keep a team mask in an alpha channel somewhere, so read
+    as a mask a palm frond renders as a solid green card in the player's colour. It
+    is a `discard` rather than a blend because scenery is drawn in arbitrary order,
+    and a cutout is order-independent, which is what keeps 14 000 trees one draw.
+
+    What it does *not* share is the unit list, for a reason about the sim rather
+    than the GPU: everything in there is ticked, collided and pickable, so a tree in
+    it would be shoved aside by passing infantry and would accept a move order.
+
+    Two scale conversions, and both are needed. `UniformScale` in the blueprint
+    takes the mesh to ogrids — cross-checked against the blueprints' own `SizeY`,
+    the collision height in ogrids, which says 1 for both a palm and a pine whose
+    meshes measure 0.96 and 1.18 once scaled — and an ogrid is 8 elmos. Miss the
+    second and a pine is 1.2 elmos tall: a scatter of dark specks that reads as a
+    texture problem rather than a units one. See [ADR-024](ADR_DECISIONS.md).
+
+    Reading a blueprint needed two things of the Lua data reader. Its
+    call-with-table allow-list grew from `GROUP` alone to the four names that appear
+    across 335 blueprints and 61 stock maps. And `#` became a line comment, which is
+    **not Lua** — real Lua allows it only on a first line and otherwise reads it as
+    the length operator — but 47 blueprints use it as one anyway, so the game's own
+    reader must. Accepted only at the start of a line, where all 47 sit; anywhere
+    else it would swallow the rest of a line and quietly drop a field.
+
+    **Dust**, on a new particle pass, and the first thing here that is neither
+    terrain, model nor interface.
+
+    ![dust behind a moving tank](docs/images/m14-dust.jpg)
+
+    What the CPU uploads is a particle's *history* rather than its state — where it
+    was born, the velocity it was born with, how long ago — and the vertex shader
+    works out the rest. So nothing on the CPU integrates a position, and the quad is
+    expanded from the vertex id and turned to face the camera in the shader, which
+    means no geometry uploaded and no index buffer. 1983 particles cost 1.428 ms
+    against 1.423 without: free, within noise. Blending is premultiplied, so the one
+    pipeline covers translucent dust *and* an additive spark
+    ([ADR-025](ADR_DECISIONS.md)).
+
+    Three mistakes worth recording, all now tests. A puff born exactly on the ground
+    is coplanar with the terrain drawn there and loses the depth test — totally and
+    silently, since the draw is issued and the count is right and nothing appears.
+    The radial falloff was squared, which shrank a puff's visible core to a fraction
+    of its quad. And the emission was gated on `MoveState::speedElmosPerSecond`,
+    which is a unit's *top* speed rather than its current one, so every parked unit
+    smoked — caught by a line of output disagreeing with itself: `0 of 60 units
+    routed` next to `840 dust particles still in the air`.
+
+    **Order markers.** A right-click leaves a crossed amber ring that shrinks toward
+    the point and fades. A cross rather than a second ring: it appears on the same
+    ground as a selection ring within a second of it, so hue alone is one
+    distinction too few.
+
+    ![an order marker among selection rings](docs/images/m14-order-marker.jpg)
+
+    The buffer these ride was named for rings alone, which stopped being true with a
+    second kind of thing in it — hence `GroundDecals`. No pipeline, buffer or draw
+    call was needed for the new decal, because the renderer already took arbitrary
+    ground-conforming coloured triangles.
+
+    **And the three open questions milestone 13 left.**
+
+    *Should the selection tint stay?* No. It was free — the team-colour field is per
+    instance and already uploaded — but in an RTS a unit's colours are its
+    allegiance, so repainting that channel to mean "selected" makes a unit appear to
+    change sides for as long as it is in the set. Two cues for one piece of state is
+    a redundancy worth paying for; two *meanings* on one channel is not. Rings only
+    now, and the click handler lost 40 lines ([ADR-021](ADR_DECISIONS.md)).
+
+    *Should the quality switches default to looks-best or costs-least?* Looks-best,
+    and there is now a settings file to say otherwise. What that obliges is that a
+    benchmark states which switches were on, since two of this renderer's own
+    numbers are otherwise not comparable — which it now does.
+
+    *And the LOD thresholds, retuned now that the cull-and-merge actually fires.*
+    The premise turned out to be wrong in a useful way: band boundaries do break
+    runs, and it does not matter. The shipped 8/20 issues six draws against 6/14's
+    one and is still **0.13 ms slower**, because it draws 80% more triangles — a
+    whole-map framing is vertex-bound and a handful of draw calls does not register
+    against 100k triangles.
+
+    | near/far | whole-map GPU | draws | triangles | vs no LOD | focus-60 diff |
+    |---|---|---|---|---|---|
+    | off | 2.598 ms | 1 | 2 097 152 | — | — |
+    | 8 / 20 (was) | 1.510 ms | 6 | 235 520 | 0.385/255 | 0.000/255 |
+    | **6 / 14 (now)** | **1.380 ms** | **1** | **131 072** | 0.452/255 | 0.000/255 |
+    | 4 / 10 | 1.384 ms | 1 | 131 072 | 0.452/255 | 0.258/255 |
+
+    6 is where the near threshold stops being free: at a mid-range working camera it
+    renders an image byte-identical to full detail while 4 already moves 1.23% of
+    the pixels. 47% off the whole-map frame for a mean difference of 0.45/255. The
+    thresholds are deliberately *not* derived from a projected-error budget, which
+    was the first attempt and demands a threshold four times the width of the map —
+    the model says "never use LOD" and the screenshots say the error is invisible
+    under ground texture and shadow ([ADR-022](ADR_DECISIONS.md)).
+
+    The merge itself moved out of the renderer into `core/mesh/ChunkDraws.hpp` with
+    ten tests, because a draw count is the one part of a frame that has to be
+    asserted rather than looked at — which is exactly how milestone 13 lost it for a
+    whole milestone.
+
+    **Refraction, built and switched off.** The water can now bend what is under it:
+    the offset needs a copy of the colour target, since a framebuffer fetch reads one
+    pixel and no other, so the pass splits in two around a blit (+0.17 ms on aw04,
+    +0.28 on a Supreme Commander sea map). That part works. What it reveals is that
+    the field being bent by is two analytic wave trains standing in for the engine's
+    four scrolling normal maps — and moving a screen-space sample by a field that
+    regular draws the field's own lattice across the water: rings tens of pixels
+    across at swell frequency, a diagonal hatch at ripple frequency, at every
+    strength down to a quarter of the engine's. So it ships off, and the blocker was
+    never the copy ([ADR-023](ADR_DECISIONS.md)).
 
 Stage B (sim semantics, only if milestones 1–5 prove out) is deliberately not
 planned. The cliff is real; plan when we're on it.

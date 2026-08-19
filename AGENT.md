@@ -173,3 +173,43 @@ formats, built test-first in modern C++, as both research and a C++ showcase.
   a port needs a fact the source does not carry, measure it against the real
   corpus and write the measurement as a test (`test_real_stratum_normals.cpp`)
   — inferring it is how bumps end up lit as dents.
+- **`MTL::TextureDescriptor::texture2DDescriptor` is a CLASS FACTORY, so its result
+  is autoreleased.** Releasing it is an over-release that segfaults a frame or two
+  later, in `objc_msgSend` and nowhere near the mistake. The rule from the top of
+  this list — `alloc()->init()` and `newXxx()` are +1, everything else is not —
+  covers it, but the name reads like a constructor and the crash does not point
+  back here.
+- **A render pipeline needs the shader library alive.** `library->release()` runs
+  as soon as the pipelines that existed at the time are built, so a new pipeline
+  added *below* that line calls `newFunction` on a dead object. Same crash
+  signature as above, and the same lesson: EXC_BAD_ACCESS inside `objc_msgSend`
+  means a released object, not a bad pointer of ours.
+- **Anything depth-tested that sits ON the ground loses to the terrain.** It fails
+  totally and silently: the draw is issued, the count is right, and nothing
+  appears — which reads as the feature not working at all. Selection rings hit it
+  first, particles hit it again; both need `LessEqual` and an elmo of lift. When a
+  new pass draws nothing, check this before checking the shader.
+- **A radial falloff of `f²` is much smaller than it looks.** A particle's visible
+  core shrank to a fraction of its quad, so a 17-elmo puff read as a speck with
+  most of the sprite spent on a gradient too faint to see. Linear falloff, and
+  judge sprite sizes on screen rather than in elmos.
+- **Supreme Commander's `.bp` blueprints use `#` as a line comment**, which is not
+  Lua — real Lua allows it only on a first line and otherwise reads it as the
+  length operator. 47 of the 335 shipped prop blueprints do it, so the game's own
+  reader must accept it. `core/lua` accepts it at the START of a line only; taken
+  anywhere it would swallow the rest of a line and quietly drop a field.
+- **A prop's normal maps are not a stratum's.** Endpoint means come out near 148
+  with red exactly equal to blue, against a stratum map's near-255 blue. Two
+  conventions under one directory tree, which is why the stratum corpus test
+  selects on the `/layers/` directory rather than on "normal" appearing in a file
+  name — extracting the props broke it, usefully.
+- **A prop's size is TWO conversions away from its mesh.** The blueprint's
+  `UniformScale` takes the mesh to ogrids, and an ogrid is 8 elmos. Applying only
+  the first leaves a pine 1.2 elmos tall, which renders as a scatter of dark specks
+  and reads as a texture problem. `SizeY` in the same blueprint is the collision
+  height in ogrids and is the independent check.
+- **Draw-call count is not where the terrain's time goes.** Six draws against one
+  measured *slower* when the six drew 80% fewer triangles: a whole-map framing is
+  vertex-bound and a handful of draw calls does not register. Measure before
+  optimising a draw count — and see ADR-022 for the error budget that said the
+  opposite of what the screenshots said.

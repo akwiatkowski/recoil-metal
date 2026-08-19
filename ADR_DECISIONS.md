@@ -874,3 +874,110 @@ One incidental find, worth recording because it cost a segfault: metal-cpp's
 `MTL::TextureDescriptor::texture2DDescriptor` is a class factory method, so what
 it returns is autoreleased. Releasing it is an over-release that crashes a frame
 or two later, nowhere near the mistake.
+
+---
+
+## ADR-024 — Props are drawn by the unit pipeline, and kept out of the unit list
+
+**Context.** Milestone 14 found that the map corpus is full of scenery after all:
+59 of the 60 stock `.scmap` maps place props, 418 942 of them, mostly trees and
+boulders. A prop is a static model with one texture, which is very nearly what a
+unit is.
+
+**Decision.** Share the unit pipeline and shaders; do not share the unit list.
+
+The GPU side is the same problem, so it uses the same solution — same vertex
+function, same fragment function, same instance layout (`UnitInstance`, whose
+team-colour field a prop simply does not use). Two differences, both flagged by a
+uniform: a prop's albedo alpha is a CUTOUT rather than a team-colour mask, and it
+has no shading texture at all.
+
+The alpha distinction is not cosmetic. Both content families keep a team-colour
+mask in an alpha channel somewhere — Recoil in tex1's, Supreme Commander in
+`_SpecTeam`'s — and a prop's albedo alpha is the shape of a leaf cut out of the
+quad it is painted on. Read as a mask, a palm frond renders as a solid green card
+in the player's colour. It is a `discard` rather than a blend because scenery is
+drawn in arbitrary order and alpha blending without sorting puts a near frond
+behind a far one; a cutout is order-independent, which is what keeps 14 000 trees
+one instanced draw.
+
+**The list is where they must NOT be shared**, and the reason is the sim rather
+than the renderer. Everything in the unit list is ticked, collided against and
+pickable, so a tree in it would be shoved aside by passing infantry, would be
+selectable, and would accept a move order. Hence `PropBatch` and `setProps`, which
+duplicate `UnitBatch` and `setUnits` in shape and differ in exactly that.
+
+**Two scale conversions, and both are needed.** A blueprint's `UniformScale` takes
+the mesh to OGRIDS — cross-checked against the blueprints' own `SizeY`, the
+collision height in ogrids, which states 1 for both a palm and a pine whose meshes
+measure 0.96 and 1.18 once scaled — and an ogrid is 8 elmos, the same factor the
+prop positions take when the map is read. Applying only the first leaves a pine 1.2
+elmos tall, which renders as a scatter of dark specks and reads as a texture
+problem rather than a units one.
+
+**Consequences.** Props do not cast shadows. The shadow pipeline has no fragment
+shader — the depth attachment is its whole output — so it cannot honour a cutout,
+and a tree pushed through it would cast the shadow of the untrimmed quads its
+leaves are painted on: hard rectangles scattered over the ground, worse than
+nothing. Giving that pass a discarding fragment shader would cost every
+shadow-casting surface its early-depth rejection, for scenery.
+
+And they are expensive: +2.8 ms of a 7.6 ms frame at 5182 props, +6.2 of 11.2 at
+46 971, because every one draws at its finest LOD. The blueprints ship three meshes
+each and state the distances to switch between them, so the data is already parsed;
+choosing one level per scene from the camera distance is the cheap version and is
+named in `setProps`. Until then, `p` turns them off.
+
+---
+
+## ADR-025 — A particle uploads its history, not its state
+
+**Context.** Milestone 14's dust needed a particle system, and the obvious design
+walks every particle on the CPU each frame to move it, then uploads the result.
+
+**Decision.** Upload where a particle was born, the velocity it was born with and
+how long ago that was. The vertex shader works out where it is: origin + v·t +
+½g·t². The CPU never integrates a position.
+
+This is less code, not just less work. The alternative does the same arithmetic in
+the slower place and then has to upload it anyway; here the per-frame CPU cost is
+advancing one float per particle and dropping the expired, and the buffer contents
+for a given particle never change after birth.
+
+Geometry follows from the same idea: each particle is one instance of a four-vertex
+draw whose quad is expanded from the vertex id and turned to face the camera using
+the view-projection's own rows. No geometry is uploaded and there is no index
+buffer. 1983 particles measured at 1.428 ms against 1.423 without — free, within
+noise.
+
+Blending is PREMULTIPLIED, source One rather than SourceAlpha, so one pipeline
+serves both kinds of particle this will ever want: translucent dust is (rgb·a, a),
+an additive spark is (rgb, 0). With straight alpha those are two blend states, two
+pipelines, and no shared draw.
+
+**Consequences, and two mistakes worth keeping written down.**
+
+A puff born exactly on the ground is coplanar with the terrain drawn there, and a
+depth-tested particle pass loses that fight. It fails totally and silently — the
+draw is issued, the count is right, and nothing appears, which reads as the feature
+being broken rather than as a depth result. Fixed the way the selection rings fixed
+it: `LessEqual` plus an elmo of lift. Establishing that the pipeline worked at all
+took temporarily colouring the dust bright red at alpha 0.95.
+
+And the fragment's radial falloff was squared, which looked right in the abstract
+and shrank a puff's visible core to a fraction of its quad — a 17-elmo puff read as
+a speck, with most of the sprite spent on a gradient too faint to see. Linear.
+
+The emission rate carries a fractional debt between frames so it does not depend on
+the frame rate, and clears rather than banks it while nothing moves — otherwise a
+squad that stands still for a minute exhales a minute of dust in the frame it moves
+again.
+
+A third mistake, and the most instructive: dust was first gated on
+`MoveState::speedElmosPerSecond`, which is a unit's TOP speed — a capability it
+carries whether or not it has anywhere to be — rather than on `moving`, the flag
+the sim maintains for "has an order and has not arrived". Every parked unit smoked.
+It was caught by a line of output disagreeing with itself: `0 of 60 units routed`
+alongside `840 dust particles still in the air`. Reading a capability as a state is
+a whole class of bug, and the reason `DustEmitter` now names both fields for what
+they are.
