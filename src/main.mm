@@ -14,6 +14,7 @@
 #include "core/model/Scm.hpp"
 #include "core/scene/Picking.hpp"
 #include "core/scene/Selection.hpp"
+#include "core/scene/SelectionRing.hpp"
 #include "core/scene/UnitPlacement.hpp"
 #include "core/sim/Movement.hpp"
 #include "core/sim/Pathfinding.hpp"
@@ -728,16 +729,36 @@ void paceAnimationByDistance(std::vector<rm::UnitInstance>& instances,
 
 /// The colour a selected unit is tinted.
 ///
-/// Reusing the team-colour field is what makes selection feedback free: it is
+/// Reusing the team-colour field is what makes this feedback free: it is
 /// already per instance, already uploaded every frame, and already read by both
-/// families' shaders through their team-colour mask. A ring drawn on the ground
-/// would read better and costs geometry, a pipeline and a pass — worth doing
-/// once there is a UI to put it in.
+/// families' shaders through their team-colour mask.
+///
+/// Kept alongside the ground rings rather than replaced by them. The two fail
+/// in different places — a ring is hidden by the unit standing over it at a low
+/// camera angle or by a crowd at high zoom, and a tint is invisible on a model
+/// that is mostly white anyway.
 ///
 /// Pure white at full brightness, which no team colour in the palette is (the
 /// white team is 0.92) so a selected unit is distinguishable even from an
 /// unselected white one.
 inline constexpr rm::TeamColour kSelectionColour{{1.0f, 1.0f, 1.0f, 1.0f}};
+
+/// The colour of the ring drawn on the ground under a selected unit.
+///
+/// One colour for every unit rather than the unit's own team colour: a
+/// selection is "mine", and the question a ring answers is which units an order
+/// will reach — not which army they belong to, which the model already says.
+///
+/// Bright green because it is the one hue no stratum, sea or sky in either
+/// game's palette occupies at this saturation, and translucent so the ground it
+/// marks still reads through it.
+inline constexpr std::array<float, 4> kSelectionRingColour{{0.35f, 1.0f, 0.45f, 0.55f}};
+
+/// How much wider than the unit's collision radius the ring is drawn.
+///
+/// A ring exactly on the radius touches the model's feet and reads as part of
+/// it. A little outside reads as a marker on the ground, which is what it is.
+inline constexpr float kSelectionRingMargin = 1.35f;
 
 /// One `--units` argument: a model, how many of it, how big, and optionally an
 /// animation to play on it.
@@ -1197,14 +1218,48 @@ void march(UnitScene& scene, const rm::HeightField& field, PassabilitySet& passa
                 ticks);
 }
 
-/// Whether `--focus` was given: frame the first instance instead of the map.
-[[nodiscard]] bool parseFocus(int argc, const char* argv[]) {
+/// How far back `--focus` should sit, in model radii, or 0 when it was not
+/// given at all.
+///
+/// 2.5 radii fills the frame with one unit, which is what the flag was for —
+/// checking a model. A squad, or a ring around each of several units, needs to
+/// see further out, so the distance takes an optional argument rather than
+/// forcing a choice between one unit and the whole map.
+[[nodiscard]] float parseFocus(int argc, const char* argv[]) {
+    constexpr float kDefaultRadiiBack = 2.5f;
+
     for (int i = 1; i < argc; ++i) {
-        if (std::string{argv[i]} == "--focus") {
-            return true;
+        if (std::string{argv[i]} != "--focus") {
+            continue;
+        }
+        if (i + 1 >= argc) {
+            return kDefaultRadiiBack;
+        }
+        char* end = nullptr;
+        const double radii = std::strtod(argv[i + 1], &end);
+        // Only a bare number counts as the argument; the next flag does not.
+        if (end != argv[i + 1] && *end == '\0' && radii > 0.0) {
+            return static_cast<float>(radii);
+        }
+        return kDefaultRadiiBack;
+    }
+    return 0.0f;
+}
+
+/// The unsigned count following a flag, or 0 when the flag is absent or its
+/// argument is not a number.
+[[nodiscard]] std::size_t parseCount(int argc, const char* argv[], std::string_view flag) {
+    for (int i = 1; i + 1 < argc; ++i) {
+        if (argv[i] != flag) {
+            continue;
+        }
+        char* end = nullptr;
+        const unsigned long value = std::strtoul(argv[i + 1], &end, 10);
+        if (end != argv[i + 1] && *end == '\0') {
+            return static_cast<std::size_t>(value);
         }
     }
-    return false;
+    return 0;
 }
 
 /// Whether a bare flag appears anywhere in the arguments.
@@ -1247,19 +1302,16 @@ void applyGround(Target& target, const LoadedMap& map) {
 /// because Window and Renderer both offer focusOn and neither shares a base
 /// class — a one-method interface would be ceremony for two call sites.
 template <typename Target>
-void focusOnFirstUnit(Target& target, const UnitScene& scene) {
+void focusOnFirstUnit(Target& target, const UnitScene& scene, float radiiBack) {
     if (scene.batches.empty() || scene.batches.front().instances.empty()
         || scene.batches.front().model == nullptr) {
         return;
     }
 
-    /// How far back to sit, in model radii.
-    constexpr float kRadiiBack = 2.5f;
-
     const rm::UnitBatch& batch = scene.batches.front();
     const rm::UnitInstance& first = batch.instances.front();
     target.focusOn(first.position,
-                   std::max(batch.model->radius, 1.0f) * kRadiiBack * first.scale);
+                   std::max(batch.model->radius, 1.0f) * radiiBack * first.scale);
 }
 
 struct BenchOptions {
@@ -1443,7 +1495,7 @@ int main(int argc, const char* argv[]) {
 
         const std::vector<UnitOptions> unitRequests = parseUnits(argc, argv);
         const rm::vfs::AssetSearch assetSearch = parseAssetSearch(argc, argv);
-        const bool focus = parseFocus(argc, argv);
+        const float focus = parseFocus(argc, argv);
         const float animationTime = parseAnimationTime(argc, argv);
         // Land above the water, whatever the map calls water: Recoil's plane is
         // always y = 0, Supreme Commander's is per map and 140 elmos on most.
@@ -1509,8 +1561,8 @@ int main(int argc, const char* argv[]) {
             // camera as well as a whole-map one. They are different workloads:
             // anything that culls to what the camera sees is invisible at full
             // zoom and everything up close.
-            if (focus) {
-                focusOnFirstUnit(renderer, units);
+            if (focus > 0.0f) {
+                focusOnFirstUnit(renderer, units, focus);
             }
 
             std::printf("offscreen benchmark: %ux%u, %zu frames (discarding %zu warmup),"
@@ -1539,8 +1591,35 @@ int main(int argc, const char* argv[]) {
             renderer.setAnimationTime(animationTime);
             renderer.setReflections(!hasFlag(argc, argv, "--no-reflections"));
             renderer.setStratumNormals(!hasFlag(argc, argv, "--no-stratum-normals"));
-            if (focus) {
-                focusOnFirstUnit(renderer, units);
+            if (focus > 0.0f) {
+                focusOnFirstUnit(renderer, units, focus);
+            }
+
+            // Selection rings need a selection, and a headless run has no
+            // clicks. `--select N` rings the first N units so that what a
+            // click produces can be captured and compared between builds —
+            // otherwise the one piece of interface this renderer draws is the
+            // one thing no screenshot can show.
+            if (const std::size_t rings = parseCount(argc, argv, "--select"); rings > 0) {
+                std::vector<rm::RingVertex> vertices;
+                std::size_t made = 0;
+                for (std::size_t batch = 0; batch < units.instances.size() && made < rings;
+                     ++batch) {
+                    for (std::size_t i = 0; i < units.instances[batch].size() && made < rings;
+                         ++i, ++made) {
+                        rm::appendSelectionRing(
+                            vertices, map->field, units.instances[batch][i].position,
+                            units.motion[batch][i].radiusElmos * kSelectionRingMargin,
+                            kSelectionRingColour);
+                    }
+                }
+                // No beginFrame: that acquires a frames-in-flight slot which
+                // only drawFrame releases, and a capture goes through
+                // renderToImage instead. Without it the slot stays 0, which is
+                // the same slot encodeScene will read — consistent, because
+                // nothing here is pipelined.
+                renderer.setSelectionRings(vertices);
+                std::printf("  selected %zu units for the capture\n", made);
             }
 
             const auto image = renderer.renderToImage(shot.width, shot.height);
@@ -1567,8 +1646,8 @@ int main(int argc, const char* argv[]) {
             batch.animationDrivenByInstance = true;
         }
         window.setUnits(units.textures.all(), units.batches);
-        if (focus) {
-            focusOnFirstUnit(window, units);
+        if (focus > 0.0f) {
+            focusOnFirstUnit(window, units, focus);
         }
 
         // The planar reflection is half the frame for something Fresnel largely
@@ -1605,6 +1684,10 @@ int main(int argc, const char* argv[]) {
         // destroyed at the end of this scope before any of them.
         std::vector<Selection> selected;
         rm::sim::TickClock clock;
+
+        // Reused across frames so that rebuilding the rings costs no
+        // allocation — the capacity settles after the first large selection.
+        std::vector<rm::RingVertex> ringVertices;
 
         window.onClick([&](const rm::Ray& ray, rm::MouseButton button,
                            rm::MouseModifiers mods) {
@@ -1714,6 +1797,23 @@ int main(int argc, const char* argv[]) {
                                         animation != nullptr ? animation->duration : 0.0f);
                 window.setInstances(batch, units.instances[batch]);
             }
+
+            // Rings under whatever is selected, rebuilt from scratch every
+            // frame. Cheap — a selection is tens of units and each ring is 192
+            // vertices of arithmetic — and it is the only way a ring can follow
+            // a unit that is walking, which is the whole point of drawing one.
+            //
+            // The buffer is reused rather than reallocated so that a frame
+            // costs no heap traffic; it is declared outside this lambda for
+            // exactly that reason.
+            ringVertices.clear();
+            for (const Selection& sel : selected) {
+                const rm::UnitInstance& instance = units.instances[sel.batch][sel.instance];
+                const float radius = units.motion[sel.batch][sel.instance].radiusElmos;
+                rm::appendSelectionRing(ringVertices, map->field, instance.position,
+                                        radius * kSelectionRingMargin, kSelectionRingColour);
+            }
+            window.setSelectionRings(ringVertices);
         });
 
         window.show();

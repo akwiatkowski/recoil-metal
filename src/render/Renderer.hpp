@@ -7,6 +7,7 @@
 #include "core/map/TileAtlas.hpp"
 #include "core/model/Model.hpp"
 #include "core/model/Pose.hpp"
+#include "core/scene/SelectionRing.hpp"
 #include "core/scene/UnitBatch.hpp"
 #include "core/scene/UnitPlacement.hpp"
 #include "core/texture/Dds.hpp"
@@ -141,6 +142,21 @@ public:
     // a height sample can express (8 elmos) and flat below it.
     void setStratumNormals(bool enabled) noexcept { stratumNormalsEnabled_ = enabled; }
     [[nodiscard]] bool stratumNormalsEnabled() const noexcept { return stratumNormalsEnabled_; }
+
+    // The rings marking which units are selected, for this frame.
+    //
+    // Rebuilt and pushed every frame, like instances and for the same reason: a
+    // ring follows the unit, and a unit moves. It rides the same frames-in-
+    // flight ring, so this must be called between beginFrame and drawFrame.
+    //
+    // Passing an empty span draws none, which is what an empty selection should
+    // look like — the previous frame's rings are NOT kept, because a selection
+    // that survives being cleared is worse than no rings at all.
+    //
+    // Vertices beyond kMaxRingVertices are dropped rather than growing the
+    // buffer, which cannot be resized while the GPU may be reading it. That is
+    // roughly 300 units selected at once.
+    void setSelectionRings(std::span<const RingVertex> vertices) noexcept;
 
     // Uploads several models, the instances to draw each at, and the textures
     // they share. One instanced draw call covers every instance of a model; the
@@ -472,6 +488,18 @@ private:
     Environment environment_{};
     bool reflectionsEnabled_ = true;
     bool stratumNormalsEnabled_ = true;
+
+    // Selection rings. One buffer with a slot per frame in flight, exactly like
+    // the unit instances and for the same reason: the vertices are rewritten
+    // every frame, and writing storage the GPU may still be reading tears a
+    // ring across two positions.
+    //
+    // Fixed capacity, allocated once. Growing it would mean freeing a buffer
+    // that up to two other frames still reference.
+    MTL::RenderPipelineState* ringPipeline_ = nullptr;  // owned
+    MTL::DepthStencilState* ringDepthState_ = nullptr;  // owned
+    MTL::Buffer* ringBuffer_ = nullptr;                 // owned
+    std::size_t ringVertexCount_ = 0;
 
     OrbitCamera camera_;
 

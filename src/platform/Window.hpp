@@ -110,6 +110,10 @@ public:
     void setStratumNormals(bool enabled);
     [[nodiscard]] bool stratumNormalsEnabled() const;
 
+    /// This frame's selection rings. See Renderer::setSelectionRings. Like
+    /// setInstances, only meaningful from inside an onFrame callback.
+    void setSelectionRings(std::span<const RingVertex> vertices);
+
     /// Points the camera at a world position. See Renderer::focusOn.
     void focusOn(std::array<float, 3> target, float distance);
 

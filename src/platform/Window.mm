@@ -378,6 +378,10 @@ bool Window::stratumNormalsEnabled() const {
     return impl_->renderer->stratumNormalsEnabled();
 }
 
+void Window::setSelectionRings(std::span<const RingVertex> vertices) {
+    impl_->renderer->setSelectionRings(vertices);
+}
+
 void Window::focusOn(std::array<float, 3> target, float distance) {
     impl_->renderer->focusOn(target, distance);
 }

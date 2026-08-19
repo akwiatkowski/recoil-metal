@@ -161,6 +161,14 @@ constexpr NS::UInteger kSplatLayerBaseIndex = 3;
 /// The nine stratum normal maps, past the shadow and reflection slots: 15..23.
 constexpr NS::UInteger kSplatNormalBaseIndex = 15;
 
+/// Ring vertices the buffer holds per frame in flight.
+///
+/// 65536 is about 340 rings at the default 32 segments, and 1.8 MB a slot. A
+/// selection larger than that is a select-all on a big army, where the rings
+/// would be a solid mat of colour and the ones that go missing are the ones
+/// nobody could have picked out anyway.
+constexpr std::size_t kMaxRingVertices = 65536;
+
 /// How far the blended stratum normal tilts the geometric one.
 ///
 /// Not from the engine, and it cannot be: SupCom renders terrain normals to a
@@ -896,6 +904,37 @@ vertex UnitOut unitVertex(uint vid [[vertex_id]],
     return out;
 }
 
+// --- Selection rings ---------------------------------------------------------
+// A band on the ground under each selected unit, built on the CPU to follow the
+// terrain (core/scene/SelectionRing.hpp) and drawn as one triangle list.
+//
+// Deliberately unlit and unshadowed. This is interface, not scenery: a ring that
+// dimmed in shade or on a slope facing away from the sun would be least visible
+// exactly where a unit is hardest to pick out.
+
+struct RingVertexIn {
+    packed_float3 position;
+    packed_float4 colour;
+};
+
+struct RingOut {
+    float4 position [[position]];
+    float4 colour;
+};
+
+vertex RingOut ringVertex(uint vid [[vertex_id]],
+                          const device RingVertexIn* vertices [[buffer(0)]],
+                          constant Uniforms& u [[buffer(1)]]) {
+    RingOut out;
+    out.position = u.viewProjection * float4(float3(vertices[vid].position), 1.0);
+    out.colour = float4(vertices[vid].colour);
+    return out;
+}
+
+fragment float4 ringFragment(RingOut in [[stage_in]]) {
+    return in.colour;
+}
+
 // --- Shadow pass -------------------------------------------------------------
 // Depth only, from the sun's point of view. No fragment shader at all: the
 // depth attachment is the entire output, and Metal is happy to run a pipeline
@@ -1213,6 +1252,10 @@ Renderer::Renderer(CA::MetalLayer* layer)
                                   /*blend=*/false);
     unitPipeline_ = makePipeline(device_, library, "unitVertex", "unitFragment",
                                  /*blend=*/false);
+    // Blended, unlike everything else here: a selection ring is interface laid
+    // over the ground, and a solid band would hide the terrain it marks.
+    ringPipeline_ = makePipeline(device_, library, "ringVertex", "ringFragment",
+                                 /*blend=*/true);
     library->release();
 
     // --- Depth state -------------------------------------------------------
@@ -1293,10 +1336,32 @@ Renderer::Renderer(CA::MetalLayer* layer)
     // so writing would occlude anything drawn behind it later.
     depthDescriptor->setDepthWriteEnabled(false);
     waterDepthState_ = device_->newDepthStencilState(depthDescriptor);
+
+    // Rings test LESS-EQUAL rather than LESS, and write no depth.
+    //
+    // Less-equal because the band is lifted a hair above ground that the
+    // terrain has already written at very nearly the same depth, and a strict
+    // test loses that fight wherever the lift rounds away at distance. No depth
+    // write because a ring must not occlude the unit standing inside it.
+    depthDescriptor->setDepthCompareFunction(MTL::CompareFunction::CompareFunctionLessEqual);
+    ringDepthState_ = device_->newDepthStencilState(depthDescriptor);
     depthDescriptor->release();
 
-    if (depthState_ == nullptr || waterDepthState_ == nullptr) {
+    if (depthState_ == nullptr || waterDepthState_ == nullptr || ringDepthState_ == nullptr) {
         throw RendererError{"failed to create depth-stencil state"};
+    }
+
+    // --- Selection ring buffer ---------------------------------------------
+    // One slot per frame in flight, allocated once. Shared storage because the
+    // CPU rewrites it every frame; the frames-in-flight wait in beginFrame is
+    // what makes that safe, exactly as for unit instances.
+    {
+        const std::size_t bytes =
+            kMaxRingVertices * sizeof(RingVertex) * kMaxFramesInFlight;
+        ringBuffer_ = device_->newBuffer(bytes, MTL::ResourceStorageModeShared);
+        if (ringBuffer_ == nullptr) {
+            throw RendererError{"failed to allocate the selection ring buffer"};
+        }
     }
 
     // --- Ground sampler ----------------------------------------------------
@@ -1356,6 +1421,9 @@ Renderer::~Renderer() {
     if (shadowMap_ != nullptr) shadowMap_->release();
     if (unitShadowPipeline_ != nullptr) unitShadowPipeline_->release();
     if (terrainShadowPipeline_ != nullptr) terrainShadowPipeline_->release();
+    if (ringBuffer_ != nullptr) ringBuffer_->release();
+    if (ringDepthState_ != nullptr) ringDepthState_->release();
+    if (ringPipeline_ != nullptr) ringPipeline_->release();
     releaseTerrainBuffers();
     releaseUnitBuffers();  // frees the unit textures too
     unitPipeline_->release();
@@ -1688,6 +1756,27 @@ void Renderer::setInstances(std::size_t batchIndex,
     // Drawing fewer than were uploaded is fine — the tail of the slot simply
     // goes unread — so a caller may shrink a batch without reallocating.
     batch.instanceCount = count;
+}
+
+void Renderer::setSelectionRings(std::span<const RingVertex> vertices) noexcept {
+    ringVertexCount_ = 0;
+    if (ringBuffer_ == nullptr || vertices.empty()) {
+        return;
+    }
+
+    // Dropped rather than grown — the buffer cannot be reallocated while up to
+    // two other frames may still be reading it. Truncated to whole triangles so
+    // the tail is never a partial one, which would render as a stray sliver
+    // rather than as a missing ring.
+    const std::size_t fits = std::min(vertices.size(), kMaxRingVertices);
+    ringVertexCount_ = fits - (fits % 3u);
+    if (ringVertexCount_ == 0) {
+        return;
+    }
+
+    auto* base = static_cast<RingVertex*>(ringBuffer_->contents());
+    std::memcpy(base + instanceSlot_ * kMaxRingVertices, vertices.data(),
+                ringVertexCount_ * sizeof(RingVertex));
 }
 
 MTL::Texture* Renderer::uploadTexture(const dds::Texture& texture, const char* what) {
@@ -2318,6 +2407,25 @@ void Renderer::encodeScene(MTL::RenderCommandEncoder* encoder, unsigned int widt
                                            /*indexBufferOffset=*/0,
                                            static_cast<NS::UInteger>(batch.instanceCount));
         }
+    }
+
+    // --- Selection rings ---------------------------------------------------
+    // After the units, so a ring is not hidden by the unit it belongs to, and
+    // BEFORE the water, so a ring on a submerged shelf is tinted by the sea
+    // above it like everything else down there.
+    //
+    // Skipped in the reflection pass: a mirror showing the interface would be
+    // the interface appearing twice.
+    if (ringVertexCount_ > 0 && ringPipeline_ != nullptr && override == nullptr) {
+        encoder->setRenderPipelineState(ringPipeline_);
+        encoder->setDepthStencilState(ringDepthState_);
+        encoder->setVertexBuffer(
+            ringBuffer_,
+            static_cast<NS::UInteger>(instanceSlot_ * kMaxRingVertices * sizeof(RingVertex)),
+            kVertexBufferIndex);
+        encoder->setVertexBytes(&uniforms, sizeof(uniforms), kUniformBufferIndex);
+        encoder->drawPrimitives(MTL::PrimitiveType::PrimitiveTypeTriangle, NS::UInteger{0},
+                                static_cast<NS::UInteger>(ringVertexCount_));
     }
 
     // --- Water -------------------------------------------------------------
