@@ -5,7 +5,7 @@
 milestone. This file is the direction: what "a simple Supreme Commander game"
 means here, what it needs, and what it deliberately does not.
 
-Milestones 1–14 are done and documented in the README. This plan covers **15–19**.
+Milestones 1–15 are done and documented in the README. This plan covers **16–20**.
 
 **Target, stated once so it can be checked:** two armies on a retail `.scmap`,
 each with an ACU, extracting mass, building from a factory, fighting with
@@ -79,15 +79,23 @@ in the knowledge base.
 ## Designing for a Lua host that does not exist yet
 
 Commenting alone does not buy this. Four decisions are free today and expensive
-after milestone 19; everything else about a host can wait.
+after milestone 20; everything else about a host can wait.
 
 1. **The sim ticks at 10 Hz, matching Supreme Commander, not the current 30.**
    Its scripts hardcode the rate: `WaitSeconds(n)` is `WaitTicks(n * 10)`
    (`mohodata/lua/simInit.lua:37`). A 30 Hz sim runs every hosted script's
-   timing 3× fast, and the fix after the fact is not the tick constant
-   (`core/sim/Movement.hpp:27`) but every tuned value that grew up around it.
-   This engine has no lockstep requirement forcing 10 Hz, and no reason to
-   refuse it either — render stays decoupled at display rate, as it is now.
+   timing 3× fast, and the fix after the fact is not the tick constant but every
+   tuned value that grew up around it. This engine has no lockstep requirement
+   forcing 10 Hz, and no reason to refuse it either — render stays decoupled at
+   display rate, as it is now.
+
+   **Done in milestone 16**, and it proved its own case twice. Two facts were
+   sharing one number: BAR's `turnrate` is per *Recoil* frame, so the loader was
+   using the sim's rate to get Recoil's 30, and changing the tick alone would have
+   slowed every BAR unit's turning threefold in silence. And one tuned value had to
+   follow the rate — the arrival radius, a flat 4 elmos, which at 10 Hz is less
+   than one tick of travel, so a unit stepped past its goal every tick and never
+   landed inside it.
 
 2. **Native functions carry moho's names, semantics, and units.** `GetBlueprint`,
    `GetPosition`, `SetSpeed`, `SetAccel`, `SetGoal`, `GetHealth`, `AdjustHealth`,
@@ -109,7 +117,9 @@ after milestone 19; everything else about a host can wait.
    mods are the majority of real mods** and they work by layering an archive over
    the stock one, so a VFS earns its keep in the pure-C++ engine too. Extracting
    with a Python one-liner (`tests/test_real_scm.cpp:8`) is fine for fixtures and
-   wrong for the app.
+   wrong for the app. **Still open**, and milestone 16 found the first thing that
+   needs it: 25 unit blueprints name their mesh with a VFS path, and only 21 of
+   them resolve against an extracted tree.
 
 **What this does *not* buy, stated plainly so nobody is surprised later:** the
 hard part of hosting the game's Lua is semantic fidelity across ~200 functions,
@@ -117,7 +127,7 @@ and no amount of preparation today makes that free. These four decisions make
 the shim mechanical and the timing correct. They do not make the fidelity job
 smaller.
 
-**One fork worth deciding before milestone 20, not now.** "Moddable" and
+**One fork worth deciding before milestone 21, not now.** "Moddable" and
 "runs existing Supreme Commander mods" are different products. Exposing *our own*
 Lua 5.4 API — our names, no fork, no compat shim, no 200-function debt — gets
 scriptable gameplay cheaply, and gets none of FAF's existing content. Hosting
@@ -137,7 +147,7 @@ out of scope.
   veterancy, adjacency bonuses, or tech tiers.**
 - **No fog of war or intel.** Everything is visible. Intel is 16 symbols and
   165 call sites in the original and is its own milestone if ever wanted.
-- **No game AI.** The opponent in milestone 19 is a scripted build order, and
+- **No game AI.** The opponent in milestone 20 is a scripted build order, and
   the plan says so in the code. Supreme Commander's own AI is 84,750 lines of
   Lua and is not being reimplemented.
 - **No lockstep or multiplayer.** Single machine, so bit-exact determinism is
@@ -150,47 +160,66 @@ out of scope.
 
 ## Milestones
 
-### 15. Supreme Commander units read their own definitions
+### 16. Supreme Commander units read their own definitions
 
-Today `--units` takes a raw model path or a BAR-style `.lua`
-(`src/main.mm:947`), so a `.scm` on a `.scmap` is a mesh placed by count — no
-speed, no footprint, no LOD. This closes that.
+**Mostly done.** `--units UEL0201_unit.bp 40 --march 4096 4096 30` puts UEF
+medium tanks on `SCMP_009` at 27 elmos/s, 1.57 rad/s and a 3.6-elmo radius, all
+read from the file, and 26 of 40 route to the map centre with dust behind them.
+![Supreme Commander units on a Supreme Commander map](docs/images/m16-supcom-units.jpg)
 
-- Extract `.bp` from `units.scd` (the test-fixture command at
-  `tests/test_real_scm.cpp:8` filters to `.scm`/`.sca` today). 580 blueprints,
-  568 of them `units/<ID>/<ID>_unit.bp`.
-- Add `UnitBlueprint` to `core/lua`'s `kTableConstructors`
-  (`src/core/lua/LuaTable.cpp:80`). Surveyed across all 568: the only
-  call-with-table identifiers are `UnitBlueprint` and `Sound`, and `Sound` is
-  already there. `Egg` (8 hits) is a false positive from inside
-  `Description = '...Crab Egg (Engineer)'` — the same class of noise as the
-  documented `Sand` case.
-- A SupCom front-end filling the existing `unitdef::UnitDef`: `Physics.MaxSpeed`
-  (ogrids/s → ×8), `Physics.TurnRate` (deg/s → rad/s), `Footprint.SizeX/SizeZ`,
-  `Defense.MaxHealth`, `Display.UniformScale`. Coverage across the 568:
-  MotionType and MaxHealth and Footprint 568/568, UniformScale 567, TurnRate
-  514, MaxSpeed 196 — present exactly when the thing moves, since
-  `RULEUMT_None` accounts for 374 of them.
-- Meshes by convention, not by basename search: `<ID>_unit.bp` beside
-  `<ID>_lod0.scm`, one per `Display.Mesh.LODs` entry (563 declare cutoffs).
-  This is what `meshBeside` in `core/map/PropBlueprint.cpp` already does —
-  reuse rather than reinvent.
-- **The one real design decision:** BAR's `maxslope` has no counterpart.
-  `MaxSlope` appears in 58 of 568 and `MinWaterDepth` in 48; SupCom expresses
-  passability as a movement class (Land 50, Air 60, Water 28, Hover 19,
-  Amphibious 17, SurfacingSub 13, AmphibiousFloating 8, None 374). So the
-  passability grid needs a MotionType → slope/depth mapping, reimplemented
-  semantics rather than a field read, and it gets an ADR.
+What the work actually turned out to be, since half the plan above was wrong:
 
-Also in this milestone, because both are cheapest before anything is tuned:
-the sim tick moves to 10 Hz (decision 1), and content loads through a
-priority-layered VFS over the `.scd` ZIPs (decision 4).
+- **`UnitBlueprint` needed no allow-list entry.** The reader scans to the first
+  table literal, so a top-level wrapper's name is never looked at — the same
+  source under any other name parses too. The allow-list governs calls in *value*
+  position, and `UnitBlueprint` appears once per file, never nested. A test says
+  so now, because the next person will assume otherwise.
+- **`#` had to become a mid-line comment.** One blueprint in 568 writes
+  `NukeCharge = Sound { # added for sound bug`. Widened by measurement: 209
+  mid-line `#` comments across all 4065 shipped `.bp` files against **zero** uses
+  as Lua's length operator. It stays refused directly after `=`, where it would be
+  that operator and swallowing the line would drop the *next* field.
+- **`SizeX`/`SizeZ` are at the file's ROOT, not under `Footprint`** — 568/568
+  against 363, and `UniformScale` is under `Display`. The two are different
+  quantities: a collision box in fractional ogrids, and a whole-square build
+  footprint that only the structures state.
+- **The collision radius had to become a stored float.** 418 of 568 sizes are
+  fractional and 154 are under one ogrid, the smallest 0.01 — as whole squares
+  that unit's radius would inflate from 0.04 elmos to 4.
+- **The model was 14× too big, and had been since milestone 7.** `.scm` vertices
+  are not in ogrids: raw extents run 10 to 262 units, which as ogrids would make
+  one experimental 2096 elmos long. `Display.UniformScale` is the missing factor,
+  exactly as for props, and it is stored as ONE combined `meshToElmos` because the
+  two-step version has already been got wrong once here.
+- **Passability comes from the motion class**, as predicted, and the numbers were
+  already in the engine: `kDefaultMaxSlopeDegrees` of 17 is 25.5 real degrees, a
+  gradient of 0.48, which is what BAR's ground units authorise too. The only slope
+  figure the format carries is `Footprint.MaxSlope` — a gradient, not an angle, on
+  aircraft landing sites. Water and SurfacingSub are **refused** rather than
+  approximated: they need the inverse of the grid, and a ship routed over the
+  ground grid drives across dry land.
+- **A ground mover's zero depth is not a missing value.** The fallback read 0 as
+  unstated and substituted BAR's 12 elmos, which would walk SupCom's land units
+  into the sea. It asks the motion class now.
+- **The corpus test earned its keep three times**: 38 units have no mesh beside
+  them (25 name one with `MeshName`), a further "16 name another unit's id" is a
+  regex artefact of `PlaceholderMeshName`, and two blueprints state a scale of
+  zero. All three are in the code as comments.
 
-**Done when:** `--units .../UEL0201_unit.bp 40 --march … --focus` puts UEF
-tanks on a `.scmap` at their authored speed, turn rate and footprint, LODs
-switching with distance — with no manual extraction step.
+The tick moved to **10 Hz** with it (decision 1), which exposed two facts sharing
+one number — BAR's `turnrate` is per *Recoil* frame and wants 30, not our rate —
+and one tuned value that had to follow the rate, the arrival radius.
 
-### 16. Armies, and units that belong to one
+Still open, and carried into 17:
+
+- **A VFS with archive priority** (decision 4). Extraction is still a documented
+  Python one-liner, which is right for fixtures and wrong for the app. The 25
+  `MeshName` blueprints need a root, and only 21 resolve without one.
+- **LOD switching.** Only level 0 is resolved; 563 blueprints declare cutoffs and
+  `meshBeside` already takes a level, so this is wiring rather than research.
+- **The MotionType ADR**, once a second reader needs the mapping.
+
+### 17. Armies, and units that belong to one
 
 Nothing in the engine currently knows who owns a unit; team colour is indexed
 by batch (`core/scene/TeamColours.hpp`).
@@ -199,7 +228,7 @@ by batch (`core/scene/TeamColours.hpp`).
 - Spawn from the map's own `ARMY_<n>` markers, which `scenario::loadStartPositions`
   already reads, and give each army its faction ACU.
 - Read the rest of the marker table while there: 3508 `Mass` markers and the
-  hydrocarbon sites are what milestone 18 needs, and the shipped nav graph
+  hydrocarbon sites are what milestone 19 needs, and the shipped nav graph
   (1974 Land / 2120 Amphibious / 1731 Air path nodes) is a free reference to
   check A* against. Note the stock maps place **no units** — all 61 army
   `Units` groups are empty — so spawning is the engine's job, not the map's.
@@ -208,7 +237,7 @@ by batch (`core/scene/TeamColours.hpp`).
 **Done when:** two ACUs face each other on `SCMP_009` in their armies' colours,
 and clicking an enemy selects nothing.
 
-### 17. Weapons, projectiles, and damage
+### 18. Weapons, projectiles, and damage
 
 The first milestone where units can lose something.
 
@@ -229,7 +258,7 @@ The first milestone where units can lose something.
 **Done when:** two groups of tanks meet on a `.scmap`, fight, and one group is
 left standing with wrecks between them.
 
-### 18. Economy and building
+### 19. Economy and building
 
 - Mass and energy income, storage and drain per army; the map's `Mass` markers
   become extractor sites.
@@ -244,7 +273,7 @@ left standing with wrecks between them.
 **Done when:** the ACU builds an extractor and a factory, and the factory
 produces tanks paid for out of a running economy.
 
-### 19. A skirmish that ends
+### 20. A skirmish that ends
 
 - A scripted opponent: a fixed build order plus attack-move. Not an AI, and
   labelled as such in the source.
@@ -260,7 +289,7 @@ produces tanks paid for out of a running economy.
 ## Cross-cutting
 
 - **Tick.** The sim runs a fixed tick with a clock that clamps catch-up
-  (`core/sim/Movement.hpp:27`, `:192`), currently 30 Hz. Milestone 15 moves it to
+  (`core/sim/Movement.hpp:27`, `:192`), currently 30 Hz. Milestone 16 moves it to
   **10 Hz** for the reason in decision 1 above, and because it is the last moment
   that change is free — every constant tuned after this point would have to move
   with it. Blueprint rates are authored per second, so the conversion is explicit
@@ -274,5 +303,6 @@ produces tanks paid for out of a running economy.
   the game's own Lua. No balance invented silently; where something must be
   chosen (the MotionType mapping, the scripted opponent's build order), it is
   named as ours and given a reason.
-- **The seam.** Sim state stays plain structs behind narrow free functions.
-  A Lua host is not on this plan, and this is what keeps it possible.
+- **The seam.** Sim state stays plain structs behind narrow free functions, as
+  `Movement.hpp` already does. No Lua host is built in milestones 16–20; the four
+  decisions above are what keep one buildable in 21+.

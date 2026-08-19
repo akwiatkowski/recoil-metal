@@ -193,6 +193,13 @@ formats, built test-first in modern C++, as both research and a C++ showcase.
   core shrank to a fraction of its quad, so a 17-elmo puff read as a speck with
   most of the sprite spent on a gradient too faint to see. Linear falloff, and
   judge sprite sizes on screen rather than in elmos.
+- **A `.scm`'s vertices are NOT in ogrids.** The blueprint's
+  `Display.UniformScale` takes them to ogrids and an ogrid is 8 elmos — the same
+  two-step conversion the props need, and the same trap. Raw mesh extents across
+  the unit corpus run from 10 to 262 units, so reading them as ogrids makes one
+  experimental 2096 elmos long and a medium tank 65 elmos instead of 4.5. Both
+  steps live in one stored factor (`UnitDef::meshToElmos`) so there is no longer a
+  way to apply half of it.
 - **Supreme Commander's `.bp` blueprints use `#` as a line comment**, which is not
   Lua — real Lua allows it only on a first line and otherwise reads it as the
   length operator. So the game's own reader must accept it and so does `core/lua`:
