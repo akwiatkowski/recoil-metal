@@ -83,6 +83,10 @@ struct TerrainUniforms {
     /// quad it is drawn on. Read as a mask, a palm frond renders as a solid green
     /// card painted in the player's colour.
     float alphaIsOpacity;
+
+    /// The map's own cirrus colour, tinting the zenith. Appended at the END, as
+    /// every field here has to be — see the offsets below.
+    simd_float3 skyZenithTint;
 };
 
 
@@ -100,9 +104,9 @@ static_assert(offsetof(TerrainUniforms, hasSceneColour) == 396,
 static_assert(offsetof(TerrainUniforms, waterRefractionScale) == 400,
               "and the next two start a fresh 16-byte slot");
 static_assert(offsetof(TerrainUniforms, alphaIsOpacity) == 404, "packed against it");
-static_assert(sizeof(TerrainUniforms) == 416,
-              "the tail padding is spent: this is the growth the comment above "
-              "predicted, and the struct is now 416 rather than 400");
+static_assert(offsetof(TerrainUniforms, skyZenithTint) == 416,
+              "a float3 is 16-aligned, so it starts a fresh slot after alphaIsOpacity");
+static_assert(sizeof(TerrainUniforms) == 432, "the float3 grows the struct by a full slot");
 static_assert(offsetof(TerrainUniforms, fogColour) == 288, "the map block follows the matrices");
 // A float3 is sixteen bytes AND sixteen-aligned, so the float after one does
 // NOT pack into its tail — it starts a fresh slot and the next float3 realigns
@@ -269,6 +273,7 @@ struct Uniforms {
     float hasSceneColour;
     float waterRefractionScale;
     float alphaIsOpacity;
+    float3 skyZenithTint;
 };
 
 // The sky, as Supreme Commander's own `effects/sky.fx` builds it: a lerp
@@ -282,13 +287,20 @@ constant float3 kZenithColour = float3(0.11, 0.24, 0.48);
 
 /// Sky colour along a view direction. Shared by the sky pass and the water's
 /// reflection, so the sea reflects the sky that is actually there.
-static float3 skyColour(float3 direction, float3 sunDirection, float3 horizonColour) {
+static float3 skyColour(float3 direction, float3 sunDirection, float3 horizonColour,
+                        float3 zenithTint) {
     const float3 d = normalize(direction);
 
     // Elevation drives the gradient. The power biases the blend toward the
     // horizon, where a real sky spends most of its visible area.
     const float elevation = saturate(d.y);
-    float3 colour = mix(horizonColour, kZenithColour, pow(elevation, 0.55));
+    // The zenith takes the map's own cirrus colour as a tint rather than a
+    // replacement: the skybox block carries no zenith colour at all — its mid colour
+    // is three bytes of black on all 60 stock maps — and the cirrus colour is the one
+    // thing in it that both varies per map and is a colour of the sky. A neutral map
+    // keeps exactly the look this had before; a green-brown one stops sharing a
+    // blue-grey with everything else.
+    float3 colour = mix(horizonColour, kZenithColour * zenithTint, pow(elevation, 0.55));
 
     // A sun, and the broad glow around it that makes a sky look lit rather
     // than painted.
@@ -333,7 +345,7 @@ vertex SkyOut skyVertex(uint vid [[vertex_id]], constant Uniforms& u [[buffer(1)
 fragment float4 skyFragment(SkyOut in [[stage_in]], constant Uniforms& u [[buffer(1)]]) {
     // The map's own fog colour is what its horizon fades to — stated by the
     // .scmap's lighting block rather than chosen here.
-    return float4(skyColour(in.direction, u.sunDirection, u.fogColour), 1.0);
+    return float4(skyColour(in.direction, u.sunDirection, u.fogColour, u.skyZenithTint), 1.0);
 }
 
 // How wide a selection outline is drawn, in pixels.
@@ -830,7 +842,7 @@ fragment float4 waterFragment(WaterOut in [[stage_in]], float4 behind [[color(0)
         planar = reflection.sample(reflectionSampler, reflectionUv);
     }
 
-    const float3 sky = skyColour(mirrored, u.sunDirection, u.fogColour);
+    const float3 sky = skyColour(mirrored, u.sunDirection, u.fogColour, u.skyZenithTint);
     // Alpha is the mirror's coverage: 1 where it drew world, 0 where it drew
     // nothing and the sky is the truthful answer.
     const float3 reflected = mix(sky, planar.rgb, planar.a);
@@ -3039,6 +3051,9 @@ void Renderer::encodeScene(MTL::CommandBuffer* commandBuffer, MTL::RenderPassDes
         .waterSkyReflection = environment_.waterSkyReflection,
         .waterSunShininess = environment_.waterSunShininess,
         .waterRefractionScale = environment_.waterRefractionScale,
+        .skyZenithTint = simd_make_float3(environment_.skyZenithTint[0],
+                                          environment_.skyZenithTint[1],
+                                          environment_.skyZenithTint[2]),
         // Far below any map by default, so nothing is clipped unless a pass
         // asks for it.
         .clipBelowY = override != nullptr ? override->clipBelowY : -1.0e9f,

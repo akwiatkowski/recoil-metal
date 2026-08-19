@@ -364,6 +364,10 @@ struct LoadedSplat {
     environment.waterSkyReflection = map->water.skyReflection;
     environment.waterSunShininess = map->water.sunShininess;
     environment.waterRefractionScale = map->water.refractionScale;
+    // The map's own cirrus colour, tinting the high sky. See Renderer::Environment
+    // for why this rather than the skybox block's own mid colour, which is black on
+    // every stock map.
+    environment.skyZenithTint = map->sky.cirrusColour;
     loaded.environment = environment;
 
     std::printf("  sky/water: fog (%.2f %.2f %.2f), surface (%.2f %.2f %.2f),"

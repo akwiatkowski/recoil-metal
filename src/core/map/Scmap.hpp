@@ -67,6 +67,32 @@ struct WaterSettings {
     float sunGlow = 0.1f;
 };
 
+// The map's own sky, from the skybox block near the end of the file.
+//
+// The sky was drawn from two constants until this was read — a stand-in with the
+// engine's structure and none of its values (ADR-018) — so every map got the same
+// blue-grey whatever it declared.
+struct SkySettings {
+    /// The colour the sky takes at mid elevation. THREE bytes rather than floats,
+    /// unlike every other colour in the file — and black on all 60 stock maps, which
+    /// use a skycube texture instead of the procedural sky these fields describe.
+    std::array<float, 3> midColour{{0.11f, 0.24f, 0.48f}};
+
+    /// The cirrus layer's colour and how strongly it shows.
+    ///
+    /// The one part of this block that varies per map, from (0.28, 0.37, 0.19) on a
+    /// green-brown world to (1.25, 0.98, 0.81) on a bright one, tracking each map's
+    /// fog. The multiplier is 1.8 on all 60 and therefore says nothing about any
+    /// particular map.
+    std::array<float, 3> cirrusColour{{1.0f, 1.0f, 1.0f}};
+    float cirrusMultiplier = 1.0f;
+
+    /// Whether the block was read at all. A .smf has no skybox, and a .scmap whose
+    /// parse ran out before this point has not got one either — in both cases the
+    /// defaults above stand and the caller should know it is looking at them.
+    bool present = false;
+};
+
 // The map's lighting, from the block preceding the water one.
 //
 // Fog is what the sky needs: a map states the colour its horizon fades to, and
@@ -187,6 +213,7 @@ struct Map {
 
     MapLighting lighting;
     WaterSettings water;
+    SkySettings sky;
 };
 
 /// Whether a buffer opens with the .scmap magic. Used to tell the two map

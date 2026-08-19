@@ -124,6 +124,17 @@ public:
         /// How far the surface bends what is under it. water2.fx's own default;
         /// most stock maps state exactly this and a few state more.
         float waterRefractionScale = 0.015f;
+
+        /// What the high sky is tinted by — the map's own cirrus colour.
+        ///
+        /// A STAND-IN, in the way ADR-018's sky already is. The skybox block carries
+        /// no zenith colour: its mid colour is three bytes of black on all 60 stock
+        /// maps, which use a skycube texture rather than the procedural sky those
+        /// fields describe. The cirrus colour is the one thing in the block that
+        /// varies per map and is a colour of the sky, so it tints the zenith
+        /// constant rather than replacing it — a neutral map keeps today's look and
+        /// a green-brown one stops sharing a blue-grey with everything else.
+        std::array<float, 3> skyZenithTint{{1.0f, 1.0f, 1.0f}};
     };
 
     void setEnvironment(const Environment& environment) noexcept;

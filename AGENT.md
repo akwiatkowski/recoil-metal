@@ -225,3 +225,10 @@ formats, built test-first in modern C++, as both research and a C++ showcase.
   screenshots taken afterwards were of props. When replacing a RANGE of a render
   function, check what else lived in that range — `grep` the pass headers and count
   them before and after.
+- **An off-by-one before a C string hides itself.** The skybox block's mid colour is
+  THREE bytes and the walk read four; the extra byte was swallowed by the cirrus
+  texture path that follows, which still terminates at the same NUL — so the parse
+  landed exactly on EOF for four milestones while every field in between was one byte
+  out. `endsExactlyAtEof` proves the total, not the parts. What exposed it was
+  reading the values and finding them absurd (colours of 1e23), which is the argument
+  for decoding a block rather than walking it whenever anything in it is wanted.

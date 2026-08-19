@@ -803,3 +803,60 @@ TEST_CASE("every prop blueprint a stock map names is on disk") {
                     << ", first: " << (missing.empty() ? std::string{} : *missing.begin()));
     CHECK(missing.empty());
 }
+
+// --- The skybox block --------------------------------------------------------
+
+TEST_CASE("every stock map's sky block reads as plausible colours") {
+    // This block was walked but not read for four milestones, and the walk was one
+    // byte wrong the whole time — hidden because the extra byte was eaten by the C
+    // string that follows it, so the parse still landed exactly on EOF. What gave it
+    // away was the numbers: the cirrus colour came out as 1e23 on every map.
+    const auto maps = corpus();
+    if (maps.empty()) {
+        SKIP("retail Forged Alliance maps not mounted");
+    }
+
+    std::size_t distinctCirrus = 0;
+    std::vector<std::array<float, 3>> seen;
+
+    for (const std::filesystem::path& path : maps) {
+        const auto map = rm::scmap::loadFile(path);
+        REQUIRE(map.has_value());
+        INFO("map: " << path.filename().string());
+
+        CHECK(map->sky.present);
+
+        // Colours, not garbage. This is the assertion the old layout failed.
+        for (const float channel : map->sky.cirrusColour) {
+            CHECK(channel >= 0.0f);
+            CHECK(channel <= 4.0f);
+        }
+        CHECK(map->sky.cirrusMultiplier > 0.0f);
+        CHECK(map->sky.cirrusMultiplier < 100.0f);
+
+        // The mid colour is three bytes and black on all of them: these maps use a
+        // skycube texture rather than the procedural sky those fields describe.
+        for (const float channel : map->sky.midColour) {
+            CHECK(channel == 0.0f);
+        }
+
+        const bool isNew = std::none_of(seen.begin(), seen.end(),
+                                        [&map](const std::array<float, 3>& other) {
+                                            return std::abs(other[0] - map->sky.cirrusColour[0])
+                                                       < 1e-4f
+                                                   && std::abs(other[1] - map->sky.cirrusColour[1])
+                                                          < 1e-4f
+                                                   && std::abs(other[2] - map->sky.cirrusColour[2])
+                                                          < 1e-4f;
+                                        });
+        if (isNew) {
+            seen.push_back(map->sky.cirrusColour);
+            ++distinctCirrus;
+        }
+    }
+
+    // ...and they VARY, which is the whole reason to read them: a single value
+    // repeated 60 times would be another constant with extra steps.
+    INFO(distinctCirrus << " distinct cirrus colours across " << maps.size() << " maps");
+    CHECK(distinctCirrus > 5);
+}

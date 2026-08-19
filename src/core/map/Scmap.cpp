@@ -374,10 +374,13 @@ std::expected<Map, MapError> load(std::span<const std::byte> bytes) {
         map.terrainType[i] = std::to_integer<std::uint8_t>(types[i]);
     }
 
-    // --- skybox and props, read only to prove the layout --------------------
-    // Nothing below is used. Walking it anyway is what makes endsExactlyAtEof
-    // mean something: if these two sections land on the last byte, every field
-    // width above them was right.
+    // --- skybox -------------------------------------------------------------
+    // Most of this is geometry for a sky dome this renderer does not build, and is
+    // walked rather than read — which is also what makes endsExactlyAtEof mean
+    // something, since a wrong field width here shifts everything after it.
+    //
+    // Two colours out of it are worth having, because without them every map's sky
+    // is the same pair of constants.
     cursor.skipFloats(3 + 1 + 1 + 1);  // position, horizon height, scale, sub height
     cursor.skip(8);                    // subdivision counts
     cursor.skipFloats(1 + 7);          // mid radius, seven unidentified floats
@@ -386,8 +389,28 @@ std::expected<Map, MapError> load(std::span<const std::byte> bytes) {
     for (std::int32_t i = 0, n = cursor.i32(); cursor.ok() && i < n; ++i) {
         cursor.skipFloats(10);  // planet: position, rotation, size, uv
     }
-    cursor.skip(4);            // mid RGB colour
-    cursor.skipFloats(1 + 3);  // cirrus multiplier, cirrus colour
+
+    // The mid colour, and the one place in this file a colour is BYTES rather than
+    // floats — four of them, of which the fourth is unused.
+    // THREE bytes, not four, and the difference was hiding in plain sight: the walk
+    // that stood here read four and still landed on EOF, because the extra byte was
+    // eaten by the cirrus texture path that follows — a C string swallows a leading
+    // byte and still terminates at the same NUL, so the total came out right while
+    // every field in between was one byte out. The floats after it read as 1e23 and
+    // the colour as black on all 60 maps, which is what finally gave it away.
+    const std::span<const std::byte> midColour = cursor.raw(3);
+    if (midColour.size() == 3) {
+        map.sky.midColour = {std::to_integer<int>(midColour[0]) / 255.0f,
+                             std::to_integer<int>(midColour[1]) / 255.0f,
+                             std::to_integer<int>(midColour[2]) / 255.0f};
+    }
+
+    map.sky.cirrusMultiplier = cursor.f32();
+    for (float& channel : map.sky.cirrusColour) {
+        channel = cursor.f32();
+    }
+    map.sky.present = cursor.ok();
+
     cursor.skipCString();      // cirrus texture
     for (std::int32_t i = 0, n = cursor.i32(); cursor.ok() && i < n; ++i) {
         cursor.skipFloats(5);  // frequency x2, speed, direction x2
