@@ -22,6 +22,7 @@
 #include "core/scene/UnitPlacement.hpp"
 #include "core/sim/Movement.hpp"
 #include "core/sim/Pathfinding.hpp"
+#include "core/unit/UnitBlueprint.hpp"
 #include "core/unit/UnitDef.hpp"
 #include "core/vfs/AssetSearch.hpp"
 #include "core/texture/Dds.hpp"
@@ -990,6 +991,38 @@ struct UnitOptions {
 [[nodiscard]] std::optional<rm::unitdef::UnitDef> resolveUnitDef(
     const std::filesystem::path& path, const rm::vfs::AssetSearch& search,
     std::filesystem::path& modelOut) {
+    // A Supreme Commander blueprint. Its mesh is not named inside it, so the
+    // reader that finds one by convention is the same one that reads the stats.
+    if (path.extension() == ".bp") {
+        const auto def = rm::unitbp::loadFile(path);
+        if (!def) {
+            std::fprintf(stderr, "unit blueprint \"%s\" not read: %s\n",
+                         path.filename().string().c_str(), def.error().message.c_str());
+            return std::nullopt;
+        }
+
+        // The game root a `MeshName` path is relative to, when the blueprint uses
+        // one: two directories up from `<root>/units/<ID>/<ID>_unit.bp`.
+        const std::filesystem::path root = path.parent_path().parent_path().parent_path();
+        modelOut = rm::unitbp::resolveMesh(*def, path, root);
+        if (modelOut.empty()) {
+            std::fprintf(stderr,
+                         "unit \"%s\" has no mesh beside it%s\n", def->name.c_str(),
+                         def->modelPath.empty() ? "" : " and its MeshName did not resolve");
+            return std::nullopt;
+        }
+
+        std::printf("unit %s: %.0f elmos/s, %.2f rad/s, radius %.1f elmos, %.0f hp, %s\n",
+                    def->name.c_str(), static_cast<double>(def->speedElmosPerSecond),
+                    static_cast<double>(def->turnRateRadiansPerSecond),
+                    static_cast<double>(def->collisionRadiusElmos),
+                    static_cast<double>(def->health),
+                    rm::unitdef::travelsOnGround(def->motion) ? "on the ground"
+                    : def->canFly                            ? "flying"
+                                                             : "not a ground mover");
+        return *def;
+    }
+
     if (path.extension() != ".lua") {
         return std::nullopt;
     }
@@ -1100,12 +1133,18 @@ struct UnitOptions {
             }
         }
 
+        // Textures are named after the MESH, not after whatever the command line
+        // pointed at — `UEL0201_Albedo.dds` beside `UEL0201_lod0.scm`. It matters
+        // now that a blueprint can be the argument: taking the request's path
+        // would look for `UEL0201_unit_Albedo.dds`, find nothing, and draw the
+        // unit in the fallback white, which reads as a missing texture in the
+        // content rather than a wrong path here.
         const rm::TexturePair pair =
             supCom ? rm::TexturePair{
                          .diffuse = scene.textures.resolve(
-                             scmTexturePath(request.modelPath, kScmDiffuseSuffix), "albedo"),
+                             scmTexturePath(modelPath, kScmDiffuseSuffix), "albedo"),
                          .shading = scene.textures.resolve(
-                             scmTexturePath(request.modelPath, kScmShadingSuffix), "specTeam"),
+                             scmTexturePath(modelPath, kScmShadingSuffix), "specTeam"),
                      }
                    : rm::TexturePair{
                          .diffuse = scene.textures.resolve(
@@ -1114,10 +1153,23 @@ struct UnitOptions {
                              barTexturePath(search, model->textures[1]), "shading"),
                      };
 
-        // A .scm's vertices are in ogrids, the same unit its maps use, so it
-        // takes the same x8 the terrain does. Applying it to the instance rather
-        // than to the vertices keeps the loader's output faithful to the file.
-        const float scale = request.scale * (supCom ? kOgridScale : 1.0f);
+        // How big the model is, and the answer depends on whether a blueprint
+        // said.
+        //
+        // WITH ONE, it is `meshToElmos` — `Display.UniformScale` times the eight
+        // elmos in an ogrid — and that is the file's own answer rather than ours.
+        //
+        // WITHOUT ONE, a bare `.scm` gets the x8 that has stood here since
+        // milestone 7, on the assumption that its vertices are in ogrids. THEY ARE
+        // NOT: raw mesh extents across the corpus run from 10 to 262 units, which
+        // as ogrids would make one experimental 2096 elmos long — a quarter of the
+        // map it stands on — and UEL0201 a 65-elmo tank instead of a 4.5-elmo one.
+        // The blueprint is what closes that gap, so the old factor is left only
+        // where there is no blueprint to consult and nothing better to guess.
+        const float scale = request.scale
+                          * (def && def->meshToElmos > 0.0f ? def->meshToElmos
+                             : supCom                       ? kOgridScale
+                                                            : 1.0f);
 
         std::vector<rm::UnitInstance> placed;
         const bool takesStarts = (i == 0);
@@ -1142,10 +1194,19 @@ struct UnitOptions {
 
         // A definition that omits these — or a building, whose maxslope is 0 —
         // falls back to the defaults rather than to a grid nothing can cross.
+        //
+        // A GROUND MOVER'S ZERO IS NOT A MISSING VALUE, which is why the depth
+        // test asks the motion class rather than the number. Supreme Commander's
+        // land units state no wading depth because they do not wade, and reading
+        // that 0 as "unstated" would hand them BAR's 12 elmos and walk them into
+        // the sea. Slope keeps the numeric guard: no unit means 0 to mean "cannot
+        // move at all".
+        const bool grounded = def && rm::unitdef::travelsOnGround(def->motion);
         const float slope = def && def->maxSlopeDegrees > 0.0f
                                 ? def->maxSlopeDegrees
                                 : rm::sim::kDefaultMaxSlopeDegrees;
-        const float depth = def && def->maxWaterDepthElmos > 0.0f
+        const float depth = grounded ? def->maxWaterDepthElmos
+                            : def && def->maxWaterDepthElmos > 0.0f
                                 ? def->maxWaterDepthElmos
                                 : rm::sim::kDefaultMaxWaterDepthElmos;
         scene.maxSlopeDegrees.push_back(slope);
@@ -1158,7 +1219,7 @@ struct UnitOptions {
             for (rm::sim::MoveState& state : scene.motion.back()) {
                 // The footprint is what a unit takes up, whether or not it
                 // moves — a building is still something to be pushed out of.
-                state.radiusElmos = def->footprintRadiusElmos();
+                state.radiusElmos = def->collisionRadiusElmos;
                 if (def->isMobile()) {
                     state.speedElmosPerSecond = def->speedElmosPerSecond;
                     if (def->turnRateRadiansPerSecond > 0.0f) {
