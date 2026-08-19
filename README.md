@@ -24,6 +24,33 @@ This is a personal research project. It is also a deliberate modern-C++
 showcase: C++23, RAII everywhere, rule of five, pImpl at platform boundaries,
 TDD with Catch2, warnings-as-errors.
 
+## What it looks like
+
+Every image below is this renderer's own output, written by `--screenshot`.
+Both content families throughout: Recoil/BAR maps and models, and Supreme
+Commander `.scmap` maps with `.scm` models.
+
+|  |  |
+|---|---|
+| ![a BAR map with sky and water](docs/images/m11-sky-water.jpg) | ![the same on a Supreme Commander map](docs/images/m11-sky-water-fa.jpg) |
+| **Sky and water**, ported from the games' own `sky.fx` and `water2.fx` | The same code on a `.scmap` — the horizon colour is the map's, not ours |
+| ![the ground splat up close](docs/images/m6-splat-close.jpg) | ![Seton's Clutch from above](docs/images/m6-splat-setons.jpg) |
+| **The Supreme Commander ground splat** — nine tiled strata assembled per frame from a recipe, since a `.scmap` bakes no ground texture at all | Seton's Clutch, whole-map |
+| ![shadows across the terrain](docs/images/m10-shadows.jpg) | ![800 units](docs/images/m10-crowd.jpg) |
+| **Shadow mapping** from a camera-following light box | **800 instanced units**, each on its own animation phase |
+| ![units rallying, 5 seconds in](docs/images/m8-rally-05s.jpg) | ![the same order, pathed round terrain](docs/images/m9-rally-pathed.jpg) |
+| **Click-to-move**, five seconds after the order | The same order once **A\* pathfinding** landed — units route round what they cannot climb |
+| ![refraction and per-map sky](docs/images/m12-water-refraction.jpg) | ![a 4096-square map](docs/images/m10-4096-map.jpg) |
+| **Refraction and planar reflection** — the sea absorbs by Beer-Lambert, so a shallow sandy bottom stays sandy | A **4096-square** map, decimated to fit rather than refused |
+
+More in the milestone notes below: [`m5-units-close`](docs/images/m5-units-close.jpg),
+[`m5-units-wide`](docs/images/m5-units-wide.jpg),
+[`m8-rally-50s`](docs/images/m8-rally-50s.jpg),
+[`m10-water`](docs/images/m10-water.jpg),
+[`m10-water-fa`](docs/images/m10-water-fa.jpg),
+[`m12-map-sky-coast`](docs/images/m12-map-sky-coast.jpg),
+[`m12-map-sky-desert`](docs/images/m12-map-sky-desert.jpg).
+
 ## Why not port Recoil class-by-class
 
 Measured on the real tree (`reference/RecoilEngine` in FAR, Spring/Recoil
@@ -209,8 +236,8 @@ reimplemented.*
    round-trip nothing and makes "does clicking there select that unit" a test
    instead of something to squint at.
 
-   ![units rallying, 5 seconds in](docs/images/m8-rally-05s.png)
-   ![the same order 50 seconds in](docs/images/m8-rally-50s.png)
+   ![units rallying, 5 seconds in](docs/images/m8-rally-05s.jpg)
+   ![the same order 50 seconds in](docs/images/m8-rally-50s.jpg)
 
    Deliberately not done at the time: **slope alignment** (`UnitInstance`
    carries a single yaw by design, so tilting to the terrain means growing a
@@ -359,8 +386,8 @@ reimplemented.*
     lerp, drawn as one full-screen triangle at the far plane, and the water
     reflects the same function — so the sea and the sky above it agree.
 
-    ![sky and water on a Recoil map](docs/images/m11-sky-water.png)
-    ![the same on a Supreme Commander map](docs/images/m11-sky-water-fa.png)
+    ![sky and water on a Recoil map](docs/images/m11-sky-water.jpg)
+    ![the same on a Supreme Commander map](docs/images/m11-sky-water-fa.jpg)
 
     Still absent: per-map sky and water colours (a `.scmap` carries them in its
     skybox block, which the loader parses but does not expose), refraction and
@@ -402,7 +429,7 @@ reimplemented.*
     that type clamps pitch positive and a mirrored camera looks *up* from below
     the surface.
 
-    ![refraction and per-map sky](docs/images/m12-water-refraction.png)
+    ![refraction and per-map sky](docs/images/m12-water-refraction.jpg)
 
     Selection rules moved to `core/scene/Selection.hpp` with nine tests. They
     had lived inside an AppKit callback, where the only way to check whether
@@ -585,6 +612,19 @@ fails outright for a window on an inactive Space, which is why this exists.
 
 PNG encoding goes through ImageIO, which is part of the OS — not a dependency.
 
+The renderer always writes PNG. What the README shows is a **downscaled JPEG**
+of it (1600 px wide, quality 90), which is a fifth of the bytes for detail that
+is invisible at the width GitHub renders an image anyway. Regenerate the whole
+set after adding a shot:
+
+```sh
+cd docs/images && for f in *.png; do
+    sips -Z 1600 -s format jpeg -s formatOptions 90 "$f" --out "${f%.png}.jpg"
+done
+```
+
+The PNGs stay out of git (`.gitignore`); the JPEGs are what is committed.
+
 Drag to orbit, scroll to zoom, right-drag (or shift-drag, for a trackpad) to
 pan. Panning drags the ground under the cursor rather than moving by a tuned
 constant — the step comes from the frustum's width at the camera's target, so it
@@ -631,6 +671,29 @@ recoil-metal/
 
 ## Legal
 
-Recoil is GPL-2.0; loader code adapted from it makes this project GPL-2.0 as
-well. Reading Recoil source as a spec is unrestricted. No game assets are or
-will ever be committed — same rule as FAR.
+**Licence: GPL-2.0-or-later** — the full text is in [LICENSE](LICENSE).
+
+Recoil states its own terms as "version 2 of the License, or (at your option)
+any later version" (`LICENSE` in the engine tree). Loader code here is adapted
+from it, so this project takes the same terms rather than a subset: `GPL-2.0`
+alone would be *narrower* than upstream and would strip the downstream choice
+Recoil deliberately grants.
+
+What is adapted, and therefore what carries the obligation:
+
+| Here | From |
+|---|---|
+| `.smf` / `.smt` map loaders | `rts/Map/SMF/` |
+| `.s3o` model loader and its team-colour convention | `rts/Rendering/Models/`, `ModelFragProgGL4.glsl` |
+| The 30 Hz tick, and `GAME_SPEED` with it | `rts/Sim/Misc/GlobalConstants.h` |
+| Water plane at `y = 0` | `rts/Map/Ground.h` |
+| Model lighting defaults | `rts/Map/MapInfo.cpp` |
+
+Supreme Commander shaders (`terrain.fx`, `mesh.fx`, `water2.fx`, `sky.fx`) are
+read as a **specification** and reimplemented in MSL — no HLSL is copied, and
+none of it is redistributed here. Reading either engine's source as a spec is
+unrestricted; it is the *adapted* Recoil code above that sets the licence.
+
+No game assets are or will ever be committed — same rule as FAR. The
+screenshots under `docs/images/` are output of this renderer, not game content,
+though they necessarily depict textures the two games ship.

@@ -9,8 +9,12 @@ third_party/
 # clangd index, generated from compile_commands.json
 .cache/
 
-# Screenshots are deterministic and regenerable with one --screenshot command
-# (see README), so they are documented rather than committed. Benchmark CSVs
-# *are* committed: those are measurements of a particular machine on a
-# particular day and cannot be reproduced.
-docs/images/
+# Screenshots ARE committed, as downscaled JPEGs — a reader should not have to
+# build the project to see what it renders, and "regenerable in principle" is
+# no help to someone browsing the repo. The full-resolution PNGs the renderer
+# emits stay local: five times the bytes for detail nobody sees at README
+# width, and `--screenshot` reproduces them exactly.
+#
+# Benchmark CSVs are committed for the opposite reason: they are measurements
+# of a particular machine on a particular day and cannot be reproduced at all.
+docs/images/*.png

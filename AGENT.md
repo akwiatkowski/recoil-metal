@@ -15,7 +15,7 @@ formats, built test-first in modern C++, as both research and a C++ showcase.
    `../forged-alliance-reborn/reference/RecoilEngine` (owned by the FAR
    project — never edit it, never re-clone it from here). Adapting its loader
    code into this repo is allowed and expected; that's why this repo is
-   GPL-2.0.
+   GPL-2.0-or-later (see `LICENSE`).
 2. **Use `mise exec --` for every tool invocation** (`mise exec -- cmake …`,
    `mise exec -- ctest …`). Never call tools directly.
 3. **Never commit game assets or `third_party/` content.** Converted or
@@ -36,7 +36,7 @@ formats, built test-first in modern C++, as both research and a C++ showcase.
 | Windowing | **AppKit + CAMetalDisplayLink**, no SDL/GLFW | Mac-native means Mac-native; dependencies stay near zero |
 | Test framework | **Catch2 v3**, FetchContent at configure time | Standard, BDD-friendly, good matchers |
 | Strategy | **Vertical slices through data formats** | See README — horizontal port of Recoil is ~250k lines before a pixel |
-| Licence | **GPL-2.0** | We adapt Recoil (GPLv2) loader code |
+| Licence | **GPL-2.0-or-later** | We adapt Recoil loader code; upstream grants "v2 or, at your option, any later" and narrowing it would strip that choice |
 
 ## C++ style — this repo is a showcase
 
