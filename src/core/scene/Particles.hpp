@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/map/HeightField.hpp"
+#include "core/map/PropBlueprint.hpp"
 
 #include <array>
 #include <cstddef>
@@ -121,5 +122,32 @@ struct DustEmitter {
 
 void emitDust(std::vector<Particle>& particles, std::span<const DustEmitter> emitters,
               const HeightField& field, float seconds, float& debt, std::uint32_t& seed);
+
+// --- Ambient effects ---------------------------------------------------------
+// Steam over lava, mist on water, bubbles under it, sand and snow on the wind. A map
+// marks where each belongs — eight blueprints that draw nothing and name the effect —
+// and says nothing at all about how it should look, because that lives in Lua this
+// project does not run.
+//
+// So every constant behind these is OURS, in the way ADR-018's water and sky are:
+// the structure is the game's, the numbers are named stand-ins. What each looks like
+// is in Particles.cpp beside the dust's.
+
+/// One place an ambient effect happens, as a map marks it.
+struct AmbientEmitter {
+    std::array<float, 3> position;
+    prop::Effect effect = prop::Effect::None;
+};
+
+/// Spawns ambient particles at each marked place.
+///
+/// `debt` and `seed` work as they do for the dust: the first carries the fractional
+/// particle between frames so the rate does not depend on the frame rate, and the
+/// second keeps the whole thing deterministic without a global.
+///
+/// Unlike dust, these emit CONTINUOUSLY — a map's lava does not stop steaming — so
+/// there is no equivalent of the "is it moving" test and no debt to clear.
+void emitAmbient(std::vector<Particle>& particles, std::span<const AmbientEmitter> emitters,
+                 float seconds, float& debt, std::uint32_t& seed);
 
 } // namespace rm

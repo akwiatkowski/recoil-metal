@@ -574,6 +574,10 @@ struct PropScene {
     std::deque<std::vector<rm::PropLevel>> levels;
     std::vector<rm::PropBatch> batches;
     TextureRegistry textures;
+
+    /// Where the map's ambient effects happen — the props that draw nothing and
+    /// mark a place for steam, mist, bubbles, sand or snow instead.
+    std::vector<rm::AmbientEmitter> ambient;
 };
 
 /// The yaw of a prop's stored rotation basis.
@@ -624,6 +628,7 @@ struct PropScene {
     }
 
     std::size_t emitters = 0;
+    std::size_t effects = 0;
     std::size_t unreadable = 0;
     std::size_t drawn = 0;
     std::size_t levelCount = 0;
@@ -631,8 +636,6 @@ struct PropScene {
     for (auto& [blueprint, instances] : byBlueprint) {
         const auto info = rm::prop::loadFile(root, blueprint);
         if (!info) {
-            // An emitter is not a failure: eight of the blueprints the stock maps
-            // name are particle effects with no geometry at all.
             if (info.error().code == rm::MapError::Code::MissingMesh) {
                 ++emitters;
             } else {
@@ -640,6 +643,21 @@ struct PropScene {
                 std::fprintf(stderr, "  prop %s: %s\n", blueprint.c_str(),
                              info.error().message.c_str());
             }
+            continue;
+        }
+
+        // A blueprint that draws nothing marks an ambient effect instead — steam
+        // over lava, mist on water, bubbles under it. Every placement becomes an
+        // emitter; the appearance is ours (Particles.cpp), since the map states only
+        // which effect and where.
+        if (info->effect != rm::prop::Effect::None) {
+            for (const rm::UnitInstance& instance : instances) {
+                scene.ambient.push_back(rm::AmbientEmitter{
+                    .position = instance.position,
+                    .effect = info->effect,
+                });
+            }
+            ++effects;
             continue;
         }
 
@@ -711,8 +729,11 @@ struct PropScene {
         std::printf(", drawn within %.0f..%.0f elmos", static_cast<double>(nearest),
                     static_cast<double>(furthest));
     }
+    if (effects > 0) {
+        std::printf(", %zu ambient effects at %zu places", effects, scene.ambient.size());
+    }
     if (emitters > 0) {
-        std::printf(", %zu emitters skipped", emitters);
+        std::printf(", %zu unrecognised markers skipped", emitters);
     }
     if (unreadable > 0) {
         std::printf(", %zu unreadable", unreadable);
@@ -1358,7 +1379,8 @@ struct MarchOptions {
 /// way to get one: dust marks where a unit has been, and a scene sampled after the
 /// walk knows only where everything ended up.
 void march(UnitScene& scene, const rm::HeightField& field, PassabilitySet& passability,
-           const MarchOptions& options, std::vector<rm::Particle>& dust) {
+           const MarchOptions& options, std::span<const rm::AmbientEmitter> ambient,
+           std::vector<rm::Particle>& dust) {
     std::size_t routed = 0;
     std::size_t total = 0;
     for (std::size_t batch = 0; batch < scene.motion.size(); ++batch) {
@@ -1385,6 +1407,7 @@ void march(UnitScene& scene, const rm::HeightField& field, PassabilitySet& passa
 
     constexpr float kTickSeconds = 1.0f / static_cast<float>(rm::sim::kTicksPerSecond);
     float dustDebt = 0.0f;
+    float ambientDebt = 0.0f;
     std::uint32_t dustSeed = 0x51ED27u;
     std::vector<rm::DustEmitter> emitters;
 
@@ -1409,6 +1432,7 @@ void march(UnitScene& scene, const rm::HeightField& field, PassabilitySet& passa
         }
         rm::advanceParticles(dust, kTickSeconds);
         rm::emitDust(dust, emitters, field, kTickSeconds, dustDebt, dustSeed);
+        rm::emitAmbient(dust, ambient, kTickSeconds, ambientDebt, dustSeed);
     }
 
     // A marched scene has been walked, so its walk cycles are paced by the
@@ -1738,28 +1762,6 @@ int main(int argc, const char* argv[]) {
         // unit's own maxslope/maxwaterdepth decide which map it sees.
         PassabilitySet passability{map->field, map->hasWater ? map->waterLevel : 0.0f};
 
-        // Held here rather than inside march(): the capture path below uploads
-        // them, and the windowed path raises its own as the sim runs.
-        std::vector<rm::Particle> marchDust;
-
-        const MarchOptions marchOptions = parseMarch(argc, argv);
-        if (marchOptions.enabled) {
-            march(units, map->field, passability, marchOptions, marchDust);
-        }
-
-        // Full detail up to the vertex budget, halved per doubling beyond it —
-        // which is what lets a 4096-square map load at all.
-        const int stride = rm::chooseStride(map->field);
-        const rm::TerrainMesh mesh = rm::buildTerrainMesh(map->field, stride);
-        std::printf("terrain: %zu vertices, %zu triangles, height %.1f..%.1f elmos",
-                    mesh.vertices.size(), mesh.triangleCount(),
-                    static_cast<double>(mesh.minY), static_cast<double>(mesh.maxY));
-        if (stride > 1) {
-            std::printf(" (every %dth sample: %d squares exceeds the %d-vertex budget)",
-                        stride, map->field.squaresX, rm::kMaxVerticesPerSide);
-        }
-        std::printf("\n");
-
         // --- Quality settings ----------------------------------------------
         // The file first, then the command line over the top: a flag is somebody
         // asking for this run, a file is somebody stating a preference, and the
@@ -1807,6 +1809,28 @@ int main(int argc, const char* argv[]) {
                                        std::filesystem::path{propHome == nullptr ? "" : propHome}
                                            / kFaEnvDir)
                            : PropScene{};
+
+        // Held here rather than inside march(): the capture path below uploads
+        // them, and the windowed path raises its own as the sim runs.
+        std::vector<rm::Particle> marchDust;
+
+        const MarchOptions marchOptions = parseMarch(argc, argv);
+        if (marchOptions.enabled) {
+            march(units, map->field, passability, marchOptions, props.ambient, marchDust);
+        }
+
+        // Full detail up to the vertex budget, halved per doubling beyond it —
+        // which is what lets a 4096-square map load at all.
+        const int stride = rm::chooseStride(map->field);
+        const rm::TerrainMesh mesh = rm::buildTerrainMesh(map->field, stride);
+        std::printf("terrain: %zu vertices, %zu triangles, height %.1f..%.1f elmos",
+                    mesh.vertices.size(), mesh.triangleCount(),
+                    static_cast<double>(mesh.minY), static_cast<double>(mesh.maxY));
+        if (stride > 1) {
+            std::printf(" (every %dth sample: %d squares exceeds the %d-vertex budget)",
+                        stride, map->field.squaresX, rm::kMaxVerticesPerSide);
+        }
+        std::printf("\n");
 
         std::size_t propInstances = 0;
         for (const rm::PropBatch& batch : props.batches) {
@@ -2010,6 +2034,7 @@ int main(int argc, const char* argv[]) {
         std::vector<rm::Particle> particles;
         std::vector<rm::DustEmitter> dustEmitters;
         float dustDebt = 0.0f;
+        float ambientDebt = 0.0f;
         // A fixed seed, so a scene is the same every run: the same reason the unit
         // scatter takes one.
         std::uint32_t dustSeed = 0x51ED27u;
@@ -2115,6 +2140,9 @@ int main(int argc, const char* argv[]) {
             }
             rm::advanceParticles(particles, elapsed);
             rm::emitDust(particles, dustEmitters, map->field, elapsed, dustDebt, dustSeed);
+            // ...and the map's own ambient effects, which run whether anything moves
+            // or not: a map's lava does not stop steaming because nobody is looking.
+            rm::emitAmbient(particles, props.ambient, elapsed, ambientDebt, dustSeed);
             window.setParticles(particles);
 
             // Rings under whatever is selected, rebuilt from scratch every

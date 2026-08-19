@@ -218,6 +218,7 @@ TEST_CASE("every blueprint the retail props ship resolves, or is an emitter") {
     }
 
     std::size_t meshes = 0;
+    std::size_t markers = 0;
     std::size_t levels = 0;
     std::size_t multiLevel = 0;
     std::size_t emitters = 0;
@@ -233,7 +234,12 @@ TEST_CASE("every blueprint the retail props ship resolves, or is an emitter") {
             std::filesystem::relative(entry.path(), root, ec).generic_string();
 
         const auto blueprint = rm::prop::loadFile(root, relative);
-        if (blueprint) {
+        if (blueprint && blueprint->effect != rm::prop::Effect::None) {
+            // A blueprint that draws nothing and marks an ambient effect instead.
+            ++markers;
+            CHECK(blueprint->lods.empty());
+            CHECK(blueprint->uniformScale == 0.0f);
+        } else if (blueprint) {
             ++meshes;
             REQUIRE_FALSE(blueprint->lods.empty());
             levels += blueprint->lods.size();
@@ -264,7 +270,10 @@ TEST_CASE("every blueprint the retail props ship resolves, or is an emitter") {
     CHECK(failures == 0);
     // 335 blueprints ship; the ones with no mesh are the emitters.
     CHECK(meshes > 300);
-    CHECK(emitters > 0);
+    // The effect markers: lava steam, water mist, underwater bubbles, blowing sand
+    // and blowing snow. Recognised rather than reported as broken content.
+    INFO(markers << " effect markers, " << emitters << " unrecognised");
+    CHECK(markers >= 8);
     // Props are authored far larger than they are drawn — the reason
     // UniformScale cannot be defaulted away.
     CHECK(smallestScale < 0.1f);
@@ -276,4 +285,92 @@ TEST_CASE("every blueprint the retail props ship resolves, or is an emitter") {
                 << " with more than one");
     CHECK(multiLevel > 80);
     CHECK(levels > meshes);
+}
+
+
+// --- Effect markers ----------------------------------------------------------
+
+TEST_CASE("a blueprint that draws nothing marks an ambient effect") {
+    // Eight of the blueprints the stock maps reference draw no geometry at all:
+    // UniformScale is 0 and MeshName points at an editor marker. What they mark is a
+    // particle effect, and the blueprint names WHICH in prose and in its own file
+    // name — and says nothing whatever about how it should look, because that lives
+    // in Lua this project does not run.
+    const Sandbox box;
+    box.write("LavaSteam01_prop.bp", R"BP(
+PropBlueprint {
+    Display = {
+        Mesh = {
+            LODs = {
+                {
+                    AlbedoName = '/env/common/props/marker01_albedo.dds',
+                    MeshName = '/env/common/props/marker01_lod0.scm',
+                    ShaderName = 'TMeshNoNormals',
+                },
+            },
+        },
+        UniformScale = 0,
+    },
+    Interface = { HelpText = 'Small lava steam steam' },
+}
+)BP");
+
+    const auto blueprint = rm::prop::loadFile(box.root(), "/env/Test/Props/LavaSteam01_prop.bp");
+    REQUIRE(blueprint.has_value());
+    CHECK(blueprint->effect == rm::prop::Effect::Steam);
+    // Exactly one of the two is meaningful: this one is a place, not a thing.
+    CHECK(blueprint->lods.empty());
+}
+
+TEST_CASE("each kind of marker is told apart") {
+    const Sandbox box;
+    const auto markerNamed = [&box](const std::string& name) {
+        box.write(name + "_prop.bp",
+                  "PropBlueprint { Display = { Mesh = { LODs = { { ShaderName = '' } } }, "
+                  "UniformScale = 0 } }");
+        return rm::prop::loadFile(box.root(), "/env/Test/Props/" + name + "_prop.bp");
+    };
+
+    CHECK(markerNamed("LavaSteam03")->effect == rm::prop::Effect::Steam);
+    CHECK(markerNamed("WaterSurfaceMist01")->effect == rm::prop::Effect::Mist);
+    CHECK(markerNamed("UnderwaterBubbles01")->effect == rm::prop::Effect::Bubbles);
+    CHECK(markerNamed("DesertBlowingSand02")->effect == rm::prop::Effect::BlowingSand);
+    CHECK(markerNamed("BlowingSnow01")->effect == rm::prop::Effect::BlowingSnow);
+}
+
+TEST_CASE("a marker whose effect nobody recognises is reported, not invented") {
+    // A scale of zero says "draws nothing"; the name says which effect. Something
+    // that says the first and not the second is content this reader does not
+    // understand, and guessing an effect for it would put steam wherever a future
+    // marker happens to be placed.
+    const Sandbox box;
+    box.write("SomethingElse_prop.bp",
+              "PropBlueprint { Display = { Mesh = { LODs = { { ShaderName = '' } } }, "
+              "UniformScale = 0 } }");
+
+    const auto blueprint =
+        rm::prop::loadFile(box.root(), "/env/Test/Props/SomethingElse_prop.bp");
+    REQUIRE_FALSE(blueprint.has_value());
+    CHECK(blueprint.error().code == rm::MapError::Code::MissingMesh);
+}
+
+TEST_CASE("MeshName names the mesh when the blueprint states one") {
+    // The format's own way, against the convention it otherwise falls back to.
+    // Twelve of the shipped blueprints use it.
+    const Sandbox box;
+    box.write("Odd_prop.bp", R"BP(
+PropBlueprint {
+    Display = {
+        Mesh = { LODs = { { MeshName = '/env/Test/Props/Elsewhere_lod0.scm' } } },
+        UniformScale = 1,
+    },
+}
+)BP");
+    box.touch("Elsewhere_lod0.scm");
+    // ...and deliberately NOT Odd_lod0.scm, so only MeshName can find it.
+
+    const auto blueprint = rm::prop::loadFile(box.root(), "/env/Test/Props/Odd_prop.bp");
+    REQUIRE(blueprint.has_value());
+    REQUIRE(blueprint->lods.size() == 1);
+    CHECK(blueprint->lods[0].mesh.filename() == "Elsewhere_lod0.scm");
 }

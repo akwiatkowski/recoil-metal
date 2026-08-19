@@ -4,6 +4,7 @@
 #include "core/map/Scmap.hpp"
 
 #include <algorithm>
+#include <cctype>
 
 #include <string>
 #include <utility>
@@ -62,6 +63,25 @@ namespace {
     return blueprintPath.parent_path() / (base + "_lod" + std::to_string(level) + ".scm");
 }
 
+/// Which ambient effect a blueprint marks, from its file name.
+///
+/// The name, because nothing else identifies it. `HelpText` says the same thing in
+/// prose and is display text — localised in principle, and "Small lava steam steam"
+/// in practice, which is not something to parse. `ScriptClass` and `ScriptModule`
+/// name Lua this project does not run. The asset's own name is the stable handle.
+[[nodiscard]] Effect effectFromName(std::string_view path) {
+    std::string lowered{path};
+    std::transform(lowered.begin(), lowered.end(), lowered.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+
+    if (lowered.find("lavasteam") != std::string::npos) return Effect::Steam;
+    if (lowered.find("surfacemist") != std::string::npos) return Effect::Mist;
+    if (lowered.find("bubbles") != std::string::npos) return Effect::Bubbles;
+    if (lowered.find("blowingsand") != std::string::npos) return Effect::BlowingSand;
+    if (lowered.find("blowingsnow") != std::string::npos) return Effect::BlowingSnow;
+    return Effect::None;
+}
+
 } // namespace
 
 std::expected<Blueprint, MapError> loadFile(const std::filesystem::path& root,
@@ -93,7 +113,18 @@ std::expected<Blueprint, MapError> loadFile(const std::filesystem::path& root,
     std::error_code ec;
 
     for (std::size_t level = 0; lods != nullptr && level < lods->items.size(); ++level) {
-        const std::filesystem::path mesh = meshBeside(path, level);
+        // MeshName, when the blueprint states one: a path inside the game's virtual
+        // filesystem rather than a name beside the blueprint. Twelve of the shipped
+        // blueprints use it, mostly the effect markers pointing at an editor marker
+        // — so it rarely names anything worth drawing, but it IS the format's own
+        // answer and the convention below is only what the engine falls back to.
+        std::filesystem::path mesh;
+        if (const std::optional<std::string_view> named =
+                lods->items[level].stringAt("MeshName")) {
+            mesh = root / withoutLeadingSlash(*named);
+        } else {
+            mesh = meshBeside(path, level);
+        }
         if (mesh.empty() || !std::filesystem::is_regular_file(mesh, ec)) {
             // Ends the list rather than failing: the table describes more levels
             // than the archive ships in a few cases, and a prop with a fine level
@@ -141,13 +172,24 @@ std::expected<Blueprint, MapError> loadFile(const std::filesystem::path& root,
         blueprint.lods.push_back(std::move(lod));
     }
 
-    // A prop with no geometry at all is an emitter, which is a legitimate answer
-    // rather than a corruption — eight of the 207 blueprints the stock maps name
-    // are particle effects.
+    // A SCALE OF ZERO means the blueprint draws nothing, whatever mesh it names —
+    // and every one of the eight effect markers in the corpus says exactly that,
+    // while pointing MeshName at an editor marker. So it is the structural signal
+    // for "this is a place, not a thing", and the name says which effect.
+    if (blueprint.uniformScale == 0.0f) {
+        blueprint.effect = effectFromName(gameRelativePath);
+        blueprint.lods.clear();
+        if (blueprint.effect != Effect::None) {
+            return blueprint;
+        }
+    }
+
+    // No geometry and no effect anyone recognises: either content that was not
+    // extracted, or a marker whose name this reader does not know.
     if (blueprint.lods.empty()) {
         return fail(MapError::Code::MissingMesh,
                     "prop blueprint \"" + std::string{gameRelativePath}
-                        + "\" names no mesh (an emitter, or content not extracted)");
+                        + "\" names no mesh and marks no effect this reader knows");
     }
 
     // Cutoffs must increase outwards, or the level chosen for a distance is

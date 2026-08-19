@@ -142,4 +142,104 @@ void emitDust(std::vector<Particle>& particles, std::span<const DustEmitter> emi
     }
 }
 
+
+
+// --- Ambient effects ---------------------------------------------------------
+// Every number below is ours. A map states WHERE its lava steams and WHICH effect
+// that is, and nothing else; the appearance lives in the engine's Lua. Named
+// stand-ins, the same arrangement ADR-018 made for the water and the sky.
+
+namespace {
+
+/// What one ambient effect looks like.
+struct AmbientLook {
+    std::array<float, 3> colour;
+    float alpha;
+    float lifetimeSeconds;
+    float risePerSecond;      ///< elmos; negative sinks
+    float driftPerSecond;     ///< elmos, sideways and random
+    float spreadElmos;        ///< how far from the marker a particle is born
+    float sizeElmos;
+    float growthPerSecond;
+    float perSecond;          ///< particles from one marker
+};
+
+[[nodiscard]] AmbientLook lookOf(prop::Effect effect) noexcept {
+    switch (effect) {
+        case prop::Effect::Steam:
+            // Rises hard and lives long, because a steam column is the tallest thing
+            // any of these make and the one a player would notice from a distance.
+            return {{0.86f, 0.84f, 0.82f}, 0.30f, 3.4f, 26.0f, 4.0f, 14.0f, 26.0f, 20.0f, 5.0f};
+        case prop::Effect::Mist:
+            // Low and slow, hugging the surface: mist that climbed would read as
+            // smoke, which is a different weather entirely.
+            return {{0.88f, 0.90f, 0.92f}, 0.16f, 5.0f, 2.5f, 6.0f, 34.0f, 44.0f, 14.0f, 3.0f};
+        case prop::Effect::Bubbles:
+            // Small, fast and tight — bubbles are the one effect whose particles read
+            // individually rather than as a cloud, so they barely grow.
+            return {{0.80f, 0.90f, 0.95f}, 0.34f, 2.2f, 34.0f, 2.0f, 6.0f, 5.0f, 2.0f, 7.0f};
+        case prop::Effect::BlowingSand:
+            return {{0.80f, 0.68f, 0.48f}, 0.18f, 3.0f, 4.0f, 30.0f, 26.0f, 30.0f, 26.0f, 6.0f};
+        case prop::Effect::BlowingSnow:
+            // The same, paler and slower: snow is carried, sand is thrown.
+            return {{0.94f, 0.95f, 0.97f}, 0.22f, 4.0f, 2.0f, 22.0f, 30.0f, 24.0f, 20.0f, 6.0f};
+        case prop::Effect::None:
+            break;
+    }
+    return {{0.0f, 0.0f, 0.0f}, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+}
+
+} // namespace
+
+void emitAmbient(std::vector<Particle>& particles, std::span<const AmbientEmitter> emitters,
+                 float seconds, float& debt, std::uint32_t& seed) {
+    if (seconds <= 0.0f || emitters.empty()) {
+        return;
+    }
+
+    // One rate for the whole set, as the dust does, rather than a debt per effect:
+    // the rates differ by less than a factor of two and a map's markers are a
+    // handful, so per-effect bookkeeping would be state for nothing.
+    debt += seconds * 6.0f;
+    if (debt < 1.0f) {
+        return;
+    }
+    const auto each = static_cast<int>(debt);
+    debt -= static_cast<float>(each);
+
+    for (const AmbientEmitter& emitter : emitters) {
+        const AmbientLook look = lookOf(emitter.effect);
+        if (!(look.alpha > 0.0f)) {
+            continue;  // an effect this reader does not know
+        }
+
+        for (int i = 0; i < each; ++i) {
+            if (particles.size() >= kMaxParticles) {
+                return;  // dropped rather than grown — see kMaxParticles
+            }
+
+            // Scattered across the marker's patch rather than issuing from a point:
+            // one of these marks an area of ground, not a nozzle.
+            const float x = emitter.position[0] + jitter(seed) * look.spreadElmos;
+            const float z = emitter.position[2] + jitter(seed) * look.spreadElmos;
+            // Height from the MARKER, not from the ground: bubbles are under the
+            // water and mist is on it, and both are placed where the map wants them.
+            const float y = emitter.position[1];
+
+            particles.push_back(Particle{
+                .origin = {x, y, z},
+                .age = 0.0f,
+                .velocity = {jitter(seed) * look.driftPerSecond,
+                             look.risePerSecond * (0.7f + 0.3f * std::abs(jitter(seed))),
+                             jitter(seed) * look.driftPerSecond},
+                .lifetime = look.lifetimeSeconds,
+                .colour = {look.colour[0] * look.alpha, look.colour[1] * look.alpha,
+                           look.colour[2] * look.alpha, look.alpha},
+                .size = look.sizeElmos,
+                .growth = look.growthPerSecond,
+            });
+        }
+    }
+}
+
 } // namespace rm

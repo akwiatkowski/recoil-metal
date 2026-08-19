@@ -45,8 +45,36 @@ struct BlueprintLod {
     float cutoffElmos = std::numeric_limits<float>::infinity();
 };
 
+// An ambient effect a prop marks the place for, rather than a thing to draw.
+//
+// Eight of the blueprints the stock maps reference draw nothing: `UniformScale = 0`
+// and a `MeshName` pointing at an editor marker. What they mark is a particle
+// effect, and the blueprint says WHICH — "Water surface mist", "Small lava steam
+// steam", "Underwater bubbles", "Desert Blowing Sand" — but nothing whatever about
+// how it looks. That lives in the Lua the engine runs, which this project does not
+// have and by settled decision will not port.
+//
+// So the KIND is read and the appearance is ours, which is the arrangement ADR-018
+// already made for the water and the sky: port the structure, name the stand-ins.
+enum class Effect {
+    None,
+    Steam,        ///< lava steam, rising and thinning
+    Mist,         ///< water-surface mist, low and slow
+    Bubbles,      ///< underwater, rising fast and small
+    BlowingSand,  ///< desert, drifting sideways
+    BlowingSnow,  ///< tundra, the same but paler and slower
+};
+
 struct Blueprint {
-    /// The levels, FINEST FIRST, never empty on success.
+    /// The ambient effect this prop marks, or None when it is geometry.
+    ///
+    /// EXACTLY ONE of this and `lods` is meaningful: a blueprint either draws a mesh
+    /// or marks an effect. A scale of zero is what says which — the structural fact
+    /// — and the file's name is what says which effect, since nothing else in it
+    /// does.
+    Effect effect = Effect::None;
+
+    /// The levels, FINEST FIRST, non-empty unless `effect` says otherwise.
     ///
     /// Most props have one. The ones that matter have three: every heavily-placed
     /// tree in the corpus declares cutoffs like 30 / 175 / 300 ogrids, which is
