@@ -784,6 +784,23 @@ BAR=~/projects/llm/games/forged-alliance-reborn/reference/BAR/objects3d/Units
 # scene: 3 models, 4 textures uploaded, 2 texture binds per frame
 ```
 
+### Controls
+
+RTS conventions, because the camera was a model viewer's before this and a view that
+swings when you meant to select is the most disorienting thing an RTS camera can do.
+
+| input | does |
+|---|---|
+| `W` `A` `S` `D` | pan the map. Speed is scaled by the frustum's width at the target, so it feels the same zoomed in as out — one and a half seconds to cross the visible width |
+| left click | select one of YOUR units. Shift/cmd/ctrl adds to the set |
+| right click | order: move to the ground, or attack the enemy under the cursor |
+| hold `space` + drag | swing the camera. Let go and it returns to the overhead view the app opened with, so a glance never costs you your bearings |
+| shift + drag | pan with the mouse |
+| scroll | zoom |
+
+The map is framed whole on load (`OrbitCamera::frame`), so the opening view is the
+whole map rather than a corner of it.
+
 ### Quality settings
 
 Three switches, all on by default, all one keypress away:

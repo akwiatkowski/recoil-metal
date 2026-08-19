@@ -4,6 +4,8 @@
 
 #include "platform/Window.hpp"
 
+#include <set>
+
 #include "render/Renderer.hpp"
 
 #include <QuartzCore/QuartzCore.hpp> // metal-cpp decl of CA::MetalLayer (no impl defines here!)
@@ -72,6 +74,8 @@
 @property(nonatomic, assign)
     const std::function<void(const rm::Ray&, rm::MouseButton, rm::MouseModifiers)>* clickCallback;
 @property(nonatomic, assign) const std::function<void(char)>* keyCallback;
+@property(nonatomic, assign) const std::function<void(char, bool)>* keyStateCallback;
+@property(nonatomic, assign) std::set<char>* heldKeys;
 @end
 
 @implementation RMTerrainView {
@@ -123,19 +127,58 @@ static constexpr CGFloat kClickSlopPoints = 3.0;
 /// not a keypress.
 ///
 /// Nothing is passed to super, so AppKit does not beep at an unhandled key.
-- (void)keyDown:(NSEvent*)event {
-    if (self.keyCallback == nullptr || !*self.keyCallback) {
-        return;
-    }
+- (char)charFor:(NSEvent*)event {
     NSString* characters = event.charactersIgnoringModifiers;
     if (characters.length == 0) {
-        return;
+        return 0;
     }
     const unichar first = [characters characterAtIndex:0];
     if (first > 127) {
-        return;  // not something a `char` can carry
+        return 0;  // not something a `char` can carry
     }
-    (*self.keyCallback)(static_cast<char>(std::tolower(static_cast<int>(first))));
+    return static_cast<char>(std::tolower(static_cast<int>(first)));
+}
+
+- (void)keyDown:(NSEvent*)event {
+    const char key = [self charFor:event];
+    if (key == 0) {
+        return;
+    }
+
+    // The HELD set first, and it is updated even when nothing is listening: the state has
+    // to be right whether or not a callback happens to be installed, or a key held while
+    // a mode changes is stuck down forever.
+    //
+    // AppKit repeats keyDown while a key is held, so a repeat must not be reported as a
+    // fresh press — a pan that re-triggered on every repeat would accelerate the longer
+    // it ran.
+    const bool repeat = self.heldKeys != nullptr && self.heldKeys->contains(key);
+    if (self.heldKeys != nullptr) {
+        self.heldKeys->insert(key);
+    }
+    if (!repeat && self.keyStateCallback != nullptr && *self.keyStateCallback) {
+        (*self.keyStateCallback)(key, true);
+    }
+
+    // The tap callback still fires on a repeat, because that is what a key-repeat is for
+    // in a text-like binding, and every current use is a toggle where a repeat is
+    // harmless.
+    if (self.keyCallback != nullptr && *self.keyCallback) {
+        (*self.keyCallback)(key);
+    }
+}
+
+- (void)keyUp:(NSEvent*)event {
+    const char key = [self charFor:event];
+    if (key == 0) {
+        return;
+    }
+    if (self.heldKeys != nullptr) {
+        self.heldKeys->erase(key);
+    }
+    if (self.keyStateCallback != nullptr && *self.keyStateCallback) {
+        (*self.keyStateCallback)(key, false);
+    }
 }
 
 - (void)mouseDown:(NSEvent*)event {
@@ -172,6 +215,15 @@ static constexpr CGFloat kClickSlopPoints = 3.0;
         [self panBy:event];
         return;
     }
+
+    // ROTATION IS HELD BEHIND SPACE, because left-drag belongs to selection in an RTS and
+    // a camera that swings when you meant to select is the single most disorienting thing
+    // an RTS camera can do. Space is the modal key: hold it and the mouse turns the view,
+    // let go and the view returns to overhead (see the space handler in main).
+    if (self.heldKeys == nullptr || !self.heldKeys->contains(' ')) {
+        return;
+    }
+
     // Tuned so a drag across the window is a little under a half-turn. Dragging
     // right swings the camera right (the world appears to move left), which is
     // the convention Recoil and most RTS cameras use.
@@ -180,9 +232,15 @@ static constexpr CGFloat kClickSlopPoints = 3.0;
                                   static_cast<float>(event.deltaY) * kRadiansPerPoint);
 }
 
+// Right-drag pans only with a modifier. Bare right-drag is left alone so that a right
+// press-and-twitch still reports as an ORDER rather than nudging the camera and swallowing
+// the click — a right button in an RTS is how a unit is told where to go, and losing that
+// to a two-pixel wobble is worse than losing the drag.
 - (void)rightMouseDragged:(NSEvent*)event {
     _travelSincePress += std::abs(event.deltaX) + std::abs(event.deltaY);
-    [self panBy:event];
+    if ((event.modifierFlags & NSEventModifierFlagShift) != 0) {
+        [self panBy:event];
+    }
 }
 
 // Drags the ground under the cursor, rather than nudging the camera by a tuned
@@ -230,6 +288,8 @@ struct rm::Window::Impl {
     std::function<void(float)> frameCallback;
     std::function<void(const rm::Ray&, rm::MouseButton, rm::MouseModifiers)> clickCallback;
     std::function<void(char)> keyCallback;
+    std::function<void(char, bool)> keyStateCallback;
+    std::set<char> heldKeys;
 
     Impl(int width, int height, const char* title) {
         constexpr NSUInteger style = NSWindowStyleMaskTitled
@@ -269,6 +329,8 @@ struct rm::Window::Impl {
         view.renderer = renderer.get();
         view.clickCallback = &clickCallback;
         view.keyCallback = &keyCallback;
+        view.keyStateCallback = &keyStateCallback;
+        view.heldKeys = &heldKeys;
 
         delegate = [[RMDisplayLinkDelegate alloc] init];
         delegate.renderer = renderer.get();
@@ -288,6 +350,8 @@ struct rm::Window::Impl {
         view.renderer = nullptr;
         view.clickCallback = nullptr;
         view.keyCallback = nullptr;
+        view.keyStateCallback = nullptr;
+        view.heldKeys = nullptr;
         delegate.frameCallback = nullptr;
         renderer.reset();
     }
@@ -367,6 +431,12 @@ void Window::onKey(std::function<void(char key)> callback) {
     impl_->keyCallback = std::move(callback);
 }
 
+void Window::onKeyState(std::function<void(char key, bool pressed)> callback) {
+    impl_->keyStateCallback = std::move(callback);
+}
+
+bool Window::keyHeld(char key) const { return impl_->heldKeys.contains(key); }
+
 void Window::setReflections(bool enabled) {
     impl_->renderer->setReflections(enabled);
 }
@@ -414,6 +484,8 @@ void Window::setParticles(std::span<const Particle> particles) {
 void Window::focusOn(std::array<float, 3> target, float distance) {
     impl_->renderer->focusOn(target, distance);
 }
+
+OrbitCamera& Window::camera() { return impl_->renderer->camera(); }
 
 void Window::show() {
     [impl_->window makeKeyAndOrderFront:nil];

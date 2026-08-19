@@ -538,6 +538,21 @@ constexpr const char* kBarTextureDir =
 // drawn at scale 1 next to Recoil content would be a eighth of its proper size.
 constexpr float kOgridScale = 8.0f;
 
+// How long a WASD pan takes to cross the visible width, in seconds.
+//
+// One and a half, which is brisk without overshooting: an RTS camera is used in short
+// corrections, and a pan that takes four seconds to cross the screen gets held down and
+// then overshot. Expressed as a duration rather than a speed so it means the same thing at
+// every zoom level.
+constexpr float kSecondsToCrossTheView = 1.5f;
+
+// The window height, in points, that the pan step is measured against.
+//
+// `elmosPerPoint` needs a viewport height and the frame callback does not have one; the
+// value only has to be CONSISTENT, since it is multiplied straight back out to recover the
+// frustum width. 1000 points is a plausible window and cancels exactly.
+constexpr float kPanReferenceHeightPoints = 1000.0f;
+
 // A .scm names no textures at all — Supreme Commander resolves them by
 // convention from the model's own file name, which is what these reproduce.
 // `_normalsTS` exists too and is not read: there is no normal-map path yet.
@@ -2499,6 +2514,48 @@ void writeCsv(const std::string& path, const rm::bench::FrameRecorder& recorder)
 
 namespace {
 
+/// The unit nearest the ray across every batch, IGNORING who owns it.
+///
+/// What a right-click wants: an order aimed at an enemy has to be able to find one, and
+/// the selection pick deliberately cannot.
+[[nodiscard]] std::optional<rm::SelectionEntry> pickAnyBatch(const rm::Ray& ray,
+                                                             const UnitScene& scene) {
+    std::optional<rm::SelectionEntry> best;
+    float bestDistance = rm::kDefaultPickRadiusElmos;
+
+    for (std::size_t batch = 0; batch < scene.instances.size(); ++batch) {
+        const std::vector<rm::UnitInstance>& instances = scene.instances[batch];
+        const std::optional<std::size_t> hit = rm::pickUnit(ray, instances, bestDistance);
+        if (!hit) {
+            continue;
+        }
+        const rm::UnitInstance& unit = instances[*hit];
+        bestDistance = rm::distanceToRay(
+            ray, simd_make_float3(unit.position[0], unit.position[1], unit.position[2]));
+        best = rm::SelectionEntry{.batch = batch, .instance = *hit};
+    }
+    return best;
+}
+
+/// Whether `army` may shoot what `entry` points at.
+[[nodiscard]] bool hostileTo(const UnitScene& scene, int army, const rm::SelectionEntry& entry) {
+    const int theirs = scene.armyOf(entry.batch, entry.instance);
+    if (army == rm::sim::kNoArmy || theirs == rm::sim::kNoArmy) {
+        return false;
+    }
+    const auto find = [&scene](int index) -> const rm::sim::Army* {
+        for (const rm::sim::Army& candidate : scene.armies) {
+            if (candidate.index == index) {
+                return &candidate;
+            }
+        }
+        return nullptr;
+    };
+    const rm::sim::Army* mine = find(army);
+    const rm::sim::Army* target = find(theirs);
+    return mine != nullptr && target != nullptr && rm::sim::hostile(*mine, *target);
+}
+
 /// The unit nearest the ray across every batch, or nothing.
 ///
 /// pickUnit searches one array at a time because that is how the instances are
@@ -2894,7 +2951,27 @@ int main(int argc, const char* argv[]) {
                 return;  // an order with nothing selected is not an error
             }
 
-            const std::optional<simd_float3> ground = rm::pickGround(ray, map->field);
+            // AN ATTACK OR A MOVE, decided by what the right button landed on. Picking is
+            // done WITHOUT the army filter that selection uses — the point here is to find
+            // an enemy, which is exactly what selection excludes.
+            //
+            // What this is not: a tracked attack order. The selection is sent to where the
+            // target IS, and the automatic targeting does the shooting once in range. A
+            // target that walks away is therefore not chased, which is the honest
+            // difference between "attack move" and "attack that unit", and the next thing
+            // here.
+            std::optional<simd_float3> ground;
+            const std::optional<rm::SelectionEntry> hit = pickAnyBatch(ray, units);
+            const bool isAttack = hit && units.playerArmy != rm::sim::kNoArmy
+                               && hostileTo(units, units.playerArmy, *hit);
+
+            if (isAttack) {
+                const std::array<float, 3>& at =
+                    units.instances[hit->batch][hit->instance].position;
+                ground = simd_make_float3(at[0], at[1], at[2]);
+            } else {
+                ground = rm::pickGround(ray, map->field);
+            }
             if (!ground) {
                 return;  // clicked the sky, or past the edge of the map
             }
@@ -2927,7 +3004,50 @@ int main(int argc, const char* argv[]) {
             }
         });
 
+        // The overhead view the camera returns to when space is released. Captured at the
+        // start, which is the whole-map fit `OrbitCamera::frame` computed on load, so
+        // "normal view" means the view the app opened with rather than a hardcoded angle.
+        const float restPitch = window.camera().pitch;
+        const float restYaw = window.camera().yaw;
+
+        window.onKeyState([&window, restPitch, restYaw](char key, bool pressed) {
+            // Releasing space snaps the camera back overhead. Holding it is what allows a
+            // drag to rotate at all (Window.mm), so this is the other half of that mode:
+            // look around while you hold, and you are put back when you let go, which
+            // means a glance never costs you your bearings.
+            if (key == ' ' && !pressed) {
+                rm::OrbitCamera& camera = window.camera();
+                camera.pitch = restPitch;
+                camera.yaw = restYaw;
+            }
+        });
+
         window.onFrame([&](float elapsed) {
+            // WASD pans the map, every frame rather than per keypress: a pan driven by
+            // key EVENTS moves in jerks the length of the auto-repeat interval, and stops
+            // dead the moment the repeat lapses.
+            //
+            // The step is scaled by the frustum's width at the target, the same quantity a
+            // mouse pan uses, so the speed feels the same zoomed in as out — there is no
+            // sensitivity constant here to get wrong. A second and a half to cross the
+            // visible width.
+            {
+                const float across =
+                    window.camera().elmosPerPoint(kPanReferenceHeightPoints)
+                    * kPanReferenceHeightPoints;
+                const float step = across * elapsed / kSecondsToCrossTheView;
+
+                float right = 0.0f;
+                float forward = 0.0f;
+                if (window.keyHeld('a')) { right -= step; }
+                if (window.keyHeld('d')) { right += step; }
+                if (window.keyHeld('w')) { forward += step; }
+                if (window.keyHeld('s')) { forward -= step; }
+                if (right != 0.0f || forward != 0.0f) {
+                    window.camera().pan(right, forward);
+                }
+            }
+
             const int ticks = clock.advance(elapsed);
             // Built once, outside the tick loop: the spans do not move, only
             // what they point at.

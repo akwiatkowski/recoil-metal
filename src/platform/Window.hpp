@@ -10,6 +10,7 @@
 #include "core/texture/Dds.hpp"
 #include "core/mesh/TerrainMesh.hpp"
 
+#include "core/camera/OrbitCamera.hpp"
 #include "core/scene/Picking.hpp"
 #include "render/Renderer.hpp"
 
@@ -105,6 +106,23 @@ public:
     // include AppKit to ask "was that R".
     void onKey(std::function<void(char key)> callback);
 
+    // Called on press AND release, for the keys that are HELD rather than tapped.
+    //
+    // Separate from `onKey` rather than replacing it, because the two answer different
+    // questions and conflating them makes both worse: a toggle wants "was R pressed" and
+    // fires once, while panning wants "is W down" and must survive the whole frame. A
+    // toggle driven by this would fire twice per press.
+    //
+    // Space arrives as ' '. It is the one non-printable key here and it earns the
+    // exception: holding it to swing the camera is the convention this app follows, and a
+    // held key with no release event cannot express "let go".
+    void onKeyState(std::function<void(char key, bool pressed)> callback);
+
+    /// Whether a key is down right now. The form a per-frame update wants — asking is
+    /// cheaper than tracking the same set again in the caller, and there is exactly one
+    /// truth about what is held.
+    [[nodiscard]] bool keyHeld(char key) const;
+
     /// The planar reflection quality setting. See Renderer::setReflections.
     void setReflections(bool enabled);
     [[nodiscard]] bool reflectionsEnabled() const;
@@ -134,6 +152,16 @@ public:
 
     /// Points the camera at a world position. See Renderer::focusOn.
     void focusOn(std::array<float, 3> target, float distance);
+
+    /// The camera itself, for a caller that drives it per frame.
+    ///
+    /// Exposed because a WASD pan is a per-FRAME thing — a pan driven by key events moves
+    /// in jerks the length of the auto-repeat interval — and because the view space returns
+    /// to is the one the app opened with, which only the caller knows to remember.
+    ///
+    /// `OrbitCamera` is a plain core type over simd, so this leaks no AppKit and no Metal,
+    /// which is the rule this header follows. Renderer::camera() already does the same.
+    [[nodiscard]] OrbitCamera& camera();
 
     // Benchmark control. See Renderer::beginBenchmark.
     void beginBenchmark(std::size_t warmupFrames);
