@@ -101,6 +101,7 @@ add_library(rm_core STATIC
     src/core/unit/UnitBlueprint.cpp
     src/core/unit/UnitDef.cpp
     src/core/vfs/AssetSearch.cpp
+    src/core/vfs/Vfs.cpp
     src/core/settings/Settings.cpp)
 target_include_directories(rm_core PUBLIC src)
 target_link_libraries(rm_core PUBLIC rm_project_warnings miniz miniz_impl)
@@ -158,6 +159,8 @@ if(BUILD_TESTING)
         tests/test_unit_blueprint.cpp
         tests/test_unit_def.cpp
         tests/test_asset_search.cpp
+        tests/test_vfs.cpp
+        tests/test_real_vfs.cpp
         tests/test_real_unit_blueprints.cpp
         tests/test_real_unitdefs.cpp
         tests/test_team_colours.cpp
