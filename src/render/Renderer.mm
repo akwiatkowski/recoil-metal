@@ -336,6 +336,16 @@ fragment float4 skyFragment(SkyOut in [[stage_in]], constant Uniforms& u [[buffe
     return float4(skyColour(in.direction, u.sunDirection, u.fogColour), 1.0);
 }
 
+// How wide a selection outline is drawn, in pixels.
+//
+// Constant in PIXELS rather than elmos: a selection cue should be the same weight
+// on a unit across the map as on one under the cursor. Three is enough to find in a
+// crowd at a working zoom and thin enough not to fatten the silhouette.
+constant float kOutlinePixels = 3.0;
+
+// The rings' own green (main.mm's kSelectionRingColour), so the two cues agree.
+constant float3 kOutlineColour = float3(0.35, 1.0, 0.45);
+
 // How much of the sun a shadowed fragment keeps. Not zero: shadows in daylight
 // are lit by the sky, and a black shadow reads as a hole in the ground rather
 // than as shade.
@@ -1179,6 +1189,61 @@ vertex float4 unitShadowVertex(uint vid [[vertex_id]],
     return u.lightViewProjection * float4(world, 1.0);
 }
 
+// --- Selection outlines ------------------------------------------------------
+// A shell around a selected unit, drawn from the same geometry pushed out along its
+// own normals. What the rings cannot do: at a low camera angle a crowd's rings hide
+// behind the units standing on them, which is the one thing removing the white tint
+// genuinely lost (ADR-021).
+//
+// An inverted hull rather than a stencil or an id buffer, because both of those
+// would change the shape of the frame — a stencil means a depth-stencil format on
+// every pipeline and the depth texture, an id buffer means another attachment — and
+// this needs neither. Front faces are culled so what shows is the shell's far side,
+// which survives only where it sticks out past the unit.
+//
+// The width is applied in CLIP space, not world space: offsetting by a fixed number
+// of elmos gives an outline that is bold on a near unit and invisible on a far one,
+// where a selection cue wants to be the same weight wherever it is.
+
+vertex float4 outlineVertex(uint vid [[vertex_id]],
+                            uint iid [[instance_id]],
+                            const device UnitVertexIn* vertices [[buffer(0)]],
+                            constant Uniforms& u [[buffer(1)]],
+                            const device UnitInstanceIn* instances [[buffer(2)]],
+                            const device BoneTransformIn* bones [[buffer(3)]],
+                            constant PoseUniforms& p [[buffer(4)]]) {
+    const UnitVertexIn v = vertices[vid];
+    const UnitInstanceIn inst = instances[iid];
+
+    const uint poseIndex = poseIndexFor(p, inst.animationPhase);
+    const BoneTransformIn bone = bones[poseIndex * p.boneCount + v.boneIndex];
+    const float4 boneRotation = float4(bone.rotation);
+    const float3 local = rotateBy(boneRotation, float3(v.position)) + float3(bone.translation);
+    const float3 world = unitOrient(local, inst) * inst.scale + float3(inst.position);
+    const float3 worldNormal = unitOrient(rotateBy(boneRotation, float3(v.normal)), inst);
+
+    float4 clip = u.viewProjection * float4(world, 1.0);
+
+    // The normal in clip space, as a direction: w = 0 drops the translation, which is
+    // what makes this a direction rather than a point a few elmos away.
+    const float3 clipNormal = (u.viewProjection * float4(worldNormal, 0.0)).xyz;
+    const float2 screenNormal =
+        length(clipNormal.xy) > 1e-6 ? normalize(clipNormal.xy) : float2(0.0);
+
+    // Multiplying by w undoes the perspective divide that is about to happen, so the
+    // offset lands as the same number of pixels at any depth. Two over the viewport
+    // height converts pixels to normalised device coordinates.
+    const float widthNdc = 2.0 * kOutlinePixels / max(u.viewportSize.y, 1.0);
+    clip.xy += screenNormal * widthNdc * clip.w;
+    return clip;
+}
+
+fragment float4 outlineFragment(constant Uniforms& u [[buffer(1)]]) {
+    // The same green the rings use, so the two cues read as one thing said twice
+    // rather than as two states.
+    return float4(kOutlineColour, 1.0);
+}
+
 // A PROP's shadow, which needs a fragment shader where the others do not.
 //
 // The passes above write depth and nothing else, and Metal is happy to rasterise
@@ -1594,6 +1659,37 @@ Renderer::Renderer(CA::MetalLayer* layer)
     // over the ground, and a solid band would hide the terrain it marks.
     decalPipeline_ = makePipeline(device_, library, "decalVertex", "decalFragment",
                                  /*blend=*/true);
+    // The selection outline. Front faces culled and no depth write: what shows is the
+    // shell's far side, and only where it survives the depth test against the unit
+    // that has already been drawn — which is exactly the silhouette.
+    {
+        MTL::Function* vertexFn =
+            library->newFunction(NS::String::string("outlineVertex", NS::UTF8StringEncoding));
+        MTL::Function* fragmentFn =
+            library->newFunction(NS::String::string("outlineFragment", NS::UTF8StringEncoding));
+
+        auto* descriptor = MTL::RenderPipelineDescriptor::alloc()->init();
+        descriptor->setVertexFunction(vertexFn);
+        descriptor->setFragmentFunction(fragmentFn);
+        descriptor->colorAttachments()->object(0)->setPixelFormat(kColorFormat);
+        descriptor->setDepthAttachmentPixelFormat(kDepthFormat);
+
+        NS::Error* outlineError = nullptr;
+        outlinePipeline_ = device_->newRenderPipelineState(descriptor, &outlineError);
+        descriptor->release();
+        if (vertexFn != nullptr) vertexFn->release();
+        if (fragmentFn != nullptr) fragmentFn->release();
+        if (outlinePipeline_ == nullptr) {
+            throw RendererError{"failed to create the selection outline pipeline"};
+        }
+
+        const std::size_t bytes = kMaxOutlinedUnits * sizeof(UnitInstance) * kMaxFramesInFlight;
+        outlineBuffer_ = device_->newBuffer(bytes, MTL::ResourceStorageModeShared);
+        if (outlineBuffer_ == nullptr) {
+            throw RendererError{"failed to allocate the selection outline buffer"};
+        }
+    }
+
     // The particle pipeline, created here because it needs the shader library and
     // the library is released on the next line.
     //
@@ -1822,6 +1918,8 @@ Renderer::~Renderer() {
     if (propShadowPipeline_ != nullptr) propShadowPipeline_->release();
     if (unitShadowPipeline_ != nullptr) unitShadowPipeline_->release();
     if (terrainShadowPipeline_ != nullptr) terrainShadowPipeline_->release();
+    if (outlineBuffer_ != nullptr) outlineBuffer_->release();
+    if (outlinePipeline_ != nullptr) outlinePipeline_->release();
     if (particleBuffer_ != nullptr) particleBuffer_->release();
     if (particleDepthState_ != nullptr) particleDepthState_->release();
     if (particlePipeline_ != nullptr) particlePipeline_->release();
@@ -2297,8 +2395,10 @@ void Renderer::beginFrame() noexcept {
     instanceSlot_ = (instanceSlot_ + 1) % kMaxFramesInFlight;
     frameOpen_ = true;
 
-    // Particles too, and for the same reason.
+    // Particles too, and for the same reason. Selection outlines likewise: a stale
+    // list would outline whatever now occupies those slots.
     particleCount_ = 0;
+    outlineRuns_.clear();
 
     // Rings are forgotten at the start of every frame, so a frame that pushes
     // none draws none.
@@ -2359,6 +2459,50 @@ void Renderer::setGroundDecals(std::span<const DecalVertex> vertices) noexcept {
     auto* base = static_cast<DecalVertex*>(decalBuffer_->contents());
     std::memcpy(base + instanceSlot_ * kMaxDecalVertices, vertices.data(),
                 decalVertexCount_ * sizeof(DecalVertex));
+}
+
+void Renderer::setSelection(std::span<const SelectionEntry> selected) noexcept {
+    outlineRuns_.clear();
+    if (outlineBuffer_ == nullptr || selected.empty() || unitBatches_.empty()) {
+        return;
+    }
+
+    auto* base = static_cast<UnitInstance*>(outlineBuffer_->contents())
+                 + instanceSlot_ * kMaxOutlinedUnits;
+    std::size_t written = 0;
+
+    // Grouped into runs by batch, because an outline is drawn from the unit's own
+    // mesh and the mesh is per batch. A selection arrives in click order, so the same
+    // batch can appear more than once — each stretch becomes its own run rather than
+    // being sorted, which keeps the outlines in the order the rings are built in.
+    for (const SelectionEntry& entry : selected) {
+        if (entry.batch >= batchForSourceIndex_.size()) {
+            continue;
+        }
+        const std::size_t batch = batchForSourceIndex_[entry.batch];
+        if (batch == kNoBatch || written >= kMaxOutlinedUnits) {
+            continue;  // a batch that was skipped at upload, or past the cap
+        }
+
+        const GpuUnitBatch& uploaded = unitBatches_[batch];
+        if (entry.instance >= uploaded.instanceCount) {
+            continue;
+        }
+
+        // The instance as the GPU currently has it, so an outline follows a walking
+        // unit rather than where it stood when it was selected.
+        const auto* instances = static_cast<const UnitInstance*>(uploaded.instanceBuffer->contents())
+                                + instanceSlot_ * uploaded.instanceCapacity;
+        base[written] = instances[entry.instance];
+
+        if (!outlineRuns_.empty() && outlineRuns_.back().batch == batch
+            && outlineRuns_.back().firstInstance + outlineRuns_.back().instanceCount == written) {
+            ++outlineRuns_.back().instanceCount;
+        } else {
+            outlineRuns_.push_back(OutlineRun{batch, written, 1});
+        }
+        ++written;
+    }
 }
 
 void Renderer::setParticles(std::span<const Particle> particles) noexcept {
@@ -2977,6 +3121,67 @@ void Renderer::encodeScene(MTL::CommandBuffer* commandBuffer, MTL::RenderPassDes
         }, camera_.eye());
     }
 
+    // --- Selection outlines ------------------------------------------------
+    // BEFORE the units, which is the whole trick. The shell is drawn with depth
+    // write, then the unit is drawn over it, so all that survives is the few pixels
+    // of shell that stick out past the silhouette.
+    //
+    // Drawn AFTER the units instead, it shows its own internal creases: a hard-edged
+    // model has split normals wherever it has a crease, the shell tears open along
+    // every one of them, and its far side shows through the unit's own surface as a
+    // green line across the hull. Which is what this looked like at first.
+    //
+    // Skipped in the reflection pass: a mirror showing the interface would be the
+    // interface appearing twice.
+    if (!outlineRuns_.empty() && outlinePipeline_ != nullptr && override == nullptr) {
+        encoder->setRenderPipelineState(outlinePipeline_);
+        // Front faces culled: what is wanted is the far side of the shell. Depth
+        // TESTED, so a shell hides behind terrain and behind other units — and depth
+        // NOT WRITTEN, which is the part that took three attempts.
+        //
+        // With depth write, the shell wins at every crease: a hard-edged model has
+        // split normals there, the extruded shell pushes the two sides apart, and the
+        // gap between them lands NEARER than the model's own surface. So the unit
+        // drawn next fails its depth test along every crease and the shell shows
+        // through as green lines across the hull. Writing nothing leaves the depth
+        // buffer holding the terrain, the unit passes everywhere it should, and its
+        // colour covers all of the shell but the rim.
+        encoder->setCullMode(MTL::CullMode::CullModeFront);
+        encoder->setDepthStencilState(decalDepthState_);
+        encoder->setVertexBytes(&uniforms, sizeof(uniforms), kUniformBufferIndex);
+        encoder->setFragmentBytes(&uniforms, sizeof(uniforms), kUniformBufferIndex);
+
+        for (const OutlineRun& run : outlineRuns_) {
+            const GpuUnitBatch& batch = unitBatches_[run.batch];
+
+            encoder->setVertexBuffer(batch.vertexBuffer, 0, kVertexBufferIndex);
+            encoder->setVertexBuffer(
+                outlineBuffer_,
+                static_cast<NS::UInteger>((instanceSlot_ * kMaxOutlinedUnits
+                                           + run.firstInstance)
+                                          * sizeof(UnitInstance)),
+                kInstanceBufferIndex);
+            encoder->setVertexBuffer(batch.boneBuffer, 0, kBoneBufferIndex);
+
+            PoseUniforms pose;
+            pose.poseCount = static_cast<std::uint32_t>(batch.poseCount);
+            pose.boneCount =
+                static_cast<std::uint32_t>(batch.boneStrideBytes / sizeof(BoneTransform));
+            pose.duration = batch.duration;
+            pose.time = batch.animationDrivenByInstance ? 0.0f : animationTime_;
+            encoder->setVertexBytes(&pose, sizeof(pose), kPoseUniformBufferIndex);
+
+            encoder->drawIndexedPrimitives(MTL::PrimitiveType::PrimitiveTypeTriangle,
+                                           static_cast<NS::UInteger>(batch.indexCount),
+                                           MTL::IndexType::IndexTypeUInt32, batch.indexBuffer,
+                                           /*indexBufferOffset=*/0,
+                                           static_cast<NS::UInteger>(run.instanceCount));
+        }
+
+        // Back to the default, since everything after this expects it.
+        encoder->setCullMode(MTL::CullMode::CullModeNone);
+    }
+
     // --- Units -------------------------------------------------------------
     // Deliberately NOT nested inside the terrain branch: a model should be
     // viewable with no map loaded, and the first version of this got that wrong
@@ -3151,6 +3356,29 @@ void Renderer::encodeScene(MTL::CommandBuffer* commandBuffer, MTL::RenderPassDes
             }
         }
     }
+
+    // --- Selection rings ---------------------------------------------------
+    // After the units, so a ring is not hidden by the unit it belongs to, and
+    // BEFORE the water, so a ring on a submerged shelf is tinted by the sea
+    // above it like everything else down there.
+    //
+    // Skipped in the reflection pass: a mirror showing the interface would be
+    // the interface appearing twice.
+    if (decalVertexCount_ > 0 && decalPipeline_ != nullptr && override == nullptr) {
+        encoder->setRenderPipelineState(decalPipeline_);
+        encoder->setDepthStencilState(decalDepthState_);
+        encoder->setVertexBuffer(
+            decalBuffer_,
+            static_cast<NS::UInteger>(instanceSlot_ * kMaxDecalVertices * sizeof(DecalVertex)),
+            kVertexBufferIndex);
+        encoder->setVertexBytes(&uniforms, sizeof(uniforms), kUniformBufferIndex);
+        encoder->drawPrimitives(MTL::PrimitiveType::PrimitiveTypeTriangle, NS::UInteger{0},
+                                static_cast<NS::UInteger>(decalVertexCount_));
+    }
+
+    // --- Particles ---------------------------------------------------------
+    // After the decals, so dust drifts over a selection ring rather than under it,
+    // and before the water for the same reason the decals are: a puff on a
 
     // --- Particles ---------------------------------------------------------
     // After the decals, so dust drifts over a selection ring rather than under it,

@@ -125,6 +125,9 @@ public:
     /// setInstances, only meaningful from inside an onFrame callback.
     void setGroundDecals(std::span<const DecalVertex> vertices);
 
+    /// This frame's selection. See Renderer::setSelection.
+    void setSelection(std::span<const SelectionEntry> selected);
+
     /// This frame's particles. See Renderer::setParticles. Like setInstances,
     /// only meaningful from inside an onFrame callback.
     void setParticles(std::span<const Particle> particles);

@@ -218,3 +218,10 @@ formats, built test-first in modern C++, as both research and a C++ showcase.
   readings in a batch came out 2.6x faster than the last, which read as props being
   *cheaper* to draw than not to draw. Three alternating rounds settled it in
   minutes. Any A/B where the difference is under a millisecond needs this.
+- **A pass can be deleted by an edit that never mentions it.** Rewriting the prop
+  draw by replacing everything between two anchors swallowed the ground-decal draw
+  that happened to sit between them: `decalPipeline_` was still created and still
+  released, and nothing drew with it. Nothing failed, 374 tests stayed green, and the
+  screenshots taken afterwards were of props. When replacing a RANGE of a render
+  function, check what else lived in that range — `grep` the pass headers and count
+  them before and after.

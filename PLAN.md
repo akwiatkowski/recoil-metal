@@ -25,10 +25,7 @@ That Lua is not a library to call. It is a **client of an API this engine would
 have to provide first** — 315 distinct functions the sim subset calls that are
 defined nowhere in those 228k lines, across 6734 call sites, plus 193 `On*`
 callbacks the engine must fire back. `Unit.lua` alone — the class every unit
-is — needs 127 of them, 30 returning real data rather than nil. So there is no
-partial credit: nothing runs until nearly all of it exists, whereas
-`core/sim/Movement.cpp` already moves units with no weapons, no economy and no
-armies.
+is — touches 127 of them, 30 in value-returning position.
 
 And those 315 functions *are* the behaviour. Motion (1174 call sites), damage,
 targeting, economy — all C++ in the original; the Lua orchestrates and
@@ -40,24 +37,92 @@ a VFS with archive priority (`lua.scd` overrides `mohodata.scd`'s Unit.lua,
 undocumented, closed-source API exactly, with failures surfacing thousands of
 lines into someone else's script.
 
-**Decision: reimplement the semantics in C++, read only the blueprints.** This
-is the rule the repo already runs on — *formats convert, behaviour gets
-reimplemented* (ADR-004, ADR-005) — and the Lua becomes what `terrain.fx` and
-`water2.fx` were for the ground and the sea: a **specification to read**, not a
-dependency to satisfy. `defaultweapons.lua` (837 lines) states the firing state
-machine; `Unit.lua` states the damage and build model; the blueprints state the
-constants. Cite them the same way, `file:line`.
+**Two arguments against hosting it turned out to be wrong, and are recorded here
+so they are not made again.**
 
-**Honest about the trade.** Hosting the Lua has a high fixed cost and a low
-marginal cost; reimplementing is the reverse. The crossover is around "all four
-factions, T1–T3, shields, stealth, nukes, transports, experimentals" — past
-that, road A wins. For a skirmish that ends, the fixed cost dominates.
-So: **keep the seam.** Sim state stays in plain structs behind narrow
-free-function interfaces (as `Movement.hpp` already does), which is what would
-let a Lua host later sit *beside* the native sim rather than replace it. That
-costs a little design discipline now and nothing else. See the survey in the
-knowledge base (`docs/recoil-metal/supcom-lua-gameplay-survey.md`) for the full
-numbers behind this section.
+*It is not slow.* Measured on this machine, 1000 units at 10 Hz: the whole tick
+in native C costs 5.5 µs; Moho's shape — native motion, Lua woken per unit per
+tick making a handful of engine calls — costs 127 µs, of which 121 µs is the Lua.
+That is **0.12% of a 100 ms tick budget**, about a sixth of what the renderer
+spends *drawing* 800 animated units. The only way to make Lua expensive is to put
+per-unit-per-tick arithmetic in it (6× native when measured), and Moho's API
+shape structurally prevents that, because the 315 functions are the hot paths.
+The real exposure is Lua 5.0's stop-the-world GC over thousands of unit tables —
+an argument for 5.1 plus a compat shim, not against Lua.
+
+*It is not all-or-nothing.* Lua is late-bound: a missing engine function errors
+only on the line that calls it. So a host can be brought up incrementally — run
+the scenario, hit `attempt to call a nil value`, implement that one function,
+repeat. An earlier draft of this plan claimed the opposite and it was the
+strongest argument it had.
+
+**Decision: reimplement the semantics in C++ first, and treat a Lua host as the
+destination rather than an alternative.** The near-term reason is time to a
+playable skirmish: road A is the same simulation plus a binding layer plus a Lua
+fork plus a VFS, against a closed-source API with no reference to diff. The
+long-term reason to keep going is that **modding is how people change this
+game**, and no C++ sim accepts a Supreme Commander mod at any price.
+
+So the repo's existing rule still applies — *formats convert, behaviour gets
+reimplemented* (ADR-004, ADR-005) — and the Lua is read as a **specification**,
+the way `terrain.fx` and `water2.fx` were read for the ground and the sea:
+`defaultweapons.lua` (837 lines) states the firing state machine, `Unit.lua` the
+damage and build model, the blueprints the constants. Cited `file:line`, same as
+the shaders. But the native sim is shaped so the host can arrive later — see the
+next section, which is the part of this plan most easily lost.
+
+Full numbers behind this section: `docs/recoil-metal/supcom-lua-gameplay-survey.md`
+in the knowledge base.
+
+---
+
+## Designing for a Lua host that does not exist yet
+
+Commenting alone does not buy this. Four decisions are free today and expensive
+after milestone 19; everything else about a host can wait.
+
+1. **The sim ticks at 10 Hz, matching Supreme Commander, not the current 30.**
+   Its scripts hardcode the rate: `WaitSeconds(n)` is `WaitTicks(n * 10)`
+   (`mohodata/lua/simInit.lua:37`). A 30 Hz sim runs every hosted script's
+   timing 3× fast, and the fix after the fact is not the tick constant
+   (`core/sim/Movement.hpp:27`) but every tuned value that grew up around it.
+   This engine has no lockstep requirement forcing 10 Hz, and no reason to
+   refuse it either — render stays decoupled at display rate, as it is now.
+
+2. **Native functions carry moho's names, semantics, and units.** `GetBlueprint`,
+   `GetPosition`, `SetSpeed`, `SetAccel`, `SetGoal`, `GetHealth`, `AdjustHealth`,
+   `DamageArea`, `CreateProjectile`, `SetConsumptionPerSecondMass`. Where the
+   original takes ogrids or degrees, the C++ entry point does too and converts
+   inward. That turns the eventual binding layer into a mechanical shim instead
+   of a translation, and it costs exactly one naming decision per function.
+   Where our semantics deliberately differ, say so at the definition.
+
+3. **Events are a documented set, dispatched by name.** The sim fires
+   `onCreate`, `onStopBeingBuilt`, `onKilled`, `onDamage`, `onStartBuild`,
+   `onStopBuild`, `onGotTarget`, `onLostTarget`, `onImpact`, `onLayerChange` —
+   the subset of the original's 193 that these milestones actually reach — as a
+   listed, tested set rather than as calls scattered through the sim. A host
+   subscribes to the same list.
+
+4. **Content loads through a VFS with archive priority.** `.scd` files are ZIPs
+   and miniz is already vendored. This is not Lua-specific work: **blueprint
+   mods are the majority of real mods** and they work by layering an archive over
+   the stock one, so a VFS earns its keep in the pure-C++ engine too. Extracting
+   with a Python one-liner (`tests/test_real_scm.cpp:8`) is fine for fixtures and
+   wrong for the app.
+
+**What this does *not* buy, stated plainly so nobody is surprised later:** the
+hard part of hosting the game's Lua is semantic fidelity across ~200 functions,
+and no amount of preparation today makes that free. These four decisions make
+the shim mechanical and the timing correct. They do not make the fidelity job
+smaller.
+
+**One fork worth deciding before milestone 20, not now.** "Moddable" and
+"runs existing Supreme Commander mods" are different products. Exposing *our own*
+Lua 5.4 API — our names, no fork, no compat shim, no 200-function debt — gets
+scriptable gameplay cheaply, and gets none of FAF's existing content. Hosting
+moho's API gets the ecosystem and owes the fidelity. Decisions 1–4 above serve
+both, which is why they can be taken now.
 
 ---
 
@@ -117,9 +182,13 @@ speed, no footprint, no LOD. This closes that.
   passability grid needs a MotionType → slope/depth mapping, reimplemented
   semantics rather than a field read, and it gets an ADR.
 
+Also in this milestone, because both are cheapest before anything is tuned:
+the sim tick moves to 10 Hz (decision 1), and content loads through a
+priority-layered VFS over the `.scd` ZIPs (decision 4).
+
 **Done when:** `--units .../UEL0201_unit.bp 40 --march … --focus` puts UEF
 tanks on a `.scmap` at their authored speed, turn rate and footprint, LODs
-switching with distance.
+switching with distance — with no manual extraction step.
 
 ### 16. Armies, and units that belong to one
 
@@ -190,12 +259,13 @@ produces tanks paid for out of a running economy.
 
 ## Cross-cutting
 
-- **Tick.** The sim already runs a fixed 30 Hz tick with a clock that clamps
-  catch-up (`core/sim/Movement.hpp:27`, `:192`). Supreme Commander's own sim is
-  10 Hz (`WaitTicks = coroutine.yield`, `WaitSeconds(n)` = `n * 10` ticks) —
-  a lockstep-multiplayer constraint this engine does not inherit. Blueprint
-  rates are authored per second, so the conversion is explicit and testable
-  either way.
+- **Tick.** The sim runs a fixed tick with a clock that clamps catch-up
+  (`core/sim/Movement.hpp:27`, `:192`), currently 30 Hz. Milestone 15 moves it to
+  **10 Hz** for the reason in decision 1 above, and because it is the last moment
+  that change is free — every constant tuned after this point would have to move
+  with it. Blueprint rates are authored per second, so the conversion is explicit
+  and testable either way; the render loop is unaffected, being decoupled from the
+  tick already.
 - **Tests.** AGENT.md rule 4 stands: anything that does not touch the GPU gets a
   failing test first, and parsers are tested against the real retail corpus —
   568 blueprints is a corpus, so blueprint reading gets the same treatment the

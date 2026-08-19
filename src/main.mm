@@ -1904,6 +1904,7 @@ int main(int argc, const char* argv[]) {
             // one thing no screenshot can show.
             if (const std::size_t rings = parseCount(argc, argv, "--select"); rings > 0) {
                 std::vector<rm::DecalVertex> vertices;
+                std::vector<rm::SelectionEntry> captured;
                 std::size_t made = 0;
                 for (std::size_t batch = 0; batch < units.instances.size() && made < rings;
                      ++batch) {
@@ -1913,6 +1914,7 @@ int main(int argc, const char* argv[]) {
                             vertices, map->field, units.instances[batch][i].position,
                             units.motion[batch][i].radiusElmos * kSelectionRingMargin,
                             kSelectionRingColour);
+                        captured.push_back(rm::SelectionEntry{batch, i});
                     }
                 }
                 // No beginFrame: that acquires a frames-in-flight slot which
@@ -1931,6 +1933,7 @@ int main(int argc, const char* argv[]) {
                 }
 
                 renderer.setGroundDecals(vertices);
+                renderer.setSelection(captured);
                 std::printf("  selected %zu units for the capture\n", made);
             }
 
@@ -2178,6 +2181,9 @@ int main(int argc, const char* argv[]) {
             });
 
             window.setGroundDecals(decalVertices);
+            // ...and an outline around each selected unit, which is what a ring
+            // cannot do at a low camera angle where the units hide their own rings.
+            window.setSelection(selected);
         });
 
         window.show();

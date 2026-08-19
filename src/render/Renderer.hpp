@@ -10,6 +10,7 @@
 #include "core/scene/GroundDecals.hpp"
 #include "core/scene/Particles.hpp"
 #include "core/scene/PropBatch.hpp"
+#include "core/scene/Selection.hpp"
 #include "core/scene/UnitBatch.hpp"
 #include "core/scene/UnitPlacement.hpp"
 #include "core/texture/Dds.hpp"
@@ -213,6 +214,17 @@ public:
     // buffer, which cannot be resized while the GPU may be reading it. That is
     // roughly 300 units selected at once.
     void setGroundDecals(std::span<const DecalVertex> vertices) noexcept;
+
+    // Which units are selected, for this frame.
+    //
+    // Pushed every frame like the decals and forgotten at beginFrame, for the same
+    // reason: a stale list would outline whatever now occupies those slots. Batch
+    // indices are the CALLER's, as they are everywhere else in this interface.
+    //
+    // Drawn as an outline around each one — a shell of the same geometry pushed out
+    // along its normals — which is what a ring cannot do at a low camera angle,
+    // where a crowd's rings hide behind the units standing on them.
+    void setSelection(std::span<const SelectionEntry> selected) noexcept;
 
     // This frame's particles — dust behind whatever is moving.
     //
@@ -510,6 +522,26 @@ private:
     /// Scratch space for the above, reused between frames and passes so that
     /// planning the terrain costs no allocation once the capacity has settled.
     std::vector<ChunkDraw> chunkDraws_;
+
+    /// The selection outline: one shell per selected unit, from the unit's own
+    /// geometry. Front faces culled, so what shows is the far side of the shell where
+    /// it sticks out past the unit.
+    MTL::RenderPipelineState* outlinePipeline_ = nullptr;  // owned
+    MTL::Buffer* outlineBuffer_ = nullptr;                 // owned
+
+    /// One run of selected instances that share a batch: which batch, where the run
+    /// starts in outlineBuffer_, and how long it is. Rebuilt every frame.
+    struct OutlineRun {
+        std::size_t batch = 0;  ///< index into unitBatches_
+        std::size_t firstInstance = 0;
+        std::size_t instanceCount = 0;
+    };
+    std::vector<OutlineRun> outlineRuns_;
+
+    /// The most units outlined at once. A selection is tens; past this the rest go
+    /// unoutlined rather than the buffer being grown, which cannot happen while the
+    /// GPU may be reading it.
+    static constexpr std::size_t kMaxOutlinedUnits = 512;
 
     MTL::RenderPipelineState* particlePipeline_ = nullptr;  // owned
     MTL::DepthStencilState* particleDepthState_ = nullptr;  // owned

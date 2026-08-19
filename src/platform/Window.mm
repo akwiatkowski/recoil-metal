@@ -403,6 +403,10 @@ void Window::setGroundDecals(std::span<const DecalVertex> vertices) {
     impl_->renderer->setGroundDecals(vertices);
 }
 
+void Window::setSelection(std::span<const SelectionEntry> selected) {
+    impl_->renderer->setSelection(selected);
+}
+
 void Window::setParticles(std::span<const Particle> particles) {
     impl_->renderer->setParticles(particles);
 }
