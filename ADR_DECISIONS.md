@@ -614,3 +614,94 @@ normal-map textures, which is the thing being stood in for.
 The sky function is shared by the sky pass and the water's reflection, so the sea
 reflects the sky that is actually above it rather than a constant chosen to look
 similar.
+
+## ADR-019 — LOD cracks are closed with skirts, and the index buffer is level-major
+
+**Context.** Milestone 12 shipped per-chunk LOD unstitched: neighbouring chunks
+drawn at different levels disagree along their shared edge, because the coarse
+one draws a chord where the fine one follows every vertex. No crack was ever
+observed — the transition sits eight chunks out where a one-level difference is
+subpixel — so this was a known hole rather than a reported bug.
+
+Testing the *other* invariant found something worse. The renderer's cull-and-
+merge (ADR-017) merges a chunk's draw into the previous one only while their
+index ranges stay adjacent. Milestone 12 emitted each chunk's three levels back
+to back, which puts chunk N's coarse ranges between chunk N's fine range and
+chunk N+1's. No two chunks were ever adjacent at the level they were drawn at.
+The merge had not fired for a whole milestone, and terrain was one draw per
+chunk — the exact cost ADR-017 exists to avoid.
+
+**Decision.** Emit level-major: all chunks' level 0, then all level 1, then all
+level 2. Consecutive chunks are then adjacent at whichever level they share.
+
+Close the cracks with skirts — a curtain hanging straight down from each
+chunk's rim, at each level's own resolution, inside that level's index range so
+a chunk stays one draw.
+
+Two details are load-bearing. **Both sides need a skirt**: where a chunk's rim
+is above its neighbour's chord its own skirt covers the gap, and where it is
+below, the neighbour's does. Skirting only the coarse levels is the tempting
+half-measure and leaves half the cracks open. And **the depth is derived**, from
+the worst gap a coarsest-level chord can leave along that chunk's *rim* — the
+only place a crack can happen, since error across a chunk's interior is
+level-of-detail error that no skirt addresses.
+
+**Alternatives considered.** Transition strips, which stitch exactly and need
+the neighbour's level known at build time — it is chosen per frame from the
+camera. A constant skirt depth, which must be sized for the worst cliff on the
+map and then hangs into open air wherever the ground beside a chunk falls away.
+
+**Consequences.** +11.2% vertices on a 1024-square map and +0.047 ms GPU. The
+dropped vertices are shared between the segments either side of them; a pair per
+segment is the obvious version and doubles that to 22%, five megabytes on a real
+map to say the same thing. `TerrainChunk::Lod` now reports `surfaceIndexCount`
+separately from `indexCount`, because the surface ranges are what tile the mesh
+exactly once and the skirt is deliberately extra over the top.
+
+The wider lesson is the one that cost a milestone: **an optimisation whose
+failure mode is invisible needs its invariant asserted, not observed.** Culling
+that stops merging renders an identical image.
+
+## ADR-020 — The stratum normal convention is measured, not inferred
+
+**Context.** A `.scmap` names a normal map beside each stratum's albedo. Porting
+the blend was straightforward — `terrain.fx`'s `TerrainNormalsXP` is the same
+chain of lerps as the albedo path, and ADR-009 already established that the
+engine's shaders are the authority.
+
+One thing that file does not state is which channel points up. It samples
+`tex2D(...)*2-1` and hands the result straight to `CalculateLighting`, whose own
+space is muddled by `.xzy` swizzles elsewhere in the same file. Inferring an
+axis from a shader that never says one is precisely the mistake ADR-009 exists
+to prevent, and the failure mode is nasty: a normal map read on the wrong axis
+lights bumps as dents, which survives a look at the screen.
+
+**Decision.** Measure it. A corpus test decodes the block endpoint colours of
+thirty real stratum normal maps and asserts blue is the channel sitting near
++1 while red and green sit near the middle — which is what a tangent-space
+normal map looks like, because it is "flat" almost everywhere.
+
+Not a full BC decoder: a block interpolates between two RGB565 endpoints, so
+averaging the endpoints estimates the mean colour closely enough to tell 255
+from 128, and blocks otherwise go to the GPU verbatim with nothing in this
+project ever needing to decode one.
+
+**Also decided:** the detail normal *perturbs* the geometric normal rather than
+replacing it. Supreme Commander replaces, because its terrain takes its slope
+from a map-wide normal map; this mesh already carries the real slope in its
+vertices, and trusting a tiled texture over it would flatten every hillside.
+That makes the composition weight (1.5) ours rather than the engine's, since the
+original has no such constant to copy — chosen by measurement, at 0.6 the mean
+pixel difference against no normal maps is 1.13/255, present in the numbers and
+invisible on screen.
+
+**Consequences.** One faithfully reproduced asymmetry that reads as a typo:
+`TerrainAlbedoXP` expands its masks (`saturate(m * 2 - 1)`, the correction
+ADR-009 made) while `TerrainNormalsXP` twenty lines later reads them **raw**.
+Tidying it would cut every stratum's relief off at half weight.
+
+Nine more texture fetches per terrain fragment — naively +41% GPU, more than the
+planar reflection costs. Skipping absent slots (uniform across the draw) and
+zero-weight strata (per fragment but spatially coherent) takes that to +6.2%,
+both leaving the image bit-identical in intent. It is a quality setting for the
+same reason the reflection pass is.

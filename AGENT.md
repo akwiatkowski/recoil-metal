@@ -148,3 +148,28 @@ formats, built test-first in modern C++, as both research and a C++ showcase.
   `CGWindowListCopyWindowInfo` and use `screencapture -o -l <id>`. Note also
   that AppleScript/`osascript` has no Accessibility permission here, so
   `System Events` window queries fail — use CoreGraphics directly.
+- **Assert the invariants an optimisation depends on; you cannot see them.**
+  Per-chunk LOD silently killed the cull-and-merge for a whole milestone by
+  interleaving each chunk's levels, so no two chunks were ever adjacent at the
+  level they were drawn at. A renderer issuing 256 draws where one would do
+  renders an identical image. Culling, merging, batching and instancing all
+  fail this way — the test to write is the structural one (are these ranges
+  adjacent?), not a visual one.
+- **A `float3` is 16 bytes AND 16-aligned in MSL**, so a trailing `float` does
+  not pack into its tail — it starts a fresh slot and the next `float3`
+  realigns past it. Every uniform struct here pins its offsets with
+  `static_assert(offsetof(...))` for exactly this reason. When adding a field,
+  add it at the END and check `sizeof` against a scratch program rather than
+  reasoning about the padding.
+- **Shader work that samples a texture array should skip absent and
+  zero-weight slots.** The stratum normal blend cost +41% GPU naively and +6.2%
+  with two `continue`s, for a bit-identical image: absent slots are bound to a
+  fallback texture whose contents are multiplied away, and a stratum's mask
+  weight is zero across most of a map. The uniform skip is free; the
+  per-fragment one is spatially coherent because strata cover regions rather
+  than speckle.
+- **Some conventions the reference shaders genuinely do not state.** SupCom's
+  `terrain.fx` never says which channel of a stratum normal map points up. When
+  a port needs a fact the source does not carry, measure it against the real
+  corpus and write the measurement as a test (`test_real_stratum_normals.cpp`)
+  — inferring it is how bumps end up lit as dents.

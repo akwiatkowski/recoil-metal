@@ -42,6 +42,8 @@ Commander `.scmap` maps with `.scm` models.
 | **Click-to-move**, five seconds after the order | The same order once **A\* pathfinding** landed — units route round what they cannot climb |
 | ![refraction and per-map sky](docs/images/m12-water-refraction.jpg) | ![a 4096-square map](docs/images/m10-4096-map.jpg) |
 | **Refraction and planar reflection** — the sea absorbs by Beer-Lambert, so a shallow sandy bottom stays sandy | A **4096-square** map, decimated to fit rather than refused |
+| ![selection rings](docs/images/m13-selection-rings.jpg) | ![stratum normal maps](docs/images/m13-stratum-normals.jpg) |
+| **Selection rings** that follow the ground rather than hovering flat over it | **Per-stratum normal maps**, at the scale an 8-elmo height sample cannot reach |
 
 More in the milestone notes below: [`m5-units-close`](docs/images/m5-units-close.jpg),
 [`m5-units-wide`](docs/images/m5-units-wide.jpg),
@@ -434,6 +436,78 @@ reimplemented.*
     Selection rules moved to `core/scene/Selection.hpp` with nine tests. They
     had lived inside an AppKit callback, where the only way to check whether
     shift-click adds was to click.
+
+13. **Interface, detail, and two quality switches.** **✔ done.**
+
+    **Selection rings** — the one piece of interface this renderer draws.
+    Selection had been a white tint on the model; a ring on the ground reads
+    better, and it *conforms* to the terrain rather than being a flat disc
+    tilted by the surface normal. That matters more than it sounds: a ring is 8
+    to 40 elmos across and a heightfield square is 8, so a flat ring spans
+    several squares of real relief and buries a third of itself in any slope
+    that is not planar. Each vertex takes its height from the ground under
+    *it*, which is also why a ring on a hillside stays level with the hill
+    instead of with the unit standing on it. Pure geometry, so ten tests pin
+    the shape — including that a ring wider than twice its radius clamps
+    rather than folding through the centre into a bow tie, which happens for
+    real, since a two-square footprint is a radius of eight elmos.
+
+    ![selection rings on the ground](docs/images/m13-selection-rings.jpg)
+
+    **Per-stratum normal maps**, ported from `terrain.fx`'s `TerrainNormalsXP`.
+    A `.scmap` names a normal map beside each stratum's albedo — nine against
+    ten, the macrotexture having none — and the loader had been parsing them
+    and dropping them. They put grain in grass and relief on gravel at the
+    scale a heightfield sample (8 elmos) cannot express at all.
+
+    | with | without |
+    |---|---|
+    | ![stratum normals on](docs/images/m13-stratum-normals.jpg) | ![and off](docs/images/m13-no-stratum-normals.jpg) |
+
+    Two things the engine's own shader settled and one it could not. It
+    confirmed the blend is the same chain of lerps as the albedo. It revealed
+    an asymmetry that looks like a typo and is not: `TerrainAlbedoXP` expands
+    its masks — `saturate(m * 2 - 1)` — while `TerrainNormalsXP` twenty lines
+    later reads them **raw**. What it could *not* settle is which channel points
+    up, because it hands the sample straight to a lighting function whose own
+    space is muddled by `.xzy` swizzles. So that was **measured** instead: a
+    corpus test reads the block endpoints of thirty real stratum normal maps
+    and asserts blue is the channel sitting near +1. A normal map read on the
+    wrong axis lights bumps as dents, which survives a look at the screen.
+
+    **Skirts** close the per-chunk LOD cracks milestone 12 shipped with. Both
+    sides of a boundary need one — where a chunk's rim is above its neighbour's
+    chord its own skirt covers the gap, where below, the neighbour's does — and
+    the depth is derived from the worst gap a coarse chord can leave along that
+    chunk's rim, not a constant. A constant deep enough for a cliff would hang
+    into open air wherever the ground beside a chunk falls away. Flat ground
+    gets a skirt of depth zero. Cost: +11.2% vertices and +0.05 ms.
+
+    **A fix that no screenshot could have found.** Milestone 12's per-chunk LOD
+    emitted each chunk's three levels back to back, which put chunk N's coarse
+    ranges between chunk N's fine range and chunk N+1's — so no two chunks were
+    ever adjacent at the level they were drawn at, and the cull-and-merge from
+    milestone 11 had not fired since. Terrain was one draw per chunk for a
+    whole milestone. A renderer issuing 256 draws where one would do renders an
+    identical image; it took asserting the adjacency the merge depends on,
+    which is now a test.
+
+    **Two quality switches**, `r` and `n` live, or `--no-reflections` and
+    `--no-stratum-normals`. Both features are worth their cost only if you can
+    see what they buy, and a side-by-side of two runs cannot show a difference
+    moving:
+
+    | | GPU | vs off |
+    |---|---|---|
+    | planar reflection | 2.527 ms | +0.50 ms |
+    | stratum normals, naive | 4.604 ms | +1.34 ms |
+    | stratum normals, skipping absent and zero-weight | 3.529 ms | +0.21 ms |
+
+    That last row is two `continue`s. A map naming five strata was sampling
+    four slots bound to a fallback texture whose contents were then multiplied
+    away, and a stratum's weight is zero across most of the map — both skips
+    leave the image bit-identical in intent, and take 6.5× off the feature's
+    cost.
 
 Stage B (sim semantics, only if milestones 1–5 prove out) is deliberately not
 planned. The cliff is real; plan when we're on it.
