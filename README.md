@@ -659,6 +659,78 @@ reimplemented.*
     strength down to a quarter of the engine's. So it ships off, and the blocker was
     never the copy ([ADR-023](ADR_DECISIONS.md)).
 
+15. **Scenery that pays for itself, and three format facts.** **✔ done.**
+
+    Seven follow-ups from milestone 14, and the interesting part is how many of them
+    turned into corrections rather than features.
+
+    **Props are drawn at the level their blueprint states**, not always at their
+    finest. Each declares a mesh and a cutoff per level — 30 / 175 / 300 ogrids for
+    the pine placed more often than anything else — so full detail belongs within 240
+    elmos. On the busiest stock map at a mid zoom that is **8.50 ms against 11.31**, a
+    quarter of the frame, from data already being parsed. The levels of one blueprint
+    share an instance buffer, because a prop is drawn at exactly one of them.
+
+    **Prop normal maps**, once their convention was measured. All 221 are BC3 with
+    red, green and blue EQUAL — one axis replicated across the colour channels, a
+    second in alpha, the third reconstructed — where a stratum map puts z in blue near
+    255. The tangent frame comes from screen-space derivatives rather than per-vertex
+    tangents, which `.scm` does carry: plumbing those through would grow every model's
+    vertex from 36 bytes to 60, 2000 BAR unit meshes included, to normal-map scenery.
+    What is *not* settled is which channel is x and which is y ([ADR-026](ADR_DECISIONS.md)).
+
+    **The ambient effects a map marks** — steam, mist, bubbles, blowing sand and snow.
+    Eight blueprints draw nothing at all: `UniformScale` is 0 and `MeshName` points at
+    an editor marker. Eight of the 60 stock maps place them, 90 of them on one map.
+    What they look like is not in the blueprint — that lives in Lua — so the kind is
+    read and the appearance is a named stand-in, as ADR-018's water and sky are.
+
+    ![steam over a lava map](docs/images/m14-ambient-steam.jpg)
+
+    **Trees cast tree-shaped shadows**, on a pipeline of their own — the only one in
+    the shadow pass with a fragment shader, which exists to run one `discard`.
+    Milestone 14 had recorded a decision *not* to, on the grounds that it would cost
+    every shadow caster its early-depth rejection. That was wrong: early-Z is a
+    property of the pipeline, not the pass, so only the props pay. +0.50 ms.
+
+    **Selection outlines**, which is what a ground ring cannot do at a low camera
+    angle where a crowd's rings hide behind the units standing on them.
+
+    ![an outlined unit](docs/images/m14-selection-outline.jpg)
+
+    An inverted hull — the unit's own geometry pushed out along its normals, front
+    faces culled — because a stencil would mean a depth-stencil format on every
+    pipeline and an id buffer would mean another attachment. The width is applied in
+    clip space so it is three pixels wherever the unit is. It must be drawn BEFORE the
+    units and write NO depth: with depth write the shell wins at every crease, where a
+    hard-edged model's split normals tear it open, and the unit's own surface loses.
+
+    **And three things the data said that the plan did not expect.**
+
+    *SMF features are a dead end, now with evidence.* Five BAR maps — one already here
+    and four off BAR's own validated index — all declare the standard sixteen
+    `TreeTypeN` entries and place none of them. The only features any of them place
+    are two GEOVENTS on Altair Crossing, which are build sites rather than scenery. So
+    the item is retired rather than unblocked, which is a better answer than three
+    milestones of "check more maps".
+
+    *The skybox block's mid colour is three bytes, not four* — and the walk that read
+    four still landed exactly on EOF for four milestones, because the extra byte was
+    swallowed by the C string after it. `endsExactlyAtEof` proves the total, not the
+    parts. Corrected, the block's cirrus colour varies per map and now tints each
+    map's zenith, where every map used to share one blue-grey.
+
+    | | |
+    |---|---|
+    | ![a green-brown sky](docs/images/m14-sky-per-map.jpg) | ![individual conifers](docs/images/m14-props-close.jpg) |
+    | **Each map's own sky**, from the block's cirrus colour | Props at the level their blueprint asks for |
+
+    *And a pass can be deleted by an edit that never mentions it.* Rewriting the prop
+    draw between two anchors swallowed the ground-decal draw that sat between them:
+    the pipeline was still built and still released, nothing drew with it, and 374
+    tests stayed green. It surfaced only when the outlines put a second cue beside the
+    missing one.
+
 Stage B (sim semantics, only if milestones 1–5 prove out) is deliberately not
 planned. The cliff is real; plan when we're on it.
 
