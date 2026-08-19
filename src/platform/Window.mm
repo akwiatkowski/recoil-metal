@@ -375,6 +375,14 @@ bool Window::reflectionsEnabled() const {
     return impl_->renderer->reflectionsEnabled();
 }
 
+void Window::setRefraction(bool enabled) {
+    impl_->renderer->setRefraction(enabled);
+}
+
+bool Window::refractionEnabled() const {
+    return impl_->renderer->refractionEnabled();
+}
+
 void Window::setPropsVisible(bool visible) {
     impl_->renderer->setPropsVisible(visible);
 }

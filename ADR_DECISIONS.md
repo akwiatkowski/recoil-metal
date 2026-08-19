@@ -816,3 +816,61 @@ deliberately, not at the cheapest level as its comment had claimed. A shadow map
 records the surface the main pass will shade, and a coarser one disagrees with it
 by the whole chord error of that level — 13 elmos at the median here, far more
 than any depth bias absorbs. The ground would shadow itself in bands.
+
+---
+
+## ADR-023 — The water's refraction offset ships switched off, and the reason is the wave field
+
+**Context.** Milestone 12's water absorbs what is behind it but cannot bend it: it
+reads the scene through a framebuffer fetch, which returns the current pixel and
+no other. `water2.fx` offsets that read by the surface normal, which needs a
+sampleable copy of the colour target — recorded as an open item ever since.
+
+**Decision.** Build the copy, ship the offset, default it OFF.
+
+The copy is a grab pass: end the render encoder after the terrain, units, props
+and rings, blit the colour attachment into a texture, resume with both
+attachments loaded back, then draw the water sampling that texture. `encodeScene`
+now owns its encoder rather than receiving one, because it may need two — which
+also unified the three call sites that each used to build a pass and end an
+encoder around it. Measured at +0.17 ms on aw04 and +0.28 ms on a Supreme
+Commander sea map: the colour and depth attachments are written out to memory and
+read back, which a single pass on a tile-based GPU never does.
+
+That part works. What does not is the field being bent by.
+
+**This water's normal is two analytic wave trains** standing in for the engine's
+four scrolling normal maps (ADR-018). Displacing a screen-space sample by a field
+that regular draws the field's own lattice over the water — dark rings tens of
+pixels across when driven by the swells, and a diagonal hatch when driven by a
+ripple field eight times finer. Measured at four strengths, down to a quarter of
+what the map's own `refractionScale` asks for; the pattern survives all of them,
+because it is not a matter of degree. A sum of two sinusoids has a lattice, and
+moving a sample by it shows the lattice.
+
+Two things do help and are kept, because both are also just correct. The offset is
+weighted by how much of the bottom still shows — the same Beer-Lambert attenuation
+the colour gets — so there is no bend where the water has already swallowed the
+view, which is where the rings were worst. And it fades in over the first eight
+elmos of depth, because at the waterline any offset samples dry ground or sky and
+paints it inside the water as a bright fringe along the coast.
+
+**Alternatives considered.** Shipping it on at a strength where the lattice is
+"probably not noticeable" — rejected on the measurements above; there is no such
+strength, only strengths where the artefact is smaller than the effect it is
+supposed to produce. Adding more octaves to the analytic field pushes the lattice
+finer rather than removing it, and at overview zoom a fine lattice aliases, which
+is worse than a coarse one. The real fix is the engine's own scrolling normal-map
+textures, which were always the plan and are now the blocking dependency rather
+than the colour-target copy everyone assumed.
+
+**Consequences.** Four quality switches, one of them off by default — which is the
+looks-best rule applied rather than abandoned, since with this wave field
+refraction does not look best. `f` toggles it live and `--refraction` turns it on
+for a run, the only switch here with a positive flag, because "not this time" is
+not the useful thing to say about something already off.
+
+One incidental find, worth recording because it cost a segfault: metal-cpp's
+`MTL::TextureDescriptor::texture2DDescriptor` is a class factory method, so what
+it returns is autoreleased. Releasing it is an over-release that crashes a frame
+or two later, nowhere near the mistake.

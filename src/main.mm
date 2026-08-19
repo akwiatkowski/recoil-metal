@@ -362,6 +362,7 @@ struct LoadedSplat {
     environment.waterFresnelPower = map->water.fresnelPower;
     environment.waterSkyReflection = map->water.skyReflection;
     environment.waterSunShininess = map->water.sunShininess;
+    environment.waterRefractionScale = map->water.refractionScale;
     loaded.environment = environment;
 
     std::printf("  sky/water: fog (%.2f %.2f %.2f), surface (%.2f %.2f %.2f),"
@@ -695,6 +696,8 @@ struct PropScene {
     text += settings.reflections ? "on" : "off";
     text += ", stratum normals ";
     text += settings.stratumNormals ? "on" : "off";
+    text += ", refraction ";
+    text += settings.refraction ? "on" : "off";
     text += ", props ";
     if (!settings.props) {
         text += "off";
@@ -1699,6 +1702,14 @@ int main(int argc, const char* argv[]) {
         if (hasFlag(argc, argv, "--no-props")) {
             settings.props = false;
         }
+        if (hasFlag(argc, argv, "--no-refraction")) {
+            settings.refraction = false;
+        }
+        // The only switch with a positive flag, because it is the only one whose
+        // default is off — "not this time" is not the useful thing to say about it.
+        if (hasFlag(argc, argv, "--refraction")) {
+            settings.refraction = true;
+        }
 
         // The map's own scenery: trees, rocks, wrecks. Loaded once here and
         // shared by all three modes below, because it is the same scene however
@@ -1739,6 +1750,7 @@ int main(int argc, const char* argv[]) {
             renderer.setAnimationTime(animationTime);
             renderer.setReflections(settings.reflections);
             renderer.setStratumNormals(settings.stratumNormals);
+            renderer.setRefraction(settings.refraction);
             // --focus works here too, so the benchmark can measure a close
             // camera as well as a whole-map one. They are different workloads:
             // anything that culls to what the camera sees is invisible at full
@@ -1775,6 +1787,7 @@ int main(int argc, const char* argv[]) {
             renderer.setAnimationTime(animationTime);
             renderer.setReflections(settings.reflections);
             renderer.setStratumNormals(settings.stratumNormals);
+            renderer.setRefraction(settings.refraction);
             if (focus > 0.0f) {
                 focusOnFirstUnit(renderer, units, focus);
             }
@@ -1842,6 +1855,7 @@ int main(int argc, const char* argv[]) {
         // moving.
         window.setReflections(settings.reflections);
         window.setStratumNormals(settings.stratumNormals);
+        window.setRefraction(settings.refraction);
         window.onKey([&window](char key) {
             if (key == 'r') {
                 const bool enabled = !window.reflectionsEnabled();
@@ -1852,6 +1866,11 @@ int main(int argc, const char* argv[]) {
                 const bool enabled = !window.stratumNormalsEnabled();
                 window.setStratumNormals(enabled);
                 std::printf("stratum normals %s\n", enabled ? "on" : "off");
+                std::fflush(stdout);
+            } else if (key == 'f') {
+                const bool enabled = !window.refractionEnabled();
+                window.setRefraction(enabled);
+                std::printf("water refraction %s\n", enabled ? "on" : "off");
                 std::fflush(stdout);
             } else if (key == 'p') {
                 const bool visible = !window.propsVisible();

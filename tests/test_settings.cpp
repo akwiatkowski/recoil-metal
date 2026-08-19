@@ -45,6 +45,11 @@ TEST_CASE("with no settings file, everything is on") {
     CHECK(settings.reflections);
     CHECK(settings.stratumNormals);
     CHECK(settings.props);
+    // ...except the water's refraction, and by the SAME rule rather than as an
+    // exception to it: the offset works, and what it reveals is that the two
+    // analytic wave trains it bends by draw their own lattice across the water.
+    // Looks-best is off until that field comes from the engine's textures.
+    CHECK_FALSE(settings.refraction);
     // A missing file is the ordinary case and must not be reported as a fault.
     CHECK(problems.empty());
 }
@@ -65,6 +70,16 @@ TEST_CASE("a settings file turns switches off") {
     CHECK_FALSE(settings.reflections);
     CHECK(settings.stratumNormals);
     CHECK_FALSE(settings.props);
+    CHECK(problems.empty());
+}
+
+TEST_CASE("a settings file turns the off-by-default switch on") {
+    const TempSettings file{"{ refraction = true }"};
+
+    std::vector<std::string> problems;
+    const rm::Settings settings = rm::loadSettings(file.path(), problems);
+
+    CHECK(settings.refraction);
     CHECK(problems.empty());
 }
 

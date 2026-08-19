@@ -109,6 +109,10 @@ public:
     void setReflections(bool enabled);
     [[nodiscard]] bool reflectionsEnabled() const;
 
+    /// Whether the water refracts. See Renderer::setRefraction.
+    void setRefraction(bool enabled);
+    [[nodiscard]] bool refractionEnabled() const;
+
     /// Whether the map's scenery is drawn. See Renderer::setPropsVisible.
     void setPropsVisible(bool visible);
     [[nodiscard]] bool propsVisible() const;

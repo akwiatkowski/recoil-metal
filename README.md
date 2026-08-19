@@ -566,11 +566,12 @@ BAR=~/projects/llm/games/forged-alliance-reborn/reference/BAR/objects3d/Units
 
 Three switches, all on by default, all one keypress away:
 
-| key | flag | costs |
-|---|---|---|
-| `r` | `--no-reflections` | +0.50 ms |
-| `n` | `--no-stratum-normals` | +0.21 ms |
-| `p` | `--no-props` | +2.8 ms at 5182 props, +6.2 ms at 46 971 |
+| key | flag | default | costs |
+|---|---|---|---|
+| `r` | `--no-reflections` | on | +0.50 ms |
+| `n` | `--no-stratum-normals` | on | +0.21 ms |
+| `p` | `--no-props` | on | +2.8 ms at 5182 props, +6.2 ms at 46 971 |
+| `f` | `--refraction` | **off** | +0.17 to +0.28 ms |
 
 Defaults are **looks-best**, deliberately. The cheap-by-default argument is the
 usual one and it is wrong here: what is being demonstrated is how the content
@@ -578,6 +579,18 @@ looks when a Metal renderer draws it, and a reader who runs this should see what
 the screenshots show. What that does oblige is that the benchmark states which
 switches were on, since otherwise two of its own numbers are not comparable —
 which it now does.
+
+The water's refraction is the one that defaults off, and by the same rule rather
+than as an exception to it: with the wave field this water has, it does not look
+best. The offset itself works — it needs a copy of the colour target, since a
+framebuffer fetch reads one pixel and no other, so the pass splits in two around a
+blit — and what it reveals is that the field being bent by is two analytic wave
+trains standing in for the engine's four scrolling normal maps. Move a
+screen-space sample by a field that regular and it draws the field's own lattice
+across the water: rings tens of pixels wide at swell frequency, a diagonal hatch
+at ripple frequency, at every strength down to a quarter of the engine's. It is
+waiting on the water's normal coming from real textures, which was never the part
+that looked hard.
 
 To state a preference rather than pass a flag, write a Lua table to
 `~/Library/Application Support/recoil-metal/settings.lua`. It is read by the same
@@ -590,6 +603,7 @@ key of the wrong type is reported rather than coerced.
     reflections = false,
     stratum_normals = true,
     props = false,
+    refraction = false,
 }
 ```
 

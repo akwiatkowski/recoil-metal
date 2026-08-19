@@ -23,6 +23,11 @@ namespace rm {
 //   planar reflection    +0.50 ms
 //   stratum normals      +0.21 ms
 //   props                +2.8 ms at 5182 of them, +6.2 ms at 46 971
+//   water refraction     +0.17 to +0.28 ms, and it splits the render pass in two
+//
+// One of the four defaults OFF rather than on, which is the same rule rather than
+// an exception to it: with the wave field this water has, refraction does not look
+// best. See Renderer::setRefraction.
 //
 // — and every one is a single keypress away. What that DOES oblige is that a
 // benchmark states which switches were on, because otherwise two numbers from
@@ -31,6 +36,10 @@ struct Settings {
     bool reflections = true;
     bool stratumNormals = true;
     bool props = true;
+    /// The exception: off, and not for its cost. See Renderer::setRefraction —
+    /// the offset works, and reveals that the wave field it bends by is two
+    /// analytic sinusoids whose lattice it draws across the water.
+    bool refraction = false;
 };
 
 /// Where the settings file lives: the platform's own place for it.

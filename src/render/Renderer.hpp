@@ -34,6 +34,7 @@ class Buffer;
 class SamplerState;
 class RenderCommandEncoder;
 class CommandBuffer;
+class RenderPassDescriptor;
 }
 
 namespace rm {
@@ -116,6 +117,10 @@ public:
         float waterFresnelPower = 1.5f;
         float waterSkyReflection = 1.5f;
         float waterSunShininess = 50.0f;
+
+        /// How far the surface bends what is under it. water2.fx's own default;
+        /// most stock maps state exactly this and a few state more.
+        float waterRefractionScale = 0.015f;
     };
 
     void setEnvironment(const Environment& environment) noexcept;
@@ -158,6 +163,34 @@ public:
     // flipped per frame.
     void setPropsVisible(bool visible) noexcept { propsVisible_ = visible; }
     [[nodiscard]] bool propsVisible() const noexcept { return propsVisible_; }
+
+    // Whether the water bends what is under it, rather than only absorbing it.
+    //
+    // THE ONE SETTING THAT DEFAULTS OFF, and the reason is not its cost. It needs
+    // a copy of the colour target, because a framebuffer fetch reads one pixel and
+    // no other, so it splits the render pass in two around a blit — on a
+    // tile-based GPU that means writing the colour and depth attachments out to
+    // memory and reading them back, measured at +0.17 ms on aw04 and +0.28 ms on a
+    // Supreme Commander sea map. That part works.
+    //
+    // What does not is the wave field being bent BY. This water's normal comes
+    // from two analytic wave trains standing in for the engine's four scrolling
+    // normal maps (ADR-018), and a screen-space offset driven by a field that
+    // regular draws the field's own lattice over the water: rings tens of pixels
+    // across at swell frequency, and a diagonal hatch when driven by a finer
+    // ripple instead. Measured at four strengths down to a quarter of the
+    // engine's; the pattern survives all of them, because it is not a matter of
+    // degree — a sum of two sinusoids has a lattice and moving a sample by it
+    // shows the lattice.
+    //
+    // So it is off until the water's normal comes from the engine's own scrolling
+    // textures, which is the piece this was waiting on all along. On, it is
+    // faithful to what water2.fx does and useful for judging exactly that.
+    //
+    // Off, the water still absorbs what is behind it by Beer-Lambert, which is
+    // what it did before this existed and is most of the effect.
+    void setRefraction(bool enabled) noexcept { refractionEnabled_ = enabled; }
+    [[nodiscard]] bool refractionEnabled() const noexcept { return refractionEnabled_; }
 
     // The rings marking which units are selected, for this frame.
     //
@@ -345,11 +378,26 @@ private:
     /// Renders the world mirrored in the water plane, for the water to sample.
     void encodeReflectionPass(MTL::CommandBuffer* commandBuffer) noexcept;
 
-    /// Encodes the whole scene — terrain then water — into an active encoder.
-    /// Shared by the windowed and offscreen paths so they cannot drift apart
-    /// and quietly benchmark different work.
-    void encodeScene(MTL::RenderCommandEncoder* encoder, unsigned int width,
-                     unsigned int height, const SceneOverride* override = nullptr) noexcept;
+    /// Encodes the whole scene — terrain, units, props, rings, then water — into
+    /// the given render pass, creating and ending the encoder itself.
+    ///
+    /// It owns the encoder because it may need TWO: the water's refraction reads
+    /// a copy of the colour target, and taking that copy means ending the first
+    /// encoder, blitting, and resuming with the attachments loaded back. Callers
+    /// hand over a pass descriptor and get a finished pass.
+    ///
+    /// Shared by the windowed, offscreen-benchmark and screenshot paths so they
+    /// cannot drift apart and quietly benchmark different work.
+    void encodeScene(MTL::CommandBuffer* commandBuffer, MTL::RenderPassDescriptor* pass,
+                     unsigned int width, unsigned int height,
+                     const SceneOverride* override = nullptr) noexcept;
+
+    /// The copy of the colour target the water samples to refract, and whether
+    /// taking it is worth the cost.
+    ///
+    /// Reallocated when the viewport changes; a no-op when it has not.
+    void ensureSceneColour(unsigned int width, unsigned int height) noexcept;
+    MTL::Texture* sceneColour_ = nullptr;  // owned
 
     CA::MetalLayer* layer_;                    // not owned
     MTL::Device* device_ = nullptr;            // owned
@@ -548,6 +596,7 @@ private:
     bool reflectionsEnabled_ = true;
     bool stratumNormalsEnabled_ = true;
     bool propsVisible_ = true;
+    bool refractionEnabled_ = false;
 
     // Selection rings. One buffer with a slot per frame in flight, exactly like
     // the unit instances and for the same reason: the vertices are rewritten

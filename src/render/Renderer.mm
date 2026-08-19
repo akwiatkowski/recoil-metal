@@ -63,6 +63,17 @@ struct TerrainUniforms {
     simd_float2 viewportSize;  ///< pixels, so the water can find its own screen position
     float hasReflection;       ///< 0 when the planar pass did not run this frame
 
+    /// 1 when a copy of the colour target is bound for the water to sample.
+    ///
+    /// Without it the water reads the framebuffer at its own pixel and can only
+    /// absorb what is directly behind it; with it, it can sample somewhere else
+    /// and bend the view. See kRefractionUv in the MSL below.
+    float hasSceneColour;
+
+    /// How far the water bends what is under it, from the map's own water block
+    /// (`refractionScale` in `water2.fx`, 0.015 by default).
+    float waterRefractionScale;
+
     /// 1 when the diffuse texture's alpha is OPACITY rather than a team-colour
     /// mask — which is what it is for every Supreme Commander prop.
     ///
@@ -84,12 +95,14 @@ static_assert(offsetof(TerrainUniforms, clipBelowY) == 380, "clipBelowY packs in
 static_assert(offsetof(TerrainUniforms, viewportSize) == 384, "float2 realigns to 8 bytes");
 static_assert(offsetof(TerrainUniforms, hasReflection) == 392,
               "hasReflection must land in the tail padding, not grow the struct");
-static_assert(offsetof(TerrainUniforms, alphaIsOpacity) == 396,
-              "alphaIsOpacity must pack against hasReflection in the tail");
-static_assert(sizeof(TerrainUniforms) == 400,
-              "alphaIsOpacity fits the padding the struct already had — the NEXT "
-              "field added here grows it to 416, which is fine, but it must go at "
-              "the END for the same reason the light matrix did");
+static_assert(offsetof(TerrainUniforms, hasSceneColour) == 396,
+              "hasSceneColour must pack against hasReflection in the tail");
+static_assert(offsetof(TerrainUniforms, waterRefractionScale) == 400,
+              "and the next two start a fresh 16-byte slot");
+static_assert(offsetof(TerrainUniforms, alphaIsOpacity) == 404, "packed against it");
+static_assert(sizeof(TerrainUniforms) == 416,
+              "the tail padding is spent: this is the growth the comment above "
+              "predicted, and the struct is now 416 rather than 400");
 static_assert(offsetof(TerrainUniforms, fogColour) == 288, "the map block follows the matrices");
 // A float3 is sixteen bytes AND sixteen-aligned, so the float after one does
 // NOT pack into its tail — it starts a fresh slot and the next float3 realigns
@@ -150,6 +163,11 @@ constexpr NS::UInteger kPoseUniformBufferIndex = 4;
 constexpr NS::UInteger kShadowTextureIndex = 13;
 constexpr NS::UInteger kShadowSamplerIndex = 2;
 constexpr NS::UInteger kReflectionTextureIndex = 14;
+
+// The copy of the colour target the water refracts through — see the grab in
+// encodeScene. Its own slot rather than sharing the reflection's: the water reads
+// both in the same fragment.
+constexpr NS::UInteger kSceneColourTextureIndex = 15;
 constexpr NS::UInteger kReflectionSamplerIndex = 3;
 
 // Mirrors the MSL PoseUniforms exactly. Small and per batch, so it goes up with
@@ -248,6 +266,8 @@ struct Uniforms {
     float clipBelowY;
     float2 viewportSize;
     float hasReflection;
+    float hasSceneColour;
+    float waterRefractionScale;
     float alphaIsOpacity;
 };
 
@@ -638,6 +658,23 @@ constant float3 kDeepWater = float3(0.03, 0.10, 0.22);
 /// Elmos of water below which the surface is treated as fully deep.
 constant float kWaterDepthRange = 60.0;
 
+// How far a unit of wave slope moves the refracted sample, in screen widths.
+//
+// The map states a `refractionScale` (0.015 for most, and water2.fx's own
+// default) but that is in the engine's own units against its own normal maps, and
+// this water builds its normal from two analytic wave trains instead. So one
+// constant of ours bridges the two, chosen by eye against a shoreline: at 0.6 the
+// bend is invisible, at 6 the sea looks like frosted glass.
+constant float kRefractionUv = 12.0;
+
+// The depth over which the refraction fades in, in elmos.
+//
+// Not a taste: at the waterline there is nothing correct to bend towards, so any
+// offset there samples dry ground or sky and paints it in the water as a bright
+// fringe along the coast. 40 elmos is five heightmap squares, which is about the
+// width the fringe would otherwise be visible over.
+constant float kRefractionFadeDepth = 8.0;
+
 // `behind` is the colour already in the framebuffer — the terrain and units
 // drawn under the water this frame. Reading the render target inside the
 // fragment shader is free on a tile-based GPU: the value is still in tile
@@ -651,6 +688,7 @@ constant float kWaterDepthRange = 60.0;
 fragment float4 waterFragment(WaterOut in [[stage_in]], float4 behind [[color(0)]],
                               constant Uniforms& u [[buffer(1)]],
                               texture2d<float> reflection [[texture(14)]],
+                              texture2d<float> sceneColour [[texture(15)]],
                               sampler reflectionSampler [[sampler(3)]]) {
     // Above the waterline there is nothing to draw. The mesh covers the whole
     // map so that one buffer serves any water level, and the dry part is
@@ -685,15 +723,75 @@ fragment float4 waterFragment(WaterOut in [[stage_in]], float4 behind [[color(0)
     const float fresnel = u.waterFresnelBias
                         + (1.0 - u.waterFresnelBias) * pow(1.0 - NdotV, u.waterFresnelPower);
 
-    // What is seen through the water: the real scene behind it, absorbed with
-    // depth. Beer-Lambert rather than a lerp to a colour — water removes light
-    // exponentially with the distance travelled through it, and the red end
-    // goes first, which is why a shallow sandy bottom stays sandy and a deep
-    // one goes blue without either being painted that way.
+    // What is seen through the water: the real scene behind it, REFRACTED, then
+    // absorbed with depth.
     //
-    // The path length is doubled: light goes down to the bottom and back up.
+    // Absorption first, because it decides how much refraction there is. Water
+    // removes light exponentially with the distance travelled through it and the
+    // red end goes first — Beer-Lambert rather than a lerp to a colour, which is
+    // why a shallow sandy bottom stays sandy and a deep one goes blue without
+    // either being painted that way. The path length is doubled: light goes down
+    // to the bottom and back up.
     const float3 absorption = float3(0.030, 0.012, 0.008);
-    const float3 transmitted = behind.rgb * exp(-absorption * in.depth * 2.0);
+    const float3 attenuation = exp(-absorption * in.depth * 2.0);
+
+    // The refraction is the engine's, and it needs a copy of the colour target:
+    // `behind` is a framebuffer fetch, which reads this pixel and no other, so
+    // with only that the water can absorb what is under it but not bend it. Where
+    // a copy is bound the sample moves with the wave normal, which is what makes
+    // a submerged shelf waver instead of lying flat under glass.
+    //
+    // The offset is weighted by HOW MUCH BOTTOM STILL SHOWS, which is the same
+    // attenuation the colour gets. That is both the physics — there is nothing to
+    // bend once the water has swallowed the view — and the fix for the artefact
+    // this feature arrives with: the wave normal here is two analytic trains
+    // standing in for the engine's four scrolling normal maps, and offsetting a
+    // sample by a field that regular draws its lattice across open water as a
+    // grid of dark rings. Refraction belongs in the shallows, where there is a
+    // bottom to see and the pattern has real relief to disturb.
+    //
+    // It also fades in over the first few elmos: at the waterline itself any
+    // offset samples dry ground or sky and paints it inside the water, which
+    // reads as a bright fringe following the coast.
+    //
+    // The scale is the map's own `refractionScale` (water2.fx), times one constant
+    // of ours to reach screen space — the wave slope is a gradient, and this water
+    // builds it analytically rather than from the engine's textures, so no factor
+    // the engine states would carry over.
+    float3 refracted = behind.rgb;
+    if (u.hasSceneColour > 0.5) {
+        // Its own, FINER wave field, not the one that lights the surface.
+        //
+        // The two trains above are 300-elmo swells — the right scale for shading,
+        // since that is the scale a sea's shape reads at. Bending a screen-space
+        // sample by them draws their lattice over the water as a chain of rings
+        // tens of pixels across, which is the artefact this feature arrives with
+        // and the reason it is a setting. Real refraction is driven by RIPPLES:
+        // the wavelength that matters is comparable to the depth of water being
+        // seen through, not to the swell crossing it.
+        //
+        // Eight times the frequency, so a ~37-elmo ripple, and at incommensurable
+        // angles to each other as the swells are — the lattice does not go away,
+        // it goes small enough to read as disturbed water rather than as a grid.
+        const float2 third = float2(0.71f, 0.70f);
+        const float2 fourth = float2(-0.68f, 0.73f);
+        const float ripple1 = dot(in.world.xz, third) * 0.168 + t * 2.3;
+        const float ripple2 = dot(in.world.xz, fourth) * 0.139 - t * 1.9;
+        const float2 ripple = third * cos(ripple1) * 0.168 + fourth * cos(ripple2) * 0.139;
+
+        const float visible = max(attenuation.r, max(attenuation.g, attenuation.b));
+        const float2 bend = ripple * u.waterRefractionScale * kRefractionUv * visible
+                          * saturate(in.depth / kRefractionFadeDepth);
+        // Clamped rather than wrapped: a sample that runs off the edge of the
+        // screen should hold the edge pixel, not fetch the opposite side of the
+        // frame, which is a bright smear along whichever border the waves lean
+        // towards.
+        const float2 screen = in.position.xy / float2(u.viewportSize);
+        refracted = sceneColour.sample(reflectionSampler,
+                                       clamp(screen + bend, float2(0.0), float2(1.0))).rgb;
+    }
+
+    const float3 transmitted = refracted * attenuation;
 
     // The engine's tint over the top, at its fixed lerp.
     float3 through = mix(transmitted, u.waterSurfaceColour, u.waterColourLerp);
@@ -1457,6 +1555,7 @@ Renderer::~Renderer() {
     if (ringBuffer_ != nullptr) ringBuffer_->release();
     if (ringDepthState_ != nullptr) ringDepthState_->release();
     if (ringPipeline_ != nullptr) ringPipeline_->release();
+    if (sceneColour_ != nullptr) sceneColour_->release();
     releaseTerrainBuffers();
     releasePropBuffers();  // before the units: acquired after them
     releaseUnitBuffers();  // frees the unit textures too
@@ -2179,9 +2278,7 @@ Renderer::CapturedImage Renderer::renderToImage(unsigned int width, unsigned int
     depth->setStoreAction(MTL::StoreAction::StoreActionDontCare);
     depth->setClearDepth(1.0);
 
-    MTL::RenderCommandEncoder* encoder = commandBuffer->renderCommandEncoder(pass);
-    encodeScene(encoder, width, height);
-    encoder->endEncoding();
+    encodeScene(commandBuffer, pass, width, height);
 
     commandBuffer->commit();
     commandBuffer->waitUntilCompleted();  // a capture wants the result, not throughput
@@ -2324,9 +2421,7 @@ bench::FrameRecorder Renderer::runOffscreenBenchmark(unsigned int width, unsigne
         depth->setStoreAction(MTL::StoreAction::StoreActionDontCare);
         depth->setClearDepth(1.0);
 
-        MTL::RenderCommandEncoder* encoder = commandBuffer->renderCommandEncoder(pass);
-        encodeScene(encoder, width, height);
-        encoder->endEncoding();
+        encodeScene(commandBuffer, pass, width, height);
 
         commandBuffer->addCompletedHandler(MTL::HandlerFunction{
             [&recorder, &recordMutex, &inFlight, cpuMs](MTL::CommandBuffer* completed) {
@@ -2357,11 +2452,65 @@ bench::FrameRecorder Renderer::runOffscreenBenchmark(unsigned int width, unsigne
     return recorder;
 }
 
-void Renderer::encodeScene(MTL::RenderCommandEncoder* encoder, unsigned int width,
-                           unsigned int height, const SceneOverride* override) noexcept {
+void Renderer::ensureSceneColour(unsigned int width, unsigned int height) noexcept {
+    if (sceneColour_ != nullptr && sceneColour_->width() == width
+        && sceneColour_->height() == height) {
+        return;
+    }
+    if (sceneColour_ != nullptr) {
+        sceneColour_->release();
+        sceneColour_ = nullptr;
+    }
+
+    MTL::TextureDescriptor* descriptor = MTL::TextureDescriptor::texture2DDescriptor(
+        kColorFormat, width, height, /*mipmapped=*/false);
+    // ShaderRead to sample it, and RenderTarget because a blit destination that
+    // shares the drawable's format wants the same usage set — Metal validates the
+    // pair rather than inferring it.
+    descriptor->setUsage(MTL::TextureUsageShaderRead | MTL::TextureUsageRenderTarget);
+    descriptor->setStorageMode(MTL::StorageModePrivate);
+    // NOT released: texture2DDescriptor is a class factory method, so what it
+    // returns is autoreleased (+0). Releasing it here is an over-release, and it
+    // segfaults on the next frame rather than at the mistake — see AGENT.md on
+    // metal-cpp not being ARC.
+    sceneColour_ = device_->newTexture(descriptor);
+}
+
+void Renderer::encodeScene(MTL::CommandBuffer* commandBuffer, MTL::RenderPassDescriptor* pass,
+                           unsigned int width, unsigned int height,
+                           const SceneOverride* override) noexcept {
     if (height == 0) {
         return;
     }
+
+    // Whether the water is going to want a copy of the colour target, decided
+    // before the pass is created because it changes the pass's store actions.
+    //
+    // Not in the reflection pass: that renders a mirrored world for the water to
+    // sample, and water inside it is skipped entirely, so there is nothing there
+    // to refract.
+    const bool wantsWater = waterIndexCount_ > 0 && hasWater_ && terrainMinY_ < waterLevel_
+                            && (override == nullptr || !override->skipWater);
+    const bool grabScene = wantsWater && refractionEnabled_ && override == nullptr;
+    if (grabScene) {
+        ensureSceneColour(width, height);
+    }
+    const bool grabbing = grabScene && sceneColour_ != nullptr;
+
+    if (grabbing) {
+        // The split costs exactly this: the colour attachment has to be written
+        // out so it can be copied, and the depth attachment has to be written out
+        // so the water can still depth-test against the terrain when the pass
+        // resumes. On a tile-based GPU both are writebacks that the single-pass
+        // version never performs, which is the whole price of the offset.
+        pass->colorAttachments()->object(0)->setStoreAction(MTL::StoreAction::StoreActionStore);
+        if (pass->depthAttachment()->texture() != nullptr) {
+            pass->depthAttachment()->setStoreAction(MTL::StoreAction::StoreActionStore);
+        }
+    }
+
+    MTL::Texture* colourTarget = pass->colorAttachments()->object(0)->texture();
+    MTL::RenderCommandEncoder* encoder = commandBuffer->renderCommandEncoder(pass);
 
     const float aspect = static_cast<float>(width) / static_cast<float>(height);
 
@@ -2395,6 +2544,7 @@ void Renderer::encodeScene(MTL::RenderCommandEncoder* encoder, unsigned int widt
         .waterColourLerp = environment_.waterColourLerp,
         .waterSkyReflection = environment_.waterSkyReflection,
         .waterSunShininess = environment_.waterSunShininess,
+        .waterRefractionScale = environment_.waterRefractionScale,
         // Far below any map by default, so nothing is clipped unless a pass
         // asks for it.
         .clipBelowY = override != nullptr ? override->clipBelowY : -1.0e9f,
@@ -2655,14 +2805,51 @@ void Renderer::encodeScene(MTL::RenderCommandEncoder* encoder, unsigned int widt
                                 static_cast<NS::UInteger>(ringVertexCount_));
     }
 
+    // --- The grab ----------------------------------------------------------
+    // A copy of everything drawn so far, for the water to refract. This is the
+    // pass split the offset needs, and the reason this function owns its encoder:
+    // end the pass, copy the colour target, resume with the attachments loaded
+    // back, then draw the water.
+    //
+    // A blit rather than rendering the world a second time: one copy of one
+    // texture against a second pass over all the geometry.
+    if (grabbing) {
+        encoder->endEncoding();
+
+        MTL::BlitCommandEncoder* blit = commandBuffer->blitCommandEncoder();
+        blit->copyFromTexture(colourTarget, 0, 0, MTL::Origin{0, 0, 0},
+                              MTL::Size{width, height, 1}, sceneColour_, 0, 0,
+                              MTL::Origin{0, 0, 0});
+        blit->endEncoding();
+
+        // Load, not clear: this pass continues the last one. Getting either
+        // attachment wrong here is loud — a cleared colour draws the water on an
+        // empty sky, and a cleared depth lets it paint over the terrain standing
+        // in front of it.
+        pass->colorAttachments()->object(0)->setLoadAction(MTL::LoadAction::LoadActionLoad);
+        pass->colorAttachments()->object(0)->setStoreAction(MTL::StoreAction::StoreActionStore);
+        if (pass->depthAttachment()->texture() != nullptr) {
+            pass->depthAttachment()->setLoadAction(MTL::LoadAction::LoadActionLoad);
+            pass->depthAttachment()->setStoreAction(MTL::StoreAction::StoreActionDontCare);
+        }
+        encoder = commandBuffer->renderCommandEncoder(pass);
+    }
+
     // --- Water -------------------------------------------------------------
     // Last, so it blends over whatever terrain and units sit below y = 0. Only
     // worth drawing when something actually is below it.
-    if (waterIndexCount_ > 0 && hasWater_ && terrainMinY_ < waterLevel_
-        && (override == nullptr || !override->skipWater)) {
+    if (wantsWater) {
+        uniforms.hasSceneColour = grabbing ? 1.0f : 0.0f;
+
         encoder->setRenderPipelineState(waterPipeline_);
         encoder->setDepthStencilState(waterDepthState_);
         encoder->setFragmentTexture(reflectionColour_, kReflectionTextureIndex);
+        // Always bound, even when it will not be read: sampling an unbound
+        // texture is undefined even on a branch that does not run. The reflection
+        // target stands in when there is no copy — same format, and certainly
+        // allocated.
+        encoder->setFragmentTexture(sceneColour_ != nullptr ? sceneColour_ : reflectionColour_,
+                                    kSceneColourTextureIndex);
         encoder->setFragmentSamplerState(reflectionSampler_, kReflectionSamplerIndex);
         encoder->setVertexBuffer(waterVertexBuffer_, 0, kVertexBufferIndex);
         encoder->setVertexBytes(&uniforms, sizeof(uniforms), kUniformBufferIndex);
@@ -2672,6 +2859,8 @@ void Renderer::encodeScene(MTL::RenderCommandEncoder* encoder, unsigned int widt
                                        MTL::IndexType::IndexTypeUInt32, waterIndexBuffer_,
                                        NS::UInteger{0});
     }
+
+    encoder->endEncoding();
 }
 
 template <typename Predicate>
@@ -2775,7 +2964,6 @@ void Renderer::encodeReflectionPass(MTL::CommandBuffer* commandBuffer) noexcept 
     depth->setStoreAction(MTL::StoreAction::StoreActionDontCare);
     depth->setClearDepth(1.0);
 
-    MTL::RenderCommandEncoder* encoder = commandBuffer->renderCommandEncoder(pass);
 
     // The view matrix, composed with a reflection in the water plane.
     //
@@ -2804,9 +2992,7 @@ void Renderer::encodeReflectionPass(MTL::CommandBuffer* commandBuffer) noexcept 
     override.clipBelowY = waterLevel_ - 1.0f;
     override.skipWater = true;
 
-    encodeScene(encoder, kReflectionWidth, kReflectionHeight, &override);
-
-    encoder->endEncoding();
+    encodeScene(commandBuffer, pass, kReflectionWidth, kReflectionHeight, &override);
     pass->release();
 }
 
@@ -2998,13 +3184,10 @@ void Renderer::drawFrame(CA::MetalDrawable* drawable) noexcept {
             depth->setClearDepth(1.0);
         }
 
-        // The encoder exists (and must end) even with zero draw calls: a
-        // render pass with LoadActionClear is what performs the clear.
-        MTL::RenderCommandEncoder* encoder = commandBuffer->renderCommandEncoder(pass);
-
-        encodeScene(encoder, width, height);
-
-        encoder->endEncoding();
+        // The pass runs even with zero draw calls: a render pass with
+        // LoadActionClear is what performs the clear. encodeScene creates and ends
+        // the encoder — it may need two of them, around the refraction's blit.
+        encodeScene(commandBuffer, pass, width, height);
 
         // Releases the ring slot this frame read its instances from. Metal runs
         // this on its own thread; std::counting_semaphore is the synchronisation
