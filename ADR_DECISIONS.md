@@ -1058,3 +1058,69 @@ which is why `hasTexture2` means something different there than on the unit path
 why `alphaIsOpacity` is what distinguishes them. The reconstruction clamps its
 radicand: a compressed pair can leave the unit disc, and a negative one would come
 back NaN and paint the fragment black.
+
+## ADR-027 — A Supreme Commander unit's passability comes from its motion class
+
+**Context.** The passability grid (`core/sim/Pathfinding.hpp`) needs a slope limit and
+a wading depth per unit. BAR states both per unit — `maxslope` and `maxwaterdepth` on
+every mobile definition — so the SMF path reads two fields and is done. A `.scmap`
+unit blueprint states NEITHER, for any of the 568. What it states instead is
+`Physics.MotionType`, one of eight `RULEUMT_*` values, and that is the whole of what
+the file says about where the unit may go.
+
+So this is not a format conversion. It is reimplemented semantics, which is the line
+ADR-004 and ADR-005 draw, and it gets recorded because the numbers are ours.
+
+**The evidence, such as it is.** The only slope figure the format carries anywhere is
+`Footprint.MaxSlope`, in 58 of the 568 — and it is a GRADIENT rather than an angle
+(0.25 in 57 of them, 0.5 in one), on aircraft, where it bounds the ground an aeroplane
+may LAND on rather than the ground a tank may climb. Useful as a sanity bracket and
+useless as the answer.
+
+**Decision.** The class decides, and the slope number was already in the engine.
+
+| motion class | count | slope | water depth |
+|---|---|---|---|
+| `Land` | 50 | engine default | **0 — does not enter water at all** |
+| `Hover`, `AmphibiousFloating` | 27 | engine default | unlimited (travels on the surface) |
+| `Amphibious` | 17 | engine default | unlimited (walks the seabed) |
+| `Air` | 60 | — | — (not a ground mover) |
+| `Water`, `SurfacingSub` | 40 | refused | refused |
+| `None` | 374 | — | — (immobile) |
+
+`sim::kDefaultMaxSlopeDegrees` of 17 means 25.5 real degrees once the engine's 1.5
+factor is applied (Pathfinding.hpp), a gradient of 0.48 — steeper than the 0.25 an
+aircraft needs to land on, shallower than a wall, and within a degree or two of what
+every BAR ground unit in the corpus authorises. So the two content families agree
+without either being bent to fit, and **nothing is invented that the engine did not
+already assume**. One number for all ground classes, because the file gives no basis
+for distinguishing a tank from a bot and inventing one would be inventing balance.
+
+**Land's zero is the sharp end, and it is not a missing value.** Supreme Commander's
+land units do not ford; BAR's wade 12 elmos and treat a shoreline as passable. The
+passability fallback in `main.mm` used to read a 0 as "unstated" and substitute BAR's
+default, which walked SupCom's tanks into the sea — so the test asks
+`travelsOnGround(motion)` rather than whether the number is positive.
+
+**Water and SurfacingSub are REFUSED rather than approximated**, via
+`unitdef::travelsOnGround`. They need the inverse of the grid — water deep enough
+rather than shallow enough — and the grid cannot express that: one grid serves the
+whole scene and its predicate is "every square in this cell is walkable". Routing a
+ship over it would path the ship across dry land, confidently. An empty answer is
+worth more than a wrong one, and it is the honest report of a feature that does not
+exist yet.
+
+**Alternatives considered.** *Read `Footprint.MaxSlope` where it exists* — 58 units,
+all aircraft, none of which uses the ground grid; it would set a limit for exactly
+the units the limit does not apply to. *Derive a slope from `MaxSteerForce` or
+`MaxAcceleration`*, which do vary per unit and do correlate with how nimble something
+is — rejected as numerology: neither field is about terrain, and a plausible curve
+fitted to them would be balance invented and then hidden behind arithmetic.
+*Per-class slope numbers* — no basis in the data, as above.
+
+**Consequences.** A per-unit slope limit still does not reach the grid: passability is
+one grid for the whole scene (README, milestone 9), so a mixed force paths as
+whichever unit built the grid. That was already true and this does not worsen it, but
+it is now the reason two motion classes are refused rather than merely a known gap.
+When per-class grids arrive, `travelsOnGround` is the seam they hang from, and
+`Water`/`SurfacingSub` become an inverted grid rather than a special case.

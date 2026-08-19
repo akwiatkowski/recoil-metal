@@ -18,7 +18,8 @@ namespace {
 /// wade, per motion class.
 ///
 /// THESE ARE OURS, and they have to be: a `.bp` states no slope limit and no
-/// wading depth for any of the 568 units. The only slope figure the format
+/// wading depth for any of the 568 units. See ADR-027 for the reasoning, the
+/// alternatives rejected, and what is still missing. The only slope figure the format
 /// carries anywhere is `Footprint.MaxSlope`, a GRADIENT rather than an angle —
 /// 0.25 in 57 blueprints and 0.5 in one, all of them aircraft, where it bounds
 /// the ground an aeroplane may land on rather than the ground a tank may climb.
