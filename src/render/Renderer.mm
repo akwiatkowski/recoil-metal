@@ -2063,7 +2063,7 @@ void Renderer::encodeScene(MTL::RenderCommandEncoder* encoder, unsigned int widt
         drawTerrainChunks(encoder, [&frustum](const TerrainChunk& chunk) {
             return frustum.intersectsBox(simd_make_float3(chunk.minX, chunk.minY, chunk.minZ),
                                          simd_make_float3(chunk.maxX, chunk.maxY, chunk.maxZ));
-        });
+        }, camera_.eye());
     }
 
     // --- Units -------------------------------------------------------------
@@ -2175,8 +2175,26 @@ void Renderer::encodeScene(MTL::RenderCommandEncoder* encoder, unsigned int widt
     }
 }
 
+/// Detail level for a chunk, by how far its centre is from a point.
+///
+/// The thresholds are in chunk widths rather than elmos, so the same numbers
+/// hold whatever a chunk works out to on a given map. Halving detail every
+/// eight chunks keeps the transition far enough away that the seam between two
+/// levels is a few pixels of terrain rather than a visible step.
+[[nodiscard]] int lodForDistance(float distance, float chunkWidth) noexcept {
+    if (!(chunkWidth > 0.0f)) {
+        return 0;
+    }
+    const float inChunks = distance / chunkWidth;
+    if (inChunks < 8.0f) {
+        return 0;
+    }
+    return inChunks < 20.0f ? 1 : 2;
+}
+
 template <typename Predicate>
-void Renderer::drawTerrainChunks(MTL::RenderCommandEncoder* encoder, Predicate keep) noexcept {
+void Renderer::drawTerrainChunks(MTL::RenderCommandEncoder* encoder, Predicate keep,
+                                 simd_float3 detailFrom, bool varyDetail) noexcept {
     std::size_t runFirst = 0;
     std::size_t runCount = 0;
 
@@ -2196,10 +2214,27 @@ void Renderer::drawTerrainChunks(MTL::RenderCommandEncoder* encoder, Predicate k
             flush();
             continue;
         }
-        if (runCount == 0) {
-            runFirst = chunk.firstIndex;
+
+        int lod = 0;
+        if (varyDetail) {
+            const simd_float3 centre = simd_make_float3((chunk.minX + chunk.maxX) * 0.5f,
+                                                        (chunk.minY + chunk.maxY) * 0.5f,
+                                                        (chunk.minZ + chunk.maxZ) * 0.5f);
+            lod = lodForDistance(simd_distance(centre, detailFrom), chunk.maxX - chunk.minX);
         }
-        runCount += chunk.indexCount;
+        const TerrainChunk::Lod& range = chunk.lods[static_cast<std::size_t>(lod)];
+
+        // A run can only continue while the ranges stay adjacent, which they do
+        // for neighbouring chunks at the SAME level and never across a change
+        // of level — the levels are interleaved in the buffer.
+        if (runCount > 0 && runFirst + runCount == range.firstIndex) {
+            runCount += range.indexCount;
+            continue;
+        }
+
+        flush();
+        runFirst = range.firstIndex;
+        runCount = range.indexCount;
     }
     flush();
 }
@@ -2366,6 +2401,8 @@ void Renderer::encodeShadowPass(MTL::CommandBuffer* commandBuffer) noexcept {
         // oriented along the sun, so an axis-aligned world-space test would be
         // wrong. A chunk's bounding sphere is cheap and never too small, and
         // here too generous is harmless while too tight drops shadows.
+        // The shadow map is coarse and seen only as shade, so it takes the
+        // cheapest level everywhere — detail there buys nothing at all.
         drawTerrainChunks(encoder, [this](const TerrainChunk& chunk) {
             const simd_float3 centre = simd_make_float3((chunk.minX + chunk.maxX) * 0.5f,
                                                         (chunk.minY + chunk.maxY) * 0.5f,
@@ -2376,7 +2413,7 @@ void Renderer::encodeShadowPass(MTL::CommandBuffer* commandBuffer) noexcept {
             const simd_float3 offset = centre - lightCentre_;
             const simd_float3 along = kSunDirection * simd_dot(offset, kSunDirection);
             return simd_length(offset - along) <= lightExtent_ + radius;
-        });
+        }, lightCentre_, /*varyDetail=*/false);
     }
 
     encoder->setRenderPipelineState(unitShadowPipeline_);

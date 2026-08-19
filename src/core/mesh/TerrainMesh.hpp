@@ -28,7 +28,23 @@ static_assert(sizeof(TerrainVertex) == 24,
 // This is what makes the terrain cullable. Without it the ground is one draw of
 // two million triangles, and a shadow pass covering a fraction of the map still
 // pays for all of them.
+/// Detail levels per chunk. Each halves the sample rate again, so level 2 is a
+/// sixteenth of the triangles — past that a 64-square chunk is four quads and
+/// there is nothing left to remove.
+inline constexpr int kLodLevels = 3;
+
 struct TerrainChunk {
+    /// One index range per detail level, finest first. Level 0 is every
+    /// vertex; each level after it takes every other one.
+    struct Lod {
+        std::size_t firstIndex = 0;
+        std::size_t indexCount = 0;
+    };
+    std::array<Lod, kLodLevels> lods{};
+
+    /// The finest level, kept as the plain range so callers that do not choose
+    /// a level — and the tests that assert the chunks tile the mesh — need not
+    /// know levels exist.
     std::size_t firstIndex = 0;
     std::size_t indexCount = 0;
 
@@ -49,8 +65,9 @@ struct TerrainMesh {
     std::vector<TerrainVertex> vertices;
     std::vector<std::uint32_t> indices;  ///< triangle list, 3 per triangle
 
-    /// Contiguous, in order, and together covering every index exactly once —
-    /// so drawing all of them is drawing the whole mesh.
+    /// Every chunk, each carrying one index range per detail level. The
+    /// level-0 ranges together cover the mesh exactly once; the coarser ranges
+    /// are alternatives to them, interleaved in the same buffer.
     std::vector<TerrainChunk> chunks;
 
     // The grid's dimensions, so a consumer can index `vertices` by (x, z)
@@ -69,7 +86,13 @@ struct TerrainMesh {
     float minY = 0.0f, maxY = 0.0f;
     float minZ = 0.0f, maxZ = 0.0f;
 
-    [[nodiscard]] std::size_t triangleCount() const noexcept { return indices.size() / 3; }
+    /// Triangles at FULL detail.
+    ///
+    /// Not `indices.size() / 3`: the buffer holds every detail level back to
+    /// back, and the coarse ones are alternatives to the fine ones rather than
+    /// additions to them. Counting the lot would report a mesh two thirds
+    /// larger than anything ever drawn.
+    [[nodiscard]] std::size_t triangleCount() const noexcept;
 };
 
 /// The most vertices this renderer will put along one side of a terrain mesh.

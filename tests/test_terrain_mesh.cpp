@@ -48,7 +48,11 @@ TEST_CASE("mesh has one vertex per corner and two triangles per square") {
 
     const auto squares = static_cast<std::size_t>(kSquares) * kSquares;
     REQUIRE(mesh.triangleCount() == squares * 2);
-    REQUIRE(mesh.indices.size() == squares * 6);
+    // The buffer holds every detail level, so the FULL-DETAIL count is what
+    // matches the square count — indices.size() also carries the coarse
+    // alternatives to those triangles.
+    REQUIRE(mesh.triangleCount() == squares * 2);
+    REQUIRE(mesh.indices.size() > squares * 6);
 }
 
 TEST_CASE("every index addresses a real vertex") {
@@ -238,7 +242,7 @@ TEST_CASE("the stride is chosen to keep a map inside the vertex budget") {
     }
 }
 
-TEST_CASE("the mesh is split into chunks that cover every triangle exactly once") {
+TEST_CASE("each chunk carries one index range per detail level") {
     const HeightField field = makeField(64, 64, [] {
         std::vector<std::uint16_t> raw(65 * 65);
         for (int z = 0; z < 65; ++z) {
@@ -254,15 +258,33 @@ TEST_CASE("the mesh is split into chunks that cover every triangle exactly once"
 
     REQUIRE_FALSE(mesh.chunks.empty());
 
-    // The chunks partition the index buffer: contiguous, in order, no gaps and
-    // no overlap. A gap drops terrain; an overlap draws it twice.
-    std::size_t expected = 0;
+    // The level-0 ranges tile the mesh: together they are the full-detail
+    // triangle list, no gaps and no overlap. A gap drops terrain; an overlap
+    // draws it twice. They are NOT contiguous any more — each chunk's coarser
+    // levels sit between them in the same buffer.
+    std::size_t fullDetail = 0;
     for (const rm::TerrainChunk& chunk : mesh.chunks) {
-        REQUIRE(chunk.firstIndex == expected);
         REQUIRE(chunk.indexCount > 0);
-        expected += chunk.indexCount;
+        REQUIRE(chunk.firstIndex == chunk.lods[0].firstIndex);
+        REQUIRE(chunk.indexCount == chunk.lods[0].indexCount);
+        fullDetail += chunk.lods[0].indexCount;
+
+        // Every level is inside the buffer, non-empty, and coarser than the
+        // last — a level that grew would mean the stride ran backwards.
+        std::size_t previous = chunk.lods[0].indexCount + 1;
+        for (const auto& lod : chunk.lods) {
+            REQUIRE(lod.indexCount > 0);
+            REQUIRE(lod.firstIndex + lod.indexCount <= mesh.indices.size());
+            REQUIRE(lod.indexCount < previous);
+            previous = lod.indexCount;
+        }
     }
-    CHECK(expected == mesh.indices.size());
+
+    CHECK(fullDetail == mesh.triangleCount() * 3);
+    // Each level is a quarter of the one before, so the buffer is about a
+    // third larger than the full-detail list alone.
+    CHECK(mesh.indices.size() > fullDetail);
+    CHECK(mesh.indices.size() < fullDetail * 2);
 }
 
 TEST_CASE("a chunk's bounds contain the vertices it indexes") {
@@ -286,7 +308,8 @@ TEST_CASE("a chunk's bounds contain the vertices it indexes") {
         REQUIRE(chunk.minY <= chunk.maxY);
         REQUIRE(chunk.minZ <= chunk.maxZ);
 
-        for (std::size_t i = chunk.firstIndex; i < chunk.firstIndex + chunk.indexCount; ++i) {
+        for (std::size_t i = chunk.lods[0].firstIndex;
+             i < chunk.lods[0].firstIndex + chunk.lods[0].indexCount; ++i) {
             const rm::TerrainVertex& v = mesh.vertices[mesh.indices[i]];
             REQUIRE(v.position[0] >= Approx(chunk.minX));
             REQUIRE(v.position[0] <= Approx(chunk.maxX));

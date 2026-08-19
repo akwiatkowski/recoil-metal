@@ -343,7 +343,8 @@ private:
     /// terrain with one per chunk, and whenever the camera keeps them all that
     /// is slower than not culling at all.
     template <typename Predicate>
-    void drawTerrainChunks(MTL::RenderCommandEncoder* encoder, Predicate keep) noexcept;
+    void drawTerrainChunks(MTL::RenderCommandEncoder* encoder, Predicate keep,
+                           simd_float3 detailFrom, bool varyDetail = true) noexcept;
 
     /// Recomputes the light's orthographic frame around the loaded terrain.
     void updateLightMatrix() noexcept;

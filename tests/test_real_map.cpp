@@ -183,7 +183,8 @@ TEST_CASE("the real map builds a complete terrain mesh", "[real-map]") {
 
     // ~2.1M triangles at 24 bytes per vertex plus 4 per index: worth knowing
     // this is ~50 MB of GPU buffers before anyone reaches for LOD.
-    REQUIRE(mesh.indices.size() == 1024u * 1024u * 6u);
+    // Full detail; mesh.indices also holds the coarser levels of each chunk.
+    REQUIRE(mesh.triangleCount() == 1024u * 1024u * 2u);
 }
 
 TEST_CASE("the real map's tile index parses", "[real-map]") {
