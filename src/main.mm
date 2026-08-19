@@ -683,17 +683,6 @@ private:
     std::map<std::pair<float, float>, rm::sim::PassabilityGrid> grids_;
 };
 
-// Which units the user has selected.
-//
-// Multi-selection: Shift- or Command-click adds or removes a unit; a plain
-// click replaces the set with the unit under the cursor. Right-click orders
-// every selected unit to the ground under the cursor.
-struct Selection {
-    std::size_t batch = 0;
-    std::size_t instance = 0;
-    rm::TeamColour originalColour{};
-};
-
 /// Paces each unit's walk cycle by the ground it has covered.
 ///
 /// The alternative — a wall clock — slides feet whenever the two disagree, and
@@ -727,23 +716,13 @@ void paceAnimationByDistance(std::vector<rm::UnitInstance>& instances,
     }
 }
 
-/// The colour a selected unit is tinted.
-///
-/// Reusing the team-colour field is what makes this feedback free: it is
-/// already per instance, already uploaded every frame, and already read by both
-/// families' shaders through their team-colour mask.
-///
-/// Kept alongside the ground rings rather than replaced by them. The two fail
-/// in different places — a ring is hidden by the unit standing over it at a low
-/// camera angle or by a crowd at high zoom, and a tint is invisible on a model
-/// that is mostly white anyway.
-///
-/// Pure white at full brightness, which no team colour in the palette is (the
-/// white team is 0.92) so a selected unit is distinguishable even from an
-/// unselected white one.
-inline constexpr rm::TeamColour kSelectionColour{{1.0f, 1.0f, 1.0f, 1.0f}};
-
 /// The colour of the ring drawn on the ground under a selected unit.
+///
+/// The ONLY selection feedback. Milestone 13 also tinted the selected unit
+/// white through its team-colour slot, which was free but misleading: in an RTS
+/// a unit's own colours mean allegiance, and overwriting them to mean "selected"
+/// makes a unit change sides for as long as it is in the set. A marker on the
+/// ground says the same thing without lying about the unit (ADR-021).
 ///
 /// One colour for every unit rather than the unit's own team colour: a
 /// selection is "mine", and the question a ring answers is which units an order
@@ -1463,9 +1442,9 @@ namespace {
 /// held — one per model. Comparing its winners across batches is what makes the
 /// nearest unit on SCREEN win, rather than the nearest one in whichever model
 /// happened to load first.
-[[nodiscard]] std::optional<Selection> pickAcrossBatches(const rm::Ray& ray,
-                                                         const UnitScene& scene) {
-    std::optional<Selection> best;
+[[nodiscard]] std::optional<rm::SelectionEntry> pickAcrossBatches(const rm::Ray& ray,
+                                                                  const UnitScene& scene) {
+    std::optional<rm::SelectionEntry> best;
     float bestDistance = rm::kDefaultPickRadiusElmos;
 
     for (std::size_t batch = 0; batch < scene.instances.size(); ++batch) {
@@ -1478,7 +1457,7 @@ namespace {
         const rm::UnitInstance& unit = instances[*hit];
         bestDistance = rm::distanceToRay(
             ray, simd_make_float3(unit.position[0], unit.position[1], unit.position[2]));
-        best = Selection{.batch = batch, .instance = *hit, .originalColour = unit.teamColour};
+        best = rm::SelectionEntry{.batch = batch, .instance = *hit};
     }
 
     return best;
@@ -1682,7 +1661,14 @@ int main(int argc, const char* argv[]) {
         //
         // Captured by reference: everything named outlives the window, which is
         // destroyed at the end of this scope before any of them.
-        std::vector<Selection> selected;
+        // Which units the user has selected. Shift- or Command-click adds or
+        // removes one; a plain click replaces the set with the unit under the
+        // cursor. Right-click orders every selected unit to the ground under it.
+        //
+        // Identity only — nothing about a selected unit is drawn differently, so
+        // there is nothing per-unit to remember and put back. The rings are
+        // rebuilt from this list every frame.
+        std::vector<rm::SelectionEntry> selected;
         rm::sim::TickClock clock;
 
         // Reused across frames so that rebuilding the rings costs no
@@ -1692,53 +1678,12 @@ int main(int argc, const char* argv[]) {
         window.onClick([&](const rm::Ray& ray, rm::MouseButton button,
                            rm::MouseModifiers mods) {
             if (button == rm::MouseButton::Left) {
-                const std::optional<Selection> hit = pickAcrossBatches(ray, units);
-                const bool addToSet = mods.shift || mods.command || mods.control;
-
                 // What the click MEANS is decided in core/scene/Selection.hpp,
-                // where it can be tested; all that is left here is repainting
-                // the units that entered or left the set.
-                std::vector<rm::SelectionEntry> before;
-                before.reserve(selected.size());
-                for (const Selection& sel : selected) {
-                    before.push_back(rm::SelectionEntry{sel.batch, sel.instance});
-                }
-
-                const std::optional<rm::SelectionEntry> hitEntry =
-                    hit ? std::optional{rm::SelectionEntry{hit->batch, hit->instance}}
-                        : std::nullopt;
-                const std::vector<rm::SelectionEntry> after =
-                    rm::applyClick(before, hitEntry, addToSet);
-
-                // Restore everything that left the selection...
-                for (const Selection& sel : selected) {
-                    const rm::SelectionEntry entry{sel.batch, sel.instance};
-                    if (std::find(after.begin(), after.end(), entry) == after.end()) {
-                        units.instances[sel.batch][sel.instance].teamColour = sel.originalColour;
-                    }
-                }
-
-                // ...and tint everything that is in it now, remembering the
-                // colour to put back. Looked up from the OLD list where it is
-                // already known, so a unit that stays selected does not have
-                // its tint recorded as its original colour.
-                std::vector<Selection> updated;
-                updated.reserve(after.size());
-                for (const rm::SelectionEntry& entry : after) {
-                    const auto previous =
-                        std::find_if(selected.begin(), selected.end(), [&entry](const Selection& s) {
-                            return s.batch == entry.batch && s.instance == entry.instance;
-                        });
-
-                    Selection sel{entry.batch, entry.instance,
-                                  previous != selected.end()
-                                      ? previous->originalColour
-                                      : units.instances[entry.batch][entry.instance].teamColour};
-                    units.instances[sel.batch][sel.instance].teamColour = kSelectionColour;
-                    updated.push_back(sel);
-                }
-
-                selected = std::move(updated);
+                // where it can be tested. Nothing is left to do here: the units
+                // themselves are not repainted, and the rings are rebuilt from
+                // this list by the frame callback.
+                const bool addToSet = mods.shift || mods.command || mods.control;
+                selected = rm::applyClick(selected, pickAcrossBatches(ray, units), addToSet);
                 return;
             }
 
@@ -1752,7 +1697,7 @@ int main(int argc, const char* argv[]) {
             }
 
             std::size_t failed = 0;
-            for (const Selection& sel : selected) {
+            for (const rm::SelectionEntry& sel : selected) {
                 // Each unit routes on the map ITS limits see. Two units given
                 // the same order can legitimately get different answers, and
                 // one of them can be "no route" while the other walks off.
@@ -1807,7 +1752,7 @@ int main(int argc, const char* argv[]) {
             // costs no heap traffic; it is declared outside this lambda for
             // exactly that reason.
             ringVertices.clear();
-            for (const Selection& sel : selected) {
+            for (const rm::SelectionEntry& sel : selected) {
                 const rm::UnitInstance& instance = units.instances[sel.batch][sel.instance];
                 const float radius = units.motion[sel.batch][sel.instance].radiusElmos;
                 rm::appendSelectionRing(ringVertices, map->field, instance.position,

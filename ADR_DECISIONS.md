@@ -705,3 +705,47 @@ planar reflection costs. Skipping absent slots (uniform across the draw) and
 zero-weight strata (per fragment but spatially coherent) takes that to +6.2%,
 both leaving the image bit-identical in intent. It is a quality setting for the
 same reason the reflection pass is.
+
+---
+
+## ADR-021 — A selection is marked on the ground, never on the unit
+
+**Context.** Milestone 13 shipped two selection cues at once: a ring on the
+ground, and the selected unit's team colour overwritten with white. The tint was
+almost free — the team-colour field is already per instance, already uploaded
+every frame, and already read by both families' shaders — and the argument for
+keeping both was that they fail in different places (a ring hides under a unit at
+a low camera angle; a tint is invisible on an already-white model).
+
+**Decision.** Rings only. The tint is removed.
+
+The cost argument was never the problem: the *meaning* was. In an RTS a unit's
+colours are its allegiance, and that is a fact the player reads constantly and
+involuntarily — which shape belongs to whom is the primary question of the genre.
+Overwriting that channel to mean "selected" makes a unit appear to change sides
+for exactly as long as it is in the selection, and it does so in the one register
+the player trusts least consciously and therefore checks least. Two cues for one
+piece of state is a redundancy worth paying for; two *meanings* on one channel is
+not.
+
+**Alternatives considered.** Tinting with a colour no team owns (the palette's
+white team is 0.92, so pure 1.0 is unclaimed) — this is what shipped, and it
+answers "could a player tell these apart side by side" rather than "does a
+glancing look still report the right army". Brightening the unit's *own* hue
+instead of replacing it keeps allegiance readable, but selection would then mean
+a different colour per team, which is the opposite of what a selection cue wants:
+one appearance for "mine, and this order will reach it". Outlines around the
+selected model are what a modern RTS actually does, and remain open — they need a
+stencil or an id buffer, so they are a milestone of their own rather than a
+constant.
+
+**Consequences.** The click handler lost 40 lines. With no per-unit paint to undo
+there is nothing to remember, so the caller's `Selection` struct — batch,
+instance, and the colour to restore — collapsed into `rm::SelectionEntry`, which
+already held the first two, and the enter/leave set arithmetic collapsed into one
+assignment. The frame callback rebuilds the rings from that list as it already
+did.
+
+The tint's genuine advantage is now genuinely lost: at a low camera angle a
+crowd's rings are hidden behind the units standing on them. That is the argument
+for outlines rather than the argument for tinting a team colour.

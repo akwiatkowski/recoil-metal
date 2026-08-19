@@ -9,9 +9,10 @@ namespace rm {
 
 // Which unit is selected: a batch and an index into it.
 //
-// Identity only. What a selected unit is *drawn* like — the tint, and the
-// colour to restore when it is deselected — belongs to the caller, so that the
-// rules below can be decided and tested without a renderer.
+// Identity only. How a selection is *drawn* — a ring on the ground under each
+// entry — belongs to the caller, so that the rules below can be decided and
+// tested without a renderer. Nothing about the unit itself changes, so there is
+// no per-unit state to restore when it leaves the set.
 struct SelectionEntry {
     std::size_t batch = 0;
     std::size_t instance = 0;

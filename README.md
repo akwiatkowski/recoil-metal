@@ -578,9 +578,9 @@ lines keep working.
 
 ### Moving units
 
-Left-click selects the unit under the cursor (it turns white); right-click
-orders it to the ground under the cursor. Drags still belong to the camera —
-only a press and release that stayed put counts as a click.
+Left-click selects the unit under the cursor (a ring appears under it);
+right-click orders it to the ground under the cursor. Drags still belong to the
+camera — only a press and release that stayed put counts as a click.
 
 ```sh
 # --march <x> <z> <seconds>: order EVERY unit to a point and pre-run the sim.
