@@ -25,9 +25,18 @@ namespace {
     return field;
 }
 
-[[nodiscard]] rm::DustEmitter movingAt(float speed) {
+[[nodiscard]] rm::DustEmitter movingAt(float topSpeed) {
     return rm::DustEmitter{.position = {100.0f, 0.0f, 100.0f},
-                           .speedElmosPerSecond = speed,
+                           .moving = true,
+                           .topSpeedElmosPerSecond = topSpeed,
+                           .radiusElmos = 10.0f};
+}
+
+/// A unit that CAN move fast and currently is not — the case that cost a bug.
+[[nodiscard]] rm::DustEmitter parked() {
+    return rm::DustEmitter{.position = {100.0f, 0.0f, 100.0f},
+                           .moving = false,
+                           .topSpeedElmosPerSecond = 40.0f,
                            .radiusElmos = 10.0f};
 }
 
@@ -84,7 +93,7 @@ TEST_CASE("a squad that stops and starts does not exhale the pause") {
     // The debt is cleared while nothing moves rather than banked. Otherwise a
     // minute of standing still is a minute of dust in the frame it moves again.
     const rm::HeightField field = flatField(64);
-    const std::vector<rm::DustEmitter> still{movingAt(0.0f)};
+    const std::vector<rm::DustEmitter> still{parked()};
     const std::vector<rm::DustEmitter> moving{movingAt(20.0f)};
 
     std::vector<rm::Particle> particles;
@@ -239,4 +248,32 @@ TEST_CASE("dust is born just clear of the ground, so it can win a depth test") {
         // ...and not by enough to read as hovering: well under a heightmap square.
         CHECK(particle.origin[1] - ground < 8.0f);
     }
+}
+
+TEST_CASE("a unit that CAN move fast but is parked raises nothing") {
+    // The bug this replaces: MoveState::speedElmosPerSecond is a unit's TOP speed,
+    // a capability it carries whether or not it has anywhere to be, and gating on
+    // it made every stationary unit smoke. The giveaway was a scene reporting 840
+    // particles after 0 of 60 units had found a route anywhere.
+    const rm::HeightField field = flatField(64);
+    const std::vector<rm::DustEmitter> emitters{parked(), parked(), parked()};
+
+    std::vector<rm::Particle> particles;
+    float debt = 0.0f;
+    std::uint32_t seed = 13u;
+    emitForOneSecond(particles, emitters, field, debt, seed);
+
+    CHECK(particles.empty());
+}
+
+TEST_CASE("a unit under way but too slow to throw grit raises nothing either") {
+    const rm::HeightField field = flatField(64);
+    const std::vector<rm::DustEmitter> emitters{movingAt(rm::kDustSpeedThreshold - 0.1f)};
+
+    std::vector<rm::Particle> particles;
+    float debt = 0.0f;
+    std::uint32_t seed = 17u;
+    emitForOneSecond(particles, emitters, field, debt, seed);
+
+    CHECK(particles.empty());
 }

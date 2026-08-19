@@ -74,10 +74,14 @@ void emitDust(std::vector<Particle>& particles, std::span<const DustEmitter> emi
         return;
     }
 
-    // Emitters that are actually moving, since the debt is spent among those.
+    // Emitters that are actually under way, since the debt is spent among those.
+    const auto raisesDust = [](const DustEmitter& emitter) {
+        return emitter.moving && emitter.topSpeedElmosPerSecond >= kDustSpeedThreshold;
+    };
+
     std::size_t moving = 0;
     for (const DustEmitter& emitter : emitters) {
-        if (emitter.speedElmosPerSecond >= kDustSpeedThreshold) {
+        if (raisesDust(emitter)) {
             ++moving;
         }
     }
@@ -93,7 +97,7 @@ void emitDust(std::vector<Particle>& particles, std::span<const DustEmitter> emi
     debt -= static_cast<float>(puffsEach);
 
     for (const DustEmitter& emitter : emitters) {
-        if (emitter.speedElmosPerSecond < kDustSpeedThreshold) {
+        if (!raisesDust(emitter)) {
             continue;
         }
 
@@ -118,7 +122,7 @@ void emitDust(std::vector<Particle>& particles, std::span<const DustEmitter> emi
             // threshold rather than an absolute speed, so it does not need to know
             // what a fast unit is.
             const float vigour =
-                std::min(2.0f, emitter.speedElmosPerSecond / kDustSpeedThreshold);
+                std::min(2.0f, emitter.topSpeedElmosPerSecond / kDustSpeedThreshold);
 
             particles.push_back(Particle{
                 .origin = {x, y, z},

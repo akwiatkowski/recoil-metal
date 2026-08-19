@@ -1366,7 +1366,8 @@ void march(UnitScene& scene, const rm::HeightField& field, PassabilitySet& passa
             for (std::size_t u = 0; u < scene.instances[batch].size(); ++u) {
                 emitters.push_back(rm::DustEmitter{
                     .position = scene.instances[batch][u].position,
-                    .speedElmosPerSecond = scene.motion[batch][u].speedElmosPerSecond,
+                    .moving = scene.motion[batch][u].moving,
+                    .topSpeedElmosPerSecond = scene.motion[batch][u].speedElmosPerSecond,
                     .radiusElmos = scene.motion[batch][u].radiusElmos,
                 });
             }
@@ -2071,7 +2072,8 @@ int main(int argc, const char* argv[]) {
                 for (std::size_t i = 0; i < units.instances[batch].size(); ++i) {
                     dustEmitters.push_back(rm::DustEmitter{
                         .position = units.instances[batch][i].position,
-                        .speedElmosPerSecond = units.motion[batch][i].speedElmosPerSecond,
+                        .moving = units.motion[batch][i].moving,
+                        .topSpeedElmosPerSecond = units.motion[batch][i].speedElmosPerSecond,
                         .radiusElmos = units.motion[batch][i].radiusElmos,
                     });
                 }
