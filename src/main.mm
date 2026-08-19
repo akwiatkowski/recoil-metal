@@ -17,6 +17,9 @@
 #include "core/scene/Particles.hpp"
 #include "core/scene/PropBatch.hpp"
 #include "core/scene/Selection.hpp"
+#include "core/scene/UnitIcons.hpp"
+
+#include <cassert>
 #include "core/settings/Settings.hpp"
 #include "core/scene/GroundDecals.hpp"
 #include "core/scene/UnitPlacement.hpp"
@@ -1461,6 +1464,10 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
             scene.definitions.push_back(unit->def);
             scene.defs.push_back(&scene.definitions.back());
             scene.health.emplace_back();
+            // Asserted rather than assumed: every one of these is indexed by batch, and a
+            // mismatch here is the segfault described in resolveUnits.
+            assert(scene.defs.size() == scene.batches.size() + 1);
+            assert(scene.health.size() == scene.batches.size() + 1);
 
             const auto armed = static_cast<std::size_t>(std::ranges::count_if(
                 unit->def.weapons, [](const rm::unitdef::Weapon& w) { return w.fires(); }));
@@ -1792,6 +1799,27 @@ void orderFirstExtractors(UnitScene& scene, std::span<const rm::scenario::Marker
                 }
             }
         }
+        // The DEFINITION and the HEALTH for this batch, kept in step with it.
+        //
+        // Every one of these arrays is indexed by batch, so every batch must push to every
+        // one of them — a batch that skipped two of them left `defs` and `health` shorter
+        // than `instances`, and the next thing to append (a commander) then wrote its own
+        // entries at the wrong index and read `health[batch]` off the end. That is a
+        // segfault the moment `--units` and `--skirmish` are given together, and it is the
+        // standing hazard of parallel arrays: the fix is that they are filled together, not
+        // that the reader checks.
+        if (def) {
+            scene.definitions.push_back(*def);
+            scene.defs.push_back(&scene.definitions.back());
+        } else {
+            scene.defs.push_back(nullptr);  // a bare model: it neither fires nor dies
+        }
+
+        scene.health.emplace_back();
+        const float hp = def ? def->health : 0.0f;
+        scene.health.back().assign(scene.instances.back().size(),
+                                   rm::sim::Health{.current = hp, .maximum = hp});
+
         scene.batches.push_back(rm::UnitBatch{
             .model = &scene.models.back(),
             .instances = scene.instances.back(),
@@ -2514,6 +2542,26 @@ void writeCsv(const std::string& path, const rm::bench::FrameRecorder& recorder)
 
 namespace {
 
+/// Appends an icon for every unit in the scene too small to read, at the camera's current
+/// zoom. See core/scene/UnitIcons.hpp.
+///
+/// Shared by the windowed loop and the capture paths, because a screenshot that did not show
+/// the icons would make the feature unverifiable — and AGENT.md asks for a screenshot or it
+/// did not happen.
+void appendSceneIcons(std::vector<rm::Particle>& into, const UnitScene& scene,
+                      const rm::OrbitCamera& camera) {
+    const float elmosPerPoint = camera.elmosPerPoint(rm::kIconReferenceHeightPoints);
+    std::vector<float> radii;
+    for (std::size_t batch = 0; batch < scene.instances.size(); ++batch) {
+        radii.clear();
+        radii.reserve(scene.motion[batch].size());
+        for (const rm::sim::MoveState& state : scene.motion[batch]) {
+            radii.push_back(state.radiusElmos);
+        }
+        (void)rm::appendUnitIcons(into, scene.instances[batch], radii, elmosPerPoint);
+    }
+}
+
 /// The unit nearest the ray across every batch, IGNORING who owns it.
 ///
 /// What a right-click wants: an order aimed at an enemy has to be able to find one, and
@@ -2743,8 +2791,12 @@ int main(int argc, const char* argv[]) {
             renderer.setStratumNormals(settings.stratumNormals);
             renderer.setRefraction(settings.refraction);
             // The march's dust, so a benchmark measures the same scene a capture
-            // shows rather than one without particles in it.
-            renderer.setParticles(marchDust);
+            // shows rather than one without particles in it — plus the icons, for the
+            // units the camera has left too small to read.
+            std::vector<rm::Particle> captureParticles;
+            captureParticles.assign(marchDust.begin(), marchDust.end());
+            appendSceneIcons(captureParticles, units, renderer.camera());
+            renderer.setParticles(captureParticles);
             // --focus works here too, so the benchmark can measure a close
             // camera as well as a whole-map one. They are different workloads:
             // anything that culls to what the camera sees is invisible at full
@@ -2829,7 +2881,13 @@ int main(int argc, const char* argv[]) {
             // The dust the march raised, if there was one. Nothing else in a
             // headless capture can produce a particle: dust records movement, and
             // only --march moves anything without a window.
-            renderer.setParticles(marchDust);
+            // The march's dust, plus icons for whatever the camera has left too small to
+            // read. The SCREENSHOT path, which is the one that has to show them: a feature
+            // only visible in a live window cannot be verified, and AGENT.md asks for a
+            // screenshot or it did not happen.
+            std::vector<rm::Particle> shotParticles{marchDust.begin(), marchDust.end()};
+            appendSceneIcons(shotParticles, units, renderer.camera());
+            renderer.setParticles(shotParticles);
 
             const auto image = renderer.renderToImage(shot.width, shot.height);
             return writePng(shot.path, image) ? 0 : 1;
@@ -3022,6 +3080,10 @@ int main(int argc, const char* argv[]) {
             }
         });
 
+        // Scratch for the icon pass, held outside the frame callback so a frame costs no
+        // allocation — the same reason the dust emitters are.
+        std::vector<rm::Particle> iconScratch;
+
         window.onFrame([&](float elapsed) {
             // WASD pans the map, every frame rather than per keypress: a pan driven by
             // key EVENTS moves in jerks the length of the auto-repeat interval, and stops
@@ -3098,7 +3160,15 @@ int main(int argc, const char* argv[]) {
             // ...and the map's own ambient effects, which run whether anything moves
             // or not: a map's lava does not stop steaming because nobody is looking.
             rm::emitAmbient(particles, props.ambient, elapsed, ambientDebt, dustSeed);
-            window.setParticles(particles);
+
+            // ICONS for whatever has shrunk past reading. Appended to the particle list
+            // rather than drawn by a pass of their own, because an icon IS a stationary
+            // camera-facing quad and that is what the particle pipeline already draws
+            // (core/scene/UnitIcons.hpp). Built into a scratch copy so the icons do not
+            // accumulate in the list the dust ages through.
+            iconScratch.assign(particles.begin(), particles.end());
+            appendSceneIcons(iconScratch, units, window.camera());
+            window.setParticles(iconScratch);
 
             // Rings under whatever is selected, rebuilt from scratch every
             // frame. Cheap — a selection is tens of units and each ring is 192

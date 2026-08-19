@@ -89,6 +89,7 @@ add_library(rm_core STATIC
     src/core/model/Sca.cpp
     src/core/model/Pose.cpp
     src/core/texture/Dds.cpp
+    src/core/scene/UnitIcons.cpp
     src/core/scene/UnitPlacement.cpp
     src/core/scene/UnitBatch.cpp
     src/core/scene/PropBatch.cpp
@@ -152,6 +153,7 @@ if(BUILD_TESTING)
         tests/test_pose.cpp
         tests/test_real_sca.cpp
         tests/test_dds.cpp
+        tests/test_unit_icons.cpp
         tests/test_unit_placement.cpp
         tests/test_army.cpp
         tests/test_combat.cpp
