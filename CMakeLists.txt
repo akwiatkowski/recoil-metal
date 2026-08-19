@@ -97,9 +97,11 @@ add_library(rm_core STATIC
     src/core/scene/GroundDecals.cpp
     src/core/scene/Particles.cpp
     src/core/sim/Army.cpp
+    src/core/sim/Combat.cpp
     src/core/sim/Movement.cpp
     src/core/sim/Pathfinding.cpp
     src/core/unit/UnitBlueprint.cpp
+    src/core/unit/Weapon.cpp
     src/core/unit/UnitDef.cpp
     src/core/vfs/AssetSearch.cpp
     src/core/vfs/Vfs.cpp
@@ -151,6 +153,7 @@ if(BUILD_TESTING)
         tests/test_dds.cpp
         tests/test_unit_placement.cpp
         tests/test_army.cpp
+        tests/test_combat.cpp
         tests/test_movement.cpp
         tests/test_picking.cpp
         tests/test_selection.cpp

@@ -21,6 +21,7 @@
 #include "core/scene/GroundDecals.hpp"
 #include "core/scene/UnitPlacement.hpp"
 #include "core/sim/Army.hpp"
+#include "core/sim/Combat.hpp"
 #include "core/sim/Movement.hpp"
 #include "core/sim/Pathfinding.hpp"
 #include "core/unit/UnitBlueprint.hpp"
@@ -979,6 +980,37 @@ struct UnitScene {
     /// The army the mouse belongs to. Only its units may be selected.
     int playerArmy = rm::sim::kNoArmy;
 
+    // What each unit can still take, parallel to the instances. A deque for the same
+    // reason the instances are: the combat pass holds spans into it.
+    std::deque<std::vector<rm::sim::Health>> health;
+
+    /// The definition behind each batch, or null for a batch that has none — a
+    /// decorative crowd, which therefore neither fires nor dies.
+    std::vector<const rm::unitdef::UnitDef*> defs;
+
+    /// The definitions themselves, owned here so the pointers above stay valid.
+    std::deque<rm::unitdef::UnitDef> definitions;
+
+    /// Shots in flight.
+    std::vector<rm::sim::Projectile> projectiles;
+
+    /// The combat pass's view of the scene, rebuilt when the batch list changes rather
+    /// than every tick — the spans are stable because the deques never reallocate.
+    [[nodiscard]] std::vector<rm::sim::CombatGroup> combatGroups() {
+        std::vector<rm::sim::CombatGroup> groups;
+        groups.reserve(instances.size());
+        for (std::size_t b = 0; b < instances.size(); ++b) {
+            groups.push_back(rm::sim::CombatGroup{
+                .instances = instances[b],
+                .motion = motion[b],
+                .health = b < health.size() ? std::span<rm::sim::Health>{health[b]}
+                                            : std::span<rm::sim::Health>{},
+                .def = b < defs.size() ? defs[b] : nullptr,
+            });
+        }
+        return groups;
+    }
+
     /// The army that owns instance `instance` of batch `batch`, or kNoArmy.
     [[nodiscard]] int armyOf(std::size_t batch, std::size_t instance) const noexcept {
         if (batch >= motion.size() || instance >= motion[batch].size()) {
@@ -1353,9 +1385,16 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
             batchForFaction.emplace(army.faction, scene.batches.size() - 1);
             scaleForFaction.emplace(army.faction, unit->def.meshToElmos);
 
-            std::printf("army %d: %s commander %s, %.0f hp\n", army.index,
+            scene.definitions.push_back(unit->def);
+            scene.defs.push_back(&scene.definitions.back());
+            scene.health.emplace_back();
+
+            const auto armed = static_cast<std::size_t>(std::ranges::count_if(
+                unit->def.weapons, [](const rm::unitdef::Weapon& w) { return w.fires(); }));
+            std::printf("army %d: %s commander %s, %.0f hp, %zu weapon(s)\n", army.index,
                         std::string{rm::sim::factionName(army.faction)}.c_str(),
-                        unit->def.name.c_str(), static_cast<double>(unit->def.health));
+                        unit->def.name.c_str(), static_cast<double>(unit->def.health), armed);
+
         }
 
         const std::size_t batch = batchForFaction.at(army.faction);
@@ -1379,6 +1418,9 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
 
         scene.instances[batch].push_back(one.front());
         scene.motion[batch].push_back(motion);
+
+        const float hp = scene.defs[batch] != nullptr ? scene.defs[batch]->health : 0.0f;
+        scene.health[batch].push_back(rm::sim::Health{.current = hp, .maximum = hp});
     }
 
     // The spans in each batch are rebuilt after every push_back, because a vector that
@@ -1833,11 +1875,44 @@ struct MarchOptions {
 /// show a trail. Emitted DURING the ticks rather than at the end, which is the only
 /// way to get one: dust marks where a unit has been, and a scene sampled after the
 /// walk knows only where everything ended up.
+/// Takes the destroyed out of the scene.
+///
+/// A dead unit stops moving and stops being DRAWN, by way of a zero scale — which
+/// collapses its mesh to a point rather than removing it from the batch. Removing it
+/// properly would mean erasing from the instance array, and the health, motion and
+/// instance arrays are parallel: an erase from one has to be an erase from all three, and
+/// every span the combat and collision passes hold would have to be rebuilt mid-tick.
+///
+/// So this is a stand-in, and it is the honest kind: the unit is gone from the screen and
+/// from the fight (`fireWeapons` and `nearestTarget` both skip the dead) while still
+/// occupying a slot. WRECKAGE — a corpse model left on the ground, which is what the game
+/// does and what makes a battlefield readable afterwards — is the real answer and is not
+/// done. Neither is a death explosion, though the blueprints describe one: 99 of the 494
+/// weapons are exactly that, read and deliberately never fired (see WeaponRole::Death).
+void retireDead(UnitScene& scene) {
+    for (std::size_t batch = 0; batch < scene.health.size(); ++batch) {
+        for (std::size_t i = 0; i < scene.health[batch].size(); ++i) {
+            if (scene.health[batch][i].alive()) {
+                continue;
+            }
+            if (i < scene.instances[batch].size()) {
+                scene.instances[batch][i].scale = 0.0f;
+            }
+            if (i < scene.motion[batch].size()) {
+                scene.motion[batch][i].moving = false;
+                scene.motion[batch][i].speedElmosPerSecond = 0.0f;
+                scene.motion[batch][i].radiusElmos = 0.0f;  // and stops shoving the living
+            }
+        }
+    }
+}
+
 void march(UnitScene& scene, const rm::HeightField& field, PassabilitySet& passability,
            const MarchOptions& options, std::span<const rm::AmbientEmitter> ambient,
            std::vector<rm::Particle>& dust) {
     std::size_t routed = 0;
     std::size_t total = 0;
+    std::size_t shotsFired = 0;
     for (std::size_t batch = 0; batch < scene.motion.size(); ++batch) {
         for (std::size_t i = 0; i < scene.motion[batch].size(); ++i) {
             ++total;
@@ -1871,6 +1946,16 @@ void march(UnitScene& scene, const rm::HeightField& field, PassabilitySet& passa
             rm::sim::tick(scene.instances[batch], scene.motion[batch], field);
         }
         rm::sim::resolveCollisions(groups, field);
+
+        // COMBAT, after the move: a unit shoots from where it has got to this tick, not
+        // from where it started. Order matters for a closing engagement — firing first
+        // would let a unit shoot from outside a range it is about to enter.
+        if (!scene.armies.empty()) {
+            std::vector<rm::sim::CombatGroup> combat = scene.combatGroups();
+            shotsFired += rm::sim::fireWeapons(combat, scene.armies, scene.projectiles);
+            rm::sim::advanceProjectiles(scene.projectiles, combat, scene.armies, field);
+            retireDead(scene);
+        }
 
         // Dust as the walk happens, aged as the walk continues, so what a capture
         // shows is a trail rather than a puff at everyone's feet.
@@ -1908,6 +1993,28 @@ void march(UnitScene& scene, const rm::HeightField& field, PassabilitySet& passa
                 " %zu dust particles still in the air\n",
                 routed, total, static_cast<double>(options.x), static_cast<double>(options.z),
                 ticks, dust.size());
+
+    if (!scene.armies.empty()) {
+        // What the fight came to. Reported rather than inferred from a screenshot,
+        // because a unit that died is a unit that is no longer in the frame and its
+        // absence looks the same as its never having been there.
+        std::vector<rm::sim::CombatGroup> combat = scene.combatGroups();
+        const std::vector<rm::sim::UnitRef> dead = rm::sim::deadUnits(combat);
+
+        float remaining = 0.0f;
+        float maximum = 0.0f;
+        for (const std::vector<rm::sim::Health>& batch : scene.health) {
+            for (const rm::sim::Health& one : batch) {
+                remaining += one.current;
+                maximum += one.maximum;
+            }
+        }
+
+        std::printf("combat: %zu shots fired, %zu in flight, %zu unit(s) destroyed,"
+                    " %.0f of %.0f hp left\n",
+                    shotsFired, scene.projectiles.size(), dead.size(),
+                    static_cast<double>(remaining), static_cast<double>(maximum));
+    }
 }
 
 /// How far back `--focus` should sit, in model radii, or 0 when it was not

@@ -37,6 +37,16 @@ constexpr float kRecoilFramesPerSecond = 30.0f;
 
 namespace rm::unitdef {
 
+float UnitDef::maxWeaponRangeElmos() const noexcept {
+    float furthest = 0.0f;
+    for (const Weapon& weapon : weapons) {
+        if (weapon.fires()) {
+            furthest = std::max(furthest, weapon.maxRangeElmos);
+        }
+    }
+    return furthest;
+}
+
 float UnitDef::footprintRadiusElmos() const noexcept {
     const int squares = std::max(footprintSquaresX, footprintSquaresZ);
     return 0.5f * static_cast<float>(squares) * static_cast<float>(kSquareSize);

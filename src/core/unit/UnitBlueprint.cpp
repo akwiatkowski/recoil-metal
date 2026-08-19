@@ -202,6 +202,15 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
                               ? squaresFrom(numberOr(*footprint, "SizeZ", 1.0f))
                               : squaresFrom(sizeZ);
 
+    // --- weapons -----------------------------------------------------------
+    //
+    // A Lua ARRAY, so the entries are positional. 247 of the 568 units carry one;
+    // `Weapon::fires()` is what decides which entries are guns, because 99 of the 494
+    // are a unit's own death explosion.
+    if (const lua::Value* weapons = parsed->path("Weapon")) {
+        def.weapons = unitdef::weaponsFrom(*weapons);
+    }
+
     // --- the rest ----------------------------------------------------------
     if (const lua::Value* defense = parsed->path("Defense")) {
         def.health = numberOr(*defense, "MaxHealth", 0.0f);

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/lua/LuaTable.hpp"
+#include "core/unit/Weapon.hpp"
 #include "core/vfs/AssetSearch.hpp"
 
 #include <cstdint>
@@ -112,6 +113,16 @@ struct UnitDef {
     /// family it is read from the file, for BAR it is inferred from the fields
     /// that family does state.
     MotionType motion = MotionType::None;
+
+    /// What this unit shoots with. Empty for the 321 shipped units that shoot nothing,
+    /// and for every BAR unit — that family states its weapons in a shape this engine
+    /// does not read yet, and an empty list is the honest report of that.
+    std::vector<Weapon> weapons;
+
+    /// The unit's longest reach, in elmos, over the weapons it will actually fire.
+    /// Zero for something unarmed. What a targeting sweep needs before it looks at
+    /// individual weapons.
+    [[nodiscard]] float maxWeaponRangeElmos() const noexcept;
 
     /// The factor that takes the MESH's own coordinates to elmos.
     ///
