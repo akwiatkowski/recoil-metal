@@ -403,6 +403,10 @@ void Window::setGroundDecals(std::span<const DecalVertex> vertices) {
     impl_->renderer->setGroundDecals(vertices);
 }
 
+void Window::setParticles(std::span<const Particle> particles) {
+    impl_->renderer->setParticles(particles);
+}
+
 void Window::focusOn(std::array<float, 3> target, float distance) {
     impl_->renderer->focusOn(target, distance);
 }

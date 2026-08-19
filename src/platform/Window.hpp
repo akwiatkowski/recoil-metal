@@ -125,6 +125,10 @@ public:
     /// setInstances, only meaningful from inside an onFrame callback.
     void setGroundDecals(std::span<const DecalVertex> vertices);
 
+    /// This frame's particles. See Renderer::setParticles. Like setInstances,
+    /// only meaningful from inside an onFrame callback.
+    void setParticles(std::span<const Particle> particles);
+
     /// Points the camera at a world position. See Renderer::focusOn.
     void focusOn(std::array<float, 3> target, float distance);
 

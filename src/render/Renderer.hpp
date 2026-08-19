@@ -8,6 +8,7 @@
 #include "core/model/Model.hpp"
 #include "core/model/Pose.hpp"
 #include "core/scene/GroundDecals.hpp"
+#include "core/scene/Particles.hpp"
 #include "core/scene/PropBatch.hpp"
 #include "core/scene/UnitBatch.hpp"
 #include "core/scene/UnitPlacement.hpp"
@@ -208,6 +209,20 @@ public:
     // buffer, which cannot be resized while the GPU may be reading it. That is
     // roughly 300 units selected at once.
     void setGroundDecals(std::span<const DecalVertex> vertices) noexcept;
+
+    // This frame's particles — dust behind whatever is moving.
+    //
+    // Pushed every frame like the decals, and forgotten at beginFrame for the same
+    // reason: a count that outlived its frame would point the draw at another
+    // slot's contents.
+    //
+    // Each particle carries where it was born, the velocity it was born with and
+    // its age; where it IS now is worked out in the vertex shader. So this uploads
+    // a description rather than a state, and the CPU never integrates a position.
+    //
+    // Particles beyond kMaxParticles are dropped rather than growing the buffer,
+    // which cannot be resized while the GPU may be reading it.
+    void setParticles(std::span<const Particle> particles) noexcept;
 
     // Uploads several models, the instances to draw each at, and the textures
     // they share. One instanced draw call covers every instance of a model; the
@@ -487,6 +502,11 @@ private:
     /// Scratch space for the above, reused between frames and passes so that
     /// planning the terrain costs no allocation once the capacity has settled.
     std::vector<ChunkDraw> chunkDraws_;
+
+    MTL::RenderPipelineState* particlePipeline_ = nullptr;  // owned
+    MTL::DepthStencilState* particleDepthState_ = nullptr;  // owned
+    MTL::Buffer* particleBuffer_ = nullptr;                 // owned
+    std::size_t particleCount_ = 0;
 
     /// Recomputes the light's orthographic frame around the loaded terrain.
     void updateLightMatrix() noexcept;

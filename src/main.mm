@@ -14,6 +14,7 @@
 #include "core/model/Scm.hpp"
 #include "core/scene/Picking.hpp"
 #include "core/map/PropBlueprint.hpp"
+#include "core/scene/Particles.hpp"
 #include "core/scene/PropBatch.hpp"
 #include "core/scene/Selection.hpp"
 #include "core/settings/Settings.hpp"
@@ -691,13 +692,16 @@ struct PropScene {
 /// frame between them, so two figures from this renderer are not comparable
 /// unless both say what was on — and the whole point of the benchmark harness is
 /// comparing figures, against Recoil and against this renderer's own past.
-[[nodiscard]] std::string describeQuality(const rm::Settings& settings, std::size_t propCount) {
+[[nodiscard]] std::string describeQuality(const rm::Settings& settings, std::size_t propCount,
+                                          std::size_t particleCount) {
     std::string text = "quality: reflections ";
     text += settings.reflections ? "on" : "off";
     text += ", stratum normals ";
     text += settings.stratumNormals ? "on" : "off";
     text += ", refraction ";
     text += settings.refraction ? "on" : "off";
+    text += ", particles ";
+    text += std::to_string(particleCount);
     text += ", props ";
     if (!settings.props) {
         text += "off";
@@ -1313,8 +1317,13 @@ struct MarchOptions {
 }
 
 /// Orders every unit in the scene to a point, and runs the sim for a while.
+///
+/// `dust` collects the particles the march raised, so that a headless capture can
+/// show a trail. Emitted DURING the ticks rather than at the end, which is the only
+/// way to get one: dust marks where a unit has been, and a scene sampled after the
+/// walk knows only where everything ended up.
 void march(UnitScene& scene, const rm::HeightField& field, PassabilitySet& passability,
-           const MarchOptions& options) {
+           const MarchOptions& options, std::vector<rm::Particle>& dust) {
     std::size_t routed = 0;
     std::size_t total = 0;
     for (std::size_t batch = 0; batch < scene.motion.size(); ++batch) {
@@ -1339,11 +1348,31 @@ void march(UnitScene& scene, const rm::HeightField& field, PassabilitySet& passa
         groups.push_back(rm::sim::CollisionGroup{scene.instances[batch], scene.motion[batch]});
     }
 
+    constexpr float kTickSeconds = 1.0f / static_cast<float>(rm::sim::kTicksPerSecond);
+    float dustDebt = 0.0f;
+    std::uint32_t dustSeed = 0x51ED27u;
+    std::vector<rm::DustEmitter> emitters;
+
     for (int i = 0; i < ticks; ++i) {
         for (std::size_t batch = 0; batch < scene.instances.size(); ++batch) {
             rm::sim::tick(scene.instances[batch], scene.motion[batch], field);
         }
         rm::sim::resolveCollisions(groups, field);
+
+        // Dust as the walk happens, aged as the walk continues, so what a capture
+        // shows is a trail rather than a puff at everyone's feet.
+        emitters.clear();
+        for (std::size_t batch = 0; batch < scene.instances.size(); ++batch) {
+            for (std::size_t u = 0; u < scene.instances[batch].size(); ++u) {
+                emitters.push_back(rm::DustEmitter{
+                    .position = scene.instances[batch][u].position,
+                    .speedElmosPerSecond = scene.motion[batch][u].speedElmosPerSecond,
+                    .radiusElmos = scene.motion[batch][u].radiusElmos,
+                });
+            }
+        }
+        rm::advanceParticles(dust, kTickSeconds);
+        rm::emitDust(dust, emitters, field, kTickSeconds, dustDebt, dustSeed);
     }
 
     // A marched scene has been walked, so its walk cycles are paced by the
@@ -1360,9 +1389,10 @@ void march(UnitScene& scene, const rm::HeightField& field, PassabilitySet& passa
     // Saying how many found a route matters on a map like aw04, where most
     // units are on islands: a unit that cannot walk there stays put, and
     // without this line that reads as the sim being broken.
-    std::printf("march: %zu of %zu units routed to (%.0f, %.0f), %d ticks simulated\n",
+    std::printf("march: %zu of %zu units routed to (%.0f, %.0f), %d ticks simulated,"
+                " %zu dust particles still in the air\n",
                 routed, total, static_cast<double>(options.x), static_cast<double>(options.z),
-                ticks);
+                ticks, dust.size());
 }
 
 /// How far back `--focus` should sit, in model radii, or 0 when it was not
@@ -1672,9 +1702,13 @@ int main(int argc, const char* argv[]) {
         // unit's own maxslope/maxwaterdepth decide which map it sees.
         PassabilitySet passability{map->field, map->hasWater ? map->waterLevel : 0.0f};
 
+        // Held here rather than inside march(): the capture path below uploads
+        // them, and the windowed path raises its own as the sim runs.
+        std::vector<rm::Particle> marchDust;
+
         const MarchOptions marchOptions = parseMarch(argc, argv);
         if (marchOptions.enabled) {
-            march(units, map->field, passability, marchOptions);
+            march(units, map->field, passability, marchOptions, marchDust);
         }
 
         // Full detail up to the vertex budget, halved per doubling beyond it —
@@ -1759,6 +1793,9 @@ int main(int argc, const char* argv[]) {
             renderer.setReflections(settings.reflections);
             renderer.setStratumNormals(settings.stratumNormals);
             renderer.setRefraction(settings.refraction);
+            // The march's dust, so a benchmark measures the same scene a capture
+            // shows rather than one without particles in it.
+            renderer.setParticles(marchDust);
             // --focus works here too, so the benchmark can measure a close
             // camera as well as a whole-map one. They are different workloads:
             // anything that culls to what the camera sees is invisible at full
@@ -1771,7 +1808,7 @@ int main(int argc, const char* argv[]) {
                         " %zu frames in flight, no vsync\n",
                         bench.width, bench.height, bench.frames, bench.warmup,
                         rm::Renderer::kMaxFramesInFlight);
-            std::printf("  %s\n", describeQuality(settings, propInstances).c_str());
+            std::printf("  %s\n", describeQuality(settings, propInstances, marchDust.size()).c_str());
 
             const rm::bench::FrameRecorder recorder =
                 renderer.runOffscreenBenchmark(bench.width, bench.height, bench.frames,
@@ -1836,6 +1873,11 @@ int main(int argc, const char* argv[]) {
                 renderer.setGroundDecals(vertices);
                 std::printf("  selected %zu units for the capture\n", made);
             }
+
+            // The dust the march raised, if there was one. Nothing else in a
+            // headless capture can produce a particle: dust records movement, and
+            // only --march moves anything without a window.
+            renderer.setParticles(marchDust);
 
             const auto image = renderer.renderToImage(shot.width, shot.height);
             return writePng(shot.path, image) ? 0 : 1;
@@ -1925,6 +1967,17 @@ int main(int argc, const char* argv[]) {
         };
         std::vector<OrderMark> orderMarks;
 
+        // Dust. Particles live across frames — that is the point of them — so
+        // this list persists and is aged rather than rebuilt, unlike the decals.
+        // The emitter list IS rebuilt each frame, because it is a view of where
+        // the units are now.
+        std::vector<rm::Particle> particles;
+        std::vector<rm::DustEmitter> dustEmitters;
+        float dustDebt = 0.0f;
+        // A fixed seed, so a scene is the same every run: the same reason the unit
+        // scatter takes one.
+        std::uint32_t dustSeed = 0x51ED27u;
+
         // Reused across frames so that rebuilding the rings costs no
         // allocation — the capacity settles after the first large selection.
         std::vector<rm::DecalVertex> decalVertices;
@@ -2006,6 +2059,27 @@ int main(int argc, const char* argv[]) {
                 window.setInstances(batch, units.instances[batch]);
             }
 
+            // Dust behind whatever is moving. After the sim, so a puff is born
+            // where the unit has got to rather than where it started the frame.
+            //
+            // The emitters are gathered from the motion state the sim just wrote,
+            // which is also where the speed threshold gets its answer — a unit
+            // being jostled by a crowd is moving in position but not in speed, and
+            // should not smoke.
+            dustEmitters.clear();
+            for (std::size_t batch = 0; batch < units.instances.size(); ++batch) {
+                for (std::size_t i = 0; i < units.instances[batch].size(); ++i) {
+                    dustEmitters.push_back(rm::DustEmitter{
+                        .position = units.instances[batch][i].position,
+                        .speedElmosPerSecond = units.motion[batch][i].speedElmosPerSecond,
+                        .radiusElmos = units.motion[batch][i].radiusElmos,
+                    });
+                }
+            }
+            rm::advanceParticles(particles, elapsed);
+            rm::emitDust(particles, dustEmitters, map->field, elapsed, dustDebt, dustSeed);
+            window.setParticles(particles);
+
             // Rings under whatever is selected, rebuilt from scratch every
             // frame. Cheap — a selection is tens of units and each ring is 192
             // vertices of arithmetic — and it is the only way a ring can follow
@@ -2047,7 +2121,7 @@ int main(int argc, const char* argv[]) {
         if (bench.enabled) {
             std::printf("benchmarking %zu frames (discarding %zu warmup)\n  %s\n",
                         bench.frames, bench.warmup,
-                        describeQuality(settings, propInstances).c_str());
+                        describeQuality(settings, propInstances, marchDust.size()).c_str());
             window.beginBenchmark(bench.warmup);
 
             watcher = [[RMBenchWatcher alloc] init];

@@ -93,6 +93,7 @@ add_library(rm_core STATIC
     src/core/scene/Picking.cpp
     src/core/scene/Selection.cpp
     src/core/scene/GroundDecals.cpp
+    src/core/scene/Particles.cpp
     src/core/sim/Movement.cpp
     src/core/sim/Pathfinding.cpp
     src/core/unit/UnitDef.cpp
@@ -148,6 +149,7 @@ if(BUILD_TESTING)
         tests/test_picking.cpp
         tests/test_selection.cpp
         tests/test_ground_decals.cpp
+        tests/test_particles.cpp
         tests/test_pathfinding.cpp
         tests/test_unit_def.cpp
         tests/test_asset_search.cpp

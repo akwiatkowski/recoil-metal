@@ -1049,6 +1049,106 @@ fragment float4 decalFragment(DecalOut in [[stage_in]]) {
     return in.colour;
 }
 
+// --- Particles ---------------------------------------------------------------
+// Dust behind moving units. Each particle is a camera-facing quad expanded here
+// from four vertices, and it is AGED HERE TOO: the CPU uploads where a particle
+// was born, the velocity it was born with and how long ago that was, and this
+// works out the rest. Nothing on the CPU ever integrates a position.
+
+struct ParticleIn {
+    packed_float3 origin;
+    float age;
+    packed_float3 velocity;
+    float lifetime;
+    packed_float4 colour;   // premultiplied
+    float size;
+    float growth;
+};
+
+struct ParticleOut {
+    float4 position [[position]];
+    float4 colour;
+    float2 offset;  // -1..1 across the quad, for the round falloff
+};
+
+// How hard dust is pulled back down, in elmos per second squared.
+//
+// Not gravity: a dust cloud is suspended in air and settles far more slowly than a
+// stone falls. Small enough that a 1.1-second puff rises for most of its life and
+// only just begins to sink, which is what disturbed dust does.
+constant float kDustSettle = 6.0;
+
+vertex ParticleOut particleVertex(uint vid [[vertex_id]],
+                                  uint iid [[instance_id]],
+                                  const device ParticleIn* particles [[buffer(0)]],
+                                  constant Uniforms& u [[buffer(1)]]) {
+    const ParticleIn p = particles[iid];
+    const float t = p.age;
+
+    // Where it is now. The whole of the simulation, and it costs one multiply-add
+    // per axis rather than a per-frame pass over the buffer on the CPU.
+    const float3 world = float3(p.origin) + float3(p.velocity) * t
+                       + float3(0.0, -0.5 * kDustSettle * t * t, 0.0);
+
+    const float life = max(p.lifetime, 1e-4);
+    const float remaining = saturate(1.0 - t / life);
+
+    // Swells as it disperses, which is what makes a puff read as a cloud rather
+    // than a moving dot.
+    const float size = p.size + p.growth * t;
+
+    // Fades in fast and out slow. A puff that appeared at full opacity would pop,
+    // and one that vanished at full opacity would blink out; the product of a
+    // quick rise and a slow decay is what a real puff looks like without needing a
+    // curve stored per particle.
+    const float fadeIn = saturate(t / (0.15 * life));
+    const float alpha = fadeIn * remaining * remaining;
+
+    // A camera-facing quad, from the vertex id alone — no index buffer and no
+    // per-particle geometry. The two screen axes come out of the view-projection's
+    // own columns, which is what keeps the quad facing the camera at any angle
+    // without the CPU sending a basis.
+    const float2 corner = float2((vid == 1 || vid == 2) ? 1.0 : -1.0,
+                                 (vid >= 2) ? 1.0 : -1.0);
+
+    // The rows of the view matrix are the camera's axes in world space; taking
+    // them from the view-projection means reading its columns, since MSL's float4x4
+    // is column-major.
+    const float3 right = normalize(float3(u.viewProjection[0][0], u.viewProjection[1][0],
+                                          u.viewProjection[2][0]));
+    const float3 up = normalize(float3(u.viewProjection[0][1], u.viewProjection[1][1],
+                                       u.viewProjection[2][1]));
+
+    const float3 corner3 = world + (right * corner.x + up * corner.y) * size * 0.5;
+
+    ParticleOut out;
+    out.position = u.viewProjection * float4(corner3, 1.0);
+    // Premultiplied, so scaling the whole thing by alpha is the correct fade for
+    // both a translucent puff and an additive spark.
+    out.colour = float4(p.colour) * alpha;
+    out.offset = corner;
+
+    // A particle past its life is collapsed rather than branched around: a vertex
+    // shader cannot decline to emit, and the CPU has already dropped the expired
+    // ones — this only covers the frame in which one expires mid-flight.
+    if (t >= p.lifetime) {
+        out.position = float4(0.0, 0.0, -1.0, 1.0);  // behind the near plane
+    }
+    return out;
+}
+
+fragment float4 particleFragment(ParticleOut in [[stage_in]]) {
+    // Round, and soft at the edge. A square puff reads as a square, and a hard
+    // circle reads as a coin; the falloff is what makes overlapping puffs merge
+    // into a cloud rather than stacking as discs.
+    const float r = length(in.offset);
+    // Linear rather than squared. Squared looked right in the abstract and shrank
+    // the visible core of a puff to a fraction of its quad, so a 17-elmo puff read
+    // as a speck — most of the sprite was spent on a gradient too faint to see.
+    const float falloff = saturate(1.0 - r);
+    return in.colour * falloff;
+}
+
 // --- Shadow pass -------------------------------------------------------------
 // Depth only, from the sun's point of view. No fragment shader at all: the
 // depth attachment is the entire output, and Metal is happy to run a pipeline
@@ -1387,6 +1487,43 @@ Renderer::Renderer(CA::MetalLayer* layer)
     // over the ground, and a solid band would hide the terrain it marks.
     decalPipeline_ = makePipeline(device_, library, "decalVertex", "decalFragment",
                                  /*blend=*/true);
+    // The particle pipeline, created here because it needs the shader library and
+    // the library is released on the next line.
+    //
+    // Not through makePipeline like the others: its blending is PREMULTIPLIED —
+    // source One rather than SourceAlpha — which is what lets one pipeline draw
+    // translucent dust and an additive spark depending only on how the particle's
+    // colour was authored.
+    {
+        MTL::Function* vertexFn = library->newFunction(
+            NS::String::string("particleVertex", NS::UTF8StringEncoding));
+        MTL::Function* fragmentFn = library->newFunction(
+            NS::String::string("particleFragment", NS::UTF8StringEncoding));
+
+        auto* descriptor = MTL::RenderPipelineDescriptor::alloc()->init();
+        descriptor->setVertexFunction(vertexFn);
+        descriptor->setFragmentFunction(fragmentFn);
+        MTL::RenderPipelineColorAttachmentDescriptor* particleColour =
+            descriptor->colorAttachments()->object(0);
+        particleColour->setPixelFormat(kColorFormat);
+        particleColour->setBlendingEnabled(true);
+        particleColour->setSourceRGBBlendFactor(MTL::BlendFactor::BlendFactorOne);
+        particleColour->setDestinationRGBBlendFactor(
+            MTL::BlendFactor::BlendFactorOneMinusSourceAlpha);
+        particleColour->setSourceAlphaBlendFactor(MTL::BlendFactor::BlendFactorOne);
+        particleColour->setDestinationAlphaBlendFactor(
+            MTL::BlendFactor::BlendFactorOneMinusSourceAlpha);
+        descriptor->setDepthAttachmentPixelFormat(kDepthFormat);
+
+        NS::Error* particleError = nullptr;
+        particlePipeline_ = device_->newRenderPipelineState(descriptor, &particleError);
+        descriptor->release();
+        if (vertexFn != nullptr) vertexFn->release();
+        if (fragmentFn != nullptr) fragmentFn->release();
+        if (particlePipeline_ == nullptr) {
+            throw RendererError{"failed to create the particle pipeline"};
+        }
+    }
     library->release();
 
     // --- Depth state -------------------------------------------------------
@@ -1482,6 +1619,31 @@ Renderer::Renderer(CA::MetalLayer* layer)
         throw RendererError{"failed to create depth-stencil state"};
     }
 
+    // --- Particles ---------------------------------------------------------
+    // Depth-TESTED so dust behind a hill is hidden, but no depth WRITE: a puff
+    // must not occlude the unit that raised it, and two overlapping puffs must
+    // both show.
+    {
+        auto* particleDepth = MTL::DepthStencilDescriptor::alloc()->init();
+        // LessEqual, not Less. Dust is raised AT the ground and the terrain has
+        // already written very nearly the same depth there, so a strict test loses
+        // that fight wherever the lift rounds away at distance — and loses it
+        // silently: the draw is issued, the count is right, and nothing appears.
+        particleDepth->setDepthCompareFunction(MTL::CompareFunction::CompareFunctionLessEqual);
+        particleDepth->setDepthWriteEnabled(false);
+        particleDepthState_ = device_->newDepthStencilState(particleDepth);
+        particleDepth->release();
+        if (particleDepthState_ == nullptr) {
+            throw RendererError{"failed to create the particle depth state"};
+        }
+
+        const std::size_t bytes = kMaxParticles * sizeof(Particle) * kMaxFramesInFlight;
+        particleBuffer_ = device_->newBuffer(bytes, MTL::ResourceStorageModeShared);
+        if (particleBuffer_ == nullptr) {
+            throw RendererError{"failed to allocate the particle buffer"};
+        }
+    }
+
     // --- Selection ring buffer ---------------------------------------------
     // One slot per frame in flight, allocated once. Shared storage because the
     // CPU rewrites it every frame; the frames-in-flight wait in beginFrame is
@@ -1552,6 +1714,9 @@ Renderer::~Renderer() {
     if (shadowMap_ != nullptr) shadowMap_->release();
     if (unitShadowPipeline_ != nullptr) unitShadowPipeline_->release();
     if (terrainShadowPipeline_ != nullptr) terrainShadowPipeline_->release();
+    if (particleBuffer_ != nullptr) particleBuffer_->release();
+    if (particleDepthState_ != nullptr) particleDepthState_->release();
+    if (particlePipeline_ != nullptr) particlePipeline_->release();
     if (decalBuffer_ != nullptr) decalBuffer_->release();
     if (decalDepthState_ != nullptr) decalDepthState_->release();
     if (decalPipeline_ != nullptr) decalPipeline_->release();
@@ -1975,6 +2140,9 @@ void Renderer::beginFrame() noexcept {
     instanceSlot_ = (instanceSlot_ + 1) % kMaxFramesInFlight;
     frameOpen_ = true;
 
+    // Particles too, and for the same reason.
+    particleCount_ = 0;
+
     // Rings are forgotten at the start of every frame, so a frame that pushes
     // none draws none.
     //
@@ -2034,6 +2202,22 @@ void Renderer::setGroundDecals(std::span<const DecalVertex> vertices) noexcept {
     auto* base = static_cast<DecalVertex*>(decalBuffer_->contents());
     std::memcpy(base + instanceSlot_ * kMaxDecalVertices, vertices.data(),
                 decalVertexCount_ * sizeof(DecalVertex));
+}
+
+void Renderer::setParticles(std::span<const Particle> particles) noexcept {
+    particleCount_ = 0;
+    if (particleBuffer_ == nullptr || particles.empty()) {
+        return;
+    }
+
+    // Dropped rather than grown, like the decals: the buffer cannot be
+    // reallocated while up to two other frames may still be reading it. No
+    // rounding needed here — a particle is a whole thing, not three vertices.
+    particleCount_ = std::min(particles.size(), kMaxParticles);
+
+    auto* base = static_cast<Particle*>(particleBuffer_->contents());
+    std::memcpy(base + instanceSlot_ * kMaxParticles, particles.data(),
+                particleCount_ * sizeof(Particle));
 }
 
 MTL::Texture* Renderer::uploadTexture(const dds::Texture& texture, const char* what) {
@@ -2803,6 +2987,32 @@ void Renderer::encodeScene(MTL::CommandBuffer* commandBuffer, MTL::RenderPassDes
         encoder->setVertexBytes(&uniforms, sizeof(uniforms), kUniformBufferIndex);
         encoder->drawPrimitives(MTL::PrimitiveType::PrimitiveTypeTriangle, NS::UInteger{0},
                                 static_cast<NS::UInteger>(decalVertexCount_));
+    }
+
+    // --- Particles ---------------------------------------------------------
+    // After the decals, so dust drifts over a selection ring rather than under it,
+    // and before the water for the same reason the decals are: a puff on a
+    // submerged shelf is tinted by the sea above it like everything else there.
+    //
+    // Skipped in the reflection pass. A mirrored puff would be defensible, but the
+    // pass renders at a quarter resolution into a texture the water then samples
+    // through a wave normal, so what arrives is a smear — and dust is the one thing
+    // in the scene whose whole appearance is a soft gradient.
+    if (particleCount_ > 0 && particlePipeline_ != nullptr && override == nullptr) {
+        encoder->setRenderPipelineState(particlePipeline_);
+        encoder->setDepthStencilState(particleDepthState_);
+        encoder->setVertexBuffer(
+            particleBuffer_,
+            static_cast<NS::UInteger>(instanceSlot_ * kMaxParticles * sizeof(Particle)),
+            kVertexBufferIndex);
+        encoder->setVertexBytes(&uniforms, sizeof(uniforms), kUniformBufferIndex);
+
+        // One instanced draw for every puff on the map: four vertices each, with
+        // the quad expanded from the vertex id, so there is no geometry to upload
+        // and no index buffer at all.
+        encoder->drawPrimitives(MTL::PrimitiveType::PrimitiveTypeTriangleStrip, NS::UInteger{0},
+                                NS::UInteger{4},
+                                static_cast<NS::UInteger>(particleCount_));
     }
 
     // --- The grab ----------------------------------------------------------
