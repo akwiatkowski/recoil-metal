@@ -141,7 +141,10 @@ TEST_CASE("a .scmap heightmap builds a terrain mesh with real relief") {
     REQUIRE(map.has_value());
 
     const rm::TerrainMesh mesh = rm::buildTerrainMesh(map->field);
-    REQUIRE(mesh.vertices.size() == map->field.raw.size());
+    // The GRID is one vertex per height sample; the skirts append more after
+    // it, so this is the dimension check rather than a total.
+    REQUIRE(static_cast<std::size_t>(mesh.verticesX) * static_cast<std::size_t>(mesh.verticesZ)
+            == map->field.raw.size());
     REQUIRE(mesh.maxY > mesh.minY);
 
     // Relief of at least half a percent of map width. FAR measured typical

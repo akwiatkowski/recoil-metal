@@ -18,6 +18,128 @@ namespace {
     return {x * inv, y * inv, z * inv};
 }
 
+/// The chunk grid, in squares at the mesh's own stride.
+struct ChunkSquares {
+    int firstX = 0, firstZ = 0, endX = 0, endZ = 0;
+};
+
+/// The last grid line a level actually reaches, which is not always the chunk's
+/// far edge: a coarse level steps by `span` and stops before overshooting.
+[[nodiscard]] int lastLine(int first, int end, int span) noexcept {
+    return first + ((end - first) / span) * span;
+}
+
+/// The worst gap a coarse chord can leave along this chunk's rim, in elmos.
+///
+/// Only the rim matters. A coarse level's error across a chunk's INTERIOR is
+/// level-of-detail error — the ground is simply smoother than it should be, and
+/// no skirt addresses that. A crack happens only where two chunks meet and
+/// disagree about where the edge is, so the four boundary lines are the whole
+/// question.
+///
+/// Measured against the coarsest level, since that is the largest disagreement
+/// any neighbour can present.
+[[nodiscard]] float rimGap(const rm::TerrainMesh& mesh, const ChunkSquares& chunk,
+                           int nx) noexcept {
+    const int coarsest = 1 << (rm::kLodLevels - 1);
+
+    const auto heightAt = [&mesh, nx](int x, int z) {
+        return mesh.vertices[static_cast<std::size_t>(z) * static_cast<std::size_t>(nx)
+                             + static_cast<std::size_t>(x)]
+            .position[1];
+    };
+
+    float worst = 0.0f;
+
+    // How far the true surface strays from the chord between two samples
+    // `coarsest` apart, walking one line.
+    const auto walk = [&](bool alongX, int fixed, int from, int to) {
+        for (int a = from; a + coarsest <= to; ++a) {
+            const float startY = alongX ? heightAt(a, fixed) : heightAt(fixed, a);
+            const float endY =
+                alongX ? heightAt(a + coarsest, fixed) : heightAt(fixed, a + coarsest);
+
+            for (int k = 1; k < coarsest; ++k) {
+                const float t = static_cast<float>(k) / static_cast<float>(coarsest);
+                const float chord = startY + (endY - startY) * t;
+                const float actual = alongX ? heightAt(a + k, fixed) : heightAt(fixed, a + k);
+                worst = std::max(worst, std::abs(actual - chord));
+            }
+        }
+    };
+
+    walk(/*alongX=*/true, chunk.firstZ, chunk.firstX, chunk.endX);
+    walk(/*alongX=*/true, chunk.endZ, chunk.firstX, chunk.endX);
+    walk(/*alongX=*/false, chunk.firstX, chunk.firstZ, chunk.endZ);
+    walk(/*alongX=*/false, chunk.endX, chunk.firstZ, chunk.endZ);
+
+    return worst;
+}
+
+/// Appends one level's skirt: a curtain hanging `depth` elmos straight down
+/// from the chunk's rim, at that level's own resolution.
+///
+/// The dropped vertices are new — a skirt vertex is the rim vertex moved down,
+/// and nothing else in the mesh wants a copy of it there. They inherit the rim
+/// vertex's normal, so the curtain shades as a continuation of the ground
+/// rather than as a black wall, and its uv (derived from world x/z downstream)
+/// is the rim's, so it reads as a vertical smear of the terrain texture.
+void appendSkirt(rm::TerrainMesh& mesh, const ChunkSquares& chunk, int span, int nx,
+                 float depth) {
+    const int lastX = lastLine(chunk.firstX, chunk.endX, span);
+    const int lastZ = lastLine(chunk.firstZ, chunk.endZ, span);
+
+    // One edge of the rim, as the grid line it runs along.
+    const auto emitEdge = [&](bool alongX, int fixed, int from, int to) {
+        const auto gridIndex = [nx, alongX, fixed](int moving) {
+            const int x = alongX ? moving : fixed;
+            const int z = alongX ? fixed : moving;
+            return static_cast<std::uint32_t>(z) * static_cast<std::uint32_t>(nx)
+                 + static_cast<std::uint32_t>(x);
+        };
+
+        if (from + span > to) {
+            return;  // nothing to hang a curtain from
+        }
+
+        // The dropped copies, one per rim position and SHARED by the two
+        // segments either side of it. Emitting a pair per segment instead is
+        // the obvious version and costs twice the vertices — 22% on top of a
+        // real map's mesh rather than 11%, which on a 1024-square map is five
+        // megabytes to say the same thing.
+        const auto firstLow = static_cast<std::uint32_t>(mesh.vertices.size());
+        for (int a = from; a <= to; a += span) {
+            rm::TerrainVertex dropped = mesh.vertices[gridIndex(a)];
+            dropped.position[1] -= depth;
+            mesh.vertices.push_back(dropped);
+        }
+
+        std::uint32_t step = 0;
+        for (int a = from; a + span <= to; a += span, ++step) {
+            const std::uint32_t rimA = gridIndex(a);
+            const std::uint32_t rimB = gridIndex(a + span);
+            const std::uint32_t lowA = firstLow + step;
+            const std::uint32_t lowB = firstLow + step + 1;
+
+            // Two triangles closing the quad rim(a) - rim(b) - low(b) - low(a).
+            // Winding is not load-bearing: the terrain pass draws with culling
+            // off, because the camera is allowed under the ground.
+            mesh.indices.push_back(rimA);
+            mesh.indices.push_back(rimB);
+            mesh.indices.push_back(lowB);
+
+            mesh.indices.push_back(rimA);
+            mesh.indices.push_back(lowB);
+            mesh.indices.push_back(lowA);
+        }
+    };
+
+    emitEdge(/*alongX=*/true, chunk.firstZ, chunk.firstX, lastX);
+    emitEdge(/*alongX=*/true, lastZ, chunk.firstX, lastX);
+    emitEdge(/*alongX=*/false, chunk.firstX, chunk.firstZ, lastZ);
+    emitEdge(/*alongX=*/false, lastX, chunk.firstZ, lastZ);
+}
+
 } // namespace
 
 namespace rm {
@@ -97,11 +219,7 @@ TerrainMesh buildTerrainMesh(const HeightField& field, int stride) {
         static_cast<std::size_t>(squaresX) * static_cast<std::size_t>(squaresZ);
     mesh.indices.reserve(squares * 6);
 
-    // The chunk grid, in the order the renderer walks it. Squares rather than
-    // world units, because the index emission below is grid arithmetic.
-    struct ChunkSquares {
-        int firstX = 0, firstZ = 0, endX = 0, endZ = 0;
-    };
+    // The chunk grid, in the order the renderer walks it.
     std::vector<ChunkSquares> grid;
     for (int chunkZ = 0; chunkZ < squaresZ; chunkZ += kChunkSquares) {
         for (int chunkX = 0; chunkX < squaresX; chunkX += kChunkSquares) {
@@ -125,6 +243,10 @@ TerrainMesh buildTerrainMesh(const HeightField& field, int stride) {
         chunk.maxZ = static_cast<float>(squaresIn.endZ) * worldStep;
         chunk.minY = std::numeric_limits<float>::max();
         chunk.maxY = std::numeric_limits<float>::lowest();
+        // Sized to the chunk's own terrain, before any index is emitted —
+        // every level's skirt hangs the same distance, so a chunk switching
+        // level does not visibly grow or shrink a curtain.
+        chunk.skirtDepth = rimGap(mesh, squaresIn, nx);
     }
 
     // LEVEL outer, chunk inner — and this order is the whole point.
@@ -178,6 +300,23 @@ TerrainMesh buildTerrainMesh(const HeightField& field, int stride) {
                 }
             }
 
+            range.surfaceIndexCount = mesh.indices.size() - range.firstIndex;
+
+            // --- Skirt -----------------------------------------------------
+            // A curtain hanging straight down from the chunk's rim, filling the
+            // crack where a neighbour drawn at a different level puts its edge
+            // somewhere else.
+            //
+            // BOTH sides need one. Where this chunk's rim is above the
+            // neighbour's chord, this skirt covers the gap; where it is below,
+            // the neighbour's does. Skirting only the coarse levels leaves half
+            // the cracks open, which is the version that looks fixed until the
+            // camera moves.
+            //
+            // Emitted inside this level's range, right after the surface, so
+            // the chunk remains one draw.
+            appendSkirt(mesh, squaresIn, span, nx, chunk.skirtDepth);
+
             range.indexCount = mesh.indices.size() - range.firstIndex;
         }
     }
@@ -190,6 +329,11 @@ TerrainMesh buildTerrainMesh(const HeightField& field, int stride) {
     for (TerrainChunk& chunk : mesh.chunks) {
         chunk.firstIndex = chunk.lods[0].firstIndex;
         chunk.indexCount = chunk.lods[0].indexCount;
+        // The bounds must contain the skirt, not just the surface. Otherwise a
+        // chunk whose curtain is on screen while its surface is not gets
+        // culled, and the crack reappears at exactly the grazing angles where
+        // it shows most.
+        chunk.minY -= chunk.skirtDepth;
     }
 
     mesh.verticesX = nx;
@@ -211,7 +355,7 @@ std::size_t TerrainMesh::triangleCount() const noexcept {
 
     std::size_t total = 0;
     for (const TerrainChunk& chunk : chunks) {
-        total += chunk.lods[0].indexCount;
+        total += chunk.lods[0].surfaceIndexCount;
     }
     return total / 3;
 }

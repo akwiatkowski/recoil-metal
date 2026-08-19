@@ -38,9 +38,30 @@ struct TerrainChunk {
     /// vertex; each level after it takes every other one.
     struct Lod {
         std::size_t firstIndex = 0;
+
+        /// Everything to draw for this level: the surface, then its skirt.
+        ///
+        /// One range rather than two so that a chunk stays a single draw and
+        /// the renderer's cull-and-merge keeps working — a separate skirt range
+        /// would double the draw count, which is the cost the merge exists to
+        /// avoid.
         std::size_t indexCount = 0;
+
+        /// How much of the above is the terrain surface proper. The skirt is
+        /// the remainder. Split out because the surface ranges are what tile
+        /// the mesh exactly once, and the skirt is deliberately extra geometry
+        /// over the top of that.
+        std::size_t surfaceIndexCount = 0;
     };
     std::array<Lod, kLodLevels> lods{};
+
+    /// How far this chunk's skirt hangs below its rim, in elmos.
+    ///
+    /// Derived from the terrain rather than fixed: it must exceed the worst gap
+    /// a coarse chord can leave over the chunk, and no more. A constant deep
+    /// enough for a cliff would hang into open air wherever the ground beside a
+    /// chunk falls away, which is the classic skirt artefact.
+    float skirtDepth = 0.0f;
 
     /// The finest level, kept as the plain range so callers that do not choose
     /// a level — and the tests that assert the chunks tile the mesh — need not
@@ -86,12 +107,14 @@ struct TerrainMesh {
     float minY = 0.0f, maxY = 0.0f;
     float minZ = 0.0f, maxZ = 0.0f;
 
-    /// Triangles at FULL detail.
+    /// Triangles of terrain SURFACE at full detail.
     ///
-    /// Not `indices.size() / 3`: the buffer holds every detail level back to
-    /// back, and the coarse ones are alternatives to the fine ones rather than
-    /// additions to them. Counting the lot would report a mesh two thirds
-    /// larger than anything ever drawn.
+    /// Not `indices.size() / 3`, for two reasons. The buffer holds every detail
+    /// level back to back, and the coarse ones are alternatives to the fine
+    /// ones rather than additions to them. And each level carries a skirt,
+    /// which is deliberately extra geometry hiding the seams between levels
+    /// rather than terrain anyone asked for. Counting either would report a
+    /// mesh far larger than the ground it describes.
     [[nodiscard]] std::size_t triangleCount() const noexcept;
 };
 
@@ -119,11 +142,10 @@ inline constexpr int kMaxVerticesPerSide = 1025;
 // step doubles, which is level of detail in its crudest useful form — chosen
 // once at load, uniform across the map.
 //
-// That uniformity is the deliberate limitation. Recoil uses ROAM
-// (rts/Map/SMF/ROAM/) to vary detail with distance, and per-patch LOD would do
-// better here too, but it brings crack-stitching between neighbouring patches
-// at different levels, and none of that is needed to make a large map render at
-// all — which is the problem this solves.
+// Detail additionally varies per chunk with distance (see TerrainChunk::Lod),
+// which is where the crack-stitching problem arrives: neighbouring chunks at
+// different levels disagree along their shared edge. That is answered with
+// skirts rather than with transition strips — see skirtDepth.
 //
 // Normals come from central differences over the height grid AT THE SAME
 // STRIDE, so a decimated mesh is shaded by the slope it actually has rather

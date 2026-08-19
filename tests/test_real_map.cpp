@@ -176,8 +176,18 @@ TEST_CASE("the real map builds a complete terrain mesh", "[real-map]") {
 
     const auto mesh = rm::buildTerrainMesh(*field);
 
-    REQUIRE(mesh.vertices.size() == 1025u * 1025u);
+    REQUIRE(mesh.verticesX == 1025);
+    REQUIRE(mesh.verticesZ == 1025);
     REQUIRE(mesh.triangleCount() == 1024u * 1024u * 2u);
+
+    // The skirts hanging off every chunk at every level, on a real map. Pinned
+    // as a fraction rather than left implicit: this is the price of not having
+    // cracks between detail levels, and a change that doubled it should have
+    // to say so here.
+    const std::size_t grid = 1025u * 1025u;
+    REQUIRE(mesh.vertices.size() > grid);
+    CHECK(static_cast<double>(mesh.vertices.size() - grid) / static_cast<double>(grid)
+          < 0.15);
     REQUIRE(mesh.maxX == Approx(8192.0f));
     REQUIRE(mesh.maxZ == Approx(8192.0f));
 

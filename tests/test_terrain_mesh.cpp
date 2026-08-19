@@ -43,14 +43,19 @@ constexpr float kElmosPerRawUnit = 0.0625f;
 TEST_CASE("mesh has one vertex per corner and two triangles per square") {
     const auto mesh = rm::buildTerrainMesh(flatField(kSquares));
 
+    // The GRID is one vertex per corner, and those come first, so a consumer
+    // can still index it by (x, z). The skirts add vertices after it — they
+    // are the same corners dropped, which is why they cannot be shared with
+    // the grid.
     const auto corners = static_cast<std::size_t>(kSquares + 1) * (kSquares + 1);
-    REQUIRE(mesh.vertices.size() == corners);
+    REQUIRE(mesh.vertices.size() >= corners);
+    REQUIRE(static_cast<std::size_t>(mesh.verticesX) * static_cast<std::size_t>(mesh.verticesZ)
+            == corners);
 
     const auto squares = static_cast<std::size_t>(kSquares) * kSquares;
-    REQUIRE(mesh.triangleCount() == squares * 2);
-    // The buffer holds every detail level, so the FULL-DETAIL count is what
-    // matches the square count — indices.size() also carries the coarse
-    // alternatives to those triangles.
+    // The buffer holds every detail level AND every skirt, so the full-detail
+    // SURFACE count is what matches the square count — indices.size() carries
+    // the coarse alternatives and the curtains too.
     REQUIRE(mesh.triangleCount() == squares * 2);
     REQUIRE(mesh.indices.size() > squares * 6);
 }
@@ -172,10 +177,12 @@ TEST_CASE("a stride decimates the mesh without moving the map") {
     const rm::TerrainMesh half = rm::buildTerrainMesh(field, 2);
     const rm::TerrainMesh quarter = rm::buildTerrainMesh(field, 4);
 
-    // One vertex per sample at each step: 65, 33, 17 along a side.
-    CHECK(full.vertices.size() == 65 * 65);
-    CHECK(half.vertices.size() == 33 * 33);
-    CHECK(quarter.vertices.size() == 17 * 17);
+    // One GRID vertex per sample at each step: 65, 33, 17 along a side. The
+    // skirts append more, but the grid is what the stride decimates.
+    CHECK(full.verticesX == 65);
+    CHECK(full.verticesZ == 65);
+    CHECK(half.verticesX == 33);
+    CHECK(quarter.verticesX == 17);
 
     // Four times fewer triangles each step, which is the point.
     CHECK(half.triangleCount() == full.triangleCount() / 4);
@@ -267,7 +274,9 @@ TEST_CASE("each chunk carries one index range per detail level") {
         REQUIRE(chunk.indexCount > 0);
         REQUIRE(chunk.firstIndex == chunk.lods[0].firstIndex);
         REQUIRE(chunk.indexCount == chunk.lods[0].indexCount);
-        fullDetail += chunk.lods[0].indexCount;
+        // The SURFACE ranges are what tile the mesh. Each level's skirt sits
+        // inside the same range and is extra geometry over the top of it.
+        fullDetail += chunk.lods[0].surfaceIndexCount;
 
         // Every level is inside the buffer, non-empty, and coarser than the
         // last — a level that grew would mean the stride ran backwards.
@@ -359,5 +368,153 @@ TEST_CASE("consecutive chunks are adjacent in the buffer at the same level") {
             INFO("level " << lod << ", chunk " << i);
             REQUIRE(previous.firstIndex + previous.indexCount == current.firstIndex);
         }
+    }
+}
+
+// --- Skirts ------------------------------------------------------------------
+// Neighbouring chunks drawn at different detail levels do not agree along their
+// shared edge: the coarse one draws a chord where the fine one follows every
+// vertex. The difference is a vertical crack you can see the sky through. A
+// skirt is a curtain hanging straight down from each chunk's rim that fills it.
+
+namespace {
+
+/// A field with a sharp ridge, so coarse levels genuinely miss something. A
+/// smooth field would let a broken skirt pass every test below.
+[[nodiscard]] HeightField ridgedField(int squares) {
+    const auto n = static_cast<std::size_t>(squares + 1);
+    std::vector<std::uint16_t> raw(n * n);
+    for (int z = 0; z <= squares; ++z) {
+        for (int x = 0; x <= squares; ++x) {
+            // Alternating high and low along both axes: every skipped vertex
+            // is a peak or a trough, which is the worst case for a chord.
+            const bool peak = (x % 2 == 0) != (z % 2 == 0);
+            raw[static_cast<std::size_t>(z) * n + static_cast<std::size_t>(x)] =
+                static_cast<std::uint16_t>(peak ? 4000 : 100);
+        }
+    }
+    return makeField(squares, squares, std::move(raw));
+}
+
+} // namespace
+
+TEST_CASE("a skirt hangs below the rim it is attached to") {
+    const rm::TerrainMesh mesh = rm::buildTerrainMesh(ridgedField(128));
+    REQUIRE(mesh.chunks.size() > 1);
+
+    for (const rm::TerrainChunk& chunk : mesh.chunks) {
+        REQUIRE(chunk.skirtDepth > 0.0f);
+
+        for (std::size_t lod = 0; lod < rm::kLodLevels; ++lod) {
+            const rm::TerrainChunk::Lod& range = chunk.lods[lod];
+            REQUIRE(range.surfaceIndexCount > 0);
+            // The skirt is part of the range the renderer draws, so that a
+            // chunk stays ONE draw and the merge keeps working.
+            REQUIRE(range.indexCount > range.surfaceIndexCount);
+            REQUIRE(range.firstIndex + range.indexCount <= mesh.indices.size());
+        }
+    }
+}
+
+TEST_CASE("the chunk's bounds contain its skirt") {
+    // Culling uses these bounds. If they describe only the surface, a chunk
+    // whose skirt is on screen but whose surface is not gets culled, and the
+    // crack the skirt exists to hide reappears at exactly the camera angles
+    // where it shows most.
+    const rm::TerrainMesh mesh = rm::buildTerrainMesh(ridgedField(128));
+
+    for (const rm::TerrainChunk& chunk : mesh.chunks) {
+        for (std::size_t lod = 0; lod < rm::kLodLevels; ++lod) {
+            const rm::TerrainChunk::Lod& range = chunk.lods[lod];
+            for (std::size_t i = range.firstIndex; i < range.firstIndex + range.indexCount; ++i) {
+                const rm::TerrainVertex& v = mesh.vertices[mesh.indices[i]];
+                REQUIRE(v.position[1] >= Approx(chunk.minY));
+                REQUIRE(v.position[1] <= Approx(chunk.maxY));
+            }
+        }
+    }
+}
+
+TEST_CASE("the skirt is deep enough to cover the worst gap between levels") {
+    // The property that makes a skirt WORK rather than merely exist. The gap
+    // between a fine edge and a coarse chord over the same span is bounded by
+    // how much the surface moves across that span; a skirt shallower than the
+    // gap leaves a crack, and one measured in the field's own units is the only
+    // way to know which side of that line it falls.
+    const rm::TerrainMesh mesh = rm::buildTerrainMesh(ridgedField(128));
+
+    const auto heightAtGrid = [&mesh](int x, int z) {
+        return mesh.heightAt(x, z);
+    };
+
+    for (const rm::TerrainChunk& chunk : mesh.chunks) {
+        // The chunk's grid extent, recovered from its world bounds.
+        const int firstX = static_cast<int>(chunk.minX / static_cast<float>(rm::kSquareSize));
+        const int firstZ = static_cast<int>(chunk.minZ / static_cast<float>(rm::kSquareSize));
+        const int endX = static_cast<int>(chunk.maxX / static_cast<float>(rm::kSquareSize));
+        const int endZ = static_cast<int>(chunk.maxZ / static_cast<float>(rm::kSquareSize));
+
+        const int coarsest = 1 << (rm::kLodLevels - 1);
+
+        // Worst deviation of a coarsest-level chord from the true surface along
+        // the chunk's RIM. Only the rim can crack: a coarse level's error
+        // across the interior is level-of-detail error, which no skirt
+        // addresses and which no neighbour disagrees with.
+        float worst = 0.0f;
+        const auto walk = [&](bool alongX, int fixed, int from, int to) {
+            for (int a = from; a + coarsest <= to; ++a) {
+                const float startY = alongX ? heightAtGrid(a, fixed) : heightAtGrid(fixed, a);
+                const float endY = alongX ? heightAtGrid(a + coarsest, fixed)
+                                          : heightAtGrid(fixed, a + coarsest);
+                for (int k = 1; k < coarsest; ++k) {
+                    const float t = static_cast<float>(k) / static_cast<float>(coarsest);
+                    const float chord = startY + (endY - startY) * t;
+                    const float actual =
+                        alongX ? heightAtGrid(a + k, fixed) : heightAtGrid(fixed, a + k);
+                    worst = std::max(worst, std::abs(actual - chord));
+                }
+            }
+        };
+        walk(true, firstZ, firstX, endX);
+        walk(true, endZ, firstX, endX);
+        walk(false, firstX, firstZ, endZ);
+        walk(false, endX, firstZ, endZ);
+
+        INFO("chunk at " << chunk.minX << ", " << chunk.minZ);
+        REQUIRE(chunk.skirtDepth >= Approx(worst).margin(1e-3));
+    }
+}
+
+TEST_CASE("a flat map needs no skirt to speak of") {
+    // The depth is derived from the terrain, not a constant. Flat ground has no
+    // gap to cover, and a skirt sized for a cliff would hang into open air
+    // wherever the ground beside it falls away.
+    const rm::TerrainMesh flat = rm::buildTerrainMesh(flatField(128));
+    const rm::TerrainMesh ridged = rm::buildTerrainMesh(ridgedField(128));
+
+    REQUIRE_FALSE(flat.chunks.empty());
+    for (const rm::TerrainChunk& chunk : flat.chunks) {
+        CHECK(chunk.skirtDepth == Approx(0.0f).margin(1e-4));
+    }
+    CHECK(ridged.chunks[0].skirtDepth > 1.0f);
+}
+
+TEST_CASE("skirt vertices sit directly under the rim, not beside it") {
+    // A skirt that drifted sideways would poke through the neighbouring chunk
+    // instead of hiding behind it.
+    const rm::TerrainMesh mesh = rm::buildTerrainMesh(ridgedField(64));
+    REQUIRE_FALSE(mesh.chunks.empty());
+
+    const rm::TerrainChunk& chunk = mesh.chunks[0];
+    const rm::TerrainChunk::Lod& range = chunk.lods[0];
+
+    // Every skirt vertex must lie on the chunk's rim in plan view.
+    for (std::size_t i = range.firstIndex + range.surfaceIndexCount;
+         i < range.firstIndex + range.indexCount; ++i) {
+        const rm::TerrainVertex& v = mesh.vertices[mesh.indices[i]];
+        const bool onEdgeX = v.position[0] == Approx(chunk.minX) || v.position[0] == Approx(chunk.maxX);
+        const bool onEdgeZ = v.position[2] == Approx(chunk.minZ) || v.position[2] == Approx(chunk.maxZ);
+        INFO("skirt vertex at " << v.position[0] << ", " << v.position[1] << ", " << v.position[2]);
+        REQUIRE((onEdgeX || onEdgeZ));
     }
 }
