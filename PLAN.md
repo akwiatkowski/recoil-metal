@@ -219,7 +219,7 @@ Still open, and carried into 17:
   `meshBeside` already takes a level, so this is wiring rather than research.
 - **The MotionType ADR**, once a second reader needs the mapping.
 
-### 17. Armies, and units that belong to one
+### 17. Armies, and units that belong to one — **✔ done**
 
 Nothing in the engine currently knows who owns a unit; team colour is indexed
 by batch (`core/scene/TeamColours.hpp`).
@@ -237,7 +237,7 @@ by batch (`core/scene/TeamColours.hpp`).
 **Done when:** two ACUs face each other on `SCMP_009` in their armies' colours,
 and clicking an enemy selects nothing.
 
-### 18. Weapons, projectiles, and damage
+### 18. Weapons, projectiles, and damage — **✔ done**
 
 The first milestone where units can lose something.
 
@@ -258,7 +258,17 @@ The first milestone where units can lose something.
 **Done when:** two groups of tanks meet on a `.scmap`, fight, and one group is
 left standing with wrecks between them.
 
-### 19. Economy and building
+**What it came to.** 414 shots over 120 seconds sends eight commanders to mutual
+destruction on SCMP_009, and the fight unfolds tick by tick rather than resolving at once.
+Three corrections the tests forced, each in the code: reloads were 10% slow (the counter
+was checked before being decremented), a flat shot detonated at the muzzle (a unit's
+position is at its FEET, so a level shot began at ground height), and with only a
+ground-height test every weapon then flew over its target and missed. Emergent and
+honest: nothing leads a target, so distant moving units are hard to hit and close ones are
+not. Still absent — wreckage, a death explosion (99 of the 494 weapons ARE one, read and
+never fired), and turret aiming, which is why firing is not gated on facing.
+
+### 19. Economy and building — **✔ done**
 
 - Mass and energy income, storage and drain per army; the map's `Mass` markers
   become extractor sites.
