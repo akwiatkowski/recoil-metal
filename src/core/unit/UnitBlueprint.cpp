@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cmath>
 #include <numbers>
+#include <fstream>
 #include <string>
 #include <system_error>
 
@@ -99,8 +100,8 @@ constexpr float kAnyDepthElmos = 100000.0f;
 /// blueprints has a `BlueprintId`, and `General.UnitName` is display text
 /// ("Mech Marine") present in only 306 of them. The id is what the game keys on
 /// and what every reference to a unit elsewhere in the content spells.
-[[nodiscard]] std::string idFromFileName(const std::filesystem::path& path) {
-    const std::string stem = path.stem().string();
+[[nodiscard]] std::string idFromFileName(std::string_view path) {
+    const std::string stem = std::filesystem::path{path}.stem().string();
     if (stem.size() > blueprint::kUnitSuffix.size()) {
         return stem.substr(0, stem.size() - blueprint::kUnitSuffix.size());
     }
@@ -110,7 +111,17 @@ constexpr float kAnyDepthElmos = 100000.0f;
 } // namespace
 
 std::expected<unitdef::UnitDef, lua::ParseError> loadFile(const std::filesystem::path& path) {
-    auto parsed = lua::parseTableFile(path.string());
+    std::ifstream in{path, std::ios::binary};
+    if (!in) {
+        return std::unexpected{lua::ParseError{"cannot open \"" + path.string() + "\"", 0}};
+    }
+    const std::string source{std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
+    return load(source, path.string());
+}
+
+std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
+                                                      std::string_view vfsPath) {
+    auto parsed = lua::parseTable(source);
     if (!parsed) {
         return std::unexpected{parsed.error()};
     }
@@ -120,7 +131,7 @@ std::expected<unitdef::UnitDef, lua::ParseError> loadFile(const std::filesystem:
     }
 
     unitdef::UnitDef def;
-    def.name = idFromFileName(path);
+    def.name = idFromFileName(vfsPath);
 
     // --- physics -----------------------------------------------------------
     //
@@ -217,6 +228,23 @@ std::expected<unitdef::UnitDef, lua::ParseError> loadFile(const std::filesystem:
     }
 
     return def;
+}
+
+std::string resolveMeshInVfs(const unitdef::UnitDef& def, std::string_view blueprintVfsPath,
+                             const vfs::Vfs& content, std::size_t level) {
+    // A `MeshName` is a VFS path already, so it needs no root and no joining —
+    // which is what it was all along. Only the filesystem form has to be told where
+    // the game is, because an extracted tree is not the game's own namespace.
+    const std::string candidate =
+        def.modelPath.empty()
+            ? blueprint::meshBeside(blueprintVfsPath, blueprint::kUnitSuffix, level)
+                  .generic_string()
+            : def.modelPath;
+
+    if (candidate.empty() || !content.contains(candidate)) {
+        return {};
+    }
+    return candidate;
 }
 
 std::filesystem::path resolveMesh(const unitdef::UnitDef& def,

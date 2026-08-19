@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/Error.hpp"
+#include "core/vfs/Vfs.hpp"
 
 #include <expected>
 #include <limits>
@@ -123,5 +124,15 @@ struct Blueprint {
 /// prop with a finer level and no coarser one is still a prop.
 [[nodiscard]] std::expected<Blueprint, MapError> loadFile(
     const std::filesystem::path& root, std::string_view gameRelativePath);
+
+/// The same, from mounted content rather than an extracted tree — the form the app
+/// uses (core/vfs/Vfs.hpp).
+///
+/// Every path this yields is a VFS path, so a caller must read the meshes and
+/// textures back through the same Vfs rather than off a disk. That is the one thing
+/// the two forms do not share, and it is why they are separate functions instead of
+/// one with a flag.
+[[nodiscard]] std::expected<Blueprint, MapError> loadFromContent(
+    const vfs::Vfs& content, std::string_view gameRelativePath);
 
 } // namespace rm::prop

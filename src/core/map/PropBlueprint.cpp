@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cctype>
 
+#include <fstream>
 #include <string>
 #include <utility>
 
@@ -50,13 +51,20 @@ namespace {
     return Effect::None;
 }
 
-} // namespace
-
-std::expected<Blueprint, MapError> loadFile(const std::filesystem::path& root,
-                                            std::string_view gameRelativePath) {
-    const std::filesystem::path path = root / withoutLeadingSlash(gameRelativePath);
-
-    const auto table = lua::parseTableFile(path.string());
+// The reader proper, over two things that differ between a real disk and mounted
+// content and NOTHING else: whether a path names something readable, and how a
+// game-relative path becomes one this caller can use.
+//
+// A template rather than std::function because this runs 207 times per map load and
+// the two lambdas are known at each call site — and because the alternative was two
+// copies of eighty lines that resolve LOD meshes, albedos, normals and cutoffs, which
+// is precisely the duplication that lets one copy quietly grow a bug the other does
+// not have.
+template <typename Exists, typename FromGamePath>
+[[nodiscard]] std::expected<Blueprint, MapError> parseBlueprint(
+    std::string_view source, std::string_view gameRelativePath,
+    const std::filesystem::path& path, Exists exists, FromGamePath fromGamePath) {
+    const auto table = lua::parseTable(source);
     if (!table) {
         // Covers both a file that is not there and one that is not data — the
         // reader reports the second with a line number, which is the part worth
@@ -78,7 +86,6 @@ std::expected<Blueprint, MapError> loadFile(const std::filesystem::path& root,
     // and how far out each is the right one to draw. `LODs` is a Lua array, so its
     // entries are positional and land in `items`, and they run finest-first.
     const lua::Value* lods = table->path("Display", "Mesh", "LODs");
-    std::error_code ec;
 
     for (std::size_t level = 0; lods != nullptr && level < lods->items.size(); ++level) {
         // MeshName, when the blueprint states one: a path inside the game's virtual
@@ -89,11 +96,11 @@ std::expected<Blueprint, MapError> loadFile(const std::filesystem::path& root,
         std::filesystem::path mesh;
         if (const std::optional<std::string_view> named =
                 lods->items[level].stringAt("MeshName")) {
-            mesh = root / withoutLeadingSlash(*named);
+            mesh = fromGamePath(*named);
         } else {
             mesh = blueprint::meshBeside(path, blueprint::kPropSuffix, level);
         }
-        if (mesh.empty() || !std::filesystem::is_regular_file(mesh, ec)) {
+        if (mesh.empty() || !exists(mesh)) {
             // Ends the list rather than failing: the table describes more levels
             // than the archive ships in a few cases, and a prop with a fine level
             // and no coarse one is still a prop. Level 0 missing is a different
@@ -113,7 +120,7 @@ std::expected<Blueprint, MapError> loadFile(const std::filesystem::path& root,
             // Named relative to the blueprint's own directory, not to the game
             // root — the LOD table gives a bare file name.
             const std::filesystem::path texture = path.parent_path() / *albedo;
-            if (std::filesystem::is_regular_file(texture, ec)) {
+            if (exists(texture)) {
                 lod.albedo = texture;
             }
         }
@@ -123,7 +130,7 @@ std::expected<Blueprint, MapError> loadFile(const std::filesystem::path& root,
         if (const std::optional<std::string_view> normals =
                 lods->items[level].stringAt("NormalsName")) {
             const std::filesystem::path texture = path.parent_path() / *normals;
-            if (std::filesystem::is_regular_file(texture, ec)) {
+            if (exists(texture)) {
                 lod.normals = texture;
             }
         }
@@ -171,6 +178,51 @@ std::expected<Blueprint, MapError> loadFile(const std::filesystem::path& root,
     }
 
     return blueprint;
+}
+
+} // namespace
+
+std::expected<Blueprint, MapError> loadFile(const std::filesystem::path& root,
+                                            std::string_view gameRelativePath) {
+    const std::filesystem::path path = root / withoutLeadingSlash(gameRelativePath);
+
+    std::ifstream in{path, std::ios::binary};
+    if (!in) {
+        return fail(MapError::Code::BadHeader,
+                    "prop blueprint \"" + std::string{gameRelativePath} + "\" not read: cannot"
+                        " open " + path.string());
+    }
+    const std::string source{std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
+
+    std::error_code ec;
+    return parseBlueprint(
+        source, gameRelativePath, path,
+        [&ec](const std::filesystem::path& candidate) {
+            return std::filesystem::is_regular_file(candidate, ec);
+        },
+        [&root](std::string_view gamePath) {
+            return root / withoutLeadingSlash(gamePath);
+        });
+}
+
+std::expected<Blueprint, MapError> loadFromContent(const vfs::Vfs& content,
+                                                   std::string_view gameRelativePath) {
+    const auto bytes = content.read(gameRelativePath);
+    if (!bytes) {
+        return fail(MapError::Code::BadHeader,
+                    "prop blueprint \"" + std::string{gameRelativePath}
+                        + "\" is not in the mounted content");
+    }
+    const std::string source{reinterpret_cast<const char*>(bytes->data()), bytes->size()};
+
+    // The VFS speaks game paths natively, so the join is the identity and the
+    // blueprint's own path needs no rooting — which is what a game path was for.
+    return parseBlueprint(
+        source, gameRelativePath, std::filesystem::path{gameRelativePath},
+        [&content](const std::filesystem::path& candidate) {
+            return content.contains(candidate.generic_string());
+        },
+        [](std::string_view gamePath) { return std::filesystem::path{gamePath}; });
 }
 
 } // namespace rm::prop

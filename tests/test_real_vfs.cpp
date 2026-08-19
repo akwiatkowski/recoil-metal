@@ -4,8 +4,11 @@
 // `units.scd` and `env.scd` where they lie — 1.06 GiB and 1.29 GiB — and asks for
 // content by the paths the blueprints themselves use. If it passes, nothing in
 // this repo needs a Python one-liner to see the game's content.
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include "core/model/Scm.hpp"
+#include "core/unit/UnitBlueprint.hpp"
 #include "core/vfs/Vfs.hpp"
 
 #include <cstdlib>
@@ -102,4 +105,60 @@ TEST_CASE("mounting the whole gamedata directory gives one namespace", "[corpus]
     const auto maps = vfs.list("/", ".scmap");
     CHECK(maps.size() == 1);
     CHECK(maps.front() == "/lua/AI/OpAI/OpAIMap.scmap");
+}
+
+TEST_CASE("a unit is read end to end out of the archives", "[corpus]") {
+    const std::filesystem::path units = gamedata() / "units.scd";
+    if (!std::filesystem::exists(units)) {
+        SKIP("no retail install at " + gamedata().string());
+    }
+
+    rm::vfs::Vfs vfs;
+    REQUIRE(vfs.mountArchive(units));
+
+    // The whole chain the app needs, with nothing extracted: blueprint, then the
+    // mesh it does not name, then the textures neither of them names.
+    const auto source = vfs.read("/units/UEL0201/UEL0201_unit.bp");
+    REQUIRE(source.has_value());
+
+    const std::string text{reinterpret_cast<const char*>(source->data()), source->size()};
+    const auto def = rm::unitbp::load(text, "/units/UEL0201/UEL0201_unit.bp");
+    REQUIRE(def.has_value());
+    CHECK(def->name == "UEL0201");
+    CHECK(def->speedElmosPerSecond == Catch::Approx(27.2f));
+    CHECK(def->meshToElmos == Catch::Approx(0.56f));
+
+    const std::string mesh = rm::unitbp::resolveMeshInVfs(*def, "/units/UEL0201/UEL0201_unit.bp", vfs);
+    REQUIRE_FALSE(mesh.empty());
+
+    const auto meshBytes = vfs.read(mesh);
+    REQUIRE(meshBytes.has_value());
+    const auto model = rm::scm::load(*meshBytes);
+    REQUIRE(model.has_value());
+    CHECK(model->vertices.size() == 554);
+
+    // Level 1 exists for this unit and is coarser, which is what LOD switching will
+    // need. Level 5 does not, and comes back empty rather than falling back to a
+    // level the blueprint never described.
+    const std::string coarse =
+        rm::unitbp::resolveMeshInVfs(*def, "/units/UEL0201/UEL0201_unit.bp", vfs, 1);
+    REQUIRE_FALSE(coarse.empty());
+    const auto coarseModel = rm::scm::load(*vfs.read(coarse));
+    REQUIRE(coarseModel.has_value());
+    CHECK(coarseModel->vertices.size() < model->vertices.size());
+
+    CHECK(rm::unitbp::resolveMeshInVfs(*def, "/units/UEL0201/UEL0201_unit.bp", vfs, 5).empty());
+
+    // And every blueprint in the archive parses from bytes, which is the claim that
+    // makes the extraction step retirable.
+    std::size_t read = 0;
+    for (const std::string& path : vfs.list("/units", "_unit.bp")) {
+        const auto bytes = vfs.read(path);
+        REQUIRE(bytes.has_value());
+        const std::string body{reinterpret_cast<const char*>(bytes->data()), bytes->size()};
+        if (rm::unitbp::load(body, path)) {
+            ++read;
+        }
+    }
+    CHECK(read == 568);
 }

@@ -2,9 +2,13 @@
 
 #include "core/lua/LuaTable.hpp"
 #include "core/unit/UnitDef.hpp"
+#include "core/vfs/Vfs.hpp"
 
+#include <cstddef>
 #include <expected>
 #include <filesystem>
+#include <string>
+#include <string_view>
 
 namespace rm::unitbp {
 
@@ -38,6 +42,30 @@ namespace rm::unitbp {
 // a field here should mean something reads it.
 [[nodiscard]] std::expected<unitdef::UnitDef, lua::ParseError> loadFile(
     const std::filesystem::path& path);
+
+/// The same, from bytes already in hand, with the unit's id taken from `vfsPath`.
+///
+/// The form the app uses, because content comes out of a `.scd` rather than off a
+/// disk (core/vfs/Vfs.hpp). The path is needed even though the source is not read
+/// from it: no blueprint states its own id, so the NAME is the only place it comes
+/// from, and a reader handed bytes alone could not tell UEL0201 from UEL0105.
+[[nodiscard]] std::expected<unitdef::UnitDef, lua::ParseError> load(
+    std::string_view source, std::string_view vfsPath);
+
+/// The VFS path of a unit's mesh at `level`, or empty when the VFS has none.
+///
+/// The VFS counterpart of `resolveMesh`, and it needs no root: a `MeshName` is
+/// already a VFS path, which is what it was all along — the filesystem form has to
+/// be told where the game is because an extracted tree is not the game's own
+/// namespace.
+///
+/// `level` applies to the CONVENTIONAL form only. A `MeshName` names one particular
+/// mesh and the 25 that use it all name a `_lod0`, so a blueprint that states its
+/// geometry outright has exactly the one level whatever is asked for — which is the
+/// honest answer rather than a coarser mesh invented for it.
+[[nodiscard]] std::string resolveMeshInVfs(const unitdef::UnitDef& def,
+                                           std::string_view blueprintVfsPath,
+                                           const vfs::Vfs& content, std::size_t level = 0);
 
 /// Finds a unit's geometry on disk, or returns empty when it has none.
 ///

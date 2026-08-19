@@ -217,13 +217,14 @@ struct LoadedMap {
     std::optional<rm::Renderer::Environment> environment;
 };
 
-// Where Supreme Commander's ground layer textures live once extracted.
+// Where Supreme Commander's ground layer textures live when they have been
+// extracted rather than mounted.
 //
-// A .scmap names its strata as game-relative paths ("/env/Evergreen/Layers/...")
-// into env.scd, a 1.3 GB ZIP. Rather than add a ZIP reader, the 184 textures the
-// stock maps actually reference — 65 MiB of the archive's 1.15 GiB of DDS — are
-// extracted once, mirroring the call the model path already made for units.scd.
-// See README for the extraction command.
+// A `.scmap` names its strata as game-relative paths ("/env/Evergreen/Layers/...")
+// into env.scd, and the FIRST answer to that was to extract the 184 textures the
+// stock maps reference and read them off a disk. Mounting the archive is the right
+// answer and is what `--gamedata` does now; this remains the fallback for a command
+// line that names no content, so the extraction the README documents keeps working.
 constexpr const char* kFaEnvDir = "projects/llm/input/faf";
 
 /// The decoded ground splat: layers in blend order, plus the two weight masks.
@@ -238,7 +239,8 @@ struct LoadedSplat {
 /// Returns nullopt when the base layer or either mask is missing — a splat
 /// without those would render as something plausible rather than as something
 /// absent, and the terrain-type placeholder is the honest fallback.
-[[nodiscard]] std::optional<LoadedSplat> resolveSplat(const rm::scmap::Map& map) {
+[[nodiscard]] std::optional<LoadedSplat> resolveSplat(const rm::scmap::Map& map,
+                                                     const rm::vfs::Vfs& content) {
     const char* home = std::getenv("HOME");
     const std::filesystem::path root =
         std::filesystem::path{home == nullptr ? "" : home} / kFaEnvDir;
@@ -251,11 +253,25 @@ struct LoadedSplat {
     // Paths are absolute within the game's virtual filesystem, so the leading
     // slash has to go before joining, or the concatenation resolves to the real
     // filesystem root.
-    const auto resolve = [&root](const rm::scmap::TextureRef& ref, const char* what,
-                                 std::size_t slot) -> std::optional<rm::dds::Texture> {
+    // The MOUNTED CONTENT first, since a `.scmap`'s stratum path is a VFS path and
+    // the VFS is the thing that speaks that language. Falling back to an extracted
+    // tree keeps every command line that predates `--gamedata` working.
+    const auto resolve = [&root, &content](const rm::scmap::TextureRef& ref, const char* what,
+                                           std::size_t slot) -> std::optional<rm::dds::Texture> {
         if (ref.empty()) {
             return std::nullopt;
         }
+
+        if (const auto bytes = content.read(ref.path)) {
+            auto texture = rm::dds::load(*bytes);
+            if (texture) {
+                return std::move(*texture);
+            }
+            std::fprintf(stderr, "  splat %s %zu (%s) will not decode: %s\n", what, slot,
+                         ref.path.c_str(), texture.error().message.c_str());
+            return std::nullopt;
+        }
+
         std::string relative = ref.path;
         if (!relative.empty() && relative.front() == '/') {
             relative.erase(0, 1);
@@ -325,7 +341,8 @@ struct LoadedSplat {
 /// No mapinfo.lua equivalent and no start positions: those live in the map's
 /// `_scenario.lua`, which is a later milestone. Units therefore scatter rather
 /// than spawning at bases on these maps.
-[[nodiscard]] std::optional<LoadedMap> resolveScmap(const std::string& path) {
+[[nodiscard]] std::optional<LoadedMap> resolveScmap(const std::string& path,
+                                                    const rm::vfs::Vfs& content) {
     auto map = rm::scmap::loadFile(path);
     if (!map) {
         std::fprintf(stderr, "failed to load \"%s\": %s\n", path.c_str(),
@@ -397,7 +414,7 @@ struct LoadedSplat {
     // The ground splat. SupCom bakes no ground image: the map names nine tiled
     // layers that live in env.scd and embeds only the two masks that weight
     // them, so this assembles a recipe rather than loading a picture.
-    if (auto splat = resolveSplat(*map)) {
+    if (auto splat = resolveSplat(*map, content)) {
         loaded.splat = std::move(splat->layers);
         loaded.splatMaskA = std::move(splat->maskA);
         loaded.splatMaskB = std::move(splat->maskB);
@@ -451,7 +468,8 @@ struct LoadedSplat {
 /// costs four bytes and means neither needs its own flag — and everything
 /// downstream, renderer included, cannot tell which one it got. That is the
 /// whole return on having built HeightField format-agnostic at milestone 2.
-[[nodiscard]] std::optional<LoadedMap> resolveMap(int argc, const char* argv[]) {
+[[nodiscard]] std::optional<LoadedMap> resolveMap(int argc, const char* argv[],
+                                                 const rm::vfs::Vfs& content) {
     if (argc < 2) {
         std::printf("no map given, rendering a procedural field\n"
                     "  usage: recoil-metal <path/to/map.smf | path/to/map.scmap>\n");
@@ -464,7 +482,7 @@ struct LoadedSplat {
     const std::string path = argv[1];
 
     if (rm::scmap::looksLikeScmap(readMagic(path, sizeof(rm::scmap::kMagic)))) {
-        return resolveScmap(path);
+        return resolveScmap(path, content);
     }
 
     auto field = resolveSmfHeightField(path);
@@ -559,6 +577,48 @@ public:
         return index;
     }
 
+    /// The same, for a texture inside the mounted content.
+    ///
+    /// Keyed on the VFS path, which cannot collide with a filesystem key: one begins
+    /// with a slash and names the game's namespace, the other names this disk. A
+    /// texture reached both ways would upload twice, which is a waste rather than a
+    /// bug, and no scene reaches one both ways.
+    [[nodiscard]] int resolve(const rm::vfs::Vfs& content, const std::string& vfsPath,
+                              const char* slot) {
+        if (vfsPath.empty()) {
+            return -1;
+        }
+        const auto known = indexByPath_.find(vfsPath);
+        if (known != indexByPath_.end()) {
+            return known->second;
+        }
+
+        const auto bytes = content.read(vfsPath);
+        if (!bytes) {
+            std::fprintf(stderr, "  no %s texture (%s): not in the mounted content\n", slot,
+                         vfsPath.c_str());
+            indexByPath_.emplace(vfsPath, -1);
+            return -1;
+        }
+
+        auto texture = rm::dds::load(*bytes);
+        if (!texture) {
+            std::fprintf(stderr, "  no %s texture (%s): %s\n", slot, vfsPath.c_str(),
+                         texture.error().message.c_str());
+            indexByPath_.emplace(vfsPath, -1);
+            return -1;
+        }
+
+        std::printf("  %s %s: %dx%d, %d mips\n", slot,
+                    std::filesystem::path{vfsPath}.filename().string().c_str(), texture->width,
+                    texture->height, texture->mipLevels);
+
+        const auto index = static_cast<int>(textures_.size());
+        textures_.push_back(std::move(*texture));
+        indexByPath_.emplace(vfsPath, index);
+        return index;
+    }
+
     [[nodiscard]] std::span<const rm::dds::Texture> all() const noexcept { return textures_; }
     [[nodiscard]] std::size_t size() const noexcept { return textures_.size(); }
 
@@ -611,7 +671,8 @@ struct PropScene {
 /// texture and one instanced draw. That grouping is the whole reason this is
 /// affordable: the busiest stock map places 46 971 props, and one draw each would
 /// be more draw calls than everything else in the frame put together.
-[[nodiscard]] PropScene loadProps(const LoadedMap& map, const std::filesystem::path& root) {
+[[nodiscard]] PropScene loadProps(const LoadedMap& map, const std::filesystem::path& root,
+                                  const rm::vfs::Vfs& content) {
     PropScene scene;
     if (map.props.empty()) {
         return scene;
@@ -639,7 +700,12 @@ struct PropScene {
     std::size_t levelCount = 0;
 
     for (auto& [blueprint, instances] : byBlueprint) {
-        const auto info = rm::prop::loadFile(root, blueprint);
+        // The MOUNTED CONTENT first, and the extracted tree only when nothing is
+        // mounted — the same order the splat uses, and for the same reason: a
+        // blueprint path is a VFS path, so the VFS is what natively speaks it.
+        const bool fromContent = content.contains(blueprint);
+        const auto info = fromContent ? rm::prop::loadFromContent(content, blueprint)
+                                      : rm::prop::loadFile(root, blueprint);
         if (!info) {
             if (info.error().code == rm::MapError::Code::MissingMesh) {
                 ++emitters;
@@ -670,7 +736,21 @@ struct PropScene {
         // drawn at is decided per frame from the camera, so all of them are loaded.
         std::vector<rm::PropLevel> levels;
         for (const rm::prop::BlueprintLod& lod : info->lods) {
-            auto model = rm::scm::loadFile(lod.mesh);
+            // A path from `loadFromContent` is a VFS path and must be read back
+            // through the VFS; one from `loadFile` is a real file. The blueprint
+            // reader that produced it is what says which.
+            auto model = [&] {
+                if (!fromContent) {
+                    return rm::scm::loadFile(lod.mesh);
+                }
+                const auto bytes = content.read(lod.mesh.generic_string());
+                if (!bytes) {
+                    return std::expected<rm::Model, rm::MapError>{std::unexpect,
+                        rm::MapError{rm::MapError::Code::Truncated,
+                                     "not in the mounted content"}};
+                }
+                return rm::scm::load(*bytes);
+            }();
             if (!model) {
                 std::fprintf(stderr, "  prop mesh %s: %s\n",
                              lod.mesh.filename().string().c_str(),
@@ -680,8 +760,14 @@ struct PropScene {
             scene.models.push_back(std::move(*model));
             levels.push_back(rm::PropLevel{
                 .model = &scene.models.back(),
-                .albedo = scene.textures.resolve(lod.albedo, "prop albedo"),
-                .normals = scene.textures.resolve(lod.normals, "prop normals"),
+                .albedo = fromContent ? scene.textures.resolve(content,
+                                                               lod.albedo.generic_string(),
+                                                               "prop albedo")
+                                      : scene.textures.resolve(lod.albedo, "prop albedo"),
+                .normals = fromContent ? scene.textures.resolve(content,
+                                                                lod.normals.generic_string(),
+                                                                "prop normals")
+                                       : scene.textures.resolve(lod.normals, "prop normals"),
                 // The blueprint's own cutoff: how far out this level is the right
                 // one, and for the coarsest, how far out the prop is drawn at all.
                 .cutoffElmos = lod.cutoffElmos,
@@ -841,6 +927,23 @@ struct PropScene {
         return rm::scm::loadFile(path);
     }
     return rm::s3o::loadFile(path);
+}
+
+/// The same sniff, on bytes already read — the form the VFS path uses.
+///
+/// Both loaders have taken a byte span since they were written, which is why
+/// content arriving from an archive instead of a disk costs one function here and
+/// nothing at all in `core/`.
+[[nodiscard]] std::expected<rm::Model, rm::MapError> loadModelBytes(
+    std::span<const std::byte> bytes) {
+    if (bytes.size() < sizeof(rm::scm::kMagic)) {
+        return std::unexpected(
+            rm::MapError{rm::MapError::Code::Truncated, "model is too short to identify"});
+    }
+    if (std::memcmp(bytes.data(), rm::scm::kMagic, sizeof(rm::scm::kMagic)) == 0) {
+        return rm::scm::load(bytes);
+    }
+    return rm::s3o::load(bytes);
 }
 
 // Everything the renderer needs to draw units, owned in one place.
@@ -1069,6 +1172,113 @@ struct UnitOptions {
     return *def;
 }
 
+// A unit resolved out of the mounted content: everything `resolveUnits` needs, so
+// that the archive path and the filesystem path converge before the code that
+// places instances rather than branching all the way down it.
+struct VfsUnit {
+    rm::unitdef::UnitDef def;
+    rm::Model model;
+    std::string albedoPath;
+    std::string shadingPath;
+};
+
+/// A Supreme Commander texture beside a mesh, inside the mounted content.
+///
+/// `scmTexturePath` cannot serve this: it decides whether to strip a `_lod0` by
+/// asking the real filesystem whether the stripped file exists, which is a
+/// filesystem assumption living inside what is otherwise string work. Given a VFS
+/// path nothing exists on disk, so it kept the `_lod0` and looked for
+/// `UEL0201_lod0_Albedo.dds` — a name the archive does not contain.
+///
+/// The strip is right and the check is what has to move. Level 0 shares the unit's
+/// own textures (`UEL0201_Albedo.dds`) while every coarser level has its OWN
+/// (`UEL0201_lod1_Albedo.dds`), both of which the archive really carries — so the
+/// stripped spelling is tried first and the literal one second, and the content
+/// decides rather than the disk.
+[[nodiscard]] std::string scmTextureInVfs(const std::string& meshPath, const char* suffix,
+                                          const rm::vfs::Vfs& content) {
+    const std::filesystem::path path{meshPath};
+    const std::string stem = path.stem().string();
+    const std::string dir = path.parent_path().generic_string();
+
+    static constexpr std::string_view kLod0 = "_lod0";
+    if (stem.size() > kLod0.size()) {
+        std::string tail = stem.substr(stem.size() - kLod0.size());
+        std::transform(tail.begin(), tail.end(), tail.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        if (tail == kLod0) {
+            const std::string stripped =
+                dir + "/" + stem.substr(0, stem.size() - kLod0.size()) + suffix;
+            if (content.contains(stripped)) {
+                return stripped;
+            }
+        }
+    }
+
+    const std::string literal = dir + "/" + stem + suffix;
+    return content.contains(literal) ? literal : std::string{};
+}
+
+/// Reads a unit entirely out of the mounted content: blueprint, then the mesh it
+/// does not name, then the textures neither of them names.
+///
+/// This is the path a real game takes and the reason the VFS exists. Nothing is
+/// extracted, and the paths are the ones the content uses about itself.
+[[nodiscard]] std::optional<VfsUnit> resolveUnitFromContent(const std::string& blueprintPath,
+                                                            const rm::vfs::Vfs& content) {
+    const auto source = content.read(blueprintPath);
+    if (!source) {
+        return std::nullopt;
+    }
+
+    const std::string text{reinterpret_cast<const char*>(source->data()), source->size()};
+    const auto def = rm::unitbp::load(text, blueprintPath);
+    if (!def) {
+        std::fprintf(stderr, "unit blueprint \"%s\" not read: %s\n", blueprintPath.c_str(),
+                     def.error().message.c_str());
+        return std::nullopt;
+    }
+
+    const std::string meshPath = rm::unitbp::resolveMeshInVfs(*def, blueprintPath, content);
+    if (meshPath.empty()) {
+        std::fprintf(stderr, "unit \"%s\" has no mesh in the mounted content\n",
+                     def->name.c_str());
+        return std::nullopt;
+    }
+
+    const auto meshBytes = content.read(meshPath);
+    if (!meshBytes) {
+        return std::nullopt;
+    }
+    auto model = loadModelBytes(*meshBytes);
+    if (!model) {
+        std::fprintf(stderr, "failed to load mesh \"%s\": %s\n", meshPath.c_str(),
+                     model.error().message.c_str());
+        return std::nullopt;
+    }
+
+    std::printf("unit %s: %.0f elmos/s, %.2f rad/s, radius %.1f elmos, %.0f hp, %s\n",
+                def->name.c_str(), static_cast<double>(def->speedElmosPerSecond),
+                static_cast<double>(def->turnRateRadiansPerSecond),
+                static_cast<double>(def->collisionRadiusElmos), static_cast<double>(def->health),
+                rm::unitdef::travelsOnGround(def->motion) ? "on the ground"
+                : def->canFly                            ? "flying"
+                                                         : "not a ground mover");
+
+    // A mesh read from bytes has no file to take its name from, so it arrives
+    // nameless — and the name is what every log line and the batch report identify
+    // it by. The blueprint's id is the better answer anyway: it is what the rest of
+    // the content calls this unit.
+    model->name = def->name;
+
+    return VfsUnit{
+        .def = *def,
+        .model = std::move(*model),
+        .albedoPath = scmTextureInVfs(meshPath, kScmDiffuseSuffix, content),
+        .shadingPath = scmTextureInVfs(meshPath, kScmShadingSuffix, content),
+    };
+}
+
 /// Loads every requested model, resolves its textures, and places instances.
 ///
 /// The first model takes the map's start positions and fills the rest of its
@@ -1078,29 +1288,52 @@ struct UnitOptions {
 [[nodiscard]] UnitScene resolveUnits(std::span<const UnitOptions> requests,
                                      const rm::HeightField& field,
                                      std::span<const rm::mapinfo::StartPosition> starts,
-                                     float landAbove,
-                                     const rm::vfs::AssetSearch& search) {
+                                     float landAbove, const rm::vfs::AssetSearch& search,
+                                     const rm::vfs::Vfs& content) {
     UnitScene scene;
 
     for (std::size_t i = 0; i < requests.size(); ++i) {
         const UnitOptions& request = requests[i];
 
-        // `--units` takes either a model or a unit DEFINITION. A definition
-        // names its own model and brings the stats the game authored for it,
-        // which is the whole point: otherwise every unit moves at the one speed
-        // this engine used to hardcode.
-        std::filesystem::path modelPath = request.modelPath;
-        const std::optional<rm::unitdef::UnitDef> def =
-            resolveUnitDef(request.modelPath, search, modelPath);
-        if (request.modelPath.extension() == ".lua" && !def) {
-            continue;  // the definition said something that could not be honoured
+        // `--units` takes a model, a unit DEFINITION, or a blueprint inside the
+        // mounted content. A definition brings the stats the game authored for it,
+        // which is the whole point: otherwise every unit moves at the one speed this
+        // engine used to hardcode.
+        //
+        // THE CONTENT IS TRIED FIRST, because a path that resolves in the game's own
+        // namespace means the caller named game content and not a file that happens
+        // to sit at the same place on this disk. Nothing else distinguishes them: a
+        // VFS path is spelled like a path, deliberately.
+        const std::string requestedPath = request.modelPath.generic_string();
+        std::optional<VfsUnit> fromContent;
+        if (request.modelPath.extension() == ".bp" && content.contains(requestedPath)) {
+            fromContent = resolveUnitFromContent(requestedPath, content);
+            if (!fromContent) {
+                continue;  // the blueprint said something that could not be honoured
+            }
         }
 
-        auto model = loadModel(modelPath);
-        if (!model) {
-            std::fprintf(stderr, "failed to load model \"%s\": %s\n",
-                         modelPath.string().c_str(), model.error().message.c_str());
-            continue;  // one bad model should not cost the whole scene
+        std::filesystem::path modelPath = request.modelPath;
+        std::optional<rm::unitdef::UnitDef> def;
+        std::expected<rm::Model, rm::MapError> model{rm::Model{}};
+
+        if (fromContent) {
+            def = fromContent->def;
+            model = std::move(fromContent->model);
+        } else {
+            def = resolveUnitDef(request.modelPath, search, modelPath);
+            if ((request.modelPath.extension() == ".lua"
+                 || request.modelPath.extension() == ".bp")
+                && !def) {
+                continue;  // the definition said something that could not be honoured
+            }
+
+            model = loadModel(modelPath);
+            if (!model) {
+                std::fprintf(stderr, "failed to load model \"%s\": %s\n",
+                             modelPath.string().c_str(), model.error().message.c_str());
+                continue;  // one bad model should not cost the whole scene
+            }
         }
 
         const bool supCom = model->family == rm::Family::SupremeCommander;
@@ -1140,7 +1373,14 @@ struct UnitOptions {
         // unit in the fallback white, which reads as a missing texture in the
         // content rather than a wrong path here.
         const rm::TexturePair pair =
-            supCom ? rm::TexturePair{
+            fromContent
+                ? rm::TexturePair{
+                      .diffuse = scene.textures.resolve(content, fromContent->albedoPath,
+                                                        "albedo"),
+                      .shading = scene.textures.resolve(content, fromContent->shadingPath,
+                                                        "specTeam"),
+                  }
+            : supCom ? rm::TexturePair{
                          .diffuse = scene.textures.resolve(
                              scmTexturePath(modelPath, kScmDiffuseSuffix), "albedo"),
                          .shading = scene.textures.resolve(
@@ -1345,36 +1585,73 @@ struct ShotOptions {
     return requests;
 }
 
-/// Builds the asset search path from `--data-dir <dir>` and `--archive <sdz>`.
+/// Builds the asset search path from `--data-dir <dir>`.
 ///
-/// `.sdz` files are ZIP archives; they are extracted to a temporary directory
-/// and that directory is added to the search path. This keeps the existing
-/// loaders — which expect real filesystem paths — unchanged while still letting
-/// archived content load.
+/// The BAR path, which resolves by filename under real directories because that is
+/// how a `.s3o` names its textures. The Supreme Commander path goes through the VFS
+/// instead — see parseContent.
 [[nodiscard]] rm::vfs::AssetSearch parseAssetSearch(int argc, const char* argv[]) {
     rm::vfs::AssetSearch search;
 
     for (int i = 1; i + 1 < argc; ++i) {
-        const std::string arg = argv[i];
-        if (arg == "--data-dir") {
+        if (std::string{argv[i]} == "--data-dir") {
             search.addRoot(argv[i + 1]);
-        } else if (arg == "--archive") {
-            const std::filesystem::path archive = argv[i + 1];
-            const std::string stem = archive.stem().string();
-            const std::filesystem::path tmp =
-                std::filesystem::temp_directory_path() / ("recoil-metal-" + stem);
-            std::printf("extracting %s -> %s\n", archive.string().c_str(),
-                        tmp.string().c_str());
-            if (rm::vfs::extractZip(archive, tmp)) {
-                search.addRoot(tmp);
-            } else {
-                std::fprintf(stderr, "failed to extract archive %s\n",
-                             archive.string().c_str());
-            }
         }
     }
 
     return search;
+}
+
+/// Mounts the game's content: `--gamedata <dir>` for a whole install, `--archive
+/// <scd>` for one archive, `--data-dir <dir>` for a loose directory.
+///
+/// MOUNT ORDER IS PRIORITY, last wins (core/vfs/Vfs.hpp), and the command line's
+/// order is honoured verbatim so a mod can be layered over stock content by naming
+/// it second. `--gamedata` mounts every `.scd` it finds in name order, which is what
+/// the game does absent a mod list.
+///
+/// This replaced extracting archives to a temporary directory. That worked, and it
+/// is not what a game does: it duplicated 2.4 GiB for the two big archives, went
+/// stale whenever the install was patched, and could not express a mod at all, since
+/// a mod IS a layer rather than a set of files to merge.
+[[nodiscard]] rm::vfs::Vfs parseContent(int argc, const char* argv[]) {
+    rm::vfs::Vfs content;
+    std::size_t archives = 0;
+
+    for (int i = 1; i + 1 < argc; ++i) {
+        const std::string arg = argv[i];
+        if (arg == "--gamedata") {
+            std::vector<std::filesystem::path> found;
+            std::error_code ec;
+            for (const auto& item :
+                 std::filesystem::directory_iterator{std::filesystem::path{argv[i + 1]}, ec}) {
+                if (item.path().extension() == ".scd" || item.path().extension() == ".sdz") {
+                    found.push_back(item.path());
+                }
+            }
+            std::ranges::sort(found);  // the iterator promises no order; a mount is priority
+            for (const std::filesystem::path& archive : found) {
+                if (content.mountArchive(archive)) {
+                    ++archives;
+                } else {
+                    std::fprintf(stderr, "failed to mount %s\n", archive.string().c_str());
+                }
+            }
+        } else if (arg == "--archive") {
+            if (content.mountArchive(argv[i + 1])) {
+                ++archives;
+            } else {
+                std::fprintf(stderr, "failed to mount archive %s\n", argv[i + 1]);
+            }
+        } else if (arg == "--data-dir") {
+            content.mountDirectory(argv[i + 1]);
+        }
+    }
+
+    if (!content.empty()) {
+        std::printf("content: %zu archives, %zu files\n", archives, content.fileCount());
+    }
+    return content;
 }
 
 /// `--time <seconds>`: where in their animations to freeze the units.
@@ -1790,7 +2067,12 @@ namespace {
 
 int main(int argc, const char* argv[]) {
     @autoreleasepool {
-        const auto map = resolveMap(argc, argv);
+        // The content is mounted BEFORE the map, because the map's ground layers
+        // and props are content too — a `.scmap` names its strata as VFS paths and
+        // has always needed somewhere to look them up.
+        const rm::vfs::Vfs content = parseContent(argc, argv);
+
+        const auto map = resolveMap(argc, argv, content);
         if (!map) {
             return 1;
         }
@@ -1804,8 +2086,8 @@ int main(int argc, const char* argv[]) {
         // Scattering above 0 on a FA map drowns most of the units.
         // Not const: the windowed path steps this scene every frame.
         UnitScene units = resolveUnits(unitRequests, map->field, map->starts,
-                                       map->hasWater ? map->waterLevel : 0.0f,
-                                       assetSearch);
+                                       map->hasWater ? map->waterLevel : 0.0f, assetSearch,
+                                       content);
 
         // Tilt every unit onto its slope once, here, because the headless paths
         // never tick the sim: a screenshot of a scattered scene would otherwise
@@ -1872,7 +2154,8 @@ int main(int argc, const char* argv[]) {
         const PropScene props =
             settings.props ? loadProps(*map,
                                        std::filesystem::path{propHome == nullptr ? "" : propHome}
-                                           / kFaEnvDir)
+                                           / kFaEnvDir,
+                                       content)
                            : PropScene{};
 
         // Held here rather than inside march(): the capture path below uploads
