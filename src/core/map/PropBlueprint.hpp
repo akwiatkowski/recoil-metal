@@ -6,6 +6,7 @@
 #include <limits>
 #include <filesystem>
 #include <string_view>
+#include <vector>
 
 namespace rm::prop {
 
@@ -20,13 +21,27 @@ namespace rm::prop {
 // Everything else in a blueprint is for the game rather than the renderer: audio
 // cues, reclaim economy, health, collision size, the Lua script class. Read and
 // ignored.
-struct Blueprint {
-    /// The mesh, as an absolute path. Never empty on success.
-    std::filesystem::path mesh;
+// One detail level of a prop: the mesh to draw, what to paint it with, and how far
+// out it is the right level to use.
+struct BlueprintLod {
+    std::filesystem::path mesh;    ///< absolute; never empty
+    std::filesystem::path albedo;  ///< absolute, or empty when none resolved
+    float cutoffElmos = std::numeric_limits<float>::infinity();
+};
 
-    /// The albedo texture, absolute. May be empty: a blueprint can name none,
-    /// and the renderer has a defined fallback for that.
-    std::filesystem::path albedo;
+struct Blueprint {
+    /// The levels, FINEST FIRST, never empty on success.
+    ///
+    /// Most props have one. The ones that matter have three: every heavily-placed
+    /// tree in the corpus declares cutoffs like 30 / 175 / 300 ogrids, which is
+    /// where the saving is, because those are the blueprints placed ten thousand
+    /// times. Boulders and the like declare a single level and a near cutoff, so
+    /// they are culled outright before detail would have mattered.
+    ///
+    /// The LOD TABLE is the authority on how many levels there are, not the files
+    /// on disk: 14 blueprints ship four meshes while declaring fewer entries, and
+    /// drawing a level the blueprint does not describe would be inventing content.
+    std::vector<BlueprintLod> lods;
 
     /// The scale the mesh is authored to need.
     ///
@@ -38,20 +53,11 @@ struct Blueprint {
     /// big, which reads as a units bug in the mesh loader.
     float uniformScale = 1.0f;
 
-    /// Beyond this distance from the camera the prop is not drawn at all, in
-    /// elmos. Infinity when the blueprint states no cutoff.
-    ///
-    /// The game's own answer to "how much scenery is worth drawing", and it is
-    /// GRADED per prop: a blueprint's LOD table gives a cutoff distance per level,
-    /// and the furthest is where the engine stops drawing it. Across the 335
-    /// shipped blueprints those run from 10 to 1000 — a shrub disappears at 100
-    /// where a big tree survives to 1000 — so zooming out thins the small detail
-    /// first and keeps the landmarks, which is what a person would ask for and
-    /// happens to be free because the numbers are already in the file.
-    ///
-    /// Stated in ogrids by the file, converted here, for the same reason the
-    /// positions are: everything downstream of the loaders is in elmos.
-    float drawDistanceElmos = std::numeric_limits<float>::infinity();
+    /// Beyond this distance the prop is not drawn at all: the coarsest level's
+    /// cutoff, which is the same thing said from the other end.
+    [[nodiscard]] float drawDistanceElmos() const noexcept {
+        return lods.empty() ? 0.0f : lods.back().cutoffElmos;
+    }
 };
 
 /// Reads a blueprint, resolving its mesh and texture against the extracted game
@@ -61,13 +67,16 @@ struct Blueprint {
 /// game's virtual filesystem, so it begins with a slash that has to go before
 /// joining, or the result resolves to the real filesystem root.
 ///
-/// The MESH IS NOT NAMED IN THE FILE. A blueprint's LOD table gives the textures
+/// THE MESHES ARE NOT NAMED IN THE FILE. A blueprint's LOD table gives the textures
 /// and the cutoff distances but never the geometry; the engine finds it by
-/// convention, `X_prop.bp` beside `X_lod0.scm`. That resolves 199 of the 207
-/// blueprints the stock maps name. The other eight are particle emitters —
-/// lava steam, blowing sand, underwater bubbles, water mist — which have no mesh
-/// because they are not geometry, and they come back as a MissingMesh error
-/// rather than as a failure to parse.
+/// convention, `X_prop.bp` beside `X_lod0.scm`, `X_lod1.scm` and so on, one per
+/// entry in the table. That resolves 199 of the 207 blueprints the stock maps name.
+/// The other eight are particle emitters — lava steam, blowing sand, underwater
+/// bubbles, water mist — which have no mesh because they are not geometry, and they
+/// come back as a MissingMesh error rather than as a failure to parse.
+///
+/// A level whose mesh is missing ends the list rather than failing the blueprint: a
+/// prop with a finer level and no coarser one is still a prop.
 [[nodiscard]] std::expected<Blueprint, MapError> loadFile(
     const std::filesystem::path& root, std::string_view gameRelativePath);
 

@@ -41,7 +41,8 @@ namespace {
 /// in lower case while the archive holds `env/Tropical/Props/Trees/Palm02_s4_lod0.scm`.
 /// macOS's default filesystem is case-insensitive so the JOIN survives that, but
 /// a string comparison on the suffix would not.
-[[nodiscard]] std::filesystem::path meshBeside(const std::filesystem::path& blueprintPath) {
+[[nodiscard]] std::filesystem::path meshBeside(const std::filesystem::path& blueprintPath,
+                                              std::size_t level) {
     const std::string stem = blueprintPath.stem().string();  // drops ".bp"
     constexpr std::string_view kSuffix = "_prop";
 
@@ -58,7 +59,7 @@ namespace {
     }
 
     const std::string base = stem.substr(0, stem.size() - kSuffix.size());
-    return blueprintPath.parent_path() / (base + "_lod0.scm");
+    return blueprintPath.parent_path() / (base + "_lod" + std::to_string(level) + ".scm");
 }
 
 } // namespace
@@ -79,60 +80,74 @@ std::expected<Blueprint, MapError> loadFile(const std::filesystem::path& root,
 
     Blueprint blueprint;
 
-    // A mesh is what makes a prop drawable, so its absence decides the outcome
-    // before anything else is read.
-    const std::filesystem::path mesh = meshBeside(path);
-    std::error_code ec;
-    if (mesh.empty() || !std::filesystem::is_regular_file(mesh, ec)) {
-        return fail(MapError::Code::MissingMesh,
-                    "prop blueprint \"" + std::string{gameRelativePath}
-                        + "\" names no mesh (an emitter, or content not extracted)");
-    }
-    blueprint.mesh = mesh;
-
     if (const std::optional<double> scale = table->path("Display")
                                                 ? table->path("Display")->numberAt("UniformScale")
                                                 : std::nullopt) {
         blueprint.uniformScale = static_cast<float>(*scale);
     }
 
-    // The LOD table, which carries two things this renderer wants and one it does
-    // not. `LODs` is a Lua array, so its entries are positional and land in
-    // `items`, and they run finest-first.
-    if (const lua::Value* lods = table->path("Display", "Mesh", "LODs");
-        lods != nullptr && !lods->items.empty()) {
-        // The FIRST entry's albedo, because only the mesh's LOD 0 is ever drawn
-        // here — pairing it with a later LOD's texture would put a low-resolution
-        // image on full-resolution geometry, subtly soft with nothing on screen to
-        // say why.
+    // The LOD table decides how many levels there are, what each is painted with,
+    // and how far out each is the right one to draw. `LODs` is a Lua array, so its
+    // entries are positional and land in `items`, and they run finest-first.
+    const lua::Value* lods = table->path("Display", "Mesh", "LODs");
+    std::error_code ec;
+
+    for (std::size_t level = 0; lods != nullptr && level < lods->items.size(); ++level) {
+        const std::filesystem::path mesh = meshBeside(path, level);
+        if (mesh.empty() || !std::filesystem::is_regular_file(mesh, ec)) {
+            // Ends the list rather than failing: the table describes more levels
+            // than the archive ships in a few cases, and a prop with a fine level
+            // and no coarse one is still a prop. Level 0 missing is a different
+            // matter and is caught below.
+            break;
+        }
+
+        BlueprintLod lod;
+        lod.mesh = mesh;
+
+        // Each level names its own albedo — a distant tree gets a smaller one — so
+        // this is read per level rather than taken from the first. Pairing level 2's
+        // geometry with level 0's texture is the wrong way round of the mistake that
+        // used to be here, and just as invisible.
         if (const std::optional<std::string_view> albedo =
-                lods->items.front().stringAt("AlbedoName")) {
+                lods->items[level].stringAt("AlbedoName")) {
             // Named relative to the blueprint's own directory, not to the game
             // root — the LOD table gives a bare file name.
             const std::filesystem::path texture = path.parent_path() / *albedo;
             if (std::filesystem::is_regular_file(texture, ec)) {
-                blueprint.albedo = texture;
+                lod.albedo = texture;
             }
         }
 
-        // ...and the FURTHEST cutoff, which is where the engine stops drawing the
-        // prop at all. A non-positive cutoff means no limit — only the four
-        // DevTest blueprints do that, and no stock map references them, but
-        // reading -1 as "cull at -8 elmos" would make them permanently invisible
-        // instead of permanently visible.
-        float furthest = 0.0f;
-        bool unlimited = false;
-        for (const lua::Value& lod : lods->items) {
-            const std::optional<double> cutoff = lod.numberAt("LODCutoff");
-            if (!cutoff || *cutoff <= 0.0) {
-                unlimited = true;
-                break;
-            }
-            furthest = std::max(furthest, static_cast<float>(*cutoff));
+        // A non-positive cutoff means no limit — only the four DevTest blueprints
+        // do that, and no stock map references them, but reading -1 as "stop
+        // drawing at -8 elmos" would make them permanently invisible instead of
+        // permanently visible.
+        const std::optional<double> cutoff = lods->items[level].numberAt("LODCutoff");
+        if (cutoff && *cutoff > 0.0) {
+            lod.cutoffElmos = static_cast<float>(*cutoff) * scmap::kElmosPerOgrid;
         }
-        if (!unlimited && furthest > 0.0f) {
-            blueprint.drawDistanceElmos = furthest * scmap::kElmosPerOgrid;
-        }
+
+        blueprint.lods.push_back(std::move(lod));
+    }
+
+    // A prop with no geometry at all is an emitter, which is a legitimate answer
+    // rather than a corruption — eight of the 207 blueprints the stock maps name
+    // are particle effects.
+    if (blueprint.lods.empty()) {
+        return fail(MapError::Code::MissingMesh,
+                    "prop blueprint \"" + std::string{gameRelativePath}
+                        + "\" names no mesh (an emitter, or content not extracted)");
+    }
+
+    // Cutoffs must increase outwards, or the level chosen for a distance is
+    // whichever the search happened to reach first. A blueprint stating them out of
+    // order is one whose LOD table this reader has misunderstood, so it is fixed
+    // here by taking the running maximum rather than trusted or refused: the effect
+    // is that a level never draws nearer than the one before it.
+    for (std::size_t i = 1; i < blueprint.lods.size(); ++i) {
+        blueprint.lods[i].cutoffElmos =
+            std::max(blueprint.lods[i].cutoffElmos, blueprint.lods[i - 1].cutoffElmos);
     }
 
     return blueprint;

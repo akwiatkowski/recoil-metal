@@ -571,6 +571,7 @@ private:
 struct PropScene {
     std::deque<rm::Model> models;
     std::deque<std::vector<rm::UnitInstance>> instances;
+    std::deque<std::vector<rm::PropLevel>> levels;
     std::vector<rm::PropBatch> batches;
     TextureRegistry textures;
 };
@@ -625,6 +626,7 @@ struct PropScene {
     std::size_t emitters = 0;
     std::size_t unreadable = 0;
     std::size_t drawn = 0;
+    std::size_t levelCount = 0;
 
     for (auto& [blueprint, instances] : byBlueprint) {
         const auto info = rm::prop::loadFile(root, blueprint);
@@ -641,11 +643,29 @@ struct PropScene {
             continue;
         }
 
-        auto model = rm::scm::loadFile(info->mesh);
-        if (!model) {
+        // Every level the blueprint declares, finest first. Which one an instance is
+        // drawn at is decided per frame from the camera, so all of them are loaded.
+        std::vector<rm::PropLevel> levels;
+        for (const rm::prop::BlueprintLod& lod : info->lods) {
+            auto model = rm::scm::loadFile(lod.mesh);
+            if (!model) {
+                std::fprintf(stderr, "  prop mesh %s: %s\n",
+                             lod.mesh.filename().string().c_str(),
+                             model.error().message.c_str());
+                break;  // and the finer levels already loaded still stand
+            }
+            scene.models.push_back(std::move(*model));
+            levels.push_back(rm::PropLevel{
+                .model = &scene.models.back(),
+                .albedo = scene.textures.resolve(lod.albedo, "prop albedo"),
+                // The blueprint's own cutoff: how far out this level is the right
+                // one, and for the coarsest, how far out the prop is drawn at all.
+                .cutoffElmos = lod.cutoffElmos,
+            });
+        }
+
+        if (levels.empty()) {
             ++unreadable;
-            std::fprintf(stderr, "  prop mesh %s: %s\n",
-                         info->mesh.filename().string().c_str(), model.error().message.c_str());
             continue;
         }
 
@@ -664,16 +684,12 @@ struct PropScene {
             instance.scale *= info->uniformScale * rm::scmap::kElmosPerOgrid;
         }
 
-        scene.models.push_back(std::move(*model));
+        levelCount += levels.size();
         scene.instances.push_back(std::move(instances));
+        scene.levels.push_back(std::move(levels));
         scene.batches.push_back(rm::PropBatch{
-            .model = &scene.models.back(),
+            .levels = scene.levels.back(),
             .instances = scene.instances.back(),
-            .albedo = scene.textures.resolve(info->albedo, "prop albedo"),
-            // The blueprint's own furthest LOD cutoff: how far out the game keeps
-            // drawing this prop. Graded per prop, so zooming out loses the shrubs
-            // before the landmark trees.
-            .drawDistanceElmos = info->drawDistanceElmos,
         });
         drawn += scene.instances.back().size();
     }
@@ -683,12 +699,13 @@ struct PropScene {
     float nearest = std::numeric_limits<float>::infinity();
     float furthest = 0.0f;
     for (const rm::PropBatch& batch : scene.batches) {
-        nearest = std::min(nearest, batch.drawDistanceElmos);
-        furthest = std::max(furthest, batch.drawDistanceElmos);
+        const float distance = batch.levels.back().cutoffElmos;
+        nearest = std::min(nearest, distance);
+        furthest = std::max(furthest, distance);
     }
 
-    std::printf("  props: %zu meshes, %zu instances, %zu textures", scene.batches.size(), drawn,
-                scene.textures.size());
+    std::printf("  props: %zu blueprints, %zu meshes, %zu instances, %zu textures",
+                scene.batches.size(), levelCount, drawn, scene.textures.size());
     if (!scene.batches.empty()) {
         std::printf(", drawn within %.0f..%.0f elmos", static_cast<double>(nearest),
                     static_cast<double>(furthest));

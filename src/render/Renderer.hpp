@@ -154,11 +154,12 @@ public:
 
     // Whether the map's scenery is drawn.
     //
-    // No longer the expensive setting it was. Props are culled per frame against
-    // the draw distance each blueprint states, so a zoomed-out frame pays nothing:
-    // the busiest stock map's 46 971 props cost 4.156 ms at a whole-map framing
-    // against 4.263 with them off, and 0.17 ms at a working zoom where they are
-    // actually visible. Before the cull those figures were +6.2 and +2.8 ms.
+    // No longer the expensive setting it was. Props are culled per frame against the
+    // draw distance each blueprint states, and drawn at the LEVEL it states, so
+    // there is no framing at which they cost much: the busiest stock map's 46 971
+    // props measure inside the noise of not drawing them at all, whether zoomed out
+    // (everything is past its cutoff) or at a working zoom (almost everything is on
+    // coarse geometry). Before either, those framings cost +6.2 and +2.8 ms.
     //
     // Kept as a switch anyway, because comparing two frames is what a switch is
     // for.
@@ -566,27 +567,52 @@ private:
     std::vector<GpuUnitBatch> unitBatches_;
     std::vector<MTL::Texture*> unitTextures_;  // owned, indexed by TexturePair
 
-    // Scenery, in the same GPU shape as a unit batch but held apart — see
-    // PropBatch.hpp for why props must not be in the list the sim ticks.
+    // Scenery, held apart from the units — see PropBatch.hpp for why props must not
+    // be in the list the sim ticks.
     //
-    // Their instance buffers hold ONE copy rather than kMaxFramesInFlight: a
-    // prop never moves, so nothing rewrites them and there is nothing for a
-    // frame in flight to race against. On the busiest stock map that is 47k
-    // instances, so the two spare copies units need would be 4.5 MB of buffer
-    // that is written once and read forever.
-    std::vector<GpuUnitBatch> propBatches_;
-    std::vector<MTL::Texture*> propTextures_;  // owned, indexed by PropBatch::albedo
+    // One GROUP per blueprint, holding its levels and ONE instance buffer they
+    // share. The levels' survivors are written into it back to back, finest first,
+    // so a level's draw is an offset and a count rather than a buffer of its own —
+    // which matters because a prop is drawn at exactly one level, so three buffers
+    // would be three times the memory to hold the same instances once.
+    struct GpuPropLevel {
+        MTL::Buffer* vertexBuffer = nullptr;  // owned
+        MTL::Buffer* indexBuffer = nullptr;   // owned
+        MTL::Buffer* boneBuffer = nullptr;    // owned
+        std::size_t indexCount = 0;
+        std::size_t boneStrideBytes = 0;
+        int albedo = -1;
+        bool supremeCommanderShading = false;
 
-    /// Every prop instance as uploaded, kept CPU-side per batch so that each frame
-    /// can pick the ones worth drawing from where the camera now is.
-    ///
-    /// 2.2 MB on the busiest stock map, against the 6 ms of GPU the cull saves at a
-    /// zoomed-out framing. The list itself never changes — props do not move — so
-    /// this is a source to filter FROM rather than state to keep in step.
-    std::vector<std::vector<UnitInstance>> propInstances_;
+        /// Drawn at this level while the camera is nearer than this.
+        float cutoffElmos = std::numeric_limits<float>::infinity();
 
-    /// Scratch for the survivors, reused so a frame costs no allocation.
+        // Rewritten every frame by cullProps: where this level's run starts in the
+        // shared instance buffer, and how long it is.
+        std::size_t firstInstance = 0;
+        std::size_t instanceCount = 0;
+    };
+
+    struct GpuPropGroup {
+        std::vector<GpuPropLevel> levels;  // finest first
+
+        MTL::Buffer* instanceBuffer = nullptr;  // owned
+        std::size_t instanceCapacity = 0;
+
+        /// Every place this prop stands, kept CPU-side to filter from. The list
+        /// never changes — props do not move — so this is a source rather than
+        /// state to keep in step. 2.2 MB on the busiest stock map.
+        std::vector<UnitInstance> instances;
+    };
+
+    std::vector<GpuPropGroup> propGroups_;
+    std::vector<MTL::Texture*> propTextures_;  // owned, indexed by PropLevel::albedo
+
+    /// Scratch for the survivors and the per-level counts, reused so a frame costs
+    /// no allocation.
     std::vector<UnitInstance> visibleProps_;
+    std::vector<float> propCutoffs_;
+    std::vector<std::size_t> propCounts_;
 
     /// Picks the props worth drawing and writes them into this frame's slot.
     ///

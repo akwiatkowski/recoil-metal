@@ -213,3 +213,8 @@ formats, built test-first in modern C++, as both research and a C++ showcase.
   vertex-bound and a handful of draw calls does not register. Measure before
   optimising a draw count — and see ADR-022 for the error budget that said the
   opposite of what the screenshots said.
+- **Alternate configurations when benchmarking, never all of A then all of B.** A
+  batch of back-to-back `--bench-offscreen` runs drifts as the GPU warms: the first
+  readings in a batch came out 2.6x faster than the last, which read as props being
+  *cheaper* to draw than not to draw. Three alternating rounds settled it in
+  minutes. Any A/B where the difference is under a millisecond needs this.

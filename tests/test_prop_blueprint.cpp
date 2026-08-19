@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <string>
 #include <string_view>
 
@@ -85,28 +86,54 @@ TEST_CASE("a blueprint yields the mesh beside it, its first albedo, and its scal
     const auto blueprint = rm::prop::loadFile(box.root(), "/env/Test/Props/Tree01_prop.bp");
     REQUIRE(blueprint.has_value());
 
-    CHECK(blueprint->mesh == box.dir() / "Tree01_lod0.scm");
-    CHECK(blueprint->albedo == box.dir() / "Tree01_albedo.dds");
+    REQUIRE(blueprint->lods.size() == 1);  // only lod0 exists on disk here
+    CHECK(blueprint->lods[0].mesh == box.dir() / "Tree01_lod0.scm");
+    CHECK(blueprint->lods[0].albedo == box.dir() / "Tree01_albedo.dds");
 
     // The whole reason this file is read. 0.04, not 1.0 — the map's own
     // per-instance scale is 1.0 for every prop in the retail corpus.
     CHECK(blueprint->uniformScale == Approx(0.04f));
 }
 
-TEST_CASE("the finest LOD's texture is the one taken") {
-    // A blueprint lists its LODs coarsening outwards, each with its own albedo
-    // (a distant tree gets a smaller one). Only the mesh's LOD 0 is drawn, so
-    // pairing it with a later LOD's texture would put a low-resolution image on
-    // full-resolution geometry — subtly soft, and nothing on screen says why.
+TEST_CASE("each level keeps its own mesh, texture and cutoff") {
+    // A blueprint lists its LODs coarsening outwards, each with its own albedo — a
+    // distant tree gets a smaller one. Pairing a level's geometry with another
+    // level's texture is invisible either way round: soft where it should be sharp,
+    // or sharp on geometry that no longer deserves it.
     const Sandbox box;
     box.write("Tree01_prop.bp", kPalmish);
     box.touch("Tree01_lod0.scm");
+    box.touch("Tree01_lod1.scm");
     box.touch("Tree01_albedo.dds");
     box.touch("Tree01_lod1_albedo.dds");
 
     const auto blueprint = rm::prop::loadFile(box.root(), "/env/Test/Props/Tree01_prop.bp");
     REQUIRE(blueprint.has_value());
-    CHECK(blueprint->albedo.filename() == "Tree01_albedo.dds");
+    REQUIRE(blueprint->lods.size() == 2);
+
+    CHECK(blueprint->lods[0].mesh.filename() == "Tree01_lod0.scm");
+    CHECK(blueprint->lods[0].albedo.filename() == "Tree01_albedo.dds");
+    CHECK(blueprint->lods[0].cutoffElmos == Approx(30.0f * 8.0f));
+
+    CHECK(blueprint->lods[1].mesh.filename() == "Tree01_lod1.scm");
+    CHECK(blueprint->lods[1].albedo.filename() == "Tree01_lod1_albedo.dds");
+    CHECK(blueprint->lods[1].cutoffElmos == Approx(200.0f * 8.0f));
+
+    // And the coarsest cutoff is the distance past which the prop is not drawn.
+    CHECK(blueprint->drawDistanceElmos() == Approx(200.0f * 8.0f));
+}
+
+TEST_CASE("a level whose mesh is absent ends the list rather than failing the prop") {
+    // The table describes three levels; only two are on disk. A prop with a fine
+    // level and no coarse one is still a prop.
+    const Sandbox box;
+    box.write("Tree01_prop.bp", kPalmish);
+    box.touch("Tree01_lod0.scm");
+    // no Tree01_lod1.scm
+
+    const auto blueprint = rm::prop::loadFile(box.root(), "/env/Test/Props/Tree01_prop.bp");
+    REQUIRE(blueprint.has_value());
+    CHECK(blueprint->lods.size() == 1);
 }
 
 TEST_CASE("a blueprint that states no scale is drawn at its own size") {
@@ -121,7 +148,10 @@ PropBlueprint {
     const auto blueprint = rm::prop::loadFile(box.root(), "/env/Test/Props/Rock_prop.bp");
     REQUIRE(blueprint.has_value());
     CHECK(blueprint->uniformScale == Approx(1.0f));
-    CHECK(blueprint->albedo.empty());
+    REQUIRE(blueprint->lods.size() == 1);
+    CHECK(blueprint->lods[0].albedo.empty());
+    // No cutoff stated means no limit, not a limit of zero.
+    CHECK(blueprint->lods[0].cutoffElmos == std::numeric_limits<float>::infinity());
 }
 
 TEST_CASE("a blueprint with no mesh beside it is an emitter, not a failure") {
@@ -169,7 +199,8 @@ TEST_CASE("a game-relative path without its leading slash still resolves") {
 
     const auto blueprint = rm::prop::loadFile(box.root(), "env/Test/Props/Tree01_prop.bp");
     REQUIRE(blueprint.has_value());
-    CHECK(blueprint->mesh == box.dir() / "Tree01_lod0.scm");
+    REQUIRE_FALSE(blueprint->lods.empty());
+    CHECK(blueprint->lods[0].mesh == box.dir() / "Tree01_lod0.scm");
 }
 
 // --- The real corpus ---------------------------------------------------------
@@ -187,6 +218,8 @@ TEST_CASE("every blueprint the retail props ship resolves, or is an emitter") {
     }
 
     std::size_t meshes = 0;
+    std::size_t levels = 0;
+    std::size_t multiLevel = 0;
     std::size_t emitters = 0;
     std::size_t failures = 0;
     std::string firstFailure;
@@ -202,7 +235,19 @@ TEST_CASE("every blueprint the retail props ship resolves, or is an emitter") {
         const auto blueprint = rm::prop::loadFile(root, relative);
         if (blueprint) {
             ++meshes;
-            CHECK(std::filesystem::is_regular_file(blueprint->mesh, ec));
+            REQUIRE_FALSE(blueprint->lods.empty());
+            levels += blueprint->lods.size();
+            if (blueprint->lods.size() > 1) {
+                ++multiLevel;
+            }
+            float previousCutoff = 0.0f;
+            for (const rm::prop::BlueprintLod& lod : blueprint->lods) {
+                CHECK(std::filesystem::is_regular_file(lod.mesh, ec));
+                // Cutoffs increase outwards, which is what makes choosing a level
+                // for a distance a walk from the finest rather than a search.
+                CHECK(lod.cutoffElmos >= previousCutoff);
+                previousCutoff = lod.cutoffElmos;
+            }
             CHECK(blueprint->uniformScale > 0.0f);
             smallestScale = std::min(smallestScale, blueprint->uniformScale);
         } else if (blueprint.error().code == rm::MapError::Code::MissingMesh) {
@@ -223,4 +268,12 @@ TEST_CASE("every blueprint the retail props ship resolves, or is an emitter") {
     // Props are authored far larger than they are drawn — the reason
     // UniformScale cannot be defaulted away.
     CHECK(smallestScale < 0.1f);
+
+    // Most props have one level; the ones that matter have three. Every
+    // heavily-placed tree in the corpus does, which is where the saving is, because
+    // those are the blueprints placed ten thousand times over.
+    INFO(levels << " levels across " << meshes << " blueprints, " << multiLevel
+                << " with more than one");
+    CHECK(multiLevel > 80);
+    CHECK(levels > meshes);
 }

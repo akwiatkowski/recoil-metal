@@ -1901,14 +1901,15 @@ void Renderer::releaseUnitBuffers() noexcept {
 }
 
 void Renderer::releasePropBuffers() noexcept {
-    for (GpuUnitBatch& batch : propBatches_) {
-        if (batch.instanceBuffer != nullptr) batch.instanceBuffer->release();
-        if (batch.boneBuffer != nullptr)     batch.boneBuffer->release();
-        if (batch.indexBuffer != nullptr)    batch.indexBuffer->release();
-        if (batch.vertexBuffer != nullptr)   batch.vertexBuffer->release();
+    for (GpuPropGroup& group : propGroups_) {
+        for (GpuPropLevel& level : group.levels) {
+            if (level.boneBuffer != nullptr)   level.boneBuffer->release();
+            if (level.indexBuffer != nullptr)  level.indexBuffer->release();
+            if (level.vertexBuffer != nullptr) level.vertexBuffer->release();
+        }
+        if (group.instanceBuffer != nullptr) group.instanceBuffer->release();
     }
-    propBatches_.clear();
-    propInstances_.clear();
+    propGroups_.clear();
 
     for (MTL::Texture* texture : propTextures_) {
         if (texture != nullptr) {
@@ -1918,18 +1919,6 @@ void Renderer::releasePropBuffers() noexcept {
     propTextures_.clear();
 }
 
-// Props are CULLED BY DISTANCE every frame, using the cutoff each blueprint states
-// — see cullProps below. That is what makes a zoomed-out frame free rather than
-// expensive: at a whole-map framing every prop on the map is past its own cutoff,
-// so 46 971 of them cost 4.156 ms against 4.263 with the whole feature switched
-// off, where before this they cost 6.2 ms.
-//
-// WHAT IS STILL NOT DONE, named rather than left as a surprise: a prop that IS
-// drawn is always drawn at its finest LOD. The blueprints ship three meshes each
-// and state a cutoff per level; only the furthest is used here, as a draw distance.
-// Using the other two would need a batch per (blueprint, level) and a level chosen
-// per prop per frame, and it would buy the mid-range — the close view still costs
-// 0.17 ms, which is what is left to win.
 void Renderer::setProps(std::span<const dds::Texture> textures,
                         std::span<const PropBatch> batches) {
     releasePropBuffers();
@@ -1951,100 +1940,124 @@ void Renderer::setProps(std::span<const dds::Texture> textures,
     // holds up to 80 distinct props and every one has its own albedo, so there is
     // nothing to group — the sort would be a no-op over a list where no two
     // entries share a key. The caller's order stands.
-    propBatches_.reserve(batches.size());
+    propGroups_.reserve(batches.size());
     for (const PropBatch& batch : batches) {
-        if (batch.model == nullptr || batch.model->empty() || batch.model->bones.empty()
-            || batch.instances.empty()) {
+        if (batch.instances.empty() || batch.levels.empty()) {
             continue;
         }
-        const Model& model = *batch.model;
 
-        // The rest pose, and only ever the rest pose. A prop has no animation —
-        // the blueprint's script class may say "Tree" and the game may topple it
-        // when shot, but nothing here shoots anything. restPose is still needed
-        // rather than skippable: it is where the two families' vertex conventions
-        // are reconciled, and the vertex shader always indexes a bone.
-        const std::vector<BoneTransform> poses = restPose(model);
+        GpuPropGroup group;
+        group.instances.assign(batch.instances.begin(), batch.instances.end());
 
-        GpuUnitBatch uploaded;
-        // A prop's albedo goes in the diffuse slot; the shading slot stays empty,
-        // so the fragment shader takes its neutral fallback and the prop is lit by
-        // sun and ambient alone. Its normal map is deliberately unused — the
-        // convention differs from the stratum maps' (measured while extracting
-        // the content: endpoint means near 148 with red equal to blue, against a
-        // stratum map's near-255 blue), and reading one on an unverified axis
-        // lights bumps as dents.
-        uploaded.textures = TexturePair{batch.albedo, -1};
-        uploaded.supremeCommanderShading = model.family == Family::SupremeCommander;
-        uploaded.alphaIsOpacity = true;
-        uploaded.poseCount = 1;
-        uploaded.boneStrideBytes = model.bones.size() * sizeof(BoneTransform);
-        uploaded.duration = 0.0f;
-        uploaded.vertexBuffer =
-            device_->newBuffer(model.vertices.data(), model.vertices.size() * sizeof(ModelVertex),
-                               MTL::ResourceStorageModeShared);
-        uploaded.indexBuffer =
-            device_->newBuffer(model.indices.data(), model.indices.size() * sizeof(std::uint32_t),
-                               MTL::ResourceStorageModeShared);
-        uploaded.boneBuffer = device_->newBuffer(poses.data(), poses.size() * sizeof(BoneTransform),
-                                                 MTL::ResourceStorageModeShared);
-        // kMaxFramesInFlight copies, like the units. This buffer DOES get
-        // rewritten every frame — not because props move, but because which of them
-        // are close enough to be worth drawing changes as the camera does, and a
-        // single copy written while the GPU may still be reading last frame's would
-        // tear a prop's transform.
-        uploaded.instanceCapacity = batch.instances.size();
-        const std::size_t instanceBytes = uploaded.instanceCapacity * sizeof(UnitInstance);
-        uploaded.instanceBuffer = device_->newBuffer(instanceBytes * kMaxFramesInFlight,
-                                                     MTL::ResourceStorageModeShared);
-        if (uploaded.instanceBuffer != nullptr) {
-            // Seeded in every slot, so a frame that never calls cullProps — a
-            // headless capture — still draws the scenery rather than nothing.
-            auto* slots = static_cast<std::byte*>(uploaded.instanceBuffer->contents());
-            for (std::size_t slot = 0; slot < kMaxFramesInFlight; ++slot) {
-                std::memcpy(slots + slot * instanceBytes, batch.instances.data(), instanceBytes);
+        // kMaxFramesInFlight copies of ONE buffer, shared by the levels. It does get
+        // rewritten every frame — not because props move, but because which level
+        // each is drawn at changes as the camera does, and a single copy written
+        // while the GPU may still be reading last frame's would tear a transform.
+        group.instanceCapacity = batch.instances.size();
+        const std::size_t instanceBytes = group.instanceCapacity * sizeof(UnitInstance);
+        group.instanceBuffer = device_->newBuffer(instanceBytes * kMaxFramesInFlight,
+                                                  MTL::ResourceStorageModeShared);
+
+        for (const PropLevel& source : batch.levels) {
+            if (source.model == nullptr || source.model->empty() || source.model->bones.empty()) {
+                continue;
             }
-        }
-        uploaded.indexCount = model.indices.size();
-        uploaded.instanceCount = batch.instances.size();
-        uploaded.drawDistanceElmos = batch.drawDistanceElmos;
+            const Model& model = *source.model;
 
-        if (uploaded.vertexBuffer == nullptr || uploaded.indexBuffer == nullptr
-            || uploaded.boneBuffer == nullptr || uploaded.instanceBuffer == nullptr) {
-            propBatches_.push_back(uploaded);  // so releasePropBuffers frees it
+            // The rest pose, and only ever the rest pose. A prop has no animation —
+            // a blueprint's script class may say "Tree" and the game may topple it
+            // when shot, but nothing here shoots anything. restPose is still needed
+            // rather than skippable: it is where the two families' vertex conventions
+            // are reconciled, and the vertex shader always indexes a bone.
+            const std::vector<BoneTransform> poses = restPose(model);
+
+            GpuPropLevel level;
+            // A prop's albedo goes in the diffuse slot; the shading slot stays empty,
+            // so the fragment shader takes its neutral fallback and the prop is lit
+            // by sun and ambient alone.
+            level.albedo = source.albedo;
+            level.cutoffElmos = source.cutoffElmos;
+            level.supremeCommanderShading = model.family == Family::SupremeCommander;
+            level.boneStrideBytes = model.bones.size() * sizeof(BoneTransform);
+            level.indexCount = model.indices.size();
+            level.vertexBuffer =
+                device_->newBuffer(model.vertices.data(),
+                                   model.vertices.size() * sizeof(ModelVertex),
+                                   MTL::ResourceStorageModeShared);
+            level.indexBuffer =
+                device_->newBuffer(model.indices.data(),
+                                   model.indices.size() * sizeof(std::uint32_t),
+                                   MTL::ResourceStorageModeShared);
+            level.boneBuffer = device_->newBuffer(poses.data(),
+                                                  poses.size() * sizeof(BoneTransform),
+                                                  MTL::ResourceStorageModeShared);
+
+            if (level.vertexBuffer == nullptr || level.indexBuffer == nullptr
+                || level.boneBuffer == nullptr) {
+                group.levels.push_back(level);  // so releasePropBuffers frees it
+                propGroups_.push_back(std::move(group));
+                releasePropBuffers();
+                throw RendererError{"failed to allocate prop buffers for " + model.name};
+            }
+
+            group.levels.push_back(level);
+        }
+
+        if (group.levels.empty() || group.instanceBuffer == nullptr) {
+            propGroups_.push_back(std::move(group));  // so what was allocated is freed
             releasePropBuffers();
-            throw RendererError{"failed to allocate prop buffers for " + model.name};
+            throw RendererError{"failed to allocate the prop instance buffer"};
         }
 
-        propBatches_.push_back(uploaded);
-        propInstances_.emplace_back(batch.instances.begin(), batch.instances.end());
+        // Seeded in every slot at the FINEST level, so a frame that never calls
+        // cullProps — a headless capture — still draws the scenery rather than
+        // nothing.
+        auto* slots = static_cast<std::byte*>(group.instanceBuffer->contents());
+        for (std::size_t slot = 0; slot < kMaxFramesInFlight; ++slot) {
+            std::memcpy(slots + slot * instanceBytes, batch.instances.data(), instanceBytes);
+        }
+        group.levels.front().firstInstance = 0;
+        group.levels.front().instanceCount = batch.instances.size();
+
+        propGroups_.push_back(std::move(group));
     }
 }
 
 void Renderer::cullProps() noexcept {
-    if (propBatches_.empty() || !propsVisible_) {
+    if (propGroups_.empty() || !propsVisible_) {
         return;
     }
 
     const simd_float3 eyeVector = camera_.eye();
     const std::array<float, 3> eye{{eyeVector.x, eyeVector.y, eyeVector.z}};
 
-    for (std::size_t i = 0; i < propBatches_.size(); ++i) {
-        GpuUnitBatch& batch = propBatches_[i];
-        const std::vector<UnitInstance>& source = propInstances_[i];
+    for (GpuPropGroup& group : propGroups_) {
+        propCutoffs_.clear();
+        for (const GpuPropLevel& level : group.levels) {
+            propCutoffs_.push_back(level.cutoffElmos);
+        }
+        propCounts_.assign(group.levels.size(), 0);
+        visibleProps_.resize(group.instances.size());
 
-        visibleProps_.resize(source.size());
-        const std::size_t kept =
-            cullPropsByDistance(source, eye, batch.drawDistanceElmos, visibleProps_);
-        batch.instanceCount = kept;
+        cullPropsByLevel(group.instances, eye, propCutoffs_, visibleProps_, propCounts_);
 
-        if (kept == 0 || batch.instanceBuffer == nullptr) {
-            continue;  // nothing to write, and a zero-instance draw is skipped
+        // The runs come back contiguous and finest first, so each level's offset is
+        // the sum of the counts before it — which is the whole reason one buffer
+        // serves every level.
+        std::size_t at = 0;
+        for (std::size_t i = 0; i < group.levels.size(); ++i) {
+            group.levels[i].firstInstance = at;
+            group.levels[i].instanceCount = propCounts_[i];
+            at += propCounts_[i];
         }
 
-        auto* slots = static_cast<std::byte*>(batch.instanceBuffer->contents());
-        std::memcpy(slots + instanceSlot_ * batch.instanceCapacity * sizeof(UnitInstance),
-                    visibleProps_.data(), kept * sizeof(UnitInstance));
+        if (at == 0 || group.instanceBuffer == nullptr) {
+            continue;  // nothing survives, and a zero-instance draw is skipped
+        }
+
+        auto* slots = static_cast<std::byte*>(group.instanceBuffer->contents());
+        std::memcpy(slots + instanceSlot_ * group.instanceCapacity * sizeof(UnitInstance),
+                    visibleProps_.data(), at * sizeof(UnitInstance));
     }
 }
 
@@ -2956,7 +2969,7 @@ void Renderer::encodeScene(MTL::CommandBuffer* commandBuffer, MTL::RenderPassDes
     // pipeline cannot reject them by depth before shading. Drawing the opaque
     // units first means the depth buffer is already dense where they stand, and
     // a tree behind a building is rejected on depth before its alpha is sampled.
-    if (!propBatches_.empty() && propsVisible_) {
+    if (!propGroups_.empty() && propsVisible_) {
         encoder->setRenderPipelineState(unitPipeline_);
         encoder->setDepthStencilState(depthState_);
         encoder->setFragmentSamplerState(groundSampler_, kGroundSamplerIndex);
@@ -2964,77 +2977,66 @@ void Renderer::encodeScene(MTL::CommandBuffer* commandBuffer, MTL::RenderPassDes
         encoder->setFragmentTexture(shadowMap_, kShadowTextureIndex);
         encoder->setFragmentSamplerState(shadowSampler_, kShadowSamplerIndex);
 
-        for (const GpuUnitBatch& batch : propBatches_) {
-            if (batch.instanceCount == 0) {
-                continue;  // every instance of this prop is past its cutoff
+        for (const GpuPropGroup& group : propGroups_) {
+            for (const GpuPropLevel& level : group.levels) {
+                if (level.instanceCount == 0) {
+                    continue;  // no prop of this blueprint is at this level right now
+                }
+
+                MTL::Texture* albedo = nullptr;
+                if (level.albedo >= 0
+                    && static_cast<std::size_t>(level.albedo) < propTextures_.size()) {
+                    albedo = propTextures_[static_cast<std::size_t>(level.albedo)];
+                }
+
+                // Both slots bound whatever happens: sampling an unbound texture is
+                // undefined even on a branch that does not run.
+                encoder->setFragmentTexture(albedo != nullptr ? albedo : groundTexture_,
+                                            kGroundTextureIndex);
+                encoder->setFragmentTexture(groundTexture_, kShadingTextureIndex);
+
+                TerrainUniforms propUniforms = uniforms;
+                propUniforms.hasTexture = albedo != nullptr ? 1.0f : 0.0f;
+                // No shading texture ever: a prop blueprint names an albedo and
+                // sometimes a normal map, never the second channel set a unit's
+                // shading texture carries. The shader's neutral fallback then lights
+                // it by sun and ambient alone, which is what a tree wants.
+                propUniforms.hasTexture2 = 0.0f;
+                propUniforms.supremeCommanderShading =
+                    level.supremeCommanderShading ? 1.0f : 0.0f;
+                propUniforms.alphaIsOpacity = 1.0f;
+                encoder->setFragmentBytes(&propUniforms, sizeof(propUniforms),
+                                          kUniformBufferIndex);
+
+                encoder->setVertexBuffer(level.vertexBuffer, 0, kVertexBufferIndex);
+                // This frame's slot, then this LEVEL's run inside it. The runs are
+                // contiguous and finest first (cullPropsByLevel), which is what lets
+                // every level of a blueprint share one buffer — a prop is drawn at
+                // exactly one level, so three buffers would hold the same instances
+                // three times over.
+                encoder->setVertexBuffer(
+                    group.instanceBuffer,
+                    static_cast<NS::UInteger>((instanceSlot_ * group.instanceCapacity
+                                               + level.firstInstance)
+                                              * sizeof(UnitInstance)),
+                    kInstanceBufferIndex);
+                encoder->setVertexBuffer(level.boneBuffer, 0, kBoneBufferIndex);
+
+                PoseUniforms pose;
+                pose.poseCount = 1;
+                pose.boneCount =
+                    static_cast<std::uint32_t>(level.boneStrideBytes / sizeof(BoneTransform));
+                pose.duration = 0.0f;
+                pose.time = 0.0f;
+                encoder->setVertexBytes(&pose, sizeof(pose), kPoseUniformBufferIndex);
+
+                encoder->drawIndexedPrimitives(
+                    MTL::PrimitiveType::PrimitiveTypeTriangle,
+                    static_cast<NS::UInteger>(level.indexCount), MTL::IndexType::IndexTypeUInt32,
+                    level.indexBuffer, /*indexBufferOffset=*/0,
+                    static_cast<NS::UInteger>(level.instanceCount));
             }
-
-            MTL::Texture* albedo = nullptr;
-            if (batch.textures.diffuse >= 0
-                && static_cast<std::size_t>(batch.textures.diffuse) < propTextures_.size()) {
-                albedo = propTextures_[static_cast<std::size_t>(batch.textures.diffuse)];
-            }
-
-            // Both slots bound whatever happens: sampling an unbound texture is
-            // undefined even on a branch that does not run.
-            encoder->setFragmentTexture(albedo != nullptr ? albedo : groundTexture_,
-                                        kGroundTextureIndex);
-            encoder->setFragmentTexture(groundTexture_, kShadingTextureIndex);
-
-            TerrainUniforms propUniforms = uniforms;
-            propUniforms.hasTexture = albedo != nullptr ? 1.0f : 0.0f;
-            // No shading texture ever: a prop blueprint names an albedo and
-            // sometimes a normal map, never the second channel set a unit's
-            // shading texture carries. The shader's neutral fallback then lights
-            // it by sun and ambient alone, which is what a tree wants.
-            propUniforms.hasTexture2 = 0.0f;
-            propUniforms.supremeCommanderShading = batch.supremeCommanderShading ? 1.0f : 0.0f;
-            propUniforms.alphaIsOpacity = 1.0f;
-            encoder->setFragmentBytes(&propUniforms, sizeof(propUniforms), kUniformBufferIndex);
-
-            encoder->setVertexBuffer(batch.vertexBuffer, 0, kVertexBufferIndex);
-            // Offset 0 always: instanceCapacity is 0 for a prop batch, because
-            // one copy of static instances needs no ring.
-            encoder->setVertexBuffer(batch.instanceBuffer,
-                                     static_cast<NS::UInteger>(instanceSlot_
-                                                               * batch.instanceCapacity
-                                                               * sizeof(UnitInstance)),
-                                     kInstanceBufferIndex);
-            encoder->setVertexBuffer(batch.boneBuffer, 0, kBoneBufferIndex);
-
-            PoseUniforms pose;
-            pose.poseCount = 1;
-            pose.boneCount =
-                static_cast<std::uint32_t>(batch.boneStrideBytes / sizeof(BoneTransform));
-            pose.duration = 0.0f;
-            pose.time = 0.0f;
-            encoder->setVertexBytes(&pose, sizeof(pose), kPoseUniformBufferIndex);
-
-            encoder->drawIndexedPrimitives(MTL::PrimitiveType::PrimitiveTypeTriangle,
-                                           static_cast<NS::UInteger>(batch.indexCount),
-                                           MTL::IndexType::IndexTypeUInt32, batch.indexBuffer,
-                                           /*indexBufferOffset=*/0,
-                                           static_cast<NS::UInteger>(batch.instanceCount));
         }
-    }
-
-    // --- Selection rings ---------------------------------------------------
-    // After the units, so a ring is not hidden by the unit it belongs to, and
-    // BEFORE the water, so a ring on a submerged shelf is tinted by the sea
-    // above it like everything else down there.
-    //
-    // Skipped in the reflection pass: a mirror showing the interface would be
-    // the interface appearing twice.
-    if (decalVertexCount_ > 0 && decalPipeline_ != nullptr && override == nullptr) {
-        encoder->setRenderPipelineState(decalPipeline_);
-        encoder->setDepthStencilState(decalDepthState_);
-        encoder->setVertexBuffer(
-            decalBuffer_,
-            static_cast<NS::UInteger>(instanceSlot_ * kMaxDecalVertices * sizeof(DecalVertex)),
-            kVertexBufferIndex);
-        encoder->setVertexBytes(&uniforms, sizeof(uniforms), kUniformBufferIndex);
-        encoder->drawPrimitives(MTL::PrimitiveType::PrimitiveTypeTriangle, NS::UInteger{0},
-                                static_cast<NS::UInteger>(decalVertexCount_));
     }
 
     // --- Particles ---------------------------------------------------------
