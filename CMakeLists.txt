@@ -98,6 +98,7 @@ add_library(rm_core STATIC
     src/core/scene/Particles.cpp
     src/core/sim/Movement.cpp
     src/core/sim/Pathfinding.cpp
+    src/core/unit/UnitBlueprint.cpp
     src/core/unit/UnitDef.cpp
     src/core/vfs/AssetSearch.cpp
     src/core/settings/Settings.cpp)
@@ -154,8 +155,10 @@ if(BUILD_TESTING)
         tests/test_particles.cpp
         tests/test_prop_culling.cpp
         tests/test_pathfinding.cpp
+        tests/test_unit_blueprint.cpp
         tests/test_unit_def.cpp
         tests/test_asset_search.cpp
+        tests/test_real_unit_blueprints.cpp
         tests/test_real_unitdefs.cpp
         tests/test_team_colours.cpp
         tests/test_unit_batch.cpp

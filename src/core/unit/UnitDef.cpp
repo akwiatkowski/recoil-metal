@@ -31,6 +31,49 @@ float UnitDef::footprintRadiusElmos() const noexcept {
     return 0.5f * static_cast<float>(squares) * static_cast<float>(kSquareSize);
 }
 
+std::optional<MotionType> motionTypeFromName(std::string_view name) noexcept {
+    // Spelled out rather than derived from the string's tail, because the names
+    // do not disambiguate on any suffix: Amphibious is a prefix of
+    // AmphibiousFloating, and a `starts_with` chain would read the longer one as
+    // the shorter and quietly let a floating unit sink.
+    struct Named {
+        std::string_view name;
+        MotionType type;
+    };
+    static constexpr Named kNames[] = {
+        {"RULEUMT_None", MotionType::None},
+        {"RULEUMT_Land", MotionType::Land},
+        {"RULEUMT_Air", MotionType::Air},
+        {"RULEUMT_Water", MotionType::Water},
+        {"RULEUMT_Hover", MotionType::Hover},
+        {"RULEUMT_Amphibious", MotionType::Amphibious},
+        {"RULEUMT_AmphibiousFloating", MotionType::AmphibiousFloating},
+        {"RULEUMT_SurfacingSub", MotionType::SurfacingSub},
+    };
+    for (const Named& known : kNames) {
+        if (known.name == name) {
+            return known.type;
+        }
+    }
+    return std::nullopt;
+}
+
+bool travelsOnGround(MotionType motion) noexcept {
+    switch (motion) {
+        case MotionType::Land:
+        case MotionType::Hover:
+        case MotionType::Amphibious:
+        case MotionType::AmphibiousFloating:
+            return true;
+        case MotionType::None:
+        case MotionType::Air:
+        case MotionType::Water:
+        case MotionType::SurfacingSub:
+            return false;
+    }
+    return false;  // an enum value from outside the set is not a licence to walk
+}
+
 std::expected<std::vector<UnitDef>, lua::ParseError> loadFileAll(
     const std::filesystem::path& path) {
     auto parsed = lua::parseTableFile(path.string());
@@ -100,6 +143,15 @@ std::expected<std::vector<UnitDef>, lua::ParseError> loadFileAll(
         };
         def.footprintSquaresX = footprint("footprintx");
         def.footprintSquaresZ = footprint("footprintz");
+        def.collisionRadiusElmos = def.footprintRadiusElmos();
+
+        // BAR does not name a motion class, so it is inferred from the fields it
+        // does state. Coarser than the eight classes the other family
+        // distinguishes — nothing here says "ship" — but it makes the same
+        // question answerable of both, which is the point.
+        def.motion = def.canFly    ? MotionType::Air
+                     : def.isMobile() ? MotionType::Land
+                                      : MotionType::None;
 
         defs.push_back(std::move(def));
     }

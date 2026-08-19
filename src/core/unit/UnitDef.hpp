@@ -3,12 +3,55 @@
 #include "core/lua/LuaTable.hpp"
 #include "core/vfs/AssetSearch.hpp"
 
+#include <cstdint>
 #include <expected>
 #include <filesystem>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace rm::unitdef {
+
+// What a unit moves through, and this engine's authority on where it may go.
+//
+// Supreme Commander's own names, because it is the family that HAS this concept:
+// a `.bp` states `Physics.MotionType = 'RULEUMT_Land'` and states no slope or
+// wading limit at all, so the class is the whole of what the file says about
+// passability. All 568 shipped unit blueprints carry one, and these eight values
+// are the complete set (None 374, Air 60, Land 50, Water 27, Hover 19,
+// Amphibious 17, SurfacingSub 13, AmphibiousFloating 8).
+//
+// BAR definitions describe the same thing differently — a per-unit `maxslope`
+// and `maxwaterdepth`, plus `canfly` — so its loader fills this in from what it
+// does say, and everything downstream asks one question of both families.
+enum class MotionType : std::uint8_t {
+    None,                ///< immobile. Buildings, and 374 of the 568 blueprints
+    Land,                ///< ground only; water of any depth is out
+    Air,                 ///< flies, and is not subject to a ground grid at all
+    Water,               ///< surface ships — water ONLY, and cannot come ashore
+    Hover,               ///< ground and water surface alike
+    Amphibious,          ///< ground, and the seabed underneath the water
+    AmphibiousFloating,  ///< ground, and floating on the surface
+    SurfacingSub,        ///< submarines: submerged, surfacing to fire
+};
+
+/// The motion type a `.bp`'s `RULEUMT_*` string names, or nullopt for a string
+/// this does not know. Nothing in the retail corpus is unknown — the check
+/// exists so a mod that invents a class says so rather than being read as
+/// immobile, which would look like a unit that simply refuses to move.
+[[nodiscard]] std::optional<MotionType> motionTypeFromName(std::string_view name) noexcept;
+
+/// Whether a motion type moves over ground the passability grid describes.
+///
+/// The grid answers "may a ground unit stand here", so this is the question of
+/// whether that grid is the right tool at all. False for `Air` (no ground
+/// involved), for `None` (nothing moves), and for `Water` and `SurfacingSub` —
+/// those two need the INVERSE of the grid, water deep enough rather than
+/// shallow enough, which this engine cannot yet express. Routing a ship over the
+/// ground grid would path it across dry land, so it is refused rather than
+/// approximated.
+[[nodiscard]] bool travelsOnGround(MotionType motion) noexcept;
 
 // What a unit *is*, read from the game's own unit definitions rather than
 // hardcoded here.
@@ -45,8 +88,47 @@ struct UnitDef {
     /// Footprint in heightmap SQUARES, already scaled by the engine's
     /// SPRING_FOOTPRINT_SCALE of 2 (UnitDef.cpp:671-672, GlobalConstants.h:17)
     /// — so a `footprintx` of 2 in the file is 4 squares, or 32 elmos, here.
+    ///
+    /// The BUILD-grid quantity: whole squares a unit occupies. A `.scmap` unit
+    /// states this separately from its collision size and only when it has one
+    /// (363 of 568, essentially the structures), so for the rest this is derived
+    /// from the size below rather than read.
     int footprintSquaresX = 0;
     int footprintSquaresZ = 0;
+
+    /// How much room the unit takes up, in elmos, for collision and separation.
+    ///
+    /// STORED rather than derived from the footprint squares above, because the
+    /// two families disagree about whether the quantity is an integer. BAR's
+    /// footprint is whole squares and this is half its larger side, exactly as
+    /// before. Supreme Commander states `SizeX`/`SizeZ` in fractional ogrids —
+    /// 418 of 568 are fractional and 154 are under a single ogrid, the smallest
+    /// 0.01 — so rounding them into squares would inflate the smallest unit's
+    /// radius from 0.04 elmos to 4, a hundredfold, and pack a crowd of them
+    /// against a spacing none of them needs.
+    float collisionRadiusElmos = 0.0f;
+
+    /// What this unit moves through. See MotionType: for the Supreme Commander
+    /// family it is read from the file, for BAR it is inferred from the fields
+    /// that family does state.
+    MotionType motion = MotionType::None;
+
+    /// The factor that takes the MESH's own coordinates to elmos.
+    ///
+    /// One number holding what is two conversions in the file, deliberately.
+    /// A `.s3o` is authored in elmos already, so BAR's is 1. A `.scm` is authored
+    /// in whatever the artist used and the blueprint's `Display.UniformScale`
+    /// takes it to OGRIDS, which are 8 elmos each — so a medium tank's 0.07 is
+    /// really 0.56, and applying only the first step leaves it an eighth of its
+    /// size. That mistake has already been made once here, on the props
+    /// (AGENT.md), and it presents as a scatter of specks rather than as a scale
+    /// bug. Combining the two removes the chance to make it again.
+    ///
+    /// Cross-checked against the mesh: UEL0201's geometry is 8.09 x 11.93 units,
+    /// which at 0.07 is 0.57 x 0.84 ogrids against the 0.7 x 0.9 collision box the
+    /// same blueprint declares — a box slightly larger than the model it holds,
+    /// which is what a collision box should be.
+    float meshToElmos = 1.0f;
 
     float health = 0.0f;
 
@@ -63,8 +145,11 @@ struct UnitDef {
     /// unit with a zero turn rate is more useful than rejecting the file.
     [[nodiscard]] bool isMobile() const noexcept { return speedElmosPerSecond > 0.0f; }
 
-    /// Footprint radius in elmos — half the larger side. What a collision test
-    /// wants, and the one derived quantity worth keeping next to its source.
+    /// Footprint radius in elmos — half the larger side.
+    ///
+    /// The BAR derivation, kept because it is how that family's `collisionRadiusElmos`
+    /// is arrived at and a test asserts the two agree. Prefer the stored radius:
+    /// this one has no answer for a unit whose size was never whole squares.
     [[nodiscard]] float footprintRadiusElmos() const noexcept;
 };
 
