@@ -366,6 +366,48 @@ reimplemented.*
     skybox block, which the loader parses but does not expose), refraction and
     planar reflection, and dynamic per-patch terrain LOD.
 
+12. **Culling, per-map environment, and real water.** **✔ done.**
+
+    **Both terrain passes cull now**, sharing one cull-and-merge helper and
+    differing only in the predicate — the light's box for the shadow pass, the
+    view frustum for the visible one. Frustum culling took the close camera
+    from 0.702 to **0.344 ms**. Plane extraction lives in `core/` with tests,
+    because two details are easy to get wrong and invisible until they bite:
+    Metal's clip depth runs 0..1, so the near plane is row 2 alone rather than
+    OpenGL's row3 + row2 — use the OpenGL form and everything near the camera
+    vanishes — and the box test must keep anything that merely *straddles* a
+    plane, or terrain clips at the screen edge as the camera turns.
+
+    **Detail varies with distance.** Each chunk carries three index sets and
+    the draw picks by distance: whole-map view 2.447 → **1.472 ms**. Not
+    stitched — neighbouring chunks at different levels can crack in principle,
+    though the transition is eight chunks out where a one-level difference is
+    subpixel, and none was visible. The honest fix is skirts.
+
+    **Maps state their own sky and sea.** A `.scmap` carries a lighting block
+    and a water block; both were parsed only to prove the layout, so every map
+    got `water2.fx`'s stock values and every horizon looked the same. Reading
+    them means a desert map gets a warm sandy sky and a coastal one green-grey.
+    Validated across all 60 retail maps — and the assertion that matters is
+    that more than five *distinct* fog colours come back, since a parse landing
+    on a constant passes every range check.
+
+    **Water refracts.** On a tile-based GPU the fragment shader can read the
+    colour already in the render target, so the scene behind the water needs no
+    second pass at all — that is the engine's refraction input arriving free.
+    It is absorbed by Beer-Lambert rather than lerped toward a painted colour,
+    so a shallow sandy bottom stays sandy and a deep one goes blue without
+    either being painted that way. Planar reflection is a real second pass and
+    the expensive one, and its reflected camera cannot be an `OrbitCamera`:
+    that type clamps pitch positive and a mirrored camera looks *up* from below
+    the surface.
+
+    ![refraction and per-map sky](docs/images/m12-water-refraction.png)
+
+    Selection rules moved to `core/scene/Selection.hpp` with nine tests. They
+    had lived inside an AppKit callback, where the only way to check whether
+    shift-click adds was to click.
+
 Stage B (sim semantics, only if milestones 1–5 prove out) is deliberately not
 planned. The cliff is real; plan when we're on it.
 
