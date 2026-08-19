@@ -915,12 +915,19 @@ prop positions take when the map is read. Applying only the first leaves a pine 
 elmos tall, which renders as a scatter of dark specks and reads as a texture
 problem rather than a units one.
 
-**Consequences.** Props do not cast shadows. The shadow pipeline has no fragment
-shader — the depth attachment is its whole output — so it cannot honour a cutout,
-and a tree pushed through it would cast the shadow of the untrimmed quads its
-leaves are painted on: hard rectangles scattered over the ground, worse than
-nothing. Giving that pass a discarding fragment shader would cost every
-shadow-casting surface its early-depth rejection, for scenery.
+**Consequences.** Props cast shadows from a pipeline of their own — the only one in
+the shadow pass with a fragment shader. It exists to run one `discard`: a prop's
+shape is cut out of its quads by the albedo's alpha, and a depth-only pass records
+the untrimmed quad, so a tree would cast the shadow of the card its leaves are
+painted on.
+
+This was first written up as a decision NOT to, on the grounds that a discarding
+fragment shader would cost every shadow caster its early-depth rejection. That was
+wrong, and worth correcting rather than quietly fixing: early-Z behaviour is a
+property of the PIPELINE, not of the pass, so the terrain and the units keep theirs
+and only the props pay. Measured at +0.50 ms over three alternating rounds — the
+same order as the planar reflection, for tree shadows. Shipped on, without a switch
+of its own, since turning the props off already turns their shadows off.
 
 **And they are culled by distance, per prop, per frame**, using the furthest LOD
 cutoff their own blueprint states — 10 to 1000 ogrids across the 335 shipped ones,

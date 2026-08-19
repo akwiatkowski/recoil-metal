@@ -1179,6 +1179,55 @@ vertex float4 unitShadowVertex(uint vid [[vertex_id]],
     return u.lightViewProjection * float4(world, 1.0);
 }
 
+// A PROP's shadow, which needs a fragment shader where the others do not.
+//
+// The passes above write depth and nothing else, and Metal is happy to rasterise
+// with no fragment function at all. A prop cannot: its shape is cut out of its quads
+// by the albedo's alpha, so a depth-only pass records the untrimmed quad and a tree
+// casts the shadow of the card its leaves are painted on — a scatter of hard
+// rectangles, visibly worse than no tree shadow.
+//
+// The cost of a `discard` is losing early-depth rejection, and it is confined to
+// this pipeline: the terrain and the units keep theirs, because that behaviour is a
+// property of the pipeline rather than of the pass.
+struct PropShadowOut {
+    float4 position [[position]];
+    float2 uv;
+};
+
+vertex PropShadowOut propShadowVertex(uint vid [[vertex_id]],
+                                      uint iid [[instance_id]],
+                                      const device UnitVertexIn* vertices [[buffer(0)]],
+                                      constant Uniforms& u [[buffer(1)]],
+                                      const device UnitInstanceIn* instances [[buffer(2)]],
+                                      const device BoneTransformIn* bones [[buffer(3)]],
+                                      constant PoseUniforms& p [[buffer(4)]]) {
+    const UnitVertexIn v = vertices[vid];
+    const UnitInstanceIn inst = instances[iid];
+
+    const BoneTransformIn bone = bones[v.boneIndex];  // props never animate
+    const float3 local =
+        rotateBy(float4(bone.rotation), float3(v.position)) + float3(bone.translation);
+    const float3 world = unitOrient(local, inst) * inst.scale + float3(inst.position);
+
+    PropShadowOut out;
+    out.position = u.lightViewProjection * float4(world, 1.0);
+    // The same V flip the visible pass applies, and it has to match: a shadow cut
+    // from the mirror image of a leaf is a different leaf.
+    out.uv = float2(v.uv.x, 1.0 - v.uv.y);
+    return out;
+}
+
+// Returns nothing — the depth attachment is still the whole output. All this exists
+// to do is refuse the fragments the leaf is not made of.
+fragment void propShadowFragment(PropShadowOut in [[stage_in]],
+                                 texture2d<float> diffuse [[texture(0)]],
+                                 sampler texSampler [[sampler(0)]]) {
+    if (diffuse.sample(texSampler, in.uv).a < 0.5) {
+        discard_fragment();
+    }
+}
+
 // Ported from Recoil's own model shader (ModelFragProgGL4.glsl:92-131), which is
 // the authority on what the two textures mean:
 //
@@ -1413,12 +1462,21 @@ constexpr unsigned char kFallbackBlock[8] = {0x10, 0x84, 0x10, 0x84, 0x00, 0x00,
 /// perfectly happy to rasterise with nothing bound to write colour into.
 [[nodiscard]] MTL::RenderPipelineState* makeDepthOnlyPipeline(MTL::Device* device,
                                                               MTL::Library* library,
-                                                              const char* vertexName) {
+                                                              const char* vertexName,
+                                                              const char* fragmentName = nullptr) {
     MTL::Function* vertexFn =
         library->newFunction(NS::String::string(vertexName, NS::UTF8StringEncoding));
 
     auto* descriptor = MTL::RenderPipelineDescriptor::alloc()->init();
     descriptor->setVertexFunction(vertexFn);
+    // A fragment function only where one is needed: an alpha-cut caster has to be
+    // able to refuse fragments, and it pays for that with early-depth rejection —
+    // which is per pipeline, so the casters that need no cutout keep theirs.
+    MTL::Function* fragmentFn = nullptr;
+    if (fragmentName != nullptr) {
+        fragmentFn = library->newFunction(NS::String::string(fragmentName, NS::UTF8StringEncoding));
+        descriptor->setFragmentFunction(fragmentFn);
+    }
     descriptor->setDepthAttachmentPixelFormat(kShadowFormat);
 
     NS::Error* error = nullptr;
@@ -1426,6 +1484,7 @@ constexpr unsigned char kFallbackBlock[8] = {0x10, 0x84, 0x10, 0x84, 0x00, 0x00,
 
     descriptor->release();
     if (vertexFn != nullptr) vertexFn->release();
+    if (fragmentFn != nullptr) fragmentFn->release();
     if (pipeline == nullptr) {
         throwMetalError("failed to create shadow pipeline", error);
     }
@@ -1519,6 +1578,8 @@ Renderer::Renderer(CA::MetalLayer* layer)
 
     terrainShadowPipeline_ = makeDepthOnlyPipeline(device_, library, "terrainShadowVertex");
     unitShadowPipeline_ = makeDepthOnlyPipeline(device_, library, "unitShadowVertex");
+    propShadowPipeline_ =
+        makeDepthOnlyPipeline(device_, library, "propShadowVertex", "propShadowFragment");
     terrainPipeline_ = makePipeline(device_, library, "terrainVertex", "terrainFragment",
                                     /*blend=*/false);
     skyPipeline_ = makePipeline(device_, library, "skyVertex", "skyFragment", /*blend=*/false);
@@ -1758,6 +1819,7 @@ Renderer::~Renderer() {
     if (skyPipeline_ != nullptr) skyPipeline_->release();
     if (shadowSampler_ != nullptr) shadowSampler_->release();
     if (shadowMap_ != nullptr) shadowMap_->release();
+    if (propShadowPipeline_ != nullptr) propShadowPipeline_->release();
     if (unitShadowPipeline_ != nullptr) unitShadowPipeline_->release();
     if (terrainShadowPipeline_ != nullptr) terrainShadowPipeline_->release();
     if (particleBuffer_ != nullptr) particleBuffer_->release();
@@ -3384,14 +3446,6 @@ void Renderer::encodeShadowPass(MTL::CommandBuffer* commandBuffer) noexcept {
         }, lightCentre_, /*varyDetail=*/false);
     }
 
-    // Units cast shadows; PROPS DO NOT, and that is a decision rather than an
-    // omission. The shadow pipeline has no fragment shader at all — the depth
-    // attachment is its entire output — so it cannot honour an alpha cutout, and
-    // a tree pushed through it would cast the shadow of the untrimmed quads its
-    // leaves are painted on: a scatter of hard rectangles across the ground,
-    // which is far worse than no tree shadow. Giving the shadow pass a fragment
-    // shader that discards would fix it and would cost every shadow-casting
-    // surface its early-depth rejection, for scenery.
     encoder->setRenderPipelineState(unitShadowPipeline_);
     for (const GpuUnitBatch& batch : unitBatches_) {
         if (batch.instanceCount == 0) {
@@ -3419,6 +3473,60 @@ void Renderer::encodeShadowPass(MTL::CommandBuffer* commandBuffer) noexcept {
                                        MTL::IndexType::IndexTypeUInt32, batch.indexBuffer,
                                        /*indexBufferOffset=*/0,
                                        static_cast<NS::UInteger>(batch.instanceCount));
+    }
+
+    // --- Props -------------------------------------------------------------
+    // On its own pipeline, because a prop's shape is cut out of its quads by the
+    // albedo's alpha and a depth-only pass would record the untrimmed quad: a tree
+    // casting the shadow of the card its leaves are painted on.
+    //
+    // The runs and levels are whatever cullProps decided for this frame, so a prop
+    // too far to be drawn is also too far to shade — and the level a tree casts from
+    // is the level it is drawn at, which keeps the shadow the shape of the tree.
+    if (!propGroups_.empty() && propsVisible_ && propShadowPipeline_ != nullptr) {
+        encoder->setRenderPipelineState(propShadowPipeline_);
+        encoder->setFragmentSamplerState(groundSampler_, kGroundSamplerIndex);
+
+        for (const GpuPropGroup& group : propGroups_) {
+            for (const GpuPropLevel& level : group.levels) {
+                if (level.instanceCount == 0) {
+                    continue;
+                }
+
+                MTL::Texture* albedo = nullptr;
+                if (level.albedo >= 0
+                    && static_cast<std::size_t>(level.albedo) < propTextures_.size()) {
+                    albedo = propTextures_[static_cast<std::size_t>(level.albedo)];
+                }
+                if (albedo == nullptr) {
+                    continue;  // no alpha to cut with, so nothing to cast honestly
+                }
+                encoder->setFragmentTexture(albedo, kGroundTextureIndex);
+
+                encoder->setVertexBuffer(level.vertexBuffer, 0, kVertexBufferIndex);
+                encoder->setVertexBuffer(
+                    group.instanceBuffer,
+                    static_cast<NS::UInteger>((instanceSlot_ * group.instanceCapacity
+                                               + level.firstInstance)
+                                              * sizeof(UnitInstance)),
+                    kInstanceBufferIndex);
+                encoder->setVertexBuffer(level.boneBuffer, 0, kBoneBufferIndex);
+
+                PoseUniforms pose;
+                pose.poseCount = 1;
+                pose.boneCount =
+                    static_cast<std::uint32_t>(level.boneStrideBytes / sizeof(BoneTransform));
+                pose.duration = 0.0f;
+                pose.time = 0.0f;
+                encoder->setVertexBytes(&pose, sizeof(pose), kPoseUniformBufferIndex);
+
+                encoder->drawIndexedPrimitives(
+                    MTL::PrimitiveType::PrimitiveTypeTriangle,
+                    static_cast<NS::UInteger>(level.indexCount), MTL::IndexType::IndexTypeUInt32,
+                    level.indexBuffer, /*indexBufferOffset=*/0,
+                    static_cast<NS::UInteger>(level.instanceCount));
+            }
+        }
     }
 
     encoder->endEncoding();

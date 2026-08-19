@@ -485,6 +485,10 @@ private:
     // enough to see.
     MTL::RenderPipelineState* terrainShadowPipeline_ = nullptr;  // owned
     MTL::RenderPipelineState* unitShadowPipeline_ = nullptr;     // owned
+    /// The props' own shadow pipeline: the only one here with a fragment shader,
+    /// because a prop's shape is an alpha cutout and a depth-only pass would record
+    /// the quad it is painted on.
+    MTL::RenderPipelineState* propShadowPipeline_ = nullptr;     // owned
     MTL::Texture* shadowMap_ = nullptr;                          // owned
     MTL::SamplerState* shadowSampler_ = nullptr;                 // owned
     simd_float4x4 lightViewProjection_{};
