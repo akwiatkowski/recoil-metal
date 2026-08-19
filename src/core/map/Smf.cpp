@@ -3,6 +3,7 @@
 #include "core/map/ByteReader.hpp"
 
 #include <cstdio>
+#include <numbers>
 #include <cstring>
 #include <fstream>
 #include <iterator>
@@ -22,6 +23,9 @@ constexpr std::size_t kOffMinHeight      = 44;
 constexpr std::size_t kOffMaxHeight      = 48;
 constexpr std::size_t kOffHeightmapPtr   = 52;
 constexpr std::size_t kOffTilesPtr       = 60;
+// ...and the feature list, four fields further on: minimapPtr and metalmapPtr sit
+// between (SMFFormat.h:60-70).
+constexpr std::size_t kOffFeaturePtr     = 72;
 
 // Values the engine demands. Anything else is rejected outright, exactly as
 // CheckHeader does (SMFMapFile.cpp:16-28).
@@ -46,6 +50,7 @@ struct Header {
     float maxHeight = 0.0f;
     std::size_t heightmapPtr = 0;
     std::size_t tilesPtr = 0;
+    std::size_t featurePtr = 0;
 };
 
 [[nodiscard]] std::expected<Header, rm::MapError> parseHeader(std::span<const std::byte> bytes) {
@@ -103,6 +108,7 @@ struct Header {
         .maxHeight = rm::readF32(bytes, kOffMaxHeight),
         .heightmapPtr = static_cast<std::size_t>(rm::readI32(bytes, kOffHeightmapPtr)),
         .tilesPtr = static_cast<std::size_t>(rm::readI32(bytes, kOffTilesPtr)),
+        .featurePtr = static_cast<std::size_t>(rm::readI32(bytes, kOffFeaturePtr)),
     };
 }
 
@@ -262,6 +268,119 @@ std::expected<HeightField, MapError> loadFile(const std::filesystem::path& path)
             MapError::Code::Truncated, "could not open \"" + path.string() + "\""});
     }
     return load(std::as_bytes(std::span{data}));
+}
+
+std::expected<MapFeatures, MapError> loadFeatures(std::span<const std::byte> bytes) {
+    const auto header = parseHeader(bytes);
+    if (!header) {
+        return std::unexpected(header.error());
+    }
+
+    MapFeatures features;
+
+    // A pointer of zero means the map has no feature section at all, which several
+    // generators emit. Not an error, and not the same thing as a section declaring
+    // zero features — both end here with an empty list.
+    if (header->featurePtr == 0) {
+        return features;
+    }
+
+    constexpr std::size_t kFeatureHeaderSize = 8;  // two int32s
+    if (!sectionFits(bytes, header->featurePtr, kFeatureHeaderSize)) {
+        return std::unexpected(MapError{
+            MapError::Code::Truncated,
+            "feature section header at offset " + std::to_string(header->featurePtr)
+                + " runs past the end of a " + std::to_string(bytes.size()) + "-byte file"});
+    }
+
+    const std::int32_t typeCount = readI32(bytes, header->featurePtr);
+    const std::int32_t placementCount = readI32(bytes, header->featurePtr + 4);
+    if (typeCount < 0 || placementCount < 0) {
+        return std::unexpected(MapError{
+            MapError::Code::BadHeader,
+            "feature section declares a negative count (" + std::to_string(typeCount) + " types, "
+                + std::to_string(placementCount) + " features)"});
+    }
+
+    // The type names: numFeatureType NUL-terminated strings back to back
+    // (SMFFormat.h:144-146). Walked rather than seeked, so a count that disagrees
+    // with the data runs out of file instead of reading whatever follows.
+    std::size_t cursor = header->featurePtr + kFeatureHeaderSize;
+    features.types.reserve(static_cast<std::size_t>(typeCount));
+    for (std::int32_t i = 0; i < typeCount; ++i) {
+        std::string name;
+        while (true) {
+            if (cursor >= bytes.size()) {
+                return std::unexpected(MapError{
+                    MapError::Code::Truncated,
+                    "feature type " + std::to_string(i) + " of " + std::to_string(typeCount)
+                        + " runs past the end of the file"});
+            }
+            const auto c = std::to_integer<char>(bytes[cursor]);
+            ++cursor;
+            if (c == '\0') {
+                break;
+            }
+            name.push_back(c);
+        }
+        features.types.push_back(std::move(name));
+    }
+
+    // Then numFeatures fixed-size records. 24 bytes each: an int32 type index, three
+    // floats of position, and two more the engine's own header calls rotation and
+    // relativeSize.
+    constexpr std::size_t kPlacementSize = 24;
+    const auto placementBytes = static_cast<std::size_t>(placementCount) * kPlacementSize;
+    if (!sectionFits(bytes, cursor, placementBytes)) {
+        return std::unexpected(MapError{
+            MapError::Code::Truncated,
+            "feature list declares " + std::to_string(placementCount) + " features ("
+                + std::to_string(placementBytes) + " bytes) but only "
+                + std::to_string(bytes.size() - std::min(cursor, bytes.size()))
+                + " remain"});
+    }
+
+    features.placements.reserve(static_cast<std::size_t>(placementCount));
+    for (std::int32_t i = 0; i < placementCount; ++i) {
+        const std::size_t at = cursor + static_cast<std::size_t>(i) * kPlacementSize;
+
+        MapFeatures::Placement placement;
+        placement.type = readI32(bytes, at);
+        placement.position = {readF32(bytes, at + 4), readF32(bytes, at + 8),
+                              readF32(bytes, at + 12)};
+
+        // "-32768..32767 for full circle" (SMFFormat.h:155), so the unit is a
+        // 65536th of a turn rather than a degree or a radian. Stored as a float
+        // holding an integer, which is the format's oddity and not a misreading.
+        constexpr float kTurnsPerUnit = 1.0f / 65536.0f;
+        placement.rotationRadians =
+            readF32(bytes, at + 16) * kTurnsPerUnit * 2.0f * std::numbers::pi_v<float>;
+
+        // relativeSize at at+20 is read past: the engine's own header says "Not used
+        // at the moment keep 1".
+
+        // A type index outside the table is corruption rather than something to
+        // clamp: it would silently draw the wrong tree for the rest of the map.
+        if (placement.type < 0 || placement.type >= typeCount) {
+            return std::unexpected(MapError{
+                MapError::Code::BadHeader,
+                "feature " + std::to_string(i) + " names type " + std::to_string(placement.type)
+                    + ", but the map declares only " + std::to_string(typeCount)});
+        }
+
+        features.placements.push_back(placement);
+    }
+
+    return features;
+}
+
+std::expected<MapFeatures, MapError> loadFeaturesFile(const std::filesystem::path& path) {
+    const std::vector<char> data = slurp(path);
+    if (data.empty()) {
+        return std::unexpected(MapError{
+            MapError::Code::Truncated, "could not open \"" + path.string() + "\""});
+    }
+    return loadFeatures(std::as_bytes(std::span{data}));
 }
 
 std::expected<TileIndex, MapError> loadTileIndexFile(const std::filesystem::path& path) {

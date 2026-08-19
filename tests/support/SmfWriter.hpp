@@ -18,6 +18,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <string>
 #include <vector>
 
 namespace rmtest {
@@ -34,6 +35,18 @@ struct SmfSpec {
     /// Raw corner samples, row-major, (mapx+1) * (mapy+1) of them.
     /// Empty means "fill with zero".
     std::vector<std::uint16_t> heights;
+
+    /// Feature type names, and the placements referring to them by index.
+    ///
+    /// Empty is the ordinary case and what most of these fixtures want: a map with
+    /// no features is legitimate, and BAR's own maps are like that.
+    std::vector<std::string> featureTypes;
+    struct Feature {
+        std::int32_t type = 0;
+        float x = 0.0f, y = 0.0f, z = 0.0f;
+        float rotation = 0.0f;  ///< -32768..32767 for a full circle, as the format has it
+    };
+    std::vector<Feature> features;
 
     // --- Knobs for negative tests ------------------------------------------
     std::int32_t version = 1;

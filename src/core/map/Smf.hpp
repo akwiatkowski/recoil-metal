@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <expected>
 #include <filesystem>
+#include <array>
 #include <span>
 #include <string>
 #include <vector>
@@ -53,7 +54,38 @@ struct TileIndex {
 //
 // Returns std::expected because a malformed map is a recoverable input error,
 // not a startup fault — see MapError in core/Error.hpp.
+// The static objects a map places: trees, rocks, wreckage.
+//
+// Recoil's answer to a .scmap's props, and laid out the same way in spirit — a list
+// of type names, then placements referring to them by index. Kept in that shape
+// rather than flattened, because a map places thousands of features drawn from a few
+// dozen types and the names are the expensive part.
+struct MapFeatures {
+    /// Feature type names, as the file lists them. What they MEAN is a game-side
+    /// question: a name resolves against the game's own feature definitions, which
+    /// live outside the map.
+    std::vector<std::string> types;
+
+    struct Placement {
+        int type = 0;  ///< index into `types`
+        std::array<float, 3> position{};  ///< elmos
+        float rotationRadians = 0.0f;
+    };
+    std::vector<Placement> placements;
+};
+
 [[nodiscard]] std::expected<HeightField, MapError> load(std::span<const std::byte> bytes);
+
+/// Reads the feature section — the third thing a .smf carries that this renderer
+/// wants, after the heightmap and the tiles.
+///
+/// A map with no features is not an error: it returns an empty list, and that is a
+/// common and legitimate state. BAR's own maps place their objects through a runtime
+/// Lua gadget instead, which is why this section can be empty on a map visibly full
+/// of trees.
+[[nodiscard]] std::expected<MapFeatures, MapError> loadFeatures(std::span<const std::byte> bytes);
+[[nodiscard]] std::expected<MapFeatures, MapError> loadFeaturesFile(
+    const std::filesystem::path& path);
 
 // Parses the tile section: MapTileHeader, the per-file name records, and the
 // index array (SMFGroundTextures.cpp:135-172). Independent of load() so the

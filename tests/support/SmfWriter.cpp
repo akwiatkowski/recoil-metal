@@ -139,9 +139,27 @@ std::vector<std::byte> writeSmf(const SmfSpec& spec) {
     // --- Metal map ---------------------------------------------------------
     appendZeros(out, metalmapCount);
 
-    // --- Feature header ----------------------------------------------------
-    appendI32(out, 0);  // numFeatureType
-    appendI32(out, 0);  // numFeatures
+    // --- Features ----------------------------------------------------------
+    // The header's two counts, then that many NUL-terminated type names, then that
+    // many fixed 24-byte placements (SMFFormat.h:135-157).
+    appendI32(out, static_cast<std::int32_t>(spec.featureTypes.size()));
+    appendI32(out, static_cast<std::int32_t>(spec.features.size()));
+
+    for (const std::string& type : spec.featureTypes) {
+        for (const char c : type) {
+            out.push_back(static_cast<std::byte>(c));
+        }
+        out.push_back(std::byte{0});
+    }
+
+    for (const SmfSpec::Feature& feature : spec.features) {
+        appendI32(out, feature.type);
+        appendF32(out, feature.x);
+        appendF32(out, feature.y);
+        appendF32(out, feature.z);
+        appendF32(out, feature.rotation);
+        appendF32(out, 1.0f);  // relativeSize: "Not used at the moment keep 1"
+    }
 
     return out;
 }

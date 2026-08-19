@@ -11,6 +11,8 @@
 #include "core/map/Smf.hpp"
 #include "support/SmfWriter.hpp"
 
+#include <numbers>
+
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
@@ -223,4 +225,71 @@ TEST_CASE("a procedural field survives a write/read round trip through SMF") {
     REQUIRE(parsed->raw == source.raw);
     REQUIRE(parsed->heightScale == Approx(source.heightScale));
     REQUIRE(parsed->baseHeight == Approx(source.baseHeight));
+}
+
+// --- Features ----------------------------------------------------------------
+// The static objects a map places: trees, rocks, wreckage. A list of type names,
+// then placements referring to them by index — the same shape a .scmap's props take,
+// and read for the same reason.
+
+TEST_CASE("a map's features come back with their types and placements") {
+    rmtest::SmfSpec spec;
+    spec.featureTypes = {"treetype0", "geovent", "rockbig"};
+    spec.features = {
+        {.type = 0, .x = 128.0f, .y = 40.0f, .z = 256.0f, .rotation = 0.0f},
+        {.type = 2, .x = 512.0f, .y = 12.5f, .z = 64.0f, .rotation = 16384.0f},
+    };
+
+    const auto features = rm::smf::loadFeatures(rmtest::writeSmf(spec));
+    REQUIRE(features.has_value());
+
+    REQUIRE(features->types.size() == 3);
+    CHECK(features->types[1] == "geovent");
+
+    REQUIRE(features->placements.size() == 2);
+    CHECK(features->placements[0].type == 0);
+    CHECK(features->placements[0].position[0] == Approx(128.0f));
+    CHECK(features->placements[0].position[1] == Approx(40.0f));
+    CHECK(features->placements[0].position[2] == Approx(256.0f));
+
+    CHECK(features->placements[1].type == 2);
+    // "-32768..32767 for full circle" (SMFFormat.h:155), so the unit is a 65536th of
+    // a turn — not a degree and not a radian. 16384 is a quarter turn.
+    CHECK(features->placements[1].rotationRadians
+          == Approx(std::numbers::pi_v<float> / 2.0f).margin(1e-4));
+}
+
+TEST_CASE("a map with no features is not a map that failed to read") {
+    // The ordinary case, and the one that matters most here: BAR's own maps declare
+    // none and place their objects through a runtime Lua gadget instead. An empty
+    // list and an error are very different answers to "does this map have trees".
+    const auto features = rm::smf::loadFeatures(rmtest::writeSmf(rmtest::SmfSpec{}));
+    REQUIRE(features.has_value());
+    CHECK(features->types.empty());
+    CHECK(features->placements.empty());
+}
+
+TEST_CASE("a feature naming a type the map does not declare is refused") {
+    // Clamping it would silently draw the wrong tree for the rest of the map, which
+    // is the kind of wrongness that looks like an art decision.
+    rmtest::SmfSpec spec;
+    spec.featureTypes = {"treetype0"};
+    spec.features = {{.type = 7, .x = 0.0f, .y = 0.0f, .z = 0.0f, .rotation = 0.0f}};
+
+    const auto features = rm::smf::loadFeatures(rmtest::writeSmf(spec));
+    REQUIRE_FALSE(features.has_value());
+    CHECK(features.error().code == rm::MapError::Code::BadHeader);
+}
+
+TEST_CASE("a feature list that runs past the end of the file is refused") {
+    rmtest::SmfSpec spec;
+    spec.featureTypes = {"treetype0"};
+    spec.features = {{.type = 0, .x = 1.0f, .y = 2.0f, .z = 3.0f, .rotation = 0.0f}};
+
+    std::vector<std::byte> bytes = rmtest::writeSmf(spec);
+    bytes.resize(bytes.size() - 8);  // clip the tail of the last placement
+
+    const auto features = rm::smf::loadFeatures(bytes);
+    REQUIRE_FALSE(features.has_value());
+    CHECK(features.error().code == rm::MapError::Code::Truncated);
 }
