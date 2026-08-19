@@ -1728,6 +1728,17 @@ void Renderer::beginFrame() noexcept {
     framesInFlight_.acquire();
     instanceSlot_ = (instanceSlot_ + 1) % kMaxFramesInFlight;
     frameOpen_ = true;
+
+    // Rings are forgotten at the start of every frame, so a frame that pushes
+    // none draws none.
+    //
+    // Unlike instances, which persist deliberately — a batch nobody writes
+    // keeps what it was uploaded with, because setUnits seeded every slot. The
+    // ring buffer has no such seeding, so a count that outlived its frame would
+    // point the draw at whatever a different slot happens to hold. Clearing
+    // here means the only way to get that wrong is to push rings before
+    // beginFrame, which the header forbids.
+    ringVertexCount_ = 0;
 }
 
 void Renderer::setInstances(std::size_t batchIndex,

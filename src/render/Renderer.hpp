@@ -149,9 +149,11 @@ public:
     // ring follows the unit, and a unit moves. It rides the same frames-in-
     // flight ring, so this must be called between beginFrame and drawFrame.
     //
-    // Passing an empty span draws none, which is what an empty selection should
-    // look like — the previous frame's rings are NOT kept, because a selection
-    // that survives being cleared is worse than no rings at all.
+    // Passing an empty span draws none, and so does not calling this at all:
+    // beginFrame forgets the previous frame's rings. That is the opposite of
+    // how instances behave, and deliberately — a selection that survived being
+    // cleared would be worse than no rings, and a count that outlived its
+    // frame would point the draw at another slot's contents.
     //
     // Vertices beyond kMaxRingVertices are dropped rather than growing the
     // buffer, which cannot be resized while the GPU may be reading it. That is
