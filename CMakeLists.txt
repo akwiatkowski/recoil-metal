@@ -74,6 +74,7 @@ add_library(rm_core STATIC
     src/core/map/ProceduralField.cpp
     src/core/map/Smf.cpp
     src/core/map/Scmap.cpp
+    src/core/blueprint/BlueprintMesh.cpp
     src/core/map/PropBlueprint.cpp
     src/core/map/ScenarioSave.cpp
     src/core/map/TerrainType.cpp
@@ -161,6 +162,7 @@ if(BUILD_TESTING)
         tests/test_real_map.cpp
         tests/test_terrain_type.cpp
         tests/test_real_scmap.cpp
+        tests/test_blueprint_mesh.cpp
         tests/test_prop_blueprint.cpp
         tests/test_settings.cpp
         tests/test_real_stratum_normals.cpp
