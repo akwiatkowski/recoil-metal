@@ -26,11 +26,13 @@ P1 has its handle (`UnitId` + `IdPool`), its store (`UnitStore`), its census
 identical`), and an order-independent invariant suite for the part the golden log cannot
 cover.
 
-**Not done: P1.4** — deleting `UnitRef{batch, instance}` and the batch-indexed spans. Not
-started deliberately; see §7 P1.4 for the measurement and the reason. It is the one item in
-the phase that is both atomic and behaviour-changing, and it wants a session of its own.
+**P1 is done.** P1.4 landed: `UnitRef{batch, instance}`, `CombatGroup`, `SkirmishGroup` and
+`CollisionGroup` are gone, and every sim pass takes `UnitStore` + `UnitCatalog` and loops once
+over slots. As predicted the golden log diverged at tick 0 and was re-recorded in the same
+commit; `tests/test_match_invariants.cpp` was the gate and held. It also earned its keep
+immediately — it found a real defect in `hashMatch`, which could not see a unit die (§7 P1.4).
 
-**Engine completion: ~37 %** (§2).
+**Engine completion: ~40 %** (§2).
 
 ---
 
@@ -123,21 +125,23 @@ re-deriving the weights.
 
 | Subsystem | W | Done | Have | Missing |
 |---|---:|---:|---|---|
-| Sim | 26 % | **25 %** | movement, collisions, targeting/facing/firing, projectiles, area damage, death, economy, construction, victory, **unit handles + store + census (not yet wired)** | features, fixed-point, intel/vision, shields, transports, most weapon classes, air/naval/hover domains, veterancy, upgrades, adjacency |
+| Sim | 26 % | **32 %** | movement, collisions, targeting/facing/firing, projectiles, area damage, death, economy, construction, victory, **unit handles + flat store + type catalog + census, wired: every pass takes the store** | features, fixed-point, intel/vision, shields, transports, most weapon classes, air/naval/hover domains, veterancy, upgrades, adjacency |
 | Renderer | 21 % | **55 %** | instanced units w/ team colour, props + culling, shadows, water + refraction, sky, particles, decals, text/HUD, icons, selection, model LOD, pose playback, DDS, offscreen capture | drawer split, minimap, effect taxonomy (muzzle/trail/impact), beams |
 | System | 16 % | **30 %** | VFS (`.sdz`/`.scd`), asset search, DDS, settings, bench harness | **sound (nothing)**, logging framework, job system, serialisation/save, profiling |
 | Game/orders/UI | 13 % | **30 %** | orbit camera, picking, selection + modifiers, HUD, order markers, CLI harness | command queue, build menu, control groups, minimap interaction, formations, game states |
 | Map | 10 % | **70 %** | SMF/SMT, `.scmap`, tile atlas, heightfield, `mapinfo.lua`, terrain mesh w/ LOD + skirts, chunk culling, splat, water, stratum normals, props, terrain types, start positions | minimap, resource spots, features as objects |
 | Pathfinding | 7 % | **25 %** | coarse grid A*, passability, path following | hierarchical/flow-field, dynamic blocking, formations, avoidance quality, per-motion-class grids |
-| Net/replay | 5 % | **15 %** | per-tick state hash, hash log + first-divergence reporting (P0.2/P0.3) | netcode, lockstep, the cross-architecture proof (P8) |
+| Net/replay | 5 % | **20 %** | per-tick state hash over the store (incl. per-slot type, generation and liveness), hash log + first-divergence reporting (P0.2/P0.3) | netcode, lockstep, the cross-architecture proof (P8) |
 | AI | 2 % | **15 %** | scripted build order + one attack wave | role classification, build tree, any reaction |
 
-**Weighted total: ~37 %.**
+**Weighted total: ~40 %** (was 37 % before P1.4; the Sim row moved 25 → 32 % because storage
+and identity are now the sim's own rather than the renderer's batching, and Net/replay 15 →
+20 % because the fingerprint now covers occupancy as well as values).
 
 The shape of that number is the important part: **the two most-complete slices are Map (70 %)
 and Renderer (55 %), which together are 31 % of the weight — and the Sim, at 26 % of the
-weight, is 22 % done.** That is precisely why the project looks further along than it is. A
-screenshot samples the finished third.
+weight, is 32 % done** (22 % at the baseline; P1 moved it). That is still why the project looks
+further along than it is: a screenshot samples the finished third.
 
 ### 2.3 The procedure
 
@@ -154,6 +158,7 @@ screenshot samples the finished third.
 | 2026-08-20 | 22 | 55 | 30 | 30 | 70 | 25 | 0 | 15 | **35 %** | baseline, before P0 |
 | 2026-08-20 | 22 | 55 | 30 | 30 | 70 | 25 | 15 | 15 | **36 %** | P0 done — the determinism harness exists |
 | 2026-08-20 | 25 | 55 | 30 | 30 | 70 | 25 | 15 | 15 | **37 %** | P1.0–P1.3 — handle, store, census, and the invariant net |
+| 2026-08-20 | 32 | 55 | 30 | 30 | 70 | 25 | 20 | 15 | **40 %** | P1 done — the store IS the sim's storage; batch groups gone |
 
 ---
 
@@ -666,7 +671,7 @@ seeded from the scene using the same predicate the sim decides on. And `advanceM
 reader was the next tick, an immediate segfault for the first reader that looked straight
 after the call. Rebuilt at the end of the call instead of the top of the next.
 
-### P1 — Identity and storage — **P1.0–P1.3 done 2026-08-20; P1.4 outstanding**
+### P1 — Identity and storage — **done 2026-08-20**
 
 **P0 changed the character of this phase.** This file originally said P1 "cannot be done in
 small safe steps" and to "expect the app to be broken in the middle of it". That was true
@@ -677,7 +682,7 @@ match does, and every step can be checked against it. The phase is still large, 
 
 The technique, and it is the whole reason to do P1 next rather than P2:
 
-- [ ] **P1.0 Record the golden log first.** `--play 300 --hash-log docs/golden-p1.log` on a
+- [x] **P1.0 Record the golden log first.** `--play 300 --hash-log docs/golden-p1.log` on a
       fixed map and army count, committed alongside the code. This is the definition of "P1
       changed nothing", written down before anything moves.
       *Test:* re-running it reports `MATCH`. *Manual:* the file exists and is in the commit.
@@ -693,19 +698,19 @@ The technique, and it is the whole reason to do P1 next rather than P2:
       the *sequence of fields fed* identical across that change and old logs stay comparable;
       change both at once and they do not.
 
-- [ ] **P1.1 `IdPool`** (§6.1). *Test:* a dead unit's id never resolves to its successor; an
+- [x] **P1.1 `IdPool`** (§6.1). *Test:* a dead unit's id never resolves to its successor; an
       order held across a death fails cleanly. *Manual:* kill a selected unit, no ghost.
-- [ ] **P1.2 `UnitStore`.** `Unit` holds type, owner, position, orientation, health, motion,
+- [x] **P1.2 `UnitStore`.** `Unit` holds type, owner, position, orientation, health, motion,
       build state. Buildings are units with a build state, not a second kind. *Test:* 1,000
       units, kill every third, assert iteration and lookup. *Manual:* `--units 5000` renders.
-- [ ] **P1.3 Bucketed index by team and type** (§6.2). *Test:* counts match brute force after
+- [x] **P1.3 Bucketed index by team and type** (§6.2). *Test:* counts match brute force after
       10,000 random spawns and deaths. *Manual:* HUD counts stay right through a battle.
-- [ ] **P1.4 Delete `UnitRef{batch, instance}`** and the batch-indexed sim spans.
+- [x] **P1.4 Delete `UnitRef{batch, instance}`** and the batch-indexed sim spans.
       *Test:* suite passes with the type gone. *Manual:* full `--play`.
 
-      **P1.4 changes the match, and the golden log cannot verify it. Found 2026-08-20,
-      before starting — it contradicts P1.0's "keep iteration order identical" and that
-      instruction cannot be honoured for this item.**
+      **Done 2026-08-20. It changed the match exactly as predicted: the golden log diverged
+      at tick 0, and was re-recorded in the same commit. Everything below was written before
+      the work started; it is left as written because the prediction held.**
 
       Why: `nearestTarget` documents its tie-break as *"ties break on the lower batch then
       the lower instance"* (Combat.hpp), and spawning appends into per-blueprint batches, so
@@ -725,6 +730,55 @@ The technique, and it is the whole reason to do P1 next rather than P2:
         units destroyed, HP remaining, the tick someone wins on. Comparable, not identical.
       - `make golden` re-records, **in the same commit**, with the reason in the message.
         That is what `make golden` is for and the only legitimate use of it.
+
+      **What it actually cost, against the estimate above:** 601/601 green, all three
+      verifications met. The estimate of ~220 sites was about right in shape and wrong about
+      where the work was: the sim passes got *shorter* (every `for group / for instance`
+      became one loop over slots) and the test files were the bulk of the churn.
+
+      **The match came out identical, not merely comparable** — 567 shots, 24 destroyed, team
+      1 at 502.2s, all three the same as the pre-P1.4 run. Only the per-tick hash moved, which
+      is the predicted consequence of slot order plus the three new per-slot fields. The bar
+      was "comparable"; the outcome exceeded it, and that is worth knowing: on this map the
+      targeting ties that reorder never decided anything.
+
+      **A defect the invariants test found, which the golden log never could.** `hashMatch`
+      fed each slot's generation but not its LIVENESS, and `kill` deliberately advances
+      neither the arrays nor the generation mirror — a stale mirror is what makes a dead
+      unit's handle fail `alive`. So a unit killed at full health changed nothing in the
+      hash: the fingerprint could not see a death. It went unnoticed because in a real match
+      the values move anyway (`retireDead` zeroes the radius, and health had to reach zero to
+      get there). Fixed by feeding `slotAlive(slot)`. This is the case for property tests
+      over regression logs: a log records what the code did, including what it failed to
+      notice.
+
+      **Two more defects found in the process, both of the same kind — a count taken by
+      scanning storage, which slot reuse invalidates:**
+
+      - The end-of-match summary counted units destroyed with `deadUnits(store)`, a scan for
+        slots whose health is zero. A corpse's slot is reused by the next spawn, so the scan
+        undercounted every recycled death: 21 reported against 24 scorch marks, and the marks
+        were right because they accumulate from the tick's death reports. `MatchRunner` now
+        totals deaths from the reports. **A total that only goes up cannot be undone by
+        storage reusing a slot** — the rule to apply to every other running total.
+      - `test_match_invariants` keyed "a death is reported exactly once" by SLOT, which would
+        false-positive on the first recycled slot. Two reports of one corpse carry the same
+        handle; two occupants of one slot do not. Keyed by the whole handle now.
+
+      **And one defect introduced and caught before commit:** `Renderer::setUnits` sizes a
+      batch's instance buffer from `batch.instances.size()`, and `spawnUnit` used to re-point
+      that span on every spawn — so a batch created mid-match was never empty by the time
+      `setUnits` saw it. With no per-batch vector to re-point, a newly built unit type got a
+      capacity of zero and would never have drawn. `gatherForDrawing` now re-points every
+      batch, so the invariant holds wherever the gather is called rather than at four call
+      sites that must remember.
+
+      **One structural change beyond the item:** `applyClick` is now a template over the
+      identity type, so a selection holds `UnitId` and `SelectionEntry{batch, instance}`
+      survives only as the renderer's draw-time projection (`UnitScene::drawnAt`). And the
+      three test files that each had their own copy of the same unit fixture now share
+      `tests/support/TestRoster.hpp` — three copies of one fixture was three chances to
+      migrate it differently.
 
       **Measured, not estimated: ~220 use sites.** ~130 across 15 files in the sim and its
       tests, plus 91 more in `main.mm` alone touching the parallel arrays. `UnitScene`'s
@@ -940,40 +994,56 @@ for what P0 actually taught.
 
 ## 11. The next goal
 
-**P1 — identity and storage.** The reasons it goes next rather than P2:
+**P1 is done (2026-08-20).** What it left behind, for whoever picks up P2:
 
-1. It is the load-bearing change. §6.1–6.3 all depend on a unit having an identity that is not
-   a draw-call address, and P3's role/build-tree work needs to count units by team and type,
-   which is P1.3.
-2. P0 just made it safe (P1.0). That safety expires: the longer the sim grows against
-   `[batch][instance]`, the more code the refactor touches.
-3. It does not change numerics, so the golden log is a *strict* check — unlike P2, where every
-   constant is re-based and the log must be re-baselined by construction. Doing the phase whose
-   correctness is exactly checkable before the phase whose isn't is the cheaper order.
+- The golden log is re-baselined and `make verify` reports MATCH. It is a strict check again.
+- `tests/test_match_invariants.cpp` is the tool for any change the log *cannot* verify. P2 is
+  exactly that class of change — every constant is re-based, so the log must be re-baselined by
+  construction — which makes the invariants the primary gate for the whole phase, not a
+  supplement. Expect to add to them rather than to lean on `MATCH`.
+- Two defects in this phase were the same mistake: **a count taken by scanning storage**, which
+  slot reuse invalidates. Anything that answers "how many" by walking slots is suspect.
 
-**Model: Opus 5 again**, `effort: xhigh`, `max_tokens` ≥ 64K. Same reasoning as P0 and it
-applies more strongly here — *"strongest on difficult tasks: multi-file features, larger
-refactors"* is a description of P1. Consider Fable 5 only if P1.2 stalls; that is the one item
-in the phase with genuine design freedom left in it.
+**P2 — fixed-point (D1) and ownership.** Why it goes next:
+
+1. Every tick of float sim written before P2.2 is a tick to rewrite (D1's recorded cost). The
+   sim is now the smallest it will ever be again — one store, one loop per pass — so the
+   migration is as cheap as it gets.
+2. P2.3 discharges D2's tick-rate rule, which is a hard constraint currently honoured by
+   convention rather than by construction: `kProjectileLifetimeTicks = 300` and
+   `kMaxTicksPerAdvance = 5` are still tick counts written as numbers (§5.1).
+3. P8's cross-architecture proof — the project's stated success criterion (§1.3) — is not
+   reachable in floating point at all. P2 is the only phase standing between here and a
+   falsifiable claim.
+
+**The float/libm CI ban** deferred at P0 (recorded in `CMakeLists.txt`) becomes registrable at
+P2.2 and should be registered in the same commit that finishes it. That is the check that stops
+the migration silently regressing.
+
+**Model: Opus 5**, `effort: xhigh`. Same reasoning as P0 and P1. P2.1 (the trig/sqrt tables) is
+the one item with real design freedom — precision, table size, the interpolation scheme — and is
+the place to consider Fable 5 if it stalls.
 
 The goal prompt:
 
 ```
-Execute phase P1 of PLAN2.md in the recoil-metal repo. Read PLAN2.md first —
-§0 has the settled decisions, §6.1–6.3 the designs, §7 the items, §10 the risks.
+Execute phase P2 of PLAN2.md in the recoil-metal repo. Read PLAN2.md first —
+§0 has the settled decisions, §5.1-5.3 the rules, §6 the designs, §7 the items,
+§10 the risks.
 
-Start with P1.0: record docs/golden-p1.log and commit it. Then P1.1 → P1.4,
-replaying against that log after each and requiring MATCH before moving on.
-Keep iteration order identical for the whole phase; a hash change is a
-behaviour change, and the tick number says where to look.
+P2 re-bases every constant, so the golden log CANNOT verify it and MATCH is not
+the gate. tests/test_match_invariants.cpp is — extend it as needed, and
+re-baseline docs/golden-p1.log with `make golden` in the commit that changes the
+numerics, with the reason in the message.
 
 Every item ships with the automated test and the manual check named in §7.
 Commit each item separately, conventional messages, co-author trailer
 "Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>".
 
 Constraints:
-- Deliver P1 at the scope §7 states. Don't start P2 — fixed-point re-bases
-  every constant and would invalidate the golden log this phase depends on.
+- Register the float/libm CI check when P2.2 lands; the reason it was deferred is
+  recorded in CMakeLists.txt.
+- Deliver P2 at the scope §7 states. Don't start P3.
 - Do not add a verification step, a self-review pass, or a verifier subagent.
   Run the tests and the replay, and report what they output.
 - Do not delegate to subagents.
@@ -982,10 +1052,3 @@ Constraints:
   one you left and why. Don't silently narrow the scope.
 - Report the §2 progress reading at the end, recomputed, with a new history row.
 ```
-
-**Before that goal starts, the commits need resolving.** The working tree holds an
-uncommitted milestone-20 changeset that predates P0, interleaved with P0's edits in `main.mm`
-and `CMakeLists.txt`; the pre-session `main.mm` is not recoverable, so the two cannot be
-separated. Proposed history, executable in one step: (1) milestone 20's sim files plus their
-`CMakeLists` entries, (2) P0's harness files plus theirs, (3) `main.mm`, described honestly as
-both. P1 should start from a clean tree — its whole method depends on knowing what changed.
