@@ -105,6 +105,7 @@ add_library(rm_core STATIC
     src/core/sim/Economy.cpp
     src/core/sim/Movement.cpp
     src/core/sim/Pathfinding.cpp
+    src/core/sim/IdPool.cpp
     src/core/sim/Skirmish.cpp
     src/core/sim/StateHash.cpp
     src/core/sim/Replay.cpp
@@ -143,6 +144,7 @@ if(BUILD_TESTING)
 
     add_executable(rm_tests
         tests/test_types.cpp
+        tests/test_id_pool.cpp
         tests/test_state_hash.cpp
         tests/test_replay.cpp
         tests/test_smf.cpp
