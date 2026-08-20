@@ -26,12 +26,19 @@ P1 has its handle (`UnitId` + `IdPool`), its store (`UnitStore`), its census
 identical`), and an order-independent invariant suite for the part the golden log cannot
 cover.
 
+**P3 is under way: P3.1–P3.4 are done.** Game rules are leaving C++. Blueprint categories are
+parsed and classified into roles; SupCom's `BuildableCategory` expressions are materialised into
+a real build tree; the opponent's opening is `data/opening.lua` and plays all four factions; and
+passability now comes from the motion class rather than from building-placement fields.
+`applyCommand` can build. What remains in P3 is P3.5 (the FA duration correction) and P3.6
+(`SlowUpdate`).
+
 **P2 is done.** The sim is fixed point end to end and the float ban is enforced; the tick rate
 is a value with `--tick-rate` and a four-rate test behind it; ownership has its three levels;
 and orders are data taking one path, with `--command-log` writing the artifact §1.3's criterion
-names. Six commits, 656 tests, `make verify` green.
+names.
 
-**Engine completion: ~52 %** (§2).
+**Engine completion: ~58 %** (§2).
 
 ---
 
@@ -132,16 +139,21 @@ re-deriving the weights.
 
 | Subsystem | W | Done | Have | Missing |
 |---|---:|---:|---|---|
-| Sim | 26 % | **60 %** | movement, collisions, targeting/facing/firing, projectiles, area damage, death, economy, construction, victory, unit handles + flat store + type catalog + census, **fixed point END TO END (enforced), CORDIC trig, tick rate as a value at 5–50 Hz, three ownership levels, orders as data through one authorised path** | features, intel/vision, shields, transports, most weapon classes, air/naval/hover domains, veterancy, upgrades, adjacency |
+| Sim | 26 % | **65 %** | movement, collisions, targeting/facing/firing, projectiles, area damage, death, economy, construction, victory, unit handles + flat store + type catalog + census, **fixed point END TO END (enforced), CORDIC trig, tick rate as a value at 5–50 Hz, three ownership levels, orders as data through one authorised path** | features, intel/vision, shields, transports, most weapon classes, air/naval/hover domains, veterancy, upgrades, adjacency |
 | Renderer | 21 % | **55 %** | instanced units w/ team colour, props + culling, shadows, water + refraction, sky, particles, decals, text/HUD, icons, selection, model LOD, pose playback, DDS, offscreen capture | drawer split, minimap, effect taxonomy (muzzle/trail/impact), beams |
-| System | 16 % | **30 %** | VFS (`.sdz`/`.scd`), asset search, DDS, settings, bench harness | **sound (nothing)**, logging framework, job system, serialisation/save, profiling |
-| Game/orders/UI | 13 % | **45 %** | orbit camera, picking, selection + modifiers, HUD, order markers, CLI harness, **commands as data + a command log + player/army/alliance** | command queue, build menu, control groups, minimap interaction, formations, game states |
+| System | 16 % | **35 %** | VFS (`.sdz`/`.scd`), asset search, DDS, settings, bench harness, **a data layer: roles, build tree, roster, opening** | **sound (nothing)**, logging framework, job system, serialisation/save, profiling |
+| Game/orders/UI | 13 % | **55 %** | orbit camera, picking, selection + modifiers, HUD, order markers, CLI harness, commands as data + a command log + player/army/alliance, **build commands applied by the sim** | command queue, build menu, control groups, minimap interaction, formations, game states |
 | Map | 10 % | **70 %** | SMF/SMT, `.scmap`, tile atlas, heightfield, `mapinfo.lua`, terrain mesh w/ LOD + skirts, chunk culling, splat, water, stratum normals, props, terrain types, start positions | minimap, resource spots, features as objects |
-| Pathfinding | 7 % | **30 %** | coarse grid A* **in fixed point**, passability, path following | hierarchical/flow-field, dynamic blocking, formations, avoidance quality, per-motion-class grids |
+| Pathfinding | 7 % | **40 %** | coarse grid A* **in fixed point**, **passability per motion class (amphibious, hover, land)**, path following | hierarchical/flow-field, dynamic blocking, formations, avoidance quality, per-motion-class grids |
 | Net/replay | 5 % | **40 %** | **a command log — §1.3's criterion now names something that exists** — per-tick state hash over the store (incl. per-slot type, generation and liveness), hash log + first-divergence reporting (P0.2/P0.3) | netcode, lockstep, the cross-architecture proof (P8) |
-| AI | 2 % | **15 %** | scripted build order + one attack wave | role classification, build tree, any reaction |
+| AI | 2 % | **45 %** | scripted build order + one attack wave, **role classification, a materialised build tree, an opening read from data that plays all four factions** | any reaction to what the opponent does; a real AI |
 
-**Weighted total: ~52 %.** The Sim row moved 42 → 60 % because the phase finished what it
+**Weighted total: ~58 %.** AI moved 15 → 45 % because the thing that made it a stub is gone: it
+had no build tree, so `07 §4.3`'s "hard blocker for any skirmish" applied to ours as much as to
+BAR's. Pathfinding 30 → 40 % because passability finally means what ADR-027 said it did. System
+30 → 35 % for the data layer itself.
+
+**The earlier reading, kept for the trend:** at 52 %, the Sim row moved 42 → 60 % because the phase finished what it
 started: the sim is fixed point end to end and a script enforces it, so the determinism claim
 rests on something checked rather than intended. Net/replay 25 → 40 % is the command log —
 §1.3's criterion was half a sentence about a file that did not exist, and now both halves
@@ -177,6 +189,7 @@ further along than it is: a screenshot samples the finished third.
 | 2026-08-20 | 32 | 55 | 30 | 30 | 70 | 25 | 20 | 15 | **40 %** | P1 done — the store IS the sim's storage; batch groups gone |
 | 2026-08-20 | 42 | 55 | 30 | 30 | 70 | 25 | 25 | 15 | **43 %** | P2.1 + P2.3's mechanism + half of P2.2 — fixed-point arithmetic, trig without libm, tick rate as a value, health/damage/economy migrated |
 | 2026-08-20 | 60 | 55 | 30 | 45 | 70 | 30 | 40 | 15 | **52 %** | P2 done — sim fixed point end to end, float ban enforced, three ownership levels, orders as data on one path |
+| 2026-08-21 | 65 | 55 | 35 | 55 | 70 | 40 | 40 | 45 | **58 %** | P3.1–P3.4 — roles, the build tree, the opening as data, passability by motion class |
 
 ---
 
@@ -995,22 +1008,22 @@ The technique, and it is the whole reason to do P1 next rather than P2:
 
 ### P3 — The data layer: game rules out of C++
 
-- [ ] **P3.1 Role classification from categories,** using `07-ai-and-gamesetup.md §4.4`'s
+- [x] **P3.1 Role classification from categories,** using `07-ai-and-gamesetup.md §4.4`'s
       vocabulary — `commander, builder, factory, extractor, energy, storage, defence, raider,
       assault, artillery, antiair, air, naval, scout, transport, shield, radar, experimental` —
       chosen there as a superset of BAR's `ai_simpleai.lua` inference and a subset of
       CircuitAI's enum. *Test:* real blueprints — `URL0001`→commander, `URB1103`→extractor,
       `URL0105`→builder, `UEB0101`→factory. *Manual:* `--dump-roles`.
-- [ ] **P3.2 `BuildableCategory` expression evaluator.** SupCom ships no build lists, it ships
+- [x] **P3.2 `BuildableCategory` expression evaluator.** SupCom ships no build lists, it ships
       expressions: `{"BUILTBYTIER1ENGINEER CYBRAN"}`, **space = AND, list = OR** (`07 §4.3`).
       That report calls materialising them *"a hard blocker for any skirmish, not just for the
       AI"*. *Test:* hand-written expressions, then a real-corpus test that a T1 engineer's set
       holds its own faction's mex, pgen and land factory and nothing of another's.
       *Manual:* `--dump-buildtree URL0105`.
-- [ ] **P3.3 Delete the hardcoded blueprint paths and wave constants.** `BuildOrder.hpp`'s four
+- [x] **P3.3 Delete the hardcoded blueprint paths and wave constants.** `BuildOrder.hpp`'s four
       `k*Blueprint` paths and `kAttackWaveTanks` become a data file selecting by *role*.
       *Test:* one build order drives UEF and Cybran from data alone. *Manual:* `--play` as each.
-- [ ] **P3.4 MoveDefs by name, from motion class.** Two corrections from `01 §3.4` and
+- [x] **P3.4 MoveDefs by name, from motion class.** Two corrections from `01 §3.4` and
       `recoil-engine-map.md §5`: mobile units ignore the unitdef's `maxSlope`/`maxWaterDepth`
       entirely — those govern *building placement* — and **all four factions' ACUs are
       `RULEUMT_Amphibious`** (`14 §9.1`), so amphibious is a fixed cost, not a later feature.
