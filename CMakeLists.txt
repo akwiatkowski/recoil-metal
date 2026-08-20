@@ -123,6 +123,7 @@ add_library(rm_core STATIC
     src/core/unit/BuildTree.cpp
     src/core/data/Roster.cpp
     src/core/data/Opening.cpp
+    src/core/data/MoveDef.cpp
     src/core/vfs/AssetSearch.cpp
     src/core/vfs/Vfs.cpp
     src/core/settings/Settings.cpp)
@@ -206,6 +207,7 @@ if(BUILD_TESTING)
         tests/test_build_tree.cpp
         tests/test_roster.cpp
         tests/test_opening.cpp
+        tests/test_move_def.cpp
         tests/test_asset_search.cpp
         tests/test_vfs.cpp
         tests/test_real_vfs.cpp

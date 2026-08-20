@@ -26,6 +26,7 @@
 #include "core/scene/GroundDecals.hpp"
 #include "core/scene/UnitPlacement.hpp"
 #include "core/sim/Army.hpp"
+#include "core/data/MoveDef.hpp"
 #include "core/data/Opening.hpp"
 #include "core/data/Roster.hpp"
 #include "core/sim/Command.hpp"
@@ -1750,10 +1751,11 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
             }
 
             scene.models.push_back(unit->model);
-            scene.maxSlopeDegrees.push_back(unit->def.maxSlopeDegrees > 0.0f
-                                                ? unit->def.maxSlopeDegrees
-                                                : rm::sim::kDefaultMaxSlopeDegrees);
-            scene.maxWaterDepthElmos.push_back(unit->def.maxWaterDepthElmos);
+            // FROM THE MOTION CLASS, not from the blueprint's own slope and depth — those
+            // govern building placement (P3.4, `core/data/MoveDef.hpp`).
+            const rm::data::MoveDef move = rm::data::moveDefFor(unit->def);
+            scene.maxSlopeDegrees.push_back(move.maxSlopeDegrees);
+            scene.maxWaterDepthElmos.push_back(move.maxWaterDepthElmos);
             scene.typeScale.push_back(unit->def.meshToElmos);
 
             scene.batches.push_back(rm::UnitBatch{
@@ -1875,15 +1877,13 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
         }
 
         scene.models.push_back(unit->model);
-        // The same fallback rules as resolveUnits: a structure's zero slope means
-        // the default, and a ground mover's zero depth means "does not wade" —
-        // see ADR-027.
-        const bool grounded = rm::unitdef::travelsOnGround(unit->def.motion);
-        scene.maxSlopeDegrees.push_back(unit->def.maxSlopeDegrees > 0.0f
-                                            ? unit->def.maxSlopeDegrees
-                                            : rm::sim::kDefaultMaxSlopeDegrees);
-        scene.maxWaterDepthElmos.push_back(grounded ? unit->def.maxWaterDepthElmos
-                                                    : rm::sim::kDefaultMaxWaterDepthElmos);
+        // From the MOTION CLASS. The fallback rules that used to be here — "a structure's zero
+        // slope means the default, and a ground mover's zero depth means does not wade" — were
+        // guesses standing in for a fact the blueprint had all along: `RULEUMT_*` says what this
+        // unit crosses (P3.4). ADR-027 said passability comes from motion class; now it does.
+        const rm::data::MoveDef move = rm::data::moveDefFor(unit->def);
+        scene.maxSlopeDegrees.push_back(move.maxSlopeDegrees);
+        scene.maxWaterDepthElmos.push_back(move.maxWaterDepthElmos);
         scene.typeScale.push_back(unit->def.meshToElmos);
         scene.batches.push_back(rm::UnitBatch{
             .model = &scene.models.back(),
@@ -2247,19 +2247,13 @@ void orderFirstExtractors(UnitScene& scene, std::span<const rm::scenario::Marker
         // A GROUND MOVER'S ZERO IS NOT A MISSING VALUE, which is why the depth
         // test asks the motion class rather than the number. Supreme Commander's
         // land units state no wading depth because they do not wade, and reading
-        // that 0 as "unstated" would hand them BAR's 12 elmos and walk them into
-        // the sea. Slope keeps the numeric guard: no unit means 0 to mean "cannot
-        // move at all".
-        const bool grounded = def && rm::unitdef::travelsOnGround(def->motion);
-        const float slope = def && def->maxSlopeDegrees > 0.0f
-                                ? def->maxSlopeDegrees
-                                : rm::sim::kDefaultMaxSlopeDegrees;
-        const float depth = grounded ? def->maxWaterDepthElmos
-                            : def.has_value() && def->maxWaterDepthElmos > 0.0f
-                                ? def->maxWaterDepthElmos
-                                : rm::sim::kDefaultMaxWaterDepthElmos;
-        scene.maxSlopeDegrees.push_back(slope);
-        scene.maxWaterDepthElmos.push_back(depth);
+        // From the MOTION CLASS (P3.4). A decorative instance with no definition gets the
+        // immobile MoveDef, which uses no ground grid — correct, since nothing routes it.
+        const rm::data::MoveDef move =
+            def.has_value() ? rm::data::moveDefFor(*def)
+                            : rm::data::moveDefFor(rm::unitdef::MotionType::None);
+        scene.maxSlopeDegrees.push_back(move.maxSlopeDegrees);
+        scene.maxWaterDepthElmos.push_back(move.maxWaterDepthElmos);
         scene.typeScale.push_back(def.has_value() ? def->meshToElmos : 1.0f);
 
         // The TYPE for these units. One per batch, and the two indices are the same number
