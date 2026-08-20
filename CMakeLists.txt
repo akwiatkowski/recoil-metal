@@ -276,4 +276,12 @@ if(BUILD_TESTING)
     # floats, so confining the conversion is what makes the rest checkable at all.
     add_test(NAME "the sim's arithmetic is fixed point"
              COMMAND ${CMAKE_SOURCE_DIR}/tools/check_no_sim_floats.sh ${CMAKE_SOURCE_DIR})
+
+    # Every order goes through `applyCommand` (PLAN2.md §7 P2.5, P4.2). The property is
+    # structural only while there is no second way in, and `orderAlongPath` is a public
+    # function that does most of a move order minus the authorisation, the record and the
+    # queue. Registered for the same reason the tick-order check is: the bug it guards against
+    # is invisible until something checks.
+    add_test(NAME "every order goes through applyCommand"
+             COMMAND ${CMAKE_SOURCE_DIR}/tools/check_one_order_path.sh ${CMAKE_SOURCE_DIR})
 endif()

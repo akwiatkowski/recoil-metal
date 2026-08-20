@@ -80,10 +80,17 @@ struct Fixture {
             for (const Command& command : log.at(tick)) {
                 (void)apply(command);
             }
+            // The routing table for queued orders, one entry per registered type (P4.1). The
+            // fixture's units all share a grid, so this is a vector of one pointer repeated —
+            // but it goes through the same field the app fills, so the tick exercises the same
+            // code either way.
+            const std::vector<const rm::sim::PassabilityGrid*> grids(roster.catalog.size(),
+                                                                    &grid);
             rm::sim::Match match{.armies = armies,
                                  .economies = economies,
                                  .projectiles = &shots,
                                  .building = &building,
+                                 .passability = grids,
                                  .commandersEver = commandersEver};
             (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain);
         }
@@ -448,4 +455,51 @@ TEST_CASE("a human log and a script log replay through the same path") {
     Fixture still;
     still.run(CommandLog{}, 120);
     CHECK(moved.roster.transform(moved.mine).z != still.roster.transform(still.mine).z);
+}
+
+TEST_CASE("a script's order and a click produce identical hashes") {
+    // §7 P4.2's stated test, and the sharper half of the one above: not "two replays of one log
+    // agree" but "the SOURCE of an order leaves no trace in the match".
+    //
+    // The two fixtures differ in exactly one way — which army has a human at the keyboard —
+    // so in the first the order for army 0 comes from a human player and in the second the
+    // identical order comes from a script. Everything else, including the player INDEX, is the
+    // same. If the two hashes differ, something about who issued an order has leaked into the
+    // world.
+    //
+    // This is what `feedOrders` deliberately excludes `tick` and `player` for. Those are
+    // provenance, they belong in the `CommandLog`, and hashing them would make this test
+    // impossible to state rather than merely make it fail.
+    const auto playAs = [](int humanArmy) {
+        Fixture fix;
+        fix.players = rm::sim::onePlayerPerArmy(2, humanArmy);
+
+        CommandLog log;
+        log.record(moveOrder(0, 0, fix.mine, 400.0f, 200.0f));
+        log.record(moveOrder(30, 0, fix.mine, 400.0f, 600.0f));
+        fix.run(log, 120);
+
+        std::vector<rm::sim::Projectile> shots;
+        std::vector<rm::sim::Economy> economies(2);
+        const std::vector<int> commandersEver(2, 0);
+        rm::sim::Match match{.armies = fix.armies,
+                             .economies = economies,
+                             .projectiles = &shots,
+                             .commandersEver = commandersEver};
+        return rm::sim::hashMatch(fix.roster.store, match);
+    };
+
+    // Army 0 driven by a human, then by a script. Same orders, same result.
+    CHECK(playAs(0) == playAs(1));
+
+    // And the orders are not being silently refused in one of the two — a match where nothing
+    // happened would agree with another where nothing happened.
+    Fixture human;
+    human.players = rm::sim::onePlayerPerArmy(2, 0);
+    CommandLog log;
+    log.record(moveOrder(0, 0, human.mine, 400.0f, 200.0f));
+    human.run(log, 120);
+    Fixture idle;
+    idle.run(CommandLog{}, 120);
+    CHECK(human.roster.transform(human.mine).x != idle.roster.transform(idle.mine).x);
 }

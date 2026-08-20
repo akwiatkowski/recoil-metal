@@ -151,11 +151,17 @@ void feedHealth(StateHash& h, const Health& health) noexcept {
 /// Field by field rather than as a struct, on the same rule as everything else here: `Command`
 /// is trivially copyable but its padding is unspecified, and hashing padding would make the
 /// result depend on the compiler.
+///
+/// AND NOT EVERY FIELD. `tick` and `player` are PROVENANCE — when the order was given and who
+/// gave it — and neither can change what the unit does with it. Feeding them would make the
+/// hash disagree about two matches that will play out identically, which is the same category
+/// of mistake as hashing a screen position. It would also make §7 P4.2's test impossible to
+/// state: "the scripted opponent's order and a synthetic click produce identical hashes" is
+/// only true if the hash is blind to which of them issued it. The `CommandLog` keeps both, and
+/// that is where provenance belongs.
 void feedOrders(StateHash& h, const CommandQueue& orders) noexcept {
     feed(h, orders.size());
     for (const Command& command : orders.orders()) {
-        feed(h, command.tick);
-        feed(h, command.player);
         feed(h, static_cast<std::uint8_t>(command.kind));
         feed(h, static_cast<std::size_t>(command.unit.index));
         feed(h, static_cast<std::size_t>(command.unit.generation));
