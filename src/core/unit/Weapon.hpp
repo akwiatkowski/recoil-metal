@@ -1,5 +1,7 @@
 #pragma once
 
+#include "core/sim/TickRate.hpp"
+
 #include "core/lua/LuaValue.hpp"
 
 #include <cstdint>
@@ -146,14 +148,19 @@ struct Weapon {
     /// is asked, since a death explosion has no range and no rate of fire to have.
     [[nodiscard]] bool harmful() const noexcept { return damage > 0.0f || hasRings(); }
 
-    /// Ticks between shots, never less than one.
+    /// Ticks between shots at a given rate, never less than one.
+    ///
+    /// The rate is a PARAMETER. `rateOfFire` is authored in shots per second, which is a fact
+    /// about the weapon; how many ticks that is depends on the clock, which is a fact about
+    /// the sim (PLAN2.md §5.1). This function was already the correct shape — the plan cites
+    /// it as the pattern to generalise — it just used to read the rate from a constant.
     ///
     /// The game quantises this the same way and for the same reason: a sim with a tick
     /// cannot fire between two of them, so a rate faster than the tick rate becomes one
     /// shot per tick rather than a fractional shot. At 10 Hz the fastest weapon in the
     /// corpus (10 shots/second) is exactly one shot per tick, which is presumably why
     /// that is the fastest weapon in the corpus.
-    [[nodiscard]] int reloadTicks() const noexcept;
+    [[nodiscard]] int reloadTicks(sim::TickRate rate = sim::TickRate{}) const noexcept;
 };
 
 /// Reads a blueprint's `Weapon` array — a Lua array, so its entries are positional.

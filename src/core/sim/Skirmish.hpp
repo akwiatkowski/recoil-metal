@@ -157,8 +157,11 @@ struct TickReport {
 /// Firing before moving would let a unit shoot from outside a range it is about to
 /// enter; checking defeat before the dead are retired would miss the commander that
 /// died this tick.
+/// The rate is a parameter, defaulted so that the many callers who want the ordinary clock
+/// need not say so. Defaulted rather than absent because a `TickRate` is cheap to construct
+/// and the alternative — reading a constant inside — is the thing §5.1 forbids.
 TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& match,
-                        const HeightField& field);
+                        const HeightField& field, TickRate rate = TickRate{});
 
 /// Living commanders per army, indexed by army.
 ///

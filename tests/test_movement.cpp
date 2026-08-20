@@ -343,7 +343,7 @@ TEST_CASE("TickClock refuses to spiral after a long stall") {
     // try to catch up thousands of ticks in one frame and hang the app, which is
     // a far worse failure than the clock quietly losing time.
     const int ticks = clock.advance(60.0f);
-    CHECK(ticks <= TickClock::kMaxTicksPerAdvance);
+    CHECK(ticks <= static_cast<int>(clock.maxTicksPerAdvance()));
     CHECK(ticks > 0);
 }
 

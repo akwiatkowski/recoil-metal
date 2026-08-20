@@ -240,7 +240,7 @@ std::size_t aimAtTargets(UnitStore& store, const UnitCatalog& catalog,
 
 std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
                         std::span<const Army> armies,
-                        std::vector<Projectile>& projectiles) {
+                        std::vector<Projectile>& projectiles, TickRate rate) {
     std::size_t fired = 0;
 
     const std::span<const UnitInstance> instances = store.instances();
@@ -300,8 +300,8 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
                 continue;
             }
 
-            projectiles.push_back(launch(from, to, weapon, army));
-            health.reloadRemaining[w] = weapon.reloadTicks();
+            projectiles.push_back(launch(from, to, weapon, army, rate));
+            health.reloadRemaining[w] = weapon.reloadTicks(rate);
             ++fired;
         }
     }
@@ -310,14 +310,14 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
 }
 
 Projectile launch(std::array<float, 3> from, std::array<float, 3> to,
-                  const unitdef::Weapon& weapon, int byArmy) {
+                  const unitdef::Weapon& weapon, int byArmy, TickRate rate) {
     Projectile shot;
     shot.position = {from[0], from[1] + kMuzzleHeightElmos, from[2]};
     shot.damage = weapon.damage;
     shot.damageRadiusElmos = weapon.damageRadiusElmos;
     shot.firedByArmy = byArmy;
     shot.arc = weapon.arc;
-    shot.ticksRemaining = kProjectileLifetimeTicks;
+    shot.ticksRemaining = static_cast<int>(rate.ticks(kProjectileLifetime));
 
     // Aimed from the MUZZLE at the target's middle, not from foot to foot: a shot that
     // leaves four elmos up and is aimed level would sail over its target.

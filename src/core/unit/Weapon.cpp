@@ -50,12 +50,15 @@ WeaponRole weaponRoleFromCategory(std::string_view category) noexcept {
     return WeaponRole::Other;
 }
 
-int Weapon::reloadTicks() const noexcept {
+int Weapon::reloadTicks(sim::TickRate rate) const noexcept {
     if (rateOfFire <= 0.0f) {
         return 1;
     }
-    const float ticks = static_cast<float>(sim::kTicksPerSecond) / rateOfFire;
-    return std::max(1, static_cast<int>(std::lround(ticks)));
+    // Shots per second inverted into seconds between shots, then converted by the rate.
+    // `TickRate::ticks` already floors at one tick, for exactly the reason this function used
+    // to do so itself: a weapon whose interval rounds to zero fires every tick, which is a
+    // different mechanic rather than a fast one.
+    return static_cast<int>(rate.ticks(sim::seconds(1.0f / rateOfFire)));
 }
 
 std::vector<Weapon> weaponsFrom(const lua::Value& weaponArray) {

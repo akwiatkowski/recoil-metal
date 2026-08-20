@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/map/HeightField.hpp"
+#include "core/sim/TickRate.hpp"
 #include "core/scene/UnitPlacement.hpp"
 
 #include <algorithm>
@@ -219,19 +220,37 @@ void tick(std::span<UnitInstance> instances, std::span<MoveState> motion,
 // difference between a screenshot that reproduces and one that does not.
 class TickClock {
 public:
+    /// The rate is a value the clock is built with, not a constant it reads. That is what
+    /// lets the same code bridge a 5 Hz sim and a 50 Hz one — and what lets one process run
+    /// both, which is P2.3's multi-rate test.
+    explicit TickClock(TickRate rate) : rate_(rate) {}
+    TickClock() = default;
+
     /// Banks `seconds` of wall time and returns how many ticks to run now.
     [[nodiscard]] int advance(float seconds) noexcept;
 
-    /// Ticks a single advance will ever ask for.
+    /// The most catch-up a single advance will ever ask for, AS A DURATION.
     ///
-    /// Without a cap, a stall — a breakpoint, a slow asset load, a closed lid —
-    /// hands over minutes of banked time and the frame loop tries to catch up
-    /// thousands of ticks at once, which reads as a hang. Losing time after a
-    /// stall is the better failure. Five is a tenth of a second of catch-up per
-    /// frame: enough to ride out ordinary hitches, far too few to spiral.
-    static constexpr int kMaxTicksPerAdvance = 5;
+    /// Without a cap, a stall — a breakpoint, a slow asset load, a closed lid — hands over
+    /// minutes of banked time and the frame loop tries to catch up thousands of ticks at
+    /// once, which reads as a hang. Losing time after a stall is the better failure.
+    ///
+    /// This was `kMaxTicksPerAdvance = 5`, which PLAN2 §5.1 names as one of the two constants
+    /// the rule exists to delete: five ticks is half a second at 10 Hz and a tenth of one at
+    /// 50 Hz, so raising the rate would silently have made the engine five times less
+    /// tolerant of a hitch. Authored in seconds, the tolerance is the same however fast the
+    /// sim runs. (The comment that used to sit here said "a tenth of a second", which was
+    /// wrong about its own constant — five ticks at 10 Hz is half a second. Worth recording:
+    /// the rate was in a comment, and the comment was mistaken.)
+    static constexpr Seconds kMaxCatchUp = Seconds{0.5f};
+
+    /// How many ticks that is, at this clock's rate.
+    [[nodiscard]] TickCount maxTicksPerAdvance() const noexcept {
+        return rate_.ticks(kMaxCatchUp);
+    }
 
 private:
+    TickRate rate_{};
     float unspentSeconds_ = 0.0f;
 };
 

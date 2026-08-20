@@ -126,7 +126,7 @@ std::vector<int> countCommanders(const UnitStore& store, const UnitCatalog& cata
 }
 
 TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& match,
-                        const HeightField& field) {
+                        const HeightField& field, TickRate rate) {
     TickReport report;
 
     // 1. MOVEMENT, then collisions. Everything downstream reads where a unit has got to
@@ -152,7 +152,8 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
 
     // 3. FIRE, fly, land.
     if (match.projectiles != nullptr) {
-        report.shotsFired = fireWeapons(store, catalog, match.armies, *match.projectiles);
+        report.shotsFired =
+            fireWeapons(store, catalog, match.armies, *match.projectiles, rate);
         advanceProjectiles(*match.projectiles, store, match.armies, field);
     }
 

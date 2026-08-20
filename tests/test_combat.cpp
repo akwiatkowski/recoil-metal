@@ -195,7 +195,7 @@ TEST_CASE("a minimum range is a hole a unit can stand in") {
 
 TEST_CASE("a flat shot flies straight at its target") {
     const Weapon weapon = directFire(10.0f, 500.0f);  // 100 elmos/s
-    const Projectile shot = rm::sim::launch({0, 0, 0}, {0, 0, 200}, weapon, 0);
+    const Projectile shot = rm::sim::launch({0, 0, 0}, {0, 0, 200}, weapon, 0, rm::sim::TickRate{});
 
     // Two seconds of flight over 200 elmos, so 100 elmos a second down +Z and nothing
     // sideways.
@@ -218,7 +218,7 @@ TEST_CASE("an arced shot rises, and comes down where the target is") {
 
     const std::array<float, 3> from{0, 0, 0};
     const std::array<float, 3> to{0, 0, 300};
-    const Projectile shot = rm::sim::launch(from, to, artillery, 0);
+    const Projectile shot = rm::sim::launch(from, to, artillery, 0, rm::sim::TickRate{});
 
     // It must LEAVE going up, which is the whole point of an arc — a flat shot at the
     // same target has a vertical velocity of zero.
@@ -239,7 +239,8 @@ TEST_CASE("an arced shot rises, and comes down where the target is") {
 
     // It landed (the list is empty) rather than expiring at the lifetime cap.
     CHECK(flight.empty());
-    CHECK(ticks < rm::sim::kProjectileLifetimeTicks);
+    CHECK(ticks < static_cast<int>(rm::sim::TickRate{}.ticks(
+              rm::sim::kProjectileLifetime)));
 }
 
 TEST_CASE("damage falls off linearly to nothing at the rim") {
@@ -313,17 +314,17 @@ TEST_CASE("a shot fired reloads, and does not fire again until it has") {
 
     std::vector<Projectile> shots;
 
-    CHECK(rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots) == 1);
+    CHECK(rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots, rm::sim::TickRate{}) == 1);
     CHECK(shots.size() == 1);
 
     // Nine ticks of reload, during which nothing more is fired.
     for (int tick = 0; tick < 9; ++tick) {
-        CHECK(rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots) == 0);
+        CHECK(rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots, rm::sim::TickRate{}) == 0);
     }
     CHECK(shots.size() == 1);
 
     // ...and then it fires again.
-    CHECK(rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots) == 1);
+    CHECK(rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots, rm::sim::TickRate{}) == 1);
     CHECK(shots.size() == 2);
 }
 
@@ -341,13 +342,13 @@ TEST_CASE("a unit with nothing to shoot at holds its fire and stays loaded") {
 
     std::vector<Projectile> shots;
     for (int tick = 0; tick < 50; ++tick) {
-        CHECK(rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots) == 0);
+        CHECK(rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots, rm::sim::TickRate{}) == 0);
     }
     CHECK(shots.empty());
 
     // Now it walks into range and shoots on the very first tick.
     roster.instance(enemy).position = {0.0f, 0.0f, 50.0f};
-    CHECK(rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots) == 1);
+    CHECK(rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots, rm::sim::TickRate{}) == 1);
 }
 
 TEST_CASE("the dead neither shoot nor are shot") {
@@ -360,7 +361,7 @@ TEST_CASE("the dead neither shoot nor are shot") {
     (void)roster.add(roster.addType(targetDef()), 0.0f, 100.0f, 1, 100.0f);
 
     std::vector<Projectile> shots;
-    CHECK(rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots) == 0);
+    CHECK(rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots, rm::sim::TickRate{}) == 0);
     CHECK(shots.empty());
 }
 
@@ -372,7 +373,7 @@ TEST_CASE("a shot in flight lands and kills, and is then gone") {
     const UnitId frail = roster.add(roster.addType(targetDef()), 0.0f, 100.0f, 1, 25.0f);
 
     Weapon weapon = directFire(40.0f, 300.0f, 30.0f);
-    std::vector<Projectile> shots{rm::sim::launch({0, 0, 0}, {0, 0, 100}, weapon, 0)};
+    std::vector<Projectile> shots{rm::sim::launch({0, 0, 0}, {0, 0, 100}, weapon, 0, rm::sim::TickRate{})};
 
     for (int tick = 0; tick < 100 && !shots.empty(); ++tick) {
         rm::sim::advanceProjectiles(shots, roster.store, armies, field);
@@ -394,10 +395,12 @@ TEST_CASE("a shot that hits nothing expires instead of flying forever") {
 
     Weapon weapon = directFire(10.0f, 300.0f);
     weapon.muzzleVelocityElmosPerSecond = 1000.0f;
-    std::vector<Projectile> shots{rm::sim::launch({0, 0, 0}, {0, 0, 100}, weapon, 0)};
+    std::vector<Projectile> shots{rm::sim::launch({0, 0, 0}, {0, 0, 100}, weapon, 0, rm::sim::TickRate{})};
 
     rm::sim::UnitStore none;
-    for (int tick = 0; tick <= rm::sim::kProjectileLifetimeTicks; ++tick) {
+    const auto lifetime =
+        static_cast<int>(rm::sim::TickRate{}.ticks(rm::sim::kProjectileLifetime));
+    for (int tick = 0; tick <= lifetime; ++tick) {
         rm::sim::advanceProjectiles(shots, none, {}, field);
     }
     CHECK(shots.empty());
@@ -417,7 +420,7 @@ TEST_CASE("an unowned unit takes no part in a fight") {
         roster.add(roster.addType(targetDef()), 0.0f, 50.0f, rm::sim::kNoArmy, 100.0f);
 
     std::vector<Projectile> shots;
-    CHECK(rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots) == 0);
+    CHECK(rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots, rm::sim::TickRate{}) == 0);
 
     CHECK(rm::sim::damageArea({0, 0, 50}, 100.0f, 500.0f, 0, roster.store, armies)
           == Approx(0.0f));
@@ -597,11 +600,11 @@ TEST_CASE("a unit facing the wrong way holds its shot rather than spending it") 
 
     std::vector<Projectile> shots;
     for (int tick = 0; tick < 30; ++tick) {
-        CHECK(rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots) == 0);
+        CHECK(rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots, rm::sim::TickRate{}) == 0);
     }
     CHECK(shots.empty());
 
     // Turn it round and it fires on the very next tick, its reload never having been spent.
     roster.instance(gunner).rotationY = 0.0f;
-    CHECK(rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots) == 1);
+    CHECK(rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots, rm::sim::TickRate{}) == 1);
 }

@@ -3,6 +3,7 @@
 #include "core/scene/UnitPlacement.hpp"
 #include "core/sim/Army.hpp"
 #include "core/sim/Health.hpp"
+#include "core/sim/TickRate.hpp"
 #include "core/sim/UnitCatalog.hpp"
 #include "core/sim/UnitStore.hpp"
 #include "core/sim/Movement.hpp"
@@ -75,12 +76,17 @@ inline constexpr float kProjectileGravityElmosPerSecond2 = 4.9f * 8.0f;
 /// better and is what the blueprints' `RackBones` are for; that waits for turret aiming.
 inline constexpr float kMuzzleHeightElmos = 4.0f;
 
-/// How long a shot may live, in ticks, before it expires unspent.
+/// How long a shot may live before it expires unspent — AS A DURATION.
 ///
-/// Thirty seconds at 10 Hz. Long enough that the slowest projectile in the corpus (a
-/// muzzle velocity of a few ogrids per second) crosses its own maximum range, and short
-/// enough that a missed shot is forgotten within a plausible engagement.
-inline constexpr int kProjectileLifetimeTicks = 300;
+/// Long enough that the slowest projectile in the corpus (a muzzle velocity of a few ogrids
+/// per second) crosses its own maximum range, and short enough that a missed shot is
+/// forgotten within a plausible engagement.
+///
+/// This was `kProjectileLifetimeTicks = 300`, with "thirty seconds at 10 Hz" in a comment —
+/// the constant PLAN2 §5.1 names first. At 20 Hz it would silently have become a
+/// fifteen-second lifetime: nothing fails, no test goes red, the balance just changes.
+/// Converted through a `TickRate` at launch, thirty seconds is thirty seconds.
+inline constexpr Seconds kProjectileLifetime = Seconds{30.0f};
 
 /// The distance from `from` to `to`, ignoring height.
 ///
@@ -150,9 +156,11 @@ std::size_t aimAtTargets(UnitStore& store, const UnitCatalog& catalog,
 /// A turreted weapon fires whatever the hull is doing, because it aims independently and
 /// this engine does not animate turrets; an unturreted one has to be pointed at its target,
 /// which is what stops a tank firing out of its side armour.
+/// The rate is passed rather than read from a constant, because the shot it creates carries
+/// a lifetime in ticks and that number is only meaningful against a rate (§5.1).
 std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
                         std::span<const Army> armies,
-                        std::vector<Projectile>& projectiles);
+                        std::vector<Projectile>& projectiles, TickRate rate);
 
 /// Moves every projectile one tick, applies what lands, and removes what is spent.
 ///
@@ -170,7 +178,7 @@ void advanceProjectiles(std::vector<Projectile>& projectiles, UnitStore& store,
 /// the 494 weapons — is given a speed that crosses its own range in a tick, so an
 /// instantaneous weapon needs no separate code path and nothing divides by zero.
 [[nodiscard]] Projectile launch(std::array<float, 3> from, std::array<float, 3> to,
-                                const unitdef::Weapon& weapon, int byArmy);
+                                const unitdef::Weapon& weapon, int byArmy, TickRate rate);
 
 /// Spreads `damage` over everything within `radiusElmos` of `centre`, and returns how
 /// much was dealt in total.

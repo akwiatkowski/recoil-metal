@@ -107,6 +107,7 @@ add_library(rm_core STATIC
     src/core/sim/Pathfinding.cpp
     src/core/sim/IdPool.cpp
     src/core/sim/Fx.cpp
+    src/core/sim/TickRate.cpp
     src/core/sim/UnitStore.cpp
     src/core/sim/UnitCatalog.cpp
     src/core/sim/UnitCensus.cpp
@@ -149,6 +150,7 @@ if(BUILD_TESTING)
     add_executable(rm_tests
         tests/test_types.cpp
         tests/test_fx.cpp
+        tests/test_tick_rate.cpp
         tests/test_id_pool.cpp
         tests/test_unit_store.cpp
         tests/test_unit_census.cpp
@@ -236,6 +238,12 @@ if(BUILD_TESTING)
     # the other checks — five compiles — but it is the whole basis of the determinism claim.
     add_test(NAME "fixed point is identical at every optimisation level"
              COMMAND ${CMAKE_SOURCE_DIR}/tools/check_fx_optimisation.sh)
+
+    # No duration may be written as a number of ticks (PLAN2.md §5.1). Registered now that
+    # the two constants the rule was written against are gone — before that it would have
+    # been a red suite describing a known state rather than a guard.
+    add_test(NAME "no duration is written in ticks"
+             COMMAND ${CMAKE_SOURCE_DIR}/tools/check_no_tick_literals.sh ${CMAKE_SOURCE_DIR})
 
     # NOT REGISTERED YET: the ban on float/double/libm inside the sim (PLAN2.md §5.2). The
     # sim is entirely float today and stays that way until P2.2 migrates it to fixed point;

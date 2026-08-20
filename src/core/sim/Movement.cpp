@@ -164,13 +164,18 @@ int TickClock::advance(float seconds) noexcept {
         unspentSeconds_ += seconds;
     }
 
-    const auto whole = static_cast<int>(unspentSeconds_ / kTickSeconds);
-    const int ticks = std::clamp(whole, 0, kMaxTicksPerAdvance);
-    unspentSeconds_ -= static_cast<float>(ticks) * kTickSeconds;
+    // The tick length comes from the rate this clock was built with. `secondsPerTick` is
+    // legitimate here and nowhere in the sim proper: converting wall time to ticks is exactly
+    // this class's job, and wall time is what the display deals in.
+    const float tickSeconds = rate_.secondsPerTick();
+    const auto cap = static_cast<int>(maxTicksPerAdvance());
+    const auto whole = static_cast<int>(unspentSeconds_ / tickSeconds);
+    const int ticks = std::clamp(whole, 0, cap);
+    unspentSeconds_ -= static_cast<float>(ticks) * tickSeconds;
 
     // Past the cap the surplus is dropped rather than carried, or the backlog
     // simply reappears next frame and the stall never clears.
-    if (whole > kMaxTicksPerAdvance) {
+    if (whole > cap) {
         unspentSeconds_ = 0.0f;
     }
 
