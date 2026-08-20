@@ -1,0 +1,348 @@
+// Orders as data, and the single path they take into the sim.
+//
+// PLAN2.md §7 P2.5's stated test: "a recorded human log and a synthetic script log replay
+// through the same path." What makes that checkable is that there IS one path — `applyCommand`
+// — so the test builds two logs from two sources and requires them to produce the same match.
+//
+// Also here, because it only became possible with this file: testing the human order path at
+// all. A click used to go through AppKit, so "does an order route around water" could only be
+// answered by clicking. A command is a struct.
+#include <catch2/catch_test_macros.hpp>
+
+#include "core/sim/Command.hpp"
+#include "core/sim/StateHash.hpp"
+#include "core/sim/Skirmish.hpp"
+#include "core/sim/UnitStore.hpp"
+
+#include "support/FxMatchers.hpp"
+#include "support/TestRoster.hpp"
+
+#include <algorithm>
+#include <cstdint>
+#include <filesystem>
+#include <fstream>
+#include <vector>
+
+using rm::sim::Command;
+using rm::sim::CommandKind;
+using rm::sim::CommandLog;
+using rm::sim::Player;
+using rm::sim::UnitId;
+
+namespace {
+
+[[nodiscard]] rm::HeightField flatField() {
+    rm::HeightField field;
+    field.squaresX = 128;
+    field.squaresZ = 128;
+    field.baseHeight = 0.0f;
+    field.heightScale = 1.0f;
+    field.raw.assign(field.sampleCount(), std::uint16_t{0});
+    return field;
+}
+
+/// A match with two armies, one unit each, and one player driving each.
+struct Fixture {
+    rm::HeightField field = flatField();
+    rm::sim::Terrain terrain{field};
+    rm::sim::PassabilityGrid grid = rm::sim::buildPassability(field, 0.0f);
+    rm::test::Roster roster;
+    std::vector<rm::sim::Army> armies = rm::sim::freeForAll(2);
+    std::vector<Player> players = rm::sim::onePlayerPerArmy(2, /*humanArmy=*/0);
+
+    UnitId mine;
+    UnitId theirs;
+
+    Fixture() {
+        rm::unitdef::UnitDef def;
+        def.name = "test_tank";
+        const rm::UnitTypeIndex type = roster.addType(def);
+        mine = roster.add(type, 200.0f, 200.0f, 0, 500.0f);
+        theirs = roster.add(type, 600.0f, 600.0f, 1, 500.0f);
+    }
+
+    [[nodiscard]] bool apply(const Command& command) {
+        return rm::sim::applyCommand(command, roster.store, players, armies, terrain, grid);
+    }
+
+    /// Runs the match forward, applying whatever the log says on each tick — which is the
+    /// replay loop, and the only loop either a live match or a replay needs.
+    void run(const CommandLog& log, rm::TickIndex ticks) {
+        std::vector<rm::sim::Projectile> shots;
+        std::vector<rm::sim::Construction> building;
+        std::vector<rm::sim::Economy> economies(2);
+        const std::vector<int> commandersEver(2, 0);
+
+        for (rm::TickIndex tick = 0; tick < ticks; ++tick) {
+            for (const Command& command : log.at(tick)) {
+                (void)apply(command);
+            }
+            rm::sim::Match match{.armies = armies,
+                                 .economies = economies,
+                                 .projectiles = &shots,
+                                 .building = &building,
+                                 .commandersEver = commandersEver};
+            (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain);
+        }
+    }
+};
+
+[[nodiscard]] Command moveOrder(rm::TickIndex tick, rm::PlayerIndex player, UnitId unit,
+                                float x, float z) {
+    return Command{.tick = tick,
+                   .player = player,
+                   .kind = CommandKind::Move,
+                   .unit = unit,
+                   .targetX = rm::test::fx(x),
+                   .targetZ = rm::test::fx(z),
+                   .buildType = 0};
+}
+
+} // namespace
+
+TEST_CASE("a move command routes a unit, and a stop cancels it") {
+    Fixture fix;
+
+    CHECK(fix.apply(moveOrder(0, 0, fix.mine, 500.0f, 200.0f)));
+    CHECK(fix.roster.motion(fix.mine).moving);
+    CHECK_FALSE(fix.roster.motion(fix.mine).path.empty());
+
+    const Command stop{.tick = 1,
+                       .player = 0,
+                       .kind = CommandKind::Stop,
+                       .unit = fix.mine,
+                       .targetX = {},
+                       .targetZ = {},
+                       .buildType = 0};
+    CHECK(fix.apply(stop));
+    CHECK_FALSE(fix.roster.motion(fix.mine).moving);
+    // The route is cleared too, or the unit resumes its old orders the moment something else
+    // sets `moving`.
+    CHECK(fix.roster.motion(fix.mine).path.empty());
+}
+
+TEST_CASE("a player cannot order another army's units") {
+    // THE AUTHORISATION CHECK, which was impossible before orders were data: with `orderTo`
+    // called at the click site, nothing compared the clicker to the owner. Invisible in a
+    // single-player game and the first thing a networked one gets wrong.
+    Fixture fix;
+
+    // Player 0 drives army 0. Ordering army 1's unit must be refused, and must change nothing.
+    const Command trespass = moveOrder(0, 0, fix.theirs, 100.0f, 100.0f);
+    CHECK_FALSE(fix.apply(trespass));
+    CHECK_FALSE(fix.roster.motion(fix.theirs).moving);
+
+    // And its own player can.
+    CHECK(fix.apply(moveOrder(0, 1, fix.theirs, 100.0f, 100.0f)));
+    CHECK(fix.roster.motion(fix.theirs).moving);
+}
+
+TEST_CASE("a defeated army takes no more orders") {
+    Fixture fix;
+    fix.armies[0].defeated = true;
+    CHECK_FALSE(fix.apply(moveOrder(0, 0, fix.mine, 500.0f, 200.0f)));
+    CHECK_FALSE(fix.roster.motion(fix.mine).moving);
+}
+
+TEST_CASE("a stale handle is refused, not resolved to whoever inherited the slot") {
+    // The case that makes handles worth having. A player clicks a unit; it dies on the same
+    // tick; the slot is reused by a new unit. The order must not arrive at the newcomer.
+    Fixture fix;
+
+    const UnitId doomed = fix.mine;
+    fix.roster.store.kill(doomed);
+
+    rm::unitdef::UnitDef def;
+    def.name = "test_tank";
+    const UnitId newcomer = fix.roster.add(fix.roster.addType(def), 200.0f, 200.0f, 0, 500.0f);
+    REQUIRE(newcomer.index == doomed.index);       // same slot
+    REQUIRE(newcomer.generation != doomed.generation);  // different unit
+
+    CHECK_FALSE(fix.apply(moveOrder(0, 0, doomed, 500.0f, 200.0f)));
+    CHECK_FALSE(fix.roster.motion(newcomer).moving);
+
+    // The newcomer takes its own orders perfectly well.
+    CHECK(fix.apply(moveOrder(0, 0, newcomer, 500.0f, 200.0f)));
+    CHECK(fix.roster.motion(newcomer).moving);
+}
+
+TEST_CASE("an unreachable destination is a refused order, not a straight line") {
+    // Driving into the water is a worse answer than not moving.
+    rm::HeightField sunken = flatField();
+    sunken.baseHeight = -500.0f;  // the whole map is under water
+
+    Fixture fix;
+    fix.grid = rm::sim::buildPassability(sunken, 0.0f);
+
+    CHECK_FALSE(fix.apply(moveOrder(0, 0, fix.mine, 500.0f, 200.0f)));
+    CHECK_FALSE(fix.roster.motion(fix.mine).moving);
+}
+
+// --- The log ---------------------------------------------------------------------------
+
+TEST_CASE("a log returns the commands for a tick, and nothing for an empty one") {
+    CommandLog log;
+    log.record(moveOrder(0, 0, UnitId{0, 1}, 100.0f, 100.0f));
+    log.record(moveOrder(5, 0, UnitId{0, 1}, 200.0f, 100.0f));
+    log.record(moveOrder(5, 1, UnitId{1, 1}, 300.0f, 100.0f));
+    log.record(moveOrder(9, 0, UnitId{0, 1}, 400.0f, 100.0f));
+
+    CHECK(log.at(0).size() == 1);
+    CHECK(log.at(1).empty());  // a tick with no orders is the common case
+    CHECK(log.at(5).size() == 2);
+    CHECK(log.at(9).size() == 1);
+    CHECK(log.at(1000).empty());
+    CHECK(log.lastTick() == 9);
+
+    // In the order recorded: two players ordering on one tick must apply in a fixed sequence,
+    // or the same log is two different matches.
+    CHECK(log.at(5)[0].player == 0);
+    CHECK(log.at(5)[1].player == 1);
+}
+
+TEST_CASE("a log refuses to go backwards in time") {
+    // Checked at RECORD time, because the tick it went backwards on is the only useful thing
+    // to know about such a log, and that is knowable here rather than at replay.
+    CommandLog log;
+    log.record(moveOrder(10, 0, UnitId{0, 1}, 100.0f, 100.0f));
+    log.record(moveOrder(3, 0, UnitId{0, 1}, 200.0f, 100.0f));
+
+    CHECK(log.size() == 1);
+    CHECK(log.lastTick() == 10);
+}
+
+TEST_CASE("a log round-trips through a file exactly") {
+    // The fixed-point targets are written as RAW integers, so this is an exact round trip
+    // rather than one within a tolerance — which in a determinism artifact is the only
+    // acceptable kind.
+    CommandLog original;
+    original.record(moveOrder(0, 0, UnitId{3, 7}, 123.456f, 789.012f));
+    original.record(Command{.tick = 4,
+                            .player = 1,
+                            .kind = CommandKind::Stop,
+                            .unit = UnitId{9, 2},
+                            .targetX = {},
+                            .targetZ = {},
+                            .buildType = 0});
+    original.record(Command{.tick = 4,
+                            .player = 1,
+                            .kind = CommandKind::Attack,
+                            .unit = UnitId{9, 2},
+                            .targetX = rm::test::fx(-42.5f),
+                            .targetZ = rm::test::fx(0.125f),
+                            .buildType = 0});
+    original.record(Command{.tick = 8,
+                            .player = 0,
+                            .kind = CommandKind::Build,
+                            .unit = UnitId{1, 1},
+                            .targetX = rm::test::fx(64.0f),
+                            .targetZ = rm::test::fx(64.0f),
+                            .buildType = 5});
+
+    const std::filesystem::path path =
+        std::filesystem::temp_directory_path() / "rm-command-log-test.txt";
+    REQUIRE(rm::sim::writeCommandLog(original, path.string()));
+
+    const std::optional<CommandLog> read = rm::sim::readCommandLog(path.string());
+    REQUIRE(read.has_value());
+    REQUIRE(read->size() == original.size());
+    for (std::size_t i = 0; i < original.size(); ++i) {
+        REQUIRE(read->all()[i] == original.all()[i]);
+    }
+
+    std::filesystem::remove(path);
+}
+
+TEST_CASE("a missing or malformed log is nothing, not a partial one") {
+    CHECK_FALSE(rm::sim::readCommandLog("/nonexistent/rm-command-log").has_value());
+
+    const std::filesystem::path path =
+        std::filesystem::temp_directory_path() / "rm-command-log-bad.txt";
+    {
+        std::ofstream out{path};
+        out << "0 0 move 1 1 100 200 0\n";
+        out << "4 0 fly 1 1 100 200 0\n";  // not a kind this engine knows
+    }
+    // Nothing, rather than the one good line: a partial log replays as a different match.
+    CHECK_FALSE(rm::sim::readCommandLog(path.string()).has_value());
+    std::filesystem::remove(path);
+}
+
+// --- The property §7 P2.5 names --------------------------------------------------------
+
+TEST_CASE("a human log and a script log replay through the same path") {
+    // THE STATED TEST. Two logs from two sources — one standing in for a player's clicks, one
+    // for a script's decisions — both applied by `applyCommand` and both producing a match
+    // that a replay reproduces exactly.
+    //
+    // "The same path" is the claim, and it is structural rather than measured: there is one
+    // `applyCommand`, so a human's order and a script's cannot diverge. What is MEASURED here
+    // is the consequence: the same log twice is the same match, byte for byte, by state hash.
+
+    // A log as a human would produce it: orders at the moments a person clicked.
+    CommandLog human;
+    {
+        Fixture fix;
+        human.record(moveOrder(0, 0, fix.mine, 400.0f, 200.0f));
+        human.record(moveOrder(30, 0, fix.mine, 400.0f, 600.0f));
+        human.record(Command{.tick = 60,
+                             .player = 0,
+                             .kind = CommandKind::Stop,
+                             .unit = fix.mine,
+                             .targetX = {},
+                             .targetZ = {},
+                             .buildType = 0});
+    }
+
+    // A log as a script would produce it: one decision a second, for the other army.
+    CommandLog script;
+    {
+        Fixture fix;
+        for (rm::TickIndex tick = 0; tick < 100; tick += 10) {
+            script.record(moveOrder(tick, 1, fix.theirs, 300.0f,
+                                    300.0f + static_cast<float>(tick)));
+        }
+    }
+
+    // Both logs, concatenated in tick order — which is what a real match's log is: two sources
+    // interleaved. That the two are indistinguishable once recorded IS the property.
+    CommandLog both;
+    {
+        std::vector<Command> merged;
+        merged.insert(merged.end(), human.all().begin(), human.all().end());
+        merged.insert(merged.end(), script.all().begin(), script.all().end());
+        std::stable_sort(merged.begin(), merged.end(),
+                         [](const Command& a, const Command& b) { return a.tick < b.tick; });
+        for (const Command& command : merged) {
+            both.record(command);
+        }
+    }
+    REQUIRE(both.size() == human.size() + script.size());
+
+    // Replayed twice, in two separate sims stepped in one process — the strongest form of the
+    // determinism test, and the payoff for having no sim globals (§5.4).
+    const auto play = [&both]() {
+        Fixture fix;
+        fix.run(both, 120);
+        std::vector<rm::sim::Projectile> shots;
+        std::vector<rm::sim::Economy> economies(2);
+        const std::vector<int> commandersEver(2, 0);
+        rm::sim::Match match{.armies = fix.armies,
+                             .economies = economies,
+                             .projectiles = &shots,
+                             .commandersEver = commandersEver};
+        return rm::sim::hashMatch(fix.roster.store, match);
+    };
+
+    const rm::StateHash first = play();
+    const rm::StateHash second = play();
+    CHECK(first == second);
+
+    // And the log actually did something — otherwise two frozen matches would agree about
+    // nothing.
+    Fixture moved;
+    moved.run(both, 120);
+    Fixture still;
+    still.run(CommandLog{}, 120);
+    CHECK(moved.roster.transform(moved.mine).z != still.roster.transform(still.mine).z);
+}

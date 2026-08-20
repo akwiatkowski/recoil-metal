@@ -1,0 +1,162 @@
+#pragma once
+
+#include "core/Types.hpp"
+#include "core/sim/Army.hpp"
+#include "core/sim/Fx.hpp"
+#include "core/sim/IdPool.hpp"
+#include "core/sim/Pathfinding.hpp"
+#include "core/sim/Terrain.hpp"
+
+#include <cstdint>
+#include <optional>
+#include <span>
+#include <string>
+#include <vector>
+
+namespace rm::sim {
+
+class UnitStore;
+
+// An order, as a value — and the single path every order takes into the sim.
+//
+// WHY THIS EXISTS (PLAN2.md §7 P2.5). Until now a human's click called `orderTo` directly and
+// the scripted opponent called `orderRouted` directly. Two callers, two paths, and no record
+// of either. That makes three things impossible at once:
+//
+//   1. **The success criterion.** §1.3 is "the same command log produces the same match". There
+//      was no command log — the phrase named something that did not exist. A match was
+//      reproducible only by replaying a hash log, which proves two runs agreed without being
+//      able to say what either of them was asked to do.
+//   2. **Testing the human path.** A click went through AppKit, so "does shift-click order the
+//      whole selection" could only be answered by clicking. A command is a struct; a test can
+//      make one.
+//   3. **Authorisation.** With orders applied at the call site, nothing checked that the player
+//      issuing one commands the unit. In a single-player game that is invisible; it is the
+//      first thing a networked one gets wrong.
+//
+// A command is DATA, deliberately: it carries when, who, what and where, and it carries no
+// behaviour. `applyCommand` is the behaviour, and it is one function so that a human's order
+// and a script's are not merely similar but identical — the property §7 P2.5 asks to be tested.
+//
+// WHAT THIS IS NOT. It is not a command QUEUE. Recoil's `CCommandAI` holds a per-unit deque of
+// pending orders and is the right shape for shift-queued waypoints and build lists (§6.4), and
+// this is not that: a command here is applied on the tick it names and is then history. The
+// queue is P6's, and it will be built out of these rather than instead of them.
+
+/// What an order asks for.
+///
+/// A closed set, and short on purpose: these are the four the engine can actually carry out
+/// today. A `Build` command names a type rather than a blueprint path, because the sim does
+/// not know what a path is (`UnitCatalog`).
+enum class CommandKind : std::uint8_t {
+    /// Walk to a place, routed around what is impassable.
+    Move,
+    /// Stop where you are, cancelling the route.
+    Stop,
+    /// Walk at a place — the same as `Move` today, since attacking is what a unit does on
+    /// arrival anyway. Separate because the two mean different things to a player, and
+    /// collapsing them would lose the distinction in the log.
+    Attack,
+    /// Begin something at a place. The caller turns a finished construction into a unit, so
+    /// the sim records the intent and the economy does the rest.
+    Build,
+};
+
+/// One order, from one player, on one tick.
+///
+/// Fixed-size and trivially copyable, which is what lets a log of them be compared byte for
+/// byte and hashed the way sim state is.
+struct Command {
+    /// The tick this was issued on, and the tick it must be applied on.
+    ///
+    /// Recorded rather than implied by position in a list, because a replay has to apply
+    /// commands on the right tick even when a tick has none — and because a log concatenated
+    /// from two sources must still sort.
+    TickIndex tick = 0;
+
+    /// Who issued it. Checked against the unit's army: a command from a player who does not
+    /// command that army is REJECTED, deterministically, rather than trusted.
+    PlayerIndex player = 0;
+
+    CommandKind kind = CommandKind::Stop;
+
+    /// Which unit. Stale handles are ignored — a player may click a unit that died on the
+    /// tick their order was issued, and that must not resolve to whoever inherited the slot.
+    UnitId unit{};
+
+    /// Where, for the kinds that have a where. Ignored by `Stop`.
+    Fx targetX{};
+    Fx targetZ{};
+
+    /// What to build, for `Build`. Ignored by the rest.
+    UnitTypeIndex buildType = 0;
+};
+
+/// Whether two commands are the same order. For comparing a recorded log with a replayed one.
+[[nodiscard]] bool operator==(const Command& a, const Command& b) noexcept;
+
+/// Applies one command, and says whether it was applied.
+///
+/// **THE SINGLE PATH.** A human's click and a script's decision both arrive here, which is
+/// what makes "they replay through the same path" true rather than aspirational.
+///
+/// Returns false — without changing anything — when the command names a unit that is not
+/// alive, or a player that does not command it, or a kind this build cannot carry out. Those
+/// are ORDINARY, not errors: a player clicks a dying unit, a stale log names a unit that no
+/// longer exists. What matters is that the rejection is deterministic, so a replay rejects
+/// exactly what the original did.
+///
+/// `Build` is not applied here. It has no effect on the store — a construction needs a
+/// blueprint out of the VFS, which the sim cannot reach — so it returns false and the caller
+/// reads the command itself. That is a gap, and it is named rather than hidden: the
+/// construction list moves into the sim in P3, and this is where it will be applied.
+[[nodiscard]] bool applyCommand(const Command& command, UnitStore& store,
+                                std::span<const Player> players,
+                                std::span<const Army> armies, const Terrain& terrain,
+                                const PassabilityGrid& grid);
+
+// --- The log --------------------------------------------------------------------------
+//
+// Every command a match was given, in the order it was given. With the initial state, this IS
+// the match: §1.3's criterion in one file.
+
+/// Commands, in tick order.
+///
+/// A flat vector rather than a map from tick to commands: a match issues a few hundred orders
+/// over ten minutes, so the whole log fits in a cache line's worth of pages, and a flat array
+/// keeps the on-disk form and the in-memory form the same shape. `at()` is a binary search,
+/// which for these sizes is faster than a hash and exactly reproducible.
+class CommandLog {
+public:
+    /// Appends a command. Must be non-decreasing in tick — a log that went backwards could not
+    /// be replayed, and finding that out at record time beats finding it out at replay time.
+    void record(const Command& command);
+
+    /// The commands issued on a tick, in the order they were recorded.
+    [[nodiscard]] std::span<const Command> at(TickIndex tick) const noexcept;
+
+    [[nodiscard]] std::span<const Command> all() const noexcept { return commands_; }
+    [[nodiscard]] std::size_t size() const noexcept { return commands_.size(); }
+    [[nodiscard]] bool empty() const noexcept { return commands_.empty(); }
+
+    /// The last tick with a command on it, or zero for an empty log. What a replay runs to.
+    [[nodiscard]] TickIndex lastTick() const noexcept;
+
+private:
+    std::vector<Command> commands_;
+};
+
+/// Writes a log as text, one command per line.
+///
+/// TEXT, for the same reason the hash log is text: a log you can read is a log you can
+/// diff, quote in a bug report and hand-edit to reproduce something. The format is
+/// `tick player kind unit.index unit.generation targetX targetZ buildType`, all decimal, and
+/// the fixed-point targets are written as their RAW integers — a decimal expansion would be a
+/// lossy round trip, which in a determinism artifact is the one unacceptable kind of lossy.
+bool writeCommandLog(const CommandLog& log, const std::string& path);
+
+/// Reads one back. Returns nothing when the file cannot be read or a line will not parse:
+/// a partial log is worse than none, because it replays as a different match.
+[[nodiscard]] std::optional<CommandLog> readCommandLog(const std::string& path);
+
+} // namespace rm::sim

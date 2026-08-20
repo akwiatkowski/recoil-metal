@@ -26,6 +26,7 @@
 #include "core/scene/GroundDecals.hpp"
 #include "core/scene/UnitPlacement.hpp"
 #include "core/sim/Army.hpp"
+#include "core/sim/Command.hpp"
 #include "core/sim/BuildOrder.hpp"
 #include "core/sim/Combat.hpp"
 #include "core/sim/Economy.hpp"
@@ -1099,6 +1100,13 @@ struct UnitScene {
     // than beside it because every question that needs an army — may I select this,
     // may I shoot that, who banks the mass — starts from a unit.
     std::vector<rm::sim::Army> armies;
+
+    /// Every order this match has been given (P2.5).
+    ///
+    /// With the initial state this IS the match — §1.3's "the same command log produces the
+    /// same match" naming something that exists rather than something intended. Written by
+    /// `--command-log`.
+    rm::sim::CommandLog commands;
 
     /// Who is participating, and which army each drives (P2.4).
     ///
@@ -2402,6 +2410,14 @@ struct MarchOptions {
     /// A hash log to compare this run against. The check that makes the artifact useful:
     /// it reports the FIRST tick that disagrees, which is a breakpoint rather than a mood.
     std::string checkHashLogPath;
+
+    /// Where to write this run's COMMAND log, or empty for nowhere.
+    ///
+    /// The other half of the determinism artifact, and the more interesting half: a hash log
+    /// says two runs agreed, and a command log says what they were asked to do. Together with
+    /// the initial state they are §1.3's criterion — "the same command log produces the same
+    /// match" — with both halves now naming things that exist.
+    std::string commandLogPath;
 };
 
 [[nodiscard]] MarchOptions parseMarch(int argc, const char* argv[]) {
@@ -2435,6 +2451,8 @@ struct MarchOptions {
             options.hashLogPath = argv[i + 1];
         } else if (flag == "--check-hash-log") {
             options.checkHashLogPath = argv[i + 1];
+        } else if (flag == "--command-log") {
+            options.commandLogPath = argv[i + 1];
         }
     }
     return options;
@@ -2445,18 +2463,55 @@ struct MarchOptions {
 /// Falls back to nothing rather than to a straight line when no route exists:
 /// walking into a cliff because the search failed is worse than standing still,
 /// and standing still is at least legible as "it cannot get there".
-[[nodiscard]] bool orderRouted(rm::sim::MoveState& state, const rm::sim::Transform& unit,
-                               const rm::sim::PassabilityGrid& grid, rm::sim::Fx toX,
-                               rm::sim::Fx toZ) {
-    // No conversion either way: the pathfinder takes and returns the same fixed point the
-    // store holds. `fxPath` existed to bridge them and is gone.
-    const auto path = rm::sim::findPath(grid, unit.x, unit.z, toX, toZ);
-    if (path.empty()) {
-        return false;
+/// Issues a move order AS A COMMAND, records it, and says whether it took.
+///
+/// THE ONE PATH (P2.5). Every order in this file — a player's right-click, a scripted
+/// opponent's attack, a tank rolling off a factory floor — goes through `applyCommand`, so
+/// there is no way for the human path and the script path to drift apart. The command is
+/// recorded on the way through, which is what makes `scene.commands` the match.
+///
+/// `player` is who is issuing it, and it is checked rather than assumed: `applyCommand` refuses
+/// an order from a player who does not command the unit's army.
+[[nodiscard]] bool issueMove(UnitScene& scene, const rm::sim::PassabilityGrid& grid,
+                             const rm::HeightField& field, rm::sim::UnitId unit,
+                             rm::PlayerIndex player, rm::TickIndex tick, rm::sim::Fx toX,
+                             rm::sim::Fx toZ) {
+    const rm::sim::Command command{
+        .tick = tick,
+        .player = player,
+        .kind = rm::sim::CommandKind::Move,
+        .unit = unit,
+        .targetX = toX,
+        .targetZ = toZ,
+        .buildType = 0,
+    };
+
+    const bool applied = rm::sim::applyCommand(command, scene.store, scene.players,
+                                              scene.armies, rm::sim::Terrain{field}, grid);
+    if (applied) {
+        // Recorded only when it took. A refused order is not part of the match — replaying it
+        // would be refused again, so keeping it would only make the log longer.
+        scene.commands.record(command);
     }
-    rm::sim::orderAlongPath(state, path);
-    return true;
+    return applied;
 }
+
+/// The player driving an army, or none. What `issueMove` needs to attribute an order.
+[[nodiscard]] rm::PlayerIndex playerDriving(const UnitScene& scene, int army) {
+    for (const rm::sim::Player& player : scene.players) {
+        if (rm::sim::commands(player, army)) {
+            return player.index;
+        }
+    }
+    return 0;
+}
+
+// `orderRouted` used to live here, and every order in this file went through it.
+//
+// It is gone: `issueMove` above does the same job and records the order on the way through, so
+// there is one path into the sim rather than two similar ones (P2.5). That is what makes
+// "a human log and a script log replay through the same path" a structural fact rather than
+// an aspiration — there is no other path to take.
 
 /// What one army has ON THE MAP, gathered for the scripted opponent's decisions —
 /// and for the economy, which recomputes income from this rather than accumulating
@@ -2598,7 +2653,8 @@ void runOpponents(UnitScene& scene, const rm::vfs::Vfs& content, const rm::Heigh
                   PassabilitySet& passability,
                   std::span<const rm::mapinfo::StartPosition> starts,
                   std::span<const rm::scenario::Marker> markers,
-                  std::vector<rm::sim::Opponent>& scripts, float elapsedSeconds) {
+                  std::vector<rm::sim::Opponent>& scripts, float elapsedSeconds,
+                  rm::TickIndex tickIndex) {
     // The middle of the map, in fixed point: `structureSite` and `rolloffPoint` place things
     // relative to it, and both are sim geometry now.
     const rm::sim::Fx centreX = rm::sim::Fx::fromInt(field.squaresX * rm::kSquareSize / 2);
@@ -2736,9 +2792,9 @@ void runOpponents(UnitScene& scene, const rm::vfs::Vfs& content, const rm::Heigh
                     const rm::sim::PassabilityGrid& grid =
                         passability.gridFor(scene.maxSlopeDegrees[type],
                                             scene.maxWaterDepthElmos[type]);
-                    if (orderRouted(scene.store.motion()[tank.index],
-                                    scene.store.transforms()[tank.index], grid,
-                                    (*target)[0], (*target)[2])) {
+                    if (issueMove(scene, grid, field, tank,
+                                  playerDriving(scene, army.index), tickIndex, (*target)[0],
+                                  (*target)[2])) {
                         ++marching;
                     }
                 }
@@ -2874,7 +2930,8 @@ rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) 
     // The opponents decide FIRST, so an order given this tick moves this tick.
     if (!scene.armies.empty() && !runner.matchOver && tickIndex % static_cast<int>(decisionTicks()) == 0) {
         runOpponents(scene, runner.content, runner.field, runner.passability, runner.starts,
-                     runner.markers, runner.scripts, now);
+                     runner.markers, runner.scripts, now,
+                     static_cast<rm::TickIndex>(tickIndex));
     }
 
     // ONE call, and the same one both callers make. What used to be here — the order of
@@ -2943,8 +3000,9 @@ rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) 
             const rm::sim::PassabilityGrid& grid =
                 runner.passability.gridFor(scene.maxSlopeDegrees[type],
                                            scene.maxWaterDepthElmos[type]);
-            (void)orderRouted(scene.store.motion()[spawned->index],
-                              scene.store.transforms()[spawned->index], grid, to[0], to[1]);
+            (void)issueMove(scene, grid, runner.field, *spawned,
+                            playerDriving(scene, work.armyIndex),
+                            static_cast<rm::TickIndex>(tickIndex), to[0], to[1]);
         }
     }
 
@@ -2974,9 +3032,10 @@ void march(UnitScene& scene, const rm::HeightField& field, PassabilitySet& passa
                 const auto type = static_cast<std::size_t>(scene.store.typeAt(slot));
                 const rm::sim::PassabilityGrid& grid = passability.gridFor(
                     scene.maxSlopeDegrees[type], scene.maxWaterDepthElmos[type]);
-                if (orderRouted(scene.store.motion()[slot], scene.store.transforms()[slot],
-                                grid, rm::sim::fxFromFloat(options.x),
-                                rm::sim::fxFromFloat(options.z))) {
+                if (issueMove(scene, grid, field, scene.store.idAt(slot),
+                              playerDriving(scene, scene.store.motion()[slot].armyIndex), 0,
+                              rm::sim::fxFromFloat(options.x),
+                              rm::sim::fxFromFloat(options.z))) {
                     ++routed;
                 }
             }
@@ -3096,9 +3155,20 @@ void march(UnitScene& scene, const rm::HeightField& field, PassabilitySet& passa
     //
     // Written before the summaries below, so that a run whose whole purpose was the
     // artifact says whether it got one before saying anything else.
+    if (!options.commandLogPath.empty()) {
+        if (rm::sim::writeCommandLog(scene.commands, options.commandLogPath)) {
+            std::printf("commands: %zu order(s) over %llu tick(s) written to %s\n",
+                        scene.commands.size(),
+                        static_cast<unsigned long long>(scene.commands.lastTick()),
+                        options.commandLogPath.c_str());
+        } else {
+            std::printf("commands: cannot write %s\n", options.commandLogPath.c_str());
+        }
+    }
+
     if (hashing) {
         rm::sim::ReplayHeader header;
-        header.ticksPerSecond = rm::sim::kTicksPerSecond;
+        header.ticksPerSecond = static_cast<int>(gAppTickRate.ticksPerSecond());
         header.widthsFingerprint = rm::sim::widthsFingerprint();
         header.tickCount = hashes.size();
 
@@ -4147,10 +4217,11 @@ int main(int argc, const char* argv[]) {
                 const rm::sim::PassabilityGrid& grid =
                     passability.gridFor(units.maxSlopeDegrees[type],
                                         units.maxWaterDepthElmos[type]);
-                if (!orderRouted(units.store.motion()[sel.index],
-                                 units.store.transforms()[sel.index], grid,
-                                 rm::sim::fxFromFloat(ground->x),
-                                 rm::sim::fxFromFloat(ground->z))) {
+                if (!issueMove(units, grid, map->field, sel,
+                               playerDriving(units, units.playerArmy),
+                               static_cast<rm::TickIndex>(matchTicks),
+                               rm::sim::fxFromFloat(ground->x),
+                               rm::sim::fxFromFloat(ground->z))) {
                     ++failed;
                 }
             }
