@@ -210,6 +210,8 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
         def.buildRate = numberOr(*economy, "BuildRate", 0.0f);
         def.producesMassPerSecond = numberOr(*economy, "ProductionPerSecondMass", 0.0f);
         def.producesEnergyPerSecond = numberOr(*economy, "ProductionPerSecondEnergy", 0.0f);
+        def.upkeepEnergyPerSecond =
+            numberOr(*economy, "MaintenanceConsumptionPerSecondEnergy", 0.0f);
         def.storageMass = numberOr(*economy, "StorageMass", 0.0f);
         def.storageEnergy = numberOr(*economy, "StorageEnergy", 0.0f);
     }

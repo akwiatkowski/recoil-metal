@@ -35,6 +35,14 @@ struct Economy {
     /// extractor stops paying immediately.
     Resources incomePerSecond;
 
+    /// What standing structures cost to RUN, per second. Energy only in the corpus.
+    ///
+    /// Charged BEFORE construction is funded, and that order is the mechanic: upkeep is not
+    /// optional, so a base whose power fails stops building rather than stopping running.
+    /// Funding builds first and letting upkeep take the remainder would invert that and
+    /// make a brownout invisible.
+    Resources upkeepPerSecond;
+
     /// The fraction of what was ASKED FOR that was actually paid last tick, 0..1.
     ///
     /// The stall ratio, and the number a player watches: 1 means everything is funded and
@@ -93,6 +101,9 @@ struct Construction {
 /// same fraction. Paying them in order instead would fund whoever came first and starve
 /// the rest, which makes build progress depend on array order — the kind of wrong that is
 /// invisible until two identical bases behave differently.
+///
+/// Upkeep is charged before construction is funded, so a base short of power stops
+/// BUILDING rather than stopping running — see Economy::upkeepPerSecond.
 ///
 /// Income is added BEFORE spending, so a tick's earnings are available in the same tick.
 /// The game does this too, and it is the difference between a just-affordable build

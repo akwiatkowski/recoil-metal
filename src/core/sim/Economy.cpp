@@ -26,6 +26,15 @@ void tickEconomy(Economy& economy, std::span<Construction> building) {
     economy.stored.mass = std::min(economy.stored.mass, economy.storage.mass);
     economy.stored.energy = std::min(economy.stored.energy, economy.storage.energy);
 
+    // UPKEEP FIRST, and unconditionally: what is standing costs what it costs whether or
+    // not it can be paid for. An economy that cannot meet it simply has nothing left, which
+    // is what a brownout is — and construction, funded from the remainder below, is what
+    // visibly stops.
+    economy.stored.mass =
+        std::max(0.0f, economy.stored.mass - economy.upkeepPerSecond.mass * kTickSeconds);
+    economy.stored.energy =
+        std::max(0.0f, economy.stored.energy - economy.upkeepPerSecond.energy * kTickSeconds);
+
     // Pass one: what does everything want this tick?
     Resources wanted;
     for (const Construction& work : building) {

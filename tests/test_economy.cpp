@@ -237,3 +237,60 @@ TEST_CASE("a commander's trickle is enough to afford the first extractor") {
     CHECK(ticks > 60);
     CHECK(ticks < 1000);
 }
+
+TEST_CASE("upkeep is charged before construction is funded") {
+    // Not optional, and the ORDER is the mechanic: a base short of power stops BUILDING
+    // rather than stopping running. Funding builds first and letting upkeep take the
+    // remainder would invert that and make a brownout invisible.
+    Economy economy;
+    economy.storage = {.mass = 1000.0f, .energy = 1000.0f};
+    economy.stored = {.mass = 100.0f, .energy = 6.0f};
+    // A tick's upkeep is 6 energy, which is exactly what is banked — so nothing is left
+    // for the 6 the build wants.
+    economy.upkeepPerSecond = {.mass = 0.0f, .energy = 60.0f};
+
+    std::vector<Construction> building{massExtractor()};
+    rm::sim::tickEconomy(economy, building);
+
+    CHECK(economy.stored.energy == Approx(0.0f));
+    CHECK(economy.fundedFraction == Approx(0.0f));
+    CHECK(building.front().buildTimeRemaining == Approx(60.0f));  // no progress at all
+}
+
+TEST_CASE("upkeep alone can empty a store, and never past zero") {
+    Economy economy;
+    economy.storage = {.mass = 1000.0f, .energy = 1000.0f};
+    economy.stored = {.mass = 0.0f, .energy = 1.0f};
+    economy.upkeepPerSecond = {.mass = 0.0f, .energy = 500.0f};
+
+    std::vector<Construction> nothing;
+    for (int tick = 0; tick < 5; ++tick) {
+        rm::sim::tickEconomy(economy, nothing);
+        CHECK(economy.stored.energy >= 0.0f);
+    }
+    CHECK(economy.stored.energy == Approx(0.0f));
+
+    // And an idle economy is still fully funded: there is nothing asking to be paid.
+    CHECK(economy.fundedFraction == Approx(1.0f));
+}
+
+TEST_CASE("an extractor's own upkeep eats the energy it needed to be built") {
+    // The real numbers: UEB1103 makes 2 mass a second and burns 2 energy doing it. An
+    // economy that ignored the second would run richer than the game's.
+    Economy economy;
+    economy.storage = {.mass = 650.0f, .energy = 5000.0f};
+    economy.incomePerSecond = rm::sim::kCommanderTrickle;  // 0.5 mass, 5 energy
+
+    // One extractor standing: +2 mass, -2 energy.
+    economy.incomePerSecond.mass += 2.0f;
+    economy.upkeepPerSecond.energy += 2.0f;
+
+    std::vector<Construction> nothing;
+    for (int tick = 0; tick < 10; ++tick) {  // one second
+        rm::sim::tickEconomy(economy, nothing);
+    }
+
+    // 2.5 mass a second in, and 5 energy in against 2 out.
+    CHECK(economy.stored.mass == Approx(2.5f).margin(0.01));
+    CHECK(economy.stored.energy == Approx(3.0f).margin(0.01));
+}

@@ -2214,16 +2214,15 @@ void march(UnitScene& scene, const rm::HeightField& field, PassabilitySet& passa
                 const bool wasFinished = work.finished();
                 work = mine[at++];
                 if (!wasFinished && work.finished()) {
-                    // What it produces starts arriving, and what it COSTS to run does
-                    // not: `MaintenanceConsumptionPerSecondEnergy` is stated by 104 units
-                    // — an extractor burns 2 energy a second — and is read nowhere yet, so
-                    // an economy here runs slightly richer than the game's. Upkeep is the
-                    // next thing, and it is what makes power generation a decision rather
-                    // than a formality.
+                    // What it produces starts arriving, and what it COSTS to run starts
+                    // being charged. An extractor makes 2 mass a second and burns 2 energy
+                    // doing it, so the second one is what makes power generation a decision
+                    // rather than a formality.
                     const rm::unitdef::UnitDef& built = scene.buildable[work.blueprintIndex];
                     scene.economies[army].incomePerSecond.mass += built.producesMassPerSecond;
                     scene.economies[army].incomePerSecond.energy +=
                         built.producesEnergyPerSecond;
+                    scene.economies[army].upkeepPerSecond.energy += built.upkeepEnergyPerSecond;
                     scene.economies[army].storage.mass += built.storageMass;
                     scene.economies[army].storage.energy += built.storageEnergy;
                     ++completedBuilds;
@@ -2293,12 +2292,14 @@ void march(UnitScene& scene, const rm::HeightField& field, PassabilitySet& passa
     if (!scene.economies.empty()) {
         const rm::sim::Economy& first = scene.economies.front();
         std::printf("economy: %zu of %zu build(s) complete; army 0 holds %.0f mass /"
-                    " %.0f energy, earning %.1f / %.1f a second, %.0f%% funded\n",
+                    " %.0f energy, earning %.1f / %.1f a second against %.1f energy of"
+                    " upkeep, %.0f%% funded\n",
                     completedBuilds, scene.building.size(),
                     static_cast<double>(first.stored.mass),
                     static_cast<double>(first.stored.energy),
                     static_cast<double>(first.incomePerSecond.mass),
                     static_cast<double>(first.incomePerSecond.energy),
+                    static_cast<double>(first.upkeepPerSecond.energy),
                     static_cast<double>(first.fundedFraction * 100.0f));
     }
 }

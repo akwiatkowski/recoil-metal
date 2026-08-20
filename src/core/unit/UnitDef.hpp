@@ -135,6 +135,14 @@ struct UnitDef {
     float producesMassPerSecond = 0.0f;
     float producesEnergyPerSecond = 0.0f;
 
+    /// What it costs to RUN, per second, once standing. Energy only: 104 units state
+    /// `MaintenanceConsumptionPerSecondEnergy` and not one states a mass counterpart.
+    ///
+    /// A mass extractor burns 2 a second against the 2 mass it makes, so an economy that
+    /// ignores this runs richer than the game's — and it is what makes power generation a
+    /// decision rather than a formality.
+    float upkeepEnergyPerSecond = 0.0f;
+
     /// How much of each it lets its owner hold. 62 units state storage.
     float storageMass = 0.0f;
     float storageEnergy = 0.0f;
