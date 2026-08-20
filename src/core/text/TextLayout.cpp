@@ -17,6 +17,32 @@ namespace {
 
 } // namespace
 
+void appendRect(std::vector<TextVertex>& out, const Font& font, float x, float y, float width,
+                float height, std::array<float, 4> colour) {
+    if (width <= 0.0f || height <= 0.0f) {
+        return;
+    }
+
+    // The MIDDLE of the solid texel, not its corners: a linear sampler on an edge fetches a
+    // blend with whatever is next door, which for a rectangle stretched over hundreds of
+    // pixels means the whole fill is tinted by its neighbour's ink.
+    const float u = (font.solidUv[0] + font.solidUv[2]) * 0.5f;
+    const float v = (font.solidUv[1] + font.solidUv[3]) * 0.5f;
+
+    const TextVertex topLeft{.position = {x, y}, .uv = {u, v}, .colour = colour};
+    const TextVertex topRight{.position = {x + width, y}, .uv = {u, v}, .colour = colour};
+    const TextVertex bottomLeft{.position = {x, y + height}, .uv = {u, v}, .colour = colour};
+    const TextVertex bottomRight{
+        .position = {x + width, y + height}, .uv = {u, v}, .colour = colour};
+
+    out.push_back(topLeft);
+    out.push_back(topRight);
+    out.push_back(bottomLeft);
+    out.push_back(bottomLeft);
+    out.push_back(topRight);
+    out.push_back(bottomRight);
+}
+
 float appendText(std::vector<TextVertex>& out, std::span<const Glyph> glyphs,
                  std::string_view text, float x, float y, std::array<float, 4> colour,
                  float scale) {

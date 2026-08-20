@@ -67,6 +67,29 @@ struct TextVertex {
     std::array<float, 4> colour{};  ///< straight rgba
 };
 
+// A font as a caller sees it: its glyphs, its line height, and one solid texel.
+//
+// THE SOLID TEXEL is what lets this pipeline draw the whole interface rather than only its
+// letters. A fully-opaque pixel reserved in the atlas means a panel, a bevel or a bar is a
+// quad with its uvs pointing at that pixel — so chrome and text share one buffer, one
+// texture bind and one draw, and there is no second pipeline to keep in step with the first.
+struct Font {
+    std::span<const Glyph> glyphs;
+    float lineHeight = 0.0f;
+
+    /// Normalised rectangle of a fully-opaque texel: u0, v0, u1, v1.
+    std::array<float, 4> solidUv{};
+
+    [[nodiscard]] bool usable() const noexcept { return !glyphs.empty(); }
+};
+
+/// Appends a solid rectangle, in pixels, using the font's opaque texel.
+///
+/// Width or height of zero draws nothing rather than a degenerate quad — a one-pixel rule is
+/// a legitimate thing to ask for and a zero-pixel one is a caller's arithmetic showing.
+void appendRect(std::vector<TextVertex>& out, const Font& font, float x, float y, float width,
+                float height, std::array<float, 4> colour);
+
 /// Appends the quads for `text`, with the pen starting at (`x`, `y`) — the BASELINE's left
 /// end, not the top-left of the first letter.
 ///

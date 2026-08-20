@@ -784,24 +784,46 @@ BAR=~/projects/llm/games/forged-alliance-reborn/reference/BAR/objects3d/Units
 # scene: 3 models, 4 textures uploaded, 2 texture binds per frame
 ```
 
-### The HUD
+### The interface
 
-Four facts and a banner, drawn last of all over the world. Ours, not the game's — Supreme
-Commander's own interface is 46 650 lines of Lua and is explicitly out of scope.
+![the resource panel and the match readout](docs/images/m21-hud.jpg)
 
-    MASS 0  (+0.5/s)   ENERGY 0  (+5.0/s  -0.0/s)
-    BUILDING AT 8%
-    6 UNITS   6 OF 8 ARMIES IN PLAY
+A resource panel is an **instrument, not a scoreboard**. What a player of this game watches is
+not how much mass they have but which way it is going and whether their build is funded — the
+economy is a flow and a stall slows everything by one shared fraction — so the panel shows
+rate and throttle first and totals second.
 
-The stall line appears only when there IS a stall: a line that always reads 100% is one a
-player stops seeing, and then does not notice at 40%.
+    ▪ MASS     120 / 650     +2.5
+      ████░░░░░░░░░░░░░░░░░░░░░░
+       ▓▓▓▓▓▓▓▓▓▓▓|▓▓▓▓▓▓▓▓▓▓▓▓          <- the flow strip
+    ▪ ENERGY   144 / 5000    +3.0
+      █░░░░░░░░░░░░░░░░░░░░░░░░░
+       ▓▓▓▓▓▓▓▓▓▓▓|▓▓▓▓▒▒▒▒▒▒▒▒
+    BUILDING AT 8% ▬▬▬░░░░░░░░░░         <- only while there is a stall
 
-The font is rasterised at startup with CoreText into a single-channel coverage atlas — Menlo
-18pt, 95 glyphs, 989x20 — and drawn through one pipeline in pixel space. Monospaced
-deliberately: in a proportional face a rising mass figure jitters sideways as its digits
-change width, which reads as the text being unstable rather than the number being live.
+**The flow strip** is the one thing here worth remembering. Income grows from the left in
+green and drain from the right in red, meeting at a notch. *Where they meet* is the reading:
+past the notch you are earning, short of it you are spending down, and no number has to be
+read for it. Two states ride on the same bar — a lit cap when the store is full and income is
+being thrown away, and a throttle line when construction is not fully funded — both of them
+real mechanics rather than decoration.
 
-### Controls
+**Two typefaces, deliberately paired.** Avenir Next Condensed for labels, which are read once
+and should look engraved; Menlo for readouts, because its figures are tabular and in a
+proportional face a live mass figure jitters sideways as its digits change width. An engraved
+label against a mechanical counter.
+
+**The chrome wears the player's faction and the resources never do.** Mass is green and energy
+amber in every livery, because those are identities a player has learned. Three of the four
+faction colours collide with a reserved one — Aeon's green with mass, Cybran's red with a loss,
+Seraphim's gold with energy — and the collision is resolved by moving the *livery*, since a
+resource's colour is an identity and a faction's is a coat of paint. A test asserts the
+distance, and it caught the first two attempts being too close to tell apart.
+
+Panels are glass with a lit top edge and corner brackets rather than full borders: brackets say
+where a panel's bounds are without the frame competing with the numbers inside it.
+
+### Controls### Controls
 
 RTS conventions, because the camera was a model viewer's before this and a view that
 swings when you meant to select is the most disorienting thing an RTS camera can do.

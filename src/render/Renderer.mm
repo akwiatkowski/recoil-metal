@@ -1619,6 +1619,23 @@ constexpr unsigned char kFallbackBlock[8] = {0x10, 0x84, 0x10, 0x84, 0x00, 0x00,
     return pipeline;
 }
 
+// The two faces, and why each is what it is.
+//
+// LABELS: Avenir Next Condensed Demi Bold. Geometric, narrow, and it holds up uppercase and
+// letterspaced, which is what makes a label read as silkscreened onto a panel rather than
+// typed into it. Condensed also buys width back in an interface with a lot of short words.
+//
+// READOUTS: Menlo. TABULAR figures, which is the whole reason — in a proportional face a live
+// mass figure jitters sideways as its digits change width, and the eye reads that as the text
+// being unstable rather than the number being live.
+//
+// The pairing is the point: an engraved label against a mechanical counter. Both are on every
+// Mac, so neither is a dependency.
+constexpr const char* kLabelFontName = "AvenirNextCondensed-DemiBold";
+constexpr const char* kReadoutFontName = "Menlo";
+constexpr float kLabelPointSize = 15.0f;
+constexpr float kReadoutPointSize = 15.0f;
+
 [[nodiscard]] MTL::RenderPipelineState* makePipeline(MTL::Device* device, MTL::Library* library,
                                                      const char* vertexName,
                                                      const char* fragmentName, bool blend) {
@@ -1939,7 +1956,8 @@ Renderer::Renderer(CA::MetalLayer* layer)
             throw RendererError{"failed to create the font sampler"};
         }
 
-        buildFontAtlas();
+        buildFontAtlas(labelFont_, kLabelFontName, kLabelPointSize);
+        buildFontAtlas(readoutFont_, kReadoutFontName, kReadoutPointSize);
     }
 
     // --- Selection ring buffer ---------------------------------------------
@@ -2021,7 +2039,8 @@ Renderer::~Renderer() {
     if (decalBuffer_ != nullptr) decalBuffer_->release();
     if (decalDepthState_ != nullptr) decalDepthState_->release();
     if (textPipeline_ != nullptr) textPipeline_->release();
-    if (fontAtlas_ != nullptr) fontAtlas_->release();
+    if (labelFont_.atlas != nullptr) labelFont_.atlas->release();
+    if (readoutFont_.atlas != nullptr) readoutFont_.atlas->release();
     if (fontSampler_ != nullptr) fontSampler_->release();
     if (textBuffer_ != nullptr) textBuffer_->release();
     if (decalPipeline_ != nullptr) decalPipeline_->release();
@@ -2497,7 +2516,8 @@ void Renderer::beginFrame() noexcept {
     // Particles too, and for the same reason. Selection outlines likewise: a stale
     // list would outline whatever now occupies those slots.
     particleCount_ = 0;
-    textVertexCount_ = 0;
+    labelVertexCount_ = 0;
+    readoutVertexCount_ = 0;
     outlineRuns_.clear();
 
     // Rings are forgotten at the start of every frame, so a frame that pushes
@@ -2610,7 +2630,6 @@ void Renderer::setSelection(std::span<const SelectionEntry> selected) noexcept {
 // Baked once and drawn at scale 1, because a glyph resampled up is soft and this is a HUD
 // rather than a title: crispness is the whole requirement. Eighteen points is comfortably
 // readable on a Retina display without the atlas needing a second row.
-constexpr float kFontPointSize = 18.0f;
 
 /// Pixels of empty space around each glyph in the atlas.
 ///
@@ -2619,24 +2638,27 @@ constexpr float kFontPointSize = 18.0f;
 /// vertical smear beside letters and reads as a bad font rather than a packing bug.
 constexpr int kGlyphPadding = 1;
 
-void Renderer::buildFontAtlas() {
-    glyphs_.clear();
-    lineHeight_ = 0.0f;
+void Renderer::buildFontAtlas(FontSlot& slot, const char* familyName, float points) {
+    slot.glyphs.clear();
+    slot.lineHeight = 0.0f;
 
-    // A MONOSPACED face, deliberately. A HUD is mostly numbers that change every frame, and
-    // in a proportional font a rising mass figure jitters sideways as its digits change
-    // width — which reads as the text being unstable rather than the number being live.
-    CTFontRef font = CTFontCreateWithName(CFSTR("Menlo"), kFontPointSize, nullptr);
+    CFStringRef name =
+        CFStringCreateWithCString(nullptr, familyName, kCFStringEncodingUTF8);
+    CTFontRef font = name != nullptr ? CTFontCreateWithName(name, points, nullptr) : nullptr;
+    if (name != nullptr) {
+        CFRelease(name);
+    }
     if (font == nullptr) {
-        // No font is not fatal: the HUD simply does not draw. Reported once, because a
-        // missing HUD is otherwise indistinguishable from one that had nothing to say.
-        std::fprintf(stderr, "no HUD font available; text will not draw\n");
+        // Not fatal: `ui::build` degrades whatever this face was for. Reported, because a
+        // missing face is otherwise indistinguishable from an interface with nothing to say.
+        std::fprintf(stderr, "no HUD font \"%s\"; that part of the interface will not draw\n",
+                     familyName);
         return;
     }
 
     const float ascent = static_cast<float>(CTFontGetAscent(font));
     const float descent = static_cast<float>(CTFontGetDescent(font));
-    lineHeight_ = ascent + descent + static_cast<float>(CTFontGetLeading(font));
+    slot.lineHeight = ascent + descent + static_cast<float>(CTFontGetLeading(font));
 
     // Measure first, pack second. Every glyph in one row: 95 of them at ~11 pixels is about
     // 1100 wide, which is one modest texture and keeps the packing arithmetic to a running
@@ -2660,8 +2682,14 @@ void Renderer::buildFontAtlas() {
     CTFontGetAdvancesForGlyphs(font, kCTFontOrientationHorizontal, cgGlyphs.data(),
                               advances.data(), static_cast<CFIndex>(text::kGlyphCount));
 
-    int atlasWidth = 0;
-    int atlasHeight = 1;
+    // A SOLID BLOCK, reserved before the glyphs. Every panel, bevel, bar and bracket in the
+    // interface is a quad whose uvs point at the middle of this — so the chrome and the letters
+    // share one atlas, one bind and one draw, and there is no second pipeline to keep in step.
+    // Four pixels rather than one so that sampling its centre is nowhere near an edge.
+    constexpr int kSolidBlock = 4;
+
+    int atlasWidth = kSolidBlock + 2 * kGlyphPadding;
+    int atlasHeight = kSolidBlock + 2 * kGlyphPadding;
     for (const CGRect& box : bounds) {
         atlasWidth += static_cast<int>(std::ceil(box.size.width)) + 2 * kGlyphPadding;
         atlasHeight = std::max(atlasHeight,
@@ -2672,6 +2700,20 @@ void Renderer::buildFontAtlas() {
     // An 8-bit COVERAGE bitmap, not colour: the glyph says how much of the vertex's colour
     // lands, which is what lets one atlas draw white text, red text and a shadow.
     std::vector<std::uint8_t> pixels(static_cast<std::size_t>(atlasWidth * atlasHeight), 0);
+
+    // The solid block, filled before CoreGraphics touches the bitmap: it is opaque coverage
+    // rather than a glyph, so it is written rather than drawn.
+    for (int row = kGlyphPadding; row < kGlyphPadding + kSolidBlock; ++row) {
+        for (int col = kGlyphPadding; col < kGlyphPadding + kSolidBlock; ++col) {
+            pixels[static_cast<std::size_t>(row * atlasWidth + col)] = 0xFF;
+        }
+    }
+    slot.solidUv = {static_cast<float>(kGlyphPadding) / static_cast<float>(atlasWidth),
+                    static_cast<float>(kGlyphPadding) / static_cast<float>(atlasHeight),
+                    static_cast<float>(kGlyphPadding + kSolidBlock)
+                        / static_cast<float>(atlasWidth),
+                    static_cast<float>(kGlyphPadding + kSolidBlock)
+                        / static_cast<float>(atlasHeight)};
     CGColorSpaceRef grey = CGColorSpaceCreateDeviceGray();
     CGContextRef ctx = CGBitmapContextCreate(
         pixels.data(), static_cast<std::size_t>(atlasWidth), static_cast<std::size_t>(atlasHeight),
@@ -2686,9 +2728,10 @@ void Renderer::buildFontAtlas() {
     CGContextSetShouldAntialias(ctx, true);
     CGContextSetShouldSmoothFonts(ctx, false);  // no subpixel: this is a single channel
 
-    glyphs_.resize(text::kGlyphCount);
+    slot.glyphs.resize(text::kGlyphCount);
 
-    int penX = kGlyphPadding;
+    // The glyphs start AFTER the solid block.
+    int penX = kSolidBlock + 2 * kGlyphPadding;
     for (std::size_t i = 0; i < text::kGlyphCount; ++i) {
         const CGRect& box = bounds[i];
         const int w = static_cast<int>(std::ceil(box.size.width));
@@ -2717,7 +2760,7 @@ void Renderer::buildFontAtlas() {
         const float vBottom =
             static_cast<float>(atlasHeight - kGlyphPadding) / static_cast<float>(atlasHeight);
 
-        glyphs_[i] = text::Glyph{
+        slot.glyphs[i] = text::Glyph{
             .uv = {static_cast<float>(penX) / static_cast<float>(atlasWidth), vTop,
                    static_cast<float>(penX + w) / static_cast<float>(atlasWidth), vBottom},
             .width = static_cast<float>(w),
@@ -2741,45 +2784,58 @@ void Renderer::buildFontAtlas() {
         static_cast<NS::UInteger>(atlasHeight), false);
     // A CLASS FACTORY, so its result is autoreleased and must NOT be released here — see
     // AGENT.md, which records the segfault that taught this.
-    fontAtlas_ = device_->newTexture(descriptor);
-    if (fontAtlas_ == nullptr) {
-        glyphs_.clear();
-        std::fprintf(stderr, "could not upload the HUD font atlas\n");
+    slot.atlas = device_->newTexture(descriptor);
+    if (slot.atlas == nullptr) {
+        slot.glyphs.clear();
+        std::fprintf(stderr, "could not upload the atlas for \"%s\"\n", familyName);
         return;
     }
 
     const MTL::Region region =
         MTL::Region::Make2D(0, 0, static_cast<NS::UInteger>(atlasWidth),
                             static_cast<NS::UInteger>(atlasHeight));
-    fontAtlas_->replaceRegion(region, 0, pixels.data(),
+    slot.atlas->replaceRegion(region, 0, pixels.data(),
                               static_cast<NS::UInteger>(atlasWidth));
 
-    std::printf("hud font: Menlo %.0fpt, %zu glyphs in a %dx%d atlas, %.1fpx line\n",
-                static_cast<double>(kFontPointSize), glyphs_.size(), atlasWidth, atlasHeight,
-                static_cast<double>(lineHeight_));
+    std::printf("hud font: %s %.0fpt, %zu glyphs in a %dx%d atlas, %.1fpx line\n", familyName,
+                static_cast<double>(points), slot.glyphs.size(), atlasWidth, atlasHeight,
+                static_cast<double>(slot.lineHeight));
 }
 
-std::span<const text::Glyph> Renderer::glyphs() const noexcept { return glyphs_; }
+text::Font Renderer::labelFont() const noexcept { return labelFont_.view(); }
 
-float Renderer::lineHeight() const noexcept { return lineHeight_; }
+text::Font Renderer::readoutFont() const noexcept { return readoutFont_.view(); }
 
-void Renderer::setText(std::span<const text::TextVertex> vertices) noexcept {
-    textVertexCount_ = 0;
-    if (textBuffer_ == nullptr || vertices.empty()) {
+void Renderer::setHud(std::span<const text::TextVertex> label,
+                      std::span<const text::TextVertex> readout) noexcept {
+    labelVertexCount_ = 0;
+    readoutVertexCount_ = 0;
+    if (textBuffer_ == nullptr) {
         return;
     }
 
-    // Truncated to whole TRIANGLES, so a dropped tail cannot leave a half quad behind — the
-    // same rule the decals follow.
-    const std::size_t fits = std::min(vertices.size(), text::kMaxTextVertices);
-    textVertexCount_ = fits - (fits % 3);
-    if (textVertexCount_ == 0) {
-        return;
+    // The two faces share one buffer, the labels first and the readouts after. One allocation
+    // and one upload; the draws differ only in which atlas they bind and where they start.
+    auto* base = static_cast<text::TextVertex*>(textBuffer_->contents())
+               + instanceSlot_ * text::kMaxTextVertices;
+
+    // Truncated to whole TRIANGLES, so a dropped tail cannot leave half a quad — the rule the
+    // decals follow. The chrome is in the label list, so if anything has to go it is a number
+    // rather than the panel it sits on.
+    const std::size_t labelFits =
+        std::min(label.size(), text::kMaxTextVertices) / 3 * 3;
+    if (labelFits > 0) {
+        std::memcpy(base, label.data(), labelFits * sizeof(text::TextVertex));
+        labelVertexCount_ = labelFits;
     }
 
-    auto* base = static_cast<text::TextVertex*>(textBuffer_->contents());
-    std::memcpy(base + instanceSlot_ * text::kMaxTextVertices, vertices.data(),
-                textVertexCount_ * sizeof(text::TextVertex));
+    const std::size_t readoutRoom = text::kMaxTextVertices - labelFits;
+    const std::size_t readoutFits = std::min(readout.size(), readoutRoom) / 3 * 3;
+    if (readoutFits > 0) {
+        std::memcpy(base + labelFits, readout.data(),
+                    readoutFits * sizeof(text::TextVertex));
+        readoutVertexCount_ = readoutFits;
+    }
 }
 
 void Renderer::setParticles(std::span<const Particle> particles) noexcept {
@@ -3748,24 +3804,42 @@ void Renderer::encodeScene(MTL::CommandBuffer* commandBuffer, MTL::RenderPassDes
     //
     // Skipped in the reflection pass, like the decals. A mirror showing the interface would
     // be the interface appearing twice.
-    if (textVertexCount_ > 0 && textPipeline_ != nullptr && fontAtlas_ != nullptr
+    if ((labelVertexCount_ > 0 || readoutVertexCount_ > 0) && textPipeline_ != nullptr
         && override == nullptr) {
         encoder->setRenderPipelineState(textPipeline_);
-        encoder->setVertexBuffer(textBuffer_,
-                                 static_cast<NS::UInteger>(instanceSlot_
-                                                           * text::kMaxTextVertices
-                                                           * sizeof(text::TextVertex)),
-                                 kVertexBufferIndex);
+        encoder->setFragmentSamplerState(fontSampler_, NS::UInteger{0});
 
         // The viewport in POINTS, which is the space the vertices are in — the shader needs
         // it to turn pixels into clip space and it is the only thing here that knows the
         // window's size.
         const simd_float2 viewport{static_cast<float>(width), static_cast<float>(height)};
         encoder->setVertexBytes(&viewport, sizeof(viewport), kUniformBufferIndex);
-        encoder->setFragmentTexture(fontAtlas_, NS::UInteger{0});
-        encoder->setFragmentSamplerState(fontSampler_, NS::UInteger{0});
-        encoder->drawPrimitives(MTL::PrimitiveType::PrimitiveTypeTriangle, NS::UInteger{0},
-                                static_cast<NS::UInteger>(textVertexCount_));
+
+        const std::size_t slotBase = instanceSlot_ * text::kMaxTextVertices;
+
+        // LABELS FIRST, and that order is the design: the label list carries every panel, bar
+        // and bracket, so drawing it first puts the chrome under the numbers rather than over
+        // them.
+        if (labelVertexCount_ > 0 && labelFont_.atlas != nullptr) {
+            encoder->setVertexBuffer(
+                textBuffer_,
+                static_cast<NS::UInteger>(slotBase * sizeof(text::TextVertex)),
+                kVertexBufferIndex);
+            encoder->setFragmentTexture(labelFont_.atlas, NS::UInteger{0});
+            encoder->drawPrimitives(MTL::PrimitiveType::PrimitiveTypeTriangle, NS::UInteger{0},
+                                    static_cast<NS::UInteger>(labelVertexCount_));
+        }
+
+        if (readoutVertexCount_ > 0 && readoutFont_.atlas != nullptr) {
+            encoder->setVertexBuffer(
+                textBuffer_,
+                static_cast<NS::UInteger>((slotBase + labelVertexCount_)
+                                          * sizeof(text::TextVertex)),
+                kVertexBufferIndex);
+            encoder->setFragmentTexture(readoutFont_.atlas, NS::UInteger{0});
+            encoder->drawPrimitives(MTL::PrimitiveType::PrimitiveTypeTriangle, NS::UInteger{0},
+                                    static_cast<NS::UInteger>(readoutVertexCount_));
+        }
     }
 
     encoder->endEncoding();

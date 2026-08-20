@@ -139,13 +139,19 @@ public:
     void setStratumNormals(bool enabled);
     [[nodiscard]] bool stratumNormalsEnabled() const;
 
-    /// The glyph table the HUD font was baked with, and its line height. See
-    /// Renderer::glyphs.
-    [[nodiscard]] std::span<const text::Glyph> glyphs() const;
-    [[nodiscard]] float lineHeight() const;
+    /// The drawable's size in PIXELS, which is the space the interface is laid out in — the
+    /// text shader divides a vertex by exactly this to reach clip space. Points would be half
+    /// of it on a Retina display and the whole HUD would come out at half size.
+    [[nodiscard]] unsigned int width() const;
+    [[nodiscard]] unsigned int height() const;
 
-    /// This frame's HUD. See Renderer::setText.
-    void setText(std::span<const text::TextVertex> vertices);
+    /// The two faces the interface is set in. See Renderer::labelFont.
+    [[nodiscard]] text::Font labelFont() const;
+    [[nodiscard]] text::Font readoutFont() const;
+
+    /// This frame's interface. See Renderer::setHud.
+    void setHud(std::span<const text::TextVertex> label,
+                std::span<const text::TextVertex> readout);
 
     /// This frame's selection rings. See Renderer::setGroundDecals. Like
     /// setInstances, only meaningful from inside an onFrame callback.

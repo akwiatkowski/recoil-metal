@@ -487,12 +487,27 @@ void Window::focusOn(std::array<float, 3> target, float distance) {
 
 OrbitCamera& Window::camera() { return impl_->renderer->camera(); }
 
-std::span<const text::Glyph> Window::glyphs() const { return impl_->renderer->glyphs(); }
+unsigned int Window::width() const {
+    // The view's own layer, which is the CAMetalLayer the renderer draws into, so its
+    // drawableSize is exactly what encodeScene is handed.
+    const CGSize size = impl_->view.layer.frame.size;
+    const CGFloat scale = impl_->view.window.backingScaleFactor;
+    return static_cast<unsigned int>(std::max(1.0, size.width * scale));
+}
 
-float Window::lineHeight() const { return impl_->renderer->lineHeight(); }
+unsigned int Window::height() const {
+    const CGSize size = impl_->view.layer.frame.size;
+    const CGFloat scale = impl_->view.window.backingScaleFactor;
+    return static_cast<unsigned int>(std::max(1.0, size.height * scale));
+}
 
-void Window::setText(std::span<const text::TextVertex> vertices) {
-    impl_->renderer->setText(vertices);
+text::Font Window::labelFont() const { return impl_->renderer->labelFont(); }
+
+text::Font Window::readoutFont() const { return impl_->renderer->readoutFont(); }
+
+void Window::setHud(std::span<const text::TextVertex> label,
+                    std::span<const text::TextVertex> readout) {
+    impl_->renderer->setHud(label, readout);
 }
 
 void Window::show() {
