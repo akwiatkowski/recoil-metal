@@ -14,18 +14,23 @@ and a 763-line feasibility study had already settled.
 
 ## Status — 2026-08-20
 
-**P0 is done.** 557 tests green, up from 527. The determinism harness exists: a per-tick state
-hash, a hash log with `--hash-log` / `--check-hash-log`, and first-divergence reporting. Two
-independent 60-second runs report `MATCH — 600 ticks identical`; one flipped bit reports
-`DIVERGED at tick 300`. Both loops now run the same tick, enforced by a CTest check rather
-than remembered.
+**P0 done. P1 done except its last item.** 601 tests green, up from 527 at the start of the
+day. Tree clean; nine commits.
 
-**Engine completion: ~36 %** (§2). **Next: P1** — identity and storage, and §11 says why it is
-now a far safer phase than this file originally claimed.
+The determinism harness exists (P0): a per-tick state hash, `--hash-log` /
+`--check-hash-log`, first-divergence reporting, and two CTest checks that hold the tick order
+and the no-globals rule. Both loops now run the same tick.
 
-**Uncommitted:** everything except `a0f6b72` (P0.5). The working tree already held an
-uncommitted milestone-20 changeset when P0 started, interleaved with P0's edits in `main.mm`
-and `CMakeLists.txt`; see §11's last paragraph for the split.
+P1 has its handle (`UnitId` + `IdPool`), its store (`UnitStore`), its census
+(`UnitCensus`), a golden match to refactor against (`make verify` → `MATCH — 5200 ticks
+identical`), and an order-independent invariant suite for the part the golden log cannot
+cover.
+
+**Not done: P1.4** — deleting `UnitRef{batch, instance}` and the batch-indexed spans. Not
+started deliberately; see §7 P1.4 for the measurement and the reason. It is the one item in
+the phase that is both atomic and behaviour-changing, and it wants a session of its own.
+
+**Engine completion: ~37 %** (§2).
 
 ---
 
@@ -118,7 +123,7 @@ re-deriving the weights.
 
 | Subsystem | W | Done | Have | Missing |
 |---|---:|---:|---|---|
-| Sim | 26 % | **22 %** | movement, collisions, targeting/facing/firing, projectiles, area damage, death, economy, construction, victory | entity store + ids, features, fixed-point, intel/vision, shields, transports, most weapon classes, air/naval/hover domains, veterancy, upgrades, adjacency |
+| Sim | 26 % | **25 %** | movement, collisions, targeting/facing/firing, projectiles, area damage, death, economy, construction, victory, **unit handles + store + census (not yet wired)** | features, fixed-point, intel/vision, shields, transports, most weapon classes, air/naval/hover domains, veterancy, upgrades, adjacency |
 | Renderer | 21 % | **55 %** | instanced units w/ team colour, props + culling, shadows, water + refraction, sky, particles, decals, text/HUD, icons, selection, model LOD, pose playback, DDS, offscreen capture | drawer split, minimap, effect taxonomy (muzzle/trail/impact), beams |
 | System | 16 % | **30 %** | VFS (`.sdz`/`.scd`), asset search, DDS, settings, bench harness | **sound (nothing)**, logging framework, job system, serialisation/save, profiling |
 | Game/orders/UI | 13 % | **30 %** | orbit camera, picking, selection + modifiers, HUD, order markers, CLI harness | command queue, build menu, control groups, minimap interaction, formations, game states |
@@ -127,7 +132,7 @@ re-deriving the weights.
 | Net/replay | 5 % | **15 %** | per-tick state hash, hash log + first-divergence reporting (P0.2/P0.3) | netcode, lockstep, the cross-architecture proof (P8) |
 | AI | 2 % | **15 %** | scripted build order + one attack wave | role classification, build tree, any reaction |
 
-**Weighted total: ~36 %.**
+**Weighted total: ~37 %.**
 
 The shape of that number is the important part: **the two most-complete slices are Map (70 %)
 and Renderer (55 %), which together are 31 % of the weight — and the Sim, at 26 % of the
@@ -148,6 +153,7 @@ screenshot samples the finished third.
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
 | 2026-08-20 | 22 | 55 | 30 | 30 | 70 | 25 | 0 | 15 | **35 %** | baseline, before P0 |
 | 2026-08-20 | 22 | 55 | 30 | 30 | 70 | 25 | 15 | 15 | **36 %** | P0 done — the determinism harness exists |
+| 2026-08-20 | 25 | 55 | 30 | 30 | 70 | 25 | 15 | 15 | **37 %** | P1.0–P1.3 — handle, store, census, and the invariant net |
 
 ---
 
@@ -660,7 +666,7 @@ seeded from the scene using the same predicate the sim decides on. And `advanceM
 reader was the next tick, an immediate segfault for the first reader that looked straight
 after the call. Rebuilt at the end of the call instead of the top of the next.
 
-### P1 — Identity and storage (load-bearing; everything is easier after and impossible before)
+### P1 — Identity and storage — **P1.0–P1.3 done 2026-08-20; P1.4 outstanding**
 
 **P0 changed the character of this phase.** This file originally said P1 "cannot be done in
 small safe steps" and to "expect the app to be broken in the middle of it". That was true
@@ -720,7 +726,24 @@ The technique, and it is the whole reason to do P1 next rather than P2:
       - `make golden` re-records, **in the same commit**, with the reason in the message.
         That is what `make golden` is for and the only legitimate use of it.
 
-      Scope measured before starting: ~130 use sites across 15 files. Heaviest are
+      **Measured, not estimated: ~220 use sites.** ~130 across 15 files in the sim and its
+      tests, plus 91 more in `main.mm` alone touching the parallel arrays. `UnitScene`'s
+      members are referenced from `main.mm` 39 times for `instances`, 26 for `batches`, 23
+      for `motion`, 18 for `defs`, 14 for `health` — and the renderer's per-batch instance
+      upload has to become a gather, which is P7's snapshot arriving early.
+
+      **Why it was not started rather than half-started:** the item is atomic — flat store or
+      batch groups, no coherent middle — so a migration that runs out of runway leaves the
+      repo worse than either end. Combined with the golden log being unable to verify it,
+      starting without finishing is the one outcome to avoid.
+
+      **What now exists for it, which did not before:** `tests/test_match_invariants.cpp` —
+      twelve properties true of any correct match, none of which mention an order, a batch or
+      a slot. A migration that reorders units keeps all twelve; one that loses a unit,
+      resurrects a corpse, double-reports a death or leaks a projectile breaks one at once.
+      That plus a comparable match summary is the gate, and it is now in place.
+
+      Scope of the original estimate: ~130 use sites across 15 files. Heaviest are
       `tests/test_combat.cpp` (29), `Combat.cpp` (25), `Skirmish.cpp` (22). The whole
       per-batch grouping exists because `def` is per batch, so the enabling move is putting
       the type on the unit and a `UnitCatalog` behind it — at which point `SkirmishGroup` and
