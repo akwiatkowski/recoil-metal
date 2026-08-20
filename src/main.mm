@@ -2192,6 +2192,17 @@ void march(UnitScene& scene, const rm::HeightField& field, PassabilitySet& passa
         // would let a unit shoot from outside a range it is about to enter.
         if (!scene.armies.empty()) {
             std::vector<rm::sim::CombatGroup> combat = scene.combatGroups();
+
+            // AIM BEFORE FIRING. An unturreted weapon may only shoot along the hull, so a
+            // unit that has stopped facing the wrong way has to be brought round first —
+            // otherwise the facing gate below reads as a weapon that simply does not work.
+            for (std::size_t batch = 0; batch < scene.instances.size(); ++batch) {
+                (void)rm::sim::aimAtTargets(
+                    scene.instances[batch], scene.motion[batch],
+                    batch < scene.defs.size() ? scene.defs[batch] : nullptr, combat,
+                    scene.armies);
+            }
+
             shotsFired += rm::sim::fireWeapons(combat, scene.armies, scene.projectiles);
             rm::sim::advanceProjectiles(scene.projectiles, combat, scene.armies, field);
             retireDead(scene, field);

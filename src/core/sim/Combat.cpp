@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <numbers>
 
 namespace rm::sim {
 namespace {
@@ -125,6 +126,101 @@ std::optional<UnitRef> nearestTarget(std::array<float, 3> from, int fromArmy,
     return best;
 }
 
+float bearingTo(std::array<float, 3> from, std::array<float, 3> to) noexcept {
+    return std::atan2(to[0] - from[0], to[2] - from[2]);
+}
+
+float headingError(float from, float to) noexcept {
+    float error = to - from;
+    // Wrapped into -pi..pi, so the shorter way round is what is measured — otherwise a unit
+    // one degree the wrong side of north reads as 359 degrees off and turns the long way.
+    constexpr float kTwoPi = 2.0f * std::numbers::pi_v<float>;
+    while (error > std::numbers::pi_v<float>) {
+        error -= kTwoPi;
+    }
+    while (error < -std::numbers::pi_v<float>) {
+        error += kTwoPi;
+    }
+    return std::abs(error);
+}
+
+bool canFireAt(const unitdef::Weapon& weapon, float yaw, float bearing) noexcept {
+    if (weapon.turreted) {
+        return true;
+    }
+    const float tolerance =
+        std::max(0.0f, weapon.firingToleranceDegrees) * std::numbers::pi_v<float> / 180.0f;
+    return headingError(yaw, bearing) <= tolerance;
+}
+
+std::size_t aimAtTargets(std::span<UnitInstance> instances, std::span<const MoveState> motion,
+                         const unitdef::UnitDef* def, std::span<const CombatGroup> groups,
+                         std::span<const Army> armies) {
+    if (def == nullptr) {
+        return 0;
+    }
+
+    // Only the weapons that need the hull pointed are worth turning for, and the longest
+    // reach among them decides how far away a unit bothers to aim.
+    float reach = 0.0f;
+    for (const unitdef::Weapon& weapon : def->weapons) {
+        if (weapon.fires() && !weapon.turreted) {
+            reach = std::max(reach, weapon.maxRangeElmos);
+        }
+    }
+    if (reach <= 0.0f) {
+        return 0;
+    }
+
+    std::size_t turned = 0;
+    for (std::size_t i = 0; i < instances.size() && i < motion.size(); ++i) {
+        if (motion[i].moving) {
+            continue;  // an order is already deciding where this one points
+        }
+        if (motion[i].radiusElmos <= 0.0f) {
+            continue;  // retired
+        }
+
+        // The nearest thing any of its hull-aimed weapons could reach. Built as a stand-in
+        // weapon rather than looping over the real ones, because the answer is the same for
+        // all of them and the sweep is the expensive part.
+        unitdef::Weapon sweep;
+        sweep.role = unitdef::WeaponRole::DirectFire;
+        sweep.damage = 1.0f;
+        sweep.rateOfFire = 1.0f;
+        sweep.maxRangeElmos = reach;
+
+        const std::optional<UnitRef> target =
+            nearestTarget(instances[i].position, motion[i].armyIndex, sweep, groups, armies);
+        if (!target) {
+            continue;
+        }
+
+        const std::array<float, 3>& at =
+            groups[target->batch].instances[target->instance].position;
+        const float bearing = bearingTo(instances[i].position, at);
+        const float error = headingError(instances[i].rotationY, bearing);
+        if (error <= 1e-4f) {
+            continue;
+        }
+
+        // Turned at the unit's OWN rate, so a slow hull is slow to bring its gun to bear —
+        // which is the whole reason `turnrate` is read off the blueprint.
+        const float step = motion[i].turnRateRadiansPerSecond * kTickSeconds;
+        float delta = bearing - instances[i].rotationY;
+        constexpr float kTwoPi = 2.0f * std::numbers::pi_v<float>;
+        while (delta > std::numbers::pi_v<float>) {
+            delta -= kTwoPi;
+        }
+        while (delta < -std::numbers::pi_v<float>) {
+            delta += kTwoPi;
+        }
+        instances[i].rotationY += std::clamp(delta, -step, step);
+        ++turned;
+    }
+    return turned;
+}
+
 std::size_t fireWeapons(std::span<const CombatGroup> groups, std::span<const Army> armies,
                         std::vector<Projectile>& projectiles) {
     std::size_t fired = 0;
@@ -175,6 +271,14 @@ std::size_t fireWeapons(std::span<const CombatGroup> groups, std::span<const Arm
 
                 const std::array<float, 3> to =
                     groups[target->batch].instances[target->instance].position;
+
+                // Pointing at it? A turreted weapon always is; an unturreted one has to be
+                // brought round, which `aimAtTargets` does. The reload is NOT consumed while
+                // turning: a unit that spent its shot waiting to line up would fire far more
+                // slowly than its blueprint says.
+                if (!canFireAt(weapon, group.instances[i].rotationY, bearingTo(from, to))) {
+                    continue;
+                }
 
                 projectiles.push_back(
                     launch(from, to, weapon, army));

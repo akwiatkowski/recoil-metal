@@ -9,6 +9,7 @@
 #include "core/sim/Combat.hpp"
 
 #include <cstdint>
+#include <numbers>
 #include <vector>
 
 using Catch::Approx;
@@ -486,4 +487,135 @@ TEST_CASE("a unit with no death weapon detonates harmlessly") {
 
     CHECK(rm::sim::explodeOnDeath(def, {0, 0, 0}, 0, groups, armies) == Approx(0.0f));
     CHECK(theirs.health[0].current == Approx(100.0f));
+}
+
+TEST_CASE("a bearing is measured the way a unit's yaw is") {
+    // atan2(dx, dz), NOT atan2(dz, dx): yaw is measured from +Z toward +X because that is
+    // what the vertex shader does with it. Swapping the arguments compiles, runs, and points
+    // every turret ninety degrees off.
+    CHECK(rm::sim::bearingTo({0, 0, 0}, {0, 0, 100}) == Approx(0.0f));                    // +Z
+    CHECK(rm::sim::bearingTo({0, 0, 0}, {100, 0, 0})
+          == Approx(std::numbers::pi_v<float> / 2.0f));                                   // +X
+}
+
+TEST_CASE("a heading error takes the shorter way round") {
+    // A unit one degree the wrong side of north must read as one degree off, not 359 — or it
+    // turns the long way and looks broken.
+    constexpr float pi = std::numbers::pi_v<float>;
+    CHECK(rm::sim::headingError(0.0f, 0.1f) == Approx(0.1f));
+    CHECK(rm::sim::headingError(0.1f, 0.0f) == Approx(0.1f));  // symmetric
+    CHECK(rm::sim::headingError(-0.05f, 0.05f) == Approx(0.1f));
+    CHECK(rm::sim::headingError(0.0f, 2.0f * pi - 0.1f) == Approx(0.1f).margin(1e-4));
+    CHECK(rm::sim::headingError(0.0f, pi) == Approx(pi));  // the furthest possible
+}
+
+TEST_CASE("a turreted weapon fires whatever the hull is doing") {
+    // 284 of the 399 weapons that say either way are turreted, and this engine does not
+    // animate turrets — so gating them on the hull would leave two thirds of the corpus
+    // unable to shoot at all.
+    Weapon turret = directFire(10.0f, 300.0f);
+    turret.turreted = true;
+    turret.firingToleranceDegrees = 1.0f;
+
+    CHECK(rm::sim::canFireAt(turret, 0.0f, 0.0f));
+    CHECK(rm::sim::canFireAt(turret, 0.0f, std::numbers::pi_v<float>));  // directly behind
+}
+
+TEST_CASE("an unturreted weapon must be pointed at what it shoots") {
+    // The fix for a tank firing out of its side armour.
+    Weapon fixed = directFire(10.0f, 300.0f);
+    fixed.turreted = false;
+    fixed.firingToleranceDegrees = 2.0f;  // the corpus's own mode
+
+    CHECK(rm::sim::canFireAt(fixed, 0.0f, 0.0f));
+    CHECK(rm::sim::canFireAt(fixed, 0.0f, 0.03f));  // just under two degrees
+    CHECK_FALSE(rm::sim::canFireAt(fixed, 0.0f, 0.5f));
+    CHECK_FALSE(rm::sim::canFireAt(fixed, 0.0f, std::numbers::pi_v<float> / 2.0f));
+}
+
+TEST_CASE("an idle unit turns to bring its gun to bear, at its own rate") {
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+
+    Squad mine;
+    mine.add(0.0f, 0.0f, 0, 100.0f);
+    mine.motion[0].turnRateRadiansPerSecond = 1.0f;  // one radian a second
+    mine.motion[0].moving = false;
+    Weapon fixed = directFire(10.0f, 300.0f);
+    fixed.turreted = false;
+    mine.def.weapons.push_back(fixed);
+
+    Squad theirs;
+    theirs.add(100.0f, 0.0f, 1, 100.0f);  // due +X, so a bearing of pi/2
+
+    const std::vector<CombatGroup> groups{mine.group(), theirs.group()};
+
+    // One tick is a tenth of a radian, so it does not snap round — a slow hull is slow to
+    // aim, which is why the turn rate is read off the blueprint at all.
+    CHECK(rm::sim::aimAtTargets(mine.instances, mine.motion, &mine.def, groups, armies) == 1);
+    CHECK(mine.instances[0].rotationY == Approx(0.1f));
+
+    // ...and it gets there eventually.
+    for (int tick = 0; tick < 100; ++tick) {
+        (void)rm::sim::aimAtTargets(mine.instances, mine.motion, &mine.def, groups, armies);
+    }
+    CHECK(mine.instances[0].rotationY
+          == Approx(std::numbers::pi_v<float> / 2.0f).margin(0.01));
+}
+
+TEST_CASE("a moving unit is not turned by aiming, and a turreted one has no reason to") {
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    Squad theirs;
+    theirs.add(100.0f, 0.0f, 1, 100.0f);
+
+    SECTION("moving: its order decides where it points") {
+        Squad mine;
+        mine.add(0.0f, 0.0f, 0, 100.0f);
+        mine.motion[0].moving = true;
+        Weapon fixed = directFire(10.0f, 300.0f);
+        fixed.turreted = false;
+        mine.def.weapons.push_back(fixed);
+
+        const std::vector<CombatGroup> groups{mine.group(), theirs.group()};
+        CHECK(rm::sim::aimAtTargets(mine.instances, mine.motion, &mine.def, groups, armies) == 0);
+        CHECK(mine.instances[0].rotationY == Approx(0.0f));
+    }
+    SECTION("turreted: the turret aims, not the hull") {
+        Squad mine;
+        mine.add(0.0f, 0.0f, 0, 100.0f);
+        Weapon turret = directFire(10.0f, 300.0f);
+        turret.turreted = true;
+        mine.def.weapons.push_back(turret);
+
+        const std::vector<CombatGroup> groups{mine.group(), theirs.group()};
+        CHECK(rm::sim::aimAtTargets(mine.instances, mine.motion, &mine.def, groups, armies) == 0);
+    }
+}
+
+TEST_CASE("a unit facing the wrong way holds its shot rather than spending it") {
+    // The reload must NOT be consumed while turning: a unit that spent its shot waiting to
+    // line up would fire far more slowly than its blueprint says.
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+
+    Squad mine;
+    mine.add(0.0f, 0.0f, 0, 100.0f);
+    mine.instances[0].rotationY = std::numbers::pi_v<float>;  // facing away
+    Weapon fixed = directFire(10.0f, 300.0f);
+    fixed.turreted = false;
+    fixed.firingToleranceDegrees = 2.0f;
+    mine.def.weapons.push_back(fixed);
+
+    Squad theirs;
+    theirs.add(0.0f, 100.0f, 1, 100.0f);  // due +Z, a bearing of 0
+
+    std::vector<Projectile> shots;
+    const std::vector<CombatGroup> groups{mine.group(), theirs.group()};
+
+    for (int tick = 0; tick < 30; ++tick) {
+        CHECK(rm::sim::fireWeapons(groups, armies, shots) == 0);
+    }
+    CHECK(shots.empty());
+
+    // Turn it round and it fires on the very next tick, its reload never having been spent.
+    mine.instances[0].rotationY = 0.0f;
+    CHECK(rm::sim::fireWeapons(groups, armies, shots) == 1);
 }

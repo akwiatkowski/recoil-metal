@@ -142,16 +142,48 @@ struct CombatGroup {
                                                    std::span<const CombatGroup> groups,
                                                    std::span<const Army> armies);
 
+/// The bearing from `from` to `to`, in radians, measured the way a unit's yaw is.
+///
+/// `atan2(dx, dz)`, NOT `atan2(dz, dx)`: yaw here is measured from +Z toward +X because that
+/// is what the vertex shader does with it (AGENT.md). Swapping the arguments compiles, runs,
+/// and points every turret ninety degrees off.
+[[nodiscard]] float bearingTo(std::array<float, 3> from, std::array<float, 3> to) noexcept;
+
+/// The smaller angle between two headings, in radians. Always 0..pi.
+[[nodiscard]] float headingError(float from, float to) noexcept;
+
+/// Whether a weapon on a unit facing `yaw` may fire at something on `bearing`.
+///
+/// A TURRETED weapon always may: it aims independently of the hull, and 284 of the 399
+/// weapons that say either way are turreted. This engine does not animate turrets, so
+/// pretending otherwise would leave two thirds of the corpus unable to shoot.
+///
+/// An UNTURRETED one may only when the hull is pointing at the target, within the weapon's
+/// own `FiringTolerance`. That is the fix for a tank shooting sideways out of its hull.
+[[nodiscard]] bool canFireAt(const unitdef::Weapon& weapon, float yaw, float bearing) noexcept;
+
+/// Turns idle units toward what they would shoot, at their own turn rate.
+///
+/// Only units that are NOT moving, and only those whose weapons need the hull pointed —
+/// a turreted unit has no reason to turn and a moving one is already being turned by its
+/// order. Without this an unturreted unit that happens to stop facing the wrong way can
+/// never fire at all, so the facing gate above would read as a weapon that does not work.
+///
+/// Writes to the instances' yaw, which is why the groups are mutable here and const in
+/// `fireWeapons`.
+std::size_t aimAtTargets(std::span<UnitInstance> instances, std::span<const MoveState> motion,
+                         const unitdef::UnitDef* def, std::span<const CombatGroup> groups,
+                         std::span<const Army> armies);
+
 /// Advances reloads, picks targets, and appends the shots fired this tick.
 ///
 /// Returns how many shots were fired, which is what a caller reports and a test asserts
 /// without reaching into the projectile list.
 ///
-/// Firing is deliberately NOT gated on facing: a turreted weapon may fire while its
-/// hull points elsewhere (284 of the 399 weapons that say so are turreted), and this
-/// engine does not aim turrets yet, so gating on the hull's yaw would leave two thirds
-/// of the corpus unable to shoot at all. The consequence is that an unturreted weapon
-/// also fires sideways, which is wrong and visible, and is the next thing to fix.
+/// Firing IS gated on facing now, but only for the weapons that need it — see `canFireAt`.
+/// A turreted weapon fires whatever the hull is doing, because it aims independently and
+/// this engine does not animate turrets; an unturreted one has to be pointed at its target,
+/// which is what stops a tank firing out of its side armour.
 std::size_t fireWeapons(std::span<const CombatGroup> groups, std::span<const Army> armies,
                         std::vector<Projectile>& projectiles);
 

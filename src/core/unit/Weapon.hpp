@@ -49,6 +49,14 @@ enum class WeaponRole : std::uint8_t {
 
 [[nodiscard]] WeaponRole weaponRoleFromCategory(std::string_view category) noexcept;
 
+/// The aiming cone a weapon gets when its blueprint states none.
+///
+/// Ten degrees: loose enough that an unstated tolerance never becomes a weapon that cannot
+/// fire, tight enough that it is still an aim. The corpus's own values run 0 to 360 with a
+/// mode of 2, so this is deliberately on the permissive side of typical — a missing field
+/// should not be stricter than a stated one.
+inline constexpr float kDefaultFiringToleranceDegrees = 10.0f;
+
 struct Weapon {
     std::string label;  ///< the blueprint's own `Label`, for messages
 
@@ -101,6 +109,15 @@ struct Weapon {
     /// Whether the weapon has a turret. A turreted weapon may fire without the hull
     /// turning; 284 of the 399 that say so are turreted.
     bool turreted = false;
+
+    /// How far off the aim may be and still fire, in DEGREES. 457 weapons state one, and
+    /// 279 of those say 2 — a tight cone.
+    ///
+    /// This is what stops an unturreted weapon shooting sideways: with no turret the hull's
+    /// own facing IS the aim, so the unit has to be pointing at what it shoots. A weapon that
+    /// states none gets a generous default rather than zero, since zero would be a weapon
+    /// that can never fire at all.
+    float firingToleranceDegrees = kDefaultFiringToleranceDegrees;
 
     /// Whether this weapon is one this engine fires at a target.
     ///
