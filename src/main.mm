@@ -38,6 +38,7 @@
 #include "core/sim/Replay.hpp"
 #include "core/sim/StateHash.hpp"
 #include "core/sim/Skirmish.hpp"
+#include "core/sim/SlowUpdate.hpp"
 #include "core/unit/UnitBlueprint.hpp"
 #include "core/unit/UnitDef.hpp"
 #include "core/vfs/AssetSearch.hpp"
@@ -2857,9 +2858,32 @@ void runOpponents(UnitScene& scene, const rm::vfs::Vfs& content, const rm::Heigh
     const rm::sim::Fx centreX = rm::sim::Fx::fromInt(field.squaresX * rm::kSquareSize / 2);
     const rm::sim::Fx centreZ = rm::sim::Fx::fromInt(field.squaresZ * rm::kSquareSize / 2);
 
+    // The cadence, and the STAGGER (PLAN2.md §6.7, §7 P3.6). Each opponent thinks once a
+    // second, and they take their turns on different ticks of that second rather than all on
+    // the same one. Each pass walks the whole scene, so eight armies used to mean eight scene
+    // walks landing on one tick in ten and none on the other nine — a stutter, which is what
+    // `--bench` is asked to show gone.
+    //
+    // This replaces `tickIndex % decisionTicks() == 0` at the call site: the same period, now
+    // asked per army rather than for all of them at once.
+    //
+    // ONCE A SECOND, and authored in seconds: nothing an opponent reacts to changes faster
+    // than a build finishes. The period kept here because it belongs to the work being paced.
+    // It was `inline constexpr int kDecisionTicks = rm::sim::kTicksPerSecond` once, which is a
+    // literal wearing a different hat — it names a RATE where a duration belongs, so at 20 Hz
+    // the opponents thought twice a second. `check_no_tick_literals.sh` catches that shape now.
+    //
+    // Staggering does not create an ordering advantage, it spreads one that was already there:
+    // the armies were served in array order within a single tick, so army 0 already moved
+    // first. A tenth of a second between them changes when, not who.
+    const rm::sim::SlowUpdate pacing{gAppTickRate, rm::sim::seconds(1.0f)};
+
     for (const rm::sim::Army& army : scene.armies) {
         if (army.index == scene.playerArmy || army.defeated
             || static_cast<std::size_t>(army.index) >= scripts.size()) {
+            continue;
+        }
+        if (!pacing.due(static_cast<std::size_t>(army.index), tickIndex)) {
             continue;
         }
         rm::sim::Opponent& script = scripts[static_cast<std::size_t>(army.index)];
@@ -3068,20 +3092,6 @@ struct MatchRunner {
     bool matchOver = false;
 };
 
-/// How often the scripted opponents get to think.
-///
-/// Once a second: nothing an opponent reacts to changes faster than a build finishes, and
-/// each pass walks the whole scene. Derived from the tick rate rather than written as a
-/// number of ticks, so changing the rate does not silently change how often they decide.
-/// Derived from the RUN'S rate, not written down. This was
-/// `inline constexpr int kDecisionTicks = rm::sim::kTicksPerSecond`, which is the same bug as a
-/// literal wearing a different hat: it names a rate rather than a duration, so at 20 Hz the
-/// opponents thought twice a second instead of once. `check_no_tick_literals.sh` now catches
-/// that shape too.
-[[nodiscard]] rm::TickCount decisionTicks() {
-    return gAppTickRate.ticks(rm::sim::seconds(1.0f));
-}
-
 [[nodiscard]] MatchRunner makeMatchRunner(UnitScene& scene, const rm::HeightField& field,
                                           PassabilitySet& passability,
                                           const rm::vfs::Vfs& content,
@@ -3131,7 +3141,12 @@ rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) 
     UnitScene& scene = runner.scene;
 
     // The opponents decide FIRST, so an order given this tick moves this tick.
-    if (!scene.armies.empty() && !runner.matchOver && tickIndex % static_cast<int>(decisionTicks()) == 0) {
+    //
+    // Called EVERY tick now, and the pacing lives inside — `runOpponents` asks a
+    // `sim::SlowUpdate` whether each army's turn is this tick (§7 P3.6). The modulo that used
+    // to be on this line was the hand-rolled version of that mechanism, and it could only ever
+    // ask the question for all armies at once.
+    if (!scene.armies.empty() && !runner.matchOver) {
         runOpponents(scene, runner.content, runner.field, runner.passability, runner.starts,
                      runner.markers, runner.scripts, now,
                      static_cast<rm::TickIndex>(tickIndex));

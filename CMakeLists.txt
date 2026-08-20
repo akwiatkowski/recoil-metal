@@ -115,6 +115,7 @@ add_library(rm_core STATIC
     src/core/sim/UnitCensus.cpp
     src/core/sim/Skirmish.cpp
     src/core/sim/StateHash.cpp
+    src/core/sim/SlowUpdate.cpp
     src/core/sim/Replay.cpp
     src/core/unit/UnitBlueprint.cpp
     src/core/unit/Weapon.cpp
@@ -210,6 +211,7 @@ if(BUILD_TESTING)
         tests/test_opening.cpp
         tests/test_move_def.cpp
         tests/test_fa_duration.cpp
+        tests/test_slow_update.cpp
         tests/test_asset_search.cpp
         tests/test_vfs.cpp
         tests/test_real_vfs.cpp
