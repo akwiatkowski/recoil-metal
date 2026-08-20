@@ -149,6 +149,7 @@ if(BUILD_TESTING)
         tests/test_id_pool.cpp
         tests/test_unit_store.cpp
         tests/test_unit_census.cpp
+        tests/test_match_invariants.cpp
         tests/test_state_hash.cpp
         tests/test_replay.cpp
         tests/test_smf.cpp
