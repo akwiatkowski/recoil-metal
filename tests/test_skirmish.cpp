@@ -15,6 +15,8 @@
 
 #include "core/sim/Skirmish.hpp"
 
+#include "support/TestRoster.hpp"
+
 #include <cstdint>
 #include <vector>
 
@@ -25,7 +27,7 @@ using rm::sim::Economy;
 using rm::sim::Health;
 using rm::sim::Match;
 using rm::sim::Projectile;
-using rm::sim::SkirmishGroup;
+using rm::test::Roster;
 using rm::sim::TickReport;
 using rm::unitdef::UnitDef;
 using rm::unitdef::Weapon;
@@ -58,37 +60,6 @@ namespace {
     return weapon;
 }
 
-/// One batch's storage, held by the caller because a SkirmishGroup is spans into it.
-struct Batch {
-    std::vector<rm::UnitInstance> instances;
-    std::vector<rm::sim::MoveState> motion;
-    std::vector<Health> health;
-    UnitDef def;
-
-    void add(float x, float z, int army, float hp) {
-        rm::UnitInstance instance{};
-        instance.position = {x, 0.0f, z};
-        instance.scale = 1.0f;
-        instances.push_back(instance);
-
-        rm::sim::MoveState state;
-        state.armyIndex = army;
-        state.radiusElmos = 4.0f;
-        motion.push_back(state);
-
-        // One reload counter per weapon, and starting at zero so the first shot is
-        // available on the first tick rather than a reload later.
-        health.push_back(Health{.current = hp,
-                                .maximum = hp,
-                                .reloadRemaining = std::vector<int>(def.weapons.size(), 0)});
-    }
-
-    [[nodiscard]] SkirmishGroup group() {
-        return SkirmishGroup{
-            .instances = instances, .motion = motion, .health = health, .def = &def};
-    }
-};
-
 /// Two armies at war with each other, free-for-all.
 [[nodiscard]] std::vector<Army> twoSides() { return rm::sim::freeForAll(2); }
 
@@ -100,18 +71,19 @@ TEST_CASE("one tick both moves a unit and fires its gun") {
     // one call to the match tick has to do both.
     const rm::HeightField field = flatField();
 
-    Batch tanks;
-    tanks.def.name = "test_tank";
-    tanks.def.weapons.push_back(turretedGun(100.0f, 400.0f));
-    tanks.add(0.0f, 0.0f, 0, 500.0f);
+    Roster roster;
+    UnitDef tankDef;
+    tankDef.name = "test_tank";
+    tankDef.weapons.push_back(turretedGun(100.0f, 400.0f));
+    UnitDef targetDef;
+    targetDef.name = "test_target";
 
-    Batch enemies;
-    enemies.def.name = "test_target";
-    enemies.add(200.0f, 0.0f, 1, 500.0f);
+    const rm::sim::UnitId tank = roster.add(roster.addType(tankDef), 0.0f, 0.0f, 0, 500.0f);
+    (void)roster.add(roster.addType(targetDef), 200.0f, 0.0f, 1, 500.0f);
 
     // Ordered somewhere, so the movement half has something to do.
-    rm::sim::orderTo(tanks.motion[0], field, 100.0f, 0.0f);
-    const std::array<float, 3> started = tanks.instances[0].position;
+    rm::sim::orderTo(roster.motion(tank), field, 100.0f, 0.0f);
+    const std::array<float, 3> started = roster.instance(tank).position;
 
     std::vector<Army> armies = twoSides();
     std::vector<Projectile> projectiles;
@@ -125,11 +97,10 @@ TEST_CASE("one tick both moves a unit and fires its gun") {
                 .building = &building,
                 .commandersEver = commandersEver};
 
-    std::vector<SkirmishGroup> groups{tanks.group(), enemies.group()};
-    const TickReport report = rm::sim::tickSkirmish(groups, match, field);
+    const TickReport report = rm::sim::tickSkirmish(roster.store, roster.catalog, match, field);
 
-    CHECK(tanks.instances[0].position != started);  // it moved
-    CHECK(report.shotsFired == 1);                  // and it shot
+    CHECK(roster.instance(tank).position != started);  // it moved
+    CHECK(report.shotsFired == 1);                     // and it shot
     CHECK(projectiles.size() == 1);
 }
 
@@ -138,16 +109,18 @@ TEST_CASE("a unit with no enemy in range moves without firing") {
     // always-firing tick would make the test above pass for the wrong reason.
     const rm::HeightField field = flatField();
 
-    Batch tanks;
-    tanks.def.name = "test_tank";
-    tanks.def.weapons.push_back(turretedGun(100.0f, 50.0f));  // short gun
-    tanks.add(0.0f, 0.0f, 0, 500.0f);
+    Roster roster;
+    UnitDef tankDef;
+    tankDef.name = "test_tank";
+    tankDef.weapons.push_back(turretedGun(100.0f, 50.0f));  // short gun
+    UnitDef targetDef;
+    targetDef.name = "test_target";
 
-    Batch enemies;
-    enemies.def.name = "test_target";
-    enemies.add(900.0f, 0.0f, 1, 500.0f);  // far out of range
+    const rm::sim::UnitId tank = roster.add(roster.addType(tankDef), 0.0f, 0.0f, 0, 500.0f);
+    (void)roster.add(roster.addType(targetDef), 900.0f, 0.0f, 1,
+                     500.0f);  // far out of range
 
-    rm::sim::orderTo(tanks.motion[0], field, 100.0f, 0.0f);
+    rm::sim::orderTo(roster.motion(tank), field, 100.0f, 0.0f);
 
     std::vector<Army> armies = twoSides();
     std::vector<Projectile> projectiles;
@@ -161,8 +134,7 @@ TEST_CASE("a unit with no enemy in range moves without firing") {
                 .building = &building,
                 .commandersEver = commandersEver};
 
-    std::vector<SkirmishGroup> groups{tanks.group(), enemies.group()};
-    const TickReport report = rm::sim::tickSkirmish(groups, match, field);
+    const TickReport report = rm::sim::tickSkirmish(roster.store, roster.catalog, match, field);
 
     CHECK(report.shotsFired == 0);
     CHECK(projectiles.empty());
@@ -174,14 +146,16 @@ TEST_CASE("the tick reports its dead, and retires them from the fight") {
     // which needs a decal buffer the sim has no business owning.
     const rm::HeightField field = flatField();
 
-    Batch tanks;
-    tanks.def.name = "test_tank";
-    tanks.add(0.0f, 0.0f, 0, 500.0f);
+    Roster roster;
+    UnitDef tankDef;
+    tankDef.name = "test_tank";
+    UnitDef targetDef;
+    targetDef.name = "test_target";
 
-    Batch victims;
-    victims.def.name = "test_target";
-    victims.add(50.0f, 0.0f, 1, 10.0f);
-    victims.health[0].current = 0.0f;  // already destroyed, this tick retires it
+    (void)roster.add(roster.addType(tankDef), 0.0f, 0.0f, 0, 500.0f);
+    const rm::sim::UnitId victim =
+        roster.add(roster.addType(targetDef), 50.0f, 0.0f, 1, 10.0f);
+    roster.health(victim).current = 0.0f;  // already destroyed, this tick retires it
 
     std::vector<Army> armies = twoSides();
     std::vector<Projectile> projectiles;
@@ -195,12 +169,12 @@ TEST_CASE("the tick reports its dead, and retires them from the fight") {
                 .building = &building,
                 .commandersEver = commandersEver};
 
-    std::vector<SkirmishGroup> groups{tanks.group(), victims.group()};
-    const TickReport report = rm::sim::tickSkirmish(groups, match, field);
+    const TickReport report = rm::sim::tickSkirmish(roster.store, roster.catalog, match, field);
 
     REQUIRE(report.died.size() == 1);
-    CHECK(report.died[0].ref.batch == 1);
-    CHECK(report.died[0].ref.instance == 0);
+    // The HANDLE of the unit that died, which is a stronger claim than the pair it replaced:
+    // a (batch, instance) pair named a place, and a place can be refilled.
+    CHECK(report.died[0].ref == victim);
 
     // The wreck's size and place are carried in the report, sampled BEFORE the unit was
     // retired — going back to the slot for them would find a radius of zero, because
@@ -208,26 +182,31 @@ TEST_CASE("the tick reports its dead, and retires them from the fight") {
     CHECK(report.died[0].radiusElmos == Approx(4.0f));
     CHECK(report.died[0].at[0] == Approx(50.0f));
 
-    // Retired: it no longer shoves the living, and it no longer drives anywhere.
-    CHECK(victims.motion[0].radiusElmos == 0.0f);
-    CHECK(victims.motion[0].moving == false);
+    // Retired: it no longer shoves the living, it no longer drives anywhere, and the store
+    // agrees it is gone — which the old pair could not express at all.
+    CHECK(roster.motion(victim).radiusElmos == 0.0f);
+    CHECK(roster.motion(victim).moving == false);
+    CHECK_FALSE(roster.store.alive(victim));
+    CHECK(roster.store.slotCount() == 2);  // the slot stays: death is a tombstone
 
     // Reported ONCE. A corpse sits in its slot for the rest of the match, and a tick
     // that kept reporting it would fire its death explosion every tick forever.
-    const TickReport again = rm::sim::tickSkirmish(groups, match, field);
+    const TickReport again = rm::sim::tickSkirmish(roster.store, roster.catalog, match, field);
     CHECK(again.died.empty());
 }
 
 TEST_CASE("losing the last commander defeats an army and ends the match") {
     const rm::HeightField field = flatField();
 
-    Batch commanders;
+    Roster roster;
     // A real commander id, and spelled the way the blueprints spell it: `isCommanderId`
     // is an exact match against the four, so lowercasing it here would leave both sides
     // with no commander and declare an instant draw.
-    commanders.def.name = "UEL0001";
-    commanders.add(0.0f, 0.0f, 0, 12000.0f);
-    commanders.add(400.0f, 0.0f, 1, 12000.0f);
+    UnitDef commanderDef;
+    commanderDef.name = "UEL0001";
+    const rm::UnitTypeIndex commander = roster.addType(commanderDef);
+    (void)roster.add(commander, 0.0f, 0.0f, 0, 12000.0f);
+    const rm::sim::UnitId theirs = roster.add(commander, 400.0f, 0.0f, 1, 12000.0f);
 
     std::vector<Army> armies = twoSides();
     std::vector<Projectile> projectiles;
@@ -241,16 +220,14 @@ TEST_CASE("losing the last commander defeats an army and ends the match") {
                 .building = &building,
                 .commandersEver = commandersEver};
 
-    std::vector<SkirmishGroup> groups{commanders.group()};
-
     // Nothing has happened yet: both sides are whole.
-    TickReport report = rm::sim::tickSkirmish(groups, match, field);
+    TickReport report = rm::sim::tickSkirmish(roster.store, roster.catalog, match, field);
     CHECK(report.defeated == 0);
     CHECK(report.matchEnded == false);
 
     // Army 1's commander dies.
-    commanders.health[1].current = 0.0f;
-    report = rm::sim::tickSkirmish(groups, match, field);
+    roster.health(theirs).current = 0.0f;
+    report = rm::sim::tickSkirmish(roster.store, roster.catalog, match, field);
 
     CHECK(report.defeated == 1);
     CHECK(armies[1].defeated);
@@ -265,10 +242,12 @@ TEST_CASE("a crowd with no commanders is not a draw on the first tick") {
     // has happened — which is why the tick is told what each army STARTED with.
     const rm::HeightField field = flatField();
 
-    Batch crowd;
-    crowd.def.name = "test_tank";
-    crowd.add(0.0f, 0.0f, 0, 500.0f);
-    crowd.add(400.0f, 0.0f, 1, 500.0f);
+    Roster roster;
+    UnitDef tankDef;
+    tankDef.name = "test_tank";
+    const rm::UnitTypeIndex tank = roster.addType(tankDef);
+    (void)roster.add(tank, 0.0f, 0.0f, 0, 500.0f);
+    (void)roster.add(tank, 400.0f, 0.0f, 1, 500.0f);
 
     std::vector<Army> armies = twoSides();
     std::vector<Projectile> projectiles;
@@ -282,8 +261,7 @@ TEST_CASE("a crowd with no commanders is not a draw on the first tick") {
                 .building = &building,
                 .commandersEver = commandersEver};
 
-    std::vector<SkirmishGroup> groups{crowd.group()};
-    const TickReport report = rm::sim::tickSkirmish(groups, match, field);
+    const TickReport report = rm::sim::tickSkirmish(roster.store, roster.catalog, match, field);
 
     CHECK(report.defeated == 0);
     CHECK(report.matchEnded == false);
@@ -301,15 +279,19 @@ TEST_CASE("a death explosion goes off once, and hurts what is standing nearby") 
     blast.damage = 400.0f;
     blast.damageRadiusElmos = 100.0f;
 
-    Batch bombs;
-    bombs.def.name = "test_bomb";
-    bombs.def.weapons.push_back(blast);
-    bombs.add(0.0f, 0.0f, 0, 100.0f);
-    bombs.health[0].current = 0.0f;  // dies this tick
+    Roster roster;
+    UnitDef bombDef;
+    bombDef.name = "test_bomb";
+    bombDef.weapons.push_back(blast);
+    UnitDef targetDef;
+    targetDef.name = "test_target";
 
-    Batch bystanders;
-    bystanders.def.name = "test_target";
-    bystanders.add(50.0f, 0.0f, 1, 500.0f);  // half the blast radius away
+    const rm::sim::UnitId bomb = roster.add(roster.addType(bombDef), 0.0f, 0.0f, 0, 100.0f);
+    roster.health(bomb).current = 0.0f;  // dies this tick
+
+    // Half the blast radius away.
+    const rm::sim::UnitId bystander =
+        roster.add(roster.addType(targetDef), 50.0f, 0.0f, 1, 500.0f);
 
     std::vector<Army> armies = twoSides();
     std::vector<Projectile> projectiles;
@@ -323,19 +305,18 @@ TEST_CASE("a death explosion goes off once, and hurts what is standing nearby") 
                 .building = &building,
                 .commandersEver = commandersEver};
 
-    std::vector<SkirmishGroup> groups{bombs.group(), bystanders.group()};
-    TickReport report = rm::sim::tickSkirmish(groups, match, field);
+    TickReport report = rm::sim::tickSkirmish(roster.store, roster.catalog, match, field);
 
     CHECK(report.deathBlasts == 1);
     CHECK(report.deathBlastDamage > 0.0f);
-    CHECK(bystanders.health[0].current < 500.0f);  // it felt it
+    CHECK(roster.health(bystander).current < 500.0f);  // it felt it
 
     // ONCE. The corpse sits in its slot for the rest of the match, and a blast that
     // repeated every tick would be both a wrong answer and an unbounded one.
-    const float afterOne = bystanders.health[0].current;
-    report = rm::sim::tickSkirmish(groups, match, field);
+    const float afterOne = roster.health(bystander).current;
+    report = rm::sim::tickSkirmish(roster.store, roster.catalog, match, field);
     CHECK(report.deathBlasts == 0);
-    CHECK(bystanders.health[0].current == Approx(afterOne));
+    CHECK(roster.health(bystander).current == Approx(afterOne));
 }
 
 TEST_CASE("a finished construction is reported but left in the list") {
@@ -345,9 +326,10 @@ TEST_CASE("a finished construction is reported but left in the list") {
     // and removing the extractor it just finished would invite a second one on top.
     const rm::HeightField field = flatField();
 
-    Batch crowd;
-    crowd.def.name = "test_tank";
-    crowd.add(0.0f, 0.0f, 0, 500.0f);
+    Roster roster;
+    UnitDef tankDef;
+    tankDef.name = "test_tank";
+    (void)roster.add(roster.addType(tankDef), 0.0f, 0.0f, 0, 500.0f);
 
     std::vector<Army> armies = twoSides();
     std::vector<Projectile> projectiles;
@@ -377,8 +359,7 @@ TEST_CASE("a finished construction is reported but left in the list") {
                 .commandersEver = commandersEver,
                 .baseStorage = {.mass = 1000.0f, .energy = 1000.0f}};
 
-    std::vector<SkirmishGroup> groups{crowd.group()};
-    TickReport report = rm::sim::tickSkirmish(groups, match, field);
+    TickReport report = rm::sim::tickSkirmish(roster.store, roster.catalog, match, field);
 
     REQUIRE(report.finished.size() == 1);
     CHECK(report.finished[0].armyIndex == 0);
@@ -386,7 +367,7 @@ TEST_CASE("a finished construction is reported but left in the list") {
     CHECK(building[0].finished());
 
     // And reported once: a second tick must not spawn the same building again.
-    report = rm::sim::tickSkirmish(groups, match, field);
+    report = rm::sim::tickSkirmish(roster.store, roster.catalog, match, field);
     CHECK(report.finished.empty());
 }
 
@@ -395,11 +376,13 @@ TEST_CASE("income is what is standing, and a destroyed producer stops paying") {
     // finishes, so a structure that dies takes its production with it.
     const rm::HeightField field = flatField();
 
-    Batch extractors;
-    extractors.def.name = "test_extractor";
-    extractors.def.producesMassPerSecond = 2.0f;
-    extractors.def.upkeepEnergyPerSecond = 2.0f;
-    extractors.add(0.0f, 0.0f, 0, 100.0f);
+    Roster roster;
+    UnitDef extractorDef;
+    extractorDef.name = "test_extractor";
+    extractorDef.producesMassPerSecond = 2.0f;
+    extractorDef.upkeepEnergyPerSecond = 2.0f;
+    const rm::sim::UnitId extractor =
+        roster.add(roster.addType(extractorDef), 0.0f, 0.0f, 0, 100.0f);
 
     std::vector<Army> armies = twoSides();
     std::vector<Projectile> projectiles;
@@ -413,15 +396,14 @@ TEST_CASE("income is what is standing, and a destroyed producer stops paying") {
                 .building = &building,
                 .commandersEver = commandersEver};
 
-    std::vector<SkirmishGroup> groups{extractors.group()};
-    (void)rm::sim::tickSkirmish(groups, match, field);
+    (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, field);
 
     CHECK(economies[0].incomePerSecond.mass == Approx(2.0f));
     CHECK(economies[0].upkeepPerSecond.energy == Approx(2.0f));
 
     // Destroyed, and the income goes with it.
-    extractors.health[0].current = 0.0f;
-    (void)rm::sim::tickSkirmish(groups, match, field);
+    roster.health(extractor).current = 0.0f;
+    (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, field);
 
     CHECK(economies[0].incomePerSecond.mass == Approx(0.0f));
     CHECK(economies[0].upkeepPerSecond.energy == Approx(0.0f));

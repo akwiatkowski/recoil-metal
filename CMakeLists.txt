@@ -107,6 +107,7 @@ add_library(rm_core STATIC
     src/core/sim/Pathfinding.cpp
     src/core/sim/IdPool.cpp
     src/core/sim/UnitStore.cpp
+    src/core/sim/UnitCatalog.cpp
     src/core/sim/UnitCensus.cpp
     src/core/sim/Skirmish.cpp
     src/core/sim/StateHash.cpp

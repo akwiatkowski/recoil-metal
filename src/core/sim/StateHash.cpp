@@ -104,29 +104,35 @@ void feedHealth(StateHash& h, const Health& health) noexcept {
 
 } // namespace
 
-StateHash hashMatch(std::span<const SkirmishGroup> groups, const Match& match) {
+StateHash hashMatch(const UnitStore& store, const Match& match) {
     StateHash h = kOffsetBasis;
 
-    // Batch count first, so a scene that grew a batch differs even if the new batch is
-    // empty — a spawn that produced nothing is still a different match.
-    feed(h, groups.size());
-    for (const SkirmishGroup& group : groups) {
-        feed(h, group.instances.size());
-        for (const UnitInstance& unit : group.instances) {
-            feedUnit(h, unit);
-        }
-        feed(h, group.motion.size());
-        for (const MoveState& motion : group.motion) {
-            feedMotion(h, motion);
-        }
-        feed(h, group.health.size());
-        for (const Health& health : group.health) {
-            feedHealth(h, health);
-        }
-        // Whether this batch has a definition at all, not the definition itself: a def is
-        // content loaded from disk, identical across two runs of the same log by
-        // construction. Hashing its contents would fingerprint the install, not the match.
-        feed(h, group.def != nullptr);
+    // Slot count first, so a store that grew differs even if the new slot is empty — a spawn
+    // that produced nothing is still a different match.
+    feed(h, store.slotCount());
+
+    const std::span<const UnitInstance> instances = store.instances();
+    const std::span<const MoveState> motion = store.motion();
+    const std::span<const Health> healths = store.health();
+
+    for (UnitIndex slot = 0; slot < store.slotCount(); ++slot) {
+        feedUnit(h, instances[slot]);
+        feedMotion(h, motion[slot]);
+        feedHealth(h, healths[slot]);
+        // The type, and who is in the slot. The type stands in for the definition — a def is
+        // content loaded from disk and identical across two runs of the same log by
+        // construction, so hashing its contents would fingerprint the install rather than the
+        // match. The generation says whether this is the same occupant.
+        feed(h, static_cast<std::size_t>(store.typeAt(slot)));
+        feed(h, static_cast<std::size_t>(store.idAt(slot).generation));
+        // WHETHER THE SLOT IS OCCUPIED, which the generation cannot say on its own. Death is
+        // a tombstone: `kill` leaves every array untouched and deliberately does NOT advance
+        // the generation mirror, because a stale mirror is what makes a dead unit's handle
+        // fail `alive`. So without this, a death changed nothing here — and a match that had
+        // lost a unit hashed identically to one that had not. In practice the values usually
+        // moved too (`retireDead` zeroes the radius, and health reached zero to get there),
+        // which is why this went unnoticed until a test killed a unit at full health.
+        feed(h, store.slotAlive(slot));
     }
 
     // The armies. `colour` is skipped for the same reason `teamColour` is — a palette entry

@@ -1,7 +1,7 @@
 #pragma once
 
 #include "core/Types.hpp"
-#include "core/sim/Combat.hpp"
+#include "core/sim/Health.hpp"
 #include "core/sim/IdPool.hpp"
 #include "core/sim/Movement.hpp"
 

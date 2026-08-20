@@ -2,6 +2,9 @@
 
 #include "core/scene/UnitPlacement.hpp"
 #include "core/sim/Army.hpp"
+#include "core/sim/Health.hpp"
+#include "core/sim/UnitCatalog.hpp"
+#include "core/sim/UnitStore.hpp"
 #include "core/sim/Movement.hpp"
 #include "core/unit/UnitDef.hpp"
 
@@ -25,35 +28,9 @@ namespace rm::sim {
 // `mohodata/lua/sim/defaultweapons.lua` for the firing cycle, `lua/sim/Unit.lua` for
 // what damage does when it arrives.
 
-/// A unit's place in the scene: which batch, and which instance of it.
-///
-/// The same shape as a SelectionEntry and deliberately not the same type — a selection
-/// is what the mouse points at and this is what a gun points at, and conflating them
-/// would let a click order a shot.
-struct UnitRef {
-    std::size_t batch = 0;
-    std::size_t instance = 0;
-
-    [[nodiscard]] friend bool operator==(const UnitRef&, const UnitRef&) noexcept = default;
-};
-
-/// What a unit can still take. One per instance, parallel to the instances themselves —
-/// same reason MoveState is: UnitInstance's layout is pinned and read by the shader.
-struct Health {
-    float current = 0.0f;
-    float maximum = 0.0f;
-
-    /// Ticks until this weapon may fire again, one entry per weapon on the unit.
-    ///
-    /// Held with health rather than with the weapon definition because a DEFINITION is
-    /// shared by every unit of that type — a hundred tanks have one blueprint and a
-    /// hundred separate reloads. Getting this wrong makes a squad fire in perfect
-    /// unison, which is the same class of mistake as a batch sharing one animation
-    /// clock.
-    std::vector<int> reloadRemaining;
-
-    [[nodiscard]] bool alive() const noexcept { return current > 0.0f; }
-};
+// A unit is named by its handle now, not by where it is drawn. `UnitId` comes from
+// IdPool.hpp; `UnitRef{batch, instance}` used to live here and named a draw call and a slot
+// in its instance buffer, which is what PLAN2.md §1.1 called out as the root problem.
 
 /// One shot in flight.
 struct Projectile {
@@ -113,20 +90,10 @@ inline constexpr int kProjectileLifetimeTicks = 300;
 [[nodiscard]] float groundDistanceElmos(std::array<float, 3> from,
                                         std::array<float, 3> to) noexcept;
 
-/// One batch's worth of units, for the combat pass.
-///
-/// Spans rather than a copy, because the pass writes health back and copying it out and
-/// in again would be both slower and a chance to lose a kill.
-struct CombatGroup {
-    std::span<const UnitInstance> instances;
-    std::span<const MoveState> motion;
-    std::span<Health> health;
-
-    /// The definition every unit in this group shares. Null for a group with no
-    /// definition — a decorative batch — which therefore never fires and never dies.
-    const unitdef::UnitDef* def = nullptr;
-};
-
+// `CombatGroup` used to live here: one batch's spans plus the one def its whole batch
+// shared. That sharing is the only reason the passes below were ever per-batch — move the def
+// behind a per-unit type (`UnitCatalog`) and the group has nothing left to be. The passes take
+// the store and loop once over slots (PLAN2.md §7 P1.4).
 /// The nearest unit `shooter` may shoot, or nothing.
 ///
 /// NEAREST rather than weakest or most dangerous: a target priority list is a game
@@ -137,10 +104,10 @@ struct CombatGroup {
 /// Excludes the shooter itself, its allies, anything already dead, and anything a
 /// defeated army owns (see `hostile`). Range is checked against the WEAPON, so a unit
 /// with a long gun and a short one may find a target for the first and not the second.
-[[nodiscard]] std::optional<UnitRef> nearestTarget(std::array<float, 3> from, int fromArmy,
-                                                   const unitdef::Weapon& weapon,
-                                                   std::span<const CombatGroup> groups,
-                                                   std::span<const Army> armies);
+[[nodiscard]] std::optional<UnitId> nearestTarget(std::array<float, 3> from, int fromArmy,
+                                                  const unitdef::Weapon& weapon,
+                                                  const UnitStore& store,
+                                                  std::span<const Army> armies);
 
 /// The bearing from `from` to `to`, in radians, measured the way a unit's yaw is.
 ///
@@ -171,8 +138,7 @@ struct CombatGroup {
 ///
 /// Writes to the instances' yaw, which is why the groups are mutable here and const in
 /// `fireWeapons`.
-std::size_t aimAtTargets(std::span<UnitInstance> instances, std::span<const MoveState> motion,
-                         const unitdef::UnitDef* def, std::span<const CombatGroup> groups,
+std::size_t aimAtTargets(UnitStore& store, const UnitCatalog& catalog,
                          std::span<const Army> armies);
 
 /// Advances reloads, picks targets, and appends the shots fired this tick.
@@ -184,7 +150,8 @@ std::size_t aimAtTargets(std::span<UnitInstance> instances, std::span<const Move
 /// A turreted weapon fires whatever the hull is doing, because it aims independently and
 /// this engine does not animate turrets; an unturreted one has to be pointed at its target,
 /// which is what stops a tank firing out of its side armour.
-std::size_t fireWeapons(std::span<const CombatGroup> groups, std::span<const Army> armies,
+std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
+                        std::span<const Army> armies,
                         std::vector<Projectile>& projectiles);
 
 /// Moves every projectile one tick, applies what lands, and removes what is spent.
@@ -192,7 +159,7 @@ std::size_t fireWeapons(std::span<const CombatGroup> groups, std::span<const Arm
 /// A shot lands when it reaches its target's ground position or its height falls to the
 /// ground — not when it collides with a model, because instances are points here and
 /// their geometry is neither known nor cheap to test.
-void advanceProjectiles(std::vector<Projectile>& projectiles, std::span<CombatGroup> groups,
+void advanceProjectiles(std::vector<Projectile>& projectiles, UnitStore& store,
                         std::span<const Army> armies, const HeightField& field);
 
 /// Builds the shot a weapon fires from `from` at `to`.
@@ -213,7 +180,7 @@ void advanceProjectiles(std::vector<Projectile>& projectiles, std::span<CombatGr
 /// centre, at full strength — the 222 weapons that state no radius are point hits
 /// rather than weapons that cannot hurt anything.
 float damageArea(std::array<float, 3> centre, float radiusElmos, float damage, int byArmy,
-                 std::span<CombatGroup> groups, std::span<const Army> armies);
+                 UnitStore& store, std::span<const Army> armies);
 
 /// The unit's own destruction, if its definition describes one.
 ///
@@ -234,9 +201,9 @@ float damageArea(std::array<float, 3> centre, float radiusElmos, float damage, i
 /// argument. Noted rather than hidden: a commander detonating in a friendly crowd should be
 /// a catastrophe and here it is merely an inconvenience.
 float explodeOnDeath(const unitdef::UnitDef& def, std::array<float, 3> at, int byArmy,
-                     std::span<CombatGroup> groups, std::span<const Army> armies);
+                     UnitStore& store, std::span<const Army> armies);
 
 /// Which units died this tick, so a caller can leave wreckage and check for a defeat.
-[[nodiscard]] std::vector<UnitRef> deadUnits(std::span<const CombatGroup> groups);
+[[nodiscard]] std::vector<UnitId> deadUnits(const UnitStore& store);
 
 } // namespace rm::sim

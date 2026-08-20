@@ -5,6 +5,8 @@
 #include "core/sim/Combat.hpp"
 #include "core/sim/Economy.hpp"
 #include "core/sim/Movement.hpp"
+#include "core/sim/UnitCatalog.hpp"
+#include "core/sim/UnitStore.hpp"
 #include "core/unit/UnitDef.hpp"
 
 #include <cstddef>
@@ -35,24 +37,9 @@ namespace rm::sim {
 // reports what happened and the caller decides what to load. That keeps the sim free of
 // the VFS, which is what lets a test build a match out of two structs and a flat field.
 
-/// One batch of units — everything a whole tick reads and writes for them.
-///
-/// Spans into the caller's storage, the same shape and for the same reason as
-/// `CombatGroup` and `CollisionGroup`: the passes write positions and health back, and
-/// copying them out and in again would be both slower and a chance to lose a kill.
-///
-/// Mutable motion, unlike `CombatGroup`, because the movement pass owns it and a death
-/// has to be able to stop a unit dead.
-struct SkirmishGroup {
-    std::span<UnitInstance> instances;
-    std::span<MoveState> motion;
-    std::span<Health> health;
-
-    /// The definition every unit in this group shares. Null for a batch that has none —
-    /// a decorative crowd, which therefore neither fires, earns, nor dies.
-    const unitdef::UnitDef* def = nullptr;
-};
-
+// `SkirmishGroup` used to live here: one batch's mutable spans plus the one definition its
+// whole batch shared. The passes take `UnitStore` and `UnitCatalog` now — see PLAN2.md §7
+// P1.4 for why the grouping existed and what removing it changed.
 /// The match-wide state one tick advances, alongside the per-batch groups.
 ///
 /// References rather than values: a tick mutates all of it, and a Match is built fresh
@@ -97,7 +84,11 @@ struct Match {
 /// afterwards would find a scorch mark of size zero at a position the sim had written
 /// off. What the wreck looks like has to be sampled before the unit stops existing.
 struct Death {
-    UnitRef ref;
+    /// The unit that died. Stale by the time a caller sees it — `retireDead` kills the handle
+    /// once the report is built — so it is a NAME for the corpse rather than a way back to a
+    /// live unit. Its slot (`ref.index`) still indexes the arrays, which is what lets the
+    /// death explosion read the def and the owner of something that no longer exists.
+    UnitId ref;
     std::array<float, 3> at{};
 
     /// The collision radius it had while alive, which is what sizes its wreck: a
@@ -166,7 +157,7 @@ struct TickReport {
 /// Firing before moving would let a unit shoot from outside a range it is about to
 /// enter; checking defeat before the dead are retired would miss the commander that
 /// died this tick.
-TickReport tickSkirmish(std::span<SkirmishGroup> groups, Match& match,
+TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& match,
                         const HeightField& field);
 
 /// Living commanders per army, indexed by army.
@@ -174,7 +165,8 @@ TickReport tickSkirmish(std::span<SkirmishGroup> groups, Match& match,
 /// Exposed rather than hidden inside the tick because the caller needs the same count at
 /// SETUP to fill `Match::commandersEver`, and two ways of counting the same thing is how
 /// "never had one" and "lost it" get confused.
-[[nodiscard]] std::vector<int> countCommanders(std::span<const SkirmishGroup> groups,
+[[nodiscard]] std::vector<int> countCommanders(const UnitStore& store,
+                                               const UnitCatalog& catalog,
                                                std::size_t armyCount);
 
 } // namespace rm::sim

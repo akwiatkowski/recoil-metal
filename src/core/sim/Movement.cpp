@@ -216,23 +216,22 @@ std::array<float, 2> slopeAlignment(const HeightField& field, float x, float z,
 
 void resolveCollisions(std::span<UnitInstance> instances, std::span<const MoveState> motion,
                        const HeightField& field) {
-    const CollisionGroup group{instances, motion};
-    resolveCollisions(std::span<const CollisionGroup>{&group, 1}, field);
-}
-
-void resolveCollisions(std::span<const CollisionGroup> groups, const HeightField& field) {
-    // One flat index space over every group, so a unit's neighbours are all the
-    // units near it rather than all the units near it OF THE SAME MODEL.
+    // One flat index space, which is now what the caller hands over rather than something
+    // assembled here: a unit's neighbours are all the units near it, not all the units near
+    // it OF THE SAME MODEL. There used to be a `CollisionGroup` overload taking one span per
+    // batch and flattening them, because storage was per model — with a flat store there is
+    // nothing to flatten.
     struct Entry {
         UnitInstance* unit;
         float radius;
     };
 
     std::vector<Entry> units;
-    for (const CollisionGroup& group : groups) {
-        const std::size_t n = std::min(group.instances.size(), group.motion.size());
+    {
+        const std::size_t n = std::min(instances.size(), motion.size());
+        units.reserve(n);
         for (std::size_t i = 0; i < n; ++i) {
-            units.push_back(Entry{&group.instances[i], group.motion[i].radiusElmos});
+            units.push_back(Entry{&instances[i], motion[i].radiusElmos});
         }
     }
 

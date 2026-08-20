@@ -1000,22 +1000,42 @@ struct PropScene {
 // batch built so far dangling. A deque never moves what it already holds.
 struct UnitScene {
     std::deque<rm::Model> models;
-    std::deque<std::vector<rm::UnitInstance>> instances;
     std::deque<rm::sca::Animation> animations;
     std::vector<rm::UnitBatch> batches;
     TextureRegistry textures;
 
-    // One MoveState per instance, in the same order, so batch b's instance i is
-    // driven by motion[b][i]. Parallel arrays rather than a field on
-    // UnitInstance because that struct's layout is read verbatim by the vertex
-    // shader and pinned by a static_assert.
-    std::deque<std::vector<rm::sim::MoveState>> motion;
+    // EVERY UNIT, flat, addressed by handle. Was three parallel deques of per-batch
+    // vectors — `instances[batch][i]`, `motion[batch][i]`, `health[batch][i]` — which made
+    // a unit's identity its position in a draw call (PLAN2.md §1.1).
+    rm::sim::UnitStore store;
 
-    // Each batch's slope and wading limits, from its unit definition. Held per
-    // batch because a batch is exactly one unit type, and used to pick which
-    // passability grid routes it: a slope one unit climbs is a wall to another.
+    // What each unit TYPE is. A batch is exactly one unit type, so a type index and a batch
+    // index are THE SAME NUMBER and deliberately so: it keeps the render batching and the
+    // sim's type numbering in step without a mapping table, and `batches[type]` is how a
+    // unit reaches its model.
+    rm::sim::UnitCatalog catalog;
+
+    // Per TYPE now rather than per batch — the same numbers, since the two indices coincide.
+    // Used to pick which passability grid routes a unit: a slope one climbs is a wall to
+    // another.
     std::vector<float> maxSlopeDegrees;
     std::vector<float> maxWaterDepthElmos;
+
+    // Scratch for drawing: one contiguous instance array per batch, refilled from the store
+    // each frame. The store is flat and the GPU wants a run per model, so somebody has to
+    // gather — this is P7's snapshot in embryo, arriving here because the renderer's upload
+    // has to stay a memcpy.
+    std::vector<std::vector<rm::UnitInstance>> drawScratch;
+
+    // Where each live unit ended up in `drawScratch`, by slot: which batch, and which index
+    // within it. Empty for a slot that is dead or was never filled. This is what turns a
+    // handle back into something the renderer can outline.
+    std::vector<rm::SelectionEntry> drawIndexOf;
+
+    // The reverse: which slot each drawn instance came from, parallel to `drawScratch`.
+    // Picking happens against what is DRAWN — that is what the ray can see — and this is
+    // what turns the hit back into a unit the sim knows about.
+    std::vector<std::vector<rm::UnitIndex>> drawSlotOf;
 
     // The sides in the match, empty outside a skirmish. Held with the scene rather
     // than beside it because every question that needs an army — may I select this,
@@ -1025,15 +1045,7 @@ struct UnitScene {
     /// The army the mouse belongs to. Only its units may be selected.
     int playerArmy = rm::sim::kNoArmy;
 
-    // What each unit can still take, parallel to the instances. A deque for the same
-    // reason the instances are: the combat pass holds spans into it.
-    std::deque<std::vector<rm::sim::Health>> health;
-
-    /// The definition behind each batch, or null for a batch that has none — a
-    /// decorative crowd, which therefore neither fires nor dies.
-    std::vector<const rm::unitdef::UnitDef*> defs;
-
-    /// The definitions themselves, owned here so the pointers above stay valid.
+    /// The definitions themselves, owned here so the catalog's pointers stay valid.
     std::deque<rm::unitdef::UnitDef> definitions;
 
     /// Shots in flight.
@@ -1084,70 +1096,99 @@ struct UnitScene {
     std::vector<int> commandersEver;
 
     /// Living commanders per army, recounted each tick.
+    ///
+    /// Delegates now: the sim owns the definition of "a living commander of army N", and this
+    /// used to be a second copy of it walking a different layout. `UnitCensus` (P1.3) makes
+    /// the same answer O(1), and wiring it here is P3's job — the scan is still cheap next to
+    /// a tick, and swapping it now would be a second change riding on this one.
     [[nodiscard]] std::vector<int> countCommanders() const {
-        std::vector<int> alive(armies.size(), 0);
-        for (std::size_t b = 0; b < motion.size(); ++b) {
-            const rm::unitdef::UnitDef* def = b < defs.size() ? defs[b] : nullptr;
-            if (def == nullptr || !rm::sim::isCommanderId(def->name)) {
+        return rm::sim::countCommanders(store, catalog, armies.size());
+    }
+
+    /// Refills `drawScratch` and `drawIndexOf` from the store.
+    ///
+    /// One contiguous run per batch, because that is what the GPU is uploaded: the store is
+    /// flat and a draw call wants one model's instances together. Dead units are left out —
+    /// a corpse's scale is already zero so drawing it costs a collapsed mesh, but leaving it
+    /// out costs nothing at all.
+    ///
+    /// The scratch vectors are cleared rather than freed, so a steady-state frame does no
+    /// allocation after the first few.
+    ///
+    /// It also re-points each batch's `instances` span at its scratch vector, which is not
+    /// tidiness — it is a correctness requirement with a sharp edge. `Renderer::setUnits`
+    /// takes each batch's instance capacity from `batch.instances.size()`, and a batch built
+    /// mid-match starts with an empty span. Before the flat store, `spawnUnit` re-pointed the
+    /// span on every spawn, so a new batch was never empty by the time `setUnits` saw it;
+    /// there is no per-batch vector to re-point any more. Doing it here means the invariant
+    /// holds wherever the gather is called, rather than at four call sites that must
+    /// remember. (The span also goes stale on its own: a scratch vector that grows past its
+    /// capacity reallocates.)
+    void gatherForDrawing() {
+        drawScratch.resize(batches.size());
+        drawSlotOf.resize(batches.size());
+        for (std::vector<rm::UnitInstance>& batch : drawScratch) {
+            batch.clear();
+        }
+        for (std::vector<rm::UnitIndex>& batch : drawSlotOf) {
+            batch.clear();
+        }
+        drawIndexOf.assign(store.slotCount(), rm::SelectionEntry{});
+
+        const std::span<const rm::UnitInstance> instances = store.instances();
+        for (rm::UnitIndex slot = 0; slot < store.slotCount(); ++slot) {
+            if (!store.slotAlive(slot)) {
                 continue;
             }
-            for (std::size_t i = 0; i < motion[b].size(); ++i) {
-                const int army = motion[b][i].armyIndex;
-                if (army < 0 || static_cast<std::size_t>(army) >= alive.size()) {
-                    continue;
-                }
-                if (b < health.size() && i < health[b].size() && health[b][i].alive()) {
-                    ++alive[static_cast<std::size_t>(army)];
-                }
+            const auto batch = static_cast<std::size_t>(store.typeAt(slot));
+            if (batch >= drawScratch.size()) {
+                continue;  // a type with no batch: nothing to draw it with
             }
+            drawIndexOf[slot] =
+                rm::SelectionEntry{.batch = batch, .instance = drawScratch[batch].size()};
+            drawScratch[batch].push_back(instances[slot]);
+            drawSlotOf[batch].push_back(slot);
         }
-        return alive;
+
+        for (std::size_t batch = 0; batch < batches.size(); ++batch) {
+            batches[batch].instances = drawScratch[batch];
+        }
     }
 
-    /// The combat pass's view of the scene, rebuilt when the batch list changes rather
-    /// than every tick — the spans are stable because the deques never reallocate.
-    [[nodiscard]] std::vector<rm::sim::CombatGroup> combatGroups() {
-        std::vector<rm::sim::CombatGroup> groups;
-        groups.reserve(instances.size());
-        for (std::size_t b = 0; b < instances.size(); ++b) {
-            groups.push_back(rm::sim::CombatGroup{
-                .instances = instances[b],
-                .motion = motion[b],
-                .health = b < health.size() ? std::span<rm::sim::Health>{health[b]}
-                                            : std::span<rm::sim::Health>{},
-                .def = b < defs.size() ? defs[b] : nullptr,
-            });
+    /// The unit behind a drawn instance, or nothing when the pair names nothing drawn.
+    [[nodiscard]] std::optional<rm::sim::UnitId> unitDrawnAt(std::size_t batch,
+                                                             std::size_t index) const {
+        if (batch >= drawSlotOf.size() || index >= drawSlotOf[batch].size()) {
+            return std::nullopt;
         }
-        return groups;
+        return store.idAt(drawSlotOf[batch][index]);
     }
 
-    /// The whole tick's view of the scene — see core/sim/Skirmish.hpp.
-    ///
-    /// Rebuilt when the batch list GROWS rather than every tick: the spans are stable
-    /// because the deques never reallocate, but a batch created mid-match adds one the
-    /// existing vector does not have, and a unit in it would sit out the fight.
-    [[nodiscard]] std::vector<rm::sim::SkirmishGroup> skirmishGroups() {
-        std::vector<rm::sim::SkirmishGroup> groups;
-        groups.reserve(instances.size());
-        for (std::size_t b = 0; b < instances.size(); ++b) {
-            groups.push_back(rm::sim::SkirmishGroup{
-                .instances = instances[b],
-                .motion = motion[b],
-                .health = b < health.size() ? std::span<rm::sim::Health>{health[b]}
-                                            : std::span<rm::sim::Health>{},
-                .def = b < defs.size() ? defs[b] : nullptr,
-            });
-        }
-        return groups;
-    }
-
-    /// The army that owns instance `instance` of batch `batch`, or kNoArmy.
-    [[nodiscard]] int armyOf(std::size_t batch, std::size_t instance) const noexcept {
-        if (batch >= motion.size() || instance >= motion[batch].size()) {
+    /// Who owns the unit in a slot, or kNoArmy.
+    [[nodiscard]] int armyOf(rm::UnitIndex slot) const noexcept {
+        const std::span<const rm::sim::MoveState> motion = store.motion();
+        if (slot >= motion.size()) {
             return rm::sim::kNoArmy;
         }
-        return motion[batch][instance].armyIndex;
+        return motion[slot].armyIndex;
     }
+
+    /// Where a live unit is being drawn, or nothing when it is dead or undrawable.
+    ///
+    /// The bridge between a handle, which is how the sim and the UI name a unit, and a
+    /// (batch, index) pair, which is the only thing the renderer can outline.
+    [[nodiscard]] std::optional<rm::SelectionEntry> drawnAt(rm::sim::UnitId id) const {
+        if (!store.alive(id) || id.index >= drawIndexOf.size()) {
+            return std::nullopt;
+        }
+        const rm::SelectionEntry& where = drawIndexOf[id.index];
+        if (where.batch >= drawScratch.size()
+            || where.instance >= drawScratch[where.batch].size()) {
+            return std::nullopt;
+        }
+        return where;
+    }
+
 };
 
 // The passability grids a scene needs, one per distinct pair of limits.
@@ -1203,7 +1244,7 @@ private:
 /// top speed the cadence is exactly what the clock used to give — and it makes
 /// every slower case fall out for free rather than needing a table of per-unit
 /// stride lengths this engine has nowhere to read from.
-void paceAnimationByDistance(std::vector<rm::UnitInstance>& instances,
+void paceAnimationByDistance(std::span<rm::UnitInstance> instances,
                              std::span<const rm::sim::MoveState> motion, float durationSeconds) {
     if (durationSeconds <= 0.0f) {
         return;  // the batch has no animation; the phase is nobody's business
@@ -1220,6 +1261,32 @@ void paceAnimationByDistance(std::vector<rm::UnitInstance>& instances,
         // about where a cycle starts.
         instances[i].animationPhase =
             motion[i].distanceTravelledElmos / strideElmos;
+    }
+}
+
+/// Paces every unit's walk cycle, in one pass over the store.
+///
+/// The animation belongs to the MODEL, so the cycle length is per type — every unit of one
+/// type shares its clock, and each unit's own phase comes from the ground it has covered.
+/// Type index is batch index (see `UnitCatalog`), which is what makes the lookup a subscript
+/// rather than a search.
+///
+/// One pass over slots rather than one pass per type: this runs every frame, and scanning the
+/// whole store once per unit type turns a linear job into a quadratic one as the roster grows.
+void paceSceneAnimations(UnitScene& scene) {
+    const std::span<rm::UnitInstance> instances = scene.store.instances();
+    const std::span<const rm::sim::MoveState> motion = scene.store.motion();
+    for (rm::UnitIndex slot = 0; slot < scene.store.slotCount(); ++slot) {
+        const std::size_t batch = static_cast<std::size_t>(scene.store.typeAt(slot));
+        if (batch >= scene.batches.size()) {
+            continue;
+        }
+        const rm::sca::Animation* animation = scene.batches[batch].animation;
+        paceAnimationByDistance(instances.subspan(slot, 1), motion.subspan(slot, 1),
+                                animation != nullptr ? animation->duration : 0.0f);
+    }
+    for (rm::UnitBatch& batch : scene.batches) {
+        batch.animationDrivenByInstance = true;
     }
 }
 
@@ -1502,8 +1569,6 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
             }
 
             scene.models.push_back(unit->model);
-            scene.instances.emplace_back();
-            scene.motion.emplace_back();
             scene.maxSlopeDegrees.push_back(unit->def.maxSlopeDegrees > 0.0f
                                                 ? unit->def.maxSlopeDegrees
                                                 : rm::sim::kDefaultMaxSlopeDegrees);
@@ -1521,14 +1586,16 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
             scaleForFaction.emplace(army.faction, unit->def.meshToElmos);
 
             scene.definitions.push_back(unit->def);
-            scene.defs.push_back(&scene.definitions.back());
-            scene.health.emplace_back();
-            // Asserted rather than assumed: every one of these is indexed by batch, and a
-            // mismatch here is the segfault described in resolveUnits. (These read
-            // `+ 1` until milestone 20 — never caught, because Release compiles
-            // asserts out, which is exactly one assert's worth of irony.)
-            assert(scene.defs.size() == scene.batches.size());
-            assert(scene.health.size() == scene.batches.size());
+            const rm::UnitTypeIndex type = scene.catalog.add(&scene.definitions.back());
+            // A type index and a batch index are the same number, by construction. Asserted
+            // rather than assumed: everything from the passability grid to the draw gather
+            // reads one as the other, and a drift here is a silent mismatch rather than a
+            // crash. (The old per-batch parallel arrays asserted the same thing and read
+            // `+ 1` until milestone 20 — never caught, because Release compiles asserts out,
+            // which is exactly one assert's worth of irony.)
+            assert(static_cast<std::size_t>(type) + 1 == scene.batches.size());
+            assert(scene.catalog.size() == scene.batches.size());
+            (void)type;
 
             const auto armed = static_cast<std::size_t>(std::ranges::count_if(
                 unit->def.weapons, [](const rm::unitdef::Weapon& w) { return w.fires(); }));
@@ -1557,19 +1624,21 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
         rm::sim::MoveState motion;
         motion.armyIndex = army.index;
 
-        scene.instances[batch].push_back(one.front());
-        scene.motion[batch].push_back(motion);
-
-        const float hp = scene.defs[batch] != nullptr ? scene.defs[batch]->health : 0.0f;
-        scene.health[batch].push_back(rm::sim::Health{.current = hp, .maximum = hp});
+        const auto type = static_cast<rm::UnitTypeIndex>(batch);
+        const rm::unitdef::UnitDef* def = scene.catalog.def(type);
+        const float hp = def != nullptr ? def->health : 0.0f;
+        (void)scene.store.spawn(rm::sim::UnitStore::Spawn{
+            .type = type,
+            .instance = one.front(),
+            .motion = motion,
+            .health = rm::sim::Health{.current = hp, .maximum = hp},
+        });
     }
 
-    // The spans in each batch are rebuilt after every push_back, because a vector that
-    // grew has moved its storage and the batch would point at freed memory — the same
-    // hazard the deques above exist to avoid for the models.
-    for (std::size_t i = 0; i < scene.batches.size(); ++i) {
-        scene.batches[i].instances = scene.instances[i];
-    }
+    // The batches' spans are filled from the store, once, here. They used to be re-pointed
+    // after every push_back because a vector that grew had moved its storage; the store owns
+    // that storage now and the gather hands each batch a contiguous run.
+    scene.gatherForDrawing();
 
     // Each army starts with the commander's trickle and one extractor's worth of storage,
     // which is what makes the first build affordable — see kCommanderTrickle.
@@ -1598,7 +1667,7 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
 /// grounded on the height field, tilted onto its slope, in its army's colour, with its
 /// definition's own health, radius and speed. Returns the batch and instance it landed
 /// in, or nothing when the blueprint or its model is not in the mounted content.
-[[nodiscard]] std::optional<rm::SelectionEntry> spawnUnit(UnitScene& scene,
+[[nodiscard]] std::optional<rm::sim::UnitId> spawnUnit(UnitScene& scene,
                                                           const rm::vfs::Vfs& content,
                                                           const rm::HeightField& field,
                                                           std::string_view blueprintPath,
@@ -1615,8 +1684,6 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
         }
 
         scene.models.push_back(unit->model);
-        scene.instances.emplace_back();
-        scene.motion.emplace_back();
         // The same fallback rules as resolveUnits: a structure's zero slope means
         // the default, and a ground mover's zero depth means "does not wade" —
         // see ADR-027.
@@ -1635,17 +1702,15 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
             },
         });
         scene.definitions.push_back(unit->def);
-        scene.defs.push_back(&scene.definitions.back());
-        scene.health.emplace_back();
-        assert(scene.defs.size() == scene.batches.size());
-        assert(scene.health.size() == scene.batches.size());
+        (void)scene.catalog.add(&scene.definitions.back());
+        assert(scene.catalog.size() == scene.batches.size());
 
         found = scene.batchForBlueprint.emplace(std::string{blueprintPath},
                                                 scene.batches.size() - 1).first;
     }
 
-    const std::size_t batch = found->second;
-    const rm::unitdef::UnitDef& def = *scene.defs[batch];
+    const auto type = static_cast<rm::UnitTypeIndex>(found->second);
+    const rm::unitdef::UnitDef& def = *scene.catalog.def(type);
 
     rm::UnitInstance instance{};
     instance.position = {position[0], field.heightAtWorld(position[0], position[2]),
@@ -1670,18 +1735,19 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
         motion.speedElmosPerSecond = 0.0f;
     }
 
-    scene.instances[batch].push_back(instance);
-    scene.motion[batch].push_back(motion);
-    scene.health[batch].push_back(
-        rm::sim::Health{.current = def.health, .maximum = def.health});
+    const rm::sim::UnitId id = scene.store.spawn(rm::sim::UnitStore::Spawn{
+        .type = type,
+        .instance = instance,
+        .motion = motion,
+        .health = rm::sim::Health{.current = def.health, .maximum = def.health},
+    });
 
-    // The instance vector may have moved its storage, so every span into it is stale:
-    // the batch's own, and — mid-simulation — the collision groups the tick loop holds,
-    // which is what the flag tells it.
-    scene.batches[batch].instances = scene.instances[batch];
+    // The store may have grown its arrays, so any span into them is stale — which for the
+    // sim means the caller-side tick has to re-read them, and for the renderer means the
+    // draw gather has to run again before the batch spans are trusted.
     scene.grewThisTick = true;
 
-    return rm::SelectionEntry{.batch = batch, .instance = scene.instances[batch].size() - 1};
+    return id;
 }
 
 /// Finds (or loads and registers) the buildable entry for `blueprintPath`, so every
@@ -1741,54 +1807,52 @@ void orderFirstExtractors(UnitScene& scene, std::span<const rm::scenario::Marker
 
     // Which commander is where, so each can be sent to its OWN nearest deposit rather than
     // all of them to one.
-    for (std::size_t batch = 0; batch < scene.motion.size(); ++batch) {
-        const rm::unitdef::UnitDef* def = batch < scene.defs.size() ? scene.defs[batch] : nullptr;
+    float firstBuilderRate = 1.0f;
+    for (rm::UnitIndex slot = 0; slot < scene.store.slotCount(); ++slot) {
+        const rm::unitdef::UnitDef* def = scene.catalog.def(scene.store.typeAt(slot));
         if (def == nullptr || !def->isBuilder()) {
             continue;
         }
+        const int army = scene.store.motion()[slot].armyIndex;
+        if (army == rm::sim::kNoArmy) {
+            continue;
+        }
+        firstBuilderRate = std::max(1.0f, def->buildRate);
 
-        for (std::size_t i = 0; i < scene.motion[batch].size(); ++i) {
-            const int army = scene.motion[batch][i].armyIndex;
-            if (army == rm::sim::kNoArmy) {
+        const std::array<float, 3> from = scene.store.instances()[slot].position;
+        const rm::scenario::Marker* nearest = nullptr;
+        float nearestDistance = 0.0f;
+        for (const rm::scenario::Marker& marker : markers) {
+            if (!marker.isType("Mass")) {
                 continue;
             }
-
-            const std::array<float, 3> from = scene.instances[batch][i].position;
-            const rm::scenario::Marker* nearest = nullptr;
-            float nearestDistance = 0.0f;
-            for (const rm::scenario::Marker& marker : markers) {
-                if (!marker.isType("Mass")) {
-                    continue;
-                }
-                const float distance = rm::sim::groundDistanceElmos(from, marker.position);
-                if (nearest == nullptr || distance < nearestDistance) {
-                    nearest = &marker;
-                    nearestDistance = distance;
-                }
+            const float distance = rm::sim::groundDistanceElmos(from, marker.position);
+            if (nearest == nullptr || distance < nearestDistance) {
+                nearest = &marker;
+                nearestDistance = distance;
             }
-            if (nearest == nullptr) {
-                continue;  // a map with no mass on it: nothing to extract
-            }
-
-            scene.building.push_back(rm::sim::Construction{
-                .armyIndex = army,
-                .position = nearest->position,
-                .cost = {.mass = extractor->buildCostMass,
-                         .energy = extractor->buildCostEnergy},
-                .buildTimeRemaining = extractor->buildTime,
-                .totalBuildTime = extractor->buildTime,
-                .buildRate = def->buildRate,
-                .blueprintIndex = blueprintIndex,
-            });
         }
+        if (nearest == nullptr) {
+            continue;  // a map with no mass on it: nothing to extract
+        }
+
+        scene.building.push_back(rm::sim::Construction{
+            .armyIndex = army,
+            .position = nearest->position,
+            .cost = {.mass = extractor->buildCostMass,
+                     .energy = extractor->buildCostEnergy},
+            .buildTimeRemaining = extractor->buildTime,
+            .totalBuildTime = extractor->buildTime,
+            .buildRate = def->buildRate,
+            .blueprintIndex = blueprintIndex,
+        });
     }
 
     std::printf("economy: %zu extractor(s) ordered on the map's own deposits,"
                 " %.0f mass / %.0f energy each over %.0fs\n",
                 scene.building.size(), static_cast<double>(extractor->buildCostMass),
                 static_cast<double>(extractor->buildCostEnergy),
-                static_cast<double>(extractor->buildTime
-                                    / std::max(1.0f, scene.defs.front()->buildRate)));
+                static_cast<double>(extractor->buildTime / firstBuilderRate));
 }
 
 /// Loads every requested model, resolves its textures, and places instances.
@@ -1939,10 +2003,6 @@ void orderFirstExtractors(UnitScene& scene, std::span<const rm::scenario::Marker
                     takesStarts ? starts.size() : 0u, scattered.size());
 
         scene.models.push_back(std::move(*model));
-        scene.instances.push_back(std::move(placed));
-        // Idle, in step with the instances just placed. Nothing moves until
-        // something is ordered to.
-        scene.motion.emplace_back(scene.instances.back().size());
 
         // A definition that omits these — or a building, whose maxslope is 0 —
         // falls back to the defaults rather than to a grid nothing can cross.
@@ -1964,13 +2024,30 @@ void orderFirstExtractors(UnitScene& scene, std::span<const rm::scenario::Marker
         scene.maxSlopeDegrees.push_back(slope);
         scene.maxWaterDepthElmos.push_back(depth);
 
-        // A definition's speed and turn rate reach every instance of it. Slope
-        // and depth limits do NOT yet: passability is one grid for the whole
-        // scene, so honouring them per unit type would mean a grid per type.
+        // The TYPE for these units. One per batch, and the two indices are the same number
+        // by construction — which is the whole reason the old parallel-array hazard here is
+        // gone: there is one array to append to, not four that had to be appended to
+        // together or the next batch wrote its entries at the wrong index and read health
+        // off the end. (That was a segfault the moment `--units` and `--skirmish` were given
+        // together.)
+        rm::UnitTypeIndex type = 0;
         if (def) {
-            for (rm::sim::MoveState& state : scene.motion.back()) {
-                // The footprint is what a unit takes up, whether or not it
-                // moves — a building is still something to be pushed out of.
+            scene.definitions.push_back(*def);
+            type = scene.catalog.add(&scene.definitions.back());
+        } else {
+            type = scene.catalog.add(nullptr);  // a bare model: it neither fires nor dies
+        }
+        assert(static_cast<std::size_t>(type) == scene.batches.size());
+
+        // A definition's speed and turn rate reach every unit of it. Slope and depth limits
+        // do NOT yet: passability is one grid for the whole scene, so honouring them per
+        // unit type would mean a grid per type.
+        const float hp = def ? def->health : 0.0f;
+        for (const rm::UnitInstance& instance : placed) {
+            rm::sim::MoveState state;
+            if (def) {
+                // The footprint is what a unit takes up, whether or not it moves — a
+                // building is still something to be pushed out of.
                 state.radiusElmos = def->collisionRadiusElmos;
                 if (def->isMobile()) {
                     state.speedElmosPerSecond = def->speedElmosPerSecond;
@@ -1979,35 +2056,24 @@ void orderFirstExtractors(UnitScene& scene, std::span<const rm::scenario::Marker
                     }
                 }
             }
+            (void)scene.store.spawn(rm::sim::UnitStore::Spawn{
+                .type = type,
+                .instance = instance,
+                .motion = state,
+                .health = rm::sim::Health{.current = hp, .maximum = hp},
+            });
         }
-        // The DEFINITION and the HEALTH for this batch, kept in step with it.
-        //
-        // Every one of these arrays is indexed by batch, so every batch must push to every
-        // one of them — a batch that skipped two of them left `defs` and `health` shorter
-        // than `instances`, and the next thing to append (a commander) then wrote its own
-        // entries at the wrong index and read `health[batch]` off the end. That is a
-        // segfault the moment `--units` and `--skirmish` are given together, and it is the
-        // standing hazard of parallel arrays: the fix is that they are filled together, not
-        // that the reader checks.
-        if (def) {
-            scene.definitions.push_back(*def);
-            scene.defs.push_back(&scene.definitions.back());
-        } else {
-            scene.defs.push_back(nullptr);  // a bare model: it neither fires nor dies
-        }
-
-        scene.health.emplace_back();
-        const float hp = def ? def->health : 0.0f;
-        scene.health.back().assign(scene.instances.back().size(),
-                                   rm::sim::Health{.current = hp, .maximum = hp});
 
         scene.batches.push_back(rm::UnitBatch{
             .model = &scene.models.back(),
-            .instances = scene.instances.back(),
+            .instances = {},
             .textures = pair,
             .animation = animation,
         });
     }
+
+    // The batches' instance spans, filled from the store now that every unit is in it.
+    scene.gatherForDrawing();
 
     if (scene.batches.size() > 1) {
         // Reports what the batching bought. The renderer orders the draws
@@ -2296,36 +2362,42 @@ struct Standing {
     std::size_t factories = 0;
     std::array<float, 3> factoryPosition{};
     float factoryBuildRate = 0.0f;
-    std::vector<rm::SelectionEntry> tanks;
+    std::vector<rm::sim::UnitId> tanks;
 };
 
-/// Gathers what `army` has standing, by walking the batches once.
+/// Gathers what `army` has standing, by walking the store once.
+///
+/// A scan, still: `UnitCensus` (P1.3) answers this in O(1) and wiring it in is P3's, where
+/// the roles it keys on stop being hardcoded blueprint ids. One pass a second over a few
+/// hundred units is not what this costs.
 [[nodiscard]] Standing standingFor(UnitScene& scene, int army) {
     Standing standing;
-    for (std::size_t batch = 0; batch < scene.instances.size(); ++batch) {
-        const rm::unitdef::UnitDef* def = batch < scene.defs.size() ? scene.defs[batch] : nullptr;
+    const std::span<const rm::UnitInstance> instances = scene.store.instances();
+    const std::span<const rm::sim::MoveState> motion = scene.store.motion();
+    const std::span<const rm::sim::Health> health = scene.store.health();
+
+    for (rm::UnitIndex slot = 0; slot < scene.store.slotCount(); ++slot) {
+        const rm::unitdef::UnitDef* def = scene.catalog.def(scene.store.typeAt(slot));
         if (def == nullptr) {
             continue;
         }
-        for (std::size_t i = 0; i < scene.instances[batch].size(); ++i) {
-            if (scene.motion[batch][i].armyIndex != army || !scene.health[batch][i].alive()) {
-                continue;
-            }
-            if (rm::sim::isCommanderId(def->name)) {
-                standing.commanderAlive = true;
-                standing.commanderPosition = scene.instances[batch][i].position;
-                standing.commanderBuildRate = def->buildRate;
-            } else if (def->name == rm::sim::kExtractorId) {
-                ++standing.extractors;
-            } else if (def->name == rm::sim::kPowerGeneratorId) {
-                ++standing.powerGenerators;
-            } else if (def->name == rm::sim::kFactoryId) {
-                ++standing.factories;
-                standing.factoryPosition = scene.instances[batch][i].position;
-                standing.factoryBuildRate = def->buildRate;
-            } else if (def->name == rm::sim::kTankId) {
-                standing.tanks.push_back(rm::SelectionEntry{batch, i});
-            }
+        if (motion[slot].armyIndex != army || !health[slot].alive()) {
+            continue;
+        }
+        if (rm::sim::isCommanderId(def->name)) {
+            standing.commanderAlive = true;
+            standing.commanderPosition = instances[slot].position;
+            standing.commanderBuildRate = def->buildRate;
+        } else if (def->name == rm::sim::kExtractorId) {
+            ++standing.extractors;
+        } else if (def->name == rm::sim::kPowerGeneratorId) {
+            ++standing.powerGenerators;
+        } else if (def->name == rm::sim::kFactoryId) {
+            ++standing.factories;
+            standing.factoryPosition = instances[slot].position;
+            standing.factoryBuildRate = def->buildRate;
+        } else if (def->name == rm::sim::kTankId) {
+            standing.tanks.push_back(scene.store.idAt(slot));
         }
     }
     return standing;
@@ -2341,25 +2413,26 @@ struct Standing {
     }
     std::optional<std::array<float, 3>> best;
     float bestDistance = 0.0f;
-    for (std::size_t batch = 0; batch < scene.instances.size(); ++batch) {
-        const rm::unitdef::UnitDef* def = batch < scene.defs.size() ? scene.defs[batch] : nullptr;
+    const std::span<const rm::UnitInstance> instances = scene.store.instances();
+    const std::span<const rm::sim::MoveState> motion = scene.store.motion();
+    const std::span<const rm::sim::Health> health = scene.store.health();
+
+    for (rm::UnitIndex slot = 0; slot < scene.store.slotCount(); ++slot) {
+        const rm::unitdef::UnitDef* def = scene.catalog.def(scene.store.typeAt(slot));
         if (def == nullptr || !rm::sim::isCommanderId(def->name)) {
             continue;
         }
-        for (std::size_t i = 0; i < scene.instances[batch].size(); ++i) {
-            const int theirs = scene.motion[batch][i].armyIndex;
-            if (theirs < 0 || static_cast<std::size_t>(theirs) >= scene.armies.size()
-                || !scene.health[batch][i].alive()
-                || !rm::sim::hostile(scene.armies[static_cast<std::size_t>(army)],
-                                     scene.armies[static_cast<std::size_t>(theirs)])) {
-                continue;
-            }
-            const float distance =
-                rm::sim::groundDistanceElmos(from, scene.instances[batch][i].position);
-            if (!best || distance < bestDistance) {
-                best = scene.instances[batch][i].position;
-                bestDistance = distance;
-            }
+        const int theirs = motion[slot].armyIndex;
+        if (theirs < 0 || static_cast<std::size_t>(theirs) >= scene.armies.size()
+            || !health[slot].alive()
+            || !rm::sim::hostile(scene.armies[static_cast<std::size_t>(army)],
+                                 scene.armies[static_cast<std::size_t>(theirs)])) {
+            continue;
+        }
+        const float distance = rm::sim::groundDistanceElmos(from, instances[slot].position);
+        if (!best || distance < bestDistance) {
+            best = instances[slot].position;
+            bestDistance = distance;
         }
     }
     return best;
@@ -2527,12 +2600,17 @@ void runOpponents(UnitScene& scene, const rm::vfs::Vfs& content, const rm::Heigh
             if (target) {
                 script.attackLaunched = true;
                 std::size_t marching = 0;
-                for (const rm::SelectionEntry& tank : standing.tanks) {
+                for (const rm::sim::UnitId tank : standing.tanks) {
+                    if (!scene.store.alive(tank)) {
+                        continue;  // died between the census and the order
+                    }
+                    const auto type =
+                        static_cast<std::size_t>(scene.store.typeAt(tank.index));
                     const rm::sim::PassabilityGrid& grid =
-                        passability.gridFor(scene.maxSlopeDegrees[tank.batch],
-                                            scene.maxWaterDepthElmos[tank.batch]);
-                    if (orderRouted(scene.motion[tank.batch][tank.instance],
-                                    scene.instances[tank.batch][tank.instance], grid,
+                        passability.gridFor(scene.maxSlopeDegrees[type],
+                                            scene.maxWaterDepthElmos[type]);
+                    if (orderRouted(scene.store.motion()[tank.index],
+                                    scene.store.instances()[tank.index], grid,
                                     (*target)[0], (*target)[2])) {
                         ++marching;
                     }
@@ -2584,11 +2662,6 @@ struct MatchRunner {
     /// The scripted opponents' memory, one per army; a human player's slot stays unused.
     std::vector<rm::sim::Opponent> scripts;
 
-    /// The sim's view of the scene. Rebuilt when a spawn GROWS it: the spans are stable
-    /// because the deques never reallocate, but a batch created mid-match adds one this
-    /// vector does not have, and a unit in it would sit out the fight.
-    std::vector<rm::sim::SkirmishGroup> groups;
-
     /// Built once and kept, because `over` has to survive between ticks — a match is
     /// decided on one tick and stays decided.
     rm::sim::Match match;
@@ -2596,6 +2669,16 @@ struct MatchRunner {
     /// Running totals, for the callers that report them at the end.
     std::size_t shotsFired = 0;
     std::size_t completedBuilds = 0;
+
+    /// Units destroyed, accumulated from the tick's death reports.
+    ///
+    /// NOT counted by scanning the store at the end, which is what this used to do and what
+    /// the flat store quietly broke: a corpse's slot is reused by the next spawn, so a scan
+    /// for "slots whose health is zero" undercounts every death whose slot got recycled. The
+    /// golden match reported 21 that way against 24 scorch marks — and the marks were right,
+    /// because they are accumulated from the same reports as this. A total that only ever
+    /// goes up cannot be undone by storage reusing a slot.
+    std::size_t unitsDestroyed = 0;
     bool matchOver = false;
 };
 
@@ -2619,7 +2702,6 @@ inline constexpr int kDecisionTicks = rm::sim::kTicksPerSecond;
         .starts = starts,
         .markers = markers,
         .scripts = std::vector<rm::sim::Opponent>(scene.armies.size()),
-        .groups = scene.skirmishGroups(),
         .match =
             rm::sim::Match{
                 .armies = scene.armies,
@@ -2660,16 +2742,12 @@ rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) 
         runOpponents(scene, runner.content, runner.field, runner.passability, runner.starts,
                      runner.markers, runner.scripts, now);
     }
-    if (scene.grewThisTick) {
-        runner.groups = scene.skirmishGroups();
-        scene.grewThisTick = false;
-    }
 
     // ONE call, and the same one both callers make. What used to be here — the order of
     // movement, collision, aiming, firing, death, defeat and economy — is a fact about
     // core/sim/Skirmish.cpp rather than about whichever loop you are reading.
     const rm::sim::TickReport report =
-        rm::sim::tickSkirmish(runner.groups, runner.match, runner.field);
+        rm::sim::tickSkirmish(scene.store, scene.catalog, runner.match, runner.field);
 
     runner.shotsFired += report.shotsFired;
     scene.deathBlasts += report.deathBlasts;
@@ -2684,6 +2762,7 @@ rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) 
     //
     // The caller's work rather than the sim's: a decal buffer is a thing the renderer
     // uploads, and the sim has no business owning one.
+    runner.unitsDestroyed += report.died.size();
     for (const rm::sim::Death& death : report.died) {
         rm::appendWreckMark(scene.wreckDecals, runner.field, death.at,
                             death.radiusElmos * rm::kWreckMarkRadiusFactor);
@@ -2718,28 +2797,21 @@ rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) 
                        : rm::sim::rolloffPoint(work.position,
                                                runner.field.widthElmos() * 0.5f,
                                                runner.field.depthElmos() * 0.5f);
+            const auto type = static_cast<std::size_t>(scene.store.typeAt(spawned->index));
             const rm::sim::PassabilityGrid& grid =
-                runner.passability.gridFor(scene.maxSlopeDegrees[spawned->batch],
-                                           scene.maxWaterDepthElmos[spawned->batch]);
-            (void)orderRouted(scene.motion[spawned->batch][spawned->instance],
-                              scene.instances[spawned->batch][spawned->instance], grid,
-                              to[0], to[1]);
+                runner.passability.gridFor(scene.maxSlopeDegrees[type],
+                                           scene.maxWaterDepthElmos[type]);
+            (void)orderRouted(scene.store.motion()[spawned->index],
+                              scene.store.instances()[spawned->index], grid, to[0], to[1]);
         }
     }
 
-    // Rebuild NOW if the spawns above grew the scene, rather than leaving it to the top of
-    // the next tick.
-    //
-    // `groups` holds spans into the per-batch vectors, and a spawn into an existing batch
-    // reallocates the vector it lands in — so on return those spans would point at freed
-    // storage. Nothing noticed while the only reader was the next tick, which rebuilt them
-    // before looking; the first caller to read them straight after the call (the hash log)
-    // segfaulted immediately. Leaving a function with a dangling member is the bug either
-    // way, so it is fixed here rather than guarded at each new reader.
-    if (scene.grewThisTick) {
-        runner.groups = scene.skirmishGroups();
-        scene.grewThisTick = false;
-    }
+    // Nothing to rebuild any more. This used to re-point a vector of per-batch spans,
+    // because a spawn into an existing batch reallocated the vector it landed in and left
+    // every span into it dangling — a segfault for the first reader that looked straight
+    // after the call. The store hands out spans on demand instead, so a grown array is
+    // simply a longer span next time somebody asks.
+    scene.grewThisTick = false;
 
     return report;
 }
@@ -2754,13 +2826,14 @@ void march(UnitScene& scene, const rm::HeightField& field, PassabilitySet& passa
     std::vector<bool> announced(scene.armies.size(), false);
     // `--march` sends everything at one point; `--play` lets the match decide.
     if (options.orderAll) {
-        for (std::size_t batch = 0; batch < scene.motion.size(); ++batch) {
-            for (std::size_t i = 0; i < scene.motion[batch].size(); ++i) {
+        for (rm::UnitIndex slot = 0; slot < scene.store.slotCount(); ++slot) {
+            {
                 ++total;
+                const auto type = static_cast<std::size_t>(scene.store.typeAt(slot));
                 const rm::sim::PassabilityGrid& grid = passability.gridFor(
-                    scene.maxSlopeDegrees[batch], scene.maxWaterDepthElmos[batch]);
-                if (orderRouted(scene.motion[batch][i], scene.instances[batch][i], grid,
-                                options.x, options.z)) {
+                    scene.maxSlopeDegrees[type], scene.maxWaterDepthElmos[type]);
+                if (orderRouted(scene.store.motion()[slot], scene.store.instances()[slot],
+                                grid, options.x, options.z)) {
                     ++routed;
                 }
             }
@@ -2805,7 +2878,7 @@ void march(UnitScene& scene, const rm::HeightField& field, PassabilitySet& passa
         // that built different things. The renderer's side stays out on its own — the decal
         // buffer is not reachable from a group or a match, so `hashMatch` cannot see it.
         if (hashing) {
-            hashes.push_back(rm::sim::hashMatch(runner.groups, runner.match));
+            hashes.push_back(rm::sim::hashMatch(scene.store, runner.match));
         }
 
         if (!scene.armies.empty()) {
@@ -2845,15 +2918,13 @@ void march(UnitScene& scene, const rm::HeightField& field, PassabilitySet& passa
         // Dust as the walk happens, aged as the walk continues, so what a capture
         // shows is a trail rather than a puff at everyone's feet.
         emitters.clear();
-        for (std::size_t batch = 0; batch < scene.instances.size(); ++batch) {
-            for (std::size_t u = 0; u < scene.instances[batch].size(); ++u) {
-                emitters.push_back(rm::DustEmitter{
-                    .position = scene.instances[batch][u].position,
-                    .moving = scene.motion[batch][u].moving,
-                    .topSpeedElmosPerSecond = scene.motion[batch][u].speedElmosPerSecond,
-                    .radiusElmos = scene.motion[batch][u].radiusElmos,
-                });
-            }
+        for (rm::UnitIndex slot = 0; slot < scene.store.slotCount(); ++slot) {
+            emitters.push_back(rm::DustEmitter{
+                .position = scene.store.instances()[slot].position,
+                .moving = scene.store.motion()[slot].moving,
+                .topSpeedElmosPerSecond = scene.store.motion()[slot].speedElmosPerSecond,
+                .radiusElmos = scene.store.motion()[slot].radiusElmos,
+            });
         }
         rm::advanceParticles(dust, kTickSeconds);
         rm::emitDust(dust, emitters, field, kTickSeconds, dustDebt, dustSeed);
@@ -2864,12 +2935,11 @@ void march(UnitScene& scene, const rm::HeightField& field, PassabilitySet& passa
     // ground covered — the same rule the windowed path follows. This is also
     // what makes such a screenshot independent of `--time`: the sim decided
     // where the legs are, not the clock.
-    for (std::size_t batch = 0; batch < scene.instances.size(); ++batch) {
-        const rm::sca::Animation* animation = scene.batches[batch].animation;
-        paceAnimationByDistance(scene.instances[batch], scene.motion[batch],
-                                animation != nullptr ? animation->duration : 0.0f);
-        scene.batches[batch].animationDrivenByInstance = true;
-    }
+    // The walk cycles, paced from the store, then gathered for drawing. Per TYPE because the
+    // animation belongs to the model: every unit of one type shares its clock length, and the
+    // pass writes each unit's own phase from the ground it has covered.
+    paceSceneAnimations(scene);
+    scene.gatherForDrawing();
 
     // --- Determinism ---------------------------------------------------------
     //
@@ -2946,38 +3016,30 @@ void march(UnitScene& scene, const rm::HeightField& field, PassabilitySet& passa
         // What the fight came to. Reported rather than inferred from a screenshot,
         // because a unit that died is a unit that is no longer in the frame and its
         // absence looks the same as its never having been there.
-        std::vector<rm::sim::CombatGroup> combat = scene.combatGroups();
-        const std::vector<rm::sim::UnitRef> dead = rm::sim::deadUnits(combat);
-
         float remaining = 0.0f;
         float maximum = 0.0f;
-        for (const std::vector<rm::sim::Health>& batch : scene.health) {
-            for (const rm::sim::Health& one : batch) {
-                remaining += one.current;
-                maximum += one.maximum;
-            }
+        for (const rm::sim::Health& one : scene.store.health()) {
+            remaining += one.current;
+            maximum += one.maximum;
         }
 
         std::printf("combat: %zu shots fired, %zu in flight, %zu unit(s) destroyed,"
                     " %.0f of %.0f hp left\n",
-                    runner.shotsFired, scene.projectiles.size(), dead.size(),
+                    runner.shotsFired, scene.projectiles.size(), runner.unitsDestroyed,
                     static_cast<double>(remaining), static_cast<double>(maximum));
 
         // Each commander's state, because the match hangs on exactly these numbers
         // and "the fight is still on" and "the fight never reached anyone" read the
         // same from the aggregate.
-        for (std::size_t batch = 0; batch < scene.instances.size(); ++batch) {
-            const rm::unitdef::UnitDef* def =
-                batch < scene.defs.size() ? scene.defs[batch] : nullptr;
+        for (rm::UnitIndex slot = 0; slot < scene.store.slotCount(); ++slot) {
+            const rm::unitdef::UnitDef* def = scene.catalog.def(scene.store.typeAt(slot));
             if (def == nullptr || !rm::sim::isCommanderId(def->name)) {
                 continue;
             }
-            for (std::size_t u = 0; u < scene.instances[batch].size(); ++u) {
-                std::printf("  army %d commander: %.0f of %.0f hp\n",
-                            scene.motion[batch][u].armyIndex,
-                            static_cast<double>(scene.health[batch][u].current),
-                            static_cast<double>(scene.health[batch][u].maximum));
-            }
+            std::printf("  army %d commander: %.0f of %.0f hp\n",
+                        scene.store.motion()[slot].armyIndex,
+                        static_cast<double>(scene.store.health()[slot].current),
+                        static_cast<double>(scene.store.health()[slot].maximum));
         }
         if (scene.deathBlasts > 0 || !scene.wreckDecals.empty()) {
             std::printf("wreckage: %zu scorch mark(s), %zu death explosion(s) dealing"
@@ -3277,11 +3339,9 @@ namespace {
     state.armiesTotal = scene.armies.size();
     state.armiesLeft = rm::sim::survivorCount(scene.armies);
 
-    for (const std::vector<rm::sim::Health>& batch : scene.health) {
-        for (const rm::sim::Health& one : batch) {
-            if (one.alive()) {
-                ++state.unitsAlive;
-            }
+    for (const rm::sim::Health& one : scene.store.health()) {
+        if (one.alive()) {
+            ++state.unitsAlive;
         }
     }
 
@@ -3331,13 +3391,13 @@ void appendSceneIcons(std::vector<rm::Particle>& into, const UnitScene& scene,
                       const rm::OrbitCamera& camera) {
     const float elmosPerPoint = camera.elmosPerPoint(rm::kIconReferenceHeightPoints);
     std::vector<float> radii;
-    for (std::size_t batch = 0; batch < scene.instances.size(); ++batch) {
+    for (std::size_t batch = 0; batch < scene.drawScratch.size(); ++batch) {
         radii.clear();
-        radii.reserve(scene.motion[batch].size());
-        for (const rm::sim::MoveState& state : scene.motion[batch]) {
-            radii.push_back(state.radiusElmos);
+        radii.reserve(scene.drawSlotOf[batch].size());
+        for (const rm::UnitIndex slot : scene.drawSlotOf[batch]) {
+            radii.push_back(scene.store.motion()[slot].radiusElmos);
         }
-        (void)rm::appendUnitIcons(into, scene.instances[batch], radii, elmosPerPoint);
+        (void)rm::appendUnitIcons(into, scene.drawScratch[batch], radii, elmosPerPoint);
     }
 }
 
@@ -3345,13 +3405,16 @@ void appendSceneIcons(std::vector<rm::Particle>& into, const UnitScene& scene,
 ///
 /// What a right-click wants: an order aimed at an enemy has to be able to find one, and
 /// the selection pick deliberately cannot.
-[[nodiscard]] std::optional<rm::SelectionEntry> pickAnyBatch(const rm::Ray& ray,
-                                                             const UnitScene& scene) {
-    std::optional<rm::SelectionEntry> best;
+[[nodiscard]] std::optional<rm::sim::UnitId> pickAnyBatch(const rm::Ray& ray,
+                                                          const UnitScene& scene) {
+    std::optional<rm::sim::UnitId> best;
     float bestDistance = rm::kDefaultPickRadiusElmos;
 
-    for (std::size_t batch = 0; batch < scene.instances.size(); ++batch) {
-        const std::vector<rm::UnitInstance>& instances = scene.instances[batch];
+    // Against what is DRAWN, because that is what the ray can see — a dead unit is not in
+    // the gather and so cannot be clicked. The hit comes back as a (batch, index) pair and
+    // is turned into a handle, which is what everything downstream now speaks.
+    for (std::size_t batch = 0; batch < scene.drawScratch.size(); ++batch) {
+        const std::vector<rm::UnitInstance>& instances = scene.drawScratch[batch];
         const std::optional<std::size_t> hit = rm::pickUnit(ray, instances, bestDistance);
         if (!hit) {
             continue;
@@ -3359,14 +3422,14 @@ void appendSceneIcons(std::vector<rm::Particle>& into, const UnitScene& scene,
         const rm::UnitInstance& unit = instances[*hit];
         bestDistance = rm::distanceToRay(
             ray, simd_make_float3(unit.position[0], unit.position[1], unit.position[2]));
-        best = rm::SelectionEntry{.batch = batch, .instance = *hit};
+        best = scene.unitDrawnAt(batch, *hit);
     }
     return best;
 }
 
 /// Whether `army` may shoot what `entry` points at.
-[[nodiscard]] bool hostileTo(const UnitScene& scene, int army, const rm::SelectionEntry& entry) {
-    const int theirs = scene.armyOf(entry.batch, entry.instance);
+[[nodiscard]] bool hostileTo(const UnitScene& scene, int army, rm::sim::UnitId id) {
+    const int theirs = scene.armyOf(id.index);
     if (army == rm::sim::kNoArmy || theirs == rm::sim::kNoArmy) {
         return false;
     }
@@ -3389,13 +3452,13 @@ void appendSceneIcons(std::vector<rm::Particle>& into, const UnitScene& scene,
 /// held — one per model. Comparing its winners across batches is what makes the
 /// nearest unit on SCREEN win, rather than the nearest one in whichever model
 /// happened to load first.
-[[nodiscard]] std::optional<rm::SelectionEntry> pickAcrossBatches(const rm::Ray& ray,
-                                                                  const UnitScene& scene) {
-    std::optional<rm::SelectionEntry> best;
+[[nodiscard]] std::optional<rm::sim::UnitId> pickAcrossBatches(const rm::Ray& ray,
+                                                              const UnitScene& scene) {
+    std::optional<rm::sim::UnitId> best;
     float bestDistance = rm::kDefaultPickRadiusElmos;
 
-    for (std::size_t batch = 0; batch < scene.instances.size(); ++batch) {
-        const std::vector<rm::UnitInstance>& instances = scene.instances[batch];
+    for (std::size_t batch = 0; batch < scene.drawScratch.size(); ++batch) {
+        const std::vector<rm::UnitInstance>& instances = scene.drawScratch[batch];
         const std::optional<std::size_t> hit = rm::pickUnit(ray, instances, bestDistance);
         if (!hit) {
             continue;
@@ -3409,15 +3472,19 @@ void appendSceneIcons(std::vector<rm::Particle>& into, const UnitScene& scene,
         // looking behind it. Clicking an enemy selects nothing, because that is what
         // was clicked — the alternative reaches through the thing under the cursor to
         // grab something else, which is worse than a null answer.
+        const std::optional<rm::sim::UnitId> id = scene.unitDrawnAt(batch, *hit);
+        if (!id) {
+            continue;
+        }
         if (scene.playerArmy != rm::sim::kNoArmy
-            && scene.armyOf(batch, *hit) != scene.playerArmy) {
+            && scene.armyOf(id->index) != scene.playerArmy) {
             continue;
         }
 
         const rm::UnitInstance& unit = instances[*hit];
         bestDistance = rm::distanceToRay(
             ray, simd_make_float3(unit.position[0], unit.position[1], unit.position[2]));
-        best = rm::SelectionEntry{.batch = batch, .instance = *hit};
+        best = id;
     }
 
     return best;
@@ -3467,14 +3534,13 @@ int main(int argc, const char* argv[]) {
         // Tilt every unit onto its slope once, here, because the headless paths
         // never tick the sim: a screenshot of a scattered scene would otherwise
         // show every unit standing horizontally on its hillside.
-        for (std::size_t batch = 0; batch < units.instances.size(); ++batch) {
-            for (rm::UnitInstance& unit : units.instances[batch]) {
-                const std::array<float, 2> align = rm::sim::slopeAlignment(
-                    map->field, unit.position[0], unit.position[2], unit.rotationY);
-                unit.rotationX = align[0];
-                unit.rotationZ = align[1];
-            }
+        for (rm::UnitInstance& unit : units.store.instances()) {
+            const std::array<float, 2> align = rm::sim::slopeAlignment(
+                map->field, unit.position[0], unit.position[2], unit.rotationY);
+            unit.rotationX = align[0];
+            unit.rotationZ = align[1];
         }
+        units.gatherForDrawing();
 
         // Before anything is uploaded: setUnits seeds every ring slot from the
         // instances as they stand, so a marched scene is correct even on the
@@ -3645,13 +3711,14 @@ int main(int argc, const char* argv[]) {
                 const std::size_t rings = parseCount(argc, argv, "--select");
                 std::vector<rm::SelectionEntry> captured;
                 std::size_t made = 0;
-                for (std::size_t batch = 0; batch < units.instances.size() && made < rings;
+                for (std::size_t batch = 0; batch < units.drawScratch.size() && made < rings;
                      ++batch) {
-                    for (std::size_t i = 0; i < units.instances[batch].size() && made < rings;
+                    for (std::size_t i = 0; i < units.drawScratch[batch].size() && made < rings;
                          ++i, ++made) {
+                        const rm::UnitIndex slot = units.drawSlotOf[batch][i];
                         rm::appendSelectionRing(
-                            vertices, map->field, units.instances[batch][i].position,
-                            units.motion[batch][i].radiusElmos * kSelectionRingMargin,
+                            vertices, map->field, units.store.instances()[slot].position,
+                            units.store.motion()[slot].radiusElmos * kSelectionRingMargin,
                             kSelectionRingColour);
                         captured.push_back(rm::SelectionEntry{batch, i});
                     }
@@ -3771,7 +3838,11 @@ int main(int argc, const char* argv[]) {
         // Identity only — nothing about a selected unit is drawn differently, so
         // there is nothing per-unit to remember and put back. The rings are
         // rebuilt from this list every frame.
-        std::vector<rm::SelectionEntry> selected;
+        // Handles, not (batch, instance) pairs: a selection has to survive a unit dying
+        // and the gather renumbering what is drawn. Converted to `SelectionEntry` at draw
+        // time, which is the only place the pair means anything.
+        std::vector<rm::sim::UnitId> selected;
+        std::vector<rm::SelectionEntry> selectionScratch;
         rm::sim::TickClock clock;
 
         // The caller-side tick, the same one `march()` drives. Built here rather than in
@@ -3828,7 +3899,8 @@ int main(int argc, const char* argv[]) {
                 // themselves are not repainted, and the rings are rebuilt from
                 // this list by the frame callback.
                 const bool addToSet = mods.shift || mods.command || mods.control;
-                selected = rm::applyClick(selected, pickAcrossBatches(ray, units), addToSet);
+                selected = rm::applyClick<rm::sim::UnitId>(
+                    selected, pickAcrossBatches(ray, units), addToSet);
                 return;
             }
 
@@ -3846,13 +3918,12 @@ int main(int argc, const char* argv[]) {
             // difference between "attack move" and "attack that unit", and the next thing
             // here.
             std::optional<simd_float3> ground;
-            const std::optional<rm::SelectionEntry> hit = pickAnyBatch(ray, units);
+            const std::optional<rm::sim::UnitId> hit = pickAnyBatch(ray, units);
             const bool isAttack = hit && units.playerArmy != rm::sim::kNoArmy
                                && hostileTo(units, units.playerArmy, *hit);
 
             if (isAttack) {
-                const std::array<float, 3>& at =
-                    units.instances[hit->batch][hit->instance].position;
+                const std::array<float, 3>& at = units.store.instances()[hit->index].position;
                 ground = simd_make_float3(at[0], at[1], at[2]);
             } else {
                 ground = rm::pickGround(ray, map->field);
@@ -3871,16 +3942,20 @@ int main(int argc, const char* argv[]) {
             });
 
             std::size_t failed = 0;
-            for (const rm::SelectionEntry& sel : selected) {
+            for (const rm::sim::UnitId sel : selected) {
+                if (!units.store.alive(sel)) {
+                    continue;  // selected, then killed before the order was given
+                }
                 // Each unit routes on the map ITS limits see. Two units given
                 // the same order can legitimately get different answers, and
                 // one of them can be "no route" while the other walks off.
+                const auto type = static_cast<std::size_t>(units.store.typeAt(sel.index));
                 const rm::sim::PassabilityGrid& grid =
-                    passability.gridFor(units.maxSlopeDegrees[sel.batch],
-                                        units.maxWaterDepthElmos[sel.batch]);
-                if (!orderRouted(units.motion[sel.batch][sel.instance],
-                                 units.instances[sel.batch][sel.instance], grid,
-                                 ground->x, ground->z)) {
+                    passability.gridFor(units.maxSlopeDegrees[type],
+                                        units.maxWaterDepthElmos[type]);
+                if (!orderRouted(units.store.motion()[sel.index],
+                                 units.store.instances()[sel.index], grid, ground->x,
+                                 ground->z)) {
                     ++failed;
                 }
             }
@@ -3974,9 +4049,20 @@ int main(int argc, const char* argv[]) {
                 }
             }
 
+            // Paced from the store, then gathered: the sim wrote each unit's distance and
+            // the gather decides where it is drawn, so the phase has to be written before
+            // the copy or the GPU gets last frame's legs.
+            paceSceneAnimations(units);
+            units.gatherForDrawing();
+
             // Re-upload when the match built something new. Only on growth, which is a
             // handful of times in a whole match — this walks every model and texture, so
             // doing it per frame would cost what it costs to load the scene.
+            //
+            // AFTER the gather, and that ordering is load-bearing: `setUnits` sizes each
+            // batch's instance buffer from what its span holds, and a batch created this
+            // tick holds nothing until the gather fills it. Uploading first gives the new
+            // model a capacity of zero, and a unit type the player just built never draws.
             if (units.batches.size() != batchesBefore) {
                 for (std::size_t b = batchesBefore; b < units.batches.size(); ++b) {
                     units.batches[b].animationDrivenByInstance = true;
@@ -3984,11 +4070,8 @@ int main(int argc, const char* argv[]) {
                 window.setUnits(units.textures.all(), units.batches);
             }
 
-            for (std::size_t batch = 0; batch < units.instances.size(); ++batch) {
-                const rm::sca::Animation* animation = units.batches[batch].animation;
-                paceAnimationByDistance(units.instances[batch], units.motion[batch],
-                                        animation != nullptr ? animation->duration : 0.0f);
-                window.setInstances(batch, units.instances[batch]);
+            for (std::size_t batch = 0; batch < units.drawScratch.size(); ++batch) {
+                window.setInstances(batch, units.drawScratch[batch]);
             }
 
             // Dust behind whatever is moving. After the sim, so a puff is born
@@ -3999,15 +4082,17 @@ int main(int argc, const char* argv[]) {
             // being jostled by a crowd is moving in position but not in speed, and
             // should not smoke.
             dustEmitters.clear();
-            for (std::size_t batch = 0; batch < units.instances.size(); ++batch) {
-                for (std::size_t i = 0; i < units.instances[batch].size(); ++i) {
-                    dustEmitters.push_back(rm::DustEmitter{
-                        .position = units.instances[batch][i].position,
-                        .moving = units.motion[batch][i].moving,
-                        .topSpeedElmosPerSecond = units.motion[batch][i].speedElmosPerSecond,
-                        .radiusElmos = units.motion[batch][i].radiusElmos,
-                    });
+            for (rm::UnitIndex slot = 0; slot < units.store.slotCount(); ++slot) {
+                if (!units.store.slotAlive(slot)) {
+                    continue;  // a wreck does not kick up dust
                 }
+                const rm::sim::MoveState& motion = units.store.motion()[slot];
+                dustEmitters.push_back(rm::DustEmitter{
+                    .position = units.store.instances()[slot].position,
+                    .moving = motion.moving,
+                    .topSpeedElmosPerSecond = motion.speedElmosPerSecond,
+                    .radiusElmos = motion.radiusElmos,
+                });
             }
             rm::advanceParticles(particles, elapsed);
             rm::emitDust(particles, dustEmitters, map->field, elapsed, dustDebt, dustSeed);
@@ -4043,11 +4128,16 @@ int main(int argc, const char* argv[]) {
             // scorch rather than under it. They are copied in rather than rebuilt: a wreck
             // is permanent and there is nothing to recompute.
             decalVertices.assign(units.wreckDecals.begin(), units.wreckDecals.end());
-            for (const rm::SelectionEntry& sel : selected) {
-                const rm::UnitInstance& instance = units.instances[sel.batch][sel.instance];
-                const float radius = units.motion[sel.batch][sel.instance].radiusElmos;
-                rm::appendSelectionRing(decalVertices, map->field, instance.position,
-                                        radius * kSelectionRingMargin, kSelectionRingColour);
+            // Dead selections draw nothing rather than being pruned here: a frame is not
+            // where a selection changes, and a ring under a wreck is the bug this avoids.
+            for (const rm::sim::UnitId sel : selected) {
+                if (!units.store.alive(sel)) {
+                    continue;
+                }
+                rm::appendSelectionRing(
+                    decalVertices, map->field, units.store.instances()[sel.index].position,
+                    units.store.motion()[sel.index].radiusElmos * kSelectionRingMargin,
+                    kSelectionRingColour);
             }
 
             // ...and a marker wherever an order was given recently. Aged by the
@@ -4069,7 +4159,16 @@ int main(int argc, const char* argv[]) {
             window.setGroundDecals(decalVertices);
             // ...and an outline around each selected unit, which is what a ring
             // cannot do at a low camera angle where the units hide their own rings.
-            window.setSelection(selected);
+            // The renderer wants (batch, instance) — where the unit ended up in THIS frame's
+            // gather. That is a projection of the selection, not the selection itself, which
+            // is why it is built here and not stored.
+            selectionScratch.clear();
+            for (const rm::sim::UnitId sel : selected) {
+                if (const std::optional<rm::SelectionEntry> where = units.drawnAt(sel)) {
+                    selectionScratch.push_back(*where);
+                }
+            }
+            window.setSelection(selectionScratch);
         });
 
         window.show();

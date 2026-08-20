@@ -648,32 +648,29 @@ TEST_CASE("a unit standing still is still tilted onto its slope") {
 }
 
 TEST_CASE("collision sees units of different models") {
-    // Each model's instances live in their own array, and for three milestones
-    // the separation pass ran once per array — so two units of DIFFERENT models
-    // could stand in exactly the same spot and neither would notice.
+    // History: each model's instances lived in their own array, and for three
+    // milestones the separation pass ran once per array — so two units of DIFFERENT
+    // models could stand in exactly the same spot and neither would notice. Then the
+    // pass took a list of arrays. Now there is ONE array for the whole match, so the
+    // bug is gone by construction and this case only proves the construction: a tank
+    // and a bot are two slots of the same span and cannot be missed by an inner loop
+    // that never restarts.
     const HeightField field = flatField();
 
-    std::vector<UnitInstance> tanks{unitAt(400.0f, 400.0f)};
-    std::vector<UnitInstance> bots{unitAt(400.0f, 400.0f)};
-    std::vector<MoveState> tankMotion(1);
-    std::vector<MoveState> botMotion(1);
-
-    const std::array<rm::sim::CollisionGroup, 2> groups{{
-        {tanks, tankMotion},
-        {bots, botMotion},
-    }};
+    std::vector<UnitInstance> units{unitAt(400.0f, 400.0f), unitAt(400.0f, 400.0f)};
+    std::vector<MoveState> motion(2);
 
     for (int i = 0; i < 20; ++i) {
-        rm::sim::resolveCollisions(groups, field);
+        rm::sim::resolveCollisions(units, motion, field);
     }
 
-    const float apart = std::hypot(tanks[0].position[0] - bots[0].position[0],
-                                   tanks[0].position[2] - bots[0].position[2]);
-    CHECK(apart >= Approx(tankMotion[0].radiusElmos + botMotion[0].radiusElmos).epsilon(0.05));
+    const float apart = std::hypot(units[0].position[0] - units[1].position[0],
+                                   units[0].position[2] - units[1].position[2]);
+    CHECK(apart >= Approx(motion[0].radiusElmos + motion[1].radiusElmos).epsilon(0.05));
 }
 
-TEST_CASE("a group's own units still separate from each other") {
-    // The multi-group form must not lose what the single-group one did.
+TEST_CASE("a crowd of one model still separates from itself") {
+    // The flat form must not lose what the grouped one did.
     const HeightField field = flatField();
 
     std::vector<UnitInstance> crowd;
@@ -681,10 +678,9 @@ TEST_CASE("a group's own units still separate from each other") {
         crowd.push_back(unitAt(400.0f, 400.0f));
     }
     std::vector<MoveState> motion(crowd.size());
-    const std::array<rm::sim::CollisionGroup, 1> groups{{{crowd, motion}}};
 
     for (int i = 0; i < 80; ++i) {
-        rm::sim::resolveCollisions(groups, field);
+        rm::sim::resolveCollisions(crowd, motion, field);
     }
 
     for (std::size_t a = 0; a < crowd.size(); ++a) {
@@ -696,14 +692,14 @@ TEST_CASE("a group's own units still separate from each other") {
     }
 }
 
-TEST_CASE("an empty or single-unit group set is harmless") {
+TEST_CASE("an empty or single-unit store is harmless") {
     const HeightField field = flatField();
 
-    CHECK_NOTHROW(rm::sim::resolveCollisions(std::span<const rm::sim::CollisionGroup>{}, field));
+    CHECK_NOTHROW(rm::sim::resolveCollisions(std::span<UnitInstance>{},
+                                             std::span<const MoveState>{}, field));
 
     std::vector<UnitInstance> one{unitAt(100.0f, 100.0f)};
     std::vector<MoveState> motion(1);
-    const std::array<rm::sim::CollisionGroup, 1> groups{{{one, motion}}};
-    rm::sim::resolveCollisions(groups, field);
+    rm::sim::resolveCollisions(one, motion, field);
     CHECK(one[0].position[0] == Approx(100.0f));
 }

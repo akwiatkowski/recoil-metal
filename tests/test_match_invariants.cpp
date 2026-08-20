@@ -5,10 +5,14 @@
 #include "core/sim/Skirmish.hpp"
 #include "core/unit/UnitDef.hpp"
 
+#include "support/TestRoster.hpp"
+
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <cstdint>
 #include <set>
+#include <utility>
 #include <vector>
 
 // Properties a match must have however its units are STORED.
@@ -28,10 +32,14 @@
 // lets health go negative breaks one immediately.
 //
 // Written before P1.4 rather than after, because a net built after the fall is a post-mortem.
+// It caught the migration in the shape it was built for: the assertions below now run against
+// a flat `UnitStore`, and the only edits were to how a unit is NAMED — a handle instead of a
+// (batch, instance) pair. Nothing about what a correct match does had to move.
 
 using rm::sim::Army;
 using rm::sim::Health;
-using rm::sim::SkirmishGroup;
+using rm::sim::UnitId;
+using rm::test::Roster;
 using rm::unitdef::UnitDef;
 using rm::unitdef::Weapon;
 using rm::unitdef::WeaponRole;
@@ -60,40 +68,9 @@ namespace {
     return weapon;
 }
 
-/// One batch's storage. Held by the caller because a SkirmishGroup is spans into it — the
-/// shape that P1.4 replaces, which is exactly why the assertions below must not depend on it.
-struct Batch {
-    std::vector<rm::UnitInstance> instances;
-    std::vector<rm::sim::MoveState> motion;
-    std::vector<Health> health;
-    UnitDef def;
-
-    void add(float x, float z, int army, float hp) {
-        rm::UnitInstance instance{};
-        instance.position = {x, 0.0f, z};
-        instance.scale = 1.0f;
-        instances.push_back(instance);
-
-        rm::sim::MoveState state;
-        state.armyIndex = army;
-        state.radiusElmos = 4.0f;
-        motion.push_back(state);
-
-        health.push_back(Health{.current = hp,
-                                .maximum = hp,
-                                .reloadRemaining = std::vector<int>(def.weapons.size(), 0)});
-    }
-
-    [[nodiscard]] SkirmishGroup group() {
-        return SkirmishGroup{
-            .instances = instances, .motion = motion, .health = health, .def = &def};
-    }
-};
-
 /// A fight that actually resolves: two armies of gunners inside each other's range.
 struct Fight {
-    Batch red;
-    Batch blue;
+    Roster roster;
     std::vector<Army> armies = rm::sim::freeForAll(2);
     std::vector<rm::sim::Projectile> projectiles;
     std::vector<rm::sim::Construction> building;
@@ -101,21 +78,33 @@ struct Fight {
     std::vector<int> commandersEver;
 
     Fight() {
-        red.def.name = "red_gun";
-        red.def.weapons.push_back(turretedGun(40.0f, 300.0f));
-        blue.def.name = "blue_gun";
-        blue.def.weapons.push_back(turretedGun(40.0f, 300.0f));
+        UnitDef redDef;
+        redDef.name = "red_gun";
+        redDef.weapons.push_back(turretedGun(40.0f, 300.0f));
+        UnitDef blueDef;
+        blueDef.name = "blue_gun";
+        blueDef.weapons.push_back(turretedGun(40.0f, 300.0f));
 
+        const rm::UnitTypeIndex red = roster.addType(redDef);
+        const rm::UnitTypeIndex blue = roster.addType(blueDef);
+
+        // INTERLEAVED on purpose. Two batches put all five reds before all five blues; one
+        // flat store spawns them alternately, so slot order is neither side's order. Any
+        // assertion below that quietly depended on the old grouping would have broken here.
         for (int i = 0; i < 5; ++i) {
-            red.add(0.0f, static_cast<float>(i) * 30.0f, 0, 300.0f);
-            blue.add(200.0f, static_cast<float>(i) * 30.0f, 1, 300.0f);
+            (void)roster.add(red, 0.0f, static_cast<float>(i) * 30.0f, 0, 300.0f);
+            (void)roster.add(blue, 200.0f, static_cast<float>(i) * 30.0f, 1, 300.0f);
         }
 
         economies.assign(2, rm::sim::Economy{});
         commandersEver.assign(2, 0);  // no commanders: the win condition sits out
     }
 
-    [[nodiscard]] std::vector<SkirmishGroup> groups() { return {red.group(), blue.group()}; }
+    /// One tick, which is now one call: there is nothing to rebuild between ticks.
+    rm::sim::TickReport tick(const rm::HeightField& field) {
+        rm::sim::Match m = match();
+        return rm::sim::tickSkirmish(roster.store, roster.catalog, m, field);
+    }
 
     [[nodiscard]] rm::sim::Match match() {
         return rm::sim::Match{
@@ -128,24 +117,19 @@ struct Fight {
     }
 };
 
-/// Every (batch, instance) pair in a set of groups, as a flat list of health values — used
-/// to state totals without naming where a unit lives.
-[[nodiscard]] float totalHealth(const std::vector<SkirmishGroup>& groups) {
+/// Every unit's health, summed — a total stated without naming where any unit lives.
+[[nodiscard]] float totalHealth(const rm::sim::UnitStore& store) {
     float total = 0.0f;
-    for (const SkirmishGroup& group : groups) {
-        for (const Health& h : group.health) {
-            total += h.current;
-        }
+    for (const Health& h : store.health()) {
+        total += h.current;
     }
     return total;
 }
 
-[[nodiscard]] std::size_t livingUnits(const std::vector<SkirmishGroup>& groups) {
+[[nodiscard]] std::size_t livingUnits(const rm::sim::UnitStore& store) {
     std::size_t alive = 0;
-    for (const SkirmishGroup& group : groups) {
-        for (const Health& h : group.health) {
-            alive += h.alive() ? 1u : 0u;
-        }
+    for (const Health& h : store.health()) {
+        alive += h.alive() ? 1u : 0u;
     }
     return alive;
 }
@@ -160,15 +144,11 @@ TEST_CASE("health stays within its bounds for every unit, every tick") {
     Fight fight;
 
     for (int tick = 0; tick < 200; ++tick) {
-        std::vector<SkirmishGroup> groups = fight.groups();
-        rm::sim::Match match = fight.match();
-        (void)rm::sim::tickSkirmish(groups, match, field);
+        (void)fight.tick(field);
 
-        for (const SkirmishGroup& group : groups) {
-            for (const Health& h : group.health) {
-                REQUIRE(h.current >= 0.0f);
-                REQUIRE(h.current <= h.maximum);
-            }
+        for (const Health& h : fight.roster.store.health()) {
+            REQUIRE(h.current >= 0.0f);
+            REQUIRE(h.current <= h.maximum);
         }
     }
 }
@@ -178,21 +158,21 @@ TEST_CASE("the dead stay dead") {
     // or an index crossed puts health back into a unit that had none.
     const rm::HeightField field = flatField();
     Fight fight;
-    std::set<std::pair<std::size_t, std::size_t>> everDead;
+    std::set<rm::UnitIndex> everDead;
 
     for (int tick = 0; tick < 300; ++tick) {
-        std::vector<SkirmishGroup> groups = fight.groups();
-        rm::sim::Match match = fight.match();
-        (void)rm::sim::tickSkirmish(groups, match, field);
+        (void)fight.tick(field);
 
-        for (std::size_t g = 0; g < groups.size(); ++g) {
-            for (std::size_t i = 0; i < groups[g].health.size(); ++i) {
-                const bool alive = groups[g].health[i].alive();
-                if (!alive) {
-                    everDead.insert({g, i});
-                } else {
-                    REQUIRE_FALSE(everDead.contains({g, i}));
-                }
+        const rm::sim::UnitStore& store = fight.roster.store;
+        for (rm::UnitIndex slot = 0; slot < store.slotCount(); ++slot) {
+            if (!store.health()[slot].alive()) {
+                everDead.insert(slot);
+                // The STORE must agree, which the health value alone could not say: a
+                // slot whose health hit zero and whose handle is still live would be a
+                // unit the passes keep working on.
+                REQUIRE_FALSE(store.slotAlive(slot));
+            } else {
+                REQUIRE_FALSE(everDead.contains(slot));
             }
         }
     }
@@ -204,20 +184,22 @@ TEST_CASE("a death is reported exactly once, ever") {
     // scorches the same ground twice — and a corpse reported never leaves none at all.
     const rm::HeightField field = flatField();
     Fight fight;
-    std::set<std::pair<std::size_t, std::size_t>> reported;
+    // Keyed by the whole HANDLE, not by the slot. Two reports of one corpse carry the same
+    // handle, so the set catches them; two different units that happen to share a recycled
+    // slot carry different generations, so the set does not accuse them of it. A slot-keyed
+    // set would be wrong in a match long enough to reuse one.
+    std::set<std::pair<rm::UnitIndex, rm::Generation>> reported;
 
     for (int tick = 0; tick < 300; ++tick) {
-        std::vector<SkirmishGroup> groups = fight.groups();
-        rm::sim::Match match = fight.match();
-        const rm::sim::TickReport report = rm::sim::tickSkirmish(groups, match, field);
+        const rm::sim::TickReport report = fight.tick(field);
 
         for (const rm::sim::Death& death : report.died) {
-            const auto key = std::pair{death.ref.batch, death.ref.instance};
+            const auto key = std::pair{death.ref.index, death.ref.generation};
             REQUIRE(reported.insert(key).second);  // never seen before
         }
     }
 
-    REQUIRE(reported.size() == 10 - livingUnits(fight.groups()));
+    REQUIRE(reported.size() == 10 - livingUnits(fight.roster.store));
 }
 
 TEST_CASE("a reported death carries the radius it had while alive") {
@@ -229,9 +211,7 @@ TEST_CASE("a reported death carries the radius it had while alive") {
     bool sawADeath = false;
 
     for (int tick = 0; tick < 300; ++tick) {
-        std::vector<SkirmishGroup> groups = fight.groups();
-        rm::sim::Match match = fight.match();
-        const rm::sim::TickReport report = rm::sim::tickSkirmish(groups, match, field);
+        const rm::sim::TickReport report = fight.tick(field);
         for (const rm::sim::Death& death : report.died) {
             sawADeath = true;
             REQUIRE(death.radiusElmos > 0.0f);
@@ -247,15 +227,12 @@ TEST_CASE("a corpse stops shoving the living") {
     Fight fight;
 
     for (int tick = 0; tick < 300; ++tick) {
-        std::vector<SkirmishGroup> groups = fight.groups();
-        rm::sim::Match match = fight.match();
-        (void)rm::sim::tickSkirmish(groups, match, field);
+        (void)fight.tick(field);
 
-        for (const SkirmishGroup& group : groups) {
-            for (std::size_t i = 0; i < group.health.size(); ++i) {
-                if (!group.health[i].alive()) {
-                    REQUIRE(group.motion[i].radiusElmos == 0.0f);
-                }
+        const rm::sim::UnitStore& store = fight.roster.store;
+        for (rm::UnitIndex slot = 0; slot < store.slotCount(); ++slot) {
+            if (!store.health()[slot].alive()) {
+                REQUIRE(store.motion()[slot].radiusElmos == 0.0f);
             }
         }
     }
@@ -266,14 +243,12 @@ TEST_CASE("total health only ever falls") {
     // stale copy of health and wrote it back would show up here as a rise.
     const rm::HeightField field = flatField();
     Fight fight;
-    float previous = totalHealth(fight.groups());
+    float previous = totalHealth(fight.roster.store);
 
     for (int tick = 0; tick < 200; ++tick) {
-        std::vector<SkirmishGroup> groups = fight.groups();
-        rm::sim::Match match = fight.match();
-        (void)rm::sim::tickSkirmish(groups, match, field);
+        (void)fight.tick(field);
 
-        const float now = totalHealth(groups);
+        const float now = totalHealth(fight.roster.store);
         REQUIRE(now <= previous);
         previous = now;
     }
@@ -289,9 +264,7 @@ TEST_CASE("projectiles do not leak") {
     std::size_t highWater = 0;
 
     for (int tick = 0; tick < 400; ++tick) {
-        std::vector<SkirmishGroup> groups = fight.groups();
-        rm::sim::Match match = fight.match();
-        (void)rm::sim::tickSkirmish(groups, match, field);
+        (void)fight.tick(field);
         highWater = std::max(highWater, fight.projectiles.size());
     }
 
@@ -301,9 +274,7 @@ TEST_CASE("projectiles do not leak") {
 
     // And once the fight is over, the sky clears.
     for (int tick = 0; tick < 400; ++tick) {
-        std::vector<SkirmishGroup> groups = fight.groups();
-        rm::sim::Match match = fight.match();
-        (void)rm::sim::tickSkirmish(groups, match, field);
+        (void)fight.tick(field);
     }
     REQUIRE(fight.projectiles.empty());
 }
@@ -316,15 +287,12 @@ TEST_CASE("shots fired are only ever attributed to a live shooter") {
 
     std::size_t totalShots = 0;
     for (int tick = 0; tick < 300; ++tick) {
-        std::vector<SkirmishGroup> groups = fight.groups();
-        rm::sim::Match match = fight.match();
-        const rm::sim::TickReport report = rm::sim::tickSkirmish(groups, match, field);
+        const rm::sim::TickReport report = fight.tick(field);
         totalShots += report.shotsFired;
 
-        if (livingUnits(groups) == 0) {
+        if (livingUnits(fight.roster.store) == 0) {
             // Nobody left: no further shot may be attributed to anyone.
-            const rm::sim::TickReport after = rm::sim::tickSkirmish(groups, match, field);
-            REQUIRE(after.shotsFired == 0);
+            REQUIRE(fight.tick(field).shotsFired == 0);
             break;
         }
     }
@@ -340,9 +308,9 @@ TEST_CASE("the match is decided at most once") {
 
     int endings = 0;
     for (int tick = 0; tick < 400; ++tick) {
-        std::vector<SkirmishGroup> groups = fight.groups();
         rm::sim::Match match = fight.match();
-        const rm::sim::TickReport report = rm::sim::tickSkirmish(groups, match, field);
+        const rm::sim::TickReport report =
+            rm::sim::tickSkirmish(fight.roster.store, fight.roster.catalog, match, field);
         if (report.matchEnded) {
             ++endings;
         }
@@ -360,9 +328,7 @@ TEST_CASE("a defeated army stays defeated") {
 
     std::vector<bool> everDefeated(2, false);
     for (int tick = 0; tick < 400; ++tick) {
-        std::vector<SkirmishGroup> groups = fight.groups();
-        rm::sim::Match match = fight.match();
-        (void)rm::sim::tickSkirmish(groups, match, field);
+        (void)fight.tick(field);
 
         for (const Army& army : fight.armies) {
             const auto i = static_cast<std::size_t>(army.index);
@@ -383,10 +349,9 @@ TEST_CASE("an economy never banks more than it can store, nor funds more than it
     }
 
     for (int tick = 0; tick < 300; ++tick) {
-        std::vector<SkirmishGroup> groups = fight.groups();
         rm::sim::Match match = fight.match();
         match.baseStorage = rm::sim::Resources{.mass = 650.0f, .energy = 5000.0f};
-        (void)rm::sim::tickSkirmish(groups, match, field);
+        (void)rm::sim::tickSkirmish(fight.roster.store, fight.roster.catalog, match, field);
 
         for (const rm::sim::Economy& economy : fight.economies) {
             REQUIRE(economy.stored.mass >= 0.0f);
@@ -408,7 +373,8 @@ TEST_CASE("a match with nobody in it does nothing, rather than deciding somethin
     std::vector<rm::sim::Economy> noEconomies;
     std::vector<int> noCommanders;
     std::vector<rm::sim::Projectile> noShots;
-    std::vector<SkirmishGroup> noGroups;
+    rm::sim::UnitStore noUnits;
+    const rm::sim::UnitCatalog noTypes;
 
     rm::sim::Match match{
         .armies = none,
@@ -418,7 +384,8 @@ TEST_CASE("a match with nobody in it does nothing, rather than deciding somethin
         .commandersEver = noCommanders,
     };
 
-    const rm::sim::TickReport report = rm::sim::tickSkirmish(noGroups, match, field);
+    const rm::sim::TickReport report =
+        rm::sim::tickSkirmish(noUnits, noTypes, match, field);
     REQUIRE(report.died.empty());
     REQUIRE(report.shotsFired == 0);
     REQUIRE(report.finished.empty());

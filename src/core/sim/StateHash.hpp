@@ -2,6 +2,7 @@
 
 #include "core/Types.hpp"
 #include "core/sim/Skirmish.hpp"
+#include "core/sim/UnitStore.hpp"
 
 #include <span>
 
@@ -46,6 +47,14 @@ namespace rm::sim {
 /// Order-sensitive, because the order IS state — two units swapping slots is a different
 /// match, and a sim that reordered them would be a sim whose behaviour depends on
 /// iteration order, which is the thing determinism forbids.
-[[nodiscard]] StateHash hashMatch(std::span<const SkirmishGroup> groups, const Match& match);
+///
+/// The per-slot GENERATION and LIVENESS are hashed too, which the batch-based version had no
+/// equivalent of. The generation catches a divergence in who occupies a slot even when the
+/// values happen to coincide: two runs that spawned and killed in a different order reach
+/// different generations, and that is a real difference in what happened. Liveness is fed
+/// separately because the generation cannot express it — death is a tombstone that leaves
+/// both the arrays and the generation mirror alone (`UnitStore::kill`), so a unit killed at
+/// full health would otherwise be invisible here.
+[[nodiscard]] StateHash hashMatch(const UnitStore& store, const Match& match);
 
 } // namespace rm::sim

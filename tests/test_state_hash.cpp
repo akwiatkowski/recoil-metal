@@ -2,11 +2,14 @@
 
 #include "core/map/HeightField.hpp"
 #include "core/sim/Skirmish.hpp"
+#include "core/sim/UnitCatalog.hpp"
+#include "core/sim/UnitStore.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
 #include <cmath>
 #include <cstdint>
+#include <span>
 #include <utility>
 #include <vector>
 
@@ -27,10 +30,13 @@ namespace {
 }
 
 // The smallest thing that is a match: one unit, one army, one economy.
+//
+// The unit lives in a `UnitStore` rather than in three parallel vectors, which is what the
+// sim now takes. The three accessors below are spans INTO the store, so a test can still
+// reach in and change one field — the point of most of these cases.
 struct Fixture {
-    std::vector<rm::UnitInstance> instances;
-    std::vector<rm::sim::MoveState> motion;
-    std::vector<rm::sim::Health> health;
+    rm::sim::UnitStore store;
+    rm::sim::UnitCatalog catalog;
     std::vector<rm::sim::Army> armies;
     std::vector<rm::sim::Economy> economies;
     std::vector<rm::sim::Projectile> projectiles;
@@ -38,20 +44,23 @@ struct Fixture {
     std::vector<int> commandersEver;
 
     Fixture() {
-        instances.push_back(rm::UnitInstance{.position = {100.0f, 0.0f, 100.0f},
-                                             .rotationY = 0.0f,
-                                             .scale = 1.0f});
-        motion.push_back(rm::sim::MoveState{.armyIndex = 0});
-        health.push_back(rm::sim::Health{.current = 500.0f, .maximum = 500.0f});
+        // One type, no definition: none of these cases fire a weapon or earn anything, and
+        // "registered without a def" is a case the catalog has to carry anyway.
+        const rm::UnitTypeIndex type = catalog.add(nullptr);
+        (void)store.spawn({
+            .type = type,
+            .instance = {.position = {100.0f, 0.0f, 100.0f}, .rotationY = 0.0f, .scale = 1.0f},
+            .motion = {.armyIndex = 0},
+            .health = {.current = 500.0f, .maximum = 500.0f},
+        });
         armies = rm::sim::freeForAll(1);
         economies.assign(1, rm::sim::Economy{});
         commandersEver.assign(1, 1);
     }
 
-    [[nodiscard]] std::vector<rm::sim::SkirmishGroup> groups() {
-        return {rm::sim::SkirmishGroup{
-            .instances = instances, .motion = motion, .health = health, .def = nullptr}};
-    }
+    [[nodiscard]] std::span<rm::UnitInstance> instances() { return store.instances(); }
+    [[nodiscard]] std::span<rm::sim::MoveState> motion() { return store.motion(); }
+    [[nodiscard]] std::span<rm::sim::Health> health() { return store.health(); }
 
     [[nodiscard]] rm::sim::Match match() {
         return rm::sim::Match{
@@ -64,9 +73,8 @@ struct Fixture {
     }
 
     [[nodiscard]] rm::StateHash hash() {
-        std::vector<rm::sim::SkirmishGroup> g = groups();
         rm::sim::Match m = match();
-        return hashMatch(g, m);
+        return hashMatch(store, m);
     }
 };
 
@@ -86,7 +94,7 @@ TEST_CASE("the same state hashes the same, twice running") {
 TEST_CASE("one unit moving one step changes the hash") {
     Fixture a;
     const rm::StateHash before = a.hash();
-    a.instances[0].position[0] += 1.0f;
+    a.instances()[0].position[0] += 1.0f;
     REQUIRE(a.hash() != before);
 }
 
@@ -96,7 +104,7 @@ TEST_CASE("a change too small to see is still a divergence") {
     // 100,000 is the entire value of the exercise.
     Fixture a;
     const rm::StateHash before = a.hash();
-    a.instances[0].position[2] = std::nextafter(a.instances[0].position[2], 1e9f);
+    a.instances()[0].position[2] = std::nextafter(a.instances()[0].position[2], 1e9f);
     REQUIRE(a.hash() != before);
 }
 
@@ -107,10 +115,10 @@ TEST_CASE("presentation is not state") {
     Fixture a;
     const rm::StateHash before = a.hash();
 
-    a.instances[0].animationPhase = 0.75f;
+    a.instances()[0].animationPhase = 0.75f;
     REQUIRE(a.hash() == before);
 
-    a.instances[0].teamColour = rm::kTeamColours[3];
+    a.instances()[0].teamColour = rm::kTeamColours[3];
     REQUIRE(a.hash() == before);
 }
 
@@ -122,45 +130,45 @@ TEST_CASE("every field the sim owns reaches the hash") {
     SECTION("orientation") {
         Fixture a;
         const rm::StateHash before = a.hash();
-        a.instances[0].rotationY += 0.1f;
+        a.instances()[0].rotationY += 0.1f;
         REQUIRE(a.hash() != before);
     }
     SECTION("slope alignment") {
         Fixture a;
         const rm::StateHash before = a.hash();
-        a.instances[0].rotationX += 0.1f;
+        a.instances()[0].rotationX += 0.1f;
         REQUIRE(a.hash() != before);
     }
     SECTION("health") {
         Fixture a;
         const rm::StateHash before = a.hash();
-        a.health[0].current -= 1.0f;
+        a.health()[0].current -= 1.0f;
         REQUIRE(a.hash() != before);
     }
     SECTION("reload") {
         Fixture a;
         const rm::StateHash before = a.hash();
-        a.health[0].reloadRemaining.push_back(3);
+        a.health()[0].reloadRemaining.push_back(3);
         REQUIRE(a.hash() != before);
     }
     SECTION("motion order") {
         Fixture a;
         const rm::StateHash before = a.hash();
-        a.motion[0].moving = true;
+        a.motion()[0].moving = true;
         REQUIRE(a.hash() != before);
     }
     SECTION("route") {
         Fixture a;
         const rm::StateHash before = a.hash();
-        a.motion[0].path.push_back({10.0f, 20.0f});
+        a.motion()[0].path.push_back({10.0f, 20.0f});
         REQUIRE(a.hash() != before);
     }
     SECTION("how far along the route") {
         Fixture a;
-        a.motion[0].path.push_back({10.0f, 20.0f});
-        a.motion[0].path.push_back({30.0f, 40.0f});
+        a.motion()[0].path.push_back({10.0f, 20.0f});
+        a.motion()[0].path.push_back({30.0f, 40.0f});
         const rm::StateHash before = a.hash();
-        a.motion[0].pathIndex = 1;
+        a.motion()[0].pathIndex = 1;
         REQUIRE(a.hash() != before);
     }
     SECTION("defeat") {
@@ -197,32 +205,37 @@ TEST_CASE("every field the sim owns reaches the hash") {
 }
 
 TEST_CASE("losing a unit changes the hash even though the survivors match") {
-    // Counts are fed alongside contents for exactly this: a hash built only from the units
-    // present would agree about a match that had lost one.
+    // Death is a TOMBSTONE: the slot stays and keeps its last values, so a hash built from
+    // the arrays alone would say nothing happened. What separates the two states is the
+    // slot's GENERATION, which `release` bumps — which is why it is hashed.
     Fixture a;
-    a.instances.push_back(a.instances[0]);
-    a.motion.push_back(a.motion[0]);
-    a.health.push_back(a.health[0]);
-    const rm::StateHash two = a.hash();
+    const rm::sim::UnitId second = a.store.spawn({
+        .type = 0,
+        .instance = {.position = {100.0f, 0.0f, 100.0f}, .rotationY = 0.0f, .scale = 1.0f},
+        .motion = {.armyIndex = 0},
+        .health = {.current = 500.0f, .maximum = 500.0f},
+    });
+    const rm::StateHash both = a.hash();
 
-    a.instances.pop_back();
-    a.motion.pop_back();
-    a.health.pop_back();
-    REQUIRE(a.hash() != two);
+    a.store.kill(second);
+    REQUIRE(a.store.liveCount() == 1);
+    REQUIRE(a.store.slotCount() == 2);  // nothing was erased
+    REQUIRE(a.hash() != both);
 }
 
 TEST_CASE("two units swapping places is a different match") {
     // Order IS state. A sim whose behaviour did not depend on iteration order would be a
     // sim we could not write a replay for.
     Fixture a;
-    a.instances.push_back(rm::UnitInstance{.position = {200.0f, 0.0f, 200.0f},
-                                           .rotationY = 0.0f,
-                                           .scale = 1.0f});
-    a.motion.push_back(rm::sim::MoveState{.armyIndex = 0});
-    a.health.push_back(rm::sim::Health{.current = 500.0f, .maximum = 500.0f});
+    (void)a.store.spawn({
+        .type = 0,
+        .instance = {.position = {200.0f, 0.0f, 200.0f}, .rotationY = 0.0f, .scale = 1.0f},
+        .motion = {.armyIndex = 0},
+        .health = {.current = 500.0f, .maximum = 500.0f},
+    });
     const rm::StateHash before = a.hash();
 
-    std::swap(a.instances[0], a.instances[1]);
+    std::swap(a.instances()[0], a.instances()[1]);
     REQUIRE(a.hash() != before);
 }
 
@@ -230,23 +243,20 @@ TEST_CASE("no list and an empty list hash differently") {
     // A decorative crowd has no projectile list at all; a match between two ticks of combat
     // has an empty one. Those are different situations and must not collide.
     Fixture a;
-    std::vector<rm::sim::SkirmishGroup> g = a.groups();
-
     rm::sim::Match withList = a.match();
     rm::sim::Match without = a.match();
     without.projectiles = nullptr;
 
-    REQUIRE(hashMatch(g, withList) != hashMatch(g, without));
+    REQUIRE(hashMatch(a.store, withList) != hashMatch(a.store, without));
 }
 
 TEST_CASE("a decided match hashes differently from one still being played") {
     Fixture a;
-    std::vector<rm::sim::SkirmishGroup> g = a.groups();
     rm::sim::Match running = a.match();
     rm::sim::Match decided = a.match();
     decided.over = true;
 
-    REQUIRE(hashMatch(g, running) != hashMatch(g, decided));
+    REQUIRE(hashMatch(a.store, running) != hashMatch(a.store, decided));
 }
 
 TEST_CASE("negative zero is not a divergence") {
@@ -255,7 +265,7 @@ TEST_CASE("negative zero is not a divergence") {
     // would be a false positive on a value that compares equal.
     Fixture a;
     const rm::StateHash positive = a.hash();
-    a.instances[0].position[1] = -0.0f;
+    a.instances()[0].position[1] = -0.0f;
     REQUIRE(a.hash() == positive);
 }
 
@@ -266,26 +276,26 @@ TEST_CASE("a real tick moves the hash, and the same tick moves it the same way")
 
     Fixture a;
     Fixture b;
-    a.motion[0].moving = true;
-    a.motion[0].destinationX = 400.0f;
-    a.motion[0].destinationZ = 100.0f;
-    b.motion[0] = a.motion[0];
+    a.motion()[0].moving = true;
+    a.motion()[0].destinationX = 400.0f;
+    a.motion()[0].destinationZ = 100.0f;
+    b.motion()[0] = a.motion()[0];
 
     REQUIRE(a.hash() == b.hash());
 
+    // Two sims stepped side by side in ONE process, which is the strongest determinism test
+    // available and the payoff for having no sim globals (PLAN2.md §5.4).
     for (int tick = 0; tick < 20; ++tick) {
-        std::vector<rm::sim::SkirmishGroup> ga = a.groups();
-        std::vector<rm::sim::SkirmishGroup> gb = b.groups();
         rm::sim::Match ma = a.match();
         rm::sim::Match mb = b.match();
-        (void)rm::sim::tickSkirmish(ga, ma, field);
-        (void)rm::sim::tickSkirmish(gb, mb, field);
+        (void)rm::sim::tickSkirmish(a.store, a.catalog, ma, field);
+        (void)rm::sim::tickSkirmish(b.store, b.catalog, mb, field);
         REQUIRE(a.hash() == b.hash());
     }
 
     // ...and that it actually advanced, so the agreement above is not two frozen matches
     // agreeing about nothing.
     Fixture fresh;
-    fresh.motion[0] = a.motion[0];
-    REQUIRE(a.instances[0].position[0] != fresh.instances[0].position[0]);
+    fresh.motion()[0] = a.motion()[0];
+    REQUIRE(a.instances()[0].position[0] != fresh.instances()[0].position[0]);
 }
