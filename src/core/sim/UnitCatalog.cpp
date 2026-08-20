@@ -24,9 +24,17 @@ UnitTypeIndex UnitCatalog::add(const unitdef::UnitDef* def, TickRate rate) {
     if (def != nullptr) {
         weapons.reserve(def->weapons.size());
         for (const unitdef::Weapon& weapon : def->weapons) {
+            const auto reload = static_cast<TickCount>(weapon.reloadTicks(rate));
+
+            // A non-bursting weapon gets its own reload as its burst gap and a size of one, so
+            // the firing pass reads the same two fields either way. The alternative — zero or a
+            // sentinel — puts a branch in the inner loop to mean "actually use the other one".
             weapons.push_back(WeaponRates{
                 .muzzlePerTick = rate.perTick(weapon.muzzleVelocityElmosPerSecond),
-                .reloadTicks = static_cast<TickCount>(weapon.reloadTicks(rate)),
+                .reloadTicks = reload,
+                .burstDelayTicks =
+                    weapon.bursts() ? rate.ticks(weapon.burstDelay) : reload,
+                .burstSize = weapon.bursts() ? weapon.burstSize : 1,
             });
         }
     }

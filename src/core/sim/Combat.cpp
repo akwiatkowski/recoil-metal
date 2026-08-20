@@ -266,6 +266,7 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
 
         Health& health = healths[slot];
         health.reloadRemaining.resize(def->weapons.size(), 0);
+        health.burstRemaining.resize(def->weapons.size(), 0);
 
         const int army = armyAt(store, slot);
         const std::array<Fx, 3> from = positionOf(transforms[slot]);
@@ -314,8 +315,26 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
             const UnitCatalog::WeaponRates& rates =
                 catalog.weaponRates(store.typeAt(slot), w);
             projectiles.push_back(launch(from, to, weapon, army, rate, rates.muzzlePerTick));
-            health.reloadRemaining[w] = static_cast<int>(rates.reloadTicks);
             ++fired;
+
+            // THE BURST (§7 P3.5). A trigger-pull owes `burstSize` shots: the gap after any but
+            // the last of them is the burst delay, and only the last one starts a real reload.
+            // For the 462 weapons that do not burst, `burstSize` is 1 and `burstDelayTicks` is
+            // the reload, so this reduces to exactly what it replaced.
+            //
+            // A burst is NOT abandoned when the target dies or walks out of range: the loop
+            // above simply finds no target and this state persists, so the weapon resumes its
+            // burst on the next thing it sees. That is the game's behaviour too — the salvo is
+            // a coroutine that has already committed to its count — and it is also the only
+            // version that is order-independent, since a burst that reset on a lost target
+            // would depend on which shooter's projectile resolved first.
+            if (health.burstRemaining[w] == 0) {
+                health.burstRemaining[w] = rates.burstSize;
+            }
+            --health.burstRemaining[w];
+            health.reloadRemaining[w] = health.burstRemaining[w] > 0
+                                            ? static_cast<int>(rates.burstDelayTicks)
+                                            : static_cast<int>(rates.reloadTicks);
         }
     }
 

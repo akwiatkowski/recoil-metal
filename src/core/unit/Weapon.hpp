@@ -85,7 +85,47 @@ struct Weapon {
     sim::Fx minRange{};
 
     /// Shots per second, as authored. Converted to ticks by `reloadTicks`.
+    ///
+    /// NOT put through `faWaitSeconds`, and that is deliberate rather than an omission:
+    /// `11 §3.6` puts `RateOfFire` on the **engine** clock (`engine/Sim/UnitWeapon.lua:150`),
+    /// not through a Lua coroutine, so it carries no `WaitSeconds` bias. Correcting it would
+    /// make every weapon in the game 100 ms slow.
     float rateOfFire = 0.0f;
+
+    // A BURST, which is how a third of the armed corpus actually delivers its damage.
+    //
+    // `MuzzleSalvoSize` shots leave `MuzzleSalvoDelay` apart, and only then does the weapon
+    // reload. Read one shot per reload instead and a burst weapon does a fraction of its real
+    // damage: `11 §5` puts the error at up to 50%.
+    //
+    // Measured over the 568 shipped blueprints: 402 weapons state both fields, 98 state a
+    // delay above zero, and 106 state a salvo size above one. The delay's values are
+    // 0.05, 0.1, 0.2, 0.25, 0.3, 0.33, 0.4, 0.5, 0.6, 0.8, 1.0, 1.5, 1.8 and 2.3 seconds.
+
+    /// How many shots one trigger-pull delivers. One for an ordinary weapon.
+    ///
+    /// Clamped at one rather than trusted: a stated zero would mean a weapon that fires
+    /// nothing, which is a table describing something else.
+    int burstSize = 1;
+
+    /// The gap between shots WITHIN a burst — **corrected** by `faWaitSeconds`, because this
+    /// one is Lua-timed (`DefaultProjectileWeapon.lua:1134`).
+    ///
+    /// Zero means no gap and no burst, which is what the game means too: it guards the wait
+    /// with `if salvoDelay > 0` at `:1130`, so a stated zero fires every muzzle inside one tick
+    /// rather than waiting a quantum. That guard is why the correction is applied at the parse
+    /// site and not inside `faWaitSeconds`.
+    sim::Seconds burstDelay{};
+
+    /// Whether this weapon delivers its shots as a burst rather than one at a time.
+    ///
+    /// BOTH fields are required. 106 weapons state a size above one while stating no delay —
+    /// those fire their muzzles simultaneously (`11 §3.3`: `salvoDelay == 0` sets
+    /// `numMuzzlesFiring = muzzleBoneCount`), which is a different mechanic from a burst spread
+    /// over time and is not what this models.
+    [[nodiscard]] bool bursts() const noexcept {
+        return burstSize > 1 && burstDelay.value > 0.0f;
+    }
 
     /// How fast a projectile leaves, in elmos per second. Zero for a weapon whose
     /// projectile is instant.

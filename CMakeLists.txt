@@ -118,6 +118,7 @@ add_library(rm_core STATIC
     src/core/sim/Replay.cpp
     src/core/unit/UnitBlueprint.cpp
     src/core/unit/Weapon.cpp
+    src/core/unit/FaDuration.cpp
     src/core/unit/UnitDef.cpp
     src/core/unit/Role.cpp
     src/core/unit/BuildTree.cpp
@@ -208,6 +209,7 @@ if(BUILD_TESTING)
         tests/test_roster.cpp
         tests/test_opening.cpp
         tests/test_move_def.cpp
+        tests/test_fa_duration.cpp
         tests/test_asset_search.cpp
         tests/test_vfs.cpp
         tests/test_real_vfs.cpp

@@ -1,5 +1,7 @@
 #include "core/unit/Weapon.hpp"
 
+#include "core/unit/FaDuration.hpp"
+
 #include "core/map/Scmap.hpp"
 #include "core/sim/Movement.hpp"
 
@@ -100,6 +102,19 @@ std::vector<Weapon> weaponsFrom(const lua::Value& weaponArray) {
             * scmap::kElmosPerOgrid);
 
         weapon.rateOfFire = numberOr(entry, "RateOfFire", 0.0f);
+
+        // The burst. `MuzzleSalvoSize` is a Lua LOOP COUNT (`:1036`), not a duration, so it is
+        // taken as stated; `MuzzleSalvoDelay` is a `WaitSeconds` argument and is corrected.
+        //
+        // The `> 0` guard mirrors the game's own at `DefaultProjectileWeapon.lua:1130`. Without
+        // it every one of the 304 weapons stating a delay of exactly zero would acquire a
+        // 100 ms gap between muzzles that the game does not give them.
+        weapon.burstSize = std::max(1, static_cast<int>(numberOr(entry, "MuzzleSalvoSize", 1.0f)));
+        const float authoredDelay = numberOr(entry, "MuzzleSalvoDelay", 0.0f);
+        if (authoredDelay > 0.0f) {
+            weapon.burstDelay = faWaitSeconds(sim::seconds(authoredDelay));
+        }
+
         weapon.muzzleVelocityElmosPerSecond =
             numberOr(entry, "MuzzleVelocity", 0.0f) * scmap::kElmosPerOgrid;
 

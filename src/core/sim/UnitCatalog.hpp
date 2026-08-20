@@ -62,6 +62,17 @@ public:
 
         /// Ticks between shots, never less than one.
         TickCount reloadTicks = 1;
+
+        /// Ticks between the shots WITHIN a burst, never less than one. Equal to
+        /// `reloadTicks` for a weapon that does not burst, so the firing pass needs no
+        /// branch on whether it does — it always reloads by one of the two.
+        TickCount burstDelayTicks = 1;
+
+        /// How many shots one trigger-pull delivers. One for an ordinary weapon.
+        ///
+        /// An `int` rather than a `TickCount`: it is a count of shots, not of ticks, and the
+        /// two being different types is the whole point of §5.1.
+        int burstSize = 1;
     };
     /// Registers a definition and returns the index units of that type will carry.
     ///

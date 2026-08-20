@@ -61,8 +61,10 @@ inline constexpr std::uint32_t kMinTicksPerSecond = 5;
 inline constexpr std::uint32_t kMaxTicksPerSecond = 50;
 
 /// The default: **10 Hz**, because the content this engine imports is Forged Alliance's, whose
-/// scripts hardcode it — `WaitSeconds(n)` is `WaitTicks(n * 10)`
-/// (`mohodata/lua/simInit.lua:37`). Recoil's `GAME_SPEED` is 30 and the two games disagree, so
+/// scripts hardcode it — `WaitSeconds(n)` is `WaitTicks(n * 10 + 1)`
+/// (`mohodata/lua/simInit.lua:37`). That `+ 1` was missing from this comment and is not a
+/// rounding detail: it inflates every Lua-timed duration in the game by 100 ms, which is what
+/// `core/unit/FaDuration.hpp` corrects. Recoil's `GAME_SPEED` is 30 and the two games disagree, so
 /// one had to be chosen; nothing here needs 30, since the lockstep multiplayer that fixed both
 /// games' rates does not exist in this engine and the renderer was never coupled to the tick.
 inline constexpr std::uint32_t kDefaultTicksPerSecond = 10;

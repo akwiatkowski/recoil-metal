@@ -129,6 +129,15 @@ void feedHealth(StateHash& h, const Health& health) noexcept {
     for (const int remaining : health.reloadRemaining) {
         feed(h, remaining);
     }
+
+    // Where each weapon is WITHIN its burst. Fed for the same reason the reload is: two units
+    // with identical health and identical reloads but different burst positions will fire
+    // different numbers of shots over the next second, so a hash that could not tell them apart
+    // would report a match as identical while it diverged (§7 P3.5).
+    feed(h, health.burstRemaining.size());
+    for (const int remaining : health.burstRemaining) {
+        feed(h, remaining);
+    }
 }
 
 } // namespace

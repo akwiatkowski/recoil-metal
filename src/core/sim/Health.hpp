@@ -35,6 +35,14 @@ struct Health {
     /// clock.
     std::vector<int> reloadRemaining;
 
+    /// Shots still owed by the burst this weapon is in the middle of, one entry per weapon.
+    ///
+    /// Zero means "not in a burst" — the next shot starts a fresh one. Per UNIT for the same
+    /// reason the reload is: a squad of burst weapons must not be locked into one shared
+    /// rhythm, and where each of them is within its burst is exactly the state that keeps them
+    /// apart (PLAN2.md §7 P3.5).
+    std::vector<int> burstRemaining;
+
     [[nodiscard]] bool alive() const noexcept { return current > Mag{}; }
 };
 

@@ -2500,6 +2500,68 @@ struct ShotOptions {
     return 0.0f;
 }
 
+/// `--dump-weapon <ID>`: print one unit's weapon timings, authored beside corrected.
+///
+/// §7 P3.5's stated manual check. It exists because the FA duration correction is invisible
+/// otherwise: the numbers it changes are inside a blueprint, and the only way to see that a
+/// stated 0.2 became a 0.3 is to print both. Reading the Lua table again alongside the parsed
+/// `UnitDef` is what makes that possible without keeping an authored copy of every field on
+/// `Weapon` for the sake of one diagnostic.
+///
+/// Prints the tick counts too, at this run's rate, because "0.3 seconds" and "3 ticks" are
+/// different claims and only the second is what the sim will do.
+[[nodiscard]] bool dumpWeapons(const rm::vfs::Vfs& content, const std::string& id) {
+    const std::string path = "/units/" + id + "/" + id + "_unit.bp";
+    const std::optional<std::vector<std::byte>> bytes = content.read(path);
+    if (!bytes) {
+        std::fprintf(stderr, "no blueprint at %s\n", path.c_str());
+        return false;
+    }
+    const std::string_view source{reinterpret_cast<const char*>(bytes->data()), bytes->size()};
+
+    const auto def = rm::unitbp::load(source, path);
+    if (!def) {
+        std::fprintf(stderr, "%s not read: %s\n", path.c_str(), def.error().message.c_str());
+        return false;
+    }
+    // The same source parsed as a plain table, for the AUTHORED figures the corrected `UnitDef`
+    // no longer carries. Two readings of one file rather than two files: they cannot disagree.
+    const auto raw = rm::lua::parseTable(source);
+    const rm::lua::Value* rawWeapons =
+        raw ? raw->path("Weapon") : static_cast<const rm::lua::Value*>(nullptr);
+
+    std::printf("%s — %zu weapon(s), at %u ticks a second\n", def->name.c_str(),
+                def->weapons.size(), gAppTickRate.ticksPerSecond());
+
+    for (std::size_t w = 0; w < def->weapons.size(); ++w) {
+        const rm::unitdef::Weapon& weapon = def->weapons[w];
+        const rm::lua::Value* entry =
+            (rawWeapons != nullptr && w < rawWeapons->items.size()) ? &rawWeapons->items[w]
+                                                                   : nullptr;
+        const double authoredDelay =
+            entry != nullptr ? entry->numberAt("MuzzleSalvoDelay").value_or(0.0) : 0.0;
+
+        std::printf("  [%zu] %-24s %s%s\n", w,
+                    weapon.label.empty() ? "(no label)" : weapon.label.c_str(),
+                    weapon.fires() ? "fires" : "not fired",
+                    weapon.role == rm::unitdef::WeaponRole::Death ? " (death explosion)" : "");
+        // `RateOfFire` is deliberately shown WITHOUT a correction — it is engine-timed
+        // (`11 §3.6`), and this line is where someone would otherwise assume otherwise.
+        std::printf("        RateOfFire %.4g/s -> reload %d ticks (engine-timed, uncorrected)\n",
+                    static_cast<double>(weapon.rateOfFire), weapon.reloadTicks(gAppTickRate));
+        if (weapon.burstSize > 1 || authoredDelay > 0.0) {
+            std::printf("        MuzzleSalvoSize %d, MuzzleSalvoDelay %.4g s authored"
+                        " -> %.4g s corrected -> %llu ticks%s\n",
+                        weapon.burstSize, authoredDelay,
+                        static_cast<double>(weapon.burstDelay.value),
+                        static_cast<unsigned long long>(
+                            gAppTickRate.ticks(weapon.burstDelay)),
+                        weapon.bursts() ? "" : " (not a burst)");
+        }
+    }
+    return true;
+}
+
 /// `--march <x> <z> <seconds>`: order every unit to a world position and run the
 /// sim that long before the first frame.
 ///
@@ -3875,6 +3937,26 @@ int main(int argc, const char* argv[]) {
         // has always needed somewhere to look them up.
         const rm::vfs::Vfs content = parseContent(argc, argv);
 
+        // `--tick-rate N`: the sim's rate for this run, 5–50 Hz. FIRST, because a unit's speed
+        // and a weapon's reload are derived from it at spawn and at catalog registration, and
+        // this used to sit after `resolveUnits` — so a `--units` crowd was built at 10 Hz
+        // whatever the flag said. The fourth instance of P2.3's bug shape: a rate applied later
+        // than the thing that derives from it.
+        if (const std::size_t requested = parseCount(argc, argv, "--tick-rate");
+            requested > 0) {
+            setAppTickRate(static_cast<std::uint32_t>(requested));
+            std::printf("sim: %u ticks a second\n", gAppTickRate.ticksPerSecond());
+        }
+
+        // `--dump-weapon <ID>`: print and exit. Before the map, because a weapon's timings have
+        // nothing to do with terrain and requiring a `.scmap` to read a blueprint would make
+        // the check harder to run than the thing it checks.
+        for (int i = 1; i + 1 < argc; ++i) {
+            if (std::string{argv[i]} == "--dump-weapon") {
+                return dumpWeapons(content, argv[i + 1]) ? 0 : 1;
+            }
+        }
+
         const auto map = resolveMap(argc, argv, content);
         if (!map) {
             return 1;
@@ -3905,14 +3987,6 @@ int main(int argc, const char* argv[]) {
         // start positions instead of all of them — a stock map declares up to eight,
         // and the match milestone 20 describes is a duel.
         std::span<const rm::mapinfo::StartPosition> starts{map->starts};
-        // `--tick-rate N`: the sim's rate for this run, 5–50 Hz. Read BEFORE anything spawns,
-        // because a unit's speed and a weapon's reload are derived from it at spawn and at
-        // catalog registration — a rate applied later would leave the two disagreeing.
-        if (const std::size_t requested = parseCount(argc, argv, "--tick-rate");
-            requested > 0) {
-            setAppTickRate(static_cast<std::uint32_t>(requested));
-            std::printf("sim: %u ticks a second\n", gAppTickRate.ticksPerSecond());
-        }
 
         const std::size_t armiesCap = parseCount(argc, argv, "--armies");
         if (armiesCap > 0 && armiesCap < starts.size()) {
