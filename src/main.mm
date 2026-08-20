@@ -1540,7 +1540,17 @@ struct VfsUnit {
 /// What an army starts with, and the baseline its storage is recomputed from every
 /// tick: OUR constant, not a blueprint's — enough to afford the first extractor and
 /// see the bars move, per milestone 19.
-inline constexpr rm::sim::Resources kStartingStorage{.mass = 650.0f, .energy = 5000.0f};
+/// The rate this build of the app runs its sim at.
+///
+/// A constant HERE, in the app, rather than in the sim: `core/sim` may not hold file-scope
+/// mutable state (PLAN2 §5.4) and does not hold this at all — a `TickRate` is a value passed
+/// to the passes that need it. What is missing is the configuration that would set it, which
+/// is the rest of P2.3; until then the app has one rate and this is where it is written down,
+/// once, instead of at the six sites that convert a content rate.
+inline const rm::sim::TickRate kAppTickRate{rm::sim::kDefaultTicksPerSecond};
+
+inline const rm::sim::Resources kStartingStorage{.mass = rm::sim::Mag::fromInt(650),
+                                                .energy = rm::sim::Mag::fromInt(5000)};
 
 void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
                      std::span<const rm::mapinfo::StartPosition> starts,
@@ -1648,7 +1658,13 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
     scene.commandersEver = scene.countCommanders();
     scene.economies.assign(scene.armies.size(), rm::sim::Economy{});
     for (rm::sim::Economy& economy : scene.economies) {
-        economy.incomePerSecond = rm::sim::kCommanderTrickle;
+        // The commander's trickle, per tick. `recomputeIncome` recomputes this every tick
+        // from what is standing; seeding it here is what makes the first tick's earnings
+        // spendable before anything has been counted.
+        economy.incomePerTick = rm::sim::Resources{
+            .mass = kAppTickRate.magPerTick(rm::sim::kCommanderTrickleMassPerSecond),
+            .energy = kAppTickRate.magPerTick(rm::sim::kCommanderTrickleEnergyPerSecond),
+        };
         economy.storage = kStartingStorage;
         // FULL at spawn, which is what the game does — a match opens with the
         // starting storage banked, and that bank is what pays for the first base.
@@ -1846,16 +1862,18 @@ void orderFirstExtractors(UnitScene& scene, std::span<const rm::scenario::Marker
                      .energy = extractor->buildCostEnergy},
             .buildTimeRemaining = extractor->buildTime,
             .totalBuildTime = extractor->buildTime,
-            .buildRate = def->buildRate,
+            .buildPerTick = kAppTickRate.magPerTick(def->buildRate),
             .blueprintIndex = blueprintIndex,
         });
     }
 
     std::printf("economy: %zu extractor(s) ordered on the map's own deposits,"
                 " %.0f mass / %.0f energy each over %.0fs\n",
-                scene.building.size(), static_cast<double>(extractor->buildCostMass),
-                static_cast<double>(extractor->buildCostEnergy),
-                static_cast<double>(extractor->buildTime / firstBuilderRate));
+                scene.building.size(),
+                static_cast<double>(rm::sim::magToFloat(extractor->buildCostMass)),
+                static_cast<double>(rm::sim::magToFloat(extractor->buildCostEnergy)),
+                static_cast<double>(rm::sim::magToFloat(extractor->buildTime)
+                                    / firstBuilderRate));
 }
 
 /// Loads every requested model, resolves its textures, and places instances.
@@ -2566,7 +2584,7 @@ void runOpponents(UnitScene& scene, const rm::vfs::Vfs& content, const rm::Heigh
                         .cost = {.mass = def.buildCostMass, .energy = def.buildCostEnergy},
                         .buildTimeRemaining = def.buildTime,
                         .totalBuildTime = def.buildTime,
-                        .buildRate = standing.commanderBuildRate,
+                        .buildPerTick = kAppTickRate.magPerTick(standing.commanderBuildRate),
                         .blueprintIndex = *blueprintIndex,
                     });
                     std::printf("  [%6.1fs] army %d starts %.*s\n",
@@ -2589,7 +2607,7 @@ void runOpponents(UnitScene& scene, const rm::vfs::Vfs& content, const rm::Heigh
                     .cost = {.mass = def.buildCostMass, .energy = def.buildCostEnergy},
                     .buildTimeRemaining = def.buildTime,
                     .totalBuildTime = def.buildTime,
-                    .buildRate = standing.factoryBuildRate,
+                    .buildPerTick = kAppTickRate.magPerTick(standing.factoryBuildRate),
                     .blueprintIndex = *blueprintIndex,
                 });
             }
@@ -3061,12 +3079,17 @@ void march(UnitScene& scene, const rm::HeightField& field, PassabilitySet& passa
                     " %.0f energy, earning %.1f / %.1f a second against %.1f energy of"
                     " upkeep, %.0f%% funded\n",
                     runner.completedBuilds, scene.building.size(),
-                    static_cast<double>(first.stored.mass),
-                    static_cast<double>(first.stored.energy),
-                    static_cast<double>(first.incomePerSecond.mass),
-                    static_cast<double>(first.incomePerSecond.energy),
-                    static_cast<double>(first.upkeepPerSecond.energy),
-                    static_cast<double>(first.fundedFraction * 100.0f));
+                    static_cast<double>(rm::sim::magToFloat(first.stored.mass)),
+                    static_cast<double>(rm::sim::magToFloat(first.stored.energy)),
+                    // Reported PER SECOND, which is what a reader wants, converted back from
+                    // the per-tick figure the sim keeps.
+                    static_cast<double>(rm::sim::magToFloat(first.incomePerTick.mass))
+                        * kAppTickRate.ticksPerSecond(),
+                    static_cast<double>(rm::sim::magToFloat(first.incomePerTick.energy))
+                        * kAppTickRate.ticksPerSecond(),
+                    static_cast<double>(rm::sim::magToFloat(first.upkeepPerTick.energy))
+                        * kAppTickRate.ticksPerSecond(),
+                    static_cast<double>(rm::sim::fxToFloat(first.fundedFraction)) * 100.0);
     }
 }
 
@@ -3356,15 +3379,21 @@ namespace {
         const rm::sim::Economy& mine =
             scene.economies[static_cast<std::size_t>(scene.playerArmy)];
 
-        state.mass = rm::ui::Gauge{.stored = mine.stored.mass,
-                                   .capacity = mine.storage.mass,
-                                   .incomePerSecond = mine.incomePerSecond.mass,
-                                   .drainPerSecond = mine.upkeepPerSecond.mass};
-        state.energy = rm::ui::Gauge{.stored = mine.stored.energy,
-                                     .capacity = mine.storage.energy,
-                                     .incomePerSecond = mine.incomePerSecond.energy,
-                                     .drainPerSecond = mine.upkeepPerSecond.energy};
-        state.fundedFraction = mine.fundedFraction;
+        // The HUD reads in floats and per SECOND — it is a display, and a player thinks in
+        // seconds. This is the sim-to-renderer half of the float boundary (`Fx.hpp`).
+        const auto perSecond = [](rm::sim::Mag perTick) {
+            return rm::sim::magToFloat(perTick)
+                   * static_cast<float>(kAppTickRate.ticksPerSecond());
+        };
+        state.mass = rm::ui::Gauge{.stored = rm::sim::magToFloat(mine.stored.mass),
+                                   .capacity = rm::sim::magToFloat(mine.storage.mass),
+                                   .incomePerSecond = perSecond(mine.incomePerTick.mass),
+                                   .drainPerSecond = perSecond(mine.upkeepPerTick.mass)};
+        state.energy = rm::ui::Gauge{.stored = rm::sim::magToFloat(mine.stored.energy),
+                                     .capacity = rm::sim::magToFloat(mine.storage.energy),
+                                     .incomePerSecond = perSecond(mine.incomePerTick.energy),
+                                     .drainPerSecond = perSecond(mine.upkeepPerTick.energy)};
+        state.fundedFraction = rm::sim::fxToFloat(mine.fundedFraction);
     }
 
     if (!scene.armies.empty() && state.armiesLeft <= 1) {

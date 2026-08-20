@@ -345,23 +345,30 @@ TEST_CASE("a defeated army stays defeated") {
 TEST_CASE("an economy never banks more than it can store, nor funds more than it has") {
     const rm::HeightField field = flatField();
     Fight fight;
+    const rm::sim::TickRate rate{};
+    const rm::sim::Resources cap{.mass = rm::test::mag(650.0f),
+                                 .energy = rm::test::mag(5000.0f)};
     for (rm::sim::Economy& economy : fight.economies) {
-        economy.storage = rm::sim::Resources{.mass = 650.0f, .energy = 5000.0f};
-        economy.incomePerSecond = rm::sim::Resources{.mass = 5.0f, .energy = 20.0f};
+        economy.storage = cap;
+        economy.incomePerTick = rm::sim::Resources{.mass = rate.magPerTick(5.0f),
+                                                   .energy = rate.magPerTick(20.0f)};
     }
 
     for (int tick = 0; tick < 300; ++tick) {
         rm::sim::Match match = fight.match();
-        match.baseStorage = rm::sim::Resources{.mass = 650.0f, .energy = 5000.0f};
+        match.baseStorage = cap;
         (void)rm::sim::tickSkirmish(fight.roster.store, fight.roster.catalog, match, field);
 
         for (const rm::sim::Economy& economy : fight.economies) {
-            REQUIRE(economy.stored.mass >= 0.0f);
-            REQUIRE(economy.stored.energy >= 0.0f);
-            REQUIRE(economy.stored.mass <= economy.storage.mass + 0.001f);
-            REQUIRE(economy.stored.energy <= economy.storage.energy + 0.001f);
-            REQUIRE(economy.fundedFraction >= 0.0f);
-            REQUIRE(economy.fundedFraction <= 1.0f);
+            REQUIRE(economy.stored.mass >= rm::sim::Mag{});
+            REQUIRE(economy.stored.energy >= rm::sim::Mag{});
+            // No slack needed any more, and that is the point: fixed point cannot leave a
+            // store "a hair above" its cap the way float could, so the invariant is now an
+            // exact bound rather than one with a tolerance bolted on.
+            REQUIRE(economy.stored.mass <= economy.storage.mass);
+            REQUIRE(economy.stored.energy <= economy.storage.energy);
+            REQUIRE(economy.fundedFraction >= rm::sim::Fx{});
+            REQUIRE(economy.fundedFraction <= rm::sim::kFxOne);
         }
     }
 }

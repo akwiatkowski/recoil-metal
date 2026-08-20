@@ -4,22 +4,27 @@
 
 namespace rm::sim {
 
-Resources drainPerSecond(const Construction& work) noexcept {
-    if (work.totalBuildTime <= 0.0f || work.buildRate <= 0.0f) {
+Resources drainPerTick(const Construction& work) noexcept {
+    if (work.totalBuildTime <= Mag{} || work.buildPerTick <= Mag{}) {
         return Resources{};
     }
-    // Seconds the whole build will take at this rate, and the cost spread over them.
-    const float seconds = work.totalBuildTime / work.buildRate;
-    if (seconds <= 0.0f) {
-        return Resources{};
-    }
-    return Resources{.mass = work.cost.mass / seconds, .energy = work.cost.energy / seconds};
+    // TICKS the whole build will take at this rate, and the cost spread over them. The
+    // per-second version of this divided by seconds; the arithmetic is the same shape, with
+    // the unit of time already folded into `buildPerTick`.
+    //
+    // The division is `Mag / Mag -> Fx`, done explicitly: the share of the total cost that
+    // falls in one tick is a ratio, which is what the geometric type holds.
+    const Fx sharePerTick = Fx::fromRaw(saturate(
+        (FxWide{work.buildPerTick.raw()} << kFxFractionalBits) / work.totalBuildTime.raw()));
+    return work.cost * sharePerTick;
 }
 
 void tickEconomy(Economy& economy, std::span<Construction> building) {
-    // Income first, so a tick's earnings are spendable in the same tick.
-    economy.stored.mass += economy.incomePerSecond.mass * kTickSeconds;
-    economy.stored.energy += economy.incomePerSecond.energy * kTickSeconds;
+    // Income first, so a tick's earnings are spendable in the same tick. NO MULTIPLY BY A
+    // TICK LENGTH: the income is already per tick, converted once when the catalog learned
+    // the type (§5.1). `kTickSeconds` used to appear four times in this function and now
+    // appears nowhere, which is the rule being satisfied rather than described.
+    economy.stored += economy.incomePerTick;
 
     // Storage is a cap and overflow is LOST, which is what the game does — an economy with
     // nothing to spend on is wasting, and that is the pressure to build something.
@@ -30,10 +35,9 @@ void tickEconomy(Economy& economy, std::span<Construction> building) {
     // not it can be paid for. An economy that cannot meet it simply has nothing left, which
     // is what a brownout is — and construction, funded from the remainder below, is what
     // visibly stops.
-    economy.stored.mass =
-        std::max(0.0f, economy.stored.mass - economy.upkeepPerSecond.mass * kTickSeconds);
+    economy.stored.mass = std::max(Mag{}, economy.stored.mass - economy.upkeepPerTick.mass);
     economy.stored.energy =
-        std::max(0.0f, economy.stored.energy - economy.upkeepPerSecond.energy * kTickSeconds);
+        std::max(Mag{}, economy.stored.energy - economy.upkeepPerTick.energy);
 
     // Pass one: what does everything want this tick?
     Resources wanted;
@@ -41,35 +45,40 @@ void tickEconomy(Economy& economy, std::span<Construction> building) {
         if (work.finished()) {
             continue;
         }
-        const Resources rate = drainPerSecond(work);
-        wanted.mass += rate.mass * kTickSeconds;
-        wanted.energy += rate.energy * kTickSeconds;
+        wanted += drainPerTick(work);
     }
 
     // Pass two: pay what can be paid, and let the shortfall slow EVERYTHING equally.
-    float funded = 1.0f;
-    if (wanted.mass > 0.0f) {
-        funded = std::min(funded, economy.stored.mass / wanted.mass);
+    // The ratio of what is banked to what was asked for, per resource, and the worse of the
+    // two. `Mag / Mag -> Fx` again: a funding ratio is not a magnitude.
+    Fx funded = kFxOne;
+    if (wanted.mass > Mag{}) {
+        funded = std::min(funded, Fx::fromRaw(saturate(
+                                      (FxWide{economy.stored.mass.raw()} << kFxFractionalBits)
+                                      / wanted.mass.raw())));
     }
-    if (wanted.energy > 0.0f) {
-        funded = std::min(funded, economy.stored.energy / wanted.energy);
+    if (wanted.energy > Mag{}) {
+        funded = std::min(funded, Fx::fromRaw(saturate(
+                                      (FxWide{economy.stored.energy.raw()} << kFxFractionalBits)
+                                      / wanted.energy.raw())));
     }
-    funded = std::clamp(funded, 0.0f, 1.0f);
+    funded = std::clamp(funded, Fx{}, kFxOne);
     economy.fundedFraction = funded;
 
     economy.stored.mass -= wanted.mass * funded;
     economy.stored.energy -= wanted.energy * funded;
-    // Floating point can leave a hair below zero after the subtraction, and a negative
-    // store would make the next tick's ratio negative and run every build backwards.
-    economy.stored.mass = std::max(0.0f, economy.stored.mass);
-    economy.stored.energy = std::max(0.0f, economy.stored.energy);
+    // Still clamped at zero. Fixed point cannot leave "a hair below zero" the way float
+    // could, but rounding in the funding ratio can still overshoot by a step or two, and a
+    // negative store would make the next tick's ratio negative and run every build backwards.
+    economy.stored.mass = std::max(Mag{}, economy.stored.mass);
+    economy.stored.energy = std::max(Mag{}, economy.stored.energy);
 
     for (Construction& work : building) {
         if (work.finished()) {
             continue;
         }
-        work.buildTimeRemaining -= work.buildRate * kTickSeconds * funded;
-        work.buildTimeRemaining = std::max(0.0f, work.buildTimeRemaining);
+        work.buildTimeRemaining -= work.buildPerTick * funded;
+        work.buildTimeRemaining = std::max(Mag{}, work.buildTimeRemaining);
     }
 }
 

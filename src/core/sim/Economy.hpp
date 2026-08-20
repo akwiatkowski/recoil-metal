@@ -1,5 +1,7 @@
 #pragma once
 
+#include "core/sim/Fx.hpp"
+
 #include "core/sim/Movement.hpp"
 
 #include <array>
@@ -21,9 +23,26 @@ namespace rm::sim {
 // number.
 
 /// An army's mass and energy, in the units the blueprints state them.
+///
+/// FIXED POINT (`Mag`), because these are magnitudes: `BuildCostEnergy` reaches 10,008,000 in
+/// the corpus (XSB2401) and a T3 energy farm's storage is larger still, both far outside
+/// `Fx`'s ±131,072. See `core/Types.hpp` for the measurement.
 struct Resources {
-    float mass = 0.0f;
-    float energy = 0.0f;
+    Mag mass{};
+    Mag energy{};
+
+    [[nodiscard]] friend constexpr Resources operator+(Resources a, Resources b) noexcept {
+        return Resources{.mass = a.mass + b.mass, .energy = a.energy + b.energy};
+    }
+    constexpr Resources& operator+=(Resources other) noexcept {
+        mass += other.mass;
+        energy += other.energy;
+        return *this;
+    }
+    /// Scaling by a fraction — the stall ratio, applied to what everything asked for.
+    [[nodiscard]] friend constexpr Resources operator*(Resources a, Fx scale) noexcept {
+        return Resources{.mass = a.mass * scale, .energy = a.energy * scale};
+    }
 };
 
 /// One army's economy for one tick.
@@ -31,9 +50,14 @@ struct Economy {
     Resources stored;
     Resources storage;  ///< the cap. Income beyond it is lost, as in the game
 
-    /// What producers deliver per second. Summed from what is standing, so a destroyed
+    /// What producers deliver PER TICK. Summed from what is standing, so a destroyed
     /// extractor stops paying immediately.
-    Resources incomePerSecond;
+    ///
+    /// Per tick rather than per second (§5.1): the per-second figure is a fact about the
+    /// blueprint and is converted once, when `UnitCatalog` registers the type. Storing it per
+    /// second here would mean a divide in the tick and would leave the unconverted value
+    /// where a reader could use it directly.
+    Resources incomePerTick;
 
     /// What standing structures cost to RUN, per second. Energy only in the corpus.
     ///
@@ -41,7 +65,7 @@ struct Economy {
     /// optional, so a base whose power fails stops building rather than stopping running.
     /// Funding builds first and letting upkeep take the remainder would invert that and
     /// make a brownout invisible.
-    Resources upkeepPerSecond;
+    Resources upkeepPerTick;
 
     /// The fraction of what was ASKED FOR that was actually paid last tick, 0..1.
     ///
@@ -50,7 +74,9 @@ struct Economy {
     /// it is what construction multiplies its progress by — the alternative, funding the
     /// first builders in list order and starving the rest, makes progress depend on the
     /// order units happen to sit in an array.
-    float fundedFraction = 1.0f;
+    /// `Fx`, not `Mag`: this is a ratio in 0..1, which is what the geometric type is for, and
+    /// it is multiplied INTO magnitudes rather than added to them.
+    Fx fundedFraction = kFxOne;
 };
 
 /// The base rate of income every army gets, per second, whatever it has built.
@@ -60,7 +86,10 @@ struct Economy {
 /// first extractor and the game never begins. The values here are OURS, chosen small
 /// enough to be a bootstrap rather than an economy: the first mass extractor produces 2
 /// mass a second, so this is a quarter of one extractor.
-inline constexpr Resources kCommanderTrickle{.mass = 0.5f, .energy = 5.0f};
+/// Per SECOND, because it is an authored value like any blueprint's — converted through the
+/// tick rate at the point of use, the same way a producer's output is.
+inline constexpr float kCommanderTrickleMassPerSecond = 0.5f;
+inline constexpr float kCommanderTrickleEnergyPerSecond = 5.0f;
 
 /// What one thing under construction wants, per second, and what it has had.
 struct Construction {
@@ -74,23 +103,30 @@ struct Construction {
     /// Build units still to do. `BuildTime` from the blueprint counts down at the
     /// builder's `BuildRate` per second — so a 60-BuildTime extractor takes six seconds
     /// for a rate-10 commander, which is what the game does with the same numbers.
-    float buildTimeRemaining = 0.0f;
-    float totalBuildTime = 0.0f;
+    Mag buildTimeRemaining{};
+    Mag totalBuildTime{};
 
-    /// The builder's rate, in build units per second.
-    float buildRate = 0.0f;
+    /// The builder's rate, in build units PER TICK — derived, like every other rate (§5.1).
+    Mag buildPerTick{};
 
     /// Which unit this becomes. An index into whatever list the caller is building from —
     /// the sim does not know what a unit type is.
     std::size_t blueprintIndex = 0;
 
-    [[nodiscard]] bool finished() const noexcept { return buildTimeRemaining <= 0.0f; }
+    [[nodiscard]] bool finished() const noexcept { return buildTimeRemaining <= Mag{}; }
 
     /// How far along, 0..1. What a progress bar wants, and what the game shows as a
     /// structure rising out of the ground.
-    [[nodiscard]] float fraction() const noexcept {
-        return totalBuildTime <= 0.0f ? 1.0f
-                                      : 1.0f - buildTimeRemaining / totalBuildTime;
+    /// An `Fx`, because a progress ratio is geometry rather than a magnitude. Computed by
+    /// widening to `FxWide` and shifting, which is the same arithmetic `Fx::operator/` does —
+    /// spelled out here because the operands are `Mag` and the result is `Fx`, and there is no
+    /// operator for that mix by design: mixing the two types should be visible.
+    [[nodiscard]] Fx fraction() const noexcept {
+        if (totalBuildTime <= Mag{}) {
+            return kFxOne;
+        }
+        const FxWide done = (totalBuildTime - buildTimeRemaining).raw();
+        return Fx::fromRaw(saturate((done << kFxFractionalBits) / totalBuildTime.raw()));
     }
 };
 
@@ -125,6 +161,6 @@ void tickEconomy(Economy& economy, std::span<Construction> building);
 /// consumes is the cost spread over however long the build will actually take. So a faster
 /// builder costs MORE per second and the same in total, which is what `BuildRate` means
 /// and why two engineers on one structure drain twice as fast.
-[[nodiscard]] Resources drainPerSecond(const Construction& work) noexcept;
+[[nodiscard]] Resources drainPerTick(const Construction& work) noexcept;
 
 } // namespace rm::sim

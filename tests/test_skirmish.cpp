@@ -343,13 +343,16 @@ TEST_CASE("a finished construction is reported but left in the list") {
     Construction work;
     work.armyIndex = 0;
     work.position = {100.0f, 0.0f, 100.0f};
-    work.cost = {.mass = 10.0f, .energy = 10.0f};
-    work.buildTimeRemaining = 1.0f;
-    work.totalBuildTime = 1.0f;
-    work.buildRate = 100.0f;  // finishes well within one tick
+    work.cost = {.mass = rm::test::mag(10.0f), .energy = rm::test::mag(10.0f)};
+    work.buildTimeRemaining = rm::test::mag(1.0f);
+    work.totalBuildTime = rm::test::mag(1.0f);
+    // A hundred build units a second against one unit of work: it finishes well within a
+    // tick, whatever the rate.
+    work.buildPerTick = rm::sim::TickRate{}.magPerTick(100.0f);
     building.push_back(work);
 
-    economies[0].stored = {.mass = 1000.0f, .energy = 1000.0f};
+    economies[0].stored = {.mass = rm::test::mag(1000.0f),
+                           .energy = rm::test::mag(1000.0f)};
 
     // The cap has to come from `baseStorage`: the tick recomputes storage from it plus
     // whatever is standing, so setting `economies[0].storage` here would be overwritten
@@ -359,7 +362,8 @@ TEST_CASE("a finished construction is reported but left in the list") {
                 .projectiles = &projectiles,
                 .building = &building,
                 .commandersEver = commandersEver,
-                .baseStorage = {.mass = 1000.0f, .energy = 1000.0f}};
+                .baseStorage = {.mass = rm::test::mag(1000.0f),
+                                .energy = rm::test::mag(1000.0f)}};
 
     TickReport report = rm::sim::tickSkirmish(roster.store, roster.catalog, match, field);
 
@@ -400,13 +404,19 @@ TEST_CASE("income is what is standing, and a destroyed producer stops paying") {
 
     (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, field);
 
-    CHECK(economies[0].incomePerSecond.mass == Approx(2.0f));
-    CHECK(economies[0].upkeepPerSecond.energy == Approx(2.0f));
+    // Asserted per SECOND — the blueprint's own unit — converted back from the per-tick
+    // figure the economy now holds.
+    const auto perSecond = [](rm::sim::Mag perTick) {
+        return rm::test::asFloat(perTick)
+               * static_cast<float>(rm::sim::TickRate{}.ticksPerSecond());
+    };
+    CHECK(perSecond(economies[0].incomePerTick.mass) == Approx(2.0f).margin(0.01));
+    CHECK(perSecond(economies[0].upkeepPerTick.energy) == Approx(2.0f).margin(0.01));
 
     // Destroyed, and the income goes with it.
     roster.health(extractor).current = rm::test::mag(0.0f);
     (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, field);
 
-    CHECK(economies[0].incomePerSecond.mass == Approx(0.0f));
-    CHECK(economies[0].upkeepPerSecond.energy == Approx(0.0f));
+    CHECK(perSecond(economies[0].incomePerTick.mass) == Approx(0.0f));
+    CHECK(perSecond(economies[0].upkeepPerTick.energy) == Approx(0.0f));
 }

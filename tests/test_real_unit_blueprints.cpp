@@ -233,9 +233,9 @@ TEST_CASE("the economy the blueprints state is the economy the game plays", "[co
         const auto def = rm::unitbp::loadFile(path);
         REQUIRE(def.has_value());
 
-        CHECK(def->buildCostMass == Catch::Approx(expected.mass));
-        CHECK(def->buildCostEnergy == Catch::Approx(expected.energy));
-        CHECK(def->buildTime == Catch::Approx(expected.buildTime));
+        CHECK(rm::test::asFloat(def->buildCostMass) == Catch::Approx(expected.mass));
+        CHECK(rm::test::asFloat(def->buildCostEnergy) == Catch::Approx(expected.energy));
+        CHECK(rm::test::asFloat(def->buildTime) == Catch::Approx(expected.buildTime));
         CHECK(def->producesMassPerSecond == Catch::Approx(expected.producesMass));
         CHECK(def->producesEnergyPerSecond == Catch::Approx(expected.producesEnergy));
     }

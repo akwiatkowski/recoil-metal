@@ -61,10 +61,18 @@ void retireDead(UnitStore& store, TickReport& report) {
 /// unit dies: an adjustment has to be applied exactly once at both ends, and the failure
 /// mode of getting that wrong is an economy that drifts over a long match with nothing
 /// pointing at when it started.
-void recomputeIncome(const UnitStore& store, const UnitCatalog& catalog, Match& match) {
+void recomputeIncome(const UnitStore& store, const UnitCatalog& catalog, Match& match,
+                     TickRate rate) {
+    // The commander's trickle, per tick. Computed once for the whole pass rather than per
+    // commander: it is the same number for all of them.
+    const Resources trickle{
+        .mass = rate.magPerTick(kCommanderTrickleMassPerSecond),
+        .energy = rate.magPerTick(kCommanderTrickleEnergyPerSecond),
+    };
+
     for (Economy& economy : match.economies) {
-        economy.incomePerSecond = {};
-        economy.upkeepPerSecond = {};
+        economy.incomePerTick = {};
+        economy.upkeepPerTick = {};
         economy.storage = match.baseStorage;
     }
 
@@ -85,16 +93,25 @@ void recomputeIncome(const UnitStore& store, const UnitCatalog& catalog, Match& 
         }
 
         Economy& economy = match.economies[static_cast<std::size_t>(owner)];
+
+        // The per-tick rates come from the CATALOG, which derived them once when it learned
+        // the type (§5.1). This loop runs over every unit every tick, so a conversion here
+        // would be a divide per unit per tick — and would keep the per-second value in reach
+        // of a later reader, which is the part that matters.
+        const UnitCatalog::Rates& rates = catalog.rates(store.typeAt(slot));
+
         if (isCommanderId(def->name)) {
             // The commander is the trickle and the starting storage, both OURS (see
-            // kCommanderTrickle) — not its blueprint's fields, which the spawn does
-            // not read either.
-            economy.incomePerSecond.mass += kCommanderTrickle.mass;
-            economy.incomePerSecond.energy += kCommanderTrickle.energy;
+            // kCommanderTrickle*) — not its blueprint's fields, which the spawn does not
+            // read either. Converted through the rate here rather than in the catalog
+            // because it is not a property of any type: every commander gets the same
+            // trickle whatever its blueprint says.
+            economy.incomePerTick.mass += trickle.mass;
+            economy.incomePerTick.energy += trickle.energy;
         } else {
-            economy.incomePerSecond.mass += def->producesMassPerSecond;
-            economy.incomePerSecond.energy += def->producesEnergyPerSecond;
-            economy.upkeepPerSecond.energy += def->upkeepEnergyPerSecond;
+            economy.incomePerTick.mass += rates.massPerTick;
+            economy.incomePerTick.energy += rates.energyPerTick;
+            economy.upkeepPerTick.energy += rates.upkeepEnergyPerTick;
             economy.storage.mass += def->storageMass;
             economy.storage.energy += def->storageEnergy;
         }
@@ -198,7 +215,7 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
 
     // 5. THE ECONOMY, last, so a producer destroyed in step 3 stops paying in the same
     //    tick it died rather than funding one more.
-    recomputeIncome(store, catalog, match);
+    recomputeIncome(store, catalog, match, rate);
 
     if (match.building != nullptr) {
         for (std::size_t army = 0; army < match.economies.size(); ++army) {

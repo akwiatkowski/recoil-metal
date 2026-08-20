@@ -124,9 +124,11 @@ struct UnitDef {
 
     /// What building this costs in total, and how many build units of work it takes.
     /// A builder's `buildRate` divided into `buildTime` gives the seconds.
-    float buildCostMass = 0.0f;
-    float buildCostEnergy = 0.0f;
-    float buildTime = 0.0f;
+    /// FIXED POINT (`Mag`), converted at parse time. `BuildCostEnergy` reaches 10,008,000 in
+    /// the corpus (XSB2401), which is why these are magnitudes rather than geometry.
+    sim::Mag buildCostMass{};
+    sim::Mag buildCostEnergy{};
+    sim::Mag buildTime{};
 
     /// How fast this unit builds, in build units per second. 143 units state one — the
     /// commanders, engineers and factories. Zero means it cannot build.
@@ -146,8 +148,8 @@ struct UnitDef {
     float upkeepEnergyPerSecond = 0.0f;
 
     /// How much of each it lets its owner hold. 62 units state storage.
-    float storageMass = 0.0f;
-    float storageEnergy = 0.0f;
+    sim::Mag storageMass{};
+    sim::Mag storageEnergy{};
 
     /// Whether this unit can build anything at all.
     [[nodiscard]] bool isBuilder() const noexcept { return buildRate > 0.0f; }

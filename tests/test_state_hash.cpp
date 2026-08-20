@@ -182,13 +182,13 @@ TEST_CASE("every field the sim owns reaches the hash") {
     SECTION("banked resources") {
         Fixture a;
         const rm::StateHash before = a.hash();
-        a.economies[0].stored.mass += 1.0f;
+        a.economies[0].stored.mass += rm::test::mag(1.0f);
         REQUIRE(a.hash() != before);
     }
     SECTION("the stall ratio") {
         Fixture a;
         const rm::StateHash before = a.hash();
-        a.economies[0].fundedFraction = 0.5f;
+        a.economies[0].fundedFraction = rm::sim::Fx::fromRatio(1, 2);
         REQUIRE(a.hash() != before);
     }
     SECTION("a shot in flight") {
@@ -200,8 +200,8 @@ TEST_CASE("every field the sim owns reaches the hash") {
     SECTION("work under construction") {
         Fixture a;
         const rm::StateHash before = a.hash();
-        a.building.push_back(rm::sim::Construction{.armyIndex = 0,
-                                                   .buildTimeRemaining = 5.0f});
+        a.building.push_back(
+            rm::sim::Construction{.armyIndex = 0, .buildTimeRemaining = rm::test::mag(5.0f)});
         REQUIRE(a.hash() != before);
     }
 }

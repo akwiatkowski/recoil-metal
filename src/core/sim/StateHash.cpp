@@ -162,8 +162,8 @@ StateHash hashMatch(const UnitStore& store, const Match& match) {
     for (const Economy& economy : match.economies) {
         feed(h, economy.stored);
         feed(h, economy.storage);
-        feed(h, economy.incomePerSecond);
-        feed(h, economy.upkeepPerSecond);
+        feed(h, economy.incomePerTick);
+        feed(h, economy.upkeepPerTick);
         feed(h, economy.fundedFraction);
     }
 
@@ -193,7 +193,7 @@ StateHash hashMatch(const UnitStore& store, const Match& match) {
             feed(h, work.cost);
             feed(h, work.buildTimeRemaining);
             feed(h, work.totalBuildTime);
-            feed(h, work.buildRate);
+            feed(h, work.buildPerTick);
             feed(h, work.blueprintIndex);
         }
     }

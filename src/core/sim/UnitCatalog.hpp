@@ -1,6 +1,8 @@
 #pragma once
 
 #include "core/Types.hpp"
+#include "core/sim/Fx.hpp"
+#include "core/sim/TickRate.hpp"
 #include "core/unit/UnitDef.hpp"
 
 #include <cstddef>
@@ -27,12 +29,39 @@ namespace rm::sim {
 // anything here; it is recorded because it makes the two comparable while both exist.
 class UnitCatalog {
 public:
+    /// What a type contributes per TICK, derived once when the type is registered.
+    ///
+    /// WHY DERIVED HERE (PLAN2.md §5.1). A blueprint authors rates per SECOND, which is a fact
+    /// about the unit; how much that is per tick depends on the clock, which is a fact about
+    /// the sim. The conversion must happen exactly once, and "when the catalog learns about
+    /// the type" is the only moment that is both after the rate is known and before any tick
+    /// runs. Doing it inside the income pass instead would put a float divide in a loop that
+    /// runs over every unit every tick — and, worse, would leave the per-second value where a
+    /// later reader could use it directly.
+    ///
+    /// `Mag` throughout: `BuildCostEnergy` reaches 10,008,000 in the corpus, and a rate summed
+    /// over a hundred producers needs the same headroom as the total it feeds.
+    struct Rates {
+        Mag massPerTick{};
+        Mag energyPerTick{};
+        Mag upkeepEnergyPerTick{};
+        Mag buildPerTick{};
+    };
     /// Registers a definition and returns the index units of that type will carry.
     ///
     /// Null is allowed and gets an index like anything else: a decorative crowd has no
     /// definition, earns nothing and fires nothing, and "no def" has to be representable
     /// rather than a reason to reject the unit.
-    [[nodiscard]] UnitTypeIndex add(const unitdef::UnitDef* def);
+    /// The rate is defaulted so the many callers that want the ordinary clock need not say
+    /// so, and is taken by value because a `TickRate` is two words.
+    [[nodiscard]] UnitTypeIndex add(const unitdef::UnitDef* def, TickRate rate = TickRate{});
+
+    /// What a type contributes per tick. Zeroes for an unregistered index or a type with no
+    /// definition, which is what a decorative crowd should earn.
+    [[nodiscard]] const Rates& rates(UnitTypeIndex type) const noexcept {
+        static constexpr Rates kNone{};
+        return type < rates_.size() ? rates_[type] : kNone;
+    }
 
     /// The definition for a type, or null — for an unregistered index as well as for a type
     /// registered without one. A pass that reads this must handle null either way, so
@@ -45,6 +74,10 @@ public:
 
 private:
     std::vector<const unitdef::UnitDef*> defs_;
+
+    /// Parallel to `defs_`, index-locked by construction: both only ever grow by one, in
+    /// `add`.
+    std::vector<Rates> rates_;
 };
 
 } // namespace rm::sim
