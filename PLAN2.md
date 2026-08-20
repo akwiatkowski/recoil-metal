@@ -26,15 +26,12 @@ P1 has its handle (`UnitId` + `IdPool`), its store (`UnitStore`), its census
 identical`), and an order-independent invariant suite for the part the golden log cannot
 cover.
 
-**P2 is in progress.** P2.1 is done (fixed-point arithmetic and CORDIC trigonometry, proven
-identical from `-O0` to `-O3 -ffast-math`), P2.3's mechanism is done (`TickRate`; both
-tick-denominated constants deleted), and P2.2 is half done — health, damage, costs and the
-whole economy are fixed point and per-tick, with the match unchanged in every reported total.
-What remains in P2.2 is **position, orientation and velocity**, which is atomic in the way
-P1.4 was: `UnitInstance` is the GPU's layout, so the sim needs its own `Transform` and the
-instance becomes a draw-time projection. See §7 P2.2 for the decomposition and the measurement.
+**P2 is done.** The sim is fixed point end to end and the float ban is enforced; the tick rate
+is a value with `--tick-rate` and a four-rate test behind it; ownership has its three levels;
+and orders are data taking one path, with `--command-log` writing the artifact §1.3's criterion
+names. Six commits, 656 tests, `make verify` green.
 
-**Engine completion: ~43 %** (§2).
+**Engine completion: ~52 %** (§2).
 
 ---
 
@@ -135,24 +132,31 @@ re-deriving the weights.
 
 | Subsystem | W | Done | Have | Missing |
 |---|---:|---:|---|---|
-| Sim | 26 % | **42 %** | movement, collisions, targeting/facing/firing, projectiles, area damage, death, economy, construction, victory, unit handles + flat store + type catalog + census, **fixed-point arithmetic + CORDIC trig (no libm) + tick rate as a value + health/damage/costs/economy migrated** | features, **fixed-point for position/orientation/velocity and pathfinding**, intel/vision, shields, transports, most weapon classes, air/naval/hover domains, veterancy, upgrades, adjacency |
+| Sim | 26 % | **60 %** | movement, collisions, targeting/facing/firing, projectiles, area damage, death, economy, construction, victory, unit handles + flat store + type catalog + census, **fixed point END TO END (enforced), CORDIC trig, tick rate as a value at 5–50 Hz, three ownership levels, orders as data through one authorised path** | features, intel/vision, shields, transports, most weapon classes, air/naval/hover domains, veterancy, upgrades, adjacency |
 | Renderer | 21 % | **55 %** | instanced units w/ team colour, props + culling, shadows, water + refraction, sky, particles, decals, text/HUD, icons, selection, model LOD, pose playback, DDS, offscreen capture | drawer split, minimap, effect taxonomy (muzzle/trail/impact), beams |
 | System | 16 % | **30 %** | VFS (`.sdz`/`.scd`), asset search, DDS, settings, bench harness | **sound (nothing)**, logging framework, job system, serialisation/save, profiling |
-| Game/orders/UI | 13 % | **30 %** | orbit camera, picking, selection + modifiers, HUD, order markers, CLI harness | command queue, build menu, control groups, minimap interaction, formations, game states |
+| Game/orders/UI | 13 % | **45 %** | orbit camera, picking, selection + modifiers, HUD, order markers, CLI harness, **commands as data + a command log + player/army/alliance** | command queue, build menu, control groups, minimap interaction, formations, game states |
 | Map | 10 % | **70 %** | SMF/SMT, `.scmap`, tile atlas, heightfield, `mapinfo.lua`, terrain mesh w/ LOD + skirts, chunk culling, splat, water, stratum normals, props, terrain types, start positions | minimap, resource spots, features as objects |
-| Pathfinding | 7 % | **25 %** | coarse grid A*, passability, path following | hierarchical/flow-field, dynamic blocking, formations, avoidance quality, per-motion-class grids |
-| Net/replay | 5 % | **25 %** | per-tick state hash over the store (incl. per-slot type, generation and liveness), hash log + first-divergence reporting (P0.2/P0.3) | netcode, lockstep, the cross-architecture proof (P8) |
+| Pathfinding | 7 % | **30 %** | coarse grid A* **in fixed point**, passability, path following | hierarchical/flow-field, dynamic blocking, formations, avoidance quality, per-motion-class grids |
+| Net/replay | 5 % | **40 %** | **a command log — §1.3's criterion now names something that exists** — per-tick state hash over the store (incl. per-slot type, generation and liveness), hash log + first-divergence reporting (P0.2/P0.3) | netcode, lockstep, the cross-architecture proof (P8) |
 | AI | 2 % | **15 %** | scripted build order + one attack wave | role classification, build tree, any reaction |
 
-**Weighted total: ~43 %.** The Sim row moved 32 → 42 % across P2.1, P2.3's mechanism and half
-of P2.2: the arithmetic the whole determinism claim rests on now exists and is proven
-optimisation-independent, which is a larger share of "what a sim is" than the remaining
-position migration. Net/replay 20 → 25 % because the fingerprint now compares integers, which
-is the form the cross-architecture claim needs.
+**Weighted total: ~52 %.** The Sim row moved 42 → 60 % because the phase finished what it
+started: the sim is fixed point end to end and a script enforces it, so the determinism claim
+rests on something checked rather than intended. Net/replay 25 → 40 % is the command log —
+§1.3's criterion was half a sentence about a file that did not exist, and now both halves
+exist. Game/orders 30 → 45 % because orders are data with an authorised path, which is most of
+what an order system is; what is left there is the QUEUE.
+
+**What is still not proven, and this is the honest limit:** every determinism result here is
+one machine agreeing with itself. `check_fx_optimisation.sh` shows the arithmetic survives
+`-O0` through `-ffast-math`, which is a real result and is not the claim. The claim needs P8's
+Linux build. Fixed point is what makes it *reachable*; it does not make it true.
 
 The shape of that number is the important part: **the two most-complete slices are Map (70 %)
 and Renderer (55 %), which together are 31 % of the weight — and the Sim, at 26 % of the
-weight, is 42 % done** (22 % at the baseline; P1 and P2 moved it). That is still why the project looks
+weight, is 60 % done** (22 % at the baseline; P1 and P2 moved it). The gap has closed: the
+finished slices are no longer only the ones a screenshot samples. That is still why the project looks
 further along than it is: a screenshot samples the finished third.
 
 ### 2.3 The procedure
@@ -172,6 +176,7 @@ further along than it is: a screenshot samples the finished third.
 | 2026-08-20 | 25 | 55 | 30 | 30 | 70 | 25 | 15 | 15 | **37 %** | P1.0–P1.3 — handle, store, census, and the invariant net |
 | 2026-08-20 | 32 | 55 | 30 | 30 | 70 | 25 | 20 | 15 | **40 %** | P1 done — the store IS the sim's storage; batch groups gone |
 | 2026-08-20 | 42 | 55 | 30 | 30 | 70 | 25 | 25 | 15 | **43 %** | P2.1 + P2.3's mechanism + half of P2.2 — fixed-point arithmetic, trig without libm, tick rate as a value, health/damage/economy migrated |
+| 2026-08-20 | 60 | 55 | 30 | 45 | 70 | 30 | 40 | 15 | **52 %** | P2 done — sim fixed point end to end, float ban enforced, three ownership levels, orders as data on one path |
 
 ---
 
@@ -843,7 +848,7 @@ The technique, and it is the whole reason to do P1 next rather than P2:
         radians needs a modulo by 2π, an irrational no fixed-point type holds, so the wrap
         itself would accumulate error.
 
-- [ ] **P2.2 Migrate sim state to fixed-point** — **half done 2026-08-20.** *Test:* sim tests
+- [x] **P2.2 Migrate sim state to fixed-point** — **done 2026-08-20.** *Test:* sim tests
       pass with re-based constants; the P0.2 hash is identical across `-O0`/`-O2`/arm64/x86-64.
       *Manual:* `--play` unchanged.
 
@@ -862,8 +867,7 @@ The technique, and it is the whole reason to do P1 next rather than P2:
             `tickEconomy` mentioned `kTickSeconds` four times and now mentions it nowhere.
             One invariant got *stronger*: the "store never exceeds its cap" bound lost its
             `+ 0.001f` of slack, because fixed point cannot leave a value a hair above a clamp.
-      - [ ] **Position, orientation and velocity.** THE ATOMIC ONE, and the reason P2.2 is
-            not finished. `UnitInstance` is the GPU's layout — pinned by a `static_assert`,
+      - [x] **Position, orientation and velocity.** THE ATOMIC ONE. `UnitInstance` is the GPU's layout — pinned by a `static_assert`,
             read verbatim by the vertex shader — so it cannot hold `Fx`. The sim needs its own
             `Transform{Fx x, y, z; Brad heading, pitch, roll;}` as the authority, with
             `UnitInstance` becoming a draw-time projection built by `gatherForDrawing` from
@@ -874,17 +878,37 @@ The technique, and it is the whole reason to do P1 next rather than P2:
             `instances[slot].position` read in the passes and the whole of `main.mm`'s spawn
             and draw path. Estimate it in sessions.
 
-            **It is atomic in the way P1.4 was** — flat store or batch groups, no coherent
-            middle — so it wants a session with the runway to finish. The two steps above were
-            deliberately chosen because they are *not* atomic: each is one structure, and each
-            landed green.
-      - [ ] **Pathfinding and heightfield sampling.** `Pathfinding.cpp` (31 float mentions)
-            and the `HeightField` accessors. Follows the transform: a path is a list of
-            positions, so it cannot migrate before they do. The map stays float **on disk** —
-            sampling is what converts.
-      - [ ] **Register the float ban** (`tools/check_no_sim_floats.sh`). Cannot be registered
-            until the above land; `Fx.hpp`/`Fx.cpp` are the boundary and stay exempt by
-            design, which is what makes the rule checkable at all.
+            **It was atomic in the way P1.4 was** — flat store or batch groups, no coherent
+            middle — and it landed in one pass. `sim::Transform` is the authority;
+            `UnitScene::instanceFor` is the whole projection; `paceAnimationByDistance` and
+            `paceSceneAnimations` are gone as a consequence, because the phase was always
+            derived and there was nowhere left for a separate pass to write it.
+
+            **`Brad` angles paid for themselves immediately.** `shortestAngleTo` was six lines
+            of `fmod`; `headingError` was eight. Both are a subtraction and a cast now, because
+            the difference of two `Brad` in 16 bits IS the shortest way round.
+
+            **The match went from identical to comparable, as predicted:** 566 shots against
+            567, same 24 destroyed, team 1 at 502.5s against 502.2s. Quantising positions moved
+            one shot by three ticks.
+      - [x] **Pathfinding, build placement and heightfield sampling.** `sim::Terrain` samples
+            the same grid with the same bilinear arithmetic, so the sim's ground and the
+            renderer's cannot disagree. Pathfinding split along the line that was always there:
+            grid CONSTRUCTION reads float heights at load and stays float; the queries that run
+            inside a tick are fixed point.
+
+            **One number needed measuring, and the first answer was wrong.** Holding the
+            vertical scale as an `Fx` looks obviously right and is not: a real `.smf` states
+            ~0.01 elmos per raw unit, which quantises to one part in a thousand in Q18.14 and is
+            then multiplied by a raw of up to 65,535 — 0.17 elmos of error, seven hundred times
+            the type's resolution. The scale is kept to 2^-30. **A small factor multiplied by a
+            large operand needs more fractional bits than the product does**, and that lesson is
+            in the header because it recurs.
+      - [x] **Register the float ban** (`tools/check_no_sim_floats.sh`). Registered. It bans
+            float variables, parameters, returns and casts, and permits `constexpr float`
+            constants (a constant cannot vary between platforms, so it cannot diverge) plus a
+            named list of boundary files, each with its reason in the script. Verified against
+            an injected violation.
 
 - [ ] **P2.3 Tick rate as configuration** (§5.1) — **mechanism done 2026-08-20**, landed early
       because P2.2's conversions need it. `core/sim/TickRate.hpp` is a validated value (5–50 Hz,
@@ -904,15 +928,70 @@ The technique, and it is the whole reason to do P1 next rather than P2:
       wrong on that detail; a one-member struct with an explicit constructor gives the same
       property at the same cost.
 
-      Still to do: *Test:* the same match at 10 Hz and 20 Hz produces the same **outcome**
-      (not the same hash) — this needs P2.2's transform first, since half the sim still reads
-      a per-second float. And the `--tick-rate` flag, plumbed from settings; `main.mm` holds a
-      single `kAppTickRate` constant in the meantime, with the reason written next to it.
-- [ ] **P2.4 `Player` / `Team` / `Alliance`** (§6.3). *Test:* victory fires on alliance
-      elimination, not team elimination; two players sharing a team both command its units.
-      *Manual:* `--play` 2v2.
-- [ ] **P2.5 Human input becomes a command source.** *Test:* a recorded human log and a
-      synthetic script log replay through the same path. *Manual:* play, then replay.
+      **Done 2026-08-20.** `--tick-rate N` sets it, and `tests/test_tick_rate_invariance.cpp`
+      is §5.1's stated test: the same work at 5, 10, 20 and 50 Hz, with every observable
+      duration inside one tick of its authored value in seconds. All five cases pass at all
+      four rates. Measured end to end on a real match: first extractor at 5.8 / 5.9 / 6.0 /
+      6.0s against an authored 6, tank cadence 14.0s at every rate, 24 units destroyed at every
+      rate.
+
+      **AND RUNNING IT FOUND THREE REAL BUGS**, all the same shape, none of which any test or
+      check had caught — which is precisely why §5.1 calls this "the only way this rule stays
+      true a year from now":
+
+      - `--play 520` converted seconds to ticks with `kTicksPerSecond`, so it ran 5200 ticks at
+        every rate. At 20 Hz that is 260 seconds of match, and the first `--tick-rate 20` run
+        produced a match in which nothing was built and nobody fired.
+      - `kDecisionTicks = rm::sim::kTicksPerSecond` — the opponents' thinking cadence. It LOOKS
+        derived and is not: it names the default rate. `check_no_tick_literals.sh` now catches
+        that shape too, which cost a real bug to learn.
+      - Three `catalog.add(def)` calls defaulted to 10 Hz, so a type's reload and income were
+        derived at one rate while its units moved at another.
+
+      `gAppTickRate` is a mutable file-scope value in `main.mm`, and its comment says so rather
+      than hiding it: `core/sim` holds no such thing, which is what lets the test run four rates
+      in one process. Twenty-one sites there convert a content rate; threading a parameter to
+      all of them is work P7.5 throws away.
+- [x] **P2.4 `Player` / `Army` / `AllianceIndex`** (§6.3) — **done 2026-08-20.** *Test:*
+      `tests/test_players.cpp` — victory fires on alliance elimination, not army elimination;
+      two players sharing an army both command its units. *Manual:* `--armies 4 --alliances 2`,
+      which gives 1249 shots and 78 destroyed against the free-for-all's 1706 and 93, because
+      allies do not shoot each other.
+
+      `Player` is the level §6.3 called out as missing, and it was right: `Army.hpp` said
+      "deliberately not a player", which is the design admitting the gap. `winningTeam` is
+      `winningAlliance`, and a free-for-all HIDES whether that reads the right level — one army
+      is one alliance there — so the test needs a 2v2.
+
+      **THE NAMING DIVERGES FROM §6.3, DELIBERATELY.** The plan says call the middle level
+      `Team`, following Recoil. We keep `Army`, following Forged Alliance, because FA is the
+      content we read: `ArmyIndex` runs through all of `lua/sim/`, and `mapinfo.lua` uses `team`
+      for what we call an ALLIANCE. Renaming would align 477 call sites with an engine we load
+      no content from, misalign them with the one we do, and make our `team` mean the opposite
+      of the map file's. The three-way mapping table in `Army.hpp` is the "one place" §6.3 asks
+      for; if a future session prefers Recoil's spelling, the cost is in the table.
+
+      `AllianceIndex` stays an index rather than a struct with one member. It becomes one when
+      it holds shared vision.
+
+- [x] **P2.5 Human input becomes a command source** — **done 2026-08-20.** *Test:*
+      `tests/test_command.cpp`. *Manual:* `--command-log`, which a 520-second match fills with
+      41 orders over 5029 ticks.
+
+      `orderRouted` is deleted and all four order sites — right-click, scripted attack wave,
+      factory rolloff, `--march` — go through `applyCommand`. "The same path" is structural
+      now: there is no other path.
+
+      Three rules the single path makes enforceable, each tested: a player cannot order another
+      army's units; a defeated army takes no more orders; a STALE HANDLE is refused rather than
+      resolved to whoever inherited the slot. That last is the case that makes
+      generation-tagged handles worth having.
+
+      §1.3's criterion — "the same command log produces the same match" — named something that
+      did not exist until this item. Both halves exist now.
+
+      One gap, named: `Build` commands are recorded but not applied, because a construction
+      needs a blueprint the sim cannot reach. It moves into `applyCommand` in P3.
 
 ### P3 — The data layer: game rules out of C++
 
@@ -1088,61 +1167,73 @@ for what P0 actually taught.
 
 ## 11. The next goal
 
-**P1 is done (2026-08-20).** What it left behind, for whoever picks up P2:
+**P2 is done (2026-08-20).** What it leaves behind, for whoever picks up P3:
 
-- The golden log is re-baselined and `make verify` reports MATCH. It is a strict check again.
-- `tests/test_match_invariants.cpp` is the tool for any change the log *cannot* verify. P2 is
-  exactly that class of change — every constant is re-based, so the log must be re-baselined by
-  construction — which makes the invariants the primary gate for the whole phase, not a
-  supplement. Expect to add to them rather than to lean on `MATCH`.
-- Two defects in this phase were the same mistake: **a count taken by scanning storage**, which
-  slot reuse invalidates. Anything that answers "how many" by walking slots is suspect.
+- **The sim is fixed point and a script says so.** `tools/check_no_sim_floats.sh` is
+  registered. Any new sim code that reaches for a `float` fails the suite, which is the
+  intended way to find out.
+- **Four gates now exist, and they answer different questions.** `make verify` says nothing
+  changed. `test_match_invariants` says nothing broke when something was *meant* to change.
+  `check_fx_optimisation` says the compiler cannot alter the answer.
+  `test_tick_rate_invariance` says the rate cannot. Use the second and fourth for anything
+  that re-bases numbers; the first only proves a refactor was one.
+- **A lesson that recurred twice and will again:** a small factor multiplied by a large operand
+  needs more fractional bits than the product does. It cost 0.17 elmos of terrain error before
+  it was written down (§7 P2.2).
+- **The four-rate test earns its keep.** It found three bugs no other check could see, all of
+  the same shape: a tick count derived from the DEFAULT rate rather than the run's. Expect that
+  shape in anything P3 adds that counts ticks.
 
-**P2 — fixed-point (D1) and ownership.** Why it goes next:
+**P3 — the data layer: game rules out of C++.** Why it goes next:
 
-1. Every tick of float sim written before P2.2 is a tick to rewrite (D1's recorded cost). The
-   sim is now the smallest it will ever be again — one store, one loop per pass — so the
-   migration is as cheap as it gets.
-2. P2.3 discharges D2's tick-rate rule, which is a hard constraint currently honoured by
-   convention rather than by construction: `kProjectileLifetimeTicks = 300` and
-   `kMaxTicksPerAdvance = 5` are still tick counts written as numbers (§5.1).
-3. P8's cross-architecture proof — the project's stated success criterion (§1.3) — is not
-   reachable in floating point at all. P2 is the only phase standing between here and a
-   falsifiable claim.
+1. **It is the largest remaining lie in the codebase.** `BuildOrder.hpp` holds four hardcoded
+   blueprint paths and `kAttackWaveTanks = 20`; both reference engines keep *zero* game rules
+   in C++ (§1.1). Every milestone that touches balance currently edits a header.
+2. **P3.2 is a stated blocker, not a nicety.** `07-ai-and-gamesetup.md §4.3` calls
+   materialising `BuildableCategory` expressions *"a hard blocker for any skirmish, not just
+   for the AI"* — SupCom ships no build lists, it ships expressions where space means AND and a
+   list means OR. Nothing beyond a scripted duel is possible without an evaluator for them.
+3. **`applyCommand` has a `Build` hole waiting for it.** A build command is recorded and not
+   applied, because a construction needs a blueprint the sim cannot reach. P3 is what closes
+   that, and the place it closes is already written.
 
-**The float/libm CI ban** deferred at P0 (recorded in `CMakeLists.txt`) becomes registrable at
-P2.2 and should be registered in the same commit that finishes it. That is the check that stops
-the migration silently regressing.
+**What P3 does NOT need:** a re-baselined golden log for its own sake. Unlike P2, P3 moves where
+numbers come from rather than what they are, so `make verify` is a strict check again — a hash
+change during P3 means a rule changed, which is worth stopping for.
 
-**Model: Opus 5**, `effort: xhigh`. Same reasoning as P0 and P1. P2.1 (the trig/sqrt tables) is
-the one item with real design freedom — precision, table size, the interpolation scheme — and is
-the place to consider Fable 5 if it stalls.
+**Model: Opus 5**, `effort: xhigh`. P3.2 (the expression evaluator) is the item with real design
+freedom — the grammar, the caching, what a materialised set is keyed on — and the place to
+consider Fable 5 if it stalls.
 
 The goal prompt:
 
 ```
-Execute phase P2 of PLAN2.md in the recoil-metal repo. Read PLAN2.md first —
-§0 has the settled decisions, §5.1-5.3 the rules, §6 the designs, §7 the items,
-§10 the risks.
+Execute phase P3 of PLAN2.md in the recoil-metal repo. Read PLAN2.md first — §0 has
+the settled decisions, §1.1 on why game rules must leave C++, §7 the items, §10 the
+risks.
 
-P2 re-bases every constant, so the golden log CANNOT verify it and MATCH is not
-the gate. tests/test_match_invariants.cpp is — extend it as needed, and
-re-baseline docs/golden-p1.log with `make golden` in the commit that changes the
-numerics, with the reason in the message.
+Unlike P2, this phase moves where numbers come from rather than what they are, so
+`make verify` is a STRICT check: a hash change means a rule changed. Stop and explain
+if one appears rather than re-recording.
 
-Every item ships with the automated test and the manual check named in §7.
-Commit each item separately, conventional messages, co-author trailer
+Start with P3.1 (role classification from categories), because P3.2 and P3.3 both
+need it. P3.2's expression evaluator is the stated blocker — `07 §4.3` calls it "a
+hard blocker for any skirmish" — so give it the corpus test as well as the
+hand-written one.
+
+Every item ships with the automated test and the manual check named in §7. Commit
+each separately, conventional messages, co-author trailer
 "Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>".
 
 Constraints:
-- Register the float/libm CI check when P2.2 lands; the reason it was deferred is
-  recorded in CMakeLists.txt.
-- Deliver P2 at the scope §7 states. Don't start P3.
-- Do not add a verification step, a self-review pass, or a verifier subagent.
-  Run the tests and the replay, and report what they output.
+- Close the `Build` hole in `applyCommand` when the data layer can supply a
+  blueprint; the place is marked.
+- Deliver P3 at the scope §7 states. Don't start P4.
+- Do not add a verification step, a self-review pass, or a verifier subagent. Run the
+  tests and the replay, and report what they output.
 - Do not delegate to subagents.
 - Feature work is frozen (D10).
-- If a step turns out to be blocked, finish the others and say plainly which
-  one you left and why. Don't silently narrow the scope.
+- If a step turns out to be blocked, finish the others and say plainly which one you
+  left and why. Don't silently narrow the scope.
 - Report the §2 progress reading at the end, recomputed, with a new history row.
 ```
