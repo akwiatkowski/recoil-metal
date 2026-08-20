@@ -8,6 +8,8 @@
 #include <Metal/Metal.hpp>
 #include <QuartzCore/QuartzCore.hpp>
 
+#import <CoreText/CoreText.h>
+
 #include "render/Renderer.hpp"
 
 #include "core/Error.hpp"
@@ -1071,6 +1073,55 @@ fragment float4 decalFragment(DecalOut in [[stage_in]]) {
     return in.colour;
 }
 
+// --- Text --------------------------------------------------------------------
+// The HUD. Positions arrive in PIXELS from the window's top-left and are turned into clip
+// space here, so a caller places text where it means to and nothing downstream has to know
+// the window's size but this.
+//
+// The atlas is single-channel COVERAGE, not colour: the glyph decides how much of the
+// vertex's colour lands, which is what lets one grey atlas draw white text, red text and a
+// drop shadow without three textures.
+
+struct TextVertexIn {
+    packed_float2 position;
+    packed_float2 uv;
+    packed_float4 colour;
+};
+
+struct TextOut {
+    float4 position [[position]];
+    float2 uv;
+    float4 colour;
+};
+
+vertex TextOut textVertex(uint vid [[vertex_id]],
+                          const device TextVertexIn* vertices [[buffer(0)]],
+                          constant float2& viewport [[buffer(1)]]) {
+    const TextVertexIn v = vertices[vid];
+
+    // Pixels to clip space. Y is flipped because a window's origin is top-left and clip
+    // space's is centre-up; getting that backwards renders the HUD upside down at the bottom
+    // of the screen, which looks like a layout bug rather than a sign error.
+    const float2 ndc = float2(v.position.x / max(viewport.x, 1.0) * 2.0 - 1.0,
+                              1.0 - v.position.y / max(viewport.y, 1.0) * 2.0);
+
+    TextOut out;
+    out.position = float4(ndc, 0.0, 1.0);
+    out.uv = float2(v.uv);
+    out.colour = float4(v.colour);
+    return out;
+}
+
+fragment float4 textFragment(TextOut in [[stage_in]],
+                             texture2d<float> atlas [[texture(0)]],
+                             sampler atlasSampler [[sampler(0)]]) {
+    const float coverage = atlas.sample(atlasSampler, in.uv).r;
+
+    // Premultiplied out, because the pipeline blends that way: the colour is scaled by how
+    // much of the pixel the glyph covers, and so is the alpha.
+    return float4(in.colour.rgb * in.colour.a * coverage, in.colour.a * coverage);
+}
+
 // --- Particles ---------------------------------------------------------------
 // Dust behind moving units. Each particle is a camera-facing quad expanded here
 // from four vertices, and it is AGED HERE TOO: the CPU uploads where a particle
@@ -1669,6 +1720,10 @@ Renderer::Renderer(CA::MetalLayer* layer)
                                  /*blend=*/false);
     // Blended, unlike everything else here: a selection ring is interface laid
     // over the ground, and a solid band would hide the terrain it marks.
+    // Blended, and drawn last of all: the HUD sits over the world rather than in it.
+    textPipeline_ = makePipeline(device_, library, "textVertex", "textFragment",
+                                 /*blend=*/true);
+
     decalPipeline_ = makePipeline(device_, library, "decalVertex", "decalFragment",
                                  /*blend=*/true);
     // The selection outline. Front faces culled and no depth write: what shows is the
@@ -1859,6 +1914,34 @@ Renderer::Renderer(CA::MetalLayer* layer)
         }
     }
 
+    // --- Text ---------------------------------------------------------------
+    {
+        // A ring like everything else written per frame: the GPU may still be reading last
+        // frame's copy, and this buffer cannot be reallocated while it is.
+        const std::size_t bytes =
+            text::kMaxTextVertices * sizeof(text::TextVertex) * kMaxFramesInFlight;
+        textBuffer_ = device_->newBuffer(bytes, MTL::ResourceStorageModeShared);
+        if (textBuffer_ == nullptr) {
+            throw RendererError{"failed to allocate the text buffer"};
+        }
+
+        auto* sampler = MTL::SamplerDescriptor::alloc()->init();
+        // LINEAR, because a glyph is coverage and nearest-neighbour on coverage is a
+        // staircase along every diagonal stroke. CLAMP because a glyph's rectangle is exact
+        // and a repeat would fetch its neighbour's ink at the seam.
+        sampler->setMinFilter(MTL::SamplerMinMagFilterLinear);
+        sampler->setMagFilter(MTL::SamplerMinMagFilterLinear);
+        sampler->setSAddressMode(MTL::SamplerAddressModeClampToEdge);
+        sampler->setTAddressMode(MTL::SamplerAddressModeClampToEdge);
+        fontSampler_ = device_->newSamplerState(sampler);
+        sampler->release();
+        if (fontSampler_ == nullptr) {
+            throw RendererError{"failed to create the font sampler"};
+        }
+
+        buildFontAtlas();
+    }
+
     // --- Selection ring buffer ---------------------------------------------
     // One slot per frame in flight, allocated once. Shared storage because the
     // CPU rewrites it every frame; the frames-in-flight wait in beginFrame is
@@ -1937,6 +2020,10 @@ Renderer::~Renderer() {
     if (particlePipeline_ != nullptr) particlePipeline_->release();
     if (decalBuffer_ != nullptr) decalBuffer_->release();
     if (decalDepthState_ != nullptr) decalDepthState_->release();
+    if (textPipeline_ != nullptr) textPipeline_->release();
+    if (fontAtlas_ != nullptr) fontAtlas_->release();
+    if (fontSampler_ != nullptr) fontSampler_->release();
+    if (textBuffer_ != nullptr) textBuffer_->release();
     if (decalPipeline_ != nullptr) decalPipeline_->release();
     if (sceneColour_ != nullptr) sceneColour_->release();
     releaseTerrainBuffers();
@@ -2410,6 +2497,7 @@ void Renderer::beginFrame() noexcept {
     // Particles too, and for the same reason. Selection outlines likewise: a stale
     // list would outline whatever now occupies those slots.
     particleCount_ = 0;
+    textVertexCount_ = 0;
     outlineRuns_.clear();
 
     // Rings are forgotten at the start of every frame, so a frame that pushes
@@ -2515,6 +2603,183 @@ void Renderer::setSelection(std::span<const SelectionEntry> selected) noexcept {
         }
         ++written;
     }
+}
+
+// The point size the font atlas is rasterised at.
+//
+// Baked once and drawn at scale 1, because a glyph resampled up is soft and this is a HUD
+// rather than a title: crispness is the whole requirement. Eighteen points is comfortably
+// readable on a Retina display without the atlas needing a second row.
+constexpr float kFontPointSize = 18.0f;
+
+/// Pixels of empty space around each glyph in the atlas.
+///
+/// One, and it earns its keep: the sampler is LINEAR, so a glyph touching its neighbour
+/// bleeds a sliver of that neighbour's ink along the shared edge. It shows up as a faint
+/// vertical smear beside letters and reads as a bad font rather than a packing bug.
+constexpr int kGlyphPadding = 1;
+
+void Renderer::buildFontAtlas() {
+    glyphs_.clear();
+    lineHeight_ = 0.0f;
+
+    // A MONOSPACED face, deliberately. A HUD is mostly numbers that change every frame, and
+    // in a proportional font a rising mass figure jitters sideways as its digits change
+    // width — which reads as the text being unstable rather than the number being live.
+    CTFontRef font = CTFontCreateWithName(CFSTR("Menlo"), kFontPointSize, nullptr);
+    if (font == nullptr) {
+        // No font is not fatal: the HUD simply does not draw. Reported once, because a
+        // missing HUD is otherwise indistinguishable from one that had nothing to say.
+        std::fprintf(stderr, "no HUD font available; text will not draw\n");
+        return;
+    }
+
+    const float ascent = static_cast<float>(CTFontGetAscent(font));
+    const float descent = static_cast<float>(CTFontGetDescent(font));
+    lineHeight_ = ascent + descent + static_cast<float>(CTFontGetLeading(font));
+
+    // Measure first, pack second. Every glyph in one row: 95 of them at ~11 pixels is about
+    // 1100 wide, which is one modest texture and keeps the packing arithmetic to a running
+    // sum rather than a bin-packer.
+    std::array<CGGlyph, text::kGlyphCount> cgGlyphs{};
+    std::array<UniChar, text::kGlyphCount> characters{};
+    for (std::size_t i = 0; i < text::kGlyphCount; ++i) {
+        characters[i] = static_cast<UniChar>(text::kFirstGlyph + static_cast<char>(i));
+    }
+    if (!CTFontGetGlyphsForCharacters(font, characters.data(), cgGlyphs.data(),
+                                      static_cast<CFIndex>(text::kGlyphCount))) {
+        // Partial coverage is still usable — appendText drops what it has no glyph for — so
+        // this is a warning rather than a bail.
+        std::fprintf(stderr, "the HUD font does not cover all of printable ASCII\n");
+    }
+
+    std::array<CGRect, text::kGlyphCount> bounds{};
+    CTFontGetBoundingRectsForGlyphs(font, kCTFontOrientationHorizontal, cgGlyphs.data(),
+                                    bounds.data(), static_cast<CFIndex>(text::kGlyphCount));
+    std::array<CGSize, text::kGlyphCount> advances{};
+    CTFontGetAdvancesForGlyphs(font, kCTFontOrientationHorizontal, cgGlyphs.data(),
+                              advances.data(), static_cast<CFIndex>(text::kGlyphCount));
+
+    int atlasWidth = 0;
+    int atlasHeight = 1;
+    for (const CGRect& box : bounds) {
+        atlasWidth += static_cast<int>(std::ceil(box.size.width)) + 2 * kGlyphPadding;
+        atlasHeight = std::max(atlasHeight,
+                               static_cast<int>(std::ceil(box.size.height)) + 2 * kGlyphPadding);
+    }
+    atlasWidth = std::max(atlasWidth, 1);
+
+    // An 8-bit COVERAGE bitmap, not colour: the glyph says how much of the vertex's colour
+    // lands, which is what lets one atlas draw white text, red text and a shadow.
+    std::vector<std::uint8_t> pixels(static_cast<std::size_t>(atlasWidth * atlasHeight), 0);
+    CGColorSpaceRef grey = CGColorSpaceCreateDeviceGray();
+    CGContextRef ctx = CGBitmapContextCreate(
+        pixels.data(), static_cast<std::size_t>(atlasWidth), static_cast<std::size_t>(atlasHeight),
+        8, static_cast<std::size_t>(atlasWidth), grey, kCGImageAlphaNone);
+    CGColorSpaceRelease(grey);
+    if (ctx == nullptr) {
+        CFRelease(font);
+        std::fprintf(stderr, "could not rasterise the HUD font\n");
+        return;
+    }
+    CGContextSetGrayFillColor(ctx, 1.0, 1.0);
+    CGContextSetShouldAntialias(ctx, true);
+    CGContextSetShouldSmoothFonts(ctx, false);  // no subpixel: this is a single channel
+
+    glyphs_.resize(text::kGlyphCount);
+
+    int penX = kGlyphPadding;
+    for (std::size_t i = 0; i < text::kGlyphCount; ++i) {
+        const CGRect& box = bounds[i];
+        const int w = static_cast<int>(std::ceil(box.size.width));
+        const int h = static_cast<int>(std::ceil(box.size.height));
+
+        if (w > 0 && h > 0) {
+            // CoreGraphics draws from the BASELINE upward with y increasing up, while the
+            // bitmap's rows run down. Placing the baseline at the glyph's own descent puts
+            // the whole ink inside the row whatever the glyph is.
+            const CGPoint at{static_cast<CGFloat>(penX) - box.origin.x,
+                             static_cast<CGFloat>(kGlyphPadding) - box.origin.y};
+            CTFontDrawGlyphs(font, &cgGlyphs[i], &at, 1, ctx);
+        }
+
+        // V IS FLIPPED. CoreGraphics draws bottom-up — y increases up from the bitmap's
+        // last row — while `replaceRegion` uploads row 0 first and the sampler's v grows
+        // downward. Every glyph's ink sits `kGlyphPadding` above the bitmap's BOTTOM, so
+        // measured from the top it runs from `atlasHeight - padding - h` to
+        // `atlasHeight - padding`.
+        //
+        // Getting this wrong does not look like a flip: the tallest glyph is nearly right
+        // and every shorter one reads from a band it does not occupy, so the text comes out
+        // legible and clipped, which reads as a font-size bug.
+        const float vTop =
+            static_cast<float>(atlasHeight - kGlyphPadding - h) / static_cast<float>(atlasHeight);
+        const float vBottom =
+            static_cast<float>(atlasHeight - kGlyphPadding) / static_cast<float>(atlasHeight);
+
+        glyphs_[i] = text::Glyph{
+            .uv = {static_cast<float>(penX) / static_cast<float>(atlasWidth), vTop,
+                   static_cast<float>(penX + w) / static_cast<float>(atlasWidth), vBottom},
+            .width = static_cast<float>(w),
+            .height = static_cast<float>(h),
+            // The ink's left edge relative to the pen, and its TOP relative to the baseline.
+            // The second is negative for anything that rises above the baseline, which is
+            // nearly everything — see Glyph.
+            .bearingX = static_cast<float>(box.origin.x),
+            .bearingY = -static_cast<float>(box.origin.y + box.size.height),
+            .advance = static_cast<float>(advances[i].width),
+        };
+
+        penX += w + 2 * kGlyphPadding;
+    }
+
+    CGContextRelease(ctx);
+    CFRelease(font);
+
+    auto* descriptor = MTL::TextureDescriptor::texture2DDescriptor(
+        MTL::PixelFormatR8Unorm, static_cast<NS::UInteger>(atlasWidth),
+        static_cast<NS::UInteger>(atlasHeight), false);
+    // A CLASS FACTORY, so its result is autoreleased and must NOT be released here — see
+    // AGENT.md, which records the segfault that taught this.
+    fontAtlas_ = device_->newTexture(descriptor);
+    if (fontAtlas_ == nullptr) {
+        glyphs_.clear();
+        std::fprintf(stderr, "could not upload the HUD font atlas\n");
+        return;
+    }
+
+    const MTL::Region region =
+        MTL::Region::Make2D(0, 0, static_cast<NS::UInteger>(atlasWidth),
+                            static_cast<NS::UInteger>(atlasHeight));
+    fontAtlas_->replaceRegion(region, 0, pixels.data(),
+                              static_cast<NS::UInteger>(atlasWidth));
+
+    std::printf("hud font: Menlo %.0fpt, %zu glyphs in a %dx%d atlas, %.1fpx line\n",
+                static_cast<double>(kFontPointSize), glyphs_.size(), atlasWidth, atlasHeight,
+                static_cast<double>(lineHeight_));
+}
+
+std::span<const text::Glyph> Renderer::glyphs() const noexcept { return glyphs_; }
+
+float Renderer::lineHeight() const noexcept { return lineHeight_; }
+
+void Renderer::setText(std::span<const text::TextVertex> vertices) noexcept {
+    textVertexCount_ = 0;
+    if (textBuffer_ == nullptr || vertices.empty()) {
+        return;
+    }
+
+    // Truncated to whole TRIANGLES, so a dropped tail cannot leave a half quad behind — the
+    // same rule the decals follow.
+    const std::size_t fits = std::min(vertices.size(), text::kMaxTextVertices);
+    textVertexCount_ = fits - (fits % 3);
+    if (textVertexCount_ == 0) {
+        return;
+    }
+
+    auto* base = static_cast<text::TextVertex*>(textBuffer_->contents());
+    std::memcpy(base + instanceSlot_ * text::kMaxTextVertices, vertices.data(),
+                textVertexCount_ * sizeof(text::TextVertex));
 }
 
 void Renderer::setParticles(std::span<const Particle> particles) noexcept {
@@ -3474,6 +3739,33 @@ void Renderer::encodeScene(MTL::CommandBuffer* commandBuffer, MTL::RenderPassDes
                                        static_cast<NS::UInteger>(waterIndexCount_),
                                        MTL::IndexType::IndexTypeUInt32, waterIndexBuffer_,
                                        NS::UInteger{0});
+    }
+
+    // --- Text ---------------------------------------------------------------
+    // LAST OF ALL, and after the water: the HUD is not in the world, so nothing in the world
+    // may draw over it — not a puff of dust and not the sea. No depth state either, for the
+    // same reason: there is nothing for it to be in front of or behind.
+    //
+    // Skipped in the reflection pass, like the decals. A mirror showing the interface would
+    // be the interface appearing twice.
+    if (textVertexCount_ > 0 && textPipeline_ != nullptr && fontAtlas_ != nullptr
+        && override == nullptr) {
+        encoder->setRenderPipelineState(textPipeline_);
+        encoder->setVertexBuffer(textBuffer_,
+                                 static_cast<NS::UInteger>(instanceSlot_
+                                                           * text::kMaxTextVertices
+                                                           * sizeof(text::TextVertex)),
+                                 kVertexBufferIndex);
+
+        // The viewport in POINTS, which is the space the vertices are in — the shader needs
+        // it to turn pixels into clip space and it is the only thing here that knows the
+        // window's size.
+        const simd_float2 viewport{static_cast<float>(width), static_cast<float>(height)};
+        encoder->setVertexBytes(&viewport, sizeof(viewport), kUniformBufferIndex);
+        encoder->setFragmentTexture(fontAtlas_, NS::UInteger{0});
+        encoder->setFragmentSamplerState(fontSampler_, NS::UInteger{0});
+        encoder->drawPrimitives(MTL::PrimitiveType::PrimitiveTypeTriangle, NS::UInteger{0},
+                                static_cast<NS::UInteger>(textVertexCount_));
     }
 
     encoder->endEncoding();

@@ -784,6 +784,23 @@ BAR=~/projects/llm/games/forged-alliance-reborn/reference/BAR/objects3d/Units
 # scene: 3 models, 4 textures uploaded, 2 texture binds per frame
 ```
 
+### The HUD
+
+Four facts and a banner, drawn last of all over the world. Ours, not the game's — Supreme
+Commander's own interface is 46 650 lines of Lua and is explicitly out of scope.
+
+    MASS 0  (+0.5/s)   ENERGY 0  (+5.0/s  -0.0/s)
+    BUILDING AT 8%
+    6 UNITS   6 OF 8 ARMIES IN PLAY
+
+The stall line appears only when there IS a stall: a line that always reads 100% is one a
+player stops seeing, and then does not notice at 40%.
+
+The font is rasterised at startup with CoreText into a single-channel coverage atlas — Menlo
+18pt, 95 glyphs, 989x20 — and drawn through one pipeline in pixel space. Monospaced
+deliberately: in a proportional face a rising mass figure jitters sideways as its digits
+change width, which reads as the text being unstable rather than the number being live.
+
 ### Controls
 
 RTS conventions, because the camera was a model viewer's before this and a view that

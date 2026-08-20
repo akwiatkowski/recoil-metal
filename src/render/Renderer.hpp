@@ -13,6 +13,7 @@
 #include "core/scene/Selection.hpp"
 #include "core/scene/UnitBatch.hpp"
 #include "core/scene/UnitPlacement.hpp"
+#include "core/text/TextLayout.hpp"
 #include "core/texture/Dds.hpp"
 #include "core/mesh/ChunkDraws.hpp"
 #include "core/mesh/TerrainMesh.hpp"
@@ -250,6 +251,27 @@ public:
     // Particles beyond kMaxParticles are dropped rather than growing the buffer,
     // which cannot be resized while the GPU may be reading it.
     void setParticles(std::span<const Particle> particles) noexcept;
+
+    // --- Text ---------------------------------------------------------------
+    //
+    // The HUD, and the first thing this renderer draws that is not part of the world.
+
+    /// The glyph table the font atlas was baked with, for a caller laying text out.
+    ///
+    /// Empty when the atlas could not be built — no font, or no device — in which case
+    /// `setText` draws nothing and `text::appendText` produces nothing, so a HUD degrades to
+    /// silence rather than to a crash.
+    [[nodiscard]] std::span<const text::Glyph> glyphs() const noexcept;
+
+    /// How tall a line of this font is, in pixels: what a caller advances y by between lines.
+    [[nodiscard]] float lineHeight() const noexcept;
+
+    /// This frame's HUD geometry, in pixels from the window's top-left.
+    ///
+    /// Replaced wholesale each frame like the selection rings, because a HUD is rebuilt from
+    /// the state it reports rather than accumulated — and a stale line would report a number
+    /// that has since changed, which is worse than reporting none.
+    void setText(std::span<const text::TextVertex> vertices) noexcept;
 
     // Uploads several models, the instances to draw each at, and the textures
     // they share. One instanced draw call covers every instance of a model; the
@@ -655,6 +677,21 @@ private:
 
     std::vector<GpuPropGroup> propGroups_;
     std::vector<MTL::Texture*> propTextures_;  // owned, indexed by PropLevel::albedo
+
+    // --- Text ---------------------------------------------------------------
+    //
+    // One atlas, baked once at startup, and one buffer rewritten per frame. The atlas is
+    // single-channel coverage rather than colour, so one texture serves text of any colour.
+    MTL::RenderPipelineState* textPipeline_ = nullptr;  // owned
+    MTL::Texture* fontAtlas_ = nullptr;                // owned
+    MTL::SamplerState* fontSampler_ = nullptr;          // owned
+    MTL::Buffer* textBuffer_ = nullptr;                 // owned
+    std::size_t textVertexCount_ = 0;
+    std::vector<text::Glyph> glyphs_;
+    float lineHeight_ = 0.0f;
+
+    /// Rasterises the font into `fontAtlas_` and fills `glyphs_`. Called once, at startup.
+    void buildFontAtlas();
 
     /// Scratch for the survivors and the per-level counts, reused so a frame costs
     /// no allocation.

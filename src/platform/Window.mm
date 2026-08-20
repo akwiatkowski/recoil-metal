@@ -487,6 +487,14 @@ void Window::focusOn(std::array<float, 3> target, float distance) {
 
 OrbitCamera& Window::camera() { return impl_->renderer->camera(); }
 
+std::span<const text::Glyph> Window::glyphs() const { return impl_->renderer->glyphs(); }
+
+float Window::lineHeight() const { return impl_->renderer->lineHeight(); }
+
+void Window::setText(std::span<const text::TextVertex> vertices) {
+    impl_->renderer->setText(vertices);
+}
+
 void Window::show() {
     [impl_->window makeKeyAndOrderFront:nil];
 }

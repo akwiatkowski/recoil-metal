@@ -139,6 +139,14 @@ public:
     void setStratumNormals(bool enabled);
     [[nodiscard]] bool stratumNormalsEnabled() const;
 
+    /// The glyph table the HUD font was baked with, and its line height. See
+    /// Renderer::glyphs.
+    [[nodiscard]] std::span<const text::Glyph> glyphs() const;
+    [[nodiscard]] float lineHeight() const;
+
+    /// This frame's HUD. See Renderer::setText.
+    void setText(std::span<const text::TextVertex> vertices);
+
     /// This frame's selection rings. See Renderer::setGroundDecals. Like
     /// setInstances, only meaningful from inside an onFrame callback.
     void setGroundDecals(std::span<const DecalVertex> vertices);

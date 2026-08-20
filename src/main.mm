@@ -18,6 +18,7 @@
 #include "core/scene/PropBatch.hpp"
 #include "core/scene/Selection.hpp"
 #include "core/scene/UnitIcons.hpp"
+#include "core/text/TextLayout.hpp"
 
 #include <cassert>
 #include "core/settings/Settings.hpp"
@@ -2600,6 +2601,84 @@ void writeCsv(const std::string& path, const rm::bench::FrameRecorder& recorder)
 
 namespace {
 
+/// Builds the HUD: what the player has, what is left standing, and who won.
+///
+/// Ours, not the game's. Supreme Commander's own interface is 46,650 lines of Lua and is
+/// explicitly out of scope (PLAN.md); this is the four facts a person watching a match needs
+/// and nothing else.
+void appendHud(std::vector<rm::text::TextVertex>& out, std::span<const rm::text::Glyph> glyphs,
+               float lineHeight, const UnitScene& scene) {
+    if (glyphs.empty() || scene.armies.empty()) {
+        return;  // no font, or no match: a HUD with nothing to report draws nothing
+    }
+
+    constexpr std::array<float, 4> kLabel{{0.75f, 0.78f, 0.82f, 0.95f}};
+    constexpr std::array<float, 4> kVictory{{1.0f, 0.92f, 0.35f, 1.0f}};
+    constexpr float kMargin = 16.0f;
+
+    // The pen starts one line DOWN from the top, because a pen sits on the baseline and text
+    // hung from y = 0 would have its ascenders off the top of the window.
+    float y = kMargin + lineHeight;
+
+    const auto line = [&](const std::string& textLine, std::array<float, 4> colour) {
+        (void)rm::text::appendText(out, glyphs, textLine, kMargin, y, colour);
+        y += lineHeight;
+    };
+
+    // The player's own economy, which is the number a hand hovers over.
+    if (scene.playerArmy != rm::sim::kNoArmy
+        && static_cast<std::size_t>(scene.playerArmy) < scene.economies.size()) {
+        const rm::sim::Economy& mine =
+            scene.economies[static_cast<std::size_t>(scene.playerArmy)];
+
+        char buffer[160];
+        std::snprintf(buffer, sizeof(buffer), "MASS %.0f  (+%.1f/s)   ENERGY %.0f  (+%.1f/s"
+                                             "  -%.1f/s)",
+                      static_cast<double>(mine.stored.mass),
+                      static_cast<double>(mine.incomePerSecond.mass),
+                      static_cast<double>(mine.stored.energy),
+                      static_cast<double>(mine.incomePerSecond.energy),
+                      static_cast<double>(mine.upkeepPerSecond.energy));
+        line(buffer, kLabel);
+
+        // The stall, and only when there IS one: a line that always reads 100% is a line a
+        // player stops seeing, and then does not notice at 40%.
+        if (mine.fundedFraction < 0.999f) {
+            char stall[64];
+            std::snprintf(stall, sizeof(stall), "BUILDING AT %.0f%%",
+                          static_cast<double>(mine.fundedFraction * 100.0f));
+            line(stall, {{1.0f, 0.55f, 0.2f, 1.0f}});
+        }
+    }
+
+    // Who is still in it. Counted from the health rather than from the army list, because an
+    // army is not defeated until its COMMANDER dies and its other units are still standing
+    // and still shooting until then.
+    std::size_t alive = 0;
+    for (const std::vector<rm::sim::Health>& batch : scene.health) {
+        for (const rm::sim::Health& one : batch) {
+            if (one.alive()) {
+                ++alive;
+            }
+        }
+    }
+
+    char army[160];
+    std::snprintf(army, sizeof(army), "%zu UNITS   %zu OF %zu ARMIES IN PLAY", alive,
+                  rm::sim::survivorCount(scene.armies), scene.armies.size());
+    line(army, kLabel);
+
+    // And the outcome, once there is one. Centred-ish and large, because it is the one thing
+    // here that is an event rather than a reading.
+    if (rm::sim::survivorCount(scene.armies) <= 1) {
+        const std::optional<int> winner = rm::sim::winningTeam(scene.armies);
+        const std::string banner = winner ? ("TEAM " + std::to_string(*winner) + " WINS")
+                                          : std::string{"A DRAW"};
+        (void)rm::text::appendText(out, glyphs, banner, kMargin, y + lineHeight * 1.5f,
+                                   kVictory, /*scale=*/2.0f);
+    }
+}
+
 /// Appends an icon for every unit in the scene too small to read, at the camera's current
 /// zoom. See core/scene/UnitIcons.hpp.
 ///
@@ -2953,6 +3032,12 @@ int main(int argc, const char* argv[]) {
             appendSceneIcons(shotParticles, units, renderer.camera());
             renderer.setParticles(shotParticles);
 
+            // The HUD in a capture too. A screenshot is how this project verifies anything,
+            // and an interface only visible in a live window cannot be checked at all.
+            std::vector<rm::text::TextVertex> hud;
+            appendHud(hud, renderer.glyphs(), renderer.lineHeight(), units);
+            renderer.setText(hud);
+
             const auto image = renderer.renderToImage(shot.width, shot.height);
             return writePng(shot.path, image) ? 0 : 1;
         }
@@ -3147,6 +3232,7 @@ int main(int argc, const char* argv[]) {
         // Scratch for the icon pass, held outside the frame callback so a frame costs no
         // allocation — the same reason the dust emitters are.
         std::vector<rm::Particle> iconScratch;
+        std::vector<rm::text::TextVertex> hudScratch;
 
         window.onFrame([&](float elapsed) {
             // WASD pans the map, every frame rather than per keypress: a pan driven by
@@ -3233,6 +3319,10 @@ int main(int argc, const char* argv[]) {
             iconScratch.assign(particles.begin(), particles.end());
             appendSceneIcons(iconScratch, units, window.camera());
             window.setParticles(iconScratch);
+
+            hudScratch.clear();
+            appendHud(hudScratch, window.glyphs(), window.lineHeight(), units);
+            window.setText(hudScratch);
 
             // Rings under whatever is selected, rebuilt from scratch every
             // frame. Cheap — a selection is tens of units and each ring is 192
