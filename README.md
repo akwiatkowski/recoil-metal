@@ -823,7 +823,7 @@ distance, and it caught the first two attempts being too close to tell apart.
 Panels are glass with a lit top edge and corner brackets rather than full borders: brackets say
 where a panel's bounds are without the frame competing with the numbers inside it.
 
-### Controls### Controls
+### Controls
 
 RTS conventions, because the camera was a model viewer's before this and a view that
 swings when you meant to select is the most disorienting thing an RTS camera can do.
@@ -929,6 +929,39 @@ name the `.s3o` carries, under BAR's `unittextures/`; models naming the same
 file share one upload, and the draws are ordered so each texture *pair* is bound
 once per frame rather than once per model — which is the unit Recoil batches on
 too. The first `--units` takes the map's start positions; the rest are scattered.
+
+### A match (milestone 20)
+
+```sh
+FA="/path/to/Supreme Commander Forged Alliance"
+
+# The whole skirmish, spawn to victory banner, deterministic: a scripted
+# opponent (a fixed build order plus one attack wave — core/sim/BuildOrder.hpp,
+# not an AI) builds a base, streams tanks, and comes for your commander.
+./build/recoil-metal "$FA/maps/SCMP_009/SCMP_009.scmap" --gamedata "$FA/gamedata" \
+    --skirmish --armies 2 --play 520 \
+    --screenshot /tmp/victory.png 1280 720
+
+# The same match at any earlier moment is a screenshot of that stage:
+#   12s the first extractor, 60s the base, 76s the first tank off the line,
+#   450s the attack column, 483s the fight at your commander's feet.
+# --look aims the capture at a world point (X Z RADIUS-around-it, elmos).
+./build/recoil-metal "$FA/maps/SCMP_009/SCMP_009.scmap" --gamedata "$FA/gamedata" \
+    --skirmish --armies 2 --play 450 --look 5020 3150 340 \
+    --screenshot /tmp/the-attack.png 1280 720
+```
+
+`--play <seconds>` is `--march` without the blanket move order — the sim runs
+and the scripted armies decide their own movement. `--armies N` takes the first
+N of the map's start positions (SCMP_009 declares eight; a duel wants two). The
+player is army 0 and the script drives everyone else.
+
+| | |
+|---|---|
+| ![the opponent's base](docs/images/m20-2-base.jpg) | ![the attack column](docs/images/m20-4-attack.jpg) |
+| **1:00** — the opponent's base: extractor, power, factory | **7:30** — twenty tanks, attack-moving |
+| ![the fight](docs/images/m20-5-battle.jpg) | ![the banner](docs/images/m20-6-victory.jpg) |
+| **8:03** — the wave reaches the player's commander | **8:40** — a match that *ends* |
 
 ### Supreme Commander models
 

@@ -1,0 +1,188 @@
+// The scripted opponent's build order — milestone 20.
+//
+// NOT an AI, and tested like the clockwork it is: a fixed sequence (power, a second
+// extractor, a factory, then tanks) and one attack wave whose size comes from the
+// blueprints' own arithmetic rather than taste. The commander and the factory are
+// separate actors — each has its own question — which is why this is three small
+// functions rather than one state machine.
+#include <catch2/catch_test_macros.hpp>
+
+#include "core/sim/BuildOrder.hpp"
+
+#include <cmath>
+
+using rm::sim::ArmyView;
+using rm::sim::Opponent;
+using rm::sim::StructureOrder;
+
+namespace {
+
+/// An army mid-game: first extractor standing, commander idle, nothing else yet.
+[[nodiscard]] ArmyView afterFirstExtractor() {
+    return ArmyView{
+        .commanderAlive = true,
+        .commanderBusy = false,
+        .factoryBusy = false,
+        .extractorsStanding = 1,
+        .powerGeneratorsStanding = 0,
+        .factoriesStanding = 0,
+        .tanksAlive = 0,
+    };
+}
+
+} // namespace
+
+TEST_CASE("the commander follows the fixed order: power, second extractor, factory") {
+    ArmyView view = afterFirstExtractor();
+
+    SECTION("power generator first — everything after it is energy-bound") {
+        CHECK(rm::sim::nextStructure(view) == StructureOrder::PowerGenerator);
+    }
+
+    SECTION("then a second extractor, because tanks are mass-bound") {
+        view.powerGeneratorsStanding = 1;
+        CHECK(rm::sim::nextStructure(view) == StructureOrder::Extractor);
+    }
+
+    SECTION("then the factory, and after it the commander is done") {
+        view.powerGeneratorsStanding = 1;
+        view.extractorsStanding = 2;
+        CHECK(rm::sim::nextStructure(view) == StructureOrder::Factory);
+
+        view.factoriesStanding = 1;
+        CHECK(rm::sim::nextStructure(view) == StructureOrder::None);
+    }
+}
+
+TEST_CASE("the commander starts nothing while it should wait") {
+    ArmyView view = afterFirstExtractor();
+
+    SECTION("not before the first extractor stands — that build is ordered at spawn") {
+        view.extractorsStanding = 0;
+        CHECK(rm::sim::nextStructure(view) == StructureOrder::None);
+    }
+
+    SECTION("not while something is already under construction") {
+        view.commanderBusy = true;
+        CHECK(rm::sim::nextStructure(view) == StructureOrder::None);
+    }
+
+    SECTION("not once it is dead — a defeated army orders nothing") {
+        view.commanderAlive = false;
+        CHECK(rm::sim::nextStructure(view) == StructureOrder::None);
+    }
+}
+
+TEST_CASE("the factory produces tanks whenever it stands idle") {
+    ArmyView view = afterFirstExtractor();
+
+    SECTION("no factory, no tank") { CHECK_FALSE(rm::sim::wantsTank(view)); }
+
+    SECTION("a standing, idle factory always starts the next tank") {
+        view.factoriesStanding = 1;
+        CHECK(rm::sim::wantsTank(view));
+    }
+
+    SECTION("but only one at a time") {
+        view.factoriesStanding = 1;
+        view.factoryBusy = true;
+        CHECK_FALSE(rm::sim::wantsTank(view));
+    }
+
+    SECTION("and production never stops — the stream after the wave is the win condition") {
+        view.factoriesStanding = 1;
+        view.tanksAlive = rm::sim::kAttackWaveTanks + 5;
+        CHECK(rm::sim::wantsTank(view));
+    }
+}
+
+TEST_CASE("one attack wave, launched at strength and never re-launched") {
+    ArmyView view = afterFirstExtractor();
+    view.factoriesStanding = 1;
+    Opponent script;
+
+    SECTION("not before the wave is big enough to survive the commander's return fire") {
+        view.tanksAlive = rm::sim::kAttackWaveTanks - 1;
+        CHECK_FALSE(rm::sim::launchesAttack(script, view));
+    }
+
+    SECTION("at strength, it launches") {
+        view.tanksAlive = rm::sim::kAttackWaveTanks;
+        CHECK(rm::sim::launchesAttack(script, view));
+    }
+
+    SECTION("once launched, it stays launched — reinforcements join, waves do not reform") {
+        script.attackLaunched = true;
+        view.tanksAlive = rm::sim::kAttackWaveTanks * 2;
+        CHECK_FALSE(rm::sim::launchesAttack(script, view));
+    }
+}
+
+TEST_CASE("the wave size is the blueprints' arithmetic, not taste") {
+    // Sequential-kill model: the commander (100 dps, UEL0001 zephyr — Damage 100,
+    // RateOfFire 1) kills one 300 hp tank (UEL0201) every 3 seconds while every tank
+    // still alive deals its 24 dps. A wave of N therefore lands about
+    // 24 * 3 * N(N+1)/2 damage before it dies, and that must clear 12000 hp.
+    const float tankDps = 24.0f;
+    const float secondsPerTankKilled = 300.0f / 100.0f;
+    const auto damageOfWave = [&](std::size_t n) {
+        const auto nf = static_cast<float>(n);
+        return tankDps * secondsPerTankKilled * nf * (nf + 1.0f) / 2.0f;
+    };
+
+    // The smallest wave the model says clears the commander's 12000 hp...
+    std::size_t minimal = 1;
+    while (damageOfWave(minimal) < 12000.0f) {
+        ++minimal;
+    }
+
+    // ...and the script's wave is that plus a stated margin of two — the model is
+    // optimistic (no travel time, no dead tanks blocking the living) — but no more:
+    // a bigger margin is the script sitting on tanks it should have used.
+    CHECK(rm::sim::kAttackWaveTanks >= minimal);
+    CHECK(rm::sim::kAttackWaveTanks == minimal + 2);
+}
+
+TEST_CASE("structures fan out from the start position, toward the map centre") {
+    const std::array<float, 3> start{512.0f, 20.0f, 512.0f};
+    const float centreX = 4096.0f;
+    const float centreZ = 4096.0f;
+
+    const std::array<float, 3> power = rm::sim::structureSite(start, centreX, centreZ, 0);
+    const std::array<float, 3> factory = rm::sim::structureSite(start, centreX, centreZ, 1);
+
+    SECTION("every slot is its own place, far enough apart not to overlap") {
+        const float dx = power[0] - factory[0];
+        const float dz = power[2] - factory[2];
+        CHECK(std::sqrt(dx * dx + dz * dz) >= 24.0f);
+    }
+
+    SECTION("both sit toward the centre, off the commander's own spot") {
+        for (const auto& site : {power, factory}) {
+            const float dx = site[0] - start[0];
+            const float dz = site[2] - start[2];
+            const float away = std::sqrt(dx * dx + dz * dz);
+            CHECK(away >= 16.0f);   // not on the commander
+            CHECK(away <= 100.0f);  // still inside the start plateau
+            // Toward the centre: the offset's dot product with the centre
+            // direction is positive.
+            CHECK(dx * (centreX - start[0]) + dz * (centreZ - start[2]) > 0.0f);
+        }
+    }
+
+    SECTION("deterministic — the same inputs place the same base") {
+        const std::array<float, 3> again = rm::sim::structureSite(start, centreX, centreZ, 0);
+        CHECK(power == again);
+    }
+}
+
+TEST_CASE("tanks roll off past the factory, not into it") {
+    const std::array<float, 3> factory{600.0f, 20.0f, 600.0f};
+    const std::array<float, 2> rally = rm::sim::rolloffPoint(factory, 4096.0f, 4096.0f);
+
+    const float dx = rally[0] - factory[0];
+    const float dz = rally[1] - factory[2];
+    const float away = std::sqrt(dx * dx + dz * dz);
+    CHECK(away >= 20.0f);  // clear of the factory's own footprint
+    CHECK(dx * (4096.0f - factory[0]) + dz * (4096.0f - factory[2]) > 0.0f);
+}

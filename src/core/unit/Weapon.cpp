@@ -103,6 +103,12 @@ std::vector<Weapon> weaponsFrom(const lua::Value& weaponArray) {
         if (const lua::Value* turreted = entry.find("Turreted")) {
             weapon.turreted = turreted->asBoolean().value_or(false);
         }
+        if (const lua::Value* manual = entry.find("ManualFire")) {
+            weapon.manualFire = manual->asBoolean().value_or(false);
+        }
+        // Any stated enhancement gates the weapon: which one it is does not matter
+        // to an engine that builds none of them.
+        weapon.enabledByEnhancement = entry.stringAt("EnabledByEnhancement").has_value();
 
         weapons.push_back(std::move(weapon));
     }

@@ -68,7 +68,7 @@ MARCH     ?= 4096 4096
 FA_FLAGS  = --gamedata "$(FA_ROOT)/gamedata"
 
 .DEFAULT_GOAL := help
-.PHONY: help build configure test run run-fa run-bar skirmish battle shot-fa shot-bar \
+.PHONY: help build configure test run run-fa run-bar skirmish battle match shot-fa shot-bar \
         bench bench-fa bench-gl clean check-fa check-bar
 
 help:
@@ -165,6 +165,12 @@ skirmish: build check-fa
 # result is the same every run — which is what makes a screenshot of it worth comparing.
 battle: build check-fa
 	$(BIN) "$(FA_MAP)" $(FA_FLAGS) --skirmish --march $(MARCH) $(SECONDS)
+
+# Milestone 20's match: a duel against the scripted opponent, played from spawn.
+# Deterministic, so SECONDS picks the stage of the SAME match: 12 the first
+# extractor, 60 the base, 76 the first tank, 450 the attack, 520 the banner.
+match: build check-fa
+	$(BIN) "$(FA_MAP)" $(FA_FLAGS) --skirmish --armies 2 --play $(SECONDS)
 
 # --- Screenshots -------------------------------------------------------------
 #

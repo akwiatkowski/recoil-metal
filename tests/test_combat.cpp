@@ -124,6 +124,23 @@ TEST_CASE("a death explosion is not a weapon that fires") {
     CHECK(directFire(10.0f, 100.0f).fires());
 }
 
+TEST_CASE("a manual weapon and an upgrade's weapon wait for orders that never come") {
+    // The commander's OverCharge states `ManualFire = true` and 12000 damage
+    // (uel0001_unit.bp) — in the game it costs energy and a click, and neither exists
+    // here. Auto-firing it one-shots everything that ever walks into range.
+    Weapon overcharge = directFire(12000.0f, 176.0f);
+    overcharge.manualFire = true;
+    CHECK_FALSE(overcharge.fires());
+
+    // The commander's TacMissile states `EnabledByEnhancement = 'TacticalMissile'`
+    // and a 2048-elmo range. Enhancements do not exist in this engine, so a weapon
+    // gated on one does not exist either — read it as a gun and the commander snipes
+    // whole columns from a fifth of the map away, which is how this line was found.
+    Weapon missile = directFire(250.0f, 2048.0f);
+    missile.enabledByEnhancement = true;
+    CHECK_FALSE(missile.fires());
+}
+
 TEST_CASE("a unit shoots the nearest enemy and never a friend") {
     const std::vector<Army> armies = rm::sim::freeForAll(2);
 

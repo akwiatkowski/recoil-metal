@@ -1124,3 +1124,125 @@ whichever unit built the grid. That was already true and this does not worsen it
 it is now the reason two motion classes are refused rather than merely a known gap.
 When per-class grids arrive, `travelsOnGround` is the seam they hang from, and
 `Water`/`SurfacingSub` become an inverted grid rather than a special case.
+
+## ADR-028 — The Lua story is two tiers, and the shim owns moho's names
+
+**Context.** The project's goals now state both halves out loud: run the existing
+Supreme Commander mods, *and* give people a modern way to write new ones. PLAN.md had
+left the fork open ("our own API" vs "moho's API") and its decision 2 required native
+functions to carry moho's names. The 2026-08-20 audit
+(`docs/recoil-metal/supcom-lua-gameplay-survey.md`) settled both empirically: not one
+of the 319 contract names appears in `src/` — the engine grew its own, better
+vocabulary — while the audit itself hand-wrote the moho→C++ mapping table (~120 lines)
+that the naming rule existed to avoid. The predicted cost has been paid once, as data.
+
+**Decision.** Both, layered. **Tier 1** is the engine's own clean Lua API: what the
+C++ actually exposes, what new mods target, what gets documentation, versioning and
+tooling. **Tier 2** is moho compatibility — `moho.*`, the LuaPlus dialect loader
+(ADR-029), the `On*` callbacks — written **in Lua on top of Tier 1** wherever
+possible, seeded from the audit's mapping table. PLAN.md decision 2 is amended
+accordingly: the shim owns the name mapping; the engine keeps its vocabulary and owns
+the unit conversions (ogrids, degrees) at its boundary.
+
+**Alternatives considered.** *moho names in C++* (the original decision) — paid
+nothing in five milestones, makes the C++ worse to read, and the translation table it
+was meant to avoid now exists anyway. *moho-only API* — every modder inherits the
+fidelity debt and a dead dialect. *Own API only* — loses the ecosystem; no existing
+mod runs at any price, and the ecosystem is the reason an open Moho matters.
+
+**Consequences.** Fidelity work lands in Lua, where the community can patch it without
+touching the engine — the same reason GZDoom's DECORATE-under-ZScript split outlived
+the engine it reimplemented. The coverage score becomes a property of the shim, tracked
+per milestone. The engine's API becomes a public contract and needs the discipline that
+implies: versioning, and no leaking of sim internals through it.
+
+## ADR-029 — LuaPlus is a dialect to accept, not a VM to adopt
+
+**Context.** The corpus is written for GPG's LuaPlus-flavoured Lua 5.0: `#` line
+comments in 1,240 of 1,414 files, `table.getn` in 477 places, `math.mod`, `arg[]`
+varargs. LuaPlus itself is long unmaintained, and fusing dialect to binary is exactly
+the coupling that has FAF stuck on a 2007 VM today.
+
+**Decision.** A current VM — Lua 5.4, or the 5.1 family if ADR-030's determinism work
+prefers it; determinism picks the VM, not nostalgia — plus a small lexer patch
+accepting `#` as a line comment and a compat library for the 5.0 idioms. The dialect
+is a **loader mode applied only to legacy archives**; Tier-1 content never sees it.
+Acceptance gate, cheap and mechanical: all 1,414 shipped files parse.
+
+**Alternatives considered.** *Embed Lua 5.0.2* — frozen, stop-the-world GC over
+thousands of unit tables, no modern tooling. *Embed LuaPlus itself* — dead code, and
+it reproduces FAF's coupling problem verbatim.
+
+**Consequences.** New mods get a living language with debuggers and an LSP. The compat
+surface is finite and enumerable (the audit lists every 5.0-ism by count), so "does the
+corpus load" is testable in CI without any engine function existing yet.
+
+## ADR-030 — The network protocol is ours: lockstep, deterministic, FAF at the lobby
+
+**Context.** The goal is multiplayer integrated with FAF — whose players today suffer
+desyncs from a closed 2007 engine nobody can fix. Compatibility with the retail sim
+protocol would require matching that binary bit for bit, forever, and is explicitly
+not wanted.
+
+**Decision.** No retail sim or network compatibility, ever. The engine's own lockstep
+on the 10 Hz tick, with three named obligations: **cross-platform float determinism**
+(no fast-math, no FMA contraction in sim code, deterministic transcendentals — IEEE
+basic arithmetic is already bit-exact everywhere, `sin`/`cos`/`exp` are not, which is
+the lesson streflop encoded for Spring in 2006); **a deterministic VM configuration**
+for sim-side Lua (iteration order, no GC-visible semantics); and **a per-tick state
+hash with an immediate desync report**, Recoil's model, so a divergence names its tick
+instead of ruining a match silently. "Integrated with FAF" means the lobby ecosystem —
+server, client, ICE adapter, all open source — not the game protocol.
+
+**Alternatives considered.** *Retail protocol compatibility* — bit-fidelity with a
+closed binary is the one goal that would make every other goal impossible.
+*Client-server with authoritative state* — thousands of units make state replication
+the wrong economy; lockstep is what every shipped engine in this genre chose.
+
+**Consequences.** Determinism becomes a standing constraint on all sim code from the
+host arc onward, latent while the only platform is one compiler on one architecture,
+binding the moment Linux (ADR-032) lands. Replays stay what they already are — an
+input log against a fixed tick.
+
+## ADR-031 — Beyond All Reason compatibility means content, not the Spring API
+
+**Context.** The engine already loads both families — Recoil maps and models, BAR
+blueprints, SupCom archives — with per-family semantics where they differ (the
+turnrate-per-frame discovery of milestone 16). "Usable for BAR" could mean two
+products: running BAR *content*, or replacing Recoil under the BAR *game*, which
+would mean reimplementing `Spring.*`, LuaRules and LuaUI — a second Moho-sized
+fidelity project against a moving target that has its own active engine team.
+
+**Decision.** Content, not API. Maps, models, blueprints and tick semantics stay
+green as a passive track; the Spring Lua API is refused. One substrate — VFS, render,
+platform, pathfinding — with a per-game sim personality on top.
+
+**Alternatives considered.** *Drop-in Recoil replacement* — starves the Supreme
+Commander goal, which is the project nobody else is building, to duplicate one that
+is actively maintained.
+
+**Consequences.** If the Recoil community ever wants this renderer, the door is the
+substrate, not a promise of API parity. BAR content stays a corpus for tests and a
+second proof that the engine's abstractions are not shaped around one game.
+
+## ADR-032 — Linux arrives through an RHI seam; Metal stays the reference
+
+**Context.** The goal is macOS **and Linux**; the renderer is hand-built Metal with
+the game's own shaders ported to MSL (`terrain.fx`, `water2.fx`). Metal does not run
+on Linux, and nothing translates it there.
+
+**Decision.** No rewrite now. When Linux becomes a milestone: a thin render-hardware
+interface with WebGPU (Dawn / wgpu-native) and SDL3's GPU API as the candidates —
+either gives Metal and Vulkan from one codepath — and shaders moved to a single
+source language (Slang or WGSL) and transpiled. Until then the obligation is
+**confinement only**: platform and GPU code stays inside `src/platform` and
+`src/render`, which is already the layout, and new shader logic stays self-contained
+and commented so the port is mechanical rather than archaeological.
+
+**Alternatives considered.** *Rewrite on Vulkan today* — delays a playable game for
+portability no one can use yet, and trades a working renderer for a regression hunt.
+*Stay Metal-only* — contradicts a stated goal; macOS alone is not "for society".
+
+**Consequences.** The real porting cost is the shaders, not the API layer, and it
+grows with every MSL line written — which is accepted and bounded by the confinement
+rule. The RHI decision date is a milestone boundary, not a surprise.

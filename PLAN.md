@@ -5,12 +5,24 @@
 milestone. This file is the direction: what "a simple Supreme Commander game"
 means here, what it needs, and what it deliberately does not.
 
-Milestones 1–15 are done and documented in the README. This plan covers **16–20**.
+Milestones 1–15 are done and documented in the README. This plan covers
+**16–20**, and — since 2026-08-20 — names the horizon past them.
 
-**Target, stated once so it can be checked:** two armies on a retail `.scmap`,
-each with an ACU, extracting mass, building from a factory, fighting with
-weapons read from the shipped blueprints, and a match that *ends* — last ACU
-standing. Playable on `SCMP_009` from the same binary that renders it today.
+**Near target, stated once so it can be checked:** two armies on a retail
+`.scmap`, each with an ACU, extracting mass, building from a factory, fighting
+with weapons read from the shipped blueprints, and a match that *ends* — last
+ACU standing. Playable on `SCMP_009` from the same binary that renders it today.
+
+**The horizon, stated once so the near target has a direction:** an open-source
+Moho. This engine, GPL-2.0-or-later like the Recoil code it adapts, playing
+Supreme Commander on macOS **and Linux**, running the existing mods through a
+hosted Lua layer while offering a clean modern API for new ones (ADR-028), and
+playing multiplayer through FAF's open lobby ecosystem on its **own**
+deterministic lockstep protocol — never the retail one, whose desyncs are the
+reason FAF needs an engine at all (ADR-030). Beyond All Reason stays supported
+at the content level — maps, models, blueprints — not as a Recoil replacement
+(ADR-031). Who this is for: everyone who wants to upgrade the game and keep
+playing it. The tracks from here to there are at the end of this file.
 
 ---
 
@@ -105,6 +117,15 @@ after milestone 20; everything else about a host can wait.
    of a translation, and it costs exactly one naming decision per function.
    Where our semantics deliberately differ, say so at the definition.
 
+   **Audited 2026-08-20, and amended by ADR-028.** Not one of the 319 names
+   appears in `src/` — the engine grew its own, better vocabulary
+   (`orderRouted`, `heightAt`, `tickEconomy`) — while the audit hand-wrote the
+   moho→C++ mapping table this decision existed to avoid (~120 lines, in the
+   survey doc). The cost this decision predicted has therefore been paid once,
+   as a table. Amended: **the shim owns the name mapping; the engine keeps its
+   vocabulary and owns the unit conversions at its boundary.** The table
+   becomes committed code when the host arc starts.
+
 3. **Events are a documented set, dispatched by name.** The sim fires
    `onCreate`, `onStopBeingBuilt`, `onKilled`, `onDamage`, `onStartBuild`,
    `onStopBuild`, `onGotTarget`, `onLostTarget`, `onImpact`, `onLayerChange` —
@@ -112,14 +133,21 @@ after milestone 20; everything else about a host can wait.
    listed, tested set rather than as calls scattered through the sim. A host
    subscribes to the same list.
 
+   **Audited 2026-08-20: not yet true.** One event exists (`onFinalWaypoint`);
+   the rest are implicit in C++ call order. The cheap honest version, owed
+   before the combat and economy code goes stale: fire the ten into a log sink
+   — no subscribers, no dispatcher machinery — so the *ordering* is pinned
+   while it is still remembered, and replay tests can assert the stream.
+
 4. **Content loads through a VFS with archive priority.** `.scd` files are ZIPs
    and miniz is already vendored. This is not Lua-specific work: **blueprint
    mods are the majority of real mods** and they work by layering an archive over
    the stock one, so a VFS earns its keep in the pure-C++ engine too. Extracting
    with a Python one-liner (`tests/test_real_scm.cpp:8`) is fine for fixtures and
-   wrong for the app. **Still open**, and milestone 16 found the first thing that
-   needs it: 25 unit blueprints name their mesh with a VFS path, and only 21 of
-   them resolve against an extracted tree.
+   wrong for the app. **Done** — the engine now reads the archives in place,
+   layered, and the whole scene loads through them (`feat(vfs)` commits after
+   milestone 16); the 25 `MeshName` blueprints were the first thing that
+   needed it.
 
 **What this does *not* buy, stated plainly so nobody is surprised later:** the
 hard part of hosting the game's Lua is semantic fidelity across ~200 functions,
@@ -127,19 +155,22 @@ and no amount of preparation today makes that free. These four decisions make
 the shim mechanical and the timing correct. They do not make the fidelity job
 smaller.
 
-**One fork worth deciding before milestone 21, not now.** "Moddable" and
-"runs existing Supreme Commander mods" are different products. Exposing *our own*
-Lua 5.4 API — our names, no fork, no compat shim, no 200-function debt — gets
-scriptable gameplay cheaply, and gets none of FAF's existing content. Hosting
-moho's API gets the ecosystem and owes the fidelity. Decisions 1–4 above serve
-both, which is why they can be taken now.
+**The fork this section left open is decided — ADR-028: both, layered.**
+"Moddable" and "runs existing Supreme Commander mods" are different products,
+and the goals want both. So the engine's *own* clean Lua API is the real one —
+what the C++ exposes, what new mods target, what gets tooling — and moho's API
+is a **compatibility shim written in Lua on top of it**, dialect loader and
+all (ADR-029), maintained where the community can patch fidelity without
+touching the engine. Decisions 1–4 above serve both tiers, which is why they
+could be taken early.
 
 ---
 
 ## Non-goals
 
 Stated up front, because a skirmish is only reachable if most of the game is
-out of scope.
+out of scope. These bound milestones 16–20, not the project — multiplayer and
+intel return as tracks at the end of this file.
 
 - **Not 568 units.** Six to eight, hand-picked: ACU, engineer, land factory,
   mass extractor, power generator, T1 tank, T1 bot, point defence.
@@ -150,9 +181,10 @@ out of scope.
 - **No game AI.** The opponent in milestone 20 is a scripted build order, and
   the plan says so in the code. Supreme Commander's own AI is 84,750 lines of
   Lua and is not being reimplemented.
-- **No lockstep or multiplayer.** Single machine, so bit-exact determinism is
-  not required — though the fixed tick keeps replays reproducible, which
-  `--march` already relies on.
+- **No lockstep or multiplayer** — *in 16–20*. It returns as its own track
+  (ADR-030). Single machine for now, so bit-exact determinism is not yet
+  required — though the fixed tick keeps replays reproducible, which `--march`
+  already relies on.
 - **No campaign, objectives, cinematics, or the game's UI.** The HUD is ours
   and minimal.
 
@@ -283,7 +315,7 @@ never fired), and turret aiming, which is why firing is not gated on facing.
 **Done when:** the ACU builds an extractor and a factory, and the factory
 produces tanks paid for out of a running economy.
 
-### 20. A skirmish that ends
+### 20. A skirmish that ends — **✔ done**
 
 - A scripted opponent: a fixed build order plus attack-move. Not an AI, and
   labelled as such in the source.
@@ -293,6 +325,81 @@ produces tanks paid for out of a running economy.
 
 **Done when:** a match on `SCMP_009` can be played from spawn to victory, and
 `--screenshot` can prove each stage of it.
+
+**Done, and provable in one line:** `--skirmish --armies 2 --play 520 --screenshot`
+plays the whole match from spawn to the victory banner, deterministically — the
+same command at any shorter duration is a screenshot of that stage of the same
+match. Extractor at 5.9s, power at 18.4s, factory at 54.9s, first tank at 68.9s,
+the attack at 335.0s with all 20 tanks routed, `team 1 WINS` at 502.2s — and the
+falling commander's death explosion takes eleven of the attackers with it, which
+is the milestone-18 nuke finally read aloud. Staged proof in
+`docs/images/m20-1-extractor.jpg` … `m20-6-victory.jpg`.
+
+What the milestone actually required, since most of it was not in the bullets:
+
+- **The opponent is `core/sim/BuildOrder.hpp`** — three pure functions (the
+  commander's next structure, the factory's next tank, the one attack launch)
+  over a caller-built `ArmyView`, tested in `tests/test_build_order.cpp`. The
+  wave size is the blueprints' own arithmetic — a 100-dps commander kills a
+  300 hp tank every 3 s, so N tanks at 24 dps land `72·N(N+1)/2` damage before
+  dying, and N=20 clears 12000 hp with a stated margin of two — and a test
+  recomputes the minimum so the constant cannot drift into taste.
+- **A finished construction had to BECOME A UNIT.** Milestone 19 ended at
+  income bookkeeping; nothing it built ever stood on the map. `spawnUnit` now
+  gives a finished Construction a batch, health, colour and motion, and a
+  finished tank rolls off the factory toward a rally point — or straight into
+  the attack once the wave has gone.
+- **Income is recomputed from what is standing**, each tick, instead of
+  accumulated when builds finish — a structure that dies now takes its
+  production, upkeep and storage with it, which the incremental version
+  silently got wrong.
+- **Armies now start with their storage banked**, as the game does. The empty
+  start survived milestone 19 only because the extractor was the sole build: a
+  750-energy power generator against a 5-a-second trickle parks the build
+  order for four minutes.
+- **The match found a weapons bug the corpus tests could not.** The commander
+  carries `ManualFire = true` (OverCharge, 12000 damage) and
+  `EnabledByEnhancement` weapons (TacMissile, 2048-elmo range), and the loader
+  read both as guns — the player's commander sniped the tank column from a
+  fifth of the map away and killed 19 of 20 before anything reached it. Both
+  flags are now read, both weapons now wait for orders and upgrades that never
+  come, and `tests/test_combat.cpp` says so.
+- **Three flags, all of them capture plumbing**: `--play SECONDS` (the march
+  sim without the blanket move order — the scripted armies decide their own
+  movement), `--armies N` (the first N start positions; the match this
+  milestone describes is a duel, and SCMP_009 declares eight), and
+  `--look X Z RADIUS` (aim a capture at a world point; a match's stages happen
+  at one base or the other, and neither is the first unit `--focus` finds).
+
+Still honest about its limits: the windowed path runs no combat or economy, so
+the *interactive* match is the pre-run one — `--play` then hand the scene over.
+Making the window fight is the natural next slice of playability, and it is
+glue rather than research: every per-tick piece already runs in `march()`.
+
+#### Owed before 20 can be called done (added 2026-08-20)
+
+Milestones 17–19 are ticked, and the skirmish still is not close. Two things
+are wrong when you actually watch it run, and neither is a milestone-20 task —
+they are debts left by 16–18 that 20 cannot be built on top of:
+
+- **Movement is not smooth.** The sim ticks at 10 Hz (cross-cutting note
+  below) and the renderer draws sim state directly, so units visibly step ten
+  times a second. The tick rate is correct and stays; what is missing is the
+  render-side half of the decoupling that was assumed done — interpolate each
+  drawn transform between the previous and current sim state by the fraction of
+  a tick elapsed, so the picture is continuous while the simulation stays
+  discrete. Nothing about determinism changes: interpolation is presentation
+  only and must never feed back into sim state.
+- **Units do not shoot.** Milestone 18 is marked done and the weapon code
+  exists, but in a running match nothing fires. That is a diagnosis owed before
+  any new work — target acquisition, the aiming gate added in
+  `feat(sim): weapons have to be pointed at what they shoot`, range and
+  cooldown, and whether the scripted opponent's units are ever given anything
+  to shoot at. The failing case gets a test before the fix, per AGENT.md rule 4.
+
+Until both are fixed, "a skirmish that ends" is not a thing that can be
+demonstrated, and the milestone-25 goal of hosting that skirmish in Lua is
+measuring against something that does not yet play.
 
 ---
 
@@ -316,3 +423,104 @@ produces tanks paid for out of a running economy.
 - **The seam.** Sim state stays plain structs behind narrow free functions, as
   `Movement.hpp` already does. No Lua host is built in milestones 16–20; the four
   decisions above are what keep one buildable in 21+.
+
+---
+
+## Beyond 20 — the tracks (added 2026-08-20)
+
+The horizon at the top of this file decomposes into four tracks. Their order
+is dependency order; their sizes are honest guesses except where measured.
+
+**Where the Lua host stands, measured** (audit of 2026-08-20, method and
+numbers in `docs/recoil-metal/supcom-lua-gameplay-survey.md` in the knowledge
+base): the sim contract is 319 functions across 4,601 call sites; the native
+sim covers **44 of them — 13.8% by function, 45.9% weighted by call site**.
+The spread is the finding: the hot core exists (`GetBlueprint`, `SetGoal`,
+`DamageArea`, `CreateProjectile`…), the 240-function tail does not. That table
+is the progress bar from milestone 21 on, so the audit scripts move from the
+scratchpad into `tools/` and re-run per milestone. One measurement is owed
+*before* 21: the contract restricted to the skirmish slice — `simInit.lua` +
+`Unit.lua` + `defaultweapons.lua` + the eight units and their projectiles.
+That number, not 319, is what milestone 25 must cover.
+
+### Track 0 — the playable window
+
+The match exists; the window has to catch up to it. `core/sim/Skirmish` already
+moves the whole tick into one tested call, and the interface grows Forged
+Alliance's anatomy in the engine's own instrument language — full design with
+tokens, layout and rejections in `docs/recoil-metal/fa-ui-design.md` (knowledge
+base). The slices, each screenshot-provable:
+
+- **UI-0**: the frame loop runs `tickSkirmish` — the window fights.
+- **UI-1**: the minimap, from the `.scmap`'s own embedded 256² preview
+  (currently skipped at `Scmap.cpp:288`), army pips, and the camera's ground
+  footprint as a grabbable trapezoid — click moves the view, zoom untouched.
+- **UI-2**: the selection roster — typed tiles, `×N` badges, hp underbars.
+- **UI-3**: the build tray — the archives' own `_icon.dds` (539 ship in
+  `textures.scd`), cost-at-the-builder's-rate on hover, a placement ghost
+  validated against the passability grid, and the first player-enqueued
+  Construction.
+- **UI-4**: an explicit orders row, deferred while right-click covers it.
+
+### Track 1 — the host arc, milestones 21–25
+
+- **21. The VM.** A current Lua — 5.4, or the 5.1 family if the determinism
+  work of ADR-030 prefers it — plus a lexer patch for `#` comments and a 5.0
+  compat library (ADR-029). *Done when* all 1,414 corpus files parse and
+  `lua/system/*.lua` executes against auto-generated logging stubs for every
+  missing engine function. The stub log IS the ranked to-do list.
+- **22. Scheduler and events.** `ForkThread`/`WaitTicks` as coroutines keyed
+  on the 10 Hz tick — the spine everything sits on, only 3 corpus files touch
+  `coroutine.` directly — and decision 3's event set dispatching to `On*`
+  methods on script objects.
+- **23. One unit, hosted.** UEL0201's real `Unit.lua` lifecycle end to end:
+  `OnCreate` → `OnStopBeingBuilt` → native motion under `SetGoal` →
+  `OnKilled`, **diffed tick by tick against the native-only run**. The native
+  sim is not scaffolding to discard; it is the oracle no other engine
+  reimplementation has had.
+- **24. Weapons go Lua.** `defaultweapons.lua`'s firing state machine replaces
+  native firing for that unit; its projectile scripts host too. The fidelity
+  stress test — the densest cluster of the contract.
+- **25. The milestone-20 skirmish, fully hosted**, coverage table published in
+  the README. The structural work owed along the way is not function-shaped,
+  so no `attempt to call a nil value` will point at it — it is named here
+  instead: the object bridge (one script table bound to one native entity,
+  designed once and reused by every binding), the categories algebra
+  (`categories.TANK * categories.TECH1 - categories.UEF`, userdata with
+  operators, 102+ sites), and `GetBlueprint` returning one shared table. The
+  moho shim itself is Lua on the engine's own API (ADR-028).
+
+After 25 breadth is mechanical, and the first payoff is demonstrable: a
+blueprint mod layered through the VFS changes the game with zero engine
+changes. That is the moment this is an open-source Moho rather than an engine
+that reads Supreme Commander's files.
+
+### Track 2 — determinism, lockstep, FAF (ADR-030)
+
+Large, and parallelizable once the sim API stops moving: strict-FP discipline
+with deterministic transcendentals (streflop's lesson — IEEE `+ − × ÷` are
+already bit-exact everywhere, `sin` is not), a deterministic VM configuration
+for sim state, and a per-tick state hash with an immediate desync report,
+which is what turns FAF's mystery desyncs into diagnosable bugs. FAF
+integration proper is the small end of the track: the lobby server, client,
+and ICE adapter are open source, and the surface a new engine must speak is
+documented by their own repos.
+
+### Track 3 — Linux (ADR-032)
+
+Medium and mostly mechanical when it starts: an RHI seam (WebGPU or SDL3 GPU
+class), shaders moved to a single-source language and transpiled. Until then
+the only obligation is confinement — platform and GPU code stays inside
+`src/platform` and `src/render`, which is already the layout.
+
+### Track 4 — Beyond All Reason content (ADR-031)
+
+Mostly done and deliberately passive: maps, models, blueprints, and the
+per-family tick semantics stay green; the Spring Lua API is refused. One
+substrate, per-game sim personality.
+
+### UI and AI, parked honestly
+
+140k of the corpus's 228k lines are UI and AI. Neither is hosted, possibly
+ever: the HUD is ours, the opponent is ours, and both can grow on the
+engine's own API. The mod-compatibility promise is about the sim.

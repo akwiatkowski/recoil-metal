@@ -119,14 +119,27 @@ struct Weapon {
     /// that can never fire at all.
     float firingToleranceDegrees = kDefaultFiringToleranceDegrees;
 
+    /// `ManualFire = true`: the game fires this only on an explicit order — the
+    /// commander's 12000-damage OverCharge is the reason the flag exists. This engine
+    /// has no such order, so a manual weapon never fires at all. 12 of the 494 state it.
+    bool manualFire = false;
+
+    /// `EnabledByEnhancement = '...'`: the weapon belongs to an upgrade the unit does
+    /// not have until built. Enhancements do not exist in this engine, so neither does
+    /// the weapon — the commander's TacMissile states a 2048-elmo range, and reading it
+    /// as a gun had the commander sniping whole tank columns from a fifth of the map
+    /// away before anything reached it.
+    bool enabledByEnhancement = false;
+
     /// Whether this weapon is one this engine fires at a target.
     ///
-    /// The `Death` exclusion is the load-bearing one. A weapon with no range or no
-    /// rate of fire is also excluded: both are things a gun must have, and a "weapon"
-    /// lacking them is a table describing something else.
+    /// The `Death` exclusion is the load-bearing one; manual and enhancement-gated
+    /// weapons wait for orders and upgrades that never come here. A weapon with no
+    /// range or no rate of fire is also excluded: both are things a gun must have, and
+    /// a "weapon" lacking them is a table describing something else.
     [[nodiscard]] bool fires() const noexcept {
-        return role != WeaponRole::Death && maxRangeElmos > 0.0f && rateOfFire > 0.0f
-            && damage > 0.0f;
+        return role != WeaponRole::Death && !manualFire && !enabledByEnhancement
+            && maxRangeElmos > 0.0f && rateOfFire > 0.0f && damage > 0.0f;
     }
 
     /// Whether this weapon does any damage at all, by either scheme. What a death explosion

@@ -19,7 +19,15 @@ struct OrbitCamera {
     simd_float3 target = {0.0f, 0.0f, 0.0f};  ///< the orbited point, in elmos
     float distance = 1000.0f;                 ///< eye-to-target distance, elmos
     float yaw = 0.0f;
-    float pitch = 0.6f;
+
+    /// Default elevation: 65 degrees — overhead with a lean, the RTS resting view
+    /// (Supreme Commander sits near this at mid zoom). Steep enough that screen
+    /// distance reads as ground distance and nothing hides behind a hill; shallow
+    /// enough that units keep a silhouette and the terrain keeps its relief. The
+    /// old 0.6 (34 degrees) was a model-viewer's angle — flattering for one mesh,
+    /// wrong for a battlefield, where it buried the far half of the map in
+    /// perspective. OUR number: neither engine states a default to read.
+    float pitch = 1.1345f;  // 65 degrees
 
     // Vertical field of view. 60 degrees is the usual compromise: wide enough to
     // see a useful slice of terrain, narrow enough that edge distortion stays

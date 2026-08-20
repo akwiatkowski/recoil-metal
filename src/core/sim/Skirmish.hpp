@@ -1,0 +1,180 @@
+#pragma once
+
+#include "core/map/HeightField.hpp"
+#include "core/sim/Army.hpp"
+#include "core/sim/Combat.hpp"
+#include "core/sim/Economy.hpp"
+#include "core/sim/Movement.hpp"
+#include "core/unit/UnitDef.hpp"
+
+#include <cstddef>
+#include <optional>
+#include <span>
+#include <vector>
+
+namespace rm::sim {
+
+// One tick of a whole match, in one place.
+//
+// WHY THIS FILE EXISTS. Every rule a match is made of was already here and already
+// tested — movement, collisions, aiming, firing, projectiles, damage, death, defeat,
+// economy. What was NOT here was the order they run in. That lived in an anonymous
+// namespace inside `main.mm`, which is an executable-only translation unit, so no test
+// could link it and there was nothing stopping a second caller from running a different
+// subset of it. One did: the windowed frame loop ticked movement and collisions and
+// nothing else, so a unit in the interactive game moved perfectly and never fired a
+// shot, and the whole test suite stayed green.
+//
+// So the assembly is the thing being moved, not the rules. Both callers — the headless
+// `--march` pre-run and the frame loop — call `tickSkirmish` now, and the order of the
+// passes is a fact about the sim rather than about whichever caller you are reading.
+//
+// WHAT IS DELIBERATELY NOT HERE. Anything that needs an asset. A finished construction
+// becomes a unit on the map, which means loading a model out of the VFS, and a death
+// leaves a scorch mark, which means a decal buffer. Both are the caller's work: this
+// reports what happened and the caller decides what to load. That keeps the sim free of
+// the VFS, which is what lets a test build a match out of two structs and a flat field.
+
+/// One batch of units — everything a whole tick reads and writes for them.
+///
+/// Spans into the caller's storage, the same shape and for the same reason as
+/// `CombatGroup` and `CollisionGroup`: the passes write positions and health back, and
+/// copying them out and in again would be both slower and a chance to lose a kill.
+///
+/// Mutable motion, unlike `CombatGroup`, because the movement pass owns it and a death
+/// has to be able to stop a unit dead.
+struct SkirmishGroup {
+    std::span<UnitInstance> instances;
+    std::span<MoveState> motion;
+    std::span<Health> health;
+
+    /// The definition every unit in this group shares. Null for a batch that has none —
+    /// a decorative crowd, which therefore neither fires, earns, nor dies.
+    const unitdef::UnitDef* def = nullptr;
+};
+
+/// The match-wide state one tick advances, alongside the per-batch groups.
+///
+/// References rather than values: a tick mutates all of it, and a Match is built fresh
+/// at each call site from storage that outlives it.
+struct Match {
+    std::vector<Army>& armies;
+
+    /// One economy per army, indexed by army. Empty outside a skirmish, which is what a
+    /// `--units` crowd is — the economy passes then do nothing rather than being skipped
+    /// by a flag.
+    std::span<Economy> economies;
+
+    std::vector<Projectile>* projectiles = nullptr;
+
+    /// Everything under construction, all armies together. Partitioned per army inside
+    /// the tick, because `tickEconomy` is documented to be given one army's work and
+    /// charging the wrong one is a caller's mistake to avoid.
+    std::vector<Construction>* building = nullptr;
+
+    /// How many commanders each army STARTED with, indexed by army.
+    ///
+    /// The win condition needs it to tell "lost its commander" from "never had one": a
+    /// decorative crowd has no commanders and must not be declared a draw on tick one.
+    std::span<const int> commandersEver;
+
+    /// The storage cap every army gets before anything it has built adds to it.
+    ///
+    /// Passed in rather than fixed here because it is the CALLER's starting condition —
+    /// a scenario could hand out a different one — and a constant in the sim would make
+    /// that a code change.
+    Resources baseStorage{};
+
+    /// Set once the match has been decided, so the result is announced once rather than
+    /// every tick for the rest of the run.
+    bool over = false;
+};
+
+/// A unit's death, with everything the caller needs to mark it.
+///
+/// The position and radius are CARRIED rather than looked up, because retiring a unit is
+/// what zeroes its radius and collapses its mesh — a caller that went back to the slot
+/// afterwards would find a scorch mark of size zero at a position the sim had written
+/// off. What the wreck looks like has to be sampled before the unit stops existing.
+struct Death {
+    UnitRef ref;
+    std::array<float, 3> at{};
+
+    /// The collision radius it had while alive, which is what sizes its wreck: a
+    /// commander marks more ground than a tank.
+    float radiusElmos = 0.0f;
+};
+
+/// What one tick did, for a caller that has to react to it.
+///
+/// Returned rather than written into the match because these are EVENTS, and the two
+/// callers react differently: the pre-run prints them, the frame loop draws them.
+struct TickReport {
+    std::size_t shotsFired = 0;
+
+    /// Who died this tick, reported exactly once each.
+    ///
+    /// Once, because the caller leaves a permanent scorch mark per entry, and a corpse
+    /// repeated every tick would scorch the same ground forever.
+    std::vector<Death> died;
+
+    /// Death explosions set off, and the damage they dealt.
+    ///
+    /// BOTH, because they answer different questions: a blast that goes off and hurts
+    /// nothing is the ordinary case when two commanders kill each other in the same
+    /// tick, and reporting only the damage would make that look like the explosions
+    /// never happened.
+    std::size_t deathBlasts = 0;
+    float deathBlastDamage = 0.0f;
+
+    /// How many armies were newly defeated this tick.
+    std::size_t defeated = 0;
+
+    /// Whether this tick ended the match, true on the ONE tick that decided it.
+    bool matchEnded = false;
+
+    /// The winning team, when the match ended with one. Empty on a draw — every army
+    /// losing its commander at once is a legitimate outcome, not an error.
+    std::optional<int> winner;
+
+    /// Constructions that completed this tick, for a caller that can turn one into a
+    /// unit on the map. The sim cannot: that needs a model out of the VFS.
+    ///
+    /// NEWLY completed, and the finished work stays in `Match::building` rather than
+    /// being taken out of it. That is deliberate: a finished construction is what marks
+    /// its ground as spoken for, and an opponent that scans the list for a free mass
+    /// deposit would put a second extractor on top of the first the moment the first
+    /// was removed.
+    std::vector<Construction> finished;
+};
+
+/// Advances the whole match by one fixed tick.
+///
+/// THE ORDER IS THE DESIGN, and it is stated here because it is what used to be lost:
+///
+///  1. Movement, then collisions. A unit shoots from where it has GOT to this tick.
+///  2. Aiming, then firing. An unturreted weapon may only shoot along its hull, so a
+///     unit that stopped facing the wrong way is brought round first — otherwise the
+///     facing gate reads as a weapon that simply does not work.
+///  3. Projectiles, then the dead. A shot that lands this tick kills this tick.
+///  4. Defeats and the win condition, every tick rather than at the end: an army that
+///     loses its commander stops being a target from that moment, which is what
+///     `hostile()` already reads, so a late check leaves a dead side fighting on.
+///  5. Income recomputed from what is STANDING, then the economy charged. A structure
+///     that died in step 3 takes its production with it in step 5, in the same tick.
+///
+/// Firing before moving would let a unit shoot from outside a range it is about to
+/// enter; checking defeat before the dead are retired would miss the commander that
+/// died this tick.
+TickReport tickSkirmish(std::span<SkirmishGroup> groups, Match& match,
+                        const HeightField& field);
+
+/// Living commanders per army, indexed by army.
+///
+/// Exposed rather than hidden inside the tick because the caller needs the same count at
+/// SETUP to fill `Match::commandersEver`, and two ways of counting the same thing is how
+/// "never had one" and "lost it" get confused.
+[[nodiscard]] std::vector<int> countCommanders(std::span<const SkirmishGroup> groups,
+                                               std::size_t armyCount);
+
+} // namespace rm::sim
