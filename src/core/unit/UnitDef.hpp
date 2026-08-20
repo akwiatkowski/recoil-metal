@@ -10,6 +10,7 @@
 #include <expected>
 #include <filesystem>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -153,6 +154,31 @@ struct UnitDef {
 
     /// Whether this unit can build anything at all.
     [[nodiscard]] bool isBuilder() const noexcept { return buildRate > 0.0f; }
+
+    // --- categories --------------------------------------------------------
+    //
+    // What the blueprint SAYS this unit is, as a sorted list of the tags it declares.
+    // `07-ai-and-gamesetup.md §4.2` shows the shape: a Cybran T2 tank carries
+    // `BUILTBYTIER2FACTORY`, `CYBRAN`, `DIRECTFIRE`, `LAND`, `MOBILE`, `TANK`, `TECH2` and
+    // six more. Every classification this engine makes above the sim is derived from these.
+    //
+    // SORTED, so `hasCategory` is a binary search rather than a scan — it is asked once per
+    // category per unit while an expression is evaluated over the whole corpus, which is
+    // 568 units times a handful of terms times every builder.
+
+    /// The tags, sorted and deduplicated. Empty for content that declares none, which is
+    /// every BAR unit — that family states its kind differently, and an empty list is the
+    /// honest report of that rather than a guess.
+    std::vector<std::string> categories;
+
+    /// Whether this unit declares a tag. Case-sensitive: the corpus is consistently upper
+    /// case, and a case-insensitive compare would hide a typo in a data file rather than
+    /// failing on it.
+    [[nodiscard]] bool hasCategory(std::string_view tag) const noexcept;
+
+    /// Whether it declares ALL of them. What one `BuildableCategory` term needs, since a
+    /// space in that expression means AND (`07 §4.3`).
+    [[nodiscard]] bool hasAllCategories(std::span<const std::string_view> tags) const noexcept;
 
     /// What this unit shoots with. Empty for the 321 shipped units that shoot nothing,
     /// and for every BAR unit — that family states its weapons in a shape this engine

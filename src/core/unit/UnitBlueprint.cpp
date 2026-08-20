@@ -216,6 +216,25 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
         def.storageEnergy = sim::magFromFloat(numberOr(*economy, "StorageEnergy", 0.0f));
     }
 
+    // --- categories --------------------------------------------------------
+    //
+    // A Lua ARRAY of strings at the top level. Everything this engine classifies above the
+    // sim is derived from these (`core/unit/Role.hpp`), so they are read for every unit
+    // rather than behind a check — 568 of 568 declare some.
+    if (const lua::Value* categories = parsed->path("Categories")) {
+        def.categories.reserve(categories->items.size());
+        for (const lua::Value& entry : categories->items) {
+            if (!entry.text.empty()) {
+                def.categories.emplace_back(entry.text);
+            }
+        }
+        // Sorted and deduplicated, which is what makes `hasCategory` a binary search. The
+        // corpus does repeat a tag occasionally, and a duplicate would only waste a compare.
+        std::sort(def.categories.begin(), def.categories.end());
+        def.categories.erase(std::unique(def.categories.begin(), def.categories.end()),
+                             def.categories.end());
+    }
+
     // --- weapons -----------------------------------------------------------
     //
     // A Lua ARRAY, so the entries are positional. 247 of the 568 units carry one;

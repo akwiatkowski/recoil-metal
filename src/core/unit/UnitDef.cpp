@@ -37,6 +37,20 @@ constexpr float kRecoilFramesPerSecond = 30.0f;
 
 namespace rm::unitdef {
 
+bool UnitDef::hasCategory(std::string_view tag) const noexcept {
+    return std::binary_search(categories.begin(), categories.end(), tag,
+                              [](std::string_view a, std::string_view b) { return a < b; });
+}
+
+bool UnitDef::hasAllCategories(std::span<const std::string_view> tags) const noexcept {
+    // ALL of them, which is what a space in a `BuildableCategory` expression means (07 §4.3).
+    // An empty term matches everything, and that is deliberate rather than an oversight: an
+    // expression the parser reduced to nothing should not silently match nothing, it should
+    // be caught by the parser — see `BuildTree.cpp`.
+    return std::all_of(tags.begin(), tags.end(),
+                       [this](std::string_view tag) { return hasCategory(tag); });
+}
+
 sim::Fx UnitDef::maxWeaponRange() const noexcept {
     sim::Fx furthest{};
     for (const Weapon& weapon : weapons) {
