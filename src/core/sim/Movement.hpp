@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/map/HeightField.hpp"
+#include "core/sim/Army.hpp"  // kNoArmy
 #include "core/sim/Fx.hpp"
 #include "core/sim/Terrain.hpp"
 #include "core/sim/TickRate.hpp"
@@ -102,13 +103,6 @@ inline constexpr Fx kDefaultRadius = Fx::fromInt(16);
 // Two structs rather than one because they have different readers: every pass touches the
 // transform, and only the movement and collision passes touch this. Keeping them apart is
 // what lets the draw gather read one array and ignore the other.
-/// The army index of something nobody owns.
-///
-/// Not 0, which would be a real army: a scattered decorative unit, a prop that found
-/// its way into the list, or a spawn whose owner was never set would all silently
-/// belong to the first player. Unowned things are neither selectable nor shootable,
-/// so the wrong default here reads as the enemy having units it never built.
-inline constexpr int kNoArmy = -1;
 
 struct MoveState {
     /// Who owns this unit. See kNoArmy.

@@ -170,7 +170,7 @@ StateHash hashMatch(const UnitStore& store, const Match& match) {
     for (const Army& army : match.armies) {
         feed(h, army.index);
         feed(h, static_cast<int>(army.faction));
-        feed(h, army.team);
+        feed(h, army.alliance);
         feed(h, army.defeated);
     }
 

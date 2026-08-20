@@ -95,21 +95,21 @@ std::size_t applyDefeats(std::vector<Army>& armies, std::span<const int> command
     return newlyDefeated;
 }
 
-std::optional<int> winningTeam(const std::vector<Army>& armies) noexcept {
+std::optional<int> winningAlliance(const std::vector<Army>& armies) noexcept {
     std::optional<int> survivor;
     for (const Army& army : armies) {
         if (army.defeated) {
             continue;
         }
-        if (survivor && *survivor != army.team) {
+        if (survivor && *survivor != army.alliance) {
             return std::nullopt;  // two teams still standing: the match is on
         }
-        survivor = army.team;
+        survivor = army.alliance;
     }
     return survivor;  // nullopt when nobody is left, which is a draw
 }
 
-bool allied(const Army& a, const Army& b) noexcept { return a.team == b.team; }
+bool allied(const Army& a, const Army& b) noexcept { return a.alliance == b.alliance; }
 
 bool hostile(const Army& a, const Army& b) noexcept {
     return !allied(a, b) && !a.defeated && !b.defeated;
@@ -125,7 +125,7 @@ std::vector<Army> freeForAll(std::size_t armyCount) {
             // Round-robin rather than random: the same map must produce the same
             // match, or a screenshot proves nothing twice.
             .faction = kFactions[i % kFactions.size()].faction,
-            .team = index,  // free-for-all: everyone their own team
+            .alliance = index,  // free-for-all: everyone their own alliance
             .colour = teamColour(i),
             .defeated = false,
         });
@@ -136,6 +136,37 @@ std::vector<Army> freeForAll(std::size_t armyCount) {
 std::size_t survivorCount(const std::vector<Army>& armies) noexcept {
     return static_cast<std::size_t>(
         std::ranges::count_if(armies, [](const Army& army) { return !army.defeated; }));
+}
+
+bool commands(const Player& player, int army) noexcept {
+    // An unowned army is nobody's to command: `kNoArmy` on either side is not a match, or a
+    // player with no army assigned would command every decorative unit on the map.
+    return army != kNoArmy && player.army == army;
+}
+
+std::vector<PlayerIndex> commandersOf(std::span<const Player> players, int army) {
+    std::vector<PlayerIndex> found;
+    for (const Player& player : players) {
+        if (commands(player, army)) {
+            found.push_back(player.index);
+        }
+    }
+    return found;
+}
+
+std::vector<Player> onePlayerPerArmy(std::size_t armyCount, int humanArmy) {
+    std::vector<Player> players;
+    players.reserve(armyCount);
+    for (std::size_t i = 0; i < armyCount; ++i) {
+        const auto army = static_cast<int>(i);
+        players.push_back(Player{
+            .index = static_cast<PlayerIndex>(i),
+            .army = army,
+            .human = army == humanArmy,
+            .name = army == humanArmy ? "player" : "script " + std::to_string(army),
+        });
+    }
+    return players;
 }
 
 } // namespace rm::sim

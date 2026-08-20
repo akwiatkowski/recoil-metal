@@ -237,7 +237,7 @@ TEST_CASE("losing the last commander defeats an army and ends the match") {
     CHECK(armies[1].defeated);
     CHECK(report.matchEnded);
     REQUIRE(report.winner.has_value());
-    CHECK(*report.winner == armies[0].team);
+    CHECK(*report.winner == armies[0].alliance);
 }
 
 TEST_CASE("a crowd with no commanders is not a draw on the first tick") {

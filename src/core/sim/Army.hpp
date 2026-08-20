@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/Types.hpp"
 #include "core/scene/TeamColours.hpp"
 
 #include <cstdint>
@@ -11,6 +12,17 @@
 
 namespace rm::sim {
 
+/// The army index of something nobody owns.
+///
+/// Not 0, which would be a real army: a scattered decorative unit, a prop that found its way
+/// into the list, or a spawn whose owner was never set would all silently belong to the first
+/// player. Unowned things are neither selectable nor shootable, so the wrong default here reads
+/// as the enemy having units it never built.
+///
+/// Lived in `Movement.hpp` until P2.4, next to the field that uses it. It belongs here: it is
+/// a fact about ownership, and `Army.hpp` is where the other two levels are.
+inline constexpr int kNoArmy = -1;
+
 // Who owns what, and who is shooting at whom.
 //
 // Until now nothing in this engine knew: a unit belonged to a batch, team colour was
@@ -19,8 +31,37 @@ namespace rm::sim {
 // counts as a target, an economy needs somebody to bank the mass, and a victory
 // condition needs somebody to lose.
 //
-// Deliberately not a player. There is no lobby, no handicap and no diplomacy here;
-// an army is the smallest thing the sim can attribute a unit to.
+// THE THREE LEVELS, and the vocabulary trap that comes with them (PLAN2.md §6.3).
+//
+// Ownership has three levels, and they are not redundant. Several PARTICIPANTS can drive one
+// side — a human plus a helper script, or two humans sharing control. A side is what owns units
+// and banks resources. And what WINS is neither of those: allies win together, so the thing
+// that is eliminated is a group of sides.
+//
+//   `Player`        — a participant, human or script. Several may command one army.
+//   `Army`          — owns units, banks resources, has a faction and a colour.
+//   `AllianceIndex` — who wins together, and later who shares vision.
+//
+// **THE NAMING, WHICH DIVERGES FROM §6.3 DELIBERATELY.** The plan says to call the middle level
+// `Team`, following Recoil. We call it `Army`, following Forged Alliance — and the reason is
+// that FA is the content we read. `ArmyIndex` runs through all of `lua/sim/`, a `.scmap`'s
+// start positions are per army, and `mapinfo.lua` uses `team` for what we call an ALLIANCE.
+// Renaming to `Team` would align 477 call sites with an engine we do not load content from,
+// and misalign them with the one we do — and would make our `team` mean the opposite of the
+// map file's `team`. So:
+//
+//   | this engine      | Forged Alliance | Recoil     |
+//   |------------------|-----------------|------------|
+//   | `Player`         | (none)          | `CPlayer`  |
+//   | `Army`           | `Army`          | `CTeam`    |
+//   | `AllianceIndex`  | `team`          | `AllyTeam` |
+//
+// That table is the "one place" §6.3 asks for. If a future session prefers Recoil's spelling,
+// the cost is in the table, not in the code.
+//
+// `AllianceIndex` is an index and not a struct, for now, because it would be a struct with one
+// member. It becomes one when it holds shared vision, which is the first thing that is
+// genuinely per-alliance rather than per-army.
 
 /// The four the game ships. Read from a blueprint's `General.FactionName`, which all
 /// 568 state and which takes exactly these four values across the corpus — so this is
@@ -54,10 +95,13 @@ struct Army {
 
     Faction faction = Faction::Uef;
 
-    /// Allies share a team. Free-for-all means every army has its own, which is what
-    /// the default gives: `team` defaulting to `index` would need a constructor, so
+    /// Who this army wins with. Allies share one.
+    ///
+    /// Renamed from `team`, which was the same field doing the same job under a name that
+    /// collided with `mapinfo.lua`'s own `team` — see the table above. Free-for-all means
+    /// every army has its own: `alliance` defaulting to `index` would need a constructor, so
     /// the builder below sets it and the default here is only a value.
-    int team = 0;
+    int alliance = 0;
 
     /// What the player sees. OURS, not the game's — neither game stores a colour with
     /// a unit or a map, both assign at match start (see TeamColours.hpp).
@@ -89,10 +133,12 @@ struct Army {
 
 /// Who has won, or nothing while the match is still on.
 ///
-/// A TEAM rather than an army, since allies win together. Nothing when two or more teams
-/// survive, and nothing when none does — that last is a draw, which is a legitimate
-/// outcome (two commanders inside one blast) rather than an error.
-[[nodiscard]] std::optional<int> winningTeam(const std::vector<Army>& armies) noexcept;
+/// AN ALLIANCE rather than an army, since allies win together — which is the property §7 P2.4
+/// asks to be tested: a 2v2 in which one army of a pair dies is not over, and the same match
+/// with the pair split into four is. Nothing when two or more alliances survive, and nothing
+/// when none does — that last is a draw, a legitimate outcome (two commanders inside one
+/// blast) rather than an error.
+[[nodiscard]] std::optional<int> winningAlliance(const std::vector<Army>& armies) noexcept;
 
 /// Whether two armies are on the same side. An army is allied with itself, which
 /// matters because "do not shoot allies" would otherwise have every unit shoot
@@ -103,7 +149,46 @@ struct Army {
 /// target, so a corpse army does not keep drawing fire.
 [[nodiscard]] bool hostile(const Army& a, const Army& b) noexcept;
 
-/// Builds a free-for-all: one army per start position, each its own team, colours
+/// A participant: who is giving the orders.
+///
+/// THE LEVEL THAT WAS MISSING. This header used to say "deliberately not a player", which
+/// §6.3 reads as the design admitting a gap — and it was right. Without it there is nowhere to
+/// record that a human and a helper script are driving the same army, or which army the
+/// player at the keyboard is, and both of those are things the app currently keeps in an
+/// `int` beside the scene.
+///
+/// Several players may name the same army. That is the point of having the level at all, and
+/// the thing `commandersOf` below answers.
+struct Player {
+    PlayerIndex index = 0;
+
+    /// The army whose units this player commands. NOT unique across players.
+    int army = kNoArmy;
+
+    /// Whether a human is driving. A script is not a lesser player — it issues the same
+    /// orders through the same path (P2.5) — this only says which source they come from.
+    bool human = false;
+
+    /// For the HUD and the log. Not identity: two players may share a name and still be two.
+    std::string name;
+};
+
+/// Whether `player` commands `army`.
+[[nodiscard]] bool commands(const Player& player, int army) noexcept;
+
+/// Every player commanding an army, in index order.
+///
+/// Order matters and is the players' own: an order applied by two players in a different
+/// sequence would be a different match.
+[[nodiscard]] std::vector<PlayerIndex> commandersOf(std::span<const Player> players,
+                                                    int army);
+
+/// One human at the keyboard against `armyCount - 1` scripts, which is what every entry point
+/// in this engine currently builds by hand.
+[[nodiscard]] std::vector<Player> onePlayerPerArmy(std::size_t armyCount,
+                                                  int humanArmy = kNoArmy);
+
+/// Builds a free-for-all: one army per start position, each its own alliance, colours
 /// taken in order from the palette.
 ///
 /// Factions are dealt round-robin from the four rather than randomised, so the same

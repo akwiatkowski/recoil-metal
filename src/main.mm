@@ -1100,7 +1100,19 @@ struct UnitScene {
     // may I shoot that, who banks the mass — starts from a unit.
     std::vector<rm::sim::Army> armies;
 
+    /// Who is participating, and which army each drives (P2.4).
+    ///
+    /// This replaces nothing yet — `playerArmy` below is still what the mouse and the HUD
+    /// read — and that is deliberate: the level now EXISTS and is populated, so the code that
+    /// needs it can start using it, but rewriting selection and the HUD to walk a player list
+    /// is P2.5's job, where input becomes a command source with a player attached.
+    std::vector<rm::sim::Player> players;
+
     /// The army the mouse belongs to. Only its units may be selected.
+    ///
+    /// Derived from `players` — the human's army, or `kNoArmy` when nobody is at the keyboard.
+    /// Kept as a field because it is read in the frame loop and deriving it per frame would be
+    /// a search for a value that cannot change mid-match.
     int playerArmy = rm::sim::kNoArmy;
 
     /// The definitions themselves, owned here so the catalog's pointers stay valid.
@@ -1612,6 +1624,10 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
     }
 
     scene.armies = rm::sim::freeForAll(starts.size());
+
+    // One participant per army, the human driving the first. `--armies 4` with two alliances
+    // is the 2v2 §7 P2.4 asks to be checked by hand, and `--alliances N` below sets it up.
+    scene.players = rm::sim::onePlayerPerArmy(starts.size(), /*humanArmy=*/0);
     scene.playerArmy = 0;
 
     // Faction -> the batch already holding that faction's commander, so four models
@@ -3511,7 +3527,7 @@ namespace {
     }
 
     if (!scene.armies.empty() && state.armiesLeft <= 1) {
-        const std::optional<int> winner = rm::sim::winningTeam(scene.armies);
+        const std::optional<int> winner = rm::sim::winningAlliance(scene.armies);
         state.outcome = winner ? rm::ui::MatchState::Outcome::Win
                                : rm::ui::MatchState::Outcome::Draw;
         state.winningTeam = winner.value_or(0);
@@ -3665,6 +3681,13 @@ int main(int argc, const char* argv[]) {
                                        map->hasWater ? map->waterLevel : 0.0f, assetSearch,
                                        content);
 
+        // `--alliances N`: deal the armies into N sides that win together, round-robin, so
+        // `--armies 4 --alliances 2` is a 2v2. Free-for-all — every army its own alliance —
+        // remains the default, which is what `freeForAll` builds.
+        //
+        // Read before `--skirmish` spawns anything: an alliance decides who shoots whom, and
+        // the scripted opponents pick targets on their first decision.
+        //
         // `--skirmish`: one commander per start position, each its own army. Appended
         // to whatever `--units` asked for rather than replacing it, so a scene can
         // hold both a match and a crowd of test units. `--armies N` takes the first N
@@ -3686,6 +3709,14 @@ int main(int argc, const char* argv[]) {
         }
         if (hasFlag(argc, argv, "--skirmish")) {
             spawnCommanders(units, map->field, starts, content);
+            if (const std::size_t alliances = parseCount(argc, argv, "--alliances");
+                alliances > 1 && alliances < units.armies.size()) {
+                for (rm::sim::Army& army : units.armies) {
+                    army.alliance = army.index % static_cast<int>(alliances);
+                }
+                std::printf("skirmish: %zu armies in %zu alliances\n", units.armies.size(),
+                            alliances);
+            }
             orderFirstExtractors(units, map->markers, content);
         }
 

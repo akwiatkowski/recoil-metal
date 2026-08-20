@@ -57,7 +57,7 @@ TEST_CASE("a free-for-all gives every start position its own side") {
 
     for (std::size_t i = 0; i < armies.size(); ++i) {
         CHECK(armies[i].index == static_cast<int>(i));
-        CHECK(armies[i].team == static_cast<int>(i));  // nobody allied with anybody
+        CHECK(armies[i].alliance == static_cast<int>(i));  // nobody allied with anybody
         CHECK_FALSE(armies[i].defeated);
     }
 
@@ -88,7 +88,7 @@ TEST_CASE("an army is allied with itself, and hostile to another team") {
 
 TEST_CASE("armies sharing a team are allies") {
     std::vector<Army> armies = rm::sim::freeForAll(4);
-    armies[1].team = armies[0].team;  // 2v2
+    armies[1].alliance = armies[0].alliance;  // 2v2
 
     CHECK(rm::sim::allied(armies[0], armies[1]));
     CHECK_FALSE(rm::sim::hostile(armies[0], armies[1]));
@@ -150,19 +150,19 @@ TEST_CASE("losing your commander loses you the match") {
     // Everyone still has theirs.
     CHECK(rm::sim::applyDefeats(armies, std::vector<int>{1, 1, 1}, ever) == 0);
     CHECK(rm::sim::survivorCount(armies) == 3);
-    CHECK_FALSE(rm::sim::winningTeam(armies).has_value());  // the match is on
+    CHECK_FALSE(rm::sim::winningAlliance(armies).has_value());  // the match is on
 
     // Army 1's falls.
     CHECK(rm::sim::applyDefeats(armies, std::vector<int>{1, 0, 1}, ever) == 1);
     CHECK(armies[1].defeated);
     CHECK(rm::sim::survivorCount(armies) == 2);
-    CHECK_FALSE(rm::sim::winningTeam(armies).has_value());  // still two teams
+    CHECK_FALSE(rm::sim::winningAlliance(armies).has_value());  // still two teams
 
     // ...and army 2's. Army 0 wins.
     CHECK(rm::sim::applyDefeats(armies, std::vector<int>{1, 0, 0}, ever) == 1);
-    const auto winner = rm::sim::winningTeam(armies);
+    const auto winner = rm::sim::winningAlliance(armies);
     REQUIRE(winner.has_value());
-    CHECK(*winner == armies[0].team);
+    CHECK(*winner == armies[0].alliance);
 
     // And a defeat is not re-counted on a later tick, or the report would climb forever.
     CHECK(rm::sim::applyDefeats(armies, std::vector<int>{1, 0, 0}, ever) == 0);
@@ -170,16 +170,16 @@ TEST_CASE("losing your commander loses you the match") {
 
 TEST_CASE("allies win together") {
     std::vector<Army> armies = rm::sim::freeForAll(4);
-    armies[1].team = armies[0].team;  // 0 and 1 are allies
+    armies[1].alliance = armies[0].alliance;  // 0 and 1 are allies
 
     const std::vector<int> ever{1, 1, 1, 1};
     (void)rm::sim::applyDefeats(armies, std::vector<int>{1, 1, 0, 0}, ever);
 
     // Two armies left, but ONE team — so the match is over and they won together.
     CHECK(rm::sim::survivorCount(armies) == 2);
-    const auto winner = rm::sim::winningTeam(armies);
+    const auto winner = rm::sim::winningAlliance(armies);
     REQUIRE(winner.has_value());
-    CHECK(*winner == armies[0].team);
+    CHECK(*winner == armies[0].alliance);
 }
 
 TEST_CASE("everyone dying at once is a draw, not a winner") {
@@ -188,7 +188,7 @@ TEST_CASE("everyone dying at once is a draw, not a winner") {
     (void)rm::sim::applyDefeats(armies, std::vector<int>{0, 0}, std::vector<int>{1, 1});
 
     CHECK(rm::sim::survivorCount(armies) == 0);
-    CHECK_FALSE(rm::sim::winningTeam(armies).has_value());
+    CHECK_FALSE(rm::sim::winningAlliance(armies).has_value());
 }
 
 TEST_CASE("an army that never had a commander is not defeated by not having one") {

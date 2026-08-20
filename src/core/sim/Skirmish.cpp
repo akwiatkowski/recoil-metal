@@ -211,7 +211,7 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
         if (left <= 1) {
             match.over = true;
             report.matchEnded = true;
-            report.winner = winningTeam(match.armies);
+            report.winner = winningAlliance(match.armies);
         }
     }
 

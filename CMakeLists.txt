@@ -182,6 +182,7 @@ if(BUILD_TESTING)
         tests/test_unit_icons.cpp
         tests/test_unit_placement.cpp
         tests/test_army.cpp
+        tests/test_players.cpp
         tests/test_build_order.cpp
         tests/test_combat.cpp
         tests/test_economy.cpp
