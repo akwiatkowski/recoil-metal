@@ -1,6 +1,7 @@
 #include "core/unit/UnitBlueprint.hpp"
 
 #include "core/blueprint/BlueprintMesh.hpp"
+#include "core/unit/BuildTree.hpp"
 #include "core/map/Scmap.hpp"
 #include "core/sim/Pathfinding.hpp"
 
@@ -214,6 +215,32 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
             numberOr(*economy, "MaintenanceConsumptionPerSecondEnergy", 0.0f);
         def.storageMass = sim::magFromFloat(numberOr(*economy, "StorageMass", 0.0f));
         def.storageEnergy = sim::magFromFloat(numberOr(*economy, "StorageEnergy", 0.0f));
+
+        // The build tree's raw material. A list of strings, each an AND of space-separated
+        // tags; the list is an OR. Parsed into terms here and resolved against the whole unit
+        // set later — see `core/unit/BuildTree.hpp`.
+        if (const lua::Value* buildable = economy->find("BuildableCategory")) {
+            for (const lua::Value& entry : buildable->items) {
+                unitdef::CategoryTerm term = unitdef::parseCategoryTerm(entry.text);
+                if (!term.empty()) {
+                    def.buildableCategory.push_back(std::move(term));
+                }
+            }
+        }
+    }
+
+    // Upgrade-conditional additions, recorded and not applied (07 §4.3). They live under
+    // `Enhancements`, one per upgrade, each a bare string rather than a list — so this walks
+    // the enhancement table rather than reading one field.
+    if (const lua::Value* enhancements = parsed->path("Enhancements")) {
+        for (const lua::Field& upgrade : enhancements->fields) {
+            if (const lua::Value* adds = upgrade.value.find("BuildableCategoryAdds")) {
+                unitdef::CategoryTerm term = unitdef::parseCategoryTerm(adds->text);
+                if (!term.empty()) {
+                    def.buildableCategoryAdds.push_back(std::move(term));
+                }
+            }
+        }
     }
 
     // --- categories --------------------------------------------------------

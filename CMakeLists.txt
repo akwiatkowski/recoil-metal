@@ -120,6 +120,7 @@ add_library(rm_core STATIC
     src/core/unit/Weapon.cpp
     src/core/unit/UnitDef.cpp
     src/core/unit/Role.cpp
+    src/core/unit/BuildTree.cpp
     src/core/vfs/AssetSearch.cpp
     src/core/vfs/Vfs.cpp
     src/core/settings/Settings.cpp)
@@ -200,6 +201,7 @@ if(BUILD_TESTING)
         tests/test_unit_blueprint.cpp
         tests/test_unit_def.cpp
         tests/test_role.cpp
+        tests/test_build_tree.cpp
         tests/test_asset_search.cpp
         tests/test_vfs.cpp
         tests/test_real_vfs.cpp

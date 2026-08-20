@@ -171,6 +171,23 @@ struct UnitDef {
     /// honest report of that rather than a guess.
     std::vector<std::string> categories;
 
+    /// What this unit can build, as the EXPRESSION the blueprint states rather than a list.
+    ///
+    /// `Economy.BuildableCategory`, where a space means AND and the list means OR — see
+    /// `core/unit/BuildTree.hpp` for why that is the single largest converter requirement.
+    /// Empty for the 463 shipped units that build nothing.
+    ///
+    /// Kept as the expression and not resolved here, because resolving needs the WHOLE unit
+    /// set: "which units is this builder allowed to make" is not a fact about this blueprint.
+    std::vector<std::vector<std::string>> buildableCategory;
+
+    /// Expressions a commander UPGRADE would add — `BuildableCategoryAdds`.
+    ///
+    /// Parsed and kept, not applied. `07 §4.3` says commander upgrades are out of scope for
+    /// milestone 1 "but must be recorded as deferred", so this is that record: when upgrades
+    /// land, applying one is a set union on `BuildTree` rather than a new mechanism.
+    std::vector<std::vector<std::string>> buildableCategoryAdds;
+
     /// Whether this unit declares a tag. Case-sensitive: the corpus is consistently upper
     /// case, and a case-insensitive compare would hide a typo in a data file rather than
     /// failing on it.
