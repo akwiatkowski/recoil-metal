@@ -68,14 +68,16 @@ MARCH     ?= 4096 4096
 FA_FLAGS  = --gamedata "$(FA_ROOT)/gamedata"
 
 .DEFAULT_GOAL := help
-.PHONY: help build configure test run run-fa run-bar skirmish battle match shot-fa shot-bar \
-        bench bench-fa bench-gl clean check-fa check-bar
+.PHONY: help build configure test verify golden run run-fa run-bar skirmish battle match \
+        shot-fa shot-bar bench bench-fa bench-gl clean check-fa check-bar
 
 help:
 	@echo 'recoil-metal — make targets'
 	@echo
 	@echo '  build           configure and build'
 	@echo '  test            the whole suite'
+	@echo '  verify          replay the golden match — MATCH, or the tick it broke'
+	@echo '  golden          re-record it (only when the change was meant to alter the match)'
 	@echo
 	@echo '  run             procedural terrain, no content needed'
 	@echo '  run-fa          a Supreme Commander map, its own units, read from the archives'
@@ -165,6 +167,34 @@ skirmish: build check-fa
 # result is the same every run — which is what makes a screenshot of it worth comparing.
 battle: build check-fa
 	$(BIN) "$(FA_MAP)" $(FA_FLAGS) --skirmish --march $(MARCH) $(SECONDS)
+
+# --- Determinism -------------------------------------------------------------
+#
+# The refactor gate. `docs/golden-p1.log` is a per-tick fingerprint of one whole match —
+# 5200 ticks from spawn to victory banner, covering movement, collisions, targeting,
+# firing, projectiles, damage, deaths, defeats, economy, construction and the spawning of
+# what gets built. `make verify` says whether the code still plays that match.
+#
+# WHY IT EXISTS: PLAN2.md's P1 changes how units are stored and identified, which touches
+# every sim pass. Without this the only way to know a refactor changed behaviour was to
+# play the game and squint. With it, a step either reports MATCH or names the tick it
+# broke — which is the difference between a phase you can do in steps and one you cannot.
+#
+# `golden` re-records it. Only run that when the change was MEANT to alter the match, and
+# say so in the commit: re-baselining silently is how a gate stops being one.
+GOLDEN      ?= docs/golden-p1.log
+GOLDEN_SECS ?= 520
+# A screenshot is how the app stays headless — without one it opens a window and waits.
+# Small and thrown away; the run is here for the hashes, not the picture.
+GOLDEN_SHOT ?= $(if $(TMPDIR),$(TMPDIR),/tmp)/rm-golden.png
+GOLDEN_RUN   = "$(FA_MAP)" $(FA_FLAGS) --skirmish --armies 2 --play $(GOLDEN_SECS) \
+               --screenshot $(GOLDEN_SHOT) 320 240
+
+verify: build check-fa
+	$(BIN) $(GOLDEN_RUN) --check-hash-log $(GOLDEN) | grep determinism:
+
+golden: build check-fa
+	$(BIN) $(GOLDEN_RUN) --hash-log $(GOLDEN) | grep determinism:
 
 # Milestone 20's match: a duel against the scripted opponent, played from spawn.
 # Deterministic, so SECONDS picks the stage of the SAME match: 12 the first
