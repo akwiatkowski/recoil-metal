@@ -106,6 +106,8 @@ add_library(rm_core STATIC
     src/core/sim/Movement.cpp
     src/core/sim/Pathfinding.cpp
     src/core/sim/Skirmish.cpp
+    src/core/sim/StateHash.cpp
+    src/core/sim/Replay.cpp
     src/core/unit/UnitBlueprint.cpp
     src/core/unit/Weapon.cpp
     src/core/unit/UnitDef.cpp
@@ -140,6 +142,9 @@ if(BUILD_TESTING)
     list(APPEND CMAKE_MODULE_PATH ${catch2_SOURCE_DIR}/extras)
 
     add_executable(rm_tests
+        tests/test_types.cpp
+        tests/test_state_hash.cpp
+        tests/test_replay.cpp
         tests/test_smf.cpp
         tests/test_height_field.cpp
         tests/test_terrain_mesh.cpp
@@ -199,4 +204,24 @@ if(BUILD_TESTING)
 
     include(Catch)
     catch_discover_tests(rm_tests)
+
+    # --- Boundary checks --------------------------------------------------------
+    #
+    # Invariants a Catch2 test cannot reach, because what they constrain is
+    # `src/main.mm` — an executable-only translation unit nothing can link against.
+    # A grep is the only tool that sees it, so the grep is a test: registered here
+    # rather than left as a script somebody remembers to run, because the bug it
+    # guards against went unnoticed precisely by never being checked.
+    add_test(NAME "no caller hand-rolls the sim tick order"
+             COMMAND ${CMAKE_SOURCE_DIR}/tools/check_sim_boundary.sh ${CMAKE_SOURCE_DIR})
+
+    # Two sims must be able to exist in one process — the divergence harness is built on
+    # it, and it is the one thing Recoil's globals make impossible at any price.
+    add_test(NAME "the sim holds no file-scope mutable state"
+             COMMAND ${CMAKE_SOURCE_DIR}/tools/check_no_sim_globals.sh ${CMAKE_SOURCE_DIR})
+
+    # NOT REGISTERED YET: the ban on float/double/libm inside the sim (PLAN2.md §5.2). The
+    # sim is entirely float today and stays that way until P2.2 migrates it to fixed point;
+    # adding the check now would mean a red suite for the wrong reason. It belongs with that
+    # migration, which is the commit that makes it true.
 endif()
