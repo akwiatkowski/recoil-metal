@@ -357,11 +357,11 @@ TEST_CASE("TickClock hands out whole ticks and carries the remainder") {
     TickClock clock;
 
     // Exactly one tick's worth.
-    CHECK(clock.advance(rm::sim::kTickSeconds) == 1);
+    CHECK(clock.advance(kRate.secondsPerTick()) == 1);
 
     // Half a tick twice is one tick, not zero and not two.
-    CHECK(clock.advance(rm::sim::kTickSeconds * 0.5f) == 0);
-    CHECK(clock.advance(rm::sim::kTickSeconds * 0.5f) == 1);
+    CHECK(clock.advance(kRate.secondsPerTick() * 0.5f) == 0);
+    CHECK(clock.advance(kRate.secondsPerTick() * 0.5f) == 1);
 
     // A whole second is the tick rate, however it is chopped up.
     TickClock other;
@@ -387,7 +387,7 @@ TEST_CASE("TickClock ignores time going backwards") {
     TickClock clock;
     CHECK(clock.advance(-1.0f) == 0);
     // And the negative time is not banked against future ticks.
-    CHECK(clock.advance(rm::sim::kTickSeconds) == 1);
+    CHECK(clock.advance(kRate.secondsPerTick()) == 1);
 }
 
 TEST_CASE("a unit accumulates the ground distance it has covered") {

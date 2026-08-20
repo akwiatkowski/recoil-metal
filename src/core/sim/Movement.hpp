@@ -46,7 +46,14 @@ namespace rm::sim {
 /// constant in UnitDef.cpp — using this one made two different facts share a
 /// number, which held only while the values agreed.
 inline constexpr int kTicksPerSecond = 10;
-inline constexpr float kTickSeconds = 1.0f / static_cast<float>(kTicksPerSecond);
+// `kTickSeconds` used to be here. It is GONE, which is PLAN2.md §5.1's "kTickSeconds leaves
+// sim math" — the last sim caller disappeared when the economy went per-tick and the movement
+// pass took per-tick speeds. What the renderer and the HUD clock want is
+// `TickRate::secondsPerTick()`, which says whose concern it is in its name.
+//
+// `kTicksPerSecond` above survives as the DEFAULT rate's value, for the handful of callers
+// that convert a per-tick figure back for display. It is a rate, not a duration in ticks, so
+// `tools/check_no_tick_literals.sh` exempts it.
 
 /// Default ground speed, in elmos per second.
 ///

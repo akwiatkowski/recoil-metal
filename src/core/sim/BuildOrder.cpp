@@ -11,24 +11,26 @@ namespace {
 /// is the largest thing the script places) with room for the commander to walk
 /// between; both are OUR numbers, chosen for the base to read as a base in a
 /// screenshot rather than a pile.
-constexpr float kSiteDistanceElmos = 40.0f;
-constexpr float kSiteFanElmos = 28.0f;
+constexpr rm::sim::Fx kSiteDistance = rm::sim::Fx::fromInt(40);
+constexpr rm::sim::Fx kSiteFan = rm::sim::Fx::fromInt(28);
 
 /// How far past the factory a fresh tank drives before waiting, in elmos.
 /// Past the arrival radius (8.7) and the factory's own footprint, so the line
 /// of waiting tanks forms outside the buildings rather than inside them.
-constexpr float kRolloffDistanceElmos = 32.0f;
+constexpr rm::sim::Fx kRolloffDistance = rm::sim::Fx::fromInt(32);
 
 /// The unit vector from `fromX/fromZ` toward `toX/toZ`, or +x when the two
 /// coincide — a start position ON the map centre has no inward direction, and
 /// any fixed one beats dividing by zero.
-[[nodiscard]] std::array<float, 2> towards(float fromX, float fromZ, float toX,
-                                           float toZ) noexcept {
-    const float dx = toX - fromX;
-    const float dz = toZ - fromZ;
-    const float length = std::sqrt(dx * dx + dz * dz);
-    if (length <= 0.0f) {
-        return {1.0f, 0.0f};
+[[nodiscard]] std::array<rm::sim::Fx, 2> towards(rm::sim::Fx fromX, rm::sim::Fx fromZ,
+                                                 rm::sim::Fx toX, rm::sim::Fx toZ) noexcept {
+    const rm::sim::Fx dx = toX - fromX;
+    const rm::sim::Fx dz = toZ - fromZ;
+    const rm::sim::Fx length = rm::sim::fxHypot(dx, dz);
+    if (length <= rm::sim::Fx{}) {
+        // No direction to point in — the two positions coincide. +X is as good as any, and
+        // being deterministic about which matters more than which it is.
+        return {rm::sim::kFxOne, rm::sim::Fx{}};
     }
     return {dx / length, dz / length};
 }
@@ -66,27 +68,27 @@ bool launchesAttack(const Opponent& script, const ArmyView& view) noexcept {
            && view.tanksAlive >= kAttackWaveTanks;
 }
 
-std::array<float, 3> structureSite(const std::array<float, 3>& start, float centreX,
-                                   float centreZ, int slot) noexcept {
-    const std::array<float, 2> in = towards(start[0], start[2], centreX, centreZ);
+std::array<Fx, 3> structureSite(const std::array<Fx, 3>& start, Fx centreX, Fx centreZ,
+                                int slot) noexcept {
+    const std::array<Fx, 2> in = towards(start[0], start[2], centreX, centreZ);
     // Perpendicular to the inward direction, so the slots fan across it.
-    const std::array<float, 2> across{-in[1], in[0]};
+    const std::array<Fx, 2> across{-in[1], in[0]};
     // Slots 0, 1, 2... sit at fan offsets +1, -1, +2, -2... so two structures
     // straddle the inward line rather than queueing along it.
     const int step = slot / 2 + 1;
-    const float fan = (slot % 2 == 0 ? 1.0f : -1.0f) * static_cast<float>(step);
+    const Fx fan = Fx::fromInt(slot % 2 == 0 ? step : -step);
     return {
-        start[0] + in[0] * kSiteDistanceElmos + across[0] * kSiteFanElmos * fan,
+        start[0] + in[0] * kSiteDistance + across[0] * kSiteFan * fan,
         start[1],
-        start[2] + in[1] * kSiteDistanceElmos + across[1] * kSiteFanElmos * fan,
+        start[2] + in[1] * kSiteDistance + across[1] * kSiteFan * fan,
     };
 }
 
-std::array<float, 2> rolloffPoint(const std::array<float, 3>& factory, float centreX,
-                                  float centreZ) noexcept {
-    const std::array<float, 2> in = towards(factory[0], factory[2], centreX, centreZ);
-    return {factory[0] + in[0] * kRolloffDistanceElmos,
-            factory[2] + in[1] * kRolloffDistanceElmos};
+std::array<Fx, 2> rolloffPoint(const std::array<Fx, 3>& factory, Fx centreX,
+                               Fx centreZ) noexcept {
+    const std::array<Fx, 2> in = towards(factory[0], factory[2], centreX, centreZ);
+    return {factory[0] + in[0] * kRolloffDistance,
+            factory[2] + in[1] * kRolloffDistance};
 }
 
 } // namespace rm::sim

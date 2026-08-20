@@ -247,8 +247,13 @@ if(BUILD_TESTING)
     add_test(NAME "no duration is written in ticks"
              COMMAND ${CMAKE_SOURCE_DIR}/tools/check_no_tick_literals.sh ${CMAKE_SOURCE_DIR})
 
-    # NOT REGISTERED YET: the ban on float/double/libm inside the sim (PLAN2.md §5.2). The
-    # sim is entirely float today and stays that way until P2.2 migrates it to fixed point;
-    # adding the check now would mean a red suite for the wrong reason. It belongs with that
-    # migration, which is the commit that makes it true.
+    # The sim's arithmetic must be fixed point (PLAN2.md §5.2). REGISTERED at last: this was
+    # deferred at P0 because the sim was entirely float, and a check describing a known-bad
+    # state is not a guard. P2.2 made it true, and this is the commit that makes it enforced.
+    #
+    # It permits `constexpr float` constants and a named list of boundary files, each with its
+    # reason in the script — content is authored in human units and the renderer draws in
+    # floats, so confining the conversion is what makes the rest checkable at all.
+    add_test(NAME "the sim's arithmetic is fixed point"
+             COMMAND ${CMAKE_SOURCE_DIR}/tools/check_no_sim_floats.sh ${CMAKE_SOURCE_DIR})
 endif()

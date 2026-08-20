@@ -11,6 +11,8 @@
 #include <numbers>
 #include <vector>
 
+#include "support/FxMatchers.hpp"
+
 using Catch::Approx;
 using rm::HeightField;
 using rm::sim::PassabilityGrid;
@@ -102,36 +104,37 @@ TEST_CASE("world positions map to cells and back") {
     const HeightField field = flatField(64);
     const PassabilityGrid grid = rm::sim::buildPassability(field, 0.0f);
 
-    CHECK(grid.cellAtWorld(0.0f) == 0);
-    CHECK(grid.cellAtWorld(kCell * 0.5f) == 0);
-    CHECK(grid.cellAtWorld(kCell) == 1);
+    CHECK(grid.cellAtWorld(rm::test::fx(0.0f)) == 0);
+    CHECK(grid.cellAtWorld(rm::test::fx(kCell * 0.5f)) == 0);
+    CHECK(grid.cellAtWorld(rm::test::fx(kCell)) == 1);
 
     // The centre of cell 0 is half a cell in, which is where a path waypoint
     // lands — a unit walking to a cell CORNER would clip whatever is next door.
-    CHECK(grid.worldAtCellCentre(0) == Approx(kCell * 0.5f));
-    CHECK(grid.worldAtCellCentre(3) == Approx(kCell * 3.5f));
+    CHECK(rm::test::asFloat(grid.worldAtCellCentre(0)) == Approx(kCell * 0.5f));
+    CHECK(rm::test::asFloat(grid.worldAtCellCentre(3)) == Approx(kCell * 3.5f));
 
     // Off the map clamps rather than indexing out of range.
-    CHECK(grid.cellAtWorld(-500.0f) == 0);
-    CHECK(grid.cellAtWorld(1e6f) == grid.cellsX - 1);
+    CHECK(grid.cellAtWorld(rm::test::fx(-500.0f)) == 0);
+    CHECK(grid.cellAtWorld(rm::test::fx(1e6f)) == grid.cellsX - 1);
 }
 
 TEST_CASE("a path across open ground is found and runs end to end") {
     const HeightField field = flatField(64);
     const PassabilityGrid grid = rm::sim::buildPassability(field, 0.0f);
 
-    const auto path = rm::sim::findPath(grid, 20.0f, 20.0f, 460.0f, 460.0f);
+    const auto path = rm::sim::findPath(grid, rm::test::fx(20.0f), rm::test::fx(20.0f), rm::test::fx(460.0f),
+                                        rm::test::fx(460.0f));
 
     REQUIRE_FALSE(path.empty());
     // Ends at the cell containing the destination.
-    CHECK(grid.cellAtWorld(path.back()[0]) == grid.cellAtWorld(460.0f));
-    CHECK(grid.cellAtWorld(path.back()[1]) == grid.cellAtWorld(460.0f));
+    CHECK(grid.cellAtWorld(path.back()[0]) == grid.cellAtWorld(rm::test::fx(460.0f)));
+    CHECK(grid.cellAtWorld(path.back()[1]) == grid.cellAtWorld(rm::test::fx(460.0f)));
 
     // Consecutive waypoints are neighbours: a path that teleports would still
     // satisfy every other assertion here.
     for (std::size_t i = 1; i < path.size(); ++i) {
-        const float dx = std::abs(path[i][0] - path[i - 1][0]);
-        const float dz = std::abs(path[i][1] - path[i - 1][1]);
+        const float dx = std::abs(rm::test::asFloat(path[i][0] - path[i - 1][0]));
+        const float dz = std::abs(rm::test::asFloat(path[i][1] - path[i - 1][1]));
         REQUIRE(dx <= Approx(kCell));
         REQUIRE(dz <= Approx(kCell));
         REQUIRE(dx + dz > 0.0f);
@@ -147,7 +150,8 @@ TEST_CASE("a path goes around a wall rather than through it") {
     setCorners(field, 32, 0, 32, 40, 4000);
 
     const PassabilityGrid grid = rm::sim::buildPassability(field, -1000.0f);
-    const auto path = rm::sim::findPath(grid, 60.0f, 60.0f, 440.0f, 60.0f);
+    const auto path = rm::sim::findPath(grid, rm::test::fx(60.0f), rm::test::fx(60.0f), rm::test::fx(440.0f),
+                                        rm::test::fx(60.0f));
 
     REQUIRE_FALSE(path.empty());
 
@@ -160,7 +164,8 @@ TEST_CASE("a path goes around a wall rather than through it") {
     // reach the gap and come back is materially longer.
     float length = 0.0f;
     for (std::size_t i = 1; i < path.size(); ++i) {
-        length += std::hypot(path[i][0] - path[i - 1][0], path[i][1] - path[i - 1][1]);
+        length += rm::test::asFloat(
+            rm::sim::fxHypot(path[i][0] - path[i - 1][0], path[i][1] - path[i - 1][1]));
     }
     CHECK(length > 500.0f);
 }
@@ -171,7 +176,8 @@ TEST_CASE("an unreachable destination yields no path rather than a wrong one") {
     setCorners(field, 32, 0, 32, field.verticesZ() - 1, 4000);
 
     const PassabilityGrid grid = rm::sim::buildPassability(field, -1000.0f);
-    const auto path = rm::sim::findPath(grid, 60.0f, 200.0f, 440.0f, 200.0f);
+    const auto path = rm::sim::findPath(grid, rm::test::fx(60.0f), rm::test::fx(200.0f), rm::test::fx(440.0f),
+                                        rm::test::fx(200.0f));
 
     CHECK(path.empty());
 }
@@ -182,7 +188,8 @@ TEST_CASE("a destination on impassable ground yields no path") {
     const PassabilityGrid grid = rm::sim::buildPassability(field, -1000.0f);
 
     const float wallWorld = 32.0f * static_cast<float>(rm::kSquareSize);
-    CHECK(rm::sim::findPath(grid, 60.0f, 200.0f, wallWorld, 200.0f).empty());
+    CHECK(rm::sim::findPath(grid, rm::test::fx(60.0f), rm::test::fx(200.0f), rm::test::fx(wallWorld),
+                              rm::test::fx(200.0f)).empty());
 }
 
 TEST_CASE("a path to where the unit already stands is empty, not a null step") {
@@ -191,7 +198,8 @@ TEST_CASE("a path to where the unit already stands is empty, not a null step") {
 
     // Same cell: there is nowhere to walk, and returning a single waypoint would
     // make a unit trundle to the cell centre for no reason.
-    CHECK(rm::sim::findPath(grid, 20.0f, 20.0f, 30.0f, 30.0f).empty());
+    CHECK(rm::sim::findPath(grid, rm::test::fx(20.0f), rm::test::fx(20.0f), rm::test::fx(30.0f),
+                                        rm::test::fx(30.0f)).empty());
 }
 
 TEST_CASE("pathfinding is safe on a field with no samples") {
@@ -200,7 +208,8 @@ TEST_CASE("pathfinding is safe on a field with no samples") {
 
     CHECK(grid.cellsX == 0);
     CHECK_FALSE(grid.passableAt(0, 0));
-    CHECK(rm::sim::findPath(grid, 0.0f, 0.0f, 100.0f, 100.0f).empty());
+    CHECK(rm::sim::findPath(grid, rm::test::fx(0.0f), rm::test::fx(0.0f), rm::test::fx(100.0f),
+                                        rm::test::fx(100.0f)).empty());
 }
 
 TEST_CASE("pathfinding is deterministic") {
@@ -208,8 +217,10 @@ TEST_CASE("pathfinding is deterministic") {
     setCorners(field, 32, 0, 32, 40, 4000);
     const PassabilityGrid grid = rm::sim::buildPassability(field, -1000.0f);
 
-    const auto first = rm::sim::findPath(grid, 60.0f, 60.0f, 440.0f, 60.0f);
-    const auto second = rm::sim::findPath(grid, 60.0f, 60.0f, 440.0f, 60.0f);
+    const auto first = rm::sim::findPath(grid, rm::test::fx(60.0f), rm::test::fx(60.0f), rm::test::fx(440.0f),
+                                        rm::test::fx(60.0f));
+    const auto second = rm::sim::findPath(grid, rm::test::fx(60.0f), rm::test::fx(60.0f), rm::test::fx(440.0f),
+                                        rm::test::fx(60.0f));
 
     REQUIRE(first.size() == second.size());
     for (std::size_t i = 0; i < first.size(); ++i) {

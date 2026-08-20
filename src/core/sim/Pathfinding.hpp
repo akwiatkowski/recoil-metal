@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/map/HeightField.hpp"
+#include "core/sim/Fx.hpp"
 
 #include <array>
 #include <cstdint>
@@ -50,7 +51,10 @@ inline constexpr float kDefaultMaxWaterDepthElmos = 12.0f;
 struct PassabilityGrid {
     int cellsX = 0;
     int cellsZ = 0;
-    float elmosPerCell = 0.0f;
+    /// FIXED POINT: the queries below run inside a tick, so the arithmetic that turns a
+    /// world position into a cell has to be integer. Set at construction from the float the
+    /// map states, which is load time and therefore the legitimate boundary.
+    Fx elmosPerCell{};
     std::vector<std::uint8_t> passable;  ///< row-major, 1 = a unit may stand here
 
     /// Whether a cell may be stood on. Out-of-range cells are impassable rather
@@ -59,12 +63,12 @@ struct PassabilityGrid {
     [[nodiscard]] bool passableAt(int x, int z) const noexcept;
 
     /// The cell containing a world coordinate, clamped onto the grid.
-    [[nodiscard]] int cellAtWorld(float elmos) const noexcept;
+    [[nodiscard]] int cellAtWorld(Fx elmos) const noexcept;
 
     /// The world coordinate of a cell's CENTRE. Waypoints sit at centres: a
     /// path through cell corners would run along the boundary of whatever is
     /// next door, which is exactly where the impassable things are.
-    [[nodiscard]] float worldAtCellCentre(int cell) const noexcept;
+    [[nodiscard]] Fx worldAtCellCentre(int cell) const noexcept;
 };
 
 /// Builds the passability grid for a map.
@@ -99,8 +103,7 @@ struct PassabilityGrid {
 /// steps require both adjacent orthogonal cells to be passable, or units cut
 /// the corners of cliffs. Deterministic: ties in the open set break on cell
 /// index, so the same query always returns the same route.
-[[nodiscard]] std::vector<std::array<float, 2>> findPath(const PassabilityGrid& grid,
-                                                         float fromX, float fromZ,
-                                                         float toX, float toZ);
+[[nodiscard]] std::vector<std::array<Fx, 2>> findPath(const PassabilityGrid& grid, Fx fromX,
+                                                      Fx fromZ, Fx toX, Fx toZ);
 
 } // namespace rm::sim

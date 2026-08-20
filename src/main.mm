@@ -1004,18 +1004,6 @@ struct PropScene {
             rm::sim::fxFromFloat(position[2])};
 }
 
-/// A route from the pathfinder, which still works in floats, as the fixed-point waypoints an
-/// order takes. Goes away when `Pathfinding` migrates — the next step of P2.2.
-[[nodiscard]] std::vector<std::array<rm::sim::Fx, 2>> fxPath(
-    const std::vector<std::array<float, 2>>& path) {
-    std::vector<std::array<rm::sim::Fx, 2>> converted;
-    converted.reserve(path.size());
-    for (const std::array<float, 2>& point : path) {
-        converted.push_back({rm::sim::fxFromFloat(point[0]), rm::sim::fxFromFloat(point[1])});
-    }
-    return converted;
-}
-
 /// A `Transform` from the float position and yaw a placement helper produced.
 ///
 /// The boundary between the placement code — which works in floats because it reads the map
@@ -1320,7 +1308,8 @@ public:
             rm::sim::buildPassability(*field_, waterLevel_, slopeDegrees, depthElmos);
         std::printf("passability: %d x %d cells of %.0f elmos, %zu%% walkable"
                     " (maxslope %.0f deg, maxwaterdepth %.0f)\n",
-                    grid.cellsX, grid.cellsZ, static_cast<double>(grid.elmosPerCell),
+                    grid.cellsX, grid.cellsZ,
+                    static_cast<double>(rm::sim::fxToFloat(grid.elmosPerCell)),
                     grid.passable.empty()
                         ? 0u
                         : 100u * static_cast<std::size_t>(std::count(grid.passable.begin(),
@@ -2427,15 +2416,13 @@ struct MarchOptions {
 [[nodiscard]] bool orderRouted(rm::sim::MoveState& state, const rm::sim::Transform& unit,
                                const rm::sim::PassabilityGrid& grid, rm::sim::Fx toX,
                                rm::sim::Fx toZ) {
-    // `findPath` still works in floats — it is the next step of P2.2 — so this is the
-    // conversion at the boundary rather than inside the pathfinder.
-    const auto path = rm::sim::findPath(grid, rm::sim::fxToFloat(unit.x),
-                                        rm::sim::fxToFloat(unit.z), rm::sim::fxToFloat(toX),
-                                        rm::sim::fxToFloat(toZ));
+    // No conversion either way: the pathfinder takes and returns the same fixed point the
+    // store holds. `fxPath` existed to bridge them and is gone.
+    const auto path = rm::sim::findPath(grid, unit.x, unit.z, toX, toZ);
     if (path.empty()) {
         return false;
     }
-    rm::sim::orderAlongPath(state, fxPath(path));
+    rm::sim::orderAlongPath(state, path);
     return true;
 }
 
@@ -2580,8 +2567,10 @@ void runOpponents(UnitScene& scene, const rm::vfs::Vfs& content, const rm::Heigh
                   std::span<const rm::mapinfo::StartPosition> starts,
                   std::span<const rm::scenario::Marker> markers,
                   std::vector<rm::sim::Opponent>& scripts, float elapsedSeconds) {
-    const float centreX = field.widthElmos() * 0.5f;
-    const float centreZ = field.depthElmos() * 0.5f;
+    // The middle of the map, in fixed point: `structureSite` and `rolloffPoint` place things
+    // relative to it, and both are sim geometry now.
+    const rm::sim::Fx centreX = rm::sim::Fx::fromInt(field.squaresX * rm::kSquareSize / 2);
+    const rm::sim::Fx centreZ = rm::sim::Fx::fromInt(field.squaresZ * rm::kSquareSize / 2);
 
     for (const rm::sim::Army& army : scene.armies) {
         if (army.index == scene.playerArmy || army.defeated
@@ -2618,11 +2607,13 @@ void runOpponents(UnitScene& scene, const rm::vfs::Vfs& content, const rm::Heigh
         const rm::sim::StructureOrder structure = rm::sim::nextStructure(view);
         if (structure != rm::sim::StructureOrder::None) {
             std::string_view blueprint;
-            std::optional<std::array<float, 3>> site;
+            std::optional<std::array<rm::sim::Fx, 3>> site;
             const std::size_t slot = standing.powerGenerators + standing.factories;
             const rm::mapinfo::StartPosition& start =
                 starts[static_cast<std::size_t>(army.index)];
-            const std::array<float, 3> home{start.x, 0.0f, start.z};
+            const std::array<rm::sim::Fx, 3> home{rm::sim::fxFromFloat(start.x),
+                                                  rm::sim::Fx{},
+                                                  rm::sim::fxFromFloat(start.z)};
             switch (structure) {
             case rm::sim::StructureOrder::PowerGenerator:
                 blueprint = rm::sim::kPowerGeneratorBlueprint;
@@ -2639,7 +2630,7 @@ void runOpponents(UnitScene& scene, const rm::vfs::Vfs& content, const rm::Heigh
                 const rm::scenario::Marker* deposit =
                     nearestFreeDeposit(scene, markers, standing.commanderPosition);
                 if (deposit != nullptr) {
-                    site = deposit->position;
+                    site = fxPoint(deposit->position);
                 }
                 break;
             }
@@ -2653,7 +2644,11 @@ void runOpponents(UnitScene& scene, const rm::vfs::Vfs& content, const rm::Heigh
                     const rm::unitdef::UnitDef& def = scene.buildable[*blueprintIndex];
                     scene.building.push_back(rm::sim::Construction{
                         .armyIndex = army.index,
-                        .position = *site,
+                        // `Construction::position` is the caller's float triple still — see
+                        // the note at the factory's construction below.
+                        .position = {rm::sim::fxToFloat((*site)[0]),
+                                     rm::sim::fxToFloat((*site)[1]),
+                                     rm::sim::fxToFloat((*site)[2])},
                         .cost = {.mass = def.buildCostMass, .energy = def.buildCostEnergy},
                         .buildTimeRemaining = def.buildTime,
                         .totalBuildTime = def.buildTime,
@@ -2898,19 +2893,19 @@ rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) 
                                     ? nearestEnemyCommander(scene, work.armyIndex,
                                                             fxPoint(work.position))
                                     : std::nullopt;
-            const std::array<float, 2> to =
-                target ? std::array<float, 2>{rm::sim::fxToFloat((*target)[0]),
-                                              rm::sim::fxToFloat((*target)[2])}
-                       : rm::sim::rolloffPoint(work.position,
-                                               runner.field.widthElmos() * 0.5f,
-                                               runner.field.depthElmos() * 0.5f);
+            const std::array<rm::sim::Fx, 2> to =
+                target ? std::array<rm::sim::Fx, 2>{(*target)[0], (*target)[2]}
+                       : rm::sim::rolloffPoint(
+                             fxPoint(work.position),
+                             rm::sim::Fx::fromInt(runner.field.squaresX * rm::kSquareSize / 2),
+                             rm::sim::Fx::fromInt(runner.field.squaresZ * rm::kSquareSize
+                                                  / 2));
             const auto type = static_cast<std::size_t>(scene.store.typeAt(spawned->index));
             const rm::sim::PassabilityGrid& grid =
                 runner.passability.gridFor(scene.maxSlopeDegrees[type],
                                            scene.maxWaterDepthElmos[type]);
             (void)orderRouted(scene.store.motion()[spawned->index],
-                              scene.store.transforms()[spawned->index], grid,
-                              rm::sim::fxFromFloat(to[0]), rm::sim::fxFromFloat(to[1]));
+                              scene.store.transforms()[spawned->index], grid, to[0], to[1]);
         }
     }
 
@@ -2967,7 +2962,7 @@ void march(UnitScene& scene, const rm::HeightField& field, PassabilitySet& passa
         hashes.reserve(static_cast<std::size_t>(ticks));
     }
 
-    constexpr float kTickSeconds = 1.0f / static_cast<float>(rm::sim::kTicksPerSecond);
+    const float kTickSeconds = kAppTickRate.secondsPerTick();
     float dustDebt = 0.0f;
     float ambientDebt = 0.0f;
     std::uint32_t dustSeed = 0x51ED27u;
@@ -4167,7 +4162,7 @@ int main(int argc, const char* argv[]) {
             for (int i = 0; i < ticks; ++i) {
                 const rm::sim::TickReport report =
                     advanceMatch(runner, matchTicks, static_cast<float>(matchTicks)
-                                                         * rm::sim::kTickSeconds);
+                                                         * kAppTickRate.secondsPerTick());
                 ++matchTicks;
 
                 // The match, announced once. The frame loop draws the fight rather than

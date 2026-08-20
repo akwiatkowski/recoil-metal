@@ -1,5 +1,7 @@
 #pragma once
 
+#include "core/sim/Fx.hpp"
+
 #include <array>
 #include <cstddef>
 #include <string_view>
@@ -106,13 +108,13 @@ enum class StructureOrder : std::uint8_t {
 /// perpendicular so the structures clear each other. 40 elmos out and ±28 apart
 /// clears the factory, the largest footprint the script builds. The height is
 /// carried through untouched; the caller grounds the site on the height field.
-[[nodiscard]] std::array<float, 3> structureSite(const std::array<float, 3>& start,
-                                                 float centreX, float centreZ,
+[[nodiscard]] std::array<Fx, 3> structureSite(const std::array<Fx, 3>& start, Fx centreX,
+                                              Fx centreZ,
                                                  int slot) noexcept;
 
 /// Where a factory-built tank first drives: past the factory, toward the centre,
 /// far enough that the next tank off the line does not roll into its back.
-[[nodiscard]] std::array<float, 2> rolloffPoint(const std::array<float, 3>& factory,
-                                                float centreX, float centreZ) noexcept;
+[[nodiscard]] std::array<Fx, 2> rolloffPoint(const std::array<Fx, 3>& factory, Fx centreX,
+                                             Fx centreZ) noexcept;
 
 } // namespace rm::sim

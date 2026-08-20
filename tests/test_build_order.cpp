@@ -11,6 +11,8 @@
 
 #include <cmath>
 
+#include "support/FxMatchers.hpp"
+
 using rm::sim::ArmyView;
 using rm::sim::Opponent;
 using rm::sim::StructureOrder;
@@ -144,45 +146,53 @@ TEST_CASE("the wave size is the blueprints' arithmetic, not taste") {
 }
 
 TEST_CASE("structures fan out from the start position, toward the map centre") {
-    const std::array<float, 3> start{512.0f, 20.0f, 512.0f};
-    const float centreX = 4096.0f;
-    const float centreZ = 4096.0f;
+    const std::array<rm::sim::Fx, 3> start = rm::test::at(512, 20, 512);
+    const rm::sim::Fx centreX = rm::sim::Fx::fromInt(4096);
+    const rm::sim::Fx centreZ = rm::sim::Fx::fromInt(4096);
 
-    const std::array<float, 3> power = rm::sim::structureSite(start, centreX, centreZ, 0);
-    const std::array<float, 3> factory = rm::sim::structureSite(start, centreX, centreZ, 1);
+    const auto power = rm::sim::structureSite(start, centreX, centreZ, 0);
+    const auto factory = rm::sim::structureSite(start, centreX, centreZ, 1);
+
+    // Distances read back as decimals, because the claims are about elmos on the ground.
+    const auto apart = [](const std::array<rm::sim::Fx, 3>& a,
+                          const std::array<rm::sim::Fx, 3>& b) {
+        return rm::test::asFloat(rm::sim::fxHypot(a[0] - b[0], a[2] - b[2]));
+    };
 
     SECTION("every slot is its own place, far enough apart not to overlap") {
-        const float dx = power[0] - factory[0];
-        const float dz = power[2] - factory[2];
-        CHECK(std::sqrt(dx * dx + dz * dz) >= 24.0f);
+        CHECK(apart(power, factory) >= 24.0f);
     }
 
     SECTION("both sit toward the centre, off the commander's own spot") {
         for (const auto& site : {power, factory}) {
-            const float dx = site[0] - start[0];
-            const float dz = site[2] - start[2];
-            const float away = std::sqrt(dx * dx + dz * dz);
+            const float away = apart(site, start);
             CHECK(away >= 16.0f);   // not on the commander
             CHECK(away <= 100.0f);  // still inside the start plateau
             // Toward the centre: the offset's dot product with the centre
             // direction is positive.
-            CHECK(dx * (centreX - start[0]) + dz * (centreZ - start[2]) > 0.0f);
+            const float dx = rm::test::asFloat(site[0] - start[0]);
+            const float dz = rm::test::asFloat(site[2] - start[2]);
+            CHECK(dx * rm::test::asFloat(centreX - start[0])
+                      + dz * rm::test::asFloat(centreZ - start[2])
+                  > 0.0f);
         }
     }
 
     SECTION("deterministic — the same inputs place the same base") {
-        const std::array<float, 3> again = rm::sim::structureSite(start, centreX, centreZ, 0);
+        const auto again = rm::sim::structureSite(start, centreX, centreZ, 0);
         CHECK(power == again);
     }
 }
 
 TEST_CASE("tanks roll off past the factory, not into it") {
-    const std::array<float, 3> factory{600.0f, 20.0f, 600.0f};
-    const std::array<float, 2> rally = rm::sim::rolloffPoint(factory, 4096.0f, 4096.0f);
+    const std::array<rm::sim::Fx, 3> factory = rm::test::at(600, 20, 600);
+    const rm::sim::Fx centre = rm::sim::Fx::fromInt(4096);
+    const auto rally = rm::sim::rolloffPoint(factory, centre, centre);
 
-    const float dx = rally[0] - factory[0];
-    const float dz = rally[1] - factory[2];
-    const float away = std::sqrt(dx * dx + dz * dz);
-    CHECK(away >= 20.0f);  // clear of the factory's own footprint
-    CHECK(dx * (4096.0f - factory[0]) + dz * (4096.0f - factory[2]) > 0.0f);
+    const float dx = rm::test::asFloat(rally[0] - factory[0]);
+    const float dz = rm::test::asFloat(rally[1] - factory[2]);
+    CHECK(std::sqrt(dx * dx + dz * dz) >= 20.0f);  // clear of the factory's own footprint
+    CHECK(dx * rm::test::asFloat(centre - factory[0])
+              + dz * rm::test::asFloat(centre - factory[2])
+          > 0.0f);
 }

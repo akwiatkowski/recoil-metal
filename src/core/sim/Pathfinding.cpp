@@ -39,19 +39,26 @@ namespace {
 
 /// Octile distance in cells: the exact cost of an unobstructed 8-connected walk,
 /// which makes it both admissible and tight.
-[[nodiscard]] float octile(int dx, int dz) noexcept {
-    static constexpr float kDiagonal = std::numbers::sqrt2_v<float>;
+/// The cost of a diagonal step: sqrt(2), in `Fx`.
+///
+/// A constant rather than a call to `fxSqrt(Fx::fromInt(2))`, so the heuristic costs no
+/// arithmetic per node. The value is pinned by `test_fx`'s golden values, which assert
+/// `fxSqrt(2).raw() == 23170` — so if the square root ever changed, that test fails rather
+/// than this constant silently disagreeing with it.
+inline constexpr rm::sim::Fx kDiagonalCost = rm::sim::Fx::fromRaw(23170);
+
+[[nodiscard]] rm::sim::Fx octile(int dx, int dz) noexcept {
     const int a = std::abs(dx);
     const int b = std::abs(dz);
     const int lo = std::min(a, b);
     const int hi = std::max(a, b);
-    return static_cast<float>(hi - lo) + kDiagonal * static_cast<float>(lo);
+    return rm::sim::Fx::fromInt(hi - lo) + kDiagonalCost * lo;
 }
 
 /// One entry in the open set. Ordered by f, then by cell index so that equal-cost
 /// frontiers are explored in the same order every run.
 struct OpenNode {
-    float f = 0.0f;
+    rm::sim::Fx f{};
     int cell = 0;
 
     [[nodiscard]] friend bool operator>(const OpenNode& a, const OpenNode& b) noexcept {
@@ -83,18 +90,18 @@ bool PassabilityGrid::passableAt(int x, int z) const noexcept {
     return index < passable.size() && passable[index] != 0;
 }
 
-int PassabilityGrid::cellAtWorld(float elmos) const noexcept {
-    if (cellsX <= 0 || elmosPerCell <= 0.0f) {
+int PassabilityGrid::cellAtWorld(Fx elmos) const noexcept {
+    if (cellsX <= 0 || elmosPerCell <= Fx{}) {
         return 0;
     }
     // cellsX for both axes: the grid is square-celled, and callers pass whichever
     // axis they mean. Clamped, so a position off the map maps to the edge cell.
-    const auto cell = static_cast<int>(std::floor(elmos / elmosPerCell));
+    const int cell = (elmos / elmosPerCell).floorToInt();
     return std::clamp(cell, 0, std::max(cellsX, cellsZ) - 1);
 }
 
-float PassabilityGrid::worldAtCellCentre(int cell) const noexcept {
-    return (static_cast<float>(cell) + 0.5f) * elmosPerCell;
+Fx PassabilityGrid::worldAtCellCentre(int cell) const noexcept {
+    return (Fx::fromInt(cell) + Fx::fromRatio(1, 2)) * elmosPerCell;
 }
 
 PassabilityGrid buildPassability(const HeightField& field, float waterLevelElmos,
@@ -106,7 +113,7 @@ PassabilityGrid buildPassability(const HeightField& field, float waterLevelElmos
 
     grid.cellsX = field.squaresX / kPathCellSquares;
     grid.cellsZ = field.squaresZ / kPathCellSquares;
-    grid.elmosPerCell = static_cast<float>(kPathCellSquares) * static_cast<float>(kSquareSize);
+    grid.elmosPerCell = Fx::fromInt(kPathCellSquares * kSquareSize);
     if (grid.cellsX <= 0 || grid.cellsZ <= 0) {
         // A map smaller than one cell. Nothing to path across.
         grid.cellsX = 0;
@@ -144,8 +151,8 @@ PassabilityGrid buildPassability(const HeightField& field, float waterLevelElmos
     return grid;
 }
 
-std::vector<std::array<float, 2>> findPath(const PassabilityGrid& grid, float fromX, float fromZ,
-                                           float toX, float toZ) {
+std::vector<std::array<Fx, 2>> findPath(const PassabilityGrid& grid, Fx fromX, Fx fromZ,
+                                        Fx toX, Fx toZ) {
     if (grid.cellsX <= 0 || grid.cellsZ <= 0) {
         return {};
     }
@@ -172,13 +179,16 @@ std::vector<std::array<float, 2>> findPath(const PassabilityGrid& grid, float fr
              + static_cast<std::size_t>(x);
     };
 
-    std::vector<float> costToReach(cellCount, std::numeric_limits<float>::infinity());
+    // "Unreached" is the type's maximum rather than an infinity, because fixed point has no
+    // infinity — and the maximum works for the same reason infinity did: every real cost is
+    // below it, so the first path found to a cell always wins.
+    std::vector<Fx> costToReach(cellCount, Fx::fromRaw(INT32_MAX));
     std::vector<int> cameFrom(cellCount, -1);
     std::vector<std::uint8_t> closed(cellCount, 0);
 
     std::priority_queue<OpenNode, std::vector<OpenNode>, std::greater<>> open;
 
-    costToReach[index(startX, startZ)] = 0.0f;
+    costToReach[index(startX, startZ)] = Fx{};
     open.push(OpenNode{octile(goalX - startX, goalZ - startZ), static_cast<int>(index(startX, startZ))});
 
     // The eight neighbours, orthogonals first so that a tie between an
@@ -228,8 +238,8 @@ std::vector<std::array<float, 2>> findPath(const PassabilityGrid& grid, float fr
                 continue;
             }
 
-            const float stepCost = diagonal ? std::numbers::sqrt2_v<float> : 1.0f;
-            const float candidate = costToReach[current] + stepCost;
+            const Fx stepCost = diagonal ? kDiagonalCost : kFxOne;
+            const Fx candidate = costToReach[current] + stepCost;
             if (candidate >= costToReach[next]) {
                 continue;
             }
@@ -247,7 +257,7 @@ std::vector<std::array<float, 2>> findPath(const PassabilityGrid& grid, float fr
 
     // Walk the parents back, then reverse. The start cell is dropped: the unit
     // is standing in it.
-    std::vector<std::array<float, 2>> path;
+    std::vector<std::array<Fx, 2>> path;
     for (int cell = static_cast<int>(index(goalX, goalZ)); cell >= 0;
          cell = cameFrom[static_cast<std::size_t>(cell)]) {
         const int x = cell % grid.cellsX;
