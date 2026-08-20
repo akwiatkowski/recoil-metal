@@ -108,6 +108,7 @@ add_library(rm_core STATIC
     src/core/sim/IdPool.cpp
     src/core/sim/Fx.cpp
     src/core/sim/TickRate.cpp
+    src/core/sim/Terrain.cpp
     src/core/sim/UnitStore.cpp
     src/core/sim/UnitCatalog.cpp
     src/core/sim/UnitCensus.cpp
@@ -151,6 +152,7 @@ if(BUILD_TESTING)
         tests/test_types.cpp
         tests/test_fx.cpp
         tests/test_tick_rate.cpp
+        tests/test_terrain.cpp
         tests/test_id_pool.cpp
         tests/test_unit_store.cpp
         tests/test_unit_census.cpp
