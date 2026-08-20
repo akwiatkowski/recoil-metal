@@ -4,6 +4,7 @@
 #include "core/sim/Health.hpp"
 #include "core/sim/IdPool.hpp"
 #include "core/sim/Movement.hpp"
+#include "core/sim/Transform.hpp"
 
 #include <cstddef>
 #include <span>
@@ -26,10 +27,11 @@ namespace rm::sim {
 //   1. The passes already take spans of exactly these arrays, so the migration in P1.4 is a
 //      change of WHICH span rather than a rewrite of every pass. That is the difference
 //      between a phase that can be verified step by step and one that cannot.
-//   2. `UnitInstance` is the GPU's layout, pinned by a static_assert and read verbatim by
-//      the vertex shader. Keeping it a contiguous array means the renderer's upload stays a
-//      memcpy; an array-of-structs would make it a gather every frame. That gather is what
-//      P7's snapshot is for, and doing it here would drag P7 into P1.
+//   2. The arrays are what the renderer's upload wants: a gather over one contiguous array
+//      per frame rather than a strided walk over an array of structs. (This reason used to
+//      read "keeping `UnitInstance` contiguous means the upload stays a memcpy". P2.2 ended
+//      that: the store holds `Transform` now, the instance is built at draw time, and the
+//      gather it was trying to avoid is the gather P1.4 introduced anyway.)
 //   3. It matches how the sim already treats death, which is the property the golden replay
 //      log depends on — see below.
 //
@@ -52,7 +54,7 @@ public:
     /// order of eight floats is exactly the kind of thing a caller gets silently wrong.
     struct Spawn {
         UnitTypeIndex type = 0;
-        UnitInstance instance{};
+        Transform transform{};
         MoveState motion{};
         Health health{};
     };
@@ -88,9 +90,9 @@ public:
     // const where it reads, which is the same split `CombatGroup` and `SkirmishGroup`
     // already make and for the same reason.
 
-    [[nodiscard]] std::span<UnitInstance> instances() noexcept { return instances_; }
-    [[nodiscard]] std::span<const UnitInstance> instances() const noexcept {
-        return instances_;
+    [[nodiscard]] std::span<Transform> transforms() noexcept { return transforms_; }
+    [[nodiscard]] std::span<const Transform> transforms() const noexcept {
+        return transforms_;
     }
     [[nodiscard]] std::span<MoveState> motion() noexcept { return motion_; }
     [[nodiscard]] std::span<const MoveState> motion() const noexcept { return motion_; }
@@ -99,7 +101,7 @@ public:
     [[nodiscard]] std::span<const UnitTypeIndex> types() const noexcept { return types_; }
 
     /// Slots that exist, live or dead. The length of every array above.
-    [[nodiscard]] std::size_t slotCount() const noexcept { return instances_.size(); }
+    [[nodiscard]] std::size_t slotCount() const noexcept { return transforms_.size(); }
 
     /// Units currently alive.
     [[nodiscard]] std::size_t liveCount() const noexcept { return ids_.liveCount(); }
@@ -118,7 +120,9 @@ private:
     /// turned back into a handle without asking the pool for its internals.
     std::vector<Generation> generations_;
 
-    std::vector<UnitInstance> instances_;
+    /// The sim's authority on where units are. `UnitInstance` — the GPU's layout — is built
+    /// from these at draw time and never read back; see `core/sim/Transform.hpp`.
+    std::vector<Transform> transforms_;
     std::vector<MoveState> motion_;
     std::vector<Health> health_;
     std::vector<UnitTypeIndex> types_;

@@ -81,20 +81,23 @@ std::vector<Weapon> weaponsFrom(const lua::Value& weaponArray) {
         // A NEGATIVE radius appears once in the corpus and is read as a point hit: a
         // blast that pulls inward is not a thing, and clamping is honest where trusting
         // it would make the falloff divide by a negative and heal whatever it hit.
-        weapon.damageRadiusElmos =
-            std::max(0.0f, numberOr(entry, "DamageRadius", 0.0f)) * scmap::kElmosPerOgrid;
+        weapon.damageRadius = sim::fxFromFloat(
+            std::max(0.0f, numberOr(entry, "DamageRadius", 0.0f)) * scmap::kElmosPerOgrid);
 
-        weapon.maxRangeElmos = numberOr(entry, "MaxRadius", 0.0f) * scmap::kElmosPerOgrid;
-        weapon.minRangeElmos =
-            std::max(0.0f, numberOr(entry, "MinRadius", 0.0f)) * scmap::kElmosPerOgrid;
+        weapon.maxRange = sim::fxFromFloat(numberOr(entry, "MaxRadius", 0.0f)
+                                           * scmap::kElmosPerOgrid);
+        weapon.minRange = sim::fxFromFloat(
+            std::max(0.0f, numberOr(entry, "MinRadius", 0.0f)) * scmap::kElmosPerOgrid);
 
         // The rings, in the same ogrids everything else is stated in.
         weapon.innerRingDamage = sim::magFromFloat(numberOr(entry, "NukeInnerRingDamage", 0.0f));
-        weapon.innerRingRadiusElmos =
-            std::max(0.0f, numberOr(entry, "NukeInnerRingRadius", 0.0f)) * scmap::kElmosPerOgrid;
+        weapon.innerRingRadius = sim::fxFromFloat(
+            std::max(0.0f, numberOr(entry, "NukeInnerRingRadius", 0.0f))
+            * scmap::kElmosPerOgrid);
         weapon.outerRingDamage = sim::magFromFloat(numberOr(entry, "NukeOuterRingDamage", 0.0f));
-        weapon.outerRingRadiusElmos =
-            std::max(0.0f, numberOr(entry, "NukeOuterRingRadius", 0.0f)) * scmap::kElmosPerOgrid;
+        weapon.outerRingRadius = sim::fxFromFloat(
+            std::max(0.0f, numberOr(entry, "NukeOuterRingRadius", 0.0f))
+            * scmap::kElmosPerOgrid);
 
         weapon.rateOfFire = numberOr(entry, "RateOfFire", 0.0f);
         weapon.muzzleVelocityElmosPerSecond =

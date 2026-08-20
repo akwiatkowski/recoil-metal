@@ -162,7 +162,7 @@ struct UnitDef {
     /// The unit's longest reach, in elmos, over the weapons it will actually fire.
     /// Zero for something unarmed. What a targeting sweep needs before it looks at
     /// individual weapons.
-    [[nodiscard]] float maxWeaponRangeElmos() const noexcept;
+    [[nodiscard]] sim::Fx maxWeaponRange() const noexcept;
 
     /// The factor that takes the MESH's own coordinates to elmos.
     ///

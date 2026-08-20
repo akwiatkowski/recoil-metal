@@ -46,8 +46,8 @@ namespace {
     weapon.label = "test gun";
     weapon.role = WeaponRole::DirectFire;
     weapon.damage = rm::test::mag(damage);
-    weapon.maxRangeElmos = rangeElmos;
-    weapon.damageRadiusElmos = radiusElmos;
+    weapon.maxRange = rm::test::fx(rangeElmos);
+    weapon.damageRadius = rm::test::fx(radiusElmos);
     weapon.rateOfFire = 1.0f;                        // one shot a second
     weapon.muzzleVelocityElmosPerSecond = 100.0f;    // fast, but not instant
     return weapon;
@@ -75,8 +75,8 @@ TEST_CASE("range is measured on the ground, so high ground is not cover") {
     // A weapon's range is a footprint on the map, not a sphere. Using the 3-D distance
     // would make a unit on a cliff harder to shoot than the same unit on the flat, which
     // is a stealth field nobody asked for.
-    CHECK(rm::sim::groundDistanceElmos({0, 0, 0}, {30, 0, 40}) == Approx(50.0f));
-    CHECK(rm::sim::groundDistanceElmos({0, 0, 0}, {30, 900, 40}) == Approx(50.0f));
+    CHECK(rm::test::asFloat(rm::sim::groundDistanceElmos(rm::test::at(0, 0, 0), rm::test::at(30, 0, 40))) == Approx(50.0f));
+    CHECK(rm::test::asFloat(rm::sim::groundDistanceElmos(rm::test::at(0, 0, 0), rm::test::at(30, 900, 40))) == Approx(50.0f));
 }
 
 TEST_CASE("a reload is a whole number of ticks, and never zero") {
@@ -147,7 +147,7 @@ TEST_CASE("a unit shoots the nearest enemy and never a friend") {
 
     const Weapon weapon = directFire(10.0f, 300.0f);
 
-    const auto target = rm::sim::nearestTarget({0, 0, 0}, 0, weapon, roster.store, armies);
+    const auto target = rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, weapon, roster.store, armies);
     REQUIRE(target.has_value());
     CHECK(*target == near);  // the near enemy, not the nearer ally
 }
@@ -163,7 +163,7 @@ TEST_CASE("a dead enemy is not a target, and neither is a defeated army's unit")
 
     const Weapon weapon = directFire(10.0f, 300.0f);
 
-    auto target = rm::sim::nearestTarget({0, 0, 0}, 0, weapon, roster.store, armies);
+    auto target = rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, weapon, roster.store, armies);
     REQUIRE(target.has_value());
     CHECK(*target == living);  // skipped the corpse
 
@@ -171,7 +171,7 @@ TEST_CASE("a dead enemy is not a target, and neither is a defeated army's unit")
     // keeps shooting a side that is already out.
     armies[1].defeated = true;
     CHECK_FALSE(
-        rm::sim::nearestTarget({0, 0, 0}, 0, weapon, roster.store, armies).has_value());
+        rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, weapon, roster.store, armies).has_value());
 }
 
 TEST_CASE("a minimum range is a hole a unit can stand in") {
@@ -185,32 +185,43 @@ TEST_CASE("a minimum range is a hole a unit can stand in") {
     const std::vector<Army> armies = rm::sim::freeForAll(2);
 
     Weapon artillery = directFire(100.0f, 500.0f);
-    artillery.minRangeElmos = 100.0f;
+    artillery.minRange = rm::test::fx(100.0f);
 
     CHECK_FALSE(
-        rm::sim::nearestTarget({0, 0, 0}, 0, artillery, roster.store, armies).has_value());
+        rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, artillery, roster.store, armies).has_value());
 
     // ...and the same weapon does reach something outside it.
-    roster.instance(hider).position = {0.0f, 0.0f, 200.0f};
-    CHECK(rm::sim::nearestTarget({0, 0, 0}, 0, artillery, roster.store, armies).has_value());
+    roster.transform(hider).z = rm::test::fx(200.0f);
+    CHECK(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, artillery, roster.store, armies).has_value());
 }
 
 TEST_CASE("a flat shot flies straight at its target") {
+    const rm::sim::TickRate rate{};
     const Weapon weapon = directFire(10.0f, 500.0f);  // 100 elmos/s
-    const Projectile shot = rm::sim::launch({0, 0, 0}, {0, 0, 200}, weapon, 0, rm::sim::TickRate{});
+    const Projectile shot =
+        rm::sim::launch(rm::test::at(0, 0, 0), rm::test::at(0, 0, 200), weapon, 0, rate,
+                        rate.perTick(weapon.muzzleVelocityElmosPerSecond));
+
+    // Asserted PER SECOND, converted back from the per-tick velocity the projectile now
+    // carries: "100 elmos a second" is the authored fact, and how far that is in a tick
+    // depends on the clock.
+    const auto perSecond = [&rate](rm::sim::Fx perTick) {
+        return rm::test::asFloat(perTick) * static_cast<float>(rate.ticksPerSecond());
+    };
 
     // Two seconds of flight over 200 elmos, so 100 elmos a second down +Z and nothing
     // sideways.
-    CHECK(shot.velocity[0] == Approx(0.0f));
-    CHECK(shot.velocity[2] == Approx(100.0f));
+    CHECK(perSecond(shot.velocity[0]) == Approx(0.0f));
+    CHECK(perSecond(shot.velocity[2]) == Approx(100.0f).margin(0.5f));
     CHECK(shot.arc == BallisticArc::None);
 
     // It leaves the MUZZLE, four elmos above the shooter's feet, and aims at the target's
     // middle two elmos above its own — so a flat shot at a target on the same ground
     // angles slightly DOWN rather than travelling level. Two elmos of drop over two
     // seconds is one a second.
-    CHECK(shot.position[1] == Approx(rm::sim::kMuzzleHeightElmos));
-    CHECK(shot.velocity[1] == Approx(-1.0f));
+    CHECK(rm::test::asFloat(shot.position[1])
+          == Approx(rm::test::asFloat(rm::sim::kMuzzleHeight)));
+    CHECK(perSecond(shot.velocity[1]) == Approx(-1.0f).margin(0.1f));
 }
 
 TEST_CASE("an arced shot rises, and comes down where the target is") {
@@ -218,13 +229,14 @@ TEST_CASE("an arced shot rises, and comes down where the target is") {
     artillery.arc = BallisticArc::High;
     artillery.muzzleVelocityElmosPerSecond = 100.0f;
 
-    const std::array<float, 3> from{0, 0, 0};
-    const std::array<float, 3> to{0, 0, 300};
-    const Projectile shot = rm::sim::launch(from, to, artillery, 0, rm::sim::TickRate{});
+    const std::array<rm::sim::Fx, 3> from = rm::test::at(0, 0, 0);
+    const std::array<rm::sim::Fx, 3> to = rm::test::at(0, 0, 300);
+    const Projectile shot = rm::sim::launch(from, to, artillery, 0, rm::sim::TickRate{},
+                        rm::sim::TickRate{}.perTick(artillery.muzzleVelocityElmosPerSecond));
 
     // It must LEAVE going up, which is the whole point of an arc — a flat shot at the
     // same target has a vertical velocity of zero.
-    CHECK(shot.velocity[1] > 0.0f);
+    CHECK(shot.velocity[1] > rm::sim::Fx{});
 
     // And gravity must bring it down exactly there. Simulated tick by tick rather than
     // asserted from the formula, so the test checks the integration and not the algebra
@@ -235,7 +247,8 @@ TEST_CASE("an arced shot rises, and comes down where the target is") {
 
     int ticks = 0;
     while (!flight.empty() && ticks < 1000) {
-        rm::sim::advanceProjectiles(flight, empty, {}, field);
+        rm::sim::advanceProjectiles(flight, empty, {}, rm::sim::Terrain{field},
+                                    rm::sim::TickRate{});
         ++ticks;
     }
 
@@ -256,7 +269,7 @@ TEST_CASE("damage falls off linearly to nothing at the rim") {
     const UnitId outside = roster.add(type, 0.0f, 200.0f, 1, 100.0f);
 
     const rm::sim::Mag dealt =
-        rm::sim::damageArea({0, 0, 0}, 100.0f, rm::test::mag(80.0f), 0, roster.store, armies);
+        rm::sim::damageArea(rm::test::at(0, 0, 0), rm::test::fx(100.0f), rm::test::mag(80.0f), 0, roster.store, armies);
 
     CHECK(rm::test::asFloat(roster.health(centre).current) == Approx(20.0f));    // took all 80
     CHECK(rm::test::asFloat(roster.health(halfway).current) == Approx(60.0f));   // took half
@@ -272,7 +285,7 @@ TEST_CASE("a blast does not hurt the army that fired it") {
 
     // Fired by army 0, centred on army 0's own unit.
     const rm::sim::Mag dealt =
-        rm::sim::damageArea({0, 0, 0}, 100.0f, rm::test::mag(80.0f), 0, roster.store, armies);
+        rm::sim::damageArea(rm::test::at(0, 0, 0), rm::test::fx(100.0f), rm::test::mag(80.0f), 0, roster.store, armies);
     CHECK(rm::test::asFloat(dealt) == Approx(0.0f));
     CHECK(rm::test::asFloat(roster.health(mine).current) == Approx(100.0f));
 }
@@ -287,7 +300,7 @@ TEST_CASE("a point hit lands on what it was aimed at") {
     const UnitId hit = roster.add(type, 0.0f, 0.0f, 1, 100.0f);
     const UnitId beside = roster.add(type, 0.0f, 60.0f, 1, 100.0f);
 
-    const rm::sim::Mag dealt = rm::sim::damageArea({0, 0, 0}, 0.0f, rm::test::mag(40.0f), 0, roster.store, armies);
+    const rm::sim::Mag dealt = rm::sim::damageArea(rm::test::at(0, 0, 0), rm::test::fx(0.0f), rm::test::mag(40.0f), 0, roster.store, armies);
     CHECK(rm::test::asFloat(roster.health(hit).current) == Approx(60.0f));
     CHECK(rm::test::asFloat(roster.health(beside).current) == Approx(100.0f));
     CHECK(rm::test::asFloat(dealt) == Approx(40.0f));
@@ -299,7 +312,7 @@ TEST_CASE("damage never takes more than a unit has, so overkill is not negative 
     const UnitId frail = roster.add(roster.addType(targetDef()), 0.0f, 0.0f, 1, 30.0f);
 
     const rm::sim::Mag dealt =
-        rm::sim::damageArea({0, 0, 0}, 0.0f, rm::test::mag(5000.0f), 0, roster.store, armies);
+        rm::sim::damageArea(rm::test::at(0, 0, 0), rm::test::fx(0.0f), rm::test::mag(5000.0f), 0, roster.store, armies);
     CHECK(rm::test::asFloat(roster.health(frail).current) == Approx(0.0f));
     CHECK(rm::test::asFloat(dealt) == Approx(30.0f));  // what was actually taken, not what was thrown
     CHECK_FALSE(roster.health(frail).alive());
@@ -349,7 +362,8 @@ TEST_CASE("a unit with nothing to shoot at holds its fire and stays loaded") {
     CHECK(shots.empty());
 
     // Now it walks into range and shoots on the very first tick.
-    roster.instance(enemy).position = {0.0f, 0.0f, 50.0f};
+    roster.transform(enemy).x = rm::test::fx(0.0f);
+    roster.transform(enemy).z = rm::test::fx(50.0f);
     CHECK(rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots, rm::sim::TickRate{}) == 1);
 }
 
@@ -375,10 +389,12 @@ TEST_CASE("a shot in flight lands and kills, and is then gone") {
     const UnitId frail = roster.add(roster.addType(targetDef()), 0.0f, 100.0f, 1, 25.0f);
 
     Weapon weapon = directFire(40.0f, 300.0f, 30.0f);
-    std::vector<Projectile> shots{rm::sim::launch({0, 0, 0}, {0, 0, 100}, weapon, 0, rm::sim::TickRate{})};
+    std::vector<Projectile> shots{rm::sim::launch(rm::test::at(0, 0, 0), rm::test::at(0, 0, 100), weapon, 0, rm::sim::TickRate{},
+                        rm::sim::TickRate{}.perTick(weapon.muzzleVelocityElmosPerSecond))};
 
     for (int tick = 0; tick < 100 && !shots.empty(); ++tick) {
-        rm::sim::advanceProjectiles(shots, roster.store, armies, field);
+        rm::sim::advanceProjectiles(shots, roster.store, armies, rm::sim::Terrain{field},
+                                    rm::sim::TickRate{});
     }
 
     CHECK(shots.empty());                        // spent
@@ -397,13 +413,15 @@ TEST_CASE("a shot that hits nothing expires instead of flying forever") {
 
     Weapon weapon = directFire(10.0f, 300.0f);
     weapon.muzzleVelocityElmosPerSecond = 1000.0f;
-    std::vector<Projectile> shots{rm::sim::launch({0, 0, 0}, {0, 0, 100}, weapon, 0, rm::sim::TickRate{})};
+    std::vector<Projectile> shots{rm::sim::launch(rm::test::at(0, 0, 0), rm::test::at(0, 0, 100), weapon, 0, rm::sim::TickRate{},
+                        rm::sim::TickRate{}.perTick(weapon.muzzleVelocityElmosPerSecond))};
 
     rm::sim::UnitStore none;
     const auto lifetime =
         static_cast<int>(rm::sim::TickRate{}.ticks(rm::sim::kProjectileLifetime));
     for (int tick = 0; tick <= lifetime; ++tick) {
-        rm::sim::advanceProjectiles(shots, none, {}, field);
+        rm::sim::advanceProjectiles(shots, none, {}, rm::sim::Terrain{field},
+                                    rm::sim::TickRate{});
     }
     CHECK(shots.empty());
 }
@@ -424,7 +442,7 @@ TEST_CASE("an unowned unit takes no part in a fight") {
     std::vector<Projectile> shots;
     CHECK(rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots, rm::sim::TickRate{}) == 0);
 
-    CHECK(rm::test::asFloat(rm::sim::damageArea({0, 0, 50}, 100.0f, rm::test::mag(500.0f), 0,
+    CHECK(rm::test::asFloat(rm::sim::damageArea(rm::test::at(0, 0, 50), rm::test::fx(100.0f), rm::test::mag(500.0f), 0,
                                                 roster.store, armies))
           == Approx(0.0f));
     CHECK(roster.health(nobodys).alive());
@@ -464,7 +482,7 @@ TEST_CASE("a death explosion goes off where the unit stood") {
     const UnitId halfway = roster.add(type, 0.0f, 40.0f, 1, 1000.0f);
     const UnitId clear = roster.add(type, 0.0f, 500.0f, 1, 1000.0f);
 
-    const rm::sim::Mag dealt = rm::sim::explodeOnDeath(def, {0, 0, 0}, 0, roster.store, armies);
+    const rm::sim::Mag dealt = rm::sim::explodeOnDeath(def, rm::test::at(0, 0, 0), 0, roster.store, armies);
 
     CHECK(rm::test::asFloat(dealt) > 0.0f);
     CHECK(rm::test::asFloat(roster.health(centre).current) == Approx(500.0f));   // took the full 500
@@ -480,7 +498,7 @@ TEST_CASE("a unit with no death weapon detonates harmlessly") {
     Roster roster;
     const UnitId bystander = roster.add(roster.addType(targetDef()), 0.0f, 0.0f, 1, 100.0f);
 
-    CHECK(rm::test::asFloat(rm::sim::explodeOnDeath(def, {0, 0, 0}, 0, roster.store,
+    CHECK(rm::test::asFloat(rm::sim::explodeOnDeath(def, rm::test::at(0, 0, 0), 0, roster.store,
                                                    armies))
           == Approx(0.0f));
     CHECK(rm::test::asFloat(roster.health(bystander).current) == Approx(100.0f));
@@ -490,20 +508,27 @@ TEST_CASE("a bearing is measured the way a unit's yaw is") {
     // atan2(dx, dz), NOT atan2(dz, dx): yaw is measured from +Z toward +X because that is
     // what the vertex shader does with it. Swapping the arguments compiles, runs, and points
     // every turret ninety degrees off.
-    CHECK(rm::sim::bearingTo({0, 0, 0}, {0, 0, 100}) == Approx(0.0f));                    // +Z
-    CHECK(rm::sim::bearingTo({0, 0, 0}, {100, 0, 0})
-          == Approx(std::numbers::pi_v<float> / 2.0f));                                   // +X
+    // Asserted in binary radians, which is what a bearing IS now: a quarter turn is 16,384,
+    // exactly, with no tolerance needed — the whole reason for the type.
+    CHECK(rm::sim::bearingTo(rm::test::at(0, 0, 0), rm::test::at(0, 0, 100)) == 0);  // +Z
+    CHECK(rm::sim::bearingTo(rm::test::at(0, 0, 0), rm::test::at(100, 0, 0))
+          == rm::sim::kBradQuarterTurn);                                            // +X
 }
 
 TEST_CASE("a heading error takes the shorter way round") {
     // A unit one degree the wrong side of north must read as one degree off, not 359 — or it
     // turns the long way and looks broken.
-    constexpr float pi = std::numbers::pi_v<float>;
-    CHECK(rm::sim::headingError(0.0f, 0.1f) == Approx(0.1f));
-    CHECK(rm::sim::headingError(0.1f, 0.0f) == Approx(0.1f));  // symmetric
-    CHECK(rm::sim::headingError(-0.05f, 0.05f) == Approx(0.1f));
-    CHECK(rm::sim::headingError(0.0f, 2.0f * pi - 0.1f) == Approx(0.1f).margin(1e-4));
-    CHECK(rm::sim::headingError(0.0f, pi) == Approx(pi));  // the furthest possible
+    // A tenth of a radian is 1043 brad (65,536 / 2*pi / 10).
+    constexpr rm::Brad tenth = 1043;
+    CHECK(rm::sim::headingError(0, tenth) == tenth);
+    CHECK(rm::sim::headingError(tenth, 0) == tenth);  // symmetric
+    CHECK(rm::sim::headingError(static_cast<rm::Brad>(-521), 522) == tenth);
+
+    // A tenth of a turn SHORT of a full turn reads as a tenth of a turn, exactly — no
+    // tolerance, because the wrap is unsigned overflow rather than a modulo by 2*pi. This
+    // case needed `.margin(1e-4)` in float for precisely that reason.
+    CHECK(rm::sim::headingError(0, static_cast<rm::Brad>(65536 - tenth)) == tenth);
+    CHECK(rm::sim::headingError(0, rm::sim::kBradHalfTurn) == rm::sim::kBradHalfTurn);
 }
 
 TEST_CASE("a turreted weapon fires whatever the hull is doing") {
@@ -514,8 +539,8 @@ TEST_CASE("a turreted weapon fires whatever the hull is doing") {
     turret.turreted = true;
     turret.firingToleranceDegrees = 1.0f;
 
-    CHECK(rm::sim::canFireAt(turret, 0.0f, 0.0f));
-    CHECK(rm::sim::canFireAt(turret, 0.0f, std::numbers::pi_v<float>));  // directly behind
+    CHECK(rm::sim::canFireAt(turret, 0, 0));
+    CHECK(rm::sim::canFireAt(turret, 0, rm::sim::kBradHalfTurn));  // directly behind
 }
 
 TEST_CASE("an unturreted weapon must be pointed at what it shoots") {
@@ -524,10 +549,10 @@ TEST_CASE("an unturreted weapon must be pointed at what it shoots") {
     fixed.turreted = false;
     fixed.firingToleranceDegrees = 2.0f;  // the corpus's own mode
 
-    CHECK(rm::sim::canFireAt(fixed, 0.0f, 0.0f));
-    CHECK(rm::sim::canFireAt(fixed, 0.0f, 0.03f));  // just under two degrees
-    CHECK_FALSE(rm::sim::canFireAt(fixed, 0.0f, 0.5f));
-    CHECK_FALSE(rm::sim::canFireAt(fixed, 0.0f, std::numbers::pi_v<float> / 2.0f));
+    CHECK(rm::sim::canFireAt(fixed, 0, 0));
+    CHECK(rm::sim::canFireAt(fixed, 0, rm::sim::bradFromRadians(0.03f)));  // just under two degrees
+    CHECK_FALSE(rm::sim::canFireAt(fixed, 0, rm::sim::bradFromRadians(0.5f)));
+    CHECK_FALSE(rm::sim::canFireAt(fixed, 0, rm::sim::kBradQuarterTurn));
 }
 
 TEST_CASE("an idle unit turns to bring its gun to bear, at its own rate") {
@@ -539,7 +564,7 @@ TEST_CASE("an idle unit turns to bring its gun to bear, at its own rate") {
     Roster roster;
     const UnitId gunner =
         roster.add(roster.addType(gunnerDef(fixed)), 0.0f, 0.0f, 0, 100.0f);
-    roster.motion(gunner).turnRateRadiansPerSecond = 1.0f;  // one radian a second
+    roster.motion(gunner).turnPerTick = roster.rate.bradPerTick(1.0f);  // one radian a second
     roster.motion(gunner).moving = false;
 
     // Due +X, so a bearing of pi/2.
@@ -548,14 +573,15 @@ TEST_CASE("an idle unit turns to bring its gun to bear, at its own rate") {
     // One tick is a tenth of a radian, so it does not snap round — a slow hull is slow to
     // aim, which is why the turn rate is read off the blueprint at all.
     CHECK(rm::sim::aimAtTargets(roster.store, roster.catalog, armies) == 1);
-    CHECK(roster.instance(gunner).rotationY == Approx(0.1f));
+    // A tenth of a radian is 1043 brad, and the turn is exact rather than approximate.
+    CHECK(roster.transform(gunner).heading == 1043);
 
     // ...and it gets there eventually.
     for (int tick = 0; tick < 100; ++tick) {
         (void)rm::sim::aimAtTargets(roster.store, roster.catalog, armies);
     }
-    CHECK(roster.instance(gunner).rotationY
-          == Approx(std::numbers::pi_v<float> / 2.0f).margin(0.01));
+    CHECK(rm::sim::headingError(roster.transform(gunner).heading, rm::sim::kBradQuarterTurn)
+          < 200);  // within ~1 degree of due +X
 }
 
 TEST_CASE("a moving unit is not turned by aiming, and a turreted one has no reason to") {
@@ -572,7 +598,7 @@ TEST_CASE("a moving unit is not turned by aiming, and a turreted one has no reas
         (void)roster.add(roster.addType(targetDef()), 100.0f, 0.0f, 1, 100.0f);
 
         CHECK(rm::sim::aimAtTargets(roster.store, roster.catalog, armies) == 0);
-        CHECK(roster.instance(gunner).rotationY == Approx(0.0f));
+        CHECK(roster.transform(gunner).heading == 0);
     }
     SECTION("turreted: the turret aims, not the hull") {
         Weapon turret = directFire(10.0f, 300.0f);
@@ -598,7 +624,7 @@ TEST_CASE("a unit facing the wrong way holds its shot rather than spending it") 
     Roster roster;
     const UnitId gunner =
         roster.add(roster.addType(gunnerDef(fixed)), 0.0f, 0.0f, 0, 100.0f);
-    roster.instance(gunner).rotationY = std::numbers::pi_v<float>;  // facing away
+    roster.transform(gunner).heading = rm::sim::kBradHalfTurn;  // facing away
 
     // Due +Z, a bearing of 0.
     (void)roster.add(roster.addType(targetDef()), 0.0f, 100.0f, 1, 100.0f);
@@ -610,6 +636,6 @@ TEST_CASE("a unit facing the wrong way holds its shot rather than spending it") 
     CHECK(shots.empty());
 
     // Turn it round and it fires on the very next tick, its reload never having been spent.
-    roster.instance(gunner).rotationY = 0.0f;
+    roster.transform(gunner).heading = 0;
     CHECK(rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots, rm::sim::TickRate{}) == 1);
 }

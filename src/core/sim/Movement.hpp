@@ -1,7 +1,10 @@
 #pragma once
 
 #include "core/map/HeightField.hpp"
+#include "core/sim/Fx.hpp"
+#include "core/sim/Terrain.hpp"
 #include "core/sim/TickRate.hpp"
+#include "core/sim/Transform.hpp"
 #include "core/scene/UnitPlacement.hpp"
 
 #include <algorithm>
@@ -78,17 +81,20 @@ inline constexpr float kDefaultTurnRateRadiansPerSecond = 3.4934f;
 /// the 4 would have left every ordered unit stopping on the tick's overshoot
 /// guard instead of on arrival — a constant that had quietly stopped doing its
 /// job. Exactly the kind of value PLAN.md warns grows up around a tick rate.
-inline constexpr float kArrivalRadiusElmos =
-    std::max(0.5f * static_cast<float>(kSquareSize), kDefaultSpeedElmosPerSecond * kTickSeconds);
+/// Now DERIVED, because it depends on the rate and §5.1 forbids writing that dependency as a
+/// number. `arrivalRadius(rate)` is the larger of half a square and one tick of default travel.
+[[nodiscard]] Fx arrivalRadius(TickRate rate) noexcept;
 
-/// Default collision radius, in elmos — see MoveState::radiusElmos.
-inline constexpr float kDefaultRadiusElmos = 16.0f;
+/// Default collision radius, in elmos — see MoveState::radiusElmos. Rate-independent, so it
+/// stays a constant.
+inline constexpr Fx kDefaultRadius = Fx::fromInt(16);
 
-// What a unit is doing. UnitInstance carries what the GPU needs — position,
-// yaw, scale, colour — and this carries what the sim needs and the GPU must
-// never see. Kept as a parallel array rather than folded into UnitInstance
-// because that struct's layout is pinned by a static_assert and read verbatim
-// by the vertex shader.
+// What a unit is DOING, as opposed to where it is. `Transform` carries position and
+// orientation; this carries the order, the derived rates and the bookkeeping.
+//
+// Two structs rather than one because they have different readers: every pass touches the
+// transform, and only the movement and collision passes touch this. Keeping them apart is
+// what lets the draw gather read one array and ignore the other.
 /// The army index of something nobody owns.
 ///
 /// Not 0, which would be a real army: a scattered decorative unit, a prop that found
@@ -99,26 +105,31 @@ inline constexpr int kNoArmy = -1;
 
 struct MoveState {
     /// Who owns this unit. See kNoArmy.
-    ///
-    /// Lives on the SIM state rather than on UnitInstance because UnitInstance's
-    /// layout is pinned by a static_assert and read verbatim by the vertex shader —
-    /// the GPU needs the army's colour, which it already has, and must never need its
-    /// index.
     int armyIndex = kNoArmy;
 
-    float destinationX = 0.0f;
-    float destinationZ = 0.0f;
+    Fx destinationX{};
+    Fx destinationZ{};
     bool moving = false;
 
-    float speedElmosPerSecond = kDefaultSpeedElmosPerSecond;
-    float turnRateRadiansPerSecond = kDefaultTurnRateRadiansPerSecond;
+    /// PER TICK, both of them, derived once from the authored per-second figures (§5.1).
+    ///
+    /// They default to ZERO rather than to the constants above, and that is deliberate: a
+    /// per-tick default would have to name a rate, which is the one thing the rule forbids.
+    /// `defaultMotion(rate)` builds a `MoveState` with the authored defaults converted, and is
+    /// what a caller that wants "an ordinary unit" should use.
+    Fx speedPerTick{};
+
+    /// Binary radians per tick. SIGNED and wider than `Brad`: a rate fast enough to wrap a
+    /// full turn in one tick would be indistinguishable from standing still in the wrapping
+    /// type, and clamping the turn against the remaining error needs the true magnitude.
+    std::int32_t turnPerTick = 0;
 
     /// How much room this unit takes up, in elmos. Zero opts out of collision
     /// entirely, which is what a marker or a decorative instance wants.
     ///
     /// The default is BAR's Pawn again: `footprintx = 2`, doubled by the
     /// engine's footprint scale to 4 squares, half of which is 16 elmos.
-    float radiusElmos = kDefaultRadiusElmos;
+    Fx radiusElmos = kDefaultRadius;
 
     // Ground distance covered since this unit was created, in elmos. Only ever
     // increases.
@@ -133,7 +144,7 @@ struct MoveState {
     // Kept here rather than derived from position because a straight line from
     // the spawn is not the distance walked: a unit that goes out and comes back
     // has covered twice what its displacement says.
-    float distanceTravelledElmos = 0.0f;
+    Fx distanceTravelledElmos{};
 
     // The route still to walk, as world (x, z) waypoints, and how far along it
     // the unit is. Empty for a unit heading straight at a point.
@@ -142,7 +153,7 @@ struct MoveState {
     // place start from different corners of the map. A vector per unit is
     // cheap here — this never reaches the GPU, and the instance data that does
     // stays exactly as tightly packed as it was.
-    std::vector<std::array<float, 2>> path;
+    std::vector<std::array<Fx, 2>> path;
     std::size_t pathIndex = 0;
 };
 
@@ -151,7 +162,7 @@ struct MoveState {
 /// An empty path stops the unit rather than leaving it heading wherever it was:
 /// "no route exists" and "walk to where you already are" are the same answer,
 /// and both mean stay put.
-void orderAlongPath(MoveState& state, std::span<const std::array<float, 2>> path);
+void orderAlongPath(MoveState& state, std::span<const std::array<Fx, 2>> path);
 
 // `CollisionGroup` used to live here, with a multi-group overload of `resolveCollisions`:
 // instances were held per model, one array each, so separating a mixed crowd meant handing
@@ -174,8 +185,8 @@ void orderAlongPath(MoveState& state, std::span<const std::array<float, 2>> path
 /// being pushed does not push back on whatever is driving it. That is enough
 /// to stop a rally point from being a stack of models in the same spot, which
 /// is the visible lie it exists to fix.
-void resolveCollisions(std::span<UnitInstance> instances, std::span<const MoveState> motion,
-                       const HeightField& field);
+void resolveCollisions(std::span<Transform> transforms, std::span<const MoveState> motion,
+                       const Terrain& terrain);
 
 /// How close counts as reaching an intermediate waypoint, in elmos.
 ///
@@ -184,7 +195,7 @@ void resolveCollisions(std::span<UnitInstance> instances, std::span<const MoveSt
 /// smooth arc instead of driving to each cell centre and pivoting there, and it
 /// costs nothing in accuracy because the FINAL waypoint still uses the tight
 /// radius.
-inline constexpr float kWaypointRadiusElmos = 32.0f;
+inline constexpr Fx kWaypointRadius = Fx::fromInt(32);
 
 /// Pitch (rotationX) and roll (rotationZ) that align a unit's up axis with the
 /// terrain normal under its feet.
@@ -192,8 +203,8 @@ inline constexpr float kWaypointRadiusElmos = 32.0f;
 /// The unit's yaw is preserved: the slope is expressed in the unit's local
 /// frame so a unit facing any direction plants both feet on the same slope.
 /// Returns {rotationX, rotationZ} in radians.
-[[nodiscard]] std::array<float, 2> slopeAlignment(const HeightField& field, float x, float z,
-                                                  float yaw) noexcept;
+[[nodiscard]] std::array<Brad, 2> slopeAlignment(const Terrain& terrain, Fx x, Fx z,
+                                                 Brad yaw) noexcept;
 
 /// Orders a unit to a world position, clamped onto the map.
 ///
@@ -201,7 +212,7 @@ inline constexpr float kWaypointRadiusElmos = 32.0f;
 /// reachable place the moment it is given — a destination off the map would
 /// otherwise leave a unit pressed against the border with `moving` stuck true
 /// forever.
-void orderTo(MoveState& state, const HeightField& field, float x, float z) noexcept;
+void orderTo(MoveState& state, const Terrain& terrain, Fx x, Fx z) noexcept;
 
 /// Advances every unit by one fixed tick.
 ///
@@ -209,8 +220,15 @@ void orderTo(MoveState& state, const HeightField& field, float x, float z) noexc
 /// span leaves the trailing instances alone rather than reading past its end.
 ///
 /// noexcept and allocation-free: this runs inside the frame loop.
-void tick(std::span<UnitInstance> instances, std::span<MoveState> motion,
-          const HeightField& field) noexcept;
+void tick(std::span<Transform> transforms, std::span<MoveState> motion,
+          const Terrain& terrain) noexcept;
+
+/// A `MoveState` with the authored default speed and turn rate, converted for this clock.
+///
+/// The replacement for defaulting those fields in the struct: the defaults are authored per
+/// second (`kDefaultSpeedElmosPerSecond`, `kDefaultTurnRateRadiansPerSecond`) and only a rate
+/// can turn them into per-tick amounts.
+[[nodiscard]] MoveState defaultMotion(TickRate rate) noexcept;
 
 // Turns elapsed wall-clock time into whole fixed ticks.
 //

@@ -14,10 +14,10 @@ namespace {
 [[nodiscard]] UnitStore::Spawn tankAt(float x, float z, int army, rm::UnitTypeIndex type = 1) {
     UnitStore::Spawn s;
     s.type = type;
-    s.instance.position = {x, 0.0f, z};
-    s.instance.scale = 1.0f;
+    s.transform.x = rm::test::fx(x);
+    s.transform.z = rm::test::fx(z);
     s.motion.armyIndex = army;
-    s.motion.radiusElmos = 16.0f;
+    s.motion.radiusElmos = rm::sim::Fx::fromInt(16);
     s.health = rm::sim::Health{.current = rm::test::mag(500.0f), .maximum = rm::test::mag(500.0f)};
     return s;
 }
@@ -32,8 +32,8 @@ TEST_CASE("a spawned unit is alive, findable, and carries what it was given") {
     REQUIRE(store.liveCount() == 1);
     REQUIRE(store.slotCount() == 1);
     REQUIRE(store.typeAt(id.index) == 7);
-    REQUIRE(store.instances()[id.index].position[0] == 100.0f);
-    REQUIRE(store.instances()[id.index].position[2] == 200.0f);
+    REQUIRE(store.transforms()[id.index].x == rm::test::fx(100.0f));
+    REQUIRE(store.transforms()[id.index].z == rm::test::fx(200.0f));
     REQUIRE(store.motion()[id.index].armyIndex == 3);
     REQUIRE(store.health()[id.index].current == rm::test::mag(500.0f));
 }
@@ -45,7 +45,7 @@ TEST_CASE("every array is the same length and indexed by slot") {
     for (int i = 0; i < 50; ++i) {
         (void)store.spawn(tankAt(static_cast<float>(i), 0.0f, i % 4));
     }
-    REQUIRE(store.instances().size() == store.slotCount());
+    REQUIRE(store.transforms().size() == store.slotCount());
     REQUIRE(store.motion().size() == store.slotCount());
     REQUIRE(store.health().size() == store.slotCount());
     REQUIRE(store.types().size() == store.slotCount());
@@ -68,7 +68,7 @@ TEST_CASE("a killed unit stops being alive but keeps its slot") {
     REQUIRE(store.slotCount() == 3);              // nothing was removed
     REQUIRE(a.index == 0);
     REQUIRE(c.index == 2);                        // ...and nothing moved
-    REQUIRE(store.instances()[2].position[0] == 30.0f);
+    REQUIRE(store.transforms()[2].x == rm::test::fx(30.0f));
 }
 
 TEST_CASE("a dead unit's last values are left where they were") {
@@ -79,8 +79,8 @@ TEST_CASE("a dead unit's last values are left where they were") {
     const UnitId a = store.spawn(tankAt(42.0f, 24.0f, 1));
     store.kill(a);
 
-    REQUIRE(store.instances()[a.index].position[0] == 42.0f);
-    REQUIRE(store.motion()[a.index].radiusElmos == 16.0f);
+    REQUIRE(store.transforms()[a.index].x == rm::test::fx(42.0f));
+    REQUIRE(store.motion()[a.index].radiusElmos == rm::sim::Fx::fromInt(16));
 }
 
 TEST_CASE("1,000 units, kill every third — iteration and lookup both hold") {
@@ -109,13 +109,13 @@ TEST_CASE("1,000 units, kill every third — iteration and lookup both hold") {
     // Iteration: walking slots and skipping the dead visits exactly the survivors, in
     // order, with their values intact.
     std::size_t visited = 0;
-    float lastX = -1.0f;
+    rm::sim::Fx lastX = rm::sim::Fx::fromInt(-1);
     for (rm::UnitIndex slot = 0; slot < store.slotCount(); ++slot) {
         if (!store.slotAlive(slot)) {
             continue;
         }
         ++visited;
-        const float x = store.instances()[slot].position[0];
+        const rm::sim::Fx x = store.transforms()[slot].x;
         REQUIRE(x > lastX);  // still in spawn order
         lastX = x;
     }
@@ -133,7 +133,7 @@ TEST_CASE("a freed slot is reused, and the old handle does not follow it") {
     REQUIRE(store.slotCount() == 1);               // ...without growing the arrays
     REQUIRE(store.alive(second));
     REQUIRE_FALSE(store.alive(first));             // ...and the old handle stayed dead
-    REQUIRE(store.instances()[second.index].position[0] == 999.0f);
+    REQUIRE(store.transforms()[second.index].x == rm::test::fx(999.0f));
     REQUIRE(store.motion()[second.index].armyIndex == 1);
 }
 
@@ -144,9 +144,9 @@ TEST_CASE("a reused slot is fully overwritten, never partly inherited") {
     UnitStore store;
     UnitStore::Spawn wounded = tankAt(5.0f, 5.0f, 0, 3);
     wounded.health = rm::sim::Health{.current = rm::test::mag(1.0f), .maximum = rm::test::mag(500.0f)};
-    wounded.motion.path.push_back({70.0f, 80.0f});
+    wounded.motion.path.push_back({rm::test::fx(70.0f), rm::test::fx(80.0f)});
     wounded.motion.moving = true;
-    wounded.motion.distanceTravelledElmos = 1234.0f;
+    wounded.motion.distanceTravelledElmos = rm::test::fx(1234.0f);
 
     const UnitId old = store.spawn(wounded);
     store.kill(old);
@@ -157,7 +157,7 @@ TEST_CASE("a reused slot is fully overwritten, never partly inherited") {
     REQUIRE(store.health()[fresh.index].current == rm::test::mag(500.0f));
     REQUIRE(store.motion()[fresh.index].path.empty());
     REQUIRE_FALSE(store.motion()[fresh.index].moving);
-    REQUIRE(store.motion()[fresh.index].distanceTravelledElmos == 0.0f);
+    REQUIRE(store.motion()[fresh.index].distanceTravelledElmos == rm::sim::Fx{});
     REQUIRE(store.typeAt(fresh.index) == 9);
 }
 

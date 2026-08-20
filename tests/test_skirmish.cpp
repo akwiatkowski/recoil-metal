@@ -56,7 +56,7 @@ namespace {
     weapon.role = WeaponRole::DirectFire;
     weapon.turreted = true;
     weapon.damage = rm::test::mag(damage);
-    weapon.maxRangeElmos = rangeElmos;
+    weapon.maxRange = rm::test::fx(rangeElmos);
     weapon.rateOfFire = 1.0f;                      // one shot a second
     weapon.muzzleVelocityElmosPerSecond = 200.0f;  // crosses the range in a tick or two
     return weapon;
@@ -84,8 +84,9 @@ TEST_CASE("one tick both moves a unit and fires its gun") {
     (void)roster.add(roster.addType(targetDef), 200.0f, 0.0f, 1, 500.0f);
 
     // Ordered somewhere, so the movement half has something to do.
-    rm::sim::orderTo(roster.motion(tank), field, 100.0f, 0.0f);
-    const std::array<float, 3> started = roster.instance(tank).position;
+    rm::sim::orderTo(roster.motion(tank), rm::sim::Terrain{field}, rm::test::fx(100.0f),
+                     rm::test::fx(0.0f));
+    const std::array<rm::sim::Fx, 3> started = rm::sim::positionOf(roster.transform(tank));
 
     std::vector<Army> armies = twoSides();
     std::vector<Projectile> projectiles;
@@ -99,9 +100,9 @@ TEST_CASE("one tick both moves a unit and fires its gun") {
                 .building = &building,
                 .commandersEver = commandersEver};
 
-    const TickReport report = rm::sim::tickSkirmish(roster.store, roster.catalog, match, field);
+    const TickReport report = rm::sim::tickSkirmish(roster.store, roster.catalog, match, rm::sim::Terrain{field});
 
-    CHECK(roster.instance(tank).position != started);  // it moved
+    CHECK(rm::sim::positionOf(roster.transform(tank)) != started);  // it moved
     CHECK(report.shotsFired == 1);                     // and it shot
     CHECK(projectiles.size() == 1);
 }
@@ -122,7 +123,8 @@ TEST_CASE("a unit with no enemy in range moves without firing") {
     (void)roster.add(roster.addType(targetDef), 900.0f, 0.0f, 1,
                      500.0f);  // far out of range
 
-    rm::sim::orderTo(roster.motion(tank), field, 100.0f, 0.0f);
+    rm::sim::orderTo(roster.motion(tank), rm::sim::Terrain{field}, rm::test::fx(100.0f),
+                     rm::test::fx(0.0f));
 
     std::vector<Army> armies = twoSides();
     std::vector<Projectile> projectiles;
@@ -136,7 +138,7 @@ TEST_CASE("a unit with no enemy in range moves without firing") {
                 .building = &building,
                 .commandersEver = commandersEver};
 
-    const TickReport report = rm::sim::tickSkirmish(roster.store, roster.catalog, match, field);
+    const TickReport report = rm::sim::tickSkirmish(roster.store, roster.catalog, match, rm::sim::Terrain{field});
 
     CHECK(report.shotsFired == 0);
     CHECK(projectiles.empty());
@@ -171,7 +173,7 @@ TEST_CASE("the tick reports its dead, and retires them from the fight") {
                 .building = &building,
                 .commandersEver = commandersEver};
 
-    const TickReport report = rm::sim::tickSkirmish(roster.store, roster.catalog, match, field);
+    const TickReport report = rm::sim::tickSkirmish(roster.store, roster.catalog, match, rm::sim::Terrain{field});
 
     REQUIRE(report.died.size() == 1);
     // The HANDLE of the unit that died, which is a stronger claim than the pair it replaced:
@@ -181,19 +183,19 @@ TEST_CASE("the tick reports its dead, and retires them from the fight") {
     // The wreck's size and place are carried in the report, sampled BEFORE the unit was
     // retired — going back to the slot for them would find a radius of zero, because
     // retiring is what zeroes it.
-    CHECK(report.died[0].radiusElmos == Approx(4.0f));
-    CHECK(report.died[0].at[0] == Approx(50.0f));
+    CHECK(rm::test::asFloat(report.died[0].radiusElmos) == Approx(4.0f));
+    CHECK(rm::test::asFloat(report.died[0].at[0]) == Approx(50.0f));
 
     // Retired: it no longer shoves the living, it no longer drives anywhere, and the store
     // agrees it is gone — which the old pair could not express at all.
-    CHECK(roster.motion(victim).radiusElmos == 0.0f);
+    CHECK(rm::test::asFloat(roster.motion(victim).radiusElmos) == 0.0f);
     CHECK(roster.motion(victim).moving == false);
     CHECK_FALSE(roster.store.alive(victim));
     CHECK(roster.store.slotCount() == 2);  // the slot stays: death is a tombstone
 
     // Reported ONCE. A corpse sits in its slot for the rest of the match, and a tick
     // that kept reporting it would fire its death explosion every tick forever.
-    const TickReport again = rm::sim::tickSkirmish(roster.store, roster.catalog, match, field);
+    const TickReport again = rm::sim::tickSkirmish(roster.store, roster.catalog, match, rm::sim::Terrain{field});
     CHECK(again.died.empty());
 }
 
@@ -223,13 +225,13 @@ TEST_CASE("losing the last commander defeats an army and ends the match") {
                 .commandersEver = commandersEver};
 
     // Nothing has happened yet: both sides are whole.
-    TickReport report = rm::sim::tickSkirmish(roster.store, roster.catalog, match, field);
+    TickReport report = rm::sim::tickSkirmish(roster.store, roster.catalog, match, rm::sim::Terrain{field});
     CHECK(report.defeated == 0);
     CHECK(report.matchEnded == false);
 
     // Army 1's commander dies.
     roster.health(theirs).current = rm::test::mag(0.0f);
-    report = rm::sim::tickSkirmish(roster.store, roster.catalog, match, field);
+    report = rm::sim::tickSkirmish(roster.store, roster.catalog, match, rm::sim::Terrain{field});
 
     CHECK(report.defeated == 1);
     CHECK(armies[1].defeated);
@@ -263,7 +265,7 @@ TEST_CASE("a crowd with no commanders is not a draw on the first tick") {
                 .building = &building,
                 .commandersEver = commandersEver};
 
-    const TickReport report = rm::sim::tickSkirmish(roster.store, roster.catalog, match, field);
+    const TickReport report = rm::sim::tickSkirmish(roster.store, roster.catalog, match, rm::sim::Terrain{field});
 
     CHECK(report.defeated == 0);
     CHECK(report.matchEnded == false);
@@ -279,7 +281,7 @@ TEST_CASE("a death explosion goes off once, and hurts what is standing nearby") 
     blast.label = "test death";
     blast.role = WeaponRole::Death;
     blast.damage = rm::test::mag(400.0f);
-    blast.damageRadiusElmos = 100.0f;
+    blast.damageRadius = rm::test::fx(100.0f);
 
     Roster roster;
     UnitDef bombDef;
@@ -307,7 +309,7 @@ TEST_CASE("a death explosion goes off once, and hurts what is standing nearby") 
                 .building = &building,
                 .commandersEver = commandersEver};
 
-    TickReport report = rm::sim::tickSkirmish(roster.store, roster.catalog, match, field);
+    TickReport report = rm::sim::tickSkirmish(roster.store, roster.catalog, match, rm::sim::Terrain{field});
 
     CHECK(report.deathBlasts == 1);
     CHECK(rm::test::asFloat(report.deathBlastDamage) > 0.0f);
@@ -316,7 +318,7 @@ TEST_CASE("a death explosion goes off once, and hurts what is standing nearby") 
     // ONCE. The corpse sits in its slot for the rest of the match, and a blast that
     // repeated every tick would be both a wrong answer and an unbounded one.
     const rm::sim::Mag afterOne = roster.health(bystander).current;
-    report = rm::sim::tickSkirmish(roster.store, roster.catalog, match, field);
+    report = rm::sim::tickSkirmish(roster.store, roster.catalog, match, rm::sim::Terrain{field});
     CHECK(report.deathBlasts == 0);
     CHECK(rm::test::asFloat(roster.health(bystander).current) == Approx(rm::test::asFloat(afterOne)));
 }
@@ -365,7 +367,7 @@ TEST_CASE("a finished construction is reported but left in the list") {
                 .baseStorage = {.mass = rm::test::mag(1000.0f),
                                 .energy = rm::test::mag(1000.0f)}};
 
-    TickReport report = rm::sim::tickSkirmish(roster.store, roster.catalog, match, field);
+    TickReport report = rm::sim::tickSkirmish(roster.store, roster.catalog, match, rm::sim::Terrain{field});
 
     REQUIRE(report.finished.size() == 1);
     CHECK(report.finished[0].armyIndex == 0);
@@ -373,7 +375,7 @@ TEST_CASE("a finished construction is reported but left in the list") {
     CHECK(building[0].finished());
 
     // And reported once: a second tick must not spawn the same building again.
-    report = rm::sim::tickSkirmish(roster.store, roster.catalog, match, field);
+    report = rm::sim::tickSkirmish(roster.store, roster.catalog, match, rm::sim::Terrain{field});
     CHECK(report.finished.empty());
 }
 
@@ -402,7 +404,7 @@ TEST_CASE("income is what is standing, and a destroyed producer stops paying") {
                 .building = &building,
                 .commandersEver = commandersEver};
 
-    (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, field);
+    (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, rm::sim::Terrain{field});
 
     // Asserted per SECOND — the blueprint's own unit — converted back from the per-tick
     // figure the economy now holds.
@@ -415,7 +417,7 @@ TEST_CASE("income is what is standing, and a destroyed producer stops paying") {
 
     // Destroyed, and the income goes with it.
     roster.health(extractor).current = rm::test::mag(0.0f);
-    (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, field);
+    (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, rm::sim::Terrain{field});
 
     CHECK(perSecond(economies[0].incomePerTick.mass) == Approx(0.0f));
     CHECK(perSecond(economies[0].upkeepPerTick.energy) == Approx(0.0f));

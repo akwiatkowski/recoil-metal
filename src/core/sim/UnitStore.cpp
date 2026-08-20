@@ -6,18 +6,18 @@ UnitId UnitStore::spawn(const Spawn& request) {
     const UnitId id = ids_.acquire();
     const auto slot = static_cast<std::size_t>(id.index);
 
-    if (slot >= instances_.size()) {
+    if (slot >= transforms_.size()) {
         // A slot the pool has never handed out before. The pool only ever grows by one, so
         // this is an append rather than a resize — asserted by construction rather than
         // checked, since `IdPool::acquire` is the only thing that produces these.
-        instances_.emplace_back();
+        transforms_.emplace_back();
         motion_.emplace_back();
         health_.emplace_back();
         types_.emplace_back();
         generations_.emplace_back();
     }
 
-    instances_[slot] = request.instance;
+    transforms_[slot] = request.transform;
     motion_[slot] = request.motion;
     health_[slot] = request.health;
     types_[slot] = request.type;

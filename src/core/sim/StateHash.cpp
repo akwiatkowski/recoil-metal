@@ -51,9 +51,7 @@ void feed(StateHash& h, bool value) noexcept { feed(h, value ? 1ULL : 0ULL); }
 /// Fixed-point values are fed as their RAW INTEGERS, which is the whole point of having them:
 /// there is no bit pattern to normalise and no tolerance to worry about, because two runs that
 /// agree agree exactly.
-/// Not yet called: positions and velocities are still float and migrate in a later step of
-/// P2.2. Declared with the `Mag` overload rather than added later so the two read as one idea.
-[[maybe_unused]] void feed(StateHash& h, Fx value) noexcept {
+void feed(StateHash& h, Fx value) noexcept {
     feed(h, static_cast<std::uint64_t>(static_cast<std::uint32_t>(value.raw())));
 }
 
@@ -61,15 +59,28 @@ void feed(StateHash& h, Mag value) noexcept {
     feed(h, static_cast<std::uint64_t>(value.raw()));
 }
 
-void feed(StateHash& h, const std::array<float, 3>& v) noexcept {
+void feed(StateHash& h, const std::array<Fx, 3>& v) noexcept {
     feed(h, v[0]);
     feed(h, v[1]);
     feed(h, v[2]);
 }
 
-void feed(StateHash& h, const std::array<float, 2>& v) noexcept {
+void feed(StateHash& h, const std::array<Fx, 2>& v) noexcept {
     feed(h, v[0]);
     feed(h, v[1]);
+}
+
+/// An angle. Fed as its raw 16 bits — there is no wrapping to normalise, because the type
+/// cannot hold an unwrapped angle.
+void feed(StateHash& h, Brad value) noexcept { feed(h, static_cast<std::uint64_t>(value)); }
+
+/// A construction's site. `std::array<float, 3>` still, because `Construction::position` is
+/// where the CALLER wants a building put — it comes from a mouse click or a map marker, not
+/// from the sim's own arithmetic, and it migrates with the order system in P2.5.
+void feed(StateHash& h, const std::array<float, 3>& v) noexcept {
+    feed(h, v[0]);
+    feed(h, v[1]);
+    feed(h, v[2]);
 }
 
 void feed(StateHash& h, const Resources& r) noexcept {
@@ -77,15 +88,20 @@ void feed(StateHash& h, const Resources& r) noexcept {
     feed(h, r.energy);
 }
 
-// A unit's position and orientation. `animationPhase` and `teamColour` are skipped: see the
-// header — both are presentation, and hashing them would report a divergence between two
-// runs that played the same match.
-void feedUnit(StateHash& h, const UnitInstance& unit) noexcept {
-    feed(h, unit.position);
-    feed(h, unit.rotationY);
-    feed(h, unit.rotationX);
-    feed(h, unit.rotationZ);
-    feed(h, unit.scale);
+// A unit's position and orientation.
+//
+// The presentation exclusions this used to carry — `animationPhase` and `teamColour` — are
+// gone, and not because the rule changed: the store no longer holds them. `UnitInstance` is
+// built at draw time now (P2.2), so the fields that could have caused a false divergence are
+// not reachable from here at all. That paragraph in the header is history rather than a
+// caveat, which is the outcome it predicted.
+void feedTransform(StateHash& h, const Transform& unit) noexcept {
+    feed(h, unit.x);
+    feed(h, unit.y);
+    feed(h, unit.z);
+    feed(h, unit.heading);
+    feed(h, unit.pitch);
+    feed(h, unit.roll);
 }
 
 void feedMotion(StateHash& h, const MoveState& motion) noexcept {
@@ -93,14 +109,14 @@ void feedMotion(StateHash& h, const MoveState& motion) noexcept {
     feed(h, motion.destinationX);
     feed(h, motion.destinationZ);
     feed(h, motion.moving);
-    feed(h, motion.speedElmosPerSecond);
-    feed(h, motion.turnRateRadiansPerSecond);
+    feed(h, motion.speedPerTick);
+    feed(h, motion.turnPerTick);
     feed(h, motion.radiusElmos);
     feed(h, motion.distanceTravelledElmos);
     // The route still to walk. Fed with its length, so a unit that has consumed a waypoint
     // differs from one that has not even when the remaining waypoints coincide.
     feed(h, motion.path.size());
-    for (const std::array<float, 2>& waypoint : motion.path) {
+    for (const std::array<Fx, 2>& waypoint : motion.path) {
         feed(h, waypoint);
     }
     feed(h, motion.pathIndex);
@@ -124,12 +140,12 @@ StateHash hashMatch(const UnitStore& store, const Match& match) {
     // that produced nothing is still a different match.
     feed(h, store.slotCount());
 
-    const std::span<const UnitInstance> instances = store.instances();
+    const std::span<const Transform> transforms = store.transforms();
     const std::span<const MoveState> motion = store.motion();
     const std::span<const Health> healths = store.health();
 
     for (UnitIndex slot = 0; slot < store.slotCount(); ++slot) {
-        feedUnit(h, instances[slot]);
+        feedTransform(h, transforms[slot]);
         feedMotion(h, motion[slot]);
         feedHealth(h, healths[slot]);
         // The type, and who is in the slot. The type stands in for the definition — a def is

@@ -56,25 +56,26 @@ namespace {
 [[nodiscard]] std::optional<UnitIndex> nearestStruck(const Projectile& shot,
                                                     const UnitStore& store,
                                                     std::span<const Army> armies) {
-    const float travelPerTick = std::sqrt(shot.velocity[0] * shot.velocity[0]
-                                          + shot.velocity[1] * shot.velocity[1]
-                                          + shot.velocity[2] * shot.velocity[2])
-                              * kTickSeconds;
+    // The velocity is already per tick, so its length IS one tick of travel — the
+    // multiplication by a tick length that used to be here is gone.
+    const Fx travelPerTick =
+        fxSqrt(shot.velocity[0] * shot.velocity[0] + shot.velocity[1] * shot.velocity[1]
+               + shot.velocity[2] * shot.velocity[2]);
 
-    const std::span<const UnitInstance> instances = store.instances();
+    const std::span<const Transform> transforms = store.transforms();
     const std::span<const MoveState> motion = store.motion();
 
     std::optional<UnitIndex> best;
-    float bestDistance = 0.0f;
+    Fx bestDistance{};
 
-    for (UnitIndex slot = 0; slot < instances.size(); ++slot) {
+    for (UnitIndex slot = 0; slot < transforms.size(); ++slot) {
         if (!shootable(shot.firedByArmy, store, slot, armies)) {
             continue;
         }
-        const float size = slot < motion.size() ? motion[slot].radiusElmos : 0.0f;
-        const float tolerance = std::max(travelPerTick, size + shot.damageRadiusElmos);
+        const Fx size = slot < motion.size() ? motion[slot].radiusElmos : Fx{};
+        const Fx tolerance = std::max(travelPerTick, size + shot.damageRadiusElmos);
 
-        const float distance = groundDistanceElmos(shot.position, instances[slot].position);
+        const Fx distance = groundDistanceElmos(shot.position, positionOf(transforms[slot]));
         if (distance > tolerance) {
             continue;
         }
@@ -88,31 +89,40 @@ namespace {
 
 } // namespace
 
-float groundDistanceElmos(std::array<float, 3> from, std::array<float, 3> to) noexcept {
-    const float dx = to[0] - from[0];
-    const float dz = to[2] - from[2];
-    return std::sqrt(dx * dx + dz * dz);
+Fx projectileGravityPerTickSquared(TickRate rate) noexcept {
+    // Per second squared -> per tick squared: divide by the rate twice. `perTick` does it
+    // once; `fromRatio(1, ticksPerSecond)` does it again.
+    return rate.perTick(kProjectileGravityElmosPerSecond2)
+           * Fx::fromRatio(1, static_cast<std::int32_t>(rate.ticksPerSecond()));
 }
 
-std::optional<UnitId> nearestTarget(std::array<float, 3> from, int fromArmy,
+std::array<Fx, 3> positionOf(const Transform& transform) noexcept {
+    return {transform.x, transform.y, transform.z};
+}
+
+Fx groundDistanceElmos(std::array<Fx, 3> from, std::array<Fx, 3> to) noexcept {
+    return fxHypot(to[0] - from[0], to[2] - from[2]);
+}
+
+std::optional<UnitId> nearestTarget(std::array<Fx, 3> from, int fromArmy,
                                     const unitdef::Weapon& weapon, const UnitStore& store,
                                     std::span<const Army> armies) {
     if (!weapon.fires()) {
         return std::nullopt;
     }
 
-    const std::span<const UnitInstance> instances = store.instances();
+    const std::span<const Transform> transforms = store.transforms();
 
     std::optional<UnitIndex> best;
-    float bestDistance = 0.0f;
+    Fx bestDistance{};
 
-    for (UnitIndex slot = 0; slot < instances.size(); ++slot) {
+    for (UnitIndex slot = 0; slot < transforms.size(); ++slot) {
         if (!shootable(fromArmy, store, slot, armies)) {
             continue;
         }
 
-        const float distance = groundDistanceElmos(from, instances[slot].position);
-        if (distance > weapon.maxRangeElmos || distance < weapon.minRangeElmos) {
+        const Fx distance = groundDistanceElmos(from, positionOf(transforms[slot]));
+        if (distance > weapon.maxRange || distance < weapon.minRange) {
             continue;
         }
 
@@ -138,44 +148,45 @@ std::optional<UnitId> nearestTarget(std::array<float, 3> from, int fromArmy,
     return store.idAt(*best);
 }
 
-float bearingTo(std::array<float, 3> from, std::array<float, 3> to) noexcept {
-    return std::atan2(to[0] - from[0], to[2] - from[2]);
+Brad bearingTo(std::array<Fx, 3> from, std::array<Fx, 3> to) noexcept {
+    // The axis order IS the convention: measured from +Z toward +X, which is what the vertex
+    // shader does with a yaw. `fxBearing` takes its arguments in the same order so the
+    // convention lives in one signature rather than in comments at every call.
+    return fxBearing(to[0] - from[0], to[2] - from[2]);
 }
 
-float headingError(float from, float to) noexcept {
-    float error = to - from;
-    // Wrapped into -pi..pi, so the shorter way round is what is measured — otherwise a unit
-    // one degree the wrong side of north reads as 359 degrees off and turns the long way.
-    constexpr float kTwoPi = 2.0f * std::numbers::pi_v<float>;
-    while (error > std::numbers::pi_v<float>) {
-        error -= kTwoPi;
-    }
-    while (error < -std::numbers::pi_v<float>) {
-        error += kTwoPi;
-    }
-    return std::abs(error);
+std::uint32_t headingError(Brad from, Brad to) noexcept {
+    // Two lines where the float version needed eight. The difference of two `Brad` in 16 bits
+    // IS the shortest way round — [-32,768, 32,767) is exactly [-half turn, +half turn) — so
+    // the wrapping the loops above did by hand falls out of two's complement.
+    const auto signed16 = static_cast<std::int16_t>(static_cast<std::uint16_t>(to)
+                                                    - static_cast<std::uint16_t>(from));
+    return static_cast<std::uint32_t>(std::abs(static_cast<std::int32_t>(signed16)));
 }
 
-bool canFireAt(const unitdef::Weapon& weapon, float yaw, float bearing) noexcept {
+bool canFireAt(const unitdef::Weapon& weapon, Brad yaw, Brad bearing) noexcept {
     if (weapon.turreted) {
         return true;
     }
-    const float tolerance =
-        std::max(0.0f, weapon.firingToleranceDegrees) * std::numbers::pi_v<float> / 180.0f;
-    return headingError(yaw, bearing) <= tolerance;
+    // Degrees to binary radians: a full turn is 65,536, so a degree is 65,536/360 = 182.04.
+    // Rounded rather than truncated, and computed in a wider integer so a tolerance of 180
+    // degrees does not overflow on the way.
+    const auto degrees = static_cast<std::int64_t>(
+        std::lround(std::max(0.0f, weapon.firingToleranceDegrees) * (65536.0 / 360.0)));
+    return static_cast<std::int64_t>(headingError(yaw, bearing)) <= degrees;
 }
 
 std::size_t aimAtTargets(UnitStore& store, const UnitCatalog& catalog,
                          std::span<const Army> armies) {
-    const std::span<UnitInstance> instances = store.instances();
+    const std::span<Transform> transforms = store.transforms();
     const std::span<const MoveState> motion = store.motion();
 
     std::size_t turned = 0;
-    for (UnitIndex slot = 0; slot < instances.size() && slot < motion.size(); ++slot) {
+    for (UnitIndex slot = 0; slot < transforms.size() && slot < motion.size(); ++slot) {
         if (motion[slot].moving) {
             continue;  // an order is already deciding where this one points
         }
-        if (motion[slot].radiusElmos <= 0.0f) {
+        if (motion[slot].radiusElmos <= Fx{}) {
             continue;  // retired
         }
 
@@ -188,13 +199,13 @@ std::size_t aimAtTargets(UnitStore& store, const UnitCatalog& catalog,
         // reach among them decides how far away a unit bothers to aim. Per unit now rather
         // than per batch, because the definition is per unit — the loop is over a handful of
         // weapons and costs nothing next to the sweep below.
-        float reach = 0.0f;
+        Fx reach{};
         for (const unitdef::Weapon& weapon : def->weapons) {
             if (weapon.fires() && !weapon.turreted) {
-                reach = std::max(reach, weapon.maxRangeElmos);
+                reach = std::max(reach, weapon.maxRange);
             }
         }
-        if (reach <= 0.0f) {
+        if (reach <= Fx{}) {
             continue;
         }
 
@@ -205,34 +216,31 @@ std::size_t aimAtTargets(UnitStore& store, const UnitCatalog& catalog,
         sweep.role = unitdef::WeaponRole::DirectFire;
         sweep.damage = Mag::fromInt(1);
         sweep.rateOfFire = 1.0f;
-        sweep.maxRangeElmos = reach;
+        sweep.maxRange = reach;
 
         const std::optional<UnitId> target =
-            nearestTarget(instances[slot].position, motion[slot].armyIndex, sweep, store,
+            nearestTarget(positionOf(transforms[slot]), motion[slot].armyIndex, sweep, store,
                           armies);
         if (!target) {
             continue;
         }
 
-        const std::array<float, 3>& at = instances[target->index].position;
-        const float bearing = bearingTo(instances[slot].position, at);
-        const float error = headingError(instances[slot].rotationY, bearing);
+        const std::array<Fx, 3> at = positionOf(transforms[target->index]);
+        const Brad bearing = bearingTo(positionOf(transforms[slot]), at);
+        const std::uint32_t error = headingError(transforms[slot].heading, bearing);
         if (error <= 1e-4f) {
             continue;
         }
 
         // Turned at the unit's OWN rate, so a slow hull is slow to bring its gun to bear —
         // which is the whole reason `turnrate` is read off the blueprint.
-        const float step = motion[slot].turnRateRadiansPerSecond * kTickSeconds;
-        float delta = bearing - instances[slot].rotationY;
-        constexpr float kTwoPi = 2.0f * std::numbers::pi_v<float>;
-        while (delta > std::numbers::pi_v<float>) {
-            delta -= kTwoPi;
-        }
-        while (delta < -std::numbers::pi_v<float>) {
-            delta += kTwoPi;
-        }
-        instances[slot].rotationY += std::clamp(delta, -step, step);
+        const std::int32_t step = motion[slot].turnPerTick;
+        const auto delta = static_cast<std::int32_t>(static_cast<std::int16_t>(
+            static_cast<std::uint16_t>(bearing)
+            - static_cast<std::uint16_t>(transforms[slot].heading)));
+        transforms[slot].heading = static_cast<Brad>(
+            static_cast<std::uint16_t>(transforms[slot].heading)
+            + static_cast<std::uint16_t>(std::clamp(delta, -step, step)));
         ++turned;
     }
     return turned;
@@ -243,10 +251,10 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
                         std::vector<Projectile>& projectiles, TickRate rate) {
     std::size_t fired = 0;
 
-    const std::span<const UnitInstance> instances = store.instances();
+    const std::span<const Transform> transforms = store.transforms();
     const std::span<Health> healths = store.health();
 
-    for (UnitIndex slot = 0; slot < instances.size(); ++slot) {
+    for (UnitIndex slot = 0; slot < transforms.size(); ++slot) {
         if (slot >= healths.size() || !healths[slot].alive()) {
             continue;  // the dead do not shoot
         }
@@ -260,7 +268,7 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
         health.reloadRemaining.resize(def->weapons.size(), 0);
 
         const int army = armyAt(store, slot);
-        const std::array<float, 3> from = instances[slot].position;
+        const std::array<Fx, 3> from = positionOf(transforms[slot]);
 
         for (std::size_t w = 0; w < def->weapons.size(); ++w) {
             const unitdef::Weapon& weapon = def->weapons[w];
@@ -290,18 +298,23 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
                 continue;
             }
 
-            const std::array<float, 3> to = instances[target->index].position;
+            const std::array<Fx, 3> to = positionOf(transforms[target->index]);
 
             // Pointing at it? A turreted weapon always is; an unturreted one has to be
             // brought round, which `aimAtTargets` does. The reload is NOT consumed while
             // turning: a unit that spent its shot waiting to line up would fire far more
             // slowly than its blueprint says.
-            if (!canFireAt(weapon, instances[slot].rotationY, bearingTo(from, to))) {
+            if (!canFireAt(weapon, transforms[slot].heading, bearingTo(from, to))) {
                 continue;
             }
 
-            projectiles.push_back(launch(from, to, weapon, army, rate));
-            health.reloadRemaining[w] = weapon.reloadTicks(rate);
+            // The weapon's derived per-tick rates come from the catalog, which computed them
+            // when it learned the type — not from the weapon, which only knows its authored
+            // per-second figures (§5.1).
+            const UnitCatalog::WeaponRates& rates =
+                catalog.weaponRates(store.typeAt(slot), w);
+            projectiles.push_back(launch(from, to, weapon, army, rate, rates.muzzlePerTick));
+            health.reloadRemaining[w] = static_cast<int>(rates.reloadTicks);
             ++fired;
         }
     }
@@ -309,38 +322,40 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
     return fired;
 }
 
-Projectile launch(std::array<float, 3> from, std::array<float, 3> to,
-                  const unitdef::Weapon& weapon, int byArmy, TickRate rate) {
+Projectile launch(std::array<Fx, 3> from, std::array<Fx, 3> to,
+                  const unitdef::Weapon& weapon, int byArmy, TickRate rate, Fx muzzlePerTick) {
     Projectile shot;
-    shot.position = {from[0], from[1] + kMuzzleHeightElmos, from[2]};
+    shot.position = {from[0], from[1] + kMuzzleHeight, from[2]};
     shot.damage = weapon.damage;
-    shot.damageRadiusElmos = weapon.damageRadiusElmos;
+    shot.damageRadiusElmos = weapon.damageRadius;
     shot.firedByArmy = byArmy;
     shot.arc = weapon.arc;
     shot.ticksRemaining = static_cast<int>(rate.ticks(kProjectileLifetime));
 
     // Aimed from the MUZZLE at the target's middle, not from foot to foot: a shot that
     // leaves four elmos up and is aimed level would sail over its target.
-    const float dx = to[0] - shot.position[0];
-    const float dy = (to[1] + kMuzzleHeightElmos * 0.5f) - shot.position[1];
-    const float dz = to[2] - shot.position[2];
-    const float ground = std::sqrt(dx * dx + dz * dz);
+    const Fx dx = to[0] - shot.position[0];
+    const Fx dy = (to[1] + kMuzzleHeight * Fx::fromRatio(1, 2)) - shot.position[1];
+    const Fx dz = to[2] - shot.position[2];
+    const Fx ground = fxHypot(dx, dz);
 
     // A muzzle velocity of zero is a weapon whose shot is instantaneous — 111 of the 494
     // state one. Rather than special-case an instant hit, it is given a speed that
     // crosses its own maximum range in a single tick, so one code path carries every
     // shot and the arithmetic below never divides by zero.
-    const float speed = weapon.muzzleVelocityElmosPerSecond > 0.0f
-                          ? weapon.muzzleVelocityElmosPerSecond
-                          : weapon.maxRangeElmos * static_cast<float>(kTicksPerSecond);
+    const Fx speedPerTick = muzzlePerTick > Fx{} ? muzzlePerTick : weapon.maxRange;
 
-    if (ground <= 0.0f) {
+    if (ground <= Fx{}) {
         // Straight up, or at something in the same spot. Neither is worth a division.
-        shot.velocity = {0.0f, dy >= 0.0f ? speed : -speed, 0.0f};
+        shot.velocity = {Fx{}, dy >= Fx{} ? speedPerTick : -speedPerTick, Fx{}};
         return shot;
     }
 
-    const float flightSeconds = ground / speed;
+    // Flight time IN TICKS, which is the unit everything below is in. The per-second version
+    // of this divided by a per-second speed; the shape is identical with the unit of time
+    // already folded in.
+    const Fx flightTicks = ground / speedPerTick;
+    const Fx gravityPerTickSquared = projectileGravityPerTickSquared(rate);
 
     // FLAT: point at the target and let it fly. ARCED: the same horizontal velocity,
     // with the vertical component chosen so gravity brings it down exactly where the
@@ -348,51 +363,51 @@ Projectile launch(std::array<float, 3> from, std::array<float, 3> to,
     // the flight time is already known from the horizontal distance.
     //
     //   y = y0 + vy*t - g*t^2/2   solved for vy at t = flightSeconds
-    const float vy = shot.arc == unitdef::BallisticArc::None
-                       ? dy / flightSeconds
-                       : dy / flightSeconds
-                             + 0.5f * kProjectileGravityElmosPerSecond2 * flightSeconds;
+    const Fx vy = shot.arc == unitdef::BallisticArc::None
+                    ? dy / flightTicks
+                    : dy / flightTicks
+                          + Fx::fromRatio(1, 2) * gravityPerTickSquared * flightTicks;
 
-    shot.velocity = {dx / flightSeconds, vy, dz / flightSeconds};
+    shot.velocity = {dx / flightTicks, vy, dz / flightTicks};
     return shot;
 }
 
-Mag damageArea(std::array<float, 3> centre, float radiusElmos, Mag damage, int byArmy,
+Mag damageArea(std::array<Fx, 3> centre, Fx radiusElmos, Mag damage, int byArmy,
                UnitStore& store, std::span<const Army> armies) {
     Mag dealt{};
 
-    const std::span<const UnitInstance> instances = store.instances();
+    const std::span<const Transform> transforms = store.transforms();
     const std::span<const MoveState> motion = store.motion();
     const std::span<Health> healths = store.health();
 
-    for (UnitIndex slot = 0; slot < instances.size(); ++slot) {
+    for (UnitIndex slot = 0; slot < transforms.size(); ++slot) {
         if (!shootable(byArmy, store, slot, armies)) {
             continue;
         }
 
-        const float distance = groundDistanceElmos(centre, instances[slot].position);
+        const Fx distance = groundDistanceElmos(centre, positionOf(transforms[slot]));
 
-        float share = 0.0f;
-        if (radiusElmos <= 0.0f) {
+        Fx share{};
+        if (radiusElmos <= Fx{}) {
             // A point hit. Only what is essentially AT the centre takes it, and the
             // tolerance is the unit's own radius rather than zero — a shot aimed at
             // a unit's position that lands a tenth of an elmo away has hit it.
-            const float tolerance =
-                std::max(1.0f, slot < motion.size() ? motion[slot].radiusElmos : 1.0f);
-            share = distance <= tolerance ? 1.0f : 0.0f;
+            const Fx tolerance =
+                std::max(kFxOne, slot < motion.size() ? motion[slot].radiusElmos : kFxOne);
+            share = distance <= tolerance ? kFxOne : Fx{};
         } else {
             // Linear from full at the centre to nothing at the rim.
-            share = std::max(0.0f, 1.0f - distance / radiusElmos);
+            share = std::max(Fx{}, kFxOne - distance / radiusElmos);
         }
 
-        if (share <= 0.0f) {
+        if (share <= Fx{}) {
             continue;
         }
 
         // The share is a fraction of the blast, so it is geometry: `Fx`. Multiplying a `Mag`
         // by an `Fx` is how a rate or a fraction becomes an amount, and it is the one mixed
         // operation the two types have.
-        const Mag wanted = damage * fxFromFloat(share);
+        const Mag wanted = damage * share;
         const Mag applied = std::min(healths[slot].current, wanted);
         healths[slot].current -= applied;
         dealt += applied;
@@ -402,7 +417,9 @@ Mag damageArea(std::array<float, 3> centre, float radiusElmos, Mag damage, int b
 }
 
 void advanceProjectiles(std::vector<Projectile>& projectiles, UnitStore& store,
-                        std::span<const Army> armies, const HeightField& field) {
+                        std::span<const Army> armies, const Terrain& terrain, TickRate rate) {
+    const Fx gravityPerTickSquared = projectileGravityPerTickSquared(rate);
+
     for (Projectile& shot : projectiles) {
         if (shot.ticksRemaining <= 0) {
             continue;
@@ -410,11 +427,12 @@ void advanceProjectiles(std::vector<Projectile>& projectiles, UnitStore& store,
         --shot.ticksRemaining;
 
         if (shot.arc != unitdef::BallisticArc::None) {
-            shot.velocity[1] -= kProjectileGravityElmosPerSecond2 * kTickSeconds;
+            shot.velocity[1] -= gravityPerTickSquared;
         }
 
+        // No scaling: the velocity is already what one tick of flight covers.
         for (std::size_t axis = 0; axis < 3; ++axis) {
-            shot.position[axis] += shot.velocity[axis] * kTickSeconds;
+            shot.position[axis] += shot.velocity[axis];
         }
 
         // TWO ways a shot ends, and both are needed.
@@ -428,14 +446,14 @@ void advanceProjectiles(std::vector<Projectile>& projectiles, UnitStore& store,
         // rather than proximity, because a near miss must land rather than fly on and hit
         // whatever happens to be behind it.
         const std::optional<UnitIndex> struck = nearestStruck(shot, store, armies);
-        const float ground = field.heightAtWorld(shot.position[0], shot.position[2]);
+        const Fx ground = terrain.heightAt(shot.position[0], shot.position[2]);
 
         if (!struck && shot.position[1] > ground) {
             continue;
         }
 
         if (struck) {
-            shot.position = store.instances()[*struck].position;
+            shot.position = positionOf(store.transforms()[*struck]);
         } else {
             shot.position[1] = ground;
         }
@@ -459,7 +477,7 @@ const unitdef::Weapon* deathWeapon(const unitdef::UnitDef& def) noexcept {
     return nullptr;
 }
 
-Mag explodeOnDeath(const unitdef::UnitDef& def, std::array<float, 3> at, int byArmy,
+Mag explodeOnDeath(const unitdef::UnitDef& def, std::array<Fx, 3> at, int byArmy,
                      UnitStore& store, std::span<const Army> armies) {
     const unitdef::Weapon* blast = deathWeapon(def);
     if (blast == nullptr || !blast->harmful()) {
@@ -473,14 +491,14 @@ Mag explodeOnDeath(const unitdef::UnitDef& def, std::array<float, 3> at, int byA
     // finishing off things the inner one had already flattened.
     if (blast->hasRings()) {
         Mag dealt{};
-        dealt += damageArea(at, blast->outerRingRadiusElmos, blast->outerRingDamage, byArmy,
+        dealt += damageArea(at, blast->outerRingRadius, blast->outerRingDamage, byArmy,
                             store, armies);
-        dealt += damageArea(at, blast->innerRingRadiusElmos, blast->innerRingDamage, byArmy,
+        dealt += damageArea(at, blast->innerRingRadius, blast->innerRingDamage, byArmy,
                             store, armies);
         return dealt;
     }
 
-    return damageArea(at, blast->damageRadiusElmos, blast->damage, byArmy, store, armies);
+    return damageArea(at, blast->damageRadius, blast->damage, byArmy, store, armies);
 }
 
 std::vector<UnitId> deadUnits(const UnitStore& store) {

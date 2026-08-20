@@ -89,11 +89,11 @@ struct Death {
     /// live unit. Its slot (`ref.index`) still indexes the arrays, which is what lets the
     /// death explosion read the def and the owner of something that no longer exists.
     UnitId ref;
-    std::array<float, 3> at{};
+    std::array<Fx, 3> at{};
 
     /// The collision radius it had while alive, which is what sizes its wreck: a
     /// commander marks more ground than a tank.
-    float radiusElmos = 0.0f;
+    Fx radiusElmos{};
 };
 
 /// What one tick did, for a caller that has to react to it.
@@ -161,7 +161,7 @@ struct TickReport {
 /// need not say so. Defaulted rather than absent because a `TickRate` is cheap to construct
 /// and the alternative — reading a constant inside — is the thing §5.1 forbids.
 TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& match,
-                        const HeightField& field, TickRate rate = TickRate{});
+                        const Terrain& terrain, TickRate rate = TickRate{});
 
 /// Living commanders per army, indexed by army.
 ///

@@ -20,7 +20,6 @@ namespace {
 [[nodiscard]] UnitStore::Spawn unitOf(int army, rm::UnitTypeIndex type) {
     UnitStore::Spawn s;
     s.type = type;
-    s.instance.scale = 1.0f;
     s.motion.armyIndex = army;
     s.health = rm::sim::Health{.current = rm::test::mag(100.0f), .maximum = rm::test::mag(100.0f)};
     return s;

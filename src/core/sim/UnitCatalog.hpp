@@ -47,6 +47,22 @@ public:
         Mag upkeepEnergyPerTick{};
         Mag buildPerTick{};
     };
+
+    /// What one WEAPON's authored rates come to per tick.
+    ///
+    /// Here for the same reason the economy's are: `MuzzleVelocity` is elmos per second and
+    /// `RateOfFire` is shots per second, both facts about the weapon, and both only become
+    /// numbers the sim can use once a clock is known. Deriving them at the firing pass would
+    /// mean a float divide per weapon per unit per tick.
+    struct WeaponRates {
+        /// Elmos per tick. Zero for the 111 weapons that state no muzzle velocity — those are
+        /// instantaneous, and `launch` gives them a speed that crosses their own range in a
+        /// tick so nothing divides by zero.
+        Fx muzzlePerTick{};
+
+        /// Ticks between shots, never less than one.
+        TickCount reloadTicks = 1;
+    };
     /// Registers a definition and returns the index units of that type will carry.
     ///
     /// Null is allowed and gets an index like anything else: a decorative crowd has no
@@ -63,6 +79,18 @@ public:
         return type < rates_.size() ? rates_[type] : kNone;
     }
 
+    /// One weapon's per-tick rates. Bounds-checked in both dimensions, returning zeroes for
+    /// anything unregistered — a pass that indexed past the end would otherwise read whatever
+    /// was next in memory, and this is called from the inner loop of firing.
+    [[nodiscard]] const WeaponRates& weaponRates(UnitTypeIndex type,
+                                                 std::size_t weapon) const noexcept {
+        static constexpr WeaponRates kNone{};
+        if (type >= weapons_.size() || weapon >= weapons_[type].size()) {
+            return kNone;
+        }
+        return weapons_[type][weapon];
+    }
+
     /// The definition for a type, or null — for an unregistered index as well as for a type
     /// registered without one. A pass that reads this must handle null either way, so
     /// bounds-checking to the same answer costs nothing and removes a crash.
@@ -75,9 +103,10 @@ public:
 private:
     std::vector<const unitdef::UnitDef*> defs_;
 
-    /// Parallel to `defs_`, index-locked by construction: both only ever grow by one, in
+    /// Parallel to `defs_`, index-locked by construction: all three only ever grow by one, in
     /// `add`.
     std::vector<Rates> rates_;
+    std::vector<std::vector<WeaponRates>> weapons_;
 };
 
 } // namespace rm::sim

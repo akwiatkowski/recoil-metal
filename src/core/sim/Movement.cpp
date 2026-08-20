@@ -9,30 +9,53 @@
 
 namespace {
 
-constexpr float kPi = std::numbers::pi_v<float>;
-constexpr float kTwoPi = 2.0f * kPi;
+using rm::sim::Fx;
 
-/// Wraps an angle difference into [-pi, pi] — the shortest way round.
+/// The shortest way round, from one angle to another, as a SIGNED number of binary radians.
 ///
-/// Without this a unit facing 0.1 rad and asked to face 6.2 turns almost all
-/// the way round the long way instead of a tenth of a radian back.
-[[nodiscard]] float shortestAngleTo(float from, float to) noexcept {
-    float delta = std::fmod(to - from, kTwoPi);
-    if (delta > kPi) {
-        delta -= kTwoPi;
-    } else if (delta < -kPi) {
-        delta += kTwoPi;
-    }
-    return delta;
+/// This function used to be six lines of `fmod` and two comparisons. In `Brad` it is a
+/// subtraction and a cast, and that is not a micro-optimisation — it is the reason angles are
+/// binary radians at all. A turn is 65,536, so `to - from` in 16 bits wraps into
+/// [-32,768, 32,767], which IS [-half turn, +half turn): the shortest way round falls out of
+/// two's complement with no wrapping step to get wrong and no modulo by an irrational to
+/// accumulate error.
+[[nodiscard]] std::int32_t shortestTurn(rm::Brad from, rm::Brad to) noexcept {
+    return static_cast<std::int16_t>(static_cast<std::uint16_t>(to)
+                                     - static_cast<std::uint16_t>(from));
 }
+
+/// One elmo, the sample distance for the terrain gradient.
+inline constexpr Fx kOneElmo = Fx::fromInt(1);
 
 } // namespace
 
 namespace rm::sim {
 
-void orderTo(MoveState& state, const HeightField& field, float x, float z) noexcept {
-    state.destinationX = std::clamp(x, 0.0f, field.widthElmos());
-    state.destinationZ = std::clamp(z, 0.0f, field.depthElmos());
+Fx arrivalRadius(TickRate rate) noexcept {
+    // Half a heightmap square is the finest the terrain itself resolves, so aiming tighter
+    // asks for precision the ground does not have. And it must exceed ONE TICK OF TRAVEL, or a
+    // unit steps past the goal every tick and never lands inside the radius at all.
+    //
+    // Which bound binds depends on the rate, which is exactly why this is a function now: at
+    // 30 Hz a tick is 2.9 elmos and the first bound wins; at 10 Hz it is 8.7 and the second
+    // does. The old constant wrote the 10 Hz answer down and would have silently stopped doing
+    // its job at any other rate.
+    return std::max(Fx::fromInt(kSquareSize) * Fx::fromRatio(1, 2),
+                    rate.perTick(kDefaultSpeedElmosPerSecond));
+}
+
+MoveState defaultMotion(TickRate rate) noexcept {
+    MoveState state;
+    state.speedPerTick = rate.perTick(kDefaultSpeedElmosPerSecond);
+    state.turnPerTick = rate.bradPerTick(kDefaultTurnRateRadiansPerSecond);
+    return state;
+}
+
+void orderTo(MoveState& state, const Terrain& terrain, Fx x, Fx z) noexcept {
+    const Fx width = Fx::fromInt(terrain.field().squaresX * kSquareSize);
+    const Fx depth = Fx::fromInt(terrain.field().squaresZ * kSquareSize);
+    state.destinationX = std::clamp(x, Fx{}, width);
+    state.destinationZ = std::clamp(z, Fx{}, depth);
     state.moving = true;
 
     // A direct order supersedes a route. Without this the unit would reach the
@@ -41,7 +64,7 @@ void orderTo(MoveState& state, const HeightField& field, float x, float z) noexc
     state.pathIndex = 0;
 }
 
-void orderAlongPath(MoveState& state, std::span<const std::array<float, 2>> path) {
+void orderAlongPath(MoveState& state, std::span<const std::array<Fx, 2>> path) {
     state.path.assign(path.begin(), path.end());
     state.pathIndex = 0;
 
@@ -55,9 +78,17 @@ void orderAlongPath(MoveState& state, std::span<const std::array<float, 2>> path
     state.moving = true;
 }
 
-void tick(std::span<UnitInstance> instances, std::span<MoveState> motion,
-          const HeightField& field) noexcept {
-    const std::size_t count = std::min(instances.size(), motion.size());
+void tick(std::span<Transform> transforms, std::span<MoveState> motion,
+          const Terrain& terrain) noexcept {
+    const std::size_t count = std::min(transforms.size(), motion.size());
+
+    const Fx width = Fx::fromInt(terrain.field().squaresX * kSquareSize);
+    const Fx depth = Fx::fromInt(terrain.field().squaresZ * kSquareSize);
+
+    // The arrival radius depends on the default travel per tick, and the speeds are already
+    // per tick — so it is derived from the fastest thing here rather than from a rate the
+    // pass no longer sees. One tick of THIS unit's travel is the bound that matters.
+    const Fx halfSquare = Fx::fromInt(kSquareSize) * Fx::fromRatio(1, 2);
 
     for (std::size_t i = 0; i < count; ++i) {
         MoveState& state = motion[i];
@@ -65,11 +96,15 @@ void tick(std::span<UnitInstance> instances, std::span<MoveState> motion,
             continue;
         }
 
-        UnitInstance& unit = instances[i];
+        Transform& unit = transforms[i];
 
-        const float dx = state.destinationX - unit.position[0];
-        const float dz = state.destinationZ - unit.position[2];
-        const float distance = std::hypot(dx, dz);
+        const Fx dx = state.destinationX - unit.x;
+        const Fx dz = state.destinationZ - unit.z;
+
+        // Bearing and distance from one CORDIC pass rather than two: the pass needs both, and
+        // vectoring mode produces both.
+        const Polar toTarget = fxPolar(dx, dz);
+        const Fx distance = toTarget.length;
 
         // Reached this waypoint. The threshold is the radius or one tick of
         // travel, whichever is larger: a unit fast enough to cross the radius in
@@ -80,8 +115,9 @@ void tick(std::span<UnitInstance> instances, std::span<MoveState> motion,
         // corner rather than driving into each cell centre; the last one uses
         // the tight radius, because that is where it was actually sent.
         const bool onFinalWaypoint = state.pathIndex + 1 >= state.path.size();
-        const float radius = onFinalWaypoint ? kArrivalRadiusElmos : kWaypointRadiusElmos;
-        const float travel = state.speedElmosPerSecond * kTickSeconds;
+        const Fx radius = onFinalWaypoint ? std::max(halfSquare, state.speedPerTick)
+                                          : kWaypointRadius;
+        const Fx travel = state.speedPerTick;
 
         if (distance <= std::max(radius, travel)) {
             if (!onFinalWaypoint) {
@@ -97,47 +133,44 @@ void tick(std::span<UnitInstance> instances, std::span<MoveState> motion,
             continue;
         }
 
-        // Turn toward the destination, but no faster than the unit can.
-        // atan2(dx, dz), not the usual atan2(z, x): the vertex shader maps a
-        // model's local +Z to (sin yaw, cos yaw), so yaw is measured from +Z
-        // toward +X. Swapping the arguments compiles, runs, and renders every
-        // unit walking sideways.
-        const float desired = std::atan2(dx, dz);
-        const float error = shortestAngleTo(unit.rotationY, desired);
-        const float maxTurn = state.turnRateRadiansPerSecond * kTickSeconds;
-        unit.rotationY += std::clamp(error, -maxTurn, maxTurn);
+        // Turn toward the destination, but no faster than the unit can. The bearing already
+        // came out of `fxPolar` above, measured from +Z toward +X — the engine's convention,
+        // which the function's argument order enforces rather than a comment.
+        const std::int32_t error = shortestTurn(unit.heading, toTarget.bearing);
+        const std::int32_t maxTurn = state.turnPerTick;
+        unit.heading = static_cast<Brad>(static_cast<std::uint16_t>(unit.heading)
+                                         + static_cast<std::uint16_t>(
+                                             std::clamp(error, -maxTurn, maxTurn)));
 
         // Forward speed falls off with how badly the unit is still pointed the
         // wrong way, reaching zero at 90 degrees off. This is what makes a unit
         // pivot roughly in place before setting off, rather than driving away
         // at full speed and arcing back — and it needs no arbitrary "turn until
         // aligned" threshold, because the cosine already is one.
-        const float remaining = shortestAngleTo(unit.rotationY, desired);
-        const float alignment = std::max(0.0f, std::cos(remaining));
+        const auto remaining = static_cast<Brad>(shortestTurn(unit.heading, toTarget.bearing));
+        const Fx alignment = std::max(Fx{}, fxCos(remaining));
 
         // Never step past the destination, however fast the unit is.
-        const float step = std::min(travel * alignment, distance);
+        const Fx step = std::min(travel * alignment, distance);
 
-        const float previousX = unit.position[0];
-        const float previousZ = unit.position[2];
+        const Fx previousX = unit.x;
+        const Fx previousZ = unit.z;
 
-        unit.position[0] += std::sin(unit.rotationY) * step;
-        unit.position[2] += std::cos(unit.rotationY) * step;
+        unit.x += fxSin(unit.heading) * step;
+        unit.z += fxCos(unit.heading) * step;
 
         // The destination is already on the map, but the arc taken to reach it
         // need not be — a unit pivoting near a border can swing outside it.
-        unit.position[0] = std::clamp(unit.position[0], 0.0f, field.widthElmos());
-        unit.position[2] = std::clamp(unit.position[2], 0.0f, field.depthElmos());
+        unit.x = std::clamp(unit.x, Fx{}, width);
+        unit.z = std::clamp(unit.z, Fx{}, depth);
 
         // Measured after the clamp, so a unit pressed against the border stops
         // striding instead of walking on the spot forever. Horizontal only: a
         // walk cycle is paced by ground covered, not by height climbed.
-        state.distanceTravelledElmos +=
-            std::hypot(unit.position[0] - previousX, unit.position[2] - previousZ);
+        state.distanceTravelledElmos += fxHypot(unit.x - previousX, unit.z - previousZ);
 
-        // Sit on the ground. Interpolated, so crossing a square does not pop —
-        // that is the whole reason HeightField::heightAtWorld exists.
-        unit.position[1] = field.heightAtWorld(unit.position[0], unit.position[2]);
+        // Sit on the ground. Interpolated, so crossing a square does not pop.
+        unit.y = terrain.heightAt(unit.x, unit.z);
     }
 
     // Tilt every unit onto the ground underneath it — NOT just the ones that
@@ -148,11 +181,10 @@ void tick(std::span<UnitInstance> instances, std::span<MoveState> motion,
     // A separate pass rather than a line in the loop above, because it applies
     // to a different set: the loop moves what is moving, this tilts everything.
     for (std::size_t i = 0; i < count; ++i) {
-        UnitInstance& unit = instances[i];
-        const std::array<float, 2> align =
-            slopeAlignment(field, unit.position[0], unit.position[2], unit.rotationY);
-        unit.rotationX = align[0];
-        unit.rotationZ = align[1];
+        Transform& unit = transforms[i];
+        const std::array<Brad, 2> align = slopeAlignment(terrain, unit.x, unit.z, unit.heading);
+        unit.pitch = align[0];
+        unit.roll = align[1];
     }
 }
 
@@ -182,61 +214,62 @@ int TickClock::advance(float seconds) noexcept {
     return ticks;
 }
 
-std::array<float, 2> slopeAlignment(const HeightField& field, float x, float z,
-                                    float yaw) noexcept {
+std::array<Brad, 2> slopeAlignment(const Terrain& terrain, Fx x, Fx z, Brad yaw) noexcept {
     // Surface y = h(x, z). The unnormalised normal is (-dh/dx, 1, -dh/dz).
     // A fixed 1-elmo sample distance is small compared to an 8-elmo square and
     // large enough not to drown in quantisation.
-    constexpr float kSampleDistance = 1.0f;
-    const float dx = (field.heightAtWorld(x + kSampleDistance, z)
-                      - field.heightAtWorld(x - kSampleDistance, z))
-                   / (2.0f * kSampleDistance);
-    const float dz = (field.heightAtWorld(x, z + kSampleDistance)
-                      - field.heightAtWorld(x, z - kSampleDistance))
-                   / (2.0f * kSampleDistance);
+    const Fx dx = (terrain.heightAt(x + kOneElmo, z) - terrain.heightAt(x - kOneElmo, z))
+                  * Fx::fromRatio(1, 2);
+    const Fx dz = (terrain.heightAt(x, z + kOneElmo) - terrain.heightAt(x, z - kOneElmo))
+                  * Fx::fromRatio(1, 2);
 
-    const float normalLength = std::sqrt(dx * dx + 1.0f + dz * dz);
-    if (!(normalLength > 0.0f)) {
-        return {{0.0f, 0.0f}};
+    const Fx normalLength = fxSqrt(dx * dx + kFxOne + dz * dz);
+    if (normalLength <= Fx{}) {
+        return {{Brad{0}, Brad{0}}};
     }
-    const float nx = -dx / normalLength;
-    const float ny = 1.0f / normalLength;
-    const float nz = -dz / normalLength;
+    const Fx nx = -dx / normalLength;
+    const Fx ny = kFxOne / normalLength;
+    const Fx nz = -dz / normalLength;
 
     // Transform the world normal into the unit's local frame by undoing yaw.
-    const float c = std::cos(yaw);
-    const float s = std::sin(yaw);
-    const float nxLocal = nx * c - nz * s;
-    const float nyLocal = ny;
-    const float nzLocal = nx * s + nz * c;
+    const Fx c = fxCos(yaw);
+    const Fx s = fxSin(yaw);
+    const Fx nxLocal = nx * c - nz * s;
+    const Fx nyLocal = ny;
+    const Fx nzLocal = nx * s + nz * c;
 
-    // Roll (rotationZ) then pitch (rotationX) in the local frame maps local +Y
-    // toward the local normal. Clamp asin input for vertical walls.
-    const float roll = -std::asin(std::clamp(nxLocal, -1.0f, 1.0f));
-    const float cosRoll = std::cos(roll);
-    const float pitch = cosRoll > 1e-4f ? std::atan2(nzLocal, nyLocal) : 0.0f;
+    // Roll then pitch in the local frame maps local +Y toward the local normal. `fxAsin`
+    // saturates outside [-1, 1] rather than being undefined, which is what a vertical wall
+    // produces — so the clamp the float version needed is now the function's own contract.
+    const auto roll = static_cast<Brad>(-static_cast<std::int32_t>(fxAsin(nxLocal)));
+
+    // Near a vertical wall the roll approaches a quarter turn, its cosine approaches zero, and
+    // the pitch is meaningless. The float version tested `cosRoll > 1e-4f`; the fixed-point
+    // equivalent is a few steps of the type, since anything smaller is not representable.
+    const Fx cosRoll = fxCos(roll);
+    const Brad pitch = cosRoll > Fx::fromRaw(4) ? fxBearing(nzLocal, nyLocal) : Brad{0};
 
     return {{pitch, roll}};
 }
 
-void resolveCollisions(std::span<UnitInstance> instances, std::span<const MoveState> motion,
-                       const HeightField& field) {
+void resolveCollisions(std::span<Transform> transforms, std::span<const MoveState> motion,
+                       const Terrain& terrain) {
     // One flat index space, which is now what the caller hands over rather than something
     // assembled here: a unit's neighbours are all the units near it, not all the units near
     // it OF THE SAME MODEL. There used to be a `CollisionGroup` overload taking one span per
     // batch and flattening them, because storage was per model — with a flat store there is
     // nothing to flatten.
     struct Entry {
-        UnitInstance* unit;
-        float radius;
+        Transform* unit;
+        Fx radius;
     };
 
     std::vector<Entry> units;
     {
-        const std::size_t n = std::min(instances.size(), motion.size());
+        const std::size_t n = std::min(transforms.size(), motion.size());
         units.reserve(n);
         for (std::size_t i = 0; i < n; ++i) {
-            units.push_back(Entry{&instances[i], motion[i].radiusElmos});
+            units.push_back(Entry{&transforms[i], motion[i].radiusElmos});
         }
     }
 
@@ -249,20 +282,18 @@ void resolveCollisions(std::span<UnitInstance> instances, std::span<const MoveSt
     // could actually reach it. Without one this is every pair against every
     // other, which is fine for the forty units a demo places and quadratic for
     // the hundreds a rally order gathers.
-    float largestRadius = 0.0f;
+    Fx largestRadius{};
     for (std::size_t i = 0; i < count; ++i) {
         largestRadius = std::max(largestRadius, units[i].radius);
     }
-    if (largestRadius <= 0.0f) {
+    if (largestRadius <= Fx{}) {
         return;  // nothing here occupies any space
     }
 
     // Cells two radii across: any pair that overlaps is then either in the same
     // cell or in touching ones, so eight neighbours is the whole search.
-    const float cellSize = largestRadius * 2.0f;
-    const auto cellOf = [cellSize](float value) {
-        return static_cast<int>(std::floor(value / cellSize));
-    };
+    const Fx cellSize = largestRadius * 2;
+    const auto cellOf = [cellSize](Fx value) { return (value / cellSize).floorToInt(); };
 
     // Keyed on the packed cell coordinates. A map rather than a dense grid
     // because a crowd occupies a handful of cells out of the tens of thousands
@@ -275,24 +306,23 @@ void resolveCollisions(std::span<UnitInstance> instances, std::span<const MoveSt
     };
 
     for (std::size_t i = 0; i < count; ++i) {
-        if (units[i].radius <= 0.0f) {
+        if (units[i].radius <= Fx{}) {
             continue;
         }
-        buckets[key(cellOf(units[i].unit->position[0]), cellOf(units[i].unit->position[2]))]
-            .push_back(i);
+        buckets[key(cellOf(units[i].unit->x), cellOf(units[i].unit->z))].push_back(i);
     }
 
     // Ascending index order, resolving each pair as it is found, so the result
     // does not depend on how the buckets happened to be laid out.
     for (std::size_t a = 0; a < count; ++a) {
-        const float radiusA = units[a].radius;
-        if (radiusA <= 0.0f) {
+        const Fx radiusA = units[a].radius;
+        if (radiusA <= Fx{}) {
             continue;
         }
-        UnitInstance& unitA = *units[a].unit;
+        Transform& unitA = *units[a].unit;
 
-        const int cx = cellOf(unitA.position[0]);
-        const int cz = cellOf(unitA.position[2]);
+        const int cx = cellOf(unitA.x);
+        const int cz = cellOf(unitA.z);
 
         for (int dz = -1; dz <= 1; ++dz) {
             for (int dx = -1; dx <= 1; ++dx) {
@@ -307,16 +337,16 @@ void resolveCollisions(std::span<UnitInstance> instances, std::span<const MoveSt
                         continue;
                     }
 
-                    const float radiusB = units[b].radius;
-                    if (radiusB <= 0.0f) {
+                    const Fx radiusB = units[b].radius;
+                    if (radiusB <= Fx{}) {
                         continue;
                     }
-                    UnitInstance& unitB = *units[b].unit;
+                    Transform& unitB = *units[b].unit;
 
-                    float dxWorld = unitB.position[0] - unitA.position[0];
-                    float dzWorld = unitB.position[2] - unitA.position[2];
-                    const float wanted = radiusA + radiusB;
-                    float distance = std::hypot(dxWorld, dzWorld);
+                    Fx dxWorld = unitB.x - unitA.x;
+                    Fx dzWorld = unitB.z - unitA.z;
+                    const Fx wanted = radiusA + radiusB;
+                    Fx distance = fxHypot(dxWorld, dzWorld);
 
                     if (distance >= wanted) {
                         continue;
@@ -328,25 +358,27 @@ void resolveCollisions(std::span<UnitInstance> instances, std::span<const MoveSt
                     // the pair's indices — deterministic, and different for
                     // each pair, so a stack fans out instead of picking one
                     // axis and forming a line.
-                    if (distance < 1e-4f) {
-                        const auto spread = static_cast<float>((a * 7 + b * 13) % 360);
-                        const float angle = spread * (std::numbers::pi_v<float> / 180.0f);
-                        dxWorld = std::cos(angle);
-                        dzWorld = std::sin(angle);
-                        distance = 1.0f;
+                    if (distance <= Fx::fromRaw(4)) {
+                        // The invented direction is now in binary radians directly, which is
+                        // both simpler and finer than the old 360 whole degrees: the spread
+                        // covers the full circle at the angle type's own resolution.
+                        const auto angle = static_cast<Brad>((a * 7919 + b * 104729) % 65536);
+                        dxWorld = fxCos(angle);
+                        dzWorld = fxSin(angle);
+                        distance = kFxOne;
                     }
 
                     // Half the overlap each: neither unit outranks the other,
                     // and moving only one would let a unit under orders shove
                     // its way through a crowd untouched.
-                    const float push = (wanted - distance) * 0.5f;
-                    const float nx = dxWorld / distance;
-                    const float nz = dzWorld / distance;
+                    const Fx push = (wanted - distance) * Fx::fromRatio(1, 2);
+                    const Fx nx = dxWorld / distance;
+                    const Fx nz = dzWorld / distance;
 
-                    unitA.position[0] -= nx * push;
-                    unitA.position[2] -= nz * push;
-                    unitB.position[0] += nx * push;
-                    unitB.position[2] += nz * push;
+                    unitA.x -= nx * push;
+                    unitA.z -= nz * push;
+                    unitB.x += nx * push;
+                    unitB.z += nz * push;
                 }
             }
         }
@@ -354,14 +386,16 @@ void resolveCollisions(std::span<UnitInstance> instances, std::span<const MoveSt
 
     // Put everyone back on the map and on the ground. Done once at the end
     // rather than per push, since a unit may be moved by several neighbours.
+    const Fx width = Fx::fromInt(terrain.field().squaresX * kSquareSize);
+    const Fx depth = Fx::fromInt(terrain.field().squaresZ * kSquareSize);
     for (std::size_t i = 0; i < count; ++i) {
-        if (units[i].radius <= 0.0f) {
+        if (units[i].radius <= Fx{}) {
             continue;
         }
-        UnitInstance& unit = *units[i].unit;
-        unit.position[0] = std::clamp(unit.position[0], 0.0f, field.widthElmos());
-        unit.position[2] = std::clamp(unit.position[2], 0.0f, field.depthElmos());
-        unit.position[1] = field.heightAtWorld(unit.position[0], unit.position[2]);
+        Transform& unit = *units[i].unit;
+        unit.x = std::clamp(unit.x, Fx{}, width);
+        unit.z = std::clamp(unit.z, Fx{}, depth);
+        unit.y = terrain.heightAt(unit.x, unit.z);
     }
 }
 

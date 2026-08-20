@@ -35,12 +35,15 @@ namespace rm::sim {
 
 /// One shot in flight.
 struct Projectile {
-    std::array<float, 3> position{};
-    std::array<float, 3> velocity{};  ///< elmos per second
+    std::array<Fx, 3> position{};
+
+    /// Elmos PER TICK, not per second (§5.1). The advance pass adds it straight to the
+    /// position with no scaling, which is what "per tick" buys.
+    std::array<Fx, 3> velocity{};
 
     /// Fixed point, carried straight from the weapon that fired it.
     Mag damage{};
-    float damageRadiusElmos = 0.0f;
+    Fx damageRadiusElmos{};
 
     /// Who fired it, so a shot cannot kill its own side — checked at impact rather than
     /// at launch, because a unit may change hands between the two.
@@ -63,6 +66,10 @@ struct Projectile {
 /// Supreme Commander's own, and stated rather than derived: the engine uses 4.9 ogrids
 /// per second squared for its ballistics, which is Earth's 9.8 halved — a game constant
 /// dressed as a physical one. Converted to elmos here like everything else.
+/// Authored per second squared. `constexpr float` is allowed in the sim precisely because a
+/// constant cannot vary between platforms — see `tools/check_no_sim_floats.sh`, which bans
+/// float variables, parameters and returns but not authored constants. Converted through the
+/// tick rate at the point of use.
 inline constexpr float kProjectileGravityElmosPerSecond2 = 4.9f * 8.0f;
 
 /// How far above a unit's own position its muzzle sits, in elmos.
@@ -75,7 +82,7 @@ inline constexpr float kProjectileGravityElmosPerSecond2 = 4.9f * 8.0f;
 /// Four elmos is half a heightmap square, about right for the corpus: a medium tank's
 /// collision box is 0.55 ogrids tall, or 4.4 elmos. A per-unit muzzle bone would be
 /// better and is what the blueprints' `RackBones` are for; that waits for turret aiming.
-inline constexpr float kMuzzleHeightElmos = 4.0f;
+inline constexpr Fx kMuzzleHeight = Fx::fromInt(4);
 
 /// How long a shot may live before it expires unspent — AS A DURATION.
 ///
@@ -94,8 +101,13 @@ inline constexpr Seconds kProjectileLifetime = Seconds{30.0f};
 /// Ground distance, because a weapon's range is a footprint on the map rather than a
 /// sphere: a unit on a cliff is not out of range of the one below it, and using the
 /// 3-D distance would make high ground a stealth field.
-[[nodiscard]] float groundDistanceElmos(std::array<float, 3> from,
-                                        std::array<float, 3> to) noexcept;
+[[nodiscard]] Fx groundDistanceElmos(std::array<Fx, 3> from, std::array<Fx, 3> to) noexcept;
+
+/// A transform's position as a triple, for the geometry functions that take one.
+///
+/// A free function rather than a member of `Transform`, because a position is what several
+/// things have — a shot, a construction site, a waypoint — and only one of them has a facing.
+[[nodiscard]] std::array<Fx, 3> positionOf(const Transform& transform) noexcept;
 
 // `CombatGroup` used to live here: one batch's spans plus the one def its whole batch
 // shared. That sharing is the only reason the passes below were ever per-batch — move the def
@@ -111,7 +123,7 @@ inline constexpr Seconds kProjectileLifetime = Seconds{30.0f};
 /// Excludes the shooter itself, its allies, anything already dead, and anything a
 /// defeated army owns (see `hostile`). Range is checked against the WEAPON, so a unit
 /// with a long gun and a short one may find a target for the first and not the second.
-[[nodiscard]] std::optional<UnitId> nearestTarget(std::array<float, 3> from, int fromArmy,
+[[nodiscard]] std::optional<UnitId> nearestTarget(std::array<Fx, 3> from, int fromArmy,
                                                   const unitdef::Weapon& weapon,
                                                   const UnitStore& store,
                                                   std::span<const Army> armies);
@@ -121,10 +133,13 @@ inline constexpr Seconds kProjectileLifetime = Seconds{30.0f};
 /// `atan2(dx, dz)`, NOT `atan2(dz, dx)`: yaw here is measured from +Z toward +X because that
 /// is what the vertex shader does with it (AGENT.md). Swapping the arguments compiles, runs,
 /// and points every turret ninety degrees off.
-[[nodiscard]] float bearingTo(std::array<float, 3> from, std::array<float, 3> to) noexcept;
+[[nodiscard]] Brad bearingTo(std::array<Fx, 3> from, std::array<Fx, 3> to) noexcept;
 
 /// The smaller angle between two headings, in radians. Always 0..pi.
-[[nodiscard]] float headingError(float from, float to) noexcept;
+/// The shortest way round, as a MAGNITUDE in binary radians. Unsigned because every caller
+/// wants "how far off", not "which way": the sign is what `shortestTurn` in Movement.cpp is
+/// for.
+[[nodiscard]] std::uint32_t headingError(Brad from, Brad to) noexcept;
 
 /// Whether a weapon on a unit facing `yaw` may fire at something on `bearing`.
 ///
@@ -134,7 +149,7 @@ inline constexpr Seconds kProjectileLifetime = Seconds{30.0f};
 ///
 /// An UNTURRETED one may only when the hull is pointing at the target, within the weapon's
 /// own `FiringTolerance`. That is the fix for a tank shooting sideways out of its hull.
-[[nodiscard]] bool canFireAt(const unitdef::Weapon& weapon, float yaw, float bearing) noexcept;
+[[nodiscard]] bool canFireAt(const unitdef::Weapon& weapon, Brad yaw, Brad bearing) noexcept;
 
 /// Turns idle units toward what they would shoot, at their own turn rate.
 ///
@@ -169,7 +184,14 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
 /// ground — not when it collides with a model, because instances are points here and
 /// their geometry is neither known nor cheap to test.
 void advanceProjectiles(std::vector<Projectile>& projectiles, UnitStore& store,
-                        std::span<const Army> armies, const HeightField& field);
+                        std::span<const Army> armies, const Terrain& terrain, TickRate rate);
+
+/// Gravity's pull on an arced shot, in elmos per tick per tick.
+///
+/// A rate squared, so it divides by the tick rate TWICE — the kind of conversion that is
+/// silently wrong when written by hand, which is why it is one named function used by both the
+/// launch solution and the per-tick advance rather than two expressions that must agree.
+[[nodiscard]] Fx projectileGravityPerTickSquared(TickRate rate) noexcept;
 
 /// Builds the shot a weapon fires from `from` at `to`.
 ///
@@ -178,8 +200,11 @@ void advanceProjectiles(std::vector<Projectile>& projectiles, UnitStore& store,
 /// that lands it on the target is one line of algebra. A muzzle velocity of zero — 111 of
 /// the 494 weapons — is given a speed that crosses its own range in a tick, so an
 /// instantaneous weapon needs no separate code path and nothing divides by zero.
-[[nodiscard]] Projectile launch(std::array<float, 3> from, std::array<float, 3> to,
-                                const unitdef::Weapon& weapon, int byArmy, TickRate rate);
+/// `muzzlePerTick` comes from the catalog rather than from the weapon: `MuzzleVelocity` is
+/// authored per second, and only a clock turns that into a distance a shot covers in a tick.
+[[nodiscard]] Projectile launch(std::array<Fx, 3> from, std::array<Fx, 3> to,
+                                const unitdef::Weapon& weapon, int byArmy, TickRate rate,
+                                Fx muzzlePerTick);
 
 /// Spreads `damage` over everything within `radiusElmos` of `centre`, and returns how
 /// much was dealt in total.
@@ -192,7 +217,7 @@ void advanceProjectiles(std::vector<Projectile>& projectiles, UnitStore& store,
 /// because a fraction of a blast radius is geometry. The two meet in one multiply, which is
 /// the only place the types mix — and it is exact rather than a rescale, since both use the
 /// same number of fractional bits.
-Mag damageArea(std::array<float, 3> centre, float radiusElmos, Mag damage, int byArmy,
+Mag damageArea(std::array<Fx, 3> centre, Fx radiusElmos, Mag damage, int byArmy,
                UnitStore& store, std::span<const Army> armies);
 
 /// The unit's own destruction, if its definition describes one.
@@ -213,7 +238,7 @@ Mag damageArea(std::array<float, 3> centre, float radiusElmos, Mag damage, int b
 /// `hostile`, so friendly fire would need a mode of its own rather than a different
 /// argument. Noted rather than hidden: a commander detonating in a friendly crowd should be
 /// a catastrophe and here it is merely an inconvenience.
-Mag explodeOnDeath(const unitdef::UnitDef& def, std::array<float, 3> at, int byArmy,
+Mag explodeOnDeath(const unitdef::UnitDef& def, std::array<Fx, 3> at, int byArmy,
                      UnitStore& store, std::span<const Army> armies);
 
 /// Which units died this tick, so a caller can leave wreckage and check for a defeat.

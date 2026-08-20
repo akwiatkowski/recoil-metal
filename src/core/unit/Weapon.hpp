@@ -76,13 +76,13 @@ struct Weapon {
     /// the file states. Zero means a point hit: 222 of the 494 weapons state no radius
     /// at all, and one states a negative one, which is read as zero rather than as an
     /// implosion.
-    float damageRadiusElmos = 0.0f;
+    sim::Fx damageRadius{};
 
     /// How far the weapon reaches, in elmos. `MinRadius` is a dead zone inside which
     /// it cannot fire — 87 weapons have one, and without it a unit walks up to an
     /// artillery piece and stands in the one place it cannot be shot from.
-    float maxRangeElmos = 0.0f;
-    float minRangeElmos = 0.0f;
+    sim::Fx maxRange{};
+    sim::Fx minRange{};
 
     /// Shots per second, as authored. Converted to ticks by `reloadTicks`.
     float rateOfFire = 0.0f;
@@ -103,9 +103,9 @@ struct Weapon {
     // are genuinely two: a near-total kill zone and a wide fringe, and averaging them would
     // both spare what should die and spread damage where the game puts none.
     sim::Mag innerRingDamage{};
-    float innerRingRadiusElmos = 0.0f;
+    sim::Fx innerRingRadius{};
     sim::Mag outerRingDamage{};
-    float outerRingRadiusElmos = 0.0f;
+    sim::Fx outerRingRadius{};
 
     /// Whether this weapon does its damage in rings rather than as a single blast.
     [[nodiscard]] bool hasRings() const noexcept {
@@ -145,7 +145,7 @@ struct Weapon {
     /// a "weapon" lacking them is a table describing something else.
     [[nodiscard]] bool fires() const noexcept {
         return role != WeaponRole::Death && !manualFire && !enabledByEnhancement
-            && maxRangeElmos > 0.0f && rateOfFire > 0.0f && damage > sim::Mag{};
+            && maxRange > sim::Fx{} && rateOfFire > 0.0f && damage > sim::Mag{};
     }
 
     /// Whether this weapon does any damage at all, by either scheme. What a death explosion

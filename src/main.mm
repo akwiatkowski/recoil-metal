@@ -993,6 +993,53 @@ struct PropScene {
     return rm::s3o::load(bytes);
 }
 
+/// A float world position as the fixed-point triple the geometry functions take.
+///
+/// The other half of the boundary: map markers, mouse picks and construction sites are all
+/// authored or produced in floats, and this is where they become sim values. Named rather than
+/// written out, because a three-element brace list of conversions at a dozen call sites is
+/// where a transposed axis hides.
+[[nodiscard]] std::array<rm::sim::Fx, 3> fxPoint(const std::array<float, 3>& position) {
+    return {rm::sim::fxFromFloat(position[0]), rm::sim::fxFromFloat(position[1]),
+            rm::sim::fxFromFloat(position[2])};
+}
+
+/// A route from the pathfinder, which still works in floats, as the fixed-point waypoints an
+/// order takes. Goes away when `Pathfinding` migrates — the next step of P2.2.
+[[nodiscard]] std::vector<std::array<rm::sim::Fx, 2>> fxPath(
+    const std::vector<std::array<float, 2>>& path) {
+    std::vector<std::array<rm::sim::Fx, 2>> converted;
+    converted.reserve(path.size());
+    for (const std::array<float, 2>& point : path) {
+        converted.push_back({rm::sim::fxFromFloat(point[0]), rm::sim::fxFromFloat(point[1])});
+    }
+    return converted;
+}
+
+/// A `Transform` from the float position and yaw a placement helper produced.
+///
+/// The boundary between the placement code — which works in floats because it reads the map
+/// and the blueprints — and the store, which is fixed point. One function so the conversion
+/// reads the same at every spawn site.
+[[nodiscard]] rm::sim::Transform transformAt(const std::array<float, 3>& position,
+                                             float yaw) {
+    rm::sim::Transform transform;
+    transform.x = rm::sim::fxFromFloat(position[0]);
+    transform.y = rm::sim::fxFromFloat(position[1]);
+    transform.z = rm::sim::fxFromFloat(position[2]);
+    transform.heading = rm::sim::bradFromRadians(yaw);
+    return transform;
+}
+
+/// The rate this build of the app runs its sim at.
+///
+/// A constant HERE, in the app, rather than in the sim: `core/sim` may not hold file-scope
+/// mutable state (PLAN2 §5.4) and does not hold this at all — a `TickRate` is a value passed
+/// to the passes that need it. What is missing is the configuration that would set it, which
+/// is the rest of P2.3; until then the app has one rate and this is where it is written down,
+/// once, instead of at every site that converts a content rate.
+inline const rm::sim::TickRate kAppTickRate{rm::sim::kDefaultTicksPerSecond};
+
 // Everything the renderer needs to draw units, owned in one place.
 //
 // models and instances are held in deques, NOT vectors: the batches point into
@@ -1020,6 +1067,14 @@ struct UnitScene {
     // another.
     std::vector<float> maxSlopeDegrees;
     std::vector<float> maxWaterDepthElmos;
+
+    /// How much to scale each type's mesh by, from its blueprint's `meshToElmos`.
+    ///
+    /// Per TYPE, and here rather than in the store, because a scale is presentation: the sim
+    /// has a collision radius and does not care how big the model that represents it is. It
+    /// moved out of `UnitInstance` when the store stopped holding one (P2.2), and this is
+    /// where the draw projection reads it.
+    std::vector<float> typeScale;
 
     // Scratch for drawing: one contiguous instance array per batch, refilled from the store
     // each frame. The store is flat and the GPU wants a run per model, so somebody has to
@@ -1135,7 +1190,9 @@ struct UnitScene {
         }
         drawIndexOf.assign(store.slotCount(), rm::SelectionEntry{});
 
-        const std::span<const rm::UnitInstance> instances = store.instances();
+        const std::span<const rm::sim::Transform> transforms = store.transforms();
+        const std::span<const rm::sim::MoveState> motion = store.motion();
+
         for (rm::UnitIndex slot = 0; slot < store.slotCount(); ++slot) {
             if (!store.slotAlive(slot)) {
                 continue;
@@ -1146,13 +1203,63 @@ struct UnitScene {
             }
             drawIndexOf[slot] =
                 rm::SelectionEntry{.batch = batch, .instance = drawScratch[batch].size()};
-            drawScratch[batch].push_back(instances[slot]);
+            drawScratch[batch].push_back(instanceFor(slot, transforms[slot], motion[slot]));
             drawSlotOf[batch].push_back(slot);
         }
 
         for (std::size_t batch = 0; batch < batches.size(); ++batch) {
             batches[batch].instances = drawScratch[batch];
         }
+    }
+
+    /// Builds the GPU's view of one unit from the sim's.
+    ///
+    /// THE PROJECTION, and the reason `UnitInstance` is no longer sim state (P2.2). Everything
+    /// here is derived: the position and angles convert from fixed point, the scale is a
+    /// property of the TYPE, the colour is a property of the ARMY, and the walk-cycle phase is
+    /// the ground the unit has covered divided by the stride its animation implies.
+    ///
+    /// One way only. Nothing reads a `UnitInstance` back into the store — that would be a
+    /// float round-trip through the middle of a match, which is exactly what fixed point is
+    /// for avoiding.
+    [[nodiscard]] rm::UnitInstance instanceFor(rm::UnitIndex slot,
+                                               const rm::sim::Transform& transform,
+                                               const rm::sim::MoveState& motion) const {
+        rm::UnitInstance instance{};
+        instance.position = {rm::sim::fxToFloat(transform.x), rm::sim::fxToFloat(transform.y),
+                             rm::sim::fxToFloat(transform.z)};
+        instance.rotationY = rm::sim::radiansFromBrad(transform.heading);
+        instance.rotationX = rm::sim::radiansFromBrad(transform.pitch);
+        instance.rotationZ = rm::sim::radiansFromBrad(transform.roll);
+
+        const auto type = static_cast<std::size_t>(store.typeAt(slot));
+        instance.scale = type < typeScale.size() ? typeScale[type] : 1.0f;
+
+        // The army's colour. `kNoArmy` and an out-of-range owner both get the first palette
+        // entry, which is what a decorative crowd should look like — the alternative, treating
+        // an unowned unit as army zero's, is the bug `kNoArmy = -1` exists to prevent, and it
+        // is prevented in the SIM rather than here.
+        const int owner = motion.armyIndex;
+        instance.teamColour =
+            owner >= 0 && static_cast<std::size_t>(owner) < armies.size()
+                ? armies[static_cast<std::size_t>(owner)].colour
+                : rm::kTeamColours[0];
+
+        // The walk cycle, paced by ground covered rather than by wall time — a unit pivoting
+        // on the spot or standing still must not keep striding. Zero for a type with no
+        // animation, which is every structure.
+        const float duration = type < batches.size() && batches[type].animation != nullptr
+                                   ? batches[type].animation->duration
+                                   : 0.0f;
+        const float speed = rm::sim::fxToFloat(motion.speedPerTick)
+                            * static_cast<float>(kAppTickRate.ticksPerSecond());
+        const float strideElmos = speed * duration;
+        if (strideElmos > 0.0f) {
+            instance.animationPhase =
+                rm::sim::fxToFloat(motion.distanceTravelledElmos) / strideElmos;
+        }
+
+        return instance;
     }
 
     /// The unit behind a drawn instance, or nothing when the pair names nothing drawn.
@@ -1230,65 +1337,14 @@ private:
     float waterLevel_;
     std::map<std::pair<float, float>, rm::sim::PassabilityGrid> grids_;
 };
+// `paceAnimationByDistance` and `paceSceneAnimations` used to live here.
+//
+// Both are gone, and not merely moved: the walk-cycle phase is now computed inside
+// `UnitScene::instanceFor`, the draw projection. It was always a DERIVED value — ground
+// covered divided by the stride the animation implies — and once `UnitInstance` stopped being
+// sim state there was nowhere for a separate pass to write it to. Two functions and two call
+// sites became four lines in the one place that builds an instance.
 
-/// Paces each unit's walk cycle by the ground it has covered.
-///
-/// The alternative — a wall clock — slides feet whenever the two disagree, and
-/// they disagree constantly: a unit standing still keeps striding, one pivoting
-/// on the spot keeps striding, and one that arrives keeps striding forever.
-/// Distance has none of those cases because a unit that covers no ground
-/// advances no legs.
-///
-/// The stride is `speed * duration`: the distance the unit covers in one cycle
-/// at full speed. That is the assumption the animation was authored under — at
-/// top speed the cadence is exactly what the clock used to give — and it makes
-/// every slower case fall out for free rather than needing a table of per-unit
-/// stride lengths this engine has nowhere to read from.
-void paceAnimationByDistance(std::span<rm::UnitInstance> instances,
-                             std::span<const rm::sim::MoveState> motion, float durationSeconds) {
-    if (durationSeconds <= 0.0f) {
-        return;  // the batch has no animation; the phase is nobody's business
-    }
-
-    const std::size_t count = std::min(instances.size(), motion.size());
-    for (std::size_t i = 0; i < count; ++i) {
-        const float strideElmos = motion[i].speedElmosPerSecond * durationSeconds;
-        if (strideElmos <= 0.0f) {
-            continue;
-        }
-        // Not wrapped to 0..1 here: the shader takes the fractional part, and
-        // wrapping on the CPU would only add a chance of the two disagreeing
-        // about where a cycle starts.
-        instances[i].animationPhase =
-            motion[i].distanceTravelledElmos / strideElmos;
-    }
-}
-
-/// Paces every unit's walk cycle, in one pass over the store.
-///
-/// The animation belongs to the MODEL, so the cycle length is per type — every unit of one
-/// type shares its clock, and each unit's own phase comes from the ground it has covered.
-/// Type index is batch index (see `UnitCatalog`), which is what makes the lookup a subscript
-/// rather than a search.
-///
-/// One pass over slots rather than one pass per type: this runs every frame, and scanning the
-/// whole store once per unit type turns a linear job into a quadratic one as the roster grows.
-void paceSceneAnimations(UnitScene& scene) {
-    const std::span<rm::UnitInstance> instances = scene.store.instances();
-    const std::span<const rm::sim::MoveState> motion = scene.store.motion();
-    for (rm::UnitIndex slot = 0; slot < scene.store.slotCount(); ++slot) {
-        const std::size_t batch = static_cast<std::size_t>(scene.store.typeAt(slot));
-        if (batch >= scene.batches.size()) {
-            continue;
-        }
-        const rm::sca::Animation* animation = scene.batches[batch].animation;
-        paceAnimationByDistance(instances.subspan(slot, 1), motion.subspan(slot, 1),
-                                animation != nullptr ? animation->duration : 0.0f);
-    }
-    for (rm::UnitBatch& batch : scene.batches) {
-        batch.animationDrivenByInstance = true;
-    }
-}
 
 /// The colour of the ring drawn on the ground under a selected unit.
 ///
@@ -1540,15 +1596,6 @@ struct VfsUnit {
 /// What an army starts with, and the baseline its storage is recomputed from every
 /// tick: OUR constant, not a blueprint's — enough to afford the first extractor and
 /// see the bars move, per milestone 19.
-/// The rate this build of the app runs its sim at.
-///
-/// A constant HERE, in the app, rather than in the sim: `core/sim` may not hold file-scope
-/// mutable state (PLAN2 §5.4) and does not hold this at all — a `TickRate` is a value passed
-/// to the passes that need it. What is missing is the configuration that would set it, which
-/// is the rest of P2.3; until then the app has one rate and this is where it is written down,
-/// once, instead of at the six sites that convert a content rate.
-inline const rm::sim::TickRate kAppTickRate{rm::sim::kDefaultTicksPerSecond};
-
 inline const rm::sim::Resources kStartingStorage{.mass = rm::sim::Mag::fromInt(650),
                                                 .energy = rm::sim::Mag::fromInt(5000)};
 
@@ -1585,6 +1632,7 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
                                                 ? unit->def.maxSlopeDegrees
                                                 : rm::sim::kDefaultMaxSlopeDegrees);
             scene.maxWaterDepthElmos.push_back(unit->def.maxWaterDepthElmos);
+            scene.typeScale.push_back(unit->def.meshToElmos);
 
             scene.batches.push_back(rm::UnitBatch{
                 .model = &scene.models.back(),
@@ -1632,8 +1680,9 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
         if (one.empty()) {
             continue;
         }
-        one.front().teamColour = army.colour;
-
+        // `atStartPositions` places a `UnitInstance` because that is what the placement
+        // helper has always produced; only its position is wanted here, and the colour and
+        // scale it also sets are now the draw projection's business.
         rm::sim::MoveState motion;
         motion.armyIndex = army.index;
 
@@ -1642,7 +1691,7 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
         const rm::sim::Mag hp = def != nullptr ? def->health : rm::sim::Mag{};
         (void)scene.store.spawn(rm::sim::UnitStore::Spawn{
             .type = type,
-            .instance = one.front(),
+            .transform = transformAt(one.front().position, one.front().rotationY),
             .motion = motion,
             .health = rm::sim::Health{.current = hp, .maximum = hp},
         });
@@ -1712,6 +1761,7 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
                                             : rm::sim::kDefaultMaxSlopeDegrees);
         scene.maxWaterDepthElmos.push_back(grounded ? unit->def.maxWaterDepthElmos
                                                     : rm::sim::kDefaultMaxWaterDepthElmos);
+        scene.typeScale.push_back(unit->def.meshToElmos);
         scene.batches.push_back(rm::UnitBatch{
             .model = &scene.models.back(),
             .instances = {},
@@ -1731,32 +1781,36 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
     const auto type = static_cast<rm::UnitTypeIndex>(found->second);
     const rm::unitdef::UnitDef& def = *scene.catalog.def(type);
 
-    rm::UnitInstance instance{};
-    instance.position = {position[0], field.heightAtWorld(position[0], position[2]),
-                         position[2]};
-    instance.rotationY = yaw;
-    instance.scale = def.meshToElmos;
-    instance.teamColour = army.colour;
-    const std::array<float, 2> align =
-        rm::sim::slopeAlignment(field, instance.position[0], instance.position[2], yaw);
-    instance.rotationX = align[0];
-    instance.rotationZ = align[1];
+    const rm::sim::Terrain terrain{field};
+    rm::sim::Transform transform;
+    transform.x = rm::sim::fxFromFloat(position[0]);
+    transform.z = rm::sim::fxFromFloat(position[2]);
+    transform.y = terrain.heightAt(transform.x, transform.z);
+    transform.heading = rm::sim::bradFromRadians(yaw);
+    const std::array<rm::Brad, 2> align =
+        rm::sim::slopeAlignment(terrain, transform.x, transform.z, transform.heading);
+    transform.pitch = align[0];
+    transform.roll = align[1];
 
     rm::sim::MoveState motion;
     motion.armyIndex = army.index;
-    motion.radiusElmos = def.collisionRadiusElmos;
+    motion.radiusElmos = rm::sim::fxFromFloat(def.collisionRadiusElmos);
     if (def.isMobile()) {
-        motion.speedElmosPerSecond = def.speedElmosPerSecond;
+        // Per second in the blueprint, per tick in the sim — converted here because this is
+        // where a unit is built from its definition (§5.1). A structure gets zero, which is
+        // what makes it a structure as far as movement is concerned.
+        motion.speedPerTick = kAppTickRate.perTick(def.speedElmosPerSecond);
         if (def.turnRateRadiansPerSecond > 0.0f) {
-            motion.turnRateRadiansPerSecond = def.turnRateRadiansPerSecond;
+            motion.turnPerTick = kAppTickRate.bradPerTick(def.turnRateRadiansPerSecond);
+        } else {
+            motion.turnPerTick =
+                kAppTickRate.bradPerTick(rm::sim::kDefaultTurnRateRadiansPerSecond);
         }
-    } else {
-        motion.speedElmosPerSecond = 0.0f;
     }
 
     const rm::sim::UnitId id = scene.store.spawn(rm::sim::UnitStore::Spawn{
         .type = type,
-        .instance = instance,
+        .transform = transform,
         .motion = motion,
         .health = rm::sim::Health{.current = def.health, .maximum = def.health},
     });
@@ -1838,14 +1892,21 @@ void orderFirstExtractors(UnitScene& scene, std::span<const rm::scenario::Marker
         }
         firstBuilderRate = std::max(1.0f, def->buildRate);
 
-        const std::array<float, 3> from = scene.store.instances()[slot].position;
+        const std::array<rm::sim::Fx, 3> from =
+            rm::sim::positionOf(scene.store.transforms()[slot]);
         const rm::scenario::Marker* nearest = nullptr;
-        float nearestDistance = 0.0f;
+        rm::sim::Fx nearestDistance{};
         for (const rm::scenario::Marker& marker : markers) {
             if (!marker.isType("Mass")) {
                 continue;
             }
-            const float distance = rm::sim::groundDistanceElmos(from, marker.position);
+            // The marker's position is float — it comes from a map file — so it crosses into
+            // fixed point here, at the boundary, rather than the distance being computed in
+            // floats and compared against sim values.
+            const rm::sim::Fx distance = rm::sim::groundDistanceElmos(
+                from, {rm::sim::fxFromFloat(marker.position[0]),
+                       rm::sim::fxFromFloat(marker.position[1]),
+                       rm::sim::fxFromFloat(marker.position[2])});
             if (nearest == nullptr || distance < nearestDistance) {
                 nearest = &marker;
                 nearestDistance = distance;
@@ -2039,11 +2100,12 @@ void orderFirstExtractors(UnitScene& scene, std::span<const rm::scenario::Marker
                                 ? def->maxSlopeDegrees
                                 : rm::sim::kDefaultMaxSlopeDegrees;
         const float depth = grounded ? def->maxWaterDepthElmos
-                            : def && def->maxWaterDepthElmos > 0.0f
+                            : def.has_value() && def->maxWaterDepthElmos > 0.0f
                                 ? def->maxWaterDepthElmos
                                 : rm::sim::kDefaultMaxWaterDepthElmos;
         scene.maxSlopeDegrees.push_back(slope);
         scene.maxWaterDepthElmos.push_back(depth);
+        scene.typeScale.push_back(def.has_value() ? def->meshToElmos : 1.0f);
 
         // The TYPE for these units. One per batch, and the two indices are the same number
         // by construction — which is the whole reason the old parallel-array hazard here is
@@ -2063,23 +2125,24 @@ void orderFirstExtractors(UnitScene& scene, std::span<const rm::scenario::Marker
         // A definition's speed and turn rate reach every unit of it. Slope and depth limits
         // do NOT yet: passability is one grid for the whole scene, so honouring them per
         // unit type would mean a grid per type.
-        const rm::sim::Mag hp = def ? def->health : rm::sim::Mag{};
+        const rm::sim::Mag hp = def.has_value() ? def->health : rm::sim::Mag{};
         for (const rm::UnitInstance& instance : placed) {
             rm::sim::MoveState state;
             if (def) {
                 // The footprint is what a unit takes up, whether or not it moves — a
                 // building is still something to be pushed out of.
-                state.radiusElmos = def->collisionRadiusElmos;
+                state.radiusElmos = rm::sim::fxFromFloat(def->collisionRadiusElmos);
                 if (def->isMobile()) {
-                    state.speedElmosPerSecond = def->speedElmosPerSecond;
-                    if (def->turnRateRadiansPerSecond > 0.0f) {
-                        state.turnRateRadiansPerSecond = def->turnRateRadiansPerSecond;
-                    }
+                    state.speedPerTick = kAppTickRate.perTick(def->speedElmosPerSecond);
+                    state.turnPerTick = kAppTickRate.bradPerTick(
+                        def->turnRateRadiansPerSecond > 0.0f
+                            ? def->turnRateRadiansPerSecond
+                            : rm::sim::kDefaultTurnRateRadiansPerSecond);
                 }
             }
             (void)scene.store.spawn(rm::sim::UnitStore::Spawn{
                 .type = type,
-                .instance = instance,
+                .transform = transformAt(instance.position, instance.rotationY),
                 .motion = state,
                 .health = rm::sim::Health{.current = hp, .maximum = hp},
             });
@@ -2361,13 +2424,18 @@ struct MarchOptions {
 /// Falls back to nothing rather than to a straight line when no route exists:
 /// walking into a cliff because the search failed is worse than standing still,
 /// and standing still is at least legible as "it cannot get there".
-[[nodiscard]] bool orderRouted(rm::sim::MoveState& state, const rm::UnitInstance& unit,
-                               const rm::sim::PassabilityGrid& grid, float toX, float toZ) {
-    const auto path = rm::sim::findPath(grid, unit.position[0], unit.position[2], toX, toZ);
+[[nodiscard]] bool orderRouted(rm::sim::MoveState& state, const rm::sim::Transform& unit,
+                               const rm::sim::PassabilityGrid& grid, rm::sim::Fx toX,
+                               rm::sim::Fx toZ) {
+    // `findPath` still works in floats — it is the next step of P2.2 — so this is the
+    // conversion at the boundary rather than inside the pathfinder.
+    const auto path = rm::sim::findPath(grid, rm::sim::fxToFloat(unit.x),
+                                        rm::sim::fxToFloat(unit.z), rm::sim::fxToFloat(toX),
+                                        rm::sim::fxToFloat(toZ));
     if (path.empty()) {
         return false;
     }
-    rm::sim::orderAlongPath(state, path);
+    rm::sim::orderAlongPath(state, fxPath(path));
     return true;
 }
 
@@ -2376,12 +2444,12 @@ struct MarchOptions {
 /// it, so a structure that dies takes its production with it.
 struct Standing {
     bool commanderAlive = false;
-    std::array<float, 3> commanderPosition{};
+    std::array<rm::sim::Fx, 3> commanderPosition{};
     float commanderBuildRate = 0.0f;
     std::size_t extractors = 0;
     std::size_t powerGenerators = 0;
     std::size_t factories = 0;
-    std::array<float, 3> factoryPosition{};
+    std::array<rm::sim::Fx, 3> factoryPosition{};
     float factoryBuildRate = 0.0f;
     std::vector<rm::sim::UnitId> tanks;
 };
@@ -2393,7 +2461,7 @@ struct Standing {
 /// hundred units is not what this costs.
 [[nodiscard]] Standing standingFor(UnitScene& scene, int army) {
     Standing standing;
-    const std::span<const rm::UnitInstance> instances = scene.store.instances();
+    const std::span<const rm::sim::Transform> transforms = scene.store.transforms();
     const std::span<const rm::sim::MoveState> motion = scene.store.motion();
     const std::span<const rm::sim::Health> health = scene.store.health();
 
@@ -2407,7 +2475,7 @@ struct Standing {
         }
         if (rm::sim::isCommanderId(def->name)) {
             standing.commanderAlive = true;
-            standing.commanderPosition = instances[slot].position;
+            standing.commanderPosition = rm::sim::positionOf(transforms[slot]);
             standing.commanderBuildRate = def->buildRate;
         } else if (def->name == rm::sim::kExtractorId) {
             ++standing.extractors;
@@ -2415,7 +2483,7 @@ struct Standing {
             ++standing.powerGenerators;
         } else if (def->name == rm::sim::kFactoryId) {
             ++standing.factories;
-            standing.factoryPosition = instances[slot].position;
+            standing.factoryPosition = rm::sim::positionOf(transforms[slot]);
             standing.factoryBuildRate = def->buildRate;
         } else if (def->name == rm::sim::kTankId) {
             standing.tanks.push_back(scene.store.idAt(slot));
@@ -2427,14 +2495,14 @@ struct Standing {
 /// The nearest living enemy commander to `from`, or nothing when the war is over.
 /// Where the attack wave walks: kill it and its army is defeated, which is the
 /// whole win condition.
-[[nodiscard]] std::optional<std::array<float, 3>> nearestEnemyCommander(
-    UnitScene& scene, int army, const std::array<float, 3>& from) {
+[[nodiscard]] std::optional<std::array<rm::sim::Fx, 3>> nearestEnemyCommander(
+    UnitScene& scene, int army, const std::array<rm::sim::Fx, 3>& from) {
     if (army < 0 || static_cast<std::size_t>(army) >= scene.armies.size()) {
         return std::nullopt;
     }
-    std::optional<std::array<float, 3>> best;
-    float bestDistance = 0.0f;
-    const std::span<const rm::UnitInstance> instances = scene.store.instances();
+    std::optional<std::array<rm::sim::Fx, 3>> best;
+    rm::sim::Fx bestDistance{};
+    const std::span<const rm::sim::Transform> transforms = scene.store.transforms();
     const std::span<const rm::sim::MoveState> motion = scene.store.motion();
     const std::span<const rm::sim::Health> health = scene.store.health();
 
@@ -2450,9 +2518,10 @@ struct Standing {
                                  scene.armies[static_cast<std::size_t>(theirs)])) {
             continue;
         }
-        const float distance = rm::sim::groundDistanceElmos(from, instances[slot].position);
+        const rm::sim::Fx distance =
+            rm::sim::groundDistanceElmos(from, rm::sim::positionOf(transforms[slot]));
         if (!best || distance < bestDistance) {
-            best = instances[slot].position;
+            best = rm::sim::positionOf(transforms[slot]);
             bestDistance = distance;
         }
     }
@@ -2464,21 +2533,24 @@ struct Standing {
 /// footprint of it.
 [[nodiscard]] const rm::scenario::Marker* nearestFreeDeposit(
     const UnitScene& scene, std::span<const rm::scenario::Marker> markers,
-    const std::array<float, 3>& from) {
+    const std::array<rm::sim::Fx, 3>& from) {
     /// A deposit within this of an existing build site is the SAME deposit —
-    /// half an extractor footprint, generous against float drift.
-    constexpr float kClaimedRadiusElmos = 8.0f;
+    /// half an extractor footprint. The old comment said "generous against float drift";
+    /// there is no float drift here any more, and the generosity is now purely about the
+    /// deposit being a point and the extractor a footprint.
+    constexpr rm::sim::Fx kClaimedRadius = rm::sim::Fx::fromInt(8);
 
     const rm::scenario::Marker* nearest = nullptr;
-    float nearestDistance = 0.0f;
+    rm::sim::Fx nearestDistance{};
     for (const rm::scenario::Marker& marker : markers) {
         if (!marker.isType("Mass")) {
             continue;
         }
         bool claimed = false;
         for (const rm::sim::Construction& work : scene.building) {
-            if (rm::sim::groundDistanceElmos(work.position, marker.position)
-                < kClaimedRadiusElmos) {
+            if (rm::sim::groundDistanceElmos(fxPoint(work.position),
+                                             fxPoint(marker.position))
+                < kClaimedRadius) {
                 claimed = true;
                 break;
             }
@@ -2486,7 +2558,8 @@ struct Standing {
         if (claimed) {
             continue;
         }
-        const float distance = rm::sim::groundDistanceElmos(from, marker.position);
+        const rm::sim::Fx distance =
+            rm::sim::groundDistanceElmos(from, fxPoint(marker.position));
         if (nearest == nullptr || distance < nearestDistance) {
             nearest = &marker;
             nearestDistance = distance;
@@ -2603,7 +2676,13 @@ void runOpponents(UnitScene& scene, const rm::vfs::Vfs& content, const rm::Heigh
                 const rm::unitdef::UnitDef& def = scene.buildable[*blueprintIndex];
                 scene.building.push_back(rm::sim::Construction{
                     .armyIndex = army.index,
-                    .position = standing.factoryPosition,
+                    // `Construction::position` is still a float triple: it is where the
+                    // CALLER wants a thing put, and it migrates with the order system in
+                    // P2.5. Converted back here rather than the field changing type, so the
+                    // two migrations stay separable.
+                    .position = {rm::sim::fxToFloat(standing.factoryPosition[0]),
+                                 rm::sim::fxToFloat(standing.factoryPosition[1]),
+                                 rm::sim::fxToFloat(standing.factoryPosition[2])},
                     .cost = {.mass = def.buildCostMass, .energy = def.buildCostEnergy},
                     .buildTimeRemaining = def.buildTime,
                     .totalBuildTime = def.buildTime,
@@ -2616,7 +2695,7 @@ void runOpponents(UnitScene& scene, const rm::vfs::Vfs& content, const rm::Heigh
         // The one attack wave: at strength, every tank walks at the nearest enemy
         // commander. After this, reinforcements are sent as they roll off.
         if (rm::sim::launchesAttack(script, view)) {
-            const std::optional<std::array<float, 3>> target =
+            const std::optional<std::array<rm::sim::Fx, 3>> target =
                 nearestEnemyCommander(scene, army.index, standing.commanderPosition);
             if (target) {
                 script.attackLaunched = true;
@@ -2631,7 +2710,7 @@ void runOpponents(UnitScene& scene, const rm::vfs::Vfs& content, const rm::Heigh
                         passability.gridFor(scene.maxSlopeDegrees[type],
                                             scene.maxWaterDepthElmos[type]);
                     if (orderRouted(scene.store.motion()[tank.index],
-                                    scene.store.instances()[tank.index], grid,
+                                    scene.store.transforms()[tank.index], grid,
                                     (*target)[0], (*target)[2])) {
                         ++marching;
                     }
@@ -2768,7 +2847,8 @@ rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) 
     // movement, collision, aiming, firing, death, defeat and economy — is a fact about
     // core/sim/Skirmish.cpp rather than about whichever loop you are reading.
     const rm::sim::TickReport report =
-        rm::sim::tickSkirmish(scene.store, scene.catalog, runner.match, runner.field);
+        rm::sim::tickSkirmish(scene.store, scene.catalog, runner.match,
+                              rm::sim::Terrain{runner.field}, kAppTickRate);
 
     runner.shotsFired += report.shotsFired;
     scene.deathBlasts += report.deathBlasts;
@@ -2785,8 +2865,13 @@ rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) 
     // uploads, and the sim has no business owning one.
     runner.unitsDestroyed += report.died.size();
     for (const rm::sim::Death& death : report.died) {
-        rm::appendWreckMark(scene.wreckDecals, runner.field, death.at,
-                            death.radiusElmos * rm::kWreckMarkRadiusFactor);
+        // The decal buffer is the renderer's, so the wreck's place and size cross back into
+        // floats here — the sim-to-renderer half of the boundary.
+        rm::appendWreckMark(scene.wreckDecals, runner.field,
+                            {rm::sim::fxToFloat(death.at[0]), rm::sim::fxToFloat(death.at[1]),
+                             rm::sim::fxToFloat(death.at[2])},
+                            rm::sim::fxToFloat(death.radiusElmos)
+                                * rm::kWreckMarkRadiusFactor);
     }
 
     // What finished this tick BECOMES A UNIT: an extractor that is done stands on its
@@ -2811,10 +2896,11 @@ rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) 
             // rally point outside the base while it forms.
             const auto target = runner.scripts[army].attackLaunched
                                     ? nearestEnemyCommander(scene, work.armyIndex,
-                                                            work.position)
+                                                            fxPoint(work.position))
                                     : std::nullopt;
             const std::array<float, 2> to =
-                target ? std::array<float, 2>{(*target)[0], (*target)[2]}
+                target ? std::array<float, 2>{rm::sim::fxToFloat((*target)[0]),
+                                              rm::sim::fxToFloat((*target)[2])}
                        : rm::sim::rolloffPoint(work.position,
                                                runner.field.widthElmos() * 0.5f,
                                                runner.field.depthElmos() * 0.5f);
@@ -2823,7 +2909,8 @@ rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) 
                 runner.passability.gridFor(scene.maxSlopeDegrees[type],
                                            scene.maxWaterDepthElmos[type]);
             (void)orderRouted(scene.store.motion()[spawned->index],
-                              scene.store.instances()[spawned->index], grid, to[0], to[1]);
+                              scene.store.transforms()[spawned->index], grid,
+                              rm::sim::fxFromFloat(to[0]), rm::sim::fxFromFloat(to[1]));
         }
     }
 
@@ -2853,8 +2940,9 @@ void march(UnitScene& scene, const rm::HeightField& field, PassabilitySet& passa
                 const auto type = static_cast<std::size_t>(scene.store.typeAt(slot));
                 const rm::sim::PassabilityGrid& grid = passability.gridFor(
                     scene.maxSlopeDegrees[type], scene.maxWaterDepthElmos[type]);
-                if (orderRouted(scene.store.motion()[slot], scene.store.instances()[slot],
-                                grid, options.x, options.z)) {
+                if (orderRouted(scene.store.motion()[slot], scene.store.transforms()[slot],
+                                grid, rm::sim::fxFromFloat(options.x),
+                                rm::sim::fxFromFloat(options.z))) {
                     ++routed;
                 }
             }
@@ -2940,11 +3028,16 @@ void march(UnitScene& scene, const rm::HeightField& field, PassabilitySet& passa
         // shows is a trail rather than a puff at everyone's feet.
         emitters.clear();
         for (rm::UnitIndex slot = 0; slot < scene.store.slotCount(); ++slot) {
+            const rm::sim::MoveState& motion = scene.store.motion()[slot];
             emitters.push_back(rm::DustEmitter{
-                .position = scene.store.instances()[slot].position,
-                .moving = scene.store.motion()[slot].moving,
-                .topSpeedElmosPerSecond = scene.store.motion()[slot].speedElmosPerSecond,
-                .radiusElmos = scene.store.motion()[slot].radiusElmos,
+                .position = {rm::sim::fxToFloat(scene.store.transforms()[slot].x),
+                             rm::sim::fxToFloat(scene.store.transforms()[slot].y),
+                             rm::sim::fxToFloat(scene.store.transforms()[slot].z)},
+                .moving = motion.moving,
+                .topSpeedElmosPerSecond = rm::sim::fxToFloat(motion.speedPerTick)
+                                          * static_cast<float>(
+                                              kAppTickRate.ticksPerSecond()),
+                .radiusElmos = rm::sim::fxToFloat(motion.radiusElmos),
             });
         }
         rm::advanceParticles(dust, kTickSeconds);
@@ -2959,7 +3052,6 @@ void march(UnitScene& scene, const rm::HeightField& field, PassabilitySet& passa
     // The walk cycles, paced from the store, then gathered for drawing. Per TYPE because the
     // animation belongs to the model: every unit of one type shares its clock length, and the
     // pass writes each unit's own phase from the ground it has covered.
-    paceSceneAnimations(scene);
     scene.gatherForDrawing();
 
     // --- Determinism ---------------------------------------------------------
@@ -3430,7 +3522,7 @@ void appendSceneIcons(std::vector<rm::Particle>& into, const UnitScene& scene,
         radii.clear();
         radii.reserve(scene.drawSlotOf[batch].size());
         for (const rm::UnitIndex slot : scene.drawSlotOf[batch]) {
-            radii.push_back(scene.store.motion()[slot].radiusElmos);
+            radii.push_back(rm::sim::fxToFloat(scene.store.motion()[slot].radiusElmos));
         }
         (void)rm::appendUnitIcons(into, scene.drawScratch[batch], radii, elmosPerPoint);
     }
@@ -3569,11 +3661,12 @@ int main(int argc, const char* argv[]) {
         // Tilt every unit onto its slope once, here, because the headless paths
         // never tick the sim: a screenshot of a scattered scene would otherwise
         // show every unit standing horizontally on its hillside.
-        for (rm::UnitInstance& unit : units.store.instances()) {
-            const std::array<float, 2> align = rm::sim::slopeAlignment(
-                map->field, unit.position[0], unit.position[2], unit.rotationY);
-            unit.rotationX = align[0];
-            unit.rotationZ = align[1];
+        const rm::sim::Terrain terrain{map->field};
+        for (rm::sim::Transform& unit : units.store.transforms()) {
+            const std::array<rm::Brad, 2> align =
+                rm::sim::slopeAlignment(terrain, unit.x, unit.z, unit.heading);
+            unit.pitch = align[0];
+            unit.roll = align[1];
         }
         units.gatherForDrawing();
 
@@ -3751,9 +3844,13 @@ int main(int argc, const char* argv[]) {
                     for (std::size_t i = 0; i < units.drawScratch[batch].size() && made < rings;
                          ++i, ++made) {
                         const rm::UnitIndex slot = units.drawSlotOf[batch][i];
+                        const rm::sim::Transform& at = units.store.transforms()[slot];
                         rm::appendSelectionRing(
-                            vertices, map->field, units.store.instances()[slot].position,
-                            units.store.motion()[slot].radiusElmos * kSelectionRingMargin,
+                            vertices, map->field,
+                            {rm::sim::fxToFloat(at.x), rm::sim::fxToFloat(at.y),
+                             rm::sim::fxToFloat(at.z)},
+                            rm::sim::fxToFloat(units.store.motion()[slot].radiusElmos)
+                                * kSelectionRingMargin,
                             kSelectionRingColour);
                         captured.push_back(rm::SelectionEntry{batch, i});
                     }
@@ -3958,8 +4055,9 @@ int main(int argc, const char* argv[]) {
                                && hostileTo(units, units.playerArmy, *hit);
 
             if (isAttack) {
-                const std::array<float, 3>& at = units.store.instances()[hit->index].position;
-                ground = simd_make_float3(at[0], at[1], at[2]);
+                const rm::sim::Transform& at = units.store.transforms()[hit->index];
+                ground = simd_make_float3(rm::sim::fxToFloat(at.x), rm::sim::fxToFloat(at.y),
+                                          rm::sim::fxToFloat(at.z));
             } else {
                 ground = rm::pickGround(ray, map->field);
             }
@@ -3989,8 +4087,9 @@ int main(int argc, const char* argv[]) {
                     passability.gridFor(units.maxSlopeDegrees[type],
                                         units.maxWaterDepthElmos[type]);
                 if (!orderRouted(units.store.motion()[sel.index],
-                                 units.store.instances()[sel.index], grid, ground->x,
-                                 ground->z)) {
+                                 units.store.transforms()[sel.index], grid,
+                                 rm::sim::fxFromFloat(ground->x),
+                                 rm::sim::fxFromFloat(ground->z))) {
                     ++failed;
                 }
             }
@@ -4084,10 +4183,8 @@ int main(int argc, const char* argv[]) {
                 }
             }
 
-            // Paced from the store, then gathered: the sim wrote each unit's distance and
-            // the gather decides where it is drawn, so the phase has to be written before
-            // the copy or the GPU gets last frame's legs.
-            paceSceneAnimations(units);
+            // The gather builds every instance from the store, walk-cycle phase included —
+            // see `UnitScene::instanceFor`. There is no separate pacing pass to run first.
             units.gatherForDrawing();
 
             // Re-upload when the match built something new. Only on growth, which is a
@@ -4122,11 +4219,18 @@ int main(int argc, const char* argv[]) {
                     continue;  // a wreck does not kick up dust
                 }
                 const rm::sim::MoveState& motion = units.store.motion()[slot];
+                const rm::sim::Transform& at = units.store.transforms()[slot];
                 dustEmitters.push_back(rm::DustEmitter{
-                    .position = units.store.instances()[slot].position,
+                    .position = {rm::sim::fxToFloat(at.x), rm::sim::fxToFloat(at.y),
+                                 rm::sim::fxToFloat(at.z)},
                     .moving = motion.moving,
-                    .topSpeedElmosPerSecond = motion.speedElmosPerSecond,
-                    .radiusElmos = motion.radiusElmos,
+                    // The dust threshold is stated per second, so the per-tick speed converts
+                    // back — a display concern reading a sim value, which is what
+                    // `secondsPerTick` exists for.
+                    .topSpeedElmosPerSecond =
+                        rm::sim::fxToFloat(motion.speedPerTick)
+                        * static_cast<float>(kAppTickRate.ticksPerSecond()),
+                    .radiusElmos = rm::sim::fxToFloat(motion.radiusElmos),
                 });
             }
             rm::advanceParticles(particles, elapsed);
@@ -4169,9 +4273,13 @@ int main(int argc, const char* argv[]) {
                 if (!units.store.alive(sel)) {
                     continue;
                 }
+                const rm::sim::Transform& at = units.store.transforms()[sel.index];
                 rm::appendSelectionRing(
-                    decalVertices, map->field, units.store.instances()[sel.index].position,
-                    units.store.motion()[sel.index].radiusElmos * kSelectionRingMargin,
+                    decalVertices, map->field,
+                    {rm::sim::fxToFloat(at.x), rm::sim::fxToFloat(at.y),
+                     rm::sim::fxToFloat(at.z)},
+                    rm::sim::fxToFloat(units.store.motion()[sel.index].radiusElmos)
+                        * kSelectionRingMargin,
                     kSelectionRingColour);
             }
 

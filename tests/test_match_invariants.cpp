@@ -64,7 +64,7 @@ namespace {
     weapon.role = WeaponRole::DirectFire;
     weapon.turreted = true;
     weapon.damage = rm::test::mag(damage);
-    weapon.maxRangeElmos = rangeElmos;
+    weapon.maxRange = rm::test::fx(rangeElmos);
     weapon.rateOfFire = 1.0f;
     weapon.muzzleVelocityElmosPerSecond = 200.0f;
     return weapon;
@@ -105,7 +105,7 @@ struct Fight {
     /// One tick, which is now one call: there is nothing to rebuild between ticks.
     rm::sim::TickReport tick(const rm::HeightField& field) {
         rm::sim::Match m = match();
-        return rm::sim::tickSkirmish(roster.store, roster.catalog, m, field);
+        return rm::sim::tickSkirmish(roster.store, roster.catalog, m, rm::sim::Terrain{field});
     }
 
     [[nodiscard]] rm::sim::Match match() {
@@ -216,7 +216,7 @@ TEST_CASE("a reported death carries the radius it had while alive") {
         const rm::sim::TickReport report = fight.tick(field);
         for (const rm::sim::Death& death : report.died) {
             sawADeath = true;
-            REQUIRE(death.radiusElmos > 0.0f);
+            REQUIRE(rm::test::asFloat(death.radiusElmos) > 0.0f);
         }
     }
     REQUIRE(sawADeath);
@@ -234,7 +234,7 @@ TEST_CASE("a corpse stops shoving the living") {
         const rm::sim::UnitStore& store = fight.roster.store;
         for (rm::UnitIndex slot = 0; slot < store.slotCount(); ++slot) {
             if (!store.health()[slot].alive()) {
-                REQUIRE(store.motion()[slot].radiusElmos == 0.0f);
+                REQUIRE(store.motion()[slot].radiusElmos == rm::sim::Fx{});
             }
         }
     }
@@ -312,7 +312,7 @@ TEST_CASE("the match is decided at most once") {
     for (int tick = 0; tick < 400; ++tick) {
         rm::sim::Match match = fight.match();
         const rm::sim::TickReport report =
-            rm::sim::tickSkirmish(fight.roster.store, fight.roster.catalog, match, field);
+            rm::sim::tickSkirmish(fight.roster.store, fight.roster.catalog, match, rm::sim::Terrain{field});
         if (report.matchEnded) {
             ++endings;
         }
@@ -357,7 +357,7 @@ TEST_CASE("an economy never banks more than it can store, nor funds more than it
     for (int tick = 0; tick < 300; ++tick) {
         rm::sim::Match match = fight.match();
         match.baseStorage = cap;
-        (void)rm::sim::tickSkirmish(fight.roster.store, fight.roster.catalog, match, field);
+        (void)rm::sim::tickSkirmish(fight.roster.store, fight.roster.catalog, match, rm::sim::Terrain{field});
 
         for (const rm::sim::Economy& economy : fight.economies) {
             REQUIRE(economy.stored.mass >= rm::sim::Mag{});
@@ -394,7 +394,7 @@ TEST_CASE("a match with nobody in it does nothing, rather than deciding somethin
     };
 
     const rm::sim::TickReport report =
-        rm::sim::tickSkirmish(noUnits, noTypes, match, field);
+        rm::sim::tickSkirmish(noUnits, noTypes, match, rm::sim::Terrain{field});
     REQUIRE(report.died.empty());
     REQUIRE(report.shotsFired == 0);
     REQUIRE(report.finished.empty());

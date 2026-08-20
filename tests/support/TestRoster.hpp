@@ -38,10 +38,15 @@ struct Roster {
     sim::UnitCatalog catalog;
     std::deque<unitdef::UnitDef> defs;
 
+    /// The clock this roster's derived rates were computed against. A member rather than a
+    /// parameter so that a test cannot register a type at one rate and spawn at another,
+    /// which would give a unit a speed its weapons disagreed with.
+    sim::TickRate rate{};
+
     /// Registers a definition and returns the type index units of it will carry.
     [[nodiscard]] UnitTypeIndex addType(unitdef::UnitDef def) {
         defs.push_back(std::move(def));
-        return catalog.add(&defs.back());
+        return catalog.add(&defs.back(), rate);
     }
 
     /// A unit of a type, at a place, owned by an army, with a health pool.
@@ -52,19 +57,19 @@ struct Roster {
     sim::UnitId add(UnitTypeIndex type, float x, float z, int army, float hp) {
         const unitdef::UnitDef* def = catalog.def(type);
 
-        UnitInstance instance{};
-        instance.position = {x, 0.0f, z};
-        instance.scale = 1.0f;
+        // Authored in decimals, stored in fixed point: a test says "at x = 400" and the
+        // conversion happens here rather than at every call.
+        const sim::Transform transform{.x = sim::fxFromFloat(x), .z = sim::fxFromFloat(z)};
 
-        sim::MoveState state;
+        sim::MoveState state = sim::defaultMotion(rate);
         state.armyIndex = army;
-        state.radiusElmos = 4.0f;
+        state.radiusElmos = sim::Fx::fromInt(4);
 
         // One reload counter per weapon, starting at zero so the first shot is available on
         // the first tick rather than a reload later.
         return store.spawn({
             .type = type,
-            .instance = instance,
+            .transform = transform,
             .motion = state,
             .health = sim::Health{.current = sim::magFromFloat(hp),
                                   .maximum = sim::magFromFloat(hp),
@@ -76,7 +81,9 @@ struct Roster {
     // Reached by HANDLE, which is how a test names a unit now — a slot index would be an
     // invitation to assume spawn order, and assuming spawn order is what the flat store
     // exists to stop.
-    [[nodiscard]] UnitInstance& instance(sim::UnitId id) { return store.instances()[id.index]; }
+    [[nodiscard]] sim::Transform& transform(sim::UnitId id) {
+        return store.transforms()[id.index];
+    }
     [[nodiscard]] sim::MoveState& motion(sim::UnitId id) { return store.motion()[id.index]; }
     [[nodiscard]] sim::Health& health(sim::UnitId id) { return store.health()[id.index]; }
 };

@@ -17,7 +17,7 @@ namespace {
 /// there. Without that a dead unit would set off its death explosion every tick
 /// forever, which is both a wrong answer and an unbounded one.
 void retireDead(UnitStore& store, TickReport& report) {
-    const std::span<UnitInstance> instances = store.instances();
+    const std::span<Transform> transforms = store.transforms();
     const std::span<MoveState> motion = store.motion();
     const std::span<const Health> healths = store.health();
 
@@ -25,23 +25,25 @@ void retireDead(UnitStore& store, TickReport& report) {
         if (healths[slot].alive()) {
             continue;
         }
-        if (slot >= motion.size() || slot >= instances.size()) {
+        if (slot >= motion.size() || slot >= transforms.size()) {
             continue;
         }
-        if (motion[slot].radiusElmos <= 0.0f) {
+        if (motion[slot].radiusElmos <= Fx{}) {
             continue;  // already retired on an earlier tick
         }
 
         report.died.push_back(Death{
             .ref = store.idAt(slot),
-            .at = instances[slot].position,
+            .at = positionOf(transforms[slot]),
             .radiusElmos = motion[slot].radiusElmos,
         });
 
-        instances[slot].scale = 0.0f;
+        // The scale that used to be zeroed here belonged to `UnitInstance`, which the store no
+        // longer holds — a corpse is left out of the draw gather instead, which is both
+        // cheaper and less of a lie than drawing a collapsed mesh.
         motion[slot].moving = false;
-        motion[slot].speedElmosPerSecond = 0.0f;
-        motion[slot].radiusElmos = 0.0f;  // and stops shoving the living
+        motion[slot].speedPerTick = Fx{};
+        motion[slot].radiusElmos = Fx{};  // and stops shoving the living
     }
 
     // The handles go stale HERE, after the report has been built from them — a caller reads
@@ -143,7 +145,7 @@ std::vector<int> countCommanders(const UnitStore& store, const UnitCatalog& cata
 }
 
 TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& match,
-                        const HeightField& field, TickRate rate) {
+                        const Terrain& terrain, TickRate rate) {
     TickReport report;
 
     // 1. MOVEMENT, then collisions. Everything downstream reads where a unit has got to
@@ -153,8 +155,8 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
     //    view built to hand every batch to the collision pass at once — because two units
     //    of different models had to be able to see each other. With one flat array that
     //    problem does not arise.
-    tick(store.instances(), store.motion(), field);
-    resolveCollisions(store.instances(), store.motion(), field);
+    tick(store.transforms(), store.motion(), terrain);
+    resolveCollisions(store.transforms(), store.motion(), terrain);
 
     // Everything below is a MATCH, and a scene with no armies is not one — a `--units`
     // crowd scattered for a screenshot has nothing to shoot at and nobody to pay.
@@ -171,7 +173,7 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
     if (match.projectiles != nullptr) {
         report.shotsFired =
             fireWeapons(store, catalog, match.armies, *match.projectiles, rate);
-        advanceProjectiles(*match.projectiles, store, match.armies, field);
+        advanceProjectiles(*match.projectiles, store, match.armies, terrain, rate);
     }
 
     // 4. The dead, then their explosions, then the defeated. In that order: an army

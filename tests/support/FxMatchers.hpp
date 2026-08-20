@@ -16,6 +16,9 @@
 
 #include <catch2/catch_approx.hpp>
 
+#include <array>
+#include <cstdint>
+
 namespace rm::test {
 
 /// One step of the fixed-point types. Both use `kFxFractionalBits`, so there is one step.
@@ -34,6 +37,27 @@ inline constexpr float kFxStep = 1.0f / (1 << kFxFractionalBits);
 }
 [[nodiscard]] inline Catch::Approx near(sim::Fx value) {
     return Catch::Approx(asFloat(value)).margin(kFxStep);
+}
+
+/// A world position from the whole numbers a test author writes: `at(0, 0, 200)`.
+///
+/// The geometry functions take `std::array<Fx, 3>`, and a brace list of integers will not
+/// convert — `Fx` has no implicit constructor, on purpose. This is the shorthand that keeps
+/// `groundDistanceElmos(at(0, 0, 0), at(30, 0, 40))` readable.
+[[nodiscard]] inline std::array<sim::Fx, 3> at(int x, int y, int z) {
+    return {sim::Fx::fromInt(x), sim::Fx::fromInt(y), sim::Fx::fromInt(z)};
+}
+
+/// An angle as SIGNED radians, in -pi..pi.
+///
+/// `Brad` is unsigned and covers the whole turn, so a small negative angle is stored near
+/// 65,536 and `radiansFromBrad` reports it as nearly 2*pi. That is correct — it is the same
+/// angle — but a test that asks "is the tilt about 0.9 radians" wants the signed reading, and
+/// `std::abs` of the unsigned one gives 5.39 instead of 0.90. Casting through `int16_t` first
+/// is what makes the sign visible.
+[[nodiscard]] inline float signedRadians(Brad angle) {
+    return sim::radiansFromBrad(0) + static_cast<float>(static_cast<std::int16_t>(angle))
+                                         * (6.28318530717958647692f / 65536.0f);
 }
 
 /// The other direction, for building a value from what a test author writes.

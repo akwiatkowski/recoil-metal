@@ -37,11 +37,11 @@ constexpr float kRecoilFramesPerSecond = 30.0f;
 
 namespace rm::unitdef {
 
-float UnitDef::maxWeaponRangeElmos() const noexcept {
-    float furthest = 0.0f;
+sim::Fx UnitDef::maxWeaponRange() const noexcept {
+    sim::Fx furthest{};
     for (const Weapon& weapon : weapons) {
         if (weapon.fires()) {
-            furthest = std::max(furthest, weapon.maxRangeElmos);
+            furthest = std::max(furthest, weapon.maxRange);
         }
     }
     return furthest;

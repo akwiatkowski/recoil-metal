@@ -1,5 +1,7 @@
 #include "core/sim/UnitCatalog.hpp"
 
+#include <utility>
+
 namespace rm::sim {
 
 UnitTypeIndex UnitCatalog::add(const unitdef::UnitDef* def, TickRate rate) {
@@ -17,6 +19,18 @@ UnitTypeIndex UnitCatalog::add(const unitdef::UnitDef* def, TickRate rate) {
         derived.buildPerTick = rate.magPerTick(def->buildRate);
     }
     rates_.push_back(derived);
+
+    std::vector<WeaponRates> weapons;
+    if (def != nullptr) {
+        weapons.reserve(def->weapons.size());
+        for (const unitdef::Weapon& weapon : def->weapons) {
+            weapons.push_back(WeaponRates{
+                .muzzlePerTick = rate.perTick(weapon.muzzleVelocityElmosPerSecond),
+                .reloadTicks = static_cast<TickCount>(weapon.reloadTicks(rate)),
+            });
+        }
+    }
+    weapons_.push_back(std::move(weapons));
 
     return type;
 }
