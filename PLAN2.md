@@ -26,13 +26,23 @@ P1 has its handle (`UnitId` + `IdPool`), its store (`UnitStore`), its census
 identical`), and an order-independent invariant suite for the part the golden log cannot
 cover.
 
+**P2 is in progress.** P2.1 is done (fixed-point arithmetic and CORDIC trigonometry, proven
+identical from `-O0` to `-O3 -ffast-math`), P2.3's mechanism is done (`TickRate`; both
+tick-denominated constants deleted), and P2.2 is half done — health, damage, costs and the
+whole economy are fixed point and per-tick, with the match unchanged in every reported total.
+What remains in P2.2 is **position, orientation and velocity**, which is atomic in the way
+P1.4 was: `UnitInstance` is the GPU's layout, so the sim needs its own `Transform` and the
+instance becomes a draw-time projection. See §7 P2.2 for the decomposition and the measurement.
+
+**Engine completion: ~43 %** (§2).
+
+---
+
 **P1 is done.** P1.4 landed: `UnitRef{batch, instance}`, `CombatGroup`, `SkirmishGroup` and
 `CollisionGroup` are gone, and every sim pass takes `UnitStore` + `UnitCatalog` and loops once
 over slots. As predicted the golden log diverged at tick 0 and was re-recorded in the same
 commit; `tests/test_match_invariants.cpp` was the gate and held. It also earned its keep
 immediately — it found a real defect in `hashMatch`, which could not see a unit die (§7 P1.4).
-
-**Engine completion: ~40 %** (§2).
 
 ---
 
@@ -125,22 +135,24 @@ re-deriving the weights.
 
 | Subsystem | W | Done | Have | Missing |
 |---|---:|---:|---|---|
-| Sim | 26 % | **32 %** | movement, collisions, targeting/facing/firing, projectiles, area damage, death, economy, construction, victory, **unit handles + flat store + type catalog + census, wired: every pass takes the store** | features, fixed-point, intel/vision, shields, transports, most weapon classes, air/naval/hover domains, veterancy, upgrades, adjacency |
+| Sim | 26 % | **42 %** | movement, collisions, targeting/facing/firing, projectiles, area damage, death, economy, construction, victory, unit handles + flat store + type catalog + census, **fixed-point arithmetic + CORDIC trig (no libm) + tick rate as a value + health/damage/costs/economy migrated** | features, **fixed-point for position/orientation/velocity and pathfinding**, intel/vision, shields, transports, most weapon classes, air/naval/hover domains, veterancy, upgrades, adjacency |
 | Renderer | 21 % | **55 %** | instanced units w/ team colour, props + culling, shadows, water + refraction, sky, particles, decals, text/HUD, icons, selection, model LOD, pose playback, DDS, offscreen capture | drawer split, minimap, effect taxonomy (muzzle/trail/impact), beams |
 | System | 16 % | **30 %** | VFS (`.sdz`/`.scd`), asset search, DDS, settings, bench harness | **sound (nothing)**, logging framework, job system, serialisation/save, profiling |
 | Game/orders/UI | 13 % | **30 %** | orbit camera, picking, selection + modifiers, HUD, order markers, CLI harness | command queue, build menu, control groups, minimap interaction, formations, game states |
 | Map | 10 % | **70 %** | SMF/SMT, `.scmap`, tile atlas, heightfield, `mapinfo.lua`, terrain mesh w/ LOD + skirts, chunk culling, splat, water, stratum normals, props, terrain types, start positions | minimap, resource spots, features as objects |
 | Pathfinding | 7 % | **25 %** | coarse grid A*, passability, path following | hierarchical/flow-field, dynamic blocking, formations, avoidance quality, per-motion-class grids |
-| Net/replay | 5 % | **20 %** | per-tick state hash over the store (incl. per-slot type, generation and liveness), hash log + first-divergence reporting (P0.2/P0.3) | netcode, lockstep, the cross-architecture proof (P8) |
+| Net/replay | 5 % | **25 %** | per-tick state hash over the store (incl. per-slot type, generation and liveness), hash log + first-divergence reporting (P0.2/P0.3) | netcode, lockstep, the cross-architecture proof (P8) |
 | AI | 2 % | **15 %** | scripted build order + one attack wave | role classification, build tree, any reaction |
 
-**Weighted total: ~40 %** (was 37 % before P1.4; the Sim row moved 25 → 32 % because storage
-and identity are now the sim's own rather than the renderer's batching, and Net/replay 15 →
-20 % because the fingerprint now covers occupancy as well as values).
+**Weighted total: ~43 %.** The Sim row moved 32 → 42 % across P2.1, P2.3's mechanism and half
+of P2.2: the arithmetic the whole determinism claim rests on now exists and is proven
+optimisation-independent, which is a larger share of "what a sim is" than the remaining
+position migration. Net/replay 20 → 25 % because the fingerprint now compares integers, which
+is the form the cross-architecture claim needs.
 
 The shape of that number is the important part: **the two most-complete slices are Map (70 %)
 and Renderer (55 %), which together are 31 % of the weight — and the Sim, at 26 % of the
-weight, is 32 % done** (22 % at the baseline; P1 moved it). That is still why the project looks
+weight, is 42 % done** (22 % at the baseline; P1 and P2 moved it). That is still why the project looks
 further along than it is: a screenshot samples the finished third.
 
 ### 2.3 The procedure
@@ -159,6 +171,7 @@ further along than it is: a screenshot samples the finished third.
 | 2026-08-20 | 22 | 55 | 30 | 30 | 70 | 25 | 15 | 15 | **36 %** | P0 done — the determinism harness exists |
 | 2026-08-20 | 25 | 55 | 30 | 30 | 70 | 25 | 15 | 15 | **37 %** | P1.0–P1.3 — handle, store, census, and the invariant net |
 | 2026-08-20 | 32 | 55 | 30 | 30 | 70 | 25 | 20 | 15 | **40 %** | P1 done — the store IS the sim's storage; batch groups gone |
+| 2026-08-20 | 42 | 55 | 30 | 30 | 70 | 25 | 25 | 15 | **43 %** | P2.1 + P2.3's mechanism + half of P2.2 — fixed-point arithmetic, trig without libm, tick rate as a value, health/damage/economy migrated |
 
 ---
 
@@ -806,14 +819,95 @@ The technique, and it is the whole reason to do P1 next rather than P2:
 
 ### P2 — Fixed-point (D1) and ownership
 
-- [ ] **P2.1 `Fx` type + fixed-point trig/sqrt tables** (§5.2). *Test:* golden tables; identical
-      results at `-O0` and `-O2`. *Manual:* none.
-- [ ] **P2.2 Migrate sim state to fixed-point.** *Test:* sim tests pass with re-based constants;
-      the P0.2 hash is identical across `-O0`/`-O2`/arm64/x86-64. *Manual:* `--play` unchanged.
-- [ ] **P2.3 Tick rate as configuration** (§5.1): per-second → per-tick conversion moves into
-      `rm_data`; `kTickSeconds` leaves sim math. *Test:* the same match at 10 Hz and 20 Hz
-      produces the same *outcome* (not the same hash); a rate of 4 or 51 is rejected at startup.
-      *Manual:* `--tick-rate 20 --play`.
+- [x] **P2.1 `Fx` type + fixed-point trig/sqrt tables** (§5.2) — **done 2026-08-20.**
+      *Test:* golden values, plus `tools/check_fx_optimisation.sh`, which is the real gate —
+      §7's "identical at `-O0` and `-O2`" is a claim about the COMPILER that no test linked
+      into one binary can make, so a probe over ~200,000 results is built at `-O0`, `-O1`,
+      `-O2`, `-O3` and `-O3 -ffast-math` and required to agree. All five do.
+
+      **NOT tables, and not Q16.16.** Two deliberate divergences, both recorded in
+      `core/Types.hpp` and `core/sim/Fx.hpp`:
+
+      - **Layout is Q18.14 plus a 64-bit `Mag`, not Q16.16.** Forced by measurement, not
+        taste. Three shipped maps are **32,768 × 32,768 elmos** (SCMP_029, SCMP_030,
+        X1MP_012 — the 81 × 81 km size), which is *exactly* Q16.16's ceiling, so a unit in
+        the far corner is unrepresentable; and `BuildCostEnergy` reaches **10,008,000**
+        (XSB2401) with `MaxHealth` at **5,000,000** (XSC9010), which no 32-bit fixed-point
+        layout holds. Both types share `kFxFractionalBits`, so converting between them is a
+        widening rather than a rescale — the mistake `recoil-engine-map.md §2` records in
+        Recoil's own content format.
+      - **CORDIC, not lookup tables.** One algorithm gives sin, cos, atan2 and hypot; a
+        table's accuracy is fixed at authoring time, while CORDIC converges below the
+        output's last bit (worst error against `libm` over the whole circle: 1.2e-8, about
+        1/5000th of a step). Angles are `Brad` — turn/65,536 — because wrapping fixed-point
+        radians needs a modulo by 2π, an irrational no fixed-point type holds, so the wrap
+        itself would accumulate error.
+
+- [ ] **P2.2 Migrate sim state to fixed-point** — **half done 2026-08-20.** *Test:* sim tests
+      pass with re-based constants; the P0.2 hash is identical across `-O0`/`-O2`/arm64/x86-64.
+      *Manual:* `--play` unchanged.
+
+      Done in two commits, each with the whole suite green and the match unchanged in every
+      reported total (567 shots, 24 destroyed, 20600/38900 hp, 37 of 37 builds, team 1 at
+      502.2s). The golden log was re-recorded both times because the FINGERPRINT changed —
+      `hashMatch` feeds raw integers where it fed float bit patterns — which is a different
+      description of the same 5200 ticks and exactly what §11 predicted P2 would do to it.
+
+      - [x] **Health, damage and costs** — `Health`, `Weapon::damage`, `UnitDef::health`,
+            `Projectile::damage`, `TickReport::deathBlastDamage`. Content converts at parse
+            time; the blast falloff stays `Fx` because a fraction of a radius is geometry, and
+            `Mag * Fx` is the one operation that mixes the two.
+      - [x] **The economy** — `Resources`, `Economy`, `Construction`, and `UnitDef`'s cost
+            fields. Rates are now **per tick, derived once** in `UnitCatalog::Rates`;
+            `tickEconomy` mentioned `kTickSeconds` four times and now mentions it nowhere.
+            One invariant got *stronger*: the "store never exceeds its cap" bound lost its
+            `+ 0.001f` of slack, because fixed point cannot leave a value a hair above a clamp.
+      - [ ] **Position, orientation and velocity.** THE ATOMIC ONE, and the reason P2.2 is
+            not finished. `UnitInstance` is the GPU's layout — pinned by a `static_assert`,
+            read verbatim by the vertex shader — so it cannot hold `Fx`. The sim needs its own
+            `Transform{Fx x, y, z; Brad heading, pitch, roll;}` as the authority, with
+            `UnitInstance` becoming a draw-time projection built by `gatherForDrawing` from
+            the transform plus the type's scale and the army's colour. That is **P7's snapshot
+            arriving early**, forced here the same way P1.4 forced the gather.
+
+            Scope, measured: `Movement.cpp` (54 float mentions), `Combat.cpp` (49), plus every
+            `instances[slot].position` read in the passes and the whole of `main.mm`'s spawn
+            and draw path. Estimate it in sessions.
+
+            **It is atomic in the way P1.4 was** — flat store or batch groups, no coherent
+            middle — so it wants a session with the runway to finish. The two steps above were
+            deliberately chosen because they are *not* atomic: each is one structure, and each
+            landed green.
+      - [ ] **Pathfinding and heightfield sampling.** `Pathfinding.cpp` (31 float mentions)
+            and the `HeightField` accessors. Follows the transform: a path is a list of
+            positions, so it cannot migrate before they do. The map stays float **on disk** —
+            sampling is what converts.
+      - [ ] **Register the float ban** (`tools/check_no_sim_floats.sh`). Cannot be registered
+            until the above land; `Fx.hpp`/`Fx.cpp` are the boundary and stay exempt by
+            design, which is what makes the rule checkable at all.
+
+- [ ] **P2.3 Tick rate as configuration** (§5.1) — **mechanism done 2026-08-20**, landed early
+      because P2.2's conversions need it. `core/sim/TickRate.hpp` is a validated value (5–50 Hz,
+      throws rather than clamps), rounding to nearest with a floor of one tick, and it is
+      *passed* to the passes that need it rather than read from a global.
+
+      **Both constants the rule was written against are gone.**
+      `kProjectileLifetimeTicks = 300` → `kProjectileLifetime = Seconds{30}`;
+      `TickClock::kMaxTicksPerAdvance = 5` → `kMaxCatchUp = Seconds{0.5}`.
+      Worth recording: the comment on the second said *"a tenth of a second of catch-up"* and
+      was wrong about its own value — five ticks at 10 Hz is half a second. The rate was in a
+      comment, and the comment was mistaken. That is the failure mode the rule exists to
+      remove, caught in the act. `tools/check_no_tick_literals.sh` is registered as a test.
+
+      `Seconds` is a **struct**, not §5.3's `enum class Seconds : float` — an enumeration's
+      underlying type must be integral, so that declaration is not legal C++. The plan is
+      wrong on that detail; a one-member struct with an explicit constructor gives the same
+      property at the same cost.
+
+      Still to do: *Test:* the same match at 10 Hz and 20 Hz produces the same **outcome**
+      (not the same hash) — this needs P2.2's transform first, since half the sim still reads
+      a per-second float. And the `--tick-rate` flag, plumbed from settings; `main.mm` holds a
+      single `kAppTickRate` constant in the meantime, with the reason written next to it.
 - [ ] **P2.4 `Player` / `Team` / `Alliance`** (§6.3). *Test:* victory fires on alliance
       elimination, not team elimination; two players sharing a team both command its units.
       *Manual:* `--play` 2v2.
