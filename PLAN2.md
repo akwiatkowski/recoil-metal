@@ -694,8 +694,38 @@ The technique, and it is the whole reason to do P1 next rather than P2:
       units, kill every third, assert iteration and lookup. *Manual:* `--units 5000` renders.
 - [ ] **P1.3 Bucketed index by team and type** (§6.2). *Test:* counts match brute force after
       10,000 random spawns and deaths. *Manual:* HUD counts stay right through a battle.
-- [ ] **P1.4 Delete `UnitRef{batch, instance}`** and the batch-indexed sim spans. *Test:* suite
-      passes with the type gone. *Manual:* full `--play`.
+- [ ] **P1.4 Delete `UnitRef{batch, instance}`** and the batch-indexed sim spans.
+      *Test:* suite passes with the type gone. *Manual:* full `--play`.
+
+      **P1.4 changes the match, and the golden log cannot verify it. Found 2026-08-20,
+      before starting — it contradicts P1.0's "keep iteration order identical" and that
+      instruction cannot be honoured for this item.**
+
+      Why: `nearestTarget` documents its tie-break as *"ties break on the lower batch then
+      the lower instance"* (Combat.hpp), and spawning appends into per-blueprint batches, so
+      units of one model are contiguous. A flat store's slot order is pure spawn order,
+      interleaved across types. Different order, therefore different winner of a tie,
+      therefore a different target, therefore a different match. Collision shoving and damage
+      application order shift for the same reason.
+
+      This is a change of *outcome*, not of *property*. The tie-break exists so that "the
+      same scene always picks the same target and a screenshot proves something twice" —
+      lowest-slot serves that intent exactly as well as lowest-batch. The sim stays
+      deterministic; it just plays a different, equally valid match.
+
+      So the verification for this item is not `MATCH`:
+      - the suite passes with `UnitRef` gone (the stated test)
+      - the match still completes, decides, and reports comparable totals — shots fired,
+        units destroyed, HP remaining, the tick someone wins on. Comparable, not identical.
+      - `make golden` re-records, **in the same commit**, with the reason in the message.
+        That is what `make golden` is for and the only legitimate use of it.
+
+      Scope measured before starting: ~130 use sites across 15 files. Heaviest are
+      `tests/test_combat.cpp` (29), `Combat.cpp` (25), `Skirmish.cpp` (22). The whole
+      per-batch grouping exists because `def` is per batch, so the enabling move is putting
+      the type on the unit and a `UnitCatalog` behind it — at which point `SkirmishGroup` and
+      `CombatGroup` collapse into "the store" and every nested `for group / for instance`
+      becomes one loop over slots. The passes get shorter, not longer.
 
 ### P2 — Fixed-point (D1) and ownership
 
