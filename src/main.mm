@@ -26,10 +26,14 @@
 #include "core/scene/GroundDecals.hpp"
 #include "core/scene/UnitPlacement.hpp"
 #include "core/sim/Army.hpp"
+#include "core/sim/BuildOrder.hpp"
 #include "core/sim/Combat.hpp"
 #include "core/sim/Economy.hpp"
 #include "core/sim/Movement.hpp"
 #include "core/sim/Pathfinding.hpp"
+#include "core/sim/Replay.hpp"
+#include "core/sim/StateHash.hpp"
+#include "core/sim/Skirmish.hpp"
 #include "core/unit/UnitBlueprint.hpp"
 #include "core/unit/UnitDef.hpp"
 #include "core/vfs/AssetSearch.hpp"
@@ -1046,6 +1050,21 @@ struct UnitScene {
     /// The blueprint each Construction becomes, by its `blueprintIndex`.
     std::vector<rm::unitdef::UnitDef> buildable;
 
+    /// The VFS path behind each `buildable` entry, parallel to it. What a FINISHED
+    /// construction spawns from: the def alone cannot resolve a model, and milestone
+    /// 20 is where a finished build becomes a unit on the map rather than a number
+    /// in the economy.
+    std::vector<std::string> buildablePaths;
+
+    /// The batch each spawned blueprint reuses, so twenty tanks are one batch and
+    /// one draw call rather than twenty. Keyed by VFS path, same as the cache in
+    /// spawnCommanders is keyed by faction.
+    std::map<std::string, std::size_t, std::less<>> batchForBlueprint;
+
+    /// Set when a spawn added instances mid-simulation, so the tick loop knows its
+    /// collision spans point at moved storage and rebuilds them.
+    bool grewThisTick = false;
+
     /// The scorch marks the dead have left, in decal vertices ready to upload.
     ///
     /// Accumulated rather than rebuilt, unlike the selection rings: a wreck is permanent, so
@@ -1092,6 +1111,26 @@ struct UnitScene {
         groups.reserve(instances.size());
         for (std::size_t b = 0; b < instances.size(); ++b) {
             groups.push_back(rm::sim::CombatGroup{
+                .instances = instances[b],
+                .motion = motion[b],
+                .health = b < health.size() ? std::span<rm::sim::Health>{health[b]}
+                                            : std::span<rm::sim::Health>{},
+                .def = b < defs.size() ? defs[b] : nullptr,
+            });
+        }
+        return groups;
+    }
+
+    /// The whole tick's view of the scene — see core/sim/Skirmish.hpp.
+    ///
+    /// Rebuilt when the batch list GROWS rather than every tick: the spans are stable
+    /// because the deques never reallocate, but a batch created mid-match adds one the
+    /// existing vector does not have, and a unit in it would sit out the fight.
+    [[nodiscard]] std::vector<rm::sim::SkirmishGroup> skirmishGroups() {
+        std::vector<rm::sim::SkirmishGroup> groups;
+        groups.reserve(instances.size());
+        for (std::size_t b = 0; b < instances.size(); ++b) {
+            groups.push_back(rm::sim::SkirmishGroup{
                 .instances = instances[b],
                 .motion = motion[b],
                 .health = b < health.size() ? std::span<rm::sim::Health>{health[b]}
@@ -1429,6 +1468,11 @@ struct VfsUnit {
 /// UEF armies field the same one. What distinguishes them is the instance's colour,
 /// which is exactly the split UnitInstance was built for: the GPU gets the army's
 /// colour and never its index.
+/// What an army starts with, and the baseline its storage is recomputed from every
+/// tick: OUR constant, not a blueprint's — enough to afford the first extractor and
+/// see the bars move, per milestone 19.
+inline constexpr rm::sim::Resources kStartingStorage{.mass = 650.0f, .energy = 5000.0f};
+
 void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
                      std::span<const rm::mapinfo::StartPosition> starts,
                      const rm::vfs::Vfs& content) {
@@ -1480,9 +1524,11 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
             scene.defs.push_back(&scene.definitions.back());
             scene.health.emplace_back();
             // Asserted rather than assumed: every one of these is indexed by batch, and a
-            // mismatch here is the segfault described in resolveUnits.
-            assert(scene.defs.size() == scene.batches.size() + 1);
-            assert(scene.health.size() == scene.batches.size() + 1);
+            // mismatch here is the segfault described in resolveUnits. (These read
+            // `+ 1` until milestone 20 — never caught, because Release compiles
+            // asserts out, which is exactly one assert's worth of irony.)
+            assert(scene.defs.size() == scene.batches.size());
+            assert(scene.health.size() == scene.batches.size());
 
             const auto armed = static_cast<std::size_t>(std::ranges::count_if(
                 unit->def.weapons, [](const rm::unitdef::Weapon& w) { return w.fires(); }));
@@ -1531,19 +1577,147 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
     scene.economies.assign(scene.armies.size(), rm::sim::Economy{});
     for (rm::sim::Economy& economy : scene.economies) {
         economy.incomePerSecond = rm::sim::kCommanderTrickle;
-        economy.storage = {.mass = 650.0f, .energy = 5000.0f};
+        economy.storage = kStartingStorage;
+        // FULL at spawn, which is what the game does — a match opens with the
+        // starting storage banked, and that bank is what pays for the first base.
+        // Milestone 19 started empty, which worked only because the extractor was
+        // the sole build: a power generator costs 750 energy against a 5-a-second
+        // trickle, and an empty start parks the whole build order for four minutes.
+        economy.stored = kStartingStorage;
     }
 
     std::printf("skirmish: %zu armies, %zu commander model(s)\n", scene.armies.size(),
                 batchForFaction.size());
 }
 
+/// Spawns one unit of `blueprintPath` for `army` at `position`, creating its batch on
+/// first use so twenty tanks stay one draw call.
+///
+/// The milestone-20 counterpart of spawnCommanders, and the moment a finished
+/// Construction stops being a number in the economy and becomes a thing on the map:
+/// grounded on the height field, tilted onto its slope, in its army's colour, with its
+/// definition's own health, radius and speed. Returns the batch and instance it landed
+/// in, or nothing when the blueprint or its model is not in the mounted content.
+[[nodiscard]] std::optional<rm::SelectionEntry> spawnUnit(UnitScene& scene,
+                                                          const rm::vfs::Vfs& content,
+                                                          const rm::HeightField& field,
+                                                          std::string_view blueprintPath,
+                                                          std::array<float, 3> position,
+                                                          const rm::sim::Army& army,
+                                                          float yaw) {
+    auto found = scene.batchForBlueprint.find(blueprintPath);
+    if (found == scene.batchForBlueprint.end()) {
+        const auto unit = resolveUnitFromContent(std::string{blueprintPath}, content);
+        if (!unit) {
+            std::fprintf(stderr, "spawn: no unit at %s in the mounted content\n",
+                         std::string{blueprintPath}.c_str());
+            return std::nullopt;
+        }
+
+        scene.models.push_back(unit->model);
+        scene.instances.emplace_back();
+        scene.motion.emplace_back();
+        // The same fallback rules as resolveUnits: a structure's zero slope means
+        // the default, and a ground mover's zero depth means "does not wade" —
+        // see ADR-027.
+        const bool grounded = rm::unitdef::travelsOnGround(unit->def.motion);
+        scene.maxSlopeDegrees.push_back(unit->def.maxSlopeDegrees > 0.0f
+                                            ? unit->def.maxSlopeDegrees
+                                            : rm::sim::kDefaultMaxSlopeDegrees);
+        scene.maxWaterDepthElmos.push_back(grounded ? unit->def.maxWaterDepthElmos
+                                                    : rm::sim::kDefaultMaxWaterDepthElmos);
+        scene.batches.push_back(rm::UnitBatch{
+            .model = &scene.models.back(),
+            .instances = {},
+            .textures = rm::TexturePair{
+                .diffuse = scene.textures.resolve(content, unit->albedoPath, "albedo"),
+                .shading = scene.textures.resolve(content, unit->shadingPath, "specTeam"),
+            },
+        });
+        scene.definitions.push_back(unit->def);
+        scene.defs.push_back(&scene.definitions.back());
+        scene.health.emplace_back();
+        assert(scene.defs.size() == scene.batches.size());
+        assert(scene.health.size() == scene.batches.size());
+
+        found = scene.batchForBlueprint.emplace(std::string{blueprintPath},
+                                                scene.batches.size() - 1).first;
+    }
+
+    const std::size_t batch = found->second;
+    const rm::unitdef::UnitDef& def = *scene.defs[batch];
+
+    rm::UnitInstance instance{};
+    instance.position = {position[0], field.heightAtWorld(position[0], position[2]),
+                         position[2]};
+    instance.rotationY = yaw;
+    instance.scale = def.meshToElmos;
+    instance.teamColour = army.colour;
+    const std::array<float, 2> align =
+        rm::sim::slopeAlignment(field, instance.position[0], instance.position[2], yaw);
+    instance.rotationX = align[0];
+    instance.rotationZ = align[1];
+
+    rm::sim::MoveState motion;
+    motion.armyIndex = army.index;
+    motion.radiusElmos = def.collisionRadiusElmos;
+    if (def.isMobile()) {
+        motion.speedElmosPerSecond = def.speedElmosPerSecond;
+        if (def.turnRateRadiansPerSecond > 0.0f) {
+            motion.turnRateRadiansPerSecond = def.turnRateRadiansPerSecond;
+        }
+    } else {
+        motion.speedElmosPerSecond = 0.0f;
+    }
+
+    scene.instances[batch].push_back(instance);
+    scene.motion[batch].push_back(motion);
+    scene.health[batch].push_back(
+        rm::sim::Health{.current = def.health, .maximum = def.health});
+
+    // The instance vector may have moved its storage, so every span into it is stale:
+    // the batch's own, and — mid-simulation — the collision groups the tick loop holds,
+    // which is what the flag tells it.
+    scene.batches[batch].instances = scene.instances[batch];
+    scene.grewThisTick = true;
+
+    return rm::SelectionEntry{.batch = batch, .instance = scene.instances[batch].size() - 1};
+}
+
+/// Finds (or loads and registers) the buildable entry for `blueprintPath`, so every
+/// Construction of the same blueprint shares one definition and one index.
+[[nodiscard]] std::optional<std::size_t> resolveBuildable(UnitScene& scene,
+                                                          const rm::vfs::Vfs& content,
+                                                          std::string_view blueprintPath) {
+    for (std::size_t i = 0; i < scene.buildablePaths.size(); ++i) {
+        if (scene.buildablePaths[i] == blueprintPath) {
+            return i;
+        }
+    }
+    const auto bytes = content.read(std::string{blueprintPath});
+    if (!bytes) {
+        std::fprintf(stderr, "economy: no blueprint at %s in the mounted content\n",
+                     std::string{blueprintPath}.c_str());
+        return std::nullopt;
+    }
+    const auto def = rm::unitbp::load(
+        std::string{reinterpret_cast<const char*>(bytes->data()), bytes->size()},
+        std::string{blueprintPath});
+    if (!def) {
+        return std::nullopt;
+    }
+    scene.buildable.push_back(*def);
+    scene.buildablePaths.emplace_back(blueprintPath);
+    return scene.buildable.size() - 1;
+}
+
 /// Orders every commander to build a mass extractor on its nearest deposit.
 ///
-/// The whole of this milestone's build order, and deliberately not an AI: one structure,
+/// The whole of milestone 19's build order, and deliberately not an AI: one structure,
 /// on the site the MAP names, paid for out of the trickle a commander produces. What it
 /// demonstrates is the chain — a marker becomes a site, a blueprint becomes a cost, and
-/// the cost is met over time rather than at once.
+/// the cost is met over time rather than at once. Milestone 20's scripted opponent
+/// (core/sim/BuildOrder.hpp) continues from exactly this point.
 ///
 /// The extractor is the right first thing for the same reason it is in the game: it is the
 /// cheapest structure that pays for the next one.
@@ -1557,21 +1731,13 @@ void orderFirstExtractors(UnitScene& scene, std::span<const rm::scenario::Marker
     // the UEF one serves here: this milestone is about the economy rather than about
     // faction-specific structures, and pretending otherwise would mean four blueprints
     // where one demonstrates the same thing.
-    const auto extractor = rm::unitbp::load(
-        [&] {
-            const auto bytes = content.read("/units/UEB1103/UEB1103_unit.bp");
-            return bytes ? std::string{reinterpret_cast<const char*>(bytes->data()),
-                                       bytes->size()}
-                         : std::string{};
-        }(),
-        "/units/UEB1103/UEB1103_unit.bp");
-    if (!extractor) {
-        std::fprintf(stderr, "economy: no mass extractor blueprint in the mounted content\n");
+    const std::optional<std::size_t> registered =
+        resolveBuildable(scene, content, rm::sim::kExtractorBlueprint);
+    if (!registered) {
         return;
     }
-
-    scene.buildable.push_back(*extractor);
-    const std::size_t blueprintIndex = scene.buildable.size() - 1;
+    const std::size_t blueprintIndex = *registered;
+    const rm::unitdef::UnitDef* extractor = &scene.buildable[blueprintIndex];
 
     // Which commander is where, so each can be sent to its OWN nearest deposit rather than
     // all of them to one.
@@ -2045,10 +2211,26 @@ struct ShotOptions {
 /// same scene every run, which is what makes a screenshot or a benchmark of
 /// moving units worth comparing. Same rationale as `--time` for animation.
 struct MarchOptions {
+    /// `--march` orders every unit to (x, z) before simulating; `--play` simulates the
+    /// skirmish without the blanket order, which is what a MATCH wants — the scripted
+    /// armies decide their own movement, and sending both commanders to one point is a
+    /// demolition derby rather than a game.
+    bool orderAll = true;
     bool enabled = false;
     float x = 0.0f;
     float z = 0.0f;
     float seconds = 0.0f;
+
+    /// Where to write this run's per-tick state hashes, or empty for nowhere.
+    ///
+    /// The determinism artifact. Two runs of the same invocation must produce identical
+    /// files, and — once P8's Linux build exists — so must two ARCHITECTURES, which is the
+    /// project's stated success criterion (PLAN2.md §1.3).
+    std::string hashLogPath;
+
+    /// A hash log to compare this run against. The check that makes the artifact useful:
+    /// it reports the FIRST tick that disagrees, which is a breakpoint rather than a mood.
+    std::string checkHashLogPath;
 };
 
 [[nodiscard]] MarchOptions parseMarch(int argc, const char* argv[]) {
@@ -2061,7 +2243,28 @@ struct MarchOptions {
         options.x = static_cast<float>(std::atof(argv[i + 1]));
         options.z = static_cast<float>(std::atof(argv[i + 2]));
         options.seconds = static_cast<float>(std::atof(argv[i + 3]));
+        return options;
+    }
+    // `--play SECONDS`: the same pre-run sim, minus the blanket move order.
+    for (int i = 2; i + 1 < argc; ++i) {
+        if (std::string{argv[i]} != "--play") {
+            continue;
+        }
+        options.enabled = true;
+        options.orderAll = false;
+        options.seconds = static_cast<float>(std::atof(argv[i + 1]));
         break;
+    }
+
+    // Both take a path and are independent of which pre-run mode is in use, so they are
+    // parsed after it rather than inside either branch.
+    for (int i = 2; i + 1 < argc; ++i) {
+        const std::string flag{argv[i]};
+        if (flag == "--hash-log") {
+            options.hashLogPath = argv[i + 1];
+        } else if (flag == "--check-hash-log") {
+            options.checkHashLogPath = argv[i + 1];
+        }
     }
     return options;
 }
@@ -2081,88 +2284,485 @@ struct MarchOptions {
     return true;
 }
 
+/// What one army has ON THE MAP, gathered for the scripted opponent's decisions —
+/// and for the economy, which recomputes income from this rather than accumulating
+/// it, so a structure that dies takes its production with it.
+struct Standing {
+    bool commanderAlive = false;
+    std::array<float, 3> commanderPosition{};
+    float commanderBuildRate = 0.0f;
+    std::size_t extractors = 0;
+    std::size_t powerGenerators = 0;
+    std::size_t factories = 0;
+    std::array<float, 3> factoryPosition{};
+    float factoryBuildRate = 0.0f;
+    std::vector<rm::SelectionEntry> tanks;
+};
+
+/// Gathers what `army` has standing, by walking the batches once.
+[[nodiscard]] Standing standingFor(UnitScene& scene, int army) {
+    Standing standing;
+    for (std::size_t batch = 0; batch < scene.instances.size(); ++batch) {
+        const rm::unitdef::UnitDef* def = batch < scene.defs.size() ? scene.defs[batch] : nullptr;
+        if (def == nullptr) {
+            continue;
+        }
+        for (std::size_t i = 0; i < scene.instances[batch].size(); ++i) {
+            if (scene.motion[batch][i].armyIndex != army || !scene.health[batch][i].alive()) {
+                continue;
+            }
+            if (rm::sim::isCommanderId(def->name)) {
+                standing.commanderAlive = true;
+                standing.commanderPosition = scene.instances[batch][i].position;
+                standing.commanderBuildRate = def->buildRate;
+            } else if (def->name == rm::sim::kExtractorId) {
+                ++standing.extractors;
+            } else if (def->name == rm::sim::kPowerGeneratorId) {
+                ++standing.powerGenerators;
+            } else if (def->name == rm::sim::kFactoryId) {
+                ++standing.factories;
+                standing.factoryPosition = scene.instances[batch][i].position;
+                standing.factoryBuildRate = def->buildRate;
+            } else if (def->name == rm::sim::kTankId) {
+                standing.tanks.push_back(rm::SelectionEntry{batch, i});
+            }
+        }
+    }
+    return standing;
+}
+
+/// The nearest living enemy commander to `from`, or nothing when the war is over.
+/// Where the attack wave walks: kill it and its army is defeated, which is the
+/// whole win condition.
+[[nodiscard]] std::optional<std::array<float, 3>> nearestEnemyCommander(
+    UnitScene& scene, int army, const std::array<float, 3>& from) {
+    if (army < 0 || static_cast<std::size_t>(army) >= scene.armies.size()) {
+        return std::nullopt;
+    }
+    std::optional<std::array<float, 3>> best;
+    float bestDistance = 0.0f;
+    for (std::size_t batch = 0; batch < scene.instances.size(); ++batch) {
+        const rm::unitdef::UnitDef* def = batch < scene.defs.size() ? scene.defs[batch] : nullptr;
+        if (def == nullptr || !rm::sim::isCommanderId(def->name)) {
+            continue;
+        }
+        for (std::size_t i = 0; i < scene.instances[batch].size(); ++i) {
+            const int theirs = scene.motion[batch][i].armyIndex;
+            if (theirs < 0 || static_cast<std::size_t>(theirs) >= scene.armies.size()
+                || !scene.health[batch][i].alive()
+                || !rm::sim::hostile(scene.armies[static_cast<std::size_t>(army)],
+                                     scene.armies[static_cast<std::size_t>(theirs)])) {
+                continue;
+            }
+            const float distance =
+                rm::sim::groundDistanceElmos(from, scene.instances[batch][i].position);
+            if (!best || distance < bestDistance) {
+                best = scene.instances[batch][i].position;
+                bestDistance = distance;
+            }
+        }
+    }
+    return best;
+}
+
+/// The nearest Mass deposit to `from` that nothing has claimed — no construction
+/// (finished ones stay in the list, so a standing extractor counts) within a
+/// footprint of it.
+[[nodiscard]] const rm::scenario::Marker* nearestFreeDeposit(
+    const UnitScene& scene, std::span<const rm::scenario::Marker> markers,
+    const std::array<float, 3>& from) {
+    /// A deposit within this of an existing build site is the SAME deposit —
+    /// half an extractor footprint, generous against float drift.
+    constexpr float kClaimedRadiusElmos = 8.0f;
+
+    const rm::scenario::Marker* nearest = nullptr;
+    float nearestDistance = 0.0f;
+    for (const rm::scenario::Marker& marker : markers) {
+        if (!marker.isType("Mass")) {
+            continue;
+        }
+        bool claimed = false;
+        for (const rm::sim::Construction& work : scene.building) {
+            if (rm::sim::groundDistanceElmos(work.position, marker.position)
+                < kClaimedRadiusElmos) {
+                claimed = true;
+                break;
+            }
+        }
+        if (claimed) {
+            continue;
+        }
+        const float distance = rm::sim::groundDistanceElmos(from, marker.position);
+        if (nearest == nullptr || distance < nearestDistance) {
+            nearest = &marker;
+            nearestDistance = distance;
+        }
+    }
+    return nearest;
+}
+
+/// One decision pass of the scripted opponent, for every army but the player's.
+///
+/// This is milestone 20's "not an AI", enacted: the pure decisions live in
+/// core/sim/BuildOrder.hpp and are tested there; this function only translates them
+/// into the scene — a Construction pushed, an attack order routed. Run once a
+/// second rather than every tick, because nothing here changes faster than a build
+/// finishes and the decisions read the whole scene.
+void runOpponents(UnitScene& scene, const rm::vfs::Vfs& content, const rm::HeightField& field,
+                  PassabilitySet& passability,
+                  std::span<const rm::mapinfo::StartPosition> starts,
+                  std::span<const rm::scenario::Marker> markers,
+                  std::vector<rm::sim::Opponent>& scripts, float elapsedSeconds) {
+    const float centreX = field.widthElmos() * 0.5f;
+    const float centreZ = field.depthElmos() * 0.5f;
+
+    for (const rm::sim::Army& army : scene.armies) {
+        if (army.index == scene.playerArmy || army.defeated
+            || static_cast<std::size_t>(army.index) >= scripts.size()) {
+            continue;
+        }
+        rm::sim::Opponent& script = scripts[static_cast<std::size_t>(army.index)];
+        const Standing standing = standingFor(scene, army.index);
+
+        // What is being paid for right now, split by who builds it: the commander
+        // owns structures, the factory owns tanks.
+        bool structureUnderway = false;
+        bool tankUnderway = false;
+        for (const rm::sim::Construction& work : scene.building) {
+            if (work.armyIndex != army.index || work.finished()) {
+                continue;
+            }
+            (scene.buildable[work.blueprintIndex].isMobile() ? tankUnderway
+                                                             : structureUnderway) = true;
+        }
+
+        const rm::sim::ArmyView view{
+            .commanderAlive = standing.commanderAlive,
+            .commanderBusy = structureUnderway,
+            .factoryBusy = tankUnderway,
+            .extractorsStanding = standing.extractors,
+            .powerGeneratorsStanding = standing.powerGenerators,
+            .factoriesStanding = standing.factories,
+            .tanksAlive = standing.tanks.size(),
+        };
+
+        // The commander's next structure, placed around ITS OWN start position —
+        // the base grows where the map put the army, not where the commander wandered.
+        const rm::sim::StructureOrder structure = rm::sim::nextStructure(view);
+        if (structure != rm::sim::StructureOrder::None) {
+            std::string_view blueprint;
+            std::optional<std::array<float, 3>> site;
+            const std::size_t slot = standing.powerGenerators + standing.factories;
+            const rm::mapinfo::StartPosition& start =
+                starts[static_cast<std::size_t>(army.index)];
+            const std::array<float, 3> home{start.x, 0.0f, start.z};
+            switch (structure) {
+            case rm::sim::StructureOrder::PowerGenerator:
+                blueprint = rm::sim::kPowerGeneratorBlueprint;
+                site = rm::sim::structureSite(home, centreX, centreZ,
+                                              static_cast<int>(slot));
+                break;
+            case rm::sim::StructureOrder::Factory:
+                blueprint = rm::sim::kFactoryBlueprint;
+                site = rm::sim::structureSite(home, centreX, centreZ,
+                                              static_cast<int>(slot));
+                break;
+            case rm::sim::StructureOrder::Extractor: {
+                blueprint = rm::sim::kExtractorBlueprint;
+                const rm::scenario::Marker* deposit =
+                    nearestFreeDeposit(scene, markers, standing.commanderPosition);
+                if (deposit != nullptr) {
+                    site = deposit->position;
+                }
+                break;
+            }
+            case rm::sim::StructureOrder::None:
+                break;
+            }
+            if (site) {
+                const std::optional<std::size_t> blueprintIndex =
+                    resolveBuildable(scene, content, blueprint);
+                if (blueprintIndex) {
+                    const rm::unitdef::UnitDef& def = scene.buildable[*blueprintIndex];
+                    scene.building.push_back(rm::sim::Construction{
+                        .armyIndex = army.index,
+                        .position = *site,
+                        .cost = {.mass = def.buildCostMass, .energy = def.buildCostEnergy},
+                        .buildTimeRemaining = def.buildTime,
+                        .totalBuildTime = def.buildTime,
+                        .buildRate = standing.commanderBuildRate,
+                        .blueprintIndex = *blueprintIndex,
+                    });
+                    std::printf("  [%6.1fs] army %d starts %.*s\n",
+                                static_cast<double>(elapsedSeconds), army.index,
+                                static_cast<int>(blueprint.size()), blueprint.data());
+                }
+            }
+        }
+
+        // The factory's next tank, built where the factory stands and rolled off it
+        // once finished (the spawn handles the rolloff).
+        if (rm::sim::wantsTank(view)) {
+            const std::optional<std::size_t> blueprintIndex =
+                resolveBuildable(scene, content, rm::sim::kTankBlueprint);
+            if (blueprintIndex) {
+                const rm::unitdef::UnitDef& def = scene.buildable[*blueprintIndex];
+                scene.building.push_back(rm::sim::Construction{
+                    .armyIndex = army.index,
+                    .position = standing.factoryPosition,
+                    .cost = {.mass = def.buildCostMass, .energy = def.buildCostEnergy},
+                    .buildTimeRemaining = def.buildTime,
+                    .totalBuildTime = def.buildTime,
+                    .buildRate = standing.factoryBuildRate,
+                    .blueprintIndex = *blueprintIndex,
+                });
+            }
+        }
+
+        // The one attack wave: at strength, every tank walks at the nearest enemy
+        // commander. After this, reinforcements are sent as they roll off.
+        if (rm::sim::launchesAttack(script, view)) {
+            const std::optional<std::array<float, 3>> target =
+                nearestEnemyCommander(scene, army.index, standing.commanderPosition);
+            if (target) {
+                script.attackLaunched = true;
+                std::size_t marching = 0;
+                for (const rm::SelectionEntry& tank : standing.tanks) {
+                    const rm::sim::PassabilityGrid& grid =
+                        passability.gridFor(scene.maxSlopeDegrees[tank.batch],
+                                            scene.maxWaterDepthElmos[tank.batch]);
+                    if (orderRouted(scene.motion[tank.batch][tank.instance],
+                                    scene.instances[tank.batch][tank.instance], grid,
+                                    (*target)[0], (*target)[2])) {
+                        ++marching;
+                    }
+                }
+                std::printf("  [%6.1fs] army %d ATTACKS with %zu of %zu tanks\n",
+                            static_cast<double>(elapsedSeconds), army.index, marching,
+                            standing.tanks.size());
+            }
+        }
+    }
+}
+
 /// Orders every unit in the scene to a point, and runs the sim for a while.
 ///
 /// `dust` collects the particles the march raised, so that a headless capture can
 /// show a trail. Emitted DURING the ticks rather than at the end, which is the only
 /// way to get one: dust marks where a unit has been, and a scene sampled after the
 /// walk knows only where everything ended up.
-/// Takes the destroyed out of the scene.
+// Everything one tick of a match is, from the CALLER's side.
+//
+// WHY THIS EXISTS. `rm::sim::tickSkirmish` owns the order the sim's own passes run in.
+// This owns the order the caller's work runs in around them: the opponents decide before
+// the tick, and afterwards come the two things the sim cannot do for itself — mark a
+// wreck, and turn a finished construction into a unit on the map, which needs a model out
+// of the VFS.
+//
+// It is ONE type used by both callers — the headless `--march`/`--play` pre-run and the
+// windowed frame loop — because the alternative was two hand-rolled loops and they
+// diverged. The windowed one ticked movement and collisions only, so a unit in the
+// interactive game moved perfectly and never fired a shot, and the whole test suite stayed
+// green because every rule was tested and the ASSEMBLY was not. Skirmish.cpp fixed that for
+// the sim's passes; this fixes it for the caller's.
+//
+// What deliberately stays with each caller, because it is presentation rather than rules:
+// PRINTING (the pre-run narrates the match, the frame loop draws it) and PARTICLE timing
+// (the pre-run ages dust by the fixed tick, the frame loop by the frame it just drew).
+// Neither changes what the match does.
+//
+// References rather than values, the same shape and for the same reason as
+// `rm::sim::Match`: a runner is built at a call site from storage that outlives it.
+struct MatchRunner {
+    UnitScene& scene;
+    const rm::HeightField& field;
+    PassabilitySet& passability;
+    const rm::vfs::Vfs& content;
+    std::span<const rm::mapinfo::StartPosition> starts;
+    std::span<const rm::scenario::Marker> markers;
+
+    /// The scripted opponents' memory, one per army; a human player's slot stays unused.
+    std::vector<rm::sim::Opponent> scripts;
+
+    /// The sim's view of the scene. Rebuilt when a spawn GROWS it: the spans are stable
+    /// because the deques never reallocate, but a batch created mid-match adds one this
+    /// vector does not have, and a unit in it would sit out the fight.
+    std::vector<rm::sim::SkirmishGroup> groups;
+
+    /// Built once and kept, because `over` has to survive between ticks — a match is
+    /// decided on one tick and stays decided.
+    rm::sim::Match match;
+
+    /// Running totals, for the callers that report them at the end.
+    std::size_t shotsFired = 0;
+    std::size_t completedBuilds = 0;
+    bool matchOver = false;
+};
+
+/// How often the scripted opponents get to think.
 ///
-/// A dead unit stops moving and stops being DRAWN, by way of a zero scale — which
-/// collapses its mesh to a point rather than removing it from the batch. Removing it
-/// properly would mean erasing from the instance array, and the health, motion and
-/// instance arrays are parallel: an erase from one has to be an erase from all three, and
-/// every span the combat and collision passes hold would have to be rebuilt mid-tick.
+/// Once a second: nothing an opponent reacts to changes faster than a build finishes, and
+/// each pass walks the whole scene. Derived from the tick rate rather than written as a
+/// number of ticks, so changing the rate does not silently change how often they decide.
+inline constexpr int kDecisionTicks = rm::sim::kTicksPerSecond;
+
+[[nodiscard]] MatchRunner makeMatchRunner(UnitScene& scene, const rm::HeightField& field,
+                                          PassabilitySet& passability,
+                                          const rm::vfs::Vfs& content,
+                                          std::span<const rm::mapinfo::StartPosition> starts,
+                                          std::span<const rm::scenario::Marker> markers) {
+    MatchRunner runner{
+        .scene = scene,
+        .field = field,
+        .passability = passability,
+        .content = content,
+        .starts = starts,
+        .markers = markers,
+        .scripts = std::vector<rm::sim::Opponent>(scene.armies.size()),
+        .groups = scene.skirmishGroups(),
+        .match =
+            rm::sim::Match{
+                .armies = scene.armies,
+                .economies = scene.economies,
+                .projectiles = &scene.projectiles,
+                .building = &scene.building,
+                .commandersEver = scene.commandersEver,
+                .baseStorage = kStartingStorage,
+                // Seeded from the scene rather than defaulted to false, using the same
+                // predicate the sim decides on (Skirmish.cpp): a match with one side left
+                // is already over. Two cases need it, and both are announcements that
+                // would otherwise be wrong:
+                //
+                //   `--play` pre-runs the match headless and THEN opens the window. A
+                //   runner built fresh over those armies would re-detect the end on its
+                //   first tick and announce a winner the pre-run already announced.
+                //
+                //   A `--units` crowd has no armies at all, so `survivorCount` is zero,
+                //   which is also `<= 1` — without this the interactive window would
+                //   declare a DRAW on tick one of every decorative scene.
+                .over = scene.armies.empty()
+                        || rm::sim::survivorCount(scene.armies) <= 1,
+            },
+    };
+    scene.grewThisTick = false;
+    return runner;
+}
+
+/// Advances the match by one fixed tick, and does the work the sim reports back.
 ///
-/// So this is a stand-in, and it is the honest kind: the unit is gone from the screen and
-/// from the fight (`fireWeapons` and `nearestTarget` both skip the dead) while still
-/// occupying a slot. WRECKAGE — a corpse model left on the ground, which is what the game
-/// does and what makes a battlefield readable afterwards — is the real answer and is not
-/// done. Neither is a death explosion, though the blueprints describe one: 99 of the 494
-/// weapons are exactly that, read and deliberately never fired (see WeaponRole::Death).
-void retireDead(UnitScene& scene, const rm::HeightField& field) {
-    for (std::size_t batch = 0; batch < scene.health.size(); ++batch) {
-        for (std::size_t i = 0; i < scene.health[batch].size(); ++i) {
-            if (scene.health[batch][i].alive()) {
-                continue;
-            }
-            if (i >= scene.motion[batch].size() || i >= scene.instances[batch].size()) {
-                continue;
-            }
+/// `tickIndex` paces the opponents' decisions; `now` is passed through to them for their
+/// own logging and reaches nothing in the sim, which counts in ticks and not in seconds.
+rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) {
+    UnitScene& scene = runner.scene;
 
-            // NEWLY dead, which is what a radius still being positive means: retiring a unit
-            // is what zeroes it, so this runs exactly once per death however many ticks the
-            // corpse then sits there. Without it a dead unit would explode every tick
-            // forever, which is both a wrong answer and an unbounded one.
-            const bool newlyDead = scene.motion[batch][i].radiusElmos > 0.0f;
-            const std::array<float, 3> where = scene.instances[batch][i].position;
+    // The opponents decide FIRST, so an order given this tick moves this tick.
+    if (!scene.armies.empty() && !runner.matchOver && tickIndex % kDecisionTicks == 0) {
+        runOpponents(scene, runner.content, runner.field, runner.passability, runner.starts,
+                     runner.markers, runner.scripts, now);
+    }
+    if (scene.grewThisTick) {
+        runner.groups = scene.skirmishGroups();
+        scene.grewThisTick = false;
+    }
 
-            if (newlyDead) {
-                // The scorch it leaves, sized from what died: a commander marks more ground
-                // than a tank. Permanent, because a wreck IS the record of what happened
-                // here and a battlefield that tidied itself up would lose it.
-                rm::appendWreckMark(scene.wreckDecals, field, where,
-                                    scene.motion[batch][i].radiusElmos
-                                        * rm::kWreckMarkRadiusFactor);
+    // ONE call, and the same one both callers make. What used to be here — the order of
+    // movement, collision, aiming, firing, death, defeat and economy — is a fact about
+    // core/sim/Skirmish.cpp rather than about whichever loop you are reading.
+    const rm::sim::TickReport report =
+        rm::sim::tickSkirmish(runner.groups, runner.match, runner.field);
 
-                // And its death explosion, at last. 99 of the 494 shipped weapons are one,
-                // parsed since milestone 18 and never fired until now.
-                const rm::unitdef::UnitDef* def =
-                    batch < scene.defs.size() ? scene.defs[batch] : nullptr;
-                if (def != nullptr && rm::sim::deathWeapon(*def) != nullptr) {
-                    std::vector<rm::sim::CombatGroup> groups = scene.combatGroups();
-                    scene.deathBlastDamage += rm::sim::explodeOnDeath(
-                        *def, where, scene.motion[batch][i].armyIndex, groups, scene.armies);
-                    ++scene.deathBlasts;
-                }
-            }
+    runner.shotsFired += report.shotsFired;
+    scene.deathBlasts += report.deathBlasts;
+    scene.deathBlastDamage += report.deathBlastDamage;
+    if (report.matchEnded) {
+        runner.matchOver = true;
+    }
 
-            scene.instances[batch][i].scale = 0.0f;
-            scene.motion[batch][i].moving = false;
-            scene.motion[batch][i].speedElmosPerSecond = 0.0f;
-            scene.motion[batch][i].radiusElmos = 0.0f;  // and stops shoving the living
+    // The scorch each death leaves, sized from what died: a commander marks more ground
+    // than a tank. Permanent, because a wreck IS the record of what happened here and a
+    // battlefield that tidied itself up would lose it.
+    //
+    // The caller's work rather than the sim's: a decal buffer is a thing the renderer
+    // uploads, and the sim has no business owning one.
+    for (const rm::sim::Death& death : report.died) {
+        rm::appendWreckMark(scene.wreckDecals, runner.field, death.at,
+                            death.radiusElmos * rm::kWreckMarkRadiusFactor);
+    }
+
+    // What finished this tick BECOMES A UNIT: an extractor that is done stands on its
+    // deposit, a factory stands by the base, and a tank rolls off the factory floor.
+    //
+    // The caller's work, and it has to be: a finished construction turns into a model out
+    // of the VFS, which is the one thing the sim cannot do for itself.
+    for (const rm::sim::Construction& work : report.finished) {
+        const auto army = static_cast<std::size_t>(work.armyIndex);
+        if (army >= scene.armies.size()) {
+            continue;
+        }
+        ++runner.completedBuilds;
+        // Face the map centre — a base laid out toward the fight reads as one.
+        const float yaw = std::atan2(runner.field.widthElmos() * 0.5f - work.position[0],
+                                     runner.field.depthElmos() * 0.5f - work.position[2]);
+        const auto spawned = spawnUnit(scene, runner.content, runner.field,
+                                       scene.buildablePaths[work.blueprintIndex],
+                                       work.position, scene.armies[army], yaw);
+        if (spawned && scene.buildable[work.blueprintIndex].isMobile()) {
+            // Off the factory floor: straight to the fight once the wave has gone, to the
+            // rally point outside the base while it forms.
+            const auto target = runner.scripts[army].attackLaunched
+                                    ? nearestEnemyCommander(scene, work.armyIndex,
+                                                            work.position)
+                                    : std::nullopt;
+            const std::array<float, 2> to =
+                target ? std::array<float, 2>{(*target)[0], (*target)[2]}
+                       : rm::sim::rolloffPoint(work.position,
+                                               runner.field.widthElmos() * 0.5f,
+                                               runner.field.depthElmos() * 0.5f);
+            const rm::sim::PassabilityGrid& grid =
+                runner.passability.gridFor(scene.maxSlopeDegrees[spawned->batch],
+                                           scene.maxWaterDepthElmos[spawned->batch]);
+            (void)orderRouted(scene.motion[spawned->batch][spawned->instance],
+                              scene.instances[spawned->batch][spawned->instance], grid,
+                              to[0], to[1]);
         }
     }
+
+    // Rebuild NOW if the spawns above grew the scene, rather than leaving it to the top of
+    // the next tick.
+    //
+    // `groups` holds spans into the per-batch vectors, and a spawn into an existing batch
+    // reallocates the vector it lands in — so on return those spans would point at freed
+    // storage. Nothing noticed while the only reader was the next tick, which rebuilt them
+    // before looking; the first caller to read them straight after the call (the hash log)
+    // segfaulted immediately. Leaving a function with a dangling member is the bug either
+    // way, so it is fixed here rather than guarded at each new reader.
+    if (scene.grewThisTick) {
+        runner.groups = scene.skirmishGroups();
+        scene.grewThisTick = false;
+    }
+
+    return report;
 }
 
 void march(UnitScene& scene, const rm::HeightField& field, PassabilitySet& passability,
            const MarchOptions& options, std::span<const rm::AmbientEmitter> ambient,
-           std::vector<rm::Particle>& dust) {
+           std::vector<rm::Particle>& dust, const rm::vfs::Vfs& content,
+           std::span<const rm::mapinfo::StartPosition> starts,
+           std::span<const rm::scenario::Marker> markers) {
     std::size_t routed = 0;
     std::size_t total = 0;
-    std::size_t shotsFired = 0;
-    std::size_t completedBuilds = 0;
-    bool matchOver = false;
     std::vector<bool> announced(scene.armies.size(), false);
-    for (std::size_t batch = 0; batch < scene.motion.size(); ++batch) {
-        for (std::size_t i = 0; i < scene.motion[batch].size(); ++i) {
-            ++total;
-            const rm::sim::PassabilityGrid& grid =
-                passability.gridFor(scene.maxSlopeDegrees[batch], scene.maxWaterDepthElmos[batch]);
-            if (orderRouted(scene.motion[batch][i], scene.instances[batch][i], grid, options.x,
-                            options.z)) {
-                ++routed;
+    // `--march` sends everything at one point; `--play` lets the match decide.
+    if (options.orderAll) {
+        for (std::size_t batch = 0; batch < scene.motion.size(); ++batch) {
+            for (std::size_t i = 0; i < scene.motion[batch].size(); ++i) {
+                ++total;
+                const rm::sim::PassabilityGrid& grid = passability.gridFor(
+                    scene.maxSlopeDegrees[batch], scene.maxWaterDepthElmos[batch]);
+                if (orderRouted(scene.motion[batch][i], scene.instances[batch][i], grid,
+                                options.x, options.z)) {
+                    ++routed;
+                }
             }
         }
     }
@@ -2171,10 +2771,18 @@ void march(UnitScene& scene, const rm::HeightField& field, PassabilitySet& passa
     // to land on exactly the same state every run.
     const auto ticks = static_cast<int>(options.seconds
                                         * static_cast<float>(rm::sim::kTicksPerSecond));
-    std::vector<rm::sim::CollisionGroup> groups;
-    groups.reserve(scene.instances.size());
-    for (std::size_t batch = 0; batch < scene.instances.size(); ++batch) {
-        groups.push_back(rm::sim::CollisionGroup{scene.instances[batch], scene.motion[batch]});
+
+    // The caller-side tick, shared with the windowed frame loop. See MatchRunner.
+    MatchRunner runner =
+        makeMatchRunner(scene, field, passability, content, starts, markers);
+
+    // Per-tick state hashes, kept when this run has been asked to record or check them.
+    // Reserved up front so the recording cannot itself perturb what it measures by
+    // reallocating mid-match.
+    const bool hashing = !options.hashLogPath.empty() || !options.checkHashLogPath.empty();
+    std::vector<rm::StateHash> hashes;
+    if (hashing) {
+        hashes.reserve(static_cast<std::size_t>(ticks));
     }
 
     constexpr float kTickSeconds = 1.0f / static_cast<float>(rm::sim::kTicksPerSecond);
@@ -2184,103 +2792,54 @@ void march(UnitScene& scene, const rm::HeightField& field, PassabilitySet& passa
     std::vector<rm::DustEmitter> emitters;
 
     for (int i = 0; i < ticks; ++i) {
-        for (std::size_t batch = 0; batch < scene.instances.size(); ++batch) {
-            rm::sim::tick(scene.instances[batch], scene.motion[batch], field);
-        }
-        rm::sim::resolveCollisions(groups, field);
+        const float now = static_cast<float>(i) * kTickSeconds;
 
-        // COMBAT, after the move: a unit shoots from where it has got to this tick, not
-        // from where it started. Order matters for a closing engagement — firing first
-        // would let a unit shoot from outside a range it is about to enter.
+        // ONE call, and the same one the windowed frame loop makes: the opponents'
+        // decisions, the sim's tick, the wrecks, and the finished builds that become
+        // units. See MatchRunner for what is deliberately left to each caller.
+        const rm::sim::TickReport report = advanceMatch(runner, i, now);
+
+        // Fingerprinted after the WHOLE caller-side tick, which deliberately includes the
+        // units a finished construction spawned: what got built is part of what the match
+        // did, and a hash that stopped at the sim's own passes would agree about two runs
+        // that built different things. The renderer's side stays out on its own — the decal
+        // buffer is not reachable from a group or a match, so `hashMatch` cannot see it.
+        if (hashing) {
+            hashes.push_back(rm::sim::hashMatch(runner.groups, runner.match));
+        }
+
         if (!scene.armies.empty()) {
-            std::vector<rm::sim::CombatGroup> combat = scene.combatGroups();
 
-            // AIM BEFORE FIRING. An unturreted weapon may only shoot along the hull, so a
-            // unit that has stopped facing the wrong way has to be brought round first —
-            // otherwise the facing gate below reads as a weapon that simply does not work.
-            for (std::size_t batch = 0; batch < scene.instances.size(); ++batch) {
-                (void)rm::sim::aimAtTargets(
-                    scene.instances[batch], scene.motion[batch],
-                    batch < scene.defs.size() ? scene.defs[batch] : nullptr, combat,
-                    scene.armies);
-            }
-
-            shotsFired += rm::sim::fireWeapons(combat, scene.armies, scene.projectiles);
-            rm::sim::advanceProjectiles(scene.projectiles, combat, scene.armies, field);
-            retireDead(scene, field);
-
-            // The match, checked every tick rather than at the end: an army that loses its
-            // commander stops being a target and stops shooting from that moment, which is
-            // what `hostile()` already reads, so a late check would leave a dead side
-            // fighting on.
-            const std::vector<int> alive = scene.countCommanders();
-            if (rm::sim::applyDefeats(scene.armies, alive, scene.commandersEver) > 0) {
-                for (const rm::sim::Army& army : scene.armies) {
-                    if (army.defeated && !announced[static_cast<std::size_t>(army.index)]) {
-                        announced[static_cast<std::size_t>(army.index)] = true;
-                        std::printf("  [%6.1fs] army %d (%s) has lost its commander\n",
-                                    static_cast<double>(static_cast<float>(i)
-                                                        * rm::sim::kTickSeconds),
-                                    army.index,
-                                    std::string{rm::sim::factionName(army.faction)}.c_str());
-                    }
+            // What the tick decided, announced. The decisions themselves are the sim's;
+            // saying them out loud is this run's, which is why only the printing is left.
+            for (const rm::sim::Army& army : scene.armies) {
+                if (army.defeated && !announced[static_cast<std::size_t>(army.index)]) {
+                    announced[static_cast<std::size_t>(army.index)] = true;
+                    std::printf("  [%6.1fs] army %d (%s) has lost its commander\n",
+                                static_cast<double>(now), army.index,
+                                std::string{rm::sim::factionName(army.faction)}.c_str());
                 }
             }
-            if (!matchOver && !scene.armies.empty()) {
-                const std::optional<int> winner = rm::sim::winningTeam(scene.armies);
-                const std::size_t left = rm::sim::survivorCount(scene.armies);
-                if (left <= 1) {
-                    matchOver = true;
-                    if (winner) {
-                        std::printf("  [%6.1fs] team %d WINS\n",
-                                    static_cast<double>(static_cast<float>(i)
-                                                        * rm::sim::kTickSeconds),
-                                    *winner);
-                    } else {
-                        std::printf("  [%6.1fs] a DRAW: every army lost its commander\n",
-                                    static_cast<double>(static_cast<float>(i)
-                                                        * rm::sim::kTickSeconds));
-                    }
+            if (report.matchEnded) {
+                if (report.winner) {
+                    std::printf("  [%6.1fs] team %d WINS\n", static_cast<double>(now),
+                                *report.winner);
+                } else {
+                    std::printf("  [%6.1fs] a DRAW: every army lost its commander\n",
+                                static_cast<double>(now));
                 }
             }
         }
 
-        // The economy, per army. Constructions are partitioned by owner here rather than
-        // held per army, because `tickEconomy` is documented to be given one army's work
-        // and charging the wrong one is a caller's mistake to avoid.
-        for (std::size_t army = 0; army < scene.economies.size(); ++army) {
-            std::vector<rm::sim::Construction> mine;
-            for (const rm::sim::Construction& work : scene.building) {
-                if (work.armyIndex == static_cast<int>(army)) {
-                    mine.push_back(work);
-                }
+        // What finished this tick, narrated. The spawning itself is `advanceMatch`'s, so
+        // that the windowed loop gets the buildings too; only saying so is this run's.
+        for (const rm::sim::Construction& work : report.finished) {
+            const auto army = static_cast<std::size_t>(work.armyIndex);
+            if (army >= scene.armies.size()) {
+                continue;
             }
-            rm::sim::tickEconomy(scene.economies[army], mine);
-
-            // Written back, and the finished ones start paying: an extractor that is done
-            // adds its production to the army that built it, which is the loop closing.
-            std::size_t at = 0;
-            for (rm::sim::Construction& work : scene.building) {
-                if (work.armyIndex != static_cast<int>(army)) {
-                    continue;
-                }
-                const bool wasFinished = work.finished();
-                work = mine[at++];
-                if (!wasFinished && work.finished()) {
-                    // What it produces starts arriving, and what it COSTS to run starts
-                    // being charged. An extractor makes 2 mass a second and burns 2 energy
-                    // doing it, so the second one is what makes power generation a decision
-                    // rather than a formality.
-                    const rm::unitdef::UnitDef& built = scene.buildable[work.blueprintIndex];
-                    scene.economies[army].incomePerSecond.mass += built.producesMassPerSecond;
-                    scene.economies[army].incomePerSecond.energy +=
-                        built.producesEnergyPerSecond;
-                    scene.economies[army].upkeepPerSecond.energy += built.upkeepEnergyPerSecond;
-                    scene.economies[army].storage.mass += built.storageMass;
-                    scene.economies[army].storage.energy += built.storageEnergy;
-                    ++completedBuilds;
-                }
-            }
+            std::printf("  [%6.1fs] army %zu completes %s\n", static_cast<double>(now), army,
+                        scene.buildable[work.blueprintIndex].name.c_str());
         }
 
         // Dust as the walk happens, aged as the walk continues, so what a capture
@@ -2312,13 +2871,76 @@ void march(UnitScene& scene, const rm::HeightField& field, PassabilitySet& passa
         scene.batches[batch].animationDrivenByInstance = true;
     }
 
+    // --- Determinism ---------------------------------------------------------
+    //
+    // Written before the summaries below, so that a run whose whole purpose was the
+    // artifact says whether it got one before saying anything else.
+    if (hashing) {
+        rm::sim::ReplayHeader header;
+        header.ticksPerSecond = rm::sim::kTicksPerSecond;
+        header.widthsFingerprint = rm::sim::widthsFingerprint();
+        header.tickCount = hashes.size();
+
+        if (!options.checkHashLogPath.empty()) {
+            const auto recorded = rm::sim::readHashLog(options.checkHashLogPath);
+            if (!recorded) {
+                std::printf("determinism: cannot read %s — %s\n",
+                            options.checkHashLogPath.c_str(),
+                            recorded.error().message.c_str());
+            } else {
+                const rm::sim::Divergence heads =
+                    rm::sim::compareHeaders(recorded->header, header);
+                if (heads.incomparable) {
+                    std::printf("determinism: NOT COMPARABLE — %s\n", heads.why.c_str());
+                } else {
+                    const rm::sim::Divergence d =
+                        rm::sim::compareHashes(recorded->hashes, hashes);
+                    if (!d.diverged) {
+                        std::printf("determinism: MATCH — %zu ticks identical to %s\n",
+                                    hashes.size(), options.checkHashLogPath.c_str());
+                    } else {
+                        // The first divergent tick, which is the only one with diagnostic
+                        // value: every later tick is downstream of it.
+                        std::printf("determinism: DIVERGED at tick %llu —"
+                                    " recorded %016llx, this run %016llx\n",
+                                    static_cast<unsigned long long>(d.tick),
+                                    static_cast<unsigned long long>(d.recorded),
+                                    static_cast<unsigned long long>(d.replayed));
+                        if (!d.why.empty()) {
+                            std::printf("            %s\n", d.why.c_str());
+                        }
+                        std::printf("            re-run with --hash-log to capture this"
+                                    " run, then diff the two files at that line\n");
+                    }
+                }
+            }
+        }
+
+        if (!options.hashLogPath.empty()) {
+            const auto written =
+                rm::sim::writeHashLog(options.hashLogPath, header, hashes);
+            if (written) {
+                std::printf("determinism: %zu tick hashes written to %s\n", hashes.size(),
+                            options.hashLogPath.c_str());
+            } else {
+                std::printf("determinism: cannot write %s — %s\n",
+                            options.hashLogPath.c_str(), written.error().message.c_str());
+            }
+        }
+    }
+
     // Saying how many found a route matters on a map like aw04, where most
     // units are on islands: a unit that cannot walk there stays put, and
     // without this line that reads as the sim being broken.
-    std::printf("march: %zu of %zu units routed to (%.0f, %.0f), %d ticks simulated,"
-                " %zu dust particles still in the air\n",
-                routed, total, static_cast<double>(options.x), static_cast<double>(options.z),
-                ticks, dust.size());
+    if (options.orderAll) {
+        std::printf("march: %zu of %zu units routed to (%.0f, %.0f), %d ticks simulated,"
+                    " %zu dust particles still in the air\n",
+                    routed, total, static_cast<double>(options.x),
+                    static_cast<double>(options.z), ticks, dust.size());
+    } else {
+        std::printf("play: %d ticks simulated, %zu dust particles still in the air\n", ticks,
+                    dust.size());
+    }
 
     if (!scene.armies.empty()) {
         // What the fight came to. Reported rather than inferred from a screenshot,
@@ -2338,8 +2960,25 @@ void march(UnitScene& scene, const rm::HeightField& field, PassabilitySet& passa
 
         std::printf("combat: %zu shots fired, %zu in flight, %zu unit(s) destroyed,"
                     " %.0f of %.0f hp left\n",
-                    shotsFired, scene.projectiles.size(), dead.size(),
+                    runner.shotsFired, scene.projectiles.size(), dead.size(),
                     static_cast<double>(remaining), static_cast<double>(maximum));
+
+        // Each commander's state, because the match hangs on exactly these numbers
+        // and "the fight is still on" and "the fight never reached anyone" read the
+        // same from the aggregate.
+        for (std::size_t batch = 0; batch < scene.instances.size(); ++batch) {
+            const rm::unitdef::UnitDef* def =
+                batch < scene.defs.size() ? scene.defs[batch] : nullptr;
+            if (def == nullptr || !rm::sim::isCommanderId(def->name)) {
+                continue;
+            }
+            for (std::size_t u = 0; u < scene.instances[batch].size(); ++u) {
+                std::printf("  army %d commander: %.0f of %.0f hp\n",
+                            scene.motion[batch][u].armyIndex,
+                            static_cast<double>(scene.health[batch][u].current),
+                            static_cast<double>(scene.health[batch][u].maximum));
+            }
+        }
         if (scene.deathBlasts > 0 || !scene.wreckDecals.empty()) {
             std::printf("wreckage: %zu scorch mark(s), %zu death explosion(s) dealing"
                         " %.0f damage\n",
@@ -2353,7 +2992,7 @@ void march(UnitScene& scene, const rm::HeightField& field, PassabilitySet& passa
         std::printf("economy: %zu of %zu build(s) complete; army 0 holds %.0f mass /"
                     " %.0f energy, earning %.1f / %.1f a second against %.1f energy of"
                     " upkeep, %.0f%% funded\n",
-                    completedBuilds, scene.building.size(),
+                    runner.completedBuilds, scene.building.size(),
                     static_cast<double>(first.stored.mass),
                     static_cast<double>(first.stored.energy),
                     static_cast<double>(first.incomePerSecond.mass),
@@ -2457,6 +3096,31 @@ void focusOnFirstUnit(Target& target, const UnitScene& scene, float radiiBack) {
     const rm::UnitInstance& first = batch.instances.front();
     target.focusOn(first.position,
                    std::max(batch.model->radius, 1.0f) * radiiBack * first.scale);
+}
+
+/// `--look X Z RADIUS`: aim a capture at a world point, framed to show RADIUS elmos
+/// around it. A match's stages happen at one base or the other, and neither is the
+/// first unit `--focus` knows how to find.
+struct LookOptions {
+    bool enabled = false;
+    float x = 0.0f;
+    float z = 0.0f;
+    float radiusElmos = 300.0f;
+};
+
+[[nodiscard]] LookOptions parseLook(int argc, const char* argv[]) {
+    LookOptions options;
+    for (int i = 2; i + 3 < argc; ++i) {
+        if (std::string{argv[i]} != "--look") {
+            continue;
+        }
+        options.enabled = true;
+        options.x = static_cast<float>(std::atof(argv[i + 1]));
+        options.z = static_cast<float>(std::atof(argv[i + 2]));
+        options.radiusElmos = static_cast<float>(std::atof(argv[i + 3]));
+        break;
+    }
+    return options;
 }
 
 struct BenchOptions {
@@ -2787,9 +3451,16 @@ int main(int argc, const char* argv[]) {
 
         // `--skirmish`: one commander per start position, each its own army. Appended
         // to whatever `--units` asked for rather than replacing it, so a scene can
-        // hold both a match and a crowd of test units.
+        // hold both a match and a crowd of test units. `--armies N` takes the first N
+        // start positions instead of all of them — a stock map declares up to eight,
+        // and the match milestone 20 describes is a duel.
+        std::span<const rm::mapinfo::StartPosition> starts{map->starts};
+        const std::size_t armiesCap = parseCount(argc, argv, "--armies");
+        if (armiesCap > 0 && armiesCap < starts.size()) {
+            starts = starts.first(armiesCap);
+        }
         if (hasFlag(argc, argv, "--skirmish")) {
-            spawnCommanders(units, map->field, map->starts, content);
+            spawnCommanders(units, map->field, starts, content);
             orderFirstExtractors(units, map->markers, content);
         }
 
@@ -2868,7 +3539,8 @@ int main(int argc, const char* argv[]) {
 
         const MarchOptions marchOptions = parseMarch(argc, argv);
         if (marchOptions.enabled) {
-            march(units, map->field, passability, marchOptions, props.ambient, marchDust);
+            march(units, map->field, passability, marchOptions, props.ambient, marchDust,
+                  content, starts, map->markers);
         }
 
         // Full detail up to the vertex budget, halved per doubling beyond it —
@@ -2952,6 +3624,11 @@ int main(int argc, const char* argv[]) {
             if (focus > 0.0f) {
                 focusOnFirstUnit(renderer, units, focus);
             }
+            const LookOptions look = parseLook(argc, argv);
+            if (look.enabled) {
+                renderer.focusOn({look.x, map->field.heightAtWorld(look.x, look.z), look.z},
+                                 look.radiusElmos);
+            }
 
             // Selection rings need a selection, and a headless run has no
             // clicks. `--select N` rings the first N units so that what a
@@ -2988,7 +3665,7 @@ int main(int argc, const char* argv[]) {
                 // cannot be screenshotted any more than a left-click can, and
                 // --march already names the destination, so the flag that orders
                 // the move is also the one that marks it.
-                if (marchOptions.enabled) {
+                if (marchOptions.enabled && marchOptions.orderAll) {
                     rm::appendOrderMarker(vertices, map->field,
                                           {{marchOptions.x, 0.0f, marchOptions.z}},
                                           kOrderMarkerColour, /*age=*/0.0f);
@@ -3096,6 +3773,26 @@ int main(int argc, const char* argv[]) {
         // rebuilt from this list every frame.
         std::vector<rm::SelectionEntry> selected;
         rm::sim::TickClock clock;
+
+        // The caller-side tick, the same one `march()` drives. Built here rather than in
+        // the frame callback because a match is decided on one tick and stays decided, and
+        // the opponents remember what they have already started.
+        MatchRunner runner =
+            makeMatchRunner(units, map->field, passability, content, starts, map->markers);
+        // Match time in TICKS, for pacing the opponents' decisions. Counted rather than
+        // read off `matchSeconds`, so a dropped frame cannot skip a decision or run one
+        // twice.
+        //
+        // Seeded from the pre-run, because `--play` simulates N seconds headless before
+        // the window opens and the window then continues the SAME match: an opponent
+        // announcing its attack at 0.0s in a match already 500 seconds old reads as a bug
+        // in the opponent. Only the logging sees this number — the sim counts its own
+        // ticks.
+        int matchTicks =
+            marchOptions.enabled
+                ? static_cast<int>(marchOptions.seconds
+                                   * static_cast<float>(rm::sim::kTicksPerSecond))
+                : 0;
 
         // Where the last few orders landed, and when. Markers expire on their own
         // (GroundDecals.hpp), so this only ever grows to the number of orders
@@ -3244,23 +3941,47 @@ int main(int argc, const char* argv[]) {
 
             matchSeconds += elapsed;
             const int ticks = clock.advance(elapsed);
-            // Built once, outside the tick loop: the spans do not move, only
-            // what they point at.
-            std::vector<rm::sim::CollisionGroup> groups;
-            groups.reserve(units.instances.size());
-            for (std::size_t batch = 0; batch < units.instances.size(); ++batch) {
-                groups.push_back(rm::sim::CollisionGroup{units.instances[batch],
-                                                         units.motion[batch]});
+
+            // How many batches the renderer currently knows about. A finished
+            // construction spawns its unit into a NEW batch when nothing of that
+            // blueprint stands yet, and `setInstances` silently drops a batch index it
+            // was never given (Renderer.hpp) — so without noticing the growth here, a
+            // building would exist in the sim, fight, earn, and never be drawn.
+            const std::size_t batchesBefore = units.batches.size();
+
+            // THE SAME TICK the headless pre-run makes. This loop used to call
+            // `sim::tick` and `resolveCollisions` and nothing else, so a unit in the
+            // interactive game moved perfectly and never fired a shot — while the whole
+            // suite stayed green, because every rule was tested and the assembly of them
+            // was not. Both callers now go through `advanceMatch`, which is what makes
+            // "the same game" checkable rather than remembered.
+            for (int i = 0; i < ticks; ++i) {
+                const rm::sim::TickReport report =
+                    advanceMatch(runner, matchTicks, static_cast<float>(matchTicks)
+                                                         * rm::sim::kTickSeconds);
+                ++matchTicks;
+
+                // The match, announced once. The frame loop draws the fight rather than
+                // narrating it, so this is the one thing worth saying out loud — and only
+                // when there is a match to decide, the same guard the pre-run uses.
+                if (report.matchEnded && !units.armies.empty()) {
+                    if (report.winner) {
+                        std::printf("team %d WINS\n", *report.winner);
+                    } else {
+                        std::printf("a DRAW: every army lost its commander\n");
+                    }
+                    std::fflush(stdout);
+                }
             }
 
-            for (int i = 0; i < ticks; ++i) {
-                for (std::size_t batch = 0; batch < units.instances.size(); ++batch) {
-                    rm::sim::tick(units.instances[batch], units.motion[batch], map->field);
+            // Re-upload when the match built something new. Only on growth, which is a
+            // handful of times in a whole match — this walks every model and texture, so
+            // doing it per frame would cost what it costs to load the scene.
+            if (units.batches.size() != batchesBefore) {
+                for (std::size_t b = batchesBefore; b < units.batches.size(); ++b) {
+                    units.batches[b].animationDrivenByInstance = true;
                 }
-                // Every model at once. Run per batch, two units of different
-                // models can stand in exactly the same spot with neither
-                // pass able to see the other.
-                rm::sim::resolveCollisions(groups, map->field);
+                window.setUnits(units.textures.all(), units.batches);
             }
 
             for (std::size_t batch = 0; batch < units.instances.size(); ++batch) {
