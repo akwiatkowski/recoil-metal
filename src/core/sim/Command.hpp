@@ -41,10 +41,11 @@ class UnitStore;
 // behaviour. `applyCommand` is the behaviour, and it is one function so that a human's order
 // and a script's are not merely similar but identical — the property §7 P2.5 asks to be tested.
 //
-// WHAT THIS IS NOT. It is not a command QUEUE. Recoil's `CCommandAI` holds a per-unit deque of
-// pending orders and is the right shape for shift-queued waypoints and build lists (§6.4), and
-// this is not that: a command here is applied on the tick it names and is then history. The
-// queue is P6's, and it will be built out of these rather than instead of them.
+// AND IT IS NOW A QUEUE TOO (§6.4, §7 P4.1). This comment used to say the opposite — "a command
+// here is applied on the tick it names and is then history" — and that is no longer true: a
+// command goes into the unit's `CommandQueue`, and `advanceOrders` starts the next one when the
+// current finishes. The queue was built out of commands rather than instead of them, exactly as
+// the note predicted.
 
 /// What an order asks for.
 ///
@@ -123,11 +124,46 @@ struct Command {
 ///
 /// `building` may be null — a decorative crowd has no construction list — in which case a
 /// `Build` command is refused rather than crashing.
+///
+/// `queued` is the shift key (§7 P4.1). Without it the order REPLACES the unit's queue and is
+/// started at once; with it the order goes behind whatever is already there — or CANCELS a
+/// matching one, which is `CommandQueue::give`'s job and Recoil's behaviour.
+///
+/// THE TWO ARE VALIDATED DIFFERENTLY, and the asymmetry is deliberate rather than an oversight.
+/// A plain order is routed here and now, so an unroutable one is refused and *nothing changes*
+/// — the queue is not even cleared, which is what keeps "a refused order is not part of the
+/// match" true. A queued order cannot be validated at all: the unit will be somewhere else by
+/// the time it starts, so a route computed now would be a route from the wrong place. It is
+/// checked when it is reached, and an order that cannot be started then is dropped and the next
+/// one tried (`advanceOrders`). Recoil validates queued orders no earlier either.
 [[nodiscard]] bool applyCommand(const Command& command, UnitStore& store,
                                 const UnitCatalog& catalog, std::span<const Player> players,
                                 std::span<const Army> armies, const Terrain& terrain,
                                 const PassabilityGrid& grid, TickRate rate,
-                                std::vector<Construction>* building = nullptr);
+                                std::vector<Construction>* building = nullptr,
+                                bool queued = false);
+
+/// Starts the next order for every unit that has finished its current one.
+///
+/// Returns how many orders were started, which is what a test asserts on and a caller reports.
+///
+/// NO `players` ARGUMENT, and that is the point: authorisation happened when the order was
+/// given. A queue holds orders that were already allowed, so starting one asks about the world
+/// and not about who is at the keyboard — and a player who leaves mid-match does not strand a
+/// unit halfway along a route it was legitimately sent on.
+///
+/// COMPLETION IS DEFINED HERE because only the caller of the passes can know it. A `Move` or
+/// `Attack` is finished when the unit has stopped moving; a `Build` and a `Stop` are finished
+/// the moment they are started, since neither occupies the unit afterwards. An order that
+/// cannot be started — a route that no longer exists, a target that died — is dropped and the
+/// next one tried in the same tick, so a dead waypoint does not stall a route.
+///
+/// `gridForType` is indexed by `UnitTypeIndex` and may hold nulls: passability is a property of
+/// the motion class (P3.4), so a hover tank and a bot route on different grids and a unit whose
+/// grid is missing is left alone rather than routed on somebody else's.
+std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Terrain& terrain,
+                          std::span<const PassabilityGrid* const> gridForType, TickRate rate,
+                          std::vector<Construction>* building = nullptr);
 
 // --- The log --------------------------------------------------------------------------
 //

@@ -140,6 +140,31 @@ void feedHealth(StateHash& h, const Health& health) noexcept {
     }
 }
 
+/// A unit's outstanding orders (§7 P4.1).
+///
+/// FED, because a queue is sim state in the strongest sense: two units standing in the same
+/// place with the same health will end up in different places if one of them has three
+/// waypoints left and the other none. A hash blind to the queue would call a match identical
+/// right up to the tick the routes diverged, which is the failure mode the whole harness exists
+/// to prevent — it would report the divergence late, at the movement, rather than at its cause.
+///
+/// Field by field rather than as a struct, on the same rule as everything else here: `Command`
+/// is trivially copyable but its padding is unspecified, and hashing padding would make the
+/// result depend on the compiler.
+void feedOrders(StateHash& h, const CommandQueue& orders) noexcept {
+    feed(h, orders.size());
+    for (const Command& command : orders.orders()) {
+        feed(h, command.tick);
+        feed(h, command.player);
+        feed(h, static_cast<std::uint8_t>(command.kind));
+        feed(h, static_cast<std::size_t>(command.unit.index));
+        feed(h, static_cast<std::size_t>(command.unit.generation));
+        feed(h, command.targetX);
+        feed(h, command.targetZ);
+        feed(h, static_cast<std::size_t>(command.buildType));
+    }
+}
+
 } // namespace
 
 StateHash hashMatch(const UnitStore& store, const Match& match) {
@@ -152,11 +177,13 @@ StateHash hashMatch(const UnitStore& store, const Match& match) {
     const std::span<const Transform> transforms = store.transforms();
     const std::span<const MoveState> motion = store.motion();
     const std::span<const Health> healths = store.health();
+    const std::span<const CommandQueue> orders = store.orders();
 
     for (UnitIndex slot = 0; slot < store.slotCount(); ++slot) {
         feedTransform(h, transforms[slot]);
         feedMotion(h, motion[slot]);
         feedHealth(h, healths[slot]);
+        feedOrders(h, orders[slot]);
         // The type, and who is in the slot. The type stands in for the definition — a def is
         // content loaded from disk and identical across two runs of the same log by
         // construction, so hashing its contents would fingerprint the install rather than the

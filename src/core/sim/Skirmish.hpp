@@ -3,6 +3,7 @@
 #include "core/map/HeightField.hpp"
 #include "core/sim/Army.hpp"
 #include "core/sim/Combat.hpp"
+#include "core/sim/Command.hpp"
 #include "core/sim/Economy.hpp"
 #include "core/sim/Movement.hpp"
 #include "core/sim/UnitCatalog.hpp"
@@ -59,6 +60,19 @@ struct Match {
     /// charging the wrong one is a caller's mistake to avoid.
     std::vector<Construction>* building = nullptr;
 
+    /// The grid each unit TYPE routes on, indexed by `UnitTypeIndex`. Entries may be null.
+    ///
+    /// PER TYPE, not one for the match, because P3.4 made passability a property of the motion
+    /// class: an Aeon hover tank crosses water a Cybran bot walks around, and a queued route
+    /// computed on somebody else's grid would send one of them into the sea. The caller already
+    /// keys its grids on the limits, so this is a lookup table it can fill in a loop over the
+    /// catalog.
+    ///
+    /// HERE RATHER THAN IN `tickSkirmish`'s SIGNATURE because it belongs to the match: the
+    /// grids are built from the map the match is played on. Empty means queued orders are not
+    /// advanced at all, which is exactly right for a `--units` crowd that cannot have any.
+    std::span<const PassabilityGrid* const> passability;
+
     /// How many commanders each army STARTED with, indexed by army.
     ///
     /// The win condition needs it to tell "lost its commander" from "never had one": a
@@ -102,6 +116,14 @@ struct Death {
 /// callers react differently: the pre-run prints them, the frame loop draws them.
 struct TickReport {
     std::size_t shotsFired = 0;
+
+    /// Queued orders started this tick — a unit reaching the next waypoint of a shift-queued
+    /// route, or a builder taking the next item off its list.
+    ///
+    /// Reported rather than kept quiet because it is the only outward sign that a queue is
+    /// draining: a route that stalls looks exactly like a unit that has arrived, and this is
+    /// what tells the two apart.
+    std::size_t ordersStarted = 0;
 
     /// Who died this tick, reported exactly once each.
     ///

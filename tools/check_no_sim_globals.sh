@@ -45,8 +45,14 @@ for file in $files; do
     fi
 
     # `static` locals: same hazard, function scope.
+    #
+    # Comment lines are skipped, the same way the file-scope check above skips them. That is
+    # not a loophole: a comment is not state, and the alternative is that describing what
+    # Recoil's `static` command-description cache does fails the check that exists because of
+    # it. A `static` sharing a line with real code is still caught by the check above.
     statics=$(grep -nE '(^|[[:space:]])static[[:space:]]' "$file" \
-        | grep -vE 'constexpr|const |static_cast|static_assert' || true)
+        | grep -vE 'constexpr|const |static_cast|static_assert' \
+        | grep -vE '^\s*[0-9]+:\s*(//|\*|/\*)' || true)
     if [ -n "$statics" ]; then
         echo "FAIL: $file has mutable static state."
         echo "$statics" | sed 's/^/        /'

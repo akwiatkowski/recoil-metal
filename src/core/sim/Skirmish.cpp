@@ -148,6 +148,13 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
                         const Terrain& terrain, TickRate rate) {
     TickReport report;
 
+    // 0. THE ORDER QUEUES, before anything moves (§7 P4.1). A unit that finished its order last
+    //    tick starts the next one now, so a shift-queued route runs waypoint to waypoint
+    //    without a gap the player can see. First in the tick for the same reason the scripted
+    //    opponents decide first: an order started this tick should move this tick.
+    report.ordersStarted = advanceOrders(store, catalog, terrain, match.passability, rate,
+                                         match.building);
+
     // 1. MOVEMENT, then collisions. Everything downstream reads where a unit has got to
     //    this tick rather than where it started it.
     //

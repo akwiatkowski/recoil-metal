@@ -14,6 +14,7 @@ UnitId UnitStore::spawn(const Spawn& request) {
         motion_.emplace_back();
         health_.emplace_back();
         types_.emplace_back();
+        orders_.emplace_back();
         generations_.emplace_back();
     }
 
@@ -21,6 +22,11 @@ UnitId UnitStore::spawn(const Spawn& request) {
     motion_[slot] = request.motion;
     health_[slot] = request.health;
     types_[slot] = request.type;
+    // CLEARED HERE rather than in `kill`, which is the tombstone rule applied to orders: a
+    // corpse keeps its arrays so the death blast can read them, and a slot is only wiped when
+    // something new moves in. A queue left behind would have the newcomer inherit the dead
+    // unit's route — the same class of bug `UnitId`'s generation exists to prevent.
+    orders_[slot].clear();
     generations_[slot] = id.generation;
     return id;
 }

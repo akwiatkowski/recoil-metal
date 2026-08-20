@@ -37,6 +37,27 @@ namespace {
     return army >= armies.size() || !armies[army].defeated;
 }
 
+/// Applies one order to the world, without touching the queue. Defined at the foot of the file,
+/// declared here because both `applyCommand` and `advanceOrders` need it.
+///
+/// Split out of `applyCommand` for §7 P4.1: the queue has to start an order it has been
+/// holding, and that is the same act as applying a fresh one minus the authorisation and the
+/// queueing. Sharing it is what stops a queued route behaving differently from a clicked one.
+[[nodiscard]] bool startCommand(const Command& command, UnitStore& store,
+                                const UnitCatalog& catalog, const Terrain& terrain,
+                                const PassabilityGrid& grid, TickRate rate,
+                                std::vector<Construction>* building);
+
+/// Whether an order is finished the moment it is started.
+///
+/// `Stop` and `Build` are: neither occupies the unit afterwards — a stop is instantaneous by
+/// definition, and a construction is paid for by the economy rather than attended by the
+/// builder. `Move` and `Attack` are not, and the unit's `moving` flag is what says when they
+/// are done.
+[[nodiscard]] bool instantaneous(CommandKind kind) noexcept {
+    return kind == CommandKind::Stop || kind == CommandKind::Build;
+}
+
 [[nodiscard]] const char* kindName(CommandKind kind) noexcept {
     switch (kind) {
     case CommandKind::Move:
@@ -77,7 +98,7 @@ bool operator==(const Command& a, const Command& b) noexcept {
 bool applyCommand(const Command& command, UnitStore& store, const UnitCatalog& catalog,
                   std::span<const Player> players, std::span<const Army> armies,
                   const Terrain& terrain, const PassabilityGrid& grid, TickRate rate,
-                  std::vector<Construction>* building) {
+                  std::vector<Construction>* building, bool queued) {
     // A stale handle first, before anything else looks at the slot. A player may click a unit
     // that died on the tick their order was issued, and a replay of an old log may name a unit
     // that no longer exists — in both cases the generation has moved on, so this must not
@@ -91,6 +112,117 @@ bool applyCommand(const Command& command, UnitStore& store, const UnitCatalog& c
         return false;
     }
 
+    CommandQueue& orders = store.orders()[command.unit.index];
+
+    // A STOP IS NOT A QUEUED ORDER HERE, shift or no shift. Recoil allows one — its comment at
+    // `CommandAI.cpp:996` says as much, with an exclamation mark — and it needs to, because it
+    // has a wait command that a queued stop interacts with. We have none, so a queued stop
+    // would be an order to stand still at some future point in a route, which is what deleting
+    // the rest of the route already means. It clears and stops.
+    if (command.kind == CommandKind::Stop) {
+        orders.clear();
+        return startCommand(command, store, catalog, terrain, grid, rate, building);
+    }
+
+    if (queued) {
+        switch (orders.give(command, true)) {
+        case CommandQueue::Result::CancelledCurrent: {
+            // The order the unit was carrying out has been taken away, so it has to be
+            // interrupted as well as forgotten. Recoil pushes a stop to the front and lets its
+            // own slow update pick it up (`:1044-1049`); stopping here and starting whatever
+            // is next reaches the same state one tick sooner.
+            MoveState& motion = store.motion()[command.unit.index];
+            motion.moving = false;
+            motion.path.clear();
+            motion.pathIndex = 0;
+            if (const Command* next = orders.current()) {
+                (void)startCommand(*next, store, catalog, terrain, grid, rate, building);
+            }
+            return true;
+        }
+        case CommandQueue::Result::Appended:
+        case CommandQueue::Result::Cancelled:
+        case CommandQueue::Result::Replaced:
+            // Appended or cancelled, and either way the order took. `Replaced` cannot happen
+            // on this branch — `give` only returns it for an unqueued order — and is listed so
+            // that adding a `Result` is a compile error rather than a silent fall-through.
+            return true;
+        }
+        return true;
+    }
+
+    // A PLAIN ORDER IS ROUTED BEFORE IT IS QUEUED, so that a refused one changes nothing at
+    // all — not even clearing the queue. That is what keeps "a refused order is not part of the
+    // match" true, and it is why this cannot simply be `give` followed by `startCommand`.
+    if (!startCommand(command, store, catalog, terrain, grid, rate, building)) {
+        return false;
+    }
+    (void)orders.give(command, false);
+    // A `Build` is over the moment it is started, so leaving it at the head of the queue would
+    // make the builder look busy for a tick. `advanceOrders` would clear it next tick anyway;
+    // doing it here keeps "the head of the queue is what the unit is doing" true every tick.
+    if (instantaneous(command.kind)) {
+        orders.clear();
+    }
+    return true;
+}
+
+std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Terrain& terrain,
+                          std::span<const PassabilityGrid* const> gridForType, TickRate rate,
+                          std::vector<Construction>* building) {
+    std::size_t started = 0;
+
+    const std::span<CommandQueue> orders = store.orders();
+    const std::span<const MoveState> motion = store.motion();
+
+    for (UnitIndex slot = 0; slot < orders.size(); ++slot) {
+        if (!store.slotAlive(slot) || orders[slot].empty()) {
+            continue;
+        }
+        if (slot < motion.size() && motion[slot].moving) {
+            continue;  // still carrying out the order at the head
+        }
+
+        // This unit's OWN grid. A missing one leaves the queue where it is rather than routing
+        // on a stranger's: a route is only as good as the map it was searched on, and an order
+        // silently dropped is worse than one that waits.
+        const auto type = static_cast<std::size_t>(store.typeAt(slot));
+        const PassabilityGrid* grid = type < gridForType.size() ? gridForType[type] : nullptr;
+        if (grid == nullptr) {
+            continue;
+        }
+
+        // The head is done. Drop it and start the next — and keep going while what comes next
+        // is either instantaneous or unstartable, so a queue of build orders empties in one
+        // tick and a dead waypoint does not stall the route behind it.
+        const Command* next = orders[slot].finish();
+        while (next != nullptr) {
+            const bool wasInstant = instantaneous(next->kind);
+            if (startCommand(*next, store, catalog, terrain, *grid, rate, building)) {
+                ++started;
+                if (!wasInstant) {
+                    break;
+                }
+            }
+            next = orders[slot].finish();
+        }
+    }
+
+    return started;
+}
+
+namespace {
+
+bool startCommand(const Command& command, UnitStore& store, const UnitCatalog& catalog,
+                  const Terrain& terrain, const PassabilityGrid& grid, TickRate rate,
+                  std::vector<Construction>* building) {
+    // By SLOT, not by handle: `advanceOrders` starts an order for a slot it has already found
+    // to be live, and a `Build` started for a unit that died this tick would charge a dead
+    // army. The handle check belongs to `applyCommand`, where a stale handle is the ordinary
+    // case; here it would be a second answer to a question already asked.
+    if (!store.slotAlive(command.unit.index)) {
+        return false;
+    }
     MoveState& motion = store.motion()[command.unit.index];
 
     switch (command.kind) {
@@ -153,6 +285,8 @@ bool applyCommand(const Command& command, UnitStore& store, const UnitCatalog& c
 
     return false;
 }
+
+} // namespace
 
 // --- The log --------------------------------------------------------------------------
 

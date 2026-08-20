@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/Types.hpp"
+#include "core/sim/CommandQueue.hpp"
 #include "core/sim/Health.hpp"
 #include "core/sim/IdPool.hpp"
 #include "core/sim/Movement.hpp"
@@ -100,6 +101,16 @@ public:
     [[nodiscard]] std::span<const Health> health() const noexcept { return health_; }
     [[nodiscard]] std::span<const UnitTypeIndex> types() const noexcept { return types_; }
 
+    /// The orders each unit still has to carry out (PLAN2.md §6.4, §7 P4.1).
+    ///
+    /// ON THE UNIT, which is where the plan puts it and where Recoil puts it too — the
+    /// alternative, one table keyed by handle, would need clearing on death and would make
+    /// "walk every unit's queue" a hash lookup per slot in a pass that already has the slot.
+    /// A slot's queue is cleared when the slot is reused, not when the unit dies: a corpse's
+    /// arrays are deliberately left intact (see the note on tombstones above).
+    [[nodiscard]] std::span<CommandQueue> orders() noexcept { return orders_; }
+    [[nodiscard]] std::span<const CommandQueue> orders() const noexcept { return orders_; }
+
     /// Slots that exist, live or dead. The length of every array above.
     [[nodiscard]] std::size_t slotCount() const noexcept { return transforms_.size(); }
 
@@ -126,6 +137,7 @@ private:
     std::vector<MoveState> motion_;
     std::vector<Health> health_;
     std::vector<UnitTypeIndex> types_;
+    std::vector<CommandQueue> orders_;
 };
 
 } // namespace rm::sim

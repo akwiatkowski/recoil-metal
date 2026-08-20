@@ -2655,10 +2655,13 @@ struct MarchOptions {
 ///
 /// `player` is who is issuing it, and it is checked rather than assumed: `applyCommand` refuses
 /// an order from a player who does not command the unit's army.
+/// `queued` is the shift key: the order goes behind whatever the unit is already doing rather
+/// than replacing it (§7 P4.1). The scripted opponents never pass it — an opponent that queued
+/// its orders would still be walking a route it decided on thirty seconds ago.
 [[nodiscard]] bool issueMove(UnitScene& scene, const rm::sim::PassabilityGrid& grid,
                              const rm::HeightField& field, rm::sim::UnitId unit,
                              rm::PlayerIndex player, rm::TickIndex tick, rm::sim::Fx toX,
-                             rm::sim::Fx toZ) {
+                             rm::sim::Fx toZ, bool queued = false) {
     const rm::sim::Command command{
         .tick = tick,
         .player = player,
@@ -2672,7 +2675,7 @@ struct MarchOptions {
     const bool applied = rm::sim::applyCommand(command, scene.store, scene.catalog,
                                                scene.players, scene.armies,
                                                rm::sim::Terrain{field}, grid, gAppTickRate,
-                                               &scene.building);
+                                               &scene.building, queued);
     if (applied) {
         // Recorded only when it took. A refused order is not part of the match — replaying it
         // would be refused again, so keeping it would only make the log longer.
@@ -3076,6 +3079,15 @@ struct MatchRunner {
     /// decided on one tick and stays decided.
     rm::sim::Match match;
 
+    /// The grid each unit TYPE routes on, indexed by `UnitTypeIndex`, for the sim's own
+    /// advancing of queued orders (§7 P4.1).
+    ///
+    /// KEPT HERE rather than in the scene because it is a cache of pointers into
+    /// `PassabilitySet`, which is the runner's. Refilled at the top of every tick: the catalog
+    /// grows when a construction finishes and introduces a type nothing had spawned yet, and a
+    /// table built once at the start would have a hole exactly where the new unit is.
+    std::vector<const rm::sim::PassabilityGrid*> gridForType;
+
     /// Running totals, for the callers that report them at the end.
     std::size_t shotsFired = 0;
     std::size_t completedBuilds = 0;
@@ -3139,6 +3151,21 @@ struct MatchRunner {
 /// own logging and reaches nothing in the sim, which counts in ticks and not in seconds.
 rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) {
     UnitScene& scene = runner.scene;
+
+    // The routing table the sim uses to advance queued orders, refreshed for whatever types the
+    // catalog now holds. `gridFor` is memoised on the LIMITS, so this is a map lookup per type
+    // per tick and builds a grid only the first time a new pair of limits appears.
+    runner.gridForType.clear();
+    runner.gridForType.reserve(scene.catalog.size());
+    for (std::size_t type = 0; type < scene.catalog.size(); ++type) {
+        if (type >= scene.maxSlopeDegrees.size() || type >= scene.maxWaterDepthElmos.size()) {
+            runner.gridForType.push_back(nullptr);
+            continue;
+        }
+        runner.gridForType.push_back(&runner.passability.gridFor(
+            scene.maxSlopeDegrees[type], scene.maxWaterDepthElmos[type]));
+    }
+    runner.match.passability = runner.gridForType;
 
     // The opponents decide FIRST, so an order given this tick moves this tick.
     //
@@ -4447,16 +4474,29 @@ int main(int argc, const char* argv[]) {
                 const rm::sim::PassabilityGrid& grid =
                     passability.gridFor(units.maxSlopeDegrees[type],
                                         units.maxWaterDepthElmos[type]);
+                // SHIFT QUEUES IT (§7 P4.1). The same modifier adds to the selection on the
+                // left button and appends to the order queue on the right, which is what
+                // every RTS this engine reads content from does.
                 if (!issueMove(units, grid, map->field, sel,
                                playerDriving(units, units.playerArmy),
                                static_cast<rm::TickIndex>(matchTicks),
                                rm::sim::fxFromFloat(ground->x),
-                               rm::sim::fxFromFloat(ground->z))) {
+                               rm::sim::fxFromFloat(ground->z), mods.shift)) {
                     ++failed;
                 }
             }
             if (failed > 0) {
                 std::printf("no route there for %zu of %zu units\n", failed, selected.size());
+            } else if (mods.shift) {
+                // Only for a queued order, and only the length: this is the one piece of
+                // feedback the world does not already show. A plain order is legible from the
+                // unit turning; a queued one looks like nothing happened until the unit gets
+                // there. Drawing the queue in the world is UI-3's job.
+                const rm::sim::UnitId first = selected.front();
+                if (units.store.alive(first)) {
+                    std::printf("queued: %zu order(s) for the first of %zu selected\n",
+                                units.store.orders()[first.index].size(), selected.size());
+                }
             }
         });
 
