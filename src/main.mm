@@ -26,6 +26,8 @@
 #include "core/scene/GroundDecals.hpp"
 #include "core/scene/UnitPlacement.hpp"
 #include "core/sim/Army.hpp"
+#include "core/data/Opening.hpp"
+#include "core/data/Roster.hpp"
 #include "core/sim/Command.hpp"
 #include "core/sim/BuildOrder.hpp"
 #include "core/sim/Combat.hpp"
@@ -994,6 +996,36 @@ struct PropScene {
     return rm::s3o::load(bytes);
 }
 
+/// Builds the roster from the whole blueprint corpus.
+///
+/// EVERY unit, once, at scene setup — because "which is the T1 extractor for this faction" is a
+/// question about the whole set and cannot be answered from one file (`core/data/Roster.hpp`).
+/// The 568 parses cost a few tens of milliseconds against a scene load that already reads
+/// hundreds of meshes and textures.
+[[nodiscard]] rm::data::Roster buildRoster(const rm::vfs::Vfs& content) {
+    std::vector<rm::unitdef::UnitDef> defs;
+    std::vector<std::string> ids;
+    for (const std::string& path : content.list("/units", ".bp")) {
+        if (!path.ends_with("_unit.bp")) {
+            continue;
+        }
+        const std::optional<std::vector<std::byte>> bytes = content.read(path);
+        if (!bytes) {
+            continue;
+        }
+        const std::string_view source{reinterpret_cast<const char*>(bytes->data()),
+                                      bytes->size()};
+        auto def = rm::unitbp::load(source, path);
+        if (!def) {
+            continue;  // a blueprint this engine cannot read is not in the roster, and that is
+                       // reported by the roster being short rather than by failing the load
+        }
+        ids.push_back(def->name);
+        defs.push_back(std::move(*def));
+    }
+    return rm::data::Roster::build(defs, ids);
+}
+
 /// A float world position as the fixed-point triple the geometry functions take.
 ///
 /// The other half of the boundary: map markers, mouse picks and construction sites are all
@@ -1100,6 +1132,14 @@ struct UnitScene {
     // than beside it because every question that needs an army — may I select this,
     // may I shoot that, who banks the mass — starts from a unit.
     std::vector<rm::sim::Army> armies;
+
+    /// What each faction fields, by role — so the opponent can ask for "a T1 extractor"
+    /// instead of naming `/units/UEB1103/UEB1103_unit.bp` (P3.3).
+    rm::data::Roster roster;
+
+    /// The opponent's plan, from `data/opening.lua`. Falls back to `defaultOpening()`, which
+    /// states the same thing in C++ so a build with no data directory still plays.
+    rm::data::Opening opening = rm::data::defaultOpening();
 
     /// Every order this match has been given (P2.5).
     ///
@@ -1320,6 +1360,43 @@ struct UnitScene {
     }
 
 };
+
+/// The opening's step for a role, or a bare default when the plan names none.
+///
+/// Three named lookups rather than an index, because `StructureOrder` is an enum of three
+/// specific things and the plan is a list: matching them by position would silently reorder the
+/// opening if a step were inserted. When the order itself becomes data (P6), both sides become
+/// the list and these go away.
+[[nodiscard]] rm::data::OpeningStep stepForRole(const rm::data::Opening& opening,
+                                                rm::unitdef::Role role) {
+    for (const rm::data::OpeningStep& step : opening.structures) {
+        if (step.role == role) {
+            return step;
+        }
+    }
+    return rm::data::OpeningStep{role, 0, {}, {}};
+}
+
+[[nodiscard]] rm::data::OpeningStep energyStep(const rm::data::Opening& o) {
+    return stepForRole(o, rm::unitdef::Role::Energy);
+}
+[[nodiscard]] rm::data::OpeningStep factoryStep(const rm::data::Opening& o) {
+    return stepForRole(o, rm::unitdef::Role::Factory);
+}
+[[nodiscard]] rm::data::OpeningStep extractorStep(const rm::data::Opening& o) {
+    return stepForRole(o, rm::unitdef::Role::Extractor);
+}
+
+/// The blueprint path for a role, for one army's faction. Empty when the faction fields none.
+///
+/// THE FUNCTION THAT REPLACED FOUR CONSTANTS. `kExtractorBlueprint` was a UEF path in a header;
+/// this asks the roster, so a Cybran army builds Cybran structures from the same plan.
+[[nodiscard]] std::string blueprintFor(const UnitScene& scene, const rm::sim::Army& army,
+                                       const rm::data::OpeningStep& step) {
+    const std::optional<rm::data::RosterEntry> entry = rm::data::resolveStep(
+        scene.roster, army.faction, step.role, step.tech, step.requires_, step.fallback);
+    return entry ? entry->path() : std::string{};
+}
 
 // The passability grids a scene needs, one per distinct pair of limits.
 //
@@ -1631,6 +1708,21 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
         return;
     }
 
+    // The roster and the opening, before anything is ordered: both decide WHAT gets built, and
+    // the first extractor is ordered during this same setup.
+    scene.roster = buildRoster(content);
+    if (const auto fromFile = rm::data::loadOpening("data/opening.lua")) {
+        scene.opening = *fromFile;
+    } else {
+        // Not an error. A build run from outside the repo has no `data/` beside it, and
+        // `defaultOpening()` states the same plan in C++ precisely so that still plays.
+        std::printf("skirmish: no data/opening.lua — using the built-in opening\n");
+    }
+    std::printf("skirmish: roster holds %zu units; opening builds %zu structure(s),"
+                " wave of %zu\n",
+                scene.roster.size(), scene.opening.structures.size(),
+                scene.opening.waveSize);
+
     scene.armies = rm::sim::freeForAll(starts.size());
 
     // One participant per army, the human driving the first. `--armies 4` with two alliances
@@ -1895,31 +1987,48 @@ void orderFirstExtractors(UnitScene& scene, std::span<const rm::scenario::Marker
         return;
     }
 
-    // The extractor blueprint, once. Read per FACTION in the game — each has its own — but
-    // the UEF one serves here: this milestone is about the economy rather than about
-    // faction-specific structures, and pretending otherwise would mean four blueprints
-    // where one demonstrates the same thing.
-    const std::optional<std::size_t> registered =
-        resolveBuildable(scene, content, rm::sim::kExtractorBlueprint);
-    if (!registered) {
+    // The extractor blueprint, PER FACTION, from the opening's first step — which is what
+    // P3.3 bought. This used to register one UEF path for everybody, with a comment saying
+    // that four blueprints "would demonstrate nothing the one does not". Four blueprints is
+    // now zero blueprints: the plan says `role = 'extractor'` and the roster says which.
+    //
+    // Resolved per army below rather than once here, because the answer differs by faction.
+    if (scene.opening.structures.empty()) {
         return;
+
     }
-    const std::size_t blueprintIndex = *registered;
-    const rm::unitdef::UnitDef* extractor = &scene.buildable[blueprintIndex];
 
     // Which commander is where, so each can be sent to its OWN nearest deposit rather than
     // all of them to one.
     float firstBuilderRate = 1.0f;
+    // The last extractor's figures, for the summary line. Reported rather than assumed
+    // identical across factions, because they are not: each faction's mex costs its own.
+    rm::sim::Mag lastCost{};
+    rm::sim::Mag lastEnergy{};
+    rm::sim::Mag lastTime{};
     for (rm::UnitIndex slot = 0; slot < scene.store.slotCount(); ++slot) {
         const rm::unitdef::UnitDef* def = scene.catalog.def(scene.store.typeAt(slot));
         if (def == nullptr || !def->isBuilder()) {
             continue;
         }
         const int army = scene.store.motion()[slot].armyIndex;
-        if (army == rm::sim::kNoArmy) {
+        if (army == rm::sim::kNoArmy
+            || static_cast<std::size_t>(army) >= scene.armies.size()) {
             continue;
         }
         firstBuilderRate = std::max(1.0f, def->buildRate);
+
+        // PER FACTION. The extractor this commander builds is its own faction's, resolved from
+        // the opening's first step through the roster — which is the whole of what P3.3 bought.
+        const std::string blueprint = blueprintFor(
+            scene, scene.armies[static_cast<std::size_t>(army)],
+            extractorStep(scene.opening));
+        const std::optional<std::size_t> registered =
+            blueprint.empty() ? std::nullopt : resolveBuildable(scene, content, blueprint);
+        if (!registered) {
+            continue;  // this faction fields no extractor this engine can read
+        }
+        const rm::unitdef::UnitDef* extractor = &scene.buildable[*registered];
 
         const std::array<rm::sim::Fx, 3> from =
             rm::sim::positionOf(scene.store.transforms()[slot]);
@@ -1953,17 +2062,20 @@ void orderFirstExtractors(UnitScene& scene, std::span<const rm::scenario::Marker
             .buildTimeRemaining = extractor->buildTime,
             .totalBuildTime = extractor->buildTime,
             .buildPerTick = gAppTickRate.magPerTick(def->buildRate),
-            .blueprintIndex = blueprintIndex,
+            .blueprintIndex = *registered,
         });
+
+        lastCost = extractor->buildCostMass;
+        lastEnergy = extractor->buildCostEnergy;
+        lastTime = extractor->buildTime;
     }
 
     std::printf("economy: %zu extractor(s) ordered on the map's own deposits,"
                 " %.0f mass / %.0f energy each over %.0fs\n",
                 scene.building.size(),
-                static_cast<double>(rm::sim::magToFloat(extractor->buildCostMass)),
-                static_cast<double>(rm::sim::magToFloat(extractor->buildCostEnergy)),
-                static_cast<double>(rm::sim::magToFloat(extractor->buildTime)
-                                    / firstBuilderRate));
+                static_cast<double>(rm::sim::magToFloat(lastCost)),
+                static_cast<double>(rm::sim::magToFloat(lastEnergy)),
+                static_cast<double>(rm::sim::magToFloat(lastTime) / firstBuilderRate));
 }
 
 /// Loads every requested model, resolves its textures, and places instances.
@@ -2551,16 +2663,29 @@ struct Standing {
             standing.commanderAlive = true;
             standing.commanderPosition = rm::sim::positionOf(transforms[slot]);
             standing.commanderBuildRate = def->buildRate;
-        } else if (def->name == rm::sim::kExtractorId) {
-            ++standing.extractors;
-        } else if (def->name == rm::sim::kPowerGeneratorId) {
-            ++standing.powerGenerators;
-        } else if (def->name == rm::sim::kFactoryId) {
-            ++standing.factories;
-            standing.factoryPosition = rm::sim::positionOf(transforms[slot]);
-            standing.factoryBuildRate = def->buildRate;
-        } else if (def->name == rm::sim::kTankId) {
-            standing.tanks.push_back(scene.store.idAt(slot));
+        } else {
+            // BY ROLE, not by blueprint id (P3.3). These were four `def->name == "UEB1103"`
+            // comparisons, which is why the census only recognised UEF structures: a Cybran
+            // mass extractor is a mass extractor and was counted as nothing.
+            switch (rm::unitdef::roleOf(*def)) {
+            case rm::unitdef::Role::Extractor:
+                ++standing.extractors;
+                break;
+            case rm::unitdef::Role::Energy:
+                ++standing.powerGenerators;
+                break;
+            case rm::unitdef::Role::Factory:
+                ++standing.factories;
+                standing.factoryPosition = rm::sim::positionOf(transforms[slot]);
+                standing.factoryBuildRate = def->buildRate;
+                break;
+            case rm::unitdef::Role::Raider:
+            case rm::unitdef::Role::Assault:
+                standing.tanks.push_back(scene.store.idAt(slot));
+                break;
+            default:
+                break;
+            }
         }
     }
     return standing;
@@ -2694,7 +2819,12 @@ void runOpponents(UnitScene& scene, const rm::vfs::Vfs& content, const rm::Heigh
         // the base grows where the map put the army, not where the commander wandered.
         const rm::sim::StructureOrder structure = rm::sim::nextStructure(view);
         if (structure != rm::sim::StructureOrder::None) {
-            std::string_view blueprint;
+            // A `std::string` and not a `string_view`: `blueprintFor` returns by value now
+            // that the path is composed from a roster entry rather than being a `constexpr`
+            // literal. A view here bound to the temporary and dangled — the match built its
+            // first extractor and then silently stopped, because every later blueprint path
+            // was freed memory. Caught by running a match, not by the compiler.
+            std::string blueprint;
             std::optional<std::array<rm::sim::Fx, 3>> site;
             const std::size_t slot = standing.powerGenerators + standing.factories;
             const rm::mapinfo::StartPosition& start =
@@ -2704,17 +2834,17 @@ void runOpponents(UnitScene& scene, const rm::vfs::Vfs& content, const rm::Heigh
                                                   rm::sim::fxFromFloat(start.z)};
             switch (structure) {
             case rm::sim::StructureOrder::PowerGenerator:
-                blueprint = rm::sim::kPowerGeneratorBlueprint;
+                blueprint = blueprintFor(scene, army, energyStep(scene.opening));
                 site = rm::sim::structureSite(home, centreX, centreZ,
                                               static_cast<int>(slot));
                 break;
             case rm::sim::StructureOrder::Factory:
-                blueprint = rm::sim::kFactoryBlueprint;
+                blueprint = blueprintFor(scene, army, factoryStep(scene.opening));
                 site = rm::sim::structureSite(home, centreX, centreZ,
                                               static_cast<int>(slot));
                 break;
             case rm::sim::StructureOrder::Extractor: {
-                blueprint = rm::sim::kExtractorBlueprint;
+                blueprint = blueprintFor(scene, army, extractorStep(scene.opening));
                 const rm::scenario::Marker* deposit =
                     nearestFreeDeposit(scene, markers, standing.commanderPosition);
                 if (deposit != nullptr) {
@@ -2754,7 +2884,8 @@ void runOpponents(UnitScene& scene, const rm::vfs::Vfs& content, const rm::Heigh
         // once finished (the spawn handles the rolloff).
         if (rm::sim::wantsTank(view)) {
             const std::optional<std::size_t> blueprintIndex =
-                resolveBuildable(scene, content, rm::sim::kTankBlueprint);
+                resolveBuildable(scene, content,
+                                 blueprintFor(scene, army, scene.opening.waveUnit));
             if (blueprintIndex) {
                 const rm::unitdef::UnitDef& def = scene.buildable[*blueprintIndex];
                 scene.building.push_back(rm::sim::Construction{
@@ -2777,7 +2908,7 @@ void runOpponents(UnitScene& scene, const rm::vfs::Vfs& content, const rm::Heigh
 
         // The one attack wave: at strength, every tank walks at the nearest enemy
         // commander. After this, reinforcements are sent as they roll off.
-        if (rm::sim::launchesAttack(script, view)) {
+        if (rm::sim::launchesAttack(script, view, scene.opening.waveSize)) {
             const std::optional<std::array<rm::sim::Fx, 3>> target =
                 nearestEnemyCommander(scene, army.index, standing.commanderPosition);
             if (target) {

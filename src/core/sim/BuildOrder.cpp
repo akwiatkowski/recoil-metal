@@ -63,9 +63,10 @@ bool wantsTank(const ArmyView& view) noexcept {
     return view.commanderAlive && view.factoriesStanding > 0 && !view.factoryBusy;
 }
 
-bool launchesAttack(const Opponent& script, const ArmyView& view) noexcept {
+bool launchesAttack(const Opponent& script, const ArmyView& view,
+                    std::size_t waveSize) noexcept {
     return !script.attackLaunched && view.commanderAlive
-           && view.tanksAlive >= kAttackWaveTanks;
+           && view.tanksAlive >= waveSize;
 }
 
 std::array<Fx, 3> structureSite(const std::array<Fx, 3>& start, Fx centreX, Fx centreZ,

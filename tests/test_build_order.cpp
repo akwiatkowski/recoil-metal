@@ -19,6 +19,12 @@ using rm::sim::StructureOrder;
 
 namespace {
 
+/// The wave size these cases reason about. A local constant now that the engine's own is in
+/// `data/opening.lua` — the tests are about the RULE ("launch once, at N"), and the number is a
+/// balance decision the data file owns. `defaultOpening().waveSize` is checked separately, in
+/// test_opening.cpp, against the file.
+constexpr std::size_t kWaveSize = 20;
+
 /// An army mid-game: first extractor standing, commander idle, nothing else yet.
 [[nodiscard]] ArmyView afterFirstExtractor() {
     return ArmyView{
@@ -93,7 +99,7 @@ TEST_CASE("the factory produces tanks whenever it stands idle") {
 
     SECTION("and production never stops — the stream after the wave is the win condition") {
         view.factoriesStanding = 1;
-        view.tanksAlive = rm::sim::kAttackWaveTanks + 5;
+        view.tanksAlive = kWaveSize + 5;
         CHECK(rm::sim::wantsTank(view));
     }
 }
@@ -104,19 +110,19 @@ TEST_CASE("one attack wave, launched at strength and never re-launched") {
     Opponent script;
 
     SECTION("not before the wave is big enough to survive the commander's return fire") {
-        view.tanksAlive = rm::sim::kAttackWaveTanks - 1;
-        CHECK_FALSE(rm::sim::launchesAttack(script, view));
+        view.tanksAlive = kWaveSize - 1;
+        CHECK_FALSE(rm::sim::launchesAttack(script, view, kWaveSize));
     }
 
     SECTION("at strength, it launches") {
-        view.tanksAlive = rm::sim::kAttackWaveTanks;
-        CHECK(rm::sim::launchesAttack(script, view));
+        view.tanksAlive = kWaveSize;
+        CHECK(rm::sim::launchesAttack(script, view, kWaveSize));
     }
 
     SECTION("once launched, it stays launched — reinforcements join, waves do not reform") {
         script.attackLaunched = true;
-        view.tanksAlive = rm::sim::kAttackWaveTanks * 2;
-        CHECK_FALSE(rm::sim::launchesAttack(script, view));
+        view.tanksAlive = kWaveSize * 2;
+        CHECK_FALSE(rm::sim::launchesAttack(script, view, kWaveSize));
     }
 }
 
@@ -141,8 +147,8 @@ TEST_CASE("the wave size is the blueprints' arithmetic, not taste") {
     // ...and the script's wave is that plus a stated margin of two — the model is
     // optimistic (no travel time, no dead tanks blocking the living) — but no more:
     // a bigger margin is the script sitting on tanks it should have used.
-    CHECK(rm::sim::kAttackWaveTanks >= minimal);
-    CHECK(rm::sim::kAttackWaveTanks == minimal + 2);
+    CHECK(kWaveSize >= minimal);
+    CHECK(kWaveSize == minimal + 2);
 }
 
 TEST_CASE("structures fan out from the start position, toward the map centre") {

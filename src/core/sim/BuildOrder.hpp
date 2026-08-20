@@ -22,34 +22,24 @@ namespace rm::sim {
 // and the factory genuinely act at the same time — folding them together would
 // serialize builders the sim runs in parallel.
 
-/// The blueprints the script builds, one per role. UEF for every faction — the same
-/// simplification the first extractor already documents (main.mm,
-/// orderFirstExtractors): this milestone is about the match, not about
-/// faction-specific structures, and four blueprints per role would demonstrate
-/// nothing the one does not.
-inline constexpr std::string_view kExtractorBlueprint = "/units/UEB1103/UEB1103_unit.bp";
-inline constexpr std::string_view kPowerGeneratorBlueprint =
-    "/units/UEB1101/UEB1101_unit.bp";
-inline constexpr std::string_view kFactoryBlueprint = "/units/UEB0101/UEB0101_unit.bp";
-inline constexpr std::string_view kTankBlueprint = "/units/UEL0201/UEL0201_unit.bp";
-
-/// The same four as bare ids — what a loaded definition's `name` carries, and what
-/// the caller counts standing units by.
-inline constexpr std::string_view kExtractorId = "UEB1103";
-inline constexpr std::string_view kPowerGeneratorId = "UEB1101";
-inline constexpr std::string_view kFactoryId = "UEB0101";
-inline constexpr std::string_view kTankId = "UEL0201";
-
-/// The attack wave, in tanks. Arithmetic, not taste — from the blueprints:
-/// a UEL0001 commander (12000 hp, and 100 dps: its zephyr states Damage = 100,
-/// RateOfFire = 1) kills one 300 hp UEL0201 every 3 seconds, so a wave of N tanks
-/// at 24 dps each (Damage = 24, RateOfFire = 1) lands roughly
-/// 24 * 3 * N(N+1)/2 damage before it is gone. N = 20 gives 15,120 against the
-/// commander's 12,000; N = 19 gives 13,680 — the margin over the model's
-/// optimism (travel time, walls of dead tanks blocking the living) is deliberate,
-/// and the stream of reinforcements behind the wave is what actually closes a
-/// match the model gets wrong.
-inline constexpr std::size_t kAttackWaveTanks = 20;
+// FOUR BLUEPRINT PATHS AND A WAVE SIZE USED TO LIVE HERE.
+//
+//     inline constexpr std::string_view kExtractorBlueprint =
+//         "/units/UEB1103/UEB1103_unit.bp";
+//     …
+//     inline constexpr std::size_t kAttackWaveTanks = 20;
+//
+// All five are gone (PLAN2.md §7 P3.3). They were game rules in a C++ header — the thing §1.1
+// says both reference engines keep none of — and the four paths were all UEF, so the opponent
+// could only ever play one faction.
+//
+// What replaced them: `data/opening.lua` states the plan by ROLE, `core/data/Roster.hpp`
+// answers "the T1 extractor for THIS faction" from the blueprint corpus, and the caller passes
+// the resulting wave size in. One file now drives all four factions, and changing the opening
+// is editing a data file rather than a rebuild.
+//
+// The arithmetic behind the wave size moved WITH it, into the data file's own comment, rather
+// than being deleted along with the constant it justified.
 
 /// One army's situation, as the script needs it. Built by the caller from the
 /// scene each decision tick — the script holds no pointers into the sim, which is
@@ -91,14 +81,17 @@ enum class StructureOrder : std::uint8_t {
 [[nodiscard]] StructureOrder nextStructure(const ArmyView& view) noexcept;
 
 /// Whether the factory should start another tank. Always yes when it stands idle:
-/// the stream never stops, and the stream is what wins matches the wave alone
-/// cannot (see kAttackWaveTanks).
+/// the stream never stops, and the stream is what wins matches the wave alone cannot.
 [[nodiscard]] bool wantsTank(const ArmyView& view) noexcept;
 
-/// Whether this is the moment to launch the one attack wave. True exactly once:
-/// at kAttackWaveTanks alive, and never again — after it, the caller sends every
-/// new tank straight to the fight instead of reforming waves at home.
-[[nodiscard]] bool launchesAttack(const Opponent& script, const ArmyView& view) noexcept;
+/// Whether this is the moment to launch the one attack wave. True exactly once: at `waveSize`
+/// alive, and never again — after it, the caller sends every new tank straight to the fight
+/// instead of reforming waves at home.
+///
+/// `waveSize` is a PARAMETER now rather than a constant read from this header. It comes from
+/// `data/opening.lua`, which is what makes the number a balance decision rather than a rebuild.
+[[nodiscard]] bool launchesAttack(const Opponent& script, const ArmyView& view,
+                                  std::size_t waveSize) noexcept;
 
 /// Where the script puts structure `slot` (0 = power generator, 1 = factory):
 /// fanned around the start position, pushed toward the map centre.

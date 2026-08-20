@@ -183,7 +183,11 @@ battle: build check-fa
 # `golden` re-records it. Only run that when the change was MEANT to alter the match, and
 # say so in the commit: re-baselining silently is how a gate stops being one.
 GOLDEN      ?= docs/golden-p1.log
-GOLDEN_SECS ?= 520
+# 700, up from 520. The golden match must cover a DECIDED match — a fingerprint of a fight
+# still in progress is a weaker artifact — and P3.3 lengthened it: army 1 is Aeon and now builds
+# Aeon units rather than UEF ones, whose stats differ, so the win lands at 644.9s instead of
+# 502.1s.
+GOLDEN_SECS ?= 700
 # A screenshot is how the app stays headless — without one it opens a window and waits.
 # Small and thrown away; the run is here for the hashes, not the picture.
 GOLDEN_SHOT ?= $(if $(TMPDIR),$(TMPDIR),/tmp)/rm-golden.png
