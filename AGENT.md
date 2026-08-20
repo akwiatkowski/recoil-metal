@@ -16,6 +16,31 @@ formats, built test-first in modern C++, as both research and a C++ showcase.
    project — never edit it, never re-clone it from here). Adapting its loader
    code into this repo is allowed and expected; that's why this repo is
    GPL-2.0-or-later (see `LICENSE`).
+
+   **Read the analysis before the source.** `../forged-alliance-reborn/docs/`
+   holds a ten-agent study of that tree and of the Supreme Commander content
+   corpus — `recoil-engine-map.md` for orientation (unit conventions, hard
+   caps, verified gotchas) and `engine-analysis/01..16` for the detail, 16
+   reports and ~20k lines, every claim cited to a file and line. It answers
+   most questions faster than the source does, and several it answers *better*
+   — measured facts, not inferences.
+
+   This rule exists because the reports went unopened for the project's first
+   twenty milestones while their conclusions were re-derived by hand. Start
+   here for anything structural:
+
+   | Question | Report |
+   |---|---|
+   | What is this engine, and what should it become? | `16-new-engine-feasibility.md` |
+   | How does a unit's lifecycle work; engine vs script? | `11-fa-sim-layer.md` |
+   | What content exists, and what is the minimum playable set? | `14-blueprint-census.md` |
+   | Unitdef/movedef tags, factories, categories, armour | `01-unitdefs-movedefs.md` |
+   | Weapons, projectiles, damage, shields | `02-weapons-projectiles.md`, `13-projectiles-effects.md` |
+   | What an AI needs from content; start scripts | `07-ai-and-gamesetup.md` |
+   | VFS, load order, determinism, build variants | `08-engine-infra.md` |
+
+   **Never edit anything under `../forged-alliance-reborn/`** — reference and
+   docs alike are the FAR project's.
 2. **Use `mise exec --` for every tool invocation** (`mise exec -- cmake …`,
    `mise exec -- ctest …`). Never call tools directly.
 3. **Never commit game assets or `third_party/` content.** Converted or
