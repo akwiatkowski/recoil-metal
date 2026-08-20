@@ -1019,14 +1019,29 @@ struct PropScene {
     return transform;
 }
 
-/// The rate this build of the app runs its sim at.
+/// The rate this run of the app steps its sim at, from `--tick-rate`.
 ///
-/// A constant HERE, in the app, rather than in the sim: `core/sim` may not hold file-scope
-/// mutable state (PLAN2 §5.4) and does not hold this at all — a `TickRate` is a value passed
-/// to the passes that need it. What is missing is the configuration that would set it, which
-/// is the rest of P2.3; until then the app has one rate and this is where it is written down,
-/// once, instead of at every site that converts a content rate.
-inline const rm::sim::TickRate kAppTickRate{rm::sim::kDefaultTicksPerSecond};
+/// **A MUTABLE FILE-SCOPE VALUE, AND THAT IS A COMPROMISE.** It is stated plainly rather than
+/// hidden: `core/sim` may hold no such thing (PLAN2 §5.4, enforced by
+/// `tools/check_no_sim_globals.sh`) and does not — a `TickRate` is a value passed to the passes
+/// that need it, which is what makes the multi-rate test able to run four rates in one process.
+/// This is the APP, which the check does not cover.
+///
+/// Why it is here anyway: twenty-one sites in this file convert a content rate, and threading a
+/// parameter to all of them would be work thrown away when P7.5 moves the spawn logic, the
+/// scripted opponent and the draw gather out of `main.mm` altogether. At that point each of
+/// them takes the rate from whatever owns it and this disappears.
+///
+/// Set ONCE, by `setAppTickRate`, before anything reads it. Not a `const` because a
+/// command-line flag has to be able to change it; not a settable-at-any-time knob because a
+/// match whose rate changed halfway would be incoherent.
+rm::sim::TickRate gAppTickRate{rm::sim::kDefaultTicksPerSecond};
+
+/// The one writer. Throws through `TickRate`'s constructor if the rate is outside 5–50 Hz,
+/// which is what makes an out-of-range `--tick-rate` a startup error rather than a clamp.
+void setAppTickRate(std::uint32_t ticksPerSecond) {
+    gAppTickRate = rm::sim::TickRate{ticksPerSecond};
+}
 
 // Everything the renderer needs to draw units, owned in one place.
 //
@@ -1240,7 +1255,7 @@ struct UnitScene {
                                    ? batches[type].animation->duration
                                    : 0.0f;
         const float speed = rm::sim::fxToFloat(motion.speedPerTick)
-                            * static_cast<float>(kAppTickRate.ticksPerSecond());
+                            * static_cast<float>(gAppTickRate.ticksPerSecond());
         const float strideElmos = speed * duration;
         if (strideElmos > 0.0f) {
             instance.animationPhase =
@@ -1635,7 +1650,8 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
             scaleForFaction.emplace(army.faction, unit->def.meshToElmos);
 
             scene.definitions.push_back(unit->def);
-            const rm::UnitTypeIndex type = scene.catalog.add(&scene.definitions.back());
+            const rm::UnitTypeIndex type =
+                scene.catalog.add(&scene.definitions.back(), gAppTickRate);
             // A type index and a batch index are the same number, by construction. Asserted
             // rather than assumed: everything from the passability grid to the draw gather
             // reads one as the other, and a drift here is a silent mismatch rather than a
@@ -1700,8 +1716,8 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
         // from what is standing; seeding it here is what makes the first tick's earnings
         // spendable before anything has been counted.
         economy.incomePerTick = rm::sim::Resources{
-            .mass = kAppTickRate.magPerTick(rm::sim::kCommanderTrickleMassPerSecond),
-            .energy = kAppTickRate.magPerTick(rm::sim::kCommanderTrickleEnergyPerSecond),
+            .mass = gAppTickRate.magPerTick(rm::sim::kCommanderTrickleMassPerSecond),
+            .energy = gAppTickRate.magPerTick(rm::sim::kCommanderTrickleEnergyPerSecond),
         };
         economy.storage = kStartingStorage;
         // FULL at spawn, which is what the game does — a match opens with the
@@ -1760,7 +1776,7 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
             },
         });
         scene.definitions.push_back(unit->def);
-        (void)scene.catalog.add(&scene.definitions.back());
+        (void)scene.catalog.add(&scene.definitions.back(), gAppTickRate);
         assert(scene.catalog.size() == scene.batches.size());
 
         found = scene.batchForBlueprint.emplace(std::string{blueprintPath},
@@ -1788,12 +1804,12 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
         // Per second in the blueprint, per tick in the sim — converted here because this is
         // where a unit is built from its definition (§5.1). A structure gets zero, which is
         // what makes it a structure as far as movement is concerned.
-        motion.speedPerTick = kAppTickRate.perTick(def.speedElmosPerSecond);
+        motion.speedPerTick = gAppTickRate.perTick(def.speedElmosPerSecond);
         if (def.turnRateRadiansPerSecond > 0.0f) {
-            motion.turnPerTick = kAppTickRate.bradPerTick(def.turnRateRadiansPerSecond);
+            motion.turnPerTick = gAppTickRate.bradPerTick(def.turnRateRadiansPerSecond);
         } else {
             motion.turnPerTick =
-                kAppTickRate.bradPerTick(rm::sim::kDefaultTurnRateRadiansPerSecond);
+                gAppTickRate.bradPerTick(rm::sim::kDefaultTurnRateRadiansPerSecond);
         }
     }
 
@@ -1912,7 +1928,7 @@ void orderFirstExtractors(UnitScene& scene, std::span<const rm::scenario::Marker
                      .energy = extractor->buildCostEnergy},
             .buildTimeRemaining = extractor->buildTime,
             .totalBuildTime = extractor->buildTime,
-            .buildPerTick = kAppTickRate.magPerTick(def->buildRate),
+            .buildPerTick = gAppTickRate.magPerTick(def->buildRate),
             .blueprintIndex = blueprintIndex,
         });
     }
@@ -2105,7 +2121,7 @@ void orderFirstExtractors(UnitScene& scene, std::span<const rm::scenario::Marker
         rm::UnitTypeIndex type = 0;
         if (def) {
             scene.definitions.push_back(*def);
-            type = scene.catalog.add(&scene.definitions.back());
+            type = scene.catalog.add(&scene.definitions.back(), gAppTickRate);
         } else {
             type = scene.catalog.add(nullptr);  // a bare model: it neither fires nor dies
         }
@@ -2122,8 +2138,8 @@ void orderFirstExtractors(UnitScene& scene, std::span<const rm::scenario::Marker
                 // building is still something to be pushed out of.
                 state.radiusElmos = rm::sim::fxFromFloat(def->collisionRadiusElmos);
                 if (def->isMobile()) {
-                    state.speedPerTick = kAppTickRate.perTick(def->speedElmosPerSecond);
-                    state.turnPerTick = kAppTickRate.bradPerTick(
+                    state.speedPerTick = gAppTickRate.perTick(def->speedElmosPerSecond);
+                    state.turnPerTick = gAppTickRate.bradPerTick(
                         def->turnRateRadiansPerSecond > 0.0f
                             ? def->turnRateRadiansPerSecond
                             : rm::sim::kDefaultTurnRateRadiansPerSecond);
@@ -2652,7 +2668,7 @@ void runOpponents(UnitScene& scene, const rm::vfs::Vfs& content, const rm::Heigh
                         .cost = {.mass = def.buildCostMass, .energy = def.buildCostEnergy},
                         .buildTimeRemaining = def.buildTime,
                         .totalBuildTime = def.buildTime,
-                        .buildPerTick = kAppTickRate.magPerTick(standing.commanderBuildRate),
+                        .buildPerTick = gAppTickRate.magPerTick(standing.commanderBuildRate),
                         .blueprintIndex = *blueprintIndex,
                     });
                     std::printf("  [%6.1fs] army %d starts %.*s\n",
@@ -2681,7 +2697,7 @@ void runOpponents(UnitScene& scene, const rm::vfs::Vfs& content, const rm::Heigh
                     .cost = {.mass = def.buildCostMass, .energy = def.buildCostEnergy},
                     .buildTimeRemaining = def.buildTime,
                     .totalBuildTime = def.buildTime,
-                    .buildPerTick = kAppTickRate.magPerTick(standing.factoryBuildRate),
+                    .buildPerTick = gAppTickRate.magPerTick(standing.factoryBuildRate),
                     .blueprintIndex = *blueprintIndex,
                 });
             }
@@ -2782,7 +2798,14 @@ struct MatchRunner {
 /// Once a second: nothing an opponent reacts to changes faster than a build finishes, and
 /// each pass walks the whole scene. Derived from the tick rate rather than written as a
 /// number of ticks, so changing the rate does not silently change how often they decide.
-inline constexpr int kDecisionTicks = rm::sim::kTicksPerSecond;
+/// Derived from the RUN'S rate, not written down. This was
+/// `inline constexpr int kDecisionTicks = rm::sim::kTicksPerSecond`, which is the same bug as a
+/// literal wearing a different hat: it names a rate rather than a duration, so at 20 Hz the
+/// opponents thought twice a second instead of once. `check_no_tick_literals.sh` now catches
+/// that shape too.
+[[nodiscard]] rm::TickCount decisionTicks() {
+    return gAppTickRate.ticks(rm::sim::seconds(1.0f));
+}
 
 [[nodiscard]] MatchRunner makeMatchRunner(UnitScene& scene, const rm::HeightField& field,
                                           PassabilitySet& passability,
@@ -2833,7 +2856,7 @@ rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) 
     UnitScene& scene = runner.scene;
 
     // The opponents decide FIRST, so an order given this tick moves this tick.
-    if (!scene.armies.empty() && !runner.matchOver && tickIndex % kDecisionTicks == 0) {
+    if (!scene.armies.empty() && !runner.matchOver && tickIndex % static_cast<int>(decisionTicks()) == 0) {
         runOpponents(scene, runner.content, runner.field, runner.passability, runner.starts,
                      runner.markers, runner.scripts, now);
     }
@@ -2843,7 +2866,7 @@ rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) 
     // core/sim/Skirmish.cpp rather than about whichever loop you are reading.
     const rm::sim::TickReport report =
         rm::sim::tickSkirmish(scene.store, scene.catalog, runner.match,
-                              rm::sim::Terrain{runner.field}, kAppTickRate);
+                              rm::sim::Terrain{runner.field}, gAppTickRate);
 
     runner.shotsFired += report.shotsFired;
     scene.deathBlasts += report.deathBlasts;
@@ -2946,8 +2969,12 @@ void march(UnitScene& scene, const rm::HeightField& field, PassabilitySet& passa
 
     // Whole ticks from a duration, rather than feeding a wall clock: this has
     // to land on exactly the same state every run.
-    const auto ticks = static_cast<int>(options.seconds
-                                        * static_cast<float>(rm::sim::kTicksPerSecond));
+    // Through the RUN'S rate, not the default one. This read `kTicksPerSecond` and so ran a
+    // 520-second `--play` for 5200 ticks whatever `--tick-rate` said — at 20 Hz that is 260
+    // seconds of match, which is why nothing was built and nobody fired. Exactly the bug
+    // §5.1 exists to prevent, found by running the four rates rather than by reading.
+    const auto ticks =
+        static_cast<int>(gAppTickRate.ticks(rm::sim::seconds(options.seconds)));
 
     // The caller-side tick, shared with the windowed frame loop. See MatchRunner.
     MatchRunner runner =
@@ -2962,7 +2989,7 @@ void march(UnitScene& scene, const rm::HeightField& field, PassabilitySet& passa
         hashes.reserve(static_cast<std::size_t>(ticks));
     }
 
-    const float kTickSeconds = kAppTickRate.secondsPerTick();
+    const float kTickSeconds = gAppTickRate.secondsPerTick();
     float dustDebt = 0.0f;
     float ambientDebt = 0.0f;
     std::uint32_t dustSeed = 0x51ED27u;
@@ -3031,7 +3058,7 @@ void march(UnitScene& scene, const rm::HeightField& field, PassabilitySet& passa
                 .moving = motion.moving,
                 .topSpeedElmosPerSecond = rm::sim::fxToFloat(motion.speedPerTick)
                                           * static_cast<float>(
-                                              kAppTickRate.ticksPerSecond()),
+                                              gAppTickRate.ticksPerSecond()),
                 .radiusElmos = rm::sim::fxToFloat(motion.radiusElmos),
             });
         }
@@ -3171,11 +3198,11 @@ void march(UnitScene& scene, const rm::HeightField& field, PassabilitySet& passa
                     // Reported PER SECOND, which is what a reader wants, converted back from
                     // the per-tick figure the sim keeps.
                     static_cast<double>(rm::sim::magToFloat(first.incomePerTick.mass))
-                        * kAppTickRate.ticksPerSecond(),
+                        * gAppTickRate.ticksPerSecond(),
                     static_cast<double>(rm::sim::magToFloat(first.incomePerTick.energy))
-                        * kAppTickRate.ticksPerSecond(),
+                        * gAppTickRate.ticksPerSecond(),
                     static_cast<double>(rm::sim::magToFloat(first.upkeepPerTick.energy))
-                        * kAppTickRate.ticksPerSecond(),
+                        * gAppTickRate.ticksPerSecond(),
                     static_cast<double>(rm::sim::fxToFloat(first.fundedFraction)) * 100.0);
     }
 }
@@ -3470,7 +3497,7 @@ namespace {
         // seconds. This is the sim-to-renderer half of the float boundary (`Fx.hpp`).
         const auto perSecond = [](rm::sim::Mag perTick) {
             return rm::sim::magToFloat(perTick)
-                   * static_cast<float>(kAppTickRate.ticksPerSecond());
+                   * static_cast<float>(gAppTickRate.ticksPerSecond());
         };
         state.mass = rm::ui::Gauge{.stored = rm::sim::magToFloat(mine.stored.mass),
                                    .capacity = rm::sim::magToFloat(mine.storage.mass),
@@ -3644,6 +3671,15 @@ int main(int argc, const char* argv[]) {
         // start positions instead of all of them — a stock map declares up to eight,
         // and the match milestone 20 describes is a duel.
         std::span<const rm::mapinfo::StartPosition> starts{map->starts};
+        // `--tick-rate N`: the sim's rate for this run, 5–50 Hz. Read BEFORE anything spawns,
+        // because a unit's speed and a weapon's reload are derived from it at spawn and at
+        // catalog registration — a rate applied later would leave the two disagreeing.
+        if (const std::size_t requested = parseCount(argc, argv, "--tick-rate");
+            requested > 0) {
+            setAppTickRate(static_cast<std::uint32_t>(requested));
+            std::printf("sim: %u ticks a second\n", gAppTickRate.ticksPerSecond());
+        }
+
         const std::size_t armiesCap = parseCount(argc, argv, "--armies");
         if (armiesCap > 0 && armiesCap < starts.size()) {
             starts = starts.first(armiesCap);
@@ -3988,8 +4024,7 @@ int main(int argc, const char* argv[]) {
         // ticks.
         int matchTicks =
             marchOptions.enabled
-                ? static_cast<int>(marchOptions.seconds
-                                   * static_cast<float>(rm::sim::kTicksPerSecond))
+                ? static_cast<int>(gAppTickRate.ticks(rm::sim::seconds(marchOptions.seconds)))
                 : 0;
 
         // Where the last few orders landed, and when. Markers expire on their own
@@ -4162,7 +4197,7 @@ int main(int argc, const char* argv[]) {
             for (int i = 0; i < ticks; ++i) {
                 const rm::sim::TickReport report =
                     advanceMatch(runner, matchTicks, static_cast<float>(matchTicks)
-                                                         * kAppTickRate.secondsPerTick());
+                                                         * gAppTickRate.secondsPerTick());
                 ++matchTicks;
 
                 // The match, announced once. The frame loop draws the fight rather than
@@ -4224,7 +4259,7 @@ int main(int argc, const char* argv[]) {
                     // `secondsPerTick` exists for.
                     .topSpeedElmosPerSecond =
                         rm::sim::fxToFloat(motion.speedPerTick)
-                        * static_cast<float>(kAppTickRate.ticksPerSecond()),
+                        * static_cast<float>(gAppTickRate.ticksPerSecond()),
                     .radiusElmos = rm::sim::fxToFloat(motion.radiusElmos),
                 });
             }

@@ -152,6 +152,7 @@ if(BUILD_TESTING)
         tests/test_types.cpp
         tests/test_fx.cpp
         tests/test_tick_rate.cpp
+        tests/test_tick_rate_invariance.cpp
         tests/test_terrain.cpp
         tests/test_id_pool.cpp
         tests/test_unit_store.cpp

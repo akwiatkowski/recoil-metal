@@ -7,7 +7,13 @@
 #     inline constexpr int kProjectileLifetimeTicks = 300;   // "thirty seconds at 10 Hz"
 #
 # is only correct at one rate, with the rate recorded in a comment instead of in the
-# arithmetic. Change the rate and nothing fails to compile, no test goes red, and the balance
+# arithmetic. So is
+#
+#     inline constexpr int kDecisionTicks = rm::sim::kTicksPerSecond;
+#
+# which looks derived and is not: it names the DEFAULT rate, so it is wrong at every other one.
+# That form is caught too — it cost a real bug to learn, found by running `--tick-rate 20` and
+# watching a match in which nothing happened. Change the rate and nothing fails to compile, no test goes red, and the balance
 # quietly changes. That is the bug this catches, and a grep is the only tool that can see it —
 # so it is registered as a test rather than left as a script somebody remembers to run.
 #
@@ -25,8 +31,8 @@ sim="$root/src/core/sim"
 # `TickRate.hpp` is exempt: it quotes both historical offenders in its own explanation of why
 # they are forbidden, which is documentation rather than a constant.
 found=$(grep -rnE \
-    'constexpr[[:space:]]+(int|unsigned|std::[a-z0-9_]+|TickCount)[[:space:]]+k[A-Za-z]*(Ticks|TickCount)[A-Za-z]*[[:space:]]*=[[:space:]]*[0-9]' \
-    "$sim" "$root/src/core/unit" 2>/dev/null \
+    'constexpr[[:space:]]+(int|unsigned|std::[a-z0-9_]+|TickCount)[[:space:]]+k[A-Za-z]*(Ticks|TickCount)[A-Za-z]*[[:space:]]*=[[:space:]]*([0-9]|[A-Za-z:_]*kTicksPerSecond)' \
+    "$sim" "$root/src/core/unit" "$root/src" 2>/dev/null \
     | grep -v '/TickRate.hpp:' \
     | grep -vE 'kTicksPerSecond|kMinTicksPerSecond|kMaxTicksPerSecond|kDefaultTicksPerSecond' \
     || true)
