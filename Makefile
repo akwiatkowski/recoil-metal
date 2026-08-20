@@ -6,24 +6,44 @@
 # target echoes the command it runs, so a target is also documentation of the command.
 #
 # WHY THIS EXISTS: the two content families live at absolute paths on two different volumes,
-# one of them removable, and a session of testing means retyping them dozens of times. The
-# paths are variables so a different install works with one override rather than an edit:
+# one of them removable, and a session of testing means retyping them dozens of times.
 #
-#     make skirmish FA_ROOT=/Volumes/Other/FA
+# WHERE THE PATHS COME FROM, in order — first one that is set wins:
+#
+#   1. the command line          make skirmish FA_ROOT=/Volumes/Other/FA
+#   2. local.mk, if present      a gitignored file of `FA_ROOT = ...` lines
+#   3. the environment           export RM_FA_ROOT=... (see below)
+#   4. the defaults below
+#
+# local.mk beats the environment because it is the more specific of the two: an export is
+# shell-wide while local.mk belongs to one checkout, and a checkout pointed at a particular
+# install should keep pointing there whatever the shell says. That is also just what the code
+# does — `-include` runs before the `?=` below, so an assignment in local.mk makes it a no-op —
+# and the two agreeing is the point of saying so.
+#
+# The environment is the one worth setting up once. This machine keeps its shell config
+# modular under ~/projects/llm/shell/, and `topics/recoil-metal.zsh` exports the roots as
+# RM_FA_ROOT, RM_BAR_ROOT and RM_BAR_MAPS — prefixed so a bare FA_ROOT belonging to some other
+# project cannot collide with them, and picked up here. On a machine without that config the
+# defaults still work.
 #
 # Tools go through `mise exec --`, per this machine's convention.
+
+# A gitignored file for machine-specific paths, for anyone who would rather not export them.
+# `-include` so its absence is silent rather than an error.
+-include local.mk
 
 # --- Where the content lives -------------------------------------------------
 #
 # Supreme Commander: a retail Forged Alliance install. `gamedata/` holds the `.scd` archives
 # the engine mounts and `maps/` the `.scmap` directories. An external drive here, so the
 # targets that need it check first and say so rather than failing inside the engine.
-FA_ROOT ?= /Volumes/Samsung_T5/faf/Supreme Commander Forged Alliance
+FA_ROOT ?= $(if $(RM_FA_ROOT),$(RM_FA_ROOT),/Volumes/Samsung_T5/faf/Supreme Commander Forged Alliance)
 
 # Beyond All Reason: FAR's reference tree for models and unit definitions, and a separate
 # directory of extracted maps (see the README for how they were fetched).
-BAR_ROOT  ?= $(HOME)/projects/llm/games/forged-alliance-reborn/reference/BAR
-BAR_MAPS  ?= $(HOME)/projects/llm/input/recoil/maps
+BAR_ROOT  ?= $(if $(RM_BAR_ROOT),$(RM_BAR_ROOT),$(HOME)/projects/llm/games/forged-alliance-reborn/reference/BAR)
+BAR_MAPS  ?= $(if $(RM_BAR_MAPS),$(RM_BAR_MAPS),$(HOME)/projects/llm/input/recoil/maps)
 
 # The defaults each family is exercised with. SCMP_009 because it is the map every screenshot
 # in the README was taken on; aw04 because it is the Recoil map the benchmarks are calibrated
@@ -78,6 +98,12 @@ help:
 	@echo '  FA_ROOT   $(FA_ROOT)'
 	@echo '  BAR_ROOT  $(BAR_ROOT)'
 	@echo '  BAR_MAPS  $(BAR_MAPS)'
+	@echo
+	@echo 'Where those could have come from — local.mk first, then the environment:'
+	@echo '  local.mk     $(if $(wildcard local.mk),present,absent)'
+	@echo '  RM_FA_ROOT   $(if $(RM_FA_ROOT),$(RM_FA_ROOT),unset)'
+	@echo '  RM_BAR_ROOT  $(if $(RM_BAR_ROOT),$(RM_BAR_ROOT),unset)'
+	@echo '  RM_BAR_MAPS  $(if $(RM_BAR_MAPS),$(RM_BAR_MAPS),unset)'
 
 # --- Build -------------------------------------------------------------------
 
@@ -103,8 +129,10 @@ check-fa:
 	@test -d "$(FA_ROOT)/gamedata" || { \
 	  echo 'No Forged Alliance install at:'; \
 	  echo '  $(FA_ROOT)'; \
-	  echo 'Plug the drive in, or point FA_ROOT at an install:'; \
-	  echo '  make $(MAKECMDGOALS) FA_ROOT=/path/to/Supreme\ Commander\ Forged\ Alliance'; \
+	  echo 'Plug the drive in, or point it somewhere else — any of:'; \
+	  echo '  make $(MAKECMDGOALS) FA_ROOT=/path/to/install    once'; \
+	  echo '  export RM_FA_ROOT=/path/to/install               for good'; \
+	  echo '  echo "FA_ROOT = /path/to/install" >> local.mk    for good, per checkout'; \
 	  exit 1; }
 	@test -f "$(FA_MAP)" || { echo 'No map at $(FA_MAP)'; exit 1; }
 

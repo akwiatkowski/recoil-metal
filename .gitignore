@@ -18,3 +18,8 @@ third_party/
 # Benchmark CSVs are committed for the opposite reason: they are measurements
 # of a particular machine on a particular day and cannot be reproduced at all.
 docs/images/*.png
+
+# Machine-specific content paths, if you keep them in a file rather than the
+# environment. The two games recoil-metal reads live wherever they live, and one
+# of them is on a removable drive — see the Makefile.
+local.mk
