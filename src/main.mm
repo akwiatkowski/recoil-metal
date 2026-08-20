@@ -1177,7 +1177,9 @@ struct UnitScene {
     /// the others rather than filed under its owner.
     std::vector<rm::sim::Construction> building;
 
-    /// The blueprint each Construction becomes, by its `blueprintIndex`.
+    /// The blueprint each Construction becomes, by its `blueprintIndex` — which is a
+    /// `UnitTypeIndex`, the same number the catalog and the draw gather use. One index space,
+    /// so `sim::applyCommand` can create a construction naming a type the caller recognises.
     std::vector<rm::unitdef::UnitDef> buildable;
 
     /// The VFS path behind each `buildable` entry, parallel to it. What a FINISHED
@@ -1946,12 +1948,24 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
 
 /// Finds (or loads and registers) the buildable entry for `blueprintPath`, so every
 /// Construction of the same blueprint shares one definition and one index.
-[[nodiscard]] std::optional<std::size_t> resolveBuildable(UnitScene& scene,
-                                                          const rm::vfs::Vfs& content,
-                                                          std::string_view blueprintPath) {
+/// Registers a blueprint as buildable and returns its TYPE INDEX.
+///
+/// A `UnitTypeIndex`, not an index into a private list — which is what closes the `Build` hole
+/// in `sim::applyCommand`. There used to be two registries: `scene.buildable` for things under
+/// construction and `scene.definitions`/`scene.catalog` for things standing on the map, with a
+/// `Construction::blueprintIndex` meaning "an index into whatever list the caller is building
+/// from". The sim could not create a construction because it had no way to name a blueprint the
+/// caller would recognise.
+///
+/// One registry fixes that: a type index means the same thing to the sim, the catalog and the
+/// draw gather, and `buildablePaths` is now indexed BY type index so a finished construction can
+/// still find its model.
+[[nodiscard]] std::optional<rm::UnitTypeIndex> resolveBuildable(UnitScene& scene,
+                                                                const rm::vfs::Vfs& content,
+                                                                std::string_view blueprintPath) {
     for (std::size_t i = 0; i < scene.buildablePaths.size(); ++i) {
         if (scene.buildablePaths[i] == blueprintPath) {
-            return i;
+            return static_cast<rm::UnitTypeIndex>(i);
         }
     }
     const auto bytes = content.read(std::string{blueprintPath});
@@ -1968,7 +1982,7 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
     }
     scene.buildable.push_back(*def);
     scene.buildablePaths.emplace_back(blueprintPath);
-    return scene.buildable.size() - 1;
+    return static_cast<rm::UnitTypeIndex>(scene.buildable.size() - 1);
 }
 
 /// Orders every commander to build a mass extractor on its nearest deposit.
@@ -2598,8 +2612,10 @@ struct MarchOptions {
         .buildType = 0,
     };
 
-    const bool applied = rm::sim::applyCommand(command, scene.store, scene.players,
-                                              scene.armies, rm::sim::Terrain{field}, grid);
+    const bool applied = rm::sim::applyCommand(command, scene.store, scene.catalog,
+                                               scene.players, scene.armies,
+                                               rm::sim::Terrain{field}, grid, gAppTickRate,
+                                               &scene.building);
     if (applied) {
         // Recorded only when it took. A refused order is not part of the match — replaying it
         // would be refused again, so keeping it would only make the log longer.

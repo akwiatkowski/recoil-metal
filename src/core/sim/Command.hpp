@@ -4,8 +4,11 @@
 #include "core/sim/Army.hpp"
 #include "core/sim/Fx.hpp"
 #include "core/sim/IdPool.hpp"
+#include "core/sim/Economy.hpp"
 #include "core/sim/Pathfinding.hpp"
 #include "core/sim/Terrain.hpp"
+#include "core/sim/TickRate.hpp"
+#include "core/sim/UnitCatalog.hpp"
 
 #include <cstdint>
 #include <optional>
@@ -106,14 +109,25 @@ struct Command {
 /// longer exists. What matters is that the rejection is deterministic, so a replay rejects
 /// exactly what the original did.
 ///
-/// `Build` is not applied here. It has no effect on the store — a construction needs a
-/// blueprint out of the VFS, which the sim cannot reach — so it returns false and the caller
-/// reads the command itself. That is a gap, and it is named rather than hidden: the
-/// construction list moves into the sim in P3, and this is where it will be applied.
+/// `Build` IS applied now (P3), and the gap this comment used to describe is closed.
+///
+/// It could not be before, for a reason worth keeping: `Construction::blueprintIndex` meant "an
+/// index into whatever list the caller is building from", so the sim had no way to name a
+/// blueprint the caller would recognise. P3 unified the two registries — an index is a
+/// `UnitTypeIndex` now, which the catalog also uses — so the sim can read a type's cost and
+/// build time and push a `Construction` itself.
+///
+/// What is still the caller's: turning a FINISHED construction into a unit. That needs a model
+/// out of the VFS, which the sim genuinely cannot reach, and `TickReport::finished` is how it
+/// is handed over. That division is the real one; the old one was an accident of indexing.
+///
+/// `building` may be null — a decorative crowd has no construction list — in which case a
+/// `Build` command is refused rather than crashing.
 [[nodiscard]] bool applyCommand(const Command& command, UnitStore& store,
-                                std::span<const Player> players,
+                                const UnitCatalog& catalog, std::span<const Player> players,
                                 std::span<const Army> armies, const Terrain& terrain,
-                                const PassabilityGrid& grid);
+                                const PassabilityGrid& grid, TickRate rate,
+                                std::vector<Construction>* building = nullptr);
 
 // --- The log --------------------------------------------------------------------------
 //

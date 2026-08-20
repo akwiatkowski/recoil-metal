@@ -74,9 +74,10 @@ bool operator==(const Command& a, const Command& b) noexcept {
            && a.targetX == b.targetX && a.targetZ == b.targetZ && a.buildType == b.buildType;
 }
 
-bool applyCommand(const Command& command, UnitStore& store, std::span<const Player> players,
-                  std::span<const Army> armies, const Terrain& terrain,
-                  const PassabilityGrid& grid) {
+bool applyCommand(const Command& command, UnitStore& store, const UnitCatalog& catalog,
+                  std::span<const Player> players, std::span<const Army> armies,
+                  const Terrain& terrain, const PassabilityGrid& grid, TickRate rate,
+                  std::vector<Construction>* building) {
     // A stale handle first, before anything else looks at the slot. A player may click a unit
     // that died on the tick their order was issued, and a replay of an old log may name a unit
     // that no longer exists — in both cases the generation has moved on, so this must not
@@ -118,10 +119,36 @@ bool applyCommand(const Command& command, UnitStore& store, std::span<const Play
         return true;
     }
 
-    case CommandKind::Build:
-        // Deliberately not applied — see the header. A construction needs a blueprint the sim
-        // cannot reach, so the caller reads the command itself. Moves here in P3.
-        return false;
+    case CommandKind::Build: {
+        if (building == nullptr) {
+            return false;  // a scene with no construction list cannot build
+        }
+        const unitdef::UnitDef* def = catalog.def(command.buildType);
+        if (def == nullptr) {
+            return false;  // a type the catalog does not know
+        }
+
+        // A builder builds. Anything else issuing a build order is a caller bug, and refusing
+        // it deterministically is better than letting a tank found a factory.
+        const unitdef::UnitDef* builder = catalog.def(store.typeAt(command.unit.index));
+        if (builder == nullptr || !builder->isBuilder()) {
+            return false;
+        }
+
+        // The cost and the time come from the DEFINITION, and the rate from the clock — the
+        // same derivation `UnitCatalog::Rates` does for income, at the one place a construction
+        // is created.
+        building->push_back(Construction{
+            .armyIndex = store.motion()[command.unit.index].armyIndex,
+            .position = {fxToFloat(command.targetX), 0.0f, fxToFloat(command.targetZ)},
+            .cost = {.mass = def->buildCostMass, .energy = def->buildCostEnergy},
+            .buildTimeRemaining = def->buildTime,
+            .totalBuildTime = def->buildTime,
+            .buildPerTick = rate.magPerTick(builder->buildRate),
+            .blueprintIndex = command.buildType,
+        });
+        return true;
+    }
     }
 
     return false;

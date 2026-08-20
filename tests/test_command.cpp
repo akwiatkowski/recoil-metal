@@ -61,15 +61,18 @@ struct Fixture {
         theirs = roster.add(type, 600.0f, 600.0f, 1, 500.0f);
     }
 
+    /// The construction list a `Build` command lands in. A member so a case can inspect it.
+    std::vector<rm::sim::Construction> building;
+
     [[nodiscard]] bool apply(const Command& command) {
-        return rm::sim::applyCommand(command, roster.store, players, armies, terrain, grid);
+        return rm::sim::applyCommand(command, roster.store, roster.catalog, players, armies,
+                                     terrain, grid, roster.rate, &building);
     }
 
     /// Runs the match forward, applying whatever the log says on each tick — which is the
     /// replay loop, and the only loop either a live match or a replay needs.
     void run(const CommandLog& log, rm::TickIndex ticks) {
         std::vector<rm::sim::Projectile> shots;
-        std::vector<rm::sim::Construction> building;
         std::vector<rm::sim::Economy> economies(2);
         const std::vector<int> commandersEver(2, 0);
 
@@ -176,6 +179,106 @@ TEST_CASE("an unreachable destination is a refused order, not a straight line") 
 
     CHECK_FALSE(fix.apply(moveOrder(0, 0, fix.mine, 500.0f, 200.0f)));
     CHECK_FALSE(fix.roster.motion(fix.mine).moving);
+}
+
+TEST_CASE("a build command creates a construction, costed from the blueprint") {
+    // THE HOLE THIS CLOSED (P3). A `Build` command used to be recorded and refused, because
+    // `Construction::blueprintIndex` meant "an index into whatever list the caller is building
+    // from" — so the sim had no way to name a blueprint the caller would recognise. One index
+    // space later, it can.
+    Fixture fix;
+
+    // A builder, and something for it to build.
+    rm::unitdef::UnitDef engineerDef;
+    engineerDef.name = "engineer";
+    engineerDef.buildRate = 10.0f;
+    const rm::UnitTypeIndex engineerType = fix.roster.addType(engineerDef);
+
+    rm::unitdef::UnitDef mexDef;
+    mexDef.name = "mex";
+    mexDef.buildCostMass = rm::test::mag(36.0f);
+    mexDef.buildCostEnergy = rm::test::mag(360.0f);
+    mexDef.buildTime = rm::test::mag(60.0f);
+    const rm::UnitTypeIndex mexType = fix.roster.addType(mexDef);
+
+    const UnitId engineer = fix.roster.add(engineerType, 300.0f, 300.0f, 0, 500.0f);
+
+    const Command build{.tick = 0,
+                        .player = 0,
+                        .kind = CommandKind::Build,
+                        .unit = engineer,
+                        .targetX = rm::test::fx(400.0f),
+                        .targetZ = rm::test::fx(400.0f),
+                        .buildType = mexType};
+
+    REQUIRE(fix.apply(build));
+    REQUIRE(fix.building.size() == 1);
+
+    const rm::sim::Construction& work = fix.building.front();
+    CHECK(work.armyIndex == 0);
+    // Cost and time from the DEFINITION, not from the command — a command says what and where,
+    // and the blueprint says what it costs.
+    CHECK(rm::test::asFloat(work.cost.mass) == 36.0f);
+    CHECK(rm::test::asFloat(work.cost.energy) == 360.0f);
+    CHECK(rm::test::asFloat(work.totalBuildTime) == 60.0f);
+    // And the rate from the BUILDER, through the clock.
+    CHECK(rm::test::asFloat(work.buildPerTick)
+          == rm::test::asFloat(fix.roster.rate.magPerTick(10.0f)));
+    // The index is the type index, which is the whole point: the caller can resolve it.
+    CHECK(work.blueprintIndex == mexType);
+}
+
+TEST_CASE("only a builder builds") {
+    // A tank founding a factory is a caller bug, and refusing it deterministically beats
+    // letting it through.
+    Fixture fix;
+    rm::unitdef::UnitDef mexDef;
+    mexDef.name = "mex";
+    mexDef.buildTime = rm::test::mag(60.0f);
+    const rm::UnitTypeIndex mexType = fix.roster.addType(mexDef);
+
+    const Command build{.tick = 0,
+                        .player = 0,
+                        .kind = CommandKind::Build,
+                        .unit = fix.mine,  // a plain unit with no build rate
+                        .targetX = rm::test::fx(400.0f),
+                        .targetZ = rm::test::fx(400.0f),
+                        .buildType = mexType};
+    CHECK_FALSE(fix.apply(build));
+    CHECK(fix.building.empty());
+}
+
+TEST_CASE("a build with nowhere to put it, or nothing to build, is refused") {
+    Fixture fix;
+    rm::unitdef::UnitDef engineerDef;
+    engineerDef.name = "engineer";
+    engineerDef.buildRate = 10.0f;
+    const UnitId engineer =
+        fix.roster.add(fix.roster.addType(engineerDef), 300.0f, 300.0f, 0, 500.0f);
+
+    // A type the catalog does not know.
+    const Command unknown{.tick = 0,
+                          .player = 0,
+                          .kind = CommandKind::Build,
+                          .unit = engineer,
+                          .targetX = rm::test::fx(400.0f),
+                          .targetZ = rm::test::fx(400.0f),
+                          .buildType = 999};
+    CHECK_FALSE(fix.apply(unknown));
+
+    // And a scene with no construction list at all — a decorative crowd. Refused rather than
+    // crashing, which is what the null default is for.
+    const Command noList{.tick = 0,
+                         .player = 0,
+                         .kind = CommandKind::Build,
+                         .unit = engineer,
+                         .targetX = rm::test::fx(400.0f),
+                         .targetZ = rm::test::fx(400.0f),
+                         .buildType = 0};
+    CHECK_FALSE(rm::sim::applyCommand(noList, fix.roster.store, fix.roster.catalog, fix.players,
+                                      fix.armies, fix.terrain, fix.grid, fix.roster.rate,
+                                      nullptr));
+    CHECK(fix.building.empty());
 }
 
 // --- The log ---------------------------------------------------------------------------
