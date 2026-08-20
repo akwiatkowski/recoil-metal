@@ -66,7 +66,11 @@ struct Weapon {
     BallisticArc arc = BallisticArc::None;
 
     /// Damage a single shot does at the point of impact.
-    float damage = 0.0f;
+    /// FIXED POINT (`Mag`), converted at parse time — which is the legitimate float boundary
+    /// (PLAN2.md §5.1: content converts exactly once, at load, and the sim never sees the
+    /// float again). `Mag` rather than `Fx` because `Damage` reaches 15,000 in the corpus and
+    /// the ring damages of a commander's death blast are larger still.
+    sim::Mag damage{};
 
     /// Radius over which that damage is spread, in ELMOS, converted from the ogrids
     /// the file states. Zero means a point hit: 222 of the 494 weapons state no radius
@@ -98,14 +102,14 @@ struct Weapon {
     // Held as two rings rather than flattened into one radius and one number because they
     // are genuinely two: a near-total kill zone and a wide fringe, and averaging them would
     // both spare what should die and spread damage where the game puts none.
-    float innerRingDamage = 0.0f;
+    sim::Mag innerRingDamage{};
     float innerRingRadiusElmos = 0.0f;
-    float outerRingDamage = 0.0f;
+    sim::Mag outerRingDamage{};
     float outerRingRadiusElmos = 0.0f;
 
     /// Whether this weapon does its damage in rings rather than as a single blast.
     [[nodiscard]] bool hasRings() const noexcept {
-        return innerRingDamage > 0.0f || outerRingDamage > 0.0f;
+        return innerRingDamage > sim::Mag{} || outerRingDamage > sim::Mag{};
     }
 
     /// Whether the weapon has a turret. A turreted weapon may fire without the hull
@@ -141,12 +145,14 @@ struct Weapon {
     /// a "weapon" lacking them is a table describing something else.
     [[nodiscard]] bool fires() const noexcept {
         return role != WeaponRole::Death && !manualFire && !enabledByEnhancement
-            && maxRangeElmos > 0.0f && rateOfFire > 0.0f && damage > 0.0f;
+            && maxRangeElmos > 0.0f && rateOfFire > 0.0f && damage > sim::Mag{};
     }
 
     /// Whether this weapon does any damage at all, by either scheme. What a death explosion
     /// is asked, since a death explosion has no range and no rate of fire to have.
-    [[nodiscard]] bool harmful() const noexcept { return damage > 0.0f || hasRings(); }
+    [[nodiscard]] bool harmful() const noexcept {
+        return damage > sim::Mag{} || hasRings();
+    }
 
     /// Ticks between shots at a given rate, never less than one.
     ///

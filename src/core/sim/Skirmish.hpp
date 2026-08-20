@@ -116,7 +116,7 @@ struct TickReport {
     /// tick, and reporting only the damage would make that look like the explosions
     /// never happened.
     std::size_t deathBlasts = 0;
-    float deathBlastDamage = 0.0f;
+    Mag deathBlastDamage{};
 
     /// How many armies were newly defeated this tick.
     std::size_t defeated = 0;

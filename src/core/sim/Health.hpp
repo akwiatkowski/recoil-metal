@@ -1,5 +1,7 @@
 #pragma once
 
+#include "core/sim/Fx.hpp"
+
 #include <vector>
 
 namespace rm::sim {
@@ -11,8 +13,18 @@ namespace rm::sim {
 /// Combat.hpp needs the store: the two would include each other. Splitting the type out is
 /// the smaller fix, and it is where a reader would look for it anyway.
 struct Health {
-    float current = 0.0f;
-    float maximum = 0.0f;
+    /// FIXED POINT (`Mag`, Q50.14), not float — PLAN2.md §5.2, D1.
+    ///
+    /// `Mag` rather than `Fx` because health does not fit the geometric type: `MaxHealth`
+    /// reaches 5,000,000 in the corpus (XSC9010) against `Fx`'s ceiling of 131,072. Measured
+    /// across all 568 unit blueprints; see `core/Types.hpp`.
+    ///
+    /// The fraction matters as much as the range. Damage is spread with a linear falloff, so a
+    /// unit at the rim of a blast takes an arbitrary fraction of the weapon's damage; rounding
+    /// that to whole points would make a large blast deal visibly different totals depending
+    /// on how the survivors happened to be arranged.
+    Mag current{};
+    Mag maximum{};
 
     /// Ticks until this weapon may fire again, one entry per weapon on the unit.
     ///
@@ -23,7 +35,7 @@ struct Health {
     /// clock.
     std::vector<int> reloadRemaining;
 
-    [[nodiscard]] bool alive() const noexcept { return current > 0.0f; }
+    [[nodiscard]] bool alive() const noexcept { return current > Mag{}; }
 };
 
 } // namespace rm::sim

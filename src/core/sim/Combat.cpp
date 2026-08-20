@@ -203,7 +203,7 @@ std::size_t aimAtTargets(UnitStore& store, const UnitCatalog& catalog,
         // all of them and the sweep is the expensive part.
         unitdef::Weapon sweep;
         sweep.role = unitdef::WeaponRole::DirectFire;
-        sweep.damage = 1.0f;
+        sweep.damage = Mag::fromInt(1);
         sweep.rateOfFire = 1.0f;
         sweep.maxRangeElmos = reach;
 
@@ -357,9 +357,9 @@ Projectile launch(std::array<float, 3> from, std::array<float, 3> to,
     return shot;
 }
 
-float damageArea(std::array<float, 3> centre, float radiusElmos, float damage, int byArmy,
-                 UnitStore& store, std::span<const Army> armies) {
-    float dealt = 0.0f;
+Mag damageArea(std::array<float, 3> centre, float radiusElmos, Mag damage, int byArmy,
+               UnitStore& store, std::span<const Army> armies) {
+    Mag dealt{};
 
     const std::span<const UnitInstance> instances = store.instances();
     const std::span<const MoveState> motion = store.motion();
@@ -389,7 +389,11 @@ float damageArea(std::array<float, 3> centre, float radiusElmos, float damage, i
             continue;
         }
 
-        const float applied = std::min(healths[slot].current, damage * share);
+        // The share is a fraction of the blast, so it is geometry: `Fx`. Multiplying a `Mag`
+        // by an `Fx` is how a rate or a fraction becomes an amount, and it is the one mixed
+        // operation the two types have.
+        const Mag wanted = damage * fxFromFloat(share);
+        const Mag applied = std::min(healths[slot].current, wanted);
         healths[slot].current -= applied;
         dealt += applied;
     }
@@ -455,11 +459,11 @@ const unitdef::Weapon* deathWeapon(const unitdef::UnitDef& def) noexcept {
     return nullptr;
 }
 
-float explodeOnDeath(const unitdef::UnitDef& def, std::array<float, 3> at, int byArmy,
+Mag explodeOnDeath(const unitdef::UnitDef& def, std::array<float, 3> at, int byArmy,
                      UnitStore& store, std::span<const Army> armies) {
     const unitdef::Weapon* blast = deathWeapon(def);
     if (blast == nullptr || !blast->harmful()) {
-        return 0.0f;
+        return Mag{};
     }
 
     // TWO RINGS when the weapon states them — the four commanders do — applied outer first
@@ -468,7 +472,7 @@ float explodeOnDeath(const unitdef::UnitDef& def, std::array<float, 3> at, int b
     // takes both, which is what a nested blast should do. Reversed, the outer ring would be
     // finishing off things the inner one had already flattened.
     if (blast->hasRings()) {
-        float dealt = 0.0f;
+        Mag dealt{};
         dealt += damageArea(at, blast->outerRingRadiusElmos, blast->outerRingDamage, byArmy,
                             store, armies);
         dealt += damageArea(at, blast->innerRingRadiusElmos, blast->innerRingDamage, byArmy,
@@ -483,7 +487,7 @@ std::vector<UnitId> deadUnits(const UnitStore& store) {
     const std::span<const Health> healths = store.health();
     std::vector<UnitId> dead;
     for (UnitIndex slot = 0; slot < healths.size(); ++slot) {
-        if (healths[slot].maximum > 0.0f && !healths[slot].alive()) {
+        if (healths[slot].maximum > Mag{} && !healths[slot].alive()) {
             dead.push_back(store.idAt(slot));
         }
     }

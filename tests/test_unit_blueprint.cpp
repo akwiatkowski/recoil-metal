@@ -17,6 +17,8 @@
 #include <numbers>
 #include <string>
 
+#include "support/FxMatchers.hpp"
+
 using Catch::Approx;
 using rm::unitdef::MotionType;
 
@@ -82,7 +84,7 @@ TEST_CASE("a unit blueprint's numbers arrive in the engine's own units") {
     // 90 degrees/s in radians — no 65536 and no tick rate, unlike BAR's.
     CHECK(def->turnRateRadiansPerSecond == Approx(std::numbers::pi_v<float> / 2.0f));
 
-    CHECK(def->health == Approx(300.0f));
+    CHECK(rm::test::asFloat(def->health) == Approx(300.0f));
     CHECK(def->motion == MotionType::Land);
     CHECK_FALSE(def->canFly);
 

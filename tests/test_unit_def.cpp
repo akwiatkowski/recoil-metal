@@ -15,6 +15,8 @@
 #include <numbers>
 #include <string>
 
+#include "support/FxMatchers.hpp"
+
 using Catch::Approx;
 
 namespace {
@@ -58,7 +60,7 @@ return {
     // engine keys on.
     CHECK(def->name == "armpw");
     CHECK(def->modelPath == "Units/ARMPW.s3o");
-    CHECK(def->health == Approx(370.0f));
+    CHECK(rm::test::asFloat(def->health) == Approx(370.0f));
 
     // Speed is already elmos/second in the modern field.
     CHECK(def->speedElmosPerSecond == Approx(87.0f));

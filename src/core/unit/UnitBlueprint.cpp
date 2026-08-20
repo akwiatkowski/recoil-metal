@@ -227,7 +227,7 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
 
     // --- the rest ----------------------------------------------------------
     if (const lua::Value* defense = parsed->path("Defense")) {
-        def.health = numberOr(*defense, "MaxHealth", 0.0f);
+        def.health = sim::magFromFloat(numberOr(*defense, "MaxHealth", 0.0f));
     }
 
     // --- display -----------------------------------------------------------

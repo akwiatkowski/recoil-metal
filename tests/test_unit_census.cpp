@@ -9,6 +9,8 @@
 #include <map>
 #include <vector>
 
+#include "support/FxMatchers.hpp"
+
 using rm::sim::UnitCensus;
 using rm::sim::UnitId;
 using rm::sim::UnitStore;
@@ -20,7 +22,7 @@ namespace {
     s.type = type;
     s.instance.scale = 1.0f;
     s.motion.armyIndex = army;
-    s.health = rm::sim::Health{.current = 100.0f, .maximum = 100.0f};
+    s.health = rm::sim::Health{.current = rm::test::mag(100.0f), .maximum = rm::test::mag(100.0f)};
     return s;
 }
 

@@ -1088,7 +1088,7 @@ struct UnitScene {
     /// two commanders kill each other in the same tick, and reporting only the damage would
     /// make that look like the explosions never happened.
     std::size_t deathBlasts = 0;
-    float deathBlastDamage = 0.0f;
+    rm::sim::Mag deathBlastDamage{};
 
     /// How many commanders each army STARTED with, indexed by army. The win condition
     /// needs it to tell "lost its commander" from "never had one" — a `--units` crowd must
@@ -1365,7 +1365,7 @@ struct UnitOptions {
                     def->name.c_str(), static_cast<double>(def->speedElmosPerSecond),
                     static_cast<double>(def->turnRateRadiansPerSecond),
                     static_cast<double>(def->collisionRadiusElmos),
-                    static_cast<double>(def->health),
+                    static_cast<double>(rm::sim::magToFloat(def->health)),
                     rm::unitdef::travelsOnGround(def->motion) ? "on the ground"
                     : def->canFly                            ? "flying"
                                                              : "not a ground mover");
@@ -1413,7 +1413,8 @@ struct UnitOptions {
     std::printf("unit %s: %.0f elmos/s, %.2f rad/s, footprint %d x %d squares, %.0f hp%s\n",
                 def->name.c_str(), static_cast<double>(def->speedElmosPerSecond),
                 static_cast<double>(def->turnRateRadiansPerSecond), def->footprintSquaresX,
-                def->footprintSquaresZ, static_cast<double>(def->health),
+                def->footprintSquaresZ,
+                static_cast<double>(rm::sim::magToFloat(def->health)),
                 def->canFly ? " (flies)" : "");
     return *def;
 }
@@ -1506,7 +1507,8 @@ struct VfsUnit {
     std::printf("unit %s: %.0f elmos/s, %.2f rad/s, radius %.1f elmos, %.0f hp, %s\n",
                 def->name.c_str(), static_cast<double>(def->speedElmosPerSecond),
                 static_cast<double>(def->turnRateRadiansPerSecond),
-                static_cast<double>(def->collisionRadiusElmos), static_cast<double>(def->health),
+                static_cast<double>(def->collisionRadiusElmos),
+                static_cast<double>(rm::sim::magToFloat(def->health)),
                 rm::unitdef::travelsOnGround(def->motion) ? "on the ground"
                 : def->canFly                            ? "flying"
                                                          : "not a ground mover");
@@ -1601,7 +1603,8 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
                 unit->def.weapons, [](const rm::unitdef::Weapon& w) { return w.fires(); }));
             std::printf("army %d: %s commander %s, %.0f hp, %zu weapon(s)\n", army.index,
                         std::string{rm::sim::factionName(army.faction)}.c_str(),
-                        unit->def.name.c_str(), static_cast<double>(unit->def.health), armed);
+                        unit->def.name.c_str(),
+                        static_cast<double>(rm::sim::magToFloat(unit->def.health)), armed);
 
         }
 
@@ -1626,7 +1629,7 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
 
         const auto type = static_cast<rm::UnitTypeIndex>(batch);
         const rm::unitdef::UnitDef* def = scene.catalog.def(type);
-        const float hp = def != nullptr ? def->health : 0.0f;
+        const rm::sim::Mag hp = def != nullptr ? def->health : rm::sim::Mag{};
         (void)scene.store.spawn(rm::sim::UnitStore::Spawn{
             .type = type,
             .instance = one.front(),
@@ -2042,7 +2045,7 @@ void orderFirstExtractors(UnitScene& scene, std::span<const rm::scenario::Marker
         // A definition's speed and turn rate reach every unit of it. Slope and depth limits
         // do NOT yet: passability is one grid for the whole scene, so honouring them per
         // unit type would mean a grid per type.
-        const float hp = def ? def->health : 0.0f;
+        const rm::sim::Mag hp = def ? def->health : rm::sim::Mag{};
         for (const rm::UnitInstance& instance : placed) {
             rm::sim::MoveState state;
             if (def) {
@@ -3016,8 +3019,8 @@ void march(UnitScene& scene, const rm::HeightField& field, PassabilitySet& passa
         // What the fight came to. Reported rather than inferred from a screenshot,
         // because a unit that died is a unit that is no longer in the frame and its
         // absence looks the same as its never having been there.
-        float remaining = 0.0f;
-        float maximum = 0.0f;
+        rm::sim::Mag remaining{};
+        rm::sim::Mag maximum{};
         for (const rm::sim::Health& one : scene.store.health()) {
             remaining += one.current;
             maximum += one.maximum;
@@ -3026,7 +3029,8 @@ void march(UnitScene& scene, const rm::HeightField& field, PassabilitySet& passa
         std::printf("combat: %zu shots fired, %zu in flight, %zu unit(s) destroyed,"
                     " %.0f of %.0f hp left\n",
                     runner.shotsFired, scene.projectiles.size(), runner.unitsDestroyed,
-                    static_cast<double>(remaining), static_cast<double>(maximum));
+                    static_cast<double>(rm::sim::magToFloat(remaining)),
+                    static_cast<double>(rm::sim::magToFloat(maximum)));
 
         // Each commander's state, because the match hangs on exactly these numbers
         // and "the fight is still on" and "the fight never reached anyone" read the
@@ -3038,14 +3042,16 @@ void march(UnitScene& scene, const rm::HeightField& field, PassabilitySet& passa
             }
             std::printf("  army %d commander: %.0f of %.0f hp\n",
                         scene.store.motion()[slot].armyIndex,
-                        static_cast<double>(scene.store.health()[slot].current),
-                        static_cast<double>(scene.store.health()[slot].maximum));
+                        static_cast<double>(
+                            rm::sim::magToFloat(scene.store.health()[slot].current)),
+                        static_cast<double>(
+                            rm::sim::magToFloat(scene.store.health()[slot].maximum)));
         }
         if (scene.deathBlasts > 0 || !scene.wreckDecals.empty()) {
             std::printf("wreckage: %zu scorch mark(s), %zu death explosion(s) dealing"
                         " %.0f damage\n",
                         scene.wreckDecals.size() / rm::wreckVertexCount(), scene.deathBlasts,
-                        static_cast<double>(scene.deathBlastDamage));
+                        static_cast<double>(rm::sim::magToFloat(scene.deathBlastDamage)));
         }
     }
 

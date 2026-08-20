@@ -20,6 +20,8 @@
 #include <cstdint>
 #include <vector>
 
+#include "support/FxMatchers.hpp"
+
 using Catch::Approx;
 using rm::sim::Army;
 using rm::sim::Construction;
@@ -53,7 +55,7 @@ namespace {
     weapon.label = "test gun";
     weapon.role = WeaponRole::DirectFire;
     weapon.turreted = true;
-    weapon.damage = damage;
+    weapon.damage = rm::test::mag(damage);
     weapon.maxRangeElmos = rangeElmos;
     weapon.rateOfFire = 1.0f;                      // one shot a second
     weapon.muzzleVelocityElmosPerSecond = 200.0f;  // crosses the range in a tick or two
@@ -155,7 +157,7 @@ TEST_CASE("the tick reports its dead, and retires them from the fight") {
     (void)roster.add(roster.addType(tankDef), 0.0f, 0.0f, 0, 500.0f);
     const rm::sim::UnitId victim =
         roster.add(roster.addType(targetDef), 50.0f, 0.0f, 1, 10.0f);
-    roster.health(victim).current = 0.0f;  // already destroyed, this tick retires it
+    roster.health(victim).current = rm::test::mag(0.0f);  // already destroyed, this tick retires it
 
     std::vector<Army> armies = twoSides();
     std::vector<Projectile> projectiles;
@@ -226,7 +228,7 @@ TEST_CASE("losing the last commander defeats an army and ends the match") {
     CHECK(report.matchEnded == false);
 
     // Army 1's commander dies.
-    roster.health(theirs).current = 0.0f;
+    roster.health(theirs).current = rm::test::mag(0.0f);
     report = rm::sim::tickSkirmish(roster.store, roster.catalog, match, field);
 
     CHECK(report.defeated == 1);
@@ -276,7 +278,7 @@ TEST_CASE("a death explosion goes off once, and hurts what is standing nearby") 
     Weapon blast;
     blast.label = "test death";
     blast.role = WeaponRole::Death;
-    blast.damage = 400.0f;
+    blast.damage = rm::test::mag(400.0f);
     blast.damageRadiusElmos = 100.0f;
 
     Roster roster;
@@ -287,7 +289,7 @@ TEST_CASE("a death explosion goes off once, and hurts what is standing nearby") 
     targetDef.name = "test_target";
 
     const rm::sim::UnitId bomb = roster.add(roster.addType(bombDef), 0.0f, 0.0f, 0, 100.0f);
-    roster.health(bomb).current = 0.0f;  // dies this tick
+    roster.health(bomb).current = rm::test::mag(0.0f);  // dies this tick
 
     // Half the blast radius away.
     const rm::sim::UnitId bystander =
@@ -308,15 +310,15 @@ TEST_CASE("a death explosion goes off once, and hurts what is standing nearby") 
     TickReport report = rm::sim::tickSkirmish(roster.store, roster.catalog, match, field);
 
     CHECK(report.deathBlasts == 1);
-    CHECK(report.deathBlastDamage > 0.0f);
-    CHECK(roster.health(bystander).current < 500.0f);  // it felt it
+    CHECK(rm::test::asFloat(report.deathBlastDamage) > 0.0f);
+    CHECK(rm::test::asFloat(roster.health(bystander).current) < 500.0f);  // it felt it
 
     // ONCE. The corpse sits in its slot for the rest of the match, and a blast that
     // repeated every tick would be both a wrong answer and an unbounded one.
-    const float afterOne = roster.health(bystander).current;
+    const rm::sim::Mag afterOne = roster.health(bystander).current;
     report = rm::sim::tickSkirmish(roster.store, roster.catalog, match, field);
     CHECK(report.deathBlasts == 0);
-    CHECK(roster.health(bystander).current == Approx(afterOne));
+    CHECK(rm::test::asFloat(roster.health(bystander).current) == Approx(rm::test::asFloat(afterOne)));
 }
 
 TEST_CASE("a finished construction is reported but left in the list") {
@@ -402,7 +404,7 @@ TEST_CASE("income is what is standing, and a destroyed producer stops paying") {
     CHECK(economies[0].upkeepPerSecond.energy == Approx(2.0f));
 
     // Destroyed, and the income goes with it.
-    roster.health(extractor).current = 0.0f;
+    roster.health(extractor).current = rm::test::mag(0.0f);
     (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, field);
 
     CHECK(economies[0].incomePerSecond.mass == Approx(0.0f));

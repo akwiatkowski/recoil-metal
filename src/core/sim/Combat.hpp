@@ -38,7 +38,8 @@ struct Projectile {
     std::array<float, 3> position{};
     std::array<float, 3> velocity{};  ///< elmos per second
 
-    float damage = 0.0f;
+    /// Fixed point, carried straight from the weapon that fired it.
+    Mag damage{};
     float damageRadiusElmos = 0.0f;
 
     /// Who fired it, so a shot cannot kill its own side — checked at impact rather than
@@ -187,8 +188,12 @@ void advanceProjectiles(std::vector<Projectile>& projectiles, UnitStore& store,
 /// `lua/sim/Unit.lua`'s damage model does. A radius of zero damages only what is at the
 /// centre, at full strength — the 222 weapons that state no radius are point hits
 /// rather than weapons that cannot hurt anything.
-float damageArea(std::array<float, 3> centre, float radiusElmos, float damage, int byArmy,
-                 UnitStore& store, std::span<const Army> armies);
+/// `damage` is a `Mag` because that is what health is; the FALLOFF is computed in `Fx`,
+/// because a fraction of a blast radius is geometry. The two meet in one multiply, which is
+/// the only place the types mix — and it is exact rather than a rescale, since both use the
+/// same number of fractional bits.
+Mag damageArea(std::array<float, 3> centre, float radiusElmos, Mag damage, int byArmy,
+               UnitStore& store, std::span<const Army> armies);
 
 /// The unit's own destruction, if its definition describes one.
 ///
@@ -208,7 +213,7 @@ float damageArea(std::array<float, 3> centre, float radiusElmos, float damage, i
 /// `hostile`, so friendly fire would need a mode of its own rather than a different
 /// argument. Noted rather than hidden: a commander detonating in a friendly crowd should be
 /// a catastrophe and here it is merely an inconvenience.
-float explodeOnDeath(const unitdef::UnitDef& def, std::array<float, 3> at, int byArmy,
+Mag explodeOnDeath(const unitdef::UnitDef& def, std::array<float, 3> at, int byArmy,
                      UnitStore& store, std::span<const Army> armies);
 
 /// Which units died this tick, so a caller can leave wreckage and check for a defeat.

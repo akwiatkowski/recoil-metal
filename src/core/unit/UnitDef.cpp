@@ -145,7 +145,7 @@ std::expected<std::vector<UnitDef>, lua::ParseError> loadFileAll(
 
         def.maxSlopeDegrees = numberOr(table, "maxslope", 0.0f);
         def.maxWaterDepthElmos = numberOr(table, "maxwaterdepth", 0.0f);
-        def.health = numberOr(table, "health", 0.0f);
+        def.health = sim::magFromFloat(numberOr(table, "health", 0.0f));
 
         if (const lua::Value* flies = table.find("canfly")) {
             def.canFly = flies->asBoolean().value_or(false);

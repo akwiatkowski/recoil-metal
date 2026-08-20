@@ -75,7 +75,7 @@ std::vector<Weapon> weaponsFrom(const lua::Value& weaponArray) {
             weapon.arc = ballisticArcFromName(*arc).value_or(BallisticArc::None);
         }
 
-        weapon.damage = numberOr(entry, "Damage", 0.0f);
+        weapon.damage = sim::magFromFloat(numberOr(entry, "Damage", 0.0f));
 
         // Ogrids to elmos throughout, the same x8 everything else in this family takes.
         // A NEGATIVE radius appears once in the corpus and is read as a point hit: a
@@ -89,10 +89,10 @@ std::vector<Weapon> weaponsFrom(const lua::Value& weaponArray) {
             std::max(0.0f, numberOr(entry, "MinRadius", 0.0f)) * scmap::kElmosPerOgrid;
 
         // The rings, in the same ogrids everything else is stated in.
-        weapon.innerRingDamage = numberOr(entry, "NukeInnerRingDamage", 0.0f);
+        weapon.innerRingDamage = sim::magFromFloat(numberOr(entry, "NukeInnerRingDamage", 0.0f));
         weapon.innerRingRadiusElmos =
             std::max(0.0f, numberOr(entry, "NukeInnerRingRadius", 0.0f)) * scmap::kElmosPerOgrid;
-        weapon.outerRingDamage = numberOr(entry, "NukeOuterRingDamage", 0.0f);
+        weapon.outerRingDamage = sim::magFromFloat(numberOr(entry, "NukeOuterRingDamage", 0.0f));
         weapon.outerRingRadiusElmos =
             std::max(0.0f, numberOr(entry, "NukeOuterRingRadius", 0.0f)) * scmap::kElmosPerOgrid;
 

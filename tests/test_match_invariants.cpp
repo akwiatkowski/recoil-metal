@@ -15,6 +15,8 @@
 #include <utility>
 #include <vector>
 
+#include "support/FxMatchers.hpp"
+
 // Properties a match must have however its units are STORED.
 //
 // WHY THIS FILE EXISTS. `docs/golden-p1.log` verifies that a change altered nothing, by
@@ -61,7 +63,7 @@ namespace {
     weapon.label = "test gun";
     weapon.role = WeaponRole::DirectFire;
     weapon.turreted = true;
-    weapon.damage = damage;
+    weapon.damage = rm::test::mag(damage);
     weapon.maxRangeElmos = rangeElmos;
     weapon.rateOfFire = 1.0f;
     weapon.muzzleVelocityElmosPerSecond = 200.0f;
@@ -119,11 +121,11 @@ struct Fight {
 
 /// Every unit's health, summed — a total stated without naming where any unit lives.
 [[nodiscard]] float totalHealth(const rm::sim::UnitStore& store) {
-    float total = 0.0f;
+    rm::sim::Mag total{};
     for (const Health& h : store.health()) {
         total += h.current;
     }
-    return total;
+    return rm::test::asFloat(total);
 }
 
 [[nodiscard]] std::size_t livingUnits(const rm::sim::UnitStore& store) {
@@ -147,7 +149,7 @@ TEST_CASE("health stays within its bounds for every unit, every tick") {
         (void)fight.tick(field);
 
         for (const Health& h : fight.roster.store.health()) {
-            REQUIRE(h.current >= 0.0f);
+            REQUIRE(rm::test::asFloat(h.current) >= 0.0f);
             REQUIRE(h.current <= h.maximum);
         }
     }

@@ -13,6 +13,8 @@
 #include <utility>
 #include <vector>
 
+#include "support/FxMatchers.hpp"
+
 using rm::sim::hashMatch;
 
 namespace {
@@ -51,7 +53,7 @@ struct Fixture {
             .type = type,
             .instance = {.position = {100.0f, 0.0f, 100.0f}, .rotationY = 0.0f, .scale = 1.0f},
             .motion = {.armyIndex = 0},
-            .health = {.current = 500.0f, .maximum = 500.0f},
+            .health = {.current = rm::test::mag(500.0f), .maximum = rm::test::mag(500.0f)},
         });
         armies = rm::sim::freeForAll(1);
         economies.assign(1, rm::sim::Economy{});
@@ -142,7 +144,7 @@ TEST_CASE("every field the sim owns reaches the hash") {
     SECTION("health") {
         Fixture a;
         const rm::StateHash before = a.hash();
-        a.health()[0].current -= 1.0f;
+        a.health()[0].current -= rm::test::mag(1.0f);
         REQUIRE(a.hash() != before);
     }
     SECTION("reload") {
@@ -192,7 +194,7 @@ TEST_CASE("every field the sim owns reaches the hash") {
     SECTION("a shot in flight") {
         Fixture a;
         const rm::StateHash before = a.hash();
-        a.projectiles.push_back(rm::sim::Projectile{.damage = 10.0f, .ticksRemaining = 30});
+        a.projectiles.push_back(rm::sim::Projectile{.damage = rm::test::mag(10.0f), .ticksRemaining = 30});
         REQUIRE(a.hash() != before);
     }
     SECTION("work under construction") {
@@ -213,7 +215,7 @@ TEST_CASE("losing a unit changes the hash even though the survivors match") {
         .type = 0,
         .instance = {.position = {100.0f, 0.0f, 100.0f}, .rotationY = 0.0f, .scale = 1.0f},
         .motion = {.armyIndex = 0},
-        .health = {.current = 500.0f, .maximum = 500.0f},
+        .health = {.current = rm::test::mag(500.0f), .maximum = rm::test::mag(500.0f)},
     });
     const rm::StateHash both = a.hash();
 
@@ -231,7 +233,7 @@ TEST_CASE("two units swapping places is a different match") {
         .type = 0,
         .instance = {.position = {200.0f, 0.0f, 200.0f}, .rotationY = 0.0f, .scale = 1.0f},
         .motion = {.armyIndex = 0},
-        .health = {.current = 500.0f, .maximum = 500.0f},
+        .health = {.current = rm::test::mag(500.0f), .maximum = rm::test::mag(500.0f)},
     });
     const rm::StateHash before = a.hash();
 

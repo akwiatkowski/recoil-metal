@@ -23,6 +23,8 @@
 #include <string>
 #include <vector>
 
+#include "support/FxMatchers.hpp"
+
 namespace {
 
 using rm::unitdef::MotionType;
@@ -124,7 +126,7 @@ TEST_CASE("every retail unit blueprint parses into a definition", "[corpus]") {
         // Invariants that hold for every unit, whatever it is. A definition
         // failing one of these has been misread, not merely under-specified.
         CHECK(!def->name.empty());
-        CHECK(def->health > 0.0f);
+        CHECK(rm::test::asFloat(def->health) > 0.0f);
         CHECK(def->collisionRadiusElmos > 0.0f);
         CHECK(def->footprintSquaresX >= 1);
         CHECK(def->footprintSquaresZ >= 1);
@@ -192,7 +194,7 @@ TEST_CASE("a UEF medium tank reads as the vehicle it is", "[corpus]") {
     CHECK(def->name == "UEL0201");
     CHECK(def->motion == MotionType::Land);
     CHECK(def->speedElmosPerSecond == Catch::Approx(3.4f * 8.0f));
-    CHECK(def->health == Catch::Approx(300.0f));
+    CHECK(rm::test::asFloat(def->health) == Catch::Approx(300.0f));
     CHECK(def->collisionRadiusElmos == Catch::Approx(3.6f));
     CHECK(def->meshToElmos == Catch::Approx(0.56f));
 

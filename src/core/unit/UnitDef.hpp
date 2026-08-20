@@ -1,5 +1,7 @@
 #pragma once
 
+#include "core/sim/Fx.hpp"
+
 #include "core/lua/LuaTable.hpp"
 #include "core/unit/Weapon.hpp"
 #include "core/vfs/AssetSearch.hpp"
@@ -177,7 +179,9 @@ struct UnitDef {
     /// which is what a collision box should be.
     float meshToElmos = 1.0f;
 
-    float health = 0.0f;
+    /// FIXED POINT (`Mag`), converted at parse time — the sim never sees the float
+    /// (PLAN2.md §5.1). `Mag` because `MaxHealth` reaches 5,000,000 in the corpus.
+    sim::Mag health{};
 
     /// Whether this unit flies.
     ///

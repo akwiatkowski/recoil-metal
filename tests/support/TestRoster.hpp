@@ -66,8 +66,8 @@ struct Roster {
             .type = type,
             .instance = instance,
             .motion = state,
-            .health = sim::Health{.current = hp,
-                                  .maximum = hp,
+            .health = sim::Health{.current = sim::magFromFloat(hp),
+                                  .maximum = sim::magFromFloat(hp),
                                   .reloadRemaining = std::vector<int>(
                                       def != nullptr ? def->weapons.size() : 0u, 0)},
         });

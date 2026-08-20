@@ -4,6 +4,8 @@
 
 #include <vector>
 
+#include "support/FxMatchers.hpp"
+
 using rm::sim::UnitId;
 using rm::sim::UnitStore;
 
@@ -16,7 +18,7 @@ namespace {
     s.instance.scale = 1.0f;
     s.motion.armyIndex = army;
     s.motion.radiusElmos = 16.0f;
-    s.health = rm::sim::Health{.current = 500.0f, .maximum = 500.0f};
+    s.health = rm::sim::Health{.current = rm::test::mag(500.0f), .maximum = rm::test::mag(500.0f)};
     return s;
 }
 
@@ -33,7 +35,7 @@ TEST_CASE("a spawned unit is alive, findable, and carries what it was given") {
     REQUIRE(store.instances()[id.index].position[0] == 100.0f);
     REQUIRE(store.instances()[id.index].position[2] == 200.0f);
     REQUIRE(store.motion()[id.index].armyIndex == 3);
-    REQUIRE(store.health()[id.index].current == 500.0f);
+    REQUIRE(store.health()[id.index].current == rm::test::mag(500.0f));
 }
 
 TEST_CASE("every array is the same length and indexed by slot") {
@@ -141,7 +143,7 @@ TEST_CASE("a reused slot is fully overwritten, never partly inherited") {
     // ghost of the one before it.
     UnitStore store;
     UnitStore::Spawn wounded = tankAt(5.0f, 5.0f, 0, 3);
-    wounded.health = rm::sim::Health{.current = 1.0f, .maximum = 500.0f};
+    wounded.health = rm::sim::Health{.current = rm::test::mag(1.0f), .maximum = rm::test::mag(500.0f)};
     wounded.motion.path.push_back({70.0f, 80.0f});
     wounded.motion.moving = true;
     wounded.motion.distanceTravelledElmos = 1234.0f;
@@ -152,7 +154,7 @@ TEST_CASE("a reused slot is fully overwritten, never partly inherited") {
     const UnitId fresh = store.spawn(tankAt(6.0f, 6.0f, 2, 9));
 
     REQUIRE(fresh.index == old.index);
-    REQUIRE(store.health()[fresh.index].current == 500.0f);
+    REQUIRE(store.health()[fresh.index].current == rm::test::mag(500.0f));
     REQUIRE(store.motion()[fresh.index].path.empty());
     REQUIRE_FALSE(store.motion()[fresh.index].moving);
     REQUIRE(store.motion()[fresh.index].distanceTravelledElmos == 0.0f);

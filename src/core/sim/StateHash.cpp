@@ -48,6 +48,19 @@ void feed(StateHash& h, std::size_t value) noexcept {
 
 void feed(StateHash& h, bool value) noexcept { feed(h, value ? 1ULL : 0ULL); }
 
+/// Fixed-point values are fed as their RAW INTEGERS, which is the whole point of having them:
+/// there is no bit pattern to normalise and no tolerance to worry about, because two runs that
+/// agree agree exactly.
+/// Not yet called: positions and velocities are still float and migrate in a later step of
+/// P2.2. Declared with the `Mag` overload rather than added later so the two read as one idea.
+[[maybe_unused]] void feed(StateHash& h, Fx value) noexcept {
+    feed(h, static_cast<std::uint64_t>(static_cast<std::uint32_t>(value.raw())));
+}
+
+void feed(StateHash& h, Mag value) noexcept {
+    feed(h, static_cast<std::uint64_t>(value.raw()));
+}
+
 void feed(StateHash& h, const std::array<float, 3>& v) noexcept {
     feed(h, v[0]);
     feed(h, v[1]);

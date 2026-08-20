@@ -14,6 +14,8 @@
 #include <numbers>
 #include <vector>
 
+#include "support/FxMatchers.hpp"
+
 using Catch::Approx;
 using rm::sim::Army;
 using rm::sim::Health;
@@ -43,7 +45,7 @@ namespace {
     Weapon weapon;
     weapon.label = "test gun";
     weapon.role = WeaponRole::DirectFire;
-    weapon.damage = damage;
+    weapon.damage = rm::test::mag(damage);
     weapon.maxRangeElmos = rangeElmos;
     weapon.damageRadiusElmos = radiusElmos;
     weapon.rateOfFire = 1.0f;                        // one shot a second
@@ -253,14 +255,14 @@ TEST_CASE("damage falls off linearly to nothing at the rim") {
     const UnitId rim = roster.add(type, 0.0f, 100.0f, 1, 100.0f);
     const UnitId outside = roster.add(type, 0.0f, 200.0f, 1, 100.0f);
 
-    const float dealt =
-        rm::sim::damageArea({0, 0, 0}, 100.0f, 80.0f, 0, roster.store, armies);
+    const rm::sim::Mag dealt =
+        rm::sim::damageArea({0, 0, 0}, 100.0f, rm::test::mag(80.0f), 0, roster.store, armies);
 
-    CHECK(roster.health(centre).current == Approx(20.0f));    // took all 80
-    CHECK(roster.health(halfway).current == Approx(60.0f));   // took half
-    CHECK(roster.health(rim).current == Approx(100.0f));      // at the rim: nothing
-    CHECK(roster.health(outside).current == Approx(100.0f));  // outside: nothing
-    CHECK(dealt == Approx(120.0f));
+    CHECK(rm::test::asFloat(roster.health(centre).current) == Approx(20.0f));    // took all 80
+    CHECK(rm::test::asFloat(roster.health(halfway).current) == Approx(60.0f));   // took half
+    CHECK(rm::test::asFloat(roster.health(rim).current) == Approx(100.0f));      // at the rim: nothing
+    CHECK(rm::test::asFloat(roster.health(outside).current) == Approx(100.0f));  // outside: nothing
+    CHECK(rm::test::asFloat(dealt) == Approx(120.0f));
 }
 
 TEST_CASE("a blast does not hurt the army that fired it") {
@@ -269,10 +271,10 @@ TEST_CASE("a blast does not hurt the army that fired it") {
     const UnitId mine = roster.add(roster.addType(targetDef()), 0.0f, 0.0f, 0, 100.0f);
 
     // Fired by army 0, centred on army 0's own unit.
-    const float dealt =
-        rm::sim::damageArea({0, 0, 0}, 100.0f, 80.0f, 0, roster.store, armies);
-    CHECK(dealt == Approx(0.0f));
-    CHECK(roster.health(mine).current == Approx(100.0f));
+    const rm::sim::Mag dealt =
+        rm::sim::damageArea({0, 0, 0}, 100.0f, rm::test::mag(80.0f), 0, roster.store, armies);
+    CHECK(rm::test::asFloat(dealt) == Approx(0.0f));
+    CHECK(rm::test::asFloat(roster.health(mine).current) == Approx(100.0f));
 }
 
 TEST_CASE("a point hit lands on what it was aimed at") {
@@ -285,10 +287,10 @@ TEST_CASE("a point hit lands on what it was aimed at") {
     const UnitId hit = roster.add(type, 0.0f, 0.0f, 1, 100.0f);
     const UnitId beside = roster.add(type, 0.0f, 60.0f, 1, 100.0f);
 
-    const float dealt = rm::sim::damageArea({0, 0, 0}, 0.0f, 40.0f, 0, roster.store, armies);
-    CHECK(roster.health(hit).current == Approx(60.0f));
-    CHECK(roster.health(beside).current == Approx(100.0f));
-    CHECK(dealt == Approx(40.0f));
+    const rm::sim::Mag dealt = rm::sim::damageArea({0, 0, 0}, 0.0f, rm::test::mag(40.0f), 0, roster.store, armies);
+    CHECK(rm::test::asFloat(roster.health(hit).current) == Approx(60.0f));
+    CHECK(rm::test::asFloat(roster.health(beside).current) == Approx(100.0f));
+    CHECK(rm::test::asFloat(dealt) == Approx(40.0f));
 }
 
 TEST_CASE("damage never takes more than a unit has, so overkill is not negative health") {
@@ -296,10 +298,10 @@ TEST_CASE("damage never takes more than a unit has, so overkill is not negative 
     Roster roster;
     const UnitId frail = roster.add(roster.addType(targetDef()), 0.0f, 0.0f, 1, 30.0f);
 
-    const float dealt =
-        rm::sim::damageArea({0, 0, 0}, 0.0f, 5000.0f, 0, roster.store, armies);
-    CHECK(roster.health(frail).current == Approx(0.0f));
-    CHECK(dealt == Approx(30.0f));  // what was actually taken, not what was thrown
+    const rm::sim::Mag dealt =
+        rm::sim::damageArea({0, 0, 0}, 0.0f, rm::test::mag(5000.0f), 0, roster.store, armies);
+    CHECK(rm::test::asFloat(roster.health(frail).current) == Approx(0.0f));
+    CHECK(rm::test::asFloat(dealt) == Approx(30.0f));  // what was actually taken, not what was thrown
     CHECK_FALSE(roster.health(frail).alive());
 }
 
@@ -422,7 +424,8 @@ TEST_CASE("an unowned unit takes no part in a fight") {
     std::vector<Projectile> shots;
     CHECK(rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots, rm::sim::TickRate{}) == 0);
 
-    CHECK(rm::sim::damageArea({0, 0, 50}, 100.0f, 500.0f, 0, roster.store, armies)
+    CHECK(rm::test::asFloat(rm::sim::damageArea({0, 0, 50}, 100.0f, rm::test::mag(500.0f), 0,
+                                                roster.store, armies))
           == Approx(0.0f));
     CHECK(roster.health(nobodys).alive());
 }
@@ -438,7 +441,7 @@ TEST_CASE("a unit's death weapon is found, and is not the gun it fired with") {
     const Weapon* found = rm::sim::deathWeapon(def);
     REQUIRE(found != nullptr);
     CHECK(found->label == "death explosion");
-    CHECK(found->damage == Approx(900.0f));
+    CHECK(rm::test::asFloat(found->damage) == Approx(900.0f));
 
     // A unit with no death weapon is ordinary, not an error: most have one, some do not.
     UnitDef unarmed;
@@ -461,12 +464,12 @@ TEST_CASE("a death explosion goes off where the unit stood") {
     const UnitId halfway = roster.add(type, 0.0f, 40.0f, 1, 1000.0f);
     const UnitId clear = roster.add(type, 0.0f, 500.0f, 1, 1000.0f);
 
-    const float dealt = rm::sim::explodeOnDeath(def, {0, 0, 0}, 0, roster.store, armies);
+    const rm::sim::Mag dealt = rm::sim::explodeOnDeath(def, {0, 0, 0}, 0, roster.store, armies);
 
-    CHECK(dealt > 0.0f);
-    CHECK(roster.health(centre).current == Approx(500.0f));   // took the full 500
-    CHECK(roster.health(halfway).current == Approx(750.0f));  // half of it
-    CHECK(roster.health(clear).current == Approx(1000.0f));   // untouched
+    CHECK(rm::test::asFloat(dealt) > 0.0f);
+    CHECK(rm::test::asFloat(roster.health(centre).current) == Approx(500.0f));   // took the full 500
+    CHECK(rm::test::asFloat(roster.health(halfway).current) == Approx(750.0f));  // half of it
+    CHECK(rm::test::asFloat(roster.health(clear).current) == Approx(1000.0f));   // untouched
 }
 
 TEST_CASE("a unit with no death weapon detonates harmlessly") {
@@ -477,8 +480,10 @@ TEST_CASE("a unit with no death weapon detonates harmlessly") {
     Roster roster;
     const UnitId bystander = roster.add(roster.addType(targetDef()), 0.0f, 0.0f, 1, 100.0f);
 
-    CHECK(rm::sim::explodeOnDeath(def, {0, 0, 0}, 0, roster.store, armies) == Approx(0.0f));
-    CHECK(roster.health(bystander).current == Approx(100.0f));
+    CHECK(rm::test::asFloat(rm::sim::explodeOnDeath(def, {0, 0, 0}, 0, roster.store,
+                                                   armies))
+          == Approx(0.0f));
+    CHECK(rm::test::asFloat(roster.health(bystander).current) == Approx(100.0f));
 }
 
 TEST_CASE("a bearing is measured the way a unit's yaw is") {
