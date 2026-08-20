@@ -183,6 +183,27 @@ void advanceProjectiles(std::vector<Projectile>& projectiles, std::span<CombatGr
 float damageArea(std::array<float, 3> centre, float radiusElmos, float damage, int byArmy,
                  std::span<CombatGroup> groups, std::span<const Army> armies);
 
+/// The unit's own destruction, if its definition describes one.
+///
+/// 99 of the 494 shipped weapons are `WeaponCategory = 'Death'`: a blast with no target, no
+/// range and no rate of fire, which `Weapon::fires()` correctly refuses to aim at anything.
+/// This is where it finally goes off — and an ACU's is enormous, which is the single most
+/// characteristic thing about Supreme Commander.
+///
+/// Returns null when the definition has none. Most units do have one.
+[[nodiscard]] const unitdef::Weapon* deathWeapon(const unitdef::UnitDef& def) noexcept;
+
+/// Sets off `def`'s death explosion at `at`, and returns the damage dealt.
+///
+/// Attributed to the DYING unit's own army, which has one consequence worth stating: it
+/// hurts that army's enemies and not its allies. The game's death explosions hurt everything
+/// nearby including friends, and this does not — `damageArea` takes an attacker and asks
+/// `hostile`, so friendly fire would need a mode of its own rather than a different
+/// argument. Noted rather than hidden: a commander detonating in a friendly crowd should be
+/// a catastrophe and here it is merely an inconvenience.
+float explodeOnDeath(const unitdef::UnitDef& def, std::array<float, 3> at, int byArmy,
+                     std::span<CombatGroup> groups, std::span<const Army> armies);
+
 /// Which units died this tick, so a caller can leave wreckage and check for a defeat.
 [[nodiscard]] std::vector<UnitRef> deadUnits(std::span<const CombatGroup> groups);
 

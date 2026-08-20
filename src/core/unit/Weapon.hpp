@@ -77,6 +77,27 @@ struct Weapon {
     /// projectile is instant.
     float muzzleVelocityElmosPerSecond = 0.0f;
 
+    // A TWO-RING BLAST, for the weapons that state one instead of a plain damage figure.
+    //
+    // Five of the 494 do, and they are the ones that matter most: the four commanders' death
+    // explosions, which state `NukeInnerRingDamage = 45000` over 30 ogrids and 5000 over 40
+    // rather than `Damage` at all. Read only `Damage` and an ACU detonates for nothing — and
+    // an ACU detonating for 45000 over 240 elmos, enough to take any other commander with
+    // it, is the single most characteristic event in the game.
+    //
+    // Held as two rings rather than flattened into one radius and one number because they
+    // are genuinely two: a near-total kill zone and a wide fringe, and averaging them would
+    // both spare what should die and spread damage where the game puts none.
+    float innerRingDamage = 0.0f;
+    float innerRingRadiusElmos = 0.0f;
+    float outerRingDamage = 0.0f;
+    float outerRingRadiusElmos = 0.0f;
+
+    /// Whether this weapon does its damage in rings rather than as a single blast.
+    [[nodiscard]] bool hasRings() const noexcept {
+        return innerRingDamage > 0.0f || outerRingDamage > 0.0f;
+    }
+
     /// Whether the weapon has a turret. A turreted weapon may fire without the hull
     /// turning; 284 of the 399 that say so are turreted.
     bool turreted = false;
@@ -90,6 +111,10 @@ struct Weapon {
         return role != WeaponRole::Death && maxRangeElmos > 0.0f && rateOfFire > 0.0f
             && damage > 0.0f;
     }
+
+    /// Whether this weapon does any damage at all, by either scheme. What a death explosion
+    /// is asked, since a death explosion has no range and no rate of fire to have.
+    [[nodiscard]] bool harmful() const noexcept { return damage > 0.0f || hasRings(); }
 
     /// Ticks between shots, never less than one.
     ///

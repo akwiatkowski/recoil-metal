@@ -323,6 +323,39 @@ void advanceProjectiles(std::vector<Projectile>& projectiles, std::span<CombatGr
                   [](const Projectile& shot) { return shot.ticksRemaining <= 0; });
 }
 
+const unitdef::Weapon* deathWeapon(const unitdef::UnitDef& def) noexcept {
+    for (const unitdef::Weapon& weapon : def.weapons) {
+        if (weapon.role == unitdef::WeaponRole::Death) {
+            return &weapon;
+        }
+    }
+    return nullptr;
+}
+
+float explodeOnDeath(const unitdef::UnitDef& def, std::array<float, 3> at, int byArmy,
+                     std::span<CombatGroup> groups, std::span<const Army> armies) {
+    const unitdef::Weapon* blast = deathWeapon(def);
+    if (blast == nullptr || !blast->harmful()) {
+        return 0.0f;
+    }
+
+    // TWO RINGS when the weapon states them — the four commanders do — applied outer first
+    // and inner second. The order matters: `damageArea` falls off to nothing at its rim, so
+    // running the wide weak ring first and the narrow strong one after means anything close
+    // takes both, which is what a nested blast should do. Reversed, the outer ring would be
+    // finishing off things the inner one had already flattened.
+    if (blast->hasRings()) {
+        float dealt = 0.0f;
+        dealt += damageArea(at, blast->outerRingRadiusElmos, blast->outerRingDamage, byArmy,
+                            groups, armies);
+        dealt += damageArea(at, blast->innerRingRadiusElmos, blast->innerRingDamage, byArmy,
+                            groups, armies);
+        return dealt;
+    }
+
+    return damageArea(at, blast->damageRadiusElmos, blast->damage, byArmy, groups, armies);
+}
+
 std::vector<UnitRef> deadUnits(std::span<const CombatGroup> groups) {
     std::vector<UnitRef> dead;
     for (std::size_t g = 0; g < groups.size(); ++g) {

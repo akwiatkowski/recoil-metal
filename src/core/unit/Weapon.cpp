@@ -85,6 +85,14 @@ std::vector<Weapon> weaponsFrom(const lua::Value& weaponArray) {
         weapon.minRangeElmos =
             std::max(0.0f, numberOr(entry, "MinRadius", 0.0f)) * scmap::kElmosPerOgrid;
 
+        // The rings, in the same ogrids everything else is stated in.
+        weapon.innerRingDamage = numberOr(entry, "NukeInnerRingDamage", 0.0f);
+        weapon.innerRingRadiusElmos =
+            std::max(0.0f, numberOr(entry, "NukeInnerRingRadius", 0.0f)) * scmap::kElmosPerOgrid;
+        weapon.outerRingDamage = numberOr(entry, "NukeOuterRingDamage", 0.0f);
+        weapon.outerRingRadiusElmos =
+            std::max(0.0f, numberOr(entry, "NukeOuterRingRadius", 0.0f)) * scmap::kElmosPerOgrid;
+
         weapon.rateOfFire = numberOr(entry, "RateOfFire", 0.0f);
         weapon.muzzleVelocityElmosPerSecond =
             numberOr(entry, "MuzzleVelocity", 0.0f) * scmap::kElmosPerOgrid;

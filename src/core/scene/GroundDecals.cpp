@@ -6,6 +6,51 @@
 
 namespace rm {
 
+/// The colour a wreck's scorch is drawn in, at its darkest.
+///
+/// Nearly black and half transparent, so it darkens whatever ground it lies on rather than
+/// painting a grey circle on it — a scorch on sand and a scorch on grass are the same
+/// scorch, and an opaque colour would make them the same colour too.
+constexpr std::array<float, 4> kWreckCentreColour{{0.05f, 0.04f, 0.03f, 0.55f}};
+
+void appendWreckMark(std::vector<DecalVertex>& out, const HeightField& field,
+                     std::array<float, 3> centre, float radiusElmos, int segments) {
+    if (!(radiusElmos > 0.0f) || segments < 3) {
+        return;
+    }
+
+    // Height per vertex, from the ground under THAT point — the same rule the rings follow,
+    // and for the same reason: a disc at the unit's own height buries its uphill half.
+    const auto vertexAt = [&](float angle, float radius, std::array<float, 4> colour) {
+        const float x = centre[0] + std::cos(angle) * radius;
+        const float z = centre[2] + std::sin(angle) * radius;
+        return DecalVertex{
+            .position = {x, field.heightAtWorld(x, z) + kRingLiftElmos, z},
+            .colour = colour,
+        };
+    };
+
+    // Transparent at the rim, so the scorch fades out instead of ending at a drawn edge.
+    std::array<float, 4> rim = kWreckCentreColour;
+    rim[3] = 0.0f;
+
+    const auto middle = vertexAt(0.0f, 0.0f, kWreckCentreColour);
+
+    out.reserve(out.size() + wreckVertexCount(segments));
+    const float step = 2.0f * std::numbers::pi_v<float> / static_cast<float>(segments);
+    for (int i = 0; i < segments; ++i) {
+        const float a0 = step * static_cast<float>(i);
+        const float a1 = step * static_cast<float>(i + 1);
+
+        // A FAN, one triangle per segment, all sharing the centre. The centre vertex is
+        // recomputed rather than hoisted only in the sense that it is copied — its height is
+        // sampled once, above, because the middle of a disc has one ground under it.
+        out.push_back(middle);
+        out.push_back(vertexAt(a0, radiusElmos, rim));
+        out.push_back(vertexAt(a1, radiusElmos, rim));
+    }
+}
+
 void appendSelectionRing(std::vector<DecalVertex>& out, const HeightField& field,
                          std::array<float, 3> centre, float radiusElmos,
                          std::array<float, 4> colour, float thicknessElmos, int segments) {

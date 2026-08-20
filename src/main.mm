@@ -1044,6 +1044,19 @@ struct UnitScene {
     /// The blueprint each Construction becomes, by its `blueprintIndex`.
     std::vector<rm::unitdef::UnitDef> buildable;
 
+    /// The scorch marks the dead have left, in decal vertices ready to upload.
+    ///
+    /// Accumulated rather than rebuilt, unlike the selection rings: a wreck is permanent, so
+    /// there is nothing to recompute each frame and a growing buffer is the honest shape.
+    std::vector<rm::DecalVertex> wreckDecals;
+
+    /// Death explosions set off, and the damage they dealt. BOTH, because they answer
+    /// different questions: a blast that goes off and hurts nothing is the ordinary case when
+    /// two commanders kill each other in the same tick, and reporting only the damage would
+    /// make that look like the explosions never happened.
+    std::size_t deathBlasts = 0;
+    float deathBlastDamage = 0.0f;
+
     /// How many commanders each army STARTED with, indexed by army. The win condition
     /// needs it to tell "lost its commander" from "never had one" — a `--units` crowd must
     /// not be declared a draw on the first tick.
@@ -2086,20 +2099,47 @@ struct MarchOptions {
 /// does and what makes a battlefield readable afterwards — is the real answer and is not
 /// done. Neither is a death explosion, though the blueprints describe one: 99 of the 494
 /// weapons are exactly that, read and deliberately never fired (see WeaponRole::Death).
-void retireDead(UnitScene& scene) {
+void retireDead(UnitScene& scene, const rm::HeightField& field) {
     for (std::size_t batch = 0; batch < scene.health.size(); ++batch) {
         for (std::size_t i = 0; i < scene.health[batch].size(); ++i) {
             if (scene.health[batch][i].alive()) {
                 continue;
             }
-            if (i < scene.instances[batch].size()) {
-                scene.instances[batch][i].scale = 0.0f;
+            if (i >= scene.motion[batch].size() || i >= scene.instances[batch].size()) {
+                continue;
             }
-            if (i < scene.motion[batch].size()) {
-                scene.motion[batch][i].moving = false;
-                scene.motion[batch][i].speedElmosPerSecond = 0.0f;
-                scene.motion[batch][i].radiusElmos = 0.0f;  // and stops shoving the living
+
+            // NEWLY dead, which is what a radius still being positive means: retiring a unit
+            // is what zeroes it, so this runs exactly once per death however many ticks the
+            // corpse then sits there. Without it a dead unit would explode every tick
+            // forever, which is both a wrong answer and an unbounded one.
+            const bool newlyDead = scene.motion[batch][i].radiusElmos > 0.0f;
+            const std::array<float, 3> where = scene.instances[batch][i].position;
+
+            if (newlyDead) {
+                // The scorch it leaves, sized from what died: a commander marks more ground
+                // than a tank. Permanent, because a wreck IS the record of what happened
+                // here and a battlefield that tidied itself up would lose it.
+                rm::appendWreckMark(scene.wreckDecals, field, where,
+                                    scene.motion[batch][i].radiusElmos
+                                        * rm::kWreckMarkRadiusFactor);
+
+                // And its death explosion, at last. 99 of the 494 shipped weapons are one,
+                // parsed since milestone 18 and never fired until now.
+                const rm::unitdef::UnitDef* def =
+                    batch < scene.defs.size() ? scene.defs[batch] : nullptr;
+                if (def != nullptr && rm::sim::deathWeapon(*def) != nullptr) {
+                    std::vector<rm::sim::CombatGroup> groups = scene.combatGroups();
+                    scene.deathBlastDamage += rm::sim::explodeOnDeath(
+                        *def, where, scene.motion[batch][i].armyIndex, groups, scene.armies);
+                    ++scene.deathBlasts;
+                }
             }
+
+            scene.instances[batch][i].scale = 0.0f;
+            scene.motion[batch][i].moving = false;
+            scene.motion[batch][i].speedElmosPerSecond = 0.0f;
+            scene.motion[batch][i].radiusElmos = 0.0f;  // and stops shoving the living
         }
     }
 }
@@ -2154,7 +2194,7 @@ void march(UnitScene& scene, const rm::HeightField& field, PassabilitySet& passa
             std::vector<rm::sim::CombatGroup> combat = scene.combatGroups();
             shotsFired += rm::sim::fireWeapons(combat, scene.armies, scene.projectiles);
             rm::sim::advanceProjectiles(scene.projectiles, combat, scene.armies, field);
-            retireDead(scene);
+            retireDead(scene, field);
 
             // The match, checked every tick rather than at the end: an army that loses its
             // commander stops being a target and stops shooting from that moment, which is
@@ -2287,6 +2327,12 @@ void march(UnitScene& scene, const rm::HeightField& field, PassabilitySet& passa
                     " %.0f of %.0f hp left\n",
                     shotsFired, scene.projectiles.size(), dead.size(),
                     static_cast<double>(remaining), static_cast<double>(maximum));
+        if (scene.deathBlasts > 0 || !scene.wreckDecals.empty()) {
+            std::printf("wreckage: %zu scorch mark(s), %zu death explosion(s) dealing"
+                        " %.0f damage\n",
+                        scene.wreckDecals.size() / rm::wreckVertexCount(), scene.deathBlasts,
+                        static_cast<double>(scene.deathBlastDamage));
+        }
     }
 
     if (!scene.economies.empty()) {
@@ -2844,8 +2890,14 @@ int main(int argc, const char* argv[]) {
             // click produces can be captured and compared between builds —
             // otherwise the one piece of interface this renderer draws is the
             // one thing no screenshot can show.
-            if (const std::size_t rings = parseCount(argc, argv, "--select"); rings > 0) {
-                std::vector<rm::DecalVertex> vertices;
+            // The ground decals for a capture. WRECKS FIRST and unconditionally, because
+            // they are a fact about the battlefield rather than a piece of interface — the
+            // rest of this block used to be gated on `--select`, which meant a scorch mark
+            // only appeared in a screenshot that also happened to be ringing units.
+            std::vector<rm::DecalVertex> vertices{units.wreckDecals.begin(),
+                                                  units.wreckDecals.end()};
+            {
+                const std::size_t rings = parseCount(argc, argv, "--select");
                 std::vector<rm::SelectionEntry> captured;
                 std::size_t made = 0;
                 for (std::size_t batch = 0; batch < units.instances.size() && made < rings;
@@ -3179,7 +3231,10 @@ int main(int argc, const char* argv[]) {
             // The buffer is reused rather than reallocated so that a frame
             // costs no heap traffic; it is declared outside this lambda for
             // exactly that reason.
-            decalVertices.clear();
+            // WRECKS FIRST, so the rings and markers a player is reading sit on top of the
+            // scorch rather than under it. They are copied in rather than rebuilt: a wreck
+            // is permanent and there is nothing to recompute.
+            decalVertices.assign(units.wreckDecals.begin(), units.wreckDecals.end());
             for (const rm::SelectionEntry& sel : selected) {
                 const rm::UnitInstance& instance = units.instances[sel.batch][sel.instance];
                 const float radius = units.motion[sel.batch][sel.instance].radiusElmos;

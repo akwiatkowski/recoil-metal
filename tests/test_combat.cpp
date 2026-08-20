@@ -432,3 +432,58 @@ TEST_CASE("an unowned unit takes no part in a fight") {
           == Approx(0.0f));
     CHECK(nobodys.health[0].alive());
 }
+
+TEST_CASE("a unit's death weapon is found, and is not the gun it fired with") {
+    UnitDef def;
+    def.weapons.push_back(directFire(10.0f, 300.0f));  // its cannon
+    Weapon death = directFire(900.0f, 100.0f, 60.0f);
+    death.role = WeaponRole::Death;
+    death.label = "death explosion";
+    def.weapons.push_back(death);
+
+    const Weapon* found = rm::sim::deathWeapon(def);
+    REQUIRE(found != nullptr);
+    CHECK(found->label == "death explosion");
+    CHECK(found->damage == Approx(900.0f));
+
+    // A unit with no death weapon is ordinary, not an error: most have one, some do not.
+    UnitDef unarmed;
+    CHECK(rm::sim::deathWeapon(unarmed) == nullptr);
+}
+
+TEST_CASE("a death explosion goes off where the unit stood") {
+    // 99 of the 494 shipped weapons are exactly this, parsed and never fired until now. An
+    // ACU's is enormous, which is the most characteristic thing about the game.
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+
+    UnitDef def;
+    Weapon death = directFire(500.0f, 100.0f, 80.0f);  // 80-elmo blast
+    death.role = WeaponRole::Death;
+    def.weapons.push_back(death);
+
+    Squad theirs;
+    theirs.add(0.0f, 0.0f, 1, 1000.0f);    // at the centre
+    theirs.add(0.0f, 40.0f, 1, 1000.0f);   // halfway out
+    theirs.add(0.0f, 500.0f, 1, 1000.0f);  // well clear
+    std::vector<CombatGroup> groups{theirs.group()};
+
+    const float dealt = rm::sim::explodeOnDeath(def, {0, 0, 0}, 0, groups, armies);
+
+    CHECK(dealt > 0.0f);
+    CHECK(theirs.health[0].current == Approx(500.0f));   // took the full 500
+    CHECK(theirs.health[1].current == Approx(750.0f));   // half of it
+    CHECK(theirs.health[2].current == Approx(1000.0f));  // untouched
+}
+
+TEST_CASE("a unit with no death weapon detonates harmlessly") {
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    UnitDef def;
+    def.weapons.push_back(directFire(10.0f, 300.0f));  // a gun, not a death blast
+
+    Squad theirs;
+    theirs.add(0.0f, 0.0f, 1, 100.0f);
+    std::vector<CombatGroup> groups{theirs.group()};
+
+    CHECK(rm::sim::explodeOnDeath(def, {0, 0, 0}, 0, groups, armies) == Approx(0.0f));
+    CHECK(theirs.health[0].current == Approx(100.0f));
+}

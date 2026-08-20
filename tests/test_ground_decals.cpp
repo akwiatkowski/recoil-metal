@@ -319,3 +319,39 @@ TEST_CASE("an order marker's cross is diagonal, not axis-aligned") {
     }
     CHECK(foundDiagonalTip);
 }
+
+TEST_CASE("a wreck mark is a filled disc, dark in the middle and gone at the rim") {
+    const HeightField field = flatAt(64, 0);
+    std::vector<rm::DecalVertex> vertices;
+
+    rm::appendWreckMark(vertices, field, {{100.0f, 0.0f, 100.0f}}, 20.0f);
+
+    // A fan: one triangle per segment, all sharing the centre — where a ring is a band and
+    // needs two.
+    REQUIRE(vertices.size() == rm::wreckVertexCount());
+
+    // Every triangle's first vertex is the centre, and it is the opaque one. A hard-edged
+    // disc reads as a painted circle, and scorching does not have an edge.
+    for (std::size_t i = 0; i < vertices.size(); i += 3) {
+        CHECK(vertices[i].position[0] == Catch::Approx(100.0f));
+        CHECK(vertices[i].position[2] == Catch::Approx(100.0f));
+        CHECK(vertices[i].colour[3] > 0.0f);
+        CHECK(vertices[i + 1].colour[3] == Catch::Approx(0.0f));
+        CHECK(vertices[i + 2].colour[3] == Catch::Approx(0.0f));
+    }
+
+    // Dark rather than team-coloured: a battlefield with team-coloured wrecks reads as one
+    // still occupied by both teams.
+    CHECK(vertices.front().colour[0] < 0.2f);
+    CHECK(vertices.front().colour[1] < 0.2f);
+    CHECK(vertices.front().colour[2] < 0.2f);
+}
+
+TEST_CASE("a wreck mark with no radius draws nothing") {
+    const HeightField field = flatAt(64, 0);
+    std::vector<rm::DecalVertex> vertices;
+    rm::appendWreckMark(vertices, field, {{0.0f, 0.0f, 0.0f}}, 0.0f);
+    CHECK(vertices.empty());
+    rm::appendWreckMark(vertices, field, {{0.0f, 0.0f, 0.0f}}, 20.0f, 2);
+    CHECK(vertices.empty());  // two segments is not a disc
+}

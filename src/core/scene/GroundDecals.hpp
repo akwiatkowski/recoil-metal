@@ -99,6 +99,37 @@ void appendOrderMarker(std::vector<DecalVertex>& out, const HeightField& field,
                        std::array<float, 3> centre, std::array<float, 4> colour, float age,
                        float radiusElmos = kOrderMarkerRadiusElmos);
 
+/// How wide a wreck's scorch mark is drawn, relative to the unit's own radius.
+///
+/// A little over twice, so a wreck reads as bigger than the thing that made it — an
+/// explosion throws debris further than the hull it came from — while still being
+/// unmistakably at one place rather than a general smudge.
+inline constexpr float kWreckMarkRadiusFactor = 2.2f;
+
+// Appends the scorch a destroyed unit leaves: a filled disc, darkest at the centre.
+//
+// A DISC rather than a ring, which is the whole distinction from the two decals above. A
+// ring means "this unit is yours" or "go here"; both are things the player did. A wreck is
+// a fact about the ground, so it is filled — and it is drawn dark and translucent rather
+// than in an army colour, because a battlefield with team-coloured wrecks reads as a
+// battlefield still occupied by both teams.
+//
+// Darkest at the centre and fading to nothing at the rim: a hard-edged disc reads as a
+// painted circle, and scorching does not have an edge.
+//
+// Permanent, unlike the order marker. A wreck IS the record of what happened here, and a
+// battlefield that tidied itself up would lose exactly the information a player wants
+// afterwards. There is no `age`, and a caller keeps them until the scene is torn down.
+void appendWreckMark(std::vector<DecalVertex>& out, const HeightField& field,
+                     std::array<float, 3> centre, float radiusElmos,
+                     int segments = kRingSegments);
+
+/// Vertices one wreck mark contributes: one triangle per segment, since a filled disc is a
+/// fan rather than a band.
+[[nodiscard]] constexpr std::size_t wreckVertexCount(int segments = kRingSegments) noexcept {
+    return static_cast<std::size_t>(segments) * 3;
+}
+
 /// Vertices one ring contributes: two triangles per segment.
 [[nodiscard]] constexpr std::size_t ringVertexCount(int segments = kRingSegments) noexcept {
     return static_cast<std::size_t>(segments) * 6u;
