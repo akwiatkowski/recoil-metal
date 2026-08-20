@@ -2,7 +2,7 @@
 # recoil-metal
 
 A Mac-native, Metal-only renderer that reads **Recoil** content formats —
-research spun out of [FAR](../forged-alliance-reborn/README.md).
+research spun out of [FAR](../faf/forged-alliance-reborn/README.md).
 
 The original premise was that FAR was *blocked* on macOS: Recoil's model path
 needs OpenGL 4.3+ SSBOs and Apple caps OpenGL at 4.1. That turned out to be
@@ -768,7 +768,7 @@ tools/bench_recoil_gl.sh docs/bench-recoil-gl.csv
 ### Units on a map
 
 ```sh
-BAR=~/projects/llm/games/forged-alliance-reborn/reference/BAR/objects3d/Units
+BAR=~/projects/llm/games/faf/forged-alliance-reborn/reference/BAR/objects3d/Units
 
 # 800 instances: one per map start position, the rest scattered on land
 ./build/recoil-metal path/to/map.smf --units $BAR/corgantbig.s3o 800

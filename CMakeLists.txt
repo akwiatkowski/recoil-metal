@@ -106,6 +106,7 @@ add_library(rm_core STATIC
     src/core/sim/Movement.cpp
     src/core/sim/Pathfinding.cpp
     src/core/sim/IdPool.cpp
+    src/core/sim/Fx.cpp
     src/core/sim/UnitStore.cpp
     src/core/sim/UnitCatalog.cpp
     src/core/sim/UnitCensus.cpp
@@ -147,6 +148,7 @@ if(BUILD_TESTING)
 
     add_executable(rm_tests
         tests/test_types.cpp
+        tests/test_fx.cpp
         tests/test_id_pool.cpp
         tests/test_unit_store.cpp
         tests/test_unit_census.cpp
@@ -227,6 +229,13 @@ if(BUILD_TESTING)
     # it, and it is the one thing Recoil's globals make impossible at any price.
     add_test(NAME "the sim holds no file-scope mutable state"
              COMMAND ${CMAKE_SOURCE_DIR}/tools/check_no_sim_globals.sh ${CMAKE_SOURCE_DIR})
+
+    # The fixed-point layer must give the same bits at every optimisation level (P2.1). Not
+    # something a unit test can check: a test runs at whichever level its own binary was
+    # built with, so the probe is compiled several times and its output compared. Slower than
+    # the other checks — five compiles — but it is the whole basis of the determinism claim.
+    add_test(NAME "fixed point is identical at every optimisation level"
+             COMMAND ${CMAKE_SOURCE_DIR}/tools/check_fx_optimisation.sh)
 
     # NOT REGISTERED YET: the ban on float/double/libm inside the sim (PLAN2.md §5.2). The
     # sim is entirely float today and stays that way until P2.2 migrates it to fixed point;

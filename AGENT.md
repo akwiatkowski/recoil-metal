@@ -12,12 +12,12 @@ formats, built test-first in modern C++, as both research and a C++ showcase.
 ## Hard rules
 
 1. **Recoil source is read-only reference.** It lives at
-   `../forged-alliance-reborn/reference/RecoilEngine` (owned by the FAR
+   `../faf/forged-alliance-reborn/reference/RecoilEngine` (owned by the FAR
    project — never edit it, never re-clone it from here). Adapting its loader
    code into this repo is allowed and expected; that's why this repo is
    GPL-2.0-or-later (see `LICENSE`).
 
-   **Read the analysis before the source.** `../forged-alliance-reborn/docs/`
+   **Read the analysis before the source.** `../faf/forged-alliance-reborn/docs/`
    holds a ten-agent study of that tree and of the Supreme Commander content
    corpus — `recoil-engine-map.md` for orientation (unit conventions, hard
    caps, verified gotchas) and `engine-analysis/01..16` for the detail, 16
@@ -39,7 +39,7 @@ formats, built test-first in modern C++, as both research and a C++ showcase.
    | What an AI needs from content; start scripts | `07-ai-and-gamesetup.md` |
    | VFS, load order, determinism, build variants | `08-engine-infra.md` |
 
-   **Never edit anything under `../forged-alliance-reborn/`** — reference and
+   **Never edit anything under `../faf/forged-alliance-reborn/`** — reference and
    docs alike are the FAR project's.
 2. **Use `mise exec --` for every tool invocation** (`mise exec -- cmake …`,
    `mise exec -- ctest …`). Never call tools directly.

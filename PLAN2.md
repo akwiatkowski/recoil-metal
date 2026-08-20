@@ -5,7 +5,7 @@
 `PLAN.md` is the milestone log: what renders next. This file is the other axis — **what this
 engine is, how its parts connect, what order to build them in, and how far along it is.**
 
-It is written against `../forged-alliance-reborn/docs/engine-analysis/` (16 reports, 19,871
+It is written against `../faf/forged-alliance-reborn/docs/engine-analysis/` (16 reports, 19,871
 lines) and `reference/{RecoilEngine,FAF-fa,BAR,Zero-K}`. Every non-obvious claim cites one.
 The first version of this file did not, and invented from a blank page what two mature engines
 and a 763-line feasibility study had already settled.

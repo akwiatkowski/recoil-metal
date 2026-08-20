@@ -25,10 +25,10 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-FAR_ROOT="${HOME}/projects/llm/games/forged-alliance-reborn"
+FAR_ROOT="${HOME}/projects/llm/games/faf/forged-alliance-reborn"
 
 ENGINE="${ENGINE:-${FAR_ROOT}/build/gl-sdl3-runtime/spring}"
-MESA="${MESA:-${HOME}/projects/llm/games/mesa-macos/install}"
+MESA="${MESA:-${HOME}/projects/llm/games/faf/mesa-macos/install}"
 MAP_SD7="${MAP_SD7:-${HOME}/projects/llm/input/recoil/maps/angel_crossing_1.4.sd7}"
 MAP_NAME="${MAP_NAME:-Angel Crossing 1.4}"
 OUT_CSV="${1:-${REPO_ROOT}/docs/bench-recoil-gl-aw04.csv}"
@@ -55,7 +55,7 @@ cp -R "$(dirname "${ENGINE}")/base" "${DATA_DIR}/" 2>/dev/null || true
 cp -R "${REPO_ROOT}/tools/rmbench.sdd" "${DATA_DIR}/games/"
 cp "${MAP_SD7}" "${DATA_DIR}/maps/"
 
-FONT_SRC="${HOME}/projects/llm/games/recoil-macos/cont/fonts/FreeSansBold.otf"
+FONT_SRC="${HOME}/projects/llm/games/faf/recoil-macos/cont/fonts/FreeSansBold.otf"
 if [[ -f "${FONT_SRC}" ]]; then
 	cp "${FONT_SRC}" "${DATA_DIR}/fonts/" 2>/dev/null || true
 fi
