@@ -129,7 +129,7 @@ Fx groundDistanceElmos(std::array<Fx, 3> from, std::array<Fx, 3> to) noexcept {
 
 std::optional<UnitId> nearestTarget(std::array<Fx, 3> from, int fromArmy,
                                     const unitdef::Weapon& weapon, const UnitStore& store,
-                                    std::span<const Army> armies) {
+                                    std::span<const Army> armies, const Intel* intel) {
     if (!weapon.fires()) {
         return std::nullopt;
     }
@@ -146,6 +146,17 @@ std::optional<UnitId> nearestTarget(std::array<Fx, 3> from, int fromArmy,
     for (const UnitIndex slot : store.space().within(from[0], from[2], weapon.maxRange)) {
         if (!shootable(fromArmy, store, slot, armies)) {
             continue;
+        }
+
+        // AND VISIBLE (ADR-037). Before the distance test rather than after, because a grid
+        // lookup is one array read and a ground distance is two multiplies and a square root.
+        if (intel != nullptr) {
+            const Army* mine = armyFor(fromArmy, armies);
+            if (mine == nullptr
+                || !intel->sees(mine->alliance, IntelKind::Vision, transforms[slot].x,
+                                transforms[slot].z)) {
+                continue;
+            }
         }
 
         const Fx distance = groundDistanceElmos(from, positionOf(transforms[slot]));
@@ -204,7 +215,7 @@ bool canFireAt(const unitdef::Weapon& weapon, Brad yaw, Brad bearing) noexcept {
 }
 
 std::size_t aimAtTargets(UnitStore& store, const UnitCatalog& catalog,
-                         std::span<const Army> armies) {
+                         std::span<const Army> armies, const Intel* intel) {
     const std::span<Transform> transforms = store.transforms();
     const std::span<const MoveState> motion = store.motion();
 
@@ -250,7 +261,7 @@ std::size_t aimAtTargets(UnitStore& store, const UnitCatalog& catalog,
 
         const std::optional<UnitId> target =
             nearestTarget(positionOf(transforms[slot]), motion[slot].armyIndex, sweep, store,
-                          armies);
+                          armies, intel);
         if (!target) {
             continue;
         }
@@ -279,7 +290,7 @@ std::size_t aimAtTargets(UnitStore& store, const UnitCatalog& catalog,
 std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
                         std::span<const Army> armies,
                         std::vector<Projectile>& projectiles, TickRate rate,
-                        EventQueue* events) {
+                        EventQueue* events, const Intel* intel) {
     std::size_t fired = 0;
 
     const std::span<const Transform> transforms = store.transforms();
@@ -325,7 +336,7 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
             }
 
             const std::optional<UnitId> target =
-                nearestTarget(from, army, weapon, store, armies);
+                nearestTarget(from, army, weapon, store, armies, intel);
             if (!target) {
                 continue;
             }

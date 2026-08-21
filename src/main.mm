@@ -181,6 +181,9 @@ int main(int argc, const char* argv[]) {
                 std::printf("skirmish: %zu armies in %zu alliances\n", units.armies.size(),
                             alliances);
             }
+            // AFTER the alliances are grouped: the grids are per alliance, and one sized
+            // for the wrong count would leave a side with nowhere to see.
+            configureIntel(units, map->field, parseVisionStyle(argc, argv));
             orderFirstExtractors(units, map->markers, content);
         }
 

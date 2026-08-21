@@ -190,6 +190,10 @@ struct UnitScene {
     /// projectile list — cleared by the tick, so nothing accumulates.
     rm::sim::EventQueue events;
 
+    /// What each alliance can see (ADR-037). Empty — and therefore "everything is seen" —
+    /// until `configureIntel` sizes it, which a skirmish does and a `--units` crowd does not.
+    rm::sim::Intel intel;
+
     /// One economy per army, indexed by army. Empty outside a skirmish.
     std::vector<rm::sim::Economy> economies;
 

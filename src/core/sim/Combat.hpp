@@ -4,6 +4,7 @@
 #include "core/sim/Events.hpp"
 #include "core/sim/Army.hpp"
 #include "core/sim/Health.hpp"
+#include "core/sim/Intel.hpp"
 #include "core/sim/TickRate.hpp"
 #include "core/sim/UnitCatalog.hpp"
 #include "core/sim/UnitStore.hpp"
@@ -139,10 +140,21 @@ inline constexpr Seconds kProjectileLifetime = Seconds{30.0f};
 /// Excludes the shooter itself, its allies, anything already dead, and anything a
 /// defeated army owns (see `hostile`). Range is checked against the WEAPON, so a unit
 /// with a long gun and a short one may find a target for the first and not the second.
+///
+/// AND ANYTHING THE SHOOTER'S SIDE CANNOT SEE (ADR-037). Until intel existed this pass
+/// picked from the whole store filtered by hostility and range, so every unit in the match
+/// shot at things across the map it had no way of knowing were there. `intel` may be null,
+/// which restores exactly that behaviour and is what a scene with no fog of war gets.
+///
+/// SIGHT, NOT RADAR. A radar contact is a position without an identity, and what to do with
+/// one is the contact rules rather than a target-selection question — see `IntelKind`. So a
+/// unit lit only by radar is not auto-attacked, deliberately, and that is a choice this
+/// engine is making rather than one it inherited.
 [[nodiscard]] std::optional<UnitId> nearestTarget(std::array<Fx, 3> from, int fromArmy,
                                                   const unitdef::Weapon& weapon,
                                                   const UnitStore& store,
-                                                  std::span<const Army> armies);
+                                                  std::span<const Army> armies,
+                                                  const Intel* intel = nullptr);
 
 /// The bearing from `from` to `to`, in radians, measured the way a unit's yaw is.
 ///
@@ -176,8 +188,10 @@ inline constexpr Seconds kProjectileLifetime = Seconds{30.0f};
 ///
 /// Writes to the instances' yaw, which is why the groups are mutable here and const in
 /// `fireWeapons`.
+/// `intel` gates what may be aimed at, exactly as it gates what may be shot — a hull
+/// swinging round to face something its side cannot see would give the position away.
 std::size_t aimAtTargets(UnitStore& store, const UnitCatalog& catalog,
-                         std::span<const Army> armies);
+                         std::span<const Army> armies, const Intel* intel = nullptr);
 
 /// Advances reloads, picks targets, and appends the shots fired this tick.
 ///
@@ -193,7 +207,7 @@ std::size_t aimAtTargets(UnitStore& store, const UnitCatalog& catalog,
 std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
                         std::span<const Army> armies,
                         std::vector<Projectile>& projectiles, TickRate rate,
-                        EventQueue* events = nullptr);
+                        EventQueue* events = nullptr, const Intel* intel = nullptr);
 
 /// Moves every projectile one tick, applies what lands, and removes what is spent.
 ///

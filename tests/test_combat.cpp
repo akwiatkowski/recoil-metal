@@ -152,6 +152,49 @@ TEST_CASE("a unit shoots the nearest enemy and never a friend") {
     CHECK(*target == near);  // the near enemy, not the nearer ally
 }
 
+TEST_CASE("a unit does not shoot what its side cannot see") {
+    // The bug ADR-037 was written to fix, now a test. Until intel existed this pass picked
+    // from the whole store filtered by hostility and range, so every unit in the match
+    // engaged targets on the far side of a hill it had no way of knowing were there.
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+
+    Roster roster;
+    const rm::UnitTypeIndex type = roster.addType(targetDef());
+    (void)roster.add(type, 0.0f, 0.0f, 0, 100.0f);
+    const UnitId enemy = roster.add(type, 0.0f, 50.0f, 1, 100.0f);
+
+    const Weapon weapon = directFire(10.0f, 300.0f);
+
+    // With no intel at all — every scene that predates this — the enemy is a target.
+    const auto blind = rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, weapon, roster.store,
+                                              armies, nullptr);
+    REQUIRE(blind.has_value());
+    CHECK(*blind == enemy);
+
+    // Configured but with nothing lighting the enemy's ground: no target, even though it is
+    // hostile, alive, and well within range.
+    rm::sim::Intel intel;
+    intel.configure(2, rm::sim::Fx::fromInt(512), rm::sim::Fx::fromInt(512),
+                    rm::sim::VisionStyle::ForgedAlliance);
+    const auto unseen = rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, weapon, roster.store,
+                                               armies, &intel);
+    CHECK_FALSE(unseen.has_value());
+
+    // And once army 0 puts something out there that CAN see, it engages. Through the pass
+    // rather than by poking the grid: what is being checked is the path a match takes.
+    UnitDef scoutDef = targetDef();
+    scoutDef.name = "test_scout";
+    scoutDef.visionRadiusElmos = 120.0f;
+    const rm::UnitTypeIndex scoutType = roster.addType(scoutDef);
+    (void)roster.add(scoutType, 0.0f, 20.0f, 0, 100.0f);
+
+    intel.update(roster.store, roster.catalog, armies, nullptr);
+    const auto seen = rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, weapon, roster.store,
+                                             armies, &intel);
+    REQUIRE(seen.has_value());
+    CHECK(*seen == enemy);
+}
+
 TEST_CASE("a dead enemy is not a target, and neither is a defeated army's unit") {
     std::vector<Army> armies = rm::sim::freeForAll(2);
 

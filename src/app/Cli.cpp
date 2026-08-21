@@ -301,4 +301,24 @@ namespace rm::app {
     return false;
 }
 
+rm::sim::VisionStyle parseVisionStyle(int argc, const char* argv[]) {
+    for (int i = 1; i + 1 < argc; ++i) {
+        if (std::string{argv[i]} != "--vision-style") {
+            continue;
+        }
+        const std::string value{argv[i + 1]};
+        if (value == "fa" || value == "forged-alliance") {
+            return rm::sim::VisionStyle::ForgedAlliance;
+        }
+        if (value == "recoil") {
+            return rm::sim::VisionStyle::Recoil;
+        }
+        std::fprintf(stderr, "--vision-style: unknown value \"%s\"; using recoil."
+                             " Expected fa or recoil.\n",
+                     value.c_str());
+        break;
+    }
+    return rm::sim::VisionStyle::Recoil;
+}
+
 } // namespace rm::app

@@ -14,6 +14,8 @@
 
 #include "app/SceneBuild.hpp"
 
+#include "core/sim/Intel.hpp"
+
 #include "core/vfs/AssetSearch.hpp"
 #include "core/vfs/Vfs.hpp"
 
@@ -82,6 +84,16 @@ struct MarchOptions {
 [[nodiscard]] rm::vfs::Vfs parseContent(int argc, const char* argv[]);
 [[nodiscard]] float parseAnimationTime(int argc, const char* argv[]);
 [[nodiscard]] MarchOptions parseMarch(int argc, const char* argv[]);
+
+/// `--vision-style fa|recoil`: whether terrain blocks sight (ADR-037).
+///
+/// Defaults to Recoil's, which is the more interesting game — hills block, high ground is
+/// worth holding. `fa` is what Supreme Commander itself does, and is the setting to reach
+/// for when a Forged Alliance map should play the way Forged Alliance played it.
+///
+/// An unrecognised value is the default with a complaint, not an exit: a typo in a
+/// rendering-adjacent flag should not stop a match starting.
+[[nodiscard]] rm::sim::VisionStyle parseVisionStyle(int argc, const char* argv[]);
 
 /// `--dump-weapon <ID>`: print one unit's weapon timings, authored beside corrected.
 [[nodiscard]] bool dumpWeapons(const rm::vfs::Vfs& content, const std::string& id);

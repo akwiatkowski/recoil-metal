@@ -80,6 +80,14 @@ struct VfsUnit {
 /// `observer` seats nobody: every army gets a script and `playerArmy` stays `kNoArmy`, so
 /// nothing is selectable and no click is authorised. That is `--observer`, and it goes through
 /// the same authorisation as everything else rather than through a spectator special case.
+/// Sizes the scene's intel grids for this map and this many alliances (ADR-037).
+///
+/// AFTER the armies exist and after `--alliances` has grouped them, because the grids are
+/// per alliance and one built for the wrong count would leave a side with nowhere to see.
+/// A scene with no armies is left unconfigured, which means every query answers "seen" —
+/// a `--units` crowd has no sides to keep secrets from.
+void configureIntel(UnitScene& scene, const rm::HeightField& field, rm::sim::VisionStyle style);
+
 void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
                      std::span<const rm::mapinfo::StartPosition> starts,
                      const rm::vfs::Vfs& content, bool observer = false);

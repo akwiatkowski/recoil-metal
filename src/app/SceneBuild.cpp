@@ -204,6 +204,32 @@ namespace rm::app {
 }
 
 
+void configureIntel(UnitScene& scene, const rm::HeightField& field,
+                    rm::sim::VisionStyle style) {
+    if (scene.armies.empty()) {
+        return;
+    }
+
+    // One more than the highest alliance index in use, not the army count: `--alliances 2`
+    // on eight armies needs two grids, and sizing by armies would allocate six that nothing
+    // ever writes to — on an 8192-elmo map that is megabytes of zeroes per sense.
+    int highest = 0;
+    for (const rm::sim::Army& army : scene.armies) {
+        highest = std::max(highest, army.alliance);
+    }
+
+    scene.intel.configure(static_cast<std::size_t>(highest) + 1,
+                          rm::sim::fxFromFloat(field.widthElmos()),
+                          rm::sim::fxFromFloat(field.depthElmos()), style);
+
+    const rm::sim::IntelGrid& sight = scene.intel.grid(0, rm::sim::IntelKind::Vision);
+    std::printf("intel: %s style, %d alliance(s), sight grid %dx%d at %d elmos a square\n",
+                style == rm::sim::VisionStyle::Recoil ? "recoil (terrain blocks sight)"
+                                                      : "forged alliance (flat discs)",
+                highest + 1, sight.squaresX(), sight.squaresZ(),
+                sight.squareElmos().floorToInt());
+}
+
 void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
                      std::span<const rm::mapinfo::StartPosition> starts,
                      const rm::vfs::Vfs& content, bool observer) {

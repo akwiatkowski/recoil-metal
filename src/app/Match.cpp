@@ -485,6 +485,7 @@ void runOpponents(UnitScene& scene, const rm::vfs::Vfs& content, const rm::Heigh
                 .features = &scene.features,
                 .commandersEver = scene.commandersEver,
                 .baseStorage = kStartingStorage,
+                .intel = &scene.intel,
                 // Seeded from the scene rather than defaulted to false, using the same
                 // predicate the sim decides on (Skirmish.cpp): a match with one side left
                 // is already over. Two cases need it, and both are announcements that

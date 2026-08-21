@@ -256,12 +256,13 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
     // 2. AIM, then fire. An unturreted weapon may only shoot along the hull, so a unit
     //    that has stopped facing the wrong way has to be brought round first; otherwise
     //    the facing gate reads as a weapon that does not work.
-    (void)aimAtTargets(store, catalog, match.armies);
+    (void)aimAtTargets(store, catalog, match.armies, match.intel);
 
     // 3. FIRE, fly, land.
     if (match.projectiles != nullptr) {
         report.shotsFired =
-            fireWeapons(store, catalog, match.armies, *match.projectiles, rate, match.events);
+            fireWeapons(store, catalog, match.armies, *match.projectiles, rate, match.events,
+                        match.intel);
         advanceProjectiles(*match.projectiles, store, match.armies, terrain, rate,
                            match.events, &catalog);
     }
