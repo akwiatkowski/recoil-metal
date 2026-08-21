@@ -84,7 +84,12 @@ struct Binding {
 class FafAi {
 public:
     /// `root` is the vendored corpus — `vendor/ai/faf`, where `make ai` puts it.
-    explicit FafAi(std::filesystem::path root);
+    ///
+    /// `verbose` traces every module load to stdout as it happens. On by default for the
+    /// in-game AI (`--ai faf`), because the whole point of this pass is that a failure is
+    /// pasteable: a trace that stops mid-line names the file that hung, which a summary printed
+    /// at the end never can.
+    explicit FafAi(std::filesystem::path root, bool verbose = false);
     ~FafAi();
 
     FafAi(const FafAi&) = delete;
@@ -121,8 +126,19 @@ public:
 
 private:
     std::filesystem::path root_;
+    bool verbose_ = false;
     lua_State* state_ = nullptr;
     std::string lastError_;
 };
+
+/// Boots the sandbox, loads the AI corpus, and prints what happened — the `--ai-debug` report.
+///
+/// Written to be PASTED. Every line is self-describing, failures carry their Lua error and the
+/// file that raised it, and the module trace is flushed as it goes so a hang leaves the name of
+/// the file it hung on rather than nothing at all.
+///
+/// Finds the corpus by walking up from the working directory, so it works from the repo root and
+/// from `build/` alike. Says so and returns if `make ai` has not been run.
+void reportFafSandbox();
 
 } // namespace rm::ai

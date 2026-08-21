@@ -32,6 +32,7 @@
 #include "core/data/Opening.hpp"
 #include "core/data/Roster.hpp"
 #include "core/sim/Command.hpp"
+#include "app/FafAi.hpp"
 #include "core/sim/BuildOrder.hpp"
 #include "core/sim/Combat.hpp"
 #include "core/sim/Economy.hpp"
@@ -125,6 +126,16 @@ int main(int argc, const char* argv[]) {
 
         // `--print-events`: narrate the sim's own event queue (§7 P6.1's manual check).
         gPrintEvents = hasFlag(argc, argv, "--print-events");
+
+        // `--ai-debug`: boot the FAF AI sandbox and report on it, then play the match (ADR-039).
+        //
+        // Printed BEFORE the match rather than after, and traced module by module rather than
+        // summarised, because the failure mode being debugged is a HANG: a summary at the end
+        // never arrives, while a trace that stops mid-line names the file that hung. The whole
+        // output is meant to be pasted somewhere and read by someone else.
+        if (hasFlag(argc, argv, "--ai-debug")) {
+            rm::ai::reportFafSandbox();
+        }
 
         // `--dump-weapon <ID>`: print and exit. Before the map, because a weapon's timings have
         // nothing to do with terrain and requiring a `.scmap` to read a blueprint would make

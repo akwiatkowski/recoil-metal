@@ -81,7 +81,7 @@ TEST_CASE("the vendored corpus parses and imports", "[faf][ai]") {
         SUCCEED("vendor/ai/faf absent — run `make ai`");
         return;
     }
-    FafAi ai(root);
+    FafAi ai(root, /*verbose=*/true);
     REQUIRE(ai.ready());
 
     std::size_t loaded = 0;

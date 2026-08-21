@@ -75,7 +75,7 @@ FA_FLAGS  = --gamedata "$(FA_ROOT)/gamedata"
 .DEFAULT_GOAL := help
 .PHONY: help build configure test verify golden play play-from watch run run-fa run-bar \
         skirmish battle match shot-fa shot-bar bench bench-fa bench-gl clean check-fa check-bar \
-        ai
+        ai ai-play ai-report
 
 help:
 	@echo 'recoil-metal — make targets'
@@ -90,6 +90,7 @@ help:
 	@echo '  play            a duel you drive — army 0 is yours (ARMIES=8 for a free-for-all)'
 	@echo '  play-from       the same, joining SECONDS in, so a base already stands'
 	@echo '  watch           every side scripted, nothing selectable (and no fog)'
+	@echo '  ai-play         bots vs bots, with the FAF AI sandbox report on the console'
 	@echo
 	@echo '  run             procedural terrain, no content needed'
 	@echo '  run-fa          a Supreme Commander map, its own units, read from the archives'
@@ -221,6 +222,36 @@ play-from: build check-fa
 watch: build check-fa
 	$(BIN) "$(FA_MAP)" $(FA_FLAGS) --skirmish --observer --armies $(ARMIES) \
 	  $(ALLIANCE_FLAG) --play $(SECONDS)
+
+# --- Bots playing each other ------------------------------------------------
+#
+# `make ai-play` is the one to run while the FAF adapter is being brought up (ADR-039). It prints
+# the sandbox report — what loaded, what failed and why, what the corpus called — and then plays
+# a bots-vs-bots match with nobody driving, so the terminal shows both the AI's integration state
+# and the opponents actually playing.
+#
+# The whole output is meant to be PASTED. That is why the report is one block with its own
+# banner, why failures are deduplicated to distinct causes, and why module loading is traced
+# line by line: the failure being chased is often a hang, and a summary printed at the end never
+# arrives.
+#
+# The opponents playing are still the SCRIPTED ones (core/sim/BuildOrder.hpp behind ADR-038's
+# port). FAF's brain does not drive an army yet, and the report is exactly the list of reasons
+# why — so this target shows the gap rather than hiding it.
+AI_SECONDS ?= 400
+
+ai-play: build check-fa
+	@echo
+	@echo '  Bots vs bots on $(notdir $(FA_MAP)), $(ARMIES) armies, $(AI_SECONDS)s.'
+	@echo '  The FAF sandbox report prints first — paste the whole block when reporting an issue.'
+	@echo
+	$(BIN) "$(FA_MAP)" $(FA_FLAGS) --ai-debug --skirmish --observer --armies $(ARMIES) \
+	  $(ALLIANCE_FLAG) --play $(AI_SECONDS)
+
+# The same report with no match afterwards, for a fast loop while fixing a binding. Runs the
+# test binary rather than the game because it needs no map, no drive and no window.
+ai-report: build
+	./$(BUILD)/rm_tests '[faf]'
 
 # A match: one army per start position, each with its faction's commander, each building an
 # extractor on the map's own mass deposits.
