@@ -57,40 +57,11 @@ bool gPrintEvents = false;
     return applied;
 }
 
-// `issueBuild` used to live here, and it is worth recording why it does not.
-//
-// THE HOLE: builds do NOT go through `applyCommand`, so a build order skips the authorisation
-// check, leaves no entry in the command log, and has its `ConstructionStarted` raised by the
-// caller rather than by the sim. `check_one_order_path.sh` does not catch it because that watches
-// the movement primitives, and this is a different one. **So P4.2's "every order goes through
-// applyCommand" is true of MOVEMENT and not of construction** — a correction to what that
-// commit claimed.
-//
-// **THE BLOCKER IS GONE (`#3090`), and the hole is not closed yet.** Those are two statements
-// and both matter.
-//
-// What blocked it: `resolveBuildable` returned an index into a private `scene.buildable` list,
-// typed `rm::UnitTypeIndex`, while `applyCommand` read `catalog.def(command.buildType)`. Two
-// numbers, one type name. Routing builds through the sim turned a 36-mass extractor into an
-// 18,000-mass experimental and the economy never paid it off. Unifying them was blocked in turn
-// by the draw gather, which read `batch = unit.type` — so registering a buildable type before
-// anything of it spawned would have shifted every later type past its batch.
-//
-// Both are fixed. `Scene::batchForType` maps the two spaces, so a type may exist with no batch —
-// which is exactly what "buildable but not yet built" is — and `resolveBuildable` registers with
-// the catalog like everything else. `Construction::blueprintIndex` is now a real type index, and
-// `applyCommand` would read the right definition.
-//
-// What remains is the routing itself: moving these two call sites onto `applyCommand`, which is
-// a behaviour change (authorisation, the command log, and the sim rather than the caller raising
-// `ConstructionStarted`) rather than the refactor this was. It is a bounded job now instead of a
-// blocked one.
-//
-// One loose end, deliberate and small: a blueprint registered by `resolveBuildable` and later
-// built gets a SECOND type from `spawnUnit`, because that path creates a type and a batch
-// together. Both are real type indices resolving through the catalog, so nothing is ambiguous —
-// it costs one catalog entry per buildable blueprint. Collapsing them means teaching `spawnUnit`
-// to add a batch to an existing type, which belongs with the routing above.
+// One loose end survives the routing, deliberate and small: a blueprint registered by
+// `resolveBuildable` and later built gets a SECOND type from `spawnUnit`, because that path
+// creates a type and a batch together. Both are real type indices resolving through the catalog,
+// so nothing is ambiguous — it costs one catalog entry per buildable blueprint. Collapsing them
+// means teaching `spawnUnit` to add a batch to an existing type.
 
 /// The definition a `Construction::blueprintIndex` names.
 ///
@@ -110,15 +81,7 @@ bool gPrintEvents = false;
     return def != nullptr ? *def : kNone;
 }
 
-/// The player driving an army, or none. What `issueMove` needs to attribute an order.
-[[nodiscard]] rm::PlayerIndex playerDriving(const UnitScene& scene, int army) {
-    for (const rm::sim::Player& player : scene.players) {
-        if (rm::sim::commands(player, army)) {
-            return player.index;
-        }
-    }
-    return 0;
-}
+// `playerDriving` moved to `SceneBuild.cpp`, beside `issueBuild`, which needs it too.
 
 // `orderRouted` used to live here, and every order in this file went through it.
 //
@@ -425,28 +388,25 @@ void applyDecisions(UnitScene& scene, const rm::vfs::Vfs& content, const rm::Hei
                 break;
             }
             const rm::unitdef::UnitDef& def = buildableDef(scene, *blueprintIndex);
-            // NOT THROUGH `applyCommand`, and that is a known hole rather than a
-            // preference — see `issueBuild`'s note. `Construction::blueprintIndex`
-            // indexes `scene.buildable`, and `applyCommand` reads `catalog.def()`:
-            // two index spaces wearing one type name.
-            scene.building.push_back(rm::sim::Construction{
-                .armyIndex = army.index,
-                .position = decision.site,
-                .cost = {.mass = def.buildCostMass, .energy = def.buildCostEnergy},
-                .buildTimeRemaining = def.buildTime,
-                .totalBuildTime = def.buildTime,
-                .buildPerTick = gAppTickRate.magPerTick(decision.buildRate),
-                .blueprintIndex = *blueprintIndex,
-            });
-            // The event the sim would have raised, raised by the caller instead, so a
-            // consumer sees the same vocabulary whichever path created the work.
-            scene.events.emit(rm::sim::Event{
-                .kind = rm::sim::EventKind::ConstructionStarted,
-                .instigator = decision.builder,
-                .army = army.index,
-                .amount = def.buildCostMass,
-                .at = decision.site,
-            });
+
+            // THROUGH `applyCommand`, like every other order. The sim reads the cost, the build
+            // time and the builder's own rate off the definitions, raises `ConstructionStarted`
+            // itself, and refuses the order if the player does not command the builder's army.
+            //
+            // The grid is the BUILDER's, since that is the unit the command names — a build is
+            // not a move and nothing is routed, but `applyCommand` takes one grid for all kinds
+            // and handing it the wrong unit's would be a lie waiting to matter.
+            const auto builderType =
+                static_cast<std::size_t>(scene.store.typeAt(decision.builder.index));
+            const rm::sim::PassabilityGrid& grid = passability.gridFor(
+                scene.maxSlopeDegrees[builderType], scene.maxWaterDepthElmos[builderType]);
+
+            if (!issueBuild(scene, grid, field, decision.builder,
+                            playerDriving(scene, army.index), tickIndex,
+                            static_cast<rm::UnitTypeIndex>(*blueprintIndex), decision.site[0],
+                            decision.site[2])) {
+                break;  // refused deterministically — a dead builder, or one this army lost
+            }
             // Structures announce themselves and tanks do not, which is what the original
             // printed: the commander's build order is the story of the opening, while a
             // factory turning out its ninth tank is noise.

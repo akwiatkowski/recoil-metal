@@ -503,3 +503,75 @@ TEST_CASE("a script's order and a click produce identical hashes") {
     idle.run(CommandLog{}, 120);
     CHECK(human.roster.transform(human.mine).x != idle.roster.transform(idle.mine).x);
 }
+
+TEST_CASE("a build order names a place on the map, and the ground decides the height") {
+    // THE `y` IS ALWAYS ZERO. `spawnUnit` overwrites whatever height a construction carries with
+    // `terrain.heightAt(x, z)`, so a height stored here is never read — it is derived data that
+    // reaches only the state hash, where it makes two runs of one match look different for a
+    // reason no player can observe.
+    //
+    // This is not hypothetical tidiness. The app's build path carried a mass marker's own `y`
+    // through, and routing builds onto `applyCommand` zeroed it — which is exactly why that
+    // change moved the golden at the first EXTRACTOR (whose site is a marker) and at neither the
+    // power generator nor the factory (whose sites are computed with a zero `y` already).
+    Fixture fix;
+
+    rm::unitdef::UnitDef engineerDef;
+    engineerDef.name = "engineer";
+    engineerDef.buildRate = 10.0f;
+    const rm::UnitTypeIndex engineerType = fix.roster.addType(engineerDef);
+
+    rm::unitdef::UnitDef mexDef;
+    mexDef.name = "mex";
+    mexDef.buildTime = rm::test::mag(60.0f);
+    const rm::UnitTypeIndex mexType = fix.roster.addType(mexDef);
+
+    const UnitId engineer = fix.roster.add(engineerType, 300.0f, 300.0f, 0, 500.0f);
+
+    REQUIRE(fix.apply(Command{.tick = 0,
+                              .player = 0,
+                              .kind = CommandKind::Build,
+                              .unit = engineer,
+                              .targetX = rm::test::fx(400.0f),
+                              .targetZ = rm::test::fx(700.0f),
+                              .buildType = mexType}));
+    REQUIRE(fix.building.size() == 1);
+
+    const rm::sim::Construction& work = fix.building.front();
+    CHECK(rm::test::asFloat(work.position[0]) == 400.0f);
+    CHECK(work.position[1] == rm::sim::Fx{});
+    CHECK(rm::test::asFloat(work.position[2]) == 700.0f);
+}
+
+TEST_CASE("a build does not leave the builder looking busy") {
+    // A construction is paid for by the economy rather than attended by the builder, so the
+    // order is over the moment it is started. Left at the head of the queue it would make the
+    // builder look occupied for a tick — and `advanceOrders` would clear it next tick anyway,
+    // which is a difference visible only to whatever asks in between.
+    //
+    // It matters more now that the app's builds come through here: the scripted opponent issues
+    // one every few seconds and reads its own units' state on the same tick.
+    Fixture fix;
+
+    rm::unitdef::UnitDef engineerDef;
+    engineerDef.name = "engineer";
+    engineerDef.buildRate = 10.0f;
+    const rm::UnitTypeIndex engineerType = fix.roster.addType(engineerDef);
+
+    rm::unitdef::UnitDef mexDef;
+    mexDef.name = "mex";
+    mexDef.buildTime = rm::test::mag(60.0f);
+    const rm::UnitTypeIndex mexType = fix.roster.addType(mexDef);
+
+    const UnitId engineer = fix.roster.add(engineerType, 300.0f, 300.0f, 0, 500.0f);
+
+    REQUIRE(fix.apply(Command{.tick = 0,
+                              .player = 0,
+                              .kind = CommandKind::Build,
+                              .unit = engineer,
+                              .targetX = rm::test::fx(400.0f),
+                              .targetZ = rm::test::fx(400.0f),
+                              .buildType = mexType}));
+
+    CHECK(fix.roster.store.orders()[engineer.index].empty());
+}

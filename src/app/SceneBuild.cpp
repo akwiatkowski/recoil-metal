@@ -586,6 +586,40 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
 ///
 /// The extractor is the right first thing for the same reason it is in the game: it is the
 /// cheapest structure that pays for the next one.
+/// The player driving an army, or none. What an issued order is attributed to.
+rm::PlayerIndex playerDriving(const UnitScene& scene, int army) {
+    for (const rm::sim::Player& player : scene.players) {
+        if (rm::sim::commands(player, army)) {
+            return player.index;
+        }
+    }
+    return 0;
+}
+
+bool issueBuild(UnitScene& scene, const rm::sim::PassabilityGrid& grid,
+                              const rm::HeightField& field, rm::sim::UnitId builder,
+                              rm::PlayerIndex player, rm::TickIndex tick,
+                              rm::UnitTypeIndex type, rm::sim::Fx atX, rm::sim::Fx atZ) {
+    const rm::sim::Command command{
+        .tick = tick,
+        .player = player,
+        .kind = rm::sim::CommandKind::Build,
+        .unit = builder,
+        .targetX = atX,
+        .targetZ = atZ,
+        .buildType = type,
+    };
+
+    const bool applied = rm::sim::applyCommand(command, scene.store, scene.catalog,
+                                               scene.players, scene.armies,
+                                               rm::sim::Terrain{field}, grid, gAppTickRate,
+                                               &scene.building, /*queued=*/false);
+    if (applied) {
+        scene.commands.record(command);
+    }
+    return applied;
+}
+
 std::size_t adoptOwnerlessUnits(UnitScene& scene) {
     if (scene.playerArmy == rm::sim::kNoArmy) {
         return 0;  // an observer owns nothing, which is the point of `--observer`
@@ -602,7 +636,8 @@ std::size_t adoptOwnerlessUnits(UnitScene& scene) {
 }
 
 void orderFirstExtractors(UnitScene& scene, std::span<const rm::scenario::Marker> markers,
-                          const rm::vfs::Vfs& content) {
+                          const rm::vfs::Vfs& content, const rm::HeightField& field,
+                          PassabilitySet& passability) {
     if (scene.armies.empty()) {
         return;
     }
@@ -674,21 +709,24 @@ void orderFirstExtractors(UnitScene& scene, std::span<const rm::scenario::Marker
             continue;  // a map with no mass on it: nothing to extract
         }
 
-        scene.building.push_back(rm::sim::Construction{
-            .armyIndex = army,
-            // A mass deposit's position comes out of the map file as floats, so it converts
-            // HERE — in the app, which is the legitimate boundary — rather than being carried
-            // into the sim as one (§7 P10.0).
-            .position = {rm::sim::fxFromFloat(nearest->position[0]),
-                         rm::sim::fxFromFloat(nearest->position[1]),
-                         rm::sim::fxFromFloat(nearest->position[2])},
-            .cost = {.mass = extractor->buildCostMass,
-                     .energy = extractor->buildCostEnergy},
-            .buildTimeRemaining = extractor->buildTime,
-            .totalBuildTime = extractor->buildTime,
-            .buildPerTick = gAppTickRate.magPerTick(def->buildRate),
-            .blueprintIndex = *registered,
-        });
+        // THROUGH `applyCommand`, like every other order — the first extractor of a match is
+        // a build like any other. It was the second bypass, and `check_one_order_path.sh`
+        // found it the moment that guard learned to watch construction rather than only
+        // movement: routing the scripted opponent's builds alone would have left the property
+        // half true for a second time, which is the exact shape of the bug being closed.
+        //
+        // The marker's `y` is dropped rather than converted, and that is the point of the
+        // field's note: a build order names a place on the map and the ground decides the
+        // height. Carrying it made two runs of one match differ in the state hash over a
+        // number nothing ever read.
+        const rm::sim::PassabilityGrid& grid = passability.gridFor(
+            scene.maxSlopeDegrees[static_cast<std::size_t>(scene.store.typeAt(slot))],
+            scene.maxWaterDepthElmos[static_cast<std::size_t>(scene.store.typeAt(slot))]);
+        if (!issueBuild(scene, grid, field, scene.store.idAt(slot), playerDriving(scene, army),
+                        0, *registered, rm::sim::fxFromFloat(nearest->position[0]),
+                        rm::sim::fxFromFloat(nearest->position[2]))) {
+            continue;  // refused deterministically
+        }
 
         lastCost = extractor->buildCostMass;
         lastEnergy = extractor->buildCostEnergy;

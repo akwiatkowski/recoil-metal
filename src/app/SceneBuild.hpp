@@ -125,8 +125,41 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
 /// An observer adopts nothing and the count is zero, which is what `--observer` means.
 std::size_t adoptOwnerlessUnits(UnitScene& scene);
 
+/// Issues a build order AS A COMMAND, records it, and says whether it took.
+///
+/// **THE HOLE THIS CLOSES, kept because it was documented at length as open.** Builds used to
+/// push a `Construction` straight onto `scene.building` and raise `ConstructionStarted`
+/// themselves, so a build order skipped the authorisation check and left no entry in the command
+/// log. `check_one_order_path.sh` never caught it — that guard watched the MOVEMENT primitives —
+/// so P4.2's "every order goes through applyCommand" was true of movement and not of
+/// construction. It is true of both now, and the guard watches both.
+///
+/// What had blocked it was `#3090`: `resolveBuildable` returned an index into a private
+/// `scene.buildable` list typed `rm::UnitTypeIndex` while `applyCommand` read
+/// `catalog.def(command.buildType)` — two numbers wearing one type name, and routing through the
+/// sim turned a 36-mass extractor into an 18,000-mass experimental. That is gone: an index is a
+/// catalog type index everywhere, so the sim reads the definition the caller meant.
+///
+/// THE RATE IS NO LONGER PASSED IN, and that is the one visible difference. `Decision::buildRate`
+/// was the builder's own `def->buildRate`, read by the caller and handed back; `applyCommand`
+/// reads it off the builder itself. Same number, one fewer way to disagree — and a decision that
+/// named a rate could name a rate the builder does not have, which is a whole class of desync a
+/// value carried across an interface invites.
+///
+/// LIVES HERE rather than beside `issueMove` in `Match.cpp` because `orderFirstExtractors` below
+/// needs it too, and `Match.hpp` includes this header rather than the other way round. The first
+/// extractor of every match is a build like any other and goes the same way.
+[[nodiscard]] bool issueBuild(UnitScene& scene, const rm::sim::PassabilityGrid& grid,
+                              const rm::HeightField& field, rm::sim::UnitId builder,
+                              rm::PlayerIndex player, rm::TickIndex tick, rm::UnitTypeIndex type,
+                              rm::sim::Fx atX, rm::sim::Fx atZ);
+
+/// The player driving an army, or none. What an issued order is attributed to.
+[[nodiscard]] rm::PlayerIndex playerDriving(const UnitScene& scene, int army);
+
 void orderFirstExtractors(UnitScene& scene, std::span<const rm::scenario::Marker> markers,
-                          const rm::vfs::Vfs& content);
+                          const rm::vfs::Vfs& content, const rm::HeightField& field,
+                          PassabilitySet& passability);
 
 [[nodiscard]] UnitScene resolveUnits(std::span<const UnitOptions> requests,
                                      const rm::HeightField& field,

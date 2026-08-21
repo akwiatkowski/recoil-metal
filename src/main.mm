@@ -181,6 +181,14 @@ int main(int argc, const char* argv[]) {
         if (armiesCap > 0 && armiesCap < starts.size()) {
             starts = starts.first(armiesCap);
         }
+        // Where a ground unit may stand. One grid per distinct pair of limits, built on first
+        // use: the terrain and water level never change, and a unit's own maxslope and
+        // maxwaterdepth decide which map it sees.
+        //
+        // BEFORE the skirmish block, because `orderFirstExtractors` issues real build commands
+        // and `applyCommand` takes a grid for every kind of order.
+        PassabilitySet passability{map->field, map->hasWater ? map->waterLevel : 0.0f};
+
         if (hasFlag(argc, argv, "--skirmish")) {
             spawnCommanders(units, map->field, starts, content,
                             hasFlag(argc, argv, "--observer"));
@@ -205,7 +213,7 @@ int main(int argc, const char* argv[]) {
                 std::printf("skirmish: %zu ownerless unit(s) adopted by army %d\n", adopted,
                             units.playerArmy);
             }
-            orderFirstExtractors(units, map->markers, content);
+            orderFirstExtractors(units, map->markers, content, map->field, passability);
         }
 
         // Tilt every unit onto its slope once, here, because the headless paths
@@ -225,10 +233,6 @@ int main(int argc, const char* argv[]) {
         // Before anything is uploaded: setUnits seeds every ring slot from the
         // instances as they stand, so a marched scene is correct even on the
         // paths that never push an instance update.
-        // Where a ground unit may stand. One grid per distinct pair of limits,
-        // built on first use: the terrain and water level never change, and a
-        // unit's own maxslope/maxwaterdepth decide which map it sees.
-        PassabilitySet passability{map->field, map->hasWater ? map->waterLevel : 0.0f};
 
         // --- Quality settings ----------------------------------------------
         // The file first, then the command line over the top: a flag is somebody

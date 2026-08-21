@@ -110,6 +110,18 @@ struct Construction {
     /// to notice. Two round trips existed to prove it: `Skirmish.cpp` converted this field back
     /// to `Fx` to raise an event, and `app/Match.cpp` converted it back again to measure a
     /// distance. Both are now the identity.
+    ///
+    /// **THE `y` IS ALWAYS ZERO, and that is a decision rather than an omission.** A build order
+    /// names a place on the MAP; the ground decides the height, and `spawnUnit` proves it by
+    /// overwriting whatever it is handed with `terrain.heightAt(x, z)`. So a height stored here
+    /// is never read — it is a derived value that only ever reached the state hash, where it
+    /// made two runs of one match look different for a reason no player could observe.
+    ///
+    /// It was not always zero. The app's build path carried the site's `y` through (a mass
+    /// marker's, which the map states), and routing builds through `applyCommand` zeroed it —
+    /// which is why that change moved the golden at the first EXTRACTOR and at nothing else.
+    /// The screenshot hash was identical across it, which is what said the match was unchanged
+    /// while the fingerprint was not.
     std::array<Fx, 3> position{};
 
     /// What the finished thing costs in total, from the blueprint.

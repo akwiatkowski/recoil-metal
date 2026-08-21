@@ -164,7 +164,7 @@ re-deriving the weights.
 | Sim | 26 % | **75 %** | movement, collisions, targeting/facing/firing, projectiles, area damage, death, economy, construction, victory, unit handles + flat store + type catalog + census, fixed point END TO END (enforced), CORDIC trig, tick rate as a value at 5–50 Hz, three ownership levels, orders as data through one authorised path, **burst weapons, FA's `WaitSeconds` bias corrected at import, periodic work staggered by a derived period, order queues advanced in the tick, a spatial index every query goes through, an event vocabulary, wrecks as objects, **an immutable snapshot the renderer reads instead of live state, 5,000 units at 12.9x real time** | intel/vision, shields, transports, most weapon classes, air/naval/hover domains, veterancy, upgrades, adjacency, features that INTERACT (a wreck is a record, not an obstacle or salvage) |
 | Renderer | 21 % | **75 %** | instanced units w/ team colour, props + culling, shadows, water + refraction, sky, particles, decals, text/HUD, icons, selection, model LOD, pose playback, DDS, offscreen capture, **an immutable per-tick snapshot, interpolation between the last two, the drawer split, a minimap** | effect taxonomy (muzzle/trail/impact), beams, unit LOD switching |
 | System | 16 % | **35 %** | VFS (`.sdz`/`.scd`), asset search, DDS, settings, bench harness, **a data layer: roles, build tree, roster, opening** | **sound (nothing)**, logging framework, job system, serialisation/save, profiling |
-| Game/orders/UI | 13 % | **80 %** | orbit camera, picking, selection + modifiers, HUD, order markers, CLI harness, commands as data + a command log + player/army/alliance, build commands applied by the sim, **a per-unit command queue with Recoil's cancel-queued rules, shift-right-click to append, and a registered check that there is one order path, a minimap with click-to-jump, an argv layer with tests** | build menu, control groups, formations, game states, playing a command log back |
+| Game/orders/UI | 13 % | **80 %** | orbit camera, picking, selection + modifiers, HUD, order markers, CLI harness, commands as data + a command log + player/army/alliance, build commands applied by the sim AND issued through it, **a per-unit command queue with Recoil's cancel-queued rules, shift-right-click to append, and a registered check that there is one order path, a minimap with click-to-jump, an argv layer with tests** | build menu, control groups, formations, game states, playing a command log back |
 | Map | 10 % | **80 %** | SMF/SMT, `.scmap`, tile atlas, heightfield, `mapinfo.lua`, terrain mesh w/ LOD + skirts, chunk culling, splat, water, stratum normals, props, terrain types, start positions, **a minimap with a world round-trip** | resource spots, features as obstacles, the `.scmap`'s embedded preview image |
 | Pathfinding | 7 % | **40 %** | coarse grid A* **in fixed point**, **passability per motion class (amphibious, hover, land)**, path following | hierarchical/flow-field, dynamic blocking, formations, avoidance quality, per-motion-class grids |
 | Net/replay | 5 % | **40 %** | **a command log — §1.3's criterion now names something that exists** — per-tick state hash over the store (incl. per-slot type, generation and liveness), hash log + first-divergence reporting (P0.2/P0.3) | netcode, lockstep, the cross-architecture proof (P9, frozen) |
@@ -1475,12 +1475,20 @@ The items below are still real and still unscheduled; they are what P10 is *not*
 1. **Sound — System is 16 % of the weight at 35 %, with nothing at all.** No mixer, no
    listener, no per-unit cue. Both games ship their audio in formats the VFS already mounts. It
    is the largest untouched slice in the project and the one a player notices first.
-2. **The two index spaces (`#28343`).** `resolveBuildable` returns an index into
-   `scene.buildable` typed as `rm::UnitTypeIndex`, while `applyCommand` reads `catalog.def()`.
-   Build orders therefore cannot go through `applyCommand`, so P4.2's "one order path" is true
-   of movement only. P7.1's snapshot is what makes fixing it possible — the sim's type index no
-   longer has to be the renderer's batch index — and it is now a bounded job rather than a
-   blocked one.
+2. ~~**The two index spaces (`#28343`).**~~ **CLOSED.** `#3090` unified them and the build
+   path is routed: both `applyDecisions` and `orderFirstExtractors` issue `CommandKind::Build`
+   through `applyCommand`, so a build is authorised, recorded in the command log, and has its
+   `ConstructionStarted` raised by the sim. P4.2's "one order path" is now true of construction
+   as well as movement, and `check_one_order_path.sh` watches both — **which is what found the
+   second bypass.** Routing only the scripted opponent's builds would have left the property
+   half true for a second time, and a guard scoped to half a property is exactly how the first
+   one survived unnoticed for months with a green check beside it.
+
+   The change moved the golden and moved nothing a player can see: `Construction::position`'s
+   `y` had been carrying a mass marker's terrain height, which `spawnUnit` overwrites with
+   `terrain.heightAt(x, z)` — derived data that reached only the state hash. The screenshot
+   hash was bit-identical across the change while the fingerprint moved, which is P10.0's
+   technique and the right proof for a representation change.
 3. **Formations, and the hierarchical pathing layer.** The rest of pathfinding's 40 % moved
    into P10.4 and P10.5 — the cost field and shared flow fields. What stays out of scope
    there is deliberate: a rally order still walks twenty units into each other and lets
