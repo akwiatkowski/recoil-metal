@@ -1244,7 +1244,8 @@ fewer of those today than there will ever be again.
       until someone puts that function back — a deliberate act rather than an oversight, and a
       stronger guarantee than the grep gives.
 
-- [ ] **P10.1 Armour classes and the damage profile** (`ADR-033`, D12). `ArmorRegistry`
+- [x] **P10.1 Armour classes and the damage profile** — **done 2026-08-21** (`cc930ce` the type, `c46f603` wired; `make verify` MATCHed because a catalog with no armour context reproduces the pre-P10.1 engine byte for byte).
+      Original item: (`ADR-033`, D12). `ArmorRegistry`
       interning sorted case-folded names to a dense `uint8`; `DamageProfile` as a base `Mag`
       plus a short inline override list; `damageArea` taking a profile with the existing
       `Mag` signature kept as a wrapper so the two dozen falloff tests are untouched.
