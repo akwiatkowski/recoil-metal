@@ -1484,3 +1484,196 @@ First pass carries Vision, Radar and Sonar, being what 391, 57 and 67 of the shi
 blueprints declare. The remaining nine FA intel types — Omni, Cloak, CloakField,
 RadarStealth(Field), SonarStealth(Field), Jammer, Spoof — are additions to the same type,
 not a redesign.
+
+
+## ADR-038 — An opponent is a command source, and the port says so
+
+**Context.** The opponent is `core/sim/BuildOrder.hpp` — a fixed build order plus one attack
+wave — and `tickSkirmish` calls it by name. Two things already point past that. P4.2 routed
+every input path through commands, so the script's orders and a player's right-click are the
+same kind of thing. And `Events.hpp` was built as "the sim's outward voice", naming among its
+intended consumers "eventually a Lua host". What is missing between them is an *interface an
+opponent implements*: a second opponent today is a second call site in the assembly, the
+scripted one cannot be switched off, swapped, or benchmarked against a replacement, and
+nothing can consume the sim the way `Events.hpp` anticipated.
+
+**Decision.** Name the port. An opponent observes, thinks, and emits commands:
+
+    observe(const World&, std::span<const Event>)   // a read view, plus what happened
+    advance(Tick)                                   // do this tick's thinking
+    drain() -> std::span<const Command>             // what it decided
+
+Three properties are load-bearing.
+
+  - **It emits commands and nothing else.** No pointers into the sim, no mutation — the rule
+    `BuildOrder.hpp` already states for the script ("the script holds no pointers into the
+    sim"), promoted from a comment to the interface. An opponent is therefore replay-safe by
+    construction: the recorded command log already replays it, with no new machinery.
+  - **`advance` returns.** Whatever happens inside — a tick function, a resumed coroutine, a
+    worker pool — the port sees only "this tick's work is done". Control flow is the
+    implementation's business, and that is what keeps the port small enough to be worth having.
+  - **The implementation is chosen once, at match setup, from the content family.** Not per
+    unit and not per tick, because a match is one family throughout.
+
+`ScriptedOpponent` is implementation one: today's `BuildOrder`, moved behind the port, unchanged.
+
+**Alternatives considered.** *Leave the script called by name* — rejected: it is precisely what
+makes a second opponent a second call site, and what leaves the scripted opponent with no A/B
+partner, so no AI work after it could be measured. *An observer interface where the opponent
+mutates the sim directly* — rejected: it puts an unaudited writer inside the tick and breaks the
+P4.2 invariant that every input is a command. *A neutral AI object model (`AIUnit`, `AIOrder`)
+for opponents to consume* — rejected: it is a third dialect nobody speaks, and every consumer
+pays to translate into it. `World` is a read view over `UnitStore`, `SpatialGrid`, `Terrain` and
+`Roster` — this engine's own vocabulary — and anything foreign is translated at its own adapter,
+once. *Defer the port until an AI needs it* — rejected on cost: it is one interface plus one
+existing implementation relocated, and it is roughly 80% implied by what `BuildOrder`, `Events`
+and `Command` already are.
+
+**An opponent need not be deterministic, and this is decided rather than assumed.** It runs on
+the machine serving the game and nowhere else, and what leaves that machine is commands — the
+same commands a player's mouse produces, already recorded and already replayed (P4.2). So the
+lockstep contract of ADR-030 is satisfied by the *command stream*, not by the opponent's
+reasoning, and an opponent may draw random numbers, iterate a hash table, or think in a thread
+pool without any of it being an engine concern. FAF's AI draws 101 random numbers and relies on
+it (`moveFirst = 'Random'`); that is now a fact about the AI rather than a problem for us.
+Seeding an adapter's RNG from the sim's stream is worth doing if it is nearly free — it makes a
+match rerunnable for debugging — and is worth no fight beyond that.
+
+**Consequences.** `World`'s shape becomes a real design surface: it must answer role/faction/tech
+questions (`Roster.hpp`) and neighbourhood questions (`SpatialGrid`) without handing out mutable
+handles, and every method added to it is a claim about what an opponent is allowed to know. The
+opponent is *not* in the state hash, correctly — it is an input source, not simulated state.
+The port costs nothing if no adapter is ever built.
+
+
+## ADR-039 — Foreign AIs are adapted, never modified; FAF's is first
+
+**Context.** Two mature AI codebases exist for the two content families this engine loads, and
+both were measured on the checkouts here rather than estimated.
+
+*FAF's AI* (`reference/FAF-fa`, `lua/AI` + `lua/aibrains` + `aibrain.lua` + `platoon.lua`):
+83,006 lines across 174 files, calling 222 distinct engine entry points — 84 globals, 138
+methods. Of 548 distinct methods called, 377 are defined inside the corpus itself and **33**
+leak into external game Lua. Its dialect is the surprise: **zero** files use `#` line comments,
+zero use `arg[]`, 49 sites use the 5.1 `#x` length operator, against 115 `table.getn` and one
+`math.mod`. It runs on stock Lua 5.1 with three shims. `PLAN.md`'s Lua-5.0-fork argument was
+measured on the *sim* corpus (1240 of 1414 files using `#` comments) and is correct there; it
+does not transfer to this subset.
+
+*Circuit/BARb* (`recoil-macos/AI/Skirmish/BARb`): 53,648 lines of C++ behind a C ABI of 596
+callbacks, of which roughly 180 are reached — an estimate by name-matching, so approximate. It
+builds its own threat map, influence map, pathfinder and metal manager, and wants none of ours.
+
+**Decision.** Three parts.
+
+*The hard rule: vendored AI source is never modified.* Upstream compatibility is the whole
+point — if the FAF or BAR communities ship something better, it drops in — so **a change that
+can only be made by patching the AI is a change to the adapter or to the engine, or it is not
+made.**
+
+A rule nothing enforces is a preference, so the storage mechanism is chosen to enforce it. The
+trees are **fetched at pinned commits and gitignored**, never committed: `tools/fetch_ai.sh`
+holds the pins and the path lists, `make ai` runs it, `vendor/ai/` is ignored, and
+`vendor/README.md` and `vendor/NOTICE.md` are the only committed artefacts. There is then no
+local copy in history for anyone to quietly edit — `--force` discards local state, and the
+repository never disagreed with upstream to begin with. That is a stronger guarantee than a CI
+diff and it costs a `.gitignore` line rather than 16 MB and 1,016 files of someone else's code
+in the history, which is the same reason `.gitignore` already gives for `third_party/`. Bumping
+a version becomes a one-line commit that is its own diagnosis when the adapter breaks.
+
+*Adapters, not a shared AI model.* Each foreign AI gets one adapter implementing ADR-038's port,
+translating this engine's `World`/`Event`/`Command` into that AI's dialect and back. Adapters
+hold zero game logic — units, coordinate space, id mapping, enum mapping, nothing else. The
+control-flow mismatch stays inside them: `FafLuaAdapter::advance` resumes the coroutines due
+this tick and returns; a later `CircuitAdapter::advance` fires `EVENT_UPDATE` and returns. The
+port never learns that Lua exists.
+
+*FAF first, at accepted partial fidelity.* The premise, stated plainly because every estimate
+here depends on it: **we do not fully know how Moho works, and we are not going to find out
+before writing the adapter.** The engine is closed, the API has signatures without
+implementations, and a binding written against a signature is a guess dressed as a function.
+Waiting for certainty means never starting; the alternative is to bind what we can, run it, and
+let the game tell us what is wrong. That is the plan, and it is a choice rather than a shortfall.
+
+So the hypothesis under test is that **a game-agnostic port can serve a foreign AI without the AI
+or the sim being modified** — not that the AI will play well. It will not, at first. The
+adapter's first goal is an AI that *runs*, and its second is a report of what it is running badly.
+
+**The first milestone is deliberately smaller than a match**, because "run it and see" against a
+partly-implemented engine does not produce an AI that plays poorly — it produces one that dies in
+the first seconds, and a single undifferentiated failure carries no information. The first
+observable success is therefore: the brain initialises, forms one platoon, and issues one order
+that the sim executes. Everything after that is the instrumentation report doing its job.
+
+That makes instrumentation part of the adapter rather than a later debugging aid. Every one of
+the 222 names is bound to *something* and carries a confidence tag — `known`, `guessed`, or
+`stub` — and the adapter records call counts per name across a match. "Which parts of the AI are
+not connected" is then a ranked report after one game, not an investigation: a `stub` with 4,000
+calls is the next thing to implement, a `known` with zero calls is dead surface. Without this the
+partial-fidelity strategy has no feedback loop and degrades into guessing about guesses.
+
+What the FAF adapter needs: a Lua 5.1 interpreter; 84 globals and 138 methods bound over `World`;
+33 shims for the external game-Lua methods (`SetTargetPriorities`, `HasEnhancement`,
+`CreateEnhancement`, `EnableUnitIntel`, the `On*` economy callbacks); a deterministic coroutine
+scheduler for `ForkThread`/`WaitSeconds`/`WaitTicks` (~225 sites each); and a threat map, which
+FAF's AI expects the *engine* to own (`GetThreatAtPosition`, 122 sites) — unlike Circuit, which
+builds its own.
+
+Two existing assets are why FAF is first rather than merely possible. `ScenarioSave.hpp` already
+reads the full marker table those behaviours are built on — 3,508 mass deposits, 1,114 defensive
+points, 677 transport markers, 524 rally points, plus the retail navigation graph — and
+`Roster.hpp` already answers `role + faction + tech -> blueprint`, which is the question both
+dialects need and neither can express natively.
+
+**Alternatives considered.** *Reimplement one AI natively against the port* — not rejected,
+deferred: it stays possible by construction, since ADR-038 admits any number of implementations,
+but it cannot be *evaluated* until a strong reference opponent exists to score against, and the
+adapter is what provides one. *A "unified AI" playing both families* — **explicitly not a goal.**
+The port must not foreclose it and nothing is designed toward it. An AI playing both adequately
+would still be worse at each game than the specialist its community has tuned for a decade, and
+how well it plays is an AI's entire value. *Patch the AI where patching is easier than adapting*
+— rejected by the hard rule: it converts a tracked dependency into a fork, and forks rot.
+*Circuit first* — the strongest alternative, and it rests on an asymmetry worth recording because
+it does not go away. **Recoil is open, so its AI callbacks have a reference implementation we can
+read**: `rts/ExternalAI/SSkirmishAICallbackImpl.cpp` is 5,554 lines implementing all 596, with the
+complete name-to-implementation map at line 5263. `Unit_getPos` is not a guess — it is
+`GetCallBack(id)->GetUnitPos(unitId)`, cheats branch included. A Circuit adapter is therefore
+*translation against a readable spec*, and every discrepancy is attributable: Recoil returns this,
+we return that. A FAF adapter is archaeology, and a failure there is ambiguous — bad port, or bad
+guess at Moho. Circuit is the cleaner experiment.
+
+It is nonetheless second, on relevance and content cost: the near target is a Supreme Commander
+skirmish on `SCMP_009`, so FAF's is the AI for the game being built, while Circuit needs BAR
+content loaded and a metal map parsed — `metalmapPtr` appears in this engine only as a comment in
+`Smf.cpp:26`. The asymmetry is accepted with eyes open rather than argued away: we take the harder
+experiment first because it is the useful one, and we lose the ability to attribute its failures
+cleanly. The instrumentation above is what partially buys that back.
+
+**The largest single risk is the threat map**, and it is named here so it is not rediscovered as
+a schedule slip. `GetThreatAtPosition` has 122 call sites; FAF's AI assumes the *engine* owns a
+threat model, and no annotation stub says what it returns. Circuit's own implementation is not a
+reference, because it answers a different engine's question. Every other item on the FAF adapter's
+bill is bounded work against a known signature; this one is a design problem with no ground truth,
+and if any single thing overruns its estimate it is this.
+
+**Consequences.** A Lua VM enters the build. `LuaTable.hpp` declines an interpreter for *data
+parsing* and that stands — the data parser is untouched and this overturns nothing except for
+the AI sandbox, which is a different justification for a different job. If Circuit is adopted
+later, two threat maps will exist, because it declines to use the engine's; accepted, they are
+not the same object. FAF-fa carries no licence and is vendored as-is by explicit decision, with
+provenance recorded rather than asserted; this ADR is the record that the question was asked.
+The adapter is roughly **255 translation points** (84 + 138 + 33), not a shim — planning that
+calls it a shim will underestimate it by an order of magnitude. Because a missing Lua binding
+fails mid-match rather than at build time, the adapter asserts at load that every one of the 222
+names in `FAF-fa/engine/`'s annotation stubs is bound to *something*, stub included — turning a
+forty-minutes-in nil-call into a startup error, without pretending a bound stub is a working one.
+Every pin is verified, and verifying them is what caught the one thing worth knowing. Each tree
+was measured on a local checkout, then re-fetched from upstream and compared: FAF returns the
+same 257 files; CircuitAI is byte-identical, and `git fetch --depth 1 origin 0ef3626` would fail
+outright if upstream lacked that commit, which is what turned a plausible hash into a proven one;
+Recoil's `rts/ExternalAI/Interface/` matches, so the pin names the same 596 callbacks this ADR
+counts. **`AI/Wrappers/` does not match** — three files differ and upstream no longer ships
+`JavaOO` — and the difference is in the *local* Recoil checkout, which carries four macOS build
+commits over an unversioned import. Upstream is the clean tree and upstream is what is fetched,
+so a Circuit adapter behaving differently here than the local Recoil build does would be the
+local build's doing. `vendor/NOTICE.md` keeps the details.
