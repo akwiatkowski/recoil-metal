@@ -586,6 +586,21 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
 ///
 /// The extractor is the right first thing for the same reason it is in the game: it is the
 /// cheapest structure that pays for the next one.
+std::size_t adoptOwnerlessUnits(UnitScene& scene) {
+    if (scene.playerArmy == rm::sim::kNoArmy) {
+        return 0;  // an observer owns nothing, which is the point of `--observer`
+    }
+
+    std::size_t adopted = 0;
+    for (rm::sim::MoveState& motion : scene.store.motion()) {
+        if (motion.armyIndex == rm::sim::kNoArmy) {
+            motion.armyIndex = scene.playerArmy;
+            ++adopted;
+        }
+    }
+    return adopted;
+}
+
 void orderFirstExtractors(UnitScene& scene, std::span<const rm::scenario::Marker> markers,
                           const rm::vfs::Vfs& content) {
     if (scene.armies.empty()) {

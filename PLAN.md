@@ -481,13 +481,17 @@ base). The slices, each screenshot-provable:
   which is ADR-040 and which had been mis-aiming the minimap's own click since
   P7.4.
 
-  **The engineer is not reachable in a running match, and that is a fact about
-  the opening rather than about the panel.** `data/opening.lua` builds four
-  structures and then tanks; nothing builds an engineer, and `--units` is
-  march-mode content that `--skirmish` ignores. So the engineer path is proven
-  by `tests/test_build_options.cpp` and the screenshot proof is a commander's
-  menu (`make shot-ui`). Giving a player an engineer to select is part of the
-  same slice as making the tray act.
+  **Getting an engineer in front of the panel took a fix, and the fix was not
+  where it looked.** `data/opening.lua` builds four structures and then tanks,
+  so a scripted match never produces an engineer — but `--units` did spawn one
+  and it was invisible to the interface for a different reason: `resolveUnits`
+  runs before `spawnCommanders` (a skirmish APPENDS to a `--units` crowd rather
+  than replacing it), so those units carry `kNoArmy`, and `pickAcrossBatches`
+  refuses anything that is not the player's. A `--units` crowd in a skirmish was
+  therefore furniture — unselectable, unorderable, and unable to show any
+  interface at all, which is most of what a crowd of test units is for.
+  `adoptOwnerlessUnits` hands them to the seated player once there is one.
+  `make shot-engineer` is the capture: **15 options for UEL0105**.
 - **UI-4**: an explicit orders row, deferred while right-click covers it.
 
 ### Track 1 — the host arc, milestones 21–25

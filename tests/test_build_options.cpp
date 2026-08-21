@@ -17,6 +17,7 @@
 
 #include "app/Interface.hpp"
 #include "app/Scene.hpp"
+#include "app/SceneBuild.hpp"
 
 #include <algorithm>
 #include <string>
@@ -277,4 +278,62 @@ TEST_CASE("an empty selection clears the previous frame's options", "[ui][build]
     const auto second = fixture.optionsFor({});
     CHECK(second.empty());
     CHECK(fixture.builderName.empty());
+}
+
+// --- Adoption ---------------------------------------------------------------
+//
+// `--units` spawns before the armies exist, so its crowd carries `kNoArmy`. Harmless in a
+// march, where `playerArmy` is `kNoArmy` too and the selection filter is skipped — and fatal in
+// a skirmish, where it makes every one of those units unselectable and therefore unable to show
+// any of the interface. It is also the only route an ENGINEER has into a match today, which is
+// why these live next to the build options rather than off in a scene-building file.
+
+TEST_CASE("a unit nobody owns is adopted by the seated player", "[ui][build][scene]") {
+    Fixture fixture;
+    const rm::sim::UnitId orphan = fixture.spawnEngineer(rm::sim::kNoArmy);
+
+    // Before: unselectable, and so the panel it could have filled never appears.
+    CHECK(fixture.optionsFor({orphan}).empty());
+
+    CHECK(rm::app::adoptOwnerlessUnits(fixture.scene) == 1);
+    CHECK(fixture.scene.armyOf(orphan.index) == 0);
+
+    const auto got = fixture.optionsFor({orphan});
+    CHECK_FALSE(got.empty());
+    CHECK(fixture.builderName == "UEL0105");
+}
+
+TEST_CASE("adoption leaves a unit that already has an army alone", "[ui][build][scene]") {
+    // The skirmish's own spawns all carry an army by the time this runs, and taking one off its
+    // owner would hand the player the enemy's commander — which is exactly the sort of thing
+    // "adopt everything" would do if it did not check.
+    Fixture fixture;
+    const rm::sim::UnitId theirs = fixture.spawnCommander(1);
+    const rm::sim::UnitId orphan = fixture.spawnEngineer(rm::sim::kNoArmy);
+
+    CHECK(rm::app::adoptOwnerlessUnits(fixture.scene) == 1);
+    CHECK(fixture.scene.armyOf(theirs.index) == 1);
+    CHECK(fixture.scene.armyOf(orphan.index) == 0);
+}
+
+TEST_CASE("an observer adopts nothing", "[ui][build][scene]") {
+    // `--observer` seats nobody: `playerArmy` stays `kNoArmy` and nothing is selectable. Handing
+    // the crowd to "no army" would be a no-op written as an assignment, and handing it to army
+    // zero would quietly seat a player in a mode whose whole point is that nobody is seated.
+    Fixture fixture;
+    fixture.scene.playerArmy = rm::sim::kNoArmy;
+    const rm::sim::UnitId orphan = fixture.spawnEngineer(rm::sim::kNoArmy);
+
+    CHECK(rm::app::adoptOwnerlessUnits(fixture.scene) == 0);
+    CHECK(fixture.scene.armyOf(orphan.index) == rm::sim::kNoArmy);
+}
+
+TEST_CASE("adopting twice changes nothing the second time", "[ui][build][scene]") {
+    // It runs once per scene today, and a count that kept climbing would be the first sign that
+    // it had quietly become per-frame.
+    Fixture fixture;
+    (void)fixture.spawnEngineer(rm::sim::kNoArmy);
+
+    CHECK(rm::app::adoptOwnerlessUnits(fixture.scene) == 1);
+    CHECK(rm::app::adoptOwnerlessUnits(fixture.scene) == 0);
 }

@@ -103,6 +103,28 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
                                                                 const rm::vfs::Vfs& content,
                                                                 std::string_view blueprintPath);
 
+/// Gives every unit that belongs to nobody to the seated player. Returns how many changed hands.
+///
+/// WHY THIS EXISTS. `--units` spawns before there are any armies to spawn into — `resolveUnits`
+/// runs first, because `--skirmish` is documented as APPENDING to whatever `--units` asked for
+/// rather than replacing it — so a `--units` crowd carries `kNoArmy`. On its own that is
+/// correct and harmless: a march with no skirmish has no armies, `playerArmy` is `kNoArmy` too,
+/// and the selection filter that compares them is skipped entirely, so every unit is clickable.
+///
+/// Put the two together and the crowd becomes furniture. `pickAcrossBatches` refuses anything
+/// whose army is not the player's, so in a skirmish a `--units` unit cannot be selected, cannot
+/// be ordered, and cannot show a build panel — which makes `--units` useless for exercising any
+/// of the interface, the one job a crowd of test units is for. It is also the only way to get
+/// an ENGINEER into a match today: `data/opening.lua` builds four structures and then tanks.
+///
+/// ADOPTION RATHER THAN A SPAWN-TIME ARMY, because the ownerless window is real and short: the
+/// units exist before the armies do. Giving them an owner the moment there is one to give is
+/// the smallest thing that closes it, and "every unit nobody owns" is exactly the set — the
+/// skirmish's own spawns all carry an army by the time this runs.
+///
+/// An observer adopts nothing and the count is zero, which is what `--observer` means.
+std::size_t adoptOwnerlessUnits(UnitScene& scene);
+
 void orderFirstExtractors(UnitScene& scene, std::span<const rm::scenario::Marker> markers,
                           const rm::vfs::Vfs& content);
 

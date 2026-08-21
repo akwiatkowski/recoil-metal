@@ -195,6 +195,16 @@ int main(int argc, const char* argv[]) {
             // AFTER the alliances are grouped: the grids are per alliance, and one sized
             // for the wrong count would leave a side with nowhere to see.
             configureIntel(units, map->field, parseVisionStyle(argc, argv));
+
+            // A `--units` crowd spawned before there were armies to spawn into, so it belongs
+            // to nobody and nothing can select it. Hand it to the seated player now that there
+            // is one — see `adoptOwnerlessUnits`. This is also how an engineer reaches a match:
+            // `--units /units/UEL0105/UEL0105_unit.bp 4 --skirmish` puts four of them in the
+            // player's hands, which is what `make shot-engineer` captures.
+            if (const std::size_t adopted = adoptOwnerlessUnits(units); adopted > 0) {
+                std::printf("skirmish: %zu ownerless unit(s) adopted by army %d\n", adopted,
+                            units.playerArmy);
+            }
             orderFirstExtractors(units, map->markers, content);
         }
 

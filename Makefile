@@ -54,6 +54,9 @@ BAR_MAP ?= $(BAR_MAPS)/aw04.smf
 # A unit from each family, by the path each family names its content with: Supreme Commander
 # by VFS path inside the mounted archives, Recoil by a real file on disk.
 FA_UNIT  ?= /units/UEL0201/UEL0201_unit.bp
+# The UEF T1 engineer. `make shot-engineer` needs a BUILDER on the map and a scripted match
+# never produces one — see that target.
+FA_ENGINEER ?= /units/UEL0105/UEL0105_unit.bp
 BAR_UNIT ?= $(BAR_ROOT)/units/ArmVehicles/armstump.lua
 
 # --- Knobs -------------------------------------------------------------------
@@ -80,7 +83,7 @@ FA_FLAGS  = --gamedata "$(FA_ROOT)/gamedata"
 .DEFAULT_GOAL := help
 .PHONY: help build configure test verify golden play play-from watch run run-fa run-bar \
         skirmish battle match shot-fa shot-bar bench bench-fa bench-gl clean check-fa check-bar \
-        ai ai-play ai-report shot-ui
+        ai ai-play ai-report shot-ui shot-engineer
 
 help:
 	@echo 'recoil-metal — make targets'
@@ -106,6 +109,7 @@ help:
 	@echo '  shot-fa         one frame of the above, to $$SHOT'
 	@echo '  shot-bar        the same for the Recoil path'
 	@echo '  shot-ui         a commander selected: the build panel and minimap in frame'
+	@echo '  shot-engineer   the same for an engineer, which a scripted match never builds'
 	@echo
 	@echo '  bench-fa        offscreen benchmark on the Supreme Commander map'
 	@echo '  bench           offscreen benchmark on the Recoil map'
@@ -320,6 +324,17 @@ shot-fa: build check-fa
 shot-ui: build check-fa
 	$(BIN) "$(FA_MAP)" $(FA_FLAGS) --skirmish --armies 2 --play $(SECONDS) --select 1 \
 	  --screenshot $(SHOT) $(SHOT_SIZE)
+	@echo "  wrote $(SHOT)"
+
+# The same, for an ENGINEER — the unit a player actually selects to build something.
+#
+# `--units` is how one reaches a match at all: `data/opening.lua` builds four structures and
+# then tanks, so nothing in a scripted match ever produces an engineer. The crowd spawns before
+# the armies do and is adopted by the seated player once there is one (`adoptOwnerlessUnits`),
+# which is what makes it selectable rather than scenery.
+shot-engineer: build check-fa
+	$(BIN) "$(FA_MAP)" $(FA_FLAGS) --skirmish --armies 2 --units $(FA_ENGINEER) 4 \
+	  --play $(SECONDS) --select 1 --look $(MARCH) 400 --screenshot $(SHOT) $(SHOT_SIZE)
 	@echo "  wrote $(SHOT)"
 
 shot-bar: build check-bar
