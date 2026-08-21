@@ -114,9 +114,9 @@ void appendViewFootprint(std::vector<std::array<float, 2>>& out, const rm::Orbit
 /// `tests/test_build_options.cpp` asks what belongs in it.
 void gatherBuildOptions(const UnitScene& scene, std::span<const rm::sim::UnitId> selection,
                         const rm::ui::Theme& theme, std::vector<rm::ui::BuildOption>& out,
-                        std::string& builderName) {
+                        BuildSelection& who) {
     out.clear();
-    builderName.clear();
+    who = BuildSelection{};
     if (selection.empty() || scene.roster.size() == 0) {
         return;
     }
@@ -166,7 +166,7 @@ void gatherBuildOptions(const UnitScene& scene, std::span<const rm::sim::UnitId>
         }
         const rm::sim::Faction faction = scene.armies[static_cast<std::size_t>(army)].faction;
 
-        builderName = def->name;
+        who = BuildSelection{.builder = id, .name = def->name};
         for (const rm::unitdef::Role wanted : kStructureRoles) {
             for (const rm::data::RosterEntry& entry : scene.roster.all(faction, wanted)) {
                 // TIER ONE ONLY, for now. A commander can build a T1 structure of each kind, and

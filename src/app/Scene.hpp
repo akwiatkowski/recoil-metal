@@ -653,6 +653,22 @@ inline constexpr float kSelectionRingMargin = 1.35f;
 /// the player is looking. Two, so it survives being small or being colour-blind.
 inline constexpr std::array<float, 4> kOrderMarkerColour{{1.0f, 0.72f, 0.20f, 0.85f}};
 
+/// The build ghost's ring, where a structure would be founded.
+///
+/// CYAN, which is neither the selection's green nor the order marker's amber — three cues can
+/// share the same ground within a second (select a commander, arm a cell, hover a site) and a
+/// ghost that borrowed either colour would read as one of them. It is also the interface's own
+/// hue, which is what a thing that is not yet part of the world should look like.
+inline constexpr std::array<float, 4> kBuildGhostColour{{0.35f, 0.85f, 1.0f, 0.70f}};
+
+/// The same ring where the footprint will not fit.
+///
+/// RED AND MORE OPAQUE, because it is a refusal and a refusal should not be the subtler of two
+/// states. The pair carries the answer without a label, and the difference survives being small
+/// — red against cyan differs in brightness as well as hue, so it does not rely on colour
+/// vision alone, which is the same reasoning the order marker's cross records.
+inline constexpr std::array<float, 4> kBuildGhostBlockedColour{{1.0f, 0.30f, 0.25f, 0.85f}};
+
 // --- What the scene layer does ------------------------------------------------------------
 
 void setAppTickRate(std::uint32_t ticksPerSecond);

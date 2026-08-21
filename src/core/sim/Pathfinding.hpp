@@ -71,6 +71,25 @@ struct PassabilityGrid {
     [[nodiscard]] Fx worldAtCellCentre(int cell) const noexcept;
 };
 
+/// Whether a structure of `radiusElmos` may be founded at a world point.
+///
+/// EVERY CELL ITS FOOTPRINT TOUCHES, not just the centre one. A factory is wider than a cell on
+/// this grid and a player aims at the middle of it, so a centre-only test cheerfully puts half a
+/// building inside a cliff — and it looks fine until the thing finishes and stands in rock.
+///
+/// THE SAME GRID THE BUILDER WOULD WALK, which is a simplification and a stated one. Passability
+/// answers "may a unit STAND here", and buildability is a different question in both reference
+/// engines: Recoil has a separate blocking map, Supreme Commander has per-blueprint terrain
+/// classes. Ours is the walkable test until there is a reason to separate them, and the reason
+/// will be a unit that can build somewhere it cannot walk — a naval yard, which needs the water
+/// grid this engine refuses to build (see `moveDefFor`'s note on Water and SurfacingSub).
+///
+/// P10.4 makes this better rather than different: a cost field replaces the binary answer, and
+/// `buildPassability`'s "one blocked square blocks the cell" — which at 64 elmos is very coarse
+/// for a 4-elmo extractor — stops being the conservative lie it is today.
+[[nodiscard]] bool sitePlaceable(const PassabilityGrid& grid, Fx x, Fx z,
+                                 Fx radiusElmos) noexcept;
+
 /// Builds the passability grid for a map.
 ///
 /// A cell is passable when every square in it is walkable, which is the

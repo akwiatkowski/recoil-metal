@@ -32,6 +32,20 @@ namespace rm::app {
 
 void appendMinimapPips(std::vector<rm::ui::MinimapPip>& out, const UnitScene& scene);
 
+/// Which unit the panel is showing the options OF.
+///
+/// THE HANDLE AND THE NAME TOGETHER, because both callers need one each and re-deriving either
+/// means restating "the first builder in the selection decides" somewhere else. That rule lives
+/// in `gatherBuildOptions` and a second copy of it is a copy that will drift — the panel would
+/// then be headed by one unit and its orders issued by another, which is invisible until the
+/// day two builders are selected.
+struct BuildSelection {
+    rm::sim::UnitId builder{};
+    std::string name;
+
+    [[nodiscard]] bool any() const noexcept { return !name.empty(); }
+};
+
 /// What the selection can build, for the build panel.
 ///
 /// THE FIRST BUILDER IN THE SELECTION DECIDES, rather than the intersection of everything
@@ -40,20 +54,19 @@ void appendMinimapPips(std::vector<rm::ui::MinimapPip>& out, const UnitScene& sc
 /// which is the common case, and a panel that empties when you select MORE is the sort of
 /// behaviour a player learns to work around instead of using.
 ///
-/// Returns the builder's own name through `builderName` so the header can say whose list this
-/// is; empty output means nothing selected builds anything, and the panel is then absent
-/// rather than empty.
+/// Returns the builder through `who` so the header can say whose list this is and a placement
+/// can be ordered from it; empty output means nothing selected builds anything, and the panel is
+/// then absent rather than empty.
 ///
 /// ANSWERED FROM `scene.roster`, NOT FROM `BuildTree` OVER `scene.definitions` — the reason is
 /// in the implementation, and it is the difference between "every structure this faction
 /// fields" and "the one structure that happens to have been registered so far".
 ///
-/// `out` and `builderName` are cleared on every call, including the ones that find nothing, so
-/// a caller may reuse both across frames without a deselection leaving the last builder's menu
-/// on screen.
+/// `out` and `who` are cleared on every call, including the ones that find nothing, so a caller
+/// may reuse both across frames without a deselection leaving the last builder's menu on screen.
 void gatherBuildOptions(const UnitScene& scene, std::span<const rm::sim::UnitId> selection,
                         const rm::ui::Theme& theme, std::vector<rm::ui::BuildOption>& out,
-                        std::string& builderName);
+                        BuildSelection& who);
 
 void appendViewFootprint(std::vector<std::array<float, 2>>& out, const rm::OrbitCamera& camera,
                          const rm::HeightField& field, float width, float height);

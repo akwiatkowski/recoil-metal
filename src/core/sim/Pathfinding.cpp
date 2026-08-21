@@ -104,6 +104,39 @@ Fx PassabilityGrid::worldAtCellCentre(int cell) const noexcept {
     return (Fx::fromInt(cell) + Fx::fromRatio(1, 2)) * elmosPerCell;
 }
 
+bool sitePlaceable(const PassabilityGrid& grid, Fx x, Fx z, Fx radiusElmos) noexcept {
+    if (grid.cellsX <= 0 || grid.cellsZ <= 0) {
+        return false;  // no grid, no answer — and refusing beats founding a building on nothing
+    }
+
+    // OFF THE MAP IS REFUSED BEFORE THE CLAMP. `cellAtWorld` clamps to the edge cell, which is
+    // right for pathing — a route to a point past the border should walk to the border — and
+    // wrong here: it would silently accept a click beyond the map and build at the edge, which
+    // is not where the player pointed.
+    const Fx width = Fx::fromInt(grid.cellsX) * grid.elmosPerCell;
+    const Fx depth = Fx::fromInt(grid.cellsZ) * grid.elmosPerCell;
+    if (x < Fx{} || z < Fx{} || x >= width || z >= depth) {
+        return false;
+    }
+
+    // The footprint's bounding square, in cells. A radius rather than a rectangle because that
+    // is what the sim stores for every unit — `collisionRadiusElmos`, which both content
+    // families state — and a structure's footprint is square in both of them.
+    const int minX = grid.cellAtWorld(x - radiusElmos);
+    const int maxX = grid.cellAtWorld(x + radiusElmos);
+    const int minZ = grid.cellAtWorld(z - radiusElmos);
+    const int maxZ = grid.cellAtWorld(z + radiusElmos);
+
+    for (int cz = minZ; cz <= maxZ; ++cz) {
+        for (int cx = minX; cx <= maxX; ++cx) {
+            if (!grid.passableAt(cx, cz)) {
+                return false;  // one blocked cell under the footprint is enough
+            }
+        }
+    }
+    return true;
+}
+
 PassabilityGrid buildPassability(const HeightField& field, float waterLevelElmos,
                                  float maxSlopeDegrees, float maxWaterDepthElmos) {
     PassabilityGrid grid;

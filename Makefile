@@ -212,6 +212,8 @@ ALLIANCE_FLAG = $(if $(filter-out 0,$(ALLIANCES)),--alliances $(ALLIANCES),)
 play: build check-fa
 	@echo
 	@echo '  You are army 0. WASD pans, left-click selects, right-click orders.'
+	@echo '  Select your commander to get a build tray: click a cell, then click the ground.'
+	@echo '  The ghost is cyan where it fits and red where it does not; right-click cancels.'
 	@echo '  Shift + right-click queues an order; hold space and drag to swing the camera.'
 	@echo '  Scroll zooms. Losing your commander loses the match.'
 	@echo

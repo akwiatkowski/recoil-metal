@@ -261,3 +261,69 @@ TEST_CASE("a deeper wader reaches ground a shallower one cannot") {
     CHECK(amphibious.passableAt(0, 0));
     CHECK_FALSE(landlubber.passableAt(0, 0));
 }
+
+// --- Where a structure may be founded -----------------------------------------
+
+TEST_CASE("a site is placeable when every cell under the footprint is") {
+    const HeightField field = flatField(64);
+    const PassabilityGrid grid = rm::sim::buildPassability(field, 0.0f);
+
+    const rm::sim::Fx middle = rm::sim::fxFromFloat(kCell * 2.0f);
+    CHECK(rm::sim::sitePlaceable(grid, middle, middle, rm::sim::fxFromFloat(4.0f)));
+}
+
+TEST_CASE("a footprint reaching into a cliff is refused, though its centre is clear") {
+    // THE WHOLE POINT OF TESTING THE FOOTPRINT RATHER THAN THE CENTRE. A player aims at the
+    // middle of the building they want; a centre-only check accepts that aim and puts the other
+    // half of a factory inside rock, which looks fine right up until it finishes.
+    HeightField field = flatField(64);
+    // A wall down one column of cells, tall enough that its slope is impassable.
+    const int wallCorner = rm::sim::kPathCellSquares * 3;
+    setCorners(field, wallCorner, 0, wallCorner + rm::sim::kPathCellSquares,
+               field.verticesZ() - 1, std::uint16_t{40000});
+    const PassabilityGrid grid = rm::sim::buildPassability(field, -1000.0f);
+
+    // A cell whose neighbour is the wall. Its own centre is clear.
+    int clear = -1;
+    for (int x = 0; x + 1 < grid.cellsX; ++x) {
+        if (grid.passableAt(x, 3) && !grid.passableAt(x + 1, 3)) {
+            clear = x;
+            break;
+        }
+    }
+    REQUIRE(clear >= 0);
+
+    const rm::sim::Fx z = grid.worldAtCellCentre(3);
+    const rm::sim::Fx x = grid.worldAtCellCentre(clear);
+
+    // Small enough to sit inside its own cell: accepted.
+    CHECK(rm::sim::sitePlaceable(grid, x, z, rm::sim::fxFromFloat(2.0f)));
+    // Wide enough to reach the wall next door: refused, on the same centre.
+    CHECK_FALSE(rm::sim::sitePlaceable(grid, x, z, rm::sim::fxFromFloat(kCell)));
+}
+
+TEST_CASE("a site off the map is refused rather than clamped to the edge") {
+    // `cellAtWorld` CLAMPS, which is right for pathing — a route toward a point past the border
+    // should walk to the border — and wrong here. Clamping would accept a click beyond the map
+    // and found the building at the edge, which is not where the player pointed, and the ghost
+    // would have been drawn somewhere else again.
+    const HeightField field = flatField(64);
+    const PassabilityGrid grid = rm::sim::buildPassability(field, 0.0f);
+
+    const rm::sim::Fx inside = rm::sim::fxFromFloat(kCell * 2.0f);
+    const rm::sim::Fx radius = rm::sim::fxFromFloat(4.0f);
+
+    CHECK_FALSE(rm::sim::sitePlaceable(grid, rm::sim::fxFromFloat(-1.0f), inside, radius));
+    CHECK_FALSE(rm::sim::sitePlaceable(grid, inside, rm::sim::fxFromFloat(-1.0f), radius));
+
+    const rm::sim::Fx past =
+        rm::sim::Fx::fromInt(grid.cellsX) * grid.elmosPerCell + rm::sim::Fx::fromInt(1);
+    CHECK_FALSE(rm::sim::sitePlaceable(grid, past, inside, radius));
+    CHECK_FALSE(rm::sim::sitePlaceable(grid, inside, past, radius));
+}
+
+TEST_CASE("an empty grid refuses every site") {
+    const PassabilityGrid empty;
+    CHECK_FALSE(rm::sim::sitePlaceable(empty, rm::sim::Fx{}, rm::sim::Fx{},
+                                       rm::sim::fxFromFloat(4.0f)));
+}

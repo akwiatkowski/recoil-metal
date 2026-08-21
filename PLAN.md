@@ -461,7 +461,18 @@ base). The slices, each screenshot-provable:
   validated against the passability grid, and the first player-enqueued
   Construction.
 
-  **Half done, and the halves are worth naming separately.** The tray READS:
+  **Done, bar the icons.** The tray READS and now ACTS: click a cell to arm,
+  click the ground to place, right-click or a second panel click to cancel. The
+  ghost is a ring in the interface's own cyan where the footprint fits and red
+  where it does not, coloured by `sitePlaceable` — the same call the placement
+  makes, so the ghost and the order cannot disagree about a spot. The build goes
+  through `applyCommand` like every other order, so a player's construction is
+  authorised, recorded in the command log, and replayable.
+
+  What it still does not do is draw an ICON: no atlas yet, so a cell reserves
+  the square and shows the blueprint id. That is a content job, not a layout one.
+
+  The original note on what the tray READS, kept because it is still true:
   BAR's tight three-column grid above the minimap, mass cost on the face of
   each button rather than behind a hover, unaffordable options dimmed rather
   than hidden, a tier band per cell, and a lit cell under the cursor

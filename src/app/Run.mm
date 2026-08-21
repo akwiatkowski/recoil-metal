@@ -314,16 +314,16 @@ int runScreenshot(const Session& session) {
             // two builds' screenshots can be compared.
             {
                 std::vector<rm::ui::BuildOption> shotOptions;
-                std::string shotBuilder;
+                rm::app::BuildSelection shotWho;
                 gatherBuildOptions(units, capturedSelection, hudThemeFor(units), shotOptions,
-                                   shotBuilder);
+                                   shotWho);
                 if (!shotOptions.empty()) {
                     rm::ui::appendBuildPanel(
                         hud, renderer.labelFont(), renderer.readoutFont(), hudThemeFor(units),
                         rm::ui::buildPanelLayout(shotMinimap, shotOptions.size()), shotOptions,
-                        std::nullopt, shotBuilder);
+                        std::nullopt, shotWho.name);
                     std::printf("  build panel: %zu options for %s\n", shotOptions.size(),
-                                shotBuilder.c_str());
+                                shotWho.name.c_str());
                 }
             }
 
@@ -423,7 +423,16 @@ int runWindowed(const Session& session) {
         // player was looking at when they pressed the button — so the two reading one vector is
         // the correct coupling rather than a shortcut.
         std::vector<rm::ui::BuildOption> buildOptions;
-        std::string builderName;
+        rm::app::BuildSelection buildWho;
+
+        // WHAT THE PLAYER PICKED OFF THE TRAY, if anything — an index into `buildOptions`.
+        //
+        // ARMED RATHER THAN IMMEDIATE, which is how both reference games do it and is not
+        // merely convention: a structure needs a PLACE, and the panel cannot know one. So a
+        // cell click arms, the next ground click places, and right-click or Escape disarms.
+        // Held here beside the options it indexes, and cleared whenever they change — an index
+        // into a list that has been rebuilt is a different building.
+        std::optional<std::size_t> armedOption;
 
         // The caller-side tick, the same one `march()` drives. Built here rather than in
         // the frame callback because a match is decided on one tick and stays decided, and
@@ -470,6 +479,80 @@ int runWindowed(const Session& session) {
         // allocation — the capacity settles after the first large selection.
         std::vector<rm::DecalVertex> decalVertices;
 
+        // The radius a build ghost is drawn at, and the footprint `sitePlaceable` checks.
+        //
+        // FROM THE BLUEPRINT once the type is registered — a factory is not an extractor — and
+        // this is only the fallback for the moment before it resolves.
+        constexpr float kGhostFallbackRadiusElmos = 4.0f;
+
+        /// The armed option's blueprint path, or empty. Derived from the id rather than carried
+        /// alongside it, so the two cannot disagree — `RosterEntry::path` is the one place the
+        /// corpus's `/units/<ID>/<ID>_unit.bp` layout is written down.
+        const auto armedPath = [&]() -> std::string {
+            if (!armedOption || *armedOption >= buildOptions.size()) {
+                return {};
+            }
+            return rm::data::RosterEntry{.id = buildOptions[*armedOption].id}.path();
+        };
+
+        /// The armed option's collision radius, for the ghost and the footprint test.
+        const auto armedRadius = [&]() -> float {
+            const std::string path = armedPath();
+            if (path.empty()) {
+                return kGhostFallbackRadiusElmos;
+            }
+            const std::optional<rm::UnitTypeIndex> type =
+                resolveBuildable(units, content, path);
+            const rm::unitdef::UnitDef* def = type ? units.catalog.def(*type) : nullptr;
+            return def != nullptr && def->collisionRadiusElmos > 0.0f
+                       ? def->collisionRadiusElmos
+                       : kGhostFallbackRadiusElmos;
+        };
+
+        /// Whether the armed build may stand at a world point — the ghost's colour, and the
+        /// same question the click asks before it orders anything.
+        const auto armedPlaceable = [&](std::array<float, 2> at) -> bool {
+            if (!armedOption) {
+                return false;
+            }
+            const auto type =
+                static_cast<std::size_t>(units.store.typeAt(buildWho.builder.index));
+            const rm::sim::PassabilityGrid& grid = passability.gridFor(
+                units.maxSlopeDegrees[type], units.maxWaterDepthElmos[type]);
+            return rm::sim::sitePlaceable(grid, rm::sim::fxFromFloat(at[0]),
+                                          rm::sim::fxFromFloat(at[1]),
+                                          rm::sim::fxFromFloat(armedRadius()));
+        };
+
+        /// Orders the armed build at a world point, through the one order path, and disarms.
+        ///
+        /// DISARMS WHETHER OR NOT IT TOOK. A refused placement that stayed armed would leave
+        /// the player clicking at a spot that will never work, with the ghost saying so and
+        /// nothing else happening — better to put the tool down and let them pick it up again.
+        const auto placeArmedBuild = [&](simd_float3 at) {
+            const std::string path = armedPath();
+            const std::optional<rm::UnitTypeIndex> type =
+                path.empty() ? std::nullopt : resolveBuildable(units, content, path);
+            if (!type || !units.store.alive(buildWho.builder)) {
+                armedOption.reset();
+                return;
+            }
+            const auto builderType =
+                static_cast<std::size_t>(units.store.typeAt(buildWho.builder.index));
+            const rm::sim::PassabilityGrid& grid = passability.gridFor(
+                units.maxSlopeDegrees[builderType], units.maxWaterDepthElmos[builderType]);
+
+            if (armedPlaceable({at.x, at.z})
+                && issueBuild(units, grid, map->field, buildWho.builder,
+                              playerDriving(units, units.playerArmy),
+                              static_cast<rm::TickIndex>(matchTicks), *type,
+                              rm::sim::fxFromFloat(at.x), rm::sim::fxFromFloat(at.z))) {
+                std::printf("build: %s at %.0f, %.0f\n", buildOptions[*armedOption].id.c_str(),
+                            static_cast<double>(at.x), static_cast<double>(at.z));
+            }
+            armedOption.reset();
+        };
+
         window.onClick([&](const rm::Ray& ray, rm::MouseButton button,
                            rm::MouseModifiers mods) {
             // THE MINIMAP FIRST, because it is in front of the world (§7 P7.4). A click on the
@@ -504,10 +587,44 @@ int runWindowed(const Session& session) {
             // What it does not yet do is ACT on the cell. That needs the build path routed
             // through `applyCommand` — a behaviour change, not a guard — so the two are separate
             // jobs and this is the one that stops the bleeding.
-            if (!buildOptions.empty()
-                && rm::ui::insideBuildPanel(
-                    rm::ui::buildPanelLayout(minimap, buildOptions.size()), mods.pointX,
-                    mods.pointY)) {
+            if (!buildOptions.empty()) {
+                const rm::ui::BuildPanelLayout panel =
+                    rm::ui::buildPanelLayout(minimap, buildOptions.size());
+                if (rm::ui::insideBuildPanel(panel, mods.pointX, mods.pointY)) {
+                    // A cell ARMS the build; the gutters and header swallow and do nothing.
+                    // Right-click anywhere on the panel disarms, so the way out is where the
+                    // way in was.
+                    const std::optional<std::size_t> cell = rm::ui::buildOptionAt(
+                        panel, buildOptions.size(), mods.pointX, mods.pointY);
+                    if (button == rm::MouseButton::Right) {
+                        armedOption.reset();
+                    } else if (cell && buildOptions[*cell].affordable) {
+                        armedOption = cell;
+                    } else if (cell) {
+                        // UNAFFORDABLE ARMS NOTHING, and the cell is still drawn — "not yet" is
+                        // the information. Arming it would leave a ghost the player cannot
+                        // place and no way to learn why.
+                        std::printf("cannot afford %s (%.0f mass)\n",
+                                    buildOptions[*cell].id.c_str(),
+                                    static_cast<double>(buildOptions[*cell].massCost));
+                    }
+                    return;
+                }
+            }
+
+            // A GROUND CLICK WHILE ARMED PLACES, and nothing else happens — it does not also
+            // select, which is the same reasoning as the panel guard above: the click had a
+            // meaning and it was not "pick a unit".
+            if (armedOption && button == rm::MouseButton::Left) {
+                const std::optional<simd_float3> at = rm::pickGround(ray, map->field);
+                if (!at) {
+                    return;  // the sky, or past the edge — the order simply does not happen
+                }
+                placeArmedBuild(*at);
+                return;
+            }
+            if (armedOption && button == rm::MouseButton::Right) {
+                armedOption.reset();  // right-click cancels, as it cancels everything else
                 return;
             }
 
@@ -785,7 +902,14 @@ int runWindowed(const Session& session) {
             // Beyond All Reason arranges the same way. Absent entirely when nothing selected
             // builds, rather than an empty frame asking to be explained.
             rm::app::gatherBuildOptions(units, selected, hudThemeFor(units), buildOptions,
-                                        builderName);
+                                        buildWho);
+            // AN INDEX INTO A LIST THAT HAS BEEN REBUILT IS A DIFFERENT BUILDING. Deselecting,
+            // or selecting a different builder, must not leave cell 4 armed and meaning
+            // something else — so the arming is dropped whenever the list it points into can no
+            // longer be trusted to be the same list.
+            if (armedOption && *armedOption >= buildOptions.size()) {
+                armedOption.reset();
+            }
             if (!buildOptions.empty()) {
                 const rm::ui::BuildPanelLayout panel =
                     rm::ui::buildPanelLayout(minimap, buildOptions.size());
@@ -794,12 +918,18 @@ int runWindowed(const Session& session) {
                 // read as BUTTONS rather than as a readout. Polled once here rather than
                 // tracked through a mouseMoved handler — see `Window::cursor`.
                 const std::array<float, 2> at = window.cursor();
-                const std::optional<std::size_t> hovered =
+                std::optional<std::size_t> hovered =
                     rm::ui::buildOptionAt(panel, buildOptions.size(), at[0], at[1]);
+                // THE ARMED CELL STAYS LIT while the cursor is out over the map, which is
+                // exactly when the player needs to be told what they are about to place. A
+                // hover wins over it, so moving back onto the tray reads normally.
+                if (!hovered && armedOption) {
+                    hovered = armedOption;
+                }
 
                 rm::ui::appendBuildPanel(hudScratch, window.labelFont(), window.readoutFont(),
                                          hudThemeFor(units), panel, buildOptions, hovered,
-                                         builderName);
+                                         buildWho.name);
             }
 
             window.setHud(hudScratch.label, hudScratch.readout);
@@ -830,6 +960,31 @@ int runWindowed(const Session& session) {
                     rm::sim::fxToFloat(units.store.motion()[sel.index].radiusElmos)
                         * kSelectionRingMargin,
                     kSelectionRingColour);
+            }
+
+            // ...and the BUILD GHOST, wherever the cursor is pointing while a cell is armed.
+            //
+            // A RING RATHER THAN A MODEL, and it is a real difference from what both reference
+            // games draw. A ghost mesh needs the blueprint's model resolved and uploaded for
+            // something that may never be built, and the question a player is actually asking
+            // is "may it go HERE" — which is a footprint and a yes or no, both of which a ring
+            // says. The model is the nicer answer and it is not the load-bearing one.
+            //
+            // The colour IS the answer: `sitePlaceable` over every cell the footprint touches,
+            // so the ring goes red against a cliff before the click rather than after. It is
+            // the same call the placement makes, which is what stops the ghost and the order
+            // disagreeing about the same spot.
+            if (armedOption) {
+                const rm::Ray under = rm::screenRay(
+                    window.camera(), window.cursor()[0],
+                    static_cast<float>(window.height()) - window.cursor()[1],
+                    static_cast<float>(window.width()), static_cast<float>(window.height()));
+                if (const std::optional<simd_float3> at = rm::pickGround(under, map->field)) {
+                    const bool ok = armedPlaceable({at->x, at->z});
+                    rm::appendSelectionRing(decalVertices, map->field, {at->x, at->y, at->z},
+                                            armedRadius() * kSelectionRingMargin,
+                                            ok ? kBuildGhostColour : kBuildGhostBlockedColour);
+                }
             }
 
             // ...and a marker wherever an order was given recently. Aged by the

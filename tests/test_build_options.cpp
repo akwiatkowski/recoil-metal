@@ -124,7 +124,7 @@ struct Fixture {
     [[nodiscard]] std::vector<std::string> optionsFor(
         std::vector<rm::sim::UnitId> selection) {
         std::vector<rm::ui::BuildOption> out;
-        gatherBuildOptions(scene, selection, rm::ui::neutralTheme(), out, builderName);
+        gatherBuildOptions(scene, selection, rm::ui::neutralTheme(), out, who);
         std::vector<std::string> got;
         got.reserve(out.size());
         for (const rm::ui::BuildOption& option : out) {
@@ -139,7 +139,7 @@ struct Fixture {
     }
 
     rm::sim::TickRate rate{};
-    std::string builderName;
+    rm::app::BuildSelection who;
     std::vector<rm::ui::BuildOption> last;
 };
 
@@ -153,7 +153,7 @@ TEST_CASE("a selected engineer is offered its faction's tier-one structures", "[
     const auto got = fixture.optionsFor({fixture.spawnEngineer()});
 
     REQUIRE_FALSE(got.empty());
-    CHECK(fixture.builderName == "UEL0105");
+    CHECK(fixture.who.name == "UEL0105");
     CHECK(fixture.offers(got, "UEB1103"));
     CHECK(fixture.offers(got, "UEB1101"));
     CHECK(fixture.offers(got, "UEB0101"));
@@ -169,7 +169,7 @@ TEST_CASE("a commander is offered the same structures as an engineer", "[ui][bui
     const auto byEngineer = engineerScene.optionsFor({engineerScene.spawnEngineer()});
     const auto byCommander = commanderScene.optionsFor({commanderScene.spawnCommander()});
 
-    CHECK(commanderScene.builderName == "UEL0001");
+    CHECK(commanderScene.who.name == "UEL0001");
     CHECK(byEngineer == byCommander);
 }
 
@@ -214,7 +214,7 @@ TEST_CASE("a non-builder in the selection is skipped, not fatal", "[ui][build]")
 
     const auto got = fixture.optionsFor({tank, engineer});
 
-    CHECK(fixture.builderName == "UEL0105");
+    CHECK(fixture.who.name == "UEL0105");
     CHECK(fixture.offers(got, "UEB1103"));
 }
 
@@ -225,7 +225,7 @@ TEST_CASE("selecting only non-builders offers nothing", "[ui][build]") {
     const auto got = fixture.optionsFor({fixture.spawnTank()});
 
     CHECK(got.empty());
-    CHECK(fixture.builderName.empty());
+    CHECK(fixture.who.name.empty());
 }
 
 TEST_CASE("a dead builder offers nothing, and a live one behind it answers", "[ui][build]") {
@@ -240,7 +240,7 @@ TEST_CASE("a dead builder offers nothing, and a live one behind it answers", "[u
 
     const auto got = fixture.optionsFor({dead, alive});
 
-    CHECK(fixture.builderName == "UEL0001");
+    CHECK(fixture.who.name == "UEL0001");
     CHECK_FALSE(got.empty());
 }
 
@@ -277,7 +277,7 @@ TEST_CASE("an empty selection clears the previous frame's options", "[ui][build]
 
     const auto second = fixture.optionsFor({});
     CHECK(second.empty());
-    CHECK(fixture.builderName.empty());
+    CHECK(fixture.who.name.empty());
 }
 
 // --- Adoption ---------------------------------------------------------------
@@ -300,7 +300,7 @@ TEST_CASE("a unit nobody owns is adopted by the seated player", "[ui][build][sce
 
     const auto got = fixture.optionsFor({orphan});
     CHECK_FALSE(got.empty());
-    CHECK(fixture.builderName == "UEL0105");
+    CHECK(fixture.who.name == "UEL0105");
 }
 
 TEST_CASE("adoption leaves a unit that already has an army alone", "[ui][build][scene]") {
@@ -336,4 +336,29 @@ TEST_CASE("adopting twice changes nothing the second time", "[ui][build][scene]"
 
     CHECK(rm::app::adoptOwnerlessUnits(fixture.scene) == 1);
     CHECK(rm::app::adoptOwnerlessUnits(fixture.scene) == 0);
+}
+
+TEST_CASE("the panel reports the builder it is showing, not just its name", "[ui][build]") {
+    // THE HANDLE, because a placement is ORDERED FROM this unit and the header only NAMES it.
+    // Re-deriving "the first builder in the selection" at the click site would be a second copy
+    // of the rule, and a second copy drifts — the panel headed by one unit and the build order
+    // issued by another, which nothing notices until two builders are selected at once.
+    Fixture fixture;
+    const rm::sim::UnitId tank = fixture.spawnTank();
+    const rm::sim::UnitId engineer = fixture.spawnEngineer();
+
+    const auto got = fixture.optionsFor({tank, engineer});
+    REQUIRE_FALSE(got.empty());
+
+    CHECK(fixture.who.builder == engineer);
+    CHECK(fixture.who.builder != tank);
+    CHECK(fixture.who.any());
+}
+
+TEST_CASE("nothing selected reports no builder at all", "[ui][build]") {
+    Fixture fixture;
+    (void)fixture.optionsFor({fixture.spawnTank()});
+
+    CHECK_FALSE(fixture.who.any());
+    CHECK_FALSE(fixture.scene.store.alive(fixture.who.builder));
 }
