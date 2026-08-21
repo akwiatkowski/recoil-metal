@@ -39,6 +39,52 @@ if(NOT EXISTS ${CMAKE_SOURCE_DIR}/third_party/miniz/miniz.h)
         "  mkdir -p third_party/miniz && curl -L https://github.com/richgel999/miniz/releases/download/3.0.2/miniz-3.0.2.zip | tar -xf - -C third_party/miniz")
 endif()
 
+# --- Lua 5.4 (the AI sandbox, ADR-039) --------------------------------------
+#
+# FAF's AI is Lua, and WHICH Lua was settled by running the corpus rather than by reading it.
+# ADR-039 first said stock 5.1, on a measurement that checked the 5.0-isms PLAN.md had
+# catalogued — `#` line comments (0 files here), `arg[]` (0), `table.getn` (115) and `math.mod`
+# (1). That measurement was looking for the wrong things. Loading the corpus found three Moho
+# extensions it never tested for:
+#
+#   `!=` for `~=`   108 uses in 39 files. Rewritten in memory by the adapter, either way.
+#   `continue`      a real statement in Moho, used in 25 of 208 files. Needs `goto` to lower
+#                   onto, which 5.1 does not have and 5.4 does.
+#   bitwise & | << >>   48 files. 5.1 has no bitwise operators at all; 5.4 has them natively.
+#
+# And the usual reason NOT to leave 5.1 turns out not to apply: `setfenv`/`getfenv`, the change
+# that breaks most 5.1 code on 5.2+, appear ZERO times in this corpus. Bare `unpack` (43 sites)
+# is one shim line.
+#
+# So 5.4 is both more capable and no more risky here, and the 5.1 build is gone rather than kept
+# as an option — carrying two would mean testing against two.
+#
+# Stock rather than LuaJIT: PLAN.md measured Moho-shaped Lua at 0.12% of a 100 ms tick budget, so
+# JIT speed buys nothing an AI needs, while per-ABI hand-written assembly buys build risk on
+# arm64. (LuaJIT is also 5.1-with-extensions, so it would reintroduce the bitwise problem.)
+#
+# `core/lua/LuaTable.hpp` declines an interpreter for DATA PARSING and that still stands — the
+# data parser is untouched. This is a different job, and the interpreter is reachable only from
+# the AI adapter.
+if(NOT EXISTS ${CMAKE_SOURCE_DIR}/third_party/lua54/src/lua.h)
+    message(FATAL_ERROR
+        "Lua 5.4 not found. Download it once:\n"
+        "  mkdir -p third_party/lua54 && curl -L https://www.lua.org/ftp/lua-5.4.7.tar.gz | tar -xz -C third_party/lua54 --strip-components=1")
+endif()
+
+# The library only — no lua.c (the standalone interpreter) and no luac.c (the compiler), both of
+# which define their own main().
+file(GLOB RM_LUA_SOURCES ${CMAKE_SOURCE_DIR}/third_party/lua54/src/*.c)
+list(REMOVE_ITEM RM_LUA_SOURCES
+    ${CMAKE_SOURCE_DIR}/third_party/lua54/src/lua.c
+    ${CMAKE_SOURCE_DIR}/third_party/lua54/src/luac.c)
+add_library(lua54 STATIC ${RM_LUA_SOURCES})
+target_include_directories(lua54 SYSTEM PUBLIC ${CMAKE_SOURCE_DIR}/third_party/lua54/src)
+# Warnings are not our business here: this is someone else's C, and the showcase rule about the
+# build being the first linter is about OUR code.
+target_compile_definitions(lua54 PRIVATE LUA_USE_MACOSX)
+target_compile_options(lua54 PRIVATE -w)
+
 find_library(FOUNDATION_FW Foundation REQUIRED)
 find_library(APPKIT_FW AppKit REQUIRED)
 find_library(METAL_FW Metal REQUIRED)
@@ -154,10 +200,11 @@ add_library(rm_app STATIC
     src/app/Scene.cpp
     src/app/SceneBuild.cpp
     src/app/Cli.cpp
+    src/app/FafAi.cpp
     src/app/Match.cpp
     src/app/Interface.cpp
     src/app/View.cpp)
-target_link_libraries(rm_app PUBLIC rm_core rm_project_warnings)
+target_link_libraries(rm_app PUBLIC rm_core rm_project_warnings lua54)
 
 # --- recoil-metal: the app --------------------------------------------------
 add_executable(recoil-metal
@@ -205,6 +252,7 @@ if(BUILD_TESTING)
         tests/test_unit_census.cpp
         tests/test_match_invariants.cpp
         tests/test_opponent_port.cpp
+        tests/test_faf_ai.cpp
         tests/test_state_hash.cpp
         tests/test_replay.cpp
         tests/test_smf.cpp

@@ -59,6 +59,8 @@ FAF_PATHS=(
     /lua/sim/FactoryBuilderManager.lua
     /lua/sim/PlatoonFormManager.lua
     /lua/sim/BrainConditionsMonitor.lua
+    /lua/system                         # Class/ClassSimple and friends: the corpus's own OO
+                                        # helper, which every manager and platoon is built with
     /engine                             # LuaLS annotation stubs for Moho — the binding spec
 )
 

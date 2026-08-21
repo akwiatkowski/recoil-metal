@@ -1669,6 +1669,35 @@ content loaded and a metal map parsed — `metalmapPtr` appears in this engine o
 experiment first because it is the useful one, and we lose the ability to attribute its failures
 cleanly. The instrumentation above is what partially buys that back.
 
+**The dialect measurement above was wrong, and running the corpus is what said so.** It tested
+for the 5.0-isms `PLAN.md` had catalogued on the *sim* corpus — `#` line comments, `arg[]`,
+`table.getn`, `math.mod` — found almost none, and concluded stock Lua 5.1. Loading the files
+found five Moho extensions it never looked for:
+
+| Extension | Reach | Status |
+|---|---|---|
+| `!=` for `~=` | 108 uses, 39 files | rewritten in memory by the adapter |
+| `{&1 &0}` table preallocation hints | 14 constructors | blanked; an optimisation with no observable semantics |
+| bitwise `&` `\|` `<<` `>>` | 48 files | **native in 5.4**, absent from 5.1 |
+| `continue` as a statement | 25 of 208 files | **unsolved** — needs `goto`, which 5.1 lacks |
+| implicit `arg` in vararg functions | 15 sites, incl. `class.lua` | **unsolved** — removed in 5.2, no compat switch in 5.4 |
+
+So **the VM is Lua 5.4, not 5.1**, and the reason it is cheap to say so is the other half of the
+measurement: `setfenv`/`getfenv` — the change that breaks most 5.1 code on 5.2+ — appear **zero**
+times in this corpus. Bare `unpack` (43 sites) is one shim line. 5.4 brings bitwise operators
+natively and `goto` to lower `continue` onto, so it fixes one blocker outright and makes the
+other solvable.
+
+None of this touches `vendor/ai/`. The rewrites happen on the buffer between reading a file and
+compiling it, so the tree stays byte-identical to upstream and the hard rule holds — a transform
+in memory is the adapter's business, a patched file on disk would be a fork.
+
+**Where it stands.** 254 names bound before any AI runs; `import` real and caching (592 call
+sites, the one binding that could not be a stub); `lua/system/class.lua` loading, which is what
+the corpus's whole object model is built on. The two unsolved extensions are what stand between
+here and the rest, and they are named rather than worked around, because a silent workaround
+would be worse than a blocker with a number attached.
+
 **The largest single risk is the threat map**, and it is named here so it is not rediscovered as
 a schedule slip. `GetThreatAtPosition` has 122 call sites; FAF's AI assumes the *engine* owns a
 threat model, and no annotation stub says what it returns. Circuit's own implementation is not a
