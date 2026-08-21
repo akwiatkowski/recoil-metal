@@ -30,13 +30,26 @@ enum class MouseButton { Left, Right };
 // the usual "add to selection" modifiers; Control is treated the same as
 // Command for selection purposes.
 struct MouseModifiers {
-    /// WHERE the click landed, in points, top-left origin — the same space the HUD lays out in.
+    /// WHERE the click landed, in PIXELS, top-left origin — the same space the HUD lays out in,
+    /// which is to say the space `width()` and `height()` report.
     ///
     /// HERE RATHER THAN AS A THIRD `onClick` PARAMETER because it belongs to the same question:
     /// a callback is handed a ray for the world and this for the screen, and a caller that wants
     /// neither ignores both. Added for the minimap (§7 P7.4), which has to know whether a click
     /// was on the panel before it decides what the click meant — a ray alone cannot say, since
     /// the panel is in front of the world rather than in it.
+    ///
+    /// PIXELS RATHER THAN POINTS, and it was points until it was measured. Every consumer of
+    /// this compares it against a layout computed from `width()`/`height()`, which are the
+    /// DRAWABLE's size and therefore 2x the view's bounds on a Retina display — so a click had
+    /// to land in the lower-left quarter of the minimap's own rectangle to register, and the
+    /// build panel's cells were off by the same factor. The two doc comments disagreed about
+    /// this in writing, `width()` calling pixels "the space the interface is laid out in" while
+    /// this one claimed points were, and the code followed the wrong one.
+    ///
+    /// The ray keeps POINTS, which is what `screenRay` wants — it divides by the view's bounds
+    /// and the two must be in one space. That the two spaces differ is exactly why this is
+    /// stated at both fields rather than assumed.
     float pointX = 0.0f;
     float pointY = 0.0f;
 
@@ -137,6 +150,20 @@ public:
     /// cheaper than tracking the same set again in the caller, and there is exactly one
     /// truth about what is held.
     [[nodiscard]] bool keyHeld(char key) const;
+
+    /// Where the cursor is right now, in `MouseModifiers::pointX`'s space — backing pixels,
+    /// top-left origin, so it can be handed straight to a HUD hit test.
+    ///
+    /// A POLL RATHER THAN AN `onMouseMove` CALLBACK, for `keyHeld`'s reason and one more of its
+    /// own. A callback would need a tracking area and would then cache a value that only the
+    /// frame loop ever reads — the interface is rebuilt every frame, so a hover computed at
+    /// mouse-event rate is either stale or recomputed anyway. Asking once per frame is exactly
+    /// the cadence the answer is used at.
+    ///
+    /// The cursor may be OUTSIDE the window, in which case the coordinates fall outside the
+    /// drawable and every hit test misses — which is the correct answer, and the reason this
+    /// does not need to be an optional.
+    [[nodiscard]] std::array<float, 2> cursor() const;
 
     /// The planar reflection quality setting. See Renderer::setReflections.
     void setReflections(bool enabled);

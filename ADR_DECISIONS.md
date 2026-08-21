@@ -1726,3 +1726,36 @@ counts. **`AI/Wrappers/` does not match** — three files differ and upstream no
 commits over an unversioned import. Upstream is the clean tree and upstream is what is fetched,
 so a Circuit adapter behaving differently here than the local Recoil build does would be the
 local build's doing. `vendor/NOTICE.md` keeps the details.
+
+
+## ADR-040 — Screen input arrives in the space the interface is laid out in
+
+**Context.** The interface is laid out in backing PIXELS: `Window::width()` returns the
+drawable's size and says so — "the space the interface is laid out in" — and the text shader
+divides a vertex by exactly that. Mouse input arrived in POINTS, which on a Retina display are
+half of it. `MouseModifiers::pointX` carried that value under a comment claiming it was "the
+same space the HUD lays out in", so the two doc comments in the same subsystem asserted
+different things and the code followed the wrong one. Every consumer compares this against a
+layout built from `width()`/`height()`, so on this machine a minimap click had to land in the
+lower-left quarter of the minimap's own rectangle to register (P7.4 shipped that way), and the
+build panel's cells inherited it.
+
+**Decision.** Screen positions handed to app code are in **backing pixels, top-left origin** —
+one space, the interface's own. `Window` converts once, at the boundary, and states the space
+at every field that carries one. `Window::cursor()` returns the same space for the same reason.
+
+The **world ray keeps points**, because `screenRay` divides by the view's bounds and the two
+must agree. That the two coexist is why each is now named at its definition rather than left to
+be inferred from a call site.
+
+**Alternatives considered.** *Lay the HUD out in points* — rejected: the shader divides by the
+drawable, so the HUD would have to be scaled back up somewhere, and "somewhere" is how this
+happened. *Convert at each consumer* — rejected: it is the same conversion at every hit test,
+and the one that already existed was the one that was missing.
+
+**Consequences.** A hit test may be compared directly against a layout with no conversion, which
+is what makes "drawn in one place, clicked in another" a bug that cannot be written by accident
+rather than one caught by looking. The conversion itself lives behind AppKit and `rm_tests` does
+not link it, so it is not directly testable; `tests/test_build_panel.cpp` pins the relationship
+that makes a mismatch fatal — at twice the drawable size every cell is somewhere else, so a
+point good in one space is a miss in the other rather than merely imprecise.

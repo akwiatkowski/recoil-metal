@@ -95,6 +95,22 @@
 /// AppKit's own drag thresholds.
 static constexpr CGFloat kClickSlopPoints = 3.0;
 
+/// A point in WINDOW coordinates, in the space the interface is laid out in — backing pixels,
+/// top-left origin. See `MouseModifiers::pointX` and ADR-040.
+///
+/// ONE FUNCTION, called by both the click path and `Window::cursor`, because the two must agree
+/// exactly: a cell that lights under the cursor and a cell that a click acts on have to be the
+/// same cell, and two copies of a conversion that must agree are two copies that will not.
+static std::array<float, 2> hudPointIn(NSView* view, NSPoint windowPoint) {
+    const NSPoint local = [view convertPoint:windowPoint fromView:nil];
+    // Flipped because the view is bottom-left and the HUD lays out from the top. Scaled because
+    // the HUD is laid out against `Window::width()`/`height()`, which are the DRAWABLE's size —
+    // 2x these bounds on a Retina display.
+    const CGFloat scale = view.window != nil ? view.window.backingScaleFactor : 1.0;
+    return {{static_cast<float>(local.x * scale),
+             static_cast<float>((view.bounds.size.height - local.y) * scale)}};
+}
+
 /// Turns a mouse event into a world ray and hands it to the app.
 - (void)reportClick:(NSEvent*)event button:(rm::MouseButton)button {
     if (self.renderer == nullptr || self.clickCallback == nullptr || !*self.clickCallback) {
@@ -111,11 +127,10 @@ static constexpr CGFloat kClickSlopPoints = 3.0;
                                       static_cast<float>(local.y),
                                       static_cast<float>(self.bounds.size.width),
                                       static_cast<float>(self.bounds.size.height));
+    const std::array<float, 2> hud = hudPointIn(self, event.locationInWindow);
     const rm::MouseModifiers mods{
-        // FLIPPED to top-left origin: the view is bottom-left and the HUD lays out from the top,
-        // so handing the raw value through would put the minimap's hit test in the wrong corner.
-        .pointX = static_cast<float>(local.x),
-        .pointY = static_cast<float>(self.bounds.size.height) - static_cast<float>(local.y),
+        .pointX = hud[0],
+        .pointY = hud[1],
         .shift = (event.modifierFlags & NSEventModifierFlagShift) != 0,
         .command = (event.modifierFlags & NSEventModifierFlagCommand) != 0,
         .control = (event.modifierFlags & NSEventModifierFlagControl) != 0,
@@ -447,6 +462,18 @@ void Window::onKeyState(std::function<void(char key, bool pressed)> callback) {
 }
 
 bool Window::keyHeld(char key) const { return impl_->heldKeys.contains(key); }
+
+std::array<float, 2> Window::cursor() const {
+    NSWindow* window = impl_->view.window;
+    if (window == nil) {
+        return {{-1.0f, -1.0f}};  // no window, no cursor: a point that misses every hit test
+    }
+
+    // `mouseLocationOutsideOfEventStream` is the current position without an event and without
+    // a tracking area — which is the whole reason this can be a poll. It is in WINDOW
+    // coordinates, so it goes through the very same conversion a click does.
+    return hudPointIn(impl_->view, window.mouseLocationOutsideOfEventStream);
+}
 
 void Window::setReflections(bool enabled) {
     impl_->renderer->setReflections(enabled);
