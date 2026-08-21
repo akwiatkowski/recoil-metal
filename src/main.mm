@@ -1751,7 +1751,7 @@ inline const rm::sim::Resources kStartingStorage{.mass = rm::sim::Mag::fromInt(6
 
 void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
                      std::span<const rm::mapinfo::StartPosition> starts,
-                     const rm::vfs::Vfs& content) {
+                     const rm::vfs::Vfs& content, bool observer = false) {
     if (starts.empty()) {
         std::fprintf(stderr, "skirmish: the map declares no start positions\n");
         return;
@@ -1776,8 +1776,14 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
 
     // One participant per army, the human driving the first. `--armies 4` with two alliances
     // is the 2v2 §7 P2.4 asks to be checked by hand, and `--alliances N` below sets it up.
-    scene.players = rm::sim::onePlayerPerArmy(starts.size(), /*humanArmy=*/0);
-    scene.playerArmy = 0;
+    //
+    // `--observer` seats nobody. Every army gets a script and `playerArmy` stays `kNoArmy`, so
+    // nothing is selectable and no click is authorised — which is what watching the scripted
+    // opponents play each other means, and it goes through the same authorisation as everything
+    // else rather than through a "spectator" special case.
+    const int human = observer ? rm::sim::kNoArmy : 0;
+    scene.players = rm::sim::onePlayerPerArmy(starts.size(), human);
+    scene.playerArmy = human;
 
     // Faction -> the batch already holding that faction's commander, so four models
     // serve eight armies, and the scale that model needs.
@@ -4198,7 +4204,8 @@ int main(int argc, const char* argv[]) {
             starts = starts.first(armiesCap);
         }
         if (hasFlag(argc, argv, "--skirmish")) {
-            spawnCommanders(units, map->field, starts, content);
+            spawnCommanders(units, map->field, starts, content,
+                            hasFlag(argc, argv, "--observer"));
             if (const std::size_t alliances = parseCount(argc, argv, "--alliances");
                 alliances > 1 && alliances < units.armies.size()) {
                 for (rm::sim::Army& army : units.armies) {

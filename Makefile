@@ -68,8 +68,8 @@ MARCH     ?= 4096 4096
 FA_FLAGS  = --gamedata "$(FA_ROOT)/gamedata"
 
 .DEFAULT_GOAL := help
-.PHONY: help build configure test verify golden run run-fa run-bar skirmish battle match \
-        shot-fa shot-bar bench bench-fa bench-gl clean check-fa check-bar
+.PHONY: help build configure test verify golden play play-from watch run run-fa run-bar \
+        skirmish battle match shot-fa shot-bar bench bench-fa bench-gl clean check-fa check-bar
 
 help:
 	@echo 'recoil-metal — make targets'
@@ -78,6 +78,11 @@ help:
 	@echo '  test            the whole suite'
 	@echo '  verify          replay the golden match — MATCH, or the tick it broke'
 	@echo '  golden          re-record it (only when the change was meant to alter the match)'
+	@echo
+	@echo '  PLAY IT'
+	@echo '  play            a duel you drive — army 0 is yours (ARMIES=8 for a free-for-all)'
+	@echo '  play-from       the same, joining SECONDS in, so a base already stands'
+	@echo '  watch           every side scripted, nothing selectable'
 	@echo
 	@echo '  run             procedural terrain, no content needed'
 	@echo '  run-fa          a Supreme Commander map, its own units, read from the archives'
@@ -94,7 +99,8 @@ help:
 	@echo
 	@echo '  clean           remove the build directory'
 	@echo
-	@echo 'Override anything: make skirmish UNITS=200 SECONDS=90 FA_MAP=.../SCMP_012.scmap'
+	@echo 'Override anything: make play ARMIES=8 ALLIANCES=2 FA_MAP=.../SCMP_012.scmap'
+	@echo '                   make skirmish UNITS=200 SECONDS=90'
 	@echo
 	@echo 'Content:'
 	@echo '  FA_ROOT   $(FA_ROOT)'
@@ -157,6 +163,45 @@ run-fa: build check-fa
 
 run-bar: build check-bar
 	$(BIN) "$(BAR_MAP)" --units "$(BAR_UNIT)" $(UNITS)
+
+# --- Playing it -------------------------------------------------------------
+#
+# `make play` is the one to run. Everything else in this file exercises a slice; this opens
+# the game.
+#
+# ARMIES defaults to 2 because a duel is what the scripted opponent plays well — it builds an
+# opening, masses a wave and attacks once. Raise it for a free-for-all: the map declares eight
+# start positions, so `make play ARMIES=8` fills them and `ALLIANCES=2` makes it 4v4.
+#
+# You drive ARMY 0 — `--skirmish` seats a human there and gives every other army a script
+# (`onePlayerPerArmy(.., humanArmy=0)`), so your units are the only ones a left click selects.
+ARMIES    ?= 2
+ALLIANCES ?= 0
+ALLIANCE_FLAG = $(if $(filter-out 0,$(ALLIANCES)),--alliances $(ALLIANCES),)
+
+play: build check-fa
+	@echo
+	@echo '  You are army 0. WASD pans, left-click selects, right-click orders.'
+	@echo '  Shift + right-click queues an order; hold space and drag to swing the camera.'
+	@echo '  Scroll zooms. Losing your commander loses the match.'
+	@echo
+	$(BIN) "$(FA_MAP)" $(FA_FLAGS) --skirmish --armies $(ARMIES) $(ALLIANCE_FLAG)
+
+# The same match with the first SECONDS already played out, so you arrive at a base rather
+# than at two commanders on empty ground. 60 is about when the factory is up; 320 is just
+# before the attack wave leaves.
+play-from: build check-fa
+	@echo
+	@echo '  You are army 0, joining at $(SECONDS)s. WASD pans, right-click orders.'
+	@echo
+	$(BIN) "$(FA_MAP)" $(FA_FLAGS) --skirmish --armies $(ARMIES) $(ALLIANCE_FLAG) \
+	  --play $(SECONDS)
+
+# Watch instead of play: no army is yours, so nothing is selectable and every side is scripted.
+# Useful for seeing what the opponent actually does.
+watch: build check-fa
+	$(BIN) "$(FA_MAP)" $(FA_FLAGS) --skirmish --observer --armies $(ARMIES) \
+	  $(ALLIANCE_FLAG) --play $(SECONDS)
 
 # A match: one army per start position, each with its faction's commander, each building an
 # extractor on the map's own mass deposits.
