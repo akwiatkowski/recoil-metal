@@ -1,5 +1,6 @@
 #include "app/SceneBuild.hpp"
 
+#include "core/data/ArmorDefs.hpp"
 #include "core/data/MoveDef.hpp"
 #include "core/model/Sca.hpp"
 #include "core/unit/UnitBlueprint.hpp"
@@ -209,6 +210,34 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
     if (starts.empty()) {
         std::fprintf(stderr, "skirmish: the map declares no start positions\n");
         return;
+    }
+
+    // THE ARMOUR TABLE FIRST, before anything else touches the catalog (PLAN2.md §7 P10.1).
+    //
+    // `UnitCatalog::setArmor` resolves names when a TYPE IS REGISTERED, so a type added before
+    // this call keeps the flat profile it was given and silently ignores armour for the rest of
+    // the match. Nothing registers a type before `spawnCommanders`, and this being the first
+    // statement in it is what keeps that true.
+    //
+    // READ FROM THE MOUNTED CONTENT rather than compiled in, because the two installs disagree:
+    // retail ships 6 classes with 5 non-1.0 entries, FAF ships 9 with 10, and they differ on the
+    // numbers too — a structure takes 0.066666 of an Overcharge under retail and 0.25 under FAF.
+    // See `core/data/ArmorDefs.hpp`.
+    //
+    // Content with no armour definition gets the `default`-only table, which is exactly the
+    // pre-P10.1 engine: every unit ordinary, every weapon a flat scalar. That is why this is
+    // safe to run unconditionally and why `make verify` still MATCHes for a scene without it.
+    if (const auto armorSource = content.read(std::string{rm::data::kArmorDefinitionPath})) {
+        const std::string text{reinterpret_cast<const char*>(armorSource->data()),
+                               armorSource->size()};
+        rm::data::ArmorTable armor = rm::data::armorTableFromSource(text);
+        std::printf("skirmish: armour table holds %zu class(es) and %zu multiplier(s)\n",
+                    armor.registry.size(), armor.multipliers.size());
+        scene.catalog.setArmor(std::move(armor.registry), std::move(armor.multipliers));
+    } else {
+        std::printf("skirmish: no %.*s in the mounted content — every unit is ordinary armour\n",
+                    static_cast<int>(rm::data::kArmorDefinitionPath.size()),
+                    rm::data::kArmorDefinitionPath.data());
     }
 
     // The roster and the opening, before anything is ordered: both decide WHAT gets built, and

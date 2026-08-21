@@ -200,7 +200,8 @@ TEST_CASE("a flat shot flies straight at its target") {
     const Weapon weapon = directFire(10.0f, 500.0f);  // 100 elmos/s
     const Projectile shot =
         rm::sim::launch(rm::test::at(0, 0, 0), rm::test::at(0, 0, 200), weapon, 0, rate,
-                        rate.perTick(weapon.muzzleVelocityElmosPerSecond));
+                        rate.perTick(weapon.muzzleVelocityElmosPerSecond),
+                        rm::unitdef::flatDamage(weapon.damage));
 
     // Asserted PER SECOND, converted back from the per-tick velocity the projectile now
     // carries: "100 elmos a second" is the authored fact, and how far that is in a tick
@@ -232,7 +233,8 @@ TEST_CASE("an arced shot rises, and comes down where the target is") {
     const std::array<rm::sim::Fx, 3> from = rm::test::at(0, 0, 0);
     const std::array<rm::sim::Fx, 3> to = rm::test::at(0, 0, 300);
     const Projectile shot = rm::sim::launch(from, to, artillery, 0, rm::sim::TickRate{},
-                        rm::sim::TickRate{}.perTick(artillery.muzzleVelocityElmosPerSecond));
+                        rm::sim::TickRate{}.perTick(artillery.muzzleVelocityElmosPerSecond),
+                        rm::unitdef::flatDamage(artillery.damage));
 
     // It must LEAVE going up, which is the whole point of an arc — a flat shot at the
     // same target has a vertical velocity of zero.
@@ -396,7 +398,8 @@ TEST_CASE("a shot in flight lands and kills, and is then gone") {
 
     Weapon weapon = directFire(40.0f, 300.0f, 30.0f);
     std::vector<Projectile> shots{rm::sim::launch(rm::test::at(0, 0, 0), rm::test::at(0, 0, 100), weapon, 0, rm::sim::TickRate{},
-                        rm::sim::TickRate{}.perTick(weapon.muzzleVelocityElmosPerSecond))};
+                        rm::sim::TickRate{}.perTick(weapon.muzzleVelocityElmosPerSecond),
+                        rm::unitdef::flatDamage(weapon.damage))};
 
     for (int tick = 0; tick < 100 && !shots.empty(); ++tick) {
         rm::sim::advanceProjectiles(shots, roster.store, armies, rm::sim::Terrain{field},
@@ -420,7 +423,8 @@ TEST_CASE("a shot that hits nothing expires instead of flying forever") {
     Weapon weapon = directFire(10.0f, 300.0f);
     weapon.muzzleVelocityElmosPerSecond = 1000.0f;
     std::vector<Projectile> shots{rm::sim::launch(rm::test::at(0, 0, 0), rm::test::at(0, 0, 100), weapon, 0, rm::sim::TickRate{},
-                        rm::sim::TickRate{}.perTick(weapon.muzzleVelocityElmosPerSecond))};
+                        rm::sim::TickRate{}.perTick(weapon.muzzleVelocityElmosPerSecond),
+                        rm::unitdef::flatDamage(weapon.damage))};
 
     rm::sim::UnitStore none;
     const auto lifetime =

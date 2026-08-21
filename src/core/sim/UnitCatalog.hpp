@@ -123,6 +123,16 @@ public:
         return type < armor_.size() ? armor_[type] : kDefaultArmor;
     }
 
+    /// One weapon's damage table for an arbitrary amount.
+    ///
+    /// PUBLIC and taking the amount separately, because a death weapon states its damage in
+    /// RINGS (`NukeInnerRingDamage`) rather than in `Damage`, so the figure to transpose is not
+    /// always `weapon.damage`. The hot firing path does not use this — it reads the profile
+    /// `add` computed once — but a death blast happens rarely enough to resolve on demand, which
+    /// is cheaper than threading a weapon index through the death report.
+    [[nodiscard]] unitdef::DamageProfile profileFor(const unitdef::Weapon& weapon,
+                                                    Mag amount) const;
+
     /// The registry this catalog resolved against. Empty of everything but `default` unless
     /// `setArmor` was called — which is what a test that never mentions armour gets.
     [[nodiscard]] const unitdef::ArmorRegistry& armor() const noexcept { return armor_names_; }

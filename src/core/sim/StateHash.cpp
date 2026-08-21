@@ -232,7 +232,14 @@ StateHash hashMatch(const UnitStore& store, const Match& match) {
         for (const Projectile& shot : *match.projectiles) {
             feed(h, shot.position);
             feed(h, shot.velocity);
-            feed(h, shot.damage);
+            // THE WHOLE TABLE, field by field. A profile is trivially copyable but its padding
+            // is unspecified, so it is fed like every other struct here rather than as bytes.
+            feed(h, shot.damage.base);
+            feed(h, static_cast<std::size_t>(shot.damage.overrideCount));
+            for (std::uint8_t i = 0; i < shot.damage.overrideCount; ++i) {
+                feed(h, static_cast<std::size_t>(shot.damage.overrideArmor[i]));
+                feed(h, shot.damage.overrideDamage[i]);
+            }
             feed(h, shot.damageRadiusElmos);
             feed(h, shot.firedByArmy);
             feed(h, static_cast<int>(shot.arc));

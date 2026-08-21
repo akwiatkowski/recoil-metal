@@ -346,7 +346,8 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
             const UnitCatalog::WeaponRates& rates =
                 catalog.weaponRates(store.typeAt(slot), w);
             projectiles.push_back(
-                launch(from, to, weapon, army, rate, rates.muzzlePerTick, store.idAt(slot)));
+                launch(from, to, weapon, army, rate, rates.muzzlePerTick, rates.damage,
+                       store.idAt(slot)));
             ++fired;
 
             emit(events, Event{
@@ -384,11 +385,11 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
 
 Projectile launch(std::array<Fx, 3> from, std::array<Fx, 3> to,
                   const unitdef::Weapon& weapon, int byArmy, TickRate rate, Fx muzzlePerTick,
-                  UnitId firedBy) {
+                  const unitdef::DamageProfile& damage, UnitId firedBy) {
     Projectile shot;
     shot.firedBy = firedBy;
     shot.position = {from[0], from[1] + kMuzzleHeight, from[2]};
-    shot.damage = weapon.damage;
+    shot.damage = damage;
     shot.damageRadiusElmos = weapon.damageRadius;
     shot.firedByArmy = byArmy;
     shot.arc = weapon.arc;
@@ -528,7 +529,7 @@ Mag damageArea(std::array<Fx, 3> centre, Fx radiusElmos, const unitdef::DamagePr
 
 void advanceProjectiles(std::vector<Projectile>& projectiles, UnitStore& store,
                         std::span<const Army> armies, const Terrain& terrain, TickRate rate,
-                        EventQueue* events) {
+                        EventQueue* events, const UnitCatalog* catalog) {
     const Fx gravityPerTickSquared = projectileGravityPerTickSquared(rate);
 
     for (Projectile& shot : projectiles) {
@@ -573,11 +574,13 @@ void advanceProjectiles(std::vector<Projectile>& projectiles, UnitStore& store,
                          .unit = struck ? store.idAt(*struck) : UnitId{},
                          .instigator = shot.firedBy,
                          .army = shot.firedByArmy,
-                         .amount = shot.damage,
+                         // The BASE, because an event says what was thrown rather than what
+                         // each target took — the per-target figure is a `UnitDamaged` per hit.
+                         .amount = shot.damage.base,
                          .at = shot.position,
                      });
         damageArea(shot.position, shot.damageRadiusElmos, shot.damage, shot.firedByArmy, store,
-                   armies, shot.firedBy, events);
+                   armies, catalog, shot.firedBy, events);
         shot.ticksRemaining = 0;
     }
 
@@ -598,7 +601,7 @@ const unitdef::Weapon* deathWeapon(const unitdef::UnitDef& def) noexcept {
 
 Mag explodeOnDeath(const unitdef::UnitDef& def, std::array<Fx, 3> at, int byArmy,
                      UnitStore& store, std::span<const Army> armies, UnitId by,
-                     EventQueue* events) {
+                     EventQueue* events, const UnitCatalog* catalog) {
     const unitdef::Weapon* blast = deathWeapon(def);
     if (blast == nullptr || !blast->harmful()) {
         return Mag{};
@@ -609,17 +612,27 @@ Mag explodeOnDeath(const unitdef::UnitDef& def, std::array<Fx, 3> at, int byArmy
     // running the wide weak ring first and the narrow strong one after means anything close
     // takes both, which is what a nested blast should do. Reversed, the outer ring would be
     // finishing off things the inner one had already flattened.
+    // The death weapon's own damage table, RESOLVED HERE rather than read from `weaponRates`.
+    // A death blast happens a few times a match, so recomputing the transpose costs nothing and
+    // saves threading a weapon index through the death report; firing is the hot path and reads
+    // the profile computed once at load. `profileFor` falls back to a flat table when there is
+    // no catalog, which is the pre-P10.1 behaviour.
+    const auto profile = [&](Mag amount) {
+        return catalog != nullptr ? catalog->profileFor(*blast, amount)
+                                  : unitdef::flatDamage(amount);
+    };
+
     if (blast->hasRings()) {
         Mag dealt{};
-        dealt += damageArea(at, blast->outerRingRadius, blast->outerRingDamage, byArmy,
-                            store, armies, by, events);
-        dealt += damageArea(at, blast->innerRingRadius, blast->innerRingDamage, byArmy,
-                            store, armies, by, events);
+        dealt += damageArea(at, blast->outerRingRadius, profile(blast->outerRingDamage), byArmy,
+                            store, armies, catalog, by, events);
+        dealt += damageArea(at, blast->innerRingRadius, profile(blast->innerRingDamage), byArmy,
+                            store, armies, catalog, by, events);
         return dealt;
     }
 
-    return damageArea(at, blast->damageRadius, blast->damage, byArmy, store, armies, by,
-                      events);
+    return damageArea(at, blast->damageRadius, profile(blast->damage), byArmy, store, armies,
+                      catalog, by, events);
 }
 
 std::vector<UnitId> deadUnits(const UnitStore& store) {

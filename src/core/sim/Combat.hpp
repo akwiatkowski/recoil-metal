@@ -42,8 +42,18 @@ struct Projectile {
     /// position with no scaling, which is what "per tick" buys.
     std::array<Fx, 3> velocity{};
 
-    /// Fixed point, carried straight from the weapon that fired it.
-    Mag damage{};
+    /// The whole damage table, not one number (PLAN2.md §7 P10.1, `ADR-033`).
+    ///
+    /// CARRIED ON THE SHOT rather than looked up at impact, which is also what Recoil does — its
+    /// projectiles hold a `DamageArray` by value. The alternative was a `(UnitTypeIndex, slot)`
+    /// pair pointing back at the catalog, and it is smaller; it was rejected because a shot
+    /// outlives its shooter routinely (a duel where both sides die on the same tick is ordinary),
+    /// and a shot whose damage depends on a still-resolvable owner is a shot that changes value
+    /// when the owner dies.
+    ///
+    /// It costs 72 bytes against the previous 8. Still fixed-size and trivially copyable, which
+    /// is the property that matters: the state hash walks this.
+    unitdef::DamageProfile damage{};
     Fx damageRadiusElmos{};
 
     /// WHICH UNIT fired it, for the `UnitDamaged`/`UnitDestroyed` events a hit produces
@@ -190,9 +200,11 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
 /// A shot lands when it reaches its target's ground position or its height falls to the
 /// ground — not when it collides with a model, because instances are points here and
 /// their geometry is neither known nor cheap to test.
+/// `catalog` is how a target's armour class is discovered; null means every target is ordinary
+/// armour, which is the pre-P10.1 behaviour and what a scene with no types should get.
 void advanceProjectiles(std::vector<Projectile>& projectiles, UnitStore& store,
                         std::span<const Army> armies, const Terrain& terrain, TickRate rate,
-                        EventQueue* events = nullptr);
+                        EventQueue* events = nullptr, const UnitCatalog* catalog = nullptr);
 
 /// Gravity's pull on an arced shot, in elmos per tick per tick.
 ///
@@ -210,9 +222,13 @@ void advanceProjectiles(std::vector<Projectile>& projectiles, UnitStore& store,
 /// instantaneous weapon needs no separate code path and nothing divides by zero.
 /// `muzzlePerTick` comes from the catalog rather than from the weapon: `MuzzleVelocity` is
 /// authored per second, and only a clock turns that into a distance a shot covers in a tick.
+/// `damage` is the weapon's resolved table. Passed in rather than read from `weapon.damage`
+/// for the same reason `muzzlePerTick` is: the authored figure becomes a usable one only once
+/// the match's armour classes are known, and that resolution belongs to `UnitCatalog`.
 [[nodiscard]] Projectile launch(std::array<Fx, 3> from, std::array<Fx, 3> to,
                                 const unitdef::Weapon& weapon, int byArmy, TickRate rate,
-                                Fx muzzlePerTick, UnitId firedBy = {});
+                                Fx muzzlePerTick, const unitdef::DamageProfile& damage,
+                                UnitId firedBy = {});
 
 /// Spreads `damage` over everything within `radiusElmos` of `centre`, and returns how
 /// much was dealt in total.
@@ -270,9 +286,14 @@ Mag damageArea(std::array<Fx, 3> centre, Fx radiusElmos, const unitdef::DamagePr
 /// `hostile`, so friendly fire would need a mode of its own rather than a different
 /// argument. Noted rather than hidden: a commander detonating in a friendly crowd should be
 /// a catastrophe and here it is merely an inconvenience.
+/// `catalog` supplies both halves: the target's armour class, and the death weapon's own damage
+/// table, which it resolves on demand rather than from `weaponRates`. That split is deliberate —
+/// firing is per-shot and hot, so it reads a profile computed once at load; a death blast happens
+/// a few times a match, so recomputing costs nothing and saves threading a weapon index through
+/// the death report.
 Mag explodeOnDeath(const unitdef::UnitDef& def, std::array<Fx, 3> at, int byArmy,
                      UnitStore& store, std::span<const Army> armies, UnitId by = {},
-                     EventQueue* events = nullptr);
+                     EventQueue* events = nullptr, const UnitCatalog* catalog = nullptr);
 
 /// Which units died this tick, so a caller can leave wreckage and check for a defeat.
 [[nodiscard]] std::vector<UnitId> deadUnits(const UnitStore& store);

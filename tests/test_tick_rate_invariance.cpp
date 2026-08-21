@@ -76,7 +76,8 @@ TEST_CASE("a projectile's lifetime is thirty seconds at every rate") {
         weapon.muzzleVelocityElmosPerSecond = 1000.0f;
         std::vector<rm::sim::Projectile> shots{
             rm::sim::launch(rm::test::at(0, 0, 0), rm::test::at(0, 0, 100), weapon, 0, rate,
-                            rate.perTick(weapon.muzzleVelocityElmosPerSecond))};
+                            rate.perTick(weapon.muzzleVelocityElmosPerSecond),
+                            rm::unitdef::flatDamage(weapon.damage))};
 
         rm::sim::UnitStore nobody;
         int ticks = 0;

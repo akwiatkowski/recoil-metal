@@ -48,6 +48,17 @@ UnitTypeIndex UnitCatalog::add(const unitdef::UnitDef* def, TickRate rate) {
     return type;
 }
 
+unitdef::DamageProfile UnitCatalog::profileFor(const unitdef::Weapon& weapon,
+                                               Mag amount) const {
+    if (armor_matrix_.empty()) {
+        return unitdef::flatDamage(amount);
+    }
+    const std::string_view damageType =
+        weapon.damageType.empty() ? std::string_view{"Normal"}
+                                  : std::string_view{weapon.damageType};
+    return unitdef::damageFromMatrix(amount, damageType, armor_matrix_);
+}
+
 unitdef::DamageProfile UnitCatalog::damageFor(const unitdef::Weapon& weapon) const {
     // NO MATRIX, NO TRANSPOSE. Two cases arrive here with an empty one and both are correct:
     // a catalog that was never given armour context (every existing test), and BAR content,

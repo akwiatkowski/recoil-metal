@@ -439,3 +439,62 @@ TEST_CASE("without a catalog every target is ordinary armour") {
                         armies, nullptr);
     CHECK(roster.health(target).current == rm::test::mag(8000.0f));
 }
+
+TEST_CASE("a death blast consults the armour table") {
+    // THE PATH THAT WAS MISSING. P10.1 first landed with armour reaching `damageArea`'s new
+    // overload and *nothing in the tick calling it* — the sim's three damage sites all used the
+    // scalar overload, so the table loaded and was ignored. This is the death-blast half of the
+    // fix; `advanceProjectiles` is covered by the golden replay.
+    //
+    // Retail Forged Alliance rates `Structure / Deathnuke` at 0.01: a commander detonating in a
+    // base does one percent of its damage to the buildings. That is a large enough rule that a
+    // match where it silently did not apply would look like a balance bug.
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+
+    Roster roster;
+    constexpr std::array<std::string_view, 3> kClasses{"Default", "Structure", "Commander"};
+    const ArmorRegistry registry = ArmorRegistry::fromNames(kClasses);
+    roster.catalog.setArmor(registry, std::vector<ArmorMultiplier>{
+                                          {registry.classFor("Structure"), "Deathnuke", 0.01f},
+                                      });
+
+    // A commander whose death weapon is a Deathnuke.
+    UnitDef acu;
+    acu.name = "test_acu";
+    acu.armorType = "Commander";
+    Weapon detonation;
+    detonation.label = "death";
+    detonation.role = WeaponRole::Death;
+    detonation.damageType = "Deathnuke";
+    detonation.damage = rm::test::mag(45000.0f);
+    detonation.damageRadius = rm::test::fx(200.0f);
+    acu.weapons.push_back(detonation);
+    const rm::UnitTypeIndex acuType = roster.addType(acu);
+
+    UnitDef bunker;
+    bunker.name = "test_bunker";
+    bunker.armorType = "Structure";
+    const rm::UnitTypeIndex bunkerType = roster.addType(bunker);
+
+    // A structure right at the centre of the blast, so falloff is 1.0 and the only thing that
+    // can differ is the table.
+    const auto damageDealt = [&](bool withCatalog) {
+        Roster fresh;
+        fresh.catalog.setArmor(registry, std::vector<ArmorMultiplier>{
+                                             {registry.classFor("Structure"), "Deathnuke", 0.01f},
+                                         });
+        fresh.defs = roster.defs;  // same definitions, same type indices
+        (void)fresh.addType(acu);
+        (void)fresh.addType(bunker);
+        (void)fresh.add(bunkerType, 0.0f, 0.0f, 1, 1000000.0f);
+        return rm::sim::explodeOnDeath(acu, rm::test::at(0, 0, 0), 0, fresh.store, armies, {},
+                                       nullptr, withCatalog ? &fresh.catalog : nullptr);
+    };
+
+    // Without the catalog: the full 45,000, which is what the engine did before this landed.
+    CHECK(damageDealt(false) == rm::test::mag(45000.0f));
+    // With it: one percent, because the target is a Structure and the blast is a Deathnuke.
+    CHECK(damageDealt(true) == rm::test::mag(450.0f));
+
+    (void)acuType;
+}

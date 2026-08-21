@@ -255,7 +255,7 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
         report.shotsFired =
             fireWeapons(store, catalog, match.armies, *match.projectiles, rate, match.events);
         advanceProjectiles(*match.projectiles, store, match.armies, terrain, rate,
-                           match.events);
+                           match.events, &catalog);
     }
 
     // 4. The dead, then their explosions, then the defeated. In that order: an army
@@ -284,7 +284,8 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
         // as a chain rather than as a crowd dying of nothing.
         report.deathBlastDamage += explodeOnDeath(*def, death.at,
                                                  store.motion()[slot].armyIndex, store,
-                                                 match.armies, death.ref, match.events);
+                                                 match.armies, death.ref, match.events,
+                                                 &catalog);
         ++report.deathBlasts;
     }
 

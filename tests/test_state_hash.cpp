@@ -214,7 +214,7 @@ TEST_CASE("every field the sim owns reaches the hash") {
     SECTION("a shot in flight") {
         Fixture a;
         const rm::StateHash before = a.hash();
-        a.projectiles.push_back(rm::sim::Projectile{.damage = rm::test::mag(10.0f), .ticksRemaining = 30});
+        a.projectiles.push_back(rm::sim::Projectile{.damage = rm::unitdef::flatDamage(rm::test::mag(10.0f)), .ticksRemaining = 30});
         REQUIRE(a.hash() != before);
     }
     SECTION("work under construction") {

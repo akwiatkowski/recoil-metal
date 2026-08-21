@@ -134,6 +134,7 @@ add_library(rm_core STATIC
     src/core/data/Roster.cpp
     src/core/data/Opening.cpp
     src/core/data/MoveDef.cpp
+    src/core/data/ArmorDefs.cpp
     src/core/vfs/AssetSearch.cpp
     src/core/vfs/Vfs.cpp
     src/core/settings/Settings.cpp)
@@ -250,6 +251,7 @@ if(BUILD_TESTING)
         tests/test_unit_blueprint.cpp
         tests/test_unit_def.cpp
         tests/test_armor.cpp
+        tests/test_armor_defs.cpp
         tests/test_role.cpp
         tests/test_build_tree.cpp
         tests/test_roster.cpp
