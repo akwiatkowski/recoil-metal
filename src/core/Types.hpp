@@ -54,6 +54,23 @@ using AllianceIndex = std::uint16_t;
 /// unit defs; 16 bits is ample and keeps the per-unit record small.
 using UnitTypeIndex = std::uint16_t;
 
+/// WHAT A UNIT IS MADE OF, for the purpose of deciding how much a weapon hurts it. An index
+/// into an `ArmorRegistry` (`core/unit/Armor.hpp`), which is content — so this is the same
+/// kind of thing as `UnitTypeIndex`, and it lives here for the same reason.
+///
+/// **8 bits, and that is a real ceiling rather than a generous one**, so it is stated here
+/// where someone changing it will look. Forged Alliance has 8 distinct classes
+/// (`14-blueprint-census.md §8.7`, measured over all 604 blueprints that state one) and
+/// Recoil's own `armordefs.lua` is conventionally a similar size, so 255 is roughly thirty
+/// times the largest real corpus. What buys the small width is that `DamageProfile` stores an
+/// override as `{ArmorClass, Mag}` and is copied per shot — a 16-bit class would grow the
+/// struct by its own padding for range nothing has ever needed.
+///
+/// Zero is `default` ALWAYS — the class a unit gets when its blueprint states none, and the
+/// class a damage lookup falls back to. Recoil makes the same reservation
+/// (`DamageArrayHandler.cpp:43-45`, index 0 inserted at the front of the sorted key list).
+using ArmorClass = std::uint8_t;
+
 /// Which tick it is, counted from the match's first. 64-bit from the start: it costs
 /// nothing next to everything else a unit carries, and replays are concatenated — a 32-bit
 /// counter would wrap after about two and a half years of match time at the fast end of the

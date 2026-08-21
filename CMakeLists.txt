@@ -126,6 +126,7 @@ add_library(rm_core STATIC
     src/core/sim/Replay.cpp
     src/core/unit/UnitBlueprint.cpp
     src/core/unit/Weapon.cpp
+    src/core/unit/Armor.cpp
     src/core/unit/FaDuration.cpp
     src/core/unit/UnitDef.cpp
     src/core/unit/Role.cpp
@@ -248,6 +249,7 @@ if(BUILD_TESTING)
         tests/test_pathfinding.cpp
         tests/test_unit_blueprint.cpp
         tests/test_unit_def.cpp
+        tests/test_armor.cpp
         tests/test_role.cpp
         tests/test_build_tree.cpp
         tests/test_roster.cpp
