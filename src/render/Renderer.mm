@@ -408,6 +408,7 @@ Renderer::~Renderer() {
     if (textPipeline_ != nullptr) textPipeline_->release();
     if (imagePipeline_ != nullptr) imagePipeline_->release();
     if (minimapTexture_ != nullptr) minimapTexture_->release();
+    if (iconAtlas_ != nullptr) iconAtlas_->release();
     if (labelFont_.atlas != nullptr) labelFont_.atlas->release();
     if (readoutFont_.atlas != nullptr) readoutFont_.atlas->release();
     if (fontSampler_ != nullptr) fontSampler_->release();
@@ -1360,6 +1361,24 @@ void Renderer::encodeScene(MTL::CommandBuffer* commandBuffer, MTL::RenderPassDes
             encoder->drawPrimitives(MTL::PrimitiveType::PrimitiveTypeTriangle, NS::UInteger{0},
                                     static_cast<NS::UInteger>(readoutVertexCount_));
         }
+
+        // THE ICONS LAST, after both faces. An icon sits inside the square its cell reserved
+        // and never touches the border or the two lines of text below it, so drawing over the
+        // chrome costs nothing — and drawing UNDER would put it beneath the cell's own fill,
+        // which is where the first attempt at this went and looked like a missing texture.
+        if (imageVertexCount_ > 0 && iconAtlas_ != nullptr && imagePipeline_ != nullptr) {
+            encoder->setRenderPipelineState(imagePipeline_);
+            encoder->setVertexBuffer(
+                textBuffer_,
+                static_cast<NS::UInteger>((slotBase + labelVertexCount_ + readoutVertexCount_)
+                                          * sizeof(text::TextVertex)),
+                kVertexBufferIndex);
+            encoder->setFragmentTexture(iconAtlas_, NS::UInteger{0});
+            encoder->drawPrimitives(MTL::PrimitiveType::PrimitiveTypeTriangle, NS::UInteger{0},
+                                    static_cast<NS::UInteger>(imageVertexCount_));
+            encoder->setRenderPipelineState(textPipeline_);
+        }
+
     }
 
     encoder->endEncoding();

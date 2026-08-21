@@ -326,6 +326,9 @@ int runScreenshot(const Session& session) {
                 gatherBuildOptions(units, capturedSelection, hudThemeFor(units), shotOptions,
                                    shotWho);
                 if (!shotOptions.empty()) {
+                    // The icons for the capture too — an interface that only has pictures when
+                    // a window is open is an interface no screenshot can compare between builds.
+                    renderer.setIconAtlas(rm::app::packBuildIcons(content, shotOptions));
                     rm::ui::appendBuildPanel(
                         hud, renderer.labelFont(), renderer.readoutFont(), hudThemeFor(units),
                         rm::ui::buildPanelLayout(shotMinimap, shotOptions.size()), shotOptions,
@@ -335,7 +338,7 @@ int runScreenshot(const Session& session) {
                 }
             }
 
-            renderer.setHud(hud.label, hud.readout);
+            renderer.setHud(hud.label, hud.readout, hud.image);
 
             const auto image = renderer.renderToImage(shot.width, shot.height);
             return writePng(shot.path, image) ? 0 : 1;
@@ -441,6 +444,19 @@ int runWindowed(const Session& session) {
         // Held here beside the options it indexes, and cleared whenever they change — an index
         // into a list that has been rebuilt is a different building.
         std::optional<std::size_t> armedOption;
+
+        // WHOSE MENU THE ICON ATLAS WAS PACKED FOR. Keyed on the builder rather than on the
+        // option list, because the list is rebuilt every frame and compares equal every frame —
+        // packing on inequality would mean packing never, and packing unconditionally would
+        // mean 15 VFS reads and a 512x512 upload per frame for a picture that has not changed.
+        // A different builder is the only thing that changes the set.
+        rm::sim::UnitId iconsPackedFor{};
+
+        /// The slot each option's icon went into, kept because `gatherBuildOptions` REBUILDS
+        /// the option list every frame and a fresh `BuildOption` has no slot. Repacking to
+        /// recover them would be 15 archive reads a frame for pictures that have not moved, so
+        /// the answer is cached and reapplied instead.
+        std::vector<std::optional<std::size_t>> iconSlots;
 
         // The caller-side tick, the same one `march()` drives. Built here rather than in
         // the frame callback because a match is decided on one tick and stays decided, and
@@ -926,6 +942,21 @@ int runWindowed(const Session& session) {
             if (armedOption && *armedOption >= buildOptions.size()) {
                 armedOption.reset();
             }
+
+            // The icons: packed when the menu is somebody else's than last frame's, and
+            // reapplied from the cache otherwise.
+            if (buildWho.builder != iconsPackedFor) {
+                iconsPackedFor = buildWho.builder;
+                window.setIconAtlas(rm::app::packBuildIcons(content, buildOptions));
+                iconSlots.clear();
+                for (const rm::ui::BuildOption& option : buildOptions) {
+                    iconSlots.push_back(option.iconSlot);
+                }
+            } else {
+                for (std::size_t i = 0; i < buildOptions.size() && i < iconSlots.size(); ++i) {
+                    buildOptions[i].iconSlot = iconSlots[i];
+                }
+            }
             if (!buildOptions.empty()) {
                 const rm::ui::BuildPanelLayout panel =
                     rm::ui::buildPanelLayout(minimap, buildOptions.size());
@@ -948,7 +979,7 @@ int runWindowed(const Session& session) {
                                          buildWho.name);
             }
 
-            window.setHud(hudScratch.label, hudScratch.readout);
+            window.setHud(hudScratch.label, hudScratch.readout, hudScratch.image);
 
             // Rings under whatever is selected, rebuilt from scratch every
             // frame. Cheap — a selection is tens of units and each ring is 192

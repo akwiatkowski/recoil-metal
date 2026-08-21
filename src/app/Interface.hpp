@@ -68,6 +68,22 @@ void gatherBuildOptions(const UnitScene& scene, std::span<const rm::sim::UnitId>
                         const rm::ui::Theme& theme, std::vector<rm::ui::BuildOption>& out,
                         BuildSelection& who);
 
+/// The build tray's icons for one option list, packed into a single atlas.
+///
+/// FROM THE ARCHIVES, at `textures/ui/common/icons/units/<ID>_icon.dds` — 538 of them ship in
+/// `textures.scd`. A blueprint with no icon there is ordinary and keeps its slot blank rather
+/// than borrowing its neighbour's: `packIcons` is positional, so the slot a cell reads is the
+/// slot its own icon went into whether or not that icon existed.
+///
+/// ASSIGNS `iconSlot` ON EACH OPTION as a side effect, which is the whole point — the atlas and
+/// the indices into it are one answer and separating them would let a caller pair last frame's
+/// slots with this frame's atlas.
+///
+/// Rebuilt when the option LIST changes, not per frame. The caller decides that; this just does
+/// the work, and it is a memcpy per icon rather than a decode (`core/ui/IconAtlas.hpp`).
+[[nodiscard]] rm::dds::Texture packBuildIcons(const rm::vfs::Vfs& content,
+                                              std::vector<rm::ui::BuildOption>& options);
+
 void appendViewFootprint(std::vector<std::array<float, 2>>& out, const rm::OrbitCamera& camera,
                          const rm::HeightField& field, float width, float height);
 

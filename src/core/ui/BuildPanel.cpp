@@ -1,5 +1,7 @@
 #include "core/ui/BuildPanel.hpp"
 
+#include "core/ui/IconAtlas.hpp"
+
 #include <algorithm>
 #include <cmath>
 
@@ -137,13 +139,31 @@ void appendBuildPanel(Geometry& out, const text::Font& labelFont, const text::Fo
         text::appendRect(out.label, labelFont, cx, cy, kBuildCell, kBevel * 2.0f,
                          fade(option.tint, alpha));
 
-        // The icon square, reserved and drawn as a recess. This is the hole a real unit icon
-        // drops into once there is an atlas for one; until then it gives the cell a centre of
-        // gravity so the id is not floating in a plain box.
+        // The icon square: a recess, and the game's own icon in it when the archives have one.
+        //
+        // THE RECESS IS DRAWN EITHER WAY, under the icon. An icon is mostly transparent — a
+        // silhouette on nothing — so without a well behind it the shape floats on the cell's
+        // own fill and loses its edges against a light tint band.
         const float iconX = cx + (kBuildCell - kBuildIcon) * 0.5f;
         const float iconY = cy + kUnit * 0.9f;
         text::appendRect(out.label, labelFont, iconX, iconY, kBuildIcon, kBuildIcon,
                          fade(theme.glass, alpha * 0.9f));
+
+        // The icon itself goes in the IMAGE list, which is drawn after both font atlases — see
+        // `Geometry::image`. Six vertices, uv'd into the shared atlas, tinted white so the
+        // artwork arrives as authored and faded with the rest of an unaffordable cell.
+        if (option.iconSlot) {
+            const IconUv uv = iconUv(*option.iconSlot);
+            const Colour tint{{1.0f, 1.0f, 1.0f, alpha}};
+            const float x1 = iconX + kBuildIcon;
+            const float y1 = iconY + kBuildIcon;
+            out.image.push_back({{iconX, iconY}, {uv.u0, uv.v0}, tint});
+            out.image.push_back({{x1, iconY}, {uv.u1, uv.v0}, tint});
+            out.image.push_back({{x1, y1}, {uv.u1, uv.v1}, tint});
+            out.image.push_back({{iconX, iconY}, {uv.u0, uv.v0}, tint});
+            out.image.push_back({{x1, y1}, {uv.u1, uv.v1}, tint});
+            out.image.push_back({{iconX, y1}, {uv.u0, uv.v1}, tint});
+        }
 
         // TWO LINES UNDER THE ICON, id then cost, rather than the id centred and the cost
         // tucked into the same band. They collided at the old cell size and would collide again

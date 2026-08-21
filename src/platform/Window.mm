@@ -551,9 +551,14 @@ void Window::setMinimapRect(float x, float y, float width, float height) noexcep
     impl_->renderer->setMinimapRect(x, y, width, height);
 }
 
+void Window::setIconAtlas(const dds::Texture& atlas) {
+    impl_->renderer->setIconAtlas(atlas);
+}
+
 void Window::setHud(std::span<const text::TextVertex> label,
-                    std::span<const text::TextVertex> readout) {
-    impl_->renderer->setHud(label, readout);
+                    std::span<const text::TextVertex> readout,
+                    std::span<const text::TextVertex> image) {
+    impl_->renderer->setHud(label, readout, image);
 }
 
 void Window::show() {

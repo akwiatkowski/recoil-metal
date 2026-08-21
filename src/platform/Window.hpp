@@ -199,7 +199,11 @@ public:
 
     /// This frame's interface. See Renderer::setHud.
     void setHud(std::span<const text::TextVertex> label,
-                std::span<const text::TextVertex> readout);
+                std::span<const text::TextVertex> readout,
+                std::span<const text::TextVertex> image = {});
+
+    /// The build tray's packed unit icons. See Renderer::setIconAtlas.
+    void setIconAtlas(const dds::Texture& atlas);
 
     /// This frame's selection rings. See Renderer::setGroundDecals. Like
     /// setInstances, only meaningful from inside an onFrame callback.

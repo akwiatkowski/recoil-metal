@@ -1,5 +1,6 @@
 #include "app/Interface.hpp"
 
+#include "core/ui/IconAtlas.hpp"
 #include "core/unit/Role.hpp"
 
 #include <algorithm>
@@ -351,6 +352,46 @@ void appendSceneIcons(std::vector<rm::Particle>& into, const UnitScene& scene,
     }
 
     return best;
+}
+
+
+rm::dds::Texture packBuildIcons(const rm::vfs::Vfs& content,
+                                std::vector<rm::ui::BuildOption>& options) {
+    std::vector<rm::dds::Texture> icons;
+    icons.reserve(options.size());
+
+    for (std::size_t i = 0; i < options.size(); ++i) {
+        rm::ui::BuildOption& option = options[i];
+        option.iconSlot.reset();
+
+        // The path the archives use about themselves, derived from the id — the same shape
+        // `RosterEntry::path` derives a blueprint path, and for the same reason: an id and a
+        // path that are stored separately are an id and a path that can disagree.
+        const std::string path = "/textures/ui/common/icons/units/" + option.id + "_icon.dds";
+        const auto bytes = content.read(path);
+        if (!bytes) {
+            icons.emplace_back();  // holds the slot; see the header
+            continue;
+        }
+        auto icon = rm::dds::load(*bytes);
+        if (!icon) {
+            icons.emplace_back();
+            continue;
+        }
+        // The slot is this option's POSITION, assigned whether or not the icon loaded, because
+        // `packIcons` places by position too. Compacting past the failures here would pair every
+        // later cell with its neighbour's picture.
+        option.iconSlot = i;
+        icons.push_back(std::move(*icon));
+    }
+
+    rm::dds::Texture atlas = rm::ui::packIcons(icons);
+    if (atlas.data.empty()) {
+        for (rm::ui::BuildOption& option : options) {
+            option.iconSlot.reset();  // nothing packed: no cell should point into an empty atlas
+        }
+    }
+    return atlas;
 }
 
 } // namespace rm::app

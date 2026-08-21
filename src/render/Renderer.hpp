@@ -314,7 +314,14 @@ public:
     /// than accumulated — and a stale line would report a number that has since changed, which
     /// is worse than reporting none.
     void setHud(std::span<const text::TextVertex> label,
-                std::span<const text::TextVertex> readout) noexcept;
+                std::span<const text::TextVertex> readout,
+                std::span<const text::TextVertex> image = {}) noexcept;
+
+    /// The build tray's packed unit icons. See `core/ui/IconAtlas.hpp`.
+    ///
+    /// Uploaded when the SET of options changes, which is on selection — not per frame. An
+    /// empty texture means the menu draws its reserved squares and no pictures.
+    void setIconAtlas(const dds::Texture& atlas);
 
     /// The map's own preview thumbnail, for the minimap to stand on.
     ///
@@ -757,6 +764,10 @@ private:
     // The map's own thumbnail, drawn under the minimap panel. Uploaded once, not per frame.
     MTL::Texture* minimapTexture_ = nullptr;  // owned
     std::array<float, 4> minimapRect_{};      // x, y, width, height in pixels; zero = no draw
+
+    // The build tray's icons, packed into one texture, and this frame's quads into it.
+    MTL::Texture* iconAtlas_ = nullptr;  // owned
+    std::size_t imageVertexCount_ = 0;
     MTL::Buffer* textBuffer_ = nullptr;                 // owned
 
     // TWO faces, because the interface has two jobs for type: a condensed face for labels,

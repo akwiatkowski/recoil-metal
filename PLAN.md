@@ -475,8 +475,13 @@ base). The slices, each screenshot-provable:
   through `applyCommand` like every other order, so a player's construction is
   authorised, recorded in the command log, and replayable.
 
-  What it still does not do is draw an ICON: no atlas yet, so a cell reserves
-  the square and shows the blueprint id. That is a content job, not a layout one.
+  **And it draws the game's own icons.** 538 ship in `textures.scd` at
+  `textures/ui/common/icons/units/<ID>_icon.dds`, 64x64 DXT5 — and because 64 is
+  a multiple of the 4x4 block, packing them into one atlas is a memcpy of
+  compressed blocks rather than a decode, a blit and a recompress. One texture,
+  one bind, one draw for the whole menu, repacked only when the selection
+  changes. A blueprint with no icon (UEB5208 is one) keeps its blank square and
+  its neighbours keep their own, because the packing is positional.
 
   The original note on what the tray READS, kept because it is still true:
   BAR's tight three-column grid above the minimap, mass cost on the face of

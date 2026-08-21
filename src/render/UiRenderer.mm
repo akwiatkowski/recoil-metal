@@ -208,9 +208,11 @@ text::Font Renderer::labelFont() const noexcept { return labelFont_.view(); }
 text::Font Renderer::readoutFont() const noexcept { return readoutFont_.view(); }
 
 void Renderer::setHud(std::span<const text::TextVertex> label,
-                      std::span<const text::TextVertex> readout) noexcept {
+                      std::span<const text::TextVertex> readout,
+                      std::span<const text::TextVertex> image) noexcept {
     labelVertexCount_ = 0;
     readoutVertexCount_ = 0;
+    imageVertexCount_ = 0;
     if (textBuffer_ == nullptr) {
         return;
     }
@@ -237,6 +239,29 @@ void Renderer::setHud(std::span<const text::TextVertex> label,
                     readoutFits * sizeof(text::TextVertex));
         readoutVertexCount_ = readoutFits;
     }
+
+    // The icons after both faces, in the same buffer for the same reason: one allocation, one
+    // upload, and the draws differ only in where they start and what they bind. LAST in the
+    // truncation order too — a menu that lost its pictures still reads, and one that lost its
+    // panel does not.
+    const std::size_t imageRoom = text::kMaxTextVertices - labelFits - readoutFits;
+    const std::size_t imageFits = std::min(image.size(), imageRoom) / 3 * 3;
+    if (imageFits > 0) {
+        std::memcpy(base + labelFits + readoutFits, image.data(),
+                    imageFits * sizeof(text::TextVertex));
+        imageVertexCount_ = imageFits;
+    }
+}
+
+void Renderer::setIconAtlas(const dds::Texture& atlas) {
+    if (iconAtlas_ != nullptr) {
+        iconAtlas_->release();
+        iconAtlas_ = nullptr;
+    }
+    if (atlas.width <= 0 || atlas.height <= 0 || atlas.data.empty()) {
+        return;  // no icons: the cells keep their reserved squares and their ids
+    }
+    iconAtlas_ = uploadTexture(atlas, "build icons");
 }
 
 

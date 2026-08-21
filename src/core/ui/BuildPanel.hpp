@@ -35,11 +35,13 @@ namespace rm::ui {
 //   COST IS ON THE FACE OF THE BUTTON. Not in a tooltip. The number a player decides on is the
 //   mass cost, and hiding it behind a hover makes comparing two options a two-step task.
 //
-// WHERE WE DIVERGE, and why. BAR draws a rendered icon of each unit; we have no icon atlas, so a
-// cell carries the blueprint id and a tint band instead. That is a real loss — an icon is read
-// faster than a five-character id — and it is a content problem rather than a layout one, so the
-// layout is built to take an icon later: `cellIcon` already reserves the square the icon goes in,
-// and the id is drawn beneath it rather than through it.
+// THE ICON IS THE GAME'S OWN. `textures.scd` ships 538 unit icons at
+// `textures/ui/common/icons/units/<ID>_icon.dds`, 64x64 DXT5, and they are packed into one atlas
+// so the whole menu is a single texture bind (`core/ui/IconAtlas.hpp`). This note used to say we
+// had none and that a cell carried "the blueprint id and a tint band instead"; the square it
+// described as reserved for later is the square they go in now. The id stays, beneath the icon
+// rather than instead of it — a five-character code is still how a player names the thing to
+// somebody else.
 //
 // EVERYTHING HERE IS ARITHMETIC over a state struct, tested without a renderer — the same reason
 // `Hud.hpp` gives. A grid that overlaps its neighbour, a hit test that disagrees with the drawn
@@ -72,16 +74,14 @@ inline constexpr int kBuildColumns = 3;
 /// The strip above the grid carrying the builder's name.
 inline constexpr float kBuildHeader = kUnit * 3.0f;
 
-/// The icon square inside a cell — the part a real unit icon would occupy once there is one.
-/// What is left below it carries two lines: the id, then the cost.
+/// The icon square inside a cell. What is left below it carries two lines: the id, then the cost.
 inline constexpr float kBuildIcon = kBuildCell - kUnit * 6.0f;
 
 // --- State ------------------------------------------------------------------
 
 /// One thing the selected builder could start.
 struct BuildOption {
-    /// The blueprint id as its directory spells it — `UEB1103`. What the cell shows, until
-    /// there are icons.
+    /// The blueprint id as its directory spells it — `UEB1103`. Drawn under the icon.
     std::string id;
 
     float massCost = 0.0f;
@@ -98,6 +98,14 @@ struct BuildOption {
     /// The tint band across the top of the cell. Carries the tech tier, so a grid of a dozen
     /// options separates into tiers without a label per row.
     Colour tint{};
+
+    /// Which slot in the icon atlas holds this unit's picture, or none.
+    ///
+    /// AN INDEX RATHER THAN A TEXTURE, because the whole menu is one atlas and one draw — see
+    /// `core/ui/IconAtlas.hpp`. None is ordinary: a blueprint whose icon is missing from the
+    /// archives keeps its reserved square and its id, which is what the panel looked like
+    /// before there were icons at all.
+    std::optional<std::size_t> iconSlot;
 };
 
 /// Where the grid sits and how it is divided.

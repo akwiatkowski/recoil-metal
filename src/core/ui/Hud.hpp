@@ -162,12 +162,28 @@ struct Geometry {
     std::vector<text::TextVertex> label;    ///< condensed face, plus every panel and bar
     std::vector<text::TextVertex> readout;  ///< monospaced face: the numbers
 
+    /// Quads sampling a full-colour ICON ATLAS rather than a font.
+    ///
+    /// A THIRD LIST rather than more of `label`, because the difference is which texture and
+    /// which shader: the first two are coverage masks painted in the vertex colour, and these
+    /// carry their own pixels (`imageFragment`). One list per texture bind is what the encoder
+    /// wants anyway.
+    ///
+    /// DRAWN LAST, after both faces, which decides what may overlap what. An icon sits inside
+    /// the square its cell reserved and never touches the cell's border or the two lines of
+    /// text below it, so drawing it over the chrome is free — and drawing it UNDER would put it
+    /// beneath the cell fill, which is where the first version of this went.
+    std::vector<text::TextVertex> image;
+
     void clear() noexcept {
         label.clear();
         readout.clear();
+        image.clear();
     }
 
-    [[nodiscard]] bool empty() const noexcept { return label.empty() && readout.empty(); }
+    [[nodiscard]] bool empty() const noexcept {
+        return label.empty() && readout.empty() && image.empty();
+    }
 };
 
 /// Draws a panel: glass, a bevel, and corner brackets.
