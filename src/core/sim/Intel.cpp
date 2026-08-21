@@ -478,4 +478,108 @@ void Intel::update(const UnitStore& store, const UnitCatalog& catalog,
     }
 }
 
+
+// --- Contacts ---------------------------------------------------------------------
+
+namespace {
+
+/// A stable 32-bit mix of three numbers. Not cryptographic and not meant to be — what is
+/// needed is that the same inputs give the same answer everywhere, which integer
+/// multiplication and shifting do and a `<random>` engine's implementation-defined
+/// internals do not.
+[[nodiscard]] std::uint32_t mix(std::uint32_t a, std::uint32_t b, std::uint32_t c) noexcept {
+    std::uint32_t h = 2166136261u;
+    for (const std::uint32_t value : {a, b, c}) {
+        h ^= value;
+        h *= 16777619u;
+        h ^= h >> 15;
+    }
+    return h;
+}
+
+/// The direction a blip's error points in during `bucket`, as an angle.
+[[nodiscard]] Brad blipAngle(UnitId unit, std::uint32_t bucket) noexcept {
+    return static_cast<Brad>(mix(unit.index, unit.generation, bucket) & 0xFFFFu);
+}
+
+/// Where an alliance thinks a blip is: the truth plus a drifting offset.
+[[nodiscard]] std::pair<Fx, Fx> blipPosition(UnitId unit, Fx x, Fx z,
+                                             TickIndex tick) noexcept {
+    const auto bucket = static_cast<std::uint32_t>(tick / kBlipDriftTicks);
+    const auto within = static_cast<std::int32_t>(tick % kBlipDriftTicks);
+
+    // Between this bucket's direction and the next, so the blip WANDERS rather than
+    // teleporting every fifteenth tick — which is what Recoil's 1/256-per-frame slide
+    // achieves and what makes a radar contact read as an uncertain position rather than a
+    // flickering one.
+    const Brad from = blipAngle(unit, bucket);
+    const Brad to = blipAngle(unit, bucket + 1);
+    const Fx blend = Fx::fromInt(within) / Fx::fromInt(kBlipDriftTicks);
+
+    const Fx radius = Fx::fromInt(kRadarErrorElmos);
+    const Fx fromX = fxCos(from) * radius;
+    const Fx fromZ = fxSin(from) * radius;
+    const Fx toX = fxCos(to) * radius;
+    const Fx toZ = fxSin(to) * radius;
+
+    return {x + fromX + (toX - fromX) * blend, z + fromZ + (toZ - fromZ) * blend};
+}
+
+} // namespace
+
+void contactsFor(int alliance, const UnitStore& store, std::span<const Army> armies,
+                 const Intel& intel, TickIndex tick, std::vector<Contact>& contacts) {
+    contacts.clear();
+
+    const std::span<const Transform> transforms = store.transforms();
+    const std::span<const MoveState> motion = store.motion();
+
+    for (UnitIndex slot = 0; slot < store.slotCount(); ++slot) {
+        if (!store.slotAlive(slot)) {
+            continue;
+        }
+        const int army = motion[slot].armyIndex;
+        if (army == kNoArmy || static_cast<std::size_t>(army) >= armies.size()) {
+            continue;  // unowned scenery is nobody's contact
+        }
+
+        const Transform& at = transforms[slot];
+        const bool own = armies[static_cast<std::size_t>(army)].alliance == alliance;
+
+        // YOUR OWN SIDE IS ALWAYS SEEN, without consulting the grid. Not an optimisation:
+        // a unit standing outside every friendly sight radius — a lone scout at the edge of
+        // its own vision — is still a unit you command, and asking the grid would lose it.
+        if (own || !intel.active()) {
+            contacts.push_back(Contact{.unit = store.idAt(slot),
+                                       .x = at.x,
+                                       .z = at.z,
+                                       .kind = ContactKind::Seen});
+            continue;
+        }
+
+        if (intel.sees(alliance, IntelKind::Vision, at.x, at.z)) {
+            contacts.push_back(Contact{.unit = store.idAt(slot),
+                                       .x = at.x,
+                                       .z = at.z,
+                                       .kind = ContactKind::Seen});
+            continue;
+        }
+
+        // RADAR BEFORE SONAR, so a unit both senses reach reads as the one that gives the
+        // better picture. They carry the same error today; when sonar gains rules of its
+        // own the order is already the one that says which wins.
+        const bool radar = intel.sees(alliance, IntelKind::Radar, at.x, at.z);
+        const bool sonar = !radar && intel.sees(alliance, IntelKind::Sonar, at.x, at.z);
+        if (!radar && !sonar) {
+            continue;  // nothing knows it is there
+        }
+
+        const auto [x, z] = blipPosition(store.idAt(slot), at.x, at.z, tick);
+        contacts.push_back(Contact{.unit = store.idAt(slot),
+                                   .x = x,
+                                   .z = z,
+                                   .kind = radar ? ContactKind::Radar : ContactKind::Sonar});
+    }
+}
+
 } // namespace rm::sim

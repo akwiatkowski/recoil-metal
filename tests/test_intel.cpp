@@ -392,6 +392,10 @@ rm::sim::UnitId place(UnitStore& store, rm::UnitTypeIndex type, int army, float 
     return store.spawn(spawn);
 }
 
+/// How far a blip may move in one tick. Two full radii over fifteen ticks is the worst the
+/// interpolation can do, so anything near that is drift and anything above it is a jump.
+constexpr int kRadarErrorStepBound = 2 * rm::sim::kRadarErrorElmos / rm::sim::kBlipDriftTicks + 2;
+
 } // namespace
 
 TEST_CASE("a unit lights the ground around it for its own alliance only") {
@@ -561,4 +565,141 @@ TEST_CASE("the same units in the same places produce the same grid twice over") 
     };
 
     CHECK(build() == build());
+}
+
+// --- Contacts: what a side knows, and how much of it is true ------------------------
+
+TEST_CASE("an enemy in sight is seen exactly; one on radar alone is a blip") {
+    rm::unitdef::UnitDef watcherDef = seer(0.0f, 400.0f);  // radar only, no eyes
+    rm::unitdef::UnitDef quietDef = seer(0.0f);
+    UnitCatalog catalog;
+    const rm::UnitTypeIndex watcher = catalog.add(&watcherDef);
+    const rm::UnitTypeIndex quiet = catalog.add(&quietDef);
+
+    Intel intel;
+    intel.configure(2, Fx::fromInt(1024), Fx::fromInt(1024),
+                    rm::sim::VisionStyle::ForgedAlliance);
+
+    UnitStore store;
+    (void)place(store, watcher, 0, 500.0f, 500.0f);
+    const rm::sim::UnitId enemy = place(store, quiet, 1, 600.0f, 500.0f);
+    std::vector<Army> armies = twoArmies(false);
+
+    intel.update(store, catalog, armies, nullptr);
+
+    std::vector<rm::sim::Contact> contacts;
+    rm::sim::contactsFor(0, store, armies, intel, 0, contacts);
+
+    // Its own radar unit, exactly where it is.
+    REQUIRE(contacts.size() == 2);
+    CHECK(contacts[0].kind == rm::sim::ContactKind::Seen);
+    CHECK(contacts[0].x == Fx::fromInt(500));
+
+    // The enemy: known to be somewhere, not known to be anything, and not known to be
+    // exactly there.
+    const rm::sim::Contact& blip = contacts[1];
+    CHECK(blip.unit == enemy);
+    CHECK(blip.kind == rm::sim::ContactKind::Radar);
+    CHECK(blip.isBlip());
+    CHECK(blip.x != Fx::fromInt(600));
+
+    // The error is bounded by what radar is documented to be wrong by, and it is a real
+    // displacement rather than a rounding wobble.
+    const Fx dx = blip.x - Fx::fromInt(600);
+    const Fx dz = blip.z - Fx::fromInt(500);
+    const Fx offset = rm::sim::fxSqrt(dx * dx + dz * dz);
+    CHECK(offset > Fx::fromInt(1));
+    CHECK(offset <= Fx::fromInt(rm::sim::kRadarErrorElmos + 1));
+}
+
+TEST_CASE("a unit nothing can sense is not a contact at all") {
+    // The difference between an intel system and a filter on the draw call: an unseen unit
+    // is ABSENT from what a side knows, not present and hidden.
+    const rm::unitdef::UnitDef def = seer(80.0f);
+    UnitCatalog catalog;
+    const rm::UnitTypeIndex type = catalog.add(&def);
+
+    Intel intel;
+    intel.configure(2, Fx::fromInt(1024), Fx::fromInt(1024),
+                    rm::sim::VisionStyle::ForgedAlliance);
+
+    UnitStore store;
+    (void)place(store, type, 0, 100.0f, 100.0f);
+    (void)place(store, type, 1, 900.0f, 900.0f);
+    std::vector<Army> armies = twoArmies(false);
+    intel.update(store, catalog, armies, nullptr);
+
+    std::vector<rm::sim::Contact> contacts;
+    rm::sim::contactsFor(0, store, armies, intel, 0, contacts);
+
+    REQUIRE(contacts.size() == 1);
+    CHECK(contacts[0].kind == rm::sim::ContactKind::Seen);
+}
+
+TEST_CASE("your own units are contacts wherever they are") {
+    // A lone scout past the edge of every friendly sight radius is still yours. Asking the
+    // grid about your own units would lose exactly the unit you sent out to look.
+    const rm::unitdef::UnitDef def = seer(0.0f);  // sees nothing, not even itself
+    UnitCatalog catalog;
+    const rm::UnitTypeIndex type = catalog.add(&def);
+
+    Intel intel;
+    intel.configure(2, Fx::fromInt(1024), Fx::fromInt(1024),
+                    rm::sim::VisionStyle::ForgedAlliance);
+
+    UnitStore store;
+    (void)place(store, type, 0, 700.0f, 700.0f);
+    std::vector<Army> armies = twoArmies(false);
+    intel.update(store, catalog, armies, nullptr);
+
+    std::vector<rm::sim::Contact> contacts;
+    rm::sim::contactsFor(0, store, armies, intel, 0, contacts);
+
+    REQUIRE(contacts.size() == 1);
+    CHECK(contacts[0].kind == rm::sim::ContactKind::Seen);
+    CHECK(contacts[0].x == Fx::fromInt(700));
+}
+
+TEST_CASE("a blip wanders rather than jumping, and is the same wander every run") {
+    rm::unitdef::UnitDef watcherDef = seer(0.0f, 400.0f);
+    rm::unitdef::UnitDef quietDef = seer(0.0f);
+    UnitCatalog catalog;
+    const rm::UnitTypeIndex watcher = catalog.add(&watcherDef);
+    const rm::UnitTypeIndex quiet = catalog.add(&quietDef);
+
+    Intel intel;
+    intel.configure(2, Fx::fromInt(1024), Fx::fromInt(1024),
+                    rm::sim::VisionStyle::ForgedAlliance);
+
+    UnitStore store;
+    (void)place(store, watcher, 0, 500.0f, 500.0f);
+    (void)place(store, quiet, 1, 600.0f, 500.0f);
+    std::vector<Army> armies = twoArmies(false);
+    intel.update(store, catalog, armies, nullptr);
+
+    const auto blipAt = [&](rm::TickIndex tick) {
+        std::vector<rm::sim::Contact> contacts;
+        rm::sim::contactsFor(0, store, armies, intel, tick, contacts);
+        REQUIRE(contacts.size() == 2);
+        return contacts[1];
+    };
+
+    // Consecutive ticks move it a little, not a lot: the drift is interpolated across the
+    // bucket rather than re-picked. A jump every fifteenth tick would read as a flickering
+    // contact rather than an uncertain one.
+    const rm::sim::Contact a = blipAt(20);
+    const rm::sim::Contact b = blipAt(21);
+    const Fx step = rm::sim::fxSqrt((b.x - a.x) * (b.x - a.x) + (b.z - a.z) * (b.z - a.z));
+    CHECK(step < Fx::fromInt(kRadarErrorStepBound));
+
+    // And over a whole bucket it really does move — a "drift" that stood still would pass
+    // the check above trivially.
+    const rm::sim::Contact later = blipAt(20 + 15);
+    const Fx travelled = rm::sim::fxSqrt((later.x - a.x) * (later.x - a.x)
+                                         + (later.z - a.z) * (later.z - a.z));
+    CHECK(travelled > Fx::fromInt(1));
+
+    // Same tick, same answer. Deterministic without any stored error vector to keep in sync.
+    CHECK(blipAt(20).x == a.x);
+    CHECK(blipAt(20).z == a.z);
 }

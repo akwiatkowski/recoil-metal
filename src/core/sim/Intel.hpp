@@ -2,6 +2,7 @@
 
 #include "core/Types.hpp"
 #include "core/sim/Fx.hpp"
+#include "core/sim/IdPool.hpp"
 
 #include <array>
 #include <cstddef>
@@ -278,5 +279,63 @@ private:
     /// Scratch, reused across emitters so a stamp is not an allocation.
     std::vector<std::int32_t> scratch_;
 };
+
+/// How an alliance knows about a unit — and how much it knows.
+enum class ContactKind : std::uint8_t {
+    /// Seen. Position exact, identity known.
+    Seen,
+
+    /// A radar return. A position, and NOT an identity — the whole point of the distinction.
+    Radar,
+
+    /// A sonar return. Same terms as radar, different sense.
+    Sonar,
+};
+
+/// What one alliance knows about one unit this tick.
+struct Contact {
+    /// Who it really is. **A caller must not show this for a blip.** It is here because a
+    /// renderer needs to key a marker to something stable across ticks, and because the sim
+    /// is the wrong layer to enforce a UI rule — but a blip that renders as a named unit
+    /// with a health bar is the bug this type exists to make avoidable, not to cause.
+    UnitId unit;
+
+    /// Where the alliance believes it is. Exact for `Seen`; offset for a blip.
+    Fx x{};
+    Fx z{};
+
+    ContactKind kind = ContactKind::Seen;
+
+    [[nodiscard]] bool isBlip() const noexcept { return kind != ContactKind::Seen; }
+};
+
+/// How far a radar contact can be from the truth — Recoil's `defBaseRadarErrorSize`
+/// (`LosHandler.h:322`), 96 elmos.
+inline constexpr std::int32_t kRadarErrorElmos = 96;
+
+/// How many ticks a blip's error direction holds before it drifts to the next one.
+///
+/// Recoil re-picks the direction every `UNIT_SLOWUPDATE_RATE` frames and slides toward it at
+/// 1/256 a frame. Ours is stated in TICKS at this engine's own rate rather than in frames at
+/// Recoil's, for the reason `SlowUpdate.hpp` gives at length: a period authored in someone
+/// else's frames is a period that silently changes meaning when the clock does.
+inline constexpr int kBlipDriftTicks = 15;
+
+/// Everything `alliance` knows about right now, appended to `contacts` in slot order.
+///
+/// Own and allied units are always `Seen` at their true position. A hostile unit is `Seen`
+/// where sight covers it, a blip where only radar or sonar does, and absent otherwise —
+/// which is the difference between an intel system and a filter on the draw call.
+///
+/// THE BLIP ERROR IS DERIVED, NOT STORED. Recoil keeps a `posErrorVector` per unit, drifting
+/// toward a fresh random direction every slow update (`Unit.cpp:577-601`). That needs a
+/// synced RNG and a per-unit vector in the state hash; ours hashes the unit's identity and
+/// the tick bucket into an angle and interpolates between consecutive buckets, which drifts
+/// the same way, costs no state at all, and cannot desync because there is nothing to keep
+/// in sync. The visible difference is that ours revisits the same wander given the same
+/// unit and tick, which for a thing whose whole purpose is to be untrustworthy is not a
+/// property anyone can exploit.
+void contactsFor(int alliance, const UnitStore& store, std::span<const Army> armies,
+                 const Intel& intel, TickIndex tick, std::vector<Contact>& contacts);
 
 } // namespace rm::sim
