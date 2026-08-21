@@ -413,6 +413,13 @@ void Window::setProps(std::span<const dds::Texture> textures,
     impl_->renderer->setProps(textures, batches);
 }
 
+void Window::setFog(std::span<const std::uint16_t> counts, int squaresX, int squaresZ,
+                    float widthElmos, float depthElmos) {
+    impl_->renderer->setFog(counts, squaresX, squaresZ, widthElmos, depthElmos);
+}
+
+void Window::clearFog() noexcept { impl_->renderer->clearFog(); }
+
 void Window::setUnits(std::span<const dds::Texture> textures,
                       std::span<const UnitBatch> batches) {
     impl_->renderer->setUnits(textures, batches);

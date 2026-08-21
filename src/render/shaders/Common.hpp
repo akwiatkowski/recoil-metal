@@ -62,6 +62,9 @@ struct Uniforms {
     float3 sunAmbience;
     float3 shadowFill;
     float lightingMultiplier;
+    float hasFog;
+    float fogWidthElmos;
+    float fogDepthElmos;
 };
 
 // The sky, as Supreme Commander's own `effects/sky.fx` builds it: a lerp
@@ -150,6 +153,9 @@ constant float3 kOutlineColour = float3(0.35, 1.0, 0.45);
 // are lit by the sky, and a black shadow reads as a hole in the ground rather
 // than as shade.
 constant float kShadowedLight = 0.35;
+
+// How much light unseen ground keeps. Not zero — see the fog block in terrainFragment.
+constant float kUnseenGround = 0.42;
 
 /// Fraction of the sun reaching a world position, 1 outside the shadow map.
 ///
@@ -299,6 +305,7 @@ fragment float4 terrainFragment(VertexOut in [[stage_in]],
                                 array<texture2d<float>, 10> layers [[texture(3)]],
                                 depth2d<float> shadowMap [[texture(13)]],
                                 array<texture2d<float>, 9> layerNormals [[texture(15)]],
+                                texture2d<float> fogMask [[texture(24)]],
                                 sampler groundSampler [[sampler(0)]],
                                 sampler splatSampler [[sampler(1)]],
                                 sampler shadowSampler [[sampler(2)]]) {
@@ -424,7 +431,25 @@ fragment float4 terrainFragment(VertexOut in [[stage_in]],
     // is a change to the unit shaders as well, so it is not made here.
     const float3 light = u.sunColour * lambert * sun + u.sunAmbience;
     const float3 lit = u.lightingMultiplier * light + u.shadowFill * (1.0 - light);
-    return float4(albedo * lit, 1.0);
+    float3 colour = albedo * lit;
+
+    // FOG OF WAR (ADR-037). Ground the viewer's side cannot see is darkened, not blacked
+    // out: Supreme Commander and Recoil both keep unseen terrain readable, because a player
+    // needs to know the shape of the ground they are about to walk into even when they
+    // cannot see what is standing on it. What the fog hides is UNITS, and that is the
+    // gather's job rather than this shader's.
+    //
+    // Sampled by world position over the whole map, with the mask's own filtering doing the
+    // smoothing — a nearest-sampled grid at 16 elmos a square would draw the vision radius
+    // as a staircase of squares, which reads as a rendering artefact rather than as a
+    // horizon.
+    if (u.hasFog > 0.5) {
+        const float2 fogUv = float2(in.world.x / u.fogWidthElmos, in.world.z / u.fogDepthElmos);
+        const float seen = fogMask.sample(groundSampler, fogUv).r;
+        colour *= mix(kUnseenGround, 1.0, seen);
+    }
+
+    return float4(colour, 1.0);
 }
 
 )MSL";

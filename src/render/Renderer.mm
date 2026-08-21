@@ -414,6 +414,7 @@ Renderer::~Renderer() {
     unitPipeline_->release();
     releaseSplat();
     if (groundTexture_ != nullptr) groundTexture_->release();
+    if (fogTexture_ != nullptr) fogTexture_->release();
     groundSampler_->release();
     if (splatSampler_ != nullptr) splatSampler_->release();
     if (depthTexture_ != nullptr) depthTexture_->release();
@@ -852,6 +853,9 @@ void Renderer::encodeScene(MTL::CommandBuffer* commandBuffer, MTL::RenderPassDes
         .shadowFill = simd_make_float3(environment_.shadowFill[0], environment_.shadowFill[1],
                                        environment_.shadowFill[2]),
         .lightingMultiplier = environment_.lightingMultiplier,
+        .hasFog = hasFog_ ? 1.0f : 0.0f,
+        .fogWidthElmos = fogWidthElmos_,
+        .fogDepthElmos = fogDepthElmos_,
         // Far below any map by default, so nothing is clipped unless a pass
         // asks for it.
         .clipBelowY = override != nullptr ? override->clipBelowY : -1.0e9f,
@@ -891,6 +895,10 @@ void Renderer::encodeScene(MTL::CommandBuffer* commandBuffer, MTL::RenderPassDes
         encoder->setVertexBytes(&uniforms, sizeof(uniforms), kUniformBufferIndex);
         encoder->setFragmentBytes(&uniforms, sizeof(uniforms), kUniformBufferIndex);
         encoder->setFragmentTexture(groundTexture_, kGroundTextureIndex);
+        // The fallback keeps the slot bound when there is no fog: an unbound texture read
+        // is undefined, and `hasFog` already gates whether the sample is used.
+        encoder->setFragmentTexture(fogTexture_ != nullptr ? fogTexture_ : groundTexture_,
+                                    kFogTextureIndex);
         encoder->setFragmentSamplerState(groundSampler_, kGroundSamplerIndex);
         encoder->setFragmentSamplerState(splatSampler_, kSplatSamplerIndex);
         encoder->setFragmentTexture(shadowMap_, kShadowTextureIndex);

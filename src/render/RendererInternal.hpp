@@ -110,6 +110,12 @@ struct TerrainUniforms {
     simd_float3 sunAmbience;
     simd_float3 shadowFill;
     float lightingMultiplier;
+
+    /// The fog of war mask's geometry, or `hasFog == 0` for a scene that has none —
+    /// an observer, a `--units` crowd, and everything that predates ADR-037.
+    float hasFog;
+    float fogWidthElmos;
+    float fogDepthElmos;
 };
 
 
@@ -136,8 +142,11 @@ static_assert(offsetof(TerrainUniforms, sunAmbience) == 448, "a float3 takes a w
 static_assert(offsetof(TerrainUniforms, shadowFill) == 464, "and so does the next");
 static_assert(offsetof(TerrainUniforms, lightingMultiplier) == 480,
               "the scalar starts the slot after the last float3");
+static_assert(offsetof(TerrainUniforms, hasFog) == 484, "the fog block packs against it");
+static_assert(offsetof(TerrainUniforms, fogWidthElmos) == 488, "and stays in the same slot");
+static_assert(offsetof(TerrainUniforms, fogDepthElmos) == 492, "filling it exactly");
 static_assert(sizeof(TerrainUniforms) == 496,
-              "the trailing float is padded out to the struct's 16-byte alignment");
+              "the fog block fits the padding the trailing float was already leaving");
 static_assert(offsetof(TerrainUniforms, fogColour) == 288, "the map block follows the matrices");
 // A float3 is sixteen bytes AND sixteen-aligned, so the float after one does
 // NOT pack into its tail — it starts a fresh slot and the next float3 realigns
@@ -228,6 +237,9 @@ constexpr NS::UInteger kSplatMaskBIndex = 2;
 constexpr NS::UInteger kSplatLayerBaseIndex = 3;
 /// The nine stratum normal maps, past the shadow and reflection slots: 15..23.
 constexpr NS::UInteger kSplatNormalBaseIndex = 15;
+
+/// The fog of war mask: one texel per square of the viewer's vision grid, past the normals.
+constexpr NS::UInteger kFogTextureIndex = 24;
 
 /// Ring vertices the buffer holds per frame in flight.
 ///

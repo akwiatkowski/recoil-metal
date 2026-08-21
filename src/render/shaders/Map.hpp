@@ -111,6 +111,7 @@ fragment float4 waterFragment(WaterOut in [[stage_in]], float4 behind [[color(0)
                               constant Uniforms& u [[buffer(1)]],
                               texture2d<float> reflection [[texture(14)]],
                               texture2d<float> sceneColour [[texture(15)]],
+                              texture2d<float> fogMask [[texture(24)]],
                               sampler reflectionSampler [[sampler(3)]]) {
     // Above the waterline there is nothing to draw. The mesh covers the whole
     // map so that one buffer serves any water level, and the dry part is
@@ -272,7 +273,18 @@ fragment float4 waterFragment(WaterOut in [[stage_in]], float4 behind [[color(0)
     // Very shallow water still fades out, so the shoreline dissolves instead
     // of ending in a line.
     const float shoreline = saturate(in.depth * 0.25);
-    return float4(mix(behind.rgb, colour, shoreline), 1.0);
+    float3 surface = mix(behind.rgb, colour, shoreline);
+
+    // The same fog the ground gets. Without it the sea stays at full brightness inside the
+    // fog and the coastline reads as a hard edge between two different times of day —
+    // which looks like a bug in the water rather than like fog of war.
+    if (u.hasFog > 0.5) {
+        const float2 fogUv = float2(in.world.x / u.fogWidthElmos, in.world.z / u.fogDepthElmos);
+        const float seen = fogMask.sample(reflectionSampler, fogUv).r;
+        surface *= mix(kUnseenGround, 1.0, seen);
+    }
+
+    return float4(surface, 1.0);
 }
 
 )MSL";

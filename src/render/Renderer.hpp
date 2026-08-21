@@ -166,6 +166,23 @@ public:
 
     void setEnvironment(const Environment& environment) noexcept;
 
+    // The fog of war: which squares of the map the viewer's side can see (ADR-037).
+    //
+    // ONE TEXEL PER SQUARE OF THE SIM'S OWN VISION GRID, uploaded rather than derived here.
+    // The alternative — the renderer stamping discs from unit positions, which is what
+    // `vision.fx` does — would be a second implementation of coverage that could disagree
+    // with the one deciding who may be shot at, and a fog that disagrees with the sim is
+    // worse than no fog: it tells the player something false with the authority of the
+    // screen.
+    //
+    // `counts` is the grid's own reference counts; anything non-zero is seen. Sized
+    // `squaresX * squaresZ`; a mismatch is ignored rather than trusted.
+    void setFog(std::span<const std::uint16_t> counts, int squaresX, int squaresZ,
+                float widthElmos, float depthElmos);
+
+    /// Draws no fog at all: an observer, or a scene with no sides to keep secrets from.
+    void clearFog() noexcept;
+
     // Whether to render the planar reflection.
     //
     // A quality setting rather than a correctness one. The pass renders the
@@ -522,6 +539,16 @@ private:
     void buildWaterMesh();
     void releaseWaterBuffers() noexcept;
     MTL::Texture* groundTexture_ = nullptr;    // owned, null until setGroundTexture
+
+    /// The fog of war mask and its geometry. Owned; reallocated only when the grid's shape
+    /// changes, because the contents are re-uploaded every frame.
+    MTL::Texture* fogTexture_ = nullptr;
+    std::vector<std::uint8_t> fogMask_;
+    int fogSquaresX_ = 0;
+    int fogSquaresZ_ = 0;
+    float fogWidthElmos_ = 0.0f;
+    float fogDepthElmos_ = 0.0f;
+    bool hasFog_ = false;
     MTL::SamplerState* groundSampler_ = nullptr; // owned
     MTL::SamplerState* splatSampler_ = nullptr;  // owned; repeats, unlike the above
 

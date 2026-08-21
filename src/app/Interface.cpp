@@ -12,23 +12,73 @@ namespace rm::app {
 /// per-batch instance arrays, and a minimap would have needed a second walk over game state that
 /// nothing owned.
 ///
+/// A radar contact's colour: deliberately not anybody's team colour. See below.
+constexpr rm::ui::Colour kBlipColour{0.85f, 0.85f, 0.55f, 0.75f};
+
+/// The blips: what radar and sonar know and sight does not.
+///
+/// A PIP OF ITS OWN COLOUR AND A SMALLER SIZE, not the owner's team colour — because a blip
+/// is a position without an identity, and painting it in the enemy's colour would be telling
+/// the player something radar did not say. Whose it is, and what it is, are exactly the two
+/// facts a contact withholds (`sim::Contact`).
+void appendMinimapBlips(std::vector<rm::ui::MinimapPip>& out, const UnitScene& scene) {
+    std::vector<rm::sim::Contact>& scratch = scene.contactScratch;
+    const int viewer = scene.viewingAlliance();
+    if (viewer == UnitScene::kNoAlliance) {
+        return;  // an observer sees units, not guesses about them
+    }
+
+    rm::sim::contactsFor(viewer, scene.store, scene.armies, scene.intel,
+                         scene.snapshotCurrent.tick, scratch);
+
+    for (const rm::sim::Contact& contact : scratch) {
+        if (!contact.isBlip()) {
+            continue;  // already plotted, in its own colour, where it really is
+        }
+        out.push_back(rm::ui::MinimapPip{
+            .worldX = rm::sim::fxToFloat(contact.x),
+            .worldZ = rm::sim::fxToFloat(contact.z),
+            .colour = kBlipColour,
+            .size = 2.0f,
+        });
+    }
+}
+
 /// The player's own units are drawn a point bigger. A minimap's job is to say where the
 /// important things are, and every pip the same size says only "units".
+///
+
 void appendMinimapPips(std::vector<rm::ui::MinimapPip>& out, const UnitScene& scene) {
     out.clear();
     out.reserve(scene.snapshotCurrent.size());
+
+    const int viewer = scene.viewingAlliance();
+
     for (const rm::sim::UnitView& unit : scene.snapshotCurrent.units) {
         const int owner = unit.armyIndex;
+        const float worldX = rm::sim::fxToFloat(unit.transform.x);
+        const float worldZ = rm::sim::fxToFloat(unit.transform.z);
+
+        // WHAT THE MINIMAP SHOWS IS WHAT THE SCREEN SHOWS. A minimap that plotted every unit
+        // would make the fog decorative: a player could read the enemy's whole position off
+        // the corner of the display and never look at the map.
+        if (!scene.visibleToViewer(viewer, owner, worldX, worldZ)) {
+            continue;
+        }
+
         out.push_back(rm::ui::MinimapPip{
-            .worldX = rm::sim::fxToFloat(unit.transform.x),
-            .worldZ = rm::sim::fxToFloat(unit.transform.z),
+            .worldX = worldX,
+            .worldZ = worldZ,
             .colour = owner >= 0 && static_cast<std::size_t>(owner) < scene.armies.size()
                           ? rm::teamColour(static_cast<std::size_t>(owner))
                           : rm::kTeamColours[0],
             .size = owner == scene.playerArmy ? 3.0f : 2.0f,
         });
     }
+
+    appendMinimapBlips(out, scene);
 }
+
 
 /// The four ground points the viewport's corners see, for the minimap's view outline.
 ///

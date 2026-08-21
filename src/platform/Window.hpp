@@ -75,6 +75,11 @@ public:
     /// The map's lighting and water settings. See Renderer::setEnvironment.
     void setEnvironment(const Renderer::Environment& environment);
 
+    /// The fog of war mask for the frame about to be drawn. See Renderer::setFog.
+    void setFog(std::span<const std::uint16_t> counts, int squaresX, int squaresZ,
+                float widthElmos, float depthElmos);
+    void clearFog() noexcept;
+
     // The Supreme Commander ground splat. See Renderer::setSplat.
     void setSplat(std::span<const SplatLayer> layers, const dds::Texture& maskA,
                   const dds::Texture& maskB);

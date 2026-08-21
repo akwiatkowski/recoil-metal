@@ -329,6 +329,56 @@ void Renderer::setEnvironment(const Environment& environment) noexcept {
     environment_ = environment;
 }
 
+void Renderer::clearFog() noexcept { hasFog_ = false; }
+
+void Renderer::setFog(std::span<const std::uint16_t> counts, int squaresX, int squaresZ,
+                      float widthElmos, float depthElmos) {
+    const auto expected = static_cast<std::size_t>(squaresX) * static_cast<std::size_t>(squaresZ);
+    if (squaresX <= 0 || squaresZ <= 0 || counts.size() != expected) {
+        clearFog();
+        return;
+    }
+
+    // R8, one byte a square, and the counts are flattened to 0 or 255 on the way in. The
+    // shader wants "seen or not"; uploading the count itself would put a number on the GPU
+    // that means something only to the sim, and a fog whose darkness varied with how many
+    // units happened to overlap would be reporting troop strength through the terrain.
+    fogMask_.resize(expected);
+    for (std::size_t i = 0; i < expected; ++i) {
+        fogMask_[i] = counts[i] != 0 ? std::uint8_t{255} : std::uint8_t{0};
+    }
+
+    // REALLOCATED ONLY WHEN THE SHAPE CHANGES. The mask is uploaded every frame — vision
+    // moves every tick — so allocating a texture per frame would be a texture per frame.
+    if (fogTexture_ == nullptr || fogSquaresX_ != squaresX || fogSquaresZ_ != squaresZ) {
+        MTL::TextureDescriptor* descriptor = MTL::TextureDescriptor::texture2DDescriptor(
+            MTL::PixelFormat::PixelFormatR8Unorm, static_cast<NS::UInteger>(squaresX),
+            static_cast<NS::UInteger>(squaresZ), /*mipmapped=*/false);
+        descriptor->setUsage(MTL::TextureUsageShaderRead);
+        descriptor->setStorageMode(MTL::StorageModeShared);
+
+        MTL::Texture* texture = device_->newTexture(descriptor);
+        if (texture == nullptr) {
+            throw RendererError{"failed to allocate the fog of war mask"};
+        }
+        if (fogTexture_ != nullptr) {
+            fogTexture_->release();
+        }
+        fogTexture_ = texture;
+        fogSquaresX_ = squaresX;
+        fogSquaresZ_ = squaresZ;
+    }
+
+    fogTexture_->replaceRegion(
+        MTL::Region::Make2D(0, 0, static_cast<NS::UInteger>(squaresX),
+                            static_cast<NS::UInteger>(squaresZ)),
+        0, fogMask_.data(), static_cast<NS::UInteger>(squaresX));
+
+    fogWidthElmos_ = widthElmos;
+    fogDepthElmos_ = depthElmos;
+    hasFog_ = true;
+}
+
 void Renderer::setWater(bool enabled, float levelElmos) noexcept {
     const bool levelChanged = waterLevel_ != levelElmos;
     hasWater_ = enabled;

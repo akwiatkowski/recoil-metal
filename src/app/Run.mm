@@ -159,6 +159,7 @@ int runOffscreenBenchmark(const Session& session) {
             renderer.setTerrain(mesh);
             applyGround(renderer, *map);
             renderer.setUnits(units.textures.all(), units.batches);
+            units.applyFog(renderer);
             renderer.setProps(props.textures.all(), props.batches);
             renderer.setAnimationTime(animationTime);
             renderer.setReflections(settings.reflections);
@@ -202,6 +203,7 @@ int runScreenshot(const Session& session) {
             renderer.setTerrain(mesh);
             applyGround(renderer, *map);
             renderer.setUnits(units.textures.all(), units.batches);
+            units.applyFog(renderer);
             renderer.setProps(props.textures.all(), props.batches);
             renderer.setAnimationTime(animationTime);
             renderer.setReflections(settings.reflections);
@@ -657,6 +659,9 @@ int runWindowed(const Session& session) {
             for (std::size_t batch = 0; batch < units.drawScratch.size(); ++batch) {
                 window.setInstances(batch, units.drawScratch[batch]);
             }
+
+            // The fog, from the same grid that decided which of those instances exist.
+            units.applyFog(window);
 
             // Dust behind whatever is moving. After the sim, so a puff is born
             // where the unit has got to rather than where it started the frame.

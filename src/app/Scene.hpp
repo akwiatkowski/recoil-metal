@@ -194,6 +194,11 @@ struct UnitScene {
     /// until `configureIntel` sizes it, which a skirmish does and a `--units` crowd does not.
     rm::sim::Intel intel;
 
+    /// Reused across frames so plotting the minimap's blips is not an allocation a frame.
+    /// Mutable because building the display out of a const scene is what every other draw
+    /// path here does.
+    mutable std::vector<rm::sim::Contact> contactScratch;
+
     /// One economy per army, indexed by army. Empty outside a skirmish.
     std::vector<rm::sim::Economy> economies;
 
@@ -374,6 +379,61 @@ struct UnitScene {
     /// holds wherever the gather is called, rather than at four call sites that must
     /// remember. (The span also goes stale on its own: a scratch vector that grows past its
     /// capacity reallocates.)
+    /// The alliance whose view the screen shows, or `kNoAlliance` for one that sees all.
+    ///
+    /// `--observer` seats nobody, and nobody is exactly who should see the whole board: that
+    /// is what watching two scripted opponents play each other means. A scene with no intel
+    /// configured answers the same way, which is every scene that predates ADR-037.
+    static constexpr int kNoAlliance = -1;
+
+    [[nodiscard]] int viewingAlliance() const noexcept {
+        if (!intel.active() || playerArmy == rm::sim::kNoArmy) {
+            return kNoAlliance;
+        }
+        const auto army = static_cast<std::size_t>(playerArmy);
+        return army < armies.size() ? armies[army].alliance : kNoAlliance;
+    }
+
+    /// Whether the viewer's side may see a unit at this drawn position.
+    ///
+    /// TAKES THE DRAWN POSITION, not the sim's, because that is where the player is looking:
+    /// a unit interpolated a few elmos ahead of its last tick should appear and disappear
+    /// against the ground it appears to be on. The difference is under one square at any
+    /// speed this engine moves things at.
+    [[nodiscard]] bool visibleToViewer(int viewer, int owner, float worldX,
+                                       float worldZ) const noexcept {
+        if (viewer == kNoAlliance) {
+            return true;
+        }
+        if (owner >= 0 && static_cast<std::size_t>(owner) < armies.size()
+            && armies[static_cast<std::size_t>(owner)].alliance == viewer) {
+            return true;  // your own side, wherever it has got to
+        }
+        return intel.sees(viewer, rm::sim::IntelKind::Vision, rm::sim::fxFromFloat(worldX),
+                          rm::sim::fxFromFloat(worldZ));
+    }
+
+    /// Hands the viewer's vision grid to whatever draws this scene.
+    ///
+    /// TEMPLATED ON THE TARGET because the two paths take different types — a `Window` in
+    /// the interactive loop and a bare `Renderer` in the headless capture — and both have
+    /// the same two calls. The alternative was an interface with two implementations, for
+    /// two call sites, to abstract over a pair of methods that already agree.
+    template <typename Target>
+    void applyFog(Target& target) const {
+        const int viewer = viewingAlliance();
+        if (viewer == kNoAlliance) {
+            target.clearFog();  // an observer sees the whole board; that is what watching is
+            return;
+        }
+        const rm::sim::IntelGrid& sight = intel.grid(viewer, rm::sim::IntelKind::Vision);
+        target.setFog(sight.counts(), sight.squaresX(), sight.squaresZ(),
+                      static_cast<float>(sight.squaresX())
+                          * rm::sim::fxToFloat(sight.squareElmos()),
+                      static_cast<float>(sight.squaresZ())
+                          * rm::sim::fxToFloat(sight.squareElmos()));
+    }
+
     void gatherForDrawing(float alpha = 1.0f) {
         // FROM THE SNAPSHOTS, not from the store (§7 P7.1/P7.2). This used to walk
         // `store.transforms()` and `store.motion()` directly, which is why motion stepped at
@@ -395,7 +455,18 @@ struct UnitScene {
         }
         drawIndexOf.assign(store.slotCount(), rm::SelectionEntry{});
 
+        const int viewer = viewingAlliance();
+
         for (const rm::DrawUnit& unit : drawUnits) {
+            // FOG OF WAR (ADR-037). A unit the viewer's side cannot see is not drawn at all —
+            // not drawn dimmed, not drawn as a ghost. It is also left out of `drawIndexOf`,
+            // which is what picking reads, so an invisible unit cannot be clicked either;
+            // that is the same rule the gather already applied to the dead, and getting it
+            // wrong would leak positions through the cursor rather than through the screen.
+            if (!visibleToViewer(viewer, unit.armyIndex, unit.position[0], unit.position[2])) {
+                continue;
+            }
+
             // THROUGH THE MAP, not `unit.type` directly (`#3090`). A type and a batch are no
             // longer the same number: a blueprint can be registered as buildable long before
             // anything of it is built, and such a type has no batch until it spawns.
