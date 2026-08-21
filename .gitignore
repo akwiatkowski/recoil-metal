@@ -23,3 +23,11 @@ docs/images/*.png
 # environment. The two games recoil-metal reads live wherever they live, and one
 # of them is on a removable drive — see the Makefile.
 local.mk
+
+# The AI corpora the adapters are written against (ADR-039), fetched by
+# `make ai` at pinned commits. Ignored for the reason third_party/ is — 16 MB
+# and a thousand files of someone else's code would bury ours — and for one
+# more: these trees are never edited, and a copy that does not exist in history
+# is a copy nobody can quietly edit. vendor/README.md and vendor/NOTICE.md ARE
+# committed; they are what says which versions and on whose terms.
+vendor/ai/

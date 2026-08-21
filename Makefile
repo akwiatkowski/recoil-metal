@@ -74,7 +74,8 @@ FA_FLAGS  = --gamedata "$(FA_ROOT)/gamedata"
 
 .DEFAULT_GOAL := help
 .PHONY: help build configure test verify golden play play-from watch run run-fa run-bar \
-        skirmish battle match shot-fa shot-bar bench bench-fa bench-gl clean check-fa check-bar
+        skirmish battle match shot-fa shot-bar bench bench-fa bench-gl clean check-fa check-bar \
+        ai
 
 help:
 	@echo 'recoil-metal — make targets'
@@ -83,6 +84,7 @@ help:
 	@echo '  test            the whole suite'
 	@echo '  verify          replay the golden match — MATCH, or the tick it broke'
 	@echo '  golden          re-record it (only when the change was meant to alter the match)'
+	@echo '  ai              fetch the vendored AI corpora at their pins (FORCE=1 to re-fetch)'
 	@echo
 	@echo '  PLAY IT'
 	@echo '  play            a duel you drive — army 0 is yours (ARMIES=8 for a free-for-all)'
@@ -132,6 +134,17 @@ build:
 
 test: build
 	mise exec -- ctest --test-dir $(BUILD) --output-on-failure
+
+# --- The AI corpora ----------------------------------------------------------
+#
+# The FAF and Circuit trees the adapters are written against (ADR-039), fetched at pinned
+# commits into vendor/ai/, which is gitignored. Not needed to build or to play — only to work
+# on an adapter — so this is a target rather than a CMake check.
+#
+# The pins, the path lists and the reasoning all live in the script; this is a shortcut, not a
+# second place to look.
+ai:
+	tools/fetch_ai.sh $(if $(FORCE),--force,) $(if $(YES),--yes,)
 
 # --- Content checks ----------------------------------------------------------
 #
