@@ -21,6 +21,7 @@
 #include "core/ui/BuildPanel.hpp"
 #include "core/ui/Hud.hpp"
 #include "core/ui/Minimap.hpp"
+#include "core/ui/Roster.hpp"
 
 #include <array>
 #include <span>
@@ -68,21 +69,36 @@ void gatherBuildOptions(const UnitScene& scene, std::span<const rm::sim::UnitId>
                         const rm::ui::Theme& theme, std::vector<rm::ui::BuildOption>& out,
                         BuildSelection& who);
 
-/// The build tray's icons for one option list, packed into a single atlas.
+/// Every icon the interface needs this frame, packed into ONE atlas.
+///
+/// BOTH PANELS AT ONCE, and that is forced rather than chosen: the renderer binds one icon
+/// texture, so a build tray and a roster with separate atlases would be two binds and two
+/// draws — or, worse, one atlas silently drawn with the other's slots, which is how a cell ends
+/// up showing a unit that is not in it. Packing them together makes the slots one numbering by
+/// construction.
 ///
 /// FROM THE ARCHIVES, at `textures/ui/common/icons/units/<ID>_icon.dds` — 538 of them ship in
-/// `textures.scd`. A blueprint with no icon there is ordinary and keeps its slot blank rather
-/// than borrowing its neighbour's: `packIcons` is positional, so the slot a cell reads is the
-/// slot its own icon went into whether or not that icon existed.
+/// `textures.scd`. A blueprint with no icon there is ordinary (`UEB5208` is one) and keeps its
+/// slot blank rather than borrowing its neighbour's: `packIcons` is positional, so the slot a
+/// cell reads is the slot its own icon went into whether or not that icon existed.
 ///
-/// ASSIGNS `iconSlot` ON EACH OPTION as a side effect, which is the whole point — the atlas and
-/// the indices into it are one answer and separating them would let a caller pair last frame's
-/// slots with this frame's atlas.
+/// ASSIGNS `iconSlot` on every option and tile as a side effect, which is the whole point — the
+/// atlas and the indices into it are one answer, and separating them would let a caller pair
+/// last frame's slots with this frame's atlas.
 ///
-/// Rebuilt when the option LIST changes, not per frame. The caller decides that; this just does
-/// the work, and it is a memcpy per icon rather than a decode (`core/ui/IconAtlas.hpp`).
-[[nodiscard]] rm::dds::Texture packBuildIcons(const rm::vfs::Vfs& content,
-                                              std::vector<rm::ui::BuildOption>& options);
+/// Rebuilt when the SET changes, not per frame. The caller decides that; this just does the
+/// work, and it is a memcpy per icon rather than a decode (`core/ui/IconAtlas.hpp`).
+[[nodiscard]] rm::dds::Texture packInterfaceIcons(const rm::vfs::Vfs& content,
+                                                  std::vector<rm::ui::BuildOption>& options,
+                                                  std::vector<rm::ui::RosterTile>& tiles);
+
+/// What the selection is made of, grouped by type, for the roster.
+///
+/// FROM THE STORE rather than from the draw gather, so a unit that is selected but off screen
+/// still counts — a roster is a statement about the selection, not about what is visible.
+/// Dead handles are skipped, which is how a selection outlives the units in it.
+void gatherRoster(const UnitScene& scene, std::span<const rm::sim::UnitId> selection,
+                  std::vector<rm::ui::RosterTile>& out);
 
 void appendViewFootprint(std::vector<std::array<float, 2>>& out, const rm::OrbitCamera& camera,
                          const rm::HeightField& field, float width, float height);

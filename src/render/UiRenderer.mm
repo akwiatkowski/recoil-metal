@@ -240,9 +240,9 @@ void Renderer::setHud(std::span<const text::TextVertex> label,
         readoutVertexCount_ = readoutFits;
     }
 
-    // The icons after both faces, in the same buffer for the same reason: one allocation, one
-    // upload, and the draws differ only in where they start and what they bind. LAST in the
-    // truncation order too — a menu that lost its pictures still reads, and one that lost its
+    // The icons after both faces IN THE BUFFER, though they are drawn between them — the
+    // upload order and the draw order are independent, and last in the buffer is where the
+    // truncation should bite: a menu that lost its pictures still reads, and one that lost its
     // panel does not.
     const std::size_t imageRoom = text::kMaxTextVertices - labelFits - readoutFits;
     const std::size_t imageFits = std::min(image.size(), imageRoom) / 3 * 3;

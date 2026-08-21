@@ -462,6 +462,13 @@ base). The slices, each screenshot-provable:
   shader reads a texture's red channel as coverage and would have drawn a
   photograph as a one-colour silhouette.
 - **UI-2**: the selection roster — typed tiles, `×N` badges, hp underbars.
+  **Done.** Bottom centre, grouped by TYPE in first-appearance order (sorting by
+  count would reorder the row as units die, which destroys the by-position
+  reading a tiled roster exists for), summed health per group rather than per
+  unit, and the same icon atlas the build tray uses — one texture for both
+  panels, because the renderer binds one and two atlases would be two binds or
+  one panel silently drawn with the other's slots. Capped at twelve tiles with
+  the overflow reported as `+N` rather than dropped in silence.
 - **UI-3**: the build tray — the archives' own `_icon.dds` (539 ship in
   `textures.scd`), cost-at-the-builder's-rate on hover, a placement ghost
   validated against the passability grid, and the first player-enqueued

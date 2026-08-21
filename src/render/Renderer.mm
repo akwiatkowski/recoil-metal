@@ -1351,21 +1351,12 @@ void Renderer::encodeScene(MTL::CommandBuffer* commandBuffer, MTL::RenderPassDes
                                     static_cast<NS::UInteger>(labelVertexCount_));
         }
 
-        if (readoutVertexCount_ > 0 && readoutFont_.atlas != nullptr) {
-            encoder->setVertexBuffer(
-                textBuffer_,
-                static_cast<NS::UInteger>((slotBase + labelVertexCount_)
-                                          * sizeof(text::TextVertex)),
-                kVertexBufferIndex);
-            encoder->setFragmentTexture(readoutFont_.atlas, NS::UInteger{0});
-            encoder->drawPrimitives(MTL::PrimitiveType::PrimitiveTypeTriangle, NS::UInteger{0},
-                                    static_cast<NS::UInteger>(readoutVertexCount_));
-        }
-
-        // THE ICONS LAST, after both faces. An icon sits inside the square its cell reserved
-        // and never touches the border or the two lines of text below it, so drawing over the
-        // chrome costs nothing — and drawing UNDER would put it beneath the cell's own fill,
-        // which is where the first attempt at this went and looked like a missing texture.
+        // THE ICONS BETWEEN THE TWO FACES, and the position is load-bearing in both
+        // directions. AFTER the labels, because the labels carry every panel and cell fill and
+        // an icon drawn before them is an icon underneath them — which is where the first
+        // attempt went, and it looked like a missing texture. BEFORE the readouts, because the
+        // readouts carry the numbers that sit ON the artwork: the roster's `xN` badge is over
+        // its tile's icon, and drawing icons last buried it.
         if (imageVertexCount_ > 0 && iconAtlas_ != nullptr && imagePipeline_ != nullptr) {
             encoder->setRenderPipelineState(imagePipeline_);
             encoder->setVertexBuffer(
@@ -1378,6 +1369,18 @@ void Renderer::encodeScene(MTL::CommandBuffer* commandBuffer, MTL::RenderPassDes
                                     static_cast<NS::UInteger>(imageVertexCount_));
             encoder->setRenderPipelineState(textPipeline_);
         }
+
+        if (readoutVertexCount_ > 0 && readoutFont_.atlas != nullptr) {
+            encoder->setVertexBuffer(
+                textBuffer_,
+                static_cast<NS::UInteger>((slotBase + labelVertexCount_)
+                                          * sizeof(text::TextVertex)),
+                kVertexBufferIndex);
+            encoder->setFragmentTexture(readoutFont_.atlas, NS::UInteger{0});
+            encoder->drawPrimitives(MTL::PrimitiveType::PrimitiveTypeTriangle, NS::UInteger{0},
+                                    static_cast<NS::UInteger>(readoutVertexCount_));
+        }
+
 
     }
 

@@ -355,43 +355,95 @@ void appendSceneIcons(std::vector<rm::Particle>& into, const UnitScene& scene,
 }
 
 
-rm::dds::Texture packBuildIcons(const rm::vfs::Vfs& content,
-                                std::vector<rm::ui::BuildOption>& options) {
+/// The archive path for a unit's icon, derived from its id.
+///
+/// ONE PLACE, because two panels need it and a path spelled twice is a path that can be spelled
+/// differently. The corpus's own layout, and the same reasoning `RosterEntry::path` gives for
+/// deriving rather than storing.
+[[nodiscard]] std::string iconPathFor(const std::string& id) {
+    return "/textures/ui/common/icons/units/" + id + "_icon.dds";
+}
+
+/// One unit's icon out of the archives, or an empty texture.
+///
+/// EMPTY IS THE ORDINARY ANSWER and it is not an error: `UEB5208` ships no icon at all, measured
+/// over `textures.scd`. `packIcons` skips an empty input and leaves its slot blank, which is
+/// what keeps the packing positional.
+[[nodiscard]] rm::dds::Texture iconFor(const rm::vfs::Vfs& content, const std::string& id) {
+    const auto bytes = content.read(iconPathFor(id));
+    if (!bytes) {
+        return {};
+    }
+    auto icon = rm::dds::load(*bytes);
+    return icon ? std::move(*icon) : rm::dds::Texture{};
+}
+
+rm::dds::Texture packInterfaceIcons(const rm::vfs::Vfs& content,
+                                    std::vector<rm::ui::BuildOption>& options,
+                                    std::vector<rm::ui::RosterTile>& tiles) {
     std::vector<rm::dds::Texture> icons;
-    icons.reserve(options.size());
+    icons.reserve(options.size() + tiles.size());
 
-    for (std::size_t i = 0; i < options.size(); ++i) {
-        rm::ui::BuildOption& option = options[i];
+    // ONE NUMBERING ACROSS BOTH PANELS. A slot is an index into `icons`, and `packIcons` places
+    // by that index, so appending the roster's after the tray's is all "one atlas" needs to be
+    // true — there is no second base to add and get wrong.
+    for (rm::ui::BuildOption& option : options) {
         option.iconSlot.reset();
-
-        // The path the archives use about themselves, derived from the id — the same shape
-        // `RosterEntry::path` derives a blueprint path, and for the same reason: an id and a
-        // path that are stored separately are an id and a path that can disagree.
-        const std::string path = "/textures/ui/common/icons/units/" + option.id + "_icon.dds";
-        const auto bytes = content.read(path);
-        if (!bytes) {
-            icons.emplace_back();  // holds the slot; see the header
-            continue;
+        rm::dds::Texture icon = iconFor(content, option.id);
+        if (!icon.data.empty()) {
+            option.iconSlot = icons.size();
         }
-        auto icon = rm::dds::load(*bytes);
-        if (!icon) {
-            icons.emplace_back();
-            continue;
+        icons.push_back(std::move(icon));
+    }
+    for (rm::ui::RosterTile& tile : tiles) {
+        tile.iconSlot.reset();
+        rm::dds::Texture icon = iconFor(content, tile.id);
+        if (!icon.data.empty()) {
+            tile.iconSlot = icons.size();
         }
-        // The slot is this option's POSITION, assigned whether or not the icon loaded, because
-        // `packIcons` places by position too. Compacting past the failures here would pair every
-        // later cell with its neighbour's picture.
-        option.iconSlot = i;
-        icons.push_back(std::move(*icon));
+        icons.push_back(std::move(icon));
     }
 
     rm::dds::Texture atlas = rm::ui::packIcons(icons);
     if (atlas.data.empty()) {
+        // Nothing packed: no cell may point into an empty atlas, or it draws whatever the
+        // sampler makes of a texture that is not bound.
         for (rm::ui::BuildOption& option : options) {
-            option.iconSlot.reset();  // nothing packed: no cell should point into an empty atlas
+            option.iconSlot.reset();
+        }
+        for (rm::ui::RosterTile& tile : tiles) {
+            tile.iconSlot.reset();
         }
     }
     return atlas;
+}
+
+void gatherRoster(const UnitScene& scene, std::span<const rm::sim::UnitId> selection,
+                  std::vector<rm::ui::RosterTile>& out) {
+    out.clear();
+
+    std::vector<std::string> ids;
+    std::vector<float> health;
+    std::vector<float> maxHealth;
+    ids.reserve(selection.size());
+    health.reserve(selection.size());
+    maxHealth.reserve(selection.size());
+
+    for (const rm::sim::UnitId id : selection) {
+        if (!scene.store.alive(id)) {
+            continue;  // a selection outlives the units in it
+        }
+        const rm::unitdef::UnitDef* def = scene.catalog.def(scene.store.typeAt(id.index));
+        if (def == nullptr) {
+            continue;
+        }
+        const rm::sim::Health& hp = scene.store.health()[id.index];
+        ids.push_back(def->name);
+        health.push_back(rm::sim::magToFloat(hp.current));
+        maxHealth.push_back(rm::sim::magToFloat(hp.maximum));
+    }
+
+    out = rm::ui::groupSelection(ids, health, maxHealth);
 }
 
 } // namespace rm::app

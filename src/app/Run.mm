@@ -317,25 +317,42 @@ int runScreenshot(const Session& session) {
                                   map->field.widthElmos(), map->field.depthElmos(), pips, view,
                                   !shotPreview);
 
-            // The build panel, for whatever `--select` ringed. This is what makes the panel
-            // verifiable at all: `make shot-fa SELECT=1` captures a commander's build list, and
-            // two builds' screenshots can be compared.
-            {
-                std::vector<rm::ui::BuildOption> shotOptions;
-                rm::app::BuildSelection shotWho;
-                gatherBuildOptions(units, capturedSelection, hudThemeFor(units), shotOptions,
-                                   shotWho);
-                if (!shotOptions.empty()) {
-                    // The icons for the capture too — an interface that only has pictures when
-                    // a window is open is an interface no screenshot can compare between builds.
-                    renderer.setIconAtlas(rm::app::packBuildIcons(content, shotOptions));
-                    rm::ui::appendBuildPanel(
-                        hud, renderer.labelFont(), renderer.readoutFont(), hudThemeFor(units),
-                        rm::ui::buildPanelLayout(shotMinimap, shotOptions.size()), shotOptions,
-                        std::nullopt, shotWho.name);
-                    std::printf("  build panel: %zu options for %s\n", shotOptions.size(),
-                                shotWho.name.c_str());
-                }
+            // The build panel and the roster, for whatever `--select` ringed. This is what
+            // makes either verifiable at all: a headless run has no clicks, so `--select` is
+            // the only way interface that appears on selection reaches a screenshot.
+            //
+            // NOT SCOPED TO THE BUILD PANEL, which the first version was: the icons were packed
+            // inside `if (!shotOptions.empty())`, so a selection of tanks — nothing that builds
+            // — drew a roster with no pictures in it.
+            std::vector<rm::ui::BuildOption> shotOptions;
+            std::vector<rm::ui::RosterTile> shotRoster;
+            rm::app::BuildSelection shotWho;
+            gatherRoster(units, capturedSelection, shotRoster);
+            gatherBuildOptions(units, capturedSelection, hudThemeFor(units), shotOptions,
+                               shotWho);
+
+            if (!shotOptions.empty() || !shotRoster.empty()) {
+                renderer.setIconAtlas(
+                    rm::app::packInterfaceIcons(content, shotOptions, shotRoster));
+            }
+
+            if (!shotOptions.empty()) {
+                rm::ui::appendBuildPanel(
+                    hud, renderer.labelFont(), renderer.readoutFont(), hudThemeFor(units),
+                    rm::ui::buildPanelLayout(shotMinimap, shotOptions.size()), shotOptions,
+                    std::nullopt, shotWho.name);
+                std::printf("  build panel: %zu options for %s\n", shotOptions.size(),
+                            shotWho.name.c_str());
+            }
+
+            if (!shotRoster.empty()) {
+                rm::ui::appendRoster(hud, renderer.labelFont(), renderer.readoutFont(),
+                                     hudThemeFor(units),
+                                     rm::ui::rosterLayout(static_cast<float>(shot.width),
+                                                          static_cast<float>(shot.height),
+                                                          shotRoster.size()),
+                                     shotRoster, std::nullopt);
+                std::printf("  roster: %zu type(s) selected\n", shotRoster.size());
             }
 
             renderer.setHud(hud.label, hud.readout, hud.image);
@@ -457,6 +474,17 @@ int runWindowed(const Session& session) {
         /// recover them would be 15 archive reads a frame for pictures that have not moved, so
         /// the answer is cached and reapplied instead.
         std::vector<std::optional<std::size_t>> iconSlots;
+
+        /// The selection, grouped by type — Track 0's UI-2. Rebuilt every frame from the store,
+        /// so a unit dying leaves its tile's count one lower without anything having to notice.
+        std::vector<rm::ui::RosterTile> rosterTiles;
+        std::vector<std::optional<std::size_t>> rosterSlots;
+
+        /// How many units the roster's icons were packed for. The tiles are grouped by TYPE, so
+        /// this changes only when the selection gains or loses a type — but the count is the
+        /// cheap conservative key, and repacking on a unit's death costs one frame of archive
+        /// reads rather than a stale picture.
+        std::size_t rosterPackedFor = static_cast<std::size_t>(-1);
 
         // The caller-side tick, the same one `march()` drives. Built here rather than in
         // the frame callback because a match is decided on one tick and stays decided, and
@@ -634,6 +662,18 @@ int runWindowed(const Session& session) {
                     }
                     return;
                 }
+            }
+
+            // THE ROSTER, for the build panel's reason: it is in front of the world, and a
+            // click that fell through would order the very units the roster is describing to
+            // walk to wherever happens to be behind it.
+            if (!rosterTiles.empty()
+                && rm::ui::insideRoster(
+                    rm::ui::rosterLayout(static_cast<float>(window.width()),
+                                         static_cast<float>(window.height()),
+                                         rosterTiles.size()),
+                    mods.pointX, mods.pointY)) {
+                return;
             }
 
             // A GROUND CLICK WHILE ARMED PLACES, and nothing else happens — it does not also
@@ -943,18 +983,32 @@ int runWindowed(const Session& session) {
                 armedOption.reset();
             }
 
-            // The icons: packed when the menu is somebody else's than last frame's, and
-            // reapplied from the cache otherwise.
-            if (buildWho.builder != iconsPackedFor) {
+            rm::app::gatherRoster(units, selected, rosterTiles);
+
+            // The icons for BOTH panels, in one atlas: packed when either set changes, and
+            // reapplied from the cache otherwise. Reapplied rather than repacked because the
+            // option list and the tile list are rebuilt every frame and a fresh entry has no
+            // slot — repacking to recover them would be two dozen archive reads a frame for
+            // pictures that have not moved.
+            if (buildWho.builder != iconsPackedFor || rosterTiles.size() != rosterPackedFor) {
                 iconsPackedFor = buildWho.builder;
-                window.setIconAtlas(rm::app::packBuildIcons(content, buildOptions));
+                rosterPackedFor = rosterTiles.size();
+                window.setIconAtlas(
+                    rm::app::packInterfaceIcons(content, buildOptions, rosterTiles));
                 iconSlots.clear();
                 for (const rm::ui::BuildOption& option : buildOptions) {
                     iconSlots.push_back(option.iconSlot);
                 }
+                rosterSlots.clear();
+                for (const rm::ui::RosterTile& tile : rosterTiles) {
+                    rosterSlots.push_back(tile.iconSlot);
+                }
             } else {
                 for (std::size_t i = 0; i < buildOptions.size() && i < iconSlots.size(); ++i) {
                     buildOptions[i].iconSlot = iconSlots[i];
+                }
+                for (std::size_t i = 0; i < rosterTiles.size() && i < rosterSlots.size(); ++i) {
+                    rosterTiles[i].iconSlot = rosterSlots[i];
                 }
             }
             if (!buildOptions.empty()) {
@@ -977,6 +1031,19 @@ int runWindowed(const Session& session) {
                 rm::ui::appendBuildPanel(hudScratch, window.labelFont(), window.readoutFont(),
                                          hudThemeFor(units), panel, buildOptions, hovered,
                                          buildWho.name);
+            }
+
+            // The roster, bottom centre. After the tray so both are in one buffer; they do not
+            // overlap, so the order between them is arbitrary and stated only to be stable.
+            if (!rosterTiles.empty()) {
+                const rm::ui::RosterLayout roster =
+                    rm::ui::rosterLayout(static_cast<float>(window.width()),
+                                         static_cast<float>(window.height()),
+                                         rosterTiles.size());
+                const std::array<float, 2> at = window.cursor();
+                rm::ui::appendRoster(hudScratch, window.labelFont(), window.readoutFont(),
+                                     hudThemeFor(units), roster, rosterTiles,
+                                     rm::ui::rosterTileAt(roster, at[0], at[1]));
             }
 
             window.setHud(hudScratch.label, hudScratch.readout, hudScratch.image);
