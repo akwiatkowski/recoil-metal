@@ -26,19 +26,24 @@ P1 has its handle (`UnitId` + `IdPool`), its store (`UnitStore`), its census
 identical`), and an order-independent invariant suite for the part the golden log cannot
 cover.
 
-**P3 is under way: P3.1–P3.4 are done.** Game rules are leaving C++. Blueprint categories are
-parsed and classified into roles; SupCom's `BuildableCategory` expressions are materialised into
-a real build tree; the opponent's opening is `data/opening.lua` and plays all four factions; and
-passability now comes from the motion class rather than from building-placement fields.
-`applyCommand` can build. What remains in P3 is P3.5 (the FA duration correction) and P3.6
-(`SlowUpdate`).
+**P3 IS DONE, and so is P4.** Game rules are out of C++. Blueprint categories are parsed and
+classified into roles; SupCom's `BuildableCategory` expressions are materialised into a real
+build tree; the opponent's opening is `data/opening.lua` and plays all four factions;
+passability comes from the motion class rather than from building-placement fields; FA's
+`WaitSeconds` bias is corrected at import and burst weapons deliver their bursts; and periodic
+work is paced by a mechanism rather than by a modulo in a caller.
+
+**P4 is done with it.** A unit holds a `CommandQueue` with Recoil's cancel-queued semantics,
+shift-right-click appends, `advanceOrders` is the tick's first pass, and a registered check
+keeps `applyCommand` the only way an order reaches the sim.
 
 **P2 is done.** The sim is fixed point end to end and the float ban is enforced; the tick rate
 is a value with `--tick-rate` and a four-rate test behind it; ownership has its three levels;
 and orders are data taking one path, with `--command-log` writing the artifact §1.3's criterion
 names.
 
-**Engine completion: ~58 %** (§2).
+**Engine completion: ~56 %** (§2) — and lower than the 58 % published yesterday because the
+arithmetic was wrong, not because anything regressed. See §2.2.
 
 ---
 
@@ -131,7 +136,7 @@ layer (12–20k). Weights are midpoints, renormalised.
 | AI | 3.5k | **2 %** |
 | | 210k | 100 % |
 
-### 2.2 The reading, 2026-08-20
+### 2.2 The reading, 2026-08-21
 
 Weights are sourced; the per-subsystem completion figures are **judgement against a named
 capability list**, which is the honest description. Recompute by re-judging each row, not by
@@ -139,19 +144,31 @@ re-deriving the weights.
 
 | Subsystem | W | Done | Have | Missing |
 |---|---:|---:|---|---|
-| Sim | 26 % | **65 %** | movement, collisions, targeting/facing/firing, projectiles, area damage, death, economy, construction, victory, unit handles + flat store + type catalog + census, **fixed point END TO END (enforced), CORDIC trig, tick rate as a value at 5–50 Hz, three ownership levels, orders as data through one authorised path** | features, intel/vision, shields, transports, most weapon classes, air/naval/hover domains, veterancy, upgrades, adjacency |
+| Sim | 26 % | **68 %** | movement, collisions, targeting/facing/firing, projectiles, area damage, death, economy, construction, victory, unit handles + flat store + type catalog + census, fixed point END TO END (enforced), CORDIC trig, tick rate as a value at 5–50 Hz, three ownership levels, orders as data through one authorised path, **burst weapons, FA's `WaitSeconds` bias corrected at import, periodic work staggered by a derived period, order queues advanced in the tick** | features, intel/vision, shields, transports, most weapon classes, air/naval/hover domains, veterancy, upgrades, adjacency |
 | Renderer | 21 % | **55 %** | instanced units w/ team colour, props + culling, shadows, water + refraction, sky, particles, decals, text/HUD, icons, selection, model LOD, pose playback, DDS, offscreen capture | drawer split, minimap, effect taxonomy (muzzle/trail/impact), beams |
 | System | 16 % | **35 %** | VFS (`.sdz`/`.scd`), asset search, DDS, settings, bench harness, **a data layer: roles, build tree, roster, opening** | **sound (nothing)**, logging framework, job system, serialisation/save, profiling |
-| Game/orders/UI | 13 % | **55 %** | orbit camera, picking, selection + modifiers, HUD, order markers, CLI harness, commands as data + a command log + player/army/alliance, **build commands applied by the sim** | command queue, build menu, control groups, minimap interaction, formations, game states |
+| Game/orders/UI | 13 % | **65 %** | orbit camera, picking, selection + modifiers, HUD, order markers, CLI harness, commands as data + a command log + player/army/alliance, build commands applied by the sim, **a per-unit command queue with Recoil's cancel-queued rules, shift-right-click to append, and a registered check that there is one order path** | build menu, control groups, minimap interaction, formations, game states, playing a command log back |
 | Map | 10 % | **70 %** | SMF/SMT, `.scmap`, tile atlas, heightfield, `mapinfo.lua`, terrain mesh w/ LOD + skirts, chunk culling, splat, water, stratum normals, props, terrain types, start positions | minimap, resource spots, features as objects |
 | Pathfinding | 7 % | **40 %** | coarse grid A* **in fixed point**, **passability per motion class (amphibious, hover, land)**, path following | hierarchical/flow-field, dynamic blocking, formations, avoidance quality, per-motion-class grids |
 | Net/replay | 5 % | **40 %** | **a command log — §1.3's criterion now names something that exists** — per-tick state hash over the store (incl. per-slot type, generation and liveness), hash log + first-divergence reporting (P0.2/P0.3) | netcode, lockstep, the cross-architecture proof (P8) |
 | AI | 2 % | **45 %** | scripted build order + one attack wave, **role classification, a materialised build tree, an opening read from data that plays all four factions** | any reaction to what the opponent does; a real AI |
 
-**Weighted total: ~58 %.** AI moved 15 → 45 % because the thing that made it a stub is gone: it
-had no build tree, so `07 §4.3`'s "hard blocker for any skirmish" applied to ours as much as to
-BAR's. Pathfinding 30 → 40 % because passability finally means what ADR-027 said it did. System
-30 → 35 % for the data layer itself.
+**Weighted total: ~56 %.** Sim 65 → 68 % for burst firing, the import-time duration correction
+and `SlowUpdate`; Game/orders 55 → 65 % because the one thing the previous reading named as
+missing — *"what is left there is the QUEUE"* — is the thing this phase built.
+
+**AND A CORRECTION, which is why the total went DOWN from the 58 % published yesterday.** The
+weighted sum was being computed wrong, and the error grew: the baseline is exact at 35.02, but
+by the P2 row the published figure was 52 against a true 49.20, and the P3.1–P3.4 row said 58
+against a true 53.90. Nothing regressed and no row's judgement changed — the arithmetic was
+inflated. Every row in §2.3's table is recomputed below and the drift is shown, because §2.3
+says never to overwrite the trend and a silently corrected trend is worse than a visible
+mistake. Read against the corrected series, this phase moved 54 → 56.
+
+The earlier readings' *reasons* stand as written: AI moved 15 → 45 % because the thing that made
+it a stub is gone — it had no build tree, so `07 §4.3`'s "hard blocker for any skirmish" applied
+to ours as much as to BAR's. Pathfinding 30 → 40 % because passability finally means what
+ADR-027 said it did. System 30 → 35 % for the data layer itself.
 
 **The earlier reading, kept for the trend:** at 52 %, the Sim row moved 42 → 60 % because the phase finished what it
 started: the sim is fixed point end to end and a script enforces it, so the determinism claim
@@ -167,9 +184,11 @@ Linux build. Fixed point is what makes it *reachable*; it does not make it true.
 
 The shape of that number is the important part: **the two most-complete slices are Map (70 %)
 and Renderer (55 %), which together are 31 % of the weight — and the Sim, at 26 % of the
-weight, is 60 % done** (22 % at the baseline; P1 and P2 moved it). The gap has closed: the
-finished slices are no longer only the ones a screenshot samples. That is still why the project looks
-further along than it is: a screenshot samples the finished third.
+weight, is 68 % done** (22 % at the baseline; P1 through P4 moved it). The gap has closed: the
+Sim is now the second most-complete slice rather than the laggard, so the project no longer
+looks further along than it is for the old reason. The remaining honest caveat is the reverse
+one — System sits at 35 % with **no sound at all**, and that is 16 % of the weight nothing has
+touched.
 
 ### 2.3 The procedure
 
@@ -190,6 +209,28 @@ further along than it is: a screenshot samples the finished third.
 | 2026-08-20 | 42 | 55 | 30 | 30 | 70 | 25 | 25 | 15 | **43 %** | P2.1 + P2.3's mechanism + half of P2.2 — fixed-point arithmetic, trig without libm, tick rate as a value, health/damage/economy migrated |
 | 2026-08-20 | 60 | 55 | 30 | 45 | 70 | 30 | 40 | 15 | **52 %** | P2 done — sim fixed point end to end, float ban enforced, three ownership levels, orders as data on one path |
 | 2026-08-21 | 65 | 55 | 35 | 55 | 70 | 40 | 40 | 45 | **58 %** | P3.1–P3.4 — roles, the build tree, the opening as data, passability by motion class |
+| 2026-08-21 | 68 | 55 | 35 | 65 | 70 | 40 | 40 | 45 | **56 %** | P3.5, P3.6, P4 — burst weapons, the FA duration correction, `SlowUpdate`, the command queue, one checked order path |
+
+**The totals above 37 % were computed wrong, and here is the arithmetic.** The judgement columns
+are unchanged; only the weighted sum was off, and the error grew with the numbers. Recomputed
+against §2.1's weights:
+
+| Row | Published | True |
+|---|---:|---:|
+| baseline | 35 | 35.0 |
+| P0 | 36 | 35.8 |
+| P1.0–P1.3 | 37 | 36.6 |
+| P1 | 40 | **38.6** |
+| P2.1 + P2.3 + half P2.2 | 43 | **41.5** |
+| P2 | 52 | **49.2** |
+| P3.1–P3.4 | 58 | **53.9** |
+| P3.5 + P3.6 + P4 | — | **56.0** |
+
+So the real trend is 35 → 36 → 37 → 39 → 41 → 49 → 54 → **56**. It is a slightly flatter curve
+than the published one and it is the same shape, which is the reassuring outcome: the phases did
+move the number, just not by as much as was claimed. Kept here rather than by editing the rows,
+because §2.3's rule is that the trend is worth more than the number — including the trend of
+getting the number wrong.
 
 ---
 
@@ -923,7 +964,7 @@ The technique, and it is the whole reason to do P1 next rather than P2:
             named list of boundary files, each with its reason in the script. Verified against
             an injected violation.
 
-- [ ] **P2.3 Tick rate as configuration** (§5.1) — **mechanism done 2026-08-20**, landed early
+- [x] **P2.3 Tick rate as configuration** (§5.1) — **mechanism done 2026-08-20**, landed early
       because P2.2's conversions need it. `core/sim/TickRate.hpp` is a validated value (5–50 Hz,
       throws rather than clamps), rounding to nearest with a floor of one tick, and it is
       *passed* to the passes that need it rather than read from a global.
@@ -1030,22 +1071,22 @@ The technique, and it is the whole reason to do P1 next rather than P2:
       `ADR-027` says passability comes from motion class; this makes it true. *Test:* water that
       blocks a land unit and passes an amphibious one, same map. *Manual:* walk the commander
       across a bay, then a tank.
-- [ ] **P3.5 FA duration correction.** `11 §2.1`: FA's `WaitSeconds(n)` is `WaitTicks(n*10+1)`,
+- [x] **P3.5 FA duration correction** — **done 2026-08-21.** `11 §2.1`: FA's `WaitSeconds(n)` is `WaitTicks(n*10+1)`,
       so every Lua-timed duration is quantised to 100 ms **and inflated by 100 ms** —
       `WaitSeconds(1.0)` waits 1.1 s. The transform is
       `t' = (t <= 0.1) ? 0.1 : (floor(t*10) + 1)/10`, and without it *"every weapon's DPS is
       wrong by up to 50 % on burst weapons"*. Applies when importing FA content at any tick
       rate — it is a fact about how FA's numbers were authored, not about our rate.
       *Test:* table-driven: `0.05→0.1`, `0.2→0.3`, `1.0→1.1`. *Manual:* `--dump-weapon URL0202`.
-- [ ] **P3.6 `SlowUpdate`** (§6.7). *Test:* every unit visited exactly once per period, even
+- [x] **P3.6 `SlowUpdate`** (§6.7) — **done 2026-08-21.** *Test:* every unit visited exactly once per period, even
       per-tick load. *Manual:* `--bench` shows no periodic spike.
 
 ### P4 — Orders
 
-- [ ] **P4.1 `CommandQueue`** (§6.4): queue, shift-append, cancel-queued rules, finish.
+- [x] **P4.1 `CommandQueue`** (§6.4) — **done 2026-08-21**: queue, shift-append, cancel-queued rules, finish.
       *Test:* three queued moves run in order; a plain order replaces, a shift-order appends.
       *Manual:* shift-click a route.
-- [ ] **P4.2 Every input path goes through commands.** *Test:* the scripted opponent's order and
+- [x] **P4.2 Every input path goes through commands** — **done 2026-08-21.** *Test:* the scripted opponent's order and
       a synthetic click produce identical hashes. *Manual:* replay divergence check.
 
 ### P5 — Spatial queries
@@ -1180,73 +1221,89 @@ for what P0 actually taught.
 
 ## 11. The next goal
 
-**P2 is done (2026-08-20).** What it leaves behind, for whoever picks up P3:
+**P3 and P4 are done (2026-08-21).** What they leave behind, for whoever picks up P5:
 
-- **The sim is fixed point and a script says so.** `tools/check_no_sim_floats.sh` is
-  registered. Any new sim code that reaches for a `float` fails the suite, which is the
-  intended way to find out.
-- **Four gates now exist, and they answer different questions.** `make verify` says nothing
-  changed. `test_match_invariants` says nothing broke when something was *meant* to change.
-  `check_fx_optimisation` says the compiler cannot alter the answer.
-  `test_tick_rate_invariance` says the rate cannot. Use the second and fourth for anything
-  that re-bases numbers; the first only proves a refactor was one.
-- **A lesson that recurred twice and will again:** a small factor multiplied by a large operand
-  needs more fractional bits than the product does. It cost 0.17 elmos of terrain error before
-  it was written down (§7 P2.2).
-- **The four-rate test earns its keep.** It found three bugs no other check could see, all of
-  the same shape: a tick count derived from the DEFAULT rate rather than the run's. Expect that
-  shape in anything P3 adds that counts ticks.
+- **Game rules are out of C++.** Roles, the build tree, the roster and the opening are read from
+  content or from `data/opening.lua`; FA's `WaitSeconds` bias is corrected at the import
+  boundary; passability comes from the motion class. `BuildOrder.hpp`'s five constants are gone.
+- **Orders are a queue with one door.** `CommandQueue` holds Recoil's cancel-queued semantics,
+  `advanceOrders` is the tick's first pass, and `check_one_order_path.sh` fails the suite if
+  anything but `applyCommand` sets a unit moving. Five gates now, and the new one answers a
+  question none of the others could: *is there still only one way in?*
+- **A mechanism for periodic work exists**, so the next four features do not each invent it.
+  `SlowUpdate` takes its period in seconds and staggers on `index % period`; the measured effect
+  on the busiest tick was a 20 % drop in p95 at eight armies with the mean unmoved.
+- **Two lessons from this phase, both about reading a report rather than a file:**
+  `RateOfFire` is engine-timed and `MuzzleSalvoDelay` is Lua-timed, and correcting the wrong one
+  of those two makes every weapon in the game 100 ms slow. And Recoil's `COMMAND_CANCEL_DIST`
+  transferred unchanged where its `SlowUpdate`'s 16 frames could not — because one describes a
+  footprint and the other describes a clock.
+- **A correction worth carrying:** §2's weighted total was being computed wrong and the error
+  grew to four points. The judgement columns were fine; the arithmetic was not. Recompute it
+  with a script, not by hand.
 
-**P3 — the data layer: game rules out of C++.** Why it goes next:
+**P5 — spatial queries.** Why it goes next:
 
-1. **It is the largest remaining lie in the codebase.** `BuildOrder.hpp` holds four hardcoded
-   blueprint paths and `kAttackWaveTanks = 20`; both reference engines keep *zero* game rules
-   in C++ (§1.1). Every milestone that touches balance currently edits a header.
-2. **P3.2 is a stated blocker, not a nicety.** `07-ai-and-gamesetup.md §4.3` calls
-   materialising `BuildableCategory` expressions *"a hard blocker for any skirmish, not just
-   for the AI"* — SupCom ships no build lists, it ships expressions where space means AND and a
-   list means OR. Nothing beyond a scripted duel is possible without an evaluator for them.
-3. **`applyCommand` has a `Build` hole waiting for it.** A build command is recorded and not
-   applied, because a construction needs a blueprint the sim cannot reach. P3 is what closes
-   that, and the place it closes is already written.
+1. **It is the only remaining item on the critical path to the success criterion.**
+   §1.3 wants thousands of units. `nearestTarget` (`core/sim/Combat.hpp`) scans every unit for
+   every shooter, and `aimAtTargets` does the same sweep again for every unturreted hull, every
+   tick. That is two O(n²) passes per tick, and P8.3's "5,000 units at the configured rate" is
+   not reachable through them at any constant factor.
+2. **Its test is the best shape available.** §7 P5.1 asks for agreement with brute force over
+   10,000 randomised layouts — and the slow version is the oracle, so the test cannot be wrong
+   in the same direction as the code. Very little else in this plan gets that.
+3. **`SlowUpdate` and the grid are complements, not alternatives.** The grid makes each query
+   cheap; the period makes fewer of them happen. Doing the grid first is right because a
+   staggered O(n²) is still O(n²) — but the two together are what make the aim sweep affordable
+   at scale, and P3.6 was deliberately left with the aim pass untouched so that P5 can take it.
 
-**What P3 does NOT need:** a re-baselined golden log for its own sake. Unlike P2, P3 moves where
-numbers come from rather than what they are, so `make verify` is a strict check again — a hash
-change during P3 means a rule changed, which is worth stopping for.
+**What P5 will move:** the golden log, and for a reason worth being ready for. A spatial query
+returns targets in GRID order where the brute-force scan returned them in slot order, so
+tie-breaks between equidistant targets change. That is a rule changing, not a refactor drifting
+— `test_match_invariants` is the gate, `make verify` is not.
 
-**Model: Opus 5**, `effort: xhigh`. P3.2 (the expression evaluator) is the item with real design
-freedom — the grammar, the caching, what a materialised set is keyed on — and the place to
-consider Fable 5 if it stalls.
+**Model: Opus 5**, `effort: xhigh`. P5.1 has real design freedom — cell size, the rebuild point
+in the tick, whether queries write into a caller's span — and §6.5 already states the shape.
 
 The goal prompt:
 
 ```
-Execute phase P3 of PLAN2.md in the recoil-metal repo. Read PLAN2.md first — §0 has
-the settled decisions, §1.1 on why game rules must leave C++, §7 the items, §10 the
-risks.
+Execute phase P5 of PLAN2.md in the recoil-metal repo. Read PLAN2.md first — §0 has
+the settled decisions, §6.5 on QuadField -> SpatialGrid, §7 the items, §11 what P3 and
+P4 left behind.
 
-Unlike P2, this phase moves where numbers come from rather than what they are, so
-`make verify` is a STRICT check: a hash change means a rule changed. Stop and explain
-if one appears rather than re-recording.
+P5.1 is the SpatialGrid: bucket every object into a uniform grid ONCE per tick by
+sorting on cell index, then a query is a range scan over contiguous cells writing into
+a caller-provided span. Zero per-query allocation — Recoil allocates a result vector
+per query from a pool that `assert(false)`s when exhausted, and the reason we can do
+better is that our tick has a defined pass order, so the grid can be rebuilt at one
+point and be authoritative for the rest of the tick.
 
-Start with P3.1 (role classification from categories), because P3.2 and P3.3 both
-need it. P3.2's expression evaluator is the stated blocker — `07 §4.3` calls it "a
-hard blocker for any skirmish" — so give it the corpus test as well as the
-hand-written one.
+P5.1's test is the ideal shape and should be taken literally: agreement with brute
+force over 10,000 randomised layouts, because the slow version is the oracle.
 
-Every item ships with the automated test and the manual check named in §7. Commit
-each separately, conventional messages, co-author trailer
+P5.2 routes targeting, collisions and area damage through it. Expect the golden log to
+move: a grid returns targets in cell order where the scan returned them in slot order,
+so tie-breaks between equidistant targets change. That is a rule changing, so use
+`test_match_invariants` and `test_tick_rate_invariance` as the gates and re-record the
+golden deliberately, saying in the commit what changed and why.
+
+Every item ships with the automated test and the manual check named in §7 —
+`--bench --units 5000` for P5.1 and a with/without frame-time pair at 2,000 units for
+P5.2. Measure both in one sitting; the project's rule is with/without pairs, not a
+single number.
+
+Commit each item separately, conventional messages, co-author trailer
 "Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>".
 
 Constraints:
-- Close the `Build` hole in `applyCommand` when the data layer can supply a
-  blueprint; the place is marked.
-- Deliver P3 at the scope §7 states. Don't start P4.
+- Deliver P5 at the scope §7 states. Don't start P6.
 - Do not add a verification step, a self-review pass, or a verifier subagent. Run the
   tests and the replay, and report what they output.
 - Do not delegate to subagents.
 - Feature work is frozen (D10).
 - If a step turns out to be blocked, finish the others and say plainly which one you
   left and why. Don't silently narrow the scope.
-- Report the §2 progress reading at the end, recomputed, with a new history row.
+- Report the §2 progress reading at the end, recomputed WITH A SCRIPT — §2.2 records
+  four points of accumulated hand-arithmetic error, and that is not to be repeated.
 ```
