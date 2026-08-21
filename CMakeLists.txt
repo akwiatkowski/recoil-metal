@@ -142,7 +142,14 @@ target_link_libraries(rm_core PUBLIC rm_project_warnings miniz miniz_impl)
 add_executable(recoil-metal
     src/main.mm
     src/platform/Window.mm
-    src/render/Renderer.mm)
+    src/render/Renderer.mm
+    # One class, several translation units (PLAN2.md §7 P7.3). `Renderer.mm` keeps the device,
+    # the queue, the frame orchestration and the metal-cpp PRIVATE_IMPLEMENTATION defines, which
+    # must stay in exactly one TU; each of these defines that domain's members.
+    src/render/MapRenderer.mm
+    src/render/UnitRenderer.mm
+    src/render/FxRenderer.mm
+    src/render/UiRenderer.mm)
 target_link_libraries(recoil-metal PRIVATE
     rm_core rm_project_warnings metal_cpp ${APPKIT_FW}
     ${IMAGEIO_FW} ${COREGRAPHICS_FW})
