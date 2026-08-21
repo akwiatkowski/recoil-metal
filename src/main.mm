@@ -24,6 +24,7 @@
 #include <cassert>
 #include "core/settings/Settings.hpp"
 #include "core/scene/GroundDecals.hpp"
+#include "core/scene/UnitDraw.hpp"
 #include "core/scene/UnitPlacement.hpp"
 #include "core/sim/Army.hpp"
 #include "core/data/MoveDef.hpp"
@@ -1071,6 +1072,12 @@ struct PropScene {
 /// command-line flag has to be able to change it; not a settable-at-any-time knob because a
 /// match whose rate changed halfway would be incoherent.
 rm::sim::TickRate gAppTickRate{rm::sim::kDefaultTicksPerSecond};
+/// Whether the renderer blends the last two snapshots (§7 P7.2). `--no-interpolate` clears it.
+///
+/// File-scope for the same reason `gAppTickRate` is, and with the same accounting: it is read
+/// once per scene build, it changes nothing in the sim, and P7.5 moves this code out.
+bool gInterpolate = true;
+
 
 /// The one writer. Throws through `TickRate`'s constructor if the rate is outside 5–50 Hz,
 /// which is what makes an out-of-range `--tick-rate` a startup error rather than a clamp.
@@ -1113,6 +1120,23 @@ struct UnitScene {
     /// moved out of `UnitInstance` when the store stopped holding one (P2.2), and this is
     /// where the draw projection reads it.
     std::vector<float> typeScale;
+
+    /// The last two ticks, as the renderer may see them (§7 P7.1).
+    ///
+    /// TWO, because interpolation needs both. `publish` rotates them: what was current becomes
+    /// previous and a fresh snapshot is taken. A frame then draws somewhere between the two,
+    /// which is what turns a 10 Hz sim into continuous motion on a 120 Hz screen.
+    rm::sim::Snapshot snapshotPrevious;
+    rm::sim::Snapshot snapshotCurrent;
+
+    /// Where each unit is being DRAWN this frame — interpolated, float, derived, never read
+    /// back. Kept between frames so the steady state allocates nothing.
+    std::vector<rm::DrawUnit> drawUnits;
+
+    /// Whether to interpolate at all. `--no-interpolate` turns it off, which is what a golden
+    /// screenshot wants: a capture of tick N should be tick N rather than a blend that depends
+    /// on when the frame happened to land.
+    bool interpolate = true;
 
     // Scratch for drawing: one contiguous instance array per batch, refilled from the store
     // each frame. The store is flat and the GPU wants a run per model, so somebody has to
@@ -1242,6 +1266,17 @@ struct UnitScene {
         return rm::sim::countCommanders(store, catalog, armies.size());
     }
 
+    /// Rotates the snapshots and takes a fresh one (§7 P7.1).
+    ///
+    /// Called once per SIM TICK, not once per frame — the whole point is that the two snapshots
+    /// are a tick apart. Called outside the tick too, after a spawn, and there `previous` and
+    /// `current` end up equal, which is exactly right: a unit that has just appeared has not
+    /// travelled anywhere, so there is nothing for any alpha to blend.
+    void publish(rm::TickIndex tick) {
+        std::swap(snapshotPrevious, snapshotCurrent);
+        rm::sim::snapshotInto(store, tick, snapshotCurrent);
+    }
+
     /// Refills `drawScratch` and `drawIndexOf` from the store.
     ///
     /// One contiguous run per batch, because that is what the GPU is uploaded: the store is
@@ -1261,7 +1296,17 @@ struct UnitScene {
     /// holds wherever the gather is called, rather than at four call sites that must
     /// remember. (The span also goes stale on its own: a scratch vector that grows past its
     /// capacity reallocates.)
-    void gatherForDrawing() {
+    void gatherForDrawing(float alpha = 1.0f) {
+        // FROM THE SNAPSHOTS, not from the store (§7 P7.1/P7.2). This used to walk
+        // `store.transforms()` and `store.motion()` directly, which is why motion stepped at
+        // the tick rate: a frame drew wherever the sim happened to be, and there was no second
+        // state to blend with.
+        if (interpolate) {
+            rm::interpolate(snapshotPrevious, snapshotCurrent, alpha, drawUnits);
+        } else {
+            rm::project(snapshotCurrent, drawUnits);
+        }
+
         drawScratch.resize(batches.size());
         drawSlotOf.resize(batches.size());
         for (std::vector<rm::UnitInstance>& batch : drawScratch) {
@@ -1272,21 +1317,20 @@ struct UnitScene {
         }
         drawIndexOf.assign(store.slotCount(), rm::SelectionEntry{});
 
-        const std::span<const rm::sim::Transform> transforms = store.transforms();
-        const std::span<const rm::sim::MoveState> motion = store.motion();
-
-        for (rm::UnitIndex slot = 0; slot < store.slotCount(); ++slot) {
-            if (!store.slotAlive(slot)) {
-                continue;
-            }
-            const auto batch = static_cast<std::size_t>(store.typeAt(slot));
+        for (const rm::DrawUnit& unit : drawUnits) {
+            const auto batch = static_cast<std::size_t>(unit.type);
             if (batch >= drawScratch.size()) {
                 continue;  // a type with no batch: nothing to draw it with
             }
-            drawIndexOf[slot] =
-                rm::SelectionEntry{.batch = batch, .instance = drawScratch[batch].size()};
-            drawScratch[batch].push_back(instanceFor(slot, transforms[slot], motion[slot]));
-            drawSlotOf[batch].push_back(slot);
+            // Still keyed by SLOT, because that is what selection and picking name a unit by,
+            // and a snapshot entry carries the id it came from.
+            const auto slot = static_cast<std::size_t>(unit.id.index);
+            if (slot < drawIndexOf.size()) {
+                drawIndexOf[slot] =
+                    rm::SelectionEntry{.batch = batch, .instance = drawScratch[batch].size()};
+            }
+            drawScratch[batch].push_back(instanceFor(unit));
+            drawSlotOf[batch].push_back(unit.id.index);
         }
 
         for (std::size_t batch = 0; batch < batches.size(); ++batch) {
@@ -1304,17 +1348,18 @@ struct UnitScene {
     /// One way only. Nothing reads a `UnitInstance` back into the store — that would be a
     /// float round-trip through the middle of a match, which is exactly what fixed point is
     /// for avoiding.
-    [[nodiscard]] rm::UnitInstance instanceFor(rm::UnitIndex slot,
-                                               const rm::sim::Transform& transform,
-                                               const rm::sim::MoveState& motion) const {
+    /// TAKES A `DrawUnit` now, not a slot and two sim structs (§7 P7.2). The position and
+    /// angles arrive already interpolated and already float; what is left here is the part that
+    /// comes from the TYPE and the ARMY rather than from the tick — the scale, the colour, and
+    /// the animation clip the stride is measured against.
+    [[nodiscard]] rm::UnitInstance instanceFor(const rm::DrawUnit& unit) const {
         rm::UnitInstance instance{};
-        instance.position = {rm::sim::fxToFloat(transform.x), rm::sim::fxToFloat(transform.y),
-                             rm::sim::fxToFloat(transform.z)};
-        instance.rotationY = rm::sim::radiansFromBrad(transform.heading);
-        instance.rotationX = rm::sim::radiansFromBrad(transform.pitch);
-        instance.rotationZ = rm::sim::radiansFromBrad(transform.roll);
+        instance.position = unit.position;
+        instance.rotationY = unit.rotationY;
+        instance.rotationX = unit.rotationX;
+        instance.rotationZ = unit.rotationZ;
 
-        const auto type = static_cast<std::size_t>(store.typeAt(slot));
+        const auto type = static_cast<std::size_t>(unit.type);
         instance.scale = type < typeScale.size() ? typeScale[type] : 1.0f;
 
         // The army's colour. `kNoArmy` and an out-of-range owner both get the first palette
@@ -1325,7 +1370,7 @@ struct UnitScene {
         // army is drawn and not a fact about one, so it lives with the renderer's other
         // presentation and the sim no longer carries it. Same answer, one include fewer in the
         // sim — which is the whole of P6.3's assertion.
-        const int owner = motion.armyIndex;
+        const int owner = unit.armyIndex;
         instance.teamColour =
             owner >= 0 && static_cast<std::size_t>(owner) < armies.size()
                 ? rm::teamColour(static_cast<std::size_t>(owner))
@@ -1333,16 +1378,16 @@ struct UnitScene {
 
         // The walk cycle, paced by ground covered rather than by wall time — a unit pivoting
         // on the spot or standing still must not keep striding. Zero for a type with no
-        // animation, which is every structure.
+        // animation, which is every structure. The distance is INTERPOLATED, so a leg no longer
+        // steps at the tick rate either.
         const float duration = type < batches.size() && batches[type].animation != nullptr
                                    ? batches[type].animation->duration
                                    : 0.0f;
-        const float speed = rm::sim::fxToFloat(motion.speedPerTick)
-                            * static_cast<float>(gAppTickRate.ticksPerSecond());
+        const float speed =
+            unit.speedPerTick * static_cast<float>(gAppTickRate.ticksPerSecond());
         const float strideElmos = speed * duration;
         if (strideElmos > 0.0f) {
-            instance.animationPhase =
-                rm::sim::fxToFloat(motion.distanceTravelledElmos) / strideElmos;
+            instance.animationPhase = unit.distanceTravelledElmos / strideElmos;
         }
 
         return instance;
@@ -1877,6 +1922,11 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
     // The batches' spans are filled from the store, once, here. They used to be re-pointed
     // after every push_back because a vector that grew had moved its storage; the store owns
     // that storage now and the gather hands each batch a contiguous run.
+    // Published before the gather because the gather reads snapshots now, and outside a tick
+    // there is no tick to have published one. Twice, so `previous` and `current` are the same
+    // state — a scene that has only just been built has nothing to interpolate.
+    scene.publish(0);
+    scene.publish(0);
     scene.gatherForDrawing();
 
     // Each army starts with the commander's trickle and one extractor's worth of storage,
@@ -2368,7 +2418,12 @@ void orderFirstExtractors(UnitScene& scene, std::span<const rm::scenario::Marker
         });
     }
 
-    // The batches' instance spans, filled from the store now that every unit is in it.
+    scene.interpolate = gInterpolate;
+
+    // The batches' instance spans, filled from a snapshot now that every unit is in the store.
+    // Published twice so `previous` and `current` agree: nothing has moved yet.
+    scene.publish(0);
+    scene.publish(0);
     scene.gatherForDrawing();
 
     if (scene.batches.size() > 1) {
@@ -3272,6 +3327,7 @@ struct MatchRunner {
 /// app, it changes nothing in the sim, and P7.5 moves this code out of `main.mm` entirely.
 bool gPrintEvents = false;
 
+
 void printEvents(const rm::sim::EventQueue& events, float now) {
     for (const rm::sim::Event& event : events.all()) {
         std::printf("  [%6.1fs] %-21s unit %u.%u by %u.%u army %d amount %.0f at %.0f,%.0f\n",
@@ -3414,6 +3470,11 @@ rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) 
     // simply a longer span next time somebody asks.
     scene.grewThisTick = false;
 
+    // THE SNAPSHOT (§7 P7.1), last thing in the tick — after the spawns, so a unit that
+    // appeared this tick is in it. `publish` rotates: what was current becomes previous, and
+    // the frame loop draws between the two.
+    scene.publish(static_cast<rm::TickIndex>(tickIndex) + 1);
+
     // LAST, so the dump is the whole tick: the sim's own events and then the caller's
     // `UnitCreated`/`UnitFinished`, in the order they happened. Printed before the caller-side
     // work at first, which meant the two kinds only the caller can raise were emitted after the
@@ -3555,10 +3616,14 @@ void march(UnitScene& scene, const rm::HeightField& field, PassabilitySet& passa
     // ground covered — the same rule the windowed path follows. This is also
     // what makes such a screenshot independent of `--time`: the sim decided
     // where the legs are, not the clock.
-    // The walk cycles, paced from the store, then gathered for drawing. Per TYPE because the
+    // The walk cycles, paced from the snapshot, then gathered for drawing. Per TYPE because the
     // animation belongs to the model: every unit of one type shares its clock length, and the
     // pass writes each unit's own phase from the ground it has covered.
-    scene.gatherForDrawing();
+    //
+    // Alpha 1 explicitly: a marched scene is a capture of one tick, and a blend of two would
+    // make the screenshot depend on where the pre-run happened to stop.
+    scene.publish(0);
+    scene.gatherForDrawing(1.0f);
 
     // --- Determinism ---------------------------------------------------------
     //
@@ -4156,6 +4221,14 @@ int main(int argc, const char* argv[]) {
             std::printf("sim: %u ticks a second\n", gAppTickRate.ticksPerSecond());
         }
 
+        // `--no-interpolate`: draw the newest snapshot rather than blending two (§7 P7.2).
+        //
+        // What a capture wants. A screenshot of tick N should BE tick N; with interpolation on,
+        // what it shows depends on how far the frame clock's banked time had got, which is a
+        // function of when the process happened to be scheduled. Every golden image in
+        // `docs/images/` is taken with this.
+        gInterpolate = !hasFlag(argc, argv, "--no-interpolate");
+
         // `--print-events`: narrate the sim's own event queue (§7 P6.1's manual check).
         gPrintEvents = hasFlag(argc, argv, "--print-events");
 
@@ -4227,6 +4300,8 @@ int main(int argc, const char* argv[]) {
             unit.pitch = align[0];
             unit.roll = align[1];
         }
+        units.publish(0);
+        units.publish(0);
         units.gatherForDrawing();
 
         // Before anything is uploaded: setUnits seeds every ring slot from the
@@ -4755,9 +4830,15 @@ int main(int argc, const char* argv[]) {
                 }
             }
 
-            // The gather builds every instance from the store, walk-cycle phase included —
-            // see `UnitScene::instanceFor`. There is no separate pacing pass to run first.
-            units.gatherForDrawing();
+            // The gather builds every instance from the last two SNAPSHOTS, blended by how far
+            // into the next tick the clock's banked time reaches (§7 P7.2). That fraction was
+            // already being computed — `TickClock::advance` banks the remainder — so exposing
+            // it as `alpha()` is what lets a 10 Hz sim draw continuously at 120 Hz rather than
+            // teleporting twelve times a step.
+            //
+            // Walk-cycle phase included, and interpolated too: a leg that stepped at the tick
+            // rate would slide as badly as a body that did.
+            units.gatherForDrawing(clock.alpha());
 
             // Re-upload when the match built something new. Only on growth, which is a
             // handful of times in a whole match — this walks every model and texture, so

@@ -94,6 +94,7 @@ add_library(rm_core STATIC
     src/core/scene/UnitIcons.cpp
     src/core/scene/UnitPlacement.cpp
     src/core/scene/UnitBatch.cpp
+    src/core/scene/UnitDraw.cpp
     src/core/scene/PropBatch.cpp
     src/core/scene/Picking.cpp
     src/core/scene/Selection.cpp
@@ -120,6 +121,7 @@ add_library(rm_core STATIC
     src/core/sim/StateHash.cpp
     src/core/sim/SlowUpdate.cpp
     src/core/sim/SpatialGrid.cpp
+    src/core/sim/Snapshot.cpp
     src/core/sim/Replay.cpp
     src/core/unit/UnitBlueprint.cpp
     src/core/unit/Weapon.cpp
@@ -199,6 +201,8 @@ if(BUILD_TESTING)
         tests/test_command_queue.cpp
         tests/test_events.cpp
         tests/test_features.cpp
+        tests/test_snapshot.cpp
+        tests/test_interpolate.cpp
         tests/test_build_order.cpp
         tests/test_combat.cpp
         tests/test_economy.cpp

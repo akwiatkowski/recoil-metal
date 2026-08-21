@@ -277,6 +277,21 @@ public:
         return rate_.ticks(kMaxCatchUp);
     }
 
+    /// How far into the next tick the banked time reaches, 0..1.
+    ///
+    /// THE INTERPOLATION ALPHA (§7 P7.2), and it was already being computed here — `advance`
+    /// banks the remainder and this is what the remainder means. Exposing it is what lets the
+    /// renderer draw between two snapshots instead of on top of the newer one; without it the
+    /// frame loop would have to keep a second copy of the same accumulator and the two would
+    /// drift.
+    ///
+    /// **Unsynced by construction**: it is wall time, which the sim never sees. A float here is
+    /// correct rather than tolerated.
+    [[nodiscard]] float alpha() const noexcept {
+        const float perTick = rate_.secondsPerTick();
+        return perTick > 0.0f ? std::clamp(unspentSeconds_ / perTick, 0.0f, 1.0f) : 0.0f;
+    }
+
 private:
     TickRate rate_{};
     float unspentSeconds_ = 0.0f;
