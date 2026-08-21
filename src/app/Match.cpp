@@ -133,7 +133,7 @@ bool gPrintEvents = false;
 /// A scan, still: `UnitCensus` (P1.3) answers this in O(1) and wiring it in is P3's, where
 /// the roles it keys on stop being hardcoded blueprint ids. One pass a second over a few
 /// hundred units is not what this costs.
-[[nodiscard]] Standing standingFor(UnitScene& scene, int army) {
+[[nodiscard]] Standing standingFor(const UnitScene& scene, int army) {
     Standing standing;
     const std::span<const rm::sim::Transform> transforms = scene.store.transforms();
     const std::span<const rm::sim::MoveState> motion = scene.store.motion();
@@ -185,7 +185,7 @@ bool gPrintEvents = false;
 /// Where the attack wave walks: kill it and its army is defeated, which is the
 /// whole win condition.
 [[nodiscard]] std::optional<std::array<rm::sim::Fx, 3>> nearestEnemyCommander(
-    UnitScene& scene, int army, const std::array<rm::sim::Fx, 3>& from) {
+    const UnitScene& scene, int army, const std::array<rm::sim::Fx, 3>& from) {
     if (army < 0 || static_cast<std::size_t>(army) >= scene.armies.size()) {
         return std::nullopt;
     }
@@ -258,21 +258,248 @@ bool gPrintEvents = false;
     return nearest;
 }
 
-/// One decision pass of the scripted opponent, for every army but the player's.
+} // namespace rm::app
+
+namespace rm::ai {
+
+void ScriptedOpponent::observe(const World& world, std::span<const rm::sim::Event> events) {
+    // The events are ignored, and that is the script rather than the port: it decides from what
+    // is STANDING, re-read every pass, so a structure that dies is simply rebuilt without anyone
+    // having to notice it died. An adapter hosting a real AI is the consumer these exist for.
+    (void)events;
+    world_ = &world;
+}
+
+void ScriptedOpponent::advance(rm::TickIndex tick) {
+    (void)tick;  // this script's cadence is the caller's; it has no clock of its own
+    decisions_.clear();
+    if (world_ == nullptr || army_ < 0) {
+        return;
+    }
+
+    const rm::app::UnitScene& scene = world_->scene;
+    const rm::sim::Army& army = scene.armies[static_cast<std::size_t>(army_)];
+    const rm::app::Standing standing = rm::app::standingFor(scene, army_);
+
+    // What is being paid for right now, split by who builds it: the commander
+    // owns structures, the factory owns tanks.
+    bool structureUnderway = false;
+    bool tankUnderway = false;
+    for (const rm::sim::Construction& work : scene.building) {
+        if (work.armyIndex != army_ || work.finished()) {
+            continue;
+        }
+        (rm::app::buildableDef(scene, work.blueprintIndex).isMobile() ? tankUnderway
+                                                                     : structureUnderway) = true;
+    }
+
+    const rm::sim::ArmyView view{
+        .commanderAlive = standing.commanderAlive,
+        .commanderBusy = structureUnderway,
+        .factoryBusy = tankUnderway,
+        .extractorsStanding = standing.extractors,
+        .powerGeneratorsStanding = standing.powerGenerators,
+        .factoriesStanding = standing.factories,
+        .tanksAlive = standing.tanks.size(),
+    };
+
+    // The commander's next structure, placed around ITS OWN start position —
+    // the base grows where the map put the army, not where the commander wandered.
+    const rm::sim::StructureOrder structure = rm::sim::nextStructure(view);
+    if (structure != rm::sim::StructureOrder::None) {
+        std::string blueprint;
+        std::optional<std::array<rm::sim::Fx, 3>> site;
+        const std::size_t slot = standing.powerGenerators + standing.factories;
+        const rm::mapinfo::StartPosition& start =
+            world_->starts[static_cast<std::size_t>(army_)];
+        const std::array<rm::sim::Fx, 3> home{rm::sim::fxFromFloat(start.x), rm::sim::Fx{},
+                                              rm::sim::fxFromFloat(start.z)};
+        switch (structure) {
+        case rm::sim::StructureOrder::PowerGenerator:
+            blueprint = rm::app::blueprintFor(scene, army, rm::app::energyStep(scene.opening));
+            site = rm::sim::structureSite(home, world_->centreX, world_->centreZ,
+                                          static_cast<int>(slot));
+            break;
+        case rm::sim::StructureOrder::Factory:
+            blueprint = rm::app::blueprintFor(scene, army, rm::app::factoryStep(scene.opening));
+            site = rm::sim::structureSite(home, world_->centreX, world_->centreZ,
+                                          static_cast<int>(slot));
+            break;
+        case rm::sim::StructureOrder::Extractor: {
+            blueprint =
+                rm::app::blueprintFor(scene, army, rm::app::extractorStep(scene.opening));
+            const rm::scenario::Marker* deposit =
+                rm::app::nearestFreeDeposit(scene, world_->markers, standing.commanderPosition);
+            if (deposit != nullptr) {
+                site = rm::app::fxPoint(deposit->position);
+            }
+            break;
+        }
+        case rm::sim::StructureOrder::None:
+            break;
+        }
+        if (site) {
+            decisions_.push_back(Decision{
+                .kind = Decision::Kind::StartConstruction,
+                .blueprint = blueprint,
+                .site = *site,
+                .builder = standing.commander,
+                .buildRate = standing.commanderBuildRate,
+            });
+        }
+    }
+
+    // The factory's next tank, built where the factory stands and rolled off it
+    // once finished (the spawn handles the rolloff).
+    if (rm::sim::wantsTank(view)) {
+        decisions_.push_back(Decision{
+            .kind = Decision::Kind::StartConstruction,
+            .blueprint = rm::app::blueprintFor(scene, army, scene.opening.waveUnit),
+            .site = standing.factoryPosition,
+            .builder = standing.factory,
+            .buildRate = standing.factoryBuildRate,
+        });
+    }
+
+    // The one attack wave: at strength, every tank walks at the nearest enemy
+    // commander. After this, reinforcements are sent as they roll off.
+    if (rm::sim::launchesAttack(script_, view, scene.opening.waveSize)) {
+        const std::optional<std::array<rm::sim::Fx, 3>> target =
+            rm::app::nearestEnemyCommander(scene, army_, standing.commanderPosition);
+        if (target) {
+            script_.attackLaunched = true;
+            for (const rm::sim::UnitId tank : standing.tanks) {
+                decisions_.push_back(Decision{
+                    .kind = Decision::Kind::Move,
+                    .unit = tank,
+                    .toX = (*target)[0],
+                    .toZ = (*target)[2],
+                });
+            }
+        }
+    }
+}
+
+} // namespace rm::ai
+
+namespace rm::app {
+
+/// One `ScriptedOpponent` per army, each told which army it plays.
 ///
-/// This is milestone 20's "not an AI", enacted: the pure decisions live in
-/// core/sim/BuildOrder.hpp and are tested there; this function only translates them
-/// into the scene — a Construction pushed, an attack order routed. Run once a
-/// second rather than every tick, because nothing here changes faster than a build
+/// A free function rather than a loop at the call site because the human player's slot is
+/// filled too: `runOpponents` skips it by army index, and a hole in the vector would make
+/// every later index arithmetic instead of a lookup.
+[[nodiscard]] std::vector<std::unique_ptr<rm::ai::Opponent>> makeScriptedOpponents(
+    std::size_t armies) {
+    std::vector<std::unique_ptr<rm::ai::Opponent>> scripts;
+    scripts.reserve(armies);
+    for (std::size_t army = 0; army < armies; ++army) {
+        auto scripted = std::make_unique<rm::ai::ScriptedOpponent>();
+        scripted->playFor(static_cast<int>(army));
+        scripts.push_back(std::move(scripted));
+    }
+    return scripts;
+}
+
+/// Applies what one opponent decided, in the order it decided it.
+///
+/// THE OTHER HALF OF THE PORT. An opponent hands back data; everything that needs the VFS, the
+/// buildable list or a passability grid happens here, which is what lets `Opponent` be an
+/// interface a Lua adapter can implement without ever seeing a `UnitScene`.
+///
+/// Order is preserved exactly, and it has to be: a structure decided before a tank was pushed
+/// before it, and the golden match is a per-tick hash of the result.
+void applyDecisions(UnitScene& scene, const rm::vfs::Vfs& content, const rm::HeightField& field,
+                    PassabilitySet& passability, const rm::sim::Army& army,
+                    std::span<const rm::ai::Decision> decisions, float elapsedSeconds,
+                    rm::TickIndex tickIndex) {
+    std::size_t ordered = 0;
+    std::size_t marching = 0;
+
+    for (const rm::ai::Decision& decision : decisions) {
+        switch (decision.kind) {
+        case rm::ai::Decision::Kind::StartConstruction: {
+            const std::optional<std::size_t> blueprintIndex =
+                resolveBuildable(scene, content, decision.blueprint);
+            if (!blueprintIndex) {
+                break;
+            }
+            const rm::unitdef::UnitDef& def = buildableDef(scene, *blueprintIndex);
+            // NOT THROUGH `applyCommand`, and that is a known hole rather than a
+            // preference — see `issueBuild`'s note. `Construction::blueprintIndex`
+            // indexes `scene.buildable`, and `applyCommand` reads `catalog.def()`:
+            // two index spaces wearing one type name.
+            scene.building.push_back(rm::sim::Construction{
+                .armyIndex = army.index,
+                .position = decision.site,
+                .cost = {.mass = def.buildCostMass, .energy = def.buildCostEnergy},
+                .buildTimeRemaining = def.buildTime,
+                .totalBuildTime = def.buildTime,
+                .buildPerTick = gAppTickRate.magPerTick(decision.buildRate),
+                .blueprintIndex = *blueprintIndex,
+            });
+            // The event the sim would have raised, raised by the caller instead, so a
+            // consumer sees the same vocabulary whichever path created the work.
+            scene.events.emit(rm::sim::Event{
+                .kind = rm::sim::EventKind::ConstructionStarted,
+                .instigator = decision.builder,
+                .army = army.index,
+                .amount = def.buildCostMass,
+                .at = decision.site,
+            });
+            // Structures announce themselves and tanks do not, which is what the original
+            // printed: the commander's build order is the story of the opening, while a
+            // factory turning out its ninth tank is noise.
+            if (!def.isMobile()) {
+                std::printf("  [%6.1fs] army %d starts %.*s\n",
+                            static_cast<double>(elapsedSeconds), army.index,
+                            static_cast<int>(decision.blueprint.size()),
+                            decision.blueprint.data());
+            }
+            break;
+        }
+        case rm::ai::Decision::Kind::Move: {
+            ++ordered;
+            if (!scene.store.alive(decision.unit)) {
+                break;  // died between the census and the order
+            }
+            const auto type = static_cast<std::size_t>(scene.store.typeAt(decision.unit.index));
+            const rm::sim::PassabilityGrid& grid = passability.gridFor(
+                scene.maxSlopeDegrees[type], scene.maxWaterDepthElmos[type]);
+            if (issueMove(scene, grid, field, decision.unit, playerDriving(scene, army.index),
+                          tickIndex, decision.toX, decision.toZ)) {
+                ++marching;
+            }
+            break;
+        }
+        }
+    }
+
+    // Moves only ever come from the one attack wave, so a batch of them IS the attack.
+    if (ordered > 0) {
+        std::printf("  [%6.1fs] army %d ATTACKS with %zu of %zu tanks\n",
+                    static_cast<double>(elapsedSeconds), army.index, marching, ordered);
+    }
+}
+
+/// One decision pass, for every army but the player's.
+///
+/// This is the port's driver (ADR-038) and it holds no opinion about what an opponent is: it
+/// paces them, shows each one the world, and applies what comes back. The scripted opponent's
+/// own logic lives in `rm::ai::ScriptedOpponent` above, and the pure decisions it is made of
+/// stay in `core/sim/BuildOrder.hpp` where they are tested.
+///
+/// Run once a second rather than every tick, because nothing here changes faster than a build
 /// finishes and the decisions read the whole scene.
 void runOpponents(UnitScene& scene, const rm::vfs::Vfs& content, const rm::HeightField& field,
                   PassabilitySet& passability,
                   std::span<const rm::mapinfo::StartPosition> starts,
                   std::span<const rm::scenario::Marker> markers,
-                  std::vector<rm::sim::Opponent>& scripts, float elapsedSeconds,
+                  std::vector<std::unique_ptr<rm::ai::Opponent>>& scripts, float elapsedSeconds,
                   rm::TickIndex tickIndex) {
     // The middle of the map, in fixed point: `structureSite` and `rolloffPoint` place things
-    // relative to it, and both are sim geometry now.
+    // relative to it, and both are sim geometry now. Computed here rather than inside an
+    // opponent, so no implementation of the port does map arithmetic of its own.
     const rm::sim::Fx centreX = rm::sim::Fx::fromInt(field.squaresX * rm::kSquareSize / 2);
     const rm::sim::Fx centreZ = rm::sim::Fx::fromInt(field.squaresZ * rm::kSquareSize / 2);
 
@@ -296,6 +523,16 @@ void runOpponents(UnitScene& scene, const rm::vfs::Vfs& content, const rm::Heigh
     // first. A tenth of a second between them changes when, not who.
     const rm::sim::SlowUpdate pacing{gAppTickRate, rm::sim::seconds(1.0f)};
 
+    const rm::ai::World world{
+        .scene = scene,
+        .content = content,
+        .field = field,
+        .starts = starts,
+        .markers = markers,
+        .centreX = centreX,
+        .centreZ = centreZ,
+    };
+
     for (const rm::sim::Army& army : scene.armies) {
         if (army.index == scene.playerArmy || army.defeated
             || static_cast<std::size_t>(army.index) >= scripts.size()) {
@@ -304,163 +541,14 @@ void runOpponents(UnitScene& scene, const rm::vfs::Vfs& content, const rm::Heigh
         if (!pacing.due(static_cast<std::size_t>(army.index), tickIndex)) {
             continue;
         }
-        rm::sim::Opponent& script = scripts[static_cast<std::size_t>(army.index)];
-        const Standing standing = standingFor(scene, army.index);
+        rm::ai::Opponent& opponent = *scripts[static_cast<std::size_t>(army.index)];
 
-        // What is being paid for right now, split by who builds it: the commander
-        // owns structures, the factory owns tanks.
-        bool structureUnderway = false;
-        bool tankUnderway = false;
-        for (const rm::sim::Construction& work : scene.building) {
-            if (work.armyIndex != army.index || work.finished()) {
-                continue;
-            }
-            (buildableDef(scene, work.blueprintIndex).isMobile() ? tankUnderway
-                                                             : structureUnderway) = true;
-        }
-
-        const rm::sim::ArmyView view{
-            .commanderAlive = standing.commanderAlive,
-            .commanderBusy = structureUnderway,
-            .factoryBusy = tankUnderway,
-            .extractorsStanding = standing.extractors,
-            .powerGeneratorsStanding = standing.powerGenerators,
-            .factoriesStanding = standing.factories,
-            .tanksAlive = standing.tanks.size(),
-        };
-
-        // The commander's next structure, placed around ITS OWN start position —
-        // the base grows where the map put the army, not where the commander wandered.
-        const rm::sim::StructureOrder structure = rm::sim::nextStructure(view);
-        if (structure != rm::sim::StructureOrder::None) {
-            // A `std::string` and not a `string_view`: `blueprintFor` returns by value now
-            // that the path is composed from a roster entry rather than being a `constexpr`
-            // literal. A view here bound to the temporary and dangled — the match built its
-            // first extractor and then silently stopped, because every later blueprint path
-            // was freed memory. Caught by running a match, not by the compiler.
-            std::string blueprint;
-            std::optional<std::array<rm::sim::Fx, 3>> site;
-            const std::size_t slot = standing.powerGenerators + standing.factories;
-            const rm::mapinfo::StartPosition& start =
-                starts[static_cast<std::size_t>(army.index)];
-            const std::array<rm::sim::Fx, 3> home{rm::sim::fxFromFloat(start.x),
-                                                  rm::sim::Fx{},
-                                                  rm::sim::fxFromFloat(start.z)};
-            switch (structure) {
-            case rm::sim::StructureOrder::PowerGenerator:
-                blueprint = blueprintFor(scene, army, energyStep(scene.opening));
-                site = rm::sim::structureSite(home, centreX, centreZ,
-                                              static_cast<int>(slot));
-                break;
-            case rm::sim::StructureOrder::Factory:
-                blueprint = blueprintFor(scene, army, factoryStep(scene.opening));
-                site = rm::sim::structureSite(home, centreX, centreZ,
-                                              static_cast<int>(slot));
-                break;
-            case rm::sim::StructureOrder::Extractor: {
-                blueprint = blueprintFor(scene, army, extractorStep(scene.opening));
-                const rm::scenario::Marker* deposit =
-                    nearestFreeDeposit(scene, markers, standing.commanderPosition);
-                if (deposit != nullptr) {
-                    site = fxPoint(deposit->position);
-                }
-                break;
-            }
-            case rm::sim::StructureOrder::None:
-                break;
-            }
-            if (site) {
-                const std::optional<std::size_t> blueprintIndex =
-                    resolveBuildable(scene, content, blueprint);
-                if (blueprintIndex) {
-                    const rm::unitdef::UnitDef& def = buildableDef(scene, *blueprintIndex);
-                    // NOT THROUGH `applyCommand`, and that is a known hole rather than a
-                    // preference — see `issueBuild`'s note. `Construction::blueprintIndex`
-                    // indexes `scene.buildable`, and `applyCommand` reads `catalog.def()`:
-                    // two index spaces wearing one type name.
-                    scene.building.push_back(rm::sim::Construction{
-                        .armyIndex = army.index,
-                        .position = *site,
-                        .cost = {.mass = def.buildCostMass, .energy = def.buildCostEnergy},
-                        .buildTimeRemaining = def.buildTime,
-                        .totalBuildTime = def.buildTime,
-                        .buildPerTick = gAppTickRate.magPerTick(standing.commanderBuildRate),
-                        .blueprintIndex = *blueprintIndex,
-                    });
-                    // The event the sim would have raised, raised by the caller instead, so a
-                    // consumer sees the same vocabulary whichever path created the work.
-                    scene.events.emit(rm::sim::Event{
-                        .kind = rm::sim::EventKind::ConstructionStarted,
-                        .instigator = standing.commander,
-                        .army = army.index,
-                        .amount = def.buildCostMass,
-                        .at = *site,
-                    });
-                    std::printf("  [%6.1fs] army %d starts %.*s\n",
-                                static_cast<double>(elapsedSeconds), army.index,
-                                static_cast<int>(blueprint.size()), blueprint.data());
-                }
-            }
-        }
-
-        // The factory's next tank, built where the factory stands and rolled off it
-        // once finished (the spawn handles the rolloff).
-        if (rm::sim::wantsTank(view)) {
-            const std::optional<std::size_t> blueprintIndex =
-                resolveBuildable(scene, content,
-                                 blueprintFor(scene, army, scene.opening.waveUnit));
-            if (blueprintIndex) {
-                const rm::unitdef::UnitDef& def = buildableDef(scene, *blueprintIndex);
-                scene.building.push_back(rm::sim::Construction{
-                    .armyIndex = army.index,
-                    .position = standing.factoryPosition,
-                    .cost = {.mass = def.buildCostMass, .energy = def.buildCostEnergy},
-                    .buildTimeRemaining = def.buildTime,
-                    .totalBuildTime = def.buildTime,
-                    .buildPerTick = gAppTickRate.magPerTick(standing.factoryBuildRate),
-                    .blueprintIndex = *blueprintIndex,
-                });
-                scene.events.emit(rm::sim::Event{
-                    .kind = rm::sim::EventKind::ConstructionStarted,
-                    .instigator = standing.factory,
-                    .army = army.index,
-                    .amount = def.buildCostMass,
-                    .at = standing.factoryPosition,
-                });
-            }
-        }
-
-        // The one attack wave: at strength, every tank walks at the nearest enemy
-        // commander. After this, reinforcements are sent as they roll off.
-        if (rm::sim::launchesAttack(script, view, scene.opening.waveSize)) {
-            const std::optional<std::array<rm::sim::Fx, 3>> target =
-                nearestEnemyCommander(scene, army.index, standing.commanderPosition);
-            if (target) {
-                script.attackLaunched = true;
-                std::size_t marching = 0;
-                for (const rm::sim::UnitId tank : standing.tanks) {
-                    if (!scene.store.alive(tank)) {
-                        continue;  // died between the census and the order
-                    }
-                    const auto type =
-                        static_cast<std::size_t>(scene.store.typeAt(tank.index));
-                    const rm::sim::PassabilityGrid& grid =
-                        passability.gridFor(scene.maxSlopeDegrees[type],
-                                            scene.maxWaterDepthElmos[type]);
-                    if (issueMove(scene, grid, field, tank,
-                                  playerDriving(scene, army.index), tickIndex, (*target)[0],
-                                  (*target)[2])) {
-                        ++marching;
-                    }
-                }
-                std::printf("  [%6.1fs] army %d ATTACKS with %zu of %zu tanks\n",
-                            static_cast<double>(elapsedSeconds), army.index, marching,
-                            standing.tanks.size());
-            }
-        }
+        opponent.observe(world, scene.events.all());
+        opponent.advance(tickIndex);
+        applyDecisions(scene, content, field, passability, army, opponent.drain(),
+                       elapsedSeconds, tickIndex);
     }
 }
-
 
 [[nodiscard]] MatchRunner makeMatchRunner(UnitScene& scene, const rm::HeightField& field,
                                           PassabilitySet& passability,
@@ -474,7 +562,7 @@ void runOpponents(UnitScene& scene, const rm::vfs::Vfs& content, const rm::Heigh
         .content = content,
         .starts = starts,
         .markers = markers,
-        .scripts = std::vector<rm::sim::Opponent>(scene.armies.size()),
+        .scripts = makeScriptedOpponents(scene.armies.size()),
         .match =
             rm::sim::Match{
                 .armies = scene.armies,
@@ -633,7 +721,7 @@ rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) 
         if (spawned && buildableDef(scene, work.blueprintIndex).isMobile()) {
             // Off the factory floor: straight to the fight once the wave has gone, to the
             // rally point outside the base while it forms.
-            const auto target = runner.scripts[army].attackLaunched
+            const auto target = runner.scripts[army]->attackLaunched()
                                     ? nearestEnemyCommander(scene, work.armyIndex,
                                                             work.position)
                                     : std::nullopt;

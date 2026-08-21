@@ -15,6 +15,7 @@
 // one thing that must not drift between two callers cannot.
 
 #include "app/Cli.hpp"
+#include "app/Opponent.hpp"
 #include "app/SceneBuild.hpp"
 
 #include "core/map/ScenarioSave.hpp"
@@ -24,6 +25,7 @@
 #include "core/sim/Skirmish.hpp"
 
 #include <array>
+#include <memory>
 #include <cstddef>
 #include <optional>
 #include <span>
@@ -92,8 +94,9 @@ struct MatchRunner {
     std::span<const rm::mapinfo::StartPosition> starts;
     std::span<const rm::scenario::Marker> markers;
 
-    /// The scripted opponents' memory, one per army; a human player's slot stays unused.
-    std::vector<rm::sim::Opponent> scripts;
+    /// One opponent per army, behind the port (ADR-038); a human player's slot holds a
+    /// `ScriptedOpponent` that is simply never asked to think.
+    std::vector<std::unique_ptr<rm::ai::Opponent>> scripts;
 
     /// Built once and kept, because `over` has to survive between ticks — a match is
     /// decided on one tick and stays decided.
@@ -148,20 +151,23 @@ extern bool gPrintEvents;
 
 [[nodiscard]] rm::PlayerIndex playerDriving(const UnitScene& scene, int army);
 
-[[nodiscard]] Standing standingFor(UnitScene& scene, int army);
+[[nodiscard]] Standing standingFor(const UnitScene& scene, int army);
 
 [[nodiscard]] std::optional<std::array<rm::sim::Fx, 3>> nearestEnemyCommander(
-    UnitScene& scene, int army, const std::array<rm::sim::Fx, 3>& from);
+    const UnitScene& scene, int army, const std::array<rm::sim::Fx, 3>& from);
 
 [[nodiscard]] const rm::scenario::Marker* nearestFreeDeposit(
     const UnitScene& scene, std::span<const rm::scenario::Marker> markers,
     const std::array<rm::sim::Fx, 3>& from);
 
+/// Drives every opponent through the port (ADR-038): each one observes, thinks, and hands
+/// back decisions that this applies. Which implementation plays which army is settled at match
+/// setup, so this loop never asks what kind of opponent it is holding.
 void runOpponents(UnitScene& scene, const rm::vfs::Vfs& content, const rm::HeightField& field,
                   PassabilitySet& passability,
                   std::span<const rm::mapinfo::StartPosition> starts,
                   std::span<const rm::scenario::Marker> markers,
-                  std::vector<rm::sim::Opponent>& scripts, float elapsedSeconds,
+                  std::vector<std::unique_ptr<rm::ai::Opponent>>& scripts, float elapsedSeconds,
                   rm::TickIndex tickIndex);
 
 [[nodiscard]] MatchRunner makeMatchRunner(UnitScene& scene, const rm::HeightField& field,
