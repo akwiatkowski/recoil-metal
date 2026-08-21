@@ -117,6 +117,40 @@ struct UnitDef {
     /// that family does state.
     MotionType motion = MotionType::None;
 
+    // --- intel -------------------------------------------------------------
+    //
+    // How far this unit can see, and by what means (ADR-037). Elmos, converted at parse
+    // time — a `.bp` states ogrids and BAR states elmos, the same split as every other
+    // distance in this struct.
+    //
+    // MOHO'S NAMES, per the plan's rule that a native field carries the original's
+    // spelling and units: `VisionRadius`, `WaterVisionRadius`, `RadarRadius`,
+    // `SonarRadius`. BAR's `sightdistance`, `radardistance` and `sonardistance` are read
+    // into the first, third and fourth — the same quantities under different spellings.
+    //
+    // ZERO IS THE DEFAULT AND IT MEANS ZERO. 177 of the 568 blueprints declare no
+    // VisionRadius at all — wrecks, props, walls — and a unit that states no radius has
+    // none. Defaulting to anything else would hand sight to things that never had it, and
+    // the symptom (an enemy base visible for no reason) points nowhere near the cause.
+    //
+    // THE FOUR THE CORPUS ACTUALLY DECLARES, which is why the list stops here:
+    // VisionRadius on 391 of the 568, WaterVisionRadius on 70, SonarRadius on 67,
+    // RadarRadius on 57. FA's other nine intel types — Omni, Cloak, the two stealth
+    // fields, Jammer, Spoof — are additions to this block when their rules arrive, not a
+    // redesign of it.
+    float visionRadiusElmos = 0.0f;
+
+    /// How far it sees UNDER water, which Forged Alliance treats as its own sense.
+    ///
+    /// BAR has no equivalent and this stays zero for that family rather than being filled
+    /// in from the land radius: BAR expresses underwater detection through sonar, which
+    /// 148 of its units carry, and copying `sightdistance` here would give every tank
+    /// submarine detection.
+    float waterVisionRadiusElmos = 0.0f;
+
+    float radarRadiusElmos = 0.0f;
+    float sonarRadiusElmos = 0.0f;
+
     // --- economy -----------------------------------------------------------
     //
     // What it costs to make and what it makes. All four are stated by essentially every

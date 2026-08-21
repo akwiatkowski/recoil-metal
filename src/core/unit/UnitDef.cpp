@@ -161,6 +161,14 @@ std::expected<std::vector<UnitDef>, lua::ParseError> loadFileAll(
         def.maxWaterDepthElmos = numberOr(table, "maxwaterdepth", 0.0f);
         def.health = sim::magFromFloat(numberOr(table, "health", 0.0f));
 
+        // Intel radii, elmos as authored — no conversion, unlike the `.bp` family's
+        // ogrids. Counted across BAR's own `units/`: sightdistance 958, radardistance
+        // 195, sonardistance 148. `waterVisionRadiusElmos` is deliberately left at zero;
+        // see UnitDef.hpp for why it is not filled in from the sight radius.
+        def.visionRadiusElmos = numberOr(table, "sightdistance", 0.0f);
+        def.radarRadiusElmos = numberOr(table, "radardistance", 0.0f);
+        def.sonarRadiusElmos = numberOr(table, "sonardistance", 0.0f);
+
         if (const lua::Value* flies = table.find("canfly")) {
             def.canFly = flies->asBoolean().value_or(false);
         }

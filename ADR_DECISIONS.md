@@ -1445,3 +1445,42 @@ silicon part is 10-14 cores but only 8-10 of them are performance cores. Sizing 
 `hardware_concurrency()` schedules sim work onto efficiency cores and can be *slower* than
 running serially. The pool is sized to the performance-core count, or the work is submitted
 at `QOS_CLASS_USER_INTERACTIVE` and left to the scheduler.
+
+## ADR-037 — Intel is a refcount grid per alliance; occlusion is a per-type algorithm
+
+**Context.** The engine has no vision of any kind: `Minimap.hpp` states "no fog of war",
+and `nearestTarget` (`Combat.hpp:142`) picks from the whole unit store filtered only by
+hostility and range, so every unit shoots things it cannot see. The two engines we read
+disagree about what vision *is*. Recoil raycasts terrain for LOS and radar and takes
+circles for everything else (`LosHandler.cpp:92`). Supreme Commander does not consider
+terrain at all: `effects/vision.fx:35` stamps `radius * vertex.xz + position.xy` — a flat
+2D disc with no height input and no heightmap sample anywhere in the file.
+
+**Decision.** Copy Recoil's *structure* and make the algorithm a setting.
+
+The structure is a **reference count per square per alliance**, not a boolean
+(`ILosType`, LosHandler.h:84-88). That is the load-bearing choice: with booleans one
+unit's sight cannot be withdrawn without re-deriving every other unit's, and removal is
+most of what an intel system does. Alliance rather than army because `Army.hpp` already
+names `AllianceIndex` as "who wins together, and later who shares vision".
+
+The algorithm is per intel type, as Recoil's own `algoType` is, and the two named
+configurations are selectable:
+
+  - **FA style** — every type a flat circle. What Forged Alliance does.
+  - **Recoil style** — raycast with terrain occlusion for vision and radar, circles for
+    sonar. Hills block sight and high ground is worth holding.
+
+**Alternatives considered.** *Circles only*, as FA-faithfulness would argue: rejected
+because it fixes the answer to a gameplay question a player should be able to ask, and
+because occlusion is the more interesting game. *Raycast only*: rejected because it
+renders FA maps in a way FA never did, on the content family we primarily load.
+
+**Consequences.** We carry both algorithms and a mipped heightmap the circle path does not
+need. The grid is integer and enters the state hash — `StateHash.cpp:35` makes a float in
+hashed state a compile error — so both styles are covered by `--hash-log` and `make verify`
+without new determinism machinery, and a style change invalidates a recorded log, correctly.
+First pass carries Vision, Radar and Sonar, being what 391, 57 and 67 of the shipped
+blueprints declare. The remaining nine FA intel types — Omni, Cloak, CloakField,
+RadarStealth(Field), SonarStealth(Field), Jammer, Spoof — are additions to the same type,
+not a redesign.

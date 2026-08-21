@@ -125,6 +125,33 @@ TEST_CASE("an absent field leaves its default rather than reading as zero") {
     CHECK(def->maxSlopeDegrees == Approx(0.0f));
 }
 
+TEST_CASE("BAR states its intel radii in elmos already, so they are read as they stand") {
+    // The tags, counted across BAR's own `units/`: sightdistance 958,
+    // radardistance 195, sonardistance 148. No x8 here — this family's distances
+    // are elmos throughout, which is the whole reason the two loaders exist.
+    const auto def = parse(R"(
+return {
+	armstump = {
+		speed = 63,
+		sightdistance = 350,
+		radardistance = 0,
+		sonardistance = 0,
+	},
+}
+)");
+
+    REQUIRE(def.has_value());
+    CHECK(def->visionRadiusElmos == Approx(350.0f));
+    CHECK(def->radarRadiusElmos == Approx(0.0f));
+    CHECK(def->sonarRadiusElmos == Approx(0.0f));
+
+    // NO BAR EQUIVALENT, and it is not faked from `sightdistance`. Forged Alliance
+    // gives a unit a separate radius for seeing under water; BAR expresses the same
+    // thing through sonar, and 148 of its units carry one. Filling this in from the
+    // land radius would give every BAR tank submarine detection.
+    CHECK(def->waterVisionRadiusElmos == Approx(0.0f));
+}
+
 TEST_CASE("a definition that is not a named table is an error") {
     CHECK_FALSE(parse("return { }").has_value());
     CHECK_FALSE(parse("return { armpw = 5 }").has_value());

@@ -95,6 +95,57 @@ TEST_CASE("a unit blueprint's numbers arrive in the engine's own units") {
     CHECK(def->meshToElmos == Approx(0.56f));
 }
 
+TEST_CASE("intel radii arrive in elmos, from the ogrids the Intel block states") {
+    // The Intel block is what a `.bp` says about what a unit can SEE, and the four
+    // radii read here are the ones the corpus actually declares: VisionRadius on
+    // 391 of the shipped units, WaterVisionRadius on 70, SonarRadius on 67,
+    // RadarRadius on 57. Ogrids like every other distance in the family, so x8 —
+    // the ACU's VisionRadius of 26 is 208 elmos, which is the number to check
+    // against BAR's `sightdistance`, already stated in elmos.
+    const Blueprint bp{"URL0001_unit.bp", R"(
+        UnitBlueprint {
+            Physics = { MotionType = 'RULEUMT_Land' },
+            Intel = {
+                VisionRadius = 26,
+                WaterVisionRadius = 26,
+                RadarRadius = 0,
+                SonarRadius = 60,
+            },
+            SizeX = 1, SizeZ = 1,
+        }
+    )"};
+    const auto def = rm::unitbp::loadFile(bp.path());
+    REQUIRE(def.has_value());
+
+    CHECK(def->visionRadiusElmos == Approx(208.0f));
+    CHECK(def->waterVisionRadiusElmos == Approx(208.0f));
+    CHECK(def->sonarRadiusElmos == Approx(480.0f));
+
+    // Stated as zero, and kept as zero. A radius of nothing is a unit that carries
+    // no radar, which is most of them — not a unit whose radar we failed to read.
+    CHECK(def->radarRadiusElmos == Approx(0.0f));
+}
+
+TEST_CASE("a blueprint with no Intel block sees nothing rather than everything") {
+    // 177 of the 568 declare no VisionRadius. Defaulting a missing radius to
+    // anything but zero would give a wreck, a prop and a nuke silo the sight of a
+    // scout — and the failure would show as the enemy's whole base being visible
+    // for reasons nobody could trace back to a missing table.
+    const Blueprint bp{"UEB0101_unit.bp", R"(
+        UnitBlueprint {
+            Physics = { MotionType = 'RULEUMT_None' },
+            SizeX = 1, SizeZ = 1,
+        }
+    )"};
+    const auto def = rm::unitbp::loadFile(bp.path());
+    REQUIRE(def.has_value());
+
+    CHECK(def->visionRadiusElmos == Approx(0.0f));
+    CHECK(def->waterVisionRadiusElmos == Approx(0.0f));
+    CHECK(def->radarRadiusElmos == Approx(0.0f));
+    CHECK(def->sonarRadiusElmos == Approx(0.0f));
+}
+
 TEST_CASE("a fractional size keeps its precision instead of rounding to squares") {
     // 418 of the 568 shipped sizes are fractional and 154 are under a single
     // ogrid, the smallest 0.01 — which as whole squares would be a radius of 4

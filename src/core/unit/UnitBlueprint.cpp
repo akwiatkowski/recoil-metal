@@ -177,6 +177,19 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
     def.maxSlopeDegrees = limits.maxSlopeDegrees;
     def.maxWaterDepthElmos = limits.maxWaterDepthElmos;
 
+    // --- intel -------------------------------------------------------------
+    //
+    // Ogrids to elmos, the same x8 as every other distance here. The block is absent on
+    // the 177 blueprints that see nothing, and a missing table reads as four zeroes
+    // rather than as a default sight radius — see UnitDef.hpp.
+    if (const lua::Value* intel = parsed->path("Intel")) {
+        def.visionRadiusElmos = numberOr(*intel, "VisionRadius", 0.0f) * scmap::kElmosPerOgrid;
+        def.waterVisionRadiusElmos =
+            numberOr(*intel, "WaterVisionRadius", 0.0f) * scmap::kElmosPerOgrid;
+        def.radarRadiusElmos = numberOr(*intel, "RadarRadius", 0.0f) * scmap::kElmosPerOgrid;
+        def.sonarRadiusElmos = numberOr(*intel, "SonarRadius", 0.0f) * scmap::kElmosPerOgrid;
+    }
+
     // --- size --------------------------------------------------------------
     //
     // `SizeX`/`SizeY`/`SizeZ` sit at the file's ROOT, not under `Footprint`, and

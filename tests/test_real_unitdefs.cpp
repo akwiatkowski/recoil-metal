@@ -21,7 +21,7 @@ namespace {
 [[nodiscard]] std::filesystem::path barRoot() {
     if (const char* home = std::getenv("HOME")) {
         return std::filesystem::path{home}
-             / "projects/llm/games/forged-alliance-reborn/reference/BAR";
+             / "projects/llm/games/faf/forged-alliance-reborn/reference/BAR";
     }
     return {};
 }
@@ -41,6 +41,9 @@ TEST_CASE("every BAR unit definition parses", "[corpus]") {
     std::size_t mobile = 0;
     std::size_t flying = 0;
     std::size_t withModel = 0;
+    std::size_t sees = 0;
+    std::size_t hasRadar = 0;
+    std::size_t hasSonar = 0;
     std::vector<std::string> turnless;
 
     // Every name the corpus declares, so a duplicate — two files claiming the
@@ -93,6 +96,14 @@ TEST_CASE("every BAR unit definition parses", "[corpus]") {
         CHECK(def->footprintSquaresX >= 2);
         CHECK(def->footprintSquaresZ >= 2);
 
+        sees += (def->visionRadiusElmos > 0.0f) ? 1 : 0;
+        hasRadar += (def->radarRadiusElmos > 0.0f) ? 1 : 0;
+        hasSonar += (def->sonarRadiusElmos > 0.0f) ? 1 : 0;
+        // Never filled in for this family, whatever the unit — see UnitDef.hpp. Asserted
+        // per unit rather than counted, because a single non-zero here would mean the
+        // loader had started inventing underwater sight for a game that has none.
+        CHECK(def->waterVisionRadiusElmos == 0.0f);
+
         const auto [it, inserted] = byName.emplace(def->name, entry.path());
         if (!inserted) {
             duplicates.push_back(def->name);
@@ -133,6 +144,18 @@ TEST_CASE("every BAR unit definition parses", "[corpus]") {
     // The turn-rate-less ground units are the joke ones; if this grows, the
     // loader has started missing a field real units use.
     CHECK(turnless.size() < 40);
+
+    // ADR-037's census for this family. `sightdistance` appears 958 times across the
+    // corpus, `radardistance` 195 and `sonardistance` 148 — and unlike Supreme Commander,
+    // where 36 blueprints declare a vision radius of zero, here essentially everything
+    // that parses sees something. Bounds rather than exact counts because BAR is a live
+    // repository and gains units between checkouts; what these catch is the loader
+    // reading none of them, which is what it did before this.
+    INFO("intel: " << sees << " see, " << hasRadar << " carry radar, " << hasSonar
+                   << " carry sonar");
+    CHECK(sees > 800);
+    CHECK(hasRadar > 100);
+    CHECK(hasSonar > 80);
 }
 
 TEST_CASE("known BAR units carry the values this engine hardcoded", "[corpus]") {

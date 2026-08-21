@@ -249,3 +249,85 @@ TEST_CASE("the economy the blueprints state is the economy the game plays", "[co
         CHECK(def->isBuilder());
     }
 }
+
+TEST_CASE("the intel radii the corpus declares are the ones the loader reads", "[corpus]") {
+    // ADR-037's census, checked rather than quoted — and it is checked HERE, through the
+    // loader, precisely because counting these by grep gets it wrong: `JamRadius` is a
+    // nested `{Max, Min}` table, so a naive non-greedy match for the Intel block stops
+    // at its closing brace and loses every tag after it on five blueprints.
+    //
+    // These counts are what decided the first pass carries Vision, WaterVision, Radar and
+    // Sonar and stops: the other nine FA intel types are declared too rarely to shape the
+    // design, Omni's 17 being the closest call and needing rules of its own anyway.
+    const std::vector<std::filesystem::path> files = blueprints();
+    if (files.empty()) {
+        SKIP("no Supreme Commander unit blueprints at " + unitRoot().string());
+    }
+
+    int vision = 0;
+    int waterVision = 0;
+    int radar = 0;
+    int sonar = 0;
+    float widestRadar = 0.0f;
+
+    for (const std::filesystem::path& path : files) {
+        const auto def = rm::unitbp::loadFile(path);
+        REQUIRE(def.has_value());
+
+        vision += (def->visionRadiusElmos > 0.0f) ? 1 : 0;
+        waterVision += (def->waterVisionRadiusElmos > 0.0f) ? 1 : 0;
+        radar += (def->radarRadiusElmos > 0.0f) ? 1 : 0;
+        sonar += (def->sonarRadiusElmos > 0.0f) ? 1 : 0;
+        widestRadar = std::max(widestRadar, def->radarRadiusElmos);
+    }
+
+    // Units that SEE, as against units that merely declare the tag. 391 blueprints carry
+    // a VisionRadius and 36 of those carry a zero — walls, wreckage, the shields — so the
+    // count below is the smaller number. A reader that defaulted a missing block to some
+    // sight radius would push this to 568; one that failed to find the block would push
+    // it to 0. Radar and sonar are never declared as zero: a unit either has the sense or
+    // does not mention it.
+    CHECK(vision == 355);
+    CHECK(waterVision == 62);
+    CHECK(radar == 57);
+    CHECK(sonar == 67);
+
+    // The Cybran T3 radar, 600 ogrids. Worth pinning because it is the number that says
+    // radar is a different ORDER of thing from sight: 4800 elmos against the widest
+    // vision on any unit, which is 800.
+    CHECK(widestRadar == Catch::Approx(4800.0f));
+}
+
+TEST_CASE("named units carry the intel their blueprints state", "[corpus]") {
+    struct Expected {
+        const char* id;
+        float vision;      ///< elmos, so the blueprint's ogrids x 8
+        float waterVision;
+        float radar;
+        float sonar;
+    };
+    // Read by hand out of the retail blueprints.
+    const Expected cases[] = {
+        // The Cybran ACU: sees 26 ogrids on land and under water, hears 60, no radar.
+        {"URL0001", 208.0f, 208.0f, 0.0f, 480.0f},
+        // A medium tank states VisionRadius and nothing else — the common shape.
+        {"UEL0201", 160.0f, 0.0f, 0.0f, 0.0f},
+        // The Cybran T3 radar: a huge radar radius on a unit that barely sees.
+        {"URB3104", 240.0f, 0.0f, 4800.0f, 0.0f},
+    };
+
+    for (const Expected& expected : cases) {
+        const std::filesystem::path path =
+            unitRoot() / expected.id / (std::string{expected.id} + "_unit.bp");
+        if (!std::filesystem::exists(path)) {
+            SKIP(std::string{"no "} + expected.id + " blueprint");
+        }
+        const auto def = rm::unitbp::loadFile(path);
+        REQUIRE(def.has_value());
+
+        CHECK(def->visionRadiusElmos == Catch::Approx(expected.vision));
+        CHECK(def->waterVisionRadiusElmos == Catch::Approx(expected.waterVision));
+        CHECK(def->radarRadiusElmos == Catch::Approx(expected.radar));
+        CHECK(def->sonarRadiusElmos == Catch::Approx(expected.sonar));
+    }
+}
