@@ -10,6 +10,8 @@
 
 namespace rm::sim {
 
+class Terrain;
+
 // What an alliance can see, and by what means (ADR-037).
 //
 // WHY THIS EXISTS. Nothing in this engine knew: `nearestTarget` picked from the whole unit
@@ -144,5 +146,44 @@ private:
 /// reading of the file than one that sees a single square.
 void circleSquares(const IntelGrid& grid, Fx x, Fx z, Fx radius,
                    std::vector<std::int32_t>& squares);
+
+/// The squares an emitter at `eyeHeight` can see over the ground, appended to `squares`.
+///
+/// Recoil's LOS, and the shape of it is simpler than its reputation: **start from the disc
+/// and subtract what the ground hides.** Rays are cast outward from the centre; along each
+/// one a running maximum angle rises as the ray climbs, and a square whose own angle falls
+/// below that maximum is behind a crest and gets struck off.
+///
+/// Transcribed from `LosMap.cpp` — `CastLos` at 525, the angle definition at 654, the ray
+/// construction at 181-309 — with four differences worth stating rather than hiding:
+///
+///   - **Heights are sampled, not mipped.** Recoil reads a pre-reduced heightmap at the
+///     grid's own mip level; we sample the real terrain at each square's centre. Identical
+///     at mip 0 and an approximation above it, in the direction of detail rather than away.
+///   - **No angle table and no instance cache.** Both are Recoil making the same
+///     computation cheap across thousands of units; ours runs on `SlowUpdate`'s cadence and
+///     only for emitters that moved.
+///   - **The eye height is not bucketed.** Recoil rounds it into buckets so two units at
+///     similar heights can share one cached instance. We share nothing, so rounding the
+///     input would lose accuracy and buy nothing.
+///   - **Fixed point throughout**, where Recoil uses floats and a reciprocal-square-root
+///     table. `fxSqrt` is exact on every machine and a `libm` call is not (`Fx.hpp`).
+///
+/// The units of the angle are mixed on purpose, exactly as the original's are: a height
+/// difference in ELMOS over a distance in SQUARES. Every comparison happens within one
+/// grid, so the scale cancels — but it does mean the sight bonus below is worth more on a
+/// coarse grid than a fine one, which is Recoil's behaviour too.
+void raycastSquares(const IntelGrid& grid, const Terrain& terrain, Fx x, Fx z, Fx radius,
+                    Fx eyeHeight, std::vector<std::int32_t>& squares);
+
+/// What `kind` covers under `style`: the dispatch ADR-037's setting comes down to.
+///
+/// Recoil raycasts sight and radar and leaves sonar a disc (`LosHandler.cpp:92`); Forged
+/// Alliance stamps discs for all three. A null `terrain` is a scene with no ground to
+/// consult — a `--units` crowd on procedural terrain — and falls back to the disc, which is
+/// the honest answer rather than a raycast against a heightmap that is not there.
+void intelSquares(const IntelGrid& grid, const Terrain* terrain, VisionStyle style,
+                  IntelKind kind, Fx x, Fx z, Fx radius, Fx eyeHeight,
+                  std::vector<std::int32_t>& squares);
 
 } // namespace rm::sim

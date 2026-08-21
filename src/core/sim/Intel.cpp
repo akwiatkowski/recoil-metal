@@ -1,11 +1,24 @@
 #include "core/sim/Intel.hpp"
 
+#include "core/sim/Terrain.hpp"
+
 #include <algorithm>
 #include <cassert>
+#include <limits>
+#include <utility>
 
 namespace rm::sim {
 
 namespace {
+
+/// Added to every square's height before its angle is taken — Recoil's `LOS_BONUS_HEIGHT`
+/// (`LosMap.cpp:16`), five elmos of slack that stops a unit being blinded by a ripple in
+/// the ground it is standing on. Elmos, like the heights it is added to.
+constexpr std::int32_t kSightBonusElmos = 5;
+
+/// An angle so low nothing can fall below it. Recoil's -1e7 sentinel; here it is the
+/// fixed-point type's floor, which cannot be reached by a real height over a real distance.
+const Fx kNoAngle = Fx::fromRaw(std::numeric_limits<FxRaw>::min());
 
 /// Calls `row(halfWidth, z)` once for each line of a filled disc of `radius` squares.
 ///
@@ -93,6 +106,207 @@ void IntelGrid::remove(std::span<const std::int32_t> squares) noexcept {
         // quietly wrong for the rest of the match.
         assert(counts_[static_cast<std::size_t>(square)] > 0);
         --counts_[static_cast<std::size_t>(square)];
+    }
+}
+
+namespace {
+
+/// One ray: the offsets it visits, nearest first, in the quarter turn x >= 0, z >= 0.
+using Ray = std::vector<std::pair<std::int32_t, std::int32_t>>;
+
+/// The offsets a zero-width line from the origin to (toX, toZ) passes through.
+///
+/// Recoil's `GetRay` (`LosMap.cpp:283`) with its float slope replaced by an integer
+/// rounding division — `(a * step * 2 + span) / (2 * span)` is `round(a * step / span)` for
+/// non-negative inputs, and unlike the float it cannot round differently on another
+/// machine. The origin itself is not included; the caller always sees where it stands.
+void buildRay(std::int32_t toX, std::int32_t toZ, Ray& ray) {
+    ray.clear();
+    const auto rounded = [](std::int32_t a, std::int32_t step, std::int32_t span) {
+        return (a * step * 2 + span) / (2 * span);
+    };
+
+    if (toX > toZ) {
+        for (std::int32_t x = 1; x <= toX; ++x) {
+            ray.emplace_back(x, rounded(toZ, x, toX));
+        }
+    } else {
+        for (std::int32_t z = 1; z <= toZ; ++z) {
+            ray.emplace_back(rounded(toX, z, toZ), z);
+        }
+    }
+}
+
+/// Indexes an offset in [-radius, radius]^2 into a flat (2r+1)^2 scratch buffer.
+[[nodiscard]] std::size_t offsetIndex(std::int32_t dx, std::int32_t dz,
+                                      std::int32_t radius) noexcept {
+    return static_cast<std::size_t>(dz + radius) * static_cast<std::size_t>(2 * radius + 1)
+         + static_cast<std::size_t>(dx + radius);
+}
+
+/// One step of a ray: strikes the square off `visible` if the ground has risen in front
+/// of it. Recoil's `CastLos` (`LosMap.cpp:525`), which is the whole occlusion rule.
+void castStep(Fx& prevAngle, Fx& maxAngle, std::int32_t dx, std::int32_t dz,
+              std::int32_t radius, std::span<const Fx> angles, std::span<char> visible) {
+    const std::size_t index = offsetIndex(dx, dz, radius);
+    const Fx angle = angles[index];
+
+    // Below the horizon this ray has already climbed to: hidden.
+    if (angle < maxAngle) {
+        visible[index] = 0;
+        return;
+    }
+
+    // The ray has just started to descend, so the square behind us was a crest. The
+    // horizon rises to it, minus a slack that falls off with distance — near the emitter
+    // the bonus is generous, far away it is nothing.
+    if (angle < prevAngle) {
+        const Fx distance = fxSqrt(Fx::fromInt(dx * dx + dz * dz));
+        maxAngle = prevAngle - Fx::fromInt(kSightBonusElmos) / distance;
+        if (angle < maxAngle) {
+            visible[index] = 0;
+            return;
+        }
+    }
+
+    prevAngle = angle;
+}
+
+} // namespace
+
+void raycastSquares(const IntelGrid& grid, const Terrain& terrain, Fx x, Fx z, Fx radius,
+                    Fx eyeHeight, std::vector<std::int32_t>& squares) {
+    squares.clear();
+
+    const std::int32_t centre = grid.squareAt(x, z);
+    if (centre == IntelGrid::kNoSquare) {
+        return;
+    }
+
+    const std::int32_t squareElmos = grid.squareElmos().floorToInt();
+    const std::int32_t radiusSquares = std::max(0, radius.floorToInt() / squareElmos);
+    if (radiusSquares == 0) {
+        squares.push_back(centre);
+        return;
+    }
+
+    const std::int32_t squaresX = grid.squaresX();
+    const std::int32_t squaresZ = grid.squaresZ();
+    const std::int32_t centreX = centre % squaresX;
+    const std::int32_t centreZ = centre / squaresX;
+    const std::size_t span = static_cast<std::size_t>(2 * radiusSquares + 1);
+
+    // START FROM THE DISC. Every square inside the radius is visible until a ray says
+    // otherwise, which is exactly how `UnsafeLosAdd` sets `losRaySquares` before casting.
+    std::vector<char> visible(span * span, char{0});
+    std::vector<Fx> angles(span * span, kNoAngle);
+
+    midpointCircleRows(radiusSquares, [&](std::int32_t halfWidth, std::int32_t rowZ) {
+        for (std::int32_t dx = -halfWidth; dx <= halfWidth; ++dx) {
+            const std::size_t index = offsetIndex(dx, rowZ, radiusSquares);
+            visible[index] = 1;
+
+            if (dx == 0 && rowZ == 0) {
+                continue;
+            }
+
+            const std::int32_t column = centreX + dx;
+            const std::int32_t row = centreZ + rowZ;
+            if (column < 0 || column >= squaresX || row < 0 || row >= squaresZ) {
+                visible[index] = 0;
+                continue;
+            }
+
+            // The square's centre in world elmos, which is where its height is taken.
+            const Fx worldX = Fx::fromInt(column * squareElmos + squareElmos / 2);
+            const Fx worldZ = Fx::fromInt(row * squareElmos + squareElmos / 2);
+
+            // GROUND BELOW SEA LEVEL COUNTS AS SEA LEVEL — `std::max(0.0f, ...)` at
+            // `LosMap.cpp:653`. Otherwise a trench in front of a unit would raise the
+            // horizon behind it, and sight would be blocked by a hole.
+            const Fx ground = std::max(kFxZero, terrain.heightAt(worldX, worldZ));
+            const Fx rise = ground - eyeHeight + Fx::fromInt(kSightBonusElmos);
+            const Fx distance = fxSqrt(Fx::fromInt(dx * dx + rowZ * rowZ));
+            angles[index] = rise / distance;
+        }
+    });
+
+    // The rays. One to every square on the rim, plus one to any square inside the disc no
+    // rim ray happened to pass through — zero-width lines miss squares, and Recoil's
+    // `AddMissing` (`LosMap.cpp:232`) exists for exactly this. Ours is the same idea
+    // arrived at by scanning rather than by their reverse walk from the 45-degree
+    // bisector: simpler to read, and this runs per emitter rather than once per radius.
+    std::vector<char> touched(span * span, char{0});
+    std::vector<Ray> rays;
+    Ray ray;
+
+    const auto castRay = [&](std::int32_t toX, std::int32_t toZ) {
+        buildRay(toX, toZ, ray);
+        for (const auto& [dx, dz] : ray) {
+            touched[offsetIndex(dx, dz, radiusSquares)] = 1;
+        }
+        rays.push_back(ray);
+    };
+
+    midpointCircleRows(radiusSquares, [&](std::int32_t halfWidth, std::int32_t rowZ) {
+        if (rowZ < 0) {
+            return;  // the quarter turn only; the other three are rotations of it
+        }
+        castRay(halfWidth, rowZ);
+    });
+
+    for (std::int32_t dz = 0; dz <= radiusSquares; ++dz) {
+        for (std::int32_t dx = 0; dx <= radiusSquares; ++dx) {
+            const std::size_t index = offsetIndex(dx, dz, radiusSquares);
+            if (visible[index] != 0 && touched[index] == 0 && !(dx == 0 && dz == 0)) {
+                castRay(dx, dz);
+            }
+        }
+    }
+
+    // Four rotations of the quarter, each with its own horizon — Recoil casts the same
+    // four (`LosMap.cpp:674-677`).
+    for (const Ray& line : rays) {
+        Fx prevAngles[4] = {kNoAngle, kNoAngle, kNoAngle, kNoAngle};
+        Fx maxAngles[4] = {kNoAngle, kNoAngle, kNoAngle, kNoAngle};
+
+        for (const auto& [dx, dz] : line) {
+            castStep(prevAngles[0], maxAngles[0], dx, dz, radiusSquares, angles, visible);
+            castStep(prevAngles[1], maxAngles[1], -dx, -dz, radiusSquares, angles, visible);
+            castStep(prevAngles[2], maxAngles[2], dz, -dx, radiusSquares, angles, visible);
+            castStep(prevAngles[3], maxAngles[3], -dz, dx, radiusSquares, angles, visible);
+        }
+    }
+
+    // Row-major, so the shape a caller holds is in one canonical order whatever the rays
+    // did — which is what lets a test compare it against the disc directly.
+    for (std::int32_t dz = -radiusSquares; dz <= radiusSquares; ++dz) {
+        const std::int32_t row = centreZ + dz;
+        if (row < 0 || row >= squaresZ) {
+            continue;
+        }
+        for (std::int32_t dx = -radiusSquares; dx <= radiusSquares; ++dx) {
+            const std::int32_t column = centreX + dx;
+            if (column < 0 || column >= squaresX) {
+                continue;
+            }
+            if (visible[offsetIndex(dx, dz, radiusSquares)] != 0) {
+                squares.push_back(row * squaresX + column);
+            }
+        }
+    }
+}
+
+void intelSquares(const IntelGrid& grid, const Terrain* terrain, VisionStyle style,
+                  IntelKind kind, Fx x, Fx z, Fx radius, Fx eyeHeight,
+                  std::vector<std::int32_t>& squares) {
+    const bool raycast = style == VisionStyle::Recoil && terrain != nullptr
+                      && (kind == IntelKind::Vision || kind == IntelKind::Radar);
+
+    if (raycast) {
+        raycastSquares(grid, *terrain, x, z, radius, eyeHeight, squares);
+    } else {
+        circleSquares(grid, x, z, radius, squares);
     }
 }
 

@@ -3,6 +3,9 @@
 
 #include "core/sim/Intel.hpp"
 
+#include "core/map/HeightField.hpp"
+#include "core/sim/Terrain.hpp"
+
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
@@ -174,4 +177,174 @@ TEST_CASE("adding a shape and removing it leaves the grid exactly as it was") {
 
     const std::vector<std::uint16_t> after{grid.counts().begin(), grid.counts().end()};
     CHECK(before == after);
+}
+
+// --- The raycast, and the setting that decides whether it runs at all -------------
+//
+// ADR-037's fork: Recoil raycasts sight and radar against the ground, Supreme Commander
+// stamps flat discs and lets you see over mountains. Both are here and the caller picks.
+
+namespace {
+
+/// A flat field of `squares` squares, every corner at `height` elmos.
+[[nodiscard]] rm::HeightField flatField(int squares, float height) {
+    rm::HeightField field;
+    field.squaresX = squares;
+    field.squaresZ = squares;
+    field.baseHeight = height;
+    field.heightScale = 1.0f;  // one elmo per raw step
+    field.raw.assign(field.sampleCount(), std::uint16_t{0});
+    return field;
+}
+
+/// Raises a band of heightmap corners to `height` elmos above the base.
+void raiseBand(rm::HeightField& field, int x0, int x1, std::uint16_t raw) {
+    for (int z = 0; z < field.verticesZ(); ++z) {
+        for (int x = x0; x <= x1 && x < field.verticesX(); ++x) {
+            field.raw[static_cast<std::size_t>(z)
+                          * static_cast<std::size_t>(field.verticesX())
+                      + static_cast<std::size_t>(x)] = raw;
+        }
+    }
+}
+
+} // namespace
+
+TEST_CASE("on flat ground the raycast sees exactly what the disc covers") {
+    // The equivalence that makes the setting safe to flip: with nothing in the way, the
+    // expensive algorithm and the cheap one agree square for square. Anything else would
+    // mean the raycast was losing squares to its own arithmetic rather than to terrain.
+    const rm::HeightField field = flatField(64, 50.0f);
+    const rm::sim::Terrain terrain{field};
+    const IntelGrid grid{Fx::fromInt(512), Fx::fromInt(512), 0};
+
+    std::vector<std::int32_t> disc;
+    std::vector<std::int32_t> cast;
+    const Fx x = Fx::fromInt(256);
+    const Fx z = Fx::fromInt(256);
+    const Fx radius = Fx::fromInt(80);
+
+    rm::sim::circleSquares(grid, x, z, radius, disc);
+    rm::sim::raycastSquares(grid, terrain, x, z, radius, Fx::fromInt(52), cast);
+
+    std::ranges::sort(disc);
+    std::ranges::sort(cast);
+    CHECK(disc == cast);
+}
+
+TEST_CASE("a ridge hides the ground behind it, and only under the Recoil style") {
+    // The whole reason the setting exists. Same map, same emitter, same radius; one
+    // engine's answer is that the far slope is dark and the other's is that you can see
+    // over a mountain, because `vision.fx` never samples a height.
+    rm::HeightField field = flatField(64, 0.0f);
+    // A wall 200 elmos tall, four squares wide, at x = 300..332 elmos.
+    raiseBand(field, 38, 41, 200);
+    const rm::sim::Terrain terrain{field};
+    const IntelGrid grid{Fx::fromInt(512), Fx::fromInt(512), 0};
+
+    const Fx x = Fx::fromInt(200);
+    const Fx z = Fx::fromInt(256);
+    const Fx radius = Fx::fromInt(200);
+    const Fx eye = Fx::fromInt(10);
+
+    std::vector<std::int32_t> cast;
+    std::vector<std::int32_t> disc;
+    rm::sim::raycastSquares(grid, terrain, x, z, radius, eye, cast);
+    rm::sim::circleSquares(grid, x, z, radius, disc);
+
+    // Directly beyond the ridge, on the same row.
+    const std::int32_t behind = grid.squareAt(Fx::fromInt(380), z);
+    const std::int32_t infront = grid.squareAt(Fx::fromInt(260), z);
+
+    CHECK(std::ranges::find(disc, behind) != disc.end());     // the disc reaches it
+    CHECK(std::ranges::find(cast, behind) == cast.end());     // the raycast does not
+    CHECK(std::ranges::find(cast, infront) != cast.end());    // the near side is lit
+
+    // Occlusion only ever REMOVES squares. A raycast that lit something the disc did not
+    // reach would mean the ray walk had escaped its own radius.
+    for (const std::int32_t square : cast) {
+        CHECK(std::ranges::find(disc, square) != disc.end());
+    }
+    CHECK(cast.size() < disc.size());
+}
+
+TEST_CASE("raising the eye is what opens a blocked ray") {
+    // Height is the point of the algorithm, not a side effect — it is what makes high
+    // ground worth taking. Same emitter, same spot, same radius; only the eye moves.
+    //
+    // A LOW ridge, deliberately. The first draft of this test put the emitter on top of
+    // the 200-elmo wall above and expected it to see the ground behind, which is wrong
+    // geometry rather than a wrong engine: from ten elmos above a plateau, the plateau's
+    // own far edge hides everything below it out to 688 elmos, well off this map. A
+    // 20-elmo rise is the case where the eye height decides the answer.
+    rm::HeightField field = flatField(64, 0.0f);
+    raiseBand(field, 38, 41, 20);
+    const rm::sim::Terrain terrain{field};
+    const IntelGrid grid{Fx::fromInt(512), Fx::fromInt(512), 0};
+
+    const Fx x = Fx::fromInt(200);
+    const Fx z = Fx::fromInt(256);
+    const Fx radius = Fx::fromInt(200);
+    const std::int32_t behind = grid.squareAt(Fx::fromInt(380), z);
+
+    std::vector<std::int32_t> low;
+    std::vector<std::int32_t> high;
+    rm::sim::raycastSquares(grid, terrain, x, z, radius, Fx::fromInt(10), low);
+    rm::sim::raycastSquares(grid, terrain, x, z, radius, Fx::fromInt(100), high);
+
+    CHECK(std::ranges::find(low, behind) == low.end());
+    CHECK(std::ranges::find(high, behind) != high.end());
+
+    // And it is monotonic: a higher eye never LOSES a square, it only gains them.
+    CHECK(high.size() > low.size());
+    for (const std::int32_t square : low) {
+        CHECK(std::ranges::find(high, square) != high.end());
+    }
+}
+
+TEST_CASE("the style decides which senses are raycast") {
+    // Recoil raycasts sight and radar and leaves sonar a disc (LosHandler.cpp:92); FA
+    // stamps discs for everything. This is the dispatch that says so.
+    rm::HeightField field = flatField(64, 0.0f);
+    raiseBand(field, 38, 41, 200);
+    const rm::sim::Terrain terrain{field};
+    const IntelGrid grid{Fx::fromInt(512), Fx::fromInt(512), 0};
+
+    const Fx x = Fx::fromInt(200);
+    const Fx z = Fx::fromInt(256);
+    const Fx radius = Fx::fromInt(200);
+    const Fx eye = Fx::fromInt(10);
+    const std::int32_t behind = grid.squareAt(Fx::fromInt(380), z);
+
+    std::vector<std::int32_t> squares;
+    const auto reaches = [&](rm::sim::VisionStyle style, rm::sim::IntelKind kind) {
+        rm::sim::intelSquares(grid, &terrain, style, kind, x, z, radius, eye, squares);
+        return std::ranges::find(squares, behind) != squares.end();
+    };
+
+    using rm::sim::IntelKind;
+    using rm::sim::VisionStyle;
+
+    CHECK(reaches(VisionStyle::ForgedAlliance, IntelKind::Vision));
+    CHECK(reaches(VisionStyle::ForgedAlliance, IntelKind::Radar));
+    CHECK(reaches(VisionStyle::ForgedAlliance, IntelKind::Sonar));
+
+    CHECK_FALSE(reaches(VisionStyle::Recoil, IntelKind::Vision));
+    CHECK_FALSE(reaches(VisionStyle::Recoil, IntelKind::Radar));
+    CHECK(reaches(VisionStyle::Recoil, IntelKind::Sonar));
+}
+
+TEST_CASE("with no terrain to consult, the Recoil style falls back to discs") {
+    // A `--units` crowd on procedural ground has no sim terrain, and the honest answer
+    // there is the disc rather than a raycast against a heightmap that is not there.
+    const IntelGrid grid{Fx::fromInt(512), Fx::fromInt(512), 0};
+    std::vector<std::int32_t> squares;
+    std::vector<std::int32_t> disc;
+
+    rm::sim::intelSquares(grid, nullptr, rm::sim::VisionStyle::Recoil,
+                          rm::sim::IntelKind::Vision, Fx::fromInt(256), Fx::fromInt(256),
+                          Fx::fromInt(80), Fx::fromInt(50), squares);
+    rm::sim::circleSquares(grid, Fx::fromInt(256), Fx::fromInt(256), Fx::fromInt(80), disc);
+
+    CHECK(squares == disc);
 }
