@@ -172,3 +172,41 @@ TEST_CASE("tier tints brighten with tier and stay short of white", "[ui][build]"
     CHECK(rm::ui::tierTint(theme, 0)[0] == tier1[0]);
     CHECK(rm::ui::tierTint(theme, -1)[0] == tier1[0]);
 }
+
+TEST_CASE("the whole panel swallows a click, gutters included", "[ui][build]") {
+    // WHY THE GUTTERS COUNT. The panel exists only while a builder is selected, so a click
+    // falling through it reaches the ground, clears the selection, and takes the panel away —
+    // the button disappears under the cursor that pressed it. `buildOptionAt` deliberately
+    // treats a gutter as a miss so nobody queues a thing they did not choose; that is the right
+    // answer to "which cell" and the wrong one to "should the world hear about this".
+    const auto layout = buildPanelLayout(aMinimap(), 6);
+    const auto first = buildCellOrigin(layout, 0);
+
+    const float gutterX = first[0] + rm::ui::kBuildCell + rm::ui::kBuildGap * 0.5f;
+    const float gutterY = first[1] + rm::ui::kBuildCell * 0.5f;
+
+    // The two answers disagree about this point, and both are correct.
+    CHECK_FALSE(buildOptionAt(layout, 6, gutterX, gutterY).has_value());
+    CHECK(rm::ui::insideBuildPanel(layout, gutterX, gutterY));
+
+    // The header strip carries no cells at all and is still the panel.
+    CHECK(rm::ui::insideBuildPanel(layout, layout.x + 2.0f, layout.y + 2.0f));
+}
+
+TEST_CASE("a point off the panel is not swallowed", "[ui][build]") {
+    const auto layout = buildPanelLayout(aMinimap(), 6);
+
+    CHECK_FALSE(rm::ui::insideBuildPanel(layout, layout.x - 1.0f, layout.y + 10.0f));
+    CHECK_FALSE(rm::ui::insideBuildPanel(layout, layout.x + 10.0f, layout.y - 1.0f));
+    // The far edges are exclusive, so the panel and whatever abuts it cannot both claim a point.
+    CHECK_FALSE(rm::ui::insideBuildPanel(layout, layout.x + layout.width, layout.y + 10.0f));
+    CHECK_FALSE(rm::ui::insideBuildPanel(layout, layout.x + 10.0f, layout.y + layout.height));
+}
+
+TEST_CASE("an absent panel swallows nothing", "[ui][build]") {
+    // A builder that can build nothing draws no frame, so there is no rectangle to be inside —
+    // and a click there is an ordinary click on the world, not a swallowed one.
+    const auto layout = buildPanelLayout(aMinimap(), 0);
+    REQUIRE(layout.empty());
+    CHECK_FALSE(rm::ui::insideBuildPanel(layout, 0.0f, 0.0f));
+}

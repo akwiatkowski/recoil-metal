@@ -414,6 +414,17 @@ int runWindowed(const Session& session) {
         std::vector<rm::SelectionEntry> selectionScratch;
         rm::sim::TickClock clock;
 
+        // THE BUILD PANEL (BAR-styled, `core/ui/BuildPanel.hpp`). Scratch kept outside the loop
+        // for the same reason every other scratch here is: a frame should not allocate.
+        //
+        // DECLARED UP HERE, above `onClick`, rather than beside the frame callback that fills
+        // it, because BOTH need it: the frame draws the panel and the click has to know whether
+        // it landed on one. What a click hits is the panel as last DRAWN, which is what the
+        // player was looking at when they pressed the button — so the two reading one vector is
+        // the correct coupling rather than a shortcut.
+        std::vector<rm::ui::BuildOption> buildOptions;
+        std::string builderName;
+
         // The caller-side tick, the same one `march()` drives. Built here rather than in
         // the frame callback because a match is decided on one tick and stays decided, and
         // the opponents remember what they have already started.
@@ -477,6 +488,26 @@ int runWindowed(const Session& session) {
                 // on the ground rather than at y = 0, which on a hill would look like a zoom.
                 window.camera().target = simd_make_float3(
                     where[0], map->field.heightAtWorld(where[0], where[1]), where[1]);
+                return;
+            }
+
+            // THE BUILD PANEL, for the minimap's reason above and with a sharper edge to it.
+            // The panel appears only while a builder is selected, so a click falling through it
+            // reached the ground, cleared the selection, and took the panel away with it — the
+            // button vanished under the cursor that pressed it. An overlay that punishes you for
+            // aiming at it is worse than no overlay.
+            //
+            // SWALLOWED WHETHER OR NOT IT HIT A CELL: the gutters and the header are part of the
+            // panel, and a click landing in one is still a click on the interface rather than on
+            // the world behind it.
+            //
+            // What it does not yet do is ACT on the cell. That needs the build path routed
+            // through `applyCommand` — a behaviour change, not a guard — so the two are separate
+            // jobs and this is the one that stops the bleeding.
+            if (!buildOptions.empty()
+                && rm::ui::insideBuildPanel(
+                    rm::ui::buildPanelLayout(minimap, buildOptions.size()), mods.pointX,
+                    mods.pointY)) {
                 return;
             }
 
@@ -589,11 +620,6 @@ int runWindowed(const Session& session) {
         // allocation — the same reason the dust emitters are.
         std::vector<rm::Particle> iconScratch;
         rm::ui::Geometry hudScratch;
-
-        // THE BUILD PANEL (BAR-styled, `core/ui/BuildPanel.hpp`). Scratch kept outside the loop
-        // for the same reason every other scratch here is: a frame should not allocate.
-        std::vector<rm::ui::BuildOption> buildOptions;
-        std::string builderName;
 
         // The minimap's per-frame scratch, kept out here so a frame allocates nothing.
         std::vector<rm::ui::MinimapPip> minimapPips;

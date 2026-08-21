@@ -51,6 +51,14 @@ BuildPanelLayout buildPanelLayout(const MinimapLayout& minimap, std::size_t opti
     return layout;
 }
 
+bool insideBuildPanel(const BuildPanelLayout& layout, float pointX, float pointY) noexcept {
+    if (layout.empty()) {
+        return false;  // no panel is drawn, so nothing can be on it
+    }
+    return pointX >= layout.x && pointX < layout.x + layout.width && pointY >= layout.y
+           && pointY < layout.y + layout.height;
+}
+
 std::array<float, 2> buildCellOrigin(const BuildPanelLayout& layout, std::size_t index) noexcept {
     const auto columns = static_cast<std::size_t>(kBuildColumns);
     const auto column = static_cast<float>(index % columns);

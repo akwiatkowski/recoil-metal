@@ -126,6 +126,16 @@ struct BuildPanelLayout {
 [[nodiscard]] BuildPanelLayout buildPanelLayout(const MinimapLayout& minimap,
                                                 std::size_t optionCount) noexcept;
 
+/// Whether a screen point is on the panel at all — cells, gutters, header and padding alike.
+///
+/// DISTINCT FROM `buildOptionAt`, which answers "which cell", and the difference is the whole
+/// reason both exist. A caller deciding whether the world behind the panel should hear about a
+/// click must treat the gutters as panel: they are inside the frame the player aimed at, and
+/// letting a click through one reaches past the interface to the ground under it. A caller
+/// deciding what to BUILD must treat them as neither, which is what `buildOptionAt` does.
+[[nodiscard]] bool insideBuildPanel(const BuildPanelLayout& layout, float pointX,
+                                    float pointY) noexcept;
+
 /// The top-left of one cell, in points.
 [[nodiscard]] std::array<float, 2> buildCellOrigin(const BuildPanelLayout& layout,
                                                    std::size_t index) noexcept;
