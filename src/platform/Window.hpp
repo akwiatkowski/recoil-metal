@@ -191,6 +191,12 @@ public:
     [[nodiscard]] text::Font labelFont() const;
     [[nodiscard]] text::Font readoutFont() const;
 
+    /// The map's own preview thumbnail, under the minimap. See Renderer::setMinimapImage.
+    void setMinimapImage(const dds::Texture& image);
+
+    /// Where to draw it this frame, in pixels. See Renderer::setMinimapRect.
+    void setMinimapRect(float x, float y, float width, float height) noexcept;
+
     /// This frame's interface. See Renderer::setHud.
     void setHud(std::span<const text::TextVertex> label,
                 std::span<const text::TextVertex> readout);

@@ -543,6 +543,14 @@ text::Font Window::labelFont() const { return impl_->renderer->labelFont(); }
 
 text::Font Window::readoutFont() const { return impl_->renderer->readoutFont(); }
 
+void Window::setMinimapImage(const dds::Texture& image) {
+    impl_->renderer->setMinimapImage(image);
+}
+
+void Window::setMinimapRect(float x, float y, float width, float height) noexcept {
+    impl_->renderer->setMinimapRect(x, y, width, height);
+}
+
 void Window::setHud(std::span<const text::TextVertex> label,
                     std::span<const text::TextVertex> readout) {
     impl_->renderer->setHud(label, readout);

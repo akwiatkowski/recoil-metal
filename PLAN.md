@@ -452,9 +452,15 @@ tokens, layout and rejections in `docs/recoil-metal/fa-ui-design.md` (knowledge
 base). The slices, each screenshot-provable:
 
 - **UI-0**: the frame loop runs `tickSkirmish` — the window fights.
-- **UI-1**: the minimap, from the `.scmap`'s own embedded 256² preview
-  (currently skipped at `Scmap.cpp:288`), army pips, and the camera's ground
-  footprint as a grabbable trapezoid — click moves the view, zoom untouched.
+- **UI-1**: the minimap, from the `.scmap`'s own embedded 256² preview, army
+  pips, and the camera's ground footprint as a grabbable trapezoid — click moves
+  the view, zoom untouched. **Done bar the drag**: the preview had been skipped
+  since the format was decoded, on a comment that called it "always 256x256
+  RGBA8" and was never checked — it is a DDS container, uncompressed BGRA, on all
+  60 stock maps, and a test says so now. It needed the one thing the original
+  minimap note claimed it would not: a second fragment function, because the text
+  shader reads a texture's red channel as coverage and would have drawn a
+  photograph as a one-colour silhouette.
 - **UI-2**: the selection roster — typed tiles, `×N` badges, hp underbars.
 - **UI-3**: the build tray — the archives' own `_icon.dds` (539 ship in
   `textures.scd`), cost-at-the-builder's-rate on hover, a placement ghost

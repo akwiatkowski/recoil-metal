@@ -82,6 +82,13 @@ struct LoadedMap {
     rm::dds::Texture splatMaskA;
     rm::dds::Texture splatMaskB;
 
+    /// The map's own thumbnail, for the minimap to stand on. Decoded here so the renderer
+    /// takes a `dds::Texture` like every other image it is handed, rather than a blob.
+    ///
+    /// EMPTY IS ORDINARY: a `.smf` has no preview, and a procedural map has no file. The
+    /// minimap then draws its own filled panel, which is what it did for its whole first life.
+    rm::dds::Texture preview;
+
     std::vector<rm::mapinfo::StartPosition> starts;
 
     /// Everything the map annotates itself with — 19310 markers across the 60 stock maps.

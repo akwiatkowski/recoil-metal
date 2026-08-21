@@ -319,6 +319,22 @@ namespace rm::app {
         loaded.colours = std::move(colours);
     }
 
+    // The map's own thumbnail, decoded here so the renderer is handed a `dds::Texture` like
+    // every other image. A DDS container holding 256x256 uncompressed BGRA on all 60 stock
+    // maps — measured, and asserted in `test_real_scmap.cpp`.
+    if (!map->preview.empty()) {
+        if (auto preview = rm::dds::load(map->preview)) {
+            std::printf("  preview: %dx%d minimap thumbnail\n", preview->width,
+                        preview->height);
+            loaded.preview = std::move(*preview);
+        } else {
+            // Not fatal, and worth saying out loud rather than silently drawing a flat panel:
+            // a map whose thumbnail will not decode is a map worth looking at.
+            std::fprintf(stderr, "  preview: not decoded (%s); the minimap stays plain\n",
+                         preview.error().message.c_str());
+        }
+    }
+
     // The ground splat. SupCom bakes no ground image: the map names nine tiled
     // layers that live in env.scd and embeds only the two masks that weight
     // them, so this assembles a recipe rather than loading a picture.

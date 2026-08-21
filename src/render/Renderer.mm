@@ -103,6 +103,10 @@ Renderer::Renderer(CA::MetalLayer* layer)
     // Blended, and drawn last of all: the HUD sits over the world rather than in it.
     textPipeline_ = makePipeline(device_, library, "textVertex", "textFragment",
                                  /*blend=*/true);
+    // The same vertex function and the same blend — only the fragment differs, sampling a
+    // full-colour image instead of a coverage mask. See `imageFragment`.
+    imagePipeline_ = makePipeline(device_, library, "textVertex", "imageFragment",
+                                  /*blend=*/true);
 
     decalPipeline_ = makePipeline(device_, library, "decalVertex", "decalFragment",
                                  /*blend=*/true);
@@ -402,6 +406,8 @@ Renderer::~Renderer() {
     if (decalBuffer_ != nullptr) decalBuffer_->release();
     if (decalDepthState_ != nullptr) decalDepthState_->release();
     if (textPipeline_ != nullptr) textPipeline_->release();
+    if (imagePipeline_ != nullptr) imagePipeline_->release();
+    if (minimapTexture_ != nullptr) minimapTexture_->release();
     if (labelFont_.atlas != nullptr) labelFont_.atlas->release();
     if (readoutFont_.atlas != nullptr) readoutFont_.atlas->release();
     if (fontSampler_ != nullptr) fontSampler_->release();
@@ -1301,6 +1307,35 @@ void Renderer::encodeScene(MTL::CommandBuffer* commandBuffer, MTL::RenderPassDes
         encoder->setVertexBytes(&viewport, sizeof(viewport), kUniformBufferIndex);
 
         const std::size_t slotBase = instanceSlot_ * text::kMaxTextVertices;
+
+        // THE MAP'S OWN THUMBNAIL, under everything. Before the labels because the minimap's
+        // panel chrome — its bevels, its brackets, its pips — belongs ON the picture, and the
+        // panel is asked not to fill its own interior when this is drawn (`appendMinimap`'s
+        // `filled`). Two things drawing the same rectangle is how the picture ends up
+        // invisible under a flat well.
+        //
+        // Six vertices built here rather than by the caller, because they are a rectangle and
+        // a uv square and nothing else — routing them through the HUD's vertex list would put
+        // an image quad in a buffer whose every other member is sampled as coverage.
+        if (minimapTexture_ != nullptr && imagePipeline_ != nullptr && minimapRect_[2] > 0.0f
+            && minimapRect_[3] > 0.0f) {
+            const float x0 = minimapRect_[0];
+            const float y0 = minimapRect_[1];
+            const float x1 = x0 + minimapRect_[2];
+            const float y1 = y0 + minimapRect_[3];
+            const std::array<float, 4> white{{1.0f, 1.0f, 1.0f, 1.0f}};
+            const std::array<text::TextVertex, 6> quad{{
+                {{x0, y0}, {0.0f, 0.0f}, white}, {{x1, y0}, {1.0f, 0.0f}, white},
+                {{x1, y1}, {1.0f, 1.0f}, white}, {{x0, y0}, {0.0f, 0.0f}, white},
+                {{x1, y1}, {1.0f, 1.0f}, white}, {{x0, y1}, {0.0f, 1.0f}, white},
+            }};
+            encoder->setRenderPipelineState(imagePipeline_);
+            encoder->setVertexBytes(quad.data(), sizeof(quad), kVertexBufferIndex);
+            encoder->setFragmentTexture(minimapTexture_, NS::UInteger{0});
+            encoder->drawPrimitives(MTL::PrimitiveType::PrimitiveTypeTriangle, NS::UInteger{0},
+                                    NS::UInteger{6});
+            encoder->setRenderPipelineState(textPipeline_);
+        }
 
         // LABELS FIRST, and that order is the design: the label list carries every panel, bar
         // and bracket, so drawing it first puts the chrome under the numbers rather than over

@@ -171,8 +171,10 @@ struct Geometry {
 };
 
 /// Draws a panel: glass, a bevel, and corner brackets.
+/// `filled` draws the glass interior. FALSE leaves it transparent so something already drawn
+/// there — the map's preview under the minimap — shows through the chrome rather than under it.
 void appendPanel(Geometry& out, const text::Font& font, const Theme& theme, float x, float y,
-                 float width, float height);
+                 float width, float height, bool filled = true);
 
 /// Builds the whole interface for one frame.
 ///

@@ -17,16 +17,22 @@ namespace rm::ui {
 // which are float, GPU-shaped and rebuilt per frame. A minimap needed a second walk over game
 // state that nothing owned. `sim::Snapshot` (P7.1) is that list.
 //
-// AND IT NEEDS NO NEW PIPELINE, which is the other half of "nearly free". Everything here is a
-// screen-space rectangle, and the HUD already draws those: `text::appendRect` uses the font
-// atlas's solid block, so a panel, a pip and a view outline are the same primitive as the
-// resource bars. A minimap that had wanted a texture would have wanted the `.scmap`'s embedded
-// 256-square preview, a sampler and a pass; that is the version this is deliberately not, and
-// the preview is a later item rather than a prerequisite.
+// IT NEEDED NO NEW PIPELINE, and then it needed one. Everything drawn HERE is still a
+// screen-space rectangle over the font atlas's solid block — panel, pip and view outline are the
+// same primitive as the resource bars — and that is what made the first version nearly free.
+// This note used to end by calling the `.scmap`'s embedded 256-square preview "a later item
+// rather than a prerequisite", and it was exactly that: the later item arrived, and it did want
+// a sampler and a second fragment function, because the text shader reads a texture's red
+// channel as COVERAGE and would have rendered a photograph as a one-colour silhouette.
 //
-// WHAT IT DOES NOT DO, so the gap is stated rather than discovered: no terrain image (it is a
-// flat panel, not a picture of the map), no fog of war, and no drag. Click to jump, which is
-// the one interaction that pays for itself immediately, and which §7's manual check names.
+// The split that came out of it is worth keeping in mind when reading `filled` below: the
+// PICTURE is the renderer's (`Renderer::setMinimapImage`, one quad, drawn first), the PANEL is
+// this file's, and the panel stops filling its own interior so the picture shows through it.
+//
+// WHAT IT STILL DOES NOT DO, so the gap is stated rather than discovered: no fog of war over the
+// preview — the thumbnail is the whole map as the editor baked it, including ground no player
+// has seen — and no drag. Click to jump, which is the one interaction that pays for itself
+// immediately, and which §7's manual check names.
 
 /// Where the minimap sits, in points.
 ///
@@ -92,9 +98,13 @@ struct MinimapPip {
 /// in order — the caller has them from the same ray-to-ground pick a right-click uses, so the
 /// outline is exact rather than an estimate from the camera's distance. Fewer than four corners
 /// draws no outline, which is what a camera looking at the sky should produce.
+/// `filled` draws the panel's own interior. FALSE when the map's preview thumbnail is being
+/// drawn underneath: two things filling one rectangle means the lower one is invisible, and a
+/// flat well over a photograph is the wrong one to keep. The bevels, brackets, pips and view
+/// outline are drawn either way — they are what makes it a panel rather than a picture.
 void appendMinimap(Geometry& out, const text::Font& font, const Theme& theme,
                    const MinimapLayout& layout, float mapWidthElmos, float mapDepthElmos,
                    std::span<const MinimapPip> pips,
-                   std::span<const std::array<float, 2>> viewCorners);
+                   std::span<const std::array<float, 2>> viewCorners, bool filled = true);
 
 } // namespace rm::ui

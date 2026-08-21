@@ -306,8 +306,16 @@ int runScreenshot(const Session& session) {
                                 static_cast<float>(shot.width), static_cast<float>(shot.height));
             const rm::ui::MinimapLayout shotMinimap = rm::ui::minimapLayout(
                 static_cast<float>(shot.width), static_cast<float>(shot.height));
+            const bool shotPreview = map->preview.width > 0;
+            if (shotPreview) {
+                renderer.setMinimapRect(shotMinimap.x + shotMinimap.inset,
+                                        shotMinimap.y + shotMinimap.inset,
+                                        shotMinimap.size - shotMinimap.inset * 2.0f,
+                                        shotMinimap.size - shotMinimap.inset * 2.0f);
+            }
             rm::ui::appendMinimap(hud, renderer.labelFont(), hudThemeFor(units), shotMinimap,
-                                  map->field.widthElmos(), map->field.depthElmos(), pips, view);
+                                  map->field.widthElmos(), map->field.depthElmos(), pips, view,
+                                  !shotPreview);
 
             // The build panel, for whatever `--select` ringed. This is what makes the panel
             // verifiable at all: `make shot-fa SELECT=1` captures a commander's build list, and
@@ -894,9 +902,17 @@ int runWindowed(const Session& session) {
             const rm::ui::MinimapLayout minimap =
                 rm::ui::minimapLayout(static_cast<float>(window.width()),
                                       static_cast<float>(window.height()));
+            // The preview under the panel, inset by the border so the chrome frames it. The
+            // panel then draws everything BUT its own fill, so the picture shows through.
+            const bool hasPreview = map->preview.width > 0;
+            if (hasPreview) {
+                window.setMinimapRect(minimap.x + minimap.inset, minimap.y + minimap.inset,
+                                      minimap.size - minimap.inset * 2.0f,
+                                      minimap.size - minimap.inset * 2.0f);
+            }
             rm::ui::appendMinimap(hudScratch, window.labelFont(), hudThemeFor(units), minimap,
                                   map->field.widthElmos(), map->field.depthElmos(), minimapPips,
-                                  minimapView);
+                                  minimapView, !hasPreview);
 
             // What the selection can build, above the minimap — the bottom-left control block
             // Beyond All Reason arranges the same way. Absent entirely when nothing selected

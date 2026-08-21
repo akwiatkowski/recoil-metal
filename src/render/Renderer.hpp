@@ -316,6 +316,21 @@ public:
     void setHud(std::span<const text::TextVertex> label,
                 std::span<const text::TextVertex> readout) noexcept;
 
+    /// The map's own preview thumbnail, for the minimap to stand on.
+    ///
+    /// UPLOADED ONCE rather than per frame: the picture is a fact about the map and the map
+    /// does not change. Calling it again replaces the texture, which is what a second map
+    /// would want.
+    void setMinimapImage(const dds::Texture& image);
+
+    /// Where to draw that image this frame, in pixels from the top-left. A zero width or
+    /// height draws nothing, which is how a scene with no preview says so.
+    ///
+    /// SEPARATE FROM THE UPLOAD because the rect is a layout decision that moves with the
+    /// window and the upload is not, and folding them together would re-upload 256 KiB every
+    /// time somebody resized.
+    void setMinimapRect(float x, float y, float width, float height) noexcept;
+
     // Uploads several models, the instances to draw each at, and the textures
     // they share. One instanced draw call covers every instance of a model; the
     // bone hierarchy is applied on the GPU by indexing a per-bone offset buffer
@@ -736,7 +751,12 @@ private:
     // One atlas, baked once at startup, and one buffer rewritten per frame. The atlas is
     // single-channel coverage rather than colour, so one texture serves text of any colour.
     MTL::RenderPipelineState* textPipeline_ = nullptr;  // owned
+    MTL::RenderPipelineState* imagePipeline_ = nullptr; // owned
     MTL::SamplerState* fontSampler_ = nullptr;          // owned
+
+    // The map's own thumbnail, drawn under the minimap panel. Uploaded once, not per frame.
+    MTL::Texture* minimapTexture_ = nullptr;  // owned
+    std::array<float, 4> minimapRect_{};      // x, y, width, height in pixels; zero = no draw
     MTL::Buffer* textBuffer_ = nullptr;                 // owned
 
     // TWO faces, because the interface has two jobs for type: a condensed face for labels,

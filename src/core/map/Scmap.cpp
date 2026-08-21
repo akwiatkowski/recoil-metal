@@ -285,7 +285,12 @@ std::expected<Map, MapError> load(std::span<const std::byte> bytes) {
     cursor.skip(4);        // unknown
     cursor.skip(2);        // unknown int16
 
-    cursor.skipSizedBlock();  // preview image, always 256x256 RGBA8
+    // The preview thumbnail. KEPT now rather than skipped — the minimap draws it.
+    //
+    // A DDS container, not bare pixels: 262,272 bytes on all 60 stock maps, which is a
+    // 128-byte header plus 256x256x4 uncompressed BGRA. Handed to the DDS reader rather
+    // than sliced here, exactly as the normal maps and strata masks are.
+    std::vector<std::byte> preview = cursor.sizedBlock();
 
     // Checked here rather than after the version: a file cut inside the preview
     // leaves every later read returning zero, and reporting that as "version 0
@@ -328,6 +333,7 @@ std::expected<Map, MapError> load(std::span<const std::byte> bytes) {
     }
 
     Map map;
+    map.preview = std::move(preview);
     map.field.squaresX = squaresX;
     map.field.squaresZ = squaresZ;
     // No mapinfo.lua equivalent exists and no stock map varies it, so unlike SMF

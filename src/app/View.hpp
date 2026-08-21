@@ -37,6 +37,11 @@ void applyGround(Target& target, const LoadedMap& map) {
     if (!map.splat.empty()) {
         target.setSplat(map.splat, map.splatMaskA, map.splatMaskB);
     }
+    // The map's own thumbnail. Uploaded with the ground because it IS ground — a picture of
+    // it — and because this is the one place that runs once per map for every target.
+    if (map.preview.width > 0 && map.preview.height > 0) {
+        target.setMinimapImage(map.preview);
+    }
     target.setWater(map.hasWater, map.waterLevel);
     if (map.environment) {
         target.setEnvironment(*map.environment);

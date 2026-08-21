@@ -239,4 +239,20 @@ void Renderer::setHud(std::span<const text::TextVertex> label,
     }
 }
 
+
+void Renderer::setMinimapImage(const dds::Texture& image) {
+    if (minimapTexture_ != nullptr) {
+        minimapTexture_->release();
+        minimapTexture_ = nullptr;
+    }
+    if (image.width <= 0 || image.height <= 0 || image.data.empty()) {
+        return;  // a map with no preview: the minimap draws its own panel and says nothing
+    }
+    minimapTexture_ = uploadTexture(image, "minimap preview");
+}
+
+void Renderer::setMinimapRect(float x, float y, float width, float height) noexcept {
+    minimapRect_ = {x, y, width, height};
+}
+
 } // namespace rm

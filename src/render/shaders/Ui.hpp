@@ -97,6 +97,24 @@ fragment float4 textFragment(TextOut in [[stage_in]],
     return float4(in.colour.rgb * in.colour.a * coverage, in.colour.a * coverage);
 }
 
+// The same geometry, sampling a full-colour IMAGE rather than a coverage mask.
+//
+// A SECOND FRAGMENT FUNCTION rather than a branch in the first, and the reason is what the two
+// do with the texture: `textFragment` reads `.r` as COVERAGE and paints the vertex colour
+// through it, which is exactly right for a glyph and turns a photograph into a red-channel
+// silhouette tinted one colour. An image wants its own pixels.
+//
+// The vertex colour survives as a TINT and a FADE — rgb multiplies, alpha scales — so the same
+// quad can be dimmed or washed toward the interface's hue without a third shader. White at full
+// alpha is the identity, which is what the minimap passes.
+fragment float4 imageFragment(TextOut in [[stage_in]],
+                              texture2d<float> image [[texture(0)]],
+                              sampler imageSampler [[sampler(0)]]) {
+    const float4 texel = image.sample(imageSampler, in.uv);
+    const float alpha = texel.a * in.colour.a;
+    return float4(texel.rgb * in.colour.rgb * alpha, alpha);
+}
+
 )MSL";
 
 } // namespace rm::shaders

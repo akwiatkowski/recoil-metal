@@ -935,3 +935,45 @@ TEST_CASE("every stock map annotates itself with mass deposits", "[corpus]") {
     CHECK(total == 19310);
     CHECK(hydrocarbon > 0);
 }
+
+TEST_CASE("every stock .scmap carries a 256x256 uncompressed preview") {
+    // SKIPPED FOR TWENTY MILESTONES, on a comment that said "always 256x256 RGBA8" and was
+    // never checked. It is nearly right: 262,272 bytes on all 60 — a 128-byte DDS header plus
+    // exactly 256x256x4 — but the byte order is BGRA, and it is a CONTAINER rather than bare
+    // pixels, which is the part a reader that trusted the comment would have got wrong.
+    //
+    // Asserted over the corpus rather than one map, because "always" is the claim.
+    const auto maps = corpus();
+    if (maps.empty()) {
+        SKIP("retail Forged Alliance maps not mounted");
+    }
+
+    std::size_t checked = 0;
+    std::size_t refused = 0;
+    for (const std::filesystem::path& path : maps) {
+        const auto map = rm::scmap::loadFile(path);
+        if (!map) {
+            ++refused;  // a map this engine declines to load has no preview to check
+            continue;
+        }
+
+        INFO(path.filename().string());
+        REQUIRE_FALSE(map->preview.empty());
+
+        const auto preview = rm::dds::load(map->preview);
+        REQUIRE(preview.has_value());
+        CHECK(preview->width == 256);
+        CHECK(preview->height == 256);
+        // Uncompressed, unlike the normal maps and strata masks beside it in the same file.
+        CHECK(preview->format == rm::dds::Format::Bgra8);
+        CHECK(preview->data.size() == 256u * 256u * 4u);
+        ++checked;
+    }
+
+    // EVERY map that loads, not a count written down once — a hardcoded 57 was the first
+    // version of this line, copied from a sibling test's note about three 4096-square maps
+    // being refused as too large. This corpus refuses none of them, so the number was wrong
+    // the moment it was written and said nothing about previews either way.
+    CHECK(checked == maps.size() - refused);
+    CHECK(checked >= 57);  // a floor, so an empty-but-present corpus cannot pass silently
+}

@@ -121,12 +121,14 @@ std::string formatClock(float seconds) {
 }
 
 void appendPanel(Geometry& out, const text::Font& font, const Theme& theme, float x, float y,
-                 float width, float height) {
+                 float width, float height, bool filled) {
     if (!font.usable() || width <= 0.0f || height <= 0.0f) {
         return;
     }
 
-    text::appendRect(out.label, font, x, y, width, height, theme.glass);
+    if (filled) {
+        text::appendRect(out.label, font, x, y, width, height, theme.glass);
+    }
 
     // A hairline all the way round, and a BRIGHTER one along the top. One light source,
     // implied from above, which is all a flat interface needs to stop looking like paper.

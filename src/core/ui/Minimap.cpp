@@ -93,12 +93,12 @@ bool insideMinimap(const MinimapLayout& layout, float pointX, float pointY) noex
 void appendMinimap(Geometry& out, const text::Font& font, const Theme& theme,
                    const MinimapLayout& layout, float mapWidthElmos, float mapDepthElmos,
                    std::span<const MinimapPip> pips,
-                   std::span<const std::array<float, 2>> viewCorners) {
+                   std::span<const std::array<float, 2>> viewCorners, bool filled) {
     if (layout.size <= 0.0f) {
         return;
     }
 
-    appendPanel(out, font, theme, layout.x, layout.y, layout.size, layout.size);
+    appendPanel(out, font, theme, layout.x, layout.y, layout.size, layout.size, filled);
 
     // THE VIEW OUTLINE FIRST, so a pip inside it is drawn on top. Four segments rather than a
     // filled shape: a filled trapezoid over the panel would dim every pip under it, and the

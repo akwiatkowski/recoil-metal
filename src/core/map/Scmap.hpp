@@ -176,6 +176,26 @@ struct Map {
     std::vector<std::byte> maskA;  ///< BGRA8, strata 1-4 in r,g,b,a
     std::vector<std::byte> maskB;  ///< BGRA8, strata 5-8 in r,g,b,a
 
+    /// The map's own thumbnail, as the editor baked it — a DDS blob, header included, like
+    /// every other embedded texture here.
+    ///
+    /// SKIPPED FOR TWENTY MILESTONES. The note that skipped it said "always 256x256 RGBA8",
+    /// and measured over all 60 stock maps that is very nearly right: every one carries
+    /// 262,272 bytes — a 128-byte DDS header plus exactly 256x256x4 — uncompressed, and BGRA
+    /// rather than RGBA, which is the byte order every other texture in this engine already
+    /// arrives in. Not one is block-compressed, unlike the normal maps and the strata masks
+    /// beside it.
+    ///
+    /// Kept as the raw file bytes ANYWAY, for the reason the normal maps are: the DDS reader
+    /// then parses it exactly as it parses one off disk, and the container states its own
+    /// format instead of this struct asserting one on the strength of a corpus that happens
+    /// to agree today. A map that ships a compressed thumbnail costs nothing here.
+    ///
+    /// EMPTY IS ORDINARY. A `.smf` has no preview at all, a procedural map has no file, and
+    /// a map may legitimately ship without one — the minimap draws its pips on a plain panel
+    /// and says nothing, rather than the loader treating a missing thumbnail as an error.
+    std::vector<std::byte> preview;
+
     // Terrain type, one byte per square at full map resolution. Undocumented
     // semantically — the engine uses it for movement and effects — but it is
     // banded in a way that correlates with the map's strata, which is what makes
