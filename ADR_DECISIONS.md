@@ -1505,10 +1505,20 @@ nothing can consume the sim the way `Events.hpp` anticipated.
 
 Three properties are load-bearing.
 
-  - **It emits commands and nothing else.** No pointers into the sim, no mutation — the rule
+  - **It emits decisions, not mutations.** No pointers into the sim — the rule
     `BuildOrder.hpp` already states for the script ("the script holds no pointers into the
-    sim"), promoted from a comment to the interface. An opponent is therefore replay-safe by
-    construction: the recorded command log already replays it, with no new machinery.
+    sim"), promoted from a comment to the interface.
+
+    *Not* "commands and nothing else", which an earlier draft of this ADR claimed and which
+    the code disproves. Construction does **not** go through `applyCommand`: `runOpponents`
+    pushes a `Construction` into `scene.building` directly and emits the
+    `ConstructionStarted` event itself, with `Match.cpp` calling it "a known hole rather than
+    a preference" — `Construction::blueprintIndex` indexes `scene.buildable` while
+    `applyCommand` reads `catalog.def()`, two index spaces wearing one type name. So the port
+    carries a decision type wide enough for what the opponent actually decides, of which
+    `Command` is one arm and "start this construction" is another. Narrowing that to `Command`
+    is a separate change that has to close the index-space hole first, and is not a
+    prerequisite for the port.
   - **`advance` returns.** Whatever happens inside — a tick function, a resumed coroutine, a
     worker pool — the port sees only "this tick's work is done". Control flow is the
     implementation's business, and that is what keeps the port small enough to be worth having.
@@ -1521,7 +1531,7 @@ Three properties are load-bearing.
 makes a second opponent a second call site, and what leaves the scripted opponent with no A/B
 partner, so no AI work after it could be measured. *An observer interface where the opponent
 mutates the sim directly* — rejected: it puts an unaudited writer inside the tick and breaks the
-P4.2 invariant that every input is a command. *A neutral AI object model (`AIUnit`, `AIOrder`)
+P4.2 invariant that an order reaches the sim through `applyCommand` and nowhere else. *A neutral AI object model (`AIUnit`, `AIOrder`)
 for opponents to consume* — rejected: it is a third dialect nobody speaks, and every consumer
 pays to translate into it. `World` is a read view over `UnitStore`, `SpatialGrid`, `Terrain` and
 `Roster` — this engine's own vocabulary — and anything foreign is translated at its own adapter,
@@ -1529,15 +1539,25 @@ once. *Defer the port until an AI needs it* — rejected on cost: it is one inte
 existing implementation relocated, and it is roughly 80% implied by what `BuildOrder`, `Events`
 and `Command` already are.
 
-**An opponent need not be deterministic, and this is decided rather than assumed.** It runs on
-the machine serving the game and nowhere else, and what leaves that machine is commands — the
-same commands a player's mouse produces, already recorded and already replayed (P4.2). So the
-lockstep contract of ADR-030 is satisfied by the *command stream*, not by the opponent's
-reasoning, and an opponent may draw random numbers, iterate a hash table, or think in a thread
-pool without any of it being an engine concern. FAF's AI draws 101 random numbers and relies on
-it (`moveFirst = 'Random'`); that is now a fact about the AI rather than a problem for us.
-Seeding an adapter's RNG from the sim's stream is worth doing if it is nearly free — it makes a
-match rerunnable for debugging — and is worth no fight beyond that.
+**Determinism: not required by the network, still required by the gate.** The opponent runs on
+the machine serving the game and nowhere else, so ADR-030's lockstep contract never depends on
+its reasoning — an opponent may draw random numbers or iterate a hash table without that being
+a network concern. FAF's AI draws 101 random numbers and relies on it (`moveFirst = 'Random'`).
+
+But an earlier draft went on to say the command log replays an opponent anyway, and **there is
+no command log.** `Replay.hpp` is explicit: *"WHAT IS NOT HERE YET, deliberately: player
+commands … there are no commands to log … what a `--play` match does is already a pure function
+of its setup, so a hash log is a complete record of it today."* `make verify` re-simulates and
+compares per-tick hashes. It passes because the scripted opponent is deterministic C++, and it
+only passes for that reason.
+
+So the real consequence, which is the opposite of what that draft implied: **a nondeterministic
+opponent cannot be covered by the golden match.** That does not force an adapter to be
+deterministic — it forces a choice, per opponent, between being deterministic and being outside
+the strongest regression gate this project has. Seeding an adapter's RNG from the sim's stream
+is therefore not the nice-to-have it was called: it is what buys a foreign AI a golden match at
+all, and it costs the difference between calling `rand()` and calling the sim's stream, since
+`Random` is one of the 84 globals an adapter must bind regardless.
 
 **Consequences.** `World`'s shape becomes a real design surface: it must answer role/faction/tech
 questions (`Roster.hpp`) and neighbourhood questions (`SpatialGrid`) without handing out mutable
