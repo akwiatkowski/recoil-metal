@@ -312,7 +312,7 @@ namespace {
         return {};
     }
     return std::filesystem::path{home}
-         / "projects/llm/games/forged-alliance-reborn/reference/BAR/unittextures";
+         / "projects/llm/games/faf/forged-alliance-reborn/reference/BAR/unittextures";
 }
 
 } // namespace

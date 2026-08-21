@@ -124,7 +124,7 @@ struct LoadedSplat {
 // Where BAR's reference content lives. Used only to resolve a model's texture
 // names, which S3O carries but does not contain.
 constexpr const char* kBarTextureDir =
-    "projects/llm/games/forged-alliance-reborn/reference/BAR/unittextures";
+    "projects/llm/games/faf/forged-alliance-reborn/reference/BAR/unittextures";
 
 // Supreme Commander's world unit is the ogrid, eight elmos across, exactly as on
 // its maps (core/map/Scmap.hpp). A .scm's vertices are in ogrids, so a model

@@ -42,7 +42,7 @@ FA_ROOT ?= $(if $(RM_FA_ROOT),$(RM_FA_ROOT),/Volumes/Samsung_T5/faf/Supreme Comm
 
 # Beyond All Reason: FAR's reference tree for models and unit definitions, and a separate
 # directory of extracted maps (see the README for how they were fetched).
-BAR_ROOT  ?= $(if $(RM_BAR_ROOT),$(RM_BAR_ROOT),$(HOME)/projects/llm/games/forged-alliance-reborn/reference/BAR)
+BAR_ROOT  ?= $(if $(RM_BAR_ROOT),$(RM_BAR_ROOT),$(HOME)/projects/llm/games/faf/forged-alliance-reborn/reference/BAR)
 BAR_MAPS  ?= $(if $(RM_BAR_MAPS),$(RM_BAR_MAPS),$(HOME)/projects/llm/input/recoil/maps)
 
 # The defaults each family is exercised with. SCMP_009 because it is the map every screenshot

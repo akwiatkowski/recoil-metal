@@ -29,7 +29,7 @@
 namespace {
 
 constexpr const char* kRelativeModelDir =
-    "projects/llm/games/forged-alliance-reborn/reference/BAR/objects3d";
+    "projects/llm/games/faf/forged-alliance-reborn/reference/BAR/objects3d";
 
 [[nodiscard]] std::filesystem::path modelDir() {
     const char* home = std::getenv("HOME");
