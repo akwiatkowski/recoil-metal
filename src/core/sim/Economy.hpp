@@ -95,7 +95,22 @@ inline constexpr float kCommanderTrickleEnergyPerSecond = 5.0f;
 struct Construction {
     /// Who is paying, and where it is being built.
     int armyIndex = kNoArmy;
-    std::array<float, 3> position{};
+    /// FIXED POINT, like every other position the sim holds (PLAN2.md §5.2, §7 P10.0).
+    ///
+    /// **THIS WAS THE LAST FLOAT IN SIM STATE**, and it survived because the check that bans
+    /// them could not see it. `check_no_sim_floats.sh` finds floats by grepping for the tokens
+    /// `float` and `double` in declaring position, so a *conversion call* is invisible to it —
+    /// and `Command.cpp` was filling this field with `fxToFloat(command.targetX)`, taking an
+    /// `Fx` the caller already had and rounding it into a float, inside the sim, on a value the
+    /// state hash then read as raw IEEE bits.
+    ///
+    /// It was never a live desync: an `int32`-to-`float` conversion is IEEE-defined and
+    /// reproducible. It was worse than that in a quieter way — §2 claimed the sim was "fixed
+    /// point END TO END (enforced)" and it was not, and the enforcement was structurally unable
+    /// to notice. Two round trips existed to prove it: `Skirmish.cpp` converted this field back
+    /// to `Fx` to raise an event, and `app/Match.cpp` converted it back again to measure a
+    /// distance. Both are now the identity.
+    std::array<Fx, 3> position{};
 
     /// What the finished thing costs in total, from the blueprint.
     Resources cost;

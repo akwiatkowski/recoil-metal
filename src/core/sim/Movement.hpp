@@ -6,7 +6,6 @@
 #include "core/sim/Terrain.hpp"
 #include "core/sim/TickRate.hpp"
 #include "core/sim/Transform.hpp"
-#include "core/map/HeightField.hpp"
 
 #include <algorithm>
 #include <array>
@@ -26,28 +25,35 @@ class UnitStore;
 // "go there", and no reaction to being blocked — a unit whose route is occupied
 // leans on whoever is in the way rather than re-routing.
 
-/// Simulation ticks per second.
+/// The DEFAULT simulation rate, in ticks per second. **Not the rate** — that is `TickRate`,
+/// and it is configurable from 5 to 50 Hz (PLAN2.md §5.1, D2).
 ///
-/// TEN, matching Supreme Commander, whose scripts hardcode it: `WaitSeconds(n)`
-/// is `WaitTicks(n * 10)` (mohodata/lua/simInit.lua:37). This was 30 — Recoil's
-/// `GAME_SPEED` (rts/Sim/Misc/GlobalConstants.h:52) — and the two games disagree,
-/// so one of them had to be chosen.
+/// TEN, because the content this engine imports is Supreme Commander-authored and its own
+/// scripts are written against that clock: `WaitSeconds(n)` is `WaitTicks(n * 10)`
+/// (`mohodata/lua/simInit.lua:37`). Recoil's `GAME_SPEED` is 30
+/// (`rts/Sim/Misc/GlobalConstants.h:52`); the two games disagree, and a default has to be
+/// one of them.
 ///
-/// WHY THE SLOWER ONE WINS. Nothing here needs 30: this engine has no lockstep
-/// multiplayer, which is the constraint that fixed both games' rates in the first
-/// place, and the renderer has never been coupled to the tick. What 10 buys is
-/// that Supreme Commander's own gameplay scripts could later run on this sim
-/// unmodified, and a 30 Hz sim would run every one of their timings three times
-/// fast. That is not a constant to change later: by then every value tuned against
-/// the rate would have to move with it, which is a far bigger job than this line.
-/// See PLAN.md, "Designing for a Lua host that does not exist yet".
+/// **THIS COMMENT USED TO ARGUE SOMETHING THE PROJECT HAS SINCE DECIDED AGAINST**, and the
+/// correction is left visible rather than quietly deleted because the old argument is
+/// persuasive and someone will reconstruct it. It said 10 Hz was chosen so that "Supreme
+/// Commander's own gameplay scripts could later run on this sim unmodified", and that "this
+/// is not a constant to change later".
 ///
-/// Content is unaffected either way, and this is the part worth being careful
-/// about: both families author speeds in units PER SECOND, so nothing is rescaled
-/// by the change. The one exception was a `turnrate` in Recoil frames, which is a
-/// fact about BAR's authoring rather than about our rate and now has its own
-/// constant in UnitDef.cpp — using this one made two different facts share a
-/// number, which held only while the values agreed.
+/// Both halves are now wrong. **Running anyone's scripts is a stated non-goal** (§1.1: "you
+/// promise import, not compatibility" — no existing Lua runs, and D6 puts unit behaviour in
+/// C++ with no script host at all). And **it is exactly a constant that changes**: D2 made
+/// the rate a value with a `--tick-rate` flag and a four-rate test behind it, which is what
+/// retired the argument. PLAN2 §1.1 names this file as the live justification it was
+/// retiring.
+///
+/// What survives is the part that was always true and is the reason a default is safe at
+/// all: **both content families author speeds PER SECOND**, so changing the rate rescales
+/// nothing. The one exception was a `turnrate` in Recoil frames — a fact about BAR's
+/// authoring rather than about our clock — which now has its own constant in `UnitDef.cpp`.
+///
+/// A caller wanting the rate should take a `TickRate`. This is here for the handful that
+/// convert a per-tick figure back for display.
 inline constexpr int kTicksPerSecond = 10;
 // `kTickSeconds` used to be here. It is GONE, which is PLAN2.md §5.1's "kTickSeconds leaves
 // sim math" — the last sim caller disappeared when the economy went per-tick and the movement

@@ -6,8 +6,9 @@
 # WHY THIS EXISTS. Recoil keeps its sim in global singletons — twelve of them: `gs`, `gsRNG`,
 # `unitHandler`, `teamHandler`, `quadField`, `featureHandler`, `projectileHandler`,
 # `moveDefHandler`, `losHandler`, `pathManager`, plus `readMap` and `globalRendering`. Their
-# reach across `rts/` is not incidental: `gs->` appears in 113 of its 1,463 files,
-# `teamHandler` in 78, `unitHandler` in 69.
+# reach across `rts/` is not incidental. Counted 2026-08-21 over the 1,518 source files
+# outside `rts/lib`: `globalRendering` appears in 135, `gs->` in 119, `teamHandler` in 78,
+# `unitHandler` and `readMap` in 69 each, `gsRNG` in 43, `quadField` in 41.
 #
 # The consequence that matters to us is not tidiness. It is that you cannot construct two
 # sims in one process — and the strongest determinism test there is happens to be exactly

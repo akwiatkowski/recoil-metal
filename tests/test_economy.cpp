@@ -48,7 +48,7 @@ const rm::sim::TickRate kRate{10};
 [[nodiscard]] Construction massExtractor() {
     return Construction{
         .armyIndex = 0,
-        .position = {100.0f, 0.0f, 100.0f},
+        .position = rm::test::at(100, 0, 100),
         .cost = res(36.0f, 360.0f),
         .buildTimeRemaining = rm::test::mag(60.0f),
         .totalBuildTime = rm::test::mag(60.0f),

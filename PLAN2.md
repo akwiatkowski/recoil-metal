@@ -1212,7 +1212,7 @@ three of which get **much more expensive to retrofit the longer they wait**.
 the most exciting feature but because every combat call site grows an argument, and there are
 fewer of those today than there will ever be again.
 
-- [ ] **P10.0 The float ban's blind spot.** `check_no_sim_floats.sh` finds floats by grepping
+- [x] **P10.0 The float ban's blind spot** — **done 2026-08-21.** `check_no_sim_floats.sh` finds floats by grepping
       for the *tokens* `float` and `double` in declaring position, so it cannot see a
       *conversion call* — and there is one, in the sim, on the determinism-critical path:
       `Command.cpp` builds `Construction::position` with `fxToFloat`, and `StateHash.cpp`
@@ -1222,7 +1222,27 @@ fewer of those today than there will ever be again.
       structurally cannot see the code that fills it. Widen the pattern to catch
       `fxToFloat`/`static_cast<float>`, then finish P2.5 and make the field `array<Fx, 3>`.
       *Test:* the check itself, with a deliberately added conversion as a negative case.
-      *Manual:* `make verify` MATCHes — this must move no hashes.
+      *Manual:* the screenshot hash is unchanged across the change.
+
+      **THE ACCEPTANCE CRITERION AS FIRST WRITTEN WAS WRONG, and is kept rather than edited
+      away.** It said "`make verify` MATCHes — this must move no hashes", which is impossible:
+      the state hash *is* a walk over the bytes of sim state, so changing a field from three
+      floats to three `Fx` moves it by construction, at tick 0. The criterion confused *the
+      match plays the same* with *the fingerprint is the same* — precisely the distinction the
+      harness exists to keep apart, written by someone who had just spent a day reading it.
+
+      What was used instead is P7.3's technique and it is the stronger one: **hash the
+      screenshot.** `0a430d44ee89ea9a3868f17d5caa0cdb6b7bd9d650cce465592c02fb5ff37a97` before
+      and after, so 7,000 ticks of a decided match render pixel-for-pixel identically while the
+      state hash moves. That is what "a representation change, not a behaviour change" looks
+      like when it is proven rather than asserted, and it is the right shape for every future
+      width change — including the `UnitIndex` widening `core/Types.hpp` warns about.
+
+      **A second guard came free.** With the field fixed point, `StateHash.cpp`'s
+      `feed(StateHash&, float)` had no callers, and `-Werror=unused-function` refused to build
+      until it was deleted. So re-introducing a float into hashed state now fails to compile
+      until someone puts that function back — a deliberate act rather than an oversight, and a
+      stronger guarantee than the grep gives.
 
 - [ ] **P10.1 Armour classes and the damage profile** (`ADR-033`, D12). `ArmorRegistry`
       interning sorted case-folded names to a dense `uint8`; `DamageProfile` as a base `Mag`

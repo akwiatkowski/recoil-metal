@@ -36,11 +36,29 @@ sim="$root/src/core/sim"
 #               part that runs in a tick.
 # `UnitCatalog` — derives per-tick rates from the per-second floats a blueprint states.
 # `Movement`  — `TickClock` bridges wall-clock seconds to ticks, which is its whole job.
-# `StateHash` — feeds `Construction::position`, still a float triple until P2.5 moves orders.
-# `Economy`   — declares `Construction::position`, same reason.
-exempt='Fx\.(hpp|cpp)|TickRate\.(hpp|cpp)|Terrain\.(hpp|cpp)|Pathfinding\.(hpp|cpp)|UnitCatalog\.(hpp|cpp)|Movement\.(hpp|cpp)|StateHash\.cpp|Economy\.hpp'
+#
+# `StateHash` AND `Economy` USED TO BE ON THIS LIST, both for `Construction::position` — the
+# last float triple in sim state. §7 P10.0 made it `std::array<Fx, 3>`, so both are now checked
+# like everything else. `StateHash.cpp` no longer even has a `feed(float)` to exempt, and
+# `-Wunused-function` is what keeps it that way.
+exempt='Fx\.(hpp|cpp)|TickRate\.(hpp|cpp)|Terrain\.(hpp|cpp)|Pathfinding\.(hpp|cpp)|UnitCatalog\.(hpp|cpp)|Movement\.(hpp|cpp)'
 
-# Strip comments, then look for float/double in a declaring or casting position.
+# THE BLIND SPOT THIS CLOSES (§7 P10.0). Until now the pattern was `\b(float|double)\b`, which
+# finds a float DECLARATION and cannot see a CONVERSION CALL — `fxToFloat` contains neither
+# token at a word boundary. So `Command.cpp` was taking an `Fx` the caller already had, rounding
+# it into a float and storing it in sim state, and this check reported the sim was fixed point.
+#
+# It was never a live desync — an `int32`-to-`float` conversion is IEEE-defined and reproducible
+# — but it made a checked claim into an unchecked one, which is worse than a known gap. A review
+# found it by reading; a grep should have.
+#
+# `fxToFloat` is the only conversion helper that goes this way. It is banned outright in the sim
+# rather than pattern-matched loosely: the sim has no legitimate reason to produce a float, and
+# a caller that needs one is by definition outside it.
+conversions='fxToFloat|magToFloat|static_cast<(float|double)>|\(float\)|\(double\)'
+
+# Strip comments, then look for float/double in a declaring or casting position, and for any
+# conversion INTO one.
 found=""
 for file in "$sim"/*.hpp "$sim"/*.cpp; do
     case "$(basename "$file")" in
@@ -48,7 +66,7 @@ for file in "$sim"/*.hpp "$sim"/*.cpp; do
     esac
 
     hits=$(sed -e 's|//.*$||' -e 's|/\*.*\*/||' "$file" \
-        | grep -nE '\b(float|double)\b' \
+        | grep -nE "\\b(float|double)\\b|$conversions" \
         | grep -vE 'constexpr[[:space:]]+(float|double)' \
         || true)
     if [ -n "$hits" ]; then

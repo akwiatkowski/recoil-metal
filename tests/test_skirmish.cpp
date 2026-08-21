@@ -344,7 +344,7 @@ TEST_CASE("a finished construction is reported but left in the list") {
     std::vector<Construction> building;
     Construction work;
     work.armyIndex = 0;
-    work.position = {100.0f, 0.0f, 100.0f};
+    work.position = rm::test::at(100, 0, 100);
     work.cost = {.mass = rm::test::mag(10.0f), .energy = rm::test::mag(10.0f)};
     work.buildTimeRemaining = rm::test::mag(1.0f);
     work.totalBuildTime = rm::test::mag(1.0f);

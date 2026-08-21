@@ -592,7 +592,12 @@ void orderFirstExtractors(UnitScene& scene, std::span<const rm::scenario::Marker
 
         scene.building.push_back(rm::sim::Construction{
             .armyIndex = army,
-            .position = nearest->position,
+            // A mass deposit's position comes out of the map file as floats, so it converts
+            // HERE — in the app, which is the legitimate boundary — rather than being carried
+            // into the sim as one (§7 P10.0).
+            .position = {rm::sim::fxFromFloat(nearest->position[0]),
+                         rm::sim::fxFromFloat(nearest->position[1]),
+                         rm::sim::fxFromFloat(nearest->position[2])},
             .cost = {.mass = extractor->buildCostMass,
                      .energy = extractor->buildCostEnergy},
             .buildTimeRemaining = extractor->buildTime,

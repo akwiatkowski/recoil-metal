@@ -25,18 +25,18 @@ void feed(StateHash& h, std::uint64_t value) noexcept {
     }
 }
 
-void feed(StateHash& h, float value) noexcept {
-    // The bit pattern, not the value. Two floats that differ in the last bit are a
-    // divergence, and that is exactly what this has to report.
-    //
-    // Negative zero is normalised to positive zero first: -0.0f == 0.0f is true arithmetic
-    // but their bit patterns differ, and a sim that produced one where it previously
-    // produced the other has not actually diverged. Nothing else is normalised — a NaN's
-    // payload is left alone, because a NaN appearing at all is a bug this should surface
-    // rather than smooth over.
-    const float normalised = value == 0.0f ? 0.0f : value;
-    feed(h, static_cast<std::uint64_t>(std::bit_cast<std::uint32_t>(normalised)));
-}
+// `feed(StateHash&, float)` USED TO BE HERE, and its absence is the result rather than a
+// tidy-up (PLAN2.md §7 P10.0).
+//
+// It hashed a float's bit pattern, normalising negative zero, because `Construction::position`
+// was a `std::array<float, 3>` — the last float in sim state, and one the float ban could not
+// see because it arrived through a `fxToFloat` call rather than a declaration. With that field
+// fixed point, nothing hashed is a float any more, and `-Wunused-function` says so at every
+// build: **re-introducing a float into hashed state now fails to compile until someone puts
+// this function back, which is a deliberate act rather than an oversight.**
+//
+// That is a stronger guarantee than the grep in `check_no_sim_floats.sh` gives, and it is worth
+// keeping. If you are here because you need to hash a float: do not. Convert at the boundary.
 
 void feed(StateHash& h, int value) noexcept {
     feed(h, static_cast<std::uint64_t>(static_cast<std::uint32_t>(value)));
@@ -73,15 +73,6 @@ void feed(StateHash& h, const std::array<Fx, 2>& v) noexcept {
 /// An angle. Fed as its raw 16 bits — there is no wrapping to normalise, because the type
 /// cannot hold an unwrapped angle.
 void feed(StateHash& h, Brad value) noexcept { feed(h, static_cast<std::uint64_t>(value)); }
-
-/// A construction's site. `std::array<float, 3>` still, because `Construction::position` is
-/// where the CALLER wants a building put — it comes from a mouse click or a map marker, not
-/// from the sim's own arithmetic, and it migrates with the order system in P2.5.
-void feed(StateHash& h, const std::array<float, 3>& v) noexcept {
-    feed(h, v[0]);
-    feed(h, v[1]);
-    feed(h, v[2]);
-}
 
 void feed(StateHash& h, const Resources& r) noexcept {
     feed(h, r.mass);

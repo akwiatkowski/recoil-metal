@@ -272,7 +272,11 @@ bool startCommand(const Command& command, UnitStore& store, const UnitCatalog& c
         // is created.
         building->push_back(Construction{
             .armyIndex = store.motion()[command.unit.index].armyIndex,
-            .position = {fxToFloat(command.targetX), 0.0f, fxToFloat(command.targetZ)},
+            // Straight through. This used to be `{fxToFloat(targetX), 0.0f,
+            // fxToFloat(targetZ)}` — an `Fx` the caller already had, rounded into a float,
+            // inside the sim (§7 P10.0). The `y` is zero because a build order names a place
+            // on the map and the ground decides the height.
+            .position = {command.targetX, Fx{}, command.targetZ},
             .cost = {.mass = def->buildCostMass, .energy = def->buildCostEnergy},
             .buildTimeRemaining = def->buildTime,
             .totalBuildTime = def->buildTime,

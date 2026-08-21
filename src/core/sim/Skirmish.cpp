@@ -361,9 +361,7 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
                          Event{.kind = EventKind::ConstructionFinished,
                                .army = work.armyIndex,
                                .amount = work.cost.mass,
-                               .at = {fxFromFloat(work.position[0]),
-                                      fxFromFloat(work.position[1]),
-                                      fxFromFloat(work.position[2])}});
+                               .at = work.position});
                 }
             }
         }

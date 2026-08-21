@@ -11,20 +11,22 @@ namespace rm::sim {
 //
 // WHY THIS EXISTS (PLAN2.md §6.7, §7 P3.6). Some work does not need doing every tick — picking
 // a target, re-checking a build site, deciding what to build next. Recoil calls that a
-// `SlowUpdate` and runs it on a **hardcoded 16-frame cycle**, staggering objects across the
-// frames of the cycle so that no single frame does all of it.
+// `SlowUpdate` and runs it on a **hardcoded 15-frame cycle** — `UNIT_SLOWUPDATE_RATE = 15`
+// (`Sim/Misc/GlobalConstants.h:60`), applied as `gs->frameNum % UNIT_SLOWUPDATE_RATE`
+// (`UnitHandler.cpp:355`) — staggering objects across the frames of the cycle so that no
+// single frame does all of it.
 //
 // Two things are worth copying and one is not:
 //
 //   COPY the period: doing slow work slowly is right, and the alternative — every tick — is
 //   what makes an O(n²) sweep an O(n²) sweep *per tick*.
 //
-//   COPY the stagger: a period without one just moves the whole cost onto every sixteenth
+//   COPY the stagger: a period without one just moves the whole cost onto every fifteenth
 //   frame, which is a stutter rather than a saving. `--bench` sees this directly, and it is
 //   §7 P3.6's stated manual check.
 //
-//   DO NOT copy the 16. It is a number of FRAMES, so Recoil's own period is 0.533 s at
-//   `GAME_SPEED 30` and would silently become 3.2 s at our minimum rate and 0.32 s at our
+//   DO NOT copy the 15. It is a number of FRAMES, so Recoil's own period is 0.5 s at
+//   `GAME_SPEED 30` and would silently become 3.0 s at our minimum rate and 0.3 s at our
 //   maximum. That is precisely the bug §5.1 exists to kill, and `check_no_tick_literals.sh`
 //   exists to catch. The period here is authored in SECONDS by the caller and the tick count
 //   is derived — and there is deliberately no default, because a period is a claim about the

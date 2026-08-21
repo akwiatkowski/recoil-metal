@@ -206,8 +206,9 @@ bool gPrintEvents = false;
         }
         bool claimed = false;
         for (const rm::sim::Construction& work : scene.building) {
-            if (rm::sim::groundDistanceElmos(fxPoint(work.position),
-                                             fxPoint(marker.position))
+            // `work.position` is already fixed point (§7 P10.0); only the MARKER still
+            // needs converting, because it comes out of a map file as floats.
+            if (rm::sim::groundDistanceElmos(work.position, fxPoint(marker.position))
                 < kClaimedRadius) {
                 claimed = true;
                 break;
@@ -348,9 +349,7 @@ void runOpponents(UnitScene& scene, const rm::vfs::Vfs& content, const rm::Heigh
                     // two index spaces wearing one type name.
                     scene.building.push_back(rm::sim::Construction{
                         .armyIndex = army.index,
-                        .position = {rm::sim::fxToFloat((*site)[0]),
-                                     rm::sim::fxToFloat((*site)[1]),
-                                     rm::sim::fxToFloat((*site)[2])},
+                        .position = *site,
                         .cost = {.mass = def.buildCostMass, .energy = def.buildCostEnergy},
                         .buildTimeRemaining = def.buildTime,
                         .totalBuildTime = def.buildTime,
@@ -383,9 +382,7 @@ void runOpponents(UnitScene& scene, const rm::vfs::Vfs& content, const rm::Heigh
                 const rm::unitdef::UnitDef& def = scene.buildable[*blueprintIndex];
                 scene.building.push_back(rm::sim::Construction{
                     .armyIndex = army.index,
-                    .position = {rm::sim::fxToFloat(standing.factoryPosition[0]),
-                                 rm::sim::fxToFloat(standing.factoryPosition[1]),
-                                 rm::sim::fxToFloat(standing.factoryPosition[2])},
+                    .position = standing.factoryPosition,
                     .cost = {.mass = def.buildCostMass, .energy = def.buildCostEnergy},
                     .buildTimeRemaining = def.buildTime,
                     .totalBuildTime = def.buildTime,
@@ -571,12 +568,18 @@ rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) 
             continue;
         }
         ++runner.completedBuilds;
+        // OUT of fixed point, here at the edge (§7 P10.0). Putting a unit on the map needs
+        // a model and a float transform, so this is the legitimate direction — the sim
+        // holds the authority and the renderer gets a copy, never the other way round.
+        const std::array<float, 3> site{rm::sim::fxToFloat(work.position[0]),
+                                        rm::sim::fxToFloat(work.position[1]),
+                                        rm::sim::fxToFloat(work.position[2])};
         // Face the map centre — a base laid out toward the fight reads as one.
-        const float yaw = std::atan2(runner.field.widthElmos() * 0.5f - work.position[0],
-                                     runner.field.depthElmos() * 0.5f - work.position[2]);
+        const float yaw = std::atan2(runner.field.widthElmos() * 0.5f - site[0],
+                                     runner.field.depthElmos() * 0.5f - site[2]);
         const auto spawned = spawnUnit(scene, runner.content, runner.field,
                                        scene.buildablePaths[work.blueprintIndex],
-                                       work.position, scene.armies[army], yaw);
+                                       site, scene.armies[army], yaw);
         // `UnitFinished` after `UnitCreated`, which `spawnUnit` raised: the pair is Recoil's
         // (`04 §4.2` — `UnitCreated` then `UnitFinished` when the build completes) and the
         // distinction matters to anything that treats a built unit differently from one placed
@@ -587,7 +590,7 @@ rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) 
                 .unit = *spawned,
                 .army = work.armyIndex,
                 .amount = work.cost.mass,
-                .at = fxPoint(work.position),
+                .at = work.position,
             });
         }
         if (spawned && scene.buildable[work.blueprintIndex].isMobile()) {
@@ -595,12 +598,12 @@ rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) 
             // rally point outside the base while it forms.
             const auto target = runner.scripts[army].attackLaunched
                                     ? nearestEnemyCommander(scene, work.armyIndex,
-                                                            fxPoint(work.position))
+                                                            work.position)
                                     : std::nullopt;
             const std::array<rm::sim::Fx, 2> to =
                 target ? std::array<rm::sim::Fx, 2>{(*target)[0], (*target)[2]}
                        : rm::sim::rolloffPoint(
-                             fxPoint(work.position),
+                             work.position,
                              rm::sim::Fx::fromInt(runner.field.squaresX * rm::kSquareSize / 2),
                              rm::sim::Fx::fromInt(runner.field.squaresZ * rm::kSquareSize
                                                   / 2));
