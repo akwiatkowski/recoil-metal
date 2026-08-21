@@ -72,6 +72,24 @@ struct Weapon {
     /// the ring damages of a commander's death blast are larger still.
     sim::Mag damage{};
 
+    /// WHAT KIND of damage, from `DamageType` — the key into `armordefinition.lua`'s matrix
+    /// (PLAN2.md §7 P10.1, `ADR-033`).
+    ///
+    /// Distinct values in the corpus (`02 §9.6`): `Normal` 454, `DeathExplosion` 41, `Nuke` 12,
+    /// `Overcharge` 10, `Deathnuke` 4, `EMP` 2, `TacticalMissile` 1, `FireBeetleExplosion` 1,
+    /// `CzarBeam` 1. Only six of the twenty valid types appear in the multiplier table at all,
+    /// and `Normal` is 1.0 against every class — which is why flattening leaves 478 of the 494
+    /// weapons with the bare `damage` above and no overrides.
+    ///
+    /// **A NAME, resolved in `sim::UnitCatalog`**, for the reason `UnitDef::armorType` gives:
+    /// `weaponsFrom` takes a Lua array and nothing else, and it should keep being callable that
+    /// way. Empty is read as `Normal`, which is what a blueprint stating nothing means.
+    ///
+    /// BAR content has no equivalent field — a Recoil weapon def states absolute damage per
+    /// armour class directly — so a BAR import leaves this empty and builds the profile from
+    /// its own table instead of through the matrix.
+    std::string damageType;
+
     /// Radius over which that damage is spread, in ELMOS, converted from the ogrids
     /// the file states. Zero means a point hit: 222 of the 494 weapons state no radius
     /// at all, and one states a negative one, which is read as zero rather than as an

@@ -274,6 +274,10 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
     // --- the rest ----------------------------------------------------------
     if (const lua::Value* defense = parsed->path("Defense")) {
         def.health = sim::magFromFloat(numberOr(*defense, "MaxHealth", 0.0f));
+        // Kept as the string the file says. `UnitDef::armorType` explains why it is not an
+        // `ArmorClass` here; the short version is that resolving it needs a registry, and a
+        // parser that needs a registry cannot be called with a Lua table and nothing else.
+        def.armorType = std::string{defense->stringAt("ArmorType").value_or("")};
     }
 
     // --- display -----------------------------------------------------------

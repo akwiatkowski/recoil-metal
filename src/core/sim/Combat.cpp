@@ -437,6 +437,17 @@ Projectile launch(std::array<Fx, 3> from, std::array<Fx, 3> to,
 Mag damageArea(std::array<Fx, 3> centre, Fx radiusElmos, Mag damage, int byArmy,
                UnitStore& store, std::span<const Army> armies, UnitId by,
                EventQueue* events) {
+    // The scalar form, kept because it is what two dozen call sites mean — most of them tests
+    // asserting the falloff curve, which is a property of the geometry and has nothing to say
+    // about armour. A flat profile answers the same for every class, so this is not an
+    // approximation of the call below: it is the same call with a table that has no entries.
+    return damageArea(centre, radiusElmos, unitdef::flatDamage(damage), byArmy, store, armies,
+                      nullptr, by, events);
+}
+
+Mag damageArea(std::array<Fx, 3> centre, Fx radiusElmos, const unitdef::DamageProfile& damage,
+               int byArmy, UnitStore& store, std::span<const Army> armies,
+               const UnitCatalog* catalog, UnitId by, EventQueue* events) {
     Mag dealt{};
 
     const std::span<const Transform> transforms = store.transforms();
@@ -472,10 +483,25 @@ Mag damageArea(std::array<Fx, 3> centre, Fx radiusElmos, Mag damage, int byArmy,
             continue;
         }
 
+        // WHAT THIS WEAPON DOES TO THIS TARGET (PLAN2.md §7 P10.1). The armour class comes from
+        // the catalog, which is where a type's content was resolved; with no catalog every
+        // target is `kDefaultArmor` and a flat profile answers `base` — the pre-P10.1 engine,
+        // exactly.
+        //
+        // LOOKED UP PER TARGET rather than hoisted, because it genuinely varies within one
+        // blast: a shell landing between a tank and a bunker hits two armour classes, and that
+        // is the whole point of the table.
+        const ArmorClass armor =
+            catalog != nullptr ? catalog->armorOf(store.typeAt(slot)) : kDefaultArmor;
+
         // The share is a fraction of the blast, so it is geometry: `Fx`. Multiplying a `Mag`
         // by an `Fx` is how a rate or a fraction becomes an amount, and it is the one mixed
         // operation the two types have.
-        const Mag wanted = damage * share;
+        //
+        // AND THE ORDER MATTERS: the armour lookup happens first, then the falloff scales what
+        // armour left. The other way round would scale the base by distance and then look up a
+        // table keyed on a number that no longer means what the table's keys mean.
+        const Mag wanted = damage.against(armor) * share;
         const Mag applied = std::min(healths[slot].current, wanted);
         healths[slot].current -= applied;
         dealt += applied;

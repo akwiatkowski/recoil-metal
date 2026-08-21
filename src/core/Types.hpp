@@ -71,6 +71,14 @@ using UnitTypeIndex = std::uint16_t;
 /// (`DamageArrayHandler.cpp:43-45`, index 0 inserted at the front of the sorted key list).
 using ArmorClass = std::uint8_t;
 
+/// The class a unit gets when its blueprint states none, the class an unrecognised name
+/// resolves to, and the fallback for a damage lookup that matches no override.
+///
+/// HERE RATHER THAN WITH `ArmorRegistry`, which is where it was first written: it is a
+/// reserved value OF THE TYPE, so a reader who has the alias should have it too, and the sim
+/// uses it in places that have no reason to include a content header.
+inline constexpr ArmorClass kDefaultArmor = 0;
+
 /// Which tick it is, counted from the match's first. 64-bit from the start: it costs
 /// nothing next to everything else a unit carries, and replays are concatenated — a 32-bit
 /// counter would wrap after about two and a half years of match time at the fast end of the

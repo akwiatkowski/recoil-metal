@@ -233,6 +233,25 @@ Mag damageArea(std::array<Fx, 3> centre, Fx radiusElmos, Mag damage, int byArmy,
                UnitStore& store, std::span<const Army> armies, UnitId by = {},
                EventQueue* events = nullptr);
 
+/// The same, with a weapon's full damage table rather than one number (PLAN2.md §7 P10.1,
+/// `ADR-033`, D12).
+///
+/// **AN OVERLOAD RATHER THAN A REPLACEMENT**, and the scalar version above is not deprecated.
+/// A blast's falloff is geometry and has nothing to say about armour, so the two dozen tests
+/// that assert the curve are better off passing a number — and `flatDamage` makes the two
+/// provably the same call, which is what keeps `make verify` a strict check across this change.
+///
+/// `catalog` is how a TARGET's armour class is discovered, and it may be null: a scene with no
+/// catalog has no types, so every target is `kDefaultArmor` and a flat profile answers `base`
+/// for it. That is the pre-P10.1 engine reproduced exactly rather than approximated.
+///
+/// The lookup happens per target inside the loop, because it genuinely varies within one blast
+/// — a shell between a tank and a bunker hits two armour classes, which is the point.
+Mag damageArea(std::array<Fx, 3> centre, Fx radiusElmos, const unitdef::DamageProfile& damage,
+               int byArmy, UnitStore& store, std::span<const Army> armies,
+               const UnitCatalog* catalog = nullptr, UnitId by = {},
+               EventQueue* events = nullptr);
+
 /// The unit's own destruction, if its definition describes one.
 ///
 /// 99 of the 494 shipped weapons are `WeaponCategory = 'Death'`: a blast with no target, no

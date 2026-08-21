@@ -3,6 +3,7 @@
 #include "core/Types.hpp"
 #include "core/sim/Fx.hpp"
 #include "core/sim/TickRate.hpp"
+#include "core/unit/Armor.hpp"
 #include "core/unit/UnitDef.hpp"
 
 #include <cstddef>
@@ -73,7 +74,58 @@ public:
         /// An `int` rather than a `TickCount`: it is a count of shots, not of ticks, and the
         /// two being different types is the whole point of §5.1.
         int burstSize = 1;
+
+        /// What this weapon does, per armour class (PLAN2.md §7 P10.1, `ADR-033`).
+        ///
+        /// RESOLVED HERE for the same reason the rates above are: the blueprint states a
+        /// `Damage` and a `DamageType` NAME, and turning a name into a class index needs a
+        /// registry — a fact about the match's content, not about the weapon. The name-to-index
+        /// resolution has to happen exactly once, and "when the catalog learns about the type"
+        /// is the only moment that is both after the registry exists and before any tick runs.
+        ///
+        /// For a catalog with no armour context (the default — see `setArmor`) this is
+        /// `flatDamage(weapon.damage)`, which is exactly the scalar the sim used before P10.1.
+        /// That equivalence is what lets the whole corpus of existing tests stay untouched.
+        unitdef::DamageProfile damage{};
     };
+
+    // --- Armour (PLAN2.md §7 P10.1, `ADR-033`, D12) ---------------------------------
+    //
+    // OPTIONAL AND SET ONCE, rather than a constructor argument. Three reasons, and the third
+    // is the one that decided it:
+    //
+    //   1. A catalog is default-constructed in about forty places, most of them tests that
+    //      care about economy or reload timing and have no opinion about armour.
+    //   2. The registry is a property of the MATCH's content, not of any one type, so it is
+    //      the wrong thing to pass per `add` call.
+    //   3. Without it, every unit is `kDefaultArmor` and every profile is flat — which is
+    //      byte-for-byte the behaviour the sim had before armour classes existed. So a caller
+    //      that says nothing gets the old engine, and `make verify` stays a strict check.
+
+    /// Gives the catalog the content's armour classes and Supreme Commander's multiplier
+    /// matrix.
+    ///
+    /// **CALL THIS BEFORE `add`.** Resolution happens when a type is registered, so a type
+    /// added first keeps the flat profile it was given. Asserted rather than silently tolerated
+    /// would be better; it is documented instead because the catalog has no way to fail — and
+    /// `add` is `[[nodiscard]]`-returning an index, not a status.
+    ///
+    /// `matrix` may be empty, which is the BAR case: that family states absolute damage per
+    /// armour class in its own weapon defs rather than a multiplier table, so the transpose
+    /// has nothing to do and the importer fills profiles directly.
+    void setArmor(unitdef::ArmorRegistry registry,
+                  std::vector<unitdef::ArmorMultiplier> matrix);
+
+    /// What a type is made of. `kDefaultArmor` for an unregistered index, for a type with no
+    /// definition, and for a definition whose blueprint states no `ArmorType` — all three of
+    /// which mean "ordinary", which is the answer that keeps a match playable.
+    [[nodiscard]] ArmorClass armorOf(UnitTypeIndex type) const noexcept {
+        return type < armor_.size() ? armor_[type] : kDefaultArmor;
+    }
+
+    /// The registry this catalog resolved against. Empty of everything but `default` unless
+    /// `setArmor` was called — which is what a test that never mentions armour gets.
+    [[nodiscard]] const unitdef::ArmorRegistry& armor() const noexcept { return armor_names_; }
     /// Registers a definition and returns the index units of that type will carry.
     ///
     /// Null is allowed and gets an index like anything else: a decorative crowd has no
@@ -112,12 +164,22 @@ public:
     [[nodiscard]] std::size_t size() const noexcept { return defs_.size(); }
 
 private:
+    /// One weapon's damage table, through the matrix when there is one and flat when there is
+    /// not. Private because it depends on `armor_matrix_` and is only meaningful during `add`.
+    [[nodiscard]] unitdef::DamageProfile damageFor(const unitdef::Weapon& weapon) const;
+
     std::vector<const unitdef::UnitDef*> defs_;
 
-    /// Parallel to `defs_`, index-locked by construction: all three only ever grow by one, in
+    /// Parallel to `defs_`, index-locked by construction: all four only ever grow by one, in
     /// `add`.
     std::vector<Rates> rates_;
     std::vector<std::vector<WeaponRates>> weapons_;
+    std::vector<ArmorClass> armor_;
+
+    /// The content's armour classes and Supreme Commander's multiplier table. Both empty of
+    /// anything but `default` until `setArmor` — see the note there.
+    unitdef::ArmorRegistry armor_names_;
+    std::vector<unitdef::ArmorMultiplier> armor_matrix_;
 };
 
 } // namespace rm::sim

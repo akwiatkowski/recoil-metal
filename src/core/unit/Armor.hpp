@@ -127,10 +127,6 @@ private:
     std::vector<std::string> names_;
 };
 
-/// The class a unit gets when its blueprint states none, and the fallback for a lookup that
-/// matches no override.
-inline constexpr ArmorClass kDefaultArmor = 0;
-
 // What one weapon does to one target, as a value.
 //
 // FIXED SIZE AND TRIVIALLY COPYABLE, and that is load-bearing rather than tidy. A projectile

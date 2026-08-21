@@ -78,6 +78,7 @@ std::vector<Weapon> weaponsFrom(const lua::Value& weaponArray) {
         }
 
         weapon.damage = sim::magFromFloat(numberOr(entry, "Damage", 0.0f));
+        weapon.damageType = std::string{entry.stringAt("DamageType").value_or("")};
 
         // Ogrids to elmos throughout, the same x8 everything else in this family takes.
         // A NEGATIVE radius appears once in the corpus and is read as a point hit: a

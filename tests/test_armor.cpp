@@ -2,19 +2,47 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include "core/sim/Army.hpp"
+#include "core/sim/Combat.hpp"
+
+#include "support/FxMatchers.hpp"
+#include "support/TestRoster.hpp"
+
 #include <array>
 #include <string_view>
+#include <vector>
 
 using rm::ArmorClass;
+using rm::kDefaultArmor;
+using rm::sim::Army;
+using rm::sim::Mag;
+using rm::test::Roster;
 using rm::unitdef::ArmorMultiplier;
 using rm::unitdef::ArmorRegistry;
 using rm::unitdef::DamageProfile;
+using rm::unitdef::UnitDef;
+using rm::unitdef::Weapon;
+using rm::unitdef::WeaponRole;
 using rm::unitdef::damageFromMatrix;
 using rm::unitdef::flatDamage;
-using rm::unitdef::kDefaultArmor;
-using rm::sim::Mag;
 
 namespace {
+
+/// A weapon that does `damage` of a stated kind, and nothing else worth reading.
+///
+/// The fields that are set are the ones the catalog looks at when it builds a profile; the
+/// rest are left alone deliberately, so a test that starts depending on range or reload says
+/// so by failing rather than by quietly using a default that means something.
+[[nodiscard]] Weapon gun(float damage, std::string_view damageType) {
+    Weapon weapon;
+    weapon.label = "test gun";
+    weapon.role = WeaponRole::DirectFire;
+    weapon.damage = rm::test::mag(damage);
+    weapon.damageType = std::string{damageType};
+    weapon.maxRange = rm::test::fx(100.0f);
+    weapon.rateOfFire = 1.0f;
+    return weapon;
+}
 
 // Supreme Commander's own armour classes, in the order `lua/armordefinition.lua` lists them.
 //
@@ -255,4 +283,159 @@ TEST_CASE("the damage type is matched without regard to case") {
     // case-sensitive match would silently give a weapon full damage against everything.
     const DamageProfile shouted = damageFromMatrix(Mag::fromInt(12000), "OVERCHARGE", matrix);
     CHECK(shouted.against(structure) == Mag::fromInt(3000));
+}
+
+// --- The wiring: content -> catalog -> the damage path ----------------------------------
+//
+// The tests above are about the TYPE. These are about the only thing that makes it worth
+// having: that a weapon's table and a target's class meet in `damageArea` and change what a
+// shot does.
+
+TEST_CASE("a catalog with no armour context reproduces the pre-P10.1 engine exactly") {
+    // THE PROPERTY THAT KEEPS `make verify` A STRICT CHECK across this change, and the reason
+    // `setArmor` is optional rather than a constructor argument. Every existing test builds a
+    // catalog and never mentions armour; all of them must keep meaning what they meant.
+    Roster roster;
+    UnitDef def;
+    def.name = "test_target";
+    def.armorType = "Structure";  // stated, but nothing resolves it
+    def.weapons.push_back(gun(100.0f, "Overcharge"));
+    const rm::UnitTypeIndex type = roster.addType(def);
+
+    CHECK(roster.catalog.armorOf(type) == kDefaultArmor);
+    CHECK(roster.catalog.weaponRates(type, 0).damage == flatDamage(rm::test::mag(100.0f)));
+}
+
+TEST_CASE("the catalog resolves a blueprint's armour type and transposes its weapons") {
+    Roster roster;
+    const ArmorRegistry registry = ArmorRegistry::fromNames(kFaClasses);
+    roster.catalog.setArmor(registry, faMatrix(registry));
+
+    UnitDef building;
+    building.name = "test_building";
+    building.armorType = "Structure";
+    const rm::UnitTypeIndex structureType = roster.addType(building);
+
+    UnitDef commander;
+    commander.name = "test_acu";
+    commander.armorType = "Normal";
+    commander.weapons.push_back(gun(12000.0f, "Overcharge"));
+    const rm::UnitTypeIndex acuType = roster.addType(commander);
+
+    CHECK(roster.catalog.armorOf(structureType) == registry.classFor("Structure"));
+    CHECK(roster.catalog.armorOf(acuType) == registry.classFor("Normal"));
+
+    // And the weapon carries the transposed table, not the scalar.
+    const rm::unitdef::DamageProfile& overcharge = roster.catalog.weaponRates(acuType, 0).damage;
+    CHECK(overcharge.against(registry.classFor("Structure")) == rm::test::mag(3000.0f));
+    CHECK(overcharge.against(registry.classFor("Normal")) == rm::test::mag(12000.0f));
+}
+
+TEST_CASE("an unstated damage type is read as Normal, not as nothing") {
+    // 454 of 494 weapons say `Normal` explicitly and its multiplier is 1.0 everywhere, so a
+    // weapon that states no type must come out identical to one that states `Normal`. Reading
+    // a missing field as anything else would hand a few weapons a bonus no blueprint asked for.
+    Roster roster;
+    const ArmorRegistry registry = ArmorRegistry::fromNames(kFaClasses);
+    roster.catalog.setArmor(registry, faMatrix(registry));
+
+    UnitDef def;
+    def.name = "test_gun";
+    def.weapons.push_back(gun(250.0f, ""));
+    def.weapons.push_back(gun(250.0f, "Normal"));
+    const rm::UnitTypeIndex type = roster.addType(def);
+
+    CHECK(roster.catalog.weaponRates(type, 0).damage
+          == roster.catalog.weaponRates(type, 1).damage);
+    CHECK(roster.catalog.weaponRates(type, 0).damage.overrideCount == 0);
+}
+
+TEST_CASE("one blast hits two armour classes differently") {
+    // THE WHOLE POINT, in one assertion. A shell landing between a tank and a bunker is why
+    // the armour lookup happens per target inside the loop rather than once outside it.
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+
+    Roster roster;
+    const ArmorRegistry registry = ArmorRegistry::fromNames(kFaClasses);
+    roster.catalog.setArmor(registry, faMatrix(registry));
+
+    UnitDef tank;
+    tank.name = "test_tank";
+    tank.armorType = "Normal";
+    const rm::UnitTypeIndex tankType = roster.addType(tank);
+
+    UnitDef bunker;
+    bunker.name = "test_bunker";
+    bunker.armorType = "Structure";
+    const rm::UnitTypeIndex bunkerType = roster.addType(bunker);
+
+    // Both at the centre of the blast, so the falloff is 1.0 for each and the only thing that
+    // can differ between them is the armour table.
+    const rm::sim::UnitId softTarget = roster.add(tankType, 0.0f, 0.0f, 1, 20000.0f);
+    const rm::sim::UnitId hardTarget = roster.add(bunkerType, 0.0f, 0.0f, 1, 20000.0f);
+
+    const rm::unitdef::DamageProfile overcharge =
+        damageFromMatrix(rm::test::mag(12000.0f), "Overcharge", faMatrix(registry));
+
+    const rm::sim::Mag dealt =
+        rm::sim::damageArea(rm::test::at(0, 0, 0), rm::test::fx(0.0f), overcharge, 0,
+                            roster.store, armies, &roster.catalog);
+
+    // Full damage to the tank, a quarter of it to the building — `armordefinition.lua`'s
+    // `Structure / Overcharge 0.25`, arriving through the whole chain.
+    CHECK(roster.health(softTarget).current == rm::test::mag(8000.0f));
+    CHECK(roster.health(hardTarget).current == rm::test::mag(17000.0f));
+    CHECK(dealt == rm::test::mag(15000.0f));
+}
+
+TEST_CASE("armour is applied before the falloff, not after") {
+    // The order is not arbitrary and getting it backwards is invisible at the centre of a
+    // blast: it only shows up off-centre, where scaling first and looking up second would key
+    // the table on a number that is no longer the weapon's damage.
+    //
+    // Half a blast radius away, so the falloff is exactly 0.5. A structure takes
+    // 12000 x 0.25 x 0.5 = 1500 either way IF the operations commute — which they do
+    // arithmetically. What does NOT commute is the LOOKUP, and this pins the value so a future
+    // non-linear falloff or a per-class radius cannot quietly reorder them.
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+
+    Roster roster;
+    const ArmorRegistry registry = ArmorRegistry::fromNames(kFaClasses);
+    roster.catalog.setArmor(registry, faMatrix(registry));
+
+    UnitDef bunker;
+    bunker.name = "test_bunker";
+    bunker.armorType = "Structure";
+    const rm::sim::UnitId target = roster.add(roster.addType(bunker), 0.0f, 50.0f, 1, 20000.0f);
+
+    const rm::unitdef::DamageProfile overcharge =
+        damageFromMatrix(rm::test::mag(12000.0f), "Overcharge", faMatrix(registry));
+    rm::sim::damageArea(rm::test::at(0, 0, 0), rm::test::fx(100.0f), overcharge, 0, roster.store,
+                        armies, &roster.catalog);
+
+    CHECK(roster.health(target).current == rm::test::mag(18500.0f));
+}
+
+TEST_CASE("without a catalog every target is ordinary armour") {
+    // The null-catalog path, asserted rather than assumed: it is what `explodeOnDeath` and
+    // every existing call site take, so "the same as before" has to be a test.
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+
+    Roster roster;
+    const ArmorRegistry registry = ArmorRegistry::fromNames(kFaClasses);
+    roster.catalog.setArmor(registry, faMatrix(registry));
+
+    UnitDef bunker;
+    bunker.name = "test_bunker";
+    bunker.armorType = "Structure";
+    const rm::sim::UnitId target = roster.add(roster.addType(bunker), 0.0f, 0.0f, 1, 20000.0f);
+
+    const rm::unitdef::DamageProfile overcharge =
+        damageFromMatrix(rm::test::mag(12000.0f), "Overcharge", faMatrix(registry));
+
+    // Same profile, same target, no catalog — so the Structure override is unreachable and the
+    // base applies.
+    rm::sim::damageArea(rm::test::at(0, 0, 0), rm::test::fx(0.0f), overcharge, 0, roster.store,
+                        armies, nullptr);
+    CHECK(roster.health(target).current == rm::test::mag(8000.0f));
 }

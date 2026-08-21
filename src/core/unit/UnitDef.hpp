@@ -228,6 +228,22 @@ struct UnitDef {
     /// (PLAN2.md §5.1). `Mag` because `MaxHealth` reaches 5,000,000 in the corpus.
     sim::Mag health{};
 
+    /// What this unit is made of, for the damage table — `Defense.ArmorType`
+    /// (`14-blueprint-census.md §8.7`: 604 of 606 blueprints state one).
+    ///
+    /// **A NAME, NOT AN `ArmorClass`, and deliberately** (PLAN2.md §7 P10.1). Resolving it
+    /// here would mean handing every blueprint parser an `ArmorRegistry`, and a parser that
+    /// needs a registry is a parser a test cannot call with a Lua table and nothing else.
+    /// Resolution happens once in `sim::UnitCatalog`, which is already the place where content
+    /// becomes sim-ready — it is where a blueprint's per-second rates become per-tick ones for
+    /// exactly the same reason.
+    ///
+    /// Empty means the blueprint stated none, which resolves to `default`. BAR blueprints do
+    /// not carry this field at all; their armour classes come from `armordefs.lua` the other
+    /// way round, as a class listing the units that belong to it, and the importer inverts it
+    /// into this field.
+    std::string armorType;
+
     /// Whether this unit flies.
     ///
     /// Worth carrying because an aircraft is not a ground unit with wings: BAR's

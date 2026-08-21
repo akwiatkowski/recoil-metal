@@ -35,12 +35,43 @@ UnitTypeIndex UnitCatalog::add(const unitdef::UnitDef* def, TickRate rate) {
                 .burstDelayTicks =
                     weapon.bursts() ? rate.ticks(weapon.burstDelay) : reload,
                 .burstSize = weapon.bursts() ? weapon.burstSize : 1,
+                .damage = damageFor(weapon),
             });
         }
     }
     weapons_.push_back(std::move(weapons));
 
+    // What the unit is made of, resolved from the name the blueprint states. A catalog with no
+    // armour context resolves everything to `kDefaultArmor`, which is the pre-P10.1 engine.
+    armor_.push_back(def != nullptr ? armor_names_.classFor(def->armorType) : kDefaultArmor);
+
     return type;
+}
+
+unitdef::DamageProfile UnitCatalog::damageFor(const unitdef::Weapon& weapon) const {
+    // NO MATRIX, NO TRANSPOSE. Two cases arrive here with an empty one and both are correct:
+    // a catalog that was never given armour context (every existing test), and BAR content,
+    // which states absolute damage per armour class in its own weapon defs rather than a
+    // multiplier table. In both the profile is the scalar the weapon authored.
+    if (armor_matrix_.empty()) {
+        return unitdef::flatDamage(weapon.damage);
+    }
+
+    // An unstated `DamageType` is `Normal`. That is not a guess: `Normal` is what 454 of the
+    // 494 shipped weapons say explicitly (`02 §9.6`), and its multiplier is 1.0 against every
+    // class — so reading a missing field as anything else would give a handful of weapons a
+    // silent bonus or penalty that no blueprint asked for.
+    const std::string_view damageType =
+        weapon.damageType.empty() ? std::string_view{"Normal"}
+                                  : std::string_view{weapon.damageType};
+
+    return unitdef::damageFromMatrix(weapon.damage, damageType, armor_matrix_);
+}
+
+void UnitCatalog::setArmor(unitdef::ArmorRegistry registry,
+                           std::vector<unitdef::ArmorMultiplier> matrix) {
+    armor_names_ = std::move(registry);
+    armor_matrix_ = std::move(matrix);
 }
 
 } // namespace rm::sim
