@@ -245,6 +245,14 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
         return report;
     }
 
+    // 1b. WHAT EACH ALLIANCE CAN SEE (ADR-037). After movement and collisions, because
+    //     sight is stamped from where a unit ENDED the tick; before aiming, because a
+    //     shooter may only choose a target its side can see. Those two constraints are what
+    //     fix this pass here rather than anywhere else in the order.
+    if (match.intel != nullptr) {
+        match.intel->update(store, catalog, match.armies, &terrain);
+    }
+
     // 2. AIM, then fire. An unturreted weapon may only shoot along the hull, so a unit
     //    that has stopped facing the wrong way has to be brought round first; otherwise
     //    the facing gate reads as a weapon that does not work.

@@ -20,6 +20,17 @@ UnitTypeIndex UnitCatalog::add(const unitdef::UnitDef* def, TickRate rate) {
     }
     rates_.push_back(derived);
 
+    // The intel radii, converted out of the content's floats once (ADR-037). Same reason
+    // the economy's rates are derived here: the alternative is a float conversion per
+    // emitter per update, in a pass `tools/check_no_sim_floats.sh` forbids floats in.
+    IntelRadii intel{};
+    if (def != nullptr) {
+        intel.vision = fxFromFloat(def->visionRadiusElmos);
+        intel.radar = fxFromFloat(def->radarRadiusElmos);
+        intel.sonar = fxFromFloat(def->sonarRadiusElmos);
+    }
+    intel_.push_back(intel);
+
     std::vector<WeaponRates> weapons;
     if (def != nullptr) {
         weapons.reserve(def->weapons.size());

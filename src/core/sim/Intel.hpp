@@ -3,6 +3,7 @@
 #include "core/Types.hpp"
 #include "core/sim/Fx.hpp"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <span>
@@ -11,6 +12,9 @@
 namespace rm::sim {
 
 class Terrain;
+class UnitStore;
+class UnitCatalog;
+struct Army;
 
 // What an alliance can see, and by what means (ADR-037).
 //
@@ -185,5 +189,94 @@ void raycastSquares(const IntelGrid& grid, const Terrain& terrain, Fx x, Fx z, F
 void intelSquares(const IntelGrid& grid, const Terrain* terrain, VisionStyle style,
                   IntelKind kind, Fx x, Fx z, Fx radius, Fx eyeHeight,
                   std::vector<std::int32_t>& squares);
+
+/// Sight's grid resolution, and radar's — Recoil's `losMipLevel` and `radarMipLevel`
+/// defaults (`ModInfo.cpp:117-119`), which are 1 and 2.
+///
+/// Radar is coarser because radar radii are an order larger: the widest in the retail
+/// corpus is 4800 elmos against the widest sight of 800, and rasterising that at sight's
+/// resolution would cost sixteen times the squares to place an edge nobody can see.
+inline constexpr int kVisionMipLevel = 1;
+inline constexpr int kRadarMipLevel = 2;
+
+// The pass: every unit's coverage, kept up to date as the match moves.
+//
+// WHAT IT OWNS: one grid per alliance per sense, and one record per unit slot of what that
+// unit last contributed. The record is the whole trick — a unit's sight is withdrawn by
+// subtracting the exact squares it added, so nothing has to be re-derived from its
+// neighbours and nothing drifts over a long match.
+//
+// WHEN A UNIT RE-STAMPS: when the SQUARE it stands on changes, or when it dies or spawns.
+// Not every tick — a unit crossing a 16-elmo square at 27 elmos a second re-stamps about
+// twice a second, and stamping every tick would do the same work ten times over. Recoil
+// makes the same call (`CLosHandler::Update` processes a queue of units that moved) and
+// the resolution of the answer is the grid's own square either way.
+//
+// AND NOT ON `SlowUpdate`'s CADENCE, which is what this file's plan item asked for. A
+// staggered pass would leave a unit's sight up to a second stale — long enough for a scout
+// to cross two squares — and the check that decides whether to re-stamp is one integer
+// comparison per slot. The cost being paid is the stamping, and the stagger would not have
+// saved any of it.
+class Intel {
+public:
+    Intel() = default;
+
+    /// Sizes the grids for a map and an alliance count. Idempotent, and clears everything:
+    /// a reconfigure is a new match, not an adjustment to one in progress.
+    void configure(std::size_t alliances, Fx widthElmos, Fx depthElmos, VisionStyle style);
+
+    /// Whether anything has been configured. False is a scene with no intel at all — a
+    /// `--units` crowd — and every query then answers "seen", which is what an engine with
+    /// no fog of war did before this existed.
+    [[nodiscard]] bool active() const noexcept { return !grids_.empty(); }
+
+    [[nodiscard]] VisionStyle style() const noexcept { return style_; }
+
+    /// Brings every unit's contribution up to date. Call after movement and before
+    /// anything reads visibility.
+    ///
+    /// `terrain` may be null, which forces discs — see `intelSquares`.
+    void update(const UnitStore& store, const UnitCatalog& catalog,
+                std::span<const Army> armies, const Terrain* terrain);
+
+    /// Whether `alliance` covers this position with this sense.
+    ///
+    /// TRUE WHEN INACTIVE. A caller that has not configured intel is a caller with no fog
+    /// of war, and answering "no" there would blind every unit in every test and every
+    /// scene that predates this file.
+    [[nodiscard]] bool sees(int alliance, IntelKind kind, Fx x, Fx z) const noexcept;
+
+    /// The grid itself, for the hash and for the fog renderer.
+    [[nodiscard]] const IntelGrid& grid(int alliance, IntelKind kind) const noexcept;
+
+    [[nodiscard]] std::size_t alliances() const noexcept { return grids_.size() / kIntelKindCount; }
+
+private:
+    /// What one unit last contributed, one entry per sense.
+    struct Emitter {
+        /// The squares added, so exactly those can be taken back.
+        std::vector<std::int32_t> squares;
+    };
+
+    /// Per slot: which alliance it stamped for, which square it stood on, and whether it
+    /// stamped at all. `kNoSquare` means "contributing nothing", which is both a fresh slot
+    /// and a dead one.
+    struct Placement {
+        std::int32_t square = IntelGrid::kNoSquare;
+        int alliance = 0;
+    };
+
+    void withdraw(UnitIndex slot);
+
+    /// `[alliance * kIntelKindCount + kind]`, so one vector holds them all and the index
+    /// arithmetic is in one place.
+    std::vector<IntelGrid> grids_;
+    std::vector<Placement> placements_;
+    std::vector<std::array<Emitter, kIntelKindCount>> emitters_;
+    VisionStyle style_ = VisionStyle::Recoil;
+
+    /// Scratch, reused across emitters so a stamp is not an allocation.
+    std::vector<std::int32_t> scratch_;
+};
 
 } // namespace rm::sim

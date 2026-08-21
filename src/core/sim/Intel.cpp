@@ -1,6 +1,11 @@
 #include "core/sim/Intel.hpp"
 
 #include "core/sim/Terrain.hpp"
+#include "core/sim/Army.hpp"
+#include "core/sim/Movement.hpp"
+#include "core/sim/Transform.hpp"
+#include "core/sim/UnitCatalog.hpp"
+#include "core/sim/UnitStore.hpp"
 
 #include <algorithm>
 #include <cassert>
@@ -344,6 +349,133 @@ void circleSquares(const IntelGrid& grid, Fx x, Fx z, Fx radius,
             squares.push_back(row * squaresX + column);
         }
     });
+}
+
+
+
+// --- The pass ---------------------------------------------------------------------
+
+void Intel::configure(std::size_t alliances, Fx widthElmos, Fx depthElmos,
+                      VisionStyle style) {
+    style_ = style;
+    grids_.clear();
+    placements_.clear();
+    emitters_.clear();
+
+    grids_.reserve(alliances * kIntelKindCount);
+    for (std::size_t alliance = 0; alliance < alliances; ++alliance) {
+        grids_.emplace_back(widthElmos, depthElmos, kVisionMipLevel);
+        grids_.emplace_back(widthElmos, depthElmos, kRadarMipLevel);
+        grids_.emplace_back(widthElmos, depthElmos, kRadarMipLevel);
+    }
+}
+
+const IntelGrid& Intel::grid(int alliance, IntelKind kind) const noexcept {
+    static const IntelGrid kEmpty{};
+    const auto index = static_cast<std::size_t>(alliance) * kIntelKindCount
+                     + static_cast<std::size_t>(kind);
+    return index < grids_.size() ? grids_[index] : kEmpty;
+}
+
+bool Intel::sees(int alliance, IntelKind kind, Fx x, Fx z) const noexcept {
+    if (!active()) {
+        return true;
+    }
+    if (alliance < 0 || static_cast<std::size_t>(alliance) >= alliances()) {
+        return false;
+    }
+    return grid(alliance, kind).covered(x, z);
+}
+
+void Intel::withdraw(UnitIndex slot) {
+    Placement& placement = placements_[slot];
+    if (placement.square == IntelGrid::kNoSquare) {
+        return;
+    }
+
+    for (std::size_t kind = 0; kind < kIntelKindCount; ++kind) {
+        std::vector<std::int32_t>& squares = emitters_[slot][kind].squares;
+        if (squares.empty()) {
+            continue;
+        }
+        const auto index = static_cast<std::size_t>(placement.alliance) * kIntelKindCount + kind;
+        grids_[index].remove(squares);
+        squares.clear();
+    }
+    placement.square = IntelGrid::kNoSquare;
+}
+
+void Intel::update(const UnitStore& store, const UnitCatalog& catalog,
+                   std::span<const Army> armies, const Terrain* terrain) {
+    if (!active()) {
+        return;
+    }
+
+    const std::size_t slots = store.slotCount();
+    placements_.resize(slots);
+    emitters_.resize(slots);
+
+    const std::span<const Transform> transforms = store.transforms();
+    const std::span<const MoveState> motion = store.motion();
+
+    for (UnitIndex slot = 0; slot < slots; ++slot) {
+        // A dead unit stops seeing. Recoil holds an instance for 1.5 seconds after death so
+        // sight does not blink off on an explosion (`DelayedFreeInstance`); we withdraw at
+        // once, because that delay only exists to make its instance CACHE worth having and
+        // we have no cache. The visible difference is a wreck's last square of ground going
+        // dark a second earlier.
+        if (!store.slotAlive(slot)) {
+            withdraw(slot);
+            continue;
+        }
+
+        const int army = motion[slot].armyIndex;
+        if (army == kNoArmy || static_cast<std::size_t>(army) >= armies.size()) {
+            withdraw(slot);
+            continue;
+        }
+
+        const int alliance = armies[static_cast<std::size_t>(army)].alliance;
+        const Transform& at = transforms[slot];
+
+        // The SQUARE decides, not the position. A unit crossing a 16-elmo square at 27
+        // elmos a second re-stamps about twice a second; stamping on every position change
+        // would do the same work ten times over for an answer the grid cannot express.
+        //
+        // Sight's grid is the finest of the three, so its square is the one that governs —
+        // a move too small to change it cannot change radar's coarser one either.
+        const std::int32_t square = grid(alliance, IntelKind::Vision).squareAt(at.x, at.z);
+        Placement& placement = placements_[slot];
+        if (placement.square == square && placement.alliance == alliance
+            && square != IntelGrid::kNoSquare) {
+            continue;
+        }
+
+        withdraw(slot);
+        if (square == IntelGrid::kNoSquare) {
+            continue;  // off the map: seeing nothing is right, and so is re-checking next tick
+        }
+
+        const UnitCatalog::IntelRadii& radii = catalog.intel(store.typeAt(slot));
+        const Fx byKind[kIntelKindCount] = {radii.vision, radii.radar, radii.sonar};
+
+        for (std::size_t kind = 0; kind < kIntelKindCount; ++kind) {
+            if (byKind[kind] <= kFxZero) {
+                continue;
+            }
+            const auto index =
+                static_cast<std::size_t>(alliance) * kIntelKindCount + kind;
+            intelSquares(grids_[index], terrain, style_, static_cast<IntelKind>(kind), at.x,
+                         at.z, byKind[kind], at.y, scratch_);
+
+            std::vector<std::int32_t>& squares = emitters_[slot][kind].squares;
+            squares.assign(scratch_.begin(), scratch_.end());
+            grids_[index].add(squares);
+        }
+
+        placement.square = square;
+        placement.alliance = alliance;
+    }
 }
 
 } // namespace rm::sim

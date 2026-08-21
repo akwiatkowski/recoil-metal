@@ -49,6 +49,21 @@ public:
         Mag buildPerTick{};
     };
 
+    /// How far one type sees, in elmos, in the type the sim can do arithmetic in.
+    ///
+    /// Converted here for the same reason the rates above are: `UnitDef` states floats
+    /// because content does, and a pass that converted per emitter per update would be
+    /// putting a float in the middle of the tick — which `tools/check_no_sim_floats.sh`
+    /// exists to forbid.
+    ///
+    /// No water vision. It is parsed and it is not used: nothing in this sim is submerged
+    /// yet, so there is nothing for it to answer about. See `IntelKind`.
+    struct IntelRadii {
+        Fx vision{};
+        Fx radar{};
+        Fx sonar{};
+    };
+
     /// What one WEAPON's authored rates come to per tick.
     ///
     /// Here for the same reason the economy's are: `MuzzleVelocity` is elmos per second and
@@ -152,6 +167,14 @@ public:
         return type < rates_.size() ? rates_[type] : kNone;
     }
 
+    /// How far a type sees. Zeroes for an unregistered index or a type with no definition —
+    /// a decorative crowd sees nothing, which is the right answer rather than a reason to
+    /// reject it.
+    [[nodiscard]] const IntelRadii& intel(UnitTypeIndex type) const noexcept {
+        static constexpr IntelRadii kNone{};
+        return type < intel_.size() ? intel_[type] : kNone;
+    }
+
     /// One weapon's per-tick rates. Bounds-checked in both dimensions, returning zeroes for
     /// anything unregistered — a pass that indexed past the end would otherwise read whatever
     /// was next in memory, and this is called from the inner loop of firing.
@@ -185,6 +208,7 @@ private:
     std::vector<Rates> rates_;
     std::vector<std::vector<WeaponRates>> weapons_;
     std::vector<ArmorClass> armor_;
+    std::vector<IntelRadii> intel_;
 
     /// The content's armour classes and Supreme Commander's multiplier table. Both empty of
     /// anything but `default` until `setArmor` — see the note there.

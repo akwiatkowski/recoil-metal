@@ -7,6 +7,7 @@
 #include "core/sim/Economy.hpp"
 #include "core/sim/Events.hpp"
 #include "core/sim/FeatureStore.hpp"
+#include "core/sim/Intel.hpp"
 #include "core/sim/Movement.hpp"
 #include "core/sim/UnitCatalog.hpp"
 #include "core/sim/UnitStore.hpp"
@@ -110,6 +111,14 @@ struct Match {
     /// a scenario could hand out a different one — and a constant in the sim would make
     /// that a code change.
     Resources baseStorage{};
+
+    /// What each alliance can see (ADR-037), or null for a scene with no fog of war.
+    ///
+    /// CALLER-OWNED like the rest of this struct, and null is a real configuration rather
+    /// than an oversight: a `--units` crowd has no alliances to keep grids for, and every
+    /// visibility query answers "seen" — which is the engine every scene predating this
+    /// was written against.
+    Intel* intel = nullptr;
 
     /// Set once the match has been decided, so the result is announced once rather than
     /// every tick for the rest of the run.

@@ -223,6 +223,34 @@ StateHash hashMatch(const UnitStore& store, const Match& match) {
         feed(h, economy.fundedFraction);
     }
 
+    // WHAT EACH SIDE CAN SEE (ADR-037). Hashed rather than treated as a derived cache, and
+    // the reason is that it is not one: sight decides who may be shot at, so two runs whose
+    // grids differ are two runs that will fight differently a tick later. Catching that here
+    // names the tick it happened on instead of the tick it became visible in the outcome.
+    //
+    // The COUNTS, not just whether a square is covered. A square seen by two units and a
+    // square seen by one are the same to a shooter and different to the sim — the second is
+    // one death away from being dark — and a hash that could not tell them apart would miss
+    // a divergence in who is standing where.
+    //
+    // Both styles feed the same field, so switching `VisionStyle` invalidates a recorded
+    // hash log. That is correct: it is a different match.
+    feed(h, match.intel != nullptr);
+    if (match.intel != nullptr) {
+        feed(h, static_cast<int>(match.intel->style()));
+        feed(h, match.intel->alliances());
+        for (std::size_t alliance = 0; alliance < match.intel->alliances(); ++alliance) {
+            for (std::size_t kind = 0; kind < kIntelKindCount; ++kind) {
+                const IntelGrid& grid =
+                    match.intel->grid(static_cast<int>(alliance), static_cast<IntelKind>(kind));
+                feed(h, grid.counts().size());
+                for (const std::uint16_t count : grid.counts()) {
+                    feed(h, count);
+                }
+            }
+        }
+    }
+
     // Shots in flight. Nullable because a decorative crowd has no projectile list, and
     // "no list" has to hash differently from "an empty list" — the first is a scene with no
     // combat, the second a match between two ticks of it.
