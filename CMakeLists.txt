@@ -223,6 +223,7 @@ if(BUILD_TESTING)
         tests/test_hud.cpp
         tests/test_minimap.cpp
         tests/test_cli.cpp
+        tests/test_scale.cpp
         tests/test_dds.cpp
         tests/test_unit_icons.cpp
         tests/test_unit_placement.cpp
