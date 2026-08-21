@@ -460,6 +460,34 @@ base). The slices, each screenshot-provable:
   `textures.scd`), cost-at-the-builder's-rate on hover, a placement ghost
   validated against the passability grid, and the first player-enqueued
   Construction.
+
+  **Half done, and the halves are worth naming separately.** The tray READS:
+  BAR's tight three-column grid above the minimap, mass cost on the face of
+  each button rather than behind a hover, unaffordable options dimmed rather
+  than hidden, a tier band per cell, and a lit cell under the cursor
+  (`core/ui/BuildPanel.hpp`, `app::gatherBuildOptions`). It does not yet ACT:
+  no icons (no atlas yet — a cell reserves the square and shows the blueprint
+  id), no placement ghost, and clicking a cell does nothing. The enqueue is
+  deliberately not smuggled in here — it is a behaviour change (authorisation,
+  the command log, the sim raising `ConstructionStarted`) and it wants the
+  build path routed through `applyCommand` first, which is its own job.
+
+  Two things the work found, both recorded rather than quietly fixed. The
+  options come from the **roster**, not from `BuildTree` over
+  `scene.definitions` — the latter holds only the types REGISTERED so far, so
+  a commander's menu came back with the single extractor the opening had just
+  asked for, and everything a player has not built yet is exactly what a menu
+  is for. And screen input was arriving in points against a layout in pixels,
+  which is ADR-040 and which had been mis-aiming the minimap's own click since
+  P7.4.
+
+  **The engineer is not reachable in a running match, and that is a fact about
+  the opening rather than about the panel.** `data/opening.lua` builds four
+  structures and then tanks; nothing builds an engineer, and `--units` is
+  march-mode content that `--skirmish` ignores. So the engineer path is proven
+  by `tests/test_build_options.cpp` and the screenshot proof is a commander's
+  menu (`make shot-ui`). Giving a player an engineer to select is part of the
+  same slice as making the tray act.
 - **UI-4**: an explicit orders row, deferred while right-click covers it.
 
 ### Track 1 — the host arc, milestones 21–25

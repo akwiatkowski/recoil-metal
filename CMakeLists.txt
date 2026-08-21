@@ -136,6 +136,7 @@ add_library(rm_core STATIC
     src/core/model/Pose.cpp
     src/core/text/TextLayout.cpp
     src/core/ui/Hud.cpp
+    src/core/ui/BuildPanel.cpp
     src/core/ui/Minimap.cpp
     src/core/texture/Dds.cpp
     src/core/scene/UnitIcons.cpp
@@ -273,6 +274,8 @@ if(BUILD_TESTING)
         tests/test_real_sca.cpp
         tests/test_text_layout.cpp
         tests/test_hud.cpp
+        tests/test_build_panel.cpp
+        tests/test_build_options.cpp
         tests/test_minimap.cpp
         tests/test_cli.cpp
         tests/test_scale.cpp

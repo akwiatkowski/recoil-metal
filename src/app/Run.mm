@@ -226,11 +226,17 @@ int runScreenshot(const Session& session) {
             // they are a fact about the battlefield rather than a piece of interface — the
             // rest of this block used to be gated on `--select`, which meant a scorch mark
             // only appeared in a screenshot that also happened to be ringing units.
+            std::vector<rm::sim::UnitId> capturedSelection;
             std::vector<rm::DecalVertex> vertices{units.wreckDecals.begin(),
                                                   units.wreckDecals.end()};
             {
                 const std::size_t rings = parseCount(argc, argv, "--select");
                 std::vector<rm::SelectionEntry> captured;
+                // The same selection as UnitIds, so the BUILD PANEL can be captured too. The
+                // comment above says why this matters: interface that only exists under a click
+                // is interface no screenshot can compare between builds, and the build panel is
+                // the largest piece of it.
+                capturedSelection.clear();
                 std::size_t made = 0;
                 for (std::size_t batch = 0; batch < units.drawScratch.size() && made < rings;
                      ++batch) {
@@ -246,6 +252,7 @@ int runScreenshot(const Session& session) {
                                 * kSelectionRingMargin,
                             kSelectionRingColour);
                         captured.push_back(rm::SelectionEntry{batch, i});
+                        capturedSelection.push_back(units.store.idAt(slot));
                     }
                 }
                 // No beginFrame: that acquires a frames-in-flight slot which
@@ -297,10 +304,28 @@ int runScreenshot(const Session& session) {
             appendMinimapPips(pips, units);
             appendViewFootprint(view, renderer.camera(), map->field,
                                 static_cast<float>(shot.width), static_cast<float>(shot.height));
-            rm::ui::appendMinimap(hud, renderer.labelFont(), hudThemeFor(units),
-                                  rm::ui::minimapLayout(static_cast<float>(shot.width),
-                                                        static_cast<float>(shot.height)),
+            const rm::ui::MinimapLayout shotMinimap = rm::ui::minimapLayout(
+                static_cast<float>(shot.width), static_cast<float>(shot.height));
+            rm::ui::appendMinimap(hud, renderer.labelFont(), hudThemeFor(units), shotMinimap,
                                   map->field.widthElmos(), map->field.depthElmos(), pips, view);
+
+            // The build panel, for whatever `--select` ringed. This is what makes the panel
+            // verifiable at all: `make shot-fa SELECT=1` captures a commander's build list, and
+            // two builds' screenshots can be compared.
+            {
+                std::vector<rm::ui::BuildOption> shotOptions;
+                std::string shotBuilder;
+                gatherBuildOptions(units, capturedSelection, hudThemeFor(units), shotOptions,
+                                   shotBuilder);
+                if (!shotOptions.empty()) {
+                    rm::ui::appendBuildPanel(
+                        hud, renderer.labelFont(), renderer.readoutFont(), hudThemeFor(units),
+                        rm::ui::buildPanelLayout(shotMinimap, shotOptions.size()), shotOptions,
+                        std::nullopt, shotBuilder);
+                    std::printf("  build panel: %zu options for %s\n", shotOptions.size(),
+                                shotBuilder.c_str());
+                }
+            }
 
             renderer.setHud(hud.label, hud.readout);
 
@@ -565,6 +590,11 @@ int runWindowed(const Session& session) {
         std::vector<rm::Particle> iconScratch;
         rm::ui::Geometry hudScratch;
 
+        // THE BUILD PANEL (BAR-styled, `core/ui/BuildPanel.hpp`). Scratch kept outside the loop
+        // for the same reason every other scratch here is: a frame should not allocate.
+        std::vector<rm::ui::BuildOption> buildOptions;
+        std::string builderName;
+
         // The minimap's per-frame scratch, kept out here so a frame allocates nothing.
         std::vector<rm::ui::MinimapPip> minimapPips;
         std::vector<std::array<float, 2>> minimapView;
@@ -718,11 +748,33 @@ int runWindowed(const Session& session) {
             appendViewFootprint(minimapView, window.camera(), map->field,
                                 static_cast<float>(window.width()),
                                 static_cast<float>(window.height()));
-            rm::ui::appendMinimap(hudScratch, window.labelFont(), hudThemeFor(units),
-                                  rm::ui::minimapLayout(static_cast<float>(window.width()),
-                                                        static_cast<float>(window.height())),
+            const rm::ui::MinimapLayout minimap =
+                rm::ui::minimapLayout(static_cast<float>(window.width()),
+                                      static_cast<float>(window.height()));
+            rm::ui::appendMinimap(hudScratch, window.labelFont(), hudThemeFor(units), minimap,
                                   map->field.widthElmos(), map->field.depthElmos(), minimapPips,
                                   minimapView);
+
+            // What the selection can build, above the minimap — the bottom-left control block
+            // Beyond All Reason arranges the same way. Absent entirely when nothing selected
+            // builds, rather than an empty frame asking to be explained.
+            rm::app::gatherBuildOptions(units, selected, hudThemeFor(units), buildOptions,
+                                        builderName);
+            if (!buildOptions.empty()) {
+                const rm::ui::BuildPanelLayout panel =
+                    rm::ui::buildPanelLayout(minimap, buildOptions.size());
+
+                // The lit cell under the cursor, which is most of what makes a grid of squares
+                // read as BUTTONS rather than as a readout. Polled once here rather than
+                // tracked through a mouseMoved handler — see `Window::cursor`.
+                const std::array<float, 2> at = window.cursor();
+                const std::optional<std::size_t> hovered =
+                    rm::ui::buildOptionAt(panel, buildOptions.size(), at[0], at[1]);
+
+                rm::ui::appendBuildPanel(hudScratch, window.labelFont(), window.readoutFont(),
+                                         hudThemeFor(units), panel, buildOptions, hovered,
+                                         builderName);
+            }
 
             window.setHud(hudScratch.label, hudScratch.readout);
 

@@ -61,6 +61,11 @@ BUILD     ?= build
 BIN       := ./$(BUILD)/recoil-metal
 UNITS     ?= 40
 SECONDS   ?= 30
+# How many units the capture rings, which is also what the BUILD PANEL is drawn for: a headless
+# run has no clicks, so `--select` is the only way an interface that appears on selection can be
+# screenshotted at all. `make shot-fa SELECT=1` captures a commander's build list.
+SELECT    ?= 0
+SELECT_FLAG = $(if $(filter-out 0,$(SELECT)),--select $(SELECT),)
 SHOT      ?= /tmp/recoil-metal.png
 SHOT_SIZE ?= 1400 900
 MARCH     ?= 4096 4096
@@ -75,7 +80,7 @@ FA_FLAGS  = --gamedata "$(FA_ROOT)/gamedata"
 .DEFAULT_GOAL := help
 .PHONY: help build configure test verify golden play play-from watch run run-fa run-bar \
         skirmish battle match shot-fa shot-bar bench bench-fa bench-gl clean check-fa check-bar \
-        ai ai-play ai-report
+        ai ai-play ai-report shot-ui
 
 help:
 	@echo 'recoil-metal — make targets'
@@ -100,6 +105,7 @@ help:
 	@echo
 	@echo '  shot-fa         one frame of the above, to $$SHOT'
 	@echo '  shot-bar        the same for the Recoil path'
+	@echo '  shot-ui         a commander selected: the build panel and minimap in frame'
 	@echo
 	@echo '  bench-fa        offscreen benchmark on the Supreme Commander map'
 	@echo '  bench           offscreen benchmark on the Recoil map'
@@ -306,8 +312,15 @@ match: build check-fa
 # Headless, so they work whichever Space is in front — the reason `--screenshot` exists.
 
 shot-fa: build check-fa
-	$(BIN) "$(FA_MAP)" $(FA_FLAGS) --skirmish --march $(MARCH) $(SECONDS) \
+	$(BIN) "$(FA_MAP)" $(FA_FLAGS) --skirmish --march $(MARCH) $(SECONDS) $(SELECT_FLAG) \
 	  --screenshot $(SHOT) $(SHOT_SIZE)
+
+# The interface, captured: a commander selected, so the build panel and the minimap are both in
+# frame. The one command that shows what `core/ui/BuildPanel.hpp` actually renders.
+shot-ui: build check-fa
+	$(BIN) "$(FA_MAP)" $(FA_FLAGS) --skirmish --armies 2 --play $(SECONDS) --select 1 \
+	  --screenshot $(SHOT) $(SHOT_SIZE)
+	@echo "  wrote $(SHOT)"
 
 shot-bar: build check-bar
 	$(BIN) "$(BAR_MAP)" --units "$(BAR_UNIT)" $(UNITS) --march $(MARCH) $(SECONDS) --focus \

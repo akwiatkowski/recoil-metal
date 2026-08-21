@@ -1,5 +1,7 @@
 #include "app/Interface.hpp"
 
+#include "core/unit/Role.hpp"
+
 #include <algorithm>
 #include <cmath>
 
@@ -103,11 +105,91 @@ void appendViewFootprint(std::vector<std::array<float, 2>>& out, const rm::Orbit
     }
 }
 
-/// Reads the scene into the state the interface reports.
+/// Reads the scene into the list the build panel draws.
 ///
-/// A translation step rather than the interface reaching into the scene, so `ui::build` takes
-/// a small struct it can be tested against and knows nothing about batches, health arrays or
-/// deques.
+/// A TRANSLATION STEP rather than the panel reaching into the scene, which is what lets
+/// `core/ui/BuildPanel.hpp` be tested over a `std::span<const BuildOption>` and know nothing
+/// about stores, catalogs, rosters or deques. The two halves are tested separately for the
+/// same reason they are separate: `tests/test_build_panel.cpp` asks where a cell is,
+/// `tests/test_build_options.cpp` asks what belongs in it.
+void gatherBuildOptions(const UnitScene& scene, std::span<const rm::sim::UnitId> selection,
+                        const rm::ui::Theme& theme, std::vector<rm::ui::BuildOption>& out,
+                        std::string& builderName) {
+    out.clear();
+    builderName.clear();
+    if (selection.empty() || scene.roster.size() == 0) {
+        return;
+    }
+
+    // FROM THE ROSTER, NOT FROM `BuildTree` OVER `scene.definitions`, and the first version got
+    // this wrong in a way only a screenshot caught. `scene.definitions` holds the types that
+    // have been REGISTERED — one spawns, or `resolveBuildable` resolves one for a build order —
+    // so a commander's menu came back with a single entry: the extractor the opening had just
+    // asked for. Everything a player has not built yet is, by definition, exactly what a build
+    // menu is for.
+    //
+    // `Roster` is built from the whole blueprint corpus at content load, and `Roster::all` says
+    // in its own comment that it exists for "a caller listing options rather than picking one —
+    // the build tray, eventually". This is that caller.
+    static constexpr std::array<rm::unitdef::Role, 6> kStructureRoles{
+        rm::unitdef::Role::Extractor, rm::unitdef::Role::Energy, rm::unitdef::Role::Factory,
+        rm::unitdef::Role::Storage,   rm::unitdef::Role::Defence, rm::unitdef::Role::Radar,
+    };
+
+    float storedMass = 0.0f;
+    if (scene.playerArmy != rm::sim::kNoArmy
+        && static_cast<std::size_t>(scene.playerArmy) < scene.economies.size()) {
+        storedMass = rm::sim::magToFloat(
+            scene.economies[static_cast<std::size_t>(scene.playerArmy)].stored.mass);
+    }
+
+    for (const rm::sim::UnitId id : selection) {
+        if (!scene.store.alive(id)) {
+            continue;
+        }
+        const rm::unitdef::UnitDef* def = scene.catalog.def(scene.store.typeAt(id.index));
+        if (def == nullptr) {
+            continue;
+        }
+        const rm::unitdef::Role role = rm::unitdef::roleOf(*def);
+        // A COMMANDER OR AN ENGINEER, which is what the goal asks for and also what the roster
+        // can answer honestly: those two build STRUCTURES, and a structure's role is a fact the
+        // roster already indexes. A factory builds mobile units, which is a different query
+        // against the same roster and a separate panel's worth of work.
+        if (role != rm::unitdef::Role::Commander && role != rm::unitdef::Role::Builder) {
+            continue;
+        }
+
+        const int army = scene.armyOf(id.index);
+        if (army < 0 || static_cast<std::size_t>(army) >= scene.armies.size()) {
+            continue;
+        }
+        const rm::sim::Faction faction = scene.armies[static_cast<std::size_t>(army)].faction;
+
+        builderName = def->name;
+        for (const rm::unitdef::Role wanted : kStructureRoles) {
+            for (const rm::data::RosterEntry& entry : scene.roster.all(faction, wanted)) {
+                // TIER ONE ONLY, for now. A commander can build a T1 structure of each kind, and
+                // the higher tiers need an upgraded engineer this engine does not yet model —
+                // listing them would offer a player something no order could satisfy, which is
+                // worse than a short menu.
+                if (entry.tech > 1) {
+                    continue;
+                }
+                const float mass = rm::sim::magToFloat(entry.costMass);
+                out.push_back(rm::ui::BuildOption{
+                    .id = entry.id,
+                    .massCost = mass,
+                    .energyCost = 0.0f,
+                    .affordable = mass <= storedMass,
+                    .tint = rm::ui::tierTint(theme, entry.tech),
+                });
+            }
+        }
+        return;  // the first builder decides — see the header
+    }
+}
+
 [[nodiscard]] rm::ui::MatchState hudStateFrom(const UnitScene& scene, float elapsedSeconds) {
     rm::ui::MatchState state;
     state.elapsedSeconds = elapsedSeconds;
