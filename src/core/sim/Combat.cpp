@@ -47,6 +47,20 @@ namespace {
     return hostile(*mine, *theirs);
 }
 
+/// The biggest collision radius in the store.
+///
+/// Needed because two of the queries below have a PER-TARGET tolerance — a big unit is easier
+/// to hit than a small one — and a spatial query needs one radius that bounds them all. Scanned
+/// rather than cached: it is one pass over a contiguous array, against a projectile pass that
+/// already touches every shot.
+[[nodiscard]] Fx largestRadius(const UnitStore& store) noexcept {
+    Fx largest{};
+    for (const MoveState& state : store.motion()) {
+        largest = std::max(largest, state.radiusElmos);
+    }
+    return largest;
+}
+
 /// The nearest hostile unit a shot has reached, or nothing.
 ///
 /// The tolerance is the TARGET's own size plus the shot's blast radius, so a big unit is
@@ -68,7 +82,13 @@ namespace {
     std::optional<UnitIndex> best;
     Fx bestDistance{};
 
-    for (UnitIndex slot = 0; slot < transforms.size(); ++slot) {
+    // THE WIDEST tolerance any target could have, so the query is a superset of what the loop
+    // below accepts: the per-target tolerance uses that target's own radius, and the largest
+    // radius in the store bounds every one of them. Asking for less would miss a big unit
+    // sitting just outside a small one's tolerance.
+    const Fx reach = std::max(travelPerTick, largestRadius(store) + shot.damageRadiusElmos);
+
+    for (const UnitIndex slot : store.space().within(shot.position[0], shot.position[2], reach)) {
         if (!shootable(shot.firedByArmy, store, slot, armies)) {
             continue;
         }
@@ -79,6 +99,9 @@ namespace {
         if (distance > tolerance) {
             continue;
         }
+        // Strictly nearer, so a tie falls to the lower slot. The grid returns slots in
+        // ascending order, which is the order the full scan this replaces walked them in —
+        // so the tie-break is the same one and the same unit is struck.
         if (!best || distance < bestDistance) {
             best = slot;
             bestDistance = distance;
@@ -116,7 +139,11 @@ std::optional<UnitId> nearestTarget(std::array<Fx, 3> from, int fromArmy,
     std::optional<UnitIndex> best;
     Fx bestDistance{};
 
-    for (UnitIndex slot = 0; slot < transforms.size(); ++slot) {
+    // THE GRID, rather than every slot in the store (§7 P5.2). The query radius is the weapon's
+    // own reach, so a scan that used to be over every unit in the match is now over the handful
+    // within range — and `minRange` is still applied below, because a dead zone is a hole in the
+    // middle of the disc and not a smaller disc.
+    for (const UnitIndex slot : store.space().within(from[0], from[2], weapon.maxRange)) {
         if (!shootable(fromArmy, store, slot, armies)) {
             continue;
         }
@@ -211,7 +238,10 @@ std::size_t aimAtTargets(UnitStore& store, const UnitCatalog& catalog,
 
         // The nearest thing any of its hull-aimed weapons could reach. Built as a stand-in
         // weapon rather than looping over the real ones, because the answer is the same for
-        // all of them and the sweep is the expensive part.
+        // all of them and the sweep WAS the expensive part — this loop asked `nearestTarget`
+        // once per unturreted hull per tick, and `nearestTarget` scanned every unit in the
+        // match. It goes through the grid now (§7 P5.2), which is where most of the O(n²) in
+        // this file lived.
         unitdef::Weapon sweep;
         sweep.role = unitdef::WeaponRole::DirectFire;
         sweep.damage = Mag::fromInt(1);
@@ -399,7 +429,12 @@ Mag damageArea(std::array<Fx, 3> centre, Fx radiusElmos, Mag damage, int byArmy,
     const std::span<const MoveState> motion = store.motion();
     const std::span<Health> healths = store.health();
 
-    for (UnitIndex slot = 0; slot < transforms.size(); ++slot) {
+    // A point hit still reaches as far as the biggest unit's own radius — see the tolerance
+    // below — so the query radius is the blast's, or that, whichever is larger.
+    const Fx reach = radiusElmos > Fx{} ? radiusElmos
+                                        : std::max(kFxOne, largestRadius(store));
+
+    for (const UnitIndex slot : store.space().within(centre[0], centre[2], reach)) {
         if (!shootable(byArmy, store, slot, armies)) {
             continue;
         }

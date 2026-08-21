@@ -1,5 +1,7 @@
 #include "core/sim/Movement.hpp"
 
+#include "core/sim/UnitStore.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -252,147 +254,113 @@ std::array<Brad, 2> slopeAlignment(const Terrain& terrain, Fx x, Fx z, Brad yaw)
     return {{pitch, roll}};
 }
 
-void resolveCollisions(std::span<Transform> transforms, std::span<const MoveState> motion,
-                       const Terrain& terrain) {
-    // One flat index space, which is now what the caller hands over rather than something
-    // assembled here: a unit's neighbours are all the units near it, not all the units near
-    // it OF THE SAME MODEL. There used to be a `CollisionGroup` overload taking one span per
-    // batch and flattening them, because storage was per model — with a flat store there is
-    // nothing to flatten.
-    struct Entry {
-        Transform* unit;
-        Fx radius;
-    };
-
-    std::vector<Entry> units;
-    {
-        const std::size_t n = std::min(transforms.size(), motion.size());
-        units.reserve(n);
-        for (std::size_t i = 0; i < n; ++i) {
-            units.push_back(Entry{&transforms[i], motion[i].radiusElmos});
-        }
-    }
-
-    const std::size_t count = units.size();
+void resolveCollisions(UnitStore& store, const Terrain& terrain) {
+    const std::span<Transform> transforms = store.transforms();
+    const std::span<const MoveState> motion = store.motion();
+    const std::size_t count = std::min(transforms.size(), motion.size());
     if (count < 2) {
         return;
     }
 
-    // A uniform grid over the map, so a unit only tests the neighbours that
-    // could actually reach it. Without one this is every pair against every
-    // other, which is fine for the forty units a demo places and quadratic for
-    // the hundreds a rally order gathers.
+    // The largest radius decides how far a unit has to look: two units overlap only if they are
+    // within the sum of their radii, and that sum is at most twice the largest.
     Fx largestRadius{};
     for (std::size_t i = 0; i < count; ++i) {
-        largestRadius = std::max(largestRadius, units[i].radius);
+        largestRadius = std::max(largestRadius, motion[i].radiusElmos);
     }
     if (largestRadius <= Fx{}) {
         return;  // nothing here occupies any space
     }
+    const Fx reach = largestRadius * 2;
 
-    // Cells two radii across: any pair that overlaps is then either in the same
-    // cell or in touching ones, so eight neighbours is the whole search.
-    const Fx cellSize = largestRadius * 2;
-    const auto cellOf = [cellSize](Fx value) { return (value / cellSize).floorToInt(); };
+    // One buffer for the whole pass. The grid's own answer buffer is overwritten by the next
+    // query, so a copy is needed — and one copy that grows to the largest neighbourhood is the
+    // whole allocation cost of the pass.
+    std::vector<UnitIndex> neighbours;
 
-    // Keyed on the packed cell coordinates. A map rather than a dense grid
-    // because a crowd occupies a handful of cells out of the tens of thousands
-    // a map has, and the dense version would cost more to clear than to search.
-    std::unordered_map<std::int64_t, std::vector<std::size_t>> buckets;
-    buckets.reserve(count);
-
-    const auto key = [](int x, int z) {
-        return (static_cast<std::int64_t>(x) << 32) ^ static_cast<std::uint32_t>(z);
-    };
-
-    for (std::size_t i = 0; i < count; ++i) {
-        if (units[i].radius <= Fx{}) {
-            continue;
-        }
-        buckets[key(cellOf(units[i].unit->x), cellOf(units[i].unit->z))].push_back(i);
-    }
-
-    // Ascending index order, resolving each pair as it is found, so the result
-    // does not depend on how the buckets happened to be laid out.
+    // ASCENDING SLOT ORDER, resolving each pair as it is found.
+    //
+    // This used to walk a `std::unordered_map` of buckets built here, every tick, and for each
+    // unit it visited the nine surrounding cells in (dz, dx) order — so the ORDER pairs were
+    // resolved in depended on how the cells happened to be laid out around each unit. The pass
+    // accumulates pushes, so that order is part of the answer, and a comment here claimed the
+    // result did not depend on the layout. It did.
+    //
+    // Now the store's index answers the query and returns slots in ascending order, so a pair
+    // is resolved in slot order regardless of where the two units are on the map. That is a
+    // different sequence from the old one — the match plays out differently, deliberately —
+    // and it is the sequence the old comment was describing.
     for (std::size_t a = 0; a < count; ++a) {
-        const Fx radiusA = units[a].radius;
+        const Fx radiusA = motion[a].radiusElmos;
         if (radiusA <= Fx{}) {
             continue;
         }
-        Transform& unitA = *units[a].unit;
+        Transform& unitA = transforms[a];
 
-        const int cx = cellOf(unitA.x);
-        const int cz = cellOf(unitA.z);
+        // Read into a local copy, because the next query overwrites the grid's answer buffer
+        // and the loop below can trigger one — `fxHypot` does not, but a reader has no way to
+        // know that from here, and a dangling span is not a bug worth leaving available.
+        const std::span<const UnitIndex> near =
+            store.space().within(unitA.x, unitA.z, reach);
+        neighbours.assign(near.begin(), near.end());
 
-        for (int dz = -1; dz <= 1; ++dz) {
-            for (int dx = -1; dx <= 1; ++dx) {
-                const auto bucket = buckets.find(key(cx + dx, cz + dz));
-                if (bucket == buckets.end()) {
-                    continue;
-                }
-
-                for (const std::size_t b : bucket->second) {
-                    // Each pair once, and never a unit against itself.
-                    if (b <= a) {
-                        continue;
-                    }
-
-                    const Fx radiusB = units[b].radius;
-                    if (radiusB <= Fx{}) {
-                        continue;
-                    }
-                    Transform& unitB = *units[b].unit;
-
-                    Fx dxWorld = unitB.x - unitA.x;
-                    Fx dzWorld = unitB.z - unitA.z;
-                    const Fx wanted = radiusA + radiusB;
-                    Fx distance = fxHypot(dxWorld, dzWorld);
-
-                    if (distance >= wanted) {
-                        continue;
-                    }
-
-                    // Exactly coincident, which a rally order produces the
-                    // moment two units are given the same destination. There is
-                    // no direction to separate along, so one is invented from
-                    // the pair's indices — deterministic, and different for
-                    // each pair, so a stack fans out instead of picking one
-                    // axis and forming a line.
-                    if (distance <= Fx::fromRaw(4)) {
-                        // The invented direction is now in binary radians directly, which is
-                        // both simpler and finer than the old 360 whole degrees: the spread
-                        // covers the full circle at the angle type's own resolution.
-                        const auto angle = static_cast<Brad>((a * 7919 + b * 104729) % 65536);
-                        dxWorld = fxCos(angle);
-                        dzWorld = fxSin(angle);
-                        distance = kFxOne;
-                    }
-
-                    // Half the overlap each: neither unit outranks the other,
-                    // and moving only one would let a unit under orders shove
-                    // its way through a crowd untouched.
-                    const Fx push = (wanted - distance) * Fx::fromRatio(1, 2);
-                    const Fx nx = dxWorld / distance;
-                    const Fx nz = dzWorld / distance;
-
-                    unitA.x -= nx * push;
-                    unitA.z -= nz * push;
-                    unitB.x += nx * push;
-                    unitB.z += nz * push;
-                }
+        for (const UnitIndex b : neighbours) {
+            // Each pair once, and never a unit against itself.
+            if (b <= a) {
+                continue;
             }
+            if (b >= count) {
+                continue;
+            }
+
+            const Fx radiusB = motion[b].radiusElmos;
+            if (radiusB <= Fx{}) {
+                continue;
+            }
+            Transform& unitB = transforms[b];
+
+            Fx dxWorld = unitB.x - unitA.x;
+            Fx dzWorld = unitB.z - unitA.z;
+            const Fx wanted = radiusA + radiusB;
+            Fx distance = fxHypot(dxWorld, dzWorld);
+
+            if (distance >= wanted) {
+                continue;
+            }
+
+            // Exactly coincident, which a rally order produces the moment two units are given
+            // the same destination. There is no direction to separate along, so one is invented
+            // from the pair's indices — deterministic, and different for each pair, so a stack
+            // fans out instead of picking one axis and forming a line.
+            if (distance <= Fx::fromRaw(4)) {
+                const auto angle = static_cast<Brad>((a * 7919 + b * 104729) % 65536);
+                dxWorld = fxCos(angle);
+                dzWorld = fxSin(angle);
+                distance = kFxOne;
+            }
+
+            // Half the overlap each: neither unit outranks the other, and moving only one would
+            // let a unit under orders shove its way through a crowd untouched.
+            const Fx push = (wanted - distance) * Fx::fromRatio(1, 2);
+            const Fx nx = dxWorld / distance;
+            const Fx nz = dzWorld / distance;
+
+            unitA.x -= nx * push;
+            unitA.z -= nz * push;
+            unitB.x += nx * push;
+            unitB.z += nz * push;
         }
     }
 
-    // Put everyone back on the map and on the ground. Done once at the end
-    // rather than per push, since a unit may be moved by several neighbours.
+    // Put everyone back on the map and on the ground. Done once at the end rather than per
+    // push, since a unit may be moved by several neighbours.
     const Fx width = Fx::fromInt(terrain.field().squaresX * kSquareSize);
     const Fx depth = Fx::fromInt(terrain.field().squaresZ * kSquareSize);
     for (std::size_t i = 0; i < count; ++i) {
-        if (units[i].radius <= Fx{}) {
+        if (motion[i].radiusElmos <= Fx{}) {
             continue;
         }
-        Transform& unit = *units[i].unit;
+        Transform& unit = transforms[i];
         unit.x = std::clamp(unit.x, Fx{}, width);
         unit.z = std::clamp(unit.z, Fx{}, depth);
         unit.y = terrain.heightAt(unit.x, unit.z);

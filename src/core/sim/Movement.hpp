@@ -16,6 +16,8 @@
 
 namespace rm::sim {
 
+class UnitStore;
+
 // The first thing in this engine whose state changes between frames.
 //
 // Units follow a route (core/sim/Pathfinding.hpp), turn at a bounded rate, hug
@@ -186,8 +188,15 @@ void orderAlongPath(MoveState& state, std::span<const std::array<Fx, 2>> path);
 /// being pushed does not push back on whatever is driving it. That is enough
 /// to stop a rally point from being a stack of models in the same spot, which
 /// is the visible lie it exists to fix.
-void resolveCollisions(std::span<Transform> transforms, std::span<const MoveState> motion,
-                       const Terrain& terrain);
+///
+/// TAKES THE STORE now, not two spans (§7 P5.2). It needs the store's spatial index — it used
+/// to build a `std::unordered_map` of buckets of its own, every tick, with its own cell size —
+/// and taking the store is what every other pass already does. The spans were the last
+/// leftover of the batch era, when a pass was handed one array per instanced draw.
+///
+/// **The index must be current**: `UnitStore::reindex` before this, since the pass reads
+/// positions that `tick` has just changed.
+void resolveCollisions(UnitStore& store, const Terrain& terrain);
 
 /// How close counts as reaching an intermediate waypoint, in elmos.
 ///

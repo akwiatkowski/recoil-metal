@@ -82,11 +82,16 @@ public:
     /// `groundDistanceElmos` measures, so range is a footprint on the map and not a sphere.
     ///
     /// Ascending slot order. **The span points into this object and is invalidated by the next
-    /// query**, which is why this is non-const: a caller that needs two results at once must
-    /// copy the first. That is the same bargain Recoil's vector pool makes, with the failure
-    /// mode moved from "the pool ran out" to "you kept a span too long" — the second is a
-    /// compile-time-visible mistake in a way the first never was.
-    [[nodiscard]] std::span<const UnitIndex> within(Fx x, Fx z, Fx radius);
+    /// query** — a caller that needs two results at once must copy the first. That is the same
+    /// bargain Recoil's vector pool makes, with the failure mode moved from "the pool ran out"
+    /// to "you kept a span too long".
+    ///
+    /// CONST, with the answer buffer `mutable`. The buffer is a cache and nothing more: the
+    /// same query twice gives the same answer, so a query does not change what this object
+    /// MEANS. Making it non-const instead would force `nearestTarget` and `damageArea` to take
+    /// a mutable store, and a targeting pass that could write to the world is a worse hazard
+    /// than a cache behind a const method. Single-threaded, like the rest of the sim.
+    [[nodiscard]] std::span<const UnitIndex> within(Fx x, Fx z, Fx radius) const;
 
     /// The same, WITHOUT the distance test: every slot in a cell that overlaps the square
     /// `[x±radius, z±radius]`.
@@ -94,7 +99,7 @@ public:
     /// For a caller whose test is not a fixed radius — collision separation compares against
     /// the sum of two units' radii, which differs per pair, so it wants the neighbourhood and
     /// does its own arithmetic.
-    [[nodiscard]] std::span<const UnitIndex> candidates(Fx x, Fx z, Fx radius);
+    [[nodiscard]] std::span<const UnitIndex> candidates(Fx x, Fx z, Fx radius) const;
 
 private:
     /// One unit's cell and slot, sorted by cell then slot.
@@ -109,13 +114,14 @@ private:
     };
 
     /// Fills `result_` with the cells overlapping the square, then optionally distance-filters.
-    void gather(Fx x, Fx z, Fx radius, bool exact);
+    void gather(Fx x, Fx z, Fx radius, bool exact) const;
 
     std::vector<Entry> entries_;
 
     /// The last query's answer. A member so that repeated queries in one pass reuse the
-    /// capacity — which is what "no per-query allocation" means in practice.
-    std::vector<UnitIndex> result_;
+    /// capacity — which is what "no per-query allocation" means in practice. `mutable` because
+    /// it is a cache: see `within`.
+    mutable std::vector<UnitIndex> result_;
 
     Fx cellSize_ = kMinCellSize;
 };

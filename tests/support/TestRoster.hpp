@@ -18,6 +18,7 @@
 #include "core/sim/UnitStore.hpp"
 #include "core/unit/UnitDef.hpp"
 
+#include <algorithm>
 #include <deque>
 #include <utility>
 #include <vector>
@@ -67,7 +68,7 @@ struct Roster {
 
         // One reload counter per weapon, starting at zero so the first shot is available on
         // the first tick rather than a reload later.
-        return store.spawn({
+        const sim::UnitId id = store.spawn({
             .type = type,
             .transform = transform,
             .motion = state,
@@ -76,6 +77,29 @@ struct Roster {
                                   .reloadRemaining = std::vector<int>(
                                       def != nullptr ? def->weapons.size() : 0u, 0)},
         });
+        // The new unit has to be in the spatial index before anything asks what is near it.
+        // A test that spawns and then queries is the common shape, and making the fixture do
+        // this is what keeps every one of those cases from carrying a reindex call.
+        reindex();
+        return id;
+    }
+
+    /// Rebuilds the store's spatial index, the way `tickSkirmish` does.
+    ///
+    /// CALLED BY `add`, so a test that only spawns units never has to think about it. A test
+    /// that MOVES a unit by writing its transform does — the index is not self-maintaining
+    /// (`UnitStore::reindex`), so a targeting query against a stale one answers about where the
+    /// unit was. Several cases here do exactly that on purpose, and call this afterwards.
+    ///
+    /// The cell size mirrors the sim's own rule: a preferred 64 elmos, floored at the collision
+    /// reach. Not shared with `Skirmish.cpp` because a test fixture reproducing the engine's
+    /// tuning constant would hide a change to it rather than reveal one.
+    void reindex() {
+        sim::Fx largest{};
+        for (const sim::MoveState& state : store.motion()) {
+            largest = std::max(largest, state.radiusElmos);
+        }
+        store.reindex(std::max(sim::Fx::fromInt(64), largest * 2));
     }
 
     // Reached by HANDLE, which is how a test names a unit now — a slot index would be an

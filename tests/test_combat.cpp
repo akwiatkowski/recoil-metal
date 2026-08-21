@@ -362,8 +362,14 @@ TEST_CASE("a unit with nothing to shoot at holds its fire and stays loaded") {
     CHECK(shots.empty());
 
     // Now it walks into range and shoots on the very first tick.
+    //
+    // The reindex is what the tick does after movement (§7 P5.2): targeting reads the store's
+    // spatial index, so a unit teleported by writing its transform is still filed under its old
+    // cell until the index is rebuilt. Without this the shooter finds nothing — a stale index
+    // answers about where things were, and this test moves a unit without a movement pass.
     roster.transform(enemy).x = rm::test::fx(0.0f);
     roster.transform(enemy).z = rm::test::fx(50.0f);
+    roster.reindex();
     CHECK(rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots, rm::sim::TickRate{}) == 1);
 }
 

@@ -5,6 +5,7 @@
 #include "core/sim/Health.hpp"
 #include "core/sim/IdPool.hpp"
 #include "core/sim/Movement.hpp"
+#include "core/sim/SpatialGrid.hpp"
 #include "core/sim/Transform.hpp"
 
 #include <cstddef>
@@ -111,6 +112,29 @@ public:
     [[nodiscard]] std::span<CommandQueue> orders() noexcept { return orders_; }
     [[nodiscard]] std::span<const CommandQueue> orders() const noexcept { return orders_; }
 
+    // --- The spatial index (PLAN2.md §6.5, §7 P5.2) ---------------------------
+    //
+    // HERE RATHER THAN THREADED THROUGH SIX SIGNATURES. `nearestTarget`, `nearestStruck`,
+    // `damageArea`, `aimAtTargets` and `resolveCollisions` all ask "which units are near this
+    // place", and all five already take the store. An index derived from the store's own
+    // positions belongs with them — the alternative was a `SpatialGrid&` parameter on every
+    // pass and on every one of their forty-odd test call sites, for no gain in clarity.
+    //
+    // IT IS NOT SELF-MAINTAINING, and that is the price. A pass that moves units invalidates
+    // it, so `reindex` is called explicitly at the points in the tick where positions have
+    // settled — `tickSkirmish` owns that, the same way it owns the pass order. A query against
+    // a stale index answers about where units WERE, which is a wrong answer rather than a
+    // crash, so the rebuild points are documented where they happen.
+
+    /// Rebuilds the spatial index from the current positions.
+    ///
+    /// Idempotent and cheap: one pass over the slots and a sort. Called twice per tick — once
+    /// before collisions and once after, because collisions move things.
+    void reindex(Fx cellSize);
+
+    /// The index. Const because a query is a read — the answer buffer inside is a cache.
+    [[nodiscard]] const SpatialGrid& space() const noexcept { return space_; }
+
     /// Slots that exist, live or dead. The length of every array above.
     [[nodiscard]] std::size_t slotCount() const noexcept { return transforms_.size(); }
 
@@ -138,6 +162,9 @@ private:
     std::vector<Health> health_;
     std::vector<UnitTypeIndex> types_;
     std::vector<CommandQueue> orders_;
+
+    /// Not parallel to the arrays above: a sorted index INTO them, rebuilt by `reindex`.
+    SpatialGrid space_;
 };
 
 } // namespace rm::sim

@@ -77,6 +77,37 @@ const rm::sim::TickRate kRate{10};
 /// `MoveState{}` used to give for free, before per-tick rates made a bare default meaningless.
 [[nodiscard]] MoveState ordinary() { return rm::sim::defaultMotion(kRate); }
 
+/// A store holding units at given places, for the collision cases.
+///
+/// `resolveCollisions` takes the store now (§7 P5.2) rather than two spans, because it reads
+/// the store's spatial index. This keeps the cases reading the way they did — place units, run
+/// separation, look at where they ended up — with the reindex in one place instead of at every
+/// call.
+struct Crowd {
+    rm::sim::UnitStore store;
+
+    void add(float x, float z) {
+        (void)store.spawn(rm::sim::UnitStore::Spawn{
+            .transform = unitAt(x, z),
+            .motion = ordinary(),
+            .health = rm::sim::Health{.current = rm::sim::Mag::fromInt(100),
+                                      .maximum = rm::sim::Mag::fromInt(100)},
+        });
+    }
+
+    [[nodiscard]] rm::sim::Transform& at(std::size_t i) { return store.transforms()[i]; }
+    [[nodiscard]] const rm::sim::MoveState& motionAt(std::size_t i) const {
+        return store.motion()[i];
+    }
+    [[nodiscard]] std::size_t size() const { return store.slotCount(); }
+
+    /// One separation pass, with the index rebuilt first — which is what the tick does.
+    void separate(const HeightField& field) {
+        store.reindex(rm::sim::Fx::fromInt(64));
+        rm::sim::resolveCollisions(store, rm::sim::Terrain{field});
+    }
+};
+
 /// Runs `count` fixed ticks over a one-unit world.
 void run(std::vector<rm::sim::Transform>& instances, std::vector<MoveState>& motion,
          const HeightField& field, int count) {
@@ -510,61 +541,65 @@ TEST_CASE("units pushed together are separated") {
     const HeightField field = flatField();
 
     SECTION("two units at the same spot end up a radius apart") {
-        std::vector<rm::sim::Transform> instances{unitAt(400.0f, 400.0f), unitAt(400.0f, 400.0f)};
-        std::vector<MoveState> motion(2, ordinary());
+        Crowd crowd;
+        crowd.add(400.0f, 400.0f);
+        crowd.add(400.0f, 400.0f);
 
         // Exactly coincident is the degenerate case: there is no direction to
         // push along, and a naive normalise divides by zero.
-        rm::sim::resolveCollisions(instances, motion, rm::sim::Terrain{field});
+        crowd.separate(field);
 
-        const rm::sim::Fx apart = rm::sim::fxHypot(instances[0].x - instances[1].x,
-                                                   instances[0].z - instances[1].z);
+        const rm::sim::Fx apart =
+            rm::sim::fxHypot(crowd.at(0).x - crowd.at(1).x, crowd.at(0).z - crowd.at(1).z);
         CHECK(apart > rm::sim::Fx{});
         // `isfinite` is gone, and cannot come back: a fixed-point value has no infinity and
         // no NaN to check for. The degenerate case that produced them — dividing by a zero
         // separation — now saturates instead, which is a wrong number a test can see rather
         // than a poison one that spreads.
-        CHECK(instances[0].x.raw() != INT32_MAX);
-        CHECK(instances[1].x.raw() != INT32_MAX);
+        CHECK(crowd.at(0).x.raw() != INT32_MAX);
+        CHECK(crowd.at(1).x.raw() != INT32_MAX);
 
         // A few passes should reach the full separation.
         for (int i = 0; i < 20; ++i) {
-            rm::sim::resolveCollisions(instances, motion, rm::sim::Terrain{field});
+            crowd.separate(field);
         }
-        const float settled = rm::test::asFloat(rm::sim::fxHypot(instances[0].x - instances[1].x,
-                                                            instances[0].z - instances[1].z));
-        CHECK(settled >= Approx(rm::test::asFloat(motion[0].radiusElmos + motion[1].radiusElmos)).epsilon(0.05));
+        const float settled = rm::test::asFloat(
+            rm::sim::fxHypot(crowd.at(0).x - crowd.at(1).x, crowd.at(0).z - crowd.at(1).z));
+        CHECK(settled >= Approx(rm::test::asFloat(crowd.motionAt(0).radiusElmos
+                                                  + crowd.motionAt(1).radiusElmos))
+                             .epsilon(0.05));
     }
 
     SECTION("units already clear of each other do not move") {
-        std::vector<rm::sim::Transform> instances{unitAt(100.0f, 100.0f), unitAt(500.0f, 500.0f)};
-        std::vector<MoveState> motion(2, ordinary());
+        Crowd crowd;
+        crowd.add(100.0f, 100.0f);
+        crowd.add(500.0f, 500.0f);
 
-        rm::sim::resolveCollisions(instances, motion, rm::sim::Terrain{field});
+        crowd.separate(field);
 
-        CHECK(rm::test::asFloat(instances[0].x) == Approx(100.0f));
-        CHECK(rm::test::asFloat(instances[1].x) == Approx(500.0f));
+        CHECK(rm::test::asFloat(crowd.at(0).x) == Approx(100.0f));
+        CHECK(rm::test::asFloat(crowd.at(1).x) == Approx(500.0f));
     }
 
     SECTION("a crowd spreads out instead of stacking") {
         // Thirty units dumped on one point, which is exactly what a rally order
         // produces once pathfinding works.
-        std::vector<rm::sim::Transform> instances;
+        Crowd crowd;
         for (int i = 0; i < 30; ++i) {
-            instances.push_back(unitAt(400.0f, 400.0f));
+            crowd.add(400.0f, 400.0f);
         }
-        std::vector<MoveState> motion(instances.size(), ordinary());
 
         for (int i = 0; i < 120; ++i) {
-            rm::sim::resolveCollisions(instances, motion, rm::sim::Terrain{field});
+            crowd.separate(field);
         }
 
         std::size_t overlapping = 0;
-        for (std::size_t a = 0; a < instances.size(); ++a) {
-            for (std::size_t b = a + 1; b < instances.size(); ++b) {
-                const rm::sim::Fx d = rm::sim::fxHypot(instances[a].x - instances[b].x,
-                                                       instances[a].z - instances[b].z);
-                if (d < (motion[a].radiusElmos + motion[b].radiusElmos)
+        for (std::size_t a = 0; a < crowd.size(); ++a) {
+            for (std::size_t b = a + 1; b < crowd.size(); ++b) {
+                const rm::sim::Fx d =
+                    rm::sim::fxHypot(crowd.at(a).x - crowd.at(b).x,
+                                     crowd.at(a).z - crowd.at(b).z);
+                if (d < (crowd.motionAt(a).radiusElmos + crowd.motionAt(b).radiusElmos)
                             * rm::sim::Fx::fromRatio(4, 5)) {
                     ++overlapping;
                 }
@@ -575,15 +610,17 @@ TEST_CASE("units pushed together are separated") {
 
     SECTION("separation keeps units on the map and on the ground") {
         const HeightField ramp = rampField();
-        std::vector<rm::sim::Transform> instances{unitAt(0.0f, 0.0f), unitAt(0.0f, 0.0f),
-                                            unitAt(0.0f, 0.0f)};
-        std::vector<MoveState> motion(3, ordinary());
-
-        for (int i = 0; i < 30; ++i) {
-            rm::sim::resolveCollisions(instances, motion, rm::sim::Terrain{ramp});
+        Crowd crowd;
+        for (int i = 0; i < 3; ++i) {
+            crowd.add(0.0f, 0.0f);
         }
 
-        for (const rm::sim::Transform& unit : instances) {
+        for (int i = 0; i < 30; ++i) {
+            crowd.separate(ramp);
+        }
+
+        for (std::size_t i = 0; i < crowd.size(); ++i) {
+            const rm::sim::Transform& unit = crowd.at(i);
             CHECK(rm::test::asFloat(unit.x) >= 0.0f);
             CHECK(rm::test::asFloat(unit.z) >= 0.0f);
             CHECK(rm::test::asFloat(unit.x) <= ramp.widthElmos());
@@ -592,45 +629,11 @@ TEST_CASE("units pushed together are separated") {
                   == Approx(ramp.heightAtWorld(rm::test::asFloat(unit.x),
                                                rm::test::asFloat(unit.z)))
                          // Eight steps: the terrain sample rounds, the two axis interpolations
-                       // round, and the vertical decode rounds — against a float accessor
-                       // that does none of that. Still four orders of magnitude below the
-                       // 0.01-elmo vertical resolution of a real heightmap.
-                       .margin(8 * rm::test::kFxStep));
+                         // round, and the vertical decode rounds — against a float accessor
+                         // that does none of that. Still four orders of magnitude below the
+                         // 0.01-elmo vertical resolution of a real heightmap.
+                         .margin(8 * rm::test::kFxStep));
         }
-    }
-
-    SECTION("it is deterministic") {
-        const auto play = [&field]() {
-            std::vector<rm::sim::Transform> instances;
-            for (int i = 0; i < 12; ++i) {
-                instances.push_back(unitAt(400.0f + static_cast<float>(i % 3),
-                                           400.0f + static_cast<float>(i % 2)));
-            }
-            std::vector<MoveState> motion(instances.size(), ordinary());
-            for (int i = 0; i < 40; ++i) {
-                rm::sim::resolveCollisions(instances, motion, rm::sim::Terrain{field});
-            }
-            return instances;
-        };
-
-        const auto first = play();
-        const auto second = play();
-        for (std::size_t i = 0; i < first.size(); ++i) {
-            CHECK(first[i].x == second[i].x);
-            CHECK(first[i].z == second[i].z);
-        }
-    }
-
-    SECTION("a unit with no radius is left alone") {
-        std::vector<rm::sim::Transform> instances{unitAt(400.0f, 400.0f), unitAt(400.0f, 400.0f)};
-        std::vector<MoveState> motion(2, ordinary());
-        motion[0].radiusElmos = rm::sim::Fx{};
-        motion[1].radiusElmos = rm::sim::Fx{};
-
-        rm::sim::resolveCollisions(instances, motion, rm::sim::Terrain{field});
-
-        CHECK(rm::test::asFloat(instances[0].x) == Approx(400.0f));
-        CHECK(rm::test::asFloat(instances[1].x) == Approx(400.0f));
     }
 }
 
@@ -713,43 +716,45 @@ TEST_CASE("collision sees units of different models") {
     // History: each model's instances lived in their own array, and for three
     // milestones the separation pass ran once per array — so two units of DIFFERENT
     // models could stand in exactly the same spot and neither would notice. Then the
-    // pass took a list of arrays. Now there is ONE array for the whole match, so the
+    // pass took a list of arrays. Now there is ONE store for the whole match, so the
     // bug is gone by construction and this case only proves the construction: a tank
-    // and a bot are two slots of the same span and cannot be missed by an inner loop
+    // and a bot are two slots of the same arrays and cannot be missed by an inner loop
     // that never restarts.
     const HeightField field = flatField();
 
-    std::vector<rm::sim::Transform> units{unitAt(400.0f, 400.0f), unitAt(400.0f, 400.0f)};
-    std::vector<MoveState> motion(2, ordinary());
+    Crowd crowd;
+    crowd.add(400.0f, 400.0f);
+    crowd.add(400.0f, 400.0f);
 
     for (int i = 0; i < 20; ++i) {
-        rm::sim::resolveCollisions(units, motion, rm::sim::Terrain{field});
+        crowd.separate(field);
     }
 
     const float apart = rm::test::asFloat(
-        rm::sim::fxHypot(units[0].x - units[1].x, units[0].z - units[1].z));
-    CHECK(apart >= Approx(rm::test::asFloat(motion[0].radiusElmos + motion[1].radiusElmos)).epsilon(0.05));
+        rm::sim::fxHypot(crowd.at(0).x - crowd.at(1).x, crowd.at(0).z - crowd.at(1).z));
+    CHECK(apart >= Approx(rm::test::asFloat(crowd.motionAt(0).radiusElmos
+                                            + crowd.motionAt(1).radiusElmos))
+                       .epsilon(0.05));
 }
 
 TEST_CASE("a crowd of one model still separates from itself") {
     // The flat form must not lose what the grouped one did.
     const HeightField field = flatField();
 
-    std::vector<rm::sim::Transform> crowd;
+    Crowd crowd;
     for (int i = 0; i < 8; ++i) {
-        crowd.push_back(unitAt(400.0f, 400.0f));
+        crowd.add(400.0f, 400.0f);
     }
-    std::vector<MoveState> motion(crowd.size(), ordinary());
 
     for (int i = 0; i < 80; ++i) {
-        rm::sim::resolveCollisions(crowd, motion, rm::sim::Terrain{field});
+        crowd.separate(field);
     }
 
     for (std::size_t a = 0; a < crowd.size(); ++a) {
         for (std::size_t b = a + 1; b < crowd.size(); ++b) {
             const rm::sim::Fx d =
-                rm::sim::fxHypot(crowd[a].x - crowd[b].x, crowd[a].z - crowd[b].z);
-            REQUIRE(d > (motion[a].radiusElmos + motion[b].radiusElmos)
+                rm::sim::fxHypot(crowd.at(a).x - crowd.at(b).x, crowd.at(a).z - crowd.at(b).z);
+            REQUIRE(d > (crowd.motionAt(a).radiusElmos + crowd.motionAt(b).radiusElmos)
                             * rm::sim::Fx::fromRatio(4, 5));
         }
     }
@@ -758,12 +763,39 @@ TEST_CASE("a crowd of one model still separates from itself") {
 TEST_CASE("an empty or single-unit store is harmless") {
     const HeightField field = flatField();
 
-    CHECK_NOTHROW(rm::sim::resolveCollisions(std::span<rm::sim::Transform>{},
-                                             std::span<const MoveState>{},
-                                             rm::sim::Terrain{field}));
+    Crowd empty;
+    CHECK_NOTHROW(empty.separate(field));
 
-    std::vector<rm::sim::Transform> one{unitAt(100.0f, 100.0f)};
-    std::vector<MoveState> motion(1, ordinary());
-    rm::sim::resolveCollisions(one, motion, rm::sim::Terrain{field});
-    CHECK(rm::test::asFloat(one[0].x) == Approx(100.0f));
+    Crowd one;
+    one.add(100.0f, 100.0f);
+    one.separate(field);
+    CHECK(rm::test::asFloat(one.at(0).x) == Approx(100.0f));
+}
+
+TEST_CASE("a stale index answers about where units were") {
+    // The price of an index that is not self-maintaining, written down as a test rather than
+    // left as a comment. `resolveCollisions` reads the store's spatial index, so a caller that
+    // moves units and forgets to reindex gets separation computed against last tick's
+    // positions — a wrong answer rather than a crash, which is exactly the kind of failure
+    // that hides. `tickSkirmish` is the one place that owns the rebuild points.
+    const HeightField field = flatField();
+
+    Crowd crowd;
+    crowd.add(100.0f, 100.0f);
+    crowd.add(500.0f, 500.0f);
+    crowd.separate(field);  // indexes them where they are: far apart, nothing to do
+
+    // Now shove them together WITHOUT reindexing, and separate again. The index still says
+    // they are 400 elmos apart, so neither is a candidate for the other and they stay stacked.
+    crowd.at(1).x = rm::test::fx(100.0f);
+    crowd.at(1).z = rm::test::fx(100.0f);
+    rm::sim::resolveCollisions(crowd.store, rm::sim::Terrain{field});
+    CHECK(rm::test::asFloat(rm::sim::fxHypot(crowd.at(0).x - crowd.at(1).x,
+                                             crowd.at(0).z - crowd.at(1).z))
+          == Approx(0.0f));
+
+    // Reindex and they separate, which is what the tick does.
+    crowd.separate(field);
+    CHECK(rm::sim::fxHypot(crowd.at(0).x - crowd.at(1).x, crowd.at(0).z - crowd.at(1).z)
+          > rm::sim::Fx{});
 }

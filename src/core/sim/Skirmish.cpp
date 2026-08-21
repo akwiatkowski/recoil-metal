@@ -144,6 +144,45 @@ std::vector<int> countCommanders(const UnitStore& store, const UnitCatalog& cata
     return alive;
 }
 
+namespace {
+
+/// The cell size the spatial index uses, in elmos.
+///
+/// TWO QUERY SCALES SHARE ONE GRID, and the cell has to serve both. Collision separation asks
+/// about twice the largest collision radius — tens of elmos — while targeting asks about a
+/// weapon's range, which reaches 2,048 in the corpus. A cell sized for the first makes a
+/// targeting query walk thousands of cells; a cell sized for the second makes a collision query
+/// fetch a whole neighbourhood to find one pair.
+///
+/// The floor is the collision reach, because a cell smaller than the smallest query is wasted
+/// work with no benefit. Above that, the grid's own fallback covers the tail: a query whose
+/// cell range exceeds the unit count scans the array instead, so a long-ranged weapon degrades
+/// to the brute force it replaced rather than to something worse.
+///
+/// 128 ELMOS IS MEASURED, NOT CHOSEN. Sixty seconds of headless match at 2,008 units, user
+/// time, two runs each — against 12.12 s for the full-scan version this replaces:
+///
+///     cell  32    2.99  3.01
+///     cell  64    1.91  2.04
+///     cell 128    1.78  1.81      <- and the curve is flat here
+///     cell 256    1.95  1.96
+///
+/// The shape is what a uniform grid always does: too fine and a query pays a binary search per
+/// cell for cells that hold nothing; too coarse and it fetches a neighbourhood to find one
+/// pair. The minimum is broad, which is the useful part — being a factor of two out costs
+/// about 10%, so this is a number that does not have to be re-tuned per map.
+[[nodiscard]] Fx spatialCellSize(const UnitStore& store) noexcept {
+    constexpr Fx kPreferredCell = Fx::fromInt(128);
+
+    Fx largest{};
+    for (const MoveState& state : store.motion()) {
+        largest = std::max(largest, state.radiusElmos);
+    }
+    return std::max(kPreferredCell, largest * 2);
+}
+
+} // namespace
+
 TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& match,
                         const Terrain& terrain, TickRate rate) {
     TickReport report;
@@ -163,7 +202,17 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
     //    of different models had to be able to see each other. With one flat array that
     //    problem does not arise.
     tick(store.transforms(), store.motion(), terrain);
-    resolveCollisions(store.transforms(), store.motion(), terrain);
+
+    //    THE SPATIAL INDEX IS REBUILT TWICE, and both points are load-bearing (§7 P5.2).
+    //    Here, because collisions ask which units are near each other and `tick` has just
+    //    moved all of them; and again below, because collisions move them too and combat must
+    //    not aim at where a unit was before it was shoved.
+    //
+    //    Each rebuild is one pass over the slots and a sort — cheap against what it replaces,
+    //    which was a scan over every unit for every shooter, every projectile and every blast.
+    store.reindex(spatialCellSize(store));
+    resolveCollisions(store, terrain);
+    store.reindex(spatialCellSize(store));
 
     // Everything below is a MATCH, and a scene with no armies is not one — a `--units`
     // crowd scattered for a screenshot has nothing to shoot at and nobody to pay.

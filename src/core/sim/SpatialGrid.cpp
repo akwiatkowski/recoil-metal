@@ -53,7 +53,7 @@ void SpatialGrid::rebuild(const UnitStore& store, Fx cellSize) {
     });
 }
 
-void SpatialGrid::gather(Fx x, Fx z, Fx radius, bool exact) {
+void SpatialGrid::gather(Fx x, Fx z, Fx radius, bool exact) const {
     result_.clear();
     if (entries_.empty()) {
         return;
@@ -112,12 +112,12 @@ void SpatialGrid::gather(Fx x, Fx z, Fx radius, bool exact) {
     std::sort(result_.begin(), result_.end());
 }
 
-std::span<const UnitIndex> SpatialGrid::within(Fx x, Fx z, Fx radius) {
+std::span<const UnitIndex> SpatialGrid::within(Fx x, Fx z, Fx radius) const {
     gather(x, z, radius, /*exact=*/true);
     return result_;
 }
 
-std::span<const UnitIndex> SpatialGrid::candidates(Fx x, Fx z, Fx radius) {
+std::span<const UnitIndex> SpatialGrid::candidates(Fx x, Fx z, Fx radius) const {
     gather(x, z, radius, /*exact=*/false);
     return result_;
 }

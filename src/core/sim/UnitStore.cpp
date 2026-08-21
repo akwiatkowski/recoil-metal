@@ -31,6 +31,8 @@ UnitId UnitStore::spawn(const Spawn& request) {
     return id;
 }
 
+void UnitStore::reindex(Fx cellSize) { space_.rebuild(*this, cellSize); }
+
 void UnitStore::kill(UnitId id) {
     if (!ids_.alive(id)) {
         return;
