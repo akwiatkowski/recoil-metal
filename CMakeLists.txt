@@ -107,6 +107,7 @@ add_library(rm_core STATIC
     src/core/sim/FeatureStore.cpp
     src/core/sim/CommandQueue.cpp
     src/core/sim/Combat.cpp
+    src/core/sim/Intel.cpp
     src/core/sim/BuildOrder.cpp
     src/core/sim/Economy.cpp
     src/core/sim/Movement.cpp
@@ -239,6 +240,8 @@ if(BUILD_TESTING)
         tests/test_interpolate.cpp
         tests/test_build_order.cpp
         tests/test_combat.cpp
+        tests/test_intel.cpp
+        tests/test_intel.cpp
         tests/test_economy.cpp
         tests/test_movement.cpp
         tests/test_picking.cpp
