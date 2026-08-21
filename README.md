@@ -963,6 +963,51 @@ player is army 0 and the script drives everyone else.
 | ![the fight](docs/images/m20-5-battle.jpg) | ![the banner](docs/images/m20-6-victory.jpg) |
 | **8:03** — the wave reaches the player's commander | **8:40** — a match that *ends* |
 
+### Fog of war, radar and sonar
+
+```sh
+# Terrain blocks sight, which is Recoil's model and the default: hills hide what
+# is behind them and high ground is worth taking.
+./build/recoil-metal "$FA/maps/SCMP_009/SCMP_009.scmap" --gamedata "$FA/gamedata" \
+    --skirmish --armies 2 --play 300
+
+# Flat discs, which is what Supreme Commander does — `effects/vision.fx` stamps a
+# radius at a position and never samples a height, so you see over mountains.
+./build/recoil-metal "$FA/maps/SCMP_009/SCMP_009.scmap" --gamedata "$FA/gamedata" \
+    --skirmish --armies 2 --play 300 --vision-style fa
+
+# ...and `--observer` draws no fog at all, because watching is seeing everything.
+```
+
+Every unit sees as far as its own blueprint says: Forged Alliance's `Intel` block
+in ogrids (a Cybran ACU's `VisionRadius = 26` is 208 elmos), BAR's
+`sightdistance` in elmos already. 355 of the 568 shipped blueprints see, 57 carry
+radar, 67 sonar; the widest radar is 4800 elmos against the widest sight of 800,
+which is what says radar is a different order of thing from sight.
+
+What it changes, in order of how much you notice:
+
+- **A unit no longer shoots what its side cannot see.** Until this existed,
+  `nearestTarget` picked from the whole unit store filtered by hostility and
+  range, so everything in the match engaged targets across the map.
+- **Unseen units are not drawn and cannot be clicked.**
+- **Radar and sonar give a blip** — a position without an identity, drifting
+  within 96 elmos of the truth. The minimap plots them in a colour that is
+  nobody's team colour, because whose it is and what it is are the two facts a
+  contact withholds.
+- **Unseen ground is darkened, not blacked out.** Both source engines keep
+  terrain readable: you need the shape of the ground you are about to walk into
+  even when you cannot see what is standing on it.
+
+The two engines disagree about what vision *is*, which is why the style is a
+setting rather than a decision — see `ADR-037`. The structure underneath is
+Recoil's: a reference count per square per alliance, so one unit's sight can be
+withdrawn without re-deriving every other unit's. The grid is integer and enters
+the state hash, so `--hash-log` and `make verify` cover it with no new machinery.
+
+Not yet: the other nine Forged Alliance intel types — omni, cloak, the stealth
+fields, jammers and their fake blips.
+
 ### Supreme Commander models
 
 `.scm` loads into the same `Model` struct `.s3o` does, and the same magic sniff

@@ -65,6 +65,11 @@ SHOT      ?= /tmp/recoil-metal.png
 SHOT_SIZE ?= 1400 900
 MARCH     ?= 4096 4096
 
+# Whether terrain blocks sight (ADR-037): `recoil` or `fa`. Empty leaves the binary's own
+# default, which is recoil's.
+VISION    ?=
+VISION_FLAG = $(if $(VISION),--vision-style $(VISION),)
+
 FA_FLAGS  = --gamedata "$(FA_ROOT)/gamedata"
 
 .DEFAULT_GOAL := help
@@ -82,7 +87,7 @@ help:
 	@echo '  PLAY IT'
 	@echo '  play            a duel you drive — army 0 is yours (ARMIES=8 for a free-for-all)'
 	@echo '  play-from       the same, joining SECONDS in, so a base already stands'
-	@echo '  watch           every side scripted, nothing selectable'
+	@echo '  watch           every side scripted, nothing selectable (and no fog)'
 	@echo
 	@echo '  run             procedural terrain, no content needed'
 	@echo '  run-fa          a Supreme Commander map, its own units, read from the archives'
@@ -100,6 +105,7 @@ help:
 	@echo '  clean           remove the build directory'
 	@echo
 	@echo 'Override anything: make play ARMIES=8 ALLIANCES=2 FA_MAP=.../SCMP_012.scmap'
+	@echo '                   make play VISION=fa    (flat discs, as Supreme Commander does)'
 	@echo '                   make skirmish UNITS=200 SECONDS=90'
 	@echo
 	@echo 'Content:'
@@ -185,7 +191,7 @@ play: build check-fa
 	@echo '  Shift + right-click queues an order; hold space and drag to swing the camera.'
 	@echo '  Scroll zooms. Losing your commander loses the match.'
 	@echo
-	$(BIN) "$(FA_MAP)" $(FA_FLAGS) --skirmish --armies $(ARMIES) $(ALLIANCE_FLAG)
+	$(BIN) "$(FA_MAP)" $(FA_FLAGS) --skirmish --armies $(ARMIES) $(ALLIANCE_FLAG) $(VISION_FLAG)
 
 # The same match with the first SECONDS already played out, so you arrive at a base rather
 # than at two commanders on empty ground. 60 is about when the factory is up; 320 is just
@@ -194,7 +200,7 @@ play-from: build check-fa
 	@echo
 	@echo '  You are army 0, joining at $(SECONDS)s. WASD pans, right-click orders.'
 	@echo
-	$(BIN) "$(FA_MAP)" $(FA_FLAGS) --skirmish --armies $(ARMIES) $(ALLIANCE_FLAG) \
+	$(BIN) "$(FA_MAP)" $(FA_FLAGS) --skirmish --armies $(ARMIES) $(ALLIANCE_FLAG) $(VISION_FLAG) \
 	  --play $(SECONDS)
 
 # Watch instead of play: no army is yours, so nothing is selectable and every side is scripted.
