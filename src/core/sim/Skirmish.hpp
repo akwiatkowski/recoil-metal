@@ -6,6 +6,7 @@
 #include "core/sim/Command.hpp"
 #include "core/sim/Economy.hpp"
 #include "core/sim/Events.hpp"
+#include "core/sim/FeatureStore.hpp"
 #include "core/sim/Movement.hpp"
 #include "core/sim/UnitCatalog.hpp"
 #include "core/sim/UnitStore.hpp"
@@ -60,6 +61,15 @@ struct Match {
     /// the tick, because `tickEconomy` is documented to be given one army's work and
     /// charging the wrong one is a caller's mistake to avoid.
     std::vector<Construction>* building = nullptr;
+
+    /// What is on the ground that is not a unit — wrecks (§7 P6.2). Null for a scene with
+    /// nothing to leave behind.
+    ///
+    /// The sim ADDS to it; the renderer reads it and projects decals. What used to happen is
+    /// that a death appended GPU vertices to the app's scene state, so the record of what died
+    /// here was a triangle list. Same reasoning as `projectiles`: caller-owned storage, sim-side
+    /// authorship.
+    FeatureStore* features = nullptr;
 
     /// Where the tick reports what happened, or null (§7 P6.1).
     ///

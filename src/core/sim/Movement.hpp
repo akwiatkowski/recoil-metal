@@ -6,7 +6,7 @@
 #include "core/sim/Terrain.hpp"
 #include "core/sim/TickRate.hpp"
 #include "core/sim/Transform.hpp"
-#include "core/scene/UnitPlacement.hpp"
+#include "core/map/HeightField.hpp"
 
 #include <algorithm>
 #include <array>

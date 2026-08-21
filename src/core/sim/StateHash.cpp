@@ -213,7 +213,7 @@ StateHash hashMatch(const UnitStore& store, const Match& match) {
         feed(h, store.slotAlive(slot));
     }
 
-    // The armies. `colour` is skipped for the same reason `teamColour` is — a palette entry
+    // The armies. There is no `colour` to skip any more (§7 P6.3): a palette entry
     // is not a fact about the match.
     feed(h, match.armies.size());
     for (const Army& army : match.armies) {

@@ -126,7 +126,6 @@ std::vector<Army> freeForAll(std::size_t armyCount) {
             // match, or a screenshot proves nothing twice.
             .faction = kFactions[i % kFactions.size()].faction,
             .alliance = index,  // free-for-all: everyone their own alliance
-            .colour = teamColour(i),
             .defeated = false,
         });
     }

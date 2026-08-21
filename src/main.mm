@@ -1203,11 +1203,22 @@ struct UnitScene {
     /// collision spans point at moved storage and rebuilds them.
     bool grewThisTick = false;
 
-    /// The scorch marks the dead have left, in decal vertices ready to upload.
+    /// What the dead left behind, as OBJECTS (§7 P6.2).
     ///
-    /// Accumulated rather than rebuilt, unlike the selection rings: a wreck is permanent, so
-    /// there is nothing to recompute each frame and a growing buffer is the honest shape.
+    /// This used to be `std::vector<rm::DecalVertex>` — GPU vertices accumulated per death —
+    /// which made a triangle list the only record that anything had died there. The sim owns
+    /// the fact now (`sim::FeatureStore`) and the decals are a projection of it, rebuilt from
+    /// `wreckDecals()` when the count changes. Same shape as the units: state in the sim,
+    /// geometry derived at the boundary.
+    rm::sim::FeatureStore features;
+
+    /// The scorch marks, projected from `features`. Rebuilt when a wreck is added rather than
+    /// every frame — a wreck does not move, so there is nothing to recompute otherwise.
     std::vector<rm::DecalVertex> wreckDecals;
+
+    /// How many features `wreckDecals` was built from, so the rebuild happens exactly when
+    /// there is something new to draw.
+    std::size_t wreckDecalsFrom = 0;
 
     /// Death explosions set off, and the damage they dealt. BOTH, because they answer
     /// different questions: a blast that goes off and hurts nothing is the ordinary case when
@@ -1310,10 +1321,14 @@ struct UnitScene {
         // entry, which is what a decorative crowd should look like — the alternative, treating
         // an unowned unit as army zero's, is the bug `kNoArmy = -1` exists to prevent, and it
         // is prevented in the SIM rather than here.
+        // Indexed from the PALETTE rather than read off the army (§7 P6.3): a colour is how an
+        // army is drawn and not a fact about one, so it lives with the renderer's other
+        // presentation and the sim no longer carries it. Same answer, one include fewer in the
+        // sim — which is the whole of P6.3's assertion.
         const int owner = motion.armyIndex;
         instance.teamColour =
             owner >= 0 && static_cast<std::size_t>(owner) < armies.size()
-                ? armies[static_cast<std::size_t>(owner)].colour
+                ? rm::teamColour(static_cast<std::size_t>(owner))
                 : rm::kTeamColours[0];
 
         // The walk cycle, paced by ground covered rather than by wall time — a unit pivoting
@@ -1368,6 +1383,32 @@ struct UnitScene {
     }
 
 };
+
+/// Rebuilds the wreck decals from the features, if any have been added since the last time.
+///
+/// THE PROJECTION (§7 P6.2). `sim::Feature` is the fact — a place, a size, what died there —
+/// and this is the geometry for it, which is the renderer's business and crosses back into
+/// floats here. Rebuilt from scratch rather than appended to, because "derive the drawing from
+/// the state" is the property worth having: an append-only buffer and an append-only store are
+/// two records of the same thing that can disagree, and the whole point of P6.2 is that there
+/// is one.
+///
+/// Guarded on the count so a match that kills nothing this tick does no work. Cheap even when
+/// it does fire: a wreck is a handful of triangles and a long match leaves tens of them.
+void refreshWreckDecals(UnitScene& scene, const rm::HeightField& field) {
+    if (scene.features.size() == scene.wreckDecalsFrom) {
+        return;
+    }
+    scene.wreckDecals.clear();
+    for (const rm::sim::Feature& wreck : scene.features.all()) {
+        rm::appendWreckMark(scene.wreckDecals, field,
+                            {rm::sim::fxToFloat(wreck.at[0]), rm::sim::fxToFloat(wreck.at[1]),
+                             rm::sim::fxToFloat(wreck.at[2])},
+                            rm::sim::fxToFloat(wreck.radiusElmos)
+                                * rm::kWreckMarkRadiusFactor);
+    }
+    scene.wreckDecalsFrom = scene.features.size();
+}
 
 /// The opening's step for a role, or a bare default when the plan names none.
 ///
@@ -3187,6 +3228,7 @@ struct MatchRunner {
                 .projectiles = &scene.projectiles,
                 .building = &scene.building,
                 .events = &scene.events,
+                .features = &scene.features,
                 .commandersEver = scene.commandersEver,
                 .baseStorage = kStartingStorage,
                 // Seeded from the scene rather than defaulted to false, using the same
@@ -3292,16 +3334,18 @@ rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) 
     //
     // The caller's work rather than the sim's: a decal buffer is a thing the renderer
     // uploads, and the sim has no business owning one.
-    runner.unitsDestroyed += report.died.size();
-    for (const rm::sim::Death& death : report.died) {
-        // The decal buffer is the renderer's, so the wreck's place and size cross back into
-        // floats here — the sim-to-renderer half of the boundary.
-        rm::appendWreckMark(scene.wreckDecals, runner.field,
-                            {rm::sim::fxToFloat(death.at[0]), rm::sim::fxToFloat(death.at[1]),
-                             rm::sim::fxToFloat(death.at[2])},
-                            rm::sim::fxToFloat(death.radiusElmos)
-                                * rm::kWreckMarkRadiusFactor);
+    // FROM THE EVENTS, not from the report (§7 P6.3). The tally and the wreck marks are the
+    // app's reaction to a death, and reacting to `UnitDestroyed` rather than to
+    // `TickReport::died` is what the event queue is for — the caller stops needing a
+    // second, differently-shaped channel for the same fact. `report.died` is still what the
+    // sim hands back for the callers that need a death's radius, and both agree by
+    // construction: `retireDead` fills one from the other.
+    for (const rm::sim::Event& event : scene.events.all()) {
+        if (event.kind == rm::sim::EventKind::UnitDestroyed) {
+            ++runner.unitsDestroyed;
+        }
     }
+    refreshWreckDecals(scene, runner.field);
 
     // What finished this tick BECOMES A UNIT: an extractor that is done stands on its
     // deposit, a factory stands by the base, and a tank rolls off the factory floor.
@@ -3624,10 +3668,12 @@ void march(UnitScene& scene, const rm::HeightField& field, PassabilitySet& passa
                         static_cast<double>(
                             rm::sim::magToFloat(scene.store.health()[slot].maximum)));
         }
-        if (scene.deathBlasts > 0 || !scene.wreckDecals.empty()) {
-            std::printf("wreckage: %zu scorch mark(s), %zu death explosion(s) dealing"
-                        " %.0f damage\n",
-                        scene.wreckDecals.size() / rm::wreckVertexCount(), scene.deathBlasts,
+        if (scene.deathBlasts > 0 || scene.features.size() > 0) {
+            // Counted from the FEATURES now, not by dividing a vertex buffer by the vertices
+            // per mark (§7 P6.2). The old form was the tell that the decal buffer was the only
+            // record: to say how many things had died you had to do arithmetic on triangles.
+            std::printf("wreckage: %zu wreck(s), %zu death explosion(s) dealing %.0f damage\n",
+                        scene.features.size(), scene.deathBlasts,
                         static_cast<double>(rm::sim::magToFloat(scene.deathBlastDamage)));
         }
     }

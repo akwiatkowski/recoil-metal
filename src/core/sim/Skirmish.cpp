@@ -16,7 +16,8 @@ namespace {
 /// zeroes it, so a corpse is reported exactly once however many ticks it then sits
 /// there. Without that a dead unit would set off its death explosion every tick
 /// forever, which is both a wrong answer and an unbounded one.
-void retireDead(UnitStore& store, TickReport& report, EventQueue* events) {
+void retireDead(UnitStore& store, TickReport& report, EventQueue* events,
+                FeatureStore* features) {
     const std::span<Transform> transforms = store.transforms();
     const std::span<MoveState> motion = store.motion();
     const std::span<const Health> healths = store.health();
@@ -37,6 +38,18 @@ void retireDead(UnitStore& store, TickReport& report, EventQueue* events) {
             .at = positionOf(transforms[slot]),
             .radiusElmos = motion[slot].radiusElmos,
         });
+
+        // THE WRECK, as an object (§7 P6.2). Made here rather than by the caller, and read from
+        // the slot BEFORE retirement zeroes the radius — which is the same reason `Death`
+        // carries its position and size rather than a handle to look them up through.
+        if (features != nullptr) {
+            (void)features->add(Feature{
+                .at = positionOf(transforms[slot]),
+                .radiusElmos = motion[slot].radiusElmos,
+                .fromType = store.typeAt(slot),
+                .armyIndex = motion[slot].armyIndex,
+            });
+        }
 
         // EXACTLY ONCE PER DEATH, which is the property §7 P6.1's test asserts — and it is this
         // loop's `radiusElmos > 0` guard that provides it, not anything about events. A corpse
@@ -248,7 +261,7 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
     // 4. The dead, then their explosions, then the defeated. In that order: an army
     //    whose commander died to a shot that landed this tick is defeated this tick, not
     //    next, and an ACU's detonation is enormous enough to decide the tick it goes off.
-    retireDead(store, report, match.events);
+    retireDead(store, report, match.events, match.features);
 
     // 99 of the 494 shipped weapons are `WeaponCategory = 'Death'` — a blast with no
     // target and no rate of fire. This is where they finally go off.

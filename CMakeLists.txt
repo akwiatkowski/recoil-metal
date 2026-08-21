@@ -102,6 +102,7 @@ add_library(rm_core STATIC
     src/core/sim/Army.cpp
     src/core/sim/Command.cpp
     src/core/sim/Events.cpp
+    src/core/sim/FeatureStore.cpp
     src/core/sim/CommandQueue.cpp
     src/core/sim/Combat.cpp
     src/core/sim/BuildOrder.cpp
@@ -197,6 +198,7 @@ if(BUILD_TESTING)
         tests/test_command.cpp
         tests/test_command_queue.cpp
         tests/test_events.cpp
+        tests/test_features.cpp
         tests/test_build_order.cpp
         tests/test_combat.cpp
         tests/test_economy.cpp
@@ -288,4 +290,11 @@ if(BUILD_TESTING)
     # is invisible until something checks.
     add_test(NAME "every order goes through applyCommand"
              COMMAND ${CMAKE_SOURCE_DIR}/tools/check_one_order_path.sh ${CMAKE_SOURCE_DIR})
+
+    # The sim and data layers must not include the render side (PLAN2.md §4, §7 P6.3). §7 asks
+    # for this as a COMPILE error — `rm_sim` built with `core/scene/` off its include path — and
+    # that needs the four libraries §4 describes, which do not exist yet. This is the same claim
+    # with the tool that does.
+    add_test(NAME "the sim knows nothing about drawing"
+             COMMAND ${CMAKE_SOURCE_DIR}/tools/check_sim_is_headless.sh ${CMAKE_SOURCE_DIR})
 endif()

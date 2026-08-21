@@ -5,6 +5,7 @@
 // commander id that resolves to nothing looks like a map with no spawns.
 #include <catch2/catch_test_macros.hpp>
 
+#include "core/scene/TeamColours.hpp"
 #include "core/sim/Army.hpp"
 
 #include <string>
@@ -67,11 +68,13 @@ TEST_CASE("a free-for-all gives every start position its own side") {
     CHECK(armies[3].faction == Faction::Seraphim);
     CHECK(armies[4].faction == Faction::Uef);  // wraps
 
-    // Colours come from the palette in order, and it wraps too: a map may declare
-    // nine start positions (SCMP maps declare up to ARMY_9) against eight colours.
-    CHECK(armies[0].colour != armies[1].colour);
-    const std::vector<Army> nine = rm::sim::freeForAll(9);
-    CHECK(nine[8].colour == nine[0].colour);
+    // The COLOUR moved out of `Army` (§7 P6.3) — it is how an army is drawn, not a fact about
+    // one, and it was the last thing making `core/sim` include `core/scene`. The palette's own
+    // wrapping is still worth pinning, and it is now a property of the palette rather than of a
+    // match: a map may declare nine start positions (SCMP maps go up to ARMY_9) against eight
+    // colours.
+    CHECK(rm::teamColour(0) != rm::teamColour(1));
+    CHECK(rm::teamColour(8) == rm::teamColour(0));
 }
 
 TEST_CASE("an army is allied with itself, and hostile to another team") {

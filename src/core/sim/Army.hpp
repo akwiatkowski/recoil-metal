@@ -1,7 +1,6 @@
 #pragma once
 
 #include "core/Types.hpp"
-#include "core/scene/TeamColours.hpp"
 
 #include <cstdint>
 #include <optional>
@@ -103,9 +102,13 @@ struct Army {
     /// the builder below sets it and the default here is only a value.
     int alliance = 0;
 
-    /// What the player sees. OURS, not the game's — neither game stores a colour with
-    /// a unit or a map, both assign at match start (see TeamColours.hpp).
-    TeamColour colour{};
+    // `TeamColour colour` used to be here, and taking it out is §7 P6.3's assertion made true
+    // rather than a tidy-up: it was the last thing that made `core/sim` include `core/scene`.
+    //
+    // A colour is not a fact about an army — it is how one is DRAWN. Two armies with the same
+    // colour play an identical match, which is exactly the test for presentation, and the state
+    // hash already skipped it for that reason. The palette lives in `core/scene/TeamColours.hpp`
+    // and the renderer indexes it by army, which is one call at the one place that needed it.
 
     /// Whether this army still has a commander. The victory condition, in one bool,
     /// and the reason it lives on the army rather than being derived from the unit
