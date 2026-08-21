@@ -136,6 +136,32 @@ public:
         /// constant rather than replacing it — a neutral map keeps today's look and
         /// a green-brown one stops sharing a blue-grey with everything else.
         std::array<float, 3> skyZenithTint{{1.0f, 1.0f, 1.0f}};
+
+        // --- The ground's light, from the same lighting block --------------------
+        //
+        // The four terms `terrain.fx` lights every stratum with, which the shader
+        // held as two hardcoded floats until now: a flat 0.35 ambient and a 0.8 sun,
+        // on a map that states its own. That is the sky's pre-ADR-018 situation
+        // exactly — the engine's structure with none of its values — and it is why
+        // every `.scmap` rendered darker and flatter than the game renders it.
+        //
+        // THE DEFAULTS ARE `Scmap.hpp`'s, which is what an `.smf` gets: it carries no
+        // lighting block at all. They also land within 1% of the two constants they
+        // replace — 1.16 against 1.15 in full sun, 0.36 against 0.35 in shade — so a
+        // Recoil map looks exactly as it did and only a map with something to say
+        // changes.
+        std::array<float, 3> sunColour{{1.0f, 1.0f, 1.0f}};
+        std::array<float, 3> sunAmbience{{0.2f, 0.2f, 0.2f}};
+
+        /// What unlit ground fades toward. Not black: `terrain.fx` fills shade with a
+        /// colour rather than darkness, which is how a map states the colour of its
+        /// own shadows (a blue-grey dusk, a warm desert shade).
+        std::array<float, 3> shadowFill{{0.2f, 0.2f, 0.3f}};
+
+        /// The whole light sum's scale. Drives exposure per map, and the engine reads
+        /// it for more than brightness — `terrain.fx:373-375` decides a map is
+        /// "high-fidelity" by testing `LightingMultiplier > 2.1`.
+        float lightingMultiplier = 1.0f;
     };
 
     void setEnvironment(const Environment& environment) noexcept;

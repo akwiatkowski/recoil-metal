@@ -58,6 +58,10 @@ struct Uniforms {
     float waterRefractionScale;
     float alphaIsOpacity;
     float3 skyZenithTint;
+    float3 sunColour;
+    float3 sunAmbience;
+    float3 shadowFill;
+    float lightingMultiplier;
 };
 
 // The sky, as Supreme Commander's own `effects/sky.fx` builds it: a lerp
@@ -393,12 +397,34 @@ fragment float4 terrainFragment(VertexOut in [[stage_in]],
     // applied would compute the detail and then throw it away.
     const float lambert = saturate(dot(normal, u.sunDirection));
 
-    // A little ambient so slopes facing away from the sun stay readable.
-    const float ambient = 0.35;
-    // Shadow attenuates the SUN only. Ambient is the sky, which reaches into
+    // Shadow attenuates the SUN only. Ambience is the sky, which reaches into
     // shade — dimming it too would make shadowed ground black.
     const float sun = sunlightAt(in.world, lambert, u, shadowMap, shadowSampler);
-    return float4(albedo * (ambient + lambert * 0.8 * sun), 1.0);
+
+    // THE MAP'S OWN LIGHT, verbatim from `terrain.fx:2279-2281` — the same three
+    // lines every one of that file's terrain pixel shaders ends with (976, 1386,
+    // 1779, 2279):
+    //
+    //     light = SunColor * saturate(dotSunNormal) * shadow + SunAmbience * ao;
+    //     light = LightingMultiplier * light + ShadowFillColor * (1 - light);
+    //     albedo.rgb = light * (albedo.rgb + specular.rgb);
+    //
+    // Two terms of that are dropped and it is worth saying which. There is no
+    // ambient occlusion — it arrives from a terrain info texture the high-fidelity
+    // shaders sample and we do not load, and the engine passes 1 without it. And
+    // there is no terrain specular, which needs the map's specular colour and the
+    // albedo's alpha as a gloss mask.
+    //
+    // ONE DELIBERATE DIFFERENCE, per the rule that they get stated at the
+    // definition: our `sun` never reaches 0, because `sunlightAt` floors a shadowed
+    // fragment at kShadowedLight. That floor exists for exactly the reason
+    // ShadowFillColor does — a black shadow reads as a hole — so with the fill term
+    // now carrying the map's own shade colour the two overlap, and our shadows come
+    // out lighter than the engine's by the amount of the floor. Lowering the floor
+    // is a change to the unit shaders as well, so it is not made here.
+    const float3 light = u.sunColour * lambert * sun + u.sunAmbience;
+    const float3 lit = u.lightingMultiplier * light + u.shadowFill * (1.0 - light);
+    return float4(albedo * lit, 1.0);
 }
 
 )MSL";

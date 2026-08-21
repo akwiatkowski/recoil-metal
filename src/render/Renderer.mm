@@ -845,6 +845,13 @@ void Renderer::encodeScene(MTL::CommandBuffer* commandBuffer, MTL::RenderPassDes
         .skyZenithTint = simd_make_float3(environment_.skyZenithTint[0],
                                           environment_.skyZenithTint[1],
                                           environment_.skyZenithTint[2]),
+        .sunColour = simd_make_float3(environment_.sunColour[0], environment_.sunColour[1],
+                                      environment_.sunColour[2]),
+        .sunAmbience = simd_make_float3(environment_.sunAmbience[0], environment_.sunAmbience[1],
+                                        environment_.sunAmbience[2]),
+        .shadowFill = simd_make_float3(environment_.shadowFill[0], environment_.shadowFill[1],
+                                       environment_.shadowFill[2]),
+        .lightingMultiplier = environment_.lightingMultiplier,
         // Far below any map by default, so nothing is clipped unless a pass
         // asks for it.
         .clipBelowY = override != nullptr ? override->clipBelowY : -1.0e9f,

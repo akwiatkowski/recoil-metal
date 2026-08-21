@@ -274,6 +274,14 @@ namespace rm::app {
     // for why this rather than the skybox block's own mid colour, which is black on
     // every stock map.
     environment.skyZenithTint = map->sky.cirrusColour;
+    // The ground's own light. Parsed since the lighting block was first read and
+    // dropped on the floor until now — the terrain shader lit every map with two
+    // hardcoded floats, which is what made a `.scmap` render darker than the game
+    // renders it. See Renderer::Environment for the terms.
+    environment.sunColour = map->lighting.sunColour;
+    environment.sunAmbience = map->lighting.sunAmbience;
+    environment.shadowFill = map->lighting.shadowFill;
+    environment.lightingMultiplier = map->lighting.multiplier;
     loaded.environment = environment;
 
     std::printf("  sky/water: fog (%.2f %.2f %.2f), surface (%.2f %.2f %.2f),"
@@ -286,6 +294,18 @@ namespace rm::app {
                 static_cast<double>(environment.waterSurfaceColour[2]),
                 static_cast<double>(environment.waterFresnelBias),
                 static_cast<double>(environment.waterFresnelPower));
+    std::printf("  lighting: sun (%.2f %.2f %.2f), ambience (%.2f %.2f %.2f),"
+                " shadow fill (%.2f %.2f %.2f), multiplier %.2f\n",
+                static_cast<double>(environment.sunColour[0]),
+                static_cast<double>(environment.sunColour[1]),
+                static_cast<double>(environment.sunColour[2]),
+                static_cast<double>(environment.sunAmbience[0]),
+                static_cast<double>(environment.sunAmbience[1]),
+                static_cast<double>(environment.sunAmbience[2]),
+                static_cast<double>(environment.shadowFill[0]),
+                static_cast<double>(environment.shadowFill[1]),
+                static_cast<double>(environment.shadowFill[2]),
+                static_cast<double>(environment.lightingMultiplier));
     std::printf("  water: %s at %.1f elmos\n", map->hasWater ? "yes" : "none (dry map)",
                 static_cast<double>(map->waterElevation));
 

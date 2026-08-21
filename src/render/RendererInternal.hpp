@@ -103,6 +103,13 @@ struct TerrainUniforms {
     /// The map's own cirrus colour, tinting the zenith. Appended at the END, as
     /// every field here has to be — see the offsets below.
     simd_float3 skyZenithTint;
+
+    /// The ground's light, from the map's lighting block: `terrain.fx`'s SunColor,
+    /// SunAmbience, ShadowFillColor and LightingMultiplier. At the end, same rule.
+    simd_float3 sunColour;
+    simd_float3 sunAmbience;
+    simd_float3 shadowFill;
+    float lightingMultiplier;
 };
 
 
@@ -122,7 +129,15 @@ static_assert(offsetof(TerrainUniforms, waterRefractionScale) == 400,
 static_assert(offsetof(TerrainUniforms, alphaIsOpacity) == 404, "packed against it");
 static_assert(offsetof(TerrainUniforms, skyZenithTint) == 416,
               "a float3 is 16-aligned, so it starts a fresh slot after alphaIsOpacity");
-static_assert(sizeof(TerrainUniforms) == 432, "the float3 grows the struct by a full slot");
+// Three float3s in a row, so each takes a full 16-byte slot of its own — no packing
+// to hope for and none assumed.
+static_assert(offsetof(TerrainUniforms, sunColour) == 432, "the ground's light follows the sky's");
+static_assert(offsetof(TerrainUniforms, sunAmbience) == 448, "a float3 takes a whole slot");
+static_assert(offsetof(TerrainUniforms, shadowFill) == 464, "and so does the next");
+static_assert(offsetof(TerrainUniforms, lightingMultiplier) == 480,
+              "the scalar starts the slot after the last float3");
+static_assert(sizeof(TerrainUniforms) == 496,
+              "the trailing float is padded out to the struct's 16-byte alignment");
 static_assert(offsetof(TerrainUniforms, fogColour) == 288, "the map block follows the matrices");
 // A float3 is sixteen bytes AND sixteen-aligned, so the float after one does
 // NOT pack into its tail — it starts a fresh slot and the next float3 realigns
