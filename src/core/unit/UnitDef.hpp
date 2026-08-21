@@ -133,11 +133,18 @@ struct UnitDef {
     // none. Defaulting to anything else would hand sight to things that never had it, and
     // the symptom (an enemy base visible for no reason) points nowhere near the cause.
     //
-    // THE FOUR THE CORPUS ACTUALLY DECLARES, which is why the list stops here:
-    // VisionRadius on 391 of the 568, WaterVisionRadius on 70, SonarRadius on 67,
-    // RadarRadius on 57. FA's other nine intel types — Omni, Cloak, the two stealth
-    // fields, Jammer, Spoof — are additions to this block when their rules arrive, not a
-    // redesign of it.
+    // WHAT THE CORPUS DECLARES, measured over the 568: VisionRadius 391, WaterVisionRadius
+    // 70, SonarRadius 67, RadarRadius 57, OmniRadius 17, RadarStealth 15, SonarStealth 9,
+    // FreeIntel 8, the two stealth FIELD radii 7 each, JamRadius 7 — and CloakFieldRadius
+    // **zero**, which is worth recording because ADR-037's follow-up list named it as one of
+    // the nine. Retail ships no cloak field; only `Cloak` on 4 units.
+    //
+    // Four of the remaining ones are still out, each for a reason rather than for tidiness.
+    // The two stealth FIELDS and the jammer act on OTHER units, so they are a second grid and
+    // a contact rule rather than a field here — and `JamRadius` is a TABLE in the blueprints,
+    // not a scalar, so even reading it is a different job. `WaterVisionRadius` is read below
+    // and unused: nothing in this sim is submerged, so a grid for it would have nothing to
+    // answer about and no test that could tell it from an empty one.
     float visionRadiusElmos = 0.0f;
 
     /// How far it sees UNDER water, which Forged Alliance treats as its own sense.
@@ -150,6 +157,30 @@ struct UnitDef {
 
     float radarRadiusElmos = 0.0f;
     float sonarRadiusElmos = 0.0f;
+
+    /// How far it sees EVERYTHING, cloaked and stealthed alike. 17 units declare one.
+    ///
+    /// A SENSE OF ITS OWN rather than a bigger vision radius, because what makes omni omni is
+    /// not its reach — several are shorter than the same unit's radar — but that nothing hides
+    /// from it. It is the counter the stealth flags below exist to have.
+    float omniRadiusElmos = 0.0f;
+
+    /// Whether this unit is invisible to the sense named, to anyone without omni.
+    ///
+    /// FLAGS RATHER THAN RADII, which is what the blueprints state: `RadarStealth = true` on
+    /// 15 units, `SonarStealth = true` on 9, `Cloak = true` on 4. A stealthed unit is not
+    /// harder to detect, it is ABSENT from that sense — which is why these are read at contact
+    /// time rather than subtracted from anybody's radius.
+    bool radarStealth = false;
+    bool sonarStealth = false;
+    bool cloak = false;
+
+    /// Whether everyone always knows where it is, regardless of any sense. 8 units declare it.
+    ///
+    /// Civilian objectives and campaign markers, mostly — a thing the scenario wants on every
+    /// player's map from the first tick. It BEATS stealth, because a blueprint stating both is
+    /// stating that this particular object is meant to be seen.
+    bool freeIntel = false;
 
     // --- economy -----------------------------------------------------------
     //

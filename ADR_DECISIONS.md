@@ -1485,6 +1485,27 @@ blueprints declare. The remaining nine FA intel types — Omni, Cloak, CloakFiel
 RadarStealth(Field), SonarStealth(Field), Jammer, Spoof — are additions to the same type,
 not a redesign.
 
+**Second pass, and the prediction held for five of the nine.** Omni is a fourth grid;
+RadarStealth (15 units), SonarStealth (9), Cloak (4) and FreeIntel (8) are per-unit FLAGS read
+at contact time, because a stealthed unit is ABSENT from a sense rather than harder to find in
+it — which is why they short-circuit the query instead of shrinking anybody's radius. Omni
+returns `Seen` rather than a blip: what makes it omni is that nothing hides from it, so it
+carries an identity as well as a position, and it is the one query the flags cannot answer
+their way out of.
+
+**Three of the remaining four are a different shape, and one does not exist.** The two stealth
+FIELDS and the jammer act on OTHER units, so they want a second KIND of grid — "who is hidden
+here" rather than "who can see here", and every grid in `Intel.hpp` answers the second
+question; `JamRadius` is also a table in the blueprints rather than a scalar. `WaterVision` is
+read and unused until something is submerged. And **`CloakFieldRadius` appears zero times in
+retail** — the list above named it from Recoil's vocabulary rather than from a count, and only
+`Cloak` on four units is real.
+
+The grid array cost one bug worth recording: `configure` emplaced three grids per alliance
+while every index into it is `alliance * kIntelKindCount + kind` with no bounds check, so
+adding a kind without adding a grid read into the next alliance's block. It surfaced as an
+alliance losing its VISION, which points nowhere near omni. There is an assertion now.
+
 
 ## ADR-038 — An opponent is a command source, and the port says so
 

@@ -362,12 +362,23 @@ void Intel::configure(std::size_t alliances, Fx widthElmos, Fx depthElmos,
     placements_.clear();
     emitters_.clear();
 
+    // ONE GRID PER KIND PER ALLIANCE, IN `IntelKind` ORDER, because every index into this is
+    // `alliance * kIntelKindCount + kind` and nothing bounds-checks it. Adding a kind without
+    // adding a grid here reads and writes past the end of an alliance's block into the next
+    // one's — which is exactly what happened when Omni arrived, and it showed up as an
+    // alliance losing its VISION rather than as anything to do with omni.
     grids_.reserve(alliances * kIntelKindCount);
     for (std::size_t alliance = 0; alliance < alliances; ++alliance) {
-        grids_.emplace_back(widthElmos, depthElmos, kVisionMipLevel);
-        grids_.emplace_back(widthElmos, depthElmos, kRadarMipLevel);
-        grids_.emplace_back(widthElmos, depthElmos, kRadarMipLevel);
+        grids_.emplace_back(widthElmos, depthElmos, kVisionMipLevel);   // Vision
+        grids_.emplace_back(widthElmos, depthElmos, kRadarMipLevel);    // Radar
+        grids_.emplace_back(widthElmos, depthElmos, kRadarMipLevel);    // Sonar
+        // OMNI AT THE VISION MIP, not the radar one. Radar is coarse because radar radii are
+        // an order larger; the shipped omni radii are 16 to 200 ogrids — 128 to 1600 elmos,
+        // mostly at the small end — and an omni return carries an IDENTITY, so it wants the
+        // precision sight has rather than the precision a blip can live with.
+        grids_.emplace_back(widthElmos, depthElmos, kVisionMipLevel);   // Omni
     }
+    assert(grids_.size() == alliances * kIntelKindCount);
 }
 
 const IntelGrid& Intel::grid(int alliance, IntelKind kind) const noexcept {
@@ -457,7 +468,8 @@ void Intel::update(const UnitStore& store, const UnitCatalog& catalog,
         }
 
         const UnitCatalog::IntelRadii& radii = catalog.intel(store.typeAt(slot));
-        const Fx byKind[kIntelKindCount] = {radii.vision, radii.radar, radii.sonar};
+        const Fx byKind[kIntelKindCount] = {radii.vision, radii.radar, radii.sonar,
+                                            radii.omni};
 
         for (std::size_t kind = 0; kind < kIntelKindCount; ++kind) {
             if (byKind[kind] <= kFxZero) {
@@ -531,7 +543,8 @@ namespace {
 
 } // namespace
 
-void contactsFor(int alliance, const UnitStore& store, std::span<const Army> armies,
+void contactsFor(int alliance, const UnitStore& store, const UnitCatalog& catalog,
+                 std::span<const Army> armies,
                  const Intel& intel, TickIndex tick, std::vector<Contact>& contacts,
                  TickRate rate) {
     contacts.clear();
@@ -562,7 +575,32 @@ void contactsFor(int alliance, const UnitStore& store, std::span<const Army> arm
             continue;
         }
 
-        if (intel.sees(alliance, IntelKind::Vision, at.x, at.z)) {
+        // WHAT THIS UNIT HIDES FROM, and what nothing hides from. `freeIntel` first because
+        // a blueprint stating both it and a stealth flag is stating that this particular
+        // object is meant to be seen — a campaign objective does not stop being one because
+        // it also carries `RadarStealth`.
+        const UnitCatalog::IntelRadii& hiding = catalog.intel(store.typeAt(slot));
+        if (hiding.freeIntel) {
+            contacts.push_back(Contact{.unit = store.idAt(slot),
+                                       .x = at.x,
+                                       .z = at.z,
+                                       .kind = ContactKind::Seen});
+            continue;
+        }
+
+        // OMNI BEFORE EVERYTHING, and it is `Seen` rather than a blip: what makes omni omni
+        // is that nothing hides from it, so an omni return carries a position AND an
+        // identity. This is the one query the stealth flags below cannot answer their way
+        // out of, which is the whole reason it is a sense of its own.
+        if (intel.sees(alliance, IntelKind::Omni, at.x, at.z)) {
+            contacts.push_back(Contact{.unit = store.idAt(slot),
+                                       .x = at.x,
+                                       .z = at.z,
+                                       .kind = ContactKind::Seen});
+            continue;
+        }
+
+        if (!hiding.cloak && intel.sees(alliance, IntelKind::Vision, at.x, at.z)) {
             contacts.push_back(Contact{.unit = store.idAt(slot),
                                        .x = at.x,
                                        .z = at.z,
@@ -573,8 +611,12 @@ void contactsFor(int alliance, const UnitStore& store, std::span<const Army> arm
         // RADAR BEFORE SONAR, so a unit both senses reach reads as the one that gives the
         // better picture. They carry the same error today; when sonar gains rules of its
         // own the order is already the one that says which wins.
-        const bool radar = intel.sees(alliance, IntelKind::Radar, at.x, at.z);
-        const bool sonar = !radar && intel.sees(alliance, IntelKind::Sonar, at.x, at.z);
+        // A STEALTHED UNIT IS ABSENT FROM THE SENSE, not harder to find in it — which is why
+        // the flag short-circuits the query rather than shrinking anybody's radius.
+        const bool radar =
+            !hiding.radarStealth && intel.sees(alliance, IntelKind::Radar, at.x, at.z);
+        const bool sonar = !radar && !hiding.sonarStealth
+                        && intel.sees(alliance, IntelKind::Sonar, at.x, at.z);
         if (!radar && !sonar) {
             continue;  // nothing knows it is there
         }

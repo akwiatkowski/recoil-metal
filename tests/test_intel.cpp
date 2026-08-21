@@ -595,7 +595,7 @@ TEST_CASE("an enemy in sight is seen exactly; one on radar alone is a blip") {
     intel.update(store, catalog, armies, nullptr);
 
     std::vector<rm::sim::Contact> contacts;
-    rm::sim::contactsFor(0, store, armies, intel, 0, contacts);
+    rm::sim::contactsFor(0, store, catalog, armies, intel, 0, contacts);
 
     // Its own radar unit, exactly where it is.
     REQUIRE(contacts.size() == 2);
@@ -637,7 +637,7 @@ TEST_CASE("a unit nothing can sense is not a contact at all") {
     intel.update(store, catalog, armies, nullptr);
 
     std::vector<rm::sim::Contact> contacts;
-    rm::sim::contactsFor(0, store, armies, intel, 0, contacts);
+    rm::sim::contactsFor(0, store, catalog, armies, intel, 0, contacts);
 
     REQUIRE(contacts.size() == 1);
     CHECK(contacts[0].kind == rm::sim::ContactKind::Seen);
@@ -660,7 +660,7 @@ TEST_CASE("your own units are contacts wherever they are") {
     intel.update(store, catalog, armies, nullptr);
 
     std::vector<rm::sim::Contact> contacts;
-    rm::sim::contactsFor(0, store, armies, intel, 0, contacts);
+    rm::sim::contactsFor(0, store, catalog, armies, intel, 0, contacts);
 
     REQUIRE(contacts.size() == 1);
     CHECK(contacts[0].kind == rm::sim::ContactKind::Seen);
@@ -686,7 +686,7 @@ TEST_CASE("a blip wanders rather than jumping, and is the same wander every run"
 
     const auto blipAt = [&](rm::TickIndex tick) {
         std::vector<rm::sim::Contact> contacts;
-        rm::sim::contactsFor(0, store, armies, intel, tick, contacts);
+        rm::sim::contactsFor(0, store, catalog, armies, intel, tick, contacts);
         REQUIRE(contacts.size() == 2);
         return contacts[1];
     };
@@ -709,4 +709,188 @@ TEST_CASE("a blip wanders rather than jumping, and is the same wander every run"
     // Same tick, same answer. Deterministic without any stored error vector to keep in sync.
     CHECK(blipAt(20).x == a.x);
     CHECK(blipAt(20).z == a.z);
+}
+
+// --- Stealth, cloak, omni and free intel --------------------------------------
+//
+// The four FA intel types that are a FLAG or a fourth grid rather than a second kind of grid.
+// The two stealth FIELDS and the jammer act on OTHER units, so they are still out — see
+// `IntelKind`'s note — and `CloakFieldRadius` turns out not to exist in retail at all.
+
+namespace {
+
+/// A unit that hides from one sense, or from all of them.
+[[nodiscard]] rm::unitdef::UnitDef hider(bool radarStealth, bool sonarStealth, bool cloak) {
+    rm::unitdef::UnitDef def;
+    def.radarStealth = radarStealth;
+    def.sonarStealth = sonarStealth;
+    def.cloak = cloak;
+    return def;
+}
+
+/// A watcher with a sense of each kind.
+[[nodiscard]] rm::unitdef::UnitDef watcher(float vision, float radar, float sonar, float omni) {
+    rm::unitdef::UnitDef def;
+    def.visionRadiusElmos = vision;
+    def.radarRadiusElmos = radar;
+    def.sonarRadiusElmos = sonar;
+    def.omniRadiusElmos = omni;
+    return def;
+}
+
+/// One alliance's view of a scene: everything it knows about, this tick.
+[[nodiscard]] std::vector<rm::sim::Contact> seenBy(int alliance, const UnitStore& store,
+                                                   const UnitCatalog& catalog,
+                                                   std::span<const Army> armies,
+                                                   const Intel& intel) {
+    std::vector<rm::sim::Contact> contacts;
+    rm::sim::contactsFor(alliance, store, catalog, armies, intel, 0, contacts);
+    return contacts;
+}
+
+} // namespace
+
+TEST_CASE("a radar-stealthed unit is absent from radar, not merely harder to find") {
+    UnitCatalog catalog;
+    // A STATIC, like every other definition here: the catalog holds POINTERS and a temporary
+    // would dangle the moment the call returned. The first draft of this line wrote
+    // `&*std::make_unique<...>(...)`, which is that bug spelled at its most confident.
+    static const rm::unitdef::UnitDef kEye = watcher(0.0f, 400.0f, 0.0f, 0.0f);
+    const rm::UnitTypeIndex eye = catalog.add(&kEye);
+    static const rm::unitdef::UnitDef kQuiet = hider(true, false, false);
+    static const rm::unitdef::UnitDef kLoud = hider(false, false, false);
+    const rm::UnitTypeIndex quiet = catalog.add(&kQuiet);
+    const rm::UnitTypeIndex loud = catalog.add(&kLoud);
+
+    Intel intel;
+    intel.configure(2, Fx::fromInt(512), Fx::fromInt(512), rm::sim::VisionStyle::ForgedAlliance);
+
+    UnitStore store;
+    (void)place(store, eye, 0, 100.0f, 100.0f);
+    (void)place(store, quiet, 1, 140.0f, 100.0f);
+    (void)place(store, loud, 1, 160.0f, 100.0f);
+
+    const std::vector<Army> armies = twoArmies(false);
+    intel.update(store, catalog, armies, nullptr);
+
+    // Both are well inside a 400-elmo radar. Only the one that does not hide from it returns.
+    const auto contacts = seenBy(0, store, catalog, armies, intel);
+    std::size_t hostile = 0;
+    for (const rm::sim::Contact& contact : contacts) {
+        if (contact.isBlip()) {
+            ++hostile;
+        }
+    }
+    CHECK(hostile == 1);
+}
+
+TEST_CASE("a cloaked unit is absent from sight") {
+    UnitCatalog catalog;
+    static const rm::unitdef::UnitDef kEye = watcher(400.0f, 0.0f, 0.0f, 0.0f);
+    static const rm::unitdef::UnitDef kCloaked = hider(false, false, true);
+    const rm::UnitTypeIndex eye = catalog.add(&kEye);
+    const rm::UnitTypeIndex cloaked = catalog.add(&kCloaked);
+
+    Intel intel;
+    intel.configure(2, Fx::fromInt(512), Fx::fromInt(512), rm::sim::VisionStyle::ForgedAlliance);
+
+    UnitStore store;
+    (void)place(store, eye, 0, 100.0f, 100.0f);
+    (void)place(store, cloaked, 1, 140.0f, 100.0f);
+
+    const std::vector<Army> armies = twoArmies(false);
+    intel.update(store, catalog, armies, nullptr);
+
+    // Only the watcher's own unit comes back — the cloaked one is not seen and no other sense
+    // reaches it, so it is ABSENT rather than a blip.
+    const auto contacts = seenBy(0, store, catalog, armies, intel);
+    CHECK(contacts.size() == 1);
+}
+
+TEST_CASE("omni sees a cloaked unit, and sees it as itself") {
+    // THE WHOLE POINT OF OMNI BEING A SENSE RATHER THAN A BIG VISION RADIUS. It defeats every
+    // flag, and what it returns is `Seen` — a position AND an identity — not a blip.
+    UnitCatalog catalog;
+    static const rm::unitdef::UnitDef kEye = watcher(0.0f, 0.0f, 0.0f, 400.0f);
+    static const rm::unitdef::UnitDef kHidden = hider(true, true, true);
+    const rm::UnitTypeIndex eye = catalog.add(&kEye);
+    const rm::UnitTypeIndex hidden = catalog.add(&kHidden);
+
+    Intel intel;
+    intel.configure(2, Fx::fromInt(512), Fx::fromInt(512), rm::sim::VisionStyle::ForgedAlliance);
+
+    UnitStore store;
+    (void)place(store, eye, 0, 100.0f, 100.0f);
+    const rm::sim::UnitId ghost = place(store, hidden, 1, 140.0f, 100.0f);
+
+    const std::vector<Army> armies = twoArmies(false);
+    intel.update(store, catalog, armies, nullptr);
+
+    const auto contacts = seenBy(0, store, catalog, armies, intel);
+    bool found = false;
+    for (const rm::sim::Contact& contact : contacts) {
+        if (contact.unit == ghost) {
+            found = true;
+            CHECK(contact.kind == rm::sim::ContactKind::Seen);
+            CHECK(contact.x == store.transforms()[ghost.index].x);  // exact, not offset
+        }
+    }
+    CHECK(found);
+}
+
+TEST_CASE("omni does not reach past its own radius") {
+    // The counter-test to the one above: it defeats stealth, not distance.
+    UnitCatalog catalog;
+    static const rm::unitdef::UnitDef kEye = watcher(0.0f, 0.0f, 0.0f, 80.0f);
+    static const rm::unitdef::UnitDef kHidden = hider(true, true, true);
+    const rm::UnitTypeIndex eye = catalog.add(&kEye);
+    const rm::UnitTypeIndex hidden = catalog.add(&kHidden);
+
+    Intel intel;
+    intel.configure(2, Fx::fromInt(512), Fx::fromInt(512), rm::sim::VisionStyle::ForgedAlliance);
+
+    UnitStore store;
+    (void)place(store, eye, 0, 100.0f, 100.0f);
+    (void)place(store, hidden, 1, 400.0f, 100.0f);
+
+    const std::vector<Army> armies = twoArmies(false);
+    intel.update(store, catalog, armies, nullptr);
+
+    CHECK(seenBy(0, store, catalog, armies, intel).size() == 1);
+}
+
+TEST_CASE("free intel beats stealth and beats having no sense at all") {
+    // A campaign objective does not stop being one because it also carries `RadarStealth`, and
+    // 8 blueprints declare `FreeIntel` — some of them beside a stealth flag.
+    UnitCatalog catalog;
+    static const rm::unitdef::UnitDef kBlind = watcher(0.0f, 0.0f, 0.0f, 0.0f);
+    static const rm::unitdef::UnitDef kBeacon = [] {
+        rm::unitdef::UnitDef def = hider(true, true, true);
+        def.freeIntel = true;
+        return def;
+    }();
+    const rm::UnitTypeIndex blind = catalog.add(&kBlind);
+    const rm::UnitTypeIndex beacon = catalog.add(&kBeacon);
+
+    Intel intel;
+    intel.configure(2, Fx::fromInt(512), Fx::fromInt(512), rm::sim::VisionStyle::ForgedAlliance);
+
+    UnitStore store;
+    (void)place(store, blind, 0, 100.0f, 100.0f);
+    const rm::sim::UnitId marker = place(store, beacon, 1, 400.0f, 400.0f);
+
+    const std::vector<Army> armies = twoArmies(false);
+    intel.update(store, catalog, armies, nullptr);
+
+    // Nothing on side 0 can see anything, and the beacon hides from every sense. It is still
+    // reported, at its true position.
+    const auto contacts = seenBy(0, store, catalog, armies, intel);
+    bool found = false;
+    for (const rm::sim::Contact& contact : contacts) {
+        if (contact.unit == marker) {
+            found = true;
+            CHECK(contact.kind == rm::sim::ContactKind::Seen);
+        }
+    }
+    CHECK(found);
 }

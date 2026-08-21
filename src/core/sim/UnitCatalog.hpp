@@ -62,6 +62,16 @@ public:
         Fx vision{};
         Fx radar{};
         Fx sonar{};
+        Fx omni{};
+
+        /// Whether this TYPE is absent from a sense, to anyone without omni. Flags rather than
+        /// radii, which is what the blueprints state — see `UnitDef`'s note.
+        bool radarStealth = false;
+        bool sonarStealth = false;
+        bool cloak = false;
+
+        /// Whether everyone always knows where it is. Beats stealth.
+        bool freeIntel = false;
     };
 
     /// What one WEAPON's authored rates come to per tick.

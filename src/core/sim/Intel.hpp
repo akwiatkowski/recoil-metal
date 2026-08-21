@@ -2,6 +2,7 @@
 
 #include "core/Types.hpp"
 #include "core/sim/Fx.hpp"
+#include "core/sim/UnitCatalog.hpp"
 #include "core/sim/IdPool.hpp"
 #include "core/sim/TickRate.hpp"
 
@@ -42,22 +43,32 @@ struct Army;
 
 /// The senses this engine models, and the order they are stored in.
 ///
-/// THREE, NOT FOUR. `UnitDef` also carries a water vision radius, which Forged Alliance
-/// treats as its own sense — but nothing in this sim is submerged yet, so a fourth grid
-/// would have no target to answer about and no test that could tell it from an empty one.
-/// It joins these when there is something under the water to see.
+/// FOUR. `UnitDef` also carries a water vision radius, which Forged Alliance treats as its
+/// own sense — but nothing in this sim is submerged yet, so a fifth grid would have no
+/// target to answer about and no test that could tell it from an empty one. It joins these
+/// when there is something under the water to see.
 ///
-/// Recoil's other four types — air LOS, seismic, and the two jammers — are absent for the
-/// same reason: air LOS needs a distinction between flying and grounded units that the
+/// Recoil's other four types — air LOS, seismic, and the two jammers — are absent for
+/// related reasons: air LOS needs a distinction between flying and grounded units that the
 /// coverage query does not yet make, and a jammer needs the contact rules of ADR-037's
-/// deferred half.
+/// deferred half. FA's stealth FIELDS are absent for a third reason worth keeping separate:
+/// they act on OTHER units, so they are a second kind of grid — "who is hidden here" rather
+/// than "who can see here" — and every grid in this file answers the second question.
 enum class IntelKind : std::uint8_t {
     Vision,
     Radar,
     Sonar,
+
+    /// Sees everything in its radius, cloaked and stealthed alike. 17 units declare a radius.
+    ///
+    /// A GRID OF ITS OWN rather than a flag on the vision grid, because it answers a
+    /// different question at contact time: vision asks "is this square lit", omni asks "is
+    /// this square lit by something nothing can hide from". Merging them would mean either
+    /// stealth defeats omni or stealth defeats nothing.
+    Omni,
 };
 
-inline constexpr std::size_t kIntelKindCount = 3;
+inline constexpr std::size_t kIntelKindCount = 4;
 
 /// Whether terrain blocks sight, which is a question about which game this is.
 enum class VisionStyle : std::uint8_t {
@@ -337,7 +348,8 @@ inline constexpr Seconds kBlipDriftPeriod = Seconds{0.5f};
 /// in sync. The visible difference is that ours revisits the same wander given the same
 /// unit and tick, which for a thing whose whole purpose is to be untrustworthy is not a
 /// property anyone can exploit.
-void contactsFor(int alliance, const UnitStore& store, std::span<const Army> armies,
+void contactsFor(int alliance, const UnitStore& store, const UnitCatalog& catalog,
+                 std::span<const Army> armies,
                  const Intel& intel, TickIndex tick, std::vector<Contact>& contacts,
                  TickRate rate = TickRate{});
 

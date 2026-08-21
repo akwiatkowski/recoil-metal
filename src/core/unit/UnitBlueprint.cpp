@@ -96,6 +96,20 @@ constexpr float kAnyDepthElmos = 100000.0f;
     return value ? static_cast<float>(*value) : fallback;
 }
 
+/// A boolean field, defaulting to false.
+///
+/// `false` FOR A MISSING KEY AND FOR AN EXPLICIT `false` ALIKE, which is what these flags
+/// mean: `FreeIntel = false` appears in the corpus beside `FreeIntel = true`, and a blueprint
+/// saying so is saying the same thing as one that says nothing.
+[[nodiscard]] bool flagAt(const lua::Value& table, std::string_view key) noexcept {
+    const lua::Value* value = table.find(key);
+    if (value == nullptr) {
+        return false;
+    }
+    const std::optional<bool> flag = value->asBoolean();
+    return flag.value_or(false);
+}
+
 /// The unit id a blueprint's file name carries: `UEL0201_unit.bp` -> `UEL0201`.
 ///
 /// The file name is the authority because nothing inside is: not one of the 568
@@ -188,6 +202,14 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
             numberOr(*intel, "WaterVisionRadius", 0.0f) * scmap::kElmosPerOgrid;
         def.radarRadiusElmos = numberOr(*intel, "RadarRadius", 0.0f) * scmap::kElmosPerOgrid;
         def.sonarRadiusElmos = numberOr(*intel, "SonarRadius", 0.0f) * scmap::kElmosPerOgrid;
+        def.omniRadiusElmos = numberOr(*intel, "OmniRadius", 0.0f) * scmap::kElmosPerOgrid;
+
+        // The flags, which are not radii and are not scaled. See UnitDef.hpp on why a
+        // stealthed unit is absent from a sense rather than harder to find in it.
+        def.radarStealth = flagAt(*intel, "RadarStealth");
+        def.sonarStealth = flagAt(*intel, "SonarStealth");
+        def.cloak = flagAt(*intel, "Cloak");
+        def.freeIntel = flagAt(*intel, "FreeIntel");
     }
 
     // --- size --------------------------------------------------------------

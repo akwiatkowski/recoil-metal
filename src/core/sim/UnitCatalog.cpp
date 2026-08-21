@@ -28,6 +28,11 @@ UnitTypeIndex UnitCatalog::add(const unitdef::UnitDef* def, TickRate rate) {
         intel.vision = fxFromFloat(def->visionRadiusElmos);
         intel.radar = fxFromFloat(def->radarRadiusElmos);
         intel.sonar = fxFromFloat(def->sonarRadiusElmos);
+        intel.omni = fxFromFloat(def->omniRadiusElmos);
+        intel.radarStealth = def->radarStealth;
+        intel.sonarStealth = def->sonarStealth;
+        intel.cloak = def->cloak;
+        intel.freeIntel = def->freeIntel;
     }
     intel_.push_back(intel);
 

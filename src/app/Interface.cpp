@@ -31,7 +31,7 @@ void appendMinimapBlips(std::vector<rm::ui::MinimapPip>& out, const UnitScene& s
         return;  // an observer sees units, not guesses about them
     }
 
-    rm::sim::contactsFor(viewer, scene.store, scene.armies, scene.intel,
+    rm::sim::contactsFor(viewer, scene.store, scene.catalog, scene.armies, scene.intel,
                          scene.snapshotCurrent.tick, scratch);
 
     for (const rm::sim::Contact& contact : scratch) {
