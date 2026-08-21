@@ -3,6 +3,7 @@
 #include "core/Types.hpp"
 #include "core/sim/Fx.hpp"
 #include "core/sim/IdPool.hpp"
+#include "core/sim/TickRate.hpp"
 
 #include <array>
 #include <cstddef>
@@ -313,13 +314,14 @@ struct Contact {
 /// (`LosHandler.h:322`), 96 elmos.
 inline constexpr std::int32_t kRadarErrorElmos = 96;
 
-/// How many ticks a blip's error direction holds before it drifts to the next one.
+/// How long a blip's error direction holds before it drifts to the next one.
 ///
-/// Recoil re-picks the direction every `UNIT_SLOWUPDATE_RATE` frames and slides toward it at
-/// 1/256 a frame. Ours is stated in TICKS at this engine's own rate rather than in frames at
-/// Recoil's, for the reason `SlowUpdate.hpp` gives at length: a period authored in someone
-/// else's frames is a period that silently changes meaning when the clock does.
-inline constexpr int kBlipDriftTicks = 15;
+/// IN SECONDS, and the first draft of this wrote 15 ticks — which is Recoil's
+/// `UNIT_SLOWUPDATE_RATE`, a count of ITS frames at ITS 30 Hz. At our 10 Hz the same number
+/// would mean 1.5 seconds, three times the wander it describes, and the comment beside it
+/// claimed to have avoided exactly that. `check_no_tick_literals.sh` caught it, which is
+/// the whole reason PLAN2 §5.1 asks for a script rather than for care.
+inline constexpr Seconds kBlipDriftPeriod = Seconds{0.5f};
 
 /// Everything `alliance` knows about right now, appended to `contacts` in slot order.
 ///
@@ -336,6 +338,7 @@ inline constexpr int kBlipDriftTicks = 15;
 /// unit and tick, which for a thing whose whole purpose is to be untrustworthy is not a
 /// property anyone can exploit.
 void contactsFor(int alliance, const UnitStore& store, std::span<const Army> armies,
-                 const Intel& intel, TickIndex tick, std::vector<Contact>& contacts);
+                 const Intel& intel, TickIndex tick, std::vector<Contact>& contacts,
+                 TickRate rate = TickRate{});
 
 } // namespace rm::sim

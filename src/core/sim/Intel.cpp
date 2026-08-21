@@ -503,10 +503,14 @@ namespace {
 }
 
 /// Where an alliance thinks a blip is: the truth plus a drifting offset.
-[[nodiscard]] std::pair<Fx, Fx> blipPosition(UnitId unit, Fx x, Fx z,
-                                             TickIndex tick) noexcept {
-    const auto bucket = static_cast<std::uint32_t>(tick / kBlipDriftTicks);
-    const auto within = static_cast<std::int32_t>(tick % kBlipDriftTicks);
+[[nodiscard]] std::pair<Fx, Fx> blipPosition(UnitId unit, Fx x, Fx z, TickIndex tick,
+                                             TickRate rate) noexcept {
+    // The period in ticks, derived from the rate rather than written down — §5.1. `ticks`
+    // floors at one, so an absurd rate degrades to a fresh direction every tick rather than
+    // to a division by zero.
+    const auto period = static_cast<TickIndex>(rate.ticks(kBlipDriftPeriod));
+    const auto bucket = static_cast<std::uint32_t>(tick / period);
+    const auto within = static_cast<std::int32_t>(tick % period);
 
     // Between this bucket's direction and the next, so the blip WANDERS rather than
     // teleporting every fifteenth tick — which is what Recoil's 1/256-per-frame slide
@@ -514,7 +518,7 @@ namespace {
     // flickering one.
     const Brad from = blipAngle(unit, bucket);
     const Brad to = blipAngle(unit, bucket + 1);
-    const Fx blend = Fx::fromInt(within) / Fx::fromInt(kBlipDriftTicks);
+    const Fx blend = Fx::fromInt(within) / Fx::fromInt(static_cast<std::int32_t>(period));
 
     const Fx radius = Fx::fromInt(kRadarErrorElmos);
     const Fx fromX = fxCos(from) * radius;
@@ -528,7 +532,8 @@ namespace {
 } // namespace
 
 void contactsFor(int alliance, const UnitStore& store, std::span<const Army> armies,
-                 const Intel& intel, TickIndex tick, std::vector<Contact>& contacts) {
+                 const Intel& intel, TickIndex tick, std::vector<Contact>& contacts,
+                 TickRate rate) {
     contacts.clear();
 
     const std::span<const Transform> transforms = store.transforms();
@@ -574,7 +579,7 @@ void contactsFor(int alliance, const UnitStore& store, std::span<const Army> arm
             continue;  // nothing knows it is there
         }
 
-        const auto [x, z] = blipPosition(store.idAt(slot), at.x, at.z, tick);
+        const auto [x, z] = blipPosition(store.idAt(slot), at.x, at.z, tick, rate);
         contacts.push_back(Contact{.unit = store.idAt(slot),
                                    .x = x,
                                    .z = z,

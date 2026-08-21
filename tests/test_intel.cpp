@@ -392,9 +392,16 @@ rm::sim::UnitId place(UnitStore& store, rm::UnitTypeIndex type, int army, float 
     return store.spawn(spawn);
 }
 
-/// How far a blip may move in one tick. Two full radii over fifteen ticks is the worst the
+/// The drift period at the default clock, derived the way the sim derives it.
+[[nodiscard]] int blipDriftTicks() {
+    return static_cast<int>(rm::sim::TickRate{}.ticks(rm::sim::kBlipDriftPeriod));
+}
+
+/// How far a blip may move in one tick. Two full radii over one period is the worst the
 /// interpolation can do, so anything near that is drift and anything above it is a jump.
-constexpr int kRadarErrorStepBound = 2 * rm::sim::kRadarErrorElmos / rm::sim::kBlipDriftTicks + 2;
+[[nodiscard]] int radarErrorStepBound() {
+    return 2 * rm::sim::kRadarErrorElmos / blipDriftTicks() + 2;
+}
 
 } // namespace
 
@@ -690,11 +697,11 @@ TEST_CASE("a blip wanders rather than jumping, and is the same wander every run"
     const rm::sim::Contact a = blipAt(20);
     const rm::sim::Contact b = blipAt(21);
     const Fx step = rm::sim::fxSqrt((b.x - a.x) * (b.x - a.x) + (b.z - a.z) * (b.z - a.z));
-    CHECK(step < Fx::fromInt(kRadarErrorStepBound));
+    CHECK(step < Fx::fromInt(radarErrorStepBound()));
 
     // And over a whole bucket it really does move — a "drift" that stood still would pass
     // the check above trivially.
-    const rm::sim::Contact later = blipAt(20 + 15);
+    const rm::sim::Contact later = blipAt(20 + static_cast<rm::TickIndex>(blipDriftTicks()));
     const Fx travelled = rm::sim::fxSqrt((later.x - a.x) * (later.x - a.x)
                                          + (later.z - a.z) * (later.z - a.z));
     CHECK(travelled > Fx::fromInt(1));
