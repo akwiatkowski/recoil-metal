@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/sim/Fx.hpp"
+#include "core/sim/IdPool.hpp"
 
 #include <vector>
 
@@ -42,6 +43,19 @@ struct Health {
     /// rhythm, and where each of them is within its burst is exactly the state that keeps them
     /// apart (PLAN2.md §7 P3.5).
     std::vector<int> burstRemaining;
+
+    /// The unit that last took health off this one, or an unset handle.
+    ///
+    /// THE INSTIGATOR a `UnitDestroyed` event names (§7 P6.1). Recoil passes an attacker triple
+    /// with its own `UnitDestroyed` (`04 §4.2`); this is the same fact in one handle, since the
+    /// army and the definition are both reachable from it.
+    ///
+    /// May be STALE by the time it is read — a shot's killer can die on the same tick — and that
+    /// is correct rather than a defect: it is a name for who did it, not a way back to a live
+    /// unit, and a generational handle says so at the point of use. Left in place across a death
+    /// so the death event can name the killer; cleared when the slot is reused, like the order
+    /// queue.
+    UnitId lastHitBy{};
 
     [[nodiscard]] bool alive() const noexcept { return current > Mag{}; }
 };

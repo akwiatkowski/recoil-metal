@@ -5,6 +5,7 @@
 #include "core/sim/Combat.hpp"
 #include "core/sim/Command.hpp"
 #include "core/sim/Economy.hpp"
+#include "core/sim/Events.hpp"
 #include "core/sim/Movement.hpp"
 #include "core/sim/UnitCatalog.hpp"
 #include "core/sim/UnitStore.hpp"
@@ -59,6 +60,20 @@ struct Match {
     /// the tick, because `tickEconomy` is documented to be given one army's work and
     /// charging the wrong one is a caller's mistake to avoid.
     std::vector<Construction>* building = nullptr;
+
+    /// Where the tick reports what happened, or null (§7 P6.1).
+    ///
+    /// CALLER-OWNED, APPEND-ONLY FROM HERE, and **the caller clears it**. The tick used to clear
+    /// it at the top, which was wrong for a reason that took a manual check to see: the caller
+    /// raises events of its own — `UnitCreated` when it spawns, `ConstructionStarted` when its
+    /// scripted opponent orders a build — and some of those happen BEFORE the tick. Clearing
+    /// inside the tick threw those away, so two event kinds were declared, emitted, and never
+    /// once observable. A queue's lifetime belongs to whoever knows where the frame boundary is,
+    /// and that is not the sim.
+    ///
+    /// Null for a scene with nothing listening — a `--units` crowd, a pathfinding harness, most
+    /// tests — in which case every emit is one branch.
+    EventQueue* events = nullptr;
 
     /// The grid each unit TYPE routes on, indexed by `UnitTypeIndex`. Entries may be null.
     ///

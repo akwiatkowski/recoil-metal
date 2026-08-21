@@ -46,7 +46,7 @@ namespace {
 [[nodiscard]] bool startCommand(const Command& command, UnitStore& store,
                                 const UnitCatalog& catalog, const Terrain& terrain,
                                 const PassabilityGrid& grid, TickRate rate,
-                                std::vector<Construction>* building);
+                                std::vector<Construction>* building, EventQueue* events);
 
 /// Whether an order is finished the moment it is started.
 ///
@@ -98,7 +98,7 @@ bool operator==(const Command& a, const Command& b) noexcept {
 bool applyCommand(const Command& command, UnitStore& store, const UnitCatalog& catalog,
                   std::span<const Player> players, std::span<const Army> armies,
                   const Terrain& terrain, const PassabilityGrid& grid, TickRate rate,
-                  std::vector<Construction>* building, bool queued) {
+                  std::vector<Construction>* building, bool queued, EventQueue* events) {
     // A stale handle first, before anything else looks at the slot. A player may click a unit
     // that died on the tick their order was issued, and a replay of an old log may name a unit
     // that no longer exists — in both cases the generation has moved on, so this must not
@@ -121,7 +121,7 @@ bool applyCommand(const Command& command, UnitStore& store, const UnitCatalog& c
     // the rest of the route already means. It clears and stops.
     if (command.kind == CommandKind::Stop) {
         orders.clear();
-        return startCommand(command, store, catalog, terrain, grid, rate, building);
+        return startCommand(command, store, catalog, terrain, grid, rate, building, events);
     }
 
     if (queued) {
@@ -136,7 +136,7 @@ bool applyCommand(const Command& command, UnitStore& store, const UnitCatalog& c
             motion.path.clear();
             motion.pathIndex = 0;
             if (const Command* next = orders.current()) {
-                (void)startCommand(*next, store, catalog, terrain, grid, rate, building);
+                (void)startCommand(*next, store, catalog, terrain, grid, rate, building, events);
             }
             return true;
         }
@@ -154,7 +154,7 @@ bool applyCommand(const Command& command, UnitStore& store, const UnitCatalog& c
     // A PLAIN ORDER IS ROUTED BEFORE IT IS QUEUED, so that a refused one changes nothing at
     // all — not even clearing the queue. That is what keeps "a refused order is not part of the
     // match" true, and it is why this cannot simply be `give` followed by `startCommand`.
-    if (!startCommand(command, store, catalog, terrain, grid, rate, building)) {
+    if (!startCommand(command, store, catalog, terrain, grid, rate, building, events)) {
         return false;
     }
     (void)orders.give(command, false);
@@ -169,7 +169,7 @@ bool applyCommand(const Command& command, UnitStore& store, const UnitCatalog& c
 
 std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Terrain& terrain,
                           std::span<const PassabilityGrid* const> gridForType, TickRate rate,
-                          std::vector<Construction>* building) {
+                          std::vector<Construction>* building, EventQueue* events) {
     std::size_t started = 0;
 
     const std::span<CommandQueue> orders = store.orders();
@@ -198,7 +198,7 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
         const Command* next = orders[slot].finish();
         while (next != nullptr) {
             const bool wasInstant = instantaneous(next->kind);
-            if (startCommand(*next, store, catalog, terrain, *grid, rate, building)) {
+            if (startCommand(*next, store, catalog, terrain, *grid, rate, building, events)) {
                 ++started;
                 if (!wasInstant) {
                     break;
@@ -215,7 +215,7 @@ namespace {
 
 bool startCommand(const Command& command, UnitStore& store, const UnitCatalog& catalog,
                   const Terrain& terrain, const PassabilityGrid& grid, TickRate rate,
-                  std::vector<Construction>* building) {
+                  std::vector<Construction>* building, EventQueue* events) {
     // By SLOT, not by handle: `advanceOrders` starts an order for a slot it has already found
     // to be live, and a `Build` started for a unit that died this tick would charge a dead
     // army. The handle check belongs to `applyCommand`, where a stale handle is the ordinary
@@ -279,6 +279,13 @@ bool startCommand(const Command& command, UnitStore& store, const UnitCatalog& c
             .buildPerTick = rate.magPerTick(builder->buildRate),
             .blueprintIndex = command.buildType,
         });
+        emit(events, Event{
+                         .kind = EventKind::ConstructionStarted,
+                         .instigator = command.unit,
+                         .army = store.motion()[command.unit.index].armyIndex,
+                         .amount = def->buildCostMass,
+                         .at = {command.targetX, Fx{}, command.targetZ},
+                     });
         return true;
     }
     }

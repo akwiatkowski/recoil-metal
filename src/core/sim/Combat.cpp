@@ -278,7 +278,8 @@ std::size_t aimAtTargets(UnitStore& store, const UnitCatalog& catalog,
 
 std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
                         std::span<const Army> armies,
-                        std::vector<Projectile>& projectiles, TickRate rate) {
+                        std::vector<Projectile>& projectiles, TickRate rate,
+                        EventQueue* events) {
     std::size_t fired = 0;
 
     const std::span<const Transform> transforms = store.transforms();
@@ -344,8 +345,18 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
             // per-second figures (§5.1).
             const UnitCatalog::WeaponRates& rates =
                 catalog.weaponRates(store.typeAt(slot), w);
-            projectiles.push_back(launch(from, to, weapon, army, rate, rates.muzzlePerTick));
+            projectiles.push_back(
+                launch(from, to, weapon, army, rate, rates.muzzlePerTick, store.idAt(slot)));
             ++fired;
+
+            emit(events, Event{
+                             .kind = EventKind::WeaponFired,
+                             .unit = store.idAt(slot),
+                             .instigator = *target,
+                             .army = army,
+                             .amount = weapon.damage,
+                             .at = from,
+                         });
 
             // THE BURST (§7 P3.5). A trigger-pull owes `burstSize` shots: the gap after any but
             // the last of them is the burst delay, and only the last one starts a real reload.
@@ -372,8 +383,10 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
 }
 
 Projectile launch(std::array<Fx, 3> from, std::array<Fx, 3> to,
-                  const unitdef::Weapon& weapon, int byArmy, TickRate rate, Fx muzzlePerTick) {
+                  const unitdef::Weapon& weapon, int byArmy, TickRate rate, Fx muzzlePerTick,
+                  UnitId firedBy) {
     Projectile shot;
+    shot.firedBy = firedBy;
     shot.position = {from[0], from[1] + kMuzzleHeight, from[2]};
     shot.damage = weapon.damage;
     shot.damageRadiusElmos = weapon.damageRadius;
@@ -422,7 +435,8 @@ Projectile launch(std::array<Fx, 3> from, std::array<Fx, 3> to,
 }
 
 Mag damageArea(std::array<Fx, 3> centre, Fx radiusElmos, Mag damage, int byArmy,
-               UnitStore& store, std::span<const Army> armies) {
+               UnitStore& store, std::span<const Army> armies, UnitId by,
+               EventQueue* events) {
     Mag dealt{};
 
     const std::span<const Transform> transforms = store.transforms();
@@ -465,13 +479,30 @@ Mag damageArea(std::array<Fx, 3> centre, Fx radiusElmos, Mag damage, int byArmy,
         const Mag applied = std::min(healths[slot].current, wanted);
         healths[slot].current -= applied;
         dealt += applied;
+
+        // WHO DID IT, recorded on the unit rather than carried in the event alone — because the
+        // event that needs it most is the DEATH, and a death is noticed a pass later by
+        // `retireDead`, which sees only that health reached zero. Overwritten by each hit, so
+        // the kill goes to whoever landed the last blow: the same rule Recoil's attacker triple
+        // follows, and the only one that does not need a damage ledger per unit.
+        healths[slot].lastHitBy = by;
+
+        emit(events, Event{
+                         .kind = EventKind::UnitDamaged,
+                         .unit = store.idAt(slot),
+                         .instigator = by,
+                         .army = armyAt(store, slot),
+                         .amount = applied,
+                         .at = positionOf(transforms[slot]),
+                     });
     }
 
     return dealt;
 }
 
 void advanceProjectiles(std::vector<Projectile>& projectiles, UnitStore& store,
-                        std::span<const Army> armies, const Terrain& terrain, TickRate rate) {
+                        std::span<const Army> armies, const Terrain& terrain, TickRate rate,
+                        EventQueue* events) {
     const Fx gravityPerTickSquared = projectileGravityPerTickSquared(rate);
 
     for (Projectile& shot : projectiles) {
@@ -511,8 +542,16 @@ void advanceProjectiles(std::vector<Projectile>& projectiles, UnitStore& store,
         } else {
             shot.position[1] = ground;
         }
+        emit(events, Event{
+                         .kind = EventKind::ProjectileImpact,
+                         .unit = struck ? store.idAt(*struck) : UnitId{},
+                         .instigator = shot.firedBy,
+                         .army = shot.firedByArmy,
+                         .amount = shot.damage,
+                         .at = shot.position,
+                     });
         damageArea(shot.position, shot.damageRadiusElmos, shot.damage, shot.firedByArmy, store,
-                   armies);
+                   armies, shot.firedBy, events);
         shot.ticksRemaining = 0;
     }
 
@@ -532,7 +571,8 @@ const unitdef::Weapon* deathWeapon(const unitdef::UnitDef& def) noexcept {
 }
 
 Mag explodeOnDeath(const unitdef::UnitDef& def, std::array<Fx, 3> at, int byArmy,
-                     UnitStore& store, std::span<const Army> armies) {
+                     UnitStore& store, std::span<const Army> armies, UnitId by,
+                     EventQueue* events) {
     const unitdef::Weapon* blast = deathWeapon(def);
     if (blast == nullptr || !blast->harmful()) {
         return Mag{};
@@ -546,13 +586,14 @@ Mag explodeOnDeath(const unitdef::UnitDef& def, std::array<Fx, 3> at, int byArmy
     if (blast->hasRings()) {
         Mag dealt{};
         dealt += damageArea(at, blast->outerRingRadius, blast->outerRingDamage, byArmy,
-                            store, armies);
+                            store, armies, by, events);
         dealt += damageArea(at, blast->innerRingRadius, blast->innerRingDamage, byArmy,
-                            store, armies);
+                            store, armies, by, events);
         return dealt;
     }
 
-    return damageArea(at, blast->damageRadius, blast->damage, byArmy, store, armies);
+    return damageArea(at, blast->damageRadius, blast->damage, byArmy, store, armies, by,
+                      events);
 }
 
 std::vector<UnitId> deadUnits(const UnitStore& store) {

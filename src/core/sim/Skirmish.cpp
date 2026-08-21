@@ -16,7 +16,7 @@ namespace {
 /// zeroes it, so a corpse is reported exactly once however many ticks it then sits
 /// there. Without that a dead unit would set off its death explosion every tick
 /// forever, which is both a wrong answer and an unbounded one.
-void retireDead(UnitStore& store, TickReport& report) {
+void retireDead(UnitStore& store, TickReport& report, EventQueue* events) {
     const std::span<Transform> transforms = store.transforms();
     const std::span<MoveState> motion = store.motion();
     const std::span<const Health> healths = store.health();
@@ -37,6 +37,18 @@ void retireDead(UnitStore& store, TickReport& report) {
             .at = positionOf(transforms[slot]),
             .radiusElmos = motion[slot].radiusElmos,
         });
+
+        // EXACTLY ONCE PER DEATH, which is the property §7 P6.1's test asserts — and it is this
+        // loop's `radiusElmos > 0` guard that provides it, not anything about events. A corpse
+        // sits in its slot for the rest of the match; without the guard it would be reported
+        // every tick forever, which is both a wrong answer and an unbounded one.
+        emit(events, Event{
+                         .kind = EventKind::UnitDestroyed,
+                         .unit = store.idAt(slot),
+                         .instigator = healths[slot].lastHitBy,
+                         .army = motion[slot].armyIndex,
+                         .at = positionOf(transforms[slot]),
+                     });
 
         // The scale that used to be zeroed here belonged to `UnitInstance`, which the store no
         // longer holds — a corpse is left out of the draw gather instead, which is both
@@ -192,7 +204,7 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
     //    without a gap the player can see. First in the tick for the same reason the scripted
     //    opponents decide first: an order started this tick should move this tick.
     report.ordersStarted = advanceOrders(store, catalog, terrain, match.passability, rate,
-                                         match.building);
+                                         match.building, match.events);
 
     // 1. MOVEMENT, then collisions. Everything downstream reads where a unit has got to
     //    this tick rather than where it started it.
@@ -228,14 +240,15 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
     // 3. FIRE, fly, land.
     if (match.projectiles != nullptr) {
         report.shotsFired =
-            fireWeapons(store, catalog, match.armies, *match.projectiles, rate);
-        advanceProjectiles(*match.projectiles, store, match.armies, terrain, rate);
+            fireWeapons(store, catalog, match.armies, *match.projectiles, rate, match.events);
+        advanceProjectiles(*match.projectiles, store, match.armies, terrain, rate,
+                           match.events);
     }
 
     // 4. The dead, then their explosions, then the defeated. In that order: an army
     //    whose commander died to a shot that landed this tick is defeated this tick, not
     //    next, and an ACU's detonation is enormous enough to decide the tick it goes off.
-    retireDead(store, report);
+    retireDead(store, report, match.events);
 
     // 99 of the 494 shipped weapons are `WeaponCategory = 'Death'` — a blast with no
     // target and no rate of fire. This is where they finally go off.
@@ -253,14 +266,35 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
         if (def == nullptr || deathWeapon(*def) == nullptr) {
             continue;
         }
+        // ATTRIBUTED TO THE CORPSE, by handle as well as by army — so a unit killed by a
+        // commander's detonation names the commander, and the chain of a base going up reads
+        // as a chain rather than as a crowd dying of nothing.
         report.deathBlastDamage += explodeOnDeath(*def, death.at,
                                                  store.motion()[slot].armyIndex, store,
-                                                 match.armies);
+                                                 match.armies, death.ref, match.events);
         ++report.deathBlasts;
     }
 
     const std::vector<int> alive = countCommanders(store, catalog, match.armies.size());
+    const std::vector<bool> defeatedBefore = [&match] {
+        std::vector<bool> before;
+        before.reserve(match.armies.size());
+        for (const Army& army : match.armies) {
+            before.push_back(army.defeated);
+        }
+        return before;
+    }();
     report.defeated = applyDefeats(match.armies, alive, match.commandersEver);
+
+    // WHICH armies fell, not just how many. `applyDefeats` returns a count, which is all the
+    // report ever needed; an event has to name the army, so the flags are compared either side
+    // of the call rather than by changing a function four tests assert the return value of.
+    for (std::size_t i = 0; i < match.armies.size() && i < defeatedBefore.size(); ++i) {
+        if (match.armies[i].defeated && !defeatedBefore[i]) {
+            emit(match.events, Event{.kind = EventKind::TeamDefeated,
+                                     .army = match.armies[i].index});
+        }
+    }
 
     if (!match.over) {
         const std::size_t left = survivorCount(match.armies);
@@ -268,6 +302,10 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
             match.over = true;
             report.matchEnded = true;
             report.winner = winningAlliance(match.armies);
+            // A draw is an ordinary outcome — every commander dying at once — so the event
+            // carries `kNoArmy` rather than being suppressed.
+            emit(match.events, Event{.kind = EventKind::GameOver,
+                                     .army = report.winner.value_or(kNoArmy)});
         }
     }
 
@@ -306,6 +344,13 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
                 ++next;
                 if (!wasFinished && work.finished()) {
                     report.finished.push_back(work);
+                    emit(match.events,
+                         Event{.kind = EventKind::ConstructionFinished,
+                               .army = work.armyIndex,
+                               .amount = work.cost.mass,
+                               .at = {fxFromFloat(work.position[0]),
+                                      fxFromFloat(work.position[1]),
+                                      fxFromFloat(work.position[2])}});
                 }
             }
         }

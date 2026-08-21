@@ -1171,6 +1171,10 @@ struct UnitScene {
     /// Shots in flight.
     std::vector<rm::sim::Projectile> projectiles;
 
+    /// What the sim reported this tick (§7 P6.1). Owned here and handed to `Match`, like the
+    /// projectile list — cleared by the tick, so nothing accumulates.
+    rm::sim::EventQueue events;
+
     /// One economy per army, indexed by army. Empty outside a skirmish.
     std::vector<rm::sim::Economy> economies;
 
@@ -1939,6 +1943,17 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
         .health = rm::sim::Health{.current = def.health, .maximum = def.health},
     });
 
+    // `UnitCreated` is THE CALLER'S to raise (§7 P6.1). The sim never spawns a unit — a spawn
+    // needs a model out of the VFS, which is exactly the line the sim does not cross — so this
+    // is the one event kind that cannot come from a pass. Raised here rather than at each of
+    // the three spawn sites, because this is the one that loads content.
+    scene.events.emit(rm::sim::Event{
+        .kind = rm::sim::EventKind::UnitCreated,
+        .unit = id,
+        .army = motion.armyIndex,
+        .at = {transform.x, transform.y, transform.z},
+    });
+
     // The store may have grown its arrays, so any span into them is stale — which for the
     // sim means the caller-side tick has to re-read them, and for the renderer means the
     // draw gather has to run again before the batch spans are trusted.
@@ -2684,6 +2699,28 @@ struct MarchOptions {
     return applied;
 }
 
+// `issueBuild` used to live here, and it is worth recording why it does not.
+//
+// THE HOLE: builds do NOT go through `applyCommand`, so a build order skips the authorisation
+// check, leaves no entry in the command log, and has its `ConstructionStarted` raised by the
+// caller rather than by the sim. `check_one_order_path.sh` does not catch it because that watches
+// the movement primitives, and this is a different one. **So P4.2's "every order goes through
+// applyCommand" is true of MOVEMENT and not of construction** — a correction to what that
+// commit claimed.
+//
+// WHY THE OBVIOUS FIX DOES NOT WORK, which is the useful part. Routing them was written, and it
+// broke the match completely — zero shots, zero units built past the first extractor. The cause
+// is two index spaces wearing one type name: `resolveBuildable` returns an index into
+// `scene.buildable` typed as `rm::UnitTypeIndex`, while `applyCommand` reads
+// `catalog.def(command.buildType)`. So a build order for a 36-mass extractor arrived as an
+// 18,000-mass experimental, and the economy never paid it off. P3's note that "an index is a
+// `UnitTypeIndex` now, which the catalog also uses" is true inside the sim and false in the app.
+//
+// Unifying them properly is not a small change: the catalog's index space is ALSO the draw
+// batch's — `resolveUnits` asserts `type == batches.size()` — so registering a buildable type
+// before anything of it spawns would break the draw path. It belongs with P7's snapshot seam,
+// where the sim's type index stops being the renderer's batch index.
+
 /// The player driving an army, or none. What `issueMove` needs to attribute an order.
 [[nodiscard]] rm::PlayerIndex playerDriving(const UnitScene& scene, int army) {
     for (const rm::sim::Player& player : scene.players) {
@@ -2708,11 +2745,21 @@ struct Standing {
     bool commanderAlive = false;
     std::array<rm::sim::Fx, 3> commanderPosition{};
     float commanderBuildRate = 0.0f;
+
+    /// WHICH commander, not just where it is (§7 P6.1). A build order is issued BY a unit, and
+    /// the sim needs the builder's handle to check it can build, charge the right army and name
+    /// the instigator in a `ConstructionStarted` event.
+    rm::sim::UnitId commander{};
+
     std::size_t extractors = 0;
     std::size_t powerGenerators = 0;
     std::size_t factories = 0;
     std::array<rm::sim::Fx, 3> factoryPosition{};
     float factoryBuildRate = 0.0f;
+
+    /// The factory that builds this army's units, for the same reason.
+    rm::sim::UnitId factory{};
+
     std::vector<rm::sim::UnitId> tanks;
 };
 
@@ -2739,6 +2786,7 @@ struct Standing {
             standing.commanderAlive = true;
             standing.commanderPosition = rm::sim::positionOf(transforms[slot]);
             standing.commanderBuildRate = def->buildRate;
+            standing.commander = scene.store.idAt(slot);
         } else {
             // BY ROLE, not by blueprint id (P3.3). These were four `def->name == "UEB1103"`
             // comparisons, which is why the census only recognised UEF structures: a Cybran
@@ -2754,6 +2802,7 @@ struct Standing {
                 ++standing.factories;
                 standing.factoryPosition = rm::sim::positionOf(transforms[slot]);
                 standing.factoryBuildRate = def->buildRate;
+                standing.factory = scene.store.idAt(slot);
                 break;
             case rm::unitdef::Role::Raider:
             case rm::unitdef::Role::Assault:
@@ -2959,10 +3008,12 @@ void runOpponents(UnitScene& scene, const rm::vfs::Vfs& content, const rm::Heigh
                     resolveBuildable(scene, content, blueprint);
                 if (blueprintIndex) {
                     const rm::unitdef::UnitDef& def = scene.buildable[*blueprintIndex];
+                    // NOT THROUGH `applyCommand`, and that is a known hole rather than a
+                    // preference — see `issueBuild`'s note. `Construction::blueprintIndex`
+                    // indexes `scene.buildable`, and `applyCommand` reads `catalog.def()`:
+                    // two index spaces wearing one type name.
                     scene.building.push_back(rm::sim::Construction{
                         .armyIndex = army.index,
-                        // `Construction::position` is the caller's float triple still — see
-                        // the note at the factory's construction below.
                         .position = {rm::sim::fxToFloat((*site)[0]),
                                      rm::sim::fxToFloat((*site)[1]),
                                      rm::sim::fxToFloat((*site)[2])},
@@ -2971,6 +3022,15 @@ void runOpponents(UnitScene& scene, const rm::vfs::Vfs& content, const rm::Heigh
                         .totalBuildTime = def.buildTime,
                         .buildPerTick = gAppTickRate.magPerTick(standing.commanderBuildRate),
                         .blueprintIndex = *blueprintIndex,
+                    });
+                    // The event the sim would have raised, raised by the caller instead, so a
+                    // consumer sees the same vocabulary whichever path created the work.
+                    scene.events.emit(rm::sim::Event{
+                        .kind = rm::sim::EventKind::ConstructionStarted,
+                        .instigator = standing.commander,
+                        .army = army.index,
+                        .amount = def.buildCostMass,
+                        .at = *site,
                     });
                     std::printf("  [%6.1fs] army %d starts %.*s\n",
                                 static_cast<double>(elapsedSeconds), army.index,
@@ -2989,10 +3049,6 @@ void runOpponents(UnitScene& scene, const rm::vfs::Vfs& content, const rm::Heigh
                 const rm::unitdef::UnitDef& def = scene.buildable[*blueprintIndex];
                 scene.building.push_back(rm::sim::Construction{
                     .armyIndex = army.index,
-                    // `Construction::position` is still a float triple: it is where the
-                    // CALLER wants a thing put, and it migrates with the order system in
-                    // P2.5. Converted back here rather than the field changing type, so the
-                    // two migrations stay separable.
                     .position = {rm::sim::fxToFloat(standing.factoryPosition[0]),
                                  rm::sim::fxToFloat(standing.factoryPosition[1]),
                                  rm::sim::fxToFloat(standing.factoryPosition[2])},
@@ -3001,6 +3057,13 @@ void runOpponents(UnitScene& scene, const rm::vfs::Vfs& content, const rm::Heigh
                     .totalBuildTime = def.buildTime,
                     .buildPerTick = gAppTickRate.magPerTick(standing.factoryBuildRate),
                     .blueprintIndex = *blueprintIndex,
+                });
+                scene.events.emit(rm::sim::Event{
+                    .kind = rm::sim::EventKind::ConstructionStarted,
+                    .instigator = standing.factory,
+                    .army = army.index,
+                    .amount = def.buildCostMass,
+                    .at = standing.factoryPosition,
                 });
             }
         }
@@ -3123,6 +3186,7 @@ struct MatchRunner {
                 .economies = scene.economies,
                 .projectiles = &scene.projectiles,
                 .building = &scene.building,
+                .events = &scene.events,
                 .commandersEver = scene.commandersEver,
                 .baseStorage = kStartingStorage,
                 // Seeded from the scene rather than defaulted to false, using the same
@@ -3149,8 +3213,37 @@ struct MatchRunner {
 ///
 /// `tickIndex` paces the opponents' decisions; `now` is passed through to them for their
 /// own logging and reaches nothing in the sim, which counts in ticks and not in seconds.
+/// `--print-events`: dump every event the sim raises, as it raises it.
+///
+/// §7 P6.1's stated manual check, and the cheapest possible consumer of the queue — which is the
+/// point of it being the manual check. If this reads clearly, the seam is the right shape; if it
+/// needs to reach back into the store to make sense of an event, the event is missing a field.
+///
+/// A file-scope flag rather than a parameter threaded through `advanceMatch`, for the same
+/// reason `gAppTickRate` is one and with the same accounting: it is read once per tick in the
+/// app, it changes nothing in the sim, and P7.5 moves this code out of `main.mm` entirely.
+bool gPrintEvents = false;
+
+void printEvents(const rm::sim::EventQueue& events, float now) {
+    for (const rm::sim::Event& event : events.all()) {
+        std::printf("  [%6.1fs] %-21s unit %u.%u by %u.%u army %d amount %.0f at %.0f,%.0f\n",
+                    static_cast<double>(now),
+                    std::string{rm::sim::eventKindName(event.kind)}.c_str(),
+                    event.unit.index, event.unit.generation, event.instigator.index,
+                    event.instigator.generation, event.army,
+                    static_cast<double>(rm::sim::magToFloat(event.amount)),
+                    static_cast<double>(rm::sim::fxToFloat(event.at[0])),
+                    static_cast<double>(rm::sim::fxToFloat(event.at[2])));
+    }
+}
+
 rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) {
     UnitScene& scene = runner.scene;
+
+    // THE TICK'S EVENTS START HERE, not inside `tickSkirmish`. The caller raises some of them
+    // itself — the opponents' build orders below, and `UnitCreated` when a finished construction
+    // becomes a unit — so the boundary has to be the caller's tick, which is this function.
+    scene.events.clear();
 
     // The routing table the sim uses to advance queued orders, refreshed for whatever types the
     // catalog now holds. `gridFor` is memoised on the LIMITS, so this is a map lookup per type
@@ -3227,6 +3320,19 @@ rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) 
         const auto spawned = spawnUnit(scene, runner.content, runner.field,
                                        scene.buildablePaths[work.blueprintIndex],
                                        work.position, scene.armies[army], yaw);
+        // `UnitFinished` after `UnitCreated`, which `spawnUnit` raised: the pair is Recoil's
+        // (`04 §4.2` — `UnitCreated` then `UnitFinished` when the build completes) and the
+        // distinction matters to anything that treats a built unit differently from one placed
+        // at match start. Both come from the caller, because both need the model to exist.
+        if (spawned) {
+            scene.events.emit(rm::sim::Event{
+                .kind = rm::sim::EventKind::UnitFinished,
+                .unit = *spawned,
+                .army = work.armyIndex,
+                .amount = work.cost.mass,
+                .at = fxPoint(work.position),
+            });
+        }
         if (spawned && scene.buildable[work.blueprintIndex].isMobile()) {
             // Off the factory floor: straight to the fight once the wave has gone, to the
             // rally point outside the base while it forms.
@@ -3257,6 +3363,14 @@ rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) 
     // after the call. The store hands out spans on demand instead, so a grown array is
     // simply a longer span next time somebody asks.
     scene.grewThisTick = false;
+
+    // LAST, so the dump is the whole tick: the sim's own events and then the caller's
+    // `UnitCreated`/`UnitFinished`, in the order they happened. Printed before the caller-side
+    // work at first, which meant the two kinds only the caller can raise were emitted after the
+    // print and cleared by the next tick — declared, emitted, and never once observable.
+    if (gPrintEvents) {
+        printEvents(scene.events, now);
+    }
 
     return report;
 }
@@ -3989,6 +4103,9 @@ int main(int argc, const char* argv[]) {
             setAppTickRate(static_cast<std::uint32_t>(requested));
             std::printf("sim: %u ticks a second\n", gAppTickRate.ticksPerSecond());
         }
+
+        // `--print-events`: narrate the sim's own event queue (§7 P6.1's manual check).
+        gPrintEvents = hasFlag(argc, argv, "--print-events");
 
         // `--dump-weapon <ID>`: print and exit. Before the map, because a weapon's timings have
         // nothing to do with terrain and requiring a `.scmap` to read a blueprint would make

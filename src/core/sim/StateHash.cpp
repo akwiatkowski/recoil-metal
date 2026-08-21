@@ -138,6 +138,13 @@ void feedHealth(StateHash& h, const Health& health) noexcept {
     for (const int remaining : health.burstRemaining) {
         feed(h, remaining);
     }
+
+    // WHO LAST HIT IT. State, not provenance — unlike a command's issuing player, this decides
+    // something: it is the instigator a `UnitDestroyed` event names, and a consumer that awards
+    // a kill, plays a sound or scores a match reads it. Two runs that disagree about who is
+    // shooting whom have diverged, whatever the health totals say.
+    feed(h, static_cast<std::size_t>(health.lastHitBy.index));
+    feed(h, static_cast<std::size_t>(health.lastHitBy.generation));
 }
 
 /// A unit's outstanding orders (§7 P4.1).

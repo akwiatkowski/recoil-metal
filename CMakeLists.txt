@@ -101,6 +101,7 @@ add_library(rm_core STATIC
     src/core/scene/Particles.cpp
     src/core/sim/Army.cpp
     src/core/sim/Command.cpp
+    src/core/sim/Events.cpp
     src/core/sim/CommandQueue.cpp
     src/core/sim/Combat.cpp
     src/core/sim/BuildOrder.cpp
@@ -195,6 +196,7 @@ if(BUILD_TESTING)
         tests/test_players.cpp
         tests/test_command.cpp
         tests/test_command_queue.cpp
+        tests/test_events.cpp
         tests/test_build_order.cpp
         tests/test_combat.cpp
         tests/test_economy.cpp

@@ -5,6 +5,7 @@
 #include "core/sim/Fx.hpp"
 #include "core/sim/IdPool.hpp"
 #include "core/sim/Economy.hpp"
+#include "core/sim/Events.hpp"
 #include "core/sim/Pathfinding.hpp"
 #include "core/sim/Terrain.hpp"
 #include "core/sim/TickRate.hpp"
@@ -141,7 +142,7 @@ struct Command {
                                 std::span<const Army> armies, const Terrain& terrain,
                                 const PassabilityGrid& grid, TickRate rate,
                                 std::vector<Construction>* building = nullptr,
-                                bool queued = false);
+                                bool queued = false, EventQueue* events = nullptr);
 
 /// Starts the next order for every unit that has finished its current one.
 ///
@@ -163,7 +164,8 @@ struct Command {
 /// grid is missing is left alone rather than routed on somebody else's.
 std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Terrain& terrain,
                           std::span<const PassabilityGrid* const> gridForType, TickRate rate,
-                          std::vector<Construction>* building = nullptr);
+                          std::vector<Construction>* building = nullptr,
+                          EventQueue* events = nullptr);
 
 // --- The log --------------------------------------------------------------------------
 //

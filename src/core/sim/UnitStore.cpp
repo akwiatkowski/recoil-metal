@@ -27,6 +27,11 @@ UnitId UnitStore::spawn(const Spawn& request) {
     // something new moves in. A queue left behind would have the newcomer inherit the dead
     // unit's route — the same class of bug `UnitId`'s generation exists to prevent.
     orders_[slot].clear();
+    // And the same for who last hit the PREVIOUS occupant: `request.health` sets the fresh
+    // unit's own, but a caller that leaves it unset would have the newcomer already remember
+    // being shot by whoever killed its predecessor. Set from the request so an explicit value
+    // still wins.
+    health_[slot].lastHitBy = request.health.lastHitBy;
     generations_[slot] = id.generation;
     return id;
 }

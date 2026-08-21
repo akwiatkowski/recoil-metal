@@ -1,6 +1,7 @@
 #pragma once
 
-#include "core/scene/UnitPlacement.hpp"
+#include "core/map/HeightField.hpp"
+#include "core/sim/Events.hpp"
 #include "core/sim/Army.hpp"
 #include "core/sim/Health.hpp"
 #include "core/sim/TickRate.hpp"
@@ -44,6 +45,11 @@ struct Projectile {
     /// Fixed point, carried straight from the weapon that fired it.
     Mag damage{};
     Fx damageRadiusElmos{};
+
+    /// WHICH UNIT fired it, for the `UnitDamaged`/`UnitDestroyed` events a hit produces
+    /// (§7 P6.1). May be stale by the time the shot lands — a duel where both sides die on the
+    /// same tick is ordinary — so it is a name for the shooter rather than a way back to one.
+    UnitId firedBy{};
 
     /// Who fired it, so a shot cannot kill its own side — checked at impact rather than
     /// at launch, because a unit may change hands between the two.
@@ -176,7 +182,8 @@ std::size_t aimAtTargets(UnitStore& store, const UnitCatalog& catalog,
 /// a lifetime in ticks and that number is only meaningful against a rate (§5.1).
 std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
                         std::span<const Army> armies,
-                        std::vector<Projectile>& projectiles, TickRate rate);
+                        std::vector<Projectile>& projectiles, TickRate rate,
+                        EventQueue* events = nullptr);
 
 /// Moves every projectile one tick, applies what lands, and removes what is spent.
 ///
@@ -184,7 +191,8 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
 /// ground — not when it collides with a model, because instances are points here and
 /// their geometry is neither known nor cheap to test.
 void advanceProjectiles(std::vector<Projectile>& projectiles, UnitStore& store,
-                        std::span<const Army> armies, const Terrain& terrain, TickRate rate);
+                        std::span<const Army> armies, const Terrain& terrain, TickRate rate,
+                        EventQueue* events = nullptr);
 
 /// Gravity's pull on an arced shot, in elmos per tick per tick.
 ///
@@ -204,7 +212,7 @@ void advanceProjectiles(std::vector<Projectile>& projectiles, UnitStore& store,
 /// authored per second, and only a clock turns that into a distance a shot covers in a tick.
 [[nodiscard]] Projectile launch(std::array<Fx, 3> from, std::array<Fx, 3> to,
                                 const unitdef::Weapon& weapon, int byArmy, TickRate rate,
-                                Fx muzzlePerTick);
+                                Fx muzzlePerTick, UnitId firedBy = {});
 
 /// Spreads `damage` over everything within `radiusElmos` of `centre`, and returns how
 /// much was dealt in total.
@@ -217,8 +225,13 @@ void advanceProjectiles(std::vector<Projectile>& projectiles, UnitStore& store,
 /// because a fraction of a blast radius is geometry. The two meet in one multiply, which is
 /// the only place the types mix — and it is exact rather than a rescale, since both use the
 /// same number of fractional bits.
+/// `by` and `events` are OPTIONAL and trail the signature deliberately: they are how a hit
+/// becomes a `UnitDamaged` event naming its instigator (§7 P6.1), and defaulting them keeps the
+/// two dozen existing call sites — most of them tests asserting the falloff curve — unchanged.
+/// A caller that passes neither gets exactly the old behaviour and no events.
 Mag damageArea(std::array<Fx, 3> centre, Fx radiusElmos, Mag damage, int byArmy,
-               UnitStore& store, std::span<const Army> armies);
+               UnitStore& store, std::span<const Army> armies, UnitId by = {},
+               EventQueue* events = nullptr);
 
 /// The unit's own destruction, if its definition describes one.
 ///
@@ -239,7 +252,8 @@ Mag damageArea(std::array<Fx, 3> centre, Fx radiusElmos, Mag damage, int byArmy,
 /// argument. Noted rather than hidden: a commander detonating in a friendly crowd should be
 /// a catastrophe and here it is merely an inconvenience.
 Mag explodeOnDeath(const unitdef::UnitDef& def, std::array<Fx, 3> at, int byArmy,
-                     UnitStore& store, std::span<const Army> armies);
+                     UnitStore& store, std::span<const Army> armies, UnitId by = {},
+                     EventQueue* events = nullptr);
 
 /// Which units died this tick, so a caller can leave wreckage and check for a defeat.
 [[nodiscard]] std::vector<UnitId> deadUnits(const UnitStore& store);
