@@ -83,6 +83,10 @@ immediately — it found a real defect in `hashMatch`, which could not see a uni
 | **D9** | **Default tick rate 10 Hz**, since the content we import is FA-authored. The knob (5–50 Hz) covers everything else | 2026-08-20 | §5.1 |
 | **D10** | **Feature work is frozen** until P0–P2 land. Milestones onto the current shape while P1 dismantles it means doing that work twice | 2026-08-20 | §7 |
 | **D11** | **P0 is authorized and started** | 2026-08-20 | §7 |
+| **D12** | **Damage is per armour class, stored sparsely; classes are names in the data and a dense index in the tick.** Both content families flatten to one runtime shape and differ only in the importer | 2026-08-21 | `ADR-033`, §7 P10.1 |
+| **D13** | **A projectile varies by a TAG, not by a subclass.** The flat trivially-copyable struct is load-bearing — it is what the state hash walks — so both reference engines' hierarchies are refused | 2026-08-21 | `ADR-034`, §7 P10.3 |
+| **D14** | **Pathfinding is built in layers and this is a STAGING POST.** Cost field, then shared flow fields, then a dynamic blocking overlay. The final architecture is deliberately deferred until the engine can measure its own pathing | 2026-08-21 | `ADR-035`, §7 P10.4 |
+| **D15** | **Parallelism may reorder WORK, never RESULTS.** Fork-join, per-slot writes, application in slot order. The tick's pass order is never parallelised | 2026-08-21 | `ADR-036`, §7 P10.6 |
 
 Still open: §9 — Q3 (snapshot copy vs `drawPos + timeOffset`) and Q4 (success criterion).
 
@@ -1194,6 +1198,94 @@ README, and the sentence is not worth the day yet.
 What would thaw it: a second machine to run it on, or a reason to trust the number more than
 the design — a networked game, a shared replay, anyone else's hardware.
 
+### P10 — Depth: what an RTS needs that this sim cannot yet express
+
+**WHY THIS PHASE EXISTS.** §2's Sim row reads 73 %, and that number is honest about
+*foundations* and quietly optimistic about *gameplay*. A review against Recoil on 2026-08-21
+(`REVIEW.md`) separated the two: the foundations — fixed point, no globals, generational
+handles, a declared pass order, a spatial index — are at or above 73 % and in four places
+beat the reference engine outright. The gameplay surface is nearer 25 %, and the gap is not
+spread evenly. It is four specific things, each of which makes the next one cheaper, and
+three of which get **much more expensive to retrofit the longer they wait**.
+
+**THE ORDER IS RETROFIT COST, not value.** Damage goes first not because armour classes are
+the most exciting feature but because every combat call site grows an argument, and there are
+fewer of those today than there will ever be again.
+
+- [ ] **P10.0 The float ban's blind spot.** `check_no_sim_floats.sh` finds floats by grepping
+      for the *tokens* `float` and `double` in declaring position, so it cannot see a
+      *conversion call* — and there is one, in the sim, on the determinism-critical path:
+      `Command.cpp` builds `Construction::position` with `fxToFloat`, and `StateHash.cpp`
+      then feeds that triple as raw IEEE bits. Not a live desync (an `int32`-to-`float`
+      conversion is IEEE-defined and reproducible), but §2 says the sim is "fixed point END
+      TO END (enforced)" and it is not quite: one float triple survives, and the guard
+      structurally cannot see the code that fills it. Widen the pattern to catch
+      `fxToFloat`/`static_cast<float>`, then finish P2.5 and make the field `array<Fx, 3>`.
+      *Test:* the check itself, with a deliberately added conversion as a negative case.
+      *Manual:* `make verify` MATCHes — this must move no hashes.
+
+- [ ] **P10.1 Armour classes and the damage profile** (`ADR-033`, D12). `ArmorRegistry`
+      interning sorted case-folded names to a dense `uint8`; `DamageProfile` as a base `Mag`
+      plus a short inline override list; `damageArea` taking a profile with the existing
+      `Mag` signature kept as a wrapper so the two dozen falloff tests are untouched.
+      Importers: BAR's `damage = {class = n}` reads directly, FA's
+      `[ArmorType][DamageType] -> multiplier` is transposed and flattened at parse.
+      *Test:* the FA matrix round-trips — an Overcharge shot does quarter damage to a
+      `Structure` and full damage to `Normal`; an unknown class name falls back to `default`
+      rather than to zero. *Manual:* `--dump-weapons` shows a commander's Overcharge with its
+      overrides listed.
+
+- [ ] **P10.2 Shields, as an armour class.** Nearly free once P10.1 lands, because that is
+      how Recoil does it — `PlasmaRepulser.cpp:201-202` reads
+      `damageArray.Get(weaponDef->shieldArmorType)`, so a shield is not a special case in the
+      damage path at all. *Test:* a weapon with a shield-class override is absorbed at a
+      different rate than the same weapon against the hull. *Manual:* a shielded unit under
+      fire.
+
+- [ ] **P10.3 Projectile kinds** (`ADR-034`, D13). A `ProjectileKind` tag and a flags
+      bitmask on the same flat struct: tracking, torpedo and semi-ballistic motion, a
+      target-layer mask, `targetable`/`interceptor` bitmasks, and a proximity fuse — which is
+      one field here and does not exist in Recoil at all (`13 §1.5`). *Test:* an
+      anti-missile intercepts a tactical and ignores a torpedo; a proximity-fused AA shell
+      detonates above its target. *Manual:* the state hash still walks a `Projectile` with no
+      visitor — if it needs one, D13 has been broken.
+
+- [ ] **P10.4 A cost field, not binary passability** (`ADR-035` layer 1, D14). One byte per
+      cell per motion class; 0 impassable, otherwise a speed divisor. Fixes the current rule
+      on its own: `buildPassability` marks a 64-elmo cell impassable if *any* of its 64
+      squares is. *Test:* a route through a gap that the binary grid refuses. *Manual:* a
+      unit crosses a bridge one square wide.
+
+- [ ] **P10.5 Shared flow fields and a dynamic blocking overlay** (`ADR-035` layers 2-3).
+      Integer Dijkstra from the goal, goals snapped to a coarse cell so nearby clicks share
+      one field, LRU cached; static terrain cost and dynamic blocking kept as separate layers
+      so a placed building dirties only the fields whose region it touches. Removes the
+      per-unit stored path, and with it a variable-length run from the state hash.
+      *Test:* fifty units to one point compute **one** field, and a building placed across a
+      route makes the units go round rather than through. *Manual:* `--bench` — this should
+      show up as a drop, not a wash.
+
+- [ ] **P10.6 Threading, path work first** (`ADR-036`, D15). Fork-join, per-slot writes,
+      application in slot order, pool sized to the *performance*-core count. *Test:* the
+      replay hash is identical single-threaded and multi-threaded, and identical across two
+      different pool sizes — that equality **is** the test, and if it ever fails the rule in
+      D15 has been broken somewhere. *Manual:* `--bench` at 5,000 units.
+
+**WHAT IS DELIBERATELY NOT IN THIS PHASE.** *Intel — LOS, radar, fog of war.* It is the next
+largest sim gap and the one that makes scouting exist, but it is genuinely phase-sized on its
+own: it gates targeting, it filters the event stream (`Events.hpp` already documents that
+Recoil nils an attacker triple the receiver cannot see), it is per-player so it lives in the
+snapshot (`Snapshot.hpp` already predicted this), and it wants P10.6 to exist first because
+an LOS bitmap per team restamped on movement is exactly the shape fork-join is for. It gets
+its own ADR and its own phase.
+
+**AND THE PATHFINDING HERE IS A STAGING POST, on purpose** (D14). P10.4 and P10.5 are chosen
+to be individually useful and individually replaceable. The hierarchical layer for sparse
+single-unit queries — HPA*, or Recoil's HAPFS shape — is the intended next layer and is
+*not* being designed now: `16 §3a` warns that pathing has the worst ratio of lines to months
+in the genre, and the honest position is that this engine cannot yet measure its own pathing
+well enough to choose. Revisit with numbers, not with a preference.
+
 ---
 
 ## 8. Content targets — what "playable" means concretely
@@ -1326,8 +1418,16 @@ redone to get there.
 What would thaw it: a second machine, or a reason to trust the number more than the design — a
 networked game, a shared replay, anyone else's hardware.
 
-**So what is next is not a phase of PLAN2.** In rough order of what the §2 reading says is
-missing, and each is a phase-sized piece of work rather than a task:
+**What is next IS a phase of PLAN2 now: §7 P10**, written 2026-08-21 after a review against
+Recoil (`REVIEW.md`) which separated two things §2's Sim row had been averaging together. The
+foundations are at or above their 73 % and beat the reference engine in four places — fixed
+point, no globals, generational handles, the pass order. The gameplay surface is nearer 25 %,
+and P10 is the four things that close it: armour classes, projectile kinds, a pathing cost
+field with shared flow fields, and the first threading. **Ordered by retrofit cost rather than
+by value** — damage is first because every combat call site grows an argument and there are
+fewer of those today than there ever will be again.
+
+The items below are still real and still unscheduled; they are what P10 is *not*:
 
 1. **Sound — System is 16 % of the weight at 35 %, with nothing at all.** No mixer, no
    listener, no per-unit cue. Both games ship their audio in formats the VFS already mounts. It
@@ -1338,9 +1438,11 @@ missing, and each is a phase-sized piece of work rather than a task:
    of movement only. P7.1's snapshot is what makes fixing it possible — the sim's type index no
    longer has to be the renderer's batch index — and it is now a bounded job rather than a
    blocked one.
-3. **Pathfinding at 40 %:** coarse-grid A* with no hierarchy, no dynamic blocking and no
-   formations. A rally order still walks twenty units into each other and lets collision sort
-   it out.
+3. **Formations, and the hierarchical pathing layer.** The rest of pathfinding's 40 % moved
+   into P10.4 and P10.5 — the cost field and shared flow fields. What stays out of scope
+   there is deliberate: a rally order still walks twenty units into each other and lets
+   collision sort it out, and D14 says the hierarchical layer is chosen with measurements
+   rather than now.
 4. **The rest of the UI:** a build tray, control groups, a selection roster, order queues drawn
    in the world. The minimap was the hard one because it needed the snapshot; these need only
    the primitives the HUD already has.

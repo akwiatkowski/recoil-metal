@@ -1246,3 +1246,202 @@ portability no one can use yet, and trades a working renderer for a regression h
 **Consequences.** The real porting cost is the shaders, not the API layer, and it
 grows with every MSL line written — which is accepted and bounded by the confinement
 rule. The RHI decision date is a milestone boundary, not a surprise.
+
+## ADR-033 — Damage is a sparse profile keyed by an armour class resolved at load
+
+**Context.** A weapon deals one scalar (`unitdef::Weapon::damage`, a `Mag`), so every unit
+is a damage-per-second number and unit composition cannot matter. Recoil's `DamageArray`
+(`Sim/Misc/DamageArray.h`) holds one figure **per armour class**; the class names are
+interned by `CDamageArrayHandler` from `gamedata/armordefs.lua`. Supreme Commander models
+the same idea transposed: a unit declares `Defense.ArmorType`, a weapon declares
+`DamageType`, and `lua/armordefinition.lua` holds `[ArmorType][DamageType] -> multiplier`.
+Both corpora must import.
+
+**Decision.** One runtime shape — **absolute damage per armour class, stored sparsely** —
+with the two content families differing only in the importer. A `DamageProfile` is a base
+`Mag` plus a short inline list of `{ArmorClass, Mag}` overrides; `against(armor)` is a
+linear scan of that list falling back to the base. Armour classes are **names in the data
+and a dense `std::uint8_t` index in the tick**, resolved once at load by an `ArmorRegistry`
+built from a sorted, case-folded name list, with index 0 reserved for `default`.
+
+Measured from `reference/FAF-fa/lua/armordefinition.lua:48-118`, which is what makes the
+sparse form the right one rather than a guess: the whole game's matrix is **8 armour
+classes x 9 damage types with exactly 10 non-1.0 entries and 4 distinct values**
+(0.0, 0.032, 0.25, 0.55). An unlisted pair means 1.0 — `Experimental` lists only
+`ExperimentalFootfall 0.0`, and Experimental units are plainly not immune to everything
+else. Flattening the matrix into weapons at import therefore leaves **about 16 of the 494
+shipped weapons carrying any override at all**; the other 478 are a bare scalar, exactly
+what they are today. (Report `02 §9.6` estimates "~6 non-1.0 multipliers"; counted directly
+it is 10 entries. The conclusion it draws is unaffected and correct.)
+
+`paralyzeSeconds` rides on the profile from the start rather than being retrofitted: FA has
+`EMP` and `Stun` damage types and Recoil has `paralyzeDamageTime` in the same struct, and
+paralysis is an accumulator rather than a subtraction, so it cannot be bolted onto a `Mag`.
+
+**Alternatives considered.** *Keep FA's shape — weapon carries `damage` + `damageType`, a
+global matrix is consulted at impact* — preserves the authored structure, but costs a
+matrix lookup per damage event, and BAR/Recoil content has no damage types at all, so BAR
+import would have to invent a synthetic one per weapon. *Copy `DamageArray` literally* —
+`std::vector<float> damages` is a heap allocation per weapon def and a pointer chase per
+lookup, for a table that is empty in 97% of cases. *A hash map keyed by class name* —
+rejected on the same grounds `IdPool` rejects Recoil's `SimObjectIDPool`: hash-container
+iteration order is a determinism hazard, and a string hash in the damage inner loop at
+5,000 units is real cost for no expressiveness.
+
+*First-seen interning order for class indices* — rejected in favour of sorting. Recoil
+sorts its key list (`DamageArrayHandler.cpp:43-45`) so the numbering is a function of the
+*set* of names rather than of load order; that property is worth more here than there,
+because the replay hash is the project's success criterion.
+
+**Consequences.** Every damage call site grows an armour-class argument, which is why this
+lands before more weapons exist rather than after. Shields become nearly free once it
+exists: Recoil implements a shield as *just another armour class*
+(`PlasmaRepulser.cpp:201-202` reads `damageArray.Get(weaponDef->shieldArmorType)`), and
+that unification is worth inheriting.
+
+We diverge from Recoil in one place deliberately: **armour class names are folded to lower
+case.** `14-blueprint-census.md §8.7` measured `Structure` (222 units) against `STRUCTURE`
+(1 unit) — the same class spelled two ways. Recoil's case-sensitive `armordefs.lua` would
+hand that one unit a private armour class with no multipliers defined. Folding costs a
+`tolower` at load and removes a silent content bug.
+
+## ADR-034 — Projectiles vary by a motion tag, not by a class hierarchy
+
+**Context.** There is one `Projectile` struct with one straight-or-arced advance
+(`core/sim/Combat.hpp`), which cannot express AA, torpedoes, tracking missiles, nukes or
+interception. Recoil's answer is a `CWeapon` hierarchy of fifteen classes plus a parallel
+projectile hierarchy — 4,757 and 6,655 lines. Supreme Commander's is a four-layer Lua class
+tree over 306 projectile blueprints.
+
+**Decision.** Neither hierarchy. A `ProjectileKind` **tag plus a flags bitmask** on the same
+flat, trivially copyable struct, dispatched by a `switch` in `advanceProjectiles`.
+
+The evidence that the hierarchies are mostly not about simulation is in the corpus.
+`13-projectiles-effects.md §2.1` classifies all 306 SupCom projectile leaves by root class:
+**91 `MultiPolyTrail`, 73 `SinglePolyTrail`, 57 `Emitter`** — differences in what is
+*drawn*, not in what is *simulated*, and that report's own conclusion is that such a leaf
+"becomes one line in a weapondef: `cegTag = ...`". The axes that genuinely change the sim
+are few: motion (straight / ballistic / tracking / semi-ballistic / torpedo), target-layer
+mask, interception, splitting, and a proximity fuse.
+
+**Alternatives considered.** *Virtual dispatch, as both reference engines use* — rejected
+on two grounds, and the second is the load-bearing one. It is an indirect call per
+projectile per tick at a target of thousands in flight; and it destroys the property
+`Combat.hpp` already has and the whole thesis depends on, that a projectile is a fixed-size
+trivially copyable value which the state hash can walk and a log can record. A polymorphic
+projectile is not hashable without a visitor per subclass. **This is a case where the
+existing design's instinct is right and both reference engines are wrong for our goals**,
+and it is recorded so a later reader does not "fix" it toward Recoil.
+
+*Model beams as short-lived projectiles* — rejected. A beam is instantaneous; it is a ray
+query in the firing pass that applies damage at once and emits an event carrying its
+endpoints, with nothing entering the projectile list. Keeping that list homogeneous is what
+keeps the `switch` cheap and the hash simple.
+
+**Consequences.** Interception is copied from Recoil rather than from FA: a `targetable`
+bitmask on the projectile and an `interceptor` bitmask on the weapon
+(`WeaponProjectile.cpp:428-431`). FA expresses the same rule as Lua predicate code
+(`lua/sim/Projectile.lua:214` — torpedoes die only to `ANTITORPEDO`, tacticals only to
+`ANTIMISSILE`, and only if `other.OriginalTarget == self`); the bitmask is that rule made
+data, which is D6.
+
+One capability goes beyond both engines because it is nearly free here: a **proximity
+fuse**. `13 §1.5` records that nine FA blueprints use `DetonateAboveHeight` and that "there
+is no Recoil proximity fuse" — a BAR import has to approximate it with a gadget. For us it
+is one field and one comparison per tick.
+
+## ADR-035 — Pathfinding: a cost field and shared flow fields, hierarchical A* deferred
+
+**Context.** Routing is one uniform 64-elmo grid with 8-connected A* per unit
+(`core/sim/Pathfinding.hpp`), with no cost model, no cache, no dynamic blocking and no
+sharing — fifty units ordered to one point run fifty full searches. Recoil ships two
+pathfinders totalling 16,325 lines, and `16-new-engine-feasibility.md §3a` explains why:
+"Pathing is where RTS engines go to die... Recoil has two pathfinders because the first one
+was not good enough after a decade."
+
+**Decision.** Build in layers, cheapest first, and **treat this ADR as a staging post
+rather than the answer** — the layers below are chosen to be individually useful and
+individually replaceable, and the choice of a final architecture is deliberately deferred
+until the engine can measure its own pathing.
+
+1. **A cost field, not binary passability.** One byte per cell per motion class where 0 is
+   impassable and otherwise the value is a speed divisor. This is a prerequisite for
+   everything else and it fixes the current design's worst artefact on its own:
+   `buildPassability` marks a 64-elmo cell impassable if *any* of its 64 squares is, which
+   will refuse legitimate routes through tight gaps as soon as maps get crowded. A cost
+   lets a partly-blocked cell be expensive instead.
+2. **Flow fields, shared per destination.** Integer Dijkstra from the goal over the cost
+   field, yielding a per-cell direction; goals snapped to a coarse cell so nearby clicks
+   share one field; LRU cached. This is the direct answer to fifty-searches-for-one-order,
+   it removes the per-unit stored path (and with it a variable-length run in the state
+   hash), and it parallelises as one worker per field.
+3. **A dynamic blocking overlay**, kept separate from static terrain cost, so a placed
+   building dirties only the fields whose region it touches.
+4. **Local avoidance by unit density folded into the field cost** before anything more
+   elaborate — integer, deterministic, and no new subsystem.
+
+Deterministic by the same rule the current A* already follows: integer costs with ties
+broken on cell index (`Pathfinding.hpp:102-105`).
+
+**Alternatives considered.** *JPS / JPS+* — a large constant-factor win, but valid only on
+**uniform-cost** grids; layer 1 above makes costs non-uniform, so it is ruled out on
+purpose and recorded here so the idea is not re-derived. *Navmesh (Recast/Detour)* —
+float-heavy, hard to make bit-deterministic, and poorly matched to grid-aligned building
+footprints; note that FAF's own 1,918-line Lua navmesh (`12 §1.4`) exists because Moho's
+pathfinder is *opaque*, which is a workaround rather than an endorsement. *QTPFS-style
+quadtree first* — Recoil built it because HAPFS was not good enough after a decade; two
+pathfinders is not a starting position. *Hierarchical A* (HPA*, Botea/Müller/Schaeffer
+2004) first* — the right layer for sparse single-unit queries and the intended layer 5, but
+it is the wrong thing to build before the cost field exists.
+
+**Consequences.** Flow fields are wasteful when one unit wants to go somewhere, which is
+exactly what the deferred hierarchical layer is for; until it exists, a threshold on
+shared-goal count decides which path is taken and the sparse case pays a full field.
+
+Worth knowing that this is not exotic and that the content is already calibrated for it:
+`12-moho-api-surface.md:827` documents Supreme Commander's own pathfinder LOD switch at 50
+ogrids — "personal per-unit waypoints" close in, "waypoints shared by many units" far out.
+FA already routes crowds on shared paths.
+
+## ADR-036 — Parallelism may reorder work, never results
+
+**Context.** The engine is single-threaded — no `std::thread`, `std::async` or
+`dispatch_*` anywhere in `src/` — on a machine with 10 to 14 cores, against a 5,000-unit
+target. Recoil multithreads path requests (`UnitHandler.h:88-90`) and parts of rendering.
+
+**Decision.** Fork-join only, under one rule stated so it can be checked:
+
+> Parallelism may change **when** work happens. It may never change **what order results
+> are applied in.**
+
+Concretely: fan out read-only work; each worker writes only to its own pre-sized slot,
+indexed by unit slot; join; apply in slot order. No shared mutable state, no atomic that
+decides a value, no work-stealing whose schedule can reach a result.
+
+Ranked by value: path and flow-field computation first (it can leave the tick entirely,
+with results applied at one named point); then targeting, which is a read-only query over
+the spatial grid writing one answer per unit; then the snapshot-to-instance gather, which
+is unsynced and needs none of this discipline; then the spatial grid rebuild; and last
+damage and collision, which must compute in parallel and apply in slot order.
+
+**The tick's pass order is explicitly not parallelised.** `Skirmish.hpp` documents why each
+pass must follow the last; overlapping ticks is a determinism trap, not an optimisation.
+
+**Alternatives considered.** *A general task graph over the whole tick* — the dependency
+chain in `tickSkirmish` is genuinely serial, so the achievable win is intra-pass and the
+graph would be scaffolding around one shape. *Threading now* — rejected on measurement
+grounds, not principle: a fork-join barrier costs on the order of 5-20 us and the passes
+at present unit counts do not. The trigger is a measured pass exceeding ~100 us in
+`--bench`, not a unit count.
+
+**Consequences.** This is the second dividend from D1 and the reason it is safe to attempt
+at all: **parallel float reductions are order-dependent and parallel integer reductions are
+not.** Recoil cannot parallelise as freely as we can precisely because its sim is float —
+so a decision taken for cross-platform determinism turns out to buy multi-core headroom
+too.
+
+One macOS-specific constraint, since ADR-032 makes Metal the reference platform: an Apple
+silicon part is 10-14 cores but only 8-10 of them are performance cores. Sizing a pool from
+`hardware_concurrency()` schedules sim work onto efficiency cores and can be *slower* than
+running serially. The pool is sized to the performance-core count, or the work is submitted
+at `QOS_CLASS_USER_INTERACTIVE` and left to the scheduler.
