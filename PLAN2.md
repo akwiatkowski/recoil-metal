@@ -26,9 +26,19 @@ P1 has its handle (`UnitId` + `IdPool`), its store (`UnitStore`), its census
 identical`), and an order-independent invariant suite for the part the golden log cannot
 cover.
 
-**P0 THROUGH P6 ARE DONE.** P5 gave the sim a spatial index and took the quadratic term out of
-targeting; P6 gave it an event vocabulary, made wrecks real objects, and cut the last include
-from `core/sim` to `core/scene`.
+**P0 THROUGH P8 ARE DONE. P9 IS FROZEN.** P7 built the tick-to-render seam and emptied
+`main.mm`: the sim publishes an immutable snapshot, the renderer interpolates between the last
+two, `Renderer.mm` went 4,267 → 1,440 lines split four ways, there is a minimap, and `main.mm`
+went 5,098 → 324 with the rest becoming a library the tests link. P8 measured the scale
+criterion: 5,000 units at **12.9x real time**.
+
+**What is left is P9, and it is frozen deliberately** — the Linux build and the
+cross-architecture replay hash. §1.3's criterion has two halves and the second one is still
+unproven: everything the harness reports is one machine agreeing with itself.
+
+**P5 and P6 before them**: a spatial index that took the quadratic term out of targeting, an
+event vocabulary, wrecks as real objects, and the last include from `core/sim` to `core/scene`
+gone.
 
 **P3 IS DONE, and so is P4.** Game rules are out of C++. Blueprint categories are parsed and
 classified into roles; SupCom's `BuildableCategory` expressions are materialised into a real
@@ -46,8 +56,7 @@ is a value with `--tick-rate` and a four-rate test behind it; ownership has its 
 and orders are data taking one path, with `--command-log` writing the artifact §1.3's criterion
 names.
 
-**Engine completion: ~57 %** (§2), computed with a script this time — see §2.2 for the four
-points of hand-arithmetic drift that had accumulated before P5.
+**Engine completion: ~65 %** (§2), computed with a script.
 
 ---
 
@@ -140,7 +149,7 @@ layer (12–20k). Weights are midpoints, renormalised.
 | AI | 3.5k | **2 %** |
 | | 210k | 100 % |
 
-### 2.2 The reading, 2026-08-21 (after P6)
+### 2.2 The reading, 2026-08-21 (after P8)
 
 Weights are sourced; the per-subsystem completion figures are **judgement against a named
 capability list**, which is the honest description. Recompute by re-judging each row, not by
@@ -148,17 +157,27 @@ re-deriving the weights.
 
 | Subsystem | W | Done | Have | Missing |
 |---|---:|---:|---|---|
-| Sim | 26 % | **73 %** | movement, collisions, targeting/facing/firing, projectiles, area damage, death, economy, construction, victory, unit handles + flat store + type catalog + census, fixed point END TO END (enforced), CORDIC trig, tick rate as a value at 5–50 Hz, three ownership levels, orders as data through one authorised path, **burst weapons, FA's `WaitSeconds` bias corrected at import, periodic work staggered by a derived period, order queues advanced in the tick, **a spatial index every query goes through, an event vocabulary, wrecks as objects** | intel/vision, shields, transports, most weapon classes, air/naval/hover domains, veterancy, upgrades, adjacency, features that INTERACT (a wreck is a record, not an obstacle or salvage) |
-| Renderer | 21 % | **55 %** | instanced units w/ team colour, props + culling, shadows, water + refraction, sky, particles, decals, text/HUD, icons, selection, model LOD, pose playback, DDS, offscreen capture | drawer split, minimap, effect taxonomy (muzzle/trail/impact), beams |
+| Sim | 26 % | **75 %** | movement, collisions, targeting/facing/firing, projectiles, area damage, death, economy, construction, victory, unit handles + flat store + type catalog + census, fixed point END TO END (enforced), CORDIC trig, tick rate as a value at 5–50 Hz, three ownership levels, orders as data through one authorised path, **burst weapons, FA's `WaitSeconds` bias corrected at import, periodic work staggered by a derived period, order queues advanced in the tick, a spatial index every query goes through, an event vocabulary, wrecks as objects, **an immutable snapshot the renderer reads instead of live state, 5,000 units at 12.9x real time** | intel/vision, shields, transports, most weapon classes, air/naval/hover domains, veterancy, upgrades, adjacency, features that INTERACT (a wreck is a record, not an obstacle or salvage) |
+| Renderer | 21 % | **75 %** | instanced units w/ team colour, props + culling, shadows, water + refraction, sky, particles, decals, text/HUD, icons, selection, model LOD, pose playback, DDS, offscreen capture, **an immutable per-tick snapshot, interpolation between the last two, the drawer split, a minimap** | effect taxonomy (muzzle/trail/impact), beams, unit LOD switching |
 | System | 16 % | **35 %** | VFS (`.sdz`/`.scd`), asset search, DDS, settings, bench harness, **a data layer: roles, build tree, roster, opening** | **sound (nothing)**, logging framework, job system, serialisation/save, profiling |
-| Game/orders/UI | 13 % | **65 %** | orbit camera, picking, selection + modifiers, HUD, order markers, CLI harness, commands as data + a command log + player/army/alliance, build commands applied by the sim, **a per-unit command queue with Recoil's cancel-queued rules, shift-right-click to append, and a registered check that there is one order path** | build menu, control groups, minimap interaction, formations, game states, playing a command log back |
-| Map | 10 % | **70 %** | SMF/SMT, `.scmap`, tile atlas, heightfield, `mapinfo.lua`, terrain mesh w/ LOD + skirts, chunk culling, splat, water, stratum normals, props, terrain types, start positions | minimap, resource spots, features as objects |
+| Game/orders/UI | 13 % | **80 %** | orbit camera, picking, selection + modifiers, HUD, order markers, CLI harness, commands as data + a command log + player/army/alliance, build commands applied by the sim, **a per-unit command queue with Recoil's cancel-queued rules, shift-right-click to append, and a registered check that there is one order path, a minimap with click-to-jump, an argv layer with tests** | build menu, control groups, formations, game states, playing a command log back |
+| Map | 10 % | **80 %** | SMF/SMT, `.scmap`, tile atlas, heightfield, `mapinfo.lua`, terrain mesh w/ LOD + skirts, chunk culling, splat, water, stratum normals, props, terrain types, start positions, **a minimap with a world round-trip** | resource spots, features as obstacles, the `.scmap`'s embedded preview image |
 | Pathfinding | 7 % | **40 %** | coarse grid A* **in fixed point**, **passability per motion class (amphibious, hover, land)**, path following | hierarchical/flow-field, dynamic blocking, formations, avoidance quality, per-motion-class grids |
-| Net/replay | 5 % | **40 %** | **a command log — §1.3's criterion now names something that exists** — per-tick state hash over the store (incl. per-slot type, generation and liveness), hash log + first-divergence reporting (P0.2/P0.3) | netcode, lockstep, the cross-architecture proof (P8) |
+| Net/replay | 5 % | **40 %** | **a command log — §1.3's criterion now names something that exists** — per-tick state hash over the store (incl. per-slot type, generation and liveness), hash log + first-divergence reporting (P0.2/P0.3) | netcode, lockstep, the cross-architecture proof (P9, frozen) |
 | AI | 2 % | **45 %** | scripted build order + one attack wave, **role classification, a materialised build tree, an opening read from data that plays all four factions** | any reaction to what the opponent does; a real AI |
 
-**Weighted total: ~57 %** (script: `0.26*73 + 0.21*55 + 0.16*35 + 0.13*65 + 0.10*70 + 0.07*40
-+ 0.05*40 + 0.02*45 = 57.28`). Sim 68 → 73 % for the spatial index, the event queue and features
+**Weighted total: ~65 %** (script: `0.26*75 + 0.21*75 + 0.16*35 + 0.13*80 + 0.10*80 + 0.07*40
++ 0.05*40 + 0.02*45 = 64.95`). Renderer 55 → 75 % is the largest single move in the project's
+history and it is the SEAM rather than the pixels: an immutable snapshot, interpolation between
+two of them, and the drawer split were three of that row's four Missing items. Game/orders
+65 → 80 % for the minimap and for argv finally being testable at all. Map 70 → 80 % because the
+minimap was its longest-standing Missing entry. Sim 73 → 75 % for publishing a snapshot, and
+for the scale criterion being measured rather than hoped for.
+
+**System stays at 35 %, and that is now the most conspicuous number on the page.** It is 16 % of
+the weight, it has **no sound at all**, and nothing in P0 through P8 touched it.
+
+**The previous reading:** Sim 68 → 73 % for the spatial index, the event queue and features
 — one Missing item moving to partly-Have, plus two foundations that make later ones cheap. No
 other row moved: P5 and P6 are a refactor and a seam, and neither adds a capability outside the
 sim. That the number barely moves for a phase this size is the honest reading rather than a
@@ -191,16 +210,16 @@ what an order system is; what is left there is the QUEUE.
 
 **What is still not proven, and this is the honest limit:** every determinism result here is
 one machine agreeing with itself. `check_fx_optimisation.sh` shows the arithmetic survives
-`-O0` through `-ffast-math`, which is a real result and is not the claim. The claim needs P8's
+`-O0` through `-ffast-math`, which is a real result and is not the claim. The claim needs P9's
 Linux build. Fixed point is what makes it *reachable*; it does not make it true.
 
-The shape of that number is the important part: **the two most-complete slices are Map (70 %)
-and Renderer (55 %), which together are 31 % of the weight — and the Sim, at 26 % of the
-weight, is 68 % done** (22 % at the baseline; P1 through P4 moved it). The gap has closed: the
-Sim is now the second most-complete slice rather than the laggard, so the project no longer
-looks further along than it is for the old reason. The remaining honest caveat is the reverse
-one — System sits at 35 % with **no sound at all**, and that is 16 % of the weight nothing has
-touched.
+The shape of that number has changed, and it is worth saying how. For most of this project the
+finished slices were the ones a screenshot samples, which is why it looked further along than it
+was. At 65 % the four biggest rows — Sim 75, Renderer 75, Game 80, Map 80 — are within five
+points of each other and are 70 % of the weight between them. **What is left is no longer "the
+parts that do not show"; it is three specific holes**: System at 35 % with no sound,
+Pathfinding at 40 % with no hierarchical search, and Net/replay at 40 % with the
+cross-architecture proof frozen in P9. Each of those is a phase, not a polish pass.
 
 ### 2.3 The procedure
 
@@ -223,6 +242,7 @@ touched.
 | 2026-08-21 | 65 | 55 | 35 | 55 | 70 | 40 | 40 | 45 | **58 %** | P3.1–P3.4 — roles, the build tree, the opening as data, passability by motion class |
 | 2026-08-21 | 68 | 55 | 35 | 65 | 70 | 40 | 40 | 45 | **56 %** | P3.5, P3.6, P4 — burst weapons, the FA duration correction, `SlowUpdate`, the command queue, one checked order path |
 | 2026-08-21 | 73 | 55 | 35 | 65 | 70 | 40 | 40 | 45 | **57 %** | P5, P6 — the spatial index (targeting 10x faster at 5,000 units), the event vocabulary, wrecks as objects, the sim's include graph enforced headless |
+| 2026-08-21 | 75 | 75 | 35 | 80 | 80 | 40 | 40 | 45 | **65 %** | P7, P8 — the snapshot seam, interpolation, `Renderer.mm` split four ways, a minimap, `main.mm` 5,098 → 324 lines, 5,000 units at 12.9x real time |
 
 **The totals above 37 % were computed wrong, and here is the arithmetic.** The judgement columns
 are unchanged; only the weighted sum was off, and the error grew with the numbers. Recomputed
@@ -1125,27 +1145,54 @@ The technique, and it is the whole reason to do P1 next rather than P2:
 
 ### P7 — The render side
 
-- [ ] **P7.1 `Snapshot` + `snapshot(const Sim&)`.** *Test:* pure; same sim, same bytes; never
+- [x] **P7.1 `Snapshot` + `snapshot(const Sim&)`** — **done 2026-08-21.** *Test:* pure; same sim, same bytes; never
       mutates. *Manual:* none.
-- [ ] **P7.2 Interpolation; `UnitInstance` becomes render-only.** *Test:* alpha 0 and 1
+- [x] **P7.2 Interpolation; `UnitInstance` becomes render-only** — **done 2026-08-21.** *Test:* alpha 0 and 1
       reproduce the endpoints exactly. *Manual:* visibly smoother; `--no-interpolate` for
       captures.
-- [ ] **P7.3 Split `Renderer.mm` (4,267 lines)** into `MapRenderer`, `UnitRenderer`,
+- [x] **P7.3 Split `Renderer.mm` (4,267 lines)** — **done 2026-08-21**, into `MapRenderer`, `UnitRenderer`,
       `FxRenderer`, `UiRenderer` — Recoil's own split (`CBaseGroundDrawer`, `CUnitDrawer`,
       `CProjectileDrawer`, `CMiniMap`). *Test:* unchanged golden screenshots.
-- [ ] **P7.4 Minimap.** Nearly free once a `Map` object and a snapshot exist; today there is
+- [x] **P7.4 Minimap** — **done 2026-08-21.** Nearly free once a `Map` object and a snapshot exist; today there is
       nothing to read from. *Test:* world→minimap projection round-trips. *Manual:* click it.
-- [ ] **P7.5 `main.mm` to argv plus wiring,** under 400 lines from 3,948. *Test:* the suite
+- [x] **P7.5 `main.mm` to argv plus wiring** — **done 2026-08-21**, under 400 lines from 3,948. *Test:* the suite
       covers what moved out. *Manual:* every flag still works.
 
-### P8 — The proof
+### P8 — Scale
 
-- [ ] **P8.1 Linux-x86-64 headless sim build** through `ADR-032`'s RHI seam — sim and tests
-      only. *Test:* CI on both. *Manual:* it builds.
-- [ ] **P8.2 Cross-architecture replay hash.** Same log, both platforms, identical per-tick
-      hashes. *Test:* this *is* the test. *Manual:* the number goes in the README.
-- [ ] **P8.3 5,000 units at the configured rate.** *Test:* perf regression gate.
+- [x] **P8.1 5,000 units at the configured rate** — **done 2026-08-21**, measured at 12.9x real time. *Test:* perf regression gate.
       *Manual:* `--bench`.
+
+**RENUMBERED, and the reason is a decision rather than tidying.** This was P8.3, behind a
+Linux build and a cross-architecture hash. Those two are now **P9, and P9 is frozen** — see
+below. What is left in P8 is the half of the success criterion that can be met on one machine,
+and it goes first because it is reachable: P5 took 5,008 units from 73.7 s of headless match to
+7.0 s, so the gate is a measurement rather than a project.
+
+### P9 — The cross-architecture proof — **FROZEN**
+
+- [ ] **P9.1 Linux-x86-64 headless sim build** through `ADR-032`'s RHI seam — sim and tests
+      only. *Test:* CI on both. *Manual:* it builds.
+- [ ] **P9.2 Cross-architecture replay hash.** Same log, both platforms, identical per-tick
+      hashes. *Test:* this *is* the test. *Manual:* the number goes in the README.
+
+**FROZEN, deliberately, and it is worth being exact about what that costs.** §1.3's success
+criterion has two halves — "the same command log produces the same match" and "on any
+machine" — and freezing this phase means the second half stays unproven. Everything the
+determinism harness reports is still ONE MACHINE AGREEING WITH ITSELF.
+`check_fx_optimisation` shows the arithmetic survives `-O0` through `-ffast-math`, which is a
+real result and is not the claim. **Nothing in the README or the about page may say otherwise
+while this phase is frozen.**
+
+Why freeze it rather than do it. The work is not sim work: it is a build system, a second
+toolchain, CI, and `ADR-032`'s RHI seam — which is a rendering abstraction, so a headless
+Linux build needs the renderer separated first (that is P7). Fixed point is what made the
+claim *reachable*, and it is reachable whenever this thaws; nothing in P1–P8 has to be redone
+to get there. The phase is a day of infrastructure standing between here and a sentence in a
+README, and the sentence is not worth the day yet.
+
+What would thaw it: a second machine to run it on, or a reason to trust the number more than
+the design — a networked game, a shared replay, anyone else's hardware.
 
 ---
 
@@ -1196,7 +1243,8 @@ snapshots later; the alternative is what a shipping engine does and allocates no
 blocking — it lands at P7.
 
 **Q4 — Success criterion (§1.3):** accept, or set your own numbers? It goes in the README and
-becomes what the project is measured against. Not blocking — the proof is P8.
+becomes what the project is measured against. Not blocking — and half the proof is now FROZEN
+(P9), so the README has to be careful about which half it claims.
 
 This should become ADR-033 as P0 lands.
 
@@ -1221,7 +1269,7 @@ for what P0 actually taught.
   cheap, discovering it late is not.
 - **Cross-machine determinism is still unproven, and the harness does not prove it.** What P0
   built shows two runs of *the same binary on the same machine* agree. That is the useful
-  daily tool and it is not the claim in §1.3. The claim needs P2's fixed-point sim and P8's
+  daily tool and it is not the claim in §1.3. The claim needs P2's fixed-point sim and P9's
   Linux build; float sim agreeing with itself locally says nothing about arm64 vs x86-64.
   Do not let `MATCH` in a local log be read as the criterion being met.
 - **`main.mm` holds real knowledge, not just mess.** The spawn logic, the extractor ordering,
@@ -1234,96 +1282,95 @@ for what P0 actually taught.
 
 ## 11. The next goal
 
-**P5 and P6 are done (2026-08-21).** What they leave behind, for whoever picks up P7:
+**P0 through P8 are done (2026-08-21). PLAN2 has one phase left and it is frozen.**
 
-- **The sim has a spatial index and everything asks it.** `store.space()` is rebuilt twice a
-  tick — before collisions and after, because collisions move things — and `nearestTarget`,
-  `nearestStruck`, `damageArea` and the aim sweep all query it. Measured: 12.12 s → 1.79 s of
-  headless match at 2,008 units, 73.7 s → 7.0 s at 5,008. **The index is not
-  self-maintaining**, and a stale one answers about where units WERE, which is a wrong answer
-  rather than a crash — there is a test that asserts the wrong answer so the trap is visible.
-- **The sim has an outward voice.** Ten event kinds, raised by the passes and by the caller,
-  drained by whoever is listening. `--print-events` is the reference consumer. The queue's
-  lifetime belongs to the CALLER, not the tick — the tick clearing it threw away every event
-  raised before it, which made two kinds unobservable and took the manual check to notice.
-- **`core/sim`, `core/data` and `core/unit` include nothing from the render side**, and
-  `check_sim_is_headless.sh` keeps it that way. Six gates now.
-- **Two claims from earlier phases are corrected, and both corrections are in the code.**
-  P4.2's "every order goes through `applyCommand`" is true of MOVEMENT and not of construction
-  — routing builds broke the match outright, because `resolveBuildable` returns an index into
-  `scene.buildable` typed as `rm::UnitTypeIndex` while `applyCommand` reads `catalog.def()`.
-  Two index spaces wearing one type name, which is exactly what P3 claimed to have unified and
-  did only inside the sim. And P5.1's cell-key sign bias, added on a plausible-sounding
-  argument, turned out to be unnecessary — the key needs to be a consistent bijection, not an
-  order-preserving one.
-- **A test can pass because it never runs the code it is about.** P5.1's oracle test used
-  layouts small enough that the grid's own fallback answered nearly every probe, so the cell
-  path, the binary search and the key were untested — and a deliberately broken key passed all
-  40,000 assertions. Now the test computes the branch itself and asserts both paths carried
-  over 5,000 probes each. Any code with an adaptive path needs that assertion.
-- **What P6.3 asked for that was mostly already true:** dust comes from unit MOTION, which the
-  renderer reads through the draw projection, so it was never in the sim; a death blast's only
-  visible product was the scorch mark, which P6.2 moved. The effect the item imagines — a muzzle
-  flash driven by `WeaponFired`, an impact puff driven by `ProjectileImpact` — is a new visual
-  feature rather than a move, and feature work is frozen (D10).
+What the last two phases leave behind:
 
-**P7 — the render side.** Why it goes next, and it is the first phase with a player-facing
-payoff since milestone 20:
+- **The tick-to-render seam exists and is a type, not a discipline.** The sim publishes an
+  immutable `sim::Snapshot` per tick; the renderer interpolates between the last two. `make
+  verify` MATCHes unchanged across the whole of P7, which is the result to want: interpolation
+  is presentation and never reaches the sim, so a seam done right moves no hashes.
+- **`main.mm` is 324 lines and the rest is a library the tests link.** Seven `.cpp` files under
+  `src/app/`, one `.mm` for the run modes. Writing the first tests for argv found three bugs in
+  code that had shipped for weeks — `argv[1]` is the map so parsers start at 2, `--look` needs
+  three values, and `AssetSearch::addRoot` silently drops a directory that does not exist.
+- **`Renderer.mm` is 1,440 lines from 4,267**, split four ways plus six shader headers. One
+  class across five translation units, not four objects — the ownership question (who holds the
+  device, the queue, the camera, the depth textures, the shadow map) is deliberately unanswered,
+  because splitting the code first is what made this step provable by hashing a screenshot.
+- **The scale criterion is met and measured: 12.9x real time at 5,000 units.** Before P5 the
+  same match ran at 0.8x. The gate is 2x, wide on purpose — it exists to catch a pass going
+  quadratic, which is a factor of ten.
 
-1. **It is the only thing standing between here and the two index spaces being one.**
-   `resolveUnits` asserts `type == batches.size()`: the sim's `UnitTypeIndex` IS the renderer's
-   batch index, which is why a buildable type cannot be registered with the catalog before
-   something of it spawns, which is why build orders cannot go through `applyCommand`. P7.1's
-   snapshot is what separates them, and P4.2's hole closes as a consequence rather than as a
-   fix.
-2. **P7.4's minimap is the first visible thing in five phases.** §10 warned that P1–P6 have no
-   player-facing payoff and to expect four or five sessions without screenshots; that was
-   accurate, and this is the end of it.
-3. **`main.mm` is 4,000 lines and holds real knowledge**, not just mess — the spawn logic, the
-   extractor ordering, the passability cache keying. §10 says the move has to be read rather
-   than mechanical, and that is still true.
+**Three lessons worth carrying out of this phase**, all of them about tests rather than code:
 
-**What P7 will move:** every golden screenshot (P7.2's interpolation) and the README's benchmark
-numbers. Re-baseline deliberately and keep `--no-interpolate` for captures — §10 has been
-saying so since P0 and it is now the phase where it lands.
+1. **A test can pass because it never runs the code it is about.** P5.1's oracle test was
+   answered almost entirely by the grid's brute-force fallback; a deliberately broken cell key
+   passed all 40,000 assertions. Any code with an adaptive path needs the test to assert that
+   both paths carried traffic.
+2. **A Catch test name starting with `--` is unrunnable through CTest.** It passes by hand and
+   fails as "Unrecognised token", because the name is passed as the filter.
+3. **A refactor's test can be an equality.** Every step of P7.3 and P7.5 was checked by hashing
+   the same screenshot — `60f805cd915ad3f4e7c362bb2581746bd12205e82867e0eaa4f7a5f4eeb9914f`
+   throughout. That is stronger than a suite and cheaper than reading the diff twice.
 
-**Model: Opus 5**, `effort: xhigh`. P7.1 has the design freedom (what a snapshot contains, who
-owns it, whether it is double-buffered); P7.3 and P7.5 are large but mechanical, and P7.5 is the
-one to slow down on.
+---
 
-The goal prompt:
+**P9 is frozen, and the freeze is the honest state of the project's headline claim.** §1.3 says
+"the same command log produces the same match, on any machine". The first half is built and
+checked every commit. **The second half is not proven and nothing may say otherwise** —
+`check_fx_optimisation` shows the arithmetic survives `-O0` through `-ffast-math`, which is real
+and is a different statement. Fixed point made the claim reachable; nothing in P1–P8 has to be
+redone to get there.
+
+What would thaw it: a second machine, or a reason to trust the number more than the design — a
+networked game, a shared replay, anyone else's hardware.
+
+**So what is next is not a phase of PLAN2.** In rough order of what the §2 reading says is
+missing, and each is a phase-sized piece of work rather than a task:
+
+1. **Sound — System is 16 % of the weight at 35 %, with nothing at all.** No mixer, no
+   listener, no per-unit cue. Both games ship their audio in formats the VFS already mounts. It
+   is the largest untouched slice in the project and the one a player notices first.
+2. **The two index spaces (`#28343`).** `resolveBuildable` returns an index into
+   `scene.buildable` typed as `rm::UnitTypeIndex`, while `applyCommand` reads `catalog.def()`.
+   Build orders therefore cannot go through `applyCommand`, so P4.2's "one order path" is true
+   of movement only. P7.1's snapshot is what makes fixing it possible — the sim's type index no
+   longer has to be the renderer's batch index — and it is now a bounded job rather than a
+   blocked one.
+3. **Pathfinding at 40 %:** coarse-grid A* with no hierarchy, no dynamic blocking and no
+   formations. A rally order still walks twenty units into each other and lets collision sort
+   it out.
+4. **The rest of the UI:** a build tray, control groups, a selection roster, order queues drawn
+   in the world. The minimap was the hard one because it needed the snapshot; these need only
+   the primitives the HUD already has.
+
+**Model: Opus 5**, `effort: xhigh`. Sound has the most design freedom and the least prior art
+in this repo — nothing here has ever made a noise, so ADR-0xx for the mixer's shape is the first
+deliverable rather than an afterthought.
+
+The goal prompt, for whichever is chosen:
 
 ```
-Execute phase P7 of PLAN2.md in the recoil-metal repo. Read PLAN2.md first — §0 has the
-settled decisions, §4.1 on the tick-to-render seam, §7 the items, §10 the risks, §11 what
-P5 and P6 left behind.
+Read PLAN2.md first — §0 has the settled decisions, §2 the progress reading and what it
+says is missing, §11 what P7 and P8 left behind, §10 the risks.
 
-Start with P7.1 (Snapshot). It is the item everything else in the phase leans on, and it
-is also what finally separates the sim's UnitTypeIndex from the renderer's batch index —
-`resolveUnits` currently asserts they are equal, which is why build orders cannot go
-through applyCommand (see §11). Closing that hole as a CONSEQUENCE of the seam is the
-right way round; do not try to fix it first.
+PLAN2's phases P0-P8 are done and P9 is FROZEN (the Linux build and the cross-architecture
+hash). Do not thaw it without being asked: the freeze is deliberate and §1.3's second half
+must keep being described as unproven.
 
-P7.2 changes what every screenshot looks like and moves the README's benchmark numbers.
-Re-baseline deliberately, add `--no-interpolate` for captures, and say in the commit what
-moved and why. `test_match_invariants` and `test_tick_rate_invariance` are the gates for
-anything that re-bases numbers; `make verify` only proves a refactor was one.
-
-P7.3 and P7.5 are large and mostly mechanical. §10's warning about P7.5 stands: `main.mm`
-holds real knowledge — the spawn logic, the extractor ordering, the passability cache
-keying — so the move has to be read rather than cut and pasted.
-
-Every item ships with the automated test and the manual check named in §7. Commit each
-separately, conventional messages, co-author trailer
-"Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>".
+Pick up <the item>. It is phase-sized, so plan it before writing code: an ADR for any
+non-trivial design choice (ADR_DECISIONS.md), then items with the automated test and the
+manual check named per item the way §7 does.
 
 Constraints:
-- Deliver P7 at the scope §7 states. Don't start P8.
-- Do not add a verification step, a self-review pass, or a verifier subagent. Run the
-  tests and the replay, and report what they output.
+- Do not add a verification step, a self-review pass, or a verifier subagent. Run the tests
+  and the replay, and report what they output.
 - Do not delegate to subagents.
-- Feature work is frozen (D10) — the minimap in P7.4 is in scope because §7 names it.
-- If a step turns out to be blocked, finish the others and say plainly which one you left
-  and why. Don't silently narrow the scope.
+- `make verify` is a strict check for anything that is meant to be a refactor. If a change is
+  meant to alter the match, use `test_match_invariants` and `test_tick_rate_invariance` as
+  the gates and re-record the golden deliberately, saying in the commit what moved and why.
+- For a refactor, prefer an EQUALITY as the test: hash the same screenshot before and after.
+  P7.3 and P7.5 were both checked that way and it caught more than reading would have.
 - Report the §2 progress reading at the end, recomputed WITH A SCRIPT.
 ```
