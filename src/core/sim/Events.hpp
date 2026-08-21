@@ -107,18 +107,74 @@ struct Event {
 
 /// What happened this tick.
 ///
-/// CLEARED EVERY TICK by `tickSkirmish`, because an event is a notification and not a fact
-/// about the world: a consumer reads the tick's events during that tick or misses them. A
-/// consumer that needs history keeps its own. That is what Recoil's call-ins do — a gadget is
-/// handed the event and nothing keeps it — and it is what stops the queue growing without bound
-/// over a ten-minute match.
+/// AN EVENT IS A NOTIFICATION, NOT A FACT ABOUT THE WORLD: a consumer reads the tick's events
+/// during that tick or misses them, and a consumer that needs history keeps its own. That is
+/// what Recoil's call-ins do — a gadget is handed the event and nothing keeps it — and it is
+/// what stops the queue growing without bound over a ten-minute match.
 ///
 /// CALLER-OWNED, like the projectile list: `Match` holds a pointer, so a scene with nothing
 /// listening passes null and the sim's emit calls cost a branch. Not a global — two sims must be
 /// able to exist in one process (§5.4).
+///
+/// --------------------------------------------------------------------------------------
+/// THE LIFETIME IS A FRAME, AND `beginFrame` IS THE ONLY WAY TO ADVANCE ONE (§7 P10.7).
+/// --------------------------------------------------------------------------------------
+///
+/// This class used to expose `clear()`, and the contract lived in prose split across two
+/// headers: this one said the queue is cleared every tick, `Skirmish.hpp` said the CALLER does
+/// the clearing and not the tick. Both were accurate and together they were a trap, because
+/// the thing they described has no name in the code — so the only way to know where the
+/// boundary is was to read both notes and believe them.
+///
+/// **It had already gone wrong once.** The tick cleared at the top, which threw away the
+/// events the caller raises BEFORE it — `UnitCreated` when it spawns a unit, and
+/// `ConstructionStarted` when its scripted opponent orders a build. Two event kinds were
+/// declared, emitted, and never once observable, and nothing failed: a lost notification looks
+/// exactly like a notification nobody sent.
+///
+/// Two changes close that:
+///
+///   1. **The frame has a name and a number.** `beginFrame(tick)` replaces `clear()`, so the
+///      boundary is a call with an argument rather than a convention, and `frame()` lets a
+///      consumer ask whether what it is reading belongs to the tick it thinks it is on.
+///      Staleness becomes detectable instead of silent.
+///
+///   2. **Advancing is IDEMPOTENT, which is what actually kills the bug.** `beginFrame(t)`
+///      clears only when `t` differs from the frame already open. So a second caller — a tick
+///      pass, a subsystem, anything — that begins the frame it is already in destroys nothing.
+///      Had the tick called `beginFrame` instead of `clear`, the original defect would have
+///      been a no-op rather than two invisible event kinds.
+///
+/// The first `beginFrame` always clears, whatever tick it names, so a queue reused for a
+/// second match does not carry the first one's last tick into it — two matches both starting
+/// at tick 0 is the ordinary case, not a corner one.
 class EventQueue {
 public:
     void emit(const Event& event) { events_.push_back(event); }
+
+    /// Opens the frame for `tick`, discarding the previous frame's events.
+    ///
+    /// Called by whoever owns the frame boundary — which is the CALLER, not the tick, because
+    /// the caller emits before `tickSkirmish` runs and after it returns. Idempotent within a
+    /// tick: see the note above, where that property is the whole point.
+    void beginFrame(TickIndex tick) noexcept {
+        if (!started_ || tick != frame_) {
+            events_.clear();
+            frame_ = tick;
+            started_ = true;
+        }
+    }
+
+    /// The tick these events belong to.
+    ///
+    /// For a consumer that wants to assert it is reading the current tick rather than trusting
+    /// that someone advanced the frame. Zero and meaningless before the first `beginFrame`,
+    /// which `started()` distinguishes.
+    [[nodiscard]] TickIndex frame() const noexcept { return frame_; }
+
+    /// Whether any frame has been opened. False for a queue a test emits into directly, which
+    /// is a legitimate use — a unit test for one pass has no frames.
+    [[nodiscard]] bool started() const noexcept { return started_; }
 
     /// The tick's events, in the order the passes raised them — which is the tick order, so
     /// a damage event always precedes the death it caused.
@@ -131,11 +187,20 @@ public:
     /// emitted *exactly once* per death is checkable rather than merely likely.
     [[nodiscard]] std::size_t count(EventKind kind) const noexcept;
 
-    void clear() noexcept { events_.clear(); }
+    // `clear()` USED TO BE HERE, and its absence is the point rather than a tidy-up: it was
+    // the second way to advance a frame, and the one with no argument to get visibly wrong.
+    // A test that wants an empty queue makes a new one.
 
 private:
     /// Capacity is kept across ticks, so a match's steady state allocates nothing here.
     std::vector<Event> events_;
+
+    /// The tick the events in `events_` belong to. Meaningless until `started_`.
+    TickIndex frame_ = 0;
+
+    /// Whether `beginFrame` has ever run. Distinguishes "frame 0" from "no frame yet", which
+    /// is what makes the first advance always clear.
+    bool started_ = false;
 };
 
 /// Emits `event` if there is anywhere to put it.

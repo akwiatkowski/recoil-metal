@@ -246,7 +246,7 @@ TEST_CASE("losing the last commander is a defeat and then a game over") {
 
     // And neither repeats on the next tick: `match.over` latches, and a defeated army is
     // already flagged.
-    events.clear();
+    events.beginFrame(1);
     (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain, roster.rate);
     CHECK(events.count(EventKind::TeamDefeated) == 0);
     CHECK(events.count(EventKind::GameOver) == 0);
@@ -284,4 +284,92 @@ TEST_CASE("every kind has a name, and the names are distinct") {
     std::sort(names.begin(), names.end());
     CHECK(std::adjacent_find(names.begin(), names.end()) == names.end());
     CHECK(names.size() == 10);
+}
+
+// --- The frame boundary (§7 P10.7, REVIEW.md §5.7) --------------------------------------
+//
+// The queue's lifetime used to be a convention described in prose across two headers, and it
+// had already gone wrong once: the tick cleared at the top, throwing away the events the CALLER
+// raises before it, so `UnitCreated` and `ConstructionStarted` were declared, emitted, and never
+// observable. Nothing failed — a lost notification looks exactly like one nobody sent.
+//
+// These pin the properties that make that unrepresentable rather than merely fixed.
+
+TEST_CASE("beginning the frame you are already in destroys nothing") {
+    // THE ONE THAT MATTERS. Had the tick called `beginFrame` instead of `clear`, the original
+    // defect would have been a no-op — because the tick and the caller are in the same frame.
+    rm::sim::EventQueue events;
+
+    events.beginFrame(7);
+    events.emit(Event{.kind = EventKind::UnitCreated});
+    events.emit(Event{.kind = EventKind::ConstructionStarted});
+    REQUIRE(events.size() == 2);
+
+    // A second caller — a tick pass, a subsystem — announcing the frame it is already in.
+    events.beginFrame(7);
+    CHECK(events.size() == 2);
+    CHECK(events.count(EventKind::UnitCreated) == 1);
+    CHECK(events.count(EventKind::ConstructionStarted) == 1);
+}
+
+TEST_CASE("advancing to a new frame discards the previous one") {
+    // The other half: a frame really is one tick, so the queue cannot grow without bound over a
+    // ten-minute match. `beginFrame` being idempotent must not turn into never clearing.
+    rm::sim::EventQueue events;
+
+    events.beginFrame(7);
+    events.emit(Event{.kind = EventKind::UnitCreated});
+    events.beginFrame(8);
+
+    CHECK(events.empty());
+    CHECK(events.frame() == 8);
+}
+
+TEST_CASE("the first frame always clears, whatever tick it names") {
+    // A queue reused for a second match: both start at tick 0, so a plain `tick != frame_`
+    // test would carry the first match's last events into the second. Two matches starting at
+    // tick 0 is the ordinary case, not a corner one.
+    rm::sim::EventQueue events;
+    CHECK_FALSE(events.started());
+
+    events.beginFrame(0);
+    events.emit(Event{.kind = EventKind::GameOver});
+    CHECK(events.started());
+    REQUIRE(events.size() == 1);
+
+    // A fresh queue for the second match, standing in for one that has been reset: the point is
+    // that `started()` is what distinguishes "frame 0" from "no frame yet".
+    rm::sim::EventQueue second;
+    second.beginFrame(0);
+    CHECK(second.empty());
+    CHECK(second.started());
+}
+
+TEST_CASE("a tick's events include the caller's, not only the sim's") {
+    // THE REGRESSION ITSELF, end to end. The caller emits before `tickSkirmish` and after it;
+    // both must survive into one frame, because that is exactly what was broken.
+    Duel duel;
+
+    duel.events.beginFrame(0);
+    // What the caller raises BEFORE the tick — a spawn it just made.
+    duel.events.emit(Event{.kind = EventKind::UnitCreated, .army = 0});
+
+    // Run until the shooter has actually done something, so the sim's own contribution is not
+    // zero and "both survived" is a real claim rather than a vacuous one.
+    for (int tick = 0; tick < 60; ++tick) {
+        if (duel.events.count(EventKind::WeaponFired) > 0) {
+            break;
+        }
+        (void)duel.step();
+    }
+    REQUIRE(duel.events.count(EventKind::WeaponFired) >= 1);
+
+    // And what it raises after, when a construction it was told about becomes a unit.
+    duel.events.emit(Event{.kind = EventKind::UnitFinished, .army = 0});
+
+    // THE ASSERTION: the caller's pre-tick event, the sim's own, and the caller's post-tick
+    // event are all in one frame. The defect this replaces lost the first of the three.
+    CHECK(duel.events.count(EventKind::UnitCreated) == 1);
+    CHECK(duel.events.count(EventKind::UnitFinished) == 1);
+    CHECK(duel.events.frame() == 0);
 }

@@ -495,7 +495,12 @@ rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) 
     // THE TICK'S EVENTS START HERE, not inside `tickSkirmish`. The caller raises some of them
     // itself — the opponents' build orders below, and `UnitCreated` when a finished construction
     // becomes a unit — so the boundary has to be the caller's tick, which is this function.
-    scene.events.clear();
+    //
+    // `beginFrame` rather than the `clear()` this used to be: the frame now carries the tick it
+    // belongs to, and advancing it is idempotent, so a second caller beginning the frame it is
+    // already in destroys nothing. See `Events.hpp` — that property exists because the opposite
+    // once cost two event kinds that were emitted and never observable.
+    scene.events.beginFrame(static_cast<rm::TickIndex>(tickIndex));
 
     // The routing table the sim uses to advance queued orders, refreshed for whatever types the
     // catalog now holds. `gridFor` is memoised on the LIMITS, so this is a map lookup per type

@@ -1291,6 +1291,28 @@ fewer of those today than there will ever be again.
       different pool sizes — that equality **is** the test, and if it ever fails the rule in
       D15 has been broken somewhere. *Manual:* `--bench` at 5,000 units.
 
+- [x] **P10.7 The event queue's frame boundary** — **done 2026-08-21.** `REVIEW.md` §5.7. The
+      queue's lifetime was a convention described in prose across two headers: `Events.hpp` said
+      it is cleared every tick, `Skirmish.hpp` said the CALLER clears and not the tick. Both
+      accurate, and together a trap — the thing they described had no name in the code, so the
+      only way to know where the boundary was is to read both notes and believe them. It had
+      already gone wrong once, and the cost was two event kinds declared, emitted and never
+      observable, with nothing failing: a lost notification looks exactly like one nobody sent.
+
+      `clear()` is replaced by `beginFrame(TickIndex)` and there is no second way to advance.
+      Two properties, and **the second is the one that matters**: the frame carries the tick it
+      belongs to, so a consumer can ask `frame()` instead of trusting that somebody advanced it;
+      and **advancing is idempotent**, so a second caller beginning the frame it is already in
+      destroys nothing. Had the tick called `beginFrame` rather than `clear`, the original
+      defect would have been a no-op. The first advance always clears whatever tick it names, so
+      a queue reused for a second match does not carry the first one's events in — two matches
+      both starting at tick 0 is ordinary, not a corner case.
+
+      *Test:* four, and the load-bearing one is "beginning the frame you are already in destroys
+      nothing"; the end-to-end one emits before `tickSkirmish` and after it and asserts both
+      survive alongside the sim's own. *Manual:* `make verify` MATCHes — events are not hashed,
+      so this must move nothing. It does not.
+
 **WHAT IS DELIBERATELY NOT IN THIS PHASE.** *Intel — LOS, radar, fog of war.* It is the next
 largest sim gap and the one that makes scouting exist, but it is genuinely phase-sized on its
 own: it gates targeting, it filters the event stream (`Events.hpp` already documents that

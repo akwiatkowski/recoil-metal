@@ -13,6 +13,52 @@ comment in the tree, both are quoted.
 
 ---
 
+## Resolution — updated 2026-08-21
+
+**Every §5 finding is closed.** §5 was the defect list; §3 is a capability comparison, and its
+items are phase-sized work rather than things to fix in a session — they are scheduled, not
+outstanding, and the distinction is kept honest below rather than blurred.
+
+| Finding | Status |
+|---|---|
+| §5.1 The float ban's blind spot | **fixed** — `68c7e73`, P10.0 |
+| §5.2 `Movement.hpp` stale 10 Hz rationale + duplicate include | **fixed** — `68c7e73` |
+| §5.3 `SlowUpdate.hpp` cites 16 frames; Recoil's constant is 15 | **fixed** — `68c7e73` |
+| §5.4 `check_no_sim_globals.sh` file counts drifted | **fixed** — `68c7e73` |
+| §5.5 The app target does not build | **fixed** — the renderer split landed (P7.3/P7.5) |
+| §5.6 `main.mm` at 4,996 lines | **fixed** — 324 lines; the rest is a library the tests link (P7.5) |
+| §5.7 One-tick event lifetime is a convention | **fixed** — P10.7, `beginFrame(tick)` replaces `clear()` |
+
+Two of those (§5.5, §5.6) were already being fixed while this review was being written — the
+work was uncommitted in the tree at the time and is noted as such in each section.
+
+**§5.1 was worse than described.** The review found a float *tolerated* in sim state; it was
+actually a **round trip in both directions** — `Command.cpp` rounded an `Fx` the caller already
+held into a float, `Skirmish.cpp` converted it back to raise an event, and `app/Match.cpp`
+converted it back again to measure a distance. All are now the identity. Fixing it moved the
+replay hash, which is correct and was proven harmless by P7.3's technique: the screenshot hash
+is `0a430d44ee89ea9a3868f17d5caa0cdb6b7bd9d650cce465592c02fb5ff37a97` before and after, so
+7,000 ticks render pixel-for-pixel identically while the fingerprint moves. A second guard came
+free — `feed(StateHash&, float)` lost its last caller and `-Werror=unused-function` now refuses
+to build until it is deleted, so re-introducing a float into hashed state is a compile error.
+
+**Of §3, one item is addressed.** §3.1 (scalar damage) is P10.1: armour classes and a sparse
+`DamageProfile`, with Forged Alliance's multiplier matrix transposed at import. The rest —
+projectiles (§3.2), pathfinding (§3.3), motion types (§3.4), sound/threading/serialisation
+(§3.5), intel and shields (§3.6) — are **scheduled in `PLAN2.md` §7 P10 and its stated
+non-goals**, ordered by retrofit cost rather than by value, and governed by `ADR-033` through
+`ADR-036`. None of them is a defect; all of them are engine that does not exist yet.
+
+**§6's two suggestions are both taken**, with one deliberately deferred: `ADR-035` adopts the
+layered pathfinding seam (§6.1) and explicitly defers choosing the final architecture until the
+engine can measure its own pathing; `ADR-034` takes §6.2's data-driven weapon variation but
+**refuses the class hierarchy**, because a polymorphic projectile is not hashable without a
+visitor per subclass and the flat trivially-copyable struct is what the state hash walks.
+
+Everything above was re-verified against the tree rather than recalled.
+
+---
+
 ## 0. Verification performed for this review
 
 Facts, not impressions, because most of what follows rests on them:
@@ -20,17 +66,17 @@ Facts, not impressions, because most of what follows rests on them:
 | Check | Result |
 |---|---|
 | `ctest` | **771/771 passed**, 8 skipped (all asset-gated: BAR/FA corpus not present) |
-| `cmake --build build` | **FAILS** — see §8.1. Library and tests build; the app target does not |
-| Recoil global-symbol reach | recounted; the numbers in `check_no_sim_globals.sh` need a small correction (§8.4) |
-| `UNIT_SLOWUPDATE_RATE` | **15**, not the 16 quoted in `SlowUpdate.hpp:15` (§8.3) |
+| `cmake --build build` | **FAILS** — see §5.5. Library and tests build; the app target does not |
+| Recoil global-symbol reach | recounted; the numbers in `check_no_sim_globals.sh` need a small correction (§5.4) |
+| `UNIT_SLOWUPDATE_RATE` | **15**, not the 16 quoted in `SlowUpdate.hpp:15` (§5.3) |
 | `COMMAND_CANCEL_DIST = 17.0f` | confirmed at `CommandAI.cpp:49`, as cited |
 | `DegreesToMaxSlope` = `1 - cos(clamp(deg,0,60) * 1.5 * DEG_TO_RAD)` | confirmed at `MoveDefHandler.cpp:84-95`, as cited |
 | `SimObjectIDPool::Expand` touches the RNG | confirmed at `SimObjectIDPool.cpp:29-30` — two `random_shuffle` calls on `gsRNG` |
 | `QueryVectorCache` asserts when exhausted | confirmed at `QuadField.h:38`, as cited |
 
 The citation discipline in this codebase is unusually good. Of roughly twenty specific Recoil
-line references spot-checked, **eighteen were exactly right**. The two that were not are §8.3
-and §8.4, and both are off by a rounding rather than wrong in substance.
+line references spot-checked, **eighteen were exactly right**. The two that were not are §5.3
+and §5.4, and both are off by a rounding rather than wrong in substance.
 
 ---
 
@@ -498,6 +544,11 @@ the determinism claim is the project's whole reason to exist and the check that 
 gap; **(2)** finish the renderer/`main.mm` split already in flight, because 4,996 untestable lines
 is how the last silent divergence happened; **(3)** make damage a vector before more weapons are
 added, because retrofitting armour classes touches every combat call site.
+
+> **All three are done as of 2026-08-21** — (1) P10.0, (2) P7.3/P7.5, (3) P10.1. See Resolution
+> at the top. What comes next is P10.3 onward: projectile kinds, the pathing cost field, shared
+> flow fields, and the first threading, in that order and for the same reason this list was
+> ordered — retrofit cost, not value.
 
 The documentation is the project's second-best asset after the determinism model, and the two are
 related — the reason the fixed-point width could be overruled on evidence is that the evidence was
