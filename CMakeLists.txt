@@ -139,9 +139,30 @@ add_library(rm_core STATIC
 target_include_directories(rm_core PUBLIC src)
 target_link_libraries(rm_core PUBLIC rm_project_warnings miniz miniz_impl)
 
+# --- rm_app: the application layer, testable ---------------------------------
+#
+# WHY THIS LIBRARY EXISTS (PLAN2.md §7 P7.5). `main.mm` had grown to 5,098 lines, and §7 asks
+# for it to be "argv plus wiring, under 400". Most of what was in there is a library — content
+# loading, scene assembly, the match runner, the CLI — and a library inside an
+# executable-only translation unit is one no test can link. These are `.cpp`, not `.mm`:
+# `Renderer.hpp` forward-declares its Metal types, so the app layer needs no Objective-C.
+add_library(rm_app STATIC
+    src/app/Content.cpp
+    src/app/Scene.cpp
+    src/app/SceneBuild.cpp
+    src/app/Cli.cpp
+    src/app/Match.cpp
+    src/app/Interface.cpp
+    src/app/View.cpp)
+target_link_libraries(rm_app PUBLIC rm_core rm_project_warnings)
+
 # --- recoil-metal: the app --------------------------------------------------
 add_executable(recoil-metal
     src/main.mm
+    # The three run modes. Objective-C++ because one owns an NSApplication and one an ImageIO
+    # destination — the only part of the app layer that genuinely needs Objective-C, which is
+    # why everything that did not was moved into rm_app first (PLAN2.md §7 P7.5).
+    src/app/Run.mm
     src/platform/Window.mm
     src/render/Renderer.mm
     # One class, several translation units (PLAN2.md §7 P7.3). `Renderer.mm` keeps the device,
@@ -152,7 +173,7 @@ add_executable(recoil-metal
     src/render/FxRenderer.mm
     src/render/UiRenderer.mm)
 target_link_libraries(recoil-metal PRIVATE
-    rm_core rm_project_warnings metal_cpp ${APPKIT_FW}
+    rm_app rm_core rm_project_warnings metal_cpp ${APPKIT_FW}
     ${IMAGEIO_FW} ${COREGRAPHICS_FW})
 # ARC for the Objective-C side only. metal-cpp objects are C++ and unaffected
 # (they are manually retained/released — see AGENT.md gotchas).
@@ -201,6 +222,7 @@ if(BUILD_TESTING)
         tests/test_text_layout.cpp
         tests/test_hud.cpp
         tests/test_minimap.cpp
+        tests/test_cli.cpp
         tests/test_dds.cpp
         tests/test_unit_icons.cpp
         tests/test_unit_placement.cpp
@@ -253,7 +275,7 @@ if(BUILD_TESTING)
     # tests/ on the include path so fixtures resolve as "support/SmfWriter.hpp",
     # matching how src/ headers resolve as "core/...".
     target_include_directories(rm_tests PRIVATE tests)
-    target_link_libraries(rm_tests PRIVATE rm_core Catch2::Catch2WithMain)
+    target_link_libraries(rm_tests PRIVATE rm_app rm_core Catch2::Catch2WithMain)
 
     include(Catch)
     catch_discover_tests(rm_tests)
