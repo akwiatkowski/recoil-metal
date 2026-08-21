@@ -20,6 +20,7 @@
 #include "core/scene/UnitIcons.hpp"
 #include "core/text/TextLayout.hpp"
 #include "core/ui/Hud.hpp"
+#include "core/ui/Minimap.hpp"
 
 #include <cassert>
 #include "core/settings/Settings.hpp"
@@ -4033,6 +4034,54 @@ void writeCsv(const std::string& path, const rm::bench::FrameRecorder& recorder)
 
 namespace {
 
+/// The minimap's pips, from the snapshot the renderer is already drawing.
+///
+/// FROM THE SNAPSHOT, which is the whole reason §7 calls P7.4 "nearly free once a `Map` object
+/// and a snapshot exist": before P7.1 the only list of where units were was the renderer's
+/// per-batch instance arrays, and a minimap would have needed a second walk over game state that
+/// nothing owned.
+///
+/// The player's own units are drawn a point bigger. A minimap's job is to say where the
+/// important things are, and every pip the same size says only "units".
+void appendMinimapPips(std::vector<rm::ui::MinimapPip>& out, const UnitScene& scene) {
+    out.clear();
+    out.reserve(scene.snapshotCurrent.size());
+    for (const rm::sim::UnitView& unit : scene.snapshotCurrent.units) {
+        const int owner = unit.armyIndex;
+        out.push_back(rm::ui::MinimapPip{
+            .worldX = rm::sim::fxToFloat(unit.transform.x),
+            .worldZ = rm::sim::fxToFloat(unit.transform.z),
+            .colour = owner >= 0 && static_cast<std::size_t>(owner) < scene.armies.size()
+                          ? rm::teamColour(static_cast<std::size_t>(owner))
+                          : rm::kTeamColours[0],
+            .size = owner == scene.playerArmy ? 3.0f : 2.0f,
+        });
+    }
+}
+
+/// The four ground points the viewport's corners see, for the minimap's view outline.
+///
+/// THE SAME RAY-TO-GROUND PICK A RIGHT-CLICK USES, so the outline is exact rather than estimated
+/// from the camera's distance and pitch. A corner looking past the map's edge or at the sky
+/// yields nothing, and the caller draws no outline rather than a wrong one — which is the honest
+/// answer for a camera that is not looking at the ground.
+void appendViewFootprint(std::vector<std::array<float, 2>>& out, const rm::OrbitCamera& camera,
+                         const rm::HeightField& field, float width, float height) {
+    out.clear();
+    // Clockwise from the top-left, so consecutive pairs are the edges of the shape.
+    const std::array<std::array<float, 2>, 4> corners{
+        {{0.0f, height}, {width, height}, {width, 0.0f}, {0.0f, 0.0f}}};
+    for (const std::array<float, 2>& corner : corners) {
+        const rm::Ray ray = rm::screenRay(camera, corner[0], corner[1], width, height);
+        const std::optional<simd_float3> ground = rm::pickGround(ray, field);
+        if (!ground) {
+            out.clear();  // all four or none: a partial outline is a wrong one
+            return;
+        }
+        out.push_back({ground->x, ground->z});
+    }
+}
+
 /// Reads the scene into the state the interface reports.
 ///
 /// A translation step rather than the interface reaching into the scene, so `ui::build` takes
@@ -4527,6 +4576,22 @@ int main(int argc, const char* argv[]) {
                           hudThemeFor(units), hudStateFrom(units, marchOptions.seconds),
                           static_cast<float>(shot.width),
                           static_cast<float>(shot.height));
+
+            // THE MINIMAP IN A CAPTURE TOO, for the same reason the rest of the HUD is here: a
+            // screenshot is how this project verifies anything, and an interface only visible in
+            // a live window cannot be checked at all. Adding it to the frame loop alone is how
+            // the first version of P7.4 looked correct and produced an empty corner in every
+            // capture.
+            std::vector<rm::ui::MinimapPip> pips;
+            std::vector<std::array<float, 2>> view;
+            appendMinimapPips(pips, units);
+            appendViewFootprint(view, renderer.camera(), map->field,
+                                static_cast<float>(shot.width), static_cast<float>(shot.height));
+            rm::ui::appendMinimap(hud, renderer.labelFont(), hudThemeFor(units),
+                                  rm::ui::minimapLayout(static_cast<float>(shot.width),
+                                                        static_cast<float>(shot.height)),
+                                  map->field.widthElmos(), map->field.depthElmos(), pips, view);
+
             renderer.setHud(hud.label, hud.readout);
 
             const auto image = renderer.renderToImage(shot.width, shot.height);
@@ -4658,6 +4723,25 @@ int main(int argc, const char* argv[]) {
 
         window.onClick([&](const rm::Ray& ray, rm::MouseButton button,
                            rm::MouseModifiers mods) {
+            // THE MINIMAP FIRST, because it is in front of the world (§7 P7.4). A click on the
+            // panel is about the panel; without this check the ray under it would also select
+            // whatever unit happens to be behind the minimap, which is the single most
+            // irritating bug an overlay can have.
+            const rm::ui::MinimapLayout minimap =
+                rm::ui::minimapLayout(static_cast<float>(window.width()),
+                                      static_cast<float>(window.height()));
+            if (rm::ui::insideMinimap(minimap, mods.pointX, mods.pointY)) {
+                const std::array<float, 2> where =
+                    rm::ui::minimapToWorld(minimap, map->field.widthElmos(),
+                                           map->field.depthElmos(), mods.pointX, mods.pointY);
+                // Jump, keeping the camera's distance and angles — a minimap click moves where
+                // you are looking, not how. Height sampled from the terrain so the target sits
+                // on the ground rather than at y = 0, which on a hill would look like a zoom.
+                window.camera().target = simd_make_float3(
+                    where[0], map->field.heightAtWorld(where[0], where[1]), where[1]);
+                return;
+            }
+
             if (button == rm::MouseButton::Left) {
                 // What the click MEANS is decided in core/scene/Selection.hpp,
                 // where it can be tested. Nothing is left to do here: the units
@@ -4767,6 +4851,10 @@ int main(int argc, const char* argv[]) {
         // allocation — the same reason the dust emitters are.
         std::vector<rm::Particle> iconScratch;
         rm::ui::Geometry hudScratch;
+
+        // The minimap's per-frame scratch, kept out here so a frame allocates nothing.
+        std::vector<rm::ui::MinimapPip> minimapPips;
+        std::vector<std::array<float, 2>> minimapView;
         float matchSeconds = 0.0f;
 
         window.onFrame([&](float elapsed) {
@@ -4906,6 +4994,20 @@ int main(int argc, const char* argv[]) {
                           hudThemeFor(units), hudStateFrom(units, matchSeconds),
                           static_cast<float>(window.width()),
                           static_cast<float>(window.height()));
+
+            // THE MINIMAP (§7 P7.4), appended to the same geometry the HUD builds — it is
+            // rectangles in screen space, which is what `text::appendRect` already draws, so it
+            // needs no pipeline of its own. That is the other half of "nearly free".
+            appendMinimapPips(minimapPips, units);
+            appendViewFootprint(minimapView, window.camera(), map->field,
+                                static_cast<float>(window.width()),
+                                static_cast<float>(window.height()));
+            rm::ui::appendMinimap(hudScratch, window.labelFont(), hudThemeFor(units),
+                                  rm::ui::minimapLayout(static_cast<float>(window.width()),
+                                                        static_cast<float>(window.height())),
+                                  map->field.widthElmos(), map->field.depthElmos(), minimapPips,
+                                  minimapView);
+
             window.setHud(hudScratch.label, hudScratch.readout);
 
             // Rings under whatever is selected, rebuilt from scratch every

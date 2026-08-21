@@ -30,6 +30,16 @@ enum class MouseButton { Left, Right };
 // the usual "add to selection" modifiers; Control is treated the same as
 // Command for selection purposes.
 struct MouseModifiers {
+    /// WHERE the click landed, in points, top-left origin — the same space the HUD lays out in.
+    ///
+    /// HERE RATHER THAN AS A THIRD `onClick` PARAMETER because it belongs to the same question:
+    /// a callback is handed a ray for the world and this for the screen, and a caller that wants
+    /// neither ignores both. Added for the minimap (§7 P7.4), which has to know whether a click
+    /// was on the panel before it decides what the click meant — a ray alone cannot say, since
+    /// the panel is in front of the world rather than in it.
+    float pointX = 0.0f;
+    float pointY = 0.0f;
+
     bool shift = false;
     bool command = false;
     bool control = false;

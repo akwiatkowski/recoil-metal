@@ -112,6 +112,10 @@ static constexpr CGFloat kClickSlopPoints = 3.0;
                                       static_cast<float>(self.bounds.size.width),
                                       static_cast<float>(self.bounds.size.height));
     const rm::MouseModifiers mods{
+        // FLIPPED to top-left origin: the view is bottom-left and the HUD lays out from the top,
+        // so handing the raw value through would put the minimap's hit test in the wrong corner.
+        .pointX = static_cast<float>(local.x),
+        .pointY = static_cast<float>(self.bounds.size.height) - static_cast<float>(local.y),
         .shift = (event.modifierFlags & NSEventModifierFlagShift) != 0,
         .command = (event.modifierFlags & NSEventModifierFlagCommand) != 0,
         .control = (event.modifierFlags & NSEventModifierFlagControl) != 0,
