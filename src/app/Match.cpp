@@ -66,18 +66,49 @@ bool gPrintEvents = false;
 // applyCommand" is true of MOVEMENT and not of construction** — a correction to what that
 // commit claimed.
 //
-// WHY THE OBVIOUS FIX DOES NOT WORK, which is the useful part. Routing them was written, and it
-// broke the match completely — zero shots, zero units built past the first extractor. The cause
-// is two index spaces wearing one type name: `resolveBuildable` returns an index into
-// `scene.buildable` typed as `rm::UnitTypeIndex`, while `applyCommand` reads
-// `catalog.def(command.buildType)`. So a build order for a 36-mass extractor arrived as an
-// 18,000-mass experimental, and the economy never paid it off. P3's note that "an index is a
-// `UnitTypeIndex` now, which the catalog also uses" is true inside the sim and false in the app.
+// **THE BLOCKER IS GONE (`#3090`), and the hole is not closed yet.** Those are two statements
+// and both matter.
 //
-// Unifying them properly is not a small change: the catalog's index space is ALSO the draw
-// batch's — `resolveUnits` asserts `type == batches.size()` — so registering a buildable type
-// before anything of it spawns would break the draw path. It belongs with P7's snapshot seam,
-// where the sim's type index stops being the renderer's batch index.
+// What blocked it: `resolveBuildable` returned an index into a private `scene.buildable` list,
+// typed `rm::UnitTypeIndex`, while `applyCommand` read `catalog.def(command.buildType)`. Two
+// numbers, one type name. Routing builds through the sim turned a 36-mass extractor into an
+// 18,000-mass experimental and the economy never paid it off. Unifying them was blocked in turn
+// by the draw gather, which read `batch = unit.type` — so registering a buildable type before
+// anything of it spawned would have shifted every later type past its batch.
+//
+// Both are fixed. `Scene::batchForType` maps the two spaces, so a type may exist with no batch —
+// which is exactly what "buildable but not yet built" is — and `resolveBuildable` registers with
+// the catalog like everything else. `Construction::blueprintIndex` is now a real type index, and
+// `applyCommand` would read the right definition.
+//
+// What remains is the routing itself: moving these two call sites onto `applyCommand`, which is
+// a behaviour change (authorisation, the command log, and the sim rather than the caller raising
+// `ConstructionStarted`) rather than the refactor this was. It is a bounded job now instead of a
+// blocked one.
+//
+// One loose end, deliberate and small: a blueprint registered by `resolveBuildable` and later
+// built gets a SECOND type from `spawnUnit`, because that path creates a type and a batch
+// together. Both are real type indices resolving through the catalog, so nothing is ambiguous —
+// it costs one catalog entry per buildable blueprint. Collapsing them means teaching `spawnUnit`
+// to add a batch to an existing type, which belongs with the routing above.
+
+/// The definition a `Construction::blueprintIndex` names.
+///
+/// ONE INDEX SPACE (`#3090`). That field used to index a private `scene.buildable` list while
+/// `sim::applyCommand` read `catalog.def()` — the same type name meaning two different numbers,
+/// which is why builds could not go through the one order path. It is a real `UnitTypeIndex`
+/// now, so this is a catalog lookup like every other.
+///
+/// A missing definition is not reachable through the build path — a construction only exists
+/// because `resolveBuildable` registered its type — but the catalog returns a pointer, so the
+/// empty definition is what a caller gets rather than a dereferenced null.
+[[nodiscard]] const rm::unitdef::UnitDef& buildableDef(const UnitScene& scene,
+                                                       std::size_t blueprintIndex) {
+    static const rm::unitdef::UnitDef kNone{};
+    const rm::unitdef::UnitDef* def =
+        scene.catalog.def(static_cast<rm::UnitTypeIndex>(blueprintIndex));
+    return def != nullptr ? *def : kNone;
+}
 
 /// The player driving an army, or none. What `issueMove` needs to attribute an order.
 [[nodiscard]] rm::PlayerIndex playerDriving(const UnitScene& scene, int army) {
@@ -284,7 +315,7 @@ void runOpponents(UnitScene& scene, const rm::vfs::Vfs& content, const rm::Heigh
             if (work.armyIndex != army.index || work.finished()) {
                 continue;
             }
-            (scene.buildable[work.blueprintIndex].isMobile() ? tankUnderway
+            (buildableDef(scene, work.blueprintIndex).isMobile() ? tankUnderway
                                                              : structureUnderway) = true;
         }
 
@@ -342,7 +373,7 @@ void runOpponents(UnitScene& scene, const rm::vfs::Vfs& content, const rm::Heigh
                 const std::optional<std::size_t> blueprintIndex =
                     resolveBuildable(scene, content, blueprint);
                 if (blueprintIndex) {
-                    const rm::unitdef::UnitDef& def = scene.buildable[*blueprintIndex];
+                    const rm::unitdef::UnitDef& def = buildableDef(scene, *blueprintIndex);
                     // NOT THROUGH `applyCommand`, and that is a known hole rather than a
                     // preference — see `issueBuild`'s note. `Construction::blueprintIndex`
                     // indexes `scene.buildable`, and `applyCommand` reads `catalog.def()`:
@@ -379,7 +410,7 @@ void runOpponents(UnitScene& scene, const rm::vfs::Vfs& content, const rm::Heigh
                 resolveBuildable(scene, content,
                                  blueprintFor(scene, army, scene.opening.waveUnit));
             if (blueprintIndex) {
-                const rm::unitdef::UnitDef& def = scene.buildable[*blueprintIndex];
+                const rm::unitdef::UnitDef& def = buildableDef(scene, *blueprintIndex);
                 scene.building.push_back(rm::sim::Construction{
                     .armyIndex = army.index,
                     .position = standing.factoryPosition,
@@ -583,7 +614,7 @@ rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) 
         const float yaw = std::atan2(runner.field.widthElmos() * 0.5f - site[0],
                                      runner.field.depthElmos() * 0.5f - site[2]);
         const auto spawned = spawnUnit(scene, runner.content, runner.field,
-                                       scene.buildablePaths[work.blueprintIndex],
+                                       std::string{scene.pathOf(static_cast<rm::UnitTypeIndex>(work.blueprintIndex))},
                                        site, scene.armies[army], yaw);
         // `UnitFinished` after `UnitCreated`, which `spawnUnit` raised: the pair is Recoil's
         // (`04 §4.2` — `UnitCreated` then `UnitFinished` when the build completes) and the
@@ -598,7 +629,7 @@ rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) 
                 .at = work.position,
             });
         }
-        if (spawned && scene.buildable[work.blueprintIndex].isMobile()) {
+        if (spawned && buildableDef(scene, work.blueprintIndex).isMobile()) {
             // Off the factory floor: straight to the fight once the wave has gone, to the
             // rally point outside the base while it forms.
             const auto target = runner.scripts[army].attackLaunched
@@ -747,7 +778,7 @@ void march(UnitScene& scene, const rm::HeightField& field, PassabilitySet& passa
                 continue;
             }
             std::printf("  [%6.1fs] army %zu completes %s\n", static_cast<double>(now), army,
-                        scene.buildable[work.blueprintIndex].name.c_str());
+                        buildableDef(scene, work.blueprintIndex).name.c_str());
         }
 
         // Dust as the walk happens, aged as the walk continues, so what a capture

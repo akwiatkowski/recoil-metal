@@ -198,21 +198,104 @@ struct UnitScene {
     /// the others rather than filed under its owner.
     std::vector<rm::sim::Construction> building;
 
-    /// The blueprint each Construction becomes, by its `blueprintIndex` — which is a
-    /// `UnitTypeIndex`, the same number the catalog and the draw gather use. One index space,
-    /// so `sim::applyCommand` can create a construction naming a type the caller recognises.
-    std::vector<rm::unitdef::UnitDef> buildable;
+    /// `buildable` USED TO BE HERE, and its absence is the fix (`#3090`).
+    ///
+    /// It was a second registry of definitions, indexed 0..N in registration order and typed
+    /// `rm::UnitTypeIndex` — the same type name the catalog uses for a completely different
+    /// number. `Construction::blueprintIndex` meant "an index into `scene.buildable`" while
+    /// `sim::applyCommand` read `catalog.def(command.buildType)`, so routing a build order
+    /// through the one order path turned a 36-mass extractor into an 18,000-mass experimental
+    /// and the economy never paid it off. The doc comment on `resolveBuildable` described the
+    /// unified design for weeks; the code never caught up.
+    ///
+    /// Now there is one registry. `resolveBuildable` registers into `definitions` + `catalog`
+    /// like everything else and returns a REAL type index, so the sim, the catalog and the draw
+    /// gather all mean the same number by it.
 
-    /// The VFS path behind each `buildable` entry, parallel to it. What a FINISHED
-    /// construction spawns from: the def alone cannot resolve a model, and milestone
-    /// 20 is where a finished build becomes a unit on the map rather than a number
-    /// in the economy.
-    std::vector<std::string> buildablePaths;
+    /// The VFS path behind each registered type, indexed BY TYPE INDEX. What a FINISHED
+    /// construction spawns from: a definition alone cannot resolve a model.
+    ///
+    /// Sparse in the sense that a type registered from a model rather than a blueprint has an
+    /// empty entry — that is a legitimate state (`--units` spawns bare models), not a hole.
+    std::vector<std::string> pathForType;
 
-    /// The batch each spawned blueprint reuses, so twenty tanks are one batch and
+    /// The draw batch each TYPE is rendered by, indexed by type index, or `kNoBatch`.
+    ///
+    /// WHY THIS EXISTS. The gather used to read `batch = unit.type` — the two index spaces were
+    /// the same number by construction, and `resolveUnits` asserted it. That assertion is what
+    /// made a buildable type impossible to register before something of it spawned, because
+    /// doing so would have shifted every later type past its batch.
+    ///
+    /// With a real mapping, a type may exist with nothing to draw it — which is exactly what a
+    /// blueprint that is buildable but not yet built IS. The gather skips those, as it already
+    /// did for a type past the end of `drawScratch`; the difference is that now that state is
+    /// representable on purpose rather than by running off the end of an array.
+    static constexpr std::size_t kNoBatch = static_cast<std::size_t>(-1);
+    std::vector<std::size_t> batchForType;
+
+    /// Records that `type` draws with `batch`, growing the map as types are registered.
+    void setBatchForType(rm::UnitTypeIndex type, std::size_t batch) {
+        if (batchForType.size() <= static_cast<std::size_t>(type)) {
+            batchForType.resize(static_cast<std::size_t>(type) + 1, kNoBatch);
+        }
+        batchForType[static_cast<std::size_t>(type)] = batch;
+    }
+
+    /// The batch for a type, or `kNoBatch` when it has none.
+    [[nodiscard]] std::size_t batchOf(rm::UnitTypeIndex type) const noexcept {
+        const auto index = static_cast<std::size_t>(type);
+        return index < batchForType.size() ? batchForType[index] : kNoBatch;
+    }
+
+    /// The VFS path a type was loaded from, or empty.
+    [[nodiscard]] std::string_view pathOf(rm::UnitTypeIndex type) const noexcept {
+        const auto index = static_cast<std::size_t>(type);
+        return index < pathForType.size() ? std::string_view{pathForType[index]}
+                                          : std::string_view{};
+    }
+
+    /// Records the path a type was loaded from.
+    void setPathForType(rm::UnitTypeIndex type, std::string_view path) {
+        if (pathForType.size() <= static_cast<std::size_t>(type)) {
+            pathForType.resize(static_cast<std::size_t>(type) + 1);
+        }
+        pathForType[static_cast<std::size_t>(type)] = std::string{path};
+    }
+
+    /// Records the per-type facts the passability grids and the draw scale read.
+    ///
+    /// INDEXED RATHER THAN APPENDED, and that is the whole point. These three were
+    /// `push_back`ed at the batch-creation sites, which worked only while every type WAS a
+    /// batch. The moment `resolveBuildable` began registering a type with no batch (`#3090`),
+    /// appending fell one behind and every later type read the wrong slope limit and the wrong
+    /// model scale — which moved a screenshot, because `instanceFor` reads `typeScale[type]`.
+    ///
+    /// That is the same parallel-array hazard the third batch site's own comment records having
+    /// been bitten by before. Setting by index cannot fall behind, whatever order types are
+    /// registered in.
+    void setTypeTraits(rm::UnitTypeIndex type, float slopeDegrees, float waterDepthElmos,
+                       float scale) {
+        const auto index = static_cast<std::size_t>(type);
+        if (maxSlopeDegrees.size() <= index) {
+            maxSlopeDegrees.resize(index + 1);
+            maxWaterDepthElmos.resize(index + 1);
+            typeScale.resize(index + 1, 1.0f);
+        }
+        maxSlopeDegrees[index] = slopeDegrees;
+        maxWaterDepthElmos[index] = waterDepthElmos;
+        typeScale[index] = scale;
+    }
+
+    /// The TYPE each spawned blueprint reuses, so twenty tanks are one type, one batch and
     /// one draw call rather than twenty. Keyed by VFS path, same as the cache in
     /// spawnCommanders is keyed by faction.
-    std::map<std::string, std::size_t, std::less<>> batchForBlueprint;
+    ///
+    /// **THIS HELD A BATCH INDEX AND WAS READ AS A TYPE INDEX** (`#3090`) —
+    /// `static_cast<rm::UnitTypeIndex>(found->second)` in `spawnUnit`, which was correct only
+    /// while the two numbers were the same by construction. It is the type now; the batch comes
+    /// from `batchOf`. This was the regression the screenshot caught when the index spaces were
+    /// separated, and it is exactly the class of bug that separating them exists to prevent.
+    std::map<std::string, rm::UnitTypeIndex, std::less<>> typeForBlueprint;
 
     /// Set when a spawn added instances mid-simulation, so the tick loop knows its
     /// collision spans point at moved storage and rebuilds them.
@@ -309,8 +392,11 @@ struct UnitScene {
         drawIndexOf.assign(store.slotCount(), rm::SelectionEntry{});
 
         for (const rm::DrawUnit& unit : drawUnits) {
-            const auto batch = static_cast<std::size_t>(unit.type);
-            if (batch >= drawScratch.size()) {
+            // THROUGH THE MAP, not `unit.type` directly (`#3090`). A type and a batch are no
+            // longer the same number: a blueprint can be registered as buildable long before
+            // anything of it is built, and such a type has no batch until it spawns.
+            const std::size_t batch = batchOf(unit.type);
+            if (batch == kNoBatch || batch >= drawScratch.size()) {
                 continue;  // a type with no batch: nothing to draw it with
             }
             // Still keyed by SLOT, because that is what selection and picking name a unit by,

@@ -289,9 +289,6 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
             // FROM THE MOTION CLASS, not from the blueprint's own slope and depth — those
             // govern building placement (P3.4, `core/data/MoveDef.hpp`).
             const rm::data::MoveDef move = rm::data::moveDefFor(unit->def);
-            scene.maxSlopeDegrees.push_back(move.maxSlopeDegrees);
-            scene.maxWaterDepthElmos.push_back(move.maxWaterDepthElmos);
-            scene.typeScale.push_back(unit->def.meshToElmos);
 
             scene.batches.push_back(rm::UnitBatch{
                 .model = &scene.models.back(),
@@ -307,15 +304,12 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
             scene.definitions.push_back(unit->def);
             const rm::UnitTypeIndex type =
                 scene.catalog.add(&scene.definitions.back(), gAppTickRate);
-            // A type index and a batch index are the same number, by construction. Asserted
-            // rather than assumed: everything from the passability grid to the draw gather
-            // reads one as the other, and a drift here is a silent mismatch rather than a
-            // crash. (The old per-batch parallel arrays asserted the same thing and read
-            // `+ 1` until milestone 20 — never caught, because Release compiles asserts out,
-            // which is exactly one assert's worth of irony.)
-            assert(static_cast<std::size_t>(type) + 1 == scene.batches.size());
-            assert(scene.catalog.size() == scene.batches.size());
-            (void)type;
+            // The type draws with the batch just pushed. A MAP now rather than an identity —
+            // see `Scene::batchForType` for why the two numbers had to come apart (`#3090`).
+            scene.setBatchForType(type, scene.batches.size() - 1);
+            scene.setPathForType(type, path);
+            scene.setTypeTraits(type, move.maxSlopeDegrees, move.maxWaterDepthElmos,
+                                unit->def.meshToElmos);
 
             const auto armed = static_cast<std::size_t>(std::ranges::count_if(
                 unit->def.weapons, [](const rm::unitdef::Weapon& w) { return w.fires(); }));
@@ -407,8 +401,8 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
                                                           std::array<float, 3> position,
                                                           const rm::sim::Army& army,
                                                           float yaw) {
-    auto found = scene.batchForBlueprint.find(blueprintPath);
-    if (found == scene.batchForBlueprint.end()) {
+    auto found = scene.typeForBlueprint.find(blueprintPath);
+    if (found == scene.typeForBlueprint.end()) {
         const auto unit = resolveUnitFromContent(std::string{blueprintPath}, content);
         if (!unit) {
             std::fprintf(stderr, "spawn: no unit at %s in the mounted content\n",
@@ -422,9 +416,6 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
         // guesses standing in for a fact the blueprint had all along: `RULEUMT_*` says what this
         // unit crosses (P3.4). ADR-027 said passability comes from motion class; now it does.
         const rm::data::MoveDef move = rm::data::moveDefFor(unit->def);
-        scene.maxSlopeDegrees.push_back(move.maxSlopeDegrees);
-        scene.maxWaterDepthElmos.push_back(move.maxWaterDepthElmos);
-        scene.typeScale.push_back(unit->def.meshToElmos);
         scene.batches.push_back(rm::UnitBatch{
             .model = &scene.models.back(),
             .instances = {},
@@ -434,14 +425,17 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
             },
         });
         scene.definitions.push_back(unit->def);
-        (void)scene.catalog.add(&scene.definitions.back(), gAppTickRate);
-        assert(scene.catalog.size() == scene.batches.size());
+        const rm::UnitTypeIndex type =
+            scene.catalog.add(&scene.definitions.back(), gAppTickRate);
+        scene.setBatchForType(type, scene.batches.size() - 1);
+        scene.setPathForType(type, blueprintPath);
+        scene.setTypeTraits(type, move.maxSlopeDegrees, move.maxWaterDepthElmos,
+                            unit->def.meshToElmos);
 
-        found = scene.batchForBlueprint.emplace(std::string{blueprintPath},
-                                                scene.batches.size() - 1).first;
+        found = scene.typeForBlueprint.emplace(std::string{blueprintPath}, type).first;
     }
 
-    const auto type = static_cast<rm::UnitTypeIndex>(found->second);
+    const rm::UnitTypeIndex type = found->second;
     const rm::unitdef::UnitDef& def = *scene.catalog.def(type);
 
     const rm::sim::Terrain terrain{field};
@@ -514,11 +508,21 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
 [[nodiscard]] std::optional<rm::UnitTypeIndex> resolveBuildable(UnitScene& scene,
                                                                 const rm::vfs::Vfs& content,
                                                                 std::string_view blueprintPath) {
-    for (std::size_t i = 0; i < scene.buildablePaths.size(); ++i) {
-        if (scene.buildablePaths[i] == blueprintPath) {
-            return static_cast<rm::UnitTypeIndex>(i);
+    // ONE REGISTRY (`#3090`). This used to keep its own `scene.buildable` list and return an
+    // index into it, typed `rm::UnitTypeIndex` — a different number from the catalog's under the
+    // same type name, which is why routing a build order through `sim::applyCommand` turned a
+    // 36-mass extractor into an 18,000-mass experimental.
+    //
+    // Now a buildable type is a type: registered with the catalog like anything else, with NO
+    // BATCH until something of it is actually built. That is what `Scene::batchForType` bought —
+    // the gather no longer assumes a type index is a batch index, so a type may exist with
+    // nothing to draw it, which is precisely what "buildable but not yet built" means.
+    for (std::size_t type = 0; type < scene.pathForType.size(); ++type) {
+        if (scene.pathForType[type] == blueprintPath) {
+            return static_cast<rm::UnitTypeIndex>(type);
         }
     }
+
     const auto bytes = content.read(std::string{blueprintPath});
     if (!bytes) {
         std::fprintf(stderr, "economy: no blueprint at %s in the mounted content\n",
@@ -531,9 +535,19 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
     if (!def) {
         return std::nullopt;
     }
-    scene.buildable.push_back(*def);
-    scene.buildablePaths.emplace_back(blueprintPath);
-    return static_cast<rm::UnitTypeIndex>(scene.buildable.size() - 1);
+
+    scene.definitions.push_back(*def);
+    const rm::UnitTypeIndex type = scene.catalog.add(&scene.definitions.back(), gAppTickRate);
+    scene.setPathForType(type, blueprintPath);
+    // The traits too, even though nothing of this type is standing yet: they are indexed by
+    // type, so leaving a hole would make every LATER type read the wrong slope limit and the
+    // wrong model scale. That is the bug this refactor introduced and then caught — see
+    // `Scene::setTypeTraits`.
+    const rm::data::MoveDef move = rm::data::moveDefFor(*def);
+    scene.setTypeTraits(type, move.maxSlopeDegrees, move.maxWaterDepthElmos, def->meshToElmos);
+    // Deliberately NO `setBatchForType`: nothing of this type exists yet. `spawnUnit` records
+    // the batch when the first one is built.
+    return type;
 }
 
 /// Orders every commander to build a mass extractor on its nearest deposit.
@@ -588,12 +602,12 @@ void orderFirstExtractors(UnitScene& scene, std::span<const rm::scenario::Marker
         const std::string blueprint = blueprintFor(
             scene, scene.armies[static_cast<std::size_t>(army)],
             extractorStep(scene.opening));
-        const std::optional<std::size_t> registered =
+        const std::optional<rm::UnitTypeIndex> registered =
             blueprint.empty() ? std::nullopt : resolveBuildable(scene, content, blueprint);
         if (!registered) {
             continue;  // this faction fields no extractor this engine can read
         }
-        const rm::unitdef::UnitDef* extractor = &scene.buildable[*registered];
+        const rm::unitdef::UnitDef* extractor = scene.catalog.def(*registered);
 
         const std::array<rm::sim::Fx, 3> from =
             rm::sim::positionOf(scene.store.transforms()[slot]);
@@ -808,9 +822,6 @@ void orderFirstExtractors(UnitScene& scene, std::span<const rm::scenario::Marker
         const rm::data::MoveDef move =
             def.has_value() ? rm::data::moveDefFor(*def)
                             : rm::data::moveDefFor(rm::unitdef::MotionType::None);
-        scene.maxSlopeDegrees.push_back(move.maxSlopeDegrees);
-        scene.maxWaterDepthElmos.push_back(move.maxWaterDepthElmos);
-        scene.typeScale.push_back(def.has_value() ? def->meshToElmos : 1.0f);
 
         // The TYPE for these units. One per batch, and the two indices are the same number
         // by construction — which is the whole reason the old parallel-array hazard here is
@@ -825,7 +836,11 @@ void orderFirstExtractors(UnitScene& scene, std::span<const rm::scenario::Marker
         } else {
             type = scene.catalog.add(nullptr);  // a bare model: it neither fires nor dies
         }
-        assert(static_cast<std::size_t>(type) == scene.batches.size());
+        // The batch for this type is the one pushed below, so the mapping is recorded there
+        // rather than asserted here. The assertion this replaces — `type == batches.size()` —
+        // is the one that made a buildable type impossible to register early (`#3090`).
+        scene.setTypeTraits(type, move.maxSlopeDegrees, move.maxWaterDepthElmos,
+                            def.has_value() ? def->meshToElmos : 1.0f);
 
         // A definition's speed and turn rate reach every unit of it. Slope and depth limits
         // do NOT yet: passability is one grid for the whole scene, so honouring them per
@@ -859,6 +874,7 @@ void orderFirstExtractors(UnitScene& scene, std::span<const rm::scenario::Marker
             .textures = pair,
             .animation = animation,
         });
+        scene.setBatchForType(type, scene.batches.size() - 1);
     }
 
     scene.interpolate = gInterpolate;
