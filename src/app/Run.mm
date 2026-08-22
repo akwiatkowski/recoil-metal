@@ -369,6 +369,12 @@ int runScreenshot(const Session& session) {
                                           static_cast<float>(shot.width),
                                           static_cast<float>(shot.height), shotRefs);
             appendSceneIcons(shotParticles, units, renderer.camera(), shotRefs);
+            // The shots in flight at the captured tick — the reason a battle screenshot
+            // finally shows the battle. No trails headless: the capture has no aging
+            // particle list for them to fade through.
+            rm::appendProjectiles(shotParticles, units.projectiles, 0.0f,
+                                  renderer.camera().elmosPerPoint(
+                                      rm::kIconReferenceHeightPoints));
             renderer.setParticles(shotParticles);
 
             if (!shotOptions.empty()) {
@@ -1116,6 +1122,10 @@ int runWindowed(const Session& session) {
                 // queue, so this tick's shots are visible now or never.
                 rm::emitCombatEffects(particles, units.events.all());
 
+                // ...and the arcs' smoke, one puff per shell per tick — the emission rate
+                // is the sim's own, so the trail spacing is a tick of travel (ProjectileFx).
+                rm::emitProjectileTrails(particles, units.projectiles);
+
                 // The match, announced once. The frame loop draws the fight rather than
                 // narrating it, so this is the one thing worth saying out loud — and only
                 // when there is a match to decide, the same guard the pre-run uses.
@@ -1204,6 +1214,11 @@ int runWindowed(const Session& session) {
             // out of the particle list. One frame after a fresh type appears, both tables
             // agree; in between it shows the square, which is the fallback anyway.
             appendSceneIcons(iconScratch, units, window.camera(), strategicRefs);
+            // The shots in flight, extrapolated by the frame's tick fraction — rebuilt per
+            // frame like the icons, into the same scratch, aging never.
+            rm::appendProjectiles(iconScratch, units.projectiles, clock.alpha(),
+                                  window.camera().elmosPerPoint(
+                                      rm::kIconReferenceHeightPoints));
             window.setParticles(iconScratch);
 
             hudScratch.clear();

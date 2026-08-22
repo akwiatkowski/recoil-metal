@@ -343,6 +343,26 @@ shot-engineer: build check-fa
 	  --play $(SECONDS) --select 1 --look $(MARCH) 400 --screenshot $(SHOT) $(SHOT_SIZE)
 	@echo "  wrote $(SHOT)"
 
+# Moments of ONE battle, captured. The match is deterministic, so re-running to a later
+# second is scrubbing the same fight forward — which is what makes this retry-friendly by
+# construction: tweak the AI, run the same command, compare the same moments. LOOK aims the
+# camera (X Z RADIUS, world elmos); empty frames the whole map.
+#
+#   make battle-shots ARMIES=8 ALLIANCES=2 SHOT_TIMES="300 600 900" LOOK="4096 4096 600"
+SHOT_TIMES ?= 300 600 900 1200
+SHOT_DIR   ?= /tmp/rm-battle
+LOOK       ?=
+LOOK_FLAG   = $(if $(LOOK),--look $(LOOK),)
+battle-shots: build check-fa
+	@mkdir -p $(SHOT_DIR)
+	@for t in $(SHOT_TIMES); do \
+	  echo "=== $$t s ==="; \
+	  $(BIN) "$(FA_MAP)" $(FA_FLAGS) --skirmish --observer --armies $(ARMIES) \
+	    $(ALLIANCE_FLAG) $(FACTION_FLAG) --play $$t $(LOOK_FLAG) \
+	    --screenshot $(SHOT_DIR)/battle-$$t.png $(SHOT_SIZE) | tail -1; \
+	done
+	@echo 'wrote $(SHOT_DIR)/battle-<seconds>.png'
+
 shot-bar: build check-bar
 	$(BIN) "$(BAR_MAP)" --units "$(BAR_UNIT)" $(UNITS) --march $(MARCH) $(SECONDS) --focus \
 	  --screenshot $(SHOT) $(SHOT_SIZE)

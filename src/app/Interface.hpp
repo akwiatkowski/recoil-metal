@@ -15,6 +15,7 @@
 #include "app/Match.hpp"
 
 #include "core/scene/CombatEffects.hpp"
+#include "core/scene/ProjectileFx.hpp"
 #include "core/scene/Particles.hpp"
 #include "core/scene/Picking.hpp"
 #include "core/scene/UnitIcons.hpp"
