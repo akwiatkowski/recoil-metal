@@ -76,6 +76,11 @@
 @property(nonatomic, assign) const std::function<void(char)>* keyCallback;
 @property(nonatomic, assign) const std::function<void(char, bool)>* keyStateCallback;
 @property(nonatomic, assign) std::set<char>* heldKeys;
+
+/// Re-derives the layer's drawableSize from bounds x contentsScale. Called by every resize;
+/// exposed so construction can run it once before the first frame — drawableSize is 0x0
+/// until somebody computes it, and Window::width() reads it.
+- (void)rmSyncDrawableSize;
 @end
 
 @implementation RMTerrainView {
@@ -87,6 +92,49 @@
 
 - (BOOL)acceptsFirstResponder {
     return YES;
+}
+
+/// Keeps the CAMetalLayer's drawableSize equal to bounds x contentsScale.
+///
+/// CAMetalLayer does NOT do this itself: drawableSize is computed once, at the first
+/// -nextDrawable, and then LATCHES — a later frame change leaves it at the old value
+/// (measured: shrink the layer from 1600x900 to 900x500 and the next drawable is still
+/// 3200x1800). MTKView resyncs it on every resize for exactly this reason, and a raw
+/// layer-hosting view has to do the same by hand.
+///
+/// Skipping the sync was the resize bug: the scene kept rendering into the startup-sized
+/// drawable while the HUD was laid out for the window's new size, so everything anchored to
+/// the bottom or right edge — minimap, build tray, roster, clock — slid off the visible area.
+- (void)rmSyncDrawableSize {
+    CAMetalLayer* metalLayer = static_cast<CAMetalLayer*>(self.layer);
+    if (metalLayer == nil) {
+        return;
+    }
+    const CGFloat scale = metalLayer.contentsScale > 0.0 ? metalLayer.contentsScale : 1.0;
+    const CGSize want = CGSizeMake(self.bounds.size.width * scale,
+                                   self.bounds.size.height * scale);
+    if (want.width >= 1.0 && want.height >= 1.0
+        && !CGSizeEqualToSize(metalLayer.drawableSize, want)) {
+        metalLayer.drawableSize = want;
+    }
+}
+
+/// Every resize comes through here, live-drag steps included.
+- (void)setFrameSize:(NSSize)newSize {
+    [super setFrameSize:newSize];
+    [self rmSyncDrawableSize];
+}
+
+/// The window changed screens (or the screen changed scale): re-match the backing scale, or
+/// the render is silently half resolution on the new display — and then resync the drawable,
+/// because contentsScale is the other half of its size.
+- (void)viewDidChangeBackingProperties {
+    [super viewDidChangeBackingProperties];
+    CAMetalLayer* metalLayer = static_cast<CAMetalLayer*>(self.layer);
+    if (metalLayer != nil && self.window != nil && self.window.backingScaleFactor > 0.0) {
+        metalLayer.contentsScale = self.window.backingScaleFactor;
+    }
+    [self rmSyncDrawableSize];
 }
 
 /// How far the pointer may move between press and release and still count as a
@@ -335,9 +383,13 @@ struct rm::Window::Impl {
         [metalLayer setContentsScale:[[window screen] backingScaleFactor]];
         [view setLayer:metalLayer];
 
-        // Resize the drawable with the view, otherwise the terrain stretches
-        // whenever the window changes size.
+        // Redraw during live resize rather than stretching the last frame.
         [view setLayerContentsRedrawPolicy:NSViewLayerContentsRedrawDuringViewResize];
+
+        // The first drawableSize. Without this it stays 0x0 until the first -nextDrawable,
+        // and Window::width() — which reads drawableSize precisely so layout and drawable
+        // can never disagree — would report a 1x1 viewport for the first frame's layout.
+        [view rmSyncDrawableSize];
 
         // metal-cpp types are layout-compatible with their ObjC twins by
         // design (Apple's metal-cpp README). __bridge = pointer cast with no
@@ -526,17 +578,18 @@ void Window::focusOn(std::array<float, 3> target, float distance) {
 OrbitCamera& Window::camera() { return impl_->renderer->camera(); }
 
 unsigned int Window::width() const {
-    // The view's own layer, which is the CAMetalLayer the renderer draws into, so its
-    // drawableSize is exactly what encodeScene is handed.
-    const CGSize size = impl_->view.layer.frame.size;
-    const CGFloat scale = impl_->view.window.backingScaleFactor;
-    return static_cast<unsigned int>(std::max(1.0, size.width * scale));
+    // The layer's drawableSize IS what encodeScene is handed — the drawable's texture is made
+    // at exactly this size — so reading it here means the HUD's layout space and the shader's
+    // viewport cannot disagree. The previous version computed frame x backingScaleFactor,
+    // which drifts from the drawable across a resize (drawableSize latches; see
+    // -rmSyncDrawableSize), and the whole bottom-anchored interface slid off screen.
+    const CGSize size = static_cast<CAMetalLayer*>(impl_->view.layer).drawableSize;
+    return static_cast<unsigned int>(std::max(1.0, size.width));
 }
 
 unsigned int Window::height() const {
-    const CGSize size = impl_->view.layer.frame.size;
-    const CGFloat scale = impl_->view.window.backingScaleFactor;
-    return static_cast<unsigned int>(std::max(1.0, size.height * scale));
+    const CGSize size = static_cast<CAMetalLayer*>(impl_->view.layer).drawableSize;
+    return static_cast<unsigned int>(std::max(1.0, size.height));
 }
 
 text::Font Window::labelFont() const { return impl_->renderer->labelFont(); }

@@ -1780,3 +1780,32 @@ rather than one caught by looking. The conversion itself lives behind AppKit and
 not link it, so it is not directly testable; `tests/test_build_panel.cpp` pins the relationship
 that makes a mismatch fatal — at twice the drawable size every cell is somewhere else, so a
 point good in one space is a miss in the other rather than merely imprecise.
+
+## ADR-041 — The drawable's size is the one source of the viewport, and the view keeps it true
+
+**Context.** Resizing the window slid every bottom- and right-anchored panel — minimap, build
+tray, roster, clock — off the visible area. The HUD was laid out against
+`Window::width()`/`height()` (then: layer frame × `backingScaleFactor`) while the shader mapped
+those vertices through the drawable texture's own size, and the two disagreed after any resize.
+Measured cause: **`CAMetalLayer` computes `drawableSize` once, at the first `-nextDrawable`,
+and never follows a later frame change** — shrink the layer from 1600×900 to 900×500 and the
+next drawable is still 3200×1800. MTKView resyncs it on every resize precisely because the
+layer will not; a raw layer-hosting NSView has to do the same by hand, and this one did not.
+
+**Decision.** Two halves, both needed. `RMTerrainView` overrides `setFrameSize:` and
+`viewDidChangeBackingProperties` to re-derive `drawableSize` from bounds × `contentsScale`
+(and to re-match `contentsScale` to the screen, for a window dragged between displays), with
+one explicit sync at construction because the value is 0×0 until somebody computes it. And
+`Window::width()`/`height()` now read `drawableSize` itself rather than recomputing it from
+the frame — the layout space and the shader's viewport are one value read from one place, so
+they cannot disagree by construction, whatever AppKit does between frames.
+
+**Alternatives considered.** Keeping frame × scale as the report and only adding the sync —
+rejected: it leaves two computations of the same quantity agreeing by luck, which is exactly
+what just failed. An `MTKView` — rejected long ago for the display-link and ownership reasons
+in `Window.mm`; adopting it for this alone would trade a two-method fix for a re-plumbing.
+
+**Consequences.** A live-resize frame may still lay out against a size one frame stale — the
+next frame corrects it, invisible in practice. Verified end to end by resizing the running app
+through the same `setFrameSize:` path a manual drag takes; not unit-testable, as `rm_tests`
+does not link AppKit (ADR-040's caveat).
