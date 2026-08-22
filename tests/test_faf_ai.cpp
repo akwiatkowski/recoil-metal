@@ -162,3 +162,88 @@ TEST_CASE("the corpus reaches for the engine, and the report ranks what it wante
         ++shown;
     }
 }
+
+TEST_CASE("the thread model runs: fork, wait, resume on the right tick, die alone",
+          "[faf][ai][threads]") {
+    const std::filesystem::path root = corpusRoot();
+    if (root.empty()) {
+        SKIP("no vendored corpus; run `make ai`");
+    }
+    FafAi ai(root);
+    REQUIRE(ai.ready());
+
+    // A worker that ticks a counter, waits a second, and repeats; a mayfly that errors.
+    REQUIRE(ai.eval(R"(
+        beats = 0
+        worker = ForkThread(function()
+            while true do
+                beats = beats + 1
+                WaitSeconds(1)
+            end
+        end)
+        ForkThread(function() error("mayfly") end)
+    )"));
+
+    // Nothing has run yet: a fork schedules, the pump executes.
+    CHECK(ai.threadsAlive() == 2);
+
+    // Tick 0: both resume. The worker beats once and sleeps ten ticks; the mayfly dies
+    // alone, recorded, without taking the worker with it.
+    (void)ai.pump(0);
+    REQUIRE(ai.eval("assert(beats == 1)"));
+    CHECK(ai.threadsAlive() == 1);
+    REQUIRE(ai.threadErrors().size() == 1);
+
+    // Ticks 1..9: asleep. Tick 10: one second has passed at the adapter's 10 Hz.
+    for (long long tick = 1; tick < 10; ++tick) {
+        CHECK(ai.pump(tick) == 0);
+    }
+    CHECK(ai.pump(10) == 1);
+    REQUIRE(ai.eval("assert(beats == 2)"));
+
+    // KillThread by handle: the worker never beats again.
+    REQUIRE(ai.eval("KillThread(worker)"));
+    CHECK(ai.pump(20) == 0);
+    REQUIRE(ai.eval("assert(beats == 2)"));
+    CHECK(ai.threadsAlive() == 0);
+}
+
+TEST_CASE("bare table iteration works, as LuaPlus meant it", "[faf][ai]") {
+    const std::filesystem::path root = corpusRoot();
+    if (root.empty()) {
+        SKIP("no vendored corpus; run `make ai`");
+    }
+    FafAi ai(root);
+    REQUIRE(ai.ready());
+
+    // The corpus's habit, 1,134 times over: a bare table after `in`. The eval path runs the
+    // raw chunk, so the rewrite is exercised through a module in the corpus's own dialect —
+    // class.lua importing at construction already proved it, but prove it small and directly:
+    // the wrapped iterator must also pass a REAL iterator triple through untouched.
+    REQUIRE(ai.eval(R"(
+        local sum = 0
+        for _, v in __rm_iter({ 3, 4, 5 }) do sum = sum + v end
+        assert(sum == 12)
+        local keys = 0
+        for k in __rm_iter(pairs({ a = 1, b = 2 })) do keys = keys + 1 end
+        assert(keys == 2)
+    )"));
+}
+
+TEST_CASE("import hands back the module's environment, which is how FAF exports",
+          "[faf][ai]") {
+    const std::filesystem::path root = corpusRoot();
+    if (root.empty()) {
+        SKIP("no vendored corpus; run `make ai`");
+    }
+    FafAi ai(root);
+    REQUIRE(ai.ready());
+
+    // BuilderManager.lua never returns a value; it declares `BuilderManager` at file scope.
+    // Moho's import returns the module environment, so the symbol must be reachable — this
+    // is the semantic whose absence took the whole manager layer down with Class(nil).
+    REQUIRE(ai.eval(R"(
+        local m = import('/lua/sim/BuilderManager.lua')
+        assert(type(m.BuilderManager) == 'table', 'BuilderManager not exported')
+    )"));
+}

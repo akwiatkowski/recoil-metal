@@ -108,6 +108,22 @@ public:
 
     [[nodiscard]] const std::string& lastError() const noexcept { return lastError_; }
 
+    /// Resumes every forked thread that is due at `tick` — Moho's scheduler beat, one call
+    /// per sim tick. Returns how many resumed. A thread that errors records its message
+    /// (`threadErrors`) and dies alone; the rest keep running, which is what lets one broken
+    /// platoon behaviour not take the brain with it.
+    std::size_t pump(long long tick);
+
+    /// Threads forked and not yet finished, killed or crashed.
+    [[nodiscard]] std::size_t threadsAlive() const;
+
+    /// Every error a thread has died with, in order. The runtime half of `modules()`.
+    [[nodiscard]] std::vector<std::string> threadErrors() const;
+
+    /// Runs a chunk in the sandbox's globals — the adapter's own hatch, for tests and for
+    /// the opponent bridge to come. False on error, with `lastError` set.
+    [[nodiscard]] bool eval(std::string_view chunk);
+
     /// Every module load attempted, in the order attempted — including the ones `import` was
     /// forgiving about, which is the point.
     [[nodiscard]] std::vector<ModuleLoad> modules() const;

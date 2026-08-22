@@ -52,6 +52,7 @@ FAF_PATHS=(
     /lua/aibrain.lua                    # the brain object
     /lua/aibrainPlans.lua
     /lua/aipersonality.lua
+    /lua/factions.lua                   # faction table: GetFactions drives the factory manager
     /lua/platoon.lua                    # the platoon behaviour library
     /lua/sim/Builder.lua                # the manager classes the brain drives
     /lua/sim/BuilderManager.lua

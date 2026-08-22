@@ -32,6 +32,16 @@ struct Slot {
 struct Sandbox;
 [[nodiscard]] Sandbox* sandboxOf(lua_State* lua);
 
+/// One forked thread: the coroutine (held alive by a registry ref), its handle table (what
+/// the AI stores in TrashBags and passes to KillThread), and when it next wants to run.
+struct Thread {
+    int coroutine = LUA_NOREF;
+    int handle = LUA_NOREF;
+    long long wake = 0;
+    int firstArgs = -1;  ///< args to pass on the FIRST resume; -1 after it has run once
+    bool dead = false;
+};
+
 struct Sandbox {
     std::vector<Slot> slots;
     std::filesystem::path root;
@@ -43,7 +53,20 @@ struct Sandbox {
     bool verbose = false;
     /// Instructions the current chunk may still execute before the watchdog stops it.
     long long fuel = 0;
+
+    /// The scheduler: Moho's thread model, on coroutines. `ForkThread` files one here,
+    /// `pump` resumes what is due, `WaitSeconds`/`WaitTicks` yield a wake delay. Errors are
+    /// recorded, not fatal — one broken platoon thread must not stop the brain.
+    std::vector<Thread> threads;
+    std::vector<std::string> threadErrors;
+    long long tick = 0;              ///< the pump's clock, in sim ticks
+    std::size_t currentThread = SIZE_MAX;  ///< index being resumed, for CurrentThread
 };
+
+/// The adapter's tick rate assumption, matching the app's default. WaitSeconds converts
+/// through this at yield time; if the app ever runs the sandbox at another rate, the pump's
+/// caller owns the conversion instead.
+constexpr long long kTicksPerSecond = 10;
 
 /// THE WATCHDOG, and it is not optional when hosting someone else's code.
 ///
@@ -66,8 +89,8 @@ void fuelHook(lua_State* lua, lua_Debug*) {
         // No %lld: lua_pushfstring supports only %d %f %s %p %c %U %%, and passing %lld makes
         // Lua raise "invalid option '%l'" INSTEAD of this message — which is how this bug first
         // showed up, as a format complaint standing in for a real diagnosis.
-        luaL_error(lua, "instruction budget exhausted (%d M instructions) — a loop that never "
-                        "yields, most likely waiting on a stubbed WaitSeconds",
+        luaL_error(lua, "instruction budget exhausted (%d M instructions) — a loop that "
+                        "never yields",
                    static_cast<int>(kInstructionBudget / 1'000'000));
     }
 }
@@ -117,6 +140,173 @@ int logSink(lua_State* lua) {
     return root / relative;
 }
 
+/// `DiskFindFiles(directory, pattern)` — the engine's file enumeration, real rather than
+/// stubbed because the corpus uses it to discover plugin files (custom factions, builder
+/// packs) and a nil return walks straight into a for-loop. Answers from the VENDORED corpus,
+/// which is the honest disk this sandbox has: a directory we did not fetch enumerates as
+/// empty, exactly as an absent directory would in Moho.
+int diskFindFiles(lua_State* lua) {
+    Sandbox* sandbox = sandboxOf(lua);
+    const char* directory = luaL_optstring(lua, 1, "/");
+    const char* pattern = luaL_optstring(lua, 2, "*");
+
+    lua_newtable(lua);
+    if (sandbox == nullptr) {
+        return 1;
+    }
+
+    // The one glob form the corpus uses: a `*` prefix on a suffix — `*.lua`, `*_unit.bp`.
+    std::string want{pattern};
+    const bool anyPrefix = !want.empty() && want.front() == '*';
+    if (anyPrefix) {
+        want.erase(want.begin());
+    }
+
+    const std::filesystem::path base = resolve(sandbox->root, directory);
+    std::error_code ec;
+    if (!std::filesystem::is_directory(base, ec)) {
+        return 1;  // absent is empty, not an error — most of the game is deliberately unfetched
+    }
+
+    int index = 0;
+    for (auto it = std::filesystem::recursive_directory_iterator(base, ec);
+         it != std::filesystem::recursive_directory_iterator(); it.increment(ec)) {
+        if (ec || !it->is_regular_file(ec)) {
+            continue;
+        }
+        const std::string name = it->path().filename().string();
+        const bool matches = anyPrefix ? name.size() >= want.size()
+                                             && name.compare(name.size() - want.size(),
+                                                             want.size(), want)
+                                                    == 0
+                                       : name == want;
+        if (!matches) {
+            continue;
+        }
+        // Back to the corpus's own spelling: absolute-from-root, forward slashes.
+        std::string relative =
+            std::filesystem::relative(it->path(), sandbox->root, ec).generic_string();
+        lua_pushstring(lua, ("/" + relative).c_str());
+        lua_rawseti(lua, -2, ++index);
+    }
+    return 1;
+}
+
+
+// --- The thread model --------------------------------------------------------------------
+//
+// Moho's threads, on Lua coroutines. FAF's whole runtime is written against ForkThread /
+// WaitSeconds / WaitTicks — every manager is a loop that works a little and waits — and this
+// is what was missing when every budget death was blamed on "a stubbed WaitSeconds". A fork
+// is a coroutine plus a wake time; the pump resumes what is due each tick; a wait is a yield
+// carrying the delay. One broken thread records an error and dies alone.
+
+/// The handle's Destroy/SetPriority live in one shared metatable, created on demand.
+void pushThreadHandleMeta(lua_State* lua);
+
+int forkThread(lua_State* lua) {
+    Sandbox* sandbox = sandboxOf(lua);
+    luaL_checktype(lua, 1, LUA_TFUNCTION);
+    if (sandbox == nullptr) {
+        lua_pushnil(lua);
+        return 1;
+    }
+    const int args = lua_gettop(lua) - 1;
+
+    // The coroutine, with the function and its arguments moved across. The watchdog hook is
+    // PER THREAD in Lua, so each coroutine arms its own — without this, a runaway forked
+    // loop would be the one thing the budget could not stop.
+    lua_State* co = lua_newthread(lua);
+    lua_sethook(co, fuelHook, LUA_MASKCOUNT, 1000);
+    lua_pushvalue(lua, 1);
+    lua_xmove(lua, co, 1);
+    for (int i = 0; i < args; ++i) {
+        lua_pushvalue(lua, 2 + i);
+    }
+    if (args > 0) {
+        lua_xmove(lua, co, args);
+    }
+
+    Thread thread;
+    thread.coroutine = luaL_ref(lua, LUA_REGISTRYINDEX);  // pops the thread object
+    thread.wake = sandbox->tick;  // due at the next pump — a fork runs soon, not now
+    thread.firstArgs = args;
+
+    // The handle: what TrashBags hold and KillThread takes. Index is 1-based so a plain
+    // truthiness test on the field works from Lua.
+    lua_newtable(lua);
+    lua_pushinteger(lua, static_cast<lua_Integer>(sandbox->threads.size() + 1));
+    lua_setfield(lua, -2, "__rm_thread");
+    pushThreadHandleMeta(lua);
+    lua_setmetatable(lua, -2);
+    lua_pushvalue(lua, -1);
+    thread.handle = luaL_ref(lua, LUA_REGISTRYINDEX);
+
+    sandbox->threads.push_back(thread);
+    return 1;  // the handle
+}
+
+/// Marks a thread dead by handle. Shared by KillThread and handle:Destroy().
+int killThread(lua_State* lua) {
+    Sandbox* sandbox = sandboxOf(lua);
+    if (sandbox == nullptr || !lua_istable(lua, 1)) {
+        return 0;
+    }
+    lua_getfield(lua, 1, "__rm_thread");
+    const lua_Integer index = lua_tointeger(lua, -1);
+    lua_pop(lua, 1);
+    if (index >= 1 && static_cast<std::size_t>(index) <= sandbox->threads.size()) {
+        sandbox->threads[static_cast<std::size_t>(index - 1)].dead = true;
+    }
+    return 0;
+}
+
+int threadHandleDestroy(lua_State* lua) { return killThread(lua); }
+int threadHandleNoop(lua_State*) { return 0; }
+
+void pushThreadHandleMeta(lua_State* lua) {
+    if (luaL_newmetatable(lua, "rm_faf_thread") != 0) {
+        lua_newtable(lua);
+        lua_pushcfunction(lua, threadHandleDestroy);
+        lua_setfield(lua, -2, "Destroy");
+        lua_pushcfunction(lua, threadHandleNoop);
+        lua_setfield(lua, -2, "SetPriority");
+        lua_setfield(lua, -2, "__index");
+    }
+}
+
+/// `WaitSeconds`/`WaitTicks`. Inside a coroutine: yield the delay in ticks, floored at one —
+/// a zero-tick wait is still a yield, which is exactly what breaks the spin the watchdog
+/// used to kill. At the top level (module load, no coroutine): return immediately — Moho
+/// never waits during import either, and a no-op is the honest translation.
+int waitTicksCount(lua_State* lua, long long ticks) {
+    if (lua_isyieldable(lua) == 0) {
+        return 0;
+    }
+    lua_pushinteger(lua, static_cast<lua_Integer>(std::max(1ll, ticks)));
+    return lua_yield(lua, 1);
+}
+
+int waitSeconds(lua_State* lua) {
+    const double seconds = luaL_optnumber(lua, 1, 0.0);
+    return waitTicksCount(lua,
+                          static_cast<long long>(seconds * static_cast<double>(kTicksPerSecond)));
+}
+
+int waitTicks(lua_State* lua) {
+    return waitTicksCount(lua, static_cast<long long>(luaL_optinteger(lua, 1, 1)));
+}
+
+int currentThread(lua_State* lua) {
+    Sandbox* sandbox = sandboxOf(lua);
+    if (sandbox == nullptr || sandbox->currentThread >= sandbox->threads.size()) {
+        lua_pushnil(lua);
+        return 1;
+    }
+    lua_rawgeti(lua, LUA_REGISTRYINDEX, sandbox->threads[sandbox->currentThread].handle);
+    return 1;
+}
+
 /// Moho's Lua is not stock Lua, and the corpus proves it in five ways rather than the zero
 /// ADR-039 first measured. That measurement checked the 5.0-isms `PLAN.md` catalogued on the SIM
 /// corpus — `#` line comments (0 files here), `arg[]` (0), `table.getn`/`math.mod` (shimmed) —
@@ -158,6 +348,21 @@ int logSink(lua_State* lua) {
     bool pendingDo = false;    // saw `for`/`while`, waiting for the `do` that opens its body
     bool pendingThen = false;  // saw `if`, waiting for its `then` (an `elseif`'s does not open)
     bool inParams = false;     // inside a function's parameter list
+
+    // The SIXTH Moho-ism, found the day the AI was asked to run rather than parse: bare
+    // table iteration. `for k, v in class do` — no pairs() — is legal LuaPlus, and the
+    // corpus does it 1,134 times; class.lua's own object model is built on it. Stock Lua
+    // calls the table as an iterator, which with the Class factory's __call metamethod is
+    // an infinite loop the watchdog reports as a budget death at class.lua:551.
+    //
+    // The rewrite wraps the WHOLE in-list: `in __rm_iter(<exprs>)`. That is safe for every
+    // form — `__rm_iter` (kDialectShims) passes a function triple straight through and
+    // turns a bare table into `next, t, nil` — so no expression analysis is needed, and a
+    // multi-value `pairs(t)` inside the parentheses keeps all three values by Lua's own
+    // last-argument rule.
+    bool forHeader = false;    // saw `for`, deciding numeric (`=`) against generic (`in`)
+    bool wrapOpen = false;     // emitted `__rm_iter(`, owes a `)` before the header's `do`
+    int wrapFnDepth = 0;       // `function` opened inside the wrapped exprs (pathological)
     int parenDepth = 0;
     std::string params;
 
@@ -252,6 +457,9 @@ int logSink(lua_State* lua) {
                 inParams = true;
                 parenDepth = 0;
                 params.clear();
+                if (wrapOpen) {
+                    ++wrapFnDepth;  // a function literal inside the wrapped exprs
+                }
             } else if (word == "if") {
                 pendingThen = true;
             } else if (word == "elseif") {
@@ -261,14 +469,32 @@ int logSink(lua_State* lua) {
                     blocks.push_back(Block{Kind::Plain, false});
                     pendingThen = false;
                 }
-            } else if (word == "for" || word == "while") {
+            } else if (word == "for") {
                 pendingDo = true;
+                forHeader = true;
+            } else if (word == "while") {
+                pendingDo = true;
+            } else if (word == "in" && forHeader) {
+                // The generic for: wrap the whole in-list. Same line, no newline, so every
+                // downstream error still names the right line.
+                forHeader = false;
+                wrapOpen = true;
+                out.append("in __rm_iter(");
+                continue;
             } else if (word == "do") {
+                if (wrapOpen && wrapFnDepth == 0) {
+                    out.append(") ");
+                    wrapOpen = false;
+                }
                 blocks.push_back(Block{pendingDo ? Kind::Loop : Kind::Plain, false});
                 pendingDo = false;
+                forHeader = false;  // a numeric for reached its body without an `in`
             } else if (word == "repeat") {
                 blocks.push_back(Block{Kind::Loop, false});
             } else if (word == "end" || word == "until") {
+                if (wrapOpen && wrapFnDepth > 0 && word == "end") {
+                    --wrapFnDepth;  // the inline function inside the wrapped exprs closed
+                }
                 if (!blocks.empty()) {
                     if (blocks.back().needsLabel) {
                         // At the very END of the loop body, which is the one place Lua allows a
@@ -307,6 +533,9 @@ int logSink(lua_State* lua) {
         }
 
         // Punctuation.
+        if (c == '=' && forHeader) {
+            forHeader = false;  // `for i = 1, n do` — numeric, nothing to wrap
+        }
         if (c == '!' && i + 1 < source.size() && source[i + 1] == '=') {
             out.append("~=");
             i += 2;
@@ -443,8 +672,7 @@ int importModule(lua_State* lua) {
     // clearing it here disarmed the PARENT's watchdog every time a nested import returned, so
     // an outer module could spin forever while its own budget sat untouched.
     sandbox->fuel = kInstructionBudget;
-    if (luaL_loadbuffer(lua, source.data(), source.size(), chunk.c_str()) != 0
-        || lua_pcall(lua, 0, 1, 0) != 0) {
+    if (luaL_loadbuffer(lua, source.data(), source.size(), chunk.c_str()) != 0) {
         --sandbox->importDepth;
         const char* message = lua_tostring(lua, -1);
         if (sandbox->verbose) {
@@ -457,18 +685,51 @@ int importModule(lua_State* lua) {
         lua_newtable(lua);
         return 1;
     }
-    --sandbox->importDepth;
-    if (sandbox->verbose) {
-        std::printf("ok\n");
-        std::fflush(stdout);
-    }
-    sandbox->modules.push_back(ModuleLoad{raw, LoadOutcome::Executed, {}});
 
-    // A module that returns nothing still gets a table, because the caller will index it.
-    if (lua_isnil(lua, -1)) {
-        lua_pop(lua, 1);
-        lua_newtable(lua);
+    // MOHO'S IMPORT RETURNS THE MODULE'S ENVIRONMENT, and this is the semantic the whole
+    // corpus is built on: a FAF module exports by DECLARING GLOBALS — `BuilderManager =
+    // Class(...) {...}` at file scope — and `import('/lua/sim/BuilderManager.lua')
+    // .BuilderManager` reads that global out of the module's own table. The first version
+    // returned the chunk's return value, which FAF modules never provide, so every
+    // cross-module symbol was nil and `Class(nil)` took the whole manager layer down with
+    // "setmetatable: table expected". Each module gets a fresh environment whose misses
+    // fall through to _G, so engine globals and the corpus's declare-globals stay visible.
+    lua_newtable(lua);                              // the module's environment
+    lua_newtable(lua);                              // its metatable
+    lua_pushglobaltable(lua);
+    lua_setfield(lua, -2, "__index");               // reads fall back to _G
+    lua_setmetatable(lua, -2);
+    lua_pushvalue(lua, -1);                         // keep a copy under the chunk
+    lua_insert(lua, -3);                            // [env, chunk, env]
+    const char* upvalue = lua_setupvalue(lua, -2, 1);  // chunk's _ENV := env
+    if (upvalue == nullptr) {
+        lua_pop(lua, 1);  // a chunk with no upvalue at all; keep the plain environment copy
     }
+
+    if (lua_pcall(lua, 0, 0, 0) != 0) {
+        --sandbox->importDepth;
+        const char* message = lua_tostring(lua, -1);
+        if (sandbox->verbose) {
+            std::printf("FAILED: %s\n", message != nullptr ? message : "?");
+            std::fflush(stdout);
+        }
+        sandbox->modules.push_back(
+            ModuleLoad{raw, LoadOutcome::Failed, message != nullptr ? message : "?"});
+        lua_pop(lua, 1);  // the error message; the env below still caches
+        // The partially-initialised environment is still cached and returned: Moho's import
+        // does the same, and half a module is far more informative to a dependant than an
+        // empty table — most failures are one symbol deep in a file that defined ten.
+    }
+    else {
+        if (sandbox->verbose) {
+            std::printf("ok\n");
+            std::fflush(stdout);
+        }
+        sandbox->modules.push_back(ModuleLoad{raw, LoadOutcome::Executed, {}});
+    }
+    --sandbox->importDepth;
+
+    // The environment IS the module. Cached even on failure — see above.
     lua_pushvalue(lua, -1);
     lua_setfield(lua, -3, key.c_str());
     lua_remove(lua, -2);
@@ -573,6 +834,53 @@ math.mod   = math.mod   or math.fmod
 -- is what made leaving 5.1 cheap.
 unpack     = unpack     or table.unpack
 loadstring = loadstring or load
+
+-- FAF's own import.lua (which the C import replaces) declares the module-cache global that
+-- factions.lua and friends probe to ask "is the UI loaded". Empty is the honest answer for
+-- a headless skirmish: no UI modules, no active mods.
+__modules     = __modules     or {}
+__active_mods = __active_mods or {}
+
+-- Bare table iteration, the rewriter's other half. `for k, v in t do` is legal LuaPlus and
+-- the corpus does it 1,134 times; the rewrite wraps every generic for's in-list in this.
+-- A function triple passes straight through (`pairs(t)` inside the parentheses keeps all
+-- three values by the last-argument rule); a bare table iterates raw, exactly as Moho does.
+function __rm_iter(f, s, v)
+    if type(f) == "table" then
+        return next, f, nil
+    end
+    return f, s, v
+end
+
+-- Moho's table extensions, captured as locals by class.lua and trashbag.lua BEFORE the
+-- corpus's own utils.lua can define its versions — so they must exist first. `or`-guarded,
+-- and utils.lua overwrites most of them later with FAF's own, which is the right order of
+-- authority: ours are the floor, theirs are the house rules.
+table.empty   = table.empty   or function(t) return next(t) == nil end
+table.getsize = table.getsize or function(t)
+    local n = 0
+    for _ in pairs(t) do n = n + 1 end
+    return n
+end
+table.find = table.find or function(t, value)
+    for k, v in pairs(t) do
+        if v == value then return k end
+    end
+    return nil
+end
+table.copy = table.copy or function(t)
+    local copy = {}
+    for k, v in pairs(t) do copy[k] = v end
+    return copy
+end
+table.removeByValue = table.removeByValue or function(t, value)
+    for k, v in ipairs(t) do
+        if v == value then
+            table.remove(t, k)
+            return
+        end
+    end
+end
 )lua";
 
 } // namespace
@@ -617,6 +925,15 @@ FafAi::FafAi(std::filesystem::path root, bool verbose)
         if (name == "LOG" || name == "WARN" || name == "SPEW" || name == "_ALERT") {
             return logSink;
         }
+        if (name == "DiskFindFiles") {
+            return diskFindFiles;
+        }
+        if (name == "ForkThread") {
+            return forkThread;
+        }
+        if (name == "KillThread") {
+            return killThread;
+        }
         return countedStub;
     };
     const auto fidelityFor = [](std::string_view name) {
@@ -624,6 +941,12 @@ FafAi::FafAi(std::filesystem::path root, bool verbose)
             return Fidelity::Known;
         }
         if (name == "LOG" || name == "WARN" || name == "SPEW" || name == "_ALERT") {
+            return Fidelity::Known;
+        }
+        if (name == "DiskFindFiles") {
+            return Fidelity::Known;
+        }
+        if (name == "ForkThread" || name == "KillThread") {
             return Fidelity::Known;
         }
         return Fidelity::Stub;
@@ -676,6 +999,16 @@ FafAi::FafAi(std::filesystem::path root, bool verbose)
     lua_setfield(state_, LUA_REGISTRYINDEX, "rm_faf_methods");
     (void)globals;
 
+    // The wait family is not in FafApi.inc — the generator counted only names the corpus
+    // calls as globals it does not itself define, and FAF wraps its waits — so the real
+    // implementations register by hand. They are the thread model's other half.
+    lua_pushcfunction(state_, waitSeconds);
+    lua_setglobal(state_, "WaitSeconds");
+    lua_pushcfunction(state_, waitTicks);
+    lua_setglobal(state_, "WaitTicks");
+    lua_pushcfunction(state_, currentThread);
+    lua_setglobal(state_, "CurrentThread");
+
     // Chunk first, THEN its argument — lua_pcall reads the stack as [function, arg1, ...], and
     // pushing the method table before the chunk left them the wrong way round, so the bootstrap
     // ran with nil and `moho` silently never existed.
@@ -713,6 +1046,11 @@ FafAi::FafAi(std::filesystem::path root, bool verbose)
     //
     // These are FAF's files run in FAF's order, not substitutes we wrote. `repr` and `trashbag`
     // come before `utils`, which uses both.
+    // Imported AND MERGED INTO _G: Moho ran these with `doscript`, into the shared global
+    // environment — that is what `---@declare-global` means — while `import` now gives every
+    // module a private environment (the Moho semantic the manager layer needs). The merge is
+    // doscript's observable effect: `Class`, `TrashBag` and the builder tables become plain
+    // globals every later module can reach.
     for (const char* module : {
              "/lua/system/class.lua",   // FIRST: everything below is built with Class()
              "/lua/system/repr.lua",
@@ -724,6 +1062,11 @@ FafAi::FafAi(std::filesystem::path root, bool verbose)
              "/lua/system/GlobalPlatoonTemplate.lua",
          }) {
         (void)import(module);
+        const std::string merge = std::string{"local m = import('"} + module
+                                  + "'); for k, v in pairs(m) do rawset(_G, k, v) end";
+        if (luaL_dostring(state_, merge.c_str()) != 0) {
+            lua_pop(state_, 1);
+        }
     }
 }
 
@@ -762,6 +1105,106 @@ bool FafAi::import(std::string_view path) {
         }
     }
     return true;  // already cached from an earlier call, which only happens after a success
+}
+
+std::size_t FafAi::pump(long long tick) {
+    if (state_ == nullptr) {
+        return 0;
+    }
+    Sandbox* sandbox = sandboxOf(state_);
+    if (sandbox == nullptr) {
+        return 0;
+    }
+    sandbox->tick = tick;
+
+    std::size_t resumed = 0;
+    // By index, not iterator: a resumed thread may FORK, growing the vector. A thread forked
+    // during this pump has wake == tick and runs this same pass, which is Moho's behaviour —
+    // a forked thread starts without waiting a sim beat.
+    for (std::size_t i = 0; i < sandbox->threads.size(); ++i) {
+        Thread& thread = sandbox->threads[i];
+        if (thread.dead || thread.wake > tick) {
+            continue;
+        }
+        lua_rawgeti(state_, LUA_REGISTRYINDEX, thread.coroutine);
+        lua_State* co = lua_tothread(state_, -1);
+        lua_pop(state_, 1);
+        if (co == nullptr) {
+            thread.dead = true;
+            continue;
+        }
+
+        sandbox->currentThread = i;
+        sandbox->fuel = kInstructionBudget;
+        int results = 0;
+        const int args = thread.firstArgs >= 0 ? thread.firstArgs : 0;
+        thread.firstArgs = -1;
+        const int status = lua_resume(co, state_, args, &results);
+        sandbox->currentThread = SIZE_MAX;
+        ++resumed;
+
+        if (status == LUA_YIELD) {
+            // The yield carries the delay in ticks (the wait family's contract). A bare
+            // coroutine.yield() waits one tick, which is Moho's smallest beat.
+            const long long delay =
+                results > 0 ? std::max(1ll, static_cast<long long>(lua_tointeger(co, -1)))
+                            : 1;
+            lua_settop(co, 0);
+            thread.wake = tick + delay;
+        } else {
+            if (status != LUA_OK) {
+                const char* message = lua_tostring(co, -1);
+                sandbox->threadErrors.push_back(message != nullptr ? message : "?");
+            }
+            thread.dead = true;
+            luaL_unref(state_, LUA_REGISTRYINDEX, thread.coroutine);
+            thread.coroutine = LUA_NOREF;
+        }
+    }
+    return resumed;
+}
+
+std::size_t FafAi::threadsAlive() const {
+    if (state_ == nullptr) {
+        return 0;
+    }
+    const Sandbox* sandbox = sandboxOf(state_);
+    if (sandbox == nullptr) {
+        return 0;
+    }
+    std::size_t alive = 0;
+    for (const Thread& thread : sandbox->threads) {
+        if (!thread.dead) {
+            ++alive;
+        }
+    }
+    return alive;
+}
+
+std::vector<std::string> FafAi::threadErrors() const {
+    if (state_ == nullptr) {
+        return {};
+    }
+    const Sandbox* sandbox = sandboxOf(state_);
+    return sandbox != nullptr ? sandbox->threadErrors : std::vector<std::string>{};
+}
+
+bool FafAi::eval(std::string_view chunk) {
+    if (state_ == nullptr) {
+        return false;
+    }
+    Sandbox* sandbox = sandboxOf(state_);
+    if (sandbox != nullptr) {
+        sandbox->fuel = kInstructionBudget;
+    }
+    if (luaL_loadbuffer(state_, chunk.data(), chunk.size(), "@rm:eval") != 0
+        || lua_pcall(state_, 0, 0, 0) != 0) {
+        const char* message = lua_tostring(state_, -1);
+        lastError_ = message != nullptr ? message : "eval failed";
+        lua_pop(state_, 1);
+        return false;
+    }
+    return true;
 }
 
 std::vector<ModuleLoad> FafAi::modules() const {
