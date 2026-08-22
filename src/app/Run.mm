@@ -612,6 +612,10 @@ int runWindowed(const Session& session) {
         };
         std::vector<OrderMark> orderMarks;
 
+        // Refusals, one per unit that reported no route — the red cross the printf used to
+        // be. Same aging discipline as the order marks; drawn beside them each frame.
+        std::vector<OrderMark> noRouteMarks;
+
         // Dust. Particles live across frames — that is the point of them — so
         // this list persists and is aged rather than rebuilt, unlike the decals.
         // The emitter list IS rebuilt each frame, because it is a view of where
@@ -735,6 +739,16 @@ int runWindowed(const Session& session) {
                                    rm::sim::fxFromFloat(ground.x),
                                    rm::sim::fxFromFloat(ground.z), queue)) {
                         ++failed;
+                        // The refusal, ON the refusing unit: the destination already has
+                        // its marker, and the question a failure raises is which of the
+                        // selected are not coming. This replaces a printf nobody looked at
+                        // in the one moment it mattered.
+                        const rm::sim::Transform& at = units.store.transforms()[sel.index];
+                        noRouteMarks.push_back(OrderMark{
+                            .position = {rm::sim::fxToFloat(at.x), rm::sim::fxToFloat(at.y),
+                                         rm::sim::fxToFloat(at.z)},
+                            .age = 0.0f,
+                        });
                     }
                 }
                 if (failed > 0) {
@@ -1469,10 +1483,17 @@ int runWindowed(const Session& session) {
                 rm::appendOrderMarker(decalVertices, map->field, mark.position,
                                       kOrderMarkerColour, mark.age);
             }
+            for (OrderMark& mark : noRouteMarks) {
+                mark.age += elapsed;
+                rm::appendNoRouteMarker(decalVertices, map->field, mark.position, mark.age);
+            }
             // Dropped once they have nothing left to draw. The append above is
             // silent past its lifetime, so this is housekeeping rather than
             // correctness — without it the list grows for as long as the app runs.
             std::erase_if(orderMarks, [](const OrderMark& mark) {
+                return mark.age >= rm::kOrderMarkerSecondsToLive;
+            });
+            std::erase_if(noRouteMarks, [](const OrderMark& mark) {
                 return mark.age >= rm::kOrderMarkerSecondsToLive;
             });
 

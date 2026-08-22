@@ -109,6 +109,75 @@ void appendSelectionRing(std::vector<DecalVertex>& out, const HeightField& field
     }
 }
 
+namespace {
+
+/// A diagonal ground-following cross: two bars at 45 degrees, each split along its length
+/// so it follows the heightmap squares instead of chording across them. Factored out of the
+/// order marker so the no-route mark can be the cross ALONE — the shape is the shared part,
+/// what it means is the caller's.
+void appendGroundCross(std::vector<DecalVertex>& out, const HeightField& field,
+                       std::array<float, 3> centre, std::array<float, 4> colour, float reach,
+                       float halfWidth) {
+    const auto bar = [&](float alongX, float alongZ) {
+        const float acrossX = -alongZ;
+        const float acrossZ = alongX;
+
+        const auto corner = [&](float along, float across) {
+            const float x = centre[0] + alongX * along + acrossX * across;
+            const float z = centre[2] + alongZ * along + acrossZ * across;
+            return DecalVertex{
+                .position = {x, field.heightAtWorld(x, z) + kRingLiftElmos, z},
+                .colour = colour,
+            };
+        };
+
+        constexpr int kSegments = 4;
+        const float step = 2.0f * reach / static_cast<float>(kSegments);
+        for (int i = 0; i < kSegments; ++i) {
+            const float a0 = -reach + step * static_cast<float>(i);
+            const float a1 = a0 + step;
+
+            const DecalVertex left0 = corner(a0, -halfWidth);
+            const DecalVertex right0 = corner(a0, halfWidth);
+            const DecalVertex left1 = corner(a1, -halfWidth);
+            const DecalVertex right1 = corner(a1, halfWidth);
+
+            out.push_back(left0);
+            out.push_back(right0);
+            out.push_back(right1);
+
+            out.push_back(left0);
+            out.push_back(right1);
+            out.push_back(left1);
+        }
+    };
+
+    // Diagonal rather than axis-aligned: a cross lying along X and Z reads as a grid
+    // artefact on terrain built from an axis-aligned heightfield.
+    constexpr float kDiagonal = 0.70710678f;  // 1/sqrt(2)
+    bar(kDiagonal, kDiagonal);
+    bar(kDiagonal, -kDiagonal);
+}
+
+} // namespace
+
+void appendNoRouteMarker(std::vector<DecalVertex>& out, const HeightField& field,
+                         std::array<float, 3> centre, float age) {
+    if (age < 0.0f || age >= kOrderMarkerSecondsToLive) {
+        return;  // expired, silently — same contract as the order marker
+    }
+
+    // The refusal mark: the cross ALONE, in the loss colour, at the UNIT that cannot go.
+    // No ring, deliberately — a ring is what an acknowledged thing looks like here, and
+    // this is the opposite of acknowledged. It fades without shrinking: "the order landed
+    // HERE" is the contraction's message, and nothing landed.
+    const float remaining = 1.0f - age / kOrderMarkerSecondsToLive;
+    const std::array<float, 4> faded{{0.894f, 0.341f, 0.239f,  // kLoss, the fixed palette
+                                      0.9f * remaining * remaining}};
+    appendGroundCross(out, field, centre, faded, kOrderMarkerRadiusElmos * 0.6f,
+                      kRingThicknessElmos * 0.45f);
+}
+
 void appendOrderMarker(std::vector<DecalVertex>& out, const HeightField& field,
                        std::array<float, 3> centre, std::array<float, 4> colour, float age,
                        float radiusElmos) {
@@ -143,54 +212,9 @@ void appendOrderMarker(std::vector<DecalVertex>& out, const HeightField& field,
     // ...and a cross through it, which is what distinguishes it from a selection
     // at a glance. Two bars, each a quad following the ground along its length —
     // sampled per vertex like the ring, so the cross lies in a gully rather than
-    // bridging it.
-    const float halfWidth = kRingThicknessElmos * 0.35f;
-    const float reach = radius * 0.72f;  // stops inside the ring rather than at it
-
-    const auto bar = [&](float alongX, float alongZ) {
-        // Perpendicular, in the ground plane, to give the bar its width.
-        const float acrossX = -alongZ;
-        const float acrossZ = alongX;
-
-        const auto corner = [&](float along, float across) {
-            const float x = centre[0] + alongX * along + acrossX * across;
-            const float z = centre[2] + alongZ * along + acrossZ * across;
-            return DecalVertex{
-                .position = {x, field.heightAtWorld(x, z) + kRingLiftElmos, z},
-                .colour = faded,
-            };
-        };
-
-        // Split along its length, so a bar spanning several heightmap squares
-        // follows them instead of chording across. Four segments over 20 elmos is
-        // a sample every 5, which is finer than the 8-elmo grid underneath.
-        constexpr int kSegments = 4;
-        const float step = 2.0f * reach / static_cast<float>(kSegments);
-        for (int i = 0; i < kSegments; ++i) {
-            const float a0 = -reach + step * static_cast<float>(i);
-            const float a1 = a0 + step;
-
-            const DecalVertex left0 = corner(a0, -halfWidth);
-            const DecalVertex right0 = corner(a0, halfWidth);
-            const DecalVertex left1 = corner(a1, -halfWidth);
-            const DecalVertex right1 = corner(a1, halfWidth);
-
-            out.push_back(left0);
-            out.push_back(right0);
-            out.push_back(right1);
-
-            out.push_back(left0);
-            out.push_back(right1);
-            out.push_back(left1);
-        }
-    };
-
-    // Diagonal rather than axis-aligned: a cross lying along X and Z reads as a
-    // grid artefact on terrain built from an axis-aligned heightfield, and every
-    // other straight line on screen is already one of those two directions.
-    constexpr float kDiagonal = 0.70710678f;  // 1/sqrt(2)
-    bar(kDiagonal, kDiagonal);
-    bar(kDiagonal, -kDiagonal);
+    // bridging it. The reach stops inside the ring rather than at it.
+    appendGroundCross(out, field, centre, faded, radius * 0.72f,
+                      kRingThicknessElmos * 0.35f);
 }
 
 } // namespace rm

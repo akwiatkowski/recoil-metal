@@ -355,3 +355,26 @@ TEST_CASE("a wreck mark with no radius draws nothing") {
     rm::appendWreckMark(vertices, field, {{0.0f, 0.0f, 0.0f}}, 20.0f, 2);
     CHECK(vertices.empty());  // two segments is not a disc
 }
+
+TEST_CASE("the no-route mark is a bare cross that fades without shrinking") {
+    const HeightField field = flatAt(64, 0);
+    std::vector<rm::DecalVertex> young;
+    rm::appendNoRouteMarker(young, field, {100.0f, 0.0f, 100.0f}, 0.0f);
+
+    // Two diagonal bars of four segments, six vertices each — and no ring: a ring is what
+    // an acknowledged thing looks like, and a refusal is the opposite.
+    CHECK(young.size() == 2 * 4 * 6);
+
+    // Same footprint later in life (no shrink), lower alpha (the fade).
+    std::vector<rm::DecalVertex> old;
+    rm::appendNoRouteMarker(old, field, {100.0f, 0.0f, 100.0f}, 1.0f);
+    REQUIRE(old.size() == young.size());
+    CHECK(old[0].position[0] == young[0].position[0]);
+    CHECK(old[0].colour[3] < young[0].colour[3]);
+
+    // Expired: nothing, silently — the caller may keep asking.
+    std::vector<rm::DecalVertex> dead;
+    rm::appendNoRouteMarker(dead, field, {100.0f, 0.0f, 100.0f},
+                            rm::kOrderMarkerSecondsToLive);
+    CHECK(dead.empty());
+}

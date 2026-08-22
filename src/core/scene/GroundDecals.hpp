@@ -99,6 +99,16 @@ void appendOrderMarker(std::vector<DecalVertex>& out, const HeightField& field,
                        std::array<float, 3> centre, std::array<float, 4> colour, float age,
                        float radiusElmos = kOrderMarkerRadiusElmos);
 
+// Appends the refusal mark: a red cross ALONE, at the unit that reported no route.
+//
+// AT THE UNIT, not at the destination — the destination got its order marker, and the
+// question a refusal raises is WHICH of the selected units is not coming. No ring, because
+// a ring is what an acknowledged thing looks like in this vocabulary; it fades without
+// shrinking, because contraction says "landed here" and nothing landed. Ages on the order
+// marker's clock, and past the lifetime contributes nothing, so the caller may keep asking.
+void appendNoRouteMarker(std::vector<DecalVertex>& out, const HeightField& field,
+                         std::array<float, 3> centre, float age);
+
 /// How wide a wreck's scorch mark is drawn, relative to the unit's own radius.
 ///
 /// A little over twice, so a wreck reads as bigger than the thing that made it — an
