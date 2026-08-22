@@ -741,13 +741,35 @@ int runWindowed(const Session& session) {
             // THE ROSTER, for the build panel's reason: it is in front of the world, and a
             // click that fell through would order the very units the roster is describing to
             // walk to wherever happens to be behind it.
-            if (!rosterTiles.empty()
-                && rm::ui::insideRoster(
+            //
+            // AND IT IS A CONTROL, not only a readout: clicking a tile filters the selection
+            // to that type — the composition panel becomes the way to peel the engineers out
+            // of a battle group — and a modifier inverts it, dropping the type instead. Both
+            // reference games bind tile clicks this way. The gutters and header still just
+            // swallow: a miss near a button must not become the wrong button.
+            if (!rosterTiles.empty()) {
+                const rm::ui::RosterLayout roster =
                     rm::ui::rosterLayout(static_cast<float>(window.width()),
                                          static_cast<float>(window.height()),
-                                         rosterTiles.size()),
-                    mods.pointX, mods.pointY)) {
-                return;
+                                         rosterTiles.size());
+                if (rm::ui::insideRoster(roster, mods.pointX, mods.pointY)) {
+                    const std::optional<std::size_t> tile =
+                        rm::ui::rosterTileAt(roster, mods.pointX, mods.pointY);
+                    if (tile && button == rm::MouseButton::Left) {
+                        const std::string& id = rosterTiles[*tile].id;
+                        const bool drop = mods.shift || mods.command || mods.control;
+                        std::erase_if(selected, [&](rm::sim::UnitId unit) {
+                            if (!units.store.alive(unit)) {
+                                return true;  // housekeeping the next gather would do anyway
+                            }
+                            const rm::unitdef::UnitDef* def =
+                                units.catalog.def(units.store.typeAt(unit.index));
+                            const bool matches = def != nullptr && def->name == id;
+                            return drop ? matches : !matches;
+                        });
+                    }
+                    return;
+                }
             }
 
             // A GROUND CLICK WHILE ARMED PLACES, and nothing else happens — it does not also
