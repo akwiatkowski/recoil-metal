@@ -336,6 +336,15 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
     //    tick it died rather than funding one more.
     recomputeIncome(store, catalog, match, rate);
 
+    // An upgrade whose unit died is CANCELLED, not completed: the work was that unit
+    // becoming something, and there is no longer anything to become it. Before the economy
+    // pass, so a cancelled upgrade stops drawing resources the same tick its factory fell.
+    if (match.building != nullptr) {
+        std::erase_if(*match.building, [&store](const Construction& work) {
+            return work.isUpgrade() && !work.finished() && !store.alive(work.upgradeOf);
+        });
+    }
+
     if (match.building != nullptr) {
         for (std::size_t army = 0; army < match.economies.size(); ++army) {
             // Partitioned per army because `tickEconomy` is documented to be given one

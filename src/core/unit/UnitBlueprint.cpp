@@ -6,6 +6,7 @@
 #include "core/sim/Pathfinding.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <numbers>
 #include <fstream>
@@ -180,6 +181,18 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
     // name at the file's root, no `<LOC>` — it names artwork, not prose.
     if (const lua::Value* icon = parsed->find("StrategicIconName")) {
         def.strategicIcon = icon->text;
+    }
+
+    // The upgrade path. The blueprint spells the id lower-case ('ueb0201') while `name`
+    // above is the file's own upper-case; folding here means the sim compares ids without
+    // carrying case rules around.
+    if (const lua::Value* general = parsed->path("General")) {
+        if (const std::optional<std::string_view> upgrades = general->stringAt("UpgradesTo")) {
+            def.upgradesTo = std::string{*upgrades};
+            std::transform(def.upgradesTo.begin(), def.upgradesTo.end(),
+                           def.upgradesTo.begin(),
+                           [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+        }
     }
 
     // --- physics -----------------------------------------------------------

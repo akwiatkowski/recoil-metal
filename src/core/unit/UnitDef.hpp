@@ -248,6 +248,12 @@ struct UnitDef {
     /// Whether this unit can build anything at all.
     [[nodiscard]] bool isBuilder() const noexcept { return buildRate > 0.0f; }
 
+    /// What this unit UPGRADES INTO — `General.UpgradesTo`, upper-cased to match `name`.
+    /// The tech path for factories (UEB0101 -> UEB0201 -> UEB0301) and extractors; empty
+    /// for the majority that upgrade into nothing. The sim reads it to tell an upgrade
+    /// order from a build order: same command, different completion.
+    std::string upgradesTo;
+
     // --- categories --------------------------------------------------------
     //
     // What the blueprint SAYS this unit is, as a sorted list of the tags it declares.

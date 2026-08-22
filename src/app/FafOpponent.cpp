@@ -99,7 +99,12 @@ __rm_faf.unitMeta = {
         IsBeingBuilt = function() return false end,
         GetFractionComplete = function() return 1 end,
         GetPosition = function(u) return { u.x, 0, u.z } end,
-        IsUnitState = function() return false end,
+        -- 'Upgrading' is the one state the snapshot tracks (the upgrade-in-place tech
+        -- path); everything else honestly answers false.
+        IsUnitState = function(u, state)
+            if state == 'Upgrading' then return u.upgrading == true end
+            return false
+        end,
     },
 }
 
@@ -514,7 +519,8 @@ function __rm_faf_decide(army, snap)
     -- Factories: the corpus picks the unit, one train per factory not already working.
     local factories = {}
     for _, u in ipairs(snap.units) do
-        if EntityCategoryContains(categories.STRUCTURE * categories.FACTORY, u) then
+        if not u.upgrading
+            and EntityCategoryContains(categories.STRUCTURE * categories.FACTORY, u) then
             table.insert(factories, u)
         end
     end
@@ -549,11 +555,24 @@ function __rm_faf_decide(army, snap)
     end
 
     -- Platoon forming: the corpus's form builders decide WHEN an attack goes out; the
-    -- squad's own category and size decide WHO. One wave per pass.
+    -- squad's own category and size decide WHO. One wave per pass. A template whose Plan
+    -- is UnitUpgradeAI is the OTHER thing form builders do — form a platoon of one
+    -- structure and upgrade it in place; that becomes an upgrade decision, never a march.
     walkBudgeted(brain, 'PlatoonFormBuilder', 15, function(item)
         local template = PlatoonTemplates[item.spec.PlatoonTemplate]
         local squads = template and template.GlobalSquads
         if not squads then return false end
+        if template.Plan == 'UnitUpgradeAI' then
+            for _, u in ipairs(snap.units) do
+                if u.idle and not u.upgrading and EntityCategoryContains(squads[1][1], u) then
+                    table.insert(decisions, {
+                        kind = 'upgrade', builder = u.h, name = item.spec.BuilderName,
+                    })
+                    return true
+                end
+            end
+            return false
+        end
         local gathered = {}
         local wanted = 0
         for _, squad in ipairs(squads) do
@@ -778,16 +797,20 @@ void FafOpponent::advance(rm::TickIndex /*tick*/) {
     pushNumber("energyStorage", rm::sim::magToFloat(economy.storage.energy));
     pushNumber("massIncome", rm::sim::magToFloat(economy.incomePerTick.mass));
     pushNumber("energyIncome", rm::sim::magToFloat(economy.incomePerTick.energy));
-    // Usage is what construction and upkeep drain; the sim spends rather than meters it, so
-    // the honest per-tick figure available today is upkeep alone. Stated here once.
-    pushNumber("massUsage", 0.0f);
-    pushNumber("energyUsage", rm::sim::magToFloat(economy.upkeepPerTick.energy));
+    // Usage is everything last tick tried to pay — construction drain plus upkeep, the
+    // figure FA's efficiency conditions divide income by. This number is what lets the
+    // corpus's own economy gates see over-commitment and stop starting new work.
+    pushNumber("massUsage", rm::sim::magToFloat(economy.requestedLastTick.mass));
+    pushNumber("energyUsage", rm::sim::magToFloat(economy.requestedLastTick.energy));
 
     // What is under construction, twice over: the counts that gate the driver's slots, and
     // `underway` — category-carrying entries for the corpus's own "how many of these are
-    // already being built" conditions.
+    // already being built" conditions. Upgrades are in NEITHER counter: they occupy their
+    // own unit, which the snapshot marks `upgrading` and the driver excludes from its
+    // factory pool — counting them here as well would charge the capacity twice.
     std::size_t structuresUnderway = 0;
     std::size_t mobileUnderway = 0;
+    std::vector<rm::sim::UnitId> upgrading;
     lua_newtable(lua);  // snap.underway
     lua_Integer underwayIndex = 1;
     for (const rm::sim::Construction& construction : scene.building) {
@@ -799,7 +822,9 @@ void FafOpponent::advance(rm::TickIndex /*tick*/) {
         if (def == nullptr) {
             continue;
         }
-        if (def->isMobile()) {
+        if (construction.isUpgrade()) {
+            upgrading.push_back(construction.upgradeOf);
+        } else if (def->isMobile()) {
             ++mobileUnderway;
         } else {
             ++structuresUnderway;
@@ -873,6 +898,11 @@ void FafOpponent::advance(rm::TickIndex /*tick*/) {
         // builder — stated in the driver where the counts gate decisions.
         lua_pushboolean(lua, motion[slot].moving ? 0 : 1);
         lua_setfield(lua, -2, "idle");
+        if (std::find(upgrading.begin(), upgrading.end(), handles_.back())
+            != upgrading.end()) {
+            lua_pushboolean(lua, 1);
+            lua_setfield(lua, -2, "upgrading");
+        }
         // __cats: the shared set, and the shared unit metatable, from the driver's cache.
         lua_getglobal(lua, "__rm_faf");
         lua_getfield(lua, -1, "cats");
@@ -938,6 +968,31 @@ void FafOpponent::convertDecision(lua_State* lua) {
 
     const std::string kind = field("kind");
     const rm::app::UnitScene& scene = world_->scene;
+
+    if (kind == "upgrade") {
+        // The corpus picked WHICH unit upgrades (UnitUpgradeAI's platoon of one); the
+        // blueprint says what it becomes. The sim pins the site to the unit itself.
+        const std::optional<rm::sim::UnitId> unit = handleAt(0);
+        if (!unit || !scene.store.alive(*unit)) {
+            return;
+        }
+        const rm::unitdef::UnitDef* def = scene.catalog.def(scene.store.typeAt(unit->index));
+        if (def == nullptr || def->upgradesTo.empty()) {
+            return;
+        }
+        const rm::sim::Transform& at = scene.store.transforms()[unit->index];
+        decisions_.push_back(Decision{
+            .kind = Decision::Kind::StartConstruction,
+            .blueprint = blueprintPathFor(def->upgradesTo),
+            .site = {at.x, rm::sim::Fx{}, at.z},
+            .builder = *unit,
+        });
+        if (rm::app::gFafLog) {
+            std::printf("  [faf %d] upgrade '%s' -> %s\n", army_, field("name").c_str(),
+                        def->upgradesTo.c_str());
+        }
+        return;
+    }
 
     if (kind == "build" || kind == "train") {
         const std::optional<rm::sim::UnitId> builder = handleAt(0);

@@ -344,6 +344,16 @@ bool startCommand(const Command& command, UnitStore& store, const UnitCatalog& c
             return false;
         }
 
+        // AN UPGRADE, when the target is what the builder's blueprint says it becomes —
+        // `General.UpgradesTo`, the tech path. Same command, two differences: the work
+        // happens WHERE THE BUILDER STANDS whatever the order said (a factory does not
+        // upgrade into a field), and completion replaces the builder instead of standing
+        // a second building on top of it (the caller's spawn path reads `upgradeOf`).
+        const bool upgrade = !builder->upgradesTo.empty() && builder->upgradesTo == def->name;
+        const Transform& builderAt = store.transforms()[command.unit.index];
+        const Fx siteX = upgrade ? builderAt.x : command.targetX;
+        const Fx siteZ = upgrade ? builderAt.z : command.targetZ;
+
         // The cost and the time come from the DEFINITION, and the rate from the clock — the
         // same derivation `UnitCatalog::Rates` does for income, at the one place a construction
         // is created.
@@ -353,19 +363,20 @@ bool startCommand(const Command& command, UnitStore& store, const UnitCatalog& c
             // fxToFloat(targetZ)}` — an `Fx` the caller already had, rounded into a float,
             // inside the sim (§7 P10.0). The `y` is zero because a build order names a place
             // on the map and the ground decides the height.
-            .position = {command.targetX, Fx{}, command.targetZ},
+            .position = {siteX, Fx{}, siteZ},
             .cost = {.mass = def->buildCostMass, .energy = def->buildCostEnergy},
             .buildTimeRemaining = def->buildTime,
             .totalBuildTime = def->buildTime,
             .buildPerTick = rate.magPerTick(builder->buildRate),
             .blueprintIndex = command.buildType,
+            .upgradeOf = upgrade ? command.unit : UnitId{},
         });
         emit(events, Event{
                          .kind = EventKind::ConstructionStarted,
                          .instigator = command.unit,
                          .army = store.motion()[command.unit.index].armyIndex,
                          .amount = def->buildCostMass,
-                         .at = {command.targetX, Fx{}, command.targetZ},
+                         .at = {siteX, Fx{}, siteZ},
                      });
         return true;
     }

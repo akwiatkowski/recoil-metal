@@ -509,6 +509,63 @@ TEST_CASE("a script's order and a click produce identical hashes") {
     CHECK(human.roster.transform(human.mine).x != idle.roster.transform(idle.mine).x);
 }
 
+TEST_CASE("an upgrade builds where the builder stands and remembers who it replaces") {
+    // Moho's tech path: a T2 factory is the T1 factory BECOMING one, declared by the
+    // blueprint's General.UpgradesTo. Same Build command; the sim recognises the pair and
+    // pins the work to the builder's own position, whatever the order said — a factory does
+    // not upgrade into a field — and records the unit to replace at completion.
+    Fixture fix;
+
+    rm::unitdef::UnitDef t1Def;
+    t1Def.name = "FACT1";
+    t1Def.buildRate = 20.0f;
+    t1Def.buildableCategory = {{"BUILTBYT1"}};
+    t1Def.upgradesTo = "FACT2";
+    const rm::UnitTypeIndex t1Type = fix.roster.addType(t1Def);
+
+    rm::unitdef::UnitDef t2Def;
+    t2Def.name = "FACT2";
+    t2Def.categories = {"BUILTBYT1"};
+    t2Def.buildTime = rm::test::mag(60.0f);
+    const rm::UnitTypeIndex t2Type = fix.roster.addType(t2Def);
+
+    const UnitId factory = fix.roster.add(t1Type, 300.0f, 300.0f, 0, 500.0f);
+
+    // The order names a point far away; the upgrade ignores it.
+    const Command upgrade{.tick = 0,
+                          .player = 0,
+                          .kind = CommandKind::Build,
+                          .unit = factory,
+                          .targetX = rm::test::fx(700.0f),
+                          .targetZ = rm::test::fx(700.0f),
+                          .buildType = t2Type};
+    REQUIRE(fix.apply(upgrade));
+    REQUIRE(fix.building.size() == 1);
+
+    const rm::sim::Construction& work = fix.building.front();
+    CHECK(work.isUpgrade());
+    CHECK(work.upgradeOf == factory);
+    CHECK(rm::test::asFloat(work.position[0]) == 300.0f);
+    CHECK(rm::test::asFloat(work.position[2]) == 300.0f);
+
+    // An ordinary build by the same factory type is NOT an upgrade: the target has to be
+    // what the blueprint says the builder becomes, not merely something it may build.
+    rm::unitdef::UnitDef tankDef;
+    tankDef.name = "TANK1";
+    tankDef.categories = {"BUILTBYT1"};
+    tankDef.buildTime = rm::test::mag(10.0f);
+    const rm::UnitTypeIndex tankType = fix.roster.addType(tankDef);
+    const Command train{.tick = 0,
+                        .player = 0,
+                        .kind = CommandKind::Build,
+                        .unit = factory,
+                        .targetX = rm::test::fx(300.0f),
+                        .targetZ = rm::test::fx(300.0f),
+                        .buildType = tankType};
+    REQUIRE(fix.apply(train));
+    CHECK_FALSE(fix.building.back().isUpgrade());
+}
+
 TEST_CASE("a build order names a place on the map, and the ground decides the height") {
     // THE `y` IS ALWAYS ZERO. `spawnUnit` overwrites whatever height a construction carries with
     // `terrain.heightAt(x, z)`, so a height stored here is never read — it is derived data that

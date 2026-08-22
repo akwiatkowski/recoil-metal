@@ -725,6 +725,13 @@ rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) 
             continue;
         }
         ++runner.completedBuilds;
+        // AN UPGRADE REPLACES: the old unit leaves before the new one stands, and it
+        // leaves without a wreck — a factory becoming its T2 self did not die. Straight
+        // through the store: no death report means no debris and no defeat accounting,
+        // both of which are for units the war removed.
+        if (work.isUpgrade() && scene.store.alive(work.upgradeOf)) {
+            scene.store.kill(work.upgradeOf);
+        }
         // OUT of fixed point, here at the edge (§7 P10.0). Putting a unit on the map needs
         // a model and a float transform, so this is the legitimate direction — the sim
         // holds the authority and the renderer gets a copy, never the other way round.

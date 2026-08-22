@@ -298,6 +298,8 @@ StateHash hashMatch(const UnitStore& store, const Match& match) {
             feed(h, work.totalBuildTime);
             feed(h, work.buildPerTick);
             feed(h, work.blueprintIndex);
+            feed(h, static_cast<std::uint64_t>(work.upgradeOf.index));
+            feed(h, static_cast<std::uint64_t>(work.upgradeOf.generation));
         }
     }
 

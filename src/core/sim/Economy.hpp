@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/sim/Fx.hpp"
+#include "core/sim/IdPool.hpp"
 
 #include "core/sim/Movement.hpp"
 
@@ -66,6 +67,11 @@ struct Economy {
     /// Funding builds first and letting upkeep take the remainder would invert that and
     /// make a brownout invisible.
     Resources upkeepPerTick;
+
+    /// What last tick TRIED to pay: construction drain plus upkeep. The load figure an AI
+    /// wants (income/requested is FA's efficiency); recomputed every tick from hashed
+    /// state, so it carries no hash entry of its own.
+    Resources requestedLastTick;
 
     /// The fraction of what was ASKED FOR that was actually paid last tick, 0..1.
     ///
@@ -139,6 +145,15 @@ struct Construction {
     /// Which unit this becomes. An index into whatever list the caller is building from —
     /// the sim does not know what a unit type is.
     std::size_t blueprintIndex = 0;
+
+    /// When live, this construction UPGRADES that unit in place — Moho's tech path, where a
+    /// T2 factory is not a new building but the T1 factory becoming one. Completion replaces
+    /// the unit instead of standing a second one on top of it, and the unit dying first
+    /// cancels the work (`pruneOrphanUpgrades`). A default UnitId is never live
+    /// (generations start at 1), so no flag is needed to mean "an ordinary build".
+    UnitId upgradeOf{};
+
+    [[nodiscard]] bool isUpgrade() const noexcept { return upgradeOf.generation != 0; }
 
     [[nodiscard]] bool finished() const noexcept { return buildTimeRemaining <= Mag{}; }
 

@@ -48,6 +48,13 @@ void tickEconomy(Economy& economy, std::span<Construction> building) {
         wanted += drainPerTick(work);
     }
 
+    // The DEMAND, remembered for whoever asks how loaded this economy is. Construction
+    // plus upkeep — everything the tick tried to pay — which is what Moho's
+    // GetEconomyRequested reports and what the FAF brain's efficiency conditions divide
+    // income by. Derived from state the hash already covers, so it is deterministic
+    // without being fed to the hash itself.
+    economy.requestedLastTick = wanted + economy.upkeepPerTick;
+
     // Pass two: pay what can be paid, and let the shortfall slow EVERYTHING equally.
     // The ratio of what is banked to what was asked for, per resource, and the worse of the
     // two. `Mag / Mag -> Fx` again: a funding ratio is not a magnitude.
