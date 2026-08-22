@@ -1,5 +1,6 @@
 #include "core/sim/Command.hpp"
 
+#include "core/sim/Combat.hpp"
 #include "core/sim/Movement.hpp"
 #include "core/sim/UnitStore.hpp"
 
@@ -92,7 +93,8 @@ namespace {
 
 bool operator==(const Command& a, const Command& b) noexcept {
     return a.tick == b.tick && a.player == b.player && a.kind == b.kind && a.unit == b.unit
-           && a.targetX == b.targetX && a.targetZ == b.targetZ && a.buildType == b.buildType;
+           && a.targetX == b.targetX && a.targetZ == b.targetZ && a.target == b.target
+           && a.buildType == b.buildType;
 }
 
 bool applyCommand(const Command& command, UnitStore& store, const UnitCatalog& catalog,
@@ -179,9 +181,6 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
         if (!store.slotAlive(slot) || orders[slot].empty()) {
             continue;
         }
-        if (slot < motion.size() && motion[slot].moving) {
-            continue;  // still carrying out the order at the head
-        }
 
         // This unit's OWN grid. A missing one leaves the queue where it is rather than routing
         // on a stranger's: a route is only as good as the map it was searched on, and an order
@@ -190,6 +189,72 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
         const PassabilityGrid* grid = type < gridForType.size() ? gridForType[type] : nullptr;
         if (grid == nullptr) {
             continue;
+        }
+
+        // THE CHASE. An attack naming a LIVING target never completes by arrival — it
+        // completes when the target dies — so it is handled here, before the finish logic,
+        // and the slot moves on. Three sub-cases, in priority order:
+        //
+        //   in range      hold: stop moving and let the automatic targeting fire. The order
+        //                 stays at the head, so a target that breaks away re-arms the chase.
+        //   target moved  re-route to where the target IS, and record that goal in the
+        //                 order's own targetX/Z — the chase's memory, which is also what
+        //                 keeps a stationary fight from pathfinding every tick.
+        //   else          keep walking the route already ordered.
+        //
+        // A unit with no firing weapon does not chase: for it an attack is the plain walk
+        // it always was, and the finish-by-arrival logic below still owns it.
+        if (const Command* head = orders[slot].current();
+            head != nullptr && head->kind == CommandKind::Attack
+            && store.alive(head->target)) {
+            const unitdef::UnitDef* def = catalog.def(store.typeAt(slot));
+            Fx reach{};
+            if (def != nullptr) {
+                for (const unitdef::Weapon& weapon : def->weapons) {
+                    if (weapon.fires() && weapon.maxRange > reach) {
+                        reach = weapon.maxRange;
+                    }
+                }
+            }
+            if (reach > Fx{}) {
+                MoveState& chase = store.motion()[slot];
+                const Transform& mine = store.transforms()[slot];
+                const Transform& theirs = store.transforms()[head->target.index];
+                const Fx gap = groundDistanceElmos({mine.x, mine.y, mine.z},
+                                                   {theirs.x, theirs.y, theirs.z});
+                if (gap <= reach) {
+                    chase.moving = false;
+                    chase.path.clear();
+                    chase.pathIndex = 0;
+                } else {
+                    // Re-route when the target has strayed from the last routed goal by
+                    // more than half the weapon's reach — far enough that the old route
+                    // ends outside the fight, close enough that a crawling target is
+                    // still caught. Or when the unit stands idle out of range, which is
+                    // how a fresh chase starts and how a failed route retries.
+                    const Fx strayed = groundDistanceElmos(
+                        {head->targetX, Fx{}, head->targetZ}, {theirs.x, Fx{}, theirs.z});
+                    if (strayed > Fx::fromRaw(reach.raw() / 2) || !chase.moving) {
+                        const std::vector<std::array<Fx, 2>> path =
+                            findPath(*grid, mine.x, mine.z, theirs.x, theirs.z);
+                        if (Command* mutableHead = orders[slot].currentMutable()) {
+                            // Recorded whether or not the route was found: a target in an
+                            // unreachable spot must not be re-pathed every tick — the next
+                            // attempt waits until it strays again.
+                            mutableHead->targetX = theirs.x;
+                            mutableHead->targetZ = theirs.z;
+                        }
+                        if (!path.empty()) {
+                            orderAlongPath(chase, path);
+                        }
+                    }
+                }
+                continue;  // alive target: the order outlives every arrival
+            }
+        }
+
+        if (slot < motion.size() && motion[slot].moving) {
+            continue;  // still carrying out the order at the head
         }
 
         // The head is done. Drop it and start the next — and keep going while what comes next
@@ -331,12 +396,14 @@ bool writeCommandLog(const CommandLog& log, const std::string& path) {
     }
 
     out << "# recoil-metal command log\n";
-    out << "# tick player kind unit generation targetX targetZ buildType\n";
+    out << "# tick player kind unit generation targetX targetZ buildType"
+           " targetUnit targetGeneration\n";
     for (const Command& command : log.all()) {
         out << command.tick << ' ' << command.player << ' ' << kindName(command.kind) << ' '
             << command.unit.index << ' ' << command.unit.generation << ' '
             << command.targetX.raw() << ' ' << command.targetZ.raw() << ' '
-            << command.buildType << '\n';
+            << command.buildType << ' ' << command.target.index << ' '
+            << command.target.generation << '\n';
     }
     return out.good();
 }
@@ -374,12 +441,21 @@ std::optional<CommandLog> readCommandLog(const std::string& path) {
             return std::nullopt;
         }
 
+        // The attack target, appended to the format when chases arrived. OPTIONAL on read:
+        // a log written before the columns existed holds only untargeted orders, and those
+        // replay exactly as they did — an absent target IS the invalid handle.
+        unsigned long targetIndex = 0;
+        unsigned long targetGeneration = 0;
+        (void)(fields >> targetIndex >> targetGeneration);
+
         command.tick = tick;
         command.player = static_cast<PlayerIndex>(player);
         command.kind = *parsed;
         command.unit = UnitId{static_cast<UnitIndex>(index), static_cast<Generation>(generation)};
         command.targetX = Fx::fromRaw(static_cast<FxRaw>(targetX));
         command.targetZ = Fx::fromRaw(static_cast<FxRaw>(targetZ));
+        command.target = UnitId{static_cast<UnitIndex>(targetIndex),
+                                static_cast<Generation>(targetGeneration)};
         command.buildType = static_cast<UnitTypeIndex>(buildType);
         log.record(command);
     }

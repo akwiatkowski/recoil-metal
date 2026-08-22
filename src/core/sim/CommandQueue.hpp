@@ -92,6 +92,13 @@ public:
         return queue_.empty() ? nullptr : &queue_.front();
     }
 
+    /// The same head, writable — for the chase, which records where it last routed to in
+    /// the order's own targetX/Z. Only the head: orders behind it are promises not yet
+    /// started, and nothing may rewrite a promise.
+    [[nodiscard]] Command* currentMutable() noexcept {
+        return queue_.empty() ? nullptr : &queue_.front();
+    }
+
     /// The current order is done. Drops it and returns the next, or null.
     ///
     /// Named for what the CALLER knows — that the unit arrived, or its target died — because

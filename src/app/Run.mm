@@ -716,7 +716,9 @@ int runWindowed(const Session& session) {
             // whether the point came from a ray into the world or a click on the minimap.
             // One lambda so the two entrances cannot drift; the marker, the per-unit grids
             // and the queue reporting are the same statements they were.
-            const auto orderSelectionTo = [&](simd_float3 ground, bool queue) {
+            const auto orderSelectionTo = [&](simd_float3 ground, bool queue,
+                                              std::optional<rm::sim::UnitId> target =
+                                                  std::nullopt) {
                 orderMarks.push_back(OrderMark{
                     .position = {ground.x, ground.y, ground.z},
                     .age = 0.0f,
@@ -733,11 +735,18 @@ int runWindowed(const Session& session) {
                     const auto type = static_cast<std::size_t>(units.store.typeAt(sel.index));
                     const rm::sim::PassabilityGrid& grid = passability.gridFor(
                         units.maxSlopeDegrees[type], units.maxWaterDepthElmos[type]);
-                    if (!issueMove(units, grid, map->field, sel,
-                                   playerDriving(units, units.playerArmy),
-                                   static_cast<rm::TickIndex>(matchTicks),
-                                   rm::sim::fxFromFloat(ground.x),
-                                   rm::sim::fxFromFloat(ground.z), queue)) {
+                    const bool took =
+                        target ? issueAttack(units, grid, map->field, sel,
+                                             playerDriving(units, units.playerArmy),
+                                             static_cast<rm::TickIndex>(matchTicks), *target,
+                                             rm::sim::fxFromFloat(ground.x),
+                                             rm::sim::fxFromFloat(ground.z), queue)
+                               : issueMove(units, grid, map->field, sel,
+                                           playerDriving(units, units.playerArmy),
+                                           static_cast<rm::TickIndex>(matchTicks),
+                                           rm::sim::fxFromFloat(ground.x),
+                                           rm::sim::fxFromFloat(ground.z), queue);
+                    if (!took) {
                         ++failed;
                         // The refusal, ON the refusing unit: the destination already has
                         // its marker, and the question a failure raises is which of the
@@ -961,7 +970,11 @@ int runWindowed(const Session& session) {
             // true even if every unit then reports no route. SHIFT QUEUES IT (§7 P4.1) —
             // the same modifier adds to the selection on the left button and appends to
             // the order queue on the right, as every RTS this engine reads content from.
-            orderSelectionTo(*ground, mods.shift);
+            //
+            // An attack carries the TARGET'S HANDLE, which is what makes it a pursuit
+            // rather than a walk to where the target used to be (`advanceOrders`' chase).
+            orderSelectionTo(*ground, mods.shift,
+                             isAttack ? hit : std::optional<rm::sim::UnitId>{});
         });
 
         // The overhead view the camera returns to when space is released. Captured at the

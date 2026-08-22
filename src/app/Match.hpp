@@ -149,6 +149,15 @@ extern bool gPrintEvents;
                              rm::PlayerIndex player, rm::TickIndex tick, rm::sim::Fx toX,
                              rm::sim::Fx toZ, bool queued = false);
 
+/// issueMove's sibling for a TARGETED attack: the handle turns the order into a pursuit —
+/// the unit follows the target's real position, holds at its own longest weapon's reach,
+/// and the order completes when the target dies. toX/toZ are where the target is right now.
+[[nodiscard]] bool issueAttack(UnitScene& scene, const rm::sim::PassabilityGrid& grid,
+                               const rm::HeightField& field, rm::sim::UnitId unit,
+                               rm::PlayerIndex player, rm::TickIndex tick,
+                               rm::sim::UnitId target, rm::sim::Fx toX, rm::sim::Fx toZ,
+                               bool queued = false);
+
 [[nodiscard]] rm::PlayerIndex playerDriving(const UnitScene& scene, int army);
 
 [[nodiscard]] Standing standingFor(const UnitScene& scene, int army);

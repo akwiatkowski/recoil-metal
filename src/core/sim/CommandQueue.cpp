@@ -30,7 +30,15 @@ bool sameOrder(const Command& a, const Command& b) noexcept {
         // were one. Recoil arrives here too: its predicate wants one or three parameters.
         return false;
     case CommandKind::Move:
+        return withinCancelDistance(a, b);
     case CommandKind::Attack:
+        // A TARGETED attack matches on the target, not the ground: the chase rewrites its
+        // own targetX/Z as it pursues, so position comparison would never cancel — and
+        // "attack that unit" clicked twice plainly names the same order however far the
+        // unit has walked. A ground attack (no target) keeps the distance rule.
+        if (a.target.generation != 0 || b.target.generation != 0) {
+            return a.target == b.target;
+        }
         return withinCancelDistance(a, b);
     case CommandKind::Build:
         return a.buildType == b.buildType && withinCancelDistance(a, b);

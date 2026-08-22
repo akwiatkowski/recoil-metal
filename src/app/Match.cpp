@@ -57,6 +57,36 @@ bool gPrintEvents = false;
     return applied;
 }
 
+[[nodiscard]] bool issueAttack(UnitScene& scene, const rm::sim::PassabilityGrid& grid,
+                               const rm::HeightField& field, rm::sim::UnitId unit,
+                               rm::PlayerIndex player, rm::TickIndex tick,
+                               rm::sim::UnitId target, rm::sim::Fx toX, rm::sim::Fx toZ,
+                               bool queued) {
+    // issueMove's sibling, and deliberately its shape: one command, one path through
+    // applyCommand, recorded only when it took. The target handle is what turns the order
+    // into a pursuit (`advanceOrders`' chase); toX/toZ are where the target IS right now,
+    // which routes the first leg and seeds the chase's memory.
+    const rm::sim::Command command{
+        .tick = tick,
+        .player = player,
+        .kind = rm::sim::CommandKind::Attack,
+        .unit = unit,
+        .targetX = toX,
+        .targetZ = toZ,
+        .target = target,
+        .buildType = 0,
+    };
+
+    const bool applied = rm::sim::applyCommand(command, scene.store, scene.catalog,
+                                               scene.players, scene.armies,
+                                               rm::sim::Terrain{field}, grid, gAppTickRate,
+                                               &scene.building, queued);
+    if (applied) {
+        scene.commands.record(command);
+    }
+    return applied;
+}
+
 // One loose end survives the routing, deliberate and small: a blueprint registered by
 // `resolveBuildable` and later built gets a SECOND type from `spawnUnit`, because that path
 // creates a type and a batch together. Both are real type indices resolving through the catalog,

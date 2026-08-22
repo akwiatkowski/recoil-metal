@@ -90,8 +90,20 @@ struct Command {
     UnitId unit{};
 
     /// Where, for the kinds that have a where. Ignored by `Stop`.
+    ///
+    /// For an `Attack` WITH a target, this is where the target was LAST ROUTED TO — the
+    /// chase in `advanceOrders` re-routes when the target strays from it and records the
+    /// new goal here, so the field is the chase's own memory rather than a stale click.
     Fx targetX{};
     Fx targetZ{};
+
+    /// Who to attack, for `Attack` — or an invalid handle, which makes the attack a plain
+    /// walk-at-a-place (the old semantics, and still what attack-ground means). A valid
+    /// handle is what turns the order into a PURSUIT: the unit follows the target's real
+    /// position, holds when its own longest weapon reaches, and the order completes when
+    /// the target dies rather than when the unit arrives anywhere. Stale generations read
+    /// as dead, which is exactly right — the thing clicked no longer exists.
+    UnitId target{};
 
     /// What to build, for `Build`. Ignored by the rest.
     UnitTypeIndex buildType = 0;

@@ -575,3 +575,56 @@ TEST_CASE("a build does not leave the builder looking busy") {
 
     CHECK(fix.roster.store.orders()[engineer.index].empty());
 }
+
+TEST_CASE("an attack with a target is a pursuit: chase, hold in range, finish on the kill") {
+    Fixture fixture;
+
+    // An armed, mobile attacker type. The fixture's default is toothless, and a unit with no
+    // firing weapon deliberately does not chase — for it an attack is the plain walk it was.
+    rm::unitdef::UnitDef armed;
+    armed.name = "test_gunner";
+    armed.speedElmosPerSecond = 40.0f;
+    armed.motion = rm::unitdef::MotionType::Land;
+    rm::unitdef::Weapon gun;
+    gun.label = "gun";
+    gun.damage = rm::sim::magFromFloat(10.0f);
+    gun.maxRange = rm::test::fx(100.0f);
+    gun.rateOfFire = 1.0f;
+    armed.weapons.push_back(gun);
+    const rm::UnitTypeIndex type = fixture.roster.addType(armed);
+    const UnitId hunter = fixture.roster.add(type, 200.0f, 200.0f, 0, 500.0f);
+    const UnitId prey = fixture.theirs;  // at 600, 600 — far outside the 100-elmo reach
+
+    CommandLog log;
+    Command attack = moveOrder(0, 0, hunter, 600.0f, 600.0f);
+    attack.kind = CommandKind::Attack;
+    attack.target = prey;
+    log.record(attack);
+
+    // The hunter closes. After a while it is nearer the prey than it started, and once the
+    // gap is inside the weapon's reach it HOLDS rather than walking to the prey's feet.
+    fixture.run(log, 200);
+    const auto gapNow = [&] {
+        const rm::sim::Transform& a = fixture.roster.store.transforms()[hunter.index];
+        const rm::sim::Transform& b = fixture.roster.store.transforms()[prey.index];
+        return rm::sim::groundDistanceElmos({a.x, a.y, a.z}, {b.x, b.y, b.z});
+    };
+    CHECK(gapNow() <= rm::test::fx(100.0f));
+    CHECK_FALSE(fixture.roster.store.orders()[hunter.index].empty());
+
+    // The prey breaks away; the chase re-routes without a fresh order.
+    {
+        rm::sim::Transform& b = fixture.roster.store.transforms()[prey.index];
+        b.x = rm::test::fx(900.0f);
+        b.z = rm::test::fx(200.0f);
+        fixture.roster.reindex();
+    }
+    const CommandLog quiet;
+    fixture.run(quiet, 300);
+    CHECK(gapNow() <= rm::test::fx(100.0f));
+
+    // The kill completes the order: the queue empties on its own.
+    fixture.roster.store.health()[prey.index].current = rm::sim::Mag{};
+    fixture.run(quiet, 10);
+    CHECK(fixture.roster.store.orders()[hunter.index].empty());
+}
