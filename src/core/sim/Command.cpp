@@ -4,6 +4,8 @@
 #include "core/sim/Movement.hpp"
 #include "core/sim/UnitStore.hpp"
 
+#include "core/unit/BuildTree.hpp"
+
 #include <algorithm>
 #include <fstream>
 #include <sstream>
@@ -329,6 +331,16 @@ bool startCommand(const Command& command, UnitStore& store, const UnitCatalog& c
         // it deterministically is better than letting a tank found a factory.
         const unitdef::UnitDef* builder = catalog.def(store.typeAt(command.unit.index));
         if (builder == nullptr || !builder->isBuilder()) {
+            return false;
+        }
+
+        // THE BUILD TREE, enforced where the order lands: the builder's own
+        // `BuildableCategory` must name the definition, or a T1 factory turns out T2 tanks
+        // the moment anything asks. Nothing legal ever hit this — the UI only offers what
+        // `buildableBy` lists and the scripted opponent builds from a vetted opening — but
+        // the FAF opponent asks for whatever its data names, and the rule belongs to the
+        // sim, not to every caller's manners.
+        if (!unitdef::matchesExpression(builder->buildableCategory, *def)) {
             return false;
         }
 

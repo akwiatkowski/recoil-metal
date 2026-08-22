@@ -199,10 +199,14 @@ TEST_CASE("a build command creates a construction, costed from the blueprint") {
     rm::unitdef::UnitDef engineerDef;
     engineerDef.name = "engineer";
     engineerDef.buildRate = 10.0f;
+    // The build TREE is enforced now: a builder states what it may build, in the same
+    // category language the blueprints use, or the order is refused.
+    engineerDef.buildableCategory = {{"TESTSTRUCTURE"}};
     const rm::UnitTypeIndex engineerType = fix.roster.addType(engineerDef);
 
     rm::unitdef::UnitDef mexDef;
     mexDef.name = "mex";
+    mexDef.categories = {"TESTSTRUCTURE"};
     mexDef.buildCostMass = rm::test::mag(36.0f);
     mexDef.buildCostEnergy = rm::test::mag(360.0f);
     mexDef.buildTime = rm::test::mag(60.0f);
@@ -241,6 +245,7 @@ TEST_CASE("only a builder builds") {
     Fixture fix;
     rm::unitdef::UnitDef mexDef;
     mexDef.name = "mex";
+    mexDef.categories = {"TESTSTRUCTURE"};
     mexDef.buildTime = rm::test::mag(60.0f);
     const rm::UnitTypeIndex mexType = fix.roster.addType(mexDef);
 
@@ -519,10 +524,14 @@ TEST_CASE("a build order names a place on the map, and the ground decides the he
     rm::unitdef::UnitDef engineerDef;
     engineerDef.name = "engineer";
     engineerDef.buildRate = 10.0f;
+    // The build TREE is enforced now: a builder states what it may build, in the same
+    // category language the blueprints use, or the order is refused.
+    engineerDef.buildableCategory = {{"TESTSTRUCTURE"}};
     const rm::UnitTypeIndex engineerType = fix.roster.addType(engineerDef);
 
     rm::unitdef::UnitDef mexDef;
     mexDef.name = "mex";
+    mexDef.categories = {"TESTSTRUCTURE"};
     mexDef.buildTime = rm::test::mag(60.0f);
     const rm::UnitTypeIndex mexType = fix.roster.addType(mexDef);
 
@@ -556,10 +565,14 @@ TEST_CASE("a build does not leave the builder looking busy") {
     rm::unitdef::UnitDef engineerDef;
     engineerDef.name = "engineer";
     engineerDef.buildRate = 10.0f;
+    // The build TREE is enforced now: a builder states what it may build, in the same
+    // category language the blueprints use, or the order is refused.
+    engineerDef.buildableCategory = {{"TESTSTRUCTURE"}};
     const rm::UnitTypeIndex engineerType = fix.roster.addType(engineerDef);
 
     rm::unitdef::UnitDef mexDef;
     mexDef.name = "mex";
+    mexDef.categories = {"TESTSTRUCTURE"};
     mexDef.buildTime = rm::test::mag(60.0f);
     const rm::UnitTypeIndex mexType = fix.roster.addType(mexDef);
 
