@@ -248,6 +248,18 @@ struct UnitDef {
     /// Whether this unit can build anything at all.
     [[nodiscard]] bool isBuilder() const noexcept { return buildRate > 0.0f; }
 
+    // --- threat ------------------------------------------------------------
+    //
+    // The blueprint's own estimate of how dangerous this unit is, per domain —
+    // `Defense.*ThreatLevel`. Authored for exactly one consumer: the AI, whose builder
+    // conditions and platoon formation compare summed threat against thresholds. A tank is
+    // 1, a T2 point defence 8, an ACU 60 — the scale is the corpus's own and is only ever
+    // compared with itself.
+    float surfaceThreat = 0.0f;
+    float airThreat = 0.0f;
+    float subThreat = 0.0f;
+    float economyThreat = 0.0f;
+
     /// What this unit UPGRADES INTO — `General.UpgradesTo`, upper-cased to match `name`.
     /// The tech path for factories (UEB0101 -> UEB0201 -> UEB0301) and extractors; empty
     /// for the majority that upgrade into nothing. The sim reads it to tell an upgrade

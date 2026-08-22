@@ -373,6 +373,12 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
         // `ArmorClass` here; the short version is that resolving it needs a registry, and a
         // parser that needs a registry cannot be called with a Lua table and nothing else.
         def.armorType = std::string{defense->stringAt("ArmorType").value_or("")};
+
+        // The threat estimates, for the AI (UnitDef's threat note).
+        def.surfaceThreat = numberOr(*defense, "SurfaceThreatLevel", 0.0f);
+        def.airThreat = numberOr(*defense, "AirThreatLevel", 0.0f);
+        def.subThreat = numberOr(*defense, "SubThreatLevel", 0.0f);
+        def.economyThreat = numberOr(*defense, "EconomyThreatLevel", 0.0f);
     }
 
     // --- display -----------------------------------------------------------

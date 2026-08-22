@@ -36,18 +36,35 @@ namespace {
 constexpr const char* kFafDriver = R"lua(
 if __rm_faf == nil then
 
-__rm_faf = { brains = {}, missing = {}, condErrors = {}, cats = {}, scenario = false }
+__rm_faf = { brains = {}, missing = {}, condErrors = {}, cats = {}, threat = {}, scenario = false }
 
 local factionNames = { 'UEF', 'Aeon', 'Cybran', 'Seraphim' }
 
 -- One category set per blueprint id, built from the tag list C++ sends once per type.
 -- In Moho every unit id is itself a category, so the id joins its own set.
-function __rm_faf_type(bp, tags)
+function __rm_faf_type(bp, tags, threat)
     if __rm_faf.cats[bp] then return end
     local set = {}
     for _, tag in ipairs(tags) do set[string.upper(tag)] = true end
     set[string.upper(bp)] = true
     __rm_faf.cats[bp] = set
+    __rm_faf.threat[bp] = threat or {}
+end
+
+-- One unit's threat in one of Moho's domains, from the blueprint's own estimates. The
+-- corpus asks with a zoo of spellings; unknown ones read as surface, the common case.
+function __rm_faf_threat(u, threatType)
+    local t = __rm_faf.threat[u.bp]
+    if not t then return 0 end
+    if threatType == 'Air' or threatType == 'AntiAir' then return t.a or 0 end
+    if threatType == 'Sub' or threatType == 'AntiSub' or threatType == 'Naval' then
+        return t.u or 0
+    end
+    if threatType == 'Economy' then return t.e or 0 end
+    if threatType == 'Overall' then
+        return (t.s or 0) + (t.a or 0) + (t.u or 0) + (t.e or 0)
+    end
+    return t.s or 0
 end
 
 -- The map's own markers, installed where the corpus looks for them —
@@ -209,10 +226,20 @@ function methods:CanBuildStructureAt(bp, position)
     end
     return true
 end
--- Threat, answered with what the adapter knows: nothing. Zero is "no threat seen", which
--- is also what a brain with no intel grids would see — it makes the AI bold, and it makes
--- expansion conditions pass, both of which are the honest consequence of no intel yet.
-function methods:GetThreatAtPosition() return 0 end
+-- Threat at a point: the blueprints' own estimates summed over ENEMIES THE ARMY CAN SEE —
+-- the snapshot's enemies list is already intel-filtered, so fog hides threat exactly as it
+-- hides units. The ring-to-radius mapping is Guessed against Moho's iMAP cells: one ring
+-- is read as roughly one and a half grid squares.
+function methods:GetThreatAtPosition(position, rings, _, threatType)
+    local radius = ((rings or 0) + 1) * 96
+    local total = 0
+    for _, e in ipairs(self.snap.enemies or {}) do
+        if VDist2(e.x, e.z, position[1], position[3]) <= radius then
+            total = total + __rm_faf_threat(e, threatType)
+        end
+    end
+    return total
+end
 function methods:GetEngineerManagerUnitsBeingBuilt(category)
     return EntityCategoryCount(category, self.snap.underway or {})
 end
@@ -288,19 +315,19 @@ function __rm_faf_boot(army, info)
         GetPlatoonUnits = function(pool)
             return brain.snap.units
         end,
-        -- Threat as a headcount. The blueprints' own threat values are not parsed yet, so
-        -- one unit is one threat — wave thresholds still scale with army size, which is the
-        -- behaviour the corpus wants from this number.
+        -- Real threat now: the blueprints' own Defense.*ThreatLevel estimates, summed
+        -- over the matching units — the number the corpus's wave thresholds were
+        -- authored against.
         GetPlatoonThreat = function(pool, threatType, category, position, radius)
-            local n = 0
+            local total = 0
             for _, u in ipairs(brain.snap.units) do
                 if EntityCategoryContains(category, u)
                     and (not position or not radius
                          or VDist2(u.x, u.z, position[1], position[3]) <= radius) then
-                    n = n + 1
+                    total = total + __rm_faf_threat(u, threatType)
                 end
             end
-            return n
+            return total
         end,
     }
 
@@ -762,7 +789,16 @@ void FafOpponent::teachType(lua_State* lua, const rm::unitdef::UnitDef& def) {
         lua_pushstring(lua, tag.c_str());
         lua_rawseti(lua, -2, tagIndex++);
     }
-    if (lua_pcall(lua, 2, 0, 0) != 0) {
+    lua_newtable(lua);  // the blueprint's threat estimates, for __rm_faf_threat
+    lua_pushnumber(lua, static_cast<lua_Number>(def.surfaceThreat));
+    lua_setfield(lua, -2, "s");
+    lua_pushnumber(lua, static_cast<lua_Number>(def.airThreat));
+    lua_setfield(lua, -2, "a");
+    lua_pushnumber(lua, static_cast<lua_Number>(def.subThreat));
+    lua_setfield(lua, -2, "u");
+    lua_pushnumber(lua, static_cast<lua_Number>(def.economyThreat));
+    lua_setfield(lua, -2, "e");
+    if (lua_pcall(lua, 3, 0, 0) != 0) {
         lua_pop(lua, 1);
     }
 }
@@ -1015,6 +1051,45 @@ void FafOpponent::advance(rm::TickIndex tick) {
 
     lua_setfield(lua, -3, "units");     // snap.units
     lua_setfield(lua, -2, "occupied");  // snap.occupied
+
+    // The enemies this army's ALLIANCE can currently see — position and blueprint id, which
+    // with the taught threat tables is everything GetThreatAtPosition needs. Intel-filtered
+    // here so fog hides threat exactly as it hides units; the AI reads the same grid the
+    // renderer's fog does.
+    lua_newtable(lua);  // snap.enemies
+    {
+        const int alliance = scene.armies[armyIndex].alliance;
+        lua_Integer enemyIndex = 1;
+        for (rm::UnitIndex slot = 0; slot < scene.store.slotCount(); ++slot) {
+            if (!health[slot].alive()) {
+                continue;
+            }
+            const int owner = motion[slot].armyIndex;
+            if (owner < 0 || static_cast<std::size_t>(owner) >= scene.armies.size()
+                || scene.armies[static_cast<std::size_t>(owner)].alliance == alliance) {
+                continue;
+            }
+            const rm::sim::Transform& transform = scene.store.transforms()[slot];
+            if (!scene.intel.sees(alliance, rm::sim::IntelKind::Vision, transform.x,
+                                  transform.z)) {
+                continue;
+            }
+            const rm::unitdef::UnitDef* def = scene.catalog.def(scene.store.typeAt(slot));
+            if (def == nullptr) {
+                continue;
+            }
+            teachType(lua, *def);
+            lua_newtable(lua);
+            lua_pushstring(lua, def->name.c_str());
+            lua_setfield(lua, -2, "bp");
+            lua_pushnumber(lua, static_cast<lua_Number>(rm::sim::fxToFloat(transform.x)));
+            lua_setfield(lua, -2, "x");
+            lua_pushnumber(lua, static_cast<lua_Number>(rm::sim::fxToFloat(transform.z)));
+            lua_setfield(lua, -2, "z");
+            lua_rawseti(lua, -2, enemyIndex++);
+        }
+    }
+    lua_setfield(lua, -2, "enemies");
 
     // --- The decision pass --------------------------------------------------------------
     lua_getglobal(lua, "__rm_faf_decide");
