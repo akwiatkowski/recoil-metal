@@ -237,6 +237,20 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
         def.sonarStealth = flagAt(*intel, "SonarStealth");
         def.cloak = flagAt(*intel, "Cloak");
         def.freeIntel = flagAt(*intel, "FreeIntel");
+
+        // The FIELDS and the jammer — the "acts on others" half of the intel table.
+        def.radarStealthFieldRadiusElmos =
+            numberOr(*intel, "RadarStealthFieldRadius", 0.0f) * scmap::kElmosPerOgrid;
+        def.sonarStealthFieldRadiusElmos =
+            numberOr(*intel, "SonarStealthFieldRadius", 0.0f) * scmap::kElmosPerOgrid;
+        // `JamRadius` is a {Min, Max} TABLE, unlike every other radius here; Max is read
+        // because every retail pair is equal and the larger bound is a deception's honest
+        // reach. `JammerBlips` is a count, not a radius, and is not scaled.
+        if (const lua::Value* jam = intel->find("JamRadius")) {
+            def.jamRadiusElmos = numberOr(*jam, "Max", 0.0f) * scmap::kElmosPerOgrid;
+        }
+        def.jammerBlips =
+            static_cast<int>(numberOr(*intel, "JammerBlips", 0.0f));
     }
 
     // --- size --------------------------------------------------------------

@@ -72,6 +72,13 @@ public:
 
         /// Whether everyone always knows where it is. Beats stealth.
         bool freeIntel = false;
+
+        /// The stealth FIELDS this type projects over its own alliance, and the jammer's
+        /// deception. Radii like the senses above; `jammerBlips` is a count.
+        Fx radarStealthField{};
+        Fx sonarStealthField{};
+        Fx jamRadius{};
+        int jammerBlips = 0;
     };
 
     /// What one WEAPON's authored rates come to per tick.

@@ -189,6 +189,20 @@ struct UnitDef {
     /// stating that this particular object is meant to be seen.
     bool freeIntel = false;
 
+    /// The stealth FIELDS: everything of this unit's own alliance inside the radius is
+    /// absent from the named sense, exactly as the per-unit flags make their one carrier.
+    /// Seven retail units declare each (the B4203 stealth generators). CloakFieldRadius
+    /// appears ZERO times in retail — measured, and the reason there is no field for it.
+    float radarStealthFieldRadiusElmos = 0.0f;
+    float sonarStealthFieldRadiusElmos = 0.0f;
+
+    /// The jammer: `JammerBlips` false radar contacts scattered within `JamRadius.Max` of
+    /// the carrier, shown to any hostile radar that covers it. Seven retail units. The
+    /// blueprint states the radius as a {Min, Max} table; Max is read because every retail
+    /// pair is equal and the larger bound is the honest reach of a deception.
+    float jamRadiusElmos = 0.0f;
+    int jammerBlips = 0;
+
     // --- economy -----------------------------------------------------------
     //
     // What it costs to make and what it makes. All four are stated by essentially every

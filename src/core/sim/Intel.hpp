@@ -70,6 +70,19 @@ enum class IntelKind : std::uint8_t {
 
 inline constexpr std::size_t kIntelKindCount = 4;
 
+/// The second kind of grid ADR-037's second pass named: "who is HIDDEN here", not "who can
+/// see here". A stealth field acts on OTHER units — everything of its own alliance standing
+/// inside it is absent from the named sense — so the grid is keyed by the FIELD OWNER'S
+/// alliance and consulted about a unit's position, where every `IntelKind` grid is keyed by
+/// the viewer's. Seven retail units declare each radius (the B4203 stealth generators);
+/// CloakField appears zero times in retail and so has no entry here.
+enum class HiddenKind : std::uint8_t {
+    RadarField,
+    SonarField,
+};
+
+inline constexpr std::size_t kHiddenKindCount = 2;
+
 /// Whether terrain blocks sight, which is a question about which game this is.
 enum class VisionStyle : std::uint8_t {
     /// Flat discs for everything, as `vision.fx` stamps them. You see over mountains.
@@ -262,6 +275,14 @@ public:
     /// The grid itself, for the hash and for the fog renderer.
     [[nodiscard]] const IntelGrid& grid(int alliance, IntelKind kind) const noexcept;
 
+    /// Whether `ownerAlliance`'s stealth field of this kind covers a position — asked about
+    /// a UNIT'S OWN location at contact time, which is the direction these grids point.
+    /// False when inactive: no intel means no fog, and no fog means nothing to hide in.
+    [[nodiscard]] bool hiddenBy(int ownerAlliance, HiddenKind kind, Fx x, Fx z) const noexcept;
+
+    /// The hidden-field grid, for the hash — the sense grids' sibling.
+    [[nodiscard]] const IntelGrid& hiddenGrid(int alliance, HiddenKind kind) const noexcept;
+
     [[nodiscard]] std::size_t alliances() const noexcept { return grids_.size() / kIntelKindCount; }
 
 private:
@@ -284,8 +305,15 @@ private:
     /// `[alliance * kIntelKindCount + kind]`, so one vector holds them all and the index
     /// arithmetic is in one place.
     std::vector<IntelGrid> grids_;
+
+    /// `[alliance * kHiddenKindCount + kind]` — the "hidden here" family, kept apart from
+    /// `grids_` because the two are indexed by different parties (owner against viewer) and
+    /// one flat vector would invite exactly the off-by-a-kind bug the assertion in
+    /// `configure` records.
+    std::vector<IntelGrid> hiddenGrids_;
     std::vector<Placement> placements_;
     std::vector<std::array<Emitter, kIntelKindCount>> emitters_;
+    std::vector<std::array<Emitter, kHiddenKindCount>> hiddenEmitters_;
     VisionStyle style_ = VisionStyle::Recoil;
 
     /// Scratch, reused across emitters so a stamp is not an allocation.

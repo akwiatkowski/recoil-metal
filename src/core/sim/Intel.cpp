@@ -359,8 +359,10 @@ void Intel::configure(std::size_t alliances, Fx widthElmos, Fx depthElmos,
                       VisionStyle style) {
     style_ = style;
     grids_.clear();
+    hiddenGrids_.clear();
     placements_.clear();
     emitters_.clear();
+    hiddenEmitters_.clear();
 
     // ONE GRID PER KIND PER ALLIANCE, IN `IntelKind` ORDER, because every index into this is
     // `alliance * kIntelKindCount + kind` and nothing bounds-checks it. Adding a kind without
@@ -379,6 +381,16 @@ void Intel::configure(std::size_t alliances, Fx widthElmos, Fx depthElmos,
         grids_.emplace_back(widthElmos, depthElmos, kVisionMipLevel);   // Omni
     }
     assert(grids_.size() == alliances * kIntelKindCount);
+
+    // The "hidden here" family, one per HiddenKind per alliance and in that order — the
+    // same rule and the same reason as above. Radar's mip for both: a stealth field is a
+    // radar-scaled thing, and its edge is as invisible as radar's own.
+    hiddenGrids_.reserve(alliances * kHiddenKindCount);
+    for (std::size_t alliance = 0; alliance < alliances; ++alliance) {
+        hiddenGrids_.emplace_back(widthElmos, depthElmos, kRadarMipLevel);  // RadarField
+        hiddenGrids_.emplace_back(widthElmos, depthElmos, kRadarMipLevel);  // SonarField
+    }
+    assert(hiddenGrids_.size() == alliances * kHiddenKindCount);
 }
 
 const IntelGrid& Intel::grid(int alliance, IntelKind kind) const noexcept {
@@ -386,6 +398,23 @@ const IntelGrid& Intel::grid(int alliance, IntelKind kind) const noexcept {
     const auto index = static_cast<std::size_t>(alliance) * kIntelKindCount
                      + static_cast<std::size_t>(kind);
     return index < grids_.size() ? grids_[index] : kEmpty;
+}
+
+const IntelGrid& Intel::hiddenGrid(int alliance, HiddenKind kind) const noexcept {
+    static const IntelGrid kEmpty{};
+    const auto index = static_cast<std::size_t>(alliance) * kHiddenKindCount
+                     + static_cast<std::size_t>(kind);
+    return index < hiddenGrids_.size() ? hiddenGrids_[index] : kEmpty;
+}
+
+bool Intel::hiddenBy(int ownerAlliance, HiddenKind kind, Fx x, Fx z) const noexcept {
+    if (!active()) {
+        return false;  // no intel means no fog, and no fog means nothing to hide in
+    }
+    if (ownerAlliance < 0 || static_cast<std::size_t>(ownerAlliance) >= alliances()) {
+        return false;
+    }
+    return hiddenGrid(ownerAlliance, kind).covered(x, z);
 }
 
 bool Intel::sees(int alliance, IntelKind kind, Fx x, Fx z) const noexcept {
@@ -413,6 +442,16 @@ void Intel::withdraw(UnitIndex slot) {
         grids_[index].remove(squares);
         squares.clear();
     }
+    for (std::size_t kind = 0; kind < kHiddenKindCount; ++kind) {
+        std::vector<std::int32_t>& squares = hiddenEmitters_[slot][kind].squares;
+        if (squares.empty()) {
+            continue;
+        }
+        const auto index =
+            static_cast<std::size_t>(placement.alliance) * kHiddenKindCount + kind;
+        hiddenGrids_[index].remove(squares);
+        squares.clear();
+    }
     placement.square = IntelGrid::kNoSquare;
 }
 
@@ -425,6 +464,7 @@ void Intel::update(const UnitStore& store, const UnitCatalog& catalog,
     const std::size_t slots = store.slotCount();
     placements_.resize(slots);
     emitters_.resize(slots);
+    hiddenEmitters_.resize(slots);
 
     const std::span<const Transform> transforms = store.transforms();
     const std::span<const MoveState> motion = store.motion();
@@ -483,6 +523,24 @@ void Intel::update(const UnitStore& store, const UnitCatalog& catalog,
             std::vector<std::int32_t>& squares = emitters_[slot][kind].squares;
             squares.assign(scratch_.begin(), scratch_.end());
             grids_[index].add(squares);
+        }
+
+        // The stealth FIELDS this unit projects, into the hidden family. Discs always: the
+        // fields are a Forged Alliance mechanic and FA stamps discs for everything — a
+        // raycast stealth shadow would be an invention, not a transcription.
+        const Fx byHidden[kHiddenKindCount] = {radii.radarStealthField,
+                                               radii.sonarStealthField};
+        for (std::size_t kind = 0; kind < kHiddenKindCount; ++kind) {
+            if (byHidden[kind] <= kFxZero) {
+                continue;
+            }
+            const auto index =
+                static_cast<std::size_t>(alliance) * kHiddenKindCount + kind;
+            circleSquares(hiddenGrids_[index], at.x, at.z, byHidden[kind], scratch_);
+
+            std::vector<std::int32_t>& squares = hiddenEmitters_[slot][kind].squares;
+            squares.assign(scratch_.begin(), scratch_.end());
+            hiddenGrids_[index].add(squares);
         }
 
         placement.square = square;
@@ -612,20 +670,56 @@ void contactsFor(int alliance, const UnitStore& store, const UnitCatalog& catalo
         // better picture. They carry the same error today; when sonar gains rules of its
         // own the order is already the one that says which wins.
         // A STEALTHED UNIT IS ABSENT FROM THE SENSE, not harder to find in it — which is why
-        // the flag short-circuits the query rather than shrinking anybody's radius.
-        const bool radar =
-            !hiding.radarStealth && intel.sees(alliance, IntelKind::Radar, at.x, at.z);
+        // the flag short-circuits the query rather than shrinking anybody's radius. A
+        // stealth FIELD is the same absence granted by a neighbour: the owner's hidden grid
+        // is asked about the UNIT'S OWN position, and covered means gone. Omni has already
+        // had its say above, which is what keeps "nothing hides from omni" true of the
+        // fields too.
+        const int owner = armies[static_cast<std::size_t>(army)].alliance;
+        const bool radar = !hiding.radarStealth
+                        && !intel.hiddenBy(owner, HiddenKind::RadarField, at.x, at.z)
+                        && intel.sees(alliance, IntelKind::Radar, at.x, at.z);
         const bool sonar = !radar && !hiding.sonarStealth
+                        && !intel.hiddenBy(owner, HiddenKind::SonarField, at.x, at.z)
                         && intel.sees(alliance, IntelKind::Sonar, at.x, at.z);
-        if (!radar && !sonar) {
-            continue;  // nothing knows it is there
+        if (radar || sonar) {
+            const auto [x, z] = blipPosition(store.idAt(slot), at.x, at.z, tick, rate);
+            contacts.push_back(Contact{.unit = store.idAt(slot),
+                                       .x = x,
+                                       .z = z,
+                                       .kind = radar ? ContactKind::Radar
+                                                     : ContactKind::Sonar});
         }
 
-        const auto [x, z] = blipPosition(store.idAt(slot), at.x, at.z, tick, rate);
-        contacts.push_back(Contact{.unit = store.idAt(slot),
-                                   .x = x,
-                                   .z = z,
-                                   .kind = radar ? ContactKind::Radar : ContactKind::Sonar});
+        // THE JAMMER: `jammerBlips` false radar contacts scattered inside `jamRadius` of a
+        // hostile carrier, whenever the viewer's radar covers the carrier's ground — a
+        // deception needs a sense to deceive. Emitted WHETHER OR NOT the carrier itself
+        // resolved to a contact above: a radar-stealthed jammer that showed nothing but its
+        // own blips would be the strongest version of the trick, and that is the shipped
+        // XES0102's exact loadout. Each blip wanders on the same derived drift the real
+        // ones use, seeded by the blip's ordinal, so the cluster reads as contacts rather
+        // than as a ring of satellites.
+        if (hiding.jammerBlips > 0 && hiding.jamRadius > kFxZero
+            && intel.sees(alliance, IntelKind::Radar, at.x, at.z)) {
+            const UnitId carrier = store.idAt(slot);
+            for (int blip = 0; blip < hiding.jammerBlips; ++blip) {
+                // A distinct identity per blip, derived from the carrier's: the generation
+                // offset keeps the angle hash from handing every blip the same wander.
+                const UnitId ghost{carrier.index,
+                                   static_cast<Generation>(
+                                       carrier.generation
+                                       + static_cast<Generation>(blip + 1))};
+                const Brad spread = blipAngle(ghost, 0x9E37u + static_cast<std::uint32_t>(blip));
+                const Fx offsetX = fxCos(spread) * hiding.jamRadius;
+                const Fx offsetZ = fxSin(spread) * hiding.jamRadius;
+                const auto [x, z] =
+                    blipPosition(ghost, at.x + offsetX, at.z + offsetZ, tick, rate);
+                contacts.push_back(Contact{.unit = carrier,
+                                           .x = x,
+                                           .z = z,
+                                           .kind = ContactKind::Radar});
+            }
+        }
     }
 }
 

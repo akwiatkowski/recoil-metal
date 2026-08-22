@@ -894,3 +894,112 @@ TEST_CASE("free intel beats stealth and beats having no sense at all") {
     }
     CHECK(found);
 }
+
+TEST_CASE("a stealth field hides its neighbours from radar, and omni still wins") {
+    // The watcher: radar wide enough to cover everything, no sight.
+    rm::unitdef::UnitDef watching = seer(0.0f, 800.0f);
+    // The field generator, and a plain tank standing inside its umbrella.
+    rm::unitdef::UnitDef generator;
+    generator.radarStealthFieldRadiusElmos = 100.0f;
+    rm::unitdef::UnitDef plain;
+
+    UnitCatalog catalog;
+    const rm::UnitTypeIndex watcher = catalog.add(&watching);
+    const rm::UnitTypeIndex field = catalog.add(&generator);
+    const rm::UnitTypeIndex tank = catalog.add(&plain);
+
+    Intel intel;
+    intel.configure(2, Fx::fromInt(1024), Fx::fromInt(1024),
+                    rm::sim::VisionStyle::ForgedAlliance);
+
+    UnitStore store;
+    (void)place(store, watcher, 0, 200.0f, 200.0f);
+    (void)place(store, field, 1, 600.0f, 600.0f);
+    const rm::sim::UnitId inside = place(store, tank, 1, 640.0f, 600.0f);
+    const rm::sim::UnitId outside = place(store, tank, 1, 900.0f, 600.0f);
+    std::vector<Army> armies = twoArmies(false);
+    intel.update(store, catalog, armies, nullptr);
+
+    std::vector<rm::sim::Contact> contacts;
+    rm::sim::contactsFor(0, store, catalog, armies, intel, 0, contacts);
+
+    // The tank inside the umbrella is ABSENT; the one outside is an ordinary blip. The
+    // generator hides under its own umbrella too — FA's do.
+    const auto knows = [&](rm::sim::UnitId id) {
+        return std::any_of(contacts.begin(), contacts.end(),
+                           [&](const rm::sim::Contact& c) { return c.unit == id; });
+    };
+    CHECK_FALSE(knows(inside));
+    CHECK(knows(outside));
+
+    // Omni is the counter: give the watcher omni over the field and everything is Seen.
+    rm::unitdef::UnitDef allSeeing = seer(0.0f, 800.0f);
+    allSeeing.omniRadiusElmos = 800.0f;
+    UnitCatalog counters;
+    const rm::UnitTypeIndex omni = counters.add(&allSeeing);
+    const rm::UnitTypeIndex field2 = counters.add(&generator);
+    const rm::UnitTypeIndex tank2 = counters.add(&plain);
+
+    Intel intel2;
+    intel2.configure(2, Fx::fromInt(1024), Fx::fromInt(1024),
+                     rm::sim::VisionStyle::ForgedAlliance);
+    UnitStore store2;
+    (void)place(store2, omni, 0, 200.0f, 200.0f);
+    (void)place(store2, field2, 1, 600.0f, 600.0f);
+    const rm::sim::UnitId inside2 = place(store2, tank2, 1, 640.0f, 600.0f);
+    intel2.update(store2, counters, armies, nullptr);
+
+    contacts.clear();
+    rm::sim::contactsFor(0, store2, counters, armies, intel2, 0, contacts);
+    const auto seen = std::find_if(contacts.begin(), contacts.end(),
+                                   [&](const rm::sim::Contact& c) { return c.unit == inside2; });
+    REQUIRE(seen != contacts.end());
+    CHECK(seen->kind == rm::sim::ContactKind::Seen);
+}
+
+TEST_CASE("a jammer scatters false blips inside hostile radar, and only there") {
+    rm::unitdef::UnitDef watching = seer(0.0f, 800.0f);
+    rm::unitdef::UnitDef deceiver;
+    deceiver.jamRadiusElmos = 208.0f;  // the retail 26 ogrids
+    deceiver.jammerBlips = 10;
+
+    UnitCatalog catalog;
+    const rm::UnitTypeIndex watcher = catalog.add(&watching);
+    const rm::UnitTypeIndex jammer = catalog.add(&deceiver);
+
+    Intel intel;
+    intel.configure(2, Fx::fromInt(4096), Fx::fromInt(4096),
+                    rm::sim::VisionStyle::ForgedAlliance);
+
+    UnitStore store;
+    (void)place(store, watcher, 0, 500.0f, 500.0f);
+    const rm::sim::UnitId carrier = place(store, jammer, 1, 700.0f, 500.0f);
+    std::vector<Army> armies = twoArmies(false);
+    intel.update(store, catalog, armies, nullptr);
+
+    std::vector<rm::sim::Contact> contacts;
+    rm::sim::contactsFor(0, store, catalog, armies, intel, 0, contacts);
+
+    // The watcher's own contact, the carrier's real blip, and ten lies — every lie keyed
+    // to the carrier (a blip must never leak an identity a real one would not).
+    std::size_t liesAndCarrier = 0;
+    for (const rm::sim::Contact& contact : contacts) {
+        if (contact.unit == carrier) {
+            ++liesAndCarrier;
+            CHECK(contact.kind == rm::sim::ContactKind::Radar);
+        }
+    }
+    CHECK(liesAndCarrier == 11);
+
+    // Out of radar's reach, the deception has no sense to deceive: nothing at all.
+    UnitStore far;
+    (void)place(far, watcher, 0, 100.0f, 100.0f);
+    (void)place(far, jammer, 1, 3000.0f, 3000.0f);
+    Intel intel2;
+    intel2.configure(2, Fx::fromInt(4096), Fx::fromInt(4096),
+                     rm::sim::VisionStyle::ForgedAlliance);
+    intel2.update(far, catalog, armies, nullptr);
+    contacts.clear();
+    rm::sim::contactsFor(0, far, catalog, armies, intel2, 0, contacts);
+    CHECK(contacts.size() == 1);  // the watcher itself, and no ghosts
+}

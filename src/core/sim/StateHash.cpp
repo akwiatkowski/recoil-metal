@@ -248,6 +248,18 @@ StateHash hashMatch(const UnitStore& store, const Match& match) {
                     feed(h, count);
                 }
             }
+            // The hidden family after the senses, same discipline: derived state, hashed so
+            // a divergence in stealth-field stamping is caught by the same gate as one in
+            // sight. Growing the format invalidates recorded logs, correctly — the golden
+            // was re-recorded when these arrived.
+            for (std::size_t kind = 0; kind < kHiddenKindCount; ++kind) {
+                const IntelGrid& grid = match.intel->hiddenGrid(
+                    static_cast<int>(alliance), static_cast<HiddenKind>(kind));
+                feed(h, grid.counts().size());
+                for (const std::uint16_t count : grid.counts()) {
+                    feed(h, count);
+                }
+            }
         }
     }
 
