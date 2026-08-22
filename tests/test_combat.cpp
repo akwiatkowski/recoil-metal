@@ -388,6 +388,37 @@ TEST_CASE("a shot fired reloads, and does not fire again until it has") {
     CHECK(shots.size() == 2);
 }
 
+TEST_CASE("a beam delivers the tick it fires: damage lands, nothing flies") {
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+
+    Roster roster;
+    Weapon laser = directFire(25.0f, 300.0f);
+    laser.beam = true;
+    (void)roster.add(roster.addType(gunnerDef(laser)), 0.0f, 0.0f, 0, 100.0f);
+    const UnitId victim = roster.add(roster.addType(targetDef()), 0.0f, 100.0f, 1, 1000.0f);
+
+    std::vector<Projectile> shots;
+    rm::sim::EventQueue events;
+
+    CHECK(rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots,
+                               rm::sim::TickRate{}, &events) == 1);
+    // The whole point, both halves: the damage is already dealt, and no projectile exists
+    // for a later tick to deliver it again.
+    CHECK(shots.empty());
+    CHECK(rm::test::asFloat(roster.health(victim).current) == Approx(975.0f));
+
+    // The event carries both ends of the line — the strike and the muzzle.
+    bool beamSeen = false;
+    for (const rm::sim::Event& event : events.all()) {
+        if (event.kind == rm::sim::EventKind::BeamFired) {
+            beamSeen = true;
+            CHECK(rm::test::asFloat(event.at[2]) == Approx(100.0f));   // the victim
+            CHECK(rm::test::asFloat(event.at2[2]) == Approx(0.0f));    // the muzzle
+        }
+    }
+    CHECK(beamSeen);
+}
+
 TEST_CASE("a unit with nothing to shoot at holds its fire and stays loaded") {
     // The reload runs whether or not there is a target, so a unit that comes into
     // contact fires at once rather than starting a fresh reload on sighting — the

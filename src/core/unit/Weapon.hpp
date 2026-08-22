@@ -149,6 +149,13 @@ struct Weapon {
     /// projectile is instant.
     float muzzleVelocityElmosPerSecond = 0.0f;
 
+    /// A BEAM: damage arrives the instant the weapon fires, nothing flies. From
+    /// `BeamLifetime` (a pulse that exists for a fraction of a second) or `ContinuousBeam`
+    /// — either way the corpus's beam weapons never spawn a projectile, and modelling them
+    /// as fast bullets both misses (the sim would integrate a flight) and reads wrong (a
+    /// laser is a LINE). One pulse per trigger-pull at the weapon's own rate of fire.
+    bool beam = false;
+
     // A TWO-RING BLAST, for the weapons that state one instead of a plain damage figure.
     //
     // Five of the 494 do, and they are the ones that matter most: the four commanders' death

@@ -356,19 +356,36 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
             // per-second figures (§5.1).
             const UnitCatalog::WeaponRates& rates =
                 catalog.weaponRates(store.typeAt(slot), w);
-            projectiles.push_back(
-                launch(from, to, weapon, army, rate, rates.muzzlePerTick, rates.damage,
-                       store.idAt(slot)));
-            ++fired;
+            if (weapon.beam) {
+                // A BEAM DELIVERS NOW: no projectile, no flight, the damage lands where
+                // the target stands this tick. The event carries both ends because the
+                // beam is the line between them, and it is all a renderer needs.
+                emit(events, Event{
+                                 .kind = EventKind::BeamFired,
+                                 .unit = store.idAt(slot),
+                                 .instigator = *target,
+                                 .army = army,
+                                 .amount = weapon.damage,
+                                 .at = to,
+                                 .at2 = {from[0], from[1] + kMuzzleHeight, from[2]},
+                             });
+                damageArea(to, weapon.damageRadius, rates.damage, army, store, armies,
+                           &catalog, store.idAt(slot), events);
+            } else {
+                projectiles.push_back(
+                    launch(from, to, weapon, army, rate, rates.muzzlePerTick, rates.damage,
+                           store.idAt(slot)));
 
-            emit(events, Event{
-                             .kind = EventKind::WeaponFired,
-                             .unit = store.idAt(slot),
-                             .instigator = *target,
-                             .army = army,
-                             .amount = weapon.damage,
-                             .at = from,
-                         });
+                emit(events, Event{
+                                 .kind = EventKind::WeaponFired,
+                                 .unit = store.idAt(slot),
+                                 .instigator = *target,
+                                 .army = army,
+                                 .amount = weapon.damage,
+                                 .at = from,
+                             });
+            }
+            ++fired;
 
             // THE BURST (§7 P3.5). A trigger-pull owes `burstSize` shots: the gap after any but
             // the last of them is the burst delay, and only the last one starts a real reload.

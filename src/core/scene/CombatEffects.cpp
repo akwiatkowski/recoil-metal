@@ -2,6 +2,8 @@
 
 #include "core/sim/Combat.hpp"
 
+#include <cmath>
+
 namespace rm {
 namespace {
 
@@ -16,6 +18,14 @@ inline constexpr float kFlashSize = 7.0f;
 
 /// The impact: a puff of smoke and a spark. The smoke is ordinary premultiplied grey that
 /// drifts up and fades; the spark is the flash's additive cousin, smaller and hotter.
+/// The beam: a chain of additive particles along the muzzle-to-strike line, dense enough
+/// to read as one bar of light at battle zoom, alive for a quarter second — a pulse, not a
+/// lamp. Spacing in elmos decides the particle count, so a long-range beam costs more
+/// particles exactly when it is the most visible thing on screen.
+inline constexpr float kBeamLifetime = 0.25f;
+inline constexpr float kBeamSize = 3.5f;
+inline constexpr float kBeamSpacingElmos = 4.0f;
+
 inline constexpr float kPuffLifetime = 0.55f;
 inline constexpr float kPuffSize = 5.0f;
 inline constexpr float kSparkLifetime = 0.12f;
@@ -45,6 +55,42 @@ void emitCombatEffects(std::vector<Particle>& into, std::span<const sim::Event> 
                 // Warm white-yellow, additive: (rgb, 0) adds light and hides nothing.
                 .colour = {1.0f, 0.85f, 0.45f, 0.0f},
                 .size = kFlashSize,
+            });
+            break;
+        }
+        case sim::EventKind::BeamFired: {
+            // The line itself, muzzle to strike. Both ends ride the event because by the
+            // time anything draws, either unit's slot may already be someone else.
+            const std::array<float, 3> to = atOf(event);
+            const std::array<float, 3> from = {sim::fxToFloat(event.at2[0]),
+                                               sim::fxToFloat(event.at2[1]),
+                                               sim::fxToFloat(event.at2[2])};
+            const float dx = to[0] - from[0];
+            const float dy = to[1] - from[1];
+            const float dz = to[2] - from[2];
+            const float length = std::sqrt(dx * dx + dy * dy + dz * dz);
+            const int steps = std::max(2, static_cast<int>(length / kBeamSpacingElmos));
+            for (int i = 0; i <= steps; ++i) {
+                const float t = static_cast<float>(i) / static_cast<float>(steps);
+                into.push_back(Particle{
+                    .origin = {from[0] + dx * t, from[1] + dy * t, from[2] + dz * t},
+                    .age = 0.0f,
+                    .velocity = {0.0f, 0.0f, 0.0f},
+                    .lifetime = kBeamLifetime,
+                    // Hot blue-white, additive — a laser is light and nothing else.
+                    .colour = {0.55f, 0.75f, 1.0f, 0.0f},
+                    .size = kBeamSize,
+                });
+            }
+            // And the spark where it lands, so the strike point reads even when the line
+            // is foreshortened to nothing by the camera.
+            into.push_back(Particle{
+                .origin = to,
+                .age = 0.0f,
+                .velocity = {0.0f, 2.0f, 0.0f},
+                .lifetime = kSparkLifetime,
+                .colour = {0.7f, 0.85f, 1.0f, 0.0f},
+                .size = kSparkSize,
             });
             break;
         }

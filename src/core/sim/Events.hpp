@@ -59,6 +59,11 @@ enum class EventKind : std::uint8_t {
     UnitDestroyed,
     /// A weapon fired. `unit` is the shooter.
     WeaponFired,
+    /// A beam weapon delivered a pulse: damage arrived the same tick, nothing flew.
+    /// `unit` is the shooter, `at` the STRUCK point and `at2` the muzzle — both carried
+    /// because the beam IS the line between them, and by the next tick either end may be
+    /// a recycled slot.
+    BeamFired,
     /// A projectile reached something, or the ground.
     ProjectileImpact,
     /// A build order was accepted and a construction created.
@@ -101,6 +106,10 @@ struct Event {
     /// Where it happened. Carried rather than looked up, because for a death the unit's slot is
     /// about to be recycled and for an impact there is no unit at all.
     std::array<Fx, 3> at{};
+
+    /// The OTHER end, for the kinds that are a line rather than a point — the muzzle of a
+    /// `BeamFired`. Zero for everything else.
+    std::array<Fx, 3> at2{};
 };
 
 [[nodiscard]] bool operator==(const Event& a, const Event& b) noexcept;

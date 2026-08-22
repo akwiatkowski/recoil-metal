@@ -104,6 +104,13 @@ std::vector<Weapon> weaponsFrom(const lua::Value& weaponArray) {
 
         weapon.rateOfFire = numberOr(entry, "RateOfFire", 0.0f);
 
+        // Beams: `BeamLifetime` above zero is a pulsed beam, `ContinuousBeam` a held one.
+        // Both deliver on fire rather than by flight.
+        const lua::Value* continuous = entry.find("ContinuousBeam");
+        weapon.beam = numberOr(entry, "BeamLifetime", 0.0f) > 0.0f
+                      || (continuous != nullptr
+                          && continuous->asBoolean().value_or(false));
+
         // The burst. `MuzzleSalvoSize` is a Lua LOOP COUNT (`:1036`), not a duration, so it is
         // taken as stated; `MuzzleSalvoDelay` is a `WaitSeconds` argument and is corrected.
         //
