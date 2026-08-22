@@ -337,7 +337,40 @@ static std::array<float, 2> hudPointIn(NSView* view, NSPoint windowPoint) {
     // crawl when far away and overshoot when close.
     constexpr float kZoomPerPoint = 0.04f;
     const float factor = std::exp(static_cast<float>(-event.scrollingDeltaY) * kZoomPerPoint);
-    self.renderer->camera().zoom(factor);
+
+    // ANCHORED TO THE CURSOR: the point under the pointer stays under the pointer, which is
+    // what lets a player dive at the thing they are looking at instead of at the middle of
+    // the screen and then hunting for it. The anchor is the cursor ray's intersection with
+    // the TARGET'S OWN HEIGHT PLANE rather than the terrain: this view has no heightfield,
+    // and at RTS pitches the plane differs from the ground by a correction the next wheel
+    // notch re-applies anyway — while a terrain pick would make zoom feel different over a
+    // hill than beside it.
+    //
+    // The arithmetic is the standard anchored-zoom identity: after scaling the distance by
+    // `factor`, moving the target to `anchor + (target - anchor) * factor` keeps the
+    // anchor's screen position fixed. Zooming OUT (factor > 1) walks the target away from
+    // the cursor by the same identity, which is what makes a dive reversible.
+    rm::OrbitCamera& camera = self.renderer->camera();
+    const NSPoint local = [self convertPoint:event.locationInWindow fromView:nil];
+    const rm::Ray ray = rm::screenRay(camera, static_cast<float>(local.x),
+                                      static_cast<float>(local.y),
+                                      static_cast<float>(self.bounds.size.width),
+                                      static_cast<float>(self.bounds.size.height));
+
+    // The APPLIED factor, not the requested one: `zoom` clamps the distance at both ends,
+    // and shifting the target by a factor the distance did not actually move by would make
+    // the view slide sideways at the zoom limits.
+    const float before = camera.distance;
+    camera.zoom(factor);
+    const float applied = before > 0.0f ? camera.distance / before : 1.0f;
+
+    if (std::abs(ray.direction.y) > 1e-4f) {
+        const float t = (camera.target.y - ray.origin.y) / ray.direction.y;
+        if (t > 0.0f) {
+            const simd_float3 anchor = ray.origin + ray.direction * t;
+            camera.target = anchor + (camera.target - anchor) * applied;
+        }
+    }
 }
 
 @end
