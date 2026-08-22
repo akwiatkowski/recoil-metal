@@ -1838,3 +1838,30 @@ after the re-upload notices (the renderer draws nothing for an unmapped batch, s
 invisible). Every armed-once blueprint keeps an uploaded model for the session — bounded by
 the build menu's size. `--ghost X Z` captures it headlessly, per the screenshot-or-it-
 didn't-happen rule.
+
+## ADR-043 — The FAF opponent: the corpus decides, the adapter places
+
+**Context.** Stage D of the AI integration (item #28904): make FAF's AI actually play, given
+a sandbox that loads the corpus but hosts no managers, and a sim whose brain/unit binding
+surface is mostly stubs.
+
+**Decision.** `FafOpponent` behind the ADR-038 port, with the split stated in its header:
+FAF's data and code decide WHAT (builder specs walked by priority, their conditions evaluated
+by the corpus's own `/lua/editor` functions over a per-tick snapshot), the adapter decides
+WHERE (site helpers shared with the scripted opponent) and converts to `Decision`s through
+`applyCommand`. The manager stack is stood in for by a serialized build queue — one structure
+underway per builder unit — and every brain method a condition wants and lacks fails closed
+and is counted (`BRAIN METHODS MISSING` in the sanity report). Lua's string-hash seed is
+pinned so `pairs` order cannot desync a match. Behind `--ai-faf`; the scripted default and
+its golden log are untouched.
+
+**Alternatives considered.** Booting base-ai.lua's real manager stack — rejected for now:
+it needs unit objects, per-unit callbacks and an economy-event surface that would all be
+Guessed bindings; the ledger-driven driver gets the corpus's judgement running first and
+tells us which of those bindings to build next. A C++ reimplementation of the builder logic —
+rejected by ADR-039's premise.
+
+**Consequences.** The AI plays a real opening (mex expansion, power, factories, tech,
+raids) but with adapter-shaped tactics: one base location, headcount threat, attack target
+picked by the adapter. Each is a named stand-in to be replaced by the real corpus mechanism
+as its bindings land.
