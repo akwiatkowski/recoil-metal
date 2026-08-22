@@ -353,6 +353,7 @@ if(BUILD_TESTING)
         tests/test_settings.cpp
         tests/test_real_stratum_normals.cpp
         tests/test_audio.cpp
+        tests/test_initial_economy_ui.cpp
         tests/test_scenario_save.cpp
         tests/support/SmfWriter.cpp
         tests/support/S3oWriter.cpp)
