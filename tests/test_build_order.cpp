@@ -8,6 +8,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "core/sim/BuildOrder.hpp"
+#include "core/unit/UnitDef.hpp"
 
 #include <cmath>
 
@@ -201,4 +202,30 @@ TEST_CASE("tanks roll off past the factory, not into it") {
     CHECK(dx * rm::test::asFloat(centre - factory[0])
               + dz * rm::test::asFloat(centre - factory[2])
           > 0.0f);
+}
+
+TEST_CASE("the wave size is the unit's own arithmetic, and the tank still earns twenty") {
+    // The model data/opening.lua documents, now computed per unit. The 300 hp / 24 dps
+    // tank must derive to exactly the hand-derived twenty — that is the regression pin —
+    // while a fragile bot earns a bigger wave and a toothless def falls back rather than
+    // dividing by nothing.
+    rm::unitdef::UnitDef tank;
+    tank.health = rm::sim::magFromFloat(300.0f);
+    rm::unitdef::Weapon gun;
+    gun.label = "gun";
+    gun.role = rm::unitdef::WeaponRole::DirectFire;
+    gun.damage = rm::sim::magFromFloat(24.0f);
+    gun.rateOfFire = 1.0f;
+    gun.maxRange = rm::sim::fxFromFloat(100.0f);
+    tank.weapons.push_back(gun);
+    CHECK(rm::unitdef::waveSizeFor(tank) == 20);
+
+    rm::unitdef::UnitDef bot = tank;
+    bot.health = rm::sim::magFromFloat(29.0f);
+    bot.weapons[0].damage = rm::sim::magFromFloat(7.0f);
+    CHECK(rm::unitdef::waveSizeFor(bot) > 30);
+
+    rm::unitdef::UnitDef unarmed;
+    unarmed.health = rm::sim::magFromFloat(300.0f);
+    CHECK(rm::unitdef::waveSizeFor(unarmed) == 20);
 }

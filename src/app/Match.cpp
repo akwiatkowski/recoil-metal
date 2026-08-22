@@ -366,7 +366,20 @@ void ScriptedOpponent::advance(rm::TickIndex tick) {
 
     // The one attack wave: at strength, every tank walks at the nearest enemy
     // commander. After this, reinforcements are sent as they roll off.
-    if (rm::sim::launchesAttack(script_, view, scene.opening.waveSize)) {
+    //
+    // The strength is the WAVE UNIT'S OWN (waveSizeFor): a 300 hp tank earns the plan's
+    // twenty, a 29 hp bot earns its thirty-nine — one number per plan was the recorded
+    // simplification, and the plan's figure now only covers the ticks before the first
+    // wave unit has resolved a type (when no wave could launch anyway).
+    std::size_t waveSize = scene.opening.waveSize;
+    if (const auto waveType = scene.typeForBlueprint.find(
+            rm::app::blueprintFor(scene, army, scene.opening.waveUnit));
+        waveType != scene.typeForBlueprint.end()) {
+        if (const rm::unitdef::UnitDef* waveDef = scene.catalog.def(waveType->second)) {
+            waveSize = rm::unitdef::waveSizeFor(*waveDef);
+        }
+    }
+    if (rm::sim::launchesAttack(script_, view, waveSize)) {
         const std::optional<std::array<rm::sim::Fx, 3>> target =
             rm::app::nearestEnemyCommander(scene, army_, standing.commanderPosition);
         if (target) {

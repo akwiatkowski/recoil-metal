@@ -403,4 +403,15 @@ struct UnitDef {
 [[nodiscard]] std::filesystem::path resolveModel(const vfs::AssetSearch& search,
                                                  std::string_view objectName);
 
+/// The scripted opponent's wave size, from this unit's own numbers — the model
+/// data/opening.lua documents: a commander (12,000 hp, 100 dps) kills one attacker every
+/// hp/100 seconds, survivors land dps × killTime × N(N+1)/2, and the smallest N clearing
+/// the commander's health at the tank-derived margin wins. Clamped to [5, 60]; a unit with
+/// no health or no gun gets the old hand-derived 20 rather than a division by nothing.
+///
+/// CONTENT ARITHMETIC, deliberately here and not in `core/sim`: it reads authored floats
+/// and runs once when a wave unit resolves, which is the load-time side of the fixed-point
+/// boundary (§5.2) — the sim only ever sees the resulting count.
+[[nodiscard]] std::size_t waveSizeFor(const UnitDef& unit) noexcept;
+
 } // namespace rm::unitdef

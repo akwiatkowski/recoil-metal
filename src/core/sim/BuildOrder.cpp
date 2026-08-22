@@ -1,5 +1,6 @@
 #include "core/sim/BuildOrder.hpp"
 
+#include <algorithm>
 #include <cmath>
 
 namespace rm::sim {

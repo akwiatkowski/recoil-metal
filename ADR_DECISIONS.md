@@ -1865,3 +1865,19 @@ rejected by ADR-039's premise.
 raids) but with adapter-shaped tactics: one base location, headcount threat, attack target
 picked by the adapter. Each is a named stand-in to be replaced by the real corpus mechanism
 as its bindings land.
+
+## ADR-044 — miniz is the archive dependency, ratified
+
+**Context.** miniz (third_party/, public-domain, single-file) was added mid-session for
+`.sdz`/`.scd` zip extraction and never justified in an ADR — item #1588's standing complaint.
+
+**Decision.** Keep it, now on the record. The VFS mounts zip archives on every content path
+this engine reads (17 archives, 23k files for retail FA alone); miniz is ~5k lines, no
+transitive dependencies, fetched pinned like Lua and Catch2 rather than committed.
+
+**Alternatives considered.** libzip/zlib — real dependency trees for the same job.
+Reimplementing inflate — a solved problem this project has no business re-solving.
+Requiring pre-extracted content — pushes a chore onto every user of every archive forever.
+
+**Consequences.** A third-party C file in the trust base, mitigated by pinning to a release
+checksum'd by its own project. The build stays curl-and-go.

@@ -230,3 +230,41 @@ std::filesystem::path resolveModel(const vfs::AssetSearch& search,
 }
 
 } // namespace rm::unitdef
+
+#include <algorithm>
+#include <cmath>
+
+namespace rm::unitdef {
+
+std::size_t waveSizeFor(const UnitDef& unit) noexcept {
+    // The model's constants, from data/opening.lua's derivation — the margin is the
+    // hand-derived tank number's own (15,120 landed against 12,000 needed = 1.26), kept so
+    // the tank still derives to exactly 20.
+    constexpr float kCommanderHp = 12000.0f;
+    constexpr float kCommanderDps = 100.0f;
+    constexpr float kMargin = 1.26f;
+    constexpr std::size_t kFallback = 20;
+
+    float dps = 0.0f;
+    for (const Weapon& weapon : unit.weapons) {
+        if (weapon.fires()) {
+            // A salvo delivers all its shots per pull, so it multiplies.
+            dps = sim::magToFloat(weapon.damage) * static_cast<float>(weapon.burstSize)
+                  * weapon.rateOfFire;
+            break;
+        }
+    }
+    const float hp = sim::magToFloat(unit.health);
+    if (dps <= 0.0f || hp <= 0.0f) {
+        return kFallback;
+    }
+
+    // Each casualty interval (hp / commander dps seconds), every survivor lands dps worth:
+    // total ≈ perInterval × (N + (N-1) + ... + 1) = perInterval × N(N+1)/2.
+    const float perInterval = dps * (hp / kCommanderDps);
+    const float need = kCommanderHp * kMargin;
+    const float n = std::ceil((-1.0f + std::sqrt(1.0f + 8.0f * need / perInterval)) / 2.0f);
+    return std::clamp(static_cast<std::size_t>(n), std::size_t{5}, std::size_t{60});
+}
+
+} // namespace rm::unitdef
