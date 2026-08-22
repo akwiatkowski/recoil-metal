@@ -119,6 +119,7 @@ help:
 	@echo '  clean           remove the build directory'
 	@echo
 	@echo 'Override anything: make play ARMIES=8 ALLIANCES=2 FACTIONS=uef,seraphim FA_MAP=...'
+	@echo '                   make watch FAF=1       (the FAF AI plays, decisions narrated)'
 	@echo '                   make play VISION=fa    (flat discs, as Supreme Commander does)'
 	@echo '                   make skirmish UNITS=200 SECONDS=90'
 	@echo
@@ -207,6 +208,10 @@ run-bar: build check-bar
 # You drive ARMY 0 — `--skirmish` seats a human there and gives every other army a script
 # (`onePlayerPerArmy(.., humanArmy=0)`), so your units are the only ones a left click selects.
 ARMIES    ?= 2
+
+# FAF=1 seats FAF's own AI (--ai-faf) with its decision log; empty keeps the scripted one.
+FAF ?=
+FAF_AI_FLAG = $(if $(FAF),--ai-faf --ai-log,)
 ALLIANCES ?= 0
 ALLIANCE_FLAG = $(if $(filter-out 0,$(ALLIANCES)),--alliances $(ALLIANCES),)
 # Which faction each seat plays, comma-separated and cycled — `FACTIONS=seraphim` is a mirror
@@ -238,7 +243,7 @@ play-from: build check-fa
 # Useful for seeing what the opponent actually does.
 watch: build check-fa
 	$(BIN) "$(FA_MAP)" $(FA_FLAGS) --skirmish --observer --armies $(ARMIES) \
-	  $(ALLIANCE_FLAG) $(FACTION_FLAG) --play $(SECONDS)
+	  $(ALLIANCE_FLAG) $(FACTION_FLAG) $(FAF_AI_FLAG) --play $(SECONDS)
 
 # --- Bots playing each other ------------------------------------------------
 #
@@ -281,8 +286,8 @@ ai-sanity: build check-fa
 	@echo '  Headless sanity: $(ARMIES) armies on $(notdir $(FA_MAP)), $(AI_SECONDS)s, profiler on.'
 	@echo
 	$(BIN) "$(FA_MAP)" $(FA_FLAGS) --skirmish --observer --armies $(ARMIES) \
-	  $(ALLIANCE_FLAG) $(FACTION_FLAG) --play $(AI_SECONDS) --ai-sanity \
-	  --screenshot /tmp/rm-ai-sanity.png 320 180 | tail -60
+	  $(ALLIANCE_FLAG) $(FACTION_FLAG) $(FAF_AI_FLAG) --play $(AI_SECONDS) --ai-sanity \
+	  --screenshot /tmp/rm-ai-sanity.png 320 180 | tail -80
 
 # A match: one army per start position, each with its faction's commander, each building an
 # extractor on the map's own mass deposits.
@@ -373,7 +378,7 @@ battle-shots: build check-fa
 	@for t in $(SHOT_TIMES); do \
 	  echo "=== $$t s ==="; \
 	  $(BIN) "$(FA_MAP)" $(FA_FLAGS) --skirmish --observer --armies $(ARMIES) \
-	    $(ALLIANCE_FLAG) $(FACTION_FLAG) --play $$t $(LOOK_FLAG) \
+	    $(ALLIANCE_FLAG) $(FACTION_FLAG) $(FAF_AI_FLAG) --play $$t $(LOOK_FLAG) \
 	    --screenshot $(SHOT_DIR)/battle-$$t.png $(SHOT_SIZE) | tail -1; \
 	done
 	@echo 'wrote $(SHOT_DIR)/battle-<seconds>.png'

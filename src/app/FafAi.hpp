@@ -125,6 +125,15 @@ public:
     /// the opponent bridge to come. False on error, with `lastError` set.
     [[nodiscard]] bool eval(std::string_view chunk);
 
+    /// When on, the corpus's LOG/WARN/SPEW lines print (prefixed "FAF:") instead of being
+    /// counted silently — the corpus explains itself well when allowed to speak.
+    void setLogPassthrough(bool enabled);
+
+    /// Resets the instruction budget. `eval`, `import` and `pump` refuel themselves; a
+    /// caller driving the VM through `state()` directly (the opponent bridge) must refuel
+    /// per entry, or the watchdog bills its passes cumulatively and kills a legitimate one.
+    void refuel();
+
     /// Turns the call profiler on or off: which of the CORPUS'S OWN functions ran, counted
     /// per definition site. The binding report's other half — that one counts calls INTO
     /// the engine, this one counts the AI's code running. Costs a hook check per call, so

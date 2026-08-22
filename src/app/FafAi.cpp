@@ -69,6 +69,9 @@ struct Sandbox {
     /// report sorts it once at the end; the per-call cost is one lookup.
     bool profiling = false;
     std::map<std::string, std::size_t> profile;
+
+    /// Print LOG/WARN/SPEW instead of only counting them (`--ai-log`).
+    bool logPassthrough = false;
 };
 
 /// The adapter's tick rate assumption, matching the app's default. WaitSeconds converts
@@ -155,6 +158,17 @@ int logSink(lua_State* lua) {
     if (sandbox != nullptr && slot < sandbox->slots.size()) {
         ++sandbox->slots[slot].calls;
     }
+    if (sandbox != nullptr && sandbox->logPassthrough) {
+        // The corpus's own voice, one line per call, arguments joined the way Moho's LOG
+        // joins them. luaL_tolstring honours __tostring and never raises here.
+        std::printf("  FAF:");
+        const int args = lua_gettop(lua);
+        for (int i = 1; i <= args; ++i) {
+            std::printf(" %s", luaL_tolstring(lua, i, nullptr));
+            lua_pop(lua, 1);
+        }
+        std::printf("\n");
+    }
     return 0;
 }
 
@@ -168,6 +182,20 @@ int gameTick(lua_State* lua) {
         ++sandbox->slots[slot].calls;
     }
     lua_pushinteger(lua, sandbox != nullptr ? static_cast<lua_Integer>(sandbox->tick) : 0);
+    return 1;
+}
+
+/// `GetGameTimeSeconds()` — the tick divided back into the seconds the corpus thinks in.
+/// The time-gated builder conditions (`GreaterThanGameTime`) compare against it directly,
+/// and a nil there is a comparison error that switches those builders off silently.
+int gameTimeSeconds(lua_State* lua) {
+    Sandbox* sandbox = sandboxOf(lua);
+    const auto slot = static_cast<std::size_t>(lua_tointeger(lua, lua_upvalueindex(1)));
+    if (sandbox != nullptr && slot < sandbox->slots.size()) {
+        ++sandbox->slots[slot].calls;
+    }
+    const long long tick = sandbox != nullptr ? sandbox->tick : 0;
+    lua_pushnumber(lua, static_cast<lua_Number>(tick) / static_cast<lua_Number>(kTicksPerSecond));
     return 1;
 }
 
@@ -839,23 +867,73 @@ moho = {
     CPlatoon            = methodTable(),
 }
 
+-- REAL CATEGORIES. A category value is an expression tree — atoms are the tags a blueprint
+-- declares (`categories.MOBILE`), and `* + -` build intersection, union and difference the
+-- way Moho's EntityCategory algebra does. `__rm_catMatch` evaluates one against a unit's
+-- tag SET (upper-cased, and including the unit's own id: in Moho every unit id is a
+-- category, which is how `categories.ueb0101` names one unit). This replaces the earlier
+-- synthetic object that answered every operation with a fresh opaque category — good enough
+-- to let data files load, useless the moment a condition asks "is this unit MOBILE".
 local categoryMeta = {}
-local function newCategory()
-    return setmetatable({ __isCategory = true }, categoryMeta)
+local function catNode(op, a, b)
+    return setmetatable({ __cat = op, a = a, b = b }, categoryMeta)
 end
-categoryMeta.__mul   = newCategory   -- intersection
-categoryMeta.__add   = newCategory   -- union
-categoryMeta.__sub   = newCategory   -- difference
-categoryMeta.__unm   = newCategory   -- negation
-categoryMeta.__index = function() return newCategory() end
+categoryMeta.__mul = function(a, b) return catNode('and', a, b) end
+categoryMeta.__add = function(a, b) return catNode('or', a, b) end
+categoryMeta.__sub = function(a, b) return catNode('sub', a, b) end
+categoryMeta.__unm = function(a) return catNode('neg', a) end
 
 categories = setmetatable({}, {
     __index = function(t, key)
-        local category = newCategory()
+        local category = catNode('tag', string.upper(key))
         rawset(t, key, category)     -- cached, so `categories.LAND == categories.LAND`
         return category
     end,
 })
+
+function __rm_catMatch(cat, set)
+    if cat == nil or set == nil then return false end
+    local op = cat.__cat
+    if op == 'tag' then return set[cat.a] == true end
+    if op == 'and' then return __rm_catMatch(cat.a, set) and __rm_catMatch(cat.b, set) end
+    if op == 'or'  then return __rm_catMatch(cat.a, set) or __rm_catMatch(cat.b, set) end
+    if op == 'sub' then return __rm_catMatch(cat.a, set) and not __rm_catMatch(cat.b, set) end
+    if op == 'neg' then return not __rm_catMatch(cat.a, set) end
+    return false
+end
+
+-- The EntityCategory family, real now that categories can be evaluated. These overwrite the
+-- counted stubs the macro pass installed (this chunk runs after it), so their calls no longer
+-- appear in the binding report — the profile shows them running instead. A unit object is
+-- anything carrying a `__cats` tag set, which is the contract the adapter's snapshots keep.
+function ParseEntityCategory(text)
+    local result = nil
+    for word in string.gmatch(text or '', '[^%s%*]+') do
+        local atom = categories[word]
+        result = result and (result * atom) or atom
+    end
+    return result
+end
+
+function EntityCategoryContains(cat, unit)
+    return __rm_catMatch(cat, unit and rawget(unit, '__cats'))
+end
+
+function EntityCategoryFilterDown(cat, units)
+    local out = {}
+    for _, u in ipairs(units or {}) do
+        if EntityCategoryContains(cat, u) then table.insert(out, u) end
+    end
+    return out
+end
+
+function EntityCategoryCount(cat, units)
+    local n = 0
+    for _, u in ipairs(units or {}) do
+        if EntityCategoryContains(cat, u) then n = n + 1 end
+    end
+    return n
+end
 
 -- Engine constructors the corpus calls at load time. Vectors are plain tables in Moho too, with
 -- the same field names, so these are real rather than stubbed — cheap, and it means positions
@@ -866,6 +944,27 @@ categories = setmetatable({}, {
 local vectorMeta = {}
 function Vector(x, y, z) return setmetatable({ x, y, z, x = x, y = y, z = z }, vectorMeta) end
 function Vector2(x, y)   return setmetatable({ x, y, x = x, y = y }, vectorMeta) end
+
+-- The distance family, real for the same reason Vector is: positions the AI computes must be
+-- positions we can compare. Moho's VDist3 ignores nothing — all three axes — while VDist2 is
+-- the ground-plane distance over x and z, which is why its arguments are scalars not vectors.
+-- These overwrite the counted stubs (this chunk runs after the macro pass).
+function VDist2(x1, z1, x2, z2)
+    local dx, dz = x1 - x2, z1 - z2
+    return math.sqrt(dx * dx + dz * dz)
+end
+function VDist2Sq(x1, z1, x2, z2)
+    local dx, dz = x1 - x2, z1 - z2
+    return dx * dx + dz * dz
+end
+function VDist3(a, b)
+    local dx, dy, dz = a[1] - b[1], (a[2] or 0) - (b[2] or 0), a[3] - b[3]
+    return math.sqrt(dx * dx + dy * dy + dz * dz)
+end
+function VDist3Sq(a, b)
+    local dx, dy, dz = a[1] - b[1], (a[2] or 0) - (b[2] or 0), a[3] - b[3]
+    return dx * dx + dy * dy + dz * dz
+end
 
 -- ScenarioInfo is the match description Moho publishes before anything else loads. Only the
 -- shape matters here: the corpus indexes it during construction and would otherwise stop at the
@@ -888,6 +987,10 @@ math.mod   = math.mod   or math.fmod
 -- is what made leaving 5.1 cheap.
 unpack     = unpack     or table.unpack
 loadstring = loadstring or load
+-- 5.0 -> 5.1: `string.gfind` became `string.gmatch`. The shim matters in REVERSE: utils.lua
+-- runs `rawset(string, 'gmatch', string.gfind)` for its own compatibility, which on 5.4
+-- CLOBBERS the real gmatch with nil unless gfind names it first.
+string.gfind = string.gfind or string.gmatch
 
 -- FAF's own import.lua (which the C import replaces) declares the module-cache global that
 -- factions.lua and friends probe to ask "is the UI loaded". Empty is the honest answer for
@@ -991,6 +1094,9 @@ FafAi::FafAi(std::filesystem::path root, bool verbose)
         if (name == "GetGameTick") {
             return gameTick;
         }
+        if (name == "GetGameTimeSeconds") {
+            return gameTimeSeconds;
+        }
         if (name == "lazyimport") {
             // Eager where Moho is lazy: the real one defers loading until first field
             // access. Loading now instead is semantically safe — same module, same cache —
@@ -1012,7 +1118,7 @@ FafAi::FafAi(std::filesystem::path root, bool verbose)
         if (name == "ForkThread" || name == "KillThread") {
             return Fidelity::Known;
         }
-        if (name == "GetGameTick") {
+        if (name == "GetGameTick" || name == "GetGameTimeSeconds") {
             return Fidelity::Known;
         }
         if (name == "lazyimport") {
@@ -1298,6 +1404,20 @@ std::vector<std::pair<std::string, std::size_t>> FafAi::callProfile() const {
     std::sort(sorted.begin(), sorted.end(),
               [](const auto& a, const auto& b) { return a.second > b.second; });
     return sorted;
+}
+
+void FafAi::setLogPassthrough(bool enabled) {
+    Sandbox* sandbox = state_ != nullptr ? sandboxOf(state_) : nullptr;
+    if (sandbox != nullptr) {
+        sandbox->logPassthrough = enabled;
+    }
+}
+
+void FafAi::refuel() {
+    Sandbox* sandbox = state_ != nullptr ? sandboxOf(state_) : nullptr;
+    if (sandbox != nullptr) {
+        sandbox->fuel = kInstructionBudget;
+    }
 }
 
 std::vector<ModuleLoad> FafAi::modules() const {

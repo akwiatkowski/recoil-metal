@@ -15,6 +15,7 @@
 // one thing that must not drift between two callers cannot.
 
 #include "app/Cli.hpp"
+#include "app/FafAi.hpp"
 #include "app/Opponent.hpp"
 #include "app/SceneBuild.hpp"
 
@@ -98,6 +99,11 @@ struct MatchRunner {
     /// `ScriptedOpponent` that is simply never asked to think.
     std::vector<std::unique_ptr<rm::ai::Opponent>> scripts;
 
+    /// The FAF sandbox, when `--ai-faf` seats FAF opponents — one VM shared by all of them
+    /// (FafAi's one-per-match rule), owned here because the opponents hold references into
+    /// it and the runner is what outlives them. Null on the scripted path.
+    std::unique_ptr<rm::ai::FafAi> fafSandbox;
+
     /// Built once and kept, because `over` has to survive between ticks — a match is
     /// decided on one tick and stays decided.
     rm::sim::Match match;
@@ -141,6 +147,18 @@ struct MatchRunner {
 /// reason `gAppTickRate` is one and with the same accounting: it is read once per tick in the
 /// app, it changes nothing in the sim, and P7.5 moves this code out of `main.mm` entirely.
 extern bool gPrintEvents;
+
+/// `--ai-faf`: seat FAF opponents (app/FafOpponent.hpp) instead of the scripted ones, for
+/// every non-player army. A file-scope flag for gPrintEvents' reasons, plus one of its own:
+/// the seating happens inside `makeMatchRunner`, which both the headless pre-run and the
+/// windowed loop call, and threading a parameter through both call chains would touch every
+/// caller to carry one bit that changes no signature's meaning.
+extern bool gFafOpponents;
+
+/// `--ai-log`: narrate the FAF opponents — every decision with the corpus builder that
+/// fired it, and the corpus's own LOG/WARN lines (normally counted and discarded). The
+/// analysis view of a match: `starts`/`completes` say what happened, this says why.
+extern bool gFafLog;
 
 // --- What the match layer does ------------------------------------------------------------
 

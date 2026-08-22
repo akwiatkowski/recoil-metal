@@ -1,6 +1,7 @@
 #include "app/Match.hpp"
 
 #include "app/FafAi.hpp"
+#include "app/FafOpponent.hpp"
 
 #include "core/sim/BuildOrder.hpp"
 #include "core/sim/Replay.hpp"
@@ -20,6 +21,8 @@ namespace rm::app {
 
 // Defined here, declared `extern` in the header.
 bool gPrintEvents = false;
+bool gFafOpponents = false;
+bool gFafLog = false;
 
 /// Sends one unit to a world position, routed around whatever is in the way.
 ///
@@ -588,6 +591,38 @@ void runOpponents(UnitScene& scene, const rm::vfs::Vfs& content, const rm::Heigh
             },
     };
     scene.grewThisTick = false;
+
+    // `--ai-faf`: FAF opponents for every army, sharing one sandbox the runner owns. The
+    // entry points and data sweeps load HERE, once — the builder registries are what the
+    // opponents' brains walk. Anything short of a working sandbox falls back to the scripted
+    // opponents already seated above, saying why: a match that silently plays a different
+    // AI than asked is worse than one that says it could not.
+    if (gFafOpponents) {
+        auto sandbox = std::make_unique<rm::ai::FafAi>(rm::ai::defaultCorpus());
+        if (sandbox->ready()) {
+            sandbox->setLogPassthrough(gFafLog);
+            // Driver BEFORE the corpus: the condition files capture engine functions out of
+            // `moho.aibrain_methods` at import, so what sits there when they load is what
+            // they call for the rest of the match.
+            const bool driverUp = rm::ai::installFafDriver(*sandbox);
+            rm::ai::importAiEntryPoints(*sandbox);
+            if (driverUp) {
+                for (std::size_t army = 0; army < scene.armies.size(); ++army) {
+                    runner.scripts[army] = std::make_unique<rm::ai::FafOpponent>(
+                        *sandbox, static_cast<int>(army));
+                }
+                runner.fafSandbox = std::move(sandbox);
+                std::printf("faf: %zu armies seated with FAF opponents\n",
+                            scene.armies.size());
+            } else {
+                std::printf("faf: driver failed (%s) — scripted opponents play instead\n",
+                            sandbox->lastError().c_str());
+            }
+        } else {
+            std::printf("faf: sandbox failed (%s) — scripted opponents play instead\n",
+                        sandbox->lastError().c_str());
+        }
+    }
     return runner;
 }
 
@@ -822,19 +857,29 @@ void march(UnitScene& scene, const rm::HeightField& field, PassabilitySet& passa
     // (that is the opponent bridge to come); what this measures is everything short of it:
     // does the corpus load, do its threads run, what does its code do, and what did the
     // match build meanwhile.
-    std::unique_ptr<rm::ai::FafAi> sanity;
+    rm::ai::FafAi* sanity = nullptr;
+    std::unique_ptr<rm::ai::FafAi> ownSanity;
     std::map<rm::UnitTypeIndex, std::size_t> builtByType;
     if (options.aiSanity) {
-        sanity = std::make_unique<rm::ai::FafAi>(rm::ai::defaultCorpus());
-        if (sanity->ready()) {
-            // Profiler BEFORE the entry points: most of what the corpus runs today runs at
-            // load time (Class factories, template registration), and a profile that starts
-            // after the load reports ninety-five modules of running code as silence.
+        if (runner.fafSandbox != nullptr) {
+            // `--ai-faf` already booted the sandbox the opponents play in — measure THAT
+            // one. Its corpus loaded before this line, so the profile starts at the first
+            // decision pass: with a live opponent the runtime code IS the report.
+            sanity = runner.fafSandbox.get();
             sanity->setProfiling(true);
-            rm::ai::importAiEntryPoints(*sanity);
         } else {
-            std::printf("ai-sanity: %s\n", sanity->lastError().c_str());
-            sanity.reset();
+            ownSanity = std::make_unique<rm::ai::FafAi>(rm::ai::defaultCorpus());
+            if (ownSanity->ready()) {
+                // Profiler BEFORE the entry points: with nothing driving an army, all the
+                // corpus runs is load-time code, and a profile that starts after the load
+                // reports ninety-five modules of running code as silence.
+                ownSanity->setProfiling(true);
+                rm::ai::importAiEntryPoints(*ownSanity);
+                sanity = ownSanity.get();
+            } else {
+                std::printf("ai-sanity: %s\n", ownSanity->lastError().c_str());
+                ownSanity.reset();
+            }
         }
     }
 
@@ -1037,6 +1082,33 @@ void march(UnitScene& scene, const rm::HeightField& field, PassabilitySet& passa
         if (sanity->callProfile().empty()) {
             std::printf("    (none ran — nothing forks threads at load, and no opponent"
                         " bridge drives a brain yet)\n");
+        }
+
+        // The opponent bridge's own ledgers: brain methods conditions wanted and did not
+        // find (fail-closed, so each line is a builder family silently switched off), and
+        // errors raised INSIDE condition code. Empty when no FAF opponent played.
+        const std::vector<std::string> missingMethods =
+            rm::ai::fafMissingBrainMethods(*sanity);
+        if (!missingMethods.empty()) {
+            std::printf("  BRAIN METHODS MISSING (conditions fail closed without them):\n");
+            shown = 0;
+            for (const std::string& line : missingMethods) {
+                std::printf("    %s\n", line.c_str());
+                if (++shown == 10) {
+                    break;
+                }
+            }
+        }
+        const std::vector<std::string> conditionErrors = rm::ai::fafConditionErrors(*sanity);
+        if (!conditionErrors.empty()) {
+            std::printf("  CONDITION ERRORS (each one fails closed):\n");
+            shown = 0;
+            for (const std::string& line : conditionErrors) {
+                std::printf("    %s\n", line.c_str());
+                if (++shown == 8) {
+                    break;
+                }
+            }
         }
 
         // Coverage from the other side: not "what did the imports miss" but "what sits in

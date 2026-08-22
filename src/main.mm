@@ -127,6 +127,12 @@ int main(int argc, const char* argv[]) {
         // `--print-events`: narrate the sim's own event queue (§7 P6.1's manual check).
         gPrintEvents = hasFlag(argc, argv, "--print-events");
 
+        // `--ai-faf`: FAF's own AI plays every army, through the sandbox (ADR-039).
+        gFafOpponents = hasFlag(argc, argv, "--ai-faf");
+
+        // `--ai-log`: narrate the FAF opponents' decisions and the corpus's own LOG lines.
+        gFafLog = hasFlag(argc, argv, "--ai-log");
+
         // `--ai-debug`: boot the FAF AI sandbox and report on it, then play the match (ADR-039).
         //
         // Printed BEFORE the match rather than after, and traced module by module rather than

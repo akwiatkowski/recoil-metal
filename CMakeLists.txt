@@ -83,6 +83,12 @@ target_include_directories(lua54 SYSTEM PUBLIC ${CMAKE_SOURCE_DIR}/third_party/l
 # Warnings are not our business here: this is someone else's C, and the showcase rule about the
 # build being the first linter is about OUR code.
 target_compile_definitions(lua54 PRIVATE LUA_USE_MACOSX)
+# A FIXED string-hash seed. Stock 5.4 seeds from ASLR addresses and the clock, so the order
+# `pairs` walks a table differs between RUNS — and the moment a FAF brain's decision depends
+# on iteration order (its data code iterates hash tables everywhere), two runs of one match
+# diverge. Determinism is this project's stated success criterion (PLAN2.md §1.3); hash-DoS
+# hardening, which the random seed exists for, is not a threat a single-player sim faces.
+target_compile_definitions(lua54 PRIVATE "luai_makeseed(L)=0x52435231u")
 target_compile_options(lua54 PRIVATE -w)
 
 find_library(FOUNDATION_FW Foundation REQUIRED)
@@ -207,6 +213,7 @@ add_library(rm_app STATIC
     src/app/SceneBuild.cpp
     src/app/Cli.cpp
     src/app/FafAi.cpp
+    src/app/FafOpponent.cpp
     src/app/Match.cpp
     src/app/Interface.cpp
     src/app/View.cpp)

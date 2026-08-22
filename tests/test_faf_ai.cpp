@@ -12,6 +12,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "app/FafAi.hpp"
+#include "app/FafOpponent.hpp"
 
 #include <cstdio>
 #include <filesystem>
@@ -281,6 +282,78 @@ TEST_CASE("the call profiler counts the corpus's own functions, by definition si
     for (std::size_t i = 1; i < profile.size(); ++i) {
         REQUIRE(profile[i - 1].second >= profile[i].second);
     }
+}
+
+TEST_CASE("categories are an algebra now, evaluated against a unit's own tags",
+          "[faf][ai]") {
+    const std::filesystem::path root = corpusRoot();
+    if (root.empty()) {
+        SKIP("no vendored corpus; run `make ai`");
+    }
+    FafAi ai(root);
+    REQUIRE(ai.ready());
+
+    // The exact shape the corpus builds at data-load time: intersection, difference, and a
+    // unit-id atom (in Moho every unit id is a category). A tank passes the hunter filter,
+    // an engineer with the same mobility does not, and ParseEntityCategory's space means AND.
+    const bool ok = ai.eval(R"(
+        local hunter = categories.MOBILE * categories.LAND - categories.ENGINEER
+        local tank = { MOBILE = true, LAND = true, TECH1 = true, UEL0201 = true }
+        assert(__rm_catMatch(hunter, tank))
+        assert(not __rm_catMatch(hunter, { MOBILE = true, LAND = true, ENGINEER = true }))
+        assert(__rm_catMatch(categories.uel0201, tank), 'unit id atom')
+        assert(EntityCategoryContains(ParseEntityCategory('MOBILE LAND'), { __cats = tank }))
+        assert(not EntityCategoryContains(ParseEntityCategory('MOBILE NAVAL'), { __cats = tank }))
+        local down = EntityCategoryFilterDown(categories.MOBILE,
+            { { __cats = tank }, { __cats = { STRUCTURE = true } } })
+        assert(table.getn(down) == 1)
+        assert(EntityCategoryCount(categories.STRUCTURE + categories.MOBILE,
+            { { __cats = tank }, { __cats = { STRUCTURE = true } } }) == 2)
+    )");
+    INFO(ai.lastError());
+    REQUIRE(ok);
+}
+
+TEST_CASE("the FAF driver boots a brain and the corpus's own builders decide", "[faf][ai]") {
+    const std::filesystem::path root = corpusRoot();
+    if (root.empty()) {
+        SKIP("no vendored corpus; run `make ai`");
+    }
+    FafAi ai(root);
+    REQUIRE(ai.ready());
+    // Driver BEFORE the corpus — the condition files capture engine functions out of
+    // moho.aibrain_methods at import (see the driver's economy note).
+    REQUIRE(installFafDriver(ai));
+    importAiEntryPoints(ai);
+
+    // A brain, a map with mass to take, and one idle commander: the corpus should decide
+    // to BUILD something. What exactly is the data's business — the assertion is that the
+    // machinery turns FAF's own builder specs into a concrete decision.
+    const bool ok = ai.eval(R"(
+        local markers = {}
+        for i = 1, 6 do
+            markers[i] = { name = 'Mass ' .. i, type = 'Mass', x = 60 + i * 10, y = 0, z = 100 }
+        end
+        local builders = __rm_faf_boot(0, { faction = 1, startX = 100, startZ = 100,
+                                            sizeX = 512, sizeZ = 512, armies = 2,
+                                            base = 'NormalMain', markers = markers })
+        assert(builders > 100, 'expected NormalMain builder list, got ' .. tostring(builders))
+        __rm_faf_type('UEL0001', { 'COMMAND', 'MOBILE', 'LAND' })
+        local commander = { bp = 'UEL0001', h = 1, x = 100, z = 100, idle = true,
+                            __cats = __rm_faf.cats.UEL0001 }
+        setmetatable(commander, __rm_faf.unitMeta)
+        local snap = { units = { commander }, occupied = {}, underway = {},
+                       mass = 400, energy = 1500, massStorage = 650, energyStorage = 4000,
+                       massIncome = 0.2, energyIncome = 10, massUsage = 0, energyUsage = 0,
+                       structuresUnderway = 0, mobileUnderway = 0 }
+        local decisions = __rm_faf_decide(0, snap)
+        assert(#decisions >= 1, 'the corpus decided nothing')
+        assert(decisions[1].kind == 'build',
+               'expected a build, got ' .. tostring(decisions[1].kind))
+        assert(type(decisions[1].bp) == 'string' and #decisions[1].bp > 0)
+    )");
+    INFO(ai.lastError());
+    REQUIRE(ok);
 }
 
 TEST_CASE("import hands back the module's environment, which is how FAF exports",
