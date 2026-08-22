@@ -150,6 +150,7 @@ add_library(rm_core STATIC
     src/core/scene/Selection.cpp
     src/core/scene/GroundDecals.cpp
     src/core/scene/Particles.cpp
+    src/core/scene/CombatEffects.cpp
     src/core/sim/Army.cpp
     src/core/sim/Command.cpp
     src/core/sim/Events.cpp
@@ -310,6 +311,7 @@ if(BUILD_TESTING)
         tests/test_pathfinding.cpp
         tests/test_unit_blueprint.cpp
         tests/test_bar_names.cpp
+        tests/test_combat_effects.cpp
         tests/test_unit_def.cpp
         tests/test_armor.cpp
         tests/test_armor_defs.cpp

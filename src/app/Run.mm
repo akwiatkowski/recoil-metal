@@ -1058,6 +1058,11 @@ int runWindowed(const Session& session) {
                                                          * gAppTickRate.secondsPerTick());
                 ++matchTicks;
 
+                // The tick's combat, as particles — read HERE because an event is a
+                // per-tick notification (Events.hpp): the next advanceMatch clears the
+                // queue, so this tick's shots are visible now or never.
+                rm::emitCombatEffects(particles, units.events.all());
+
                 // The match, announced once. The frame loop draws the fight rather than
                 // narrating it, so this is the one thing worth saying out loud — and only
                 // when there is a match to decide, the same guard the pre-run uses.
