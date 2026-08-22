@@ -252,3 +252,26 @@ TEST_CASE("an empty command line parses to nothing enabled") {
     CHECK(rm::app::parseUnits(none.argc(), none.argv()).empty());
     CHECK(rm::app::parseFocus(none.argc(), none.argv()) == Approx(0.0f));
 }
+
+TEST_CASE("the factions flag parses a seat list, skips what it cannot name") {
+    const char* argv[] = {"app", "--factions", "uef,Seraphim,CYBRAN"};
+    const auto seats = rm::app::parseFactions(3, argv);
+    REQUIRE(seats.size() == 3);
+    CHECK(seats[0] == rm::sim::Faction::Uef);
+    CHECK(seats[1] == rm::sim::Faction::Seraphim);  // case-insensitive, as factionFromName is
+    CHECK(seats[2] == rm::sim::Faction::Cybran);
+
+    // An unknown name is reported and SKIPPED — seating the wrong faction would be worse
+    // than seating one fewer — and the names around it survive.
+    const char* mixed[] = {"app", "--factions", "aeon,klingon,uef"};
+    const auto partial = rm::app::parseFactions(3, mixed);
+    REQUIRE(partial.size() == 2);
+    CHECK(partial[0] == rm::sim::Faction::Aeon);
+    CHECK(partial[1] == rm::sim::Faction::Uef);
+
+    // Absent, or nothing parseable: empty, which the caller reads as "round-robin stays".
+    const char* none[] = {"app", "--skirmish"};
+    CHECK(rm::app::parseFactions(2, none).empty());
+    const char* junk[] = {"app", "--factions", "romulan"};
+    CHECK(rm::app::parseFactions(3, junk).empty());
+}

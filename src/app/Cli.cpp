@@ -301,6 +301,40 @@ namespace rm::app {
     return false;
 }
 
+std::vector<rm::sim::Faction> parseFactions(int argc, const char* argv[]) {
+    std::vector<rm::sim::Faction> factions;
+    for (int i = 1; i + 1 < argc; ++i) {
+        if (std::string{argv[i]} != "--factions") {
+            continue;
+        }
+        // A comma-separated list, in seat order — `uef,seraphim` seats army 0 as UEF and
+        // army 1 as Seraphim, and the list CYCLES over more armies, which is what makes
+        // `--armies 8 --factions uef,seraphim` an even 4v4 of the two.
+        const std::string value{argv[i + 1]};
+        std::size_t from = 0;
+        while (from <= value.size()) {
+            const std::size_t comma = std::min(value.find(',', from), value.size());
+            const std::string name = value.substr(from, comma - from);
+            if (!name.empty()) {
+                if (const auto faction = rm::sim::factionFromName(name)) {
+                    factions.push_back(*faction);
+                } else {
+                    // Reported and skipped rather than aborting — the --vision-style manner.
+                    // Skipped rather than defaulted, because seating the wrong faction is a
+                    // worse answer than seating one fewer.
+                    std::fprintf(stderr,
+                                 "--factions: unknown faction \"%s\"; expected uef, aeon,"
+                                 " cybran or seraphim\n",
+                                 name.c_str());
+                }
+            }
+            from = comma + 1;
+        }
+        break;
+    }
+    return factions;
+}
+
 rm::sim::VisionStyle parseVisionStyle(int argc, const char* argv[]) {
     for (int i = 1; i + 1 < argc; ++i) {
         if (std::string{argv[i]} != "--vision-style") {

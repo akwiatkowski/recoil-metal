@@ -255,7 +255,8 @@ void configureIntel(UnitScene& scene, const rm::HeightField& field,
 
 void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
                      std::span<const rm::mapinfo::StartPosition> starts,
-                     const rm::vfs::Vfs& content, bool observer) {
+                     const rm::vfs::Vfs& content, bool observer,
+                     std::span<const rm::sim::Faction> factions) {
     if (starts.empty()) {
         std::fprintf(stderr, "skirmish: the map declares no start positions\n");
         return;
@@ -305,6 +306,16 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
                 scene.opening.waveSize);
 
     scene.armies = rm::sim::freeForAll(starts.size());
+
+    // `--factions` overrides the round-robin, in seat order and cycled — the mirror match
+    // and the chosen matchup. Applied BEFORE any commander loads, since which model a seat
+    // needs is exactly what this decides.
+    if (!factions.empty()) {
+        for (rm::sim::Army& army : scene.armies) {
+            army.faction =
+                factions[static_cast<std::size_t>(army.index) % factions.size()];
+        }
+    }
 
     // One participant per army, the human driving the first. `--armies 4` with two alliances
     // is the 2v2 §7 P2.4 asks to be checked by hand, and `--alliances N` below sets it up.

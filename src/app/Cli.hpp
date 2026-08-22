@@ -95,6 +95,12 @@ struct MarchOptions {
 /// rendering-adjacent flag should not stop a match starting.
 [[nodiscard]] rm::sim::VisionStyle parseVisionStyle(int argc, const char* argv[]);
 
+/// `--factions uef,seraphim,...`: which faction each army plays, in seat order, cycled over
+/// more armies than names. Empty — flag absent, or nothing parsed — keeps the round-robin
+/// default. Unknown names are reported and skipped: seating the wrong faction is a worse
+/// answer than seating one fewer.
+[[nodiscard]] std::vector<rm::sim::Faction> parseFactions(int argc, const char* argv[]);
+
 /// `--dump-weapon <ID>`: print one unit's weapon timings, authored beside corrected.
 [[nodiscard]] bool dumpWeapons(const rm::vfs::Vfs& content, const std::string& id);
 

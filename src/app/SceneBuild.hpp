@@ -88,9 +88,13 @@ struct VfsUnit {
 /// a `--units` crowd has no sides to keep secrets from.
 void configureIntel(UnitScene& scene, const rm::HeightField& field, rm::sim::VisionStyle style);
 
+/// `factions`, when non-empty, seats army i as `factions[i % factions.size()]` in place of
+/// the round-robin default — `--factions` is how a mirror match or a chosen matchup exists.
+/// Cycling rather than truncating, so two names over eight armies is an even split.
 void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
                      std::span<const rm::mapinfo::StartPosition> starts,
-                     const rm::vfs::Vfs& content, bool observer = false);
+                     const rm::vfs::Vfs& content, bool observer = false,
+                     std::span<const rm::sim::Faction> factions = {});
 
 /// The DRAWABLE registration half of `spawnUnit`: model, textures, batch, type and traits,
 /// without spawning anything into the store. Idempotent per blueprint — the second call is a

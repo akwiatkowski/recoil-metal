@@ -190,8 +190,12 @@ int main(int argc, const char* argv[]) {
         PassabilitySet passability{map->field, map->hasWater ? map->waterLevel : 0.0f};
 
         if (hasFlag(argc, argv, "--skirmish")) {
+            // `--factions uef,seraphim,...` picks each seat's faction, cycled; absent keeps
+            // the round-robin. Parsed here and passed down, because which model a seat needs
+            // is decided before any commander loads.
+            const std::vector<rm::sim::Faction> factions = parseFactions(argc, argv);
             spawnCommanders(units, map->field, starts, content,
-                            hasFlag(argc, argv, "--observer"));
+                            hasFlag(argc, argv, "--observer"), factions);
             if (const std::size_t alliances = parseCount(argc, argv, "--alliances");
                 alliances > 1 && alliances < units.armies.size()) {
                 for (rm::sim::Army& army : units.armies) {

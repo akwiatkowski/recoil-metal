@@ -117,7 +117,7 @@ help:
 	@echo
 	@echo '  clean           remove the build directory'
 	@echo
-	@echo 'Override anything: make play ARMIES=8 ALLIANCES=2 FA_MAP=.../SCMP_012.scmap'
+	@echo 'Override anything: make play ARMIES=8 ALLIANCES=2 FACTIONS=uef,seraphim FA_MAP=...'
 	@echo '                   make play VISION=fa    (flat discs, as Supreme Commander does)'
 	@echo '                   make skirmish UNITS=200 SECONDS=90'
 	@echo
@@ -208,6 +208,10 @@ run-bar: build check-bar
 ARMIES    ?= 2
 ALLIANCES ?= 0
 ALLIANCE_FLAG = $(if $(filter-out 0,$(ALLIANCES)),--alliances $(ALLIANCES),)
+# Which faction each seat plays, comma-separated and cycled — `FACTIONS=seraphim` is a mirror
+# match, `FACTIONS=uef,seraphim ARMIES=8` an even 4v4 of the two. Empty keeps the round-robin.
+FACTIONS  ?=
+FACTION_FLAG = $(if $(FACTIONS),--factions $(FACTIONS),)
 
 play: build check-fa
 	@echo
@@ -217,7 +221,7 @@ play: build check-fa
 	@echo '  Shift + right-click queues an order; hold space and drag to swing the camera.'
 	@echo '  Scroll zooms. Losing your commander loses the match.'
 	@echo
-	$(BIN) "$(FA_MAP)" $(FA_FLAGS) --skirmish --armies $(ARMIES) $(ALLIANCE_FLAG) $(VISION_FLAG)
+	$(BIN) "$(FA_MAP)" $(FA_FLAGS) --skirmish --armies $(ARMIES) $(ALLIANCE_FLAG) $(FACTION_FLAG) $(VISION_FLAG)
 
 # The same match with the first SECONDS already played out, so you arrive at a base rather
 # than at two commanders on empty ground. 60 is about when the factory is up; 320 is just
@@ -226,14 +230,14 @@ play-from: build check-fa
 	@echo
 	@echo '  You are army 0, joining at $(SECONDS)s. WASD pans, right-click orders.'
 	@echo
-	$(BIN) "$(FA_MAP)" $(FA_FLAGS) --skirmish --armies $(ARMIES) $(ALLIANCE_FLAG) $(VISION_FLAG) \
+	$(BIN) "$(FA_MAP)" $(FA_FLAGS) --skirmish --armies $(ARMIES) $(ALLIANCE_FLAG) $(FACTION_FLAG) $(VISION_FLAG) \
 	  --play $(SECONDS)
 
 # Watch instead of play: no army is yours, so nothing is selectable and every side is scripted.
 # Useful for seeing what the opponent actually does.
 watch: build check-fa
 	$(BIN) "$(FA_MAP)" $(FA_FLAGS) --skirmish --observer --armies $(ARMIES) \
-	  $(ALLIANCE_FLAG) --play $(SECONDS)
+	  $(ALLIANCE_FLAG) $(FACTION_FLAG) --play $(SECONDS)
 
 # --- Bots playing each other ------------------------------------------------
 #

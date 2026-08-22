@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <array>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -124,10 +125,11 @@ TEST_CASE("a missing or unparseable file is nothing, so the caller can fall back
     CHECK_FALSE(rm::data::loadOpening("/nonexistent/opening.lua").has_value());
 }
 
-TEST_CASE("one build order drives UEF and Cybran from data alone") {
-    // §7 P3.3'S STATED TEST. The plan is read from the shipped file, and every step resolves
-    // for both factions to that faction's OWN blueprints — with no id named anywhere in the
-    // plan, the roster, or this test's expectations except as the answer.
+TEST_CASE("one build order drives all four factions from data alone") {
+    // §7 P3.3'S STATED TEST, widened from two factions to the full four when AI-vs-AI
+    // skirmishes started seating everyone. The plan is read from the shipped file, and every
+    // step resolves for each faction to that faction's OWN blueprints — with no id named
+    // anywhere in the plan, the roster, or this test's expectations except as the answer.
     const std::filesystem::path root = unitRoot();
     if (root.empty() || !std::filesystem::exists(root)) {
         SKIP("no extracted unit corpus at " + root.string());
@@ -171,26 +173,35 @@ TEST_CASE("one build order drives UEF and Cybran from data alone") {
         return plan;
     };
 
-    const std::vector<std::string> uef = resolve(Faction::Uef);
-    const std::vector<std::string> cybran = resolve(Faction::Cybran);
+    const std::array<Faction, 4> factions{Faction::Uef, Faction::Aeon, Faction::Cybran,
+                                          Faction::Seraphim};
+    std::array<std::vector<std::string>, 4> plans;
+    for (std::size_t f = 0; f < factions.size(); ++f) {
+        plans[f] = resolve(factions[f]);
+        REQUIRE(plans[f].size() == opening->structures.size() + 1);
+    }
 
-    REQUIRE(uef.size() == opening->structures.size() + 1);
-    REQUIRE(cybran.size() == uef.size());
+    // EVERY step resolves for every faction. A single "-" means the plan asks for something
+    // a faction does not field, which is the failure the four hardcoded paths hid by never
+    // asking — and exactly what an AI-vs-AI seat of that faction would trip over at spawn.
+    for (std::size_t i = 0; i < plans[0].size(); ++i) {
+        for (std::size_t f = 0; f < factions.size(); ++f) {
+            INFO("step " << i << ", faction " << f << ": " << plans[f][i]);
+            CHECK(plans[f][i] != "-");
 
-    // EVERY step resolves for both. A single "-" means the plan asks for something a faction
-    // does not field, which is the failure the four hardcoded paths hid by never asking.
-    for (std::size_t i = 0; i < uef.size(); ++i) {
-        INFO("step " << i << ": UEF " << uef[i] << ", Cybran " << cybran[i]);
-        CHECK(uef[i] != "-");
-        CHECK(cybran[i] != "-");
-
-        // And the two factions get DIFFERENT units, which is the point — one plan, four
-        // rosters. If these matched, the roster would be ignoring the faction.
-        CHECK(uef[i] != cybran[i]);
+            // And every pair differs, which is the point — one plan, four rosters. A match
+            // between any two would mean the roster is ignoring the faction.
+            for (std::size_t g = f + 1; g < factions.size(); ++g) {
+                CHECK(plans[f][i] != plans[g][i]);
+            }
+        }
     }
 
     // The UEF resolution is the ids the deleted constants named, which is what makes this a
-    // refactor of the opening rather than a change to it.
+    // refactor of the opening rather than a change to it. `plans` is in the factions array's
+    // own order: UEF, Aeon, Cybran, Seraphim.
+    const std::vector<std::string>& uef = plans[0];
+    const std::vector<std::string>& cybran = plans[2];
     CHECK(uef[0] == "UEB1103");  // extractor
     CHECK(uef[1] == "UEB1101");  // power generator
     CHECK(uef[3] == "UEB0101");  // land factory
