@@ -126,8 +126,22 @@ void appendPanel(Geometry& out, const text::Font& font, const Theme& theme, floa
         return;
     }
 
+    // The drop shadow: one quad, offset toward the implied light's opposite corner, drawn
+    // before everything so only its bottom-right sliver survives. It is what seats a panel
+    // ON the world instead of IN it — three pixels of separation, not a lighting model.
+    text::appendRect(out.label, font, x + kShadow, y + kShadow, width, height,
+                     Colour{{0.0f, 0.0f, 0.0f, 0.22f}});
+
     if (filled) {
-        text::appendRect(out.label, font, x, y, width, height, theme.glass);
+        // GRADIENT GLASS: lighter where the light is, darker away from it — the same one
+        // implied light the lit top edge already states, now agreeing with the fill. The
+        // lift and drop are small enough that the glass stays a surface for readouts, not
+        // a picture of one.
+        const auto lit = [](const Colour& c, float factor) {
+            return Colour{{c[0] * factor, c[1] * factor, c[2] * factor, c[3]}};
+        };
+        text::appendRectV(out.label, font, x, y, width, height, lit(theme.glass, 1.45f),
+                          lit(theme.glass, 0.75f));
     }
 
     // A hairline all the way round, and a BRIGHTER one along the top. One light source,

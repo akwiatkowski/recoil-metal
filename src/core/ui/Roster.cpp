@@ -173,7 +173,12 @@ void appendRoster(Geometry& out, const text::Font& labelFont, const text::Font& 
         const float tx = origin[0];
         const float ty = origin[1];
 
-        text::appendRect(out.label, labelFont, tx, ty, kRosterTile, kRosterTile, theme.well);
+        // The tile's well in gradient glass, the build cell's treatment at the roster's size.
+        text::appendRectV(out.label, labelFont, tx, ty, kRosterTile, kRosterTile,
+                          Colour{{theme.well[0] * 1.5f, theme.well[1] * 1.5f,
+                                  theme.well[2] * 1.5f, theme.well[3]}},
+                          Colour{{theme.well[0] * 0.7f, theme.well[1] * 0.7f,
+                                  theme.well[2] * 0.7f, theme.well[3]}});
 
         // The icon, from the same atlas the build tray packs.
         if (tile.iconSlot) {

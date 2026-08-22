@@ -90,6 +90,13 @@ struct Font {
 void appendRect(std::vector<TextVertex>& out, const Font& font, float x, float y, float width,
                 float height, std::array<float, 4> colour);
 
+/// The same rectangle with a vertical gradient — `top` at its top edge, `bottom` at its
+/// bottom, the rasteriser interpolating between. Costs nothing over the flat rect: the
+/// vertices carry colour anyway. This is how glass catches the interface's one implied
+/// light without a texture, a shader or a second pipeline.
+void appendRectV(std::vector<TextVertex>& out, const Font& font, float x, float y, float width,
+                 float height, std::array<float, 4> top, std::array<float, 4> bottom);
+
 /// Appends the quads for `text`, with the pen starting at (`x`, `y`) — the BASELINE's left
 /// end, not the top-left of the first letter.
 ///

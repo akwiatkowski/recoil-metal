@@ -86,6 +86,10 @@ inline constexpr float kMargin = kUnit * 2;  ///< panel to screen edge
 inline constexpr float kPad = kUnit * 1.5f;  ///< panel edge to its contents
 inline constexpr float kBevel = 1.0f;        ///< the hairline that catches the light
 
+/// The drop shadow's offset, in pixels — toward the implied light's opposite corner, so a
+/// panel sits ON the world rather than in it. Three: enough to separate, not enough to float.
+inline constexpr float kShadow = 3.0f;
+
 /// How far the corner brackets run along each edge of a panel, in pixels.
 ///
 /// The one ornamental gesture, and it is doing structural work: brackets at the corners say

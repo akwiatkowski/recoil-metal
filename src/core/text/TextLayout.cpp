@@ -43,6 +43,32 @@ void appendRect(std::vector<TextVertex>& out, const Font& font, float x, float y
     out.push_back(bottomRight);
 }
 
+void appendRectV(std::vector<TextVertex>& out, const Font& font, float x, float y, float width,
+                 float height, std::array<float, 4> top, std::array<float, 4> bottom) {
+    if (width <= 0.0f || height <= 0.0f) {
+        return;
+    }
+
+    const float u = (font.solidUv[0] + font.solidUv[2]) * 0.5f;
+    const float v = (font.solidUv[1] + font.solidUv[3]) * 0.5f;
+
+    // The gradient is free: the vertices already carry colour and the rasteriser already
+    // interpolates it — the whole cost of glass that catches the light is naming two colours
+    // instead of one.
+    const TextVertex topLeft{.position = {x, y}, .uv = {u, v}, .colour = top};
+    const TextVertex topRight{.position = {x + width, y}, .uv = {u, v}, .colour = top};
+    const TextVertex bottomLeft{.position = {x, y + height}, .uv = {u, v}, .colour = bottom};
+    const TextVertex bottomRight{
+        .position = {x + width, y + height}, .uv = {u, v}, .colour = bottom};
+
+    out.push_back(topLeft);
+    out.push_back(topRight);
+    out.push_back(bottomLeft);
+    out.push_back(bottomLeft);
+    out.push_back(topRight);
+    out.push_back(bottomRight);
+}
+
 float appendText(std::vector<TextVertex>& out, std::span<const Glyph> glyphs,
                  std::string_view text, float x, float y, std::array<float, 4> colour,
                  float scale) {

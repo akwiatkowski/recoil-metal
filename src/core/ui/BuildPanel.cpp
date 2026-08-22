@@ -231,8 +231,18 @@ void appendBuildPanel(Geometry& out, const text::Font& labelFont, const text::Fo
         // than as a lit frame around grey contents.
         const float alpha = option.affordable ? 1.0f : 0.38f;
 
-        text::appendRect(out.label, labelFont, cx, cy, kBuildCell, kBuildCellHeight,
-                         fade(theme.well, alpha));
+        // The well in gradient glass, like its panel — one light for chrome and cells alike.
+        const Colour well = fade(theme.well, alpha);
+        text::appendRectV(out.label, labelFont, cx, cy, kBuildCell, kBuildCellHeight,
+                          Colour{{well[0] * 1.5f, well[1] * 1.5f, well[2] * 1.5f, well[3]}},
+                          Colour{{well[0] * 0.7f, well[1] * 0.7f, well[2] * 0.7f, well[3]}});
+
+        // The hovered cell's fill lifts as well as its border brightening below: a button
+        // under the cursor should look pressed toward the light, not merely outlined.
+        if (hovered.has_value() && *hovered == index) {
+            text::appendRect(out.label, labelFont, cx, cy, kBuildCell, kBuildCellHeight,
+                             fade(theme.edgeLit, 0.10f));
+        }
 
         // The tier band across the top. Three pixels, up from two: at two the band vanished
         // into the cell border on a Retina capture and the tier grouping it exists for was
