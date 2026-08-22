@@ -130,6 +130,22 @@ fragment void propShadowFragment(PropShadowOut in [[stage_in]],
 //
 // Without tex2 a model is flat-lit and never shines — which is why every BAR
 // unit looked like painted cardboard until this landed.
+// The build ghost: a model drawn as the interface's own light rather than as metal.
+//
+// No textures and no shading model, deliberately — the ghost answers "what would stand
+// here", and identity lives in the SILHOUETTE, not in paint. A flat tint would render the
+// model as one shapeless slab, so the surface normal contributes just enough modulation
+// that a roof reads over a wall; the fraction is small because the moment the interior
+// competes with the outline, the ghost starts reading as a built thing.
+//
+// The tint is the whole vocabulary: the placeable cyan or the blocked red, the same two
+// colours the ground ring has always spoken.
+fragment float4 unitGhostFragment(UnitOut in [[stage_in]],
+                                  constant float4& tint [[buffer(1)]]) {
+    const float shape = 0.55 + 0.45 * saturate(in.normal.y * 0.5 + 0.5);
+    return float4(tint.rgb * shape, tint.a);
+}
+
 fragment float4 unitFragment(UnitOut in [[stage_in]],
                              constant Uniforms& u [[buffer(1)]],
                              texture2d<float> diffuse [[texture(0)]],

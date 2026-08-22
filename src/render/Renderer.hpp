@@ -295,6 +295,18 @@ public:
     // which cannot be resized while the GPU may be reading it.
     void setParticles(std::span<const Particle> particles) noexcept;
 
+    // The build ghost: one instance of an already-uploaded batch's model, drawn as a
+    // translucent silhouette in `tint` — the interface's light, not the unit's paint.
+    //
+    // STICKY, unlike the decals and the selection: the ghost follows the cursor across
+    // frames while a build is armed, so it is state the caller sets and clears rather than
+    // something re-pushed per frame. Cleared automatically by nothing; `clearGhost` is the
+    // caller saying "disarmed". A batch index out of range draws nothing rather than
+    // asserting — the batch may be one frame younger than the upload that carries it.
+    void setGhost(std::size_t batch, const UnitInstance& instance,
+                  std::array<float, 4> tint) noexcept;
+    void clearGhost() noexcept;
+
     // --- Text ---------------------------------------------------------------
     //
     // The HUD, and the first thing this renderer draws that is not part of the world.
@@ -598,6 +610,18 @@ private:
     void releaseSplat() noexcept;
 
     MTL::RenderPipelineState* unitPipeline_ = nullptr;  // owned
+
+    // The build ghost: which batch's model, where, and in what light. See setGhost.
+    struct GhostDraw {
+        std::size_t batch = 0;
+        UnitInstance instance{};
+        std::array<float, 4> tint{};
+    };
+    std::optional<GhostDraw> ghost_;
+    MTL::RenderPipelineState* ghostPipeline_ = nullptr;  // owned
+    /// One instance per frame in flight — the ghost is a single model, but it moves with
+    /// the cursor, so each frame writes its own slot like every other per-frame upload.
+    MTL::Buffer* ghostInstanceBuffer_ = nullptr;  // owned
 
     // Shadows. One directional light, one map, covering the whole terrain —
     // the sun does not move and an RTS camera looks at the same ground from a

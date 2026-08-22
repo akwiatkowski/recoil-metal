@@ -251,8 +251,12 @@ void Renderer::setUnits(std::span<const dds::Texture> textures,
     unitBatches_.reserve(batches.size());
     for (const std::size_t index : order) {
         const UnitBatch& batch = batches[index];
-        if (batch.model == nullptr || batch.model->empty() || batch.model->bones.empty()
-            || batch.instances.empty()) {
+        // An EMPTY batch uploads: a batch with no instances is "registered but not yet
+        // built", which is exactly what the build ghost draws — a model with no unit behind
+        // it. It used to be skipped here, which meant the ghost's batch never reached the
+        // GPU and the silhouette silently drew nothing. The draw loop skips zero-instance
+        // batches instead, which costs a comparison rather than a model.
+        if (batch.model == nullptr || batch.model->empty() || batch.model->bones.empty()) {
             continue;
         }
         const Model& model = *batch.model;
@@ -308,14 +312,18 @@ void Renderer::setUnits(std::span<const dds::Texture> textures,
         // written while the GPU is still reading it. Seeded with the same data
         // in every slot so a batch that is never updated draws correctly from
         // whichever slot the frame lands on.
-        uploaded.instanceCapacity = batch.instances.size();
+        // At least one instance's room even when none exist yet: a zero-byte Metal buffer is
+        // a null buffer, and this batch may be the ghost's — or grow its first real unit
+        // next frame through setInstances, whose writes are capped by this capacity.
+        uploaded.instanceCapacity = std::max<std::size_t>(1, batch.instances.size());
         const std::size_t instanceBytes = uploaded.instanceCapacity * sizeof(UnitInstance);
         uploaded.instanceBuffer = device_->newBuffer(instanceBytes * kMaxFramesInFlight,
                                                      MTL::ResourceStorageModeShared);
-        if (uploaded.instanceBuffer != nullptr) {
+        if (uploaded.instanceBuffer != nullptr && !batch.instances.empty()) {
             auto* slots = static_cast<std::byte*>(uploaded.instanceBuffer->contents());
+            const std::size_t filled = batch.instances.size() * sizeof(UnitInstance);
             for (std::size_t slot = 0; slot < kMaxFramesInFlight; ++slot) {
-                std::memcpy(slots + slot * instanceBytes, batch.instances.data(), instanceBytes);
+                std::memcpy(slots + slot * instanceBytes, batch.instances.data(), filled);
             }
         }
         uploaded.indexCount = model.indices.size();
@@ -362,6 +370,18 @@ void Renderer::setInstances(std::size_t batchIndex,
     // goes unread — so a caller may shrink a batch without reallocating.
     batch.instanceCount = count;
 }
+
+void Renderer::setGhost(std::size_t batch, const UnitInstance& instance,
+                        std::array<float, 4> tint) noexcept {
+    // The SOURCE index, as every caller-facing batch index here is. Mapped through
+    // `batchForSourceIndex_` at encode time rather than now, because an upload between
+    // frames renumbers the GPU batches and a mapped-and-stored index would be stale —
+    // exactly the case the ghost hits, since arming a new blueprint is what grows the
+    // batch list in the first place.
+    ghost_ = GhostDraw{.batch = batch, .instance = instance, .tint = tint};
+}
+
+void Renderer::clearGhost() noexcept { ghost_.reset(); }
 
 void Renderer::setSelection(std::span<const SelectionEntry> selected) noexcept {
     outlineRuns_.clear();

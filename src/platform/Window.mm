@@ -563,6 +563,13 @@ void Window::setGroundDecals(std::span<const DecalVertex> vertices) {
     impl_->renderer->setGroundDecals(vertices);
 }
 
+void Window::setGhost(std::size_t batch, const UnitInstance& instance,
+                      std::array<float, 4> tint) noexcept {
+    impl_->renderer->setGhost(batch, instance, tint);
+}
+
+void Window::clearGhost() noexcept { impl_->renderer->clearGhost(); }
+
 void Window::setSelection(std::span<const SelectionEntry> selected) {
     impl_->renderer->setSelection(selected);
 }

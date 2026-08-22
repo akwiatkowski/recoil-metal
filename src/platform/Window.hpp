@@ -209,6 +209,12 @@ public:
     /// setInstances, only meaningful from inside an onFrame callback.
     void setGroundDecals(std::span<const DecalVertex> vertices);
 
+    /// The build ghost — the armed blueprint's silhouette at the cursor. See
+    /// Renderer::setGhost; sticky until cleared, unlike the per-frame lists.
+    void setGhost(std::size_t batch, const UnitInstance& instance,
+                  std::array<float, 4> tint) noexcept;
+    void clearGhost() noexcept;
+
     /// This frame's selection. See Renderer::setSelection.
     void setSelection(std::span<const SelectionEntry> selected);
 

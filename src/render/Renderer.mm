@@ -98,6 +98,11 @@ Renderer::Renderer(CA::MetalLayer* layer)
                                   /*blend=*/false);
     unitPipeline_ = makePipeline(device_, library, "unitVertex", "unitFragment",
                                  /*blend=*/false);
+    // The build ghost: the same vertex stage — it IS a unit, geometrically — with a flat
+    // luminous fragment and blending, because a silhouette that occluded the ground it is
+    // about to claim would hide the one thing the player is judging.
+    ghostPipeline_ = makePipeline(device_, library, "unitVertex", "unitGhostFragment",
+                                  /*blend=*/true);
     // Blended, unlike everything else here: a selection ring is interface laid
     // over the ground, and a solid band would hide the terrain it marks.
     // Blended, and drawn last of all: the HUD sits over the world rather than in it.
@@ -298,6 +303,17 @@ Renderer::Renderer(CA::MetalLayer* layer)
         }
     }
 
+    // --- The build ghost -----------------------------------------------------
+    {
+        // One UnitInstance per frame in flight: the ghost is a single model, but it moves
+        // with the cursor, so each frame writes its own slot like every per-frame upload.
+        ghostInstanceBuffer_ = device_->newBuffer(sizeof(UnitInstance) * kMaxFramesInFlight,
+                                                  MTL::ResourceStorageModeShared);
+        if (ghostInstanceBuffer_ == nullptr) {
+            throw RendererError{"failed to allocate the ghost instance buffer"};
+        }
+    }
+
     // --- Text ---------------------------------------------------------------
     {
         // A ring like everything else written per frame: the GPU may still be reading last
@@ -419,6 +435,8 @@ Renderer::~Renderer() {
     releasePropBuffers();  // before the units: acquired after them
     releaseUnitBuffers();  // frees the unit textures too
     unitPipeline_->release();
+    if (ghostPipeline_ != nullptr) ghostPipeline_->release();
+    if (ghostInstanceBuffer_ != nullptr) ghostInstanceBuffer_->release();
     releaseSplat();
     if (groundTexture_ != nullptr) groundTexture_->release();
     if (fogTexture_ != nullptr) fogTexture_->release();
@@ -1038,6 +1056,9 @@ void Renderer::encodeScene(MTL::CommandBuffer* commandBuffer, MTL::RenderPassDes
         };
 
         for (const GpuUnitBatch& batch : unitBatches_) {
+            if (batch.instanceCount == 0) {
+                continue;  // registered but not yet built: only the ghost may draw it
+            }
             MTL::Texture* diffuse = textureAt(batch.textures.diffuse);
             MTL::Texture* shading = textureAt(batch.textures.shading);
 
@@ -1204,9 +1225,54 @@ void Renderer::encodeScene(MTL::CommandBuffer* commandBuffer, MTL::RenderPassDes
                                 static_cast<NS::UInteger>(decalVertexCount_));
     }
 
-    // --- Particles ---------------------------------------------------------
-    // After the decals, so dust drifts over a selection ring rather than under it,
-    // and before the water for the same reason the decals are: a puff on a
+    // --- The build ghost ----------------------------------------------------
+    // The armed blueprint's model at the cursor, as a translucent silhouette in the
+    // interface's own light. AFTER the decals so it draws over its own ground ring, and
+    // depth-tested without writing (the rings' state): terrain hides the ghost's far side,
+    // and the ghost hides nothing — a preview that occluded the ground being judged would
+    // cost the player the one thing they are looking at.
+    //
+    // Skipped in the reflection pass like the rest of the interface: a mirrored ghost
+    // would be the interface appearing in the sea.
+    if (ghost_ && ghostPipeline_ != nullptr && ghostInstanceBuffer_ != nullptr
+        && override == nullptr && ghost_->batch < batchForSourceIndex_.size()) {
+        const std::size_t target = batchForSourceIndex_[ghost_->batch];
+        if (target != kNoBatch && target < unitBatches_.size()) {
+            const GpuUnitBatch& batch = unitBatches_[target];
+            if (batch.vertexBuffer != nullptr && batch.indexBuffer != nullptr
+                && batch.boneBuffer != nullptr) {
+                auto* slot = static_cast<UnitInstance*>(ghostInstanceBuffer_->contents())
+                             + instanceSlot_;
+                *slot = ghost_->instance;
+
+                encoder->setRenderPipelineState(ghostPipeline_);
+                encoder->setDepthStencilState(decalDepthState_);
+                encoder->setVertexBytes(&uniforms, sizeof(uniforms), kUniformBufferIndex);
+                encoder->setVertexBuffer(batch.vertexBuffer, 0, kVertexBufferIndex);
+                encoder->setVertexBuffer(
+                    ghostInstanceBuffer_,
+                    static_cast<NS::UInteger>(instanceSlot_ * sizeof(UnitInstance)),
+                    kInstanceBufferIndex);
+                encoder->setVertexBuffer(batch.boneBuffer, 0, kBoneBufferIndex);
+
+                PoseUniforms pose;
+                pose.poseCount = static_cast<std::uint32_t>(batch.poseCount);
+                pose.boneCount =
+                    static_cast<std::uint32_t>(batch.boneStrideBytes / sizeof(BoneTransform));
+                pose.duration = batch.duration;
+                pose.time = 0.0f;  // a ghost stands at rest; nothing is built mid-stride
+                encoder->setVertexBytes(&pose, sizeof(pose), kPoseUniformBufferIndex);
+
+                encoder->setFragmentBytes(&ghost_->tint, sizeof(ghost_->tint),
+                                          kUniformBufferIndex);
+                encoder->drawIndexedPrimitives(MTL::PrimitiveType::PrimitiveTypeTriangle,
+                                               static_cast<NS::UInteger>(batch.indexCount),
+                                               MTL::IndexType::IndexTypeUInt32,
+                                               batch.indexBuffer,
+                                               /*indexBufferOffset=*/0, NS::UInteger{1});
+            }
+        }
+    }
 
     // --- Particles ---------------------------------------------------------
     // After the decals, so dust drifts over a selection ring rather than under it,
