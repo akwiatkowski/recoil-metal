@@ -153,11 +153,14 @@ void gatherBuildOptions(const UnitScene& scene, std::span<const rm::sim::UnitId>
             continue;
         }
         const rm::unitdef::Role role = rm::unitdef::roleOf(*def);
-        // A COMMANDER OR AN ENGINEER, which is what the goal asks for and also what the roster
-        // can answer honestly: those two build STRUCTURES, and a structure's role is a fact the
-        // roster already indexes. A factory builds mobile units, which is a different query
-        // against the same roster and a separate panel's worth of work.
-        if (role != rm::unitdef::Role::Commander && role != rm::unitdef::Role::Builder) {
+        // A COMMANDER, AN ENGINEER — or a FACTORY. The first two build STRUCTURES, answered
+        // by role; a factory builds MOBILE units, answered by its own `BuildableCategory`
+        // expression, which is the game's statement of what rolls off this floor and needs
+        // no taxonomy of ours. Anything else in the selection offers nothing.
+        const bool buildsStructures =
+            role == rm::unitdef::Role::Commander || role == rm::unitdef::Role::Builder;
+        const bool isFactory = role == rm::unitdef::Role::Factory;
+        if (!buildsStructures && !isFactory) {
             continue;
         }
 
@@ -170,6 +173,32 @@ void gatherBuildOptions(const UnitScene& scene, std::span<const rm::sim::UnitId>
         who = BuildSelection{.builder = id,
                              .name = def->name,
                              .role = std::string{rm::unitdef::roleName(role)}};
+
+        if (isFactory) {
+            for (const rm::data::RosterEntry& entry :
+                 scene.roster.buildableBy(faction, def->buildableCategory)) {
+                // TIER ONE ONLY, the structure tray's rule for the structure tray's reason.
+                if (entry.tech > 1) {
+                    continue;
+                }
+                const float mass = rm::sim::magToFloat(entry.costMass);
+                const float seconds =
+                    def->buildRate > 0.0f
+                        ? rm::sim::magToFloat(entry.buildTime) / def->buildRate
+                        : 0.0f;
+                out.push_back(rm::ui::BuildOption{
+                    .id = entry.id,
+                    .name = entry.description,
+                    .massCost = mass,
+                    .energyCost = rm::sim::magToFloat(entry.costEnergy),
+                    .buildSeconds = seconds,
+                    .health = rm::sim::magToFloat(entry.health),
+                    .affordable = mass <= storedMass,
+                    .tint = rm::ui::tierTint(theme, entry.tech),
+                });
+            }
+            return;  // the first builder decides — see the header
+        }
         for (const rm::unitdef::Role wanted : kStructureRoles) {
             for (const rm::data::RosterEntry& entry : scene.roster.all(faction, wanted)) {
                 // TIER ONE ONLY, for now. A commander can build a T1 structure of each kind, and

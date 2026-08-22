@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/sim/Army.hpp"
+#include "core/unit/BuildTree.hpp"
 #include "core/unit/Role.hpp"
 #include "core/unit/UnitDef.hpp"
 
@@ -54,6 +55,12 @@ struct RosterEntry {
     sim::Faction faction = sim::Faction::Uef;
     int tech = 0;
 
+    /// Whether this entry satisfies a `BuildableCategory` expression — any one term, all of
+    /// its tags, or a lowercase id reference naming this entry. The factory menu's whole
+    /// question, answered against the roster's own copy of the categories so the defs the
+    /// roster was built from need not outlive it.
+    [[nodiscard]] bool matches(const unitdef::CategoryExpression& expression) const;
+
     /// What it costs, which is what breaks a tie.
     sim::Mag costMass{};
 
@@ -96,8 +103,15 @@ public:
         sim::Faction faction, unitdef::Role role,
         std::span<const std::string> required = {}) const;
 
+    /// Everything of a faction that satisfies a `BuildableCategory` expression, cheapest
+    /// first — the FACTORY's menu, where the structure tray's is `all` by role. The
+    /// expression decides membership because that is what the content says a factory
+    /// builds; roles would be this engine's taxonomy standing in for the game's own.
+    [[nodiscard]] std::vector<RosterEntry> buildableBy(
+        sim::Faction faction, const unitdef::CategoryExpression& expression) const;
+
     /// Everything of a role and faction, cheapest first. For a caller listing options rather
-    /// than picking one — the build tray, eventually.
+    /// than picking one — the structure tray.
     [[nodiscard]] std::vector<RosterEntry> all(sim::Faction faction, unitdef::Role role,
                                                std::span<const std::string> required = {}) const;
 

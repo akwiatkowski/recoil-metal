@@ -362,3 +362,58 @@ TEST_CASE("nothing selected reports no builder at all", "[ui][build]") {
     CHECK_FALSE(fixture.who.any());
     CHECK_FALSE(fixture.scene.store.alive(fixture.who.builder));
 }
+
+TEST_CASE("a factory offers what its BuildableCategory names, and nothing else", "[ui][build]") {
+    Fixture fixture;
+
+    // The factory's expression, as retail states one: category terms, ANY of which admits.
+    rm::unitdef::UnitDef factory =
+        aDef("UEB0101", {"UEF", "TECH1", "STRUCTURE", "FACTORY"}, 240.0f, 20.0f);
+    factory.buildableCategory.push_back(
+        rm::unitdef::parseCategoryTerm("BUILTBYTIER1FACTORY UEF MOBILE"));
+
+    // Corpus additions: a tank the term admits, an engineer it admits, an air unit of the
+    // right faction it does NOT (no BUILTBYTIER1FACTORY), and the enemy's tank.
+    fixture.add(aDef("UEL0202", {"BUILTBYTIER1FACTORY", "MOBILE", "TANK", "TECH1", "UEF"}, 52.0f));
+    fixture.add(aDef("UEL0106", {"BUILTBYTIER1FACTORY", "ENGINEER", "MOBILE", "TECH1", "UEF"}, 36.0f));
+    fixture.add(aDef("UEA0101", {"AIR", "MOBILE", "TECH1", "UEF"}, 80.0f));
+    fixture.add(aDef("URL0202", {"BUILTBYTIER1FACTORY", "CYBRAN", "MOBILE", "TANK", "TECH1"}, 52.0f));
+    fixture.scene.roster = rm::data::Roster::build(fixture.corpus, fixture.ids);
+
+    const rm::sim::UnitId site = fixture.spawn(factory, 0);
+    const auto got = fixture.optionsFor({site});
+
+    CHECK(fixture.offers(got, "UEL0202"));
+    CHECK(fixture.offers(got, "UEL0106"));
+    CHECK_FALSE(fixture.offers(got, "UEA0101"));  // the expression does not admit it
+    CHECK_FALSE(fixture.offers(got, "URL0202"));  // the enemy's, whatever the tags say
+    CHECK_FALSE(fixture.offers(got, "UEB1103"));  // structures are the other tray's
+
+    // The header names the factory, so the panel is attributable.
+    CHECK(fixture.who.role == "factory");
+    CHECK(fixture.who.builder == site);
+}
+
+TEST_CASE("a factory stating no BuildableCategory offers nothing, not everything",
+          "[ui][build]") {
+    Fixture fixture;
+    const rm::unitdef::UnitDef factory =
+        aDef("UEB0101", {"UEF", "TECH1", "STRUCTURE", "FACTORY"}, 240.0f, 20.0f);
+    const rm::sim::UnitId site = fixture.spawn(factory, 0);
+    CHECK(fixture.optionsFor({site}).empty());
+}
+
+TEST_CASE("an id reference in the expression admits exactly that unit", "[ui][build]") {
+    Fixture fixture;
+    rm::unitdef::UnitDef factory =
+        aDef("UEB0102", {"UEF", "TECH1", "STRUCTURE", "FACTORY"}, 240.0f, 20.0f);
+    factory.buildableCategory.push_back(rm::unitdef::parseCategoryTerm("uel0202"));
+
+    fixture.add(aDef("UEL0202", {"MOBILE", "TANK", "TECH1", "UEF"}, 52.0f));
+    fixture.add(aDef("UEL0203", {"MOBILE", "TANK", "TECH1", "UEF"}, 52.0f));
+    fixture.scene.roster = rm::data::Roster::build(fixture.corpus, fixture.ids);
+
+    const auto got = fixture.optionsFor({fixture.spawn(factory, 0)});
+    CHECK(fixture.offers(got, "UEL0202"));
+    CHECK_FALSE(fixture.offers(got, "UEL0203"));
+}

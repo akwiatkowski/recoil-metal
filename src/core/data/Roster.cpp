@@ -1,6 +1,7 @@
 #include "core/data/Roster.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <tuple>
 
 namespace rm::data {
@@ -91,6 +92,54 @@ namespace {
 }
 
 } // namespace
+
+bool RosterEntry::matches(const unitdef::CategoryExpression& expression) const {
+    for (const unitdef::CategoryTerm& term : expression) {
+        if (term.empty()) {
+            continue;  // a term with no tags matches nothing, per BuildTree's rule
+        }
+        if (unitdef::isIdReference(term)) {
+            // A lowercase blueprint id naming a unit directly. Entry ids are uppercase, as
+            // the directories spell them, so the comparison folds case one way.
+            const std::string& reference = term.front();
+            if (reference.size() == id.size()
+                && std::equal(reference.begin(), reference.end(), id.begin(),
+                              [](char a, char b) {
+                                  return a == static_cast<char>(
+                                             std::tolower(static_cast<unsigned char>(b)));
+                              })) {
+                return true;
+            }
+            continue;
+        }
+        const bool allPresent =
+            std::all_of(term.begin(), term.end(), [this](const std::string& tag) {
+                return std::binary_search(categories.begin(), categories.end(), tag);
+            });
+        if (allPresent) {
+            return true;
+        }
+    }
+    return false;
+}
+
+std::vector<RosterEntry> Roster::buildableBy(
+    sim::Faction faction, const unitdef::CategoryExpression& expression) const {
+    std::vector<RosterEntry> found;
+    if (expression.empty()) {
+        return found;  // builds nothing, per BuildTree: an empty expression is not "everything"
+    }
+    for (const RosterEntry& entry : entries_) {
+        if (entry.faction == faction && entry.matches(expression)) {
+            found.push_back(entry);
+        }
+    }
+    std::stable_sort(found.begin(), found.end(),
+                     [](const RosterEntry& a, const RosterEntry& b) {
+                         return std::tie(a.costMass, a.id) < std::tie(b.costMass, b.id);
+                     });
+    return found;
+}
 
 std::vector<RosterEntry> Roster::all(sim::Faction faction, unitdef::Role role,
                                      std::span<const std::string> required) const {

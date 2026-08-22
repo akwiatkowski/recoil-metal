@@ -832,6 +832,35 @@ int runWindowed(const Session& session) {
                         panel, buildOptions.size(), mods.pointX, mods.pointY);
                     if (button == rm::MouseButton::Right) {
                         armedOption.reset();
+                    } else if (cell && buildOptions[*cell].affordable
+                               && buildWho.role == "factory") {
+                        // A FACTORY CELL BUILDS AT ONCE — there is no place to pick, the
+                        // factory IS the place, so arming a ghost would be a step with no
+                        // decision in it. The site is one step off the floor, so the
+                        // finished unit stands beside its factory rather than inside it.
+                        if (units.store.alive(buildWho.builder)) {
+                            const std::string path =
+                                rm::data::RosterEntry{.id = buildOptions[*cell].id}.path();
+                            const std::optional<rm::UnitTypeIndex> type =
+                                resolveBuildable(units, content, path);
+                            const auto factoryType = static_cast<std::size_t>(
+                                units.store.typeAt(buildWho.builder.index));
+                            const rm::sim::PassabilityGrid& grid = passability.gridFor(
+                                units.maxSlopeDegrees[factoryType],
+                                units.maxWaterDepthElmos[factoryType]);
+                            const rm::sim::Transform& at =
+                                units.store.transforms()[buildWho.builder.index];
+                            const rm::sim::Fx rollOff =
+                                units.store.motion()[buildWho.builder.index].radiusElmos * 2;
+                            if (type
+                                && issueBuild(units, grid, map->field, buildWho.builder,
+                                              playerDriving(units, units.playerArmy),
+                                              static_cast<rm::TickIndex>(matchTicks), *type,
+                                              at.x, at.z + rollOff)) {
+                                std::printf("factory: %s queued\n",
+                                            buildOptions[*cell].id.c_str());
+                            }
+                        }
                     } else if (cell && buildOptions[*cell].affordable) {
                         armedOption = cell;
                     } else if (cell) {
