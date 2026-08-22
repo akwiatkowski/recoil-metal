@@ -991,6 +991,12 @@ FafAi::FafAi(std::filesystem::path root, bool verbose)
         if (name == "GetGameTick") {
             return gameTick;
         }
+        if (name == "lazyimport") {
+            // Eager where Moho is lazy: the real one defers loading until first field
+            // access. Loading now instead is semantically safe — same module, same cache —
+            // and a stub's nil errors on the very access laziness exists to serve.
+            return importModule;
+        }
         return countedStub;
     };
     const auto fidelityFor = [](std::string_view name) {
@@ -1008,6 +1014,9 @@ FafAi::FafAi(std::filesystem::path root, bool verbose)
         }
         if (name == "GetGameTick") {
             return Fidelity::Known;
+        }
+        if (name == "lazyimport") {
+            return Fidelity::Guessed;  // eager, where Moho defers to first access
         }
         return Fidelity::Stub;
     };
