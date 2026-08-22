@@ -95,6 +95,48 @@ TEST_CASE("a unit blueprint's numbers arrive in the engine's own units") {
     CHECK(def->meshToElmos == Approx(0.56f));
 }
 
+TEST_CASE("the display name arrives with its localisation tag stripped") {
+    // `Description` is the generic type name — "Mass Extractor", "Gatling Bot" — present in
+    // 567 of the 568 shipped blueprints, and the text after the `<LOC key>` prefix is the
+    // built-in English fallback. That fallback is the name; no string database is needed.
+    const Blueprint tagged{"UEB1103_unit.bp", R"(
+UnitBlueprint {
+    Description = '<LOC ueb1103_desc>Mass Extractor',
+    Physics = { MotionType = 'RULEUMT_None' },
+})"};
+    const auto withTag = rm::unitbp::loadFile(tagged.path());
+    REQUIRE(withTag.has_value());
+    CHECK(withTag->description == "Mass Extractor");
+
+    // A description with no tag at all is already the name.
+    const Blueprint bare{"XXB0001_unit.bp", R"(
+UnitBlueprint {
+    Description = 'Test Structure',
+    Physics = { MotionType = 'RULEUMT_None' },
+})"};
+    const auto withoutTag = rm::unitbp::loadFile(bare.path());
+    REQUIRE(withoutTag.has_value());
+    CHECK(withoutTag->description == "Test Structure");
+
+    // The one blueprint with no Description keeps an empty name rather than inventing one —
+    // the interface falls back to the id, which is what it showed for everything before.
+    const Blueprint none{"XXB0002_unit.bp", kMediumTank};
+    const auto missing = rm::unitbp::loadFile(none.path());
+    REQUIRE(missing.has_value());
+    CHECK(missing->description.empty());
+
+    // A malformed tag — opened, never closed — yields nothing rather than the tag itself:
+    // "<LOC ueb" drawn on a button is worse than the id the empty answer falls back to.
+    const Blueprint broken{"XXB0003_unit.bp", R"(
+UnitBlueprint {
+    Description = '<LOC ueb1103_desc',
+    Physics = { MotionType = 'RULEUMT_None' },
+})"};
+    const auto malformed = rm::unitbp::loadFile(broken.path());
+    REQUIRE(malformed.has_value());
+    CHECK(malformed->description.empty());
+}
+
 TEST_CASE("intel radii arrive in elmos, from the ogrids the Intel block states") {
     // The Intel block is what a `.bp` says about what a unit can SEE, and the four
     // radii read here are the ones the corpus actually declares: VisionRadius on

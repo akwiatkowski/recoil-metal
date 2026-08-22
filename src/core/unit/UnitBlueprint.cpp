@@ -124,6 +124,25 @@ constexpr float kAnyDepthElmos = 100000.0f;
     return stem;
 }
 
+/// The display text a `<LOC key>fallback` string carries: the fallback.
+///
+/// The corpus writes every player-facing string this way — `'<LOC ueb1103_desc>Mass
+/// Extractor'` — and the text after the `>` is the built-in English, which is why no string
+/// database has to be mounted to name a unit. A tag that opens and never closes yields
+/// nothing rather than the tag itself: "<LOC ueb" on a button is worse than the id the
+/// caller falls back to. A string with no tag is already the text.
+[[nodiscard]] std::string_view stripLocTag(std::string_view text) noexcept {
+    constexpr std::string_view kTag = "<LOC ";
+    if (!text.starts_with(kTag)) {
+        return text;
+    }
+    const std::size_t close = text.find('>');
+    if (close == std::string_view::npos) {
+        return {};
+    }
+    return text.substr(close + 1);
+}
+
 } // namespace
 
 std::expected<unitdef::UnitDef, lua::ParseError> loadFile(const std::filesystem::path& path) {
@@ -148,6 +167,14 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
 
     unitdef::UnitDef def;
     def.name = idFromFileName(vfsPath);
+
+    // The display name. `Description` is the generic type name a player reads — "Mass
+    // Extractor" — and 567 of the 568 shipped blueprints state one. `General.UnitName`
+    // ("Mass Pump 1") is flavour text on only 306 and is deliberately not read: a menu that
+    // names one button by type and the next by callsign is a menu with two vocabularies.
+    if (const lua::Value* description = parsed->find("Description")) {
+        def.description = std::string{stripLocTag(description->text)};
+    }
 
     // --- physics -----------------------------------------------------------
     //

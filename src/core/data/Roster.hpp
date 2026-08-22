@@ -39,6 +39,14 @@ struct RosterEntry {
     /// The blueprint id, as its directory spells it — `UEB1103`.
     std::string id;
 
+    /// The display name — "Mass Extractor" — or empty when the content states none.
+    ///
+    /// CARRIED HERE, not looked up when a panel asks, because the roster is exactly the list
+    /// of units that are NOT loaded: a build menu offers what the player has not built, and
+    /// `scene.definitions` holds only what has been registered. The roster outlives the defs
+    /// it was built from, so anything the interface will want must ride along.
+    std::string description;
+
     /// Where it lives, for the loader. Derived from the id rather than stored twice.
     [[nodiscard]] std::string path() const;
 
@@ -48,6 +56,12 @@ struct RosterEntry {
 
     /// What it costs, which is what breaks a tie.
     sim::Mag costMass{};
+
+    // What the hover card reads. The same reasoning as `description`: the def is not loaded,
+    // so the facts a player weighs before building — full cost, time, toughness — ride here.
+    sim::Mag costEnergy{};
+    sim::Mag buildTime{};  ///< the blueprint's own units; seconds = buildTime / buildRate
+    sim::Mag health{};
 
     /// Its categories, kept so a `requires` filter can be applied without going back to the
     /// definition — the roster outlives the span it was built from.

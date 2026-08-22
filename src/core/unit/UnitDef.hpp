@@ -76,6 +76,13 @@ struct UnitDef {
     std::string name;       ///< the table's own key, e.g. "armpw"
     std::string modelPath;  ///< `objectname`, e.g. "Units/ARMPW.s3o"
 
+    /// The display name a player reads — "Mass Extractor" — or empty when the content states
+    /// none. Supreme Commander's `Description` field carries it inline (567 of 568 blueprints,
+    /// English fallback after the `<LOC key>` prefix). BAR keeps names outside the unit files
+    /// (`language/en/units.json`), which this loader does not read yet — a BAR unit therefore
+    /// shows its id, exactly what every unit showed before this field existed.
+    std::string description;
+
     /// Elmos per second. Recoil's modern `speed` field is already per second;
     /// only the legacy `maxVelocity` is per frame (UnitDef.cpp:442-443).
     float speedElmosPerSecond = 0.0f;

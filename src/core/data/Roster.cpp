@@ -59,10 +59,14 @@ Roster Roster::build(std::span<const unitdef::UnitDef> units, std::span<const st
         }
         roster.entries_.push_back(RosterEntry{
             .id = ids[i],
+            .description = units[i].description,
             .role = unitdef::roleOf(units[i]),
             .faction = *faction,
             .tech = unitdef::techOf(units[i]),
             .costMass = units[i].buildCostMass,
+            .costEnergy = units[i].buildCostEnergy,
+            .buildTime = units[i].buildTime,
+            .health = units[i].health,
             .categories = units[i].categories,
         });
     }
