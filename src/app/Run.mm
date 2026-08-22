@@ -300,9 +300,10 @@ int runScreenshot(const Session& session) {
             // read. The SCREENSHOT path, which is the one that has to show them: a feature
             // only visible in a live window cannot be verified, and AGENT.md asks for a
             // screenshot or it did not happen.
+            // Filled AFTER the icon atlas below decides which types the strategic layer
+            // draws — the squares are the fallback for the glyphless, and appending them
+            // first would draw both.
             std::vector<rm::Particle> shotParticles{marchDust.begin(), marchDust.end()};
-            appendSceneIcons(shotParticles, units, renderer.camera());
-            renderer.setParticles(shotParticles);
 
             // The HUD in a capture too. A screenshot is how this project verifies anything,
             // and an interface only visible in a live window cannot be checked at all.
@@ -355,10 +356,20 @@ int runScreenshot(const Session& session) {
             gatherBuildOptions(units, capturedSelection, hudThemeFor(units), shotOptions,
                                shotWho);
 
-            if (!shotOptions.empty() || !shotRoster.empty()) {
-                renderer.setIconAtlas(
-                    rm::app::packInterfaceIcons(content, shotOptions, shotRoster));
-            }
+            // Packed unconditionally now: the strategic glyphs exist with nothing selected
+            // at all, which is precisely the far-zoom capture that shows them.
+            rm::app::ensureStrategicIconArt(units, content);
+            std::size_t shotStrategicBase = 0;
+            renderer.setIconAtlas(
+                rm::app::packInterfaceIcons(content, shotOptions, shotRoster,
+                                            units.strategicIconArt, &shotStrategicBase));
+            std::vector<std::optional<rm::app::StrategicIconRef>> shotRefs;
+            rm::app::buildStrategicIconRefs(units, shotStrategicBase, shotRefs);
+            rm::app::appendStrategicIcons(hud, units, renderer.camera(),
+                                          static_cast<float>(shot.width),
+                                          static_cast<float>(shot.height), shotRefs);
+            appendSceneIcons(shotParticles, units, renderer.camera(), shotRefs);
+            renderer.setParticles(shotParticles);
 
             if (!shotOptions.empty()) {
                 // `--hover N` lights the Nth option (1-based) and draws its info card, for
@@ -435,7 +446,7 @@ int runScreenshot(const Session& session) {
                 std::printf("  roster: %zu type(s) selected\n", shotRoster.size());
             }
 
-            renderer.setHud(hud.label, hud.readout, hud.image);
+            renderer.setHud(hud.label, hud.readout, hud.image, hud.worldImage);
 
             const auto image = renderer.renderToImage(shot.width, shot.height);
             return writePng(shot.path, image) ? 0 : 1;
@@ -588,6 +599,13 @@ int runWindowed(const Session& session) {
         /// cheap conservative key, and repacking on a unit's death costs one frame of archive
         /// reads rather than a stale picture.
         std::size_t rosterPackedFor = static_cast<std::size_t>(-1);
+
+        // The strategic layer's per-type icon table, rebuilt with every pack — the slots
+        // move with the tray's and roster's counts. `typesPackedFor` starts impossible so
+        // the FIRST frame packs: unlike the tray, the strategic icons exist with nothing
+        // selected at all.
+        std::vector<std::optional<rm::app::StrategicIconRef>> strategicRefs;
+        std::size_t typesPackedFor = static_cast<std::size_t>(-1);
 
         // The caller-side tick, the same one `march()` drives. Built here rather than in
         // the frame callback because a match is decided on one tick and stays decided, and
@@ -1182,7 +1200,10 @@ int runWindowed(const Session& session) {
             // (core/scene/UnitIcons.hpp). Built into a scratch copy so the icons do not
             // accumulate in the list the dust ages through.
             iconScratch.assign(particles.begin(), particles.end());
-            appendSceneIcons(iconScratch, units, window.camera());
+            // With LAST pack's refs: the types the strategic layer draws keep their squares
+            // out of the particle list. One frame after a fresh type appears, both tables
+            // agree; in between it shows the square, which is the fallback anyway.
+            appendSceneIcons(iconScratch, units, window.camera(), strategicRefs);
             window.setParticles(iconScratch);
 
             hudScratch.clear();
@@ -1196,6 +1217,12 @@ int runWindowed(const Session& session) {
             appendHealthBars(hudScratch, units, window.camera(), window.labelFont(),
                              static_cast<float>(window.width()),
                              static_cast<float>(window.height()));
+
+            // The strategic layer: the game's own glyphs where units are too small to read,
+            // in the army's colour, under all the chrome (Geometry::worldImage).
+            appendStrategicIcons(hudScratch, units, window.camera(),
+                                 static_cast<float>(window.width()),
+                                 static_cast<float>(window.height()), strategicRefs);
 
             // THE MINIMAP (§7 P7.4), appended to the same geometry the HUD builds — it is
             // rectangles in screen space, which is what `text::appendRect` already draws, so it
@@ -1239,11 +1266,20 @@ int runWindowed(const Session& session) {
             // option list and the tile list are rebuilt every frame and a fresh entry has no
             // slot — repacking to recover them would be two dozen archive reads a frame for
             // pictures that have not moved.
-            if (buildWho.builder != iconsPackedFor || rosterTiles.size() != rosterPackedFor) {
+            if (buildWho.builder != iconsPackedFor || rosterTiles.size() != rosterPackedFor
+                || units.catalog.size() != typesPackedFor) {
                 iconsPackedFor = buildWho.builder;
                 rosterPackedFor = rosterTiles.size();
-                window.setIconAtlas(
-                    rm::app::packInterfaceIcons(content, buildOptions, rosterTiles));
+                typesPackedFor = units.catalog.size();
+                // Any glyph a newly registered type names is fetched before the pack, so a
+                // unit type first seen this frame gets its icon in this atlas rather than
+                // a square until the next selection change.
+                rm::app::ensureStrategicIconArt(units, content);
+                std::size_t strategicBase = 0;
+                window.setIconAtlas(rm::app::packInterfaceIcons(
+                    content, buildOptions, rosterTiles, units.strategicIconArt,
+                    &strategicBase));
+                rm::app::buildStrategicIconRefs(units, strategicBase, strategicRefs);
                 iconSlots.clear();
                 for (const rm::ui::BuildOption& option : buildOptions) {
                     iconSlots.push_back(option.iconSlot);
@@ -1416,7 +1452,8 @@ int runWindowed(const Session& session) {
                 leftWasHeld = held;
             }
 
-            window.setHud(hudScratch.label, hudScratch.readout, hudScratch.image);
+            window.setHud(hudScratch.label, hudScratch.readout, hudScratch.image,
+                          hudScratch.worldImage);
 
             // Rings under whatever is selected, rebuilt from scratch every
             // frame. Cheap — a selection is tens of units and each ring is 192

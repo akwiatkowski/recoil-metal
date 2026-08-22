@@ -209,10 +209,12 @@ text::Font Renderer::readoutFont() const noexcept { return readoutFont_.view(); 
 
 void Renderer::setHud(std::span<const text::TextVertex> label,
                       std::span<const text::TextVertex> readout,
-                      std::span<const text::TextVertex> image) noexcept {
+                      std::span<const text::TextVertex> image,
+                      std::span<const text::TextVertex> worldImage) noexcept {
     labelVertexCount_ = 0;
     readoutVertexCount_ = 0;
     imageVertexCount_ = 0;
+    worldImageVertexCount_ = 0;
     if (textBuffer_ == nullptr) {
         return;
     }
@@ -250,6 +252,18 @@ void Renderer::setHud(std::span<const text::TextVertex> label,
         std::memcpy(base + labelFits + readoutFits, image.data(),
                     imageFits * sizeof(text::TextVertex));
         imageVertexCount_ = imageFits;
+    }
+
+    // The world's icons take whatever is left — last in the buffer, first to be truncated,
+    // because a battle that overflows the budget should thin its strategic layer before it
+    // costs the interface a panel or a number.
+    const std::size_t worldRoom =
+        text::kMaxTextVertices - labelFits - readoutFits - imageFits;
+    const std::size_t worldFits = std::min(worldImage.size(), worldRoom) / 3 * 3;
+    if (worldFits > 0) {
+        std::memcpy(base + labelFits + readoutFits + imageFits, worldImage.data(),
+                    worldFits * sizeof(text::TextVertex));
+        worldImageVertexCount_ = worldFits;
     }
 }
 

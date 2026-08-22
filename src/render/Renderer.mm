@@ -1362,8 +1362,8 @@ void Renderer::encodeScene(MTL::CommandBuffer* commandBuffer, MTL::RenderPassDes
     //
     // Skipped in the reflection pass, like the decals. A mirror showing the interface would
     // be the interface appearing twice.
-    if ((labelVertexCount_ > 0 || readoutVertexCount_ > 0) && textPipeline_ != nullptr
-        && override == nullptr) {
+    if ((labelVertexCount_ > 0 || readoutVertexCount_ > 0 || worldImageVertexCount_ > 0)
+        && textPipeline_ != nullptr && override == nullptr) {
         encoder->setRenderPipelineState(textPipeline_);
         encoder->setFragmentSamplerState(fontSampler_, NS::UInteger{0});
 
@@ -1401,6 +1401,25 @@ void Renderer::encodeScene(MTL::CommandBuffer* commandBuffer, MTL::RenderPassDes
             encoder->setFragmentTexture(minimapTexture_, NS::UInteger{0});
             encoder->drawPrimitives(MTL::PrimitiveType::PrimitiveTypeTriangle, NS::UInteger{0},
                                     NS::UInteger{6});
+            encoder->setRenderPipelineState(textPipeline_);
+        }
+
+        // THE WORLD'S ICONS before any chrome: a strategic icon is a picture of the
+        // battlefield, and a panel is glass over it — a glyph crossing the minimap's corner
+        // slides beneath the interface the way the terrain does. Same pipeline and atlas as
+        // the tray's icons; only the position in the order differs, and the position is the
+        // meaning.
+        if (worldImageVertexCount_ > 0 && iconAtlas_ != nullptr && imagePipeline_ != nullptr) {
+            encoder->setRenderPipelineState(imagePipeline_);
+            encoder->setVertexBuffer(
+                textBuffer_,
+                static_cast<NS::UInteger>((slotBase + labelVertexCount_ + readoutVertexCount_
+                                           + imageVertexCount_)
+                                          * sizeof(text::TextVertex)),
+                kVertexBufferIndex);
+            encoder->setFragmentTexture(iconAtlas_, NS::UInteger{0});
+            encoder->drawPrimitives(MTL::PrimitiveType::PrimitiveTypeTriangle, NS::UInteger{0},
+                                    static_cast<NS::UInteger>(worldImageVertexCount_));
             encoder->setRenderPipelineState(textPipeline_);
         }
 

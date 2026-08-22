@@ -176,6 +176,12 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
         def.description = std::string{stripLocTag(description->text)};
     }
 
+    // The strategic icon: what the map shows where the model is too small to read. A plain
+    // name at the file's root, no `<LOC>` — it names artwork, not prose.
+    if (const lua::Value* icon = parsed->find("StrategicIconName")) {
+        def.strategicIcon = icon->text;
+    }
+
     // --- physics -----------------------------------------------------------
     //
     // The one table whose absence is a real failure. Every shipped blueprint has

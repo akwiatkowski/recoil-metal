@@ -366,3 +366,20 @@ TEST_CASE("a scale of zero is read as stated, not corrected to one") {
     REQUIRE(def.has_value());
     CHECK(def->meshToElmos == Approx(0.0f));
 }
+
+TEST_CASE("the strategic icon's name arrives, and its absence stays empty") {
+    const Blueprint named{"UEL0201_unit.bp", R"(
+UnitBlueprint {
+    Physics = { MotionType = 'RULEUMT_Land' },
+    StrategicIconName = 'icon_land1_directfire',
+})"};
+    const auto def = rm::unitbp::loadFile(named.path());
+    REQUIRE(def.has_value());
+    CHECK(def->strategicIcon == "icon_land1_directfire");
+
+    // 18 of 568 state none; they keep the plain square, which is the honest fallback.
+    const Blueprint bare{"XXB0004_unit.bp", kMediumTank};
+    const auto none = rm::unitbp::loadFile(bare.path());
+    REQUIRE(none.has_value());
+    CHECK(none->strategicIcon.empty());
+}

@@ -325,9 +325,12 @@ public:
     /// Replaced wholesale each frame, because a HUD is rebuilt from the state it reports rather
     /// than accumulated — and a stale line would report a number that has since changed, which
     /// is worse than reporting none.
+    /// `worldImage` is the atlas-sampling quads that belong to the WORLD — the strategic
+    /// icons — drawn under every panel and letter, where a picture of the battlefield goes.
     void setHud(std::span<const text::TextVertex> label,
                 std::span<const text::TextVertex> readout,
-                std::span<const text::TextVertex> image = {}) noexcept;
+                std::span<const text::TextVertex> image = {},
+                std::span<const text::TextVertex> worldImage = {}) noexcept;
 
     /// The build tray's packed unit icons. See `core/ui/IconAtlas.hpp`.
     ///
@@ -792,6 +795,8 @@ private:
     // The build tray's icons, packed into one texture, and this frame's quads into it.
     MTL::Texture* iconAtlas_ = nullptr;  // owned
     std::size_t imageVertexCount_ = 0;
+    /// The world's own atlas quads — strategic icons — drawn under all the chrome.
+    std::size_t worldImageVertexCount_ = 0;
     MTL::Buffer* textBuffer_ = nullptr;                 // owned
 
     // TWO faces, because the interface has two jobs for type: a condensed face for labels,

@@ -83,6 +83,13 @@ struct UnitDef {
     /// shows its id, exactly what every unit showed before this field existed.
     std::string description;
 
+    /// The strategic icon's name — `icon_land1_directfire` — or empty when the content states
+    /// none (18 of 568, plus every BAR unit). What the map shows where a unit is too small to
+    /// read: 550 blueprints declare one of 100 distinct names encoding class, tier and role,
+    /// and the glyphs ship at `/textures/ui/common/game/strategicicons/<name>_rest.dds`. A
+    /// unit without one keeps the plain team-colour square, which is the honest fallback.
+    std::string strategicIcon;
+
     /// Elmos per second. Recoil's modern `speed` field is already per second;
     /// only the legacy `maxVelocity` is per frame (UnitDef.cpp:442-443).
     float speedElmosPerSecond = 0.0f;

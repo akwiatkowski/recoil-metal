@@ -179,14 +179,22 @@ struct Geometry {
     /// beneath the cell fill, which is where the first version of this went.
     std::vector<text::TextVertex> image;
 
+    /// Atlas-sampling quads that belong to the WORLD, not the interface: the strategic icons
+    /// standing in for units too small to read. Drawn FIRST of the four lists — under every
+    /// panel, bar and letter — because an icon is a picture of the battlefield and a panel is
+    /// glass over it; a glyph crossing the minimap's corner must slide beneath the chrome the
+    /// way the terrain does.
+    std::vector<text::TextVertex> worldImage;
+
     void clear() noexcept {
         label.clear();
         readout.clear();
         image.clear();
+        worldImage.clear();
     }
 
     [[nodiscard]] bool empty() const noexcept {
-        return label.empty() && readout.empty() && image.empty();
+        return label.empty() && readout.empty() && image.empty() && worldImage.empty();
     }
 };
 

@@ -292,16 +292,87 @@ void gatherBuildOptions(const UnitScene& scene, std::span<const rm::sim::UnitId>
 /// the icons would make the feature unverifiable — and AGENT.md asks for a screenshot or it
 /// did not happen.
 void appendSceneIcons(std::vector<rm::Particle>& into, const UnitScene& scene,
-                      const rm::OrbitCamera& camera) {
+                      const rm::OrbitCamera& camera,
+                      std::span<const std::optional<StrategicIconRef>> refs) {
     const float elmosPerPoint = camera.elmosPerPoint(rm::kIconReferenceHeightPoints);
     std::vector<float> radii;
     for (std::size_t batch = 0; batch < scene.drawScratch.size(); ++batch) {
         radii.clear();
         radii.reserve(scene.drawSlotOf[batch].size());
         for (const rm::UnitIndex slot : scene.drawSlotOf[batch]) {
-            radii.push_back(rm::sim::fxToFloat(scene.store.motion()[slot].radiusElmos));
+            // A type the strategic layer drew is passed a zero radius, which
+            // `appendUnitIcons` reads as "skip" — the square is the fallback for the
+            // glyphless, not a backing plate for everyone.
+            const auto type = static_cast<std::size_t>(scene.store.typeAt(slot));
+            const bool drawnAsGlyph = type < refs.size() && refs[type].has_value();
+            radii.push_back(drawnAsGlyph
+                                ? 0.0f
+                                : rm::sim::fxToFloat(scene.store.motion()[slot].radiusElmos));
         }
         (void)rm::appendUnitIcons(into, scene.drawScratch[batch], radii, elmosPerPoint);
+    }
+}
+
+void appendStrategicIcons(rm::ui::Geometry& out, const UnitScene& scene,
+                          const rm::OrbitCamera& camera, float width, float height,
+                          std::span<const std::optional<StrategicIconRef>> refs) {
+    if (refs.empty() || !(width > 0.0f) || !(height > 0.0f)) {
+        return;
+    }
+    const float elmosPerPoint = camera.elmosPerPoint(rm::kIconReferenceHeightPoints);
+    if (!(elmosPerPoint > 0.0f)) {
+        return;
+    }
+
+    // The glyphs ship at their reading size for a ~1000-point view; scaling by the actual
+    // viewport keeps them the same fraction of the screen on every window, exactly as the
+    // square fallback's point size behaves.
+    const float scale = height / rm::kIconReferenceHeightPoints;
+
+    for (std::size_t batch = 0; batch < scene.drawScratch.size(); ++batch) {
+        for (std::size_t i = 0; i < scene.drawScratch[batch].size()
+                                && i < scene.drawSlotOf[batch].size(); ++i) {
+            const rm::UnitIndex slot = scene.drawSlotOf[batch][i];
+            const auto type = static_cast<std::size_t>(scene.store.typeAt(slot));
+            if (type >= refs.size() || !refs[type]) {
+                continue;  // no glyph: the square fallback owns this one
+            }
+            const float radius = rm::sim::fxToFloat(scene.store.motion()[slot].radiusElmos);
+            if (radius <= 0.0f
+                || rm::apparentPoints(radius, elmosPerPoint) >= rm::kIconThresholdPoints) {
+                continue;  // the mesh still reads; a glyph over it would be noise on a tank
+            }
+
+            const rm::UnitInstance& unit = scene.drawScratch[batch][i];
+            const auto screen = rm::worldToScreen(
+                camera,
+                simd_make_float3(unit.position[0], unit.position[1], unit.position[2]),
+                width, height);
+            if (!screen) {
+                continue;
+            }
+
+            const StrategicIconRef& ref = *refs[type];
+            const float w = static_cast<float>(ref.width) * scale;
+            const float h = static_cast<float>(ref.height) * scale;
+            const float x0 = (*screen)[0] - w * 0.5f;
+            const float y0 = (*screen)[1] - h * 0.5f;
+            const float x1 = x0 + w;
+            const float y1 = y0 + h;
+
+            // The glyph is white artwork; the army's colour arrives as the tint the image
+            // shader multiplies in — the same identity story the pips and the old squares
+            // tell, now wearing a shape.
+            const rm::ui::IconUv uv = rm::ui::iconUvSized(ref.slot, ref.width, ref.height);
+            const std::array<float, 4> tint{unit.teamColour[0], unit.teamColour[1],
+                                            unit.teamColour[2], 0.95f};
+            out.worldImage.push_back({{x0, y0}, {uv.u0, uv.v0}, tint});
+            out.worldImage.push_back({{x1, y0}, {uv.u1, uv.v0}, tint});
+            out.worldImage.push_back({{x1, y1}, {uv.u1, uv.v1}, tint});
+            out.worldImage.push_back({{x0, y0}, {uv.u0, uv.v0}, tint});
+            out.worldImage.push_back({{x1, y1}, {uv.u1, uv.v1}, tint});
+            out.worldImage.push_back({{x0, y1}, {uv.u0, uv.v1}, tint});
+        }
     }
 }
 
@@ -479,11 +550,68 @@ void appendHealthBars(rm::ui::Geometry& out, const UnitScene& scene,
     return icon ? std::move(*icon) : rm::dds::Texture{};
 }
 
+void ensureStrategicIconArt(UnitScene& scene, const rm::vfs::Vfs& content) {
+    for (std::size_t type = 0; type < scene.catalog.size(); ++type) {
+        const rm::unitdef::UnitDef* def =
+            scene.catalog.def(static_cast<rm::UnitTypeIndex>(type));
+        if (def == nullptr || def->strategicIcon.empty()
+            || scene.strategicIconMissing.contains(def->strategicIcon)) {
+            continue;
+        }
+        const auto cached = std::find_if(
+            scene.strategicIconArt.begin(), scene.strategicIconArt.end(),
+            [&](const auto& entry) { return entry.first == def->strategicIcon; });
+        if (cached != scene.strategicIconArt.end()) {
+            continue;
+        }
+
+        // The `_rest` state: the glyph at rest is the map's own layer; `_over` and
+        // `_selected` belong to a hover-and-selection story the strategic layer does not
+        // tell yet.
+        const std::string path = "/textures/ui/common/game/strategicicons/"
+                                 + def->strategicIcon + "_rest.dds";
+        const auto bytes = content.read(path);
+        bool loaded = false;
+        if (bytes) {
+            if (auto icon = rm::dds::load(*bytes); icon && !icon->data.empty()) {
+                scene.strategicIconArt.emplace_back(def->strategicIcon, std::move(*icon));
+                loaded = true;
+            }
+        }
+        if (!loaded) {
+            scene.strategicIconMissing.insert(def->strategicIcon);
+        }
+    }
+}
+
+void buildStrategicIconRefs(const UnitScene& scene, std::size_t base,
+                            std::vector<std::optional<StrategicIconRef>>& out) {
+    out.assign(scene.catalog.size(), std::nullopt);
+    for (std::size_t type = 0; type < scene.catalog.size(); ++type) {
+        const rm::unitdef::UnitDef* def =
+            scene.catalog.def(static_cast<rm::UnitTypeIndex>(type));
+        if (def == nullptr || def->strategicIcon.empty()) {
+            continue;
+        }
+        for (std::size_t i = 0; i < scene.strategicIconArt.size(); ++i) {
+            const auto& [name, art] = scene.strategicIconArt[i];
+            if (name == def->strategicIcon) {
+                out[type] = StrategicIconRef{
+                    .slot = base + i, .width = art.width, .height = art.height};
+                break;
+            }
+        }
+    }
+}
+
 rm::dds::Texture packInterfaceIcons(const rm::vfs::Vfs& content,
                                     std::vector<rm::ui::BuildOption>& options,
-                                    std::vector<rm::ui::RosterTile>& tiles) {
+                                    std::vector<rm::ui::RosterTile>& tiles,
+                                    std::span<const std::pair<std::string, rm::dds::Texture>>
+                                        strategic,
+                                    std::size_t* strategicBase) {
     std::vector<rm::dds::Texture> icons;
-    icons.reserve(options.size() + tiles.size());
+    icons.reserve(options.size() + tiles.size() + strategic.size());
 
     // ONE NUMBERING ACROSS BOTH PANELS. A slot is an index into `icons`, and `packIcons` places
     // by that index, so appending the roster's after the tray's is all "one atlas" needs to be
@@ -503,6 +631,15 @@ rm::dds::Texture packInterfaceIcons(const rm::vfs::Vfs& content,
             tile.iconSlot = icons.size();
         }
         icons.push_back(std::move(icon));
+    }
+
+    // The strategic glyphs after both panels' icons, in the cache's own order — so `base +
+    // cache index` is the slot, and the caller needs nothing but the base to map them.
+    if (strategicBase != nullptr) {
+        *strategicBase = icons.size();
+    }
+    for (const auto& [name, art] : strategic) {
+        icons.push_back(art);  // a copy per pack; a glyph is ~100 bytes of BC3 blocks
     }
 
     rm::dds::Texture atlas = rm::ui::packIcons(icons);

@@ -69,17 +69,21 @@ TEST_CASE("an icon lands on its own slot's blocks", "[ui][icons]") {
     CHECK(blockAt(atlas, 15, 15) == std::byte{0x11});
 }
 
-TEST_CASE("the ninth icon wraps to the second row", "[ui][icons]") {
+TEST_CASE("one past a full row wraps to the second", "[ui][icons]") {
+    // Written against the column constant rather than a number: the atlas grew from 8 to 12
+    // across when the strategic glyphs arrived, and a wrap test that hardcodes the width is
+    // a test of the old size.
+    const int columns = rm::ui::kAtlasColumns;
     std::vector<Texture> icons;
-    for (int i = 0; i < 9; ++i) {
+    for (int i = 0; i < columns + 1; ++i) {
         icons.push_back(anIcon(static_cast<std::byte>(i + 1)));
     }
     const Texture atlas = packIcons(icons);
 
-    // Slot 8 is row 1, column 0 — block (0, 16).
-    CHECK(blockAt(atlas, 0, 16) == std::byte{9});
-    // And slot 7 is the end of row 0.
-    CHECK(blockAt(atlas, 7 * 16, 0) == std::byte{8});
+    // The first slot of row 1 — block (0, 16).
+    CHECK(blockAt(atlas, 0, 16) == static_cast<std::byte>(columns + 1));
+    // And the last slot of row 0.
+    CHECK(blockAt(atlas, (columns - 1) * 16, 0) == static_cast<std::byte>(columns));
 }
 
 TEST_CASE("an icon that is not 64x64 DXT5 leaves its slot blank", "[ui][icons]") {
@@ -118,10 +122,10 @@ TEST_CASE("uv rectangles tile the atlas and match their slots", "[ui][icons]") {
     CHECK(first.v0 == 0.0f);
     CHECK(first.u1 == 1.0f / static_cast<float>(rm::ui::kAtlasColumns));
 
-    // Slot 8 starts the second row: back to the left edge, one step down.
-    const auto ninth = iconUv(8);
-    CHECK(ninth.u0 == 0.0f);
-    CHECK(ninth.v0 == first.u1);
+    // One past a full row starts the second: back to the left edge, one step down.
+    const auto wrapped = iconUv(static_cast<std::size_t>(rm::ui::kAtlasColumns));
+    CHECK(wrapped.u0 == 0.0f);
+    CHECK(wrapped.v0 == first.u1);
 
     // Adjacent slots share an edge exactly — a gap would show as a seam and an overlap would
     // bleed a neighbour's pixels into the cell.
@@ -134,4 +138,34 @@ TEST_CASE("a slot past the end is nothing rather than a wrap", "[ui][icons]") {
     CHECK(past.u0 == 0.0f);
     CHECK(past.u1 == 0.0f);
     CHECK(past.v1 == 0.0f);
+}
+
+TEST_CASE("a small glyph packs into its cell's corner and iconUvSized addresses it",
+          "[ui][icons]") {
+    // The strategic icons ship at 16x16-ish — block-aligned, smaller than a cell. The glyph
+    // lands at the cell's top-left; the rest of the cell stays transparent.
+    Texture glyph;
+    glyph.width = 16;
+    glyph.height = 12;
+    glyph.mipLevels = 1;
+    glyph.format = Format::Bc3;
+    glyph.data.assign(4u * 3u * kBlockBytes, std::byte{0x77});
+
+    const std::vector<Texture> icons{anIcon(std::byte{0x11}), glyph};
+    const Texture atlas = packIcons(icons);
+
+    // Slot 1's cell starts at block (16, 0). The glyph's 4x3 blocks are there...
+    CHECK(blockAt(atlas, 16, 0) == std::byte{0x77});
+    CHECK(blockAt(atlas, 19, 2) == std::byte{0x77});
+    // ...and the rest of the cell is untouched.
+    CHECK(blockAt(atlas, 20, 0) == std::byte{0});
+    CHECK(blockAt(atlas, 16, 3) == std::byte{0});
+
+    // The sized uv covers exactly the glyph's fraction of the cell.
+    const rm::ui::IconUv uv = rm::ui::iconUvSized(1, 16, 12);
+    const rm::ui::IconUv cell = rm::ui::iconUv(1);
+    CHECK(uv.u0 == cell.u0);
+    CHECK(uv.v0 == cell.v0);
+    CHECK(uv.u1 == cell.u0 + (cell.u1 - cell.u0) * (16.0f / 64.0f));
+    CHECK(uv.v1 == cell.v0 + (cell.v1 - cell.v0) * (12.0f / 64.0f));
 }

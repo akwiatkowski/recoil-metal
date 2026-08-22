@@ -26,6 +26,7 @@
 
 #include <array>
 #include <span>
+#include <utility>
 #include <string>
 #include <optional>
 #include <vector>
@@ -94,9 +95,14 @@ void gatherBuildOptions(const UnitScene& scene, std::span<const rm::sim::UnitId>
 ///
 /// Rebuilt when the SET changes, not per frame. The caller decides that; this just does the
 /// work, and it is a memcpy per icon rather than a decode (`core/ui/IconAtlas.hpp`).
-[[nodiscard]] rm::dds::Texture packInterfaceIcons(const rm::vfs::Vfs& content,
-                                                  std::vector<rm::ui::BuildOption>& options,
-                                                  std::vector<rm::ui::RosterTile>& tiles);
+/// `strategic` is the scene's cached strategic glyph art, appended after the tray's and the
+/// roster's icons; `strategicBase` comes back as the slot its first entry landed in, which
+/// with the cache's own indices is the whole mapping `buildStrategicIconRefs` needs.
+[[nodiscard]] rm::dds::Texture packInterfaceIcons(
+    const rm::vfs::Vfs& content, std::vector<rm::ui::BuildOption>& options,
+    std::vector<rm::ui::RosterTile>& tiles,
+    std::span<const std::pair<std::string, rm::dds::Texture>> strategic = {},
+    std::size_t* strategicBase = nullptr);
 
 /// What the selection is made of, grouped by type, for the roster.
 ///
@@ -113,8 +119,41 @@ void appendViewFootprint(std::vector<std::array<float, 2>>& out, const rm::Orbit
 
 [[nodiscard]] rm::ui::Theme hudThemeFor(const UnitScene& scene);
 
+/// One type's strategic icon, as the atlas holds it this pack: which slot, and the glyph's
+/// own texel size — the icons ship at mixed small sizes (16x16-ish) and are packed into a
+/// cell's corner, so the size is what turns a slot into a uv rectangle and a quad.
+struct StrategicIconRef {
+    std::size_t slot = 0;
+    int width = 0;
+    int height = 0;
+};
+
+/// Loads any strategic glyph a REGISTERED type names that is not yet cached — a few archive
+/// reads the first time a type appears, and none thereafter. Lazy by registration rather
+/// than eager over the corpus, so a match only ever pays for the icons it can show; failures
+/// are remembered too, or a missing file would be re-read every pack.
+void ensureStrategicIconArt(UnitScene& scene, const rm::vfs::Vfs& content);
+
+/// The per-type icon table for THIS pack: `out[type]` is the type's glyph at `base + its
+/// index in the art cache`, or nothing — nothing meaning the plain square fallback. Rebuilt
+/// after every pack, because the base moves with the tray's and roster's counts.
+void buildStrategicIconRefs(const UnitScene& scene, std::size_t base,
+                            std::vector<std::optional<StrategicIconRef>>& out);
+
+/// The strategic layer: a glyph, in the army's colour, for every drawn unit whose type has
+/// one and whose mesh has shrunk past reading. Into `out.worldImage` — under all the chrome,
+/// where a picture of the battlefield belongs. Units without a glyph are left to
+/// `appendSceneIcons`' squares, which is the honest fallback for the 18 nameless blueprints
+/// and every BAR unit.
+void appendStrategicIcons(rm::ui::Geometry& out, const UnitScene& scene,
+                          const rm::OrbitCamera& camera, float width, float height,
+                          std::span<const std::optional<StrategicIconRef>> refs);
+
+/// `refs`, when given, names the types the strategic layer already drew — their units are
+/// skipped here rather than drawn twice, once as artwork and once as a square.
 void appendSceneIcons(std::vector<rm::Particle>& into, const UnitScene& scene,
-                      const rm::OrbitCamera& camera);
+                      const rm::OrbitCamera& camera,
+                      std::span<const std::optional<StrategicIconRef>> refs = {});
 
 /// Health bars over the units that need one: DAMAGED, and big enough on screen to be a unit
 /// rather than an icon.

@@ -36,6 +36,7 @@
 #include <cstdint>
 #include <deque>
 #include <map>
+#include <set>
 #include <optional>
 #include <span>
 #include <string>
@@ -182,6 +183,13 @@ struct UnitScene {
 
     /// The definitions themselves, owned here so the catalog's pointers stay valid.
     std::deque<rm::unitdef::UnitDef> definitions;
+
+    /// The strategic icon glyphs loaded so far, in insertion order — which IS the pack's
+    /// slot order, so `base + index` names an atlas cell (`ensureStrategicIconArt`). Names
+    /// that failed to load are remembered apart, or a missing file would be re-read on
+    /// every pack for the whole match.
+    std::vector<std::pair<std::string, rm::dds::Texture>> strategicIconArt;
+    std::set<std::string, std::less<>> strategicIconMissing;
 
     /// Shots in flight.
     std::vector<rm::sim::Projectile> projectiles;

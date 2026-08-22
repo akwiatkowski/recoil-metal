@@ -33,9 +33,10 @@ inline constexpr int kIconSide = 64;
 inline constexpr int kBlockSide = 4;
 inline constexpr std::size_t kBlockBytes = 16;
 
-/// How many icons fit across the atlas. 8 across and 8 down holds 64, which is more than any
-/// builder's menu — the commander's is fifteen — and keeps the texture at 512x512.
-inline constexpr int kAtlasColumns = 8;
+/// How many icons fit across the atlas. 12 across and 12 down holds 144 — the tray's fifteen,
+/// the roster's twelve, and the ~100 strategic icon glyphs the corpus declares, together with
+/// room to grow — at a 768x768 texture, which is still one modest bind.
+inline constexpr int kAtlasColumns = 12;
 
 /// Where one icon sits in the atlas, as uv corners.
 struct IconUv {
@@ -52,12 +53,22 @@ struct IconUv {
 /// that looks like a content bug and is not one.
 [[nodiscard]] IconUv iconUv(std::size_t slot) noexcept;
 
-/// Packs 64x64 DXT5 icons into one atlas, in the order given.
+/// The uv rectangle for the top-left `widthTexels` x `heightTexels` of a slot — for an icon
+/// SMALLER than its cell, which is where the strategic glyphs live (16x16-ish in a 64 cell,
+/// placed at the cell's origin by `packIcons`). The caller knows the size because it held the
+/// texture it packed; asking for more than a cell answers the whole cell rather than bleeding
+/// into a neighbour.
+[[nodiscard]] IconUv iconUvSized(std::size_t slot, int widthTexels, int heightTexels) noexcept;
+
+/// Packs DXT5 icons into one atlas, in the order given — one 64x64 cell each.
 ///
-/// Every input must be 64x64 and `Format::Bc3`; anything else is SKIPPED and leaves its slot
-/// blank rather than being scaled or reinterpreted. A mod shipping a 128x128 icon is a real
-/// possibility and silently stretching it into a quarter of the space it wants would be worse
-/// than an empty square — the square at least reads as "no icon", which is exactly true.
+/// An input up to 64x64 with block-aligned sides (multiples of 4, which DXT compression
+/// guarantees of anything it encodes) is copied into its cell's TOP-LEFT corner; the unit
+/// icons fill their cells exactly, the strategic glyphs occupy a corner and `iconUvSized`
+/// addresses them. Anything larger, or not BC3, is SKIPPED and leaves its slot blank rather
+/// than being scaled or reinterpreted. A mod shipping a 128x128 icon is a real possibility
+/// and silently stretching it would be worse than an empty square — the square at least reads
+/// as "no icon", which is exactly true.
 ///
 /// Returns an empty texture when nothing could be packed.
 [[nodiscard]] dds::Texture packIcons(std::span<const dds::Texture> icons);
