@@ -158,6 +158,19 @@ int logSink(lua_State* lua) {
     return 0;
 }
 
+/// `GetGameTick()` — the sim tick, which the pump already carries for the thread scheduler.
+/// Real because corpus housekeeping loops (navutils' path renderer, grid updates) call it
+/// every tick to pace themselves, and a nil there turns arithmetic into an error.
+int gameTick(lua_State* lua) {
+    Sandbox* sandbox = sandboxOf(lua);
+    const auto slot = static_cast<std::size_t>(lua_tointeger(lua, lua_upvalueindex(1)));
+    if (sandbox != nullptr && slot < sandbox->slots.size()) {
+        ++sandbox->slots[slot].calls;
+    }
+    lua_pushinteger(lua, sandbox != nullptr ? static_cast<lua_Integer>(sandbox->tick) : 0);
+    return 1;
+}
+
 /// Resolves a FAF-relative path (`/lua/AI/aiutilities.lua`) under the vendored corpus.
 [[nodiscard]] std::filesystem::path resolve(const std::filesystem::path& root,
                                             std::string_view path) {
@@ -727,6 +740,19 @@ int importModule(lua_State* lua) {
     lua_pushglobaltable(lua);
     lua_setfield(lua, -2, "__index");               // reads fall back to _G
     lua_setmetatable(lua, -2);
+
+    // `__moduleinfo`, as Moho's import injects it (documented by FAF's /lua/system/import.lua):
+    // name, who-imports-me, and the reload-tracking flag. Modules write hot-reload hooks onto
+    // it at file scope — `function __moduleinfo.OnDirty()` in navutils.lua — so without the
+    // table the file fails at load over a feature this sandbox will never trigger.
+    lua_newtable(lua);                              // __moduleinfo
+    lua_pushstring(lua, raw);
+    lua_setfield(lua, -2, "name");
+    lua_newtable(lua);
+    lua_setfield(lua, -2, "used_by");
+    lua_pushboolean(lua, 0);
+    lua_setfield(lua, -2, "track_imports");
+    lua_setfield(lua, -2, "__moduleinfo");
     lua_pushvalue(lua, -1);                         // keep a copy under the chunk
     lua_insert(lua, -3);                            // [env, chunk, env]
     const char* upvalue = lua_setupvalue(lua, -2, 1);  // chunk's _ENV := env
@@ -962,6 +988,9 @@ FafAi::FafAi(std::filesystem::path root, bool verbose)
         if (name == "KillThread") {
             return killThread;
         }
+        if (name == "GetGameTick") {
+            return gameTick;
+        }
         return countedStub;
     };
     const auto fidelityFor = [](std::string_view name) {
@@ -975,6 +1004,9 @@ FafAi::FafAi(std::filesystem::path root, bool verbose)
             return Fidelity::Known;
         }
         if (name == "ForkThread" || name == "KillThread") {
+            return Fidelity::Known;
+        }
+        if (name == "GetGameTick") {
             return Fidelity::Known;
         }
         return Fidelity::Stub;
@@ -1336,6 +1368,26 @@ void importAiEntryPoints(FafAi& ai) {
     for (const char* path : kAiEntryPoints) {
         (void)ai.import(path);
     }
+
+    // The data sweeps FAF's own simInit.lua does at session setup: every platoon template,
+    // builder group and base template registers itself into the global tables the
+    // Global*Template.lua systems installed at bootstrap. Swept with the corpus's own idiom —
+    // DiskFindFiles then import — so the sanity report counts it the way a match would.
+    // Then the brain registry: index.lua names every brain the lobby can seat, and importing
+    // each is what pulls in the modern managers/tasks/templates trees.
+    (void)ai.eval(R"(
+        for _, dir in __rm_iter({ '/lua/AI/PlatoonTemplates',
+                                  '/lua/AI/AIBuilders',
+                                  '/lua/AI/AIBaseTemplates' }) do
+            for _, file in __rm_iter(DiskFindFiles(dir, '*.lua')) do
+                import(file)
+            end
+        end
+        local index = import('/lua/aibrains/index.lua')
+        for _, spec in __rm_iter(index.keyToBrain or {}) do
+            import(spec[1])
+        end
+    )");
 }
 
 void reportFafSandbox() {

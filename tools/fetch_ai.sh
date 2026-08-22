@@ -60,6 +60,21 @@ FAF_PATHS=(
     /lua/sim/FactoryBuilderManager.lua
     /lua/sim/PlatoonFormManager.lua
     /lua/sim/BrainConditionsMonitor.lua
+    /lua/editor                         # the build-condition libraries every Builder names
+                                        # by path string — loaded the moment builders run
+    /lua/basetemplates.lua              # the template data those builders place
+    /lua/buildingtemplates.lua
+    /lua/unittemplates.lua
+    /lua/upgradetemplates.lua
+    /lua/game.lua                       # rule helpers the brains and conditions lean on
+    /lua/utilities.lua
+    /lua/sim/navutils.lua
+    /lua/sim/navgenerator.lua           # the Lua-side nav mesh navutils paths over
+    /lua/sim/navdatastructures.lua
+    /lua/shared                         # navgenerator/color/... helpers shared with the UI side
+    /lua/sim/markerutilities.lua
+    /lua/sim/markerutilities            # expansions.lua lives in the directory of the same name
+    /lua/scenarioplatoonai.lua          # platoon plans the builder specs name by path
     /lua/system                         # Class/ClassSimple and friends: the corpus's own OO
                                         # helper, which every manager and platoon is built with
     /engine                             # LuaLS annotation stubs for Moho — the binding spec

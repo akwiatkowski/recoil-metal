@@ -1000,6 +1000,18 @@ void march(UnitScene& scene, const rm::HeightField& field, PassabilitySet& passa
                 break;
             }
         }
+        // Name what failed, not just how many — a count nobody can act on is the silent
+        // failure ADR-039 exists to avoid. Distinct paths only; a file that failed once is
+        // re-imported by half the corpus.
+        std::set<std::string> failedNamed;
+        for (const rm::ai::ModuleLoad& module : sanity->modules()) {
+            if (module.outcome == rm::ai::LoadOutcome::Failed
+                && failedNamed.insert(foldedPath(module.path)).second
+                && failedNamed.size() <= 5) {
+                std::printf("    failed: %-40s %s\n", module.path.c_str(),
+                            module.error.c_str());
+            }
+        }
 
         std::printf("  ENGINE BINDINGS CALLED (top 10 of the AI's asks):\n");
         shown = 0;
