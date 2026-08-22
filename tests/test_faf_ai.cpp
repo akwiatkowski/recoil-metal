@@ -230,6 +230,59 @@ TEST_CASE("bare table iteration works, as LuaPlus meant it", "[faf][ai]") {
     )"));
 }
 
+TEST_CASE("the call profiler counts the corpus's own functions, by definition site",
+          "[faf][ai]") {
+    const std::filesystem::path root = corpusRoot();
+    if (root.empty()) {
+        SKIP("no vendored corpus; run `make ai`");
+    }
+    FafAi ai(root);
+    REQUIRE(ai.ready());
+
+    // Off by default: the sanity run opts in, a match does not pay for it.
+    ai.setProfiling(true);
+
+    // A CORPUS function — the profiler counts only functions defined under `/lua/`, so an
+    // eval-defined helper or the adapter's own shims never appear; that filter is what keeps
+    // the report answering "which of the AI's code ran" rather than "how busy were we".
+    REQUIRE(ai.import("/lua/factions.lua"));
+
+    const auto callsTo = [&ai](std::string_view name) {
+        std::size_t total = 0;
+        for (const auto& [site, calls] : ai.callProfile()) {
+            if (site.find("/lua/factions.lua") != std::string::npos
+                && site.find(name) != std::string::npos) {
+                total = calls;
+            }
+        }
+        return total;
+    };
+
+    // Three direct calls and one from a pumped thread — the two paths corpus code actually
+    // runs through. The profile keys on the DEFINITION site, so all four land on one row,
+    // on top of whatever the module's own load already counted.
+    const std::size_t before = callsTo("GetFactions");
+    REQUIRE(ai.eval(R"(
+        local m = import('/lua/factions.lua')
+        m.GetFactions(); m.GetFactions(); m.GetFactions()
+        ForkThread(function() m.GetFactions() end)
+    )"));
+    (void)ai.pump(0);
+    CHECK(callsTo("GetFactions") == before + 4);
+
+    // The adapter's own shims stay out of the profile.
+    for (const auto& [site, calls] : ai.callProfile()) {
+        REQUIRE(site.find("__rm_iter") == std::string::npos);
+    }
+
+    // The profile is sorted most-called first, which is what makes the report's top-N a
+    // ranking rather than a sample.
+    const auto profile = ai.callProfile();
+    for (std::size_t i = 1; i < profile.size(); ++i) {
+        REQUIRE(profile[i - 1].second >= profile[i].second);
+    }
+}
+
 TEST_CASE("import hands back the module's environment, which is how FAF exports",
           "[faf][ai]") {
     const std::filesystem::path root = corpusRoot();

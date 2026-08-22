@@ -1,13 +1,20 @@
 #include "app/Match.hpp"
 
+#include "app/FafAi.hpp"
+
 #include "core/sim/BuildOrder.hpp"
 #include "core/sim/Replay.hpp"
 #include "core/sim/SlowUpdate.hpp"
 #include "core/sim/StateHash.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
+#include <filesystem>
+#include <map>
+#include <memory>
+#include <set>
 
 namespace rm::app {
 
@@ -809,6 +816,28 @@ void march(UnitScene& scene, const rm::HeightField& field, PassabilitySet& passa
     std::uint32_t dustSeed = 0x51ED27u;
     std::vector<rm::DustEmitter> emitters;
 
+    // `--ai-sanity`: the FAF sandbox runs BESIDE the match — booted with the profiler on,
+    // pumped every tick so its forked threads live on the match's own clock — and what got
+    // built is tallied for the closing report. The sandbox does not command anything yet
+    // (that is the opponent bridge to come); what this measures is everything short of it:
+    // does the corpus load, do its threads run, what does its code do, and what did the
+    // match build meanwhile.
+    std::unique_ptr<rm::ai::FafAi> sanity;
+    std::map<rm::UnitTypeIndex, std::size_t> builtByType;
+    if (options.aiSanity) {
+        sanity = std::make_unique<rm::ai::FafAi>(rm::ai::defaultCorpus());
+        if (sanity->ready()) {
+            // Profiler BEFORE the entry points: most of what the corpus runs today runs at
+            // load time (Class factories, template registration), and a profile that starts
+            // after the load reports ninety-five modules of running code as silence.
+            sanity->setProfiling(true);
+            rm::ai::importAiEntryPoints(*sanity);
+        } else {
+            std::printf("ai-sanity: %s\n", sanity->lastError().c_str());
+            sanity.reset();
+        }
+    }
+
     for (int i = 0; i < ticks; ++i) {
         const float now = static_cast<float>(i) * kTickSeconds;
 
@@ -858,6 +887,13 @@ void march(UnitScene& scene, const rm::HeightField& field, PassabilitySet& passa
             }
             std::printf("  [%6.1fs] army %zu completes %s\n", static_cast<double>(now), army,
                         buildableDef(scene, work.blueprintIndex).name.c_str());
+            if (sanity != nullptr) {
+                ++builtByType[static_cast<rm::UnitTypeIndex>(work.blueprintIndex)];
+            }
+        }
+
+        if (sanity != nullptr) {
+            (void)sanity->pump(i);
         }
 
         // Dust as the walk happens, aged as the walk continues, so what a capture
@@ -893,6 +929,161 @@ void march(UnitScene& scene, const rm::HeightField& field, PassabilitySet& passa
     // make the screenshot depend on where the pre-run happened to stop.
     scene.publish(0);
     scene.gatherForDrawing(1.0f);
+
+    // --- The sanity report ---------------------------------------------------
+    //
+    // Three answers, one block: what the match BUILT (the tech question — a T1-only tally
+    // means the opponent has no tech-up, whoever is driving), what the AI corpus asked the
+    // ENGINE for (the bindings work queue), and which of the corpus's OWN functions ran
+    // (proof the AI's code executes, not merely loads).
+    if (sanity != nullptr) {
+        std::printf("\n=== AI SANITY ========================================================\n");
+
+        std::size_t totalBuilt = 0;
+        for (const auto& [type, count] : builtByType) {
+            totalBuilt += count;
+        }
+        std::printf("  BUILT  %zu unit(s) across %zu type(s):\n", totalBuilt,
+                    builtByType.size());
+        std::vector<std::pair<rm::UnitTypeIndex, std::size_t>> ranked{builtByType.begin(),
+                                                                      builtByType.end()};
+        std::sort(ranked.begin(), ranked.end(),
+                  [](const auto& a, const auto& b) { return a.second > b.second; });
+        for (const auto& [type, count] : ranked) {
+            std::printf("    %6zu  %s\n", count, buildableDef(scene, type).name.c_str());
+        }
+
+        // DISTINCT FILES, not load events. `modules()` records every attempt: a missing file
+        // is recorded again on every import (nothing to cache), and a cyclic import records —
+        // and re-runs — a file that is still mid-load. Counting events reported "95 executed"
+        // for what turned out to be far fewer files, and a sanity report that disagrees with
+        // its own coverage line is worse than no report. Executed wins over Failed over
+        // Missing when one path saw several outcomes.
+        const auto foldedPath = [](std::string s) {
+            std::transform(s.begin(), s.end(), s.begin(),
+                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            return s;
+        };
+        const auto outcomeRank = [](rm::ai::LoadOutcome outcome) {
+            switch (outcome) {
+            case rm::ai::LoadOutcome::Executed: return 2;
+            case rm::ai::LoadOutcome::Failed: return 1;
+            case rm::ai::LoadOutcome::Missing: return 0;
+            }
+            return 0;
+        };
+        std::map<std::string, rm::ai::LoadOutcome> outcomes;
+        for (const rm::ai::ModuleLoad& module : sanity->modules()) {
+            auto [it, fresh] = outcomes.try_emplace(foldedPath(module.path), module.outcome);
+            if (!fresh && outcomeRank(module.outcome) > outcomeRank(it->second)) {
+                it->second = module.outcome;
+            }
+        }
+        std::size_t executed = 0;
+        std::size_t missing = 0;
+        std::size_t failed = 0;
+        for (const auto& [path, outcome] : outcomes) {
+            switch (outcome) {
+            case rm::ai::LoadOutcome::Executed: ++executed; break;
+            case rm::ai::LoadOutcome::Missing: ++missing; break;
+            case rm::ai::LoadOutcome::Failed: ++failed; break;
+            }
+        }
+        std::printf("  SANDBOX  %zu distinct modules executed, %zu missing (not vendored),"
+                    " %zu failed; %zu thread(s) alive, %zu thread error(s)\n",
+                    executed, missing, failed, sanity->threadsAlive(),
+                    sanity->threadErrors().size());
+        std::size_t shown = 0;
+        for (const std::string& error : sanity->threadErrors()) {
+            std::printf("    thread died: %s\n", error.c_str());
+            if (++shown == 5) {
+                break;
+            }
+        }
+
+        std::printf("  ENGINE BINDINGS CALLED (top 10 of the AI's asks):\n");
+        shown = 0;
+        for (const rm::ai::Binding& binding : sanity->report()) {
+            if (binding.calls == 0) {
+                break;  // the report is calls-first; zeroes are the tail
+            }
+            std::printf("    %8zu  %-28s %s\n", binding.calls, binding.name.c_str(),
+                        std::string{rm::ai::fidelityName(binding.fidelity)}.c_str());
+            if (++shown == 10) {
+                break;
+            }
+        }
+
+        std::printf("  AI CODE EXECUTED (top 15 corpus functions):\n");
+        shown = 0;
+        for (const auto& [where, count] : sanity->callProfile()) {
+            std::printf("    %8zu  %s\n", count, where.c_str());
+            if (++shown == 15) {
+                break;
+            }
+        }
+        if (sanity->callProfile().empty()) {
+            std::printf("    (none ran — nothing forks threads at load, and no opponent"
+                        " bridge drives a brain yet)\n");
+        }
+
+        // Coverage from the other side: not "what did the imports miss" but "what sits in
+        // the vendored tree that NOTHING imported". Missing modules above are files we chose
+        // not to fetch; these are files we DID fetch that no import path reaches — either
+        // dead vendoring or an entry point the sanity run does not load yet. FAF paths are
+        // case-insensitive, so the comparison is too.
+        const auto lowered = [](std::string s) {
+            std::transform(s.begin(), s.end(), s.begin(),
+                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            return s;
+        };
+        std::set<std::string> loaded;
+        for (const rm::ai::ModuleLoad& module : sanity->modules()) {
+            if (module.outcome == rm::ai::LoadOutcome::Executed) {
+                loaded.insert(lowered(module.path));
+            }
+        }
+        std::vector<std::string> neverLoaded;
+        std::size_t vendored = 0;
+        const std::filesystem::path corpus = rm::ai::defaultCorpus();
+        std::error_code ec;
+        for (const auto& entry :
+             std::filesystem::recursive_directory_iterator(corpus, ec)) {
+            if (!entry.is_regular_file(ec) || entry.path().extension() != ".lua") {
+                continue;
+            }
+            const std::string rel =
+                "/" + entry.path().lexically_relative(corpus).generic_string();
+            // `/engine/` is the annotation stubs the binding generator reads — documentation
+            // of Moho's surface, not code the corpus ever imports. Counting them as "unused
+            // AI code" would bury the real answer under seventy-eight files that were never
+            // going to load.
+            if (rel.starts_with("/engine/")) {
+                continue;
+            }
+            ++vendored;
+            if (!loaded.contains(lowered(rel))) {
+                neverLoaded.push_back(rel);
+            }
+        }
+        std::sort(neverLoaded.begin(), neverLoaded.end());
+        std::printf("  COVERAGE  %zu of %zu vendored files executed", vendored - neverLoaded.size(),
+                    vendored);
+        if (neverLoaded.empty()) {
+            std::printf(" — the whole vendored corpus is in use\n");
+        } else {
+            std::printf("; never loaded:\n");
+            shown = 0;
+            for (const std::string& path : neverLoaded) {
+                std::printf("    %s\n", path.c_str());
+                if (++shown == 12 && neverLoaded.size() > 12) {
+                    std::printf("    ... and %zu more\n", neverLoaded.size() - shown);
+                    break;
+                }
+            }
+        }
+        std::printf("======================================================================\n\n");
+    }
 
     // --- Determinism ---------------------------------------------------------
     //

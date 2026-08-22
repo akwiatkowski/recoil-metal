@@ -11,6 +11,7 @@ extern "C" {
 #include <cstring>
 #include <cstdio>
 #include <fstream>
+#include <map>
 #include <sstream>
 
 namespace rm::ai {
@@ -61,6 +62,13 @@ struct Sandbox {
     std::vector<std::string> threadErrors;
     long long tick = 0;              ///< the pump's clock, in sim ticks
     std::size_t currentThread = SIZE_MAX;  ///< index being resumed, for CurrentThread
+
+    /// The call profile: which of the CORPUS'S OWN functions ran, and how often — the other
+    /// half of the binding report, which only counts calls INTO the engine. Keyed by
+    /// file:line and name, filled by the hook when profiling is on. A map because the sanity
+    /// report sorts it once at the end; the per-call cost is one lookup.
+    bool profiling = false;
+    std::map<std::string, std::size_t> profile;
 };
 
 /// The adapter's tick rate assumption, matching the app's default. WaitSeconds converts
@@ -79,9 +87,29 @@ constexpr long long kTicksPerSecond = 10;
 /// and in every build — a timeout would make the report depend on how busy the laptop was.
 constexpr long long kInstructionBudget = 20'000'000;
 
-void fuelHook(lua_State* lua, lua_Debug*) {
+void fuelHook(lua_State* lua, lua_Debug* ar) {
     Sandbox* sandbox = sandboxOf(lua);
     if (sandbox == nullptr) {
+        return;
+    }
+    if (ar != nullptr && ar->event == LUA_HOOKCALL) {
+        // The profiler's half of the hook: name the corpus function being entered. Only
+        // functions defined in the vendored tree count — the adapter's own shims (`__rm_iter`
+        // runs hundreds of times) and the engine bindings would otherwise drown the signal,
+        // and the question the profile answers is "which of the AI'S code ran". Keyed from
+        // `/lua/` because that is where a FAF path becomes meaningful, and because Lua has
+        // already truncated the front of `short_src` to fit LUA_IDSIZE anyway.
+        if (sandbox->profiling && lua_getinfo(lua, "nS", ar) != 0 && ar->source != nullptr
+            && ar->what != nullptr && std::strcmp(ar->what, "Lua") == 0) {
+            if (const char* site = std::strstr(ar->short_src, "/lua/"); site != nullptr) {
+                std::string key{site};
+                key += ":" + std::to_string(ar->linedefined);
+                if (ar->name != nullptr) {
+                    key += std::string{" ("} + ar->name + ")";
+                }
+                ++sandbox->profile[key];
+            }
+        }
         return;
     }
     sandbox->fuel -= 1000;
@@ -217,7 +245,7 @@ int forkThread(lua_State* lua) {
     // PER THREAD in Lua, so each coroutine arms its own — without this, a runaway forked
     // loop would be the one thing the budget could not stop.
     lua_State* co = lua_newthread(lua);
-    lua_sethook(co, fuelHook, LUA_MASKCOUNT, 1000);
+    lua_sethook(co, fuelHook, LUA_MASKCOUNT | LUA_MASKCALL, 1000);
     lua_pushvalue(lua, 1);
     lua_xmove(lua, co, 1);
     for (int i = 0; i < args; ++i) {
@@ -1022,7 +1050,7 @@ FafAi::FafAi(std::filesystem::path root, bool verbose)
     }
 
     // Armed once and never cleared — see the note in importModule.
-    lua_sethook(state_, fuelHook, LUA_MASKCOUNT, 1000);
+    lua_sethook(state_, fuelHook, LUA_MASKCOUNT | LUA_MASKCALL, 1000);
 
     if (luaL_dostring(state_, kDialectShims) != 0) {
         const char* message = lua_tostring(state_, -1);
@@ -1207,6 +1235,30 @@ bool FafAi::eval(std::string_view chunk) {
     return true;
 }
 
+void FafAi::setProfiling(bool enabled) {
+    if (state_ == nullptr) {
+        return;
+    }
+    if (Sandbox* sandbox = sandboxOf(state_)) {
+        sandbox->profiling = enabled;
+    }
+}
+
+std::vector<std::pair<std::string, std::size_t>> FafAi::callProfile() const {
+    if (state_ == nullptr) {
+        return {};
+    }
+    const Sandbox* sandbox = sandboxOf(state_);
+    if (sandbox == nullptr) {
+        return {};
+    }
+    std::vector<std::pair<std::string, std::size_t>> sorted{sandbox->profile.begin(),
+                                                            sandbox->profile.end()};
+    std::sort(sorted.begin(), sorted.end(),
+              [](const auto& a, const auto& b) { return a.second > b.second; });
+    return sorted;
+}
+
 std::vector<ModuleLoad> FafAi::modules() const {
     if (state_ == nullptr) {
         return {};
@@ -1266,7 +1318,7 @@ constexpr const char* kAiEntryPoints[] = {
     "/lua/aibrains/base-ai.lua",
 };
 
-[[nodiscard]] std::filesystem::path findCorpus() {
+[[nodiscard]] std::filesystem::path findCorpusImpl() {
     for (const char* candidate : {"vendor/ai/faf", "../vendor/ai/faf", "../../vendor/ai/faf"}) {
         std::error_code ec;
         if (std::filesystem::is_directory(candidate, ec)) {
@@ -1278,10 +1330,18 @@ constexpr const char* kAiEntryPoints[] = {
 
 } // namespace
 
+std::filesystem::path defaultCorpus() { return findCorpusImpl(); }
+
+void importAiEntryPoints(FafAi& ai) {
+    for (const char* path : kAiEntryPoints) {
+        (void)ai.import(path);
+    }
+}
+
 void reportFafSandbox() {
     std::printf("\n=== FAF AI sandbox (ADR-039) =========================================\n");
 
-    const std::filesystem::path root = findCorpus();
+    const std::filesystem::path root = findCorpusImpl();
     if (root.empty()) {
         std::printf("  no corpus: vendor/ai/faf is missing. Run `make ai`.\n");
         std::printf("======================================================================\n\n");

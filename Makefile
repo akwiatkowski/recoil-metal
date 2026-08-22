@@ -83,7 +83,7 @@ FA_FLAGS  = --gamedata "$(FA_ROOT)/gamedata"
 .DEFAULT_GOAL := help
 .PHONY: help build configure test verify golden play play-from watch run run-fa run-bar \
         skirmish battle match shot-fa shot-bar bench bench-fa bench-gl clean check-fa check-bar \
-        ai ai-play ai-report shot-ui shot-engineer
+        ai ai-play ai-report ai-sanity shot-ui shot-engineer
 
 help:
 	@echo 'recoil-metal — make targets'
@@ -99,6 +99,7 @@ help:
 	@echo '  play-from       the same, joining SECONDS in, so a base already stands'
 	@echo '  watch           every side scripted, nothing selectable (and no fog)'
 	@echo '  ai-play         bots vs bots, with the FAF AI sandbox report on the console'
+	@echo '  ai-sanity       headless skirmish + the AI sanity report: built what, called what'
 	@echo
 	@echo '  run             procedural terrain, no content needed'
 	@echo '  run-fa          a Supreme Commander map, its own units, read from the archives'
@@ -268,6 +269,20 @@ ai-play: build check-fa
 # test binary rather than the game because it needs no map, no drive and no window.
 ai-report: build
 	./$(BUILD)/rm_tests '[faf]'
+
+# The measuring half of "is the AI integrated": a headless skirmish with the FAF sandbox
+# pumped beside it, closed by the sanity report — what the armies BUILT (by blueprint,
+# counted), which ENGINE BINDINGS the corpus called, and which of the CORPUS'S OWN functions
+# ran and how often. Deterministic, so the numbers are comparable run to run: change an
+# adapter, run this again, diff the report. The tiny screenshot is how the pre-run exits
+# without opening a window.
+ai-sanity: build check-fa
+	@echo
+	@echo '  Headless sanity: $(ARMIES) armies on $(notdir $(FA_MAP)), $(AI_SECONDS)s, profiler on.'
+	@echo
+	$(BIN) "$(FA_MAP)" $(FA_FLAGS) --skirmish --observer --armies $(ARMIES) \
+	  $(ALLIANCE_FLAG) $(FACTION_FLAG) --play $(AI_SECONDS) --ai-sanity \
+	  --screenshot /tmp/rm-ai-sanity.png 320 180 | tail -60
 
 # A match: one army per start position, each with its faction's commander, each building an
 # extractor on the map's own mass deposits.

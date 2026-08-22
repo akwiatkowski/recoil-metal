@@ -31,6 +31,7 @@
 #include <filesystem>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 struct lua_State;
@@ -124,6 +125,15 @@ public:
     /// the opponent bridge to come. False on error, with `lastError` set.
     [[nodiscard]] bool eval(std::string_view chunk);
 
+    /// Turns the call profiler on or off: which of the CORPUS'S OWN functions ran, counted
+    /// per definition site. The binding report's other half — that one counts calls INTO
+    /// the engine, this one counts the AI's code running. Costs a hook check per call, so
+    /// it is off unless a sanity run asks.
+    void setProfiling(bool enabled);
+
+    /// The profile, most-called first: "file:line (name)" against its call count.
+    [[nodiscard]] std::vector<std::pair<std::string, std::size_t>> callProfile() const;
+
     /// Every module load attempted, in the order attempted — including the ones `import` was
     /// forgiving about, which is the point.
     [[nodiscard]] std::vector<ModuleLoad> modules() const;
@@ -156,5 +166,15 @@ private:
 /// Finds the corpus by walking up from the working directory, so it works from the repo root and
 /// from `build/` alike. Says so and returns if `make ai` has not been run.
 void reportFafSandbox();
+
+/// Where the vendored corpus lives for this checkout, or empty — the same search
+/// `reportFafSandbox` uses, exposed so the sanity run can boot its own sandbox.
+[[nodiscard]] std::filesystem::path defaultCorpus();
+
+/// Imports the brain's entry-point modules — the same list `reportFafSandbox` loads, exposed
+/// so the sanity run measures the WHOLE corpus rather than the eight bootstrap files. Turn
+/// the profiler on first: most of what runs today runs at load time, and a sanity report
+/// that misses it says "nothing ran" about ninety-five modules of running code.
+void importAiEntryPoints(FafAi& ai);
 
 } // namespace rm::ai

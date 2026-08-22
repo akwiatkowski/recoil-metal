@@ -239,6 +239,14 @@ namespace rm::app {
 
 [[nodiscard]] MarchOptions parseMarch(int argc, const char* argv[]) {
     MarchOptions options;
+    // Before the mode branches: `--march` returns early, and the sanity flag composes with
+    // either mode.
+    for (int i = 1; i < argc; ++i) {
+        if (std::string{argv[i]} == "--ai-sanity") {
+            options.aiSanity = true;
+            break;
+        }
+    }
     for (int i = 2; i + 3 < argc; ++i) {
         if (std::string{argv[i]} != "--march") {
             continue;

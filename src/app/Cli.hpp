@@ -74,6 +74,12 @@ struct MarchOptions {
     /// the initial state they are §1.3's criterion — "the same command log produces the same
     /// match" — with both halves now naming things that exist.
     std::string commandLogPath;
+
+    /// `--ai-sanity`: boot the FAF sandbox beside the headless pre-run, pump its threads
+    /// every tick, and close with the sanity report — what got built, which engine bindings
+    /// the AI called, and which of the corpus's own functions ran. The measuring half of
+    /// "is the AI integrated", runnable after every adapter change.
+    bool aiSanity = false;
 };
 
 // --- The parsers ---------------------------------------------------------------------------
