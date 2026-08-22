@@ -3,6 +3,7 @@
 #include "core/data/ArmorDefs.hpp"
 #include "core/data/MoveDef.hpp"
 #include "core/model/Sca.hpp"
+#include "core/unit/BarNames.hpp"
 #include "core/unit/UnitBlueprint.hpp"
 #include "core/sim/BuildOrder.hpp"
 
@@ -10,6 +11,7 @@
 #include <cassert>
 #include <cmath>
 #include <cstdio>
+#include <fstream>
 #include <map>
 
 namespace rm::app {
@@ -61,11 +63,32 @@ namespace rm::app {
         return std::nullopt;
     }
 
-    const auto def = rm::unitdef::loadFile(path);
+    auto def = rm::unitdef::loadFile(path);
     if (!def) {
         std::fprintf(stderr, "unit definition \"%s\" not read: %s\n",
                      path.filename().string().c_str(), def.error().message.c_str());
         return std::nullopt;
+    }
+
+    // The display name, from the tree's own language files. A BAR unit `.lua` carries no
+    // player-facing text; `language/en/units.json` does, and it sits a few levels above the
+    // unit — the same walk that finds `objects3d` below. Nothing found leaves the name
+    // empty, and the interface falls back to the id as it always has.
+    if (def->description.empty()) {
+        for (std::filesystem::path dir = path.parent_path();
+             !dir.empty() && dir != dir.root_path(); dir = dir.parent_path()) {
+            const std::filesystem::path names = dir / "language" / "en" / "units.json";
+            if (!std::filesystem::is_regular_file(names)) {
+                continue;
+            }
+            std::ifstream in{names, std::ios::binary};
+            if (in) {
+                const std::string text{std::istreambuf_iterator<char>(in),
+                                       std::istreambuf_iterator<char>()};
+                def->description = rm::unitdef::barUnitName(text, def->name);
+            }
+            break;
+        }
     }
 
     modelOut = rm::unitdef::resolveModel(search, def->modelPath);

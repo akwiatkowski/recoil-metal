@@ -180,6 +180,7 @@ add_library(rm_core STATIC
     src/core/unit/FaDuration.cpp
     src/core/unit/UnitDef.cpp
     src/core/unit/Role.cpp
+    src/core/unit/BarNames.cpp
     src/core/unit/BuildTree.cpp
     src/core/data/Roster.cpp
     src/core/data/Opening.cpp
@@ -308,6 +309,7 @@ if(BUILD_TESTING)
         tests/test_prop_culling.cpp
         tests/test_pathfinding.cpp
         tests/test_unit_blueprint.cpp
+        tests/test_bar_names.cpp
         tests/test_unit_def.cpp
         tests/test_armor.cpp
         tests/test_armor_defs.cpp
