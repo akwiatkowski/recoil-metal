@@ -420,13 +420,9 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
 /// grounded on the height field, tilted onto its slope, in its army's colour, with its
 /// definition's own health, radius and speed. Returns the batch and instance it landed
 /// in, or nothing when the blueprint or its model is not in the mounted content.
-[[nodiscard]] std::optional<rm::sim::UnitId> spawnUnit(UnitScene& scene,
-                                                          const rm::vfs::Vfs& content,
-                                                          const rm::HeightField& field,
-                                                          std::string_view blueprintPath,
-                                                          std::array<float, 3> position,
-                                                          const rm::sim::Army& army,
-                                                          float yaw) {
+[[nodiscard]] std::optional<rm::UnitTypeIndex> ensureDrawableType(UnitScene& scene,
+                                                                  const rm::vfs::Vfs& content,
+                                                                  std::string_view blueprintPath) {
     auto found = scene.typeForBlueprint.find(blueprintPath);
     if (found == scene.typeForBlueprint.end()) {
         const auto unit = resolveUnitFromContent(std::string{blueprintPath}, content);
@@ -460,8 +456,23 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
 
         found = scene.typeForBlueprint.emplace(std::string{blueprintPath}, type).first;
     }
+    return found->second;
+}
 
-    const rm::UnitTypeIndex type = found->second;
+[[nodiscard]] std::optional<rm::sim::UnitId> spawnUnit(UnitScene& scene,
+                                                          const rm::vfs::Vfs& content,
+                                                          const rm::HeightField& field,
+                                                          std::string_view blueprintPath,
+                                                          std::array<float, 3> position,
+                                                          const rm::sim::Army& army,
+                                                          float yaw) {
+    const std::optional<rm::UnitTypeIndex> ensured =
+        ensureDrawableType(scene, content, blueprintPath);
+    if (!ensured) {
+        return std::nullopt;
+    }
+
+    const rm::UnitTypeIndex type = *ensured;
     const rm::unitdef::UnitDef& def = *scene.catalog.def(type);
 
     const rm::sim::Terrain terrain{field};

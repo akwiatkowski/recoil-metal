@@ -1809,3 +1809,32 @@ in `Window.mm`; adopting it for this alone would trade a two-method fix for a re
 next frame corrects it, invisible in practice. Verified end to end by resizing the running app
 through the same `setFrameSize:` path a manual drag takes; not unit-testable, as `rm_tests`
 does not link AppKit (ADR-040's caveat).
+
+## ADR-042 — The build ghost is a batch with no units, drawn in the interface's light
+
+**Context.** Placing an armed build showed only a ring — the sim's own test is a disc
+(`sitePlaceable`), but a circle says nothing about WHAT would stand there. The model is the
+answer, and the blocker was structural: the only way to get a blueprint's model on screen was
+to spawn a unit, and `setUnits` skipped any batch with no instances, so "registered but not
+built" could not reach the GPU at all.
+
+**Decision.** Three parts. `ensureDrawableType` factors the drawable half out of `spawnUnit`
+(model, textures, batch, traits — no unit), called when a build cell is armed. Empty batches
+now UPLOAD with capacity for one instance, and the draw loop skips them by instance count —
+so a model can exist on the GPU with nothing standing. The ghost itself is renderer state
+(`setGhost`/`clearGhost`, sticky unlike the per-frame lists): one instance drawn through the
+unit vertex stage with a flat translucent fragment (`unitGhostFragment`) in the ring's own
+two colours, depth-tested against the world but writing nothing, after the decals and
+skipped in the reflection pass.
+
+**Alternatives considered.** Tinting via the team-colour mask — rejected: the mask covers
+only livery regions, so most of the hull would stay painted metal and read as built. A
+footprint rectangle decal — deferred, deliberately: the sim tests a disc today, and a
+rectangle would promise a precision the placement does not check. Spawning a real unit and
+deleting it — the structural hack this replaces.
+
+**Consequences.** Arming a new blueprint grows the batch list; the ghost draws one frame
+after the re-upload notices (the renderer draws nothing for an unmapped batch, so the gap is
+invisible). Every armed-once blueprint keeps an uploaded model for the session — bounded by
+the build menu's size. `--ghost X Z` captures it headlessly, per the screenshot-or-it-
+didn't-happen rule.

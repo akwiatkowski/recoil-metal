@@ -92,6 +92,19 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
                      std::span<const rm::mapinfo::StartPosition> starts,
                      const rm::vfs::Vfs& content, bool observer = false);
 
+/// The DRAWABLE registration half of `spawnUnit`: model, textures, batch, type and traits,
+/// without spawning anything into the store. Idempotent per blueprint — the second call is a
+/// map lookup.
+///
+/// FACTORED OUT FOR THE BUILD GHOST, which needs exactly this and nothing more: a silhouette
+/// at the cursor is a model with no unit behind it, and before this existed the only way to
+/// get a blueprint's model on screen was to spawn one. (`resolveBuildable` is the OTHER half
+/// of the story — a type with no batch — and the two remain distinct type entries per the
+/// loose end documented in `Match.cpp`.)
+[[nodiscard]] std::optional<rm::UnitTypeIndex> ensureDrawableType(UnitScene& scene,
+                                                                  const rm::vfs::Vfs& content,
+                                                                  std::string_view blueprintPath);
+
 [[nodiscard]] std::optional<rm::sim::UnitId> spawnUnit(UnitScene& scene,
                                                        const rm::vfs::Vfs& content,
                                                        const rm::HeightField& field,

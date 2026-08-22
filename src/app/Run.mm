@@ -361,6 +361,44 @@ int runScreenshot(const Session& session) {
                 }
                 std::printf("  build panel: %zu options for %s\n", shotOptions.size(),
                             shotWho.name.c_str());
+
+                // `--ghost X Z`: the silhouette of the hovered option (or the first) at a
+                // world point, for the reason --select and --hover exist — the ghost only
+                // appears under a cursor, and a headless run has none.
+                for (int i = 1; i + 2 < argc; ++i) {
+                    if (std::string{argv[i]} != "--ghost") {
+                        continue;
+                    }
+                    const float gx = static_cast<float>(std::atof(argv[i + 1]));
+                    const float gz = static_cast<float>(std::atof(argv[i + 2]));
+                    const std::size_t option = shotHovered.value_or(0);
+                    const std::string path =
+                        rm::data::RosterEntry{.id = shotOptions[option].id}.path();
+                    const std::optional<rm::UnitTypeIndex> type =
+                        ensureDrawableType(units, content, path);
+                    const std::size_t batch =
+                        type ? units.batchOf(*type) : UnitScene::kNoBatch;
+                    if (batch != UnitScene::kNoBatch) {
+                        // The batch grew after the upload above, so upload again — the
+                        // windowed loop's growth check, done by hand.
+                        renderer.setUnits(units.textures.all(), units.batches);
+                        const auto typeIndex = static_cast<std::size_t>(*type);
+                        renderer.setGhost(
+                            batch,
+                            rm::UnitInstance{
+                                .position = {{gx, map->field.heightAtWorld(gx, gz), gz}},
+                                .rotationY = 0.0f,
+                                .scale = typeIndex < units.typeScale.size()
+                                             ? units.typeScale[typeIndex]
+                                             : 1.0f,
+                            },
+                            kBuildGhostColour);
+                        std::printf("  ghost: %s at %.0f, %.0f\n",
+                                    shotOptions[option].id.c_str(),
+                                    static_cast<double>(gx), static_cast<double>(gz));
+                    }
+                    break;
+                }
             }
 
             if (!shotRoster.empty()) {
@@ -1136,12 +1174,52 @@ int runWindowed(const Session& session) {
                     window.camera(), window.cursor()[0],
                     static_cast<float>(window.height()) - window.cursor()[1],
                     static_cast<float>(window.width()), static_cast<float>(window.height()));
-                if (const std::optional<simd_float3> at = rm::pickGround(under, map->field)) {
+                const std::optional<simd_float3> at = rm::pickGround(under, map->field);
+                if (at) {
                     const bool ok = armedPlaceable({at->x, at->z});
                     rm::appendSelectionRing(decalVertices, map->field, {at->x, at->y, at->z},
                                             armedRadius() * kSelectionRingMargin,
                                             ok ? kBuildGhostColour : kBuildGhostBlockedColour);
+
+                    // THE SILHOUETTE over the ring: the armed blueprint's own model at the
+                    // cursor, in the same two colours the ring speaks. The ring stays — it
+                    // is the sim's actual test (`sitePlaceable` checks a DISC of the
+                    // collision radius, so a rectangle would promise a precision the sim
+                    // does not check) — and the model says WHAT would stand here, which no
+                    // circle can.
+                    //
+                    // `ensureDrawableType` is a map lookup after the first call; the first
+                    // call loads the model and grows `units.batches`, which next frame's
+                    // growth check turns into the re-upload the ghost draw then finds. The
+                    // renderer draws nothing for a batch it has not been given yet, so the
+                    // one-frame gap is invisible rather than wrong.
+                    const std::string path = armedPath();
+                    const std::optional<rm::UnitTypeIndex> ghostType =
+                        path.empty() ? std::nullopt
+                                     : ensureDrawableType(units, content, path);
+                    const std::size_t ghostBatch =
+                        ghostType ? units.batchOf(*ghostType) : UnitScene::kNoBatch;
+                    if (ghostBatch != UnitScene::kNoBatch) {
+                        const auto typeIndex = static_cast<std::size_t>(*ghostType);
+                        window.setGhost(
+                            ghostBatch,
+                            rm::UnitInstance{
+                                .position = {{at->x, at->y, at->z}},
+                                .rotationY = 0.0f,  // spawns face north; so does the promise
+                                .scale = typeIndex < units.typeScale.size()
+                                             ? units.typeScale[typeIndex]
+                                             : 1.0f,
+                            },
+                            ok ? kBuildGhostColour : kBuildGhostBlockedColour);
+                    } else {
+                        window.clearGhost();
+                    }
                 }
+                if (!at) {
+                    window.clearGhost();  // the sky promises nothing
+                }
+            } else {
+                window.clearGhost();
             }
 
             // ...and a marker wherever an order was given recently. Aged by the
