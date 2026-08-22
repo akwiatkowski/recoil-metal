@@ -93,3 +93,26 @@ TEST_CASE("entries compare on identity alone") {
     CHECK_FALSE(kA == kB);
     CHECK_FALSE(SelectionEntry{0, 1} == SelectionEntry{1, 1});
 }
+
+TEST_CASE("a band replaces, extends without toggling, and an empty band mirrors a miss") {
+    const std::vector<SelectionEntry> current{kA, kB};
+
+    // Unmodified: the box IS the selection now.
+    const std::vector<SelectionEntry> box{kB, kC};
+    const auto replaced = rm::applyBand<SelectionEntry>(current, box, false);
+    REQUIRE(replaced.size() == 2);
+    CHECK(replaced[0] == kB);
+    CHECK(replaced[1] == kC);
+
+    // Modified: appended minus duplicates — a re-boxed unit is NOT evicted, unlike a
+    // re-clicked one, because a box aims at an area rather than at a unit.
+    const auto extended = rm::applyBand<SelectionEntry>(current, box, true);
+    REQUIRE(extended.size() == 3);
+    CHECK(extended[0] == kA);
+    CHECK(extended[1] == kB);
+    CHECK(extended[2] == kC);
+
+    // An empty box rhymes with a missed click: clears bare, keeps under a modifier.
+    CHECK(rm::applyBand<SelectionEntry>(current, {}, false).empty());
+    CHECK(rm::applyBand<SelectionEntry>(current, {}, true).size() == 2);
+}

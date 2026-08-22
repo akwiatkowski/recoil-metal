@@ -78,4 +78,40 @@ template <typename Id>
     return extended;
 }
 
+/// The selection after a band-select (a drag rectangle released over the world).
+///
+/// The click rules' sibling, and the cases rhyme with `applyClick`'s deliberately:
+///
+///   empty box, unmodified   clear — dragging over empty ground deselects, exactly as
+///                           clicking it does
+///   empty box, modified     unchanged; a near-miss while adding keeps what you had
+///   hits, unmodified        the box REPLACES the selection
+///   hits, modified          the box's units are appended, minus the ones already present —
+///                           unlike a modified click, a re-boxed unit is NOT toggled out,
+///                           because a box is aimed at an area rather than at a unit, and
+///                           evicting half your army because the new box overlapped the old
+///                           selection is never what the drag meant
+///
+/// Order: existing first (orders walk the selection, and what was selected keeps its
+/// place), then the box's units in the order given.
+template <typename Id>
+[[nodiscard]] std::vector<Id> applyBand(std::span<const std::type_identity_t<Id>> current,
+                                        std::span<const std::type_identity_t<Id>> inBox,
+                                        bool addToSet) {
+    if (inBox.empty()) {
+        return addToSet ? std::vector<Id>{current.begin(), current.end()} : std::vector<Id>{};
+    }
+    if (!addToSet) {
+        return {inBox.begin(), inBox.end()};
+    }
+
+    std::vector<Id> extended{current.begin(), current.end()};
+    for (const Id& id : inBox) {
+        if (std::find(extended.begin(), extended.end(), id) == extended.end()) {
+            extended.push_back(id);
+        }
+    }
+    return extended;
+}
+
 } // namespace rm

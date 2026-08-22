@@ -56,6 +56,11 @@ struct MouseModifiers {
     bool shift = false;
     bool command = false;
     bool control = false;
+
+    /// AppKit's clickCount: 2 on the second click of a double-click. The first click of the
+    /// pair still arrives as 1 and is handled normally — a double-click refines what the
+    /// single click did, which is exactly how select-then-select-all-of-type should feel.
+    int clicks = 1;
 };
 
 // Owns the NSWindow, its CAMetalLayer, the vsync display link, and the
@@ -145,6 +150,20 @@ public:
     // exception: holding it to swing the camera is the convention this app follows, and a
     // held key with no release event cannot express "let go".
     void onKeyState(std::function<void(char key, bool pressed)> callback);
+
+    /// Whether the left button is down right now, and where its press began, in the HUD's
+    /// pixel space. POLLED, like the cursor and for the same reason: a drag is a per-frame
+    /// fact, and the interface is rebuilt per frame. The origin is only meaningful while
+    /// the button is held; the band-select rectangle and the minimap's drag-to-pan are both
+    /// derived from these two answers and the cursor, with no drag events plumbed at all.
+    [[nodiscard]] bool leftMouseHeld() const;
+    [[nodiscard]] std::array<float, 2> dragOrigin() const;
+
+    /// Whether a modifier is down RIGHT NOW, polled from the event stream's live state.
+    /// For chorded keys: `keyDown` deliberately strips modifiers from characters, so
+    /// "Ctrl+3 sets a control group" asks this at the moment the '3' arrives.
+    [[nodiscard]] bool controlHeldNow() const;
+    [[nodiscard]] bool shiftHeldNow() const;
 
     /// Whether a key is down right now. The form a per-frame update wants — asking is
     /// cheaper than tracking the same set again in the caller, and there is exactly one

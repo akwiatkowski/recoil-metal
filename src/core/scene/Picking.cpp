@@ -76,6 +76,31 @@ Ray screenRay(const OrbitCamera& camera, float pointX, float pointY, float width
     return Ray{.origin = eye, .direction = simd_normalize(target - eye)};
 }
 
+std::optional<std::array<float, 2>> worldToScreen(const OrbitCamera& camera, simd_float3 world,
+                                                  float width, float height) noexcept {
+    if (!(width > 0.0f) || !(height > 0.0f)) {
+        return std::nullopt;  // a viewport with no area has no screen positions in it
+    }
+
+    const simd_float4 clip =
+        simd_mul(camera.viewProjection(width / height), simd_make_float4(world, 1.0f));
+
+    // Behind the camera (or on the eye plane): the projection folds such points across the
+    // screen's centre, and a band-select that "caught" units behind the eye would be the
+    // subtlest wrong answer this function could give. Nothing is the honest one.
+    if (clip.w <= 0.0f) {
+        return std::nullopt;
+    }
+
+    const float ndcX = clip.x / clip.w;
+    const float ndcY = clip.y / clip.w;
+
+    // NDC to TOP-LEFT viewport coordinates — the HUD's space, hence the Y flip that
+    // `screenRay` (bottom-left, AppKit's space) does not have.
+    return std::array<float, 2>{{(ndcX * 0.5f + 0.5f) * width,
+                                 (1.0f - (ndcY * 0.5f + 0.5f)) * height}};
+}
+
 std::optional<simd_float3> pickGround(const Ray& ray, const HeightField& field) noexcept {
     if (field.squaresX <= 0 || field.squaresZ <= 0) {
         return std::nullopt;

@@ -471,30 +471,6 @@ int runWindowed(const Session& session) {
         window.setReflections(settings.reflections);
         window.setStratumNormals(settings.stratumNormals);
         window.setRefraction(settings.refraction);
-        window.onKey([&window](char key) {
-            if (key == 'r') {
-                const bool enabled = !window.reflectionsEnabled();
-                window.setReflections(enabled);
-                std::printf("reflections %s\n", enabled ? "on" : "off");
-                std::fflush(stdout);
-            } else if (key == 'n') {
-                const bool enabled = !window.stratumNormalsEnabled();
-                window.setStratumNormals(enabled);
-                std::printf("stratum normals %s\n", enabled ? "on" : "off");
-                std::fflush(stdout);
-            } else if (key == 'f') {
-                const bool enabled = !window.refractionEnabled();
-                window.setRefraction(enabled);
-                std::printf("water refraction %s\n", enabled ? "on" : "off");
-                std::fflush(stdout);
-            } else if (key == 'p') {
-                const bool visible = !window.propsVisible();
-                window.setPropsVisible(visible);
-                std::printf("props %s\n", visible ? "on" : "off");
-                std::fflush(stdout);
-            }
-        });
-
         // --- Click to move -------------------------------------------------
         // Left selects the unit under the cursor, right orders the selection to
         // the ground under it. Both arrive as a world ray; what it hit is
@@ -515,6 +491,53 @@ int runWindowed(const Session& session) {
         std::vector<rm::sim::UnitId> selected;
         std::vector<rm::SelectionEntry> selectionScratch;
         rm::sim::TickClock clock;
+
+        // CONTROL GROUPS: ten saved selections. Ctrl+digit files the current selection under
+        // that digit; a bare digit recalls it, pruned of the dead at recall rather than
+        // eagerly — a group is a note about intent, and the note outliving some of its units
+        // is normal. An empty recall is a no-op rather than a deselect: fat-fingering '4'
+        // must not throw away the army under the cursor.
+        std::array<std::vector<rm::sim::UnitId>, 10> controlGroups;
+
+        window.onKey([&window, &selected, &controlGroups, &units](char key) {
+            if (key == 'r') {
+                const bool enabled = !window.reflectionsEnabled();
+                window.setReflections(enabled);
+                std::printf("reflections %s\n", enabled ? "on" : "off");
+                std::fflush(stdout);
+            } else if (key == 'n') {
+                const bool enabled = !window.stratumNormalsEnabled();
+                window.setStratumNormals(enabled);
+                std::printf("stratum normals %s\n", enabled ? "on" : "off");
+                std::fflush(stdout);
+            } else if (key == 'f') {
+                const bool enabled = !window.refractionEnabled();
+                window.setRefraction(enabled);
+                std::printf("water refraction %s\n", enabled ? "on" : "off");
+                std::fflush(stdout);
+            } else if (key == 'p') {
+                const bool visible = !window.propsVisible();
+                window.setPropsVisible(visible);
+                std::printf("props %s\n", visible ? "on" : "off");
+                std::fflush(stdout);
+            } else if (key >= '0' && key <= '9') {
+                // The digit arrives with its modifiers stripped (Window.mm's charFor), so
+                // whether this is "set" or "recall" is polled from the live modifier state
+                // at the moment the key lands — the one question that distinction needs.
+                auto& group = controlGroups[static_cast<std::size_t>(key - '0')];
+                if (window.controlHeldNow()) {
+                    group = selected;
+                    std::printf("group %c: %zu unit(s) set\n", key, group.size());
+                } else {
+                    std::erase_if(group, [&units](rm::sim::UnitId id) {
+                        return !units.store.alive(id);
+                    });
+                    if (!group.empty()) {
+                        selected = group;
+                    }
+                }
+            }
+        });
 
         // THE BUILD PANEL (BAR-styled, `core/ui/BuildPanel.hpp`). Scratch kept outside the loop
         // for the same reason every other scratch here is: a frame should not allocate.
@@ -685,6 +708,50 @@ int runWindowed(const Session& session) {
             // panel is about the panel; without this check the ray under it would also select
             // whatever unit happens to be behind the minimap, which is the single most
             // irritating bug an overlay can have.
+            // Orders the whole selection to a world point — the right button's meaning,
+            // whether the point came from a ray into the world or a click on the minimap.
+            // One lambda so the two entrances cannot drift; the marker, the per-unit grids
+            // and the queue reporting are the same statements they were.
+            const auto orderSelectionTo = [&](simd_float3 ground, bool queue) {
+                orderMarks.push_back(OrderMark{
+                    .position = {ground.x, ground.y, ground.z},
+                    .age = 0.0f,
+                });
+
+                std::size_t failed = 0;
+                for (const rm::sim::UnitId sel : selected) {
+                    if (!units.store.alive(sel)) {
+                        continue;  // selected, then killed before the order was given
+                    }
+                    // Each unit routes on the map ITS limits see. Two units given the same
+                    // order can legitimately get different answers, and one of them can be
+                    // "no route" while the other walks off.
+                    const auto type = static_cast<std::size_t>(units.store.typeAt(sel.index));
+                    const rm::sim::PassabilityGrid& grid = passability.gridFor(
+                        units.maxSlopeDegrees[type], units.maxWaterDepthElmos[type]);
+                    if (!issueMove(units, grid, map->field, sel,
+                                   playerDriving(units, units.playerArmy),
+                                   static_cast<rm::TickIndex>(matchTicks),
+                                   rm::sim::fxFromFloat(ground.x),
+                                   rm::sim::fxFromFloat(ground.z), queue)) {
+                        ++failed;
+                    }
+                }
+                if (failed > 0) {
+                    std::printf("no route there for %zu of %zu units\n", failed,
+                                selected.size());
+                } else if (queue) {
+                    // Only for a queued order, and only the length: this is the one piece of
+                    // feedback the world does not already show.
+                    const rm::sim::UnitId first = selected.front();
+                    if (units.store.alive(first)) {
+                        std::printf("queued: %zu order(s) for the first of %zu selected\n",
+                                    units.store.orders()[first.index].size(),
+                                    selected.size());
+                    }
+                }
+            };
+
             const rm::ui::MinimapLayout minimap =
                 rm::ui::minimapLayout(static_cast<float>(window.width()),
                                       static_cast<float>(window.height()));
@@ -692,11 +759,23 @@ int runWindowed(const Session& session) {
                 const std::array<float, 2> where =
                     rm::ui::minimapToWorld(minimap, map->field.widthElmos(),
                                            map->field.depthElmos(), mods.pointX, mods.pointY);
-                // Jump, keeping the camera's distance and angles — a minimap click moves where
-                // you are looking, not how. Height sampled from the terrain so the target sits
-                // on the ground rather than at y = 0, which on a hill would look like a zoom.
-                window.camera().target = simd_make_float3(
+                const simd_float3 ground = simd_make_float3(
                     where[0], map->field.heightAtWorld(where[0], where[1]), where[1]);
+
+                // THE RIGHT BUTTON MEANS THE SAME THING ON THE MAP AS IN THE WORLD: go
+                // there. Ordering across the map without swinging the camera off the fight
+                // is most of what a minimap order is for.
+                if (button == rm::MouseButton::Right) {
+                    if (!selected.empty()) {
+                        orderSelectionTo(ground, mods.shift);
+                    }
+                    return;
+                }
+
+                // Left: jump, keeping the camera's distance and angles — a minimap click
+                // moves where you are looking, not how. Height sampled from the terrain so
+                // the target sits on the ground rather than at y = 0.
+                window.camera().target = ground;
                 return;
             }
 
@@ -794,8 +873,43 @@ int runWindowed(const Session& session) {
                 // themselves are not repainted, and the rings are rebuilt from
                 // this list by the frame callback.
                 const bool addToSet = mods.shift || mods.command || mods.control;
-                selected = rm::applyClick<rm::sim::UnitId>(
-                    selected, pickAcrossBatches(ray, units), addToSet);
+                const std::optional<rm::sim::UnitId> pick = pickAcrossBatches(ray, units);
+
+                // DOUBLE-CLICK WIDENS TO THE TYPE, on screen: every one of the player's
+                // units of the clicked type whose position projects into the viewport.
+                // On screen rather than map-wide because that is what both reference games
+                // do, and because "everything like this, everywhere" silently commits units
+                // the player cannot see. The first click of the pair selected the unit
+                // normally; this refines it, so a double-click on empty ground still means
+                // what a single click there meant.
+                if (pick && mods.clicks >= 2) {
+                    const rm::UnitTypeIndex wanted = units.store.typeAt(pick->index);
+                    const float w = static_cast<float>(window.width());
+                    const float h = static_cast<float>(window.height());
+                    std::vector<rm::sim::UnitId> ofType;
+                    for (rm::UnitIndex slot = 0; slot < units.store.slotCount(); ++slot) {
+                        if (!units.store.slotAlive(slot)
+                            || units.store.typeAt(slot) != wanted
+                            || units.armyOf(slot) != units.playerArmy) {
+                            continue;
+                        }
+                        const rm::sim::Transform& at = units.store.transforms()[slot];
+                        const auto screen = rm::worldToScreen(
+                            window.camera(),
+                            simd_make_float3(rm::sim::fxToFloat(at.x),
+                                             rm::sim::fxToFloat(at.y),
+                                             rm::sim::fxToFloat(at.z)),
+                            w, h);
+                        if (screen && (*screen)[0] >= 0.0f && (*screen)[0] <= w
+                            && (*screen)[1] >= 0.0f && (*screen)[1] <= h) {
+                            ofType.push_back(units.store.idAt(slot));
+                        }
+                    }
+                    selected = rm::applyBand<rm::sim::UnitId>(selected, ofType, addToSet);
+                    return;
+                }
+
+                selected = rm::applyClick<rm::sim::UnitId>(selected, pick, addToSet);
                 return;
             }
 
@@ -828,51 +942,12 @@ int runWindowed(const Session& session) {
                 return;  // clicked the sky, or past the edge of the map
             }
 
-            // Marked before the routing is attempted, and deliberately: the mark
-            // answers "did that click land, and where", which is true even if
-            // every unit then reports no route. A marker that appeared only on
-            // success would leave the player unsure whether the click registered.
-            orderMarks.push_back(OrderMark{
-                .position = {ground->x, ground->y, ground->z},
-                .age = 0.0f,
-            });
-
-            std::size_t failed = 0;
-            for (const rm::sim::UnitId sel : selected) {
-                if (!units.store.alive(sel)) {
-                    continue;  // selected, then killed before the order was given
-                }
-                // Each unit routes on the map ITS limits see. Two units given
-                // the same order can legitimately get different answers, and
-                // one of them can be "no route" while the other walks off.
-                const auto type = static_cast<std::size_t>(units.store.typeAt(sel.index));
-                const rm::sim::PassabilityGrid& grid =
-                    passability.gridFor(units.maxSlopeDegrees[type],
-                                        units.maxWaterDepthElmos[type]);
-                // SHIFT QUEUES IT (§7 P4.1). The same modifier adds to the selection on the
-                // left button and appends to the order queue on the right, which is what
-                // every RTS this engine reads content from does.
-                if (!issueMove(units, grid, map->field, sel,
-                               playerDriving(units, units.playerArmy),
-                               static_cast<rm::TickIndex>(matchTicks),
-                               rm::sim::fxFromFloat(ground->x),
-                               rm::sim::fxFromFloat(ground->z), mods.shift)) {
-                    ++failed;
-                }
-            }
-            if (failed > 0) {
-                std::printf("no route there for %zu of %zu units\n", failed, selected.size());
-            } else if (mods.shift) {
-                // Only for a queued order, and only the length: this is the one piece of
-                // feedback the world does not already show. A plain order is legible from the
-                // unit turning; a queued one looks like nothing happened until the unit gets
-                // there. Drawing the queue in the world is UI-3's job.
-                const rm::sim::UnitId first = selected.front();
-                if (units.store.alive(first)) {
-                    std::printf("queued: %zu order(s) for the first of %zu selected\n",
-                                units.store.orders()[first.index].size(), selected.size());
-                }
-            }
+            // Marked before the routing is attempted (inside orderSelectionTo), and
+            // deliberately: the mark answers "did that click land, and where", which is
+            // true even if every unit then reports no route. SHIFT QUEUES IT (§7 P4.1) —
+            // the same modifier adds to the selection on the left button and appends to
+            // the order queue on the right, as every RTS this engine reads content from.
+            orderSelectionTo(*ground, mods.shift);
         });
 
         // The overhead view the camera returns to when space is released. Captured at the
@@ -902,6 +977,11 @@ int runWindowed(const Session& session) {
         std::vector<rm::ui::MinimapPip> minimapPips;
         std::vector<std::array<float, 2>> minimapView;
         float matchSeconds = 0.0f;
+
+        // The left button's state LAST frame, for the band-select's falling edge — the
+        // release is detected by polling, the same way the drag itself is.
+        bool leftWasHeld = false;
+        std::vector<rm::sim::UnitId> bandScratch;
 
         window.onFrame([&](float elapsed) {
             // WASD pans the map, every frame rather than per keypress: a pan driven by
@@ -1165,6 +1245,102 @@ int runWindowed(const Session& session) {
                                            window.readoutFont(), hudThemeFor(units), roster.x,
                                            roster.y - cardHeight, roster.width, card);
                 }
+            }
+
+            // --- The band box, and the minimap's drag-to-pan --------------------------
+            // Both are DERIVED FROM POLLED STATE — is the left button down, where did the
+            // press begin, where is the cursor now — rather than from drag events, because
+            // the interface is rebuilt per frame and a drag is a per-frame fact. The press
+            // origin decides which gesture this is: on the minimap it pans the view, on the
+            // world it draws a band, on a panel (or while a build is armed) it is neither.
+            {
+                const float w = static_cast<float>(window.width());
+                const float h = static_cast<float>(window.height());
+                const bool held = window.leftMouseHeld();
+                const std::array<float, 2> origin = window.dragOrigin();
+                const std::array<float, 2> at = window.cursor();
+
+                // Strictly above the click slop (3 points, backing-scaled) so a release can
+                // never be both a click and a band: between the two thresholds is a small
+                // dead zone, which is the safe side of the ambiguity.
+                constexpr float kBandSlopPx = 8.0f;
+                const bool traveled = std::abs(at[0] - origin[0]) + std::abs(at[1] - origin[1])
+                                      > kBandSlopPx;
+
+                const bool onMinimap = rm::ui::insideMinimap(minimap, origin[0], origin[1]);
+                const bool onPanel =
+                    (!buildOptions.empty()
+                     && rm::ui::insideBuildPanel(
+                         rm::ui::buildPanelLayout(minimap, buildOptions.size()), origin[0],
+                         origin[1]))
+                    || (!rosterTiles.empty()
+                        && rm::ui::insideRoster(
+                            rm::ui::rosterLayout(w, h, rosterTiles.size()), origin[0],
+                            origin[1]));
+
+                if (held && onMinimap) {
+                    // Drag-to-pan: the ground under the finger, continuously. The same
+                    // projection the click-jump uses, at frame rate, and clamped to the map
+                    // by minimapToWorld — dragging past the letterbox pins to the edge.
+                    const std::array<float, 2> where = rm::ui::minimapToWorld(
+                        minimap, map->field.widthElmos(), map->field.depthElmos(), at[0],
+                        at[1]);
+                    window.camera().target = simd_make_float3(
+                        where[0], map->field.heightAtWorld(where[0], where[1]), where[1]);
+                }
+
+                const bool worldBand = !onMinimap && !onPanel && !armedOption && traveled;
+                if (held && worldBand) {
+                    // The box: a whisper of fill so the caught area reads, and a hairline
+                    // in the lit edge so the bounds are exact. Interface, not effect — the
+                    // same vocabulary as every panel border.
+                    const rm::ui::Theme theme = hudThemeFor(units);
+                    const float left = std::min(origin[0], at[0]);
+                    const float top = std::min(origin[1], at[1]);
+                    const float wide = std::abs(at[0] - origin[0]);
+                    const float tall = std::abs(at[1] - origin[1]);
+                    rm::text::appendRect(hudScratch.label, window.labelFont(), left, top,
+                                         wide, tall, rm::ui::fade(theme.edgeLit, 0.10f));
+                    rm::text::appendRect(hudScratch.label, window.labelFont(), left, top,
+                                         wide, 1.0f, theme.edgeLit);
+                    rm::text::appendRect(hudScratch.label, window.labelFont(), left,
+                                         top + tall - 1.0f, wide, 1.0f, theme.edgeLit);
+                    rm::text::appendRect(hudScratch.label, window.labelFont(), left, top,
+                                         1.0f, tall, theme.edgeLit);
+                    rm::text::appendRect(hudScratch.label, window.labelFont(),
+                                         left + wide - 1.0f, top, 1.0f, tall, theme.edgeLit);
+                }
+
+                if (leftWasHeld && !held && worldBand) {
+                    // Release: everything of the player's whose position projects into the
+                    // box. Position rather than silhouette — a unit is its instance's point
+                    // here, exactly as it is for a click's pick radius.
+                    const float left = std::min(origin[0], at[0]);
+                    const float right = std::max(origin[0], at[0]);
+                    const float top = std::min(origin[1], at[1]);
+                    const float bottom = std::max(origin[1], at[1]);
+                    bandScratch.clear();
+                    for (rm::UnitIndex slot = 0; slot < units.store.slotCount(); ++slot) {
+                        if (!units.store.slotAlive(slot)
+                            || units.armyOf(slot) != units.playerArmy) {
+                            continue;
+                        }
+                        const rm::sim::Transform& tr = units.store.transforms()[slot];
+                        const auto screen = rm::worldToScreen(
+                            window.camera(),
+                            simd_make_float3(rm::sim::fxToFloat(tr.x),
+                                             rm::sim::fxToFloat(tr.y),
+                                             rm::sim::fxToFloat(tr.z)),
+                            w, h);
+                        if (screen && (*screen)[0] >= left && (*screen)[0] <= right
+                            && (*screen)[1] >= top && (*screen)[1] <= bottom) {
+                            bandScratch.push_back(units.store.idAt(slot));
+                        }
+                    }
+                    selected = rm::applyBand<rm::sim::UnitId>(selected, bandScratch,
+                                                              window.shiftHeldNow());
+                }
+                leftWasHeld = held;
             }
 
             window.setHud(hudScratch.label, hudScratch.readout, hudScratch.image);

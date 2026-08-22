@@ -279,3 +279,29 @@ TEST_CASE("a degenerate viewport does not divide by zero") {
     CHECK(std::isfinite(ray.direction.y));
     CHECK(std::isfinite(ray.direction.z));
 }
+
+TEST_CASE("worldToScreen round-trips with screenRay, in the HUD's flipped space") {
+    const OrbitCamera camera = overheadCamera();
+    constexpr float kW = 1280.0f;
+    constexpr float kH = 720.0f;
+
+    // A ray out through a known viewport point (bottom-left space), walked to an arbitrary
+    // world point along it, must project back to the same viewport point — with Y flipped,
+    // because the projection answers in the HUD's top-left space.
+    const float pointX = 800.0f;
+    const float pointY = 200.0f;
+    const rm::Ray ray = rm::screenRay(camera, pointX, pointY, kW, kH);
+    const simd_float3 world = ray.origin + ray.direction * 650.0f;
+
+    const auto screen = rm::worldToScreen(camera, world, kW, kH);
+    REQUIRE(screen.has_value());
+    CHECK((*screen)[0] == Approx(pointX).margin(0.1));
+    CHECK((*screen)[1] == Approx(kH - pointY).margin(0.1));
+}
+
+TEST_CASE("a point behind the camera projects to nothing") {
+    const OrbitCamera camera = overheadCamera();
+    const simd_float3 eye = camera.eye();
+    const simd_float3 behind = eye + (eye - camera.target);
+    CHECK_FALSE(rm::worldToScreen(camera, behind, 1280.0f, 720.0f).has_value());
+}

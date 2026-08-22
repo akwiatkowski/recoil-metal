@@ -4,6 +4,7 @@
 #include "core/map/HeightField.hpp"
 #include "core/scene/UnitPlacement.hpp"
 
+#include <array>
 #include <cstddef>
 #include <optional>
 #include <span>
@@ -32,6 +33,18 @@ struct Ray {
 /// picking that is correct only in the lower-left quarter of the window.
 [[nodiscard]] Ray screenRay(const OrbitCamera& camera, float pointX, float pointY,
                             float widthPoints, float heightPoints) noexcept;
+
+/// A world point projected into the viewport, TOP-LEFT origin — the space the HUD lays out
+/// in — or nothing when the point is behind the camera.
+///
+/// The inverse of `screenRay` up to the axis flip, and the flip is deliberate: a ray is
+/// asked for by AppKit (bottom-left origin), a projection is compared against HUD layout
+/// (top-left), and the band-select rectangle that motivated this lives entirely in the
+/// second space. Width and height are whatever space the caller's rectangle is in — the two
+/// must simply agree, which is ADR-040's one rule.
+[[nodiscard]] std::optional<std::array<float, 2>> worldToScreen(const OrbitCamera& camera,
+                                                                simd_float3 world, float width,
+                                                                float height) noexcept;
 
 /// Where a ray first meets the terrain, or nothing if it never does.
 ///

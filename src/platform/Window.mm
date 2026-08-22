@@ -81,6 +81,10 @@
 /// exposed so construction can run it once before the first frame — drawableSize is 0x0
 /// until somebody computes it, and Window::width() reads it.
 - (void)rmSyncDrawableSize;
+
+/// The left button's live state, for Window's per-frame polling. See the ivars.
+- (BOOL)leftDown;
+- (std::array<float, 2>)leftDownAtHud;
 @end
 
 @implementation RMTerrainView {
@@ -88,6 +92,14 @@
     // that stayed under the slop is a click; anything more was a camera drag
     // and must not also fire an order.
     CGFloat _travelSincePress;
+
+    // The left button's live state, POLLED by the app per frame (Window::leftMouseHeld)
+    // rather than delivered as drag events — the interface is rebuilt per frame anyway, so
+    // a drag is two facts: is the button down, and where did the press begin. The origin is
+    // kept in the HUD's pixel space because everything that consumes it (the band-select
+    // box, the minimap's drag test) lives there.
+    BOOL _leftDown;
+    std::array<float, 2> _leftDownAtHud;
 }
 
 - (BOOL)acceptsFirstResponder {
@@ -182,6 +194,7 @@ static std::array<float, 2> hudPointIn(NSView* view, NSPoint windowPoint) {
         .shift = (event.modifierFlags & NSEventModifierFlagShift) != 0,
         .command = (event.modifierFlags & NSEventModifierFlagCommand) != 0,
         .control = (event.modifierFlags & NSEventModifierFlagControl) != 0,
+        .clicks = static_cast<int>(event.clickCount),
     };
     (*self.clickCallback)(ray, button, mods);
 }
@@ -249,14 +262,24 @@ static std::array<float, 2> hudPointIn(NSView* view, NSPoint windowPoint) {
 }
 
 - (void)mouseDown:(NSEvent*)event {
-    (void)event;
     _travelSincePress = 0.0;
+    _leftDown = YES;
+    _leftDownAtHud = hudPointIn(self, event.locationInWindow);
 }
 
 - (void)mouseUp:(NSEvent*)event {
+    _leftDown = NO;
     if (_travelSincePress <= kClickSlopPoints) {
         [self reportClick:event button:rm::MouseButton::Left];
     }
+}
+
+- (BOOL)leftDown {
+    return _leftDown;
+}
+
+- (std::array<float, 2>)leftDownAtHud {
+    return _leftDownAtHud;
 }
 
 - (void)rightMouseDown:(NSEvent*)event {
@@ -594,6 +617,18 @@ bool Window::stratumNormalsEnabled() const {
 
 void Window::setGroundDecals(std::span<const DecalVertex> vertices) {
     impl_->renderer->setGroundDecals(vertices);
+}
+
+bool Window::leftMouseHeld() const { return [impl_->view leftDown]; }
+
+std::array<float, 2> Window::dragOrigin() const { return [impl_->view leftDownAtHud]; }
+
+bool Window::controlHeldNow() const {
+    return ([NSEvent modifierFlags] & NSEventModifierFlagControl) != 0;
+}
+
+bool Window::shiftHeldNow() const {
+    return ([NSEvent modifierFlags] & NSEventModifierFlagShift) != 0;
 }
 
 void Window::setGhost(std::size_t batch, const UnitInstance& instance,
