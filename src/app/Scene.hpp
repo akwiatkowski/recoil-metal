@@ -645,6 +645,15 @@ inline constexpr std::array<float, 4> kSelectionRingColour{{0.35f, 1.0f, 0.45f, 
 /// it. A little outside reads as a marker on the ground, which is what it is.
 inline constexpr float kSelectionRingMargin = 1.35f;
 
+/// The range ring: the longest firing weapon's reach, drawn while a unit is selected.
+///
+/// QUIET BY DESIGN — a thin band at low alpha in the loss family's hue, because a range is a
+/// threat radius and red is what threat already means here. Selection is green and range is
+/// dim red, so the two rings around one unit cannot be confused; the alpha is low enough
+/// that a crowd's overlapping ranges shade the ground rather than painting it.
+inline constexpr std::array<float, 4> kRangeRingColour{{0.95f, 0.45f, 0.35f, 0.28f}};
+inline constexpr float kRangeRingThicknessElmos = 1.2f;
+
 /// The colour of the marker where a move order was given.
 ///
 /// Amber against the rings' green, and a cross rather than a plain ring, because

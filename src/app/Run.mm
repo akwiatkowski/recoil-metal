@@ -244,13 +244,31 @@ int runScreenshot(const Session& session) {
                          ++i, ++made) {
                         const rm::UnitIndex slot = units.drawSlotOf[batch][i];
                         const rm::sim::Transform& at = units.store.transforms()[slot];
+                        const std::array<float, 3> ground{rm::sim::fxToFloat(at.x),
+                                                          rm::sim::fxToFloat(at.y),
+                                                          rm::sim::fxToFloat(at.z)};
                         rm::appendSelectionRing(
-                            vertices, map->field,
-                            {rm::sim::fxToFloat(at.x), rm::sim::fxToFloat(at.y),
-                             rm::sim::fxToFloat(at.z)},
+                            vertices, map->field, ground,
                             rm::sim::fxToFloat(units.store.motion()[slot].radiusElmos)
                                 * kSelectionRingMargin,
                             kSelectionRingColour);
+                        // The range ring in a capture too, or the feature is unverifiable —
+                        // same reasoning and same arithmetic as the windowed loop's.
+                        if (const rm::unitdef::UnitDef* def =
+                                units.catalog.def(units.store.typeAt(slot))) {
+                            rm::sim::Fx reach{};
+                            for (const rm::unitdef::Weapon& weapon : def->weapons) {
+                                if (weapon.fires() && weapon.maxRange > reach) {
+                                    reach = weapon.maxRange;
+                                }
+                            }
+                            if (reach > rm::sim::Fx{}) {
+                                rm::appendSelectionRing(vertices, map->field, ground,
+                                                        rm::sim::fxToFloat(reach),
+                                                        kRangeRingColour,
+                                                        kRangeRingThicknessElmos);
+                            }
+                        }
                         captured.push_back(rm::SelectionEntry{batch, i});
                         capturedSelection.push_back(units.store.idAt(slot));
                     }
@@ -1148,13 +1166,35 @@ int runWindowed(const Session& session) {
                     continue;
                 }
                 const rm::sim::Transform& at = units.store.transforms()[sel.index];
+                const std::array<float, 3> ground{rm::sim::fxToFloat(at.x),
+                                                  rm::sim::fxToFloat(at.y),
+                                                  rm::sim::fxToFloat(at.z)};
                 rm::appendSelectionRing(
-                    decalVertices, map->field,
-                    {rm::sim::fxToFloat(at.x), rm::sim::fxToFloat(at.y),
-                     rm::sim::fxToFloat(at.z)},
+                    decalVertices, map->field, ground,
                     rm::sim::fxToFloat(units.store.motion()[sel.index].radiusElmos)
                         * kSelectionRingMargin,
                     kSelectionRingColour);
+
+                // THE RANGE RING: the longest firing weapon's reach, only while selected.
+                // What a player is deciding with a selection is where to send it, and "from
+                // where can it hurt things" is the radius that decision is made against.
+                // The longest range rather than one ring per weapon: a triple-barrelled
+                // unit's rings differ by metres and draw as one smeared band.
+                const rm::unitdef::UnitDef* def =
+                    units.catalog.def(units.store.typeAt(sel.index));
+                if (def != nullptr) {
+                    rm::sim::Fx reach{};
+                    for (const rm::unitdef::Weapon& weapon : def->weapons) {
+                        if (weapon.fires() && weapon.maxRange > reach) {
+                            reach = weapon.maxRange;
+                        }
+                    }
+                    if (reach > rm::sim::Fx{}) {
+                        rm::appendSelectionRing(decalVertices, map->field, ground,
+                                                rm::sim::fxToFloat(reach), kRangeRingColour,
+                                                kRangeRingThicknessElmos);
+                    }
+                }
             }
 
             // ...and the BUILD GHOST, wherever the cursor is pointing while a cell is armed.
