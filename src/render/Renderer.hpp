@@ -126,6 +126,12 @@ public:
         /// most stock maps state exactly this and a few state more.
         float waterRefractionScale = 0.015f;
 
+        /// The two scrolling wave-normal layers the water samples (water2.fx): repeats
+        /// per elmo and scroll vectors per second, from the map's own water block. The
+        /// defaults are the stock maps' mid and fine layers, for a map that names none.
+        std::array<float, 2> waveRepeats{{0.009f, 0.05f}};
+        std::array<float, 4> waveMovements{{0.5f, -0.95f, -0.6f, 0.7f}};
+
         /// What the high sky is tinted by — the map's own cirrus colour.
         ///
         /// A STAND-IN, in the way ADR-018's sky already is. The skybox block carries
@@ -165,6 +171,11 @@ public:
     };
 
     void setEnvironment(const Environment& environment) noexcept;
+
+    /// The map's wave-normal texture (`waves.dds` on the stock maps), sampled scrolled by
+    /// the Environment's wave layers. Without it the water keeps its analytic ripple —
+    /// the stand-in this call exists to retire.
+    void setWaterWaveTexture(const dds::Texture& normal);
 
     // The fog of war: which squares of the map the viewer's side can see (ADR-037).
     //
@@ -880,6 +891,7 @@ private:
     bool hasWater_ = true;
     float waterLevel_ = 0.0f;
     Environment environment_{};
+    MTL::Texture* waterWaves_ = nullptr;
     bool reflectionsEnabled_ = true;
     bool stratumNormalsEnabled_ = true;
     bool propsVisible_ = true;

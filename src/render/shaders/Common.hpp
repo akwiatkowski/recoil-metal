@@ -65,6 +65,9 @@ struct Uniforms {
     float hasFog;
     float fogWidthElmos;
     float fogDepthElmos;
+    float4 waveRepeats;
+    float4 waveMovements;
+    float hasWaterWaves;
 };
 
 // The sky, as Supreme Commander's own `effects/sky.fx` builds it: a lerp

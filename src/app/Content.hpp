@@ -89,6 +89,11 @@ struct LoadedMap {
     /// minimap then draws its own filled panel, which is what it did for its whole first life.
     rm::dds::Texture preview;
 
+    /// The map's wave-normal texture (its first named wave layer), decoded like the
+    /// preview. Empty when the map names none or the archive lacks it — the water then
+    /// keeps its analytic ripple.
+    rm::dds::Texture waterWaves;
+
     std::vector<rm::mapinfo::StartPosition> starts;
 
     /// Everything the map annotates itself with — 19310 markers across the 60 stock maps.

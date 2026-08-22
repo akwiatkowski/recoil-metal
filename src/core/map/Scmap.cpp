@@ -187,10 +187,14 @@ void readToTerrainType(Cursor& cursor, rm::scmap::Map& map) {
     cursor.skipCString();  // water ramp
     // All four wave-repeat scalars come first, THEN four (movement, path)
     // records — not one interleaved struct, which is easy to get backwards.
-    cursor.skipFloats(4);
     for (int i = 0; i < 4 && cursor.ok(); ++i) {
-        cursor.skipFloats(2);  // movement
-        cursor.skipCString();  // texture path
+        map.water.waveLayers[static_cast<std::size_t>(i)].repeat = cursor.f32();
+    }
+    for (int i = 0; i < 4 && cursor.ok(); ++i) {
+        auto& layer = map.water.waveLayers[static_cast<std::size_t>(i)];
+        layer.movement[0] = cursor.f32();
+        layer.movement[1] = cursor.f32();
+        layer.path = cursor.cstring();
     }
 
     // --- wave generators ---------------------------------------------------

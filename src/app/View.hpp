@@ -43,6 +43,9 @@ void applyGround(Target& target, const LoadedMap& map) {
         target.setMinimapImage(map.preview);
     }
     target.setWater(map.hasWater, map.waterLevel);
+    if (map.waterWaves.width > 0 && map.waterWaves.height > 0) {
+        target.setWaterWaveTexture(map.waterWaves);
+    }
     if (map.environment) {
         target.setEnvironment(*map.environment);
     }

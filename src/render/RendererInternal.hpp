@@ -116,6 +116,13 @@ struct TerrainUniforms {
     float hasFog;
     float fogWidthElmos;
     float fogDepthElmos;
+
+    /// The water's scrolling wave-normal layers: xy = the two repeats (per elmo),
+    /// movements = layer A scroll in xy and layer B in zw (per second), and whether a
+    /// texture is bound at all. Appended at the end, same rule as everything above.
+    simd_float4 waveRepeats;
+    simd_float4 waveMovements;
+    float hasWaterWaves;
 };
 
 
@@ -145,8 +152,10 @@ static_assert(offsetof(TerrainUniforms, lightingMultiplier) == 480,
 static_assert(offsetof(TerrainUniforms, hasFog) == 484, "the fog block packs against it");
 static_assert(offsetof(TerrainUniforms, fogWidthElmos) == 488, "and stays in the same slot");
 static_assert(offsetof(TerrainUniforms, fogDepthElmos) == 492, "filling it exactly");
-static_assert(sizeof(TerrainUniforms) == 496,
-              "the fog block fits the padding the trailing float was already leaving");
+static_assert(offsetof(TerrainUniforms, waveRepeats) == 496,
+              "the wave block starts on the fresh 16-byte slot after the fog block");
+static_assert(sizeof(TerrainUniforms) == 544,
+              "the wave block grows the struct by three 16-byte slots");
 static_assert(offsetof(TerrainUniforms, fogColour) == 288, "the map block follows the matrices");
 // A float3 is sixteen bytes AND sixteen-aligned, so the float after one does
 // NOT pack into its tail — it starts a fresh slot and the next float3 realigns

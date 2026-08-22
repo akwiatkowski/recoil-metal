@@ -878,6 +878,12 @@ void Renderer::encodeScene(MTL::CommandBuffer* commandBuffer, MTL::RenderPassDes
         .shadowFill = simd_make_float3(environment_.shadowFill[0], environment_.shadowFill[1],
                                        environment_.shadowFill[2]),
         .lightingMultiplier = environment_.lightingMultiplier,
+        .waveRepeats = simd_make_float4(environment_.waveRepeats[0],
+                                        environment_.waveRepeats[1], 0.0f, 0.0f),
+        .waveMovements = simd_make_float4(
+            environment_.waveMovements[0], environment_.waveMovements[1],
+            environment_.waveMovements[2], environment_.waveMovements[3]),
+        .hasWaterWaves = waterWaves_ != nullptr ? 1.0f : 0.0f,
         .hasFog = hasFog_ ? 1.0f : 0.0f,
         .fogWidthElmos = fogWidthElmos_,
         .fogDepthElmos = fogDepthElmos_,
@@ -1345,6 +1351,10 @@ void Renderer::encodeScene(MTL::CommandBuffer* commandBuffer, MTL::RenderPassDes
         // allocated.
         encoder->setFragmentTexture(sceneColour_ != nullptr ? sceneColour_ : reflectionColour_,
                                     kSceneColourTextureIndex);
+        // The wave normals, or the reflection target standing in — same undefined-sampling
+        // rule as above; hasWaterWaves is what decides whether the shader reads it.
+        encoder->setFragmentTexture(waterWaves_ != nullptr ? waterWaves_ : reflectionColour_,
+                                    16);
         encoder->setFragmentSamplerState(reflectionSampler_, kReflectionSamplerIndex);
         encoder->setVertexBuffer(waterVertexBuffer_, 0, kVertexBufferIndex);
         encoder->setVertexBytes(&uniforms, sizeof(uniforms), kUniformBufferIndex);

@@ -111,8 +111,11 @@ fragment float4 waterFragment(WaterOut in [[stage_in]], float4 behind [[color(0)
                               constant Uniforms& u [[buffer(1)]],
                               texture2d<float> reflection [[texture(14)]],
                               texture2d<float> sceneColour [[texture(15)]],
+                              texture2d<float> waveNormals [[texture(16)]],
                               texture2d<float> fogMask [[texture(24)]],
                               sampler reflectionSampler [[sampler(3)]]) {
+    // Tiling, unlike the screen-space samplers above: wave UVs are world-space and repeat.
+    constexpr sampler waveSampler(address::repeat, filter::linear, mip_filter::linear);
     // Above the waterline there is nothing to draw. The mesh covers the whole
     // map so that one buffer serves any water level, and the dry part is
     // discarded rather than uploaded conditionally.
@@ -196,11 +199,23 @@ fragment float4 waterFragment(WaterOut in [[stage_in]], float4 behind [[color(0)
         // Eight times the frequency, so a ~37-elmo ripple, and at incommensurable
         // angles to each other as the swells are — the lattice does not go away,
         // it goes small enough to read as disturbed water rather than as a grid.
-        const float2 third = float2(0.71f, 0.70f);
-        const float2 fourth = float2(-0.68f, 0.73f);
-        const float ripple1 = dot(in.world.xz, third) * 0.168 + t * 2.3;
-        const float ripple2 = dot(in.world.xz, fourth) * 0.139 - t * 1.9;
-        const float2 ripple = third * cos(ripple1) * 0.168 + fourth * cos(ripple2) * 0.139;
+        float2 ripple;
+        if (u.hasWaterWaves > 0.5) {
+            // THE MAP'S OWN RIPPLE: the engine's wave-normal texture, sampled twice with
+            // the water block's own repeats and scroll vectors (water2.fx's exact recipe).
+            // The analytic trains below stay as the stand-in for a map that names none.
+            const float2 uvA = in.world.xz * u.waveRepeats.x + u.waveMovements.xy * t * 0.02;
+            const float2 uvB = in.world.xz * u.waveRepeats.y + u.waveMovements.zw * t * 0.02;
+            const float2 nA = waveNormals.sample(waveSampler, uvA).rg * 2.0 - 1.0;
+            const float2 nB = waveNormals.sample(waveSampler, uvB).rg * 2.0 - 1.0;
+            ripple = (nA + nB) * 0.5 * 0.3;
+        } else {
+            const float2 third = float2(0.71f, 0.70f);
+            const float2 fourth = float2(-0.68f, 0.73f);
+            const float ripple1 = dot(in.world.xz, third) * 0.168 + t * 2.3;
+            const float ripple2 = dot(in.world.xz, fourth) * 0.139 - t * 1.9;
+            ripple = third * cos(ripple1) * 0.168 + fourth * cos(ripple2) * 0.139;
+        }
 
         const float visible = max(attenuation.r, max(attenuation.g, attenuation.b));
         const float2 bend = ripple * u.waterRefractionScale * kRefractionUv * visible

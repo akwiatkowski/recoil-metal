@@ -245,6 +245,13 @@ void Renderer::releaseSplat() noexcept {
     splatEnabled_ = false;
 }
 
+void Renderer::setWaterWaveTexture(const dds::Texture& normal) {
+    if (waterWaves_ != nullptr) {
+        waterWaves_->release();
+    }
+    waterWaves_ = uploadTexture(normal, "water waves");
+}
+
 void Renderer::setSplat(std::span<const SplatLayer> layers, const dds::Texture& maskA,
                         const dds::Texture& maskB) {
     releaseSplat();

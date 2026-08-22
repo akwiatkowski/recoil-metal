@@ -213,6 +213,9 @@ public:
     /// The map's own preview thumbnail, under the minimap. See Renderer::setMinimapImage.
     void setMinimapImage(const dds::Texture& image);
 
+    /// The map's wave-normal texture. See Renderer::setWaterWaveTexture.
+    void setWaterWaveTexture(const dds::Texture& normal);
+
     /// Where to draw it this frame, in pixels. See Renderer::setMinimapRect.
     void setMinimapRect(float x, float y, float width, float height) noexcept;
 

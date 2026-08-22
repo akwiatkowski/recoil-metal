@@ -65,6 +65,18 @@ struct WaterSettings {
     std::array<float, 3> sunColour{{0.81f, 0.81f, 0.81f}};
     float sunReflection = 5.0f;
     float sunGlow = 0.1f;
+
+    /// The four scrolling wave-normal layers `water2.fx` samples — repeat scalar (how many
+    /// tiles across the map), scroll direction, and the texture path, in the file's own
+    /// order: all four repeats first, THEN four (movement, path) records. The engine's
+    /// water gets its ripple from these, and the renderer's analytic stand-in exists only
+    /// for a map that names none.
+    struct WaveLayer {
+        float repeat = 8.0f;
+        std::array<float, 2> movement{{0.5f, -0.95f}};
+        std::string path;
+    };
+    std::array<WaveLayer, 4> waveLayers;
 };
 
 // The map's own sky, from the skybox block near the end of the file.

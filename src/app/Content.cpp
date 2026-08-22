@@ -282,7 +282,30 @@ namespace rm::app {
     environment.sunAmbience = map->lighting.sunAmbience;
     environment.shadowFill = map->lighting.shadowFill;
     environment.lightingMultiplier = map->lighting.multiplier;
+    // The wave layers: the block stores four, big swell to fine ripple; the mid and fine
+    // ones (1 and 2) are the pair the refraction wants — see the water shader's note on
+    // wavelength versus viewing depth.
+    environment.waveRepeats = {map->water.waveLayers[1].repeat, map->water.waveLayers[2].repeat};
+    environment.waveMovements = {
+        map->water.waveLayers[1].movement[0], map->water.waveLayers[1].movement[1],
+        map->water.waveLayers[2].movement[0], map->water.waveLayers[2].movement[1]};
     loaded.environment = environment;
+
+    // The wave-normal texture itself, from the mounted archives ('/textures/engine/waves.dds'
+    // on every stock map). A miss keeps the analytic stand-in.
+    if (map->hasWater && !map->water.waveLayers[1].path.empty()) {
+        if (const std::optional<std::vector<std::byte>> bytes =
+                content.read(map->water.waveLayers[1].path)) {
+            if (auto waves = rm::dds::load(*bytes)) {
+                loaded.waterWaves = std::move(*waves);
+                std::printf("  water: waves %s (%ux%u), repeats %.4f/%.4f\n",
+                            map->water.waveLayers[1].path.c_str(), loaded.waterWaves.width,
+                            loaded.waterWaves.height,
+                            static_cast<double>(map->water.waveLayers[1].repeat),
+                            static_cast<double>(map->water.waveLayers[2].repeat));
+            }
+        }
+    }
 
     std::printf("  sky/water: fog (%.2f %.2f %.2f), surface (%.2f %.2f %.2f),"
                 " fresnel %.2f^%.2f\n",

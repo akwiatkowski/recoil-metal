@@ -671,6 +671,10 @@ text::Font Window::labelFont() const { return impl_->renderer->labelFont(); }
 
 text::Font Window::readoutFont() const { return impl_->renderer->readoutFont(); }
 
+void Window::setWaterWaveTexture(const dds::Texture& normal) {
+    impl_->renderer->setWaterWaveTexture(normal);
+}
+
 void Window::setMinimapImage(const dds::Texture& image) {
     impl_->renderer->setMinimapImage(image);
 }
