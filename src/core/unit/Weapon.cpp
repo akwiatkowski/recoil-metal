@@ -104,6 +104,20 @@ std::vector<Weapon> weaponsFrom(const lua::Value& weaponArray) {
 
         weapon.rateOfFire = numberOr(entry, "RateOfFire", 0.0f);
 
+        // The muzzle's bone: the turret's, or the first rack's first muzzle. A name for
+        // the app to resolve against the skeleton — see Weapon::muzzleBone.
+        weapon.muzzleBone = std::string{entry.stringAt("TurretBoneMuzzle").value_or("")};
+        if (weapon.muzzleBone.empty()) {
+            if (const lua::Value* racks = entry.find("RackBones");
+                racks != nullptr && !racks->items.empty()) {
+                if (const lua::Value* muzzles = racks->items.front().find("MuzzleBones");
+                    muzzles != nullptr && !muzzles->items.empty()) {
+                    weapon.muzzleBone =
+                        std::string{muzzles->items.front().asString().value_or("")};
+                }
+            }
+        }
+
         // Beams: `BeamLifetime` above zero is a pulsed beam, `ContinuousBeam` a held one.
         // Both deliver on fire rather than by flight.
         const lua::Value* continuous = entry.find("ContinuousBeam");

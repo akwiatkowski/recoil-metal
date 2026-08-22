@@ -149,6 +149,17 @@ struct Weapon {
     /// projectile is instant.
     float muzzleVelocityElmosPerSecond = 0.0f;
 
+    /// The bone the shot leaves from — `TurretBoneMuzzle`, or the rack's first muzzle
+    /// bone when no turret names one. A NAME, because the blueprint knows the name and
+    /// only the MODEL knows where that bone is; the app resolves it at load.
+    std::string muzzleBone;
+
+    /// The resolved muzzle height in elmos, filled by the app from the model's skeleton
+    /// (bone global offset × mesh scale). Zero means unresolved, and the sim falls back
+    /// to its old constant — every unit firing from four elmos up, which is what this
+    /// field exists to retire.
+    sim::Fx muzzleHeight{};
+
     /// A BEAM: damage arrives the instant the weapon fires, nothing flies. From
     /// `BeamLifetime` (a pulse that exists for a fraction of a second) or `ContinuousBeam`
     /// — either way the corpus's beam weapons never spawn a projectile, and modelling them

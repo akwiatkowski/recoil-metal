@@ -367,14 +367,27 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
                                  .army = army,
                                  .amount = weapon.damage,
                                  .at = to,
-                                 .at2 = {from[0], from[1] + kMuzzleHeight, from[2]},
+                                 .at2 = {from[0],
+                                         from[1]
+                                             + (weapon.muzzleHeight > Fx{}
+                                                    ? weapon.muzzleHeight
+                                                    : kMuzzleHeight),
+                                         from[2]},
                              });
                 damageArea(to, weapon.damageRadius, rates.damage, army, store, armies,
                            &catalog, store.idAt(slot), events);
             } else {
-                projectiles.push_back(
-                    launch(from, to, weapon, army, rate, rates.muzzlePerTick, rates.damage,
-                           store.idAt(slot)));
+                // THE SIMULTANEOUS SALVO (11 §3.3): a salvo size above one with NO delay
+                // means every muzzle fires on the same trigger pull — Moho sets
+                // numMuzzlesFiring to the whole rack. It is a different mechanic from the
+                // timed burst below (delay > 0), and reading it as one shot per reload
+                // cost those 106 weapons up to half their authored damage.
+                const int volley = weapon.bursts() ? 1 : rates.burstSize;
+                for (int shot = 0; shot < volley; ++shot) {
+                    projectiles.push_back(
+                        launch(from, to, weapon, army, rate, rates.muzzlePerTick,
+                               rates.damage, store.idAt(slot)));
+                }
 
                 emit(events, Event{
                                  .kind = EventKind::WeaponFired,
@@ -398,13 +411,21 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
             // a coroutine that has already committed to its count — and it is also the only
             // version that is order-independent, since a burst that reset on a lost target
             // would depend on which shooter's projectile resolved first.
-            if (health.burstRemaining[w] == 0) {
-                health.burstRemaining[w] = rates.burstSize;
+            if (weapon.bursts()) {
+                if (health.burstRemaining[w] == 0) {
+                    health.burstRemaining[w] = rates.burstSize;
+                }
+                --health.burstRemaining[w];
+                health.reloadRemaining[w] = health.burstRemaining[w] > 0
+                                                ? static_cast<int>(rates.burstDelayTicks)
+                                                : static_cast<int>(rates.reloadTicks);
+            } else {
+                // The volley above delivered the whole rack at once; a plain reload
+                // follows. Letting the burst cycle run here with a zero delay would fire
+                // again next tick and deliver the salvo twice over.
+                health.burstRemaining[w] = 0;
+                health.reloadRemaining[w] = static_cast<int>(rates.reloadTicks);
             }
-            --health.burstRemaining[w];
-            health.reloadRemaining[w] = health.burstRemaining[w] > 0
-                                            ? static_cast<int>(rates.burstDelayTicks)
-                                            : static_cast<int>(rates.reloadTicks);
         }
     }
 
@@ -416,7 +437,10 @@ Projectile launch(std::array<Fx, 3> from, std::array<Fx, 3> to,
                   const unitdef::DamageProfile& damage, UnitId firedBy) {
     Projectile shot;
     shot.firedBy = firedBy;
-    shot.position = {from[0], from[1] + kMuzzleHeight, from[2]};
+    // The model's own muzzle when the app resolved one, the old constant when not —
+    // Weapon::muzzleHeight's contract.
+    const Fx muzzle = weapon.muzzleHeight > Fx{} ? weapon.muzzleHeight : kMuzzleHeight;
+    shot.position = {from[0], from[1] + muzzle, from[2]};
     shot.damage = damage;
     shot.damageRadiusElmos = weapon.damageRadius;
     shot.firedByArmy = byArmy;

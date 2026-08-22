@@ -16,6 +16,35 @@
 
 namespace rm::app {
 
+/// Resolves each weapon's muzzle bone against the model's skeleton — the one moment both
+/// the blueprint's bone NAME and the model's bone POSITIONS are in hand. The height is the
+/// bone's rest-pose global Y scaled into elmos; anything at ground level or below keeps the
+/// sim's fallback constant, because a muzzle in the floor is a modelling accident and not a
+/// firing solution. Case-insensitive, as the corpus's bone spelling is not reliable.
+void resolveMuzzleBones(rm::unitdef::UnitDef& def, const rm::Model& model) {
+    const auto sameName = [](std::string_view a, std::string_view b) {
+        return a.size() == b.size()
+               && std::equal(a.begin(), a.end(), b.begin(), [](unsigned char x, unsigned char y) {
+                      return std::tolower(x) == std::tolower(y);
+                  });
+    };
+    for (rm::unitdef::Weapon& weapon : def.weapons) {
+        if (weapon.muzzleBone.empty()) {
+            continue;
+        }
+        for (const rm::ModelBone& bone : model.bones) {
+            if (sameName(bone.name, weapon.muzzleBone)) {
+                const float heightElmos = bone.globalOffset[1] * def.meshToElmos;
+                if (heightElmos > 0.05f) {
+                    weapon.muzzleHeight = rm::sim::fxFromFloat(heightElmos);
+                }
+                break;
+            }
+        }
+    }
+}
+
+
 
 /// Resolves a `--units` argument that names a unit DEFINITION rather than a
 /// model, returning the model to load and the stats to move it with.
@@ -362,6 +391,7 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
             scaleForFaction.emplace(army.faction, unit->def.meshToElmos);
 
             scene.definitions.push_back(unit->def);
+            resolveMuzzleBones(scene.definitions.back(), scene.models.back());
             const rm::UnitTypeIndex type =
                 scene.catalog.add(&scene.definitions.back(), gAppTickRate);
             // The type draws with the batch just pushed. A MAP now rather than an identity —
@@ -481,6 +511,7 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
             },
         });
         scene.definitions.push_back(unit->def);
+        resolveMuzzleBones(scene.definitions.back(), scene.models.back());
         const rm::UnitTypeIndex type =
             scene.catalog.add(&scene.definitions.back(), gAppTickRate);
         scene.setBatchForType(type, scene.batches.size() - 1);
