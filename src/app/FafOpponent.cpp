@@ -4,6 +4,7 @@
 #include "app/Scene.hpp"
 
 #include "core/sim/BuildOrder.hpp"
+#include "core/unit/UnitBlueprint.hpp"
 
 extern "C" {
 #include "lauxlib.h"
@@ -225,6 +226,15 @@ function methods:GetPlatoonUniquelyNamed(name)
     return nil
 end
 
+local function buildingIdFor(brain, structureName)
+    local perFaction = brain.buildingTemplates and brain.buildingTemplates[brain.faction]
+    if not perFaction then return nil end
+    for _, entry in ipairs(perFaction) do
+        if entry[1] == structureName then return entry[2] end
+    end
+    return nil
+end
+
 -- --- Boot: the builder list, assembled from FAF's own registries ---------------------------
 
 function __rm_faf_boot(army, info)
@@ -256,11 +266,11 @@ function __rm_faf_boot(army, info)
     -- this table from a thread, and the efficiency conditions read it directly.
     brain.EconomyOverTimeCurrent = {}
 
-    -- Where each kind's budgeted walk resumes next pass (see walkBudgeted).
-    brain.cursor = {}
-
     -- Per-builder position in its BuildStructures queue (see the engineer walk).
     brain.progress = {}
+
+    -- The condition cadence cache (see conditionsPass), keyed by spec table.
+    brain.condCache = {}
 
     -- The pool platoon (see GetPlatoonUniquelyNamed): counts over the army's own units.
     brain.pool = {
@@ -306,7 +316,7 @@ function __rm_faf_boot(army, info)
     end
     local manager = {
         GetLocationCoords = coords,
-        Radius = 120,
+        Radius = 200,
         GetNumFactories = function() return countUnits(categories.STRUCTURE * categories.FACTORY) end,
         GetNumCategoryFactories = function(self, category) return countUnits(category) end,
         GetNumCategoryUnits = function(self, category) return countUnits(category) end,
@@ -356,12 +366,48 @@ function __rm_faf_boot(army, info)
 
     brain.buildingTemplates = import('/lua/buildingtemplates.lua').BuildingTemplates
     __rm_faf.brains[army] = brain
-    return #list
+
+    -- Every unit id this faction's factory builders could ask for, handed back so the
+    -- adapter can teach their category sets — the tech gate below needs the categories of
+    -- units that do not exist yet, which only the blueprints know.
+    local wanted = {}
+    local seen = {}
+    local function want(bp)
+        if bp and not seen[bp] then
+            seen[bp] = true
+            table.insert(wanted, bp)
+        end
+    end
+    for _, item in ipairs(list) do
+        if item.kind == 'FactoryBuilder' then
+            local template = PlatoonTemplates[item.spec.PlatoonTemplate]
+            local squads = template and template.FactionSquads
+            local squad = squads and squads[factionNames[info.faction]]
+            want(squad and squad[1] and squad[1][1])
+        elseif item.kind == 'EngineerBuilder' then
+            local construction = item.spec.BuilderData and item.spec.BuilderData.Construction
+            for _, structure in ipairs((construction and construction.BuildStructures) or {}) do
+                want(buildingIdFor(brain, structure))
+            end
+        end
+    end
+    return wanted
 end
 
 -- --- Conditions: the corpus's own code, fail-closed ----------------------------------------
 
 local function conditionsPass(brain, spec)
+    -- CACHED ON A CADENCE, which is FAF's own design: BrainConditionsMonitor re-checks a
+    -- condition every few seconds and serves the cached answer between — evaluating every
+    -- builder's full condition list every pass is what blew the instruction budget once
+    -- the priority walk saw the whole list. Three seconds, keyed by the spec table itself
+    -- (stable for the life of the brain).
+    local now = brain.snap.tick or 0
+    local cached = brain.condCache[spec]
+    if cached and (now - cached.tick) < 30 then
+        return cached.result
+    end
+    local result = true
     for _, cond in ipairs(spec.BuilderConditions or {}) do
         local fn, args
         if type(cond[1]) == 'function' then
@@ -372,62 +418,44 @@ local function conditionsPass(brain, spec)
             args = cond[3] or {}
             if not fn then
                 recordMissing(tostring(cond[1]) .. ':' .. tostring(cond[2]))
-                return false
+                result = false
+                break
             end
         end
-        -- 'LocationType' is FAF's placeholder, substituted per base when a real manager
-        -- instantiates a builder. The stand-in has exactly one base.
-        local actual = {}
-        for i, v in ipairs(args) do
-            actual[i] = (v == 'LocationType') and 'MAIN' or v
-        end
-        local ok, result = pcall(fn, brain, unpack(actual))
-        if not ok then
-            local key = tostring(result)
-            __rm_faf.condErrors[key] = (__rm_faf.condErrors[key] or 0) + 1
-            return false
-        end
-        if not result then return false end
-    end
-    return true
-end
-
--- The budgeted walk: at most `budget` of one kind's builders get their conditions checked
--- per pass, continuing round-robin from where the last pass stopped. FAF's own managers
--- work the same way — builders are re-checked periodically, not all of them every tick —
--- and it is what keeps a pass inside the watchdog's instruction budget: the expensive
--- conditions (marker sorts) are only ever a bounded slice of a pass. Priority still rules
--- WITHIN the walk because the list is priority-sorted; across passes it becomes "soon"
--- rather than "first", which is the trade the budget buys.
-local function walkBudgeted(brain, kindName, budget, visit)
-    local list = brain.builders
-    local n = #list
-    if n == 0 then return end
-    local start = brain.cursor[kindName] or 1
-    if start > n then start = 1 end
-    local i = start
-    local checked = 0
-    repeat
-        local item = list[i]
-        i = (i % n) + 1
-        if item.kind == kindName then
-            checked = checked + 1
-            if conditionsPass(brain, item.spec) and visit(item) then
-                brain.cursor[kindName] = i
-                return
+        if result then
+            -- 'LocationType' is FAF's placeholder, substituted per base when a real manager
+            -- instantiates a builder. The stand-in has exactly one base.
+            local actual = {}
+            for i, v in ipairs(args) do
+                actual[i] = (v == 'LocationType') and 'MAIN' or v
+            end
+            local ok, value = pcall(fn, brain, unpack(actual))
+            if not ok then
+                local key = tostring(value)
+                __rm_faf.condErrors[key] = (__rm_faf.condErrors[key] or 0) + 1
+                result = false
+            elseif not value then
+                result = false
             end
         end
-    until i == start or checked >= budget
-    brain.cursor[kindName] = i
+        if not result then break end
+    end
+    brain.condCache[spec] = { tick = now, result = result }
+    return result
 end
 
-local function buildingIdFor(brain, structureName)
-    local perFaction = brain.buildingTemplates and brain.buildingTemplates[brain.faction]
-    if not perFaction then return nil end
-    for _, entry in ipairs(perFaction) do
-        if entry[1] == structureName then return entry[2] end
+-- The walk: top of the priority order down, first passing builder wins — FAF's own
+-- semantics, and the fix for a real bug: an earlier round-robin cursor version made
+-- priority mean "soon" rather than "first", so the no-condition ACU opening queue lost
+-- its slot to far-mex builders from the tail and no power was ever built. The full walk
+-- is affordable because the caller refuels the watchdog per pass; if a pass ever outgrows
+-- the budget again, the watchdog says so by name rather than by a stall.
+local function walkPriority(brain, kindName, visit)
+    for _, item in ipairs(brain.builders) do
+        if item.kind == kindName and conditionsPass(brain, item.spec) and visit(item) then
+            return
+        end
     end
-    return nil
 end
 
 -- --- The decision pass ---------------------------------------------------------------------
@@ -478,7 +506,16 @@ function __rm_faf_decide(army, snap)
     local slots = #builderPool - snap.structuresUnderway
 
     if slots > 0 then
-        walkBudgeted(brain, 'EngineerBuilder', 20, function(item)
+        -- What the NEXT builder in the pool may legally build, by the tag the blueprints
+        -- grant its tier — the sim would refuse anyway, but a refused decision burns the
+        -- slot for a whole pass, which is how a T3 power plant order starved a base.
+        local nextBuilder = builderPool[#builderPool - slots + 1]
+        local builderTag =
+            (EntityCategoryContains(categories.COMMAND, nextBuilder) and 'BUILTBYCOMMANDER')
+            or (EntityCategoryContains(categories.TECH3, nextBuilder) and 'BUILTBYTIER3ENGINEER')
+            or (EntityCategoryContains(categories.TECH2, nextBuilder) and 'BUILTBYTIER2ENGINEER')
+            or 'BUILTBYTIER1ENGINEER'
+        walkPriority(brain, 'EngineerBuilder', function(item)
             local construction = item.spec.BuilderData and item.spec.BuilderData.Construction
             local names = construction and construction.BuildStructures
             if not names or #names == 0 then return false end
@@ -500,6 +537,25 @@ function __rm_faf_decide(army, snap)
                 local structure = names[progress]
                 local bp = buildingIdFor(brain, structure)
                 progress = progress + 1
+                -- FAF's InstanceCount: how many of this builder's platoons may exist at
+                -- once. The nearest honest equivalent here is unfinished constructions of
+                -- the same blueprint — without it the condition cadence re-fires a passing
+                -- builder every pass and a hundred power plants go up at 3% funding each.
+                if bp then
+                    local bpUpper = string.upper(bp)
+                    local cats = __rm_faf.cats[bpUpper]
+                    if cats and not cats[builderTag] then
+                        bp = nil
+                    else
+                        local live = 0
+                        for _, w in ipairs(snap.underway or {}) do
+                            if w.bp == bpUpper then live = live + 1 end
+                        end
+                        if live >= (item.spec.InstanceCount or 1) then
+                            bp = nil
+                        end
+                    end
+                end
                 if bp then
                     brain.progress[item.spec.BuilderName] = progress
                     local builderUnit = builderPool[#builderPool - slots + 1]
@@ -526,7 +582,7 @@ function __rm_faf_decide(army, snap)
     end
     local free = #factories - snap.mobileUnderway
     if free > 0 then
-        walkBudgeted(brain, 'FactoryBuilder', 20, function(item)
+        walkPriority(brain, 'FactoryBuilder', function(item)
             local template = PlatoonTemplates[item.spec.PlatoonTemplate]
             local squads = template and template.FactionSquads
             local squad = squads and squads[factionNames[brain.faction]]
@@ -539,8 +595,19 @@ function __rm_faf_decide(army, snap)
             local letter = string.sub(bp, 3, 3)
             local need = (letter == 'a' and categories.AIR)
                 or (letter == 's' and categories.NAVAL) or categories.LAND
+            -- And only its own TIER: the unit must carry the BUILTBYTIERxFACTORY tag the
+            -- factory's tech level grants — FAF's factory manager checks CanBuildPlatoon
+            -- the same way, and without it a T3 engineer order wastes a T1 factory's slot
+            -- every single pass.
+            local unitCats = __rm_faf.cats[string.upper(bp)]
             for _, factory in ipairs(factories) do
-                if not factory.__taken and EntityCategoryContains(need, factory) then
+                local tierTag = (EntityCategoryContains(categories.TECH3, factory)
+                                     and 'BUILTBYTIER3FACTORY')
+                    or (EntityCategoryContains(categories.TECH2, factory)
+                            and 'BUILTBYTIER2FACTORY')
+                    or 'BUILTBYTIER1FACTORY'
+                if not factory.__taken and EntityCategoryContains(need, factory)
+                    and unitCats and unitCats[tierTag] then
                     factory.__taken = true
                     table.insert(decisions, {
                         kind = 'train', bp = bp,
@@ -558,7 +625,7 @@ function __rm_faf_decide(army, snap)
     -- squad's own category and size decide WHO. One wave per pass. A template whose Plan
     -- is UnitUpgradeAI is the OTHER thing form builders do — form a platoon of one
     -- structure and upgrade it in place; that becomes an upgrade decision, never a march.
-    walkBudgeted(brain, 'PlatoonFormBuilder', 15, function(item)
+    walkPriority(brain, 'PlatoonFormBuilder', function(item)
         local template = PlatoonTemplates[item.spec.PlatoonTemplate]
         local squads = template and template.GlobalSquads
         if not squads then return false end
@@ -704,9 +771,10 @@ void FafOpponent::observe(const World& world, std::span<const rm::sim::Event> /*
     world_ = &world;
 }
 
-void FafOpponent::advance(rm::TickIndex /*tick*/) {
+void FafOpponent::advance(rm::TickIndex tick) {
     decisions_.clear();
     handles_.clear();
+    plannedThisPass_.clear();
     if (world_ == nullptr || !sandbox_.ready()) {
         return;
     }
@@ -772,7 +840,35 @@ void FafOpponent::advance(rm::TickIndex /*tick*/) {
             lua_pop(lua, 1);
             return;
         }
-        lua_pop(lua, 1);  // builder count, informational
+        // Boot hands back every unit id this faction's factory builders could ask for.
+        // Their category sets are taught NOW, from the blueprints themselves — the tech
+        // gate has to know the categories of units that do not exist yet, and a read-only
+        // parse per candidate at boot is what that costs.
+        if (lua_istable(lua, -1)) {
+            const auto count = static_cast<lua_Integer>(lua_rawlen(lua, -1));
+            for (lua_Integer i = 1; i <= count; ++i) {
+                lua_rawgeti(lua, -1, i);
+                const char* id = lua_tostring(lua, -1);
+                lua_pop(lua, 1);
+                if (id == nullptr) {
+                    continue;
+                }
+                const std::string path = blueprintPathFor(id);
+                const std::optional<std::vector<std::byte>> bytes =
+                    world_->content.read(path);
+                if (!bytes) {
+                    continue;
+                }
+                const auto def = rm::unitbp::load(
+                    std::string_view{reinterpret_cast<const char*>(bytes->data()),
+                                     bytes->size()},
+                    path);
+                if (def) {
+                    teachType(lua, *def);
+                }
+            }
+        }
+        lua_pop(lua, 1);
         booted_ = true;
     }
 
@@ -784,6 +880,8 @@ void FafOpponent::advance(rm::TickIndex /*tick*/) {
     const std::span<const rm::sim::Health> health = scene.store.health();
 
     lua_newtable(lua);  // snap
+    lua_pushinteger(lua, static_cast<lua_Integer>(tick));
+    lua_setfield(lua, -2, "tick");
 
     // Economy, per tick — the scale FAF's own thresholds are written against.
     const rm::sim::Economy& economy = scene.economies[armyIndex];
@@ -1017,20 +1115,100 @@ void FafOpponent::convertDecision(lua_State* lua) {
                 world_->starts[static_cast<std::size_t>(army_)];
             const std::array<rm::sim::Fx, 3> home{rm::sim::fxFromFloat(start.x), rm::sim::Fx{},
                                                   rm::sim::fxFromFloat(start.z)};
+            const auto plannedNear = [this](const std::array<rm::sim::Fx, 3>& at) {
+                for (const std::array<rm::sim::Fx, 3>& planned : plannedThisPass_) {
+                    const float dx = rm::sim::fxToFloat(planned[0]) - rm::sim::fxToFloat(at[0]);
+                    const float dz = rm::sim::fxToFloat(planned[2]) - rm::sim::fxToFloat(at[2]);
+                    if (dx * dx + dz * dz < 8.0f * 8.0f) {
+                        return true;
+                    }
+                }
+                return false;
+            };
             if (wantsDeposit) {
-                const rm::scenario::Marker* deposit =
-                    rm::app::nearestFreeDeposit(scene, world_->markers, home);
-                if (deposit != nullptr) {
-                    site = rm::app::fxPoint(deposit->position);
+                // The nearest deposit free of BOTH the sim's claims and this pass's own
+                // plans — nearestFreeDeposit only knows the first kind, so the search runs
+                // here with both filters.
+                const rm::sim::Fx claimed = rm::sim::Fx::fromInt(8);
+                const rm::scenario::Marker* best = nullptr;
+                rm::sim::Fx bestDistance{};
+                for (const rm::scenario::Marker& marker : world_->markers) {
+                    if (!marker.isType("Mass")) {
+                        continue;
+                    }
+                    const std::array<rm::sim::Fx, 3> at = rm::app::fxPoint(marker.position);
+                    if (plannedNear(at)) {
+                        continue;
+                    }
+                    bool taken = false;
+                    for (const rm::sim::Construction& work : scene.building) {
+                        if (rm::sim::groundDistanceElmos(work.position, at) < claimed) {
+                            taken = true;
+                            break;
+                        }
+                    }
+                    if (taken) {
+                        continue;
+                    }
+                    const rm::sim::Fx distance = rm::sim::groundDistanceElmos(home, at);
+                    if (best == nullptr || distance < bestDistance) {
+                        best = &marker;
+                        bestDistance = distance;
+                    }
+                }
+                if (best != nullptr) {
+                    site = rm::app::fxPoint(best->position);
                 }
             } else {
-                site = rm::sim::structureSite(home, world_->centreX, world_->centreZ,
-                                              structureSlot_++);
+                // FIRST FREE SLOT, not an ever-growing ring: an incrementing counter walked
+                // three hundred structures outward until "is there a radar at this base"
+                // honestly answered no — the base had left its own radius. Reusing freed
+                // slots keeps the base a base.
+                for (int slot = 0; slot < 96; ++slot) {
+                    const std::array<rm::sim::Fx, 3> candidate = rm::sim::structureSite(
+                        home, world_->centreX, world_->centreZ, slot);
+                    bool taken = false;
+                    const auto near = [&](rm::sim::Fx ax, rm::sim::Fx az) {
+                        const float dx = rm::sim::fxToFloat(ax) - rm::sim::fxToFloat(candidate[0]);
+                        const float dz = rm::sim::fxToFloat(az) - rm::sim::fxToFloat(candidate[2]);
+                        return dx * dx + dz * dz < 6.0f * 6.0f;
+                    };
+                    for (rm::UnitIndex slotIndex = 0; slotIndex < scene.store.slotCount();
+                         ++slotIndex) {
+                        if (!scene.store.health()[slotIndex].alive()) {
+                            continue;
+                        }
+                        const rm::unitdef::UnitDef* standing =
+                            scene.catalog.def(scene.store.typeAt(slotIndex));
+                        if (standing != nullptr && !standing->isMobile()
+                            && near(scene.store.transforms()[slotIndex].x,
+                                    scene.store.transforms()[slotIndex].z)) {
+                            taken = true;
+                            break;
+                        }
+                    }
+                    if (!taken) {
+                        for (const rm::sim::Construction& work : scene.building) {
+                            if (!work.finished() && near(work.position[0], work.position[2])) {
+                                taken = true;
+                                break;
+                            }
+                        }
+                    }
+                    if (!taken && plannedNear(candidate)) {
+                        taken = true;
+                    }
+                    if (!taken) {
+                        site = candidate;
+                        break;
+                    }
+                }
             }
         }
         if (!site) {
             return;
         }
+        plannedThisPass_.push_back(*site);
         decisions_.push_back(Decision{
             .kind = Decision::Kind::StartConstruction,
             .blueprint = blueprintPathFor(field("bp")),

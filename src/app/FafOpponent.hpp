@@ -59,14 +59,17 @@ private:
     /// Blueprint ids whose category sets the driver has been taught. Per opponent rather
     /// than per sandbox; re-teaching an id the sandbox knows is a cheap no-op there.
     std::set<std::string> sentTypes_;
-    /// Rotation for generic structure placement, the same notion the scripted opponent
-    /// derives from its census — here it only ever moves forward.
-    int structureSlot_ = 0;
     const World* world_ = nullptr;
     std::vector<Decision> decisions_;
     /// Snapshot ordinal -> unit, rebuilt every advance. Lua refers to units by ordinal so
     /// no id crosses the boundary in a form Lua arithmetic could damage.
     std::vector<rm::sim::UnitId> handles_;
+
+    /// Sites already chosen THIS pass. Several decisions convert before any of them
+    /// reaches `scene.building`, so the free-site and free-deposit checks would hand every
+    /// one of them the same spot — four power plants on one slot, four extractors on one
+    /// deposit. Cleared at the top of every advance.
+    std::vector<std::array<rm::sim::Fx, 3>> plannedThisPass_;
 };
 
 /// Installs the driver chunk into the sandbox. Idempotent; false with `lastError` set when

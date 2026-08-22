@@ -334,9 +334,11 @@ TEST_CASE("the FAF driver boots a brain and the corpus's own builders decide", "
         for i = 1, 6 do
             markers[i] = { name = 'Mass ' .. i, type = 'Mass', x = 60 + i * 10, y = 0, z = 100 }
         end
-        local builders = __rm_faf_boot(0, { faction = 1, startX = 100, startZ = 100,
-                                            sizeX = 512, sizeZ = 512, armies = 2,
-                                            base = 'NormalMain', markers = markers })
+        local wanted = __rm_faf_boot(0, { faction = 1, startX = 100, startZ = 100,
+                                          sizeX = 512, sizeZ = 512, armies = 2,
+                                          base = 'NormalMain', markers = markers })
+        assert(type(wanted) == 'table', 'boot returns the train candidates to teach')
+        local builders = #__rm_faf.brains[0].builders
         assert(builders > 100, 'expected NormalMain builder list, got ' .. tostring(builders))
         __rm_faf_type('UEL0001', { 'COMMAND', 'MOBILE', 'LAND' })
         local commander = { bp = 'UEL0001', h = 1, x = 100, z = 100, idle = true,
