@@ -276,6 +276,67 @@ void appendSceneIcons(std::vector<rm::Particle>& into, const UnitScene& scene,
     }
 }
 
+void appendHealthBars(rm::ui::Geometry& out, const UnitScene& scene,
+                      const rm::OrbitCamera& camera, const rm::text::Font& font, float width,
+                      float height) {
+    if (!font.usable() || !(width > 0.0f) || !(height > 0.0f)) {
+        return;
+    }
+
+    // The icon threshold, inverted: icons take over when a unit shrinks past reading
+    // (UnitIcons.hpp), and the bar stops where they start — one regime per zoom, never both.
+    const float elmosPerPoint = camera.elmosPerPoint(rm::kIconReferenceHeightPoints);
+    if (!(elmosPerPoint > 0.0f)) {
+        return;
+    }
+
+    for (std::size_t batch = 0; batch < scene.drawScratch.size(); ++batch) {
+        for (std::size_t i = 0; i < scene.drawScratch[batch].size()
+                                && i < scene.drawSlotOf[batch].size(); ++i) {
+            const rm::UnitIndex slot = scene.drawSlotOf[batch][i];
+            const rm::sim::Health& hp = scene.store.health()[slot];
+            if (!hp.alive() || hp.current >= hp.maximum) {
+                continue;  // the absence of a bar is what "fine" looks like
+            }
+
+            const float radiusElmos =
+                rm::sim::fxToFloat(scene.store.motion()[slot].radiusElmos);
+            const float radiusPoints = radiusElmos / elmosPerPoint;
+            if (radiusPoints * 2.0f < rm::kIconThresholdPoints) {
+                continue;  // icon territory: the strategic layer owns this zoom
+            }
+
+            const rm::UnitInstance& unit = scene.drawScratch[batch][i];
+            const auto screen = rm::worldToScreen(
+                camera,
+                simd_make_float3(unit.position[0], unit.position[1], unit.position[2]),
+                width, height);
+            if (!screen) {
+                continue;
+            }
+
+            // Sized with the unit but clamped: a bar narrower than ~16 points is unreadable
+            // and one wider than ~48 reads as interface chrome rather than a unit's.
+            const float barWidth = std::clamp(radiusPoints * 2.2f, 16.0f, 48.0f);
+            const float barHeight = 3.0f;
+            const float x = (*screen)[0] - barWidth * 0.5f;
+            const float y = (*screen)[1] - radiusPoints - 8.0f;
+
+            const float fill =
+                rm::sim::magToFloat(hp.current) / rm::sim::magToFloat(hp.maximum);
+            // The roster underbar's own thresholds — the two must not disagree about how
+            // bad the same number is.
+            const rm::ui::Colour bar = fill > 0.6f ? rm::ui::kGain
+                                       : (fill > 0.3f ? rm::ui::kWarn : rm::ui::kLoss);
+
+            rm::text::appendRect(out.label, font, x, y, barWidth, barHeight,
+                                 rm::ui::Colour{{0.0f, 0.0f, 0.0f, 0.55f}});
+            rm::text::appendRect(out.label, font, x, y, barWidth * std::clamp(fill, 0.0f, 1.0f),
+                                 barHeight, bar);
+        }
+    }
+}
+
 /// The unit nearest the ray across every batch, IGNORING who owns it.
 ///
 /// What a right-click wants: an order aimed at an enemy has to be able to find one, and

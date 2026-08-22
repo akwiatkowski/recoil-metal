@@ -116,6 +116,20 @@ void appendViewFootprint(std::vector<std::array<float, 2>>& out, const rm::Orbit
 void appendSceneIcons(std::vector<rm::Particle>& into, const UnitScene& scene,
                       const rm::OrbitCamera& camera);
 
+/// Health bars over the units that need one: DAMAGED, and big enough on screen to be a unit
+/// rather than an icon.
+///
+/// Both gates are the design. A full-health bar is noise repeated per unit — the absence of
+/// a bar is what "fine" looks like, and then a bar appearing IS the signal. And below icon
+/// zoom a three-pixel bar floats over a two-pixel unit, so the bar keeps to the range where
+/// the unit it belongs to is legible; at height, the fight reads through the icons.
+///
+/// Screen-space quads into the HUD's own geometry — the same worldToScreen the band select
+/// uses, drawn by the pipeline every panel already rides.
+void appendHealthBars(rm::ui::Geometry& out, const UnitScene& scene,
+                      const rm::OrbitCamera& camera, const rm::text::Font& font, float width,
+                      float height);
+
 [[nodiscard]] std::optional<rm::sim::UnitId> pickAnyBatch(const rm::Ray& ray,
                                                           const UnitScene& scene);
 

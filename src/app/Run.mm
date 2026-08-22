@@ -312,6 +312,12 @@ int runScreenshot(const Session& session) {
                           static_cast<float>(shot.width),
                           static_cast<float>(shot.height));
 
+            // Health bars in a capture too, for the usual reason: a battle screenshot is
+            // the one place a damaged unit reliably exists to verify them against.
+            appendHealthBars(hud, units, renderer.camera(), renderer.labelFont(),
+                             static_cast<float>(shot.width),
+                             static_cast<float>(shot.height));
+
             // THE MINIMAP IN A CAPTURE TOO, for the same reason the rest of the HUD is here: a
             // screenshot is how this project verifies anything, and an interface only visible in
             // a live window cannot be checked at all. Adding it to the frame loop alone is how
@@ -1155,6 +1161,12 @@ int runWindowed(const Session& session) {
                           hudThemeFor(units), hudStateFrom(units, matchSeconds),
                           static_cast<float>(window.width()),
                           static_cast<float>(window.height()));
+
+            // Health over the units that need it: damaged, and close enough to be units
+            // rather than icons. Absence is what "fine" looks like (Interface.hpp).
+            appendHealthBars(hudScratch, units, window.camera(), window.labelFont(),
+                             static_cast<float>(window.width()),
+                             static_cast<float>(window.height()));
 
             // THE MINIMAP (§7 P7.4), appended to the same geometry the HUD builds — it is
             // rectangles in screen space, which is what `text::appendRect` already draws, so it
