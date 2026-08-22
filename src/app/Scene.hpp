@@ -654,6 +654,14 @@ inline constexpr float kSelectionRingMargin = 1.35f;
 inline constexpr std::array<float, 4> kRangeRingColour{{0.95f, 0.45f, 0.35f, 0.28f}};
 inline constexpr float kRangeRingThicknessElmos = 1.2f;
 
+/// The drawn order queue: the line quieter than its nodes, because the nodes are the
+/// decisions and the line only connects them. In the order marker's own hue — a queue is
+/// orders, and this is what orders already look like on this ground.
+inline constexpr std::array<float, 4> kQueueLineColour{{0.55f, 0.95f, 0.75f, 0.30f}};
+inline constexpr std::array<float, 4> kQueueNodeColour{{0.55f, 0.95f, 0.75f, 0.75f}};
+inline constexpr float kQueueLineWidthElmos = 1.4f;
+inline constexpr float kQueueNodeHalfElmos = 4.0f;
+
 /// The colour of the marker where a move order was given.
 ///
 /// Amber against the rings' green, and a cross rather than a plain ring, because

@@ -1407,6 +1407,33 @@ int runWindowed(const Session& session) {
                                                 kRangeRingThicknessElmos);
                     }
                 }
+
+                // THE ORDER QUEUE, drawn in the world for a selected unit: a line from the
+                // unit through every queued destination, a diamond at each node — and the
+                // build orders' nodes in the ghost's cyan, because that node will become a
+                // building and its colour should say so before the fact. Only while
+                // selected: forty queues at once is a map of spaghetti, and the question
+                // "where is THIS unit going" is asked of a selection.
+                {
+                    const std::deque<rm::sim::Command>& queue =
+                        units.store.orders()[sel.index].orders();
+                    std::array<float, 2> from{ground[0], ground[2]};
+                    for (const rm::sim::Command& order : queue) {
+                        if (order.kind == rm::sim::CommandKind::Stop) {
+                            continue;  // a stop has no destination to draw a line to
+                        }
+                        const std::array<float, 2> to{rm::sim::fxToFloat(order.targetX),
+                                                      rm::sim::fxToFloat(order.targetZ)};
+                        appendGroundSegment(decalVertices, map->field, from, to,
+                                            kQueueLineColour, kQueueLineWidthElmos);
+                        appendGroundNode(decalVertices, map->field, to,
+                                         order.kind == rm::sim::CommandKind::Build
+                                             ? kBuildGhostColour
+                                             : kQueueNodeColour,
+                                         kQueueNodeHalfElmos);
+                        from = to;
+                    }
+                }
             }
 
             // ...and the BUILD GHOST, wherever the cursor is pointing while a cell is armed.

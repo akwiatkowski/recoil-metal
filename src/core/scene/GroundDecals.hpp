@@ -109,6 +109,21 @@ void appendOrderMarker(std::vector<DecalVertex>& out, const HeightField& field,
 void appendNoRouteMarker(std::vector<DecalVertex>& out, const HeightField& field,
                          std::array<float, 3> centre, float age);
 
+// Appends one ground-following bar between two world points — the segment a drawn order
+// queue is made of. Sampled along its length at roughly heightmap-square pitch, so a line
+// across a valley lies in the valley rather than chording over it; only x and z of the
+// endpoints are read, the ground supplying the heights the way it does for every decal.
+void appendGroundSegment(std::vector<DecalVertex>& out, const HeightField& field,
+                         std::array<float, 2> fromXZ, std::array<float, 2> toXZ,
+                         std::array<float, 4> colour, float widthElmos);
+
+/// A waypoint node: a small filled diamond on the ground. A DIAMOND rather than a square so
+/// a node cannot be mistaken for a building's footprint at a glance — nothing rectangular in
+/// this vocabulary is ephemeral, and nothing ephemeral is rectangular.
+void appendGroundNode(std::vector<DecalVertex>& out, const HeightField& field,
+                      std::array<float, 2> atXZ, std::array<float, 4> colour,
+                      float halfElmos);
+
 /// How wide a wreck's scorch mark is drawn, relative to the unit's own radius.
 ///
 /// A little over twice, so a wreck reads as bigger than the thing that made it — an

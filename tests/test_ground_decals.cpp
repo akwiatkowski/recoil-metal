@@ -378,3 +378,35 @@ TEST_CASE("the no-route mark is a bare cross that fades without shrinking") {
                             rm::kOrderMarkerSecondsToLive);
     CHECK(dead.empty());
 }
+
+TEST_CASE("a ground segment samples along its length and a zero-length one draws nothing") {
+    const HeightField field = flatAt(64, 0);
+    std::vector<rm::DecalVertex> out;
+
+    // 40 elmos at one sample per 8-elmo square: five spans, six vertices each.
+    rm::appendGroundSegment(out, field, {100.0f, 100.0f}, {140.0f, 100.0f},
+                            {{1.0f, 1.0f, 1.0f, 1.0f}}, 2.0f);
+    CHECK(out.size() == 5 * 6);
+
+    std::vector<rm::DecalVertex> nothing;
+    rm::appendGroundSegment(nothing, field, {100.0f, 100.0f}, {100.0f, 100.0f},
+                            {{1.0f, 1.0f, 1.0f, 1.0f}}, 2.0f);
+    CHECK(nothing.empty());
+}
+
+TEST_CASE("a node is one diamond, centred where it was asked for") {
+    const HeightField field = flatAt(64, 0);
+    std::vector<rm::DecalVertex> out;
+    rm::appendGroundNode(out, field, {200.0f, 200.0f}, {{1.0f, 1.0f, 1.0f, 1.0f}}, 4.0f);
+    REQUIRE(out.size() == 6);
+
+    // The four compass points straddle the centre symmetrically.
+    float minX = out[0].position[0];
+    float maxX = minX;
+    for (const rm::DecalVertex& vertex : out) {
+        minX = std::min(minX, vertex.position[0]);
+        maxX = std::max(maxX, vertex.position[0]);
+    }
+    CHECK(minX == 196.0f);
+    CHECK(maxX == 204.0f);
+}

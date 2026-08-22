@@ -178,6 +178,75 @@ void appendNoRouteMarker(std::vector<DecalVertex>& out, const HeightField& field
                       kRingThicknessElmos * 0.45f);
 }
 
+void appendGroundSegment(std::vector<DecalVertex>& out, const HeightField& field,
+                         std::array<float, 2> fromXZ, std::array<float, 2> toXZ,
+                         std::array<float, 4> colour, float widthElmos) {
+    const float dx = toXZ[0] - fromXZ[0];
+    const float dz = toXZ[1] - fromXZ[1];
+    const float length = std::sqrt(dx * dx + dz * dz);
+    if (!(length > 0.001f) || !(widthElmos > 0.0f)) {
+        return;  // a zero-length segment has no direction to give the bar its width
+    }
+
+    const float alongX = dx / length;
+    const float alongZ = dz / length;
+    const float acrossX = -alongZ * widthElmos * 0.5f;
+    const float acrossZ = alongX * widthElmos * 0.5f;
+
+    // One sample about every heightmap square (8 elmos), at least two — the same pitch the
+    // cross uses and for the same reason: a chord across a gully buries the line.
+    const int segments = std::max(2, static_cast<int>(std::ceil(length / 8.0f)));
+    const auto corner = [&](float t, float side) {
+        const float x = fromXZ[0] + dx * t + acrossX * side;
+        const float z = fromXZ[1] + dz * t + acrossZ * side;
+        return DecalVertex{
+            .position = {x, field.heightAtWorld(x, z) + kRingLiftElmos, z},
+            .colour = colour,
+        };
+    };
+    for (int i = 0; i < segments; ++i) {
+        const float t0 = static_cast<float>(i) / static_cast<float>(segments);
+        const float t1 = static_cast<float>(i + 1) / static_cast<float>(segments);
+        const DecalVertex left0 = corner(t0, -1.0f);
+        const DecalVertex right0 = corner(t0, 1.0f);
+        const DecalVertex left1 = corner(t1, -1.0f);
+        const DecalVertex right1 = corner(t1, 1.0f);
+        out.push_back(left0);
+        out.push_back(right0);
+        out.push_back(right1);
+        out.push_back(left0);
+        out.push_back(right1);
+        out.push_back(left1);
+    }
+}
+
+void appendGroundNode(std::vector<DecalVertex>& out, const HeightField& field,
+                      std::array<float, 2> atXZ, std::array<float, 4> colour,
+                      float halfElmos) {
+    if (!(halfElmos > 0.0f)) {
+        return;
+    }
+    const auto point = [&](float ox, float oz) {
+        const float x = atXZ[0] + ox;
+        const float z = atXZ[1] + oz;
+        return DecalVertex{
+            .position = {x, field.heightAtWorld(x, z) + kRingLiftElmos, z},
+            .colour = colour,
+        };
+    };
+    // Two triangles over the four compass points: the diamond.
+    const DecalVertex north = point(0.0f, -halfElmos);
+    const DecalVertex east = point(halfElmos, 0.0f);
+    const DecalVertex south = point(0.0f, halfElmos);
+    const DecalVertex west = point(-halfElmos, 0.0f);
+    out.push_back(north);
+    out.push_back(east);
+    out.push_back(south);
+    out.push_back(north);
+    out.push_back(south);
+    out.push_back(west);
+}
+
 void appendOrderMarker(std::vector<DecalVertex>& out, const HeightField& field,
                        std::array<float, 3> centre, std::array<float, 4> colour, float age,
                        float radiusElmos) {
