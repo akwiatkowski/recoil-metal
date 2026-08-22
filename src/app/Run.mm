@@ -1,5 +1,9 @@
 #include "app/Run.hpp"
 
+#include "core/audio/CueEvents.hpp"
+#include "core/audio/Cues.hpp"
+#include "platform/Audio.hpp"
+
 #import <AppKit/AppKit.h>
 #import <ImageIO/ImageIO.h>
 
@@ -470,6 +474,18 @@ int runWindowed(const Session& session) {
 
         // 1280x720 points: comfortable debug size on a laptop screen.
         rm::Window window{1280, 720, "recoil-metal — m8: movable units"};
+
+        // SOUND, windowed only: the headless paths are captures and a capture is silent.
+        // The mixer lives on the stack beside the window; the output pulls from it on the
+        // audio thread and a machine with no device just plays the match mute — the same
+        // degradation `--mute` asks for on purpose.
+        rm::audio::Mixer mixer;
+        rm::audio::Output audioOutput;
+        if (hasFlag(session.argc, session.argv, "--mute")) {
+            mixer.setMasterGain(0.0f);
+        } else {
+            (void)audioOutput.start(mixer);
+        }
         window.setTerrain(mesh);
         applyGround(window, *map);
         window.setProps(props.textures.all(), props.batches);
@@ -1121,6 +1137,12 @@ int runWindowed(const Session& session) {
                 // per-tick notification (Events.hpp): the next advanceMatch clears the
                 // queue, so this tick's shots are visible now or never.
                 rm::emitCombatEffects(particles, units.events.all());
+
+                // ...and as SOUND, from the same per-tick queue for the same reason. The
+                // listener rides the camera every tick, so panning follows the view.
+                mixer.setListener(window.camera().target.x, window.camera().target.z,
+                                  window.camera().distance);
+                rm::audio::playForEvents(mixer, units.events.all());
 
                 // ...and the arcs' smoke, one puff per shell per tick — the emission rate
                 // is the sim's own, so the trail spacing is a tick of travel (ProjectileFx).

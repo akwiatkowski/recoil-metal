@@ -98,6 +98,8 @@ find_library(QUARTZCORE_FW QuartzCore REQUIRED)
 # ImageIO: PNG encoding for --screenshot. Part of the OS, not a dependency.
 find_library(IMAGEIO_FW ImageIO REQUIRED)
 find_library(COREGRAPHICS_FW CoreGraphics REQUIRED)
+# AVFoundation: the audio output. Part of the OS, not a dependency (ADR-044's standard).
+find_library(AVFOUNDATION_FW AVFoundation REQUIRED)
 
 add_library(metal_cpp INTERFACE)
 target_include_directories(metal_cpp SYSTEM INTERFACE
@@ -166,6 +168,9 @@ add_library(rm_core STATIC
     src/core/sim/Combat.cpp
     src/core/sim/Intel.cpp
     src/core/sim/BuildOrder.cpp
+    src/core/audio/Cues.cpp
+    src/core/audio/CueEvents.cpp
+    src/core/audio/Mixer.cpp
     src/core/sim/Economy.cpp
     src/core/sim/Movement.cpp
     src/core/sim/Pathfinding.cpp
@@ -226,6 +231,7 @@ add_executable(recoil-metal
     # destination — the only part of the app layer that genuinely needs Objective-C, which is
     # why everything that did not was moved into rm_app first (PLAN2.md §7 P7.5).
     src/app/Run.mm
+    src/platform/Audio.mm
     src/platform/Window.mm
     src/render/Renderer.mm
     # One class, several translation units (PLAN2.md §7 P7.3). `Renderer.mm` keeps the device,
@@ -237,7 +243,7 @@ add_executable(recoil-metal
     src/render/UiRenderer.mm)
 target_link_libraries(recoil-metal PRIVATE
     rm_app rm_core rm_project_warnings metal_cpp ${APPKIT_FW}
-    ${IMAGEIO_FW} ${COREGRAPHICS_FW})
+    ${IMAGEIO_FW} ${COREGRAPHICS_FW} ${AVFOUNDATION_FW})
 # ARC for the Objective-C side only. metal-cpp objects are C++ and unaffected
 # (they are manually retained/released — see AGENT.md gotchas).
 target_compile_options(recoil-metal PRIVATE
@@ -346,6 +352,7 @@ if(BUILD_TESTING)
         tests/test_prop_blueprint.cpp
         tests/test_settings.cpp
         tests/test_real_stratum_normals.cpp
+        tests/test_audio.cpp
         tests/test_scenario_save.cpp
         tests/support/SmfWriter.cpp
         tests/support/S3oWriter.cpp)
