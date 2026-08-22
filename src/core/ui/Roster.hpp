@@ -45,6 +45,16 @@ inline constexpr float kRosterGap = kUnit * 0.5f;
 /// The health bar under each tile.
 inline constexpr float kRosterBar = kUnit * 0.7f;
 
+/// The strip above the tiles carrying the selection's total count. Same height as the build
+/// tray's header, because the two are the same instrument fitting: a line of prose over a row
+/// of tiles.
+///
+/// WHY A HEADER AT ALL: the roster groups by type, so the one number it otherwise never states
+/// is the TOTAL — and "how many things is this order about to move" is the first fact of a
+/// selection. The overflow marker (`+N`) moves up here too, where it reads as part of the
+/// summary rather than floating over a tile.
+inline constexpr float kRosterHeader = kUnit * 3.0f;
+
 /// How many tiles the row shows before it stops.
 ///
 /// TWELVE, and it is a cap rather than a scroll or a shrink. A selection of forty types does not
@@ -60,6 +70,10 @@ inline constexpr std::size_t kRosterMaxTiles = 12;
 struct RosterTile {
     /// The blueprint id, as the corpus spells it.
     std::string id;
+
+    /// The display name — "Medium Tank" — or empty when the content states none. The hover
+    /// card reads it; the tile itself stays an icon, which is the whole roster idea.
+    std::string name;
 
     /// How many of this type are selected. Always at least one.
     std::size_t count = 1;
@@ -114,6 +128,10 @@ struct RosterLayout {
 [[nodiscard]] bool insideRoster(const RosterLayout& layout, float pointX,
                                 float pointY) noexcept;
 
+/// The hover card for one roster tile: the type's name, its id in the corner, how many are
+/// selected, and the group's exact health — the numbers the underbar compresses into colour.
+[[nodiscard]] InfoCard rosterTileCard(const RosterTile& tile);
+
 /// Draws the roster: a tile per type, its icon, its `xN` badge and its health underbar.
 void appendRoster(Geometry& out, const text::Font& labelFont, const text::Font& readoutFont,
                   const Theme& theme, const RosterLayout& layout,
@@ -125,8 +143,10 @@ void appendRoster(Geometry& out, const text::Font& labelFont, const text::Font& 
 /// dragging a box, and the thing a player expects at the left of the roster is whatever the
 /// selection is mostly about — which in practice is the first thing the box caught. Sorting by
 /// count would reorder the row as units die, which is the reflow this design exists to avoid.
+/// `names` is parallel to `ids` when given — a tile takes the name of the first unit of its
+/// type, which is every unit of its type. Callers without names may omit it.
 [[nodiscard]] std::vector<RosterTile> groupSelection(
     std::span<const std::string> ids, std::span<const float> health,
-    std::span<const float> maxHealth);
+    std::span<const float> maxHealth, std::span<const std::string> names = {});
 
 } // namespace rm::ui

@@ -28,7 +28,7 @@ RosterLayout rosterLayout(float viewportWidth, float viewportHeight,
     const float row = shown * kRosterTile + (shown - 1.0f) * kRosterGap;
 
     layout.width = row + kPad * 2.0f;
-    layout.height = kRosterTile + kRosterBar + kUnit * 0.5f + kPad * 2.0f;
+    layout.height = kRosterHeader + kRosterTile + kRosterBar + kUnit * 0.5f + kPad * 2.0f;
 
     // Centred horizontally, one margin off the bottom.
     layout.x = (viewportWidth - layout.width) * 0.5f;
@@ -38,7 +38,7 @@ RosterLayout rosterLayout(float viewportWidth, float viewportHeight,
 
 std::array<float, 2> rosterTileOrigin(const RosterLayout& layout, std::size_t index) noexcept {
     return {{layout.x + kPad + static_cast<float>(index) * (kRosterTile + kRosterGap),
-             layout.y + kPad}};
+             layout.y + kPad + kRosterHeader}};
 }
 
 std::optional<std::size_t> rosterTileAt(const RosterLayout& layout, float pointX,
@@ -47,7 +47,7 @@ std::optional<std::size_t> rosterTileAt(const RosterLayout& layout, float pointX
         return std::nullopt;
     }
     const float localX = pointX - (layout.x + kPad);
-    const float localY = pointY - (layout.y + kPad);
+    const float localY = pointY - (layout.y + kPad + kRosterHeader);
     if (localX < 0.0f || localY < 0.0f || localY > kRosterTile) {
         return std::nullopt;
     }
@@ -74,7 +74,8 @@ bool insideRoster(const RosterLayout& layout, float pointX, float pointY) noexce
 
 std::vector<RosterTile> groupSelection(std::span<const std::string> ids,
                                        std::span<const float> health,
-                                       std::span<const float> maxHealth) {
+                                       std::span<const float> maxHealth,
+                                       std::span<const std::string> names) {
     std::vector<RosterTile> tiles;
     for (std::size_t i = 0; i < ids.size(); ++i) {
         const float hp = i < health.size() ? health[i] : 0.0f;
@@ -91,9 +92,37 @@ std::vector<RosterTile> groupSelection(std::span<const std::string> ids,
             found->maxHealth += max;
             continue;
         }
-        tiles.push_back(RosterTile{.id = ids[i], .count = 1, .health = hp, .maxHealth = max});
+        tiles.push_back(RosterTile{.id = ids[i],
+                                   .name = i < names.size() ? names[i] : std::string{},
+                                   .count = 1,
+                                   .health = hp,
+                                   .maxHealth = max});
     }
     return tiles;
+}
+
+InfoCard rosterTileCard(const RosterTile& tile) {
+    InfoCard card;
+    card.title = tile.name.empty() ? tile.id : tile.name;
+    if (!tile.name.empty()) {
+        card.corner = tile.id;
+    }
+
+    // Stated even at one — "COUNT 1" is the difference between "this tile is one unit" and a
+    // reader wondering whether the badge was dropped. The tile's own badge stays silent at
+    // one for the opposite reason: on the grid the common case must cost no ink.
+    card.rows.push_back(InfoRow{.label = "COUNT", .value = std::to_string(tile.count)});
+
+    // The exact numbers the underbar compresses into colour, in that bar's own colour — the
+    // card and the bar must not disagree about how bad it is.
+    if (tile.maxHealth > 0.0f) {
+        const float fill = tile.fill();
+        card.rows.push_back(InfoRow{
+            .label = "HEALTH",
+            .value = formatAmount(tile.health) + " / " + formatAmount(tile.maxHealth),
+            .tint = fill > 0.6f ? kGain : (fill > 0.3f ? kWarn : kLoss)});
+    }
+    return card;
 }
 
 void appendRoster(Geometry& out, const text::Font& labelFont, const text::Font& readoutFont,
@@ -104,6 +133,39 @@ void appendRoster(Geometry& out, const text::Font& labelFont, const text::Font& 
     }
 
     appendPanel(out, labelFont, theme, layout.x, layout.y, layout.width, layout.height);
+
+    // The header: the selection's TOTAL, which grouping-by-type otherwise erases. "14 UNITS"
+    // is the first fact of a selection — how many things the next order is about to move — and
+    // the one number no tile can carry. Set like the build tray's header, because the two
+    // panels are the same fitting and a player should read them as one instrument family.
+    {
+        std::size_t total = 0;
+        for (const RosterTile& tile : tiles) {
+            total += tile.count;
+        }
+        const float headerBaseline = layout.y + kPad + kRosterHeader * 0.7f;
+        const std::string summary =
+            std::to_string(total) + (total == 1 ? " UNIT" : " UNITS");
+        (void)text::appendText(out.label, labelFont.glyphs, summary, layout.x + kPad,
+                               headerBaseline, theme.label);
+
+        // WHAT WAS DROPPED, SAID OUT LOUD — in the summary line, where a count belongs. A
+        // roster that silently omits types is a roster that lies about the selection, and the
+        // lie is invisible: the row looks complete.
+        if (layout.hidden > 0 && readoutFont.usable()) {
+            const std::string more = "+" + std::to_string(layout.hidden)
+                                     + (layout.hidden == 1 ? " TYPE" : " TYPES");
+            (void)text::appendText(out.readout, readoutFont.glyphs, more,
+                                   layout.x + layout.width - kPad
+                                       - text::measureText(readoutFont.glyphs, more),
+                                   headerBaseline, kInk);
+        }
+
+        // The rule under the header — the build tray's device, shared deliberately.
+        text::appendRect(out.label, labelFont, layout.x + kPad,
+                         layout.y + kPad + kRosterHeader - kBevel, layout.width - kPad * 2.0f,
+                         kBevel, fade(theme.edge, 0.9f));
+    }
 
     for (std::size_t index = 0; index < layout.shown && index < tiles.size(); ++index) {
         const RosterTile& tile = tiles[index];
@@ -188,15 +250,6 @@ void appendRoster(Geometry& out, const text::Font& labelFont, const text::Font& 
                          kRosterTile, border);
     }
 
-    // WHAT WAS DROPPED, SAID OUT LOUD. A roster that silently omits types is a roster that
-    // lies about the selection, and the lie is invisible — the row looks complete.
-    if (layout.hidden > 0 && readoutFont.usable()) {
-        const std::string more = "+" + std::to_string(layout.hidden);
-        (void)text::appendText(out.readout, readoutFont.glyphs, more,
-                               layout.x + layout.width - kPad
-                                   - text::measureText(readoutFont.glyphs, more),
-                               layout.y + kPad * 0.9f, kInk);
-    }
 }
 
 } // namespace rm::ui

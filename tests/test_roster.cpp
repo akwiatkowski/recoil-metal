@@ -90,6 +90,44 @@ TEST_CASE("a group with no stated maximum reads as full", "[ui][roster]") {
     CHECK(tile.fill() == 1.0f);
 }
 
+TEST_CASE("a tile's hover card names the type and shows the exact numbers", "[ui][roster]") {
+    const rm::ui::RosterTile hurt{.id = "UEL0201",
+                                  .name = "Medium Tank",
+                                  .count = 3,
+                                  .health = 150.0f,
+                                  .maxHealth = 900.0f};
+    const rm::ui::InfoCard card = rm::ui::rosterTileCard(hurt);
+    CHECK(card.title == "Medium Tank");
+    CHECK(card.corner == "UEL0201");
+    REQUIRE(card.rows.size() == 2);
+    CHECK(card.rows[0].value == "3");
+    // A sixth of maximum is deep in the loss band; the card's colour must agree with the
+    // underbar's, which turns red below thirty percent.
+    CHECK(card.rows[1].tint == rm::ui::kLoss);
+
+    // Nameless: the id leads and is not repeated; no stated maximum, no health row.
+    const rm::ui::RosterTile bare{.id = "XXL0001", .count = 1};
+    const rm::ui::InfoCard sparse = rm::ui::rosterTileCard(bare);
+    CHECK(sparse.title == "XXL0001");
+    CHECK(sparse.corner.empty());
+    CHECK(sparse.rows.size() == 1);
+}
+
+TEST_CASE("grouping keeps the first unit's name for the type", "[ui][roster]") {
+    const std::vector<std::string> ids{"UEL0201", "UEL0201"};
+    const std::vector<float> hp{100.0f, 200.0f};
+    const std::vector<float> max{300.0f, 300.0f};
+    const std::vector<std::string> names{"Medium Tank", "Medium Tank"};
+    const auto tiles = rm::ui::groupSelection(ids, hp, max, names);
+    REQUIRE(tiles.size() == 1);
+    CHECK(tiles[0].name == "Medium Tank");
+
+    // Without names the tile is nameless rather than wrong.
+    const auto plain = rm::ui::groupSelection(ids, hp, max);
+    REQUIRE(plain.size() == 1);
+    CHECK(plain[0].name.empty());
+}
+
 TEST_CASE("the roster is centred along the bottom", "[ui][roster]") {
     const auto layout = rosterLayout(kWide, kTall, 4);
     REQUIRE_FALSE(layout.empty());

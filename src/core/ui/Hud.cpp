@@ -153,6 +153,49 @@ void appendPanel(Geometry& out, const text::Font& font, const Theme& theme, floa
                      theme.edgeLit);
 }
 
+float infoCardHeight(float lineHeight, std::size_t rowCount) noexcept {
+    const float line = std::max(lineHeight, 12.0f);
+    return kPad * 2.0f + line * 0.9f + static_cast<float>(rowCount) * line * 0.9f;
+}
+
+void appendInfoCard(Geometry& out, const text::Font& labelFont, const text::Font& readoutFont,
+                    const Theme& theme, float x, float y, float width, const InfoCard& card) {
+    const text::Font& chrome = labelFont.usable() ? labelFont : readoutFont;
+    if (!chrome.usable() || card.empty() || width <= 0.0f) {
+        return;
+    }
+    const float line = std::max(chrome.lineHeight, 12.0f);
+    const float height = infoCardHeight(chrome.lineHeight, card.rows.size());
+
+    appendPanel(out, chrome, theme, x, y, width, height);
+
+    // The title in the reading ink, not the silkscreen: it is the answer the hover asked
+    // for, and the one line here a player actually reads rather than scans past.
+    float baseline = y + kPad + line * 0.7f;
+    if (labelFont.usable() && !card.title.empty()) {
+        (void)text::appendText(out.label, labelFont.glyphs, card.title, x + kPad, baseline,
+                               kInk);
+    }
+    if (readoutFont.usable() && !card.corner.empty()) {
+        const float cornerWidth = text::measureText(readoutFont.glyphs, card.corner);
+        (void)text::appendText(out.readout, readoutFont.glyphs, card.corner,
+                               x + width - kPad - cornerWidth, baseline, fade(kInk, 0.6f));
+    }
+
+    for (const InfoRow& row : card.rows) {
+        baseline += line * 0.9f;
+        if (labelFont.usable()) {
+            (void)text::appendText(out.label, labelFont.glyphs, row.label, x + kPad, baseline,
+                                   theme.label);
+        }
+        if (readoutFont.usable()) {
+            const float valueWidth = text::measureText(readoutFont.glyphs, row.value);
+            (void)text::appendText(out.readout, readoutFont.glyphs, row.value,
+                                   x + width - kPad - valueWidth, baseline, row.tint);
+        }
+    }
+}
+
 namespace {
 
 /// One resource's row: a chip, a label, the numbers, a storage bar and a flow strip.

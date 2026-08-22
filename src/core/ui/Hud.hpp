@@ -192,6 +192,40 @@ struct Geometry {
 void appendPanel(Geometry& out, const text::Font& font, const Theme& theme, float x, float y,
                  float width, float height, bool filled = true);
 
+// --- The info card ----------------------------------------------------------
+//
+// What HOVER means in this interface: a small panel of facts about the thing under the
+// cursor, docked onto the panel that owns it rather than chasing the pointer. A tooltip that
+// follows the mouse covers the neighbouring cells — the very things the player is comparing
+// against — and jitters with the hand; a card in a fixed slot is read with the same glance
+// every time, which is the instrument idea the rest of the HUD is built on.
+
+/// One fact: a label on the left, a value on the right, the value in the colour of what it
+/// IS — mass green, energy amber — per the palette's fixed/livery rule.
+struct InfoRow {
+    std::string label;
+    std::string value;
+    Colour tint = kInk;
+};
+
+/// The card: a title (the display name), the id set quiet in the corner, and the rows.
+struct InfoCard {
+    std::string title;
+    std::string corner;
+    std::vector<InfoRow> rows;
+
+    [[nodiscard]] bool empty() const noexcept { return title.empty() && rows.empty(); }
+};
+
+/// The card's height for `rowCount` rows at `lineHeight`, so a caller can dock it above the
+/// panel it belongs to. One function used by layout and drawing both — a height computed
+/// twice is a card that overlaps its owner by the difference.
+[[nodiscard]] float infoCardHeight(float lineHeight, std::size_t rowCount) noexcept;
+
+/// Draws the card at (x, y), `width` across.
+void appendInfoCard(Geometry& out, const text::Font& labelFont, const text::Font& readoutFont,
+                    const Theme& theme, float x, float y, float width, const InfoCard& card);
+
 /// Builds the whole interface for one frame.
 ///
 /// `labelFont` is the condensed face and `readoutFont` the monospaced one; either being

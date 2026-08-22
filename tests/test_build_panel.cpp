@@ -53,13 +53,15 @@ TEST_CASE("the grid wraps at three columns and keeps the last short row", "[ui][
     CHECK(fourth[1] > first[1]);
 }
 
-TEST_CASE("the panel sits above the minimap and shares its left edge", "[ui][build]") {
+TEST_CASE("the panel docks onto the minimap and shares its left edge", "[ui][build]") {
     const MinimapLayout minimap = aMinimap();
     const auto layout = buildPanelLayout(minimap, 6);
 
     // One bottom-left block, which is the arrangement being copied from Beyond All Reason.
+    // DOCKED, not merely near: the tray's bottom edge is the minimap's top edge, so the two
+    // hairlines meet as one shared rail and the block reads as a single control.
     CHECK(layout.x == minimap.x);
-    CHECK(layout.y + layout.height < minimap.y);
+    CHECK(layout.y + layout.height == minimap.y);
 }
 
 TEST_CASE("a longer list grows upward rather than off the bottom", "[ui][build]") {
@@ -148,6 +150,85 @@ TEST_CASE("the grid moves with the drawable, so a hit test must share its space"
 
     REQUIRE(buildOptionAt(small, 6, x, y).has_value());
     CHECK_FALSE(buildOptionAt(large, 6, x, y).has_value());
+}
+
+TEST_CASE("the vertical gutter between rows is a miss too", "[ui][build]") {
+    // Cells are taller than they are wide since names arrived, so the row pitch is its own
+    // quantity — a hit test still using the width for it puts every second row's clicks in
+    // the wrong cell, which no screenshot shows.
+    const auto layout = buildPanelLayout(aMinimap(), 6);
+    const auto first = buildCellOrigin(layout, 0);
+
+    const float x = first[0] + rm::ui::kBuildCell * 0.5f;
+    const float y = first[1] + rm::ui::kBuildCellHeight + rm::ui::kBuildGap * 0.5f;
+    CHECK_FALSE(buildOptionAt(layout, 6, x, y).has_value());
+
+    // Just inside the bottom of the first cell is still the first cell.
+    const auto hit = buildOptionAt(layout, 6, x, first[1] + rm::ui::kBuildCellHeight - 1.0f);
+    REQUIRE(hit.has_value());
+    CHECK(*hit == 0);
+}
+
+TEST_CASE("a name wraps by words to the cell and truncates only a hopeless word",
+          "[ui][build]") {
+    // Six points per glyph, the synthetic-font convention the text tests use.
+    std::vector<rm::text::Glyph> glyphs(rm::text::kGlyphCount);
+    for (rm::text::Glyph& glyph : glyphs) {
+        glyph.advance = 6.0f;
+    }
+
+    // "Mass Extractor" at 6/glyph is 84 wide; a 66-point cell takes one word per line.
+    const auto two = rm::ui::wrapCellName(glyphs, "Mass Extractor", 66.0f);
+    CHECK(two[0] == "Mass");
+    CHECK(two[1] == "Extractor");
+
+    // A short name stays on one line, second slot empty.
+    const auto one = rm::ui::wrapCellName(glyphs, "Frigate", 66.0f);
+    CHECK(one[0] == "Frigate");
+    CHECK(one[1].empty());
+
+    // A single word wider than the cell is truncated by characters, not dropped: eleven
+    // glyphs of "Hydrocarbon" fit 66 points at six each.
+    const auto clipped = rm::ui::wrapCellName(glyphs, "Hydrocarbon Power", 66.0f);
+    CHECK(clipped[0] == "Hydrocarbon");
+    CHECK(clipped[1] == "Power");
+    const auto longWord = rm::ui::wrapCellName(glyphs, "Extraordinarily", 66.0f);
+    CHECK(longWord[0] == "Extraordina");
+
+    // A third line's worth of words is dropped — the hover card carries the full name.
+    const auto dropped = rm::ui::wrapCellName(glyphs, "Aeon Tech Mass Fabricator", 30.0f);
+    CHECK(dropped[0] == "Aeon");
+    CHECK(dropped[1] == "Tech");
+}
+
+TEST_CASE("the hover card states the facts and omits what the content did not say",
+          "[ui][build]") {
+    const BuildOption full{.id = "UEB1103",
+                           .name = "Mass Extractor",
+                           .massCost = 36.0f,
+                           .energyCost = 360.0f,
+                           .buildSeconds = 10.0f,
+                           .health = 600.0f,
+                           .affordable = true};
+    const rm::ui::InfoCard card = rm::ui::buildOptionCard(full);
+    CHECK(card.title == "Mass Extractor");
+    CHECK(card.corner == "UEB1103");
+    REQUIRE(card.rows.size() == 4);
+    CHECK(card.rows[0].label == "MASS");
+    CHECK(card.rows[0].tint == rm::ui::kMass);
+
+    // Unaffordable mass turns the row to the loss colour — the card agrees with the cell.
+    BuildOption poor = full;
+    poor.affordable = false;
+    CHECK(rm::ui::buildOptionCard(poor).rows[0].tint == rm::ui::kLoss);
+
+    // A nameless option leads with its id and repeats nothing in the corner; its zero rows
+    // are absent rather than printed as measurements.
+    const BuildOption bare{.id = "XXB0001", .massCost = 5.0f};
+    const rm::ui::InfoCard sparse = rm::ui::buildOptionCard(bare);
+    CHECK(sparse.title == "XXB0001");
+    CHECK(sparse.corner.empty());
+    CHECK(sparse.rows.size() == 1);
 }
 
 TEST_CASE("tier tints brighten with tier and stay short of white", "[ui][build]") {

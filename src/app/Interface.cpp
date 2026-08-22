@@ -167,7 +167,9 @@ void gatherBuildOptions(const UnitScene& scene, std::span<const rm::sim::UnitId>
         }
         const rm::sim::Faction faction = scene.armies[static_cast<std::size_t>(army)].faction;
 
-        who = BuildSelection{.builder = id, .name = def->name};
+        who = BuildSelection{.builder = id,
+                             .name = def->name,
+                             .role = std::string{rm::unitdef::roleName(role)}};
         for (const rm::unitdef::Role wanted : kStructureRoles) {
             for (const rm::data::RosterEntry& entry : scene.roster.all(faction, wanted)) {
                 // TIER ONE ONLY, for now. A commander can build a T1 structure of each kind, and
@@ -178,10 +180,19 @@ void gatherBuildOptions(const UnitScene& scene, std::span<const rm::sim::UnitId>
                     continue;
                 }
                 const float mass = rm::sim::magToFloat(entry.costMass);
+                // Seconds at THIS builder's rate — the blueprint states work, the builder
+                // states work per second, and the player is only ever told the quotient.
+                const float seconds =
+                    def->buildRate > 0.0f
+                        ? rm::sim::magToFloat(entry.buildTime) / def->buildRate
+                        : 0.0f;
                 out.push_back(rm::ui::BuildOption{
                     .id = entry.id,
+                    .name = entry.description,
                     .massCost = mass,
-                    .energyCost = 0.0f,
+                    .energyCost = rm::sim::magToFloat(entry.costEnergy),
+                    .buildSeconds = seconds,
+                    .health = rm::sim::magToFloat(entry.health),
                     .affordable = mass <= storedMass,
                     .tint = rm::ui::tierTint(theme, entry.tech),
                 });
@@ -423,9 +434,11 @@ void gatherRoster(const UnitScene& scene, std::span<const rm::sim::UnitId> selec
     out.clear();
 
     std::vector<std::string> ids;
+    std::vector<std::string> names;
     std::vector<float> health;
     std::vector<float> maxHealth;
     ids.reserve(selection.size());
+    names.reserve(selection.size());
     health.reserve(selection.size());
     maxHealth.reserve(selection.size());
 
@@ -439,11 +452,12 @@ void gatherRoster(const UnitScene& scene, std::span<const rm::sim::UnitId> selec
         }
         const rm::sim::Health& hp = scene.store.health()[id.index];
         ids.push_back(def->name);
+        names.push_back(def->description);
         health.push_back(rm::sim::magToFloat(hp.current));
         maxHealth.push_back(rm::sim::magToFloat(hp.maximum));
     }
 
-    out = rm::ui::groupSelection(ids, health, maxHealth);
+    out = rm::ui::groupSelection(ids, health, maxHealth, names);
 }
 
 } // namespace rm::app

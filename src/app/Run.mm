@@ -337,10 +337,28 @@ int runScreenshot(const Session& session) {
             }
 
             if (!shotOptions.empty()) {
-                rm::ui::appendBuildPanel(
-                    hud, renderer.labelFont(), renderer.readoutFont(), hudThemeFor(units),
-                    rm::ui::buildPanelLayout(shotMinimap, shotOptions.size()), shotOptions,
-                    std::nullopt, shotWho.name);
+                // `--hover N` lights the Nth option (1-based) and draws its info card, for
+                // the same reason `--select` exists: a headless run has no cursor, and
+                // interface that appears only under one cannot reach a screenshot.
+                const std::size_t hoverAt = parseCount(argc, argv, "--hover");
+                const std::optional<std::size_t> shotHovered =
+                    hoverAt > 0 && hoverAt <= shotOptions.size()
+                        ? std::optional<std::size_t>{hoverAt - 1}
+                        : std::nullopt;
+                const rm::ui::BuildPanelLayout shotPanel =
+                    rm::ui::buildPanelLayout(shotMinimap, shotOptions.size());
+                rm::ui::appendBuildPanel(hud, renderer.labelFont(), renderer.readoutFont(),
+                                         hudThemeFor(units), shotPanel, shotOptions,
+                                         shotHovered, shotWho.name, shotWho.role);
+                if (shotHovered) {
+                    const rm::ui::InfoCard card =
+                        rm::ui::buildOptionCard(shotOptions[*shotHovered]);
+                    const float cardHeight = rm::ui::infoCardHeight(
+                        renderer.labelFont().lineHeight, card.rows.size());
+                    rm::ui::appendInfoCard(hud, renderer.labelFont(), renderer.readoutFont(),
+                                           hudThemeFor(units), shotPanel.x,
+                                           shotPanel.y - cardHeight, shotPanel.width, card);
+                }
                 std::printf("  build panel: %zu options for %s\n", shotOptions.size(),
                             shotWho.name.c_str());
             }
@@ -1030,7 +1048,20 @@ int runWindowed(const Session& session) {
 
                 rm::ui::appendBuildPanel(hudScratch, window.labelFont(), window.readoutFont(),
                                          hudThemeFor(units), panel, buildOptions, hovered,
-                                         buildWho.name);
+                                         buildWho.name, buildWho.role);
+
+                // The hover card, docked above the tray — the block grows upward one more
+                // step: minimap, tray, card. A fixed slot rather than a pointer-chasing
+                // tooltip; the reasons are on `InfoCard`.
+                if (hovered && *hovered < buildOptions.size()) {
+                    const rm::ui::InfoCard card =
+                        rm::ui::buildOptionCard(buildOptions[*hovered]);
+                    const float cardHeight = rm::ui::infoCardHeight(
+                        window.labelFont().lineHeight, card.rows.size());
+                    rm::ui::appendInfoCard(hudScratch, window.labelFont(),
+                                           window.readoutFont(), hudThemeFor(units), panel.x,
+                                           panel.y - cardHeight, panel.width, card);
+                }
             }
 
             // The roster, bottom centre. After the tray so both are in one buffer; they do not
@@ -1041,9 +1072,21 @@ int runWindowed(const Session& session) {
                                          static_cast<float>(window.height()),
                                          rosterTiles.size());
                 const std::array<float, 2> at = window.cursor();
+                const std::optional<std::size_t> overTile =
+                    rm::ui::rosterTileAt(roster, at[0], at[1]);
                 rm::ui::appendRoster(hudScratch, window.labelFont(), window.readoutFont(),
-                                     hudThemeFor(units), roster, rosterTiles,
-                                     rm::ui::rosterTileAt(roster, at[0], at[1]));
+                                     hudThemeFor(units), roster, rosterTiles, overTile);
+
+                // The tile's card, above the roster — same fitting as the tray's.
+                if (overTile && *overTile < rosterTiles.size()) {
+                    const rm::ui::InfoCard card =
+                        rm::ui::rosterTileCard(rosterTiles[*overTile]);
+                    const float cardHeight = rm::ui::infoCardHeight(
+                        window.labelFont().lineHeight, card.rows.size());
+                    rm::ui::appendInfoCard(hudScratch, window.labelFont(),
+                                           window.readoutFont(), hudThemeFor(units), roster.x,
+                                           roster.y - cardHeight, roster.width, card);
+                }
             }
 
             window.setHud(hudScratch.label, hudScratch.readout, hudScratch.image);

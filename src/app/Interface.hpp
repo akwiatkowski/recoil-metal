@@ -44,6 +44,11 @@ struct BuildSelection {
     rm::sim::UnitId builder{};
     std::string name;
 
+    /// The builder's role, as `roleName` spells it — "commander", "builder". The panel header
+    /// leads with this and demotes the blueprint id to a suffix, because a role is the word a
+    /// player thinks in and an id is how they name the unit to somebody else.
+    std::string role;
+
     [[nodiscard]] bool any() const noexcept { return !name.empty(); }
 };
 

@@ -49,7 +49,7 @@ namespace rm::ui {
 
 // --- Metrics ----------------------------------------------------------------
 
-/// A cell's side, in points.
+/// A cell's WIDTH, in points.
 ///
 /// SIZED FROM THE LONGEST THING IT HOLDS, which is a seven-character blueprint id like
 /// `UEB1103` at the label font's natural size. The first version guessed 48 and the ids ran
@@ -58,6 +58,14 @@ namespace rm::ui {
 /// about rectangles. Scaling the text down instead would cost crispness, which `appendText`'s
 /// own note warns against.
 inline constexpr float kBuildCell = kUnit * 12.0f;
+
+/// A cell's HEIGHT, in points — taller than it is wide, since display names arrived.
+///
+/// The face carries an icon, up to TWO lines of name, and the cost; a square cell held the
+/// icon, one id line and the cost exactly, and "Mass Extractor" does not fit one line at this
+/// width. The height buys the second line; the width stays, because three columns of it is
+/// what docks onto the minimap and what the by-position muscle memory is trained on.
+inline constexpr float kBuildCellHeight = kUnit * 15.0f;
 
 /// The gap between cells. One unit, not two: BAR's grid is TIGHT, and the tightness is what
 /// makes it read as one control rather than as scattered buttons.
@@ -81,11 +89,22 @@ inline constexpr float kBuildIcon = kBuildCell - kUnit * 6.0f;
 
 /// One thing the selected builder could start.
 struct BuildOption {
-    /// The blueprint id as its directory spells it — `UEB1103`. Drawn under the icon.
+    /// The blueprint id as its directory spells it — `UEB1103`. The hover card states it;
+    /// the cell face carries the name below when there is one.
     std::string id;
+
+    /// The display name — "Mass Extractor" — or empty, in which case the cell face shows the
+    /// id, which is what every cell showed before names existed.
+    std::string name;
 
     float massCost = 0.0f;
     float energyCost = 0.0f;
+
+    /// For the hover card: how long the build takes at the builder's own rate, and what the
+    /// result can survive. Zero means the content stated nothing, and the card omits the row
+    /// rather than printing a zero as if it were a measurement.
+    float buildSeconds = 0.0f;
+    float health = 0.0f;
 
     /// Whether the army can pay for it RIGHT NOW, from stored mass.
     ///
@@ -125,12 +144,15 @@ struct BuildPanelLayout {
     [[nodiscard]] bool empty() const noexcept { return rows <= 0; }
 };
 
-/// Places the panel against the minimap, growing UPWARD from its top edge.
+/// Places the panel against the minimap, DOCKED onto its top edge and growing UPWARD.
 ///
 /// Upward rather than downward because the minimap is already at the bottom margin, and rightward
 /// would put the grid where the eye expects the map. Growing up means a long option list pushes
 /// into empty screen rather than off it, and a short one sits just above the map — which is
 /// exactly how BAR's behaves as a factory's queue changes.
+///
+/// Docked flush — `y + height == minimap.y` — so the two hairlines meet and the tray and the
+/// map read as one bottom-left command block rather than as neighbours.
 [[nodiscard]] BuildPanelLayout buildPanelLayout(const MinimapLayout& minimap,
                                                 std::size_t optionCount) noexcept;
 
@@ -164,10 +186,30 @@ struct BuildPanelLayout {
 /// `hovered` gets the lit border BAR uses to say "this one". An out-of-range index draws no
 /// highlight rather than clamping to a neighbour, because highlighting the wrong cell is worse
 /// than highlighting none.
+///
+/// The header sets `builderRole` — the word a player thinks in, "COMMANDER" — as its lead, and
+/// `builderName` (the blueprint id) right-aligned in the readout face. An empty role promotes
+/// the id back to the lead seat rather than leaving the line blank.
 void appendBuildPanel(Geometry& out, const text::Font& labelFont, const text::Font& readoutFont,
                       const Theme& theme, const BuildPanelLayout& layout,
                       std::span<const BuildOption> options, std::optional<std::size_t> hovered,
-                      std::string_view builderName);
+                      std::string_view builderName, std::string_view builderRole = {});
+
+/// A display name broken to fit a cell face: up to two lines, empty slots unused.
+///
+/// GREEDY BY WORDS — "Mass Extractor" becomes "Mass" / "Extractor" — because a name is words
+/// and a break inside one is a different name. A single word wider than the cell is truncated
+/// by characters instead, which is the honest floor: "Experiment" clipped is still legible
+/// where a vanished line (the id's old overflow rule) says the cell is nameless. A third line's
+/// worth of words is dropped; the hover card states the full name.
+[[nodiscard]] std::array<std::string_view, 2> wrapCellName(
+    std::span<const text::Glyph> glyphs, std::string_view name, float maxWidth) noexcept;
+
+/// The hover card for one build option: full name, id in the corner, and the facts a player
+/// weighs before building — mass (in the loss colour when it cannot be paid), energy, build
+/// time at the selected builder's rate, and what the result can survive. A zero row is
+/// omitted rather than printed: zero means the content stated nothing, not a measurement.
+[[nodiscard]] InfoCard buildOptionCard(const BuildOption& option);
 
 /// The tint for a tech tier, 1..3.
 ///
