@@ -399,6 +399,14 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
             if (const std::optional<std::string_view> named = lods->items.front().stringAt("MeshName")) {
                 def.modelPath = std::string{*named};
             }
+            def.lodCutoff = numberOr(lods->items.front(), "LODCutoff", 0.0f);
+            if (lods->items.size() > 1) {
+                def.hasLod1 = true;
+                def.lod1Albedo =
+                    std::string{lods->items[1].stringAt("AlbedoName").value_or("")};
+                def.lod1Spec =
+                    std::string{lods->items[1].stringAt("SpecularName").value_or("")};
+            }
         }
     }
 

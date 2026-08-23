@@ -1200,7 +1200,9 @@ int runWindowed(const Session& session) {
             //
             // Walk-cycle phase included, and interpolated too: a leg that stepped at the tick
             // rate would slide as badly as a body that did.
-            units.gatherForDrawing(clock.alpha());
+            const simd_float3 cameraEye = window.camera().eye();
+            const std::array<float, 3> lodEye{cameraEye.x, cameraEye.y, cameraEye.z};
+            units.gatherForDrawing(clock.alpha(), &lodEye);
 
             // Re-upload when the match built something new. Only on growth, which is a
             // handful of times in a whole match — this walks every model and texture, so

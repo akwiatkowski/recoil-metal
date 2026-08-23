@@ -2,6 +2,7 @@
 
 #include "core/data/ArmorDefs.hpp"
 #include "core/data/MoveDef.hpp"
+#include "core/model/Scm.hpp"
 #include "core/model/Sca.hpp"
 #include "core/unit/BarNames.hpp"
 #include "core/unit/UnitBlueprint.hpp"
@@ -518,6 +519,49 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
         scene.setPathForType(type, blueprintPath);
         scene.setTypeTraits(type, move.maxSlopeDegrees, move.maxWaterDepthElmos,
                             unit->def.meshToElmos);
+
+        // The coarse mesh, when the blueprint declares one: its own batch, drawn instead
+        // of the fine one past the cutoff (Scene::lodOfType; the gather routes). Found by
+        // convention beside the blueprint, with its own albedo when it names one — a far
+        // unit with the fine texture on coarse UVs would smear, and the LOD art ships its
+        // own exactly because of that.
+        if (unit->def.hasLod1 && unit->def.lodCutoff > 0.0f) {
+            const std::string coarsePath =
+                rm::unitbp::resolveMeshInVfs(unit->def, blueprintPath, content, 1);
+            if (!coarsePath.empty()) {
+                if (const auto bytes = content.read(coarsePath)) {
+                    if (auto coarse = rm::scm::load(*bytes)) {
+                        scene.models.push_back(std::move(*coarse));
+                        const std::string dir =
+                            std::string{blueprintPath.substr(0, blueprintPath.rfind('/') + 1)};
+                        const std::string albedo = unit->def.lod1Albedo.empty()
+                                                       ? unit->albedoPath
+                                                       : dir + unit->def.lod1Albedo;
+                        const std::string shading = unit->def.lod1Spec.empty()
+                                                        ? unit->shadingPath
+                                                        : dir + unit->def.lod1Spec;
+                        scene.batches.push_back(rm::UnitBatch{
+                            .model = &scene.models.back(),
+                            .instances = {},
+                            .textures = rm::TexturePair{
+                                .diffuse = scene.textures.resolve(content, albedo, "albedo"),
+                                .shading =
+                                    scene.textures.resolve(content, shading, "specTeam"),
+                            },
+                        });
+                        scene.lodOfType[type] = UnitScene::LodLevel{
+                            .batch = scene.batches.size() - 1,
+                            .cutoffElmos =
+                                unit->def.lodCutoff * UnitScene::kLodElmosPerCutoff,
+                        };
+                        std::printf("  lod: %s coarse mesh beyond %.0f elmos\n",
+                                    unit->def.name.c_str(),
+                                    static_cast<double>(
+                                        scene.lodOfType[type].cutoffElmos));
+                    }
+                }
+            }
+        }
 
         found = scene.typeForBlueprint.emplace(std::string{blueprintPath}, type).first;
     }

@@ -248,6 +248,18 @@ struct UnitDef {
     /// Whether this unit can build anything at all.
     [[nodiscard]] bool isBuilder() const noexcept { return buildRate > 0.0f; }
 
+    // --- level of detail -----------------------------------------------------
+    //
+    // `Display.Mesh.LODs`: the finest level's cutoff and whether a coarser mesh follows.
+    // 563 of 568 blueprints declare a cutoff; the coarse mesh itself is found by convention
+    // (`<id>_lod1.scm`, resolveMeshInVfs level 1) and usually brings its own albedo.
+    // The cutoff's unit is the engine's own camera-distance figure; the renderer scales it
+    // once into elmos (Scene::kLodElmosPerCutoff) — labelled a calibration, not a fact.
+    float lodCutoff = 0.0f;
+    bool hasLod1 = false;
+    std::string lod1Albedo;   ///< `LODs[2].AlbedoName`, or empty to share the fine albedo
+    std::string lod1Spec;     ///< `LODs[2].SpecularName`, same fallback
+
     // --- threat ------------------------------------------------------------
     //
     // The blueprint's own estimate of how dangerous this unit is, per domain —

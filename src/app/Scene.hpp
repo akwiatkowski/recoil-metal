@@ -136,6 +136,17 @@ struct UnitScene {
     // has to stay a memcpy.
     std::vector<std::vector<rm::UnitInstance>> drawScratch;
 
+    /// LOD: for a type with a coarse mesh, which batch draws it far away and past what
+    /// camera distance. `kLodElmosPerCutoff` scales the blueprint's own LODCutoff figure
+    /// into elmos — a CALIBRATION against how the retail game reads at distance, not a
+    /// decoded unit; tune it, don't trust it.
+    struct LodLevel {
+        std::size_t batch = 0;
+        float cutoffElmos = 0.0f;
+    };
+    std::map<rm::UnitTypeIndex, LodLevel> lodOfType;
+    static constexpr float kLodElmosPerCutoff = 2.0f;
+
     // Where each live unit ended up in `drawScratch`, by slot: which batch, and which index
     // within it. Empty for a slot that is dead or was never filled. This is what turns a
     // handle back into something the renderer can outline.
@@ -442,7 +453,10 @@ struct UnitScene {
                           * rm::sim::fxToFloat(sight.squareElmos()));
     }
 
-    void gatherForDrawing(float alpha = 1.0f) {
+    /// `eye`, when given, is the camera position in world elmos and switches far
+    /// instances onto their coarse batches — the windowed loop passes it; headless
+    /// captures do not, and draw everything fine, which is what a screenshot wants.
+    void gatherForDrawing(float alpha = 1.0f, const std::array<float, 3>* eye = nullptr) {
         // FROM THE SNAPSHOTS, not from the store (§7 P7.1/P7.2). This used to walk
         // `store.transforms()` and `store.motion()` directly, which is why motion stepped at
         // the tick rate: a frame drew wherever the sim happened to be, and there was no second
@@ -478,9 +492,23 @@ struct UnitScene {
             // THROUGH THE MAP, not `unit.type` directly (`#3090`). A type and a batch are no
             // longer the same number: a blueprint can be registered as buildable long before
             // anything of it is built, and such a type has no batch until it spawns.
-            const std::size_t batch = batchOf(unit.type);
+            std::size_t batch = batchOf(unit.type);
             if (batch == kNoBatch || batch >= drawScratch.size()) {
                 continue;  // a type with no batch: nothing to draw it with
+            }
+            // Far enough for the coarse mesh? Distance to the CAMERA, all three axes —
+            // zooming out is flying up, and height is most of the distance that matters.
+            if (eye != nullptr) {
+                if (const auto lod = lodOfType.find(unit.type);
+                    lod != lodOfType.end() && lod->second.batch < drawScratch.size()) {
+                    const float dx = unit.position[0] - (*eye)[0];
+                    const float dy = unit.position[1] - (*eye)[1];
+                    const float dz = unit.position[2] - (*eye)[2];
+                    const float cutoff = lod->second.cutoffElmos;
+                    if (dx * dx + dy * dy + dz * dz > cutoff * cutoff) {
+                        batch = lod->second.batch;
+                    }
+                }
             }
             // Still keyed by SLOT, because that is what selection and picking name a unit by,
             // and a snapshot entry carries the id it came from.
