@@ -1,6 +1,7 @@
 #include "app/Run.hpp"
 
 #include "core/audio/CueEvents.hpp"
+#include "core/audio/Xwb.hpp"
 #include "core/audio/Cues.hpp"
 #include "platform/Audio.hpp"
 
@@ -484,7 +485,35 @@ int runWindowed(const Session& session) {
         if (hasFlag(session.argc, session.argv, "--mute")) {
             mixer.setMasterGain(0.0f);
         } else {
+            // `--volume 0..100`: the master gain, for tuning the mix by ear without a
+            // rebuild. Absent means the mixer's own default.
+            if (const std::size_t volume = parseCount(session.argc, session.argv, "--volume");
+                volume > 0) {
+                mixer.setMasterGain(static_cast<float>(std::min<std::size_t>(volume, 100))
+                                    / 100.0f);
+            }
             (void)audioOutput.start(mixer);
+        }
+
+        // The game's own booms: FA ships its audio as loose wave banks beside gamedata
+        // (`<install>/sounds`), all plain PCM (see core/audio/Xwb.hpp). Absent — a
+        // procedural map, a missing drive — the synthesised cues carry on.
+        std::optional<rm::audio::WaveBank> explosionBank;
+        std::optional<rm::audio::WaveBank> impactBank;
+        for (int i = 1; i + 1 < session.argc; ++i) {
+            if (std::string_view{session.argv[i]} == "--gamedata") {
+                const std::filesystem::path sounds =
+                    std::filesystem::path{session.argv[i + 1]}.parent_path() / "sounds";
+                explosionBank = rm::audio::loadWaveBank(sounds / "Explosions.xwb");
+                impactBank = rm::audio::loadWaveBank(sounds / "Impacts.xwb");
+                if (explosionBank) {
+                    std::printf("audio: %zu explosion(s), %zu impact(s) from the game's own"
+                                " banks\n",
+                                explosionBank->entries.size(),
+                                impactBank ? impactBank->entries.size() : 0);
+                }
+                break;
+            }
         }
         window.setTerrain(mesh);
         applyGround(window, *map);
@@ -1142,7 +1171,9 @@ int runWindowed(const Session& session) {
                 // listener rides the camera every tick, so panning follows the view.
                 mixer.setListener(window.camera().target.x, window.camera().target.z,
                                   window.camera().distance);
-                rm::audio::playForEvents(mixer, units.events.all());
+                rm::audio::playForEvents(mixer, units.events.all(),
+                                         explosionBank ? &*explosionBank : nullptr,
+                                         impactBank ? &*impactBank : nullptr);
 
                 // ...and the arcs' smoke, one puff per shell per tick — the emission rate
                 // is the sim's own, so the trail spacing is a tick of travel (ProjectileFx).

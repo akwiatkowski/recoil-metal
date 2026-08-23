@@ -171,6 +171,7 @@ add_library(rm_core STATIC
     src/core/audio/Cues.cpp
     src/core/audio/CueEvents.cpp
     src/core/audio/Mixer.cpp
+    src/core/audio/Xwb.cpp
     src/core/sim/Economy.cpp
     src/core/sim/Movement.cpp
     src/core/sim/Pathfinding.cpp

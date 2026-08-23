@@ -8,8 +8,11 @@
 #include "core/audio/CueEvents.hpp"
 #include "core/audio/Cues.hpp"
 #include "core/audio/Mixer.hpp"
+#include "core/audio/Xwb.hpp"
 
 #include <cmath>
+#include <filesystem>
+#include <optional>
 #include <vector>
 
 TEST_CASE("cues are synthesised once, non-silent, and identical on every call") {
@@ -87,4 +90,25 @@ TEST_CASE("events map to cues: a shot sounds, a move does not") {
     };
     rm::audio::playForEvents(mixer, events);
     CHECK(mixer.activeVoices() == 2);  // the shot and the death; a creation is not a moment
+}
+
+TEST_CASE("the retail wave banks decode: PCM in, mixer-ready cues out", "[corpus]") {
+    // Gated on the retail install like every [corpus] test — the banks are loose files
+    // beside gamedata, not archive members.
+    const std::filesystem::path bank{
+        "/Volumes/Samsung_T5/faf/Supreme Commander Forged Alliance/sounds/Explosions.xwb"};
+    if (!std::filesystem::exists(bank)) {
+        SKIP("no retail sounds at " + bank.string());
+    }
+    const std::optional<rm::audio::WaveBank> loaded = rm::audio::loadWaveBank(bank);
+    REQUIRE(loaded.has_value());
+    CHECK(loaded->name == "Explosions");
+    // Thirteen booms in the retail bank; a count drift means the parse walked wrong.
+    CHECK(loaded->entries.size() == 13);
+    float peak = 0.0f;
+    for (const float sample : loaded->entries.front().samples) {
+        peak = std::max(peak, std::abs(sample));
+    }
+    CHECK(peak > 0.05f);   // decoded something audible
+    CHECK(peak <= 1.0f);   // and PCM scaling did not blow past full scale
 }
