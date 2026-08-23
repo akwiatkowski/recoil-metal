@@ -198,6 +198,21 @@ namespace {
     return def;
 }
 
+[[nodiscard]] rm::unitdef::UnitDef fighterDef(float minimumRange = 0.0f) {
+    rm::unitdef::UnitDef def = walkerDef();
+    def.visionRadiusElmos = 140.0f;
+    rm::unitdef::Weapon weapon;
+    weapon.label = "test gun";
+    weapon.role = rm::unitdef::WeaponRole::DirectFire;
+    weapon.damage = rm::sim::magFromFloat(10.0f);
+    weapon.maxRange = rm::sim::fxFromFloat(100.0f);
+    weapon.minRange = rm::sim::fxFromFloat(minimumRange);
+    weapon.rateOfFire = 1.0f;
+    weapon.muzzleVelocityElmosPerSecond = 100.0f;
+    def.weapons.push_back(weapon);
+    return def;
+}
+
 } // namespace
 
 TEST_CASE("three queued moves run in order") {
@@ -261,6 +276,197 @@ TEST_CASE("three queued moves run in order") {
     const rm::sim::Transform& at = roster.store.transforms()[walker.index];
     CHECK(rm::sim::fxToFloat(at.x) < 100.0f);
     CHECK(rm::sim::fxToFloat(at.z) > 150.0f);
+}
+
+TEST_CASE("attack-move stops for a visible enemy then resumes its destination") {
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    const rm::sim::PassabilityGrid grid = rm::sim::buildPassability(field, 0.0f, 60.0f, 0.0f);
+
+    rm::test::Roster roster;
+    const rm::UnitTypeIndex fighterType = roster.addType(fighterDef());
+    const rm::UnitTypeIndex targetType = roster.addType(walkerDef());
+    const UnitId fighter = roster.add(fighterType, 40.0f, 40.0f, 0, 100.0f);
+    const UnitId enemy = roster.add(targetType, 240.0f, 40.0f, 1, 100.0f);
+    std::vector<rm::sim::Army> armies = rm::sim::freeForAll(2);
+    const std::vector<rm::sim::Player> players{rm::sim::Player{.index = 0, .army = 0}};
+    const std::vector<const rm::sim::PassabilityGrid*> grids{&grid, &grid};
+
+    Command attackMove = moveTo(500.0f, 40.0f, fighter);
+    attackMove.kind = CommandKind::AttackMove;
+    REQUIRE(rm::sim::applyCommand(attackMove, roster.store, roster.catalog, players, armies,
+                                  terrain, grid, roster.rate));
+
+    rm::sim::Match match{.armies = armies, .economies = {}, .passability = grids,
+                         .commandersEver = {}};
+    rm::sim::Intel intel;
+    intel.configure(2, rm::sim::fxFromFloat(field.widthElmos()),
+                    rm::sim::fxFromFloat(field.depthElmos()),
+                    rm::sim::VisionStyle::ForgedAlliance);
+    match.intel = &intel;
+    bool engaged = false;
+    for (int tick = 0; tick < 300; ++tick) {
+        (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain, roster.rate);
+        const Command* current = roster.store.orders()[fighter.index].current();
+        if (current != nullptr && current->target == enemy) {
+            engaged = true;
+            CHECK_FALSE(roster.store.motion()[fighter.index].moving);
+            CHECK(current->targetX == rm::sim::fxFromFloat(500.0f));
+            break;
+        }
+    }
+    REQUIRE(engaged);
+
+    roster.transform(enemy).z = rm::sim::fxFromFloat(400.0f);
+    (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain, roster.rate);
+    REQUIRE(roster.store.orders()[fighter.index].current() != nullptr);
+    CHECK(roster.store.orders()[fighter.index].current()->target.generation == 0);
+    CHECK(roster.store.motion()[fighter.index].moving);
+
+    roster.health(enemy).current = rm::sim::Mag{};
+    for (int tick = 0; tick < 500 && !roster.store.orders()[fighter.index].empty(); ++tick) {
+        (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain, roster.rate);
+    }
+
+    CHECK(roster.store.orders()[fighter.index].empty());
+    CHECK(rm::sim::fxToFloat(roster.store.transforms()[fighter.index].x) > 450.0f);
+}
+
+TEST_CASE("attack-move does not stop inside every weapon's minimum range") {
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    const rm::sim::PassabilityGrid grid = rm::sim::buildPassability(field, 0.0f, 60.0f, 0.0f);
+
+    rm::test::Roster roster;
+    const rm::UnitTypeIndex fighterType = roster.addType(fighterDef(80.0f));
+    const rm::UnitTypeIndex targetType = roster.addType(walkerDef());
+    const UnitId fighter = roster.add(fighterType, 40.0f, 40.0f, 0, 100.0f);
+    (void)roster.add(targetType, 100.0f, 40.0f, 1, 100.0f);
+    std::vector<rm::sim::Army> armies = rm::sim::freeForAll(2);
+    const std::vector<rm::sim::Player> players{rm::sim::Player{.index = 0, .army = 0}};
+    const std::vector<const rm::sim::PassabilityGrid*> grids{&grid, &grid};
+
+    Command attackMove = moveTo(300.0f, 40.0f, fighter);
+    attackMove.kind = CommandKind::AttackMove;
+    REQUIRE(rm::sim::applyCommand(attackMove, roster.store, roster.catalog, players, armies,
+                                  terrain, grid, roster.rate));
+    rm::sim::Match match{.armies = armies, .economies = {}, .passability = grids,
+                         .commandersEver = {}};
+    (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain, roster.rate);
+
+    REQUIRE(roster.store.orders()[fighter.index].current() != nullptr);
+    CHECK(roster.store.orders()[fighter.index].current()->target.generation == 0);
+    CHECK(roster.store.motion()[fighter.index].moving);
+}
+
+TEST_CASE("attack-move resumes its waypoint when a target retreats out of reach") {
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    rm::sim::PassabilityGrid grid = rm::sim::buildPassability(field, 0.0f, 60.0f, 0.0f);
+    for (int z = 0; z < grid.cellsZ; ++z) {
+        grid.passable[static_cast<std::size_t>(z * grid.cellsX + 4)] = 0;
+    }
+
+    rm::test::Roster roster;
+    const rm::UnitTypeIndex fighterType = roster.addType(fighterDef());
+    const rm::UnitTypeIndex targetType = roster.addType(walkerDef());
+    const UnitId fighter = roster.add(fighterType, 40.0f, 40.0f, 0, 100.0f);
+    const UnitId enemy = roster.add(targetType, 120.0f, 40.0f, 1, 100.0f);
+    std::vector<rm::sim::Army> armies = rm::sim::freeForAll(2);
+    const std::vector<rm::sim::Player> players{rm::sim::Player{.index = 0, .army = 0}};
+    const std::vector<const rm::sim::PassabilityGrid*> grids{&grid, &grid};
+
+    Command attackMove = moveTo(180.0f, 40.0f, fighter);
+    attackMove.kind = CommandKind::AttackMove;
+    REQUIRE(rm::sim::applyCommand(attackMove, roster.store, roster.catalog, players, armies,
+                                  terrain, grid, roster.rate));
+    rm::sim::Match match{.armies = armies, .economies = {}, .passability = grids,
+                         .commandersEver = {}};
+    (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain, roster.rate);
+    REQUIRE(roster.store.orders()[fighter.index].current() != nullptr);
+    REQUIRE(roster.store.orders()[fighter.index].current()->target == enemy);
+
+    roster.transform(enemy).x = rm::sim::fxFromFloat(400.0f);
+    (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain, roster.rate);
+
+    REQUIRE(roster.store.orders()[fighter.index].current() != nullptr);
+    CHECK(roster.store.orders()[fighter.index].current()->target.generation == 0);
+    CHECK(roster.store.motion()[fighter.index].moving);
+    CHECK(roster.store.motion()[fighter.index].path.back()[0]
+          < rm::sim::fxFromFloat(256.0f));
+}
+
+TEST_CASE("patrol keeps cycling between its destination and starting point") {
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    const rm::sim::PassabilityGrid grid = rm::sim::buildPassability(field, 0.0f, 60.0f, 0.0f);
+
+    rm::test::Roster roster;
+    const rm::UnitTypeIndex type = roster.addType(walkerDef());
+    const UnitId walker = roster.add(type, 40.0f, 40.0f, 0, 100.0f);
+    std::vector<rm::sim::Army> armies = rm::sim::freeForAll(1);
+    const std::vector<rm::sim::Player> players{rm::sim::Player{.index = 0, .army = 0}};
+    const std::vector<const rm::sim::PassabilityGrid*> grids{&grid};
+
+    Command patrol = moveTo(300.0f, 40.0f, walker);
+    patrol.kind = CommandKind::Patrol;
+    REQUIRE(rm::sim::applyCommand(patrol, roster.store, roster.catalog, players, armies,
+                                  terrain, grid, roster.rate));
+    REQUIRE(roster.store.orders()[walker.index].size() == 2);
+
+    Command third = patrol;
+    third.queued = true;
+    third.targetX = rm::sim::fxFromFloat(300.0f);
+    third.targetZ = rm::sim::fxFromFloat(300.0f);
+    REQUIRE(rm::sim::applyCommand(third, roster.store, roster.catalog, players, armies,
+                                  terrain, grid, roster.rate));
+    REQUIRE(roster.store.orders()[walker.index].size() == 3);
+
+    rm::sim::Match match{.armies = armies, .economies = {}, .passability = grids,
+                         .commandersEver = {}};
+    std::vector<std::array<rm::sim::Fx, 2>> destinations;
+    for (int tick = 0; tick < 1600 && destinations.size() < 4; ++tick) {
+        const Command* current = roster.store.orders()[walker.index].current();
+        REQUIRE(current != nullptr);
+        const std::array<rm::sim::Fx, 2> destination{current->targetX, current->targetZ};
+        if (destinations.empty() || destinations.back() != destination) {
+            destinations.push_back(destination);
+        }
+        (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain, roster.rate);
+        CHECK(roster.store.orders()[walker.index].size() == 3);
+    }
+
+    REQUIRE(destinations.size() >= 4);
+    CHECK(destinations[0] == std::array{rm::sim::fxFromFloat(300.0f),
+                                       rm::sim::fxFromFloat(40.0f)});
+    CHECK(destinations[1] == std::array{rm::sim::fxFromFloat(40.0f),
+                                       rm::sim::fxFromFloat(40.0f)});
+    CHECK(destinations[2] == std::array{rm::sim::fxFromFloat(300.0f),
+                                       rm::sim::fxFromFloat(300.0f)});
+    CHECK(destinations[3] == destinations[0]);
+}
+
+TEST_CASE("cancelling a two-point patrol dissolves its synthetic endpoint") {
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    const rm::sim::PassabilityGrid grid = rm::sim::buildPassability(field, 0.0f, 60.0f, 0.0f);
+
+    rm::test::Roster roster;
+    const rm::UnitTypeIndex type = roster.addType(walkerDef());
+    const UnitId walker = roster.add(type, 40.0f, 40.0f, 0, 100.0f);
+    std::vector<rm::sim::Army> armies = rm::sim::freeForAll(1);
+    const std::vector<rm::sim::Player> players{rm::sim::Player{.index = 0, .army = 0}};
+
+    Command patrol = moveTo(300.0f, 40.0f, walker);
+    patrol.kind = CommandKind::Patrol;
+    REQUIRE(rm::sim::applyCommand(patrol, roster.store, roster.catalog, players, armies,
+                                  terrain, grid, roster.rate));
+    patrol.queued = true;
+    REQUIRE(rm::sim::applyCommand(patrol, roster.store, roster.catalog, players, armies,
+                                  terrain, grid, roster.rate));
+
+    CHECK(roster.store.orders()[walker.index].empty());
+    CHECK_FALSE(roster.store.motion()[walker.index].moving);
 }
 
 TEST_CASE("a refused plain order changes nothing at all") {

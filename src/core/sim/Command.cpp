@@ -67,6 +67,10 @@ namespace {
     switch (kind) {
     case CommandKind::Move:
         return "move";
+    case CommandKind::AttackMove:
+        return "attack-move";
+    case CommandKind::Patrol:
+        return "patrol";
     case CommandKind::Stop:
         return "stop";
     case CommandKind::Attack:
@@ -84,6 +88,12 @@ namespace {
 [[nodiscard]] std::optional<CommandKind> kindFromName(std::string_view name) noexcept {
     if (name == "move") {
         return CommandKind::Move;
+    }
+    if (name == "attack-move") {
+        return CommandKind::AttackMove;
+    }
+    if (name == "patrol") {
+        return CommandKind::Patrol;
     }
     if (name == "stop") {
         return CommandKind::Stop;
@@ -144,7 +154,43 @@ bool applyCommand(const Command& command, UnitStore& store, const UnitCatalog& c
     }
 
     if (command.queued) {
-        switch (orders.give(command, true)) {
+        const bool currentWasPatrol =
+            orders.current() != nullptr && orders.current()->kind == CommandKind::Patrol;
+        const bool alreadyPatrolling = std::any_of(
+            orders.orders().begin(), orders.orders().end(), [](const Command& queued) {
+                return queued.kind == CommandKind::Patrol;
+            });
+        const CommandQueue::Result result = orders.give(command, true);
+        if (command.kind == CommandKind::Patrol && !alreadyPatrolling
+            && result == CommandQueue::Result::Appended) {
+            Command origin = command;
+            origin.targetX = store.transforms()[command.unit.index].x;
+            origin.targetZ = store.transforms()[command.unit.index].z;
+            orders.append(origin);
+        }
+        if (command.kind == CommandKind::Patrol
+            && (result == CommandQueue::Result::Cancelled
+                || result == CommandQueue::Result::CancelledCurrent)) {
+            const std::size_t points = static_cast<std::size_t>(std::count_if(
+                orders.orders().begin(), orders.orders().end(), [](const Command& queued) {
+                    return queued.kind == CommandKind::Patrol;
+                }));
+            if (points < 2) {
+                orders.remove(CommandKind::Patrol);
+                if (currentWasPatrol) {
+                    MoveState& motion = store.motion()[command.unit.index];
+                    motion.moving = false;
+                    motion.path.clear();
+                    motion.pathIndex = 0;
+                    if (const Command* next = orders.current()) {
+                        (void)startCommand(*next, store, catalog, terrain, grid, rate, building,
+                                           events, features);
+                    }
+                    return true;
+                }
+            }
+        }
+        switch (result) {
         case CommandQueue::Result::CancelledCurrent: {
             // The order the unit was carrying out has been taken away, so it has to be
             // interrupted as well as forgotten. Recoil pushes a stop to the front and lets its
@@ -179,6 +225,12 @@ bool applyCommand(const Command& command, UnitStore& store, const UnitCatalog& c
         return false;
     }
     (void)orders.give(command, false);
+    if (command.kind == CommandKind::Patrol) {
+        Command origin = command;
+        origin.targetX = store.transforms()[command.unit.index].x;
+        origin.targetZ = store.transforms()[command.unit.index].z;
+        orders.append(origin);
+    }
     // A `Build` is over the moment it is started, so leaving it at the head of the queue would
     // make the builder look busy for a tick. `advanceOrders` would clear it next tick anyway;
     // doing it here keeps "the head of the queue is what the unit is doing" true every tick.
@@ -280,6 +332,16 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
             }
         }
 
+        // An aggressive order with a temporary target belongs to the post-intel pass, even
+        // when it is currently holding still. A stale target is cleared there and the original
+        // waypoint resumed; treating the hold as arrival here would lose that destination.
+        if (const Command* head = orders[slot].current();
+            head != nullptr
+            && (head->kind == CommandKind::AttackMove || head->kind == CommandKind::Patrol)
+            && head->target.generation != 0) {
+            continue;
+        }
+
         // THE HARVEST HOLD, the reclaim twin of the chase above: a reclaim naming a wreck
         // that still holds value never completes by arrival — it completes when the wreck
         // is GONE, drained by this unit or any other. In reach it holds still and lets
@@ -319,6 +381,17 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
             continue;  // still carrying out the order at the head
         }
 
+        if (const Command* head = orders[slot].current();
+            head != nullptr && head->kind == CommandKind::Patrol) {
+            const Command* next = orders[slot].cycle();
+            if (next != nullptr
+                && startCommand(*next, store, catalog, terrain, *grid, rate, building, events,
+                                features)) {
+                ++started;
+            }
+            continue;
+        }
+
         // The head is done. Drop it and start the next — and keep going while what comes next
         // is either instantaneous or unstartable, so a queue of build orders empties in one
         // tick and a dead waypoint does not stall the route behind it.
@@ -337,6 +410,135 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
     }
 
     return started;
+}
+
+void updateAggressiveOrders(UnitStore& store, const UnitCatalog& catalog,
+                            std::span<const Army> armies, const Terrain& terrain,
+                            std::span<const PassabilityGrid* const> gridForType, TickRate rate,
+                            const Intel* intel) {
+    const auto armyFor = [armies](int index) -> const Army* {
+        for (const Army& army : armies) {
+            if (army.index == index) {
+                return &army;
+            }
+        }
+        return nullptr;
+    };
+
+    for (UnitIndex slot = 0; slot < store.orders().size(); ++slot) {
+        if (!store.slotAlive(slot)) {
+            continue;
+        }
+        Command* order = store.orders()[slot].currentMutable();
+        if (order == nullptr
+            || (order->kind != CommandKind::AttackMove && order->kind != CommandKind::Patrol)) {
+            continue;
+        }
+
+        const auto type = static_cast<std::size_t>(store.typeAt(slot));
+        const PassabilityGrid* grid = type < gridForType.size() ? gridForType[type] : nullptr;
+        const unitdef::UnitDef* def = catalog.def(store.typeAt(slot));
+        if (grid == nullptr || def == nullptr) {
+            continue;
+        }
+
+        const unitdef::Weapon* widest = nullptr;
+        for (const unitdef::Weapon& weapon : def->weapons) {
+            if (weapon.fires() && (widest == nullptr || weapon.maxRange > widest->maxRange)) {
+                widest = &weapon;
+            }
+        }
+        if (widest == nullptr) {
+            continue;  // an unarmed patrol is still a patrol; it simply never interrupts
+        }
+
+        MoveState& motion = store.motion()[slot];
+        const auto resumeWaypoint = [&] {
+            motion.moving = false;
+            motion.path.clear();
+            motion.pathIndex = 0;
+            return startCommand(*order, store, catalog, terrain, *grid, rate, nullptr, nullptr,
+                                nullptr);
+        };
+        const int owner = store.motion()[slot].armyIndex;
+        const Army* mine = armyFor(owner);
+        const auto targetVisibleAndHostile = [&](UnitId target) {
+            if (!store.alive(target) || !store.health()[target.index].alive() || mine == nullptr) {
+                return false;
+            }
+            const Army* theirs = armyFor(store.motion()[target.index].armyIndex);
+            const Transform& at = store.transforms()[target.index];
+            return theirs != nullptr && hostile(*mine, *theirs)
+                   && (intel == nullptr
+                       || intel->sees(mine->alliance, IntelKind::Vision, at.x, at.z));
+        };
+
+        if (order->target.generation != 0 && !targetVisibleAndHostile(order->target)) {
+            order->target = UnitId{};
+            (void)resumeWaypoint();
+        }
+
+        const std::array<Fx, 3> from = positionOf(store.transforms()[slot]);
+        if (order->target.generation == 0) {
+            std::optional<UnitId> nearest;
+            Fx nearestDistance{};
+            for (const unitdef::Weapon& weapon : def->weapons) {
+                if (!weapon.fires()) {
+                    continue;
+                }
+                const std::optional<UnitId> candidate =
+                    nearestTarget(from, owner, weapon, store, armies, intel);
+                if (!candidate) {
+                    continue;
+                }
+                const Fx distance =
+                    groundDistanceElmos(from, positionOf(store.transforms()[candidate->index]));
+                if (!nearest || distance < nearestDistance
+                    || (distance == nearestDistance && candidate->index < nearest->index)) {
+                    nearest = candidate;
+                    nearestDistance = distance;
+                }
+            }
+            if (nearest) {
+                order->target = *nearest;
+            }
+        }
+
+        if (order->target.generation == 0) {
+            continue;
+        }
+
+        const Transform& mineAt = store.transforms()[slot];
+        const Transform& targetAt = store.transforms()[order->target.index];
+        const Fx gap = groundDistanceElmos(positionOf(mineAt), positionOf(targetAt));
+        const bool canEngage = std::any_of(
+            def->weapons.begin(), def->weapons.end(), [gap](const unitdef::Weapon& weapon) {
+                return weapon.fires() && gap >= weapon.minRange && gap <= weapon.maxRange;
+            });
+        if (canEngage) {
+            motion.moving = false;
+            motion.path.clear();
+            motion.pathIndex = 0;
+            continue;
+        }
+
+        if (gap < widest->minRange) {
+            order->target = UnitId{};
+            (void)resumeWaypoint();
+            continue;
+        }
+
+        if (!motion.moving) {
+            const std::vector<std::array<Fx, 2>> path =
+                findPath(*grid, mineAt.x, mineAt.z, targetAt.x, targetAt.z);
+            if (!path.empty()) {
+                orderAlongPath(motion, path);
+            } else {
+                order->target = UnitId{};
+                (void)resumeWaypoint();
+            }
+        }
+    }
 }
 
 namespace {
@@ -398,6 +600,8 @@ bool startCommand(const Command& command, UnitStore& store, const UnitCatalog& c
         [[fallthrough]];  // out of reach: walk toward the target exactly as an attack would
     }
     case CommandKind::Move:
+    case CommandKind::AttackMove:
+    case CommandKind::Patrol:
     case CommandKind::Attack: {
         // ROUTED, not aimed straight at the destination — which is the difference between a
         // unit walking round a lake and one walking into it. A route that cannot be found is

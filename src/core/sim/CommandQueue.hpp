@@ -4,6 +4,7 @@
 
 #include <cstddef>
 #include <deque>
+#include <utility>
 #include <vector>
 
 namespace rm::sim {
@@ -42,14 +43,15 @@ inline constexpr Fx kCancelDistance = Fx::fromInt(17);
 
 /// Whether two commands are THE SAME ORDER, for cancellation purposes.
 ///
-/// Recoil's `GetCancelQueued` predicate, reduced to the four kinds this engine has:
+/// Recoil's `GetCancelQueued` predicate, reduced to the kinds this engine has:
 ///
 ///   - Different kinds never match. Recoil also matches `CMD_ATTACK` against a one-parameter
 ///     `CMD_FIGHT`; we have no fight order, so that case has nothing to say here.
 ///   - `Stop` never matches anything, including another `Stop`. Recoil reaches the same answer
 ///     structurally — its predicate needs one or three parameters and a stop has none — and it
 ///     is the right answer: stopping twice is not a request to un-stop.
-///   - `Move` and `Attack` match when their targets are within `kCancelDistance`.
+///   - Positional movement orders match within `kCancelDistance`; targeted attacks match by
+///     handle.
 ///   - `Build` additionally requires the SAME BLUEPRINT. Recoil compares build footprints for
 ///     overlap; comparing the type as well is stricter in the one direction that matters,
 ///     since two different buildings queued on the same spot are a plan rather than a
@@ -105,6 +107,18 @@ public:
     /// the queue cannot tell: whether an order is complete is a fact about the world, and the
     /// queue holds no world.
     const Command* finish();
+
+    /// Moves the completed head to the back and returns the next waypoint. Patrol uses this
+    /// instead of finishing, so its two endpoints remain a loop rather than being consumed.
+    const Command* cycle();
+
+    /// Adds an engine-generated order without player cancellation rules. Used only for the
+    /// starting-point waypoint paired with a player's first patrol destination.
+    void append(Command command) { queue_.push_back(std::move(command)); }
+
+    /// Removes every order of one kind. A patrol with fewer than two points is no loop, so
+    /// cancelling either endpoint dissolves its remaining synthetic half through this path.
+    void remove(CommandKind kind);
 
     void clear() noexcept { queue_.clear(); }
 

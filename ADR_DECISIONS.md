@@ -1881,3 +1881,25 @@ Requiring pre-extracted content — pushes a chore onto every user of every arch
 
 **Consequences.** A third-party C file in the trust base, mitigated by pinning to a release
 checksum'd by its own project. The build stays curl-and-go.
+
+## ADR-045 — Aggressive movement keeps its waypoint and borrows a target
+
+**Context.** Attack-move and patrol must interrupt movement for combat without forgetting the
+route, seeing through fog, or adding a second hidden order queue.
+
+**Decision.** `AttackMove` and `Patrol` remain ordinary serialized commands. Their position is
+the permanent waypoint; their generational `target` temporarily names a visible hostile chosen
+after movement and intel update by the existing deterministic combat query. Losing, killing, or
+failing to route to that target clears only the handle and resumes the waypoint. Patrol is a
+deque of those commands: arrival rotates the head to the back, and the first click adds the
+unit's starting point as the return leg.
+
+**Alternatives considered.** Hidden attack suborders — rejected because replay and state hashing
+would need another state machine. Reusing targeted `Attack` — rejected because its chase rewrites
+the destination, destroying the route that must resume. Acquiring before intel — rejected as a
+fog oracle.
+
+**Consequences.** Existing command logs and queue hashing cover the mechanic without a new data
+type; old command-kind ordinals remain fixed. Unarmed patrols still cycle, minimum-range weapons
+do not stop in their dead zone, and a patrol with fewer than two points dissolves instead of
+spinning forever.

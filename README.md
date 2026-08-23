@@ -833,6 +833,8 @@ swings when you meant to select is the most disorienting thing an RTS camera can
 | `W` `A` `S` `D` | pan the map. Speed is scaled by the frustum's width at the target, so it feels the same zoomed in as out — one and a half seconds to cross the visible width |
 | left click | select one of YOUR units. Shift/cmd/ctrl adds to the set |
 | right click | order: move to the ground, or attack the enemy under the cursor |
+| `shift+A`, then right click | attack-move: engage visible enemies on the route, then resume the destination |
+| `P`, then right click | patrol between the unit's starting point and the destination; repeat `P`, then shift-right-click to add a waypoint |
 | hold `space` + drag | swing the camera. Let go and it returns to the overhead view the app opened with, so a glance never costs you your bearings |
 | shift + drag | pan with the mouse |
 | scroll | zoom |
@@ -848,7 +850,7 @@ Three switches, all on by default, all one keypress away:
 |---|---|---|---|
 | `r` | `--no-reflections` | on | +0.50 ms |
 | `n` | `--no-stratum-normals` | on | +0.21 ms |
-| `p` | `--no-props` | on | +0.17 ms at a working zoom, nothing zoomed out |
+| `o` | `--no-props` | on | +0.17 ms at a working zoom, nothing zoomed out |
 | `f` | `--refraction` | **off** | +0.17 to +0.28 ms |
 
 Defaults are **looks-best**, deliberately. The cheap-by-default argument is the

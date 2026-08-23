@@ -625,8 +625,9 @@ int runWindowed(const Session& session) {
         // is normal. An empty recall is a no-op rather than a deselect: fat-fingering '4'
         // must not throw away the army under the cursor.
         std::array<std::vector<rm::sim::UnitId>, 10> controlGroups;
+        std::optional<rm::sim::CommandKind> armedGroundOrder;
 
-        window.onKey([&window, &selected, &controlGroups, &units](char key) {
+        window.onKey([&window, &selected, &controlGroups, &units, &armedGroundOrder](char key) {
             if (key == 'r') {
                 const bool enabled = !window.reflectionsEnabled();
                 window.setReflections(enabled);
@@ -642,11 +643,17 @@ int runWindowed(const Session& session) {
                 window.setRefraction(enabled);
                 std::printf("water refraction %s\n", enabled ? "on" : "off");
                 std::fflush(stdout);
-            } else if (key == 'p') {
+            } else if (key == 'o') {
                 const bool visible = !window.propsVisible();
                 window.setPropsVisible(visible);
                 std::printf("props %s\n", visible ? "on" : "off");
                 std::fflush(stdout);
+            } else if (key == 'a' && window.shiftHeldNow()) {
+                armedGroundOrder = rm::sim::CommandKind::AttackMove;
+                std::printf("attack-move armed: right-click a destination\n");
+            } else if (key == 'p') {
+                armedGroundOrder = rm::sim::CommandKind::Patrol;
+                std::printf("patrol armed: right-click a destination\n");
             } else if (key >= '0' && key <= '9') {
                 // The digit arrives with its modifiers stripped (Window.mm's charFor), so
                 // whether this is "set" or "recall" is polled from the live modifier state
@@ -853,8 +860,10 @@ int runWindowed(const Session& session) {
             // One lambda so the two entrances cannot drift; the marker, the per-unit grids
             // and the queue reporting are the same statements they were.
             const auto orderSelectionTo = [&](simd_float3 ground, bool queue,
-                                              std::optional<rm::sim::UnitId> target =
-                                                  std::nullopt) {
+                                               std::optional<rm::sim::UnitId> target =
+                                                   std::nullopt,
+                                               rm::sim::CommandKind groundKind =
+                                                   rm::sim::CommandKind::Move) {
                 orderMarks.push_back(OrderMark{
                     .position = {ground.x, ground.y, ground.z},
                     .age = 0.0f,
@@ -886,23 +895,26 @@ int runWindowed(const Session& session) {
                         }
                     }
                     const bool wantOvercharge = target && mods.command && shotCost > 0.0f;
-                    const bool took =
-                        wantOvercharge
-                            ? issueOvercharge(units, grid, map->field, sel,
-                                              playerDriving(units, units.playerArmy),
-                                              static_cast<rm::TickIndex>(matchTicks), *target,
-                                              rm::sim::fxFromFloat(ground.x),
-                                              rm::sim::fxFromFloat(ground.z), queue)
-                        : target ? issueAttack(units, grid, map->field, sel,
-                                             playerDriving(units, units.playerArmy),
-                                             static_cast<rm::TickIndex>(matchTicks), *target,
-                                             rm::sim::fxFromFloat(ground.x),
-                                             rm::sim::fxFromFloat(ground.z), queue)
-                               : issueMove(units, grid, map->field, sel,
+                    bool took = false;
+                    if (wantOvercharge) {
+                        took = issueOvercharge(
+                            units, grid, map->field, sel,
+                            playerDriving(units, units.playerArmy),
+                            static_cast<rm::TickIndex>(matchTicks), *target,
+                            rm::sim::fxFromFloat(ground.x), rm::sim::fxFromFloat(ground.z), queue);
+                    } else if (target) {
+                        took = issueAttack(units, grid, map->field, sel,
                                            playerDriving(units, units.playerArmy),
-                                           static_cast<rm::TickIndex>(matchTicks),
+                                           static_cast<rm::TickIndex>(matchTicks), *target,
                                            rm::sim::fxFromFloat(ground.x),
                                            rm::sim::fxFromFloat(ground.z), queue);
+                    } else {
+                        took = issueMove(units, grid, map->field, sel,
+                                         playerDriving(units, units.playerArmy),
+                                         static_cast<rm::TickIndex>(matchTicks),
+                                         rm::sim::fxFromFloat(ground.x),
+                                         rm::sim::fxFromFloat(ground.z), queue, groundKind);
+                    }
                     if (took && wantOvercharge && units.playerArmy >= 0
                         && static_cast<std::size_t>(units.playerArmy)
                                < units.economies.size()) {
@@ -965,7 +977,10 @@ int runWindowed(const Session& session) {
                 // is most of what a minimap order is for.
                 if (button == rm::MouseButton::Right) {
                     if (!selected.empty()) {
-                        orderSelectionTo(ground, mods.shift);
+                        orderSelectionTo(ground, mods.shift, std::nullopt,
+                                         armedGroundOrder.value_or(
+                                             rm::sim::CommandKind::Move));
+                        armedGroundOrder.reset();
                     }
                     return;
                 }
@@ -1156,7 +1171,7 @@ int runWindowed(const Session& session) {
             std::optional<simd_float3> ground;
             const std::optional<rm::sim::UnitId> hit = pickAnyBatch(ray, units);
             const bool isAttack = hit && units.playerArmy != rm::sim::kNoArmy
-                               && hostileTo(units, units.playerArmy, *hit);
+                                && hostileTo(units, units.playerArmy, *hit);
 
             if (isAttack) {
                 const rm::sim::Transform& at = units.store.transforms()[hit->index];
@@ -1174,7 +1189,7 @@ int runWindowed(const Session& session) {
             // above already decided that), and a wreck beats plain ground. The hit disc is
             // the mark the player can actually SEE — the decal's radius, not the sim's —
             // with a floor so a tiny unit's wreck is still clickable.
-            if (!isAttack) {
+            if (!isAttack && !armedGroundOrder) {
                 std::optional<rm::sim::FeatureId> wreck;
                 float wreckGap = 0.0f;
                 for (rm::UnitIndex slot = 0; slot < units.features.size(); ++slot) {
@@ -1252,7 +1267,11 @@ int runWindowed(const Session& session) {
             // An attack carries the TARGET'S HANDLE, which is what makes it a pursuit
             // rather than a walk to where the target used to be (`advanceOrders`' chase).
             orderSelectionTo(*ground, mods.shift,
-                             isAttack ? hit : std::optional<rm::sim::UnitId>{});
+                             isAttack && !armedGroundOrder
+                                 ? hit
+                                 : std::optional<rm::sim::UnitId>{},
+                             armedGroundOrder.value_or(rm::sim::CommandKind::Move));
+            armedGroundOrder.reset();
         });
 
         // The overhead view the camera returns to when space is released. Captured at the

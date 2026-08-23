@@ -22,6 +22,7 @@ namespace rm::sim {
 
 class UnitStore;
 class FeatureStore;
+class Intel;
 
 // An order, as a value — and the single path every order takes into the sim.
 //
@@ -52,34 +53,40 @@ class FeatureStore;
 
 /// What an order asks for.
 ///
-/// A closed set, and short on purpose: these are the four the engine can actually carry out
-/// today. A `Build` command names a type rather than a blueprint path, because the sim does
-/// not know what a path is (`UnitCatalog`).
+/// A closed set, and short on purpose: only orders the engine can actually carry out live here.
+/// A `Build` command names a type rather than a blueprint path, because the sim does not know
+/// what a path is (`UnitCatalog`).
 enum class CommandKind : std::uint8_t {
     /// Walk to a place, routed around what is impassable.
-    Move,
+    Move = 0,
     /// Stop where you are, cancelling the route.
-    Stop,
+    Stop = 1,
     /// Walk at a place — the same as `Move` today, since attacking is what a unit does on
     /// arrival anyway. Separate because the two mean different things to a player, and
     /// collapsing them would lose the distinction in the log.
-    Attack,
+    Attack = 2,
     /// Begin something at a place. The caller turns a finished construction into a unit, so
     /// the sim records the intent and the economy does the rest.
-    Build,
+    Build = 3,
     /// Harvest a wreck: walk into build reach and drain it into the army's store
     /// (`core/sim/Reclaim.hpp`). `target` names the FEATURE — the id spaces are separate
     /// pools, and a reclaim resolves its handle only against the feature store, so the
     /// reuse of an integer between them cannot cross the streams. The order completes when
     /// the wreck is gone, however many reclaimers emptied it.
-    Reclaim,
+    Reclaim = 4,
     /// Fire the unit's MANUAL weapon — the commander's OverCharge — at `target`: walk
     /// into that weapon's range, wait for the energy, fire ONCE, done. The pursuit is the
     /// attack's; the differences are the reach (the manual weapon's, not the guns'), the
     /// energy gate (`Weapon::energyRequired`, drained the tick it fires), and completion —
     /// one shot per order, whether or not the target survives it (`fireOvercharge`
     /// forgets the target on firing, which is what retires the order).
-    Overcharge,
+    Overcharge = 5,
+    /// Walk to a place, stopping to engage visible enemies encountered on the way, then
+    /// resume toward the original destination when the temporary target is gone.
+    AttackMove = 6,
+    /// Repeatedly walk between queued waypoints, engaging enemies by the same rule as an
+    /// attack-move. The first patrol order automatically includes the unit's starting point.
+    Patrol = 7,
 };
 
 /// One order, from one player, on one tick.
@@ -201,6 +208,13 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
                           std::vector<Construction>* building = nullptr,
                           EventQueue* events = nullptr,
                           const FeatureStore* features = nullptr);
+
+/// Updates attack-move and patrol combat after movement and intel. These orders retain their
+/// waypoint while `target` temporarily names the visible hostile that interrupted the route.
+void updateAggressiveOrders(UnitStore& store, const UnitCatalog& catalog,
+                            std::span<const Army> armies, const Terrain& terrain,
+                            std::span<const PassabilityGrid* const> gridForType, TickRate rate,
+                            const Intel* intel = nullptr);
 
 // --- The log --------------------------------------------------------------------------
 //

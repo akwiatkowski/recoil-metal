@@ -30,6 +30,8 @@ bool sameOrder(const Command& a, const Command& b) noexcept {
         // were one. Recoil arrives here too: its predicate wants one or three parameters.
         return false;
     case CommandKind::Move:
+    case CommandKind::AttackMove:
+    case CommandKind::Patrol:
         return withinCancelDistance(a, b);
     case CommandKind::Attack:
         // A TARGETED attack matches on the target, not the ground: the chase rewrites its
@@ -92,6 +94,18 @@ const Command* CommandQueue::finish() {
         queue_.pop_front();
     }
     return current();
+}
+
+const Command* CommandQueue::cycle() {
+    if (!queue_.empty()) {
+        queue_.push_back(queue_.front());
+        queue_.pop_front();
+    }
+    return current();
+}
+
+void CommandQueue::remove(CommandKind kind) {
+    std::erase_if(queue_, [kind](const Command& command) { return command.kind == kind; });
 }
 
 std::vector<Command> CommandQueue::all() const {

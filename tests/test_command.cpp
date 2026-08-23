@@ -354,6 +354,18 @@ TEST_CASE("a log round-trips through a file exactly") {
                             .targetX = rm::test::fx(64.0f),
                             .targetZ = rm::test::fx(64.0f),
                             .buildType = 5});
+    original.record(Command{.tick = 9,
+                            .player = 0,
+                            .kind = CommandKind::AttackMove,
+                            .unit = UnitId{3, 7},
+                            .targetX = rm::test::fx(400.0f),
+                            .targetZ = rm::test::fx(500.0f)});
+    original.record(Command{.tick = 10,
+                            .player = 0,
+                            .kind = CommandKind::Patrol,
+                            .unit = UnitId{3, 7},
+                            .targetX = rm::test::fx(600.0f),
+                            .targetZ = rm::test::fx(700.0f)});
 
     const std::filesystem::path path =
         std::filesystem::temp_directory_path() / "rm-command-log-test.txt";

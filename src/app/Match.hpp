@@ -177,7 +177,8 @@ extern bool gFafLog;
 [[nodiscard]] bool issueMove(UnitScene& scene, const rm::sim::PassabilityGrid& grid,
                              const rm::HeightField& field, rm::sim::UnitId unit,
                              rm::PlayerIndex player, rm::TickIndex tick, rm::sim::Fx toX,
-                             rm::sim::Fx toZ, bool queued = false);
+                             rm::sim::Fx toZ, bool queued = false,
+                             rm::sim::CommandKind kind = rm::sim::CommandKind::Move);
 
 /// issueMove's sibling for a TARGETED attack: the handle turns the order into a pursuit —
 /// the unit follows the target's real position, holds at its own longest weapon's reach,

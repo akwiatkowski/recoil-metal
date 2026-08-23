@@ -42,13 +42,13 @@ bool gFafLog = false;
 /// than replacing it (§7 P4.1). The scripted opponents never pass it — an opponent that queued
 /// its orders would still be walking a route it decided on thirty seconds ago.
 [[nodiscard]] bool issueMove(UnitScene& scene, const rm::sim::PassabilityGrid& grid,
-                             const rm::HeightField& field, rm::sim::UnitId unit,
-                             rm::PlayerIndex player, rm::TickIndex tick, rm::sim::Fx toX,
-                             rm::sim::Fx toZ, bool queued) {
+                              const rm::HeightField& field, rm::sim::UnitId unit,
+                              rm::PlayerIndex player, rm::TickIndex tick, rm::sim::Fx toX,
+                              rm::sim::Fx toZ, bool queued, rm::sim::CommandKind kind) {
     const rm::sim::Command command{
         .tick = tick,
         .player = player,
-        .kind = rm::sim::CommandKind::Move,
+        .kind = kind,
         .queued = queued,
         .unit = unit,
         .targetX = toX,
