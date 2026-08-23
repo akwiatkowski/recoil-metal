@@ -1928,3 +1928,23 @@ controls hits, picking, wrecks, and death retirement.
 terrain vertically and aircraft may stop or pivot in place. The airborne bit is derived state and
 is hashed only when true: historical ground hashes stay stable while a broken aircraft spawn
 invariant still changes the lockstep checksum.
+
+## ADR-047 — Weapons carry a two-layer target mask
+
+**Context.** FA's T1 interceptor and bomber weapons already describe what they may hit, but the
+engine discarded `FireTargetLayerCapsTable` and the AIR restrictions. Acquisition, beams,
+projectile collision, and splash therefore treated aircraft and surface units as interchangeable.
+
+**Decision.** Select the `Air` source row for aircraft, collapse all other source rows and FA's
+Land, Water, and Seabed destinations into the current sim's Surface bit, and retain Air as the
+second destination bit. A weapon defaults to both only when content has no FA cap table. The
+resolved mask gates every target choice and damage path, travels with projectiles, and is hashed
+when it differs from the historical surface-only projectile state.
+
+**Alternatives considered.** Weapon role alone was rejected because retail target caps are more
+specific and dual-purpose weapons exist. Full category-expression targeting was deferred because
+the approved air slice needs only two physical layers, not FA's complete target-priority language.
+
+**Consequences.** Interceptors attack aircraft, bombers and ordinary guns attack the surface, and
+shots cannot leak into the wrong layer through collision or splash. Water and seabed remain one
+surface domain until naval depth becomes a simulated movement layer.

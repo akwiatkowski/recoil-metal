@@ -332,6 +332,65 @@ TEST_CASE("attack-move stops for a visible enemy then resumes its destination") 
     CHECK(rm::sim::fxToFloat(roster.store.transforms()[fighter.index].x) > 450.0f);
 }
 
+TEST_CASE("an interceptor's attack-move ignores surface units") {
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    const rm::sim::PassabilityGrid grid =
+        rm::sim::buildPassability(field, 0.0f, 60.0f, 0.0f);
+
+    rm::test::Roster roster;
+    rm::unitdef::UnitDef interceptor = fighterDef();
+    interceptor.motion = rm::unitdef::MotionType::Air;
+    interceptor.weapons[0].targetLayers = rm::unitdef::TargetLayerMask::Air;
+    rm::unitdef::UnitDef aircraft = walkerDef();
+    aircraft.motion = rm::unitdef::MotionType::Air;
+    const UnitId fighter = roster.add(roster.addType(interceptor), 40.0f, 40.0f, 0, 100.0f);
+    (void)roster.add(roster.addType(walkerDef()), 80.0f, 40.0f, 1, 100.0f);
+    const UnitId enemyAir =
+        roster.add(roster.addType(aircraft), 120.0f, 40.0f, 1, 100.0f);
+    std::vector<rm::sim::Army> armies = rm::sim::freeForAll(2);
+    const std::vector<rm::sim::Player> players{rm::sim::Player{.index = 0, .army = 0}};
+    const std::vector<const rm::sim::PassabilityGrid*> grids{&grid, &grid};
+
+    Command attackMove = moveTo(300.0f, 40.0f, fighter);
+    attackMove.kind = CommandKind::AttackMove;
+    REQUIRE(rm::sim::applyCommand(attackMove, roster.store, roster.catalog, players, armies,
+                                  terrain, grid, roster.rate));
+    rm::sim::Match match{.armies = armies, .economies = {}, .passability = grids,
+                         .commandersEver = {}};
+    (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain, roster.rate);
+
+    REQUIRE(roster.store.orders()[fighter.index].current() != nullptr);
+    CHECK(roster.store.orders()[fighter.index].current()->target == enemyAir);
+}
+
+TEST_CASE("an interceptor refuses an explicit attack on a surface unit") {
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    const rm::sim::PassabilityGrid grid =
+        rm::sim::buildPassability(field, 0.0f, 60.0f, 0.0f);
+
+    rm::test::Roster roster;
+    rm::unitdef::UnitDef interceptor = fighterDef();
+    interceptor.motion = rm::unitdef::MotionType::Air;
+    interceptor.weapons[0].targetLayers = rm::unitdef::TargetLayerMask::Air;
+    const UnitId fighter = roster.add(roster.addType(interceptor), 40.0f, 40.0f, 0, 100.0f);
+    const UnitId surface =
+        roster.add(roster.addType(walkerDef()), 120.0f, 40.0f, 1, 100.0f);
+    const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(2);
+    const std::vector<rm::sim::Player> players{rm::sim::Player{.index = 0, .army = 0}};
+    const Command attack{.kind = CommandKind::Attack,
+                         .unit = fighter,
+                         .targetX = roster.transform(surface).x,
+                         .targetZ = roster.transform(surface).z,
+                         .target = surface};
+
+    CHECK_FALSE(rm::sim::applyCommand(attack, roster.store, roster.catalog, players, armies,
+                                      terrain, grid, roster.rate));
+    CHECK(roster.store.orders()[fighter.index].empty());
+    CHECK_FALSE(roster.store.motion()[fighter.index].moving);
+}
+
 TEST_CASE("attack-move does not stop inside every weapon's minimum range") {
     const rm::HeightField field = flatField();
     const rm::sim::Terrain terrain{field};

@@ -411,7 +411,7 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
     // `Weapon::fires()` is what decides which entries are guns, because 99 of the 494
     // are a unit's own death explosion.
     if (const lua::Value* weapons = parsed->path("Weapon")) {
-        def.weapons = unitdef::weaponsFrom(*weapons);
+        def.weapons = unitdef::weaponsFrom(*weapons, def.motion == unitdef::MotionType::Air);
     }
 
     // --- the rest ----------------------------------------------------------

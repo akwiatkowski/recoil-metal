@@ -57,6 +57,7 @@ struct Projectile {
     /// is the property that matters: the state hash walks this.
     unitdef::DamageProfile damage{};
     Fx damageRadiusElmos{};
+    unitdef::TargetLayerMask targetLayers = unitdef::TargetLayerMask::Both;
 
     /// WHICH UNIT fired it, for the `UnitDamaged`/`UnitDestroyed` events a hit produces
     /// (§7 P6.1). May be stale by the time the shot lands — a duel where both sides die on the
@@ -298,7 +299,8 @@ Mag damageArea(std::array<Fx, 3> centre, Fx radiusElmos, Mag damage, int byArmy,
 Mag damageArea(std::array<Fx, 3> centre, Fx radiusElmos, const unitdef::DamageProfile& damage,
                int byArmy, UnitStore& store, std::span<const Army> armies,
                const UnitCatalog* catalog = nullptr, UnitId by = {},
-               EventQueue* events = nullptr);
+               EventQueue* events = nullptr,
+               unitdef::TargetLayerMask targetLayers = unitdef::TargetLayerMask::Both);
 
 /// The unit's own destruction, if its definition describes one.
 ///

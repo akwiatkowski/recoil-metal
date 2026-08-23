@@ -92,6 +92,14 @@ namespace {
         if (!shootable(shot.firedByArmy, store, slot, armies)) {
             continue;
         }
+        if (slot >= motion.size()
+            || ((static_cast<std::uint8_t>(shot.targetLayers)
+                 & static_cast<std::uint8_t>(motion[slot].airborne
+                                                 ? unitdef::TargetLayerMask::Air
+                                                 : unitdef::TargetLayerMask::Surface))
+                == 0)) {
+            continue;
+        }
         const Fx size = slot < motion.size() ? motion[slot].radiusElmos : Fx{};
         const Fx tolerance = std::max(travelPerTick, size + shot.damageRadiusElmos);
 
@@ -135,6 +143,7 @@ std::optional<UnitId> nearestTarget(std::array<Fx, 3> from, int fromArmy,
     }
 
     const std::span<const Transform> transforms = store.transforms();
+    const std::span<const MoveState> motion = store.motion();
 
     std::optional<UnitIndex> best;
     Fx bestDistance{};
@@ -145,6 +154,9 @@ std::optional<UnitId> nearestTarget(std::array<Fx, 3> from, int fromArmy,
     // middle of the disc and not a smaller disc.
     for (const UnitIndex slot : store.space().within(from[0], from[2], weapon.maxRange)) {
         if (!shootable(fromArmy, store, slot, armies)) {
+            continue;
+        }
+        if (slot >= motion.size() || !weapon.canTarget(motion[slot].airborne)) {
             continue;
         }
 
@@ -237,31 +249,28 @@ std::size_t aimAtTargets(UnitStore& store, const UnitCatalog& catalog,
         // reach among them decides how far away a unit bothers to aim. Per unit now rather
         // than per batch, because the definition is per unit — the loop is over a handful of
         // weapons and costs nothing next to the sweep below.
-        Fx reach{};
+        // Query the real weapons. Combining the longest range with a union of target masks
+        // invents a gun the unit does not own (for example long surface range plus short AA).
+        std::optional<UnitId> target;
+        Fx targetDistance{};
         for (const unitdef::Weapon& weapon : def->weapons) {
-            if (weapon.fires() && !weapon.turreted) {
-                reach = std::max(reach, weapon.maxRange);
+            if (!weapon.fires() || weapon.turreted) {
+                continue;
+            }
+            const std::optional<UnitId> candidate = nearestTarget(
+                positionOf(transforms[slot]), motion[slot].armyIndex, weapon, store, armies,
+                intel);
+            if (!candidate) {
+                continue;
+            }
+            const Fx distance = groundDistanceElmos(positionOf(transforms[slot]),
+                                                    positionOf(transforms[candidate->index]));
+            if (!target || distance < targetDistance
+                || (distance == targetDistance && candidate->index < target->index)) {
+                target = candidate;
+                targetDistance = distance;
             }
         }
-        if (reach <= Fx{}) {
-            continue;
-        }
-
-        // The nearest thing any of its hull-aimed weapons could reach. Built as a stand-in
-        // weapon rather than looping over the real ones, because the answer is the same for
-        // all of them and the sweep WAS the expensive part — this loop asked `nearestTarget`
-        // once per unturreted hull per tick, and `nearestTarget` scanned every unit in the
-        // match. It goes through the grid now (§7 P5.2), which is where most of the O(n²) in
-        // this file lived.
-        unitdef::Weapon sweep;
-        sweep.role = unitdef::WeaponRole::DirectFire;
-        sweep.damage = Mag::fromInt(1);
-        sweep.rateOfFire = 1.0f;
-        sweep.maxRange = reach;
-
-        const std::optional<UnitId> target =
-            nearestTarget(positionOf(transforms[slot]), motion[slot].armyIndex, sweep, store,
-                          armies, intel);
         if (!target) {
             continue;
         }
@@ -382,7 +391,7 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
                                          from[2]},
                              });
                 damageArea(to, weapon.damageRadius, rates.damage, army, store, armies,
-                           &catalog, store.idAt(slot), events);
+                           &catalog, store.idAt(slot), events, weapon.targetLayers);
             } else {
                 // THE SIMULTANEOUS SALVO (11 §3.3): a salvo size above one with NO delay
                 // means every muzzle fires on the same trigger pull — Moho sets
@@ -480,6 +489,9 @@ std::size_t fireOvercharge(UnitStore& store, const UnitCatalog& catalog,
             if (!weapon.manuallyFired()) {
                 continue;
             }
+            if (!weapon.canTarget(store.motion()[head->target.index].airborne)) {
+                continue;
+            }
             healths[slot].reloadRemaining.resize(def->weapons.size(), 0);
             if (healths[slot].reloadRemaining[w] > 0) {
                 continue;  // still cooling from the last click; `fireWeapons` ticks it
@@ -538,6 +550,7 @@ Projectile launch(std::array<Fx, 3> from, std::array<Fx, 3> to,
     shot.position = {from[0], from[1] + muzzle, from[2]};
     shot.damage = damage;
     shot.damageRadiusElmos = weapon.damageRadius;
+    shot.targetLayers = weapon.targetLayers;
     shot.firedByArmy = byArmy;
     shot.arc = weapon.arc;
     shot.ticksRemaining = static_cast<int>(rate.ticks(kProjectileLifetime));
@@ -595,7 +608,8 @@ Mag damageArea(std::array<Fx, 3> centre, Fx radiusElmos, Mag damage, int byArmy,
 
 Mag damageArea(std::array<Fx, 3> centre, Fx radiusElmos, const unitdef::DamageProfile& damage,
                int byArmy, UnitStore& store, std::span<const Army> armies,
-               const UnitCatalog* catalog, UnitId by, EventQueue* events) {
+               const UnitCatalog* catalog, UnitId by, EventQueue* events,
+               unitdef::TargetLayerMask targetLayers) {
     Mag dealt{};
 
     const std::span<const Transform> transforms = store.transforms();
@@ -609,6 +623,14 @@ Mag damageArea(std::array<Fx, 3> centre, Fx radiusElmos, const unitdef::DamagePr
 
     for (const UnitIndex slot : store.space().within(centre[0], centre[2], reach)) {
         if (!shootable(byArmy, store, slot, armies)) {
+            continue;
+        }
+        if (slot >= motion.size()
+            || ((static_cast<std::uint8_t>(targetLayers)
+                 & static_cast<std::uint8_t>(motion[slot].airborne
+                                                 ? unitdef::TargetLayerMask::Air
+                                                 : unitdef::TargetLayerMask::Surface))
+                == 0)) {
             continue;
         }
 
@@ -727,7 +749,7 @@ void advanceProjectiles(std::vector<Projectile>& projectiles, UnitStore& store,
                          .at = shot.position,
                      });
         damageArea(shot.position, shot.damageRadiusElmos, shot.damage, shot.firedByArmy, store,
-                   armies, catalog, shot.firedBy, events);
+                    armies, catalog, shot.firedBy, events, shot.targetLayers);
         shot.ticksRemaining = 0;
     }
 
@@ -772,14 +794,14 @@ Mag explodeOnDeath(const unitdef::UnitDef& def, std::array<Fx, 3> at, int byArmy
     if (blast->hasRings()) {
         Mag dealt{};
         dealt += damageArea(at, blast->outerRingRadius, profile(blast->outerRingDamage), byArmy,
-                            store, armies, catalog, by, events);
+                            store, armies, catalog, by, events, blast->targetLayers);
         dealt += damageArea(at, blast->innerRingRadius, profile(blast->innerRingDamage), byArmy,
-                            store, armies, catalog, by, events);
+                            store, armies, catalog, by, events, blast->targetLayers);
         return dealt;
     }
 
     return damageArea(at, blast->damageRadius, profile(blast->damage), byArmy, store, armies,
-                      catalog, by, events);
+                       catalog, by, events, blast->targetLayers);
 }
 
 std::vector<UnitId> deadUnits(const UnitStore& store) {

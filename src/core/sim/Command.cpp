@@ -306,8 +306,10 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
             const unitdef::UnitDef* def = catalog.def(store.typeAt(slot));
             Fx reach{};
             if (def != nullptr) {
+                const bool targetAirborne = store.motion()[head->target.index].airborne;
                 for (const unitdef::Weapon& weapon : def->weapons) {
                     if ((manual ? weapon.manuallyFired() : weapon.fires())
+                        && weapon.canTarget(targetAirborne)
                         && weapon.maxRange > reach) {
                         reach = weapon.maxRange;
                     }
@@ -454,13 +456,13 @@ void updateAggressiveOrders(UnitStore& store, const UnitCatalog& catalog,
             continue;
         }
 
-        const unitdef::Weapon* widest = nullptr;
+        bool armed = false;
         for (const unitdef::Weapon& weapon : def->weapons) {
-            if (weapon.fires() && (widest == nullptr || weapon.maxRange > widest->maxRange)) {
-                widest = &weapon;
+            if (weapon.fires()) {
+                armed = true;
             }
         }
-        if (widest == nullptr) {
+        if (!armed) {
             continue;  // an unarmed patrol is still a patrol; it simply never interrupts
         }
 
@@ -522,10 +524,13 @@ void updateAggressiveOrders(UnitStore& store, const UnitCatalog& catalog,
 
         const Transform& mineAt = store.transforms()[slot];
         const Transform& targetAt = store.transforms()[order->target.index];
+        const bool targetAirborne = store.motion()[order->target.index].airborne;
         const Fx gap = groundDistanceElmos(positionOf(mineAt), positionOf(targetAt));
         const bool canEngage = std::any_of(
-            def->weapons.begin(), def->weapons.end(), [gap](const unitdef::Weapon& weapon) {
-                return weapon.fires() && gap >= weapon.minRange && gap <= weapon.maxRange;
+            def->weapons.begin(), def->weapons.end(),
+            [gap, targetAirborne](const unitdef::Weapon& weapon) {
+                return weapon.fires() && weapon.canTarget(targetAirborne)
+                    && gap >= weapon.minRange && gap <= weapon.maxRange;
             });
         if (canEngage) {
             motion.moving = false;
@@ -534,7 +539,14 @@ void updateAggressiveOrders(UnitStore& store, const UnitCatalog& catalog,
             continue;
         }
 
-        if (gap < widest->minRange) {
+        const unitdef::Weapon* widest = nullptr;
+        for (const unitdef::Weapon& weapon : def->weapons) {
+            if (weapon.fires() && weapon.canTarget(targetAirborne)
+                && (widest == nullptr || weapon.maxRange > widest->maxRange)) {
+                widest = &weapon;
+            }
+        }
+        if (widest == nullptr || gap < widest->minRange) {
             order->target = UnitId{};
             (void)resumeWaypoint();
             continue;
@@ -584,8 +596,10 @@ bool startCommand(const Command& command, UnitStore& store, const UnitCatalog& c
         const unitdef::UnitDef* def = catalog.def(store.typeAt(command.unit.index));
         Fx reach{};
         if (def != nullptr) {
+            const bool targetAirborne = store.motion()[command.target.index].airborne;
             for (const unitdef::Weapon& weapon : def->weapons) {
-                if (weapon.manuallyFired() && weapon.maxRange > reach) {
+                if (weapon.manuallyFired() && weapon.canTarget(targetAirborne)
+                    && weapon.maxRange > reach) {
                     reach = weapon.maxRange;
                 }
             }
@@ -610,7 +624,22 @@ bool startCommand(const Command& command, UnitStore& store, const UnitCatalog& c
     case CommandKind::Move:
     case CommandKind::AttackMove:
     case CommandKind::Patrol:
+        return routeUnit(command.unit.index, command.targetX, command.targetZ, store, terrain,
+                         grid);
+
     case CommandKind::Attack: {
+        if (!store.alive(command.target)) {
+            return false;
+        }
+        const unitdef::UnitDef* def = catalog.def(store.typeAt(command.unit.index));
+        const bool targetAirborne = store.motion()[command.target.index].airborne;
+        if (def == nullptr
+            || std::none_of(def->weapons.begin(), def->weapons.end(),
+                            [targetAirborne](const unitdef::Weapon& weapon) {
+                                return weapon.fires() && weapon.canTarget(targetAirborne);
+                            })) {
+            return false;
+        }
         // ROUTED, not aimed straight at the destination — which is the difference between a
         // unit walking round a lake and one walking into it. A route that cannot be found is
         // a refused order rather than a straight-line fallback: driving into the water is a

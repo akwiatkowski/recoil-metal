@@ -6,6 +6,7 @@
 #include "core/sim/Movement.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 
 namespace rm::unitdef {
@@ -15,6 +16,35 @@ namespace {
                              float fallback) noexcept {
     const std::optional<double> value = table.numberAt(key);
     return value ? static_cast<float>(*value) : fallback;
+}
+
+[[nodiscard]] bool containsWord(std::string_view text, std::string_view word) noexcept {
+    std::size_t at = text.find(word);
+    while (at != std::string_view::npos) {
+        const auto isWord = [](char c) {
+            return std::isalnum(static_cast<unsigned char>(c)) != 0 || c == '_';
+        };
+        const bool startsWord = at == 0 || !isWord(text[at - 1]);
+        const std::size_t after = at + word.size();
+        const bool endsWord = after == text.size() || !isWord(text[after]);
+        if (startsWord && endsWord) {
+            return true;
+        }
+        at = text.find(word, at + 1);
+    }
+    return false;
+}
+
+[[nodiscard]] std::uint8_t targetBits(std::string_view caps) noexcept {
+    std::uint8_t bits = 0;
+    if (containsWord(caps, "Air")) {
+        bits |= static_cast<std::uint8_t>(TargetLayerMask::Air);
+    }
+    if (containsWord(caps, "Land") || containsWord(caps, "Water")
+        || containsWord(caps, "Seabed")) {
+        bits |= static_cast<std::uint8_t>(TargetLayerMask::Surface);
+    }
+    return bits;
 }
 
 } // namespace
@@ -63,7 +93,7 @@ int Weapon::reloadTicks(sim::TickRate rate) const noexcept {
     return static_cast<int>(rate.ticks(sim::seconds(1.0f / rateOfFire)));
 }
 
-std::vector<Weapon> weaponsFrom(const lua::Value& weaponArray) {
+std::vector<Weapon> weaponsFrom(const lua::Value& weaponArray, bool airborneSource) {
     std::vector<Weapon> weapons;
     weapons.reserve(weaponArray.items.size());
 
@@ -76,6 +106,39 @@ std::vector<Weapon> weaponsFrom(const lua::Value& weaponArray) {
         if (const std::optional<std::string_view> arc = entry.stringAt("BallisticArc")) {
             weapon.arc = ballisticArcFromName(*arc).value_or(BallisticArc::None);
         }
+
+        // FA's source-layer table names the destination layers each weapon can hit. Aircraft
+        // use the Air row; this sim collapses every other source into Surface, so surface units
+        // union the remaining rows. Folding Air into those rows would broaden asymmetric caps.
+        if (const lua::Value* caps = entry.find("FireTargetLayerCapsTable");
+            caps != nullptr && caps->isTable()) {
+            std::uint8_t bits = 0;
+            for (const lua::Field& field : caps->fields) {
+                if ((field.key == "Air") != airborneSource) {
+                    continue;
+                }
+                if (const std::optional<std::string_view> value = field.value.asString()) {
+                    bits |= targetBits(*value);
+                }
+            }
+            weapon.targetLayers = static_cast<TargetLayerMask>(bits);
+        }
+        std::uint8_t layers = static_cast<std::uint8_t>(weapon.targetLayers);
+        if (const lua::Value* cannotGround = entry.find("CannotAttackGround");
+            cannotGround != nullptr && cannotGround->asBoolean().value_or(false)) {
+            layers &= ~static_cast<std::uint8_t>(TargetLayerMask::Surface);
+        }
+        if (const std::optional<std::string_view> only =
+                entry.stringAt("TargetRestrictOnlyAllow");
+            only && containsWord(*only, "AIR")) {
+            layers &= static_cast<std::uint8_t>(TargetLayerMask::Air);
+        }
+        if (const std::optional<std::string_view> disallow =
+                entry.stringAt("TargetRestrictDisallow");
+            disallow && containsWord(*disallow, "AIR")) {
+            layers &= ~static_cast<std::uint8_t>(TargetLayerMask::Air);
+        }
+        weapon.targetLayers = static_cast<TargetLayerMask>(layers);
 
         weapon.damage = sim::magFromFloat(numberOr(entry, "Damage", 0.0f));
         weapon.damageType = std::string{entry.stringAt("DamageType").value_or("")};

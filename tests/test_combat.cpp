@@ -152,6 +152,50 @@ TEST_CASE("a unit shoots the nearest enemy and never a friend") {
     CHECK(*target == near);  // the near enemy, not the nearer ally
 }
 
+TEST_CASE("a weapon acquires targets only on its allowed movement layer") {
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    Roster roster;
+
+    UnitDef surface = targetDef();
+    surface.name = "surface_target";
+    UnitDef aircraft = targetDef();
+    aircraft.name = "air_target";
+    aircraft.motion = rm::unitdef::MotionType::Air;
+    const rm::UnitTypeIndex surfaceType = roster.addType(surface);
+    const rm::UnitTypeIndex airType = roster.addType(aircraft);
+    const UnitId nearSurface = roster.add(surfaceType, 0.0f, 50.0f, 1, 100.0f);
+    const UnitId farAir = roster.add(airType, 0.0f, 100.0f, 1, 100.0f);
+
+    Weapon weapon = directFire(10.0f, 300.0f);
+    weapon.targetLayers = rm::unitdef::TargetLayerMask::Air;
+    CHECK(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, weapon, roster.store, armies)
+          == farAir);
+
+    weapon.targetLayers = rm::unitdef::TargetLayerMask::Surface;
+    CHECK(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, weapon, roster.store, armies)
+          == nearSurface);
+}
+
+TEST_CASE("hull aiming does not combine one weapon's range with another's target layer") {
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    Roster roster;
+
+    Weapon longSurface = directFire(10.0f, 300.0f);
+    longSurface.targetLayers = rm::unitdef::TargetLayerMask::Surface;
+    Weapon shortAir = directFire(10.0f, 100.0f);
+    shortAir.targetLayers = rm::unitdef::TargetLayerMask::Air;
+    UnitDef gunner = gunnerDef(longSurface);
+    gunner.weapons.push_back(shortAir);
+    const UnitId shooter = roster.add(roster.addType(gunner), 0.0f, 0.0f, 0, 100.0f);
+
+    UnitDef aircraft = targetDef();
+    aircraft.motion = rm::unitdef::MotionType::Air;
+    (void)roster.add(roster.addType(aircraft), 200.0f, 0.0f, 1, 100.0f);
+
+    CHECK(rm::sim::aimAtTargets(roster.store, roster.catalog, armies) == 0);
+    CHECK(roster.transform(shooter).heading == rm::Brad{0});
+}
+
 TEST_CASE("a unit does not shoot what its side cannot see") {
     // The bug ADR-037 was written to fix, now a test. Until intel existed this pass picked
     // from the whole store filtered by hostility and range, so every unit in the match
@@ -486,6 +530,36 @@ TEST_CASE("a shot in flight lands and kills, and is then gone") {
     const auto dead = rm::sim::deadUnits(roster.store);
     REQUIRE(dead.size() == 1);
     CHECK(dead.front() == frail);
+}
+
+TEST_CASE("a surface shot passes aircraft and damages only its ground target") {
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    const rm::HeightField field = flatField();
+    Roster roster;
+
+    UnitDef aircraft = targetDef();
+    aircraft.name = "air_target";
+    aircraft.motion = rm::unitdef::MotionType::Air;
+    const UnitId air = roster.add(roster.addType(aircraft), 0.0f, 50.0f, 1, 100.0f);
+    const UnitId surface =
+        roster.add(roster.addType(targetDef()), 0.0f, 100.0f, 1, 100.0f);
+
+    Weapon weapon = directFire(40.0f, 300.0f, 20.0f);
+    weapon.targetLayers = rm::unitdef::TargetLayerMask::Surface;
+    std::vector<Projectile> shots{rm::sim::launch(
+        rm::test::at(0, 0, 0), rm::test::at(0, 0, 100), weapon, 0,
+        rm::sim::TickRate{},
+        rm::sim::TickRate{}.perTick(weapon.muzzleVelocityElmosPerSecond),
+        rm::unitdef::flatDamage(weapon.damage))};
+
+    for (int tick = 0; tick < 100 && !shots.empty(); ++tick) {
+        rm::sim::advanceProjectiles(shots, roster.store, armies, rm::sim::Terrain{field},
+                                    rm::sim::TickRate{});
+    }
+
+    CHECK(shots.empty());
+    CHECK(rm::test::asFloat(roster.health(air).current) == Approx(100.0f));
+    CHECK(rm::test::asFloat(roster.health(surface).current) < 100.0f);
 }
 
 TEST_CASE("a shot that hits nothing expires instead of flying forever") {

@@ -341,6 +341,60 @@ TEST_CASE("an aircraft is known by its motion class") {
     CHECK(def->speedElmosPerSecond == Approx(120.0f));
 }
 
+TEST_CASE("FA weapon target layers distinguish interceptors from bombers") {
+    SECTION("an interceptor may attack air and not the ground") {
+        const Blueprint bp{"UEA0102_unit.bp", R"(
+            UnitBlueprint {
+                Physics = { MotionType = 'RULEUMT_Air', MaxSpeed = 0.5 },
+                Air = { MaxAirspeed = 18 },
+                SizeX = 1, SizeZ = 1,
+                Weapon = {
+                    {
+                        WeaponCategory = 'Anti Air', Damage = 10, MaxRadius = 20,
+                        RateOfFire = 1, CannotAttackGround = true,
+                        FireTargetLayerCapsTable = {
+                            Air = 'Air|Land', Land = 'Air|Land',
+                        },
+                        TargetRestrictOnlyAllow = 'AIR',
+                    },
+                },
+            }
+        )"};
+
+        const auto def = rm::unitbp::loadFile(bp.path());
+        REQUIRE(def.has_value());
+        REQUIRE(def->weapons.size() == 1);
+        CHECK(def->weapons[0].canTarget(true));
+        CHECK_FALSE(def->weapons[0].canTarget(false));
+    }
+
+    SECTION("a bomber may attack the surface and not air") {
+        const Blueprint bp{"UEA0103_unit.bp", R"(
+            UnitBlueprint {
+                Physics = { MotionType = 'RULEUMT_Air', MaxSpeed = 0.5 },
+                Air = { MaxAirspeed = 12 },
+                SizeX = 1, SizeZ = 1,
+                Weapon = {
+                    {
+                        WeaponCategory = 'Bomb', Damage = 100, MaxRadius = 20,
+                        RateOfFire = 1,
+                        FireTargetLayerCapsTable = {
+                            Air = 'Land|Water|Seabed',
+                            Land = 'Air|Land|Water|Seabed',
+                        },
+                    },
+                },
+            }
+        )"};
+
+        const auto def = rm::unitbp::loadFile(bp.path());
+        REQUIRE(def.has_value());
+        REQUIRE(def->weapons.size() == 1);
+        CHECK(def->weapons[0].canTarget(false));
+        CHECK_FALSE(def->weapons[0].canTarget(true));
+    }
+}
+
 TEST_CASE("a blueprint with no Physics table is refused, not read as a building") {
     // A building has a Physics table stating RULEUMT_None. A blueprint with none
     // at all is a file this reader has misunderstood, and defaulting it to

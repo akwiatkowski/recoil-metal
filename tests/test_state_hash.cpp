@@ -111,6 +111,18 @@ TEST_CASE("the cached air movement layer changes the hash") {
     CHECK(ground.hash() != air.hash());
 }
 
+TEST_CASE("a projectile's target layer changes the hash") {
+    Fixture surface;
+    Fixture air;
+    rm::sim::Projectile shot;
+    shot.targetLayers = rm::unitdef::TargetLayerMask::Surface;
+    surface.projectiles.push_back(shot);
+    shot.targetLayers = rm::unitdef::TargetLayerMask::Air;
+    air.projectiles.push_back(shot);
+
+    CHECK(surface.hash() != air.hash());
+}
+
 TEST_CASE("one unit moving one step changes the hash") {
     Fixture a;
     const rm::StateHash before = a.hash();

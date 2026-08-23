@@ -51,6 +51,17 @@ enum class WeaponRole : std::uint8_t {
 
 [[nodiscard]] WeaponRole weaponRoleFromCategory(std::string_view category) noexcept;
 
+/// Which of the sim's two movement layers a weapon may damage.
+///
+/// FA states richer Land/Water/Seabed/Air caps. This engine currently has one airborne layer
+/// and one surface layer, so the three surface names deliberately collapse into one bit.
+enum class TargetLayerMask : std::uint8_t {
+    None = 0,
+    Surface = 1,
+    Air = 2,
+    Both = 3,
+};
+
 /// The aiming cone a weapon gets when its blueprint states none.
 ///
 /// Ten degrees: loose enough that an unstated tolerance never becomes a weapon that cannot
@@ -64,6 +75,15 @@ struct Weapon {
 
     WeaponRole role = WeaponRole::Other;
     BallisticArc arc = BallisticArc::None;
+
+    /// Unrestricted when content states no caps, preserving synthetic and Recoil weapons.
+    TargetLayerMask targetLayers = TargetLayerMask::Both;
+
+    [[nodiscard]] bool canTarget(bool airborne) const noexcept {
+        const std::uint8_t wanted = static_cast<std::uint8_t>(
+            airborne ? TargetLayerMask::Air : TargetLayerMask::Surface);
+        return (static_cast<std::uint8_t>(targetLayers) & wanted) != 0;
+    }
 
     /// Damage a single shot does at the point of impact.
     /// FIXED POINT (`Mag`), converted at parse time — which is the legitimate float boundary
@@ -263,6 +283,7 @@ struct Weapon {
 
 /// Reads a blueprint's `Weapon` array — a Lua array, so its entries are positional.
 /// Empty for the 321 units that carry none.
-[[nodiscard]] std::vector<Weapon> weaponsFrom(const lua::Value& weaponArray);
+[[nodiscard]] std::vector<Weapon> weaponsFrom(const lua::Value& weaponArray,
+                                               bool airborneSource = false);
 
 } // namespace rm::unitdef

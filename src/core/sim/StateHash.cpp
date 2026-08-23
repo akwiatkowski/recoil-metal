@@ -292,6 +292,12 @@ StateHash hashMatch(const UnitStore& store, const Match& match) {
                 feed(h, shot.damage.overrideDamage[i]);
             }
             feed(h, shot.damageRadiusElmos);
+            // Surface-only is the historical FA projectile state. Keep its byte stream stable,
+            // while every other mask carries a marker and value that distinguish future rules.
+            if (shot.targetLayers != unitdef::TargetLayerMask::Surface) {
+                feed(h, true);
+                feed(h, static_cast<int>(shot.targetLayers));
+            }
             feed(h, shot.firedByArmy);
             feed(h, static_cast<int>(shot.arc));
             feed(h, shot.ticksRemaining);

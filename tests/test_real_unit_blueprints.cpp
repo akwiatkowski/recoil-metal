@@ -14,9 +14,11 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "core/map/Scmap.hpp"
+#include "core/unit/BuildTree.hpp"
 #include "core/unit/UnitBlueprint.hpp"
 #include "core/unit/UnitDef.hpp"
 
+#include <algorithm>
 #include <cstdlib>
 #include <filesystem>
 #include <map>
@@ -75,6 +77,7 @@ TEST_CASE("every retail unit blueprint parses into a definition", "[corpus]") {
     std::map<MotionType, int> byMotion;
     std::map<std::string, std::filesystem::path> byId;
     std::vector<std::string> duplicates;
+    std::vector<std::string> firingWithoutTargets;
 
     int mobile = 0;
     int statesMeshName = 0;
@@ -100,6 +103,12 @@ TEST_CASE("every retail unit blueprint parses into a definition", "[corpus]") {
         }
         fastest = std::max(fastest, def->speedElmosPerSecond);
         largestRadius = std::max(largestRadius, def->collisionRadiusElmos);
+        for (const rm::unitdef::Weapon& weapon : def->weapons) {
+            if (weapon.fires()
+                && weapon.targetLayers == rm::unitdef::TargetLayerMask::None) {
+                firingWithoutTargets.push_back(def->name + ":" + weapon.label);
+            }
+        }
 
         // Ids are what the rest of the content refers to a unit by, so two files
         // claiming one would mean a reference that cannot be resolved.
@@ -143,6 +152,7 @@ TEST_CASE("every retail unit blueprint parses into a definition", "[corpus]") {
         }
     }
     CHECK(duplicates.empty());
+    CHECK(firingWithoutTargets.empty());
 
     // The motion census, which is the fact this milestone leans on hardest: the
     // class is the only thing a blueprint says about where a unit may go, and
@@ -204,6 +214,109 @@ TEST_CASE("a UEF medium tank reads as the vehicle it is", "[corpus]") {
     const std::filesystem::path mesh = rm::unitbp::resolveMesh(*def, path);
     REQUIRE_FALSE(mesh.empty());
     CHECK(std::filesystem::exists(mesh));
+}
+
+TEST_CASE("retail T1 air factories expose scouts, interceptors and bombers", "[corpus]") {
+    const auto read = [](std::string_view id) {
+        const std::string name{id};
+        return rm::unitbp::loadFile(unitRoot() / name / (name + "_unit.bp"));
+    };
+    if (!std::filesystem::exists(unitRoot() / "UEB0102/UEB0102_unit.bp")) {
+        SKIP("no T1 air factory blueprints at " + unitRoot().string());
+    }
+    const auto tank = read("UEL0201");
+    REQUIRE(tank.has_value());
+
+    struct AirTree {
+        const char* commander;
+        const char* factory;
+        const char* scout;
+        const char* interceptor;
+        const char* bomber;
+    };
+    constexpr AirTree trees[] = {
+        {"UEL0001", "UEB0102", "UEA0101", "UEA0102", "UEA0103"},
+        {"UAL0001", "UAB0102", "UAA0101", "UAA0102", "UAA0103"},
+        {"URL0001", "URB0102", "URA0101", "URA0102", "URA0103"},
+        {"XSL0001", "XSB0102", "XSA0101", "XSA0102", "XSA0103"},
+    };
+    for (const AirTree& tree : trees) {
+        const auto commander = read(tree.commander);
+        const auto factory = read(tree.factory);
+        const auto scout = read(tree.scout);
+        const auto interceptor = read(tree.interceptor);
+        const auto bomber = read(tree.bomber);
+        REQUIRE(commander.has_value());
+        REQUIRE(factory.has_value());
+        REQUIRE(scout.has_value());
+        REQUIRE(interceptor.has_value());
+        REQUIRE(bomber.has_value());
+
+        CHECK(rm::unitdef::matchesExpression(commander->buildableCategory, *factory));
+        CHECK(rm::unitdef::matchesExpression(factory->buildableCategory, *scout));
+        CHECK(rm::unitdef::matchesExpression(factory->buildableCategory, *interceptor));
+        CHECK(rm::unitdef::matchesExpression(factory->buildableCategory, *bomber));
+        CHECK_FALSE(rm::unitdef::matchesExpression(factory->buildableCategory, *tank));
+    }
+}
+
+TEST_CASE("retail T1 interceptors and bombers keep their target domains", "[corpus]") {
+    struct AirPair {
+        const char* interceptor;
+        const char* bomber;
+    };
+    constexpr AirPair pairs[] = {
+        {"UEA0102", "UEA0103"},
+        {"UAA0102", "UAA0103"},
+        {"URA0102", "URA0103"},
+        {"XSA0102", "XSA0103"},
+    };
+    if (!std::filesystem::exists(unitRoot() / "UEA0102/UEA0102_unit.bp")) {
+        SKIP("no T1 air blueprints at " + unitRoot().string());
+    }
+
+    for (const AirPair& pair : pairs) {
+        const std::string interceptorId{pair.interceptor};
+        const std::string bomberId{pair.bomber};
+        const auto interceptor = rm::unitbp::loadFile(
+            unitRoot() / interceptorId / (interceptorId + "_unit.bp"));
+        const auto bomber =
+            rm::unitbp::loadFile(unitRoot() / bomberId / (bomberId + "_unit.bp"));
+        REQUIRE(interceptor.has_value());
+        REQUIRE(bomber.has_value());
+
+        const auto firing = [](const rm::unitdef::Weapon& weapon) { return weapon.fires(); };
+        REQUIRE(std::any_of(interceptor->weapons.begin(), interceptor->weapons.end(), firing));
+        REQUIRE(std::any_of(bomber->weapons.begin(), bomber->weapons.end(), firing));
+        for (const rm::unitdef::Weapon& weapon : interceptor->weapons) {
+            if (weapon.fires()) {
+                CHECK(weapon.canTarget(true));
+                CHECK_FALSE(weapon.canTarget(false));
+            }
+        }
+        for (const rm::unitdef::Weapon& weapon : bomber->weapons) {
+            if (weapon.fires()) {
+                CHECK(weapon.canTarget(false));
+                CHECK_FALSE(weapon.canTarget(true));
+            }
+        }
+    }
+}
+
+TEST_CASE("an aircraft uses its Air source row instead of unioning unused rows", "[corpus]") {
+    const std::filesystem::path path = unitRoot() / "DAA0206/DAA0206_unit.bp";
+    if (!std::filesystem::exists(path)) {
+        SKIP("no DAA0206 blueprint at " + path.string());
+    }
+    const auto def = rm::unitbp::loadFile(path);
+    REQUIRE(def.has_value());
+    const auto weapon = std::find_if(def->weapons.begin(), def->weapons.end(),
+                                     [](const rm::unitdef::Weapon& candidate) {
+                                         return candidate.fires();
+                                     });
+    REQUIRE(weapon != def->weapons.end());
+    CHECK(weapon->canTarget(false));
+    CHECK_FALSE(weapon->canTarget(true));
 }
 
 TEST_CASE("the economy the blueprints state is the economy the game plays", "[corpus]") {
