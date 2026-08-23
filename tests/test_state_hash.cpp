@@ -294,6 +294,27 @@ TEST_CASE("negative zero is not a divergence") {
     REQUIRE(a.hash() == positive);
 }
 
+TEST_CASE("the target handle changes the hash before pursuit changes movement") {
+    Fixture a;
+    Fixture b;
+    Fixture c;
+    rm::sim::Command left{.kind = rm::sim::CommandKind::Attack,
+                          .unit = rm::sim::UnitId{0, 1},
+                          .targetX = rm::test::fx(200.0f),
+                          .targetZ = rm::test::fx(200.0f),
+                          .target = rm::sim::UnitId{4, 2}};
+    rm::sim::Command right = left;
+    right.target = rm::sim::UnitId{5, 2};
+    rm::sim::Command newer = left;
+    newer.target = rm::sim::UnitId{4, 3};
+    (void)a.store.orders()[0].give(left, false);
+    (void)b.store.orders()[0].give(right, false);
+    (void)c.store.orders()[0].give(newer, false);
+
+    REQUIRE(a.hash() != b.hash());
+    REQUIRE(a.hash() != c.hash());
+}
+
 TEST_CASE("a real tick moves the hash, and the same tick moves it the same way") {
     // The property the divergence harness is built on, end to end: two matches stepped
     // identically stay identical, tick after tick.

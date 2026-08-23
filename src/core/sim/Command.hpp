@@ -100,6 +100,10 @@ struct Command {
 
     CommandKind kind = CommandKind::Stop;
 
+    /// Whether this input appends behind the current order. Serialized because replay must
+    /// rebuild the same queue; once accepted it is provenance and does not affect execution.
+    bool queued = false;
+
     /// Which unit. Stale handles are ignored — a player may click a unit that died on the
     /// tick their order was issued, and that must not resolve to whoever inherited the slot.
     UnitId unit{};
@@ -153,7 +157,7 @@ struct Command {
 /// `building` may be null — a decorative crowd has no construction list — in which case a
 /// `Build` command is refused rather than crashing.
 ///
-/// `queued` is the shift key (§7 P4.1). Without it the order REPLACES the unit's queue and is
+/// `Command::queued` is the shift key (§7 P4.1). Without it the order REPLACES the unit's queue and is
 /// started at once; with it the order goes behind whatever is already there — or CANCELS a
 /// matching one, which is `CommandQueue::give`'s job and Recoil's behaviour.
 ///
@@ -169,10 +173,10 @@ struct Command {
 [[nodiscard]] bool applyCommand(const Command& command, UnitStore& store,
                                 const UnitCatalog& catalog, std::span<const Player> players,
                                 std::span<const Army> armies, const Terrain& terrain,
-                                const PassabilityGrid& grid, TickRate rate,
-                                std::vector<Construction>* building = nullptr,
-                                bool queued = false, EventQueue* events = nullptr,
-                                const FeatureStore* features = nullptr);
+                                 const PassabilityGrid& grid, TickRate rate,
+                                 std::vector<Construction>* building = nullptr,
+                                 EventQueue* events = nullptr,
+                                 const FeatureStore* features = nullptr);
 
 /// Starts the next order for every unit that has finished its current one.
 ///

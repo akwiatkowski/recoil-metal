@@ -733,7 +733,7 @@ bool issueBuild(UnitScene& scene, const rm::sim::PassabilityGrid& grid,
     const bool applied = rm::sim::applyCommand(command, scene.store, scene.catalog,
                                                scene.players, scene.armies,
                                                rm::sim::Terrain{field}, grid, gAppTickRate,
-                                               &scene.building, /*queued=*/false);
+                                                &scene.building);
     if (applied) {
         scene.commands.record(command);
     }

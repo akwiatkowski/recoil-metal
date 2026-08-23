@@ -49,6 +49,7 @@ bool gFafLog = false;
         .tick = tick,
         .player = player,
         .kind = rm::sim::CommandKind::Move,
+        .queued = queued,
         .unit = unit,
         .targetX = toX,
         .targetZ = toZ,
@@ -56,9 +57,9 @@ bool gFafLog = false;
     };
 
     const bool applied = rm::sim::applyCommand(command, scene.store, scene.catalog,
-                                               scene.players, scene.armies,
-                                               rm::sim::Terrain{field}, grid, gAppTickRate,
-                                               &scene.building, queued);
+                                                scene.players, scene.armies,
+                                                rm::sim::Terrain{field}, grid, gAppTickRate,
+                                                &scene.building);
     if (applied) {
         // Recorded only when it took. A refused order is not part of the match — replaying it
         // would be refused again, so keeping it would only make the log longer.
@@ -80,6 +81,7 @@ bool gFafLog = false;
         .tick = tick,
         .player = player,
         .kind = rm::sim::CommandKind::Attack,
+        .queued = queued,
         .unit = unit,
         .targetX = toX,
         .targetZ = toZ,
@@ -88,9 +90,9 @@ bool gFafLog = false;
     };
 
     const bool applied = rm::sim::applyCommand(command, scene.store, scene.catalog,
-                                               scene.players, scene.armies,
-                                               rm::sim::Terrain{field}, grid, gAppTickRate,
-                                               &scene.building, queued);
+                                                scene.players, scene.armies,
+                                                rm::sim::Terrain{field}, grid, gAppTickRate,
+                                                &scene.building);
     if (applied) {
         scene.commands.record(command);
     }
@@ -108,6 +110,7 @@ bool gFafLog = false;
         .tick = tick,
         .player = player,
         .kind = rm::sim::CommandKind::Overcharge,
+        .queued = queued,
         .unit = unit,
         .targetX = toX,
         .targetZ = toZ,
@@ -116,9 +119,9 @@ bool gFafLog = false;
     };
 
     const bool applied = rm::sim::applyCommand(command, scene.store, scene.catalog,
-                                               scene.players, scene.armies,
-                                               rm::sim::Terrain{field}, grid, gAppTickRate,
-                                               &scene.building, queued);
+                                                scene.players, scene.armies,
+                                                rm::sim::Terrain{field}, grid, gAppTickRate,
+                                                &scene.building);
     if (applied) {
         scene.commands.record(command);
     }
@@ -139,6 +142,7 @@ bool gFafLog = false;
         .tick = tick,
         .player = player,
         .kind = rm::sim::CommandKind::Reclaim,
+        .queued = queued,
         .unit = unit,
         .targetX = found->at[0],
         .targetZ = found->at[2],
@@ -147,10 +151,10 @@ bool gFafLog = false;
     };
 
     const bool applied = rm::sim::applyCommand(command, scene.store, scene.catalog,
-                                               scene.players, scene.armies,
-                                               rm::sim::Terrain{field}, grid, gAppTickRate,
-                                               &scene.building, queued, nullptr,
-                                               &scene.features);
+                                                scene.players, scene.armies,
+                                                rm::sim::Terrain{field}, grid, gAppTickRate,
+                                                &scene.building, nullptr,
+                                                &scene.features);
     if (applied) {
         scene.commands.record(command);
     }
@@ -787,9 +791,9 @@ rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) 
         const rm::sim::PassabilityGrid& grid = runner.passability.gridFor(
             scene.maxSlopeDegrees[type], scene.maxWaterDepthElmos[type]);
         if (rm::sim::applyCommand(command, scene.store, scene.catalog, scene.players,
-                                  scene.armies, rm::sim::Terrain{runner.field}, grid,
-                                  gAppTickRate, &scene.building, false, nullptr,
-                                  &scene.features)) {
+                                   scene.armies, rm::sim::Terrain{runner.field}, grid,
+                                   gAppTickRate, &scene.building, nullptr,
+                                   &scene.features)) {
             scene.commands.record(command);
         }
     };

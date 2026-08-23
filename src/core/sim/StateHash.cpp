@@ -165,6 +165,12 @@ void feedOrders(StateHash& h, const CommandQueue& orders) noexcept {
         feed(h, static_cast<std::size_t>(command.unit.generation));
         feed(h, command.targetX);
         feed(h, command.targetZ);
+        // Invalid means "no target" and predates targeted commands. Feeding nothing for it
+        // preserves old hashes; a real generational handle joins the hash at acquisition.
+        if (command.target.generation != 0) {
+            feed(h, static_cast<std::size_t>(command.target.index));
+            feed(h, static_cast<std::size_t>(command.target.generation));
+        }
         feed(h, static_cast<std::size_t>(command.buildType));
     }
 }

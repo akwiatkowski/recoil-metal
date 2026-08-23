@@ -86,7 +86,7 @@ struct Fixture {
             command.targetZ = wreck->at[2];
         }
         return rm::sim::applyCommand(command, roster.store, roster.catalog, players, armies,
-                                     terrain, grid, roster.rate, &building, false, nullptr,
+                                     terrain, grid, roster.rate, &building, nullptr,
                                      &features);
     }
 

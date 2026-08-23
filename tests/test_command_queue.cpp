@@ -24,9 +24,10 @@ using Result = rm::sim::CommandQueue::Result;
 
 namespace {
 
-[[nodiscard]] Command moveTo(float x, float z, UnitId unit = UnitId{}) {
+[[nodiscard]] Command moveTo(float x, float z, UnitId unit = UnitId{}, bool queued = false) {
     return Command{.kind = CommandKind::Move,
-                   .unit = unit,
+                    .queued = queued,
+                    .unit = unit,
                    .targetX = rm::sim::fxFromFloat(x),
                    .targetZ = rm::sim::fxFromFloat(z)};
 }
@@ -223,11 +224,11 @@ TEST_CASE("three queued moves run in order") {
 
     CHECK(rm::sim::applyCommand(moveTo(legs[0][0], legs[0][1], walker), roster.store,
                                 roster.catalog, players, armies, terrain, grid, roster.rate,
-                                &building, false));
+                                &building));
     for (std::size_t leg = 1; leg < legs.size(); ++leg) {
-        CHECK(rm::sim::applyCommand(moveTo(legs[leg][0], legs[leg][1], walker), roster.store,
+        CHECK(rm::sim::applyCommand(moveTo(legs[leg][0], legs[leg][1], walker, true), roster.store,
                                     roster.catalog, players, armies, terrain, grid, roster.rate,
-                                    &building, true));
+                                    &building));
     }
     CHECK(roster.store.orders()[walker.index].size() == 3);
 
@@ -280,12 +281,12 @@ TEST_CASE("a refused plain order changes nothing at all") {
     const std::vector<rm::sim::Player> players{rm::sim::Player{.index = 0, .army = 0}};
 
     CHECK(rm::sim::applyCommand(moveTo(200.0f, 40.0f, walker), roster.store, roster.catalog,
-                                players, armies, terrain, open, roster.rate, nullptr, false));
+                                players, armies, terrain, open, roster.rate, nullptr));
     REQUIRE(roster.store.orders()[walker.index].size() == 1);
 
     CHECK_FALSE(rm::sim::applyCommand(moveTo(300.0f, 300.0f, walker), roster.store,
                                       roster.catalog, players, armies, terrain, closed,
-                                      roster.rate, nullptr, false));
+                                      roster.rate, nullptr));
     // The original order is still there.
     REQUIRE(roster.store.orders()[walker.index].size() == 1);
     CHECK(*roster.store.orders()[walker.index].current() == moveTo(200.0f, 40.0f, walker));
@@ -307,7 +308,7 @@ TEST_CASE("a recycled slot does not inherit the dead unit's route") {
     const std::vector<rm::sim::Player> players{rm::sim::Player{.index = 0, .army = 0}};
 
     CHECK(rm::sim::applyCommand(moveTo(200.0f, 40.0f, doomed), roster.store, roster.catalog,
-                                players, armies, terrain, grid, roster.rate, nullptr, false));
+                                players, armies, terrain, grid, roster.rate, nullptr));
     CHECK(roster.store.orders()[doomed.index].size() == 1);
 
     roster.store.kill(doomed);

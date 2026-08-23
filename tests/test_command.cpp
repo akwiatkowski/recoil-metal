@@ -342,6 +342,7 @@ TEST_CASE("a log round-trips through a file exactly") {
     original.record(Command{.tick = 4,
                             .player = 1,
                             .kind = CommandKind::Attack,
+                            .queued = true,
                             .unit = UnitId{9, 2},
                             .targetX = rm::test::fx(-42.5f),
                             .targetZ = rm::test::fx(0.125f),
@@ -364,6 +365,7 @@ TEST_CASE("a log round-trips through a file exactly") {
     for (std::size_t i = 0; i < original.size(); ++i) {
         REQUIRE(read->all()[i] == original.all()[i]);
     }
+    CHECK(read->all()[2].queued);
 
     std::filesystem::remove(path);
 }
@@ -380,6 +382,57 @@ TEST_CASE("a missing or malformed log is nothing, not a partial one") {
     }
     // Nothing, rather than the one good line: a partial log replays as a different match.
     CHECK_FALSE(rm::sim::readCommandLog(path.string()).has_value());
+    std::filesystem::remove(path);
+}
+
+TEST_CASE("a present queue flag must be zero or one") {
+    const std::filesystem::path path =
+        std::filesystem::temp_directory_path() / "rm-command-log-bad-queue.txt";
+    {
+        std::ofstream out{path};
+        out << "0 0 move 1 1 100 200 0 0 0 - yes\n";
+    }
+    CHECK_FALSE(rm::sim::readCommandLog(path.string()).has_value());
+    std::filesystem::remove(path);
+}
+
+TEST_CASE("a legacy command without a queue column remains a replacement order") {
+    const std::filesystem::path path =
+        std::filesystem::temp_directory_path() / "rm-command-log-legacy.txt";
+    {
+        std::ofstream out{path};
+        out << "0 0 move 1 1 100 200 0\n";
+    }
+    const std::optional<CommandLog> read = rm::sim::readCommandLog(path.string());
+    REQUIRE(read.has_value());
+    REQUIRE(read->size() == 1);
+    CHECK_FALSE(read->all().front().queued);
+    std::filesystem::remove(path);
+}
+
+TEST_CASE("a queued route survives file round-trip and replay") {
+    CommandLog original;
+    original.record(moveOrder(0, 0, UnitId{0, 1}, 300.0f, 200.0f));
+    Command second = moveOrder(0, 0, UnitId{0, 1}, 300.0f, 500.0f);
+    second.queued = true;
+    original.record(second);
+
+    const std::filesystem::path path =
+        std::filesystem::temp_directory_path() / "rm-command-log-queued-route.txt";
+    REQUIRE(rm::sim::writeCommandLog(original, path.string()));
+    const std::optional<CommandLog> replayLog = rm::sim::readCommandLog(path.string());
+    REQUIRE(replayLog.has_value());
+
+    Fixture live;
+    Fixture replay;
+    live.run(original, 500);
+    replay.run(*replayLog, 500);
+
+    REQUIRE(live.roster.store.orders()[live.mine.index].empty());
+    REQUIRE(replay.roster.store.orders()[replay.mine.index].empty());
+    CHECK(live.roster.store.transforms()[live.mine.index].z
+          == replay.roster.store.transforms()[replay.mine.index].z);
+    CHECK(live.roster.store.transforms()[live.mine.index].z > rm::test::fx(450.0f));
     std::filesystem::remove(path);
 }
 

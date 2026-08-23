@@ -106,16 +106,17 @@ namespace {
 } // namespace
 
 bool operator==(const Command& a, const Command& b) noexcept {
-    return a.tick == b.tick && a.player == b.player && a.kind == b.kind && a.unit == b.unit
+    return a.tick == b.tick && a.player == b.player && a.kind == b.kind && a.queued == b.queued
+           && a.unit == b.unit
            && a.targetX == b.targetX && a.targetZ == b.targetZ && a.target == b.target
            && a.buildType == b.buildType;
 }
 
 bool applyCommand(const Command& command, UnitStore& store, const UnitCatalog& catalog,
-                  std::span<const Player> players, std::span<const Army> armies,
-                  const Terrain& terrain, const PassabilityGrid& grid, TickRate rate,
-                  std::vector<Construction>* building, bool queued, EventQueue* events,
-                  const FeatureStore* features) {
+                   std::span<const Player> players, std::span<const Army> armies,
+                   const Terrain& terrain, const PassabilityGrid& grid, TickRate rate,
+                   std::vector<Construction>* building, EventQueue* events,
+                   const FeatureStore* features) {
     // A stale handle first, before anything else looks at the slot. A player may click a unit
     // that died on the tick their order was issued, and a replay of an old log may name a unit
     // that no longer exists — in both cases the generation has moved on, so this must not
@@ -142,7 +143,7 @@ bool applyCommand(const Command& command, UnitStore& store, const UnitCatalog& c
                             features);
     }
 
-    if (queued) {
+    if (command.queued) {
         switch (orders.give(command, true)) {
         case CommandQueue::Result::CancelledCurrent: {
             // The order the unit was carrying out has been taken away, so it has to be
@@ -537,12 +538,16 @@ void CommandLog::record(const Command& command) {
 }
 
 std::span<const Command> CommandLog::at(TickIndex tick) const noexcept {
+    if (commands_.empty()) {
+        return {};
+    }
     const auto begin =
         std::lower_bound(commands_.begin(), commands_.end(), tick,
                          [](const Command& c, TickIndex t) { return c.tick < t; });
     const auto end = std::upper_bound(begin, commands_.end(), tick,
                                       [](TickIndex t, const Command& c) { return t < c.tick; });
-    return std::span<const Command>{&*begin, static_cast<std::size_t>(end - begin)};
+    return std::span<const Command>{commands_.data() + (begin - commands_.begin()),
+                                    static_cast<std::size_t>(end - begin)};
 }
 
 TickIndex CommandLog::lastTick() const noexcept {
@@ -558,7 +563,7 @@ bool writeCommandLog(const CommandLog& log, const std::string& path,
 
     out << "# recoil-metal command log\n";
     out << "# tick player kind unit generation targetX targetZ buildType"
-           " targetUnit targetGeneration buildPath\n";
+           " targetUnit targetGeneration buildPath queued\n";
     for (const Command& command : log.all()) {
         out << command.tick << ' ' << command.player << ' ' << kindName(command.kind) << ' '
             << command.unit.index << ' ' << command.unit.generation << ' '
@@ -571,7 +576,8 @@ bool writeCommandLog(const CommandLog& log, const std::string& path,
         if (command.kind == CommandKind::Build && pathFor != nullptr) {
             blueprint = pathFor(command.buildType);
         }
-        out << ' ' << (blueprint.empty() ? "-" : blueprint.c_str()) << '\n';
+        out << ' ' << (blueprint.empty() ? "-" : blueprint.c_str()) << ' '
+            << (command.queued ? 1 : 0) << '\n';
     }
     return out.good();
 }
@@ -633,6 +639,15 @@ std::optional<CommandLog> readCommandLog(const std::string& path,
         command.target = UnitId{static_cast<UnitIndex>(targetIndex),
                                 static_cast<Generation>(targetGeneration)};
         command.buildType = static_cast<UnitTypeIndex>(buildType);
+        unsigned queued = 0;
+        if (fields >> queued) {
+            if (queued > 1) {
+                return std::nullopt;
+            }
+        } else if (!fields.eof()) {
+            return std::nullopt;  // present but not an integer; absence is the legacy default
+        }
+        command.queued = queued == 1;
         log.record(command);
     }
 
