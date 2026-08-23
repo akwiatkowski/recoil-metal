@@ -202,9 +202,15 @@ struct Weapon {
     float firingToleranceDegrees = kDefaultFiringToleranceDegrees;
 
     /// `ManualFire = true`: the game fires this only on an explicit order — the
-    /// commander's 12000-damage OverCharge is the reason the flag exists. This engine
-    /// has no such order, so a manual weapon never fires at all. 12 of the 494 state it.
+    /// commander's 12000-damage OverCharge is the reason the flag exists. The order
+    /// exists now: `CommandKind::Overcharge`, one shot per click, gated on the energy
+    /// below. 12 of the 494 state it.
     bool manualFire = false;
+
+    /// `EnergyRequired`: what one manual shot costs, drained from the army's store the
+    /// tick it fires — 5000 for every faction's OverCharge. Zero for the ordinary guns,
+    /// whose blueprint states the field only on charged weapons.
+    sim::Mag energyRequired{};
 
     /// `EnabledByEnhancement = '...'`: the weapon belongs to an upgrade the unit does
     /// not have until built. Enhancements do not exist in this engine, so neither does
@@ -228,6 +234,16 @@ struct Weapon {
     /// is asked, since a death explosion has no range and no rate of fire to have.
     [[nodiscard]] bool harmful() const noexcept {
         return damage > sim::Mag{} || hasRings();
+    }
+
+    /// Whether this is a weapon an explicit order fires — OverCharge, in practice.
+    ///
+    /// `fires()`'s deliberate complement: manual, NOT enhancement-gated (the commander's
+    /// TacMissile is both flags at once and belongs to an upgrade that does not exist
+    /// here), and otherwise a real gun by the same tests.
+    [[nodiscard]] bool manuallyFired() const noexcept {
+        return role != WeaponRole::Death && manualFire && !enabledByEnhancement
+            && maxRange > sim::Fx{} && damage > sim::Mag{};
     }
 
     /// Ticks between shots at a given rate, never less than one.

@@ -316,6 +316,13 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
         for (std::size_t w = 0; w < def->weapons.size(); ++w) {
             const unitdef::Weapon& weapon = def->weapons[w];
             if (!weapon.fires()) {
+                // A MANUAL weapon's reload still counts down here, where every reload
+                // does — `fireOvercharge` only checks readiness, and a cooldown that
+                // ticked only while an order was held would punish the second click for
+                // the first one's timing.
+                if (weapon.manuallyFired() && health.reloadRemaining[w] > 0) {
+                    --health.reloadRemaining[w];
+                }
                 continue;
             }
 
@@ -426,6 +433,94 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
                 health.burstRemaining[w] = 0;
                 health.reloadRemaining[w] = static_cast<int>(rates.reloadTicks);
             }
+        }
+    }
+
+    return fired;
+}
+
+std::size_t fireOvercharge(UnitStore& store, const UnitCatalog& catalog,
+                           std::span<const Army> armies,
+                           std::vector<Projectile>& projectiles,
+                           std::span<Economy> economies, TickRate rate, EventQueue* events) {
+    std::size_t fired = 0;
+
+    const std::span<const Transform> transforms = store.transforms();
+    const std::span<Health> healths = store.health();
+    const std::span<CommandQueue> orders = store.orders();
+
+    for (UnitIndex slot = 0; slot < orders.size(); ++slot) {
+        if (!store.slotAlive(slot) || slot >= healths.size() || !healths[slot].alive()) {
+            continue;
+        }
+        Command* head = orders[slot].currentMutable();
+        if (head == nullptr || head->kind != CommandKind::Overcharge
+            || !store.alive(head->target)) {
+            continue;  // no order, or a spent/expired one advanceOrders will retire
+        }
+
+        const unitdef::UnitDef* def = catalog.def(store.typeAt(slot));
+        if (def == nullptr) {
+            continue;
+        }
+
+        const int army = armyAt(store, slot);
+        const int theirArmy = armyAt(store, head->target.index);
+        const Army* mine = armyFor(army, armies);
+        const Army* theirs = armyFor(theirArmy, armies);
+        if (mine == nullptr || theirs == nullptr || !hostile(*mine, *theirs)) {
+            // A target that stopped being shootable — captured maps aside, a defeated
+            // army — retires the order the same way a fired one does.
+            head->target = UnitId{};
+            continue;
+        }
+
+        for (std::size_t w = 0; w < def->weapons.size(); ++w) {
+            const unitdef::Weapon& weapon = def->weapons[w];
+            if (!weapon.manuallyFired()) {
+                continue;
+            }
+            healths[slot].reloadRemaining.resize(def->weapons.size(), 0);
+            if (healths[slot].reloadRemaining[w] > 0) {
+                continue;  // still cooling from the last click; `fireWeapons` ticks it
+            }
+
+            const std::array<Fx, 3> from = positionOf(transforms[slot]);
+            const std::array<Fx, 3> to = positionOf(transforms[head->target.index]);
+            if (groundDistanceElmos(from, to) > weapon.maxRange) {
+                continue;  // the pursuit is still closing
+            }
+
+            // THE ENERGY GATE, and the mechanic: the shot costs `EnergyRequired` from the
+            // army's store the tick it fires, and a short bar holds the shot rather than
+            // spending what is not there.
+            if (army < 0 || static_cast<std::size_t>(army) >= economies.size()) {
+                continue;
+            }
+            Economy& economy = economies[static_cast<std::size_t>(army)];
+            if (economy.stored.energy < weapon.energyRequired) {
+                continue;
+            }
+            economy.stored.energy -= weapon.energyRequired;
+
+            const UnitCatalog::WeaponRates& rates = catalog.weaponRates(store.typeAt(slot), w);
+            projectiles.push_back(launch(from, to, weapon, army, rate, rates.muzzlePerTick,
+                                         rates.damage, store.idAt(slot)));
+            healths[slot].reloadRemaining[w] = static_cast<int>(rates.reloadTicks);
+            emit(events, Event{
+                             .kind = EventKind::WeaponFired,
+                             .unit = store.idAt(slot),
+                             .instigator = head->target,
+                             .army = army,
+                             .amount = weapon.damage,
+                             .at = from,
+                         });
+            ++fired;
+
+            // ONE SHOT PER ORDER: forgetting the target is what completes it —
+            // `advanceOrders` retires a targetless overcharge like any arrival.
+            head->target = UnitId{};
+            break;
         }
     }
 

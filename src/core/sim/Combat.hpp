@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/map/HeightField.hpp"
+#include "core/sim/Economy.hpp"
 #include "core/sim/Events.hpp"
 #include "core/sim/Army.hpp"
 #include "core/sim/Health.hpp"
@@ -208,6 +209,23 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
                         std::span<const Army> armies,
                         std::vector<Projectile>& projectiles, TickRate rate,
                         EventQueue* events = nullptr, const Intel* intel = nullptr);
+
+/// Fires every held OVERCHARGE whose moment has come: target alive, in the manual
+/// weapon's range, reload ready, and the army's stored energy covering the shot's
+/// `EnergyRequired` — drained the tick it fires, which is the mechanic (the blueprint's
+/// 5000 against a store the player watches). One shot retires the order by FORGETTING
+/// ITS TARGET on the head command, which `advanceOrders` then completes like any
+/// arrival — one click, one shot, whether or not the target survives it.
+///
+/// A short energy bar HOLDS rather than fails: the unit stands at range until the store
+/// fills, which is what the game's own queued overcharge does. Returns shots fired.
+/// No facing gate: every ManualFire weapon in the corpus is turreted, and turrets aim
+/// independently here (`fireWeapons`' rule, applied to the same hardware).
+std::size_t fireOvercharge(UnitStore& store, const UnitCatalog& catalog,
+                           std::span<const Army> armies,
+                           std::vector<Projectile>& projectiles,
+                           std::span<Economy> economies, TickRate rate,
+                           EventQueue* events = nullptr);
 
 /// Moves every projectile one tick, applies what lands, and removes what is spent.
 ///

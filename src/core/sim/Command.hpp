@@ -73,6 +73,13 @@ enum class CommandKind : std::uint8_t {
     /// reuse of an integer between them cannot cross the streams. The order completes when
     /// the wreck is gone, however many reclaimers emptied it.
     Reclaim,
+    /// Fire the unit's MANUAL weapon — the commander's OverCharge — at `target`: walk
+    /// into that weapon's range, wait for the energy, fire ONCE, done. The pursuit is the
+    /// attack's; the differences are the reach (the manual weapon's, not the guns'), the
+    /// energy gate (`Weapon::energyRequired`, drained the tick it fires), and completion —
+    /// one shot per order, whether or not the target survives it (`fireOvercharge`
+    /// forgets the target on firing, which is what retires the order).
+    Overcharge,
 };
 
 /// One order, from one player, on one tick.

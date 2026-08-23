@@ -97,6 +97,34 @@ bool gFafLog = false;
     return applied;
 }
 
+[[nodiscard]] bool issueOvercharge(UnitScene& scene, const rm::sim::PassabilityGrid& grid,
+                                   const rm::HeightField& field, rm::sim::UnitId unit,
+                                   rm::PlayerIndex player, rm::TickIndex tick,
+                                   rm::sim::UnitId target, rm::sim::Fx toX, rm::sim::Fx toZ,
+                                   bool queued) {
+    // issueAttack with a different kind: same pursuit, but the shot is the MANUAL
+    // weapon's, gated on energy, and one per order (`fireOvercharge`).
+    const rm::sim::Command command{
+        .tick = tick,
+        .player = player,
+        .kind = rm::sim::CommandKind::Overcharge,
+        .unit = unit,
+        .targetX = toX,
+        .targetZ = toZ,
+        .target = target,
+        .buildType = 0,
+    };
+
+    const bool applied = rm::sim::applyCommand(command, scene.store, scene.catalog,
+                                               scene.players, scene.armies,
+                                               rm::sim::Terrain{field}, grid, gAppTickRate,
+                                               &scene.building, queued);
+    if (applied) {
+        scene.commands.record(command);
+    }
+    return applied;
+}
+
 [[nodiscard]] bool issueReclaim(UnitScene& scene, const rm::sim::PassabilityGrid& grid,
                                 const rm::HeightField& field, rm::sim::UnitId unit,
                                 rm::PlayerIndex player, rm::TickIndex tick,

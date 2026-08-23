@@ -273,6 +273,11 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
         report.shotsFired =
             fireWeapons(store, catalog, match.armies, *match.projectiles, rate, match.events,
                         match.intel);
+        // The held overcharges, after the guns and before the flight: a shot authorised
+        // this tick flies this tick, and the energy it burned is gone before the economy
+        // pass reads the store.
+        report.shotsFired += fireOvercharge(store, catalog, match.armies, *match.projectiles,
+                                            match.economies, rate, match.events);
         advanceProjectiles(*match.projectiles, store, match.armies, terrain, rate,
                            match.events, &catalog);
     }

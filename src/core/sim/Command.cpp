@@ -75,6 +75,8 @@ namespace {
         return "build";
     case CommandKind::Reclaim:
         return "reclaim";
+    case CommandKind::Overcharge:
+        return "overcharge";
     }
     return "stop";
 }
@@ -94,6 +96,9 @@ namespace {
     }
     if (name == "reclaim") {
         return CommandKind::Reclaim;
+    }
+    if (name == "overcharge") {
+        return CommandKind::Overcharge;
     }
     return std::nullopt;
 }
@@ -219,13 +224,20 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
         // A unit with no firing weapon does not chase: for it an attack is the plain walk
         // it always was, and the finish-by-arrival logic below still owns it.
         if (const Command* head = orders[slot].current();
-            head != nullptr && head->kind == CommandKind::Attack
+            head != nullptr
+            && (head->kind == CommandKind::Attack || head->kind == CommandKind::Overcharge)
             && store.alive(head->target)) {
+            // An overcharge pursues exactly as an attack does; the reach is the MANUAL
+            // weapon's, because that is the gun this order will fire. A fired overcharge
+            // forgets its target (`fireOvercharge`), so a spent order falls out of this
+            // block and retires below like any arrival.
+            const bool manual = head->kind == CommandKind::Overcharge;
             const unitdef::UnitDef* def = catalog.def(store.typeAt(slot));
             Fx reach{};
             if (def != nullptr) {
                 for (const unitdef::Weapon& weapon : def->weapons) {
-                    if (weapon.fires() && weapon.maxRange > reach) {
+                    if ((manual ? weapon.manuallyFired() : weapon.fires())
+                        && weapon.maxRange > reach) {
                         reach = weapon.maxRange;
                     }
                 }
@@ -350,6 +362,40 @@ bool startCommand(const Command& command, UnitStore& store, const UnitCatalog& c
         motion.pathIndex = 0;
         return true;
 
+    case CommandKind::Overcharge: {
+        // The pursuit below is the attack's; what is checked here is what makes this order
+        // MEAN anything — a living target and a manual weapon to fire at it. The energy is
+        // deliberately NOT checked: the store may fill while the unit walks over, so a
+        // short bar holds the shot rather than refusing the click (`fireOvercharge` gates).
+        if (!store.alive(command.target)) {
+            return false;
+        }
+        const unitdef::UnitDef* def = catalog.def(store.typeAt(command.unit.index));
+        Fx reach{};
+        if (def != nullptr) {
+            for (const unitdef::Weapon& weapon : def->weapons) {
+                if (weapon.manuallyFired() && weapon.maxRange > reach) {
+                    reach = weapon.maxRange;
+                }
+            }
+        }
+        if (reach <= Fx{}) {
+            return false;  // no manual weapon, no overcharge — a tank cannot be asked to
+        }
+        // Already in reach: hold here and let `fireOvercharge` do the rest. Checked
+        // before routing because `findPath` answers EMPTY inside one coarse cell, and an
+        // in-range shot refused for want of a route it does not need would read as a
+        // weapon that does not work — the same trap the reclaim start steps around.
+        const Transform& at = store.transforms()[command.unit.index];
+        const Transform& theirs = store.transforms()[command.target.index];
+        if (groundDistanceElmos(positionOf(at), positionOf(theirs)) <= reach) {
+            motion.moving = false;
+            motion.path.clear();
+            motion.pathIndex = 0;
+            return true;
+        }
+        [[fallthrough]];  // out of reach: walk toward the target exactly as an attack would
+    }
     case CommandKind::Move:
     case CommandKind::Attack: {
         // ROUTED, not aimed straight at the destination — which is the difference between a

@@ -810,8 +810,29 @@ int runWindowed(const Session& session) {
                     const auto type = static_cast<std::size_t>(units.store.typeAt(sel.index));
                     const rm::sim::PassabilityGrid& grid = passability.gridFor(
                         units.maxSlopeDegrees[type], units.maxWaterDepthElmos[type]);
+                    // ⌘-RIGHT-CLICK ON AN ENEMY IS AN OVERCHARGE, for the units that carry
+                    // a manual weapon; the rest of the selection attacks as it would have.
+                    // The escort keeps escorting while the commander spends the store.
+                    const rm::unitdef::UnitDef* selDef =
+                        units.catalog.def(units.store.typeAt(sel.index));
+                    float shotCost = 0.0f;  // the manual weapon's EnergyRequired, or zero
+                    if (selDef != nullptr) {
+                        for (const rm::unitdef::Weapon& weapon : selDef->weapons) {
+                            if (weapon.manuallyFired()) {
+                                shotCost = rm::sim::magToFloat(weapon.energyRequired);
+                                break;
+                            }
+                        }
+                    }
+                    const bool wantOvercharge = target && mods.command && shotCost > 0.0f;
                     const bool took =
-                        target ? issueAttack(units, grid, map->field, sel,
+                        wantOvercharge
+                            ? issueOvercharge(units, grid, map->field, sel,
+                                              playerDriving(units, units.playerArmy),
+                                              static_cast<rm::TickIndex>(matchTicks), *target,
+                                              rm::sim::fxFromFloat(ground.x),
+                                              rm::sim::fxFromFloat(ground.z), queue)
+                        : target ? issueAttack(units, grid, map->field, sel,
                                              playerDriving(units, units.playerArmy),
                                              static_cast<rm::TickIndex>(matchTicks), *target,
                                              rm::sim::fxFromFloat(ground.x),
@@ -821,6 +842,24 @@ int runWindowed(const Session& session) {
                                            static_cast<rm::TickIndex>(matchTicks),
                                            rm::sim::fxFromFloat(ground.x),
                                            rm::sim::fxFromFloat(ground.z), queue);
+                    if (took && wantOvercharge && units.playerArmy >= 0
+                        && static_cast<std::size_t>(units.playerArmy)
+                               < units.economies.size()) {
+                        // The one piece of feedback the world does not show: whether the
+                        // shot leaves now or waits for the bar to fill.
+                        const float banked = rm::sim::magToFloat(
+                            units.economies[static_cast<std::size_t>(units.playerArmy)]
+                                .stored.energy);
+                        if (banked >= shotCost) {
+                            std::printf("overcharge: firing (%.0f energy banked)\n",
+                                        static_cast<double>(banked));
+                        } else {
+                            std::printf("overcharge: holding until charged (%.0f of %.0f "
+                                        "energy)\n",
+                                        static_cast<double>(banked),
+                                        static_cast<double>(shotCost));
+                        }
+                    }
                     if (!took) {
                         ++failed;
                         // The refusal, ON the refusing unit: the destination already has

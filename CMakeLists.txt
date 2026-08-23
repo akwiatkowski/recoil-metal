@@ -311,6 +311,7 @@ if(BUILD_TESTING)
         tests/test_events.cpp
         tests/test_features.cpp
         tests/test_reclaim.cpp
+        tests/test_overcharge.cpp
         tests/test_snapshot.cpp
         tests/test_interpolate.cpp
         tests/test_build_order.cpp

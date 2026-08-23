@@ -149,6 +149,9 @@ std::vector<Weapon> weaponsFrom(const lua::Value& weaponArray) {
         if (const lua::Value* manual = entry.find("ManualFire")) {
             weapon.manualFire = manual->asBoolean().value_or(false);
         }
+        // What one manual shot costs — 5000 on every faction's OverCharge, absent on
+        // ordinary guns. Energy, so no ogrid conversion.
+        weapon.energyRequired = sim::magFromFloat(numberOr(entry, "EnergyRequired", 0.0f));
         // Any stated enhancement gates the weapon: which one it is does not matter
         // to an engine that builds none of them.
         weapon.enabledByEnhancement = entry.stringAt("EnabledByEnhancement").has_value();
