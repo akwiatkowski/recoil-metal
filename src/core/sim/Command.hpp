@@ -12,6 +12,7 @@
 #include "core/sim/UnitCatalog.hpp"
 
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <span>
 #include <string>
@@ -217,10 +218,18 @@ private:
 /// `tick player kind unit.index unit.generation targetX targetZ buildType`, all decimal, and
 /// the fixed-point targets are written as their RAW integers — a decimal expansion would be a
 /// lossy round trip, which in a determinism artifact is the one unacceptable kind of lossy.
-bool writeCommandLog(const CommandLog& log, const std::string& path);
+/// `pathFor` resolves a build's type index into its blueprint path for the log's last
+/// column, or empty. Written because a TYPE INDEX is this run's private numbering — the
+/// original replay attempt refused every type it had never registered — while a path names
+/// content any run can resolve. Null keeps the ten-column legacy format.
+bool writeCommandLog(const CommandLog& log, const std::string& path,
+                     const std::function<std::string(std::uint32_t)>& pathFor = nullptr);
 
 /// Reads one back. Returns nothing when the file cannot be read or a line will not parse:
 /// a partial log is worse than none, because it replays as a different match.
-[[nodiscard]] std::optional<CommandLog> readCommandLog(const std::string& path);
+/// `buildPaths`, when given, receives one entry per command — the blueprint path for a
+/// build written with a resolver, empty otherwise — index-aligned with the log.
+[[nodiscard]] std::optional<CommandLog> readCommandLog(
+    const std::string& path, std::vector<std::string>* buildPaths = nullptr);
 
 } // namespace rm::sim

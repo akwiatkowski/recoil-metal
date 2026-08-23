@@ -99,6 +99,18 @@ struct MatchRunner {
     /// `ScriptedOpponent` that is simply never asked to think.
     std::vector<std::unique_ptr<rm::ai::Opponent>> scripts;
 
+    /// A recorded command log to play back instead of letting anything think — §1.3's
+    /// "same log, same match". When set, the caller has emptied `scripts` and the spawn
+    /// roll-off stands down too: every one of their orders is already IN the log, and a
+    /// path that regenerated them would issue each twice. Points at storage the caller
+    /// owns for the run.
+    const rm::sim::CommandLog* replay = nullptr;
+
+    /// The log's blueprint-path column, index-aligned with `replay`'s commands. A build's
+    /// recorded type index was the ORIGINAL run's private numbering; the path is what this
+    /// run resolves into its own catalog before applying.
+    const std::vector<std::string>* replayPaths = nullptr;
+
     /// The FAF sandbox, when `--ai-faf` seats FAF opponents — one VM shared by all of them
     /// (FafAi's one-per-match rule), owned here because the opponents hold references into
     /// it and the runner is what outlives them. Null on the scripted path.

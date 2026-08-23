@@ -412,7 +412,8 @@ TickIndex CommandLog::lastTick() const noexcept {
     return commands_.empty() ? TickIndex{0} : commands_.back().tick;
 }
 
-bool writeCommandLog(const CommandLog& log, const std::string& path) {
+bool writeCommandLog(const CommandLog& log, const std::string& path,
+                     const std::function<std::string(std::uint32_t)>& pathFor) {
     std::ofstream out{path, std::ios::binary | std::ios::trunc};
     if (!out) {
         return false;
@@ -420,18 +421,26 @@ bool writeCommandLog(const CommandLog& log, const std::string& path) {
 
     out << "# recoil-metal command log\n";
     out << "# tick player kind unit generation targetX targetZ buildType"
-           " targetUnit targetGeneration\n";
+           " targetUnit targetGeneration buildPath\n";
     for (const Command& command : log.all()) {
         out << command.tick << ' ' << command.player << ' ' << kindName(command.kind) << ' '
             << command.unit.index << ' ' << command.unit.generation << ' '
             << command.targetX.raw() << ' ' << command.targetZ.raw() << ' '
             << command.buildType << ' ' << command.target.index << ' '
-            << command.target.generation << '\n';
+            << command.target.generation;
+        // The content-addressed column: what the type index MEANT in this run. '-' for
+        // everything that is not a build, and for a caller with no resolver.
+        std::string blueprint;
+        if (command.kind == CommandKind::Build && pathFor != nullptr) {
+            blueprint = pathFor(command.buildType);
+        }
+        out << ' ' << (blueprint.empty() ? "-" : blueprint.c_str()) << '\n';
     }
     return out.good();
 }
 
-std::optional<CommandLog> readCommandLog(const std::string& path) {
+std::optional<CommandLog> readCommandLog(const std::string& path,
+                                         std::vector<std::string>* buildPaths) {
     std::ifstream in{path, std::ios::binary};
     if (!in) {
         return std::nullopt;
@@ -470,6 +479,13 @@ std::optional<CommandLog> readCommandLog(const std::string& path) {
         unsigned long targetIndex = 0;
         unsigned long targetGeneration = 0;
         (void)(fields >> targetIndex >> targetGeneration);
+
+        // The blueprint column, optional the same way: '-' and absence both mean "none".
+        std::string blueprint;
+        (void)(fields >> blueprint);
+        if (buildPaths != nullptr) {
+            buildPaths->push_back(blueprint == "-" ? std::string{} : blueprint);
+        }
 
         command.tick = tick;
         command.player = static_cast<PlayerIndex>(player);

@@ -247,6 +247,12 @@ namespace rm::app {
             break;
         }
     }
+    for (int i = 1; i + 1 < argc; ++i) {
+        if (std::string{argv[i]} == "--replay-commands") {
+            options.replayCommandsPath = argv[i + 1];
+            break;
+        }
+    }
     for (int i = 2; i + 3 < argc; ++i) {
         if (std::string{argv[i]} != "--march") {
             continue;

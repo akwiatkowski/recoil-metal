@@ -75,6 +75,13 @@ struct MarchOptions {
     /// match" — with both halves now naming things that exist.
     std::string commandLogPath;
 
+    /// `--replay-commands <path>`: play a recorded command log back through the headless
+    /// pre-run instead of letting opponents think — §1.3's criterion made runnable: the
+    /// same log and the same setup must produce the same match, which `--check-hash-log`
+    /// then proves. Opponents and the factory roll-off are disabled (their decisions are
+    /// IN the log); the setup's own orders are skipped as already issued.
+    std::string replayCommandsPath;
+
     /// `--ai-sanity`: boot the FAF sandbox beside the headless pre-run, pump its threads
     /// every tick, and close with the sanity report — what got built, which engine bindings
     /// the AI called, and which of the corpus's own functions ran. The measuring half of
