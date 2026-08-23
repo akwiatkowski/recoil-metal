@@ -120,6 +120,12 @@ void appendViewFootprint(std::vector<std::array<float, 2>>& out, const rm::Orbit
 
 [[nodiscard]] rm::ui::Theme hudThemeFor(const UnitScene& scene);
 
+/// `--ui faf`: dress every panel in the game's own generic_brd nine-slice instead of the
+/// glass. The pieces pack into the icon atlas (packInterfaceIcons), and hudThemeFor
+/// attaches what was packed — so both the windowed loop and the capture path skin the
+/// same way without either knowing how.
+extern bool gFafSkin;
+
 /// One type's strategic icon, as the atlas holds it this pack: which slot, and the glyph's
 /// own texel size — the icons ship at mixed small sizes (16x16-ish) and are packed into a
 /// cell's corner, so the size is what turns a slot into a uv rectangle and a quad.

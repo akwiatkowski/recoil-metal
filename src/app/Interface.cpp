@@ -276,13 +276,26 @@ void gatherBuildOptions(const UnitScene& scene, std::span<const rm::sim::UnitId>
 
 /// The livery the interface wears: the player's own faction, or the neutral cyan when the scene
 /// has no armies in it.
+bool gFafSkin = false;
+
+namespace {
+/// What packInterfaceIcons packed for the skin, for hudThemeFor to attach. File-scope
+/// because the two run on opposite sides of the atlas upload and share nothing else.
+rm::ui::PanelSkin gPackedSkin;
+} // namespace
+
 [[nodiscard]] rm::ui::Theme hudThemeFor(const UnitScene& scene) {
+    rm::ui::Theme theme = rm::ui::neutralTheme();
     for (const rm::sim::Army& army : scene.armies) {
         if (army.index == scene.playerArmy) {
-            return rm::ui::themeFor(army.faction);
+            theme = rm::ui::themeFor(army.faction);
+            break;
         }
     }
-    return rm::ui::neutralTheme();
+    // The skin rides whatever livery won: the chrome is the game's, the accents stay the
+    // faction's.
+    theme.skin = gPackedSkin;
+    return theme;
 }
 
 /// Appends an icon for every unit in the scene too small to read, at the camera's current
@@ -642,7 +655,47 @@ rm::dds::Texture packInterfaceIcons(const rm::vfs::Vfs& content,
         icons.push_back(art);  // a copy per pack; a glyph is ~100 bytes of BC3 blocks
     }
 
+    // The skin's nine slices, last, when `--ui faf` asked for the game's own chrome. The
+    // atlas is the ride every icon already takes; nine more squares cost nothing and spare
+    // the renderer a second texture bind it has no slot for.
+    gPackedSkin = rm::ui::PanelSkin{};
+    std::array<std::size_t, 9> skinSlots{};
+    std::array<std::array<int, 2>, 9> skinSizes{};
+    bool skinComplete = gFafSkin;
+    if (gFafSkin) {
+        constexpr std::array<const char*, 9> kPieces{
+            "generic_brd_ul",      "generic_brd_horz_um", "generic_brd_ur",
+            "generic_brd_vert_l",  "generic_brd_m",       "generic_brd_vert_r",
+            "generic_brd_ll",      "generic_brd_horz_lm", "generic_brd_lr"};
+        for (std::size_t piece = 0; piece < kPieces.size(); ++piece) {
+            const std::string path = std::string{"/textures/ui/common/game/generic_brd/"}
+                                     + kPieces[piece] + ".dds";
+            const std::optional<std::vector<std::byte>> bytes = content.read(path);
+            const auto art = bytes ? rm::dds::load(*bytes)
+                                   : std::expected<rm::dds::Texture, rm::MapError>{
+                                         std::unexpect, rm::MapError{}};
+            if (!art || art->width == 0) {
+                skinComplete = false;
+                break;
+            }
+            skinSlots[piece] = icons.size();
+            skinSizes[piece] = {static_cast<int>(art->width), static_cast<int>(art->height)};
+            icons.push_back(*art);
+        }
+    }
+
     rm::dds::Texture atlas = rm::ui::packIcons(icons);
+    if (skinComplete && !atlas.data.empty()) {
+        for (std::size_t piece = 0; piece < 9; ++piece) {
+            gPackedSkin.uv[piece] = rm::ui::iconUvSized(skinSlots[piece],
+                                                        skinSizes[piece][0],
+                                                        skinSizes[piece][1]);
+            gPackedSkin.size[piece] = {static_cast<float>(skinSizes[piece][0]),
+                                       static_cast<float>(skinSizes[piece][1])};
+        }
+        gPackedSkin.active = true;
+        std::printf("  ui: FAF chrome packed (generic_brd, nine slices)\n");
+    }
     if (atlas.data.empty()) {
         // Nothing packed: no cell may point into an empty atlas, or it draws whatever the
         // sampler makes of a texture that is not bound.

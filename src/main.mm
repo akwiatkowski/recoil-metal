@@ -133,6 +133,13 @@ int main(int argc, const char* argv[]) {
         // `--ai-log`: narrate the FAF opponents' decisions and the corpus's own LOG lines.
         gFafLog = hasFlag(argc, argv, "--ai-log");
 
+        // `--ui faf`: the game's own panel chrome (Interface.hpp's gFafSkin).
+        for (int i = 1; i + 1 < argc; ++i) {
+            if (std::string{argv[i]} == "--ui") {
+                gFafSkin = std::string{argv[i + 1]} == "faf";
+            }
+        }
+
         // `--ai-debug`: boot the FAF AI sandbox and report on it, then play the match (ADR-039).
         //
         // Printed BEFORE the match rather than after, and traced module by module rather than

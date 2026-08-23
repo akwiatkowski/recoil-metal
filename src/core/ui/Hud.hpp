@@ -2,6 +2,7 @@
 
 #include "core/sim/Army.hpp"
 #include "core/text/TextLayout.hpp"
+#include "core/ui/IconAtlas.hpp"
 
 #include <array>
 #include <cstddef>
@@ -56,12 +57,25 @@ inline constexpr Colour kInk{{0.780f, 0.839f, 0.863f, 1.0f}};     ///< #C7D6DC r
 // --- LIVERY: whose interface this is ----------------------------------------
 
 /// The chrome, in one faction's colours.
+/// The game's own chrome, when a profile packs it: the nine `generic_brd` slices in the
+/// icon atlas — corners at their native size, edges stretched along their run, the middle
+/// stretched both ways. Inactive draws the glass the HUD always drew; active swaps every
+/// panel's fill and bevel for the game's art while text and bars ride on top unchanged.
+struct PanelSkin {
+    bool active = false;
+    /// ul, um, ur, l, m, r, ll, lm, lr — atlas UVs and each piece's native size in points.
+    std::array<IconUv, 9> uv{};
+    std::array<std::array<float, 2>, 9> size{};
+};
+
 struct Theme {
     Colour glass;    ///< a panel's fill
     Colour well;     ///< a recess inside a panel: a bar's track, a readout's field
     Colour edge;     ///< the bevel around a panel
     Colour edgeLit;  ///< the top edge, and the corner brackets. The one bright line
     Colour label;    ///< silkscreen text. Quieter than kInk, because a label is read once
+
+    PanelSkin skin;  ///< the FAF chrome, inactive by default
 };
 
 /// The four liveries. See the note above on why three of them are not the faction's own hue.

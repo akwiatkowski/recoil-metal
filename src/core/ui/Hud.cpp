@@ -132,6 +132,43 @@ void appendPanel(Geometry& out, const text::Font& font, const Theme& theme, floa
     text::appendRect(out.label, font, x + kShadow, y + kShadow, width, height,
                      Colour{{0.0f, 0.0f, 0.0f, 0.22f}});
 
+    // THE GAME'S OWN CHROME, when a profile packed it (Theme::PanelSkin): the nine-slice
+    // replaces the glass and its hand-drawn bevels wholesale — corners native, edges
+    // stretched along their run, the middle stretched both ways. Rides the IMAGE list, so
+    // it costs the same atlas bind every icon already pays.
+    if (theme.skin.active) {
+        const PanelSkin& skin = theme.skin;
+        const auto quad = [&](std::size_t piece, float qx, float qy, float qw, float qh) {
+            if (qw <= 0.0f || qh <= 0.0f) {
+                return;
+            }
+            const IconUv& uv = skin.uv[piece];
+            constexpr std::array<float, 4> kTint{1.0f, 1.0f, 1.0f, 0.96f};
+            out.image.push_back({{qx, qy}, {uv.u0, uv.v0}, kTint});
+            out.image.push_back({{qx + qw, qy}, {uv.u1, uv.v0}, kTint});
+            out.image.push_back({{qx + qw, qy + qh}, {uv.u1, uv.v1}, kTint});
+            out.image.push_back({{qx, qy}, {uv.u0, uv.v0}, kTint});
+            out.image.push_back({{qx + qw, qy + qh}, {uv.u1, uv.v1}, kTint});
+            out.image.push_back({{qx, qy + qh}, {uv.u0, uv.v1}, kTint});
+        };
+        // Edge thicknesses are the art's own, clamped so a panel smaller than its frame
+        // still closes: ul um ur / l m r / ll lm lr.
+        const float top = std::min(skin.size[1][1], height * 0.5f);
+        const float bottom = std::min(skin.size[7][1], height * 0.5f);
+        const float left = std::min(skin.size[3][0], width * 0.5f);
+        const float right = std::min(skin.size[5][0], width * 0.5f);
+        quad(0, x, y, left, top);
+        quad(1, x + left, y, width - left - right, top);
+        quad(2, x + width - right, y, right, top);
+        quad(3, x, y + top, left, height - top - bottom);
+        quad(4, x + left, y + top, width - left - right, height - top - bottom);
+        quad(5, x + width - right, y + top, right, height - top - bottom);
+        quad(6, x, y + height - bottom, left, bottom);
+        quad(7, x + left, y + height - bottom, width - left - right, bottom);
+        quad(8, x + width - right, y + height - bottom, right, bottom);
+        return;
+    }
+
     if (filled) {
         // GRADIENT GLASS: lighter where the light is, darker away from it — the same one
         // implied light the lit top edge already states, now agreeing with the fill. The
