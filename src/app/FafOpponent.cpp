@@ -648,24 +648,34 @@ function __rm_faf_decide(army, snap)
         end)
     end
 
-    -- Platoon forming: the corpus's form builders decide WHEN an attack goes out; the
-    -- squad's own category and size decide WHO. One wave per pass. A template whose Plan
-    -- is UnitUpgradeAI is the OTHER thing form builders do — form a platoon of one
-    -- structure and upgrade it in place; that becomes an upgrade decision, never a march.
+    -- Platoon forming, in TWO slots per pass: one attack, one upgrade. They used to share
+    -- a slot and priority order starved the upgrades permanently — the scout-raid formers
+    -- (priority 700) pass nearly every pass, and the tech-up builders at 200 fired exactly
+    -- twice in a 25-minute match, both in the opening seconds before anything could raid.
+    -- FAF's real managers run every form builder concurrently; two slots is the serialized
+    -- stand-in's honest minimum.
+    walkPriority(brain, 'PlatoonFormBuilder', function(item)
+        local template = PlatoonTemplates[item.spec.PlatoonTemplate]
+        if not template or template.Plan ~= 'UnitUpgradeAI' then return false end
+        local squads = template.GlobalSquads
+        if not squads then return false end
+        for _, u in ipairs(snap.units) do
+            if u.idle and not u.upgrading and EntityCategoryContains(squads[1][1], u) then
+                table.insert(decisions, {
+                    kind = 'upgrade', builder = u.h, name = item.spec.BuilderName,
+                })
+                return true
+            end
+        end
+        return false
+    end)
+
     walkPriority(brain, 'PlatoonFormBuilder', function(item)
         local template = PlatoonTemplates[item.spec.PlatoonTemplate]
         local squads = template and template.GlobalSquads
         if not squads then return false end
         if template.Plan == 'UnitUpgradeAI' then
-            for _, u in ipairs(snap.units) do
-                if u.idle and not u.upgrading and EntityCategoryContains(squads[1][1], u) then
-                    table.insert(decisions, {
-                        kind = 'upgrade', builder = u.h, name = item.spec.BuilderName,
-                    })
-                    return true
-                end
-            end
-            return false
+            return false  -- the upgrade slot above owns these
         end
         local gathered = {}
         local wanted = 0

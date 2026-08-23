@@ -657,6 +657,16 @@ void printEvents(const rm::sim::EventQueue& events, float now) {
 rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) {
     UnitScene& scene = runner.scene;
 
+    // THE SANDBOX'S HEARTBEAT, when FAF opponents play: `pump` resumes due corpus threads
+    // AND advances the clock GetGameTimeSeconds reads. It was pumped only by the sanity
+    // harness, so a plain --ai-faf match ran with the AI's watch stopped at zero — and
+    // every time-gated builder in the corpus (the mex upgrade's GameTime > 480 among them)
+    // stayed off for the whole match. Here rather than in a run mode, because both the
+    // headless pre-run and the windowed loop go through this tick.
+    if (runner.fafSandbox != nullptr) {
+        (void)runner.fafSandbox->pump(tickIndex);
+    }
+
     // THE TICK'S EVENTS START HERE, not inside `tickSkirmish`. The caller raises some of them
     // itself — the opponents' build orders below, and `UnitCreated` when a finished construction
     // becomes a unit — so the boundary has to be the caller's tick, which is this function.
@@ -957,8 +967,10 @@ void march(UnitScene& scene, const rm::HeightField& field, PassabilitySet& passa
             }
         }
 
-        if (sanity != nullptr) {
-            (void)sanity->pump(i);
+        // Only the harness's OWN sandbox pumps here — the opponents' shared one beats
+        // inside advanceMatch, and a second pump per tick would be a second heart.
+        if (ownSanity != nullptr) {
+            (void)ownSanity->pump(i);
         }
 
         // Dust as the walk happens, aged as the walk continues, so what a capture
