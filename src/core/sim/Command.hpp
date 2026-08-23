@@ -87,6 +87,13 @@ enum class CommandKind : std::uint8_t {
     /// Repeatedly walk between queued waypoints, engaging enemies by the same rule as an
     /// attack-move. The first patrol order automatically includes the unit's starting point.
     Patrol = 7,
+    /// Pour this builder's BuildRate into whatever `target` is building — the guard order,
+    /// on the working half of the game. The pursuit is the attack's with the BUILD reach
+    /// for a weapon range: follow the target, hold beside it, and while it has an
+    /// unfinished construction the assister's rate is added to it every tick
+    /// (`applyAssistance`). A target with an idle queue is simply waited on — the order is
+    /// a standing one and completes only when the target dies.
+    Assist = 8,
 };
 
 /// One order, from one player, on one tick.

@@ -1,6 +1,7 @@
 #include "core/sim/Skirmish.hpp"
 
 #include "core/sim/Adjacency.hpp"
+#include "core/sim/Assist.hpp"
 #include "core/sim/Reclaim.hpp"
 
 namespace rm::sim {
@@ -390,6 +391,11 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
         std::erase_if(*match.building, [&store](const Construction& work) {
             return work.isUpgrade() && !work.finished() && !store.alive(work.upgradeOf);
         });
+
+        // WHO IS HELPING, recomputed before the economy reads any rate: an assister in
+        // reach adds its BuildRate to its target's work, and the drain below rises with
+        // it (`core/sim/Assist.hpp`).
+        (void)applyAssistance(store, catalog, *match.building);
     }
 
     if (match.building != nullptr) {

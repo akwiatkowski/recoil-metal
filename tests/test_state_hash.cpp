@@ -268,6 +268,20 @@ TEST_CASE("every field the sim owns reaches the hash") {
             rm::sim::Construction{.armyIndex = 0, .buildTimeRemaining = rm::test::mag(5.0f)});
         REQUIRE(a.hash() != before);
     }
+    SECTION("the construction founder") {
+        Fixture a;
+        a.building.push_back(rm::sim::Construction{});
+        const rm::StateHash before = a.hash();
+        a.building[0].builder = rm::sim::UnitId{0, 1};
+        REQUIRE(a.hash() != before);
+    }
+    SECTION("assistance applied this tick") {
+        Fixture a;
+        a.building.push_back(rm::sim::Construction{});
+        const rm::StateHash before = a.hash();
+        a.building[0].assistPerTick = rm::test::mag(1.0f);
+        REQUIRE(a.hash() != before);
+    }
 }
 
 TEST_CASE("losing a unit changes the hash even though the survivors match") {

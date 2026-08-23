@@ -325,6 +325,12 @@ StateHash hashMatch(const UnitStore& store, const Match& match) {
             feed(h, work.blueprintIndex);
             feed(h, static_cast<std::uint64_t>(work.upgradeOf.index));
             feed(h, static_cast<std::uint64_t>(work.upgradeOf.generation));
+            // The founder and the help. `builder` is real state (set at order time);
+            // `assistPerTick` is derived each tick from hashed orders and positions, so
+            // feeding it costs nothing and catches a divergence in the assist scan itself.
+            feed(h, static_cast<std::uint64_t>(work.builder.index));
+            feed(h, static_cast<std::uint64_t>(work.builder.generation));
+            feed(h, work.assistPerTick);
         }
     }
 

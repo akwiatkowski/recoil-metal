@@ -152,6 +152,17 @@ TEST_CASE("a short energy bar holds the shot instead of refusing the click") {
     CHECK(rm::test::asFloat(f.economies[0].stored.energy) == 0.0f);
 }
 
+TEST_CASE("an out-of-range overcharge pursues its enemy instead of becoming an assist") {
+    Fixture f;
+    const UnitId acu = f.roster.add(f.acuType, 200.0f, 200.0f, 0, 10000.0f);
+    const UnitId victim = f.roster.add(f.tankType, 500.0f, 200.0f, 1, 500.0f);
+
+    REQUIRE(f.overcharge(acu, victim));
+    CHECK(f.roster.store.motion()[acu.index].moving);
+    REQUIRE(f.roster.store.orders()[acu.index].current() != nullptr);
+    CHECK(f.roster.store.orders()[acu.index].current()->kind == CommandKind::Overcharge);
+}
+
 TEST_CASE("one order is one shot, even into something that survives it") {
     Fixture f;
     const UnitId acu = f.roster.add(f.acuType, 200.0f, 200.0f, 0, 10000.0f);

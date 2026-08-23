@@ -99,6 +99,8 @@ namespace {
         return "reclaim";
     case CommandKind::Overcharge:
         return "overcharge";
+    case CommandKind::Assist:
+        return "assist";
     }
     return "stop";
 }
@@ -116,6 +118,9 @@ namespace {
     if (name == "stop") {
         return CommandKind::Stop;
     }
+    if (name == "assist") {
+        return CommandKind::Assist;
+    }
     if (name == "attack") {
         return CommandKind::Attack;
     }
@@ -129,6 +134,23 @@ namespace {
         return CommandKind::Overcharge;
     }
     return std::nullopt;
+}
+
+/// Validation shared by immediate orders, queued promises, and their eventual start.
+/// Routing is deliberately absent: a queued helper should not move until this reaches the head.
+[[nodiscard]] bool validAssist(const Command& command, const UnitStore& store,
+                               const UnitCatalog& catalog) noexcept {
+    if (!store.alive(command.target) || command.target == command.unit) {
+        return false;
+    }
+    if (store.motion()[command.unit.index].armyIndex
+        != store.motion()[command.target.index].armyIndex) {
+        return false;
+    }
+    const unitdef::UnitDef* assister = catalog.def(store.typeAt(command.unit.index));
+    const unitdef::UnitDef* target = catalog.def(store.typeAt(command.target.index));
+    return assister != nullptr && assister->isBuilder() && target != nullptr
+        && target->isBuilder();
 }
 
 } // namespace
@@ -155,6 +177,9 @@ bool applyCommand(const Command& command, UnitStore& store, const UnitCatalog& c
 
     const Player* player = playerFor(command.player, players);
     if (player == nullptr || !authorised(*player, store, command.unit, armies)) {
+        return false;
+    }
+    if (command.kind == CommandKind::Assist && !validAssist(command, store, catalog)) {
         return false;
     }
 
@@ -296,16 +321,24 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
         // it always was, and the finish-by-arrival logic below still owns it.
         if (const Command* head = orders[slot].current();
             head != nullptr
-            && (head->kind == CommandKind::Attack || head->kind == CommandKind::Overcharge)
+            && (head->kind == CommandKind::Attack || head->kind == CommandKind::Overcharge
+                || head->kind == CommandKind::Assist)
             && store.alive(head->target)) {
             // An overcharge pursues exactly as an attack does; the reach is the MANUAL
             // weapon's, because that is the gun this order will fire. A fired overcharge
             // forgets its target (`fireOvercharge`), so a spent order falls out of this
-            // block and retires below like any arrival.
+            // block and retires below like any arrival. An ASSIST pursues with the BUILD
+            // reach — follow the working engineer, hold beside the factory — and, being a
+            // standing order, completes only when the target dies, which is exactly this
+            // block's rule.
             const bool manual = head->kind == CommandKind::Overcharge;
             const unitdef::UnitDef* def = catalog.def(store.typeAt(slot));
             Fx reach{};
-            if (def != nullptr) {
+            if (head->kind == CommandKind::Assist) {
+                reach = catalog.rates(store.typeAt(slot)).buildReachElmos
+                      + store.motion()[slot].radiusElmos
+                      + store.motion()[head->target.index].radiusElmos;
+            } else if (def != nullptr) {
                 const bool targetAirborne = store.motion()[head->target.index].airborne;
                 for (const unitdef::Weapon& weapon : def->weapons) {
                     if ((manual ? weapon.manuallyFired() : weapon.fires())
@@ -619,7 +652,31 @@ bool startCommand(const Command& command, UnitStore& store, const UnitCatalog& c
             motion.pathIndex = 0;
             return true;
         }
-        [[fallthrough]];  // out of reach: walk toward the target exactly as an attack would
+        // Out of reach: pursue the target directly. This used to fall through to `Attack`, but
+        // adding another targeted command between the cases silently redirected overcharge into
+        // that command's validation; spelling the shared routing out keeps the kinds independent.
+        return routeUnit(command.unit.index, theirs.x, theirs.z, store, terrain, grid);
+    }
+    case CommandKind::Assist: {
+        // The guard order. A builder helps a LIVING unit of its own army — helping the
+        // enemy build is not a thing, and "assist yourself" is a click that means nothing.
+        if (!validAssist(command, store, catalog)) {
+            return false;
+        }
+        // In build reach already: stand and help. The same coarse-cell trap as the
+        // overcharge start — an in-reach order must not be refused for want of a route.
+        const Fx reach = catalog.rates(store.typeAt(command.unit.index)).buildReachElmos
+                       + store.motion()[command.unit.index].radiusElmos
+                       + store.motion()[command.target.index].radiusElmos;
+        const Transform& at = store.transforms()[command.unit.index];
+        const Transform& theirs = store.transforms()[command.target.index];
+        if (groundDistanceElmos(positionOf(at), positionOf(theirs)) <= reach) {
+            motion.moving = false;
+            motion.path.clear();
+            motion.pathIndex = 0;
+            return true;
+        }
+        return routeUnit(command.unit.index, theirs.x, theirs.z, store, terrain, grid);
     }
     case CommandKind::Move:
     case CommandKind::AttackMove:
@@ -700,6 +757,7 @@ bool startCommand(const Command& command, UnitStore& store, const UnitCatalog& c
             .buildPerTick = rate.magPerTick(builder->buildRate),
             .blueprintIndex = command.buildType,
             .upgradeOf = upgrade ? command.unit : UnitId{},
+            .builder = command.unit,
         });
         emit(events, Event{
                          .kind = EventKind::ConstructionStarted,

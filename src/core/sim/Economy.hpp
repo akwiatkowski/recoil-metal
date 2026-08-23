@@ -153,6 +153,25 @@ struct Construction {
     /// (generations start at 1), so no flag is needed to mean "an ordinary build".
     UnitId upgradeOf{};
 
+    /// WHO is building this — the unit whose order created it. What an `Assist` resolves
+    /// against: "help that engineer" means "add my rate to ITS construction", and without
+    /// this field the only link was a position match too fragile to trust. Stale once the
+    /// builder dies, which is fine — assistance stops, the work itself continues, exactly
+    /// as the game has it.
+    UnitId builder{};
+
+    /// What ASSISTERS add this tick, in build units per tick — recomputed every tick by
+    /// `applyAssistance` from who is standing in reach with an Assist order, so a helper
+    /// that walks away or dies stops helping the same tick. Derived state in a hashed
+    /// struct: deterministic by construction, so hashing it costs nothing and catches a
+    /// divergence in the assist scan itself.
+    Mag assistPerTick{};
+
+    /// The rate the work actually advances at: the founder's plus everyone helping.
+    [[nodiscard]] Mag effectiveBuildPerTick() const noexcept {
+        return buildPerTick + assistPerTick;
+    }
+
     [[nodiscard]] bool isUpgrade() const noexcept { return upgradeOf.generation != 0; }
 
     [[nodiscard]] bool finished() const noexcept { return buildTimeRemaining <= Mag{}; }

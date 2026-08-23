@@ -1970,3 +1970,26 @@ rectangle and particle paths.
 state is deterministic, hashed, and visible as a cyan bar and impact flash. Personal, transport,
 enhancement, energy-stall, overlap-overspill, toggle, and special-nuke rules remain explicit future
 work rather than approximations hidden in this slice.
+
+## ADR-049 — Assist is a standing unit order and a derived construction rate
+
+**Context.** FA lets engineers guard a builder or factory and lend BuildRate to its work. Here a
+`Build` command is instantaneous and constructions outlive the founder's command queue, so an
+assister cannot discover the target's project from its current order.
+
+**Decision.** Each construction records the `UnitId` that founded it. A targeted, queueable
+`Assist` order follows a distinct same-army builder, holds at the helper's build reach, and each
+tick contributes to that target's oldest unfinished construction. Contribution is recomputed from
+live orders and positions before economy funding; founder plus helpers drives both resource demand
+and progress.
+
+**Alternatives considered.** Keeping `Build` resident until completion would rewrite existing
+construction and factory semantics. Storing helper lists on constructions would require death and
+retask bookkeeping. Free acceleration was rejected because it removes assist's economy decision,
+and position-matching a helper to a site cannot reliably identify whose project it is helping.
+
+**Consequences.** Assist is replayable, cancellable, survives an idle target, rolls to the next
+factory project, and stops immediately when its order, range, helper, or target ceases to qualify.
+Stalls slow the combined rate through the existing shared funding fraction. Founder identity and
+the derived contribution are hashed; recording founders on historical builds intentionally moves
+the golden state stream even in matches that issue no Assist order.

@@ -5,17 +5,21 @@
 namespace rm::sim {
 
 Resources drainPerTick(const Construction& work) noexcept {
-    if (work.totalBuildTime <= Mag{} || work.buildPerTick <= Mag{}) {
+    // The EFFECTIVE rate — founder plus assisters — throughout: help makes the work drain
+    // faster as well as finish sooner, which is what `BuildRate` means and why piling
+    // engineers onto one build is a decision about the bank, not just the clock.
+    const Mag rate = work.effectiveBuildPerTick();
+    if (work.totalBuildTime <= Mag{} || rate <= Mag{}) {
         return Resources{};
     }
     // TICKS the whole build will take at this rate, and the cost spread over them. The
     // per-second version of this divided by seconds; the arithmetic is the same shape, with
-    // the unit of time already folded into `buildPerTick`.
+    // the unit of time already folded into the per-tick rate.
     //
     // The division is `Mag / Mag -> Fx`, done explicitly: the share of the total cost that
     // falls in one tick is a ratio, which is what the geometric type holds.
     const Fx sharePerTick = Fx::fromRaw(saturate(
-        (FxWide{work.buildPerTick.raw()} << kFxFractionalBits) / work.totalBuildTime.raw()));
+        (FxWide{rate.raw()} << kFxFractionalBits) / work.totalBuildTime.raw()));
     return work.cost * sharePerTick;
 }
 
@@ -84,7 +88,7 @@ void tickEconomy(Economy& economy, std::span<Construction> building) {
         if (work.finished()) {
             continue;
         }
-        work.buildTimeRemaining -= work.buildPerTick * funded;
+        work.buildTimeRemaining -= work.effectiveBuildPerTick() * funded;
         work.buildTimeRemaining = std::max(Mag{}, work.buildTimeRemaining);
     }
 }

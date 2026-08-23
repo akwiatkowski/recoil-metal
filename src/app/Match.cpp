@@ -128,6 +128,38 @@ bool gFafLog = false;
     return applied;
 }
 
+[[nodiscard]] bool issueAssist(UnitScene& scene, const rm::sim::PassabilityGrid& grid,
+                               const rm::HeightField& field, rm::sim::UnitId unit,
+                               rm::PlayerIndex player, rm::TickIndex tick,
+                               rm::sim::UnitId target, bool queued) {
+    // issueAttack's shape with the guard order's kind: the target's position seeds the
+    // route, the pursuit holds at build reach, and `applyAssistance` does the lending.
+    if (!scene.store.alive(target)) {
+        return false;
+    }
+    const rm::sim::Transform& at = scene.store.transforms()[target.index];
+    const rm::sim::Command command{
+        .tick = tick,
+        .player = player,
+        .kind = rm::sim::CommandKind::Assist,
+        .unit = unit,
+        .targetX = at.x,
+        .targetZ = at.z,
+        .target = target,
+        .buildType = 0,
+        .queued = queued,
+    };
+
+    const bool applied = rm::sim::applyCommand(command, scene.store, scene.catalog,
+                                               scene.players, scene.armies,
+                                               rm::sim::Terrain{field}, grid, gAppTickRate,
+                                               &scene.building);
+    if (applied) {
+        scene.commands.record(command);
+    }
+    return applied;
+}
+
 [[nodiscard]] bool issueReclaim(UnitScene& scene, const rm::sim::PassabilityGrid& grid,
                                 const rm::HeightField& field, rm::sim::UnitId unit,
                                 rm::PlayerIndex player, rm::TickIndex tick,

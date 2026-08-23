@@ -1184,6 +1184,49 @@ int runWindowed(const Session& session) {
                 return;  // clicked the sky, or past the edge of the map
             }
 
+            // A RIGHT-CLICK ON YOUR OWN BUILDER IS AN ASSIST — the guard order. The
+            // builders in the selection lend their rate to whatever the target builds
+            // (`core/sim/Assist.hpp`); everyone else just walks over. Beaten by an enemy
+            // under the click (that is an attack) and beating a wreck and plain ground.
+            if (!isAttack && !armedGroundOrder && hit && units.playerArmy != rm::sim::kNoArmy
+                && units.armyOf(hit->index) == units.playerArmy) {
+                const rm::unitdef::UnitDef* targetDef =
+                    units.catalog.def(units.store.typeAt(hit->index));
+                if (targetDef != nullptr && targetDef->isBuilder()) {
+                    std::size_t assisting = 0;
+                    for (const rm::sim::UnitId sel : selected) {
+                        if (!units.store.alive(sel) || sel == *hit) {
+                            continue;  // a unit cannot assist itself
+                        }
+                        const auto type =
+                            static_cast<std::size_t>(units.store.typeAt(sel.index));
+                        const rm::sim::PassabilityGrid& grid = passability.gridFor(
+                            units.maxSlopeDegrees[type], units.maxWaterDepthElmos[type]);
+                        const rm::unitdef::UnitDef* def =
+                            units.catalog.def(units.store.typeAt(sel.index));
+                        const bool builder = def != nullptr && def->isBuilder();
+                        const rm::sim::Transform& at = units.store.transforms()[hit->index];
+                        const bool took =
+                            builder ? issueAssist(units, grid, map->field, sel,
+                                                  playerDriving(units, units.playerArmy),
+                                                  static_cast<rm::TickIndex>(matchTicks),
+                                                  *hit, mods.shift)
+                                    : issueMove(units, grid, map->field, sel,
+                                                playerDriving(units, units.playerArmy),
+                                                static_cast<rm::TickIndex>(matchTicks),
+                                                at.x, at.z, mods.shift);
+                        if (took && builder) {
+                            ++assisting;
+                        }
+                    }
+                    if (assisting > 0) {
+                        std::printf("assist: %zu builder(s) helping %s\n", assisting,
+                                    targetDef->name.c_str());
+                    }
+                    return;
+                }
+            }
+
             // A WRECK UNDER THE CLICK MAKES IT A RECLAIM — for the builders in the
             // selection; everyone else walks there. An enemy unit beats a wreck (the pick
             // above already decided that), and a wreck beats plain ground. The hit disc is

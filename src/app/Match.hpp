@@ -197,6 +197,14 @@ extern bool gFafLog;
                                    rm::sim::UnitId target, rm::sim::Fx toX, rm::sim::Fx toZ,
                                    bool queued = false);
 
+/// The guard order: `unit` lends its BuildRate to whatever `target` is building, standing
+/// at build reach and following it (`core/sim/Assist.hpp`). Refused unless both units are
+/// distinct builders in the same army, exactly as the sim refuses it.
+[[nodiscard]] bool issueAssist(UnitScene& scene, const rm::sim::PassabilityGrid& grid,
+                               const rm::HeightField& field, rm::sim::UnitId unit,
+                               rm::PlayerIndex player, rm::TickIndex tick,
+                               rm::sim::UnitId target, bool queued = false);
+
 /// issueAttack's sibling for a wreck: the FEATURE handle rides in `target`, the builder
 /// walks into reach and the harvest drains it (`core/sim/Reclaim.hpp`). Refused for a
 /// non-builder and for a wreck with nothing in it, exactly as the sim refuses them.

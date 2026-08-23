@@ -51,6 +51,8 @@ bool sameOrder(const Command& a, const Command& b) noexcept {
     case CommandKind::Overcharge:
         // Same rule: the target names the order.
         return a.target == b.target;
+    case CommandKind::Assist:
+        return a.target == b.target;
     }
     return false;
 }
