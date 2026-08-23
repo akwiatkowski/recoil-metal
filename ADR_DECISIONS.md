@@ -1902,4 +1902,7 @@ fog oracle.
 **Consequences.** Existing command logs and queue hashing cover the mechanic without a new data
 type; old command-kind ordinals remain fixed. Unarmed patrols still cycle, minimum-range weapons
 do not stop in their dead zone, and a patrol with fewer than two points dissolves instead of
-spinning forever.
+spinning forever. A patrolling builder performs at most one service action already inside build
+reach: repair first, then reclaim, without leaving the route or creating an internal order.
+Repair uses native `maxHealth × work / BuildTime`; explicit reclaim keeps priority over autonomous
+cleanup, and full storage suppresses the latter rather than destroying value.

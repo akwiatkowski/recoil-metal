@@ -64,6 +64,7 @@ struct Fixture {
 
         rm::unitdef::UnitDef tank;
         tank.name = "test_tank";
+        tank.buildTime = rm::sim::magFromFloat(100.0f);
         tankType = roster.addType(tank);
     }
 
@@ -229,4 +230,165 @@ TEST_CASE("a reclaim order survives the log round trip") {
     REQUIRE(reread.has_value());
     REQUIRE(reread->size() == 1);
     CHECK(reread->all()[0] == log.all()[0]);
+}
+
+TEST_CASE("a patrolling engineer repairs an allied unit already inside build reach") {
+    Fixture f;
+    f.armies[1].alliance = f.armies[0].alliance;
+    const UnitId engineer = f.roster.add(f.engineerType, 200.0f, 200.0f, 0, 100.0f);
+    const UnitId ally = f.roster.add(f.tankType, 210.0f, 200.0f, 1, 100.0f);
+    f.roster.health(ally).current = rm::sim::magFromFloat(50.0f);
+
+    Command patrol{.kind = CommandKind::Patrol,
+                   .unit = engineer,
+                   .targetX = rm::sim::fxFromFloat(500.0f),
+                   .targetZ = rm::sim::fxFromFloat(200.0f)};
+    REQUIRE(rm::sim::applyCommand(patrol, f.roster.store, f.roster.catalog, f.players,
+                                  f.armies, f.terrain, f.grid, f.roster.rate));
+    f.tick();
+
+    // BuildRate 10 at 10 Hz is one work unit; the target's BuildTime 100 makes that exactly
+    // 1% of maximum health, without first quantising the ratio to geometry's Q18.14 range.
+    CHECK(rm::test::asFloat(f.roster.health(ally).current) == 51.0f);
+}
+
+TEST_CASE("patrol repair has priority over reclaim, then a clear route harvests the wreck") {
+    Fixture f;
+    const UnitId engineer = f.roster.add(f.engineerType, 200.0f, 200.0f, 0, 100.0f);
+    const UnitId ally = f.roster.add(f.tankType, 210.0f, 200.0f, 0, 100.0f);
+    f.roster.health(ally).current = rm::sim::magFromFloat(99.5f);
+    const FeatureId wreck = f.wreckAt(205.0f, 200.0f);
+
+    Command patrol{.kind = CommandKind::Patrol,
+                   .unit = engineer,
+                   .targetX = rm::sim::fxFromFloat(500.0f),
+                   .targetZ = rm::sim::fxFromFloat(200.0f)};
+    REQUIRE(rm::sim::applyCommand(patrol, f.roster.store, f.roster.catalog, f.players,
+                                  f.armies, f.terrain, f.grid, f.roster.rate));
+    f.tick();
+    REQUIRE(f.features.find(wreck) != nullptr);
+    CHECK(rm::test::asFloat(f.features.find(wreck)->massRemaining) == 90.0f);
+
+    f.tick();
+    REQUIRE(f.features.find(wreck) != nullptr);
+    CHECK(rm::test::asFloat(f.features.find(wreck)->massRemaining) == 85.0f);
+    CHECK(rm::test::asFloat(f.economies[0].stored.mass) == 5.0f);
+}
+
+TEST_CASE("a patrolling engineer does not detour for work outside build reach") {
+    Fixture f;
+    const UnitId engineer = f.roster.add(f.engineerType, 200.0f, 200.0f, 0, 100.0f);
+    const UnitId ally = f.roster.add(f.tankType, 280.0f, 200.0f, 0, 100.0f);
+    f.roster.health(ally).current = rm::sim::magFromFloat(50.0f);
+    const FeatureId wreck = f.wreckAt(290.0f, 200.0f);
+
+    Command patrol{.kind = CommandKind::Patrol,
+                   .unit = engineer,
+                   .targetX = rm::sim::fxFromFloat(500.0f),
+                   .targetZ = rm::sim::fxFromFloat(200.0f)};
+    REQUIRE(rm::sim::applyCommand(patrol, f.roster.store, f.roster.catalog, f.players,
+                                  f.armies, f.terrain, f.grid, f.roster.rate));
+    f.tick();
+
+    CHECK(rm::test::asFloat(f.roster.health(ally).current) == 50.0f);
+    REQUIRE(f.features.find(wreck) != nullptr);
+    CHECK(rm::test::asFloat(f.features.find(wreck)->massRemaining) == 90.0f);
+    CHECK(f.roster.store.motion()[engineer.index].moving);
+}
+
+TEST_CASE("patrol repair keeps sub-Q18 work and safely clamps oversized work") {
+    Fixture f;
+    rm::unitdef::UnitDef slowTarget;
+    slowTarget.name = "slow_target";
+    slowTarget.buildTime = rm::sim::magFromFloat(100000.0f);
+    const rm::UnitTypeIndex slowType = f.roster.addType(slowTarget);
+    const UnitId engineer = f.roster.add(f.engineerType, 200.0f, 200.0f, 0, 100.0f);
+    const UnitId slow = f.roster.add(slowType, 210.0f, 200.0f, 0, 100.0f);
+    f.roster.health(slow).current = rm::sim::magFromFloat(50.0f);
+
+    Command patrol{.kind = CommandKind::Patrol,
+                   .unit = engineer,
+                   .targetX = rm::sim::fxFromFloat(500.0f),
+                   .targetZ = rm::sim::fxFromFloat(200.0f)};
+    REQUIRE(rm::sim::applyCommand(patrol, f.roster.store, f.roster.catalog, f.players,
+                                  f.armies, f.terrain, f.grid, f.roster.rate));
+    f.tick();
+    CHECK(f.roster.health(slow).current > rm::sim::magFromFloat(50.0f));
+
+    Fixture fast;
+    rm::unitdef::UnitDef fastEngineer;
+    fastEngineer.name = "fast_engineer";
+    fastEngineer.buildRate = 100000.0f;
+    const rm::UnitTypeIndex fastType = fast.roster.addType(fastEngineer);
+    const UnitId builder = fast.roster.add(fastType, 200.0f, 200.0f, 0, 100.0f);
+    const UnitId huge = fast.roster.add(fast.tankType, 210.0f, 200.0f, 0, 5000000.0f);
+    fast.roster.health(huge).current = rm::sim::magFromFloat(1.0f);
+    patrol.unit = builder;
+    REQUIRE(rm::sim::applyCommand(patrol, fast.roster.store, fast.roster.catalog, fast.players,
+                                  fast.armies, fast.terrain, fast.grid, fast.roster.rate));
+    fast.tick();
+    CHECK(fast.roster.health(huge).current == fast.roster.health(huge).maximum);
+}
+
+TEST_CASE("a dead patrolling builder cannot repair or reclaim before its slot retires") {
+    Fixture f;
+    const UnitId engineer = f.roster.add(f.engineerType, 200.0f, 200.0f, 0, 100.0f);
+    const UnitId ally = f.roster.add(f.tankType, 210.0f, 200.0f, 0, 100.0f);
+    f.roster.health(ally).current = rm::sim::magFromFloat(50.0f);
+    const FeatureId wreck = f.wreckAt(205.0f, 200.0f);
+    Command patrol{.kind = CommandKind::Patrol,
+                   .unit = engineer,
+                   .targetX = rm::sim::fxFromFloat(500.0f),
+                   .targetZ = rm::sim::fxFromFloat(200.0f)};
+    REQUIRE(rm::sim::applyCommand(patrol, f.roster.store, f.roster.catalog, f.players,
+                                  f.armies, f.terrain, f.grid, f.roster.rate));
+    f.roster.health(engineer).current = rm::sim::Mag{};
+
+    CHECK(rm::sim::servicePatrolBuilders(f.roster.store, f.roster.catalog, f.armies,
+                                         &f.features, f.economies)
+          == 0);
+    CHECK(rm::test::asFloat(f.roster.health(ally).current) == 50.0f);
+    REQUIRE(f.features.find(wreck) != nullptr);
+    CHECK(rm::test::asFloat(f.features.find(wreck)->massRemaining) == 90.0f);
+}
+
+TEST_CASE("patrol reclaim preserves a wreck when storage is full") {
+    Fixture f;
+    const UnitId engineer = f.roster.add(f.engineerType, 200.0f, 200.0f, 0, 100.0f);
+    const FeatureId wreck = f.wreckAt(205.0f, 200.0f);
+    f.economies[0].stored.mass = rm::sim::magFromFloat(1000.0f);
+    Command patrol{.kind = CommandKind::Patrol,
+                   .unit = engineer,
+                   .targetX = rm::sim::fxFromFloat(500.0f),
+                   .targetZ = rm::sim::fxFromFloat(200.0f)};
+    REQUIRE(rm::sim::applyCommand(patrol, f.roster.store, f.roster.catalog, f.players,
+                                  f.armies, f.terrain, f.grid, f.roster.rate));
+    f.tick();
+
+    REQUIRE(f.features.find(wreck) != nullptr);
+    CHECK(rm::test::asFloat(f.features.find(wreck)->massRemaining) == 90.0f);
+}
+
+TEST_CASE("a patrol helper does no service while its combat target is active") {
+    Fixture f;
+    const UnitId engineer = f.roster.add(f.engineerType, 200.0f, 200.0f, 0, 100.0f);
+    const UnitId ally = f.roster.add(f.tankType, 210.0f, 200.0f, 0, 100.0f);
+    const UnitId enemy = f.roster.add(f.tankType, 220.0f, 200.0f, 1, 100.0f);
+    f.roster.health(ally).current = rm::sim::magFromFloat(50.0f);
+    const FeatureId wreck = f.wreckAt(205.0f, 200.0f);
+    Command patrol{.kind = CommandKind::Patrol,
+                   .unit = engineer,
+                   .targetX = rm::sim::fxFromFloat(500.0f),
+                   .targetZ = rm::sim::fxFromFloat(200.0f)};
+    REQUIRE(rm::sim::applyCommand(patrol, f.roster.store, f.roster.catalog, f.players,
+                                  f.armies, f.terrain, f.grid, f.roster.rate));
+    REQUIRE(f.roster.store.orders()[engineer.index].currentMutable() != nullptr);
+    f.roster.store.orders()[engineer.index].currentMutable()->target = enemy;
+
+    CHECK(rm::sim::servicePatrolBuilders(f.roster.store, f.roster.catalog, f.armies,
+                                         &f.features, f.economies)
+          == 0);
+    CHECK(rm::test::asFloat(f.roster.health(ally).current) == 50.0f);
+    REQUIRE(f.features.find(wreck) != nullptr);
+    CHECK(rm::test::asFloat(f.features.find(wreck)->massRemaining) == 90.0f);
 }

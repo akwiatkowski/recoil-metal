@@ -366,14 +366,18 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
     // 5. THE ECONOMY, last, so a producer destroyed in step 3 stops paying in the same
     //    tick it died rather than funding one more.
     //
-    //    The harvest first, INSIDE the economy step: reclaim credits the store directly,
+    //    Recompute capacity first, then harvest INSIDE the economy step: reclaim credits the
+    //    store directly,
     //    and running before `tickEconomy` means this tick's haul meets this tick's storage
     //    cap — reclaiming over a full mass bar overflows and is lost, the same rule as
     //    every other income (`core/sim/Reclaim.hpp`).
+    recomputeIncome(store, catalog, match, rate);
     if (match.features != nullptr) {
         (void)harvestReclaim(store, catalog, *match.features, match.economies);
     }
-    recomputeIncome(store, catalog, match, rate);
+    // Manual reclaim has priority over autonomous patrol service when both reach the same
+    // final scrap. Patrol helpers also use the freshly recomputed storage cap to avoid waste.
+    (void)servicePatrolBuilders(store, catalog, match.armies, match.features, match.economies);
 
     // An upgrade whose unit died is CANCELLED, not completed: the work was that unit
     // becoming something, and there is no longer anything to become it. Before the economy

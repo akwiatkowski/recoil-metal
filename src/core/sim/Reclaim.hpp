@@ -44,4 +44,15 @@ namespace rm::sim {
 std::size_t harvestReclaim(UnitStore& store, const UnitCatalog& catalog,
                            FeatureStore& features, std::span<Economy> economies);
 
+/// One tick of PATROLHELPER work for builders whose current order is `Patrol`.
+///
+/// The builder does not leave its route or create an internal order: it repairs the nearest
+/// damaged allied unit already inside build reach, otherwise reclaims the nearest wreck there.
+/// A temporary combat target suppresses service, and explicit reclaim orders run first.
+/// Returns how many builders did useful work. Repair is intentionally free until explicit
+/// engineer assist generalises construction and repair resource consumption together.
+std::size_t servicePatrolBuilders(UnitStore& store, const UnitCatalog& catalog,
+                                  std::span<const Army> armies, FeatureStore* features,
+                                  std::span<Economy> economies);
+
 } // namespace rm::sim
