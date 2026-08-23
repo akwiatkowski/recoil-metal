@@ -176,9 +176,10 @@ TEST_CASE("every retail unit blueprint parses into a definition", "[corpus]") {
     CHECK(statesZeroScale == 2);
 
     // Sanity on the extremes, in the engine's units. The fastest thing in the
-    // game is an air unit at 20.5 ogrids/s, and the largest collision box is the
+    // game cruises at 30 ogrids/s (the old 20.5 maximum was Physics.MaxSpeed, which is an
+    // aircraft's landing speed), and the largest collision box is the
     // 21-ogrid Aeon Paragon-class structure.
-    CHECK(fastest == Catch::Approx(20.5f * rm::scmap::kElmosPerOgrid));
+    CHECK(fastest == Catch::Approx(30.0f * rm::scmap::kElmosPerOgrid));
     CHECK(largestRadius == Catch::Approx(0.5f * 21.0f * rm::scmap::kElmosPerOgrid));
 }
 

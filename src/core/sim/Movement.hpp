@@ -105,6 +105,13 @@ inline constexpr float kDefaultTurnRateRadiansPerSecond = 3.4934f;
 /// stays a constant.
 inline constexpr Fx kDefaultRadius = Fx::fromInt(16);
 
+/// Simplified aircraft clearance above local terrain, in elmos.
+///
+/// Recoil's `AAirMoveType::wantedHeight` defaults to 80 (`AAirMoveType.h:75`). The real air
+/// movers vary altitude, take off and land; this slice keeps that sourced cruise clearance
+/// fixed, which is enough to cross terrain without inventing a flight model.
+inline constexpr Fx kAirClearanceElmos = Fx::fromInt(80);
+
 // What a unit is DOING, as opposed to where it is. `Transform` carries position and
 // orientation; this carries the order, the derived rates and the bookkeeping.
 //
@@ -119,6 +126,10 @@ struct MoveState {
     Fx destinationX{};
     Fx destinationZ{};
     bool moving = false;
+
+    /// This unit occupies the air movement layer. Derived from its immutable `UnitDef` when
+    /// spawned; stored here because movement and collision are hot span passes with no catalog.
+    bool airborne = false;
 
     /// PER TICK, both of them, derived once from the authored per-second figures (§5.1).
     ///
@@ -229,6 +240,11 @@ inline constexpr Fx kWaypointRadius = Fx::fromInt(32);
 /// otherwise leave a unit pressed against the border with `moving` stuck true
 /// forever.
 void orderTo(MoveState& state, const Terrain& terrain, Fx x, Fx z) noexcept;
+
+/// Places one transform on its movement layer after X/Z changes. Ground units follow terrain
+/// and its slope; aircraft keep fixed clearance and remain level.
+void placeOnMotionLayer(Transform& transform, const MoveState& state,
+                        const Terrain& terrain) noexcept;
 
 /// Advances every unit by one fixed tick.
 ///

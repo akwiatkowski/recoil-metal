@@ -498,6 +498,36 @@ TEST_CASE("a refused plain order changes nothing at all") {
     CHECK(*roster.store.orders()[walker.index].current() == moveTo(200.0f, 40.0f, walker));
 }
 
+TEST_CASE("an aircraft flies directly across a map no ground unit can route") {
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    const rm::sim::PassabilityGrid closed =
+        rm::sim::buildPassability(field, 1.0e6f, 60.0f, 0.0f);
+
+    rm::test::Roster roster;
+    rm::unitdef::UnitDef aircraft = walkerDef();
+    aircraft.motion = rm::unitdef::MotionType::Air;
+    const rm::UnitTypeIndex type = roster.addType(aircraft);
+    const UnitId flyer = roster.add(type, 40.0f, 40.0f, 0, 100.0f);
+    std::vector<rm::sim::Army> armies = rm::sim::freeForAll(1);
+    const std::vector<rm::sim::Player> players{rm::sim::Player{.index = 0, .army = 0}};
+    const std::vector<const rm::sim::PassabilityGrid*> grids{&closed};
+
+    REQUIRE(rm::sim::applyCommand(moveTo(400.0f, 400.0f, flyer), roster.store,
+                                  roster.catalog, players, armies, terrain, closed, roster.rate));
+    CHECK(roster.store.motion()[flyer.index].path.empty());
+
+    rm::sim::Match match{.armies = armies, .economies = {}, .passability = grids,
+                         .commandersEver = {}};
+    for (int tick = 0; tick < 600 && !roster.store.orders()[flyer.index].empty(); ++tick) {
+        (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain, roster.rate);
+    }
+    CHECK(roster.store.orders()[flyer.index].empty());
+    CHECK(rm::sim::fxToFloat(roster.store.transforms()[flyer.index].x) > 350.0f);
+    CHECK(rm::sim::fxToFloat(roster.store.transforms()[flyer.index].z) > 350.0f);
+    CHECK(roster.store.transforms()[flyer.index].y == rm::sim::kAirClearanceElmos);
+}
+
 TEST_CASE("a recycled slot does not inherit the dead unit's route") {
     // The tombstone rule applied to orders. A corpse keeps its arrays so the death blast can
     // read them, so the queue is cleared when something new moves INTO the slot rather than

@@ -220,11 +220,18 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
     def.motion = *motion;
     def.canFly = (def.motion == unitdef::MotionType::Air);
 
-    // Ogrids per second to elmos per second. `MaxSpeed` is present in exactly the
+    // Ogrids per second to elmos per second. Aircraft cruise with `Air.MaxAirspeed`;
+    // `Physics.MaxSpeed` is their slow landing/taxi speed (0.5 on the T1 fighters and
+    // bombers). Ground units have no Air table and keep the original source.
     // 196 blueprints that move — `RULEUMT_None` accounts for 374 of the rest —
     // so its absence is a building rather than a missing field, and zero is the
     // honest reading.
-    def.speedElmosPerSecond = numberOr(*physics, "MaxSpeed", 0.0f) * scmap::kElmosPerOgrid;
+    const lua::Value* air = parsed->path("Air");
+    const float authoredSpeed =
+        def.motion == unitdef::MotionType::Air && air != nullptr
+            ? numberOr(*air, "MaxAirspeed", numberOr(*physics, "MaxSpeed", 0.0f))
+            : numberOr(*physics, "MaxSpeed", 0.0f);
+    def.speedElmosPerSecond = authoredSpeed * scmap::kElmosPerOgrid;
 
     // Degrees per second to radians. No 65536 and no tick rate: this family
     // authors the quantity in the unit a person would use, which is worth noting

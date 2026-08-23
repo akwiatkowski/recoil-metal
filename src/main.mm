@@ -237,11 +237,9 @@ int main(int argc, const char* argv[]) {
         // never tick the sim: a screenshot of a scattered scene would otherwise
         // show every unit standing horizontally on its hillside.
         const rm::sim::Terrain terrain{map->field};
-        for (rm::sim::Transform& unit : units.store.transforms()) {
-            const std::array<rm::Brad, 2> align =
-                rm::sim::slopeAlignment(terrain, unit.x, unit.z, unit.heading);
-            unit.pitch = align[0];
-            unit.roll = align[1];
+        for (std::size_t slot = 0; slot < units.store.transforms().size(); ++slot) {
+            rm::sim::placeOnMotionLayer(units.store.transforms()[slot],
+                                        units.store.motion()[slot], terrain);
         }
         units.publish(0);
         units.publish(0);

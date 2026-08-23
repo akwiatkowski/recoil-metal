@@ -64,6 +64,7 @@ struct Roster {
 
         sim::MoveState state = sim::defaultMotion(rate);
         state.armyIndex = army;
+        state.airborne = def != nullptr && def->motion == unitdef::MotionType::Air;
         state.radiusElmos = sim::Fx::fromInt(4);
 
         // One reload counter per weapon, starting at zero so the first shot is available on

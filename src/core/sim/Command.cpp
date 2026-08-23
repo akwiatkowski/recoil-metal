@@ -51,7 +51,25 @@ namespace {
                                 const UnitCatalog& catalog, const Terrain& terrain,
                                 const PassabilityGrid& grid, TickRate rate,
                                 std::vector<Construction>* building, EventQueue* events,
-                                const FeatureStore* features);
+                                 const FeatureStore* features);
+
+/// Routes one unit according to its content movement layer. Aircraft fly directly over the
+/// map; supported ground classes retain A* and refuse an unreachable destination.
+[[nodiscard]] bool routeUnit(UnitIndex slot, Fx toX, Fx toZ, UnitStore& store,
+                             const Terrain& terrain, const PassabilityGrid& grid) {
+    MoveState& motion = store.motion()[slot];
+    if (motion.airborne) {
+        orderTo(motion, terrain, toX, toZ);
+        return true;
+    }
+    const Transform& at = store.transforms()[slot];
+    const std::vector<std::array<Fx, 2>> path = findPath(grid, at.x, at.z, toX, toZ);
+    if (path.empty()) {
+        return false;
+    }
+    orderAlongPath(motion, path);
+    return true;
+}
 
 /// Whether an order is finished the moment it is started.
 ///
@@ -314,8 +332,8 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
                     const Fx strayed = groundDistanceElmos(
                         {head->targetX, Fx{}, head->targetZ}, {theirs.x, Fx{}, theirs.z});
                     if (strayed > Fx::fromRaw(reach.raw() / 2) || !chase.moving) {
-                        const std::vector<std::array<Fx, 2>> path =
-                            findPath(*grid, mine.x, mine.z, theirs.x, theirs.z);
+                        const bool routed =
+                            routeUnit(slot, theirs.x, theirs.z, store, terrain, *grid);
                         if (Command* mutableHead = orders[slot].currentMutable()) {
                             // Recorded whether or not the route was found: a target in an
                             // unreachable spot must not be re-pathed every tick — the next
@@ -323,9 +341,7 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
                             mutableHead->targetX = theirs.x;
                             mutableHead->targetZ = theirs.z;
                         }
-                        if (!path.empty()) {
-                            orderAlongPath(chase, path);
-                        }
+                        (void)routed;
                     }
                 }
                 continue;  // alive target: the order outlives every arrival
@@ -366,11 +382,7 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
                 // Arrived short — the route ended outside reach. One more attempt from
                 // here; a second failure falls through and retires the order rather than
                 // pathfinding every tick at a wreck across a wall.
-                const Transform& at = store.transforms()[slot];
-                const std::vector<std::array<Fx, 2>> path =
-                    findPath(*grid, at.x, at.z, wreck->at[0], wreck->at[2]);
-                if (!path.empty()) {
-                    orderAlongPath(mine, path);
+                if (routeUnit(slot, wreck->at[0], wreck->at[2], store, terrain, *grid)) {
                     continue;
                 }
             }
@@ -529,11 +541,7 @@ void updateAggressiveOrders(UnitStore& store, const UnitCatalog& catalog,
         }
 
         if (!motion.moving) {
-            const std::vector<std::array<Fx, 2>> path =
-                findPath(*grid, mineAt.x, mineAt.z, targetAt.x, targetAt.z);
-            if (!path.empty()) {
-                orderAlongPath(motion, path);
-            } else {
+            if (!routeUnit(slot, targetAt.x, targetAt.z, store, terrain, *grid)) {
                 order->target = UnitId{};
                 (void)resumeWaypoint();
             }
@@ -607,15 +615,8 @@ bool startCommand(const Command& command, UnitStore& store, const UnitCatalog& c
         // unit walking round a lake and one walking into it. A route that cannot be found is
         // a refused order rather than a straight-line fallback: driving into the water is a
         // worse answer than not moving.
-        const Transform& at = store.transforms()[command.unit.index];
-        const std::vector<std::array<Fx, 2>> path =
-            findPath(grid, at.x, at.z, command.targetX, command.targetZ);
-        if (path.empty()) {
-            return false;
-        }
-        orderAlongPath(motion, path);
-        (void)terrain;  // the route is already on the map; the tick puts the unit on the ground
-        return true;
+        return routeUnit(command.unit.index, command.targetX, command.targetZ, store, terrain,
+                         grid);
     }
 
     case CommandKind::Build: {
@@ -714,13 +715,7 @@ bool startCommand(const Command& command, UnitStore& store, const UnitCatalog& c
             mine.pathIndex = 0;
             return true;
         }
-        const std::vector<std::array<Fx, 2>> path =
-            findPath(grid, at.x, at.z, wreck->at[0], wreck->at[2]);
-        if (path.empty()) {
-            return false;
-        }
-        orderAlongPath(mine, path);
-        return true;
+        return routeUnit(command.unit.index, wreck->at[0], wreck->at[2], store, terrain, grid);
     }
     }
 

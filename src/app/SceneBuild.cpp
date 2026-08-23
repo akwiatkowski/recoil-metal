@@ -588,15 +588,11 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
     rm::sim::Transform transform;
     transform.x = rm::sim::fxFromFloat(position[0]);
     transform.z = rm::sim::fxFromFloat(position[2]);
-    transform.y = terrain.heightAt(transform.x, transform.z);
     transform.heading = rm::sim::bradFromRadians(yaw);
-    const std::array<rm::Brad, 2> align =
-        rm::sim::slopeAlignment(terrain, transform.x, transform.z, transform.heading);
-    transform.pitch = align[0];
-    transform.roll = align[1];
 
     rm::sim::MoveState motion;
     motion.armyIndex = army.index;
+    motion.airborne = def.motion == rm::unitdef::MotionType::Air;
     motion.radiusElmos = rm::sim::fxFromFloat(def.collisionRadiusElmos);
     if (def.isMobile()) {
         // Per second in the blueprint, per tick in the sim — converted here because this is
@@ -610,6 +606,7 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
                 gAppTickRate.bradPerTick(rm::sim::kDefaultTurnRateRadiansPerSecond);
         }
     }
+    rm::sim::placeOnMotionLayer(transform, motion, terrain);
 
     const rm::sim::UnitId id = scene.store.spawn(rm::sim::UnitStore::Spawn{
         .type = type,
@@ -1051,6 +1048,7 @@ void orderFirstExtractors(UnitScene& scene, std::span<const rm::scenario::Marker
                 // The footprint is what a unit takes up, whether or not it moves — a
                 // building is still something to be pushed out of.
                 state.radiusElmos = rm::sim::fxFromFloat(def->collisionRadiusElmos);
+                state.airborne = def->motion == rm::unitdef::MotionType::Air;
                 if (def->isMobile()) {
                     state.speedPerTick = gAppTickRate.perTick(def->speedElmosPerSecond);
                     state.turnPerTick = gAppTickRate.bradPerTick(
@@ -1059,9 +1057,11 @@ void orderFirstExtractors(UnitScene& scene, std::span<const rm::scenario::Marker
                             : rm::sim::kDefaultTurnRateRadiansPerSecond);
                 }
             }
+            rm::sim::Transform transform = transformAt(instance.position, instance.rotationY);
+            rm::sim::placeOnMotionLayer(transform, state, rm::sim::Terrain{field});
             (void)scene.store.spawn(rm::sim::UnitStore::Spawn{
                 .type = type,
-                .transform = transformAt(instance.position, instance.rotationY),
+                .transform = transform,
                 .motion = state,
                 .health = rm::sim::Health{.current = hp, .maximum = hp},
             });

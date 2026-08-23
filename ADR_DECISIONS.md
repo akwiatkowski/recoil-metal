@@ -1906,3 +1906,25 @@ spinning forever. A patrolling builder performs at most one service action alrea
 reach: repair first, then reclaim, without leaving the route or creating an internal order.
 Repair uses native `maxHealth × work / BuildTime`; explicit reclaim keeps priority over autonomous
 cleanup, and full storage suppresses the latter rather than destroying value.
+
+## ADR-046 — Air is a direct movement layer at fixed terrain clearance
+
+**Context.** The corpus already identifies `RULEUMT_Air`, but the app discarded its no-ground-
+grid meaning: aircraft used landing speed, ground A*, terrain height, slope alignment, and ground
+collision. The T1 air slice needs flight without importing a full takeoff/landing model.
+
+**Decision.** Air commands bypass A* and route directly in X/Z. `MoveState::airborne`, derived
+from the unit definition at spawn, lets the hot movement and collision passes keep aircraft 80
+elmos above local terrain and level; 80 is Recoil `AAirMoveType`'s sourced default clearance.
+Air and ground do not separate, while aircraft sharing that altitude still do. FA aircraft speed
+comes from `Air.MaxAirspeed`, falling back to `Physics.MaxSpeed` only when absent.
+
+**Alternatives considered.** An all-passable air grid — rejected because it still bends flight
+through cell centres and pays for A*. A full fixed-wing mover — deferred: banking, takeoff,
+landing, fuel, and strafe runs are distinct mechanics. Radius zero — rejected because radius also
+controls hits, picking, wrecks, and death retirement.
+
+**Consequences.** Flight is deterministic and intentionally simplified: fixed clearance follows
+terrain vertically and aircraft may stop or pivot in place. The airborne bit is derived state and
+is hashed only when true: historical ground hashes stay stable while a broken aircraft spawn
+invariant still changes the lockstep checksum.

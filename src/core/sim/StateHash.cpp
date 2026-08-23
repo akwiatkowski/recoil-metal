@@ -100,6 +100,11 @@ void feedMotion(StateHash& h, const MoveState& motion) noexcept {
     feed(h, motion.destinationX);
     feed(h, motion.destinationZ);
     feed(h, motion.moving);
+    // Derived from the already-hashed unit type, but still execution state: feeding only the
+    // true case catches a broken spawn invariant without changing every historical ground hash.
+    if (motion.airborne) {
+        feed(h, motion.airborne);
+    }
     feed(h, motion.speedPerTick);
     feed(h, motion.turnPerTick);
     feed(h, motion.radiusElmos);

@@ -330,6 +330,7 @@ TEST_CASE("an aircraft is known by its motion class") {
     const Blueprint bp{"UEA0101_unit.bp", R"(
         UnitBlueprint {
             Physics = { MotionType = 'RULEUMT_Air', MaxSpeed = 10, TurnRate = 180 },
+            Air = { MaxAirspeed = 15 },
             SizeX = 1, SizeZ = 1,
         }
     )"};
@@ -337,6 +338,7 @@ TEST_CASE("an aircraft is known by its motion class") {
     REQUIRE(def.has_value());
     CHECK(def->canFly);
     CHECK_FALSE(rm::unitdef::travelsOnGround(def->motion));
+    CHECK(def->speedElmosPerSecond == Approx(120.0f));
 }
 
 TEST_CASE("a blueprint with no Physics table is refused, not read as a building") {

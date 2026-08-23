@@ -171,11 +171,14 @@ void tick(std::span<Transform> transforms, std::span<MoveState> motion,
         // walk cycle is paced by ground covered, not by height climbed.
         state.distanceTravelledElmos += fxHypot(unit.x - previousX, unit.z - previousZ);
 
-        // Sit on the ground. Interpolated, so crossing a square does not pop.
-        unit.y = terrain.heightAt(unit.x, unit.z);
+        if (!state.airborne) {
+            // Ground behavior stays exactly where it was: moving units update height here;
+            // idle units retain their established Y and only refresh slope below.
+            unit.y = terrain.heightAt(unit.x, unit.z);
+        }
     }
 
-    // Tilt every unit onto the ground underneath it — NOT just the ones that
+    // Place every unit on its layer — NOT just the ones that
     // moved. A scene of scattered units has ordered none of them, and gating
     // this on movement would leave all of them sticking out horizontally on
     // their hillsides, which is the whole thing alignment exists to fix.
@@ -183,8 +186,13 @@ void tick(std::span<Transform> transforms, std::span<MoveState> motion,
     // A separate pass rather than a line in the loop above, because it applies
     // to a different set: the loop moves what is moving, this tilts everything.
     for (std::size_t i = 0; i < count; ++i) {
+        if (motion[i].airborne) {
+            placeOnMotionLayer(transforms[i], motion[i], terrain);
+            continue;
+        }
         Transform& unit = transforms[i];
-        const std::array<Brad, 2> align = slopeAlignment(terrain, unit.x, unit.z, unit.heading);
+        const std::array<Brad, 2> align =
+            slopeAlignment(terrain, unit.x, unit.z, unit.heading);
         unit.pitch = align[0];
         unit.roll = align[1];
     }
@@ -254,6 +262,21 @@ std::array<Brad, 2> slopeAlignment(const Terrain& terrain, Fx x, Fx z, Brad yaw)
     return {{pitch, roll}};
 }
 
+void placeOnMotionLayer(Transform& transform, const MoveState& state,
+                        const Terrain& terrain) noexcept {
+    transform.y = terrain.heightAt(transform.x, transform.z);
+    if (state.airborne) {
+        transform.y += kAirClearanceElmos;
+        transform.pitch = Brad{0};
+        transform.roll = Brad{0};
+        return;
+    }
+    const std::array<Brad, 2> align =
+        slopeAlignment(terrain, transform.x, transform.z, transform.heading);
+    transform.pitch = align[0];
+    transform.roll = align[1];
+}
+
 void resolveCollisions(UnitStore& store, const Terrain& terrain) {
     const std::span<Transform> transforms = store.transforms();
     const std::span<const MoveState> motion = store.motion();
@@ -314,7 +337,7 @@ void resolveCollisions(UnitStore& store, const Terrain& terrain) {
             }
 
             const Fx radiusB = motion[b].radiusElmos;
-            if (radiusB <= Fx{}) {
+            if (radiusB <= Fx{} || motion[a].airborne != motion[b].airborne) {
                 continue;
             }
             Transform& unitB = transforms[b];
@@ -352,7 +375,7 @@ void resolveCollisions(UnitStore& store, const Terrain& terrain) {
         }
     }
 
-    // Put everyone back on the map and on the ground. Done once at the end rather than per
+    // Put everyone back on the map and on its movement layer. Done once at the end rather than per
     // push, since a unit may be moved by several neighbours.
     const Fx width = Fx::fromInt(terrain.field().squaresX * kSquareSize);
     const Fx depth = Fx::fromInt(terrain.field().squaresZ * kSquareSize);
@@ -363,7 +386,11 @@ void resolveCollisions(UnitStore& store, const Terrain& terrain) {
         Transform& unit = transforms[i];
         unit.x = std::clamp(unit.x, Fx{}, width);
         unit.z = std::clamp(unit.z, Fx{}, depth);
-        unit.y = terrain.heightAt(unit.x, unit.z);
+        if (motion[i].airborne) {
+            placeOnMotionLayer(unit, motion[i], terrain);
+        } else {
+            unit.y = terrain.heightAt(unit.x, unit.z);
+        }
     }
 }
 

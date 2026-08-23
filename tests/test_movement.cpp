@@ -86,10 +86,12 @@ const rm::sim::TickRate kRate{10};
 struct Crowd {
     rm::sim::UnitStore store;
 
-    void add(float x, float z) {
+    void add(float x, float z, bool airborne = false) {
+        MoveState motion = ordinary();
+        motion.airborne = airborne;
         (void)store.spawn(rm::sim::UnitStore::Spawn{
             .transform = unitAt(x, z),
-            .motion = ordinary(),
+            .motion = motion,
             .health = rm::sim::Health{.current = rm::sim::Mag::fromInt(100),
                                       .maximum = rm::sim::Mag::fromInt(100)},
         });
@@ -116,6 +118,51 @@ void run(std::vector<rm::sim::Transform>& instances, std::vector<MoveState>& mot
     }
 }
 
+TEST_CASE("aircraft keep fixed terrain clearance and remain level") {
+    const HeightField field = rampField();
+    const rm::sim::Terrain terrain{field};
+    std::vector<rm::sim::Transform> units{unitAt(100.0f, 100.0f)};
+    std::vector<MoveState> motion{ordinary()};
+    motion[0].airborne = true;
+    rm::sim::orderTo(motion[0], terrain, rm::test::fx(400.0f), rm::test::fx(100.0f));
+
+    for (int tick = 0; tick < 20; ++tick) {
+        rm::sim::tick(units, motion, terrain);
+        CHECK(units[0].y == terrain.heightAt(units[0].x, units[0].z)
+                                  + rm::sim::kAirClearanceElmos);
+        CHECK(units[0].pitch == rm::Brad{0});
+        CHECK(units[0].roll == rm::Brad{0});
+    }
+}
+
+TEST_CASE("aircraft and ground units do not push each other") {
+    const HeightField field = flatField();
+    Crowd crowd;
+    crowd.add(100.0f, 100.0f, false);
+    crowd.add(100.0f, 100.0f, true);
+    crowd.separate(field);
+
+    CHECK(crowd.at(0).x == rm::test::fx(100.0f));
+    CHECK(crowd.at(0).z == rm::test::fx(100.0f));
+    CHECK(crowd.at(1).x == rm::test::fx(100.0f));
+    CHECK(crowd.at(1).z == rm::test::fx(100.0f));
+    CHECK(crowd.at(1).y == rm::sim::kAirClearanceElmos);
+}
+
+TEST_CASE("aircraft sharing an altitude still separate") {
+    const HeightField field = flatField();
+    Crowd crowd;
+    crowd.add(100.0f, 100.0f, true);
+    crowd.add(100.0f, 100.0f, true);
+    crowd.separate(field);
+
+    CHECK(rm::sim::fxHypot(crowd.at(1).x - crowd.at(0).x,
+                           crowd.at(1).z - crowd.at(0).z)
+          > rm::sim::Fx{});
+    CHECK(crowd.at(0).y == rm::sim::kAirClearanceElmos);
+    CHECK(crowd.at(1).y == rm::sim::kAirClearanceElmos);
+}
+
 /// Distance between a unit and its destination, on the ground plane.
 [[nodiscard]] rm::sim::Fx distanceToOrder(const rm::sim::Transform& instance,
                                           const MoveState& state) {
@@ -127,12 +174,15 @@ void run(std::vector<rm::sim::Transform>& instances, std::vector<MoveState>& mot
 TEST_CASE("a unit with no order does not move") {
     const HeightField field = flatField();
     std::vector<rm::sim::Transform> instances{unitAt(100.0f, 100.0f, 0.7f)};
+    instances[0].y = rm::test::fx(123.0f);
     std::vector<MoveState> motion{ordinary()};
 
     run(instances, motion, field, 60);
 
     CHECK(rm::test::asFloat(instances[0].x) == Approx(100.0f));
     CHECK(rm::test::asFloat(instances[0].z) == Approx(100.0f));
+    // Tick historically aligns an idle ground unit's slope without relocating its height.
+    CHECK(rm::test::asFloat(instances[0].y) == Approx(123.0f));
     // Yaw too: an idle unit that slowly rotates is a bug that is easy to miss.
     CHECK(instances[0].heading == rm::sim::bradFromRadians(0.7f));
 }
@@ -579,6 +629,19 @@ TEST_CASE("units pushed together are separated") {
 
         CHECK(rm::test::asFloat(crowd.at(0).x) == Approx(100.0f));
         CHECK(rm::test::asFloat(crowd.at(1).x) == Approx(500.0f));
+    }
+
+    SECTION("ground collision placement preserves the established tilt") {
+        Crowd crowd;
+        crowd.add(400.0f, 400.0f);
+        crowd.add(400.0f, 400.0f);
+        crowd.at(0).pitch = rm::Brad{123};
+        crowd.at(0).roll = rm::Brad{456};
+
+        crowd.separate(field);
+
+        CHECK(crowd.at(0).pitch == rm::Brad{123});
+        CHECK(crowd.at(0).roll == rm::Brad{456});
     }
 
     SECTION("a crowd spreads out instead of stacking") {

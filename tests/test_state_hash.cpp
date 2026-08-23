@@ -103,6 +103,14 @@ TEST_CASE("the same state hashes the same, twice running") {
     REQUIRE(a.hash() == first);
 }
 
+TEST_CASE("the cached air movement layer changes the hash") {
+    Fixture ground;
+    Fixture air;
+    air.motion()[0].airborne = true;
+
+    CHECK(ground.hash() != air.hash());
+}
+
 TEST_CASE("one unit moving one step changes the hash") {
     Fixture a;
     const rm::StateHash before = a.hash();
