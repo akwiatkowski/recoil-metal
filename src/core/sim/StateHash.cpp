@@ -303,6 +303,30 @@ StateHash hashMatch(const UnitStore& store, const Match& match) {
         }
     }
 
+    // THE WRECKS, since reclaim reads them back into a rule — the moment FeatureStore.hpp's
+    // old note said they would have to be here. How much of a wreck is LEFT depends on who
+    // reclaimed it and when, which no unit's row records; two matches that differ only in a
+    // half-drained wreck must hash apart on the tick they diverged, not when the mass gets
+    // spent. Slot liveness and generation for the same reason the units feed them: a
+    // reclaimed-and-replaced slot is a different occupant.
+    feed(h, match.features != nullptr);
+    if (match.features != nullptr) {
+        feed(h, match.features->size());
+        const std::span<const Feature> features = match.features->all();
+        for (UnitIndex slot = 0; slot < features.size(); ++slot) {
+            const Feature& wreck = features[slot];
+            feed(h, wreck.at);
+            feed(h, wreck.radiusElmos);
+            feed(h, static_cast<std::size_t>(wreck.fromType));
+            feed(h, wreck.armyIndex);
+            feed(h, wreck.massRemaining);
+            feed(h, wreck.energyRemaining);
+            feed(h, wreck.reclaimPerBuildRate);
+            feed(h, match.features->slotAlive(slot));
+            feed(h, static_cast<std::size_t>(match.features->idAt(slot).generation));
+        }
+    }
+
     feed(h, match.commandersEver.size());
     for (const int ever : match.commandersEver) {
         feed(h, ever);

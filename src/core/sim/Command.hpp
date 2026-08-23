@@ -21,6 +21,7 @@
 namespace rm::sim {
 
 class UnitStore;
+class FeatureStore;
 
 // An order, as a value — and the single path every order takes into the sim.
 //
@@ -66,6 +67,12 @@ enum class CommandKind : std::uint8_t {
     /// Begin something at a place. The caller turns a finished construction into a unit, so
     /// the sim records the intent and the economy does the rest.
     Build,
+    /// Harvest a wreck: walk into build reach and drain it into the army's store
+    /// (`core/sim/Reclaim.hpp`). `target` names the FEATURE — the id spaces are separate
+    /// pools, and a reclaim resolves its handle only against the feature store, so the
+    /// reuse of an integer between them cannot cross the streams. The order completes when
+    /// the wreck is gone, however many reclaimers emptied it.
+    Reclaim,
 };
 
 /// One order, from one player, on one tick.
@@ -150,12 +157,15 @@ struct Command {
 /// the time it starts, so a route computed now would be a route from the wrong place. It is
 /// checked when it is reached, and an order that cannot be started then is dropped and the next
 /// one tried (`advanceOrders`). Recoil validates queued orders no earlier either.
+/// `features` is where a `Reclaim` resolves its target; null refuses the kind outright,
+/// which is what a scene with nothing on the ground should do.
 [[nodiscard]] bool applyCommand(const Command& command, UnitStore& store,
                                 const UnitCatalog& catalog, std::span<const Player> players,
                                 std::span<const Army> armies, const Terrain& terrain,
                                 const PassabilityGrid& grid, TickRate rate,
                                 std::vector<Construction>* building = nullptr,
-                                bool queued = false, EventQueue* events = nullptr);
+                                bool queued = false, EventQueue* events = nullptr,
+                                const FeatureStore* features = nullptr);
 
 /// Starts the next order for every unit that has finished its current one.
 ///
@@ -178,7 +188,8 @@ struct Command {
 std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Terrain& terrain,
                           std::span<const PassabilityGrid* const> gridForType, TickRate rate,
                           std::vector<Construction>* building = nullptr,
-                          EventQueue* events = nullptr);
+                          EventQueue* events = nullptr,
+                          const FeatureStore* features = nullptr);
 
 // --- The log --------------------------------------------------------------------------
 //

@@ -311,6 +311,12 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
         def.storageMass = sim::magFromFloat(numberOr(*economy, "StorageMass", 0.0f));
         def.storageEnergy = sim::magFromFloat(numberOr(*economy, "StorageEnergy", 0.0f));
 
+        // Build, repair and reclaim all share this reach. Ogrids to elmos; the default of 5
+        // is the engine's own (`blueprints-units.lua:250` writes the fallback out), and only
+        // 10 of 568 blueprints override it.
+        def.buildDistanceElmos =
+            numberOr(*economy, "MaxBuildDistance", 5.0f) * scmap::kElmosPerOgrid;
+
         // The build tree's raw material. A list of strings, each an AND of space-separated
         // tags; the list is an OR. Parsed into terms here and resolved against the whole unit
         // set later — see `core/unit/BuildTree.hpp`.
@@ -321,6 +327,32 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
                     def.buildableCategory.push_back(std::move(term));
                 }
             }
+        }
+    }
+
+    // --- wreckage ----------------------------------------------------------
+    //
+    // AFTER the economy block, because the wreck's worth is `BuildCost* × *Mult`
+    // (`Unit.lua:1769-1770`) and the costs have to be read first. No Wreckage table means
+    // no wreck at all (`Unit.lua:1762-1765`) — the ACUs and the walls — so the multipliers
+    // default to zero, not to the corpus's 0.9.
+    if (const lua::Value* wreckage = parsed->path("Wreckage")) {
+        const lua::Value* economy = parsed->path("Economy");
+        const float costMass =
+            economy != nullptr ? numberOr(*economy, "BuildCostMass", 0.0f) : 0.0f;
+        const float costEnergy =
+            economy != nullptr ? numberOr(*economy, "BuildCostEnergy", 0.0f) : 0.0f;
+        def.wreckMass =
+            sim::magFromFloat(costMass * numberOr(*wreckage, "MassMult", 0.0f));
+        def.wreckEnergy =
+            sim::magFromFloat(costEnergy * numberOr(*wreckage, "EnergyMult", 0.0f));
+
+        // 10 / (ReclaimTimeMultiplier × 2): Prop.lua:270-287's duration formula inverted,
+        // with Unit.lua:1771's global ×2 for unit wrecks. The 10 is FA's own tick rate — a
+        // constant of the formula, not of our clock.
+        const float timeMult = numberOr(*wreckage, "ReclaimTimeMultiplier", 1.0f) * 2.0f;
+        if (timeMult > 0.0f) {
+            def.reclaimPerBuildRate = sim::fxFromFloat(10.0f / timeMult);
         }
     }
 

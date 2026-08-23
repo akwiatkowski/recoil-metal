@@ -2,6 +2,7 @@
 
 #include "core/sim/Combat.hpp"
 #include "core/sim/Movement.hpp"
+#include "core/sim/Reclaim.hpp"
 #include "core/sim/UnitStore.hpp"
 
 #include "core/unit/BuildTree.hpp"
@@ -49,7 +50,8 @@ namespace {
 [[nodiscard]] bool startCommand(const Command& command, UnitStore& store,
                                 const UnitCatalog& catalog, const Terrain& terrain,
                                 const PassabilityGrid& grid, TickRate rate,
-                                std::vector<Construction>* building, EventQueue* events);
+                                std::vector<Construction>* building, EventQueue* events,
+                                const FeatureStore* features);
 
 /// Whether an order is finished the moment it is started.
 ///
@@ -71,6 +73,8 @@ namespace {
         return "attack";
     case CommandKind::Build:
         return "build";
+    case CommandKind::Reclaim:
+        return "reclaim";
     }
     return "stop";
 }
@@ -88,6 +92,9 @@ namespace {
     if (name == "build") {
         return CommandKind::Build;
     }
+    if (name == "reclaim") {
+        return CommandKind::Reclaim;
+    }
     return std::nullopt;
 }
 
@@ -102,7 +109,8 @@ bool operator==(const Command& a, const Command& b) noexcept {
 bool applyCommand(const Command& command, UnitStore& store, const UnitCatalog& catalog,
                   std::span<const Player> players, std::span<const Army> armies,
                   const Terrain& terrain, const PassabilityGrid& grid, TickRate rate,
-                  std::vector<Construction>* building, bool queued, EventQueue* events) {
+                  std::vector<Construction>* building, bool queued, EventQueue* events,
+                  const FeatureStore* features) {
     // A stale handle first, before anything else looks at the slot. A player may click a unit
     // that died on the tick their order was issued, and a replay of an old log may name a unit
     // that no longer exists — in both cases the generation has moved on, so this must not
@@ -125,7 +133,8 @@ bool applyCommand(const Command& command, UnitStore& store, const UnitCatalog& c
     // the rest of the route already means. It clears and stops.
     if (command.kind == CommandKind::Stop) {
         orders.clear();
-        return startCommand(command, store, catalog, terrain, grid, rate, building, events);
+        return startCommand(command, store, catalog, terrain, grid, rate, building, events,
+                            features);
     }
 
     if (queued) {
@@ -140,7 +149,8 @@ bool applyCommand(const Command& command, UnitStore& store, const UnitCatalog& c
             motion.path.clear();
             motion.pathIndex = 0;
             if (const Command* next = orders.current()) {
-                (void)startCommand(*next, store, catalog, terrain, grid, rate, building, events);
+                (void)startCommand(*next, store, catalog, terrain, grid, rate, building, events,
+                                   features);
             }
             return true;
         }
@@ -158,7 +168,8 @@ bool applyCommand(const Command& command, UnitStore& store, const UnitCatalog& c
     // A PLAIN ORDER IS ROUTED BEFORE IT IS QUEUED, so that a refused one changes nothing at
     // all — not even clearing the queue. That is what keeps "a refused order is not part of the
     // match" true, and it is why this cannot simply be `give` followed by `startCommand`.
-    if (!startCommand(command, store, catalog, terrain, grid, rate, building, events)) {
+    if (!startCommand(command, store, catalog, terrain, grid, rate, building, events,
+                      features)) {
         return false;
     }
     (void)orders.give(command, false);
@@ -173,7 +184,8 @@ bool applyCommand(const Command& command, UnitStore& store, const UnitCatalog& c
 
 std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Terrain& terrain,
                           std::span<const PassabilityGrid* const> gridForType, TickRate rate,
-                          std::vector<Construction>* building, EventQueue* events) {
+                          std::vector<Construction>* building, EventQueue* events,
+                          const FeatureStore* features) {
     std::size_t started = 0;
 
     const std::span<CommandQueue> orders = store.orders();
@@ -255,6 +267,41 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
             }
         }
 
+        // THE HARVEST HOLD, the reclaim twin of the chase above: a reclaim naming a wreck
+        // that still holds value never completes by arrival — it completes when the wreck
+        // is GONE, drained by this unit or any other. In reach it holds still and lets
+        // `harvestReclaim` do the work; short of reach and idle, it walks the rest of the
+        // way. A wreck it cannot route to is dropped by falling through to the finish
+        // logic, which is what an unreachable order deserves.
+        if (const Command* head = orders[slot].current();
+            head != nullptr && head->kind == CommandKind::Reclaim && features != nullptr) {
+            if (const Feature* wreck = features->find(head->target)) {
+                MoveState& mine = store.motion()[slot];
+                const Fx gap = groundDistanceElmos(positionOf(store.transforms()[slot]),
+                                                   wreck->at);
+                if (gap <= reclaimReach(catalog, store.typeAt(slot), mine, *wreck)) {
+                    mine.moving = false;
+                    mine.path.clear();
+                    mine.pathIndex = 0;
+                    continue;  // the wreck outlives every arrival; the harvest empties it
+                }
+                if (mine.moving) {
+                    continue;  // still walking there
+                }
+                // Arrived short — the route ended outside reach. One more attempt from
+                // here; a second failure falls through and retires the order rather than
+                // pathfinding every tick at a wreck across a wall.
+                const Transform& at = store.transforms()[slot];
+                const std::vector<std::array<Fx, 2>> path =
+                    findPath(*grid, at.x, at.z, wreck->at[0], wreck->at[2]);
+                if (!path.empty()) {
+                    orderAlongPath(mine, path);
+                    continue;
+                }
+            }
+            // The wreck is gone (or unreachable): the order is done. Fall through.
+        }
+
         if (slot < motion.size() && motion[slot].moving) {
             continue;  // still carrying out the order at the head
         }
@@ -265,7 +312,8 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
         const Command* next = orders[slot].finish();
         while (next != nullptr) {
             const bool wasInstant = instantaneous(next->kind);
-            if (startCommand(*next, store, catalog, terrain, *grid, rate, building, events)) {
+            if (startCommand(*next, store, catalog, terrain, *grid, rate, building, events,
+                             features)) {
                 ++started;
                 if (!wasInstant) {
                     break;
@@ -282,7 +330,8 @@ namespace {
 
 bool startCommand(const Command& command, UnitStore& store, const UnitCatalog& catalog,
                   const Terrain& terrain, const PassabilityGrid& grid, TickRate rate,
-                  std::vector<Construction>* building, EventQueue* events) {
+                  std::vector<Construction>* building, EventQueue* events,
+                  const FeatureStore* features) {
     // By SLOT, not by handle: `advanceOrders` starts an order for a slot it has already found
     // to be live, and a `Build` started for a unit that died this tick would charge a dead
     // army. The handle check belongs to `applyCommand`, where a stale handle is the ordinary
@@ -378,6 +427,48 @@ bool startCommand(const Command& command, UnitStore& store, const UnitCatalog& c
                          .amount = def->buildCostMass,
                          .at = {siteX, Fx{}, siteZ},
                      });
+        return true;
+    }
+
+    case CommandKind::Reclaim: {
+        // A scene with nothing on the ground refuses the kind, the same shape as `Build`
+        // with no construction list.
+        if (features == nullptr) {
+            return false;
+        }
+        const Feature* wreck = features->find(command.target);
+        if (wreck == nullptr) {
+            return false;  // already emptied, or a stale handle from a replay
+        }
+        if (wreck->massRemaining <= Mag{} && wreck->energyRemaining <= Mag{}) {
+            return false;  // a bare scorch record — an ACU's, a wall's — holds nothing
+        }
+
+        // ONLY A BUILDER RECLAIMS. The harvest multiplies by `buildPerTick`, so a tank's
+        // zero would make this an order that never completes — refusing it here is the
+        // same rule as a tank refusing to found a factory, for the same reason.
+        const unitdef::UnitDef* reclaimer = catalog.def(store.typeAt(command.unit.index));
+        if (reclaimer == nullptr || !reclaimer->isBuilder()) {
+            return false;
+        }
+
+        // In reach already: stand and harvest, no route needed. Otherwise walk there —
+        // and an unroutable wreck refuses the order, exactly as an unroutable move does.
+        const Transform& at = store.transforms()[command.unit.index];
+        MoveState& mine = store.motion()[command.unit.index];
+        const Fx gap = groundDistanceElmos(positionOf(at), wreck->at);
+        if (gap <= reclaimReach(catalog, store.typeAt(command.unit.index), mine, *wreck)) {
+            mine.moving = false;
+            mine.path.clear();
+            mine.pathIndex = 0;
+            return true;
+        }
+        const std::vector<std::array<Fx, 2>> path =
+            findPath(grid, at.x, at.z, wreck->at[0], wreck->at[2]);
+        if (path.empty()) {
+            return false;
+        }
+        orderAlongPath(mine, path);
         return true;
     }
     }

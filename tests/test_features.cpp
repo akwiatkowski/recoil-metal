@@ -137,10 +137,52 @@ TEST_CASE("a scene with nowhere to put wrecks still runs the tick") {
     CHECK(report.died.size() == 1);
 }
 
-TEST_CASE("features are append-only, and clearing resets the handles") {
-    // Append-only is the decision (a wreck is permanent). `clear` exists for a caller starting
-    // a fresh match in the same process — and it has to reset the id pool too, or the first
-    // handle of the new match would collide with a live handle from the old one.
+TEST_CASE("a reclaimed feature stops resolving, and the revision says something changed") {
+    // Reclaim ended the append-only era: an emptied wreck is REMOVED, the generational
+    // handle goes stale exactly as a unit's does, and the revision counter is what the
+    // decal rebuild watches now — size() can no longer tell "one added" from "one added,
+    // one removed", which under the old guard would have drawn a ghost forever.
+    FeatureStore features;
+    const std::uint64_t empty = features.revision();
+
+    const FeatureId wreck = features.add(Feature{.radiusElmos = rm::test::fx(4.0f),
+                                                 .massRemaining = rm::sim::magFromFloat(90.0f)});
+    const FeatureId keeper = features.add(Feature{.radiusElmos = rm::test::fx(2.0f)});
+    CHECK(features.revision() != empty);
+    REQUIRE(features.slotAlive(wreck.index));
+
+    const std::uint64_t before = features.revision();
+    features.remove(wreck);
+    CHECK(features.revision() != before);
+    CHECK(features.find(wreck) == nullptr);
+    CHECK_FALSE(features.slotAlive(wreck.index));
+
+    // The other feature is untouched, and a stale handle stays stale after the slot is
+    // reused — the same guarantee a unit handle gives, from the same pool.
+    CHECK(features.find(keeper) != nullptr);
+    const FeatureId reuse = features.add(Feature{.radiusElmos = rm::test::fx(1.0f)});
+    CHECK(reuse.index == wreck.index);  // LIFO reuse, same as units
+    CHECK(features.find(wreck) == nullptr);
+    CHECK(features.find(reuse) != nullptr);
+
+    // Removing twice is a no-op, not a corruption of whoever moved in.
+    features.remove(wreck);
+    CHECK(features.find(reuse) != nullptr);
+}
+
+TEST_CASE("the harvest writes through the mutable view") {
+    FeatureStore features;
+    const FeatureId wreck = features.add(Feature{.massRemaining = rm::sim::magFromFloat(50.0f)});
+    Feature* mutably = features.findMutable(wreck);
+    REQUIRE(mutably != nullptr);
+    mutably->massRemaining = rm::sim::magFromFloat(20.0f);
+    CHECK(rm::test::asFloat(features.find(wreck)->massRemaining) == 20.0f);
+}
+
+TEST_CASE("features grow by add and shrink only by remove, and clearing resets the handles") {
+    // `clear` exists for a caller starting a fresh match in the same process — and it has
+    // to reset the id pool too, or the first handle of the new match would collide with a
+    // live handle from the old one.
     FeatureStore features;
     const FeatureId first = features.add(Feature{});
     (void)features.add(Feature{});

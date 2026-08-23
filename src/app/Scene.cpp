@@ -88,18 +88,26 @@ void setAppTickRate(std::uint32_t ticksPerSecond) {
 /// Guarded on the count so a match that kills nothing this tick does no work. Cheap even when
 /// it does fire: a wreck is a handful of triangles and a long match leaves tens of them.
 void refreshWreckDecals(UnitScene& scene, const rm::HeightField& field) {
-    if (scene.features.size() == scene.wreckDecalsFrom) {
+    // The REVISION, not the count: reclaim removes wrecks now, and "one added, one
+    // removed" leaves the count where it was while the ground has changed twice. Dead
+    // slots are skipped for the same reason — a reclaimed wreck is clean ground, and
+    // drawing it would advertise mass that is not there.
+    if (scene.features.revision() == scene.wreckDecalsFrom) {
         return;
     }
     scene.wreckDecals.clear();
-    for (const rm::sim::Feature& wreck : scene.features.all()) {
+    for (rm::UnitIndex slot = 0; slot < scene.features.size(); ++slot) {
+        if (!scene.features.slotAlive(slot)) {
+            continue;
+        }
+        const rm::sim::Feature& wreck = scene.features.all()[slot];
         rm::appendWreckMark(scene.wreckDecals, field,
                             {rm::sim::fxToFloat(wreck.at[0]), rm::sim::fxToFloat(wreck.at[1]),
                              rm::sim::fxToFloat(wreck.at[2])},
                             rm::sim::fxToFloat(wreck.radiusElmos)
                                 * rm::kWreckMarkRadiusFactor);
     }
-    scene.wreckDecalsFrom = scene.features.size();
+    scene.wreckDecalsFrom = scene.features.revision();
 }
 
 /// The opening's step for a role, or a bare default when the plan names none.

@@ -164,6 +164,7 @@ add_library(rm_core STATIC
     src/core/sim/Command.cpp
     src/core/sim/Events.cpp
     src/core/sim/FeatureStore.cpp
+    src/core/sim/Reclaim.cpp
     src/core/sim/CommandQueue.cpp
     src/core/sim/Combat.cpp
     src/core/sim/Intel.cpp
@@ -309,6 +310,7 @@ if(BUILD_TESTING)
         tests/test_command_queue.cpp
         tests/test_events.cpp
         tests/test_features.cpp
+        tests/test_reclaim.cpp
         tests/test_snapshot.cpp
         tests/test_interpolate.cpp
         tests/test_build_order.cpp

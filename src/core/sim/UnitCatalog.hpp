@@ -47,6 +47,11 @@ public:
         Mag energyPerTick{};
         Mag upkeepEnergyPerTick{};
         Mag buildPerTick{};
+
+        /// How far this type builds, repairs and reclaims, in elmos — converted here for
+        /// the same reason `IntelRadii` is: `UnitDef` states a float because content does,
+        /// and the reach is compared against fixed-point distances inside the tick.
+        Fx buildReachElmos{};
     };
 
     /// How far one type sees, in elmos, in the type the sim can do arithmetic in.

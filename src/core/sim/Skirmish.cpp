@@ -1,5 +1,7 @@
 #include "core/sim/Skirmish.hpp"
 
+#include "core/sim/Reclaim.hpp"
+
 namespace rm::sim {
 namespace {
 
@@ -16,8 +18,8 @@ namespace {
 /// zeroes it, so a corpse is reported exactly once however many ticks it then sits
 /// there. Without that a dead unit would set off its death explosion every tick
 /// forever, which is both a wrong answer and an unbounded one.
-void retireDead(UnitStore& store, TickReport& report, EventQueue* events,
-                FeatureStore* features) {
+void retireDead(UnitStore& store, const UnitCatalog& catalog, TickReport& report,
+                EventQueue* events, FeatureStore* features) {
     const std::span<Transform> transforms = store.transforms();
     const std::span<MoveState> motion = store.motion();
     const std::span<const Health> healths = store.health();
@@ -43,11 +45,19 @@ void retireDead(UnitStore& store, TickReport& report, EventQueue* events,
         // the slot BEFORE retirement zeroes the radius — which is the same reason `Death`
         // carries its position and size rather than a handle to look them up through.
         if (features != nullptr) {
+            // What the wreck is WORTH comes from the definition — `BuildCost × MassMult`,
+            // computed at parse time (`UnitDef::wreckMass`). A type with no definition, or
+            // one whose blueprint states no Wreckage table (the ACUs, the walls), leaves a
+            // scorch record with nothing in it, which is exactly `Unit.lua:1762-1765`.
+            const unitdef::UnitDef* def = catalog.def(store.typeAt(slot));
             (void)features->add(Feature{
                 .at = positionOf(transforms[slot]),
                 .radiusElmos = motion[slot].radiusElmos,
                 .fromType = store.typeAt(slot),
                 .armyIndex = motion[slot].armyIndex,
+                .massRemaining = def != nullptr ? def->wreckMass : Mag{},
+                .energyRemaining = def != nullptr ? def->wreckEnergy : Mag{},
+                .reclaimPerBuildRate = def != nullptr ? def->reclaimPerBuildRate : Fx{},
             });
         }
 
@@ -217,7 +227,7 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
     //    without a gap the player can see. First in the tick for the same reason the scripted
     //    opponents decide first: an order started this tick should move this tick.
     report.ordersStarted = advanceOrders(store, catalog, terrain, match.passability, rate,
-                                         match.building, match.events);
+                                         match.building, match.events, match.features);
 
     // 1. MOVEMENT, then collisions. Everything downstream reads where a unit has got to
     //    this tick rather than where it started it.
@@ -270,7 +280,7 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
     // 4. The dead, then their explosions, then the defeated. In that order: an army
     //    whose commander died to a shot that landed this tick is defeated this tick, not
     //    next, and an ACU's detonation is enormous enough to decide the tick it goes off.
-    retireDead(store, report, match.events, match.features);
+    retireDead(store, catalog, report, match.events, match.features);
 
     // 99 of the 494 shipped weapons are `WeaponCategory = 'Death'` — a blast with no
     // target and no rate of fire. This is where they finally go off.
@@ -334,6 +344,14 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
 
     // 5. THE ECONOMY, last, so a producer destroyed in step 3 stops paying in the same
     //    tick it died rather than funding one more.
+    //
+    //    The harvest first, INSIDE the economy step: reclaim credits the store directly,
+    //    and running before `tickEconomy` means this tick's haul meets this tick's storage
+    //    cap — reclaiming over a full mass bar overflows and is lost, the same rule as
+    //    every other income (`core/sim/Reclaim.hpp`).
+    if (match.features != nullptr) {
+        (void)harvestReclaim(store, catalog, *match.features, match.economies);
+    }
     recomputeIncome(store, catalog, match, rate);
 
     // An upgrade whose unit died is CANCELLED, not completed: the work was that unit

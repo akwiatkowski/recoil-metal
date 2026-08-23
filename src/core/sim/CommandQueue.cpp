@@ -42,6 +42,10 @@ bool sameOrder(const Command& a, const Command& b) noexcept {
         return withinCancelDistance(a, b);
     case CommandKind::Build:
         return a.buildType == b.buildType && withinCancelDistance(a, b);
+    case CommandKind::Reclaim:
+        // Two reclaims of one wreck are one order, however the clicks landed — the handle
+        // names the wreck the way a targeted attack's names its victim.
+        return a.target == b.target;
     }
     return false;
 }

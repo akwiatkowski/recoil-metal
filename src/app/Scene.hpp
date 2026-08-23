@@ -344,7 +344,7 @@ struct UnitScene {
 
     /// How many features `wreckDecals` was built from, so the rebuild happens exactly when
     /// there is something new to draw.
-    std::size_t wreckDecalsFrom = 0;
+    std::uint64_t wreckDecalsFrom = 0;  ///< the FeatureStore revision the decals were built at
 
     /// Death explosions set off, and the damage they dealt. BOTH, because they answer
     /// different questions: a blast that goes off and hurts nothing is the ordinary case when

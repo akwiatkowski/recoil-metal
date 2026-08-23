@@ -230,6 +230,61 @@ TEST_CASE("a structure's own build footprint wins over its collision size") {
     CHECK(def->motion == MotionType::None);
 }
 
+TEST_CASE("a wreck's value and the builder's reach arrive from the economy tables") {
+    // The value chain is `Unit.lua:1760-1819`: a wreck holds `BuildCostMass * MassMult`
+    // and `BuildCostEnergy * EnergyMult`, and reclaiming it takes
+    // `ReclaimTimeMultiplier * 2` times longer than the base rate (`:1771`, `:1817`).
+    // Measured across the corpus: 504 of 568 blueprints state a Wreckage table and every
+    // one says MassMult = 0.9, EnergyMult = 0, ReclaimTimeMultiplier = 1.
+    const Blueprint bp{"UEL0106_unit.bp", R"(
+        UnitBlueprint {
+            Economy = {
+                BuildCostMass = 200,
+                BuildCostEnergy = 1000,
+                MaxBuildDistance = 5,
+            },
+            Physics = { MotionType = 'RULEUMT_Land', MaxSpeed = 1 },
+            SizeX = 0.6, SizeZ = 0.6,
+            Wreckage = {
+                EnergyMult = 0.5,
+                MassMult = 0.9,
+                ReclaimTimeMultiplier = 1,
+            },
+        }
+    )"};
+    const auto def = rm::unitbp::loadFile(bp.path());
+    REQUIRE(def.has_value());
+
+    // 200 * 0.9 and 1000 * 0.5, computed at parse time so the sim never multiplies floats.
+    CHECK(rm::test::asFloat(def->wreckMass) == Approx(180.0f));
+    CHECK(rm::test::asFloat(def->wreckEnergy) == Approx(500.0f));
+
+    // 10 / (ReclaimTimeMultiplier * 2): the value one point of a reclaimer's BuildRate
+    // recovers per second, from Prop.lua:270-287's duration formula inverted.
+    CHECK(rm::sim::fxToFloat(def->reclaimPerBuildRate) == Approx(5.0f));
+
+    // 5 ogrids x 8 elmos — reclaim, repair and build all share this reach.
+    CHECK(def->buildDistanceElmos == Approx(40.0f));
+}
+
+TEST_CASE("no Wreckage table means nothing to reclaim, and the reach defaults to 5") {
+    // The ACUs and the walls state no Wreckage table, and `Unit.lua:1762-1765` leaves no
+    // wreck for them at all: `MassMult or 0` (`:1769`). The build reach defaults to 5
+    // ogrids — `blueprints-units.lua:250` spells the fallback out.
+    const Blueprint bp{"UEL0001_unit.bp", R"(
+        UnitBlueprint {
+            Economy = { BuildCostMass = 18000 },
+            Physics = { MotionType = 'RULEUMT_Land', MaxSpeed = 1 },
+            SizeX = 0.75, SizeZ = 0.75,
+        }
+    )"};
+    const auto def = rm::unitbp::loadFile(bp.path());
+    REQUIRE(def.has_value());
+    CHECK(rm::test::asFloat(def->wreckMass) == Approx(0.0f));
+    CHECK(rm::test::asFloat(def->wreckEnergy) == Approx(0.0f));
+    CHECK(def->buildDistanceElmos == Approx(40.0f));
+}
+
 TEST_CASE("the motion class decides where a unit may go, since the file does not") {
     // A `.bp` states no slope limit and no wading depth for ANY of the 568. The
     // only slope figure the format carries is Footprint.MaxSlope, a gradient on

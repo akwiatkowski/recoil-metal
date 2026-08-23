@@ -1069,6 +1069,77 @@ int runWindowed(const Session& session) {
                 return;  // clicked the sky, or past the edge of the map
             }
 
+            // A WRECK UNDER THE CLICK MAKES IT A RECLAIM — for the builders in the
+            // selection; everyone else walks there. An enemy unit beats a wreck (the pick
+            // above already decided that), and a wreck beats plain ground. The hit disc is
+            // the mark the player can actually SEE — the decal's radius, not the sim's —
+            // with a floor so a tiny unit's wreck is still clickable.
+            if (!isAttack) {
+                std::optional<rm::sim::FeatureId> wreck;
+                float wreckGap = 0.0f;
+                for (rm::UnitIndex slot = 0; slot < units.features.size(); ++slot) {
+                    if (!units.features.slotAlive(slot)) {
+                        continue;
+                    }
+                    const rm::sim::Feature& candidate = units.features.all()[slot];
+                    if (candidate.massRemaining <= rm::sim::Mag{}
+                        && candidate.energyRemaining <= rm::sim::Mag{}) {
+                        continue;  // a bare scorch is not an order target
+                    }
+                    const float dx = ground->x - rm::sim::fxToFloat(candidate.at[0]);
+                    const float dz = ground->z - rm::sim::fxToFloat(candidate.at[2]);
+                    const float gap = std::sqrt(dx * dx + dz * dz);
+                    const float disc =
+                        std::max(6.0f, rm::sim::fxToFloat(candidate.radiusElmos)
+                                           * rm::kWreckMarkRadiusFactor);
+                    if (gap <= disc && (!wreck || gap < wreckGap)) {
+                        wreck = units.features.idAt(slot);
+                        wreckGap = gap;
+                    }
+                }
+                if (wreck) {
+                    const rm::sim::Feature* found = units.features.find(*wreck);
+                    orderMarks.push_back(OrderMark{
+                        .position = {rm::sim::fxToFloat(found->at[0]),
+                                     rm::sim::fxToFloat(found->at[1]),
+                                     rm::sim::fxToFloat(found->at[2])},
+                        .age = 0.0f,
+                    });
+                    std::size_t reclaiming = 0;
+                    for (const rm::sim::UnitId sel : selected) {
+                        if (!units.store.alive(sel)) {
+                            continue;
+                        }
+                        const auto type =
+                            static_cast<std::size_t>(units.store.typeAt(sel.index));
+                        const rm::sim::PassabilityGrid& grid = passability.gridFor(
+                            units.maxSlopeDegrees[type], units.maxWaterDepthElmos[type]);
+                        const rm::unitdef::UnitDef* def =
+                            units.catalog.def(units.store.typeAt(sel.index));
+                        const bool builder = def != nullptr && def->isBuilder();
+                        const bool took =
+                            builder ? issueReclaim(units, grid, map->field, sel,
+                                                   playerDriving(units, units.playerArmy),
+                                                   static_cast<rm::TickIndex>(matchTicks),
+                                                   *wreck, mods.shift)
+                                    : issueMove(units, grid, map->field, sel,
+                                                playerDriving(units, units.playerArmy),
+                                                static_cast<rm::TickIndex>(matchTicks),
+                                                found->at[0], found->at[2], mods.shift);
+                        if (took && builder) {
+                            ++reclaiming;
+                        }
+                    }
+                    if (reclaiming > 0) {
+                        std::printf("reclaim: %zu builder(s) on the wreck (%.0f mass)\n",
+                                    reclaiming,
+                                    static_cast<double>(
+                                        rm::sim::magToFloat(found->massRemaining)));
+                    }
+                    return;
+                }
+            }
+
             // Marked before the routing is attempted (inside orderSelectionTo), and
             // deliberately: the mark answers "did that click land, and where", which is
             // true even if every unit then reports no route. SHIFT QUEUES IT (§7 P4.1) —

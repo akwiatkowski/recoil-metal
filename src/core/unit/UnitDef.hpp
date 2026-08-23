@@ -245,6 +245,34 @@ struct UnitDef {
     sim::Mag storageMass{};
     sim::Mag storageEnergy{};
 
+    /// What this unit's WRECK is worth: `BuildCost* × Wreckage.*Mult`, computed at parse
+    /// time so the sim never multiplies a float (`Unit.lua:1769-1770`). Measured across the
+    /// corpus: 504 of 568 blueprints state a Wreckage table and every one says
+    /// `MassMult = 0.9, EnergyMult = 0` — and the 64 without one (the ACUs, the walls)
+    /// leave nothing to reclaim, which is why the default is zero rather than 0.9
+    /// (`Unit.lua:1762-1765` makes no wreck at all for them).
+    ///
+    /// Deliberately NOT applied here: FAF's tech-tier discount (0.9/0.8/0.7/0.6,
+    /// `Unit.lua:1776-1792`, a FAF addition rather than retail), the submerged 0.6, and the
+    /// overkill/fraction-complete scaling — all need state the parse cannot see.
+    sim::Mag wreckMass{};
+    sim::Mag wreckEnergy{};
+
+    /// The value one point of a reclaimer's `BuildRate` recovers per second, as a ratio.
+    ///
+    /// `Prop.lua:270-287`: seconds = TimeReclaim × value / (10 × BuildRate), so the rate is
+    /// 10 / TimeReclaim — and a unit wreck's TimeReclaim is `ReclaimTimeMultiplier × 2`
+    /// (`Unit.lua:1771`, the global "reclaim is twice as slow" balance knob), which makes
+    /// this 5 for every wreck in the corpus. The 10 is FA's own tick rate, a constant of
+    /// the formula rather than of our clock.
+    sim::Fx reclaimPerBuildRate{};
+
+    /// How far this unit can build, repair and reclaim, in elmos.
+    /// `Economy.MaxBuildDistance` × 8 — only 10 of 568 blueprints state one (the ACUs say
+    /// 10, the UEF T1 engineer 5); everything else inherits the engine's default of 5
+    /// ogrids, which `blueprints-units.lua:250` spells out as the fallback.
+    float buildDistanceElmos = 40.0f;
+
     /// Whether this unit can build anything at all.
     [[nodiscard]] bool isBuilder() const noexcept { return buildRate > 0.0f; }
 
