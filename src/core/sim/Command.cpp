@@ -6,6 +6,7 @@
 #include "core/sim/UnitStore.hpp"
 
 #include "core/unit/BuildTree.hpp"
+#include "core/unit/Role.hpp"
 
 #include <algorithm>
 #include <fstream>
@@ -149,8 +150,11 @@ namespace {
     }
     const unitdef::UnitDef* assister = catalog.def(store.typeAt(command.unit.index));
     const unitdef::UnitDef* target = catalog.def(store.typeAt(command.target.index));
-    return assister != nullptr && assister->isBuilder() && target != nullptr
-        && target->isBuilder();
+    if (assister == nullptr || target == nullptr || !target->isBuilder()) {
+        return false;
+    }
+    const unitdef::Role role = unitdef::roleOf(*assister);
+    return role == unitdef::Role::Builder || role == unitdef::Role::Commander;
 }
 
 } // namespace

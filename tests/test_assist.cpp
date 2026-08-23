@@ -151,6 +151,30 @@ TEST_CASE("an assisted build advances at the combined rate, and drains for it") 
     CHECK(f.building[0].finished());
 }
 
+TEST_CASE("the final assisted tick charges only for the work still remaining") {
+    rm::sim::Economy economy;
+    economy.storage = {.mass = rm::sim::magFromFloat(1000.0f),
+                       .energy = rm::sim::magFromFloat(1000.0f)};
+    economy.stored = economy.storage;
+
+    std::vector<rm::sim::Construction> building{
+        rm::sim::Construction{
+            .cost = {.mass = rm::sim::magFromFloat(100.0f),
+                     .energy = rm::sim::magFromFloat(100.0f)},
+            .totalBuildTime = rm::sim::magFromFloat(100.0f),
+            .buildTimeRemaining = rm::sim::magFromFloat(1.0f),
+            .buildPerTick = rm::sim::magFromFloat(1.0f),
+            .assistPerTick = rm::sim::magFromFloat(2.0f),
+        },
+    };
+
+    rm::sim::tickEconomy(economy, building);
+
+    CHECK(building[0].finished());
+    CHECK(rm::test::asFloat(economy.stored.mass) == Approx(999.0f).margin(0.01));
+    CHECK(rm::test::asFloat(economy.stored.energy) == Approx(999.0f).margin(0.01));
+}
+
 TEST_CASE("a helper out of reach contributes nothing until it arrives") {
     Fixture f;
     const UnitId founder = f.roster.add(f.engineerType, 200.0f, 200.0f, 0, 100.0f);
@@ -268,9 +292,11 @@ TEST_CASE("an assist is a standing order: it waits through an idle queue and end
 TEST_CASE("assist requires two friendly builders that are not the same unit") {
     Fixture f;
     const UnitId engineer = f.roster.add(f.engineerType, 200.0f, 200.0f, 0, 100.0f);
+    const UnitId factory = f.roster.add(f.factoryType, 205.0f, 200.0f, 0, 100.0f);
     const UnitId tank = f.roster.add(f.tankType, 210.0f, 200.0f, 0, 100.0f);
     const UnitId theirs = f.roster.add(f.engineerType, 220.0f, 200.0f, 1, 100.0f);
 
+    CHECK_FALSE(f.assist(factory, engineer));
     CHECK_FALSE(f.assist(tank, engineer));
     CHECK_FALSE(f.assist(engineer, tank));
     CHECK_FALSE(f.assist(engineer, engineer));

@@ -8,7 +8,10 @@ Resources drainPerTick(const Construction& work) noexcept {
     // The EFFECTIVE rate — founder plus assisters — throughout: help makes the work drain
     // faster as well as finish sooner, which is what `BuildRate` means and why piling
     // engineers onto one build is a decision about the bank, not just the clock.
-    const Mag rate = work.effectiveBuildPerTick();
+    // The last tick can need less work than the builders offer. Charging the full rate
+    // there would bill for work that cannot happen after the remaining amount clamps to
+    // zero, so demand and progress share the same capped rate.
+    const Mag rate = std::min(work.effectiveBuildPerTick(), work.buildTimeRemaining);
     if (work.totalBuildTime <= Mag{} || rate <= Mag{}) {
         return Resources{};
     }
@@ -88,7 +91,8 @@ void tickEconomy(Economy& economy, std::span<Construction> building) {
         if (work.finished()) {
             continue;
         }
-        work.buildTimeRemaining -= work.effectiveBuildPerTick() * funded;
+        const Mag rate = std::min(work.effectiveBuildPerTick(), work.buildTimeRemaining);
+        work.buildTimeRemaining -= rate * funded;
         work.buildTimeRemaining = std::max(Mag{}, work.buildTimeRemaining);
     }
 }
