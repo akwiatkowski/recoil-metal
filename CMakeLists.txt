@@ -320,7 +320,7 @@ if(BUILD_TESTING)
         tests/test_build_order.cpp
         tests/test_combat.cpp
         tests/test_intel.cpp
-        tests/test_intel.cpp
+        tests/test_player_fog.cpp
         tests/test_economy.cpp
         tests/test_movement.cpp
         tests/test_picking.cpp

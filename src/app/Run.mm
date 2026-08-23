@@ -153,6 +153,58 @@ namespace {
     [[maybe_unused]] const float animationTime = (s).animationTime;                                              \
     [[maybe_unused]] const std::size_t propInstances = (s).propInstances;
 
+void appendVisibleWreckDecals(std::vector<rm::DecalVertex>& out, const UnitScene& units) {
+    for (std::size_t i = 0; i + 2 < units.wreckDecals.size(); i += 3) {
+        const rm::DecalVertex& first = units.wreckDecals[i];
+        if (units.visibleToViewer(rm::sim::fxFromFloat(first.position[0]),
+                                  rm::sim::fxFromFloat(first.position[2]))) {
+            out.insert(out.end(), units.wreckDecals.begin() + static_cast<std::ptrdiff_t>(i),
+                       units.wreckDecals.begin() + static_cast<std::ptrdiff_t>(i + 3));
+        }
+    }
+}
+
+void gatherVisibleProjectiles(std::vector<rm::sim::Projectile>& out, const UnitScene& units,
+                              float alpha = 0.0f) {
+    out.clear();
+    for (const rm::sim::Projectile& projectile : units.projectiles) {
+        const rm::sim::Fx x = rm::sim::fxFromFloat(
+            rm::sim::fxToFloat(projectile.position[0])
+            + rm::sim::fxToFloat(projectile.velocity[0]) * alpha);
+        const rm::sim::Fx z = rm::sim::fxFromFloat(
+            rm::sim::fxToFloat(projectile.position[2])
+            + rm::sim::fxToFloat(projectile.velocity[2]) * alpha);
+        if (units.visibleToViewer(x, z)) {
+            out.push_back(projectile);
+        }
+    }
+}
+
+void appendVisibleParticles(std::vector<rm::Particle>& out, std::span<const rm::Particle> source,
+                            const UnitScene& units) {
+    for (const rm::Particle& particle : source) {
+        if (units.visibleToViewer(rm::sim::fxFromFloat(particle.origin[0]),
+                                  rm::sim::fxFromFloat(particle.origin[2]))) {
+            out.push_back(particle);
+        }
+    }
+}
+
+void gatherVisibleEvents(std::vector<rm::sim::Event>& out, const UnitScene& units) {
+    out.clear();
+    units.refreshViewerContacts();
+    for (const rm::sim::Event& event : units.events.all()) {
+        const bool matchEvent = event.kind == rm::sim::EventKind::TeamDefeated
+                             || event.kind == rm::sim::EventKind::GameOver;
+        const bool alliedUnitEvent = event.kind != rm::sim::EventKind::ProjectileImpact
+                                  && units.alliedWithViewer(event.army);
+        if (matchEvent || alliedUnitEvent || units.visibleToViewer(event.unit)
+            || units.visibleToViewer(event.at[0], event.at[2])) {
+            out.push_back(event);
+        }
+    }
+}
+
 } // namespace
 
 int runOffscreenBenchmark(const Session& session) {
@@ -233,8 +285,8 @@ int runScreenshot(const Session& session) {
             // rest of this block used to be gated on `--select`, which meant a scorch mark
             // only appeared in a screenshot that also happened to be ringing units.
             std::vector<rm::sim::UnitId> capturedSelection;
-            std::vector<rm::DecalVertex> vertices{units.wreckDecals.begin(),
-                                                  units.wreckDecals.end()};
+            std::vector<rm::DecalVertex> vertices;
+            appendVisibleWreckDecals(vertices, units);
             {
                 const std::size_t rings = parseCount(argc, argv, "--select");
                 std::vector<rm::SelectionEntry> captured;
@@ -309,7 +361,8 @@ int runScreenshot(const Session& session) {
             // Filled AFTER the icon atlas below decides which types the strategic layer
             // draws — the squares are the fallback for the glyphless, and appending them
             // first would draw both.
-            std::vector<rm::Particle> shotParticles{marchDust.begin(), marchDust.end()};
+            std::vector<rm::Particle> shotParticles;
+            appendVisibleParticles(shotParticles, marchDust, units);
 
             // The HUD in a capture too. A screenshot is how this project verifies anything,
             // and an interface only visible in a live window cannot be checked at all.
@@ -374,11 +427,16 @@ int runScreenshot(const Session& session) {
             rm::app::appendStrategicIcons(hud, units, renderer.camera(),
                                           static_cast<float>(shot.width),
                                           static_cast<float>(shot.height), shotRefs);
+            rm::app::appendContactBlips(hud, units, renderer.camera(), map->field,
+                                        renderer.labelFont(), static_cast<float>(shot.width),
+                                        static_cast<float>(shot.height));
             appendSceneIcons(shotParticles, units, renderer.camera(), shotRefs);
             // The shots in flight at the captured tick — the reason a battle screenshot
             // finally shows the battle. No trails headless: the capture has no aging
             // particle list for them to fade through.
-            rm::appendProjectiles(shotParticles, units.projectiles, 0.0f,
+            std::vector<rm::sim::Projectile> shotProjectiles;
+            gatherVisibleProjectiles(shotProjectiles, units);
+            rm::appendProjectiles(shotParticles, shotProjectiles, 0.0f,
                                   renderer.camera().elmosPerPoint(
                                       rm::kIconReferenceHeightPoints));
             renderer.setParticles(shotParticles);
@@ -698,6 +756,8 @@ int runWindowed(const Session& session) {
         // the units are now.
         std::vector<rm::Particle> particles;
         std::vector<rm::DustEmitter> dustEmitters;
+        std::vector<rm::sim::Event> visibleEvents;
+        std::vector<rm::sim::Projectile> visibleProjectiles;
         float dustDebt = 0.0f;
         float ambientDebt = 0.0f;
         // A fixed seed, so a scene is the same every run: the same reason the unit
@@ -1122,6 +1182,9 @@ int runWindowed(const Session& session) {
                         continue;
                     }
                     const rm::sim::Feature& candidate = units.features.all()[slot];
+                    if (!units.visibleToViewer(candidate.at[0], candidate.at[2])) {
+                        continue;  // an unseen wreck cannot turn a blind move into an oracle
+                    }
                     if (candidate.massRemaining <= rm::sim::Mag{}
                         && candidate.energyRemaining <= rm::sim::Mag{}) {
                         continue;  // a bare scorch is not an order target
@@ -1276,19 +1339,21 @@ int runWindowed(const Session& session) {
                 // The tick's combat, as particles — read HERE because an event is a
                 // per-tick notification (Events.hpp): the next advanceMatch clears the
                 // queue, so this tick's shots are visible now or never.
-                rm::emitCombatEffects(particles, units.events.all());
+                gatherVisibleEvents(visibleEvents, units);
+                rm::emitCombatEffects(particles, visibleEvents);
 
                 // ...and as SOUND, from the same per-tick queue for the same reason. The
                 // listener rides the camera every tick, so panning follows the view.
                 mixer.setListener(window.camera().target.x, window.camera().target.z,
                                   window.camera().distance);
-                rm::audio::playForEvents(mixer, units.events.all(),
+                rm::audio::playForEvents(mixer, visibleEvents,
                                          explosionBank ? &*explosionBank : nullptr,
                                          impactBank ? &*impactBank : nullptr);
 
                 // ...and the arcs' smoke, one puff per shell per tick — the emission rate
                 // is the sim's own, so the trail spacing is a tick of travel (ProjectileFx).
-                rm::emitProjectileTrails(particles, units.projectiles);
+                gatherVisibleProjectiles(visibleProjectiles, units);
+                rm::emitProjectileTrails(particles, visibleProjectiles);
 
                 // The match, announced once. The frame loop draws the fight rather than
                 // narrating it, so this is the one thing worth saying out loud — and only
@@ -1349,6 +1414,9 @@ int runWindowed(const Session& session) {
                 if (!units.store.slotAlive(slot)) {
                     continue;  // a wreck does not kick up dust
                 }
+                if (!units.visibleToViewer(units.store.idAt(slot))) {
+                    continue;
+                }
                 const rm::sim::MoveState& motion = units.store.motion()[slot];
                 const rm::sim::Transform& at = units.store.transforms()[slot];
                 dustEmitters.push_back(rm::DustEmitter{
@@ -1375,14 +1443,16 @@ int runWindowed(const Session& session) {
             // camera-facing quad and that is what the particle pipeline already draws
             // (core/scene/UnitIcons.hpp). Built into a scratch copy so the icons do not
             // accumulate in the list the dust ages through.
-            iconScratch.assign(particles.begin(), particles.end());
+            iconScratch.clear();
+            appendVisibleParticles(iconScratch, particles, units);
             // With LAST pack's refs: the types the strategic layer draws keep their squares
             // out of the particle list. One frame after a fresh type appears, both tables
             // agree; in between it shows the square, which is the fallback anyway.
             appendSceneIcons(iconScratch, units, window.camera(), strategicRefs);
             // The shots in flight, extrapolated by the frame's tick fraction — rebuilt per
             // frame like the icons, into the same scratch, aging never.
-            rm::appendProjectiles(iconScratch, units.projectiles, clock.alpha(),
+            gatherVisibleProjectiles(visibleProjectiles, units, clock.alpha());
+            rm::appendProjectiles(iconScratch, visibleProjectiles, clock.alpha(),
                                   window.camera().elmosPerPoint(
                                       rm::kIconReferenceHeightPoints));
             window.setParticles(iconScratch);
@@ -1404,6 +1474,9 @@ int runWindowed(const Session& session) {
             appendStrategicIcons(hudScratch, units, window.camera(),
                                  static_cast<float>(window.width()),
                                  static_cast<float>(window.height()), strategicRefs);
+            appendContactBlips(hudScratch, units, window.camera(), map->field,
+                               window.labelFont(), static_cast<float>(window.width()),
+                               static_cast<float>(window.height()));
 
             // THE MINIMAP (§7 P7.4), appended to the same geometry the HUD builds — it is
             // rectangles in screen space, which is what `text::appendRect` already draws, so it
@@ -1647,7 +1720,8 @@ int runWindowed(const Session& session) {
             // WRECKS FIRST, so the rings and markers a player is reading sit on top of the
             // scorch rather than under it. They are copied in rather than rebuilt: a wreck
             // is permanent and there is nothing to recompute.
-            decalVertices.assign(units.wreckDecals.begin(), units.wreckDecals.end());
+            decalVertices.clear();
+            appendVisibleWreckDecals(decalVertices, units);
             // Dead selections draw nothing rather than being pruned here: a frame is not
             // where a selection changes, and a ring under a wreck is the bug this avoids.
             for (const rm::sim::UnitId sel : selected) {

@@ -797,6 +797,7 @@ private:
     // single-channel coverage rather than colour, so one texture serves text of any colour.
     MTL::RenderPipelineState* textPipeline_ = nullptr;  // owned
     MTL::RenderPipelineState* imagePipeline_ = nullptr; // owned
+    MTL::RenderPipelineState* minimapFogPipeline_ = nullptr; // owned
     MTL::SamplerState* fontSampler_ = nullptr;          // owned
 
     // The map's own thumbnail, drawn under the minimap panel. Uploaded once, not per frame.

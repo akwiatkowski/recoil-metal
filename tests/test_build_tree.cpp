@@ -253,6 +253,7 @@ TEST_CASE("a real T1 engineer builds its own faction's economy and nothing of an
     CHECK(canBuild("UEB1103"));  // UEF T1 mass extractor
     CHECK(canBuild("UEB1101"));  // UEF T1 power generator
     CHECK(canBuild("UEB0101"));  // UEF T1 land factory
+    CHECK(canBuild("UEB3101"));  // UEF T1 radar: fog ships with the tool that answers it
 
     // And nothing of another faction's. This is the assertion that catches an expression
     // parsed as OR when it means AND: drop the faction tag and a UEF engineer builds the whole
@@ -260,6 +261,7 @@ TEST_CASE("a real T1 engineer builds its own faction's economy and nothing of an
     CHECK_FALSE(canBuild("URB1103"));  // Cybran mex
     CHECK_FALSE(canBuild("UAB1103"));  // Aeon mex
     CHECK_FALSE(canBuild("XSB1103"));  // Seraphim mex
+    CHECK_FALSE(canBuild("URB3101"));  // Cybran radar
 
     // Every option is UEF, checked over the whole set rather than three spot cases.
     for (const std::size_t option : options) {

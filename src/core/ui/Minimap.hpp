@@ -29,10 +29,8 @@ namespace rm::ui {
 // PICTURE is the renderer's (`Renderer::setMinimapImage`, one quad, drawn first), the PANEL is
 // this file's, and the panel stops filling its own interior so the picture shows through it.
 //
-// WHAT IT STILL DOES NOT DO, so the gap is stated rather than discovered: no fog of war over the
-// preview — the thumbnail is the whole map as the editor baked it, including ground no player
-// has seen — and no drag. Click to jump, which is the one interaction that pays for itself
-// immediately, and which §7's manual check names.
+// The renderer puts its existing R8 vision mask over the preview, so terrain and minimap share
+// one fog answer. Drag is still absent; click to jump is the interaction that pays immediately.
 
 /// Where the minimap sits, in points.
 ///

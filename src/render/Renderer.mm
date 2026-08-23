@@ -112,6 +112,8 @@ Renderer::Renderer(CA::MetalLayer* layer)
     // full-colour image instead of a coverage mask. See `imageFragment`.
     imagePipeline_ = makePipeline(device_, library, "textVertex", "imageFragment",
                                   /*blend=*/true);
+    minimapFogPipeline_ = makePipeline(device_, library, "textVertex", "minimapFogFragment",
+                                       /*blend=*/true);
 
     decalPipeline_ = makePipeline(device_, library, "decalVertex", "decalFragment",
                                  /*blend=*/true);
@@ -423,6 +425,7 @@ Renderer::~Renderer() {
     if (decalDepthState_ != nullptr) decalDepthState_->release();
     if (textPipeline_ != nullptr) textPipeline_->release();
     if (imagePipeline_ != nullptr) imagePipeline_->release();
+    if (minimapFogPipeline_ != nullptr) minimapFogPipeline_->release();
     if (minimapTexture_ != nullptr) minimapTexture_->release();
     if (iconAtlas_ != nullptr) iconAtlas_->release();
     if (labelFont_.atlas != nullptr) labelFont_.atlas->release();
@@ -1411,6 +1414,14 @@ void Renderer::encodeScene(MTL::CommandBuffer* commandBuffer, MTL::RenderPassDes
             encoder->setFragmentTexture(minimapTexture_, NS::UInteger{0});
             encoder->drawPrimitives(MTL::PrimitiveType::PrimitiveTypeTriangle, NS::UInteger{0},
                                     NS::UInteger{6});
+            if (hasFog_ && fogTexture_ != nullptr && minimapFogPipeline_ != nullptr) {
+                // The same current-vision mask as the terrain, over the map's thumbnail.
+                // One texture makes the corner map and battlefield incapable of disagreeing.
+                encoder->setRenderPipelineState(minimapFogPipeline_);
+                encoder->setFragmentTexture(fogTexture_, NS::UInteger{0});
+                encoder->drawPrimitives(MTL::PrimitiveType::PrimitiveTypeTriangle,
+                                        NS::UInteger{0}, NS::UInteger{6});
+            }
             encoder->setRenderPipelineState(textPipeline_);
         }
 

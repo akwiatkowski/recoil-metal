@@ -153,8 +153,14 @@ void buildStrategicIconRefs(const UnitScene& scene, std::size_t base,
 /// `appendSceneIcons`' squares, which is the honest fallback for the 18 nameless blueprints
 /// and every BAR unit.
 void appendStrategicIcons(rm::ui::Geometry& out, const UnitScene& scene,
-                          const rm::OrbitCamera& camera, float width, float height,
-                          std::span<const std::optional<StrategicIconRef>> refs);
+                           const rm::OrbitCamera& camera, float width, float height,
+                           std::span<const std::optional<StrategicIconRef>> refs);
+
+/// Anonymous world-space crosses at radar/sonar-reported positions. They deliberately use
+/// only `Contact::x/z`: no type, owner, health, or true position crosses the fog boundary.
+void appendContactBlips(rm::ui::Geometry& out, const UnitScene& scene,
+                        const rm::OrbitCamera& camera, const rm::HeightField& field,
+                        const rm::text::Font& font, float width, float height);
 
 /// `refs`, when given, names the types the strategic layer already drew — their units are
 /// skipped here rather than drawn twice, once as artwork and once as a square.

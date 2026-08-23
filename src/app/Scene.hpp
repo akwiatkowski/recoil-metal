@@ -120,6 +120,7 @@ struct UnitScene {
     /// which is what turns a 10 Hz sim into continuous motion on a 120 Hz screen.
     rm::sim::Snapshot snapshotPrevious;
     rm::sim::Snapshot snapshotCurrent;
+    std::uint64_t snapshotRevision = 0;
 
     /// Where each unit is being DRAWN this frame — interpolated, float, derived, never read
     /// back. Kept between frames so the steady state allocates nothing.
@@ -217,6 +218,13 @@ struct UnitScene {
     /// Mutable because building the display out of a const scene is what every other draw
     /// path here does.
     mutable std::vector<rm::sim::Contact> contactScratch;
+
+    /// Generation of the `Seen` contact occupying each unit slot, or zero when the viewer
+    /// knows only a blip (or nothing). Rebuilt with `contactScratch`: indexing avoids an
+    /// O(units x contacts) scan while the draw gather walks every snapshot entry.
+    mutable std::vector<rm::Generation> seenContactGenerations;
+    mutable std::optional<std::uint64_t> contactRevision;
+    mutable int contactViewer = kNoAlliance;
 
     /// One economy per army, indexed by army. Empty outside a skirmish.
     std::vector<rm::sim::Economy> economies;
@@ -377,6 +385,7 @@ struct UnitScene {
     void publish(rm::TickIndex tick) {
         std::swap(snapshotPrevious, snapshotCurrent);
         rm::sim::snapshotInto(store, tick, snapshotCurrent);
+        ++snapshotRevision;
     }
 
     /// Refills `drawScratch` and `drawIndexOf` from the store.
@@ -413,23 +422,53 @@ struct UnitScene {
         return army < armies.size() ? armies[army].alliance : kNoAlliance;
     }
 
-    /// Whether the viewer's side may see a unit at this drawn position.
-    ///
-    /// TAKES THE DRAWN POSITION, not the sim's, because that is where the player is looking:
-    /// a unit interpolated a few elmos ahead of its last tick should appear and disappear
-    /// against the ground it appears to be on. The difference is under one square at any
-    /// speed this engine moves things at.
-    [[nodiscard]] bool visibleToViewer(int viewer, int owner, float worldX,
-                                       float worldZ) const noexcept {
+    /// Rebuilds the presentation's exact-unit visibility from the sim's contact authority.
+    /// A radar/sonar contact remains in `contactScratch` for anonymous blip drawing, but does
+    /// not enter `seenContactGenerations` and therefore cannot leak a mesh, team or health.
+    void refreshViewerContacts() const {
+        const int viewer = viewingAlliance();
+        if (contactRevision == snapshotRevision && contactViewer == viewer) {
+            return;
+        }
+        contactRevision = snapshotRevision;
+        contactViewer = viewer;
+        contactScratch.clear();
+        seenContactGenerations.assign(store.slotCount(), rm::Generation{0});
         if (viewer == kNoAlliance) {
+            return;
+        }
+        rm::sim::contactsFor(viewer, store, catalog, armies, intel, snapshotCurrent.tick,
+                             contactScratch);
+        for (const rm::sim::Contact& contact : contactScratch) {
+            if (contact.kind == rm::sim::ContactKind::Seen
+                && contact.unit.index < seenContactGenerations.size()) {
+                seenContactGenerations[contact.unit.index] = contact.unit.generation;
+            }
+        }
+    }
+
+    /// Whether the viewer's contact table identifies this exact generation as seen.
+    [[nodiscard]] bool visibleToViewer(rm::sim::UnitId unit) const {
+        refreshViewerContacts();
+        if (viewingAlliance() == kNoAlliance) {
             return true;
         }
-        if (owner >= 0 && static_cast<std::size_t>(owner) < armies.size()
-            && armies[static_cast<std::size_t>(owner)].alliance == viewer) {
-            return true;  // your own side, wherever it has got to
-        }
-        return intel.sees(viewer, rm::sim::IntelKind::Vision, rm::sim::fxFromFloat(worldX),
-                          rm::sim::fxFromFloat(worldZ));
+        return unit.generation != 0 && unit.index < seenContactGenerations.size()
+            && seenContactGenerations[unit.index] == unit.generation;
+    }
+
+    /// Whether a point event or projectile is inside the viewer's current sight.
+    [[nodiscard]] bool visibleToViewer(rm::sim::Fx x, rm::sim::Fx z) const noexcept {
+        const int viewer = viewingAlliance();
+        return viewer == kNoAlliance || intel.sees(viewer, rm::sim::IntelKind::Vision, x, z);
+    }
+
+    /// Own and allied notifications are always known, even for a zero-vision unit.
+    [[nodiscard]] bool alliedWithViewer(int army) const noexcept {
+        const int viewer = viewingAlliance();
+        return viewer == kNoAlliance
+            || (army >= 0 && static_cast<std::size_t>(army) < armies.size()
+                && armies[static_cast<std::size_t>(army)].alliance == viewer);
     }
 
     /// Hands the viewer's vision grid to whatever draws this scene.
@@ -477,7 +516,7 @@ struct UnitScene {
         }
         drawIndexOf.assign(store.slotCount(), rm::SelectionEntry{});
 
-        const int viewer = viewingAlliance();
+        refreshViewerContacts();
 
         for (const rm::DrawUnit& unit : drawUnits) {
             // FOG OF WAR (ADR-037). A unit the viewer's side cannot see is not drawn at all —
@@ -485,7 +524,7 @@ struct UnitScene {
             // which is what picking reads, so an invisible unit cannot be clicked either;
             // that is the same rule the gather already applied to the dead, and getting it
             // wrong would leak positions through the cursor rather than through the screen.
-            if (!visibleToViewer(viewer, unit.armyIndex, unit.position[0], unit.position[2])) {
+            if (!visibleToViewer(unit.id)) {
                 continue;
             }
 

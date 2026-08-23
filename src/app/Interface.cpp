@@ -25,16 +25,12 @@ constexpr rm::ui::Colour kBlipColour{0.85f, 0.85f, 0.55f, 0.75f};
 /// the player something radar did not say. Whose it is, and what it is, are exactly the two
 /// facts a contact withholds (`sim::Contact`).
 void appendMinimapBlips(std::vector<rm::ui::MinimapPip>& out, const UnitScene& scene) {
-    std::vector<rm::sim::Contact>& scratch = scene.contactScratch;
     const int viewer = scene.viewingAlliance();
     if (viewer == UnitScene::kNoAlliance) {
         return;  // an observer sees units, not guesses about them
     }
 
-    rm::sim::contactsFor(viewer, scene.store, scene.catalog, scene.armies, scene.intel,
-                         scene.snapshotCurrent.tick, scratch);
-
-    for (const rm::sim::Contact& contact : scratch) {
+    for (const rm::sim::Contact& contact : scene.contactScratch) {
         if (!contact.isBlip()) {
             continue;  // already plotted, in its own colour, where it really is
         }
@@ -55,7 +51,7 @@ void appendMinimapPips(std::vector<rm::ui::MinimapPip>& out, const UnitScene& sc
     out.clear();
     out.reserve(scene.snapshotCurrent.size());
 
-    const int viewer = scene.viewingAlliance();
+    scene.refreshViewerContacts();
 
     for (const rm::sim::UnitView& unit : scene.snapshotCurrent.units) {
         const int owner = unit.armyIndex;
@@ -65,7 +61,7 @@ void appendMinimapPips(std::vector<rm::ui::MinimapPip>& out, const UnitScene& sc
         // WHAT THE MINIMAP SHOWS IS WHAT THE SCREEN SHOWS. A minimap that plotted every unit
         // would make the fog decorative: a player could read the enemy's whole position off
         // the corner of the display and never look at the map.
-        if (!scene.visibleToViewer(viewer, owner, worldX, worldZ)) {
+        if (!scene.visibleToViewer(unit.id)) {
             continue;
         }
 
@@ -237,8 +233,12 @@ void gatherBuildOptions(const UnitScene& scene, std::span<const rm::sim::UnitId>
     state.armiesTotal = scene.armies.size();
     state.armiesLeft = rm::sim::survivorCount(scene.armies);
 
-    for (const rm::sim::Health& one : scene.store.health()) {
-        if (one.alive()) {
+    const std::span<const rm::sim::MoveState> motion = scene.store.motion();
+    const std::span<const rm::sim::Health> health = scene.store.health();
+    for (std::size_t slot = 0; slot < health.size(); ++slot) {
+        if (health[slot].alive()
+            && (scene.playerArmy == rm::sim::kNoArmy
+                || (slot < motion.size() && motion[slot].armyIndex == scene.playerArmy))) {
             ++state.unitsAlive;
         }
     }
@@ -386,6 +386,34 @@ void appendStrategicIcons(rm::ui::Geometry& out, const UnitScene& scene,
             out.worldImage.push_back({{x1, y1}, {uv.u1, uv.v1}, tint});
             out.worldImage.push_back({{x0, y1}, {uv.u0, uv.v1}, tint});
         }
+    }
+}
+
+void appendContactBlips(rm::ui::Geometry& out, const UnitScene& scene,
+                        const rm::OrbitCamera& camera, const rm::HeightField& field,
+                        const rm::text::Font& font, float width, float height) {
+    if (!font.usable() || !(width > 0.0f) || !(height > 0.0f)) {
+        return;
+    }
+    scene.refreshViewerContacts();
+    constexpr float kRun = 9.0f;
+    constexpr float kStroke = 1.5f;
+    for (const rm::sim::Contact& contact : scene.contactScratch) {
+        if (!contact.isBlip()) {
+            continue;
+        }
+        const float x = rm::sim::fxToFloat(contact.x);
+        const float z = rm::sim::fxToFloat(contact.z);
+        const auto screen = rm::worldToScreen(
+            camera, simd_make_float3(x, field.heightAtWorld(x, z) + 2.0f, z), width, height);
+        if (!screen) {
+            continue;
+        }
+        // A plus, not a unit glyph: it says "a sensor return is near here" and nothing more.
+        rm::text::appendRect(out.label, font, (*screen)[0] - kRun * 0.5f,
+                             (*screen)[1] - kStroke * 0.5f, kRun, kStroke, kBlipColour);
+        rm::text::appendRect(out.label, font, (*screen)[0] - kStroke * 0.5f,
+                             (*screen)[1] - kRun * 0.5f, kStroke, kRun, kBlipColour);
     }
 }
 
