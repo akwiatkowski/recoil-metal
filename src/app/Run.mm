@@ -8,6 +8,7 @@
 #import <AppKit/AppKit.h>
 #import <ImageIO/ImageIO.h>
 
+#include "core/sim/Adjacency.hpp"
 #include "core/sim/Replay.hpp"
 #include "core/sim/StateHash.hpp"
 
@@ -1735,6 +1736,48 @@ int runWindowed(const Session& session) {
                     rm::appendSelectionRing(decalVertices, map->field, {at->x, at->y, at->z},
                                             armedRadius() * kSelectionRingMargin,
                                             ok ? kBuildGhostColour : kBuildGhostBlockedColour);
+
+                    // THE ADJACENCY PREVIEW: a link line from the ghost to every standing
+                    // structure whose skirt the armed one would touch here — the bonus
+                    // shown BEFORE the mass is spent, because a bonus the player cannot
+                    // see at placement time is a mechanic that does not exist
+                    // (`core/sim/Adjacency.hpp`). Drawn whenever the skirts would touch,
+                    // like the game's own preview, which links every touching structure
+                    // without asking whether a buff lands (`gamemain.lua:916-920`).
+                    if (const std::optional<rm::UnitTypeIndex> armedType =
+                            armedPath().empty()
+                                ? std::nullopt
+                                : resolveBuildable(units, content, armedPath())) {
+                        const rm::sim::UnitCatalog::AdjacencyInfo& mine =
+                            units.catalog.adjacency(*armedType);
+                        if (mine.participates()) {
+                            for (rm::UnitIndex slot = 0; slot < units.store.slotCount();
+                                 ++slot) {
+                                if (!units.store.slotAlive(slot)
+                                    || units.armyOf(slot) != units.playerArmy) {
+                                    continue;
+                                }
+                                const rm::sim::UnitCatalog::AdjacencyInfo& theirs =
+                                    units.catalog.adjacency(units.store.typeAt(slot));
+                                if (!theirs.participates()) {
+                                    continue;
+                                }
+                                const rm::sim::Transform& t =
+                                    units.store.transforms()[slot];
+                                if (!rm::sim::skirtsShareEdge(
+                                        rm::sim::fxFromFloat(at->x),
+                                        rm::sim::fxFromFloat(at->z), mine.skirtHalfXElmos,
+                                        mine.skirtHalfZElmos, t.x, t.z,
+                                        theirs.skirtHalfXElmos, theirs.skirtHalfZElmos)) {
+                                    continue;
+                                }
+                                rm::appendGroundSegment(
+                                    decalVertices, map->field, {at->x, at->z},
+                                    {rm::sim::fxToFloat(t.x), rm::sim::fxToFloat(t.z)},
+                                    kBuildGhostColour, 1.5f);
+                            }
+                        }
+                    }
 
                     // THE SILHOUETTE over the ring: the armed blueprint's own model at the
                     // cursor, in the same two colours the ring speaks. The ring stays — it

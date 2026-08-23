@@ -273,6 +273,20 @@ struct UnitDef {
     /// ogrids, which `blueprints-units.lua:250` spells out as the fallback.
     float buildDistanceElmos = 40.0f;
 
+    // --- adjacency ---------------------------------------------------------
+
+    /// The SKIRT — the concrete apron around a structure, in ogrids (`Physics.SkirtSize*`).
+    /// Adjacency is decided skirt-to-skirt, not footprint-to-footprint: the game snaps
+    /// structures to abutting skirts, and the buff tables key on the contact. Zero for
+    /// everything mobile and for structures that state none.
+    float skirtSquaresX = 0.0f;
+    float skirtSquaresZ = 0.0f;
+
+    /// Which adjacency buff table this structure GRANTS to its neighbours — the root
+    /// `Adjacency` field, e.g. `T1PowerGeneratorAdjacencyBuffs`. Empty for the many
+    /// structures that grant nothing (factories receive; they do not give).
+    std::string adjacencyBuffs;
+
     /// Whether this unit can build anything at all.
     [[nodiscard]] bool isBuilder() const noexcept { return buildRate > 0.0f; }
 

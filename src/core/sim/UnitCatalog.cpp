@@ -1,8 +1,35 @@
 #include "core/sim/UnitCatalog.hpp"
 
+#include "core/map/Scmap.hpp"
+
+#include <algorithm>
+#include <cstdlib>
 #include <utility>
 
 namespace rm::sim {
+namespace {
+
+/// The receiver-size row for a definition: the authored `SIZE<n>` category when stated,
+/// else `SkirtSizeX + SkirtSizeZ` rounded to the nearest step — the same arithmetic the
+/// corpus's own authoring follows (a 2×2 skirt is SIZE4, the factory's 8×8 is SIZE16;
+/// the one hand-authored outlier, UEB0103's 12×14 skirt marked SIZE16, is why the
+/// category wins when present).
+[[nodiscard]] std::uint8_t adjacencySizeIndex(const unitdef::UnitDef& def) noexcept {
+    static constexpr std::string_view kSizes[] = {"SIZE4", "SIZE8", "SIZE12", "SIZE16",
+                                                  "SIZE20"};
+    for (std::size_t i = 0; i < std::size(kSizes); ++i) {
+        for (const std::string& category : def.categories) {
+            if (category == kSizes[i]) {
+                return static_cast<std::uint8_t>(i);
+            }
+        }
+    }
+    const float sum = def.skirtSquaresX + def.skirtSquaresZ;
+    const auto step = static_cast<int>((sum + 2.0f) / 4.0f);  // nearest of 4,8,12,16,20
+    return static_cast<std::uint8_t>(std::clamp(step - 1, 0, 4));
+}
+
+} // namespace
 
 UnitTypeIndex UnitCatalog::add(const unitdef::UnitDef* def, TickRate rate) {
     const auto type = static_cast<UnitTypeIndex>(defs_.size());
@@ -20,6 +47,27 @@ UnitTypeIndex UnitCatalog::add(const unitdef::UnitDef* def, TickRate rate) {
         derived.buildReachElmos = fxFromFloat(def->buildDistanceElmos);
     }
     rates_.push_back(derived);
+
+    // Adjacency, out of the content's floats once (same boundary as everything above).
+    // Mobile units and skirtless structures get the zero entry, which is also what keeps
+    // them out of the pair scan.
+    AdjacencyInfo adjacency{};
+    if (def != nullptr && def->skirtSquaresX > 0.0f && def->skirtSquaresZ > 0.0f
+        && !def->isMobile()) {
+        adjacency.skirtHalfXElmos =
+            fxFromFloat(0.5f * def->skirtSquaresX * scmap::kElmosPerOgrid);
+        adjacency.skirtHalfZElmos =
+            fxFromFloat(0.5f * def->skirtSquaresZ * scmap::kElmosPerOgrid);
+        adjacency.sizeIndex = adjacencySizeIndex(*def);
+        const unitdef::AdjacencyGrants& grants = unitdef::adjacencyGrants(
+            unitdef::adjacencyClassFromName(def->adjacencyBuffs));
+        for (std::size_t i = 0; i < unitdef::kAdjacencySizeSteps; ++i) {
+            adjacency.givesMassProduction[i] = fxFromFloat(grants.massProduction[i]);
+            adjacency.givesEnergyProduction[i] = fxFromFloat(grants.energyProduction[i]);
+            adjacency.givesEnergyUpkeep[i] = fxFromFloat(grants.energyMaintenance[i]);
+        }
+    }
+    adjacency_.push_back(adjacency);
 
     // The intel radii, converted out of the content's floats once (ADR-037). Same reason
     // the economy's rates are derived here: the alternative is a float conversion per

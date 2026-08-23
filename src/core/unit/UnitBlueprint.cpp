@@ -237,6 +237,15 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
     def.maxSlopeDegrees = limits.maxSlopeDegrees;
     def.maxWaterDepthElmos = limits.maxWaterDepthElmos;
 
+    // The skirt — the concrete apron adjacency is decided across. In ogrids, at the
+    // file's stated size; kept as authored because the adjacency test wants halves and
+    // converting to elmos here would hide which quantity this is.
+    def.skirtSquaresX = numberOr(*physics, "SkirtSizeX", 0.0f);
+    def.skirtSquaresZ = numberOr(*physics, "SkirtSizeZ", 0.0f);
+
+    // Which buff table this structure grants its neighbours (`Adjacency`, root level).
+    def.adjacencyBuffs = std::string{parsed->stringAt("Adjacency").value_or("")};
+
     // --- intel -------------------------------------------------------------
     //
     // Ogrids to elmos, the same x8 as every other distance here. The block is absent on

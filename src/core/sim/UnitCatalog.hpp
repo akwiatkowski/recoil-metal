@@ -3,6 +3,7 @@
 #include "core/Types.hpp"
 #include "core/sim/Fx.hpp"
 #include "core/sim/TickRate.hpp"
+#include "core/unit/Adjacency.hpp"
 #include "core/unit/Armor.hpp"
 #include "core/unit/UnitDef.hpp"
 
@@ -85,6 +86,40 @@ public:
         Fx jamRadius{};
         int jammerBlips = 0;
     };
+
+    /// One type's place in the adjacency game (`core/unit/Adjacency.hpp`), in the types
+    /// the sim can do arithmetic in. Derived here for the same reason the rates are.
+    struct AdjacencyInfo {
+        /// Half the skirt, in elmos — the concrete apron adjacency is decided across.
+        /// Zero for everything mobile, which is also what excludes it from the pair scan.
+        Fx skirtHalfXElmos{};
+        Fx skirtHalfZElmos{};
+
+        /// The receiver-size row, 0..4 for SIZE4..SIZE20. From the authored `SIZE<n>`
+        /// category when one is stated; derived as `SkirtSizeX + SkirtSizeZ` rounded to
+        /// the nearest step otherwise — which is exactly how the corpus authors it (a
+        /// 2×2 skirt is SIZE4, the factory's 8×8 is SIZE16).
+        std::uint8_t sizeIndex = 0;
+
+        /// What standing beside this type ADDS to a neighbour, indexed by the
+        /// NEIGHBOUR's `sizeIndex`. Already fixed point; already per the giver's table.
+        std::array<Fx, unitdef::kAdjacencySizeSteps> givesMassProduction{};
+        std::array<Fx, unitdef::kAdjacencySizeSteps> givesEnergyProduction{};
+        std::array<Fx, unitdef::kAdjacencySizeSteps> givesEnergyUpkeep{};
+
+        /// Whether this type sits in the adjacency game at all — a structure with a
+        /// skirt. The pair scan skips everything else without touching the arrays.
+        [[nodiscard]] bool participates() const noexcept {
+            return skirtHalfXElmos > Fx{} && skirtHalfZElmos > Fx{};
+        }
+    };
+
+    /// One type's adjacency data. Zeroes for an unregistered index or a type with no
+    /// definition — a decorative crowd neither gives nor receives.
+    [[nodiscard]] const AdjacencyInfo& adjacency(UnitTypeIndex type) const noexcept {
+        static constexpr AdjacencyInfo kNoAdjacency{};
+        return type < adjacency_.size() ? adjacency_[type] : kNoAdjacency;
+    }
 
     /// What one WEAPON's authored rates come to per tick.
     ///
@@ -231,6 +266,7 @@ private:
     std::vector<std::vector<WeaponRates>> weapons_;
     std::vector<ArmorClass> armor_;
     std::vector<IntelRadii> intel_;
+    std::vector<AdjacencyInfo> adjacency_;
 
     /// The content's armour classes and Supreme Commander's multiplier table. Both empty of
     /// anything but `default` until `setArmor` — see the note there.

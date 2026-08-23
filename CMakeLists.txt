@@ -163,6 +163,7 @@ add_library(rm_core STATIC
     src/core/sim/Army.cpp
     src/core/sim/Command.cpp
     src/core/sim/Events.cpp
+    src/core/sim/Adjacency.cpp
     src/core/sim/FeatureStore.cpp
     src/core/sim/Reclaim.cpp
     src/core/sim/CommandQueue.cpp
@@ -189,6 +190,7 @@ add_library(rm_core STATIC
     src/core/sim/SpatialGrid.cpp
     src/core/sim/Snapshot.cpp
     src/core/sim/Replay.cpp
+    src/core/unit/Adjacency.cpp
     src/core/unit/UnitBlueprint.cpp
     src/core/unit/Weapon.cpp
     src/core/unit/Armor.cpp
@@ -312,6 +314,7 @@ if(BUILD_TESTING)
         tests/test_features.cpp
         tests/test_reclaim.cpp
         tests/test_overcharge.cpp
+        tests/test_adjacency.cpp
         tests/test_snapshot.cpp
         tests/test_interpolate.cpp
         tests/test_build_order.cpp

@@ -1,5 +1,6 @@
 #include "core/sim/Skirmish.hpp"
 
+#include "core/sim/Adjacency.hpp"
 #include "core/sim/Reclaim.hpp"
 
 namespace rm::sim {
@@ -107,6 +108,13 @@ void recomputeIncome(const UnitStore& store, const UnitCatalog& catalog, Match& 
         .energy = rate.magPerTick(kCommanderTrickleEnergyPerSecond),
     };
 
+    // Who stands beside whom, this tick (`core/sim/Adjacency.hpp`): a storage feeding the
+    // extractor it touches, a generator discounting its neighbours' upkeep. Derived state,
+    // recomputed like the income itself — a structure that died in step 3 takes its
+    // bonuses with it in the same tick its production stops.
+    std::vector<AdjacencyEffects> adjacency;
+    adjacencyEffects(store, catalog, adjacency);
+
     for (Economy& economy : match.economies) {
         economy.incomePerTick = {};
         economy.upkeepPerTick = {};
@@ -146,9 +154,12 @@ void recomputeIncome(const UnitStore& store, const UnitCatalog& catalog, Match& 
             economy.incomePerTick.mass += trickle.mass;
             economy.incomePerTick.energy += trickle.energy;
         } else {
-            economy.incomePerTick.mass += rates.massPerTick;
-            economy.incomePerTick.energy += rates.energyPerTick;
-            economy.upkeepPerTick.energy += rates.upkeepEnergyPerTick;
+            // Production and upkeep through this unit's adjacency multipliers — one for
+            // the unbuffed, which is everything that stands alone.
+            const AdjacencyEffects& beside = adjacency[slot];
+            economy.incomePerTick.mass += rates.massPerTick * beside.massProduction;
+            economy.incomePerTick.energy += rates.energyPerTick * beside.energyProduction;
+            economy.upkeepPerTick.energy += rates.upkeepEnergyPerTick * beside.energyUpkeep;
             economy.storage.mass += def->storageMass;
             economy.storage.energy += def->storageEnergy;
         }
