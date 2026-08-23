@@ -274,6 +274,10 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
         match.intel->update(store, catalog, match.armies, &terrain);
     }
 
+    // Recovery precedes fire: a bubble whose timer reaches zero can intercept this tick,
+    // while a hit later in the tick restarts its authored delay.
+    tickShields(store, catalog, match.events);
+
     // Attack-move and patrol acquire only from the post-movement, post-intel world. Their
     // temporary target then feeds the ordinary aiming and firing passes below.
     updateAggressiveOrders(store, catalog, match.armies, terrain, match.passability, rate,

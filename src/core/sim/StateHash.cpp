@@ -121,6 +121,14 @@ void feedMotion(StateHash& h, const MoveState& motion) noexcept {
 void feedHealth(StateHash& h, const Health& health) noexcept {
     feed(h, health.current);
     feed(h, health.maximum);
+    // Preserve every historical unshielded hash while covering all new execution state.
+    if (health.shield.maximum > Mag{}) {
+        feed(h, true);
+        feed(h, health.shield.current);
+        feed(h, health.shield.maximum);
+        feed(h, static_cast<std::size_t>(health.shield.regenDelayRemaining));
+        feed(h, static_cast<std::size_t>(health.shield.rechargeRemaining));
+    }
     feed(h, health.reloadRemaining.size());
     for (const int remaining : health.reloadRemaining) {
         feed(h, remaining);

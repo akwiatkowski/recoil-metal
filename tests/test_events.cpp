@@ -269,11 +269,13 @@ TEST_CASE("a scene with no listener runs the same tick") {
 TEST_CASE("every kind has a name, and the names are distinct") {
     // The names are what `--print-events` shows and what a log would carry, so a duplicate or
     // a missing one is a silent loss of information rather than a compile error.
-    const std::array kinds{EventKind::UnitCreated,         EventKind::UnitFinished,
-                           EventKind::UnitDamaged,         EventKind::UnitDestroyed,
-                           EventKind::WeaponFired,         EventKind::ProjectileImpact,
-                           EventKind::ConstructionStarted, EventKind::ConstructionFinished,
-                           EventKind::TeamDefeated,        EventKind::GameOver};
+    const std::array kinds{EventKind::UnitCreated,          EventKind::UnitFinished,
+                            EventKind::UnitDamaged,          EventKind::UnitDestroyed,
+                            EventKind::WeaponFired,          EventKind::BeamFired,
+                            EventKind::ProjectileImpact,     EventKind::ShieldDamaged,
+                            EventKind::ShieldCollapsed,      EventKind::ShieldRestored,
+                            EventKind::ConstructionStarted,  EventKind::ConstructionFinished,
+                            EventKind::TeamDefeated,         EventKind::GameOver};
 
     std::vector<std::string_view> names;
     for (const EventKind kind : kinds) {
@@ -283,7 +285,7 @@ TEST_CASE("every kind has a name, and the names are distinct") {
     }
     std::sort(names.begin(), names.end());
     CHECK(std::adjacent_find(names.begin(), names.end()) == names.end());
-    CHECK(names.size() == 10);
+    CHECK(names.size() == 14);
 }
 
 // --- The frame boundary (§7 P10.7, REVIEW.md §5.7) --------------------------------------

@@ -20,6 +20,12 @@ std::string_view eventKindName(EventKind kind) noexcept {
         return "weapon-fired";
     case EventKind::ProjectileImpact:
         return "projectile-impact";
+    case EventKind::ShieldDamaged:
+        return "shield-damaged";
+    case EventKind::ShieldCollapsed:
+        return "shield-collapsed";
+    case EventKind::ShieldRestored:
+        return "shield-restored";
     case EventKind::ConstructionStarted:
         return "construction-started";
     case EventKind::ConstructionFinished:

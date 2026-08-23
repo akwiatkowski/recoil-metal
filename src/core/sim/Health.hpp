@@ -7,6 +7,17 @@
 
 namespace rm::sim {
 
+struct ShieldState {
+    Mag current{};
+    Mag maximum{};
+    TickCount regenDelayRemaining = 0;
+    TickCount rechargeRemaining = 0;
+
+    [[nodiscard]] bool active() const noexcept {
+        return maximum > Mag{} && current > Mag{} && rechargeRemaining == 0;
+    }
+};
+
 /// What a unit can still take. One per unit, parallel to the instances themselves —
 /// same reason MoveState is: UnitInstance's layout is pinned and read by the shader.
 ///
@@ -26,6 +37,7 @@ struct Health {
     /// on how the survivors happened to be arranged.
     Mag current{};
     Mag maximum{};
+    ShieldState shield;
 
     /// Ticks until this weapon may fire again, one entry per weapon on the unit.
     ///
@@ -59,5 +71,15 @@ struct Health {
 
     [[nodiscard]] bool alive() const noexcept { return current > Mag{}; }
 };
+
+/// Fresh unit survivability. Shield.lua starts ordinary bubbles full (`:206-215`).
+[[nodiscard]] inline Health initialHealth(Mag hull, Mag shield = {}) {
+    Health health;
+    health.current = hull;
+    health.maximum = hull;
+    health.shield.current = shield;
+    health.shield.maximum = shield;
+    return health;
+}
 
 } // namespace rm::sim

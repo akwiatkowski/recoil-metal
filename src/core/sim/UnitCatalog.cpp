@@ -89,6 +89,18 @@ UnitTypeIndex UnitCatalog::add(const unitdef::UnitDef* def, TickRate rate) {
     }
     intel_.push_back(intel);
 
+    ShieldInfo shield{};
+    if (def != nullptr && def->shield.exists()) {
+        shield.maximum = def->shield.maximum;
+        shield.radiusElmos = def->shield.radiusElmos;
+        shield.verticalOffsetElmos = def->shield.verticalOffsetElmos;
+        shield.regenPerTick = rate.magPerTick(def->shield.regenPerSecond);
+        shield.regenDelay = rate.ticks(def->shield.regenDelay);
+        shield.recharge = rate.ticks(def->shield.rechargeDelay);
+        largestShieldRadius_ = std::max(largestShieldRadius_, shield.radiusElmos);
+    }
+    shields_.push_back(shield);
+
     std::vector<WeaponRates> weapons;
     if (def != nullptr) {
         weapons.reserve(def->weapons.size());

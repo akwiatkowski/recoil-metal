@@ -29,6 +29,10 @@ namespace rm::data {
 //   taken. Both are recorded here so the ADR's numbers are reproducible rather than merely
 //   quoted, and neither is "the" answer: **the mounted content is.**
 //
+//   Those counts are authored hull classes. A successfully parsed table also registers the
+//   engine-owned `Shield` pseudo-class so damage profiles can distinguish bubble and hull damage;
+//   neither shipped table needs to duplicate it as a content block.
+//
 // WHAT THE MOUNTED RETAIL CORPUS ACTUALLY USES, measured over all 568 `*_unit.bp` in `units.scd`:
 // `Normal` 296, `Structure` 206, `Light` 56, `Experimental` 6, `Commander` 4 — five classes, and
 // every one of them is declared in the table above. No blueprint names a class the table omits,
@@ -51,7 +55,8 @@ namespace rm::data {
 // than `--`, which `core/lua` already accepts (`LuaTable.cpp:229-249`) because 209 mid-line `#`
 // comments appear across the shipped blueprints.
 
-/// A parsed armour table: the classes, and the exceptions to "full damage".
+/// A parsed armour table: authored classes plus the Shield pseudo-class, and exceptions to
+/// "full damage".
 ///
 /// TOGETHER, because they are useless apart — a multiplier names a class, so a row can only be
 /// resolved against the registry that numbered it. Returning them as one value is what stops a

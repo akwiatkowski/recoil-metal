@@ -36,6 +36,18 @@ TEST_CASE("an impact earns smoke that drifts and a spark that adds", "[effects]"
     CHECK(out[1].lifetime < out[0].lifetime);
 }
 
+TEST_CASE("shield absorption flashes blue at the intercepted impact", "[effects]") {
+    std::vector<rm::Particle> out;
+    const Event absorbed{.kind = EventKind::ShieldDamaged,
+                         .at = {rm::test::fx(64.0f), rm::test::fx(20.0f), rm::test::fx(96.0f)}};
+    rm::emitCombatEffects(out, {&absorbed, 1});
+
+    REQUIRE(out.size() == 1);
+    CHECK(out[0].origin == std::array{64.0f, 20.0f, 96.0f});
+    CHECK(out[0].colour[2] > out[0].colour[0]);
+    CHECK(out[0].colour[3] == 0.0f);
+}
+
 TEST_CASE("everything else earns nothing here", "[effects]") {
     std::vector<rm::Particle> out;
     const Event death{.kind = EventKind::UnitDestroyed};

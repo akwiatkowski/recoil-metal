@@ -61,6 +61,24 @@ namespace {
     return largest;
 }
 
+[[nodiscard]] unitdef::DamageProfile scaledDamage(const unitdef::DamageProfile& damage,
+                                                   Fx share) noexcept {
+    unitdef::DamageProfile scaled = damage;
+    scaled.base = damage.base * share;
+    for (std::uint8_t i = 0; i < damage.overrideCount; ++i) {
+        scaled.overrideDamage[i] = damage.overrideDamage[i] * share;
+    }
+    return scaled;
+}
+
+[[nodiscard]] Fx fraction(Mag numerator, Mag denominator) noexcept {
+    if (denominator <= Mag{}) {
+        return Fx{};
+    }
+    return Fx::fromRaw(saturate((FxWide{numerator.raw()} << kFxFractionalBits)
+                                / denominator.raw()));
+}
+
 /// The nearest hostile unit a shot has reached, or nothing.
 ///
 /// The tolerance is the TARGET's own size plus the shot's blast radius, so a big unit is
@@ -539,6 +557,46 @@ std::size_t fireOvercharge(UnitStore& store, const UnitCatalog& catalog,
     return fired;
 }
 
+void tickShields(UnitStore& store, const UnitCatalog& catalog, EventQueue* events) {
+    const std::span<Health> health = store.health();
+    for (UnitIndex slot = 0; slot < health.size(); ++slot) {
+        if (!store.slotAlive(slot) || !health[slot].alive()) {
+            continue;
+        }
+        ShieldState& state = health[slot].shield;
+        const UnitCatalog::ShieldInfo& shield = catalog.shield(store.typeAt(slot));
+        if (!shield.exists() || state.maximum <= Mag{}) {
+            continue;
+        }
+        if (state.rechargeRemaining > 0) {
+            --state.rechargeRemaining;
+            if (state.rechargeRemaining == 0) {
+                state.current = state.maximum;
+                emit(events, Event{.kind = EventKind::ShieldRestored,
+                                   .unit = store.idAt(slot),
+                                   .army = armyAt(store, slot),
+                                   .at = positionOf(store.transforms()[slot])});
+            }
+            continue;
+        }
+        if (state.current >= state.maximum) {
+            state.current = state.maximum;
+            continue;
+        }
+        if (state.regenDelayRemaining > 0) {
+            --state.regenDelayRemaining;
+            continue;
+        }
+        state.current = std::min(state.maximum, state.current + shield.regenPerTick);
+        if (state.current == state.maximum) {
+            emit(events, Event{.kind = EventKind::ShieldRestored,
+                               .unit = store.idAt(slot),
+                               .army = armyAt(store, slot),
+                               .at = positionOf(store.transforms()[slot])});
+        }
+    }
+}
+
 Projectile launch(std::array<Fx, 3> from, std::array<Fx, 3> to,
                   const unitdef::Weapon& weapon, int byArmy, TickRate rate, Fx muzzlePerTick,
                   const unitdef::DamageProfile& damage, UnitId firedBy) {
@@ -597,13 +655,13 @@ Projectile launch(std::array<Fx, 3> from, std::array<Fx, 3> to,
 
 Mag damageArea(std::array<Fx, 3> centre, Fx radiusElmos, Mag damage, int byArmy,
                UnitStore& store, std::span<const Army> armies, UnitId by,
-               EventQueue* events) {
+               EventQueue* events, const UnitCatalog* catalog) {
     // The scalar form, kept because it is what two dozen call sites mean — most of them tests
     // asserting the falloff curve, which is a property of the geometry and has nothing to say
     // about armour. A flat profile answers the same for every class, so this is not an
     // approximation of the call below: it is the same call with a table that has no entries.
     return damageArea(centre, radiusElmos, unitdef::flatDamage(damage), byArmy, store, armies,
-                      nullptr, by, events);
+                       catalog, by, events);
 }
 
 Mag damageArea(std::array<Fx, 3> centre, Fx radiusElmos, const unitdef::DamageProfile& damage,
@@ -615,6 +673,58 @@ Mag damageArea(std::array<Fx, 3> centre, Fx radiusElmos, const unitdef::DamagePr
     const std::span<const Transform> transforms = store.transforms();
     const std::span<const MoveState> motion = store.motion();
     const std::span<Health> healths = store.health();
+
+    unitdef::DamageProfile hullDamage = damage;
+    if (catalog != nullptr && catalog->largestShieldRadius() > Fx{}) {
+        for (const UnitIndex slot :
+             store.space().within(centre[0], centre[2], catalog->largestShieldRadius())) {
+            if (!shootable(byArmy, store, slot, armies) || slot >= healths.size()) {
+                continue;
+            }
+            Health& owner = healths[slot];
+            const UnitCatalog::ShieldInfo& shield = catalog->shield(store.typeAt(slot));
+            std::array<Fx, 3> shieldCentre = positionOf(transforms[slot]);
+            shieldCentre[1] += shield.verticalOffsetElmos;
+            const Fx dx = centre[0] - shieldCentre[0];
+            const Fx dy = centre[1] - shieldCentre[1];
+            const Fx dz = centre[2] - shieldCentre[2];
+            if (!shield.exists() || !owner.shield.active()
+                || fxSqrt(dx * dx + dy * dy + dz * dz) > shield.radiusElmos) {
+                continue;
+            }
+
+            const Mag incoming = hullDamage.against(catalog->armor().classFor("Shield"));
+            if (incoming <= Mag{}) {
+                break;
+            }
+            const Mag absorbed = std::min(owner.shield.current, incoming);
+            owner.shield.current -= absorbed;
+            owner.shield.regenDelayRemaining = shield.regenDelay;
+            dealt += absorbed;
+            emit(events, Event{.kind = EventKind::ShieldDamaged,
+                               .unit = store.idAt(slot),
+                               .instigator = by,
+                               .army = armyAt(store, slot),
+                               .amount = absorbed,
+                               .at = centre});
+
+            if (owner.shield.current <= Mag{}) {
+                owner.shield.current = Mag{};
+                owner.shield.regenDelayRemaining = 0;
+                owner.shield.rechargeRemaining = shield.recharge;
+                emit(events, Event{.kind = EventKind::ShieldCollapsed,
+                                   .unit = store.idAt(slot),
+                                   .instigator = by,
+                                   .army = armyAt(store, slot),
+                                   .at = centre});
+            }
+            if (absorbed >= incoming) {
+                return dealt;
+            }
+            hullDamage = scaledDamage(hullDamage, fraction(incoming - absorbed, incoming));
+            break;  // the spatial grid's lowest slot owns an overlap
+        }
+    }
 
     // A point hit still reaches as far as the biggest unit's own radius — see the tolerance
     // below — so the query radius is the blast's, or that, whichever is larger.
@@ -671,7 +781,7 @@ Mag damageArea(std::array<Fx, 3> centre, Fx radiusElmos, const unitdef::DamagePr
         // AND THE ORDER MATTERS: the armour lookup happens first, then the falloff scales what
         // armour left. The other way round would scale the base by distance and then look up a
         // table keyed on a number that no longer means what the table's keys mean.
-        const Mag wanted = damage.against(armor) * share;
+        const Mag wanted = hullDamage.against(armor) * share;
         const Mag applied = std::min(healths[slot].current, wanted);
         healths[slot].current -= applied;
         dealt += applied;

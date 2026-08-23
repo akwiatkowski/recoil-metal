@@ -117,6 +117,17 @@ void emitCombatEffects(std::vector<Particle>& into, std::span<const sim::Event> 
             });
             break;
         }
+        case sim::EventKind::ShieldDamaged: {
+            into.push_back(Particle{
+                .origin = atOf(event),
+                .age = 0.0f,
+                .velocity = {0.0f, 2.0f, 0.0f},
+                .lifetime = kBeamLifetime,
+                .colour = {0.25f, 0.75f, 1.0f, 0.0f},
+                .size = kFlashSize,
+            });
+            break;
+        }
         default:
             break;
         }

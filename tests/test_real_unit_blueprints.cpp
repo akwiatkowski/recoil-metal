@@ -14,6 +14,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "core/map/Scmap.hpp"
+#include "core/sim/UnitCatalog.hpp"
 #include "core/unit/BuildTree.hpp"
 #include "core/unit/UnitBlueprint.hpp"
 #include "core/unit/UnitDef.hpp"
@@ -84,6 +85,7 @@ TEST_CASE("every retail unit blueprint parses into a definition", "[corpus]") {
     int byConvention = 0;
     int resolvedByConvention = 0;
     int statesZeroScale = 0;
+    int ordinaryShields = 0;
     float fastest = 0.0f;
     float largestRadius = 0.0f;
 
@@ -97,6 +99,9 @@ TEST_CASE("every retail unit blueprint parses into a definition", "[corpus]") {
         byMotion[def->motion]++;
         if (def->isMobile()) {
             ++mobile;
+        }
+        if (def->shield.exists()) {
+            ++ordinaryShields;
         }
         if (def->meshToElmos == 0.0f) {
             ++statesZeroScale;
@@ -184,6 +189,7 @@ TEST_CASE("every retail unit blueprint parses into a definition", "[corpus]") {
 
     // Two state a scale of zero, read as stated rather than corrected to one.
     CHECK(statesZeroScale == 2);
+    CHECK(ordinaryShields == 19);
 
     // Sanity on the extremes, in the engine's units. The fastest thing in the
     // game cruises at 30 ogrids/s (the old 20.5 maximum was Physics.MaxSpeed, which is an
@@ -317,6 +323,25 @@ TEST_CASE("an aircraft uses its Air source row instead of unioning unused rows",
     REQUIRE(weapon != def->weapons.end());
     CHECK(weapon->canTarget(false));
     CHECK_FALSE(weapon->canTarget(true));
+}
+
+TEST_CASE("the retail UEF T2 shield keeps its authored bubble and energy drain", "[corpus]") {
+    const std::filesystem::path path = unitRoot() / "UEB4202/UEB4202_unit.bp";
+    if (!std::filesystem::exists(path)) {
+        SKIP("no UEB4202 blueprint at " + path.string());
+    }
+    const auto def = rm::unitbp::loadFile(path);
+    REQUIRE(def.has_value());
+    CHECK(def->shield.maximum == rm::sim::Mag::fromInt(9000));
+    CHECK(def->shield.radiusElmos == rm::sim::Fx::fromInt(104));
+    CHECK(def->shield.verticalOffsetElmos == rm::sim::Fx::fromInt(-24));
+    CHECK(def->shield.regenPerSecond == Catch::Approx(120.0f));
+    CHECK(def->shield.regenDelay.value == Catch::Approx(1.1f));
+    CHECK(def->shield.rechargeDelay.value == Catch::Approx(15.1f));
+    CHECK(def->upkeepEnergyPerSecond == Catch::Approx(200.0f));
+    rm::sim::UnitCatalog catalog;
+    const rm::UnitTypeIndex type = catalog.add(&*def, rm::sim::TickRate{});
+    CHECK(rm::test::asFloat(catalog.rates(type).upkeepEnergyPerTick) == Catch::Approx(20.0f));
 }
 
 TEST_CASE("the economy the blueprints state is the economy the game plays", "[corpus]") {

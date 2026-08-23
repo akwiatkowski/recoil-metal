@@ -1,5 +1,6 @@
 #include "core/unit/UnitBlueprint.hpp"
 
+#include "core/unit/FaDuration.hpp"
 #include "core/blueprint/BlueprintMesh.hpp"
 #include "core/unit/BuildTree.hpp"
 #include "core/map/Scmap.hpp"
@@ -421,6 +422,31 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
         // `ArmorClass` here; the short version is that resolving it needs a registry, and a
         // parser that needs a registry cannot be called with a Lua table and nothing else.
         def.armorType = std::string{defense->stringAt("ArmorType").value_or("")};
+
+        if (const lua::Value* shield = defense->find("Shield");
+            shield != nullptr && shield->isTable()) {
+            const auto flag = [shield](std::string_view key) {
+                const lua::Value* value = shield->find(key);
+                return value != nullptr && value->asBoolean().value_or(false);
+            };
+            // Personal and transport shields attach to one owner instead of covering a bubble.
+            if (!flag("PersonalShield") && !flag("PersonalBubble")
+                && !flag("TransportShield")) {
+                def.shield.maximum =
+                    sim::magFromFloat(numberOr(*shield, "ShieldMaxHealth", 0.0f));
+                def.shield.radiusElmos = sim::fxFromFloat(
+                    numberOr(*shield, "ShieldSize", 0.0f) * scmap::kElmosPerOgrid * 0.5f);
+                def.shield.verticalOffsetElmos = sim::fxFromFloat(
+                    numberOr(*shield, "ShieldVerticalOffset", 0.0f)
+                    * scmap::kElmosPerOgrid);
+                def.shield.regenPerSecond = numberOr(*shield, "ShieldRegenRate", 0.0f);
+                def.shield.regenDelay = unitdef::faWaitSeconds(
+                    sim::seconds(numberOr(*shield, "ShieldRegenStartTime", 0.0f)));
+                def.shield.rechargeDelay = unitdef::faWaitSeconds(sim::seconds(std::max(
+                    numberOr(*shield, "ShieldRechargeTime", 0.0f),
+                    numberOr(*shield, "ShieldEnergyDrainRechargeTime", 0.0f))));
+            }
+        }
 
         // The threat estimates, for the AI (UnitDef's threat note).
         def.surfaceThreat = numberOr(*defense, "SurfaceThreatLevel", 0.0f);

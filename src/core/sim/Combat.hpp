@@ -228,6 +228,10 @@ std::size_t fireOvercharge(UnitStore& store, const UnitCatalog& catalog,
                            std::span<Economy> economies, TickRate rate,
                            EventQueue* events = nullptr);
 
+/// Advances partial regeneration and damage-collapse recovery for ordinary bubbles.
+void tickShields(UnitStore& store, const UnitCatalog& catalog,
+                 EventQueue* events = nullptr);
+
 /// Moves every projectile one tick, applies what lands, and removes what is spent.
 ///
 /// A shot lands when it reaches its target's ground position or its height falls to the
@@ -280,7 +284,7 @@ void advanceProjectiles(std::vector<Projectile>& projectiles, UnitStore& store,
 /// A caller that passes neither gets exactly the old behaviour and no events.
 Mag damageArea(std::array<Fx, 3> centre, Fx radiusElmos, Mag damage, int byArmy,
                UnitStore& store, std::span<const Army> armies, UnitId by = {},
-               EventQueue* events = nullptr);
+               EventQueue* events = nullptr, const UnitCatalog* catalog = nullptr);
 
 /// The same, with a weapon's full damage table rather than one number (PLAN2.md §7 P10.1,
 /// `ADR-033`, D12).

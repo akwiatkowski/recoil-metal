@@ -101,10 +101,15 @@ ArmorTable armorTableFrom(const lua::Value& parsed) {
     // TWO PASSES, because a multiplier names a class and a class needs a number first. The
     // registry sorts, so no row can be resolved until every name has been seen.
     std::vector<std::string_view> names;
-    names.reserve(blocks.size());
+    names.reserve(blocks.size() + 1);
     for (const Block& block : blocks) {
         names.push_back(block.name);
     }
+    // A bubble is not one of retail FA's authored hull armour blocks, but it is a distinct
+    // impact surface. Register the engine-level pseudo-class here so every mounted FA catalog
+    // can represent a weapon that damages shields differently; profiles without such an
+    // override continue to return their ordinary base damage.
+    names.push_back("Shield");
     table.registry = unitdef::ArmorRegistry::fromNames(names);
 
     for (const Block& block : blocks) {

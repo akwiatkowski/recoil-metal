@@ -57,6 +57,21 @@ enum class MotionType : std::uint8_t {
 /// approximated.
 [[nodiscard]] bool travelsOnGround(MotionType motion) noexcept;
 
+/// One ordinary FA bubble shield as authored by `Defense.Shield`.
+/// `ShieldSize` is a diameter: Shield.lua creates its sphere at `Size / 2` (`:816-821`).
+struct ShieldSpec {
+    sim::Mag maximum{};
+    sim::Fx radiusElmos{};
+    sim::Fx verticalOffsetElmos{};
+    float regenPerSecond = 0.0f;
+    sim::Seconds regenDelay{};
+    sim::Seconds rechargeDelay{};
+
+    [[nodiscard]] bool exists() const noexcept {
+        return maximum > sim::Mag{} && radiusElmos > sim::Fx{};
+    }
+};
+
 // What a unit *is*, read from the game's own unit definitions rather than
 // hardcoded here.
 //
@@ -392,6 +407,9 @@ struct UnitDef {
     /// FIXED POINT (`Mag`), converted at parse time — the sim never sees the float
     /// (PLAN2.md §5.1). `Mag` because `MaxHealth` reaches 5,000,000 in the corpus.
     sim::Mag health{};
+
+    /// Ordinary projectile-colliding bubble; personal and transport shields remain zero.
+    ShieldSpec shield;
 
     /// What this unit is made of, for the damage table — `Defense.ArmorType`
     /// (`14-blueprint-census.md §8.7`: 604 of 606 blueprints state one).

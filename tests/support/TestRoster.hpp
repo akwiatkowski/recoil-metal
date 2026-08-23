@@ -73,10 +73,13 @@ struct Roster {
             .type = type,
             .transform = transform,
             .motion = state,
-            .health = sim::Health{.current = sim::magFromFloat(hp),
-                                  .maximum = sim::magFromFloat(hp),
-                                  .reloadRemaining = std::vector<int>(
-                                      def != nullptr ? def->weapons.size() : 0u, 0)},
+            .health = [&] {
+                sim::Health health = sim::initialHealth(
+                    sim::magFromFloat(hp), catalog.shield(type).maximum);
+                health.reloadRemaining =
+                    std::vector<int>(def != nullptr ? def->weapons.size() : 0u, 0);
+                return health;
+            }(),
         });
         // The new unit has to be in the spatial index before anything asks what is near it.
         // A test that spawns and then queries is the common shape, and making the fixture do

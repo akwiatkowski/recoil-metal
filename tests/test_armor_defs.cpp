@@ -83,10 +83,12 @@ armordefinition = {
 TEST_CASE("the shipped retail armour table parses") {
     const ArmorTable table = armorTableFromSource(kRetail);
 
-    // Six classes, and `Default` is not a seventh — it is class 0, which the registry reserves.
-    CHECK(table.registry.size() == 6);
+    // Six content classes plus the engine's shield pseudo-class. `Default` is class 0 rather
+    // than another entry, while `Shield` must exist even though retail does not author a block
+    // for it: damage profiles need a stable class to distinguish bubble damage from hull damage.
+    CHECK(table.registry.size() == 7);
     for (const std::string_view name :
-         {"Default", "Normal", "Light", "Commander", "Structure", "Experimental"}) {
+         {"Default", "Normal", "Light", "Commander", "Structure", "Experimental", "Shield"}) {
         CHECK(table.registry.knows(name));
     }
 

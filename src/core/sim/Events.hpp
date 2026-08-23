@@ -66,6 +66,12 @@ enum class EventKind : std::uint8_t {
     BeamFired,
     /// A projectile reached something, or the ground.
     ProjectileImpact,
+    /// An active bubble absorbed damage. `unit` is its generator and `amount` was absorbed.
+    ShieldDamaged,
+    /// A bubble reached zero power and stopped intercepting damage.
+    ShieldCollapsed,
+    /// A collapsed or partially depleted bubble returned to full power.
+    ShieldRestored,
     /// A build order was accepted and a construction created.
     ConstructionStarted,
     /// A construction completed. The unit it becomes is a separate `UnitFinished`, because the

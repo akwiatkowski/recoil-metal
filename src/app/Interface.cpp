@@ -436,8 +436,9 @@ void appendHealthBars(rm::ui::Geometry& out, const UnitScene& scene,
                                 && i < scene.drawSlotOf[batch].size(); ++i) {
             const rm::UnitIndex slot = scene.drawSlotOf[batch][i];
             const rm::sim::Health& hp = scene.store.health()[slot];
-            if (!hp.alive() || hp.current >= hp.maximum) {
-                continue;  // the absence of a bar is what "fine" looks like
+            const bool hasShield = hp.shield.maximum > rm::sim::Mag{};
+            if (!hp.alive() || (hp.current >= hp.maximum && !hasShield)) {
+                continue;
             }
 
             const float radiusElmos =
@@ -463,17 +464,27 @@ void appendHealthBars(rm::ui::Geometry& out, const UnitScene& scene,
             const float x = (*screen)[0] - barWidth * 0.5f;
             const float y = (*screen)[1] - radiusPoints - 8.0f;
 
-            const float fill =
-                rm::sim::magToFloat(hp.current) / rm::sim::magToFloat(hp.maximum);
-            // The roster underbar's own thresholds — the two must not disagree about how
-            // bad the same number is.
-            const rm::ui::Colour bar = fill > 0.6f ? rm::ui::kGain
-                                       : (fill > 0.3f ? rm::ui::kWarn : rm::ui::kLoss);
+            if (hasShield) {
+                const float shieldFill = rm::sim::magToFloat(hp.shield.current)
+                                         / rm::sim::magToFloat(hp.shield.maximum);
+                constexpr rm::ui::Colour kShield{{0.2f, 0.75f, 1.0f, 0.95f}};
+                rm::text::appendRect(out.label, font, x, y - 4.0f, barWidth, barHeight,
+                                     rm::ui::Colour{{0.0f, 0.0f, 0.0f, 0.55f}});
+                rm::text::appendRect(out.label, font, x, y - 4.0f,
+                                     barWidth * std::clamp(shieldFill, 0.0f, 1.0f), barHeight,
+                                     kShield);
+            }
 
-            rm::text::appendRect(out.label, font, x, y, barWidth, barHeight,
-                                 rm::ui::Colour{{0.0f, 0.0f, 0.0f, 0.55f}});
-            rm::text::appendRect(out.label, font, x, y, barWidth * std::clamp(fill, 0.0f, 1.0f),
-                                 barHeight, bar);
+            if (hp.current < hp.maximum) {
+                const float fill =
+                    rm::sim::magToFloat(hp.current) / rm::sim::magToFloat(hp.maximum);
+                const rm::ui::Colour bar = fill > 0.6f ? rm::ui::kGain
+                                           : (fill > 0.3f ? rm::ui::kWarn : rm::ui::kLoss);
+                rm::text::appendRect(out.label, font, x, y, barWidth, barHeight,
+                                     rm::ui::Colour{{0.0f, 0.0f, 0.0f, 0.55f}});
+                rm::text::appendRect(out.label, font, x, y,
+                                     barWidth * std::clamp(fill, 0.0f, 1.0f), barHeight, bar);
+            }
         }
     }
 }

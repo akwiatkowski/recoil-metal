@@ -87,6 +87,20 @@ public:
         int jammerBlips = 0;
     };
 
+    /// One ordinary bubble in fixed-point, per-tick simulation units.
+    struct ShieldInfo {
+        Mag maximum{};
+        Fx radiusElmos{};
+        Fx verticalOffsetElmos{};
+        Mag regenPerTick{};
+        TickCount regenDelay = 0;
+        TickCount recharge = 0;
+
+        [[nodiscard]] bool exists() const noexcept {
+            return maximum > Mag{} && radiusElmos > Fx{};
+        }
+    };
+
     /// One type's place in the adjacency game (`core/unit/Adjacency.hpp`), in the types
     /// the sim can do arithmetic in. Derived here for the same reason the rates are.
     struct AdjacencyInfo {
@@ -232,6 +246,13 @@ public:
         return type < intel_.size() ? intel_[type] : kNone;
     }
 
+    [[nodiscard]] const ShieldInfo& shield(UnitTypeIndex type) const noexcept {
+        static constexpr ShieldInfo kNone{};
+        return type < shields_.size() ? shields_[type] : kNone;
+    }
+
+    [[nodiscard]] Fx largestShieldRadius() const noexcept { return largestShieldRadius_; }
+
     /// One weapon's per-tick rates. Bounds-checked in both dimensions, returning zeroes for
     /// anything unregistered — a pass that indexed past the end would otherwise read whatever
     /// was next in memory, and this is called from the inner loop of firing.
@@ -267,6 +288,8 @@ private:
     std::vector<ArmorClass> armor_;
     std::vector<IntelRadii> intel_;
     std::vector<AdjacencyInfo> adjacency_;
+    std::vector<ShieldInfo> shields_;
+    Fx largestShieldRadius_{};
 
     /// The content's armour classes and Supreme Commander's multiplier table. Both empty of
     /// anything but `default` until `setArmor` — see the note there.

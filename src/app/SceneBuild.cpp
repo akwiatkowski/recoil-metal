@@ -300,9 +300,10 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
     // statement in it is what keeps that true.
     //
     // READ FROM THE MOUNTED CONTENT rather than compiled in, because the two installs disagree:
-    // retail ships 6 classes with 5 non-1.0 entries, FAF ships 9 with 10, and they differ on the
-    // numbers too — a structure takes 0.066666 of an Overcharge under retail and 0.25 under FAF.
-    // See `core/data/ArmorDefs.hpp`.
+    // retail authors 6 classes with 5 non-1.0 entries, FAF authors 9 with 10, and they differ on
+    // the numbers too — a structure takes 0.066666 of an Overcharge under retail and 0.25 under
+    // FAF. The importer adds one engine-owned Shield pseudo-class to either registry. See
+    // `core/data/ArmorDefs.hpp`.
     //
     // Content with no armour definition gets the `default`-only table, which is exactly the
     // pre-P10.1 engine: every unit ordinary, every weapon a flat scalar. That is why this is
@@ -438,7 +439,7 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
             .type = type,
             .transform = transformAt(one.front().position, one.front().rotationY),
             .motion = motion,
-            .health = rm::sim::Health{.current = hp, .maximum = hp},
+            .health = rm::sim::initialHealth(hp, scene.catalog.shield(type).maximum),
         });
     }
 
@@ -612,7 +613,7 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
         .type = type,
         .transform = transform,
         .motion = motion,
-        .health = rm::sim::Health{.current = def.health, .maximum = def.health},
+        .health = rm::sim::initialHealth(def.health, scene.catalog.shield(type).maximum),
     });
 
     // `UnitCreated` is THE CALLER'S to raise (§7 P6.1). The sim never spawns a unit — a spawn
@@ -1063,7 +1064,7 @@ void orderFirstExtractors(UnitScene& scene, std::span<const rm::scenario::Marker
                 .type = type,
                 .transform = transform,
                 .motion = state,
-                .health = rm::sim::Health{.current = hp, .maximum = hp},
+                .health = rm::sim::initialHealth(hp, scene.catalog.shield(type).maximum),
             });
         }
 

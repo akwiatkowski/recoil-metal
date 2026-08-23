@@ -1948,3 +1948,25 @@ the approved air slice needs only two physical layers, not FA's complete target-
 **Consequences.** Interceptors attack aircraft, bombers and ordinary guns attack the surface, and
 shots cannot leak into the wrong layer through collision or splash. Water and seabed remain one
 surface domain until naval depth becomes a simulated movement layer.
+
+## ADR-048 — Ordinary shields intercept at the shared damage boundary
+
+**Context.** Retail FA authors ordinary bubble capacity, diameter, vertical offset, regeneration,
+collapse recovery, and energy upkeep, but every damage path previously went straight to hulls.
+Beams, projectiles, and death blasts already converge on `damageArea`.
+
+**Decision.** Parse non-personal `Defense.Shield` bubbles and derive their rates in `UnitCatalog`.
+Keep current power and recovery timers with `Health`. Before hull falloff, `damageArea` lets the
+lowest-slot hostile active sphere containing the impact absorb one damage profile; overkill leaks
+proportionally to hulls. Partial shields regenerate after the corrected FA delay, collapsed ones
+return full after the corrected authored recharge, and existing unit upkeep supplies energy drain.
+
+**Alternatives considered.** Projectile-only dome collision was rejected because beams and death
+blasts would bypass it. A separate shield component array was unnecessary while shield state is
+part of unit survivability. A translucent Metal sphere was deferred in favour of the existing HUD
+rectangle and particle paths.
+
+**Consequences.** Focus fire collapses bubbles, protected hulls survive until then, and shield
+state is deterministic, hashed, and visible as a cyan bar and impact flash. Personal, transport,
+enhancement, energy-stall, overlap-overspill, toggle, and special-nuke rules remain explicit future
+work rather than approximations hidden in this slice.

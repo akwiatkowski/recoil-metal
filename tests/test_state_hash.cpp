@@ -111,6 +111,30 @@ TEST_CASE("the cached air movement layer changes the hash") {
     CHECK(ground.hash() != air.hash());
 }
 
+TEST_CASE("shield power and recovery timers change the hash") {
+    const auto hashWith = [](rm::sim::ShieldState shield) {
+        Fixture fixture;
+        fixture.health()[0].shield = shield;
+        return fixture.hash();
+    };
+    const rm::sim::ShieldState full{.current = rm::sim::Mag::fromInt(100),
+                                    .maximum = rm::sim::Mag::fromInt(100)};
+    CHECK(hashWith(full)
+          != hashWith({.current = rm::sim::Mag::fromInt(90),
+                       .maximum = rm::sim::Mag::fromInt(100)}));
+    CHECK(hashWith(full)
+          != hashWith({.current = rm::sim::Mag::fromInt(100),
+                       .maximum = rm::sim::Mag::fromInt(101)}));
+    CHECK(hashWith(full)
+          != hashWith({.current = rm::sim::Mag::fromInt(100),
+                       .maximum = rm::sim::Mag::fromInt(100),
+                       .regenDelayRemaining = 10}));
+    CHECK(hashWith(full)
+          != hashWith({.current = rm::sim::Mag::fromInt(100),
+                       .maximum = rm::sim::Mag::fromInt(100),
+                       .rechargeRemaining = 20}));
+}
+
 TEST_CASE("a projectile's target layer changes the hash") {
     Fixture surface;
     Fixture air;
