@@ -70,6 +70,18 @@ public:
         Fx sonar{};
         Fx omni{};
 
+        /// How far above its own feet this type's sensors sit, in elmos.
+        ///
+        /// ONLY THE RAYCAST STYLE READS IT (`VisionStyle::Recoil`), because only a model that
+        /// consults terrain can have an opinion about eye level; Forged Alliance's discs are
+        /// flat and take no height at all. Before this the raycast was handed the unit's
+        /// TRANSFORM — the ground under its feet — so a commander could not see over a rise its
+        /// own head cleared, and every unit in the game shared one blind ankle-level view.
+        ///
+        /// The top of the collision box (`UnitDef::sizeYElmos`), because the blueprints state
+        /// no sensor mount and that is the only height they state.
+        Fx eyeHeight{};
+
         /// Whether this TYPE is absent from a sense, to anyone without omni. Flags rather than
         /// radii, which is what the blueprints state — see `UnitDef`'s note.
         bool radarStealth = false;

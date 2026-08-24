@@ -1,8 +1,10 @@
 #include "app/Cli.hpp"
 
 #include "core/lua/LuaTable.hpp"
+#include "core/ui/Hud.hpp"  // the interface scale's own bounds, so `--ui-scale` cannot invent one
 #include "core/unit/UnitBlueprint.hpp"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -172,6 +174,23 @@ namespace rm::app {
         }
     }
     return 0.0f;
+}
+
+float parseUiScale(int argc, const char* argv[]) {
+    for (int i = 1; i + 1 < argc; ++i) {
+        if (std::string{argv[i]} == "--ui-scale") {
+            const auto asked = static_cast<float>(std::atof(argv[i + 1]));
+            // CLAMPED RATHER THAN REFUSED, unlike `--tick-rate`. A tick rate outside its range
+            // changes the match and a silent clamp would produce a game nobody can explain; an
+            // interface scale changes only how big the chrome is, and the player can see the
+            // result and try another number. Zero and nonsense fall back to automatic.
+            if (!(asked > 0.0f)) {
+                return 1.0f;
+            }
+            return std::clamp(asked, rm::ui::kMinUserHudScale, rm::ui::kMaxUserHudScale);
+        }
+    }
+    return 1.0f;
 }
 
 /// `--dump-weapon <ID>`: print one unit's weapon timings, authored beside corrected.
@@ -361,12 +380,12 @@ rm::sim::VisionStyle parseVisionStyle(int argc, const char* argv[]) {
         if (value == "recoil") {
             return rm::sim::VisionStyle::Recoil;
         }
-        std::fprintf(stderr, "--vision-style: unknown value \"%s\"; using recoil."
+        std::fprintf(stderr, "--vision-style: unknown value \"%s\"; using fa."
                              " Expected fa or recoil.\n",
                      value.c_str());
         break;
     }
-    return rm::sim::VisionStyle::Recoil;
+    return rm::sim::VisionStyle::ForgedAlliance;
 }
 
 } // namespace rm::app

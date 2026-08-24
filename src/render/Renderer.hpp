@@ -318,6 +318,49 @@ public:
                   std::array<float, 4> tint) noexcept;
     void clearGhost() noexcept;
 
+    // --- Construction sites -------------------------------------------------
+    //
+    // A BUILDING THAT DOES NOT EXIST YET. Between the order and its completion the sim holds
+    // only a `Construction` — a row in the economy — so the site was bare ground for however
+    // long the work took, and the only sign a build had been ordered at all was a line of
+    // console output. This is the body that belongs there.
+    //
+    // Drawn as the model itself, revealed in step with the work, in the manner of the
+    // builder's own faction. See `unitBuildFragment` for what the four look like and why.
+
+    /// Which faction's build effect to draw. Ordered to match `sim::Faction` so the app hands
+    /// its own enum straight across; the shader reads the number.
+    enum class BuildStyle : std::uint32_t { Uef = 0, Aeon = 1, Cybran = 2, Seraphim = 3 };
+
+    /// One site, this frame.
+    struct ConstructionDraw {
+        /// The PRODUCT's batch, in the caller's own numbering — the same index space
+        /// `setInstances` and `setGhost` take. Out of range draws nothing.
+        std::size_t batch = 0;
+        UnitInstance instance{};
+
+        /// How much of the work is done, 0 to 1. Drives the whole effect.
+        float progress = 0.0f;
+
+        /// The site's ground height and the model's own height, in world elmos: together they
+        /// say where the reveal starts and how far it has to travel. A height of zero would
+        /// make the reveal instantaneous, so the shader floors it.
+        float baseY = 0.0f;
+        float heightElmos = 0.0f;
+
+        BuildStyle style = BuildStyle::Uef;
+        std::array<float, 4> tint{{0.4f, 0.7f, 1.0f, 1.0f}};
+    };
+
+    /// This frame's sites. Replaces the previous frame's outright, like the decals and unlike
+    /// the sticky ghost: a construction that finished must stop being drawn on the very next
+    /// frame, and a list that had to be cleared by hand would eventually not be.
+    void setConstructions(std::span<const ConstructionDraw> sites) noexcept;
+
+    /// The clock the shimmer and the pulse run on, in seconds. Shared by every site, because
+    /// two sites started a tick apart should not visibly beat against each other.
+    void setConstructionTime(float seconds) noexcept;
+
     // --- Text ---------------------------------------------------------------
     //
     // The HUD, and the first thing this renderer draws that is not part of the world.
@@ -331,7 +374,15 @@ public:
     [[nodiscard]] text::Font labelFont() const noexcept;
     [[nodiscard]] text::Font readoutFont() const noexcept;
 
-    /// This frame's interface, in pixels from the window's top-left.
+    /// Rasterises fonts at the display's backing scale while keeping their exposed metrics in
+    /// logical points. Rebuilds only when the scale changes; headless rendering remains 1x.
+    void setUiScale(float backingScale);
+
+    /// The logical-point viewport used only by screen-space UI. World rendering continues to
+    /// use the drawable's backing-pixel dimensions.
+    void setHudViewport(float widthPoints, float heightPoints) noexcept;
+
+    /// This frame's interface, in logical points from the window's top-left.
     ///
     /// Replaced wholesale each frame, because a HUD is rebuilt from the state it reports rather
     /// than accumulated — and a stale line would report a number that has since changed, which
@@ -356,7 +407,7 @@ public:
     /// would want.
     void setMinimapImage(const dds::Texture& image);
 
-    /// Where to draw that image this frame, in pixels from the top-left. A zero width or
+    /// Where to draw that image this frame, in logical points from the top-left. A zero width or
     /// height draws nothing, which is how a scene with no preview says so.
     ///
     /// SEPARATE FROM THE UPLOAD because the rect is a layout decision that moves with the
@@ -418,15 +469,28 @@ public:
     // not the internal draw order — setUnits sorts batches by texture pair, so
     // the two disagree and using the wrong one moves the wrong model.
     //
-    // Instances beyond the count the batch was uploaded with are dropped: the
-    // ring is sized once, and growing it mid-frame would mean allocating on a
-    // buffer the GPU is reading.
+    // THE RING GROWS when a batch outgrows it. It used to be sized once at upload and every
+    // instance past that count was silently dropped — which meant the second unit of a type
+    // was invisible until something else grew the batch LIST and triggered a full re-upload.
+    // Nothing failed and nothing logged; a factory's output simply stopped appearing. The old
+    // buffer is retired against the frame counter rather than freed, because the GPU may still
+    // be reading it (see `retiredBuffers_`), and the surviving contents are copied across so a
+    // batch nobody pushes this frame still draws what it drew last frame.
     //
     // Either push a batch every frame or never push it at all. A batch that is
     // never pushed keeps the instances it was uploaded with, because setUnits
     // seeds every ring slot with them; one pushed intermittently would show a
     // frame from three frames ago whenever it is skipped.
     void setInstances(std::size_t batchIndex, std::span<const UnitInstance> instances) noexcept;
+
+    /// How many unit instances the next draw would actually issue, across every batch.
+    ///
+    /// EXISTS TO BE COMPARED with the number of units the sim holds. The renderer links into
+    /// the executable rather than a library, so no test can reach it; this is the one number
+    /// that makes "everything alive is on screen" checkable from a capture's console output.
+    /// Dropped instances used to be silent, which is how a batch capped at one instance went
+    /// unnoticed.
+    [[nodiscard]] std::size_t drawnUnitInstances() const noexcept;
 
     // The camera is mutated by input handlers on the main thread. That is safe
     // because CAMetalDisplayLink was added to the *main* run loop, so
@@ -632,6 +696,21 @@ private:
         std::array<float, 4> tint{};
     };
     std::optional<GhostDraw> ghost_;
+
+    /// This frame's construction sites, their shared clock, and what draws them.
+    ///
+    /// The instance buffer is a ring like every other per-frame buffer here, sized for
+    /// `kMaxConstructions` sites. A cap rather than a growing buffer for the reason the
+    /// particles have one: it is written every frame while the GPU may still be reading the
+    /// previous copy, so it cannot be reallocated mid-flight. Past the cap sites are DROPPED,
+    /// which costs the least important thing on screen — the far end of a large base's build
+    /// queue — rather than the frame.
+    static constexpr std::size_t kMaxConstructions = 64;
+    std::vector<ConstructionDraw> constructions_;
+    float constructionSeconds_ = 0.0f;
+    MTL::RenderPipelineState* constructionPipeline_ = nullptr;  // owned
+    MTL::Buffer* constructionInstanceBuffer_ = nullptr;         // owned
+
     MTL::RenderPipelineState* ghostPipeline_ = nullptr;  // owned
     /// One instance per frame in flight — the ghost is a single model, but it moves with
     /// the cursor, so each frame writes its own slot like every other per-frame upload.
@@ -802,7 +881,8 @@ private:
 
     // The map's own thumbnail, drawn under the minimap panel. Uploaded once, not per frame.
     MTL::Texture* minimapTexture_ = nullptr;  // owned
-    std::array<float, 4> minimapRect_{};      // x, y, width, height in pixels; zero = no draw
+    std::array<float, 4> minimapRect_{};      // x, y, width, height in points; zero = no draw
+    std::array<float, 2> hudViewportPoints_{};
 
     // The build tray's icons, packed into one texture, and this frame's quads into it.
     MTL::Texture* iconAtlas_ = nullptr;  // owned
@@ -829,11 +909,12 @@ private:
 
     FontSlot labelFont_;
     FontSlot readoutFont_;
+    float uiScale_ = 1.0f;
 
     std::size_t labelVertexCount_ = 0;
     std::size_t readoutVertexCount_ = 0;
 
-    /// Rasterises one face into a slot. Called twice, at startup.
+    /// Rasterises one face into a slot at `uiScale_`, exposing logical-point metrics.
     void buildFontAtlas(FontSlot& slot, const char* familyName, float points);
 
     /// Scratch for the survivors and the per-level counts, reused so a frame costs
@@ -863,6 +944,19 @@ private:
     bool frameOpen_ = false;
     std::counting_semaphore<static_cast<std::ptrdiff_t>(kMaxFramesInFlight)> framesInFlight_{
         static_cast<std::ptrdiff_t>(kMaxFramesInFlight)};
+
+    /// Frames opened since construction, and buffers waiting for the GPU to be done with them.
+    ///
+    /// A batch that outgrows its instance buffer is reallocated by `setInstances`, and the old
+    /// buffer cannot be released on the spot: up to `kMaxFramesInFlight - 1` frames may still
+    /// be reading it. Retiring it against the frame counter and freeing it once that many
+    /// frames have opened is the same guarantee `beginFrame`'s semaphore gives the ring slots,
+    /// stated for a buffer that is going away rather than one being reused.
+    std::uint64_t frameCounter_ = 0;
+    std::vector<std::pair<MTL::Buffer*, std::uint64_t>> retiredBuffers_;
+
+    /// Frees whatever the GPU can no longer be reading. Called by `beginFrame`.
+    void collectRetiredBuffers(bool everything = false) noexcept;
 
     MTL::Buffer* vertexBuffer_ = nullptr;      // owned
     MTL::Buffer* indexBuffer_ = nullptr;       // owned

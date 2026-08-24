@@ -82,7 +82,9 @@ namespace {
     return kind == CommandKind::Stop || kind == CommandKind::Build;
 }
 
-[[nodiscard]] const char* kindName(CommandKind kind) noexcept {
+} // namespace
+
+const char* commandKindName(CommandKind kind) noexcept {
     switch (kind) {
     case CommandKind::Move:
         return "move";
@@ -105,6 +107,8 @@ namespace {
     }
     return "stop";
 }
+
+namespace {
 
 [[nodiscard]] std::optional<CommandKind> kindFromName(std::string_view name) noexcept {
     if (name == "move") {
@@ -301,12 +305,52 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
             continue;
         }
 
-        // This unit's OWN grid. A missing one leaves the queue where it is rather than routing
-        // on a stranger's: a route is only as good as the map it was searched on, and an order
-        // silently dropped is worse than one that waits.
-        const auto type = static_cast<std::size_t>(store.typeAt(slot));
-        const PassabilityGrid* grid = type < gridForType.size() ? gridForType[type] : nullptr;
+        // Movement uses this unit's grid; construction uses the PRODUCT's. Commands retain type
+        // ids but not derived grids, so the choice must be repeated when a deferred order starts.
+        const auto gridFor = [&](const Command& command) -> const PassabilityGrid* {
+            const auto builderType = static_cast<std::size_t>(store.typeAt(slot));
+            const PassabilityGrid* builderGrid =
+                builderType < gridForType.size() ? gridForType[builderType] : nullptr;
+            if (command.kind != CommandKind::Build) {
+                return builderGrid;
+            }
+
+            const unitdef::UnitDef* product = catalog.def(command.buildType);
+            const bool navalFactory = product != nullptr && product->hasCategory("NAVAL")
+                                     && product->hasCategory("FACTORY");
+            if (product != nullptr && !product->isMobile() && !navalFactory) {
+                return builderGrid;  // the same ordinary-structure fallback as gridForBuild
+            }
+            const auto productType = static_cast<std::size_t>(command.buildType);
+            return productType < gridForType.size() ? gridForType[productType] : nullptr;
+        };
+        const Command* current = orders[slot].current();
+        const PassabilityGrid* grid = current != nullptr ? gridFor(*current) : nullptr;
         if (grid == nullptr) {
+            continue;  // a missing domain leaves the command queued rather than dropping it
+        }
+
+        // A build left at the head was exposed by the previous tick before its product grid
+        // existed. It has never started: successful instantaneous builds are removed in the
+        // same pass. Start it now, along with any following instantaneous commands.
+        if (current->kind == CommandKind::Build) {
+            const Command* next = current;
+            while (next != nullptr) {
+                const PassabilityGrid* nextGrid = gridFor(*next);
+                if (nextGrid == nullptr) {
+                    break;
+                }
+                const bool wasInstant = instantaneous(next->kind);
+                const bool began = startCommand(*next, store, catalog, terrain, *nextGrid, rate,
+                                                building, events, features);
+                if (began) {
+                    ++started;
+                    if (!wasInstant) {
+                        break;
+                    }
+                }
+                next = orders[slot].finish();
+            }
             continue;
         }
 
@@ -448,8 +492,12 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
         // tick and a dead waypoint does not stall the route behind it.
         const Command* next = orders[slot].finish();
         while (next != nullptr) {
+            const PassabilityGrid* nextGrid = gridFor(*next);
+            if (nextGrid == nullptr) {
+                break;  // this order remains at the head until its type gains a grid
+            }
             const bool wasInstant = instantaneous(next->kind);
-            if (startCommand(*next, store, catalog, terrain, *grid, rate, building, events,
+            if (startCommand(*next, store, catalog, terrain, *nextGrid, rate, building, events,
                              features)) {
                 ++started;
                 if (!wasInstant) {
@@ -745,6 +793,15 @@ bool startCommand(const Command& command, UnitStore& store, const UnitCatalog& c
         const Fx siteX = upgrade ? builderAt.x : command.targetX;
         const Fx siteZ = upgrade ? builderAt.z : command.targetZ;
 
+        // Validate the TARGET's terrain domain before creating work. Callers pass the grid
+        // selected for the product being built; aircraft need no ground footprint and upgrades
+        // keep the factory's existing foundation.
+        if (!upgrade && def->motion != unitdef::MotionType::Air
+            && !sitePlaceable(grid, siteX, siteZ,
+                              fxFromFloat(def->collisionRadiusElmos))) {
+            return false;
+        }
+
         // The cost and the time come from the DEFINITION, and the rate from the clock — the
         // same derivation `UnitCatalog::Rates` does for income, at the one place a construction
         // is created.
@@ -855,7 +912,7 @@ bool writeCommandLog(const CommandLog& log, const std::string& path,
     out << "# tick player kind unit generation targetX targetZ buildType"
            " targetUnit targetGeneration buildPath queued\n";
     for (const Command& command : log.all()) {
-        out << command.tick << ' ' << command.player << ' ' << kindName(command.kind) << ' '
+        out << command.tick << ' ' << command.player << ' ' << commandKindName(command.kind) << ' '
             << command.unit.index << ' ' << command.unit.generation << ' '
             << command.targetX.raw() << ' ' << command.targetZ.raw() << ' '
             << command.buildType << ' ' << command.target.index << ' '

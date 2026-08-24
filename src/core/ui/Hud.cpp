@@ -62,6 +62,132 @@ Theme neutralTheme() noexcept {
     return themeFrom(Colour{{0.412f, 0.812f, 0.902f, 1.0f}});  // #69CFE6
 }
 
+std::vector<std::string> wrapToWidth(std::span<const text::Glyph> glyphs, std::string_view text,
+                                     float maxWidth, std::size_t maxLines, float scale) {
+    std::vector<std::string> lines;
+    if (text.empty() || maxLines == 0 || maxWidth <= 0.0f) {
+        return lines;
+    }
+
+    /// The longest prefix of `from` that fits, at least one character.
+    ///
+    /// At least one, or a maxWidth narrower than a single glyph would make no progress and the
+    /// loop below would never end. A cell that cannot hold one letter is a layout bug, and
+    /// spinning forever is a worse way to report it than drawing one clipped letter.
+    const auto longestFitting = [&](std::string_view from) {
+        std::size_t fits = 1;
+        while (fits < from.size()
+               && text::measureText(glyphs, from.substr(0, fits + 1), scale) <= maxWidth) {
+            ++fits;
+        }
+        return fits;
+    };
+
+    std::string_view rest = text;
+    while (!rest.empty() && lines.size() < maxLines) {
+        while (!rest.empty() && rest.front() == ' ') {
+            rest.remove_prefix(1);
+        }
+        if (rest.empty()) {
+            break;
+        }
+        if (text::measureText(glyphs, rest, scale) <= maxWidth) {
+            lines.emplace_back(rest);
+            return lines;
+        }
+
+        const std::size_t fits = longestFitting(rest);
+        // Prefer the last space INSIDE what fits, so a break lands between words. A word longer
+        // than the whole line has no such space and is broken where it must be.
+        const std::size_t space = rest.substr(0, fits + 1).find_last_of(' ');
+        const std::size_t take = space != std::string_view::npos && space > 0 ? space : fits;
+
+        if (lines.size() + 1 == maxLines) {
+            // The last line says that it is not the whole name rather than stopping mid-word
+            // as though it were. Room for the marker is taken out of the text, not added to
+            // the line.
+            std::string tail{rest.substr(0, take)};
+            while (!tail.empty()
+                   && text::measureText(glyphs, tail + "..", scale) > maxWidth) {
+                tail.pop_back();
+            }
+            lines.push_back(tail.empty() ? std::string{rest.substr(0, 1)} : tail + "..");
+            return lines;
+        }
+        lines.emplace_back(rest.substr(0, take));
+        rest.remove_prefix(take);
+    }
+    return lines;
+}
+
+float hudScale(float viewportWidth, float viewportHeight, float userScale) noexcept {
+    if (viewportWidth <= 0.0f || viewportHeight <= 0.0f) {
+        return std::clamp(userScale, kMinUserHudScale, kMaxUserHudScale);
+    }
+    // The LIMITING axis. Taking the larger of the two would magnify a 3440x1440 ultrawide by
+    // 2.7 and push the bottom deck off the screen, since the deck's height is what the short
+    // axis has to hold.
+    const float fit = std::min(viewportWidth / kHudDesignWidth, viewportHeight / kHudDesignHeight);
+    return std::clamp(fit, kMinHudScale, kMaxHudScale)
+         * std::clamp(userScale, kMinUserHudScale, kMaxUserHudScale);
+}
+
+FrameLayout frameLayout(float viewportWidth, float viewportHeight) noexcept {
+    struct Metrics {
+        HudProfile profile;
+        float minimap;
+        float selection;
+        float build;
+        std::size_t buildColumns;
+        std::size_t rosterSlots;
+    };
+
+    // THE COLUMN COUNTS CAME DOWN — nine to six, twelve to eight, sixteen to ten — and that is
+    // the other half of the scaling correction. A cell has to hold a NAME, and at nine columns
+    // it was fifty-four points across: six characters of the readout face, so "Mobile Anti-Air"
+    // came out as "Mobil" over "e..". Six columns give eighty-two, which holds "Land Scout" on
+    // one line and breaks longer names between words instead of inside them.
+    //
+    // The page arrows already existed and now earn their place: a commander's fifteen options
+    // run to two pages of twelve rather than one page of eighteen unreadable ones.
+    // Six, seven and nine — chosen so the CELL never narrows as the panel widens. Eight at the
+    // Standard width would be 79.5 points against Compact's 82.8, which is the same shrinking
+    // button the old nine/twelve/sixteen produced, just less of it.
+    Metrics metrics{HudProfile::Compact, 176.0f, 320.0f, 528.0f, 6, 5};
+    if (viewportWidth >= 2240.0f && viewportHeight >= 1000.0f) {
+        metrics = Metrics{HudProfile::Wide, 256.0f, 673.0f, 893.0f, 9, 12};
+    } else if (viewportWidth >= 1600.0f && viewportHeight >= 900.0f) {
+        metrics = Metrics{HudProfile::Standard, 216.0f, 453.0f, 673.0f, 7, 8};
+    }
+
+    constexpr float kGap = 8.0f;
+    constexpr float kDeckHeight = 176.0f;
+    constexpr float kCommandWidth = 200.0f;
+    FrameLayout frame;
+    frame.profile = metrics.profile;
+    frame.economy = Rect{kMargin, kMargin, 360.0f, 84.0f};
+    frame.match = Rect{viewportWidth - kMargin - 184.0f, kMargin, 184.0f, 72.0f};
+    frame.minimap = Rect{kMargin, viewportHeight - kMargin - metrics.minimap,
+                         metrics.minimap, metrics.minimap};
+    frame.selection = Rect{frame.minimap.right() + kGap,
+                           viewportHeight - kMargin - kDeckHeight,
+                           metrics.selection, kDeckHeight};
+    frame.commands = Rect{viewportWidth - kMargin - kCommandWidth,
+                          viewportHeight - kMargin - kDeckHeight,
+                          kCommandWidth, kDeckHeight};
+    frame.build = Rect{frame.commands.x - kGap - metrics.build, frame.commands.y,
+                       metrics.build, kDeckHeight};
+
+    const float top = std::max(frame.economy.bottom(), frame.match.bottom()) + kGap;
+    const float deckTop = std::min({frame.minimap.y, frame.selection.y, frame.build.y,
+                                    frame.commands.y});
+    frame.battlefield = Rect{kMargin, top, std::max(0.0f, viewportWidth - kMargin * 2.0f),
+                             std::max(0.0f, deckTop - top - kGap)};
+    frame.buildColumns = metrics.buildColumns;
+    frame.rosterSlots = metrics.rosterSlots;
+    return frame;
+}
+
 float Gauge::fill() const noexcept {
     if (capacity <= 0.0f) {
         return 0.0f;  // nowhere to put anything reads as EMPTY, not as full
@@ -247,6 +373,41 @@ void appendInfoCard(Geometry& out, const text::Font& labelFont, const text::Font
     }
 }
 
+void appendInspector(Geometry& out, const text::Font& labelFont,
+                     const text::Font& readoutFont, const Theme& theme, const Rect& rect,
+                     const InfoCard& card) {
+    if (rect.width <= 0.0f || rect.height <= 0.0f || card.empty()) {
+        return;
+    }
+    constexpr float kInset = 4.0f;
+    constexpr float kLine = 16.0f;
+    float baseline = rect.y + kInset + 13.0f;
+    if (labelFont.usable()) {
+        (void)text::appendText(out.label, labelFont.glyphs, card.title, rect.x + kInset,
+                               baseline, kInk);
+    }
+    if (readoutFont.usable() && !card.corner.empty()) {
+        const float width = text::measureText(readoutFont.glyphs, card.corner);
+        (void)text::appendText(out.readout, readoutFont.glyphs, card.corner,
+                               rect.right() - kInset - width, baseline, fade(kInk, 0.6f));
+    }
+
+    const std::size_t rows = std::min<std::size_t>(3, card.rows.size());
+    for (std::size_t i = 0; i < rows; ++i) {
+        baseline += kLine;
+        const InfoRow& row = card.rows[i];
+        if (labelFont.usable()) {
+            (void)text::appendText(out.label, labelFont.glyphs, row.label, rect.x + kInset,
+                                   baseline, theme.label);
+        }
+        if (readoutFont.usable()) {
+            const float width = text::measureText(readoutFont.glyphs, row.value);
+            (void)text::appendText(out.readout, readoutFont.glyphs, row.value,
+                                   rect.right() - kInset - width, baseline, row.tint);
+        }
+    }
+}
+
 namespace {
 
 /// One resource's row: a chip, a label, the numbers, a storage bar and a flow strip.
@@ -337,39 +498,32 @@ namespace {
 void build(Geometry& out, const text::Font& labelFont, const text::Font& readoutFont,
            const Theme& theme, const MatchState& state, float viewportWidth,
            float viewportHeight) {
-    (void)viewportHeight;
-
     const text::Font& chrome = labelFont.usable() ? labelFont : readoutFont;
     if (!chrome.usable()) {
         return;  // no font at all: the interface degrades to nothing rather than to a crash
     }
 
     const float lineHeight = std::max(chrome.lineHeight, 12.0f);
+    const FrameLayout frame = frameLayout(viewportWidth, viewportHeight);
 
     // --- the resource panel, top left -------------------------------------
-    const float panelX = kMargin;
-    const float panelY = kMargin;
-    // Measured rather than guessed, and it has to include the stall line: the first version
-    // computed a height for two rows and then drew a third thing below them, which put the
-    // warning across the panel's own bottom edge.
-    const float rowHeight = kUnit * 0.8f + kGaugeHeight + kFlowGap + kFlowHeight;
-    const float rowGap = kUnit * 2.2f;
+    const float panelX = frame.economy.x;
+    const float panelY = frame.economy.y;
     const bool stalling = state.fundedFraction < 0.995f;
-    const float panelHeight = kPad * 2.0f + lineHeight * 0.8f + rowHeight * 2.0f + rowGap
-                            + (stalling ? lineHeight : 0.0f);
-
-    appendPanel(out, chrome, theme, panelX, panelY, kResourcePanelWidth, panelHeight);
+    appendPanel(out, chrome, theme, panelX, panelY, frame.economy.width,
+                frame.economy.height);
 
     const float contentX = panelX + kPad;
-    const float contentWidth = kResourcePanelWidth - kPad * 2.0f;
+    const float contentWidth = frame.economy.width - kPad * 2.0f;
 
-    // The pen sits on the BASELINE, so the first row starts a line down from the padding.
-    float y = panelY + kPad + lineHeight * 0.8f;
-    y = appendResourceRow(out, labelFont, readoutFont, theme, state.mass, "MASS", kMass,
-                          contentX, y, contentWidth);
-    y += rowGap;
-    y = appendResourceRow(out, labelFont, readoutFont, theme, state.energy, "ENERGY", kEnergy,
-                          contentX, y, contentWidth);
+    // Both rows and the stall footer have permanent slots. A changing economy changes readings,
+    // never this panel's height or its neighbours' anchors.
+    constexpr float kFirstBaseline = 20.0f;
+    constexpr float kSecondBaseline = 47.0f;
+    (void)appendResourceRow(out, labelFont, readoutFont, theme, state.mass, "MASS", kMass,
+                            contentX, panelY + kFirstBaseline, contentWidth);
+    (void)appendResourceRow(out, labelFont, readoutFont, theme, state.energy, "ENERGY", kEnergy,
+                            contentX, panelY + kSecondBaseline, contentWidth);
 
     // --- the throttle -----------------------------------------------------
     //
@@ -381,7 +535,7 @@ void build(Geometry& out, const text::Font& labelFont, const text::Font& readout
     // Shown only while there IS a stall: a line that always says 100% is one a player stops
     // seeing, and then misses at 40%.
     if (stalling) {
-        const float rowY = y + lineHeight * 0.85f;
+        const float rowY = panelY + frame.economy.height - 7.0f;
 
         char buffer[64];
         std::snprintf(buffer, sizeof(buffer), "BUILDING AT %.0f%%",
@@ -418,17 +572,13 @@ void build(Geometry& out, const text::Font& labelFont, const text::Font& readout
         std::snprintf(units, sizeof(units), "%zu UNITS", state.unitsAlive);
         const std::string clock = formatClock(state.elapsedSeconds);
 
-        const float widest = std::max({text::measureText(readoutFont.glyphs, clock, 1.25f),
-                                       text::measureText(readoutFont.glyphs, armies),
-                                       text::measureText(readoutFont.glyphs, units)});
-        const float panelWidth = widest + kPad * 2.0f;
-        const float rightX = viewportWidth - kMargin - panelWidth;
-        const float height = kPad * 2.0f + lineHeight * 2.6f;
-
-        appendPanel(out, chrome, theme, rightX, kMargin, panelWidth, height);
+        const float rightX = frame.match.x;
+        const float panelWidth = frame.match.width;
+        appendPanel(out, chrome, theme, rightX, frame.match.y, panelWidth,
+                    frame.match.height);
 
         const float right = rightX + panelWidth - kPad;
-        float ry = kMargin + kPad + lineHeight * 0.8f;
+        float ry = frame.match.y + 21.0f;
 
         const float clockWidth = text::measureText(readoutFont.glyphs, clock, 1.25f);
         (void)text::appendText(out.readout, readoutFont.glyphs, clock, right - clockWidth, ry,

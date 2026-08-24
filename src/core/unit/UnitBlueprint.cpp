@@ -248,6 +248,11 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
     // The skirt — the concrete apron adjacency is decided across. In ogrids, at the
     // file's stated size; kept as authored because the adjacency test wants halves and
     // converting to elmos here would hide which quantity this is.
+    // How tall the MESH is, which is not how tall the collision box is — see
+    // `UnitDef::meshHeightElmos`. Read here because it lives under `Physics`; combined with
+    // `SizeY` below, once that has been read.
+    def.meshHeightElmos = numberOr(*physics, "MeshExtentsY", 0.0f) * scmap::kElmosPerOgrid;
+
     def.skirtSquaresX = numberOr(*physics, "SkirtSizeX", 0.0f);
     def.skirtSquaresZ = numberOr(*physics, "SkirtSizeZ", 0.0f);
 
@@ -298,6 +303,14 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
     const float sizeX = numberOr(*parsed, "SizeX", 0.0f);
     const float sizeZ = numberOr(*parsed, "SizeZ", 0.0f);
     def.collisionRadiusElmos = 0.5f * std::max(sizeX, sizeZ) * scmap::kElmosPerOgrid;
+    // The vertical axis the radius above throws away. Kept for sight: an eye is on top of the
+    // unit and the sight model was reading the ground under it. See `UnitDef::sizeYElmos`.
+    def.sizeYElmos = numberOr(*parsed, "SizeY", 0.0f) * scmap::kElmosPerOgrid;
+    // The mesh's height falls back to the collision box when `Physics.MeshExtentsY` is absent,
+    // and never below it: a unit whose stated extents are smaller than its own collision box is
+    // content contradicting itself, and the larger figure is the safer one for a reveal that
+    // would otherwise finish early and leave a roof floating.
+    def.meshHeightElmos = std::max(def.meshHeightElmos, def.sizeYElmos);
 
     // The BUILD footprint is a separate, whole-square field, and only 363 of the
     // 568 have one — essentially the structures, which are what occupies a grid.

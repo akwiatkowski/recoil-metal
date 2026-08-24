@@ -105,6 +105,9 @@ void feedMotion(StateHash& h, const MoveState& motion) noexcept {
     if (motion.airborne) {
         feed(h, motion.airborne);
     }
+    if (motion.surfaceWater) {
+        feed(h, motion.surfaceWater);
+    }
     feed(h, motion.speedPerTick);
     feed(h, motion.turnPerTick);
     feed(h, motion.radiusElmos);

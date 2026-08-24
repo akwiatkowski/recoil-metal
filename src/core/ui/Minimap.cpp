@@ -6,15 +6,6 @@
 namespace rm::ui {
 namespace {
 
-/// A fraction of the SHORTER viewport side, so the panel is the same physical size on a wide
-/// monitor as on a square one. A fifth is what Supreme Commander's is at 1080p, measured off a
-/// screenshot rather than guessed.
-inline constexpr float kMinimapFraction = 0.20f;
-
-/// The largest the panel gets, in points. Without a cap a 5K display gets a minimap the size of
-/// a playing card, which is not more useful — it is just further from the units.
-inline constexpr float kMinimapMax = 260.0f;
-
 /// The projected map's inset from the panel edge: the border the panel's own bevel needs plus a
 /// little, so a unit at the very edge of the map still draws a whole pip inside the glass.
 inline constexpr float kMinimapInset = kPad;
@@ -50,12 +41,11 @@ struct Fit {
 } // namespace
 
 MinimapLayout minimapLayout(float viewportWidth, float viewportHeight) noexcept {
-    const float side =
-        std::min(kMinimapMax, std::min(viewportWidth, viewportHeight) * kMinimapFraction);
+    const Rect rect = frameLayout(viewportWidth, viewportHeight).minimap;
     return MinimapLayout{
-        .x = kMargin,
-        .y = viewportHeight - kMargin - side,
-        .size = side,
+        .x = rect.x,
+        .y = rect.y,
+        .size = rect.width,
         .inset = kMinimapInset,
     };
 }
@@ -86,8 +76,8 @@ std::array<float, 2> minimapToWorld(const MinimapLayout& layout, float mapWidthE
 }
 
 bool insideMinimap(const MinimapLayout& layout, float pointX, float pointY) noexcept {
-    return pointX >= layout.x && pointX <= layout.x + layout.size && pointY >= layout.y
-           && pointY <= layout.y + layout.size;
+    return pointX >= layout.x && pointX < layout.x + layout.size && pointY >= layout.y
+            && pointY < layout.y + layout.size;
 }
 
 void appendMinimap(Geometry& out, const text::Font& font, const Theme& theme,

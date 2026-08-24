@@ -30,7 +30,7 @@ enum class MouseButton { Left, Right };
 // the usual "add to selection" modifiers; Control is treated the same as
 // Command for selection purposes.
 struct MouseModifiers {
-    /// WHERE the click landed, in PIXELS, top-left origin — the same space the HUD lays out in,
+    /// WHERE the click landed, in logical POINTS, top-left origin — the HUD layout space,
     /// which is to say the space `width()` and `height()` report.
     ///
     /// HERE RATHER THAN AS A THIRD `onClick` PARAMETER because it belongs to the same question:
@@ -39,13 +39,8 @@ struct MouseModifiers {
     /// was on the panel before it decides what the click meant — a ray alone cannot say, since
     /// the panel is in front of the world rather than in it.
     ///
-    /// PIXELS RATHER THAN POINTS, and it was points until it was measured. Every consumer of
-    /// this compares it against a layout computed from `width()`/`height()`, which are the
-    /// DRAWABLE's size and therefore 2x the view's bounds on a Retina display — so a click had
-    /// to land in the lower-left quarter of the minimap's own rectangle to register, and the
-    /// build panel's cells were off by the same factor. The two doc comments disagreed about
-    /// this in writing, `width()` calling pixels "the space the interface is laid out in" while
-    /// this one claimed points were, and the code followed the wrong one.
+    /// Points keep one interface physically stable across 1x and 2x displays. Backing conversion
+    /// belongs at the renderer boundary rather than in every layout and hit test.
     ///
     /// The ray keeps POINTS, which is what `screenRay` wants — it divides by the view's bounds
     /// and the two must be in one space. That the two spaces differ is exactly why this is
@@ -122,14 +117,15 @@ public:
     // thread here and nothing to synchronise against.
     void onFrame(std::function<void(float seconds)> callback);
 
-    // Called when the user clicks without dragging, with the world ray under
-    // the cursor and the modifier keys held.
+    // Called with the world ray under the cursor and the modifier keys held. Left clicks and
+    // Shift-right clicks arrive on release after the drag-slop check. An unshifted right click
+    // arrives on press so an ordinary RTS order does not wait for the button to come back up.
     //
     // A ray rather than a screen position, and a ray rather than a resolved
     // pick: building it needs the camera and the viewport, which live here,
     // while deciding what it hit needs the map and the units, which do not.
-    // Drags are already spoken for by the camera (orbit and pan), so only a
-    // press and release that stayed put is reported.
+    // Drags are already spoken for by the camera (orbit and pan); Shift-right therefore remains
+    // release-gated so a pan cannot also queue an order.
     void onClick(std::function<void(const Ray& ray, MouseButton button, MouseModifiers mods)> callback);
 
     // Called on a printable keypress, lowercased. Modifiers are not reported:
@@ -152,7 +148,7 @@ public:
     void onKeyState(std::function<void(char key, bool pressed)> callback);
 
     /// Whether the left button is down right now, and where its press began, in the HUD's
-    /// pixel space. POLLED, like the cursor and for the same reason: a drag is a per-frame
+    /// point space. POLLED, like the cursor and for the same reason: a drag is a per-frame
     /// fact, and the interface is rebuilt per frame. The origin is only meaningful while
     /// the button is held; the band-select rectangle and the minimap's drag-to-pan are both
     /// derived from these two answers and the cursor, with no drag events plumbed at all.
@@ -170,7 +166,7 @@ public:
     /// truth about what is held.
     [[nodiscard]] bool keyHeld(char key) const;
 
-    /// Where the cursor is right now, in `MouseModifiers::pointX`'s space — backing pixels,
+    /// Where the cursor is right now, in `MouseModifiers::pointX`'s space — logical points,
     /// top-left origin, so it can be handed straight to a HUD hit test.
     ///
     /// A POLL RATHER THAN AN `onMouseMove` CALLBACK, for `keyHeld`'s reason and one more of its
@@ -200,11 +196,39 @@ public:
     void setStratumNormals(bool enabled);
     [[nodiscard]] bool stratumNormalsEnabled() const;
 
-    /// The drawable's size in PIXELS, which is the space the interface is laid out in — the
-    /// text shader divides a vertex by exactly this to reach clip space. Points would be half
-    /// of it on a Retina display and the whole HUD would come out at half size.
+    /// The content view's size in logical points. World rendering obtains backing pixels from
+    /// its drawable; HUD layout and input must not inherit that scale.
     [[nodiscard]] unsigned int width() const;
     [[nodiscard]] unsigned int height() const;
+
+    // --- The HUD's own space ------------------------------------------------------------
+    //
+    // THE INTERFACE IS LAID OUT SMALL AND DRAWN BIG. `ui::hudScale` says by how much, the
+    // renderer's HUD projection does the magnifying, and everything below is that space: a
+    // 2560x1440 window lays the interface out as though it were 1280x720 and draws it at twice
+    // the size, rather than filling the extra room with more, smaller controls.
+    //
+    // KEPT SEPARATE FROM `width`/`height` ON PURPOSE. The two spaces coincided until now and a
+    // single accessor would have been used for both; picking is done against the real viewport
+    // and hit-testing against this one, and quietly using either for both puts the cursor in
+    // the wrong place by exactly the scale factor.
+
+    /// What the player asked for, on top of the automatic figure. 1 is automatic alone.
+    void setUserHudScale(float scale);
+    [[nodiscard]] float userHudScale() const noexcept;
+
+    /// The magnification in force: automatic, times the player's preference.
+    [[nodiscard]] float hudScale() const;
+
+    /// The viewport the interface lays itself out in — `width()` and `height()` over the scale.
+    [[nodiscard]] float hudWidth() const;
+    [[nodiscard]] float hudHeight() const;
+
+    /// `cursor()` in that space, ready for a hit test.
+    [[nodiscard]] std::array<float, 2> hudCursor() const;
+
+    /// Where the left button went down, in that space. See `dragOrigin`.
+    [[nodiscard]] std::array<float, 2> hudDragOrigin() const;
 
     /// The two faces the interface is set in. See Renderer::labelFont.
     [[nodiscard]] text::Font labelFont() const;
@@ -237,6 +261,11 @@ public:
     void setGhost(std::size_t batch, const UnitInstance& instance,
                   std::array<float, 4> tint) noexcept;
     void clearGhost() noexcept;
+
+    /// This frame's construction sites, and the clock their effects run on.
+    /// See Renderer::setConstructions.
+    void setConstructions(std::span<const Renderer::ConstructionDraw> sites) noexcept;
+    void setConstructionTime(float seconds) noexcept;
 
     /// This frame's selection. See Renderer::setSelection.
     void setSelection(std::span<const SelectionEntry> selected);

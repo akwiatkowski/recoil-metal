@@ -181,9 +181,9 @@ TEST_CASE("a tray cell hit-tests to its option and the click becomes that constr
 
     // The click's first leg: a point in the mex's own cell resolves to the mex's index —
     // the same layout and hit-test the windowed tray uses.
-    const rm::ui::MinimapLayout minimap = rm::ui::minimapLayout(1280.0f, 720.0f);
+    const rm::ui::FrameLayout frame = rm::ui::frameLayout(1280.0f, 720.0f);
     const rm::ui::BuildPanelLayout panel =
-        rm::ui::buildPanelLayout(minimap, fixture->options.size());
+        rm::ui::buildPanelLayout(frame, fixture->options.size());
     std::size_t mexIndex = 0;
     while (fixture->options[mexIndex].id != "UEB1103") {
         ++mexIndex;
@@ -191,8 +191,8 @@ TEST_CASE("a tray cell hit-tests to its option and the click becomes that constr
     }
     const std::array<float, 2> origin = rm::ui::buildCellOrigin(panel, mexIndex);
     CHECK(rm::ui::buildOptionAt(panel, fixture->options.size(),
-                                origin[0] + rm::ui::kBuildCell * 0.5f,
-                                origin[1] + rm::ui::kBuildCell * 0.5f)
+                                origin[0] + panel.cellWidth * 0.5f,
+                                origin[1] + panel.cellHeight * 0.5f)
           == std::optional<std::size_t>{mexIndex});
 
     // The second leg: the armed build's ground truth and the order itself. The site is

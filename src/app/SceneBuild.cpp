@@ -14,8 +14,13 @@
 #include <cstdio>
 #include <fstream>
 #include <map>
+#include <numbers>
 
 namespace rm::app {
+
+[[nodiscard]] bool floatsOnWater(const rm::unitdef::UnitDef& def) noexcept {
+    return rm::data::moveDefFor(def).usesSurfaceWaterGrid;
+}
 
 /// Resolves each weapon's muzzle bone against the model's skeleton — the one moment both
 /// the blueprint's bone NAME and the model's bone POSITIONS are in hand. The height is the
@@ -400,8 +405,7 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
             // see `Scene::batchForType` for why the two numbers had to come apart (`#3090`).
             scene.setBatchForType(type, scene.batches.size() - 1);
             scene.setPathForType(type, path);
-            scene.setTypeTraits(type, move.maxSlopeDegrees, move.maxWaterDepthElmos,
-                                unit->def.meshToElmos);
+            scene.setTypeTraits(type, move, unit->def.meshToElmos);
 
             const auto armed = static_cast<std::size_t>(std::ranges::count_if(
                 unit->def.weapons, [](const rm::unitdef::Weapon& w) { return w.fires(); }));
@@ -518,8 +522,7 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
             scene.catalog.add(&scene.definitions.back(), gAppTickRate);
         scene.setBatchForType(type, scene.batches.size() - 1);
         scene.setPathForType(type, blueprintPath);
-        scene.setTypeTraits(type, move.maxSlopeDegrees, move.maxWaterDepthElmos,
-                            unit->def.meshToElmos);
+        scene.setTypeTraits(type, move, unit->def.meshToElmos);
 
         // The coarse mesh, when the blueprint declares one: its own batch, drawn instead
         // of the fine one past the cutoff (Scene::lodOfType; the gather routes). Found by
@@ -585,7 +588,6 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
     const rm::UnitTypeIndex type = *ensured;
     const rm::unitdef::UnitDef& def = *scene.catalog.def(type);
 
-    const rm::sim::Terrain terrain{field};
     rm::sim::Transform transform;
     transform.x = rm::sim::fxFromFloat(position[0]);
     transform.z = rm::sim::fxFromFloat(position[2]);
@@ -594,6 +596,7 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
     rm::sim::MoveState motion;
     motion.armyIndex = army.index;
     motion.airborne = def.motion == rm::unitdef::MotionType::Air;
+    motion.surfaceWater = floatsOnWater(def);
     motion.radiusElmos = rm::sim::fxFromFloat(def.collisionRadiusElmos);
     if (def.isMobile()) {
         // Per second in the blueprint, per tick in the sim — converted here because this is
@@ -607,7 +610,7 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
                 gAppTickRate.bradPerTick(rm::sim::kDefaultTurnRateRadiansPerSecond);
         }
     }
-    rm::sim::placeOnMotionLayer(transform, motion, terrain);
+    rm::sim::placeOnMotionLayer(transform, motion, scene.terrain(field));
 
     const rm::sim::UnitId id = scene.store.spawn(rm::sim::UnitStore::Spawn{
         .type = type,
@@ -688,7 +691,7 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
     // wrong model scale. That is the bug this refactor introduced and then caught — see
     // `Scene::setTypeTraits`.
     const rm::data::MoveDef move = rm::data::moveDefFor(*def);
-    scene.setTypeTraits(type, move.maxSlopeDegrees, move.maxWaterDepthElmos, def->meshToElmos);
+    scene.setTypeTraits(type, move, def->meshToElmos);
     // Deliberately NO `setBatchForType`: nothing of this type exists yet. `spawnUnit` records
     // the batch when the first one is built.
     return type;
@@ -730,8 +733,8 @@ bool issueBuild(UnitScene& scene, const rm::sim::PassabilityGrid& grid,
 
     const bool applied = rm::sim::applyCommand(command, scene.store, scene.catalog,
                                                scene.players, scene.armies,
-                                               rm::sim::Terrain{field}, grid, gAppTickRate,
-                                                &scene.building);
+                                                scene.terrain(field), grid, gAppTickRate,
+                                                 &scene.building);
     if (applied) {
         scene.commands.record(command);
     }
@@ -837,9 +840,10 @@ void orderFirstExtractors(UnitScene& scene, std::span<const rm::scenario::Marker
         // field's note: a build order names a place on the map and the ground decides the
         // height. Carrying it made two runs of one match differ in the state hash over a
         // number nothing ever read.
-        const rm::sim::PassabilityGrid& grid = passability.gridFor(
-            scene.maxSlopeDegrees[static_cast<std::size_t>(scene.store.typeAt(slot))],
-            scene.maxWaterDepthElmos[static_cast<std::size_t>(scene.store.typeAt(slot))]);
+        const std::size_t builderType =
+            static_cast<std::size_t>(scene.store.typeAt(slot));
+        const rm::sim::PassabilityGrid& grid = passability.gridForBuild(
+            scene, static_cast<std::size_t>(*registered), builderType);
         if (!issueBuild(scene, grid, field, scene.store.idAt(slot), playerDriving(scene, army),
                         0, *registered, rm::sim::fxFromFloat(nearest->position[0]),
                         rm::sim::fxFromFloat(nearest->position[2]))) {
@@ -859,6 +863,48 @@ void orderFirstExtractors(UnitScene& scene, std::span<const rm::scenario::Marker
                 static_cast<double>(rm::sim::magToFloat(lastTime) / firstBuilderRate));
 }
 
+/// Places a requested surface fleet at deterministic navigable-cell centres.
+[[nodiscard]] std::vector<rm::UnitInstance> scatterOnWater(
+    const rm::HeightField& field, float waterLevelElmos, std::size_t count,
+    std::uint32_t seed, float scale) {
+    const rm::sim::PassabilityGrid grid =
+        rm::sim::buildSurfaceWaterPassability(field, waterLevelElmos);
+    std::vector<std::size_t> cells;
+    for (std::size_t cell = 0; cell < grid.passable.size(); ++cell) {
+        const int x = static_cast<int>(cell % static_cast<std::size_t>(grid.cellsX));
+        const int z = static_cast<int>(cell / static_cast<std::size_t>(grid.cellsX));
+        if (grid.passable[cell] != 0
+            && (grid.passableAt(x - 1, z) || grid.passableAt(x + 1, z)
+                || grid.passableAt(x, z - 1) || grid.passableAt(x, z + 1))) {
+            cells.push_back(cell);  // never seed a ship in a one-cell puddle
+        }
+    }
+    std::vector<rm::UnitInstance> placed;
+    if (cells.empty()) {
+        return placed;
+    }
+
+    placed.reserve(count);
+    const std::size_t first = static_cast<std::size_t>(seed) % cells.size();
+    const std::size_t stride =
+        std::max<std::size_t>(1, cells.size() / std::max<std::size_t>(1, count));
+    for (std::size_t i = 0; i < count; ++i) {
+        const std::size_t cell = cells[(first + i * stride) % cells.size()];
+        const int x = static_cast<int>(cell % static_cast<std::size_t>(grid.cellsX));
+        const int z = static_cast<int>(cell / static_cast<std::size_t>(grid.cellsX));
+        const float phase = count > 0 ? static_cast<float>(i) / static_cast<float>(count) : 0.0f;
+        placed.push_back(rm::UnitInstance{
+            .position = {{rm::sim::fxToFloat(grid.worldAtCellCentre(x)), waterLevelElmos,
+                          rm::sim::fxToFloat(grid.worldAtCellCentre(z))}},
+            .rotationY = 2.0f * std::numbers::pi_v<float> * phase,
+            .scale = scale,
+            .teamColour = rm::teamColour(i),
+            .animationPhase = phase,
+        });
+    }
+    return placed;
+}
+
 /// Loads every requested model, resolves its textures, and places instances.
 ///
 /// The first model takes the map's start positions and fills the rest of its
@@ -868,9 +914,12 @@ void orderFirstExtractors(UnitScene& scene, std::span<const rm::scenario::Marker
 [[nodiscard]] UnitScene resolveUnits(std::span<const UnitOptions> requests,
                                      const rm::HeightField& field,
                                      std::span<const rm::mapinfo::StartPosition> starts,
-                                     float landAbove, const rm::vfs::AssetSearch& search,
+                                     bool hasWater, float waterLevelElmos,
+                                     const rm::vfs::AssetSearch& search,
                                      const rm::vfs::Vfs& content) {
     UnitScene scene;
+    scene.hasWater = hasWater;
+    scene.waterLevelElmos = waterLevelElmos;
 
     for (std::size_t i = 0; i < requests.size(); ++i) {
         const UnitOptions& request = requests[i];
@@ -992,15 +1041,27 @@ void orderFirstExtractors(UnitScene& scene, std::span<const rm::scenario::Marker
                                                             : 1.0f);
 
         std::vector<rm::UnitInstance> placed;
-        const bool takesStarts = (i == 0);
-        if (takesStarts) {
+        const bool surfaceWater = def && floatsOnWater(*def);
+        const bool takesStarts = i == 0 && !surfaceWater;
+        if (surfaceWater && hasWater) {
+            placed = scatterOnWater(field, waterLevelElmos, request.count,
+                                     kScatterSeed + static_cast<std::uint32_t>(i), scale);
+            if (!placed.empty()) {
+                std::printf("  water placement starts at %.0f, %.0f\n",
+                            static_cast<double>(placed.front().position[0]),
+                            static_cast<double>(placed.front().position[2]));
+            }
+        } else if (takesStarts) {
             placed = rm::atStartPositions(field, starts, scale);
         }
         const std::size_t remaining =
             request.count > placed.size() ? request.count - placed.size() : 0;
-        const auto scattered =
-            rm::scatterOnLand(field, remaining, kScatterSeed + static_cast<std::uint32_t>(i),
-                              scale, landAbove);
+        const auto scattered = surfaceWater
+                                 ? std::vector<rm::UnitInstance>{}
+                                 : rm::scatterOnLand(
+                                       field, remaining,
+                                       kScatterSeed + static_cast<std::uint32_t>(i), scale,
+                                       hasWater ? waterLevelElmos : 0.0f);
         placed.insert(placed.end(), scattered.begin(), scattered.end());
 
         std::printf("  %zu instances (%zu at start positions, %zu scattered)\n", placed.size(),
@@ -1036,8 +1097,7 @@ void orderFirstExtractors(UnitScene& scene, std::span<const rm::scenario::Marker
         // The batch for this type is the one pushed below, so the mapping is recorded there
         // rather than asserted here. The assertion this replaces — `type == batches.size()` —
         // is the one that made a buildable type impossible to register early (`#3090`).
-        scene.setTypeTraits(type, move.maxSlopeDegrees, move.maxWaterDepthElmos,
-                            def.has_value() ? def->meshToElmos : 1.0f);
+        scene.setTypeTraits(type, move, def.has_value() ? def->meshToElmos : 1.0f);
 
         // A definition's speed and turn rate reach every unit of it. Slope and depth limits
         // do NOT yet: passability is one grid for the whole scene, so honouring them per
@@ -1050,6 +1110,7 @@ void orderFirstExtractors(UnitScene& scene, std::span<const rm::scenario::Marker
                 // building is still something to be pushed out of.
                 state.radiusElmos = rm::sim::fxFromFloat(def->collisionRadiusElmos);
                 state.airborne = def->motion == rm::unitdef::MotionType::Air;
+                state.surfaceWater = floatsOnWater(*def);
                 if (def->isMobile()) {
                     state.speedPerTick = gAppTickRate.perTick(def->speedElmosPerSecond);
                     state.turnPerTick = gAppTickRate.bradPerTick(
@@ -1059,7 +1120,7 @@ void orderFirstExtractors(UnitScene& scene, std::span<const rm::scenario::Marker
                 }
             }
             rm::sim::Transform transform = transformAt(instance.position, instance.rotationY);
-            rm::sim::placeOnMotionLayer(transform, state, rm::sim::Terrain{field});
+            rm::sim::placeOnMotionLayer(transform, state, scene.terrain(field));
             (void)scene.store.spawn(rm::sim::UnitStore::Spawn{
                 .type = type,
                 .transform = transform,

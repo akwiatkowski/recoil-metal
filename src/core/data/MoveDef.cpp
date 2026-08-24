@@ -47,10 +47,14 @@ MoveDef moveDefFor(unitdef::MotionType motion) noexcept {
                        .usesGroundGrid = false};
 
     case MotionType::Water:
+        // Surface ships use the inverse domain: every square under a path cell must be below
+        // the waterline. They do not care about seabed slope because they float above it.
+        return MoveDef{.maxSlopeDegrees = 0.0f, .maxWaterDepthElmos = 0.0f,
+                        .usesGroundGrid = false, .usesSurfaceWaterGrid = true};
+
     case MotionType::SurfacingSub:
-        // These need the INVERSE of the ground grid — water deep enough rather than shallow
-        // enough — which this engine cannot yet express. Refused rather than approximated:
-        // routing a ship over the ground grid would path it across dry land.
+        // A submarine needs depth, surfacing and sonar semantics. Refuse it rather than passing
+        // it through the surface-ship grid and hiding those missing rules.
         return MoveDef{.maxSlopeDegrees = 0.0f, .maxWaterDepthElmos = 0.0f,
                        .usesGroundGrid = false};
     }
@@ -60,6 +64,13 @@ MoveDef moveDefFor(unitdef::MotionType motion) noexcept {
 }
 
 MoveDef moveDefFor(const unitdef::UnitDef& def) noexcept {
+    // Naval factories are immobile in the blueprint, but their foundation is the same water
+    // domain their products use. Treating MotionType::None literally here leaves placement with
+    // no grid and lets an amphibious builder found the yard on land.
+    if (def.motion == unitdef::MotionType::None && def.hasCategory("NAVAL")
+        && def.hasCategory("FACTORY")) {
+        return moveDefFor(unitdef::MotionType::Water);
+    }
     // THE CORRECTION. The unit's own `maxSlopeDegrees` and `maxWaterDepthElmos` are not read —
     // they govern building placement (`01 §3.2`), and reading them for routing was asking a
     // question about foundations and using the answer for legs.

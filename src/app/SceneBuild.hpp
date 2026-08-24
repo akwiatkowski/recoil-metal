@@ -181,7 +181,8 @@ void orderFirstExtractors(UnitScene& scene, std::span<const rm::scenario::Marker
 [[nodiscard]] UnitScene resolveUnits(std::span<const UnitOptions> requests,
                                      const rm::HeightField& field,
                                      std::span<const rm::mapinfo::StartPosition> starts,
-                                     float landAbove, const rm::vfs::AssetSearch& search,
+                                     bool hasWater, float waterLevelElmos,
+                                     const rm::vfs::AssetSearch& search,
                                      const rm::vfs::Vfs& content);
 
 } // namespace rm::app

@@ -44,6 +44,13 @@ namespace {
     return def;
 }
 
+[[nodiscard]] rm::unitdef::UnitDef shieldedDef() {
+    rm::unitdef::UnitDef def = plainDef();
+    def.shield.maximum = rm::sim::Mag::fromInt(100);
+    def.shield.radiusElmos = rm::sim::Fx::fromInt(80);
+    return def;
+}
+
 } // namespace
 
 // --- P7.1: the snapshot ------------------------------------------------------------------
@@ -115,4 +122,16 @@ TEST_CASE("taking a snapshot does not touch the sim") {
         (void)rm::sim::snapshot(roster.store, static_cast<rm::TickIndex>(i));
     }
     CHECK(rm::sim::hashMatch(roster.store, match) == before);
+}
+
+TEST_CASE("a snapshot says whether an ordinary shield is active") {
+    rm::test::Roster roster;
+    const rm::UnitTypeIndex type = roster.addType(shieldedDef());
+    const UnitId unit = roster.add(type, 100.0f, 100.0f, 0, 50.0f);
+
+    REQUIRE(rm::sim::snapshot(roster.store, 1).units[0].shieldActive);
+
+    roster.health(unit).shield.current = rm::sim::Mag{};
+    roster.health(unit).shield.rechargeRemaining = 10;
+    CHECK_FALSE(rm::sim::snapshot(roster.store, 2).units[0].shieldActive);
 }

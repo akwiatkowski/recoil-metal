@@ -7,7 +7,9 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace rm::ui {
@@ -95,10 +97,107 @@ struct Theme {
 // One spacing unit, and everything derived from it. A HUD whose paddings are all chosen
 // individually looks approximately aligned from a distance and wrong up close.
 
+// --- What the interface is willing to say -----------------------------------
+//
+// TWO SWITCHES, deliberately constants rather than settings, because they are a decision about
+// what the interface is FOR rather than a preference. Both are one edit to reverse, which is
+// the point of naming them at all. They live here rather than beside the build panel because
+// the roster and the info cards obey them too.
+
+/// Whether a build cell's face carries the costs, or the hover card alone does.
+///
+/// OFF. The face used to carry mass and nothing else, and the note that decision left behind
+/// argued that a bare number was the deciding fact and energy beside it would not fit. What it
+/// missed is that a cell then carried an icon and a number and NO NAME — so a player looking
+/// for the engineer in a factory's tray had six pictures and six numbers and no way to tell
+/// which was which. The name is what a menu is for; the numbers are what a hover is for.
+///
+/// ON restores all three — mass, energy and build time — as a set. Not one of them: half a
+/// tray showing two numbers and half showing one reads as a bug rather than a rule, which is
+/// the same trap the mass-only version fell into from the other side.
+inline constexpr bool kShowCostOnCell = false;
+
+/// Whether blueprint ids appear anywhere a human is meant to read.
+///
+/// OFF. `UEB0101` is a filename. It belongs in a log, in a command line and in a bug report,
+/// and it was being set in the build panel's header, in every info card's corner and on any
+/// tile whose blueprint stated no display name — places where the reader wanted "Land
+/// Factory". The one exception is content that states no name at all, where the id is the only
+/// thing left to print and an anonymous cell would be worse than a part number.
+inline constexpr bool kShowBlueprintIds = false;
+
 inline constexpr float kUnit = 6.0f;         ///< the grid everything snaps to
 inline constexpr float kMargin = kUnit * 2;  ///< panel to screen edge
 inline constexpr float kPad = kUnit * 1.5f;  ///< panel edge to its contents
 inline constexpr float kBevel = 1.0f;        ///< the hairline that catches the light
+
+/// One module rectangle in the HUD's top-left-origin logical-point space.
+struct Rect {
+    float x = 0.0f;
+    float y = 0.0f;
+    float width = 0.0f;
+    float height = 0.0f;
+
+    [[nodiscard]] float right() const noexcept { return x + width; }
+    [[nodiscard]] float bottom() const noexcept { return y + height; }
+    [[nodiscard]] bool contains(float pointX, float pointY) const noexcept {
+        return pointX >= x && pointX < right() && pointY >= y && pointY < bottom();
+    }
+};
+
+enum class HudProfile : std::uint8_t { Compact, Standard, Wide };
+
+/// The universal interface anatomy. Individual modules own their internals; this owns every
+/// outer rectangle so drawing, hover, clicks and drag exclusion cannot derive different HUDs.
+struct FrameLayout {
+    HudProfile profile = HudProfile::Compact;
+    Rect economy;
+    Rect match;
+    Rect minimap;
+    Rect selection;
+    Rect build;
+    Rect commands;
+    Rect battlefield;
+    std::size_t buildColumns = 9;
+    std::size_t rosterSlots = 5;
+};
+
+/// Selects Compact (1280x720), Standard (1600x900), or Wide (2240x1000) from logical points.
+///
+/// TAKES THE HUD'S OWN SPACE, not the window's. See `hudScale`: the interface is laid out in a
+/// design space that the renderer magnifies, so a caller passes `width / scale`.
+[[nodiscard]] FrameLayout frameLayout(float viewportWidth, float viewportHeight) noexcept;
+
+/// The interface's design resolution, in points. Everything in this header is authored against
+/// it, and `hudScale` is how far a real viewport is from it.
+inline constexpr float kHudDesignWidth = 1280.0f;
+inline constexpr float kHudDesignHeight = 720.0f;
+
+/// How far the interface may be magnified before it stops being an interface and starts being
+/// furniture. Two and a half is a 3200x1800 window drawn as though it were 1280x720.
+inline constexpr float kMinHudScale = 1.0f;
+inline constexpr float kMaxHudScale = 2.5f;
+
+/// The bounds a player's own preference may reach, either way from the automatic figure.
+inline constexpr float kMinUserHudScale = 0.5f;
+inline constexpr float kMaxUserHudScale = 3.0f;
+
+/// How much bigger than its design size to draw the interface, from the viewport in LOGICAL
+/// POINTS and the player's own preference.
+///
+/// WHY THIS EXISTS, and it is the correction of a real backwards behaviour. The frame used to
+/// pick one of three fixed profiles and spend a bigger window on MORE COLUMNS: nine cells in
+/// 528 points at 1280 wide, sixteen in 893 at 2240. The cell went from 54 points across to 52.
+/// Every metric in this header is a constant in points, so enlarging the window made the
+/// interface physically smaller relative to the screen and never larger — the opposite of what
+/// a bigger display is for. On a HiDPI panel it was worse again: logical points there are dense,
+/// the viewport measures under 1600x900, and the smallest profile is what a 2.7K screen got.
+///
+/// The fix is to magnify rather than subdivide. Layout happens in the design space above and
+/// the renderer scales the result, so the same nine columns simply get bigger. The fit is taken
+/// on the LIMITING axis so a short ultrawide does not magnify itself off its own bottom edge.
+[[nodiscard]] float hudScale(float viewportWidth, float viewportHeight,
+                             float userScale = 1.0f) noexcept;
 
 /// The drop shadow's offset, in pixels — toward the implied light's opposite corner, so a
 /// panel sits ON the world rather than in it. Three: enough to separate, not enough to float.
@@ -113,7 +212,7 @@ inline constexpr float kShadow = 3.0f;
 inline constexpr float kBracket = kUnit * 2.5f;
 
 /// The resource panel's size.
-inline constexpr float kResourcePanelWidth = 344.0f;
+inline constexpr float kResourcePanelWidth = 360.0f;
 
 /// A resource's chip: the small square of its own colour that says which row this is.
 ///
@@ -248,9 +347,29 @@ struct InfoCard {
 /// twice is a card that overlaps its owner by the difference.
 [[nodiscard]] float infoCardHeight(float lineHeight, std::size_t rowCount) noexcept;
 
+/// Breaks `text` into at most `maxLines` lines that each fit `maxWidth`, in the given face.
+///
+/// WHY A BUILD CELL NEEDS THIS. A cell is about fifty points across and a unit is called "Mass
+/// Extractor"; the choice is between a name that overflows into its neighbour, a name clipped
+/// mid-word, and two short lines. Two short lines is the only one of the three a player can
+/// read. Breaks on spaces where it can and mid-word where it cannot, because a single
+/// unbreakable word is still better shown in part than not at all.
+///
+/// The last line is truncated with two dots when what remains does not fit — two rather than an
+/// ellipsis because the atlas holds ASCII and nothing else (`text::kFirstGlyph`).
+[[nodiscard]] std::vector<std::string> wrapToWidth(std::span<const text::Glyph> glyphs,
+                                                    std::string_view text, float maxWidth,
+                                                    std::size_t maxLines, float scale = 1.0f);
+
 /// Draws the card at (x, y), `width` across.
 void appendInfoCard(Geometry& out, const text::Font& labelFont, const text::Font& readoutFont,
-                    const Theme& theme, float x, float y, float width, const InfoCard& card);
+                     const Theme& theme, float x, float y, float width, const InfoCard& card);
+
+/// Draws card content inside a fixed inspector rectangle, clipping its information budget to
+/// three fact rows. The rectangle never changes with hover content.
+void appendInspector(Geometry& out, const text::Font& labelFont,
+                     const text::Font& readoutFont, const Theme& theme, const Rect& rect,
+                     const InfoCard& card);
 
 /// Builds the whole interface for one frame.
 ///

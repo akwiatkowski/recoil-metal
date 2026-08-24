@@ -12,6 +12,7 @@ extern "C" {
 }
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cstdio>
 #include <optional>
@@ -116,6 +117,7 @@ __rm_faf.unitMeta = {
         GetAIBrain = function(u) return u.__brain end,
         IsBeingBuilt = function() return false end,
         GetFractionComplete = function() return 1 end,
+        GetHealthPercent = function(u) return u.healthPercent end,
         GetPosition = function(u) return { u.x, 0, u.z } end,
         -- 'Upgrading' is the one state the snapshot tracks (the upgrade-in-place tech
         -- path); everything else honestly answers false.
@@ -273,6 +275,7 @@ function __rm_faf_boot(army, info)
         startX = info.startX,
         startZ = info.startZ,
         snap = { units = {}, occupied = {} },
+        hasNavalSite = info.hasNavalSite == true,
         Name = 'rm-faf-' .. tostring(army),
     }
     for name, fn in pairs(methods) do brain[name] = fn end
@@ -372,7 +375,20 @@ function __rm_faf_boot(army, info)
         if not group then return end
         for _, builderName in ipairs(group) do
             local spec = Builders[builderName]
-            if spec then
+            local supported = spec ~= nil
+            if groupName == 'EngineerNavalFactoryBuilder' then
+                supported = builderName == 'T1 Naval Factory Builder'
+            elseif groupName == 'FrequentSeaAttackFormBuilders' then
+                supported = builderName == 'Frequent Sea Attack T1'
+            end
+            -- The slice stops at T1. NormalMain already carries generic economy-upgrade
+            -- groups, so filter their naval platoon templates even though they were not added
+            -- by the naval block below.
+            if spec and (spec.PlatoonTemplate == 'T1SeaFactoryUpgrade'
+                         or spec.PlatoonTemplate == 'T2SeaFactoryUpgrade') then
+                supported = false
+            end
+            if supported then
                 table.insert(list, { spec = spec, kind = group.BuildersType })
             end
         end
@@ -381,6 +397,13 @@ function __rm_faf_boot(army, info)
         for _, groupName in ipairs(template.Builders or {}) do addGroup(groupName) end
         for _, groupName in ipairs(template.NonCheatBuilders or {}) do addGroup(groupName) end
     end
+    if brain.hasNavalSite then
+        -- Smallest complete naval lane: one T1 yard, surface products, and the stock T1
+        -- fleet former. Submarines are filtered below until depth and sonar are simulated.
+        addGroup('EngineerNavalFactoryBuilder')
+        addGroup('T1SeaFactoryBuilders')
+        addGroup('FrequentSeaAttackFormBuilders')
+    end
     table.sort(list, function(a, b)
         local pa, pb = a.spec.Priority or 0, b.spec.Priority or 0
         if pa ~= pb then return pa > pb end
@@ -388,7 +411,15 @@ function __rm_faf_boot(army, info)
     end)
     brain.builders = list
     if template then
-        brain.BuilderManagers.MAIN.BaseSettings = template.BaseSettings
+        -- Per-brain copy: raising MAIN's sea cap must not mutate NormalMain globally and make
+        -- a dry brain think it owns a naval lane too.
+        local settings = {}
+        for key, value in pairs(template.BaseSettings or {}) do settings[key] = value end
+        local factoryCount = {}
+        for key, value in pairs(settings.FactoryCount or {}) do factoryCount[key] = value end
+        if brain.hasNavalSite then factoryCount.Sea = 1 end
+        settings.FactoryCount = factoryCount
+        brain.BuilderManagers.MAIN.BaseSettings = settings
     end
 
     brain.buildingTemplates = import('/lua/buildingtemplates.lua').BuildingTemplates
@@ -634,7 +665,7 @@ function __rm_faf_decide(army, snap)
                             and 'BUILTBYTIER2FACTORY')
                     or 'BUILTBYTIER1FACTORY'
                 if not factory.__taken and EntityCategoryContains(need, factory)
-                    and unitCats and unitCats[tierTag] then
+                    and unitCats and unitCats[tierTag] and not unitCats.SUBMERSIBLE then
                     factory.__taken = true
                     table.insert(decisions, {
                         kind = 'train', bp = bp,
@@ -740,6 +771,35 @@ end
     std::transform(id.begin(), id.end(), id.begin(),
                    [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
     return "/units/" + id + "/" + id + "_unit.bp";
+}
+
+[[nodiscard]] std::optional<rm::unitdef::UnitDef> readBlueprint(const World& world,
+                                                                 const std::string& path) {
+    const std::optional<std::vector<std::byte>> bytes = world.content.read(path);
+    if (!bytes) {
+        return std::nullopt;
+    }
+    auto loaded = rm::unitbp::load(
+        std::string_view{reinterpret_cast<const char*>(bytes->data()), bytes->size()}, path);
+    if (!loaded) {
+        return std::nullopt;
+    }
+    return std::move(*loaded);
+}
+
+[[nodiscard]] std::optional<std::array<rm::sim::Fx, 3>> nearestNavalSite(
+    const World& world, const std::array<rm::sim::Fx, 3>& home, rm::sim::Fx radius) {
+    if (!world.scene.hasWater) {
+        return std::nullopt;
+    }
+    const rm::sim::PassabilityGrid water = rm::sim::buildSurfaceWaterPassability(
+        world.field, world.scene.waterLevelElmos);
+    const auto site = rm::sim::nearestPlaceableSite(water, home[0], home[2], radius);
+    if (!site) {
+        return std::nullopt;
+    }
+    return std::array<rm::sim::Fx, 3>{(*site)[0], rm::sim::fxFromFloat(world.scene.waterLevelElmos),
+                                      (*site)[1]};
 }
 
 /// Reads an array of strings a driver ledger function returns. Empty on any failure —
@@ -857,6 +917,22 @@ void FafOpponent::advance(rm::TickIndex tick) {
         lua_setfield(lua, -2, "sizeZ");
         lua_pushinteger(lua, static_cast<lua_Integer>(scene.armies.size()));
         lua_setfield(lua, -2, "armies");
+        const std::array<rm::sim::Fx, 3> home{
+            rm::sim::fxFromFloat(start.x), rm::sim::Fx{}, rm::sim::fxFromFloat(start.z)};
+        bool hasNavalSite = false;
+        const std::array<std::string, 1> navalCategory{{"NAVAL"}};
+        if (const auto yard = scene.roster.pick(scene.armies[armyIndex].faction,
+                                                rm::unitdef::Role::Factory, 1,
+                                                navalCategory)) {
+            if (const auto def = readBlueprint(*world_, yard->path())) {
+                hasNavalSite = nearestNavalSite(
+                                   *world_, home,
+                                   rm::sim::fxFromFloat(def->collisionRadiusElmos))
+                                   .has_value();
+            }
+        }
+        lua_pushboolean(lua, hasNavalSite ? 1 : 0);
+        lua_setfield(lua, -2, "hasNavalSite");
         // 'NormalMain' is FAF's own default skirmish base; template CHOICE (per-map scoring
         // via each template's FirstBaseFunction) is a later pass.
         lua_pushstring(lua, "NormalMain");
@@ -1037,6 +1113,12 @@ void FafOpponent::advance(rm::TickIndex tick) {
         lua_setfield(lua, -2, "x");
         lua_pushnumber(lua, static_cast<lua_Number>(z));
         lua_setfield(lua, -2, "z");
+        const float maximumHealth = rm::sim::magToFloat(health[slot].maximum);
+        lua_pushnumber(lua, static_cast<lua_Number>(
+                                maximumHealth > 0.0F
+                                    ? rm::sim::magToFloat(health[slot].current) / maximumHealth
+                                    : 0.0F));
+        lua_setfield(lua, -2, "healthPercent");
         // Idle: not moving. Whether a builder is mid-construction is answered by the
         // *Underway counts, because the sim does not associate a construction with its
         // builder — stated in the driver where the counts gate decisions.
@@ -1186,6 +1268,7 @@ void FafOpponent::convertDecision(lua_State* lua) {
         if (bp.empty()) {
             return;
         }
+        const std::string path = blueprintPathFor(bp);
 
         std::optional<std::array<rm::sim::Fx, 3>> site;
         if (kind == "train") {
@@ -1195,7 +1278,8 @@ void FafOpponent::convertDecision(lua_State* lua) {
         } else {
             const std::string structure = field("structure");
             const bool wantsDeposit = structure.find("Resource") != std::string::npos
-                                      || structure.find("MassExtraction") != std::string::npos;
+                                       || structure.find("MassExtraction") != std::string::npos;
+            const bool wantsSeaFactory = structure.find("SeaFactory") != std::string::npos;
             const rm::mapinfo::StartPosition& start =
                 world_->starts[static_cast<std::size_t>(army_)];
             const std::array<rm::sim::Fx, 3> home{rm::sim::fxFromFloat(start.x), rm::sim::Fx{},
@@ -1210,7 +1294,13 @@ void FafOpponent::convertDecision(lua_State* lua) {
                 }
                 return false;
             };
-            if (wantsDeposit) {
+            if (wantsSeaFactory) {
+                const auto def = readBlueprint(*world_, path);
+                if (def && def->collisionRadiusElmos > 0.0f) {
+                    site = nearestNavalSite(
+                        *world_, home, rm::sim::fxFromFloat(def->collisionRadiusElmos));
+                }
+            } else if (wantsDeposit) {
                 // The nearest deposit free of BOTH the sim's claims and this pass's own
                 // plans — nearestFreeDeposit only knows the first kind, so the search runs
                 // here with both filters.
@@ -1296,7 +1386,7 @@ void FafOpponent::convertDecision(lua_State* lua) {
         plannedThisPass_.push_back(*site);
         decisions_.push_back(Decision{
             .kind = Decision::Kind::StartConstruction,
-            .blueprint = blueprintPathFor(field("bp")),
+            .blueprint = path,
             .site = *site,
             .builder = *builder,
         });
@@ -1320,6 +1410,8 @@ void FafOpponent::convertDecision(lua_State* lua) {
         if (!target) {
             return;
         }
+        const rm::sim::PassabilityGrid water = rm::sim::buildSurfaceWaterPassability(
+            world_->field, scene.waterLevelElmos);
         lua_getfield(lua, -1, "units");
         if (lua_istable(lua, -1)) {
             const auto count = static_cast<lua_Integer>(lua_rawlen(lua, -1));
@@ -1332,11 +1424,19 @@ void FafOpponent::convertDecision(lua_State* lua) {
                             ? std::optional<rm::sim::UnitId>{handles_[static_cast<std::size_t>(
                                   h - 1)]}
                             : std::nullopt) {
+                    std::array<rm::sim::Fx, 2> objective{(*target)[0], (*target)[2]};
+                    if (scene.store.motion()[unit->index].surfaceWater) {
+                        const rm::sim::Transform& from = scene.store.transforms()[unit->index];
+                        if (const auto reachable = rm::sim::reachablePointToward(
+                                water, from.x, from.z, objective[0], objective[1])) {
+                            objective = *reachable;
+                        }
+                    }
                     decisions_.push_back(Decision{
                         .kind = Decision::Kind::Move,
                         .unit = *unit,
-                        .toX = (*target)[0],
-                        .toZ = (*target)[2],
+                        .toX = objective[0],
+                        .toZ = objective[1],
                     });
                     ++sent;
                 }

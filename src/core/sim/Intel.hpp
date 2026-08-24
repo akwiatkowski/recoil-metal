@@ -314,7 +314,11 @@ private:
     std::vector<Placement> placements_;
     std::vector<std::array<Emitter, kIntelKindCount>> emitters_;
     std::vector<std::array<Emitter, kHiddenKindCount>> hiddenEmitters_;
-    VisionStyle style_ = VisionStyle::Recoil;
+    // FLAT DISCS UNLESS TOLD OTHERWISE. This engine reads Forged Alliance's content, and that
+    // game's own sight is `radius * vertex.xz + position.xy` — a circle, with no heightmap
+    // sample anywhere in `effects/vision.fx`. `configure` is what a real scene calls; this
+    // default is what a scene that never configures itself gets, and it should agree.
+    VisionStyle style_ = VisionStyle::ForgedAlliance;
 
     /// Scratch, reused across emitters so a stamp is not an allocation.
     std::vector<std::int32_t> scratch_;

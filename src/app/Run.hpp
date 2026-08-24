@@ -61,6 +61,13 @@ struct Session {
     /// `--time`: where in an animation clip a capture freezes. Zero means the clip's start.
     float animationTime = 0.0f;
 
+    /// `--ui-scale`: the player's own multiplier on top of the automatic magnification.
+    ///
+    /// A PREFERENCE RATHER THAN A CORRECTION. `ui::hudScale` already grows the interface with
+    /// the viewport, which is what a larger window should do; this is for the reader who wants
+    /// it larger still, or the one capturing a small screenshot who wants it out of the way.
+    float uiScale = 1.0f;
+
     /// How many prop instances were placed, for the quality line each mode prints.
     std::size_t propInstances = 0;
 };

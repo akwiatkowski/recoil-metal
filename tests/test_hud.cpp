@@ -6,6 +6,7 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include "core/ui/BuildPanel.hpp"  // the cell metrics the column counts have to keep room for
 #include "core/ui/Hud.hpp"
 
 #include <cmath>
@@ -59,6 +60,116 @@ TEST_CASE("a gauge's fill clamps, and no capacity reads as empty") {
     // a full bar would say precisely the opposite of the truth.
     CHECK(Gauge{.stored = 0.0f, .capacity = 0.0f}.fill() == Approx(0.0f));
     CHECK(Gauge{.stored = 10.0f, .capacity = 0.0f}.fill() == Approx(0.0f));
+}
+
+TEST_CASE("the responsive frame selects the largest profile that fits") {
+    const rm::ui::FrameLayout compact = rm::ui::frameLayout(1280.0f, 720.0f);
+    CHECK(compact.profile == rm::ui::HudProfile::Compact);
+    CHECK(compact.minimap.width == 176.0f);
+    CHECK(compact.minimap.height == 176.0f);
+    CHECK(compact.selection.width == 320.0f);
+    CHECK(compact.build.width == 528.0f);
+    CHECK(compact.buildColumns == 6);
+    CHECK(compact.rosterSlots == 5);
+
+    const rm::ui::FrameLayout standard = rm::ui::frameLayout(1600.0f, 900.0f);
+    CHECK(standard.profile == rm::ui::HudProfile::Standard);
+    CHECK(standard.minimap.width == 216.0f);
+    CHECK(standard.buildColumns == 7);
+    CHECK(standard.rosterSlots == 8);
+
+    const rm::ui::FrameLayout wide = rm::ui::frameLayout(2240.0f, 1000.0f);
+    CHECK(wide.profile == rm::ui::HudProfile::Wide);
+    CHECK(wide.minimap.width == 256.0f);
+    CHECK(wide.buildColumns == 9);
+    CHECK(wide.rosterSlots == 12);
+
+    // Width alone is not enough: a low-height ultrawide uses the lower vertical metrics.
+    CHECK(rm::ui::frameLayout(2400.0f, 900.0f).profile == rm::ui::HudProfile::Standard);
+
+    // A WIDER PROFILE NEVER MEANS A NARROWER CELL, which is the trap the column counts fell
+    // into: nine cells in 528 points and sixteen in 893 made the button SHRINK as the panel
+    // grew, from 54 points across to 52. A cell has to hold a name, so the count is chosen to
+    // keep the width, not to fill the panel.
+    const auto cellWidth = [](const rm::ui::FrameLayout& frame) {
+        const auto columns = static_cast<float>(frame.buildColumns);
+        return (frame.build.width - rm::ui::kBuildPadding * 2.0f
+                - (columns - 1.0f) * rm::ui::kBuildGap)
+             / columns;
+    };
+    CHECK(cellWidth(standard) >= cellWidth(compact));
+    CHECK(cellWidth(wide) >= cellWidth(standard));
+}
+
+TEST_CASE("the interface grows with the viewport instead of subdividing it") {
+    // THE BUG THIS LOCKS DOWN, and it was backwards in the way that is hardest to see: every
+    // metric in `Hud.hpp` is a constant in points, so a bigger window used to spend the extra
+    // room on MORE COLUMNS rather than bigger ones — nine cells across 528 points at 1280 wide,
+    // sixteen across 893 at 2240, and the cell itself shrinking from 54 points to 52. The
+    // interface got physically smaller relative to the screen the larger the screen was.
+    CHECK(rm::ui::hudScale(1280.0f, 720.0f) == Approx(1.0f));
+    CHECK(rm::ui::hudScale(2560.0f, 1440.0f) == Approx(2.0f));
+
+    // MONOTONIC, which is the property the old behaviour violated: a wider window is never a
+    // smaller interface.
+    float previous = 0.0f;
+    for (const float width : {1280.0f, 1440.0f, 1600.0f, 1920.0f, 2560.0f, 3840.0f}) {
+        const float scale = rm::ui::hudScale(width, width * 9.0f / 16.0f);
+        CHECK(scale >= previous);
+        previous = scale;
+    }
+
+    // BELOW THE DESIGN SIZE IT DOES NOT SHRINK. Halving a 1280-point layout would make the
+    // readouts unreadable rather than merely cramped; a small window loses battlefield instead,
+    // which is the trade a small window is already making.
+    CHECK(rm::ui::hudScale(800.0f, 600.0f) == Approx(1.0f));
+
+    // THE LIMITING AXIS DECIDES. A 3440x1440 ultrawide has the width for 2.68x and the height
+    // for 2.0, and magnifying by the width would push the bottom deck off its own screen.
+    CHECK(rm::ui::hudScale(3440.0f, 1440.0f) == Approx(2.0f));
+
+    // Capped, or a 5K panel gets a build tray the size of a paperback.
+    CHECK(rm::ui::hudScale(5120.0f, 2880.0f) == Approx(rm::ui::kMaxHudScale));
+
+    // The player's own preference multiplies the automatic figure, and is itself bounded — a
+    // scale of zero would divide the whole interface into a single point.
+    CHECK(rm::ui::hudScale(1280.0f, 720.0f, 1.5f) == Approx(1.5f));
+    CHECK(rm::ui::hudScale(1280.0f, 720.0f, 99.0f) == Approx(rm::ui::kMaxUserHudScale));
+    CHECK(rm::ui::hudScale(1280.0f, 720.0f, 0.01f) == Approx(rm::ui::kMinUserHudScale));
+
+    // A viewport of nothing still answers, because a window can be zero-sized mid-resize and a
+    // division by it would take the layout with it.
+    CHECK(rm::ui::hudScale(0.0f, 0.0f) > 0.0f);
+}
+
+TEST_CASE("a magnified interface lays out in design space, not the window's") {
+    // The frame is fed `width / scale`, so the SAME layout serves every viewport and the
+    // renderer does the enlarging. What that buys is the cell count staying put: six columns at
+    // 1280 and six columns at 2560, each twice the size.
+    const float scale = rm::ui::hudScale(2560.0f, 1440.0f);
+    const rm::ui::FrameLayout big = rm::ui::frameLayout(2560.0f / scale, 1440.0f / scale);
+    const rm::ui::FrameLayout small = rm::ui::frameLayout(1280.0f, 720.0f);
+    CHECK(big.buildColumns == small.buildColumns);
+    CHECK(big.build.width == small.build.width);
+    CHECK(big.minimap.width == small.minimap.width);
+}
+
+TEST_CASE("responsive frame modules stay anchored and do not overlap") {
+    for (const std::array<float, 2> viewport :
+         {std::array{1280.0f, 720.0f}, std::array{1600.0f, 900.0f},
+          std::array{2240.0f, 1000.0f}, std::array{2560.0f, 1080.0f}}) {
+        const rm::ui::FrameLayout frame = rm::ui::frameLayout(viewport[0], viewport[1]);
+        CHECK(frame.economy.x == rm::ui::kMargin);
+        CHECK(frame.economy.y == rm::ui::kMargin);
+        CHECK(frame.match.right() == viewport[0] - rm::ui::kMargin);
+        CHECK(frame.minimap.bottom() == viewport[1] - rm::ui::kMargin);
+        CHECK(frame.commands.right() == viewport[0] - rm::ui::kMargin);
+        CHECK(frame.commands.bottom() == viewport[1] - rm::ui::kMargin);
+        CHECK(frame.minimap.right() <= frame.selection.x);
+        CHECK(frame.selection.right() <= frame.build.x);
+        CHECK(frame.build.right() <= frame.commands.x);
+        CHECK(frame.battlefield.bottom() <= frame.minimap.y);
+    }
 }
 
 TEST_CASE("a full store that is still earning is wasting, and says so") {

@@ -72,6 +72,59 @@ TEST_CASE("ground under deep water is impassable") {
     REQUIRE_FALSE(deep.passableAt(0, 0));
 }
 
+TEST_CASE("surface-water passability accepts sea and rejects land") {
+    HeightField field = flatField(64, -20.0f);
+    setCorners(field, 32, 0, field.verticesX() - 1, field.verticesZ() - 1, 40);
+
+    const PassabilityGrid water = rm::sim::buildSurfaceWaterPassability(field, 0.0f);
+
+    REQUIRE(water.passableAt(1, 3));
+    CHECK_FALSE(water.passableAt(6, 3));
+    CHECK(rm::sim::findPath(water, rm::test::fx(96.0f), rm::test::fx(224.0f),
+                            rm::test::fx(416.0f), rm::test::fx(224.0f))
+              .empty());
+}
+
+TEST_CASE("a surface ship routes through connected water") {
+    const HeightField sea = flatField(64, -20.0f);
+    const PassabilityGrid water = rm::sim::buildSurfaceWaterPassability(sea, 0.0f);
+
+    const auto path = rm::sim::findPath(water, rm::test::fx(32.0f), rm::test::fx(32.0f),
+                                        rm::test::fx(416.0f), rm::test::fx(416.0f));
+    REQUIRE_FALSE(path.empty());
+    for (const auto& point : path) {
+        CHECK(water.passableAt(water.cellAtWorld(point[0]), water.cellAtWorld(point[1])));
+    }
+}
+
+TEST_CASE("a water objective stays in the ship's connected sea") {
+    HeightField field = flatField(64, -20.0f);
+    // A dry strip divides the map into two disconnected seas.
+    setCorners(field, 31, 0, 33, field.verticesZ() - 1, 40);
+    const PassabilityGrid water = rm::sim::buildSurfaceWaterPassability(field, 0.0f);
+
+    const auto objective = rm::sim::reachablePointToward(
+        water, rm::test::fx(96.0f), rm::test::fx(224.0f), rm::test::fx(416.0f),
+        rm::test::fx(224.0f));
+
+    REQUIRE(objective.has_value());
+    CHECK(water.cellAtWorld((*objective)[0]) < 31 / rm::sim::kPathCellSquares);
+    CHECK(water.passableAt(water.cellAtWorld((*objective)[0]),
+                           water.cellAtWorld((*objective)[1])));
+}
+
+TEST_CASE("the nearest placeable water site fits its whole footprint") {
+    HeightField field = flatField(64, -20.0f);
+    setCorners(field, 0, 0, 15, field.verticesZ() - 1, 40);
+    const PassabilityGrid water = rm::sim::buildSurfaceWaterPassability(field, 0.0f);
+
+    const auto site = rm::sim::nearestPlaceableSite(
+        water, rm::test::fx(32.0f), rm::test::fx(224.0f), rm::test::fx(70.0f));
+
+    REQUIRE(site.has_value());
+    CHECK(rm::sim::sitePlaceable(water, (*site)[0], (*site)[1], rm::test::fx(70.0f)));
+}
+
 TEST_CASE("a slope steeper than the limit is impassable") {
     const HeightField flat = flatField(64);
     REQUIRE(rm::sim::buildPassability(flat, -1000.0f).passableAt(2, 2));
@@ -320,6 +373,11 @@ TEST_CASE("a site off the map is refused rather than clamped to the edge") {
         rm::sim::Fx::fromInt(grid.cellsX) * grid.elmosPerCell + rm::sim::Fx::fromInt(1);
     CHECK_FALSE(rm::sim::sitePlaceable(grid, past, inside, radius));
     CHECK_FALSE(rm::sim::sitePlaceable(grid, inside, past, radius));
+
+    // A centre inside the map is still invalid when the structure itself crosses the border.
+    const rm::sim::Fx nearEdge = rm::sim::fxFromFloat(2.0f);
+    CHECK_FALSE(rm::sim::sitePlaceable(grid, nearEdge, inside, radius));
+    CHECK_FALSE(rm::sim::sitePlaceable(grid, inside, nearEdge, radius));
 }
 
 TEST_CASE("an empty grid refuses every site") {

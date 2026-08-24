@@ -111,6 +111,14 @@ TEST_CASE("the cached air movement layer changes the hash") {
     CHECK(ground.hash() != air.hash());
 }
 
+TEST_CASE("the cached surface-water movement layer changes the hash") {
+    Fixture ground;
+    Fixture surface;
+    surface.motion()[0].surfaceWater = true;
+
+    CHECK(ground.hash() != surface.hash());
+}
+
 TEST_CASE("shield power and recovery timers change the hash") {
     const auto hashWith = [](rm::sim::ShieldState shield) {
         Fixture fixture;

@@ -11,6 +11,7 @@
 #include "core/scene/UnitPlacement.hpp"
 #include "core/sim/Combat.hpp"  // headingError, for the angle assertions
 #include "core/sim/Movement.hpp"
+#include "core/sim/Pathfinding.hpp"
 
 #include <array>
 #include <cmath>
@@ -86,9 +87,10 @@ const rm::sim::TickRate kRate{10};
 struct Crowd {
     rm::sim::UnitStore store;
 
-    void add(float x, float z, bool airborne = false) {
+    void add(float x, float z, bool airborne = false, bool surfaceWater = false) {
         MoveState motion = ordinary();
         motion.airborne = airborne;
+        motion.surfaceWater = surfaceWater;
         (void)store.spawn(rm::sim::UnitStore::Spawn{
             .transform = unitAt(x, z),
             .motion = motion,
@@ -161,6 +163,70 @@ TEST_CASE("aircraft sharing an altitude still separate") {
           > rm::sim::Fx{});
     CHECK(crowd.at(0).y == rm::sim::kAirClearanceElmos);
     CHECK(crowd.at(1).y == rm::sim::kAirClearanceElmos);
+}
+
+TEST_CASE("surface ships stay level at the waterline over an uneven seabed") {
+    const HeightField field = rampField();
+    const rm::sim::Terrain terrain{field, true, 500.0f};
+    std::vector<rm::sim::Transform> units{unitAt(100.0f, 100.0f)};
+    std::vector<MoveState> motion{ordinary()};
+    motion[0].surfaceWater = true;
+    rm::sim::orderTo(motion[0], terrain, rm::test::fx(400.0f), rm::test::fx(100.0f));
+
+    for (int tick = 0; tick < 20; ++tick) {
+        rm::sim::tick(units, motion, terrain);
+        CHECK(units[0].y == rm::test::fx(500.0f));
+        CHECK(units[0].pitch == rm::Brad{0});
+        CHECK(units[0].roll == rm::Brad{0});
+    }
+}
+
+TEST_CASE("surface ships and ground units do not push each other") {
+    const HeightField field = flatField();
+    Crowd crowd;
+    crowd.add(100.0f, 100.0f, false, false);
+    crowd.add(100.0f, 100.0f, false, true);
+    crowd.separate(field);
+
+    CHECK(crowd.at(0).x == rm::test::fx(100.0f));
+    CHECK(crowd.at(0).z == rm::test::fx(100.0f));
+    CHECK(crowd.at(1).x == rm::test::fx(100.0f));
+    CHECK(crowd.at(1).z == rm::test::fx(100.0f));
+}
+
+TEST_CASE("surface ships sharing the waterline still separate") {
+    const HeightField field = flatField();
+    Crowd crowd;
+    crowd.add(100.0f, 100.0f, false, true);
+    crowd.add(100.0f, 100.0f, false, true);
+    crowd.separate(field);
+
+    CHECK(rm::sim::fxHypot(crowd.at(1).x - crowd.at(0).x,
+                           crowd.at(1).z - crowd.at(0).z)
+          > rm::sim::Fx{});
+}
+
+TEST_CASE("collision separation does not push a surface ship into a blocked water cell") {
+    const HeightField field = flatField();
+    const rm::sim::Terrain terrain{field, true, 10.0f};
+    Crowd crowd;
+    crowd.add(110.0f, 32.0f, false, true);
+    crowd.add(111.0f, 32.0f, false, true);
+    crowd.store.reindex(rm::sim::Fx::fromInt(64));
+
+    rm::sim::PassabilityGrid water;
+    water.cellsX = 3;
+    water.cellsZ = 1;
+    water.elmosPerCell = rm::sim::Fx::fromInt(64);
+    water.passable = {1, 1, 0};
+    const std::array<const rm::sim::PassabilityGrid*, 1> grids{{&water}};
+
+    rm::sim::resolveCollisions(crowd.store, terrain, grids);
+
+    for (std::size_t i = 0; i < crowd.size(); ++i) {
+        CHECK(rm::sim::sitePlaceable(water, crowd.at(i).x, crowd.at(i).z,
+                                     crowd.motionAt(i).radiusElmos));
+    }
 }
 
 /// Distance between a unit and its destination, on the ground plane.

@@ -217,6 +217,7 @@ int runOffscreenBenchmark(const Session& session) {
             renderer.setTerrain(mesh);
             applyGround(renderer, *map);
             renderer.setUnits(units.textures.all(), units.batches);
+            renderer.setGroundDecals(units.shieldScratch);
             units.applyFog(renderer);
             renderer.setProps(props.textures.all(), props.batches);
             renderer.setAnimationTime(animationTime);
@@ -346,6 +347,11 @@ int runScreenshot(const Session& session) {
                                           kOrderMarkerColour, /*age=*/0.0f);
                 }
 
+                // Interface decals are load-bearing; shield shells are presentation and may be
+                // truncated by the renderer's fixed frame buffer only after the UI is complete.
+                vertices.insert(vertices.end(), units.shieldScratch.begin(),
+                                units.shieldScratch.end());
+
                 renderer.setGroundDecals(vertices);
                 renderer.setSelection(captured);
                 std::printf("  selected %zu units for the capture\n", made);
@@ -367,16 +373,24 @@ int runScreenshot(const Session& session) {
             // The HUD in a capture too. A screenshot is how this project verifies anything,
             // and an interface only visible in a live window cannot be checked at all.
             rm::ui::Geometry hud;
+            // THE CAPTURE SCALES LIKE THE WINDOW DOES, from the same function, or a screenshot
+            // would stop being evidence about the interface the player sees. `--screenshot`
+            // takes PIXELS and a window is measured in points; a capture has no backing scale
+            // of its own, so the two coincide here and the pixel size is the logical size.
+            const float shotScale = rm::ui::hudScale(static_cast<float>(shot.width),
+                                                     static_cast<float>(shot.height),
+                                                     session.uiScale);
+            const float shotW = static_cast<float>(shot.width) / shotScale;
+            const float shotH = static_cast<float>(shot.height) / shotScale;
+            renderer.setUiScale(shotScale);
+            const rm::ui::FrameLayout shotFrame = rm::ui::frameLayout(shotW, shotH);
             rm::ui::build(hud, renderer.labelFont(), renderer.readoutFont(),
-                          hudThemeFor(units), hudStateFrom(units, marchOptions.seconds),
-                          static_cast<float>(shot.width),
-                          static_cast<float>(shot.height));
+                          hudThemeFor(units), hudStateFrom(units, marchOptions.seconds), shotW,
+                          shotH);
 
             // Health bars in a capture too, for the usual reason: a battle screenshot is
             // the one place a damaged unit reliably exists to verify them against.
-            appendHealthBars(hud, units, renderer.camera(), renderer.labelFont(),
-                             static_cast<float>(shot.width),
-                             static_cast<float>(shot.height));
+            appendHealthBars(hud, units, renderer.camera(), renderer.labelFont(), shotW, shotH);
 
             // THE MINIMAP IN A CAPTURE TOO, for the same reason the rest of the HUD is here: a
             // screenshot is how this project verifies anything, and an interface only visible in
@@ -386,10 +400,8 @@ int runScreenshot(const Session& session) {
             std::vector<rm::ui::MinimapPip> pips;
             std::vector<std::array<float, 2>> view;
             appendMinimapPips(pips, units);
-            appendViewFootprint(view, renderer.camera(), map->field,
-                                static_cast<float>(shot.width), static_cast<float>(shot.height));
-            const rm::ui::MinimapLayout shotMinimap = rm::ui::minimapLayout(
-                static_cast<float>(shot.width), static_cast<float>(shot.height));
+            appendViewFootprint(view, renderer.camera(), map->field, shotW, shotH);
+            const rm::ui::MinimapLayout shotMinimap = rm::ui::minimapLayout(shotW, shotH);
             const bool shotPreview = map->preview.width > 0;
             if (shotPreview) {
                 renderer.setMinimapRect(shotMinimap.x + shotMinimap.inset,
@@ -424,13 +436,38 @@ int runScreenshot(const Session& session) {
                                             units.strategicIconArt, &shotStrategicBase));
             std::vector<std::optional<rm::app::StrategicIconRef>> shotRefs;
             rm::app::buildStrategicIconRefs(units, shotStrategicBase, shotRefs);
-            rm::app::appendStrategicIcons(hud, units, renderer.camera(),
-                                          static_cast<float>(shot.width),
-                                          static_cast<float>(shot.height), shotRefs);
+            rm::app::appendStrategicIcons(hud, units, renderer.camera(), shotW, shotH, shotRefs);
             rm::app::appendContactBlips(hud, units, renderer.camera(), map->field,
-                                        renderer.labelFont(), static_cast<float>(shot.width),
-                                        static_cast<float>(shot.height));
+                                        renderer.labelFont(), shotW, shotH);
             appendSceneIcons(shotParticles, units, renderer.camera(), shotRefs);
+
+            // THE CONSTRUCTION SITES IN A CAPTURE TOO, for the reason the HUD is here: a
+            // screenshot is how this project verifies anything, and an effect only visible in
+            // a live window cannot be checked at all. The upload afterwards is not optional —
+            // this is where the product's model is loaded, and a batch created after the last
+            // `setUnits` draws nothing.
+            std::vector<rm::Renderer::ConstructionDraw> shotSites;
+            rm::app::gatherConstructions(units, content, map->field, shotSites);
+            if (!shotSites.empty()) {
+                renderer.setUnits(units.textures.all(), units.batches);
+                renderer.setConstructions(shotSites);
+                renderer.setConstructionTime(marchOptions.seconds);
+                rm::app::appendConstructionEffects(vertices, shotParticles, units, map->field,
+                                                   marchOptions.seconds);
+                // The decals were pushed above; pushing them again replaces that list with
+                // this longer one, which is what `setGroundDecals` means.
+                renderer.setGroundDecals(vertices);
+                std::printf("  building: %zu site(s) under construction\n", shotSites.size());
+                for (const rm::Renderer::ConstructionDraw& site : shotSites) {
+                    // Where and how far along, because a capture is how this is checked and a
+                    // site that drew nothing looks exactly like a site that was never there.
+                    std::printf("    at (%.0f, %.0f), %.0f%% of %.0f elmos tall\n",
+                                static_cast<double>(site.instance.position[0]),
+                                static_cast<double>(site.instance.position[2]),
+                                static_cast<double>(site.progress * 100.0f),
+                                static_cast<double>(site.heightElmos));
+                }
+            }
             // The shots in flight at the captured tick — the reason a battle screenshot
             // finally shows the battle. No trails headless: the capture has no aging
             // particle list for them to fade through.
@@ -441,29 +478,24 @@ int runScreenshot(const Session& session) {
                                       rm::kIconReferenceHeightPoints));
             renderer.setParticles(shotParticles);
 
+            std::optional<std::size_t> shotHovered;
             if (!shotOptions.empty()) {
                 // `--hover N` lights the Nth option (1-based) and draws its info card, for
                 // the same reason `--select` exists: a headless run has no cursor, and
                 // interface that appears only under one cannot reach a screenshot.
                 const std::size_t hoverAt = parseCount(argc, argv, "--hover");
-                const std::optional<std::size_t> shotHovered =
-                    hoverAt > 0 && hoverAt <= shotOptions.size()
-                        ? std::optional<std::size_t>{hoverAt - 1}
-                        : std::nullopt;
+                shotHovered = hoverAt > 0 && hoverAt <= shotOptions.size()
+                                ? std::optional<std::size_t>{hoverAt - 1}
+                                : std::nullopt;
+                const std::size_t shotCapacity =
+                    shotFrame.buildColumns * static_cast<std::size_t>(rm::ui::kBuildRows);
+                const std::size_t shotPage =
+                    shotHovered && shotCapacity > 0 ? *shotHovered / shotCapacity : 0;
                 const rm::ui::BuildPanelLayout shotPanel =
-                    rm::ui::buildPanelLayout(shotMinimap, shotOptions.size());
+                    rm::ui::buildPanelLayout(shotFrame, shotOptions.size(), shotPage);
                 rm::ui::appendBuildPanel(hud, renderer.labelFont(), renderer.readoutFont(),
                                          hudThemeFor(units), shotPanel, shotOptions,
                                          shotHovered, shotWho.name, shotWho.role);
-                if (shotHovered) {
-                    const rm::ui::InfoCard card =
-                        rm::ui::buildOptionCard(shotOptions[*shotHovered]);
-                    const float cardHeight = rm::ui::infoCardHeight(
-                        renderer.labelFont().lineHeight, card.rows.size());
-                    rm::ui::appendInfoCard(hud, renderer.labelFont(), renderer.readoutFont(),
-                                           hudThemeFor(units), shotPanel.x,
-                                           shotPanel.y - cardHeight, shotPanel.width, card);
-                }
                 std::printf("  build panel: %zu options for %s\n", shotOptions.size(),
                             shotWho.name.c_str());
 
@@ -507,16 +539,33 @@ int runScreenshot(const Session& session) {
             }
 
             if (!shotRoster.empty()) {
+                const rm::ui::InfoCard inspector =
+                    shotHovered && *shotHovered < shotOptions.size()
+                        ? rm::ui::buildOptionCard(shotOptions[*shotHovered])
+                        : rm::ui::rosterTileCard(shotRoster.front());
                 rm::ui::appendRoster(hud, renderer.labelFont(), renderer.readoutFont(),
                                      hudThemeFor(units),
-                                     rm::ui::rosterLayout(static_cast<float>(shot.width),
-                                                          static_cast<float>(shot.height),
-                                                          shotRoster.size()),
-                                     shotRoster, std::nullopt);
+                                     rm::ui::rosterLayout(shotFrame, shotRoster.size()),
+                                     shotRoster, std::nullopt, &inspector);
                 std::printf("  roster: %zu type(s) selected\n", shotRoster.size());
             }
 
+            renderer.setHudViewport(shotW, shotH);
             renderer.setHud(hud.label, hud.readout, hud.image, hud.worldImage);
+
+            // WHAT REACHED THE GPU, against what the sim holds. The two disagreeing is the
+            // signature of a dropped instance, and it used to be invisible: a batch capped at
+            // its upload-time count drew one tank while the sim ran twenty, and every test
+            // stayed green because nothing links the renderer. Fog legitimately hides units
+            // from a seated player, so this is a report rather than an assertion.
+            std::size_t liveUnits = 0;
+            for (rm::UnitIndex slot = 0; slot < units.store.slotCount(); ++slot) {
+                if (units.store.slotAlive(slot)) {
+                    ++liveUnits;
+                }
+            }
+            std::printf("  units: %zu instance(s) drawn, %zu alive in the sim\n",
+                        renderer.drawnUnitInstances(), liveUnits);
 
             const auto image = renderer.renderToImage(shot.width, shot.height);
             return writePng(shot.path, image) ? 0 : 1;
@@ -595,6 +644,14 @@ int runWindowed(const Session& session) {
         // `r` flips it live, which is the only way to judge whether it is worth
         // its cost — a side-by-side of two runs cannot show the difference
         // moving.
+        // The player's own multiplier on the interface's automatic magnification, before the
+        // first frame lays anything out — the faces are rasterised for it.
+        window.setUserHudScale(session.uiScale);
+        std::printf("interface: %.2fx (%.0f x %.0f points of layout in a %u x %u window)\n",
+                    static_cast<double>(window.hudScale()),
+                    static_cast<double>(window.hudWidth()),
+                    static_cast<double>(window.hudHeight()), window.width(), window.height());
+
         window.setReflections(settings.reflections);
         window.setStratumNormals(settings.stratumNormals);
         window.setRefraction(settings.refraction);
@@ -692,6 +749,8 @@ int runWindowed(const Session& session) {
         // Held here beside the options it indexes, and cleared whenever they change — an index
         // into a list that has been rebuilt is a different building.
         std::optional<std::size_t> armedOption;
+        std::size_t buildPage = 0;
+        std::size_t rosterPage = 0;
 
         // WHOSE MENU THE ICON ATLAS WAS PACKED FOR. Keyed on the builder rather than on the
         // option list, because the list is rebuilt every frame and compares equal every frame —
@@ -742,6 +801,24 @@ int runWindowed(const Session& session) {
             marchOptions.enabled
                 ? static_cast<int>(gAppTickRate.ticks(rm::sim::seconds(marchOptions.seconds)))
                 : 0;
+
+        // A player order should show the first completed movement tick immediately instead of
+        // spending another 100 ms blending toward it. Keep each unit current until the following
+        // tick, where normal interpolation starts exactly at that first position and cannot snap
+        // backwards. This is presentation state only; commands and snapshots remain unchanged.
+        std::vector<rm::CurrentUnitProjection> responsiveDraws;
+        std::vector<rm::sim::UnitId> responsiveDrawScratch;
+        const auto drawCurrentAfterOrder = [&](rm::sim::UnitId id) {
+            rm::scheduleCurrentUnitProjection(responsiveDraws, id, units.snapshotCurrent.tick);
+        };
+        const auto currentOrderFor = [&](rm::sim::UnitId id)
+            -> std::optional<rm::sim::Command> {
+            if (!units.store.alive(id)) {
+                return std::nullopt;
+            }
+            const rm::sim::Command* order = units.store.orders()[id.index].current();
+            return order != nullptr ? std::optional{*order} : std::nullopt;
+        };
 
         // Where the last few orders landed, and when. Markers expire on their own
         // (GroundDecals.hpp), so this only ever grows to the number of orders
@@ -811,10 +888,16 @@ int runWindowed(const Session& session) {
             if (!armedOption) {
                 return false;
             }
-            const auto type =
+            const std::string path = armedPath();
+            const std::optional<rm::UnitTypeIndex> targetType =
+                path.empty() ? std::nullopt : resolveBuildable(units, content, path);
+            if (!targetType) {
+                return false;
+            }
+            const auto builderType =
                 static_cast<std::size_t>(units.store.typeAt(buildWho.builder.index));
-            const rm::sim::PassabilityGrid& grid = passability.gridFor(
-                units.maxSlopeDegrees[type], units.maxWaterDepthElmos[type]);
+            const rm::sim::PassabilityGrid& grid = passability.gridForBuild(
+                units, static_cast<std::size_t>(*targetType), builderType);
             return rm::sim::sitePlaceable(grid, rm::sim::fxFromFloat(at[0]),
                                           rm::sim::fxFromFloat(at[1]),
                                           rm::sim::fxFromFloat(armedRadius()));
@@ -835,17 +918,31 @@ int runWindowed(const Session& session) {
             }
             const auto builderType =
                 static_cast<std::size_t>(units.store.typeAt(buildWho.builder.index));
-            const rm::sim::PassabilityGrid& grid = passability.gridFor(
-                units.maxSlopeDegrees[builderType], units.maxWaterDepthElmos[builderType]);
+            const rm::sim::PassabilityGrid& grid = passability.gridForBuild(
+                units, static_cast<std::size_t>(*type), builderType);
 
-            if (armedPlaceable({at.x, at.z})
-                && issueBuild(units, grid, map->field, buildWho.builder,
-                              playerDriving(units, units.playerArmy),
-                              static_cast<rm::TickIndex>(matchTicks), *type,
-                              rm::sim::fxFromFloat(at.x), rm::sim::fxFromFloat(at.z))) {
-                std::printf("build: %s at %.0f, %.0f\n", buildOptions[*armedOption].id.c_str(),
+            // THE PLACEMENT REPORTS EITHER WAY. Until construction has a body in the world
+            // (nothing exists at the site until the work completes) this line is the ONLY
+            // sign a build was ordered at all — so a refusal being silent meant a player
+            // could not tell "the site is bad" from "the button does nothing".
+            const std::string& id = buildOptions[*armedOption].id;
+            const std::string& what =
+                buildOptions[*armedOption].name.empty() ? id : buildOptions[*armedOption].name;
+            if (!armedPlaceable({at.x, at.z})) {
+                std::printf("build refused: %s does not fit at (%.0f, %.0f)\n", what.c_str(),
                             static_cast<double>(at.x), static_cast<double>(at.z));
+            } else if (issueBuild(units, grid, map->field, buildWho.builder,
+                                  playerDriving(units, units.playerArmy),
+                                  static_cast<rm::TickIndex>(matchTicks), *type,
+                                  rm::sim::fxFromFloat(at.x), rm::sim::fxFromFloat(at.z))) {
+                std::printf("build: %s started at (%.0f, %.0f)\n", what.c_str(),
+                            static_cast<double>(at.x), static_cast<double>(at.z));
+            } else {
+                std::printf("build refused: %s was not accepted at (%.0f, %.0f)\n",
+                            what.c_str(), static_cast<double>(at.x),
+                            static_cast<double>(at.z));
             }
+            std::fflush(stdout);
             armedOption.reset();
         };
 
@@ -870,6 +967,7 @@ int runWindowed(const Session& session) {
                 });
 
                 std::size_t failed = 0;
+                std::size_t accepted = 0;
                 for (const rm::sim::UnitId sel : selected) {
                     if (!units.store.alive(sel)) {
                         continue;  // selected, then killed before the order was given
@@ -878,13 +976,13 @@ int runWindowed(const Session& session) {
                     // order can legitimately get different answers, and one of them can be
                     // "no route" while the other walks off.
                     const auto type = static_cast<std::size_t>(units.store.typeAt(sel.index));
-                    const rm::sim::PassabilityGrid& grid = passability.gridFor(
-                        units.maxSlopeDegrees[type], units.maxWaterDepthElmos[type]);
+                    const rm::sim::PassabilityGrid& grid = passability.gridFor(units, type);
                     // ⌘-RIGHT-CLICK ON AN ENEMY IS AN OVERCHARGE, for the units that carry
                     // a manual weapon; the rest of the selection attacks as it would have.
                     // The escort keeps escorting while the commander spends the store.
                     const rm::unitdef::UnitDef* selDef =
                         units.catalog.def(units.store.typeAt(sel.index));
+                    const std::optional<rm::sim::Command> orderBefore = currentOrderFor(sel);
                     float shotCost = 0.0f;  // the manual weapon's EnergyRequired, or zero
                     if (selDef != nullptr) {
                         for (const rm::unitdef::Weapon& weapon : selDef->weapons) {
@@ -914,6 +1012,12 @@ int runWindowed(const Session& session) {
                                          static_cast<rm::TickIndex>(matchTicks),
                                          rm::sim::fxFromFloat(ground.x),
                                          rm::sim::fxFromFloat(ground.z), queue, groundKind);
+                    }
+                    if (took) {
+                        ++accepted;
+                    }
+                    if (took && orderBefore != currentOrderFor(sel)) {
+                        drawCurrentAfterOrder(sel);
                     }
                     if (took && wantOvercharge && units.playerArmy >= 0
                         && static_cast<std::size_t>(units.playerArmy)
@@ -947,24 +1051,43 @@ int runWindowed(const Session& session) {
                         });
                     }
                 }
-                if (failed > 0) {
-                    std::printf("no route there for %zu of %zu units\n", failed,
-                                selected.size());
-                } else if (queue) {
-                    // Only for a queued order, and only the length: this is the one piece of
-                    // feedback the world does not already show.
-                    const rm::sim::UnitId first = selected.front();
-                    if (units.store.alive(first)) {
-                        std::printf("queued: %zu order(s) for the first of %zu selected\n",
-                                    units.store.orders()[first.index].size(),
-                                    selected.size());
-                    }
+                // EVERY ORDER SAYS WHAT HAPPENED, not only the ones that went wrong. The old
+                // version printed on a refusal and stayed silent on success, which is exactly
+                // backwards for the question a player actually asks — "did that click do
+                // anything at all?" — because silence is also what a click that never reached
+                // this lambda produces. One line per order makes the two distinguishable from
+                // the console alone, which is the only instrument a windowed session has.
+                std::printf("order: %s%s — %zu of %zu unit(s) at (%.0f, %.0f)%s\n",
+                            rm::sim::commandKindName(
+                                target ? rm::sim::CommandKind::Attack : groundKind),
+                            queue ? " (queued)" : "", accepted, selected.size(),
+                            static_cast<double>(ground.x), static_cast<double>(ground.z),
+                            failed > 0 ? " — the rest found no route" : "");
+                std::fflush(stdout);
+            };
+
+            // A CLICK THE INTERFACE ATE SAYS SO. The deck spans most of the screen's bottom
+            // edge at every profile, and a right-click landing on it is swallowed by design:
+            // the world behind a panel is not what the player aimed at. What was NOT by
+            // design is that it was swallowed in SILENCE — which is indistinguishable from an
+            // order that was refused, an order that never arrived, and a unit that is merely
+            // pivoting on the spot before setting off. One line tells the three apart.
+            const auto swallowedByPanel = [&](const char* panel) {
+                if (button == rm::MouseButton::Right && !selected.empty()) {
+                    std::printf("order ignored: that click was on the %s panel, not the "
+                                "world\n",
+                                panel);
+                    std::fflush(stdout);
                 }
             };
 
+            // THE HUD'S OWN SPACE, which `mods.pointX/Y` are already in. Handing these the
+            // window's real size instead would put every panel's rectangle at the wrong
+            // magnification and every hit test would miss by the scale factor.
+            const rm::ui::FrameLayout frame =
+                rm::ui::frameLayout(window.hudWidth(), window.hudHeight());
             const rm::ui::MinimapLayout minimap =
-                rm::ui::minimapLayout(static_cast<float>(window.width()),
-                                      static_cast<float>(window.height()));
+                rm::ui::minimapLayout(window.hudWidth(), window.hudHeight());
             if (rm::ui::insideMinimap(minimap, mods.pointX, mods.pointY)) {
                 const std::array<float, 2> where =
                     rm::ui::minimapToWorld(minimap, map->field.widthElmos(),
@@ -1007,7 +1130,7 @@ int runWindowed(const Session& session) {
             // jobs and this is the one that stops the bleeding.
             if (!buildOptions.empty()) {
                 const rm::ui::BuildPanelLayout panel =
-                    rm::ui::buildPanelLayout(minimap, buildOptions.size());
+                    rm::ui::buildPanelLayout(frame, buildOptions.size(), buildPage);
                 if (rm::ui::insideBuildPanel(panel, mods.pointX, mods.pointY)) {
                     // A cell ARMS the build; the gutters and header swallow and do nothing.
                     // Right-click anywhere on the panel disarms, so the way out is where the
@@ -1015,34 +1138,66 @@ int runWindowed(const Session& session) {
                     const std::optional<std::size_t> cell = rm::ui::buildOptionAt(
                         panel, buildOptions.size(), mods.pointX, mods.pointY);
                     if (button == rm::MouseButton::Right) {
+                        if (!armedOption) {
+                            swallowedByPanel("build");  // nothing to disarm: it was just eaten
+                        }
                         armedOption.reset();
+                    } else if (const std::optional<int> step = rm::ui::buildPageStepAt(
+                                   panel, mods.pointX, mods.pointY)) {
+                        if (*step < 0 && buildPage > 0) {
+                            --buildPage;
+                        } else if (*step > 0 && buildPage + 1 < panel.pages) {
+                            ++buildPage;
+                        }
                     } else if (cell && buildOptions[*cell].affordable
-                               && buildWho.role == "factory") {
-                        // A FACTORY CELL BUILDS AT ONCE — there is no place to pick, the
-                        // factory IS the place, so arming a ghost would be a step with no
-                        // decision in it. The site is one step off the floor, so the
-                        // finished unit stands beside its factory rather than inside it.
+                               && (buildOptions[*cell].upgrade
+                                   || buildWho.role == "factory")) {
+                        // BUILT AT ONCE, with no site to pick, for two different reasons that
+                        // reach the same place. A FACTORY is the place — arming a ghost for its
+                        // products would be a step with no decision in it. An UPGRADE has no
+                        // site at all: `startCommand` overrides whatever the order says with
+                        // the builder's own position, because a factory does not upgrade into
+                        // a field.
                         if (units.store.alive(buildWho.builder)) {
+                            const bool upgrade = buildOptions[*cell].upgrade;
                             const std::string path =
                                 rm::data::RosterEntry{.id = buildOptions[*cell].id}.path();
                             const std::optional<rm::UnitTypeIndex> type =
                                 resolveBuildable(units, content, path);
                             const auto factoryType = static_cast<std::size_t>(
                                 units.store.typeAt(buildWho.builder.index));
-                            const rm::sim::PassabilityGrid& grid = passability.gridFor(
-                                units.maxSlopeDegrees[factoryType],
-                                units.maxWaterDepthElmos[factoryType]);
                             const rm::sim::Transform& at =
                                 units.store.transforms()[buildWho.builder.index];
+                            // The roll-off step is what puts a finished unit BESIDE its
+                            // factory rather than inside it. An upgrade wants the opposite —
+                            // exactly where the builder stands — and the sim enforces that
+                            // anyway; passing the offset would only make the recorded command
+                            // disagree with what happened.
                             const rm::sim::Fx rollOff =
-                                units.store.motion()[buildWho.builder.index].radiusElmos * 2;
-                            if (type
-                                && issueBuild(units, grid, map->field, buildWho.builder,
-                                              playerDriving(units, units.playerArmy),
-                                              static_cast<rm::TickIndex>(matchTicks), *type,
-                                              at.x, at.z + rollOff)) {
-                                std::printf("factory: %s queued\n",
-                                            buildOptions[*cell].id.c_str());
+                                upgrade
+                                    ? rm::sim::Fx{}
+                                    : units.store.motion()[buildWho.builder.index].radiusElmos
+                                          * 2;
+                            if (type) {
+                                const rm::sim::PassabilityGrid& grid =
+                                    passability.gridForBuild(
+                                        units, static_cast<std::size_t>(*type), factoryType);
+                                const std::string& what = buildOptions[*cell].name.empty()
+                                                            ? buildOptions[*cell].id
+                                                            : buildOptions[*cell].name;
+                                if (issueBuild(units, grid, map->field, buildWho.builder,
+                                               playerDriving(units, units.playerArmy),
+                                               static_cast<rm::TickIndex>(matchTicks), *type,
+                                               at.x, at.z + rollOff)) {
+                                    std::printf("%s: %s\n",
+                                                upgrade ? "upgrade started" : "factory queued",
+                                                what.c_str());
+                                } else {
+                                    std::printf("%s refused: %s\n",
+                                                upgrade ? "upgrade" : "factory order",
+                                                what.c_str());
+                                }
+                                std::fflush(stdout);
                             }
                         }
                     } else if (cell && buildOptions[*cell].affordable) {
@@ -1070,12 +1225,21 @@ int runWindowed(const Session& session) {
             // swallow: a miss near a button must not become the wrong button.
             if (!rosterTiles.empty()) {
                 const rm::ui::RosterLayout roster =
-                    rm::ui::rosterLayout(static_cast<float>(window.width()),
-                                         static_cast<float>(window.height()),
-                                         rosterTiles.size());
+                    rm::ui::rosterLayout(frame, rosterTiles.size(), rosterPage);
                 if (rm::ui::insideRoster(roster, mods.pointX, mods.pointY)) {
                     const std::optional<std::size_t> tile =
                         rm::ui::rosterTileAt(roster, mods.pointX, mods.pointY);
+                    if (button == rm::MouseButton::Left) {
+                        if (const std::optional<int> step = rm::ui::rosterPageStepAt(
+                                roster, mods.pointX, mods.pointY)) {
+                            if (*step < 0 && rosterPage > 0) {
+                                --rosterPage;
+                            } else if (*step > 0 && rosterPage + 1 < roster.pages) {
+                                ++rosterPage;
+                            }
+                            return;
+                        }
+                    }
                     if (tile && button == rm::MouseButton::Left) {
                         const std::string& id = rosterTiles[*tile].id;
                         const bool drop = mods.shift || mods.command || mods.control;
@@ -1089,6 +1253,7 @@ int runWindowed(const Session& session) {
                             return drop ? matches : !matches;
                         });
                     }
+                    swallowedByPanel("selection");
                     return;
                 }
             }
@@ -1156,7 +1321,11 @@ int runWindowed(const Session& session) {
             }
 
             if (selected.empty()) {
-                return;  // an order with nothing selected is not an error
+                // Not an error, and worth saying anyway: "nothing selected" and "the order
+                // was refused" look identical from the far side of the screen.
+                std::printf("order ignored: nothing is selected\n");
+                std::fflush(stdout);
+                return;
             }
 
             // AN ATTACK OR A MOVE, decided by what the right button landed on. Picking is
@@ -1181,7 +1350,12 @@ int runWindowed(const Session& session) {
                 ground = rm::pickGround(ray, map->field);
             }
             if (!ground) {
-                return;  // clicked the sky, or past the edge of the map
+                // The sky, or past the edge of the map. Silence here reads as a broken
+                // button, because the click did land somewhere as far as the player is
+                // concerned — the horizon looks like ground until you are told it is not.
+                std::printf("order ignored: that ray missed the map\n");
+                std::fflush(stdout);
+                return;
             }
 
             // A RIGHT-CLICK ON YOUR OWN BUILDER IS AN ASSIST — the guard order. The
@@ -1200,11 +1374,12 @@ int runWindowed(const Session& session) {
                         }
                         const auto type =
                             static_cast<std::size_t>(units.store.typeAt(sel.index));
-                        const rm::sim::PassabilityGrid& grid = passability.gridFor(
-                            units.maxSlopeDegrees[type], units.maxWaterDepthElmos[type]);
+                        const rm::sim::PassabilityGrid& grid = passability.gridFor(units, type);
                         const rm::unitdef::UnitDef* def =
                             units.catalog.def(units.store.typeAt(sel.index));
                         const bool builder = def != nullptr && def->isBuilder();
+                        const std::optional<rm::sim::Command> orderBefore =
+                            currentOrderFor(sel);
                         const rm::sim::Transform& at = units.store.transforms()[hit->index];
                         const bool took =
                             builder ? issueAssist(units, grid, map->field, sel,
@@ -1217,6 +1392,9 @@ int runWindowed(const Session& session) {
                                                 at.x, at.z, mods.shift);
                         if (took && builder) {
                             ++assisting;
+                        }
+                        if (took && orderBefore != currentOrderFor(sel)) {
+                            drawCurrentAfterOrder(sel);
                         }
                     }
                     if (assisting > 0) {
@@ -1273,11 +1451,12 @@ int runWindowed(const Session& session) {
                         }
                         const auto type =
                             static_cast<std::size_t>(units.store.typeAt(sel.index));
-                        const rm::sim::PassabilityGrid& grid = passability.gridFor(
-                            units.maxSlopeDegrees[type], units.maxWaterDepthElmos[type]);
+                        const rm::sim::PassabilityGrid& grid = passability.gridFor(units, type);
                         const rm::unitdef::UnitDef* def =
                             units.catalog.def(units.store.typeAt(sel.index));
                         const bool builder = def != nullptr && def->isBuilder();
+                        const std::optional<rm::sim::Command> orderBefore =
+                            currentOrderFor(sel);
                         const bool took =
                             builder ? issueReclaim(units, grid, map->field, sel,
                                                    playerDriving(units, units.playerArmy),
@@ -1289,6 +1468,9 @@ int runWindowed(const Session& session) {
                                                 found->at[0], found->at[2], mods.shift);
                         if (took && builder) {
                             ++reclaiming;
+                        }
+                        if (took && orderBefore != currentOrderFor(sel)) {
+                            drawCurrentAfterOrder(sel);
                         }
                     }
                     if (reclaiming > 0) {
@@ -1350,6 +1532,29 @@ int runWindowed(const Session& session) {
         bool leftWasHeld = false;
         std::vector<rm::sim::UnitId> bandScratch;
 
+        // HOW MANY BATCHES THE RENDERER HAS BEEN GIVEN — held ACROSS frames, which is the
+        // whole point. This was a local captured at the top of each frame and compared at the
+        // bottom, so a batch created LATER in the frame than that comparison — which is
+        // exactly when the build ghost creates one, since it resolves its model at draw
+        // time — was never uploaded at all: the next frame's "before" already counted it, so
+        // the growth it represented had silently happened between two equal numbers. The
+        // silhouette therefore drew nothing for any blueprint the player had not already
+        // built, which is most of the tray.
+        // This frame's construction sites, rebuilt each frame like every other draw list.
+        std::vector<rm::Renderer::ConstructionDraw> constructionDraws;
+
+        std::size_t uploadedBatches = 0;
+        const auto uploadNewBatches = [&] {
+            if (units.batches.size() == uploadedBatches) {
+                return;
+            }
+            for (std::size_t b = uploadedBatches; b < units.batches.size(); ++b) {
+                units.batches[b].animationDrivenByInstance = true;
+            }
+            window.setUnits(units.textures.all(), units.batches);
+            uploadedBatches = units.batches.size();
+        };
+
         window.onFrame([&](float elapsed) {
             // WASD pans the map, every frame rather than per keypress: a pan driven by
             // key EVENTS moves in jerks the length of the auto-repeat interval, and stops
@@ -1378,13 +1583,6 @@ int runWindowed(const Session& session) {
 
             matchSeconds += elapsed;
             const int ticks = clock.advance(elapsed);
-
-            // How many batches the renderer currently knows about. A finished
-            // construction spawns its unit into a NEW batch when nothing of that
-            // blueprint stands yet, and `setInstances` silently drops a batch index it
-            // was never given (Renderer.hpp) — so without noticing the growth here, a
-            // building would exist in the sim, fight, earn, and never be drawn.
-            const std::size_t batchesBefore = units.batches.size();
 
             // THE SAME TICK the headless pre-run makes. This loop used to call
             // `sim::tick` and `resolveCollisions` and nothing else, so a unit in the
@@ -1440,7 +1638,26 @@ int runWindowed(const Session& session) {
             // rate would slide as badly as a body that did.
             const simd_float3 cameraEye = window.camera().eye();
             const std::array<float, 3> lodEye{cameraEye.x, cameraEye.y, cameraEye.z};
-            units.gatherForDrawing(clock.alpha(), &lodEye);
+            std::erase_if(responsiveDraws, [&](const rm::CurrentUnitProjection& draw) {
+                return draw.throughTick < units.snapshotCurrent.tick
+                       || !units.store.alive(draw.id);
+            });
+            responsiveDrawScratch.clear();
+            for (const rm::CurrentUnitProjection& draw : responsiveDraws) {
+                if (draw.activeAt(units.snapshotCurrent.tick)) {
+                    responsiveDrawScratch.push_back(draw.id);
+                }
+            }
+            units.gatherForDrawing(clock.alpha(), &lodEye, responsiveDrawScratch);
+
+            // WHAT IS BEING BUILT, as something to look at. Before the upload below, because
+            // this is where a blueprint's model comes into existence: a construction is the
+            // first moment a type needs DRAWING rather than merely simulating, and the batch
+            // it creates has to reach the GPU in the same frame — which is the bug the ghost
+            // spent its whole life on.
+            rm::app::gatherConstructions(units, content, map->field, constructionDraws);
+            window.setConstructions(constructionDraws);
+            window.setConstructionTime(matchSeconds);
 
             // Re-upload when the match built something new. Only on growth, which is a
             // handful of times in a whole match — this walks every model and texture, so
@@ -1449,13 +1666,9 @@ int runWindowed(const Session& session) {
             // AFTER the gather, and that ordering is load-bearing: `setUnits` sizes each
             // batch's instance buffer from what its span holds, and a batch created this
             // tick holds nothing until the gather fills it. Uploading first gives the new
-            // model a capacity of zero, and a unit type the player just built never draws.
-            if (units.batches.size() != batchesBefore) {
-                for (std::size_t b = batchesBefore; b < units.batches.size(); ++b) {
-                    units.batches[b].animationDrivenByInstance = true;
-                }
-                window.setUnits(units.textures.all(), units.batches);
-            }
+            // model a capacity of one — which `setInstances` now grows rather than clips,
+            // so the ordering is a nicety here and a correctness rule for the poses.
+            uploadNewBatches();
 
             for (std::size_t batch = 0; batch < units.drawScratch.size(); ++batch) {
                 window.setInstances(batch, units.drawScratch[batch]);
@@ -1520,36 +1733,32 @@ int runWindowed(const Session& session) {
             window.setParticles(iconScratch);
 
             hudScratch.clear();
+            // EVERY VERTEX BELOW IS IN THE HUD'S DESIGN SPACE, chrome and world-projected
+            // overlays alike. They share one vertex stream and therefore one viewport, so
+            // mixing the window's real size in here would place the health bars and strategic
+            // icons a scale factor away from the units they belong to.
+            const float hudW = window.hudWidth();
+            const float hudH = window.hudHeight();
+            const rm::ui::FrameLayout frame = rm::ui::frameLayout(hudW, hudH);
             rm::ui::build(hudScratch, window.labelFont(), window.readoutFont(),
-                          hudThemeFor(units), hudStateFrom(units, matchSeconds),
-                          static_cast<float>(window.width()),
-                          static_cast<float>(window.height()));
+                          hudThemeFor(units), hudStateFrom(units, matchSeconds), hudW, hudH);
 
             // Health over the units that need it: damaged, and close enough to be units
             // rather than icons. Absence is what "fine" looks like (Interface.hpp).
-            appendHealthBars(hudScratch, units, window.camera(), window.labelFont(),
-                             static_cast<float>(window.width()),
-                             static_cast<float>(window.height()));
+            appendHealthBars(hudScratch, units, window.camera(), window.labelFont(), hudW, hudH);
 
             // The strategic layer: the game's own glyphs where units are too small to read,
             // in the army's colour, under all the chrome (Geometry::worldImage).
-            appendStrategicIcons(hudScratch, units, window.camera(),
-                                 static_cast<float>(window.width()),
-                                 static_cast<float>(window.height()), strategicRefs);
+            appendStrategicIcons(hudScratch, units, window.camera(), hudW, hudH, strategicRefs);
             appendContactBlips(hudScratch, units, window.camera(), map->field,
-                               window.labelFont(), static_cast<float>(window.width()),
-                               static_cast<float>(window.height()));
+                               window.labelFont(), hudW, hudH);
 
             // THE MINIMAP (§7 P7.4), appended to the same geometry the HUD builds — it is
             // rectangles in screen space, which is what `text::appendRect` already draws, so it
             // needs no pipeline of its own. That is the other half of "nearly free".
             appendMinimapPips(minimapPips, units);
-            appendViewFootprint(minimapView, window.camera(), map->field,
-                                static_cast<float>(window.width()),
-                                static_cast<float>(window.height()));
-            const rm::ui::MinimapLayout minimap =
-                rm::ui::minimapLayout(static_cast<float>(window.width()),
-                                      static_cast<float>(window.height()));
+            appendViewFootprint(minimapView, window.camera(), map->field, hudW, hudH);
+            const rm::ui::MinimapLayout minimap = rm::ui::minimapLayout(hudW, hudH);
             // The preview under the panel, inset by the border so the chrome frames it. The
             // panel then draws everything BUT its own fill, so the picture shows through.
             const bool hasPreview = map->preview.width > 0;
@@ -1566,12 +1775,16 @@ int runWindowed(const Session& session) {
             // Beyond All Reason arranges the same way. Absent entirely when nothing selected
             // builds, rather than an empty frame asking to be explained.
             rm::app::gatherBuildOptions(units, selected, hudThemeFor(units), buildOptions,
-                                        buildWho);
+                                         buildWho);
             // AN INDEX INTO A LIST THAT HAS BEEN REBUILT IS A DIFFERENT BUILDING. Deselecting,
             // or selecting a different builder, must not leave cell 4 armed and meaning
             // something else — so the arming is dropped whenever the list it points into can no
             // longer be trusted to be the same list.
             if (armedOption && *armedOption >= buildOptions.size()) {
+                armedOption.reset();
+            }
+            if (buildWho.builder != iconsPackedFor) {
+                buildPage = 0;
                 armedOption.reset();
             }
 
@@ -1612,64 +1825,53 @@ int runWindowed(const Session& session) {
                     rosterTiles[i].iconSlot = rosterSlots[i];
                 }
             }
+            std::optional<std::size_t> overBuild;
             if (!buildOptions.empty()) {
                 const rm::ui::BuildPanelLayout panel =
-                    rm::ui::buildPanelLayout(minimap, buildOptions.size());
+                    rm::ui::buildPanelLayout(frame, buildOptions.size(), buildPage);
+                buildPage = panel.page;
 
                 // The lit cell under the cursor, which is most of what makes a grid of squares
                 // read as BUTTONS rather than as a readout. Polled once here rather than
                 // tracked through a mouseMoved handler — see `Window::cursor`.
-                const std::array<float, 2> at = window.cursor();
-                std::optional<std::size_t> hovered =
-                    rm::ui::buildOptionAt(panel, buildOptions.size(), at[0], at[1]);
+                const std::array<float, 2> at = window.hudCursor();
+                overBuild = rm::ui::buildOptionAt(panel, buildOptions.size(), at[0], at[1]);
                 // THE ARMED CELL STAYS LIT while the cursor is out over the map, which is
                 // exactly when the player needs to be told what they are about to place. A
                 // hover wins over it, so moving back onto the tray reads normally.
-                if (!hovered && armedOption) {
-                    hovered = armedOption;
+                std::optional<std::size_t> lit = overBuild;
+                if (!lit && armedOption) {
+                    lit = armedOption;
                 }
 
                 rm::ui::appendBuildPanel(hudScratch, window.labelFont(), window.readoutFont(),
-                                         hudThemeFor(units), panel, buildOptions, hovered,
+                                         hudThemeFor(units), panel, buildOptions, lit,
                                          buildWho.name, buildWho.role);
-
-                // The hover card, docked above the tray — the block grows upward one more
-                // step: minimap, tray, card. A fixed slot rather than a pointer-chasing
-                // tooltip; the reasons are on `InfoCard`.
-                if (hovered && *hovered < buildOptions.size()) {
-                    const rm::ui::InfoCard card =
-                        rm::ui::buildOptionCard(buildOptions[*hovered]);
-                    const float cardHeight = rm::ui::infoCardHeight(
-                        window.labelFont().lineHeight, card.rows.size());
-                    rm::ui::appendInfoCard(hudScratch, window.labelFont(),
-                                           window.readoutFont(), hudThemeFor(units), panel.x,
-                                           panel.y - cardHeight, panel.width, card);
-                }
             }
 
             // The roster, bottom centre. After the tray so both are in one buffer; they do not
             // overlap, so the order between them is arbitrary and stated only to be stable.
             if (!rosterTiles.empty()) {
                 const rm::ui::RosterLayout roster =
-                    rm::ui::rosterLayout(static_cast<float>(window.width()),
-                                         static_cast<float>(window.height()),
-                                         rosterTiles.size());
-                const std::array<float, 2> at = window.cursor();
+                    rm::ui::rosterLayout(frame, rosterTiles.size(), rosterPage);
+                rosterPage = roster.page;
+                const std::array<float, 2> at = window.hudCursor();
                 const std::optional<std::size_t> overTile =
                     rm::ui::rosterTileAt(roster, at[0], at[1]);
-                rm::ui::appendRoster(hudScratch, window.labelFont(), window.readoutFont(),
-                                     hudThemeFor(units), roster, rosterTiles, overTile);
 
-                // The tile's card, above the roster — same fitting as the tray's.
-                if (overTile && *overTile < rosterTiles.size()) {
-                    const rm::ui::InfoCard card =
-                        rm::ui::rosterTileCard(rosterTiles[*overTile]);
-                    const float cardHeight = rm::ui::infoCardHeight(
-                        window.labelFont().lineHeight, card.rows.size());
-                    rm::ui::appendInfoCard(hudScratch, window.labelFont(),
-                                           window.readoutFont(), hudThemeFor(units), roster.x,
-                                           roster.y - cardHeight, roster.width, card);
+                rm::ui::InfoCard inspector;
+                if (armedOption && *armedOption < buildOptions.size()) {
+                    inspector = rm::ui::buildOptionCard(buildOptions[*armedOption]);
+                } else if (overBuild && *overBuild < buildOptions.size()) {
+                    inspector = rm::ui::buildOptionCard(buildOptions[*overBuild]);
+                } else if (overTile && *overTile < rosterTiles.size()) {
+                    inspector = rm::ui::rosterTileCard(rosterTiles[*overTile]);
+                } else {
+                    inspector = rm::ui::rosterTileCard(rosterTiles.front());
                 }
+                rm::ui::appendRoster(hudScratch, window.labelFont(), window.readoutFont(),
+                                     hudThemeFor(units), roster, rosterTiles, overTile,
+                                     &inspector);
             }
 
             // --- The band box, and the minimap's drag-to-pan --------------------------
@@ -1679,11 +1881,16 @@ int runWindowed(const Session& session) {
             // origin decides which gesture this is: on the minimap it pans the view, on the
             // world it draws a band, on a panel (or while a build is armed) it is neither.
             {
-                const float w = static_cast<float>(window.width());
-                const float h = static_cast<float>(window.height());
+                // ALL OF THIS IS ONE SPACE, the HUD's. The box is drawn into the HUD's vertex
+                // stream, the panel tests read the HUD's rectangles, and the units are caught
+                // by projecting them into the same space — three things that must agree, and
+                // would not if the projection used the window's real size while the box used
+                // the design space the renderer magnifies.
+                const float w = window.hudWidth();
+                const float h = window.hudHeight();
                 const bool held = window.leftMouseHeld();
-                const std::array<float, 2> origin = window.dragOrigin();
-                const std::array<float, 2> at = window.cursor();
+                const std::array<float, 2> origin = window.hudDragOrigin();
+                const std::array<float, 2> at = window.hudCursor();
 
                 // Strictly above the click slop (3 points, backing-scaled) so a release can
                 // never be both a click and a band: between the two thresholds is a small
@@ -1695,12 +1902,12 @@ int runWindowed(const Session& session) {
                 const bool onMinimap = rm::ui::insideMinimap(minimap, origin[0], origin[1]);
                 const bool onPanel =
                     (!buildOptions.empty()
-                     && rm::ui::insideBuildPanel(
-                         rm::ui::buildPanelLayout(minimap, buildOptions.size()), origin[0],
-                         origin[1]))
+                      && rm::ui::insideBuildPanel(
+                          rm::ui::buildPanelLayout(frame, buildOptions.size(), buildPage), origin[0],
+                          origin[1]))
                     || (!rosterTiles.empty()
                         && rm::ui::insideRoster(
-                            rm::ui::rosterLayout(w, h, rosterTiles.size()), origin[0],
+                            rm::ui::rosterLayout(frame, rosterTiles.size(), rosterPage), origin[0],
                             origin[1]));
 
                 if (held && onMinimap) {
@@ -1923,14 +2130,16 @@ int runWindowed(const Session& session) {
                     // circle can.
                     //
                     // `ensureDrawableType` is a map lookup after the first call; the first
-                    // call loads the model and grows `units.batches`, which next frame's
-                    // growth check turns into the re-upload the ghost draw then finds. The
-                    // renderer draws nothing for a batch it has not been given yet, so the
-                    // one-frame gap is invisible rather than wrong.
+                    // call loads the model and grows `units.batches`. THE UPLOAD HAPPENS
+                    // HERE, immediately after, rather than being left to a growth check that
+                    // has already run this frame and will see no growth on the next one —
+                    // which is why the silhouette used to draw nothing for any blueprint the
+                    // player had not already built.
                     const std::string path = armedPath();
                     const std::optional<rm::UnitTypeIndex> ghostType =
                         path.empty() ? std::nullopt
                                      : ensureDrawableType(units, content, path);
+                    uploadNewBatches();
                     const std::size_t ghostBatch =
                         ghostType ? units.batchOf(*ghostType) : UnitScene::kNoBatch;
                     if (ghostBatch != UnitScene::kNoBatch) {
@@ -1978,6 +2187,22 @@ int runWindowed(const Session& session) {
             std::erase_if(noRouteMarks, [](const OrderMark& mark) {
                 return mark.age >= rm::kOrderMarkerSecondsToLive;
             });
+
+            // The pads under the sites and the streams feeding them. Into the SAME two lists
+            // the rest of the frame's effects use — a build stream is a line of motes and a pad
+            // is a ring, and both already have a pass.
+            //
+            // Before the shields for the reason the shields are last: if the fixed decal
+            // buffer fills, a pad marking work in progress is worth more than a distant dome.
+            rm::app::appendConstructionEffects(decalVertices, iconScratch, units, map->field,
+                                               matchSeconds);
+            window.setParticles(iconScratch);
+
+            // Preserve all gameplay UI when the renderer's fixed decal buffer fills. Domes are
+            // deliberately last: losing distant shield shells is preferable to losing a build
+            // ghost, selection ring, route, or refused-order marker.
+            decalVertices.insert(decalVertices.end(), units.shieldScratch.begin(),
+                                 units.shieldScratch.end());
 
             window.setGroundDecals(decalVertices);
             // ...and an outline around each selected unit, which is what a ring

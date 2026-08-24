@@ -32,6 +32,17 @@ static_assert(sizeof(DecalVertex) == 28,
               "DecalVertex must stay tightly packed — the shader reads it as a "
               "packed_float3 and a packed_float4");
 
+/// One-subdivision icosphere: 20 faces become 80 triangles.
+[[nodiscard]] constexpr std::size_t shieldSphereVertexCount() noexcept { return 80u * 3u; }
+
+/// Appends a low-poly translucent sphere in world space.
+///
+/// Unlike the ground-bound shapes below, every coordinate comes from `centre` and `radius`.
+/// The existing decal pass supplies alpha blending, depth testing without depth writes, and
+/// two-sided drawing, so the shell needs no dedicated renderer or shader.
+void appendShieldSphere(std::vector<DecalVertex>& out, std::array<float, 3> centre,
+                        float radiusElmos, std::array<float, 4> colour);
+
 /// Segments around a selection ring.
 ///
 /// 32 is a ring whose facets are under a pixel at the closest an RTS camera

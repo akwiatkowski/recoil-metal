@@ -103,6 +103,11 @@ Renderer::Renderer(CA::MetalLayer* layer)
     // about to claim would hide the one thing the player is judging.
     ghostPipeline_ = makePipeline(device_, library, "unitVertex", "unitGhostFragment",
                                   /*blend=*/true);
+    // A construction site: the same vertex stage again, and blended because Aeon's unbuilt
+    // half is translucent light. The other three factions discard rather than blend, so the
+    // blend state costs them nothing.
+    constructionPipeline_ = makePipeline(device_, library, "unitVertex", "unitBuildFragment",
+                                         /*blend=*/true);
     // Blended, unlike everything else here: a selection ring is interface laid
     // over the ground, and a solid band would hide the terrain it marks.
     // Blended, and drawn last of all: the HUD sits over the world rather than in it.
@@ -316,6 +321,19 @@ Renderer::Renderer(CA::MetalLayer* layer)
         }
     }
 
+    // --- Construction sites --------------------------------------------------
+    {
+        // A ring of `kMaxConstructions` instances per frame in flight. Every site is drawn
+        // with its own uniform block, so they cannot share one instanced draw; what they share
+        // is this buffer, one slot each, written where the site's index puts it.
+        constructionInstanceBuffer_ =
+            device_->newBuffer(sizeof(UnitInstance) * kMaxConstructions * kMaxFramesInFlight,
+                               MTL::ResourceStorageModeShared);
+        if (constructionInstanceBuffer_ == nullptr) {
+            throw RendererError{"failed to allocate the construction instance buffer"};
+        }
+    }
+
     // --- Text ---------------------------------------------------------------
     {
         // A ring like everything else written per frame: the GPU may still be reading last
@@ -437,9 +455,15 @@ Renderer::~Renderer() {
     releaseTerrainBuffers();
     releasePropBuffers();  // before the units: acquired after them
     releaseUnitBuffers();  // frees the unit textures too
+    // Whatever `releaseUnitBuffers` was still holding back for a frame in flight. There is no
+    // next frame to wait for here, and the queue is drained by the time a Renderer is torn
+    // down, so the wait is over by definition.
+    collectRetiredBuffers(/*everything=*/true);
     unitPipeline_->release();
     if (ghostPipeline_ != nullptr) ghostPipeline_->release();
     if (ghostInstanceBuffer_ != nullptr) ghostInstanceBuffer_->release();
+    if (constructionPipeline_ != nullptr) constructionPipeline_->release();
+    if (constructionInstanceBuffer_ != nullptr) constructionInstanceBuffer_->release();
     releaseSplat();
     if (groundTexture_ != nullptr) groundTexture_->release();
     if (fogTexture_ != nullptr) fogTexture_->release();
@@ -472,6 +496,8 @@ void Renderer::beginFrame() noexcept {
     framesInFlight_.acquire();
     instanceSlot_ = (instanceSlot_ + 1) % kMaxFramesInFlight;
     frameOpen_ = true;
+    ++frameCounter_;
+    collectRetiredBuffers();
 
     // Particles too, and for the same reason. Selection outlines likewise: a stale
     // list would outline whatever now occupies those slots.
@@ -1243,6 +1269,91 @@ void Renderer::encodeScene(MTL::CommandBuffer* commandBuffer, MTL::RenderPassDes
     //
     // Skipped in the reflection pass like the rest of the interface: a mirrored ghost
     // would be the interface appearing in the sea.
+    // --- Construction sites ------------------------------------------------
+    //
+    // Before the ghost, because a player placing a second building wants the silhouette on
+    // top of the site already going up rather than behind it. Depth-tested and WRITING, unlike
+    // the ghost: a construction is a real object standing on real ground, and a wall going up
+    // should hide what is behind it.
+    //
+    // Skipped in the reflection pass with everything else that is not plain world geometry —
+    // the pass renders at a quarter resolution through a wave normal, and what would arrive is
+    // a smear of the scan line rather than a building.
+    if (!constructions_.empty() && constructionPipeline_ != nullptr
+        && constructionInstanceBuffer_ != nullptr && override == nullptr) {
+        encoder->setRenderPipelineState(constructionPipeline_);
+        encoder->setDepthStencilState(depthState_);
+        encoder->setVertexBytes(&uniforms, sizeof(uniforms), kUniformBufferIndex);
+
+        auto* slots = static_cast<UnitInstance*>(constructionInstanceBuffer_->contents())
+                    + instanceSlot_ * kMaxConstructions;
+
+        std::size_t written = 0;
+        for (const ConstructionDraw& site : constructions_) {
+            if (written >= kMaxConstructions || site.batch >= batchForSourceIndex_.size()) {
+                continue;
+            }
+            const std::size_t target = batchForSourceIndex_[site.batch];
+            if (target == kNoBatch || target >= unitBatches_.size()) {
+                continue;  // the model has not been uploaded yet; next frame it will be
+            }
+            const GpuUnitBatch& batch = unitBatches_[target];
+            if (batch.vertexBuffer == nullptr || batch.indexBuffer == nullptr
+                || batch.boneBuffer == nullptr) {
+                continue;
+            }
+
+            const std::size_t slot = written++;
+            slots[slot] = site.instance;
+
+            encoder->setVertexBuffer(batch.vertexBuffer, 0, kVertexBufferIndex);
+            encoder->setVertexBuffer(
+                constructionInstanceBuffer_,
+                static_cast<NS::UInteger>(
+                    (instanceSlot_ * kMaxConstructions + slot) * sizeof(UnitInstance)),
+                kInstanceBufferIndex);
+            encoder->setVertexBuffer(batch.boneBuffer, 0, kBoneBufferIndex);
+
+            PoseUniforms pose;
+            pose.poseCount = static_cast<std::uint32_t>(batch.poseCount);
+            pose.boneCount =
+                static_cast<std::uint32_t>(batch.boneStrideBytes / sizeof(BoneTransform));
+            pose.duration = batch.duration;
+            pose.time = 0.0f;  // a building goes up at rest; nothing is built mid-stride
+            encoder->setVertexBytes(&pose, sizeof(pose), kPoseUniformBufferIndex);
+
+            // The uniform block the four faction effects read. Laid out to match
+            // `BuildUniforms` in the shader; the padding is there because Metal wants the
+            // struct's size rounded up and a mismatch would shear every field after it.
+            struct BuildUniforms {
+                std::array<float, 4> tint;
+                float progress;
+                float baseY;
+                float height;
+                float seconds;
+                float centreX;
+                float centreZ;
+                std::uint32_t style;
+                std::uint32_t pad0;
+            } build{
+                .tint = site.tint,
+                .progress = std::clamp(site.progress, 0.0f, 1.0f),
+                .baseY = site.baseY,
+                .height = site.heightElmos,
+                .seconds = constructionSeconds_,
+                .centreX = site.instance.position[0],
+                .centreZ = site.instance.position[2],
+                .style = static_cast<std::uint32_t>(site.style),
+                .pad0 = 0,
+            };
+            encoder->setFragmentBytes(&build, sizeof(build), kUniformBufferIndex);
+            encoder->drawIndexedPrimitives(MTL::PrimitiveType::PrimitiveTypeTriangle,
+                                           static_cast<NS::UInteger>(batch.indexCount),
+                                           MTL::IndexType::IndexTypeUInt32, batch.indexBuffer,
+                                           /*indexBufferOffset=*/0, NS::UInteger{1});
+        }
+    }
+
     if (ghost_ && ghostPipeline_ != nullptr && ghostInstanceBuffer_ != nullptr
         && override == nullptr && ghost_->batch < batchForSourceIndex_.size()) {
         const std::size_t target = batchForSourceIndex_[ghost_->batch];
@@ -1383,7 +1494,9 @@ void Renderer::encodeScene(MTL::CommandBuffer* commandBuffer, MTL::RenderPassDes
         // The viewport in POINTS, which is the space the vertices are in — the shader needs
         // it to turn pixels into clip space and it is the only thing here that knows the
         // window's size.
-        const simd_float2 viewport{static_cast<float>(width), static_cast<float>(height)};
+        const simd_float2 viewport{
+            hudViewportPoints_[0] > 0.0f ? hudViewportPoints_[0] : static_cast<float>(width),
+            hudViewportPoints_[1] > 0.0f ? hudViewportPoints_[1] : static_cast<float>(height)};
         encoder->setVertexBytes(&viewport, sizeof(viewport), kUniformBufferIndex);
 
         const std::size_t slotBase = instanceSlot_ * text::kMaxTextVertices;

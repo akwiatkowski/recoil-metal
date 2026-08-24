@@ -52,6 +52,10 @@ struct MoveDef {
     /// the first needs no grid and the last two need its inverse, water deep enough rather than
     /// shallow enough.
     bool usesGroundGrid = true;
+
+    /// Whether this class routes over connected surface water. Kept separate from submarines:
+    /// sharing a grid would silently pretend depth and surfacing do not exist.
+    bool usesSurfaceWaterGrid = false;
 };
 
 /// The MoveDef for a motion class.

@@ -5,6 +5,7 @@
 
 #include <array>
 #include <cstddef>
+#include <span>
 #include <vector>
 
 namespace rm {
@@ -58,7 +59,27 @@ struct DrawUnit {
     /// and none wants the two `Mag`s, and because the division belongs on this side of the
     /// seam.
     float healthFraction = 1.0f;
+
+    /// Discrete current-tick state, like health rather than interpolated motion.
+    bool shieldActive = false;
 };
+
+/// How long one recently ordered unit should use current-snapshot presentation.
+/// Consecutive orders extend the interval so drawing never falls back to an older position.
+struct CurrentUnitProjection {
+    sim::UnitId id{};
+    TickIndex firstTick = 0;
+    TickIndex throughTick = 0;
+
+    [[nodiscard]] bool activeAt(TickIndex tick) const noexcept {
+        return firstTick <= tick && tick <= throughTick;
+    }
+};
+
+/// Starts current-snapshot presentation on the tick after an order, or extends an interval that
+/// is already active. `currentTick` is the newest published snapshot, not wall-clock time.
+void scheduleCurrentUnitProjection(std::vector<CurrentUnitProjection>& projections,
+                                   sim::UnitId id, TickIndex currentTick);
 
 /// Interpolates two snapshots into what to draw.
 ///
@@ -84,5 +105,13 @@ void interpolate(const sim::Snapshot& from, const sim::Snapshot& to, float alpha
 /// should be tick N and not a blend of two ticks, or every golden image would depend on when
 /// the frame happened to land.
 void project(const sim::Snapshot& state, std::vector<DrawUnit>& out);
+
+/// Replaces the named units in an interpolated draw list with their current-snapshot state.
+///
+/// Player orders use this for one tick: the simulation remains fixed at its deterministic rate,
+/// while the unit that just received input does not spend another full tick visually easing
+/// toward state the simulation has already reached. Other units remain smoothly interpolated.
+void projectCurrentUnits(const sim::Snapshot& current, std::span<const sim::UnitId> ids,
+                         std::vector<DrawUnit>& inOut);
 
 } // namespace rm

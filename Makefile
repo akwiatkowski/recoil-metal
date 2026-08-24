@@ -74,9 +74,16 @@ SHOT_SIZE ?= 1400 900
 MARCH     ?= 4096 4096
 
 # Whether terrain blocks sight (ADR-037): `recoil` or `fa`. Empty leaves the binary's own
-# default, which is recoil's.
+# default, which is FA's — flat discs, no terrain and no trees, exactly as `vision.fx` stamps
+# them. `recoil` is the advanced model: sight raycast against the ground, from each unit's own
+# sensor height rather than from its feet.
 VISION    ?=
 VISION_FLAG = $(if $(VISION),--vision-style $(VISION),)
+
+# How much larger than automatic to draw the interface. The automatic figure already grows the
+# HUD with the viewport; this is the player's own multiplier on top, 0.5 to 3.
+UI_SCALE  ?=
+UI_FLAG   = $(if $(UI_SCALE),--ui-scale $(UI_SCALE),)
 
 FA_FLAGS  = --gamedata "$(FA_ROOT)/gamedata"
 
@@ -104,7 +111,7 @@ help:
 	@echo '  run             procedural terrain, no content needed'
 	@echo '  run-fa          a Supreme Commander map, its own units, read from the archives'
 	@echo '  run-bar         a Recoil map with Beyond All Reason units'
-	@echo '  skirmish        eight armies, commanders, economy — a match you can watch'
+	@echo '  skirmish        default duel: you are army 0, FAF drives army 1'
 	@echo '  battle          the same, marched to the middle and fought to a finish'
 	@echo
 	@echo '  shot-fa         one frame of the above, to $$SHOT'
@@ -120,8 +127,9 @@ help:
 	@echo
 	@echo 'Override anything: make play ARMIES=8 ALLIANCES=2 FACTIONS=uef,seraphim FA_MAP=...'
 	@echo '                   make watch FAF=1       (the FAF AI plays, decisions narrated)'
-	@echo '                   make play VISION=fa    (flat discs, as Supreme Commander does)'
-	@echo '                   make skirmish UNITS=200 SECONDS=90'
+	@echo '                   make play VISION=recoil (terrain blocks sight; fa discs are the default)'
+	@echo '                   make play UI_SCALE=1.4 (a larger interface than the automatic one)'
+	@echo '                   make skirmish FACTIONS=uef,cybran'
 	@echo
 	@echo 'Content:'
 	@echo '  FA_ROOT   $(FA_ROOT)'
@@ -227,7 +235,8 @@ play: build check-fa
 	@echo '  Shift + right-click queues an order; hold space and drag to swing the camera.'
 	@echo '  Scroll zooms. Losing your commander loses the match.'
 	@echo
-	$(BIN) "$(FA_MAP)" $(FA_FLAGS) --skirmish --armies $(ARMIES) $(ALLIANCE_FLAG) $(FACTION_FLAG) $(VISION_FLAG)
+	$(BIN) "$(FA_MAP)" $(FA_FLAGS) --skirmish --armies $(ARMIES) $(ALLIANCE_FLAG) $(FACTION_FLAG) \
+	  $(FAF_AI_FLAG) $(VISION_FLAG) $(UI_FLAG)
 
 # The same match with the first SECONDS already played out, so you arrive at a base rather
 # than at two commanders on empty ground. 60 is about when the factory is up; 320 is just
@@ -236,8 +245,8 @@ play-from: build check-fa
 	@echo
 	@echo '  You are army 0, joining at $(SECONDS)s. WASD pans, right-click orders.'
 	@echo
-	$(BIN) "$(FA_MAP)" $(FA_FLAGS) --skirmish --armies $(ARMIES) $(ALLIANCE_FLAG) $(FACTION_FLAG) $(VISION_FLAG) \
-	  --play $(SECONDS)
+	$(BIN) "$(FA_MAP)" $(FA_FLAGS) --skirmish --armies $(ARMIES) $(ALLIANCE_FLAG) $(FACTION_FLAG) \
+	  $(FAF_AI_FLAG) $(VISION_FLAG) $(UI_FLAG) --play $(SECONDS)
 
 # Watch instead of play: no army is yours, so nothing is selectable and every side is scripted.
 # Useful for seeing what the opponent actually does.
@@ -289,10 +298,10 @@ ai-sanity: build check-fa
 	  $(ALLIANCE_FLAG) $(FACTION_FLAG) $(FAF_AI_FLAG) --play $(AI_SECONDS) --ai-sanity \
 	  --screenshot /tmp/rm-ai-sanity.png 320 180 | tail -80
 
-# A match: one army per start position, each with its faction's commander, each building an
-# extractor on the map's own mass deposits.
+# The default playable duel: army 0 is the human, army 1 runs FAF's AI, and the responsive HUD
+# chooses its profile from the logical window size. Use `play` for other army counts and knobs.
 skirmish: build check-fa
-	$(BIN) "$(FA_MAP)" $(FA_FLAGS) --skirmish
+	$(BIN) "$(FA_MAP)" $(FA_FLAGS) --skirmish --armies 2 --ai-faf $(FACTION_FLAG) $(VISION_FLAG) $(UI_FLAG)
 
 # The same, fought. `--march` sends everything at one point and pre-runs the sim, so the
 # result is the same every run — which is what makes a screenshot of it worth comparing.

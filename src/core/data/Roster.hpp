@@ -115,6 +115,14 @@ public:
     [[nodiscard]] std::vector<RosterEntry> all(sim::Faction faction, unitdef::Role role,
                                                std::span<const std::string> required = {}) const;
 
+    /// One entry BY NAME, or nothing.
+    ///
+    /// The tech path needs this and nothing else does: `General.UpgradesTo` names its successor
+    /// by blueprint id — `'ueb0201'` — and every other lookup here is by what a unit IS rather
+    /// than by what it is called. Case-insensitive, because the field is lower case and
+    /// `RosterEntry::id` carries the id as its directory spells it, which is upper.
+    [[nodiscard]] std::optional<RosterEntry> byId(std::string_view id) const;
+
     [[nodiscard]] std::size_t size() const noexcept { return entries_.size(); }
 
 private:

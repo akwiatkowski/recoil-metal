@@ -342,8 +342,11 @@ TEST_CASE("the FAF driver boots a brain and the corpus's own builders decide", "
         assert(builders > 100, 'expected NormalMain builder list, got ' .. tostring(builders))
         __rm_faf_type('UEL0001', { 'COMMAND', 'MOBILE', 'LAND' })
         local commander = { bp = 'UEL0001', h = 1, x = 100, z = 100, idle = true,
+                            healthPercent = 0.75,
                             __cats = __rm_faf.cats.UEL0001 }
         setmetatable(commander, __rm_faf.unitMeta)
+        assert(commander:GetHealthPercent() == 0.75,
+               'unit proxy does not expose its hull health')
         local snap = { units = { commander }, occupied = {}, underway = {},
                        mass = 400, energy = 1500, massStorage = 650, energyStorage = 4000,
                        massIncome = 0.2, energyIncome = 10, massUsage = 0, energyUsage = 0,
@@ -353,6 +356,37 @@ TEST_CASE("the FAF driver boots a brain and the corpus's own builders decide", "
         assert(decisions[1].kind == 'build',
                'expected a build, got ' .. tostring(decisions[1].kind))
         assert(type(decisions[1].bp) == 'string' and #decisions[1].bp > 0)
+    )");
+    INFO(ai.lastError());
+    REQUIRE(ok);
+}
+
+TEST_CASE("a viable water map exposes only the T1 surface-naval FAF slice", "[faf][ai]") {
+    const std::filesystem::path root = corpusRoot();
+    if (root.empty()) {
+        SKIP("no vendored corpus; run `make ai`");
+    }
+    FafAi ai(root);
+    REQUIRE(ai.ready());
+    REQUIRE(installFafDriver(ai));
+    importAiEntryPoints(ai);
+
+    const bool ok = ai.eval(R"(
+        __rm_faf_boot(0, { faction = 1, startX = 100, startZ = 100,
+                           sizeX = 512, sizeZ = 512, armies = 2,
+                           base = 'NormalMain', markers = {}, hasNavalSite = true })
+        local names = {}
+        for _, item in ipairs(__rm_faf.brains[0].builders) do
+            names[item.spec.BuilderName] = true
+        end
+        assert(names['T1 Naval Factory Builder'], 'no naval factory builder')
+        assert(not names['T2 Naval Factory Builder'], 'T2 yard leaked into T1 slice')
+        assert(not names['T3 Naval Factory Builder'], 'T3 yard leaked into T1 slice')
+        assert(names['T1 Sea Frigate - init'], 'no T1 frigate builder')
+        assert(names['Frequent Sea Attack T1'], 'no surface fleet former')
+        assert(not names['Frequent Sea Attack T2'], 'T2 fleet former leaked into T1 slice')
+        assert(not names['T1 Sea Factory Upgrade Slow'], 'sea upgrade leaked into T1 slice')
+        assert(__rm_faf.brains[0].BuilderManagers.MAIN.BaseSettings.FactoryCount.Sea == 1)
     )");
     INFO(ai.lastError());
     REQUIRE(ok);

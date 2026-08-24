@@ -1,5 +1,6 @@
 #include "core/sim/Movement.hpp"
 
+#include "core/sim/Pathfinding.hpp"
 #include "core/sim/UnitStore.hpp"
 
 #include <algorithm>
@@ -171,7 +172,9 @@ void tick(std::span<Transform> transforms, std::span<MoveState> motion,
         // walk cycle is paced by ground covered, not by height climbed.
         state.distanceTravelledElmos += fxHypot(unit.x - previousX, unit.z - previousZ);
 
-        if (!state.airborne) {
+        if (state.surfaceWater && terrain.hasWater()) {
+            unit.y = terrain.waterLevel();
+        } else if (!state.airborne) {
             // Ground behavior stays exactly where it was: moving units update height here;
             // idle units retain their established Y and only refresh slope below.
             unit.y = terrain.heightAt(unit.x, unit.z);
@@ -186,7 +189,7 @@ void tick(std::span<Transform> transforms, std::span<MoveState> motion,
     // A separate pass rather than a line in the loop above, because it applies
     // to a different set: the loop moves what is moving, this tilts everything.
     for (std::size_t i = 0; i < count; ++i) {
-        if (motion[i].airborne) {
+        if (motion[i].airborne || motion[i].surfaceWater) {
             placeOnMotionLayer(transforms[i], motion[i], terrain);
             continue;
         }
@@ -264,6 +267,12 @@ std::array<Brad, 2> slopeAlignment(const Terrain& terrain, Fx x, Fx z, Brad yaw)
 
 void placeOnMotionLayer(Transform& transform, const MoveState& state,
                         const Terrain& terrain) noexcept {
+    if (state.surfaceWater && terrain.hasWater()) {
+        transform.y = terrain.waterLevel();
+        transform.pitch = Brad{0};
+        transform.roll = Brad{0};
+        return;
+    }
     transform.y = terrain.heightAt(transform.x, transform.z);
     if (state.airborne) {
         transform.y += kAirClearanceElmos;
@@ -277,7 +286,8 @@ void placeOnMotionLayer(Transform& transform, const MoveState& state,
     transform.roll = align[1];
 }
 
-void resolveCollisions(UnitStore& store, const Terrain& terrain) {
+void resolveCollisions(UnitStore& store, const Terrain& terrain,
+                       std::span<const PassabilityGrid* const> gridForType) {
     const std::span<Transform> transforms = store.transforms();
     const std::span<const MoveState> motion = store.motion();
     const std::size_t count = std::min(transforms.size(), motion.size());
@@ -337,7 +347,8 @@ void resolveCollisions(UnitStore& store, const Terrain& terrain) {
             }
 
             const Fx radiusB = motion[b].radiusElmos;
-            if (radiusB <= Fx{} || motion[a].airborne != motion[b].airborne) {
+            if (radiusB <= Fx{} || motion[a].airborne != motion[b].airborne
+                || motion[a].surfaceWater != motion[b].surfaceWater) {
                 continue;
             }
             Transform& unitB = transforms[b];
@@ -368,10 +379,35 @@ void resolveCollisions(UnitStore& store, const Terrain& terrain) {
             const Fx nx = dxWorld / distance;
             const Fx nz = dzWorld / distance;
 
+            const auto surfaceSiteAllowed = [&](std::size_t slot, Fx x, Fx z) {
+                if (!motion[slot].surfaceWater) {
+                    return true;
+                }
+                const auto type = static_cast<std::size_t>(
+                    store.typeAt(static_cast<UnitIndex>(slot)));
+                const PassabilityGrid* grid =
+                    type < gridForType.size() ? gridForType[type] : nullptr;
+                return grid == nullptr
+                    || sitePlaceable(*grid, x, z, motion[slot].radiusElmos);
+            };
+
+            const Fx oldAX = unitA.x;
+            const Fx oldAZ = unitA.z;
             unitA.x -= nx * push;
             unitA.z -= nz * push;
+            if (!surfaceSiteAllowed(a, unitA.x, unitA.z)) {
+                unitA.x = oldAX;
+                unitA.z = oldAZ;
+            }
+
+            const Fx oldBX = unitB.x;
+            const Fx oldBZ = unitB.z;
             unitB.x += nx * push;
             unitB.z += nz * push;
+            if (!surfaceSiteAllowed(b, unitB.x, unitB.z)) {
+                unitB.x = oldBX;
+                unitB.z = oldBZ;
+            }
         }
     }
 
@@ -386,7 +422,7 @@ void resolveCollisions(UnitStore& store, const Terrain& terrain) {
         Transform& unit = transforms[i];
         unit.x = std::clamp(unit.x, Fx{}, width);
         unit.z = std::clamp(unit.z, Fx{}, depth);
-        if (motion[i].airborne) {
+        if (motion[i].airborne || motion[i].surfaceWater) {
             placeOnMotionLayer(unit, motion[i], terrain);
         } else {
             unit.y = terrain.heightAt(unit.x, unit.z);

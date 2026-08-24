@@ -239,6 +239,36 @@ TEST_CASE("a build command creates a construction, costed from the blueprint") {
     CHECK(work.blueprintIndex == mexType);
 }
 
+TEST_CASE("a build command refuses a blocked target footprint") {
+    Fixture fix;
+
+    rm::unitdef::UnitDef engineerDef;
+    engineerDef.name = "engineer";
+    engineerDef.buildRate = 10.0f;
+    engineerDef.buildableCategory = {{"TESTSTRUCTURE"}};
+    const rm::UnitTypeIndex engineerType = fix.roster.addType(engineerDef);
+
+    rm::unitdef::UnitDef structureDef;
+    structureDef.name = "structure";
+    structureDef.categories = {"TESTSTRUCTURE"};
+    structureDef.collisionRadiusElmos = 8.0f;
+    const rm::UnitTypeIndex structureType = fix.roster.addType(structureDef);
+
+    const UnitId engineer = fix.roster.add(engineerType, 300.0f, 300.0f, 0, 500.0f);
+    std::fill(fix.grid.passable.begin(), fix.grid.passable.end(), std::uint8_t{0});
+
+    const Command build{.tick = 0,
+                        .player = 0,
+                        .kind = CommandKind::Build,
+                        .unit = engineer,
+                        .targetX = rm::test::fx(400.0f),
+                        .targetZ = rm::test::fx(400.0f),
+                        .buildType = structureType};
+
+    CHECK_FALSE(fix.apply(build));
+    CHECK(fix.building.empty());
+}
+
 TEST_CASE("only a builder builds") {
     // A tank founding a factory is a caller bug, and refusing it deterministically beats
     // letting it through.

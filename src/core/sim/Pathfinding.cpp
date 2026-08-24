@@ -37,6 +37,12 @@ namespace {
                      field.heightAt(x, z + 1), field.heightAt(x + 1, z + 1)});
 }
 
+/// Highest corner height of a square — the point a surface hull would strike first.
+[[nodiscard]] float squareMaxHeight(const rm::HeightField& field, int x, int z) noexcept {
+    return std::max({field.heightAt(x, z), field.heightAt(x + 1, z),
+                     field.heightAt(x, z + 1), field.heightAt(x + 1, z + 1)});
+}
+
 /// Octile distance in cells: the exact cost of an unobstructed 8-connected walk,
 /// which makes it both admissible and tight.
 /// The cost of a diagonal step: sqrt(2), in `Fx`.
@@ -115,7 +121,9 @@ bool sitePlaceable(const PassabilityGrid& grid, Fx x, Fx z, Fx radiusElmos) noex
     // is not where the player pointed.
     const Fx width = Fx::fromInt(grid.cellsX) * grid.elmosPerCell;
     const Fx depth = Fx::fromInt(grid.cellsZ) * grid.elmosPerCell;
-    if (x < Fx{} || z < Fx{} || x >= width || z >= depth) {
+    if (radiusElmos < Fx{} || x < Fx{} || z < Fx{} || x >= width || z >= depth
+        || x - radiusElmos < Fx{} || z - radiusElmos < Fx{}
+        || x + radiusElmos > width || z + radiusElmos > depth) {
         return false;
     }
 
@@ -181,6 +189,47 @@ PassabilityGrid buildPassability(const HeightField& field, float waterLevelElmos
         }
     }
 
+    return grid;
+}
+
+PassabilityGrid buildSurfaceWaterPassability(const HeightField& field, float waterLevelElmos,
+                                              float minDepthElmos) {
+    PassabilityGrid grid;
+    if (field.squaresX <= 0 || field.squaresZ <= 0) {
+        return grid;
+    }
+
+    grid.cellsX = field.squaresX / kPathCellSquares;
+    grid.cellsZ = field.squaresZ / kPathCellSquares;
+    grid.elmosPerCell = Fx::fromInt(kPathCellSquares * kSquareSize);
+    if (grid.cellsX <= 0 || grid.cellsZ <= 0) {
+        grid.cellsX = 0;
+        grid.cellsZ = 0;
+        return grid;
+    }
+
+    const float highestNavigableHeight = waterLevelElmos - std::max(0.0f, minDepthElmos);
+    grid.passable.assign(static_cast<std::size_t>(grid.cellsX)
+                             * static_cast<std::size_t>(grid.cellsZ),
+                         std::uint8_t{1});
+
+    for (int cz = 0; cz < grid.cellsZ; ++cz) {
+        for (int cx = 0; cx < grid.cellsX; ++cx) {
+            bool navigable = true;
+            for (int z = cz * kPathCellSquares;
+                 z < (cz + 1) * kPathCellSquares && navigable; ++z) {
+                for (int x = cx * kPathCellSquares; x < (cx + 1) * kPathCellSquares; ++x) {
+                    if (squareMaxHeight(field, x, z) >= highestNavigableHeight) {
+                        navigable = false;
+                        break;
+                    }
+                }
+            }
+            grid.passable[static_cast<std::size_t>(cz) * static_cast<std::size_t>(grid.cellsX)
+                          + static_cast<std::size_t>(cx)] = navigable ? std::uint8_t{1}
+                                                                      : std::uint8_t{0};
+        }
+    }
     return grid;
 }
 
@@ -303,6 +352,101 @@ std::vector<std::array<Fx, 2>> findPath(const PassabilityGrid& grid, Fx fromX, F
 
     std::reverse(path.begin(), path.end());
     return path;
+}
+
+std::optional<std::array<Fx, 2>> nearestPlaceableSite(const PassabilityGrid& grid, Fx nearX,
+                                                       Fx nearZ, Fx radiusElmos) {
+    if (grid.cellsX <= 0 || grid.cellsZ <= 0) {
+        return std::nullopt;
+    }
+    const int nearCellX = grid.cellAtWorld(nearX);
+    const int nearCellZ = grid.cellAtWorld(nearZ);
+    std::optional<std::array<Fx, 2>> best;
+    std::int64_t bestDistance = std::numeric_limits<std::int64_t>::max();
+
+    for (int z = 0; z < grid.cellsZ; ++z) {
+        for (int x = 0; x < grid.cellsX; ++x) {
+            const Fx worldX = grid.worldAtCellCentre(x);
+            const Fx worldZ = grid.worldAtCellCentre(z);
+            if (!sitePlaceable(grid, worldX, worldZ, radiusElmos)) {
+                continue;
+            }
+            const std::int64_t dx = static_cast<std::int64_t>(x - nearCellX);
+            const std::int64_t dz = static_cast<std::int64_t>(z - nearCellZ);
+            const std::int64_t distance = dx * dx + dz * dz;
+            if (distance < bestDistance) {
+                bestDistance = distance;
+                best = std::array<Fx, 2>{worldX, worldZ};
+            }
+        }
+    }
+    return best;
+}
+
+std::optional<std::array<Fx, 2>> reachablePointToward(const PassabilityGrid& grid, Fx fromX,
+                                                       Fx fromZ, Fx towardX, Fx towardZ) {
+    if (grid.cellsX <= 0 || grid.cellsZ <= 0) {
+        return std::nullopt;
+    }
+    const int startX = grid.cellAtWorld(fromX);
+    const int startZ = grid.cellAtWorld(fromZ);
+    if (!grid.passableAt(startX, startZ)) {
+        return std::nullopt;
+    }
+    const int targetX = grid.cellAtWorld(towardX);
+    const int targetZ = grid.cellAtWorld(towardZ);
+    const auto index = [&grid](int x, int z) {
+        return z * grid.cellsX + x;
+    };
+    static constexpr std::array<std::array<int, 2>, 8> kSteps{{
+        {{1, 0}}, {{-1, 0}}, {{0, 1}}, {{0, -1}},
+        {{1, 1}}, {{1, -1}}, {{-1, 1}}, {{-1, -1}},
+    }};
+
+    std::vector<std::uint8_t> seen(
+        static_cast<std::size_t>(grid.cellsX) * static_cast<std::size_t>(grid.cellsZ), 0);
+    std::queue<int> open;
+    open.push(index(startX, startZ));
+    seen[static_cast<std::size_t>(index(startX, startZ))] = 1;
+
+    int bestX = startX;
+    int bestZ = startZ;
+    std::int64_t bestDistance = std::numeric_limits<std::int64_t>::max();
+    while (!open.empty()) {
+        const int current = open.front();
+        open.pop();
+        const int x = current % grid.cellsX;
+        const int z = current / grid.cellsX;
+        const std::int64_t dx = static_cast<std::int64_t>(x - targetX);
+        const std::int64_t dz = static_cast<std::int64_t>(z - targetZ);
+        const std::int64_t distance = dx * dx + dz * dz;
+        if (distance < bestDistance) {
+            bestDistance = distance;
+            bestX = x;
+            bestZ = z;
+        }
+
+        for (const auto& step : kSteps) {
+            const int nx = x + step[0];
+            const int nz = z + step[1];
+            if (!grid.passableAt(nx, nz)) {
+                continue;
+            }
+            const bool diagonal = step[0] != 0 && step[1] != 0;
+            if (diagonal
+                && (!grid.passableAt(x + step[0], z) || !grid.passableAt(x, z + step[1]))) {
+                continue;
+            }
+            const int next = index(nx, nz);
+            if (seen[static_cast<std::size_t>(next)] != 0) {
+                continue;
+            }
+            seen[static_cast<std::size_t>(next)] = 1;
+            open.push(next);
+        }
+    }
+    return std::array<Fx, 2>{grid.worldAtCellCentre(bestX),
+                              grid.worldAtCellCentre(bestZ)};
 }
 
 } // namespace rm::sim

@@ -73,6 +73,10 @@ struct UnitView {
     /// What it can still take, for the health bars and the strategic-icon tint.
     Mag health{};
     Mag maxHealth{};
+
+    /// Whether the ordinary external bubble exists this tick. Radius and offset are immutable
+    /// type data, so only this changing state crosses the sim/presentation seam.
+    bool shieldActive = false;
 };
 
 /// Every live unit, as of one tick.

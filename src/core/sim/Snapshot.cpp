@@ -27,6 +27,7 @@ void snapshotInto(const UnitStore& store, TickIndex tick, Snapshot& out) {
             .speedPerTick = slot < motion.size() ? motion[slot].speedPerTick : Fx{},
             .health = slot < health.size() ? health[slot].current : Mag{},
             .maxHealth = slot < health.size() ? health[slot].maximum : Mag{},
+            .shieldActive = slot < health.size() && health[slot].shield.active(),
         });
     }
 }

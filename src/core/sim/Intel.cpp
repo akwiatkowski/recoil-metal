@@ -517,8 +517,13 @@ void Intel::update(const UnitStore& store, const UnitCatalog& catalog,
             }
             const auto index =
                 static_cast<std::size_t>(alliance) * kIntelKindCount + kind;
+            // THE EYE, not the feet. `at.y` is the ground the unit stands on; the sensor is on
+            // top of it, and handing the raycast the transform meant a commander looked out
+            // from ankle level and could not see over a rise its own head cleared.
+            // `VisionStyle::ForgedAlliance` ignores the height entirely, as its own shader
+            // does.
             intelSquares(grids_[index], terrain, style_, static_cast<IntelKind>(kind), at.x,
-                         at.z, byKind[kind], at.y, scratch_);
+                         at.z, byKind[kind], at.y + radii.eyeHeight, scratch_);
 
             std::vector<std::int32_t>& squares = emitters_[slot][kind].squares;
             squares.assign(scratch_.begin(), scratch_.end());

@@ -40,12 +40,20 @@ namespace rm {
 using namespace render_detail;  // NOLINT(google-build-using-namespace)
 
 void Renderer::buildFontAtlas(FontSlot& slot, const char* familyName, float points) {
+    if (slot.atlas != nullptr) {
+        slot.atlas->release();
+        slot.atlas = nullptr;
+    }
     slot.glyphs.clear();
     slot.lineHeight = 0.0f;
 
+    const float scale = std::max(uiScale_, 1.0f);
+    const float rasterPoints = points * scale;
+
     CFStringRef name =
         CFStringCreateWithCString(nullptr, familyName, kCFStringEncodingUTF8);
-    CTFontRef font = name != nullptr ? CTFontCreateWithName(name, points, nullptr) : nullptr;
+    CTFontRef font =
+        name != nullptr ? CTFontCreateWithName(name, rasterPoints, nullptr) : nullptr;
     if (name != nullptr) {
         CFRelease(name);
     }
@@ -59,7 +67,8 @@ void Renderer::buildFontAtlas(FontSlot& slot, const char* familyName, float poin
 
     const float ascent = static_cast<float>(CTFontGetAscent(font));
     const float descent = static_cast<float>(CTFontGetDescent(font));
-    slot.lineHeight = ascent + descent + static_cast<float>(CTFontGetLeading(font));
+    slot.lineHeight =
+        (ascent + descent + static_cast<float>(CTFontGetLeading(font))) / scale;
 
     // Measure first, pack second. Every glyph in one row: 95 of them at ~11 pixels is about
     // 1100 wide, which is one modest texture and keeps the packing arithmetic to a running
@@ -164,14 +173,14 @@ void Renderer::buildFontAtlas(FontSlot& slot, const char* familyName, float poin
         slot.glyphs[i] = text::Glyph{
             .uv = {static_cast<float>(penX) / static_cast<float>(atlasWidth), vTop,
                    static_cast<float>(penX + w) / static_cast<float>(atlasWidth), vBottom},
-            .width = static_cast<float>(w),
-            .height = static_cast<float>(h),
+            .width = static_cast<float>(w) / scale,
+            .height = static_cast<float>(h) / scale,
             // The ink's left edge relative to the pen, and its TOP relative to the baseline.
             // The second is negative for anything that rises above the baseline, which is
             // nearly everything — see Glyph.
-            .bearingX = static_cast<float>(box.origin.x),
-            .bearingY = -static_cast<float>(box.origin.y + box.size.height),
-            .advance = static_cast<float>(advances[i].width),
+            .bearingX = static_cast<float>(box.origin.x) / scale,
+            .bearingY = -static_cast<float>(box.origin.y + box.size.height) / scale,
+            .advance = static_cast<float>(advances[i].width) / scale,
         };
 
         penX += w + 2 * kGlyphPadding;
@@ -198,14 +207,29 @@ void Renderer::buildFontAtlas(FontSlot& slot, const char* familyName, float poin
     slot.atlas->replaceRegion(region, 0, pixels.data(),
                               static_cast<NS::UInteger>(atlasWidth));
 
-    std::printf("hud font: %s %.0fpt, %zu glyphs in a %dx%d atlas, %.1fpx line\n", familyName,
-                static_cast<double>(points), slot.glyphs.size(), atlasWidth, atlasHeight,
+    std::printf("hud font: %s %.0fpt @ %.0fx, %zu glyphs in a %dx%d atlas, %.1fpt line\n",
+                familyName, static_cast<double>(points), static_cast<double>(scale),
+                slot.glyphs.size(), atlasWidth, atlasHeight,
                 static_cast<double>(slot.lineHeight));
 }
 
 text::Font Renderer::labelFont() const noexcept { return labelFont_.view(); }
 
 text::Font Renderer::readoutFont() const noexcept { return readoutFont_.view(); }
+
+void Renderer::setUiScale(float backingScale) {
+    const float scale = std::max(backingScale, 1.0f);
+    if (std::abs(scale - uiScale_) < 0.01f) {
+        return;
+    }
+    uiScale_ = scale;
+    buildFontAtlas(labelFont_, kLabelFontName, kLabelPointSize);
+    buildFontAtlas(readoutFont_, kReadoutFontName, kReadoutPointSize);
+}
+
+void Renderer::setHudViewport(float widthPoints, float heightPoints) noexcept {
+    hudViewportPoints_ = {std::max(widthPoints, 1.0f), std::max(heightPoints, 1.0f)};
+}
 
 void Renderer::setHud(std::span<const text::TextVertex> label,
                       std::span<const text::TextVertex> readout,

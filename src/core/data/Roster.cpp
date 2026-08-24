@@ -158,6 +158,22 @@ std::vector<RosterEntry> Roster::all(sim::Faction faction, unitdef::Role role,
     return found;
 }
 
+std::optional<RosterEntry> Roster::byId(std::string_view id) const {
+    const auto lower = [](unsigned char c) {
+        return c >= 'A' && c <= 'Z' ? static_cast<unsigned char>(c - 'A' + 'a') : c;
+    };
+    for (const RosterEntry& entry : entries_) {
+        if (entry.id.size() == id.size()
+            && std::equal(entry.id.begin(), entry.id.end(), id.begin(),
+                          [&](unsigned char a, unsigned char b) {
+                              return lower(a) == lower(b);
+                          })) {
+            return entry;
+        }
+    }
+    return std::nullopt;
+}
+
 std::optional<RosterEntry> Roster::pick(sim::Faction faction, unitdef::Role role, int tech,
                                         std::span<const std::string> required) const {
     // The first match in sorted order IS the cheapest, then lowest id — no comparison here.

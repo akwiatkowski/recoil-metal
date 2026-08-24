@@ -156,6 +156,61 @@ TEST_CASE("health is taken as it is, not eased into") {
     CHECK(out[0].healthFraction == Approx(0.1f));
 }
 
+TEST_CASE("shield activity is taken from the current snapshot") {
+    const UnitId id{0, 1};
+    UnitView before = unitAt(id, 0.0f, 0.0f);
+    UnitView after = unitAt(id, 100.0f, 0.0f);
+    before.shieldActive = true;
+    after.shieldActive = false;
+
+    std::vector<DrawUnit> out;
+    rm::interpolate(made(10, {before}), made(11, {after}), 0.5f, out);
+
+    REQUIRE(out.size() == 1);
+    CHECK(out[0].position[0] == Approx(50.0f));
+    CHECK_FALSE(out[0].shieldActive);
+}
+
+TEST_CASE("recently ordered units can draw the current snapshot without moving their neighbours") {
+    const UnitId ordered{0, 1};
+    const UnitId neighbour{1, 1};
+    const Snapshot from = made(10, {unitAt(ordered, 0.0f, 0.0f),
+                                    unitAt(neighbour, 10.0f, 0.0f)});
+    const Snapshot to = made(11, {unitAt(ordered, 100.0f, 0.0f),
+                                  unitAt(neighbour, 110.0f, 0.0f)});
+
+    std::vector<DrawUnit> out;
+    rm::interpolate(from, to, 0.25f, out);
+    rm::projectCurrentUnits(to, std::array{ordered}, out);
+
+    REQUIRE(out.size() == 2);
+    CHECK(out[0].id == ordered);
+    CHECK(out[0].position[0] == Approx(100.0f));
+    CHECK(out[1].id == neighbour);
+    CHECK(out[1].position[0] == Approx(35.0f));
+}
+
+TEST_CASE("rapid orders extend current projection without revisiting an older snapshot") {
+    const UnitId ordered{0, 1};
+    std::vector<rm::CurrentUnitProjection> projections;
+
+    rm::scheduleCurrentUnitProjection(projections, ordered, 10);
+    REQUIRE(projections.size() == 1);
+    CHECK_FALSE(projections[0].activeAt(10));
+    CHECK(projections[0].activeAt(11));
+
+    // A second order while tick 11 is being shown must keep 11 current as well as tick 12.
+    rm::scheduleCurrentUnitProjection(projections, ordered, 11);
+    CHECK(projections[0].activeAt(11));
+    CHECK(projections[0].activeAt(12));
+    CHECK_FALSE(projections[0].activeAt(13));
+
+    // Once the old interval is over, a later order starts a fresh interval after its own tick.
+    rm::scheduleCurrentUnitProjection(projections, ordered, 13);
+    CHECK_FALSE(projections[0].activeAt(13));
+    CHECK(projections[0].activeAt(14));
+}
+
 TEST_CASE("projecting one snapshot is interpolation with nothing to blend") {
     // `--no-interpolate` and every headless capture take this path, and it has to agree with
     // alpha 1 — a screenshot of tick N must be tick N whichever route it took.
@@ -174,6 +229,7 @@ TEST_CASE("projecting one snapshot is interpolation with nothing to blend") {
     CHECK(projected[0].position[2] == blended[0].position[2]);
     CHECK(projected[0].rotationY == blended[0].rotationY);
     CHECK(projected[0].healthFraction == blended[0].healthFraction);
+    CHECK(projected[0].shieldActive == blended[0].shieldActive);
 }
 
 TEST_CASE("an empty snapshot draws nothing") {

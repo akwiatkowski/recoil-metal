@@ -1,5 +1,7 @@
 #include "app/Interface.hpp"
 
+#include "app/SceneBuild.hpp"  // ensureDrawableType — a construction is the first time a
+                               // blueprint needs to be DRAWN rather than merely simulated
 #include "core/ui/IconAtlas.hpp"
 #include "core/unit/Role.hpp"
 
@@ -7,6 +9,45 @@
 #include <cmath>
 
 namespace rm::app {
+namespace {
+
+/// The colour the energy going into a building takes, by faction.
+///
+/// SEPARATE FROM THE HUD'S LIVERY (`ui::themeFor`), which is chosen for legibility against
+/// readouts and deliberately pushed away from the resource colours — Cybran's chrome is rose so
+/// it cannot be mistaken for a loss figure. Out on the battlefield there is nothing to be
+/// mistaken for, and the effect should be the faction's own: Cybran build lasers are red.
+[[nodiscard]] std::array<float, 4> buildEnergyColour(rm::sim::Faction faction) noexcept {
+    switch (faction) {
+    case rm::sim::Faction::Uef:
+        return {{0.42f, 0.68f, 1.00f, 1.0f}};  // the steel blue of a UEF build frame
+    case rm::sim::Faction::Aeon:
+        return {{0.36f, 1.00f, 0.72f, 1.0f}};  // the green-white a unit rises out of
+    case rm::sim::Faction::Cybran:
+        return {{1.00f, 0.24f, 0.18f, 1.0f}};  // nano-swarm red
+    case rm::sim::Faction::Seraphim:
+        return {{1.00f, 0.82f, 0.36f, 1.0f}};  // the gold its rings contract in
+    }
+    return {{0.42f, 0.68f, 1.00f, 1.0f}};
+}
+
+} // namespace
+
+bool constructionInProgress(const rm::sim::Construction& work) noexcept {
+    return !work.finished();
+}
+
+float constructionProgress(const rm::sim::Construction& work) noexcept {
+    const float total = rm::sim::magToFloat(work.totalBuildTime);
+    if (!(total > 0.0f)) {
+        // No stated build time is not "finished" — it is a blueprint that said nothing, and a
+        // site drawn as complete would be a building that never appears to go up at all. Show
+        // it as barely started; the work still completes on the economy's own schedule.
+        return 0.0f;
+    }
+    const float remaining = rm::sim::magToFloat(work.buildTimeRemaining);
+    return std::clamp(1.0f - remaining / total, 0.0f, 1.0f);
+}
 
 /// The minimap's pips, from the snapshot the renderer is already drawing.
 ///
@@ -170,6 +211,38 @@ void gatherBuildOptions(const UnitScene& scene, std::span<const rm::sim::UnitId>
                              .name = def->name,
                              .role = std::string{rm::unitdef::roleName(role)}};
 
+        // THE TECH PATH, first in the tray because it is the decision a player returns to.
+        //
+        // `General.UpgradesTo` is a field of its own and belongs to NO `BuildableCategory`, so
+        // walking the build tree could never find it: a T1 land factory's own tier two was in
+        // the corpus, understood by `startCommand` (which recognises an upgrade by exactly this
+        // field) and offered by nothing. The chain continues on its own — the T2 factory's
+        // blueprint names the T3 — so this one lookup gives all three tiers as each is reached.
+        if (const std::optional<rm::data::RosterEntry> next =
+                def->upgradesTo.empty() ? std::nullopt : scene.roster.byId(def->upgradesTo)) {
+            const float mass = rm::sim::magToFloat(next->costMass);
+            const float seconds = def->buildRate > 0.0f
+                                    ? rm::sim::magToFloat(next->buildTime) / def->buildRate
+                                    : 0.0f;
+            // NAMED BY ITS TIER, because all three tiers of a land factory are called "Land
+            // Factory" in the shipped corpus and a cell reading the same as its neighbour tells
+            // a player nothing at all.
+            const std::string name =
+                (next->description.empty() ? next->id : next->description) + " T"
+                + std::to_string(next->tech);
+            out.push_back(rm::ui::BuildOption{
+                .id = next->id,
+                .name = name,
+                .massCost = mass,
+                .energyCost = rm::sim::magToFloat(next->costEnergy),
+                .buildSeconds = seconds,
+                .health = rm::sim::magToFloat(next->health),
+                .upgrade = true,
+                .affordable = mass <= storedMass,
+                .tint = rm::ui::tierTint(theme, next->tech),
+            });
+        }
+
         if (isFactory) {
             for (const rm::data::RosterEntry& entry :
                  scene.roster.buildableBy(faction, def->buildableCategory)) {
@@ -224,6 +297,156 @@ void gatherBuildOptions(const UnitScene& scene, std::span<const rm::sim::UnitId>
             }
         }
         return;  // the first builder decides — see the header
+    }
+}
+
+void gatherConstructions(UnitScene& scene, const rm::vfs::Vfs& content,
+                         const rm::HeightField& field,
+                         std::vector<rm::Renderer::ConstructionDraw>& out) {
+    out.clear();
+    for (const rm::sim::Construction& work : scene.building) {
+        // FINISHED WORK STAYS IN THE LIST. `scene.building` is a ledger, not a queue — the
+        // sim reports what newly completed and removes nothing, because the census counts a
+        // standing extractor by finding its completed row here (`Match.cpp`'s `standingFor`).
+        // Drawing those would put a permanent half-built ghost on top of every building the
+        // army ever finished.
+        if (!constructionInProgress(work)) {
+            continue;
+        }
+        const float x = rm::sim::fxToFloat(work.position[0]);
+        const float z = rm::sim::fxToFloat(work.position[2]);
+        if (!scene.visibleToViewer(work.position[0], work.position[2])) {
+            continue;  // a building the viewer has not seen; drawing it would be free scouting
+        }
+
+        // AN UPGRADE IS NOT A SITE. It replaces a building that is already standing and drawn,
+        // so a second model in the same place would z-fight with the thing being upgraded.
+        // The pad and the stream still mark it — see `appendConstructionEffects`.
+        if (work.upgradeOf != rm::sim::UnitId{}) {
+            continue;
+        }
+
+        const auto type = static_cast<rm::UnitTypeIndex>(work.blueprintIndex);
+        const rm::unitdef::UnitDef* def = scene.catalog.def(type);
+        if (def == nullptr) {
+            continue;
+        }
+
+        // The model, loaded on demand. A blueprint under construction has usually never been
+        // drawn — that is the whole point — so this is where its batch comes into existence,
+        // and the caller must upload before the frame draws. See the frame loop.
+        const std::optional<rm::UnitTypeIndex> drawable =
+            ensureDrawableType(scene, content, std::string{scene.pathOf(type)});
+        if (!drawable) {
+            continue;
+        }
+        const std::size_t batch = scene.batchOf(*drawable);
+        if (batch == UnitScene::kNoBatch) {
+            continue;
+        }
+
+        const int army = work.armyIndex;
+        const rm::sim::Faction faction =
+            army >= 0 && static_cast<std::size_t>(army) < scene.armies.size()
+                ? scene.armies[static_cast<std::size_t>(army)].faction
+                : rm::sim::Faction::Uef;
+
+        // The ground decides the height, exactly as `spawnUnit` will when the work completes —
+        // the construction's own `y` is always zero and says so in its own comment.
+        const float groundY = field.heightAtWorld(x, z);
+        const auto typeIndex = static_cast<std::size_t>(*drawable);
+
+        rm::UnitInstance instance{};
+        instance.position = {{x, groundY, z}};
+        instance.rotationY = 0.0f;  // structures face north, as the finished spawn will
+        instance.scale =
+            typeIndex < scene.typeScale.size() ? scene.typeScale[typeIndex] : 1.0f;
+        instance.teamColour = army >= 0 && static_cast<std::size_t>(army) < scene.armies.size()
+                                ? rm::teamColour(static_cast<std::size_t>(army))
+                                : rm::kTeamColours[0];
+
+        out.push_back(rm::Renderer::ConstructionDraw{
+            .batch = batch,
+            .instance = instance,
+            .progress = constructionProgress(work),
+            .baseY = groundY,
+            // The MESH's height, not the collision box's — a factory's box is the low apron
+            // and its mesh is the gantry above it (`UnitDef::meshHeightElmos`).
+            .heightElmos = def->meshHeightElmos > 0.0f ? def->meshHeightElmos
+                                                        : def->collisionRadiusElmos * 2.0f,
+            .style = static_cast<rm::Renderer::BuildStyle>(faction),
+            .tint = buildEnergyColour(faction),
+        });
+    }
+}
+
+void appendConstructionEffects(std::vector<rm::DecalVertex>& decals,
+                               std::vector<rm::Particle>& particles, const UnitScene& scene,
+                               const rm::HeightField& field, float seconds) {
+    for (const rm::sim::Construction& work : scene.building) {
+        // Only work still in progress — the list keeps completed rows forever; see
+        // `gatherConstructions`.
+        if (!constructionInProgress(work) || !scene.visibleToViewer(work.position[0], work.position[2])) {
+            continue;
+        }
+        const int army = work.armyIndex;
+        const rm::sim::Faction faction =
+            army >= 0 && static_cast<std::size_t>(army) < scene.armies.size()
+                ? scene.armies[static_cast<std::size_t>(army)].faction
+                : rm::sim::Faction::Uef;
+        const std::array<float, 4> energy = buildEnergyColour(faction);
+        const float x = rm::sim::fxToFloat(work.position[0]);
+        const float z = rm::sim::fxToFloat(work.position[2]);
+        const float progress = constructionProgress(work);
+
+        // THE PAD, which is what Aeon's units rise out of and what every faction's site stands
+        // on. It closes as the work finishes, so a nearly-complete building has a thin collar
+        // rather than a halo — the pad's radius is the progress bar nobody has to read.
+        const rm::unitdef::UnitDef* def =
+            scene.catalog.def(static_cast<rm::UnitTypeIndex>(work.blueprintIndex));
+        const float radius = def != nullptr && def->collisionRadiusElmos > 0.0f
+                               ? def->collisionRadiusElmos
+                               : 8.0f;
+        const float glow = 0.35f + 0.25f * std::sin(seconds * 4.0f);
+        rm::appendSelectionRing(
+            decals, field, {{x, 0.0f, z}}, radius * (1.35f - 0.3f * progress),
+            {{energy[0], energy[1], energy[2], 0.30f + 0.25f * glow}},
+            /*thicknessElmos=*/2.5f);
+
+        // THE STREAM, from whoever is working. Particles rather than a beam pipeline: a
+        // build stream IS a line of motes, which is what the particle pass already draws, and
+        // a pipeline for one effect is a pipeline to maintain for one effect.
+        //
+        // Emitted along the line each frame with no velocity, so they hang where they are put
+        // and the line reads as continuous rather than as a spray.
+        if (!scene.store.alive(work.builder)) {
+            continue;
+        }
+        const rm::sim::Transform& from = scene.store.transforms()[work.builder.index];
+        const float fx = rm::sim::fxToFloat(from.x);
+        const float fy = rm::sim::fxToFloat(from.y);
+        const float fz = rm::sim::fxToFloat(from.z);
+        const float toY = field.heightAtWorld(x, z) + radius * 0.5f;
+
+        constexpr int kMotesPerStream = 7;
+        for (int mote = 0; mote < kMotesPerStream; ++mote) {
+            // Marched from the builder to the site, with the phase running so the motes
+            // travel rather than sitting in a static dotted line.
+            const float step = static_cast<float>(mote) / static_cast<float>(kMotesPerStream);
+            const float t = std::fmod(step + seconds * 0.9f, 1.0f);
+            particles.push_back(rm::Particle{
+                .origin = {{fx + (x - fx) * t, fy + 4.0f + (toY - fy - 4.0f) * t,
+                            fz + (z - fz) * t}},
+                .age = 0.0f,
+                .velocity = {{0.0f, 0.0f, 0.0f}},
+                .lifetime = 0.12f,
+                // Premultiplied and alpha zero: additive, so the stream adds light and
+                // obscures nothing behind it. See `Particle::colour`.
+                .colour = {{energy[0] * 0.9f, energy[1] * 0.9f, energy[2] * 0.9f, 0.0f}},
+                .size = 1.6f,
+                .growth = 0.0f,
+            });
+        }
     }
 }
 

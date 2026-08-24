@@ -557,6 +557,113 @@ TEST_CASE("a refused plain order changes nothing at all") {
     CHECK(*roster.store.orders()[walker.index].current() == moveTo(200.0f, 40.0f, walker));
 }
 
+TEST_CASE("a queued mobile product waits for and starts on its own grid") {
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    const rm::sim::PassabilityGrid open =
+        rm::sim::buildPassability(field, 0.0f, 60.0f, 0.0f);
+    const rm::sim::PassabilityGrid closed =
+        rm::sim::buildPassability(field, 1.0e6f, 60.0f, 0.0f);
+
+    rm::test::Roster roster;
+    rm::unitdef::UnitDef engineerDef = walkerDef();
+    engineerDef.buildRate = 10.0f;
+    engineerDef.buildableCategory = {{"TESTSTRUCTURE"}};
+    const rm::UnitTypeIndex engineerType = roster.addType(engineerDef);
+
+    rm::unitdef::UnitDef productDef = walkerDef();
+    productDef.name = "product";
+    productDef.categories = {"TESTSTRUCTURE"};
+    productDef.collisionRadiusElmos = 8.0f;
+    const rm::UnitTypeIndex productType = roster.addType(productDef);
+
+    const UnitId engineer = roster.add(engineerType, 40.0f, 40.0f, 0, 100.0f);
+    const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(1);
+    const std::vector<rm::sim::Player> players{rm::sim::Player{.index = 0, .army = 0}};
+    std::vector<rm::sim::Construction> building;
+
+    REQUIRE(rm::sim::applyCommand(moveTo(200.0f, 40.0f, engineer), roster.store,
+                                  roster.catalog, players, armies, terrain, open, roster.rate,
+                                  &building));
+    Command build{.tick = 0,
+                  .player = 0,
+                  .kind = CommandKind::Build,
+                  .queued = true,
+                  .unit = engineer,
+                  .targetX = rm::sim::fxFromFloat(400.0f),
+                  .targetZ = rm::sim::fxFromFloat(400.0f),
+                  .buildType = productType};
+    REQUIRE(rm::sim::applyCommand(build, roster.store, roster.catalog, players, armies,
+                                  terrain, closed, roster.rate, &building));
+
+    // The move has arrived, but this tick's table predates the newly registered product. The
+    // build stays at the head rather than being dropped as though it had already run.
+    roster.store.motion()[engineer.index].moving = false;
+    const std::vector<const rm::sim::PassabilityGrid*> staleGrids{&closed};
+    CHECK(rm::sim::advanceOrders(roster.store, roster.catalog, terrain, staleGrids, roster.rate,
+                                 &building)
+          == 0);
+    CHECK(building.empty());
+    REQUIRE(roster.store.orders()[engineer.index].current() != nullptr);
+    CHECK(roster.store.orders()[engineer.index].current()->kind == CommandKind::Build);
+
+    // On the next tick the product grid exists. The builder grid is deliberately closed, so a
+    // successful start proves the deferred command selected productType's grid.
+    const std::vector<const rm::sim::PassabilityGrid*> grids{&closed, &open};
+    CHECK(rm::sim::advanceOrders(roster.store, roster.catalog, terrain, grids, roster.rate,
+                                 &building)
+          == 1);
+    REQUIRE(building.size() == 1);
+    CHECK(building.front().blueprintIndex == productType);
+}
+
+TEST_CASE("a queued immobile structure falls back to its builder grid") {
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    const rm::sim::PassabilityGrid open =
+        rm::sim::buildPassability(field, 0.0f, 60.0f, 0.0f);
+    const rm::sim::PassabilityGrid empty;
+
+    rm::test::Roster roster;
+    rm::unitdef::UnitDef engineerDef = walkerDef();
+    engineerDef.buildRate = 10.0f;
+    engineerDef.buildableCategory = {{"TESTSTRUCTURE"}};
+    const rm::UnitTypeIndex engineerType = roster.addType(engineerDef);
+
+    rm::unitdef::UnitDef structureDef;
+    structureDef.name = "structure";
+    structureDef.categories = {"TESTSTRUCTURE"};
+    structureDef.collisionRadiusElmos = 8.0f;
+    const rm::UnitTypeIndex structureType = roster.addType(structureDef);
+
+    const UnitId engineer = roster.add(engineerType, 40.0f, 40.0f, 0, 100.0f);
+    const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(1);
+    const std::vector<rm::sim::Player> players{rm::sim::Player{.index = 0, .army = 0}};
+    std::vector<rm::sim::Construction> building;
+
+    REQUIRE(rm::sim::applyCommand(moveTo(200.0f, 40.0f, engineer), roster.store,
+                                  roster.catalog, players, armies, terrain, open, roster.rate,
+                                  &building));
+    const Command build{.tick = 0,
+                        .player = 0,
+                        .kind = CommandKind::Build,
+                        .queued = true,
+                        .unit = engineer,
+                        .targetX = rm::sim::fxFromFloat(400.0f),
+                        .targetZ = rm::sim::fxFromFloat(400.0f),
+                        .buildType = structureType};
+    REQUIRE(rm::sim::applyCommand(build, roster.store, roster.catalog, players, armies,
+                                  terrain, open, roster.rate, &building));
+
+    roster.store.motion()[engineer.index].moving = false;
+    const std::vector<const rm::sim::PassabilityGrid*> grids{&open, &empty};
+    CHECK(rm::sim::advanceOrders(roster.store, roster.catalog, terrain, grids, roster.rate,
+                                 &building)
+          == 1);
+    REQUIRE(building.size() == 1);
+    CHECK(building.front().blueprintIndex == structureType);
+}
+
 TEST_CASE("an aircraft flies directly across a map no ground unit can route") {
     const rm::HeightField field = flatField();
     const rm::sim::Terrain terrain{field};

@@ -98,11 +98,27 @@ struct MarchOptions {
 [[nodiscard]] float parseAnimationTime(int argc, const char* argv[]);
 [[nodiscard]] MarchOptions parseMarch(int argc, const char* argv[]);
 
+/// `--ui-scale N`: how much larger than automatic to draw the interface.
+///
+/// One, the default, is the automatic figure alone — `ui::hudScale`, which already grows the
+/// interface with the viewport. Above one is for a player who wants it larger still on a dense
+/// display; below one is for a small capture that should be mostly world. Out of range clamps,
+/// and anything unparseable falls back to automatic.
+[[nodiscard]] float parseUiScale(int argc, const char* argv[]);
+
 /// `--vision-style fa|recoil`: whether terrain blocks sight (ADR-037).
 ///
-/// Defaults to Recoil's, which is the more interesting game — hills block, high ground is
-/// worth holding. `fa` is what Supreme Commander itself does, and is the setting to reach
-/// for when a Forged Alliance map should play the way Forged Alliance played it.
+/// DEFAULTS TO `fa` — plain circles, no terrain consulted and no trees — because that is what
+/// this engine's content is. Supreme Commander's `effects/vision.fx:35` is
+/// `radius * vertex.xz + position.xy`: a flat disc, with no height input and no heightmap
+/// sample anywhere in the file. Running FA blueprints on FA maps and then blocking sight with
+/// hills is a different game wearing this one's content.
+///
+/// It used to default to `recoil` on the argument that blocked sight is the more interesting
+/// game. That is a fair opinion about game design and the wrong default for a transcription:
+/// the simple model is the one the content was balanced against, and the raycast is the
+/// ADVANCED option — which is now genuinely advanced, since it reads each unit's own sensor
+/// height (`UnitCatalog::IntelRadii::eyeHeight`) rather than looking out from the ground.
 ///
 /// An unrecognised value is the default with a complaint, not an exit: a typo in a
 /// rendering-adjacent flag should not stop a match starting.

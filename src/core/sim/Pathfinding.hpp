@@ -5,6 +5,7 @@
 
 #include <array>
 #include <cstdint>
+#include <optional>
 #include <vector>
 
 namespace rm::sim {
@@ -77,12 +78,12 @@ struct PassabilityGrid {
 /// this grid and a player aims at the middle of it, so a centre-only test cheerfully puts half a
 /// building inside a cliff — and it looks fine until the thing finishes and stands in rock.
 ///
-/// THE SAME GRID THE BUILDER WOULD WALK, which is a simplification and a stated one. Passability
-/// answers "may a unit STAND here", and buildability is a different question in both reference
-/// engines: Recoil has a separate blocking map, Supreme Commander has per-blueprint terrain
-/// classes. Ours is the walkable test until there is a reason to separate them, and the reason
-/// will be a unit that can build somewhere it cannot walk — a naval yard, which needs the water
-/// grid this engine refuses to build (see `moveDefFor`'s note on Water and SurfacingSub).
+/// THE TARGET DOMAIN'S GRID for mobile products and naval yards; ordinary immobile structures
+/// still use the builder's grid. Passability answers "may a unit STAND here", and buildability
+/// is a different question in both reference engines: Recoil has a separate blocking map,
+/// Supreme Commander has per-blueprint terrain classes. Ours remains the walkable test until a
+/// dedicated build map exists, but the target-domain distinction prevents a commander that can
+/// cross water from founding a naval yard on land.
 ///
 /// P10.4 makes this better rather than different: a cost field replaces the binary answer, and
 /// `buildPassability`'s "one blocked square blocks the cell" — which at 64 elmos is very coarse
@@ -107,6 +108,15 @@ struct PassabilityGrid {
     float maxSlopeDegrees = kDefaultMaxSlopeDegrees,
     float maxWaterDepthElmos = kDefaultMaxWaterDepthElmos);
 
+/// Builds the inverse grid used by surface ships.
+///
+/// Every terrain corner under a cell must be strictly below `waterLevelElmos - minDepthElmos`.
+/// The maximum corner binds because one dry/shallow corner is enough for a hull to hit shore.
+/// Seabed slope is irrelevant to a unit floating on the plane above it.
+[[nodiscard]] PassabilityGrid buildSurfaceWaterPassability(const HeightField& field,
+                                                            float waterLevelElmos,
+                                                            float minDepthElmos = 0.0f);
+
 /// A route from one world position to another, as cell-centre waypoints.
 ///
 /// Empty when there is no route, when either end is impassable, or when both
@@ -123,6 +133,18 @@ struct PassabilityGrid {
 /// the corners of cliffs. Deterministic: ties in the open set break on cell
 /// index, so the same query always returns the same route.
 [[nodiscard]] std::vector<std::array<Fx, 2>> findPath(const PassabilityGrid& grid, Fx fromX,
-                                                      Fx fromZ, Fx toX, Fx toZ);
+                                                       Fx fromZ, Fx toX, Fx toZ);
+
+/// Nearest cell centre whose complete circular footprint is passable.
+/// Ties break by row-major cell index, so site selection is deterministic.
+[[nodiscard]] std::optional<std::array<Fx, 2>> nearestPlaceableSite(
+    const PassabilityGrid& grid, Fx nearX, Fx nearZ, Fx radiusElmos);
+
+/// The reachable cell in `from`'s connected component nearest `toward`.
+///
+/// Used when a water-only unit is tactically aimed at a point on land or across a disconnected
+/// sea: the order advances as far as its own water permits instead of being rejected wholesale.
+[[nodiscard]] std::optional<std::array<Fx, 2>> reachablePointToward(
+    const PassabilityGrid& grid, Fx fromX, Fx fromZ, Fx towardX, Fx towardZ);
 
 } // namespace rm::sim

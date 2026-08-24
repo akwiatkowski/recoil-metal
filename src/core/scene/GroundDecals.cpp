@@ -13,6 +13,68 @@ namespace rm {
 /// scorch, and an opaque colour would make them the same colour too.
 constexpr std::array<float, 4> kWreckCentreColour{{0.05f, 0.04f, 0.03f, 0.55f}};
 
+void appendShieldSphere(std::vector<DecalVertex>& out, std::array<float, 3> centre,
+                        float radiusElmos, std::array<float, 4> colour) {
+    if (!(radiusElmos > 0.0f)) {
+        return;
+    }
+
+    // An icosahedron gives the shell even triangles without a UV sphere's pinched poles. One
+    // midpoint subdivision is 80 triangles: round enough at RTS distance, only 240 vertices.
+    constexpr float phi = 1.61803398875f;
+    constexpr std::array<std::array<float, 3>, 12> points{{
+        {{-1.0f, phi, 0.0f}}, {{1.0f, phi, 0.0f}}, {{-1.0f, -phi, 0.0f}},
+        {{1.0f, -phi, 0.0f}}, {{0.0f, -1.0f, phi}}, {{0.0f, 1.0f, phi}},
+        {{0.0f, -1.0f, -phi}}, {{0.0f, 1.0f, -phi}}, {{phi, 0.0f, -1.0f}},
+        {{phi, 0.0f, 1.0f}}, {{-phi, 0.0f, -1.0f}}, {{-phi, 0.0f, 1.0f}},
+    }};
+    constexpr std::array<std::array<std::size_t, 3>, 20> faces{{
+        {{0, 11, 5}}, {{0, 5, 1}}, {{0, 1, 7}}, {{0, 7, 10}}, {{0, 10, 11}},
+        {{1, 5, 9}}, {{5, 11, 4}}, {{11, 10, 2}}, {{10, 7, 6}}, {{7, 1, 8}},
+        {{3, 9, 4}}, {{3, 4, 2}}, {{3, 2, 6}}, {{3, 6, 8}}, {{3, 8, 9}},
+        {{4, 9, 5}}, {{2, 4, 11}}, {{6, 2, 10}}, {{8, 6, 7}}, {{9, 8, 1}},
+    }};
+
+    const auto normal = [](std::array<float, 3> point) {
+        const float length = std::sqrt(point[0] * point[0] + point[1] * point[1]
+                                       + point[2] * point[2]);
+        return std::array<float, 3>{point[0] / length, point[1] / length,
+                                    point[2] / length};
+    };
+    const auto midpoint = [&](std::array<float, 3> a, std::array<float, 3> b) {
+        return normal({a[0] + b[0], a[1] + b[1], a[2] + b[2]});
+    };
+    const auto vertex = [&](std::array<float, 3> point) {
+        point = normal(point);
+        return DecalVertex{
+            .position = {centre[0] + point[0] * radiusElmos,
+                         centre[1] + point[1] * radiusElmos,
+                         centre[2] + point[2] * radiusElmos},
+            .colour = colour,
+        };
+    };
+    const auto triangle = [&](std::array<float, 3> a, std::array<float, 3> b,
+                              std::array<float, 3> c) {
+        out.push_back(vertex(a));
+        out.push_back(vertex(b));
+        out.push_back(vertex(c));
+    };
+
+    out.reserve(out.size() + shieldSphereVertexCount());
+    for (const auto& face : faces) {
+        const std::array<float, 3> a = normal(points[face[0]]);
+        const std::array<float, 3> b = normal(points[face[1]]);
+        const std::array<float, 3> c = normal(points[face[2]]);
+        const std::array<float, 3> ab = midpoint(a, b);
+        const std::array<float, 3> bc = midpoint(b, c);
+        const std::array<float, 3> ca = midpoint(c, a);
+        triangle(a, ab, ca);
+        triangle(b, bc, ab);
+        triangle(c, ca, bc);
+        triangle(ab, bc, ca);
+    }
+}
+
 void appendWreckMark(std::vector<DecalVertex>& out, const HeightField& field,
                      std::array<float, 3> centre, float radiusElmos, int segments) {
     if (!(radiusElmos > 0.0f) || segments < 3) {

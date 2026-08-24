@@ -258,7 +258,7 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
     //    Each rebuild is one pass over the slots and a sort — cheap against what it replaces,
     //    which was a scan over every unit for every shooter, every projectile and every blast.
     store.reindex(spatialCellSize(store));
-    resolveCollisions(store, terrain);
+    resolveCollisions(store, terrain, match.passability);
     store.reindex(spatialCellSize(store));
 
     // Everything below is a MATCH, and a scene with no armies is not one — a `--units`

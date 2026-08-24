@@ -428,6 +428,83 @@ TEST_CASE("a unit lights the ground around it for its own alliance only") {
     CHECK_FALSE(intel.sees(0, IntelKind::Radar, here, here));
 }
 
+TEST_CASE("a unit's sensors sit on top of it, not on the ground under it") {
+    // THE PLUMBING, not the algorithm. `raycastSquares` has always taken an eye height and the
+    // tests above prove it uses one; what nothing checked is what the SIM hands it, and the sim
+    // was handing it the unit's transform — the terrain under its feet. Every unit in the game
+    // therefore looked out from ankle level, and a commander two ogrids tall could not see over
+    // a rise its own head cleared.
+    // A LOW ridge, for the reason the eye-height test above records: from high enough above a
+    // tall plateau its own FAR edge hides the ground beyond, so a taller eye stops helping. A
+    // twenty-elmo rise is the band where the eye decides the answer.
+    rm::HeightField field = flatField(64, 0.0f);
+    raiseBand(field, 38, 41, 20);  // a 20-elmo ridge at x = 300..332
+    const rm::sim::Terrain terrain{field};
+
+    rm::unitdef::UnitDef low = seer(400.0f);
+    rm::unitdef::UnitDef tall = seer(400.0f);
+    tall.sizeYElmos = 100.0f;  // the same eye the raycast's own test proves opens this ray
+
+    UnitCatalog catalog;
+    const rm::UnitTypeIndex lowType = catalog.add(&low);
+    const rm::UnitTypeIndex tallType = catalog.add(&tall);
+    CHECK(catalog.intel(tallType).eyeHeight > catalog.intel(lowType).eyeHeight);
+
+    const Fx behind = Fx::fromInt(380);  // the far side of the ridge
+    const Fx lane = Fx::fromInt(256);
+
+    const auto seesBehindRidge = [&](rm::UnitTypeIndex type) {
+        Intel intel;
+        intel.configure(2, Fx::fromInt(512), Fx::fromInt(512), rm::sim::VisionStyle::Recoil);
+        UnitStore store;
+        (void)place(store, type, 0, 200.0f, 256.0f);
+        std::vector<Army> armies = twoArmies(false);
+        intel.update(store, catalog, armies, &terrain);
+        return intel.sees(0, IntelKind::Vision, behind, lane);
+    };
+
+    CHECK_FALSE(seesBehindRidge(lowType));
+    CHECK(seesBehindRidge(tallType));
+}
+
+TEST_CASE("the flat-disc style ignores height entirely, as its own shader does") {
+    // The other half of the same decision, and the reason `--vision-style fa` is now the
+    // default: Supreme Commander's `vision.fx` has no heightmap sample in it at all. A sensor
+    // height that changed a disc would be this engine inventing a rule.
+    rm::HeightField field = flatField(64, 0.0f);
+    raiseBand(field, 38, 41, 60);
+    const rm::sim::Terrain terrain{field};
+
+    rm::unitdef::UnitDef low = seer(400.0f);
+    rm::unitdef::UnitDef tall = seer(400.0f);
+    tall.sizeYElmos = 200.0f;
+
+    UnitCatalog catalog;
+    const rm::UnitTypeIndex lowType = catalog.add(&low);
+    const rm::UnitTypeIndex tallType = catalog.add(&tall);
+
+    const auto litSquares = [&](rm::UnitTypeIndex type) {
+        Intel intel;
+        intel.configure(2, Fx::fromInt(512), Fx::fromInt(512),
+                        rm::sim::VisionStyle::ForgedAlliance);
+        UnitStore store;
+        (void)place(store, type, 0, 200.0f, 256.0f);
+        std::vector<Army> armies = twoArmies(false);
+        intel.update(store, catalog, armies, &terrain);
+        std::size_t lit = 0;
+        for (int x = 0; x < 512; x += 8) {
+            for (int z = 0; z < 512; z += 8) {
+                lit += intel.sees(0, IntelKind::Vision, Fx::fromInt(x), Fx::fromInt(z)) ? 1u : 0u;
+            }
+        }
+        return lit;
+    };
+
+    CHECK(litSquares(lowType) == litSquares(tallType));
+    // And the ridge is no obstacle to either, which is the style's whole claim.
+    CHECK(litSquares(lowType) > 0);
+}
+
 TEST_CASE("allies share what either of them can see") {
     // The reason the grids are keyed on alliance rather than army, checked rather than
     // asserted in a comment.

@@ -57,9 +57,9 @@ bool gFafLog = false;
     };
 
     const bool applied = rm::sim::applyCommand(command, scene.store, scene.catalog,
-                                                scene.players, scene.armies,
-                                                rm::sim::Terrain{field}, grid, gAppTickRate,
-                                                &scene.building);
+                                                 scene.players, scene.armies,
+                                                 scene.terrain(field), grid, gAppTickRate,
+                                                 &scene.building);
     if (applied) {
         // Recorded only when it took. A refused order is not part of the match — replaying it
         // would be refused again, so keeping it would only make the log longer.
@@ -90,9 +90,9 @@ bool gFafLog = false;
     };
 
     const bool applied = rm::sim::applyCommand(command, scene.store, scene.catalog,
-                                                scene.players, scene.armies,
-                                                rm::sim::Terrain{field}, grid, gAppTickRate,
-                                                &scene.building);
+                                                 scene.players, scene.armies,
+                                                 scene.terrain(field), grid, gAppTickRate,
+                                                 &scene.building);
     if (applied) {
         scene.commands.record(command);
     }
@@ -119,9 +119,9 @@ bool gFafLog = false;
     };
 
     const bool applied = rm::sim::applyCommand(command, scene.store, scene.catalog,
-                                                scene.players, scene.armies,
-                                                rm::sim::Terrain{field}, grid, gAppTickRate,
-                                                &scene.building);
+                                                 scene.players, scene.armies,
+                                                 scene.terrain(field), grid, gAppTickRate,
+                                                 &scene.building);
     if (applied) {
         scene.commands.record(command);
     }
@@ -152,7 +152,7 @@ bool gFafLog = false;
 
     const bool applied = rm::sim::applyCommand(command, scene.store, scene.catalog,
                                                scene.players, scene.armies,
-                                               rm::sim::Terrain{field}, grid, gAppTickRate,
+                                               scene.terrain(field), grid, gAppTickRate,
                                                &scene.building);
     if (applied) {
         scene.commands.record(command);
@@ -183,10 +183,10 @@ bool gFafLog = false;
     };
 
     const bool applied = rm::sim::applyCommand(command, scene.store, scene.catalog,
-                                                scene.players, scene.armies,
-                                                rm::sim::Terrain{field}, grid, gAppTickRate,
-                                                &scene.building, nullptr,
-                                                &scene.features);
+                                                 scene.players, scene.armies,
+                                                 scene.terrain(field), grid, gAppTickRate,
+                                                 &scene.building, nullptr,
+                                                 &scene.features);
     if (applied) {
         scene.commands.record(command);
     }
@@ -542,13 +542,13 @@ void applyDecisions(UnitScene& scene, const rm::vfs::Vfs& content, const rm::Hei
             // time and the builder's own rate off the definitions, raises `ConstructionStarted`
             // itself, and refuses the order if the player does not command the builder's army.
             //
-            // The grid is the BUILDER's, since that is the unit the command names — a build is
-            // not a move and nothing is routed, but `applyCommand` takes one grid for all kinds
-            // and handing it the wrong unit's would be a lie waiting to matter.
             const auto builderType =
                 static_cast<std::size_t>(scene.store.typeAt(decision.builder.index));
-            const rm::sim::PassabilityGrid& grid = passability.gridFor(
-                scene.maxSlopeDegrees[builderType], scene.maxWaterDepthElmos[builderType]);
+            // Placement belongs to the PRODUCT's domain: land units stand on land and ships and
+            // naval yards stand in water. Immobile land structures retain the builder-grid
+            // simplification in PassabilitySet::gridForBuild.
+            const rm::sim::PassabilityGrid& grid = passability.gridForBuild(
+                scene, *blueprintIndex, builderType);
 
             if (!issueBuild(scene, grid, field, decision.builder,
                             playerDriving(scene, army.index), tickIndex,
@@ -573,8 +573,7 @@ void applyDecisions(UnitScene& scene, const rm::vfs::Vfs& content, const rm::Hei
                 break;  // died between the census and the order
             }
             const auto type = static_cast<std::size_t>(scene.store.typeAt(decision.unit.index));
-            const rm::sim::PassabilityGrid& grid = passability.gridFor(
-                scene.maxSlopeDegrees[type], scene.maxWaterDepthElmos[type]);
+            const rm::sim::PassabilityGrid& grid = passability.gridFor(scene, type);
             if (issueMove(scene, grid, field, decision.unit, playerDriving(scene, army.index),
                           tickIndex, decision.toX, decision.toZ)) {
                 ++marching;
@@ -779,12 +778,7 @@ rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) 
     runner.gridForType.clear();
     runner.gridForType.reserve(scene.catalog.size());
     for (std::size_t type = 0; type < scene.catalog.size(); ++type) {
-        if (type >= scene.maxSlopeDegrees.size() || type >= scene.maxWaterDepthElmos.size()) {
-            runner.gridForType.push_back(nullptr);
-            continue;
-        }
-        runner.gridForType.push_back(&runner.passability.gridFor(
-            scene.maxSlopeDegrees[type], scene.maxWaterDepthElmos[type]));
+        runner.gridForType.push_back(&runner.passability.gridFor(scene, type));
     }
     runner.match.passability = runner.gridForType;
 
@@ -819,11 +813,15 @@ rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) 
                 command.buildType = static_cast<rm::UnitTypeIndex>(*resolved);
             }
         }
-        const auto type = static_cast<std::size_t>(scene.store.typeAt(command.unit.index));
-        const rm::sim::PassabilityGrid& grid = runner.passability.gridFor(
-            scene.maxSlopeDegrees[type], scene.maxWaterDepthElmos[type]);
+        const auto builderType =
+            static_cast<std::size_t>(scene.store.typeAt(command.unit.index));
+        const rm::sim::PassabilityGrid& grid =
+            command.kind == rm::sim::CommandKind::Build
+                ? runner.passability.gridForBuild(
+                      scene, static_cast<std::size_t>(command.buildType), builderType)
+                : runner.passability.gridFor(scene, builderType);
         if (rm::sim::applyCommand(command, scene.store, scene.catalog, scene.players,
-                                   scene.armies, rm::sim::Terrain{runner.field}, grid,
+                                   scene.armies, scene.terrain(runner.field), grid,
                                    gAppTickRate, &scene.building, nullptr,
                                    &scene.features)) {
             scene.commands.record(command);
@@ -869,7 +867,7 @@ rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) 
     // core/sim/Skirmish.cpp rather than about whichever loop you are reading.
     const rm::sim::TickReport report =
         rm::sim::tickSkirmish(scene.store, scene.catalog, runner.match,
-                              rm::sim::Terrain{runner.field}, gAppTickRate);
+                               scene.terrain(runner.field), gAppTickRate);
 
     runner.shotsFired += report.shotsFired;
     scene.deathBlasts += report.deathBlasts;
@@ -951,7 +949,7 @@ rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) 
                                     ? nearestEnemyCommander(scene, work.armyIndex,
                                                             work.position)
                                     : std::nullopt;
-            const std::array<rm::sim::Fx, 2> to =
+            std::array<rm::sim::Fx, 2> to =
                 target ? std::array<rm::sim::Fx, 2>{(*target)[0], (*target)[2]}
                        : rm::sim::rolloffPoint(
                              work.position,
@@ -959,9 +957,13 @@ rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) 
                              rm::sim::Fx::fromInt(runner.field.squaresZ * rm::kSquareSize
                                                   / 2));
             const auto type = static_cast<std::size_t>(scene.store.typeAt(spawned->index));
-            const rm::sim::PassabilityGrid& grid =
-                runner.passability.gridFor(scene.maxSlopeDegrees[type],
-                                           scene.maxWaterDepthElmos[type]);
+            const rm::sim::PassabilityGrid& grid = runner.passability.gridFor(scene, type);
+            if (scene.store.motion()[spawned->index].surfaceWater) {
+                if (const auto waterTarget = rm::sim::reachablePointToward(
+                        grid, work.position[0], work.position[2], to[0], to[1])) {
+                    to = *waterTarget;
+                }
+            }
             (void)issueMove(scene, grid, runner.field, *spawned,
                             playerDriving(scene, work.armyIndex),
                             static_cast<rm::TickIndex>(tickIndex), to[0], to[1]);
@@ -1016,8 +1018,7 @@ void march(UnitScene& scene, const rm::HeightField& field, PassabilitySet& passa
             {
                 ++total;
                 const auto type = static_cast<std::size_t>(scene.store.typeAt(slot));
-                const rm::sim::PassabilityGrid& grid = passability.gridFor(
-                    scene.maxSlopeDegrees[type], scene.maxWaterDepthElmos[type]);
+                const rm::sim::PassabilityGrid& grid = passability.gridFor(scene, type);
                 if (issueMove(scene, grid, field, scene.store.idAt(slot),
                               playerDriving(scene, scene.store.motion()[slot].armyIndex), 0,
                               rm::sim::fxFromFloat(options.x),

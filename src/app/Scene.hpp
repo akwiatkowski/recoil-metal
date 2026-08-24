@@ -15,6 +15,7 @@
 #include "app/Content.hpp"
 
 #include "core/data/Opening.hpp"
+#include "core/data/MoveDef.hpp"
 #include "core/data/Roster.hpp"
 #include "core/scene/GroundDecals.hpp"
 #include "core/scene/Selection.hpp"
@@ -99,11 +100,18 @@ struct UnitScene {
     // unit reaches its model.
     rm::sim::UnitCatalog catalog;
 
-    // Per TYPE now rather than per batch — the same numbers, since the two indices coincide.
-    // Used to pick which passability grid routes a unit: a slope one climbs is a wall to
-    // another.
-    std::vector<float> maxSlopeDegrees;
-    std::vector<float> maxWaterDepthElmos;
+    // Per TYPE movement domains and limits. Keeping the complete value matters: surface ships
+    // use the inverse water grid, while air and unsupported submarines use neither ground grid.
+    std::vector<rm::data::MoveDef> moveDefForType;
+
+    /// Map water metadata, copied once at scene construction so every sim-side Terrain view
+    /// agrees with rendering and passability about the physical water plane.
+    bool hasWater = false;
+    float waterLevelElmos = 0.0f;
+
+    [[nodiscard]] rm::sim::Terrain terrain(const rm::HeightField& field) const noexcept {
+        return rm::sim::Terrain{field, hasWater, waterLevelElmos};
+    }
 
     /// How much to scale each type's mesh by, from its blueprint's `meshToElmos`.
     ///
@@ -125,6 +133,9 @@ struct UnitScene {
     /// Where each unit is being DRAWN this frame — interpolated, float, derived, never read
     /// back. Kept between frames so the steady state allocates nothing.
     std::vector<rm::DrawUnit> drawUnits;
+
+    /// Active ordinary bubbles, rebuilt beside the interpolated unit instances each frame.
+    std::vector<rm::DecalVertex> shieldScratch;
 
     /// Whether to interpolate at all. `--no-interpolate` turns it off, which is what a golden
     /// screenshot wants: a capture of tick N should be tick N rather than a blend that depends
@@ -309,16 +320,13 @@ struct UnitScene {
     /// That is the same parallel-array hazard the third batch site's own comment records having
     /// been bitten by before. Setting by index cannot fall behind, whatever order types are
     /// registered in.
-    void setTypeTraits(rm::UnitTypeIndex type, float slopeDegrees, float waterDepthElmos,
-                       float scale) {
+    void setTypeTraits(rm::UnitTypeIndex type, rm::data::MoveDef move, float scale) {
         const auto index = static_cast<std::size_t>(type);
-        if (maxSlopeDegrees.size() <= index) {
-            maxSlopeDegrees.resize(index + 1);
-            maxWaterDepthElmos.resize(index + 1);
+        if (moveDefForType.size() <= index) {
+            moveDefForType.resize(index + 1);
             typeScale.resize(index + 1, 1.0f);
         }
-        maxSlopeDegrees[index] = slopeDegrees;
-        maxWaterDepthElmos[index] = waterDepthElmos;
+        moveDefForType[index] = move;
         typeScale[index] = scale;
     }
 
@@ -495,13 +503,15 @@ struct UnitScene {
     /// `eye`, when given, is the camera position in world elmos and switches far
     /// instances onto their coarse batches — the windowed loop passes it; headless
     /// captures do not, and draw everything fine, which is what a screenshot wants.
-    void gatherForDrawing(float alpha = 1.0f, const std::array<float, 3>* eye = nullptr) {
+    void gatherForDrawing(float alpha = 1.0f, const std::array<float, 3>* eye = nullptr,
+                          std::span<const rm::sim::UnitId> currentUnits = {}) {
         // FROM THE SNAPSHOTS, not from the store (§7 P7.1/P7.2). This used to walk
         // `store.transforms()` and `store.motion()` directly, which is why motion stepped at
         // the tick rate: a frame drew wherever the sim happened to be, and there was no second
         // state to blend with.
         if (interpolate) {
             rm::interpolate(snapshotPrevious, snapshotCurrent, alpha, drawUnits);
+            rm::projectCurrentUnits(snapshotCurrent, currentUnits, drawUnits);
         } else {
             rm::project(snapshotCurrent, drawUnits);
         }
@@ -515,6 +525,7 @@ struct UnitScene {
             batch.clear();
         }
         drawIndexOf.assign(store.slotCount(), rm::SelectionEntry{});
+        shieldScratch.clear();
 
         refreshViewerContacts();
 
@@ -548,6 +559,16 @@ struct UnitScene {
                         batch = lod->second.batch;
                     }
                 }
+            }
+            const rm::sim::UnitCatalog::ShieldInfo& shield = catalog.shield(unit.type);
+            if (unit.shieldActive && shield.exists()) {
+                std::array<float, 3> centre = unit.position;
+                centre[1] += rm::sim::fxToFloat(shield.verticalOffsetElmos);
+                // Same cyan as the shield HUD, with calibrated low alpha so overlapping shells
+                // remain readable without hiding the battle underneath.
+                rm::appendShieldSphere(shieldScratch, centre,
+                                       rm::sim::fxToFloat(shield.radiusElmos),
+                                       {{0.2f, 0.75f, 1.0f, 0.12f}});
             }
             // Still keyed by SLOT, because that is what selection and picking name a unit by,
             // and a snapshot entry carries the id it came from.
@@ -664,8 +685,8 @@ struct UnitScene {
 // usually two or three grids rather than a dozen.
 class PassabilitySet {
 public:
-    PassabilitySet(const rm::HeightField& field, float waterLevel)
-        : field_{&field}, waterLevel_{waterLevel} {}
+    PassabilitySet(const rm::HeightField& field, bool hasWater, float waterLevel)
+        : field_{&field}, hasWater_{hasWater}, waterLevel_{waterLevel} {}
 
     [[nodiscard]] const rm::sim::PassabilityGrid& gridFor(float slopeDegrees, float depthElmos) {
         const auto key = std::make_pair(slopeDegrees, depthElmos);
@@ -691,10 +712,62 @@ public:
         return grids_.emplace(key, std::move(grid)).first->second;
     }
 
+    /// The one grid a registered type routes on. Air receives an empty grid because its command
+    /// path flies directly; unsupported movement classes receive the same grid and are refused.
+    [[nodiscard]] const rm::sim::PassabilityGrid& gridFor(const UnitScene& scene,
+                                                           std::size_t type) {
+        if (type >= scene.moveDefForType.size()) {
+            return empty_;
+        }
+        const rm::data::MoveDef& move = scene.moveDefForType[type];
+        if (move.usesSurfaceWaterGrid) {
+            if (!hasWater_) {
+                return empty_;
+            }
+            if (!surfaceWater_) {
+                surfaceWater_ = rm::sim::buildSurfaceWaterPassability(*field_, waterLevel_);
+                std::printf("passability: %d x %d cells of %.0f elmos, %zu%% navigable water\n",
+                            surfaceWater_->cellsX, surfaceWater_->cellsZ,
+                            static_cast<double>(rm::sim::fxToFloat(surfaceWater_->elmosPerCell)),
+                            surfaceWater_->passable.empty()
+                                ? 0u
+                                : 100u * static_cast<std::size_t>(std::count(
+                                                surfaceWater_->passable.begin(),
+                                                surfaceWater_->passable.end(), std::uint8_t{1}))
+                                      / surfaceWater_->passable.size());
+            }
+            return *surfaceWater_;
+        }
+        if (!move.usesGroundGrid) {
+            return empty_;
+        }
+        return gridFor(move.maxSlopeDegrees, move.maxWaterDepthElmos);
+    }
+
+    /// The terrain domain a new unit or structure must occupy.
+    ///
+    /// Mobile land and sea products use their own movement domain. Immobile land structures
+    /// retain the builder-grid simplification documented by `sitePlaceable`; naval factories
+    /// are the exception that forced this distinction and carry a surface-water MoveDef.
+    [[nodiscard]] const rm::sim::PassabilityGrid& gridForBuild(const UnitScene& scene,
+                                                                std::size_t targetType,
+                                                                std::size_t builderType) {
+        if (targetType < scene.moveDefForType.size()) {
+            const rm::data::MoveDef& target = scene.moveDefForType[targetType];
+            if (target.usesGroundGrid || target.usesSurfaceWaterGrid) {
+                return gridFor(scene, targetType);
+            }
+        }
+        return gridFor(scene, builderType);
+    }
+
 private:
     const rm::HeightField* field_;
+    bool hasWater_;
     float waterLevel_;
     std::map<std::pair<float, float>, rm::sim::PassabilityGrid> grids_;
+    std::optional<rm::sim::PassabilityGrid> surfaceWater_;
+    rm::sim::PassabilityGrid empty_;
 };
 
 /// The colour of the ring drawn on the ground under a selected unit.

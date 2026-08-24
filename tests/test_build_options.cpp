@@ -13,6 +13,7 @@
 // content test wearing a logic test's name, and it would go red when somebody edited a
 // blueprint.
 
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 #include "app/Interface.hpp"
@@ -394,6 +395,65 @@ TEST_CASE("a factory offers what its BuildableCategory names, and nothing else",
     CHECK(fixture.who.builder == site);
 }
 
+TEST_CASE("a builder offers its own tech-path upgrade, which no category names",
+          "[ui][build]") {
+    // THE GAP THIS CLOSES. `General.UpgradesTo` is a field of its own and belongs to no
+    // `BuildableCategory`, so the build tree could not reach it however hard it looked: a T1
+    // land factory's tier two was in the corpus, understood by the sim, and offered by nothing.
+    // A player had no way to tech up at all.
+    Fixture fixture;
+    rm::unitdef::UnitDef factory =
+        aDef("UEB0101", {"UEF", "TECH1", "STRUCTURE", "FACTORY"}, 240.0f, 20.0f);
+    factory.buildableCategory.push_back(
+        rm::unitdef::parseCategoryTerm("BUILTBYTIER1FACTORY UEF MOBILE"));
+    factory.upgradesTo = "UEB0201";
+
+    fixture.add(aDef("UEL0202", {"BUILTBYTIER1FACTORY", "MOBILE", "TANK", "TECH1", "UEF"}, 52.0f));
+    // The successor carries no factory-buildable tag whatsoever, which is exactly the point:
+    // nothing but the field itself connects the two.
+    fixture.add(aDef("UEB0201", {"UEF", "TECH2", "STRUCTURE", "FACTORY"}, 500.0f, 20.0f));
+    fixture.scene.roster = rm::data::Roster::build(fixture.corpus, fixture.ids);
+
+    const rm::sim::UnitId site = fixture.spawn(factory, 0);
+    const auto got = fixture.optionsFor({site});
+
+    REQUIRE(fixture.offers(got, "UEB0201"));
+    const auto upgrade =
+        std::find_if(fixture.last.begin(), fixture.last.end(),
+                     [](const rm::ui::BuildOption& o) { return o.id == "UEB0201"; });
+    REQUIRE(upgrade != fixture.last.end());
+    CHECK(upgrade->upgrade);
+    // NAMED BY ITS TIER. All three tiers of a land factory are called "Land Factory" in the
+    // shipped corpus, so a cell reading the same as its neighbour would say nothing.
+    CHECK(upgrade->name.ends_with("T2"));
+    // Everything else in the tray is an ordinary build — the flag is what routes the click
+    // past the placement step, and setting it wrongly would put a ghost on the cursor for a
+    // tank.
+    for (const rm::ui::BuildOption& option : fixture.last) {
+        CHECK(option.upgrade == (option.id == "UEB0201"));
+    }
+}
+
+TEST_CASE("a builder with no tech path offers no upgrade", "[ui][build]") {
+    // The absence has to be as reliable as the presence: an empty `UpgradesTo` must not become
+    // a lookup for the empty id, which `Roster::byId` would answer for any entry with an empty
+    // name.
+    Fixture fixture;
+    rm::unitdef::UnitDef factory =
+        aDef("UEB0101", {"UEF", "TECH1", "STRUCTURE", "FACTORY"}, 240.0f, 20.0f);
+    factory.buildableCategory.push_back(
+        rm::unitdef::parseCategoryTerm("BUILTBYTIER1FACTORY UEF MOBILE"));
+    fixture.add(aDef("UEL0202", {"BUILTBYTIER1FACTORY", "MOBILE", "TANK", "TECH1", "UEF"}, 52.0f));
+    fixture.scene.roster = rm::data::Roster::build(fixture.corpus, fixture.ids);
+
+    const rm::sim::UnitId site = fixture.spawn(factory, 0);
+    (void)fixture.optionsFor({site});
+    REQUIRE_FALSE(fixture.last.empty());
+    for (const rm::ui::BuildOption& option : fixture.last) {
+        CHECK_FALSE(option.upgrade);
+    }
+}
+
 TEST_CASE("a factory stating no BuildableCategory offers nothing, not everything",
           "[ui][build]") {
     Fixture fixture;
@@ -416,4 +476,38 @@ TEST_CASE("an id reference in the expression admits exactly that unit", "[ui][bu
     const auto got = fixture.optionsFor({fixture.spawn(factory, 0)});
     CHECK(fixture.offers(got, "UEL0202"));
     CHECK_FALSE(fixture.offers(got, "UEL0203"));
+}
+
+TEST_CASE("a construction is drawn while it is work, and not once it is a record",
+          "[ui][build]") {
+    // THE LEDGER TRAP, and it cost a wrong screenshot to find. `scene.building` is not a queue
+    // of pending work: the sim reports what newly completed and REMOVES NOTHING, because the
+    // census counts a standing extractor by finding its finished row. A first draft of the
+    // construction effect drew every row, so a base at one minute had eight completed
+    // buildings each wearing a permanent half-built shell — and every one of them reported
+    // 100% progress, which is what gave the game away.
+    rm::sim::Construction started{
+        .buildTimeRemaining = rm::sim::magFromFloat(60.0f),
+        .totalBuildTime = rm::sim::magFromFloat(60.0f),
+    };
+    CHECK(rm::app::constructionInProgress(started));
+    CHECK(rm::app::constructionProgress(started) == Catch::Approx(0.0f));
+
+    rm::sim::Construction half = started;
+    half.buildTimeRemaining = rm::sim::magFromFloat(30.0f);
+    CHECK(rm::app::constructionInProgress(half));
+    CHECK(rm::app::constructionProgress(half) == Catch::Approx(0.5f));
+
+    rm::sim::Construction done = started;
+    done.buildTimeRemaining = rm::sim::Mag{};
+    CHECK_FALSE(rm::app::constructionInProgress(done));
+
+    // A BLUEPRINT THAT STATED NO BUILD TIME reads as barely begun rather than as complete.
+    // Dividing by its zero total is the obvious bug; answering "finished" is the subtle one,
+    // and it would draw a building that never appears to go up at all.
+    rm::sim::Construction untimed{
+        .buildTimeRemaining = rm::sim::magFromFloat(5.0f),
+        .totalBuildTime = rm::sim::Mag{},
+    };
+    CHECK(rm::app::constructionProgress(untimed) == Catch::Approx(0.0f));
 }

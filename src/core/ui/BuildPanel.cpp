@@ -8,24 +8,18 @@
 #include <string>
 
 namespace rm::ui {
-namespace {
-
-/// Rows needed for `count` options at `kBuildColumns` across, rounding up.
-[[nodiscard]] int rowsFor(std::size_t count) noexcept {
-    if (count == 0) {
-        return 0;
-    }
-    const auto columns = static_cast<std::size_t>(kBuildColumns);
-    return static_cast<int>((count + columns - 1) / columns);
-}
-
-} // namespace
-
 InfoCard buildOptionCard(const BuildOption& option) {
     InfoCard card;
     card.title = option.name.empty() ? option.id : option.name;
+    // The card is where an upgrade gets to say what it does in words: the cell's frame says
+    // "this one is different" and only this can say how.
+    if (option.upgrade) {
+        card.rows.push_back(InfoRow{.label = "UPGRADE", .value = "replaces this building"});
+    }
     // The corner repeats nothing: when the title IS the id there is no second fact to state.
-    if (!option.name.empty()) {
+    // And with ids hidden it states nothing at all — a blueprint id is a filename, useful in a
+    // log and in a bug report and never to the player deciding what to build.
+    if (kShowBlueprintIds && !option.name.empty()) {
         card.corner = option.id;
     }
 
@@ -57,69 +51,28 @@ Colour tierTint(const Theme& theme, int tier) noexcept {
                    theme.edgeLit[2] + (1.0f - theme.edgeLit[2]) * lift, 1.0f}};
 }
 
-std::array<std::string_view, 2> wrapCellName(std::span<const text::Glyph> glyphs,
-                                             std::string_view name, float maxWidth) noexcept {
-    std::array<std::string_view, 2> lines{};
-
-    // Truncates one overlong word by characters until it fits. Measured per prefix rather
-    // than estimated per glyph, because the widths differ per character and "roughly fits"
-    // here means "runs into the neighbouring cell".
-    const auto fitted = [&](std::string_view word) {
-        while (word.size() > 1 && text::measureText(glyphs, word) > maxWidth) {
-            word.remove_suffix(1);
-        }
-        return word;
-    };
-
-    std::size_t lineStart = 0;   // where the current line begins in `name`
-    std::size_t lineEnd = 0;     // one past the last word taken into it
-    std::size_t line = 0;
-    std::size_t cursor = 0;
-    while (cursor < name.size() && line < lines.size()) {
-        const std::size_t wordEnd = std::min(name.find(' ', cursor), name.size());
-        const std::string_view candidate = name.substr(lineStart, wordEnd - lineStart);
-        if (lineEnd == lineStart || text::measureText(glyphs, candidate) <= maxWidth) {
-            // The first word always joins — an empty line helps nobody — and any further
-            // word joins while the line still fits.
-            lineEnd = wordEnd;
-        } else {
-            lines[line++] = fitted(name.substr(lineStart, lineEnd - lineStart));
-            lineStart = cursor;
-            lineEnd = wordEnd;
-        }
-        cursor = wordEnd + 1;
-    }
-    if (line < lines.size() && lineEnd > lineStart) {
-        lines[line] = fitted(name.substr(lineStart, lineEnd - lineStart));
-    }
-    return lines;
-}
-
-BuildPanelLayout buildPanelLayout(const MinimapLayout& minimap, std::size_t optionCount) noexcept {
+BuildPanelLayout buildPanelLayout(const FrameLayout& frame, std::size_t optionCount,
+                                  std::size_t page) noexcept {
     BuildPanelLayout layout;
-    layout.rows = rowsFor(optionCount);
-    if (layout.rows == 0) {
+    if (optionCount == 0 || frame.buildColumns == 0) {
         return layout;  // nothing selected that builds: the panel is simply absent
     }
 
-    const auto columns = static_cast<float>(kBuildColumns);
-    const float gridWidth = columns * kBuildCell + (columns - 1.0f) * kBuildGap;
-    const float gridHeight = static_cast<float>(layout.rows) * kBuildCellHeight
-                             + static_cast<float>(layout.rows - 1) * kBuildGap;
-
-    layout.width = gridWidth + kPad * 2.0f;
-    layout.height = gridHeight + kBuildHeader + kPad * 2.0f;
-
-    // DOCKED: flush with the minimap's left edge and sitting directly on its top edge, so the
-    // panel's bottom hairline and the minimap's lit top edge form one shared rail. The first
-    // version floated one unit clear, and the gap read as two unrelated panels that happened to
-    // be stacked — the arrangement being copied (BAR's bottom-left cluster) is ONE control
-    // block, and the dock is what makes it one.
-    layout.x = minimap.x;
-    layout.y = minimap.y - layout.height;
-
-    layout.gridX = layout.x + kPad;
-    layout.gridY = layout.y + kPad + kBuildHeader;
+    layout.x = frame.build.x;
+    layout.y = frame.build.y;
+    layout.width = frame.build.width;
+    layout.height = frame.build.height;
+    layout.columns = static_cast<int>(frame.buildColumns);
+    const std::size_t capacity = frame.buildColumns * static_cast<std::size_t>(kBuildRows);
+    layout.pages = (optionCount + capacity - 1) / capacity;
+    layout.page = std::min(page, layout.pages - 1);
+    layout.first = layout.page * capacity;
+    layout.shown = std::min(capacity, optionCount - layout.first);
+    layout.gridX = layout.x + kBuildPadding;
+    layout.gridY = layout.y + kBuildPadding + kBuildHeader;
+    const float gaps = static_cast<float>(layout.columns - 1) * kBuildGap;
+    layout.cellWidth = (layout.width - kBuildPadding * 2.0f - gaps)
+                     / static_cast<float>(layout.columns);
     return layout;
 }
 
@@ -132,11 +85,11 @@ bool insideBuildPanel(const BuildPanelLayout& layout, float pointX, float pointY
 }
 
 std::array<float, 2> buildCellOrigin(const BuildPanelLayout& layout, std::size_t index) noexcept {
-    const auto columns = static_cast<std::size_t>(kBuildColumns);
+    const auto columns = static_cast<std::size_t>(layout.columns);
     const auto column = static_cast<float>(index % columns);
     const auto row = static_cast<float>(index / columns);
-    return {{layout.gridX + column * (kBuildCell + kBuildGap),
-             layout.gridY + row * (kBuildCellHeight + kBuildGap)}};
+    return {{layout.gridX + column * (layout.cellWidth + kBuildGap),
+             layout.gridY + row * (layout.cellHeight + kBuildGap)}};
 }
 
 std::optional<std::size_t> buildOptionAt(const BuildPanelLayout& layout, std::size_t optionCount,
@@ -150,28 +103,47 @@ std::optional<std::size_t> buildOptionAt(const BuildPanelLayout& layout, std::si
         return std::nullopt;
     }
 
-    const float pitchX = kBuildCell + kBuildGap;
-    const float pitchY = kBuildCellHeight + kBuildGap;
+    const float pitchX = layout.cellWidth + kBuildGap;
+    const float pitchY = layout.cellHeight + kBuildGap;
     const auto column = static_cast<int>(std::floor(localX / pitchX));
     const auto row = static_cast<int>(std::floor(localY / pitchY));
-    if (column < 0 || column >= kBuildColumns || row < 0 || row >= layout.rows) {
+    if (column < 0 || column >= layout.columns || row < 0 || row >= layout.rows) {
         return std::nullopt;
     }
 
     // THE GUTTER IS DEAD SPACE, not the nearest cell's. A click that lands between two buttons
     // is a miss, and treating it as a hit on whichever cell is closer is how a player ends up
     // queueing something they did not choose.
-    if (localX - static_cast<float>(column) * pitchX > kBuildCell
-        || localY - static_cast<float>(row) * pitchY > kBuildCellHeight) {
+    if (localX - static_cast<float>(column) * pitchX > layout.cellWidth
+        || localY - static_cast<float>(row) * pitchY > layout.cellHeight) {
         return std::nullopt;
     }
 
-    const auto index =
-        static_cast<std::size_t>(row) * static_cast<std::size_t>(kBuildColumns)
-        + static_cast<std::size_t>(column);
+    const auto local = static_cast<std::size_t>(row)
+                     * static_cast<std::size_t>(layout.columns)
+                     + static_cast<std::size_t>(column);
     // The last row is usually short. A point in one of its empty trailing cells is inside the
     // grid and over nothing.
-    return index < optionCount ? std::optional<std::size_t>{index} : std::nullopt;
+    const std::size_t index = layout.first + local;
+    return local < layout.shown && index < optionCount
+               ? std::optional<std::size_t>{index}
+               : std::nullopt;
+}
+
+std::optional<int> buildPageStepAt(const BuildPanelLayout& layout, float pointX,
+                                   float pointY) noexcept {
+    if (layout.pages <= 1 || pointY < layout.y || pointY >= layout.gridY) {
+        return std::nullopt;
+    }
+    constexpr float kArrowWidth = 22.0f;
+    const float right = layout.x + layout.width - kBuildPadding;
+    if (pointX >= right - kArrowWidth && pointX < right) {
+        return 1;
+    }
+    if (pointX >= right - kArrowWidth * 2.0f && pointX < right - kArrowWidth) {
+        return -1;
+    }
+    return std::nullopt;
 }
 
 void appendBuildPanel(Geometry& out, const text::Font& labelFont, const text::Font& readoutFont,
@@ -194,35 +166,55 @@ void appendBuildPanel(Geometry& out, const text::Font& labelFont, const text::Fo
     // quieter seat on the right, in the readout face, the way every other identifier-shaped
     // fact in this interface is set. The first version put the raw id where the word belongs,
     // which made the panel's one line of prose read as a part number.
-    const float headerBaseline = layout.y + kPad + kBuildHeader * 0.7f;
+    const float headerBaseline = layout.y + kBuildPadding + kBuildHeader * 0.7f;
     if (!builderRole.empty()) {
         // The silkscreen face is caps-only in spirit; the role arrives lowercase from
         // `roleName` and is lifted here, where it becomes a label.
         std::string role{builderRole};
         std::transform(role.begin(), role.end(), role.begin(),
                        [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
-        (void)text::appendText(out.label, labelFont.glyphs, role, layout.x + kPad,
+        (void)text::appendText(out.label, labelFont.glyphs, role, layout.x + kBuildPadding,
                                headerBaseline, theme.label);
-        if (readoutFont.usable()) {
+        // The id used to sit here, right-aligned in the readout face, on the argument that it
+        // is how a player names the unit to somebody else. That is true of a forum post and
+        // false of the screen: `UEB0101` is on the panel of the thing already selected and
+        // named, so it was a part number repeated beside the word it stands for.
+        if (kShowBlueprintIds && readoutFont.usable()) {
             const float idWidth = text::measureText(readoutFont.glyphs, builderName);
+            const float idRight = layout.x + layout.width - kBuildPadding
+                                - (layout.pages > 1 ? 76.0f : 0.0f);
             (void)text::appendText(out.readout, readoutFont.glyphs, builderName,
-                                   layout.x + layout.width - kPad - idWidth, headerBaseline,
-                                   fade(kInk, 0.7f));
+                                   idRight - idWidth, headerBaseline, fade(kInk, 0.7f));
         }
     } else {
         // No role stated: the id keeps the lead seat rather than the line going blank.
-        (void)text::appendText(out.label, labelFont.glyphs, builderName, layout.x + kPad,
+        (void)text::appendText(out.label, labelFont.glyphs, builderName,
+                               layout.x + kBuildPadding,
                                headerBaseline, theme.label);
+    }
+
+    if (layout.pages > 1 && readoutFont.usable()) {
+        const std::string page = std::to_string(layout.page + 1) + "/"
+                               + std::to_string(layout.pages) + "  <  >";
+        (void)text::appendText(out.readout, readoutFont.glyphs, page,
+                               layout.x + layout.width - kBuildPadding
+                                   - text::measureText(readoutFont.glyphs, page),
+                               headerBaseline, kInk);
     }
 
     // A rule under the header, the full content width. The same device the resource panel's
     // bevel is: it says "the prose ends here, the instrument begins" without a second panel.
-    text::appendRect(out.label, labelFont, layout.x + kPad, layout.y + kPad + kBuildHeader - kBevel,
-                     layout.width - kPad * 2.0f, kBevel, fade(theme.edge, 0.9f));
+    text::appendRect(out.label, labelFont, layout.x + kBuildPadding,
+                     layout.y + kBuildPadding + kBuildHeader - kBevel,
+                     layout.width - kBuildPadding * 2.0f, kBevel, fade(theme.edge, 0.9f));
 
-    for (std::size_t index = 0; index < options.size(); ++index) {
+    for (std::size_t local = 0; local < layout.shown; ++local) {
+        const std::size_t index = layout.first + local;
+        if (index >= options.size()) {
+            break;
+        }
         const BuildOption& option = options[index];
-        const std::array<float, 2> origin = buildCellOrigin(layout, index);
+        const std::array<float, 2> origin = buildCellOrigin(layout, local);
         const float cx = origin[0];
         const float cy = origin[1];
 
@@ -233,32 +225,52 @@ void appendBuildPanel(Geometry& out, const text::Font& labelFont, const text::Fo
 
         // The well in gradient glass, like its panel — one light for chrome and cells alike.
         const Colour well = fade(theme.well, alpha);
-        text::appendRectV(out.label, labelFont, cx, cy, kBuildCell, kBuildCellHeight,
+        text::appendRectV(out.label, labelFont, cx, cy, layout.cellWidth, layout.cellHeight,
                           Colour{{well[0] * 1.5f, well[1] * 1.5f, well[2] * 1.5f, well[3]}},
                           Colour{{well[0] * 0.7f, well[1] * 0.7f, well[2] * 0.7f, well[3]}});
 
         // The hovered cell's fill lifts as well as its border brightening below: a button
         // under the cursor should look pressed toward the light, not merely outlined.
         if (hovered.has_value() && *hovered == index) {
-            text::appendRect(out.label, labelFont, cx, cy, kBuildCell, kBuildCellHeight,
+            text::appendRect(out.label, labelFont, cx, cy, layout.cellWidth, layout.cellHeight,
                              fade(theme.edgeLit, 0.10f));
         }
 
         // The tier band across the top. Three pixels, up from two: at two the band vanished
         // into the cell border on a Retina capture and the tier grouping it exists for was
         // invisible at a glance. Three is still a trim, not a feature.
-        text::appendRect(out.label, labelFont, cx, cy, kBuildCell, kBevel * 3.0f,
-                         fade(option.tint, alpha));
+        //
+        // AN UPGRADE WEARS THE BAND ON ALL FOUR SIDES, at the lit edge colour. It is not
+        // another thing to build beside the others — it CONSUMES the selected building and
+        // replaces it — so a cell that looked like its neighbours would be a click a player
+        // could not take back. A frame is the loudest thing this cell vocabulary has that is
+        // still part of the vocabulary.
+        const float bandWeight = kBevel * 3.0f;
+        text::appendRect(out.label, labelFont, cx, cy, layout.cellWidth, bandWeight,
+                          fade(option.tint, alpha));
+        if (option.upgrade) {
+            const Colour band = fade(theme.edgeLit, alpha);
+            text::appendRect(out.label, labelFont, cx, cy + layout.cellHeight - bandWeight,
+                             layout.cellWidth, bandWeight, band);
+            text::appendRect(out.label, labelFont, cx, cy, bandWeight, layout.cellHeight, band);
+            text::appendRect(out.label, labelFont, cx + layout.cellWidth - bandWeight, cy,
+                             bandWeight, layout.cellHeight, band);
+        }
 
         // The icon square: a recess, and the game's own icon in it when the archives have one.
         //
         // THE RECESS IS DRAWN EITHER WAY, under the icon. An icon is mostly transparent — a
         // silhouette on nothing — so without a well behind it the shape floats on the cell's
         // own fill and loses its edges against a light tint band.
-        const float iconX = cx + (kBuildCell - kBuildIcon) * 0.5f;
-        const float iconY = cy + kUnit * 1.1f;
-        text::appendRect(out.label, labelFont, iconX, iconY, kBuildIcon, kBuildIcon,
-                         fade(theme.glass, alpha * 0.9f));
+        //
+        // SMALLER THAN IT WAS (34, from 38) to make room for the NAME beneath it. A picture is
+        // how a player who already knows the tray finds a thing; a name is how a player
+        // learning it does, and the cell used to carry only the first.
+        const float iconSize = std::min(30.0f, layout.cellWidth - 12.0f);
+        const float iconX = cx + (layout.cellWidth - iconSize) * 0.5f;
+        const float iconY = cy + 5.0f;
+        text::appendRect(out.label, labelFont, iconX, iconY, iconSize, iconSize,
+                          fade(theme.glass, alpha * 0.9f));
 
         // The icon itself goes in the IMAGE list, which is drawn after both font atlases — see
         // `Geometry::image`. Six vertices, uv'd into the shared atlas, tinted white so the
@@ -266,8 +278,8 @@ void appendBuildPanel(Geometry& out, const text::Font& labelFont, const text::Fo
         if (option.iconSlot) {
             const IconUv uv = iconUv(*option.iconSlot);
             const Colour tint{{1.0f, 1.0f, 1.0f, alpha}};
-            const float x1 = iconX + kBuildIcon;
-            const float y1 = iconY + kBuildIcon;
+            const float x1 = iconX + iconSize;
+            const float y1 = iconY + iconSize;
             out.image.push_back({{iconX, iconY}, {uv.u0, uv.v0}, tint});
             out.image.push_back({{x1, iconY}, {uv.u1, uv.v0}, tint});
             out.image.push_back({{x1, y1}, {uv.u1, uv.v1}, tint});
@@ -276,49 +288,85 @@ void appendBuildPanel(Geometry& out, const text::Font& labelFont, const text::Fo
             out.image.push_back({{iconX, y1}, {uv.u0, uv.v1}, tint});
         }
 
-        // THE NAME ON THE FACE, up to two lines, then the cost. The id moved to the hover
-        // card: a player scanning a menu reads "Mass Extractor", and `UEB1103` is for naming
-        // the thing to somebody else. A nameless blueprint (one of 568, plus everything BAR
-        // until its language files are read) falls back to the id, which is what every cell
-        // showed before names existed — clipped to the cell, never overhanging a neighbour.
-        const std::array<std::string_view, 2> lines =
-            wrapCellName(labelFont.glyphs, option.name.empty() ? option.id : option.name,
-                         kBuildCell - kUnit);
-        const float lineOne = cy + kBuildCellHeight - kUnit * 5.6f;
-        const float lineTwo = cy + kBuildCellHeight - kUnit * 3.6f;
-        for (std::size_t i = 0; i < lines.size(); ++i) {
-            if (lines[i].empty()) {
-                continue;
+        // THE NAME, under the icon, wrapped to two short lines.
+        //
+        // THIS IS WHAT THE CELL EXISTS TO SAY. The face carried a picture and a mass figure
+        // and no name at all, which meant a factory's tray was six silhouettes and six numbers
+        // — findable by muscle memory and by nothing else. A player looking for the engineer
+        // had to hover each cell in turn to be told which was which.
+        //
+        // The blueprint id is the fallback and only the fallback: content that states no
+        // display name leaves nothing else to print, and an unlabelled cell is worse than a
+        // part number (see `kShowBlueprintIds`).
+        // IN THE LABEL FACE, not the readout one. The readout is monospaced — it is set that
+        // way so a changing number does not jitter its column — and a monospaced face is the
+        // worst possible choice for a proper noun in a narrow cell: "Land Scout" costs ten full
+        // advances where the condensed label face sets it in about six.
+        const std::string& label = option.name.empty() ? option.id : option.name;
+        if (labelFont.usable() && !label.empty()) {
+            const float textWidth = layout.cellWidth - 6.0f;
+            // TIGHTER THAN THE FACE'S OWN LEADING. A font's line height is measured for
+            // paragraphs; two lines of a proper noun set at it leave a gap wide enough for the
+            // pair to stop reading as one name, and the second line then collides with the
+            // icon above. Four fifths is the label's cap height plus a hair.
+            const float lineHeight =
+                (labelFont.lineHeight > 0.0f ? labelFont.lineHeight : kUnit * 1.8f) * 0.80f;
+            const std::vector<std::string> lines =
+                wrapToWidth(labelFont.glyphs, label, textWidth, kBuildNameLines);
+            // Bottom-anchored, so a one-line name and a two-line name share their last
+            // baseline and the grid keeps a common horizon rather than each cell floating its
+            // own text.
+            const float lastBaseline =
+                cy + layout.cellHeight - (kShowCostOnCell ? kBuildCostStrip : 0.0f) - 5.0f;
+            for (std::size_t line = 0; line < lines.size(); ++line) {
+                const float baseline =
+                    lastBaseline - static_cast<float>(lines.size() - 1 - line) * lineHeight;
+                const float width = text::measureText(labelFont.glyphs, lines[line]);
+                (void)text::appendText(out.label, labelFont.glyphs, lines[line],
+                                       cx + (layout.cellWidth - width) * 0.5f, baseline,
+                                       fade(theme.label, alpha));
             }
-            const float width = text::measureText(labelFont.glyphs, lines[i]);
-            (void)text::appendText(out.label, labelFont.glyphs, lines[i],
-                                   cx + (kBuildCell - width) * 0.5f,
-                                   i == 0 ? lineOne : lineTwo, fade(theme.label, alpha));
         }
 
-        // THE MASS COST, on the face of the button, with a chip of the resource's colour —
-        // the device the resource panel introduced, so "small green square" already means
-        // mass by the time a player reads a cell. A bare green number was the first version,
-        // and it asked the reader to know the colour code before the menu made sense.
+        // THE COSTS, when the face is asked to carry them — mass, energy and time as a SET.
         //
-        // MASS ALONE, deliberately. A draft put energy beside it and the pair fit only the
-        // cheap cells — half the tray showed two numbers and half showed one, which reads as
-        // a bug rather than a rule. Mass is the deciding number and the affordability
-        // signal; the hover card always states both.
-        if (readoutFont.usable()) {
-            constexpr float kCostChip = kUnit;  ///< smaller than the panel's kChip: it is a
-                                                ///< footnote here, not a row heading
-            const float costBaseline = cy + kBuildCellHeight - kUnit * 0.8f;
+        // The chip of the resource's colour is the device the resource panel introduced, so
+        // "small green square" already means mass by the time a player reads a cell. Off by
+        // default: see `kShowCostOnCell` for why the name won the space instead, and why it is
+        // all three or none rather than mass alone.
+        if (kShowCostOnCell && readoutFont.usable()) {
+            constexpr float kCostChip = kUnit * 0.7f;  ///< a footnote, not a row heading
+            const float costBaseline = cy + layout.cellHeight - 5.0f;
             const std::string mass = formatAmount(option.massCost);
+            const std::string energy = formatAmount(option.energyCost);
+            const std::string seconds = formatClock(option.buildSeconds);
+            const float gap = kUnit * 0.35f;
             const float massWidth = text::measureText(readoutFont.glyphs, mass);
-            const float gap = kUnit * 0.5f;
-            const Colour tint = fade(option.affordable ? kMass : kLoss, alpha);
+            const float energyWidth = text::measureText(readoutFont.glyphs, energy);
+            const float timeWidth = text::measureText(readoutFont.glyphs, seconds);
 
-            float pen = cx + (kBuildCell - (kCostChip + gap + massWidth)) * 0.5f;
-            text::appendRect(out.readout, readoutFont, pen, costBaseline - kCostChip,
-                             kCostChip, kCostChip, tint);
-            (void)text::appendText(out.readout, readoutFont.glyphs, mass, pen + kCostChip + gap,
-                                   costBaseline, tint);
+            // Two rows rather than one: mass and energy read as a pair, and the time is the
+            // odd one out because it is not a resource. Three figures on one line at this cell
+            // width would be four points apart and unreadable.
+            float pen = cx
+                      + (layout.cellWidth
+                         - (kCostChip * 2.0f + gap * 3.0f + massWidth + energyWidth))
+                            * 0.5f;
+            const float pairBaseline = costBaseline - kBuildCostStrip * 0.5f;
+            const Colour massTint = fade(option.affordable ? kMass : kLoss, alpha);
+            text::appendRect(out.readout, readoutFont, pen, pairBaseline - kCostChip, kCostChip,
+                             kCostChip, massTint);
+            pen = text::appendText(out.readout, readoutFont.glyphs, mass, pen + kCostChip + gap,
+                                   pairBaseline, massTint);
+            pen += gap;
+            text::appendRect(out.readout, readoutFont, pen, pairBaseline - kCostChip, kCostChip,
+                             kCostChip, fade(kEnergy, alpha));
+            (void)text::appendText(out.readout, readoutFont.glyphs, energy,
+                                   pen + kCostChip + gap, pairBaseline, fade(kEnergy, alpha));
+
+            (void)text::appendText(out.readout, readoutFont.glyphs, seconds,
+                                   cx + (layout.cellWidth - timeWidth) * 0.5f, costBaseline,
+                                   fade(kInk, alpha * 0.8f));
         }
 
         // The hovered cell gets a full lit border, which is BAR's own "this one" and reads
@@ -326,12 +374,12 @@ void appendBuildPanel(Geometry& out, const text::Font& labelFont, const text::Fo
         const bool lit = hovered.has_value() && *hovered == index;
         const Colour border = lit ? theme.edgeLit : fade(theme.edge, alpha);
         const float thickness = lit ? kBevel * 2.0f : kBevel;
-        text::appendRect(out.label, labelFont, cx, cy, kBuildCell, thickness, border);
-        text::appendRect(out.label, labelFont, cx, cy + kBuildCellHeight - thickness,
-                         kBuildCell, thickness, border);
-        text::appendRect(out.label, labelFont, cx, cy, thickness, kBuildCellHeight, border);
-        text::appendRect(out.label, labelFont, cx + kBuildCell - thickness, cy, thickness,
-                         kBuildCellHeight, border);
+        text::appendRect(out.label, labelFont, cx, cy, layout.cellWidth, thickness, border);
+        text::appendRect(out.label, labelFont, cx, cy + layout.cellHeight - thickness,
+                          layout.cellWidth, thickness, border);
+        text::appendRect(out.label, labelFont, cx, cy, thickness, layout.cellHeight, border);
+        text::appendRect(out.label, labelFont, cx + layout.cellWidth - thickness, cy, thickness,
+                          layout.cellHeight, border);
     }
 }
 

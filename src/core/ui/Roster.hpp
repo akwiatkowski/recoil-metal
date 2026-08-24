@@ -38,7 +38,7 @@ namespace rm::ui {
 
 /// A tile's side, in points. Smaller than a build cell: a roster tile carries an icon, a count
 /// and a bar, and no cost line.
-inline constexpr float kRosterTile = kUnit * 9.0f;
+inline constexpr float kRosterTile = 52.0f;
 
 inline constexpr float kRosterGap = kUnit * 0.5f;
 
@@ -99,10 +99,16 @@ struct RosterLayout {
     float y = 0.0f;
     float width = 0.0f;
     float height = 0.0f;
+    float tilesX = 0.0f;
+    float tilesY = 0.0f;
+    float tileSize = kRosterTile;
 
     /// How many tiles are drawn, and how many the selection had that will not fit.
+    std::size_t first = 0;
     std::size_t shown = 0;
     std::size_t hidden = 0;
+    std::size_t page = 0;
+    std::size_t pages = 0;
 
     [[nodiscard]] bool empty() const noexcept { return shown == 0; }
 };
@@ -113,8 +119,8 @@ struct RosterLayout {
 /// and build tray own the bottom-left, the clock the top-right, and the resource panel the
 /// top-left. Centre-bottom is the one region left, and it is where the eye already is during a
 /// fight — a player watching their units is looking at the middle of the screen.
-[[nodiscard]] RosterLayout rosterLayout(float viewportWidth, float viewportHeight,
-                                        std::size_t tileCount) noexcept;
+[[nodiscard]] RosterLayout rosterLayout(const FrameLayout& frame, std::size_t tileCount,
+                                         std::size_t page = 0) noexcept;
 
 /// The top-left of one tile, in points.
 [[nodiscard]] std::array<float, 2> rosterTileOrigin(const RosterLayout& layout,
@@ -126,7 +132,10 @@ struct RosterLayout {
 
 /// Whether a screen point is on the roster at all — tiles, gutters and padding alike.
 [[nodiscard]] bool insideRoster(const RosterLayout& layout, float pointX,
-                                float pointY) noexcept;
+                                 float pointY) noexcept;
+
+[[nodiscard]] std::optional<int> rosterPageStepAt(const RosterLayout& layout, float pointX,
+                                                  float pointY) noexcept;
 
 /// The hover card for one roster tile: the type's name, its id in the corner, how many are
 /// selected, and the group's exact health — the numbers the underbar compresses into colour.
@@ -134,8 +143,9 @@ struct RosterLayout {
 
 /// Draws the roster: a tile per type, its icon, its `xN` badge and its health underbar.
 void appendRoster(Geometry& out, const text::Font& labelFont, const text::Font& readoutFont,
-                  const Theme& theme, const RosterLayout& layout,
-                  std::span<const RosterTile> tiles, std::optional<std::size_t> hovered);
+                   const Theme& theme, const RosterLayout& layout,
+                   std::span<const RosterTile> tiles, std::optional<std::size_t> hovered,
+                   const InfoCard* inspector = nullptr);
 
 /// Groups a flat list of (id, health, maxHealth) into tiles, one per type.
 ///

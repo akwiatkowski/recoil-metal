@@ -1963,13 +1963,13 @@ return full after the corrected authored recharge, and existing unit upkeep supp
 
 **Alternatives considered.** Projectile-only dome collision was rejected because beams and death
 blasts would bypass it. A separate shield component array was unnecessary while shield state is
-part of unit survivability. A translucent Metal sphere was deferred in favour of the existing HUD
-rectangle and particle paths.
+part of unit survivability. A dedicated Metal shield pipeline was unnecessary: the existing
+blended, depth-tested world-triangle pass can draw a low-poly translucent sphere.
 
 **Consequences.** Focus fire collapses bubbles, protected hulls survive until then, and shield
-state is deterministic, hashed, and visible as a cyan bar and impact flash. Personal, transport,
-enhancement, energy-stall, overlap-overspill, toggle, and special-nuke rules remain explicit future
-work rather than approximations hidden in this slice.
+state is deterministic, hashed, and visible as a cyan bar, impact flash, and external sphere.
+Personal, transport, enhancement, energy-stall, overlap-overspill, toggle, and special-nuke rules
+remain explicit future work rather than approximations hidden in this slice.
 
 ## ADR-049 — Assist is a standing unit order and a derived construction rate
 
@@ -1993,3 +1993,127 @@ factory project, and stops immediately when its order, range, helper, or target 
 Stalls slow the combined rate through the existing shared funding fraction. Founder identity and
 the derived contribution are hashed; recording founders on historical builds intentionally moves
 the golden state stream even in matches that issue no Assist order.
+
+## ADR-050 — Surface navy uses an inverse water domain
+
+**Context.** Treating every non-air unit as ground-bound placed ships on the seabed and let an
+amphibious commander found naval yards on land. Submarine depth and sonar remain unsimulated.
+
+**Decision.** Surface ships and naval factories use a deterministic inverse passability grid whose
+cells lie wholly below the map waterline. Build validation follows the product domain, including
+queued and replayed orders; ordinary immobile structures retain the builder-grid fallback.
+
+**Alternatives considered.** Amphibious routing and direct movement toward a shoreline were
+rejected because both permit land occupancy. A full depth-cost field was deferred with submarines.
+
+**Consequences.** Surface ships spawn and collide at the waterline, route only through connected
+water, and approach land objectives at the nearest reachable water cell. Submersibles remain
+refused rather than approximated as surface craft.
+
+## ADR-051 — The HUD uses logical points; the world uses drawable pixels
+
+**Context.** The pixel-space HUD fixed mismatched hit tests but made every module physically half
+as large on a Retina display and made responsive breakpoints depend on backing scale.
+
+**Decision.** AppKit input and all HUD geometry use top-left-origin logical points. Metal keeps the
+world viewport in drawable pixels; the UI shader receives its own point viewport, while fonts are
+rasterized at backing scale and report point-sized metrics. One tested frame chooses Compact,
+Standard, or Wide and owns every bounded module rectangle.
+
+**Alternatives considered.** Converting every input to backing pixels preserves one coordinate
+space at the cost of display-dependent UI size. Uniformly scaling one fixed frame cannot preserve
+both readable controls and useful battlefield area across supported windows.
+
+**Consequences.** Drawing and hit testing share stable geometry across 1x/2x displays; moving
+between displays rebuilds only the font atlases. Headless captures remain 1x. This supersedes
+ADR-040's pixel-layout decision and ADR-041's use of drawable size for HUD layout; drawable sync
+remains authoritative for world rendering.
+
+## ADR-052 — Per-frame GPU lists grow; per-frame growth checks are held across frames
+
+**Context.** Two silent losses, both invisible to a green suite because nothing links the renderer
+into the test binary. `setInstances` clipped at each batch's upload-time instance count, so the
+second unit of a type was never drawn until an unrelated batch-list growth forced a full
+re-upload. And the frame loop captured `batches.size()` at the top of the frame and compared at
+the bottom, so a batch created LATER in the frame — which is exactly when the build ghost resolves
+its model — was never uploaded at all: the next frame's "before" already counted it.
+
+**Decision.** Instance buffers reallocate when a batch outgrows them, doubling, with the old buffer
+retired against a frame counter and freed once `kMaxFramesInFlight` frames have opened. The
+upload-on-growth check reads a counter held OUTSIDE the frame callback and runs twice: after the
+gather, and again after the ghost and construction passes have had their chance to load a model.
+
+**Alternatives considered.** Re-uploading every batch whenever any one grows is correct and walks
+every model and texture to do it. Pre-sizing every batch to a worst case wastes the memory of the
+largest army on the smallest. Neither addresses the growth-check bug, which is about ordering.
+
+**Consequences.** A capture now reports `units: N instance(s) drawn, M alive in the sim`; the two
+disagreeing is the signature of a dropped instance, which is the only instrument available while
+the renderer has no tests.
+
+## ADR-053 — The interface is laid out small and drawn big
+
+**Context.** Every HUD metric is a constant in points, and the responsive frame spent a larger
+viewport on MORE COLUMNS — nine cells across 528 points at 1280 wide, sixteen across 893 at 2240,
+the cell itself shrinking from 54 points to 52. The interface therefore got physically smaller
+relative to the screen the larger the screen was, and a HiDPI panel measuring under 1600x900
+logical points received the smallest profile of the three.
+
+**Decision.** `ui::hudScale` returns how far the viewport is from a 1280x720 design resolution,
+clamped to 1..2.5 and multiplied by the player's `--ui-scale`. Layout happens in that design space;
+the renderer's HUD projection maps the design viewport across the whole drawable, which magnifies
+the result. Input divides by the same scale, fonts rasterise at `backing x hudScale` and report
+design-point metrics, and the column counts came down (6/7/9) so a cell can hold a NAME.
+
+**Alternatives considered.** Multiplying every metric at every layout site touches four files of
+arithmetic and leaves each new constant free to forget. A pure font-size setting fixes the text and
+leaves the panels the size they were.
+
+**Consequences.** The whole HUD vertex stream lives in one space, so world-projected overlays —
+health bars, strategic icons, contact blips, the band-select box — are fed the design viewport too
+and scale with the chrome. `Window::cursor` stays in logical points for picking; `hudCursor` is the
+divided one, and using either for both puts the pointer off by exactly the scale factor.
+
+## ADR-054 — A construction is drawn from the economy's ledger, per faction
+
+**Context.** Nothing existed in the world between ordering a building and its completion: a
+`sim::Construction` is a row in the economy and `spawnUnit` runs only on completion, so placing a
+silhouette produced a mass drain, a console line, and bare ground. The reported symptom was
+"when clicking silhouette on ground I don't see command was building it".
+
+**Decision.** The app translates `scene.building` into draw records each frame — the product's
+model, its progress, the builder's faction — and a dedicated pass reveals the model in step with
+the work. The four faction effects share one pipeline and one uniform block and differ in the
+SHAPE of the reveal: UEF a rising plane, Cybran a hashed dissolve, Aeon a rise from a pad with the
+unbuilt part drawn as translucent light, Seraphim a sweep about the site's vertical axis. Pads and
+build streams reuse the existing decal and particle passes.
+
+**Alternatives considered.** Spawning the unit at build start and scaling it up puts a real object
+in the sim for presentation's sake and changes collision, targeting and the state hash. A generic
+scaffold for all four is less work and discards the one thing the request was specifically about.
+
+**Consequences.** `scene.building` is a LEDGER, not a queue — finished rows stay so the census can
+count standing structures — so the gather must filter on `constructionInProgress`; drawing every
+row put a permanent half-built shell on every completed building. The reveal uses
+`UnitDef::meshHeightElmos` (`Physics.MeshExtentsY`), not the collision height: a UEF land factory
+is `SizeY = 0.6` against `MeshExtentsY = 4.5`, and the collision box is the apron rather than the
+gantry.
+
+## ADR-055 — Sight is Forged Alliance's flat disc by default, and the raycast reads sensor height
+
+**Context.** `VisionStyle` defaulted to Recoil's terrain raycast on the argument that blocked sight
+is the more interesting game. This engine reads Forged Alliance's content, and that game's sight is
+`radius * vertex.xz + position.xy` — a flat disc, with no heightmap sample anywhere in
+`effects/vision.fx`. Separately, the raycast was handed the emitter's transform as its eye, which
+is the ground under its feet: every unit in the game looked out from ankle level.
+
+**Decision.** The default is `VisionStyle::ForgedAlliance`. The raycast stays as `--vision-style
+recoil` and is now genuinely the advanced model: `UnitCatalog::IntelRadii::eyeHeight` carries each
+type's `SizeY`, so a commander sees from its own head.
+
+**Alternatives considered.** Keeping the raycast default and only adding eye height leaves a
+transcription playing a different game from the content it transcribes.
+
+**Consequences.** Both halves change what armies can see and therefore the match; the golden log
+was re-recorded deliberately. `SizeY` is the collision box and stands in for a sensor mount, which
+the blueprints do not state — the mesh height is a different field and belongs to ADR-054.

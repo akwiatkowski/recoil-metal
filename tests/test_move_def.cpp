@@ -89,8 +89,21 @@ TEST_CASE("each motion class crosses what its class crosses") {
     CHECK_FALSE(moveDefFor(MotionType::Water).usesGroundGrid);
     CHECK_FALSE(moveDefFor(MotionType::SurfacingSub).usesGroundGrid);
 
+    // Surface ships have their inverse domain now; submarines remain deliberately unsupported.
+    CHECK(moveDefFor(MotionType::Water).usesSurfaceWaterGrid);
+    CHECK_FALSE(moveDefFor(MotionType::SurfacingSub).usesSurfaceWaterGrid);
+
     CHECK(moveDefFor(MotionType::Land).usesGroundGrid);
     CHECK(moveDefFor(MotionType::Amphibious).usesGroundGrid);
+}
+
+TEST_CASE("an immobile naval factory uses the surface-water domain") {
+    UnitDef yard = unitOf(MotionType::None, 0.0f, 0.0f);
+    yard.categories = {"FACTORY", "NAVAL", "STRUCTURE"};
+
+    const MoveDef move = moveDefFor(yard);
+    CHECK(move.usesSurfaceWaterGrid);
+    CHECK_FALSE(move.usesGroundGrid);
 }
 
 TEST_CASE("water blocks a land unit and passes an amphibious one, on the same map") {

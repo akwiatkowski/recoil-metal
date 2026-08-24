@@ -6,6 +6,7 @@
 
 #include <set>
 
+#include "core/ui/Hud.hpp"  // ui::hudScale — the interface's magnification, applied here
 #include "render/Renderer.hpp"
 
 #include <QuartzCore/QuartzCore.hpp> // metal-cpp decl of CA::MetalLayer (no impl defines here!)
@@ -76,6 +77,8 @@
 @property(nonatomic, assign) const std::function<void(char)>* keyCallback;
 @property(nonatomic, assign) const std::function<void(char, bool)>* keyStateCallback;
 @property(nonatomic, assign) std::set<char>* heldKeys;
+/// What the player asked for on top of the automatic figure — `--ui-scale`. 1 is automatic.
+@property(nonatomic, assign) float userHudScale;
 
 /// Re-derives the layer's drawableSize from bounds x contentsScale. Called by every resize;
 /// exposed so construction can run it once before the first frame — drawableSize is 0x0
@@ -85,6 +88,10 @@
 /// The left button's live state, for Window's per-frame polling. See the ivars.
 - (BOOL)leftDown;
 - (std::array<float, 2>)leftDownAtHud;
+
+/// The interface's magnification: automatic, from these bounds, times the player's preference.
+/// Everything the HUD lays out and hit-tests is divided by it; see `Window`'s HUD-space block.
+- (float)rmHudScale;
 @end
 
 @implementation RMTerrainView {
@@ -100,6 +107,11 @@
     // box, the minimap's drag test) lives there.
     BOOL _leftDown;
     std::array<float, 2> _leftDownAtHud;
+
+    // An ordinary RTS order is reported on press for minimum latency. Shift-right stays
+    // release-gated because that same gesture may become either a queued order or a pan.
+    BOOL _rightReportedOnDown;
+    NSEventModifierFlags _rightModifiersAtPress;
 }
 
 - (BOOL)acceptsFirstResponder {
@@ -131,10 +143,38 @@
     }
 }
 
+- (float)rmHudScale {
+    return rm::ui::hudScale(static_cast<float>(self.bounds.size.width),
+                            static_cast<float>(self.bounds.size.height),
+                            self.userHudScale > 0.0f ? self.userHudScale : 1.0f);
+}
+
+/// Re-rasterises the interface's faces for the magnification now in force.
+///
+/// TWO SCALES MULTIPLIED, and they mean different things. The backing scale is about
+/// CRISPNESS — a glyph rendered at 1x and blown up on a Retina panel is a blurry glyph. The HUD
+/// scale is about SIZE — the interface is laid out small and drawn big, so a face that stayed
+/// at its design point size would come out magnified and soft. Rasterising at the product and
+/// reporting metrics in design points gives a sharp face at the right size, whichever screen
+/// the window is on.
+- (void)rmSyncUiScale {
+    if (self.renderer == nullptr) {
+        return;
+    }
+    const CGFloat backing =
+        self.window != nil && self.window.backingScaleFactor > 0.0 ? self.window.backingScaleFactor
+                                                                    : 1.0;
+    self.renderer->setUiScale(static_cast<float>(backing) * [self rmHudScale]);
+}
+
 /// Every resize comes through here, live-drag steps included.
 - (void)setFrameSize:(NSSize)newSize {
     [super setFrameSize:newSize];
     [self rmSyncDrawableSize];
+    // The magnification is a function of the bounds, so a resize changes it — and the faces
+    // are rasterised for it. Without this a window dragged larger keeps its old atlas and the
+    // text alone stays the size it was while every rectangle around it grows.
+    [self rmSyncUiScale];
 }
 
 /// The window changed screens (or the screen changed scale): re-match the backing scale, or
@@ -145,6 +185,7 @@
     CAMetalLayer* metalLayer = static_cast<CAMetalLayer*>(self.layer);
     if (metalLayer != nil && self.window != nil && self.window.backingScaleFactor > 0.0) {
         metalLayer.contentsScale = self.window.backingScaleFactor;
+        [self rmSyncUiScale];
     }
     [self rmSyncDrawableSize];
 }
@@ -155,24 +196,42 @@
 /// AppKit's own drag thresholds.
 static constexpr CGFloat kClickSlopPoints = 3.0;
 
-/// A point in WINDOW coordinates, in the space the interface is laid out in — backing pixels,
+/// A point in WINDOW coordinates, in the space the interface is laid out in — logical points,
 /// top-left origin. See `MouseModifiers::pointX` and ADR-040.
 ///
 /// ONE FUNCTION, called by both the click path and `Window::cursor`, because the two must agree
 /// exactly: a cell that lights under the cursor and a cell that a click acts on have to be the
 /// same cell, and two copies of a conversion that must agree are two copies that will not.
-static std::array<float, 2> hudPointIn(NSView* view, NSPoint windowPoint) {
+static std::array<float, 2> viewPointIn(NSView* view, NSPoint windowPoint) {
     const NSPoint local = [view convertPoint:windowPoint fromView:nil];
-    // Flipped because the view is bottom-left and the HUD lays out from the top. Scaled because
-    // the HUD is laid out against `Window::width()`/`height()`, which are the DRAWABLE's size —
-    // 2x these bounds on a Retina display.
-    const CGFloat scale = view.window != nil ? view.window.backingScaleFactor : 1.0;
-    return {{static_cast<float>(local.x * scale),
-             static_cast<float>((view.bounds.size.height - local.y) * scale)}};
+    // Flipped because the view is bottom-left and the HUD lays out from the top. No backing
+    // scale here: input and layout share AppKit's logical-point space.
+    return {{static_cast<float>(local.x),
+             static_cast<float>(view.bounds.size.height - local.y)}};
+}
+
+/// The same point in the HUD's design space — what every hit test wants.
+///
+/// DIVIDED BY THE HUD SCALE, because layout happens in a design space the renderer then
+/// magnifies (`ui::hudScale`). Skipping this is the classic overlay bug in its newest clothes:
+/// every panel would draw where the player sees it and answer a click as though it were
+/// somewhere else, by exactly the scale factor.
+static std::array<float, 2> hudPointIn(RMTerrainView* view, NSPoint windowPoint) {
+    const std::array<float, 2> point = viewPointIn(view, windowPoint);
+    const float scale = std::max([view rmHudScale], 0.01f);
+    return {{point[0] / scale, point[1] / scale}};
 }
 
 /// Turns a mouse event into a world ray and hands it to the app.
 - (void)reportClick:(NSEvent*)event button:(rm::MouseButton)button {
+    [self reportClick:event button:button modifierFlags:event.modifierFlags];
+}
+
+/// The deferred Shift-right path keeps the press-time modifiers: changing a key halfway through
+/// a click must not turn a queued order into a plain one, or an order into a camera pan.
+- (void)reportClick:(NSEvent*)event
+              button:(rm::MouseButton)button
+       modifierFlags:(NSEventModifierFlags)modifierFlags {
     if (self.renderer == nullptr || self.clickCallback == nullptr || !*self.clickCallback) {
         return;
     }
@@ -191,9 +250,9 @@ static std::array<float, 2> hudPointIn(NSView* view, NSPoint windowPoint) {
     const rm::MouseModifiers mods{
         .pointX = hud[0],
         .pointY = hud[1],
-        .shift = (event.modifierFlags & NSEventModifierFlagShift) != 0,
-        .command = (event.modifierFlags & NSEventModifierFlagCommand) != 0,
-        .control = (event.modifierFlags & NSEventModifierFlagControl) != 0,
+        .shift = (modifierFlags & NSEventModifierFlagShift) != 0,
+        .command = (modifierFlags & NSEventModifierFlagCommand) != 0,
+        .control = (modifierFlags & NSEventModifierFlagControl) != 0,
         .clicks = static_cast<int>(event.clickCount),
     };
     (*self.clickCallback)(ray, button, mods);
@@ -264,7 +323,9 @@ static std::array<float, 2> hudPointIn(NSView* view, NSPoint windowPoint) {
 - (void)mouseDown:(NSEvent*)event {
     _travelSincePress = 0.0;
     _leftDown = YES;
-    _leftDownAtHud = hudPointIn(self, event.locationInWindow);
+    // LOGICAL POINTS, matching `cursor()`: the band-select compares this against projected
+    // world positions, and `Window::hudDragOrigin` divides it down for the panel hit tests.
+    _leftDownAtHud = viewPointIn(self, event.locationInWindow);
 }
 
 - (void)mouseUp:(NSEvent*)event {
@@ -283,13 +344,20 @@ static std::array<float, 2> hudPointIn(NSView* view, NSPoint windowPoint) {
 }
 
 - (void)rightMouseDown:(NSEvent*)event {
-    (void)event;
     _travelSincePress = 0.0;
+    _rightModifiersAtPress = event.modifierFlags;
+    _rightReportedOnDown =
+        (_rightModifiersAtPress & NSEventModifierFlagShift) == 0;
+    if (_rightReportedOnDown) {
+        [self reportClick:event button:rm::MouseButton::Right];
+    }
 }
 
 - (void)rightMouseUp:(NSEvent*)event {
-    if (_travelSincePress <= kClickSlopPoints) {
-        [self reportClick:event button:rm::MouseButton::Right];
+    if (!_rightReportedOnDown && _travelSincePress <= kClickSlopPoints) {
+        [self reportClick:event
+                    button:rm::MouseButton::Right
+             modifierFlags:_rightModifiersAtPress];
     }
 }
 
@@ -322,13 +390,11 @@ static std::array<float, 2> hudPointIn(NSView* view, NSPoint windowPoint) {
                                   static_cast<float>(event.deltaY) * kRadiansPerPoint);
 }
 
-// Right-drag pans only with a modifier. Bare right-drag is left alone so that a right
-// press-and-twitch still reports as an ORDER rather than nudging the camera and swallowing
-// the click — a right button in an RTS is how a unit is told where to go, and losing that
-// to a two-pixel wobble is worse than losing the drag.
+// Right-drag pans only with a modifier. Bare right-drag is left alone because the press has
+// already reported its order; waiting to distinguish it from a drag was avoidable input latency.
 - (void)rightMouseDragged:(NSEvent*)event {
     _travelSincePress += std::abs(event.deltaX) + std::abs(event.deltaY);
-    if ((event.modifierFlags & NSEventModifierFlagShift) != 0) {
+    if ((_rightModifiersAtPress & NSEventModifierFlagShift) != 0) {
         [self panBy:event];
     }
 }
@@ -429,6 +495,7 @@ struct rm::Window::Impl {
         view = [[RMTerrainView alloc] initWithFrame:NSMakeRect(0, 0, width, height)];
         [window setContentView:view];
         [window makeFirstResponder:view];
+        [window setContentMinSize:NSMakeSize(1280, 720)];
 
         // Order matters: wantsLayer first, then assign — the reverse creates
         // a layer-hosting view and your layer never displays.
@@ -452,6 +519,7 @@ struct rm::Window::Impl {
         // ownership change — the layer stays owned by the content view.
         renderer = std::make_unique<rm::Renderer>(
             (__bridge CA::MetalLayer*)metalLayer);
+        renderer->setUiScale(static_cast<float>(metalLayer.contentsScale));
 
         view.renderer = renderer.get();
         view.clickCallback = &clickCallback;
@@ -580,7 +648,10 @@ std::array<float, 2> Window::cursor() const {
     // `mouseLocationOutsideOfEventStream` is the current position without an event and without
     // a tracking area — which is the whole reason this can be a poll. It is in WINDOW
     // coordinates, so it goes through the very same conversion a click does.
-    return hudPointIn(impl_->view, window.mouseLocationOutsideOfEventStream);
+    //
+    // LOGICAL POINTS, not HUD space: this is what `screenRay` and `worldToScreen` are measured
+    // in. `hudCursor` is the same point for a hit test.
+    return viewPointIn(impl_->view, window.mouseLocationOutsideOfEventStream);
 }
 
 void Window::setReflections(bool enabled) {
@@ -619,6 +690,14 @@ void Window::setGroundDecals(std::span<const DecalVertex> vertices) {
     impl_->renderer->setGroundDecals(vertices);
 }
 
+void Window::setConstructions(std::span<const Renderer::ConstructionDraw> sites) noexcept {
+    impl_->renderer->setConstructions(sites);
+}
+
+void Window::setConstructionTime(float seconds) noexcept {
+    impl_->renderer->setConstructionTime(seconds);
+}
+
 bool Window::leftMouseHeld() const { return [impl_->view leftDown]; }
 
 std::array<float, 2> Window::dragOrigin() const { return [impl_->view leftDownAtHud]; }
@@ -653,18 +732,37 @@ void Window::focusOn(std::array<float, 3> target, float distance) {
 OrbitCamera& Window::camera() { return impl_->renderer->camera(); }
 
 unsigned int Window::width() const {
-    // The layer's drawableSize IS what encodeScene is handed — the drawable's texture is made
-    // at exactly this size — so reading it here means the HUD's layout space and the shader's
-    // viewport cannot disagree. The previous version computed frame x backingScaleFactor,
-    // which drifts from the drawable across a resize (drawableSize latches; see
-    // -rmSyncDrawableSize), and the whole bottom-anchored interface slid off screen.
-    const CGSize size = static_cast<CAMetalLayer*>(impl_->view.layer).drawableSize;
-    return static_cast<unsigned int>(std::max(1.0, size.width));
+    return static_cast<unsigned int>(std::max(1.0, impl_->view.bounds.size.width));
 }
 
 unsigned int Window::height() const {
-    const CGSize size = static_cast<CAMetalLayer*>(impl_->view.layer).drawableSize;
-    return static_cast<unsigned int>(std::max(1.0, size.height));
+    return static_cast<unsigned int>(std::max(1.0, impl_->view.bounds.size.height));
+}
+
+void Window::setUserHudScale(float scale) {
+    impl_->view.userHudScale =
+        std::clamp(scale, rm::ui::kMinUserHudScale, rm::ui::kMaxUserHudScale);
+    [impl_->view rmSyncUiScale];
+}
+
+float Window::userHudScale() const noexcept { return impl_->view.userHudScale; }
+
+float Window::hudScale() const { return [impl_->view rmHudScale]; }
+
+float Window::hudWidth() const { return static_cast<float>(width()) / hudScale(); }
+
+float Window::hudHeight() const { return static_cast<float>(height()) / hudScale(); }
+
+std::array<float, 2> Window::hudCursor() const {
+    const std::array<float, 2> at = cursor();
+    const float scale = hudScale();
+    return {{at[0] / scale, at[1] / scale}};
+}
+
+std::array<float, 2> Window::hudDragOrigin() const {
+    const std::array<float, 2> at = dragOrigin();
+    const float scale = hudScale();
+    return {{at[0] / scale, at[1] / scale}};
 }
 
 text::Font Window::labelFont() const { return impl_->renderer->labelFont(); }
@@ -691,6 +789,11 @@ void Window::setHud(std::span<const text::TextVertex> label,
                     std::span<const text::TextVertex> readout,
                     std::span<const text::TextVertex> image,
                     std::span<const text::TextVertex> worldImage) {
+    // THE DESIGN-SPACE VIEWPORT, which is what magnifies the interface: the HUD shader maps
+    // this rectangle across the whole drawable, so handing it a smaller one draws the same
+    // vertices bigger. Every vertex in these spans was laid out against `hudWidth`/`hudHeight`
+    // for that reason.
+    impl_->renderer->setHudViewport(hudWidth(), hudHeight());
     impl_->renderer->setHud(label, readout, image, worldImage);
 }
 

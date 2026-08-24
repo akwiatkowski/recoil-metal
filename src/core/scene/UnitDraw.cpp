@@ -29,6 +29,7 @@ namespace {
         .distanceTravelledElmos = sim::fxToFloat(view.distanceTravelledElmos),
         .speedPerTick = sim::fxToFloat(view.speedPerTick),
         .healthFraction = fraction(view.health, view.maxHealth),
+        .shieldActive = view.shieldActive,
     };
 }
 
@@ -58,6 +59,43 @@ void project(const sim::Snapshot& state, std::vector<DrawUnit>& out) {
     out.reserve(state.units.size());
     for (const sim::UnitView& view : state.units) {
         out.push_back(at(view));
+    }
+}
+
+void scheduleCurrentUnitProjection(std::vector<CurrentUnitProjection>& projections,
+                                   sim::UnitId id, TickIndex currentTick) {
+    const TickIndex firstPostOrderTick = currentTick + 1;
+    const auto found = std::find_if(projections.begin(), projections.end(),
+                                    [id](const CurrentUnitProjection& projection) {
+                                        return projection.id == id;
+                                    });
+    if (found == projections.end()) {
+        projections.push_back(CurrentUnitProjection{.id = id,
+                                                     .firstTick = firstPostOrderTick,
+                                                     .throughTick = firstPostOrderTick});
+    } else if (found->throughTick < currentTick) {
+        found->firstTick = firstPostOrderTick;
+        found->throughTick = firstPostOrderTick;
+    } else {
+        found->throughTick = std::max(found->throughTick, firstPostOrderTick);
+    }
+}
+
+void projectCurrentUnits(const sim::Snapshot& current, std::span<const sim::UnitId> ids,
+                         std::vector<DrawUnit>& inOut) {
+    for (const sim::UnitId id : ids) {
+        const auto view = std::lower_bound(
+            current.units.begin(), current.units.end(), id.index,
+            [](const sim::UnitView& candidate, UnitIndex index) {
+                return candidate.id.index < index;
+            });
+        const auto drawn = std::lower_bound(
+            inOut.begin(), inOut.end(), id.index,
+            [](const DrawUnit& candidate, UnitIndex index) { return candidate.id.index < index; });
+        if (view != current.units.end() && view->id == id && drawn != inOut.end()
+            && drawn->id == id) {
+            *drawn = at(*view);
+        }
     }
 }
 
@@ -114,6 +152,7 @@ void interpolate(const sim::Snapshot& from, const sim::Snapshot& to, float alpha
             // is. A health bar that eased into a hit would show a unit at 40% when the sim had
             // already killed it, and the bar is information rather than motion.
             .healthFraction = fraction(now.health, now.maxHealth),
+            .shieldActive = now.shieldActive,
         });
     }
 }

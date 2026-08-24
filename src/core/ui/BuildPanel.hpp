@@ -2,7 +2,6 @@
 
 #include "core/text/TextLayout.hpp"
 #include "core/ui/Hud.hpp"
-#include "core/ui/Minimap.hpp"
 
 #include <array>
 #include <cstddef>
@@ -57,15 +56,7 @@ namespace rm::ui {
 /// invisible in every layout assertion, because overflow is a font fact and the tests only knew
 /// about rectangles. Scaling the text down instead would cost crispness, which `appendText`'s
 /// own note warns against.
-inline constexpr float kBuildCell = kUnit * 12.0f;
-
-/// A cell's HEIGHT, in points — taller than it is wide, since display names arrived.
-///
-/// The face carries an icon, up to TWO lines of name, and the cost; a square cell held the
-/// icon, one id line and the cost exactly, and "Mass Extractor" does not fit one line at this
-/// width. The height buys the second line; the width stays, because three columns of it is
-/// what docks onto the minimap and what the by-position muscle memory is trained on.
-inline constexpr float kBuildCellHeight = kUnit * 15.0f;
+inline constexpr float kBuildCellHeight = 66.0f;
 
 /// The gap between cells. One unit, not two: BAR's grid is TIGHT, and the tightness is what
 /// makes it read as one control rather than as scattered buttons.
@@ -77,13 +68,18 @@ inline constexpr float kBuildGap = kUnit * 0.5f;
 /// items and stops fitting beside the minimap; a narrower one grows tall enough to cover the
 /// view. Three is also what makes tier rows land together for the shipped corpus, where a
 /// tech level's structures come in threes and fours.
-inline constexpr int kBuildColumns = 3;
+inline constexpr int kBuildRows = 2;
 
 /// The strip above the grid carrying the builder's name.
-inline constexpr float kBuildHeader = kUnit * 3.0f;
+inline constexpr float kBuildHeader = 24.0f;
+inline constexpr float kBuildPadding = 8.0f;
 
-/// The icon square inside a cell. What is left below it carries two lines: the id, then the cost.
-inline constexpr float kBuildIcon = kBuildCell - kUnit * 6.0f;
+/// How many lines the cell's name may run to. Two: "Mass Extractor" needs both and nothing in
+/// the shipped corpus needs a third at this cell width.
+inline constexpr std::size_t kBuildNameLines = 2;
+
+/// The band at the foot of a cell that `kShowCostOnCell` fills, and that the name gives way to.
+inline constexpr float kBuildCostStrip = 20.0f;
 
 // --- State ------------------------------------------------------------------
 
@@ -105,6 +101,15 @@ struct BuildOption {
     /// rather than printing a zero as if it were a measurement.
     float buildSeconds = 0.0f;
     float health = 0.0f;
+
+    /// Whether this cell UPGRADES the selected builder rather than building something beside it.
+    ///
+    /// The tech path — `General.UpgradesTo` — is not a member of any `BuildableCategory`, so a
+    /// factory's own tier two was in the corpus, reachable by the sim, and absent from every
+    /// menu. It behaves differently in two ways the cell has to say out loud: it needs no
+    /// PLACE (the factory upgrades where it stands), and it CONSUMES the builder rather than
+    /// adding to the base.
+    bool upgrade = false;
 
     /// Whether the army can pay for it RIGHT NOW, from stored mass.
     ///
@@ -137,24 +142,23 @@ struct BuildPanelLayout {
     /// The grid's origin — below the header, inside the padding.
     float gridX = 0.0f;
     float gridY = 0.0f;
+    float cellWidth = 0.0f;
+    float cellHeight = kBuildCellHeight;
 
-    int columns = kBuildColumns;
-    int rows = 0;
+    int columns = 0;
+    int rows = kBuildRows;
+    std::size_t first = 0;
+    std::size_t shown = 0;
+    std::size_t page = 0;
+    std::size_t pages = 0;
 
-    [[nodiscard]] bool empty() const noexcept { return rows <= 0; }
+    [[nodiscard]] bool empty() const noexcept { return shown == 0; }
 };
 
-/// Places the panel against the minimap, DOCKED onto its top edge and growing UPWARD.
-///
-/// Upward rather than downward because the minimap is already at the bottom margin, and rightward
-/// would put the grid where the eye expects the map. Growing up means a long option list pushes
-/// into empty screen rather than off it, and a short one sits just above the map — which is
-/// exactly how BAR's behaves as a factory's queue changes.
-///
-/// Docked flush — `y + height == minimap.y` — so the two hairlines meet and the tray and the
-/// map read as one bottom-left command block rather than as neighbours.
-[[nodiscard]] BuildPanelLayout buildPanelLayout(const MinimapLayout& minimap,
-                                                std::size_t optionCount) noexcept;
+/// Fits one two-row page inside the frame's bounded build rectangle.
+[[nodiscard]] BuildPanelLayout buildPanelLayout(const FrameLayout& frame,
+                                                 std::size_t optionCount,
+                                                 std::size_t page = 0) noexcept;
 
 /// Whether a screen point is on the panel at all — cells, gutters, header and padding alike.
 ///
@@ -181,6 +185,10 @@ struct BuildPanelLayout {
                                                        std::size_t optionCount, float pointX,
                                                        float pointY) noexcept;
 
+/// -1 or +1 when a point hits a visible page arrow in the header.
+[[nodiscard]] std::optional<int> buildPageStepAt(const BuildPanelLayout& layout, float pointX,
+                                                 float pointY) noexcept;
+
 /// Draws the panel: header, grid, and each cell's tint band, id and cost.
 ///
 /// `hovered` gets the lit border BAR uses to say "this one". An out-of-range index draws no
@@ -194,16 +202,6 @@ void appendBuildPanel(Geometry& out, const text::Font& labelFont, const text::Fo
                       const Theme& theme, const BuildPanelLayout& layout,
                       std::span<const BuildOption> options, std::optional<std::size_t> hovered,
                       std::string_view builderName, std::string_view builderRole = {});
-
-/// A display name broken to fit a cell face: up to two lines, empty slots unused.
-///
-/// GREEDY BY WORDS — "Mass Extractor" becomes "Mass" / "Extractor" — because a name is words
-/// and a break inside one is a different name. A single word wider than the cell is truncated
-/// by characters instead, which is the honest floor: "Experiment" clipped is still legible
-/// where a vanished line (the id's old overflow rule) says the cell is nameless. A third line's
-/// worth of words is dropped; the hover card states the full name.
-[[nodiscard]] std::array<std::string_view, 2> wrapCellName(
-    std::span<const text::Glyph> glyphs, std::string_view name, float maxWidth) noexcept;
 
 /// The hover card for one build option: full name, id in the corner, and the facts a player
 /// weighs before building — mass (in the loss colour when it cannot be paid), energy, build

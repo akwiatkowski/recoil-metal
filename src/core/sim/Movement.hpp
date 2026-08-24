@@ -16,6 +16,7 @@
 namespace rm::sim {
 
 class UnitStore;
+struct PassabilityGrid;
 
 // The first thing in this engine whose state changes between frames.
 //
@@ -131,6 +132,10 @@ struct MoveState {
     /// spawned; stored here because movement and collision are hot span passes with no catalog.
     bool airborne = false;
 
+    /// This unit floats on the map's water plane. Mutually exclusive with `airborne`; surface
+    /// ships route on the inverse water grid and do not inherit seabed height or slope.
+    bool surfaceWater = false;
+
     /// PER TICK, both of them, derived once from the authored per-second figures (§5.1).
     ///
     /// They default to ZERO rather than to the constants above, and that is deliberate: a
@@ -213,7 +218,9 @@ void orderAlongPath(MoveState& state, std::span<const std::array<Fx, 2>> path);
 ///
 /// **The index must be current**: `UnitStore::reindex` before this, since the pass reads
 /// positions that `tick` has just changed.
-void resolveCollisions(UnitStore& store, const Terrain& terrain);
+void resolveCollisions(
+    UnitStore& store, const Terrain& terrain,
+    std::span<const PassabilityGrid* const> gridForType = {});
 
 /// How close counts as reaching an intermediate waypoint, in elmos.
 ///

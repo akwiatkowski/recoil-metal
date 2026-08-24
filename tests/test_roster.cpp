@@ -20,13 +20,14 @@ using rm::ui::rosterTileOrigin;
 
 namespace {
 
-constexpr float kWide = 1400.0f;
-constexpr float kTall = 900.0f;
+[[nodiscard]] rm::ui::FrameLayout aFrame() {
+    return rm::ui::frameLayout(1280.0f, 720.0f);
+}
 
 } // namespace
 
 TEST_CASE("an empty selection has no roster", "[ui][roster]") {
-    const auto layout = rosterLayout(kWide, kTall, 0);
+    const auto layout = rosterLayout(aFrame(), 0);
     CHECK(layout.empty());
     CHECK_FALSE(rosterTileAt(layout, 700.0f, 850.0f).has_value());
     CHECK_FALSE(insideRoster(layout, 700.0f, 850.0f));
@@ -98,7 +99,9 @@ TEST_CASE("a tile's hover card names the type and shows the exact numbers", "[ui
                                   .maxHealth = 900.0f};
     const rm::ui::InfoCard card = rm::ui::rosterTileCard(hurt);
     CHECK(card.title == "Medium Tank");
-    CHECK(card.corner == "UEL0201");
+    // No id beside the name — see `kShowBlueprintIds`. The nameless case below is the one
+    // place an id still reaches the screen, because there is nothing else to print.
+    CHECK(card.corner == (rm::ui::kShowBlueprintIds ? "UEL0201" : ""));
     REQUIRE(card.rows.size() == 2);
     CHECK(card.rows[0].value == "3");
     // A sixth of maximum is deep in the loss band; the card's colour must agree with the
@@ -128,36 +131,35 @@ TEST_CASE("grouping keeps the first unit's name for the type", "[ui][roster]") {
     CHECK(plain[0].name.empty());
 }
 
-TEST_CASE("the roster is centred along the bottom", "[ui][roster]") {
-    const auto layout = rosterLayout(kWide, kTall, 4);
+TEST_CASE("the roster occupies the frame's selection bay", "[ui][roster]") {
+    const rm::ui::FrameLayout frame = aFrame();
+    const auto layout = rosterLayout(frame, 4);
     REQUIRE_FALSE(layout.empty());
-
-    // Equal margins left and right, within a rounding step.
-    const float left = layout.x;
-    const float right = kWide - (layout.x + layout.width);
-    CHECK(std::abs(left - right) < 1.0f);
-    CHECK(layout.y + layout.height < kTall);
+    CHECK(layout.x == frame.selection.x);
+    CHECK(layout.y == frame.selection.y);
+    CHECK(layout.width == frame.selection.width);
+    CHECK(layout.height == frame.selection.height);
 }
 
 TEST_CASE("every tile hit-tests back to its own index", "[ui][roster]") {
     constexpr std::size_t kCount = 5;
-    const auto layout = rosterLayout(kWide, kTall, kCount);
+    const auto layout = rosterLayout(aFrame(), kCount);
 
     for (std::size_t index = 0; index < kCount; ++index) {
         const auto origin = rosterTileOrigin(layout, index);
-        const auto hit = rosterTileAt(layout, origin[0] + rm::ui::kRosterTile * 0.5f,
-                                      origin[1] + rm::ui::kRosterTile * 0.5f);
+        const auto hit = rosterTileAt(layout, origin[0] + layout.tileSize * 0.5f,
+                                      origin[1] + layout.tileSize * 0.5f);
         REQUIRE(hit.has_value());
         CHECK(*hit == index);
     }
 }
 
 TEST_CASE("the gutter between tiles is a miss", "[ui][roster]") {
-    const auto layout = rosterLayout(kWide, kTall, 4);
+    const auto layout = rosterLayout(aFrame(), 4);
     const auto first = rosterTileOrigin(layout, 0);
 
-    const float gutterX = first[0] + rm::ui::kRosterTile + rm::ui::kRosterGap * 0.5f;
-    const float y = first[1] + rm::ui::kRosterTile * 0.5f;
+    const float gutterX = first[0] + layout.tileSize + rm::ui::kRosterGap * 0.5f;
+    const float y = first[1] + layout.tileSize * 0.5f;
 
     CHECK_FALSE(rosterTileAt(layout, gutterX, y).has_value());
     // ...and is still the PANEL, the same split the build tray makes: a click there is
@@ -165,23 +167,36 @@ TEST_CASE("the gutter between tiles is a miss", "[ui][roster]") {
     CHECK(insideRoster(layout, gutterX, y));
 }
 
-TEST_CASE("a selection wider than the cap reports what it dropped", "[ui][roster]") {
+TEST_CASE("a selection wider than the profile capacity reports what is not on the page",
+          "[ui][roster]") {
     // A roster that silently omits types lies about the selection, and the lie is invisible —
     // the row looks complete. `hidden` is what the panel prints as `+N`.
-    const auto layout = rosterLayout(kWide, kTall, rm::ui::kRosterMaxTiles + 5);
+    const auto layout = rosterLayout(aFrame(), 10);
 
-    CHECK(layout.shown == rm::ui::kRosterMaxTiles);
+    CHECK(layout.shown == 5);
     CHECK(layout.hidden == 5);
+    CHECK(layout.pages == 2);
 
     // And nothing past the cap hit-tests, so a click cannot select a tile that is not drawn.
-    const auto past = rosterTileOrigin(layout, rm::ui::kRosterMaxTiles);
-    CHECK_FALSE(rosterTileAt(layout, past[0] + rm::ui::kRosterTile * 0.5f,
-                             past[1] + rm::ui::kRosterTile * 0.5f)
+    const auto past = rosterTileOrigin(layout, 5);
+    CHECK_FALSE(rosterTileAt(layout, past[0] + layout.tileSize * 0.5f,
+                             past[1] + layout.tileSize * 0.5f)
                     .has_value());
 }
 
 TEST_CASE("a selection inside the cap hides nothing", "[ui][roster]") {
-    const auto layout = rosterLayout(kWide, kTall, 3);
+    const auto layout = rosterLayout(aFrame(), 3);
     CHECK(layout.shown == 3);
     CHECK(layout.hidden == 0);
+}
+
+TEST_CASE("a later roster page hit-tests to the global tile index", "[ui][roster]") {
+    const auto layout = rosterLayout(aFrame(), 6, 1);
+    REQUIRE(layout.shown == 1);
+    CHECK(layout.first == 5);
+    const auto origin = rosterTileOrigin(layout, 0);
+    const auto hit = rosterTileAt(layout, origin[0] + layout.tileSize * 0.5f,
+                                  origin[1] + layout.tileSize * 0.5f);
+    REQUIRE(hit.has_value());
+    CHECK(*hit == 5);
 }

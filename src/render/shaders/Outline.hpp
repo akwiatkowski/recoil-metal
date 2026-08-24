@@ -146,6 +146,117 @@ fragment float4 unitGhostFragment(UnitOut in [[stage_in]],
     return float4(tint.rgb * shape, tint.a);
 }
 
+// A BUILDING UNDER CONSTRUCTION, materialising the way its faction's engineers work.
+//
+// WHY THIS EXISTS AT ALL. Nothing stood at a build site until the work finished: a
+// `Construction` (`core/sim/Economy.hpp`) is a row in the economy and nothing else, so
+// placing a silhouette produced a mass drain, a console line, and an empty patch of ground
+// for the next twenty seconds. The player's own report was "when clicking silhouette on
+// ground I don't see command was building it", and they were right — there was nothing to see.
+//
+// THE FOUR EFFECTS are Supreme Commander's own, transcribed rather than invented. The game
+// implements them in Lua per faction (`DefaultBuildBehaviors`), and what they have in common
+// is a REVEAL FRACTION driven by build progress; what differs is the shape of the reveal and
+// the colour of the energy doing it. That is exactly the split here: one uniform block, one
+// pipeline, four branches.
+//
+//   UEF       a horizontal plane sweeps up the model, steel-blue, with a bright scan line at
+//             the cut and a wireframe scaffold implied by the seam brightening on edges.
+//   Cybran    no plane at all: a hashed dissolve reveals the model in scattered flecks, so it
+//             assembles as a swarm rather than a casting. Red on near-black.
+//   Aeon      the model rises out of a glowing pad and the UNBUILT part is still drawn, as
+//             translucent green light rather than nothing — the shape is promised before it
+//             is delivered.
+//   Seraphim  a radial sweep in gold: the reveal runs around the model rather than up it,
+//             which is what its contracting rings read as.
+struct BuildUniforms {
+    float4 tint;       // the faction's energy colour
+    float progress;    // 0..1, from the construction's own remaining build time
+    float baseY;       // world Y of the site: where the reveal starts
+    float height;      // how tall the model is, in elmos
+    float seconds;     // an animation clock, for the parts that shimmer
+    float centreX;     // the site in world elmos — Seraphim's sweep turns about it
+    float centreZ;
+    uint style;        // 0 UEF, 1 Aeon, 2 Cybran, 3 Seraphim
+    uint pad0;
+};
+
+/// A cheap stable hash of a world position, for Cybran's dissolve. Deterministic in space so
+/// the pattern sticks to the MODEL rather than crawling as the camera moves — a dissolve that
+/// swims is a screen-space effect wearing a world-space costume.
+static float buildHash(float3 p) {
+    return fract(sin(dot(floor(p * 1.7), float3(12.9898, 78.233, 37.719))) * 43758.5453);
+}
+
+fragment float4 unitBuildFragment(UnitOut in [[stage_in]],
+                                  constant BuildUniforms& b [[buffer(1)]]) {
+    // How far up this fragment sits within the model's own height, 0 at the ground and 1 at
+    // the roof. Guarded because a model with no stated height would divide by zero and take
+    // the whole building with it.
+    const float span = max(b.height, 0.001);
+    const float up = saturate((in.world.y - b.baseY) / span);
+
+    // The shading the ghost uses, for the same reason: a flat tint renders a model as one
+    // shapeless slab and the silhouette is where identity lives.
+    const float shape = 0.55 + 0.45 * saturate(in.normal.y * 0.5 + 0.5);
+
+    float revealed = 0.0;   // 1 where the structure exists, 0 where it does not yet
+    float edge = 0.0;       // 1 at the working face, where the energy is going in
+
+    if (b.style == 2u) {
+        // CYBRAN: a hashed threshold. Every fragment gets its own cut-off, so the model comes
+        // in as flecks that thicken rather than as a rising slab. The hash is biased by height
+        // so it still fills bottom-up on average — a swarm builds a foundation first too.
+        const float threshold = buildHash(in.world) * 0.75 + up * 0.25;
+        revealed = threshold < b.progress ? 1.0 : 0.0;
+        // A NARROW hot band, and narrower than the others on purpose: a uniform hash puts a
+        // great many fragments just under the threshold at once, so a band the width of UEF's
+        // turns the whole site white instead of picking out its working edge.
+        edge = 1.0 - saturate((b.progress - threshold) * 60.0);
+    } else if (b.style == 3u) {
+        // SERAPHIM: the sweep runs AROUND the site rather than up it — a rotating wedge
+        // closing on itself, which is what its contracting rings read as.
+        //
+        // ABOUT THE SITE'S OWN AXIS, from world position. Taking the angle from the surface
+        // NORMAL instead was the first attempt and it is a different effect entirely: every
+        // flat face shares one normal, so a building arrived as whole facets popping in rather
+        // than as anything sweeping.
+        const float angle = atan2(in.world.z - b.centreZ, in.world.x - b.centreX)
+                          / (2.0 * 3.14159265) + 0.5;
+        const float threshold = angle * 0.7 + up * 0.3;
+        revealed = threshold < b.progress ? 1.0 : 0.0;
+        edge = 1.0 - saturate((b.progress - threshold) * 25.0);
+    } else {
+        // UEF AND AEON: a plane sweeping up the model. The difference is what happens ABOVE
+        // it, handled below — UEF discards, Aeon glows.
+        revealed = up < b.progress ? 1.0 : 0.0;
+        edge = 1.0 - saturate((b.progress - up) * 30.0);
+    }
+
+    if (revealed < 0.5) {
+        // AEON PROMISES THE SHAPE, the other three do not. Drawing the unbuilt part as
+        // translucent light is the one place the four genuinely differ in what is on screen
+        // rather than in how it arrives.
+        if (b.style == 1u) {
+            const float shimmer = 0.35 + 0.15 * sin(b.seconds * 3.0 + in.world.y * 0.25);
+            return float4(b.tint.rgb * shimmer, 0.22);
+        }
+        discard_fragment();
+    }
+
+    // The working face, blown out toward white — this is the energy going in, and it is the
+    // one part of the effect that reads from across the map.
+    const float3 metal = float3(0.42, 0.44, 0.47) * shape;
+    const float3 built = mix(metal, b.tint.rgb, 0.35);
+    const float3 hot = mix(built, float3(1.0), saturate(edge) * 0.85);
+
+    // A faint pulse over the whole thing while it is unfinished, so a site that is PAUSED for
+    // want of mass still reads as a site rather than as a finished building of the wrong
+    // colour. It stops at completion because `progress` reaches one and the term vanishes.
+    const float pulse = 1.0 + 0.06 * sin(b.seconds * 6.0) * (1.0 - b.progress);
+    return float4(hot * pulse, 1.0);
+}
+
 fragment float4 unitFragment(UnitOut in [[stage_in]],
                              constant Uniforms& u [[buffer(1)]],
                              texture2d<float> diffuse [[texture(0)]],

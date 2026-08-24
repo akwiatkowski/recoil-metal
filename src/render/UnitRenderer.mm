@@ -37,7 +37,27 @@ namespace rm {
 // `RendererInternal.hpp` — see the note there on why they are not in `Renderer.hpp`.
 using namespace render_detail;  // NOLINT(google-build-using-namespace)
 
+void Renderer::collectRetiredBuffers(bool everything) noexcept {
+    // A buffer retired on frame N was last bindable by that frame, and `beginFrame`'s
+    // semaphore guarantees frame N has completed once kMaxFramesInFlight further frames have
+    // opened. `everything` is the teardown case, where there is no next frame to wait for and
+    // the caller has already drained the queue.
+    std::erase_if(retiredBuffers_, [&](const std::pair<MTL::Buffer*, std::uint64_t>& retired) {
+        if (!everything && frameCounter_ < retired.second + kMaxFramesInFlight) {
+            return false;
+        }
+        if (retired.first != nullptr) {
+            retired.first->release();
+        }
+        return true;
+    });
+}
+
 void Renderer::releaseUnitBuffers() noexcept {
+    // Only what the GPU is provably done with. A re-upload can land while frames are still in
+    // flight, and a retired buffer's whole purpose is to outlive that.
+    collectRetiredBuffers();
+
     for (GpuUnitBatch& batch : unitBatches_) {
         if (batch.instanceBuffer != nullptr) batch.instanceBuffer->release();
         if (batch.boneBuffer != nullptr)     batch.boneBuffer->release();
@@ -359,6 +379,34 @@ void Renderer::setInstances(std::size_t batchIndex,
         return;
     }
 
+    // OUTGROWN: reallocate rather than clip. Doubling means a batch that fills steadily
+    // reallocates a handful of times over a match instead of on every unit; the exact size is
+    // taken when the request is already past the double, so one huge push does not allocate
+    // twice.
+    if (instances.size() > batch.instanceCapacity) {
+        const std::size_t wanted = std::max(instances.size(), batch.instanceCapacity * 2);
+        const std::size_t wantedSlotBytes = wanted * sizeof(UnitInstance);
+        MTL::Buffer* grown = device_->newBuffer(wantedSlotBytes * kMaxFramesInFlight,
+                                                MTL::ResourceStorageModeShared);
+        if (grown != nullptr) {
+            // Carry every slot over. A batch that is not pushed on some frame draws whatever
+            // its slot holds, so a fresh buffer full of nothing would blink those batches out
+            // for one ring's worth of frames.
+            const std::size_t oldSlotBytes = batch.instanceCapacity * sizeof(UnitInstance);
+            const auto* from = static_cast<const std::byte*>(batch.instanceBuffer->contents());
+            auto* to = static_cast<std::byte*>(grown->contents());
+            for (std::size_t slot = 0; slot < kMaxFramesInFlight; ++slot) {
+                std::memcpy(to + slot * wantedSlotBytes, from + slot * oldSlotBytes,
+                            oldSlotBytes);
+            }
+            retiredBuffers_.emplace_back(batch.instanceBuffer, frameCounter_);
+            batch.instanceBuffer = grown;
+            batch.instanceCapacity = wanted;
+        }
+        // A failed allocation falls through and clips, which is the old behaviour and the
+        // only thing left to do when the device is out of memory.
+    }
+
     const std::size_t count = std::min(instances.size(), batch.instanceCapacity);
     const std::size_t slotBytes = batch.instanceCapacity * sizeof(UnitInstance);
 
@@ -369,6 +417,14 @@ void Renderer::setInstances(std::size_t batchIndex,
     // Drawing fewer than were uploaded is fine — the tail of the slot simply
     // goes unread — so a caller may shrink a batch without reallocating.
     batch.instanceCount = count;
+}
+
+std::size_t Renderer::drawnUnitInstances() const noexcept {
+    std::size_t drawn = 0;
+    for (const GpuUnitBatch& batch : unitBatches_) {
+        drawn += batch.instanceCount;
+    }
+    return drawn;
 }
 
 void Renderer::setGhost(std::size_t batch, const UnitInstance& instance,
@@ -382,6 +438,17 @@ void Renderer::setGhost(std::size_t batch, const UnitInstance& instance,
 }
 
 void Renderer::clearGhost() noexcept { ghost_.reset(); }
+
+void Renderer::setConstructions(std::span<const ConstructionDraw> sites) noexcept {
+    // Assigned rather than appended: this replaces the previous frame outright, so a site that
+    // completed stops being drawn on the very next frame without anyone remembering to say so.
+    // Truncated at the cap rather than growing the ring — see `kMaxConstructions`.
+    constructions_.assign(sites.begin(),
+                          sites.size() > kMaxConstructions ? sites.begin() + kMaxConstructions
+                                                            : sites.end());
+}
+
+void Renderer::setConstructionTime(float seconds) noexcept { constructionSeconds_ = seconds; }
 
 void Renderer::setSelection(std::span<const SelectionEntry> selected) noexcept {
     outlineRuns_.clear();

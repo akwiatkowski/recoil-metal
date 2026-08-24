@@ -172,9 +172,8 @@ int main(int argc, const char* argv[]) {
         // always y = 0, Supreme Commander's is per map and 140 elmos on most.
         // Scattering above 0 on a FA map drowns most of the units.
         // Not const: the windowed path steps this scene every frame.
-        UnitScene units = resolveUnits(unitRequests, map->field, map->starts,
-                                       map->hasWater ? map->waterLevel : 0.0f, assetSearch,
-                                       content);
+        UnitScene units = resolveUnits(unitRequests, map->field, map->starts, map->hasWater,
+                                       map->waterLevel, assetSearch, content);
 
         // `--alliances N`: deal the armies into N sides that win together, round-robin, so
         // `--armies 4 --alliances 2` is a 2v2. Free-for-all — every army its own alliance —
@@ -200,7 +199,7 @@ int main(int argc, const char* argv[]) {
         //
         // BEFORE the skirmish block, because `orderFirstExtractors` issues real build commands
         // and `applyCommand` takes a grid for every kind of order.
-        PassabilitySet passability{map->field, map->hasWater ? map->waterLevel : 0.0f};
+        PassabilitySet passability{map->field, map->hasWater, map->waterLevel};
 
         if (hasFlag(argc, argv, "--skirmish")) {
             // `--factions uef,seraphim,...` picks each seat's faction, cycled; absent keeps
@@ -236,7 +235,7 @@ int main(int argc, const char* argv[]) {
         // Tilt every unit onto its slope once, here, because the headless paths
         // never tick the sim: a screenshot of a scattered scene would otherwise
         // show every unit standing horizontally on its hillside.
-        const rm::sim::Terrain terrain{map->field};
+        const rm::sim::Terrain terrain = units.terrain(map->field);
         for (std::size_t slot = 0; slot < units.store.transforms().size(); ++slot) {
             rm::sim::placeOnMotionLayer(units.store.transforms()[slot],
                                         units.store.motion()[slot], terrain);
@@ -353,6 +352,7 @@ int main(int argc, const char* argv[]) {
             .look = parseLook(argc, argv),
             .focus = focus,
             .animationTime = animationTime,
+            .uiScale = parseUiScale(argc, argv),
             .propInstances = propInstances,
         };
 

@@ -52,6 +52,35 @@ constexpr std::array<float, 4> kWhite{{1.0f, 1.0f, 1.0f, 1.0f}};
 
 } // namespace
 
+TEST_CASE("a shield sphere is closed triangle geometry at the requested radius") {
+    const std::array<float, 3> centre{{100.0f, 40.0f, 200.0f}};
+    const std::array<float, 4> cyan{{0.2f, 0.75f, 1.0f, 0.12f}};
+    constexpr float radius = 80.0f;
+
+    std::vector<DecalVertex> out;
+    rm::appendShieldSphere(out, centre, radius, cyan);
+
+    REQUIRE(out.size() == rm::shieldSphereVertexCount());
+    REQUIRE(out.size() % 3u == 0u);
+    for (const DecalVertex& vertex : out) {
+        const float dx = vertex.position[0] - centre[0];
+        const float dy = vertex.position[1] - centre[1];
+        const float dz = vertex.position[2] - centre[2];
+        CHECK(std::sqrt(dx * dx + dy * dy + dz * dz) == Approx(radius).margin(1e-3));
+        CHECK(vertex.colour == cyan);
+    }
+}
+
+TEST_CASE("a shield sphere appends and rejects a non-positive radius") {
+    std::vector<DecalVertex> out(3);
+    rm::appendShieldSphere(out, {{0.0f, 0.0f, 0.0f}}, 0.0f, kWhite);
+    rm::appendShieldSphere(out, {{0.0f, 0.0f, 0.0f}}, -1.0f, kWhite);
+    CHECK(out.size() == 3);
+
+    rm::appendShieldSphere(out, {{0.0f, 0.0f, 0.0f}}, 1.0f, kWhite);
+    CHECK(out.size() == 3u + rm::shieldSphereVertexCount());
+}
+
 TEST_CASE("a ring is two triangles per segment and nothing else") {
     std::vector<DecalVertex> out;
     rm::appendSelectionRing(out, flatAt(16, 0), {{64.0f, 0.0f, 64.0f}}, 10.0f, kWhite);

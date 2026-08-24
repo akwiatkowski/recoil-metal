@@ -30,7 +30,8 @@ class Terrain {
 public:
     /// Holds a REFERENCE to the field. The field outlives the sim in every caller — it is the
     /// map — and copying a heightfield to sample it would be absurd.
-    explicit Terrain(const HeightField& field) noexcept;
+    explicit Terrain(const HeightField& field, bool hasWater = false,
+                     float waterLevelElmos = 0.0f) noexcept;
 
     /// The height at a grid corner, clamped at the edges.
     ///
@@ -46,6 +47,9 @@ public:
     /// counts, extents. Deliberately not a way back to the float accessors: those are the
     /// renderer's.
     [[nodiscard]] const HeightField& field() const noexcept { return *field_; }
+
+    [[nodiscard]] bool hasWater() const noexcept { return hasWater_; }
+    [[nodiscard]] Fx waterLevel() const noexcept { return waterLevel_; }
 
     /// How many fractional bits the vertical scale is kept to. **Thirty, not fourteen.**
     ///
@@ -65,6 +69,8 @@ public:
 private:
     const HeightField* field_;
     Fx baseHeight_;
+    bool hasWater_ = false;
+    Fx waterLevel_{};
 
     /// `heightScale * 2^kScaleBits`, in the widening type — not an `Fx`. See `kScaleBits`.
     FxWide heightScale_;

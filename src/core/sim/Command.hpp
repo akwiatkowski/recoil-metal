@@ -145,6 +145,13 @@ struct Command {
 /// Whether two commands are the same order. For comparing a recorded log with a replayed one.
 [[nodiscard]] bool operator==(const Command& a, const Command& b) noexcept;
 
+/// What an order is CALLED — the one spelling, shared by the command log and the console.
+///
+/// It was private to `Command.cpp`, where the log writer used it and nothing else could. The
+/// app then had no way to name a kind, so the interface reported orders by not reporting them.
+/// Two spellings of "attack-move" would be two things to keep in step; this is one.
+[[nodiscard]] const char* commandKindName(CommandKind kind) noexcept;
+
 /// Applies one command, and says whether it was applied.
 ///
 /// **THE SINGLE PATH.** A human's click and a script's decision both arrive here, which is

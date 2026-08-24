@@ -5,9 +5,11 @@
 
 namespace rm::sim {
 
-Terrain::Terrain(const HeightField& field) noexcept
+Terrain::Terrain(const HeightField& field, bool hasWater, float waterLevelElmos) noexcept
     : field_(&field),
       baseHeight_(fxFromFloat(field.baseHeight)),
+      hasWater_(hasWater),
+      waterLevel_(fxFromFloat(waterLevelElmos)),
       // Construction is content load, so the float is allowed here — it is the boundary, and
       // it is crossed once per map rather than once per sample.
       heightScale_(static_cast<FxWide>(

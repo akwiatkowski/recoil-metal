@@ -14,31 +14,30 @@ float RosterTile::fill() const noexcept {
     return std::clamp(health / maxHealth, 0.0f, 1.0f);
 }
 
-RosterLayout rosterLayout(float viewportWidth, float viewportHeight,
-                          std::size_t tileCount) noexcept {
+RosterLayout rosterLayout(const FrameLayout& frame, std::size_t tileCount,
+                           std::size_t page) noexcept {
     RosterLayout layout;
-    if (tileCount == 0 || viewportWidth <= 0.0f || viewportHeight <= 0.0f) {
+    if (tileCount == 0 || frame.rosterSlots == 0) {
         return layout;  // nothing selected: the roster is absent, not an empty frame
     }
 
-    layout.shown = std::min(tileCount, kRosterMaxTiles);
+    layout.x = frame.selection.x;
+    layout.y = frame.selection.y;
+    layout.width = frame.selection.width;
+    layout.height = frame.selection.height;
+    layout.pages = (tileCount + frame.rosterSlots - 1) / frame.rosterSlots;
+    layout.page = std::min(page, layout.pages - 1);
+    layout.first = layout.page * frame.rosterSlots;
+    layout.shown = std::min(frame.rosterSlots, tileCount - layout.first);
     layout.hidden = tileCount - layout.shown;
-
-    const auto shown = static_cast<float>(layout.shown);
-    const float row = shown * kRosterTile + (shown - 1.0f) * kRosterGap;
-
-    layout.width = row + kPad * 2.0f;
-    layout.height = kRosterHeader + kRosterTile + kRosterBar + kUnit * 0.5f + kPad * 2.0f;
-
-    // Centred horizontally, one margin off the bottom.
-    layout.x = (viewportWidth - layout.width) * 0.5f;
-    layout.y = viewportHeight - layout.height - kMargin;
+    layout.tilesX = layout.x + 8.0f;
+    layout.tilesY = layout.y + 109.0f;
     return layout;
 }
 
 std::array<float, 2> rosterTileOrigin(const RosterLayout& layout, std::size_t index) noexcept {
-    return {{layout.x + kPad + static_cast<float>(index) * (kRosterTile + kRosterGap),
-             layout.y + kPad + kRosterHeader}};
+    return {{layout.tilesX + static_cast<float>(index) * (layout.tileSize + kRosterGap),
+              layout.tilesY}};
 }
 
 std::optional<std::size_t> rosterTileAt(const RosterLayout& layout, float pointX,
@@ -46,22 +45,38 @@ std::optional<std::size_t> rosterTileAt(const RosterLayout& layout, float pointX
     if (layout.empty()) {
         return std::nullopt;
     }
-    const float localX = pointX - (layout.x + kPad);
-    const float localY = pointY - (layout.y + kPad + kRosterHeader);
-    if (localX < 0.0f || localY < 0.0f || localY > kRosterTile) {
+    const float localX = pointX - layout.tilesX;
+    const float localY = pointY - layout.tilesY;
+    if (localX < 0.0f || localY < 0.0f || localY > layout.tileSize) {
         return std::nullopt;
     }
 
-    const float pitch = kRosterTile + kRosterGap;
-    const auto index = static_cast<std::size_t>(std::floor(localX / pitch));
-    if (index >= layout.shown) {
+    const float pitch = layout.tileSize + kRosterGap;
+    const auto local = static_cast<std::size_t>(std::floor(localX / pitch));
+    if (local >= layout.shown) {
         return std::nullopt;
     }
     // The gutter is dead space, as the build tray's is and for the same reason.
-    if (localX - static_cast<float>(index) * pitch > kRosterTile) {
+    if (localX - static_cast<float>(local) * pitch > layout.tileSize) {
         return std::nullopt;
     }
-    return index;
+    return layout.first + local;
+}
+
+std::optional<int> rosterPageStepAt(const RosterLayout& layout, float pointX,
+                                    float pointY) noexcept {
+    if (layout.pages <= 1 || pointY < layout.y + 84.0f || pointY >= layout.tilesY) {
+        return std::nullopt;
+    }
+    constexpr float kArrowWidth = 22.0f;
+    const float right = layout.x + layout.width - 8.0f;
+    if (pointX >= right - kArrowWidth && pointX < right) {
+        return 1;
+    }
+    if (pointX >= right - kArrowWidth * 2.0f && pointX < right - kArrowWidth) {
+        return -1;
+    }
+    return std::nullopt;
 }
 
 bool insideRoster(const RosterLayout& layout, float pointX, float pointY) noexcept {
@@ -104,7 +119,8 @@ std::vector<RosterTile> groupSelection(std::span<const std::string> ids,
 InfoCard rosterTileCard(const RosterTile& tile) {
     InfoCard card;
     card.title = tile.name.empty() ? tile.id : tile.name;
-    if (!tile.name.empty()) {
+    // No blueprint id beside the name it already spells out — see `kShowBlueprintIds`.
+    if (kShowBlueprintIds && !tile.name.empty()) {
         card.corner = tile.id;
     }
 
@@ -126,13 +142,20 @@ InfoCard rosterTileCard(const RosterTile& tile) {
 }
 
 void appendRoster(Geometry& out, const text::Font& labelFont, const text::Font& readoutFont,
-                  const Theme& theme, const RosterLayout& layout,
-                  std::span<const RosterTile> tiles, std::optional<std::size_t> hovered) {
+                   const Theme& theme, const RosterLayout& layout,
+                   std::span<const RosterTile> tiles, std::optional<std::size_t> hovered,
+                   const InfoCard* inspector) {
     if (layout.empty() || tiles.empty() || !labelFont.usable()) {
         return;
     }
 
     appendPanel(out, labelFont, theme, layout.x, layout.y, layout.width, layout.height);
+    const Rect inspectorRect{layout.x + 8.0f, layout.y + 8.0f, layout.width - 16.0f, 68.0f};
+    if (inspector != nullptr) {
+        appendInspector(out, labelFont, readoutFont, theme, inspectorRect, *inspector);
+    }
+    text::appendRect(out.label, labelFont, layout.x + 8.0f, layout.y + 84.0f,
+                     layout.width - 16.0f, kBevel, fade(theme.edge, 0.9f));
 
     // The header: the selection's TOTAL, which grouping-by-type otherwise erases. "14 UNITS"
     // is the first fact of a selection — how many things the next order is about to move — and
@@ -143,38 +166,37 @@ void appendRoster(Geometry& out, const text::Font& labelFont, const text::Font& 
         for (const RosterTile& tile : tiles) {
             total += tile.count;
         }
-        const float headerBaseline = layout.y + kPad + kRosterHeader * 0.7f;
+        const float headerBaseline = layout.y + 102.0f;
         const std::string summary =
             std::to_string(total) + (total == 1 ? " UNIT" : " UNITS");
-        (void)text::appendText(out.label, labelFont.glyphs, summary, layout.x + kPad,
+        (void)text::appendText(out.label, labelFont.glyphs, summary, layout.x + 8.0f,
                                headerBaseline, theme.label);
 
         // WHAT WAS DROPPED, SAID OUT LOUD — in the summary line, where a count belongs. A
         // roster that silently omits types is a roster that lies about the selection, and the
         // lie is invisible: the row looks complete.
-        if (layout.hidden > 0 && readoutFont.usable()) {
-            const std::string more = "+" + std::to_string(layout.hidden)
-                                     + (layout.hidden == 1 ? " TYPE" : " TYPES");
+        if (layout.pages > 1 && readoutFont.usable()) {
+            const std::string more = std::to_string(layout.page + 1) + "/"
+                                   + std::to_string(layout.pages) + "  <  >";
             (void)text::appendText(out.readout, readoutFont.glyphs, more,
-                                   layout.x + layout.width - kPad
-                                       - text::measureText(readoutFont.glyphs, more),
-                                   headerBaseline, kInk);
+                                    layout.x + layout.width - 8.0f
+                                        - text::measureText(readoutFont.glyphs, more),
+                                    headerBaseline, kInk);
         }
-
-        // The rule under the header — the build tray's device, shared deliberately.
-        text::appendRect(out.label, labelFont, layout.x + kPad,
-                         layout.y + kPad + kRosterHeader - kBevel, layout.width - kPad * 2.0f,
-                         kBevel, fade(theme.edge, 0.9f));
     }
 
-    for (std::size_t index = 0; index < layout.shown && index < tiles.size(); ++index) {
+    for (std::size_t local = 0; local < layout.shown; ++local) {
+        const std::size_t index = layout.first + local;
+        if (index >= tiles.size()) {
+            break;
+        }
         const RosterTile& tile = tiles[index];
-        const std::array<float, 2> origin = rosterTileOrigin(layout, index);
+        const std::array<float, 2> origin = rosterTileOrigin(layout, local);
         const float tx = origin[0];
         const float ty = origin[1];
 
         // The tile's well in gradient glass, the build cell's treatment at the roster's size.
-        text::appendRectV(out.label, labelFont, tx, ty, kRosterTile, kRosterTile,
+        text::appendRectV(out.label, labelFont, tx, ty, layout.tileSize, layout.tileSize,
                           Colour{{theme.well[0] * 1.5f, theme.well[1] * 1.5f,
                                   theme.well[2] * 1.5f, theme.well[3]}},
                           Colour{{theme.well[0] * 0.7f, theme.well[1] * 0.7f,
@@ -184,8 +206,8 @@ void appendRoster(Geometry& out, const text::Font& labelFont, const text::Font& 
         if (tile.iconSlot) {
             const IconUv uv = iconUv(*tile.iconSlot);
             constexpr Colour kFull{{1.0f, 1.0f, 1.0f, 1.0f}};
-            const float x1 = tx + kRosterTile;
-            const float y1 = ty + kRosterTile;
+            const float x1 = tx + layout.tileSize;
+            const float y1 = ty + layout.tileSize;
             out.image.push_back({{tx, ty}, {uv.u0, uv.v0}, kFull});
             out.image.push_back({{x1, ty}, {uv.u1, uv.v0}, kFull});
             out.image.push_back({{x1, y1}, {uv.u1, uv.v1}, kFull});
@@ -193,12 +215,21 @@ void appendRoster(Geometry& out, const text::Font& labelFont, const text::Font& 
             out.image.push_back({{x1, y1}, {uv.u1, uv.v1}, kFull});
             out.image.push_back({{tx, y1}, {uv.u0, uv.v1}, kFull});
         } else if (readoutFont.usable()) {
-            // No picture: the id, small, so a tile is never anonymous.
-            const float width = text::measureText(readoutFont.glyphs, tile.id);
-            if (width <= kRosterTile - kUnit) {
-                (void)text::appendText(out.readout, readoutFont.glyphs, tile.id,
-                                       tx + (kRosterTile - width) * 0.5f,
-                                       ty + kRosterTile * 0.55f, theme.label);
+            // No picture: the NAME, wrapped small, so a tile is never anonymous. The id is the
+            // fallback's fallback — content that states no display name leaves nothing else to
+            // print, which is the only place `kShowBlueprintIds` does not reach.
+            const std::string& label = tile.name.empty() ? tile.id : tile.name;
+            const float lineHeight =
+                readoutFont.lineHeight > 0.0f ? readoutFont.lineHeight : kUnit * 1.8f;
+            const std::vector<std::string> lines =
+                wrapToWidth(readoutFont.glyphs, label, layout.tileSize - kUnit, 2);
+            for (std::size_t line = 0; line < lines.size(); ++line) {
+                const float width = text::measureText(readoutFont.glyphs, lines[line]);
+                (void)text::appendText(out.readout, readoutFont.glyphs, lines[line],
+                                        tx + (layout.tileSize - width) * 0.5f,
+                                        ty + layout.tileSize * 0.5f
+                                            + static_cast<float>(line) * lineHeight,
+                                        theme.label);
             }
         }
 
@@ -217,8 +248,8 @@ void appendRoster(Geometry& out, const text::Font& labelFont, const text::Font& 
             const float width = text::measureText(readoutFont.glyphs, badge);
             const float plateW = width + kUnit * 0.8f;
             const float plateH = kUnit * 1.8f;
-            const float plateX = tx + kRosterTile - plateW - kBevel;
-            const float plateY = ty + kRosterTile - plateH - kBevel;
+            const float plateX = tx + layout.tileSize - plateW - kBevel;
+            const float plateY = ty + layout.tileSize - plateH - kBevel;
             // INTO THE READOUT LIST, not the label list, and that is the whole reason the
             // badge is readable. The icons are drawn between the two faces, so anything in
             // `label` ends up UNDER the artwork — a plate there is a plate nobody sees, with
@@ -231,8 +262,8 @@ void appendRoster(Geometry& out, const text::Font& labelFont, const text::Font& 
         }
 
         // The health underbar: a track, and the group's summed fill over it.
-        const float barY = ty + kRosterTile + kUnit * 0.3f;
-        text::appendRect(out.label, labelFont, tx, barY, kRosterTile, kRosterBar,
+        const float barY = ty + layout.tileSize + kUnit * 0.3f;
+        text::appendRect(out.label, labelFont, tx, barY, layout.tileSize, kRosterBar,
                          fade(theme.edge, 0.5f));
         const float fill = tile.fill();
         if (fill > 0.0f) {
@@ -240,19 +271,20 @@ void appendRoster(Geometry& out, const text::Font& labelFont, const text::Font& 
             // length — at this size the length difference between half and two-thirds is a
             // couple of pixels and the colour difference is not.
             const Colour bar = fill > 0.6f ? kGain : (fill > 0.3f ? kWarn : kLoss);
-            text::appendRect(out.label, labelFont, tx, barY, kRosterTile * fill, kRosterBar,
+            text::appendRect(out.label, labelFont, tx, barY, layout.tileSize * fill, kRosterBar,
                              bar);
         }
 
         const bool lit = hovered.has_value() && *hovered == index;
         const Colour border = lit ? theme.edgeLit : theme.edge;
         const float thickness = lit ? kBevel * 2.0f : kBevel;
-        text::appendRect(out.label, labelFont, tx, ty, kRosterTile, thickness, border);
-        text::appendRect(out.label, labelFont, tx, ty + kRosterTile - thickness, kRosterTile,
-                         thickness, border);
-        text::appendRect(out.label, labelFont, tx, ty, thickness, kRosterTile, border);
-        text::appendRect(out.label, labelFont, tx + kRosterTile - thickness, ty, thickness,
-                         kRosterTile, border);
+        text::appendRect(out.label, labelFont, tx, ty, layout.tileSize, thickness, border);
+        text::appendRect(out.label, labelFont, tx, ty + layout.tileSize - thickness,
+                          layout.tileSize,
+                          thickness, border);
+        text::appendRect(out.label, labelFont, tx, ty, thickness, layout.tileSize, border);
+        text::appendRect(out.label, labelFont, tx + layout.tileSize - thickness, ty, thickness,
+                          layout.tileSize, border);
     }
 
 }

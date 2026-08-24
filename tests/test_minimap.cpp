@@ -125,25 +125,28 @@ TEST_CASE("a click outside the map clamps to its edge") {
 TEST_CASE("the panel knows what is on it") {
     const MinimapLayout layout = square();
     CHECK(rm::ui::insideMinimap(layout, layout.x + 1.0f, layout.y + 1.0f));
-    CHECK(rm::ui::insideMinimap(layout, layout.x + layout.size, layout.y + layout.size));
+    CHECK_FALSE(rm::ui::insideMinimap(layout, layout.x + layout.size,
+                                      layout.y + layout.size));
     CHECK_FALSE(rm::ui::insideMinimap(layout, layout.x - 1.0f, layout.y + 1.0f));
     CHECK_FALSE(rm::ui::insideMinimap(layout, layout.x + 1.0f, layout.y + layout.size + 1.0f));
 }
 
-TEST_CASE("the default layout is bottom-left and does not grow with width") {
-    // Sized off the SHORTER side, so an ultrawide monitor gets the same minimap as a square
-    // one rather than a bigger one that is further from the units.
-    const MinimapLayout wide = rm::ui::minimapLayout(3440.0f, 1440.0f);
-    const MinimapLayout tall = rm::ui::minimapLayout(1440.0f, 1440.0f);
-    CHECK(wide.size == tall.size);
+TEST_CASE("the default layout follows responsive profile metrics") {
+    CHECK(rm::ui::minimapLayout(1280.0f, 720.0f).size == 176.0f);
+    CHECK(rm::ui::minimapLayout(1600.0f, 900.0f).size == 216.0f);
+    CHECK(rm::ui::minimapLayout(2240.0f, 1000.0f).size == 256.0f);
+
+    // Width alone does not select Wide when the vertical deck cannot fit its metrics.
+    const MinimapLayout wide = rm::ui::minimapLayout(3440.0f, 900.0f);
+    CHECK(wide.size == 216.0f);
 
     // Bottom-left: the resource panel is top-left and the clock top-right.
     CHECK(wide.x < 100.0f);
-    CHECK(wide.y > 1440.0f * 0.5f);
-    CHECK(wide.y + wide.size <= 1440.0f);
+    CHECK(wide.y > 900.0f * 0.5f);
+    CHECK(wide.y + wide.size <= 900.0f);
 
     // And capped, so a 5K display does not get a minimap the size of a playing card.
-    CHECK(rm::ui::minimapLayout(5120.0f, 2880.0f).size <= 260.0f);
+    CHECK(rm::ui::minimapLayout(5120.0f, 2880.0f).size == 256.0f);
 }
 
 TEST_CASE("a degenerate layout draws nothing rather than dividing by zero") {

@@ -1,8 +1,9 @@
 <!-- Generated and maintained by Claude -->
 # recoil-metal
 
-A Mac-native, Metal-only renderer that reads **Recoil** content formats —
-research spun out of [FAR](../faf/forged-alliance-reborn/README.md).
+A Mac-native, Metal-only engine that reads **Recoil** and **Supreme Commander**
+content formats and plays a match out of them — research spun out of
+[FAR](../faf/forged-alliance-reborn/README.md).
 
 The original premise was that FAR was *blocked* on macOS: Recoil's model path
 needs OpenGL 4.3+ SSBOs and Apple caps OpenGL at 4.1. That turned out to be
@@ -24,6 +25,17 @@ This is a personal research project. It is also a deliberate modern-C++
 showcase: C++23, RAII everywhere, rule of five, pImpl at platform boundaries,
 TDD with Catch2, warnings-as-errors.
 
+**Where it stands.** It started as a renderer and it is now a game you can lose.
+Twenty milestones are done and the twentieth ends in a victory banner: a skirmish
+on a retail map, spawn to win, with an economy, construction, weapons, shields,
+aircraft, fog of war, sound and an interface — all in fixed-point arithmetic, so
+the same command log replays the same match tick for tick. Since then the window
+learned to fight in real time rather than being handed a finished scene, and
+Forged Alliance's own AI corpus — vendored unmodified at a pinned commit — plays
+the opponent's opening. **1047 tests, all green.** The milestone notes below are
+the long version; [Beyond 20](#beyond-20--the-window-that-plays) is the inventory
+of everything after the match.
+
 ## What it looks like
 
 Every image below is this renderer's own output, written by `--screenshot`.
@@ -32,6 +44,8 @@ Commander `.scmap` maps with `.scm` models.
 
 |  |  |
 |---|---|
+| ![the interface, with a commander selected](docs/images/ui-commander.jpg) | ![the attack column reaching the player's base](docs/images/m20-5-battle.jpg) |
+| **The interface** — the build tray draws the archives' own 64×64 icons, names and mass costs; the minimap is the `.scmap`'s own embedded preview | **A match that ends** — a scripted opponent builds a base, streams tanks, and comes for your commander |
 | ![a BAR map with sky and water](docs/images/m11-sky-water.jpg) | ![the same on a Supreme Commander map](docs/images/m11-sky-water-fa.jpg) |
 | **Sky and water**, ported from the games' own `sky.fx` and `water2.fx` | The same code on a `.scmap` — the horizon colour is the map's, not ours |
 | ![the ground splat up close](docs/images/m6-splat-close.jpg) | ![Seton's Clutch from above](docs/images/m6-splat-setons.jpg) |
@@ -731,8 +745,249 @@ reimplemented.*
     tests stayed green. It surfaced only when the outlines put a second cue beside the
     missing one.
 
-Stage B (sim semantics, only if milestones 1–5 prove out) is deliberately not
-planned. The cliff is real; plan when we're on it.
+16. **Supreme Commander units read their own definitions.** **✔ done** —
+    `--units UEL0201_unit.bp 40 --march 4096 4096 30` puts UEF medium tanks on
+    `SCMP_009` at 27 elmos/s, 1.57 rad/s and a 3.6-elmo collision radius, every
+    number read from the file rather than chosen.
+
+    ![Supreme Commander units on a Supreme Commander map](docs/images/m16-supcom-units.jpg)
+
+    Half of what the milestone planned turned out to be wrong, and the corrections
+    are the interesting part. **The model had been 14× too big since milestone 7** —
+    `.scm` vertices are not in ogrids, and `Display.UniformScale` is the missing
+    factor, exactly as for props. It is stored as ONE combined `meshToElmos`,
+    because the two-step version has already been got wrong here once.
+    **`SizeX`/`SizeZ` are at the file's ROOT, not under `Footprint`** (568 of 568
+    against 363), and they are a different quantity from the build footprint: a
+    collision box in fractional ogrids against whole squares. That forced the
+    collision radius to become a stored float — 418 of 568 sizes are fractional and
+    154 are under one ogrid, the smallest 0.01, which as whole squares would inflate
+    that unit's radius from 0.04 elmos to 4. **Passability comes from the motion
+    class**, and Water and SurfacingSub are *refused* rather than approximated,
+    because they need the inverse of the ground grid and a ship routed over it
+    drives across dry land.
+
+    The tick moved to **10 Hz** with this milestone, which is the last moment that
+    change was free — every constant tuned after it would have had to move too. It
+    immediately exposed two facts sharing one number: BAR's `turnrate` is per
+    *Recoil* frame and wants 30, not our rate.
+
+    The two items carried out of here landed later: a **VFS with archive priority**,
+    so the 25 blueprints that name a mesh by path resolve against the shipped
+    `.scd` archives instead of a documented extraction one-liner ([ADR-044](ADR_DECISIONS.md)),
+    and **LOD switching** — 563 blueprints declare a cutoff and a coarser mesh, and
+    a distant unit now draws the one its own blueprint asks for.
+
+17. **Armies, and units that belong to one.** **✔ done** — an `Army` carries
+    index, faction, colour and alliance, ownership sits on every instance, and
+    selection refuses anything that is not yours. Each army spawns on one of the
+    map's own `ARMY_<n>` markers with its faction's ACU. `--factions` picks each
+    seat's side, so mirrors and matchups are both one flag.
+
+    Reading the rest of the marker table while there was the cheap part and the
+    useful one: 3508 `Mass` markers and the hydrocarbon sites are what milestone 19
+    builds on, and the shipped nav graph is a free reference to check A* against.
+    The stock maps place **no units at all** — all 61 army `Units` groups are empty —
+    so spawning is the engine's job, not the map's.
+
+18. **Weapons, projectiles, and damage.** **✔ done** — the first milestone where a
+    unit can lose something. Rate of fire, damage, radius, range, muzzle velocity
+    and the turret bones come from the blueprint's own `Weapon` table; projectiles
+    fly direct or ballistic on the fixed tick; damage is a sparse profile keyed by
+    an armour class resolved at load ([ADR-033](ADR_DECISIONS.md)), and a death
+    leaves a wreck. The fight unfolds tick by tick rather than resolving at once —
+    the live proof is milestone 20's match, which spends 336 shots and 32 units to
+    reach its banner.
+
+    (The milestone's own demonstration was eight commanders marched into the map
+    centre to mutual destruction. That command no longer produces a fight on the
+    current build: they walk to the centre and stand there. Recorded as owed rather
+    than quietly dropped — combat demonstrably works, so this is about what
+    `--march` gives a commander that already has a build order, not about weapons.)
+
+    Three corrections the tests forced, each now a comment in the code: reloads ran
+    10% slow because the counter was checked before being decremented; a flat shot
+    detonated at the muzzle, because **a unit's position is at its FEET** and a level
+    shot therefore began at ground height; and with only a ground-height test every
+    weapon then flew over its target and missed. Emergent and honest — nothing leads
+    a target, so distant moving units are hard to hit and close ones are not.
+
+19. **Economy and building.** **✔ done** — mass and energy income, storage and drain
+    per army; the map's `Mass` markers become extractor sites; build costs come from
+    `BuildCostMass`, `BuildCostEnergy` and `BuildTime` against a builder's
+    `BuildRate`, with consumption gated on income, so a stalled economy *slows*
+    construction rather than cheating. The ACU and engineers raise structures, and a
+    land factory builds units and rolls them off the pad.
+
+20. **A skirmish that ends.** **✔ done, and provable in one line:**
+    `--skirmish --armies 2 --play 700 --screenshot` plays the whole match from spawn
+    to the victory banner, deterministically — the same command at any shorter
+    duration is a screenshot of that stage of the same match. The opponent's
+    extractor lands at 5.9s, power at 18.5s, a second extractor at 25.0s, the land
+    factory at 55.0s and the first tank off it at 68.0s; the attack goes in at
+    432.1s with all 29 tanks routed, and `team 1 WINS` at 594.4s after 336 shots and
+    32 units destroyed. Your own commander does nothing while you are not there to
+    play it, which is the honest shape of a headless run: seat 0 is the player's.
+    The staged proof is in [A match](#a-match-milestone-20) below.
+
+    Those timings are current, not historical — `make match SECONDS=<n>` re-runs the
+    same match to any moment of it, and `make verify` replays 7000 ticks against
+    `docs/golden-p1.log` and reports `determinism: MATCH`. They have moved once
+    already: the wave used to be a hardcoded 20 tanks launching at 335s, and now
+    that it sizes itself from the unit it is made of, it is 29 and goes in at 432s.
+
+    Most of what the milestone required was not in its plan.
+
+    **The opponent is `core/sim/BuildOrder.hpp`** — three pure functions over a
+    caller-built `ArmyView`, labelled a scripted build order in the source rather
+    than an AI. Even its wave size is the blueprints' own arithmetic rather than a
+    chosen number: a 100-dps commander kills a 300 hp tank every 3 s, so N tanks at
+    24 dps land `72·N(N+1)/2` damage before dying, and the wave is the smallest N
+    that clears the commander's hp with a stated margin — with a test that
+    recomputes that minimum, so the constant cannot drift into taste. It was a
+    hardcoded 20 when the milestone closed; sizing it from the unit it is actually
+    made of is what later moved it to 29.
+
+    **A finished construction had to BECOME A UNIT.** Milestone 19 ended at income
+    bookkeeping; nothing it built ever stood on the map. **Income is now recomputed
+    from what is standing** each tick rather than accumulated when builds finish, so
+    a structure that dies takes its production, upkeep and storage with it — which
+    the incremental version silently got wrong. And **armies start with their
+    storage banked**, as the game does; the empty start survived milestone 19 only
+    because the extractor was the sole build.
+
+    **The match found a weapons bug no corpus test could.** The commander carries
+    `ManualFire` (OverCharge, 12000 damage) and `EnabledByEnhancement` weapons
+    (TacMissile, 2048-elmo range), and the loader read both as ordinary guns — so
+    the player's commander sniped the tank column from a fifth of the map away and
+    killed 19 of 20 before anything arrived. Both flags are read now, and both
+    weapons wait for the order and the upgrade that milestone 20 never gives them.
+
+## Beyond 20 — the window that plays
+
+Milestone 20's match was *pre-run*: the sim ticked headlessly and handed a finished
+scene to the window. Everything below is what closing that gap turned into, plus the
+depth the match needed once it was watchable rather than screenshotted. The full
+design and the rejected alternatives live in [`ADR_DECISIONS.md`](ADR_DECISIONS.md)
+(ADRs 037–049); this is the inventory.
+
+**The window fights.** The frame loop runs the sim tick, and the renderer
+interpolates each drawn transform between the previous and current sim state by the
+fraction of a tick elapsed — so the picture is continuous while the simulation stays
+discrete at 10 Hz. Interpolation is presentation only and never feeds back into sim
+state; `--no-interpolate` turns it off to see the difference.
+
+**An interface with the game's anatomy, in our own instrument language.** A HUD, a
+selection roster grouped by type in first-appearance order (sorting by count would
+reorder the row as units die, which destroys the by-position reading a tiled roster
+exists for), and a build tray that reads *and acts* — click a cell to arm, click the
+ground to place. The **minimap is the map**: the `.scmap`'s own embedded 256²
+preview, skipped for four milestones on a comment that called it "always 256×256
+RGBA8" and was never checked — it is a DDS container, uncompressed BGRA, on all 60
+stock maps. The tray draws **the archives' own icons**: 538 ship in `textures.scd` at
+64×64 DXT5, and because 64 is a multiple of the 4×4 block, packing them into one
+atlas is a memcpy of compressed blocks rather than a decode, a blit and a
+recompress. The **placement ghost** is a batch with no units in it
+([ADR-042](ADR_DECISIONS.md)), coloured by `sitePlaceable` — the same call the
+placement itself makes, so the ghost and the order cannot disagree about a spot.
+`--ui faf` wears the game's own chrome instead.
+
+**Orders grew a vocabulary.** Attack-move and patrol keep their waypoint and borrow
+a target ([ADR-045](ADR_DECISIONS.md)) rather than growing a second hidden order
+queue: the position is the permanent waypoint, the target is a generational handle
+cleared on a kill or a loss, and patrol is a deque whose head rotates to the back on
+arrival. A targeted attack is a pursuit — chase, hold at reach, finish on the kill.
+A patrolling engineer performs at most one service action already inside build reach,
+repair before reclaim, without leaving the route. Beside them: band select, control
+groups, double-click to take the type, the order queue drawn in the world, range
+rings while selected, health bars at the zoom where units are units, strategic
+glyphs at the zoom where they are not, and a refusal drawn as a red cross on the unit
+that cannot go.
+
+**Intel is a refcount grid per alliance** ([ADR-037](ADR_DECISIONS.md)), with
+occlusion as a per-type algorithm: terrain blocks sight by default, radar and sonar
+give a blip without an identity, and cloak, stealth fields and the jammer each hide a
+different thing. Documented with its flags in
+[Fog of war, radar and sonar](#fog-of-war-radar-and-sonar) below.
+
+**The sim grew the decisions that make a match a game.** *Reclaim* turns wrecks back
+into mass at `BuildRate × 5` a second, several reclaimers sharing one wreck first-slot-first
+so the total never exceeds what it held. *Overcharge* is the commander's manual
+weapon as an order: walk into its reach, wait for the energy bar to fill, fire once.
+*Adjacency* makes the base layout a puzzle — skirt rectangles that share an edge
+trade production and upkeep multipliers, with half an ogrid of slack because this
+engine places freely where the game snaps to a grid, and the ghost shows the answer
+before you commit. *Upgrades* let a unit become its blueprint's next self. *Assist*
+([ADR-049](ADR_DECISIONS.md)) is a standing order that lends build power into the
+target's oldest unfinished construction out of the same bank, so it is a real economy
+decision rather than free acceleration. *Shields* ([ADR-048](ADR_DECISIONS.md))
+intercept at the shared damage boundary — before hull falloff, the lowest-slot
+hostile sphere containing the impact absorbs one damage profile and overkill leaks
+proportionally — so beams and death blasts cannot bypass a dome the way projectile-only
+collision would have let them. *Aircraft* fly ([ADR-046](ADR_DECISIONS.md)): air
+commands bypass A* and route directly, held 80 elmos above local terrain, which is
+Recoil's own sourced default clearance. And weapons carry a **two-layer target mask**
+([ADR-047](ADR_DECISIONS.md)) read from FA's own cap tables, so interceptors own the
+sky, bombers and ordinary guns the ground, and no shot leaks into the wrong layer
+through collision or splash.
+
+**Sound, from the game's own banks.** 89 loose `.xwb` files ship under `<install>/sounds`,
+and the cue system first assumed they were xWMA and synthesised placeholders instead.
+Measured, that was wrong: **all 1,737 entries across all 89 retail banks are tag 0** —
+plain little-endian PCM, mostly 16-bit mono at 32 kHz — so decoding needs a header
+walk and a resample, not a codec. Blueprints wire units to entries by name, which is
+why a bank loads into a name-keyed cue map. A mixer, a listener that follows the
+camera, and `--volume` / `--mute`.
+
+**Determinism, with the receipts.** The sim's arithmetic is fixed point, and a test
+proves it is identical at every optimisation level. `--hash-log` writes a per-tick
+state hash and `--check-hash-log` names the tick a divergence began at;
+`--command-log` and `--replay-commands` prove that the same log is the same match.
+Our sim is the only authority on its own behaviour, so a recorded hash log *is* the
+oracle — which is the test that black-box parity projects do not get to have.
+
+**Forged Alliance's own AI plays the opponent** ([ADR-039](ADR_DECISIONS.md),
+[ADR-043](ADR_DECISIONS.md)), behind `--ai-faf`. The hard rule is that vendored AI
+source is **never modified** — a change that can only be made by patching the AI is a
+change to the adapter or to the engine, or it is not made — so it is fetched at
+pinned commits by `make ai` and gitignored, never committed, and there is no local
+copy in history for anyone to quietly edit. The split is FAF's data and code decide
+*what* (builder specs walked by priority, their conditions evaluated by the corpus's
+own `/lua/editor` functions) and the adapter decides *where*. 254 engine names are
+bound, each carrying a `known` / `guessed` confidence tag, and every brain method a
+condition wants and lacks fails closed and is **counted** — the sanity report is the
+ranked to-do list, not a debugging afterthought. `make ai-sanity` is the measurement:
+a 400-second headless match runs 102 of 255 vendored files with 0 failures and no
+dead threads, and the AI builds a real opening — two extractors, a power
+generator and a land factory a side, then 50 tanks off them, 58 of 60 builds
+complete.
+
+    make ai-report    # the sandbox report alone, no map, no window
+    make ai-sanity    # a headless match, closed by what was built and what ran
+    make ai-play      # bots against bots, watched
+
+Honest about what that is not: the manager stack is stood in for by a serialized
+build queue, there is one base location, threat is headcount, and the attack target
+is the adapter's choice. Each is a named stand-in to be replaced by the real corpus
+mechanism as its bindings land. The hypothesis under test is that a game-agnostic
+port can serve a foreign AI without the AI or the sim being modified — not that the
+AI will play well.
+
+**1047 tests, all green**, over 98 test files. Anything that does not touch the GPU
+gets a failing test first, and parsers are tested against the real retail corpus.
+Some of them test the shape of the code rather than its output — that every order
+goes through `applyCommand`, that no caller hand-rolls the sim tick order, that the
+sim holds no file-scope mutable state, that no duration is written in ticks, and that
+the sim knows nothing about drawing.
+
+**What is deliberately still open.** The Lua host arc (milestones 21–25 — a real VM,
+a coroutine scheduler on the 10 Hz tick, and one unit's `Unit.lua` lifecycle diffed
+tick by tick against the native run, which is the oracle no other engine
+reimplementation has had); lockstep networking and FAF lobby integration
+([ADR-030](ADR_DECISIONS.md)); and Linux through an RHI seam
+([ADR-032](ADR_DECISIONS.md)), for which the only present obligation is confinement —
+platform and GPU code stays inside `src/platform` and `src/render`, which is already
+the layout.
 
 ## Build
 
@@ -832,9 +1087,15 @@ swings when you meant to select is the most disorienting thing an RTS camera can
 |---|---|
 | `W` `A` `S` `D` | pan the map. Speed is scaled by the frustum's width at the target, so it feels the same zoomed in as out — one and a half seconds to cross the visible width |
 | left click | select one of YOUR units. Shift/cmd/ctrl adds to the set |
-| right click | order: move to the ground, or attack the enemy under the cursor |
+| left drag | band-select everything of yours inside the rectangle |
+| double click | widen to the TYPE — every unit like it that projects into the viewport. On screen rather than map-wide, because both reference games do that, and "everything like this, everywhere" silently commits units you cannot see |
+| right click | order: move to the ground, attack the enemy under the cursor, **assist** your own builder (lend it your build rate), or **reclaim** the wreck |
+| cmd + right click | overcharge: fire the commander's manual weapon at the target once the energy bar has filled |
 | `shift+A`, then right click | attack-move: engage visible enemies on the route, then resume the destination |
 | `P`, then right click | patrol between the unit's starting point and the destination; repeat `P`, then shift-right-click to add a waypoint |
+| shift + any order | queue it behind the ones already given, drawn in the world as you go |
+| `ctrl`+`0`–`9` / `0`–`9` | set a control group / recall it, the dead pruned out on recall |
+| click a tray cell, then the ground | build: the ghost is cyan where the footprint fits and red where it does not. Right-click or a second cell click cancels |
 | hold `space` + drag | swing the camera. Let go and it returns to the overhead view the app opened with, so a glance never costs you your bearings |
 | shift + drag | pan with the mouse |
 | scroll | zoom |
@@ -941,17 +1202,26 @@ FA="/path/to/Supreme Commander Forged Alliance"
 # opponent (a fixed build order plus one attack wave — core/sim/BuildOrder.hpp,
 # not an AI) builds a base, streams tanks, and comes for your commander.
 ./build/recoil-metal "$FA/maps/SCMP_009/SCMP_009.scmap" --gamedata "$FA/gamedata" \
-    --skirmish --armies 2 --play 520 \
+    --skirmish --armies 2 --play 620 \
     --screenshot /tmp/victory.png 1280 720
 
 # The same match at any earlier moment is a screenshot of that stage:
-#   12s the first extractor, 60s the base, 76s the first tank off the line,
-#   450s the attack column, 483s the fight at your commander's feet.
-# --look aims the capture at a world point (X Z RADIUS-around-it, elmos).
+#   6s the first extractor, 19s power, 55s the land factory, 68s the first tank
+#   off the line, 432s the attack column, 590s the fight at your commander's
+#   feet, 594s the banner.
+# --focus frames the first instance — the player's commander, which is exactly
+# where the wave arrives; --look aims at a world point instead (X Z RADIUS).
 ./build/recoil-metal "$FA/maps/SCMP_009/SCMP_009.scmap" --gamedata "$FA/gamedata" \
-    --skirmish --armies 2 --play 450 --look 5020 3150 340 \
-    --screenshot /tmp/the-attack.png 1280 720
+    --skirmish --armies 2 --play 590 --focus \
+    --screenshot /tmp/the-fight.png 1280 720
 ```
+
+The stage times above are what the match does *now*, and they have moved once:
+the attack wave used to be a hardcoded 20 tanks going in at 335s, and now that it
+sizes itself from the unit it is made of it is 29 tanks at 432s, with the banner
+at 594.4s rather than 502.2s. `make verify` is the guard that the movement was
+intended — it replays 7000 ticks against `docs/golden-p1.log` and prints
+`determinism: MATCH`.
 
 `--play <seconds>` is `--march` without the blanket move order — the sim runs
 and the scripted armies decide their own movement. `--armies N` takes the first
@@ -960,10 +1230,10 @@ player is army 0 and the script drives everyone else.
 
 | | |
 |---|---|
-| ![the opponent's base](docs/images/m20-2-base.jpg) | ![the attack column](docs/images/m20-4-attack.jpg) |
-| **1:00** — the opponent's base: extractor, power, factory | **7:30** — twenty tanks, attack-moving |
+| ![the opponent's base](docs/images/m20-2-base.jpg) | ![the first tank off the line](docs/images/m20-3-tank.jpg) |
+| **1:00** — the opponent's base: extractor, power, factory | **1:08** — the first tank rolls off the pad |
 | ![the fight](docs/images/m20-5-battle.jpg) | ![the banner](docs/images/m20-6-victory.jpg) |
-| **8:03** — the wave reaches the player's commander | **8:40** — a match that *ends* |
+| **9:50** — the wave arrives at the player's commander, health bars over the damaged | **9:54** — a match that *ends* |
 
 ### Fog of war, radar and sonar
 
@@ -1007,8 +1277,22 @@ Recoil's: a reference count per square per alliance, so one unit's sight can be
 withdrawn without re-deriving every other unit's. The grid is integer and enters
 the state hash, so `--hash-log` and `make verify` cover it with no new machinery.
 
-Not yet: the other nine Forged Alliance intel types — omni, cloak, the stealth
-fields, jammers and their fake blips.
+**Since then, eight of ADR-037's nine landed.** *Omni* sees everything in its
+radius, cloaked and stealthed alike — 17 units declare one — and it is a grid of
+its own rather than a flag on the vision grid, because it answers a different
+question at contact time: vision asks "is this square lit", omni asks "is this
+square lit by something nothing can hide from". Merging them would have meant
+either stealth defeats omni or stealth defeats nothing. *Cloak* and the two
+per-unit stealth flags hide a unit from a named sense; the *stealth fields* (the
+B4203 generators, seven units declaring each radius) are a second kind of grid
+entirely — "who is HIDDEN here" rather than "who can see here", keyed by the
+field owner's alliance rather than the viewer's. *CloakField* has no entry
+because it appears zero times in retail content.
+
+Still absent, each for its own stated reason: a water-vision grid (nothing is
+submerged yet, so it would have no target to answer about and no test that could
+tell it from an empty one), air LOS (it needs a flying/grounded distinction the
+coverage query does not yet make), and seismic.
 
 ### Supreme Commander models
 
@@ -1128,6 +1412,39 @@ Ground colour comes from the map's terrain-type array rather than a texture:
 `.scmap` ships no baked ground, so until the splat shader exists those bands are
 the stand-in. No game assets are read from anywhere but the retail install.
 
+### Every flag
+
+The walkthrough above uses about half of these. The rest exist for the same
+reason `--screenshot` does: **a headless run has no cursor**, and interface that
+only appears under one cannot otherwise be captured, tested, or diffed.
+
+| flag | does |
+|---|---|
+| `--gamedata <dir>` / `--data-dir <dir>` / `--archive <file>` | where content is found: the retail `gamedata` folder, a loose tree, or one `.scd`/`.sdz` mounted by hand |
+| `--units <path> <n>` | spawn N of a model or blueprint, scattered deterministically |
+| `--factions <a,b,…>` | each seat's side, cycled — mirrors and matchups are one flag |
+| `--armies <n>` / `--alliances <n>` | how many of the map's start positions are seated, and how they pair up |
+| `--skirmish` | spawn commanders and run the match rules |
+| `--observer` | watch without a seat: no fog, no selection, nobody's commander |
+| `--march <x> <z> <s>` / `--play <s>` | pre-run the sim: with a blanket move order, or letting each side decide |
+| `--tick-rate <hz>` | the sim's rate for this run, 5–50 Hz. Applied *first*, because speeds and reloads derive from it at spawn |
+| `--no-interpolate` | draw the newest snapshot rather than blending two. **Every golden image is taken with this** — a screenshot of tick N should *be* tick N, not depend on when the process was scheduled |
+| `--focus` / `--look <x> <z> <r>` | aim the capture at the first instance, or at a world point |
+| `--select <n>` / `--hover <n>` / `--ghost <x> <z>` | light up interface a headless run has no cursor to produce: N units selected, the Nth tray option hovered with its info card, the placement ghost at a world point |
+| `--ui faf` | wear the game's own chrome instead of ours |
+| `--vision-style <recoil\|fa>` | whether terrain blocks sight |
+| `--ai-faf` | FAF's own AI plays every army, through the sandbox |
+| `--ai-log` / `--ai-debug` / `--ai-sanity` | narrate the AI's decisions and the corpus's own `LOG` lines; the debug report; the closing census of what was built, which bindings were called, and which corpus functions ran |
+| `--hash-log <f>` / `--check-hash-log <f>` | write a per-tick state hash, or replay against one and name the tick a divergence began at |
+| `--command-log <f>` / `--replay-commands <f>` | record the orders given, or play them back into the same match |
+| `--print-events` | narrate the sim's own event queue |
+| `--volume <0–1>` / `--mute` | the mixer |
+| `--dump-weapon <id>` | print one blueprint's weapons as the loader read them |
+| `--bench <n>` / `--bench-offscreen <n> <csv>` | windowed and vsync-limited, or headless and unthrottled — the second is the comparable number |
+| `--screenshot <f> <w> <h>` | render one frame offscreen and exit |
+| `--time <s>` / `--animate` | advance the clock before capturing; run model animation |
+| `--no-reflections` `--no-stratum-normals` `--no-props` `--refraction` | quality, as in the table above |
+
 ### Screenshots
 
 `--screenshot` renders one frame offscreen and writes a PNG. No window, so it
@@ -1186,16 +1503,33 @@ recoil-metal/
 ├── CMakeLists.txt      single build file, sections commented
 ├── src/
 │   ├── core/           pure C++ — no Metal, no AppKit, fully unit-tested
-│   │   ├── map/        SMF/SMT loaders, mapinfo.lua, tile atlas
+│   │   ├── sim/        the simulation: units, orders, combat, economy,
+│   │   │               pathing, intel, reclaim, shields, replay, hashing
+│   │   ├── unit/       unit definitions, the build tree, adjacency tables
+│   │   ├── blueprint/  Supreme Commander `.bp` reading
+│   │   ├── map/        SMF/SMT and `.scmap` loaders, mapinfo.lua, tile atlas
+│   │   ├── model/      `.s3o` and `.scm`/`.sca` into one model struct
+│   │   ├── scene/      what is drawn, and the batches it is drawn in
+│   │   ├── ui/         HUD, minimap, build tray, roster, icon atlas
+│   │   ├── audio/      XACT wave banks, mixer, cues
+│   │   ├── vfs/        archive mounting and search-path priority
 │   │   ├── lua/        Lua table-literal reader (data, not programs)
+│   │   ├── data/       the shipped openings and tables
 │   │   ├── mesh/       heightfield triangulation
+│   │   ├── texture/    DDS decoding and atlas packing
+│   │   ├── text/       glyph atlas
+│   │   ├── bench/      the benchmark harness
+│   │   ├── settings/   quality switches
 │   │   └── camera/     orbit camera + projection
+│   ├── app/            wiring: CLI, the match loop, the FAF AI adapter
 │   ├── render/         Metal renderer (Objective-C++ where bridging)
 │   ├── platform/       AppKit window + display link (pImpl hides ObjC)
 │   └── main.mm         thin entry point
-├── tests/              Catch2 unit tests, mirrors src/core
-├── third_party/        metal-cpp (git-cloned, gitignored)
-└── docs/               research notes, benchmark results
+├── tests/              Catch2 unit tests, mirrors src/core — 98 files, 1047 tests
+├── third_party/        metal-cpp and miniz (fetched, gitignored)
+├── vendor/ai/          foreign AI corpora at pinned commits (fetched, gitignored,
+│                       NEVER modified — `make ai`, ADR-039)
+└── docs/               research notes, benchmark results, the golden hash log
 ```
 
 ## Legal

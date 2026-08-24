@@ -156,6 +156,46 @@ void appendStrategicIcons(rm::ui::Geometry& out, const UnitScene& scene,
                            const rm::OrbitCamera& camera, float width, float height,
                            std::span<const std::optional<StrategicIconRef>> refs);
 
+/// Whether a row in `scene.building` is work still going on, and how far along it is.
+///
+/// TWO RULES THAT BOTH COST A BUG. `scene.building` is a LEDGER, not a queue: the sim reports
+/// what newly completed and removes nothing, because the census counts a standing extractor by
+/// finding its completed row (`Match.cpp`'s `standingFor`). Drawing every row put a permanent
+/// half-built ghost on top of every building an army had ever finished. And a blueprint that
+/// states no build time has a total of zero, which reads as "complete" to any division and as
+/// "nothing to draw" to a renderer — the honest answer is that it has barely started, since the
+/// work still runs on the economy's own schedule.
+[[nodiscard]] bool constructionInProgress(const rm::sim::Construction& work) noexcept;
+[[nodiscard]] float constructionProgress(const rm::sim::Construction& work) noexcept;
+
+/// Every construction the player can see, as something to draw at its site.
+///
+/// THE MISSING BODY. `sim::Construction` is an economic row and nothing more — the sim spawns
+/// no unit until the work completes — so between ordering a building and its arrival the site
+/// was bare ground. This is the translation step that gives it one: the product's model, its
+/// progress, and the builder's faction, which is what decides the effect.
+///
+/// RESOLVES THE PRODUCT'S MODEL ON DEMAND, through `ensureDrawableType`: a construction is the
+/// first time in a match that a blueprint needs to be DRAWN, and until now that only happened
+/// when the finished unit spawned. The batch list may therefore grow inside this call, which is
+/// why the caller must upload before drawing (see the frame loop's `uploadNewBatches`).
+///
+/// Fogged sites are left out — a construction is a building the enemy has not seen yet, and
+/// drawing one through the fog would be a free scouting report.
+void gatherConstructions(UnitScene& scene, const rm::vfs::Vfs& content,
+                         const rm::HeightField& field,
+                         std::vector<rm::Renderer::ConstructionDraw>& out);
+
+/// The ground and air effects that go with them: a glowing pad under each site, and a stream
+/// of motes from every builder working on one.
+///
+/// SEPARATE FROM THE MODEL PASS because they ride existing machinery — the pad is a ground
+/// decal like a selection ring, the stream is particles like dust — and adding a third
+/// pipeline for a line of light would be a pipeline to maintain for one effect.
+void appendConstructionEffects(std::vector<rm::DecalVertex>& decals,
+                               std::vector<rm::Particle>& particles, const UnitScene& scene,
+                               const rm::HeightField& field, float seconds);
+
 /// Anonymous world-space crosses at radar/sonar-reported positions. They deliberately use
 /// only `Contact::x/z`: no type, owner, health, or true position crosses the fog boundary.
 void appendContactBlips(rm::ui::Geometry& out, const UnitScene& scene,

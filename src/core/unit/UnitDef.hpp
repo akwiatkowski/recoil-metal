@@ -141,6 +141,30 @@ struct UnitDef {
     /// against a spacing none of them needs.
     float collisionRadiusElmos = 0.0f;
 
+    /// How TALL the collision box is, in elmos — `SizeY`, the axis the radius above discards.
+    ///
+    /// READ FOR ONE REASON: a sensor is not on the ground. The raycast sight model
+    /// (`sim::Intel.hpp`, `VisionStyle::Recoil`) asks where the eye IS, and it was being handed
+    /// the unit's own transform — the terrain height under its feet — so every unit in the game
+    /// looked out from ankle level and a commander could not see over a rise its own head
+    /// cleared. The top of the collision box is the honest stand-in: the blueprints state no
+    /// sensor mount, and this is the only height they state at all.
+    ///
+    /// Zero for content that omits `SizeY`, which reads as ground level and is exactly the old
+    /// behaviour — a silent default that changes nothing rather than a guess.
+    float sizeYElmos = 0.0f;
+
+    /// How tall the unit LOOKS, in elmos — `Physics.MeshExtentsY`, or the collision height when
+    /// the blueprint states no extents.
+    ///
+    /// A DIFFERENT QUESTION FROM `sizeYElmos`, and the shipped corpus makes the difference
+    /// plain: a UEF land factory is `SizeY = 0.6` and `MeshExtentsY = 4.5`, because its
+    /// collision box is the low apron tanks drive over and its mesh is the whole gantry above.
+    /// Sight wants the first (an eye sits on the body); the construction effect wants the
+    /// second, because it sweeps a plane up the MODEL and a plane that finished at 4.8 elmos
+    /// would leave a factory's roof standing complete before the work was a fifth done.
+    float meshHeightElmos = 0.0f;
+
     /// What this unit moves through. See MotionType: for the Supreme Commander
     /// family it is read from the file, for BAR it is inferred from the fields
     /// that family does state.
