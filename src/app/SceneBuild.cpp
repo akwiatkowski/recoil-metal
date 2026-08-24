@@ -22,6 +22,36 @@ namespace rm::app {
     return rm::data::moveDefFor(def).usesSurfaceWaterGrid;
 }
 
+/// The movement state a unit of this definition is born with.
+///
+/// ONE DERIVATION, because there are two spawn paths and they drifted. `spawnUnit` built this by
+/// hand and `spawnCommanders` set only the army index — so every commander in the game started
+/// with `speedPerTick` and `turnPerTick` at zero, which are `MoveState`'s deliberate defaults.
+///
+/// That is the whole of the "I right click and the commander is standing still" report, and it
+/// is invisible from every angle an assertion was looking from: the route is FOUND, the order is
+/// ACCEPTED, the queue line is drawn to the destination, and no refusal is printed — the unit
+/// simply multiplies its step by a speed of zero forever. A headless `--march` reports "2 of 2
+/// units routed" and is telling the truth about routing while saying nothing about motion.
+///
+/// Rates are per second in the blueprint and per tick in the sim (§5.1). A structure keeps the
+/// zeroes, which is what makes it a structure as far as movement is concerned.
+rm::sim::MoveState motionFor(const rm::unitdef::UnitDef& def, int armyIndex) {
+    rm::sim::MoveState motion;
+    motion.armyIndex = armyIndex;
+    motion.airborne = def.motion == rm::unitdef::MotionType::Air;
+    motion.surfaceWater = floatsOnWater(def);
+    motion.radiusElmos = rm::sim::fxFromFloat(def.collisionRadiusElmos);
+    if (def.isMobile()) {
+        motion.speedPerTick = gAppTickRate.perTick(def.speedElmosPerSecond);
+        motion.turnPerTick =
+            def.turnRateRadiansPerSecond > 0.0f
+                ? gAppTickRate.bradPerTick(def.turnRateRadiansPerSecond)
+                : gAppTickRate.bradPerTick(rm::sim::kDefaultTurnRateRadiansPerSecond);
+    }
+    return motion;
+}
+
 /// Resolves each weapon's muzzle bone against the model's skeleton — the one moment both
 /// the blueprint's bone NAME and the model's bone POSITIONS are in hand. The height is the
 /// bone's rest-pose global Y scaled into elmos; anything at ground level or below keeps the
@@ -433,11 +463,14 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
         // `atStartPositions` places a `UnitInstance` because that is what the placement
         // helper has always produced; only its position is wanted here, and the colour and
         // scale it also sets are now the draw projection's business.
-        rm::sim::MoveState motion;
-        motion.armyIndex = army.index;
-
         const auto type = static_cast<rm::UnitTypeIndex>(batch);
         const rm::unitdef::UnitDef* def = scene.catalog.def(type);
+        // FROM THE DEFINITION, like every other spawn. This used to set the army index and
+        // nothing else, which left the first unit of every match — the one the player drives —
+        // unable to move at any speed. See `motionFor`.
+        const rm::sim::MoveState motion =
+            def != nullptr ? motionFor(*def, army.index)
+                           : rm::sim::MoveState{.armyIndex = army.index};
         const rm::sim::Mag hp = def != nullptr ? def->health : rm::sim::Mag{};
         (void)scene.store.spawn(rm::sim::UnitStore::Spawn{
             .type = type,
@@ -593,23 +626,7 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
     transform.z = rm::sim::fxFromFloat(position[2]);
     transform.heading = rm::sim::bradFromRadians(yaw);
 
-    rm::sim::MoveState motion;
-    motion.armyIndex = army.index;
-    motion.airborne = def.motion == rm::unitdef::MotionType::Air;
-    motion.surfaceWater = floatsOnWater(def);
-    motion.radiusElmos = rm::sim::fxFromFloat(def.collisionRadiusElmos);
-    if (def.isMobile()) {
-        // Per second in the blueprint, per tick in the sim — converted here because this is
-        // where a unit is built from its definition (§5.1). A structure gets zero, which is
-        // what makes it a structure as far as movement is concerned.
-        motion.speedPerTick = gAppTickRate.perTick(def.speedElmosPerSecond);
-        if (def.turnRateRadiansPerSecond > 0.0f) {
-            motion.turnPerTick = gAppTickRate.bradPerTick(def.turnRateRadiansPerSecond);
-        } else {
-            motion.turnPerTick =
-                gAppTickRate.bradPerTick(rm::sim::kDefaultTurnRateRadiansPerSecond);
-        }
-    }
+    const rm::sim::MoveState motion = motionFor(def, army.index);
     rm::sim::placeOnMotionLayer(transform, motion, scene.terrain(field));
 
     const rm::sim::UnitId id = scene.store.spawn(rm::sim::UnitStore::Spawn{

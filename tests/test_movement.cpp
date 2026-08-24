@@ -7,6 +7,7 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include "app/SceneBuild.hpp"  // motionFor — the one derivation both spawn paths use
 #include "core/map/HeightField.hpp"
 #include "core/scene/UnitPlacement.hpp"
 #include "core/sim/Combat.hpp"  // headingError, for the angle assertions
@@ -927,4 +928,54 @@ TEST_CASE("a stale index answers about where units were") {
     crowd.separate(field);
     CHECK(rm::sim::fxHypot(crowd.at(0).x - crowd.at(1).x, crowd.at(0).z - crowd.at(1).z)
           > rm::sim::Fx{});
+}
+
+TEST_CASE("a mobile unit is born able to move, whichever spawn path made it",
+          "[movement][scene]") {
+    // THE BUG THIS EXISTS FOR, and it is the one the whole order path is invisible to. There
+    // are two spawn paths; `spawnCommanders` set the army index and nothing else, so every
+    // commander in the game — the first unit of every match and the one the player drives —
+    // started with `speedPerTick` and `turnPerTick` at zero, which are `MoveState`'s deliberate
+    // defaults, and with no collision radius either.
+    //
+    // Nothing an assertion aimed at ordering could see: `findPath` returns a route,
+    // `applyCommand` accepts it, `moving` goes true, the queue line is drawn to the
+    // destination, and no refusal is printed. `Movement::tick` then multiplies its step by a
+    // speed of zero, forever. A headless `--march` reports "2 of 2 units routed" and is telling
+    // the truth about routing while saying nothing whatsoever about motion.
+    rm::unitdef::UnitDef tank;
+    tank.name = "UEL0201";
+    tank.motion = rm::unitdef::MotionType::Land;
+    tank.speedElmosPerSecond = 14.0f;
+    tank.turnRateRadiansPerSecond = 1.57f;
+    tank.collisionRadiusElmos = 4.0f;
+
+    const rm::sim::MoveState moving = rm::app::motionFor(tank, 0);
+    CHECK(moving.armyIndex == 0);
+    CHECK(moving.speedPerTick > rm::sim::Fx{});
+    CHECK(moving.turnPerTick > 0);
+    CHECK(moving.radiusElmos > rm::sim::Fx{});
+    CHECK_FALSE(moving.airborne);
+
+    // A unit whose blueprint states no turn rate still turns — otherwise it would pivot for
+    // ever at the destination it is already facing away from.
+    rm::unitdef::UnitDef turnless = tank;
+    turnless.turnRateRadiansPerSecond = 0.0f;
+    CHECK(rm::app::motionFor(turnless, 0).turnPerTick > 0);
+
+    // A STRUCTURE KEEPS THE ZEROES, which is what makes it a structure as far as movement is
+    // concerned — the fix must not hand every building a speed.
+    rm::unitdef::UnitDef factory;
+    factory.name = "UEB0101";
+    factory.motion = rm::unitdef::MotionType::None;
+    factory.collisionRadiusElmos = 17.6f;
+    const rm::sim::MoveState still = rm::app::motionFor(factory, 1);
+    CHECK(still.speedPerTick == rm::sim::Fx{});
+    CHECK(still.turnPerTick == 0);
+    CHECK(still.radiusElmos > rm::sim::Fx{});  // it still occupies ground
+
+    // Air is flagged from the definition, because collision and height both read it.
+    rm::unitdef::UnitDef bomber = tank;
+    bomber.motion = rm::unitdef::MotionType::Air;
+    CHECK(rm::app::motionFor(bomber, 0).airborne);
 }

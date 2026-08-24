@@ -96,6 +96,21 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
                      const rm::vfs::Vfs& content, bool observer = false,
                      std::span<const rm::sim::Faction> factions = {});
 
+/// The movement state a unit of this definition is born with — the ONE derivation both spawn
+/// paths use.
+///
+/// EXPORTED TO BE TESTED, because the two paths drifted and the drift was undetectable from
+/// outside. `spawnCommanders` set the army index and nothing else, so every commander started
+/// with `speedPerTick` and `turnPerTick` at zero — `MoveState`'s deliberate defaults — and also
+/// with no collision radius. The player's own unit could not move at any speed and did not
+/// collide with anything.
+///
+/// Nothing about that is visible to an assertion aimed at the order path: the route is found,
+/// the order is accepted, the queue line is drawn, and no refusal is printed. The unit
+/// multiplies its step by a speed of zero. A headless `--march` reports "2 of 2 units routed"
+/// and is telling the truth about routing while saying nothing about motion.
+[[nodiscard]] rm::sim::MoveState motionFor(const rm::unitdef::UnitDef& def, int armyIndex);
+
 /// The DRAWABLE registration half of `spawnUnit`: model, textures, batch, type and traits,
 /// without spawning anything into the store. Idempotent per blueprint — the second call is a
 /// map lookup.
