@@ -154,9 +154,10 @@ inline constexpr Seconds kProjectileLifetime = Seconds{30.0f};
 /// engine is making rather than one it inherited.
 [[nodiscard]] std::optional<UnitId> nearestTarget(std::array<Fx, 3> from, int fromArmy,
                                                   const unitdef::Weapon& weapon,
-                                                  const UnitStore& store,
-                                                  std::span<const Army> armies,
-                                                  const Intel* intel = nullptr);
+                                                   const UnitStore& store,
+                                                   std::span<const Army> armies,
+                                                   const Intel* intel = nullptr,
+                                                   const UnitCatalog* catalog = nullptr);
 
 /// The bearing from `from` to `to`, in radians, measured the way a unit's yaw is.
 ///
@@ -234,11 +235,9 @@ void tickShields(UnitStore& store, const UnitCatalog& catalog,
 
 /// Moves every projectile one tick, applies what lands, and removes what is spent.
 ///
-/// A shot lands when it reaches its target's ground position or its height falls to the
-/// ground — not when it collides with a model, because instances are points here and
-/// their geometry is neither known nor cheap to test.
-/// `catalog` is how a target's armour class is discovered; null means every target is ordinary
-/// armour, which is the pre-P10.1 behaviour and what a scene with no types should get.
+/// A shot lands on the first hostile collision box crossed by this tick's 3D segment, or when
+/// its endpoint reaches the ground. `catalog` supplies authored target height and armour; null
+/// falls back to a diameter-high box and ordinary armour.
 void advanceProjectiles(std::vector<Projectile>& projectiles, UnitStore& store,
                         std::span<const Army> armies, const Terrain& terrain, TickRate rate,
                         EventQueue* events = nullptr, const UnitCatalog* catalog = nullptr);

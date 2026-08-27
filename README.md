@@ -19,7 +19,7 @@ gets reimplemented.**
 - **Deterministic.** The sim is fixed point, proved identical at every
   optimisation level by a test. `--hash-log` writes a per-tick state hash and
   `--check-hash-log` names the tick a divergence began at.
-- **Tested.** **1077 tests across 98 files, all green.** Anything that does not
+- **Tested.** **1088 tests across 98 files, all green.** Anything that does not
   touch the GPU gets a failing test first, and parsers are tested against the
   real retail corpus — all 2034 BAR `.s3o` models and 2552 `.dds` textures.
 - **It plays.** Economy, construction, weapons, shields, aircraft, fog of war,
@@ -28,9 +28,11 @@ gets reimplemented.**
 - **Both content families.** Recoil `.smf`/`.smt` maps with `.s3o` models, and
   Supreme Commander `.scmap` maps with `.scm` models, in one scene if you like.
   The loader is picked by the file's own magic bytes.
-- **Foreign AI, unmodified.** Forged Alliance's own Lua AI corpus plays the
-  opponent's opening, vendored at a pinned commit and **never patched** — 254
-  engine names bound, 102 of 255 corpus files running in a headless match.
+- **Foreign AI, unmodified.** Forged Alliance's own Lua builder data and
+  condition functions choose the opponent's opening through a native placement
+  adapter. The corpus is vendored at a pinned commit and **never patched**: 254
+  engine names are bound and 107 of 255 vendored files ran in the latest
+  650-second headless sanity match. Its manager stack is not hosted yet.
 - **No Xcode, no assets.** Apple clang from the Command Line Tools is enough;
   shaders compile from source at runtime. Two small vendored dependencies, both
   fetched. No game content is committed, ever.
@@ -61,6 +63,26 @@ on the 10 Hz tick, one unit's `Unit.lua` lifecycle diffed tick by tick against
 the native run), lockstep networking and FAF lobby integration, and Linux
 through an RHI seam — for which the only present obligation is confinement, and
 platform and GPU code already stays inside `src/platform` and `src/render`.
+
+### Forged Alliance gameplay gaps
+
+This is a playable vertical slice, not a claim of Forged Alliance feature
+parity. The generic implementations cover ordinary economy, construction,
+combat, shields, aircraft, surface ships, intel, reclaim and tech upgrades, but
+large parts of the retail roster still lack the behaviour that gives them their
+role.
+
+| State | Systems |
+|---|---|
+| **Partial** | large-army pathing and formations; aircraft flight, bombing, fuel and staging; surface naval combat; shield variants; experimentals; factory controls; repair and guard; wreck semantics; FAF AI |
+| **Absent** | submarines and submerged combat; transports and cargo; tactical and strategic missiles, silo ammunition and interception; ACU/SCU enhancements; veterancy; capture and gifting; unit caps; terrain deformation; alternate victory conditions |
+
+The shortest route to those systems is four shared foundations rather than one
+special case per unit: complete movement and target layers, generalized
+projectiles with ammunition and interception, generalized builder work, and
+persistent production controls with mutable unit capabilities. The detailed
+dependency order and milestone history live in [`PLAN.md`](PLAN.md) and
+[`docs/milestones.md`](docs/milestones.md).
 
 ### The question it exists to answer
 
@@ -164,7 +186,7 @@ Then build and test. Catch2 is fetched by CMake at configure time:
 ```sh
 make build
 make test
-#   100% tests passed, 0 tests failed out of 1077
+#   100% tests passed, 0 tests failed out of 1088
 ```
 
 Or without the Makefile:
@@ -291,7 +313,7 @@ FA="/path/to/Supreme Commander Forged Alliance"
 The stage times above are what the match does *now*, and they have moved once:
 the attack wave used to be a hardcoded 20 tanks going in at 335s, and now that it
 sizes itself from the unit it is made of it is 29 tanks at 432s, with the banner
-at 594.4s rather than 502.2s. `make verify` is the guard that the movement was
+at 594.2s rather than 502.2s. `make verify` is the guard that the movement was
 intended — it replays 7000 ticks against `docs/golden-p1.log` and prints
 `determinism: MATCH`.
 
@@ -769,7 +791,7 @@ recoil-metal/
 │   ├── render/         Metal renderer (Objective-C++ where bridging)
 │   ├── platform/       AppKit window + display link (pImpl hides ObjC)
 │   └── main.mm         thin entry point
-├── tests/              Catch2 unit tests, mirrors src/core — 98 files, 1047 tests
+├── tests/              Catch2 unit tests, mirrors src/core — 98 files, 1088 tests
 ├── third_party/        metal-cpp and miniz (fetched, gitignored)
 ├── vendor/ai/          foreign AI corpora at pinned commits (fetched, gitignored,
 │                       NEVER modified — `make ai`, ADR-039)

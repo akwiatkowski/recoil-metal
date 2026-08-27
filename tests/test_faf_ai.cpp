@@ -209,6 +209,66 @@ TEST_CASE("the thread model runs: fork, wait, resume on the right tick, die alon
     CHECK(ai.threadsAlive() == 0);
 }
 
+TEST_CASE("forking from inside a resume does not corrupt the scheduler",
+          "[faf][ai][threads]") {
+    // The regression this pins: pump holds a Thread& across lua_resume, and a fork inside
+    // that resume grows the container. A vector reallocated there and every later write
+    // through the reference landed in freed storage; a deque promises the elements never
+    // move, so the reference survives.
+    const std::filesystem::path root = corpusRoot();
+    if (root.empty()) {
+        SKIP("no vendored corpus; run `make ai`");
+    }
+    FafAi ai(root);
+    REQUIRE(ai.ready());
+
+    // Enough forks to walk the container through several growths while earlier references
+    // are still live inside pump. A forked thread is due immediately, so all 2000 children
+    // run in this same pass — after the spawner has finished forking them.
+    REQUIRE(ai.eval(R"(
+        done = 0
+        ForkThread(function()
+            for i = 1, 2000 do
+                ForkThread(function() done = done + 1 end)
+            end
+        end)
+    )"));
+    (void)ai.pump(0);
+    REQUIRE(ai.eval("assert(done == 2000)"));
+    CHECK(ai.threadErrors().empty());
+    CHECK(ai.threadsAlive() == 0);  // every child ran to completion and died cleanly
+}
+
+TEST_CASE("a thread that kills itself mid-body is reclaimed without leaking its refs",
+          "[faf][ai][threads]") {
+    const std::filesystem::path root = corpusRoot();
+    if (root.empty()) {
+        SKIP("no vendored corpus; run `make ai`");
+    }
+    FafAi ai(root);
+    REQUIRE(ai.ready());
+
+    // KillThread(self) marks the thread dead WHILE pump holds it resumed. The body after
+    // the kill still returns (Lua runs on), but nothing scheduled may ever run again — and
+    // the sweep at the end of the pump must release both registry refs, which an inline
+    // unref at resume time cannot do for a thread that died from inside.
+    REQUIRE(ai.eval(R"(
+        reached = 0
+        ForkThread(function()
+            KillThread(CurrentThread())
+            reached = reached + 1   -- Lua keeps running to the end of the body...
+        end)
+    )"));
+    CHECK(ai.pump(0) == 1);
+    CHECK(ai.threadsAlive() == 0);
+    // ...and it did, once: the kill stops SCHEDULING, not the current slice.
+    REQUIRE(ai.eval("assert(reached == 1)"));
+
+    // The dead thread stays dead: no further pump revives it.
+    CHECK(ai.pump(1) == 0);
+    REQUIRE(ai.eval("assert(reached == 1)"));
+}
+
 TEST_CASE("bare table iteration works, as LuaPlus meant it", "[faf][ai]") {
     const std::filesystem::path root = corpusRoot();
     if (root.empty()) {

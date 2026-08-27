@@ -356,11 +356,14 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
     }
 
     if (!match.over) {
-        const std::size_t left = survivorCount(match.armies);
-        if (left <= 1) {
+        const std::optional<int> winner = winningAlliance(match.armies);
+        // A team wins when it is the only ALLIANCE left, even if several allied armies
+        // survived. `survivorCount <= 1` left a successful 2v2 running forever. No
+        // survivors is the other terminal state and remains an ordinary draw.
+        if (winner || survivorCount(match.armies) == 0) {
             match.over = true;
             report.matchEnded = true;
-            report.winner = winningAlliance(match.armies);
+            report.winner = winner;
             // A draw is an ordinary outcome — every commander dying at once — so the event
             // carries `kNoArmy` rather than being suppressed.
             emit(match.events, Event{.kind = EventKind::GameOver,
@@ -428,6 +431,7 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
                 work = mine[next];
                 ++next;
                 if (!wasFinished && work.finished()) {
+                    finishBuildOrder(store, work);
                     report.finished.push_back(work);
                     emit(match.events,
                          Event{.kind = EventKind::ConstructionFinished,

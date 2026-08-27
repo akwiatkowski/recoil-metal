@@ -9,6 +9,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <vector>
 
@@ -352,6 +353,13 @@ struct Contact {
 
     [[nodiscard]] bool isBlip() const noexcept { return kind != ContactKind::Seen; }
 };
+
+/// Classifies one real unit with the same cloak, stealth-field, omni and free-intel rules used
+/// by the contact list. Automatic targeting accepts only `Seen`; radar and sonar remain
+/// anonymous positions rather than targetable identities.
+[[nodiscard]] std::optional<ContactKind> contactKindForUnit(
+    int alliance, UnitIndex target, const UnitStore& store, const UnitCatalog& catalog,
+    std::span<const Army> armies, const Intel& intel) noexcept;
 
 /// How far a radar contact can be from the truth — Recoil's `defBaseRadarErrorSize`
 /// (`LosHandler.h:322`), 96 elmos.

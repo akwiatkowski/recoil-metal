@@ -72,14 +72,28 @@ namespace {
     return true;
 }
 
+[[nodiscard]] bool hasActiveConstruction(std::span<const Construction> building,
+                                         UnitId builder) noexcept {
+    return std::ranges::any_of(building, [builder](const Construction& work) {
+        return !work.finished() && work.builder == builder;
+    });
+}
+
+void cancelActiveConstruction(std::vector<Construction>* building, UnitId builder) {
+    if (building == nullptr) {
+        return;
+    }
+    std::erase_if(*building, [builder](const Construction& work) {
+        return !work.finished() && work.builder == builder;
+    });
+}
+
 /// Whether an order is finished the moment it is started.
 ///
-/// `Stop` and `Build` are: neither occupies the unit afterwards — a stop is instantaneous by
-/// definition, and a construction is paid for by the economy rather than attended by the
-/// builder. `Move` and `Attack` are not, and the unit's `moving` flag is what says when they
-/// are done.
+/// A stop is instantaneous by definition. A build occupies its founder until completion;
+/// movement kinds use the unit's `moving` flag.
 [[nodiscard]] bool instantaneous(CommandKind kind) noexcept {
-    return kind == CommandKind::Stop || kind == CommandKind::Build;
+    return kind == CommandKind::Stop;
 }
 
 } // namespace
@@ -170,6 +184,44 @@ bool operator==(const Command& a, const Command& b) noexcept {
            && a.buildType == b.buildType;
 }
 
+bool buildSitePlaceable(const PassabilityGrid& grid, Fx x, Fx z, Fx radiusElmos,
+                        const UnitStore& store, const UnitCatalog& catalog,
+                        std::span<const Construction> building) noexcept {
+    if (!sitePlaceable(grid, x, z, radiusElmos)) {
+        return false;
+    }
+
+    const std::array<Fx, 3> site{x, Fx{}, z};
+    for (UnitIndex slot = 0; slot < store.slotCount(); ++slot) {
+        if (!store.slotAlive(slot) || !store.health()[slot].alive()
+            || store.motion()[slot].airborne) {
+            continue;
+        }
+        const Fx occupied = store.motion()[slot].radiusElmos;
+        if (occupied > Fx{}
+            && groundDistanceElmos(site, positionOf(store.transforms()[slot]))
+                   < radiusElmos + occupied) {
+            return false;
+        }
+    }
+
+    for (const Construction& work : building) {
+        if (work.finished()) {
+            continue;  // history is retained, but only unfinished work occupies a site
+        }
+        const unitdef::UnitDef* def =
+            catalog.def(static_cast<UnitTypeIndex>(work.blueprintIndex));
+        if (def == nullptr) {
+            continue;
+        }
+        const Fx occupied = fxFromFloat(def->collisionRadiusElmos);
+        if (groundDistanceElmos(site, work.position) < radiusElmos + occupied) {
+            return false;
+        }
+    }
+    return true;
+}
+
 bool applyCommand(const Command& command, UnitStore& store, const UnitCatalog& catalog,
                    std::span<const Player> players, std::span<const Army> armies,
                    const Terrain& terrain, const PassabilityGrid& grid, TickRate rate,
@@ -199,12 +251,24 @@ bool applyCommand(const Command& command, UnitStore& store, const UnitCatalog& c
     // would be an order to stand still at some future point in a route, which is what deleting
     // the rest of the route already means. It clears and stops.
     if (command.kind == CommandKind::Stop) {
+        cancelActiveConstruction(building, command.unit);
         orders.clear();
         return startCommand(command, store, catalog, terrain, grid, rate, building, events,
                             features);
     }
 
     if (command.queued) {
+        // Factory production is repeatable: Shift-clicking the same tank twice means two tanks,
+        // unlike placing the same structure twice, which retains the ordinary cancel gesture.
+        if (command.kind == CommandKind::Build) {
+            const unitdef::UnitDef* builder = catalog.def(store.typeAt(command.unit.index));
+            const unitdef::UnitDef* product = catalog.def(command.buildType);
+            if (builder != nullptr && product != nullptr && builder->hasCategory("FACTORY")
+                && product->isMobile()) {
+                orders.append(command);
+                return true;
+            }
+        }
         const bool currentWasPatrol =
             orders.current() != nullptr && orders.current()->kind == CommandKind::Patrol;
         const bool alreadyPatrolling = std::any_of(
@@ -251,6 +315,7 @@ bool applyCommand(const Command& command, UnitStore& store, const UnitCatalog& c
             motion.moving = false;
             motion.path.clear();
             motion.pathIndex = 0;
+            cancelActiveConstruction(building, command.unit);
             if (const Command* next = orders.current()) {
                 (void)startCommand(*next, store, catalog, terrain, grid, rate, building, events,
                                    features);
@@ -275,6 +340,9 @@ bool applyCommand(const Command& command, UnitStore& store, const UnitCatalog& c
                       features)) {
         return false;
     }
+    if (command.kind != CommandKind::Build) {
+        cancelActiveConstruction(building, command.unit);
+    }
     (void)orders.give(command, false);
     if (command.kind == CommandKind::Patrol) {
         Command origin = command;
@@ -282,9 +350,6 @@ bool applyCommand(const Command& command, UnitStore& store, const UnitCatalog& c
         origin.targetZ = store.transforms()[command.unit.index].z;
         orders.append(origin);
     }
-    // A `Build` is over the moment it is started, so leaving it at the head of the queue would
-    // make the builder look busy for a tick. `advanceOrders` would clear it next tick anyway;
-    // doing it here keeps "the head of the queue is what the unit is doing" true every tick.
     if (instantaneous(command.kind)) {
         orders.clear();
     }
@@ -330,26 +395,16 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
             continue;  // a missing domain leaves the command queued rather than dropping it
         }
 
-        // A build left at the head was exposed by the previous tick before its product grid
-        // existed. It has never started: successful instantaneous builds are removed in the
-        // same pass. Start it now, along with any following instantaneous commands.
+        // A build remains at the head while its construction is active. A queued one reaching
+        // the head starts once, then waits there until the economy reports completion.
         if (current->kind == CommandKind::Build) {
-            const Command* next = current;
-            while (next != nullptr) {
-                const PassabilityGrid* nextGrid = gridFor(*next);
-                if (nextGrid == nullptr) {
-                    break;
-                }
-                const bool wasInstant = instantaneous(next->kind);
-                const bool began = startCommand(*next, store, catalog, terrain, *nextGrid, rate,
-                                                building, events, features);
-                if (began) {
-                    ++started;
-                    if (!wasInstant) {
-                        break;
-                    }
-                }
-                next = orders[slot].finish();
+            if (building != nullptr
+                && hasActiveConstruction(*building, store.idAt(slot))) {
+                continue;
+            }
+            if (startCommand(*current, store, catalog, terrain, *grid, rate, building, events,
+                             features)) {
+                ++started;
             }
             continue;
         }
@@ -511,6 +566,18 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
     return started;
 }
 
+void finishBuildOrder(UnitStore& store, const Construction& finished) noexcept {
+    if (!store.alive(finished.builder)) {
+        return;
+    }
+    CommandQueue& orders = store.orders()[finished.builder.index];
+    const Command* current = orders.current();
+    if (current != nullptr && current->kind == CommandKind::Build
+        && current->unit == finished.builder) {
+        (void)orders.finish();
+    }
+}
+
 void updateAggressiveOrders(UnitStore& store, const UnitCatalog& catalog,
                             std::span<const Army> armies, const Terrain& terrain,
                             std::span<const PassabilityGrid* const> gridForType, TickRate rate,
@@ -566,10 +633,11 @@ void updateAggressiveOrders(UnitStore& store, const UnitCatalog& catalog,
                 return false;
             }
             const Army* theirs = armyFor(store.motion()[target.index].armyIndex);
-            const Transform& at = store.transforms()[target.index];
             return theirs != nullptr && hostile(*mine, *theirs)
                    && (intel == nullptr
-                       || intel->sees(mine->alliance, IntelKind::Vision, at.x, at.z));
+                        || contactKindForUnit(mine->alliance, target.index, store, catalog,
+                                              armies, *intel)
+                               == ContactKind::Seen);
         };
 
         if (order->target.generation != 0 && !targetVisibleAndHostile(order->target)) {
@@ -586,7 +654,7 @@ void updateAggressiveOrders(UnitStore& store, const UnitCatalog& catalog,
                     continue;
                 }
                 const std::optional<UnitId> candidate =
-                    nearestTarget(from, owner, weapon, store, armies, intel);
+                    nearestTarget(from, owner, weapon, store, armies, intel, &catalog);
                 if (!candidate) {
                     continue;
                 }
@@ -761,6 +829,9 @@ bool startCommand(const Command& command, UnitStore& store, const UnitCatalog& c
         if (building == nullptr) {
             return false;  // a scene with no construction list cannot build
         }
+        if (hasActiveConstruction(*building, command.unit)) {
+            return false;
+        }
         const unitdef::UnitDef* def = catalog.def(command.buildType);
         if (def == nullptr) {
             return false;  // a type the catalog does not know
@@ -796,15 +867,28 @@ bool startCommand(const Command& command, UnitStore& store, const UnitCatalog& c
         // Validate the TARGET's terrain domain before creating work. Callers pass the grid
         // selected for the product being built; aircraft need no ground footprint and upgrades
         // keep the factory's existing foundation.
-        if (!upgrade && def->motion != unitdef::MotionType::Air
-            && !sitePlaceable(grid, siteX, siteZ,
-                              fxFromFloat(def->collisionRadiusElmos))) {
-            return false;
+        if (!upgrade && def->motion != unitdef::MotionType::Air) {
+            const Fx radius = fxFromFloat(def->collisionRadiusElmos);
+            if (!sitePlaceable(grid, siteX, siteZ, radius)) {
+                return false;
+            }
+            // Mobile products are assembled on a factory pad rather than placed on the build
+            // map. Structures must not overlap a living footprint or earlier construction.
+            if (!def->isMobile()
+                && !buildSitePlaceable(grid, siteX, siteZ, radius, store, catalog, *building)) {
+                return false;
+            }
         }
 
         // The cost and the time come from the DEFINITION, and the rate from the clock — the
         // same derivation `UnitCatalog::Rates` does for income, at the one place a construction
         // is created.
+        // Construction occupies the builder until completion, so an earlier route must not
+        // keep moving the founder while it builds remotely.
+        motion.moving = false;
+        motion.path.clear();
+        motion.pathIndex = 0;
+
         building->push_back(Construction{
             .armyIndex = store.motion()[command.unit.index].armyIndex,
             // Straight through. This used to be `{fxToFloat(targetX), 0.0f,

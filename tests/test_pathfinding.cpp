@@ -179,9 +179,8 @@ TEST_CASE("a path across open ground is found and runs end to end") {
                                         rm::test::fx(460.0f));
 
     REQUIRE_FALSE(path.empty());
-    // Ends at the cell containing the destination.
-    CHECK(grid.cellAtWorld(path.back()[0]) == grid.cellAtWorld(rm::test::fx(460.0f)));
-    CHECK(grid.cellAtWorld(path.back()[1]) == grid.cellAtWorld(rm::test::fx(460.0f)));
+    CHECK(path.back()[0] == rm::test::fx(460.0f));
+    CHECK(path.back()[1] == rm::test::fx(460.0f));
 
     // Consecutive waypoints are neighbours: a path that teleports would still
     // satisfy every other assertion here.
@@ -245,14 +244,15 @@ TEST_CASE("a destination on impassable ground yields no path") {
                               rm::test::fx(200.0f)).empty());
 }
 
-TEST_CASE("a path to where the unit already stands is empty, not a null step") {
+TEST_CASE("a path within one cell goes to the exact requested point") {
     const HeightField field = flatField(64);
     const PassabilityGrid grid = rm::sim::buildPassability(field, 0.0f);
 
-    // Same cell: there is nowhere to walk, and returning a single waypoint would
-    // make a unit trundle to the cell centre for no reason.
-    CHECK(rm::sim::findPath(grid, rm::test::fx(20.0f), rm::test::fx(20.0f), rm::test::fx(30.0f),
-                                        rm::test::fx(30.0f)).empty());
+    const auto path = rm::sim::findPath(grid, rm::test::fx(20.0f), rm::test::fx(20.0f),
+                                        rm::test::fx(30.0f), rm::test::fx(30.0f));
+    REQUIRE(path.size() == 1);
+    CHECK(path[0][0] == rm::test::fx(30.0f));
+    CHECK(path[0][1] == rm::test::fx(30.0f));
 }
 
 TEST_CASE("pathfinding is safe on a field with no samples") {

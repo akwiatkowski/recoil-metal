@@ -152,6 +152,13 @@ struct Command {
 /// Two spellings of "attack-move" would be two things to keep in step; this is one.
 [[nodiscard]] const char* commandKindName(CommandKind kind) noexcept;
 
+/// Whether a structure footprint fits the terrain without overlapping a living ground unit or
+/// another construction. This is the shared answer for the placement ghost and command
+/// authority; mobile factory products and upgrades do not use map placement.
+[[nodiscard]] bool buildSitePlaceable(const PassabilityGrid& grid, Fx x, Fx z, Fx radiusElmos,
+                                       const UnitStore& store, const UnitCatalog& catalog,
+                                       std::span<const Construction> building) noexcept;
+
 /// Applies one command, and says whether it was applied.
 ///
 /// **THE SINGLE PATH.** A human's click and a script's decision both arrive here, which is
@@ -178,9 +185,9 @@ struct Command {
 /// `building` may be null — a decorative crowd has no construction list — in which case a
 /// `Build` command is refused rather than crashing.
 ///
-/// `Command::queued` is the shift key (§7 P4.1). Without it the order REPLACES the unit's queue and is
-/// started at once; with it the order goes behind whatever is already there — or CANCELS a
-/// matching one, which is `CommandQueue::give`'s job and Recoil's behaviour.
+/// `Command::queued` is the shift key (§7 P4.1). Without it the order REPLACES the unit's queue
+/// and is started at once; with it the order goes behind whatever is already there — or CANCELS
+/// a matching one, except that repeatable mobile factory products are appended.
 ///
 /// THE TWO ARE VALIDATED DIFFERENTLY, and the asymmetry is deliberate rather than an oversight.
 /// A plain order is routed here and now, so an unroutable one is refused and *nothing changes*
@@ -209,8 +216,8 @@ struct Command {
 /// unit halfway along a route it was legitimately sent on.
 ///
 /// COMPLETION IS DEFINED HERE because only the caller of the passes can know it. A `Move` or
-/// `Attack` is finished when the unit has stopped moving; a `Build` and a `Stop` are finished
-/// the moment they are started, since neither occupies the unit afterwards. An order that
+/// `Attack` is finished when the unit has stopped moving; `Stop` finishes immediately, while a
+/// `Build` remains current until its construction completes. An order that
 /// cannot be started — a route that no longer exists, a target that died — is dropped and the
 /// next one tried in the same tick, so a dead waypoint does not stall a route.
 ///
@@ -221,7 +228,11 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
                           std::span<const PassabilityGrid* const> gridForType, TickRate rate,
                           std::vector<Construction>* building = nullptr,
                           EventQueue* events = nullptr,
-                          const FeatureStore* features = nullptr);
+                           const FeatureStore* features = nullptr);
+
+/// Releases the builder whose current construction completed. The generational builder handle
+/// prevents a recycled slot from consuming the new unit's order.
+void finishBuildOrder(UnitStore& store, const Construction& finished) noexcept;
 
 /// Updates attack-move and patrol combat after movement and intel. These orders retain their
 /// waypoint while `target` temporarily names the visible hostile that interrupted the route.

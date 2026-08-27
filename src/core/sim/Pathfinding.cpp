@@ -239,10 +239,16 @@ std::vector<std::array<Fx, 2>> findPath(const PassabilityGrid& grid, Fx fromX, F
         return {};
     }
 
-    const int startX = grid.cellAtWorld(fromX);
-    const int startZ = grid.cellAtWorld(fromZ);
-    const int goalX = grid.cellAtWorld(toX);
-    const int goalZ = grid.cellAtWorld(toZ);
+    const auto cellAt = [&grid](Fx position, int cells) {
+        const int cell = (position / grid.elmosPerCell).floorToInt();
+        return std::clamp(cell, 0, cells - 1);
+    };
+    const Fx targetX = std::clamp(toX, Fx{}, Fx::fromInt(grid.cellsX) * grid.elmosPerCell);
+    const Fx targetZ = std::clamp(toZ, Fx{}, Fx::fromInt(grid.cellsZ) * grid.elmosPerCell);
+    const int startX = cellAt(fromX, grid.cellsX);
+    const int startZ = cellAt(fromZ, grid.cellsZ);
+    const int goalX = cellAt(targetX, grid.cellsX);
+    const int goalZ = cellAt(targetZ, grid.cellsZ);
 
     // A unit standing somewhere it could never have walked to is a state this
     // sim cannot produce, but scattering can — refuse rather than search the
@@ -251,7 +257,7 @@ std::vector<std::array<Fx, 2>> findPath(const PassabilityGrid& grid, Fx fromX, F
         return {};
     }
     if (startX == goalX && startZ == goalZ) {
-        return {};
+        return {{{targetX, targetZ}}};
     }
 
     const auto cellCount = static_cast<std::size_t>(grid.cellsX)
@@ -351,6 +357,11 @@ std::vector<std::array<Fx, 2>> findPath(const PassabilityGrid& grid, Fx fromX, F
     }
 
     std::reverse(path.begin(), path.end());
+    // Keep the goal cell's centre: the A* edge into it was checked for corner cutting.
+    // The exact endpoint is then a safe final segment wholly inside that passable cell.
+    if (path.back()[0] != targetX || path.back()[1] != targetZ) {
+        path.push_back({{targetX, targetZ}});
+    }
     return path;
 }
 

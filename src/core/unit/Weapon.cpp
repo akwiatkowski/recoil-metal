@@ -203,8 +203,8 @@ std::vector<Weapon> weaponsFrom(const lua::Value& weaponArray, bool airborneSour
         weapon.muzzleVelocityElmosPerSecond =
             numberOr(entry, "MuzzleVelocity", 0.0f) * scmap::kElmosPerOgrid;
 
-        weapon.firingToleranceDegrees =
-            numberOr(entry, "FiringTolerance", kDefaultFiringToleranceDegrees);
+        weapon.firingToleranceBrads = firingToleranceBradsFromDegrees(
+            numberOr(entry, "FiringTolerance", kDefaultFiringToleranceDegrees));
 
         if (const lua::Value* turreted = entry.find("Turreted")) {
             weapon.turreted = turreted->asBoolean().value_or(false);

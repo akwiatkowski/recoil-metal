@@ -422,6 +422,20 @@ Renderer::Renderer(CA::MetalLayer* layer)
 }
 
 Renderer::~Renderer() {
+    // Drain before releasing anything. Every committed frame's completion
+    // handler captures `this`, so Metal must be done CALLING them all before the
+    // members they touch go away. Each outstanding handler holds one ring slot
+    // and hands it back as its last action, so acquiring kMaxFramesInFlight of
+    // them blocks until the last handler has returned — and cannot deadlock,
+    // because no new frame can open during destruction. The slots are handed
+    // straight back so the member destructs full, as it was constructed.
+    for (std::size_t i = 0; i < kMaxFramesInFlight; ++i) {
+        framesInFlight_.acquire();
+    }
+    for (std::size_t i = 0; i < kMaxFramesInFlight; ++i) {
+        framesInFlight_.release();
+    }
+
     // Reverse acquisition order; all are +1 objects from newXxx()/CreateXxx.
     releaseWaterBuffers();
     if (reflectionSampler_ != nullptr) reflectionSampler_->release();
@@ -455,9 +469,9 @@ Renderer::~Renderer() {
     releaseTerrainBuffers();
     releasePropBuffers();  // before the units: acquired after them
     releaseUnitBuffers();  // frees the unit textures too
-    // Whatever `releaseUnitBuffers` was still holding back for a frame in flight. There is no
-    // next frame to wait for here, and the queue is drained by the time a Renderer is torn
-    // down, so the wait is over by definition.
+    // Whatever `releaseUnitBuffers` was still holding back for a frame in flight. The
+    // semaphore drain at the top of this destructor proved every in-flight frame's handler
+    // has finished, so "everything" is freeable now rather than aspirationally later.
     collectRetiredBuffers(/*everything=*/true);
     unitPipeline_->release();
     if (ghostPipeline_ != nullptr) ghostPipeline_->release();
@@ -1688,28 +1702,40 @@ void Renderer::drawFrame(CA::MetalDrawable* drawable) noexcept {
         // Releases the ring slot this frame read its instances from. Metal runs
         // this on its own thread; std::counting_semaphore is the synchronisation
         // primitive, so no further locking is needed.
+        //
+        // ONE handler per committed frame, and the slot goes back LAST inside
+        // it. Teardown (~Renderer) drains the semaphore, so "every slot handed
+        // back" is also "every capture of `this` has finished running" — two
+        // separate handlers would only promise an order between them, not that
+        // both finished before the last one signals.
+        const double recordedCpuMs = (recording_ && cpuMs > 0.0) ? cpuMs : 0.0;
         if (opened) {
-            commandBuffer->addCompletedHandler(
-                MTL::HandlerFunction{[this](MTL::CommandBuffer*) { framesInFlight_.release(); }});
-        }
-
-        if (recording_ && cpuMs > 0.0) {
-            // GPUEndTime - GPUStartTime is the driver's own measurement of the
-            // work, so it is unaffected by vsync pacing. That makes it the
-            // meaningful number here: the CPU figure is pinned to the display
-            // refresh by CAMetalDisplayLink and says nothing about how fast the
-            // renderer could go.
-            //
-            // The handler runs on a Metal-owned thread, hence the mutex. It is
-            // taken once per frame, not per draw.
-            // Explicit HandlerFunction: a bare lambda is ambiguous between the
-            // std::function and ObjC-block overloads.
             commandBuffer->addCompletedHandler(MTL::HandlerFunction{
-                [this, cpuMs](MTL::CommandBuffer* completed) {
+                [this, recordedCpuMs](MTL::CommandBuffer* completed) {
+                    if (recordedCpuMs > 0.0) {
+                        // GPUEndTime - GPUStartTime is the driver's own
+                        // measurement of the work, unaffected by vsync pacing —
+                        // the CPU figure is pinned to the display refresh by
+                        // CAMetalDisplayLink and says nothing about how fast
+                        // the renderer could go. The handler runs on a
+                        // Metal-owned thread, hence the mutex. It is taken once
+                        // per frame, not per draw.
+                        const double gpuMs =
+                            (completed->GPUEndTime() - completed->GPUStartTime()) * 1000.0;
+                        const std::lock_guard lock{benchMutex_};
+                        recorder_.add(bench::FrameSample{recordedCpuMs, gpuMs});
+                    }
+                    framesInFlight_.release();
+                }});
+        } else if (recordedCpuMs > 0.0) {
+            // No slot was acquired this frame, so nothing to hand back — but
+            // the buffer below still commits, so it still owes its sample.
+            commandBuffer->addCompletedHandler(MTL::HandlerFunction{
+                [this, recordedCpuMs](MTL::CommandBuffer* completed) {
                     const double gpuMs =
                         (completed->GPUEndTime() - completed->GPUStartTime()) * 1000.0;
                     const std::lock_guard lock{benchMutex_};
-                    recorder_.add(bench::FrameSample{cpuMs, gpuMs});
+                    recorder_.add(bench::FrameSample{recordedCpuMs, gpuMs});
                 }});
         }
 

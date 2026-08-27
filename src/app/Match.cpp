@@ -59,7 +59,8 @@ bool gFafLog = false;
     const bool applied = rm::sim::applyCommand(command, scene.store, scene.catalog,
                                                  scene.players, scene.armies,
                                                  scene.terrain(field), grid, gAppTickRate,
-                                                 &scene.building);
+                                                 &scene.building,
+                                                 &scene.events);
     if (applied) {
         // Recorded only when it took. A refused order is not part of the match — replaying it
         // would be refused again, so keeping it would only make the log longer.
@@ -92,7 +93,8 @@ bool gFafLog = false;
     const bool applied = rm::sim::applyCommand(command, scene.store, scene.catalog,
                                                  scene.players, scene.armies,
                                                  scene.terrain(field), grid, gAppTickRate,
-                                                 &scene.building);
+                                                 &scene.building,
+                                                 &scene.events);
     if (applied) {
         scene.commands.record(command);
     }
@@ -121,7 +123,8 @@ bool gFafLog = false;
     const bool applied = rm::sim::applyCommand(command, scene.store, scene.catalog,
                                                  scene.players, scene.armies,
                                                  scene.terrain(field), grid, gAppTickRate,
-                                                 &scene.building);
+                                                 &scene.building,
+                                                 &scene.events);
     if (applied) {
         scene.commands.record(command);
     }
@@ -153,7 +156,7 @@ bool gFafLog = false;
     const bool applied = rm::sim::applyCommand(command, scene.store, scene.catalog,
                                                scene.players, scene.armies,
                                                scene.terrain(field), grid, gAppTickRate,
-                                               &scene.building);
+                                               &scene.building, &scene.events);
     if (applied) {
         scene.commands.record(command);
     }
@@ -185,7 +188,7 @@ bool gFafLog = false;
     const bool applied = rm::sim::applyCommand(command, scene.store, scene.catalog,
                                                  scene.players, scene.armies,
                                                  scene.terrain(field), grid, gAppTickRate,
-                                                 &scene.building, nullptr,
+                                                 &scene.building, &scene.events,
                                                  &scene.features);
     if (applied) {
         scene.commands.record(command);
@@ -822,7 +825,7 @@ rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) 
                 : runner.passability.gridFor(scene, builderType);
         if (rm::sim::applyCommand(command, scene.store, scene.catalog, scene.players,
                                    scene.armies, scene.terrain(runner.field), grid,
-                                   gAppTickRate, &scene.building, nullptr,
+                                   gAppTickRate, &scene.building, &scene.events,
                                    &scene.features)) {
             scene.commands.record(command);
         }
@@ -919,9 +922,15 @@ rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) 
         const std::array<float, 3> site{rm::sim::fxToFloat(work.position[0]),
                                         rm::sim::fxToFloat(work.position[1]),
                                         rm::sim::fxToFloat(work.position[2])};
-        // Face the map centre — a base laid out toward the fight reads as one.
-        const float yaw = std::atan2(runner.field.widthElmos() * 0.5f - site[0],
-                                     runner.field.depthElmos() * 0.5f - site[2]);
+        // Face the map centre — a base laid out toward the fight reads as one. The bearing
+        // is computed in FIXED POINT (`fxBearing`, the same CORDIC the sim's own aiming
+        // uses), not `std::atan2`: this yaw becomes `Transform.heading`, which the state
+        // hash covers, and libm's atan2 is exactly where two architectures disagree in the
+        // last ulp. The old float path was a cross-machine desync waiting on every
+        // factory roll-off.
+        const rm::Brad yaw = rm::sim::fxBearing(
+            rm::sim::fxFromFloat(runner.field.widthElmos() * 0.5f) - work.position[0],
+            rm::sim::fxFromFloat(runner.field.depthElmos() * 0.5f) - work.position[2]);
         const auto spawned = spawnUnit(scene, runner.content, runner.field,
                                        std::string{scene.pathOf(static_cast<rm::UnitTypeIndex>(work.blueprintIndex))},
                                        site, scene.armies[army], yaw);

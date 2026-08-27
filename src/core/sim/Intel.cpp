@@ -606,6 +606,44 @@ namespace {
 
 } // namespace
 
+std::optional<ContactKind> contactKindForUnit(int alliance, UnitIndex target,
+                                              const UnitStore& store,
+                                              const UnitCatalog& catalog,
+                                              std::span<const Army> armies,
+                                              const Intel& intel) noexcept {
+    if (!store.slotAlive(target)) {
+        return std::nullopt;
+    }
+    const int armyIndex = store.motion()[target].armyIndex;
+    const auto army = std::ranges::find_if(
+        armies, [armyIndex](const Army& candidate) { return candidate.index == armyIndex; });
+    if (army == armies.end()) {
+        return std::nullopt;
+    }
+
+    const Transform& at = store.transforms()[target];
+    if (army->alliance == alliance || !intel.active()) {
+        return ContactKind::Seen;
+    }
+
+    const UnitCatalog::IntelRadii& hiding = catalog.intel(store.typeAt(target));
+    if (hiding.freeIntel || intel.sees(alliance, IntelKind::Omni, at.x, at.z)
+        || (!hiding.cloak && intel.sees(alliance, IntelKind::Vision, at.x, at.z))) {
+        return ContactKind::Seen;
+    }
+    if (!hiding.radarStealth
+        && !intel.hiddenBy(army->alliance, HiddenKind::RadarField, at.x, at.z)
+        && intel.sees(alliance, IntelKind::Radar, at.x, at.z)) {
+        return ContactKind::Radar;
+    }
+    if (!hiding.sonarStealth
+        && !intel.hiddenBy(army->alliance, HiddenKind::SonarField, at.x, at.z)
+        && intel.sees(alliance, IntelKind::Sonar, at.x, at.z)) {
+        return ContactKind::Sonar;
+    }
+    return std::nullopt;
+}
+
 void contactsFor(int alliance, const UnitStore& store, const UnitCatalog& catalog,
                  std::span<const Army> armies,
                  const Intel& intel, TickIndex tick, std::vector<Contact>& contacts,
@@ -625,75 +663,22 @@ void contactsFor(int alliance, const UnitStore& store, const UnitCatalog& catalo
         }
 
         const Transform& at = transforms[slot];
-        const bool own = armies[static_cast<std::size_t>(army)].alliance == alliance;
-
-        // YOUR OWN SIDE IS ALWAYS SEEN, without consulting the grid. Not an optimisation:
-        // a unit standing outside every friendly sight radius — a lone scout at the edge of
-        // its own vision — is still a unit you command, and asking the grid would lose it.
-        if (own || !intel.active()) {
-            contacts.push_back(Contact{.unit = store.idAt(slot),
-                                       .x = at.x,
-                                       .z = at.z,
-                                       .kind = ContactKind::Seen});
-            continue;
-        }
-
-        // WHAT THIS UNIT HIDES FROM, and what nothing hides from. `freeIntel` first because
-        // a blueprint stating both it and a stealth flag is stating that this particular
-        // object is meant to be seen — a campaign objective does not stop being one because
-        // it also carries `RadarStealth`.
         const UnitCatalog::IntelRadii& hiding = catalog.intel(store.typeAt(slot));
-        if (hiding.freeIntel) {
+        const std::optional<ContactKind> kind =
+            contactKindForUnit(alliance, slot, store, catalog, armies, intel);
+        if (kind == ContactKind::Seen) {
             contacts.push_back(Contact{.unit = store.idAt(slot),
                                        .x = at.x,
                                        .z = at.z,
                                        .kind = ContactKind::Seen});
             continue;
         }
-
-        // OMNI BEFORE EVERYTHING, and it is `Seen` rather than a blip: what makes omni omni
-        // is that nothing hides from it, so an omni return carries a position AND an
-        // identity. This is the one query the stealth flags below cannot answer their way
-        // out of, which is the whole reason it is a sense of its own.
-        if (intel.sees(alliance, IntelKind::Omni, at.x, at.z)) {
-            contacts.push_back(Contact{.unit = store.idAt(slot),
-                                       .x = at.x,
-                                       .z = at.z,
-                                       .kind = ContactKind::Seen});
-            continue;
-        }
-
-        if (!hiding.cloak && intel.sees(alliance, IntelKind::Vision, at.x, at.z)) {
-            contacts.push_back(Contact{.unit = store.idAt(slot),
-                                       .x = at.x,
-                                       .z = at.z,
-                                       .kind = ContactKind::Seen});
-            continue;
-        }
-
-        // RADAR BEFORE SONAR, so a unit both senses reach reads as the one that gives the
-        // better picture. They carry the same error today; when sonar gains rules of its
-        // own the order is already the one that says which wins.
-        // A STEALTHED UNIT IS ABSENT FROM THE SENSE, not harder to find in it — which is why
-        // the flag short-circuits the query rather than shrinking anybody's radius. A
-        // stealth FIELD is the same absence granted by a neighbour: the owner's hidden grid
-        // is asked about the UNIT'S OWN position, and covered means gone. Omni has already
-        // had its say above, which is what keeps "nothing hides from omni" true of the
-        // fields too.
-        const int owner = armies[static_cast<std::size_t>(army)].alliance;
-        const bool radar = !hiding.radarStealth
-                        && !intel.hiddenBy(owner, HiddenKind::RadarField, at.x, at.z)
-                        && intel.sees(alliance, IntelKind::Radar, at.x, at.z);
-        const bool sonar = !radar && !hiding.sonarStealth
-                        && !intel.hiddenBy(owner, HiddenKind::SonarField, at.x, at.z)
-                        && intel.sees(alliance, IntelKind::Sonar, at.x, at.z);
-        if (radar || sonar) {
+        if (kind) {
             const auto [x, z] = blipPosition(store.idAt(slot), at.x, at.z, tick, rate);
             contacts.push_back(Contact{.unit = store.idAt(slot),
                                        .x = x,
                                        .z = z,
-                                       .kind = radar ? ContactKind::Radar
-                                                     : ContactKind::Sonar});
+                                       .kind = *kind});
         }
 
         // THE JAMMER: `jammerBlips` false radar contacts scattered inside `jamRadius` of a

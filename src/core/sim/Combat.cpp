@@ -79,34 +79,59 @@ namespace {
                                 / denominator.raw()));
 }
 
-/// The nearest hostile unit a shot has reached, or nothing.
-///
-/// The tolerance is the TARGET's own size plus the shot's blast radius, so a big unit is
-/// easier to hit than a small one and a shell with a wide blast need not touch. A floor of
-/// one tick of travel stops a fast shot stepping cleanly over a unit between two ticks,
-/// which is the discrete-time version of a bullet passing through a wall.
-[[nodiscard]] std::optional<UnitIndex> nearestStruck(const Projectile& shot,
-                                                    const UnitStore& store,
-                                                    std::span<const Army> armies) {
-    // The velocity is already per tick, so its length IS one tick of travel — the
-    // multiplication by a tick length that used to be here is gone.
-    const Fx travelPerTick =
-        fxSqrt(shot.velocity[0] * shot.velocity[0] + shot.velocity[1] * shot.velocity[1]
-               + shot.velocity[2] * shot.velocity[2]);
+struct SweptHit {
+    UnitIndex slot = 0;
+    Fx fraction{};
+};
 
+/// Earliest intersection of a segment with an axis-aligned collision box, in 0..1.
+[[nodiscard]] std::optional<Fx> segmentBoxEntry(std::array<Fx, 3> from,
+                                                std::array<Fx, 3> to,
+                                                std::array<Fx, 3> minimum,
+                                                std::array<Fx, 3> maximum) noexcept {
+    Fx enter{};
+    Fx exit = kFxOne;
+    for (std::size_t axis = 0; axis < 3; ++axis) {
+        const Fx delta = to[axis] - from[axis];
+        if (delta == Fx{}) {
+            if (from[axis] < minimum[axis] || from[axis] > maximum[axis]) {
+                return std::nullopt;
+            }
+            continue;
+        }
+        Fx first = (minimum[axis] - from[axis]) / delta;
+        Fx last = (maximum[axis] - from[axis]) / delta;
+        if (first > last) {
+            std::swap(first, last);
+        }
+        enter = std::max(enter, first);
+        exit = std::min(exit, last);
+        if (enter > exit) {
+            return std::nullopt;
+        }
+    }
+    return enter;
+}
+
+/// First hostile body crossed by this tick's 3D flight segment. Blast radius is deliberately
+/// absent: it belongs to damage after impact, not the projectile's physical body.
+[[nodiscard]] std::optional<SweptHit> firstStruck(const Projectile& shot,
+                                                  std::array<Fx, 3> from,
+                                                  std::array<Fx, 3> to,
+                                                  const UnitStore& store,
+                                                  std::span<const Army> armies,
+                                                  const UnitCatalog* catalog) {
     const std::span<const Transform> transforms = store.transforms();
     const std::span<const MoveState> motion = store.motion();
+    std::optional<SweptHit> best;
 
-    std::optional<UnitIndex> best;
-    Fx bestDistance{};
+    const Fx half = Fx::fromRatio(1, 2);
+    const Fx middleX = from[0] + (to[0] - from[0]) * half;
+    const Fx middleZ = from[2] + (to[2] - from[2]) * half;
+    const Fx reach = fxHypot(to[0] - from[0], to[2] - from[2]) * half
+                   + largestRadius(store);
 
-    // THE WIDEST tolerance any target could have, so the query is a superset of what the loop
-    // below accepts: the per-target tolerance uses that target's own radius, and the largest
-    // radius in the store bounds every one of them. Asking for less would miss a big unit
-    // sitting just outside a small one's tolerance.
-    const Fx reach = std::max(travelPerTick, largestRadius(store) + shot.damageRadiusElmos);
-
-    for (const UnitIndex slot : store.space().within(shot.position[0], shot.position[2], reach)) {
+    for (const UnitIndex slot : store.space().within(middleX, middleZ, reach)) {
         if (!shootable(shot.firedByArmy, store, slot, armies)) {
             continue;
         }
@@ -118,22 +143,68 @@ namespace {
                 == 0)) {
             continue;
         }
-        const Fx size = slot < motion.size() ? motion[slot].radiusElmos : Fx{};
-        const Fx tolerance = std::max(travelPerTick, size + shot.damageRadiusElmos);
-
-        const Fx distance = groundDistanceElmos(shot.position, positionOf(transforms[slot]));
-        if (distance > tolerance) {
+        const Fx radius = motion[slot].radiusElmos;
+        if (radius <= Fx{}) {
             continue;
         }
-        // Strictly nearer, so a tie falls to the lower slot. The grid returns slots in
-        // ascending order, which is the order the full scan this replaces walked them in —
-        // so the tie-break is the same one and the same unit is struck.
-        if (!best || distance < bestDistance) {
-            best = slot;
-            bestDistance = distance;
+        const std::array<Fx, 3> feet{
+            transforms[slot].x, transforms[slot].y, transforms[slot].z};
+        Fx height = catalog != nullptr ? catalog->intel(store.typeAt(slot)).eyeHeight : Fx{};
+        if (height <= Fx{}) {
+            height = radius * Fx::fromInt(2);
+        }
+        const std::array<Fx, 3> minimum{feet[0] - radius, feet[1], feet[2] - radius};
+        const std::array<Fx, 3> maximum{feet[0] + radius, feet[1] + height, feet[2] + radius};
+        const std::optional<Fx> hit = segmentBoxEntry(from, to, minimum, maximum);
+        if (hit && (!best || *hit < best->fraction)) {
+            best = SweptHit{.slot = slot, .fraction = *hit};
         }
     }
     return best;
+}
+
+/// First place a flight segment enters terrain. Samples are no more than half a height-field
+/// square apart, so a one-row ridge is sampled even when both segment endpoints lie between
+/// grid lines; binary refinement then gives a fraction comparable with a swept unit hit.
+[[nodiscard]] std::optional<Fx> terrainEntry(std::array<Fx, 3> from,
+                                             std::array<Fx, 3> to,
+                                             const Terrain& terrain) noexcept {
+    const auto clearanceAt = [&](Fx fraction) {
+        const Fx x = from[0] + (to[0] - from[0]) * fraction;
+        const Fx y = from[1] + (to[1] - from[1]) * fraction;
+        const Fx z = from[2] + (to[2] - from[2]) * fraction;
+        return y - terrain.heightAt(x, z);
+    };
+    if (clearanceAt(Fx{}) <= Fx{}) {
+        return Fx{};
+    }
+
+    const Fx distance = fxHypot(to[0] - from[0], to[2] - from[2]);
+    const Fx sampleWidth = Fx::fromRatio(rm::kSquareSize, 2);
+    const auto stepsWide = std::max<FxWide>(
+        1, (FxWide{distance.raw()} + sampleWidth.raw() - 1) / sampleWidth.raw());
+    const int steps = static_cast<int>(std::min<FxWide>(stepsWide, std::numeric_limits<int>::max()));
+    Fx previous{};
+    for (int step = 1; step <= steps; ++step) {
+        Fx current = Fx::fromRatio(step, steps);
+        if (clearanceAt(current) > Fx{}) {
+            previous = current;
+            continue;
+        }
+
+        // Twelve fixed-point bisections resolve an eight-elmo square to about 0.002 elmos.
+        for (int refinement = 0; refinement < 12; ++refinement) {
+            const Fx middle = (previous + current) * Fx::fromRatio(1, 2);
+            if (clearanceAt(middle) > Fx{}) {
+                previous = middle;
+            } else {
+                // `current` remains the first known point at or below the terrain.
+                current = middle;
+            }
+        }
+        return current;
+    }
+    return std::nullopt;
 }
 
 } // namespace
@@ -155,7 +226,8 @@ Fx groundDistanceElmos(std::array<Fx, 3> from, std::array<Fx, 3> to) noexcept {
 
 std::optional<UnitId> nearestTarget(std::array<Fx, 3> from, int fromArmy,
                                     const unitdef::Weapon& weapon, const UnitStore& store,
-                                    std::span<const Army> armies, const Intel* intel) {
+                                    std::span<const Army> armies, const Intel* intel,
+                                    const UnitCatalog* catalog) {
     if (!weapon.fires()) {
         return std::nullopt;
     }
@@ -182,9 +254,9 @@ std::optional<UnitId> nearestTarget(std::array<Fx, 3> from, int fromArmy,
         // lookup is one array read and a ground distance is two multiplies and a square root.
         if (intel != nullptr) {
             const Army* mine = armyFor(fromArmy, armies);
-            if (mine == nullptr
-                || !intel->sees(mine->alliance, IntelKind::Vision, transforms[slot].x,
-                                transforms[slot].z)) {
+            if (mine == nullptr || catalog == nullptr
+                || contactKindForUnit(mine->alliance, slot, store, *catalog, armies, *intel)
+                       != ContactKind::Seen) {
                 continue;
             }
         }
@@ -236,12 +308,12 @@ bool canFireAt(const unitdef::Weapon& weapon, Brad yaw, Brad bearing) noexcept {
     if (weapon.turreted) {
         return true;
     }
-    // Degrees to binary radians: a full turn is 65,536, so a degree is 65,536/360 = 182.04.
-    // Rounded rather than truncated, and computed in a wider integer so a tolerance of 180
-    // degrees does not overflow on the way.
-    const auto degrees = static_cast<std::int64_t>(
-        std::lround(std::max(0.0f, weapon.firingToleranceDegrees) * (65536.0 / 360.0)));
-    return static_cast<std::int64_t>(headingError(yaw, bearing)) <= degrees;
+    // Converted once at load — `firingToleranceBradsFromDegrees`, in the unit layer where
+    // content's floats belong. The tick only ever compares integers; it used to re-run the
+    // degrees→brad lround on every ready shot, which was both wasted work and a float
+    // expression the no-float check could not see.
+    return static_cast<std::int64_t>(headingError(yaw, bearing))
+           <= static_cast<std::int64_t>(weapon.firingToleranceBrads);
 }
 
 std::size_t aimAtTargets(UnitStore& store, const UnitCatalog& catalog,
@@ -277,7 +349,7 @@ std::size_t aimAtTargets(UnitStore& store, const UnitCatalog& catalog,
             }
             const std::optional<UnitId> candidate = nearestTarget(
                 positionOf(transforms[slot]), motion[slot].armyIndex, weapon, store, armies,
-                intel);
+                intel, &catalog);
             if (!candidate) {
                 continue;
             }
@@ -296,7 +368,11 @@ std::size_t aimAtTargets(UnitStore& store, const UnitCatalog& catalog,
         const std::array<Fx, 3> at = positionOf(transforms[target->index]);
         const Brad bearing = bearingTo(positionOf(transforms[slot]), at);
         const std::uint32_t error = headingError(transforms[slot].heading, bearing);
-        if (error <= 1e-4f) {
+        // Aimed exactly: nothing to turn. (This used to read `error <= 1e-4f`, a float
+        // literal against an unsigned integer — invisible to the no-float check because it
+        // names neither `float` nor a cast, and degenerate either way: an integral error is
+        // below 1e-4 only when it is zero.)
+        if (error == 0) {
             continue;
         }
 
@@ -370,7 +446,7 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
             }
 
             const std::optional<UnitId> target =
-                nearestTarget(from, army, weapon, store, armies, intel);
+                nearestTarget(from, army, weapon, store, armies, intel, &catalog);
             if (!target) {
                 continue;
             }
@@ -821,6 +897,7 @@ void advanceProjectiles(std::vector<Projectile>& projectiles, UnitStore& store,
             shot.velocity[1] -= gravityPerTickSquared;
         }
 
+        const std::array<Fx, 3> from = shot.position;
         // No scaling: the velocity is already what one tick of flight covers.
         for (std::size_t axis = 0; axis < 3; ++axis) {
             shot.position[axis] += shot.velocity[axis];
@@ -836,21 +913,26 @@ void advanceProjectiles(std::vector<Projectile>& projectiles, UnitStore& store,
         // Or it reaches the GROUND, which is what a miss does. Height is the test there
         // rather than proximity, because a near miss must land rather than fly on and hit
         // whatever happens to be behind it.
-        const std::optional<UnitIndex> struck = nearestStruck(shot, store, armies);
-        const Fx ground = terrain.heightAt(shot.position[0], shot.position[2]);
+        const std::optional<SweptHit> struck =
+            firstStruck(shot, from, shot.position, store, armies, catalog);
+        const std::optional<Fx> groundHit = terrainEntry(from, shot.position, terrain);
+        const bool hitUnit = struck && (!groundHit || struck->fraction < *groundHit);
 
-        if (!struck && shot.position[1] > ground) {
+        if (!hitUnit && !groundHit) {
             continue;
         }
 
-        if (struck) {
-            shot.position = positionOf(store.transforms()[*struck]);
+        if (hitUnit) {
+            shot.position = positionOf(store.transforms()[struck->slot]);
         } else {
-            shot.position[1] = ground;
+            for (std::size_t axis = 0; axis < 3; ++axis) {
+                shot.position[axis] = from[axis] + (shot.position[axis] - from[axis]) * *groundHit;
+            }
+            shot.position[1] = terrain.heightAt(shot.position[0], shot.position[2]);
         }
         emit(events, Event{
                          .kind = EventKind::ProjectileImpact,
-                         .unit = struck ? store.idAt(*struck) : UnitId{},
+                         .unit = hitUnit ? store.idAt(struck->slot) : UnitId{},
                          .instigator = shot.firedBy,
                          .army = shot.firedByArmy,
                          // The BASE, because an event says what was thrown rather than what

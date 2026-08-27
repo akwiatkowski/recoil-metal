@@ -221,7 +221,7 @@ TEST_CASE("a unit does not shoot what its side cannot see") {
     intel.configure(2, rm::sim::Fx::fromInt(512), rm::sim::Fx::fromInt(512),
                     rm::sim::VisionStyle::ForgedAlliance);
     const auto unseen = rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, weapon, roster.store,
-                                               armies, &intel);
+                                               armies, &intel, &roster.catalog);
     CHECK_FALSE(unseen.has_value());
 
     // And once army 0 puts something out there that CAN see, it engages. Through the pass
@@ -234,9 +234,42 @@ TEST_CASE("a unit does not shoot what its side cannot see") {
 
     intel.update(roster.store, roster.catalog, armies, nullptr);
     const auto seen = rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, weapon, roster.store,
-                                             armies, &intel);
+                                             armies, &intel, &roster.catalog);
     REQUIRE(seen.has_value());
     CHECK(*seen == enemy);
+}
+
+TEST_CASE("automatic targeting obeys cloak, omni, and free-intel identity") {
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    const Weapon weapon = directFire(10.0f, 300.0f);
+
+    const auto targetFor = [&](bool omni, bool freeIntel) {
+        Roster roster;
+        UnitDef watcher = targetDef();
+        watcher.visionRadiusElmos = 200.0f;
+        watcher.omniRadiusElmos = omni ? 200.0f : 0.0f;
+        (void)roster.add(roster.addType(watcher), 0.0f, 0.0f, 0, 100.0f);
+
+        UnitDef hidden = targetDef();
+        hidden.cloak = true;
+        hidden.freeIntel = freeIntel;
+        const UnitId enemy = roster.add(roster.addType(hidden), 0.0f, 50.0f, 1, 100.0f);
+
+        rm::sim::Intel intel;
+        intel.configure(2, rm::sim::Fx::fromInt(512), rm::sim::Fx::fromInt(512),
+                        rm::sim::VisionStyle::ForgedAlliance);
+        intel.update(roster.store, roster.catalog, armies, nullptr);
+        return std::pair{rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, weapon,
+                                                roster.store, armies, &intel, &roster.catalog),
+                         enemy};
+    };
+
+    const auto cloaked = targetFor(false, false);
+    const auto omni = targetFor(true, false);
+    const auto freeIntel = targetFor(false, true);
+    CHECK_FALSE(cloaked.first.has_value());
+    CHECK(omni.first == omni.second);
+    CHECK(freeIntel.first == freeIntel.second);
 }
 
 TEST_CASE("a dead enemy is not a target, and neither is a defeated army's unit") {
@@ -532,6 +565,104 @@ TEST_CASE("a shot in flight lands and kills, and is then gone") {
     CHECK(dead.front() == frail);
 }
 
+TEST_CASE("a swept projectile hits the first unit crossed in three dimensions") {
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    const rm::HeightField field = flatField(-100.0f);
+    Roster roster;
+    const rm::UnitTypeIndex type = roster.addType(targetDef());
+    const UnitId first = roster.add(type, 0.0f, 30.0f, 1, 100.0f);
+    const UnitId second = roster.add(type, 0.0f, 80.0f, 1, 100.0f);
+    roster.reindex();
+
+    rm::sim::Projectile shot;
+    shot.position = rm::test::at(0, 5, 0);
+    shot.velocity = rm::test::at(0, 0, 100);
+    shot.damage = rm::unitdef::flatDamage(rm::test::mag(40.0f));
+    shot.firedByArmy = 0;
+    shot.ticksRemaining = 2;
+    std::vector<rm::sim::Projectile> shots{shot};
+
+    rm::sim::advanceProjectiles(shots, roster.store, armies, rm::sim::Terrain{field},
+                                rm::sim::TickRate{}, nullptr, &roster.catalog);
+
+    CHECK(rm::test::asFloat(roster.health(first).current) < 100.0f);
+    CHECK(rm::test::asFloat(roster.health(second).current) == Approx(100.0f));
+    CHECK(shots.empty());
+}
+
+TEST_CASE("terrain blocks a swept projectile before the unit behind it") {
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    rm::HeightField field = flatField();
+    // A single grid-line ridge at z=8. Both segment endpoints are below its 12-elmo peak but
+    // above their local ground, so endpoint-only or one-square stepping tunnels through it.
+    for (int x = 0; x < field.verticesX(); ++x) {
+        field.raw[static_cast<std::size_t>(field.verticesX() + x)] = 12;
+    }
+    Roster roster;
+    UnitDef wideTarget = targetDef();
+    wideTarget.collisionRadiusElmos = 6.0f;
+    const UnitId target = roster.add(roster.addType(wideTarget), 0.0f, 18.0f, 1, 100.0f);
+    roster.reindex();
+
+    rm::sim::Projectile shot;
+    shot.position = rm::test::at(0, 10, 4);
+    shot.velocity = rm::test::at(0, 0, 18);
+    shot.damage = rm::unitdef::flatDamage(rm::test::mag(40.0f));
+    shot.firedByArmy = 0;
+    shot.ticksRemaining = 2;
+    std::vector<rm::sim::Projectile> shots{shot};
+
+    rm::sim::advanceProjectiles(shots, roster.store, armies, rm::sim::Terrain{field},
+                                rm::sim::TickRate{}, nullptr, &roster.catalog);
+
+    CHECK(rm::test::asFloat(roster.health(target).current) == Approx(100.0f));
+    CHECK(shots.empty());
+}
+
+TEST_CASE("projectile collision respects altitude and does not use blast radius as a body") {
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    const rm::HeightField field = flatField(-100.0f);
+
+    SECTION("a shot above the unit keeps flying") {
+        Roster roster;
+        const UnitId target =
+            roster.add(roster.addType(targetDef()), 0.0f, 50.0f, 1, 100.0f);
+        roster.reindex();
+        rm::sim::Projectile shot;
+        shot.position = rm::test::at(0, 20, 0);
+        shot.velocity = rm::test::at(0, 0, 100);
+        shot.damage = rm::unitdef::flatDamage(rm::test::mag(40.0f));
+        shot.firedByArmy = 0;
+        shot.ticksRemaining = 2;
+        std::vector<rm::sim::Projectile> shots{shot};
+
+        rm::sim::advanceProjectiles(shots, roster.store, armies, rm::sim::Terrain{field},
+                                    rm::sim::TickRate{}, nullptr, &roster.catalog);
+        CHECK(rm::test::asFloat(roster.health(target).current) == Approx(100.0f));
+        CHECK(shots.size() == 1);
+    }
+
+    SECTION("a wide blast does not detonate beside a missed body") {
+        Roster roster;
+        const UnitId target =
+            roster.add(roster.addType(targetDef()), 10.0f, 50.0f, 1, 100.0f);
+        roster.reindex();
+        rm::sim::Projectile shot;
+        shot.position = rm::test::at(0, 5, 0);
+        shot.velocity = rm::test::at(0, 0, 100);
+        shot.damage = rm::unitdef::flatDamage(rm::test::mag(40.0f));
+        shot.damageRadiusElmos = rm::test::fx(30.0f);
+        shot.firedByArmy = 0;
+        shot.ticksRemaining = 2;
+        std::vector<rm::sim::Projectile> shots{shot};
+
+        rm::sim::advanceProjectiles(shots, roster.store, armies, rm::sim::Terrain{field},
+                                    rm::sim::TickRate{}, nullptr, &roster.catalog);
+        CHECK(rm::test::asFloat(roster.health(target).current) == Approx(100.0f));
+        CHECK(shots.size() == 1);
+    }
+}
+
 TEST_CASE("a surface shot passes aircraft and damages only its ground target") {
     const std::vector<Army> armies = rm::sim::freeForAll(2);
     const rm::HeightField field = flatField();
@@ -695,7 +826,7 @@ TEST_CASE("a turreted weapon fires whatever the hull is doing") {
     // unable to shoot at all.
     Weapon turret = directFire(10.0f, 300.0f);
     turret.turreted = true;
-    turret.firingToleranceDegrees = 1.0f;
+    turret.firingToleranceBrads = rm::unitdef::firingToleranceBradsFromDegrees(1.0f);
 
     CHECK(rm::sim::canFireAt(turret, 0, 0));
     CHECK(rm::sim::canFireAt(turret, 0, rm::sim::kBradHalfTurn));  // directly behind
@@ -705,7 +836,7 @@ TEST_CASE("an unturreted weapon must be pointed at what it shoots") {
     // The fix for a tank firing out of its side armour.
     Weapon fixed = directFire(10.0f, 300.0f);
     fixed.turreted = false;
-    fixed.firingToleranceDegrees = 2.0f;  // the corpus's own mode
+    fixed.firingToleranceBrads = rm::unitdef::firingToleranceBradsFromDegrees(2.0f);  // the corpus's own mode
 
     CHECK(rm::sim::canFireAt(fixed, 0, 0));
     CHECK(rm::sim::canFireAt(fixed, 0, rm::sim::bradFromRadians(0.03f)));  // just under two degrees
@@ -777,7 +908,7 @@ TEST_CASE("a unit facing the wrong way holds its shot rather than spending it") 
 
     Weapon fixed = directFire(10.0f, 300.0f);
     fixed.turreted = false;
-    fixed.firingToleranceDegrees = 2.0f;
+    fixed.firingToleranceBrads = rm::unitdef::firingToleranceBradsFromDegrees(2.0f);
 
     Roster roster;
     const UnitId gunner =

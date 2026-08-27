@@ -240,6 +240,45 @@ TEST_CASE("losing the last commander defeats an army and ends the match") {
     CHECK(*report.winner == armies[0].alliance);
 }
 
+TEST_CASE("defeating the other alliance ends a team match with both allies alive") {
+    const rm::HeightField field = flatField();
+
+    Roster roster;
+    UnitDef commanderDef;
+    commanderDef.name = "UEL0001";
+    const rm::UnitTypeIndex commander = roster.addType(commanderDef);
+    (void)roster.add(commander, 0.0f, 0.0f, 0, 12000.0f);
+    (void)roster.add(commander, 100.0f, 0.0f, 1, 12000.0f);
+    const rm::sim::UnitId enemyA = roster.add(commander, 400.0f, 0.0f, 2, 12000.0f);
+    const rm::sim::UnitId enemyB = roster.add(commander, 500.0f, 0.0f, 3, 12000.0f);
+
+    std::vector<Army> armies = rm::sim::freeForAll(4);
+    armies[0].alliance = 0;
+    armies[1].alliance = 0;
+    armies[2].alliance = 1;
+    armies[3].alliance = 1;
+    std::vector<Projectile> projectiles;
+    std::vector<Construction> building;
+    std::vector<Economy> economies(4);
+    const std::vector<int> commandersEver(4, 1);
+    Match match{.armies = armies,
+                .economies = economies,
+                .projectiles = &projectiles,
+                .building = &building,
+                .commandersEver = commandersEver};
+
+    roster.health(enemyA).current = rm::test::mag(0.0f);
+    roster.health(enemyB).current = rm::test::mag(0.0f);
+    const TickReport report =
+        rm::sim::tickSkirmish(roster.store, roster.catalog, match, rm::sim::Terrain{field});
+
+    CHECK(report.defeated == 2);
+    CHECK(rm::sim::survivorCount(armies) == 2);
+    CHECK(report.matchEnded);
+    REQUIRE(report.winner.has_value());
+    CHECK(*report.winner == 0);
+}
+
 TEST_CASE("a crowd with no commanders is not a draw on the first tick") {
     // `--units` scatters a decorative crowd that never had a commander. Reading "no
     // commander alive" as "lost its commander" would declare a draw before anything

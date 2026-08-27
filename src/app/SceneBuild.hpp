@@ -129,7 +129,7 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
                                                        const rm::HeightField& field,
                                                        std::string_view blueprintPath,
                                                        std::array<float, 3> position,
-                                                       const rm::sim::Army& army, float yaw);
+                                                       const rm::sim::Army& army, rm::Brad yaw);
 
 [[nodiscard]] std::optional<rm::UnitTypeIndex> resolveBuildable(UnitScene& scene,
                                                                 const rm::vfs::Vfs& content,
@@ -182,9 +182,9 @@ std::size_t adoptOwnerlessUnits(UnitScene& scene);
 /// needs it too, and `Match.hpp` includes this header rather than the other way round. The first
 /// extractor of every match is a build like any other and goes the same way.
 [[nodiscard]] bool issueBuild(UnitScene& scene, const rm::sim::PassabilityGrid& grid,
-                              const rm::HeightField& field, rm::sim::UnitId builder,
-                              rm::PlayerIndex player, rm::TickIndex tick, rm::UnitTypeIndex type,
-                              rm::sim::Fx atX, rm::sim::Fx atZ);
+                               const rm::HeightField& field, rm::sim::UnitId builder,
+                               rm::PlayerIndex player, rm::TickIndex tick, rm::UnitTypeIndex type,
+                               rm::sim::Fx atX, rm::sim::Fx atZ, bool queued = false);
 
 /// The player driving an army, or none. What an issued order is attributed to.
 [[nodiscard]] rm::PlayerIndex playerDriving(const UnitScene& scene, int army);

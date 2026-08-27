@@ -4,6 +4,8 @@
 
 #include "core/lua/LuaValue.hpp"
 
+#include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -69,6 +71,20 @@ enum class TargetLayerMask : std::uint8_t {
 /// mode of 2, so this is deliberately on the permissive side of typical — a missing field
 /// should not be stricter than a stated one.
 inline constexpr float kDefaultFiringToleranceDegrees = 10.0f;
+
+/// Ten degrees in binary radians — `lround(10 * 65536 / 360)` — the value the default
+/// converts to, kept as a constant so the field below needs no load-time work when the
+/// blueprint states nothing.
+inline constexpr std::int32_t kDefaultFiringToleranceBrads = 1820;
+
+/// Degrees → binary radians, at LOAD time. A full turn is 65,536 brad, so a degree is
+/// 65,536/360 = 182.04; rounded rather than truncated. This is the one place the conversion
+/// runs: content converts once through the loader, and the sim compares integers — the same
+/// rule every other authored angle follows.
+[[nodiscard]] inline std::int32_t firingToleranceBradsFromDegrees(float degrees) noexcept {
+    return static_cast<std::int32_t>(
+        std::lround(std::max(0.0f, degrees) * (65536.0 / 360.0)));
+}
 
 struct Weapon {
     std::string label;  ///< the blueprint's own `Label`, for messages
@@ -212,14 +228,16 @@ struct Weapon {
     /// turning; 284 of the 399 that say so are turreted.
     bool turreted = false;
 
-    /// How far off the aim may be and still fire, in DEGREES. 457 weapons state one, and
-    /// 279 of those say 2 — a tight cone.
+    /// How far off the aim may be and still fire, in BINARY RADIANS (a full turn is
+    /// 65,536). 457 weapons state one, and 279 of those say 2 degrees — a tight cone.
     ///
     /// This is what stops an unturreted weapon shooting sideways: with no turret the hull's
     /// own facing IS the aim, so the unit has to be pointing at what it shoots. A weapon that
     /// states none gets a generous default rather than zero, since zero would be a weapon
-    /// that can never fire at all.
-    float firingToleranceDegrees = kDefaultFiringToleranceDegrees;
+    /// that can never fire at all. Converted once at load by
+    /// `firingToleranceBradsFromDegrees`, because the tick has no business running float math
+    /// per shot to re-derive a number that never changes.
+    std::int32_t firingToleranceBrads = kDefaultFiringToleranceBrads;
 
     /// `ManualFire = true`: the game fires this only on an explicit order — the
     /// commander's 12000-damage OverCharge is the reason the flag exists. The order

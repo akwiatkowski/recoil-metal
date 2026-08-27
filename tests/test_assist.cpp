@@ -82,8 +82,9 @@ struct Fixture {
                                      terrain, grid, roster.rate, &building);
     }
 
-    [[nodiscard]] bool build(UnitId who, float x, float z) {
+    [[nodiscard]] bool build(UnitId who, float x, float z, bool queued = false) {
         return apply(Command{.kind = CommandKind::Build,
+                             .queued = queued,
                              .unit = who,
                              .targetX = rm::sim::fxFromFloat(x),
                              .targetZ = rm::sim::fxFromFloat(z),
@@ -206,23 +207,24 @@ TEST_CASE("factory assist accelerates the oldest unfinished queue entry") {
     f.economies[0].stored = {.mass = rm::sim::magFromFloat(1000.0f),
                              .energy = rm::sim::magFromFloat(1000.0f)};
 
-    // The current build UI can enqueue two factory products before either finishes. List order
-    // is creation order, so assist must strengthen only the first unfinished product.
+    // The second product is queued, not constructed in parallel. Assist follows the factory's
+    // one active project and transfers when the queue advances.
     REQUIRE(f.build(factory, 205.0f, 200.0f));
-    REQUIRE(f.build(factory, 220.0f, 200.0f));
+    REQUIRE(f.build(factory, 240.0f, 200.0f, true));
     REQUIRE(f.assist(helper, factory));
     f.tick(1);
 
-    REQUIRE(f.building.size() == 2);
+    REQUIRE(f.building.size() == 1);
     CHECK(rm::test::asFloat(f.building[0].buildTimeRemaining) == Approx(98.0f).margin(0.01));
     CHECK(rm::test::asFloat(f.building[0].assistPerTick) == Approx(1.0f).margin(0.001));
-    CHECK(rm::test::asFloat(f.building[1].buildTimeRemaining) == Approx(99.0f).margin(0.01));
-    CHECK(rm::test::asFloat(f.building[1].assistPerTick) == 0.0f);
 
-    // Once the first product is done, the same standing order rolls onto the next entry.
-    f.building[0].buildTimeRemaining = rm::sim::Mag{};
+    // Once the first product finishes, the next tick starts the second and the same standing
+    // assist order rolls onto it.
+    f.building[0].buildTimeRemaining = rm::sim::magFromFloat(1.0f);
     f.tick(1);
-    CHECK(rm::test::asFloat(f.building[1].buildTimeRemaining) == Approx(97.0f).margin(0.01));
+    f.tick(1);
+    REQUIRE(f.building.size() == 2);
+    CHECK(rm::test::asFloat(f.building[1].buildTimeRemaining) == Approx(98.0f).margin(0.01));
     CHECK(rm::test::asFloat(f.building[1].assistPerTick) == Approx(1.0f).margin(0.001));
 }
 

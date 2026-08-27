@@ -362,6 +362,12 @@ void resolveCollisions(UnitStore& store, const Terrain& terrain,
                 continue;
             }
 
+            const bool movableA = motion[a].speedPerTick > Fx{};
+            const bool movableB = motion[b].speedPerTick > Fx{};
+            if (!movableA && !movableB) {
+                continue;
+            }
+
             // Exactly coincident, which a rally order produces the moment two units are given
             // the same destination. There is no direction to separate along, so one is invented
             // from the pair's indices — deterministic, and different for each pair, so a stack
@@ -373,14 +379,18 @@ void resolveCollisions(UnitStore& store, const Terrain& terrain,
                 distance = kFxOne;
             }
 
-            // Half the overlap each: neither unit outranks the other, and moving only one would
-            // let a unit under orders shove its way through a crowd untouched.
-            const Fx push = (wanted - distance) * Fx::fromRatio(1, 2);
+            // Mobile peers share the overlap. An immobile structure is a fixed obstacle, so the
+            // mobile unit takes the whole displacement instead of sliding the building away.
+            const Fx overlap = wanted - distance;
+            const Fx pushA = movableA ? (movableB ? overlap * Fx::fromRatio(1, 2) : overlap)
+                                      : Fx{};
+            const Fx pushB = movableB ? (movableA ? overlap * Fx::fromRatio(1, 2) : overlap)
+                                      : Fx{};
             const Fx nx = dxWorld / distance;
             const Fx nz = dzWorld / distance;
 
-            const auto surfaceSiteAllowed = [&](std::size_t slot, Fx x, Fx z) {
-                if (!motion[slot].surfaceWater) {
+            const auto siteAllowed = [&](std::size_t slot, Fx x, Fx z) {
+                if (motion[slot].airborne) {
                     return true;
                 }
                 const auto type = static_cast<std::size_t>(
@@ -393,18 +403,18 @@ void resolveCollisions(UnitStore& store, const Terrain& terrain,
 
             const Fx oldAX = unitA.x;
             const Fx oldAZ = unitA.z;
-            unitA.x -= nx * push;
-            unitA.z -= nz * push;
-            if (!surfaceSiteAllowed(a, unitA.x, unitA.z)) {
+            unitA.x -= nx * pushA;
+            unitA.z -= nz * pushA;
+            if (!siteAllowed(a, unitA.x, unitA.z)) {
                 unitA.x = oldAX;
                 unitA.z = oldAZ;
             }
 
             const Fx oldBX = unitB.x;
             const Fx oldBZ = unitB.z;
-            unitB.x += nx * push;
-            unitB.z += nz * push;
-            if (!surfaceSiteAllowed(b, unitB.x, unitB.z)) {
+            unitB.x += nx * pushB;
+            unitB.z += nz * pushB;
+            if (!siteAllowed(b, unitB.x, unitB.z)) {
                 unitB.x = oldBX;
                 unitB.z = oldBZ;
             }

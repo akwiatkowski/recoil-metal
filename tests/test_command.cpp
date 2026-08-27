@@ -131,6 +131,16 @@ TEST_CASE("a move command routes a unit, and a stop cancels it") {
     CHECK(fix.roster.motion(fix.mine).path.empty());
 }
 
+TEST_CASE("a short move in one path cell reaches the clicked point") {
+    Fixture fix;
+
+    REQUIRE(fix.apply(moveOrder(0, 0, fix.mine, 220.0f, 220.0f)));
+    const rm::sim::MoveState& motion = fix.roster.motion(fix.mine);
+    REQUIRE(motion.path.size() == 1);
+    CHECK(motion.path[0][0] == rm::test::fx(220.0f));
+    CHECK(motion.path[0][1] == rm::test::fx(220.0f));
+}
+
 TEST_CASE("a player cannot order another army's units") {
     // THE AUTHORISATION CHECK, which was impossible before orders were data: with `orderTo`
     // called at the click site, nothing compared the clicker to the owner. Invisible in a
@@ -648,14 +658,17 @@ TEST_CASE("an upgrade builds where the builder stands and remembers who it repla
     rm::unitdef::UnitDef tankDef;
     tankDef.name = "TANK1";
     tankDef.categories = {"BUILTBYT1"};
+    tankDef.motion = rm::unitdef::MotionType::Land;
+    tankDef.speedElmosPerSecond = 30.0f;
     tankDef.buildTime = rm::test::mag(10.0f);
     const rm::UnitTypeIndex tankType = fix.roster.addType(tankDef);
+    const UnitId secondFactory = fix.roster.add(t1Type, 500.0f, 500.0f, 0, 500.0f);
     const Command train{.tick = 0,
                         .player = 0,
                         .kind = CommandKind::Build,
-                        .unit = factory,
-                        .targetX = rm::test::fx(300.0f),
-                        .targetZ = rm::test::fx(300.0f),
+                        .unit = secondFactory,
+                        .targetX = rm::test::fx(500.0f),
+                        .targetZ = rm::test::fx(500.0f),
                         .buildType = tankType};
     REQUIRE(fix.apply(train));
     CHECK_FALSE(fix.building.back().isUpgrade());
@@ -688,6 +701,8 @@ TEST_CASE("a build order names a place on the map, and the ground decides the he
     const rm::UnitTypeIndex mexType = fix.roster.addType(mexDef);
 
     const UnitId engineer = fix.roster.add(engineerType, 300.0f, 300.0f, 0, 500.0f);
+    REQUIRE(fix.apply(moveOrder(0, 0, engineer, 600.0f, 300.0f)));
+    REQUIRE(fix.roster.motion(engineer).moving);
 
     REQUIRE(fix.apply(Command{.tick = 0,
                               .player = 0,
@@ -704,14 +719,7 @@ TEST_CASE("a build order names a place on the map, and the ground decides the he
     CHECK(rm::test::asFloat(work.position[2]) == 700.0f);
 }
 
-TEST_CASE("a build does not leave the builder looking busy") {
-    // A construction is paid for by the economy rather than attended by the builder, so the
-    // order is over the moment it is started. Left at the head of the queue it would make the
-    // builder look occupied for a tick — and `advanceOrders` would clear it next tick anyway,
-    // which is a difference visible only to whatever asks in between.
-    //
-    // It matters more now that the app's builds come through here: the scripted opponent issues
-    // one every few seconds and reads its own units' state on the same tick.
+TEST_CASE("a build occupies its builder and refuses parallel work") {
     Fixture fix;
 
     rm::unitdef::UnitDef engineerDef;
@@ -735,10 +743,82 @@ TEST_CASE("a build does not leave the builder looking busy") {
                               .kind = CommandKind::Build,
                               .unit = engineer,
                               .targetX = rm::test::fx(400.0f),
-                              .targetZ = rm::test::fx(400.0f),
-                              .buildType = mexType}));
+                               .targetZ = rm::test::fx(400.0f),
+                               .buildType = mexType}));
 
-    CHECK(fix.roster.store.orders()[engineer.index].empty());
+    CHECK_FALSE(fix.roster.motion(engineer).moving);
+    CHECK(fix.roster.motion(engineer).path.empty());
+    CHECK_FALSE(fix.roster.store.orders()[engineer.index].empty());
+    CHECK_FALSE(fix.apply(Command{.tick = 1,
+                                  .player = 0,
+                                  .kind = CommandKind::Build,
+                                  .unit = engineer,
+                                  .targetX = rm::test::fx(500.0f),
+                                  .targetZ = rm::test::fx(500.0f),
+                                  .buildType = mexType}));
+    CHECK(fix.building.size() == 1);
+
+    Command queued{.tick = 1,
+                   .player = 0,
+                   .kind = CommandKind::Build,
+                   .queued = true,
+                   .unit = engineer,
+                   .targetX = rm::test::fx(500.0f),
+                   .targetZ = rm::test::fx(500.0f),
+                   .buildType = mexType};
+    REQUIRE(fix.apply(queued));
+    CHECK(fix.roster.store.orders()[engineer.index].size() == 2);
+    CHECK(fix.building.size() == 1);
+
+    fix.run(CommandLog{}, 60);
+    CHECK(fix.building[0].finished());
+    CHECK(fix.roster.store.orders()[engineer.index].size() == 1);
+    fix.run(CommandLog{}, 1);
+    REQUIRE(fix.building.size() == 2);
+    CHECK_FALSE(fix.building[1].finished());
+}
+
+TEST_CASE("a structure build refuses live occupancy and only unfinished work") {
+    Fixture fix;
+
+    rm::unitdef::UnitDef engineerDef;
+    engineerDef.name = "engineer";
+    engineerDef.buildRate = 10.0f;
+    engineerDef.buildableCategory = {{"TESTSTRUCTURE"}};
+    const rm::UnitTypeIndex engineerType = fix.roster.addType(engineerDef);
+
+    rm::unitdef::UnitDef structureDef;
+    structureDef.name = "structure";
+    structureDef.categories = {"TESTSTRUCTURE"};
+    structureDef.collisionRadiusElmos = 10.0f;
+    structureDef.buildTime = rm::test::mag(60.0f);
+    const rm::UnitTypeIndex structureType = fix.roster.addType(structureDef);
+
+    const UnitId firstBuilder = fix.roster.add(engineerType, 300.0f, 300.0f, 0, 500.0f);
+    const UnitId secondBuilder = fix.roster.add(engineerType, 320.0f, 300.0f, 0, 500.0f);
+    const UnitId blocker = fix.roster.add(engineerType, 400.0f, 400.0f, 0, 500.0f);
+    const auto build = [&](UnitId builder, float x, float z) {
+        return fix.apply(Command{.tick = 0,
+                                 .player = 0,
+                                 .kind = CommandKind::Build,
+                                 .unit = builder,
+                                 .targetX = rm::test::fx(x),
+                                 .targetZ = rm::test::fx(z),
+                                 .buildType = structureType});
+    };
+
+    CHECK_FALSE(build(firstBuilder, 300.0f, 300.0f));  // the builder itself occupies the site
+    CHECK_FALSE(build(firstBuilder, 400.0f, 400.0f));
+    fix.roster.store.kill(blocker);
+    REQUIRE(build(firstBuilder, 400.0f, 400.0f));
+    CHECK_FALSE(build(secondBuilder, 405.0f, 400.0f));
+    CHECK(fix.building.size() == 1);
+
+    // Finished entries remain as history but no longer occupy ground. The spawned structure
+    // would normally become the live blocker; this fixture deliberately has not spawned it.
+    fix.building[0].buildTimeRemaining = rm::sim::Mag{};
+    REQUIRE(build(secondBuilder, 400.0f, 400.0f));
+    CHECK(fix.building.size() == 2);
 }
 
 TEST_CASE("an attack with a target is a pursuit: chase, hold in range, finish on the kill") {
@@ -792,4 +872,37 @@ TEST_CASE("an attack with a target is a pursuit: chase, hold in range, finish on
     fixture.roster.store.health()[prey.index].current = rm::sim::Mag{};
     fixture.run(quiet, 10);
     CHECK(fixture.roster.store.orders()[hunter.index].empty());
+}
+
+TEST_CASE("a short-range pursuit closes inside the target's path cell") {
+    Fixture fixture;
+
+    rm::unitdef::UnitDef armed;
+    armed.name = "test_short_range_gunner";
+    armed.speedElmosPerSecond = 40.0f;
+    armed.motion = rm::unitdef::MotionType::Land;
+    rm::unitdef::Weapon gun;
+    gun.label = "short gun";
+    gun.damage = rm::sim::magFromFloat(1.0f);
+    gun.maxRange = rm::test::fx(12.0f);
+    gun.rateOfFire = 1.0f;
+    armed.weapons.push_back(gun);
+    const UnitId hunter =
+        fixture.roster.add(fixture.roster.addType(armed), 200.0f, 200.0f, 0, 500.0f);
+    const UnitId prey = fixture.theirs;
+    fixture.roster.transform(prey).x = rm::test::fx(630.0f);
+    fixture.roster.transform(prey).z = rm::test::fx(630.0f);
+    fixture.roster.reindex();
+
+    Command attack = moveOrder(0, 0, hunter, 630.0f, 630.0f);
+    attack.kind = CommandKind::Attack;
+    attack.target = prey;
+    CommandLog log;
+    log.record(attack);
+    fixture.run(log, 300);
+
+    CHECK(rm::sim::groundDistanceElmos(rm::sim::positionOf(fixture.roster.transform(hunter)),
+                                       rm::sim::positionOf(fixture.roster.transform(prey)))
+          <= gun.maxRange);
+    CHECK_FALSE(fixture.roster.motion(hunter).moving);
 }

@@ -230,6 +230,28 @@ TEST_CASE("collision separation does not push a surface ship into a blocked wate
     }
 }
 
+TEST_CASE("collision separation does not push a land unit into a blocked cell") {
+    const HeightField field = flatField();
+    Crowd crowd;
+    crowd.add(110.0f, 32.0f);
+    crowd.add(111.0f, 32.0f);
+    crowd.store.reindex(rm::sim::Fx::fromInt(64));
+
+    rm::sim::PassabilityGrid land;
+    land.cellsX = 3;
+    land.cellsZ = 1;
+    land.elmosPerCell = rm::sim::Fx::fromInt(64);
+    land.passable = {1, 1, 0};
+    const std::array<const rm::sim::PassabilityGrid*, 1> grids{{&land}};
+
+    rm::sim::resolveCollisions(crowd.store, rm::sim::Terrain{field}, grids);
+
+    for (std::size_t i = 0; i < crowd.size(); ++i) {
+        CHECK(rm::sim::sitePlaceable(land, crowd.at(i).x, crowd.at(i).z,
+                                     crowd.motionAt(i).radiusElmos));
+    }
+}
+
 /// Distance between a unit and its destination, on the ground plane.
 [[nodiscard]] rm::sim::Fx distanceToOrder(const rm::sim::Transform& instance,
                                           const MoveState& state) {
@@ -696,6 +718,20 @@ TEST_CASE("units pushed together are separated") {
 
         CHECK(rm::test::asFloat(crowd.at(0).x) == Approx(100.0f));
         CHECK(rm::test::asFloat(crowd.at(1).x) == Approx(500.0f));
+    }
+
+    SECTION("a mobile unit moves around an immobile structure") {
+        Crowd crowd;
+        crowd.add(400.0f, 400.0f);
+        crowd.add(401.0f, 400.0f);
+        crowd.store.motion()[0].speedPerTick = rm::sim::Fx{};
+        const rm::sim::Transform fixed = crowd.at(0);
+
+        crowd.separate(field);
+
+        CHECK(crowd.at(0).x == fixed.x);
+        CHECK(crowd.at(0).z == fixed.z);
+        CHECK(crowd.at(1).x > rm::test::fx(401.0f));
     }
 
     SECTION("ground collision placement preserves the established tilt") {

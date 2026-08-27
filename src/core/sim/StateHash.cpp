@@ -310,6 +310,12 @@ StateHash hashMatch(const UnitStore& store, const Match& match) {
                 feed(h, static_cast<int>(shot.targetLayers));
             }
             feed(h, shot.firedByArmy);
+            // The shooter's identity is live execution state: at impact it becomes
+            // `lastHitBy`, which decides kill attribution. Two runs differing only here
+            // hash identically for the whole flight — up to thirty seconds — before the
+            // divergence surfaces one hop downstream. Fed like every other UnitId.
+            feed(h, static_cast<std::size_t>(shot.firedBy.index));
+            feed(h, static_cast<std::size_t>(shot.firedBy.generation));
             feed(h, static_cast<int>(shot.arc));
             feed(h, shot.ticksRemaining);
         }

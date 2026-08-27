@@ -117,12 +117,12 @@ struct PassabilityGrid {
                                                             float waterLevelElmos,
                                                             float minDepthElmos = 0.0f);
 
-/// A route from one world position to another, as cell-centre waypoints.
+/// A route from one world position to another, through cell-centre waypoints and ending at the
+/// exact requested point (clamped to the grid bounds).
 ///
-/// Empty when there is no route, when either end is impassable, or when both
-/// ends are in the same cell — in that last case there is genuinely nowhere to
-/// walk, and returning one waypoint would send a unit trundling to the cell
-/// centre for no reason.
+/// Empty when there is no route or either end is impassable. Two positions in the same cell
+/// produce one direct waypoint; an empty path must never ambiguously mean both "unreachable"
+/// and "nearby" to a command caller.
 ///
 /// The start cell is NOT included: a unit is already there, and a waypoint
 /// behind it would make it turn round before setting off.

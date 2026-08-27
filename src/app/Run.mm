@@ -128,6 +128,25 @@ bool writePng(const std::string& path, const rm::Renderer::CapturedImage& image)
 
 namespace {
 
+/// The roster's tile list as one number: FNV-1a 64-bit over each tile's blueprint id.
+///
+/// This is the icon atlas's repack key for the selection panel, and it has to answer "is
+/// this the same GROUP OF TYPES the atlas was packed for" — which the tile count cannot,
+/// because two selections of different units group into equal-length lists. Ids are what
+/// the atlas actually drew; counts and health are per-frame state no icon depends on.
+[[nodiscard]] std::uint64_t rosterKeyFor(const std::vector<rm::ui::RosterTile>& tiles) {
+    constexpr std::uint64_t kFnvOffset = 1469598103934665603ull;
+    constexpr std::uint64_t kFnvPrime = 1099511628211ull;
+    std::uint64_t key = kFnvOffset;
+    for (const rm::ui::RosterTile& tile : tiles) {
+        for (const char c : tile.id) {
+            key = (key ^ static_cast<std::uint8_t>(c)) * kFnvPrime;
+        }
+        key = (key ^ static_cast<std::uint8_t>('/')) * kFnvPrime;  // tile separator
+    }
+    return key;
+}
+
 // The session's fields, named the way the code that used to be inside `main` named them. A
 // Every name is `[[maybe_unused]]`: a benchmark reads no start positions and a screenshot
 // opens no window, so a shared session is by nature partly unread by each of its users.
@@ -770,11 +789,12 @@ int runWindowed(const Session& session) {
         std::vector<rm::ui::RosterTile> rosterTiles;
         std::vector<std::optional<std::size_t>> rosterSlots;
 
-        /// How many units the roster's icons were packed for. The tiles are grouped by TYPE, so
-        /// this changes only when the selection gains or loses a type — but the count is the
-        /// cheap conservative key, and repacking on a unit's death costs one frame of archive
-        /// reads rather than a stale picture.
-        std::size_t rosterPackedFor = static_cast<std::size_t>(-1);
+        /// WHAT THE ROSTER'S ICONS WERE PACKED FOR: an FNV-1a over the tiles' blueprint ids,
+        /// from `rosterKeyFor` below. It used to be the tile COUNT, which is not an identity:
+        /// two selections of different unit types group into equal-length tile lists, and the
+        /// positional slot reapplication then showed the previous selection's icon until some
+        /// count happened to change. Ids are what the atlas actually drew.
+        std::uint64_t rosterPackedKey = 0;
 
         // The strategic layer's per-type icon table, rebuilt with every pack — the slots
         // move with the tray's and roster's counts. `typesPackedFor` starts impossible so
@@ -885,7 +905,7 @@ int runWindowed(const Session& session) {
         /// Whether the armed build may stand at a world point — the ghost's colour, and the
         /// same question the click asks before it orders anything.
         const auto armedPlaceable = [&](std::array<float, 2> at) -> bool {
-            if (!armedOption) {
+            if (!armedOption || !units.store.alive(buildWho.builder)) {
                 return false;
             }
             const std::string path = armedPath();
@@ -898,9 +918,10 @@ int runWindowed(const Session& session) {
                 static_cast<std::size_t>(units.store.typeAt(buildWho.builder.index));
             const rm::sim::PassabilityGrid& grid = passability.gridForBuild(
                 units, static_cast<std::size_t>(*targetType), builderType);
-            return rm::sim::sitePlaceable(grid, rm::sim::fxFromFloat(at[0]),
-                                          rm::sim::fxFromFloat(at[1]),
-                                          rm::sim::fxFromFloat(armedRadius()));
+            return rm::sim::buildSitePlaceable(
+                grid, rm::sim::fxFromFloat(at[0]), rm::sim::fxFromFloat(at[1]),
+                rm::sim::fxFromFloat(armedRadius()), units.store, units.catalog,
+                units.building);
         };
 
         /// Orders the armed build at a world point, through the one order path, and disarms.
@@ -1186,9 +1207,9 @@ int runWindowed(const Session& session) {
                                                             ? buildOptions[*cell].id
                                                             : buildOptions[*cell].name;
                                 if (issueBuild(units, grid, map->field, buildWho.builder,
-                                               playerDriving(units, units.playerArmy),
-                                               static_cast<rm::TickIndex>(matchTicks), *type,
-                                               at.x, at.z + rollOff)) {
+                                                playerDriving(units, units.playerArmy),
+                                                static_cast<rm::TickIndex>(matchTicks), *type,
+                                                at.x, at.z + rollOff, !upgrade)) {
                                     std::printf("%s: %s\n",
                                                 upgrade ? "upgrade started" : "factory queued",
                                                 what.c_str());
@@ -1795,10 +1816,10 @@ int runWindowed(const Session& session) {
             // option list and the tile list are rebuilt every frame and a fresh entry has no
             // slot — repacking to recover them would be two dozen archive reads a frame for
             // pictures that have not moved.
-            if (buildWho.builder != iconsPackedFor || rosterTiles.size() != rosterPackedFor
+            if (buildWho.builder != iconsPackedFor || rosterPackedKey != rosterKeyFor(rosterTiles)
                 || units.catalog.size() != typesPackedFor) {
                 iconsPackedFor = buildWho.builder;
-                rosterPackedFor = rosterTiles.size();
+                rosterPackedKey = rosterKeyFor(rosterTiles);
                 typesPackedFor = units.catalog.size();
                 // Any glyph a newly registered type names is fetched before the pack, so a
                 // unit type first seen this frame gets its icon in this atlas rather than

@@ -611,7 +611,7 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
                                                           std::string_view blueprintPath,
                                                           std::array<float, 3> position,
                                                           const rm::sim::Army& army,
-                                                          float yaw) {
+                                                          rm::Brad yaw) {
     const std::optional<rm::UnitTypeIndex> ensured =
         ensureDrawableType(scene, content, blueprintPath);
     if (!ensured) {
@@ -624,7 +624,11 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
     rm::sim::Transform transform;
     transform.x = rm::sim::fxFromFloat(position[0]);
     transform.z = rm::sim::fxFromFloat(position[2]);
-    transform.heading = rm::sim::bradFromRadians(yaw);
+    // The heading arrives already in brads: it enters hashed sim state here, and the
+    // conversion from radians runs in whoever produced it — which is fixed point for a
+    // bearing derived from positions (see the factory roll-off call in Match.cpp), never
+    // libm's atan2.
+    transform.heading = yaw;
 
     const rm::sim::MoveState motion = motionFor(def, army.index);
     rm::sim::placeOnMotionLayer(transform, motion, scene.terrain(field));
@@ -735,13 +739,15 @@ rm::PlayerIndex playerDriving(const UnitScene& scene, int army) {
 }
 
 bool issueBuild(UnitScene& scene, const rm::sim::PassabilityGrid& grid,
-                              const rm::HeightField& field, rm::sim::UnitId builder,
-                              rm::PlayerIndex player, rm::TickIndex tick,
-                              rm::UnitTypeIndex type, rm::sim::Fx atX, rm::sim::Fx atZ) {
+                               const rm::HeightField& field, rm::sim::UnitId builder,
+                               rm::PlayerIndex player, rm::TickIndex tick,
+                               rm::UnitTypeIndex type, rm::sim::Fx atX, rm::sim::Fx atZ,
+                               bool queued) {
     const rm::sim::Command command{
         .tick = tick,
         .player = player,
         .kind = rm::sim::CommandKind::Build,
+        .queued = queued,
         .unit = builder,
         .targetX = atX,
         .targetZ = atZ,
@@ -751,7 +757,7 @@ bool issueBuild(UnitScene& scene, const rm::sim::PassabilityGrid& grid,
     const bool applied = rm::sim::applyCommand(command, scene.store, scene.catalog,
                                                scene.players, scene.armies,
                                                 scene.terrain(field), grid, gAppTickRate,
-                                                 &scene.building);
+                                                 &scene.building, &scene.events);
     if (applied) {
         scene.commands.record(command);
     }

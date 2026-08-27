@@ -9,6 +9,9 @@ third_party/
 # clangd index, generated from compile_commands.json
 .cache/
 
+# A git worktree lives here — never commit a worktree inside its own repo.
+.claude/
+
 # Screenshots ARE committed, as downscaled JPEGs — a reader should not have to
 # build the project to see what it renders, and "regenerable in principle" is
 # no help to someone browsing the repo. The full-resolution PNGs the renderer

@@ -10,6 +10,7 @@ extern "C" {
 #include <cctype>
 #include <cstring>
 #include <cstdio>
+#include <deque>
 #include <fstream>
 #include <map>
 #include <sstream>
@@ -58,7 +59,14 @@ struct Sandbox {
     /// The scheduler: Moho's thread model, on coroutines. `ForkThread` files one here,
     /// `pump` resumes what is due, `WaitSeconds`/`WaitTicks` yield a wake delay. Errors are
     /// recorded, not fatal — one broken platoon thread must not stop the brain.
-    std::vector<Thread> threads;
+    ///
+    /// A DEQUE, and the choice is load-bearing twice. (1) `pump` holds a `Thread&` across
+    /// `lua_resume`, and the resumed corpus code may FORK — a vector's push_back would
+    /// reallocate out from under that reference; deque promises the existing elements never
+    /// move. (2) Slots are never erased, because a handle's `__rm_thread` field carries a
+    /// slot index: compacting would silently re-point every older handle at the wrong
+    /// thread. Dead slots are reclaimed at the registry level by pump instead.
+    std::deque<Thread> threads;
     std::vector<std::string> threadErrors;
     long long tick = 0;              ///< the pump's clock, in sim ticks
     std::size_t currentThread = SIZE_MAX;  ///< index being resumed, for CurrentThread
@@ -1293,9 +1301,11 @@ std::size_t FafAi::pump(long long tick) {
     sandbox->tick = tick;
 
     std::size_t resumed = 0;
-    // By index, not iterator: a resumed thread may FORK, growing the vector. A thread forked
-    // during this pump has wake == tick and runs this same pass, which is Moho's behaviour —
-    // a forked thread starts without waiting a sim beat.
+    // By index, not iterator: a resumed thread may FORK, growing the container. The forked
+    // thread has wake == tick and runs this same pass, which is Moho's behaviour — a forked
+    // thread starts without waiting a sim beat. A `Thread&` stays valid across the resume
+    // because `threads` is a deque (see Sandbox::threads), which is what makes holding the
+    // reference through a call that can grow the container legal.
     for (std::size_t i = 0; i < sandbox->threads.size(); ++i) {
         Thread& thread = sandbox->threads[i];
         if (thread.dead || thread.wake > tick) {
@@ -1332,8 +1342,26 @@ std::size_t FafAi::pump(long long tick) {
                 sandbox->threadErrors.push_back(message != nullptr ? message : "?");
             }
             thread.dead = true;
+        }
+    }
+
+    // Reclaim what dead threads hold at the registry, wherever they died: resumed to
+    // completion here, killed from another thread's body through KillThread, or destroyed
+    // through their own handle mid-run. The coroutine ref is its Lua stack; the handle ref
+    // is the table a TrashBag may still point at — both are immortal until this unrefs
+    // them, so without the sweep every fork/kill cycle leaks one of each for the rest of
+    // the match. The slots themselves stay (see Sandbox::threads): only the refs grow.
+    for (Thread& thread : sandbox->threads) {
+        if (!thread.dead) {
+            continue;
+        }
+        if (thread.coroutine != LUA_NOREF) {
             luaL_unref(state_, LUA_REGISTRYINDEX, thread.coroutine);
             thread.coroutine = LUA_NOREF;
+        }
+        if (thread.handle != LUA_NOREF) {
+            luaL_unref(state_, LUA_REGISTRYINDEX, thread.handle);
+            thread.handle = LUA_NOREF;
         }
     }
     return resumed;
