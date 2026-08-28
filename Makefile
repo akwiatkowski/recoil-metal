@@ -90,7 +90,7 @@ FA_FLAGS  = --gamedata "$(FA_ROOT)/gamedata"
 .DEFAULT_GOAL := help
 .PHONY: help build configure test verify golden play play-from watch run run-fa run-bar \
         skirmish battle match shot-fa shot-bar bench bench-fa bench-gl clean check-fa check-bar \
-        ai ai-play ai-report ai-sanity shot-ui shot-engineer
+        check-ai ai ai-play ai-report ai-sanity shot-ui shot-engineer
 
 help:
 	@echo 'recoil-metal — make targets'
@@ -256,32 +256,32 @@ watch: build check-fa
 
 # --- Bots playing each other ------------------------------------------------
 #
-# `make ai-play` is the one to run while the FAF adapter is being brought up (ADR-039). It prints
-# the sandbox report — what loaded, what failed and why, what the corpus called — and then plays
-# a bots-vs-bots match with nobody driving, so the terminal shows both the AI's integration state
-# and the opponents actually playing.
+# `make ai-play` prints the sandbox report — what loaded, what failed and why, what the corpus
+# called — and then requests FAF opponents in a bots-vs-bots match with nobody driving. It starts
+# live at tick zero: pre-running and then opening a window creates a fresh MatchRunner and would
+# reset the brains while keeping the progressed scene. The terminal shows both integration state
+# and the decisions driving the match.
 #
 # The whole output is meant to be PASTED. That is why the report is one block with its own
 # banner, why failures are deduplicated to distinct causes, and why module loading is traced
 # line by line: the failure being chased is often a hang, and a summary printed at the end never
 # arrives.
-#
-# The opponents playing are still the SCRIPTED ones (core/sim/BuildOrder.hpp behind ADR-038's
-# port). FAF's brain does not drive an army yet, and the report is exactly the list of reasons
-# why — so this target shows the gap rather than hiding it.
 AI_SECONDS ?= 400
 
-ai-play: build check-fa
+check-ai:
+	@test -d vendor/ai/faf || { echo 'No FAF AI corpus at vendor/ai/faf — run `make ai`.'; exit 1; }
+
+ai-play: build check-fa check-ai
 	@echo
-	@echo '  Bots vs bots on $(notdir $(FA_MAP)), $(ARMIES) armies, $(AI_SECONDS)s.'
+	@echo "  Bots vs bots on $$(basename "$(FA_MAP)"), $(ARMIES) armies, live from tick zero."
 	@echo '  The FAF sandbox report prints first — paste the whole block when reporting an issue.'
 	@echo
-	$(BIN) "$(FA_MAP)" $(FA_FLAGS) --ai-debug --skirmish --observer --armies $(ARMIES) \
-	  $(ALLIANCE_FLAG) --play $(AI_SECONDS)
+	$(BIN) "$(FA_MAP)" $(FA_FLAGS) --ai-debug --ai-faf --ai-log \
+	  --skirmish --observer --armies $(ARMIES) $(ALLIANCE_FLAG) $(FACTION_FLAG)
 
 # The same report with no match afterwards, for a fast loop while fixing a binding. Runs the
 # test binary rather than the game because it needs no map, no drive and no window.
-ai-report: build
+ai-report: build check-ai
 	./$(BUILD)/rm_tests '[faf]'
 
 # The measuring half of "is the AI integrated": a headless skirmish with the FAF sandbox
@@ -291,9 +291,9 @@ ai-report: build
 # missing-method and condition-error ledgers stay empty. Deterministic, so the numbers are
 # comparable run to run: change an adapter, run this again, diff the report. The tiny screenshot
 # is how the pre-run exits without opening a window.
-ai-sanity: build check-fa
+ai-sanity: build check-fa check-ai
 	@echo
-	@echo '  Headless sanity: $(ARMIES) armies on $(notdir $(FA_MAP)), $(AI_SECONDS)s, profiler on.'
+	@echo "  Headless sanity: $(ARMIES) armies on $$(basename "$(FA_MAP)"), $(AI_SECONDS)s, profiler on."
 	@echo
 	$(BIN) "$(FA_MAP)" $(FA_FLAGS) --skirmish --observer --armies $(ARMIES) \
 	  $(ALLIANCE_FLAG) $(FACTION_FLAG) --ai-faf $(if $(FAF),--ai-log,) \
@@ -302,7 +302,7 @@ ai-sanity: build check-fa
 
 # The default playable duel: army 0 is the human, army 1 runs FAF's AI, and the responsive HUD
 # chooses its profile from the logical window size. Use `play` for other army counts and knobs.
-skirmish: build check-fa
+skirmish: build check-fa check-ai
 	$(BIN) "$(FA_MAP)" $(FA_FLAGS) --skirmish --armies 2 --ai-faf $(FACTION_FLAG) $(VISION_FLAG) $(UI_FLAG)
 
 # The same, fought. `--march` sends everything at one point and pre-runs the sim, so the

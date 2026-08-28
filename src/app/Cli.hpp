@@ -82,10 +82,10 @@ struct MarchOptions {
     /// IN the log); the setup's own orders are skipped as already issued.
     std::string replayCommandsPath;
 
-    /// `--ai-sanity`: boot the FAF sandbox beside the headless pre-run, pump its threads
-    /// every tick, and close with the sanity report — what got built, which engine bindings
-    /// the AI called, and which of the corpus's own functions ran. The measuring half of
-    /// "is the AI integrated", runnable after every adapter change.
+    /// `--ai-sanity`: profile the FAF opponent's sandbox during the headless pre-run, or boot
+    /// a standalone sandbox when no live FAF-opponent sandbox exists, and close with the sanity
+    /// report — what got built, which engine bindings the AI called, and which of the corpus's
+    /// own functions ran. The measuring half of "is the AI integrated".
     bool aiSanity = false;
 };
 

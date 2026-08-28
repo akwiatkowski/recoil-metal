@@ -1066,12 +1066,9 @@ void march(UnitScene& scene, const rm::HeightField& field, PassabilitySet& passa
     std::uint32_t dustSeed = 0x51ED27u;
     std::vector<rm::DustEmitter> emitters;
 
-    // `--ai-sanity`: the FAF sandbox runs BESIDE the match — booted with the profiler on,
-    // pumped every tick so its forked threads live on the match's own clock — and what got
-    // built is tallied for the closing report. The sandbox does not command anything yet
-    // (that is the opponent bridge to come); what this measures is everything short of it:
-    // does the corpus load, do its threads run, what does its code do, and what did the
-    // match build meanwhile.
+    // `--ai-sanity`: profile the sandbox the FAF opponents actually use. When no live sandbox
+    // exists — either none was requested or its boot failed — a standalone one is pumped on the
+    // match clock instead; either way, what got built is tallied for the report.
     // `--replay-commands`: the log drives, nothing thinks. Loaded before the loop so a
     // bad path aborts the run instead of replaying half a match; scripts emptied so the
     // opponents' slot in the tick belongs to the log's own commands.
