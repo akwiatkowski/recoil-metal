@@ -287,15 +287,17 @@ ai-report: build
 # The measuring half of "is the AI integrated": a headless skirmish with the FAF sandbox
 # pumped beside it, closed by the sanity report — what the armies BUILT (by blueprint,
 # counted), which ENGINE BINDINGS the corpus called, and which of the CORPUS'S OWN functions
-# ran and how often. Deterministic, so the numbers are comparable run to run: change an
-# adapter, run this again, diff the report. The tiny screenshot is how the pre-run exits
-# without opening a window.
+# ran and how often. This target always seats FAF opponents; otherwise the opponent bridge's
+# missing-method and condition-error ledgers stay empty. Deterministic, so the numbers are
+# comparable run to run: change an adapter, run this again, diff the report. The tiny screenshot
+# is how the pre-run exits without opening a window.
 ai-sanity: build check-fa
 	@echo
 	@echo '  Headless sanity: $(ARMIES) armies on $(notdir $(FA_MAP)), $(AI_SECONDS)s, profiler on.'
 	@echo
 	$(BIN) "$(FA_MAP)" $(FA_FLAGS) --skirmish --observer --armies $(ARMIES) \
-	  $(ALLIANCE_FLAG) $(FACTION_FLAG) $(FAF_AI_FLAG) --play $(AI_SECONDS) --ai-sanity \
+	  $(ALLIANCE_FLAG) $(FACTION_FLAG) --ai-faf $(if $(FAF),--ai-log,) \
+	  --play $(AI_SECONDS) --ai-sanity \
 	  --screenshot /tmp/rm-ai-sanity.png 320 180 | tail -80
 
 # The default playable duel: army 0 is the human, army 1 runs FAF's AI, and the responsive HUD
