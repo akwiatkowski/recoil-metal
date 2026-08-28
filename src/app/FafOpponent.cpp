@@ -843,6 +843,17 @@ std::vector<std::string> fafConditionErrors(FafAi& ai) {
     return readStringArray(ai, "__rm_faf_cond_errors");
 }
 
+std::string formatFafConditionErrorReport(std::span<const std::string> errors) {
+    if (errors.empty()) {
+        return {};
+    }
+    std::string report = "  CONDITION ERRORS (each one fails closed):\n";
+    for (const std::string& error : errors) {
+        report += "    " + error + '\n';
+    }
+    return report;
+}
+
 FafOpponent::FafOpponent(FafAi& sandbox, int army) : sandbox_(sandbox), army_(army) {}
 
 /// Teaches the driver this type's category set, once per blueprint id per opponent —

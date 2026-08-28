@@ -27,6 +27,7 @@
 #include "app/Opponent.hpp"
 
 #include <set>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -83,5 +84,9 @@ private:
 /// Distinct errors raised inside condition functions, as "error xN" lines. A condition that
 /// errors fails closed, so these are silent behaviour changes — worth naming.
 [[nodiscard]] std::vector<std::string> fafConditionErrors(FafAi& ai);
+
+/// Formats the complete condition-error section. Unlike the ranked summary sections, this
+/// list is the repair queue: omitting its tail hides independently broken conditions.
+[[nodiscard]] std::string formatFafConditionErrorReport(std::span<const std::string> errors);
 
 } // namespace rm::ai

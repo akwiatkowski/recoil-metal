@@ -1337,16 +1337,9 @@ void march(UnitScene& scene, const rm::HeightField& field, PassabilitySet& passa
             }
         }
         const std::vector<std::string> conditionErrors = rm::ai::fafConditionErrors(*sanity);
-        if (!conditionErrors.empty()) {
-            std::printf("  CONDITION ERRORS (each one fails closed):\n");
-            shown = 0;
-            for (const std::string& line : conditionErrors) {
-                std::printf("    %s\n", line.c_str());
-                if (++shown == 8) {
-                    break;
-                }
-            }
-        }
+        const std::string conditionErrorReport =
+            rm::ai::formatFafConditionErrorReport(conditionErrors);
+        std::printf("%s", conditionErrorReport.c_str());
 
         // Coverage from the other side: not "what did the imports miss" but "what sits in
         // the vendored tree that NOTHING imported". Missing modules above are files we chose

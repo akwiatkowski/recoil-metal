@@ -469,3 +469,15 @@ TEST_CASE("import hands back the module's environment, which is how FAF exports"
         assert(type(m.BuilderManager) == 'table', 'BuilderManager not exported')
     )"));
 }
+
+TEST_CASE("the sanity report names every distinct condition failure", "[faf][ai]") {
+    std::vector<std::string> errors;
+    std::string expected = "  CONDITION ERRORS (each one fails closed):\n";
+    for (int i = 1; i <= 10; ++i) {
+        errors.push_back("condition failure " + std::to_string(i));
+        expected += "    " + errors.back() + '\n';
+    }
+
+    CHECK(rm::ai::formatFafConditionErrorReport(errors) == expected);
+    CHECK(rm::ai::formatFafConditionErrorReport({}).empty());
+}
