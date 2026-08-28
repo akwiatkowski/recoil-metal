@@ -89,62 +89,46 @@ Renderer::Renderer(CA::MetalLayer* layer)
     propShadowPipeline_ =
         makeDepthOnlyPipeline(device_, library, "propShadowVertex", "propShadowFragment");
     terrainPipeline_ = makePipeline(device_, library, "terrainVertex", "terrainFragment",
-                                    /*blend=*/false);
-    skyPipeline_ = makePipeline(device_, library, "skyVertex", "skyFragment", /*blend=*/false);
+                                    BlendMode::Opaque);
+    skyPipeline_ =
+        makePipeline(device_, library, "skyVertex", "skyFragment", BlendMode::Opaque);
     // No hardware blending: the water shader reads the framebuffer itself and
     // composites, which is what lets it absorb by depth rather than by a single
     // alpha. Leaving blending on would mix the result a second time.
     waterPipeline_ = makePipeline(device_, library, "waterVertex", "waterFragment",
-                                  /*blend=*/false);
+                                  BlendMode::Opaque);
     unitPipeline_ = makePipeline(device_, library, "unitVertex", "unitFragment",
-                                 /*blend=*/false);
+                                 BlendMode::Opaque);
     // The build ghost: the same vertex stage — it IS a unit, geometrically — with a flat
     // luminous fragment and blending, because a silhouette that occluded the ground it is
     // about to claim would hide the one thing the player is judging.
     ghostPipeline_ = makePipeline(device_, library, "unitVertex", "unitGhostFragment",
-                                  /*blend=*/true);
+                                  BlendMode::StraightAlpha);
     // A construction site: the same vertex stage again, and blended because Aeon's unbuilt
     // half is translucent light. The other three factions discard rather than blend, so the
     // blend state costs them nothing.
     constructionPipeline_ = makePipeline(device_, library, "unitVertex", "unitBuildFragment",
-                                         /*blend=*/true);
-    // Blended, unlike everything else here: a selection ring is interface laid
-    // over the ground, and a solid band would hide the terrain it marks.
+                                         BlendMode::StraightAlpha);
     // Blended, and drawn last of all: the HUD sits over the world rather than in it.
     textPipeline_ = makePipeline(device_, library, "textVertex", "textFragment",
-                                 /*blend=*/true);
+                                 BlendMode::PremultipliedAlpha);
     // The same vertex function and the same blend — only the fragment differs, sampling a
     // full-colour image instead of a coverage mask. See `imageFragment`.
     imagePipeline_ = makePipeline(device_, library, "textVertex", "imageFragment",
-                                  /*blend=*/true);
+                                  BlendMode::PremultipliedAlpha);
     minimapFogPipeline_ = makePipeline(device_, library, "textVertex", "minimapFogFragment",
-                                       /*blend=*/true);
+                                       BlendMode::PremultipliedAlpha);
 
+    // A selection ring is interface laid over the ground, and a solid band would hide the
+    // terrain it marks.
     decalPipeline_ = makePipeline(device_, library, "decalVertex", "decalFragment",
-                                 /*blend=*/true);
+                                  BlendMode::StraightAlpha);
     // The selection outline. Front faces culled and no depth write: what shows is the
     // shell's far side, and only where it survives the depth test against the unit
     // that has already been drawn — which is exactly the silhouette.
     {
-        MTL::Function* vertexFn =
-            library->newFunction(NS::String::string("outlineVertex", NS::UTF8StringEncoding));
-        MTL::Function* fragmentFn =
-            library->newFunction(NS::String::string("outlineFragment", NS::UTF8StringEncoding));
-
-        auto* descriptor = MTL::RenderPipelineDescriptor::alloc()->init();
-        descriptor->setVertexFunction(vertexFn);
-        descriptor->setFragmentFunction(fragmentFn);
-        descriptor->colorAttachments()->object(0)->setPixelFormat(kColorFormat);
-        descriptor->setDepthAttachmentPixelFormat(kDepthFormat);
-
-        NS::Error* outlineError = nullptr;
-        outlinePipeline_ = device_->newRenderPipelineState(descriptor, &outlineError);
-        descriptor->release();
-        if (vertexFn != nullptr) vertexFn->release();
-        if (fragmentFn != nullptr) fragmentFn->release();
-        if (outlinePipeline_ == nullptr) {
-            throw RendererError{"failed to create the selection outline pipeline"};
-        }
+        outlinePipeline_ = makePipeline(device_, library, "outlineVertex", "outlineFragment",
+                                        BlendMode::Opaque);
 
         const std::size_t bytes = kMaxOutlinedUnits * sizeof(UnitInstance) * kMaxFramesInFlight;
         outlineBuffer_ = device_->newBuffer(bytes, MTL::ResourceStorageModeShared);
@@ -153,43 +137,10 @@ Renderer::Renderer(CA::MetalLayer* layer)
         }
     }
 
-    // The particle pipeline, created here because it needs the shader library and
-    // the library is released on the next line.
-    //
-    // Not through makePipeline like the others: its blending is PREMULTIPLIED —
-    // source One rather than SourceAlpha — which is what lets one pipeline draw
-    // translucent dust and an additive spark depending only on how the particle's
-    // colour was authored.
-    {
-        MTL::Function* vertexFn = library->newFunction(
-            NS::String::string("particleVertex", NS::UTF8StringEncoding));
-        MTL::Function* fragmentFn = library->newFunction(
-            NS::String::string("particleFragment", NS::UTF8StringEncoding));
-
-        auto* descriptor = MTL::RenderPipelineDescriptor::alloc()->init();
-        descriptor->setVertexFunction(vertexFn);
-        descriptor->setFragmentFunction(fragmentFn);
-        MTL::RenderPipelineColorAttachmentDescriptor* particleColour =
-            descriptor->colorAttachments()->object(0);
-        particleColour->setPixelFormat(kColorFormat);
-        particleColour->setBlendingEnabled(true);
-        particleColour->setSourceRGBBlendFactor(MTL::BlendFactor::BlendFactorOne);
-        particleColour->setDestinationRGBBlendFactor(
-            MTL::BlendFactor::BlendFactorOneMinusSourceAlpha);
-        particleColour->setSourceAlphaBlendFactor(MTL::BlendFactor::BlendFactorOne);
-        particleColour->setDestinationAlphaBlendFactor(
-            MTL::BlendFactor::BlendFactorOneMinusSourceAlpha);
-        descriptor->setDepthAttachmentPixelFormat(kDepthFormat);
-
-        NS::Error* particleError = nullptr;
-        particlePipeline_ = device_->newRenderPipelineState(descriptor, &particleError);
-        descriptor->release();
-        if (vertexFn != nullptr) vertexFn->release();
-        if (fragmentFn != nullptr) fragmentFn->release();
-        if (particlePipeline_ == nullptr) {
-            throw RendererError{"failed to create the particle pipeline"};
-        }
-    }
+    // Particle colours are authored premultiplied so the same pipeline can draw translucent
+    // dust and additive sparks. The explicit mode keeps that contract beside every other one.
+    particlePipeline_ = makePipeline(device_, library, "particleVertex", "particleFragment",
+                                     BlendMode::PremultipliedAlpha);
     library->release();
 
     // --- Depth state -------------------------------------------------------

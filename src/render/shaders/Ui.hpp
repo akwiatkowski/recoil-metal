@@ -122,7 +122,7 @@ fragment float4 minimapFogFragment(TextOut in [[stage_in]],
                                    sampler imageSampler [[sampler(0)]]) {
     const float hidden = 1.0 - mask.sample(imageSampler, in.uv).r;
     const float alpha = hidden * 0.72;
-    return float4(0.015, 0.025, 0.035, alpha);
+    return float4(float3(0.015, 0.025, 0.035) * alpha, alpha);
 }
 
 )MSL";

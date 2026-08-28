@@ -2117,3 +2117,22 @@ transcription playing a different game from the content it transcribes.
 **Consequences.** Both halves change what armies can see and therefore the match; the golden log
 was re-recorded deliberately. `SizeY` is the collision box and stands in for a sensor mount, which
 the blueprints do not state — the mesh height is a different field and belongs to ADR-054.
+
+## ADR-056 — Every blended pipeline declares straight or premultiplied alpha
+
+**Context.** HUD text and images premultiplied RGB in their fragment shaders, while the shared
+Metal pipeline multiplied RGB by source alpha again. Translucent UI was therefore dimmed twice,
+and every blended pipeline also multiplied the framebuffer's alpha contribution twice.
+
+**Decision.** Pipeline creation takes `Opaque`, `StraightAlpha`, or `PremultipliedAlpha`. Straight
+RGB uses `SourceAlpha`; premultiplied RGB uses `One`; both use `One` for source alpha and
+`OneMinusSourceAlpha` for the destination. CPU HUD colours and image texels remain straight;
+their shaders premultiply, while decals, ghosts, and construction effects remain straight.
+
+**Alternatives considered.** Premultiplying every CPU vertex and uploaded texture would spread the
+contract across content loaders and UI builders. Returning straight output from every shader would
+discard the particle pipeline's useful translucent/additive representation.
+
+**Consequences.** Minimap fog now premultiplies its tint, particles share the common pipeline
+builder, and compile-time assertions pin both blend equations. Existing translucent HUD colours
+render brighter because they now contribute exactly once rather than by alpha squared.

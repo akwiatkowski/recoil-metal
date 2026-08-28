@@ -413,9 +413,35 @@ constexpr const char* kReadoutFontName = "Menlo";
 constexpr float kLabelPointSize = 15.0f;
 constexpr float kReadoutPointSize = 15.0f;
 
+enum class BlendMode {
+    Opaque,
+    StraightAlpha,
+    PremultipliedAlpha,
+};
+
+[[nodiscard]] constexpr MTL::BlendFactor sourceRgbBlendFactor(BlendMode mode) noexcept {
+    return mode == BlendMode::StraightAlpha ? MTL::BlendFactor::BlendFactorSourceAlpha
+                                            : MTL::BlendFactor::BlendFactorOne;
+}
+
+[[nodiscard]] constexpr MTL::BlendFactor sourceAlphaBlendFactor(BlendMode /*mode*/) noexcept {
+    // Porter-Duff source-over always contributes source alpha once, regardless of whether
+    // RGB arrived straight or premultiplied.
+    return MTL::BlendFactor::BlendFactorOne;
+}
+
+static_assert(sourceRgbBlendFactor(BlendMode::StraightAlpha)
+              == MTL::BlendFactor::BlendFactorSourceAlpha);
+static_assert(sourceRgbBlendFactor(BlendMode::PremultipliedAlpha)
+              == MTL::BlendFactor::BlendFactorOne);
+static_assert(sourceAlphaBlendFactor(BlendMode::StraightAlpha)
+              == MTL::BlendFactor::BlendFactorOne);
+static_assert(sourceAlphaBlendFactor(BlendMode::PremultipliedAlpha)
+              == MTL::BlendFactor::BlendFactorOne);
+
 [[nodiscard]] inline MTL::RenderPipelineState* makePipeline(MTL::Device* device, MTL::Library* library,
-                                                     const char* vertexName,
-                                                     const char* fragmentName, bool blend) {
+                                                      const char* vertexName,
+                                                      const char* fragmentName, BlendMode blend) {
     MTL::Function* vertexFn =
         library->newFunction(NS::String::string(vertexName, NS::UTF8StringEncoding));
     MTL::Function* fragmentFn =
@@ -428,11 +454,11 @@ constexpr float kReadoutPointSize = 15.0f;
     MTL::RenderPipelineColorAttachmentDescriptor* color0 =
         descriptor->colorAttachments()->object(0);
     color0->setPixelFormat(kColorFormat);
-    if (blend) {
+    if (blend != BlendMode::Opaque) {
         color0->setBlendingEnabled(true);
-        color0->setSourceRGBBlendFactor(MTL::BlendFactor::BlendFactorSourceAlpha);
+        color0->setSourceRGBBlendFactor(sourceRgbBlendFactor(blend));
         color0->setDestinationRGBBlendFactor(MTL::BlendFactor::BlendFactorOneMinusSourceAlpha);
-        color0->setSourceAlphaBlendFactor(MTL::BlendFactor::BlendFactorSourceAlpha);
+        color0->setSourceAlphaBlendFactor(sourceAlphaBlendFactor(blend));
         color0->setDestinationAlphaBlendFactor(MTL::BlendFactor::BlendFactorOneMinusSourceAlpha);
     }
     // The pipeline must know the depth format or the render pass silently
@@ -505,4 +531,3 @@ void Renderer::drawTerrainChunks(MTL::RenderCommandEncoder* encoder, Predicate k
 }
 
 } // namespace rm
-
