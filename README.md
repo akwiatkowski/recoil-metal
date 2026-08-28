@@ -209,12 +209,14 @@ version:
 
 ```sh
 make run      # procedural terrain — no game content needed at all
-make play     # a duel you drive: army 0 is yours, FAF's AI takes army 1
+make play     # a duel you drive: army 0 is yours, army 1 is scripted
 make watch    # every side scripted, nothing selectable, no fog
 make verify   # replay the golden match — prints "determinism: MATCH"
 ```
 
 Anything is overridable: `make play ARMIES=8 ALLIANCES=2 FACTIONS=uef,seraphim`.
+Add `FAF=1` to `play` or `watch` when Forged Alliance's AI should drive the
+opponents instead of the deterministic native script.
 Content roots come from `local.mk` first, then the environment
 (`RM_FA_ROOT`, `RM_BAR_ROOT`, `RM_BAR_MAPS`).
 
@@ -673,7 +675,7 @@ only appears under one cannot otherwise be captured, tested, or diffed.
 | `--no-interpolate` | draw the newest snapshot rather than blending two. **Every golden image is taken with this** — a screenshot of tick N should *be* tick N, not depend on when the process was scheduled |
 | `--focus` / `--look <x> <z> <r>` | aim the capture at the first instance, or at a world point |
 | `--select <n>` / `--hover <n>` / `--ghost <x> <z>` | light up interface a headless run has no cursor to produce: N units selected, the Nth tray option hovered with its info card, the placement ghost at a world point |
-| `--ui faf` | wear the game's own chrome instead of ours |
+| `--ui faf` / `--ui-scale <n>` | wear the game's own chrome; scale the HUD relative to its automatic size |
 | `--vision-style <recoil\|fa>` | whether terrain blocks sight |
 | `--ai-faf` | FAF's own AI plays every army, through the sandbox |
 | `--ai-log` / `--ai-debug` / `--ai-sanity` | narrate the AI's decisions and the corpus's own `LOG` lines; the debug report; the closing census of what was built, which bindings were called, and which corpus functions ran |

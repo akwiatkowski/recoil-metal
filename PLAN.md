@@ -5,8 +5,8 @@
 milestone. This file is the direction: what "a simple Supreme Commander game"
 means here, what it needs, and what it deliberately does not.
 
-Milestones 1–15 are done and documented in the README. This plan covers
-**16–20**, and — since 2026-08-20 — names the horizon past them.
+Milestones 1–20 are done and documented in the README. Their sections below
+record how they landed; the current direction starts at **Beyond 20**.
 
 **Near target, stated once so it can be checked:** two armies on a retail
 `.scmap`, each with an ACU, extracting mass, building from a factory, fighting

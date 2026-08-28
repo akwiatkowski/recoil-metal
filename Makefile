@@ -311,7 +311,7 @@ battle: build check-fa
 # --- Determinism -------------------------------------------------------------
 #
 # The refactor gate. `docs/golden-p1.log` is a per-tick fingerprint of one whole match —
-# 5200 ticks from spawn to victory banner, covering movement, collisions, targeting,
+# 7000 ticks from spawn through the decided match, covering movement, collisions, targeting,
 # firing, projectiles, damage, deaths, defeats, economy, construction and the spawning of
 # what gets built. `make verify` says whether the code still plays that match.
 #
@@ -342,7 +342,7 @@ golden: build check-fa
 
 # Milestone 20's match: a duel against the scripted opponent, played from spawn.
 # Deterministic, so SECONDS picks the stage of the SAME match: 12 the first
-# extractor, 60 the base, 76 the first tank, 450 the attack, 520 the banner.
+# extractor, 60 the base, 68 the first tank, 432 the attack, 594 the banner.
 match: build check-fa
 	$(BIN) "$(FA_MAP)" $(FA_FLAGS) --skirmish --armies 2 --play $(SECONDS)
 
