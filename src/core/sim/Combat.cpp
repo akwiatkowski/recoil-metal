@@ -163,9 +163,9 @@ struct SweptHit {
     return best;
 }
 
-/// First place a flight segment enters terrain. Samples are no more than half a height-field
-/// square apart, so a one-row ridge is sampled even when both segment endpoints lie between
-/// grid lines; binary refinement then gives a fraction comparable with a swept unit hit.
+/// First place a flight segment enters terrain. Grid-line cuts keep every interval inside one
+/// bilinear height-field cell. Along a straight segment that surface's clearance is quadratic,
+/// so its endpoints and stationary point are enough to prove whether the shot crossed it.
 [[nodiscard]] std::optional<Fx> terrainEntry(std::array<Fx, 3> from,
                                              std::array<Fx, 3> to,
                                              const Terrain& terrain) noexcept {
@@ -179,30 +179,78 @@ struct SweptHit {
         return Fx{};
     }
 
-    const Fx distance = fxHypot(to[0] - from[0], to[2] - from[2]);
-    const Fx sampleWidth = Fx::fromRatio(rm::kSquareSize, 2);
-    const auto stepsWide = std::max<FxWide>(
-        1, (FxWide{distance.raw()} + sampleWidth.raw() - 1) / sampleWidth.raw());
-    const int steps = static_cast<int>(std::min<FxWide>(stepsWide, std::numeric_limits<int>::max()));
-    Fx previous{};
-    for (int step = 1; step <= steps; ++step) {
-        Fx current = Fx::fromRatio(step, steps);
-        if (clearanceAt(current) > Fx{}) {
-            previous = current;
-            continue;
+    std::vector<Fx> cuts{Fx{}, kFxOne};
+    const auto addCuts = [&](Fx start, Fx finish, int squares) {
+        const Fx delta = finish - start;
+        if (delta == Fx{}) {
+            return;
         }
-
-        // Twelve fixed-point bisections resolve an eight-elmo square to about 0.002 elmos.
-        for (int refinement = 0; refinement < 12; ++refinement) {
-            const Fx middle = (previous + current) * Fx::fromRatio(1, 2);
-            if (clearanceAt(middle) > Fx{}) {
-                previous = middle;
-            } else {
-                // `current` remains the first known point at or below the terrain.
-                current = middle;
+        constexpr FxRaw squareRaw = Fx::fromInt(rm::kSquareSize).raw();
+        const auto gridFloor = [](Fx coordinate) {
+            int cell = coordinate.raw() / squareRaw;
+            if (coordinate.raw() < 0 && coordinate.raw() % squareRaw != 0) {
+                --cell;
+            }
+            return cell;
+        };
+        const int first =
+            std::clamp(gridFloor(std::min(start, finish)) + 1, 0, squares);
+        const int last = std::clamp(gridFloor(std::max(start, finish)), 0, squares);
+        for (int line = first; line <= last; ++line) {
+            const Fx boundary = Fx::fromInt(line * rm::kSquareSize);
+            const Fx fraction = (boundary - start) / delta;
+            if (fraction > Fx{} && fraction < kFxOne) {
+                cuts.push_back(fraction);
             }
         }
-        return current;
+    };
+    addCuts(from[0], to[0], terrain.field().squaresX);
+    addCuts(from[2], to[2], terrain.field().squaresZ);
+    std::ranges::sort(cuts);
+    cuts.erase(std::unique(cuts.begin(), cuts.end()), cuts.end());
+
+    const Fx half = Fx::fromRatio(1, 2);
+    const Fx two = Fx::fromInt(2);
+    const auto firstRoot = [&](Fx clear, Fx blocked) {
+        // One step per fractional bit exhausts the fixed-point fraction's precision.
+        for (int refinement = 0; refinement < kFxFractionalBits; ++refinement) {
+            const Fx middle = (clear + blocked) * half;
+            if (clearanceAt(middle) > Fx{}) {
+                clear = middle;
+            } else {
+                blocked = middle;
+            }
+        }
+        return blocked;
+    };
+
+    for (std::size_t i = 1; i < cuts.size(); ++i) {
+        const Fx begin = cuts[i - 1];
+        const Fx end = cuts[i];
+        const Fx atBegin = clearanceAt(begin);
+        if (atBegin <= Fx{}) {
+            return begin;
+        }
+
+        const Fx middle = (begin + end) * half;
+        const Fx atMiddle = clearanceAt(middle);
+        const Fx atEnd = clearanceAt(end);
+
+        // q(u) = a*u^2 + b*u + q(0), reconstructed at u = 0, 1/2 and 1.
+        const Fx a = two * (atEnd + atBegin - two * atMiddle);
+        const Fx b = atEnd - atBegin - a;
+        if (a > Fx{}) {
+            const Fx stationary = -b / (two * a);
+            if (stationary > Fx{} && stationary < kFxOne) {
+                const Fx fraction = begin + (end - begin) * stationary;
+                if (clearanceAt(fraction) <= Fx{}) {
+                    return firstRoot(begin, fraction);
+                }
+            }
+        }
+        if (atEnd <= Fx{}) {
+            return firstRoot(begin, end);
+        }
     }
     return std::nullopt;
 }

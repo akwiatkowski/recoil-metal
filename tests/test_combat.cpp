@@ -601,11 +601,12 @@ TEST_CASE("terrain blocks a swept projectile before the unit behind it") {
     Roster roster;
     UnitDef wideTarget = targetDef();
     wideTarget.collisionRadiusElmos = 6.0f;
+    wideTarget.sizeYElmos = 20.0f;
     const UnitId target = roster.add(roster.addType(wideTarget), 0.0f, 18.0f, 1, 100.0f);
     roster.reindex();
 
     rm::sim::Projectile shot;
-    shot.position = rm::test::at(0, 10, 4);
+    shot.position = {rm::test::fx(0.0f), rm::test::fx(11.9f), rm::test::fx(4.0f)};
     shot.velocity = rm::test::at(0, 0, 18);
     shot.damage = rm::unitdef::flatDamage(rm::test::mag(40.0f));
     shot.firedByArmy = 0;
