@@ -86,18 +86,104 @@ TEST_CASE("shield overkill collapses the bubble and leaks only the remainder") {
     CHECK(eventOf(events, rm::sim::EventKind::ShieldCollapsed) != nullptr);
 }
 
-TEST_CASE("the lowest-slot active bubble owns an overlapping impact") {
+TEST_CASE("overlapping bubbles both absorb, and their protection stacks") {
+    // THIS TEST USED TO ASSERT THE OPPOSITE, under the name "the lowest-slot active bubble
+    // owns an overlapping impact". It pinned a `break` after the first absorbing shield, so a
+    // shot into two overlapping domes drained one and left the other untouched. Overlapping
+    // shields stacking is a real Forged Alliance mechanic, and retail walks the whole world
+    // shield list rather than stopping at one (`C-062`, `C-110`).
+    //
+    // 150 into two full 100-point domes. Each decides its absorption independently and takes
+    // 150 capped at its own strength, so 200 is taken off a 150-point shot and the unit
+    // between them is untouched. Under the old rule it took 50.
+    //
+    // Both domes paying 100 for a 150-point shot is not a rounding artefact — it is retail's
+    // model, where each shield's absorption is decided up front and it is charged its own
+    // amount whatever the others did. It is also why stacking shields is worth doing.
+    rm::test::Roster roster;
+    const rm::UnitTypeIndex shieldType = roster.addType(shieldDef());
+    const rm::UnitTypeIndex targetType = roster.addType(plainDef());
+    const rm::sim::UnitId first = roster.add(shieldType, 0.0f, 0.0f, 1, 100.0f);
+    const rm::sim::UnitId second = roster.add(shieldType, 40.0f, 0.0f, 1, 100.0f);
+    const rm::sim::UnitId sheltered = roster.add(targetType, 20.0f, 0.0f, 1, 100.0f);
+    const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(2);
+
+    (void)rm::sim::damageArea(
+        rm::test::at(20, 0, 0), rm::sim::Fx{}, rm::unitdef::flatDamage(rm::sim::Mag::fromInt(150)),
+        0, roster.store, armies, &roster.catalog);
+
+    CHECK(rm::test::asFloat(roster.health(sheltered).current) == Approx(100.0f));
+    CHECK(roster.health(first).shield.current == rm::sim::Mag{});
+    CHECK(roster.health(second).shield.current == rm::sim::Mag{});
+}
+
+TEST_CASE("a blast inside a bubble does not shelter what is outside it") {
+    // THE HEADLINE CASE FROM `C-110`, kept as a test because it was measured rather than
+    // reasoned about, and because a green suite hid it for a long time.
+    //
+    // Coverage used to be decided once, from the blast's own position. So an explosion
+    // detonating inside a dome was absorbed once and the whole area effect vanished — for
+    // every target in the radius, including units nowhere near the shield. A probe measured a
+    // single 100-point bubble saving three separate units, one of them 150 elmos away and
+    // entirely outside it.
+    rm::test::Roster roster;
+    const rm::UnitTypeIndex shieldType = roster.addType(shieldDef());
+    const rm::UnitTypeIndex targetType = roster.addType(plainDef());
+    const rm::sim::UnitId generator = roster.add(shieldType, 0.0f, 0.0f, 1, 100.0f);
+    const rm::sim::UnitId inside = roster.add(targetType, 40.0f, 0.0f, 1, 100.0f);
+    const rm::sim::UnitId outside = roster.add(targetType, 150.0f, 0.0f, 1, 100.0f);
+    const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(2);
+
+    // Radius 200 reaches all three; the dome's radius is 80, so it covers only the first two.
+    (void)rm::sim::damageArea(rm::test::at(0, 0, 0), rm::test::fx(200.0f),
+                              rm::sim::Mag::fromInt(40), 0, roster.store, armies, {}, nullptr,
+                              &roster.catalog);
+
+    CHECK(rm::test::asFloat(roster.health(inside).current) == Approx(100.0f));
+    CHECK(rm::test::asFloat(roster.health(outside).current) == Approx(60.0f));  // was 100
+    CHECK(rm::test::asFloat(roster.health(generator).shield.current) == Approx(60.0f));
+}
+
+TEST_CASE("a blast outside a bubble still spares what is under it") {
+    // The mirror error, and the one that made shields useless in the situation they exist for.
+    // With coverage measured from the blast, an explosion far from the generator never woke
+    // the dome, so a unit standing directly under it took the shot at full strength.
+    rm::test::Roster roster;
+    const rm::UnitTypeIndex shieldType = roster.addType(shieldDef());
+    const rm::UnitTypeIndex targetType = roster.addType(plainDef());
+    const rm::sim::UnitId generator = roster.add(shieldType, 0.0f, 0.0f, 1, 100.0f);
+    const rm::sim::UnitId sheltered = roster.add(targetType, 20.0f, 0.0f, 1, 100.0f);
+    const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(2);
+
+    // Centred 200 elmos away — far outside the dome — but wide enough to reach under it.
+    (void)rm::sim::damageArea(rm::test::at(200, 0, 0), rm::test::fx(250.0f),
+                              rm::sim::Mag::fromInt(40), 0, roster.store, armies, {}, nullptr,
+                              &roster.catalog);
+
+    CHECK(rm::test::asFloat(roster.health(sheltered).current) == Approx(100.0f));  // was 60
+    CHECK(rm::test::asFloat(roster.health(generator).shield.current) == Approx(60.0f));
+}
+
+TEST_CASE("a bubble that covers nothing pays nothing") {
+    // The other half of the same correction. The shield block used to run before the target
+    // loop and charge the nearest dome whether or not the shot reached anybody — so a point
+    // hit landing in open ground 20 elmos from two generators still drained one of them.
+    //
+    // A bubble is charged only for work it did, which needs the absorption to be decided per
+    // TARGET rather than per blast.
     rm::test::Roster roster;
     const rm::UnitTypeIndex shieldType = roster.addType(shieldDef());
     const rm::sim::UnitId first = roster.add(shieldType, 0.0f, 0.0f, 1, 100.0f);
     const rm::sim::UnitId second = roster.add(shieldType, 40.0f, 0.0f, 1, 100.0f);
     const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(2);
 
+    // Midway between them and well outside either unit's own body: a point hit that strikes
+    // no unit at all.
     (void)rm::sim::damageArea(
         rm::test::at(20, 0, 0), rm::sim::Fx{}, rm::unitdef::flatDamage(rm::sim::Mag::fromInt(10)),
         0, roster.store, armies, &roster.catalog);
 
-    CHECK(rm::test::asFloat(roster.health(first).shield.current) == Approx(90.0f));
+    CHECK(rm::test::asFloat(roster.health(first).shield.current) == Approx(100.0f));
     CHECK(rm::test::asFloat(roster.health(second).shield.current) == Approx(100.0f));
 }
 
@@ -117,15 +203,37 @@ TEST_CASE("damage outside a bubble reaches hull normally") {
 }
 
 TEST_CASE("a bubble is a sphere rather than an infinite vertical cylinder") {
+    // THE PROPERTY IS UNCHANGED; THE SETUP HAD TO MOVE. This used to put the BLAST 100 elmos
+    // above a dome of radius 80 and check that the shot got through. That worked only because
+    // coverage was tested against the blast's position — the bug `C-110` removed. Now that
+    // coverage is tested against the TARGET, a unit sitting at the dome's centre is sheltered
+    // however high the explosion was, and the old assertions inverted.
+    //
+    // So the height moves to where the question actually lives: the TARGET goes up, into the
+    // region a cylinder would cover and a sphere would not.
+    //
+    // It also has to move sideways, which is the part worth explaining. Impact tests use
+    // GROUND distance — height is deliberately not cover (`Combat.hpp`) — so a target directly
+    // over the generator would put the point hit on the generator as well, and the generator's
+    // own bubble would absorb for the generator. That is correct behaviour and it would hide
+    // the geometry under test. Offsetting by 60 elmos keeps the target inside the dome's
+    // horizontal footprint while leaving the generator well outside the blast.
+    //
+    //   horizontal 60 <= radius 80          a cylinder shelters it
+    //   sqrt(60^2 + 60^2) = 84.9 > 80       a sphere does not
     rm::test::Roster roster;
     const rm::UnitTypeIndex shieldType = roster.addType(shieldDef());
     const rm::UnitTypeIndex targetType = roster.addType(plainDef());
     const rm::sim::UnitId generator = roster.add(shieldType, 0.0f, 0.0f, 1, 100.0f);
-    const rm::sim::UnitId target = roster.add(targetType, 0.0f, 0.0f, 1, 100.0f);
+    const rm::sim::UnitId target = roster.add(targetType, 60.0f, 0.0f, 1, 100.0f);
     const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(2);
 
+    // `Roster::add` places things on the ground, so the height is set here rather than hidden
+    // in a helper.
+    roster.store.transforms()[target.index].y = rm::test::fx(60.0f);
+
     (void)rm::sim::damageArea(
-        rm::test::at(0, 100, 0), rm::sim::Fx{}, rm::sim::Mag::fromInt(40), 0,
+        rm::test::at(60, 60, 0), rm::sim::Fx{}, rm::sim::Mag::fromInt(40), 0,
         roster.store, armies, {}, nullptr, &roster.catalog);
 
     CHECK(rm::test::asFloat(roster.health(generator).shield.current) == Approx(100.0f));

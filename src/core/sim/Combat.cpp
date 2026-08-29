@@ -61,15 +61,12 @@ namespace {
     return largest;
 }
 
-[[nodiscard]] unitdef::DamageProfile scaledDamage(const unitdef::DamageProfile& damage,
-                                                   Fx share) noexcept {
-    unitdef::DamageProfile scaled = damage;
-    scaled.base = damage.base * share;
-    for (std::uint8_t i = 0; i < damage.overrideCount; ++i) {
-        scaled.overrideDamage[i] = damage.overrideDamage[i] * share;
-    }
-    return scaled;
-}
+// `scaledDamage` used to live here — it rescaled a whole `DamageProfile` so the blast could be
+// weakened once for everybody before the target loop ran. Nothing needs that now: shield
+// absorption became per target (`C-110`) and applies as one `Fx` factor at the point of use,
+// and the distance falloff it also served went away with `C-061`. Removed rather than left
+// for a future caller, because a helper whose only meaning was "weaken the shot for the whole
+// blast" is exactly the model this file no longer has.
 
 [[nodiscard]] Fx fraction(Mag numerator, Mag denominator) noexcept {
     if (denominator <= Mag{}) {
@@ -798,62 +795,89 @@ Mag damageArea(std::array<Fx, 3> centre, Fx radiusElmos, const unitdef::DamagePr
     const std::span<const MoveState> motion = store.motion();
     const std::span<Health> healths = store.health();
 
-    unitdef::DamageProfile hullDamage = damage;
-    if (catalog != nullptr && catalog->largestShieldRadius() > Fx{}) {
-        for (const UnitIndex slot :
-             store.space().within(centre[0], centre[2], catalog->largestShieldRadius())) {
-            if (!shootable(byArmy, store, slot, armies) || slot >= healths.size()) {
-                continue;
-            }
-            Health& owner = healths[slot];
-            const UnitCatalog::ShieldInfo& shield = catalog->shield(store.typeAt(slot));
-            std::array<Fx, 3> shieldCentre = positionOf(transforms[slot]);
-            shieldCentre[1] += shield.verticalOffsetElmos;
-            const Fx dx = centre[0] - shieldCentre[0];
-            const Fx dy = centre[1] - shieldCentre[1];
-            const Fx dz = centre[2] - shieldCentre[2];
-            if (!shield.exists() || !owner.shield.active()
-                || fxSqrt(dx * dx + dy * dy + dz * dz) > shield.radiusElmos) {
-                continue;
-            }
-
-            const Mag incoming = hullDamage.against(catalog->armor().classFor("Shield"));
-            if (incoming <= Mag{}) {
-                break;
-            }
-            const Mag absorbed = std::min(owner.shield.current, incoming);
-            owner.shield.current -= absorbed;
-            owner.shield.regenDelayRemaining = shield.regenDelay;
-            dealt += absorbed;
-            emit(events, Event{.kind = EventKind::ShieldDamaged,
-                               .unit = store.idAt(slot),
-                               .instigator = by,
-                               .army = armyAt(store, slot),
-                               .amount = absorbed,
-                               .at = centre});
-
-            if (owner.shield.current <= Mag{}) {
-                owner.shield.current = Mag{};
-                owner.shield.regenDelayRemaining = 0;
-                owner.shield.rechargeRemaining = shield.recharge;
-                emit(events, Event{.kind = EventKind::ShieldCollapsed,
-                                   .unit = store.idAt(slot),
-                                   .instigator = by,
-                                   .army = armyAt(store, slot),
-                                   .at = centre});
-            }
-            if (absorbed >= incoming) {
-                return dealt;
-            }
-            hullDamage = scaledDamage(hullDamage, fraction(incoming - absorbed, incoming));
-            break;  // the spatial grid's lowest slot owns an overlap
-        }
-    }
-
     // A point hit still reaches as far as the biggest unit's own radius — see the tolerance
     // below — so the query radius is the blast's, or that, whichever is larger.
     const Fx reach = radiusElmos > Fx{} ? radiusElmos
                                         : std::max(kFxOne, largestRadius(store));
+
+    // SHIELDS ARE GATHERED FIRST AND CHARGED PER TARGET, which is the correction `C-110`
+    // demanded. This block used to absorb ONCE for the whole blast and test coverage against
+    // the blast CENTRE, and a probe measured what that cost: one 100-point bubble absorbed 40
+    // and thereby saved three separate units, one of them 150 elmos away and entirely outside
+    // the dome. A blast centred inside a bubble sheltered everything in the radius; a blast
+    // centred outside one damaged the units under it at full strength.
+    //
+    // The shape here follows retail (`C-062`): each bubble's absorption is decided ONCE, up
+    // front, from the whole blast; it is then taken off every target that bubble actually
+    // covers; and the bubble itself is charged once at the end. So a shield with 100 points
+    // over three units protects all three and still loses only 100 — generous, and what the
+    // original does.
+    //
+    // WHAT IS NOT CHANGED, deliberately: the reduction stays a proportional rescale rather
+    // than becoming a flat subtraction, even though retail subtracts flat. `DamageProfile`
+    // holds damage already resolved per armour class (`ADR-033`), so `against(c) = A·M(c)`,
+    // and scaling by `(A−S)/A` yields `(A−S)·M(c)` — exactly retail's subtract-then-multiply.
+    // The two are the same arithmetic in different coordinates; a literal flat subtraction on
+    // a resolved profile would be the thing that is wrong.
+    struct BlastShield {
+        UnitIndex slot;
+        std::array<Fx, 3> centre;
+        Fx radius;
+        Mag absorb;      ///< decided once from the whole blast, spent across every target
+        bool used;       ///< whether it covered anything, and so is charged at the end
+    };
+    std::vector<BlastShield> shields;
+
+    // What a bubble sees, as opposed to what a hull sees. Computed from the ORIGINAL profile,
+    // once: every bubble in the blast faces the same shot.
+    const Mag shieldIncoming =
+        catalog != nullptr ? damage.against(catalog->armor().classFor("Shield")) : Mag{};
+
+    if (catalog != nullptr && shieldIncoming > Mag{} && catalog->largestShieldRadius() > Fx{}) {
+        // A bubble whose CENTRE is far outside the blast can still cover a target inside it,
+        // so the search has to be widened by the largest bubble's radius. Querying at the
+        // blast radius alone is how the old code came to miss shields it should have found.
+        const Fx search = reach + catalog->largestShieldRadius();
+        for (const UnitIndex slot : store.space().within(centre[0], centre[2], search)) {
+            if (!shootable(byArmy, store, slot, armies) || slot >= healths.size()) {
+                continue;
+            }
+            const UnitCatalog::ShieldInfo& shield = catalog->shield(store.typeAt(slot));
+            if (!shield.exists() || !healths[slot].shield.active()) {
+                continue;
+            }
+            std::array<Fx, 3> shieldCentre = positionOf(transforms[slot]);
+            shieldCentre[1] += shield.verticalOffsetElmos;
+            shields.push_back(BlastShield{
+                .slot = slot,
+                .centre = shieldCentre,
+                .radius = shield.radiusElmos,
+                .absorb = std::min(healths[slot].shield.current, shieldIncoming),
+                .used = false,
+            });
+        }
+    }
+
+    /// How much the bubbles over `at` take off this shot, and marks them as having spent it.
+    ///
+    /// Summed across every covering bubble rather than stopping at the first, because
+    /// overlapping shields stacking is a real Forged Alliance mechanic and the old `break`
+    /// silently gave it away — a probe put 150 damage into two overlapping 100-point domes and
+    /// drained one to zero while the other never fired.
+    const auto absorbedOver = [&shields](std::array<Fx, 3> at) {
+        Mag total{};
+        for (BlastShield& bubble : shields) {
+            const Fx dx = at[0] - bubble.centre[0];
+            const Fx dy = at[1] - bubble.centre[1];
+            const Fx dz = at[2] - bubble.centre[2];
+            if (fxSqrt(dx * dx + dy * dy + dz * dz) > bubble.radius) {
+                continue;
+            }
+            bubble.used = true;
+            total += bubble.absorb;
+        }
+        return total;
+    };
 
     for (const UnitIndex slot : store.space().within(centre[0], centre[2], reach)) {
         if (!shootable(byArmy, store, slot, armies)) {
@@ -926,7 +950,20 @@ Mag damageArea(std::array<Fx, 3> centre, Fx radiusElmos, const unitdef::DamagePr
         // left. `C-061` removed the falloff, so the share is now 1 or 0 and the two operations
         // commute. The lookup stays inside the loop because the armour CLASS still varies per
         // target — a shell landing between a tank and a bunker hits two classes.
-        const Mag wanted = hullDamage.against(armor) * share;
+        // WHAT THE BUBBLES OVER **THIS** TARGET TAKE OFF THE SHOT. Tested against the target's
+        // own position, which is the whole of `C-110`: a unit is sheltered when it is under a
+        // dome, not when the explosion happens to be.
+        Fx shielded = kFxOne;
+        if (shieldIncoming > Mag{}) {
+            const Mag absorbed =
+                std::min(shieldIncoming, absorbedOver(positionOf(transforms[slot])));
+            if (absorbed >= shieldIncoming) {
+                continue;   // fully covered: this target takes nothing at all
+            }
+            shielded = fraction(shieldIncoming - absorbed, shieldIncoming);
+        }
+
+        const Mag wanted = damage.against(armor) * share * shielded;
         const Mag applied = std::min(healths[slot].current, wanted);
         healths[slot].current -= applied;
         dealt += applied;
@@ -946,6 +983,42 @@ Mag damageArea(std::array<Fx, 3> centre, Fx radiusElmos, const unitdef::DamagePr
                          .amount = applied,
                          .at = positionOf(transforms[slot]),
                      });
+    }
+
+    // THE BUBBLES ARE CHARGED LAST, and each exactly once however many targets it sheltered —
+    // retail decides a shield's absorption up front and runs the shield itself through the
+    // damage path afterwards (`C-062`). Charging inside the target loop instead would drain a
+    // dome once per unit standing under it, which is a different and much harsher game.
+    //
+    // Only bubbles that actually covered something are charged: a shield inside the search
+    // radius but over nobody has done no work and pays nothing.
+    for (const BlastShield& bubble : shields) {
+        if (!bubble.used || bubble.absorb <= Mag{}) {
+            continue;
+        }
+        Health& owner = healths[bubble.slot];
+        const UnitCatalog::ShieldInfo& shield = catalog->shield(store.typeAt(bubble.slot));
+        const Mag absorbed = std::min(owner.shield.current, bubble.absorb);
+        owner.shield.current -= absorbed;
+        owner.shield.regenDelayRemaining = shield.regenDelay;
+        dealt += absorbed;
+        emit(events, Event{.kind = EventKind::ShieldDamaged,
+                           .unit = store.idAt(bubble.slot),
+                           .instigator = by,
+                           .army = armyAt(store, bubble.slot),
+                           .amount = absorbed,
+                           .at = centre});
+
+        if (owner.shield.current <= Mag{}) {
+            owner.shield.current = Mag{};
+            owner.shield.regenDelayRemaining = 0;
+            owner.shield.rechargeRemaining = shield.recharge;
+            emit(events, Event{.kind = EventKind::ShieldCollapsed,
+                               .unit = store.idAt(bubble.slot),
+                               .instigator = by,
+                               .army = armyAt(store, bubble.slot),
+                               .at = centre});
+        }
     }
 
     return dealt;
