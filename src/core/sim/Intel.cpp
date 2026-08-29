@@ -374,11 +374,17 @@ void Intel::configure(std::size_t alliances, Fx widthElmos, Fx depthElmos,
         grids_.emplace_back(widthElmos, depthElmos, kVisionMipLevel);   // Vision
         grids_.emplace_back(widthElmos, depthElmos, kRadarMipLevel);    // Radar
         grids_.emplace_back(widthElmos, depthElmos, kRadarMipLevel);    // Sonar
-        // OMNI AT THE VISION MIP, not the radar one. Radar is coarse because radar radii are
-        // an order larger; the shipped omni radii are 16 to 200 ogrids — 128 to 1600 elmos,
-        // mostly at the small end — and an omni return carries an IDENTITY, so it wants the
-        // precision sight has rather than the precision a blip can live with.
-        grids_.emplace_back(widthElmos, depthElmos, kVisionMipLevel);   // Omni
+        // OMNI AT RADAR'S MIP. This used to be the vision mip, argued from precision: omni
+        // radii are mostly small and an omni return carries an IDENTITY, so it looked like it
+        // wanted sight's resolution rather than a blip's. Retail disagrees — omni is one of
+        // its scale-4 grids, alongside radar, sonar, water vision and the counter-intel
+        // family, with only fog at scale 2 (`C-077`).
+        //
+        // The argument was not wrong about what omni *is*; it was reasoning about a choice
+        // the original had already made. Because radius-to-cells truncates, the finer grid put
+        // our omni edge up to two world units outside retail's for any radius that is not a
+        // multiple of four ogrids.
+        grids_.emplace_back(widthElmos, depthElmos, kRadarMipLevel);    // Omni
     }
     assert(grids_.size() == alliances * kIntelKindCount);
 

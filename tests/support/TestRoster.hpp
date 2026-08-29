@@ -52,7 +52,7 @@ struct Roster {
 
     /// A unit of a type, at a place, owned by an army, with a health pool.
     ///
-    /// The radius is fixed at 4 elmos for everything: separation and blast falloff are
+    /// The radius is fixed at 4 elmos for everything: separation and blast reach are
     /// tested on their own, and a per-unit radius here would let one test's crowding
     /// change another test's answer.
     sim::UnitId add(UnitTypeIndex type, float x, float z, int army, float hp) {

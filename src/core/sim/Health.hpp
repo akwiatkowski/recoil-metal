@@ -32,10 +32,11 @@ struct Health {
     /// reaches 5,000,000 in the corpus (XSC9010) against `Fx`'s ceiling of 131,072. Measured
     /// across all 568 unit blueprints; see `core/Types.hpp`.
     ///
-    /// The fraction matters as much as the range. Damage is spread with a linear falloff, so a
-    /// unit at the rim of a blast takes an arbitrary fraction of the weapon's damage; rounding
-    /// that to whole points would make a large blast deal visibly different totals depending
-    /// on how the survivors happened to be arranged.
+    /// The fraction matters as much as the range, though no longer for the reason first given
+    /// here — that argument was blast falloff, which `C-061` established retail does not have.
+    /// It still holds for armour multipliers (0.25 against an Overcharge, 0.032 against a
+    /// Deathnuke), for shield absorption, and for regeneration accrued per tick, all of which
+    /// produce fractional health that rounding to whole points would visibly distort.
     Mag current{};
     Mag maximum{};
     ShieldState shield;

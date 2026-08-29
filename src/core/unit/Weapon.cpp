@@ -146,7 +146,7 @@ std::vector<Weapon> weaponsFrom(const lua::Value& weaponArray, bool airborneSour
         // Ogrids to elmos throughout, the same x8 everything else in this family takes.
         // A NEGATIVE radius appears once in the corpus and is read as a point hit: a
         // blast that pulls inward is not a thing, and clamping is honest where trusting
-        // it would make the falloff divide by a negative and heal whatever it hit.
+        // a negative radius is meaningless as a reach and would invert the containment test.
         weapon.damageRadius = sim::fxFromFloat(
             std::max(0.0f, numberOr(entry, "DamageRadius", 0.0f)) * scmap::kElmosPerOgrid);
 

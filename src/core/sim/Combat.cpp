@@ -781,7 +781,7 @@ Mag damageArea(std::array<Fx, 3> centre, Fx radiusElmos, Mag damage, int byArmy,
                UnitStore& store, std::span<const Army> armies, UnitId by,
                EventQueue* events, const UnitCatalog* catalog) {
     // The scalar form, kept because it is what two dozen call sites mean — most of them tests
-    // asserting the falloff curve, which is a property of the geometry and has nothing to say
+    // asserting blast reach, which is a property of the geometry and has nothing to say
     // about armour. A flat profile answers the same for every class, so this is not an
     // approximation of the call below: it is the same call with a table that has no entries.
     return damageArea(centre, radiusElmos, unitdef::flatDamage(damage), byArmy, store, armies,
@@ -921,9 +921,11 @@ Mag damageArea(std::array<Fx, 3> centre, Fx radiusElmos, const unitdef::DamagePr
         // by an `Fx` is how a rate or a fraction becomes an amount, and it is the one mixed
         // operation the two types have.
         //
-        // AND THE ORDER MATTERS: the armour lookup happens first, then the falloff scales what
-        // armour left. The other way round would scale the base by distance and then look up a
-        // table keyed on a number that no longer means what the table's keys mean.
+        // ORDER USED TO MATTER HERE and no longer does, which is worth saying rather than
+        // silently deleting: the armour lookup ran first and a distance falloff scaled what it
+        // left. `C-061` removed the falloff, so the share is now 1 or 0 and the two operations
+        // commute. The lookup stays inside the loop because the armour CLASS still varies per
+        // target — a shell landing between a tank and a bunker hits two classes.
         const Mag wanted = hullDamage.against(armor) * share;
         const Mag applied = std::min(healths[slot].current, wanted);
         healths[slot].current -= applied;

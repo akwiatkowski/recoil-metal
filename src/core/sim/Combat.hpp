@@ -24,7 +24,7 @@ namespace rm::sim {
 //
 // Everything here is grid- and vector arithmetic on the fixed tick, so it lives in
 // core/ with the rest of the sim and is tested rather than watched. What it gets wrong
-// is invisible in the good case: a falloff curve that is slightly wrong still kills
+// is invisible in the good case: a blast whose reach is slightly wrong still kills
 // things, just not the right ones, and a reload measured in the wrong unit reads as a
 // balance complaint rather than as a bug.
 //
@@ -269,18 +269,19 @@ void advanceProjectiles(std::vector<Projectile>& projectiles, UnitStore& store,
 /// Spreads `damage` over everything within `radiusElmos` of `centre`, and returns how
 /// much was dealt in total.
 ///
-/// LINEAR falloff from full at the centre to nothing at the rim, which is what
-/// `lua/sim/Unit.lua`'s damage model does. A radius of zero damages only what is at the
-/// centre, at full strength — the 222 weapons that state no radius are point hits
-/// rather than weapons that cannot hurt anything.
-/// `damage` is a `Mag` because that is what health is; the FALLOFF is computed in `Fx`,
-/// because a fraction of a blast radius is geometry. The two meet in one multiply, which is
-/// the only place the types mix — and it is exact rather than a rescale, since both use the
-/// same number of fractional bits.
+/// UNIFORM within the radius: everything inside takes the full amount, and nothing outside
+/// takes any. **This comment used to describe a linear falloff to nothing at the rim, and
+/// attribute it to `lua/sim/Unit.lua`.** Both halves were wrong — retail applies the full
+/// amount to every entity the blast reaches, and the behaviour here was corrected in
+/// `ADR-066` against claim `C-061`. The prose outlived the fix by one session, which is
+/// exactly how a stale comment re-teaches a model the code has abandoned.
+///
+/// A radius of zero damages only what is at the centre, at full strength — the 222 weapons
+/// that state no radius are point hits rather than weapons that cannot hurt anything.
+///
 /// `by` and `events` are OPTIONAL and trail the signature deliberately: they are how a hit
-/// becomes a `UnitDamaged` event naming its instigator (§7 P6.1), and defaulting them keeps the
-/// two dozen existing call sites — most of them tests asserting the falloff curve — unchanged.
-/// A caller that passes neither gets exactly the old behaviour and no events.
+/// becomes a `UnitDamaged` event naming its instigator (§7 P6.1), and defaulting them keeps
+/// the existing call sites unchanged.
 Mag damageArea(std::array<Fx, 3> centre, Fx radiusElmos, Mag damage, int byArmy,
                UnitStore& store, std::span<const Army> armies, UnitId by = {},
                EventQueue* events = nullptr, const UnitCatalog* catalog = nullptr);
@@ -289,9 +290,9 @@ Mag damageArea(std::array<Fx, 3> centre, Fx radiusElmos, Mag damage, int byArmy,
 /// `ADR-033`, D12).
 ///
 /// **AN OVERLOAD RATHER THAN A REPLACEMENT**, and the scalar version above is not deprecated.
-/// A blast's falloff is geometry and has nothing to say about armour, so the two dozen tests
-/// that assert the curve are better off passing a number — and `flatDamage` makes the two
-/// provably the same call, which is what keeps `make verify` a strict check across this change.
+/// A blast's geometry has nothing to say about armour, so tests about reach and coverage are
+/// better off passing a number — and `flatDamage` makes the two provably the same call, which
+/// is what keeps `make verify` a strict check across this change.
 ///
 /// `catalog` is how a TARGET's armour class is discovered, and it may be null: a scene with no
 /// catalog has no types, so every target is `kDefaultArmor` and a flat profile answers `base`
