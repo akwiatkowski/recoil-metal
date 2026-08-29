@@ -2336,3 +2336,31 @@ hits no harder — retail's per-weapon damage buff is commented out. `Health` gr
 member and the state hash feeds it only when non-zero, so every historical replay hash of a match
 without promotions is unchanged. A killer at zero health that has not yet been retired earns
 nothing, otherwise the promotion heal would resurrect a unit the same loop was about to bury.
+
+## ADR-066 — Area damage is uniform inside the radius, with no distance falloff
+
+**Context.** `damageArea` scaled damage by `1 - distance/radius`, full at the centre and nothing
+at the rim. That is what Total Annihilation and Spring do and what almost everyone assumes every
+RTS does. Supreme Commander does not. Traced in the retail executable: the sphere worker
+(`0x0073e100`) and ring worker (`0x0073e5b0`) pass the amount to `DealDamage` (`0x0073dbc0`)
+untouched, and the only thing between the spatial query and that call is shield absorption — a
+flat subtraction with no distance term. The target-to-centre delta is computed and written into
+the damage record as a *direction*; it is never multiplied into the amount.
+
+**Decision.** Inside the radius every target takes the full amount; outside it takes none. The
+point-hit path (zero radius, tolerance equal to the target's own radius) is unchanged. Recorded
+as claim `C-061` in `docs/fa-exe-analysis-plan.md`.
+
+**Alternatives considered.** Keeping the curve as a deliberate deviation was rejected: the
+project's purpose is parity, and this changes blast totals by roughly a factor of two, which
+propagates into deaths, wrecks and the state hash. Making it configurable was rejected as
+speculative — nothing asks for both behaviours, and a switch here would be a second source of
+truth about what the game is.
+
+**Consequences.** Blast weapons hit substantially harder and blueprint damage numbers now mean
+what the blueprint says. Two tests changed sides: `test_combat.cpp`'s falloff case now asserts
+uniformity and a doubled total, and the death-explosion case expects full damage at half radius.
+One test lost its purpose and says so — `test_armor.cpp`'s "armour before falloff" could only
+discriminate ordering because the share was fractional; with a share of 1 or 0 the two orders are
+arithmetically identical, so that ordering is no longer observable through it and will need
+catching elsewhere if it ever matters.

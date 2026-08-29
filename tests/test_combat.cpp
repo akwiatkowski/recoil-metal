@@ -380,7 +380,19 @@ TEST_CASE("an arced shot rises, and comes down where the target is") {
               rm::sim::kProjectileLifetime)));
 }
 
-TEST_CASE("damage falls off linearly to nothing at the rim") {
+TEST_CASE("area damage is uniform inside the radius, as retail's is") {
+    // THIS TEST USED TO ASSERT THE OPPOSITE, and it was wrong. It read "damage falls off
+    // linearly to nothing at the rim" and expected the unit halfway out to take half — the
+    // Total Annihilation and Spring behaviour, which is what almost everyone assumes.
+    //
+    // Supreme Commander does not do that. In the retail executable the sphere worker
+    // (`0x0073e100`) passes the amount to `DealDamage` (`0x0073dbc0`) untouched; the only
+    // thing between the spatial query and the damage call is shield absorption, a flat
+    // subtraction. The distance is computed and used as a DIRECTION, never as a scale.
+    // `docs/fa-exe-analysis-plan.md`, claim `C-061`.
+    //
+    // Kept as one case with a victim at every interesting distance, because the failure this
+    // guards against is a re-introduced curve, and a curve is only visible across a spread.
     const std::vector<Army> armies = rm::sim::freeForAll(2);
 
     Roster roster;
@@ -393,11 +405,14 @@ TEST_CASE("damage falls off linearly to nothing at the rim") {
     const rm::sim::Mag dealt =
         rm::sim::damageArea(rm::test::at(0, 0, 0), rm::test::fx(100.0f), rm::test::mag(80.0f), 0, roster.store, armies);
 
-    CHECK(rm::test::asFloat(roster.health(centre).current) == Approx(20.0f));    // took all 80
-    CHECK(rm::test::asFloat(roster.health(halfway).current) == Approx(60.0f));   // took half
-    CHECK(rm::test::asFloat(roster.health(rim).current) == Approx(100.0f));      // at the rim: nothing
-    CHECK(rm::test::asFloat(roster.health(outside).current) == Approx(100.0f));  // outside: nothing
-    CHECK(rm::test::asFloat(dealt) == Approx(120.0f));
+    CHECK(rm::test::asFloat(roster.health(centre).current) == Approx(20.0f));   // full 80
+    CHECK(rm::test::asFloat(roster.health(halfway).current) == Approx(20.0f));  // also full 80
+    CHECK(rm::test::asFloat(roster.health(rim).current) == Approx(20.0f));      // the rim is inside
+    CHECK(rm::test::asFloat(roster.health(outside).current) == Approx(100.0f)); // outside: nothing
+
+    // Three victims at 80 each. Under the old curve this was 120 — the same blast now deals
+    // twice the damage, which is the whole point of the correction.
+    CHECK(rm::test::asFloat(dealt) == Approx(240.0f));
 }
 
 TEST_CASE("a blast does not hurt the army that fired it") {
@@ -776,7 +791,9 @@ TEST_CASE("a death explosion goes off where the unit stood") {
 
     CHECK(rm::test::asFloat(dealt) > 0.0f);
     CHECK(rm::test::asFloat(roster.health(centre).current) == Approx(500.0f));   // took the full 500
-    CHECK(rm::test::asFloat(roster.health(halfway).current) == Approx(750.0f));  // half of it
+    // Also the full 500: a death blast has no falloff either, for the same reason an ordinary
+    // one does not — both go through `damageArea`. See `C-061`.
+    CHECK(rm::test::asFloat(roster.health(halfway).current) == Approx(500.0f));
     CHECK(rm::test::asFloat(roster.health(clear).current) == Approx(1000.0f));   // untouched
 }
 

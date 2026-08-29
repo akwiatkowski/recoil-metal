@@ -870,6 +870,23 @@ Mag damageArea(std::array<Fx, 3> centre, Fx radiusElmos, const unitdef::DamagePr
 
         const Fx distance = groundDistanceElmos(centre, positionOf(transforms[slot]));
 
+        // WITHIN THE RADIUS IS WITHIN THE RADIUS — no distance falloff, because Forged
+        // Alliance has none.
+        //
+        // This used to be `1 - distance/radius`, which is what Total Annihilation and Spring
+        // do and what most people assume every RTS does. Supreme Commander does not. Traced
+        // through the retail executable: `DealDamage` (`0x0073dbc0`) is reached from the
+        // sphere worker (`0x0073e100`) and the ring worker (`0x0073e5b0`), and between the
+        // spatial query and that call the *only* thing that touches the amount is shield
+        // absorption — a flat subtraction with no distance term. The target-to-centre delta is
+        // computed, but it is written into the damage record as a DIRECTION and never
+        // multiplied in. See `docs/fa-exe-analysis-plan.md`, claim `C-061`.
+        //
+        // The correction matters more than it looks. Under linear falloff the average victim
+        // of a blast took roughly half the stated damage; now every one of them takes all of
+        // it, so blast weapons hit far harder, more units die per shot, and the wreck and
+        // state-hash consequences follow. Blueprint damage numbers finally mean what the
+        // blueprint says.
         Fx share{};
         if (radiusElmos <= Fx{}) {
             // A point hit. Only what is essentially AT the centre takes it, and the
@@ -879,8 +896,10 @@ Mag damageArea(std::array<Fx, 3> centre, Fx radiusElmos, const unitdef::DamagePr
                 std::max(kFxOne, slot < motion.size() ? motion[slot].radiusElmos : kFxOne);
             share = distance <= tolerance ? kFxOne : Fx{};
         } else {
-            // Linear from full at the centre to nothing at the rim.
-            share = std::max(Fx{}, kFxOne - distance / radiusElmos);
+            // Uniform inside the radius, nothing outside it. Retail's own test is inclusive of
+            // the rim: the query returns everything the sphere overlaps and the worker applies
+            // the full amount to all of it.
+            share = distance <= radiusElmos ? kFxOne : Fx{};
         }
 
         if (share <= Fx{}) {

@@ -388,15 +388,19 @@ TEST_CASE("one blast hits two armour classes differently") {
     CHECK(dealt == rm::test::mag(15000.0f));
 }
 
-TEST_CASE("armour is applied before the falloff, not after") {
-    // The order is not arbitrary and getting it backwards is invisible at the centre of a
-    // blast: it only shows up off-centre, where scaling first and looking up second would key
-    // the table on a number that is no longer the weapon's damage.
+TEST_CASE("armour applies to a target away from the blast centre") {
+    // THIS TEST HAS LOST ITS ORIGINAL POINT, and saying so is more useful than quietly
+    // rewriting it. It used to be called "armour is applied before the falloff, not after" and
+    // pinned the ordering of the armour lookup against a linear distance falloff.
     //
-    // Half a blast radius away, so the falloff is exactly 0.5. A structure takes
-    // 12000 x 0.25 x 0.5 = 1500 either way IF the operations commute — which they do
-    // arithmetically. What does NOT commute is the LOOKUP, and this pins the value so a future
-    // non-linear falloff or a per-class radius cannot quietly reorder them.
+    // `C-061` removed the falloff: retail applies the full amount everywhere inside the
+    // radius, so the share is now 1 or 0 and `armour x share` is identical to
+    // `share x armour` for every input. **The ordering is no longer observable through this
+    // route at all.** The case is kept because it still checks something real — that the
+    // armour table is consulted for a target that is not at the centre — but a future change
+    // that reorders the lookup will have to be caught somewhere else.
+    //
+    // Half a blast radius away. A structure takes 12000 x 0.25 = 3000.
     const std::vector<Army> armies = rm::sim::freeForAll(2);
 
     Roster roster;
@@ -413,7 +417,7 @@ TEST_CASE("armour is applied before the falloff, not after") {
     rm::sim::damageArea(rm::test::at(0, 0, 0), rm::test::fx(100.0f), overcharge, 0, roster.store,
                         armies, &roster.catalog);
 
-    CHECK(roster.health(target).current == rm::test::mag(18500.0f));
+    CHECK(roster.health(target).current == rm::test::mag(17000.0f));
 }
 
 TEST_CASE("without a catalog every target is ordinary armour") {
