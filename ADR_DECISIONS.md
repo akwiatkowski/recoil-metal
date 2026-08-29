@@ -2226,3 +2226,22 @@ future panel.
 **Consequences.** The two-resource simulation is unchanged. FA and classic FAF present Mass then
 Energy, BAR presents Metal then Energy, and Neutral presents Material then Energy; order and count
 are compile-time fixed and independently tested.
+
+## ADR-061 — AppKit emits one complete logical key event
+
+**Context.** Keyboard input crossed the platform boundary through a repeating key-down callback, a
+second press/release callback, a character-keyed held set, and live modifier polls. A consumer had
+to combine facts sampled through different APIs, and every binding compared raw characters.
+
+**Decision.** AppKit translates each bound layout-aware character once into `KeyEvent`: a small
+logical `Key` enum plus press/release phase, AppKit repeat state, and Shift/Command/Control. One
+callback receives both phases; held movement polls the same enum-keyed set. Mouse band selection
+continues polling live Shift because it completes from per-frame mouse state, not a key event.
+
+**Alternatives considered.** Hardware key codes would silently switch to physical-key bindings and
+change behavior across keyboard layouts. Keeping separate tap and held callbacks preserves two
+partial event models and still leaves modifiers out-of-band.
+
+**Consequences.** Existing bindings and repeat behavior are unchanged, while application code has
+no raw key-character comparisons. Every future keyboard consumer must handle phase, repeat, and
+modifiers from one event rather than reconstructing them from AppKit state.

@@ -12,6 +12,7 @@
 
 #include "core/camera/OrbitCamera.hpp"
 #include "core/scene/Picking.hpp"
+#include "platform/KeyInput.hpp"
 #include "render/Renderer.hpp"
 
 #include <memory>
@@ -128,24 +129,10 @@ public:
     // release-gated so a pan cannot also queue an order.
     void onClick(std::function<void(const Ray& ray, MouseButton button, MouseModifiers mods)> callback);
 
-    // Called on a printable keypress, lowercased. Modifiers are not reported:
-    // a binding that needed one would belong in a menu rather than here.
-    //
-    // A plain char rather than a key code, so that nothing downstream has to
-    // include AppKit to ask "was that R".
-    void onKey(std::function<void(char key)> callback);
-
-    // Called on press AND release, for the keys that are HELD rather than tapped.
-    //
-    // Separate from `onKey` rather than replacing it, because the two answer different
-    // questions and conflating them makes both worse: a toggle wants "was R pressed" and
-    // fires once, while panning wants "is W down" and must survive the whole frame. A
-    // toggle driven by this would fire twice per press.
-    //
-    // Space arrives as ' '. It is the one non-printable key here and it earns the
-    // exception: holding it to swing the camera is the convention this app follows, and a
-    // held key with no release event cannot express "let go".
-    void onKeyState(std::function<void(char key, bool pressed)> callback);
+    /// Called for every bound logical key press and release. Repeat and modifiers are facts on the
+    /// same event rather than separate platform polls, so consumers cannot observe mismatched
+    /// input moments. Characters remain layout-aware; this is not a physical-key mapping.
+    void onKey(std::function<void(KeyEvent event)> callback);
 
     /// Whether the left button is down right now, and where its press began, in AppKit logical
     /// points. POLLED, like the cursor and for the same reason: a drag is a per-frame
@@ -155,16 +142,14 @@ public:
     [[nodiscard]] bool leftMouseHeld() const;
     [[nodiscard]] std::array<float, 2> dragOrigin() const;
 
-    /// Whether a modifier is down RIGHT NOW, polled from the event stream's live state.
-    /// For chorded keys: `keyDown` deliberately strips modifiers from characters, so
-    /// "Ctrl+3 sets a control group" asks this at the moment the '3' arrives.
-    [[nodiscard]] bool controlHeldNow() const;
+    /// Shift's live state for a band selection completed by per-frame mouse polling rather than
+    /// by a key event. Keyboard bindings consume `KeyEvent::modifiers` instead.
     [[nodiscard]] bool shiftHeldNow() const;
 
     /// Whether a key is down right now. The form a per-frame update wants — asking is
     /// cheaper than tracking the same set again in the caller, and there is exactly one
     /// truth about what is held.
-    [[nodiscard]] bool keyHeld(char key) const;
+    [[nodiscard]] bool keyHeld(Key key) const;
 
     /// Where the cursor is right now, in `MouseModifiers::pointX`'s space — logical points,
     /// top-left origin. `UiViewport::toHud` converts it before a HUD hit test.

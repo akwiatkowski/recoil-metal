@@ -17,6 +17,18 @@
 #include <functional>
 #include <utility>
 
+namespace {
+
+[[nodiscard]] rm::KeyModifiers rmKeyModifiers(NSEventModifierFlags flags) {
+    return {
+        .shift = (flags & NSEventModifierFlagShift) != 0,
+        .command = (flags & NSEventModifierFlagCommand) != 0,
+        .control = (flags & NSEventModifierFlagControl) != 0,
+    };
+}
+
+} // namespace
+
 // Thin ObjC delegate that forwards vsync callbacks into the C++ Renderer.
 // CAMetalDisplayLink (macOS 14+) is the modern replacement for the
 // deprecated CVDisplayLink callback dance.
@@ -74,9 +86,8 @@
 // Window::Impl's click callback, by pointer — see RMDisplayLinkDelegate.
 @property(nonatomic, assign)
     const std::function<void(const rm::Ray&, rm::MouseButton, rm::MouseModifiers)>* clickCallback;
-@property(nonatomic, assign) const std::function<void(char)>* keyCallback;
-@property(nonatomic, assign) const std::function<void(char, bool)>* keyStateCallback;
-@property(nonatomic, assign) std::set<char>* heldKeys;
+@property(nonatomic, assign) const std::function<void(rm::KeyEvent)>* keyCallback;
+@property(nonatomic, assign) std::set<rm::Key>* heldKeys;
 /// The player's requested multiplier on automatic size — `--ui-scale`. 1 is automatic.
 @property(nonatomic, assign) float userHudScale;
 
@@ -245,12 +256,10 @@ static std::array<float, 2> viewPointIn(NSView* view, NSPoint windowPoint) {
     (*self.clickCallback)(ray, button, mods);
 }
 
-/// Reports a printable keypress, lowercased, to the app.
+/// Extracts one layout-aware ASCII character, lowercased, from an AppKit event.
 ///
-/// Deliberately a plain char rather than an NSEvent or a key code: the app is
-/// C++ that includes no AppKit, and every use so far is "did the user press r".
-/// Modifiers are not forwarded — a toggle that needed one would be a menu item,
-/// not a keypress.
+/// This is the only AppKit-specific part of keyboard identity. `keyEventForCharacter` immediately
+/// turns the result into the platform-neutral key, phase, repeat, and modifier vocabulary.
 ///
 /// Nothing is passed to super, so AppKit does not beep at an unhandled key.
 - (char)charFor:(NSEvent*)event {
@@ -266,8 +275,10 @@ static std::array<float, 2> viewPointIn(NSView* view, NSPoint windowPoint) {
 }
 
 - (void)keyDown:(NSEvent*)event {
-    const char key = [self charFor:event];
-    if (key == 0) {
+    const std::optional<rm::KeyEvent> keyEvent = rm::keyEventForCharacter(
+        [self charFor:event], rm::KeyPhase::Press, event.isARepeat,
+        rmKeyModifiers(event.modifierFlags));
+    if (!keyEvent) {
         return;
     }
 
@@ -275,35 +286,29 @@ static std::array<float, 2> viewPointIn(NSView* view, NSPoint windowPoint) {
     // to be right whether or not a callback happens to be installed, or a key held while
     // a mode changes is stuck down forever.
     //
-    // AppKit repeats keyDown while a key is held, so a repeat must not be reported as a
-    // fresh press — a pan that re-triggered on every repeat would accelerate the longer
-    // it ran.
-    const bool repeat = self.heldKeys != nullptr && self.heldKeys->contains(key);
     if (self.heldKeys != nullptr) {
-        self.heldKeys->insert(key);
-    }
-    if (!repeat && self.keyStateCallback != nullptr && *self.keyStateCallback) {
-        (*self.keyStateCallback)(key, true);
+        self.heldKeys->insert(keyEvent->key);
     }
 
-    // The tap callback still fires on a repeat, because that is what a key-repeat is for
-    // in a text-like binding, and every current use is a toggle where a repeat is
-    // harmless.
+    // Repeats are still delivered: current tapped bindings repeat, while held movement polls the
+    // set above and therefore cannot accelerate with AppKit's repeat cadence.
     if (self.keyCallback != nullptr && *self.keyCallback) {
-        (*self.keyCallback)(key);
+        (*self.keyCallback)(*keyEvent);
     }
 }
 
 - (void)keyUp:(NSEvent*)event {
-    const char key = [self charFor:event];
-    if (key == 0) {
+    const std::optional<rm::KeyEvent> keyEvent = rm::keyEventForCharacter(
+        [self charFor:event], rm::KeyPhase::Release, false,
+        rmKeyModifiers(event.modifierFlags));
+    if (!keyEvent) {
         return;
     }
     if (self.heldKeys != nullptr) {
-        self.heldKeys->erase(key);
+        self.heldKeys->erase(keyEvent->key);
     }
-    if (self.keyStateCallback != nullptr && *self.keyStateCallback) {
-        (*self.keyStateCallback)(key, false);
+    if (self.keyCallback != nullptr && *self.keyCallback) {
+        (*self.keyCallback)(*keyEvent);
     }
 }
 
@@ -365,7 +370,7 @@ static std::array<float, 2> viewPointIn(NSView* view, NSPoint windowPoint) {
     // a camera that swings when you meant to select is the single most disorienting thing
     // an RTS camera can do. Space is the modal key: hold it and the mouse turns the view,
     // let go and the view returns to overhead (see the space handler in main).
-    if (self.heldKeys == nullptr || !self.heldKeys->contains(' ')) {
+    if (self.heldKeys == nullptr || !self.heldKeys->contains(rm::Key::Space)) {
         return;
     }
 
@@ -463,9 +468,8 @@ struct rm::Window::Impl {
     // view and the delegate hold pointers to these very objects.
     std::function<void(float)> frameCallback;
     std::function<void(const rm::Ray&, rm::MouseButton, rm::MouseModifiers)> clickCallback;
-    std::function<void(char)> keyCallback;
-    std::function<void(char, bool)> keyStateCallback;
-    std::set<char> heldKeys;
+    std::function<void(rm::KeyEvent)> keyCallback;
+    std::set<rm::Key> heldKeys;
 
     Impl(int width, int height, const char* title) {
         constexpr NSUInteger style = NSWindowStyleMaskTitled
@@ -509,7 +513,6 @@ struct rm::Window::Impl {
         [view rmSyncUiViewport];
         view.clickCallback = &clickCallback;
         view.keyCallback = &keyCallback;
-        view.keyStateCallback = &keyStateCallback;
         view.heldKeys = &heldKeys;
 
         delegate = [[RMDisplayLinkDelegate alloc] init];
@@ -530,7 +533,6 @@ struct rm::Window::Impl {
         view.renderer = nullptr;
         view.clickCallback = nullptr;
         view.keyCallback = nullptr;
-        view.keyStateCallback = nullptr;
         view.heldKeys = nullptr;
         delegate.frameCallback = nullptr;
         renderer.reset();
@@ -614,15 +616,11 @@ void Window::onClick(
     impl_->clickCallback = std::move(callback);
 }
 
-void Window::onKey(std::function<void(char key)> callback) {
+void Window::onKey(std::function<void(KeyEvent event)> callback) {
     impl_->keyCallback = std::move(callback);
 }
 
-void Window::onKeyState(std::function<void(char key, bool pressed)> callback) {
-    impl_->keyStateCallback = std::move(callback);
-}
-
-bool Window::keyHeld(char key) const { return impl_->heldKeys.contains(key); }
+bool Window::keyHeld(Key key) const { return impl_->heldKeys.contains(key); }
 
 std::array<float, 2> Window::cursor() const {
     NSWindow* window = impl_->view.window;
@@ -686,10 +684,6 @@ void Window::setConstructionTime(float seconds) noexcept {
 bool Window::leftMouseHeld() const { return [impl_->view leftDown]; }
 
 std::array<float, 2> Window::dragOrigin() const { return [impl_->view leftDownAtPoint]; }
-
-bool Window::controlHeldNow() const {
-    return ([NSEvent modifierFlags] & NSEventModifierFlagControl) != 0;
-}
 
 bool Window::shiftHeldNow() const {
     return ([NSEvent modifierFlags] & NSEventModifierFlagShift) != 0;

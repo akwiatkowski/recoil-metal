@@ -713,41 +713,54 @@ int runWindowed(const Session& session) {
         std::array<std::vector<rm::sim::UnitId>, 10> controlGroups;
         std::optional<rm::sim::CommandKind> armedGroundOrder;
 
-        window.onKey([&window, &selected, &controlGroups, &units, &armedGroundOrder](char key) {
-            if (key == 'r') {
+        // The overhead view the camera returns to when space is released. Captured at the start,
+        // when `OrbitCamera::frame` has fitted the whole map.
+        const float restPitch = window.camera().pitch;
+        const float restYaw = window.camera().yaw;
+
+        window.onKey([&window, &selected, &controlGroups, &units, &armedGroundOrder, restPitch,
+                      restYaw](rm::KeyEvent event) {
+            if (event.phase == rm::KeyPhase::Release) {
+                if (event.key == rm::Key::Space) {
+                    // A held-space glance never costs the player their overhead bearings.
+                    rm::OrbitCamera& camera = window.camera();
+                    camera.pitch = restPitch;
+                    camera.yaw = restYaw;
+                }
+                return;
+            }
+
+            if (event.key == rm::Key::R) {
                 const bool enabled = !window.reflectionsEnabled();
                 window.setReflections(enabled);
                 std::printf("reflections %s\n", enabled ? "on" : "off");
                 std::fflush(stdout);
-            } else if (key == 'n') {
+            } else if (event.key == rm::Key::N) {
                 const bool enabled = !window.stratumNormalsEnabled();
                 window.setStratumNormals(enabled);
                 std::printf("stratum normals %s\n", enabled ? "on" : "off");
                 std::fflush(stdout);
-            } else if (key == 'f') {
+            } else if (event.key == rm::Key::F) {
                 const bool enabled = !window.refractionEnabled();
                 window.setRefraction(enabled);
                 std::printf("water refraction %s\n", enabled ? "on" : "off");
                 std::fflush(stdout);
-            } else if (key == 'o') {
+            } else if (event.key == rm::Key::O) {
                 const bool visible = !window.propsVisible();
                 window.setPropsVisible(visible);
                 std::printf("props %s\n", visible ? "on" : "off");
                 std::fflush(stdout);
-            } else if (key == 'a' && window.shiftHeldNow()) {
+            } else if (event.key == rm::Key::A && event.modifiers.shift) {
                 armedGroundOrder = rm::sim::CommandKind::AttackMove;
                 std::printf("attack-move armed: right-click a destination\n");
-            } else if (key == 'p') {
+            } else if (event.key == rm::Key::P) {
                 armedGroundOrder = rm::sim::CommandKind::Patrol;
                 std::printf("patrol armed: right-click a destination\n");
-            } else if (key >= '0' && key <= '9') {
-                // The digit arrives with its modifiers stripped (Window.mm's charFor), so
-                // whether this is "set" or "recall" is polled from the live modifier state
-                // at the moment the key lands — the one question that distinction needs.
-                auto& group = controlGroups[static_cast<std::size_t>(key - '0')];
-                if (window.controlHeldNow()) {
+            } else if (const std::optional<std::size_t> digit = rm::digitForKey(event.key)) {
+                auto& group = controlGroups[*digit];
+                if (event.modifiers.control) {
                     group = selected;
-                    std::printf("group %c: %zu unit(s) set\n", key, group.size());
+                    std::printf("group %zu: %zu unit(s) set\n", *digit, group.size());
                 } else {
                     std::erase_if(group, [&units](rm::sim::UnitId id) {
                         return !units.store.alive(id);
@@ -1530,24 +1543,6 @@ int runWindowed(const Session& session) {
             armedGroundOrder.reset();
         });
 
-        // The overhead view the camera returns to when space is released. Captured at the
-        // start, which is the whole-map fit `OrbitCamera::frame` computed on load, so
-        // "normal view" means the view the app opened with rather than a hardcoded angle.
-        const float restPitch = window.camera().pitch;
-        const float restYaw = window.camera().yaw;
-
-        window.onKeyState([&window, restPitch, restYaw](char key, bool pressed) {
-            // Releasing space snaps the camera back overhead. Holding it is what allows a
-            // drag to rotate at all (Window.mm), so this is the other half of that mode:
-            // look around while you hold, and you are put back when you let go, which
-            // means a glance never costs you your bearings.
-            if (key == ' ' && !pressed) {
-                rm::OrbitCamera& camera = window.camera();
-                camera.pitch = restPitch;
-                camera.yaw = restYaw;
-            }
-        });
-
         // Scratch for the icon pass, held outside the frame callback so a frame costs no
         // allocation — the same reason the dust emitters are.
         std::vector<rm::Particle> iconScratch;
@@ -1603,10 +1598,10 @@ int runWindowed(const Session& session) {
 
                 float right = 0.0f;
                 float forward = 0.0f;
-                if (window.keyHeld('a')) { right -= step; }
-                if (window.keyHeld('d')) { right += step; }
-                if (window.keyHeld('w')) { forward += step; }
-                if (window.keyHeld('s')) { forward -= step; }
+                if (window.keyHeld(rm::Key::A)) { right -= step; }
+                if (window.keyHeld(rm::Key::D)) { right += step; }
+                if (window.keyHeld(rm::Key::W)) { forward += step; }
+                if (window.keyHeld(rm::Key::S)) { forward -= step; }
                 if (right != 0.0f || forward != 0.0f) {
                     window.camera().pan(right, forward);
                 }
