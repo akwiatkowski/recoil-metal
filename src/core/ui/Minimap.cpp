@@ -111,7 +111,7 @@ void appendMinimap(Geometry& out, const text::Font& font, const Theme& theme,
             const float top = std::min(a[1], b[1]);
             const float width = std::max(1.0f, std::abs(b[0] - a[0]));
             const float height = std::max(1.0f, std::abs(b[1] - a[1]));
-            text::appendRect(out.label, font, left, top, width, height, edge);
+            text::appendRect(out.chrome, font, left, top, width, height, edge);
         }
     }
 
@@ -121,7 +121,7 @@ void appendMinimap(Geometry& out, const text::Font& font, const Theme& theme,
         // Centred on the position rather than starting at it, so a pip marks where a unit is
         // rather than sitting down and to the right of it.
         const float half = pip.size * 0.5f;
-        text::appendRect(out.label, font, at[0] - half, at[1] - half, pip.size, pip.size,
+        text::appendRect(out.chrome, font, at[0] - half, at[1] - half, pip.size, pip.size,
                          pip.colour);
     }
 }

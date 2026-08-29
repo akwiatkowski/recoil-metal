@@ -567,7 +567,17 @@ int runScreenshot(const Session& session) {
                 std::printf("  roster: %zu type(s) selected\n", shotRoster.size());
             }
 
-            renderer.setHud(hud.label, hud.readout, hud.image, hud.worldImage);
+            renderer.setHud(hud);
+            const rm::ui::UiCapacityReport& hudCapacity = renderer.uiCapacityReport();
+            std::printf("  hud vertices (uploaded/submitted/capacity):");
+            for (std::size_t index = 0; index < rm::ui::kUiLayerCount; ++index) {
+                const auto layer = static_cast<rm::ui::UiLayer>(index);
+                const rm::ui::UiLayerUsage& usage = hudCapacity.layers[index];
+                const std::string_view name = rm::ui::uiLayerName(layer);
+                std::printf(" %.*s=%zu/%zu/%zu", static_cast<int>(name.size()), name.data(),
+                            usage.uploaded, usage.submitted, usage.capacity);
+            }
+            std::printf("\n");
 
             // WHAT REACHED THE GPU, against what the sim holds. The two disagreeing is the
             // signature of a dropped instance, and it used to be invisible: a batch capped at
@@ -1769,7 +1779,7 @@ int runWindowed(const Session& session) {
             appendHealthBars(hudScratch, units, window.camera(), window.labelFont(), viewport);
 
             // The strategic layer: the game's own glyphs where units are too small to read,
-            // in the army's colour, under all the chrome (Geometry::worldImage).
+            // in the army's colour, under all the chrome (Geometry::worldOverlay).
             appendStrategicIcons(hudScratch, units, window.camera(), viewport, strategicRefs);
             appendContactBlips(hudScratch, units, window.camera(), map->field,
                                window.labelFont(), viewport);
@@ -1955,15 +1965,18 @@ int runWindowed(const Session& session) {
                     const float top = std::min(origin[1], at[1]);
                     const float wide = std::abs(at[0] - origin[0]);
                     const float tall = std::abs(at[1] - origin[1]);
-                    rm::text::appendRect(hudScratch.label, window.labelFont(), left, top,
+                    rm::text::appendRect(hudScratch.worldOverlay.solid, window.labelFont(), left,
+                                         top,
                                          wide, tall, rm::ui::fade(theme.edgeLit, 0.10f));
-                    rm::text::appendRect(hudScratch.label, window.labelFont(), left, top,
+                    rm::text::appendRect(hudScratch.worldOverlay.solid, window.labelFont(), left,
+                                         top,
                                          wide, 1.0f, theme.edgeLit);
-                    rm::text::appendRect(hudScratch.label, window.labelFont(), left,
+                    rm::text::appendRect(hudScratch.worldOverlay.solid, window.labelFont(), left,
                                          top + tall - 1.0f, wide, 1.0f, theme.edgeLit);
-                    rm::text::appendRect(hudScratch.label, window.labelFont(), left, top,
+                    rm::text::appendRect(hudScratch.worldOverlay.solid, window.labelFont(), left,
+                                         top,
                                          1.0f, tall, theme.edgeLit);
-                    rm::text::appendRect(hudScratch.label, window.labelFont(),
+                    rm::text::appendRect(hudScratch.worldOverlay.solid, window.labelFont(),
                                          left + wide - 1.0f, top, 1.0f, tall, theme.edgeLit);
                 }
 
@@ -1999,8 +2012,7 @@ int runWindowed(const Session& session) {
                 leftWasHeld = held;
             }
 
-            window.setHud(hudScratch.label, hudScratch.readout, hudScratch.image,
-                          hudScratch.worldImage);
+            window.setHud(hudScratch);
 
             // Rings under whatever is selected, rebuilt from scratch every
             // frame. Cheap — a selection is tens of units and each ring is 192

@@ -754,11 +754,8 @@ void Window::setIconAtlas(const dds::Texture& atlas) {
     impl_->renderer->setIconAtlas(atlas);
 }
 
-void Window::setHud(std::span<const text::TextVertex> label,
-                    std::span<const text::TextVertex> readout,
-                    std::span<const text::TextVertex> image,
-                    std::span<const text::TextVertex> worldImage) {
-    impl_->renderer->setHud(label, readout, image, worldImage);
+void Window::setHud(const ui::Geometry& geometry) {
+    impl_->renderer->setHud(geometry);
 }
 
 void Window::show() {

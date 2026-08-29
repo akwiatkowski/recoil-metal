@@ -2165,3 +2165,25 @@ thresholds remain in that same logical space. Display scale changes rebuild font
 changing their authored metrics. Requested user magnification cannot exceed available fit, and an
 undersized capture scales Compact down instead of collapsing its geometry. This consolidates
 ADR-051 and ADR-053's coordinate rules and replaces ADR-053's separate HUD accessors.
+
+## ADR-058 — UI geometry is partitioned by semantic compositing layer
+
+**Context.** HUD geometry was grouped by whichever texture could draw it: label-font solids and
+glyphs, readout-font solids and glyphs, or interface-atlas images. Draw order was therefore an
+accident of material, and one shared 6,000-vertex upload ceiling could silently remove unrelated
+visuals when any producer became busy.
+
+**Decision.** Producers submit six back-to-front semantic layers: world overlay, panel surface,
+chrome, icon, label, and foreground readout. Each owns a fixed 1,000-quad partition in the
+triple-buffered upload. Mixed solid/image layers share their partition deterministically, only
+whole quads upload, and the renderer reports submitted, uploaded, and dropped vertices per layer.
+Solids use a texture-independent fragment function rather than borrowing a font-atlas texel.
+
+**Alternatives considered.** Sorting individual quads by z preserves one stream but adds keys and
+per-frame work to an interface whose order is static. Dynamically growing one shared buffer avoids
+fixed limits but can still let labels displace icons and complicates buffers already in GPU flight.
+
+**Consequences.** Material changes can add draws inside a layer but cannot reorder semantic roles.
+Overflow in one role cannot evict another; debug builds assert, release builds truncate safely and
+warn once, and screenshot telemetry exposes the actual frame counts. The fixed budget grows
+from 6,000 to 36,000 vertices per frame, about 3.3 MiB for all three ring slots.

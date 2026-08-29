@@ -193,7 +193,7 @@ void appendBuildPanel(Geometry& out, const text::Font& labelFont, const text::Fo
             const float idWidth = text::measureText(readoutFont.glyphs, builderName);
             const float idRight = layout.x + layout.width - kBuildPadding
                                 - (layout.pages > 1 ? 76.0f : 0.0f);
-            (void)text::appendText(out.readout, readoutFont.glyphs, builderName,
+            (void)text::appendText(out.foregroundReadout, readoutFont.glyphs, builderName,
                                    idRight - idWidth, headerBaseline, fade(kInk, 0.7f));
         }
     } else {
@@ -206,7 +206,7 @@ void appendBuildPanel(Geometry& out, const text::Font& labelFont, const text::Fo
     if (layout.pages > 1 && readoutFont.usable()) {
         const std::string page = std::to_string(layout.page + 1) + "/"
                                + std::to_string(layout.pages) + "  <  >";
-        (void)text::appendText(out.readout, readoutFont.glyphs, page,
+        (void)text::appendText(out.foregroundReadout, readoutFont.glyphs, page,
                                layout.x + layout.width - kBuildPadding
                                    - text::measureText(readoutFont.glyphs, page),
                                headerBaseline, kInk);
@@ -214,7 +214,7 @@ void appendBuildPanel(Geometry& out, const text::Font& labelFont, const text::Fo
 
     // A rule under the header, the full content width. The same device the resource panel's
     // bevel is: it says "the prose ends here, the instrument begins" without a second panel.
-    text::appendRect(out.label, labelFont, layout.x + kBuildPadding,
+    text::appendRect(out.chrome, labelFont, layout.x + kBuildPadding,
                      layout.y + kBuildPadding + kBuildHeader - kBevel,
                      layout.width - kBuildPadding * 2.0f, kBevel, fade(theme.edge, 0.9f));
 
@@ -235,14 +235,14 @@ void appendBuildPanel(Geometry& out, const text::Font& labelFont, const text::Fo
 
         // The well in gradient glass, like its panel — one light for chrome and cells alike.
         const Colour well = fade(theme.well, alpha);
-        text::appendRectV(out.label, labelFont, cx, cy, layout.cellWidth, layout.cellHeight,
+        text::appendRectV(out.chrome, labelFont, cx, cy, layout.cellWidth, layout.cellHeight,
                           Colour{{well[0] * 1.5f, well[1] * 1.5f, well[2] * 1.5f, well[3]}},
                           Colour{{well[0] * 0.7f, well[1] * 0.7f, well[2] * 0.7f, well[3]}});
 
         // The hovered cell's fill lifts as well as its border brightening below: a button
         // under the cursor should look pressed toward the light, not merely outlined.
         if (hovered.has_value() && *hovered == index) {
-            text::appendRect(out.label, labelFont, cx, cy, layout.cellWidth, layout.cellHeight,
+            text::appendRect(out.chrome, labelFont, cx, cy, layout.cellWidth, layout.cellHeight,
                              fade(theme.edgeLit, 0.10f));
         }
 
@@ -256,14 +256,14 @@ void appendBuildPanel(Geometry& out, const text::Font& labelFont, const text::Fo
         // could not take back. A frame is the loudest thing this cell vocabulary has that is
         // still part of the vocabulary.
         const float bandWeight = kBevel * 3.0f;
-        text::appendRect(out.label, labelFont, cx, cy, layout.cellWidth, bandWeight,
+        text::appendRect(out.chrome, labelFont, cx, cy, layout.cellWidth, bandWeight,
                           fade(option.tint, alpha));
         if (option.upgrade) {
             const Colour band = fade(theme.edgeLit, alpha);
-            text::appendRect(out.label, labelFont, cx, cy + layout.cellHeight - bandWeight,
+            text::appendRect(out.chrome, labelFont, cx, cy + layout.cellHeight - bandWeight,
                              layout.cellWidth, bandWeight, band);
-            text::appendRect(out.label, labelFont, cx, cy, bandWeight, layout.cellHeight, band);
-            text::appendRect(out.label, labelFont, cx + layout.cellWidth - bandWeight, cy,
+            text::appendRect(out.chrome, labelFont, cx, cy, bandWeight, layout.cellHeight, band);
+            text::appendRect(out.chrome, labelFont, cx + layout.cellWidth - bandWeight, cy,
                              bandWeight, layout.cellHeight, band);
         }
 
@@ -279,23 +279,23 @@ void appendBuildPanel(Geometry& out, const text::Font& labelFont, const text::Fo
         const float iconSize = std::min(30.0f, layout.cellWidth - 12.0f);
         const float iconX = cx + (layout.cellWidth - iconSize) * 0.5f;
         const float iconY = cy + 5.0f;
-        text::appendRect(out.label, labelFont, iconX, iconY, iconSize, iconSize,
+        text::appendRect(out.chrome, labelFont, iconX, iconY, iconSize, iconSize,
                           fade(theme.glass, alpha * 0.9f));
 
-        // The icon itself goes in the IMAGE list, which is drawn after both font atlases — see
-        // `Geometry::image`. Six vertices, uv'd into the shared atlas, tinted white so the
-        // artwork arrives as authored and faded with the rest of an unaffordable cell.
+        // The icon itself goes in the semantic icon layer, below type but above panel chrome.
+        // Six vertices, uv'd into the shared atlas, tinted white so the artwork arrives as
+        // authored and faded with the rest of an unaffordable cell.
         if (option.iconSlot) {
             const IconUv uv = iconUv(*option.iconSlot);
             const Colour tint{{1.0f, 1.0f, 1.0f, alpha}};
             const float x1 = iconX + iconSize;
             const float y1 = iconY + iconSize;
-            out.image.push_back({{iconX, iconY}, {uv.u0, uv.v0}, tint});
-            out.image.push_back({{x1, iconY}, {uv.u1, uv.v0}, tint});
-            out.image.push_back({{x1, y1}, {uv.u1, uv.v1}, tint});
-            out.image.push_back({{iconX, iconY}, {uv.u0, uv.v0}, tint});
-            out.image.push_back({{x1, y1}, {uv.u1, uv.v1}, tint});
-            out.image.push_back({{iconX, y1}, {uv.u0, uv.v1}, tint});
+            out.icon.push_back({{iconX, iconY}, {uv.u0, uv.v0}, tint});
+            out.icon.push_back({{x1, iconY}, {uv.u1, uv.v0}, tint});
+            out.icon.push_back({{x1, y1}, {uv.u1, uv.v1}, tint});
+            out.icon.push_back({{iconX, iconY}, {uv.u0, uv.v0}, tint});
+            out.icon.push_back({{x1, y1}, {uv.u1, uv.v1}, tint});
+            out.icon.push_back({{iconX, y1}, {uv.u0, uv.v1}, tint});
         }
 
         // THE NAME, under the icon, wrapped to two short lines.
@@ -364,17 +364,20 @@ void appendBuildPanel(Geometry& out, const text::Font& labelFont, const text::Fo
                             * 0.5f;
             const float pairBaseline = costBaseline - kBuildCostStrip * 0.5f;
             const Colour massTint = fade(option.affordable ? kMass : kLoss, alpha);
-            text::appendRect(out.readout, readoutFont, pen, pairBaseline - kCostChip, kCostChip,
+            text::appendRect(out.foregroundReadout, readoutFont, pen,
+                             pairBaseline - kCostChip, kCostChip,
                              kCostChip, massTint);
-            pen = text::appendText(out.readout, readoutFont.glyphs, mass, pen + kCostChip + gap,
+            pen = text::appendText(out.foregroundReadout, readoutFont.glyphs, mass,
+                                   pen + kCostChip + gap,
                                    pairBaseline, massTint);
             pen += gap;
-            text::appendRect(out.readout, readoutFont, pen, pairBaseline - kCostChip, kCostChip,
+            text::appendRect(out.foregroundReadout, readoutFont, pen,
+                             pairBaseline - kCostChip, kCostChip,
                              kCostChip, fade(kEnergy, alpha));
-            (void)text::appendText(out.readout, readoutFont.glyphs, energy,
+            (void)text::appendText(out.foregroundReadout, readoutFont.glyphs, energy,
                                    pen + kCostChip + gap, pairBaseline, fade(kEnergy, alpha));
 
-            (void)text::appendText(out.readout, readoutFont.glyphs, seconds,
+            (void)text::appendText(out.foregroundReadout, readoutFont.glyphs, seconds,
                                    cx + (layout.cellWidth - timeWidth) * 0.5f, costBaseline,
                                    fade(kInk, alpha * 0.8f));
         }
@@ -384,11 +387,11 @@ void appendBuildPanel(Geometry& out, const text::Font& labelFont, const text::Fo
         const bool lit = hovered.has_value() && *hovered == index;
         const Colour border = lit ? theme.edgeLit : fade(theme.edge, alpha);
         const float thickness = lit ? kBevel * 2.0f : kBevel;
-        text::appendRect(out.label, labelFont, cx, cy, layout.cellWidth, thickness, border);
-        text::appendRect(out.label, labelFont, cx, cy + layout.cellHeight - thickness,
+        text::appendRect(out.chrome, labelFont, cx, cy, layout.cellWidth, thickness, border);
+        text::appendRect(out.chrome, labelFont, cx, cy + layout.cellHeight - thickness,
                           layout.cellWidth, thickness, border);
-        text::appendRect(out.label, labelFont, cx, cy, thickness, layout.cellHeight, border);
-        text::appendRect(out.label, labelFont, cx + layout.cellWidth - thickness, cy, thickness,
+        text::appendRect(out.chrome, labelFont, cx, cy, thickness, layout.cellHeight, border);
+        text::appendRect(out.chrome, labelFont, cx + layout.cellWidth - thickness, cy, thickness,
                           layout.cellHeight, border);
     }
 }

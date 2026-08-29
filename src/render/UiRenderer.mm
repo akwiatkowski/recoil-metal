@@ -25,11 +25,14 @@
 
 #include "core/Error.hpp"
 #include "core/camera/Frustum.hpp"
+#include "core/ui/Hud.hpp"
 
 #include <simd/simd.h>
 
 #include <algorithm>
+#include <cassert>
 #include <cstddef>
+#include <cstdio>
 #include <cstring>
 #include <string>
 
@@ -91,10 +94,9 @@ void Renderer::buildFontAtlas(FontSlot& slot, const char* familyName, float poin
     CTFontGetAdvancesForGlyphs(font, kCTFontOrientationHorizontal, cgGlyphs.data(),
                               advances.data(), static_cast<CFIndex>(text::kGlyphCount));
 
-    // A SOLID BLOCK, reserved before the glyphs. Every panel, bevel, bar and bracket in the
-    // interface is a quad whose uvs point at the middle of this — so the chrome and the letters
-    // share one atlas, one bind and one draw, and there is no second pipeline to keep in step.
-    // Four pixels rather than one so that sampling its centre is nowhere near an edge.
+    // A SOLID BLOCK, reserved before the glyphs. Solid quads keep these coordinates in the common
+    // UI vertex format even though their semantic pipeline no longer samples the atlas. Four
+    // pixels rather than one keeps the Font contract valid for any coverage-sampled caller.
     constexpr int kSolidBlock = 4;
 
     int atlasWidth = kSolidBlock + 2 * kGlyphPadding;
@@ -227,64 +229,77 @@ void Renderer::setUiViewport(const ui::UiViewport& viewport) {
     buildFontAtlas(readoutFont_, kReadoutFontName, kReadoutPointSize);
 }
 
-void Renderer::setHud(std::span<const text::TextVertex> label,
-                      std::span<const text::TextVertex> readout,
-                      std::span<const text::TextVertex> image,
-                      std::span<const text::TextVertex> worldImage) noexcept {
-    labelVertexCount_ = 0;
-    readoutVertexCount_ = 0;
-    imageVertexCount_ = 0;
-    worldImageVertexCount_ = 0;
-    if (textBuffer_ == nullptr) {
+void Renderer::setHud(const ui::Geometry& geometry) noexcept {
+    uiLayerVertexCounts_ = {};
+    const bool hasMinimap = minimapTexture_ != nullptr && minimapRect_[2] > 0.0f
+                         && minimapRect_[3] > 0.0f;
+    std::array<std::size_t, ui::kUiLayerCount> submitted = geometry.submittedVertices();
+    if (hasMinimap) {
+        submitted[ui::uiLayerIndex(ui::UiLayer::PanelSurface)] += text::kVerticesPerGlyph;
+    }
+    uiCapacityReport_ = ui::uiCapacityReport(submitted);
+    if (uiBuffer_ == nullptr) {
         return;
     }
 
-    // The two faces share one buffer, the labels first and the readouts after. One allocation
-    // and one upload; the draws differ only in which atlas they bind and where they start.
-    auto* base = static_cast<text::TextVertex*>(textBuffer_->contents())
-               + instanceSlot_ * text::kMaxTextVertices;
+    auto* frameBase = static_cast<text::TextVertex*>(uiBuffer_->contents())
+                    + instanceSlot_ * ui::kUiVerticesPerFrame;
+    const std::span<const text::TextVertex> none;
 
-    // Truncated to whole TRIANGLES, so a dropped tail cannot leave half a quad — the rule the
-    // decals follow. The chrome is in the label list, so if anything has to go it is a number
-    // rather than the panel it sits on.
-    const std::size_t labelFits =
-        std::min(label.size(), text::kMaxTextVertices) / 3 * 3;
-    if (labelFits > 0) {
-        std::memcpy(base, label.data(), labelFits * sizeof(text::TextVertex));
-        labelVertexCount_ = labelFits;
-    }
+    // Mixed-material layers still own one semantic capacity. The first stream has draw-order
+    // priority within that layer; both are copied only as complete quads.
+    const auto uploadLayer = [&](ui::UiLayer layer,
+                                 std::span<const text::TextVertex> first,
+                                 std::span<const text::TextVertex> second) {
+        assert(first.size() % text::kVerticesPerGlyph == 0);
+        assert(second.size() % text::kVerticesPerGlyph == 0);
 
-    const std::size_t readoutRoom = text::kMaxTextVertices - labelFits;
-    const std::size_t readoutFits = std::min(readout.size(), readoutRoom) / 3 * 3;
-    if (readoutFits > 0) {
-        std::memcpy(base + labelFits, readout.data(),
-                    readoutFits * sizeof(text::TextVertex));
-        readoutVertexCount_ = readoutFits;
-    }
+        const std::size_t index = ui::uiLayerIndex(layer);
+        // The minimap preview uses a six-vertex inline draw in this same semantic layer. Reserve
+        // its quad even though it does not occupy this buffer, so the capacity report and limit
+        // describe all panel-surface geometry rather than only the uploaded material streams.
+        const std::size_t reserved = layer == ui::UiLayer::PanelSurface && hasMinimap
+                                       ? text::kVerticesPerGlyph
+                                       : 0;
+        const ui::UiLayerUpload upload = ui::uiLayerUpload(
+            first.size(), second.size(), ui::kUiLayerVertexCapacity - reserved);
+        text::TextVertex* destination = frameBase + index * ui::kUiLayerVertexCapacity;
+        if (upload.first > 0) {
+            std::memcpy(destination, first.data(), upload.first * sizeof(text::TextVertex));
+        }
+        if (upload.second > 0) {
+            std::memcpy(destination + upload.first, second.data(),
+                        upload.second * sizeof(text::TextVertex));
+        }
+        uiLayerVertexCounts_[index] = {upload.first, upload.second};
+        uiCapacityReport_.layers[index].uploaded = upload.total() + reserved;
+    };
 
-    // The icons after both faces IN THE BUFFER, though they are drawn between them — the
-    // upload order and the draw order are independent, and last in the buffer is where the
-    // truncation should bite: a menu that lost its pictures still reads, and one that lost its
-    // panel does not.
-    const std::size_t imageRoom = text::kMaxTextVertices - labelFits - readoutFits;
-    const std::size_t imageFits = std::min(image.size(), imageRoom) / 3 * 3;
-    if (imageFits > 0) {
-        std::memcpy(base + labelFits + readoutFits, image.data(),
-                    imageFits * sizeof(text::TextVertex));
-        imageVertexCount_ = imageFits;
-    }
+    uploadLayer(ui::UiLayer::WorldOverlay, geometry.worldOverlay.image,
+                geometry.worldOverlay.solid);
+    uploadLayer(ui::UiLayer::PanelSurface, geometry.panelSurface.solid,
+                geometry.panelSurface.image);
+    uploadLayer(ui::UiLayer::Chrome, geometry.chrome, none);
+    uploadLayer(ui::UiLayer::Icon, geometry.icon, none);
+    uploadLayer(ui::UiLayer::Label, geometry.label, none);
+    uploadLayer(ui::UiLayer::ForegroundReadout, geometry.foregroundReadout, none);
 
-    // The world's icons take whatever is left — last in the buffer, first to be truncated,
-    // because a battle that overflows the budget should thin its strategic layer before it
-    // costs the interface a panel or a number.
-    const std::size_t worldRoom =
-        text::kMaxTextVertices - labelFits - readoutFits - imageFits;
-    const std::size_t worldFits = std::min(worldImage.size(), worldRoom) / 3 * 3;
-    if (worldFits > 0) {
-        std::memcpy(base + labelFits + readoutFits + imageFits, worldImage.data(),
-                    worldFits * sizeof(text::TextVertex));
-        worldImageVertexCount_ = worldFits;
+#ifndef NDEBUG
+    assert(!uiCapacityReport_.droppedAny() && "a semantic UI layer exceeded its fixed capacity");
+#else
+    if (uiCapacityReport_.droppedAny() && !uiOverflowWarned_) {
+        for (std::size_t index = 0; index < ui::kUiLayerCount; ++index) {
+            const ui::UiLayerUsage& usage = uiCapacityReport_.layers[index];
+            if (usage.dropped() > 0) {
+                std::fprintf(stderr, "HUD %.*s layer dropped %zu of %zu vertices\n",
+                             static_cast<int>(ui::uiLayerName(static_cast<ui::UiLayer>(index)).size()),
+                             ui::uiLayerName(static_cast<ui::UiLayer>(index)).data(),
+                             usage.dropped(), usage.submitted);
+            }
+        }
+        uiOverflowWarned_ = true;
     }
+#endif
 }
 
 void Renderer::setIconAtlas(const dds::Texture& atlas) {

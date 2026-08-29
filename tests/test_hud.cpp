@@ -8,6 +8,7 @@
 
 #include "core/ui/BuildPanel.hpp"  // the cell metrics the column counts have to keep room for
 #include "core/ui/Hud.hpp"
+#include "core/ui/Roster.hpp"
 
 #include <cmath>
 #include <string_view>
@@ -350,18 +351,83 @@ TEST_CASE("the interface draws something, and the chrome outweighs the numbers")
     rm::ui::Geometry out;
     rm::ui::build(out, font, font, rm::ui::neutralTheme(), state, frameAt(1400.0f, 900.0f));
 
-    // Both faces contribute: the chrome and labels in one list, the numbers in the other.
+    // Every visual role is independent: surfaces and chrome no longer borrow the label stream.
+    CHECK_FALSE(out.panelSurface.solid.empty());
+    CHECK_FALSE(out.chrome.empty());
     CHECK_FALSE(out.label.empty());
-    CHECK_FALSE(out.readout.empty());
+    CHECK_FALSE(out.foregroundReadout.empty());
 
-    // The chrome is REALLY there, not just the labels: a panel's glass, bevels and brackets are
-    // more quads than the words "MASS" and "ENERGY" could account for on their own.
+    // The chrome is REALLY there, not only a renamed label list: panels, gauges and brackets
+    // outweigh the two resource words.
     const std::size_t labelGlyphs = std::string_view{"MASSENERGY"}.size();
-    CHECK(out.label.size() > labelGlyphs * rm::text::kVerticesPerGlyph * 2);
+    CHECK(out.chrome.size() > labelGlyphs * rm::text::kVerticesPerGlyph * 2);
 
-    // Whole triangles, or the renderer's truncation would cut a quad in half.
-    CHECK(out.label.size() % 3 == 0);
-    CHECK(out.readout.size() % 3 == 0);
+    // Whole quads, which is the unit every semantic capacity partition admits or drops.
+    for (const std::size_t submitted : out.submittedVertices()) {
+        CHECK(submitted % rm::text::kVerticesPerGlyph == 0);
+    }
+}
+
+TEST_CASE("a skinned panel stays in the panel-surface image stream", "[ui][layers]") {
+    const std::vector<rm::text::Glyph> glyphs = boxGlyphs();
+    const rm::text::Font font = fontOver(glyphs);
+    rm::ui::Theme theme = rm::ui::neutralTheme();
+    theme.skin.active = true;
+    for (std::size_t piece = 0; piece < theme.skin.size.size(); ++piece) {
+        theme.skin.uv[piece] = {.u0 = 0.0f, .v0 = 0.0f, .u1 = 0.1f, .v1 = 0.1f};
+        theme.skin.size[piece] = {4.0f, 4.0f};
+    }
+
+    rm::ui::Geometry out;
+    rm::ui::appendPanel(out, font, theme, 10.0f, 20.0f, 100.0f, 80.0f);
+
+    CHECK(out.panelSurface.solid.size() == rm::text::kVerticesPerGlyph);  // shadow
+    CHECK(out.panelSurface.image.size() == 9 * rm::text::kVerticesPerGlyph);
+    CHECK(out.chrome.empty());  // the nine-slice replaces procedural chrome
+}
+
+TEST_CASE("build panel art and type use their semantic layers", "[ui][layers]") {
+    const std::vector<rm::text::Glyph> glyphs = boxGlyphs();
+    const rm::text::Font font = fontOver(glyphs);
+    const rm::ui::BuildOption option{
+        .id = "UEB1103", .name = "Mass Extractor", .massCost = 36.0f, .iconSlot = 0};
+    const rm::ui::BuildPanelLayout layout =
+        rm::ui::buildPanelLayout(frameAt(1400.0f, 900.0f), 1);
+
+    rm::ui::Geometry out;
+    rm::ui::appendBuildPanel(out, font, font, rm::ui::neutralTheme(), layout,
+                             std::span<const rm::ui::BuildOption>{&option, 1}, std::nullopt,
+                             "Commander", "COMMANDER");
+
+    CHECK_FALSE(out.panelSurface.empty());
+    CHECK_FALSE(out.chrome.empty());
+    CHECK(out.icon.size() == rm::text::kVerticesPerGlyph);
+    CHECK_FALSE(out.label.empty());
+    CHECK(out.foregroundReadout.empty());  // face values are disabled by this HUD profile
+    CHECK(out.worldOverlay.empty());
+}
+
+TEST_CASE("a roster name fallback remains a label rather than a readout", "[ui][layers]") {
+    const std::vector<rm::text::Glyph> glyphs = boxGlyphs();
+    const rm::text::Font font = fontOver(glyphs);
+    const rm::ui::RosterLayout layout =
+        rm::ui::rosterLayout(frameAt(1400.0f, 900.0f), 1);
+    const rm::ui::RosterTile withoutIcon{
+        .id = "UEL0201", .name = "Medium Tank", .health = 300.0f, .maxHealth = 300.0f};
+    rm::ui::RosterTile withIcon = withoutIcon;
+    withIcon.iconSlot = 0;
+
+    rm::ui::Geometry fallback;
+    rm::ui::appendRoster(fallback, font, font, rm::ui::neutralTheme(), layout,
+                         std::span<const rm::ui::RosterTile>{&withoutIcon, 1}, std::nullopt);
+    rm::ui::Geometry pictured;
+    rm::ui::appendRoster(pictured, font, font, rm::ui::neutralTheme(), layout,
+                         std::span<const rm::ui::RosterTile>{&withIcon, 1}, std::nullopt);
+
+    CHECK(fallback.icon.empty());
+    CHECK(pictured.icon.size() == rm::text::kVerticesPerGlyph);
+    CHECK(fallback.label.size() > pictured.label.size());
+    CHECK(fallback.foregroundReadout.empty());
 }
 
 TEST_CASE("the banner appears only when the match is over") {
@@ -432,13 +498,15 @@ TEST_CASE("a missing face costs its own text and nothing else") {
     rm::ui::Geometry noLabels;
     rm::ui::build(noLabels, missing, good, rm::ui::neutralTheme(), state,
                   frameAt(1400.0f, 900.0f));
-    CHECK_FALSE(noLabels.empty());  // the readouts, and chrome drawn with the readout atlas
+    CHECK_FALSE(noLabels.empty());  // surfaces, chrome, and readouts remain
+    CHECK(noLabels.label.empty());
+    CHECK_FALSE(noLabels.foregroundReadout.empty());
 
     rm::ui::Geometry noReadouts;
     rm::ui::build(noReadouts, good, missing, rm::ui::neutralTheme(), state,
                   frameAt(1400.0f, 900.0f));
     CHECK_FALSE(noReadouts.label.empty());
-    CHECK(noReadouts.readout.empty());
+    CHECK(noReadouts.foregroundReadout.empty());
 
     // Neither face: nothing at all, rather than a crash.
     rm::ui::Geometry nothing;

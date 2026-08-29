@@ -154,7 +154,7 @@ void appendRoster(Geometry& out, const text::Font& labelFont, const text::Font& 
     if (inspector != nullptr) {
         appendInspector(out, labelFont, readoutFont, theme, inspectorRect, *inspector);
     }
-    text::appendRect(out.label, labelFont, layout.x + 8.0f, layout.y + 84.0f,
+    text::appendRect(out.chrome, labelFont, layout.x + 8.0f, layout.y + 84.0f,
                      layout.width - 16.0f, kBevel, fade(theme.edge, 0.9f));
 
     // The header: the selection's TOTAL, which grouping-by-type otherwise erases. "14 UNITS"
@@ -178,7 +178,7 @@ void appendRoster(Geometry& out, const text::Font& labelFont, const text::Font& 
         if (layout.pages > 1 && readoutFont.usable()) {
             const std::string more = std::to_string(layout.page + 1) + "/"
                                    + std::to_string(layout.pages) + "  <  >";
-            (void)text::appendText(out.readout, readoutFont.glyphs, more,
+            (void)text::appendText(out.foregroundReadout, readoutFont.glyphs, more,
                                     layout.x + layout.width - 8.0f
                                         - text::measureText(readoutFont.glyphs, more),
                                     headerBaseline, kInk);
@@ -196,7 +196,7 @@ void appendRoster(Geometry& out, const text::Font& labelFont, const text::Font& 
         const float ty = origin[1];
 
         // The tile's well in gradient glass, the build cell's treatment at the roster's size.
-        text::appendRectV(out.label, labelFont, tx, ty, layout.tileSize, layout.tileSize,
+        text::appendRectV(out.chrome, labelFont, tx, ty, layout.tileSize, layout.tileSize,
                           Colour{{theme.well[0] * 1.5f, theme.well[1] * 1.5f,
                                   theme.well[2] * 1.5f, theme.well[3]}},
                           Colour{{theme.well[0] * 0.7f, theme.well[1] * 0.7f,
@@ -208,28 +208,28 @@ void appendRoster(Geometry& out, const text::Font& labelFont, const text::Font& 
             constexpr Colour kFull{{1.0f, 1.0f, 1.0f, 1.0f}};
             const float x1 = tx + layout.tileSize;
             const float y1 = ty + layout.tileSize;
-            out.image.push_back({{tx, ty}, {uv.u0, uv.v0}, kFull});
-            out.image.push_back({{x1, ty}, {uv.u1, uv.v0}, kFull});
-            out.image.push_back({{x1, y1}, {uv.u1, uv.v1}, kFull});
-            out.image.push_back({{tx, ty}, {uv.u0, uv.v0}, kFull});
-            out.image.push_back({{x1, y1}, {uv.u1, uv.v1}, kFull});
-            out.image.push_back({{tx, y1}, {uv.u0, uv.v1}, kFull});
-        } else if (readoutFont.usable()) {
+            out.icon.push_back({{tx, ty}, {uv.u0, uv.v0}, kFull});
+            out.icon.push_back({{x1, ty}, {uv.u1, uv.v0}, kFull});
+            out.icon.push_back({{x1, y1}, {uv.u1, uv.v1}, kFull});
+            out.icon.push_back({{tx, ty}, {uv.u0, uv.v0}, kFull});
+            out.icon.push_back({{x1, y1}, {uv.u1, uv.v1}, kFull});
+            out.icon.push_back({{tx, y1}, {uv.u0, uv.v1}, kFull});
+        } else if (labelFont.usable()) {
             // No picture: the NAME, wrapped small, so a tile is never anonymous. The id is the
             // fallback's fallback — content that states no display name leaves nothing else to
             // print, which is the only place `kShowBlueprintIds` does not reach.
             const std::string& label = tile.name.empty() ? tile.id : tile.name;
             const float lineHeight =
-                readoutFont.lineHeight > 0.0f ? readoutFont.lineHeight : kUnit * 1.8f;
+                labelFont.lineHeight > 0.0f ? labelFont.lineHeight : kUnit * 1.8f;
             const std::vector<std::string> lines =
-                wrapToWidth(readoutFont.glyphs, label, layout.tileSize - kUnit, 2);
+                wrapToWidth(labelFont.glyphs, label, layout.tileSize - kUnit, 2);
             for (std::size_t line = 0; line < lines.size(); ++line) {
-                const float width = text::measureText(readoutFont.glyphs, lines[line]);
-                (void)text::appendText(out.readout, readoutFont.glyphs, lines[line],
-                                        tx + (layout.tileSize - width) * 0.5f,
-                                        ty + layout.tileSize * 0.5f
-                                            + static_cast<float>(line) * lineHeight,
-                                        theme.label);
+                const float width = text::measureText(labelFont.glyphs, lines[line]);
+                (void)text::appendText(out.label, labelFont.glyphs, lines[line],
+                                       tx + (layout.tileSize - width) * 0.5f,
+                                       ty + layout.tileSize * 0.5f
+                                           + static_cast<float>(line) * lineHeight,
+                                       theme.label);
             }
         }
 
@@ -250,20 +250,17 @@ void appendRoster(Geometry& out, const text::Font& labelFont, const text::Font& 
             const float plateH = kUnit * 1.8f;
             const float plateX = tx + layout.tileSize - plateW - kBevel;
             const float plateY = ty + layout.tileSize - plateH - kBevel;
-            // INTO THE READOUT LIST, not the label list, and that is the whole reason the
-            // badge is readable. The icons are drawn between the two faces, so anything in
-            // `label` ends up UNDER the artwork — a plate there is a plate nobody sees, with
-            // its own text floating over the icon it was meant to sit on.
-            text::appendRect(out.readout, readoutFont, plateX, plateY, plateW, plateH,
+            // INTO THE FOREGROUND READOUT LAYER, so both plate and badge remain above icon art.
+            text::appendRect(out.foregroundReadout, readoutFont, plateX, plateY, plateW, plateH,
                              Colour{{0.0f, 0.0f, 0.0f, 0.72f}});
-            (void)text::appendText(out.readout, readoutFont.glyphs, badge,
+            (void)text::appendText(out.foregroundReadout, readoutFont.glyphs, badge,
                                    plateX + kUnit * 0.4f, plateY + plateH - kUnit * 0.5f,
                                    Colour{{1.0f, 1.0f, 1.0f, 1.0f}});
         }
 
         // The health underbar: a track, and the group's summed fill over it.
         const float barY = ty + layout.tileSize + kUnit * 0.3f;
-        text::appendRect(out.label, labelFont, tx, barY, layout.tileSize, kRosterBar,
+        text::appendRect(out.chrome, labelFont, tx, barY, layout.tileSize, kRosterBar,
                          fade(theme.edge, 0.5f));
         const float fill = tile.fill();
         if (fill > 0.0f) {
@@ -271,19 +268,19 @@ void appendRoster(Geometry& out, const text::Font& labelFont, const text::Font& 
             // length — at this size the length difference between half and two-thirds is a
             // couple of pixels and the colour difference is not.
             const Colour bar = fill > 0.6f ? kGain : (fill > 0.3f ? kWarn : kLoss);
-            text::appendRect(out.label, labelFont, tx, barY, layout.tileSize * fill, kRosterBar,
+            text::appendRect(out.chrome, labelFont, tx, barY, layout.tileSize * fill, kRosterBar,
                              bar);
         }
 
         const bool lit = hovered.has_value() && *hovered == index;
         const Colour border = lit ? theme.edgeLit : theme.edge;
         const float thickness = lit ? kBevel * 2.0f : kBevel;
-        text::appendRect(out.label, labelFont, tx, ty, layout.tileSize, thickness, border);
-        text::appendRect(out.label, labelFont, tx, ty + layout.tileSize - thickness,
+        text::appendRect(out.chrome, labelFont, tx, ty, layout.tileSize, thickness, border);
+        text::appendRect(out.chrome, labelFont, tx, ty + layout.tileSize - thickness,
                           layout.tileSize,
                           thickness, border);
-        text::appendRect(out.label, labelFont, tx, ty, thickness, layout.tileSize, border);
-        text::appendRect(out.label, labelFont, tx + layout.tileSize - thickness, ty, thickness,
+        text::appendRect(out.chrome, labelFont, tx, ty, thickness, layout.tileSize, border);
+        text::appendRect(out.chrome, labelFont, tx + layout.tileSize - thickness, ty, thickness,
                           layout.tileSize, border);
     }
 

@@ -273,13 +273,13 @@ void appendPanel(Geometry& out, const text::Font& font, const Theme& theme, floa
     // The drop shadow: one quad, offset toward the implied light's opposite corner, drawn
     // before everything so only its bottom-right sliver survives. It is what seats a panel
     // ON the world instead of IN it — three authored points of separation, not a lighting model.
-    text::appendRect(out.label, font, x + kShadow, y + kShadow, width, height,
+    text::appendRect(out.panelSurface.solid, font, x + kShadow, y + kShadow, width, height,
                      Colour{{0.0f, 0.0f, 0.0f, 0.22f}});
 
     // THE GAME'S OWN CHROME, when a profile packed it (Theme::PanelSkin): the nine-slice
     // replaces the glass and its hand-drawn bevels wholesale — corners native, edges
-    // stretched along their run, the middle stretched both ways. Rides the IMAGE list, so
-    // it costs the same atlas bind every icon already pays.
+    // stretched along their run, the middle stretched both ways. It uses the shared interface
+    // image atlas but remains in the panel-surface layer below chrome, icons, and type.
     if (theme.skin.active) {
         const PanelSkin& skin = theme.skin;
         const auto quad = [&](std::size_t piece, float qx, float qy, float qw, float qh) {
@@ -288,12 +288,12 @@ void appendPanel(Geometry& out, const text::Font& font, const Theme& theme, floa
             }
             const IconUv& uv = skin.uv[piece];
             constexpr std::array<float, 4> kTint{1.0f, 1.0f, 1.0f, 0.96f};
-            out.image.push_back({{qx, qy}, {uv.u0, uv.v0}, kTint});
-            out.image.push_back({{qx + qw, qy}, {uv.u1, uv.v0}, kTint});
-            out.image.push_back({{qx + qw, qy + qh}, {uv.u1, uv.v1}, kTint});
-            out.image.push_back({{qx, qy}, {uv.u0, uv.v0}, kTint});
-            out.image.push_back({{qx + qw, qy + qh}, {uv.u1, uv.v1}, kTint});
-            out.image.push_back({{qx, qy + qh}, {uv.u0, uv.v1}, kTint});
+            out.panelSurface.image.push_back({{qx, qy}, {uv.u0, uv.v0}, kTint});
+            out.panelSurface.image.push_back({{qx + qw, qy}, {uv.u1, uv.v0}, kTint});
+            out.panelSurface.image.push_back({{qx + qw, qy + qh}, {uv.u1, uv.v1}, kTint});
+            out.panelSurface.image.push_back({{qx, qy}, {uv.u0, uv.v0}, kTint});
+            out.panelSurface.image.push_back({{qx + qw, qy + qh}, {uv.u1, uv.v1}, kTint});
+            out.panelSurface.image.push_back({{qx, qy + qh}, {uv.u0, uv.v1}, kTint});
         };
         // Edge thicknesses are the art's own, clamped so a panel smaller than its frame
         // still closes: ul um ur / l m r / ll lm lr.
@@ -321,16 +321,17 @@ void appendPanel(Geometry& out, const text::Font& font, const Theme& theme, floa
         const auto lit = [](const Colour& c, float factor) {
             return Colour{{c[0] * factor, c[1] * factor, c[2] * factor, c[3]}};
         };
-        text::appendRectV(out.label, font, x, y, width, height, lit(theme.glass, 1.45f),
+        text::appendRectV(out.panelSurface.solid, font, x, y, width, height,
+                          lit(theme.glass, 1.45f),
                           lit(theme.glass, 0.75f));
     }
 
     // A hairline all the way round, and a BRIGHTER one along the top. One light source,
     // implied from above, which is all a flat interface needs to stop looking like paper.
-    text::appendRect(out.label, font, x, y, width, kBevel, theme.edgeLit);
-    text::appendRect(out.label, font, x, y + height - kBevel, width, kBevel, theme.edge);
-    text::appendRect(out.label, font, x, y, kBevel, height, theme.edge);
-    text::appendRect(out.label, font, x + width - kBevel, y, kBevel, height, theme.edge);
+    text::appendRect(out.chrome, font, x, y, width, kBevel, theme.edgeLit);
+    text::appendRect(out.chrome, font, x, y + height - kBevel, width, kBevel, theme.edge);
+    text::appendRect(out.chrome, font, x, y, kBevel, height, theme.edge);
+    text::appendRect(out.chrome, font, x + width - kBevel, y, kBevel, height, theme.edge);
 
     // The brackets: two strokes at each corner, in the lit colour. They mark the panel's
     // bounds without a full frame, so the chrome never competes with the numbers inside it.
@@ -339,12 +340,12 @@ void appendPanel(Geometry& out, const text::Font& font, const Theme& theme, floa
     const std::array<std::array<float, 2>, 4> corners{
         {{x, y}, {x + width - run, y}, {x, y + height - kThick}, {x + width - run, y + height - kThick}}};
     for (const std::array<float, 2>& corner : corners) {
-        text::appendRect(out.label, font, corner[0], corner[1], run, kThick, theme.edgeLit);
+        text::appendRect(out.chrome, font, corner[0], corner[1], run, kThick, theme.edgeLit);
     }
-    text::appendRect(out.label, font, x, y, kThick, run, theme.edgeLit);
-    text::appendRect(out.label, font, x + width - kThick, y, kThick, run, theme.edgeLit);
-    text::appendRect(out.label, font, x, y + height - run, kThick, run, theme.edgeLit);
-    text::appendRect(out.label, font, x + width - kThick, y + height - run, kThick, run,
+    text::appendRect(out.chrome, font, x, y, kThick, run, theme.edgeLit);
+    text::appendRect(out.chrome, font, x + width - kThick, y, kThick, run, theme.edgeLit);
+    text::appendRect(out.chrome, font, x, y + height - run, kThick, run, theme.edgeLit);
+    text::appendRect(out.chrome, font, x + width - kThick, y + height - run, kThick, run,
                      theme.edgeLit);
 }
 
@@ -373,7 +374,7 @@ void appendInfoCard(Geometry& out, const text::Font& labelFont, const text::Font
     }
     if (readoutFont.usable() && !card.corner.empty()) {
         const float cornerWidth = text::measureText(readoutFont.glyphs, card.corner);
-        (void)text::appendText(out.readout, readoutFont.glyphs, card.corner,
+        (void)text::appendText(out.foregroundReadout, readoutFont.glyphs, card.corner,
                                x + width - kPad - cornerWidth, baseline, fade(kInk, 0.6f));
     }
 
@@ -385,7 +386,7 @@ void appendInfoCard(Geometry& out, const text::Font& labelFont, const text::Font
         }
         if (readoutFont.usable()) {
             const float valueWidth = text::measureText(readoutFont.glyphs, row.value);
-            (void)text::appendText(out.readout, readoutFont.glyphs, row.value,
+            (void)text::appendText(out.foregroundReadout, readoutFont.glyphs, row.value,
                                    x + width - kPad - valueWidth, baseline, row.tint);
         }
     }
@@ -406,7 +407,7 @@ void appendInspector(Geometry& out, const text::Font& labelFont,
     }
     if (readoutFont.usable() && !card.corner.empty()) {
         const float width = text::measureText(readoutFont.glyphs, card.corner);
-        (void)text::appendText(out.readout, readoutFont.glyphs, card.corner,
+        (void)text::appendText(out.foregroundReadout, readoutFont.glyphs, card.corner,
                                rect.right() - kInset - width, baseline, fade(kInk, 0.6f));
     }
 
@@ -420,7 +421,7 @@ void appendInspector(Geometry& out, const text::Font& labelFont,
         }
         if (readoutFont.usable()) {
             const float width = text::measureText(readoutFont.glyphs, row.value);
-            (void)text::appendText(out.readout, readoutFont.glyphs, row.value,
+            (void)text::appendText(out.foregroundReadout, readoutFont.glyphs, row.value,
                                    rect.right() - kInset - width, baseline, row.tint);
         }
     }
@@ -442,7 +443,7 @@ namespace {
     // Squared off and in the resource's own colour, sitting on the label's baseline. It is the
     // only place the resource's identity is stated as colour alone, which is how it will be
     // read once the panel is familiar.
-    text::appendRect(out.label, chrome, x, y - kChip, kChip, kChip, tint);
+    text::appendRect(out.chrome, chrome, x, y - kChip, kChip, kChip, tint);
 
     if (labelFont.usable()) {
         (void)text::appendText(out.label, labelFont.glyphs, name, x + kChip + kUnit, y,
@@ -457,25 +458,27 @@ namespace {
     if (readoutFont.usable()) {
         const std::string stored =
             formatAmount(gauge.stored) + " / " + formatAmount(gauge.capacity);
-        (void)text::appendText(out.readout, readoutFont.glyphs, stored, x + kLabelColumn, y,
+        (void)text::appendText(out.foregroundReadout, readoutFont.glyphs, stored,
+                               x + kLabelColumn, y,
                                kInk);
 
         const std::string net = formatRate(gauge.net());
         constexpr float kNetScale = 1.3f;
         const float netWidth = text::measureText(readoutFont.glyphs, net, kNetScale);
-        (void)text::appendText(out.readout, readoutFont.glyphs, net, x + width - netWidth, y,
+        (void)text::appendText(out.foregroundReadout, readoutFont.glyphs, net,
+                               x + width - netWidth, y,
                                gauge.net() >= 0.0f ? kGain : kLoss, kNetScale);
     }
 
     // --- the storage bar ----------------------------------------------------
     const float barTop = y + kUnit * 0.8f;
-    text::appendRect(out.label, chrome, x, barTop, width, kGaugeHeight, theme.well);
-    text::appendRect(out.label, chrome, x, barTop, width * gauge.fill(), kGaugeHeight, tint);
+    text::appendRect(out.chrome, chrome, x, barTop, width, kGaugeHeight, theme.well);
+    text::appendRect(out.chrome, chrome, x, barTop, width * gauge.fill(), kGaugeHeight, tint);
 
     // FULL AND STILL EARNING: a lit cap at the far end. The economy discards anything past
     // capacity, and this is the only place that fact is visible.
     if (gauge.wasting()) {
-        text::appendRect(out.label, chrome, x + width - kUnit * 0.6f, barTop, kUnit * 0.6f,
+        text::appendRect(out.chrome, chrome, x + width - kUnit * 0.6f, barTop, kUnit * 0.6f,
                          kGaugeHeight, Colour{{1.0f, 1.0f, 1.0f, 0.92f}});
     }
 
@@ -491,20 +494,20 @@ namespace {
     // first version of this panel unreadable: at an empty store the only coloured thing was the
     // flow strip, and every eye took it for the level.
     const float flowTop = barTop + kGaugeHeight + kFlowGap;
-    text::appendRect(out.label, chrome, x, flowTop, width, kFlowHeight, theme.well);
+    text::appendRect(out.chrome, chrome, x, flowTop, width, kFlowHeight, theme.well);
 
     const float total = gauge.incomePerSecond + gauge.drainPerSecond;
     if (total > 0.0f) {
         const float inWidth = width * (gauge.incomePerSecond / total);
-        text::appendRect(out.label, chrome, x, flowTop, inWidth, kFlowHeight, fade(kGain, 0.9f));
-        text::appendRect(out.label, chrome, x + inWidth, flowTop, width - inWidth, kFlowHeight,
+        text::appendRect(out.chrome, chrome, x, flowTop, inWidth, kFlowHeight, fade(kGain, 0.9f));
+        text::appendRect(out.chrome, chrome, x + inWidth, flowTop, width - inWidth, kFlowHeight,
                          fade(kLoss, 0.9f));
     }
 
     // The balance notch, drawn whether or not anything is flowing: it is the reference the
     // strip is read against, and a reference that appears only when there is something to
     // compare it to is no reference at all.
-    text::appendRect(out.label, chrome, x + width * 0.5f - kBevel, flowTop - kFlowGap,
+    text::appendRect(out.chrome, chrome, x + width * 0.5f - kBevel, flowTop - kFlowGap,
                      kBevel * 2.0f, kFlowHeight + kFlowGap * 2.0f,
                      Colour{{1.0f, 1.0f, 1.0f, 0.6f}});
 
@@ -567,9 +570,9 @@ void build(Geometry& out, const text::Font& labelFont, const text::Font& readout
         const float barWidth = std::max(0.0f, contentX + contentWidth - barX);
         if (barWidth > kUnit) {
             const float barY = rowY - kGaugeHeight * 0.85f;
-            text::appendRect(out.label, chrome, barX, barY, barWidth, kGaugeHeight * 0.7f,
+            text::appendRect(out.chrome, chrome, barX, barY, barWidth, kGaugeHeight * 0.7f,
                              theme.well);
-            text::appendRect(out.label, chrome, barX, barY,
+            text::appendRect(out.chrome, chrome, barX, barY,
                              barWidth * std::clamp(state.fundedFraction, 0.0f, 1.0f),
                              kGaugeHeight * 0.7f, kWarn);
         }
@@ -596,14 +599,15 @@ void build(Geometry& out, const text::Font& labelFont, const text::Font& readout
         float ry = frame.match.y + 21.0f;
 
         const float clockWidth = text::measureText(readoutFont.glyphs, clock, 1.25f);
-        (void)text::appendText(out.readout, readoutFont.glyphs, clock, right - clockWidth, ry,
+        (void)text::appendText(out.foregroundReadout, readoutFont.glyphs, clock,
+                               right - clockWidth, ry,
                                kInk, 1.25f);
         ry += lineHeight;
-        (void)text::appendText(out.readout, readoutFont.glyphs, armies,
+        (void)text::appendText(out.foregroundReadout, readoutFont.glyphs, armies,
                                right - text::measureText(readoutFont.glyphs, armies), ry,
                                theme.label);
         ry += lineHeight * 0.9f;
-        (void)text::appendText(out.readout, readoutFont.glyphs, units,
+        (void)text::appendText(out.foregroundReadout, readoutFont.glyphs, units,
                                right - text::measureText(readoutFont.glyphs, units), ry,
                                theme.label);
     }
@@ -624,11 +628,11 @@ void build(Geometry& out, const text::Font& labelFont, const text::Font& readout
         // A ruled band behind it, full width of the text plus a margin, so the banner reads
         // over any terrain rather than only over dark ground.
         const float band = lineHeight * kBannerScale;
-        text::appendRect(out.label, chrome, bx - kUnit * 4.0f, by - band * 0.85f,
+        text::appendRect(out.chrome, chrome, bx - kUnit * 4.0f, by - band * 0.85f,
                          bannerWidth + kUnit * 8.0f, band * 1.15f, fade(theme.glass, 1.1f));
-        text::appendRect(out.label, chrome, bx - kUnit * 4.0f, by - band * 0.85f,
+        text::appendRect(out.chrome, chrome, bx - kUnit * 4.0f, by - band * 0.85f,
                          bannerWidth + kUnit * 8.0f, kBevel, theme.edgeLit);
-        text::appendRect(out.label, chrome, bx - kUnit * 4.0f, by + band * 0.30f,
+        text::appendRect(out.chrome, chrome, bx - kUnit * 4.0f, by + band * 0.30f,
                          bannerWidth + kUnit * 8.0f, kBevel, theme.edgeLit);
 
         (void)text::appendText(out.label, labelFont.glyphs, banner, bx, by,

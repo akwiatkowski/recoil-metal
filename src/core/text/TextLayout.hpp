@@ -65,12 +65,10 @@ struct TextVertex {
     std::array<float, 4> colour{};  ///< straight rgba
 };
 
-// A font as a caller sees it: its glyphs, its line height, and one solid texel.
+// A font as a caller sees it: its glyphs, its line height, and the atlas's solid region.
 //
-// THE SOLID TEXEL is what lets this pipeline draw the whole interface rather than only its
-// letters. A fully-opaque pixel reserved in the atlas means a panel, a bevel or a bar is a
-// quad with its uvs pointing at that pixel — so chrome and text share one buffer, one
-// texture bind and one draw, and there is no second pipeline to keep in step with the first.
+// Solid quads retain atlas coordinates in the common vertex format, but the semantic solid
+// pipeline does not sample them. Text alone depends on the atlas's coverage.
 struct Font {
     std::span<const Glyph> glyphs;
     float lineHeight = 0.0f;
@@ -81,7 +79,7 @@ struct Font {
     [[nodiscard]] bool usable() const noexcept { return !glyphs.empty(); }
 };
 
-/// Appends a solid rectangle, in authored HUD points, using the font's opaque texel.
+/// Appends a solid rectangle, in authored HUD points, using the font's solid-region UVs.
 ///
 /// Width or height of zero draws nothing rather than a degenerate quad — a one-point rule is
 /// legitimate and a zero-point one is a caller's arithmetic showing.
@@ -118,13 +116,5 @@ float appendText(std::vector<TextVertex>& out, std::span<const Glyph> glyphs,
 
 /// Vertices one glyph contributes: two triangles.
 inline constexpr std::size_t kVerticesPerGlyph = 6;
-
-/// The most text the renderer will draw in a frame, in vertices.
-///
-/// Six thousand is a thousand glyphs — far more HUD than this app will ever show, and a
-/// third of a megabyte of buffer per frame in flight. Beyond it, text is DROPPED rather than
-/// the buffer grown, on the same rule the particles and decals follow: a buffer cannot be
-/// reallocated while the GPU may still be reading last frame's copy.
-inline constexpr std::size_t kMaxTextVertices = kVerticesPerGlyph * 1000;
 
 } // namespace rm::text

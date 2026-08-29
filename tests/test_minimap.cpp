@@ -185,16 +185,18 @@ TEST_CASE("pips and a view outline produce geometry") {
 
     rm::ui::Geometry bare;
     rm::ui::appendMinimap(bare, font, theme, layout, 4096.0f, 4096.0f, {}, {});
-    const std::size_t panelOnly = bare.label.size();
+    const std::size_t panelOnly = bare.chrome.size();
     CHECK(panelOnly > 0);
+    CHECK_FALSE(bare.panelSurface.solid.empty());
 
     rm::ui::Geometry full;
     rm::ui::appendMinimap(full, font, theme, layout, 4096.0f, 4096.0f, pips, corners);
-    CHECK(full.label.size() > panelOnly);
+    CHECK(full.chrome.size() > panelOnly);
+    CHECK(full.panelSurface.size() == bare.panelSurface.size());
 
     // Three corners is not a quad, so no outline — a camera looking at the sky produces that.
     rm::ui::Geometry partial;
     rm::ui::appendMinimap(partial, font, theme, layout, 4096.0f, 4096.0f, pips,
                           std::span<const std::array<float, 2>>{corners.data(), 3});
-    CHECK(partial.label.size() < full.label.size());
+    CHECK(partial.chrome.size() < full.chrome.size());
 }

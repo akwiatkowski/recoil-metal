@@ -3,6 +3,7 @@
 #include "core/sim/Army.hpp"
 #include "core/text/TextLayout.hpp"
 #include "core/ui/IconAtlas.hpp"
+#include "core/ui/UiLayers.hpp"
 #include "core/ui/Viewport.hpp"
 
 #include <array>
@@ -229,43 +230,46 @@ struct MatchState {
     int winningTeam = 0;
 };
 
-/// The geometry a frame's interface comes to, split by which atlas draws it.
-///
-/// Two lists because there are two typefaces, and a draw can bind one atlas at a time. The
-/// SOLID CHROME rides in `label`, since it needs an opaque texel and either atlas has one.
-struct Geometry {
-    std::vector<text::TextVertex> label;    ///< condensed face, plus every panel and bar
-    std::vector<text::TextVertex> readout;  ///< monospaced face: the numbers
-
-    /// Quads sampling a full-colour ICON ATLAS rather than a font.
-    ///
-    /// A THIRD LIST rather than more of `label`, because the difference is which texture and
-    /// which shader: the first two are coverage masks painted in the vertex colour, and these
-    /// carry their own pixels (`imageFragment`). One list per texture bind is what the encoder
-    /// wants anyway.
-    ///
-    /// DRAWN LAST, after both faces, which decides what may overlap what. An icon sits inside
-    /// the square its cell reserved and never touches the cell's border or the two lines of
-    /// text below it, so drawing it over the chrome is free — and drawing it UNDER would put it
-    /// beneath the cell fill, which is where the first version of this went.
+/// One semantic layer that needs both solid-colour and icon-atlas draws.
+struct MixedGeometryLayer {
+    std::vector<text::TextVertex> solid;
     std::vector<text::TextVertex> image;
 
-    /// Atlas-sampling quads that belong to the WORLD, not the interface: the strategic icons
-    /// standing in for units too small to read. Drawn FIRST of the four lists — under every
-    /// panel, bar and letter — because an icon is a picture of the battlefield and a panel is
-    /// glass over it; a glyph crossing the minimap's corner must slide beneath the chrome the
-    /// way the terrain does.
-    std::vector<text::TextVertex> worldImage;
+    void clear() noexcept {
+        solid.clear();
+        image.clear();
+    }
+
+    [[nodiscard]] bool empty() const noexcept { return solid.empty() && image.empty(); }
+    [[nodiscard]] std::size_t size() const noexcept { return solid.size() + image.size(); }
+};
+
+/// The geometry for one interface frame, split by semantic compositing order.
+struct Geometry {
+    MixedGeometryLayer worldOverlay;  ///< strategic images, bars, contacts, selection band
+    MixedGeometryLayer panelSurface;  ///< glass/shadows and optional nine-slice art
+    std::vector<text::TextVertex> chrome;             ///< bevels, wells, bars, minimap marks
+    std::vector<text::TextVertex> icon;               ///< build and roster icon-atlas quads
+    std::vector<text::TextVertex> label;              ///< condensed face
+    std::vector<text::TextVertex> foregroundReadout;  ///< monospaced values and badges
 
     void clear() noexcept {
+        worldOverlay.clear();
+        panelSurface.clear();
+        chrome.clear();
+        icon.clear();
         label.clear();
-        readout.clear();
-        image.clear();
-        worldImage.clear();
+        foregroundReadout.clear();
     }
 
     [[nodiscard]] bool empty() const noexcept {
-        return label.empty() && readout.empty() && image.empty() && worldImage.empty();
+        return worldOverlay.empty() && panelSurface.empty() && chrome.empty() && icon.empty()
+            && label.empty() && foregroundReadout.empty();
+    }
+
+    [[nodiscard]] std::array<std::size_t, kUiLayerCount> submittedVertices() const noexcept {
+        return {worldOverlay.size(), panelSurface.size(), chrome.size(), icon.size(), label.size(),
+                foregroundReadout.size()};
     }
 };
 

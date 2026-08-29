@@ -297,6 +297,7 @@ if(BUILD_TESTING)
         tests/test_real_sca.cpp
         tests/test_text_layout.cpp
         tests/test_ui_viewport.cpp
+        tests/test_ui_layers.cpp
         tests/test_hud.cpp
         tests/test_build_panel.cpp
         tests/test_icon_atlas.cpp

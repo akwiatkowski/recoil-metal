@@ -111,7 +111,9 @@ Renderer::Renderer(CA::MetalLayer* layer)
                                          BlendMode::StraightAlpha);
     // Blended, and drawn last of all: the HUD sits over the world rather than in it.
     textPipeline_ = makePipeline(device_, library, "textVertex", "textFragment",
-                                 BlendMode::PremultipliedAlpha);
+                                  BlendMode::PremultipliedAlpha);
+    solidPipeline_ = makePipeline(device_, library, "textVertex", "solidFragment",
+                                  BlendMode::PremultipliedAlpha);
     // The same vertex function and the same blend — only the fragment differs, sampling a
     // full-colour image instead of a coverage mask. See `imageFragment`.
     imagePipeline_ = makePipeline(device_, library, "textVertex", "imageFragment",
@@ -285,15 +287,15 @@ Renderer::Renderer(CA::MetalLayer* layer)
         }
     }
 
-    // --- Text ---------------------------------------------------------------
+    // --- UI -----------------------------------------------------------------
     {
         // A ring like everything else written per frame: the GPU may still be reading last
         // frame's copy, and this buffer cannot be reallocated while it is.
         const std::size_t bytes =
-            text::kMaxTextVertices * sizeof(text::TextVertex) * kMaxFramesInFlight;
-        textBuffer_ = device_->newBuffer(bytes, MTL::ResourceStorageModeShared);
-        if (textBuffer_ == nullptr) {
-            throw RendererError{"failed to allocate the text buffer"};
+            ui::kUiVerticesPerFrame * sizeof(text::TextVertex) * kMaxFramesInFlight;
+        uiBuffer_ = device_->newBuffer(bytes, MTL::ResourceStorageModeShared);
+        if (uiBuffer_ == nullptr) {
+            throw RendererError{"failed to allocate the UI buffer"};
         }
 
         auto* sampler = MTL::SamplerDescriptor::alloc()->init();
@@ -407,6 +409,7 @@ Renderer::~Renderer() {
     if (decalBuffer_ != nullptr) decalBuffer_->release();
     if (decalDepthState_ != nullptr) decalDepthState_->release();
     if (textPipeline_ != nullptr) textPipeline_->release();
+    if (solidPipeline_ != nullptr) solidPipeline_->release();
     if (imagePipeline_ != nullptr) imagePipeline_->release();
     if (minimapFogPipeline_ != nullptr) minimapFogPipeline_->release();
     if (minimapTexture_ != nullptr) minimapTexture_->release();
@@ -414,7 +417,7 @@ Renderer::~Renderer() {
     if (labelFont_.atlas != nullptr) labelFont_.atlas->release();
     if (readoutFont_.atlas != nullptr) readoutFont_.atlas->release();
     if (fontSampler_ != nullptr) fontSampler_->release();
-    if (textBuffer_ != nullptr) textBuffer_->release();
+    if (uiBuffer_ != nullptr) uiBuffer_->release();
     if (decalPipeline_ != nullptr) decalPipeline_->release();
     if (sceneColour_ != nullptr) sceneColour_->release();
     releaseTerrainBuffers();
@@ -467,8 +470,8 @@ void Renderer::beginFrame() noexcept {
     // Particles too, and for the same reason. Selection outlines likewise: a stale
     // list would outline whatever now occupies those slots.
     particleCount_ = 0;
-    labelVertexCount_ = 0;
-    readoutVertexCount_ = 0;
+    uiLayerVertexCounts_ = {};
+    uiCapacityReport_ = {};
     outlineRuns_.clear();
 
     // Rings are forgotten at the start of every frame, so a frame that pushes
@@ -1428,39 +1431,72 @@ void Renderer::encodeScene(MTL::CommandBuffer* commandBuffer, MTL::RenderPassDes
                                        NS::UInteger{0});
     }
 
-    // --- Text ---------------------------------------------------------------
-    // LAST OF ALL, and after the water: the HUD is not in the world, so nothing in the world
-    // may draw over it — not a puff of dust and not the sea. No depth state either, for the
-    // same reason: there is nothing for it to be in front of or behind.
-    //
-    // Skipped in the reflection pass, like the decals. A mirror showing the interface would
-    // be the interface appearing twice.
-    if ((labelVertexCount_ > 0 || readoutVertexCount_ > 0 || worldImageVertexCount_ > 0)
-        && textPipeline_ != nullptr && override == nullptr) {
-        encoder->setRenderPipelineState(textPipeline_);
+    // --- UI -----------------------------------------------------------------
+    // Last of all and skipped in the reflection pass: semantic layers composite from world
+    // overlays toward foreground readouts, with no depth state between them.
+    const bool hasUiGeometry = std::any_of(
+        uiCapacityReport_.layers.begin(), uiCapacityReport_.layers.end(),
+        [](const ui::UiLayerUsage& usage) { return usage.uploaded > 0; });
+    const bool hasMinimap = minimapTexture_ != nullptr && minimapRect_[2] > 0.0f
+                         && minimapRect_[3] > 0.0f;
+    if ((hasUiGeometry || hasMinimap) && override == nullptr) {
         encoder->setFragmentSamplerState(fontSampler_, NS::UInteger{0});
 
-        // The authored HUD viewport, which is the space the vertices are in. An unset viewport
-        // falls back to target pixels for renderer callers that submit unscaled geometry.
         const ui::Extent hudExtent = uiViewport_.hudExtent();
         const simd_float2 viewport{
             hudExtent.width > 0.0f ? hudExtent.width : static_cast<float>(width),
             hudExtent.height > 0.0f ? hudExtent.height : static_cast<float>(height)};
         encoder->setVertexBytes(&viewport, sizeof(viewport), kUniformBufferIndex);
 
-        const std::size_t slotBase = instanceSlot_ * text::kMaxTextVertices;
+        const std::size_t slotBase = instanceSlot_ * ui::kUiVerticesPerFrame;
+        const auto count = [&](ui::UiLayer layer, std::size_t stream) {
+            return uiLayerVertexCounts_[ui::uiLayerIndex(layer)][stream];
+        };
+        const auto offset = [&](ui::UiLayer layer, std::size_t stream) {
+            const std::size_t index = ui::uiLayerIndex(layer);
+            return slotBase + index * ui::kUiLayerVertexCapacity
+                 + (stream == 0 ? 0 : uiLayerVertexCounts_[index][0]);
+        };
+        const auto bindRange = [&](ui::UiLayer layer, std::size_t stream) {
+            encoder->setVertexBuffer(
+                uiBuffer_,
+                static_cast<NS::UInteger>(offset(layer, stream) * sizeof(text::TextVertex)),
+                kVertexBufferIndex);
+        };
+        const auto drawSolid = [&](ui::UiLayer layer, std::size_t stream) {
+            const std::size_t vertices = count(layer, stream);
+            if (vertices == 0 || solidPipeline_ == nullptr) return;
+            encoder->setRenderPipelineState(solidPipeline_);
+            bindRange(layer, stream);
+            encoder->drawPrimitives(MTL::PrimitiveType::PrimitiveTypeTriangle, NS::UInteger{0},
+                                    static_cast<NS::UInteger>(vertices));
+        };
+        const auto drawImage = [&](ui::UiLayer layer, std::size_t stream) {
+            const std::size_t vertices = count(layer, stream);
+            if (vertices == 0 || imagePipeline_ == nullptr || iconAtlas_ == nullptr) return;
+            encoder->setRenderPipelineState(imagePipeline_);
+            bindRange(layer, stream);
+            encoder->setFragmentTexture(iconAtlas_, NS::UInteger{0});
+            encoder->drawPrimitives(MTL::PrimitiveType::PrimitiveTypeTriangle, NS::UInteger{0},
+                                    static_cast<NS::UInteger>(vertices));
+        };
+        const auto drawText = [&](ui::UiLayer layer, MTL::Texture* atlas) {
+            const std::size_t vertices = count(layer, 0);
+            if (vertices == 0 || textPipeline_ == nullptr || atlas == nullptr) return;
+            encoder->setRenderPipelineState(textPipeline_);
+            bindRange(layer, 0);
+            encoder->setFragmentTexture(atlas, NS::UInteger{0});
+            encoder->drawPrimitives(MTL::PrimitiveType::PrimitiveTypeTriangle, NS::UInteger{0},
+                                    static_cast<NS::UInteger>(vertices));
+        };
 
-        // THE MAP'S OWN THUMBNAIL, under everything. Before the labels because the minimap's
-        // panel chrome — its bevels, its brackets, its pips — belongs ON the picture, and the
-        // panel is asked not to fill its own interior when this is drawn (`appendMinimap`'s
-        // `filled`). Two things drawing the same rectangle is how the picture ends up
-        // invisible under a flat well.
-        //
-        // Six vertices built here rather than by the caller, because they are a rectangle and
-        // a uv square and nothing else — routing them through the HUD's vertex list would put
-        // an image quad in a buffer whose every other member is sampled as coverage.
-        if (minimapTexture_ != nullptr && imagePipeline_ != nullptr && minimapRect_[2] > 0.0f
-            && minimapRect_[3] > 0.0f) {
+        // Battlefield annotations remain behind every panel, including the minimap preview.
+        drawImage(ui::UiLayer::WorldOverlay, 0);
+        drawSolid(ui::UiLayer::WorldOverlay, 1);
+
+        // The map preview and its fog are the first panel-surface artwork. Pips and footprint
+        // edges arrive later with chrome, so they cannot disappear below the picture.
+        if (hasMinimap && imagePipeline_ != nullptr) {
             const float x0 = minimapRect_[0];
             const float y0 = minimapRect_[1];
             const float x1 = x0 + minimapRect_[2];
@@ -1477,79 +1513,19 @@ void Renderer::encodeScene(MTL::CommandBuffer* commandBuffer, MTL::RenderPassDes
             encoder->drawPrimitives(MTL::PrimitiveType::PrimitiveTypeTriangle, NS::UInteger{0},
                                     NS::UInteger{6});
             if (hasFog_ && fogTexture_ != nullptr && minimapFogPipeline_ != nullptr) {
-                // The same current-vision mask as the terrain, over the map's thumbnail.
-                // One texture makes the corner map and battlefield incapable of disagreeing.
                 encoder->setRenderPipelineState(minimapFogPipeline_);
                 encoder->setFragmentTexture(fogTexture_, NS::UInteger{0});
                 encoder->drawPrimitives(MTL::PrimitiveType::PrimitiveTypeTriangle,
                                         NS::UInteger{0}, NS::UInteger{6});
             }
-            encoder->setRenderPipelineState(textPipeline_);
         }
 
-        // THE WORLD'S ICONS before any chrome: a strategic icon is a picture of the
-        // battlefield, and a panel is glass over it — a glyph crossing the minimap's corner
-        // slides beneath the interface the way the terrain does. Same pipeline and atlas as
-        // the tray's icons; only the position in the order differs, and the position is the
-        // meaning.
-        if (worldImageVertexCount_ > 0 && iconAtlas_ != nullptr && imagePipeline_ != nullptr) {
-            encoder->setRenderPipelineState(imagePipeline_);
-            encoder->setVertexBuffer(
-                textBuffer_,
-                static_cast<NS::UInteger>((slotBase + labelVertexCount_ + readoutVertexCount_
-                                           + imageVertexCount_)
-                                          * sizeof(text::TextVertex)),
-                kVertexBufferIndex);
-            encoder->setFragmentTexture(iconAtlas_, NS::UInteger{0});
-            encoder->drawPrimitives(MTL::PrimitiveType::PrimitiveTypeTriangle, NS::UInteger{0},
-                                    static_cast<NS::UInteger>(worldImageVertexCount_));
-            encoder->setRenderPipelineState(textPipeline_);
-        }
-
-        // LABELS FIRST, and that order is the design: the label list carries every panel, bar
-        // and bracket, so drawing it first puts the chrome under the numbers rather than over
-        // them.
-        if (labelVertexCount_ > 0 && labelFont_.atlas != nullptr) {
-            encoder->setVertexBuffer(
-                textBuffer_,
-                static_cast<NS::UInteger>(slotBase * sizeof(text::TextVertex)),
-                kVertexBufferIndex);
-            encoder->setFragmentTexture(labelFont_.atlas, NS::UInteger{0});
-            encoder->drawPrimitives(MTL::PrimitiveType::PrimitiveTypeTriangle, NS::UInteger{0},
-                                    static_cast<NS::UInteger>(labelVertexCount_));
-        }
-
-        // THE ICONS BETWEEN THE TWO FACES, and the position is load-bearing in both
-        // directions. AFTER the labels, because the labels carry every panel and cell fill and
-        // an icon drawn before them is an icon underneath them — which is where the first
-        // attempt went, and it looked like a missing texture. BEFORE the readouts, because the
-        // readouts carry the numbers that sit ON the artwork: the roster's `xN` badge is over
-        // its tile's icon, and drawing icons last buried it.
-        if (imageVertexCount_ > 0 && iconAtlas_ != nullptr && imagePipeline_ != nullptr) {
-            encoder->setRenderPipelineState(imagePipeline_);
-            encoder->setVertexBuffer(
-                textBuffer_,
-                static_cast<NS::UInteger>((slotBase + labelVertexCount_ + readoutVertexCount_)
-                                          * sizeof(text::TextVertex)),
-                kVertexBufferIndex);
-            encoder->setFragmentTexture(iconAtlas_, NS::UInteger{0});
-            encoder->drawPrimitives(MTL::PrimitiveType::PrimitiveTypeTriangle, NS::UInteger{0},
-                                    static_cast<NS::UInteger>(imageVertexCount_));
-            encoder->setRenderPipelineState(textPipeline_);
-        }
-
-        if (readoutVertexCount_ > 0 && readoutFont_.atlas != nullptr) {
-            encoder->setVertexBuffer(
-                textBuffer_,
-                static_cast<NS::UInteger>((slotBase + labelVertexCount_)
-                                          * sizeof(text::TextVertex)),
-                kVertexBufferIndex);
-            encoder->setFragmentTexture(readoutFont_.atlas, NS::UInteger{0});
-            encoder->drawPrimitives(MTL::PrimitiveType::PrimitiveTypeTriangle, NS::UInteger{0},
-                                    static_cast<NS::UInteger>(readoutVertexCount_));
-        }
-
-
+        drawSolid(ui::UiLayer::PanelSurface, 0);
+        drawImage(ui::UiLayer::PanelSurface, 1);
+        drawSolid(ui::UiLayer::Chrome, 0);
+        drawImage(ui::UiLayer::Icon, 0);
+        drawText(ui::UiLayer::Label, labelFont_.atlas);
+        drawText(ui::UiLayer::ForegroundReadout, readoutFont_.atlas);
     }
 
     encoder->endEncoding();

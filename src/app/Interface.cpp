@@ -606,12 +606,12 @@ void appendStrategicIcons(rm::ui::Geometry& out, const UnitScene& scene,
             const rm::ui::IconUv uv = rm::ui::iconUvSized(ref.slot, ref.width, ref.height);
             const std::array<float, 4> tint{unit.teamColour[0], unit.teamColour[1],
                                             unit.teamColour[2], 0.95f};
-            out.worldImage.push_back({{x0, y0}, {uv.u0, uv.v0}, tint});
-            out.worldImage.push_back({{x1, y0}, {uv.u1, uv.v0}, tint});
-            out.worldImage.push_back({{x1, y1}, {uv.u1, uv.v1}, tint});
-            out.worldImage.push_back({{x0, y0}, {uv.u0, uv.v0}, tint});
-            out.worldImage.push_back({{x1, y1}, {uv.u1, uv.v1}, tint});
-            out.worldImage.push_back({{x0, y1}, {uv.u0, uv.v1}, tint});
+            out.worldOverlay.image.push_back({{x0, y0}, {uv.u0, uv.v0}, tint});
+            out.worldOverlay.image.push_back({{x1, y0}, {uv.u1, uv.v0}, tint});
+            out.worldOverlay.image.push_back({{x1, y1}, {uv.u1, uv.v1}, tint});
+            out.worldOverlay.image.push_back({{x0, y0}, {uv.u0, uv.v0}, tint});
+            out.worldOverlay.image.push_back({{x1, y1}, {uv.u1, uv.v1}, tint});
+            out.worldOverlay.image.push_back({{x0, y1}, {uv.u0, uv.v1}, tint});
         }
     }
 }
@@ -639,9 +639,9 @@ void appendContactBlips(rm::ui::Geometry& out, const UnitScene& scene,
             continue;
         }
         // A plus, not a unit glyph: it says "a sensor return is near here" and nothing more.
-        rm::text::appendRect(out.label, font, (*screen)[0] - kRun * 0.5f,
+        rm::text::appendRect(out.worldOverlay.solid, font, (*screen)[0] - kRun * 0.5f,
                              (*screen)[1] - kStroke * 0.5f, kRun, kStroke, kBlipColour);
-        rm::text::appendRect(out.label, font, (*screen)[0] - kStroke * 0.5f,
+        rm::text::appendRect(out.worldOverlay.solid, font, (*screen)[0] - kStroke * 0.5f,
                              (*screen)[1] - kRun * 0.5f, kStroke, kRun, kBlipColour);
     }
 }
@@ -698,9 +698,10 @@ void appendHealthBars(rm::ui::Geometry& out, const UnitScene& scene,
                 const float shieldFill = rm::sim::magToFloat(hp.shield.current)
                                          / rm::sim::magToFloat(hp.shield.maximum);
                 constexpr rm::ui::Colour kShield{{0.2f, 0.75f, 1.0f, 0.95f}};
-                rm::text::appendRect(out.label, font, x, y - 4.0f, barWidth, barHeight,
+                rm::text::appendRect(out.worldOverlay.solid, font, x, y - 4.0f, barWidth,
+                                     barHeight,
                                      rm::ui::Colour{{0.0f, 0.0f, 0.0f, 0.55f}});
-                rm::text::appendRect(out.label, font, x, y - 4.0f,
+                rm::text::appendRect(out.worldOverlay.solid, font, x, y - 4.0f,
                                      barWidth * std::clamp(shieldFill, 0.0f, 1.0f), barHeight,
                                      kShield);
             }
@@ -710,9 +711,9 @@ void appendHealthBars(rm::ui::Geometry& out, const UnitScene& scene,
                     rm::sim::magToFloat(hp.current) / rm::sim::magToFloat(hp.maximum);
                 const rm::ui::Colour bar = fill > 0.6f ? rm::ui::kGain
                                            : (fill > 0.3f ? rm::ui::kWarn : rm::ui::kLoss);
-                rm::text::appendRect(out.label, font, x, y, barWidth, barHeight,
+                rm::text::appendRect(out.worldOverlay.solid, font, x, y, barWidth, barHeight,
                                      rm::ui::Colour{{0.0f, 0.0f, 0.0f, 0.55f}});
-                rm::text::appendRect(out.label, font, x, y,
+                rm::text::appendRect(out.worldOverlay.solid, font, x, y,
                                      barWidth * std::clamp(fill, 0.0f, 1.0f), barHeight, bar);
             }
         }

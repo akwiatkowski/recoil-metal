@@ -148,7 +148,7 @@ void buildStrategicIconRefs(const UnitScene& scene, std::size_t base,
                             std::vector<std::optional<StrategicIconRef>>& out);
 
 /// The strategic layer: a glyph, in the army's colour, for every drawn unit whose type has
-/// one and whose mesh has shrunk past reading. Into `out.worldImage` — under all the chrome,
+/// one and whose mesh has shrunk past reading. Into `out.worldOverlay.image` — under the HUD,
 /// where a picture of the battlefield belongs. Units without a glyph are left to
 /// `appendSceneIcons`' squares, which is the honest fallback for the 18 nameless blueprints
 /// and every BAR unit.

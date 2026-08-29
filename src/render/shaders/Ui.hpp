@@ -97,6 +97,12 @@ fragment float4 textFragment(TextOut in [[stage_in]],
     return float4(in.colour.rgb * in.colour.a * coverage, in.colour.a * coverage);
 }
 
+// Solid UI geometry has no texture dependency. Keeping it separate means panels, bars and
+// battlefield overlays do not borrow an opaque texel from whichever font happened to build.
+fragment float4 solidFragment(TextOut in [[stage_in]]) {
+    return float4(in.colour.rgb * in.colour.a, in.colour.a);
+}
+
 // The same geometry, sampling a full-colour IMAGE rather than a coverage mask.
 //
 // A SECOND FRAGMENT FUNCTION rather than a branch in the first, and the reason is what the two

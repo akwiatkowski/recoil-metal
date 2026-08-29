@@ -223,11 +223,8 @@ public:
     /// Where to draw it this frame, in authored HUD points. See Renderer::setMinimapRect.
     void setMinimapRect(float x, float y, float width, float height) noexcept;
 
-    /// This frame's interface, plus the world's strategic icons. See Renderer::setHud.
-    void setHud(std::span<const text::TextVertex> label,
-                std::span<const text::TextVertex> readout,
-                std::span<const text::TextVertex> image = {},
-                std::span<const text::TextVertex> worldImage = {});
+    /// This frame's semantic UI layers. See Renderer::setHud.
+    void setHud(const ui::Geometry& geometry);
 
     /// The build tray's packed unit icons. See Renderer::setIconAtlas.
     void setIconAtlas(const dds::Texture& atlas);

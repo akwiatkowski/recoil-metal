@@ -17,6 +17,7 @@
 #include "core/texture/Dds.hpp"
 #include "core/mesh/ChunkDraws.hpp"
 #include "core/mesh/TerrainMesh.hpp"
+#include "core/ui/UiLayers.hpp"
 #include "core/ui/Viewport.hpp"
 
 #include <limits>
@@ -43,6 +44,8 @@ class RenderPassDescriptor;
 }
 
 namespace rm {
+
+namespace ui { struct Geometry; }
 
 // Owns every long-lived Metal object — device, command queue, pipelines,
 // depth buffer, terrain geometry — and renders frames into the window's
@@ -366,8 +369,8 @@ public:
     //
     // The HUD, and the first thing this renderer draws that is not part of the world.
 
-    /// The two faces the interface is set in: a condensed one for labels and every solid fill,
-    /// and a monospaced one for the numbers.
+    /// The two faces the interface is set in: a condensed one for labels and a monospaced one
+    /// for numbers. Solid semantic layers have no texture dependency.
     ///
     /// A face whose atlas could not be built comes back unusable, and `ui::build` degrades that
     /// part to nothing — so a missing font costs the labels and keeps the readouts, rather than
@@ -384,12 +387,12 @@ public:
     /// Replaced wholesale each frame, because a HUD is rebuilt from the state it reports rather
     /// than accumulated — and a stale line would report a number that has since changed, which
     /// is worse than reporting none.
-    /// `worldImage` is the atlas-sampling quads that belong to the WORLD — the strategic
-    /// icons — drawn under every panel and letter, where a picture of the battlefield goes.
-    void setHud(std::span<const text::TextVertex> label,
-                std::span<const text::TextVertex> readout,
-                std::span<const text::TextVertex> image = {},
-                std::span<const text::TextVertex> worldImage = {}) noexcept;
+    /// Each semantic layer has an independent fixed upload partition, so one overflowing layer
+    /// cannot evict another. `uiCapacityReport()` exposes the resulting per-frame evidence.
+    void setHud(const ui::Geometry& geometry) noexcept;
+    [[nodiscard]] const ui::UiCapacityReport& uiCapacityReport() const noexcept {
+        return uiCapacityReport_;
+    }
 
     /// The build tray's packed unit icons. See `core/ui/IconAtlas.hpp`.
     ///
@@ -867,12 +870,13 @@ private:
     std::vector<GpuPropGroup> propGroups_;
     std::vector<MTL::Texture*> propTextures_;  // owned, indexed by PropLevel::albedo
 
-    // --- Text ---------------------------------------------------------------
+    // --- UI -----------------------------------------------------------------
     //
     // One atlas per face and one buffer rewritten per frame. Atlases rebuild only when display
     // or HUD magnification changes; each remains single-channel coverage, so it serves text of
     // any colour.
     MTL::RenderPipelineState* textPipeline_ = nullptr;  // owned
+    MTL::RenderPipelineState* solidPipeline_ = nullptr; // owned
     MTL::RenderPipelineState* imagePipeline_ = nullptr; // owned
     MTL::RenderPipelineState* minimapFogPipeline_ = nullptr; // owned
     MTL::SamplerState* fontSampler_ = nullptr;          // owned
@@ -882,12 +886,13 @@ private:
     std::array<float, 4> minimapRect_{};      // x, y, width, height in HUD points; zero = no draw
     ui::UiViewport uiViewport_{};
 
-    // The build tray's icons, packed into one texture, and this frame's quads into it.
+    // The build tray's icons, packed into one texture. Semantic UI layer quads occupy fixed
+    // partitions of one triple-buffered allocation; mixed layers use the two counts in draw order.
     MTL::Texture* iconAtlas_ = nullptr;  // owned
-    std::size_t imageVertexCount_ = 0;
-    /// The world's own atlas quads — strategic icons — drawn under all the chrome.
-    std::size_t worldImageVertexCount_ = 0;
-    MTL::Buffer* textBuffer_ = nullptr;                 // owned
+    MTL::Buffer* uiBuffer_ = nullptr;  // owned
+    std::array<std::array<std::size_t, 2>, ui::kUiLayerCount> uiLayerVertexCounts_{};
+    ui::UiCapacityReport uiCapacityReport_{};
+    bool uiOverflowWarned_ = false;
 
     // TWO faces, because the interface has two jobs for type: a condensed face for labels,
     // which are read once and should look engraved, and a monospaced one for readouts, whose
@@ -908,9 +913,6 @@ private:
     FontSlot labelFont_;
     FontSlot readoutFont_;
     float fontRasterScale_ = 1.0f;
-
-    std::size_t labelVertexCount_ = 0;
-    std::size_t readoutVertexCount_ = 0;
 
     /// Rasterises one face at `fontRasterScale_`, exposing authored HUD-point metrics.
     void buildFontAtlas(FontSlot& slot, const char* familyName, float points);
