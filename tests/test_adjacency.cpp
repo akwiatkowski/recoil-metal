@@ -1,7 +1,12 @@
 // Standing beside things pays: the skirt geometry, the buff tables, and the income they
-// change. Numbers are the game's own (`AdjacencyBuffs.lua:206-247` via
-// `core/unit/Adjacency.hpp`): a mass storage adds +12.5% to a SIZE4 extractor, an energy
-// storage +25% to a SIZE4 generator, a T1 generator -6.25% to a SIZE4 neighbour's upkeep.
+// change. Numbers are the game's own (`AdjacencyBuffs.lua` via `core/unit/Adjacency.hpp`): a
+// mass storage adds +12.5% to a SIZE4 extractor, an energy storage **+12.5%** to a SIZE4
+// generator, a T1 generator -6.25% to a SIZE4 neighbour's upkeep.
+//
+// That energy figure used to read +25% here and in the table, which was every value in the
+// row doubled — a full ring paid +100% where retail pays +50%. An audit against the shipped
+// buff file caught it (`C-072`). The giveaway is the invariant the whole table is built on:
+// `Add x n` must be constant across the size rows, and the doubled row broke it.
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
@@ -190,8 +195,9 @@ TEST_CASE("an energy storage beside the generator raises what it makes") {
     (void)f.roster.add(batteryType, 216.0f, 200.0f, 0, 500.0f);
     f.tick();
 
-    // 20 e/s × 1.25 = 25/s → 2.5 a tick.
-    CHECK(rm::test::asFloat(f.economies[0].incomePerTick.energy) == Approx(2.5f).margin(0.0001));
+    // 20 e/s × 1.125 = 22.5/s → 2.25 a tick. One neighbour of five possible on a SIZE4
+    // receiver; a full ring would be ×1.5, which is the retail oracle.
+    CHECK(rm::test::asFloat(f.economies[0].incomePerTick.energy) == Approx(2.25f).margin(0.0001));
 }
 
 TEST_CASE("a tank parked between the buildings changes nothing") {

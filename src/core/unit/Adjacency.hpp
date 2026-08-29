@@ -48,8 +48,14 @@ enum class AdjacencyClass : std::uint8_t {
 [[nodiscard]] AdjacencyClass adjacencyClassFromName(std::string_view name) noexcept;
 
 /// The receiver-size axis: `STRUCTURE SIZE4/8/12/16/20`, from the receiver's own
-/// `Categories`. Index 0..4; structures stating no SIZE category read as SIZE4, the
-/// smallest, which is where the corpus's T1 economy lives anyway.
+/// `Categories`. Index 0..4.
+///
+/// A structure stating no SIZE category currently has one DERIVED from its skirt
+/// (`sim::UnitCatalog`), which is an invention: retail gates every adjacency buff on
+/// `EntityCategory = 'STRUCTURE SIZEn'`, so such a structure is permanently inert there. 174
+/// of the 568 shipped units are in that position. It matters little today — only one of them
+/// has any modelled production or upkeep — but it will the moment build-cost adjacency lands.
+/// See claim `C-073`.
 inline constexpr std::size_t kAdjacencySizeSteps = 5;
 
 /// One giver's additive grants, per receiver size. `constexpr float` because these are

@@ -29,15 +29,28 @@ AdjacencyClass adjacencyClassFromName(std::string_view name) noexcept {
 
 namespace {
 
-// `AdjacencyBuffs.lua:206-247`, the slice this engine consumes. Rows are receiver sizes
-// SIZE4..SIZE20. The numbers are ≈ K/n by design: a full ring of neighbours yields a
-// constant total (4 × 0.25 = 8 × 0.125 = 100% for energy storage), so a partial ring
-// gives proportionally less by COUNT — there is no edge-length fraction anywhere in the
-// original either.
+// `AdjacencyBuffs.lua`, the slice this engine consumes. Rows are receiver sizes
+// SIZE4..SIZE20. A partial ring gives proportionally less by COUNT — there is no edge-length
+// fraction anywhere in the original.
 constexpr AdjacencyGrants kNone{};
 
+// THE INVARIANT THAT CHECKS THESE TABLES. For a giver with a 2x2 skirt, `Add x n` is constant
+// across the five size rows, where `n` is how many 2x2 structures fit around a receiver of that
+// size — 4, 8, 12, 16, 20. So the row values are one number divided by those counts, and any
+// transcription slip shows up as a row that breaks the product. Two did (`C-072`).
+//
+//   T1 power generator   -0.25   fully surrounded
+//   T1 energy storage    +0.50
+//   T1 mass storage      +0.50
+//
+// Givers with a 6x6 or 8x8 skirt can only occupy one side, so their `Add` is flat across rows
+// and caps at four neighbours: T2 power -0.5, T3 power -0.75.
 constexpr AdjacencyGrants kT1PowerGenerator{
-    .energyMaintenance = {-0.0625f, -0.03125f, -0.0208f, -0.01563f, -0.0125f},
+    // Written as the file writes them. The last three used to be truncated to `-0.0208`,
+    // `-0.01563`, `-0.0125`; those quantise to identical Q18.14 values, so nothing changed
+    // numerically, but a literal that does not match the source silently stops matching if the
+    // fixed-point format ever gains bits.
+    .energyMaintenance = {-0.0625f, -0.03125f, -0.020833f, -0.015625f, -0.0125f},
 };
 constexpr AdjacencyGrants kT2PowerGenerator{
     .energyMaintenance = {-0.125f, -0.125f, -0.125f, -0.125f, -0.125f},
@@ -45,11 +58,20 @@ constexpr AdjacencyGrants kT2PowerGenerator{
 constexpr AdjacencyGrants kT3PowerGenerator{
     .energyMaintenance = {-0.1875f, -0.1875f, -0.1875f, -0.1875f, -0.1875f},
 };
+// BOTH OF THESE WERE WRONG, and the invariant above is what makes that visible.
+//
+// The energy row was every value DOUBLED: a full ring gave +100% where retail gives +50%.
+// The mass row was right in four places and had `0.03` where the file says `0.041667`, which
+// made a full ring of twelve give +36% instead of +50%. Neither is the sort of thing playtesting
+// finds — an energy-storage ring that is twice as good reads as a balance opinion.
+//
+// Retail: `AdjacencyBuffs.lua`, `T1EnergyStorageEnergyProductionBonusSize4..20` and
+// `T1MassStorageMassProductionBonusSize4..20`. Claim `C-072`.
 constexpr AdjacencyGrants kT1EnergyStorage{
-    .energyProduction = {0.25f, 0.125f, 0.083334f, 0.0625f, 0.05f},
+    .energyProduction = {0.125f, 0.0625f, 0.041667f, 0.03125f, 0.025f},
 };
 constexpr AdjacencyGrants kT1MassStorage{
-    .massProduction = {0.125f, 0.0625f, 0.03f, 0.03125f, 0.025f},
+    .massProduction = {0.125f, 0.0625f, 0.041667f, 0.03125f, 0.025f},
 };
 
 } // namespace
@@ -60,7 +82,9 @@ const AdjacencyGrants& adjacencyGrants(AdjacencyClass which) noexcept {
         return kT1PowerGenerator;
     case AdjacencyClass::T2PowerGenerator:
     case AdjacencyClass::Hydrocarbon:
-        // `adj.Hydrocarbon = adj.T2PowerGenerator` — the file's own aliasing.
+        // `HydrocarbonAdjacencyBuffs` is a separate table that lists the T2 power
+        // generator's sixteen buff names verbatim — the same grants, not an alias.
+        // (The comment here used to claim the file aliased them. It does not.)
         return kT2PowerGenerator;
     case AdjacencyClass::T3PowerGenerator:
         return kT3PowerGenerator;
