@@ -120,19 +120,7 @@ std::vector<std::string> wrapToWidth(std::span<const text::Glyph> glyphs, std::s
     return lines;
 }
 
-float hudScale(float viewportWidth, float viewportHeight, float userScale) noexcept {
-    if (viewportWidth <= 0.0f || viewportHeight <= 0.0f) {
-        return std::clamp(userScale, kMinUserHudScale, kMaxUserHudScale);
-    }
-    // The LIMITING axis. Taking the larger of the two would magnify a 3440x1440 ultrawide by
-    // 2.7 and push the bottom deck off the screen, since the deck's height is what the short
-    // axis has to hold.
-    const float fit = std::min(viewportWidth / kHudDesignWidth, viewportHeight / kHudDesignHeight);
-    return std::clamp(fit, kMinHudScale, kMaxHudScale)
-         * std::clamp(userScale, kMinUserHudScale, kMaxUserHudScale);
-}
-
-FrameLayout frameLayout(float viewportWidth, float viewportHeight) noexcept {
+FrameLayout frameLayout(const UiViewport& viewport) noexcept {
     struct Metrics {
         HudProfile profile;
         float minimap;
@@ -153,10 +141,12 @@ FrameLayout frameLayout(float viewportWidth, float viewportHeight) noexcept {
     // Six, seven and nine — chosen so the CELL never narrows as the panel widens. Eight at the
     // Standard width would be 79.5 points against Compact's 82.8, which is the same shrinking
     // button the old nine/twelve/sixteen produced, just less of it.
+    const Extent extent = viewport.hudExtent();
+    const Rect safe = viewport.hudSafeContent();
     Metrics metrics{HudProfile::Compact, 176.0f, 320.0f, 528.0f, 6, 5};
-    if (viewportWidth >= 2240.0f && viewportHeight >= 1000.0f) {
+    if (safe.width >= 2240.0f && safe.height >= 1000.0f) {
         metrics = Metrics{HudProfile::Wide, 256.0f, 673.0f, 893.0f, 9, 12};
-    } else if (viewportWidth >= 1600.0f && viewportHeight >= 900.0f) {
+    } else if (safe.width >= 1600.0f && safe.height >= 900.0f) {
         metrics = Metrics{HudProfile::Standard, 216.0f, 453.0f, 673.0f, 7, 8};
     }
 
@@ -165,26 +155,54 @@ FrameLayout frameLayout(float viewportWidth, float viewportHeight) noexcept {
     constexpr float kCommandWidth = 200.0f;
     FrameLayout frame;
     frame.profile = metrics.profile;
-    frame.economy = Rect{kMargin, kMargin, 360.0f, 84.0f};
-    frame.match = Rect{viewportWidth - kMargin - 184.0f, kMargin, 184.0f, 72.0f};
-    frame.minimap = Rect{kMargin, viewportHeight - kMargin - metrics.minimap,
-                         metrics.minimap, metrics.minimap};
-    frame.selection = Rect{frame.minimap.right() + kGap,
-                           viewportHeight - kMargin - kDeckHeight,
-                           metrics.selection, kDeckHeight};
-    frame.commands = Rect{viewportWidth - kMargin - kCommandWidth,
-                          viewportHeight - kMargin - kDeckHeight,
-                          kCommandWidth, kDeckHeight};
-    frame.build = Rect{frame.commands.x - kGap - metrics.build, frame.commands.y,
-                       metrics.build, kDeckHeight};
+    frame.viewport = Rect{0.0f, 0.0f, extent.width, extent.height};
+    frame.safeContent = safe;
+
+    const float contentWidth = std::max(0.0f, safe.width - kMargin * 2.0f);
+    frame.economy = Rect{safe.x + kMargin, safe.y + kMargin,
+                         std::min(360.0f, contentWidth), 84.0f};
+    frame.match = Rect{safe.right() - kMargin - std::min(184.0f, contentWidth),
+                       safe.y + kMargin, std::min(184.0f, contentWidth), 72.0f};
+    frame.economy.width =
+        std::min(frame.economy.width, std::max(0.0f, frame.match.x - kGap - frame.economy.x));
+
+    const float minimapSize =
+        std::min(metrics.minimap,
+                 std::max(0.0f, std::min(safe.width, safe.height) - kMargin * 2.0f));
+    const float deckY = safe.bottom() - kMargin - kDeckHeight;
+    frame.minimap = Rect{safe.x + kMargin, safe.bottom() - kMargin - minimapSize,
+                         minimapSize, minimapSize};
+
+    // Constrained safe content gives up build width, then selection width, rather than allowing
+    // the bottom modules to cross. Ordinary profile sizes retain their authored dimensions.
+    const float selectionX = frame.minimap.right() + kGap;
+    const float deckRight = safe.right() - kMargin;
+    const float commandX = std::max(selectionX, deckRight - kCommandWidth);
+    frame.commands = Rect{commandX, deckY, std::max(0.0f, deckRight - commandX), kDeckHeight};
+    const float selectionWidth =
+        std::min(metrics.selection, std::max(0.0f, frame.commands.x - kGap - selectionX));
+    frame.selection = Rect{selectionX, deckY, selectionWidth, kDeckHeight};
+    const float buildWidth =
+        std::min(metrics.build,
+                 std::max(0.0f, frame.commands.x - frame.selection.right() - kGap * 2.0f));
+    const float buildRight =
+        buildWidth > 0.0f ? frame.commands.x - kGap : frame.selection.right();
+    frame.build = Rect{buildRight - buildWidth, deckY, buildWidth, kDeckHeight};
 
     const float top = std::max(frame.economy.bottom(), frame.match.bottom()) + kGap;
     const float deckTop = std::min({frame.minimap.y, frame.selection.y, frame.build.y,
                                     frame.commands.y});
-    frame.battlefield = Rect{kMargin, top, std::max(0.0f, viewportWidth - kMargin * 2.0f),
-                             std::max(0.0f, deckTop - top - kGap)};
-    frame.buildColumns = metrics.buildColumns;
-    frame.rosterSlots = metrics.rosterSlots;
+    frame.battlefield = Rect{safe.x + kMargin, top,
+                             std::max(0.0f, safe.width - kMargin * 2.0f),
+                              std::max(0.0f, deckTop - top - kGap)};
+    frame.buildColumns = frame.build.width > 0.0f ? metrics.buildColumns : 0;
+    if (frame.selection.width < metrics.selection) {
+        constexpr float kRosterTilePitch = 56.0f;  // 52-point tile plus its 4-point gap
+        frame.rosterSlots = static_cast<std::size_t>(
+            std::max(0.0f, std::floor((frame.selection.width - 4.0f) / kRosterTilePitch)));
+    } else {
+        frame.rosterSlots = metrics.rosterSlots;
+    }
     return frame;
 }
 
@@ -254,7 +272,7 @@ void appendPanel(Geometry& out, const text::Font& font, const Theme& theme, floa
 
     // The drop shadow: one quad, offset toward the implied light's opposite corner, drawn
     // before everything so only its bottom-right sliver survives. It is what seats a panel
-    // ON the world instead of IN it — three pixels of separation, not a lighting model.
+    // ON the world instead of IN it — three authored points of separation, not a lighting model.
     text::appendRect(out.label, font, x + kShadow, y + kShadow, width, height,
                      Colour{{0.0f, 0.0f, 0.0f, 0.22f}});
 
@@ -496,16 +514,13 @@ namespace {
 } // namespace
 
 void build(Geometry& out, const text::Font& labelFont, const text::Font& readoutFont,
-           const Theme& theme, const MatchState& state, float viewportWidth,
-           float viewportHeight) {
+           const Theme& theme, const MatchState& state, const FrameLayout& frame) {
     const text::Font& chrome = labelFont.usable() ? labelFont : readoutFont;
     if (!chrome.usable()) {
         return;  // no font at all: the interface degrades to nothing rather than to a crash
     }
 
     const float lineHeight = std::max(chrome.lineHeight, 12.0f);
-    const FrameLayout frame = frameLayout(viewportWidth, viewportHeight);
-
     // --- the resource panel, top left -------------------------------------
     const float panelX = frame.economy.x;
     const float panelY = frame.economy.y;
@@ -603,8 +618,8 @@ void build(Geometry& out, const text::Font& labelFont, const text::Font& readout
                                      : std::string{"A DRAW"};
         constexpr float kBannerScale = 3.0f;
         const float bannerWidth = text::measureText(labelFont.glyphs, banner, kBannerScale);
-        const float bx = (viewportWidth - bannerWidth) * 0.5f;
-        const float by = viewportHeight * 0.34f;
+        const float bx = frame.viewport.x + (frame.viewport.width - bannerWidth) * 0.5f;
+        const float by = frame.viewport.y + frame.viewport.height * 0.34f;
 
         // A ruled band behind it, full width of the text plus a margin, so the banner reads
         // over any terrain rather than only over dark ground.

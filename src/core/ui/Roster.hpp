@@ -36,7 +36,7 @@ namespace rm::ui {
 
 // --- Metrics ----------------------------------------------------------------
 
-/// A tile's side, in points. Smaller than a build cell: a roster tile carries an icon, a count
+/// A tile's side, in authored HUD points. Smaller than a build cell: it carries an icon, a count
 /// and a bar, and no cost line.
 inline constexpr float kRosterTile = 52.0f;
 
@@ -122,15 +122,15 @@ struct RosterLayout {
 [[nodiscard]] RosterLayout rosterLayout(const FrameLayout& frame, std::size_t tileCount,
                                          std::size_t page = 0) noexcept;
 
-/// The top-left of one tile, in points.
+/// The top-left of one tile, in authored HUD points.
 [[nodiscard]] std::array<float, 2> rosterTileOrigin(const RosterLayout& layout,
                                                     std::size_t index) noexcept;
 
-/// Which tile a screen point is over, if any. Gutters are dead space, as the build tray's are.
+/// Which tile an authored HUD point is over, if any. Gutters are dead space, as the build tray's are.
 [[nodiscard]] std::optional<std::size_t> rosterTileAt(const RosterLayout& layout, float pointX,
                                                       float pointY) noexcept;
 
-/// Whether a screen point is on the roster at all — tiles, gutters and padding alike.
+/// Whether an authored HUD point is on the roster at all — tiles, gutters and padding alike.
 [[nodiscard]] bool insideRoster(const RosterLayout& layout, float pointX,
                                  float pointY) noexcept;
 

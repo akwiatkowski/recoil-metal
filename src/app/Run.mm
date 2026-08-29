@@ -396,20 +396,18 @@ int runScreenshot(const Session& session) {
             // would stop being evidence about the interface the player sees. `--screenshot`
             // takes PIXELS and a window is measured in points; a capture has no backing scale
             // of its own, so the two coincide here and the pixel size is the logical size.
-            const float shotScale = rm::ui::hudScale(static_cast<float>(shot.width),
-                                                     static_cast<float>(shot.height),
-                                                     session.uiScale);
-            const float shotW = static_cast<float>(shot.width) / shotScale;
-            const float shotH = static_cast<float>(shot.height) / shotScale;
-            renderer.setUiScale(shotScale);
-            const rm::ui::FrameLayout shotFrame = rm::ui::frameLayout(shotW, shotH);
+            const rm::ui::UiViewport shotViewport = rm::ui::UiViewport::full(
+                static_cast<float>(shot.width), static_cast<float>(shot.height), 1.0f,
+                session.uiScale);
+            renderer.setUiViewport(shotViewport);
+            const rm::ui::FrameLayout shotFrame = rm::ui::frameLayout(shotViewport);
             rm::ui::build(hud, renderer.labelFont(), renderer.readoutFont(),
-                          hudThemeFor(units), hudStateFrom(units, marchOptions.seconds), shotW,
-                          shotH);
+                          hudThemeFor(units), hudStateFrom(units, marchOptions.seconds),
+                          shotFrame);
 
             // Health bars in a capture too, for the usual reason: a battle screenshot is
             // the one place a damaged unit reliably exists to verify them against.
-            appendHealthBars(hud, units, renderer.camera(), renderer.labelFont(), shotW, shotH);
+            appendHealthBars(hud, units, renderer.camera(), renderer.labelFont(), shotViewport);
 
             // THE MINIMAP IN A CAPTURE TOO, for the same reason the rest of the HUD is here: a
             // screenshot is how this project verifies anything, and an interface only visible in
@@ -419,8 +417,8 @@ int runScreenshot(const Session& session) {
             std::vector<rm::ui::MinimapPip> pips;
             std::vector<std::array<float, 2>> view;
             appendMinimapPips(pips, units);
-            appendViewFootprint(view, renderer.camera(), map->field, shotW, shotH);
-            const rm::ui::MinimapLayout shotMinimap = rm::ui::minimapLayout(shotW, shotH);
+            appendViewFootprint(view, renderer.camera(), map->field, shotViewport);
+            const rm::ui::MinimapLayout shotMinimap = rm::ui::minimapLayout(shotFrame);
             const bool shotPreview = map->preview.width > 0;
             if (shotPreview) {
                 renderer.setMinimapRect(shotMinimap.x + shotMinimap.inset,
@@ -455,9 +453,9 @@ int runScreenshot(const Session& session) {
                                             units.strategicIconArt, &shotStrategicBase));
             std::vector<std::optional<rm::app::StrategicIconRef>> shotRefs;
             rm::app::buildStrategicIconRefs(units, shotStrategicBase, shotRefs);
-            rm::app::appendStrategicIcons(hud, units, renderer.camera(), shotW, shotH, shotRefs);
+            rm::app::appendStrategicIcons(hud, units, renderer.camera(), shotViewport, shotRefs);
             rm::app::appendContactBlips(hud, units, renderer.camera(), map->field,
-                                        renderer.labelFont(), shotW, shotH);
+                                        renderer.labelFont(), shotViewport);
             appendSceneIcons(shotParticles, units, renderer.camera(), shotRefs);
 
             // THE CONSTRUCTION SITES IN A CAPTURE TOO, for the reason the HUD is here: a
@@ -569,7 +567,6 @@ int runScreenshot(const Session& session) {
                 std::printf("  roster: %zu type(s) selected\n", shotRoster.size());
             }
 
-            renderer.setHudViewport(shotW, shotH);
             renderer.setHud(hud.label, hud.readout, hud.image, hud.worldImage);
 
             // WHAT REACHED THE GPU, against what the sim holds. The two disagreeing is the
@@ -663,13 +660,15 @@ int runWindowed(const Session& session) {
         // `r` flips it live, which is the only way to judge whether it is worth
         // its cost — a side-by-side of two runs cannot show the difference
         // moving.
-        // The player's own multiplier on the interface's automatic magnification, before the
-        // first frame lays anything out — the faces are rasterised for it.
+        // The player's requested multiplier on automatic magnification, before the first frame
+        // lays anything out — the faces are rasterised for the resulting fit-capped scale.
         window.setUserHudScale(session.uiScale);
+        const rm::ui::UiViewport openingViewport = window.uiViewport();
+        const rm::ui::Extent openingHud = openingViewport.hudExtent();
         std::printf("interface: %.2fx (%.0f x %.0f points of layout in a %u x %u window)\n",
-                    static_cast<double>(window.hudScale()),
-                    static_cast<double>(window.hudWidth()),
-                    static_cast<double>(window.hudHeight()), window.width(), window.height());
+                    static_cast<double>(openingViewport.hudScale()),
+                    static_cast<double>(openingHud.width), static_cast<double>(openingHud.height),
+                    window.width(), window.height());
 
         window.setReflections(settings.reflections);
         window.setStratumNormals(settings.stratumNormals);
@@ -969,6 +968,9 @@ int runWindowed(const Session& session) {
 
         window.onClick([&](const rm::Ray& ray, rm::MouseButton button,
                            rm::MouseModifiers mods) {
+            const rm::ui::UiViewport clickViewport = window.uiViewport();
+            const std::array<float, 2> hudPoint =
+                clickViewport.toHud({mods.pointX, mods.pointY});
             // THE MINIMAP FIRST, because it is in front of the world (§7 P7.4). A click on the
             // panel is about the panel; without this check the ray under it would also select
             // whatever unit happens to be behind the minimap, which is the single most
@@ -1102,17 +1104,13 @@ int runWindowed(const Session& session) {
                 }
             };
 
-            // THE HUD'S OWN SPACE, which `mods.pointX/Y` are already in. Handing these the
-            // window's real size instead would put every panel's rectangle at the wrong
-            // magnification and every hit test would miss by the scale factor.
-            const rm::ui::FrameLayout frame =
-                rm::ui::frameLayout(window.hudWidth(), window.hudHeight());
-            const rm::ui::MinimapLayout minimap =
-                rm::ui::minimapLayout(window.hudWidth(), window.hudHeight());
-            if (rm::ui::insideMinimap(minimap, mods.pointX, mods.pointY)) {
+            // Convert AppKit's logical click exactly once, beside the hit tests that consume it.
+            const rm::ui::FrameLayout frame = rm::ui::frameLayout(clickViewport);
+            const rm::ui::MinimapLayout minimap = rm::ui::minimapLayout(frame);
+            if (rm::ui::insideMinimap(minimap, hudPoint[0], hudPoint[1])) {
                 const std::array<float, 2> where =
                     rm::ui::minimapToWorld(minimap, map->field.widthElmos(),
-                                           map->field.depthElmos(), mods.pointX, mods.pointY);
+                                           map->field.depthElmos(), hudPoint[0], hudPoint[1]);
                 const simd_float3 ground = simd_make_float3(
                     where[0], map->field.heightAtWorld(where[0], where[1]), where[1]);
 
@@ -1152,19 +1150,19 @@ int runWindowed(const Session& session) {
             if (!buildOptions.empty()) {
                 const rm::ui::BuildPanelLayout panel =
                     rm::ui::buildPanelLayout(frame, buildOptions.size(), buildPage);
-                if (rm::ui::insideBuildPanel(panel, mods.pointX, mods.pointY)) {
+                if (rm::ui::insideBuildPanel(panel, hudPoint[0], hudPoint[1])) {
                     // A cell ARMS the build; the gutters and header swallow and do nothing.
                     // Right-click anywhere on the panel disarms, so the way out is where the
                     // way in was.
                     const std::optional<std::size_t> cell = rm::ui::buildOptionAt(
-                        panel, buildOptions.size(), mods.pointX, mods.pointY);
+                        panel, buildOptions.size(), hudPoint[0], hudPoint[1]);
                     if (button == rm::MouseButton::Right) {
                         if (!armedOption) {
                             swallowedByPanel("build");  // nothing to disarm: it was just eaten
                         }
                         armedOption.reset();
                     } else if (const std::optional<int> step = rm::ui::buildPageStepAt(
-                                   panel, mods.pointX, mods.pointY)) {
+                                   panel, hudPoint[0], hudPoint[1])) {
                         if (*step < 0 && buildPage > 0) {
                             --buildPage;
                         } else if (*step > 0 && buildPage + 1 < panel.pages) {
@@ -1247,12 +1245,12 @@ int runWindowed(const Session& session) {
             if (!rosterTiles.empty()) {
                 const rm::ui::RosterLayout roster =
                     rm::ui::rosterLayout(frame, rosterTiles.size(), rosterPage);
-                if (rm::ui::insideRoster(roster, mods.pointX, mods.pointY)) {
+                if (rm::ui::insideRoster(roster, hudPoint[0], hudPoint[1])) {
                     const std::optional<std::size_t> tile =
-                        rm::ui::rosterTileAt(roster, mods.pointX, mods.pointY);
+                        rm::ui::rosterTileAt(roster, hudPoint[0], hudPoint[1]);
                     if (button == rm::MouseButton::Left) {
                         if (const std::optional<int> step = rm::ui::rosterPageStepAt(
-                                roster, mods.pointX, mods.pointY)) {
+                                roster, hudPoint[0], hudPoint[1])) {
                             if (*step < 0 && rosterPage > 0) {
                                 --rosterPage;
                             } else if (*step > 0 && rosterPage + 1 < roster.pages) {
@@ -1312,8 +1310,8 @@ int runWindowed(const Session& session) {
                 // what a single click there meant.
                 if (pick && mods.clicks >= 2) {
                     const rm::UnitTypeIndex wanted = units.store.typeAt(pick->index);
-                    const float w = static_cast<float>(window.width());
-                    const float h = static_cast<float>(window.height());
+                    const float w = clickViewport.logicalExtent.width;
+                    const float h = clickViewport.logicalExtent.height;
                     std::vector<rm::sim::UnitId> ofType;
                     for (rm::UnitIndex slot = 0; slot < units.store.slotCount(); ++slot) {
                         if (!units.store.slotAlive(slot)
@@ -1758,28 +1756,30 @@ int runWindowed(const Session& session) {
             // overlays alike. They share one vertex stream and therefore one viewport, so
             // mixing the window's real size in here would place the health bars and strategic
             // icons a scale factor away from the units they belong to.
-            const float hudW = window.hudWidth();
-            const float hudH = window.hudHeight();
-            const rm::ui::FrameLayout frame = rm::ui::frameLayout(hudW, hudH);
+            const rm::ui::UiViewport viewport = window.uiViewport();
+            const rm::ui::Extent hudExtent = viewport.hudExtent();
+            const rm::ui::FrameLayout frame = rm::ui::frameLayout(viewport);
+            const std::array<float, 2> logicalCursor = window.cursor();
+            const std::array<float, 2> hudCursor = viewport.toHud(logicalCursor);
             rm::ui::build(hudScratch, window.labelFont(), window.readoutFont(),
-                          hudThemeFor(units), hudStateFrom(units, matchSeconds), hudW, hudH);
+                          hudThemeFor(units), hudStateFrom(units, matchSeconds), frame);
 
             // Health over the units that need it: damaged, and close enough to be units
             // rather than icons. Absence is what "fine" looks like (Interface.hpp).
-            appendHealthBars(hudScratch, units, window.camera(), window.labelFont(), hudW, hudH);
+            appendHealthBars(hudScratch, units, window.camera(), window.labelFont(), viewport);
 
             // The strategic layer: the game's own glyphs where units are too small to read,
             // in the army's colour, under all the chrome (Geometry::worldImage).
-            appendStrategicIcons(hudScratch, units, window.camera(), hudW, hudH, strategicRefs);
+            appendStrategicIcons(hudScratch, units, window.camera(), viewport, strategicRefs);
             appendContactBlips(hudScratch, units, window.camera(), map->field,
-                               window.labelFont(), hudW, hudH);
+                               window.labelFont(), viewport);
 
             // THE MINIMAP (§7 P7.4), appended to the same geometry the HUD builds — it is
             // rectangles in screen space, which is what `text::appendRect` already draws, so it
             // needs no pipeline of its own. That is the other half of "nearly free".
             appendMinimapPips(minimapPips, units);
-            appendViewFootprint(minimapView, window.camera(), map->field, hudW, hudH);
-            const rm::ui::MinimapLayout minimap = rm::ui::minimapLayout(hudW, hudH);
+            appendViewFootprint(minimapView, window.camera(), map->field, viewport);
+            const rm::ui::MinimapLayout minimap = rm::ui::minimapLayout(frame);
             // The preview under the panel, inset by the border so the chrome frames it. The
             // panel then draws everything BUT its own fill, so the picture shows through.
             const bool hasPreview = map->preview.width > 0;
@@ -1855,8 +1855,8 @@ int runWindowed(const Session& session) {
                 // The lit cell under the cursor, which is most of what makes a grid of squares
                 // read as BUTTONS rather than as a readout. Polled once here rather than
                 // tracked through a mouseMoved handler — see `Window::cursor`.
-                const std::array<float, 2> at = window.hudCursor();
-                overBuild = rm::ui::buildOptionAt(panel, buildOptions.size(), at[0], at[1]);
+                overBuild = rm::ui::buildOptionAt(panel, buildOptions.size(), hudCursor[0],
+                                                  hudCursor[1]);
                 // THE ARMED CELL STAYS LIT while the cursor is out over the map, which is
                 // exactly when the player needs to be told what they are about to place. A
                 // hover wins over it, so moving back onto the tray reads normally.
@@ -1876,9 +1876,8 @@ int runWindowed(const Session& session) {
                 const rm::ui::RosterLayout roster =
                     rm::ui::rosterLayout(frame, rosterTiles.size(), rosterPage);
                 rosterPage = roster.page;
-                const std::array<float, 2> at = window.hudCursor();
                 const std::optional<std::size_t> overTile =
-                    rm::ui::rosterTileAt(roster, at[0], at[1]);
+                    rm::ui::rosterTileAt(roster, hudCursor[0], hudCursor[1]);
 
                 rm::ui::InfoCard inspector;
                 if (armedOption && *armedOption < buildOptions.size()) {
@@ -1907,18 +1906,22 @@ int runWindowed(const Session& session) {
                 // by projecting them into the same space — three things that must agree, and
                 // would not if the projection used the window's real size while the box used
                 // the design space the renderer magnifies.
-                const float w = window.hudWidth();
-                const float h = window.hudHeight();
+                const float w = hudExtent.width;
+                const float h = hudExtent.height;
                 const bool held = window.leftMouseHeld();
-                const std::array<float, 2> origin = window.hudDragOrigin();
-                const std::array<float, 2> at = window.hudCursor();
+                const std::array<float, 2> logicalOrigin = window.dragOrigin();
+                const std::array<float, 2> origin = viewport.toHud(logicalOrigin);
+                const std::array<float, 2> at = hudCursor;
 
-                // Strictly above the click slop (3 points, backing-scaled) so a release can
+                // Strictly above the click slop (3 AppKit points) so a release can
                 // never be both a click and a band: between the two thresholds is a small
-                // dead zone, which is the safe side of the ambiguity.
-                constexpr float kBandSlopPx = 8.0f;
-                const bool traveled = std::abs(at[0] - origin[0]) + std::abs(at[1] - origin[1])
-                                      > kBandSlopPx;
+                // dead zone, which is the safe side of the ambiguity. Measure before HUD
+                // conversion so --ui-scale cannot change the logical-point drag threshold.
+                constexpr float kBandSlopPoints = 8.0f;
+                const bool traveled =
+                    std::abs(logicalCursor[0] - logicalOrigin[0])
+                      + std::abs(logicalCursor[1] - logicalOrigin[1])
+                    > kBandSlopPoints;
 
                 const bool onMinimap = rm::ui::insideMinimap(minimap, origin[0], origin[1]);
                 const bool onPanel =
@@ -2090,10 +2093,10 @@ int runWindowed(const Session& session) {
             // the same call the placement makes, which is what stops the ghost and the order
             // disagreeing about the same spot.
             if (armedOption) {
+                const std::array<float, 2> cursor = window.cursor();
                 const rm::Ray under = rm::screenRay(
-                    window.camera(), window.cursor()[0],
-                    static_cast<float>(window.height()) - window.cursor()[1],
-                    static_cast<float>(window.width()), static_cast<float>(window.height()));
+                    window.camera(), cursor[0], viewport.logicalExtent.height - cursor[1],
+                    viewport.logicalExtent.width, viewport.logicalExtent.height);
                 const std::optional<simd_float3> at = rm::pickGround(under, map->field);
                 if (at) {
                     const bool ok = armedPlaceable({at->x, at->z});

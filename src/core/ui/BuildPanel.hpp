@@ -48,7 +48,7 @@ namespace rm::ui {
 
 // --- Metrics ----------------------------------------------------------------
 
-/// A cell's WIDTH, in points.
+/// A cell's WIDTH, in authored HUD points.
 ///
 /// SIZED FROM THE LONGEST THING IT HOLDS, which is a seven-character blueprint id like
 /// `UEB1103` at the label font's natural size. The first version guessed 48 and the ids ran
@@ -160,7 +160,7 @@ struct BuildPanelLayout {
                                                  std::size_t optionCount,
                                                  std::size_t page = 0) noexcept;
 
-/// Whether a screen point is on the panel at all — cells, gutters, header and padding alike.
+/// Whether an authored HUD point is on the panel at all — cells, gutters, header and padding alike.
 ///
 /// DISTINCT FROM `buildOptionAt`, which answers "which cell", and the difference is the whole
 /// reason both exist. A caller deciding whether the world behind the panel should hear about a
@@ -170,11 +170,11 @@ struct BuildPanelLayout {
 [[nodiscard]] bool insideBuildPanel(const BuildPanelLayout& layout, float pointX,
                                     float pointY) noexcept;
 
-/// The top-left of one cell, in points.
+/// The top-left of one cell, in authored HUD points.
 [[nodiscard]] std::array<float, 2> buildCellOrigin(const BuildPanelLayout& layout,
                                                    std::size_t index) noexcept;
 
-/// Which option a screen point is over, if any.
+/// Which option an authored HUD point is over, if any.
 ///
 /// ROUND-TRIPS with `buildCellOrigin`, and that pairing is the whole of this panel's
 /// correctness — a cell drawn in one place and clicked in another is the same bug twice, and it
@@ -185,7 +185,7 @@ struct BuildPanelLayout {
                                                        std::size_t optionCount, float pointX,
                                                        float pointY) noexcept;
 
-/// -1 or +1 when a point hits a visible page arrow in the header.
+/// -1 or +1 when an authored HUD point hits a visible page arrow in the header.
 [[nodiscard]] std::optional<int> buildPageStepAt(const BuildPanelLayout& layout, float pointX,
                                                  float pointY) noexcept;
 

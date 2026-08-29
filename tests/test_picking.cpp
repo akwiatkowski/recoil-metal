@@ -12,6 +12,7 @@
 #include "core/camera/OrbitCamera.hpp"
 #include "core/map/HeightField.hpp"
 #include "core/scene/Picking.hpp"
+#include "core/ui/Viewport.hpp"
 #include "core/scene/UnitPlacement.hpp"
 
 #include <cmath>
@@ -297,6 +298,25 @@ TEST_CASE("worldToScreen round-trips with screenRay, in the HUD's flipped space"
     REQUIRE(screen.has_value());
     CHECK((*screen)[0] == Approx(pointX).margin(0.1));
     CHECK((*screen)[1] == Approx(kH - pointY).margin(0.1));
+}
+
+TEST_CASE("world projection lands in the scaled HUD viewport", "[ui][viewport]") {
+    const OrbitCamera camera = overheadCamera();
+    const rm::ui::UiViewport viewport =
+        rm::ui::UiViewport::full(2560.0f, 1440.0f, 2.0f);
+    const rm::ui::Extent hud = viewport.hudExtent();
+
+    // Picking consumes AppKit's full logical viewport. The same world point is drawn into the
+    // authored HUD viewport, so both axes divide by HUD magnification and Y changes origin.
+    const rm::Ray ray = rm::screenRay(camera, 1600.0f, 400.0f,
+                                      viewport.logicalExtent.width,
+                                      viewport.logicalExtent.height);
+    const simd_float3 world = ray.origin + ray.direction * 650.0f;
+    const auto screen = rm::worldToScreen(camera, world, hud.width, hud.height);
+
+    REQUIRE(screen.has_value());
+    CHECK((*screen)[0] == Approx(800.0f).margin(0.1));
+    CHECK((*screen)[1] == Approx(520.0f).margin(0.1));
 }
 
 TEST_CASE("a point behind the camera projects to nothing") {

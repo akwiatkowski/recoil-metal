@@ -37,6 +37,11 @@ namespace {
     return MinimapLayout{.x = 20.0f, .y = 500.0f, .size = 200.0f, .inset = 10.0f};
 }
 
+[[nodiscard]] MinimapLayout responsive(float width, float height) {
+    return rm::ui::minimapLayout(
+        rm::ui::frameLayout(rm::ui::UiViewport::authored(width, height)));
+}
+
 } // namespace
 
 TEST_CASE("world to minimap and back is the identity") {
@@ -132,12 +137,12 @@ TEST_CASE("the panel knows what is on it") {
 }
 
 TEST_CASE("the default layout follows responsive profile metrics") {
-    CHECK(rm::ui::minimapLayout(1280.0f, 720.0f).size == 176.0f);
-    CHECK(rm::ui::minimapLayout(1600.0f, 900.0f).size == 216.0f);
-    CHECK(rm::ui::minimapLayout(2240.0f, 1000.0f).size == 256.0f);
+    CHECK(responsive(1280.0f, 720.0f).size == 176.0f);
+    CHECK(responsive(1600.0f, 900.0f).size == 216.0f);
+    CHECK(responsive(2240.0f, 1000.0f).size == 256.0f);
 
     // Width alone does not select Wide when the vertical deck cannot fit its metrics.
-    const MinimapLayout wide = rm::ui::minimapLayout(3440.0f, 900.0f);
+    const MinimapLayout wide = responsive(3440.0f, 900.0f);
     CHECK(wide.size == 216.0f);
 
     // Bottom-left: the resource panel is top-left and the clock top-right.
@@ -146,7 +151,7 @@ TEST_CASE("the default layout follows responsive profile metrics") {
     CHECK(wide.y + wide.size <= 900.0f);
 
     // And capped, so a 5K display does not get a minimap the size of a playing card.
-    CHECK(rm::ui::minimapLayout(5120.0f, 2880.0f).size == 256.0f);
+    CHECK(responsive(5120.0f, 2880.0f).size == 256.0f);
 }
 
 TEST_CASE("a degenerate layout draws nothing rather than dividing by zero") {

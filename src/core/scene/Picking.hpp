@@ -34,14 +34,12 @@ struct Ray {
 [[nodiscard]] Ray screenRay(const OrbitCamera& camera, float pointX, float pointY,
                             float widthPoints, float heightPoints) noexcept;
 
-/// A world point projected into the viewport, TOP-LEFT origin — the space the HUD lays out
-/// in — or nothing when the point is behind the camera.
+/// A world point projected into a caller-sized viewport with a TOP-LEFT origin, or nothing when
+/// the point is behind the camera.
 ///
-/// The inverse of `screenRay` up to the axis flip, and the flip is deliberate: a ray is
-/// asked for by AppKit (bottom-left origin), a projection is compared against HUD layout
-/// (top-left), and the band-select rectangle that motivated this lives entirely in the
-/// second space. Width and height are whatever space the caller's rectangle is in — the two
-/// must simply agree, which is ADR-040's one rule.
+/// The inverse of `screenRay` up to the axis flip. Width and height define the output units: pass
+/// AppKit logical extent for view coordinates or authored HUD extent for UI overlays. The point
+/// and both dimensions must use that same space.
 [[nodiscard]] std::optional<std::array<float, 2>> worldToScreen(const OrbitCamera& camera,
                                                                 simd_float3 world, float width,
                                                                 float height) noexcept;

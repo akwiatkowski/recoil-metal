@@ -80,8 +80,8 @@ MARCH     ?= 4096 4096
 VISION    ?=
 VISION_FLAG = $(if $(VISION),--vision-style $(VISION),)
 
-# How much larger than automatic to draw the interface. The automatic figure already grows the
-# HUD with the viewport; this is the player's own multiplier on top, 0.5 to 3.
+# Requested multiplier on automatic HUD size, clamped to 0.5..3. Available fit wins; enlargement
+# uses spare viewport room and stops before Compact would overlap itself.
 UI_SCALE  ?=
 UI_FLAG   = $(if $(UI_SCALE),--ui-scale $(UI_SCALE),)
 
@@ -128,7 +128,7 @@ help:
 	@echo 'Override anything: make play ARMIES=8 ALLIANCES=2 FACTIONS=uef,seraphim FA_MAP=...'
 	@echo '                   make watch FAF=1       (the FAF AI plays, decisions narrated)'
 	@echo '                   make play VISION=recoil (terrain blocks sight; fa discs are the default)'
-	@echo '                   make play UI_SCALE=1.4 (a larger interface than the automatic one)'
+	@echo '                   make play UI_SCALE=1.4 (use spare room for a larger interface)'
 	@echo '                   make skirmish FACTIONS=uef,cybran'
 	@echo
 	@echo 'Content:'

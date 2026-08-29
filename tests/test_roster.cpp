@@ -21,7 +21,7 @@ using rm::ui::rosterTileOrigin;
 namespace {
 
 [[nodiscard]] rm::ui::FrameLayout aFrame() {
-    return rm::ui::frameLayout(1280.0f, 720.0f);
+    return rm::ui::frameLayout(rm::ui::UiViewport::full(1280.0f, 720.0f));
 }
 
 } // namespace

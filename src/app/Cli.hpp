@@ -98,12 +98,13 @@ struct MarchOptions {
 [[nodiscard]] float parseAnimationTime(int argc, const char* argv[]);
 [[nodiscard]] MarchOptions parseMarch(int argc, const char* argv[]);
 
-/// `--ui-scale N`: how much larger than automatic to draw the interface.
+/// `--ui-scale N`: the requested multiplier relative to automatic HUD size.
 ///
 /// One, the default, is the automatic figure alone — `ui::hudScale`, which already grows the
-/// interface with the viewport. Above one is for a player who wants it larger still on a dense
-/// display; below one is for a small capture that should be mostly world. Out of range clamps,
-/// and anything unparseable falls back to automatic.
+/// interface with the viewport. Above one uses spare room left after automatic magnification;
+/// it cannot shrink the authored viewport below Compact and make controls overlap. Below one
+/// requests less prominent chrome where available fit permits. Out of range clamps, and anything
+/// unparseable falls back to automatic.
 [[nodiscard]] float parseUiScale(int argc, const char* argv[]);
 
 /// `--vision-style fa|recoil`: whether terrain blocks sight (ADR-037).

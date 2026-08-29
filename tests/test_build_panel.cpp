@@ -17,7 +17,7 @@ using rm::ui::buildPanelLayout;
 namespace {
 
 [[nodiscard]] rm::ui::FrameLayout aFrame() {
-    return rm::ui::frameLayout(1280.0f, 720.0f);
+    return rm::ui::frameLayout(rm::ui::UiViewport::full(1280.0f, 720.0f));
 }
 
 } // namespace
@@ -30,6 +30,27 @@ TEST_CASE("no options means no panel", "[ui][build]") {
     // empty".
     CHECK(layout.empty());
     CHECK_FALSE(buildOptionAt(layout, 0, 20.0f, 500.0f).has_value());
+}
+
+TEST_CASE("a palette too narrow for one cell is absent", "[ui][build][viewport]") {
+    rm::ui::FrameLayout frame = aFrame();
+    frame.build.width = 20.0f;
+    const auto layout = buildPanelLayout(frame, 6);
+
+    CHECK(layout.empty());
+    CHECK(layout.cellWidth >= 0.0f);
+    CHECK_FALSE(rm::ui::insideBuildPanel(layout, frame.build.x, frame.build.y));
+}
+
+TEST_CASE("a constrained palette reduces columns before narrowing cells", "[ui][build]") {
+    rm::ui::FrameLayout frame = aFrame();
+    frame.build.width = 156.0f;
+    const auto layout = buildPanelLayout(frame, 6);
+
+    CHECK(layout.columns == 2);
+    CHECK(layout.cellWidth >= rm::ui::kBuildCellHeight);
+    CHECK(layout.shown == 4);
+    CHECK(layout.pages == 2);
 }
 
 TEST_CASE("the grid is two rows of the frame's own column count", "[ui][build]") {
@@ -112,6 +133,19 @@ TEST_CASE("every cell hit-tests back to its own index", "[ui][build]") {
         REQUIRE(hit.has_value());
         CHECK(*hit == index);
     }
+}
+
+TEST_CASE("a logical click round-trips through a scaled HUD cell", "[ui][viewport][build]") {
+    constexpr std::size_t kCount = 8;
+    const rm::ui::UiViewport viewport =
+        rm::ui::UiViewport::full(2560.0f, 1440.0f, 2.0f);
+    const auto layout = buildPanelLayout(rm::ui::frameLayout(viewport), kCount);
+    const auto origin = buildCellOrigin(layout, 3);
+    const std::array<float, 2> logical = viewport.toLogical(
+        {origin[0] + layout.cellWidth * 0.5f, origin[1] + layout.cellHeight * 0.5f});
+    const std::array<float, 2> hud = viewport.toHud(logical);
+
+    CHECK(buildOptionAt(layout, kCount, hud[0], hud[1]) == std::optional<std::size_t>{3});
 }
 
 TEST_CASE("the gutter between cells is a miss, not the nearest neighbour", "[ui][build]") {

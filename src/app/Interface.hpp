@@ -114,7 +114,7 @@ void gatherRoster(const UnitScene& scene, std::span<const rm::sim::UnitId> selec
                   std::vector<rm::ui::RosterTile>& out);
 
 void appendViewFootprint(std::vector<std::array<float, 2>>& out, const rm::OrbitCamera& camera,
-                         const rm::HeightField& field, float width, float height);
+                         const rm::HeightField& field, const rm::ui::UiViewport& viewport);
 
 [[nodiscard]] rm::ui::MatchState hudStateFrom(const UnitScene& scene, float elapsedSeconds);
 
@@ -153,8 +153,8 @@ void buildStrategicIconRefs(const UnitScene& scene, std::size_t base,
 /// `appendSceneIcons`' squares, which is the honest fallback for the 18 nameless blueprints
 /// and every BAR unit.
 void appendStrategicIcons(rm::ui::Geometry& out, const UnitScene& scene,
-                           const rm::OrbitCamera& camera, float width, float height,
-                           std::span<const std::optional<StrategicIconRef>> refs);
+                          const rm::OrbitCamera& camera, const rm::ui::UiViewport& viewport,
+                          std::span<const std::optional<StrategicIconRef>> refs);
 
 /// Whether a row in `scene.building` is work still going on, and how far along it is.
 ///
@@ -199,8 +199,8 @@ void appendConstructionEffects(std::vector<rm::DecalVertex>& decals,
 /// Anonymous world-space crosses at radar/sonar-reported positions. They deliberately use
 /// only `Contact::x/z`: no type, owner, health, or true position crosses the fog boundary.
 void appendContactBlips(rm::ui::Geometry& out, const UnitScene& scene,
-                        const rm::OrbitCamera& camera, const rm::HeightField& field,
-                        const rm::text::Font& font, float width, float height);
+                         const rm::OrbitCamera& camera, const rm::HeightField& field,
+                         const rm::text::Font& font, const rm::ui::UiViewport& viewport);
 
 /// `refs`, when given, names the types the strategic layer already drew — their units are
 /// skipped here rather than drawn twice, once as artwork and once as a square.
@@ -213,14 +213,14 @@ void appendSceneIcons(std::vector<rm::Particle>& into, const UnitScene& scene,
 ///
 /// Both gates are the design. A full-health bar is noise repeated per unit — the absence of
 /// a bar is what "fine" looks like, and then a bar appearing IS the signal. And below icon
-/// zoom a three-pixel bar floats over a two-pixel unit, so the bar keeps to the range where
+/// zoom a three-point bar floats over a two-point unit, so the bar keeps to the range where
 /// the unit it belongs to is legible; at height, the fight reads through the icons.
 ///
 /// Screen-space quads into the HUD's own geometry — the same worldToScreen the band select
 /// uses, drawn by the pipeline every panel already rides.
 void appendHealthBars(rm::ui::Geometry& out, const UnitScene& scene,
-                      const rm::OrbitCamera& camera, const rm::text::Font& font, float width,
-                      float height);
+                      const rm::OrbitCamera& camera, const rm::text::Font& font,
+                      const rm::ui::UiViewport& viewport);
 
 [[nodiscard]] std::optional<rm::sim::UnitId> pickAnyBatch(const rm::Ray& ray,
                                                           const UnitScene& scene);

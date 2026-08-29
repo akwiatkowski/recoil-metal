@@ -483,22 +483,6 @@ void Renderer::beginFrame() noexcept {
     decalVertexCount_ = 0;
 }
 
-
-
-
-// The point size the font atlas is rasterised at.
-//
-// Baked once and drawn at scale 1, because a glyph resampled up is soft and this is a HUD
-// rather than a title: crispness is the whole requirement. Eighteen points is comfortably
-// readable on a Retina display without the atlas needing a second row.
-
-
-
-
-
-
-
-
 MTL::Texture* Renderer::uploadTexture(const dds::Texture& texture, const char* what) {
     // DXT1/3/5 map one-to-one onto BC1/BC2/BC3, and BGRA8 onto BGRA8Unorm — all
     // natively sampleable here, so the payload goes up untouched exactly like
@@ -1456,12 +1440,12 @@ void Renderer::encodeScene(MTL::CommandBuffer* commandBuffer, MTL::RenderPassDes
         encoder->setRenderPipelineState(textPipeline_);
         encoder->setFragmentSamplerState(fontSampler_, NS::UInteger{0});
 
-        // The viewport in POINTS, which is the space the vertices are in — the shader needs
-        // it to turn pixels into clip space and it is the only thing here that knows the
-        // window's size.
+        // The authored HUD viewport, which is the space the vertices are in. An unset viewport
+        // falls back to target pixels for renderer callers that submit unscaled geometry.
+        const ui::Extent hudExtent = uiViewport_.hudExtent();
         const simd_float2 viewport{
-            hudViewportPoints_[0] > 0.0f ? hudViewportPoints_[0] : static_cast<float>(width),
-            hudViewportPoints_[1] > 0.0f ? hudViewportPoints_[1] : static_cast<float>(height)};
+            hudExtent.width > 0.0f ? hudExtent.width : static_cast<float>(width),
+            hudExtent.height > 0.0f ? hudExtent.height : static_cast<float>(height)};
         encoder->setVertexBytes(&viewport, sizeof(viewport), kUniformBufferIndex);
 
         const std::size_t slotBase = instanceSlot_ * text::kMaxTextVertices;

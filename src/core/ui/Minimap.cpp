@@ -40,8 +40,8 @@ struct Fit {
 
 } // namespace
 
-MinimapLayout minimapLayout(float viewportWidth, float viewportHeight) noexcept {
-    const Rect rect = frameLayout(viewportWidth, viewportHeight).minimap;
+MinimapLayout minimapLayout(const FrameLayout& frame) noexcept {
+    const Rect rect = frame.minimap;
     return MinimapLayout{
         .x = rect.x,
         .y = rect.y,
@@ -68,7 +68,7 @@ std::array<float, 2> minimapToWorld(const MinimapLayout& layout, float mapWidthE
     const float x = (pointX - fit.innerX - fit.offsetX) / fit.scale;
     const float z = (pointY - fit.innerY - fit.offsetY) / fit.scale;
 
-    // CLAMPED to the map. A click a pixel off the edge of a letterboxed map obviously means the
+    // CLAMPED to the map. A click one authored point off a letterboxed map obviously means the
     // edge, and an unclamped answer would send the camera off the world — where `pickGround`
     // finds nothing and the view appears to freeze.
     return {std::clamp(x, 0.0f, std::max(0.0f, mapWidthElmos)),

@@ -49,9 +49,9 @@ fragment float4 decalFragment(DecalOut in [[stage_in]]) {
 }
 
 // --- Text --------------------------------------------------------------------
-// The HUD. Positions arrive in PIXELS from the window's top-left and are turned into clip
-// space here, so a caller places text where it means to and nothing downstream has to know
-// the window's size but this.
+// The HUD. Positions arrive in authored HUD points from the viewport's top-left and are turned
+// into clip space here, so a caller places text where it means to and nothing downstream has
+// to know the viewport's size but this.
 //
 // The atlas is single-channel COVERAGE, not colour: the glyph decides how much of the
 // vertex's colour lands, which is what lets one grey atlas draw white text, red text and a
@@ -74,9 +74,9 @@ vertex TextOut textVertex(uint vid [[vertex_id]],
                           constant float2& viewport [[buffer(1)]]) {
     const TextVertexIn v = vertices[vid];
 
-    // Pixels to clip space. Y is flipped because a window's origin is top-left and clip
-    // space's is centre-up; getting that backwards renders the HUD upside down at the bottom
-    // of the screen, which looks like a layout bug rather than a sign error.
+    // Authored HUD points to clip space. Y is flipped because a window's origin is top-left and
+    // clip space's is centre-up; getting that backwards renders the HUD upside down at the
+    // bottom of the screen, which looks like a layout bug rather than a sign error.
     const float2 ndc = float2(v.position.x / max(viewport.x, 1.0) * 2.0 - 1.0,
                               1.0 - v.position.y / max(viewport.y, 1.0) * 2.0);
 

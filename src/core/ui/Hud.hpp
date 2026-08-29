@@ -3,6 +3,7 @@
 #include "core/sim/Army.hpp"
 #include "core/text/TextLayout.hpp"
 #include "core/ui/IconAtlas.hpp"
+#include "core/ui/Viewport.hpp"
 
 #include <array>
 #include <cstddef>
@@ -65,7 +66,7 @@ inline constexpr Colour kInk{{0.780f, 0.839f, 0.863f, 1.0f}};     ///< #C7D6DC r
 /// panel's fill and bevel for the game's art while text and bars ride on top unchanged.
 struct PanelSkin {
     bool active = false;
-    /// ul, um, ur, l, m, r, ll, lm, lr — atlas UVs and each piece's native size in points.
+    /// ul, um, ur, l, m, r, ll, lm, lr — atlas UVs and native size in authored HUD points.
     std::array<IconUv, 9> uv{};
     std::array<std::array<float, 2>, 9> size{};
 };
@@ -127,23 +128,9 @@ inline constexpr bool kShowCostOnCell = false;
 inline constexpr bool kShowBlueprintIds = false;
 
 inline constexpr float kUnit = 6.0f;         ///< the grid everything snaps to
-inline constexpr float kMargin = kUnit * 2;  ///< panel to screen edge
+inline constexpr float kMargin = kUnit * 2;  ///< panel to safe-content edge
 inline constexpr float kPad = kUnit * 1.5f;  ///< panel edge to its contents
 inline constexpr float kBevel = 1.0f;        ///< the hairline that catches the light
-
-/// One module rectangle in the HUD's top-left-origin logical-point space.
-struct Rect {
-    float x = 0.0f;
-    float y = 0.0f;
-    float width = 0.0f;
-    float height = 0.0f;
-
-    [[nodiscard]] float right() const noexcept { return x + width; }
-    [[nodiscard]] float bottom() const noexcept { return y + height; }
-    [[nodiscard]] bool contains(float pointX, float pointY) const noexcept {
-        return pointX >= x && pointX < right() && pointY >= y && pointY < bottom();
-    }
-};
 
 enum class HudProfile : std::uint8_t { Compact, Standard, Wide };
 
@@ -151,6 +138,8 @@ enum class HudProfile : std::uint8_t { Compact, Standard, Wide };
 /// outer rectangle so drawing, hover, clicks and drag exclusion cannot derive different HUDs.
 struct FrameLayout {
     HudProfile profile = HudProfile::Compact;
+    Rect viewport;
+    Rect safeContent;
     Rect economy;
     Rect match;
     Rect minimap;
@@ -162,48 +151,17 @@ struct FrameLayout {
     std::size_t rosterSlots = 5;
 };
 
-/// Selects Compact (1280x720), Standard (1600x900), or Wide (2240x1000) from logical points.
-///
-/// TAKES THE HUD'S OWN SPACE, not the window's. See `hudScale`: the interface is laid out in a
-/// design space that the renderer magnifies, so a caller passes `width / scale`.
-[[nodiscard]] FrameLayout frameLayout(float viewportWidth, float viewportHeight) noexcept;
+/// Selects Compact (1280x720), Standard (1600x900), or Wide (2240x1000) from the viewport's
+/// safe HUD space. Fixed modules anchor inside the safe rectangle; world overlays continue to
+/// project through the full viewport.
+[[nodiscard]] FrameLayout frameLayout(const UiViewport& viewport) noexcept;
 
-/// The interface's design resolution, in points. Everything in this header is authored against
-/// it, and `hudScale` is how far a real viewport is from it.
-inline constexpr float kHudDesignWidth = 1280.0f;
-inline constexpr float kHudDesignHeight = 720.0f;
-
-/// How far the interface may be magnified before it stops being an interface and starts being
-/// furniture. Two and a half is a 3200x1800 window drawn as though it were 1280x720.
-inline constexpr float kMinHudScale = 1.0f;
-inline constexpr float kMaxHudScale = 2.5f;
-
-/// The bounds a player's own preference may reach, either way from the automatic figure.
-inline constexpr float kMinUserHudScale = 0.5f;
-inline constexpr float kMaxUserHudScale = 3.0f;
-
-/// How much bigger than its design size to draw the interface, from the viewport in LOGICAL
-/// POINTS and the player's own preference.
-///
-/// WHY THIS EXISTS, and it is the correction of a real backwards behaviour. The frame used to
-/// pick one of three fixed profiles and spend a bigger window on MORE COLUMNS: nine cells in
-/// 528 points at 1280 wide, sixteen in 893 at 2240. The cell went from 54 points across to 52.
-/// Every metric in this header is a constant in points, so enlarging the window made the
-/// interface physically smaller relative to the screen and never larger — the opposite of what
-/// a bigger display is for. On a HiDPI panel it was worse again: logical points there are dense,
-/// the viewport measures under 1600x900, and the smallest profile is what a 2.7K screen got.
-///
-/// The fix is to magnify rather than subdivide. Layout happens in the design space above and
-/// the renderer scales the result, so the same nine columns simply get bigger. The fit is taken
-/// on the LIMITING axis so a short ultrawide does not magnify itself off its own bottom edge.
-[[nodiscard]] float hudScale(float viewportWidth, float viewportHeight,
-                             float userScale = 1.0f) noexcept;
-
-/// The drop shadow's offset, in pixels — toward the implied light's opposite corner, so a
-/// panel sits ON the world rather than in it. Three: enough to separate, not enough to float.
+/// The drop shadow's offset, in authored HUD points — toward the implied light's opposite
+/// corner, so a panel sits ON the world rather than in it. Three: enough to separate, not
+/// enough to float.
 inline constexpr float kShadow = 3.0f;
 
-/// How far the corner brackets run along each edge of a panel, in pixels.
+/// How far the corner brackets run along each edge of a panel, in authored HUD points.
 ///
 /// The one ornamental gesture, and it is doing structural work: brackets at the corners say
 /// where a panel's bounds are without a full border, which keeps the frame from competing
@@ -377,8 +335,7 @@ void appendInspector(Geometry& out, const text::Font& labelFont,
 /// unusable degrades that part to nothing rather than failing, so a missing font costs the
 /// labels and keeps the numbers.
 void build(Geometry& out, const text::Font& labelFont, const text::Font& readoutFont,
-           const Theme& theme, const MatchState& state, float viewportWidth,
-           float viewportHeight);
+           const Theme& theme, const MatchState& state, const FrameLayout& frame);
 
 /// Formats a resource figure the way the panel shows it: thousands as `12.4k`, below that a
 /// plain integer.

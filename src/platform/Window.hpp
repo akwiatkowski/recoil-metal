@@ -30,8 +30,9 @@ enum class MouseButton { Left, Right };
 // the usual "add to selection" modifiers; Control is treated the same as
 // Command for selection purposes.
 struct MouseModifiers {
-    /// WHERE the click landed, in logical POINTS, top-left origin — the HUD layout space,
-    /// which is to say the space `width()` and `height()` report.
+    /// WHERE the click landed, in AppKit logical points with a top-left origin — the space
+    /// `width()` and `height()` report. `UiViewport::toHud` performs the explicit layout-space
+    /// conversion beside the hit test that needs it.
     ///
     /// HERE RATHER THAN AS A THIRD `onClick` PARAMETER because it belongs to the same question:
     /// a callback is handed a ray for the world and this for the screen, and a caller that wants
@@ -39,12 +40,11 @@ struct MouseModifiers {
     /// was on the panel before it decides what the click meant — a ray alone cannot say, since
     /// the panel is in front of the world rather than in it.
     ///
-    /// Points keep one interface physically stable across 1x and 2x displays. Backing conversion
-    /// belongs at the renderer boundary rather than in every layout and hit test.
+    /// Backing pixels never enter input. The renderer derives drawable size and font atlas
+    /// raster scale separately.
     ///
-    /// The ray keeps POINTS, which is what `screenRay` wants — it divides by the view's bounds
-    /// and the two must be in one space. That the two spaces differ is exactly why this is
-    /// stated at both fields rather than assumed.
+    /// The accompanying ray was derived from this same logical point and the view's logical
+    /// bounds; after that conversion it contains a world-space origin and direction.
     float pointX = 0.0f;
     float pointY = 0.0f;
 
@@ -147,8 +147,8 @@ public:
     // held key with no release event cannot express "let go".
     void onKeyState(std::function<void(char key, bool pressed)> callback);
 
-    /// Whether the left button is down right now, and where its press began, in the HUD's
-    /// point space. POLLED, like the cursor and for the same reason: a drag is a per-frame
+    /// Whether the left button is down right now, and where its press began, in AppKit logical
+    /// points. POLLED, like the cursor and for the same reason: a drag is a per-frame
     /// fact, and the interface is rebuilt per frame. The origin is only meaningful while
     /// the button is held; the band-select rectangle and the minimap's drag-to-pan are both
     /// derived from these two answers and the cursor, with no drag events plumbed at all.
@@ -167,7 +167,7 @@ public:
     [[nodiscard]] bool keyHeld(char key) const;
 
     /// Where the cursor is right now, in `MouseModifiers::pointX`'s space — logical points,
-    /// top-left origin, so it can be handed straight to a HUD hit test.
+    /// top-left origin. `UiViewport::toHud` converts it before a HUD hit test.
     ///
     /// A POLL RATHER THAN AN `onMouseMove` CALLBACK, for `keyHeld`'s reason and one more of its
     /// own. A callback would need a tracking area and would then cache a value that only the
@@ -176,8 +176,8 @@ public:
     /// the cadence the answer is used at.
     ///
     /// The cursor may be OUTSIDE the window, in which case the coordinates fall outside the
-    /// drawable and every hit test misses — which is the correct answer, and the reason this
-    /// does not need to be an optional.
+    /// AppKit content view and every hit test misses — which is the correct answer, and the
+    /// reason this does not need to be an optional.
     [[nodiscard]] std::array<float, 2> cursor() const;
 
     /// The planar reflection quality setting. See Renderer::setReflections.
@@ -196,39 +196,19 @@ public:
     void setStratumNormals(bool enabled);
     [[nodiscard]] bool stratumNormalsEnabled() const;
 
-    /// The content view's size in logical points. World rendering obtains backing pixels from
-    /// its drawable; HUD layout and input must not inherit that scale.
+    /// The content view's size in logical points. World rendering obtains drawable pixels from
+    /// its Metal view; HUD layout and input must not inherit that scale.
     [[nodiscard]] unsigned int width() const;
     [[nodiscard]] unsigned int height() const;
-
-    // --- The HUD's own space ------------------------------------------------------------
-    //
-    // THE INTERFACE IS LAID OUT SMALL AND DRAWN BIG. `ui::hudScale` says by how much, the
-    // renderer's HUD projection does the magnifying, and everything below is that space: a
-    // 2560x1440 window lays the interface out as though it were 1280x720 and draws it at twice
-    // the size, rather than filling the extra room with more, smaller controls.
-    //
-    // KEPT SEPARATE FROM `width`/`height` ON PURPOSE. The two spaces coincided until now and a
-    // single accessor would have been used for both; picking is done against the real viewport
-    // and hit-testing against this one, and quietly using either for both puts the cursor in
-    // the wrong place by exactly the scale factor.
 
     /// What the player asked for, on top of the automatic figure. 1 is automatic alone.
     void setUserHudScale(float scale);
     [[nodiscard]] float userHudScale() const noexcept;
 
-    /// The magnification in force: automatic, times the player's preference.
-    [[nodiscard]] float hudScale() const;
-
-    /// The viewport the interface lays itself out in — `width()` and `height()` over the scale.
-    [[nodiscard]] float hudWidth() const;
-    [[nodiscard]] float hudHeight() const;
-
-    /// `cursor()` in that space, ready for a hit test.
-    [[nodiscard]] std::array<float, 2> hudCursor() const;
-
-    /// Where the left button went down, in that space. See `dragOrigin`.
-    [[nodiscard]] std::array<float, 2> hudDragOrigin() const;
+    /// AppKit points, display backing scale, safe content, and every HUD-space conversion.
+    /// The renderer is synchronised before this value reaches frame code, so obtaining fonts
+    /// after this call cannot observe an atlas for another display scale.
+    [[nodiscard]] ui::UiViewport uiViewport() const;
 
     /// The two faces the interface is set in. See Renderer::labelFont.
     [[nodiscard]] text::Font labelFont() const;
@@ -240,7 +220,7 @@ public:
     /// The map's wave-normal texture. See Renderer::setWaterWaveTexture.
     void setWaterWaveTexture(const dds::Texture& normal);
 
-    /// Where to draw it this frame, in pixels. See Renderer::setMinimapRect.
+    /// Where to draw it this frame, in authored HUD points. See Renderer::setMinimapRect.
     void setMinimapRect(float x, float y, float width, float height) noexcept;
 
     /// This frame's interface, plus the world's strategic icons. See Renderer::setHud.

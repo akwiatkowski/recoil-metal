@@ -30,16 +30,16 @@ namespace rm::ui {
 // this file's, and the panel stops filling its own interior so the picture shows through it.
 //
 // The renderer puts its existing R8 vision mask over the preview, so terrain and minimap share
-// one fog answer. Drag is still absent; click to jump is the interaction that pays immediately.
+// one fog answer. Click and drag both pan the camera through the same inverse projection.
 
-/// Where the minimap sits, in points.
+/// Where the minimap sits, in authored HUD points.
 ///
 /// SQUARE, whatever the map's aspect ratio is, and the projection letterboxes inside it. A panel
 /// that changed shape per map would move every other HUD element around it, and both games this
 /// engine reads content from keep the minimap a fixed frame.
 struct MinimapLayout {
-    float x = 0.0f;       ///< left edge, points from the viewport's left
-    float y = 0.0f;       ///< top edge, points from the viewport's top
+    float x = 0.0f;       ///< left edge, authored points from the viewport's left
+    float y = 0.0f;       ///< top edge, authored points from the viewport's top
     float size = 0.0f;    ///< width and height
     float inset = 0.0f;   ///< the border between the panel and the projected map
 };
@@ -48,9 +48,9 @@ struct MinimapLayout {
 ///
 /// BOTTOM-LEFT because the resource panel is top-left and the clock top-right (`Hud.cpp`), and
 /// because that is where Supreme Commander puts it — the interface this one is modelled on
-/// (ADR-028). Sized as a fraction of the SHORTER side, so it stays the same physical size on a
-/// wide monitor rather than growing with the width.
-[[nodiscard]] MinimapLayout minimapLayout(float viewportWidth, float viewportHeight) noexcept;
+/// (ADR-028). Its profile chooses a stable authored size, constrained only when safe content is
+/// smaller, so a wide monitor does not stretch it.
+[[nodiscard]] MinimapLayout minimapLayout(const FrameLayout& frame) noexcept;
 
 /// A world position in elmos, projected into the minimap panel.
 ///
@@ -70,12 +70,12 @@ struct MinimapLayout {
 /// a screenshot: everything looks plausible.
 ///
 /// A point outside the projected area still returns a world position; it is clamped to the map,
-/// because a click one pixel off the edge of a letterboxed map obviously means the edge.
+/// because a click one authored point off a letterboxed map obviously means the edge.
 [[nodiscard]] std::array<float, 2> minimapToWorld(const MinimapLayout& layout,
                                                  float mapWidthElmos, float mapDepthElmos,
                                                  float pointX, float pointY) noexcept;
 
-/// Whether a screen point is on the panel at all.
+/// Whether an authored HUD point is on the panel at all.
 [[nodiscard]] bool insideMinimap(const MinimapLayout& layout, float pointX,
                                 float pointY) noexcept;
 
@@ -85,7 +85,7 @@ struct MinimapPip {
     float worldZ = 0.0f;
     Colour colour{};
 
-    /// Points across. Bigger for a commander than for a tank — a minimap's job is to say
+    /// Authored HUD points across. Bigger for a commander than for a tank — the map's job is to say
     /// where the important things are, and every pip the same size says only "units".
     float size = 2.0f;
 };

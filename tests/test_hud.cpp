@@ -38,6 +38,10 @@ namespace {
         .glyphs = glyphs, .lineHeight = 18.0f, .solidUv = {0.5f, 0.5f, 0.6f, 0.6f}};
 }
 
+[[nodiscard]] rm::ui::FrameLayout frameAt(float width, float height) {
+    return rm::ui::frameLayout(rm::ui::UiViewport::authored(width, height));
+}
+
 /// How far apart two colours are, ignoring alpha. Used to assert that a livery and a fixed
 /// colour are TELLABLE APART, which is a stronger claim than being unequal.
 [[nodiscard]] float distance(rm::ui::Colour a, rm::ui::Colour b) {
@@ -63,7 +67,7 @@ TEST_CASE("a gauge's fill clamps, and no capacity reads as empty") {
 }
 
 TEST_CASE("the responsive frame selects the largest profile that fits") {
-    const rm::ui::FrameLayout compact = rm::ui::frameLayout(1280.0f, 720.0f);
+    const rm::ui::FrameLayout compact = frameAt(1280.0f, 720.0f);
     CHECK(compact.profile == rm::ui::HudProfile::Compact);
     CHECK(compact.minimap.width == 176.0f);
     CHECK(compact.minimap.height == 176.0f);
@@ -72,20 +76,20 @@ TEST_CASE("the responsive frame selects the largest profile that fits") {
     CHECK(compact.buildColumns == 6);
     CHECK(compact.rosterSlots == 5);
 
-    const rm::ui::FrameLayout standard = rm::ui::frameLayout(1600.0f, 900.0f);
+    const rm::ui::FrameLayout standard = frameAt(1600.0f, 900.0f);
     CHECK(standard.profile == rm::ui::HudProfile::Standard);
     CHECK(standard.minimap.width == 216.0f);
     CHECK(standard.buildColumns == 7);
     CHECK(standard.rosterSlots == 8);
 
-    const rm::ui::FrameLayout wide = rm::ui::frameLayout(2240.0f, 1000.0f);
+    const rm::ui::FrameLayout wide = frameAt(2240.0f, 1000.0f);
     CHECK(wide.profile == rm::ui::HudProfile::Wide);
     CHECK(wide.minimap.width == 256.0f);
     CHECK(wide.buildColumns == 9);
     CHECK(wide.rosterSlots == 12);
 
     // Width alone is not enough: a low-height ultrawide uses the lower vertical metrics.
-    CHECK(rm::ui::frameLayout(2400.0f, 900.0f).profile == rm::ui::HudProfile::Standard);
+    CHECK(frameAt(2400.0f, 900.0f).profile == rm::ui::HudProfile::Standard);
 
     // A WIDER PROFILE NEVER MEANS A NARROWER CELL, which is the trap the column counts fell
     // into: nine cells in 528 points and sixteen in 893 made the button SHRINK as the panel
@@ -119,23 +123,30 @@ TEST_CASE("the interface grows with the viewport instead of subdividing it") {
         previous = scale;
     }
 
-    // BELOW THE DESIGN SIZE IT DOES NOT SHRINK. Halving a 1280-point layout would make the
-    // readouts unreadable rather than merely cramped; a small window loses battlefield instead,
-    // which is the trade a small window is already making.
-    CHECK(rm::ui::hudScale(800.0f, 600.0f) == Approx(1.0f));
+    // A headless output may be smaller than the window's enforced minimum. It scales the whole
+    // authored frame down rather than clipping or overlapping Compact.
+    CHECK(rm::ui::hudScale(800.0f, 600.0f) == Approx(0.625f));
 
     // THE LIMITING AXIS DECIDES. A 3440x1440 ultrawide has the width for 2.68x and the height
     // for 2.0, and magnifying by the width would push the bottom deck off its own screen.
     CHECK(rm::ui::hudScale(3440.0f, 1440.0f) == Approx(2.0f));
 
     // Capped, or a 5K panel gets a build tray the size of a paperback.
-    CHECK(rm::ui::hudScale(5120.0f, 2880.0f) == Approx(rm::ui::kMaxHudScale));
+    CHECK(rm::ui::hudScale(5120.0f, 2880.0f)
+          == Approx(rm::ui::kMaxAutomaticHudScale));
 
-    // The player's own preference multiplies the automatic figure, and is itself bounded — a
-    // scale of zero would divide the whole interface into a single point.
-    CHECK(rm::ui::hudScale(1280.0f, 720.0f, 1.5f) == Approx(1.5f));
-    CHECK(rm::ui::hudScale(1280.0f, 720.0f, 99.0f) == Approx(rm::ui::kMaxUserHudScale));
+    // The player's preference multiplies the automatic figure, but not past the room available
+    // for Compact. At the minimum supported viewport there is no spare room; a 5K viewport has
+    // room above the automatic cap. The preference itself remains bounded.
+    CHECK(rm::ui::hudScale(1280.0f, 720.0f, 1.5f) == Approx(1.0f));
+    CHECK(rm::ui::hudScale(5120.0f, 2880.0f, 1.5f) == Approx(3.75f));
+    CHECK(rm::ui::hudScale(10000.0f, 5625.0f, 99.0f)
+          == Approx(rm::ui::kMaxAutomaticHudScale * rm::ui::kMaxUserHudScale));
     CHECK(rm::ui::hudScale(1280.0f, 720.0f, 0.01f) == Approx(rm::ui::kMinUserHudScale));
+
+    // Captures may be smaller than the window's enforced 1280x720 minimum. There the HUD scales
+    // down to preserve its authored extent, and a large preference cannot collapse it further.
+    CHECK(rm::ui::hudScale(640.0f, 360.0f, 3.0f) == Approx(0.5f));
 
     // A viewport of nothing still answers, because a window can be zero-sized mid-resize and a
     // division by it would take the layout with it.
@@ -146,9 +157,9 @@ TEST_CASE("a magnified interface lays out in design space, not the window's") {
     // The frame is fed `width / scale`, so the SAME layout serves every viewport and the
     // renderer does the enlarging. What that buys is the cell count staying put: six columns at
     // 1280 and six columns at 2560, each twice the size.
-    const float scale = rm::ui::hudScale(2560.0f, 1440.0f);
-    const rm::ui::FrameLayout big = rm::ui::frameLayout(2560.0f / scale, 1440.0f / scale);
-    const rm::ui::FrameLayout small = rm::ui::frameLayout(1280.0f, 720.0f);
+    const rm::ui::FrameLayout big =
+        rm::ui::frameLayout(rm::ui::UiViewport::full(2560.0f, 1440.0f));
+    const rm::ui::FrameLayout small = frameAt(1280.0f, 720.0f);
     CHECK(big.buildColumns == small.buildColumns);
     CHECK(big.build.width == small.build.width);
     CHECK(big.minimap.width == small.minimap.width);
@@ -158,7 +169,7 @@ TEST_CASE("responsive frame modules stay anchored and do not overlap") {
     for (const std::array<float, 2> viewport :
          {std::array{1280.0f, 720.0f}, std::array{1600.0f, 900.0f},
           std::array{2240.0f, 1000.0f}, std::array{2560.0f, 1080.0f}}) {
-        const rm::ui::FrameLayout frame = rm::ui::frameLayout(viewport[0], viewport[1]);
+        const rm::ui::FrameLayout frame = frameAt(viewport[0], viewport[1]);
         CHECK(frame.economy.x == rm::ui::kMargin);
         CHECK(frame.economy.y == rm::ui::kMargin);
         CHECK(frame.match.right() == viewport[0] - rm::ui::kMargin);
@@ -170,6 +181,55 @@ TEST_CASE("responsive frame modules stay anchored and do not overlap") {
         CHECK(frame.build.right() <= frame.commands.x);
         CHECK(frame.battlefield.bottom() <= frame.minimap.y);
     }
+}
+
+TEST_CASE("responsive frame anchors inside safe content") {
+    const rm::ui::UiViewport viewport = rm::ui::UiViewport::withSafeContent(
+        1280.0f, 720.0f, 2.0f, {40.0f, 24.0f, 1200.0f, 672.0f});
+    const rm::ui::FrameLayout frame = rm::ui::frameLayout(viewport);
+
+    CHECK(frame.viewport.x == 0.0f);
+    CHECK(frame.viewport.width == 1280.0f);
+    CHECK(frame.safeContent.x == 40.0f);
+    CHECK(frame.safeContent.y == 24.0f);
+    CHECK(frame.economy.x == frame.safeContent.x + rm::ui::kMargin);
+    CHECK(frame.economy.y == frame.safeContent.y + rm::ui::kMargin);
+    CHECK(frame.match.right() == frame.safeContent.right() - rm::ui::kMargin);
+    CHECK(frame.commands.bottom() == frame.safeContent.bottom() - rm::ui::kMargin);
+    CHECK(frame.minimap.right() <= frame.selection.x);
+    CHECK(frame.selection.right() <= frame.build.x);
+    CHECK(frame.build.right() <= frame.commands.x);
+}
+
+TEST_CASE("UI preference cannot magnify Compact into overlapping itself") {
+    const rm::ui::UiViewport viewport =
+        rm::ui::UiViewport::full(1280.0f, 720.0f, 2.0f, 3.0f);
+    const rm::ui::FrameLayout frame = rm::ui::frameLayout(viewport);
+
+    CHECK(viewport.hudScale() == 1.0f);
+    CHECK(frame.selection.right() <= frame.build.x);
+    CHECK(frame.build.right() <= frame.commands.x);
+}
+
+TEST_CASE("undersized output scales Compact down instead of overlapping it") {
+    const rm::ui::UiViewport viewport = rm::ui::UiViewport::full(640.0f, 360.0f, 1.0f, 3.0f);
+    const rm::ui::FrameLayout frame = rm::ui::frameLayout(viewport);
+
+    CHECK(viewport.hudExtent().width == 1280.0f);
+    CHECK(viewport.hudExtent().height == 720.0f);
+    CHECK(viewport.fontRasterScale() == 1.0f);
+    CHECK(viewport.toDrawable({1280.0f, 720.0f}) == std::array{640.0f, 360.0f});
+    CHECK(frame.minimap.right() <= frame.selection.x);
+    CHECK(frame.selection.right() <= frame.build.x);
+    CHECK(frame.build.right() <= frame.commands.x);
+}
+
+TEST_CASE("a constrained authored frame contracts modules without overlap") {
+    const rm::ui::FrameLayout frame = frameAt(640.0f, 480.0f);
+
+    CHECK(frame.minimap.right() <= frame.selection.x);
+    CHECK(frame.selection.right() <= frame.build.x);
+    CHECK(frame.build.right() <= frame.commands.x);
 }
 
 TEST_CASE("a full store that is still earning is wasting, and says so") {
@@ -288,7 +348,7 @@ TEST_CASE("the interface draws something, and the chrome outweighs the numbers")
     state.elapsedSeconds = 40.0f;
 
     rm::ui::Geometry out;
-    rm::ui::build(out, font, font, rm::ui::neutralTheme(), state, 1400.0f, 900.0f);
+    rm::ui::build(out, font, font, rm::ui::neutralTheme(), state, frameAt(1400.0f, 900.0f));
 
     // Both faces contribute: the chrome and labels in one list, the numbers in the other.
     CHECK_FALSE(out.label.empty());
@@ -313,7 +373,8 @@ TEST_CASE("the banner appears only when the match is over") {
     running.armiesTotal = 8;
 
     rm::ui::Geometry mid;
-    rm::ui::build(mid, font, font, rm::ui::neutralTheme(), running, 1400.0f, 900.0f);
+    rm::ui::build(mid, font, font, rm::ui::neutralTheme(), running,
+                  frameAt(1400.0f, 900.0f));
 
     MatchState won = running;
     won.armiesLeft = 1;
@@ -321,7 +382,8 @@ TEST_CASE("the banner appears only when the match is over") {
     won.winningTeam = 6;
 
     rm::ui::Geometry over;
-    rm::ui::build(over, font, font, rm::ui::neutralTheme(), won, 1400.0f, 900.0f);
+    rm::ui::build(over, font, font, rm::ui::neutralTheme(), won,
+                  frameAt(1400.0f, 900.0f));
 
     // The banner is the largest thing the interface ever draws, so it is unmistakable in the
     // vertex count. A draw and a win both produce one; a running match produces none.
@@ -331,7 +393,8 @@ TEST_CASE("the banner appears only when the match is over") {
     drawn.armiesLeft = 0;
     drawn.outcome = MatchState::Outcome::Draw;
     rm::ui::Geometry drawnOut;
-    rm::ui::build(drawnOut, font, font, rm::ui::neutralTheme(), drawn, 1400.0f, 900.0f);
+    rm::ui::build(drawnOut, font, font, rm::ui::neutralTheme(), drawn,
+                  frameAt(1400.0f, 900.0f));
     CHECK(drawnOut.label.size() > mid.label.size());
 }
 
@@ -346,8 +409,10 @@ TEST_CASE("a stall adds a line, and no stall does not") {
 
     rm::ui::Geometry a;
     rm::ui::Geometry b;
-    rm::ui::build(a, font, font, rm::ui::neutralTheme(), funded, 1400.0f, 900.0f);
-    rm::ui::build(b, font, font, rm::ui::neutralTheme(), stalling, 1400.0f, 900.0f);
+    rm::ui::build(a, font, font, rm::ui::neutralTheme(), funded,
+                  frameAt(1400.0f, 900.0f));
+    rm::ui::build(b, font, font, rm::ui::neutralTheme(), stalling,
+                  frameAt(1400.0f, 900.0f));
 
     // A line that always reads 100% is one a player stops seeing, and then misses at 40%.
     CHECK(b.label.size() > a.label.size());
@@ -365,16 +430,19 @@ TEST_CASE("a missing face costs its own text and nothing else") {
     state.armiesLeft = 2;
 
     rm::ui::Geometry noLabels;
-    rm::ui::build(noLabels, missing, good, rm::ui::neutralTheme(), state, 1400.0f, 900.0f);
+    rm::ui::build(noLabels, missing, good, rm::ui::neutralTheme(), state,
+                  frameAt(1400.0f, 900.0f));
     CHECK_FALSE(noLabels.empty());  // the readouts, and chrome drawn with the readout atlas
 
     rm::ui::Geometry noReadouts;
-    rm::ui::build(noReadouts, good, missing, rm::ui::neutralTheme(), state, 1400.0f, 900.0f);
+    rm::ui::build(noReadouts, good, missing, rm::ui::neutralTheme(), state,
+                  frameAt(1400.0f, 900.0f));
     CHECK_FALSE(noReadouts.label.empty());
     CHECK(noReadouts.readout.empty());
 
     // Neither face: nothing at all, rather than a crash.
     rm::ui::Geometry nothing;
-    rm::ui::build(nothing, missing, missing, rm::ui::neutralTheme(), state, 1400.0f, 900.0f);
+    rm::ui::build(nothing, missing, missing, rm::ui::neutralTheme(), state,
+                  frameAt(1400.0f, 900.0f));
     CHECK(nothing.empty());
 }

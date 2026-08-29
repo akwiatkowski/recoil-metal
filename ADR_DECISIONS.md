@@ -2012,6 +2012,8 @@ refused rather than approximated as surface craft.
 
 ## ADR-051 — The HUD uses logical points; the world uses drawable pixels
 
+**Status.** Superseded by ADR-057 for HUD coordinates and ownership; its world-drawable rule remains.
+
 **Context.** The pixel-space HUD fixed mismatched hit tests but made every module physically half
 as large on a Retina display and made responsive breakpoints depend on backing scale.
 
@@ -2052,6 +2054,9 @@ disagreeing is the signature of a dropped instance, which is the only instrument
 the renderer has no tests.
 
 ## ADR-053 — The interface is laid out small and drawn big
+
+**Status.** Amended by ADR-057: HUD geometry now has its own authored-point space, conversion
+lives in `UiViewport`, and requested magnification is capped by available fit.
 
 **Context.** Every HUD metric is a constant in points, and the responsive frame spent a larger
 viewport on MORE COLUMNS — nine cells across 528 points at 1280 wide, sixteen across 893 at 2240,
@@ -2136,3 +2141,27 @@ discard the particle pipeline's useful translucent/additive representation.
 **Consequences.** Minimap fog now premultiplies its tint, particles share the common pipeline
 builder, and compile-time assertions pin both blend equations. Existing translucent HUD colours
 render brighter because they now contribute exactly once rather than by alpha squared.
+
+## ADR-057 — One viewport value owns every UI coordinate conversion
+
+**Context.** Logical extent, HUD magnification, backing scale, shader viewport, safe content, and
+capture scale were derived through separate APIs. Their formulas agreed, but resize, display-move,
+input, and capture paths could update only part of that contract.
+
+**Decision.** `UiViewport` carries AppKit extent, backing scale, safe content, and the resulting
+HUD magnification. It derives HUD extent, input conversion, drawable extent, and font raster scale.
+Layout anchors fixed modules inside safe content; constrained width contracts the build palette
+and selection bay rather than crossing modules, and the palette reduces columns before cells become
+invalid. World overlays project through the full HUD extent. Window and capture paths pass the same
+value to layout and Renderer before obtaining font views.
+
+**Alternatives considered.** Keeping `hudWidth`, `hudCursor`, `setUiScale`, and `setHudViewport`
+preserves smaller local edits but leaves correctness dependent on callers invoking matching pairs.
+
+**Consequences.** A 1280x720-point 2x window and a 2560x1440-pixel 1x capture derive identical HUD
+geometry and font raster scale; larger same-pixel pairs may differ after the automatic 2.5x cap.
+Mouse events remain in top-left AppKit logical-point space until one explicit conversion, and drag
+thresholds remain in that same logical space. Display scale changes rebuild font atlases without
+changing their authored metrics. Requested user magnification cannot exceed available fit, and an
+undersized capture scales Compact down instead of collapsing its geometry. This consolidates
+ADR-051 and ADR-053's coordinate rules and replaces ADR-053's separate HUD accessors.

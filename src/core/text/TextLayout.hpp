@@ -12,25 +12,23 @@ namespace rm::text {
 //
 // The first interface this engine draws that is not part of the world. Everything so far
 // has been in elmos on the ground — selection rings, order markers, wrecks — and a HUD is
-// not: it is in PIXELS on the window, it does not move when the camera does, and it needs
-// glyphs.
+// not: it is in authored HUD points, it does not move when the camera does, and it needs glyphs.
 //
 // THE SPLIT, which is what keeps this file testable. The glyphs themselves are rasterised
 // by the platform (CoreText into a Metal texture — see Renderer), because that is where the
 // fonts and the GPU are. Where each glyph GOES is arithmetic, so it is here, in core/, with
-// tests. What that buys: a layout bug shows up as a failing assertion rather than as
-// unreadable text in a screenshot, and the two are indistinguishable by eye at eleven
-// pixels.
+// tests. What that buys: a layout bug shows up as a failing assertion rather than as unreadable
+// small text in a screenshot, where arithmetic and rasterization failures look alike.
 
 /// Where one glyph lives in the atlas, and how it sits on the line.
 ///
-/// All in PIXELS at the size the atlas was baked, except the uv rectangle, which is
-/// normalised because that is what a sampler wants.
+/// Metrics are exposed in authored HUD points regardless of the atlas's raster scale. The uv
+/// rectangle is normalised because that is what a sampler wants.
 struct Glyph {
     /// Normalised atlas rectangle: u0, v0, u1, v1.
     std::array<float, 4> uv{};
 
-    /// The glyph's size on screen, in pixels.
+    /// The glyph's size in authored HUD points.
     float width = 0.0f;
     float height = 0.0f;
 
@@ -58,11 +56,11 @@ inline constexpr std::size_t kGlyphCount =
 
 /// One textured, coloured vertex of a glyph quad.
 ///
-/// Position is in PIXELS from the window's top-left, which the shader turns into clip space
-/// — so a caller places text where it means to rather than in a normalised space that
+/// Position is in authored HUD points from the viewport's top-left, which the shader turns into
+/// clip space — so a caller places text where it means to rather than in a normalised space that
 /// changes meaning when the window resizes.
 struct TextVertex {
-    std::array<float, 2> position{};  ///< pixels, top-left origin
+    std::array<float, 2> position{};  ///< authored HUD points, top-left origin
     std::array<float, 2> uv{};
     std::array<float, 4> colour{};  ///< straight rgba
 };
@@ -83,10 +81,10 @@ struct Font {
     [[nodiscard]] bool usable() const noexcept { return !glyphs.empty(); }
 };
 
-/// Appends a solid rectangle, in pixels, using the font's opaque texel.
+/// Appends a solid rectangle, in authored HUD points, using the font's opaque texel.
 ///
-/// Width or height of zero draws nothing rather than a degenerate quad — a one-pixel rule is
-/// a legitimate thing to ask for and a zero-pixel one is a caller's arithmetic showing.
+/// Width or height of zero draws nothing rather than a degenerate quad — a one-point rule is
+/// legitimate and a zero-point one is a caller's arithmetic showing.
 void appendRect(std::vector<TextVertex>& out, const Font& font, float x, float y, float width,
                 float height, std::array<float, 4> colour);
 
@@ -110,7 +108,7 @@ float appendText(std::vector<TextVertex>& out, std::span<const Glyph> glyphs,
                  std::string_view text, float x, float y, std::array<float, 4> colour,
                  float scale = 1.0f);
 
-/// How wide `text` would be, in pixels, without laying it out.
+/// How wide `text` would be, in authored HUD points, without laying it out.
 ///
 /// What right-aligning needs, and what centring needs twice. Measured from the ADVANCES
 /// rather than the widths, so a trailing space counts — which is what makes measuring a

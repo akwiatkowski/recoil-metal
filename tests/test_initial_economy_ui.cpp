@@ -181,7 +181,8 @@ TEST_CASE("a tray cell hit-tests to its option and the click becomes that constr
 
     // The click's first leg: a point in the mex's own cell resolves to the mex's index —
     // the same layout and hit-test the windowed tray uses.
-    const rm::ui::FrameLayout frame = rm::ui::frameLayout(1280.0f, 720.0f);
+    const rm::ui::FrameLayout frame =
+        rm::ui::frameLayout(rm::ui::UiViewport::full(1280.0f, 720.0f));
     const rm::ui::BuildPanelLayout panel =
         rm::ui::buildPanelLayout(frame, fixture->options.size());
     std::size_t mexIndex = 0;

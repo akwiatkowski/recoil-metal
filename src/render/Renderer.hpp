@@ -17,6 +17,7 @@
 #include "core/texture/Dds.hpp"
 #include "core/mesh/ChunkDraws.hpp"
 #include "core/mesh/TerrainMesh.hpp"
+#include "core/ui/Viewport.hpp"
 
 #include <limits>
 #include <mutex>
@@ -374,15 +375,11 @@ public:
     [[nodiscard]] text::Font labelFont() const noexcept;
     [[nodiscard]] text::Font readoutFont() const noexcept;
 
-    /// Rasterises fonts at the display's backing scale while keeping their exposed metrics in
-    /// logical points. Rebuilds only when the scale changes; headless rendering remains 1x.
-    void setUiScale(float backingScale);
+    /// Synchronises UI projection and font rasterization from one coordinate contract. World
+    /// rendering continues to use the Metal target's drawable-pixel dimensions.
+    void setUiViewport(const ui::UiViewport& viewport);
 
-    /// The logical-point viewport used only by screen-space UI. World rendering continues to
-    /// use the drawable's backing-pixel dimensions.
-    void setHudViewport(float widthPoints, float heightPoints) noexcept;
-
-    /// This frame's interface, in logical points from the window's top-left.
+    /// This frame's interface, in authored HUD points from the viewport's top-left.
     ///
     /// Replaced wholesale each frame, because a HUD is rebuilt from the state it reports rather
     /// than accumulated — and a stale line would report a number that has since changed, which
@@ -407,8 +404,8 @@ public:
     /// would want.
     void setMinimapImage(const dds::Texture& image);
 
-    /// Where to draw that image this frame, in logical points from the top-left. A zero width or
-    /// height draws nothing, which is how a scene with no preview says so.
+    /// Where to draw that image this frame, in authored HUD points from the top-left. A zero
+    /// width or height draws nothing, which is how a scene with no preview says so.
     ///
     /// SEPARATE FROM THE UPLOAD because the rect is a layout decision that moves with the
     /// window and the upload is not, and folding them together would re-upload 256 KiB every
@@ -872,8 +869,9 @@ private:
 
     // --- Text ---------------------------------------------------------------
     //
-    // One atlas, baked once at startup, and one buffer rewritten per frame. The atlas is
-    // single-channel coverage rather than colour, so one texture serves text of any colour.
+    // One atlas per face and one buffer rewritten per frame. Atlases rebuild only when display
+    // or HUD magnification changes; each remains single-channel coverage, so it serves text of
+    // any colour.
     MTL::RenderPipelineState* textPipeline_ = nullptr;  // owned
     MTL::RenderPipelineState* imagePipeline_ = nullptr; // owned
     MTL::RenderPipelineState* minimapFogPipeline_ = nullptr; // owned
@@ -881,8 +879,8 @@ private:
 
     // The map's own thumbnail, drawn under the minimap panel. Uploaded once, not per frame.
     MTL::Texture* minimapTexture_ = nullptr;  // owned
-    std::array<float, 4> minimapRect_{};      // x, y, width, height in points; zero = no draw
-    std::array<float, 2> hudViewportPoints_{};
+    std::array<float, 4> minimapRect_{};      // x, y, width, height in HUD points; zero = no draw
+    ui::UiViewport uiViewport_{};
 
     // The build tray's icons, packed into one texture, and this frame's quads into it.
     MTL::Texture* iconAtlas_ = nullptr;  // owned
@@ -909,12 +907,12 @@ private:
 
     FontSlot labelFont_;
     FontSlot readoutFont_;
-    float uiScale_ = 1.0f;
+    float fontRasterScale_ = 1.0f;
 
     std::size_t labelVertexCount_ = 0;
     std::size_t readoutVertexCount_ = 0;
 
-    /// Rasterises one face into a slot at `uiScale_`, exposing logical-point metrics.
+    /// Rasterises one face at `fontRasterScale_`, exposing authored HUD-point metrics.
     void buildFontAtlas(FontSlot& slot, const char* familyName, float points);
 
     /// Scratch for the survivors and the per-level counts, reused so a frame costs

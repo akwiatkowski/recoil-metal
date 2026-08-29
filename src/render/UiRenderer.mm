@@ -47,7 +47,7 @@ void Renderer::buildFontAtlas(FontSlot& slot, const char* familyName, float poin
     slot.glyphs.clear();
     slot.lineHeight = 0.0f;
 
-    const float scale = std::max(uiScale_, 1.0f);
+    const float scale = std::max(fontRasterScale_, 1.0f);
     const float rasterPoints = points * scale;
 
     CFStringRef name =
@@ -70,9 +70,8 @@ void Renderer::buildFontAtlas(FontSlot& slot, const char* familyName, float poin
     slot.lineHeight =
         (ascent + descent + static_cast<float>(CTFontGetLeading(font))) / scale;
 
-    // Measure first, pack second. Every glyph in one row: 95 of them at ~11 pixels is about
-    // 1100 wide, which is one modest texture and keeps the packing arithmetic to a running
-    // sum rather than a bin-packer.
+    // Measure first, pack second. All 95 glyphs stay in one row; its pixel width grows with the
+    // raster scale, and a running sum remains enough without a bin-packer.
     std::array<CGGlyph, text::kGlyphCount> cgGlyphs{};
     std::array<UniChar, text::kGlyphCount> characters{};
     for (std::size_t i = 0; i < text::kGlyphCount; ++i) {
@@ -217,18 +216,15 @@ text::Font Renderer::labelFont() const noexcept { return labelFont_.view(); }
 
 text::Font Renderer::readoutFont() const noexcept { return readoutFont_.view(); }
 
-void Renderer::setUiScale(float backingScale) {
-    const float scale = std::max(backingScale, 1.0f);
-    if (std::abs(scale - uiScale_) < 0.01f) {
+void Renderer::setUiViewport(const ui::UiViewport& viewport) {
+    const float rasterScale = viewport.fontRasterScale();
+    uiViewport_ = viewport;
+    if (std::abs(rasterScale - fontRasterScale_) < 0.01f) {
         return;
     }
-    uiScale_ = scale;
+    fontRasterScale_ = rasterScale;
     buildFontAtlas(labelFont_, kLabelFontName, kLabelPointSize);
     buildFontAtlas(readoutFont_, kReadoutFontName, kReadoutPointSize);
-}
-
-void Renderer::setHudViewport(float widthPoints, float heightPoints) noexcept {
-    hudViewportPoints_ = {std::max(widthPoints, 1.0f), std::max(heightPoints, 1.0f)};
 }
 
 void Renderer::setHud(std::span<const text::TextVertex> label,

@@ -127,13 +127,16 @@ void appendMinimapPips(std::vector<rm::ui::MinimapPip>& out, const UnitScene& sc
 /// yields nothing, and the caller draws no outline rather than a wrong one — which is the honest
 /// answer for a camera that is not looking at the ground.
 void appendViewFootprint(std::vector<std::array<float, 2>>& out, const rm::OrbitCamera& camera,
-                         const rm::HeightField& field, float width, float height) {
+                         const rm::HeightField& field, const rm::ui::UiViewport& viewport) {
     out.clear();
+    const rm::ui::Extent extent = viewport.hudExtent();
     // Clockwise from the top-left, so consecutive pairs are the edges of the shape.
     const std::array<std::array<float, 2>, 4> corners{
-        {{0.0f, height}, {width, height}, {width, 0.0f}, {0.0f, 0.0f}}};
+        {{0.0f, extent.height}, {extent.width, extent.height}, {extent.width, 0.0f},
+         {0.0f, 0.0f}}};
     for (const std::array<float, 2>& corner : corners) {
-        const rm::Ray ray = rm::screenRay(camera, corner[0], corner[1], width, height);
+        const rm::Ray ray =
+            rm::screenRay(camera, corner[0], corner[1], extent.width, extent.height);
         const std::optional<simd_float3> ground = rm::pickGround(ray, field);
         if (!ground) {
             out.clear();  // all four or none: a partial outline is a wrong one
@@ -550,9 +553,10 @@ void appendSceneIcons(std::vector<rm::Particle>& into, const UnitScene& scene,
 }
 
 void appendStrategicIcons(rm::ui::Geometry& out, const UnitScene& scene,
-                          const rm::OrbitCamera& camera, float width, float height,
+                          const rm::OrbitCamera& camera, const rm::ui::UiViewport& viewport,
                           std::span<const std::optional<StrategicIconRef>> refs) {
-    if (refs.empty() || !(width > 0.0f) || !(height > 0.0f)) {
+    const rm::ui::Extent extent = viewport.hudExtent();
+    if (refs.empty() || !(extent.width > 0.0f) || !(extent.height > 0.0f)) {
         return;
     }
     const float elmosPerPoint = camera.elmosPerPoint(rm::kIconReferenceHeightPoints);
@@ -563,7 +567,7 @@ void appendStrategicIcons(rm::ui::Geometry& out, const UnitScene& scene,
     // The glyphs ship at their reading size for a ~1000-point view; scaling by the actual
     // viewport keeps them the same fraction of the screen on every window, exactly as the
     // square fallback's point size behaves.
-    const float scale = height / rm::kIconReferenceHeightPoints;
+    const float scale = extent.height / rm::kIconReferenceHeightPoints;
 
     for (std::size_t batch = 0; batch < scene.drawScratch.size(); ++batch) {
         for (std::size_t i = 0; i < scene.drawScratch[batch].size()
@@ -583,7 +587,7 @@ void appendStrategicIcons(rm::ui::Geometry& out, const UnitScene& scene,
             const auto screen = rm::worldToScreen(
                 camera,
                 simd_make_float3(unit.position[0], unit.position[1], unit.position[2]),
-                width, height);
+                extent.width, extent.height);
             if (!screen) {
                 continue;
             }
@@ -613,9 +617,10 @@ void appendStrategicIcons(rm::ui::Geometry& out, const UnitScene& scene,
 }
 
 void appendContactBlips(rm::ui::Geometry& out, const UnitScene& scene,
-                        const rm::OrbitCamera& camera, const rm::HeightField& field,
-                        const rm::text::Font& font, float width, float height) {
-    if (!font.usable() || !(width > 0.0f) || !(height > 0.0f)) {
+                         const rm::OrbitCamera& camera, const rm::HeightField& field,
+                         const rm::text::Font& font, const rm::ui::UiViewport& viewport) {
+    const rm::ui::Extent extent = viewport.hudExtent();
+    if (!font.usable() || !(extent.width > 0.0f) || !(extent.height > 0.0f)) {
         return;
     }
     scene.refreshViewerContacts();
@@ -628,7 +633,8 @@ void appendContactBlips(rm::ui::Geometry& out, const UnitScene& scene,
         const float x = rm::sim::fxToFloat(contact.x);
         const float z = rm::sim::fxToFloat(contact.z);
         const auto screen = rm::worldToScreen(
-            camera, simd_make_float3(x, field.heightAtWorld(x, z) + 2.0f, z), width, height);
+            camera, simd_make_float3(x, field.heightAtWorld(x, z) + 2.0f, z), extent.width,
+            extent.height);
         if (!screen) {
             continue;
         }
@@ -641,9 +647,10 @@ void appendContactBlips(rm::ui::Geometry& out, const UnitScene& scene,
 }
 
 void appendHealthBars(rm::ui::Geometry& out, const UnitScene& scene,
-                      const rm::OrbitCamera& camera, const rm::text::Font& font, float width,
-                      float height) {
-    if (!font.usable() || !(width > 0.0f) || !(height > 0.0f)) {
+                      const rm::OrbitCamera& camera, const rm::text::Font& font,
+                      const rm::ui::UiViewport& viewport) {
+    const rm::ui::Extent extent = viewport.hudExtent();
+    if (!font.usable() || !(extent.width > 0.0f) || !(extent.height > 0.0f)) {
         return;
     }
 
@@ -675,7 +682,7 @@ void appendHealthBars(rm::ui::Geometry& out, const UnitScene& scene,
             const auto screen = rm::worldToScreen(
                 camera,
                 simd_make_float3(unit.position[0], unit.position[1], unit.position[2]),
-                width, height);
+                extent.width, extent.height);
             if (!screen) {
                 continue;
             }

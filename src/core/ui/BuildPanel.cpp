@@ -58,12 +58,22 @@ BuildPanelLayout buildPanelLayout(const FrameLayout& frame, std::size_t optionCo
         return layout;  // nothing selected that builds: the panel is simply absent
     }
 
+    // Never make a cell narrower than it is tall. Fewer columns paginate predictably; keeping
+    // the authored count in a collapsed palette would produce negative pitch and reversed quads.
+    const float usableWidth = frame.build.width - kBuildPadding * 2.0f;
+    const int fittingColumns = static_cast<int>(
+        std::floor((usableWidth + kBuildGap) / (kBuildCellHeight + kBuildGap)));
+    layout.columns = std::min(static_cast<int>(frame.buildColumns), fittingColumns);
+    if (layout.columns <= 0) {
+        return layout;
+    }
+
     layout.x = frame.build.x;
     layout.y = frame.build.y;
     layout.width = frame.build.width;
     layout.height = frame.build.height;
-    layout.columns = static_cast<int>(frame.buildColumns);
-    const std::size_t capacity = frame.buildColumns * static_cast<std::size_t>(kBuildRows);
+    const std::size_t capacity =
+        static_cast<std::size_t>(layout.columns) * static_cast<std::size_t>(kBuildRows);
     layout.pages = (optionCount + capacity - 1) / capacity;
     layout.page = std::min(page, layout.pages - 1);
     layout.first = layout.page * capacity;
@@ -236,7 +246,7 @@ void appendBuildPanel(Geometry& out, const text::Font& labelFont, const text::Fo
                              fade(theme.edgeLit, 0.10f));
         }
 
-        // The tier band across the top. Three pixels, up from two: at two the band vanished
+        // The tier band across the top. Three authored points, up from two: at two it vanished
         // into the cell border on a Retina capture and the tier grouping it exists for was
         // invisible at a glance. Three is still a trim, not a feature.
         //

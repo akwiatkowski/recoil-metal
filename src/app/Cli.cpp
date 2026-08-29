@@ -1,7 +1,7 @@
 #include "app/Cli.hpp"
 
 #include "core/lua/LuaTable.hpp"
-#include "core/ui/Hud.hpp"  // the interface scale's own bounds, so `--ui-scale` cannot invent one
+#include "core/ui/Viewport.hpp"  // the interface scale's bounds
 #include "core/unit/UnitBlueprint.hpp"
 
 #include <algorithm>
