@@ -2286,3 +2286,23 @@ first candidate every frame preserves old behavior but leaves panel ownership im
 **Consequences.** Reordering an unchanged mixed selection no longer changes whose menu is shown.
 Death, deselection, or filtering of the active builder chooses the next candidate deterministically;
 no candidates clear the panel and invalidate the active handle. This adds no builder-cycle control.
+
+## ADR-064 — Panel pages belong to the context that gives them meaning
+
+**Context.** The window kept one build-page counter and one roster-page counter. Switching builders
+could either erase useful position or apply a page from an unrelated menu, while a changed selection
+could inherit a roster page whose tiles no longer represented the same units. The future command
+rack has the same ownership question across interface profiles.
+
+**Decision.** Keep build pages by `UnitTypeIndex`, command pages by the closed `GameProfile`, and the
+roster page with its exact ordered generational selection identity. An identity change resets only
+the roster page. `buildPanelLayout` and `rosterLayout` still clamp requested pages against current
+content and viewport capacity, and the window writes those clamped values back to the owner.
+
+**Alternatives considered.** One global counter loses context. Keying builds by unit handle makes two
+units of one type remember inexplicably different menus. Hashing the roster risks collisions where
+exact comparison is cheap. A generic panel registry adds indirection for three fixed instruments.
+
+**Consequences.** Returning to a builder type or interface profile restores its previous page;
+changing selection order, membership, or a handle generation returns the roster to page zero.
+Content shrinkage and viewport changes remain layout concerns rather than being duplicated in state.

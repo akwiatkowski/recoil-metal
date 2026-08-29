@@ -11,6 +11,7 @@
 #include "core/sim/Adjacency.hpp"
 #include "core/sim/Replay.hpp"
 #include "core/sim/StateHash.hpp"
+#include "core/ui/PanelPages.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -796,8 +797,7 @@ int runWindowed(const Session& session) {
         // Held here beside the options it indexes, and cleared whenever they change — an index
         // into a list that has been rebuilt is a different building.
         std::optional<std::size_t> armedOption;
-        std::size_t buildPage = 0;
-        std::size_t rosterPage = 0;
+        rm::ui::PanelPages panelPages;
 
         // WHOSE MENU THE ICON ATLAS WAS PACKED FOR. Keyed on the builder rather than on the
         // option list, because the list is rebuilt every frame and compares equal every frame —
@@ -1178,6 +1178,8 @@ int runWindowed(const Session& session) {
             // through `applyCommand` — a behaviour change, not a guard — so the two are separate
             // jobs and this is the one that stops the bleeding.
             if (!buildOptions.empty()) {
+                std::size_t& buildPage =
+                    panelPages.build(units.store.typeAt(buildWho.builder.index));
                 const rm::ui::BuildPanelLayout panel =
                     rm::ui::buildPanelLayout(frame, buildOptions.size(), buildPage);
                 if (rm::ui::insideBuildPanel(panel, hudPoint[0], hudPoint[1])) {
@@ -1273,6 +1275,7 @@ int runWindowed(const Session& session) {
             // reference games bind tile clicks this way. The gutters and header still just
             // swallow: a miss near a button must not become the wrong button.
             if (!rosterTiles.empty()) {
+                std::size_t& rosterPage = panelPages.roster();
                 const rm::ui::RosterLayout roster =
                     rm::ui::rosterLayout(frame, rosterTiles.size(), rosterPage);
                 if (rm::ui::insideRoster(roster, hudPoint[0], hudPoint[1])) {
@@ -1813,11 +1816,14 @@ int runWindowed(const Session& session) {
                 armedOption.reset();
             }
             if (buildWho.builder != iconsPackedFor) {
-                buildPage = 0;
                 armedOption.reset();
             }
 
             rm::app::gatherRoster(units, selected, rosterTiles);
+            // Advance page ownership with the tiles, not with input. A control-group key can
+            // change `selected` between display callbacks; until this rebuild, clicks must keep
+            // addressing the roster that is still visible rather than page zero of a future one.
+            panelPages.showRoster(selected);
 
             // The icons for BOTH panels, in one atlas: packed when either set changes, and
             // reapplied from the cache otherwise. Reapplied rather than repacked because the
@@ -1865,6 +1871,8 @@ int runWindowed(const Session& session) {
                                   minimapView, !hasPreview);
             std::optional<std::size_t> overBuild;
             if (!buildOptions.empty()) {
+                std::size_t& buildPage =
+                    panelPages.build(units.store.typeAt(buildWho.builder.index));
                 const rm::ui::BuildPanelLayout panel =
                     rm::ui::buildPanelLayout(frame, buildOptions.size(), buildPage);
                 buildPage = panel.page;
@@ -1890,6 +1898,7 @@ int runWindowed(const Session& session) {
             // The roster, bottom centre. After the tray so both are in one buffer; they do not
             // overlap, so the order between them is arbitrary and stated only to be stable.
             if (!rosterTiles.empty()) {
+                std::size_t& rosterPage = panelPages.roster();
                 const rm::ui::RosterLayout roster =
                     rm::ui::rosterLayout(frame, rosterTiles.size(), rosterPage);
                 rosterPage = roster.page;
@@ -1943,6 +1952,11 @@ int runWindowed(const Session& session) {
                     > kBandSlopPoints;
 
                 const bool onMinimap = rm::ui::insideMinimap(minimap, origin[0], origin[1]);
+                const std::size_t buildPage =
+                    buildOptions.empty()
+                        ? 0
+                        : panelPages.build(units.store.typeAt(buildWho.builder.index));
+                const std::size_t rosterPage = panelPages.roster();
                 const bool onPanel =
                     (!buildOptions.empty()
                       && rm::ui::insideBuildPanel(
