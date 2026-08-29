@@ -55,25 +55,36 @@ and because the honest denominators are what stop the next session over-claiming
 | Executable bytes in `ART-E001` | 9,101,312 | — |
 | Code bytes Ghidra places inside a function | 5,855,603 | 64% of executable |
 | Functions Ghidra identified | 32,268 | — |
-| Functions carrying a meaningful name (RTTI, demangled export, or analyst) | **2,979** | **9.2%** |
-| Code bytes inside those named functions | **456,576** | **7.8%** of function bytes |
+| Functions carrying a meaningful name (RTTI, demangled export, or analyst) | 2,979 | 9.2% |
+| **Function starts recovered from vtables that Ghidra never found** (`C-117`) | **4,514** | — |
 | Lua callables mapped name → address (`C-032`) | 1,182 | — |
 | …of those, resolved to the real native method (`C-035`) | 797 | 2.6% of all functions |
 | …of those, arity machine-verified against the code (`C-039`) | 549 | 90.3% of the 608 checkable |
-| Functions read instruction by instruction by an analyst | ~90 | **~0.28%** |
+| **Vtables recovered / slot rows** (`C-117`) | **4,049 / 32,678** | 3,861 classes |
+| **Object fields recovered, base pointer read not guessed** (`C-128`, `C-133`, `C-137`, `C-143`) | **~500** | 51+ classes |
+| **Enum (name, value) pairs recovered** (`C-122`, `C-125`) | **541** | 51 enums + 4 motion tables |
+| **Functions attributed to a source file and line** (`C-114`) | **560** | 1.8% — a measured ceiling |
+| **Mutable globals reachable from the sim frontier** (`C-136`) | **282**, 11 shared | the whole surface |
+| Functions read instruction by instruction by an analyst | **~180** | ~0.56% |
 | Work packages at **Confirmed with EXE analysis** | 0 of 45 | **0%** |
 
 Read that table as three different senses of the word "analyzed", which are worth keeping apart:
 
-- **Inventoried** is far along. The type system (471 concrete `Moho::` classes), the complete
-  script API (1,182 callables with signatures and addresses), the section map, and the
-  subsystem anchors are all in hand. This is what makes everything after it cheap.
-- **Understood** is barely started. Five functions have been read as instructions. Nothing has
-  been traced through a caller and a downstream effect, which is why the confirmation gate has
-  passed nothing and why the `Confirmed` column is still zero.
-- **Bounded** sits in between and is where most of the value is so far: 21 of the 45 packages
-  now have a named mechanism and at least one refuted alternative, mostly from RTTI and symbol
-  evidence rather than from reading code.
+- **Inventoried** is now largely done, and session 13 is why. The type system, the complete
+  script API, every vtable, ~500 field offsets, 541 enum constants and the whole mutable global
+  surface are in hand. The binary describes itself in more places than the campaign first
+  assumed, and four separate self-description veins have now been mined out.
+- **Understood** has moved from "barely started" to "started". Around 180 functions have been
+  read as instructions, and several have been traced through a caller to a downstream effect —
+  the tick's stage order (`C-142`), the grid query's iteration order (`C-138`), the reclaim
+  rate loop (`C-147`). That is the work the confirmation gate actually needs.
+- **Bounded** is where most packages sit: a named mechanism plus at least one refuted
+  alternative. Eight packages moved up a level in session 13, including `WP-26`, which the plan
+  had called the weakest link in the map.
+
+**The `Confirmed` column is still zero, and that number is the honest one.** Nothing has yet
+been taken through the full gate of a traced native path matched against a tested
+implementation. Until one package does, the cost of that gate is unknown.
 
 The 36% of executable bytes outside any recognised function is mostly padding, jump tables,
 switch data, and the statically linked C/C++ runtime — not hidden game logic. It has not been
