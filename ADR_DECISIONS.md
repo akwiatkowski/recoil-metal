@@ -2245,3 +2245,24 @@ partial event models and still leaves modifiers out-of-band.
 **Consequences.** Existing bindings and repeat behavior are unchanged, while application code has
 no raw key-character comparisons. Every future keyboard consumer must handle phase, repeat, and
 modifiers from one event rather than reconstructing them from AppKit state.
+
+## ADR-062 — The command rack keeps Forged Alliance's stable order positions
+
+**Context.** The HUD reserves a command rectangle but has no view data for it. Compacting whichever
+commands a selection supports would make Move, Stop, and Assist jump between slots as selection
+capabilities change, while inventing buttons for absent mechanics would promise gameplay that does
+not exist.
+
+**Decision.** Use a fixed four-column by three-row descriptor table based on FAF's `preferredSlot`
+order: AttackMove, Move, Attack, Patrol, Stop, Assist, reserved fire-state, Overcharge, three
+unit-specific reserves, and Reclaim. Build remains in the construction panel. A separate parallel
+array reports enabled state; mixed selections enable a semantic when any selected unit can execute
+it, matching existing per-handle order dispatch.
+
+**Alternatives considered.** A compact list causes positional reflow. A profile-specific command
+registry invents extension machinery before profiles differ here. Placing Build in a spare slot
+duplicates the blueprint palette and has no Forged Alliance order-rack counterpart.
+
+**Consequences.** Selection changes can only alter disabled state, never common-command positions.
+Unimplemented canonical positions remain visible to future rendering as disabled reserves, and this
+slice adds no command execution, click handling, or gameplay capability.

@@ -144,6 +144,7 @@ add_library(rm_core STATIC
     src/core/model/Pose.cpp
     src/core/text/TextLayout.cpp
     src/core/ui/Hud.cpp
+    src/core/ui/CommandPanel.cpp
     src/core/ui/BuildPanel.cpp
     src/core/ui/IconAtlas.cpp
     src/core/ui/Roster.cpp
@@ -300,6 +301,7 @@ if(BUILD_TESTING)
         tests/test_ui_layers.cpp
         tests/test_key_input.cpp
         tests/test_hud.cpp
+        tests/test_command_panel.cpp
         tests/test_build_panel.cpp
         tests/test_icon_atlas.cpp
         tests/test_roster.cpp
