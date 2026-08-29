@@ -15,6 +15,7 @@
 #include "app/SceneBuild.hpp"
 
 #include "core/sim/Intel.hpp"
+#include "core/ui/GameProfile.hpp"
 
 #include "core/vfs/AssetSearch.hpp"
 #include "core/vfs/Vfs.hpp"
@@ -106,6 +107,13 @@ struct MarchOptions {
 /// requests less prominent chrome where available fit permits. Out of range clamps, and anything
 /// unparseable falls back to automatic.
 [[nodiscard]] float parseUiScale(int argc, const char* argv[]);
+
+/// `--ui fa|bar|neutral|faf`: select one concrete game-interface profile.
+///
+/// FA is the default and `faf` preserves the existing classic nine-slice option. BAR and Neutral
+/// are explicit until a run-wide content-family policy exists; individual model formats are not
+/// enough evidence because one scene may contain both.
+[[nodiscard]] rm::ui::GameProfile parseGameProfile(int argc, const char* argv[]);
 
 /// `--vision-style fa|recoil`: whether terrain blocks sight (ADR-037).
 ///

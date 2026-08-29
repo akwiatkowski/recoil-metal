@@ -215,6 +215,38 @@ TEST_CASE("the --time flag is where in a clip a capture freezes") {
     CHECK(rm::app::parseAnimationTime(absent.argc(), absent.argv()) == Approx(0.0f));
 }
 
+TEST_CASE("the --ui flag selects one closed game-interface profile") {
+    using rm::ui::GameProfile;
+
+    Args absent{{"--skirmish"}};
+    CHECK(rm::app::parseGameProfile(absent.argc(), absent.argv()) == GameProfile::Fa);
+
+    for (const auto& [word, expected] :
+         std::vector<std::pair<std::string, GameProfile>>{{"fa", GameProfile::Fa},
+                                                          {"bar", GameProfile::Bar},
+                                                          {"neutral", GameProfile::Neutral},
+                                                          {"faf", GameProfile::ClassicFaf}}) {
+        Args args{{"--ui", word}};
+        CHECK(rm::app::parseGameProfile(args.argc(), args.argv()) == expected);
+        CHECK(rm::ui::gameProfileName(expected) == word);
+    }
+
+    Args unknown{{"--ui", "future-game"}};
+    CHECK(rm::app::parseGameProfile(unknown.argc(), unknown.argv()) == GameProfile::Fa);
+}
+
+TEST_CASE("game-interface profile parsing carries no process-global state") {
+    Args classic{{"--ui", "faf"}};
+    Args implicitFa{{}};
+
+    CHECK(rm::app::parseGameProfile(classic.argc(), classic.argv())
+          == rm::ui::GameProfile::ClassicFaf);
+    CHECK(rm::app::parseGameProfile(implicitFa.argc(), implicitFa.argv())
+          == rm::ui::GameProfile::Fa);
+    CHECK(rm::app::parseGameProfile(classic.argc(), classic.argv())
+          == rm::ui::GameProfile::ClassicFaf);
+}
+
 TEST_CASE("the --data-dir flag collects every root it is given") {
     // Repeated flags ACCUMULATE rather than overwrite: order is priority, since an asset search
     // tries each root in turn.

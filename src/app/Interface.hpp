@@ -21,6 +21,7 @@
 #include "core/scene/UnitIcons.hpp"
 #include "core/camera/OrbitCamera.hpp"
 #include "core/ui/BuildPanel.hpp"
+#include "core/ui/GameProfile.hpp"
 #include "core/ui/Hud.hpp"
 #include "core/ui/Minimap.hpp"
 #include "core/ui/Roster.hpp"
@@ -99,9 +100,15 @@ void gatherBuildOptions(const UnitScene& scene, std::span<const rm::sim::UnitId>
 /// `strategic` is the scene's cached strategic glyph art, appended after the tray's and the
 /// roster's icons; `strategicBase` comes back as the slot its first entry landed in, which
 /// with the cache's own indices is the whole mapping `buildStrategicIconRefs` needs.
-[[nodiscard]] rm::dds::Texture packInterfaceIcons(
+struct PackedInterfaceAtlas {
+    rm::dds::Texture texture;
+    rm::ui::PanelSkin skin;
+};
+
+[[nodiscard]] PackedInterfaceAtlas packInterfaceIcons(
     const rm::vfs::Vfs& content, std::vector<rm::ui::BuildOption>& options,
     std::vector<rm::ui::RosterTile>& tiles,
+    rm::ui::GameProfile profile,
     std::span<const std::pair<std::string, rm::dds::Texture>> strategic = {},
     std::size_t* strategicBase = nullptr);
 
@@ -118,13 +125,10 @@ void appendViewFootprint(std::vector<std::array<float, 2>>& out, const rm::Orbit
 
 [[nodiscard]] rm::ui::MatchState hudStateFrom(const UnitScene& scene, float elapsedSeconds);
 
-[[nodiscard]] rm::ui::Theme hudThemeFor(const UnitScene& scene);
-
-/// `--ui faf`: dress every panel in the game's own generic_brd nine-slice instead of the
-/// glass. The pieces pack into the icon atlas (packInterfaceIcons), and hudThemeFor
-/// attaches what was packed — so both the windowed loop and the capture path skin the
-/// same way without either knowing how.
-extern bool gFafSkin;
+/// Resolves the run's explicit profile against the player's faction and an optional packed skin.
+/// BAR and Neutral intentionally use neutral chrome until their material slice lands.
+[[nodiscard]] rm::ui::Theme hudThemeFor(const UnitScene& scene, rm::ui::GameProfile profile,
+                                         const rm::ui::PanelSkin& skin = {});
 
 /// One type's strategic icon, as the atlas holds it this pack: which slot, and the glyph's
 /// own texel size — the icons ship at mixed small sizes (16x16-ish) and are packed into a

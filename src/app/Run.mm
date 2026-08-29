@@ -401,9 +401,7 @@ int runScreenshot(const Session& session) {
                 session.uiScale);
             renderer.setUiViewport(shotViewport);
             const rm::ui::FrameLayout shotFrame = rm::ui::frameLayout(shotViewport);
-            rm::ui::build(hud, renderer.labelFont(), renderer.readoutFont(),
-                          hudThemeFor(units), hudStateFrom(units, marchOptions.seconds),
-                          shotFrame);
+            const rm::ui::Theme baseTheme = hudThemeFor(units, session.uiProfile);
 
             // Health bars in a capture too, for the usual reason: a battle screenshot is
             // the one place a damaged unit reliably exists to verify them against.
@@ -426,10 +424,6 @@ int runScreenshot(const Session& session) {
                                         shotMinimap.size - shotMinimap.inset * 2.0f,
                                         shotMinimap.size - shotMinimap.inset * 2.0f);
             }
-            rm::ui::appendMinimap(hud, renderer.labelFont(), hudThemeFor(units), shotMinimap,
-                                  map->field.widthElmos(), map->field.depthElmos(), pips, view,
-                                  !shotPreview);
-
             // The build panel and the roster, for whatever `--select` ringed. This is what
             // makes either verifiable at all: a headless run has no clicks, so `--select` is
             // the only way interface that appears on selection reaches a screenshot.
@@ -441,16 +435,23 @@ int runScreenshot(const Session& session) {
             std::vector<rm::ui::RosterTile> shotRoster;
             rm::app::BuildSelection shotWho;
             gatherRoster(units, capturedSelection, shotRoster);
-            gatherBuildOptions(units, capturedSelection, hudThemeFor(units), shotOptions,
-                               shotWho);
+            gatherBuildOptions(units, capturedSelection, baseTheme, shotOptions, shotWho);
 
             // Packed unconditionally now: the strategic glyphs exist with nothing selected
             // at all, which is precisely the far-zoom capture that shows them.
             rm::app::ensureStrategicIconArt(units, content);
             std::size_t shotStrategicBase = 0;
-            renderer.setIconAtlas(
-                rm::app::packInterfaceIcons(content, shotOptions, shotRoster,
-                                            units.strategicIconArt, &shotStrategicBase));
+            rm::app::PackedInterfaceAtlas shotAtlas = rm::app::packInterfaceIcons(
+                content, shotOptions, shotRoster, session.uiProfile, units.strategicIconArt,
+                &shotStrategicBase);
+            renderer.setIconAtlas(shotAtlas.texture);
+            const rm::ui::Theme shotTheme =
+                hudThemeFor(units, session.uiProfile, shotAtlas.skin);
+            rm::ui::build(hud, renderer.labelFont(), renderer.readoutFont(), shotTheme,
+                          hudStateFrom(units, marchOptions.seconds), shotFrame);
+            rm::ui::appendMinimap(hud, renderer.labelFont(), shotTheme, shotMinimap,
+                                  map->field.widthElmos(), map->field.depthElmos(), pips, view,
+                                  !shotPreview);
             std::vector<std::optional<rm::app::StrategicIconRef>> shotRefs;
             rm::app::buildStrategicIconRefs(units, shotStrategicBase, shotRefs);
             rm::app::appendStrategicIcons(hud, units, renderer.camera(), shotViewport, shotRefs);
@@ -511,8 +512,8 @@ int runScreenshot(const Session& session) {
                 const rm::ui::BuildPanelLayout shotPanel =
                     rm::ui::buildPanelLayout(shotFrame, shotOptions.size(), shotPage);
                 rm::ui::appendBuildPanel(hud, renderer.labelFont(), renderer.readoutFont(),
-                                         hudThemeFor(units), shotPanel, shotOptions,
-                                         shotHovered, shotWho.name, shotWho.role);
+                                         shotTheme, shotPanel, shotOptions, shotHovered,
+                                         shotWho.name, shotWho.role);
                 std::printf("  build panel: %zu options for %s\n", shotOptions.size(),
                             shotWho.name.c_str());
 
@@ -561,7 +562,7 @@ int runScreenshot(const Session& session) {
                         ? rm::ui::buildOptionCard(shotOptions[*shotHovered])
                         : rm::ui::rosterTileCard(shotRoster.front());
                 rm::ui::appendRoster(hud, renderer.labelFont(), renderer.readoutFont(),
-                                     hudThemeFor(units),
+                                     shotTheme,
                                      rm::ui::rosterLayout(shotFrame, shotRoster.size()),
                                      shotRoster, std::nullopt, &inspector);
                 std::printf("  roster: %zu type(s) selected\n", shotRoster.size());
@@ -811,6 +812,7 @@ int runWindowed(const Session& session) {
         // selected at all.
         std::vector<std::optional<rm::app::StrategicIconRef>> strategicRefs;
         std::size_t typesPackedFor = static_cast<std::size_t>(-1);
+        rm::ui::PanelSkin interfaceSkin;
 
         // The caller-side tick, the same one `march()` drives. Built here rather than in
         // the frame callback because a match is decided on one tick and stays decided, and
@@ -1771,8 +1773,7 @@ int runWindowed(const Session& session) {
             const rm::ui::FrameLayout frame = rm::ui::frameLayout(viewport);
             const std::array<float, 2> logicalCursor = window.cursor();
             const std::array<float, 2> hudCursor = viewport.toHud(logicalCursor);
-            rm::ui::build(hudScratch, window.labelFont(), window.readoutFont(),
-                          hudThemeFor(units), hudStateFrom(units, matchSeconds), frame);
+            const rm::ui::Theme baseTheme = hudThemeFor(units, session.uiProfile);
 
             // Health over the units that need it: damaged, and close enough to be units
             // rather than icons. Absence is what "fine" looks like (Interface.hpp).
@@ -1798,15 +1799,10 @@ int runWindowed(const Session& session) {
                                       minimap.size - minimap.inset * 2.0f,
                                       minimap.size - minimap.inset * 2.0f);
             }
-            rm::ui::appendMinimap(hudScratch, window.labelFont(), hudThemeFor(units), minimap,
-                                  map->field.widthElmos(), map->field.depthElmos(), minimapPips,
-                                  minimapView, !hasPreview);
-
             // What the selection can build, above the minimap — the bottom-left control block
             // Beyond All Reason arranges the same way. Absent entirely when nothing selected
             // builds, rather than an empty frame asking to be explained.
-            rm::app::gatherBuildOptions(units, selected, hudThemeFor(units), buildOptions,
-                                         buildWho);
+            rm::app::gatherBuildOptions(units, selected, baseTheme, buildOptions, buildWho);
             // AN INDEX INTO A LIST THAT HAS BEEN REBUILT IS A DIFFERENT BUILDING. Deselecting,
             // or selecting a different builder, must not leave cell 4 armed and meaning
             // something else — so the arming is dropped whenever the list it points into can no
@@ -1836,9 +1832,11 @@ int runWindowed(const Session& session) {
                 // a square until the next selection change.
                 rm::app::ensureStrategicIconArt(units, content);
                 std::size_t strategicBase = 0;
-                window.setIconAtlas(rm::app::packInterfaceIcons(
-                    content, buildOptions, rosterTiles, units.strategicIconArt,
-                    &strategicBase));
+                rm::app::PackedInterfaceAtlas packed = rm::app::packInterfaceIcons(
+                    content, buildOptions, rosterTiles, session.uiProfile,
+                    units.strategicIconArt, &strategicBase);
+                window.setIconAtlas(packed.texture);
+                interfaceSkin = packed.skin;
                 rm::app::buildStrategicIconRefs(units, strategicBase, strategicRefs);
                 iconSlots.clear();
                 for (const rm::ui::BuildOption& option : buildOptions) {
@@ -1856,6 +1854,13 @@ int runWindowed(const Session& session) {
                     rosterTiles[i].iconSlot = rosterSlots[i];
                 }
             }
+            const rm::ui::Theme theme =
+                hudThemeFor(units, session.uiProfile, interfaceSkin);
+            rm::ui::build(hudScratch, window.labelFont(), window.readoutFont(), theme,
+                          hudStateFrom(units, matchSeconds), frame);
+            rm::ui::appendMinimap(hudScratch, window.labelFont(), theme, minimap,
+                                  map->field.widthElmos(), map->field.depthElmos(), minimapPips,
+                                  minimapView, !hasPreview);
             std::optional<std::size_t> overBuild;
             if (!buildOptions.empty()) {
                 const rm::ui::BuildPanelLayout panel =
@@ -1876,7 +1881,7 @@ int runWindowed(const Session& session) {
                 }
 
                 rm::ui::appendBuildPanel(hudScratch, window.labelFont(), window.readoutFont(),
-                                         hudThemeFor(units), panel, buildOptions, lit,
+                                         theme, panel, buildOptions, lit,
                                          buildWho.name, buildWho.role);
             }
 
@@ -1900,7 +1905,7 @@ int runWindowed(const Session& session) {
                     inspector = rm::ui::rosterTileCard(rosterTiles.front());
                 }
                 rm::ui::appendRoster(hudScratch, window.labelFont(), window.readoutFont(),
-                                     hudThemeFor(units), roster, rosterTiles, overTile,
+                                     theme, roster, rosterTiles, overTile,
                                      &inspector);
             }
 
@@ -1960,7 +1965,6 @@ int runWindowed(const Session& session) {
                     // The box: a whisper of fill so the caught area reads, and a hairline
                     // in the lit edge so the bounds are exact. Interface, not effect — the
                     // same vocabulary as every panel border.
-                    const rm::ui::Theme theme = hudThemeFor(units);
                     const float left = std::min(origin[0], at[0]);
                     const float top = std::min(origin[1], at[1]);
                     const float wide = std::abs(at[0] - origin[0]);

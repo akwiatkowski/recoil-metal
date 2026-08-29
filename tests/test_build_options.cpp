@@ -511,3 +511,27 @@ TEST_CASE("a construction is drawn while it is work, and not once it is a record
     };
     CHECK(rm::app::constructionProgress(untimed) == Catch::Approx(0.0f));
 }
+
+TEST_CASE("game-interface themes do not leak classic skin or faction state", "[ui]") {
+    UnitScene scene;
+    scene.armies.push_back(rm::sim::Army{.index = 0, .faction = rm::sim::Faction::Uef});
+    scene.playerArmy = 0;
+
+    rm::ui::PanelSkin packedSkin;
+    packedSkin.active = true;
+
+    const rm::ui::Theme classic =
+        rm::app::hudThemeFor(scene, rm::ui::GameProfile::ClassicFaf, packedSkin);
+    CHECK(classic.edge == rm::ui::themeFor(rm::sim::Faction::Uef).edge);
+    CHECK(classic.skin.active);
+
+    // A later FA or BAR resolution starts from its own explicit inputs; it cannot inherit the
+    // classic skin or the previous faction livery through process state.
+    const rm::ui::Theme fa = rm::app::hudThemeFor(scene, rm::ui::GameProfile::Fa);
+    CHECK(fa.edge == rm::ui::themeFor(rm::sim::Faction::Uef).edge);
+    CHECK_FALSE(fa.skin.active);
+
+    const rm::ui::Theme bar = rm::app::hudThemeFor(scene, rm::ui::GameProfile::Bar, packedSkin);
+    CHECK(bar.edge == rm::ui::neutralTheme().edge);
+    CHECK_FALSE(bar.skin.active);
+}

@@ -500,27 +500,21 @@ void appendConstructionEffects(std::vector<rm::DecalVertex>& decals,
     return state;
 }
 
-/// The livery the interface wears: the player's own faction, or the neutral cyan when the scene
-/// has no armies in it.
-bool gFafSkin = false;
-
-namespace {
-/// What packInterfaceIcons packed for the skin, for hudThemeFor to attach. File-scope
-/// because the two run on opposite sides of the atlas upload and share nothing else.
-rm::ui::PanelSkin gPackedSkin;
-} // namespace
-
-[[nodiscard]] rm::ui::Theme hudThemeFor(const UnitScene& scene) {
+[[nodiscard]] rm::ui::Theme hudThemeFor(const UnitScene& scene, rm::ui::GameProfile profile,
+                                         const rm::ui::PanelSkin& skin) {
     rm::ui::Theme theme = rm::ui::neutralTheme();
-    for (const rm::sim::Army& army : scene.armies) {
-        if (army.index == scene.playerArmy) {
-            theme = rm::ui::themeFor(army.faction);
-            break;
+    if (profile == rm::ui::GameProfile::Fa || profile == rm::ui::GameProfile::ClassicFaf) {
+        for (const rm::sim::Army& army : scene.armies) {
+            if (army.index == scene.playerArmy) {
+                theme = rm::ui::themeFor(army.faction);
+                break;
+            }
         }
     }
-    // The skin rides whatever livery won: the chrome is the game's, the accents stay the
-    // faction's.
-    theme.skin = gPackedSkin;
+    if (profile == rm::ui::GameProfile::ClassicFaf) {
+        // Classic chrome rides the faction livery: panel art changes, semantic accents do not.
+        theme.skin = skin;
+    }
     return theme;
 }
 
@@ -887,12 +881,11 @@ void buildStrategicIconRefs(const UnitScene& scene, std::size_t base,
     }
 }
 
-rm::dds::Texture packInterfaceIcons(const rm::vfs::Vfs& content,
-                                    std::vector<rm::ui::BuildOption>& options,
-                                    std::vector<rm::ui::RosterTile>& tiles,
-                                    std::span<const std::pair<std::string, rm::dds::Texture>>
-                                        strategic,
-                                    std::size_t* strategicBase) {
+PackedInterfaceAtlas packInterfaceIcons(
+    const rm::vfs::Vfs& content, std::vector<rm::ui::BuildOption>& options,
+    std::vector<rm::ui::RosterTile>& tiles, rm::ui::GameProfile profile,
+    std::span<const std::pair<std::string, rm::dds::Texture>> strategic,
+    std::size_t* strategicBase) {
     std::vector<rm::dds::Texture> icons;
     icons.reserve(options.size() + tiles.size() + strategic.size());
 
@@ -928,11 +921,11 @@ rm::dds::Texture packInterfaceIcons(const rm::vfs::Vfs& content,
     // The skin's nine slices, last, when `--ui faf` asked for the game's own chrome. The
     // atlas is the ride every icon already takes; nine more squares cost nothing and spare
     // the renderer a second texture bind it has no slot for.
-    gPackedSkin = rm::ui::PanelSkin{};
+    rm::ui::PanelSkin skin;
     std::array<std::size_t, 9> skinSlots{};
     std::array<std::array<int, 2>, 9> skinSizes{};
-    bool skinComplete = gFafSkin;
-    if (gFafSkin) {
+    bool skinComplete = profile == rm::ui::GameProfile::ClassicFaf;
+    if (skinComplete) {
         constexpr std::array<const char*, 9> kPieces{
             "generic_brd_ul",      "generic_brd_horz_um", "generic_brd_ur",
             "generic_brd_vert_l",  "generic_brd_m",       "generic_brd_vert_r",
@@ -957,13 +950,12 @@ rm::dds::Texture packInterfaceIcons(const rm::vfs::Vfs& content,
     rm::dds::Texture atlas = rm::ui::packIcons(icons);
     if (skinComplete && !atlas.data.empty()) {
         for (std::size_t piece = 0; piece < 9; ++piece) {
-            gPackedSkin.uv[piece] = rm::ui::iconUvSized(skinSlots[piece],
-                                                        skinSizes[piece][0],
-                                                        skinSizes[piece][1]);
-            gPackedSkin.size[piece] = {static_cast<float>(skinSizes[piece][0]),
-                                       static_cast<float>(skinSizes[piece][1])};
+            skin.uv[piece] = rm::ui::iconUvSized(skinSlots[piece], skinSizes[piece][0],
+                                                 skinSizes[piece][1]);
+            skin.size[piece] = {static_cast<float>(skinSizes[piece][0]),
+                                static_cast<float>(skinSizes[piece][1])};
         }
-        gPackedSkin.active = true;
+        skin.active = true;
         std::printf("  ui: FAF chrome packed (generic_brd, nine slices)\n");
     }
     if (atlas.data.empty()) {
@@ -976,7 +968,7 @@ rm::dds::Texture packInterfaceIcons(const rm::vfs::Vfs& content,
             tile.iconSlot.reset();
         }
     }
-    return atlas;
+    return {.texture = std::move(atlas), .skin = skin};
 }
 
 void gatherRoster(const UnitScene& scene, std::span<const rm::sim::UnitId> selection,

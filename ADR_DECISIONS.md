@@ -2187,3 +2187,24 @@ fixed limits but can still let labels displace icons and complicates buffers alr
 Overflow in one role cannot evict another; debug builds assert, release builds truncate safely and
 warn once, and screenshot telemetry exposes the actual frame counts. The fixed budget grows
 from 6,000 to 36,000 vertices per frame, about 3.3 MiB for all three ring slots.
+
+## ADR-059 — Game-interface profile is explicit run state
+
+**Context.** `--ui faf` mutated one process global before startup, while atlas packing mutated a
+second global that theme resolution read later. A fresh capture could therefore build panel
+geometry before the packed nine-slice skin existed, and neither path could represent BAR or neutral
+presentation without adding more hidden switches.
+
+**Decision.** A closed `GameProfile` value (`Fa`, `Bar`, `Neutral`, `ClassicFaf`) is parsed once and
+carried by `Session`. Atlas packing returns its texture and optional panel skin together; callers
+pass that skin explicitly to profile-aware theme resolution. `fa` remains the default and `faf`
+remains the classic-chrome alias.
+
+**Alternatives considered.** A profile resolver or plugin interface invents extension machinery
+before a fifth profile exists. Inferring BAR from loaded model formats is incorrect for mixed-content
+scenes and makes presentation depend on whichever asset happened to load first.
+
+**Consequences.** Captures and the windowed loop have the same data flow and no UI skin globals.
+FA and classic FAF keep faction accents; BAR and Neutral deliberately use neutral materials until
+their profile-named resource views land. Selecting a profile is deterministic and independently
+testable without retail assets.

@@ -193,6 +193,23 @@ float parseUiScale(int argc, const char* argv[]) {
     return 1.0f;
 }
 
+rm::ui::GameProfile parseGameProfile(int argc, const char* argv[]) {
+    for (int i = 1; i + 1 < argc; ++i) {
+        if (std::string_view{argv[i]} != "--ui") {
+            continue;
+        }
+        const std::string_view value = argv[i + 1];
+        if (value == "fa") return rm::ui::GameProfile::Fa;
+        if (value == "bar") return rm::ui::GameProfile::Bar;
+        if (value == "neutral") return rm::ui::GameProfile::Neutral;
+        if (value == "faf") return rm::ui::GameProfile::ClassicFaf;
+        std::fprintf(stderr, "unknown --ui profile '%.*s'; using fa\n",
+                     static_cast<int>(value.size()), value.data());
+        return rm::ui::GameProfile::Fa;
+    }
+    return rm::ui::GameProfile::Fa;
+}
+
 /// `--dump-weapon <ID>`: print one unit's weapon timings, authored beside corrected.
 ///
 /// §7 P3.5's stated manual check. It exists because the FA duration correction is invisible

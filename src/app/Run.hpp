@@ -17,6 +17,7 @@
 
 #include "app/View.hpp"
 
+#include "core/ui/GameProfile.hpp"
 #include "platform/Window.hpp"
 #include "render/Renderer.hpp"
 
@@ -67,6 +68,9 @@ struct Session {
     /// the viewport, which is what a larger window should do; this requests room left beyond
     /// Compact, or less prominent chrome where available fit permits.
     float uiScale = 1.0f;
+
+    /// `--ui`: the run-wide interface vocabulary and material policy.
+    rm::ui::GameProfile uiProfile = rm::ui::GameProfile::Fa;
 
     /// How many prop instances were placed, for the quality line each mode prints.
     std::size_t propInstances = 0;
