@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/sim/Fx.hpp"
+#include "core/sim/Veterancy.hpp"
 
 #include "core/lua/LuaTable.hpp"
 #include "core/unit/Weapon.hpp"
@@ -431,6 +432,32 @@ struct UnitDef {
     /// FIXED POINT (`Mag`), converted at parse time — the sim never sees the float
     /// (PLAN2.md §5.1). `Mag` because `MaxHealth` reaches 5,000,000 in the corpus.
     sim::Mag health{};
+
+    /// Kills needed for each veteran level — the blueprint's `Veteran` table.
+    ///
+    /// PER TYPE, not a global constant, because 193 of the 568 shipped units state their own
+    /// and the spread is enormous: an interceptor promotes at 2 kills, a strategic bomber at
+    /// 40, and a unit with no table at all falls back to `Game.VeteranDefault`'s 25. The
+    /// default is what this holds until a blueprint says otherwise, so a type that never
+    /// mentions veterancy still behaves like retail.
+    sim::VeterancyThresholds veterancyKills = sim::kVeterancyKillThresholds;
+
+    /// Regeneration added at each veteran level, health per second — the blueprint's
+    /// `Buffs.Regen` table, or `VeterancyRegen1-5`'s defaults when it states none.
+    ///
+    /// Per type for the same reason the thresholds are: 192 of 568 blueprints restate it, and
+    /// `Buffs.Regen` is the only buff kind any shipped unit overrides — no blueprint in the
+    /// corpus overrides the health multiplier, so that stays a constant.
+    sim::VeterancyRegen veterancyRegenPerSecond = sim::kVeterancyRegenPerSecond;
+
+    /// Hull regeneration, in health PER SECOND — `Defense.RegenRate`.
+    ///
+    /// Left as the authored float here for the same reason every other rate is: the
+    /// conversion to per-tick belongs to `sim::UnitCatalog`, which is the one place that
+    /// knows the tick rate. Distinct from `ShieldSpec::regenPerSecond`, which heals the
+    /// bubble rather than the hull and follows different rules — a shield has a delay after
+    /// being hit and a recharge after collapsing; a hull has neither.
+    float regenPerSecond = 0.0f;
 
     /// Ordinary projectile-colliding bubble; personal and transport shields remain zero.
     ShieldSpec shield;

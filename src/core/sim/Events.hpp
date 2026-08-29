@@ -77,6 +77,11 @@ enum class EventKind : std::uint8_t {
     /// A construction completed. The unit it becomes is a separate `UnitFinished`, because the
     /// sim cannot make one — that needs a model out of the VFS.
     ConstructionFinished,
+    /// A unit reached a new veterancy level. `amount` is the level it reached, 1 through 5,
+    /// as a whole number — the one kind whose amount is a count rather than a quantity of
+    /// health, because there is nowhere else for it to go and a separate field used by one
+    /// kind would cost every event eight bytes.
+    UnitVeteranPromoted,
     /// An army lost its last commander.
     TeamDefeated,
     /// The match ended. `army` is the winning alliance, or `kNoArmy` for a draw.

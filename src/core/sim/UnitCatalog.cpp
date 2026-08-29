@@ -45,6 +45,7 @@ UnitTypeIndex UnitCatalog::add(const unitdef::UnitDef* def, TickRate rate) {
         derived.upkeepEnergyPerTick = rate.magPerTick(def->upkeepEnergyPerSecond);
         derived.buildPerTick = rate.magPerTick(def->buildRate);
         derived.buildReachElmos = fxFromFloat(def->buildDistanceElmos);
+        derived.regenPerTick = rate.magPerTick(def->regenPerSecond);
     }
     rates_.push_back(derived);
 

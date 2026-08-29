@@ -53,6 +53,13 @@ public:
         /// the same reason `IntelRadii` is: `UnitDef` states a float because content does,
         /// and the reach is compared against fixed-point distances inside the tick.
         Fx buildReachElmos{};
+
+        /// Hull regeneration, health per tick, from `Defense.RegenRate`.
+        ///
+        /// The type's BASE rate only. A unit's actual rate is this plus its veterancy bonus,
+        /// which varies per unit and so cannot live in a per-type table — see
+        /// `tickRegeneration`.
+        Mag regenPerTick{};
     };
 
     /// How far one type sees, in elmos, in the type the sim can do arithmetic in.

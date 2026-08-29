@@ -2306,3 +2306,33 @@ exact comparison is cheap. A generic panel registry adds indirection for three f
 **Consequences.** Returning to a builder type or interface profile restores its previous page;
 changing selection order, membership, or a handle generation returns the roster to page zero.
 Content shrinkage and viewport changes remain layout concerns rather than being duplicated in state.
+
+## ADR-065 — Veterancy is recomputed from the blueprint, never accumulated
+
+**Context.** Retail Forged Alliance recomputes every buff from the unit's blueprint value and
+declares its veterancy buffs `Stacks = 'REPLACE'`, so only the current level's buff is ever
+applied (`lua/sim/Buff.lua`, `BuffCalculate`). Level 3 health is `base x 1.3`. An implementation
+that applied each level's multiplier as the unit was promoted would reach 1.1 x 1.2 x 1.3 = 1.716,
+32% too much health, and would read as a balance complaint rather than as a bug. Promotion also
+heals: retail raises the maximum and then adds the increase to current health.
+
+**Decision.** Store `kills` and `level` per unit and derive the maximum from the blueprint each
+promotion, `veterancyMaxHealth(blueprintMax, level)`. Scale as an exact integer ratio on the raw
+fixed-point value rather than by an `Fx` multiplier, because `Fx::fromRatio(11, 10)` is 18022/16384
+and turns 1,000 health into 1,099.976. Kill credit is awarded from `retireDead`, which is where
+retail calls `OnKilledUnit` — before the death weapon and before the wreck. Thresholds and the
+regeneration ladder come from the blueprint's `Veteran` and `Buffs.Regen` tables, defaulting to
+`Game.VeteranDefault`.
+
+**Alternatives considered.** Accumulating multipliers per promotion is simpler and wrong, as above.
+A global threshold constant was implemented first and rejected on measurement: 193 of 568 shipped
+blueprints override the thresholds and 192 override the regeneration, most by large factors — an
+interceptor promotes at 2 kills, not 25. Converting the veteran regeneration bonus at content load
+was impossible because it depends on the unit's level rather than its type, so it is derived inside
+the tick in whole numbers, which keeps floating point out of the sim.
+
+**Consequences.** Veteran health and regeneration match retail exactly, including that a veteran
+hits no harder — retail's per-weapon damage buff is commented out. `Health` grows a `Veterancy`
+member and the state hash feeds it only when non-zero, so every historical replay hash of a match
+without promotions is unchanged. A killer at zero health that has not yet been retired earns
+nothing, otherwise the promotion heal would resurrect a unit the same loop was about to bury.

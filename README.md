@@ -75,7 +75,12 @@ role.
 | State | Systems |
 |---|---|
 | **Partial** | large-army pathing and formations; aircraft flight, bombing, fuel and staging; surface naval combat; shield variants; experimentals; factory controls; repair and guard; wreck semantics; FAF AI |
-| **Absent** | submarines and submerged combat; transports and cargo; tactical and strategic missiles, silo ammunition and interception; ACU/SCU enhancements; veterancy; capture and gifting; unit caps; terrain deformation; alternate victory conditions |
+| **Absent** | submarines and submerged combat; transports and cargo; tactical and strategic missiles, silo ammunition and interception; ACU/SCU enhancements; capture and gifting; unit caps; terrain deformation; alternate victory conditions |
+
+Veterancy and hull regeneration moved out of **Absent** in August 2026. Both follow retail
+Forged Alliance exactly, including its per-blueprint kill thresholds and the detail that a
+veteran hits no harder — only survives longer. The evidence behind every constant is recorded
+as claims `C-024`, `C-028`–`C-031` in [`docs/fa-exe-analysis-plan.md`](docs/fa-exe-analysis-plan.md).
 
 The shortest route to those systems is four shared foundations rather than one
 special case per unit: complete movement and target layers, generalized

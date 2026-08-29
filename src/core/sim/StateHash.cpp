@@ -152,6 +152,16 @@ void feedHealth(StateHash& h, const Health& health) noexcept {
     // shooting whom have diverged, whatever the health totals say.
     feed(h, static_cast<std::size_t>(health.lastHitBy.index));
     feed(h, static_cast<std::size_t>(health.lastHitBy.generation));
+
+    // VETERANCY, and only when the unit has any — which keeps every historical hash of a match
+    // whose units never promoted byte-identical, the same trick the unshielded case above uses.
+    // Fed because it decides things: two units with equal health but different levels have
+    // different maxima and heal at different rates, so they diverge from the next tick on.
+    if (health.veterancy.kills != 0 || health.veterancy.level != 0) {
+        feed(h, true);
+        feed(h, health.veterancy.kills);
+        feed(h, health.veterancy.level);
+    }
 }
 
 /// A unit's outstanding orders (§7 P4.1).

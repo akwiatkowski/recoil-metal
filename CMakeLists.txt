@@ -185,6 +185,7 @@ add_library(rm_core STATIC
     src/core/sim/TickRate.cpp
     src/core/sim/Terrain.cpp
     src/core/sim/UnitStore.cpp
+    src/core/sim/Veterancy.cpp
     src/core/sim/UnitCatalog.cpp
     src/core/sim/UnitCensus.cpp
     src/core/sim/Skirmish.cpp
@@ -329,6 +330,7 @@ if(BUILD_TESTING)
         tests/test_interpolate.cpp
         tests/test_build_order.cpp
         tests/test_combat.cpp
+        tests/test_veterancy.cpp
         tests/test_intel.cpp
         tests/test_player_fog.cpp
         tests/test_economy.cpp

@@ -428,9 +428,45 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
         def.weapons = unitdef::weaponsFrom(*weapons, def.motion == unitdef::MotionType::Air);
     }
 
+    // --- veterancy ---------------------------------------------------------
+    //
+    // A TOP-LEVEL section, not part of `Defense`, and stated by 193 of the 568 shipped units.
+    // Read one level at a time and only overriding the ones present, so a blueprint listing
+    // three levels keeps the default for the other two rather than zeroing them —
+    // `Unit.lua` sizes its ladder with `table.getsize`, which counts what is there.
+    if (const lua::Value* veteran = parsed->path("Veteran")) {
+        for (std::size_t level = 0; level < def.veterancyKills.size(); ++level) {
+            const std::string key = "Level" + std::to_string(level + 1);
+            const float kills = numberOr(*veteran, key, 0.0f);
+            if (kills > 0.0f) {
+                def.veterancyKills[level] = static_cast<int>(kills);
+            }
+        }
+    }
+
+    // `Buffs.Regen` REPLACES the default regeneration ladder rather than adding to it: both
+    // the default `VeterancyRegen<L>` buff and the blueprint-derived one carry
+    // `BuffType = 'VETERANCYREGEN'` with `Stacks = 'REPLACE'`, so the later one wins.
+    // `Regen` is the only buff kind any shipped blueprint overrides.
+    if (const lua::Value* buffs = parsed->path("Buffs")) {
+        if (const lua::Value* regen = buffs->find("Regen"); regen != nullptr) {
+            for (std::size_t level = 0; level < def.veterancyRegenPerSecond.size(); ++level) {
+                const std::string key = "Level" + std::to_string(level + 1);
+                const float perSecond = numberOr(*regen, key, -1.0f);
+                if (perSecond >= 0.0f) {
+                    def.veterancyRegenPerSecond[level] = static_cast<int>(perSecond);
+                }
+            }
+        }
+    }
+
     // --- the rest ----------------------------------------------------------
     if (const lua::Value* defense = parsed->path("Defense")) {
         def.health = sim::magFromFloat(numberOr(*defense, "MaxHealth", 0.0f));
+        // AUTHORED PER SECOND, like every other rate a blueprint states, and converted to
+        // per-tick once in `sim::UnitCatalog` (PLAN2.md §5.1). Most units state 0 and simply
+        // do not heal; the regenerating ones are mainly the ACUs and the Cybran hulls.
+        def.regenPerSecond = numberOr(*defense, "RegenRate", 0.0f);
         // Kept as the string the file says. `UnitDef::armorType` explains why it is not an
         // `ArmorClass` here; the short version is that resolving it needs a registry, and a
         // parser that needs a registry cannot be called with a Lua table and nothing else.

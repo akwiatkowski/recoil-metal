@@ -2,6 +2,7 @@
 
 #include "core/sim/Fx.hpp"
 #include "core/sim/IdPool.hpp"
+#include "core/sim/Veterancy.hpp"
 
 #include <vector>
 
@@ -68,6 +69,14 @@ struct Health {
     /// so the death event can name the killer; cleared when the slot is reused, like the order
     /// queue.
     UnitId lastHitBy{};
+
+    /// What this unit has earned by killing things (`Veterancy.hpp`).
+    ///
+    /// HERE rather than in a fourth parallel array in the store, because it is per-unit
+    /// mutable combat state and that is what this struct has become — it already holds the
+    /// reload clocks and the instigator, neither of which is health either. A separate
+    /// array would mean another span to keep index-locked for no gain.
+    Veterancy veterancy;
 
     [[nodiscard]] bool alive() const noexcept { return current > Mag{}; }
 };

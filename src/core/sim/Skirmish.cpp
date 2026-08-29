@@ -3,6 +3,7 @@
 #include "core/sim/Adjacency.hpp"
 #include "core/sim/Assist.hpp"
 #include "core/sim/Reclaim.hpp"
+#include "core/sim/Veterancy.hpp"
 
 namespace rm::sim {
 namespace {
@@ -74,6 +75,15 @@ void retireDead(UnitStore& store, const UnitCatalog& catalog, TickReport& report
                          .army = motion[slot].armyIndex,
                          .at = positionOf(transforms[slot]),
                      });
+
+        // KILL CREDIT, here because this is retail's own placement: `Unit.lua` calls
+        // `instigator:OnKilledUnit(self)` from the victim's death handling, before the death
+        // weapon fires and before the wreck exists. Putting it anywhere later would credit a
+        // chain kill to the wrong tick; putting it in `damageArea` would credit every hit.
+        //
+        // The same `radiusElmos > 0` guard makes this once per death too, which matters more
+        // here than for the event: a kill counted twice is a unit promoted at half the cost.
+        (void)creditKill(store, catalog, healths[slot].lastHitBy, events);
 
         // The scale that used to be zeroed here belonged to `UnitInstance`, which the store no
         // longer holds — a corpse is left out of the draw gather instead, which is both
@@ -278,6 +288,12 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
     // Recovery precedes fire: a bubble whose timer reaches zero can intercept this tick,
     // while a hit later in the tick restarts its authored delay.
     tickShields(store, catalog, match.events);
+
+    // Hulls heal alongside bubbles, and before the guns: a unit that regenerates back above
+    // zero this tick was never dead, and one that does not is retired below. Doing it after
+    // the damage would let a unit spend a tick at zero health and still survive, which is a
+    // different game.
+    tickRegeneration(store, catalog, rate);
 
     // Attack-move and patrol acquire only from the post-movement, post-intel world. Their
     // temporary target then feeds the ordinary aiming and firing passes below.
