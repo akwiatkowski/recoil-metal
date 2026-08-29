@@ -39,11 +39,9 @@ void appendMinimapPips(std::vector<rm::ui::MinimapPip>& out, const UnitScene& sc
 
 /// Which unit the panel is showing the options OF.
 ///
-/// THE HANDLE AND THE NAME TOGETHER, because both callers need one each and re-deriving either
-/// means restating "the first builder in the selection decides" somewhere else. That rule lives
-/// in `gatherBuildOptions` and a second copy of it is a copy that will drift — the panel would
-/// then be headed by one unit and its orders issued by another, which is invisible until the
-/// day two builders are selected.
+/// THE HANDLE AND THE NAME TOGETHER, because the panel header and command dispatch must identify
+/// the same exact unit. `gatherBuildOptions` accepts that active handle explicitly and returns it
+/// here, so a caller never has to re-derive who owns the menu it is drawing.
 struct BuildSelection {
     rm::sim::UnitId builder{};
     std::string name;
@@ -56,17 +54,32 @@ struct BuildSelection {
     [[nodiscard]] bool any() const noexcept { return !name.empty(); }
 };
 
-/// What the selection can build, for the build panel.
+/// Build-capable handles in selection order.
 ///
-/// THE FIRST BUILDER IN THE SELECTION DECIDES, rather than the intersection of everything
-/// selected. Both games this engine reads from do it that way, and the reason is that an
-/// intersection empties the panel the moment a tank is box-selected along with a commander —
-/// which is the common case, and a panel that empties when you select MORE is the sort of
-/// behaviour a player learns to work around instead of using.
+/// Dead, unknown and non-building units are omitted. Output is cleared on every call so a caller
+/// can keep the vector across frames without stale handles surviving a deselection.
+void gatherBuilderCandidates(const UnitScene& scene,
+                             std::span<const rm::sim::UnitId> selection,
+                             std::vector<rm::sim::UnitId>& out);
+
+/// Retains `current` while it remains a candidate; otherwise chooses the first candidate.
+///
+/// Selection order is already deterministic, so the fallback is deterministic without sorting
+/// handles and changing the player's selection order. No candidate returns an invalid handle.
+[[nodiscard]] rm::sim::UnitId
+activeBuilderFor(std::span<const rm::sim::UnitId> candidates,
+                 rm::sim::UnitId current = {}) noexcept;
+
+/// What one explicit active builder can build, for the build panel.
+///
+/// Choosing one builder rather than intersecting every selected builder is deliberate. Both games
+/// this engine reads from do it that way, and an intersection would empty the panel whenever a
+/// tank is box-selected with a commander. Candidate choice lives outside this translation so the
+/// same builder can remain active when selection order changes.
 ///
 /// Returns the builder through `who` so the header can say whose list this is and a placement
-/// can be ordered from it; empty output means nothing selected builds anything, and the panel is
-/// then absent rather than empty.
+/// can be ordered from it. Invalid input clears both outputs; a valid builder can still have no
+/// offered options, in which case the panel is absent rather than empty.
 ///
 /// ANSWERED FROM `scene.roster`, NOT FROM `BuildTree` OVER `scene.definitions` — the reason is
 /// in the implementation, and it is the difference between "every structure this faction
@@ -74,9 +87,9 @@ struct BuildSelection {
 ///
 /// `out` and `who` are cleared on every call, including the ones that find nothing, so a caller
 /// may reuse both across frames without a deselection leaving the last builder's menu on screen.
-void gatherBuildOptions(const UnitScene& scene, std::span<const rm::sim::UnitId> selection,
-                        const rm::ui::Theme& theme, std::vector<rm::ui::BuildOption>& out,
-                        BuildSelection& who);
+void gatherBuildOptions(const UnitScene& scene, rm::sim::UnitId activeBuilder,
+                         const rm::ui::Theme& theme, std::vector<rm::ui::BuildOption>& out,
+                         BuildSelection& who);
 
 /// Every icon the interface needs this frame, packed into ONE atlas.
 ///

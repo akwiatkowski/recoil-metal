@@ -433,9 +433,12 @@ int runScreenshot(const Session& session) {
             // — drew a roster with no pictures in it.
             std::vector<rm::ui::BuildOption> shotOptions;
             std::vector<rm::ui::RosterTile> shotRoster;
+            std::vector<rm::sim::UnitId> shotBuilders;
             rm::app::BuildSelection shotWho;
             gatherRoster(units, capturedSelection, shotRoster);
-            gatherBuildOptions(units, capturedSelection, baseTheme, shotOptions, shotWho);
+            gatherBuilderCandidates(units, capturedSelection, shotBuilders);
+            gatherBuildOptions(units, activeBuilderFor(shotBuilders), baseTheme, shotOptions,
+                               shotWho);
 
             // Packed unconditionally now: the strategic glyphs exist with nothing selected
             // at all, which is precisely the far-zoom capture that shows them.
@@ -782,6 +785,8 @@ int runWindowed(const Session& session) {
         // the correct coupling rather than a shortcut.
         std::vector<rm::ui::BuildOption> buildOptions;
         rm::app::BuildSelection buildWho;
+        std::vector<rm::sim::UnitId> builderCandidates;
+        rm::sim::UnitId activeBuilder{};
 
         // WHAT THE PLAYER PICKED OFF THE TRAY, if anything — an index into `buildOptions`.
         //
@@ -1797,7 +1802,9 @@ int runWindowed(const Session& session) {
             // What the selection can build, above the minimap — the bottom-left control block
             // Beyond All Reason arranges the same way. Absent entirely when nothing selected
             // builds, rather than an empty frame asking to be explained.
-            rm::app::gatherBuildOptions(units, selected, baseTheme, buildOptions, buildWho);
+            rm::app::gatherBuilderCandidates(units, selected, builderCandidates);
+            activeBuilder = rm::app::activeBuilderFor(builderCandidates, activeBuilder);
+            rm::app::gatherBuildOptions(units, activeBuilder, baseTheme, buildOptions, buildWho);
             // AN INDEX INTO A LIST THAT HAS BEEN REBUILT IS A DIFFERENT BUILDING. Deselecting,
             // or selecting a different builder, must not leave cell 4 armed and meaning
             // something else — so the arming is dropped whenever the list it points into can no

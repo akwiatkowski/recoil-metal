@@ -21,6 +21,7 @@
 #include "app/SceneBuild.hpp"
 
 #include <algorithm>
+#include <array>
 #include <string>
 #include <vector>
 
@@ -123,15 +124,17 @@ struct Fixture {
 
     /// Runs the query and returns the ids it offered, in panel order.
     [[nodiscard]] std::vector<std::string> optionsFor(
-        std::vector<rm::sim::UnitId> selection) {
-        std::vector<rm::ui::BuildOption> out;
-        gatherBuildOptions(scene, selection, rm::ui::neutralTheme(), out, who);
+        std::vector<rm::sim::UnitId> selection,
+        rm::sim::UnitId current = {}) {
+        std::vector<rm::sim::UnitId> candidates;
+        rm::app::gatherBuilderCandidates(scene, selection, candidates);
+        const rm::sim::UnitId active = rm::app::activeBuilderFor(candidates, current);
+        gatherBuildOptions(scene, active, rm::ui::neutralTheme(), last, who);
         std::vector<std::string> got;
-        got.reserve(out.size());
-        for (const rm::ui::BuildOption& option : out) {
+        got.reserve(last.size());
+        for (const rm::ui::BuildOption& option : last) {
             got.push_back(option.id);
         }
-        last = std::move(out);
         return got;
     }
 
@@ -243,6 +246,52 @@ TEST_CASE("a dead builder offers nothing, and a live one behind it answers", "[u
 
     CHECK(fixture.who.name == "UEL0001");
     CHECK_FALSE(got.empty());
+}
+
+TEST_CASE("the active builder survives selection reordering and falls back deterministically",
+          "[ui][build]") {
+    Fixture fixture;
+    const rm::sim::UnitId engineer = fixture.spawnEngineer();
+    const rm::sim::UnitId commander = fixture.spawnCommander();
+    const rm::sim::UnitId tank = fixture.spawnTank();
+    std::vector<rm::sim::UnitId> candidates;
+
+    rm::app::gatherBuilderCandidates(fixture.scene, {&engineer, 1}, candidates);
+    REQUIRE(candidates == std::vector{engineer});
+    CHECK(rm::app::activeBuilderFor(candidates) == engineer);
+
+    const std::array reordered{tank, commander, engineer};
+    rm::app::gatherBuilderCandidates(fixture.scene, reordered, candidates);
+    REQUIRE(candidates == std::vector{commander, engineer});
+    CHECK(rm::app::activeBuilderFor(candidates, engineer) == engineer);
+
+    fixture.scene.store.kill(engineer);
+    rm::app::gatherBuilderCandidates(fixture.scene, reordered, candidates);
+    REQUIRE(candidates == std::vector{commander});
+    CHECK(rm::app::activeBuilderFor(candidates, engineer) == commander);
+
+    const rm::sim::UnitId replacement = fixture.spawnEngineer();
+    REQUIRE(replacement.index == engineer.index);
+    REQUIRE(replacement != engineer);
+    const std::array reused{replacement, commander};
+    rm::app::gatherBuilderCandidates(fixture.scene, reused, candidates);
+    CHECK(rm::app::activeBuilderFor(candidates, engineer) == replacement);
+
+    rm::app::gatherBuilderCandidates(fixture.scene, {}, candidates);
+    CHECK(candidates.empty());
+    CHECK_FALSE(fixture.scene.store.alive(rm::app::activeBuilderFor(candidates, commander)));
+}
+
+TEST_CASE("an ineligible builder falls through to the next candidate", "[ui][build]") {
+    Fixture fixture;
+    const rm::sim::UnitId ownerless = fixture.spawnEngineer(rm::sim::kNoArmy);
+    const rm::sim::UnitId commander = fixture.spawnCommander();
+    const std::array selection{ownerless, commander};
+    std::vector<rm::sim::UnitId> candidates;
+
+    rm::app::gatherBuilderCandidates(fixture.scene, selection, candidates);
+    REQUIRE(candidates == std::vector{commander});
+    CHECK(rm::app::activeBuilderFor(candidates) == commander);
 }
 
 TEST_CASE("an option the army cannot pay for is offered, and marked", "[ui][build]") {

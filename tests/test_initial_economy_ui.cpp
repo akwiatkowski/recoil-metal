@@ -144,9 +144,8 @@ TEST_CASE("a real commander's tray offers the initial economy, priced by the blu
         SKIP("no Supreme Commander unit blueprints at " + unitRoot().string());
     }
     const rm::sim::UnitId commander = fixture->spawn(*fixture->real("UEL0001"), 300.0f, 300.0f);
-    const std::vector<rm::sim::UnitId> selection{commander};
-    rm::app::gatherBuildOptions(fixture->scene, selection, rm::ui::neutralTheme(),
-                                fixture->options, fixture->who);
+    rm::app::gatherBuildOptions(fixture->scene, commander, rm::ui::neutralTheme(),
+                                 fixture->options, fixture->who);
 
     // The whole opening is on the tray: extractor, power, storage, factory — and each cell
     // carries the blueprint's OWN price and display name, which is the claim a synthetic
@@ -174,9 +173,8 @@ TEST_CASE("a tray cell hit-tests to its option and the click becomes that constr
         SKIP("no Supreme Commander unit blueprints at " + unitRoot().string());
     }
     const rm::sim::UnitId commander = fixture->spawn(*fixture->real("UEL0001"), 300.0f, 300.0f);
-    const std::vector<rm::sim::UnitId> selection{commander};
-    rm::app::gatherBuildOptions(fixture->scene, selection, rm::ui::neutralTheme(),
-                                fixture->options, fixture->who);
+    rm::app::gatherBuildOptions(fixture->scene, commander, rm::ui::neutralTheme(),
+                                 fixture->options, fixture->who);
     REQUIRE_FALSE(fixture->options.empty());
 
     // The click's first leg: a point in the mex's own cell resolves to the mex's index —
@@ -228,9 +226,8 @@ TEST_CASE("affordability dims what the bank cannot cover, at real prices",
     // tray says so by dimming rather than hiding, so the layout never reflows.
     fixture->scene.economies[0].stored.mass = rm::sim::magFromFloat(100.0f);
     const rm::sim::UnitId commander = fixture->spawn(*fixture->real("UEL0001"), 300.0f, 300.0f);
-    const std::vector<rm::sim::UnitId> selection{commander};
-    rm::app::gatherBuildOptions(fixture->scene, selection, rm::ui::neutralTheme(),
-                                fixture->options, fixture->who);
+    rm::app::gatherBuildOptions(fixture->scene, commander, rm::ui::neutralTheme(),
+                                 fixture->options, fixture->who);
 
     REQUIRE(fixture->option("UEB1103") != nullptr);
     REQUIRE(fixture->option("UEB0101") != nullptr);

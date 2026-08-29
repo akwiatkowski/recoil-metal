@@ -2266,3 +2266,23 @@ duplicates the blueprint palette and has no Forged Alliance order-rack counterpa
 **Consequences.** Selection changes can only alter disabled state, never common-command positions.
 Unimplemented canonical positions remain visible to future rendering as disabled reserves, and this
 slice adds no command execution, click handling, or gameplay capability.
+
+## ADR-063 — One explicit selected builder owns the build panel
+
+**Context.** `gatherBuildOptions` silently chose the first build-capable unit in a selection on
+every frame. The panel header and build dispatch shared its returned handle, but there was no
+active-builder state to preserve that choice when the same selection arrived in a different order,
+and no testable boundary between discovering candidates and choosing one.
+
+**Decision.** Gather live build-capable handles in selection order, retain the exact current handle
+while it remains among them, and otherwise fall back to the first candidate. Pass that handle
+explicitly into option gathering; the returned `BuildSelection::builder` remains the sole handle
+used by factory, upgrade, and placed-build dispatch.
+
+**Alternatives considered.** Intersecting every builder's options empties useful menus in mixed
+selections. Sorting candidates discards the player's deterministic selection order. Re-choosing the
+first candidate every frame preserves old behavior but leaves panel ownership implicit and unstable.
+
+**Consequences.** Reordering an unchanged mixed selection no longer changes whose menu is shown.
+Death, deselection, or filtering of the active builder chooses the next candidate deterministically;
+no candidates clear the panel and invalidate the active handle. This adds no builder-cycle control.

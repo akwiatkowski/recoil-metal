@@ -31,6 +31,27 @@ namespace {
     return {{0.42f, 0.68f, 1.00f, 1.0f}};
 }
 
+/// A handle eligible to own the build panel, or null.
+[[nodiscard]] const rm::unitdef::UnitDef* buildCandidateDef(const UnitScene& scene,
+                                                            rm::sim::UnitId id) noexcept {
+    if (!scene.store.alive(id)) {
+        return nullptr;
+    }
+    const rm::unitdef::UnitDef* def = scene.catalog.def(scene.store.typeAt(id.index));
+    if (def == nullptr) {
+        return nullptr;
+    }
+    const int army = scene.armyOf(id.index);
+    if (army < 0 || static_cast<std::size_t>(army) >= scene.armies.size()) {
+        return nullptr;
+    }
+    const rm::unitdef::Role role = rm::unitdef::roleOf(*def);
+    return role == rm::unitdef::Role::Commander || role == rm::unitdef::Role::Builder
+            || role == rm::unitdef::Role::Factory
+         ? def
+         : nullptr;
+}
+
 } // namespace
 
 bool constructionInProgress(const rm::sim::Construction& work) noexcept {
@@ -153,12 +174,31 @@ void appendViewFootprint(std::vector<std::array<float, 2>>& out, const rm::Orbit
 /// about stores, catalogs, rosters or deques. The two halves are tested separately for the
 /// same reason they are separate: `tests/test_build_panel.cpp` asks where a cell is,
 /// `tests/test_build_options.cpp` asks what belongs in it.
-void gatherBuildOptions(const UnitScene& scene, std::span<const rm::sim::UnitId> selection,
-                        const rm::ui::Theme& theme, std::vector<rm::ui::BuildOption>& out,
-                        BuildSelection& who) {
+void gatherBuilderCandidates(const UnitScene& scene,
+                             std::span<const rm::sim::UnitId> selection,
+                             std::vector<rm::sim::UnitId>& out) {
+    out.clear();
+    for (const rm::sim::UnitId id : selection) {
+        if (buildCandidateDef(scene, id) != nullptr) {
+            out.push_back(id);
+        }
+    }
+}
+
+rm::sim::UnitId activeBuilderFor(std::span<const rm::sim::UnitId> candidates,
+                                 rm::sim::UnitId current) noexcept {
+    if (std::ranges::find(candidates, current) != candidates.end()) {
+        return current;
+    }
+    return candidates.empty() ? rm::sim::UnitId{} : candidates.front();
+}
+
+void gatherBuildOptions(const UnitScene& scene, rm::sim::UnitId activeBuilder,
+                         const rm::ui::Theme& theme, std::vector<rm::ui::BuildOption>& out,
+                         BuildSelection& who) {
     out.clear();
     who = BuildSelection{};
-    if (selection.empty() || scene.roster.size() == 0) {
+    if (scene.roster.size() == 0) {
         return;
     }
 
@@ -184,122 +224,111 @@ void gatherBuildOptions(const UnitScene& scene, std::span<const rm::sim::UnitId>
             scene.economies[static_cast<std::size_t>(scene.playerArmy)].stored.mass);
     }
 
-    for (const rm::sim::UnitId id : selection) {
-        if (!scene.store.alive(id)) {
-            continue;
-        }
-        const rm::unitdef::UnitDef* def = scene.catalog.def(scene.store.typeAt(id.index));
-        if (def == nullptr) {
-            continue;
-        }
-        const rm::unitdef::Role role = rm::unitdef::roleOf(*def);
-        // A COMMANDER, AN ENGINEER — or a FACTORY. The first two build STRUCTURES, answered
-        // by role; a factory builds MOBILE units, answered by its own `BuildableCategory`
-        // expression, which is the game's statement of what rolls off this floor and needs
-        // no taxonomy of ours. Anything else in the selection offers nothing.
-        const bool buildsStructures =
-            role == rm::unitdef::Role::Commander || role == rm::unitdef::Role::Builder;
-        const bool isFactory = role == rm::unitdef::Role::Factory;
-        if (!buildsStructures && !isFactory) {
-            continue;
-        }
+    const rm::unitdef::UnitDef* def = buildCandidateDef(scene, activeBuilder);
+    if (def == nullptr) {
+        return;
+    }
+    const rm::unitdef::Role role = rm::unitdef::roleOf(*def);
+    // A COMMANDER, AN ENGINEER — or a FACTORY. The first two build STRUCTURES, answered
+    // by role; a factory builds MOBILE units, answered by its own `BuildableCategory`
+    // expression, which is the game's statement of what rolls off this floor and needs
+    // no taxonomy of ours.
+    const bool isFactory = role == rm::unitdef::Role::Factory;
 
-        const int army = scene.armyOf(id.index);
-        if (army < 0 || static_cast<std::size_t>(army) >= scene.armies.size()) {
-            continue;
-        }
-        const rm::sim::Faction faction = scene.armies[static_cast<std::size_t>(army)].faction;
+    const int army = scene.armyOf(activeBuilder.index);
+    if (army < 0 || static_cast<std::size_t>(army) >= scene.armies.size()) {
+        return;
+    }
+    const rm::sim::Faction faction = scene.armies[static_cast<std::size_t>(army)].faction;
 
-        who = BuildSelection{.builder = id,
-                             .name = def->name,
-                             .role = std::string{rm::unitdef::roleName(role)}};
+    who = BuildSelection{.builder = activeBuilder,
+                         .name = def->name,
+                         .role = std::string{rm::unitdef::roleName(role)}};
 
-        // THE TECH PATH, first in the tray because it is the decision a player returns to.
-        //
-        // `General.UpgradesTo` is a field of its own and belongs to NO `BuildableCategory`, so
-        // walking the build tree could never find it: a T1 land factory's own tier two was in
-        // the corpus, understood by `startCommand` (which recognises an upgrade by exactly this
-        // field) and offered by nothing. The chain continues on its own — the T2 factory's
-        // blueprint names the T3 — so this one lookup gives all three tiers as each is reached.
-        if (const std::optional<rm::data::RosterEntry> next =
-                def->upgradesTo.empty() ? std::nullopt : scene.roster.byId(def->upgradesTo)) {
-            const float mass = rm::sim::magToFloat(next->costMass);
-            const float seconds = def->buildRate > 0.0f
-                                    ? rm::sim::magToFloat(next->buildTime) / def->buildRate
-                                    : 0.0f;
-            // NAMED BY ITS TIER, because all three tiers of a land factory are called "Land
-            // Factory" in the shipped corpus and a cell reading the same as its neighbour tells
-            // a player nothing at all.
-            const std::string name =
-                (next->description.empty() ? next->id : next->description) + " T"
-                + std::to_string(next->tech);
+    // THE TECH PATH, first in the tray because it is the decision a player returns to.
+    //
+    // `General.UpgradesTo` is a field of its own and belongs to NO `BuildableCategory`, so
+    // walking the build tree could never find it: a T1 land factory's own tier two was in
+    // the corpus, understood by `startCommand` (which recognises an upgrade by exactly this
+    // field) and offered by nothing. The chain continues on its own — the T2 factory's
+    // blueprint names the T3 — so this one lookup gives all three tiers as each is reached.
+    if (const std::optional<rm::data::RosterEntry> next =
+            def->upgradesTo.empty() ? std::nullopt : scene.roster.byId(def->upgradesTo)) {
+        const float mass = rm::sim::magToFloat(next->costMass);
+        const float seconds = def->buildRate > 0.0f
+                                ? rm::sim::magToFloat(next->buildTime) / def->buildRate
+                                : 0.0f;
+        // NAMED BY ITS TIER, because all three tiers of a land factory are called "Land
+        // Factory" in the shipped corpus and a cell reading the same as its neighbour tells
+        // a player nothing at all.
+        const std::string name =
+            (next->description.empty() ? next->id : next->description) + " T"
+            + std::to_string(next->tech);
+        out.push_back(rm::ui::BuildOption{
+            .id = next->id,
+            .name = name,
+            .massCost = mass,
+            .energyCost = rm::sim::magToFloat(next->costEnergy),
+            .buildSeconds = seconds,
+            .health = rm::sim::magToFloat(next->health),
+            .upgrade = true,
+            .affordable = mass <= storedMass,
+            .tint = rm::ui::tierTint(theme, next->tech),
+        });
+    }
+
+    if (isFactory) {
+        for (const rm::data::RosterEntry& entry :
+             scene.roster.buildableBy(faction, def->buildableCategory)) {
+            // TIER ONE ONLY, the structure tray's rule for the structure tray's reason.
+            if (entry.tech > 1) {
+                continue;
+            }
+            const float mass = rm::sim::magToFloat(entry.costMass);
+            const float seconds =
+                def->buildRate > 0.0f
+                    ? rm::sim::magToFloat(entry.buildTime) / def->buildRate
+                    : 0.0f;
             out.push_back(rm::ui::BuildOption{
-                .id = next->id,
-                .name = name,
+                .id = entry.id,
+                .name = entry.description,
                 .massCost = mass,
-                .energyCost = rm::sim::magToFloat(next->costEnergy),
+                .energyCost = rm::sim::magToFloat(entry.costEnergy),
                 .buildSeconds = seconds,
-                .health = rm::sim::magToFloat(next->health),
-                .upgrade = true,
+                .health = rm::sim::magToFloat(entry.health),
                 .affordable = mass <= storedMass,
-                .tint = rm::ui::tierTint(theme, next->tech),
+                .tint = rm::ui::tierTint(theme, entry.tech),
             });
         }
-
-        if (isFactory) {
-            for (const rm::data::RosterEntry& entry :
-                 scene.roster.buildableBy(faction, def->buildableCategory)) {
-                // TIER ONE ONLY, the structure tray's rule for the structure tray's reason.
-                if (entry.tech > 1) {
-                    continue;
-                }
-                const float mass = rm::sim::magToFloat(entry.costMass);
-                const float seconds =
-                    def->buildRate > 0.0f
-                        ? rm::sim::magToFloat(entry.buildTime) / def->buildRate
-                        : 0.0f;
-                out.push_back(rm::ui::BuildOption{
-                    .id = entry.id,
-                    .name = entry.description,
-                    .massCost = mass,
-                    .energyCost = rm::sim::magToFloat(entry.costEnergy),
-                    .buildSeconds = seconds,
-                    .health = rm::sim::magToFloat(entry.health),
-                    .affordable = mass <= storedMass,
-                    .tint = rm::ui::tierTint(theme, entry.tech),
-                });
+        return;
+    }
+    for (const rm::unitdef::Role wanted : kStructureRoles) {
+        for (const rm::data::RosterEntry& entry : scene.roster.all(faction, wanted)) {
+            // TIER ONE ONLY, for now. A commander can build a T1 structure of each kind, and
+            // the higher tiers need an upgraded engineer this engine does not yet model —
+            // listing them would offer a player something no order could satisfy, which is
+            // worse than a short menu.
+            if (entry.tech > 1) {
+                continue;
             }
-            return;  // the first builder decides — see the header
+            const float mass = rm::sim::magToFloat(entry.costMass);
+            // Seconds at THIS builder's rate — the blueprint states work, the builder
+            // states work per second, and the player is only ever told the quotient.
+            const float seconds =
+                def->buildRate > 0.0f
+                    ? rm::sim::magToFloat(entry.buildTime) / def->buildRate
+                    : 0.0f;
+            out.push_back(rm::ui::BuildOption{
+                .id = entry.id,
+                .name = entry.description,
+                .massCost = mass,
+                .energyCost = rm::sim::magToFloat(entry.costEnergy),
+                .buildSeconds = seconds,
+                .health = rm::sim::magToFloat(entry.health),
+                .affordable = mass <= storedMass,
+                .tint = rm::ui::tierTint(theme, entry.tech),
+            });
         }
-        for (const rm::unitdef::Role wanted : kStructureRoles) {
-            for (const rm::data::RosterEntry& entry : scene.roster.all(faction, wanted)) {
-                // TIER ONE ONLY, for now. A commander can build a T1 structure of each kind, and
-                // the higher tiers need an upgraded engineer this engine does not yet model —
-                // listing them would offer a player something no order could satisfy, which is
-                // worse than a short menu.
-                if (entry.tech > 1) {
-                    continue;
-                }
-                const float mass = rm::sim::magToFloat(entry.costMass);
-                // Seconds at THIS builder's rate — the blueprint states work, the builder
-                // states work per second, and the player is only ever told the quotient.
-                const float seconds =
-                    def->buildRate > 0.0f
-                        ? rm::sim::magToFloat(entry.buildTime) / def->buildRate
-                        : 0.0f;
-                out.push_back(rm::ui::BuildOption{
-                    .id = entry.id,
-                    .name = entry.description,
-                    .massCost = mass,
-                    .energyCost = rm::sim::magToFloat(entry.costEnergy),
-                    .buildSeconds = seconds,
-                    .health = rm::sim::magToFloat(entry.health),
-                    .affordable = mass <= storedMass,
-                    .tint = rm::ui::tierTint(theme, entry.tech),
-                });
-            }
-        }
-        return;  // the first builder decides — see the header
     }
 }
 
