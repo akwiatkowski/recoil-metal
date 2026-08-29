@@ -8,6 +8,8 @@ third_party/
 .DS_Store
 # clangd index, generated from compile_commands.json
 .cache/
+# Bytecode for the reverse-engineering helpers in tools/re/, which import each other.
+__pycache__/
 
 # A git worktree lives here — never commit a worktree inside its own repo.
 .claude/

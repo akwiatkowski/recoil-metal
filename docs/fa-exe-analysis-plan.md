@@ -9,40 +9,330 @@ about native engine behavior before Recoil Metal implements more Forged Alliance
 
 ## What is ready
 
-**Campaign state:** unblocked for static executable analysis. The owned, hash-identified
+**Campaign state:** unblocked and materially cheaper than planned. The owned, hash-identified
 installation associated with Steam app `9420` is connected, and its complete `bin` and `gamedata`
-directories have been preserved and hash-verified. An authoritative Steam depot manifest is still
-needed to prove the exact retail build and completeness.
+directories have been preserved and hash-verified. Ghidra 12.1.2 is installed and the retail
+executable is imported and auto-analyzed. Two accelerators discovered in session 02 collapse most of
+Phase 0: the executable ships **complete MSVC RTTI** (2,728 `Moho::` type descriptors, 471 concrete
+non-template `Moho::` classes), and the shipped-but-unloaded `MohoEngine.dll` exports **4,875
+mangled C++ symbols from the same Perforce tree**, giving signatures for 352 of those classes. An
+authoritative Steam depot manifest is still needed to prove the exact retail build and completeness.
 
-**Next exact action:** install and pin Ghidra, create `build/re-fa/project`, import the preserved
-`ART-E001`, and complete the initial PE section/import/compiler survey for `WP-01` without executing
-the binary.
+**Next exact action:** run a Ghidra headless script over the `fa` project that resolves each
+`moho.*_methods` registration string to its referencing function and dumps the adjacent
+name/function-pointer array, producing the `WP-02` address map. See `WP-02` below.
 
 | Readiness | Count | Meaning |
 |---|---:|---|
-| **Not ready** | 26 | Recoil Metal is absent or materially incomplete for this work package. |
-| **Ready but not confirmed** | 19 | Recoil Metal has a tested implementation, but native retail semantics have not been confirmed from the executable. |
+| **Not ready** | 24 | Recoil Metal is absent or materially incomplete for this work package. |
+| **Ready but not confirmed** | 21 | Recoil Metal has a tested implementation, but native retail semantics have not been confirmed from the executable. |
 | **Confirmed with EXE analysis** | 0 | The implementation is ready and the relevant retail native behavior has been traced, recorded, and compared. |
+
+Counts as of session 04. `WP-35` moved to ready when veterancy was implemented; `WP-02` moved when the
+registration map was completed. Nothing is Confirmed yet, because confirmation additionally requires a
+traced native path with at least one caller and one downstream effect — see the confirmation gate.
+
+### How much of the executable is actually analyzed
+
+Measured, not estimated — regenerate with `tools/re/ReportCoverage.java`. Kept here because a
+campaign like this accumulates a *feeling* of progress that runs far ahead of the real number,
+and because the honest denominators are what stop the next session over-claiming.
+
+| Measure | Value | Share |
+|---|---:|---:|
+| Executable bytes in `ART-E001` | 9,101,312 | — |
+| Code bytes Ghidra places inside a function | 5,855,603 | 64% of executable |
+| Functions Ghidra identified | 32,268 | — |
+| Functions carrying a meaningful name (RTTI, demangled export, or analyst) | **2,979** | **9.2%** |
+| Code bytes inside those named functions | **456,576** | **7.8%** of function bytes |
+| Lua callables mapped name → address (`C-032`) | 1,182 | — |
+| …of those, resolved to the real native method (`C-035`) | 797 | 2.6% of all functions |
+| …of those, arity machine-verified against the code (`C-039`) | 549 | 90.3% of the 608 checkable |
+| Functions read instruction by instruction by an analyst | 9 | **0.029%** |
+| Work packages at **Confirmed with EXE analysis** | 0 of 45 | **0%** |
+
+Read that table as three different senses of the word "analyzed", which are worth keeping apart:
+
+- **Inventoried** is far along. The type system (471 concrete `Moho::` classes), the complete
+  script API (1,182 callables with signatures and addresses), the section map, and the
+  subsystem anchors are all in hand. This is what makes everything after it cheap.
+- **Understood** is barely started. Five functions have been read as instructions. Nothing has
+  been traced through a caller and a downstream effect, which is why the confirmation gate has
+  passed nothing and why the `Confirmed` column is still zero.
+- **Bounded** sits in between and is where most of the value is so far: 21 of the 45 packages
+  now have a named mechanism and at least one refuted alternative, mostly from RTTI and symbol
+  evidence rather than from reading code.
+
+The 36% of executable bytes outside any recognised function is mostly padding, jump tables,
+switch data, and the statically linked C/C++ runtime — not hidden game logic. It has not been
+examined and there is currently no reason to.
+
+## Analysis strategy: how to not analyze 31,086 functions
+
+The executable cannot be read. It does not need to be. This section is the campaign's method,
+and it is derived from measurement rather than from preference — the numbers below are
+reproducible with `tools/re/DumpCallGraph.java` plus the reachability snippet in session 06.
+
+### 1. The Lua boundary is the natural cut, and it is small
+
+Everything the simulation does is reachable from the Lua API, because that is the boundary the
+game's own scripts talk through. Measuring the transitive closure of the call graph from the
+recovered entry points bounds the work:
+
+| Root set | Functions | Share of binary | Code bytes |
+|---|---:|---:|---:|
+| Whole binary | 31,086 | 100% | 5,718 KB |
+| Reachable from the entire Lua API (794 roots) | 4,929 | **15.9%** | 1,010 KB |
+| Reachable from **simulation** subsystems only (303 roots) | 2,562 | **8.2%** | 484 KB |
+| **Depth 1 from the simulation roots** | **618** | **2.0%** | — |
+
+So **84% of the binary is unreachable from any script-visible behavior** — renderer, audio
+mixer, netcode, wxWidgets, the statically linked CRT. It cannot affect simulation parity and
+is out of scope permanently, not merely deprioritised.
+
+Per subsystem, the frontier is smaller still. These are the depth-1 counts — the functions the
+Lua API calls *directly*, where engine semantics actually live:
+
+| Subsystem | Roots | Depth 1 | Depth 2 | Full closure |
+|---|---:|---:|---:|---:|
+| combat | 94 | 199 | 362 | 1,494 |
+| lifecycle | 80 | 180 | 304 | 1,266 |
+| movement | 24 | 75 | 130 | 946 |
+| intel | 19 | 73 | 151 | 986 |
+| orders | 14 | 70 | 154 | 908 |
+| build | 16 | 66 | 158 | 942 |
+| transport | 13 | 66 | 144 | 1,046 |
+| **economy** | 18 | **51** | 109 | 771 |
+| shields | 3 | 19 | 50 | 665 |
+| ordnance | 7 | 14 | 30 | 525 |
+
+Read that as: *confirming the economy means understanding on the order of 51 functions, not
+31,086.* The closures overlap heavily because they share containers, maths and allocators —
+which is a feature, since that infrastructure gets understood once and then stops mattering.
+
+**Work the depth-1 frontier, not the closure.** Depth 1 is engine semantics. Depth 3+ is
+almost entirely `std::vector`, string handling, allocators and maths.
+
+### 2. Four tiers of method, cheapest first
+
+Measured against this campaign's own effort. Do not reach for a lower tier until the one above
+it is exhausted.
+
+| Tier | Method | Cost | Yield here |
+|---|---|---|---|
+| **0** | **Answer from shipped Lua/blueprints instead** | minutes | `WP-35` fully specified with **no executable work at all** (`C-024`) |
+| **1** | **Whole-binary pattern extraction** | seconds | RTTI 471 classes; exports 4,083 members; registration scan 1,182 callables with signatures; arity check 549 verified |
+| **2** | **Index lookup** — jump to a known address | minutes | every damage entry point located once `C-032` existed |
+| **3** | **Read disassembly** | hours | 9 functions total, but 2 of them produced `C-037` and `C-038` |
+
+Tier 0 deserves emphasis because it is counter-intuitive: Gas Powered Games put most *rules*
+in Lua. The executable owns ordering, numeric representation, data structures and timing —
+and little else that matters. Reaching for Ghidra to answer a question the shipped scripts
+state outright is the most common way to waste a session.
+
+Tier 1 is where the leverage is. Every large result in this campaign came from noticing that
+the binary describes itself somewhere and then scanning for that description across all of it
+at once. Sources already exploited: RTTI type descriptors, MSVC export names, per-method
+static initialisers with doc strings, native arity checks. Sources **not yet exploited**:
+vtable slot tables, assertion strings carrying file and line, log-format strings, and
+per-class field-offset access patterns.
+
+### 3. Prefer questions whose answers are one line
+
+A good question has an answer that fits in a table cell and changes code:
+
+- *good*: "what numeric type is health, and at what offset?" → `float`, `Entity+0x98` (`C-038`)
+- *good*: "how many arguments does `Damage` take?" → five, not four (`C-040`)
+- *good*: "what order do the sim stages run in?"
+- *bad*: "how does damage work?" — unbounded, and no single answer changes anything
+
+If a question cannot be phrased so that a wrong answer would change a line of Recoil Metal,
+it is not worth executable time.
+
+### 4. `ART-D001` as a name oracle — tested, and the answer is "yes, but narrowly"
+
+Session 07 ran this. The prediction was that it would transfer "thousands of names" and be
+the campaign's biggest lever. **That was wrong, and how it was wrong is the useful part.**
+
+`MohoEngine.dll` has 21,152 named functions against the executable's 943, and both come from
+the same Perforce tree (`C-002`), so bulk matching via BSim looked like a Tier 1 operation
+with Tier 3 value. Measured (`C-041`):
+
+| Region queried | Matched | With a real name | Accuracy |
+|---|---:|---:|---|
+| The executable's 870 already-named functions (mostly CRT/MFC) | 164 | 54 | 84% peak, **degrading above sig 30** |
+| The 626-function depth-1 engine frontier | 471 | **98** | **78%** corroborated at sig ≥ 40, truly higher |
+
+Three lessons, all of which generalise beyond BSim:
+
+- **Small functions match everything.** `_sscanf` → `Moho::PLAT_SetRegistryValueDword` at
+  similarity **1.000**. A short function's feature vector is degenerate. **Use significance,
+  never similarity, and distrust any match on a function under a few dozen instructions.**
+- **The oracle only helps where the oracle itself has names.** Querying the Lua *bindings*
+  returned 472 matches and **zero** named ones — because those bindings are generated glue in
+  both binaries, and Ghidra named them in neither. Aim at the layer below the glue.
+- **Yield is modest but not uniform in value.** 98 candidate names is not "thousands". But one
+  of them is `SIM_MetaImpactArea` (`C-042`), the damage anchor that two sessions of working
+  forwards from Lua had failed to reach. A lever that produces one decisive address is worth
+  running even when its bulk yield disappoints.
+
+So the technique earns a permanent place — as a **frontier tool at Tier 1 cost**, not as a
+bulk renamer. Its output is `maybe_` names, never `fa_` names.
+
+### 5. Triage by parity impact, and say no
+
+Rendering, audio, UI internals and netcode cannot change a replay hash. They are `P3` in the
+dashboard and should stay unexamined unless a specific user-visible defect demands it. The
+campaign's purpose is simulation parity; a beautiful map of the renderer is a cost with no
+return.
+
+### 6. Stop rules
+
+- **Timebox each question.** If a Tier 3 read has not answered a one-line question within a
+  session, record it as unresolved with the exact next address and move on.
+- **Irreducible ambiguity is a result.** The confirmation gate explicitly allows "the
+  executable cannot distinguish these candidates" as an answer, provided the reason is stated.
+- **A negative result is a result.** `veterancy` having zero native API (`C-024`) and
+  `luaL_register` being absent (`F-008`) both saved more time than they cost.
+
+### 7. Two failure modes this campaign has already hit
+
+Both produced confident wrong answers, and both are cheap to avoid:
+
+- **Inferring a mechanism from agreeing examples.** `C-036` read a shared thunk as "resolve
+  the receiver" from two examples that were both methods. 112 global functions with no
+  receiver run the same code. *Before generalising, find the case that should differ and
+  check it.*
+- **Differential analysis with a bad control.** `H-001` intersected four damage functions'
+  callees and subtracted one unrelated binding's — but the control (`Unit::GetHealth`) was
+  trivial and called no script machinery, so all the script plumbing survived and looked
+  damage-specific. *A control must be at least as rich as the subject.*
+
+## Multi-session hunting kit
+
+The campaign is now long enough that the binding constraint is no longer *finding* things, it
+is **not losing what was found between sessions** — including sessions run by a different
+analyst or a different model. This section is the handover.
+
+### The database is now labelled — start there, not in a text file
+
+Until session 08 every Ghidra session opened 31,086 functions called `FUN_xxxxxxxx` and had to
+re-derive context from TSVs in another window. `tools/re/ApplyKnownNames.java` has now written
+the recovered knowledge into the program itself: **2,036 functions named and plate-commented**,
+taking the named total from 943 to **2,979** and named code from 151 KB to 457 KB. Call sites in
+the decompiler now read `fa_lua_Unit_GetHealth(...)` rather than `FUN_006cb7a0(...)`.
+
+**Read the name prefix before trusting a name.** The prefix *is* the confidence:
+
+| Prefix | Meaning | Trust |
+|---|---|---|
+| `fa_<subsystem>_<Scope><Name>` | Recovered from the registration scan (`C-032`), arity-verified for 549 of them (`C-039`) | Fact |
+| `fa_luathunk_<Scope><Name>` | The generated 20-byte Lua wrapper for that method (`C-035`) | Fact |
+| `maybe_Moho__<Class>__<Method>` | BSim candidate at significance ≥ 40 — **~80% accurate** (`C-041`) | Lead only |
+| `Moho::...`, `FID_conflict:...` | Ghidra's own RTTI/demangler/FunctionID output — never overwritten by us | Fact |
+| `FUN_...` | Untouched | Nothing |
+
+Every applied name carries a plate comment with the Lua signature, the engine's own
+documentation where it ships one, the subsystem, and the claim IDs behind it. A future session
+can therefore trace any name back to its evidence without opening this document.
+
+### Starting a deep session
+
+```bash
+# 0. Everything below assumes these two lines; Ghidra 12 needs JDK 21 and it is NOT on PATH.
+export JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home
+export PATH="$JAVA_HOME/bin:$PATH"
+HL=/opt/homebrew/Cellar/ghidra/12.1.2/libexec/support/analyzeHeadless
+
+# 1. Confirm the artifact still matches the ledger before trusting any address.
+shasum -a 256 ~/projects/llm/input/recoil-metal/retail-fa/bin/SupremeCommander.exe
+#   expect c6783580c0b7a408ec2ad3bfe5eb1fdbef31a60d92c1007ff9b90c33bb960aa0
+
+# 2. If the project is missing, rebuild it and re-apply knowledge (about 10 minutes).
+build/re-fa/run-import.sh
+python3 tools/re/extract_moho_methods.py --tsv build/re-fa/exports/moho.methods.tsv
+python3 tools/re/annotate_moho_methods.py
+$HL build/re-fa/project fa -process SupremeCommander.exe -noanalysis \
+   -scriptPath tools/re -postScript ApplyKnownNames.java \
+   build/re-fa/exports/moho.methods.annotated.tsv build/re-fa/exports/bsim.frontier.tsv
+
+# 3. Read code. Two ways, and prefer the first — it needs no project lock, so it works
+#    while other work is running.
+objdump -d --start-address=0xAAAA --stop-address=0xBBBB <exe>
+$HL build/re-fa/project fa -process SupremeCommander.exe -noanalysis \
+   -scriptPath tools/re -postScript DumpRefsAndCode.java 0xADDR -- at
+```
+
+**Only one Ghidra process may hold the project at a time.** Parallel work must use `objdump`
+and `tools/re/pe_reader.py`, which read the file directly and take no lock. All the derived
+tables (`moho.methods.tsv`, `callgraph.tsv`, the RTTI list) exist precisely so that parallel
+analysts never need the project at all.
+
+### The hunting queue
+
+Ordered by (implementation impact) x (1 / measured frontier size). Each entry is a question
+with a starting address, because "continue analysis" is not a next action.
+
+| # | WP | Question | Start at | Frontier |
+|---|---|---|---|---:|
+| 1 | `WP-30` | Order of armour → shield → health write → death callback | `SIM_MetaImpactArea 0x0073e950`; entries `0x0073f6d0`, `0x0073fa40`, `0x0073fdc0`, `0x007401e0` | 199 |
+| 2 | `WP-15` | Rounding point and competing-demand priority | `Unit::SetConsumptionActive 0x006b1390`; getters `0x006d0f00`, `0x006d1050`, `0x006d11a0`, `0x006d12f0` | 51 |
+| 3 | `WP-04` | Phase order within one beat; MT19937 constants | search `.text` for `0x9908b0df`; `Sim` members via `moho.classes.tsv` | — |
+| 4 | `WP-03` | What invalidates the Lua handle on destroy (`H-002`) | receiver fetch `0x0059a190`; `Entity::Destroy 0x00698510` | — |
+| 5 | `WP-26` | Broad-phase structure and iteration ORDER | the `*InRect`/`*InSphere` bindings in `moho.methods.tsv` | — |
+| 6 | `WP-33` | Length of the deferred vision-removal delay | `CIntelGrid::DelayedSubtractCircle`, `SDelayedSubVizInfo` | 73 |
+
+### Object layout, the most reusable artifact
+
+Field offsets outlive every other kind of finding: they are small, they are exact, and they are
+what parity questions actually turn on. Only one is recovered so far — `Entity+0x98` is health
+as a `float` (`C-038`) — and it immediately produced a hard constraint on replay parity. **A
+session that recovers ten offsets has done more for the campaign than one that reads one
+function very carefully.** The cheap way is the small getters: each Lua accessor is a handful
+of instructions and reveals one offset.
+
+| Class | Offset | Field | Type | Evidence |
+|---|---|---|---|---|
+| `Moho::Entity` | `+0x98` | health | `float` | `C-038` |
+
+### Two evidence traps found the hard way
+
+Both cost real time in session 02. Any analyst — human or model — resuming this campaign should
+read these before trusting a negative result.
+
+1. **`grep` silently drops matches in the retail corpus.** The shipped Lua is ISO-8859-1 with CRLF
+   line endings. Under a UTF-8 locale, `grep` classifies files containing bytes like `0xA9` (`©`,
+   present in every GPG copyright header) as binary and suppresses matching lines. A search for
+   `Veteran` across `lua/sim/` returned *nothing* and briefly looked like proof that retail FA has
+   no Lua veterancy. It has a complete implementation. **Always export `LC_ALL=C`** before searching
+   the extracted corpus, and treat any all-empty result as unproven until re-run that way.
+2. **`MohoEngine.dll`'s export table is not the engine's full surface.** Its 4,875 exports omit
+   whole subsystems. Searching them for `Reclaim`, `Capture` and `Repair` returned zero hits, which
+   read as "retail implements these in Lua". The executable's RTTI lists
+   `Moho::CUnitReclaimTask`, `Moho::CUnitCaptureTask` and `Moho::CUnitRepairTask` as native classes.
+   **The executable's RTTI is the authority on what exists; the DLL exports are only a signature
+   dictionary for the subset they cover.**
 
 ### Ready but not confirmed
 
-`WP-04` tick/update determinism, `WP-05` VFS, `WP-06` blueprint ingestion, `WP-09`
-map loading, `WP-10` skirmish setup/factions, `WP-12` command queues, `WP-15` economy,
-`WP-16` construction/upgrades/assist, `WP-19` adjacency, `WP-20` ordinary ground movement,
-`WP-23` surface naval movement, `WP-26` spatial collision, `WP-27` target acquisition,
-`WP-28` ordinary weapons/projectiles, `WP-30` damage/armor/death, `WP-31` ordinary shields,
-`WP-33` intel/counter-intel, `WP-39` core player UI, `WP-43` command replay/state hashing.
+`WP-02` Moho registration map, `WP-04` tick/update determinism, `WP-05` VFS, `WP-06` blueprint
+ingestion, `WP-09` map loading, `WP-10` skirmish setup/factions, `WP-12` command queues,
+`WP-15` economy, `WP-16` construction/upgrades/assist, `WP-19` adjacency, `WP-20` ordinary
+ground movement, `WP-23` surface naval movement, `WP-26` spatial collision, `WP-27` target
+acquisition, `WP-28` ordinary weapons/projectiles, `WP-30` damage/armor/death, `WP-31` ordinary
+shields, `WP-33` intel/counter-intel, `WP-35` veterancy, `WP-39` core player UI, `WP-43` command
+replay/state hashing.
 
 ### Not ready
 
-`WP-00` artifact provenance, `WP-01` binary map, `WP-02` Moho registration map, `WP-03`
-native object lifecycle, `WP-07` retail Lua host, `WP-08` mod hooks, `WP-11` match rules/caps,
-`WP-13` persistent unit controls, `WP-14` factory automation, `WP-17` repair/capture/gifting,
-`WP-18` complete wreck semantics, `WP-21` formations/dynamic blockage, `WP-22` aircraft,
-`WP-24` submerged warfare, `WP-25` transports/attachments, `WP-29` missiles/interception,
-`WP-32` shield variants, `WP-34` enhancements, `WP-35` veterancy, `WP-36` experimentals,
-`WP-37` terrain deformation, `WP-38` retail AI behavior, `WP-40` advanced UI/controls,
-`WP-41` rendering/animation fidelity, `WP-42` audio/music behavior, `WP-44` save/resume.
+`WP-00` artifact provenance, `WP-01` binary map, `WP-03` native object lifecycle, `WP-07` retail
+Lua host, `WP-08` mod hooks, `WP-11` match rules/caps, `WP-13` persistent unit controls,
+`WP-14` factory automation, `WP-17` repair/capture/gifting, `WP-18` complete wreck semantics,
+`WP-21` formations/dynamic blockage, `WP-22` aircraft, `WP-24` submerged warfare, `WP-25`
+transports/attachments, `WP-29` missiles/interception, `WP-32` shield variants, `WP-34`
+enhancements, `WP-36` experimentals, `WP-37` terrain deformation, `WP-38` retail AI behavior,
+`WP-40` advanced UI/controls, `WP-41` rendering/animation fidelity, `WP-42` audio/music
+behavior, `WP-44` save/resume.
 
 ## Separate public briefing
 
@@ -207,57 +497,73 @@ Do not change readiness merely because analysis began.
 
 | ID | Area | Readiness | Confidence before EXE | EXE evidence | Envelope | Priority | Current basis / main uncertainty |
 |---|---|---|---|---|---|---|---|
-| `WP-00` | Artifact provenance and version identity | Not ready | High | Anchored | n/a | P0 | Steam app `9420`; executable version `1.5.0.1`, complete `bin` set, and all SCDs are hashed. Original Steam depot/build manifest and transfer history remain unknown. |
-| `WP-01` | PE architecture, sections, imports, RTTI, symbols, global map | Not ready | Low | Unexamined | `PE-02` | P0 | PE32 x86, linker-version field 8.0, stripped relocations, large-address awareness, timestamp, and imports observed; sections, compiler attribution, symbols, RTTI, and globals remain unsurveyed. |
-| `WP-02` | Moho/Lua native registration map | Not ready | Medium | Unexamined | `PE-27` | P0 | FAF annotation stubs enumerate names, but retail addresses and exact registration set are unknown. |
-| `WP-03` | Native object identity, ownership, lifecycle, destruction | Not ready | Low | Unexamined | `PE-02`, `PE-03` | P0 | Lua callback surface bounds lifecycle; native storage and stale-reference rules unknown. |
-| `WP-04` | Simulation tick, phase order, RNG, determinism | Ready but not confirmed | Medium | Unexamined | `PE-01` | P0 | 10 Hz and callback clues are strong; native phase order, numeric types, and RNG ownership unknown. |
-| `WP-05` | VFS, SCD mounting, override precedence | Ready but not confirmed | High | Unexamined | `PE-27` | P2 | Archive behavior is well bounded by shipped layout and mods; exact retail precedence still needs tracing. |
-| `WP-06` | Blueprint loading, merge/default rules, categories | Ready but not confirmed | High | Unexamined | `PE-27` | Corpus gives strong output evidence; native defaults and merge ordering may differ. |
-| `WP-07` | Retail Lua dialect, scheduler, callbacks, script objects | Not ready | Medium | Unexamined | `PE-01`, `PE-27` | Shipped scripts bound syntax/API; VM integration and coroutine/event ordering need analysis. |
-| `WP-08` | Mod manager, hooks, UI/sim mod boundaries | Not ready | Medium | Unexamined | `PE-27` | Manual and mod conventions bound capabilities; exact retail load and sandbox rules unknown. |
-| `WP-09` | Map/scenario loading and start markers | Ready but not confirmed | High | Unexamined | `PE-27` | Binary readers and corpus tests are strong; scenario-rule integration is incomplete. |
-| `WP-10` | Skirmish setup, four factions, armies/alliances | Ready but not confirmed | High | Unexamined | `PE-25` | Core seating and faction identity work; retail lobby option translation is not confirmed. |
-| `WP-11` | Victory modes, sandbox, unit caps, rule state | Not ready | High | Unexamined | `PE-25` | Manual names expected modes; native predicates, categories, timing, and cap accounting unknown. |
-| `WP-12` | Command authorization, queues, cancellation, patrol | Ready but not confirmed | Medium | Unexamined | `PE-14`, `PE-25` | Deterministic command path exists; retail queue mutation and edge cases need tracing. |
-| `WP-13` | Persistent fire state, toggles, priorities, mutable capabilities | Not ready | Medium | Unexamined | `PE-14`, `PE-21` | UI/Lua expose controls; authoritative storage and update effects unknown. |
-| `WP-14` | Factory repeat, pause, rally, queue editing, mirroring | Not ready | High | Unexamined | `PE-14` | Manual bounds user behavior; sim ownership and serialization remain unknown. |
-| `WP-15` | Mass/energy income, storage, upkeep, stalls, allocation | Ready but not confirmed | High | Unexamined | `PE-11` | Lua/data and current tests bound outcomes; native precision, ordering, and priorities unknown. |
-| `WP-16` | Construction, upgrades, assist, build progress | Ready but not confirmed | High | Unexamined | `PE-12`, `PE-13` | Common gameplay is implemented; unfinished-unit lifecycle and exact cancel/refund semantics unknown. |
-| `WP-17` | Explicit repair, guard, capture, gifting, ownership transfer | Not ready | Medium | Unexamined | `PE-13` | Lua/docs bound commands; common-work versus separate native mechanisms is unknown. |
-| `WP-18` | Wreck creation, damage, collision, rebuild, reclaim value | Not ready | Medium | Unexamined | `PE-18`, `PE-23` | Reclaimable records exist; world-object and retail value semantics are incomplete. |
-| `WP-19` | Adjacency geometry and economy effects | Ready but not confirmed | High | Unexamined | `PE-11` | Buff tables and geometry strongly bound behavior; stacking/rounding/order need confirmation. |
-| `WP-20` | Ground movement, motion classes, ordinary pathing | Ready but not confirmed | Medium | Unexamined | `PE-04`, `PE-06` | Deterministic A* works; retail route representation, caching, steering, and stuck behavior unknown. |
-| `WP-21` | Formations, coordinated movement, congestion, dynamic blockage | Not ready | Low | Unexamined | `PE-05`, `PE-06` | User-visible formation controls are known; native grouping and replanning are poorly known. |
-| `WP-22` | Aircraft flight, bombing runs, fuel, staging, landing | Not ready | Low | Unexamined | `PE-08` | Blueprint parameters and visible behavior bound states; native mover architecture is unknown. |
-| `WP-23` | Surface naval movement and ordinary combat | Ready but not confirmed | Medium | Unexamined | `PE-09` | Water routing and surface targeting exist; draft, turning, beaching, and weapon-domain details unknown. |
-| `WP-24` | Submarines, depth, surfacing, torpedoes, water vision | Not ready | Low | Unexamined | `PE-09`, `PE-16` | Motion classes and Lua names bound capabilities; depth/layer representation is unknown. |
-| `WP-25` | Transports, cargo, attachments, ferry, staging reuse | Not ready | Low | Unexamined | `PE-10` | Manual and attachment API bound lifecycle; native ownership graph is unknown. |
-| `WP-26` | Spatial index, collision layers, query ordering | Ready but not confirmed | Low | Unexamined | `PE-07` | Recoil Metal has deterministic indices; retail data structure and tie ordering are unknown. |
-| `WP-27` | Weapon target acquisition, priorities, arcs, retargeting | Ready but not confirmed | Low | Unexamined | `PE-15` | Blueprint constraints are known; native candidate ownership, cadence, and tie breaks are not. |
-| `WP-28` | Direct fire, beams, ballistic projectiles, impact | Ready but not confirmed | Medium | Unexamined | `PE-16`, `PE-18` | Generic physical combat works; retail projectile class/state details need tracing. |
-| `WP-29` | Tactical/strategic missiles, ammo, interception | Not ready | Low | Unexamined | `PE-17` | User behavior and blueprint categories are known; native ammo/projectile/defense model is unknown. |
-| `WP-30` | Damage, armor, area falloff, death blasts, friendly fire | Ready but not confirmed | Medium | Unexamined | `PE-18` | Damage matrices and current behavior exist; callback, shield, overkill, and death ordering need tracing. |
-| `WP-31` | Ordinary area shields | Ready but not confirmed | Medium | Unexamined | `PE-19` | Bubble data and visible rules are bounded; current damage-gate architecture may differ from retail collision. |
-| `WP-32` | Personal, transport, enhancement, overlapping shield variants | Not ready | Low | Unexamined | `PE-19`, `PE-21` | Variant distinctions are known; native representation and pass-through rules are not. |
-| `WP-33` | Vision, radar, sonar, omni, cloak, stealth, jamming | Ready but not confirmed | Medium | Unexamined | `PE-20` | Most authored fields and outcomes are implemented; memory, update cadence, and contact identity need confirmation. |
-| `WP-34` | ACU/SCU enhancements and mutable abilities | Not ready | Low | Unexamined | `PE-21` | Slots/costs/effects are visible in Lua/data; authoritative mutation architecture is unknown. |
-| `WP-35` | Veterancy, kill credit, promotion, regeneration | Not ready | Medium | Unexamined | `PE-22` | Retail outcomes are documented; threshold ownership and native/Lua split need tracing. |
-| `WP-36` | Experimentals and unit-specific special abilities | Not ready | Low | Unexamined | `PE-10`, `PE-16`, `PE-21` | Generic units can load; bespoke script/native interactions vary by unit and remain largely unknown. |
-| `WP-37` | Mutable terrain, craters, path/render invalidation | Not ready | Low | Unexamined | `PE-24` | Visible deformation exists; whether gameplay height changes and how systems invalidate are unknown. |
-| `WP-38` | Retail AI native boundary, threat, platoons, managers | Not ready | Medium | Unexamined | `PE-28` | Lua AI is visible; native world-query semantics and manager integration are incomplete. |
-| `WP-39` | Core selection, camera, minimap, build/command UI | Ready but not confirmed | High | Unexamined | `PE-25` | Recoil Metal has a usable native HUD; this is functional readiness, not pixel or retail UI parity. |
-| `WP-40` | Advanced controls, overlays, split views, key behavior | Not ready | High | Unexamined | `PE-05`, `PE-14` | Manual documents controls; exact command encoding and UI/sim split need tracing. |
-| `WP-41` | Rendering, model graph, manipulators, effects, LOD | Not ready | Medium | Unexamined | `PE-29` | Formats render; native manipulator/effect lifecycle and broad visual coverage are incomplete. |
-| `WP-42` | Audio cues, voice priority, dynamic music | Not ready | Medium | Unexamined | `PE-30` | XWB PCM and basic playback are understood; retail event/music logic is not. |
-| `WP-43` | Command replay, state hash equivalence, divergence | Ready but not confirmed | Medium | Unexamined | `PE-01`, `PE-26` | Recoil Metal has its own deterministic logs; retail command payload/RNG/replay ordering are unknown. |
-| `WP-44` | Save/resume and full simulation serialization | Not ready | Low | Unexamined | `PE-26` | No Recoil Metal save state; retail format and script/native restoration boundaries are unknown. |
+| `WP-00` | Artifact provenance and version identity | Not ready | High | Anchored | n/a | P0 | Steam app `9420`; executable version `1.5.0.1`, complete `bin` set, and all SCDs are hashed. `C-025` proves the corpus is Forged Alliance. Original Steam depot/build manifest and transfer history remain unknown. |
+| `WP-01` | PE architecture, sections, imports, RTTI, symbols, global map | Not ready | High | Analyzed | `PE-02` | P0 | `C-001`–`C-003`: statically linked, no engine DLL loaded, full RTTI recovered (2,728 descriptors / 471 concrete `Moho::` classes), Ghidra project analyzed. Remaining gap is the *address* ledger: no function RVA has been recorded yet, and globals are unsurveyed. |
+| `WP-02` | Moho/Lua native registration map | **Ready but not confirmed** | High | **Analyzed** | `PE-27` | P0 | `C-032`: the complete map is recovered — 1,182 Lua callables with name, signature, documentation and native wrapper address, cross-validated by `C-033` against shipped Lua and DLL exports. Regenerate with `tools/re/extract_moho_methods.py`. Readiness is "ready" in this package's own terms (the map is complete enough to drive downstream analysis) but not confirmed: no individual wrapper has yet been decompiled and checked against its signature. |
+| `WP-03` | Native object identity, ownership, lifecycle, destruction | Not ready | High | **Analyzed** | `PE-02`, `PE-03` | P0 | `C-003`, `C-004`, `C-036`: vtable hierarchy under `Moho::Entity`; the **sim** uses pooled integer ids via `EntityDB`/`IdPool` with deferred destruction, while the **Lua boundary** caches a raw pointer at userdata `+0x44` and resolves it with no check at all. Remaining question is what nulls that field, or what keeps the object alive, on destruction. |
+| `WP-04` | Simulation tick, phase order, RNG, determinism | Ready but not confirmed | High | Bounded | `PE-01` | P0 | `C-005`, `C-006`: beats with named stages (motion / script / command dispatch), per-entity `MotionTick`/`TaskTick`, Mersenne-Twister RNG behind `Sim::GetRandom`, pervasive `UpdateChecksum`. The **stage order** and the MT variant/seeding are the open questions. |
+| `WP-05` | VFS, SCD mounting, override precedence | Ready but not confirmed | High | Anchored | `PE-27` | P2 | `Moho::CVFSImpl`/`CVirtualFileSystem` located in RTTI; `.scd` confirmed to be plain ZIP. Exact retail mount precedence still needs tracing. |
+| `WP-06` | Blueprint loading, merge/default rules, categories | Ready but not confirmed | High | Bounded | `PE-27` | P2 | `C-010`: blueprints deserialise into native per-section structs; defaults and merge order live in `RRuleGameRulesImpl::InitBlueprint`, not in Lua. |
+| `WP-07` | Retail Lua dialect, scheduler, callbacks, script objects | Not ready | High | Bounded | `PE-01`, `PE-27` | P2 | `C-022`, `C-023`: native `CTaskThread`/`CTaskStage`/`CLuaTask` scheduler behind `ForkThread`/`WaitTicks`; `#` line comments and ISO-8859-1/CRLF source. Wake ordering is an engine property and is untraced. |
+| `WP-08` | Mod manager, hooks, UI/sim mod boundaries | Not ready | Medium | Unexamined | `PE-27` | P3 | Manual and mod conventions bound capabilities; exact retail load and sandbox rules unknown. |
+| `WP-09` | Map/scenario loading and start markers | Ready but not confirmed | High | Anchored | `PE-27` | P2 | `C-019`: `STIMap` over `CHeightField` with five distinct elevation queries and a playable rect. Scenario-rule integration is still incomplete. |
+| `WP-10` | Skirmish setup, four factions, armies/alliances | Ready but not confirmed | High | Anchored | `PE-25` | P2 | `Moho::CLobby`, `SimArmy`, `CArmyImpl`, `IArmy`, `CArmyStats` located; `Sim::CreateArmies`/`GetArmies`/`GetFocusArmy`. Retail lobby option translation is not confirmed. |
+| `WP-11` | Victory modes, sandbox, unit caps, rule state | Not ready | High | Anchored | `PE-25` | P2 | `C-009`: `RRuleGameRules` is the *blueprint/category* database, not victory logic. No native `Victory`/`Defeat`/`Score` symbol exists, so pursue scenario Lua first. `Sim::EndGame`/`IsGameOver` are the native hooks. |
+| `WP-12` | Command authorization, queues, cancellation, patrol | Ready but not confirmed | High | Bounded | `PE-14`, `PE-25` | P1 | `C-008`: native per-order task classes plus `CUnitCommandQueue` (insert/trim/reorder/`GetQueueClearingCmdType`) and `ISSUE_*` free functions. Queue mutation edge cases still need tracing. |
+| `WP-13` | Persistent fire state, toggles, priorities, mutable capabilities | Not ready | High | Anchored | `PE-14`, `PE-21` | P1 | Authoritative storage found on the unit: `Unit::GetFireState`/`SetFireState`/`IsFireState`/`ToggleFireState`, `GetScriptBit`/`ToggleScriptBit`, `SetPaused`/`IsPaused`, `SetUnitState`/`UnSetUnitState`/`IsUnitState`, `BoostPriority`/`GetPriorityBoost`/`ResetPriorityBoost`. |
+| `WP-14` | Factory repeat, pause, rally, queue editing, mirroring | Not ready | High | Anchored | `PE-14` | P1 | Sim ownership confirmed: `Unit::IsRepeatQueue`/`SetRepeatQueue`, `IsPaused`/`SetPaused`, `CUnitCommand::GetRally`/`FactoryRepeatable`/`AlwaysRepeatable`/`GetIsFactoryOrder`, `Sim::IssueFactoryCommand`, `CFactoryBuildTask`. Serialization detail still open. |
+| `WP-15` | Mass/energy income, storage, upkeep, stalls, allocation | Ready but not confirmed | High | Bounded | `PE-11` | P1 | `C-014`: two-phase request/satisfy via `CEconRequest` and `CEconStorage` under `CEconomy`. Rounding point, numeric type, and competing-demand priority order remain the decisive unknowns. |
+| `WP-16` | Construction, upgrades, assist, build progress | Ready but not confirmed | High | Bounded | `PE-12`, `PE-13` | P1 | `C-017`: progress on the target (`GetFractionComplete`), separate builder work value (`GetWorkProgress`), shared `CBuildTaskHelper`. Cancel/refund path untraced. |
+| `WP-17` | Explicit repair, guard, capture, gifting, ownership transfer | Not ready | High | Bounded | `PE-13` | P1 | `C-008`: `CUnitRepairTask`, `CUnitCaptureTask`, `CUnitReclaimTask`, `CUnitGuardTask` are **separate native state machines**. Ownership transfer is `Sim::TransferUnit`; capture refcounts via `Unit::IncCaptors`/`DecCaptors`/`GetCaptors`. |
+| `WP-18` | Wreck creation, damage, collision, rebuild, reclaim value | Not ready | Medium | Anchored | `PE-18`, `PE-23` | P2 | `Moho::Prop` is a first-class entity class with its own iterators and `EntityDB::AddBoundedProp`/`RemoveBoundedProp`; `Unit::LookForStructureRebuilder` is the rebuild link. Value scaling is untraced. |
+| `WP-19` | Adjacency geometry and economy effects | Ready but not confirmed | High | Anchored | `PE-11` | P2 | `Moho::UI_DetectAdjacencyBonus` is the only adjacency symbol in the engine and it is **UI-side**; `ART-S007` `lua/sim/AdjacencyBuffs.lua` (2,006 lines) carries the sim effect. Strong hint that adjacency is Lua-owned with a native UI preview. |
+| `WP-20` | Ground movement, motion classes, ordinary pathing | Ready but not confirmed | High | Bounded | `PE-04`, `PE-06` | P1 | `C-012`, `C-013`: shared `PathQueue` request service over precomputed `PathTables`, spline routes, one `CUnitMotion` mover, and a real occupancy grid (`COGrid`, `OCCUPY_*`, `ReserveOgridRect`). Recoil Metal's per-unit A* is a structural difference. |
+| `WP-21` | Formations, coordinated movement, congestion, dynamic blockage | Not ready | Medium | Bounded | `PE-05`, `PE-06` | P1 | `C-015`: formation generated on the command object at issue, persistent `CFormationInstance`, Lua formation scripts via `FORMATION_RunScript`, explicit multi-unit coordination handshake. Replanning cadence still unknown. |
+| `WP-22` | Aircraft flight, bombing runs, fuel, staging, landing | Not ready | Medium | Bounded | `PE-08` | P1 | `C-013`: one mover with `CalcMoveAir`/`CalcWingedLift`/`ComputeAirControl`/`ComputeAirCombatTactics`, fuel in `ProcessFuelLevels`/`GetFuelUseTime`/`Unit::GetFuelRatio`, staging via `CUnitCallAirStagingPlatform`/`CUnitRefuel`/`CUnitCarrier*`. |
+| `WP-23` | Surface naval movement and ordinary combat | Ready but not confirmed | High | Bounded | `PE-09` | P2 | `C-013`, `C-019`: `CalcMoveWater`, discrete layers, and separate water/surface/deep/abyss elevations. `Moho::Shoreline`/`ShoreCell`/`WaveSystem` cover the shore boundary. |
+| `WP-24` | Submarines, depth, surfacing, torpedoes, water vision | Not ready | Medium | Bounded | `PE-09`, `PE-16` | P1 | `C-013`: diving is a **layer transition** (`HandleDivingAndSurfacing`, `SetNewTargetLayer`, `TransitionBetweenLayers`), not a depth scalar; `Unit::SetAutoSurfaceMode`/`IsAutoSurfaceMode`. Continuous-depth candidate refuted. |
+| `WP-25` | Transports, cargo, attachments, ferry, staging reuse | Not ready | Medium | Bounded | `PE-10` | P1 | `C-016`: generic `Entity` attachment graph plus `CAiTransportImpl`; ferry via `CUnitFerryTask`/`CUnitWaitForFerryTask`/`GetTransportFerryBeacon`. Death propagation is callback-ordered. |
+| `WP-26` | Spatial index, collision layers, query ordering | Ready but not confirmed | Low | Anchored | `PE-07` | P1 | `EntityDB` supplies typed iteration (units/props/projectiles/shields/blips) and `RegisterEntitySet`; `COGrid` is occupancy, not broad phase. The actual broad-phase structure and its iteration order are still **unidentified** — the weakest link in the map. |
+| `WP-27` | Weapon target acquisition, priorities, arcs, retargeting | Ready but not confirmed | Medium | Anchored | `PE-15` | P1 | `Moho::CAcquireTargetTask` is a discrete task, with `CWeaponAttributes`, `UnitWeapon`, `Unit::GetWeapon`/`GetWeaponCount`, `IsValidTarget`/`SetIsValidTarget`, `IsWithinAttackRange`, `HasSlavedWeaponTarget`, `AI_CalculateFiringDirection`/`AI_CalculateFiringPitch`. Cadence and tie breaks untraced. |
+| `WP-28` | Direct fire, beams, ballistic projectiles, impact | Ready but not confirmed | High | Bounded | `PE-16`, `PE-18` | P1 | `C-021`: one `Moho::Projectile` class configured by ~20 setters (tracking, ballistic acceleration, lifetime, stay-underwater, velocity-align) with a single `Impact` and `CheckCollision`; beams are a separate `CollisionBeamEntity`. Per-family subclassing is refuted. |
+| `WP-29` | Tactical/strategic missiles, ammo, interception | Not ready | Medium | Bounded | `PE-17` | P1 | `C-018`: ammo is a counter on the launcher (`GetSiloStorageCount`/`GetSiloMaxStorageCount`), built by `CAiSiloBuildImpl`. No native interceptor manager symbol exists, so selection is likely weapon-level or Lua. |
+| `WP-30` | Damage, armor, area falloff, death blasts, friendly fire | Ready but not confirmed | High | **Anchored→Bounded** | `PE-18` | P1 | `C-021` plus addresses: the four scripted entry points are `Damage 0x0073f6d0` (arity 5, `C-040`), `DamageArea 0x0073fa40` (6–7), `DamageRing 0x0073fdc0`, `MetaImpact 0x007401e0`; `Entity::AdjustHealth 0x00693bb0`, `Entity::Kill 0x006987a0`, `Unit::GetArmorMult 0x006cac80`, `Unit::AlterArmor 0x006caa80`. `C-038`: health is a **float at `Entity+0x98`**, so exact damage totals cannot match Recoil Metal's fixed point. Next: follow these four into the shared gate. |
+| `WP-31` | Ordinary area shields | Ready but not confirmed | Medium | Bounded | `PE-19` | P1 | `C-020`: shields are `Entity` subclasses registered with the sim and iterated by `EntityDB`, so interception is entity/collision-based, not a containment test. Recoil Metal's damage-gate model differs structurally. |
+| `WP-32` | Personal, transport, enhancement, overlapping shield variants | Not ready | Low | Anchored | `PE-19`, `PE-21` | P2 | `C-020` plus `RUnitBlueprintDefenseShield`; `ART-S007` `lua/shield.lua` defines `Shield`, `UnitShield`, `AntiArtilleryShield`. Overlap selection rules untraced. |
+| `WP-33` | Vision, radar, sonar, omni, cloak, stealth, jamming | Ready but not confirmed | High | Bounded | `PE-20` | P1 | `C-007`: refcounted rasterised grids per intel type, `VisionDB`, `ReconBlip` with `IsOnRadar`/`IsOnSonar`/`IsOnOmni`/`IsJam`, and **deferred** removal (`DelayedSubtractCircle`, `SDelayedSubVizInfo`). The removal delay is an observable ordering difference. |
+| `WP-34` | ACU/SCU enhancements and mutable abilities | Not ready | Low | Unexamined | `PE-21` | P2 | No native enhancement symbol found in RTTI or exports; `Sim::QueueNotifyUpgrade`/`SNotifyUpgradeParams` and `Unit::SetUpgradedTo` are the only hooks. Likely Lua-owned — verify against `ART-S007` before EXE work. |
+| `WP-35` | Veterancy, kill credit, promotion, regeneration | Ready but not confirmed | High | Unexamined | `PE-22` | P1 | **Implemented** in session 03 against `C-024`, `C-028`, `C-029`: `src/core/sim/Veterancy.{hpp,cpp}`, kill credit from `retireDead`, hull regeneration in the tick, covered by `tests/test_veterancy.cpp`. Readiness stops at "not confirmed" because the native `KILLS` store and `OnKilledUnit` ordering have not been traced in the executable, and blueprint `Veteran` threshold overrides are not implemented. |
+| `WP-36` | Experimentals and unit-specific special abilities | Not ready | Low | Unexamined | `PE-10`, `PE-16`, `PE-21` | P3 | Generic units can load; bespoke script/native interactions vary by unit and remain largely unknown. |
+| `WP-37` | Mutable terrain, craters, path/render invalidation | Not ready | Medium | Anchored | `PE-24` | P3 | `C-019`: `Sim::FlattenMapRect` and `STIMap::SetTerrainType`/`SetTerrainTypeRect` prove the **sim-side** map is mutable, so deformation is not purely visual. Crater path is untraced. |
+| `WP-38` | Retail AI native boundary, threat, platoons, managers | Not ready | Medium | Anchored | `PE-28` | P3 | Native threat extraction found: `IntelExtractor`, `RadarExtractor`, `SonarExtractor`, `OmniExtractor`, `RangeExtractor`, `WeaponExtractor`, `CounterIntelExtractor`, `CountermeasureExtractor`, `CombinedMilitaryExtractor`, `MiscellaneousExtractor`, over `CInfluenceMap`, with `CAiBrain`, `CPlatoon`, `CAiPersonality`. |
+| `WP-39` | Core selection, camera, minimap, build/command UI | Ready but not confirmed | High | Unexamined | `PE-25` | P3 | Recoil Metal has a usable native HUD; this is functional readiness, not pixel or retail UI parity. |
+| `WP-40` | Advanced controls, overlays, split views, key behavior | Not ready | High | Anchored | `PE-05`, `PE-14` | P3 | `Moho::CUIKeyHandler`, `UICommandModeData`, `UIBuildDragger`, `UICommandDragger`, `SelectionDragger2D`/`3D`, `CUIWorldView`, `IdleUnitSelector`, `RDebugOverlay*` located. Command encoding untraced. |
+| `WP-41` | Rendering, model graph, manipulators, effects, LOD | Not ready | Medium | Anchored | `PE-29` | P3 | Manipulator classes enumerated (`CAnimationManipulator`, `CAimManipulator`, `CBoneEntityManipulator`, `CBuilderArmManipulator`, `CCollisionManipulator`, `CFootPlantManipulator`, `CRotateManipulator`, `CSlaveManipulator`, `CSlideManipulator`, `CStorageManipulator`, `CThrustManipulator`) over `IAniManipulator`, plus `CAniActor`/`CAniPose`/`CAniSkel` and `MeshLOD`. |
+| `WP-42` | Audio cues, voice priority, dynamic music | Not ready | Medium | Anchored | `PE-30` | P3 | `Moho::CUserSoundManager`, `ISoundManager`, `CSimSoundManager`, `HSound`, `CSndParams`, `CSndVar`, `SAudioRequest`, `RWaveBankResource`/`ResInMemory`/`ResStreaming` located. Event/music logic untraced. |
+| `WP-43` | Command replay, state hash equivalence, divergence | Ready but not confirmed | High | Bounded | `PE-01`, `PE-26` | P2 | `C-006` plus `Moho::CReplayClient`, `CLocalClient`, `CNullClient`, `CClientBase`, `ICommandSink`, `CCommandDB`, `CMessageStream`, `Sim::GetCommandSources`/`ValidateNewCommandId`/`GetBeatChecksum`. Replay is a command stream over a client abstraction. |
+| `WP-44` | Save/resume and full simulation serialization | Not ready | Medium | Anchored | `PE-26` | P3 | `Moho::CSavedGame`, `CSaveGameRequestImpl`, `ISaveRequest`, `Sim::SaveState`/`SerArmies`/`SerDirtyEnts`/`SerMapData`/`SerVars`, `EntityDB::SerEntities`/`SerSets`, and a per-class `MemberSaveConstructArgs` convention. Full object serialization, not a command replay. |
 
 ## Analysis order
 
 The campaign starts with the least-known behavior, but executable mapping prerequisites come first.
 Do not skip Phase 0 to chase an interesting feature: every later session becomes cheaper when the
 registration and object maps are stable.
+
+> **Revised after session 06.** Phases 0–4 below remain the right *subject* ordering, but the
+> measured reachability in `Analysis strategy` changes the *method* ordering. Concretely, the
+> next four moves, in this order:
+>
+> 1. ~~Bulk-transfer names from `ART-D001`.~~ **Done in session 07, and it is not the lever it
+>    looked like** — 98 candidate names, not thousands. See strategy §4 for the measured
+>    result. It stays in the toolbox as a frontier tool, and it did hand us
+>    `SIM_MetaImpactArea` (`C-042`), which unblocks `WP-30`.
+> 2. **Mine field offsets for `Moho::Unit` and `Moho::Entity`** from the depth-1 frontier.
+>    Object layout is what parity questions actually need — `C-038` is the template.
+> 3. **Take one subsystem to `Confirmed`** to prove the gate is passable at all. `economy`
+>    is the right pick: 51 depth-1 functions, a `Ready but not confirmed` implementation to
+>    compare against, and `PE-11`'s open question (rounding point and priority order) is
+>    exactly a "one-line answer" question.
+> 4. **Then `WP-30` damage**, which is higher value but four times the frontier.
 
 ### Phase 0: make the binary searchable
 
@@ -378,14 +684,40 @@ its own ID; never assign one ID to a group of DLLs or archives.
 
 | Tool | Version | Path | Project/output | Notes |
 |---|---|---|---|---|
-| Ghidra | Not installed or not on `PATH` as of 2026-08-29 | Pending | `build/re-fa/project` proposed | Pin the version for reproducible decompiler output. |
-| `objdump` | Apple LLVM 17.0.0 | `/usr/bin/objdump` | Scratch only | Used for PE headers, timestamps, imports, and disassembly checks; not the primary database. |
+| Ghidra | 12.1.2 (Homebrew Cellar, pinned) | `/opt/homebrew/Cellar/ghidra/12.1.2/libexec/support/analyzeHeadless` | `build/re-fa/project`, project name `fa` | The canonical database. Driven headless only; the GUI has never been opened on this project. |
+| OpenJDK | 21.0.11 (Homebrew, keg-only) | `/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home` | n/a | Ghidra 12 needs JDK 21+. It is **not** on `PATH`; `build/re-fa/run-import.sh` exports `JAVA_HOME` explicitly. Without that, `analyzeHeadless` fails with "Unable to locate a Java Runtime". |
+| `objdump` | Apple LLVM 17.0.0 | `/usr/bin/objdump` | Scratch only | Used for PE headers, timestamps, imports, and export tables; not the primary database. |
 | `strings` | Apple system tool | `/usr/bin/strings` | Scratch only | Preserve offsets and encoding when exporting strings. |
 | ExifTool | 13.10 | `/opt/homebrew/bin/exiftool` | Scratch only | Used to read PE version resources and timestamps. |
 | `shasum` | 6.02 | `/usr/bin/shasum` | Artifact verification | Used with SHA-256 for source and preserved-copy identity. |
+| `tools/re/parse_msvc_exports.py` | This repo | `tools/re/parse_msvc_exports.py` | `build/re-fa/exports/*.classes.tsv` | Original tooling, committed. Heuristic MSVC name parser: turns a PE export table into a class → member-name inventory. Not a full demangler; Ghidra demangles properly once a binary is imported. |
+| `tools/re/pe_reader.py` | This repo | — | — | Minimal read-only PE32 accessor (sections, VA→bytes, C strings). No `pefile` dependency. |
+| `tools/re/extract_moho_methods.py` | This repo | — | `moho.methods.tsv` | Recovers the whole Lua API by scanning `.text` for registration static initialisers (`C-032`). |
+| `tools/re/verify_arity.py` | This repo | — | stdout | Checks each recovered signature against the engine's own arity check (`C-039`). |
+| `tools/re/annotate_moho_methods.py` | This repo | — | `moho.methods.annotated.tsv` | Adds subsystem, canonical name and purpose to each callable. |
+| `tools/re/ReportCoverage.java` | This repo | — | stdout | Ghidra script: the coverage numbers at the top of this document. |
+| `tools/re/DumpRefsAndCode.java` | This repo | — | stdout | Ghidra script: references to an address, and decompilation of the functions involved. |
+| `tools/re/DumpMohoRegistrations.java`, `DumpMohoRegLayout.java`, `DumpAddrs.java` | This repo | — | stdout | Ghidra scripts from the `WP-02` data-scan phase. Superseded by `extract_moho_methods.py` but kept: they record how the registry layout was found, and `DumpAddrs` is a general pointer-chain walker. |
 
 If another tool is added, record its version and role. Do not let two unlabeled analysis databases
 become competing sources of truth.
+
+### Reproducing the session-02 derived data
+
+Everything below is regenerable and therefore **not** committed; it lives under the gitignored
+`build/re-fa/`. Regenerate with:
+
+```bash
+build/re-fa/run-import.sh                      # Ghidra headless import + analysis, all five binaries
+objdump -p <dll> | sed -n '/Export Table/,/Import Table/p' \
+  | grep -E '^ *[0-9]+ +0x' > build/re-fa/exports/<name>.exports.txt
+python3 tools/re/parse_msvc_exports.py build/re-fa/exports/MohoEngine.exports.txt \
+  > build/re-fa/exports/moho.classes.tsv
+strings -a <exe> | grep -E '^\.\?A[VU]' | sort -u > build/re-fa/exports/exe.rtti.raw.txt
+python3 -c "import zipfile;zipfile.ZipFile('<gamedata>/lua.scd').extractall('build/re-fa/lua')"
+```
+
+The `.scd` archives are ordinary ZIP files; Python's `zipfile` reads them directly.
 
 ## Address and symbol ledger
 
@@ -398,9 +730,98 @@ Naming convention:
 - `maybe_<subsystem>_<verb>` while evidence is incomplete.
 - Keep the original Ghidra name in the `Original` column forever.
 
+Image base of `ART-E001` is `0x00400000` and relocations are stripped, so the addresses below are
+absolute and stable for this hash. Section map:
+
+| Section | Virtual range | Raw offset | Role |
+|---|---|---|---|
+| `.text` | `0x00401000`–`0x00c4f8fe` | `0x00001000` | code |
+| `PSFD00` | `0x00c50000`–`0x00c52f50` | `0x00850000` | small non-standard section, unexamined |
+| `.rdata` | `0x00c53000`–`0x00f87bce` | `0x00853000` | read-only data, RTTI, binding descriptors |
+| `.data` | `0x00f88000`–`0x0129cea8` | `0x00b88000` | writable data, registration tables |
+| `.tls` | `0x0129d000`–`0x0129f08d` | `0x00bef000` | thread-local storage |
+| `.rsrc` | `0x012a0000`–`0x012eb8ec` | `0x00bf2000` | version resource, icons |
+| `.bind` | `0x012ec000`–`0x01348000` | `0x00c3e000` | import binding |
+
 | Artifact | Address / RVA | Original | Canonical name | Signature hypothesis | Confidence | Evidence citations | Callers/callees | Last reviewed |
 |---|---|---|---|---|---|---|---|---|
-| | | | | | | | | |
+| `ART-E001` | `0x00fb9400`–`0x00fbb800` (`.data`) | n/a | `fa_lua_class_registry` | Array of 24-byte class-registration records | High | [EXE] all 60 `moho.*` strings are referenced from inside this range and from nowhere else | Consumed by the `CScrLuaBinder` machinery of `C-011` | 2026-08-29 |
+| `ART-E001` | `0x00fba008` (`.data`) | n/a | `fa_luareg_Unit` | Class record for Lua `Unit` | High | [EXE] see `C-026` for the field layout | → `0x00fee88c` method list | 2026-08-29 |
+| `ART-E001` | `0x00fee874`, `0x00fee88c` (`.data`) | n/a | `maybe_luamethods_Entity`, `maybe_luamethods_Unit` | Array of `{descriptor*, NULL}` 8-byte entries | Medium | [EXE] reached from the `+16` field of the `Unit` and `Entity` class records | → per-method `.rdata` descriptors | 2026-08-29 |
+| `ART-E001` | `0x00e6f0a4` (`.rdata`) | n/a | `maybe_class_CUnitAssistMoveTask` | `{void* fn; char name[];}` with the name stored **inline** | Medium | [EXE] bytes at `+4` decode little-endian to `CUnitAssistMoveTask`, a class from `C-008` | referenced from `0x00fee874` list | 2026-08-29 |
+| `ART-E001` | `0x00975c60` (`.text`) | `thunk_FUN_0098f640` | `fa_lua_resolve_receiver_thunk` | 5-byte `jmp` to `0x0098f640` | High | [EXE] `C-035`, `C-036` | called by all 797 `(self)` thunks | 2026-08-29 |
+| `ART-E001` | `0x0098f640` (`.text`) | `FUN_0098f640` | `fa_lua_call_context` | `void* __cdecl(void *luaStateWrapper)` — returns `*(void**)(w + 0x44)`, the per-call context | High | [EXE] `C-037`; used by class methods and `<global>` functions alike | sole callee of every binding thunk; result becomes `ecx` | 2026-08-29 |
+| `ART-E001` | `0x00977ce0` (`.text`) | `FUN_00977ce0` | `fa_lua_argcount` | `int __cdecl(lua_State*)` — the number of arguments on the Lua stack | High | [EXE] `C-037`, `C-039`: called in the prologue of 608 verified bindings | called by every binding before its arity compare | 2026-08-29 |
+| `ART-E001` | `0x00977920` (`.text`) | `FUN_00977920` | `fa_lua_arity_error` | raises using `"%s\n  expected %d args, but got %d"` (`0x00e59e38`) | High | [EXE] `C-037` | called on a failed arity compare | 2026-08-29 |
+| `ART-E001` | `0x0059a190` (`.text`) | `FUN_0059a190` | `maybe_lua_fetch_receiver` | returns the native object for a Lua argument | Medium | [EXE] `C-037`: called by `Unit::GetHealth` before reading `+0x98`; not yet read | called by class-method bindings | 2026-08-29 |
+| `ART-E001` | `0x0073f6d0` / `0x0073fa40` / `0x0073fdc0` / `0x007401e0` | — | `fa_lua_Damage`, `fa_lua_DamageArea`, `fa_lua_DamageRing`, `fa_lua_MetaImpact` | `int __thiscall(LuaCallContext*)`; arities 5, 6–7, 7, 6 | High | [EXE] `C-032`, `C-039`, `C-040` | the four scripted damage entry points; expected to converge on `SIM_Damage` (`C-021`) | 2026-08-29 |
+| `ART-E001` | `Entity + 0x98` | — | `fa_Entity_health` | `float` | High | [EXE] `C-038`: `flds 0x98(%esi)` in `Unit::GetHealth` | read by `Unit::GetHealth`, `Entity::GetHealth` | 2026-08-29 |
+| `ART-E001` | `0x0073e950` | `FUN_0073e950` | `maybe_damage_SIM_MetaImpactArea` | area damage — the `C-021` entry | Medium-High | [EXE] `C-041`/`C-042`: BSim sig 201, called by the `MetaImpact` Lua binding | ← `fa_lua_MetaImpact 0x007401e0` | 2026-08-29 |
+| `ART-E001` | `0x0074dc40` | `FUN_0074dc40` | `maybe_session_Sim_TransferUnit` | changes a unit's owning army | Medium-High | [EXE] `C-042`: BSim sig 489, called by `ChangeUnitArmy` | ← `ChangeUnitArmy` binding | 2026-08-29 |
+| `ART-E001` | `0x006b1390` | `FUN_006b1390` | `maybe_economy_Unit_SetConsumptionActive` | toggles a unit's resource draw | Medium-High | [EXE] `C-042`: BSim sig 100; the binding's own name matches exactly | ← `Unit:SetConsumptionActive` | 2026-08-29 |
+| `ART-E001` | `0x00681ae0`, `0x008bf570` | — | `maybe_blueprint_Entity_IsInCategory`, `..._UserEntity_IsInCategory` | category test | Medium-High | [EXE] `C-042` | ← `Entity:Kill`, `UserUnit:IsInCategory` | 2026-08-29 |
+| `ART-E001` | `0x006adf20`, `0x006ae7f0` | — | `maybe_orders_Unit_ToggleScriptBit`, `maybe_orders_Unit_IsIdleState` | per-unit state bits | Medium | [EXE] `C-042` | ← the same-named bindings | 2026-08-29 |
+| `ART-E001` | `0x0067f3c0`–`0x0067f4b0` | — | `maybe_intel_Entity_SetVizTo{Allies,Enemies,Neutrals,FocusPlayer}` | four visibility setters, **order unknown** | Low | [EXE] `C-043`: BSim returns the same name for all four | — | 2026-08-29 |
+
+Names prefixed `maybe_` are BSim candidates at roughly 80% accuracy (`C-041`). They are leads, not
+facts, and **must not be promoted to `fa_*` without a second source** — a corroborating caller, a
+matching signature, or a read of the code.
+| `ART-E001` | `0x006ca530` → `0x006ca5b0` | `FUN_006ca530` | `fa_lua_thunk_Unit_GetUnitId` → `fa_Unit_GetUnitId` | thunk `int(lua_State*)`; method `int __thiscall(lua_State*)` | High | [EXE] `C-032`, `C-035`; signature string `GetUnitId(self)` | thunk → `fa_lua_resolve_receiver`, then tail-call | 2026-08-29 |
+| `ART-E001` | `0x006cb720` → `0x006cb7a0` | `FUN_006cb720` | `fa_lua_thunk_Unit_GetHealth` → `fa_Unit_GetHealth` | as above | High | [EXE] `C-032`, `C-035`; signature string `GetHealth(self)` | thunk → `fa_lua_resolve_receiver`, then tail-call | 2026-08-29 |
+| `ART-E001` | `0x00fee88c`, `0x00fee874` (`.data`) | n/a | `fa_luamethods_Unit`, `fa_luamethods_Entity` | the class method-list globals named by descriptor field `+20` | High | [EXE] `C-032`; 125 and 65 registrations respectively | written by the per-method static initialisers | 2026-08-29 |
+
+The full 1,182-row table is **not committed** — it is derived metadata from a proprietary binary and
+is regenerable in about a second. Produce it, verify it, and annotate it with:
+
+```bash
+python3 tools/re/extract_moho_methods.py --tsv build/re-fa/exports/moho.methods.tsv
+python3 tools/re/verify_arity.py                     # 549/608 signatures machine-checked
+python3 tools/re/verify_arity.py --mismatches        # the 59 that disagree
+python3 tools/re/annotate_moho_methods.py            # adds subsystem / canonical / purpose
+```
+
+`moho.methods.tsv` columns: `scope`, `name`, `signature`, `method_va`, `wrapper_va`,
+`method_list_va`, `init_site_va`, `doc`.
+
+`moho.methods.annotated.tsv` prepends four more:
+
+| Column | Meaning |
+|---|---|
+| `subsystem` | Which part of the engine the callable belongs to (see the census below). |
+| `canonical` | `fa_<subsystem>_<Scope><Name>` — this ledger's naming convention, ready to paste. |
+| `purpose` | One line of prose describing what it does. |
+| `purpose_source` | `engine` where the binary ships the text, `derived` where it was generated from the name. **Always check this before quoting a purpose as fact.** |
+
+305 of the 1,182 purposes are the engine's own words; the other 877 are derived from the verb
+and noun in the name and are a navigation aid, not evidence.
+
+#### Subsystem census of the retail Lua API
+
+| Subsystem | Count | | Subsystem | Count |
+|---|---:|---|---|---:|
+| `ui` | 247 | | `world` | 22 |
+| `ai` | 165 | | `intel` | 21 |
+| `misc` | 113 | | `transport` | 16 |
+| `combat` | 101 | | `audio` | 16 |
+| `lifecycle` | 98 | | `debug` | 12 |
+| `session` | 67 | | `platform` | 10 |
+| `animation` | 50 | | `selection` | 9 |
+| `fx` | 49 | | `filesystem` | 9 |
+| `movement` | 32 | | `persistence` | 8 |
+| `blueprint` | 29 | | `ordnance` | 7 |
+| `build` | 28 | | `shields` | 3 |
+| `runtime` | 24 | | `resources` | 2 |
+| `economy` | 22 | | **`veterancy`** | **0** |
+| `orders` | 22 | | | |
+
+Two rows of that census are evidence in their own right, because a zero is a finding:
+
+- **`veterancy` is 0.** The retail engine exposes *no* veterancy API to Lua at all —
+  independent corroboration of `C-024`, which concluded from the shipped scripts that
+  veterancy is entirely Lua-owned. Two unrelated methods agreeing is worth more than either.
+- **`shields` is 3**, and all three are `Unit::GetShieldRatio`/`SetShieldRatio` plus a global
+  `_c_CreateShield` — no shield object methods. That is what `C-034` predicted from the empty
+  `moho.shield_methods` table, now visible from the other direction.
 
 ## Claim ledger
 
@@ -409,7 +830,49 @@ claim changes: mark it superseded and add the replacement.
 
 | Claim ID | Work package | Claim | Evidence | Confidence | Status | Implementation impact |
 |---|---|---|---|---|---|---|
-| | | | | | Open / Confirmed / Refuted / Superseded | |
+| `C-001` | `WP-01` | `ART-E001` statically links the entire engine. Its import table names only Windows, D3D9/`d3dx9_35`, DirectSound/`X3DAudio1_2`, WS2_32, Steam and BugSplat DLLs — no `MohoEngine.dll`, `gpgcore.dll`, `gpggal.dll` or `LuaPlus_1081.dll`. Those four shipped DLLs are **not loaded by the game**. | [EXE] `ART-E001` PE import directory | High | Confirmed | All executable analysis targets one binary. Do not attribute retail behavior to `ART-D001`–`ART-D004` without proving the exe contains the same code. |
+| `C-002` | `WP-00`, `WP-01` | `ART-E001` and `ART-D001` were built from the same source tree: their PE debug directories name `c:\work\rts\main\code\bin8\SupremeCommander.pdb` and `...\MohoEngine.pdb`. | [EXE] `ART-E001`, `ART-D001` debug directory | High | Confirmed | Legitimises using `ART-D001`'s exported symbol names as a naming dictionary for functions found in `ART-E001`. Version drift (2007 DLL vs 2011 exe) means names, not addresses, transfer. |
+| `C-003` | `WP-01`, `WP-03` | The engine object model is an ordinary C++ class hierarchy with vtables and full RTTI, rooted at `Moho::Entity`, with `Moho::Unit`, `Moho::Projectile`, `Moho::Prop`, `Moho::Shield` and `Moho::ReconBlip` as sibling concrete entity classes. 2,728 `Moho::` RTTI type descriptors are present, 471 of them concrete non-template classes. | [EXE] `ART-E001` `.?AV*@Moho@@` type descriptors; [EXE] `ART-D001` exports | High | Confirmed | `PE-02` resolved. Recoil Metal's typed-entity approach matches. The "manager-owned records behind opaque handles" candidate is refuted. |
+| `C-004` | `WP-03` | Entity identity is an engine-assigned integer id from a pool, owned by `Moho::EntityDB` (`AssignId`, `ReserveId`, `DoReserveId`, `ReleaseId`, `LookupId`), with classes `Moho::IdPool` and `Moho::EntId`. Destruction is deferred: `Entity::DestroyQueued`, `Entity::IsReadyForDelete`, `EntityDB::ReadyForDelete`, `EntityDB::Purge`, `Sim::GetOnDestroyedQueue`. | [EXE] `ART-D001` exports; [EXE] `ART-E001` RTTI | High | Confirmed | `PE-03`: "stable integer IDs resolved by managers" **and** "deferred destruction queue" both hold. Ids are recycled via a pool, so a stale id can be reused — generation/versioned handles are refuted, meaning retail relies on the deferred-purge window for safety. |
+| `C-005` | `WP-04` | The simulation advances in named "beats" with explicit engine-level stages, not one monolithic loop and not pure per-object virtual updates: `Sim::AdvanceBeat`, `Sim::GetCurrentTick`, `Sim::AdvanceCommandClock`, and stage accessors `Sim::GetMotionUpdateStage`, `Sim::GetScriptStage`, `Sim::GetCommandDispatchStage`. Per-entity work hangs off virtual `Entity::MotionTick` and `Entity::TaskTick` (overridden by `Unit`, `Projectile`, `CUnitMotion`). | [EXE] `ART-D001` exports `Sim`, `Entity`, `Unit`, `CUnitMotion` | High | Confirmed | `PE-01`: "hybrid manager phases plus object callbacks" confirmed; "per-object virtual updates" alone refuted. The stage *order* is still untraced — that is the open `WP-04` question. |
+| `C-006` | `WP-04`, `WP-43` | Determinism is a first-class native concern. `Sim` exposes `GetBeatChecksum`, `UpdateChecksum`, `VerifyChecksum`, `GetChecksumContext`, `GetChecksumDigest`; many classes implement their own `UpdateChecksum`; `Moho::SDesyncInfo` exists. The RNG is a Mersenne Twister: `Moho::CMersenneTwister` (`Seed`, `IRand`, `ShuffleState`, `Checksum`, `N`) wrapped by `Moho::CRandomStream` (`SetSeed`, `IRand`, `FRand`, `DRand`, `FRandGaussian`, `Checksum`), reached through `Sim::GetRandom`. | [EXE] `ART-D001` exports; [EXE] `ART-E001` RTTI | High | Confirmed | `WP-04` RNG ownership answered: retail is MT19937-family, per-sim, checksummed, seeded once. Recoil Metal must match the generator family and draw order to claim replay parity. The exact MT variant and seeding are not yet read. |
+| `C-007` | `WP-33` | Intel is stored in rasterised grids, not recomputed per query. `Moho::CIntelGrid` has `AddCircle`, `SubtractCircle`, `DelayedSubtractCircle`, `Raster`, `GetCoverage`, `IsVisible`, `Tick`, `UpdateChecksum`; `Moho::CIntelXGrid` is the explored map (`AddCircle`, `IsExplored`, `ExploreAll`). Separate grids exist per intel type: `CAiReconDBImpl::ReconGetRadarGrid`/`ReconGetSonarGrid`/`ReconGetOmniGrid`/`ReconGetJamingBlips`. `Moho::VisionDB` and `CWldSession::VisionDB` own vision. | [EXE] `ART-D001` exports; [EXE] `ART-E001` RTTI (`CIntel`, `CIntelGrid`, `CIntelCounterHandle`, `CIntelPosHandle`, `VisionDB`) | High | Confirmed | `PE-20`: incremental grids confirmed; "periodic complete rebuild" and "per-query spatial tests" refuted. `GetCoverage` plus `CIntelCounterHandle` implies a **refcount** grid, and `DelayedSubtractCircle` with `Moho::SDelayedSubVizInfo` implies removal is deferred by some number of beats — a directly observable ordering difference against Recoil Metal. |
+| `C-008` | `WP-12`, `WP-16`, `WP-17`, `WP-25` | Unit orders are executed by **separate native task classes**, not one generalised work engine. RTTI names at least: `CUnitMoveTask`, `CUnitFormAndMoveTask`, `CUnitAssistMoveTask`, `CUnitPatrolTask`, `CUnitGuardTask`, `CUnitAttackTargetTask`, `CUnitMeleeAttackTargetTask`, `CUnitFireAtTask`, `CFireWeaponTask`, `CAcquireTargetTask`, `CUnitMobileBuildTask`, `CFactoryBuildTask`, `CUnitGetBuiltTask`, `CUnitUpgradeTask`, `CUnitRepairTask`, `CUnitCaptureTask`, `CUnitReclaimTask`, `CUnitSacrificeTask`, `CUnitTeleportTask`, `CUnitCallTeleport`, `CUnitLoadUnits`, `CUnitUnloadUnits`, `CUnitFerryTask`, `CUnitWaitForFerryTask`, `CUnitCallTransport`, `CUnitCallLandTransport`, `CUnitCallAirStagingPlatform`, `CUnitCarrierLand`, `CUnitCarrierLaunch`, `CUnitCarrierRetrieve`, `CUnitRefuel`, `CUnitPodAssist`, `CUnitScriptTask`, `CWaitForTask`, `CCommandTask`, over the shared bases `CTask`/`CBuildTaskHelper`. | [EXE] `ART-E001` RTTI | High | Confirmed | `PE-13` resolved against candidate 1: repair, capture and reclaim are **separate native state machines** sharing a base and a build-rate helper, not one parameterised work engine. Also refutes the session-02 interim reading drawn from DLL exports alone (see evidence trap 2). |
+| `C-009` | `WP-11` | `Moho::RRuleGameRules`/`RRuleGameRulesImpl` is **not** the victory-condition system despite the name. Its entire method surface is blueprint and category management: `GetUnitBlueprint`, `GetProjectileBlueprint`, `GetPropBlueprint`, `GetMeshBlueprint`, `InitBlueprint`, `InitCategories`, `ParseEntityCategory`, `ResolveCategoryReferences`, `SetupEntityCategories`, `GetEntityCategory`, `GetUnitCount`, `FindFootprint`, `ExportToLuaState`, `UpdateLuaState`, `UpdateChecksum`. | [EXE] `ART-D001` exports | High | Confirmed | Prevents a costly wrong turn on `WP-11`. Victory/defeat predicates are *not* here; no native symbol matches `Victory`, `Defeat` or `Score`. `WP-11` should be pursued through scenario Lua first. |
+| `C-010` | `WP-06` | Blueprints are parsed into native typed structs, one per section: `RUnitBlueprint` with `RUnitBlueprintGeneral`, `Physics`, `Economy`, `Defense`, `DefenseShield`, `Intel`, `Air`, `Transport`, `Weapon`, `AI`, `Display`; likewise `RProjectileBlueprint` (`Display`/`Economy`/`Physics`) and `RPropBlueprint` (`Defense`/`Display`/`Economy`), plus `RMeshBlueprint`, `REmitterBlueprint`, `RTrailBlueprint`, `RBeamBlueprint`, `REffectBlueprint`, `REntityBlueprint`. | [EXE] `ART-E001` RTTI; [EXE] `ART-D001` exports | High | Confirmed | Blueprint defaults and coercion live in native struct initialisation, not in Lua. `WP-06` merge-order questions must be answered at `RRuleGameRulesImpl::InitBlueprint`. |
+| `C-011` | `WP-02` | Lua binding is generated per bound class through the template `Moho::CScrLuaMetatableFactory<T>`, supported by `CScrLuaBinder`, `CScrLuaClassBinder`, `CScrLuaObjectFactory`, `CScrLuaBaseClassSpec`, `CScrLuaInitForm`/`CScrLuaInitFormSet`. The bound classes are enumerable from the instantiated factory symbols. 60 registration-table name strings of the form `moho.<name>_methods` are present in `ART-E001`. | [EXE] `ART-D001` exports; [EXE] `ART-E001` strings | High | Confirmed | `PE-27`: "generated registration tables" confirmed; "generic dispatcher by method ID" refuted. Gives `WP-02` a mechanical path: each `moho.*_methods` string is referenced by exactly the registration site that builds that table. |
+| `C-012` | `WP-20`, `WP-21` | Pathing is native and service-shaped, not per-unit ad-hoc: `Moho::CAiPathFinder`, `CAiPathNavigator`, `CAiNavigatorLand`, `CAiNavigatorAir`, `CAiPathSpline`, `CPathPoint`, `PathQueue`, `PathTables`, `PathPreviewFinder`, `IPathTraveler`, plus `Sim::GetPathTables` and `AI_ClearPathData`/`AI_TestForTerrainBlockage`. Routes are **splines** (`CUnitMotion::SetSplineData`). Occupancy is a separate grid: `Moho::COGrid` with `Unit::ReserveOgridRect`, `FreeOgridRect`, `CanReserveOgridRect`, `GetReservedOgridRect`, and free functions `OCCUPY_Check`, `OCCUPY_MobileCheck`, `OCCUPY_MobileCheck_1x1`, `OCCUPY_CheckAreaFlatness`, `OCCUPY_CheckEdgeFlatness`. | [EXE] `ART-E001` RTTI; [EXE] `ART-D001` exports | High | Confirmed | `PE-04`: a shared path **request service** (`PathQueue`) with precomputed `PathTables` is confirmed over naive per-unit A*. `PE-06`: an explicit occupancy/reservation grid exists, so retail blockage is not steering-only. Recoil Metal's per-unit A* over a plain grid is a structural difference worth measuring. |
+| `C-013` | `WP-22`, `WP-23`, `WP-24` | All movement domains share **one** mover class, `Moho::CUnitMotion`, which branches per layer: `CalcMoveCommon` plus `CalcMoveLand`, `CalcMoveWater`, `CalcMoveAir`, `CalcMoveHover`, `CalcMoveBallistic`. Air specifics are methods on the same class (`CalcWingedLift`, `CalcWingedOrientation`, `CalcCirclingOrientation`, `CalcAirMovementDampingFactor`, `ComputeAirControl`, `ComputeAirCombatTactics`, `AttemptingToLand`, `ShouldHoverInsteadOfLand`, `ProcessFuelLevels`, `GetFuelUseTime`). Layers are discrete and transitions explicit: `Entity::GetCurrentLayer`/`SetCurrentLayer`, `CUnitMotion::UpdateCurrentLayer`, `SetNewTargetLayer`, `TransitionBetweenLayers`, `HandleDivingAndSurfacing`, `IsOnValidLayer`, and `COORDS_LayerToString`/`COORDS_StringToLayer`. | [EXE] `ART-D001` exports (`CUnitMotion`, 74 methods) | High | Confirmed | `PE-08`: "mover class per aircraft family" refuted; one data-driven mover with per-layer branches confirmed. `PE-09`: discrete layers with explicit transition confirmed over continuous depth. Submarine diving is a layer transition, not a depth scalar. |
+| `C-014` | `WP-15` | Economy is a per-unit request/consume cycle feeding army-level pools: `Unit::UpdateResourceRequest`, `UpdateResourceConsumption`, `UpdateResourceProduction`, `GetConsumptionRequest`, `GetResourceConsumed`, `HandleResourceManagement`, `ResetEconValues`, `SetConsumptionActive`, `SetProductionActive`, `IsConsumptionActive`, `IsProductionActive`, with `Moho::CEconomy`, `CEconRequest`, `CEconStorage`, `CEconomyEvent`, `CSimResources`/`ISimResources` and `Sim::GetResources`. Events are serialised (`Unit::SerEconomyEvents`, `AddEconomyEvent`). | [EXE] `ART-E001` RTTI; [EXE] `ART-D001` exports | High | Confirmed | `PE-11`: separate request objects (`CEconRequest`) and storage (`CEconStorage`) exist, so allocation is a two-phase request-then-satisfy, not a single sequential drain. Rounding point and priority order remain untraced — that is the `WP-15` question. |
+| `C-015` | `WP-21` | Formation is assigned **on the command object at issue time**, not by a persistent per-unit controller: `CUnitCommand::GenerateFormation`, `HasFormation`, `GetFormation`, `RemoveUnitFromFormation`, alongside `AddUnit`/`RemoveUnit`/`GetUnits`/`GetTotalCount`/`GetCurrentCount`. Formation selection is scripted: `FORMATION_PickBestFormation`, `FORMATION_PickTravelFormation`, `FORMATION_RunScript`, `FORMATION_GetScriptName`/`GetScriptIndex`/`GetNumScripts`, with `Sim::GetFormationDB`, `Moho::CAiFormationDBImpl`, `CAiFormationInstance`, `CFormationInstance`, `CSquad`. Multi-unit coordination is explicit: `CUnitCommand::CoordinateWith`, `IsCoordinating`, `CheckForCoordinationSuccess`, `SatisfiyCoordination` (sic). | [EXE] `ART-D001` exports; [EXE] `ART-E001` RTTI | High | Confirmed | `PE-05`: "destination offsets assigned once at command issue" confirmed, but with a persistent `CFormationInstance` object rather than plain offsets, and with Lua-scripted formation shapes. |
+| `C-016` | `WP-25` | Attachment is a generic parent-child graph on `Entity` (`AttachTo`, `DetachFrom`, `GetAttachedEntities`, `CalculateAttachedTransform`, `SetParentOffset`, `GetParentInfo`, `Moho::SEntAttachInfo`) with explicit death propagation in both directions (`AttachedEntityDestroyed`, `AttachedEntityKilled`, `ParentEntityDestroyed`, `ParentEntityKilled`). Transport logic sits above it in `IAiTransport`/`CAiTransportImpl` with `Unit::GetAssignedTransport`, `SetTransportedBy`, `CalcTransportLoadFactor`, `GetTransportFerryBeacon`. | [EXE] `ART-D001` exports | High | Confirmed | `PE-10`: generic attachment graph plus a transport-specific controller — the hybrid candidate. Death propagation is callback-driven, so ordering is observable and must be matched. |
+| `C-017` | `WP-16` | Build progress is stored on the **target** unit, with a separate builder-side work value: target-side `Entity::GetBuildProgress`, `GetFractionComplete`, `UpdateFractionComplete`, `IsBeingBuilt`; builder-side `Unit::GetWorkProgress`/`SetWorkProgress` and `Unit::GetBuilder`. Native builder controller is `IAiBuilder`/`CAiBuilderImpl`, with `Moho::CBuildTaskHelper` shared by the build tasks. | [EXE] `ART-D001` exports | High | Confirmed | `PE-12`: "progress stored on target unit" confirmed, combined with a builder-owned task holding a backlink. The two values are distinct — conflating them is a parity bug. |
+| `C-018` | `WP-29` | Silo ammunition is a **counter**, not child entities: `Moho::IAiSiloBuild`/`CAiSiloBuildImpl`, `Unit::GetSiloBuild`, `GetSiloBuildCount`, `GetSiloStorageCount`, `GetSiloMaxStorageCount`, plus `Unit::GetCountedProjectileWeapon` and `AI_CreateSiloBuilder`. | [EXE] `ART-D001` exports | High | Confirmed | `PE-17`: "ammo as child entities" refuted. Ammo is a build-then-store counter on the launching unit. |
+| `C-019` | `WP-09`, `WP-37` | The terrain model is `Moho::STIMap` over a `Moho::CHeightField`, with **four distinct elevation queries** — `GetTerrainElevation`, `GetSurfaceElevation`, `GetWaterElevation`, `GetDeepElevation`, `GetAbyssElevation` — plus `GetTerrainType`/`GetTerrainTypeCode`/`SetTerrainTypeRect`, `IsBlockingTerrain`, `IsPlayable`, `GetPlayableMapRect`, `SurfaceIntersection`, `TerrainIntersection`. `Sim::FlattenMapRect` mutates it. | [EXE] `ART-D001` exports | High | Confirmed | Surface elevation (what a unit stands on) and terrain elevation (the heightfield) are **separate** queries — water and abyss thresholds sit between them. `Sim::FlattenMapRect` proves the sim-side heightfield is mutable, which bears on `WP-37`. |
+| `C-020` | `WP-31`, `WP-32` | Shields are first-class entities in the entity database, not a damage-gate flag: `Moho::Shield` is an `Entity` subclass (`Entity::IsShield`), registered via `Sim::AddShield`/`RemoveShield`/`GetShields` and iterated by `EntityDB::ShieldsBegin`/`ShieldsEnd`/`AllShieldsBegin`/`AllShieldsEnd`. `Unit::GetShieldRatio`/`SetShieldRatio` carry the display value. | [EXE] `ART-D001` exports; [EXE] `ART-E001` RTTI | High | Confirmed | `PE-19`: "shield entities in spatial index" is the favoured candidate; a pure damage-boundary containment test is refuted, because shields have entity identity and collision. Recoil Metal's damage-gate architecture is a real structural difference. |
+| `C-021` | `WP-30` | The damage entry points are the free functions `Moho::SIM_Damage` and `Moho::SIM_MetaImpactArea`, with armor handled by `Moho::ARMOR_GetArmorDefinations` (sic) and `Unit::InitializeArmor`, `GetArmorMult`, `AlterArmor`, `ProcessArmorOnDamage`. Projectiles carry `GetDamageAmount`/`GetDamageRadius`/`GetDamageType` and a single `Impact` plus `CheckCollision`. `Moho::CDamage` is the Lua-bound damage object. | [EXE] `ART-D001` exports | High | Confirmed | `PE-18`: a **shared damage gate** is confirmed by the existence of two free entry points that all sources funnel through. `SIM_Damage` is the single highest-value address to recover for `WP-30`; ordering of armor, shield and callback all resolve there. |
+| `C-022` | `WP-07` | The Lua scheduler is native and thread-shaped: `Moho::CTask`, `CTaskThread`, `CTaskStage`, `CTaskEvent`, `CLuaTask`, `Moho::PausedThread`/`PausedMainThread`/`PausedChildThread`, with `Moho::STaskEventLinkage` and `Sim::GetScriptStage`. `Sim::ExecuteLuaInSim` and `Sim::LuaSimCallback` bridge in. | [EXE] `ART-E001` RTTI; [EXE] `ART-D001` exports | High | Confirmed | `ForkThread`/`WaitTicks` are backed by native task threads with stages, not plain Lua coroutines the VM schedules. Wake ordering is therefore an engine property and matters for `WP-04` determinism. |
+| `C-023` | `WP-07` | The retail Lua dialect uses `#` for line comments in shipped sim/UI scripts, not `--`, and shipped files are ISO-8859-1 with CRLF endings. | [LUA-R] `ART-S007` `lua/sim/Unit.lua` lines 1–9, 3108; every shipped `lua/**.lua` | High | Confirmed | Any retail-Lua ingestion in Recoil Metal must accept `#` comments and 8-bit encodings. Also the root cause of evidence trap 1. |
+| `C-024` | `WP-35` | Retail FA veterancy is entirely Lua-owned and blueprint-driven. Thresholds are cumulative unit `KILLS` from `blueprint.Veteran`, defaulting to `Game.VeteranDefault = {Level1=25, Level2=100, Level3=250, Level4=500, Level5=1000}`. Kill credit flows `Unit:OnKilledUnit(victim)` → `CheckVeteranLevel()`, which reads `GetStat('KILLS',0).Value + 1` (it runs *before* the stat is written) and promotes at most **one** level; `AddKills(n)` is the multi-level path and loops. Promotion applies buffs `VeterancyHealth<L>` and `VeterancyRegen<L>`, both `Duration = -1`, `Stacks = 'REPLACE'`: health is `MaxHealth` **Mult** 1.1/1.2/1.3/1.4/1.5, regen is `Regen` **Add** 2/4/6/8/10. Blueprint `Buffs[<type>].Level<N>` can add overrides via `CreateVeterancyBuff`. Then `AIBrain:OnBrainUnitVeterancyLevel` and the `OnVeteran` unit callback fire. Per-weapon damage buffs are present but **commented out** in retail with `# TODO: Enable per weapon buffs again`. | [LUA-R] `ART-S007` `lua/sim/Unit.lua` `AddKills`/`SetVeterancy`/`CheckVeteranLevel`/`SetVeteranLevel`/`OnKilledUnit`/`BuffTypes`; `lua/game.lua:11-17`; `lua/sim/BuffDefinitions.lua` `VeterancyHealth1-5`, `VeterancyRegen1-5` | High | Confirmed | `PE-22` resolved: "Lua buff application" confirmed, "native kill counter and fixed table" refuted. Confirms retail veterancy does **not** change weapon damage, and pins every constant. `WP-35` is now fully specified without any EXE work; the only native dependency is the `KILLS` stat store and callback timing. |
+| `C-032` | `WP-02`, `WP-03` | The complete retail Moho Lua API is recoverable **from code, not data**. Every Lua-callable native function has a compiler-generated static initialiser that fills a descriptor with `mov dword ptr [absolute], immediate` stores (`C7 05`), laid out `+0` name, `+4` scope, `+8` signature-with-documentation, `+16` native wrapper, `+20` the class's method-list global (0 for a free function). Scanning `.text` for runs of those stores recovers **1,182 callables across 54 method-list globals**: 776 class-bound methods and 406 `<global>` free functions, each with its Lua name, its authored signature *including parameter names*, its documentation string where the engine ships one, and the address of its native wrapper. Example: `Unit::GetUnitId`, signature `GetUnitId(self)`, wrapper `0x006ca530`, list `0x00fee88c`, initialiser `0x006ca560`. | [EXE] `ART-E001` `.text` static-initialiser scan; reproduce with `tools/re/extract_moho_methods.py` | High | Confirmed | This is `WP-02`'s deliverable and the key that unlocks every later subsystem: any Moho method named in shipped Lua now resolves directly to a native address to decompile. Largest scopes: `Unit` 125, `Entity` 65, `CAiBrain` 64, `CPlatoon` 49, `UserUnit` 36, `CAiPersonality` 35, `UnitWeapon` 32, `Projectile` 30. |
+| `C-035` | `WP-02`, `WP-03` | Every Lua-callable `(self)` method is reached through a **20-byte generated thunk** of identical shape: `mov eax,[esp+4]` (the `lua_State*`), `push eax`, `call 0x00975c60`, `add esp,4`, `mov ecx,eax` (receiver becomes `this`), `jmp <real method>`. Following the tail call resolves **797 of the 1,182 callables to their real native method, all 797 distinct** — no aliasing. The remaining 385 have wrappers of other shapes (more marshalling). **All 797 call the same resolver, `0x00975c60`**, which converts a Lua userdata into a native object pointer. | [EXE] `ART-E001` disassembly at `0x006ca530` (`Unit::GetUnitId`) and `0x006cb720` (`Unit::GetHealth`), plus the thunk scan | High | Confirmed | Two things. It verifies `C-032`: a method declared `GetUnitId(self)` really does consume exactly one argument and use it as the receiver, and the calling convention is `__thiscall`. And it hands `WP-03`/`PE-03` its decisive anchor for free — `0x00975c60` is *the* userdata-to-object resolution point, so the stale-reference rules live inside one function. |
+| `C-036` | `WP-02` | ~~The thunk's callee resolves the Lua receiver.~~ **SUPERSEDED by `C-037`.** The function at `0x0098f640` (reached via the `jmp` thunk at `0x00975c60`) is `mov eax,[esp+4]; mov eax,[eax+0x44]; ret`. That much is correct. The *interpretation* was not: it was read as userdata → native receiver resolution. | [EXE] `ART-E001` `0x0098f640` | High | **Superseded** | Refuted by counting: **112 of the 797 thunk-resolved callables are `<global>` free functions with no receiver at all**, and their thunks are byte-identical. A step every global also takes cannot be receiver resolution. The error was inferring a mechanism from one plausible reading of two examples, both of which happened to be methods. |
+| `C-041` | campaign method | BSim name transfer from `ART-D001` to `ART-E001` **works on large engine functions and fails on small ones**, and the difference is stark enough that a single accuracy figure would be misleading. Two controls: (a) on the executable's 870 already-named functions — overwhelmingly CRT and MFC stubs — peak agreement is **84% at significance ≥ 30** and it *degrades* above that, with confident errors such as `__alldvrm` → `__alldiv` and `_sscanf` → `Moho::PLAT_SetRegistryValueDword` both at similarity 1.000; (b) on the 626-function depth-1 engine frontier, 471 matched and **98 matched a *named* DLL function, of which 78% are corroborated at significance ≥ 40** by an independent signal — which Lua binding calls them — and manual inspection shows several of the remaining 22% are correct synonyms the metric cannot see (`CreateAnimator` → the `CAnimationManipulator` constructor, `PauseSound` → `AudioEngine::SetPaused`). | [EXE] `ART-E001` vs `ART-D001` via BSim `medium_32`; reproduce with `tools/re/BSimTransferNames.java` | High | Confirmed | Small functions have degenerate feature vectors and match everything, so **similarity 1.0 on a short function is worthless**. Use significance, not similarity, and only on the frontier. Yield is modest — 98 candidate names from 626 — but it includes the `WP-30` anchor. Never auto-apply: at ~80% these names must be marked `maybe_` per the naming convention. |
+| `C-042` | `WP-30`, `WP-15`, `WP-17` | Addresses recovered by `C-041`, each corroborated by its calling Lua binding: **`Moho::SIM_MetaImpactArea 0x0073e950`** (sig 201, called by the `MetaImpact` binding) — the area-damage entry `C-021` predicted; `Moho::Sim::TransferUnit 0x0074dc40` (sig 489, called by `ChangeUnitArmy`); `Moho::Unit::SetConsumptionActive 0x006b1390` (sig 100, exact name agreement with its binding); `Moho::Entity::IsInCategory 0x00681ae0`; `Moho::Unit::ToggleScriptBit 0x006adf20`; `Moho::Unit::IsIdleState 0x006ae7f0`; `Moho::CollisionBeamEntity::CheckCollision 0x00679d60`; `Moho::UserEntity::IsInCategory 0x008bf570`. | [EXE] `C-041` plus call-graph corroboration | Medium–High | Confirmed | `SIM_MetaImpactArea` is the first sim-side damage function located, after two sessions of failing to reach it from the Lua side. The damage neighbourhood is `0x0073e000`–`0x00740000`. |
+| `C-043` | campaign method | BSim **cannot distinguish identical sibling functions**. `Moho::Entity::SetVizToAllies` is returned as the best match for four consecutive addresses (`0x0067f3c0`, `0x0067f410`, `0x0067f460`, `0x0067f4b0`), all at similarity 1.000 and significance 41.68. `Moho::Entity` really has four such setters — `SetVizToAllies`, `SetVizToEnemies`, `SetVizToNeutrals`, `SetVizToFocusPlayer` (`ART-D001` exports) — with, evidently, identical code differing only in a constant. | [EXE] `ART-E001` BSim results; [EXE] `ART-D001` export list | High | Confirmed | Where a class has a family of near-identical accessors, BSim assigns them all the same name and the *order* must be recovered another way. Treat a repeated match name across consecutive addresses as an ordering problem, not as a set of duplicates. |
+| `C-037` | `WP-02`, `WP-07` | The retail Lua binding convention, read from `Unit::GetHealth` at `0x006cb7a0`. The 20-byte thunk unwraps a **call context** from the LuaPlus state object (`+0x44`, the step `C-036` misread) and tail-calls the real function with it in `ecx`. The real function is `int __thiscall F(LuaCallContext*)`: it dereferences `[ecx]` to get the raw `lua_State*`, calls the argument-count helper at `0x00977ce0`, compares the result against each accepted arity, and on mismatch raises through `0x00977920` with the format string `"%s\n  expected %d args, but got %d"`. The receiver, where there is one, is fetched separately at `0x0059a190`. Return value is the Lua result count (`mov eax,1; ret` for a one-value getter). | [EXE] `ART-E001` `0x006cb7a0` full disassembly; string at `0x00e59e38` | High | Confirmed | Corrects `C-036`. Also means arity is checked *natively* on every Moho call, which is what makes `C-039` possible. |
+| `C-038` | `WP-30`, `WP-03` | **Entity health is a 32-bit `float` at object offset `+0x98`.** `Unit::GetHealth` reads it with a single `flds 0x98(%esi)` after fetching the receiver, then pushes it as a Lua number. | [EXE] `ART-E001` `0x006cb839` | High | Confirmed | A direct, load-bearing divergence from Recoil Metal, which stores health as fixed-point `Mag` (Q50.14) *on purpose* — see `src/core/sim/Health.hpp`. Retail accumulates float rounding error across a blast's linear falloff; Recoil Metal does not. Neither is "wrong", but exact damage totals **cannot** match retail bit-for-bit, and any future replay-parity claim must say so. This is the first concrete number-level parity constraint the campaign has produced. |
+| `C-039` | `WP-02` | The recovered signatures are **machine-verified against the engine's own arity checks**. Of the 608 rows having both a parseable parameter list and a detectable arity check, **549 agree (90.3%)** and 59 do not. Of the 59: 53 are doc strings that declare empty parentheses for a method that really takes arguments (`CAiBrain:GetEconomyStored()` accepts 2), and only **6** are substantive — `Damage`, `PlayLoop`, `StopLoop`, `_c_CreateShield`, `CMauiItemList::SetNewColors`, `Entity::SetCollisionShape`. | [EXE] `ART-E001`; reproduce with `tools/re/verify_arity.py` | High | Confirmed | Independently corroborates `C-032` at scale, and establishes the precedence rule: **where the shipped signature and the arity check disagree, the code is right and the documentation is stale.** |
+| `C-040` | `WP-30` | The global `Damage` really takes **five** arguments, not the four its shipped signature declares: the declared `Damage(instigator, target, amount, damageType)` omits `location`. The native implementation at `0x0073f6d0` checks `cmp eax, 5`, and the only retail script that calls it passes five — `Damage(self, {0,0,0}, TargetEntity, self.Data, 'Normal')` in `ADFShieldDisruptor01_script.lua`. | [EXE] `ART-E001` `0x0073f707`; [LUA-R] `ART-S013` `projectiles/ADFShieldDisruptor01/ADFShieldDisruptor01_script.lua` | High | Confirmed | Three independent sources agree against the engine's own documentation. A worked example of why `C-039`'s precedence rule matters, and a caution for anyone treating the recovered signatures as authoritative. |
+| `C-033` | `WP-02` | Cross-validation of `C-032` against two independent sources. Of the 125 recovered `Unit` method names, **81 appear verbatim as method calls in the shipped retail Lua** (`ART-S007`) and 40 match exported `Moho::Unit` members in `ART-D001`; for `Entity`, 53 of 65 and 27 of 65. Every one of the 44 `Unit` names *not* called by shipped Lua is a recognisable engine method — `ToggleScriptBit`, `AlterArmor`, `RemoveNukeSiloAmmo`, `SetFireState`, `RevertRegenRate`, `SetBreakOffDistanceMult` — several of which are independently confirmed by `ART-D001` exports. No recovered name is implausible. | [EXE] `ART-E001`; [LUA-R] `ART-S007` call-site scan; [EXE] `ART-D001` export table | High | Confirmed | The extraction has no observed false positives. The 44 uncalled names are API the shipped scripts simply do not use, which is expected — mods and FAF use many of them. |
+| `C-034` | `WP-02`, `WP-31` | `moho.shield_methods` and `moho.sound_methods` are registered as metatables (`C-027`) but **no method is bound to them** through the mechanism of `C-032`: the strings `Shield` and `HSound` never appear as a descriptor scope anywhere in `ART-E001`. | [EXE] `ART-E001` static-initialiser scan, negative result | Medium | Open | Suggests Lua's `Shield` object gets its behavior from `Entity` plus the Lua-side `lua/shield.lua` class rather than from shield-specific native methods — consistent with `C-020`, where shields are ordinary entities. Worth confirming before relying on it for `WP-31`. |
+| `C-030` | `WP-35`, `WP-06` | `Game.VeteranDefault` is the **fallback, not the norm**. 193 of the 568 shipped unit blueprints in `ART-S001` state their own top-level `Veteran = { Level1..Level5 }` table, and the overrides are far shorter than the default: UAA0102 (interceptor) promotes at 2/4/6/8/10 kills, UEL0001 (UEF commander) at 20/40/60/80/100, UAA0310 (strategic bomber) at 40/80/120/160/200, against the default's 25/100/250/500/1000. Every override observed is an evenly spaced arithmetic series. 374 units state neither `Veteran` nor `Buffs` and take the default. | [BP-R] `ART-S001` `units/<id>/<id>_unit.bp`, `Veteran` table, counted over all 568 unit blueprints | High | Confirmed | Implementing veterancy against the default alone would make it roughly an order of magnitude too rare across most of the combat roster. `UnitDef` therefore carries per-type thresholds. Also a caution for `WP-06`: `Veteran` is a **top-level** blueprint section, not part of `Defense`. |
+| `C-031` | `WP-35`, `WP-06` | 192 of the 568 unit blueprints also state a top-level `Buffs = { Regen = { Level1..Level5 } }` table, which **replaces** the default `VeterancyRegen<L>` ladder rather than adding to it — both the engine buff and the blueprint-derived one carry `BuffType = 'VETERANCYREGEN'` with `Stacks = 'REPLACE'`, so the later application wins. Values differ from the default 2/4/6/8/10: UAA0102 states 1/2/3/4/5 and UEL0001 states 3/6/9/12/15. **`Regen` is the only buff sub-table any shipped unit overrides** — a census of every `Buffs` sub-table across all 568 blueprints returns `{'Regen': 192}` and nothing else, so the health multiplier is genuinely universal. | [BP-R] `ART-S001` `Buffs` sub-table census over all 568 unit blueprints; [LUA-R] `ART-S007` `lua/sim/Unit.lua` `SetVeteranLevel`/`BuffTypes`/`CreateVeterancyBuff` | High | Confirmed | The negative half is as useful as the positive: it licenses keeping the health multiplier a constant while making regeneration per-type, which is what the implementation does. |
+| `C-028` | `WP-35`, `WP-34` | Retail buffs are **recomputed from the blueprint base value**, never applied incrementally. `Buff.ApplyBuff` calls `BuffCalculate(unit, buffName, affectType, initialVal)` with `initialVal` taken fresh from the blueprint (`Defense.MaxHealth`, `Defense.RegenRate`), and the formula is `result = (base + Σ(Add × Count)) × Π(Mult repeated Count times)` — **adds first, then multiplies**. Because the veterancy buffs declare `Stacks = 'REPLACE'`, only the current level's buff is ever present, so levels **do not compound**. | [LUA-R] `ART-S007` `lua/sim/Buff.lua:206-231` and `BuffCalculate` at `:452-492` | High | Confirmed | Decisive. Level 3 health is `base × 1.3`, **not** `base × 1.1 × 1.2 × 1.3`. Implementing veterancy as successive multiplications is the obvious wrong answer and gives 1.716× instead of 1.3× at level 3. |
+| `C-029` | `WP-35` | Raising `MaxHealth` by buff also **heals** the unit. `Buff.lua` does `SetMaxHealth(val)` then, unless the buff sets `DoNoFill`, `AdjustHealth(unit, val - oldmax)` when the maximum grew, or clamps current health to the new maximum when it shrank. The veterancy health buffs do not set `DoNoFill`. Regeneration is set, not added: `SetRegenRate((bpRegenRate + adds) × mults)`, so at level `L` regen is `Defense.RegenRate + 2L` and max health is `Defense.MaxHealth × (1 + 0.1L)`. | [LUA-R] `ART-S007` `lua/sim/Buff.lua:206-231`; `lua/sim/BuffDefinitions.lua` | High | Confirmed | A promoted unit is healed by exactly the max-health increase, so veterancy is a mid-combat survivability spike, not just a larger bar. Both facts are directly testable. |
+| `C-026` | `WP-02` | The Lua class registry is a `.data` array at `0x00fb9400`–`0x00fbb800` of 24-byte records laid out `{const char *metatable_name, const char *class_name, const char *doc, NULL, void *method_list, void *type_desc}`. Inheritance is a second record of the same shape whose name field is the literal `"base"` and whose doc field reads `"derived from <Parent>"`. All 60 `moho.*` strings are referenced from inside this range and from nowhere else in the image. | [EXE] `ART-E001` `.data 0x00fba008` (the `Unit` record) and 59 siblings | High | Confirmed | Gives `WP-02` its skeleton and the exact `PE-27` mechanism. The method **names** are not in this table. |
+| `C-027` | `WP-02`, `WP-03` | The retail Lua object model exposes exactly 36 method tables. Mapping metatable → native class: `unit_methods`→`Unit`, `entity_methods`→`Entity`, `projectile_methods`→`Projectile`, `prop_methods`→`Prop`, `shield_methods`→`Shield`, `blip_methods`→`ReconBlip`, `weapon_methods`→`UnitWeapon`, `userDecal_methods`→`ScriptedDecal`, `aibrain_methods`→`CAiBrain`, `platoon_methods`→`CPlatoon`, `navigator_methods`→`CAiNavigatorImpl`, `aipersonality_methods`→`CAiPersonality`, `CAiAttackerImpl_methods`→`CAiAttackerImpl`, `manipulator_methods`→`IAniManipulator`, `sound_methods`→`HSound`, `lobby_methods`→`CLobby`, `discovery_service_methods`→`CDiscoveryService`, `steam_discovery_service_methods`→`CSteamDiscoveryService`, `PathDebugger_methods`→`CPathDebugger`, `ui_map_preview_methods`→`CUIMapPreview`, `WldUIProvider_methods`→`CLuaWldUIProvider`, `world_mesh_methods`→`CUIWorldMesh`, and 14 `CMaui*` UI classes (`control`, `bitmap`, `border`, `cursor`, `dragger`, `edit`, `frame`, `group`, `histogram`, `item_list`, `mesh`, `movie`, `scrollbar`, `text`). Declared inheritance counts: 13 classes `derived from Entity`, 33 `derived from CMauiControl`, 3 `derived from IAniManipulator`, 1 `derived from CScriptEvent`. | [EXE] `ART-E001` `.data` class registry, field `+4` and the `"base"` records | High | Confirmed | The authoritative list of what retail Lua can touch. Note `Shield` and `ReconBlip` are Lua-visible entity classes in their own right, reinforcing `C-020`. |
+| `C-025` | `WP-00` | The preserved corpus is Forged Alliance, not vanilla Supreme Commander: `ART-S007` contains Seraphim faction data (`lua/factions.lua`, `lua/ui/lobby/restrictedUnitsData.lua`, and others). The exe version resource reads product `Supreme Commander Forged Alliance`, internal name `SupCom`, original filename `SupremeCommander.exe`. | [LUA-R] `ART-S007`; [EXE] `ART-E001` version resource | High | Confirmed | Removes the ambiguity created by the executable being named `SupremeCommander.exe` and by `MohoEngine.dll` (a vanilla-era artifact) being present in `bin`. |
 
 ## Hypothesis ledger
 
@@ -417,7 +880,8 @@ Use this for decisions not yet settled by the executable.
 
 | Hypothesis ID | Envelope | Candidate | Supporting evidence | Counterevidence | Discriminating observation | State |
 |---|---|---|---|---|---|---|
-| | | | | | | Open / Favored / Refuted / Confirmed |
+| `H-001` | `PE-18` | `0x0073ef40` is the shared damage gate that `C-021` calls `SIM_Damage`. | All four scripted damage entry points call it; only 6 call sites image-wide; adjacent to the four callers. | **Refuted by reading it.** `0x0073ef40` unpacks Lua values (`0x009729f0` repeatedly), reads a field at `+0x8d8` of a context object, and calls `0x004cdb30` — which is itself Lua machinery (argument counting at `0x00977ce0`, stack access at `0x00972a40`/`0x00975090`, 16 callers spread across unrelated subsystems). No armour lookup, no write to `Entity+0x98`. | Done: disassembled. It only touches the Lua stack, which was the stated discriminator. | **Refuted** |
+| `H-002` | `PE-03` | The Lua object's cached native pointer is nulled on destruction, rather than the handle being validated on use. | `C-036`/`C-037`: the binding path performs no validity check, yet shipped Lua stores unit references across ticks. Something must make a stale reference safe. `Moho::WeakPtrBase`, `WeakObject` and `ThreadSafeCountedObject` all exist in RTTI. | None yet. | Find what writes the Lua object's native-pointer field during `Entity::Destroy`, or establish that the field is a weak-pointer slot checked elsewhere. | **Open** |
 
 ## Work-package record template
 
@@ -479,6 +943,216 @@ One behavior question narrow enough to answer from a call path.
 
 One address, function, xref, or experiment. Never "continue analysis."
 ```
+
+## Active work-package records
+
+### WP-01: PE architecture, sections, imports, RTTI, symbols, global map
+
+**Readiness:** Not ready
+**Confidence before EXE:** High
+**EXE evidence:** Analyzed
+**Possibility envelopes:** `PE-02`
+**Artifacts:** `ART-E001`, `ART-D001`
+**Last touched:** 2026-08-29
+
+#### Exact question
+
+Is the retail engine reachable in one binary, and does that binary carry enough type information to
+name functions without a PDB?
+
+#### Findings
+
+- `F-001` Yes to both. `C-001` (single statically linked binary) and `C-003` (full RTTI) mean the
+  campaign never needs the shipped DLLs at runtime, and Ghidra's RTTI analyzer can name vtables
+  directly. `C-002` additionally supplies 4,875 mangled names from the same source tree.
+- `F-002` The executable is PE32 x86, GUI subsystem, linker-version field 8.0, relocations
+  stripped, large-address aware, imports `d3dx9_35.dll` which is **not** shipped in `bin` (only
+  `d3dx9_31.dll` is), so the retail install depends on a system DirectX redistributable — consistent
+  with `ART-M002` referencing the August 2009 DirectX package.
+
+#### Counterevidence and unresolved questions
+
+- Relocations are stripped, so the image base is fixed; addresses recorded from Ghidra are directly
+  comparable across sessions, but only for this exact hash.
+- No function RVA has been recorded in the symbol ledger yet. Until it is, `WP-01` stays Not ready.
+- The global/static data map is entirely unsurveyed.
+
+#### Next exact action
+
+Run a headless script that lists Ghidra's RTTI-derived vtable symbols with addresses, and seed the
+symbol ledger with `Moho::Sim`, `Moho::Entity`, `Moho::Unit` and `Moho::EntityDB` vtable RVAs.
+
+---
+
+### WP-02: Moho/Lua native registration map
+
+**Readiness:** Ready but not confirmed
+**Confidence before EXE:** High
+**EXE evidence:** Analyzed
+**Possibility envelopes:** `PE-27`
+**Artifacts:** `ART-E001`, cross-checked against `ART-D001` and `ART-S007`
+**Last touched:** 2026-08-29 (session 04)
+
+#### Exact question
+
+Which native function implements each Lua-visible Moho method, and what is the complete retail
+registration set?
+
+#### Known bounds
+
+- [EXE] `ART-E001` contains exactly 60 registration-table name strings matching `moho.*`. The
+  method-table ones are: `aibrain_methods`, `aipersonality_methods`, `bitmap_methods`,
+  `blip_methods`, `border_methods`, `CAiAttackerImpl_methods`, `control_methods`, `cursor_methods`,
+  `discovery_service_methods`, `dragger_methods`, `edit_methods`, `entity_methods`, `frame_methods`,
+  `group_methods`, `histogram_methods`, `item_list_methods`, `lobby_methods`,
+  `manipulator_methods`, `mesh_methods`, `movie_methods`, `navigator_methods`,
+  `PathDebugger_methods`, `platoon_methods`, `projectile_methods`, `prop_methods`,
+  `ScriptTask_Methods`, `scrollbar_methods`, `shield_methods`, `sound_methods`,
+  `steam_discovery_service_methods`, `text_methods`, `ui_map_preview_methods`, `unit_methods`,
+  `userDecal_methods`, `weapon_methods`, `WldUIProvider_methods`, `world_mesh_methods`.
+  The remainder are constructor/type names: `AimManipulator`, `AnimationManipulator`,
+  `BoneEntityManipulator`, `BuilderArmManipulator`, `CDamage`, `CDecalHandle`,
+  `CollisionBeamEntity`, `CollisionManipulator`, `CPrefetchSet`, `EconomyEvent`, `EntityCategory`,
+  `FootPlantManipulator`, `IEffect`, `MotorFallDown`, `RotateManipulator`, `SlaveManipulator`,
+  `SlideManipulator`, `StorageManipulator`, `ThrustManipulator`, `UIWorldView`.
+- [EXE] `C-011`: registration is generated per class via `CScrLuaMetatableFactory<T>`.
+
+#### Candidate mechanisms
+
+Settled by `C-011`. What remains is purely mechanical recovery, not a choice between mechanisms.
+
+#### Native path
+
+`.data 0x00fb9400..0x00fbb800` class registry → record `+16` → `.data` list of
+`{descriptor*, NULL}` → `.rdata` per-method descriptor whose word 0 is the native function.
+
+#### Findings
+
+- `F-006` `C-026`: the class-registry record layout, recovered by dumping around every
+  `moho.*_methods` string reference rather than by pattern-scanning.
+- `F-007` `C-027`: the complete 36-entry metatable → native class map plus declared inheritance.
+- `F-008` **Negative result, recorded so it is not retried.** A generic scan for `luaL_reg`-shaped
+  `{const char *name, lua_CFunction fn}` arrays finds LuaPlus's own standard libraries
+  (`base`, `math`, `table`, `debug` — for example the `math` table at `0x00d96f48` and the `table`
+  library at `0x00d980a0`) but finds **no Moho method table**. Moho does not use `luaL_register`.
+  The per-method `.rdata` descriptors instead begin with the function pointer and continue with a
+  LuaPlus type/signature structure (a `{0,0,0, ptr, ptr, 0, 0, argcount, ...}` shape), so the
+  method *name* is not adjacent to the pointer. That scan is a dead end; do not repeat it.
+
+- `F-009` **Solved, and the hypothesis in `F-008` was right.** The names are immediate operands in
+  code. Each Lua callable has a compiler-generated static initialiser that fills a descriptor with
+  `mov dword ptr [absolute], immediate` stores; scanning `.text` for runs of them recovers the
+  whole API without decompiling anything. `C-032` states the layout and the result; `C-033` the
+  cross-validation. The extractor is `tools/re/extract_moho_methods.py`, and the table lands at
+  `build/re-fa/exports/moho.methods.tsv` (gitignored, regenerable in about a second).
+- `F-010` The descriptor carries a **documentation string** as well as a signature, which the
+  engine splits on `" - "`. So the recovered table includes the engine authors' own one-line
+  description of many methods — for example `Unit::GetConsumptionPerSecondEnergy`, "Get the
+  consumption of energy of the unit". That is a better specification of intended behavior than
+  anything reconstructed from call sites.
+
+- `F-011` The wrapper check passed. `0x006ca530` and `0x006cb720` are byte-identical 20-byte
+  thunks that take one argument, resolve it to a receiver through `0x00975c60`, and tail-call
+  the real method with the receiver in `ecx` — exactly what a signature of `GetUnitId(self)`
+  claims. Following that tail call resolves 797 of the 1,182 callables to distinct real method
+  addresses. See `C-035`.
+
+#### Counterevidence and unresolved questions
+
+- 385 callables still name only their generated wrapper, not the real method: their thunks
+  marshal more than a receiver and so have other shapes. Each shape is a small, separate
+  decoding job.
+- `C-034`: `Shield` and `HSound` have metatables but no methods bound by this mechanism. Either
+  they genuinely have none, or those two use a second registration path this scan does not see.
+  Distinguishing the two matters for `WP-31`.
+- 406 of the 1,182 callables have scope `<global>`; which Lua table they end up in (`moho.`,
+  `_G`, a UI namespace) has not been determined.
+
+#### Next exact action
+
+Decompile `fa_lua_resolve_receiver` at `0x00975c60`. It is the single point where a Lua handle
+becomes a native object, so it decides `WP-03`'s open question — what happens on a stale
+reference, and whether the pooled id is checked or the pointer trusted. One registration
+function should yield the whole `unit_methods` table; the other 35 follow the same shape.
+
+---
+
+### WP-35: Veterancy, kill credit, promotion, regeneration
+
+**Readiness:** Not ready
+**Confidence before EXE:** High
+**EXE evidence:** Unexamined
+**Possibility envelopes:** `PE-22`
+**Artifacts:** `ART-S007`
+**Last touched:** 2026-08-29
+
+#### Exact question
+
+What exactly changes when a retail Forged Alliance unit gains a veterancy level, and what triggers
+it?
+
+#### Findings
+
+- `F-003` See `C-024` for the complete specification. This package is **answered without EXE work**;
+  the whole mechanism is in shipped Lua and blueprint data.
+- `F-004` A subtle detail worth preserving: `CheckVeteranLevel` reads `GetStat('KILLS',0).Value + 1`
+  because it runs *before* the kill stat is written, and it promotes at most one level per call.
+  `AddKills(n)` is the separate multi-level path and loops. Implementing only one of the two paths
+  produces off-by-one veterancy.
+- `F-005` `Unit:OnKilledUnit(victim)` is called on the *instigator* from the victim's death handling,
+  immediately before the death weapon fires and the death thread forks. Kill credit therefore lands
+  before wreck creation.
+
+#### Counterevidence and unresolved questions
+
+- Whether the `KILLS` stat is stored natively (`Unit::GetStat`/`SetStat` are native) or in Lua
+  affects save/replay but not gameplay values.
+- Whether an instigator that dies in the same beat still receives credit depends on native death
+  ordering, which is untraced.
+
+#### Implementation, session 03
+
+Done. `src/core/sim/Veterancy.{hpp,cpp}` holds the rules; `Health` carries the per-unit
+`Veterancy` state; kill credit is awarded from `retireDead` (retail's own placement, before the
+death weapon and the wreck); hull regeneration runs as `tickRegeneration` next to `tickShields`;
+`Defense.RegenRate` is now parsed and converted per tick in `UnitCatalog`. Covered by
+`tests/test_veterancy.cpp` — all 1,129 tests and all seven sim-discipline guards pass.
+
+Three implementation notes worth keeping:
+
+- Max health is scaled as an **exact integer ratio** on the raw fixed-point value rather than
+  by an `Fx` multiplier. `Fx::fromRatio(11, 10)` is 18022/16384, which turns 1,000 health into
+  1,099.976 rather than 1,100 — invisible in play, but it feeds the state hash.
+- The veteran regen bonus is the one rate in the sim that **cannot** be converted once at
+  content load, because it depends on the unit's level rather than its type. It is derived in
+  whole numbers inside the tick (`veteranRegenPerTick`) precisely so that deriving it there
+  does not mean a float in the tick.
+- `creditKill` refuses a killer at zero health that has not yet been retired. Without that
+  guard, promoting it would heal it by the max-health increase and resurrect a unit the same
+  loop was about to bury — an outcome that would depend on nothing but slot order.
+
+- Per-type thresholds are read from the blueprint's top-level `Veteran` table (`C-030`), which
+  193 of 568 units state. This was found by checking rather than assumed: implementing only
+  `Game.VeteranDefault` would have been wrong for a third of the roster, and wrong by roughly
+  a factor of ten on the units that fight most.
+
+- Per-type regeneration ladders come from `Buffs.Regen` (`C-031`), replacing the default.
+  `tests/test_veterancy.cpp` checks all of this against the **real shipped blueprints**
+  (UAA0102, UEL0001, DAA0206) as well as against hand-built fixtures, because the hand-built
+  ones cannot catch the fact that `Veteran` and `Buffs` are top-level sections.
+
+#### Counterevidence and unresolved questions, still open
+
+- Whether the `KILLS` stat is native or Lua-side, and whether an instigator that dies in the
+  same beat still receives credit, both remain untraced.
+- Veterancy is not surfaced in the UI, so a promotion is currently invisible except through
+  the event and the health change.
+- `Unit.lua` also calls `AIBrain:OnBrainUnitVeterancyLevel`. Recoil Metal's AI is not notified.
+
+#### Next exact action
+
+Surface veteran level in the HUD (chevrons on the selected unit's panel), which is the only
+part of `C-024` a player can currently not see.
 
 ## Session protocol
 
@@ -572,6 +1246,359 @@ owned connected disk, and are they sufficient to begin static analysis?
 - Install and pin Ghidra, create `build/re-fa/project`, import preserved `ART-E001`, and record its
   section map, imports, compiler indicators, RTTI evidence, debug-directory contents, and image base
   for `WP-01`.
+
+### 2026-08-29 / Session 02
+
+**Artifact:** `ART-E001` SHA-256 `c6783580c0b7a408...`, `ART-D001` SHA-256 `3e6e1a698a57d051...`,
+`ART-S007` SHA-256 `3632a3294fc01a07...`
+**Tool/project:** Ghidra 12.1.2 headless with OpenJDK 21.0.11, project `build/re-fa/project` name `fa`
+**Work package:** `WP-01`, opportunistically `WP-02` and `WP-35`
+**Question:** Is the retail engine reachable in one binary, and does it carry enough type information
+to proceed without a PDB?
+
+**Accomplished**
+- Established that Ghidra was already installed (12.1.2) but unusable because no JVM was on `PATH`;
+  wired `JAVA_HOME` to the keg-only OpenJDK 21 in `build/re-fa/run-import.sh`.
+- Imported and auto-analyzed `ART-E001` (224 s), `ART-D001`, `ART-D003`, `ART-D004`, `ART-D002` into
+  project `fa`. No binary was executed at any point.
+- `C-001`: proved from the PE import directory that the executable statically links the engine and
+  loads none of the four shipped engine/runtime DLLs. This reorients the whole campaign onto one
+  binary.
+- `C-002`: matched the debug-directory PDB paths of `ART-E001` and `ART-D001` to the same Perforce
+  tree, legitimising the DLL export table as a naming dictionary.
+- Recovered 2,728 `Moho::` RTTI type descriptors from `ART-E001` (471 concrete non-template classes)
+  and 4,875 mangled exports from `ART-D001`, parsed into 352 classes / 4,083 members.
+- Recorded claims `C-001` through `C-025`, updating 38 of 45 dashboard rows from `Unexamined`.
+- `C-024`: fully specified retail veterancy from shipped Lua and data, with every constant.
+- `C-025`: confirmed the corpus is Forged Alliance, not vanilla Supreme Commander.
+- Fixed a structural defect in the dashboard: rows `WP-06` through `WP-44` were missing the
+  `Priority` column, silently shifting every later cell one column left.
+
+**Possibility envelope changes**
+- `PE-01` hybrid stages plus object callbacks — **favored**, alternatives refuted (`C-005`).
+- `PE-02` C++ hierarchy with vtables — **confirmed**, opaque-handle candidate refuted (`C-003`).
+- `PE-03` pooled integer ids plus deferred destruction — **confirmed**; generation/versioned handles
+  refuted, which *weakens* stale-reference safety versus what was assumed (`C-004`).
+- `PE-04` shared path request service with precomputed tables — **favored** over per-unit A* (`C-012`).
+- `PE-05` formation assigned at command issue — **confirmed**, via a persistent instance (`C-015`).
+- `PE-06` an explicit occupancy/reservation grid exists — steering-only refuted (`C-012`).
+- `PE-08` one parameterised mover — per-family mover classes **refuted** (`C-013`).
+- `PE-09` discrete layers — continuous depth **refuted** (`C-013`).
+- `PE-10` generic attachment graph plus transport controller — **confirmed** (`C-016`).
+- `PE-11` two-phase request/satisfy — sequential single drain **refuted** (`C-014`).
+- `PE-12` progress on target plus builder-owned task — **confirmed** (`C-017`).
+- `PE-13` separate native task state machines — one generalised work engine **refuted** (`C-008`).
+- `PE-16` one data-driven projectile configured by setters — per-family native subclassing
+  **refuted**: `ART-E001` RTTI contains a single `Moho::Projectile` plus a separate
+  `Moho::CollisionBeamEntity`, and no per-family projectile subclass. See the `WP-28` dashboard row.
+- `PE-17` ammo as a counter — ammo as child entities **refuted** (`C-018`).
+- `PE-18` shared damage gate — **confirmed** by `SIM_Damage`/`SIM_MetaImpactArea` (`C-021`).
+- `PE-19` shields as entities — pure containment test **refuted** (`C-020`).
+- `PE-20` incremental refcounted grids with deferred removal — rebuild and per-query **refuted**
+  (`C-007`).
+- `PE-22` Lua buff application — native kill counter with fixed table **refuted** (`C-024`).
+- `PE-25` native rule strategy object — **refuted** for victory conditions specifically (`C-009`).
+- `PE-27` generated registration tables — method-id dispatcher **refuted** (`C-011`).
+
+**Files and durable outputs**
+- `docs/fa-exe-analysis-plan.md` (this file)
+- `tools/re/parse_msvc_exports.py` (committed, reusable)
+- `build/re-fa/run-import.sh`, `build/re-fa/project/` (gitignored)
+- `build/re-fa/exports/{MohoEngine,gpgcore,gpggal,LuaPlus_1081}.exports.txt`,
+  `moho.classes.tsv`, `exe.rtti.raw.txt`, `exe.moho.classes.txt` (gitignored, regenerable)
+- `build/re-fa/lua/` extracted `ART-S007` (gitignored, regenerable)
+
+**Blocked by**
+- Nothing. `WP-00` still lacks the Steam depot manifest, which does not block analysis.
+
+**Next exact action**
+- Write and run a Ghidra headless script that, for every string beginning `moho.` in `ART-E001`,
+  lists xrefs and dumps the adjacent `(name, function-pointer)` data array; write
+  `build/re-fa/exports/moho.registration.tsv` and seed the symbol ledger from `moho.unit_methods`.
+
+### 2026-08-29 / Session 03
+
+**Artifact:** `ART-E001`, `ART-S001` SHA-256 `c23a48d6b4704314...`, `ART-S007`
+**Tool/project:** Ghidra 12.1.2 headless, project `fa`; Python `zipfile` for the SCDs
+**Work package:** `WP-02`, then `WP-35`
+**Question:** Which native function implements each Lua Moho method — and, once that stalled,
+what exactly does retail veterancy do and can Recoil Metal do it?
+
+**Accomplished**
+- `WP-02`: wrote `tools/re/DumpMohoRegistrations.java`, `DumpMohoRegLayout.java` and
+  `DumpAddrs.java` (all read-only against the Ghidra database). Recovered `C-026`, the layout
+  of the class-registration record, and `C-027`, the complete 36-entry metatable → native class
+  map with declared inheritance.
+- `WP-02` negative result `F-008`: Moho does **not** use `luaL_register`. A generic scan for
+  `{name, fn}` arrays finds only LuaPlus's own standard libraries. Recorded so it is not
+  retried; the method names are most likely immediates inside the registration code.
+- `WP-35`: `C-024`, `C-028`, `C-029` from the shipped Lua, then `C-030` and `C-031` from a
+  census over all 568 shipped unit blueprints.
+- Implemented veterancy and hull regeneration. All 1,133 tests and all seven sim-discipline
+  guards pass; the full app builds.
+
+**What went wrong, and what it cost**
+- A `grep` under a UTF-8 locale reported that retail has no Lua veterancy. It has a complete
+  implementation; the shipped files are ISO-8859-1 and `grep` was silently treating them as
+  binary. Recorded as evidence trap 1 at the top of this document.
+- The `MohoEngine.dll` export table was briefly taken as the engine's full surface, which made
+  repair, capture and reclaim look Lua-side. The executable's RTTI shows all three as native
+  classes. Evidence trap 2.
+- Veterancy was first implemented against `Game.VeteranDefault` alone. A check of the corpus
+  showed 193 of 568 units override the thresholds and 192 override the regeneration ladder,
+  most of them by large factors — so the first implementation would have been wrong for a
+  third of the roster. Both are now per-type and tested against the real blueprints.
+- The assumption that the UEF commander states no `Veteran` table was wrong; it states
+  20/40/60/80/100. The test now pins the real values.
+
+**Possibility envelope changes**
+- `PE-27`: `C-026`/`C-027` confirm generated per-class registration. The remaining unknown is
+  where the method *names* live, which is a decompilation question rather than a design one.
+- `PE-22`: closed. Retail veterancy is Lua-owned, blueprint-parameterised, and does not touch
+  weapon damage.
+
+**Files and durable outputs**
+- `docs/fa-exe-analysis-plan.md`
+- `tools/re/{parse_msvc_exports.py,DumpMohoRegistrations.java,DumpMohoRegLayout.java,DumpAddrs.java}`
+- `src/core/sim/Veterancy.{hpp,cpp}`, `tests/test_veterancy.cpp`, plus edits to `Health.hpp`,
+  `UnitDef.hpp`, `UnitBlueprint.cpp`, `UnitCatalog.{hpp,cpp}`, `Skirmish.cpp`, `StateHash.cpp`,
+  `Events.{hpp,cpp}`
+- `build/re-fa/exports/{moho.registration.raw.tsv,moho.reglayout.txt}` (gitignored)
+
+**Blocked by**
+- Nothing. `WP-02`'s remaining step needs decompilation time, not new evidence.
+
+**Next exact action**
+- Find the function that writes `0x00fee88c` with a write-xref search, decompile it, and read
+  the `unit_methods` names from its immediate operands.
+
+### 2026-08-29 / Session 04
+
+**Artifact:** `ART-E001` SHA-256 `c6783580c0b7a408...`, cross-checked against `ART-D001`, `ART-S007`
+**Tool/project:** Ghidra 12.1.2 headless project `fa`; `tools/re/extract_moho_methods.py`
+**Work package:** `WP-02`, spilling into `WP-03`
+**Question:** Which native function implements each Lua-visible Moho method?
+
+**Accomplished**
+- **`WP-02` solved.** `C-032`: the method names are not in data at all — each Lua callable has a
+  compiler-generated static initialiser that fills a descriptor with `mov [abs], imm` stores.
+  Scanning `.text` for runs of those recovers **1,182 callables across 54 method-list globals**,
+  each with its Lua name, authored signature *with parameter names*, the engine's own
+  documentation string, and its native address. No decompiler needed; the scan runs in a second.
+- `C-033`: cross-validated. 81 of 125 recovered `Unit` names are called verbatim in shipped
+  retail Lua; every one of the 44 that are not is a recognisable engine method, several
+  independently confirmed by `ART-D001` exports. No false positives observed.
+- `C-035`: verified the mapping by disassembling two wrappers. Both are byte-identical 20-byte
+  thunks that resolve `self` and tail-call the real method as `__thiscall` — exactly what a
+  `(self)` signature claims. Following the tail call resolved **797 callables to distinct real
+  native methods**, with zero address collisions.
+- `C-036`, a `WP-03` bonus: the shared receiver resolver is four instructions —
+  `mov eax,[esp+4]; mov eax,[eax+0x44]; ret`. Lua holds a **raw pointer** at userdata `+0x44`
+  and the engine checks nothing on the way in.
+- Dashboard readiness recounted from the table: 24 Not ready, 21 Ready but not confirmed.
+  `WP-02` and `WP-35` both moved this session.
+
+**Possibility envelope changes**
+- `PE-27` closed. Generated per-class registration confirmed, and the whole surface enumerated.
+- `PE-03` refined rather than settled: the sim identifies entities by pooled id, but the script
+  boundary is a raw cached pointer. Both candidates were true, at different layers — a reminder
+  that "which mechanism" questions need to name the layer they are about.
+
+**What this changes for Recoil Metal**
+- Recoil Metal's generational `UnitId` is **stricter than retail**, which resolves Lua receivers
+  with no validity check whatsoever. That is a deliberate divergence and should stay.
+
+**Files and durable outputs**
+- `docs/fa-exe-analysis-plan.md`
+- `tools/re/{pe_reader.py,extract_moho_methods.py,DumpRefsAndCode.java}` (committed, reusable)
+- `build/re-fa/exports/moho.methods.tsv`, 1,182 rows (gitignored, regenerable)
+
+**Blocked by**
+- Nothing.
+
+**Next exact action**
+- Find what writes userdata `+0x44` on entity destruction — search for stores of `0` to
+  `[reg+0x44]` inside `Entity::Destroy`/`OnDestroy`, or establish that the userdata holds a
+  `Moho::WeakPtrBase` and the field is a weak-pointer slot. That settles `WP-03`'s last question.
+
+### 2026-08-29 / Session 05
+
+**Artifact:** `ART-E001`, cross-checked against `ART-S013`
+**Tool/project:** Ghidra 12.1.2 project `fa`; `objdump`; `tools/re/verify_arity.py`
+**Work package:** `WP-02` verification, `WP-30` anchoring
+**Question:** Push the executable analysis from a map into read code.
+
+**Accomplished**
+- `C-037`: read `Unit::GetHealth` end to end and recovered the **binding calling convention** —
+  `int __thiscall F(LuaCallContext*)`, native arity check via `0x00977ce0`, error through
+  `0x00977920`, receiver fetched separately at `0x0059a190`, return value is the Lua result count.
+- `C-038`: **health is a `float` at `Entity+0x98`** — the campaign's first number-level parity
+  constraint against Recoil Metal's fixed-point `Mag`.
+- `C-039`: machine-verified 549 of 608 checkable signatures against the engine's own arity
+  checks (90.3%). Only 6 substantive disagreements; 53 more are empty-paren doc stubs.
+- `C-040`: the global `Damage` takes **five** arguments, not the four it documents. Confirmed
+  three ways: the arity check, the doc string, and the one retail script that calls it.
+- `WP-30` anchored with addresses for all four scripted damage entry points.
+
+**Corrections**
+- **`C-036` superseded.** I read `0x0098f640` as "resolve the Lua receiver" from two examples,
+  both methods. It is not: **112 `<global>` functions with no receiver run the identical thunk**.
+  It unwraps a per-call context. The lesson is the one already at the top of this document in
+  another form — a mechanism inferred from agreeing examples is not confirmed until something
+  that *should* differ is checked.
+- The first arity run reported 74 disagreements. 21 of them were **the parser's fault**: doc
+  strings name the receiver after the class (`IsUnitState(unit, stateName)`), not `self`, so a
+  receiver was double-counted. Fixed by admitting both readings before calling anything a
+  mismatch. Reporting those 21 as engine bugs would have been a fabricated finding.
+
+**Possibility envelope changes**
+- `PE-18` unchanged but now addressable: the entry points are located, the gate is not yet read.
+
+**Files and durable outputs**
+- `docs/fa-exe-analysis-plan.md`; `tools/re/{verify_arity.py,ReportCoverage.java}`
+
+**Also accomplished (after the session's first write-up)**
+- Intersected the call targets of all four damage entry points and subtracted an unrelated
+  binding's calls to strip the Lua plumbing. One candidate survives with only 6 callers in the
+  whole image: `0x0073ef40`. Recorded as **`H-001`**, not as a claim — it has not been read.
+- Annotated all 1,182 callables with a subsystem, a canonical `fa_*` name and a purpose line
+  (`tools/re/annotate_moho_methods.py`). 305 purposes are the engine's own text; the rest are
+  derived and marked as such in a `purpose_source` column so the two are never confused.
+- The subsystem census produced two corroborating zeros: **no native veterancy API** (supports
+  `C-024`) and only three shield-related callables (supports `C-034`).
+
+**Negative result worth keeping**
+- `H-001` **refuted**, and the method that produced it was flawed. Intersecting the four damage
+  bindings' call targets and subtracting one unrelated binding's calls does *not* isolate
+  domain logic: the binding used for subtraction, `Unit::GetHealth`, is trivial and calls no
+  script machinery, so everything script-related survived the subtraction and looked
+  damage-specific. `0x0073ef40` and `0x004cdb30` are both Lua plumbing. **Subtract a rich
+  binding, not a simple one** — or better, do not subtract at all and work from the other end.
+
+**Next exact action**
+- Work backwards from armour instead of forwards from Lua. `Unit::GetArmorMult` is at
+  `0x006cac80` and `Unit::AlterArmor` at `0x006caa80`; both must read the same per-unit armour
+  table that the damage gate consults. Find the field offset they use, then find the other
+  functions that read that offset. The damage gate is among them, and unlike a call-graph
+  intersection this cannot be fooled by shared script plumbing.
+
+### 2026-08-29 / Session 06
+
+**Artifact:** `ART-E001`
+**Tool/project:** Ghidra 12.1.2 project `fa`; `tools/re/DumpCallGraph.java`
+**Work package:** campaign method
+**Question:** How do we analyze this efficiently, given that we cannot analyze all of it?
+
+**Accomplished**
+- Exported the full call graph (31,086 functions) and measured reachability from the recovered
+  Lua API. **84% of the binary is unreachable from any script-visible behavior**; the
+  simulation-relevant closure is 2,562 functions (8.2%), and its **depth-1 frontier is 618**.
+- Per-subsystem frontiers are small enough to plan against: economy 51, build 66, orders 70,
+  intel 73, movement 75, combat 199.
+- Wrote the `Analysis strategy` section: the Lua boundary as the natural cut, four cost tiers,
+  the one-line-answer rule, `ART-D001` as the unused name oracle, triage, stop rules, and the
+  two failure modes already hit.
+- Revised the analysis order: bulk name transfer first, then field-offset mining, then take
+  **economy** to `Confirmed` before attempting damage.
+
+**Why economy before damage**
+Damage is the more valuable answer, but economy is the better *first* one: a quarter of the
+frontier, an implementation already built to compare against, and `PE-11`'s open question
+(rounding point, priority order) has a one-line answer. Passing the confirmation gate once
+matters more than passing it on the most interesting subsystem — nothing has passed it yet.
+
+**Files and durable outputs**
+- `docs/fa-exe-analysis-plan.md`; `tools/re/DumpCallGraph.java`;
+  `build/re-fa/exports/callgraph.tsv` (gitignored, regenerable)
+
+**Next exact action**
+- Run Ghidra BSim or Version Tracking with `ART-D001` as the source and `ART-E001` as the
+  destination, and measure how many of the 4,875 exported names transfer. Record the match
+  count and the false-positive rate before trusting any transferred name.
+
+### 2026-08-29 / Session 07
+
+**Artifact:** `ART-E001` against `ART-D001`, `ART-D003`, `ART-D004`
+**Tool/project:** Ghidra 12.1.2 BSim, H2 database at `build/re-fa/bsim/fadb`, template `medium_32`
+**Work package:** campaign method, then `WP-30`
+**Question:** Does bulk name transfer from the named DLL actually work?
+
+**Accomplished**
+- Stood up a local BSim database and committed signatures for `MohoEngine.dll`, `gpgcore.dll`
+  and `gpggal.dll` (`build/re-fa/run-bsim-sigs.sh`).
+- Wrote `tools/re/BSimTransferNames.java`, **report-only by default** — it will not rename
+  without `--apply`, which is what made the following measurements possible before any damage
+  was done to the database.
+- `C-041`: measured accuracy in two regions and found them completely different — 84% peak and
+  degrading on the CRT-heavy control, ~78%+ on the engine frontier.
+- `C-042`: recovered 98 candidate names including **`Moho::SIM_MetaImpactArea` at
+  `0x0073e950`**, the sim-side damage entry that `C-021` predicted and that sessions 05 and 06
+  failed to reach from the Lua side.
+- `C-043`: found a real limitation — four identical `Entity::SetVizTo*` siblings all match the
+  same name, so BSim cannot order a family of near-identical accessors.
+
+**Corrections to my own strategy**
+- Session 06 called DLL name transfer "the biggest unused lever" and predicted thousands of
+  names. **It yielded 98.** The strategy section now records the measured result in place of
+  the prediction. The technique keeps a place as a frontier tool at Tier 1 cost, not as a bulk
+  renamer, and its output is `maybe_` names only.
+- The first control was unrepresentative — the executable's "already-named" functions are
+  almost all CRT and MFC stubs, nothing like the engine code the campaign cares about.
+  Generalising from it would have killed a technique that works. **A control has to resemble
+  the target.** This is the second time in three sessions that a bad control produced a wrong
+  conclusion (`H-001` was the first).
+- The second attempt was also unfair in the opposite direction: querying the Lua *bindings*
+  returned zero named matches, because generated glue is unnamed in both binaries. The
+  meaningful query is the layer below.
+
+**Files and durable outputs**
+- `docs/fa-exe-analysis-plan.md`; `tools/re/BSimTransferNames.java`;
+  `build/re-fa/bsim/`, `build/re-fa/exports/bsim.*.tsv`, `frontier_d1.clean.txt` (gitignored)
+
+**Next exact action**
+- Disassemble `0x0073e950` (`SIM_MetaImpactArea`). Confirm it by the two independent markers
+  already established: it must reach a write to `Entity+0x98` (`C-038`) and consult armour
+  (`Unit::GetArmorMult`, `0x006cac80`). That converts `C-042` from a BSim candidate into a
+  read fact and gives `WP-30` its damage-ordering answer.
+
+### 2026-08-29 / Session 08
+
+**Artifact:** `ART-E001`
+**Tool/project:** Ghidra 12.1.2 project `fa`; `tools/re/ApplyKnownNames.java`
+**Work package:** campaign infrastructure
+**Question:** Make the campaign survivable across sessions and analysts.
+
+**Accomplished**
+- Wrote the recovered knowledge **into the Ghidra database**: 2,036 functions named and
+  plate-commented. Named functions went 943 → **2,979**; named code 151 KB → **457 KB**. A
+  session now opens a partly labelled binary instead of 31,086 `FUN_` placeholders.
+- Encoded confidence in the name prefix — `fa_` is recovered fact, `maybe_` is an ~80% BSim
+  lead, Ghidra's own RTTI names are never overwritten. Two existing names were correctly
+  skipped. The prefix is the safeguard: a future session will read a name and not this ledger.
+- Added the **multi-session hunting kit**: the prefix table, a start-of-session command
+  sequence including artifact-hash verification and full project rebuild, the one-Ghidra-process
+  rule, the ordered hunting queue with a start address per entry, and an object-layout table.
+- Six analysis agents dispatched in parallel on `WP-30`, `WP-15`, `WP-04`, `WP-03`, `WP-26`
+  and `WP-19`, working through `objdump` and the exported tables so none of them needs the
+  Ghidra project lock. Their findings are integrated by the parent session, which owns this
+  document — six writers on one file would corrupt it.
+
+**Why the object-layout table matters more than it looks**
+Only one offset is recorded (`Entity+0x98`, health, `float`), and it alone produced a hard
+parity constraint. Offsets are small, exact, and durable in a way that prose about a subsystem
+is not. A session that recovers ten of them advances the campaign more than one that reads a
+single function exhaustively.
+
+**Files and durable outputs**
+- `docs/fa-exe-analysis-plan.md`; `tools/re/ApplyKnownNames.java`, `DumpCallGraph.java`,
+  `ReportCoverage.java`, `BSimTransferNames.java`
+- `ADR-065` in `ADR_DECISIONS.md`; `README.md` and `PLAN2.md` corrected — veterancy was still
+  listed as absent in both.
+
+**Next exact action**
+- Integrate the six agents' reports into the claim ledger, then take the top hunting-queue
+  entry (`WP-30`, `SIM_MetaImpactArea 0x0073e950`) to a traced path with a caller and a
+  downstream effect. That would be the first package through the confirmation gate.
 
 ## Confirmation gate
 
