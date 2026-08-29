@@ -9,18 +9,30 @@ about native engine behavior before Recoil Metal implements more Forged Alliance
 
 ## What is ready
 
-**Campaign state:** unblocked and materially cheaper than planned. The owned, hash-identified
-installation associated with Steam app `9420` is connected, and its complete `bin` and `gamedata`
-directories have been preserved and hash-verified. Ghidra 12.1.2 is installed and the retail
-executable is imported and auto-analyzed. Two accelerators discovered in session 02 collapse most of
-Phase 0: the executable ships **complete MSVC RTTI** (2,728 `Moho::` type descriptors, 471 concrete
-non-template `Moho::` classes), and the shipped-but-unloaded `MohoEngine.dll` exports **4,875
-mangled C++ symbols from the same Perforce tree**, giving signatures for 352 of those classes. An
-authoritative Steam depot manifest is still needed to prove the exact retail build and completeness.
+**Campaign state:** the map is built and the campaign has moved from finding things to reading
+them. The owned, hash-identified installation (Steam app `9420`) is preserved and hash-verified;
+Ghidra 12.1.2 holds an analyzed project whose database now carries **2,979 named functions** after
+the recovered knowledge was written back into it. The Lua API is fully recovered — **1,182
+callables** with signatures, documentation and native addresses (`C-032`), 549 of them
+machine-verified against the engine's own arity checks. **Eight work packages are at `Analyzed`**
+and the object-layout table holds forty-odd offsets, each naming its base pointer.
 
-**Next exact action:** run a Ghidra headless script over the `fa` project that resolves each
-`moho.*_methods` registration string to its referencing function and dumps the adjacent
-name/function-pointer array, producing the `WP-02` address map. See `WP-02` below.
+Two accelerators from session 02 still underpin everything: the executable ships **complete MSVC
+RTTI** (2,728 `Moho::` descriptors, 471 concrete classes), and `MohoEngine.dll` carries 4,875
+mangled symbols from the same Perforce tree. **But see `C-075`: the DLL is a naming oracle only.**
+It is a different build and its *behaviour* diverges — one intel function is live there and dead in
+retail, and `Unit` offsets differ by `0x10`. Transfer names from it, never offsets and never
+behaviour.
+
+An authoritative Steam depot manifest is still needed to prove the exact retail build.
+
+**Next exact action:** find the engine's **default `Footprint` size** for a unit blueprint that
+omits the field. It is the single unknown blocking `C-073`(a) — Recoil Metal centres skirt
+rectangles on the unit instead of computing `pos − Footprint.Size/2 + SkirtOffset`, which misplaces
+adjacency for **31 structures including every naval factory**. Many small structures omit
+`Footprint` entirely, so the fix cannot be written until the default is known, and it is set in
+native code rather than in the shipped Lua. Start from `Unit:GetSkirtRect` and the blueprint
+loader's footprint field registration.
 
 | Readiness | Count | Meaning |
 |---|---:|---|
@@ -48,7 +60,7 @@ and because the honest denominators are what stop the next session over-claiming
 | Lua callables mapped name → address (`C-032`) | 1,182 | — |
 | …of those, resolved to the real native method (`C-035`) | 797 | 2.6% of all functions |
 | …of those, arity machine-verified against the code (`C-039`) | 549 | 90.3% of the 608 checkable |
-| Functions read instruction by instruction by an analyst | 9 | **0.029%** |
+| Functions read instruction by instruction by an analyst | ~90 | **~0.28%** |
 | Work packages at **Confirmed with EXE analysis** | 0 of 45 | **0%** |
 
 Read that table as three different senses of the word "analyzed", which are worth keeping apart:
@@ -277,17 +289,20 @@ analysts never need the project at all.
 
 ### The hunting queue
 
-Ordered by (implementation impact) x (1 / measured frontier size). Each entry is a question
-with a starting address, because "continue analysis" is not a next action.
+Ordered by (implementation impact) x (1 / measured frontier size). Each entry is a question with a
+starting address, because "continue analysis" is not a next action. The first six entries were
+cleared in sessions 09–11; what follows is what is left.
 
-| # | WP | Question | Start at | Frontier |
-|---|---|---|---|---:|
-| 1 | `WP-30` | Order of armour → shield → health write → death callback | `SIM_MetaImpactArea 0x0073e950`; entries `0x0073f6d0`, `0x0073fa40`, `0x0073fdc0`, `0x007401e0` | 199 |
-| 2 | `WP-15` | Rounding point and competing-demand priority | `Unit::SetConsumptionActive 0x006b1390`; getters `0x006d0f00`, `0x006d1050`, `0x006d11a0`, `0x006d12f0` | 51 |
-| 3 | `WP-04` | Phase order within one beat; MT19937 constants | search `.text` for `0x9908b0df`; `Sim` members via `moho.classes.tsv` | — |
-| 4 | `WP-03` | What invalidates the Lua handle on destroy (`H-002`) | receiver fetch `0x0059a190`; `Entity::Destroy 0x00698510` | — |
-| 5 | `WP-26` | Broad-phase structure and iteration ORDER | the `*InRect`/`*InSphere` bindings in `moho.methods.tsv` | — |
-| 6 | `WP-33` | Length of the deferred vision-removal delay | `CIntelGrid::DelayedSubtractCircle`, `SDelayedSubVizInfo` | 73 |
+| # | WP | Question | Start at |
+|---|---|---|---|
+| 1 | `WP-19` | **The engine's default `Footprint` when a blueprint omits it.** Blocks `C-073`(a); 31 structures are affected | `Unit:GetSkirtRect`; the blueprint loader's footprint registration |
+| 2 | `WP-16` | What `CUnitGetBuiltTask` does on the **target** side while it is being built | RTTI `CUnitGetBuiltTask`; the `TaskTick` at its vtable `+0x04` |
+| 3 | `WP-12` | What `GetQueueClearingCmdType` (`CUnitCommandQueue+0x1c`) actually does — accessors are inlined everywhere with zero call sites | `C-096`'s open item |
+| 4 | `WP-11` | Victory and defeat predicates — `C-009` ruled out `RRuleGameRules`; try scenario Lua first | `Sim::EndGame`, `Sim::IsGameOver` (`Sim+0x8DC`/`+0x8DD`) |
+| 5 | `WP-22` | Aircraft mover states: takeoff, landing, fuel, staging | `CUnitMotion::CalcMoveAir`, `ProcessFuelLevels`, `AttemptingToLand` |
+| 6 | `WP-43` | Replay command payload and how the client abstraction records it | `CReplayClient`, `CCommandDB`, `CMessageStream`, `Sim::GetCommandSources` |
+| 7 | `WP-27` | Two unopened per-candidate rejects in target acquisition | `0x006de340`; `CAiAttackerImpl` vtable `+0x58` |
+| 8 | `WP-27` | Whether a weapon with an empty priority table acquires **nothing** — if so it is load-bearing | `0x006e2930`, the suspected default-priority seeder |
 
 ### Object layout, the most reusable artifact
 
@@ -1804,6 +1819,52 @@ deviation); a SIZE-less STRUCTURE receives nothing.
 **Next exact action**
 - Fix the falloff defect: make `damageArea` uniform within the radius, behind a test that pins
   `C-061`. It is a small change with large consequences, so land it alone.
+
+### 2026-08-29 / Session 11
+
+**Artifact:** `ART-E001`, `ART-S001`, `ART-S007`, `ART-S013`
+**Tool/project:** five parallel agents on `objdump` + the exported tables; one auditing our own source
+**Work package:** `WP-12`, `WP-16`, `WP-19`, `WP-27`, `WP-29`, `WP-33`
+**Question:** Can a second wave take the subsystems the first wave did not reach, and can an agent
+audit our implementation rather than the binary?
+
+**Accomplished**
+- `WP-27` **Analyzed**: selection is `(range/arc class, priority index, score, incumbency)`; the
+  score is **turret slew, not distance**, for turreted weapons; anti-projectile acquisition is a
+  **separate algorithm**; `TargetPriorities` is not an engine field and `IsValidTarget` is inert
+  (`C-090`–`C-095`).
+- `WP-29` **Analyzed**: ammo is an `int` on `CAiSiloBuildImpl`; an SMD's interceptors live in the
+  **tactical** slot; interception is the ordinary collision path and **damages** rather than
+  destroys; three distinct counter-missile mechanisms exist (`C-081`–`C-088`).
+- `WP-33` **Analyzed**: nine signed-byte **coverage** grids; **removal is immediate — the deferred
+  path is dead code**; stale contacts are retained (`C-076`–`C-079`).
+- `WP-12`/`WP-16` **Analyzed**: one site advances a queue; progress is on the target; the economy
+  ratio a builder uses is **one beat stale**; assist clamps per contribution (`C-096`–`C-102`).
+- The adjacency **audit found two real defects in our own tables** and both are fixed (`C-072`).
+
+**The audit agent was the most valuable per token**
+It read our source against a recovered specification rather than reading the binary, and it found a
+doubled magnitude row that no playtest would ever surface. Worth repeating for every subsystem that
+reaches `Analyzed`: **recovering a spec and then auditing against it catches a different class of
+bug than either activity alone.** The invariant did the work — `Add × n` must be constant, so a row
+that breaks the product is a transcription slip.
+
+**Corrections forced this session**
+- `C-007` refuted: deferred vision removal does not exist in retail. The inference had been drawn
+  from a symbol's *existence* rather than from a caller.
+- `C-070` refined: `CEconomyEvent` is all-or-nothing about the *tick*, not about the *resources* —
+  partial deliveries accumulate, so a starved silo is slow rather than stalled.
+- `C-075`/`C-089`: the DLL is a **naming oracle only**. Different build, divergent behaviour,
+  `Unit` offsets shifted by `0x10`. Folded into the strategy section.
+
+**Two defects fixed in Recoil Metal, both with known-correct retail values**
+1. Area damage had a linear falloff; retail has none (`C-061`, `ADR-066`, commit `aa65554`).
+2. Two adjacency magnitude rows were wrong, one of them doubled (`C-072`, commit `bc59bdc`).
+
+**Next exact action**
+- Recover the engine's default `Footprint` for blueprints that omit the field. It is the only
+  unknown blocking `C-073`(a), which misplaces adjacency for 31 structures including every naval
+  factory.
 
 ## Confirmation gate
 
