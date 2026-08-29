@@ -9,10 +9,14 @@ about native engine behavior before Recoil Metal implements more Forged Alliance
 
 ## What is ready
 
-**Campaign state:** blocked until the owned retail disk is connected.
+**Campaign state:** unblocked for static executable analysis. The owned, hash-identified
+installation associated with Steam app `9420` is connected, and its complete `bin` and `gamedata`
+directories have been preserved and hash-verified. An authoritative Steam depot manifest is still
+needed to prove the exact retail build and completeness.
 
-**Next exact action:** connect the disk, identify the final retail executable and DLL set, then
-complete `ART-E001` in the artifact manifest before opening a disassembler.
+**Next exact action:** install and pin Ghidra, create `build/re-fa/project`, import the preserved
+`ART-E001`, and complete the initial PE section/import/compiler survey for `WP-01` without executing
+the binary.
 
 | Readiness | Count | Meaning |
 |---|---:|---|
@@ -58,6 +62,11 @@ Readiness and knowledge are separate axes.
 - **Confidence** measures how tightly non-EXE evidence already bounds retail behavior.
 - **EXE evidence** measures reverse-engineering progress. It may become `Analyzed` while readiness
   remains Not ready.
+
+`WP-00` through `WP-03` are research prerequisites rather than Recoil Metal behavior packages. For
+those four packages, readiness instead measures whether the durable artifact, binary, registration,
+or object-lifecycle map is complete enough to support downstream analysis. Their confirmation gate
+uses that package-specific map and validation in place of an implementation and focused tests.
 
 Allowed EXE evidence values:
 
@@ -198,51 +207,51 @@ Do not change readiness merely because analysis began.
 
 | ID | Area | Readiness | Confidence before EXE | EXE evidence | Envelope | Priority | Current basis / main uncertainty |
 |---|---|---|---|---|---|---|---|
-| `WP-00` | Artifact provenance and version identity | Not ready | Low | Blocked | n/a | P0 | Disk disconnected; exact executable version, patch, DLL set, and hashes unknown. |
-| `WP-01` | PE architecture, sections, imports, RTTI, symbols, global map | Not ready | Low | Blocked | `PE-02` | P0 | Only generic 32-bit Windows/MSVC expectations; must not assume compiler or symbol stripping. |
-| `WP-02` | Moho/Lua native registration map | Not ready | Medium | Blocked | `PE-27` | P0 | FAF annotation stubs enumerate names, but retail addresses and exact registration set are unknown. |
-| `WP-03` | Native object identity, ownership, lifecycle, destruction | Not ready | Low | Blocked | `PE-02`, `PE-03` | P0 | Lua callback surface bounds lifecycle; native storage and stale-reference rules unknown. |
-| `WP-04` | Simulation tick, phase order, RNG, determinism | Ready but not confirmed | Medium | Blocked | `PE-01` | P0 | 10 Hz and callback clues are strong; native phase order, numeric types, and RNG ownership unknown. |
-| `WP-05` | VFS, SCD mounting, override precedence | Ready but not confirmed | High | Blocked | `PE-27` | P2 | Archive behavior is well bounded by shipped layout and mods; exact retail precedence still needs tracing. |
-| `WP-06` | Blueprint loading, merge/default rules, categories | Ready but not confirmed | High | Blocked | `PE-27` | Corpus gives strong output evidence; native defaults and merge ordering may differ. |
-| `WP-07` | Retail Lua dialect, scheduler, callbacks, script objects | Not ready | Medium | Blocked | `PE-01`, `PE-27` | Shipped scripts bound syntax/API; VM integration and coroutine/event ordering need analysis. |
-| `WP-08` | Mod manager, hooks, UI/sim mod boundaries | Not ready | Medium | Blocked | `PE-27` | Manual and mod conventions bound capabilities; exact retail load and sandbox rules unknown. |
-| `WP-09` | Map/scenario loading and start markers | Ready but not confirmed | High | Blocked | `PE-27` | Binary readers and corpus tests are strong; scenario-rule integration is incomplete. |
-| `WP-10` | Skirmish setup, four factions, armies/alliances | Ready but not confirmed | High | Blocked | `PE-25` | Core seating and faction identity work; retail lobby option translation is not confirmed. |
-| `WP-11` | Victory modes, sandbox, unit caps, rule state | Not ready | High | Blocked | `PE-25` | Manual names expected modes; native predicates, categories, timing, and cap accounting unknown. |
-| `WP-12` | Command authorization, queues, cancellation, patrol | Ready but not confirmed | Medium | Blocked | `PE-14`, `PE-25` | Deterministic command path exists; retail queue mutation and edge cases need tracing. |
-| `WP-13` | Persistent fire state, toggles, priorities, mutable capabilities | Not ready | Medium | Blocked | `PE-14`, `PE-21` | UI/Lua expose controls; authoritative storage and update effects unknown. |
-| `WP-14` | Factory repeat, pause, rally, queue editing, mirroring | Not ready | High | Blocked | `PE-14` | Manual bounds user behavior; sim ownership and serialization remain unknown. |
-| `WP-15` | Mass/energy income, storage, upkeep, stalls, allocation | Ready but not confirmed | High | Blocked | `PE-11` | Lua/data and current tests bound outcomes; native precision, ordering, and priorities unknown. |
-| `WP-16` | Construction, upgrades, assist, build progress | Ready but not confirmed | High | Blocked | `PE-12`, `PE-13` | Common gameplay is implemented; unfinished-unit lifecycle and exact cancel/refund semantics unknown. |
-| `WP-17` | Explicit repair, guard, capture, gifting, ownership transfer | Not ready | Medium | Blocked | `PE-13` | Lua/docs bound commands; common-work versus separate native mechanisms is unknown. |
-| `WP-18` | Wreck creation, damage, collision, rebuild, reclaim value | Not ready | Medium | Blocked | `PE-18`, `PE-23` | Reclaimable records exist; world-object and retail value semantics are incomplete. |
-| `WP-19` | Adjacency geometry and economy effects | Ready but not confirmed | High | Blocked | `PE-11` | Buff tables and geometry strongly bound behavior; stacking/rounding/order need confirmation. |
-| `WP-20` | Ground movement, motion classes, ordinary pathing | Ready but not confirmed | Medium | Blocked | `PE-04`, `PE-06` | Deterministic A* works; retail route representation, caching, steering, and stuck behavior unknown. |
-| `WP-21` | Formations, coordinated movement, congestion, dynamic blockage | Not ready | Low | Blocked | `PE-05`, `PE-06` | User-visible formation controls are known; native grouping and replanning are poorly known. |
-| `WP-22` | Aircraft flight, bombing runs, fuel, staging, landing | Not ready | Low | Blocked | `PE-08` | Blueprint parameters and visible behavior bound states; native mover architecture is unknown. |
-| `WP-23` | Surface naval movement and ordinary combat | Ready but not confirmed | Medium | Blocked | `PE-09` | Water routing and surface targeting exist; draft, turning, beaching, and weapon-domain details unknown. |
-| `WP-24` | Submarines, depth, surfacing, torpedoes, water vision | Not ready | Low | Blocked | `PE-09`, `PE-16` | Motion classes and Lua names bound capabilities; depth/layer representation is unknown. |
-| `WP-25` | Transports, cargo, attachments, ferry, staging reuse | Not ready | Low | Blocked | `PE-10` | Manual and attachment API bound lifecycle; native ownership graph is unknown. |
-| `WP-26` | Spatial index, collision layers, query ordering | Ready but not confirmed | Low | Blocked | `PE-07` | Recoil Metal has deterministic indices; retail data structure and tie ordering are unknown. |
-| `WP-27` | Weapon target acquisition, priorities, arcs, retargeting | Ready but not confirmed | Low | Blocked | `PE-15` | Blueprint constraints are known; native candidate ownership, cadence, and tie breaks are not. |
-| `WP-28` | Direct fire, beams, ballistic projectiles, impact | Ready but not confirmed | Medium | Blocked | `PE-16`, `PE-18` | Generic physical combat works; retail projectile class/state details need tracing. |
-| `WP-29` | Tactical/strategic missiles, ammo, interception | Not ready | Low | Blocked | `PE-17` | User behavior and blueprint categories are known; native ammo/projectile/defense model is unknown. |
-| `WP-30` | Damage, armor, area falloff, death blasts, friendly fire | Ready but not confirmed | Medium | Blocked | `PE-18` | Damage matrices and current behavior exist; callback, shield, overkill, and death ordering need tracing. |
-| `WP-31` | Ordinary area shields | Ready but not confirmed | Medium | Blocked | `PE-19` | Bubble data and visible rules are bounded; current damage-gate architecture may differ from retail collision. |
-| `WP-32` | Personal, transport, enhancement, overlapping shield variants | Not ready | Low | Blocked | `PE-19`, `PE-21` | Variant distinctions are known; native representation and pass-through rules are not. |
-| `WP-33` | Vision, radar, sonar, omni, cloak, stealth, jamming | Ready but not confirmed | Medium | Blocked | `PE-20` | Most authored fields and outcomes are implemented; memory, update cadence, and contact identity need confirmation. |
-| `WP-34` | ACU/SCU enhancements and mutable abilities | Not ready | Low | Blocked | `PE-21` | Slots/costs/effects are visible in Lua/data; authoritative mutation architecture is unknown. |
-| `WP-35` | Veterancy, kill credit, promotion, regeneration | Not ready | Medium | Blocked | `PE-22` | Retail outcomes are documented; threshold ownership and native/Lua split need tracing. |
-| `WP-36` | Experimentals and unit-specific special abilities | Not ready | Low | Blocked | `PE-10`, `PE-16`, `PE-21` | Generic units can load; bespoke script/native interactions vary by unit and remain largely unknown. |
-| `WP-37` | Mutable terrain, craters, path/render invalidation | Not ready | Low | Blocked | `PE-24` | Visible deformation exists; whether gameplay height changes and how systems invalidate are unknown. |
-| `WP-38` | Retail AI native boundary, threat, platoons, managers | Not ready | Medium | Blocked | `PE-28` | Lua AI is visible; native world-query semantics and manager integration are incomplete. |
-| `WP-39` | Core selection, camera, minimap, build/command UI | Ready but not confirmed | High | Blocked | `PE-25` | Recoil Metal has a usable native HUD; this is functional readiness, not pixel or retail UI parity. |
-| `WP-40` | Advanced controls, overlays, split views, key behavior | Not ready | High | Blocked | `PE-05`, `PE-14` | Manual documents controls; exact command encoding and UI/sim split need tracing. |
-| `WP-41` | Rendering, model graph, manipulators, effects, LOD | Not ready | Medium | Blocked | `PE-29` | Formats render; native manipulator/effect lifecycle and broad visual coverage are incomplete. |
-| `WP-42` | Audio cues, voice priority, dynamic music | Not ready | Medium | Blocked | `PE-30` | XWB PCM and basic playback are understood; retail event/music logic is not. |
-| `WP-43` | Command replay, state hash equivalence, divergence | Ready but not confirmed | Medium | Blocked | `PE-01`, `PE-26` | Recoil Metal has its own deterministic logs; retail command payload/RNG/replay ordering are unknown. |
-| `WP-44` | Save/resume and full simulation serialization | Not ready | Low | Blocked | `PE-26` | No Recoil Metal save state; retail format and script/native restoration boundaries are unknown. |
+| `WP-00` | Artifact provenance and version identity | Not ready | High | Anchored | n/a | P0 | Steam app `9420`; executable version `1.5.0.1`, complete `bin` set, and all SCDs are hashed. Original Steam depot/build manifest and transfer history remain unknown. |
+| `WP-01` | PE architecture, sections, imports, RTTI, symbols, global map | Not ready | Low | Unexamined | `PE-02` | P0 | PE32 x86, linker-version field 8.0, stripped relocations, large-address awareness, timestamp, and imports observed; sections, compiler attribution, symbols, RTTI, and globals remain unsurveyed. |
+| `WP-02` | Moho/Lua native registration map | Not ready | Medium | Unexamined | `PE-27` | P0 | FAF annotation stubs enumerate names, but retail addresses and exact registration set are unknown. |
+| `WP-03` | Native object identity, ownership, lifecycle, destruction | Not ready | Low | Unexamined | `PE-02`, `PE-03` | P0 | Lua callback surface bounds lifecycle; native storage and stale-reference rules unknown. |
+| `WP-04` | Simulation tick, phase order, RNG, determinism | Ready but not confirmed | Medium | Unexamined | `PE-01` | P0 | 10 Hz and callback clues are strong; native phase order, numeric types, and RNG ownership unknown. |
+| `WP-05` | VFS, SCD mounting, override precedence | Ready but not confirmed | High | Unexamined | `PE-27` | P2 | Archive behavior is well bounded by shipped layout and mods; exact retail precedence still needs tracing. |
+| `WP-06` | Blueprint loading, merge/default rules, categories | Ready but not confirmed | High | Unexamined | `PE-27` | Corpus gives strong output evidence; native defaults and merge ordering may differ. |
+| `WP-07` | Retail Lua dialect, scheduler, callbacks, script objects | Not ready | Medium | Unexamined | `PE-01`, `PE-27` | Shipped scripts bound syntax/API; VM integration and coroutine/event ordering need analysis. |
+| `WP-08` | Mod manager, hooks, UI/sim mod boundaries | Not ready | Medium | Unexamined | `PE-27` | Manual and mod conventions bound capabilities; exact retail load and sandbox rules unknown. |
+| `WP-09` | Map/scenario loading and start markers | Ready but not confirmed | High | Unexamined | `PE-27` | Binary readers and corpus tests are strong; scenario-rule integration is incomplete. |
+| `WP-10` | Skirmish setup, four factions, armies/alliances | Ready but not confirmed | High | Unexamined | `PE-25` | Core seating and faction identity work; retail lobby option translation is not confirmed. |
+| `WP-11` | Victory modes, sandbox, unit caps, rule state | Not ready | High | Unexamined | `PE-25` | Manual names expected modes; native predicates, categories, timing, and cap accounting unknown. |
+| `WP-12` | Command authorization, queues, cancellation, patrol | Ready but not confirmed | Medium | Unexamined | `PE-14`, `PE-25` | Deterministic command path exists; retail queue mutation and edge cases need tracing. |
+| `WP-13` | Persistent fire state, toggles, priorities, mutable capabilities | Not ready | Medium | Unexamined | `PE-14`, `PE-21` | UI/Lua expose controls; authoritative storage and update effects unknown. |
+| `WP-14` | Factory repeat, pause, rally, queue editing, mirroring | Not ready | High | Unexamined | `PE-14` | Manual bounds user behavior; sim ownership and serialization remain unknown. |
+| `WP-15` | Mass/energy income, storage, upkeep, stalls, allocation | Ready but not confirmed | High | Unexamined | `PE-11` | Lua/data and current tests bound outcomes; native precision, ordering, and priorities unknown. |
+| `WP-16` | Construction, upgrades, assist, build progress | Ready but not confirmed | High | Unexamined | `PE-12`, `PE-13` | Common gameplay is implemented; unfinished-unit lifecycle and exact cancel/refund semantics unknown. |
+| `WP-17` | Explicit repair, guard, capture, gifting, ownership transfer | Not ready | Medium | Unexamined | `PE-13` | Lua/docs bound commands; common-work versus separate native mechanisms is unknown. |
+| `WP-18` | Wreck creation, damage, collision, rebuild, reclaim value | Not ready | Medium | Unexamined | `PE-18`, `PE-23` | Reclaimable records exist; world-object and retail value semantics are incomplete. |
+| `WP-19` | Adjacency geometry and economy effects | Ready but not confirmed | High | Unexamined | `PE-11` | Buff tables and geometry strongly bound behavior; stacking/rounding/order need confirmation. |
+| `WP-20` | Ground movement, motion classes, ordinary pathing | Ready but not confirmed | Medium | Unexamined | `PE-04`, `PE-06` | Deterministic A* works; retail route representation, caching, steering, and stuck behavior unknown. |
+| `WP-21` | Formations, coordinated movement, congestion, dynamic blockage | Not ready | Low | Unexamined | `PE-05`, `PE-06` | User-visible formation controls are known; native grouping and replanning are poorly known. |
+| `WP-22` | Aircraft flight, bombing runs, fuel, staging, landing | Not ready | Low | Unexamined | `PE-08` | Blueprint parameters and visible behavior bound states; native mover architecture is unknown. |
+| `WP-23` | Surface naval movement and ordinary combat | Ready but not confirmed | Medium | Unexamined | `PE-09` | Water routing and surface targeting exist; draft, turning, beaching, and weapon-domain details unknown. |
+| `WP-24` | Submarines, depth, surfacing, torpedoes, water vision | Not ready | Low | Unexamined | `PE-09`, `PE-16` | Motion classes and Lua names bound capabilities; depth/layer representation is unknown. |
+| `WP-25` | Transports, cargo, attachments, ferry, staging reuse | Not ready | Low | Unexamined | `PE-10` | Manual and attachment API bound lifecycle; native ownership graph is unknown. |
+| `WP-26` | Spatial index, collision layers, query ordering | Ready but not confirmed | Low | Unexamined | `PE-07` | Recoil Metal has deterministic indices; retail data structure and tie ordering are unknown. |
+| `WP-27` | Weapon target acquisition, priorities, arcs, retargeting | Ready but not confirmed | Low | Unexamined | `PE-15` | Blueprint constraints are known; native candidate ownership, cadence, and tie breaks are not. |
+| `WP-28` | Direct fire, beams, ballistic projectiles, impact | Ready but not confirmed | Medium | Unexamined | `PE-16`, `PE-18` | Generic physical combat works; retail projectile class/state details need tracing. |
+| `WP-29` | Tactical/strategic missiles, ammo, interception | Not ready | Low | Unexamined | `PE-17` | User behavior and blueprint categories are known; native ammo/projectile/defense model is unknown. |
+| `WP-30` | Damage, armor, area falloff, death blasts, friendly fire | Ready but not confirmed | Medium | Unexamined | `PE-18` | Damage matrices and current behavior exist; callback, shield, overkill, and death ordering need tracing. |
+| `WP-31` | Ordinary area shields | Ready but not confirmed | Medium | Unexamined | `PE-19` | Bubble data and visible rules are bounded; current damage-gate architecture may differ from retail collision. |
+| `WP-32` | Personal, transport, enhancement, overlapping shield variants | Not ready | Low | Unexamined | `PE-19`, `PE-21` | Variant distinctions are known; native representation and pass-through rules are not. |
+| `WP-33` | Vision, radar, sonar, omni, cloak, stealth, jamming | Ready but not confirmed | Medium | Unexamined | `PE-20` | Most authored fields and outcomes are implemented; memory, update cadence, and contact identity need confirmation. |
+| `WP-34` | ACU/SCU enhancements and mutable abilities | Not ready | Low | Unexamined | `PE-21` | Slots/costs/effects are visible in Lua/data; authoritative mutation architecture is unknown. |
+| `WP-35` | Veterancy, kill credit, promotion, regeneration | Not ready | Medium | Unexamined | `PE-22` | Retail outcomes are documented; threshold ownership and native/Lua split need tracing. |
+| `WP-36` | Experimentals and unit-specific special abilities | Not ready | Low | Unexamined | `PE-10`, `PE-16`, `PE-21` | Generic units can load; bespoke script/native interactions vary by unit and remain largely unknown. |
+| `WP-37` | Mutable terrain, craters, path/render invalidation | Not ready | Low | Unexamined | `PE-24` | Visible deformation exists; whether gameplay height changes and how systems invalidate are unknown. |
+| `WP-38` | Retail AI native boundary, threat, platoons, managers | Not ready | Medium | Unexamined | `PE-28` | Lua AI is visible; native world-query semantics and manager integration are incomplete. |
+| `WP-39` | Core selection, camera, minimap, build/command UI | Ready but not confirmed | High | Unexamined | `PE-25` | Recoil Metal has a usable native HUD; this is functional readiness, not pixel or retail UI parity. |
+| `WP-40` | Advanced controls, overlays, split views, key behavior | Not ready | High | Unexamined | `PE-05`, `PE-14` | Manual documents controls; exact command encoding and UI/sim split need tracing. |
+| `WP-41` | Rendering, model graph, manipulators, effects, LOD | Not ready | Medium | Unexamined | `PE-29` | Formats render; native manipulator/effect lifecycle and broad visual coverage are incomplete. |
+| `WP-42` | Audio cues, voice priority, dynamic music | Not ready | Medium | Unexamined | `PE-30` | XWB PCM and basic playback are understood; retail event/music logic is not. |
+| `WP-43` | Command replay, state hash equivalence, divergence | Ready but not confirmed | Medium | Unexamined | `PE-01`, `PE-26` | Recoil Metal has its own deterministic logs; retail command payload/RNG/replay ordering are unknown. |
+| `WP-44` | Save/resume and full simulation serialization | Not ready | Low | Unexamined | `PE-26` | No Recoil Metal save state; retail format and script/native restoration boundaries are unknown. |
 
 ## Analysis order
 
@@ -304,12 +313,61 @@ registration and object maps are stable.
 
 No analysis result is valid without an exact artifact identity. Fill this before Ghidra import.
 
+Inventory date: 2026-08-29. The connected volume label is `Samsung_T5`. `steam_appid.txt` and
+`installscript.vdf` associate the installation with Steam app `9420`; the executable resource names
+the product *Supreme Commander Forged Alliance*. The files were already present on the external
+disk with filesystem modification times of 2025-06-28. The original Steam download date, depot
+manifest/build ID, and method used to transfer the installation to this disk are not currently
+known. Do not infer them from those filesystem timestamps.
+
+Path abbreviations used below:
+
+- `SOURCE_ROOT`: `/Volumes/Samsung_T5/faf/Supreme Commander Forged Alliance`
+- `PRESERVED_ROOT`: `~/projects/llm/input/recoil-metal/retail-fa`
+
 | Artifact ID | Source path | Preserved path | Size | SHA-256 | Version / PE timestamp | Notes |
 |---|---|---|---:|---|---|---|
-| `ART-E001` | Pending disk | Pending | | | | Main retail executable. |
-| `ART-D001` | Pending disk | Pending | | | | First engine/game DLL; add one uniquely numbered row per DLL. |
-| `ART-S001` | Pending disk | Manifest only if too large | | | | First SCD archive; add one uniquely numbered row per archive. |
-| `ART-M001` | Pending disk | Pending | | | | Retail patch/version metadata and configuration manifest. |
+| `ART-E001` | `$SOURCE_ROOT/bin/SupremeCommander.exe` | `$PRESERVED_ROOT/bin/SupremeCommander.exe` | 13,213,696 | `c6783580c0b7a408ec2ad3bfe5eb1fdbef31a60d92c1007ff9b90c33bb960aa0` | File/product `1.5.0.1`; PE `2011-08-29 23:48:30 +0200` | Main game executable in this installation; PE32 x86 GUI, linker-version field 8.0, relocations stripped, large-address aware. |
+| `ART-E002` | `$SOURCE_ROOT/bin/BsSndRpt.exe` | `$PRESERVED_ROOT/bin/BsSndRpt.exe` | 180,224 | `f914ca869e52fc4a57665ef21a17ab482d47c5aa32baca8aa72db94b45e209b0` | `3.1.0.1`; PE `2006-04-19 02:05:41 +0200` | BugSplat crash-report helper, not a game-engine analysis target. |
+| `ART-D001` | `$SOURCE_ROOT/bin/MohoEngine.dll` | `$PRESERVED_ROOT/bin/MohoEngine.dll` | 9,827,584 | `3e6e1a698a57d051e8ee6120d81d4af373321b9bf5f10071e291c96c08a7c3b5` | PE `2007-07-09 21:01:12 +0200` | Engine DLL; PE32 x86. |
+| `ART-D002` | `$SOURCE_ROOT/bin/LuaPlus_1081.dll` | `$PRESERVED_ROOT/bin/LuaPlus_1081.dll` | 365,824 | `54167a0d72df75a06109879a9e3eb95bd5e83d1e07dd7c0d6156f05ca0835e28` | `1.0.0.1`; PE `2007-07-09 20:46:42 +0200` | LuaPlus runtime. |
+| `ART-D003` | `$SOURCE_ROOT/bin/gpgcore.dll` | `$PRESERVED_ROOT/bin/gpgcore.dll` | 533,760 | `6d0b7cc22711bf86f223fb8225458fc0aa1e99147efcc79f955ffc181f660699` | `1.0.0.1`; PE `2007-07-09 20:46:41 +0200` | Gas Powered Games core runtime. |
+| `ART-D004` | `$SOURCE_ROOT/bin/gpggal.dll` | `$PRESERVED_ROOT/bin/gpggal.dll` | 1,246,464 | `c9b7d90199e963a9d7683f74cd50dd6977d6cf193fe172c3a792b6d7cf1754a3` | `1.0.0.1`; PE `2007-07-09 20:46:47 +0200` | Gas Powered Games abstraction layer. |
+| `ART-D005` | `$SOURCE_ROOT/bin/GDFBinary.dll` | `$PRESERVED_ROOT/bin/GDFBinary.dll` | 390,400 | `f9c5d50ae7117749d7c2a3585518688ada4108535e5548d93357f54b7a52deb0` | `1.0.0.1`; PE `2007-10-12 20:45:30 +0200` | Game Definition File support. |
+| `ART-D006` | `$SOURCE_ROOT/bin/steam_api.dll` | `$PRESERVED_ROOT/bin/steam_api.dll` | 121,984 | `59ed854645eaa237463eb22f3c5a25f726d7cb2f29440f00a1ec0a4d73d0207a` | PE `2010-01-27 21:59:55 +0100` | Steamworks runtime. |
+| `ART-D007` | `$SOURCE_ROOT/bin/zlibwapi.dll` | `$PRESERVED_ROOT/bin/zlibwapi.dll` | 72,704 | `0d38360003865e84a2842c337d7c440c8ab4c41809cc87b8758df6d852c02afc` | PE `2004-10-07 12:50:49 +0200` | zlib runtime. |
+| `ART-D008` | `$SOURCE_ROOT/bin/wxmsw24u-vs80.dll` | `$PRESERVED_ROOT/bin/wxmsw24u-vs80.dll` | 3,575,808 | `665b9a94cb3aa6a4bd7009bece6370e4673f8c695678af2269c5d36eda2b18c1` | PE `2007-06-29 01:48:01 +0200` | wxWidgets runtime. |
+| `ART-D009` | `$SOURCE_ROOT/bin/sx32w.dll` | `$PRESERVED_ROOT/bin/sx32w.dll` | 100,864 | `da3fb6c95af39cda6a67a6024bb70bf0d19bcf271b055e0c468cd8426b1bff13` | PE `2003-02-26 08:43:43 +0100` | Third-party runtime. |
+| `ART-D010` | `$SOURCE_ROOT/bin/SHW32d.DLL` | `$PRESERVED_ROOT/bin/SHW32d.DLL` | 283,648 | `757458f9c1fb0a1842d98b396c43c065d1811594407d1c42f0e44c31d2b36cf1` | PE `2006-03-27 21:35:03 +0200` | Third-party runtime. |
+| `ART-D011` | `$SOURCE_ROOT/bin/SHSMP.DLL` | `$PRESERVED_ROOT/bin/SHSMP.DLL` | 115,200 | `82b9c2dcf5bbe21522b4d0b841de0bd3ac90c8d96e400bde24aa1353244a76ff` | PE `2006-03-27 19:50:53 +0200` | Third-party runtime. |
+| `ART-D012` | `$SOURCE_ROOT/bin/msvcr80.dll` | `$PRESERVED_ROOT/bin/msvcr80.dll` | 626,688 | `120cd25f5d6002ffd9069cf9550bc16c682bcd3323053b95146e7cd3ba2215ac` | PE `2005-09-23 08:44:37 +0200` | Microsoft Visual C runtime. |
+| `ART-D013` | `$SOURCE_ROOT/bin/msvcp80.dll` | `$PRESERVED_ROOT/bin/msvcp80.dll` | 548,864 | `9fc2e85ba84cf0459aab0dc2efac734ad7b5b4c99ba19871fe8f6e35d0191838` | PE `2005-09-23 08:46:56 +0200` | Microsoft Visual C++ runtime. |
+| `ART-D014` | `$SOURCE_ROOT/bin/msvcm80.dll` | `$PRESERVED_ROOT/bin/msvcm80.dll` | 479,232 | `c75e2f91a7b2032d3757eeac12502112381e0cb6f0e6e308adc74ac30c8a7ec7` | PE `2005-09-23 08:46:13 +0200` | Microsoft managed C++ runtime. |
+| `ART-D015` | `$SOURCE_ROOT/bin/DbgHelp.dll` | `$PRESERVED_ROOT/bin/DbgHelp.dll` | 986,112 | `cf2647be9233f4a7248514cbd2541d5f7bebd61005bde1dca79c8e4234f53794` | PE `2005-01-12 20:23:59 +0100` | Microsoft debugging runtime. |
+| `ART-D016` | `$SOURCE_ROOT/bin/d3dx9_31.dll` | `$PRESERVED_ROOT/bin/d3dx9_31.dll` | 2,413,064 | `010473c709db48fb72e3ea3af174ee023a9b291463e43bf7c8a9172a043594e5` | PE `2006-09-29 00:13:05 +0200` | DirectX helper runtime; `ART-E001` also imports system `d3dx9_35.dll`, which is not shipped in `bin`. |
+| `ART-D017` | `$SOURCE_ROOT/bin/BugSplat.dll` | `$PRESERVED_ROOT/bin/BugSplat.dll` | 106,555 | `ad79278f441fb4c9cb4ffeb0fb2a196e8e9fdaa44a9e831302d7eecd0d633cd8` | PE `2006-04-19 02:05:12 +0200` | Crash-report runtime. |
+| `ART-D018` | `$SOURCE_ROOT/bin/BugSplatRc.dll` | `$PRESERVED_ROOT/bin/BugSplatRc.dll` | 65,597 | `be777e26779d780de20cd92fa4779fa503cf7d8a09ed4e2f5782b6bb2076ea53` | PE `2006-04-19 02:04:57 +0200` | Crash-report resources. |
+| `ART-S001` | `$SOURCE_ROOT/gamedata/units.scd` | `$PRESERVED_ROOT/gamedata/units.scd` | 1,114,843,505 | `c23a48d6b47043144baafc4c7f47b5a470392264f1bbaf962896923d58899c26` | n/a | Units and blueprints archive. |
+| `ART-S002` | `$SOURCE_ROOT/gamedata/textures.scd` | `$PRESERVED_ROOT/gamedata/textures.scd` | 530,031,023 | `5f48e3e283759cb71b65e6501063d0d4bd586fe67fc1cfa27672250d1a4f8ffd` | n/a | Texture archive. |
+| `ART-S003` | `$SOURCE_ROOT/gamedata/env.scd` | `$PRESERVED_ROOT/gamedata/env.scd` | 1,355,035,520 | `30110a7314fadcfbd05b69c626d87dfd5cd23f309cfe19490421828809e95ac7` | n/a | Environment archive. |
+| `ART-S004` | `$SOURCE_ROOT/gamedata/editor.scd` | `$PRESERVED_ROOT/gamedata/editor.scd` | 57,563,657 | `bd9d4866b78194cafe87562927b765a3557ec3a4c2a20567bd5bf9d5a9abbd9d` | n/a | Editor archive. |
+| `ART-S005` | `$SOURCE_ROOT/gamedata/effects.scd` | `$PRESERVED_ROOT/gamedata/effects.scd` | 27,224,110 | `f0dcbf76b2c3381e7d9ebbd7e09613e046875f6ba3a788406e5635768e28a300` | n/a | Effects archive. |
+| `ART-S006` | `$SOURCE_ROOT/gamedata/loc_PL.scd` | `$PRESERVED_ROOT/gamedata/loc_PL.scd` | 608,377 | `4323e70411dfd486abe75ce1598c13746cf3390c2795e94a97e9c764db8e135d` | n/a | Polish localization archive. |
+| `ART-S007` | `$SOURCE_ROOT/gamedata/lua.scd` | `$PRESERVED_ROOT/gamedata/lua.scd` | 7,671,907 | `3632a3294fc01a07ebe017dfd12ce4ff655c2d019934f1d7a784fbc1d4f314bb` | n/a | Retail Lua archive. |
+| `ART-S008` | `$SOURCE_ROOT/gamedata/meshes.scd` | `$PRESERVED_ROOT/gamedata/meshes.scd` | 36,067,607 | `24e2e6f8febf16c2f190675f5a0e8b14bb19abfa2040b180bcb53f49fdf0db1d` | n/a | Mesh archive. |
+| `ART-S009` | `$SOURCE_ROOT/gamedata/mods.scd` | `$PRESERVED_ROOT/gamedata/mods.scd` | 1,239,705 | `4b0fcf88079453034fbaeb06a333dadfc40b0cde7712c430fe285e180ed354d9` | n/a | Mod-support archive. |
+| `ART-S010` | `$SOURCE_ROOT/gamedata/mohodata.scd` | `$PRESERVED_ROOT/gamedata/mohodata.scd` | 526,529 | `f57a18a1756632d6c125f806f50dbe28a6d7adbdd85d2fc8ae99e23000253b04` | n/a | Moho data archive. |
+| `ART-S011` | `$SOURCE_ROOT/gamedata/moholua.scd` | `$PRESERVED_ROOT/gamedata/moholua.scd` | 267 | `c3b7e4ae210f26e733d066baefb99ddeac1b1a5dd16002f8d2abdc4b6dd0835b` | n/a | Moho Lua mount/archive placeholder. |
+| `ART-S012` | `$SOURCE_ROOT/gamedata/objects.scd` | `$PRESERVED_ROOT/gamedata/objects.scd` | 655,296 | `711dfbf8c8ee13f8d8ab4ab3cca08a59e394de8c9d598fe6780dfa0d9e7541e9` | n/a | Objects archive. |
+| `ART-S013` | `$SOURCE_ROOT/gamedata/projectiles.scd` | `$PRESERVED_ROOT/gamedata/projectiles.scd` | 12,430,259 | `60d2732597cde9ef046a663c8d439e60844f967147e14737c7ad5a08c641be12` | n/a | Projectile archive. |
+| `ART-S014` | `$SOURCE_ROOT/gamedata/props.scd` | `$PRESERVED_ROOT/gamedata/props.scd` | 2,382,020 | `d323f6ca205482d825b562add1ea03f941aa69ac0cdfb0f969549d13e154b82d` | n/a | Props archive. |
+| `ART-S015` | `$SOURCE_ROOT/gamedata/schook.scd` | `$PRESERVED_ROOT/gamedata/schook.scd` | 25,568 | `c9716a24421e005c496ce36afa734119342dc1288fde05c75b77d67bf766f334` | n/a | Script-hook archive. |
+| `ART-S016` | `$SOURCE_ROOT/gamedata/skins.scd` | `$PRESERVED_ROOT/gamedata/skins.scd` | 271 | `cdb019bcc7ab2ebc264945e4507fa17b1a3d16bda40de465062111a58710dd41` | n/a | Skin mount/archive placeholder. |
+| `ART-S017` | `$SOURCE_ROOT/gamedata/ambience.scd` | `$PRESERVED_ROOT/gamedata/ambience.scd` | 277 | `e8fd733928877232694933a88344eef91bc9b8404ebe162a0bdc0e161680173b` | n/a | Ambience mount/archive placeholder. |
+| `ART-M001` | `$SOURCE_ROOT/bin/steam_appid.txt` | `$PRESERVED_ROOT/bin/steam_appid.txt` | 6 | `ce59ed427d6d19ee1eb4363ecc40eb6fb3ccac6cc213ba4e92ba1cb6351fd218` | Steam app `9420` | Steam application identity. |
+| `ART-M002` | `$SOURCE_ROOT/installscript.vdf` | `$PRESERVED_ROOT/installscript.vdf` | 334 | `39bc6b304ecb3aa4c65f80e100fd0369d63d675156bfdbd1bfb7beb6cdde5c22` | n/a | Steam install script; identifies app `9420` registry key and August 2009 DirectX redistributable. |
+| `ART-M003` | `$SOURCE_ROOT/bin/SupComDataPath.lua` | `$PRESERVED_ROOT/bin/SupComDataPath.lua` | 1,048 | `2d96a60f9d214182cd7246c9572fef807a25710e67009a86f3caf7ccf1119dbe` | n/a | Retail VFS mount and hook configuration. |
+| `ART-M004` | `$SOURCE_ROOT/bin/game.dat` | `$PRESERVED_ROOT/bin/game.dat` | 173,576 | `379aa5c867cb9b22310f7dd080e261dabe806a283516bec63ed75a90ea2b3ce6` | n/a | Binary game data/configuration; format not yet identified. |
 
 Record the acquisition date, disk label, install provenance, and whether Steam/GOG/disc patching
 changed any binary. Never silently replace an artifact: add a new ID. Use `ART-E` for executables,
@@ -321,8 +379,10 @@ its own ID; never assign one ID to a group of DLLs or archives.
 | Tool | Version | Path | Project/output | Notes |
 |---|---|---|---|---|
 | Ghidra | Not installed or not on `PATH` as of 2026-08-29 | Pending | `build/re-fa/project` proposed | Pin the version for reproducible decompiler output. |
-| `objdump` | Apple system tool | `/usr/bin/objdump` | Scratch only | Useful for PE headers/disassembly checks, not the primary database. |
+| `objdump` | Apple LLVM 17.0.0 | `/usr/bin/objdump` | Scratch only | Used for PE headers, timestamps, imports, and disassembly checks; not the primary database. |
 | `strings` | Apple system tool | `/usr/bin/strings` | Scratch only | Preserve offsets and encoding when exporting strings. |
+| ExifTool | 13.10 | `/opt/homebrew/bin/exiftool` | Scratch only | Used to read PE version resources and timestamps. |
+| `shasum` | 6.02 | `/usr/bin/shasum` | Artifact verification | Used with SHA-256 for source and preserved-copy identity. |
 
 If another tool is added, record its version and role. Do not let two unlabeled analysis databases
 become competing sources of truth.
@@ -478,7 +538,40 @@ Append sessions newest-last. Keep each record concise enough to scan but complet
 - Open function at RVA X, inspect xrefs from string Y, or trace return value into Z.
 ```
 
-No EXE-analysis sessions have run yet.
+### 2026-08-29 / Session 01
+
+**Artifact:** `ART-E001` SHA-256 `c6783580c0b7a408...`
+**Tool/project:** Apple LLVM `objdump` 17.0.0 and ExifTool 13.10; no Ghidra project yet
+**Work package:** `WP-00`
+**Question:** Which exact retail executable, DLLs, configuration files, and SCD archives are on the
+owned connected disk, and are they sufficient to begin static analysis?
+
+**Accomplished**
+- Identified the Steam app `9420` executable as PE32 x86 version `1.5.0.1`, reporting a PE
+  linker-version field of 8.0.
+- Hashed and recorded the main executable, BugSplat helper, all 18 DLLs, all 17 SCD archives, and
+  four identity/configuration files.
+- Preserved the complete `bin` and 2.93 GiB `gamedata` directories under the append-only input tree.
+  Each source and preserved file was independently hashed with `/usr/bin/shasum -a 256`; comparing
+  the normalized hash streams with `diff` returned no differences.
+- Confirmed the executable imports and PE metadata statically; no retail binary was executed.
+
+**Possibility envelope changes**
+- None. This session established artifact identity only.
+
+**Files and durable outputs**
+- `docs/fa-exe-analysis-plan.md`
+- `~/projects/llm/input/recoil-metal/retail-fa/bin/`
+- `~/projects/llm/input/recoil-metal/retail-fa/gamedata/`
+
+**Blocked by**
+- Full `WP-00` provenance still lacks the original Steam depot/build manifest and installation
+  transfer history. This does not block static analysis of the hash-identified artifact.
+
+**Next exact action**
+- Install and pin Ghidra, create `build/re-fa/project`, import preserved `ART-E001`, and record its
+  section map, imports, compiler indicators, RTTI evidence, debug-directory contents, and image base
+  for `WP-01`.
 
 ## Confirmation gate
 
