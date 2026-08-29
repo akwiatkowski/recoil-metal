@@ -202,7 +202,8 @@ TEST_CASE("the hover card states the facts and omits what the content did not sa
                            .buildSeconds = 10.0f,
                            .health = 600.0f,
                            .affordable = true};
-    const rm::ui::InfoCard card = rm::ui::buildOptionCard(full);
+    const rm::ui::InfoCard card =
+        rm::ui::buildOptionCard(full, rm::ui::GameProfile::Fa);
     CHECK(card.title == "Mass Extractor");
     // The corner carried the blueprint id beside the name it stands for. `kShowBlueprintIds`
     // turned that off everywhere a human reads: an id is a filename, and the card is the one
@@ -211,16 +212,21 @@ TEST_CASE("the hover card states the facts and omits what the content did not sa
     REQUIRE(card.rows.size() == 4);
     CHECK(card.rows[0].label == "MASS");
     CHECK(card.rows[0].tint == rm::ui::kMass);
+    CHECK(rm::ui::buildOptionCard(full, rm::ui::GameProfile::Bar).rows[0].label == "METAL");
+    CHECK(rm::ui::buildOptionCard(full, rm::ui::GameProfile::Neutral).rows[0].label
+          == "MATERIAL");
 
     // Unaffordable mass turns the row to the loss colour — the card agrees with the cell.
     BuildOption poor = full;
     poor.affordable = false;
-    CHECK(rm::ui::buildOptionCard(poor).rows[0].tint == rm::ui::kLoss);
+    CHECK(rm::ui::buildOptionCard(poor, rm::ui::GameProfile::Fa).rows[0].tint
+          == rm::ui::kLoss);
 
     // A nameless option leads with its id and repeats nothing in the corner; its zero rows
     // are absent rather than printed as measurements.
     const BuildOption bare{.id = "XXB0001", .massCost = 5.0f};
-    const rm::ui::InfoCard sparse = rm::ui::buildOptionCard(bare);
+    const rm::ui::InfoCard sparse =
+        rm::ui::buildOptionCard(bare, rm::ui::GameProfile::Fa);
     CHECK(sparse.title == "XXB0001");
     CHECK(sparse.corner.empty());
     CHECK(sparse.rows.size() == 1);

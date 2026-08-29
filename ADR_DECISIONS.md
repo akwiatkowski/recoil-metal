@@ -2205,6 +2205,24 @@ before a fifth profile exists. Inferring BAR from loaded model formats is incorr
 scenes and makes presentation depend on whichever asset happened to load first.
 
 **Consequences.** Captures and the windowed loop have the same data flow and no UI skin globals.
-FA and classic FAF keep faction accents; BAR and Neutral deliberately use neutral materials until
-their profile-named resource views land. Selecting a profile is deterministic and independently
-testable without retail assets.
+FA and classic FAF keep faction accents; BAR and Neutral deliberately use neutral materials, while
+their distinct resource names live in the fixed profile-owned views of ADR-060. Selecting a profile
+is deterministic and independently testable without retail assets.
+
+## ADR-060 — Economy presentation is a fixed pair of resource views
+
+**Context.** The HUD renderer reached into `MatchState::mass` and `MatchState::energy` and wrote
+their labels itself. BAR calls the construction material Metal, while a game-neutral presentation
+cannot honestly call it either game's resource.
+
+**Decision.** `MatchState` carries exactly two ordered `ResourceView` values: the profile names the
+first Mass, Metal, or Material, and the second remains Energy. Each view owns its gauge and tint,
+so the renderer iterates presentation data without knowing simulation field names.
+
+**Alternatives considered.** An arbitrary resource registry or plugin API solves games this engine
+does not support. Letting panels translate raw simulation resources repeats profile policy in every
+future panel.
+
+**Consequences.** The two-resource simulation is unchanged. FA and classic FAF present Mass then
+Energy, BAR presents Metal then Energy, and Neutral presents Material then Energy; order and count
+are compile-time fixed and independently tested.

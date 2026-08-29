@@ -123,7 +123,8 @@ void gatherRoster(const UnitScene& scene, std::span<const rm::sim::UnitId> selec
 void appendViewFootprint(std::vector<std::array<float, 2>>& out, const rm::OrbitCamera& camera,
                          const rm::HeightField& field, const rm::ui::UiViewport& viewport);
 
-[[nodiscard]] rm::ui::MatchState hudStateFrom(const UnitScene& scene, float elapsedSeconds);
+[[nodiscard]] rm::ui::MatchState hudStateFrom(
+    const UnitScene& scene, float elapsedSeconds, rm::ui::GameProfile profile);
 
 /// Resolves the run's explicit profile against the player's faction and an optional packed skin.
 /// BAR and Neutral intentionally use neutral chrome until their material slice lands.

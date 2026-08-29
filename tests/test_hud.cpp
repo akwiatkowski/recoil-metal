@@ -67,6 +67,32 @@ TEST_CASE("a gauge's fill clamps, and no capacity reads as empty") {
     CHECK(Gauge{.stored = 10.0f, .capacity = 0.0f}.fill() == Approx(0.0f));
 }
 
+TEST_CASE("each game profile presents exactly two ordered resource views") {
+    STATIC_REQUIRE(std::tuple_size_v<rm::ui::ResourceViews> == 2);
+
+    const std::vector<rm::text::Glyph> glyphs = boxGlyphs();
+    CHECK(rm::ui::kChip + rm::ui::kUnit
+              + rm::text::measureText(glyphs, "MATERIAL")
+          <= rm::ui::kLabelColumn);
+
+    const Gauge primary{.stored = 11.0f};
+    const Gauge energy{.stored = 22.0f};
+    for (const auto& [profile, firstName] :
+         std::array<std::pair<rm::ui::GameProfile, std::string_view>, 4>{
+             {{rm::ui::GameProfile::Fa, "MASS"},
+              {rm::ui::GameProfile::Bar, "METAL"},
+              {rm::ui::GameProfile::Neutral, "MATERIAL"},
+              {rm::ui::GameProfile::ClassicFaf, "MASS"}}}) {
+        const rm::ui::ResourceViews views = rm::ui::resourceViews(profile, primary, energy);
+        CHECK(views[0].name == firstName);
+        CHECK(views[0].gauge.stored == 11.0f);
+        CHECK(views[0].tint == rm::ui::kMass);
+        CHECK(views[1].name == "ENERGY");
+        CHECK(views[1].gauge.stored == 22.0f);
+        CHECK(views[1].tint == rm::ui::kEnergy);
+    }
+}
+
 TEST_CASE("the responsive frame selects the largest profile that fits") {
     const rm::ui::FrameLayout compact = frameAt(1280.0f, 720.0f);
     CHECK(compact.profile == rm::ui::HudProfile::Compact);
@@ -340,9 +366,13 @@ TEST_CASE("the interface draws something, and the chrome outweighs the numbers")
     const rm::text::Font font = fontOver(glyphs);
 
     MatchState state;
-    state.mass = Gauge{.stored = 120.0f, .capacity = 650.0f, .incomePerSecond = 2.5f};
-    state.energy = Gauge{
-        .stored = 144.0f, .capacity = 5000.0f, .incomePerSecond = 5.0f, .drainPerSecond = 2.0f};
+    state.resources = rm::ui::resourceViews(
+        rm::ui::GameProfile::Fa,
+        Gauge{.stored = 120.0f, .capacity = 650.0f, .incomePerSecond = 2.5f},
+        Gauge{.stored = 144.0f,
+              .capacity = 5000.0f,
+              .incomePerSecond = 5.0f,
+              .drainPerSecond = 2.0f});
     state.unitsAlive = 6;
     state.armiesLeft = 6;
     state.armiesTotal = 8;

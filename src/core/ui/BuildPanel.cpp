@@ -8,7 +8,7 @@
 #include <string>
 
 namespace rm::ui {
-InfoCard buildOptionCard(const BuildOption& option) {
+InfoCard buildOptionCard(const BuildOption& option, GameProfile profile) {
     InfoCard card;
     card.title = option.name.empty() ? option.id : option.name;
     // The card is where an upgrade gets to say what it does in words: the cell's frame says
@@ -23,9 +23,9 @@ InfoCard buildOptionCard(const BuildOption& option) {
         card.corner = option.id;
     }
 
-    // Mass is always stated — a build decision is a mass decision first — and in the loss
-    // colour when the store cannot pay it, which is the card agreeing with the dimmed cell.
-    card.rows.push_back(InfoRow{.label = "MASS",
+    // The construction material is always stated first, named as this profile names it, and in
+    // the loss colour when the store cannot pay it — the card agreeing with the dimmed cell.
+    card.rows.push_back(InfoRow{.label = std::string{resourceViews(profile, {}, {})[0].name},
                                 .value = formatAmount(option.massCost),
                                 .tint = option.affordable ? kMass : kLoss});
     if (option.energyCost > 0.0f) {

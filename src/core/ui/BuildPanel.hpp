@@ -204,10 +204,10 @@ void appendBuildPanel(Geometry& out, const text::Font& labelFont, const text::Fo
                       std::string_view builderName, std::string_view builderRole = {});
 
 /// The hover card for one build option: full name, id in the corner, and the facts a player
-/// weighs before building — mass (in the loss colour when it cannot be paid), energy, build
-/// time at the selected builder's rate, and what the result can survive. A zero row is
-/// omitted rather than printed: zero means the content stated nothing, not a measurement.
-[[nodiscard]] InfoCard buildOptionCard(const BuildOption& option);
+/// weighs before building — construction material (in the loss colour when it cannot be paid),
+/// energy, build time at the selected builder's rate, and what the result can survive. A zero row
+/// is omitted rather than printed: zero means the content stated nothing, not a measurement.
+[[nodiscard]] InfoCard buildOptionCard(const BuildOption& option, GameProfile profile);
 
 /// The tint for a tech tier, 1..3.
 ///

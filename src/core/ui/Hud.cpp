@@ -217,6 +217,17 @@ bool Gauge::wasting() const noexcept {
     return capacity > 0.0f && stored >= capacity * 0.999f && net() > 0.0f;
 }
 
+ResourceViews resourceViews(GameProfile profile, Gauge primary, Gauge energy) noexcept {
+    std::string_view primaryName = "MASS";
+    if (profile == GameProfile::Bar) {
+        primaryName = "METAL";
+    } else if (profile == GameProfile::Neutral) {
+        primaryName = "MATERIAL";
+    }
+    return {{{.name = primaryName, .gauge = primary, .tint = kMass},
+             {.name = "ENERGY", .gauge = energy, .tint = kEnergy}}};
+}
+
 std::string formatAmount(float value) {
     char buffer[32];
     // Thousands as `12.4k`, because an energy store runs to five digits where a mass store
@@ -536,12 +547,13 @@ void build(Geometry& out, const text::Font& labelFont, const text::Font& readout
 
     // Both rows and the stall footer have permanent slots. A changing economy changes readings,
     // never this panel's height or its neighbours' anchors.
-    constexpr float kFirstBaseline = 20.0f;
-    constexpr float kSecondBaseline = 47.0f;
-    (void)appendResourceRow(out, labelFont, readoutFont, theme, state.mass, "MASS", kMass,
-                            contentX, panelY + kFirstBaseline, contentWidth);
-    (void)appendResourceRow(out, labelFont, readoutFont, theme, state.energy, "ENERGY", kEnergy,
-                            contentX, panelY + kSecondBaseline, contentWidth);
+    constexpr std::array<float, 2> kResourceBaselines{20.0f, 47.0f};
+    for (std::size_t index = 0; index < state.resources.size(); ++index) {
+        const ResourceView& resource = state.resources[index];
+        (void)appendResourceRow(out, labelFont, readoutFont, theme, resource.gauge, resource.name,
+                                resource.tint, contentX, panelY + kResourceBaselines[index],
+                                contentWidth);
+    }
 
     // --- the throttle -----------------------------------------------------
     //

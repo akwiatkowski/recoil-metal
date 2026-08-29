@@ -453,8 +453,10 @@ void appendConstructionEffects(std::vector<rm::DecalVertex>& decals,
     }
 }
 
-[[nodiscard]] rm::ui::MatchState hudStateFrom(const UnitScene& scene, float elapsedSeconds) {
+[[nodiscard]] rm::ui::MatchState hudStateFrom(const UnitScene& scene, float elapsedSeconds,
+                                               rm::ui::GameProfile profile) {
     rm::ui::MatchState state;
+    state.resources = rm::ui::resourceViews(profile, {}, {});
     state.elapsedSeconds = elapsedSeconds;
     state.armiesTotal = scene.armies.size();
     state.armiesLeft = rm::sim::survivorCount(scene.armies);
@@ -480,14 +482,16 @@ void appendConstructionEffects(std::vector<rm::DecalVertex>& decals,
             return rm::sim::magToFloat(perTick)
                    * static_cast<float>(gAppTickRate.ticksPerSecond());
         };
-        state.mass = rm::ui::Gauge{.stored = rm::sim::magToFloat(mine.stored.mass),
-                                   .capacity = rm::sim::magToFloat(mine.storage.mass),
-                                   .incomePerSecond = perSecond(mine.incomePerTick.mass),
-                                   .drainPerSecond = perSecond(mine.upkeepPerTick.mass)};
-        state.energy = rm::ui::Gauge{.stored = rm::sim::magToFloat(mine.stored.energy),
-                                     .capacity = rm::sim::magToFloat(mine.storage.energy),
-                                     .incomePerSecond = perSecond(mine.incomePerTick.energy),
-                                     .drainPerSecond = perSecond(mine.upkeepPerTick.energy)};
+        state.resources = rm::ui::resourceViews(
+            profile,
+            rm::ui::Gauge{.stored = rm::sim::magToFloat(mine.stored.mass),
+                          .capacity = rm::sim::magToFloat(mine.storage.mass),
+                          .incomePerSecond = perSecond(mine.incomePerTick.mass),
+                          .drainPerSecond = perSecond(mine.upkeepPerTick.mass)},
+            rm::ui::Gauge{.stored = rm::sim::magToFloat(mine.stored.energy),
+                          .capacity = rm::sim::magToFloat(mine.storage.energy),
+                          .incomePerSecond = perSecond(mine.incomePerTick.energy),
+                          .drainPerSecond = perSecond(mine.upkeepPerTick.energy)});
         state.fundedFraction = rm::sim::fxToFloat(mine.fundedFraction);
     }
 

@@ -448,7 +448,7 @@ int runScreenshot(const Session& session) {
             const rm::ui::Theme shotTheme =
                 hudThemeFor(units, session.uiProfile, shotAtlas.skin);
             rm::ui::build(hud, renderer.labelFont(), renderer.readoutFont(), shotTheme,
-                          hudStateFrom(units, marchOptions.seconds), shotFrame);
+                          hudStateFrom(units, marchOptions.seconds, session.uiProfile), shotFrame);
             rm::ui::appendMinimap(hud, renderer.labelFont(), shotTheme, shotMinimap,
                                   map->field.widthElmos(), map->field.depthElmos(), pips, view,
                                   !shotPreview);
@@ -559,7 +559,7 @@ int runScreenshot(const Session& session) {
             if (!shotRoster.empty()) {
                 const rm::ui::InfoCard inspector =
                     shotHovered && *shotHovered < shotOptions.size()
-                        ? rm::ui::buildOptionCard(shotOptions[*shotHovered])
+                        ? rm::ui::buildOptionCard(shotOptions[*shotHovered], session.uiProfile)
                         : rm::ui::rosterTileCard(shotRoster.front());
                 rm::ui::appendRoster(hud, renderer.labelFont(), renderer.readoutFont(),
                                      shotTheme,
@@ -1857,7 +1857,7 @@ int runWindowed(const Session& session) {
             const rm::ui::Theme theme =
                 hudThemeFor(units, session.uiProfile, interfaceSkin);
             rm::ui::build(hudScratch, window.labelFont(), window.readoutFont(), theme,
-                          hudStateFrom(units, matchSeconds), frame);
+                          hudStateFrom(units, matchSeconds, session.uiProfile), frame);
             rm::ui::appendMinimap(hudScratch, window.labelFont(), theme, minimap,
                                   map->field.widthElmos(), map->field.depthElmos(), minimapPips,
                                   minimapView, !hasPreview);
@@ -1896,9 +1896,11 @@ int runWindowed(const Session& session) {
 
                 rm::ui::InfoCard inspector;
                 if (armedOption && *armedOption < buildOptions.size()) {
-                    inspector = rm::ui::buildOptionCard(buildOptions[*armedOption]);
+                    inspector =
+                        rm::ui::buildOptionCard(buildOptions[*armedOption], session.uiProfile);
                 } else if (overBuild && *overBuild < buildOptions.size()) {
-                    inspector = rm::ui::buildOptionCard(buildOptions[*overBuild]);
+                    inspector =
+                        rm::ui::buildOptionCard(buildOptions[*overBuild], session.uiProfile);
                 } else if (overTile && *overTile < rosterTiles.size()) {
                     inspector = rm::ui::rosterTileCard(rosterTiles[*overTile]);
                 } else {

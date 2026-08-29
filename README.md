@@ -675,7 +675,7 @@ only appears under one cannot otherwise be captured, tested, or diffed.
 | `--no-interpolate` | draw the newest snapshot rather than blending two. **Every golden image is taken with this** — a screenshot of tick N should *be* tick N, not depend on when the process was scheduled |
 | `--focus` / `--look <x> <z> <r>` | aim the capture at the first instance, or at a world point |
 | `--select <n>` / `--hover <n>` / `--ghost <x> <z>` | light up interface a headless run has no cursor to produce: N units selected, the Nth tray option hovered with its info card, the placement ghost at a world point |
-| `--ui <fa\|bar\|neutral\|faf>` / `--ui-scale <0.5..3>` | select FA, BAR, neutral, or classic FAF presentation (`fa` is the default; `faf` wears the game's own nine-slice chrome); request HUD scaling relative to automatic size. Values clamp; available fit wins, and enlargement uses only room beyond the automatic 2.5× cap |
+| `--ui <fa\|bar\|neutral\|faf>` / `--ui-scale <0.5..3>` | select FA, BAR, neutral, or classic FAF presentation (`fa` is the default; the first resource reads Mass, Metal, or Material respectively; `faf` wears the game's own nine-slice chrome); request HUD scaling relative to automatic size. Values clamp; available fit wins, and enlargement uses only room beyond the automatic 2.5× cap |
 | `--vision-style <recoil\|fa>` | whether terrain blocks sight |
 | `--ai-faf` | FAF's own AI plays every army, through the sandbox |
 | `--ai-log` / `--ai-debug` / `--ai-sanity` | narrate the AI's decisions and the corpus's own `LOG` lines; the debug report; the closing census of what was built, which bindings were called, and which corpus functions ran |

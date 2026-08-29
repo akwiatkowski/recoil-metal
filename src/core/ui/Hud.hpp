@@ -2,6 +2,7 @@
 
 #include "core/sim/Army.hpp"
 #include "core/text/TextLayout.hpp"
+#include "core/ui/GameProfile.hpp"
 #include "core/ui/IconAtlas.hpp"
 #include "core/ui/UiLayers.hpp"
 #include "core/ui/Viewport.hpp"
@@ -182,10 +183,10 @@ inline constexpr float kChip = kUnit * 1.5f;
 
 /// Where the label column ends and the readouts begin, measured from the content's left edge.
 ///
-/// A fixed column rather than "after the label", so MASS and ENERGY line their numbers up
-/// despite being different lengths. Ragged number columns are the single thing that makes a
-/// dense readout look unfinished.
-inline constexpr float kLabelColumn = kUnit * 13.0f;
+/// A fixed column rather than "after the label", so MATERIAL (the longest profile name) and
+/// ENERGY line their numbers up despite being different lengths. Ragged number columns are the
+/// single thing that makes a dense readout look unfinished.
+inline constexpr float kLabelColumn = kUnit * 16.0f;
 
 inline constexpr float kGaugeHeight = kUnit * 1.2f;  ///< the storage bar
 inline constexpr float kFlowHeight = kUnit * 0.55f;  ///< the flow strip under it
@@ -212,10 +213,24 @@ struct Gauge {
     [[nodiscard]] bool wasting() const noexcept;
 };
 
+/// One of the two economy readings the selected game profile presents, in display order.
+///
+/// This is a closed pair, not arbitrary-resource infrastructure: both supported games have one
+/// construction material and energy, while disagreeing only on the first resource's name.
+struct ResourceView {
+    std::string_view name;
+    Gauge gauge;
+    Colour tint;
+};
+
+using ResourceViews = std::array<ResourceView, 2>;
+
+[[nodiscard]] ResourceViews resourceViews(GameProfile profile, Gauge primary,
+                                           Gauge energy) noexcept;
+
 /// What the whole interface reports.
 struct MatchState {
-    Gauge mass;
-    Gauge energy;
+    ResourceViews resources = resourceViews(GameProfile::Fa, {}, {});
 
     /// The share of what construction asked for that was actually paid, 0..1. The stall.
     float fundedFraction = 1.0f;

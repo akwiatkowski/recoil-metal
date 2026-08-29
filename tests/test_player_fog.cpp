@@ -109,9 +109,13 @@ TEST_CASE("an observer gets exact units without duplicate sensor guesses") {
 TEST_CASE("the player HUD counts own units, not hidden enemy production") {
     FogFixture fixture{/*targetCloaked=*/false, /*targetFreeIntel=*/false};
 
-    CHECK(rm::app::hudStateFrom(fixture.scene, 0.0f).unitsAlive == 1);
+    CHECK(rm::app::hudStateFrom(fixture.scene, 0.0f, rm::ui::GameProfile::Fa).unitsAlive == 1);
+    const rm::ui::MatchState bar =
+        rm::app::hudStateFrom(fixture.scene, 0.0f, rm::ui::GameProfile::Bar);
+    CHECK(bar.resources[0].name == "METAL");
+    CHECK(bar.resources[1].name == "ENERGY");
     fixture.scene.playerArmy = rm::sim::kNoArmy;
-    CHECK(rm::app::hudStateFrom(fixture.scene, 0.0f).unitsAlive == 2);
+    CHECK(rm::app::hudStateFrom(fixture.scene, 0.0f, rm::ui::GameProfile::Fa).unitsAlive == 2);
 }
 
 TEST_CASE("slot reuse cannot make a stale unit generation visible") {
