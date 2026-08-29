@@ -62,10 +62,18 @@ struct Economy {
 
     /// What standing structures cost to RUN, per second. Energy only in the corpus.
     ///
-    /// Charged BEFORE construction is funded, and that order is the mechanic: upkeep is not
-    /// optional, so a base whose power fails stops building rather than stopping running.
-    /// Funding builds first and letting upkeep take the remainder would invert that and
-    /// make a brownout invisible.
+    /// Charged BEFORE construction is funded. **This is ours, not Forged Alliance's**, and
+    /// the comment here used to claim the opposite — that the ordering "is the mechanic".
+    /// It is not. Retail has no priority between them: upkeep and construction are peers in
+    /// one request list, and when energy is the binding resource both receive the *same*
+    /// fraction. Where we starve a build to keep the lights on, retail runs both at half
+    /// rate (`C-103`, `C-067`).
+    ///
+    /// The deeper divergence is that retail models upkeep as demand at all, which is what
+    /// lets an unpayable bill throttle the consumers that incurred it. Here it is a lump
+    /// subtracted before demand is measured, with the shortfall absorbed — so a brownout is
+    /// invisible to shields and intel rather than slowing them. Fixing the ordering without
+    /// first making upkeep a request would not move us closer to retail.
     Resources upkeepPerTick;
 
     /// What last tick TRIED to pay: construction drain plus upkeep. The load figure an AI

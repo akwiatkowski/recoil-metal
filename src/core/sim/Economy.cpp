@@ -33,8 +33,15 @@ void tickEconomy(Economy& economy, std::span<Construction> building) {
     // appears nowhere, which is the rule being satisfied rather than described.
     economy.stored += economy.incomePerTick;
 
-    // Storage is a cap and overflow is LOST, which is what the game does — an economy with
-    // nothing to spend on is wasting, and that is the pressure to build something.
+    // Storage is a cap and overflow is LOST here. **That is NOT what the game does**, and
+    // this comment used to say it was. Retail splits the excess equally among allies that
+    // have free storage, each capped by its own headroom, gated by a per-army sharing flag
+    // (`C-070`). We have alliances and no sharing path, so in a team game we destroy
+    // resources retail would hand to a partner.
+    //
+    // Clamping HERE is a second divergence: retail allocates out of `stored + income` and
+    // only clamps afterwards, so a full-storage army can still spend the tick's income
+    // (`C-104`). We discard it first, so a full bank cannot fund anything this tick.
     economy.stored.mass = std::min(economy.stored.mass, economy.storage.mass);
     economy.stored.energy = std::min(economy.stored.energy, economy.storage.energy);
 
