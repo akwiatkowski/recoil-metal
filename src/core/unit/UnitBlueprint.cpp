@@ -255,6 +255,10 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
 
     def.skirtSquaresX = numberOr(*physics, "SkirtSizeX", 0.0f);
     def.skirtSquaresZ = numberOr(*physics, "SkirtSizeZ", 0.0f);
+    // Positive offsets are discarded by retail's `ComputeDerivedQuantities`; negative ones
+    // extend the skirt toward the corresponding lower coordinate (C-109).
+    const float skirtOffsetX = std::min(numberOr(*physics, "SkirtOffsetX", 0.0f), 0.0f);
+    const float skirtOffsetZ = std::min(numberOr(*physics, "SkirtOffsetZ", 0.0f), 0.0f);
 
     // Which buff table this structure grants its neighbours (`Adjacency`, root level).
     def.adjacencyBuffs = std::string{parsed->stringAt("Adjacency").value_or("")};
@@ -314,19 +318,33 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
 
     // The BUILD footprint is a separate, whole-square field, and only 363 of the
     // 568 have one — essentially the structures, which are what occupies a grid.
-    // For the rest it is derived from the collision size, rounded UP so that a
-    // unit never claims less ground than it stands on, and floored at one square
-    // because a unit occupying no squares at all would be placeable inside a wall.
+    // A zero has the same meaning as absence: retail's byte fields start at zero and
+    // `REntityBlueprint::OnInitBlueprint` replaces either case with ceil(top-level Size).
+    // This is native behavior recovered at 0x00518B60 (C-109), not a loader fallback guess.
     const lua::Value* footprint = parsed->path("Footprint");
     const auto squaresFrom = [](float ogrids) {
-        return std::max(1, static_cast<int>(std::ceil(ogrids)));
+        return static_cast<int>(std::ceil(ogrids));
     };
-    def.footprintSquaresX = footprint != nullptr && footprint->numberAt("SizeX")
-                              ? squaresFrom(numberOr(*footprint, "SizeX", 1.0f))
-                              : squaresFrom(sizeX);
-    def.footprintSquaresZ = footprint != nullptr && footprint->numberAt("SizeZ")
-                              ? squaresFrom(numberOr(*footprint, "SizeZ", 1.0f))
-                              : squaresFrom(sizeZ);
+    const auto footprintOrSize = [footprint, &squaresFrom](std::string_view key, float size) {
+        const std::optional<double> stated =
+            footprint != nullptr ? footprint->numberAt(key) : std::nullopt;
+        return stated && *stated != 0.0 ? squaresFrom(static_cast<float>(*stated))
+                                       : squaresFrom(size);
+    };
+    def.footprintSquaresX = footprintOrSize("SizeX", sizeX);
+    def.footprintSquaresZ = footprintOrSize("SizeZ", sizeZ);
+
+    // Retail then raises an omitted or undersized skirt to the footprint and turns its
+    // lower-corner offset into a rectangle centre. Keeping the derived centre means the sim
+    // need not know which blueprint family authored the geometry.
+    def.skirtSquaresX = std::max(def.skirtSquaresX,
+                                 static_cast<float>(def.footprintSquaresX));
+    def.skirtSquaresZ = std::max(def.skirtSquaresZ,
+                                 static_cast<float>(def.footprintSquaresZ));
+    def.skirtCentreOffsetSquaresX =
+        0.5f * (def.skirtSquaresX - static_cast<float>(def.footprintSquaresX)) + skirtOffsetX;
+    def.skirtCentreOffsetSquaresZ =
+        0.5f * (def.skirtSquaresZ - static_cast<float>(def.footprintSquaresZ)) + skirtOffsetZ;
 
     // --- economy -----------------------------------------------------------
     if (const lua::Value* economy = parsed->path("Economy")) {

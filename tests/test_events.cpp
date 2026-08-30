@@ -178,10 +178,10 @@ TEST_CASE("a shot fired and a shot landing are separate events") {
     CHECK(fired < landed);
 }
 
-TEST_CASE("damage reports what was dealt, not what was thrown") {
-    // A 1000-damage shot into 100 health reports 100. The distinction matters to anything
-    // summing damage — overkill would otherwise inflate every total — and it is the same
-    // figure `damageArea` returns.
+TEST_CASE("damage reports the pre-health-clipping amount") {
+    // Retail publishes the amount after armour/shield handling but before health clips it
+    // (C-111). A 1000-damage shot into 100 health therefore reports 1000 even though only 100
+    // can be removed; `damageArea` still returns the amount actually removed.
     Duel duel;
     for (int tick = 0; tick < 60; ++tick) {
         if (!duel.step().died.empty()) {
@@ -195,7 +195,7 @@ TEST_CASE("damage reports what was dealt, not what was thrown") {
             total += event.amount;
         }
     }
-    CHECK(rm::test::asFloat(total) == 100.0f);
+    CHECK(rm::test::asFloat(total) == 1000.0f);
 }
 
 TEST_CASE("losing the last commander is a defeat and then a game over") {

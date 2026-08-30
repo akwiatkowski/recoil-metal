@@ -230,6 +230,38 @@ TEST_CASE("a structure's own build footprint wins over its collision size") {
     CHECK(def->motion == MotionType::None);
 }
 
+TEST_CASE("retail derives zero footprints and clamps skirt geometry") {
+    // The native blueprint constructor stores footprint dimensions as zero, then
+    // `REntityBlueprint::OnInitBlueprint` replaces each zero (whether omitted or explicit)
+    // with ceil(top-level Size). `ComputeDerivedQuantities` subsequently prevents a skirt
+    // from being smaller than that footprint. See C-109 in the EXE-analysis ledger.
+    const Blueprint bp{"UEB4302_unit.bp", R"(
+        UnitBlueprint {
+            Footprint = { SizeX = 0, SizeZ = 0 },
+            Physics = {
+                MotionType = 'RULEUMT_None',
+                SkirtOffsetX = 5,
+                SkirtOffsetZ = -2,
+                SkirtSizeX = 3,
+                SkirtSizeZ = 8,
+            },
+            SizeX = 1.75,
+            SizeZ = 10,
+        }
+    )"};
+    const auto def = rm::unitbp::loadFile(bp.path());
+    REQUIRE(def.has_value());
+
+    CHECK(def->footprintSquaresX == 2);
+    CHECK(def->footprintSquaresZ == 10);
+    CHECK(def->skirtSquaresX == Approx(3.0f));
+    CHECK(def->skirtSquaresZ == Approx(10.0f));
+    // Positive X is discarded, then (3 - 2) / 2 shifts the wider skirt by half a square.
+    // Negative Z survives; the size clamp itself contributes no shift on that axis.
+    CHECK(def->skirtCentreOffsetSquaresX == Approx(0.5f));
+    CHECK(def->skirtCentreOffsetSquaresZ == Approx(-2.0f));
+}
+
 TEST_CASE("a wreck's value and the builder's reach arrive from the economy tables") {
     // The value chain is `Unit.lua:1760-1819`: a wreck holds `BuildCostMass * MassMult`
     // and `BuildCostEnergy * EnergyMult`, and reclaiming it takes

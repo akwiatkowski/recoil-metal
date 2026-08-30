@@ -44,8 +44,8 @@ void adjacencyEffects(const UnitStore& store, const UnitCatalog& catalog,
         }
         standing.push_back(Participant{
             .slot = slot,
-            .x = transforms[slot].x,
-            .z = transforms[slot].z,
+            .x = transforms[slot].x + info.skirtCentreOffsetXElmos,
+            .z = transforms[slot].z + info.skirtCentreOffsetZElmos,
             .army = motion[slot].armyIndex,
             .info = &info,
         });

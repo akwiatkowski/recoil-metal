@@ -253,11 +253,17 @@ bool applyCommand(const Command& command, UnitStore& store, const UnitCatalog& c
     if (command.kind == CommandKind::Stop) {
         cancelActiveConstruction(building, command.unit);
         orders.clear();
-        return startCommand(command, store, catalog, terrain, grid, rate, building, events,
-                            features);
+        if (!startCommand(command, store, catalog, terrain, grid, rate, building, events,
+                          features)) {
+            return false;
+        }
+        (void)store.allocateCommandSerial();
+        return true;
     }
 
     if (command.queued) {
+        Command accepted = command;
+        accepted.creationSerial = store.allocateCommandSerial();
         // Factory production is repeatable: Shift-clicking the same tank twice means two tanks,
         // unlike placing the same structure twice, which retains the ordinary cancel gesture.
         if (command.kind == CommandKind::Build) {
@@ -265,7 +271,7 @@ bool applyCommand(const Command& command, UnitStore& store, const UnitCatalog& c
             const unitdef::UnitDef* product = catalog.def(command.buildType);
             if (builder != nullptr && product != nullptr && builder->hasCategory("FACTORY")
                 && product->isMobile()) {
-                orders.append(command);
+                orders.append(accepted);
                 return true;
             }
         }
@@ -275,12 +281,13 @@ bool applyCommand(const Command& command, UnitStore& store, const UnitCatalog& c
             orders.orders().begin(), orders.orders().end(), [](const Command& queued) {
                 return queued.kind == CommandKind::Patrol;
             });
-        const CommandQueue::Result result = orders.give(command, true);
+        const CommandQueue::Result result = orders.give(accepted, true);
         if (command.kind == CommandKind::Patrol && !alreadyPatrolling
             && result == CommandQueue::Result::Appended) {
-            Command origin = command;
+            Command origin = accepted;
             origin.targetX = store.transforms()[command.unit.index].x;
             origin.targetZ = store.transforms()[command.unit.index].z;
+            origin.creationSerial = store.allocateCommandSerial();
             orders.append(origin);
         }
         if (command.kind == CommandKind::Patrol
@@ -343,11 +350,14 @@ bool applyCommand(const Command& command, UnitStore& store, const UnitCatalog& c
     if (command.kind != CommandKind::Build) {
         cancelActiveConstruction(building, command.unit);
     }
-    (void)orders.give(command, false);
+    Command accepted = command;
+    accepted.creationSerial = store.allocateCommandSerial();
+    (void)orders.give(accepted, false);
     if (command.kind == CommandKind::Patrol) {
-        Command origin = command;
+        Command origin = accepted;
         origin.targetX = store.transforms()[command.unit.index].x;
         origin.targetZ = store.transforms()[command.unit.index].z;
+        origin.creationSerial = store.allocateCommandSerial();
         orders.append(origin);
     }
     if (instantaneous(command.kind)) {

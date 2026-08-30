@@ -235,9 +235,10 @@ void tickShields(UnitStore& store, const UnitCatalog& catalog,
 
 /// Moves every projectile one tick, applies what lands, and removes what is spent.
 ///
-/// A shot lands on the first hostile collision box crossed by this tick's 3D segment, or when
-/// its endpoint reaches the ground. `catalog` supplies authored target height and armour; null
-/// falls back to a diameter-high box and ordinary armour.
+/// A shot lands on the first hostile collision box crossed by this tick's 3D segment, extended
+/// 10% past both ends. Motion below 0.01 elmo instead tests a radius-one sphere at the old
+/// position, unless the tick also reaches terrain. `catalog` supplies authored target height
+/// and armour; null falls back to a diameter-high box and ordinary armour.
 void advanceProjectiles(std::vector<Projectile>& projectiles, UnitStore& store,
                         std::span<const Army> armies, const Terrain& terrain, TickRate rate,
                         EventQueue* events = nullptr, const UnitCatalog* catalog = nullptr);

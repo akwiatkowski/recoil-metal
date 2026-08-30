@@ -290,6 +290,20 @@ TEST_CASE("every field the sim owns reaches the hash") {
         a.building[0].assistPerTick = rm::test::mag(1.0f);
         REQUIRE(a.hash() != before);
     }
+    SECTION("the next command serial") {
+        Fixture a;
+        const rm::StateHash before = a.hash();
+        (void)a.store.allocateCommandSerial();
+        REQUIRE(a.hash() != before);
+    }
+    SECTION("a queued command's creation serial") {
+        Fixture a;
+        a.store.orders()[0].append(rm::sim::Command{.unit = a.store.idAt(0)});
+        const rm::StateHash before = a.hash();
+        REQUIRE(a.store.orders()[0].currentMutable() != nullptr);
+        a.store.orders()[0].currentMutable()->creationSerial = 1;
+        REQUIRE(a.hash() != before);
+    }
 }
 
 TEST_CASE("losing a unit changes the hash even though the survivors match") {

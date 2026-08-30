@@ -123,6 +123,7 @@ TEST_CASE("a hash log round-trips through a file") {
 
     const auto read = rm::sim::readHashLog(path.get());
     REQUIRE(read.has_value());
+    REQUIRE(read->header.formatVersion == ReplayHeader::kFormatVersion);
     REQUIRE(read->header.ticksPerSecond == rm::sim::kTicksPerSecond);
     REQUIRE(read->header.widthsFingerprint == rm::sim::widthsFingerprint());
     REQUIRE(read->hashes == hashes);
@@ -159,7 +160,9 @@ TEST_CASE("a truncated log is an error, not silent agreement") {
         REQUIRE(whole.has_value());
         std::FILE* f = std::fopen(path.get().c_str(), "w");
         REQUIRE(f != nullptr);
-        std::fputs("recoil-metal hash log\nversion 1\nticks-per-second ", f);
+        std::fputs("recoil-metal hash log\nversion ", f);
+        std::fputs(std::to_string(ReplayHeader::kFormatVersion).c_str(), f);
+        std::fputs("\nticks-per-second ", f);
         std::fputs(std::to_string(rm::sim::kTicksPerSecond).c_str(), f);
         std::fputs("\nwidths ", f);
         std::fprintf(f, "%llx", static_cast<unsigned long long>(rm::sim::widthsFingerprint()));
@@ -183,7 +186,7 @@ TEST_CASE("the widths fingerprint changes when a width does") {
     // shape instead: every alias contributes, so the packed field is non-zero in each of
     // the slots the fingerprint claims to cover.
     const std::uint64_t f = rm::sim::widthsFingerprint();
-    for (int slot = 0; slot < 10; ++slot) {
+    for (int slot = 0; slot < 11; ++slot) {
         const std::uint64_t nibble = (f >> (slot * 4)) & 0xFULL;
         REQUIRE(nibble != 0);
     }

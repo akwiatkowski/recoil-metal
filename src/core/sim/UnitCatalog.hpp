@@ -127,6 +127,8 @@ public:
         /// Zero for everything mobile, which is also what excludes it from the pair scan.
         Fx skirtHalfXElmos{};
         Fx skirtHalfZElmos{};
+        Fx skirtCentreOffsetXElmos{};
+        Fx skirtCentreOffsetZElmos{};
 
         /// The receiver-size row, 0..4 for SIZE4..SIZE20. From the authored `SIZE<n>`
         /// category when one is stated; derived as `SkirtSizeX + SkirtSizeZ` rounded to

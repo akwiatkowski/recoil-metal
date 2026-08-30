@@ -17,22 +17,26 @@ ordinary shields, simplified aircraft and surface naval movement, fog/radar/sona
 reclaim, adjacency, overcharge, sound, a playable HUD, victory, command replay, and per-tick state
 hashes. This is not a feature-parity claim.
 
-The next major fidelity phase will analyze Olek's owned retail executable, DLLs, Lua, blueprints,
-and archives before implementing more systems. Findings will become concise behavioral evidence,
-failing tests, and independent clean-room code. Decompiled source or proprietary assets will not be
-copied into or distributed with the project.
+The current fidelity phase analyzes Olek's owned retail executable, DLLs, Lua, blueprints and
+archives before implementing more systems. The executable campaign has recovered the complete
+script-visible native API, class and vtable maps, hundreds of object fields, the blueprint schema,
+serializer layouts and decisive behavior for twenty-seven work packages. Findings become concise
+behavioral evidence, failing tests and independent clean-room code. Decompiled source or
+proprietary assets are not copied into or distributed with the project.
 
 ## Current status snapshot
 
 | Readiness | Count |
 |---|---:|
-| **Not ready** | 26 |
-| **Ready but not confirmed** | 19 |
+| **Not ready** | 23 |
+| **Ready but not confirmed** | 22 |
 | **Confirmed with EXE analysis** | 0 |
 
 These are the 45 work packages in `fa-exe-analysis-plan.md`. Readiness measures the current Recoil
-Metal implementation; EXE knowledge is tracked separately. The retail disk is disconnected, so the
-EXE campaign has not started.
+Metal implementation; EXE knowledge is tracked separately. Twenty-seven packages now have their
+decisive native path analyzed. None is labelled Confirmed because that state additionally requires
+the corresponding Recoil Metal implementation and focused tests to match the recovered ordering,
+rounding, tie breaks and failure behavior.
 
 ## Community motivation
 
@@ -63,14 +67,15 @@ Games, Square Enix, or THQ Nordic.
 - A vertical-slice skirmish progresses from commanders and economy through construction, combat,
   commander elimination, and a victory banner.
 - Human and AI commands use one authoritative path and can be recorded and replayed.
-- At commit `60b1525` on 2026-08-29, the repository had 1,129 registered tests. The full run passed,
-  with 26 expected retail-content-dependent skips while the disk was disconnected.
+- On 2026-08-30, the repository had 1,169 registered tests. The full run passed, with two expected
+  retail-content-dependent skips.
 - FAF's Lua builder data and conditions run through a partial adapter. The full manager stack and
   full native API semantics are not implemented.
-- The planned executable campaign is static-analysis-first, clean-room, artifact-hashed, and
-  hypothesis-driven.
-- No subsystem is currently labelled Confirmed with EXE analysis because that campaign has not
-  begun.
+- The executable campaign is static-analysis-first, clean-room, artifact-hashed and
+  hypothesis-driven. The retail executable is the behavior authority; the older engine DLL is used
+  only as a naming dictionary because its offsets and behavior differ.
+- No subsystem is currently labelled Confirmed with EXE analysis because the implementation side
+  of the confirmation gate has not yet matched every recovered semantic detail.
 
 ## Claims the artifact must not make
 
@@ -79,7 +84,8 @@ Games, Square Enix, or THQ Nordic.
 - Do not imply simplified aircraft, naval, shield, AI, or UI behavior matches retail.
 - Do not say retail source code was recovered. Decompilation provides behavioral evidence, not
   maintainable original source.
-- Do not imply executable analysis has started or that Ghidra findings already exist.
+- Do not imply that the original source was recovered, the whole executable was decompiled, or an
+  analyzed work package is automatically implemented or confirmed.
 - Do not present FAF behavior as retail behavior unless the distinction is explicit.
 - Do not include or offer proprietary executable code, decompiler listings, game assets, music, or
   archive contents.
@@ -91,8 +97,8 @@ Games, Square Enix, or THQ Nordic.
 1. **The community problem:** the game has an open Lua ecosystem on top of a closed, old engine.
 2. **The experiment:** test whether a new clean-room engine is possible without original source.
 3. **What exists:** a tested, playable, deterministic native engine and renderer, not a paper plan.
-4. **What remains:** formations, transports, missiles/interception, enhancements, veterancy,
-   submerged warfare, factory controls, full unit scripts, and full AI behavior.
+4. **What remains:** formations, transports, missiles/interception, enhancements, submerged
+   warfare, factory controls, full unit scripts, save/resume, and full AI behavior.
 5. **Why analyze the EXE:** Lua and blueprints describe intent but not native movement, targeting,
    collision, rounding, update order, and state ownership.
 6. **How analysis stays efficient:** bound each question from Lua/data/docs first, enumerate the

@@ -198,6 +198,9 @@ void feedOrders(StateHash& h, const CommandQueue& orders) noexcept {
             feed(h, static_cast<std::size_t>(command.target.generation));
         }
         feed(h, static_cast<std::size_t>(command.buildType));
+        // Unlike the input tick, this clock changes how a rotating patrol accepts its next
+        // waypoint: the oldest command marks the lap boundary even after it leaves the head.
+        feed(h, static_cast<std::uint64_t>(command.creationSerial));
     }
 }
 
@@ -209,6 +212,9 @@ StateHash hashMatch(const UnitStore& store, const Match& match) {
     // Slot count first, so a store that grew differs even if the new slot is empty — a spawn
     // that produced nothing is still a different match.
     feed(h, store.slotCount());
+    // The next accepted command consumes this value. It is match state even while no live
+    // command currently exposes it, and clearing or recycling a queue must not rewind it.
+    feed(h, static_cast<std::uint64_t>(store.nextCommandSerial()));
 
     const std::span<const Transform> transforms = store.transforms();
     const std::span<const MoveState> motion = store.motion();

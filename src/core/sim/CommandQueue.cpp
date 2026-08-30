@@ -1,5 +1,7 @@
 #include "core/sim/CommandQueue.hpp"
 
+#include <algorithm>
+
 namespace rm::sim {
 namespace {
 
@@ -85,6 +87,22 @@ CommandQueue::Result CommandQueue::give(const Command& command, bool queued) {
         // itself, a formation move — the two stop being the same act, and that is a bad time
         // to find out the loop was unbounded.
         return wasCurrent ? Result::CancelledCurrent : Result::Cancelled;
+    }
+
+    // A patrol queue rotates, so its oldest command is not necessarily at the front. Retail
+    // inserts a newly added waypoint at the end of the CURRENT lap: immediately before that
+    // oldest command, unless the lap already starts at the head. The immutable serial matters
+    // when several clicks landed on the same tick.
+    if (command.kind == CommandKind::Patrol && queue_.size() >= 2
+        && queue_.front().kind == CommandKind::Patrol) {
+        const auto oldest = std::min_element(
+            queue_.begin(), queue_.end(), [](const Command& a, const Command& b) {
+                return a.creationSerial < b.creationSerial;
+            });
+        if (oldest != queue_.begin()) {
+            queue_.insert(oldest, command);
+            return Result::Appended;
+        }
     }
 
     queue_.push_back(command);

@@ -69,6 +69,42 @@ namespace {
     return def;
 }
 
+/// Whether one raw-unit-sized target is struck by a projectile moving by the supplied Q18.14
+/// delta. Tiny dimensions keep the test about C-168's radius-one fallback rather than the
+/// ordinary four-elmo test body.
+[[nodiscard]] bool tinyProjectileStrikes(std::array<rm::FxRaw, 3> deltaRaw,
+                                         std::array<rm::FxRaw, 3> targetRaw) {
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    Roster roster;
+    const UnitId target =
+        roster.add(roster.addType(targetDef()), 0.0f, 0.0f, 1, 100.0f);
+    roster.transform(target) = {
+        .x = rm::sim::Fx::fromRaw(targetRaw[0]),
+        .y = rm::sim::Fx::fromRaw(targetRaw[1]),
+        .z = rm::sim::Fx::fromRaw(targetRaw[2]),
+    };
+    roster.motion(target).radiusElmos = rm::sim::Fx::fromRaw(1);
+    roster.reindex();
+
+    Projectile shot;
+    shot.position = {};
+    shot.velocity = {
+        rm::sim::Fx::fromRaw(deltaRaw[0]),
+        rm::sim::Fx::fromRaw(deltaRaw[1]),
+        rm::sim::Fx::fromRaw(deltaRaw[2]),
+    };
+    shot.damage = rm::unitdef::flatDamage(rm::test::mag(40.0f));
+    shot.targetLayers = rm::unitdef::TargetLayerMask::Surface;
+    shot.firedByArmy = 0;
+    shot.ticksRemaining = 2;
+    std::vector<Projectile> shots{shot};
+
+    rm::sim::advanceProjectiles(shots, roster.store, armies,
+                                rm::sim::Terrain{flatField(-100.0f)}, roster.rate,
+                                nullptr, &roster.catalog);
+    return roster.health(target).current < rm::test::mag(100.0f);
+}
+
 } // namespace
 
 TEST_CASE("range is measured on the ground, so high ground is not cover") {
@@ -150,6 +186,31 @@ TEST_CASE("a unit shoots the nearest enemy and never a friend") {
     const auto target = rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, weapon, roster.store, armies);
     REQUIRE(target.has_value());
     CHECK(*target == near);  // the near enemy, not the nearer ally
+}
+
+TEST_CASE("target ranking preserves distances below hypotenuse quantization") {
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    Roster roster;
+    const rm::UnitTypeIndex type = roster.addType(targetDef());
+
+    // At fifty elmos, the fixed-point hypotenuse rounds this 1/64-elmo offset away.
+    // Retail compares squared distances before any square root, so the later slot wins.
+    const UnitId farther = roster.add(type, 1.0f / 64.0f, 50.0f, 1, 100.0f);
+    const UnitId nearer = roster.add(type, 0.0f, 50.0f, 1, 100.0f);
+
+    const Weapon weapon = directFire(10.0f, 100.0f);
+    const auto target =
+        rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, weapon, roster.store, armies);
+
+    REQUIRE(target.has_value());
+    CHECK(*target == nearer);
+
+    roster.transform(farther).x = rm::test::fx(0.0f);
+    roster.reindex();
+    const auto tied =
+        rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, weapon, roster.store, armies);
+    REQUIRE(tied.has_value());
+    CHECK(*tied == farther);
 }
 
 TEST_CASE("a weapon acquires targets only on its allowed movement layer") {
@@ -380,6 +441,35 @@ TEST_CASE("an arced shot rises, and comes down where the target is") {
               rm::sim::kProjectileLifetime)));
 }
 
+TEST_CASE("an arced projectile advances by its average old and new velocity") {
+    const rm::sim::TickRate rate{};
+    const rm::sim::Fx gravity = rm::sim::projectileGravityPerTickSquared(rate);
+    const rm::sim::Fx half = rm::sim::Fx::fromRatio(1, 2);
+
+    Projectile shot;
+    shot.position = rm::test::at(0, 100, 0);
+    shot.velocity = rm::test::at(10, 20, 30);
+    shot.arc = BallisticArc::High;
+    shot.ticksRemaining = 2;
+    std::vector<Projectile> flight{shot};
+    rm::sim::UnitStore empty;
+
+    rm::sim::advanceProjectiles(flight, empty, {}, rm::sim::Terrain{flatField()}, rate);
+
+    REQUIRE(flight.size() == 1);
+    // v_new = v_old - g; trapezoidal position uses (v_old + v_new) / 2,
+    // which is v_old - g/2 for this constant-acceleration tick.
+    const rm::sim::Fx oldVerticalVelocity = rm::test::fx(20.0f);
+    const rm::sim::Fx newVerticalVelocity = oldVerticalVelocity - gravity;
+    const rm::sim::Fx averageVerticalVelocity =
+        oldVerticalVelocity + (newVerticalVelocity - oldVerticalVelocity) * half;
+    CHECK(flight.front().velocity[1] == newVerticalVelocity);
+    CHECK(flight.front().position[0] == rm::test::fx(10.0f));
+    CHECK(flight.front().position[1]
+          == rm::test::fx(100.0f) + averageVerticalVelocity);
+    CHECK(flight.front().position[2] == rm::test::fx(30.0f));
+}
+
 TEST_CASE("area damage is uniform inside the radius, as retail's is") {
     // THIS TEST USED TO ASSERT THE OPPOSITE, and it was wrong. It read "damage falls off
     // linearly to nothing at the rim" and expected the unit halfway out to take half — the
@@ -441,6 +531,82 @@ TEST_CASE("a point hit lands on what it was aimed at") {
     CHECK(rm::test::asFloat(roster.health(hit).current) == Approx(60.0f));
     CHECK(rm::test::asFloat(roster.health(beside).current) == Approx(100.0f));
     CHECK(rm::test::asFloat(dealt) == Approx(40.0f));
+}
+
+TEST_CASE("a point projectile damages only the body it struck") {
+    // The swept collision has already selected the first body. C-111 found that throwing that
+    // answer away and issuing a radius-zero spatial query made every overlapping body take a
+    // separate full hit.
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    Roster roster;
+    const rm::UnitTypeIndex type = roster.addType(targetDef());
+    const UnitId first = roster.add(type, 0.0f, 10.0f, 1, 100.0f);
+    const UnitId overlappingA = roster.add(type, 0.0f, 12.0f, 1, 100.0f);
+    const UnitId overlappingB = roster.add(type, 0.0f, 14.0f, 1, 100.0f);
+
+    std::vector<Projectile> shots{Projectile{
+        .position = rm::test::at(0, 1, 0),
+        .velocity = rm::test::at(0, 0, 20),
+        .damage = rm::unitdef::flatDamage(rm::test::mag(40.0f)),
+        .damageRadiusElmos = {},
+        .targetLayers = rm::unitdef::TargetLayerMask::Surface,
+        .firedByArmy = 0,
+        .ticksRemaining = 1,
+    }};
+    rm::sim::EventQueue events;
+    const rm::HeightField field = flatField();
+    rm::sim::advanceProjectiles(shots, roster.store, armies, rm::sim::Terrain{field},
+                                roster.rate, &events, &roster.catalog);
+
+    CHECK(rm::test::asFloat(roster.health(first).current) == Approx(60.0f));
+    CHECK(rm::test::asFloat(roster.health(overlappingA).current) == Approx(100.0f));
+    CHECK(rm::test::asFloat(roster.health(overlappingB).current) == Approx(100.0f));
+    CHECK(events.count(rm::sim::EventKind::UnitDamaged) == 1);
+}
+
+TEST_CASE("a splash projectile damages the body it struck at the contact point") {
+    // The target is four elmos deep, but the blast radius is only one elmo. C-168 moves the
+    // impact from the target centre to the collision-box surface, so a centre-only area query
+    // would consume the projectile without damaging the body that caused the impact.
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    Roster roster;
+    const UnitId target =
+        roster.add(roster.addType(targetDef()), 0.0f, 10.0f, 1, 100.0f);
+
+    std::vector<Projectile> shots{Projectile{
+        .position = rm::test::at(0, 1, 0),
+        .velocity = rm::test::at(0, 0, 20),
+        .damage = rm::unitdef::flatDamage(rm::test::mag(40.0f)),
+        .damageRadiusElmos = rm::test::fx(1.0f),
+        .targetLayers = rm::unitdef::TargetLayerMask::Surface,
+        .firedByArmy = 0,
+        .ticksRemaining = 1,
+    }};
+    rm::sim::EventQueue events;
+
+    rm::sim::advanceProjectiles(shots, roster.store, armies,
+                                rm::sim::Terrain{flatField(-100.0f)}, roster.rate,
+                                &events, &roster.catalog);
+
+    CHECK(shots.empty());
+    CHECK(rm::test::asFloat(roster.health(target).current) == Approx(60.0f));
+    CHECK(events.count(rm::sim::EventKind::UnitDamaged) == 1);
+}
+
+TEST_CASE("non-positive damage neither heals nor reports a hit") {
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    Roster roster;
+    const UnitId target =
+        roster.add(roster.addType(targetDef()), 0.0f, 0.0f, 1, 100.0f);
+    rm::sim::EventQueue events;
+
+    const rm::sim::Mag dealt = rm::sim::damageArea(
+        rm::test::at(0, 0, 0), rm::test::fx(100.0f), rm::test::mag(-20.0f), 0,
+        roster.store, armies, {}, &events);
+
+    CHECK(rm::test::asFloat(roster.health(target).current) == Approx(100.0f));
+    CHECK(dealt == rm::sim::Mag{});
+    CHECK(events.count(rm::sim::EventKind::UnitDamaged) == 0);
 }
 
 TEST_CASE("damage never takes more than a unit has, so overkill is not negative health") {
@@ -596,13 +762,315 @@ TEST_CASE("a swept projectile hits the first unit crossed in three dimensions") 
     shot.firedByArmy = 0;
     shot.ticksRemaining = 2;
     std::vector<rm::sim::Projectile> shots{shot};
+    rm::sim::EventQueue events;
 
     rm::sim::advanceProjectiles(shots, roster.store, armies, rm::sim::Terrain{field},
-                                rm::sim::TickRate{}, nullptr, &roster.catalog);
+                                rm::sim::TickRate{}, &events, &roster.catalog);
 
     CHECK(rm::test::asFloat(roster.health(first).current) < 100.0f);
     CHECK(rm::test::asFloat(roster.health(second).current) == Approx(100.0f));
     CHECK(shots.empty());
+    bool sawImpact = false;
+    for (const rm::sim::Event& event : events.all()) {
+        if (event.kind == rm::sim::EventKind::ProjectileImpact) {
+            sawImpact = true;
+            CHECK(event.at == rm::test::at(0, 5, 26));
+        }
+    }
+    CHECK(sawImpact);
+}
+
+TEST_CASE("a projectile sweep reaches one tenth past both endpoints") {
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    const rm::HeightField field = flatField(-100.0f);
+
+    const auto healthAfterSweep = [&](rm::sim::Fx targetX, rm::sim::Fx targetZ) {
+        Roster roster;
+        const rm::UnitTypeIndex type = roster.addType(targetDef());
+        const UnitId target = roster.add(type, 0.0f, 0.0f, 1, 100.0f);
+        // More entries than covered cells force SpatialGrid's indexed path. Friendly fillers
+        // are far away so they exercise only the broadphase, never collision selection.
+        for (int filler = 0; filler < 20; ++filler) {
+            (void)roster.add(type, 1000.0f + static_cast<float>(filler), 1000.0f, 0,
+                             100.0f);
+        }
+        roster.transform(target).x = targetX;
+        roster.transform(target).z = targetZ;
+        roster.reindex();
+
+        Projectile shot;
+        shot.position = rm::test::at(0, 5, 0);
+        shot.velocity = rm::test::at(0, 0, 100);
+        shot.damage = rm::unitdef::flatDamage(rm::test::mag(40.0f));
+        shot.firedByArmy = 0;
+        shot.ticksRemaining = 2;
+        std::vector<Projectile> shots{shot};
+
+        rm::sim::advanceProjectiles(shots, roster.store, armies, rm::sim::Terrain{field},
+                                    rm::sim::TickRate{}, nullptr, &roster.catalog);
+        return roster.health(target).current;
+    };
+
+    // Radius is four elmos. The first box ends exactly ten elmos behind the start; the second
+    // begins exactly ten elmos past the end and touches the flight line at its X edge.
+    CHECK(rm::test::asFloat(healthAfterSweep(rm::sim::Fx{}, rm::test::fx(-14.0f)))
+          == Approx(60.0f));
+    CHECK(rm::test::asFloat(
+              healthAfterSweep(rm::test::fx(3.9f), rm::test::fx(114.0f)))
+          == Approx(60.0f));
+
+    // One tenth farther is outside: this rejects merely making the query generously larger.
+    CHECK(rm::test::asFloat(healthAfterSweep(rm::sim::Fx{}, rm::test::fx(-14.1f)))
+          == Approx(100.0f));
+    CHECK(rm::test::asFloat(healthAfterSweep(rm::sim::Fx{}, rm::test::fx(114.1f)))
+          == Approx(100.0f));
+
+    // One raw position step beyond the exact endpoint is also outside. Q18.14 fractions used
+    // to round this entry back onto the 1.1 boundary and manufacture a hit.
+    CHECK(rm::test::asFloat(healthAfterSweep(
+              rm::sim::Fx{}, rm::sim::Fx::fromInt(114) + rm::sim::Fx::fromRaw(1)))
+          == Approx(100.0f));
+}
+
+TEST_CASE("sub-centielmo projectile motion uses a strict old-position sphere") {
+    // C-168 compares the unrounded 3D length with 0.01. In Q18.14 raw units:
+    //   10,000 * (16^2 + 163^2) = 268,250,000 < 16,384^2
+    //   10,000 * (17^2 + 163^2) = 268,580,000 > 16,384^2
+    // The target's one-raw-unit radius leaves its X face one step inside the sphere.
+    CHECK(tinyProjectileStrikes({16, 0, 163}, {16384, 0, 0}));
+    CHECK_FALSE(tinyProjectileStrikes({17, 0, 163}, {16384, 0, 0}));
+    // A vertical component counts too: the threshold is a 3D length, not ground distance.
+    CHECK_FALSE(tinyProjectileStrikes({0, 164, 0}, {16384, 0, 0}));
+
+    // Exact tangency is out. Both targets would be inside a sphere centred at the pending
+    // endpoint, so these also pin the query to the start-of-tick position.
+    CHECK_FALSE(tinyProjectileStrikes({16, 0, 163}, {16385, 0, 0}));
+    CHECK_FALSE(tinyProjectileStrikes({16, 0, 163}, {0, 0, 16385}));
+
+    // The primitive test is fully 3D, not the grid's ground-only distance.
+    CHECK(tinyProjectileStrikes({16, 0, 163}, {0, 16383, 0}));
+    CHECK_FALSE(tinyProjectileStrikes({16, 0, 163}, {0, 16384, 0}));
+
+    // The broadphase square is not the answer: 11,585^2 + 11,585^2 is just inside a
+    // radius-one sphere in raw units, while increasing each nearest-face gap by one is out.
+    CHECK(tinyProjectileStrikes({16, 0, 163}, {11586, 0, 11586}));
+    CHECK_FALSE(tinyProjectileStrikes({16, 0, 163}, {11587, 0, 11587}));
+}
+
+TEST_CASE("a tiny-motion impact stays at the old projectile position") {
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    Roster roster;
+    const UnitId target =
+        roster.add(roster.addType(targetDef()), 11.0f, 20.0f, 1, 100.0f);
+    roster.transform(target).y = rm::test::fx(5.0f);
+    roster.motion(target).radiusElmos = rm::sim::Fx::fromRaw(1);
+    roster.reindex();
+
+    const std::array<rm::sim::Fx, 3> from = rm::test::at(10, 5, 20);
+    Projectile shot;
+    shot.position = from;
+    shot.velocity = {
+        rm::sim::Fx::fromRaw(16), rm::sim::Fx{}, rm::sim::Fx::fromRaw(163)};
+    shot.damage = rm::unitdef::flatDamage(rm::test::mag(40.0f));
+    shot.targetLayers = rm::unitdef::TargetLayerMask::Surface;
+    shot.firedByArmy = 0;
+    shot.ticksRemaining = 2;
+    std::vector<Projectile> shots{shot};
+    rm::sim::EventQueue events;
+
+    rm::sim::advanceProjectiles(shots, roster.store, armies,
+                                rm::sim::Terrain{flatField(-100.0f)}, roster.rate,
+                                &events, &roster.catalog);
+
+    CHECK(rm::test::asFloat(roster.health(target).current) == Approx(60.0f));
+    bool sawImpact = false;
+    for (const rm::sim::Event& event : events.all()) {
+        if (event.kind == rm::sim::EventKind::ProjectileImpact) {
+            sawImpact = true;
+            CHECK(event.at == from);
+        }
+    }
+    CHECK(sawImpact);
+}
+
+TEST_CASE("terrain suppresses the tiny-motion entity fallback") {
+    const auto healthAfter = [](float terrainHeight) {
+        const std::vector<Army> armies = rm::sim::freeForAll(2);
+        Roster roster;
+        const UnitId target =
+            roster.add(roster.addType(targetDef()), 0.0f, 0.0f, 1, 100.0f);
+
+        Projectile shot;
+        shot.position = {
+            rm::sim::Fx{}, rm::sim::Fx::fromRaw(100), rm::sim::Fx{}};
+        shot.velocity = {
+            rm::sim::Fx{}, rm::sim::Fx::fromRaw(-150), rm::sim::Fx{}};
+        shot.damage = rm::unitdef::flatDamage(rm::test::mag(40.0f));
+        shot.targetLayers = rm::unitdef::TargetLayerMask::Surface;
+        shot.firedByArmy = 0;
+        shot.ticksRemaining = 2;
+        std::vector<Projectile> shots{shot};
+
+        rm::sim::advanceProjectiles(shots, roster.store, armies,
+                                    rm::sim::Terrain{flatField(terrainHeight)}, roster.rate,
+                                    nullptr, &roster.catalog);
+        return roster.health(target).current;
+    };
+
+    // The same old-position sphere finds the unit in both scenes. With no surface impact it
+    // lands; when the tiny segment crosses terrain later in the tick, terrain wins outright.
+    CHECK(rm::test::asFloat(healthAfter(-100.0f)) == Approx(60.0f));
+    CHECK(rm::test::asFloat(healthAfter(0.0f)) == Approx(100.0f));
+}
+
+TEST_CASE("tiny-motion fallback preserves filters and ascending slot order on the grid") {
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    Roster roster;
+    const rm::UnitTypeIndex surfaceType = roster.addType(targetDef());
+    UnitDef aircraft = targetDef();
+    aircraft.name = "air_target";
+    aircraft.motion = rm::unitdef::MotionType::Air;
+    const rm::UnitTypeIndex airType = roster.addType(aircraft);
+
+    const UnitId friendly = roster.add(surfaceType, 67.0f, 32.0f, 0, 100.0f);
+    const UnitId air = roster.add(airType, 67.0f, 32.0f, 1, 100.0f);
+    const UnitId shapeless = roster.add(surfaceType, 67.0f, 32.0f, 1, 100.0f);
+    roster.motion(shapeless).radiusElmos = rm::sim::Fx{};
+    for (int filler = 0; filler < 5; ++filler) {
+        (void)roster.add(surfaceType, static_cast<float>(filler), 0.0f, 0, 100.0f);
+    }
+    const UnitId first = roster.add(surfaceType, 67.0f, 32.0f, 1, 100.0f);
+    const UnitId second = roster.add(surfaceType, 67.0f, 32.0f, 1, 100.0f);
+
+    // At x=62.5, reach five covers two 64-elmo cells. Two cells for ten entries forces
+    // SpatialGrid's indexed path rather than its whole-array fallback.
+    REQUIRE(roster.store.space().size() == 10);
+    REQUIRE(roster.store.space().cellSize() == rm::sim::Fx::fromInt(64));
+
+    Projectile shot;
+    shot.position = {rm::test::fx(62.5f), rm::test::fx(1.0f), rm::test::fx(32.0f)};
+    shot.velocity = {
+        rm::sim::Fx::fromRaw(16), rm::sim::Fx{}, rm::sim::Fx::fromRaw(163)};
+    shot.damage = rm::unitdef::flatDamage(rm::test::mag(40.0f));
+    shot.targetLayers = rm::unitdef::TargetLayerMask::Surface;
+    shot.firedByArmy = 0;
+    shot.ticksRemaining = 2;
+    std::vector<Projectile> shots{shot};
+
+    rm::sim::advanceProjectiles(shots, roster.store, armies,
+                                rm::sim::Terrain{flatField(-100.0f)}, roster.rate,
+                                nullptr, &roster.catalog);
+
+    CHECK(rm::test::asFloat(roster.health(friendly).current) == Approx(100.0f));
+    CHECK(rm::test::asFloat(roster.health(air).current) == Approx(100.0f));
+    CHECK(rm::test::asFloat(roster.health(shapeless).current) == Approx(100.0f));
+    CHECK(rm::test::asFloat(roster.health(first).current) == Approx(60.0f));
+    CHECK(rm::test::asFloat(roster.health(second).current) == Approx(100.0f));
+}
+
+TEST_CASE("a vertical projectile sweep includes target-box corners") {
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    Roster roster;
+    const UnitId target =
+        roster.add(roster.addType(targetDef()), 3.0f, 3.0f, 1, 100.0f);
+    roster.transform(target).y = rm::test::fx(50.0f);
+
+    Projectile shot;
+    shot.position = rm::test::at(0, 0, 0);
+    shot.velocity = rm::test::at(0, 100, 0);
+    shot.damage = rm::unitdef::flatDamage(rm::test::mag(40.0f));
+    shot.firedByArmy = 0;
+    shot.ticksRemaining = 2;
+    std::vector<Projectile> shots{shot};
+
+    rm::sim::advanceProjectiles(shots, roster.store, armies,
+                                rm::sim::Terrain{flatField(-100.0f)},
+                                rm::sim::TickRate{}, nullptr, &roster.catalog);
+
+    CHECK(rm::test::asFloat(roster.health(target).current) == Approx(60.0f));
+    CHECK(shots.empty());
+}
+
+TEST_CASE("a stationary projectile has no collision time before its tick") {
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    Roster roster;
+    const UnitId target =
+        roster.add(roster.addType(targetDef()), 0.0f, 0.0f, 1, 100.0f);
+
+    Projectile shot;
+    shot.position = rm::test::at(0, 0, 0);
+    shot.damage = rm::unitdef::flatDamage(rm::test::mag(40.0f));
+    shot.firedByArmy = 0;
+    shot.ticksRemaining = 2;
+    std::vector<Projectile> shots{shot};
+
+    rm::sim::advanceProjectiles(shots, roster.store, armies,
+                                rm::sim::Terrain{flatField()}, rm::sim::TickRate{},
+                                nullptr, &roster.catalog);
+
+    // The unit and terrain both intersect at t=0, so the existing terrain-first tie remains.
+    CHECK(rm::test::asFloat(roster.health(target).current) == Approx(100.0f));
+    CHECK(shots.empty());
+}
+
+TEST_CASE("terrain beats an extended-sweep hit beyond the tick endpoint") {
+    const auto healthAfter = [](float terrainHeight) {
+        const std::vector<Army> armies = rm::sim::freeForAll(2);
+        Roster roster;
+        const UnitId target =
+            roster.add(roster.addType(targetDef()), 0.0f, 106.0f, 1, 100.0f);
+        // Put the collision box across the continued flight line after it passes through the
+        // ground. Its unusual depth makes the ordering observable without inventing a ridge.
+        roster.transform(target).y = rm::test::fx(-5.0f);
+
+        Projectile shot;
+        shot.position = rm::test::at(0, 100, 0);
+        shot.velocity = rm::test::at(0, -100, 100);
+        shot.damage = rm::unitdef::flatDamage(rm::test::mag(40.0f));
+        shot.firedByArmy = 0;
+        shot.ticksRemaining = 2;
+        std::vector<Projectile> shots{shot};
+
+        rm::sim::advanceProjectiles(shots, roster.store, armies,
+                                    rm::sim::Terrain{flatField(terrainHeight)},
+                                    rm::sim::TickRate{}, nullptr, &roster.catalog);
+        return roster.health(target).current;
+    };
+
+    CHECK(rm::test::asFloat(healthAfter(-100.0f)) == Approx(60.0f));
+    CHECK(rm::test::asFloat(healthAfter(0.0f)) == Approx(100.0f));
+}
+
+TEST_CASE("terrain wins when its crossing and a buried body share one Fx time step") {
+    // The flat surface is crossed at 10000/30000 of the tick. The target box starts one
+    // position raw unit later, at 10001/30000. Those times fit inside one Q18.14 fraction
+    // step, so comparing a Q31 body hit with a rounded-up Q18.14 terrain hit reverses them.
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    Roster roster;
+    UnitDef buried = targetDef();
+    buried.sizeYElmos = 8.0f;
+    const UnitId target = roster.add(roster.addType(buried), 0.0f, 0.0f, 1, 100.0f);
+    roster.transform(target).y =
+        -rm::sim::Fx::fromInt(8) - rm::sim::Fx::fromRaw(1);
+    roster.reindex();
+
+    Projectile shot;
+    shot.position = {
+        rm::sim::Fx{}, rm::sim::Fx::fromRaw(10000), rm::sim::Fx{}};
+    shot.velocity = {
+        rm::sim::Fx{}, rm::sim::Fx::fromRaw(-30000), rm::sim::Fx{}};
+    shot.damage = rm::unitdef::flatDamage(rm::test::mag(40.0f));
+    shot.targetLayers = rm::unitdef::TargetLayerMask::Surface;
+    shot.firedByArmy = 0;
+    shot.ticksRemaining = 2;
+    std::vector<Projectile> shots{shot};
+
+    rm::sim::advanceProjectiles(shots, roster.store, armies,
+                                rm::sim::Terrain{flatField()}, roster.rate,
+                                nullptr, &roster.catalog);
+
+    CHECK(shots.empty());
+    CHECK(rm::test::asFloat(roster.health(target).current) == Approx(100.0f));
 }
 
 TEST_CASE("terrain blocks a swept projectile before the unit behind it") {

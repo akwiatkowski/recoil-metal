@@ -297,6 +297,81 @@ TEST_CASE("a projectile impact reaches the same bubble gate") {
     CHECK(rm::test::asFloat(roster.health(target).current) == Approx(100.0f));
 }
 
+TEST_CASE("a corner impact still discovers the bubble covering its target") {
+    rm::test::Roster roster;
+    const rm::UnitTypeIndex shieldType = roster.addType(shieldDef());
+    const rm::UnitTypeIndex targetType = roster.addType(plainDef());
+    // The target centre is 79.9 elmos from this generator, inside its radius-80 sphere.
+    // Its (-4,-4) collision-box corner is 85.6 elmos away, beyond blast radius 1 + body
+    // radius 4 + shield radius 80. A broadphase bounded by one body radius misses the dome.
+    const rm::sim::UnitId generator =
+        roster.add(shieldType, 56.5f, 56.5f, 1, 100.0f);
+    const rm::sim::UnitId target = roster.add(targetType, 0.0f, 0.0f, 1, 100.0f);
+    const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(2);
+
+    rm::sim::Projectile shot;
+    shot.position = rm::test::at(-14, 1, -14);
+    shot.velocity = rm::test::at(20, 0, 20);
+    shot.damage = rm::unitdef::flatDamage(rm::sim::Mag::fromInt(40));
+    shot.damageRadiusElmos = rm::sim::Fx::fromInt(1);
+    shot.firedByArmy = 0;
+    shot.ticksRemaining = 2;
+    std::vector<rm::sim::Projectile> shots{shot};
+
+    rm::HeightField field;
+    field.squaresX = 100;
+    field.squaresZ = 100;
+    field.baseHeight = -100.0f;
+    field.heightScale = 1.0f;
+    field.raw.assign(field.sampleCount(), std::uint16_t{0});
+    rm::sim::advanceProjectiles(shots, roster.store, armies, rm::sim::Terrain{field},
+                                roster.rate, nullptr, &roster.catalog);
+
+    CHECK(shots.empty());
+    CHECK(rm::test::asFloat(roster.health(generator).shield.current) == Approx(60.0f));
+    CHECK(rm::test::asFloat(roster.health(target).current) == Approx(100.0f));
+}
+
+TEST_CASE("a proximity-fallback impact discovers the far-side covering bubble") {
+    rm::test::Roster roster;
+    rm::unitdef::UnitDef smallShield = shieldDef();
+    smallShield.shield.radiusElmos = rm::sim::Fx::fromInt(2);
+    const rm::UnitTypeIndex shieldType = roster.addType(smallShield);
+    const rm::UnitTypeIndex targetType = roster.addType(plainDef());
+    const rm::sim::UnitId generator =
+        roster.add(shieldType, 3.0f, 0.0f, 1, 100.0f);
+    const rm::sim::UnitId target = roster.add(targetType, 1.0f, 0.0f, 1, 100.0f);
+    // Keep both physical bodies tiny. The radius-one fallback at x=0 overlaps the target's
+    // near face, while the generator two elmos beyond its centre is not itself struck.
+    roster.motion(generator).radiusElmos = rm::sim::Fx::fromRaw(1);
+    roster.motion(target).radiusElmos = rm::sim::Fx::fromRaw(1);
+    roster.reindex();
+    const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(2);
+
+    rm::sim::Projectile shot;
+    shot.position = {
+        rm::sim::Fx{}, rm::sim::Fx::fromRaw(1), rm::sim::Fx{}};
+    shot.damage = rm::unitdef::flatDamage(rm::sim::Mag::fromInt(40));
+    shot.damageRadiusElmos = rm::sim::Fx::fromRatio(1, 4);
+    shot.targetLayers = rm::unitdef::TargetLayerMask::Surface;
+    shot.firedByArmy = 0;
+    shot.ticksRemaining = 2;
+    std::vector<rm::sim::Projectile> shots{shot};
+
+    rm::HeightField field;
+    field.squaresX = 100;
+    field.squaresZ = 100;
+    field.baseHeight = -100.0f;
+    field.heightScale = 1.0f;
+    field.raw.assign(field.sampleCount(), std::uint16_t{0});
+    rm::sim::advanceProjectiles(shots, roster.store, armies, rm::sim::Terrain{field},
+                                roster.rate, nullptr, &roster.catalog);
+
+    CHECK(shots.empty());
+    CHECK(rm::test::asFloat(roster.health(generator).shield.current) == Approx(60.0f));
+    CHECK(rm::test::asFloat(roster.health(target).current) == Approx(100.0f));
+}
+
 TEST_CASE("a damaged shield waits, regenerates, and a collapsed one returns full") {
     SECTION("partial damage") {
         rm::test::Roster roster;

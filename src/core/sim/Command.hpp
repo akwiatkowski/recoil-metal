@@ -140,6 +140,11 @@ struct Command {
 
     /// What to build, for `Build`. Ignored by the rest.
     UnitTypeIndex buildType = 0;
+
+    /// Match-global creation order, assigned by `applyCommand` after the command is accepted.
+    /// It is derived execution state rather than replay input: same-tick commands need distinct
+    /// values so a rotating patrol can still identify its oldest waypoint.
+    CommandSerial creationSerial = 0;
 };
 
 /// Whether two commands are the same order. For comparing a recorded log with a replayed one.

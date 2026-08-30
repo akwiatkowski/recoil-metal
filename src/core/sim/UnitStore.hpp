@@ -112,6 +112,13 @@ public:
     [[nodiscard]] std::span<CommandQueue> orders() noexcept { return orders_; }
     [[nodiscard]] std::span<const CommandQueue> orders() const noexcept { return orders_; }
 
+    /// Assigns the immutable creation clock carried by an accepted command. Match-global, as in
+    /// retail: recycling a unit slot or clearing one queue must not restart the clock.
+    [[nodiscard]] CommandSerial allocateCommandSerial() noexcept {
+        return nextCommandSerial_++;
+    }
+    [[nodiscard]] CommandSerial nextCommandSerial() const noexcept { return nextCommandSerial_; }
+
     // --- The spatial index (PLAN2.md §6.5, §7 P5.2) ---------------------------
     //
     // HERE RATHER THAN THREADED THROUGH SIX SIGNATURES. `nearestTarget`, `nearestStruck`,
@@ -162,6 +169,8 @@ private:
     std::vector<Health> health_;
     std::vector<UnitTypeIndex> types_;
     std::vector<CommandQueue> orders_;
+
+    CommandSerial nextCommandSerial_ = 0;
 
     /// Not parallel to the arrays above: a sorted index INTO them, rebuilt by `reindex`.
     SpatialGrid space_;

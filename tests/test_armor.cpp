@@ -388,6 +388,34 @@ TEST_CASE("one blast hits two armour classes differently") {
     CHECK(dealt == rm::test::mag(15000.0f));
 }
 
+TEST_CASE("an armour multiplier of zero is not a damage event") {
+    // Retail returns after armour when the resulting amount is non-positive (C-060/C-111).
+    // This is the shipped discriminator: ExperimentalFootfall has an authored 0.0 multiplier
+    // against Experimental armour, while the same profile remains harmful to ordinary units.
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+
+    Roster roster;
+    const ArmorRegistry registry = ArmorRegistry::fromNames(kFaClasses);
+    roster.catalog.setArmor(registry, faMatrix(registry));
+
+    UnitDef experimental;
+    experimental.name = "test_experimental";
+    experimental.armorType = "Experimental";
+    const rm::sim::UnitId target =
+        roster.add(roster.addType(experimental), 0.0f, 0.0f, 1, 100.0f);
+
+    const DamageProfile footfall =
+        damageFromMatrix(rm::test::mag(80.0f), "ExperimentalFootfall", faMatrix(registry));
+    rm::sim::EventQueue events;
+    const Mag dealt = rm::sim::damageArea(
+        rm::test::at(0, 0, 0), rm::test::fx(100.0f), footfall, 0, roster.store, armies,
+        &roster.catalog, {}, &events);
+
+    CHECK(roster.health(target).current == rm::test::mag(100.0f));
+    CHECK(dealt == Mag{});
+    CHECK(events.count(rm::sim::EventKind::UnitDamaged) == 0);
+}
+
 TEST_CASE("armour applies to a target away from the blast centre") {
     // THIS TEST HAS LOST ITS ORIGINAL POINT, and saying so is more useful than quietly
     // rewriting it. It used to be called "armour is applied before the falloff, not after" and

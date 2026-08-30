@@ -200,6 +200,75 @@ TEST_CASE("income beyond storage is lost, which is the pressure to build somethi
     CHECK(amount(economy.stored.energy) == Approx(100.0f));
 }
 
+TEST_CASE("a full store spends current income before overflow is clamped") {
+    Economy economy;
+    economy.storage = res(100.0f, 100.0f);
+    economy.stored = economy.storage;
+    economy.incomePerTick = res(1.0f, 1.0f);
+
+    std::vector<Construction> building{Construction{
+        .cost = res(2.0f, 2.0f),
+        .buildTimeRemaining = rm::test::mag(2.0f),
+        .totalBuildTime = rm::test::mag(2.0f),
+        .buildPerTick = rm::test::mag(1.0f),
+    }};
+
+    rm::sim::tickEconomy(economy, building);
+
+    CHECK(amount(economy.stored.mass) == Approx(100.0f));
+    CHECK(amount(economy.stored.energy) == Approx(100.0f));
+    CHECK(amount(building[0].buildTimeRemaining) == Approx(1.0f));
+}
+
+TEST_CASE("current income is spendable with no storage headroom") {
+    Economy economy;
+    economy.incomePerTick = res(1.0f, 1.0f);
+
+    std::vector<Construction> building{Construction{
+        .cost = res(2.0f, 2.0f),
+        .buildTimeRemaining = rm::test::mag(2.0f),
+        .totalBuildTime = rm::test::mag(2.0f),
+        .buildPerTick = rm::test::mag(1.0f),
+    }};
+
+    rm::sim::tickEconomy(economy, building);
+
+    CHECK(rm::test::asFloat(economy.fundedFraction) == Approx(1.0f));
+    CHECK(amount(building[0].buildTimeRemaining) == Approx(1.0f));
+    CHECK(amount(economy.stored.mass) == Approx(0.0f));
+    CHECK(amount(economy.stored.energy) == Approx(0.0f));
+}
+
+TEST_CASE("carried overflow cannot fund this tick") {
+    Economy economy;
+    economy.storage = res(100.0f, 100.0f);
+    economy.stored = res(101.0f, 101.0f);
+
+    std::vector<Construction> building{Construction{
+        .cost = res(2.0f, 2.0f),
+        .buildTimeRemaining = rm::test::mag(2.0f),
+        .totalBuildTime = rm::test::mag(2.0f),
+        .buildPerTick = rm::test::mag(1.0f),
+    }};
+
+    rm::sim::tickEconomy(economy, building);
+
+    CHECK(amount(economy.stored.mass) == Approx(99.0f));
+    CHECK(amount(economy.stored.energy) == Approx(99.0f));
+}
+
+TEST_CASE("a negative capacity cannot make storage negative") {
+    Economy economy;
+    economy.storage = res(-1.0f, -1.0f);
+    economy.stored = res(10.0f, 10.0f);
+
+    std::vector<Construction> nothing;
+    rm::sim::tickEconomy(economy, nothing);
+
+    CHECK(amount(economy.stored.mass) == Approx(0.0f));
+    CHECK(amount(economy.stored.energy) == Approx(0.0f));
+}
+
 TEST_CASE("a store never goes negative, however the arithmetic falls") {
     // Floating point can leave a hair below zero after the subtraction, and a negative
     // store would make the next tick's ratio negative and run every build BACKWARDS.

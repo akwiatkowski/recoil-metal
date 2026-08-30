@@ -27,23 +27,16 @@ Resources drainPerTick(const Construction& work) noexcept {
 }
 
 void tickEconomy(Economy& economy, std::span<Construction> building) {
-    // Income first, so a tick's earnings are spendable in the same tick. NO MULTIPLY BY A
-    // TICK LENGTH: the income is already per tick, converted once when the catalog learned
-    // the type (§5.1). `kTickSeconds` used to appear four times in this function and now
-    // appears nowhere, which is the rule being satisfied rather than described.
-    economy.stored += economy.incomePerTick;
+    // Clamp only what CARRIED IN. Reclaim currently credits `stored` directly before this
+    // pass, so its over-cap excess is still lost rather than becoming a hidden reserve.
+    economy.stored.mass = std::max(Mag{}, std::min(economy.stored.mass, economy.storage.mass));
+    economy.stored.energy =
+        std::max(Mag{}, std::min(economy.stored.energy, economy.storage.energy));
 
-    // Storage is a cap and overflow is LOST here. **That is NOT what the game does**, and
-    // this comment used to say it was. Retail splits the excess equally among allies that
-    // have free storage, each capped by its own headroom, gated by a per-army sharing flag
-    // (`C-070`). We have alliances and no sharing path, so in a team game we destroy
-    // resources retail would hand to a partner.
-    //
-    // Clamping HERE is a second divergence: retail allocates out of `stored + income` and
-    // only clamps afterwards, so a full-storage army can still spend the tick's income
-    // (`C-104`). We discard it first, so a full bank cannot fund anything this tick.
-    economy.stored.mass = std::min(economy.stored.mass, economy.storage.mass);
-    economy.stored.energy = std::min(economy.stored.energy, economy.storage.energy);
+    // Income then becomes spendable before the final capacity clamp, as retail's allocator
+    // does (`C-163`). A full bank can therefore pay one tick's bill from one tick's income
+    // and remain full. NO MULTIPLY BY A TICK LENGTH: this is already a per-tick rate (§5.1).
+    economy.stored += economy.incomePerTick;
 
     // UPKEEP FIRST, and unconditionally: what is standing costs what it costs whether or
     // not it can be paid for. An economy that cannot meet it simply has nothing left, which
@@ -88,11 +81,12 @@ void tickEconomy(Economy& economy, std::span<Construction> building) {
 
     economy.stored.mass -= wanted.mass * funded;
     economy.stored.energy -= wanted.energy * funded;
-    // Still clamped at zero. Fixed point cannot leave "a hair below zero" the way float
-    // could, but rounding in the funding ratio can still overshoot by a step or two, and a
-    // negative store would make the next tick's ratio negative and run every build backwards.
-    economy.stored.mass = std::max(Mag{}, economy.stored.mass);
-    economy.stored.energy = std::max(Mag{}, economy.stored.energy);
+    // Capacity is applied AFTER spending. Excess is still lost here because allied sharing is
+    // not implemented; retail offers it to allies before this same final clamp (`C-163`).
+    // The zero floor also catches fixed-point ratio rounding that overshot by a raw step.
+    economy.stored.mass = std::max(Mag{}, std::min(economy.stored.mass, economy.storage.mass));
+    economy.stored.energy =
+        std::max(Mag{}, std::min(economy.stored.energy, economy.storage.energy));
 
     for (Construction& work : building) {
         if (work.finished()) {

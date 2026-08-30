@@ -2166,9 +2166,13 @@ int runWindowed(const Session& session) {
                                 const rm::sim::Transform& t =
                                     units.store.transforms()[slot];
                                 if (!rm::sim::skirtsShareEdge(
-                                        rm::sim::fxFromFloat(at->x),
-                                        rm::sim::fxFromFloat(at->z), mine.skirtHalfXElmos,
-                                        mine.skirtHalfZElmos, t.x, t.z,
+                                        rm::sim::fxFromFloat(at->x)
+                                            + mine.skirtCentreOffsetXElmos,
+                                        rm::sim::fxFromFloat(at->z)
+                                            + mine.skirtCentreOffsetZElmos,
+                                        mine.skirtHalfXElmos, mine.skirtHalfZElmos,
+                                        t.x + theirs.skirtCentreOffsetXElmos,
+                                        t.z + theirs.skirtCentreOffsetZElmos,
                                         theirs.skirtHalfXElmos, theirs.skirtHalfZElmos)) {
                                     continue;
                                 }

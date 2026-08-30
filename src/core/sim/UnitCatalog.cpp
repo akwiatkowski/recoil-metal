@@ -59,6 +59,10 @@ UnitTypeIndex UnitCatalog::add(const unitdef::UnitDef* def, TickRate rate) {
             fxFromFloat(0.5f * def->skirtSquaresX * scmap::kElmosPerOgrid);
         adjacency.skirtHalfZElmos =
             fxFromFloat(0.5f * def->skirtSquaresZ * scmap::kElmosPerOgrid);
+        adjacency.skirtCentreOffsetXElmos =
+            fxFromFloat(def->skirtCentreOffsetSquaresX * scmap::kElmosPerOgrid);
+        adjacency.skirtCentreOffsetZElmos =
+            fxFromFloat(def->skirtCentreOffsetSquaresZ * scmap::kElmosPerOgrid);
         adjacency.sizeIndex = adjacencySizeIndex(*def);
         const unitdef::AdjacencyGrants& grants = unitdef::adjacencyGrants(
             unitdef::adjacencyClassFromName(def->adjacencyBuffs));

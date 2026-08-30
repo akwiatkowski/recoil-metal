@@ -199,6 +199,22 @@ TEST_CASE("every retail unit blueprint parses into a definition", "[corpus]") {
     CHECK(largestRadius == Catch::Approx(0.5f * 21.0f * rm::scmap::kElmosPerOgrid));
 }
 
+TEST_CASE("UEB4302 discriminates the native footprint fallback", "[corpus]") {
+    // This shipped blueprint is the C-109 discriminator: SizeX=1.75, no Footprint.SizeX,
+    // SkirtSizeX=3 and SkirtOffsetX=-0.5. The native fallback ceil(1.75)=2 makes the
+    // resulting skirt centred; a guessed footprint of one does not.
+    const std::filesystem::path path = unitRoot() / "UEB4302" / "UEB4302_unit.bp";
+    if (!std::filesystem::exists(path)) {
+        SKIP("no UEB4302 blueprint at " + path.string());
+    }
+    const auto def = rm::unitbp::loadFile(path);
+    REQUIRE(def.has_value());
+
+    CHECK(def->footprintSquaresX == 2);
+    CHECK(def->skirtSquaresX == Catch::Approx(3.0f));
+    CHECK(def->skirtCentreOffsetSquaresX == Catch::Approx(0.0f));
+}
+
 TEST_CASE("a UEF medium tank reads as the vehicle it is", "[corpus]") {
     const std::filesystem::path path = unitRoot() / "UEL0201/UEL0201_unit.bp";
     if (!std::filesystem::exists(path)) {

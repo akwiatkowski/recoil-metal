@@ -91,6 +91,12 @@ using TickIndex = std::uint64_t;
 /// arithmetic, and that is the bug the rule exists to prevent.
 using TickCount = std::uint32_t;
 
+/// Creation order of accepted commands within one match. Forged Alliance stores the same
+/// 32-bit monotonic serial on each command and uses it to find the start of a rotating patrol.
+/// Numeric ordering assumes one live queue never spans the 2^32-command wrap, a practical
+/// match ceiling shared with retail's field width rather than hidden behind a wider local type.
+using CommandSerial = std::uint32_t;
+
 // --- Fixed point (PLAN2.md §5.2, D1) --------------------------------------------------
 //
 // **This diverges from PLAN2 §5.2's stated Q16.16, on measurement.** The plan specified

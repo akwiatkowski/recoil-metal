@@ -51,8 +51,9 @@ enum class EventKind : std::uint8_t {
     UnitCreated,
     /// A unit finished being built, as opposed to being placed at match start.
     UnitFinished,
-    /// A unit took damage. `amount` is what was actually dealt, not what was thrown — a shot
-    /// that overkills reports the health it removed, so the numbers sum to what died.
+    /// A unit took damage. `amount` is the post-armour/shield amount before health clips it, so
+    /// an overkill reports the full incoming blow rather than only the health it removed
+    /// (retail `DealDamage`, C-111).
     UnitDamaged,
     /// A unit died. `instigator` is the unit that dealt the fatal blow, which may itself be
     /// dead by now — it is a name for the killer, not a way back to a live unit.
@@ -111,7 +112,8 @@ struct Event {
     /// the winning alliance for `GameOver`.
     int army = kNoArmy;
 
-    /// How much, where the kind has an amount: damage dealt for `UnitDamaged`.
+    /// How much, where the kind has an amount: incoming post-mitigation damage for
+    /// `UnitDamaged`.
     Mag amount{};
 
     /// Where it happened. Carried rather than looked up, because for a death the unit's slot is

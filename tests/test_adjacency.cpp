@@ -13,6 +13,7 @@
 #include "core/sim/Adjacency.hpp"
 #include "core/sim/Skirmish.hpp"
 #include "core/unit/Adjacency.hpp"
+#include "core/unit/UnitBlueprint.hpp"
 
 #include "support/FxMatchers.hpp"
 #include "support/TestRoster.hpp"
@@ -87,6 +88,52 @@ TEST_CASE("skirts share an edge, not a corner, and free placement gets its slack
     // Overlapping counts: standing ON the apron is no less adjacent than beside it.
     CHECK(rm::sim::skirtsShareEdge(Fx::fromInt(100), Fx::fromInt(100), eight, eight,
                                    Fx::fromInt(108), Fx::fromInt(100), eight, eight));
+}
+
+TEST_CASE("an FA skirt rectangle starts at footprint plus its offset") {
+    // Retail's rectangle is `position - Footprint/2 + SkirtOffset`, extending by
+    // SkirtSize. This 2x2 footprint with a 4x2 skirt therefore has its skirt centre one
+    // half an ogrid along X and one ogrid along Z after its authored negative offsets.
+    const auto parsed = rm::unitbp::load(R"(
+        UnitBlueprint {
+            Footprint = { SizeX = 2, SizeZ = 2 },
+            Physics = {
+                MotionType = 'RULEUMT_None',
+                SkirtOffsetX = -0.5,
+                SkirtOffsetZ = -1,
+                SkirtSizeX = 4,
+                SkirtSizeZ = 6,
+            },
+            SizeX = 2,
+            SizeZ = 2,
+        }
+    )", "SHIFTED_unit.bp");
+    REQUIRE(parsed.has_value());
+
+    Fixture f;
+    rm::unitdef::UnitDef storage = *parsed;
+    storage.categories = {"SIZE4"};
+    storage.adjacencyBuffs = "T1MassStorageAdjacencyBuffs";
+    const rm::UnitTypeIndex storageType = f.roster.addType(storage);
+    CHECK(storage.skirtCentreOffsetSquaresX == Approx(0.5f));
+    CHECK(storage.skirtCentreOffsetSquaresZ == Approx(1.0f));
+    const rm::sim::UnitCatalog::AdjacencyInfo& geometry =
+        f.roster.catalog.adjacency(storageType);
+    CHECK(geometry.skirtCentreOffsetXElmos == Fx::fromInt(4));
+    CHECK(geometry.skirtCentreOffsetZElmos == Fx::fromInt(8));
+
+    rm::unitdef::UnitDef mex = smallStructure("test_mex");
+    mex.producesMassPerSecond = 2.0f;
+    const rm::UnitTypeIndex mexType = f.roster.addType(mex);
+
+    (void)f.roster.add(storageType, 200.0f, 200.0f, 0, 500.0f);
+    // Shifted storage east edge = 220; mex west edge = 224. The four-elmo gap is the
+    // deliberate free-placement tolerance. A wrongly centred storage ends at 216.
+    (void)f.roster.add(mexType, 232.0f, 208.0f, 0, 500.0f);
+    f.tick();
+
+    CHECK(rm::test::asFloat(f.economies[0].incomePerTick.mass)
+          == Approx(0.225f).margin(0.0001));
 }
 
 TEST_CASE("the buff tables resolve by name and say what the file says") {

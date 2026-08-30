@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <numbers>
 
 namespace rm::sim {
@@ -76,28 +77,101 @@ namespace {
                                 / denominator.raw()));
 }
 
+// Collision time needs more precision than a world coordinate. A one-raw-unit position gap
+// over a long sweep disappears in Q18.14, widening both the 10% endpoint and the tie set.
+using SweepFraction = std::int64_t;
+inline constexpr int kSweepFractionalBits = 31;
+inline constexpr SweepFraction kSweepOne = SweepFraction{1} << kSweepFractionalBits;
+// ponytail: Q31 distinguishes one raw step across shipped maps; use rational timing only if
+// full-range Fx sweeps become a supported input.
+inline constexpr SweepFraction kSweepExtension = kSweepOne / 10;
+
+[[nodiscard]] Fx interpolateSweep(Fx from, Fx to, SweepFraction fraction) noexcept {
+    const Fx delta = to - from;
+    const FxWide displacement =
+        roundShift(FxWide{delta.raw()} * fraction, kSweepFractionalBits);
+    return Fx::fromRaw(saturate(FxWide{from.raw()} + displacement));
+}
+
 struct SweptHit {
     UnitIndex slot = 0;
-    Fx fraction{};
+    SweepFraction fraction = 0;
+    bool proximityFallback = false;
 };
 
-/// Earliest intersection of a segment with an axis-aligned collision box, in 0..1.
-[[nodiscard]] std::optional<Fx> segmentBoxEntry(std::array<Fx, 3> from,
-                                                std::array<Fx, 3> to,
-                                                std::array<Fx, 3> minimum,
-                                                std::array<Fx, 3> maximum) noexcept {
-    Fx enter{};
-    Fx exit = kFxOne;
+[[nodiscard]] Mag damageTarget(UnitIndex target, const unitdef::DamageProfile& damage,
+                               int byArmy, UnitStore& store, std::span<const Army> armies,
+                               const UnitCatalog* catalog, UnitId by, EventQueue* events,
+                               unitdef::TargetLayerMask targetLayers);
+
+/// Whether the original three-dimensional tick motion is strictly below retail's 0.01-elmo
+/// sweep threshold (`C-168`). Compare the exact rational in raw units because Q18.14 cannot
+/// represent 0.01: 10,000 * lengthRaw^2 < 16,384^2.
+[[nodiscard]] bool usesProximityFallback(std::array<Fx, 3> from,
+                                         std::array<Fx, 3> to) noexcept {
+    constexpr std::uint64_t thresholdDenominator = 100u;  // 0.01 elmo is exactly 1/100.
+    constexpr std::uint64_t oneElmoRaw = std::uint64_t{1} << kFxFractionalBits;
+
+    std::uint64_t lengthSquaredRaw = 0;
     for (std::size_t axis = 0; axis < 3; ++axis) {
-        const Fx delta = to[axis] - from[axis];
-        if (delta == Fx{}) {
+        const FxWide deltaRaw = FxWide{to[axis].raw()} - from[axis].raw();
+        const auto magnitudeRaw = static_cast<std::uint64_t>(
+            deltaRaw < 0 ? -deltaRaw : deltaRaw);
+        // One component at or above the exact threshold rejects the whole vector. Bounding it
+        // first keeps all following squares far from integer overflow.
+        if (magnitudeRaw * thresholdDenominator >= oneElmoRaw) {
+            return false;
+        }
+        lengthSquaredRaw += magnitudeRaw * magnitudeRaw;
+    }
+    return thresholdDenominator * thresholdDenominator * lengthSquaredRaw
+           < oneElmoRaw * oneElmoRaw;
+}
+
+/// Strict overlap of C-168's radius-one sphere and an axis-aligned box. Exact tangency is not
+/// a hit in the retail collision primitive's point-to-box test.
+[[nodiscard]] bool proximitySphereBoxOverlap(std::array<Fx, 3> centre,
+                                             std::array<Fx, 3> minimum,
+                                             std::array<Fx, 3> maximum) noexcept {
+    std::uint64_t distanceSquaredRaw = 0;
+    for (std::size_t axis = 0; axis < 3; ++axis) {
+        Fx gap{};
+        if (centre[axis] < minimum[axis]) {
+            gap = minimum[axis] - centre[axis];
+        } else if (centre[axis] > maximum[axis]) {
+            gap = centre[axis] - maximum[axis];
+        }
+        if (gap >= kFxOne) {
+            return false;
+        }
+        const auto gapRaw = static_cast<std::uint64_t>(gap.raw());
+        distanceSquaredRaw += gapRaw * gapRaw;
+    }
+    const auto radiusRaw = static_cast<std::uint64_t>(kFxOne.raw());
+    return distanceSquaredRaw < radiusRaw * radiusRaw;
+}
+
+/// Earliest intersection of a line with an axis-aligned collision box, inside the supplied
+/// fraction interval. Ordinary segments use 0..1; projectile collision extends that interval.
+[[nodiscard]] std::optional<SweepFraction> segmentBoxEntry(
+    std::array<Fx, 3> from, std::array<Fx, 3> to, std::array<Fx, 3> minimum,
+    std::array<Fx, 3> maximum, SweepFraction minimumFraction,
+    SweepFraction maximumFraction) noexcept {
+    SweepFraction enter = minimumFraction;
+    SweepFraction exit = maximumFraction;
+    for (std::size_t axis = 0; axis < 3; ++axis) {
+        const FxWide fromRaw = from[axis].raw();
+        const FxWide deltaRaw = FxWide{to[axis].raw()} - fromRaw;
+        if (deltaRaw == 0) {
             if (from[axis] < minimum[axis] || from[axis] > maximum[axis]) {
                 return std::nullopt;
             }
             continue;
         }
-        Fx first = (minimum[axis] - from[axis]) / delta;
-        Fx last = (maximum[axis] - from[axis]) / delta;
+        SweepFraction first =
+            ((FxWide{minimum[axis].raw()} - fromRaw) * kSweepOne) / deltaRaw;
+        SweepFraction last =
+            ((FxWide{maximum[axis].raw()} - fromRaw) * kSweepOne) / deltaRaw;
         if (first > last) {
             std::swap(first, last);
         }
@@ -110,8 +184,9 @@ struct SweptHit {
     return enter;
 }
 
-/// First hostile body crossed by this tick's 3D flight segment. Blast radius is deliberately
-/// absent: it belongs to damage after impact, not the projectile's physical body.
+/// First hostile body hit by this tick's extended 3D segment, or by C-168's radius-one sphere
+/// at the old position when the motion is below 0.01 elmo. Blast radius belongs to damage after
+/// impact, not the projectile's physical body.
 [[nodiscard]] std::optional<SweptHit> firstStruck(const Projectile& shot,
                                                   std::array<Fx, 3> from,
                                                   std::array<Fx, 3> to,
@@ -123,12 +198,26 @@ struct SweptHit {
     std::optional<SweptHit> best;
 
     const Fx half = Fx::fromRatio(1, 2);
+    const Fx extension = Fx::fromRatio(1, 10);
     const Fx middleX = from[0] + (to[0] - from[0]) * half;
     const Fx middleZ = from[2] + (to[2] - from[2]) * half;
-    const Fx reach = fxHypot(to[0] - from[0], to[2] - from[2]) * half
-                   + largestRadius(store);
+    const Fx spanX = std::max(from[0], to[0]) - std::min(from[0], to[0]);
+    const Fx spanZ = std::max(from[2], to[2]) - std::min(from[2], to[2]);
+    // The targets are boxes, so their centres occupy a SQUARE around the swept line rather
+    // than its circumscribed circle. One fraction LSB covers a slab boundary rounded into the
+    // accepted interval, and one position LSB covers the rounded midpoint.
+    const Fx roundingGuard = Fx::fromRaw(1);
+    const bool proximityFallback = usesProximityFallback(from, to);
+    const Fx reach = proximityFallback
+                       ? largestRadius(store) + kFxOne
+                       : std::max(spanX, spanZ) * (half + extension + roundingGuard)
+                             + largestRadius(store) + roundingGuard;
+    const SweepFraction minimumFraction = -kSweepExtension;
+    const SweepFraction maximumFraction = kSweepOne + kSweepExtension;
+    const Fx queryX = proximityFallback ? from[0] : middleX;
+    const Fx queryZ = proximityFallback ? from[2] : middleZ;
 
-    for (const UnitIndex slot : store.space().within(middleX, middleZ, reach)) {
+    for (const UnitIndex slot : store.space().candidates(queryX, queryZ, reach)) {
         if (!shootable(shot.firedByArmy, store, slot, armies)) {
             continue;
         }
@@ -152,9 +241,21 @@ struct SweptHit {
         }
         const std::array<Fx, 3> minimum{feet[0] - radius, feet[1], feet[2] - radius};
         const std::array<Fx, 3> maximum{feet[0] + radius, feet[1] + height, feet[2] + radius};
-        const std::optional<Fx> hit = segmentBoxEntry(from, to, minimum, maximum);
+        std::optional<SweepFraction> hit;
+        if (proximityFallback) {
+            if (proximitySphereBoxOverlap(from, minimum, maximum)) {
+                hit = SweepFraction{0};
+            }
+        } else {
+            hit = segmentBoxEntry(
+                from, to, minimum, maximum, minimumFraction, maximumFraction);
+        }
         if (hit && (!best || *hit < best->fraction)) {
-            best = SweptHit{.slot = slot, .fraction = *hit};
+            best = SweptHit{
+                .slot = slot,
+                .fraction = *hit,
+                .proximityFallback = proximityFallback,
+            };
         }
     }
     return best;
@@ -163,20 +264,19 @@ struct SweptHit {
 /// First place a flight segment enters terrain. Grid-line cuts keep every interval inside one
 /// bilinear height-field cell. Along a straight segment that surface's clearance is quadratic,
 /// so its endpoints and stationary point are enough to prove whether the shot crossed it.
-[[nodiscard]] std::optional<Fx> terrainEntry(std::array<Fx, 3> from,
-                                             std::array<Fx, 3> to,
-                                             const Terrain& terrain) noexcept {
-    const auto clearanceAt = [&](Fx fraction) {
-        const Fx x = from[0] + (to[0] - from[0]) * fraction;
-        const Fx y = from[1] + (to[1] - from[1]) * fraction;
-        const Fx z = from[2] + (to[2] - from[2]) * fraction;
+[[nodiscard]] std::optional<SweepFraction> terrainEntry(
+    std::array<Fx, 3> from, std::array<Fx, 3> to, const Terrain& terrain) noexcept {
+    const auto clearanceAt = [&](SweepFraction fraction) {
+        const Fx x = interpolateSweep(from[0], to[0], fraction);
+        const Fx y = interpolateSweep(from[1], to[1], fraction);
+        const Fx z = interpolateSweep(from[2], to[2], fraction);
         return y - terrain.heightAt(x, z);
     };
-    if (clearanceAt(Fx{}) <= Fx{}) {
-        return Fx{};
+    if (clearanceAt(SweepFraction{}) <= Fx{}) {
+        return SweepFraction{};
     }
 
-    std::vector<Fx> cuts{Fx{}, kFxOne};
+    std::vector<SweepFraction> cuts{SweepFraction{}, kSweepOne};
     const auto addCuts = [&](Fx start, Fx finish, int squares) {
         const Fx delta = finish - start;
         if (delta == Fx{}) {
@@ -195,8 +295,9 @@ struct SweptHit {
         const int last = std::clamp(gridFloor(std::max(start, finish)), 0, squares);
         for (int line = first; line <= last; ++line) {
             const Fx boundary = Fx::fromInt(line * rm::kSquareSize);
-            const Fx fraction = (boundary - start) / delta;
-            if (fraction > Fx{} && fraction < kFxOne) {
+            const SweepFraction fraction =
+                ((FxWide{boundary.raw()} - start.raw()) * kSweepOne) / delta.raw();
+            if (fraction > SweepFraction{} && fraction < kSweepOne) {
                 cuts.push_back(fraction);
             }
         }
@@ -206,12 +307,12 @@ struct SweptHit {
     std::ranges::sort(cuts);
     cuts.erase(std::unique(cuts.begin(), cuts.end()), cuts.end());
 
-    const Fx half = Fx::fromRatio(1, 2);
     const Fx two = Fx::fromInt(2);
-    const auto firstRoot = [&](Fx clear, Fx blocked) {
-        // One step per fractional bit exhausts the fixed-point fraction's precision.
-        for (int refinement = 0; refinement < kFxFractionalBits; ++refinement) {
-            const Fx middle = (clear + blocked) * half;
+    const auto firstRoot = [&](SweepFraction clear, SweepFraction blocked) {
+        // Terrain and entity hits must use the same time precision. Returning the first Q31
+        // blocked sample keeps a body one position raw unit behind the surface behind it.
+        while (blocked - clear > 1) {
+            const SweepFraction middle = clear + (blocked - clear) / 2;
             if (clearanceAt(middle) > Fx{}) {
                 clear = middle;
             } else {
@@ -222,14 +323,14 @@ struct SweptHit {
     };
 
     for (std::size_t i = 1; i < cuts.size(); ++i) {
-        const Fx begin = cuts[i - 1];
-        const Fx end = cuts[i];
+        const SweepFraction begin = cuts[i - 1];
+        const SweepFraction end = cuts[i];
         const Fx atBegin = clearanceAt(begin);
         if (atBegin <= Fx{}) {
             return begin;
         }
 
-        const Fx middle = (begin + end) * half;
+        const SweepFraction middle = begin + (end - begin) / 2;
         const Fx atMiddle = clearanceAt(middle);
         const Fx atEnd = clearanceAt(end);
 
@@ -239,7 +340,8 @@ struct SweptHit {
         if (a > Fx{}) {
             const Fx stationary = -b / (two * a);
             if (stationary > Fx{} && stationary < kFxOne) {
-                const Fx fraction = begin + (end - begin) * stationary;
+                const SweepFraction fraction = begin + roundShift(
+                    FxWide{end - begin} * stationary.raw(), kFxFractionalBits);
                 if (clearanceAt(fraction) <= Fx{}) {
                     return firstRoot(begin, fraction);
                 }
@@ -281,7 +383,7 @@ std::optional<UnitId> nearestTarget(std::array<Fx, 3> from, int fromArmy,
     const std::span<const MoveState> motion = store.motion();
 
     std::optional<UnitIndex> best;
-    Fx bestDistance{};
+    std::uint64_t bestDistanceSquared = 0;
 
     // THE GRID, rather than every slot in the store (§7 P5.2). The query radius is the weapon's
     // own reach, so a scan that used to be over every unit in the match is now over the handful
@@ -306,14 +408,24 @@ std::optional<UnitId> nearestTarget(std::array<Fx, 3> from, int fromArmy,
             }
         }
 
-        const Fx distance = groundDistanceElmos(from, positionOf(transforms[slot]));
+        const Fx dx = transforms[slot].x - from[0];
+        const Fx dz = transforms[slot].z - from[2];
+        const Fx distance = fxHypot(dx, dz);
         if (distance > weapon.maxRange || distance < weapon.minRange) {
             continue;
         }
 
-        // Strictly nearer, so a tie falls to the LOWER SLOT — the iteration order. That is
-        // what makes the same scene pick the same target twice, which a screenshot depends
-        // on.
+        // Retail ranks the unrounded squared distance. Taking the fixed-point root first
+        // would collapse nearby candidates into false ties.
+        const FxWide dxRaw = dx.raw();
+        const FxWide dzRaw = dz.raw();
+        const std::uint64_t distanceSquared =
+            static_cast<std::uint64_t>(dxRaw * dxRaw)
+            + static_cast<std::uint64_t>(dzRaw * dzRaw);
+
+        // Strictly nearer, so a true squared-distance tie falls to the LOWER SLOT — the
+        // iteration order. That is what makes the same scene pick the same target twice,
+        // which a screenshot depends on.
         //
         // It used to fall to the lower batch and then the lower instance, and slot order is
         // not the same order: batches grouped one model together, and slots are spawn order
@@ -321,9 +433,9 @@ std::optional<UnitId> nearestTarget(std::array<Fx, 3> from, int fromArmy,
         // to, and the match plays out differently — deliberately, and documented in PLAN2.md
         // §7 P1.4. The property that mattered (the same scene decides the same way every
         // run) is unchanged.
-        if (!best || distance < bestDistance) {
+        if (!best || distanceSquared < bestDistanceSquared) {
             best = slot;
-            bestDistance = distance;
+            bestDistanceSquared = distanceSquared;
         }
     }
 
@@ -529,8 +641,14 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
                                                     : kMuzzleHeight),
                                          from[2]},
                              });
-                damageArea(to, weapon.damageRadius, rates.damage, army, store, armies,
-                           &catalog, store.idAt(slot), events, weapon.targetLayers);
+                if (weapon.damageRadius <= Fx{}) {
+                    (void)damageTarget(target->index, rates.damage, army, store, armies,
+                                       &catalog, store.idAt(slot), events,
+                                       weapon.targetLayers);
+                } else {
+                    damageArea(to, weapon.damageRadius, rates.damage, army, store, armies,
+                               &catalog, store.idAt(slot), events, weapon.targetLayers);
+                }
             } else {
                 // THE SIMULTANEOUS SALVO (11 §3.3): a salvo size above one with NO delay
                 // means every muzzle fires on the same trigger pull — Moho sets
@@ -785,10 +903,14 @@ Mag damageArea(std::array<Fx, 3> centre, Fx radiusElmos, Mag damage, int byArmy,
                        catalog, by, events);
 }
 
-Mag damageArea(std::array<Fx, 3> centre, Fx radiusElmos, const unitdef::DamageProfile& damage,
-               int byArmy, UnitStore& store, std::span<const Army> armies,
-               const UnitCatalog* catalog, UnitId by, EventQueue* events,
-               unitdef::TargetLayerMask targetLayers) {
+namespace {
+
+Mag damageTargets(std::array<Fx, 3> centre, Fx radiusElmos,
+                  const unitdef::DamageProfile& damage, int byArmy, UnitStore& store,
+                  std::span<const Army> armies, const UnitCatalog* catalog, UnitId by,
+                  EventQueue* events, unitdef::TargetLayerMask targetLayers,
+                  std::optional<UnitIndex> exactTarget,
+                  std::optional<UnitIndex> impactTarget) {
     Mag dealt{};
 
     const std::span<const Transform> transforms = store.transforms();
@@ -837,7 +959,13 @@ Mag damageArea(std::array<Fx, 3> centre, Fx radiusElmos, const unitdef::DamagePr
         // A bubble whose CENTRE is far outside the blast can still cover a target inside it,
         // so the search has to be widened by the largest bubble's radius. Querying at the
         // blast radius alone is how the old code came to miss shields it should have found.
-        const Fx search = reach + catalog->largestShieldRadius();
+        // A square collision box's ground corner is sqrt(2) radii from its centre, and C-168's
+        // tiny-motion probe may sit another one elmo outside it. Two radii plus that probe are
+        // the cheap conservative bound; coverage is still decided exactly below.
+        const Fx impactReach = impactTarget && *impactTarget < motion.size()
+                                 ? motion[*impactTarget].radiusElmos * Fx::fromInt(2) + kFxOne
+                                 : Fx{};
+        const Fx search = reach + impactReach + catalog->largestShieldRadius();
         for (const UnitIndex slot : store.space().within(centre[0], centre[2], search)) {
             if (!shootable(byArmy, store, slot, armies) || slot >= healths.size()) {
                 continue;
@@ -879,17 +1007,20 @@ Mag damageArea(std::array<Fx, 3> centre, Fx radiusElmos, const unitdef::DamagePr
         return total;
     };
 
-    for (const UnitIndex slot : store.space().within(centre[0], centre[2], reach)) {
+    const auto damageOne = [&](UnitIndex slot, bool forceImpact) {
+        if (exactTarget && slot != *exactTarget) {
+            return;
+        }
         if (!shootable(byArmy, store, slot, armies)) {
-            continue;
+            return;
         }
         if (slot >= motion.size()
             || ((static_cast<std::uint8_t>(targetLayers)
                  & static_cast<std::uint8_t>(motion[slot].airborne
-                                                 ? unitdef::TargetLayerMask::Air
-                                                 : unitdef::TargetLayerMask::Surface))
+                                                  ? unitdef::TargetLayerMask::Air
+                                                  : unitdef::TargetLayerMask::Surface))
                 == 0)) {
-            continue;
+            return;
         }
 
         const Fx distance = groundDistanceElmos(centre, positionOf(transforms[slot]));
@@ -912,7 +1043,12 @@ Mag damageArea(std::array<Fx, 3> centre, Fx radiusElmos, const unitdef::DamagePr
         // state-hash consequences follow. Blueprint damage numbers finally mean what the
         // blueprint says.
         Fx share{};
-        if (radiusElmos <= Fx{}) {
+        if (forceImpact) {
+            // A non-zero blast at the contact point overlaps the collision body by
+            // construction. Carry that result through because the general area query below
+            // still measures centres and a small blast would otherwise miss its own target.
+            share = kFxOne;
+        } else if (radiusElmos <= Fx{}) {
             // A point hit. Only what is essentially AT the centre takes it, and the
             // tolerance is the unit's own radius rather than zero — a shot aimed at
             // a unit's position that lands a tenth of an elmo away has hit it.
@@ -927,7 +1063,7 @@ Mag damageArea(std::array<Fx, 3> centre, Fx radiusElmos, const unitdef::DamagePr
         }
 
         if (share <= Fx{}) {
-            continue;
+            return;
         }
 
         // WHAT THIS WEAPON DOES TO THIS TARGET (PLAN2.md §7 P10.1). The armour class comes from
@@ -958,12 +1094,18 @@ Mag damageArea(std::array<Fx, 3> centre, Fx radiusElmos, const unitdef::DamagePr
             const Mag absorbed =
                 std::min(shieldIncoming, absorbedOver(positionOf(transforms[slot])));
             if (absorbed >= shieldIncoming) {
-                continue;   // fully covered: this target takes nothing at all
+                return;   // fully covered: this target takes nothing at all
             }
             shielded = fraction(shieldIncoming - absorbed, shieldIncoming);
         }
 
         const Mag wanted = damage.against(armor) * share * shielded;
+        // Retail returns after mitigation when the final amount is non-positive. Besides
+        // preventing negative damage from healing, this matters for the shipped 0.0 armour
+        // multipliers: no `UnitDamaged` callback is raised for a blow that became nothing.
+        if (wanted <= Mag{}) {
+            return;
+        }
         const Mag applied = std::min(healths[slot].current, wanted);
         healths[slot].current -= applied;
         dealt += applied;
@@ -980,9 +1122,26 @@ Mag damageArea(std::array<Fx, 3> centre, Fx radiusElmos, const unitdef::DamagePr
                          .unit = store.idAt(slot),
                          .instigator = by,
                          .army = armyAt(store, slot),
-                         .amount = applied,
+                         // Retail publishes the incoming amount before health clips overkill.
+                         .amount = wanted,
                          .at = positionOf(transforms[slot]),
                      });
+    };
+
+    // The grid returns ascending slots. Merge a contacted body that its centre-only radius
+    // query omitted without allocating another result vector or changing event order.
+    bool impactHandled = false;
+    for (const UnitIndex slot : store.space().within(centre[0], centre[2], reach)) {
+        if (impactTarget && !impactHandled && *impactTarget < slot) {
+            damageOne(*impactTarget, true);
+            impactHandled = true;
+        }
+        const bool isImpact = impactTarget && slot == *impactTarget;
+        damageOne(slot, isImpact);
+        impactHandled = impactHandled || isImpact;
+    }
+    if (impactTarget && !impactHandled) {
+        damageOne(*impactTarget, true);
     }
 
     // THE BUBBLES ARE CHARGED LAST, and each exactly once however many targets it sheltered —
@@ -1024,6 +1183,27 @@ Mag damageArea(std::array<Fx, 3> centre, Fx radiusElmos, const unitdef::DamagePr
     return dealt;
 }
 
+[[nodiscard]] Mag damageTarget(UnitIndex target, const unitdef::DamageProfile& damage,
+                               int byArmy, UnitStore& store, std::span<const Army> armies,
+                               const UnitCatalog* catalog, UnitId by, EventQueue* events,
+                               unitdef::TargetLayerMask targetLayers) {
+    if (target >= store.transforms().size()) {
+        return Mag{};
+    }
+    return damageTargets(positionOf(store.transforms()[target]), Fx{}, damage, byArmy, store,
+                         armies, catalog, by, events, targetLayers, target, std::nullopt);
+}
+
+} // namespace
+
+Mag damageArea(std::array<Fx, 3> centre, Fx radiusElmos,
+               const unitdef::DamageProfile& damage, int byArmy, UnitStore& store,
+               std::span<const Army> armies, const UnitCatalog* catalog, UnitId by,
+               EventQueue* events, unitdef::TargetLayerMask targetLayers) {
+    return damageTargets(centre, radiusElmos, damage, byArmy, store, armies, catalog, by,
+                         events, targetLayers, std::nullopt, std::nullopt);
+}
+
 void advanceProjectiles(std::vector<Projectile>& projectiles, UnitStore& store,
                         std::span<const Army> armies, const Terrain& terrain, TickRate rate,
                         EventQueue* events, const UnitCatalog* catalog) {
@@ -1035,40 +1215,57 @@ void advanceProjectiles(std::vector<Projectile>& projectiles, UnitStore& store,
         }
         --shot.ticksRemaining;
 
+        const std::array<Fx, 3> oldVelocity = shot.velocity;
         if (shot.arc != unitdef::BallisticArc::None) {
             shot.velocity[1] -= gravityPerTickSquared;
         }
 
         const std::array<Fx, 3> from = shot.position;
-        // No scaling: the velocity is already what one tick of flight covers.
+        // Velocity is already per tick. Retail integrates the average before and after this
+        // tick's acceleration; the delta form avoids overflowing `old + new` before halving.
         for (std::size_t axis = 0; axis < 3; ++axis) {
-            shot.position[axis] += shot.velocity[axis];
+            const Fx averageVelocity =
+                oldVelocity[axis]
+                + (shot.velocity[axis] - oldVelocity[axis]) * Fx::fromRatio(1, 2);
+            shot.position[axis] += averageVelocity;
         }
 
         // TWO ways a shot ends, and both are needed.
         //
-        // It HITS something: the nearest hostile within a tolerance of where the shot now
-        // is. Without this a flat shot aimed level across flat ground never descends, so
-        // it flies over its target and expires — a weapon that reliably misses, which is
-        // worse than one that does not fire at all.
+        // It HITS something: the first hostile body on the extended sweep, or a body inside
+        // C-168's old-position sphere when motion is too small for a sweep.
         //
         // Or it reaches the GROUND, which is what a miss does. Height is the test there
         // rather than proximity, because a near miss must land rather than fly on and hit
         // whatever happens to be behind it.
         const std::optional<SweptHit> struck =
             firstStruck(shot, from, shot.position, store, armies, catalog);
-        const std::optional<Fx> groundHit = terrainEntry(from, shot.position, terrain);
-        const bool hitUnit = struck && (!groundHit || struck->fraction < *groundHit);
+        const std::optional<SweepFraction> groundHit =
+            terrainEntry(from, shot.position, terrain);
+        // Retail skips the fallback entity query entirely once this tick has a surface hit.
+        const bool hitUnit =
+            struck
+            && (!groundHit
+                || (!struck->proximityFallback
+                    && struck->fraction < *groundHit));
 
         if (!hitUnit && !groundHit) {
             continue;
         }
 
         if (hitUnit) {
-            shot.position = positionOf(store.transforms()[struck->slot]);
+            if (struck->proximityFallback) {
+                shot.position = from;
+            } else {
+                for (std::size_t axis = 0; axis < 3; ++axis) {
+                    shot.position[axis] =
+                        interpolateSweep(from[axis], shot.position[axis], struck->fraction);
+                }
+            }
         } else {
             for (std::size_t axis = 0; axis < 3; ++axis) {
-                shot.position[axis] = from[axis] + (shot.position[axis] - from[axis]) * *groundHit;
+                shot.position[axis] =
+                    interpolateSweep(from[axis], shot.position[axis], *groundHit);
             }
             shot.position[1] = terrain.heightAt(shot.position[0], shot.position[2]);
         }
@@ -1082,8 +1279,18 @@ void advanceProjectiles(std::vector<Projectile>& projectiles, UnitStore& store,
                          .amount = shot.damage.base,
                          .at = shot.position,
                      });
-        damageArea(shot.position, shot.damageRadiusElmos, shot.damage, shot.firedByArmy, store,
-                    armies, catalog, shot.firedBy, events, shot.targetLayers);
+        if (shot.damageRadiusElmos <= Fx{}) {
+            if (hitUnit) {
+                (void)damageTarget(struck->slot, shot.damage, shot.firedByArmy, store, armies,
+                                   catalog, shot.firedBy, events, shot.targetLayers);
+            }
+        } else {
+            const std::optional<UnitIndex> impactTarget =
+                hitUnit ? std::optional<UnitIndex>{struck->slot} : std::nullopt;
+            (void)damageTargets(shot.position, shot.damageRadiusElmos, shot.damage,
+                                shot.firedByArmy, store, armies, catalog, shot.firedBy,
+                                events, shot.targetLayers, std::nullopt, impactTarget);
+        }
         shot.ticksRemaining = 0;
     }
 

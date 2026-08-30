@@ -317,10 +317,20 @@ struct UnitDef {
 
     /// The SKIRT — the concrete apron around a structure, in ogrids (`Physics.SkirtSize*`).
     /// Adjacency is decided skirt-to-skirt, not footprint-to-footprint: the game snaps
-    /// structures to abutting skirts, and the buff tables key on the contact. Zero for
-    /// everything mobile and for structures that state none.
+    /// structures to abutting skirts, and the buff tables key on the contact. FA's native
+    /// derived-quantity pass raises each dimension to at least the footprint; BAR and
+    /// hand-built definitions keep their authored/default values.
     float skirtSquaresX = 0.0f;
     float skirtSquaresZ = 0.0f;
+
+    /// Where the skirt rectangle's centre sits relative to the unit position, in ogrids.
+    ///
+    /// FA authors a lower-corner `SkirtOffset*`, not a centre. Its native rectangle is
+    /// `position - Footprint/2 + SkirtOffset`, extending by `SkirtSize`, so the loader folds
+    /// those three content fields into this one derived offset. Zero is the centred default
+    /// used by BAR and by definitions built directly in tests.
+    float skirtCentreOffsetSquaresX = 0.0f;
+    float skirtCentreOffsetSquaresZ = 0.0f;
 
     /// Which adjacency buff table this structure GRANTS to its neighbours — the root
     /// `Adjacency` field, e.g. `T1PowerGeneratorAdjacencyBuffs`. Empty for the many

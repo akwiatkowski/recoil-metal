@@ -215,6 +215,69 @@ namespace {
 
 } // namespace
 
+TEST_CASE("accepted commands consume one match-global creation serial") {
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    const rm::sim::PassabilityGrid grid =
+        rm::sim::buildPassability(field, 0.0f, 60.0f, 0.0f);
+
+    rm::test::Roster roster;
+    const rm::UnitTypeIndex type = roster.addType(walkerDef());
+    const UnitId first = roster.add(type, 40.0f, 40.0f, 0, 100.0f);
+    const UnitId second = roster.add(type, 40.0f, 80.0f, 0, 100.0f);
+    const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(1);
+    const std::vector<rm::sim::Player> players{rm::sim::Player{.index = 0, .army = 0}};
+    const auto apply = [&](const Command& command) {
+        return rm::sim::applyCommand(command, roster.store, roster.catalog, players, armies,
+                                     terrain, grid, roster.rate);
+    };
+
+    Command rejected = moveTo(200.0f, 40.0f, UnitId{99, 1});
+    rejected.tick = 7;
+    CHECK_FALSE(apply(rejected));
+    CHECK(roster.store.nextCommandSerial() == 0);
+
+    Command firstMove = moveTo(200.0f, 40.0f, first);
+    firstMove.tick = 7;
+    REQUIRE(apply(firstMove));
+    REQUIRE(roster.store.orders()[first.index].current() != nullptr);
+    CHECK(roster.store.orders()[first.index].current()->creationSerial == 0);
+
+    Command secondMove = moveTo(200.0f, 80.0f, second);
+    secondMove.tick = 7;
+    REQUIRE(apply(secondMove));
+    REQUIRE(roster.store.orders()[second.index].current() != nullptr);
+    CHECK(roster.store.orders()[second.index].current()->creationSerial == 1);
+
+    Command queued = moveTo(300.0f, 80.0f, second, true);
+    queued.tick = 7;
+    REQUIRE(apply(queued));
+    REQUIRE(roster.store.orders()[second.index].all().size() == 2);
+    CHECK(roster.store.orders()[second.index].all()[1].creationSerial == 2);
+
+    // The second click creates command serial 3 even though cancellation means that command
+    // never enters the queue. Accepted command creation and queue retention are separate facts.
+    REQUIRE(apply(queued));
+    CHECK(roster.store.nextCommandSerial() == 4);
+    REQUIRE(roster.store.orders()[second.index].current() != nullptr);
+    CHECK(roster.store.orders()[second.index].current()->creationSerial == 1);
+
+    Command stop{.tick = 7, .kind = CommandKind::Stop, .unit = first};
+    REQUIRE(apply(stop));
+    CHECK(roster.store.nextCommandSerial() == 5);
+    CHECK(roster.store.orders()[first.index].empty());
+
+    roster.store.kill(first);
+    const UnitId replacement = roster.add(type, 40.0f, 40.0f, 0, 100.0f);
+    REQUIRE(replacement.index == first.index);
+    Command replacementMove = moveTo(240.0f, 40.0f, replacement);
+    replacementMove.tick = 7;
+    REQUIRE(apply(replacementMove));
+    REQUIRE(roster.store.orders()[replacement.index].current() != nullptr);
+    CHECK(roster.store.orders()[replacement.index].current()->creationSerial == 5);
+    CHECK(roster.store.nextCommandSerial() == 6);
+}
+
 TEST_CASE("three queued moves run in order") {
     // §7 P4.1's stated test, end to end through the tick — which is the part the pure cases
     // above cannot reach: a queue that is correct and never consulted would pass all of them.
@@ -505,6 +568,53 @@ TEST_CASE("patrol keeps cycling between its destination and starting point") {
     CHECK(destinations[3] == destinations[0]);
 }
 
+TEST_CASE("a queued patrol joins the current cycle before its oldest waypoint") {
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    const rm::sim::PassabilityGrid grid =
+        rm::sim::buildPassability(field, 0.0f, 60.0f, 0.0f);
+
+    rm::test::Roster roster;
+    const rm::UnitTypeIndex type = roster.addType(walkerDef());
+    const UnitId walker = roster.add(type, 40.0f, 40.0f, 0, 100.0f);
+    const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(1);
+    const std::vector<rm::sim::Player> players{rm::sim::Player{.index = 0, .army = 0}};
+
+    Command patrol = moveTo(300.0f, 40.0f, walker);
+    patrol.tick = 7;
+    patrol.kind = CommandKind::Patrol;
+    REQUIRE(rm::sim::applyCommand(patrol, roster.store, roster.catalog, players, armies,
+                                  terrain, grid, roster.rate));
+
+    patrol.queued = true;
+    patrol.targetX = rm::sim::fxFromFloat(300.0f);
+    patrol.targetZ = rm::sim::fxFromFloat(300.0f);
+    REQUIRE(rm::sim::applyCommand(patrol, roster.store, roster.catalog, players, armies,
+                                  terrain, grid, roster.rate));
+
+    rm::sim::CommandQueue& queue = roster.store.orders()[walker.index];
+    REQUIRE(queue.size() == 3);
+    (void)queue.cycle();
+
+    // Every input shares a tick, so only the command-creation serial can identify the first
+    // destination after it rotates behind the other two waypoints.
+    patrol.targetX = rm::sim::fxFromFloat(40.0f);
+    patrol.targetZ = rm::sim::fxFromFloat(300.0f);
+    REQUIRE(rm::sim::applyCommand(patrol, roster.store, roster.catalog, players, armies,
+                                  terrain, grid, roster.rate));
+
+    const std::vector<Command> orders = queue.all();
+    REQUIRE(orders.size() == 4);
+    CHECK(orders[0].targetX == rm::sim::fxFromFloat(40.0f));
+    CHECK(orders[0].targetZ == rm::sim::fxFromFloat(40.0f));
+    CHECK(orders[1].targetX == rm::sim::fxFromFloat(300.0f));
+    CHECK(orders[1].targetZ == rm::sim::fxFromFloat(300.0f));
+    CHECK(orders[2].targetX == rm::sim::fxFromFloat(40.0f));
+    CHECK(orders[2].targetZ == rm::sim::fxFromFloat(300.0f));
+    CHECK(orders[3].targetX == rm::sim::fxFromFloat(300.0f));
+    CHECK(orders[3].targetZ == rm::sim::fxFromFloat(40.0f));
+}
+
 TEST_CASE("cancelling a two-point patrol dissolves its synthetic endpoint") {
     const rm::HeightField field = flatField();
     const rm::sim::Terrain terrain{field};
@@ -568,6 +678,9 @@ TEST_CASE("a queued mobile product waits for and starts on its own grid") {
     rm::test::Roster roster;
     rm::unitdef::UnitDef engineerDef = walkerDef();
     engineerDef.buildRate = 10.0f;
+    // A mobile test double for the factory-specific queue path: keeping movement lets the
+    // order ahead exercise deferred start, while the category selects repeatable products.
+    engineerDef.categories = {"FACTORY"};
     engineerDef.buildableCategory = {{"TESTSTRUCTURE"}};
     const rm::UnitTypeIndex engineerType = roster.addType(engineerDef);
 
@@ -595,6 +708,10 @@ TEST_CASE("a queued mobile product waits for and starts on its own grid") {
                   .buildType = productType};
     REQUIRE(rm::sim::applyCommand(build, roster.store, roster.catalog, players, armies,
                                   terrain, closed, roster.rate, &building));
+    const std::vector<Command> queued = roster.store.orders()[engineer.index].all();
+    REQUIRE(queued.size() == 2);
+    CHECK(queued[1].creationSerial == 1);
+    CHECK(roster.store.nextCommandSerial() == 2);
 
     // The move has arrived, but this tick's table predates the newly registered product. The
     // build stays at the head rather than being dropped as though it had already run.
