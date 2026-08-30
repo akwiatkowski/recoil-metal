@@ -132,10 +132,9 @@ __rm_faf.unitMeta = {
 -- `moho.aibrain_methods` — the condition files do `local GetEconomyIncome =
 -- moho.aibrain_methods.GetEconomyIncome` at IMPORT, capturing whatever sits there forever.
 -- That is why this driver must install BEFORE the entry points load: a captured stub is
--- nil-into-arithmetic for the rest of the match. Requested maps to usage, the closest
--- thing the sim meters.
+-- nil-into-arithmetic for the rest of the match.
 function GetEconomyIncome(brain, kind) return brain:GetEconomyIncome(kind) end
-function GetEconomyRequested(brain, kind) return brain:GetEconomyUsage(kind) end
+function GetEconomyRequested(brain, kind) return brain:GetEconomyRequested(kind) end
 function GetEconomyStored(brain, kind) return brain:GetEconomyStored(kind) end
 function GetEconomyTrend(brain, kind) return brain:GetEconomyTrend(kind) end
 function GetEconomyStoredRatio(brain, kind) return brain:GetEconomyStoredRatio(kind) end
@@ -192,8 +191,12 @@ function methods:GetEconomyUsage(kind)
     if kind == 'MASS' then return self.snap.massUsage end
     return self.snap.energyUsage
 end
+function methods:GetEconomyRequested(kind)
+    if kind == 'MASS' then return self.snap.massRequested end
+    return self.snap.energyRequested
+end
 function methods:GetEconomyTrend(kind)
-    return self:GetEconomyIncome(kind) - self:GetEconomyUsage(kind)
+    return (self:GetEconomyIncome(kind) - self:GetEconomyUsage(kind)) * 10
 end
 function methods:GetCurrentUnits(category)
     return EntityCategoryCount(category, self.snap.units)
@@ -529,19 +532,19 @@ function __rm_faf_decide(army, snap)
     for _, u in ipairs(snap.units) do u.__brain = brain end
 
     -- What base-ai's economy thread maintains, refreshed from the sim's own numbers.
-    -- Requested is the best figure the sim meters today (upkeep; construction spends rather
-    -- than requests), so a surplus economy reads as fully efficient — capped at 2, as the
-    -- corpus's own ratios are in practice.
+    -- Retail keeps requested demand separate from granted usage (`C-163`). Efficiency uses
+    -- demand; trend uses actual consumption and is published per second.
     local eco = brain.EconomyOverTimeCurrent
     eco.MassIncome = snap.massIncome
     eco.EnergyIncome = snap.energyIncome
-    eco.MassRequested = snap.massUsage
-    eco.EnergyRequested = snap.energyUsage
-    eco.MassEfficiencyOverTime = math.min(snap.massIncome / math.max(snap.massUsage, 0.0001), 2)
+    eco.MassRequested = snap.massRequested
+    eco.EnergyRequested = snap.energyRequested
+    eco.MassEfficiencyOverTime =
+        math.min(snap.massIncome / math.max(snap.massRequested, 0.0001), 2)
     eco.EnergyEfficiencyOverTime =
-        math.min(snap.energyIncome / math.max(snap.energyUsage, 0.0001), 2)
-    eco.MassTrendOverTime = snap.massIncome - snap.massUsage
-    eco.EnergyTrendOverTime = snap.energyIncome - snap.energyUsage
+        math.min(snap.energyIncome / math.max(snap.energyRequested, 0.0001), 2)
+    eco.MassTrendOverTime = (snap.massIncome - snap.massUsage) * 10
+    eco.EnergyTrendOverTime = (snap.energyIncome - snap.energyUsage) * 10
 
     local decisions = {}
 
@@ -1028,11 +1031,10 @@ void FafOpponent::advance(rm::TickIndex tick) {
     pushNumber("energyStorage", rm::sim::magToFloat(economy.storage.energy));
     pushNumber("massIncome", rm::sim::magToFloat(economy.incomePerTick.mass));
     pushNumber("energyIncome", rm::sim::magToFloat(economy.incomePerTick.energy));
-    // Usage is everything last tick tried to pay — construction drain plus upkeep, the
-    // figure FA's efficiency conditions divide income by. This number is what lets the
-    // corpus's own economy gates see over-commitment and stop starting new work.
-    pushNumber("massUsage", rm::sim::magToFloat(economy.requestedLastTick.mass));
-    pushNumber("energyUsage", rm::sim::magToFloat(economy.requestedLastTick.energy));
+    pushNumber("massRequested", rm::sim::magToFloat(economy.requestedLastTick.mass));
+    pushNumber("energyRequested", rm::sim::magToFloat(economy.requestedLastTick.energy));
+    pushNumber("massUsage", rm::sim::magToFloat(economy.usageLastTick.mass));
+    pushNumber("energyUsage", rm::sim::magToFloat(economy.usageLastTick.energy));
 
     // What is under construction, twice over: the counts that gate the driver's slots, and
     // `underway` — category-carrying entries for the corpus's own "how many of these are

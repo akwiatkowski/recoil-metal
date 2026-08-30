@@ -334,6 +334,9 @@ StateHash hashMatch(const UnitStore& store, const Match& match) {
             feed(h, static_cast<std::size_t>(shot.firedBy.generation));
             feed(h, static_cast<int>(shot.arc));
             feed(h, shot.ticksRemaining);
+            feed(h, static_cast<int>(shot.pendingImpact));
+            feed(h, static_cast<std::size_t>(shot.impactTarget.index));
+            feed(h, static_cast<std::size_t>(shot.impactTarget.generation));
         }
     }
 

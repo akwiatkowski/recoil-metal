@@ -70,7 +70,7 @@ struct Feature {
     Mag massRemaining{};
     Mag energyRemaining{};
 
-    /// The value one point of a reclaimer's BuildRate recovers per second — 5 for every
+    /// The value one point of a reclaimer's BuildRate recovers per second — 10 for every
     /// wreck in the corpus. Carried on the feature rather than looked up through
     /// `fromType` because a wreck outlives content changes and, later, map props will
     /// state their own (`Prop.lua:39-47`).

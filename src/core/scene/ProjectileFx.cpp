@@ -43,13 +43,15 @@ void appendProjectiles(std::vector<Particle>& into, std::span<const sim::Project
     const float blend = std::clamp(alpha, 0.0f, 1.0f);
 
     for (const sim::Projectile& shot : shots) {
+        const float shotBlend = shot.pendingImpact == sim::ImpactType::Invalid ? blend : 0.0f;
         // Extrapolated by the frame's fraction of a tick — at most one tick of flight,
-        // along the velocity the sim will apply anyway. The float boundary, crossed in the
-        // draw direction only.
+        // along the velocity the sim will apply anyway. A pending impact does no next-tick
+        // motion, so it stays at contact instead of visibly overshooting and snapping back.
+        // The float boundary is crossed in the draw direction only.
         const std::array<float, 3> at{
-            sim::fxToFloat(shot.position[0]) + sim::fxToFloat(shot.velocity[0]) * blend,
-            sim::fxToFloat(shot.position[1]) + sim::fxToFloat(shot.velocity[1]) * blend,
-            sim::fxToFloat(shot.position[2]) + sim::fxToFloat(shot.velocity[2]) * blend,
+            sim::fxToFloat(shot.position[0]) + sim::fxToFloat(shot.velocity[0]) * shotBlend,
+            sim::fxToFloat(shot.position[1]) + sim::fxToFloat(shot.velocity[1]) * shotBlend,
+            sim::fxToFloat(shot.position[2]) + sim::fxToFloat(shot.velocity[2]) * shotBlend,
         };
 
         switch (shot.arc) {

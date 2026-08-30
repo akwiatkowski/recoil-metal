@@ -102,6 +102,9 @@ namespace {
     rm::sim::advanceProjectiles(shots, roster.store, armies,
                                 rm::sim::Terrain{flatField(-100.0f)}, roster.rate,
                                 nullptr, &roster.catalog);
+    rm::sim::advanceProjectiles(shots, roster.store, armies,
+                                rm::sim::Terrain{flatField(-100.0f)}, roster.rate,
+                                nullptr, &roster.catalog);
     return roster.health(target).current < rm::test::mag(100.0f);
 }
 
@@ -558,10 +561,94 @@ TEST_CASE("a point projectile damages only the body it struck") {
     rm::sim::advanceProjectiles(shots, roster.store, armies, rm::sim::Terrain{field},
                                 roster.rate, &events, &roster.catalog);
 
+    // Detection only records the impact. Retail invokes it at the start of the next
+    // projectile tick, without moving the shot again.
+    REQUIRE(shots.size() == 1);
+    CHECK(shots.front().position == rm::test::at(0, 1, 6));
+    CHECK(shots.front().pendingImpact == rm::sim::ImpactType::Unit);
+    CHECK(shots.front().impactTarget == first);
+    CHECK(rm::test::asFloat(roster.health(first).current) == Approx(100.0f));
+    CHECK(events.count(rm::sim::EventKind::ProjectileImpact) == 0);
+    CHECK(events.count(rm::sim::EventKind::UnitDamaged) == 0);
+
+    rm::sim::advanceProjectiles(shots, roster.store, armies, rm::sim::Terrain{field},
+                                roster.rate, &events, &roster.catalog);
+
+    CHECK(shots.empty());
     CHECK(rm::test::asFloat(roster.health(first).current) == Approx(60.0f));
     CHECK(rm::test::asFloat(roster.health(overlappingA).current) == Approx(100.0f));
     CHECK(rm::test::asFloat(roster.health(overlappingB).current) == Approx(100.0f));
+    CHECK(events.count(rm::sim::EventKind::ProjectileImpact) == 1);
     CHECK(events.count(rm::sim::EventKind::UnitDamaged) == 1);
+    REQUIRE_FALSE(events.all().empty());
+    CHECK(events.all().front().impactType == rm::sim::ImpactType::Unit);
+}
+
+TEST_CASE("a pending impact cannot follow a recycled unit slot") {
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    Roster roster;
+    const rm::UnitTypeIndex type = roster.addType(targetDef());
+    const UnitId original = roster.add(type, 0.0f, 10.0f, 1, 100.0f);
+
+    std::vector<Projectile> shots{Projectile{
+        .position = rm::test::at(0, 1, 0),
+        .velocity = rm::test::at(0, 0, 20),
+        .damage = rm::unitdef::flatDamage(rm::test::mag(40.0f)),
+        .targetLayers = rm::unitdef::TargetLayerMask::Surface,
+        .firedByArmy = 0,
+        .ticksRemaining = 1,
+    }};
+    rm::sim::EventQueue events;
+    const rm::sim::Terrain terrain{flatField(-100.0f)};
+
+    rm::sim::advanceProjectiles(shots, roster.store, armies, terrain, roster.rate,
+                                &events, &roster.catalog);
+    REQUIRE(shots.size() == 1);
+    REQUIRE(shots.front().impactTarget == original);
+
+    roster.store.kill(original);
+    const UnitId replacement = roster.add(type, 0.0f, 10.0f, 1, 100.0f);
+    REQUIRE(replacement.index == original.index);
+    REQUIRE(replacement.generation != original.generation);
+
+    rm::sim::advanceProjectiles(shots, roster.store, armies, terrain, roster.rate,
+                                &events, &roster.catalog);
+
+    CHECK(shots.empty());
+    CHECK(rm::test::asFloat(roster.health(replacement).current) == Approx(100.0f));
+    CHECK(events.count(rm::sim::EventKind::UnitDamaged) == 0);
+    REQUIRE(events.count(rm::sim::EventKind::ProjectileImpact) == 1);
+    CHECK(events.all().front().unit == UnitId{});
+}
+
+TEST_CASE("unit impact classification checks water level before movement layer") {
+    const auto classify = [](float height) {
+        const std::vector<Army> armies = rm::sim::freeForAll(2);
+        Roster roster;
+        UnitDef aircraft = targetDef();
+        aircraft.motion = rm::unitdef::MotionType::Air;
+        const UnitId target = roster.add(roster.addType(aircraft), 0.0f, 10.0f, 1, 100.0f);
+        roster.transform(target).y = rm::test::fx(height);
+        roster.reindex();
+
+        std::vector<Projectile> shots{Projectile{
+            .position = {rm::sim::Fx{}, rm::test::fx(height + 1.0f), rm::sim::Fx{}},
+            .velocity = rm::test::at(0, 0, 20),
+            .damage = rm::unitdef::flatDamage(rm::test::mag(40.0f)),
+            .targetLayers = rm::unitdef::TargetLayerMask::Air,
+            .firedByArmy = 0,
+            .ticksRemaining = 1,
+        }};
+
+        rm::sim::advanceProjectiles(shots, roster.store, armies,
+                                    rm::sim::Terrain{flatField(-100.0f), false, 0.0f},
+                                    roster.rate, nullptr, &roster.catalog);
+        REQUIRE(shots.size() == 1);
+        return shots.front().pendingImpact;
+    };
+
+    CHECK(classify(10.0f) == rm::sim::ImpactType::UnitAir);
+    CHECK(classify(-10.0f) == rm::sim::ImpactType::UnitUnderwater);
 }
 
 TEST_CASE("a splash projectile damages the body it struck at the contact point") {
@@ -588,9 +675,52 @@ TEST_CASE("a splash projectile damages the body it struck at the contact point")
                                 rm::sim::Terrain{flatField(-100.0f)}, roster.rate,
                                 &events, &roster.catalog);
 
+    REQUIRE(shots.size() == 1);
+    CHECK(rm::test::asFloat(roster.health(target).current) == Approx(100.0f));
+    CHECK(events.count(rm::sim::EventKind::ProjectileImpact) == 0);
+    rm::sim::advanceProjectiles(shots, roster.store, armies,
+                                rm::sim::Terrain{flatField(-100.0f)}, roster.rate,
+                                &events, &roster.catalog);
+
     CHECK(shots.empty());
     CHECK(rm::test::asFloat(roster.health(target).current) == Approx(60.0f));
+    CHECK(events.count(rm::sim::EventKind::ProjectileImpact) == 1);
     CHECK(events.count(rm::sim::EventKind::UnitDamaged) == 1);
+}
+
+TEST_CASE("a pending splash stays at its contact point when bodies move") {
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    Roster roster;
+    const rm::UnitTypeIndex type = roster.addType(targetDef());
+    const UnitId struck = roster.add(type, 0.0f, 10.0f, 1, 100.0f);
+    const UnitId entering = roster.add(type, 0.0f, 30.0f, 1, 100.0f);
+
+    std::vector<Projectile> shots{Projectile{
+        .position = rm::test::at(0, 1, 0),
+        .velocity = rm::test::at(0, 0, 20),
+        .damage = rm::unitdef::flatDamage(rm::test::mag(40.0f)),
+        .damageRadiusElmos = rm::test::fx(1.0f),
+        .targetLayers = rm::unitdef::TargetLayerMask::Surface,
+        .firedByArmy = 0,
+        .ticksRemaining = 1,
+    }};
+    const rm::sim::Terrain terrain{flatField(-100.0f)};
+
+    rm::sim::advanceProjectiles(shots, roster.store, armies, terrain, roster.rate,
+                                nullptr, &roster.catalog);
+    REQUIRE(shots.size() == 1);
+    REQUIRE(shots.front().position == rm::test::at(0, 1, 6));
+
+    // DamageArea runs on delivery and ignores OnImpact's target entity. What matters now is
+    // which collision primitive overlaps the recorded blast sphere.
+    roster.transform(struck).z = rm::test::fx(100.0f);
+    roster.transform(entering).z = rm::test::fx(10.0f);
+    roster.reindex();
+    rm::sim::advanceProjectiles(shots, roster.store, armies, terrain, roster.rate,
+                                nullptr, &roster.catalog);
+
+    CHECK(rm::test::asFloat(roster.health(struck).current) == Approx(100.0f));
+    CHECK(rm::test::asFloat(roster.health(entering).current) == Approx(60.0f));
 }
 
 TEST_CASE("non-positive damage neither heals nor reports a hit") {
@@ -766,6 +896,8 @@ TEST_CASE("a swept projectile hits the first unit crossed in three dimensions") 
 
     rm::sim::advanceProjectiles(shots, roster.store, armies, rm::sim::Terrain{field},
                                 rm::sim::TickRate{}, &events, &roster.catalog);
+    rm::sim::advanceProjectiles(shots, roster.store, armies, rm::sim::Terrain{field},
+                                rm::sim::TickRate{}, &events, &roster.catalog);
 
     CHECK(rm::test::asFloat(roster.health(first).current) < 100.0f);
     CHECK(rm::test::asFloat(roster.health(second).current) == Approx(100.0f));
@@ -806,6 +938,8 @@ TEST_CASE("a projectile sweep reaches one tenth past both endpoints") {
         shot.ticksRemaining = 2;
         std::vector<Projectile> shots{shot};
 
+        rm::sim::advanceProjectiles(shots, roster.store, armies, rm::sim::Terrain{field},
+                                    rm::sim::TickRate{}, nullptr, &roster.catalog);
         rm::sim::advanceProjectiles(shots, roster.store, armies, rm::sim::Terrain{field},
                                     rm::sim::TickRate{}, nullptr, &roster.catalog);
         return roster.health(target).current;
@@ -881,6 +1015,9 @@ TEST_CASE("a tiny-motion impact stays at the old projectile position") {
     rm::sim::advanceProjectiles(shots, roster.store, armies,
                                 rm::sim::Terrain{flatField(-100.0f)}, roster.rate,
                                 &events, &roster.catalog);
+    rm::sim::advanceProjectiles(shots, roster.store, armies,
+                                rm::sim::Terrain{flatField(-100.0f)}, roster.rate,
+                                &events, &roster.catalog);
 
     CHECK(rm::test::asFloat(roster.health(target).current) == Approx(60.0f));
     bool sawImpact = false;
@@ -911,6 +1048,9 @@ TEST_CASE("terrain suppresses the tiny-motion entity fallback") {
         shot.ticksRemaining = 2;
         std::vector<Projectile> shots{shot};
 
+        rm::sim::advanceProjectiles(shots, roster.store, armies,
+                                    rm::sim::Terrain{flatField(terrainHeight)}, roster.rate,
+                                    nullptr, &roster.catalog);
         rm::sim::advanceProjectiles(shots, roster.store, armies,
                                     rm::sim::Terrain{flatField(terrainHeight)}, roster.rate,
                                     nullptr, &roster.catalog);
@@ -960,6 +1100,9 @@ TEST_CASE("tiny-motion fallback preserves filters and ascending slot order on th
     rm::sim::advanceProjectiles(shots, roster.store, armies,
                                 rm::sim::Terrain{flatField(-100.0f)}, roster.rate,
                                 nullptr, &roster.catalog);
+    rm::sim::advanceProjectiles(shots, roster.store, armies,
+                                rm::sim::Terrain{flatField(-100.0f)}, roster.rate,
+                                nullptr, &roster.catalog);
 
     CHECK(rm::test::asFloat(roster.health(friendly).current) == Approx(100.0f));
     CHECK(rm::test::asFloat(roster.health(air).current) == Approx(100.0f));
@@ -986,6 +1129,9 @@ TEST_CASE("a vertical projectile sweep includes target-box corners") {
     rm::sim::advanceProjectiles(shots, roster.store, armies,
                                 rm::sim::Terrain{flatField(-100.0f)},
                                 rm::sim::TickRate{}, nullptr, &roster.catalog);
+    rm::sim::advanceProjectiles(shots, roster.store, armies,
+                                rm::sim::Terrain{flatField(-100.0f)},
+                                rm::sim::TickRate{}, nullptr, &roster.catalog);
 
     CHECK(rm::test::asFloat(roster.health(target).current) == Approx(60.0f));
     CHECK(shots.empty());
@@ -1004,6 +1150,9 @@ TEST_CASE("a stationary projectile has no collision time before its tick") {
     shot.ticksRemaining = 2;
     std::vector<Projectile> shots{shot};
 
+    rm::sim::advanceProjectiles(shots, roster.store, armies,
+                                rm::sim::Terrain{flatField()}, rm::sim::TickRate{},
+                                nullptr, &roster.catalog);
     rm::sim::advanceProjectiles(shots, roster.store, armies,
                                 rm::sim::Terrain{flatField()}, rm::sim::TickRate{},
                                 nullptr, &roster.catalog);
@@ -1031,6 +1180,9 @@ TEST_CASE("terrain beats an extended-sweep hit beyond the tick endpoint") {
         shot.ticksRemaining = 2;
         std::vector<Projectile> shots{shot};
 
+        rm::sim::advanceProjectiles(shots, roster.store, armies,
+                                    rm::sim::Terrain{flatField(terrainHeight)},
+                                    rm::sim::TickRate{}, nullptr, &roster.catalog);
         rm::sim::advanceProjectiles(shots, roster.store, armies,
                                     rm::sim::Terrain{flatField(terrainHeight)},
                                     rm::sim::TickRate{}, nullptr, &roster.catalog);
@@ -1068,6 +1220,9 @@ TEST_CASE("terrain wins when its crossing and a buried body share one Fx time st
     rm::sim::advanceProjectiles(shots, roster.store, armies,
                                 rm::sim::Terrain{flatField()}, roster.rate,
                                 nullptr, &roster.catalog);
+    rm::sim::advanceProjectiles(shots, roster.store, armies,
+                                rm::sim::Terrain{flatField()}, roster.rate,
+                                nullptr, &roster.catalog);
 
     CHECK(shots.empty());
     CHECK(rm::test::asFloat(roster.health(target).current) == Approx(100.0f));
@@ -1096,6 +1251,8 @@ TEST_CASE("terrain blocks a swept projectile before the unit behind it") {
     shot.ticksRemaining = 2;
     std::vector<rm::sim::Projectile> shots{shot};
 
+    rm::sim::advanceProjectiles(shots, roster.store, armies, rm::sim::Terrain{field},
+                                rm::sim::TickRate{}, nullptr, &roster.catalog);
     rm::sim::advanceProjectiles(shots, roster.store, armies, rm::sim::Terrain{field},
                                 rm::sim::TickRate{}, nullptr, &roster.catalog);
 
@@ -1175,6 +1332,75 @@ TEST_CASE("a surface shot passes aircraft and damages only its ground target") {
     CHECK(shots.empty());
     CHECK(rm::test::asFloat(roster.health(air).current) == Approx(100.0f));
     CHECK(rm::test::asFloat(roster.health(surface).current) < 100.0f);
+}
+
+TEST_CASE("a timeout becomes a next-tick targetless impact with splash-only damage") {
+    const auto checkExpiry = [](rm::sim::Fx radius, float expectedHealth,
+                                std::size_t expectedDamageEvents, float flightHeight = 1.0f,
+                                bool hasWater = false) {
+        const std::vector<Army> armies = rm::sim::freeForAll(2);
+        Roster roster;
+        // Ten elmos to the side of the endpoint: outside the four-elmo collision body but
+        // inside the splash section's twelve-elmo damage radius.
+        const UnitId target =
+            roster.add(roster.addType(targetDef()), 10.0f, 20.0f, 1, 100.0f);
+
+        Projectile shot;
+        shot.position = {rm::sim::Fx{}, rm::test::fx(flightHeight), rm::sim::Fx{}};
+        shot.velocity = rm::test::at(0, 0, 20);
+        shot.damage = rm::unitdef::flatDamage(rm::test::mag(40.0f));
+        shot.damageRadiusElmos = radius;
+        shot.targetLayers = rm::unitdef::TargetLayerMask::Surface;
+        shot.firedByArmy = 0;
+        shot.ticksRemaining = 1;
+        std::vector<Projectile> shots{shot};
+        rm::sim::EventQueue events;
+        const rm::sim::Terrain terrain{flatField(-100.0f), hasWater, 0.0f};
+        const rm::sim::ImpactType expectedImpact = flightHeight < 0.0f
+                                                        ? rm::sim::ImpactType::Underwater
+                                                        : rm::sim::ImpactType::Air;
+        const std::array<rm::sim::Fx, 3> endpoint{
+            rm::sim::Fx{}, rm::test::fx(flightHeight), rm::sim::Fx::fromInt(20)};
+
+        rm::sim::advanceProjectiles(shots, roster.store, armies, terrain, roster.rate,
+                                    &events, &roster.catalog);
+
+        REQUIRE(shots.size() == 1);
+        CHECK(shots.front().position == endpoint);
+        CHECK(shots.front().pendingImpact == expectedImpact);
+        CHECK(rm::test::asFloat(roster.health(target).current) == Approx(100.0f));
+        CHECK(events.count(rm::sim::EventKind::ProjectileImpact) == 0);
+
+        rm::sim::advanceProjectiles(shots, roster.store, armies, terrain, roster.rate,
+                                    &events, &roster.catalog);
+
+        CHECK(shots.empty());
+        CHECK(rm::test::asFloat(roster.health(target).current) == Approx(expectedHealth));
+        CHECK(events.count(rm::sim::EventKind::ProjectileImpact) == 1);
+        CHECK(events.count(rm::sim::EventKind::UnitDamaged) == expectedDamageEvents);
+        for (const rm::sim::Event& event : events.all()) {
+            if (event.kind == rm::sim::EventKind::ProjectileImpact) {
+                CHECK(event.unit == UnitId{});
+                CHECK(event.at == endpoint);
+                CHECK(event.impactType == expectedImpact);
+            }
+        }
+    };
+
+    SECTION("positive-radius expiry airbursts") {
+        checkExpiry(rm::test::fx(12.0f), 60.0f, 1);
+    }
+    SECTION("radius-zero expiry is harmless but still reports impact") {
+        checkExpiry(rm::sim::Fx{}, 100.0f, 0);
+    }
+    SECTION("an expiry below water reports underwater rather than air") {
+        // The native classifier compares against WaterLevel directly; map rendering's
+        // HasWater flag is not part of this decision.
+        checkExpiry(rm::sim::Fx{}, 100.0f, 0, -1.0f, false);
+    }
+    SECTION("an airburst is a sphere rather than an infinite vertical cylinder") {
+        checkExpiry(rm::test::fx(12.0f), 100.0f, 0, 100.0f);
+    }
 }
 
 TEST_CASE("a shot that hits nothing expires instead of flying forever") {

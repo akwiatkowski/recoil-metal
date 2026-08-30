@@ -8,10 +8,10 @@ Resources drainPerTick(const Construction& work) noexcept {
     // The EFFECTIVE rate — founder plus assisters — throughout: help makes the work drain
     // faster as well as finish sooner, which is what `BuildRate` means and why piling
     // engineers onto one build is a decision about the bank, not just the clock.
-    // The last tick can need less work than the builders offer. Charging the full rate
-    // there would bill for work that cannot happen after the remaining amount clamps to
-    // zero, so demand and progress share the same capped rate.
-    const Mag rate = std::min(work.effectiveBuildPerTick(), work.buildTimeRemaining);
+    // Retail does NOT reconcile the completing request with the amount Materialize applies:
+    // every builder offers its full delta and the target alone clamps progress (`C-100`,
+    // `C-187`). Our aggregate therefore prices the full combined rate even on the last tick.
+    const Mag rate = work.effectiveBuildPerTick();
     if (work.totalBuildTime <= Mag{} || rate <= Mag{}) {
         return Resources{};
     }
@@ -42,9 +42,12 @@ void tickEconomy(Economy& economy, std::span<Construction> building) {
     // not it can be paid for. An economy that cannot meet it simply has nothing left, which
     // is what a brownout is — and construction, funded from the remainder below, is what
     // visibly stops.
-    economy.stored.mass = std::max(Mag{}, economy.stored.mass - economy.upkeepPerTick.mass);
-    economy.stored.energy =
-        std::max(Mag{}, economy.stored.energy - economy.upkeepPerTick.energy);
+    const Resources upkeepUsed{
+        .mass = std::min(economy.stored.mass, economy.upkeepPerTick.mass),
+        .energy = std::min(economy.stored.energy, economy.upkeepPerTick.energy),
+    };
+    economy.stored.mass -= upkeepUsed.mass;
+    economy.stored.energy -= upkeepUsed.energy;
 
     // Pass one: what does everything want this tick?
     Resources wanted;
@@ -79,8 +82,10 @@ void tickEconomy(Economy& economy, std::span<Construction> building) {
     funded = std::clamp(funded, Fx{}, kFxOne);
     economy.fundedFraction = funded;
 
-    economy.stored.mass -= wanted.mass * funded;
-    economy.stored.energy -= wanted.energy * funded;
+    const Resources constructionUsed = wanted * funded;
+    economy.usageLastTick = upkeepUsed + constructionUsed;
+    economy.stored.mass -= constructionUsed.mass;
+    economy.stored.energy -= constructionUsed.energy;
     // Capacity is applied AFTER spending. Excess is still lost here because allied sharing is
     // not implemented; retail offers it to allies before this same final clamp (`C-163`).
     // The zero floor also catches fixed-point ratio rounding that overshot by a raw step.
@@ -92,8 +97,10 @@ void tickEconomy(Economy& economy, std::span<Construction> building) {
         if (work.finished()) {
             continue;
         }
-        const Mag rate = std::min(work.effectiveBuildPerTick(), work.buildTimeRemaining);
+        const Mag rate = work.effectiveBuildPerTick();
         work.buildTimeRemaining -= rate * funded;
+        // The request above remains deliberately uncapped; only Materialize's equivalent
+        // result is clamped. Its applied amount is not fed back into economy accounting.
         work.buildTimeRemaining = std::max(Mag{}, work.buildTimeRemaining);
     }
 }

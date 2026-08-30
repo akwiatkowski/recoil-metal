@@ -78,6 +78,15 @@ struct Projectile {
     /// the map, and an accumulating list of shots that will never land is a leak with a
     /// frame-rate symptom.
     int ticksRemaining = 0;
+
+    /// Contact detected last tick and delivered at the start of this one (`C-173`).
+    /// `Invalid` means the projectile is still flying. A targetless timeout uses Air or
+    /// Underwater; Terrain and the Unit variants retain where ordinary collision ended.
+    ImpactType pendingImpact = ImpactType::Invalid;
+
+    /// The body recorded by a pending unit impact. Generational so a retired slot reused before
+    /// delivery cannot redirect the damage to its new occupant.
+    UnitId impactTarget{};
 };
 
 /// Gravity applied to an arced shot, in elmos per second squared.

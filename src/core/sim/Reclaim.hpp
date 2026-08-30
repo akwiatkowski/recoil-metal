@@ -14,7 +14,7 @@ namespace rm::sim {
 //
 // THE MECHANIC, read from the game's own Lua (the value chain is cited on `UnitDef` and
 // `Feature`): a builder within its build reach of a wreck drains it continuously, at
-// `BuildRate × Feature::reclaimPerBuildRate` value per second — 5 × BuildRate for every
+// `BuildRate × Feature::reclaimPerBuildRate` value per second — 10 × BuildRate for every
 // wreck in the corpus — and the income lands in the army's store the tick it is earned,
 // subject to the same storage cap as every other income (`tickEconomy` clamps; overflow
 // is lost, exactly as extraction over a full store is).

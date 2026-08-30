@@ -263,9 +263,8 @@ TEST_CASE("retail derives zero footprints and clamps skirt geometry") {
 }
 
 TEST_CASE("a wreck's value and the builder's reach arrive from the economy tables") {
-    // The value chain is `Unit.lua:1760-1819`: a wreck holds `BuildCostMass * MassMult`
-    // and `BuildCostEnergy * EnergyMult`, and reclaiming it takes
-    // `ReclaimTimeMultiplier * 2` times longer than the base rate (`:1771`, `:1817`).
+    // The value chain is FA's `Unit.lua:1090-1146`: a wreck holds
+    // `BuildCostMass * MassMult` and `BuildCostEnergy * EnergyMult`.
     // Measured across the corpus: 504 of 568 blueprints state a Wreckage table and every
     // one says MassMult = 0.9, EnergyMult = 0, ReclaimTimeMultiplier = 1.
     const Blueprint bp{"UEL0106_unit.bp", R"(
@@ -291,9 +290,9 @@ TEST_CASE("a wreck's value and the builder's reach arrive from the economy table
     CHECK(rm::test::asFloat(def->wreckMass) == Approx(180.0f));
     CHECK(rm::test::asFloat(def->wreckEnergy) == Approx(500.0f));
 
-    // 10 / (ReclaimTimeMultiplier * 2): the value one point of a reclaimer's BuildRate
-    // recovers per second, from Prop.lua:270-287's duration formula inverted.
-    CHECK(rm::sim::fxToFloat(def->reclaimPerBuildRate) == Approx(5.0f));
+    // FA Prop.lua:153-162 divides the work budget by 10 before the native task multiplies it
+    // back by 10. The inverses leave 10 / ReclaimTimeMultiplier value per BuildRate-second.
+    CHECK(rm::sim::fxToFloat(def->reclaimPerBuildRate) == Approx(10.0f));
 
     // 5 ogrids x 8 elmos — reclaim, repair and build all share this reach.
     CHECK(def->buildDistanceElmos == Approx(40.0f));

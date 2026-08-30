@@ -155,6 +155,25 @@ TEST_CASE("a projectile's target layer changes the hash") {
     CHECK(surface.hash() != air.hash());
 }
 
+TEST_CASE("a projectile's pending impact and target generation change the hash") {
+    const auto hashWith = [](rm::sim::ImpactType impact, rm::sim::UnitId target) {
+        Fixture fixture;
+        fixture.projectiles.push_back({
+            .ticksRemaining = 1,
+            .pendingImpact = impact,
+            .impactTarget = target,
+        });
+        return fixture.hash();
+    };
+
+    CHECK(hashWith(rm::sim::ImpactType::Invalid, {})
+          != hashWith(rm::sim::ImpactType::Air, {}));
+    CHECK(hashWith(rm::sim::ImpactType::Unit, {.index = 3, .generation = 1})
+          != hashWith(rm::sim::ImpactType::Unit, {.index = 4, .generation = 1}));
+    CHECK(hashWith(rm::sim::ImpactType::Unit, {.index = 3, .generation = 1})
+          != hashWith(rm::sim::ImpactType::Unit, {.index = 3, .generation = 2}));
+}
+
 TEST_CASE("one unit moving one step changes the hash") {
     Fixture a;
     const rm::StateHash before = a.hash();

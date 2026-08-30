@@ -89,6 +89,26 @@ enum class EventKind : std::uint8_t {
     GameOver,
 };
 
+/// Retail's native projectile impact classifier (`C-124`, `C-170`).
+///
+/// Values are explicit because Lua receives these through the engine's name table, and the
+/// pending projectile state is hashed. `Invalid` is only the reset value; an emitted impact is
+/// always one of the other eleven.
+enum class ImpactType : std::uint8_t {
+    Invalid = 0,
+    Terrain = 1,
+    Water = 2,
+    Air = 3,
+    Underwater = 4,
+    Projectile = 5,
+    ProjectileUnderwater = 6,
+    Prop = 7,
+    Shield = 8,
+    Unit = 9,
+    UnitAir = 10,
+    UnitUnderwater = 11,
+};
+
 [[nodiscard]] std::string_view eventKindName(EventKind kind) noexcept;
 
 /// One thing that happened.
@@ -123,6 +143,9 @@ struct Event {
     /// The OTHER end, for the kinds that are a line rather than a point — the muzzle of a
     /// `BeamFired`. Zero for everything else.
     std::array<Fx, 3> at2{};
+
+    /// Native impact classification for `ProjectileImpact`; `Invalid` for every other event.
+    ImpactType impactType = ImpactType::Invalid;
 };
 
 [[nodiscard]] bool operator==(const Event& a, const Event& b) noexcept;

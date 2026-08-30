@@ -300,11 +300,10 @@ struct UnitDef {
 
     /// The value one point of a reclaimer's `BuildRate` recovers per second, as a ratio.
     ///
-    /// `Prop.lua:270-287`: seconds = TimeReclaim × value / (10 × BuildRate), so the rate is
-    /// 10 / TimeReclaim — and a unit wreck's TimeReclaim is `ReclaimTimeMultiplier × 2`
-    /// (`Unit.lua:1771`, the global "reclaim is twice as slow" balance knob), which makes
-    /// this 5 for every wreck in the corpus. The 10 is FA's own tick rate, a constant of
-    /// the formula rather than of our clock.
+    /// FA `Prop.lua:153-162` divides `max(TimeMult × value / BuildRate)` by 10 before the
+    /// native task multiplies it back by 10. Those operations cancel, so the rate is
+    /// 10 / ReclaimTimeMultiplier — 10 for every wreck in the retail corpus. The 10 belongs
+    /// to FA's formula rather than to our clock.
     sim::Fx reclaimPerBuildRate{};
 
     /// How far this unit can build, repair and reclaim, in elmos.

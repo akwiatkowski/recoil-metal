@@ -188,12 +188,14 @@ void gatherVisibleProjectiles(std::vector<rm::sim::Projectile>& out, const UnitS
                               float alpha = 0.0f) {
     out.clear();
     for (const rm::sim::Projectile& projectile : units.projectiles) {
+        const float projectileAlpha =
+            projectile.pendingImpact == rm::sim::ImpactType::Invalid ? alpha : 0.0f;
         const rm::sim::Fx x = rm::sim::fxFromFloat(
             rm::sim::fxToFloat(projectile.position[0])
-            + rm::sim::fxToFloat(projectile.velocity[0]) * alpha);
+            + rm::sim::fxToFloat(projectile.velocity[0]) * projectileAlpha);
         const rm::sim::Fx z = rm::sim::fxFromFloat(
             rm::sim::fxToFloat(projectile.position[2])
-            + rm::sim::fxToFloat(projectile.velocity[2]) * alpha);
+            + rm::sim::fxToFloat(projectile.velocity[2]) * projectileAlpha);
         if (units.visibleToViewer(x, z)) {
             out.push_back(projectile);
         }

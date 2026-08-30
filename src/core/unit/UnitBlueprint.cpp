@@ -395,10 +395,10 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
         def.wreckEnergy =
             sim::magFromFloat(costEnergy * numberOr(*wreckage, "EnergyMult", 0.0f));
 
-        // 10 / (ReclaimTimeMultiplier × 2): Prop.lua:270-287's duration formula inverted,
-        // with Unit.lua:1771's global ×2 for unit wrecks. The 10 is FA's own tick rate — a
-        // constant of the formula, not of our clock.
-        const float timeMult = numberOr(*wreckage, "ReclaimTimeMultiplier", 1.0f) * 2.0f;
+        // FA Prop.lua:153-162 divides the work budget by 10 before the native task multiplies
+        // it back by 10, so these inverses leave 10 / ReclaimTimeMultiplier. The 10 belongs to
+        // FA's formula, not to our clock.
+        const float timeMult = numberOr(*wreckage, "ReclaimTimeMultiplier", 1.0f);
         if (timeMult > 0.0f) {
             def.reclaimPerBuildRate = sim::fxFromFloat(10.0f / timeMult);
         }

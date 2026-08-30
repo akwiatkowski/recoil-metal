@@ -128,11 +128,17 @@ struct SweptHit {
            < oneElmoRaw * oneElmoRaw;
 }
 
-/// Strict overlap of C-168's radius-one sphere and an axis-aligned box. Exact tangency is not
-/// a hit in the retail collision primitive's point-to-box test.
-[[nodiscard]] bool proximitySphereBoxOverlap(std::array<Fx, 3> centre,
-                                             std::array<Fx, 3> minimum,
-                                             std::array<Fx, 3> maximum) noexcept {
+/// Overlap of a three-dimensional sphere and an axis-aligned collision box. Collision's
+/// radius-one fallback is strict; an area-damage sphere includes its rim (`C-061`, `C-168`).
+[[nodiscard]] bool sphereBoxOverlap(std::array<Fx, 3> centre,
+                                    std::array<Fx, 3> minimum,
+                                    std::array<Fx, 3> maximum, Fx radius,
+                                    bool inclusive) noexcept {
+    if (radius <= Fx{}) {
+        return false;
+    }
+    const auto radiusRaw = static_cast<std::uint64_t>(radius.raw());
+    const std::uint64_t radiusSquaredRaw = radiusRaw * radiusRaw;
     std::uint64_t distanceSquaredRaw = 0;
     for (std::size_t axis = 0; axis < 3; ++axis) {
         Fx gap{};
@@ -141,14 +147,18 @@ struct SweptHit {
         } else if (centre[axis] > maximum[axis]) {
             gap = centre[axis] - maximum[axis];
         }
-        if (gap >= kFxOne) {
+        if (gap > radius) {
             return false;
         }
         const auto gapRaw = static_cast<std::uint64_t>(gap.raw());
-        distanceSquaredRaw += gapRaw * gapRaw;
+        const std::uint64_t gapSquaredRaw = gapRaw * gapRaw;
+        // Keep the sum bounded by radiusSquaredRaw, avoiding overflow even at Fx's limit.
+        if (gapSquaredRaw > radiusSquaredRaw - distanceSquaredRaw) {
+            return false;
+        }
+        distanceSquaredRaw += gapSquaredRaw;
     }
-    const auto radiusRaw = static_cast<std::uint64_t>(kFxOne.raw());
-    return distanceSquaredRaw < radiusRaw * radiusRaw;
+    return inclusive || distanceSquaredRaw < radiusSquaredRaw;
 }
 
 /// Earliest intersection of a line with an axis-aligned collision box, inside the supplied
@@ -243,7 +253,7 @@ struct SweptHit {
         const std::array<Fx, 3> maximum{feet[0] + radius, feet[1] + height, feet[2] + radius};
         std::optional<SweepFraction> hit;
         if (proximityFallback) {
-            if (proximitySphereBoxOverlap(from, minimum, maximum)) {
+            if (sphereBoxOverlap(from, minimum, maximum, kFxOne, false)) {
                 hit = SweepFraction{0};
             }
         } else {
@@ -917,23 +927,21 @@ Mag damageTargets(std::array<Fx, 3> centre, Fx radiusElmos,
     const std::span<const MoveState> motion = store.motion();
     const std::span<Health> healths = store.health();
 
-    // A point hit still reaches as far as the biggest unit's own radius — see the tolerance
-    // below — so the query radius is the blast's, or that, whichever is larger.
-    const Fx reach = radiusElmos > Fx{} ? radiusElmos
-                                        : std::max(kFxOne, largestRadius(store));
+    // A blast is a sphere against collision boxes, not a centre-only ground circle. A square
+    // box corner is at sqrt(2) body radii, so two radii are a cheap conservative broadphase;
+    // `sphereBoxOverlap` below remains the answer. Point hits retain their old tolerance.
+    const Fx largestBodyRadius = largestRadius(store);
+    const Fx reach = radiusElmos > Fx{}
+                       ? radiusElmos + largestBodyRadius * Fx::fromInt(2)
+                       : std::max(kFxOne, largestBodyRadius);
 
-    // SHIELDS ARE GATHERED FIRST AND CHARGED PER TARGET, which is the correction `C-110`
-    // demanded. This block used to absorb ONCE for the whole blast and test coverage against
-    // the blast CENTRE, and a probe measured what that cost: one 100-point bubble absorbed 40
-    // and thereby saved three separate units, one of them 150 elmos away and entirely outside
-    // the dome. A blast centred inside a bubble sheltered everything in the radius; a blast
-    // centred outside one damaged the units under it at full strength.
+    // Retail builds one shield list for the whole area blast (`C-143`): the blast sphere must
+    // intersect the dome, while a blast centre inside the dome's radius minus 0.1 skips it.
+    // Every admitted dome pays once, even if no target beneath it is hit. Coverage is still
+    // checked per target, so one admitted dome can shelter every hull below it for that price.
     //
-    // The shape here follows retail (`C-062`): each bubble's absorption is decided ONCE, up
-    // front, from the whole blast; it is then taken off every target that bubble actually
-    // covers; and the bubble itself is charged once at the end. So a shield with 100 points
-    // over three units protects all three and still loses only 100 — generous, and what the
-    // original does.
+    // Radius-zero damage retains the existing point-hit bridge until projectiles can collide
+    // with shield entities: it gathers nearby domes and charges only those covering a target.
     //
     // WHAT IS NOT CHANGED, deliberately: the reduction stays a proportional rescale rather
     // than becoming a flat subtraction, even though retail subtracts flat. `DamageProfile`
@@ -946,9 +954,10 @@ Mag damageTargets(std::array<Fx, 3> centre, Fx radiusElmos,
         std::array<Fx, 3> centre;
         Fx radius;
         Mag absorb;      ///< decided once from the whole blast, spent across every target
-        bool used;       ///< whether it covered anything, and so is charged at the end
+        bool covered;    ///< radius-zero compatibility: whether this dome covered the hit
     };
     std::vector<BlastShield> shields;
+    const bool areaBlast = radiusElmos > Fx{};
 
     // What a bubble sees, as opposed to what a hull sees. Computed from the ORIGINAL profile,
     // once: every bubble in the blast faces the same shot.
@@ -959,13 +968,9 @@ Mag damageTargets(std::array<Fx, 3> centre, Fx radiusElmos,
         // A bubble whose CENTRE is far outside the blast can still cover a target inside it,
         // so the search has to be widened by the largest bubble's radius. Querying at the
         // blast radius alone is how the old code came to miss shields it should have found.
-        // A square collision box's ground corner is sqrt(2) radii from its centre, and C-168's
-        // tiny-motion probe may sit another one elmo outside it. Two radii plus that probe are
-        // the cheap conservative bound; coverage is still decided exactly below.
-        const Fx impactReach = impactTarget && *impactTarget < motion.size()
-                                 ? motion[*impactTarget].radiusElmos * Fx::fromInt(2) + kFxOne
-                                 : Fx{};
-        const Fx search = reach + impactReach + catalog->largestShieldRadius();
+        // `reach` already includes collision-box corners. Add only the distance from a covered
+        // body to the generator at the centre of its shield bubble.
+        const Fx search = reach + catalog->largestShieldRadius();
         for (const UnitIndex slot : store.space().within(centre[0], centre[2], search)) {
             if (!shootable(byArmy, store, slot, armies) || slot >= healths.size()) {
                 continue;
@@ -976,17 +981,30 @@ Mag damageTargets(std::array<Fx, 3> centre, Fx radiusElmos,
             }
             std::array<Fx, 3> shieldCentre = positionOf(transforms[slot]);
             shieldCentre[1] += shield.verticalOffsetElmos;
+            if (areaBlast) {
+                const Fx insideRadius = shield.radiusElmos - Fx::fromRatio(1, 10);
+                // A degenerate box is an exact point-distance test using the helper's widened
+                // raw squares; ordinary Fx multiplication would saturate above ~362 elmos.
+                const bool centreInside =
+                    (insideRadius == Fx{} && centre == shieldCentre)
+                    || sphereBoxOverlap(centre, shieldCentre, shieldCentre, insideRadius, true);
+                if (centreInside
+                    || !sphereBoxOverlap(centre, shieldCentre, shieldCentre,
+                                         shield.radiusElmos + radiusElmos, true)) {
+                    continue;
+                }
+            }
             shields.push_back(BlastShield{
                 .slot = slot,
                 .centre = shieldCentre,
                 .radius = shield.radiusElmos,
                 .absorb = std::min(healths[slot].shield.current, shieldIncoming),
-                .used = false,
+                .covered = false,
             });
         }
     }
 
-    /// How much the bubbles over `at` take off this shot, and marks them as having spent it.
+    /// How much the bubbles over `at` take off this shot.
     ///
     /// Summed across every covering bubble rather than stopping at the first, because
     /// overlapping shields stacking is a real Forged Alliance mechanic and the old `break`
@@ -1001,13 +1019,13 @@ Mag damageTargets(std::array<Fx, 3> centre, Fx radiusElmos,
             if (fxSqrt(dx * dx + dy * dy + dz * dz) > bubble.radius) {
                 continue;
             }
-            bubble.used = true;
+            bubble.covered = true;
             total += bubble.absorb;
         }
         return total;
     };
 
-    const auto damageOne = [&](UnitIndex slot, bool forceImpact) {
+    const auto damageOne = [&](UnitIndex slot) {
         if (exactTarget && slot != *exactTarget) {
             return;
         }
@@ -1043,12 +1061,7 @@ Mag damageTargets(std::array<Fx, 3> centre, Fx radiusElmos,
         // state-hash consequences follow. Blueprint damage numbers finally mean what the
         // blueprint says.
         Fx share{};
-        if (forceImpact) {
-            // A non-zero blast at the contact point overlaps the collision body by
-            // construction. Carry that result through because the general area query below
-            // still measures centres and a small blast would otherwise miss its own target.
-            share = kFxOne;
-        } else if (radiusElmos <= Fx{}) {
+        if (radiusElmos <= Fx{}) {
             // A point hit. Only what is essentially AT the centre takes it, and the
             // tolerance is the unit's own radius rather than zero — a shot aimed at
             // a unit's position that lands a tenth of an elmo away has hit it.
@@ -1056,10 +1069,25 @@ Mag damageTargets(std::array<Fx, 3> centre, Fx radiusElmos,
                 std::max(kFxOne, slot < motion.size() ? motion[slot].radiusElmos : kFxOne);
             share = distance <= tolerance ? kFxOne : Fx{};
         } else {
-            // Uniform inside the radius, nothing outside it. Retail's own test is inclusive of
-            // the rim: the query returns everything the sphere overlaps and the worker applies
-            // the full amount to all of it.
-            share = distance <= radiusElmos ? kFxOne : Fx{};
+            // Uniform wherever the sphere overlaps the current collision primitive, including
+            // the rim. Rechecking at delivery keeps a delayed splash at its recorded point: it
+            // neither follows the body originally struck nor misses one that moved into it.
+            const Fx bodyRadius = motion[slot].radiusElmos;
+            Fx height = catalog != nullptr
+                          ? catalog->intel(store.typeAt(slot)).eyeHeight
+                          : Fx{};
+            if (height <= Fx{}) {
+                height = bodyRadius * Fx::fromInt(2);
+            }
+            const std::array<Fx, 3> feet = positionOf(transforms[slot]);
+            const std::array<Fx, 3> minimum{
+                feet[0] - bodyRadius, feet[1], feet[2] - bodyRadius};
+            const std::array<Fx, 3> maximum{
+                feet[0] + bodyRadius, feet[1] + height, feet[2] + bodyRadius};
+            share = bodyRadius > Fx{}
+                            && sphereBoxOverlap(centre, minimum, maximum, radiusElmos, true)
+                      ? kFxOne
+                      : Fx{};
         }
 
         if (share <= Fx{}) {
@@ -1128,20 +1156,19 @@ Mag damageTargets(std::array<Fx, 3> centre, Fx radiusElmos,
                      });
     };
 
-    // The grid returns ascending slots. Merge a contacted body that its centre-only radius
-    // query omitted without allocating another result vector or changing event order.
+    // The grid returns ascending slots. Retain the contacted handle in this merge so slot order
+    // stays stable, but damageOne rechecks its CURRENT primitive against the recorded sphere.
     bool impactHandled = false;
     for (const UnitIndex slot : store.space().within(centre[0], centre[2], reach)) {
         if (impactTarget && !impactHandled && *impactTarget < slot) {
-            damageOne(*impactTarget, true);
+            damageOne(*impactTarget);
             impactHandled = true;
         }
-        const bool isImpact = impactTarget && slot == *impactTarget;
-        damageOne(slot, isImpact);
-        impactHandled = impactHandled || isImpact;
+        damageOne(slot);
+        impactHandled = impactHandled || (impactTarget && slot == *impactTarget);
     }
     if (impactTarget && !impactHandled) {
-        damageOne(*impactTarget, true);
+        damageOne(*impactTarget);
     }
 
     // THE BUBBLES ARE CHARGED LAST, and each exactly once however many targets it sheltered —
@@ -1149,10 +1176,10 @@ Mag damageTargets(std::array<Fx, 3> centre, Fx radiusElmos,
     // damage path afterwards (`C-062`). Charging inside the target loop instead would drain a
     // dome once per unit standing under it, which is a different and much harsher game.
     //
-    // Only bubbles that actually covered something are charged: a shield inside the search
-    // radius but over nobody has done no work and pays nothing.
+    // Area-blast admission itself incurs the charge. Radius-zero compatibility still requires
+    // actual coverage because it has no blast sphere to intersect with the dome.
     for (const BlastShield& bubble : shields) {
-        if (!bubble.used || bubble.absorb <= Mag{}) {
+        if ((!areaBlast && !bubble.covered) || bubble.absorb <= Mag{}) {
             continue;
         }
         Health& owner = healths[bubble.slot];
@@ -1210,6 +1237,48 @@ void advanceProjectiles(std::vector<Projectile>& projectiles, UnitStore& store,
     const Fx gravityPerTickSquared = projectileGravityPerTickSquared(rate);
 
     for (Projectile& shot : projectiles) {
+        // Retail detects contact in one MotionTick and invokes Impact at the start of the next.
+        // This branch runs before lifetime and motion so the projectile remains exactly at the
+        // recorded point for that intervening tick (`C-173`).
+        if (shot.pendingImpact != ImpactType::Invalid) {
+            const UnitId target = store.alive(shot.impactTarget)
+                                    ? shot.impactTarget
+                                    : UnitId{};
+            emit(events, Event{
+                             .kind = EventKind::ProjectileImpact,
+                             .unit = target,
+                             .instigator = shot.firedBy,
+                             .army = shot.firedByArmy,
+                             // The BASE, because an event says what was thrown rather than
+                             // what each target took — `UnitDamaged` carries the latter.
+                             .amount = shot.damage.base,
+                             .at = shot.position,
+                             .impactType = shot.pendingImpact,
+                         });
+            if (shot.damageRadiusElmos <= Fx{}) {
+                if (target.generation != 0) {
+                    (void)damageTarget(target.index, shot.damage, shot.firedByArmy, store,
+                                       armies, catalog, shot.firedBy, events,
+                                       shot.targetLayers);
+                }
+            } else {
+                const std::optional<UnitIndex> impactTarget = target.generation != 0
+                                                                ? std::optional<UnitIndex>{
+                                                                      target.index}
+                                                                : std::nullopt;
+                (void)damageTargets(shot.position, shot.damageRadiusElmos, shot.damage,
+                                    shot.firedByArmy, store, armies, catalog, shot.firedBy,
+                                    events, shot.targetLayers, std::nullopt, impactTarget);
+            }
+
+            // Recoil Metal has no Lua projectile lifecycle yet, so retain its established
+            // destroy-after-impact policy after reproducing the native one-tick timing.
+            shot.pendingImpact = ImpactType::Invalid;
+            shot.impactTarget = {};
+            shot.ticksRemaining = 0;
+            continue;
+        }
+
         if (shot.ticksRemaining <= 0) {
             continue;
         }
@@ -1250,6 +1319,12 @@ void advanceProjectiles(std::vector<Projectile>& projectiles, UnitStore& store,
                     && struck->fraction < *groundHit));
 
         if (!hitUnit && !groundHit) {
+            if (shot.ticksRemaining <= 0) {
+                shot.pendingImpact = shot.position[1] < terrain.waterLevel()
+                                       ? ImpactType::Underwater
+                                       : ImpactType::Air;
+                shot.impactTarget = {};
+            }
             continue;
         }
 
@@ -1262,42 +1337,30 @@ void advanceProjectiles(std::vector<Projectile>& projectiles, UnitStore& store,
                         interpolateSweep(from[axis], shot.position[axis], struck->fraction);
                 }
             }
+            shot.impactTarget = store.idAt(struck->slot);
+            if (shot.position[1] < terrain.waterLevel()) {
+                shot.pendingImpact = ImpactType::UnitUnderwater;
+            } else {
+                shot.pendingImpact = store.motion()[struck->slot].airborne
+                                       ? ImpactType::UnitAir
+                                       : ImpactType::Unit;
+            }
         } else {
             for (std::size_t axis = 0; axis < 3; ++axis) {
                 shot.position[axis] =
                     interpolateSweep(from[axis], shot.position[axis], *groundHit);
             }
             shot.position[1] = terrain.heightAt(shot.position[0], shot.position[2]);
+            shot.pendingImpact = ImpactType::Terrain;
+            shot.impactTarget = {};
         }
-        emit(events, Event{
-                         .kind = EventKind::ProjectileImpact,
-                         .unit = hitUnit ? store.idAt(struck->slot) : UnitId{},
-                         .instigator = shot.firedBy,
-                         .army = shot.firedByArmy,
-                         // The BASE, because an event says what was thrown rather than what
-                         // each target took — the per-target figure is a `UnitDamaged` per hit.
-                         .amount = shot.damage.base,
-                         .at = shot.position,
-                     });
-        if (shot.damageRadiusElmos <= Fx{}) {
-            if (hitUnit) {
-                (void)damageTarget(struck->slot, shot.damage, shot.firedByArmy, store, armies,
-                                   catalog, shot.firedBy, events, shot.targetLayers);
-            }
-        } else {
-            const std::optional<UnitIndex> impactTarget =
-                hitUnit ? std::optional<UnitIndex>{struck->slot} : std::nullopt;
-            (void)damageTargets(shot.position, shot.damageRadiusElmos, shot.damage,
-                                shot.firedByArmy, store, armies, catalog, shot.firedBy,
-                                events, shot.targetLayers, std::nullopt, impactTarget);
-        }
-        shot.ticksRemaining = 0;
     }
 
-    // Spent and expired shots go together, after the pass rather than during it, so the
-    // list is not being resized while it is walked.
-    std::erase_if(projectiles,
-                  [](const Projectile& shot) { return shot.ticksRemaining <= 0; });
+    // A zero-lifetime shot with an impact still has one tick of work left. Everything else at
+    // zero is spent, removed after the pass so the list is not resized while it is walked.
+    std::erase_if(projectiles, [](const Projectile& shot) {
+        return shot.ticksRemaining <= 0 && shot.pendingImpact == ImpactType::Invalid;
+    });
 }
 
 const unitdef::Weapon* deathWeapon(const unitdef::UnitDef& def) noexcept {

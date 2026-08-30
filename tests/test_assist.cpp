@@ -152,7 +152,7 @@ TEST_CASE("an assisted build advances at the combined rate, and drains for it") 
     CHECK(f.building[0].finished());
 }
 
-TEST_CASE("the final assisted tick charges only for the work still remaining") {
+TEST_CASE("the final assisted tick requests every builder's full offered work") {
     rm::sim::Economy economy;
     economy.storage = {.mass = rm::sim::magFromFloat(1000.0f),
                        .energy = rm::sim::magFromFloat(1000.0f)};
@@ -172,8 +172,53 @@ TEST_CASE("the final assisted tick charges only for the work still remaining") {
     rm::sim::tickEconomy(economy, building);
 
     CHECK(building[0].finished());
-    CHECK(rm::test::asFloat(economy.stored.mass) == Approx(999.0f).margin(0.01));
-    CHECK(rm::test::asFloat(economy.stored.energy) == Approx(999.0f).margin(0.01));
+    // Materialize clamps progress at completion, but retail discards the applied amount and
+    // never reconciles it against the full 1 founder + 2 assister request.
+    CHECK(rm::test::asFloat(economy.requestedLastTick.mass) == Approx(3.0f).margin(0.01));
+    CHECK(rm::test::asFloat(economy.requestedLastTick.energy) == Approx(3.0f).margin(0.01));
+    CHECK(rm::test::asFloat(economy.usageLastTick.mass) == Approx(3.0f).margin(0.01));
+    CHECK(rm::test::asFloat(economy.usageLastTick.energy) == Approx(3.0f).margin(0.01));
+    CHECK(rm::test::asFloat(economy.stored.mass) == Approx(997.0f).margin(0.01));
+    CHECK(rm::test::asFloat(economy.stored.energy) == Approx(997.0f).margin(0.01));
+}
+
+TEST_CASE("final build progress scales the full request before clamping") {
+    rm::sim::Economy economy;
+    economy.storage = {.mass = rm::test::mag(1000.0f),
+                       .energy = rm::test::mag(1000.0f)};
+    // Half of the roughly three-resource completing request.
+    economy.stored = {.mass = rm::test::mag(1.5f), .energy = rm::test::mag(1.5f)};
+
+    std::vector<rm::sim::Construction> building{
+        rm::sim::Construction{
+            .cost = {.mass = rm::test::mag(100.0f),
+                     .energy = rm::test::mag(100.0f)},
+            .totalBuildTime = rm::test::mag(100.0f),
+            .buildTimeRemaining = rm::test::mag(1.0f),
+            .buildPerTick = rm::test::mag(1.0f),
+            .assistPerTick = rm::test::mag(2.0f),
+        },
+    };
+
+    rm::sim::tickEconomy(economy, building);
+
+    CHECK(rm::test::asFloat(economy.requestedLastTick.mass) == Approx(3.0f).margin(0.01));
+    CHECK(rm::test::asFloat(economy.usageLastTick.mass) == Approx(1.5f).margin(0.01));
+    CHECK(rm::test::asFloat(economy.usageLastTick.energy) == Approx(1.5f).margin(0.01));
+    CHECK(rm::test::asFloat(economy.fundedFraction) == Approx(0.5f).margin(0.01));
+    CHECK(building[0].finished());
+    CHECK(rm::test::asFloat(economy.stored.mass) == Approx(0.0f).margin(0.01));
+    CHECK(rm::test::asFloat(economy.stored.energy) == Approx(0.0f).margin(0.01));
+    const rm::sim::Resources afterCompletion = economy.stored;
+
+    rm::sim::tickEconomy(economy, building);
+
+    CHECK(economy.requestedLastTick.mass == rm::sim::Mag{});
+    CHECK(economy.requestedLastTick.energy == rm::sim::Mag{});
+    CHECK(economy.usageLastTick.mass == rm::sim::Mag{});
+    CHECK(economy.usageLastTick.energy == rm::sim::Mag{});
+    CHECK(economy.stored.mass == afterCompletion.mass);
+    CHECK(economy.stored.energy == afterCompletion.energy);
 }
 
 TEST_CASE("a helper out of reach contributes nothing until it arrives") {

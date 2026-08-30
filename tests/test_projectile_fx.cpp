@@ -54,6 +54,18 @@ TEST_CASE("positions extrapolate by the frame's tick fraction", "[fx][projectile
     CHECK(out[0].origin[0] == Approx(104.0f));
 }
 
+TEST_CASE("a pending impact is drawn at contact rather than extrapolated past it",
+          "[fx][projectiles]") {
+    std::vector<rm::Particle> out;
+    Projectile shot = aShot(rm::unitdef::BallisticArc::High, 100.0f, 8.0f);
+    shot.pendingImpact = rm::sim::ImpactType::Air;
+
+    rm::appendProjectiles(out, std::span<const Projectile>{&shot, 1}, 0.5f, 0.1f);
+
+    REQUIRE(out.size() == 1);
+    CHECK(out[0].origin[0] == Approx(100.0f));
+}
+
 TEST_CASE("the artillery floor holds at far zoom, in the icon convention's points",
           "[fx][projectiles]") {
     std::vector<rm::Particle> out;

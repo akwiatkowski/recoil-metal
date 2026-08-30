@@ -108,24 +108,23 @@ TEST_CASE("overlapping bubbles both absorb, and their protection stacks") {
     const rm::sim::UnitId sheltered = roster.add(targetType, 20.0f, 0.0f, 1, 100.0f);
     const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(2);
 
+    // The positive-radius blast centre is outside both domes, while its sphere reaches the
+    // sheltered unit. This exercises C-143's area-blast admission rather than point-hit
+    // compatibility.
     (void)rm::sim::damageArea(
-        rm::test::at(20, 0, 0), rm::sim::Fx{}, rm::unitdef::flatDamage(rm::sim::Mag::fromInt(150)),
-        0, roster.store, armies, &roster.catalog);
+        rm::test::at(20, 0, 100), rm::sim::Fx::fromInt(100),
+        rm::unitdef::flatDamage(rm::sim::Mag::fromInt(150)), 0, roster.store, armies,
+        &roster.catalog);
 
     CHECK(rm::test::asFloat(roster.health(sheltered).current) == Approx(100.0f));
     CHECK(roster.health(first).shield.current == rm::sim::Mag{});
     CHECK(roster.health(second).shield.current == rm::sim::Mag{});
 }
 
-TEST_CASE("a blast inside a bubble does not shelter what is outside it") {
-    // THE HEADLINE CASE FROM `C-110`, kept as a test because it was measured rather than
-    // reasoned about, and because a green suite hid it for a long time.
-    //
-    // Coverage used to be decided once, from the blast's own position. So an explosion
-    // detonating inside a dome was absorbed once and the whole area effect vanished — for
-    // every target in the radius, including units nowhere near the shield. A probe measured a
-    // single 100-point bubble saving three separate units, one of them 150 elmos away and
-    // entirely outside it.
+TEST_CASE("an area blast that starts inside a bubble bypasses it") {
+    // Retail removes the dome from this blast's shield list before considering individual
+    // targets (`C-143(a)`). This is not merely per-target coverage: nobody under the dome is
+    // sheltered from a blast whose centre is already inside it.
     rm::test::Roster roster;
     const rm::UnitTypeIndex shieldType = roster.addType(shieldDef());
     const rm::UnitTypeIndex targetType = roster.addType(plainDef());
@@ -139,9 +138,62 @@ TEST_CASE("a blast inside a bubble does not shelter what is outside it") {
                               rm::sim::Mag::fromInt(40), 0, roster.store, armies, {}, nullptr,
                               &roster.catalog);
 
-    CHECK(rm::test::asFloat(roster.health(inside).current) == Approx(100.0f));
-    CHECK(rm::test::asFloat(roster.health(outside).current) == Approx(60.0f));  // was 100
-    CHECK(rm::test::asFloat(roster.health(generator).shield.current) == Approx(60.0f));
+    CHECK(rm::test::asFloat(roster.health(generator).current) == Approx(60.0f));
+    CHECK(rm::test::asFloat(roster.health(inside).current) == Approx(60.0f));
+    CHECK(rm::test::asFloat(roster.health(outside).current) == Approx(60.0f));
+    CHECK(rm::test::asFloat(roster.health(generator).shield.current) == Approx(100.0f));
+}
+
+TEST_CASE("inside-origin rejection uses the shield radius minus one tenth") {
+    rm::test::Roster roster;
+    const rm::UnitTypeIndex shieldType = roster.addType(shieldDef());
+    const rm::UnitTypeIndex targetType = roster.addType(plainDef());
+    const rm::sim::UnitId generator = roster.add(shieldType, 0.0f, 0.0f, 1, 100.0f);
+    const rm::sim::UnitId target = roster.add(targetType, 0.0f, 0.0f, 1, 100.0f);
+    const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(2);
+
+    rm::sim::Fx blastX{};
+    bool shieldAdmitted = false;
+    SECTION("inside the shrunken bound") {
+        blastX = rm::sim::Fx::fromInt(80) - rm::sim::Fx::fromRatio(3, 20);
+    }
+    SECTION("on the shrunken bound") {
+        blastX = rm::sim::Fx::fromInt(80) - rm::sim::Fx::fromRatio(1, 10);
+    }
+    SECTION("outside the shrunken bound but inside the authored radius") {
+        blastX = rm::sim::Fx::fromInt(80) - rm::sim::Fx::fromRatio(1, 20);
+        shieldAdmitted = true;
+    }
+
+    roster.transform(target).x = blastX;
+    roster.reindex();
+    (void)rm::sim::damageArea({blastX, {}, {}}, rm::sim::Fx::fromInt(1),
+                              rm::sim::Mag::fromInt(10), 0, roster.store, armies, {}, nullptr,
+                              &roster.catalog);
+
+    CHECK(rm::test::asFloat(roster.health(target).current)
+          == Approx(shieldAdmitted ? 100.0f : 90.0f));
+    CHECK(rm::test::asFloat(roster.health(generator).shield.current)
+          == Approx(shieldAdmitted ? 90.0f : 100.0f));
+}
+
+TEST_CASE("a one-tenth-radius dome rejects an area blast at its exact centre") {
+    rm::test::Roster roster;
+    rm::unitdef::UnitDef tinyShield = shieldDef();
+    tinyShield.shield.radiusElmos = rm::sim::Fx::fromRatio(1, 10);
+    const rm::UnitTypeIndex shieldType = roster.addType(std::move(tinyShield));
+    const rm::UnitTypeIndex targetType = roster.addType(plainDef());
+    const rm::sim::UnitId generator = roster.add(shieldType, 0.0f, 0.0f, 1, 100.0f);
+    const rm::sim::UnitId target = roster.add(targetType, 0.0f, 0.0f, 1, 100.0f);
+    const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(2);
+
+    (void)rm::sim::damageArea(rm::test::at(0, 0, 0), rm::sim::Fx::fromInt(1),
+                              rm::sim::Mag::fromInt(10), 0, roster.store, armies, {}, nullptr,
+                              &roster.catalog);
+
+    CHECK(rm::test::asFloat(roster.health(generator).current) == Approx(90.0f));
+    CHECK(rm::test::asFloat(roster.health(target).current) == Approx(90.0f));
+    CHECK(rm::test::asFloat(roster.health(generator).shield.current) == Approx(100.0f));
 }
 
 TEST_CASE("a blast outside a bubble still spares what is under it") {
@@ -164,13 +216,10 @@ TEST_CASE("a blast outside a bubble still spares what is under it") {
     CHECK(rm::test::asFloat(roster.health(generator).shield.current) == Approx(60.0f));
 }
 
-TEST_CASE("a bubble that covers nothing pays nothing") {
-    // The other half of the same correction. The shield block used to run before the target
-    // loop and charge the nearest dome whether or not the shot reached anybody — so a point
-    // hit landing in open ground 20 elmos from two generators still drained one of them.
-    //
-    // A bubble is charged only for work it did, which needs the absorption to be decided per
-    // TARGET rather than per blast.
+TEST_CASE("a point hit makes bubbles that cover no target pay nothing") {
+    // Radius-zero damage is the compatibility path until projectiles collide with shield
+    // entities. Unlike a positive-radius area blast, it charges only domes that covered an
+    // actual target.
     rm::test::Roster roster;
     const rm::UnitTypeIndex shieldType = roster.addType(shieldDef());
     const rm::sim::UnitId first = roster.add(shieldType, 0.0f, 0.0f, 1, 100.0f);
@@ -185,6 +234,55 @@ TEST_CASE("a bubble that covers nothing pays nothing") {
 
     CHECK(rm::test::asFloat(roster.health(first).shield.current) == Approx(100.0f));
     CHECK(rm::test::asFloat(roster.health(second).shield.current) == Approx(100.0f));
+}
+
+TEST_CASE("an intersecting bubble pays even when the area blast reaches no hull") {
+    rm::test::Roster roster;
+    const rm::UnitTypeIndex shieldType = roster.addType(shieldDef());
+    // A radius-20 blast at zero is exactly tangent to the first radius-80 dome. The second is
+    // one fixed-point unit beyond tangency; both remain inside the conservative spatial query.
+    const rm::sim::UnitId intersecting = roster.add(shieldType, 100.0f, 0.0f, 1, 100.0f);
+    const rm::sim::UnitId nearby = roster.add(shieldType, 100.0f, 0.0f, 1, 100.0f);
+    roster.transform(nearby).x = rm::sim::Fx::fromInt(100) + rm::sim::Fx::fromRaw(1);
+    roster.reindex();
+    const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(2);
+    rm::sim::EventQueue events;
+
+    const rm::sim::Mag dealt = rm::sim::damageArea(
+        rm::test::at(0, 0, 0), rm::test::fx(20.0f), rm::sim::Mag::fromInt(10), 0, roster.store,
+        armies, {}, &events, &roster.catalog);
+
+    CHECK(rm::test::asFloat(dealt) == Approx(10.0f));
+    CHECK(rm::test::asFloat(roster.health(intersecting).current) == Approx(100.0f));
+    CHECK(rm::test::asFloat(roster.health(nearby).current) == Approx(100.0f));
+    CHECK(rm::test::asFloat(roster.health(intersecting).shield.current) == Approx(90.0f));
+    CHECK(rm::test::asFloat(roster.health(nearby).shield.current) == Approx(100.0f));
+    int shieldDamageEvents = 0;
+    for (const rm::sim::Event& event : events.all()) {
+        if (event.kind == rm::sim::EventKind::ShieldDamaged) {
+            ++shieldDamageEvents;
+            CHECK(event.unit == intersecting);
+            CHECK(rm::test::asFloat(event.amount) == Approx(10.0f));
+        }
+    }
+    CHECK(shieldDamageEvents == 1);
+}
+
+TEST_CASE("a disjoint distant dome is not admitted when fixed-point squares saturate") {
+    rm::test::Roster roster;
+    const rm::UnitTypeIndex shieldType = roster.addType(shieldDef());
+    // 485 > blast radius 400 + shield radius 80, but the conservative query reaches 488.
+    // Squaring 485 as an Fx saturates, so admission must compare widened raw squares instead.
+    const rm::sim::UnitId generator = roster.add(shieldType, 485.0f, 0.0f, 1, 100.0f);
+    const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(2);
+
+    const rm::sim::Mag dealt = rm::sim::damageArea(
+        rm::test::at(0, 0, 0), rm::sim::Fx::fromInt(400), rm::sim::Mag::fromInt(10), 0,
+        roster.store, armies, {}, nullptr, &roster.catalog);
+
+    CHECK(dealt == rm::sim::Mag{});
+    CHECK(rm::test::asFloat(roster.health(generator).current) == Approx(100.0f));
+    CHECK(rm::test::asFloat(roster.health(generator).shield.current) == Approx(100.0f));
 }
 
 TEST_CASE("damage outside a bubble reaches hull normally") {
@@ -297,13 +395,14 @@ TEST_CASE("a projectile impact reaches the same bubble gate") {
     CHECK(rm::test::asFloat(roster.health(target).current) == Approx(100.0f));
 }
 
-TEST_CASE("a corner impact still discovers the bubble covering its target") {
+TEST_CASE("a corner impact outside the bubble does not admit it for a covered target") {
     rm::test::Roster roster;
     const rm::UnitTypeIndex shieldType = roster.addType(shieldDef());
     const rm::UnitTypeIndex targetType = roster.addType(plainDef());
     // The target centre is 79.9 elmos from this generator, inside its radius-80 sphere.
-    // Its (-4,-4) collision-box corner is 85.6 elmos away, beyond blast radius 1 + body
-    // radius 4 + shield radius 80. A broadphase bounded by one body radius misses the dome.
+    // Its (-4,-4) collision-box corner is 85.6 elmos from the generator: the radius-one blast
+    // hits the hull but does not intersect the radius-80 dome. Per C-143, target coverage alone
+    // cannot admit that shield.
     const rm::sim::UnitId generator =
         roster.add(shieldType, 56.5f, 56.5f, 1, 100.0f);
     const rm::sim::UnitId target = roster.add(targetType, 0.0f, 0.0f, 1, 100.0f);
@@ -326,10 +425,12 @@ TEST_CASE("a corner impact still discovers the bubble covering its target") {
     field.raw.assign(field.sampleCount(), std::uint16_t{0});
     rm::sim::advanceProjectiles(shots, roster.store, armies, rm::sim::Terrain{field},
                                 roster.rate, nullptr, &roster.catalog);
+    rm::sim::advanceProjectiles(shots, roster.store, armies, rm::sim::Terrain{field},
+                                roster.rate, nullptr, &roster.catalog);
 
     CHECK(shots.empty());
-    CHECK(rm::test::asFloat(roster.health(generator).shield.current) == Approx(60.0f));
-    CHECK(rm::test::asFloat(roster.health(target).current) == Approx(100.0f));
+    CHECK(rm::test::asFloat(roster.health(generator).shield.current) == Approx(100.0f));
+    CHECK(rm::test::asFloat(roster.health(target).current) == Approx(60.0f));
 }
 
 TEST_CASE("a proximity-fallback impact discovers the far-side covering bubble") {
@@ -349,10 +450,13 @@ TEST_CASE("a proximity-fallback impact discovers the far-side covering bubble") 
     const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(2);
 
     rm::sim::Projectile shot;
-    shot.position = {
-        rm::sim::Fx{}, rm::sim::Fx::fromRaw(1), rm::sim::Fx{}};
+    // Coplanar with the shield centre, so blast radius 1 + shield radius 2 is exact tangency.
+    shot.position = {rm::sim::Fx{}, rm::sim::Fx{}, rm::sim::Fx{}};
     shot.damage = rm::unitdef::flatDamage(rm::sim::Mag::fromInt(40));
-    shot.damageRadiusElmos = rm::sim::Fx::fromRatio(1, 4);
+    // The radius-one collision fallback can detect a body farther away than a smaller blast
+    // overlaps. C-170's DamageArea ignores that collision target, so use a one-elmo blast to
+    // keep this case about discovering the far-side shield rather than following the target.
+    shot.damageRadiusElmos = rm::sim::Fx::fromInt(1);
     shot.targetLayers = rm::unitdef::TargetLayerMask::Surface;
     shot.firedByArmy = 0;
     shot.ticksRemaining = 2;
@@ -364,6 +468,8 @@ TEST_CASE("a proximity-fallback impact discovers the far-side covering bubble") 
     field.baseHeight = -100.0f;
     field.heightScale = 1.0f;
     field.raw.assign(field.sampleCount(), std::uint16_t{0});
+    rm::sim::advanceProjectiles(shots, roster.store, armies, rm::sim::Terrain{field},
+                                roster.rate, nullptr, &roster.catalog);
     rm::sim::advanceProjectiles(shots, roster.store, armies, rm::sim::Terrain{field},
                                 roster.rate, nullptr, &roster.catalog);
 

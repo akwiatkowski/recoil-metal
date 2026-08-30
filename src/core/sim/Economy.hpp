@@ -81,6 +81,11 @@ struct Economy {
     /// state, so it carries no hash entry of its own.
     Resources requestedLastTick;
 
+    /// What last tick ACTUALLY paid: granted construction plus the affordable part of upkeep.
+    /// Distinct from requested demand so a stalled army can report both over-commitment and
+    /// real consumption (`C-163`). Recomputed from hashed state alongside requestedLastTick.
+    Resources usageLastTick;
+
     /// The fraction of what was ASKED FOR that was actually paid last tick, 0..1.
     ///
     /// The stall ratio, and the number a player watches: 1 means everything is funded and

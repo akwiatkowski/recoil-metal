@@ -354,6 +354,8 @@ TEST_CASE("upkeep is charged before construction is funded") {
     CHECK(amount(economy.stored.energy) == Approx(0.0f));
     CHECK(rm::test::asFloat(economy.fundedFraction) == Approx(0.0f));
     CHECK(amount(building.front().buildTimeRemaining) == Approx(60.0f));  // no progress at all
+    CHECK(amount(economy.requestedLastTick.energy) == Approx(12.0f).margin(0.01));
+    CHECK(amount(economy.usageLastTick.energy) == Approx(6.0f).margin(0.01));
 }
 
 TEST_CASE("upkeep alone can empty a store, and never past zero") {
@@ -363,7 +365,11 @@ TEST_CASE("upkeep alone can empty a store, and never past zero") {
     economy.upkeepPerTick = perTick(0.0f, 500.0f);
 
     std::vector<Construction> nothing;
-    for (int tick = 0; tick < 5; ++tick) {
+    rm::sim::tickEconomy(economy, nothing);
+    CHECK(amount(economy.requestedLastTick.energy) == Approx(50.0f));
+    CHECK(amount(economy.usageLastTick.energy) == Approx(1.0f));
+
+    for (int tick = 1; tick < 5; ++tick) {
         rm::sim::tickEconomy(economy, nothing);
         CHECK(amount(economy.stored.energy) >= 0.0f);
     }

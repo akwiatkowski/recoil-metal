@@ -42,7 +42,8 @@ std::string_view eventKindName(EventKind kind) noexcept {
 
 bool operator==(const Event& a, const Event& b) noexcept {
     return a.kind == b.kind && a.unit == b.unit && a.instigator == b.instigator
-           && a.army == b.army && a.amount == b.amount && a.at == b.at;
+           && a.army == b.army && a.amount == b.amount && a.at == b.at
+           && a.impactType == b.impactType;
 }
 
 std::size_t EventQueue::count(EventKind kind) const noexcept {

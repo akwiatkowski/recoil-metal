@@ -1,8 +1,8 @@
 // Wrecks back into mass: the reclaim order, the harvest, and the economy they feed.
 //
 // The numbers are the game's own, cited on `UnitDef` and `core/sim/Reclaim.hpp`: a wreck
-// holds `BuildCost × 0.9` and a reclaimer drains `5 × BuildRate` value a second — so a
-// rate-10 engineer takes 5 mass a tick at 10 Hz, and the arithmetic below is exact in
+// holds `BuildCost × 0.9` and a reclaimer drains `10 × BuildRate` value a second — so a
+// rate-10 engineer takes 10 mass a tick at 10 Hz, and the arithmetic below is exact in
 // fixed point, which is what lets these tests use == rather than margins.
 #include <catch2/catch_test_macros.hpp>
 
@@ -76,7 +76,7 @@ struct Fixture {
                                     .fromType = tankType,
                                     .armyIndex = 1,
                                     .massRemaining = rm::sim::magFromFloat(mass),
-                                    .reclaimPerBuildRate = rm::sim::fxFromFloat(5.0f)});
+                                    .reclaimPerBuildRate = rm::sim::fxFromFloat(10.0f)});
     }
 
     [[nodiscard]] bool reclaim(UnitId who, FeatureId what) {
@@ -118,13 +118,13 @@ TEST_CASE("an engineer empties a wreck into its army's store, and the wreck disa
 
     REQUIRE(f.reclaim(engineer, wreck));
 
-    // 90 mass at 5 a tick: seventeen ticks in, the wreck still stands with 5 left...
-    f.tick(17);
-    CHECK(rm::test::asFloat(f.economies[0].stored.mass) == 85.0f);
+    // 90 mass at 10 a tick: eight ticks in, the wreck still stands with 10 left...
+    f.tick(8);
+    CHECK(rm::test::asFloat(f.economies[0].stored.mass) == 80.0f);
     REQUIRE(f.features.find(wreck) != nullptr);
-    CHECK(rm::test::asFloat(f.features.find(wreck)->massRemaining) == 5.0f);
+    CHECK(rm::test::asFloat(f.features.find(wreck)->massRemaining) == 10.0f);
 
-    // ...and the eighteenth empties it. The wreck is gone — reclaimed ground is clean
+    // ...and the ninth empties it. The wreck is gone — reclaimed ground is clean
     // ground — and one more tick retires the order, leaving the engineer idle.
     f.tick(1);
     CHECK(rm::test::asFloat(f.economies[0].stored.mass) == 90.0f);
@@ -139,7 +139,7 @@ TEST_CASE("reclaiming over a full mass bar overflows and is lost, like any other
     const FeatureId wreck = f.wreckAt(210.0f, 200.0f);
 
     REQUIRE(f.reclaim(engineer, wreck));
-    f.tick(18, /*storageMass=*/10.0f);
+    f.tick(9, /*storageMass=*/10.0f);
 
     // The wreck gave all 90; the store kept its cap's worth. `tickEconomy` clamps the
     // same tick each grant lands, so the loss is per tick, not a one-off at the end.
@@ -171,9 +171,9 @@ TEST_CASE("two engineers empty one wreck faster, and the total never exceeds wha
     REQUIRE(f.reclaim(first, wreck));
     REQUIRE(f.reclaim(second, wreck));
 
-    // 90 mass at 10 a tick between them: nine ticks, and not a point more than the wreck
+    // 90 mass at 20 a tick between them: five ticks, and not a point more than the wreck
     // held — the last tick's grant is whatever is left, in slot order.
-    f.tick(9);
+    f.tick(5);
     CHECK(rm::test::asFloat(f.economies[0].stored.mass) == 90.0f);
     CHECK(f.features.find(wreck) == nullptr);
 
@@ -191,7 +191,7 @@ TEST_CASE("a death leaves a wreck worth the definition's word, and reclaim empti
     rm::unitdef::UnitDef costly;
     costly.name = "test_costly";
     costly.wreckMass = rm::sim::magFromFloat(180.0f);
-    costly.reclaimPerBuildRate = rm::sim::fxFromFloat(5.0f);
+    costly.reclaimPerBuildRate = rm::sim::fxFromFloat(10.0f);
     const rm::UnitTypeIndex costlyType = f.roster.addType(costly);
 
     const UnitId doomed = f.roster.add(costlyType, 210.0f, 200.0f, 1, 100.0f);
@@ -205,7 +205,7 @@ TEST_CASE("a death leaves a wreck worth the definition's word, and reclaim empti
 
     const UnitId engineer = f.roster.add(f.engineerType, 200.0f, 200.0f, 0, 100.0f);
     REQUIRE(f.reclaim(engineer, wreck));
-    f.tick(36);
+    f.tick(18);
     CHECK(f.features.find(wreck) == nullptr);
     CHECK(rm::test::asFloat(f.economies[0].stored.mass) == 180.0f);
 }
@@ -271,8 +271,8 @@ TEST_CASE("patrol repair has priority over reclaim, then a clear route harvests 
 
     f.tick();
     REQUIRE(f.features.find(wreck) != nullptr);
-    CHECK(rm::test::asFloat(f.features.find(wreck)->massRemaining) == 85.0f);
-    CHECK(rm::test::asFloat(f.economies[0].stored.mass) == 5.0f);
+    CHECK(rm::test::asFloat(f.features.find(wreck)->massRemaining) == 80.0f);
+    CHECK(rm::test::asFloat(f.economies[0].stored.mass) == 10.0f);
 }
 
 TEST_CASE("a patrolling engineer does not detour for work outside build reach") {

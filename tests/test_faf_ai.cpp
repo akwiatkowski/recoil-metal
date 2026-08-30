@@ -409,13 +409,24 @@ TEST_CASE("the FAF driver boots a brain and the corpus's own builders decide", "
                'unit proxy does not expose its hull health')
         local snap = { units = { commander }, occupied = {}, underway = {},
                        mass = 400, energy = 1500, massStorage = 650, energyStorage = 4000,
-                       massIncome = 0.2, energyIncome = 10, massUsage = 0, energyUsage = 0,
+                       massIncome = 0.2, energyIncome = 10,
+                       massRequested = 0, energyRequested = 0,
+                       massUsage = 0, energyUsage = 0,
                        structuresUnderway = 0, mobileUnderway = 0 }
         local decisions = __rm_faf_decide(0, snap)
         assert(#decisions >= 1, 'the corpus decided nothing')
         assert(decisions[1].kind == 'build',
                'expected a build, got ' .. tostring(decisions[1].kind))
         assert(type(decisions[1].bp) == 'string' and #decisions[1].bp > 0)
+
+        -- C-163: requested demand and granted usage are different published counters, while
+        -- trend converts their per-tick difference back to a per-second rate.
+        snap.massRequested = 0.4
+        snap.massUsage = 0.1
+        __rm_faf.brains[0].snap = snap
+        assert(GetEconomyRequested(__rm_faf.brains[0], 'MASS') == 0.4)
+        assert(__rm_faf.brains[0]:GetEconomyUsage('MASS') == 0.1)
+        assert(math.abs(__rm_faf.brains[0]:GetEconomyTrend('MASS') - 1.0) < 0.000001)
     )");
     INFO(ai.lastError());
     REQUIRE(ok);
