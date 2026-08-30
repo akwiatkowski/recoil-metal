@@ -26,6 +26,20 @@ Resources drainPerTick(const Construction& work) noexcept {
     return work.cost * sharePerTick;
 }
 
+namespace {
+
+/// `numerator / denominator` as a ratio, clamped to 1. Retail's `divss` then `min`.
+[[nodiscard]] Fx fundingRatio(Mag numerator, Mag denominator) noexcept {
+    if (denominator <= Mag{}) {
+        return kFxOne;  // nothing wanted is fully funded, which keeps the `min` neutral
+    }
+    const Fx raw = Fx::fromRaw(saturate((FxWide{numerator.raw()} << kFxFractionalBits)
+                                        / denominator.raw()));
+    return std::min(raw, kFxOne);
+}
+
+} // namespace
+
 void tickEconomy(Economy& economy, std::span<Construction> building) {
     // Clamp only what CARRIED IN. Reclaim currently credits `stored` directly before this
     // pass, so its over-cap excess is still lost rather than becoming a hidden reserve.
@@ -38,24 +52,46 @@ void tickEconomy(Economy& economy, std::span<Construction> building) {
     // and remain full. NO MULTIPLY BY A TICK LENGTH: this is already a per-tick rate (§5.1).
     economy.stored += economy.incomePerTick;
 
-    // UPKEEP FIRST, and unconditionally: what is standing costs what it costs whether or
-    // not it can be paid for. An economy that cannot meet it simply has nothing left, which
-    // is what a brownout is — and construction, funded from the remainder below, is what
-    // visibly stops.
-    const Resources upkeepUsed{
-        .mass = std::min(economy.stored.mass, economy.upkeepPerTick.mass),
-        .energy = std::min(economy.stored.energy, economy.upkeepPerTick.energy),
+    // UPKEEP IS A REQUEST, not a lump taken off the top (`C-161`). Retail never sees upkeep
+    // and construction as two things: `Unit.lua` sums maintenance and build cost into ONE
+    // consumption figure before the native setter, so the engine cannot prioritise between
+    // them even in principle. Where we used to starve a build to keep the lights on, retail
+    // runs both at whatever fraction the allocator hands out.
+    //
+    // Pass one: what is still OUTSTANDING, per consumer. Retail computes
+    // `outstanding = max(0, demand - allocated)`, so a consumer holding an unspent residue
+    // from last tick asks for correspondingly less (`C-162`).
+    const auto outstanding = [](Resources demand, Resources allocated) {
+        return Resources{
+            .mass = std::max(Mag{}, demand.mass - allocated.mass),
+            .energy = std::max(Mag{}, demand.energy - allocated.energy),
+        };
     };
-    economy.stored.mass -= upkeepUsed.mass;
-    economy.stored.energy -= upkeepUsed.energy;
 
-    // Pass one: what does everything want this tick?
-    Resources wanted;
-    for (const Construction& work : building) {
+    // Bucketed by HOW MANY RESOURCES ARE STILL OUTSTANDING — not by nominal demand
+    // (`C-159`). A two-resource consumer whose mass is already covered drops into the
+    // single-resource bucket and is funded at `r2`, which is the case that made the engine's
+    // scheme look wrong until the immediates were read.
+    Resources multi;   // both resources outstanding
+    Resources single;  // one or neither
+
+    const auto bucket = [&multi, &single](Resources out) {
+        const int resources = (out.mass > Mag{} ? 1 : 0) + (out.energy > Mag{} ? 1 : 0);
+        (resources == 2 ? multi : single) += out;
+    };
+
+    const Resources upkeepOutstanding = outstanding(economy.upkeepPerTick,
+                                                    economy.upkeepAllocated);
+    bucket(upkeepOutstanding);
+
+    Resources wanted = economy.upkeepPerTick;
+    for (Construction& work : building) {
         if (work.finished()) {
             continue;
         }
-        wanted += drainPerTick(work);
+        const Resources demand = drainPerTick(work);
+        wanted += demand;
+        bucket(outstanding(demand, work.allocated));
     }
 
     // The DEMAND, remembered for whoever asks how loaded this economy is. Construction
@@ -63,46 +99,96 @@ void tickEconomy(Economy& economy, std::span<Construction> building) {
     // GetEconomyRequested reports and what the FAF brain's efficiency conditions divide
     // income by. Derived from state the hash already covers, so it is deterministic
     // without being fed to the hash itself.
-    economy.requestedLastTick = wanted + economy.upkeepPerTick;
+    economy.requestedLastTick = wanted;
 
-    // Pass two: pay what can be paid, and let the shortfall slow EVERYTHING equally.
-    // The ratio of what is banked to what was asked for, per resource, and the worse of the
-    // two. `Mag / Mag -> Fx` again: a funding ratio is not a magnitude.
-    Fx funded = kFxOne;
-    if (wanted.mass > Mag{}) {
-        funded = std::min(funded, Fx::fromRaw(saturate(
-                                      (FxWide{economy.stored.mass.raw()} << kFxFractionalBits)
-                                      / wanted.mass.raw())));
-    }
-    if (wanted.energy > Mag{}) {
-        funded = std::min(funded, Fx::fromRaw(saturate(
-                                      (FxWide{economy.stored.energy.raw()} << kFxFractionalBits)
-                                      / wanted.energy.raw())));
-    }
-    funded = std::clamp(funded, Fx{}, kFxOne);
-    economy.fundedFraction = funded;
+    // Pass two: the two ratios. `supply` is what is on hand — retail's `stored + income`,
+    // which income has already been folded into above.
+    const Resources supply = economy.stored;
+    const Resources total{.mass = multi.mass + single.mass,
+                          .energy = multi.energy + single.energy};
 
-    const Resources constructionUsed = wanted * funded;
-    economy.usageLastTick = upkeepUsed + constructionUsed;
-    economy.stored.mass -= constructionUsed.mass;
-    economy.stored.energy -= constructionUsed.energy;
-    // Capacity is applied AFTER spending. Excess is still lost here because allied sharing is
-    // not implemented; retail offers it to allies before this same final clamp (`C-163`).
-    // The zero floor also catches fixed-point ratio rounding that overshot by a raw step.
-    economy.stored.mass = std::max(Mag{}, std::min(economy.stored.mass, economy.storage.mass));
-    economy.stored.energy =
-        std::max(Mag{}, std::min(economy.stored.energy, economy.storage.energy));
+    // r1 over the COMBINED total, and the resource that bound it. Energy wins an exact tie
+    // because the engine's comparison updates only on a strict improvement and its loop
+    // starts at energy (`C-159`).
+    const Fx massRatio = fundingRatio(supply.mass, total.mass);
+    const Fx energyRatio = fundingRatio(supply.energy, total.energy);
+    const bool massBinds = massRatio < energyRatio;
+    const Fx r1 = massBinds ? massRatio : energyRatio;
+
+    // r2 covers the single-resource bucket out of whatever the multi-resource bucket left,
+    // and it ignores the binding resource — that one is already spent to the last unit.
+    const Resources remaining{
+        .mass = std::max(Mag{}, supply.mass - multi.mass * r1),
+        .energy = std::max(Mag{}, supply.energy - multi.energy * r1),
+    };
+    const Fx r2 = massBinds ? fundingRatio(remaining.energy, single.energy)
+                            : fundingRatio(remaining.mass, single.mass);
+
+    economy.multiResourceFunded = r1;
+    economy.singleResourceFunded = r2;
+    economy.massIsBinding = massBinds;
+    economy.fundedFraction = std::min(r1, r2);
+
+    // Grant, and spend. A consumer takes `r1` when it is outstanding on the binding resource,
+    // else `r2` — which is the bucket it was counted in.
+    const auto grantFor = [massBinds, r1, r2](Resources out) {
+        const Mag binding = massBinds ? out.mass : out.energy;
+        return binding > Mag{} ? r1 : r2;
+    };
+
+    // Grant, then CONSUME. Retail keeps these separate and the separation is the whole
+    // mechanism: the allocator moves resources out of the economy into a request's
+    // `allocated`, and `Consume` later moves them from there into actual work. The binding
+    // resource lands exactly at zero, but the non-binding one keeps a residue that carries
+    // into the next tick as a pre-credit (`C-162`). Zeroing `allocated` here instead would
+    // look tidier and would delete that behaviour entirely.
+    Resources granted;
+    const auto grantAndConsume = [&granted, &outstanding, &grantFor](Resources demand,
+                                                                     Resources& allocated) {
+        const Resources out = outstanding(demand, allocated);
+        const Fx ratio = grantFor(out);
+        const Resources share = out * ratio;
+        allocated += share;
+        granted += share;
+
+        // What the consumer actually spends this tick, taken out of its allocation.
+        const Resources consumed = demand * ratio;
+        allocated.mass = std::max(Mag{}, allocated.mass - consumed.mass);
+        allocated.energy = std::max(Mag{}, allocated.energy - consumed.energy);
+        return ratio;
+    };
+
+    grantAndConsume(economy.upkeepPerTick, economy.upkeepAllocated);
 
     for (Construction& work : building) {
         if (work.finished()) {
             continue;
         }
-        const Mag rate = work.effectiveBuildPerTick();
-        work.buildTimeRemaining -= rate * funded;
-        // The request above remains deliberately uncapped; only Materialize's equivalent
-        // result is clamped. Its applied amount is not fed back into economy accounting.
+        // Progress FIRST, on last tick's fraction (`C-162`). Retail writes the ratio onto the
+        // builder in the motion stage, which runs last, and reads it in command dispatch,
+        // which runs first (`C-142`) — so a builder always advances on the previous beat's
+        // funding. Using the fraction computed just above would be a one-tick head start the
+        // engine does not give, and it is the difference `C-100` measured.
+        work.buildTimeRemaining -= work.effectiveBuildPerTick() * work.fundedLastTick;
+        // The request stays deliberately uncapped even on the completing tick: retail does not
+        // reconcile it with what `Materialize` applies (`C-100`, `C-187`).
         work.buildTimeRemaining = std::max(Mag{}, work.buildTimeRemaining);
+
+        work.fundedLastTick = grantAndConsume(drainPerTick(work), work.allocated);
     }
+
+    economy.usageLastTick = granted;
+    economy.stored.mass = std::max(Mag{}, economy.stored.mass - granted.mass);
+    economy.stored.energy = std::max(Mag{}, economy.stored.energy - granted.energy);
+    // Capacity is applied AFTER spending. Excess is still lost here because allied sharing is
+    // not implemented; retail offers it to allies before this same final clamp (`C-163`).
+    // The zero floor is OUTSIDE the cap and not redundant: a negative capacity would otherwise
+    // pull the store below zero, and the next tick's ratios would then run every build
+    // backwards. A test holds this.
+    economy.stored.mass =
+        std::max(Mag{}, std::min(economy.stored.mass, economy.storage.mass));
+    economy.stored.energy =
+        std::max(Mag{}, std::min(economy.stored.energy, economy.storage.energy));
 }
 
 std::vector<Construction> takeFinished(std::vector<Construction>& building) {

@@ -116,9 +116,12 @@ TEST_CASE("a build is not nearly done half way through, it is exactly half done"
     CHECK_FALSE(building.front().finished());
 }
 
-TEST_CASE("running out slows everything by the same fraction, it does not refuse") {
-    // The mechanic the game is built around: a stall is a slowdown. Half the mass means
-    // half the progress, not a build that stops and waits.
+TEST_CASE("a shortfall reaches the build one tick late") {
+    // The mechanic the game is built around: a stall is a slowdown, not a refusal. But the
+    // slowdown ARRIVES A TICK LATE, and that lag is retail's, not an artifact. The engine
+    // caches the funding ratio on the builder in the motion stage — which runs last — and
+    // reads it in command dispatch, which runs first (`C-142`, `C-162`). A builder therefore
+    // always advances on the previous beat's fraction.
     Economy economy = rich();
     economy.stored.mass = rm::test::mag(0.3f);   // enough for half of one tick's 0.6
     economy.incomePerTick.mass = kRate.magPerTick(3.0f);  // half of the 6 a second the build wants
@@ -128,17 +131,20 @@ TEST_CASE("running out slows everything by the same fraction, it does not refuse
 
     std::vector<Construction> building{massExtractor()};
     rm::sim::tickEconomy(economy, building);
-
     CHECK(rm::test::asFloat(economy.fundedFraction) == Approx(1.0f));  // the first tick is affordable
 
-    // Now run it dry and watch the fraction fall rather than the build stop.
+    // Run it dry. The RATIO falls immediately...
     economy.stored.mass = rm::test::mag(0.0f);
     economy.incomePerTick.mass = kRate.magPerTick(3.0f);
+    const float beforeLagged = amount(building.front().buildTimeRemaining);
+    rm::sim::tickEconomy(economy, building);
+    CHECK(rm::test::asFloat(economy.fundedFraction) == Approx(0.5f).margin(0.01));
+    // ...but this tick still advances on the fraction cached while the economy was rich.
+    CHECK(beforeLagged - amount(building.front().buildTimeRemaining) == Approx(1.0f).margin(0.01));
+
+    // Only now does the build feel it.
     const float before = amount(building.front().buildTimeRemaining);
     rm::sim::tickEconomy(economy, building);
-
-    CHECK(rm::test::asFloat(economy.fundedFraction) == Approx(0.5f).margin(0.01));
-    // Progress was made, but half as much as a funded tick's full 1.0 build units.
     CHECK(before - amount(building.front().buildTimeRemaining) == Approx(0.5f).margin(0.01));
 }
 
@@ -337,25 +343,28 @@ TEST_CASE("a commander's trickle is enough to afford the first extractor") {
     CHECK(ticks < 1000);
 }
 
-TEST_CASE("upkeep is charged before construction is funded") {
-    // Not optional, and the ORDER is the mechanic: a base short of power stops BUILDING
-    // rather than stopping running. Funding builds first and letting upkeep take the
-    // remainder would invert that and make a brownout invisible.
+TEST_CASE("upkeep competes with construction rather than preceding it") {
+    // **This test changed sides.** It used to assert that upkeep is charged FIRST and that the
+    // ordering "is the mechanic" — a base short of power stops building rather than stops
+    // running. That was ours, not Forged Alliance's. Retail cannot prioritise between them
+    // even in principle: `Unit.lua` sums maintenance and build cost into one consumption
+    // figure before the native setter ever sees it, so the engine has a single number per
+    // consumer and no way to tell the halves apart (`C-103`, `C-161`).
     Economy economy;
     economy.storage = res(1000.0f, 1000.0f);
     economy.stored = res(100.0f, 6.0f);
-    // A tick's upkeep is 6 energy, which is exactly what is banked — so nothing is left
-    // for the 6 the build wants.
     economy.upkeepPerTick = perTick(0.0f, 60.0f);
 
     std::vector<Construction> building{massExtractor()};
     rm::sim::tickEconomy(economy, building);
 
-    CHECK(amount(economy.stored.energy) == Approx(0.0f));
-    CHECK(rm::test::asFloat(economy.fundedFraction) == Approx(0.0f));
-    CHECK(amount(building.front().buildTimeRemaining) == Approx(60.0f));  // no progress at all
+    // Upkeep is energy-only, so it sits in the single-resource bucket; the build wants both
+    // and sits in the multi-resource one. Energy binds, and neither is served first.
+    CHECK_FALSE(economy.massIsBinding);
     CHECK(amount(economy.requestedLastTick.energy) == Approx(12.0f).margin(0.01));
-    CHECK(amount(economy.usageLastTick.energy) == Approx(6.0f).margin(0.01));
+    // What was actually paid is strictly less than what was asked for, and the store empties.
+    CHECK(amount(economy.usageLastTick.energy) < 12.0f);
+    CHECK(amount(economy.stored.energy) == Approx(0.0f).margin(0.01));
 }
 
 TEST_CASE("upkeep alone can empty a store, and never past zero") {
@@ -367,16 +376,20 @@ TEST_CASE("upkeep alone can empty a store, and never past zero") {
     std::vector<Construction> nothing;
     rm::sim::tickEconomy(economy, nothing);
     CHECK(amount(economy.requestedLastTick.energy) == Approx(50.0f));
-    CHECK(amount(economy.usageLastTick.energy) == Approx(1.0f));
+    // Not exactly 1.0: the ratio is a fixed-point division and multiplying it back through
+    // the demand loses a raw step. Retail loses the same step in binary32 at the same place.
+    CHECK(amount(economy.usageLastTick.energy) == Approx(1.0f).margin(0.01));
 
     for (int tick = 1; tick < 5; ++tick) {
         rm::sim::tickEconomy(economy, nothing);
         CHECK(amount(economy.stored.energy) >= 0.0f);
     }
-    CHECK(amount(economy.stored.energy) == Approx(0.0f));
+    CHECK(amount(economy.stored.energy) == Approx(0.0f).margin(0.01));
 
-    // And an idle economy is still fully funded: there is nothing asking to be paid.
-    CHECK(rm::test::asFloat(economy.fundedFraction) == Approx(1.0f));
+    // And the fraction reports ZERO, not one. An unpayable upkeep bill is unmet demand now
+    // that upkeep is a request (`C-161`); under the old lump-subtraction model it was
+    // invisible and this asserted "fully funded: there is nothing asking to be paid".
+    CHECK(rm::test::asFloat(economy.fundedFraction) == Approx(0.0f).margin(0.01));
 }
 
 TEST_CASE("an extractor's own upkeep eats the energy it needed to be built") {

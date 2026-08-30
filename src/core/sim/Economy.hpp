@@ -88,14 +88,51 @@ struct Economy {
 
     /// The fraction of what was ASKED FOR that was actually paid last tick, 0..1.
     ///
-    /// The stall ratio, and the number a player watches: 1 means everything is funded and
-    /// anything less means every consumer is slowed by the same proportion. Kept because
-    /// it is what construction multiplies its progress by — the alternative, funding the
-    /// first builders in list order and starving the rest, makes progress depend on the
-    /// order units happen to sit in an array.
+    /// The stall ratio, and the number a player watches. **This is now the WORSE of the two
+    /// bucket ratios** (`multiResourceFunded`, `singleResourceFunded`) rather than a single
+    /// global throttle — kept because it is the figure the HUD and the AI read, and because
+    /// "how stalled am I" wants one number. Consumers no longer multiply by it; they multiply
+    /// by whichever bucket ratio applies to them.
     /// `Fx`, not `Mag`: this is a ratio in 0..1, which is what the geometric type is for, and
     /// it is multiplied INTO magnitudes rather than added to them.
     Fx fundedFraction = kFxOne;
+
+    /// Retail's two allocation ratios (`C-159`), read from `0x007790e0`.
+    ///
+    /// A request is bucketed by **how many resources it still has outstanding**, not by what
+    /// it nominally wants: two → the multi-resource bucket, one or zero → the single-resource
+    /// bucket. Then
+    ///
+    ///     r1 = min(1, min_k supply[k] / (multi[k] + single[k]))   // k* = the argmin
+    ///     rem[k] = max(0, supply[k] - multi[k] * r1)
+    ///     r2 = min(1, min_{k != k*} rem[k] / single[k])
+    ///
+    /// and a request is granted at `r1` when it is outstanding on the binding resource, else
+    /// at `r2`. **The r1 divisor is `multi + single`, not `multi`** — that is the engine's, and
+    /// it is what `C-067` had recorded wrongly before `C-159` read the instructions.
+    ///
+    /// **Aggregating same-bucket consumers is lossless**, which is why we hold two sums rather
+    /// than a per-unit request list: both ratios depend only on the bucket totals, so ten
+    /// energy-only radar and one radar drawing ten times as much produce identical ratios.
+    /// Per-request identity only matters for the carry-forward below.
+    Fx multiResourceFunded = kFxOne;
+    Fx singleResourceFunded = kFxOne;
+
+    /// Which resource bound the allocation last tick — retail's `k*`.
+    ///
+    /// **Energy wins an exact tie**, because the engine's `comiss`/`jbe` updates only on a
+    /// strict improvement and its loop starts at the energy index (`C-159`). A tie is not
+    /// hypothetical: it is what a perfectly balanced economy produces every tick.
+    bool massIsBinding = false;
+
+    /// Upkeep granted and not yet spent, carried across ticks (`C-162`).
+    ///
+    /// Retail's `Consume` drains a request's allocation immediately after the ratio is read,
+    /// and the binding resource lands exactly at zero — but the NON-binding one keeps a
+    /// residue, so next tick's outstanding is smaller and the request asks for less. Without
+    /// this, a two-resource consumer re-asks for its full demand every tick and the bucket
+    /// totals never settle.
+    Resources upkeepAllocated;
 };
 
 /// The base rate of income every army gets, per second, whatever it has built.
@@ -179,6 +216,19 @@ struct Construction {
     /// struct: deterministic by construction, so hashing it costs nothing and catches a
     /// divergence in the assist scan itself.
     Mag assistPerTick{};
+
+    /// Granted and not yet spent, carried across ticks — this construction's half of
+    /// `C-162`'s residue. See `Economy::upkeepAllocated` for why it exists.
+    Resources allocated;
+
+    /// The funding ratio this work advanced at LAST tick.
+    ///
+    /// Retail caches the ratio on the builder and reads it a beat later: it is written in the
+    /// motion stage, which runs last, and read in the command-dispatch stage, which runs first
+    /// (`C-142`, `C-162`). So a builder always spends the previous beat's fraction. The cache
+    /// exists because `Consume` drains the allocation the moment the ratio is taken, leaving a
+    /// later in-beat read to return roughly zero — it is not an optimisation.
+    Fx fundedLastTick = kFxOne;
 
     /// The rate the work actually advances at: the founder's plus everyone helping.
     [[nodiscard]] Mag effectiveBuildPerTick() const noexcept {

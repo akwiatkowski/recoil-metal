@@ -259,6 +259,13 @@ StateHash hashMatch(const UnitStore& store, const Match& match) {
         feed(h, economy.incomePerTick);
         feed(h, economy.upkeepPerTick);
         feed(h, economy.fundedFraction);
+        // The two bucket ratios and which resource bound them (`C-159`), plus upkeep's share
+        // of the carry-forward. `massIsBinding` decides which ratio each consumer is granted
+        // at, so it changes behaviour and belongs here.
+        feed(h, economy.multiResourceFunded);
+        feed(h, economy.singleResourceFunded);
+        feed(h, economy.massIsBinding);
+        feed(h, economy.upkeepAllocated);
     }
 
     // WHAT EACH SIDE CAN SEE (ADR-037). Hashed rather than treated as a derived cache, and
@@ -359,6 +366,13 @@ StateHash hashMatch(const UnitStore& store, const Match& match) {
             feed(h, static_cast<std::uint64_t>(work.builder.index));
             feed(h, static_cast<std::uint64_t>(work.builder.generation));
             feed(h, work.assistPerTick);
+            // THE CARRY-FORWARD AND THE CACHED RATIO (`C-159`, `C-162`). Both are live sim
+            // state, not derived: `allocated` is a residue that survives into next tick's
+            // outstanding demand, and `fundedLastTick` is what next tick's progress is
+            // multiplied by. Leaving them out would let two runs diverge in build speed while
+            // the fingerprint said they agreed — the exact failure this log exists to catch.
+            feed(h, work.allocated);
+            feed(h, work.fundedLastTick);
         }
     }
 
