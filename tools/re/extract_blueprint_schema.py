@@ -15,10 +15,21 @@ all four appear in ascending string order, matching ascending offset order.
 
 Read-only. Never executes the target.
 """
-import sys, re
+import csv
+import re
 
 TSV = 'build/re-fa/exports/strings.all.tsv'
+METHODS = 'build/re-fa/exports/moho.methods.annotated.tsv'
 OUT = 'build/re-fa/exports/blueprint_schema.tsv'
+
+# The same .rdata block also holds the Lua API's documentation (C-032), which
+# has the identical name-then-prose shape -- 586 of a naive sweep's hits were
+# Lua callables like Dirname and GetCargo, not blueprint keys. Subtract them.
+LUA_CALLABLES = set()
+with open(METHODS, encoding='latin-1') as _f:
+    for _row in csv.DictReader(_f, delimiter='\t'):
+        if _row.get('name'):
+            LUA_CALLABLES.add(_row['name'])
 
 # A key is a bare CamelCase identifier; its doc is prose that follows it.
 KEY = re.compile(r'^[A-Z][A-Za-z0-9_]{2,39}$')
@@ -44,7 +55,7 @@ while i < len(rows) - 1:
     va, kind, text = rows[i]
     nva, nkind, ntext = rows[i + 1]
     # key immediately followed by prose (a space-bearing sentence) = schema entry
-    if (LO <= va < HI and KEY.match(text)
+    if (LO <= va < HI and KEY.match(text) and text not in LUA_CALLABLES
             and ' ' in ntext and len(ntext) > 12 and not KEY.match(ntext)):
         pairs.append((va, text, nva, ntext))
         i += 2
