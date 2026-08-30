@@ -323,6 +323,13 @@ TEST_CASE("every field the sim owns reaches the hash") {
         a.store.orders()[0].currentMutable()->creationSerial = 1;
         REQUIRE(a.hash() != before);
     }
+    SECTION("which queued command is active") {
+        Fixture a;
+        a.store.orders()[0].append(rm::sim::Command{.unit = a.store.idAt(0)});
+        const rm::StateHash before = a.hash();
+        a.store.orders()[0].markCurrentActive();
+        REQUIRE(a.hash() != before);
+    }
 }
 
 TEST_CASE("losing a unit changes the hash even though the survivors match") {

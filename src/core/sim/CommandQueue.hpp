@@ -4,6 +4,7 @@
 
 #include <cstddef>
 #include <deque>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -89,7 +90,10 @@ public:
     /// adding it or taking it away.
     Result give(const Command& command, bool queued);
 
-    /// The order being carried out, or null when the unit is idle.
+    /// The queue head, or null when the unit has no orders.
+    ///
+    /// The head can be waiting for the next command-dispatch beat after a cyclic rotation. Use
+    /// `active()` when a simulation pass needs the order the unit is actually carrying out.
     [[nodiscard]] const Command* current() const noexcept {
         return queue_.empty() ? nullptr : &queue_.front();
     }
@@ -99,6 +103,23 @@ public:
     /// started, and nothing may rewrite a promise.
     [[nodiscard]] Command* currentMutable() noexcept {
         return queue_.empty() ? nullptr : &queue_.front();
+    }
+
+    /// The head only when it has been dispatched and started.
+    [[nodiscard]] const Command* active() const noexcept {
+        const Command* head = current();
+        return head != nullptr && activeSerial_ == head->creationSerial ? head : nullptr;
+    }
+
+    [[nodiscard]] Command* activeMutable() noexcept {
+        Command* head = currentMutable();
+        return head != nullptr && activeSerial_ == head->creationSerial ? head : nullptr;
+    }
+
+    /// Marks the current head as started by the command-dispatch stage.
+    void markCurrentActive() noexcept {
+        const Command* head = current();
+        activeSerial_ = head != nullptr ? std::optional{head->creationSerial} : std::nullopt;
     }
 
     /// The current order is done. Drops it and returns the next, or null.
@@ -120,7 +141,7 @@ public:
     /// cancelling either endpoint dissolves its remaining synthetic half through this path.
     void remove(CommandKind kind);
 
-    void clear() noexcept { queue_.clear(); }
+    void clear() noexcept;
 
     [[nodiscard]] bool empty() const noexcept { return queue_.empty(); }
     [[nodiscard]] std::size_t size() const noexcept { return queue_.size(); }
@@ -140,6 +161,10 @@ private:
     /// cancel path also pushes to the front. A vector would make every completed order an
     /// O(n) erase from the head.
     std::deque<Command> queue_;
+
+    /// Identity of the command whose execution state is live. A rotated or newly exposed head
+    /// deliberately has no active serial until the next dispatch step starts it.
+    std::optional<CommandSerial> activeSerial_;
 };
 
 } // namespace rm::sim

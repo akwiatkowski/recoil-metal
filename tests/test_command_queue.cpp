@@ -341,6 +341,159 @@ TEST_CASE("three queued moves run in order") {
     CHECK(rm::sim::fxToFloat(at.z) > 150.0f);
 }
 
+TEST_CASE("a queued command on an idle unit starts in the dispatch stage") {
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    const rm::sim::PassabilityGrid grid =
+        rm::sim::buildPassability(field, 0.0f, 60.0f, 0.0f);
+
+    rm::test::Roster roster;
+    const rm::UnitTypeIndex type = roster.addType(walkerDef());
+    const UnitId walker = roster.add(type, 40.0f, 40.0f, 0, 100.0f);
+    const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(1);
+    const std::vector<rm::sim::Player> players{rm::sim::Player{.index = 0, .army = 0}};
+    const std::vector<const rm::sim::PassabilityGrid*> grids{&grid};
+
+    REQUIRE(rm::sim::applyCommand(moveTo(300.0f, 40.0f, walker, true), roster.store,
+                                  roster.catalog, players, armies, terrain, grid, roster.rate));
+    CHECK_FALSE(roster.store.motion()[walker.index].moving);
+    CHECK(roster.store.orders()[walker.index].active() == nullptr);
+
+    CHECK(rm::sim::advanceOrders(roster.store, roster.catalog, terrain, grids, roster.rate) == 1);
+    REQUIRE(roster.store.orders()[walker.index].size() == 1);
+    REQUIRE(roster.store.orders()[walker.index].active() != nullptr);
+    CHECK(roster.store.motion()[walker.index].moving);
+}
+
+TEST_CASE("ordinary unstartable commands cascade within one dispatch beat") {
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    const rm::sim::PassabilityGrid grid =
+        rm::sim::buildPassability(field, 0.0f, 60.0f, 0.0f);
+
+    rm::test::Roster roster;
+    const rm::UnitTypeIndex type = roster.addType(walkerDef());
+    const UnitId walker = roster.add(type, 40.0f, 40.0f, 0, 100.0f);
+    const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(1);
+    const std::vector<rm::sim::Player> players{rm::sim::Player{.index = 0, .army = 0}};
+    const std::vector<const rm::sim::PassabilityGrid*> grids{&grid};
+
+    Command firstDead = moveTo(100.0f, 40.0f, walker, true);
+    firstDead.kind = CommandKind::Attack;
+    firstDead.target = UnitId{99, 1};
+    REQUIRE(rm::sim::applyCommand(firstDead, roster.store, roster.catalog, players, armies,
+                                  terrain, grid, roster.rate));
+
+    Command secondDead = firstDead;
+    secondDead.target = UnitId{98, 1};
+    REQUIRE(rm::sim::applyCommand(secondDead, roster.store, roster.catalog, players, armies,
+                                  terrain, grid, roster.rate));
+    REQUIRE(rm::sim::applyCommand(moveTo(300.0f, 40.0f, walker, true), roster.store,
+                                  roster.catalog, players, armies, terrain, grid, roster.rate));
+    REQUIRE(roster.store.orders()[walker.index].size() == 3);
+
+    CHECK(rm::sim::advanceOrders(roster.store, roster.catalog, terrain, grids, roster.rate) == 1);
+    const std::vector<Command> orders = roster.store.orders()[walker.index].all();
+    REQUIRE(orders.size() == 1);
+    CHECK(orders[0].kind == CommandKind::Move);
+    CHECK(roster.store.motion()[walker.index].moving);
+}
+
+TEST_CASE("an attack-position cycles only while another command follows") {
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    const rm::sim::PassabilityGrid grid =
+        rm::sim::buildPassability(field, 0.0f, 60.0f, 0.0f);
+
+    rm::test::Roster roster;
+    const rm::UnitTypeIndex type = roster.addType(walkerDef());
+    const UnitId walker = roster.add(type, 40.0f, 40.0f, 0, 100.0f);
+    const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(1);
+    const std::vector<rm::sim::Player> players{rm::sim::Player{.index = 0, .army = 0}};
+    const std::vector<const rm::sim::PassabilityGrid*> grids{&grid};
+
+    Command attack = moveTo(300.0f, 40.0f, walker);
+    attack.kind = CommandKind::Attack;
+    REQUIRE(rm::sim::applyCommand(attack, roster.store, roster.catalog, players, armies,
+                                  terrain, grid, roster.rate));
+
+    SECTION("it retires when it is the only entry") {
+        roster.store.motion()[walker.index].moving = false;
+
+        CHECK(rm::sim::advanceOrders(roster.store, roster.catalog, terrain, grids, roster.rate)
+              == 0);
+        CHECK(roster.store.orders()[walker.index].empty());
+    }
+
+    SECTION("it rotates behind the next entry") {
+        REQUIRE(rm::sim::applyCommand(moveTo(300.0f, 300.0f, walker, true), roster.store,
+                                      roster.catalog, players, armies, terrain, grid,
+                                      roster.rate));
+        roster.store.motion()[walker.index].moving = false;
+
+        CHECK(rm::sim::advanceOrders(roster.store, roster.catalog, terrain, grids, roster.rate)
+              == 0);
+        const std::vector<Command> orders = roster.store.orders()[walker.index].all();
+        REQUIRE(orders.size() == 2);
+        CHECK(orders[0].kind == CommandKind::Move);
+        CHECK(orders[0].targetZ == rm::sim::fxFromFloat(300.0f));
+        CHECK(orders[1].kind == CommandKind::Attack);
+        CHECK(orders[1].targetZ == rm::sim::fxFromFloat(40.0f));
+        CHECK_FALSE(roster.store.motion()[walker.index].moving);
+        CHECK(roster.store.orders()[walker.index].active() == nullptr);
+
+        CHECK(rm::sim::advanceOrders(roster.store, roster.catalog, terrain, grids, roster.rate)
+              == 1);
+        REQUIRE(roster.store.orders()[walker.index].active() != nullptr);
+        CHECK(roster.store.motion()[walker.index].moving);
+    }
+}
+
+TEST_CASE("an attack-entity retires instead of cycling when its target dies") {
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    const rm::sim::PassabilityGrid grid =
+        rm::sim::buildPassability(field, 0.0f, 60.0f, 0.0f);
+
+    rm::test::Roster roster;
+    const rm::UnitTypeIndex fighterType = roster.addType(fighterDef());
+    const rm::UnitTypeIndex targetType = roster.addType(walkerDef());
+    const UnitId fighter = roster.add(fighterType, 40.0f, 40.0f, 0, 100.0f);
+    const UnitId target = roster.add(targetType, 300.0f, 40.0f, 1, 100.0f);
+    const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(2);
+    const std::vector<rm::sim::Player> players{rm::sim::Player{.index = 0, .army = 0}};
+    const std::vector<const rm::sim::PassabilityGrid*> grids{&grid, &grid};
+
+    Command attack = moveTo(300.0f, 40.0f, fighter);
+    attack.kind = CommandKind::Attack;
+    attack.target = target;
+    REQUIRE(rm::sim::applyCommand(attack, roster.store, roster.catalog, players, armies,
+                                  terrain, grid, roster.rate));
+
+    SECTION("it stops immediately when it has no follower") {
+        roster.store.kill(target);
+
+        CHECK(rm::sim::advanceOrders(roster.store, roster.catalog, terrain, grids, roster.rate)
+              == 0);
+        CHECK(roster.store.orders()[fighter.index].empty());
+        CHECK_FALSE(roster.store.motion()[fighter.index].moving);
+        CHECK(roster.store.motion()[fighter.index].path.empty());
+    }
+
+    SECTION("it dispatches a follower in the same beat") {
+        REQUIRE(rm::sim::applyCommand(moveTo(300.0f, 300.0f, fighter, true), roster.store,
+                                      roster.catalog, players, armies, terrain, grid,
+                                      roster.rate));
+        roster.store.kill(target);
+
+        CHECK(rm::sim::advanceOrders(roster.store, roster.catalog, terrain, grids, roster.rate)
+              == 1);
+        const std::vector<Command> orders = roster.store.orders()[fighter.index].all();
+        REQUIRE(orders.size() == 1);
+        CHECK(orders[0].kind == CommandKind::Move);
+    }
+}
+
 TEST_CASE("attack-move stops for a visible enemy then resumes its destination") {
     const rm::HeightField field = flatField();
     const rm::sim::Terrain terrain{field};
@@ -566,6 +719,39 @@ TEST_CASE("patrol keeps cycling between its destination and starting point") {
     CHECK(destinations[2] == std::array{rm::sim::fxFromFloat(300.0f),
                                        rm::sim::fxFromFloat(300.0f)});
     CHECK(destinations[3] == destinations[0]);
+}
+
+TEST_CASE("a lone patrol retires instead of rotating forever") {
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    const rm::sim::PassabilityGrid grid =
+        rm::sim::buildPassability(field, 0.0f, 60.0f, 0.0f);
+
+    rm::test::Roster roster;
+    const rm::UnitTypeIndex type = roster.addType(walkerDef());
+    const UnitId walker = roster.add(type, 40.0f, 40.0f, 0, 100.0f);
+    const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(1);
+    const std::vector<rm::sim::Player> players{rm::sim::Player{.index = 0, .army = 0}};
+    const std::vector<const rm::sim::PassabilityGrid*> grids{&grid};
+
+    Command patrol = moveTo(300.0f, 40.0f, walker);
+    patrol.kind = CommandKind::Patrol;
+    REQUIRE(rm::sim::applyCommand(patrol, roster.store, roster.catalog, players, armies,
+                                  terrain, grid, roster.rate));
+    REQUIRE(roster.store.orders()[walker.index].size() == 2);
+
+    // Simulate an out-of-band removal of one waypoint. Retail's shared-count and guard paths can
+    // leave a cyclic command alone; the dispatch path must consume it rather than cycle itself.
+    (void)roster.store.orders()[walker.index].finish();
+    roster.store.transforms()[walker.index].x = rm::sim::fxFromFloat(300.0f);
+    roster.store.motion()[walker.index].moving = false;
+
+    CHECK(rm::sim::advanceOrders(roster.store, roster.catalog, terrain, grids, roster.rate) == 1);
+    REQUIRE(roster.store.orders()[walker.index].active() != nullptr);
+
+    roster.store.motion()[walker.index].moving = false;
+    CHECK(rm::sim::advanceOrders(roster.store, roster.catalog, terrain, grids, roster.rate) == 0);
+    CHECK(roster.store.orders()[walker.index].empty());
 }
 
 TEST_CASE("a queued patrol joins the current cycle before its oldest waypoint") {

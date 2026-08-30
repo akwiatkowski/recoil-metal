@@ -33,7 +33,7 @@ namespace rm::sim {
 struct ReplayHeader {
     /// Bumped whenever the format or the hashed field set changes, so an old log is
     /// rejected rather than compared against a hash that was never computed the same way.
-    static constexpr std::uint32_t kFormatVersion = 3;
+    static constexpr std::uint32_t kFormatVersion = 4;
 
     std::uint32_t formatVersion = kFormatVersion;
 

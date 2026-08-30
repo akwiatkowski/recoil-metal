@@ -337,10 +337,12 @@ GOLDEN_RUN   = "$(FA_MAP)" $(FA_FLAGS) --skirmish --armies 2 --play $(GOLDEN_SEC
                --screenshot $(GOLDEN_SHOT) 320 240
 
 verify: build check-fa
-	$(BIN) $(GOLDEN_RUN) --check-hash-log $(GOLDEN) | grep determinism:
+	@output="$$( $(BIN) $(GOLDEN_RUN) --check-hash-log $(GOLDEN) )" && \
+	  printf '%s\n' "$$output" | grep -E '^determinism: MATCH '
 
 golden: build check-fa
-	$(BIN) $(GOLDEN_RUN) --hash-log $(GOLDEN) | grep determinism:
+	@output="$$( $(BIN) $(GOLDEN_RUN) --hash-log $(GOLDEN) )" && \
+	  printf '%s\n' "$$output" | grep -E '^determinism: [0-9]+ tick hashes written '
 
 # Milestone 20's match: a duel against the scripted opponent, played from spawn.
 # Deterministic, so SECONDS picks the stage of the SAME match: 12 the first

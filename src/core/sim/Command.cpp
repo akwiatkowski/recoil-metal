@@ -305,8 +305,10 @@ bool applyCommand(const Command& command, UnitStore& store, const UnitCatalog& c
                     motion.path.clear();
                     motion.pathIndex = 0;
                     if (const Command* next = orders.current()) {
-                        (void)startCommand(*next, store, catalog, terrain, grid, rate, building,
-                                           events, features);
+                        if (startCommand(*next, store, catalog, terrain, grid, rate, building,
+                                         events, features)) {
+                            orders.markCurrentActive();
+                        }
                     }
                     return true;
                 }
@@ -324,8 +326,10 @@ bool applyCommand(const Command& command, UnitStore& store, const UnitCatalog& c
             motion.pathIndex = 0;
             cancelActiveConstruction(building, command.unit);
             if (const Command* next = orders.current()) {
-                (void)startCommand(*next, store, catalog, terrain, grid, rate, building, events,
-                                   features);
+                if (startCommand(*next, store, catalog, terrain, grid, rate, building, events,
+                                 features)) {
+                    orders.markCurrentActive();
+                }
             }
             return true;
         }
@@ -360,6 +364,7 @@ bool applyCommand(const Command& command, UnitStore& store, const UnitCatalog& c
         origin.creationSerial = store.allocateCommandSerial();
         orders.append(origin);
     }
+    orders.markCurrentActive();
     if (instantaneous(command.kind)) {
         orders.clear();
     }
@@ -399,7 +404,36 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
             const auto productType = static_cast<std::size_t>(command.buildType);
             return productType < gridForType.size() ? gridForType[productType] : nullptr;
         };
-        const Command* current = orders[slot].current();
+
+        // Run the dispatcher microsteps for commands that have not started yet. Retail can
+        // discard several ordinary no-task/inline-done heads in one beat; a real running task
+        // is the barrier. Cyclic completion takes a different path below and deliberately does
+        // not call this helper until the next beat.
+        const auto startPending = [&] {
+            while (const Command* pending = orders[slot].current()) {
+                const PassabilityGrid* pendingGrid = gridFor(*pending);
+                if (pendingGrid == nullptr) {
+                    return;  // leave it pending until its movement domain exists
+                }
+                const bool wasInstant = instantaneous(pending->kind);
+                if (startCommand(*pending, store, catalog, terrain, *pendingGrid, rate, building,
+                                 events, features)) {
+                    orders[slot].markCurrentActive();
+                    ++started;
+                    if (!wasInstant) {
+                        return;
+                    }
+                }
+                (void)orders[slot].finish();
+            }
+        };
+
+        if (orders[slot].active() == nullptr) {
+            startPending();
+            continue;
+        }
+
+        const Command* current = orders[slot].active();
         const PassabilityGrid* grid = current != nullptr ? gridFor(*current) : nullptr;
         if (grid == nullptr) {
             continue;  // a missing domain leaves the command queued rather than dropping it
@@ -412,11 +446,7 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
                 && hasActiveConstruction(*building, store.idAt(slot))) {
                 continue;
             }
-            if (startCommand(*current, store, catalog, terrain, *grid, rate, building, events,
-                             features)) {
-                ++started;
-            }
-            continue;
+            continue;  // completion retires it through finishBuildOrder
         }
 
         // THE CHASE. An attack naming a LIVING target never completes by arrival — it
@@ -430,9 +460,10 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
         //                 keeps a stationary fight from pathfinding every tick.
         //   else          keep walking the route already ordered.
         //
-        // A unit with no firing weapon does not chase: for it an attack is the plain walk
-        // it always was, and the finish-by-arrival logic below still owns it.
-        if (const Command* head = orders[slot].current();
+        // A position-target attack never enters this block: it is routed movement, and the
+        // finish-or-cycle logic below owns it. An entity-target attack was already validated to
+        // have a suitable weapon when it started.
+        if (const Command* head = orders[slot].active();
             head != nullptr
             && (head->kind == CommandKind::Attack || head->kind == CommandKind::Overcharge
                 || head->kind == CommandKind::Assist)
@@ -482,7 +513,7 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
                     if (strayed > Fx::fromRaw(reach.raw() / 2) || !chase.moving) {
                         const bool routed =
                             routeUnit(slot, theirs.x, theirs.z, store, terrain, *grid);
-                        if (Command* mutableHead = orders[slot].currentMutable()) {
+                        if (Command* mutableHead = orders[slot].activeMutable()) {
                             // Recorded whether or not the route was found: a target in an
                             // unreachable spot must not be re-pathed every tick — the next
                             // attempt waits until it strays again.
@@ -496,10 +527,24 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
             }
         }
 
+        // An entity attack ends on target death, not when its now-stale route happens to arrive.
+        // It is an ordinary completion, so dispatch may start the follower in this same beat.
+        if (const Command* head = orders[slot].active();
+            head != nullptr && head->kind == CommandKind::Attack
+            && head->target.generation != 0 && !store.alive(head->target)) {
+            MoveState& staleRoute = store.motion()[slot];
+            staleRoute.moving = false;
+            staleRoute.path.clear();
+            staleRoute.pathIndex = 0;
+            (void)orders[slot].finish();
+            startPending();
+            continue;
+        }
+
         // An aggressive order with a temporary target belongs to the post-intel pass, even
         // when it is currently holding still. A stale target is cleared there and the original
         // waypoint resumed; treating the hold as arrival here would lose that destination.
-        if (const Command* head = orders[slot].current();
+        if (const Command* head = orders[slot].active();
             head != nullptr
             && (head->kind == CommandKind::AttackMove || head->kind == CommandKind::Patrol)
             && head->target.generation != 0) {
@@ -512,7 +557,7 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
         // `harvestReclaim` do the work; short of reach and idle, it walks the rest of the
         // way. A wreck it cannot route to is dropped by falling through to the finish
         // logic, which is what an unreachable order deserves.
-        if (const Command* head = orders[slot].current();
+        if (const Command* head = orders[slot].active();
             head != nullptr && head->kind == CommandKind::Reclaim && features != nullptr) {
             if (const Feature* wreck = features->find(head->target)) {
                 MoveState& mine = store.motion()[slot];
@@ -541,36 +586,19 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
             continue;  // still carrying out the order at the head
         }
 
-        if (const Command* head = orders[slot].current();
-            head != nullptr && head->kind == CommandKind::Patrol) {
-            const Command* next = orders[slot].cycle();
-            if (next != nullptr
-                && startCommand(*next, store, catalog, terrain, *grid, rate, building, events,
-                                features)) {
-                ++started;
-            }
+        // Retail keys Attack cycling on target KIND. A position attack is a repeatable waypoint
+        // while another command follows; an entity attack and every lone cyclic command retire.
+        if (const Command* head = orders[slot].active();
+            head != nullptr && orders[slot].size() > 1
+            && (head->kind == CommandKind::Patrol
+                || (head->kind == CommandKind::Attack && head->target.generation == 0))) {
+            (void)orders[slot].cycle();
             continue;
         }
 
-        // The head is done. Drop it and start the next — and keep going while what comes next
-        // is either instantaneous or unstartable, so a queue of build orders empties in one
-        // tick and a dead waypoint does not stall the route behind it.
-        const Command* next = orders[slot].finish();
-        while (next != nullptr) {
-            const PassabilityGrid* nextGrid = gridFor(*next);
-            if (nextGrid == nullptr) {
-                break;  // this order remains at the head until its type gains a grid
-            }
-            const bool wasInstant = instantaneous(next->kind);
-            if (startCommand(*next, store, catalog, terrain, *nextGrid, rate, building, events,
-                             features)) {
-                ++started;
-                if (!wasInstant) {
-                    break;
-                }
-            }
-            next = orders[slot].finish();
-        }
+        // An ordinary completion immediately re-enters command dispatch in this beat.
+        (void)orders[slot].finish();
+        startPending();
     }
 
     return started;
@@ -581,7 +609,7 @@ void finishBuildOrder(UnitStore& store, const Construction& finished) noexcept {
         return;
     }
     CommandQueue& orders = store.orders()[finished.builder.index];
-    const Command* current = orders.current();
+    const Command* current = orders.active();
     if (current != nullptr && current->kind == CommandKind::Build
         && current->unit == finished.builder) {
         (void)orders.finish();
@@ -605,7 +633,7 @@ void updateAggressiveOrders(UnitStore& store, const UnitCatalog& catalog,
         if (!store.slotAlive(slot)) {
             continue;
         }
-        Command* order = store.orders()[slot].currentMutable();
+        Command* order = store.orders()[slot].activeMutable();
         if (order == nullptr
             || (order->kind != CommandKind::AttackMove && order->kind != CommandKind::Patrol)) {
             continue;
@@ -815,6 +843,10 @@ bool startCommand(const Command& command, UnitStore& store, const UnitCatalog& c
                          grid);
 
     case CommandKind::Attack: {
+        if (command.target.generation == 0) {
+            return routeUnit(command.unit.index, command.targetX, command.targetZ, store, terrain,
+                             grid);
+        }
         if (!store.alive(command.target)) {
             return false;
         }

@@ -185,6 +185,13 @@ void feedHealth(StateHash& h, const Health& health) noexcept {
 /// that is where provenance belongs.
 void feedOrders(StateHash& h, const CommandQueue& orders) noexcept {
     feed(h, orders.size());
+    const Command* active = orders.active();
+    feed(h, static_cast<std::uint8_t>(active != nullptr));
+    if (active != nullptr) {
+        // A newly exposed cyclic head starts next beat. Hashing this identity reports a
+        // divergence at the queue transition rather than one tick later when movement differs.
+        feed(h, static_cast<std::uint64_t>(active->creationSerial));
+    }
     for (const Command& command : orders.orders()) {
         feed(h, static_cast<std::uint8_t>(command.kind));
         feed(h, static_cast<std::size_t>(command.unit.index));

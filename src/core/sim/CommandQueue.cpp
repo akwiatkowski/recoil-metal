@@ -65,6 +65,7 @@ CommandQueue::Result CommandQueue::give(const Command& command, bool queued) {
         // (`CommandAI.cpp:998-1011`); the cancel rules below then never fire, because there is
         // nothing left to match against.
         queue_.clear();
+        activeSerial_.reset();
         queue_.push_back(command);
         return Result::Replaced;
     }
@@ -79,6 +80,9 @@ CommandQueue::Result CommandQueue::give(const Command& command, bool queued) {
         }
         const bool wasCurrent = at == 0;
         queue_.erase(queue_.begin() + static_cast<std::ptrdiff_t>(at));
+        if (wasCurrent) {
+            activeSerial_.reset();
+        }
         // ONE match only, and then stop looking — Recoil's "only delete one non-build order"
         // (`:1400`). Worth being honest about: it is currently indistinguishable from removing
         // ALL matches, because `give` is the only way into the queue and it cancels a match
@@ -113,6 +117,7 @@ const Command* CommandQueue::finish() {
     if (!queue_.empty()) {
         queue_.pop_front();
     }
+    activeSerial_.reset();
     return current();
 }
 
@@ -121,11 +126,21 @@ const Command* CommandQueue::cycle() {
         queue_.push_back(queue_.front());
         queue_.pop_front();
     }
+    activeSerial_.reset();
     return current();
 }
 
 void CommandQueue::remove(CommandKind kind) {
+    const bool removesCurrent = current() != nullptr && current()->kind == kind;
     std::erase_if(queue_, [kind](const Command& command) { return command.kind == kind; });
+    if (removesCurrent) {
+        activeSerial_.reset();
+    }
+}
+
+void CommandQueue::clear() noexcept {
+    queue_.clear();
+    activeSerial_.reset();
 }
 
 std::vector<Command> CommandQueue::all() const {

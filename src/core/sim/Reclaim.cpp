@@ -100,7 +100,7 @@ std::size_t harvestReclaim(UnitStore& store, const UnitCatalog& catalog,
         if (!store.slotAlive(slot) || !store.health()[slot].alive()) {
             continue;
         }
-        const Command* head = orders[slot].current();
+        const Command* head = orders[slot].active();
         if (head == nullptr || head->kind != CommandKind::Reclaim) {
             continue;
         }
@@ -132,7 +132,7 @@ std::size_t servicePatrolBuilders(UnitStore& store, const UnitCatalog& catalog,
         if (!store.slotAlive(builder) || !store.health()[builder].alive()) {
             continue;
         }
-        const Command* order = store.orders()[builder].current();
+        const Command* order = store.orders()[builder].active();
         const UnitCatalog::Rates& rates = catalog.rates(store.typeAt(builder));
         if (order == nullptr || order->kind != CommandKind::Patrol
             || order->target.generation != 0

@@ -23,7 +23,7 @@ std::size_t applyAssistance(const UnitStore& store, const UnitCatalog& catalog,
         if (!store.slotAlive(slot)) {
             continue;
         }
-        const Command* head = orders[slot].current();
+        const Command* head = orders[slot].active();
         if (head == nullptr || head->kind != CommandKind::Assist
             || !store.alive(head->target)) {
             continue;
