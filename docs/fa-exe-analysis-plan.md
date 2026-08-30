@@ -1433,6 +1433,71 @@ Three implementation notes worth keeping:
 Surface veteran level in the HUD (chevrons on the selected unit's panel), which is the only
 part of `C-024` a player can currently not see.
 
+### 2026-08-30 / Session 13
+
+**Artifact:** `ART-E001`; `ART-D001` as a naming dictionary only
+**Tool/project:** eleven agents in three waves, plus direct reads; all lock-free (`objdump` +
+`tools/re/pe_reader.py`), the Ghidra project never opened
+**Work package:** `WP-01`, `WP-04`, `WP-06`, `WP-15`, `WP-18`, `WP-20`, `WP-21`, `WP-26`,
+`WP-27`, `WP-28`, `WP-31`, `WP-43`
+**Question:** Mine the remaining self-description veins, then spend what they buy.
+
+**Why this shape.** Session 12 ended with eight packages `Analyzed` and none `Confirmed`. The
+plan named four unexploited Tier-1 sources; wave 1 ran all four in parallel, and their output
+made wave 2 and wave 3 far cheaper — every later agent started from vtables, field offsets and
+enum tables rather than deriving them.
+
+**Accomplished**
+- **Four veins mined, and their yields differ by two orders of magnitude** (`C-114`, `C-117`,
+  `C-122`, `C-128`). Enum registration returned 525 constants including all 45 bits of the
+  unit-state mask; field offsets went from ~40 to ~500 with the base pointer *read* from each
+  receiver's type descriptor; vtables gave 32,678 slots validated 217/217 against exported
+  `??_7` symbols and surfaced 4,514 function starts Ghidra never found. Assertion strings were
+  **largely a negative result** — 1.8% of the binary, none of it damage, shields or economy.
+- **Two further veins found later**: the blueprint schema documents itself (`C-165`, 725 keys),
+  and a table of 81 named cvars with defaults (`C-174`).
+- **`WP-26` closed** — the plan's self-declared weakest link. `Moho::CollisionDB<Entity>` at
+  `COGrid+0x04`, with the query iteration order read verbatim (`C-137`–`C-141`).
+- **`WP-04`'s stage order answered, and it is a trap**: the tick runs CommandDispatch → Script
+  → Motion, the **reverse** of declaration order (`C-142`). Corroborated sideways by `C-162`.
+- **`WP-15` traced end to end** (`C-159`–`C-164`) and is the **first package to satisfy the
+  gate's evidence half**. It was deliberately *not* marked `Confirmed` — see below.
+- `WP-43`, `WP-27`, `WP-28`, `WP-18`, `WP-31`, `WP-20`, `WP-21` all reached `Analyzed`.
+- **The `C-110` shield rewrite is confirmed against retail's own code** (`C-143`).
+
+**Judgment call, recorded because it is the campaign's first.** `WP-15` meets every evidence
+requirement, and an agent proposed marking it `Confirmed`. It is not. The gate reads *"requires
+both a ready implementation and executable evidence"*, and the contrast with `Ready but not
+confirmed` is *"might still differ from retail in ordering, rounding, edge cases, or
+architecture"* — ours differs on all four, openly (`C-103`, `C-104`). Marking it confirmed would
+have made the campaign's one green light meaningless. The row now records the fix order instead.
+
+**Corrections made to our own work**
+- `C-165` first reported 1,311 blueprint keys; 586 were Lua API docs sharing the same shape. The
+  real number is **725**.
+- A globals survey first returned 1,328 hits whose top entries were `44 24` — the `[esp+disp]`
+  SIB byte — decoding inside unrelated instructions. Redone with real disassembly: **691**.
+- `C-141` refuted `C-120`'s guess that collision slot `+0x1c` was the *cheaper* test.
+- `C-180` fixed a defect in `extract_source_paths.py`: it matched only a string's start address,
+  so `PathQueue.cpp` read as unreferenced. 66 → 67 files, 560 → 564 functions.
+- A global float3 flagged as a possible determinism hazard was read and **cleared** — it is a
+  lazy-init constant cache.
+
+**Cross-confirmations.** Findings reached independently by agents that could not see each other:
+the collision-shape count (enum table vs vtables), five state-mask bits (`orl` immediates vs the
+registration table), `IsTargetExempt` (behaviour vs transferred name), `CUnitGetBuiltTask`'s
+address (source paths vs vtables), and the stage order.
+
+**The one architectural verdict.** `C-179`: per-unit A* run to completion inside a unit's tick
+cannot reproduce retail's latency shape, because retail runs **one resumable search per army,
+FIFO, under an integer step budget**. The redesign is real but bounded — the search underneath
+can stay anything resumable that counts steps.
+
+**Next action.** Exploit the seventh vein named in `C-180`: `PathQueue`, `COGrid`,
+`CAiPathNavigator`, `CFormationInstance` and friends all have save/load serializers, and what a
+serializer registers is the authoritative field list for its class. Then take `WP-15` to
+`Confirmed` by fixing in the order its dashboard row records.
+
 ## Session protocol
 
 ### Starting a session
