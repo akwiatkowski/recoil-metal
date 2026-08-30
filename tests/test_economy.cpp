@@ -413,3 +413,109 @@ TEST_CASE("an extractor's own upkeep eats the energy it needed to be built") {
     CHECK(amount(economy.stored.mass) == Approx(2.5f).margin(0.01));
     CHECK(amount(economy.stored.energy) == Approx(3.0f).margin(0.01));
 }
+
+TEST_CASE("allied overflow is a progressive split, not an equal one") {
+    // Retail divides the REMAINING excess by the REMAINING recipient count, caps each share
+    // by that ally's headroom, and subtracts what was actually taken (`C-163`). So an ally
+    // with no room passes its share along rather than wasting it, and a later recipient can
+    // receive far more than an equal split would give. A flat 1/n is the obvious reading and
+    // is wrong wherever any ally is near cap.
+    std::vector<rm::sim::Army> armies(3);
+    for (int index = 0; index < 3; ++index) {
+        armies[static_cast<std::size_t>(index)].index = index;
+        armies[static_cast<std::size_t>(index)].alliance = 0;  // one team
+    }
+
+    std::vector<Economy> economies(3);
+    for (Economy& economy : economies) {
+        economy.storage = res(100.0f, 100.0f);
+    }
+    // The giver is 60 mass over its cap.
+    economies[0].stored = res(160.0f, 0.0f);
+    // The first ally is FULL, so it can take nothing and must pass its share on.
+    economies[1].stored = res(100.0f, 0.0f);
+    economies[2].stored = res(0.0f, 0.0f);
+
+    rm::sim::shareOverflow(economies, armies);
+
+    CHECK(amount(economies[1].sharedIn.mass) == Approx(0.0f));
+    // An equal split would have handed the second ally 30 and destroyed the other 30. The
+    // progressive one gives it everything the first could not hold.
+    CHECK(amount(economies[2].sharedIn.mass) == Approx(60.0f).margin(0.01));
+    // And the giver keeps only its cap either way.
+    CHECK(amount(economies[0].stored.mass) == Approx(100.0f));
+}
+
+TEST_CASE("a gift arrives as income, so a full ally gains nothing from it") {
+    // Retail credits a share to the recipient's INCOME accumulator, which the allocator
+    // consumes at the start of the next beat (`C-163`) — not to its store. So the gift is
+    // spendable rather than banked, and it cannot push anyone over their cap.
+    std::vector<rm::sim::Army> armies(2);
+    armies[1].index = 1;
+    armies[0].alliance = armies[1].alliance = 0;
+
+    std::vector<Economy> economies(2);
+    economies[0].storage = res(100.0f, 100.0f);
+    economies[1].storage = res(100.0f, 100.0f);
+    economies[0].stored = res(150.0f, 0.0f);
+    economies[1].stored = res(90.0f, 0.0f);
+
+    rm::sim::shareOverflow(economies, armies);
+    // Capped by the ally's 10 of headroom, not by the 50 on offer.
+    CHECK(amount(economies[1].sharedIn.mass) == Approx(10.0f).margin(0.01));
+    CHECK(amount(economies[1].stored.mass) == Approx(90.0f));  // not yet arrived
+
+    std::vector<Construction> nothing;
+    rm::sim::tickEconomy(economies[1], nothing);
+    CHECK(amount(economies[1].stored.mass) == Approx(100.0f).margin(0.01));
+    CHECK(amount(economies[1].sharedIn.mass) == Approx(0.0f));  // consumed, not re-credited
+}
+
+TEST_CASE("storage capacity truncates per structure, not on the sum") {
+    // The economy's ONE rounding point (`C-069`, `C-104`(e), `C-160`). Retail adds each
+    // structure's contribution through a truncating conversion, so three structures offering
+    // 105.6 contribute 315 rather than 316.8. Truncating the sum instead agrees for
+    // whole-numbered blueprints and diverges for every other, which is what decides it.
+    const rm::sim::Mag one = rm::test::mag(105.6f);
+    rm::sim::Mag perStructure{};
+    for (int index = 0; index < 3; ++index) {
+        perStructure += rm::sim::Mag::fromInt(one.floorToInt());
+    }
+    CHECK(amount(perStructure) == Approx(315.0f));
+    CHECK(amount(perStructure) != Approx(316.8f));
+}
+
+TEST_CASE("the per-unit consumed ratio is recovered from the demand shape") {
+    // Retail keeps this on each unit's own request (`Unit+0x53c`); we recover it from the
+    // bucket sums, which is equivalent because the allocator is linear in them (`C-159`).
+    // Shields and intel read it as a rate multiplier, so a brownout has to reach them.
+    Economy economy;
+    economy.storage = res(1000.0f, 1000.0f);
+    economy.stored = res(1000.0f, 3.0f);   // plenty of mass, energy is short
+    economy.upkeepPerTick = perTick(0.0f, 60.0f);  // energy-only: single-resource bucket
+
+    std::vector<Construction> building{massExtractor()};  // wants both: multi-resource
+    rm::sim::tickEconomy(economy, building);
+
+    CHECK_FALSE(economy.massIsBinding);  // energy binds
+
+    // A consumer that wants nothing is unaffected, so the ratio stays neutral.
+    CHECK(rm::test::asFloat(economy.consumedRatio(res(0.0f, 0.0f))) == Approx(1.0f));
+
+    // **Which BUCKET a request is summed into and which RATIO it is granted at are different
+    // questions**, and conflating them is the easy mistake here — this test was first written
+    // asserting that an energy-only consumer gets `singleResourceFunded`, and it does not.
+    // Retail buckets by how many resources are outstanding, but grants at `r1` whenever the
+    // request is outstanding **on the binding resource** (`C-159`). Energy binds here, so an
+    // energy-only consumer is on the binding resource and takes `r1` — the same ratio as a
+    // consumer wanting both.
+    CHECK(rm::test::asFloat(economy.consumedRatio(perTick(0.0f, 60.0f)))
+          == Approx(rm::test::asFloat(economy.multiResourceFunded)));
+    CHECK(rm::test::asFloat(economy.consumedRatio(perTick(10.0f, 10.0f)))
+          == Approx(rm::test::asFloat(economy.multiResourceFunded)));
+    // A MASS-only consumer is not outstanding on the binding resource, so it takes `r2` —
+    // and with mass in plentiful supply that means it is funded in full while the energy
+    // payers are throttled. A single global ratio cannot express that.
+    CHECK(rm::test::asFloat(economy.consumedRatio(perTick(10.0f, 0.0f)))
+          == Approx(rm::test::asFloat(economy.singleResourceFunded)));
+}

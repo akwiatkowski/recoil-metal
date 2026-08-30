@@ -171,8 +171,15 @@ void recomputeIncome(const UnitStore& store, const UnitCatalog& catalog, Match& 
             economy.incomePerTick.mass += rates.massPerTick * beside.massProduction;
             economy.incomePerTick.energy += rates.energyPerTick * beside.energyProduction;
             economy.upkeepPerTick.energy += rates.upkeepEnergyPerTick * beside.energyUpkeep;
-            economy.storage.mass += def->storageMass;
-            economy.storage.energy += def->storageEnergy;
+            // TRUNCATED PER STRUCTURE, and this is the only place the economy rounds
+            // (`C-069`, `C-104`(e), `C-160`). Retail keeps its capacity as a `uint64` and
+            // adds each contribution through `CEconStorage::Apply`, whose `__ftol2`
+            // truncates toward zero — so a structure offering 105.6 mass of storage
+            // contributes 105, and three of them contribute 315 rather than 316.8.
+            // Truncating the SUM instead would agree for whole-numbered blueprints and
+            // diverge for every other, which is the case that decides it.
+            economy.storage.mass += Mag::fromInt(def->storageMass.floorToInt());
+            economy.storage.energy += Mag::fromInt(def->storageEnergy.floorToInt());
         }
     }
 }
@@ -457,6 +464,11 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
                 }
             }
         }
+
+        // AFTER every army has ticked, never during (`C-163`). An army's spare capacity is
+        // only known once it has spent, so a share offered mid-loop would be sized against a
+        // headroom that the recipient's own tick was about to change.
+        shareOverflow(match.economies, match.armies);
     }
 
     return report;

@@ -51,6 +51,10 @@ void tickEconomy(Economy& economy, std::span<Construction> building) {
     // does (`C-163`). A full bank can therefore pay one tick's bill from one tick's income
     // and remain full. NO MULTIPLY BY A TICK LENGTH: this is already a per-tick rate (§5.1).
     economy.stored += economy.incomePerTick;
+    // What allies handed over last tick arrives with income, not as a deposit (`C-163`), so it
+    // is spendable this tick and an army already at cap gains nothing from it.
+    economy.stored += economy.sharedIn;
+    economy.sharedIn = Resources{};
 
     // UPKEEP IS A REQUEST, not a lump taken off the top (`C-161`). Retail never sees upkeep
     // and construction as two things: `Unit.lua` sums maintenance and build cost into ONE
@@ -189,6 +193,70 @@ void tickEconomy(Economy& economy, std::span<Construction> building) {
         std::max(Mag{}, std::min(economy.stored.mass, economy.storage.mass));
     economy.stored.energy =
         std::max(Mag{}, std::min(economy.stored.energy, economy.storage.energy));
+}
+
+void shareOverflow(std::span<Economy> economies, std::span<const Army> armies) {
+    // Retail's split is PROGRESSIVE, not flat (`C-163`): it divides the *remaining* excess by
+    // the *remaining* recipient count, caps each share by that ally's headroom, and subtracts
+    // what was actually taken. So an ally with no room passes its share on rather than wasting
+    // it, and the last recipient can receive far more than an equal split would give.
+    //
+    // A flat `1/n` would be the obvious reading and is wrong wherever any ally is near cap,
+    // which in a stalling team is most of the time.
+    for (std::size_t giver = 0; giver < economies.size(); ++giver) {
+        Economy& from = economies[giver];
+        if (!from.sharesOverflow || giver >= armies.size()) {
+            continue;
+        }
+
+        Resources excess{
+            .mass = std::max(Mag{}, from.stored.mass - from.storage.mass),
+            .energy = std::max(Mag{}, from.stored.energy - from.storage.energy),
+        };
+        if (excess.mass <= Mag{} && excess.energy <= Mag{}) {
+            continue;
+        }
+
+        // Recipients, in army order — the traversal order is part of the result, because the
+        // progressive split gives later allies whatever earlier ones could not hold.
+        std::vector<std::size_t> allies;
+        for (std::size_t other = 0; other < economies.size(); ++other) {
+            if (other != giver && other < armies.size()
+                && armies[other].alliance == armies[giver].alliance) {
+                allies.push_back(other);
+            }
+        }
+
+        std::size_t remaining = allies.size();
+        for (const std::size_t index : allies) {
+            Economy& to = economies[index];
+            const Mag divisor = Mag::fromInt(static_cast<std::int64_t>(remaining));
+            const auto offer = [divisor](Mag pool, Mag headroom) {
+                if (pool <= Mag{} || headroom <= Mag{}) {
+                    return Mag{};
+                }
+                const Mag share = Mag::fromRaw((pool.raw() << kFxFractionalBits)
+                                               / divisor.raw());
+                return std::min(share, headroom);
+            };
+            const Mag mass = offer(excess.mass,
+                                   std::max(Mag{}, to.storage.mass - to.stored.mass));
+            const Mag energy = offer(excess.energy,
+                                     std::max(Mag{}, to.storage.energy - to.stored.energy));
+
+            // Credited to INCOME, so it arrives next tick and is spendable rather than banked.
+            to.sharedIn.mass += mass;
+            to.sharedIn.energy += energy;
+            excess.mass -= mass;
+            excess.energy -= energy;
+            --remaining;
+        }
+
+        // The giver keeps only its cap. Whatever no ally could hold is destroyed, which is
+        // retail's outcome too — sharing reduces the waste, it does not remove it.
+        from.stored.mass = std::min(from.stored.mass, from.storage.mass);
+        from.stored.energy = std::min(from.stored.energy, from.storage.energy);
+    }
 }
 
 std::vector<Construction> takeFinished(std::vector<Construction>& building) {

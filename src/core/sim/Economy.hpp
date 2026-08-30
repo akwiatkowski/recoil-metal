@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/sim/Fx.hpp"
+#include "core/sim/Army.hpp"
 #include "core/sim/IdPool.hpp"
 
 #include "core/sim/Movement.hpp"
@@ -60,20 +61,22 @@ struct Economy {
     /// where a reader could use it directly.
     Resources incomePerTick;
 
-    /// What standing structures cost to RUN, per second. Energy only in the corpus.
+    /// What standing structures cost to RUN, per tick. Energy only in the corpus.
     ///
-    /// Charged BEFORE construction is funded. **This is ours, not Forged Alliance's**, and
-    /// the comment here used to claim the opposite — that the ordering "is the mechanic".
-    /// It is not. Retail has no priority between them: upkeep and construction are peers in
-    /// one request list, and when energy is the binding resource both receive the *same*
-    /// fraction. Where we starve a build to keep the lights on, retail runs both at half
-    /// rate (`C-103`, `C-067`).
+    /// A REQUEST, competing with construction rather than preceding it (`C-161`). This
+    /// comment twice said the opposite — first that charging upkeep first "is the mechanic",
+    /// then that it was ours and wanted fixing — and it is now fixed: upkeep and construction
+    /// are peers, and when energy binds they receive the same fraction.
     ///
-    /// The deeper divergence is that retail models upkeep as demand at all, which is what
-    /// lets an unpayable bill throttle the consumers that incurred it. Here it is a lump
-    /// subtracted before demand is measured, with the shortfall absorbed — so a brownout is
-    /// invisible to shields and intel rather than slowing them. Fixing the ordering without
-    /// first making upkeep a request would not move us closer to retail.
+    /// Retail cannot prioritise between them even in principle. `Unit.lua` sums maintenance
+    /// and build cost into ONE consumption figure before the native setter, so the engine
+    /// holds a single number per consumer and cannot tell the halves apart (`C-103`, `C-161`).
+    ///
+    /// One divergence survives and is deliberate: retail's ratio is per unit, ours is per
+    /// bucket. Those are the same number for every consumer in this corpus, because upkeep is
+    /// energy-only and therefore always lands in the single-resource bucket — see
+    /// `singleResourceFunded`. A unit with *mass* upkeep would break the equivalence and need
+    /// a real per-unit request.
     Resources upkeepPerTick;
 
     /// What last tick TRIED to pay: construction drain plus upkeep. The load figure an AI
@@ -124,6 +127,44 @@ struct Economy {
     /// strict improvement and its loop starts at the energy index (`C-159`). A tie is not
     /// hypothetical: it is what a perfectly balanced economy produces every tick.
     bool massIsBinding = false;
+
+    /// Whether this army offers its over-cap excess to allies (`C-163`).
+    ///
+    /// Retail gates sharing on a per-army flag and defaults it on for team members; a
+    /// free-for-all army has no allies to give to, so the flag never matters there.
+    bool sharesOverflow = true;
+
+    /// Excess handed over by allies, waiting to arrive.
+    ///
+    /// **Credited to INCOME, not to storage** — retail adds a share to the recipient's income
+    /// accumulator, which the allocator consumes at the start of the next beat (`C-163`). So a
+    /// gift arrives a beat late and is spendable rather than instantly banked, and an ally
+    /// already at cap gains nothing from it. Held separately because `incomePerTick` is
+    /// rebuilt from standing units every tick and anything written there would be erased.
+    Resources sharedIn;
+
+    /// The ratio a consumer with THIS demand shape was granted at — retail's `Unit+0x53c`.
+    ///
+    /// Retail stores this per unit, on the unit's own `CEconRequest`, and shields and intel
+    /// read it as a rate multiplier (`C-161`, `C-071`). We hold bucket sums rather than
+    /// per-unit requests because the allocator is linear in them (see `multiResourceFunded`),
+    /// and this recovers the per-unit answer from the shape of what a consumer wants.
+    ///
+    /// **Equivalent for this corpus, and not in general.** Every upkeep payer in Forged
+    /// Alliance draws energy only, so every one of them lands in the single-resource bucket
+    /// and shares one ratio. A unit with *mass* upkeep would break that and need a real
+    /// per-unit request — which is why this takes the demand rather than assuming.
+    ///
+    /// Returns 1 for a consumer that wants nothing, which keeps it neutral as a multiplier.
+    [[nodiscard]] Fx consumedRatio(Resources demand) const noexcept {
+        const bool wantsMass = demand.mass > Mag{};
+        const bool wantsEnergy = demand.energy > Mag{};
+        if (!wantsMass && !wantsEnergy) {
+            return kFxOne;
+        }
+        const bool outstandingOnBinding = massIsBinding ? wantsMass : wantsEnergy;
+        return outstandingOnBinding ? multiResourceFunded : singleResourceFunded;
+    }
 
     /// Upkeep granted and not yet spent, carried across ticks (`C-162`).
     ///
@@ -275,6 +316,17 @@ struct Construction {
 /// because silently skipping a mismatched entry would leave it never built and never
 /// reported.
 void tickEconomy(Economy& economy, std::span<Construction> building);
+
+/// Hand each army's over-cap excess to its allies, retail's `C-163` progressive split.
+///
+/// Run AFTER every army has ticked, because an army's spare capacity is only known once it
+/// has spent. Not a flat `1/n`: retail walks the recipients dividing the *remaining* excess
+/// by the *remaining* recipient count, capping each by that ally's headroom and subtracting
+/// what it took — so an ally with no room passes its share along to the next rather than
+/// wasting it, and the last recipient can receive far more than `1/n`.
+///
+/// Whatever no ally can hold is destroyed, which is retail's behaviour and ours.
+void shareOverflow(std::span<Economy> economies, std::span<const Army> armies);
 
 /// Removes what is finished, returning it so the caller can put the units on the map.
 [[nodiscard]] std::vector<Construction> takeFinished(std::vector<Construction>& building);

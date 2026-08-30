@@ -266,6 +266,11 @@ StateHash hashMatch(const UnitStore& store, const Match& match) {
         feed(h, economy.singleResourceFunded);
         feed(h, economy.massIsBinding);
         feed(h, economy.upkeepAllocated);
+        // The allied gift in flight. It carries between ticks and is spent next tick, so it
+        // is live state by the same argument as the carry-forward above — and the sharing
+        // flag decides whether it is ever produced.
+        feed(h, economy.sharedIn);
+        feed(h, economy.sharesOverflow);
     }
 
     // WHAT EACH SIDE CAN SEE (ADR-037). Hashed rather than treated as a derived cache, and
