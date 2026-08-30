@@ -50,27 +50,53 @@ with open(TSV, encoding='latin-1') as f:
         rows.append((int(p[0], 16), p[2], p[4]))
 rows.sort()
 
+# A key is documented by prose IMMEDIATELY following it. A key followed by another
+# key is UNDOCUMENTED -- it is still a schema key and must be emitted, but it has no
+# description of its own. Concretely: Class2AttachSize is documented, and
+# Class3/Class4/ClassSAttachSize are three real keys with no doc at all; the prose
+# after them belongs to AirClass, the last key in the run.
+#
+# An earlier version required key-then-prose and silently dropped the three
+# undocumented ones. A first fix over-corrected by attributing the run's prose to
+# every key in it, which handed Class3AttachSize the AirClass description -- wrong
+# in the other direction, and caught by reading the transport block back.
 pairs, i = [], 0
-while i < len(rows) - 1:
+while i < len(rows):
     va, kind, text = rows[i]
-    nva, nkind, ntext = rows[i + 1]
-    # key immediately followed by prose (a space-bearing sentence) = schema entry
-    if (LO <= va < HI and KEY.match(text) and text not in LUA_CALLABLES
-            and ' ' in ntext and len(ntext) > 12 and not KEY.match(ntext)):
-        pairs.append((va, text, nva, ntext))
-        i += 2
-    else:
+    if not (LO <= va < HI and KEY.match(text) and text not in LUA_CALLABLES):
         i += 1
+        continue
+    # collect the maximal run of consecutive keys starting here
+    run = []
+    while i < len(rows):
+        va2, _, text2 = rows[i]
+        if LO <= va2 < HI and KEY.match(text2) and text2 not in LUA_CALLABLES:
+            run.append((va2, text2))
+            i += 1
+        else:
+            break
+    doc_va, doc = None, ''
+    if i < len(rows):
+        nva, _, ntext = rows[i]
+        if ' ' in ntext and len(ntext) > 12 and not KEY.match(ntext):
+            doc_va, doc = nva, ntext
+            i += 1
+    if doc_va is None:
+        continue                      # a run with no prose after it is not schema
+    for n, (kva, ktext) in enumerate(run):
+        last = (n == len(run) - 1)
+        pairs.append((kva, ktext, doc_va if last else 0, doc if last else '',
+                      0 if last else 1))
 
 with open(OUT, 'w', encoding='utf-8') as f:
-    f.write('key_va\tkey\tdoc_va\tdoc\n')
-    for va, k, dva, d in pairs:
-        f.write(f'{va:08x}\t{k}\t{dva:08x}\t{d}\n')
+    f.write('key_va\tkey\tdoc_va\tdoc\tundocumented\n')
+    for va, k, dva, d, sh in pairs:
+        f.write(f'{va:08x}\t{k}\t{dva:08x}\t{d}\t{sh}\n')
 
 print(f'{len(pairs)} documented schema keys -> {OUT}')
 known = {'StorageEnergy': 0x4f8, 'StorageMass': 0x4fc,
          'NaturalProducer': 0x500, 'RebuildBonusIds': 0x518}
-found = [(k, va) for va, k, _, _ in pairs if k in known]
+found = [(k, va) for va, k, _, _, _ in pairs if k in known]
 found.sort(key=lambda kv: kv[1])
 print('validation -- string order vs known offset order:')
 for k, va in found:
