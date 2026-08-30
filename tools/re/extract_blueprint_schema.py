@@ -24,7 +24,12 @@ OUT = 'build/re-fa/exports/blueprint_schema.tsv'
 
 # The same .rdata block also holds the Lua API's documentation (C-032), which
 # has the identical name-then-prose shape -- 586 of a naive sweep's hits were
-# Lua callables like Dirname and GetCargo, not blueprint keys. Subtract them.
+# Lua callables like Dirname and GetCargo, not blueprint keys.
+#
+# Excluding by NAME alone was too blunt: StayUnderwater and TrackTarget are both
+# blueprint keys AND Projectile methods, so the name filter silently dropped real
+# schema rows. Discriminate on the DOC instead -- a Lua entry documents itself with
+# a signature ("Projectile:StayUnderwater(onoff)"), a blueprint key with prose.
 LUA_CALLABLES = set()
 with open(METHODS, encoding='latin-1') as _f:
     for _row in csv.DictReader(_f, delimiter='\t'):
@@ -33,6 +38,8 @@ with open(METHODS, encoding='latin-1') as _f:
 
 # A key is a bare CamelCase identifier; its doc is prose that follows it.
 KEY = re.compile(r'^[A-Z][A-Za-z0-9_]{2,39}$')
+# A Lua doc documents itself: 'Scope:Method(args)' or 'x = Method(args)'.
+LUA_SIG = re.compile(r'^[A-Za-z_][\w.]*\s*[:=]|\w+\s*\([^)]*\)\s*(--|$)')
 
 # The documented-schema block measured by density: 99% of pairs fall in this
 # span, and outside it the same key-then-prose shape matches unrelated text
@@ -63,14 +70,14 @@ rows.sort()
 pairs, i = [], 0
 while i < len(rows):
     va, kind, text = rows[i]
-    if not (LO <= va < HI and KEY.match(text) and text not in LUA_CALLABLES):
+    if not (LO <= va < HI and KEY.match(text)):
         i += 1
         continue
     # collect the maximal run of consecutive keys starting here
     run = []
     while i < len(rows):
         va2, _, text2 = rows[i]
-        if LO <= va2 < HI and KEY.match(text2) and text2 not in LUA_CALLABLES:
+        if LO <= va2 < HI and KEY.match(text2):
             run.append((va2, text2))
             i += 1
         else:
@@ -79,6 +86,11 @@ while i < len(rows):
     if i < len(rows):
         nva, _, ntext = rows[i]
         if ' ' in ntext and len(ntext) > 12 and not KEY.match(ntext):
+            # A Lua signature, not a blueprint description: drop the whole run.
+            if LUA_SIG.match(ntext) or (run and run[-1][1] in LUA_CALLABLES
+                                        and run[-1][1] + '(' in ntext):
+                i += 1
+                continue
             doc_va, doc = nva, ntext
             i += 1
     if doc_va is None:
