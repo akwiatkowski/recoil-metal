@@ -208,14 +208,26 @@ def find_references(pe: PE32, targets: dict[int, str]) -> list[tuple[int, int, s
     Returns (ref_site_va, string_va, ref_kind, line_number_or_None). `ref_site_va` points
     at the *instruction byte*, i.e. one before the immediate, when the preceding byte
     identifies a known instruction form; otherwise it points at the immediate itself.
+
+    INTERIOR POINTERS COUNT. An earlier version matched only a string's start address
+    and therefore missed `.\\sim\\PathQueue.cpp` entirely: its asserts push a VA five
+    bytes in, skipping the `.\\sim\\` prefix so the printed path is shorter. Every offset
+    into a known string is now scanned and attributed to the string that contains it,
+    which is why `interior=` appears in the ref kind.
     """
     text = next(s for s in pe.sections if s.name == ".text")
     blob = pe.data[text.raw_offset:text.raw_offset + text.raw_size]
     base = text.virtual_address
 
+    # Every VA that lands inside a candidate string, mapped back to that string's start.
+    probes: dict[int, tuple[int, int]] = {}
+    for string_va, text_of in targets.items():
+        for delta in range(len(text_of)):
+            probes.setdefault(string_va + delta, (string_va, delta))
+
     results = []
-    for string_va, _ in targets.items():
-        needle = struct.pack("<I", string_va)
+    for probe_va, (string_va, delta) in probes.items():
+        needle = struct.pack("<I", probe_va)
         pos = blob.find(needle)
         while pos != -1:
             prev = blob[pos - 1] if pos > 0 else None
@@ -227,6 +239,8 @@ def find_references(pe: PE32, targets: dict[int, str]) -> list[tuple[int, int, s
                 kind, site = "arith_imm32", pos - 1
             else:
                 kind, site = "raw_imm32", pos
+            if delta:
+                kind = f"{kind},interior={delta}"
             results.append((base + site, string_va, kind,
                             recover_line(blob, pos, prev),
                             recover_message(pe, blob, pos, prev)))
