@@ -489,6 +489,28 @@ Readiness and knowledge are separate axes.
 - **Ready but not confirmed** means our implementation works and is tested against its own
   contract, but might still differ from retail in ordering, rounding, edge cases, or architecture.
 - **Confirmed with EXE analysis** requires both a ready implementation and executable evidence.
+
+  **What "matches" means, decided in session 14 and binding on every later package.** `C-160`
+  established that retail's economy is `binary32` and that its storage cap is rounded twice;
+  `C-154` established that its replay checksum is a bounded change-set ring rather than a
+  full-state hash. Recoil Metal is fixed point end to end by design (`PLAN2.md` §5.2). **Numeric
+  equality with retail is therefore structurally impossible, not merely hard** — and a gate that
+  demanded it would be unreachable for every package that computes anything, which is most of
+  them. That would make `0 of 45` a permanent and meaningless score.
+
+  So `Confirmed` means **structural equivalence**, and specifically all five of:
+
+  1. **Same algorithm** — the same decision procedure, not a different one tuned to agree.
+  2. **Same ordering** — iteration order, tie-breaks, and which pass sees which state.
+  3. **Same quantisation points** — where retail rounds or truncates, we round or truncate,
+     even though the representations differ.
+  4. **Same observable staleness** — a value retail reads one beat late is read one beat late.
+  5. **Divergences enumerated** — anything left differing is recorded as a claim with its
+     reason, not left implicit.
+
+  What it explicitly does **not** require: bit-identical results, matching replay digests, or
+  reproducing retail's float rounding. Those are recorded as permanent divergences under
+  `C-154` and `C-160` and are not counted against any package.
 - **Confidence** measures how tightly non-EXE evidence already bounds retail behavior.
 - **EXE evidence** measures reverse-engineering progress. It may become `Analyzed` while readiness
   remains Not ready.
