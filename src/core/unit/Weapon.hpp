@@ -224,6 +224,40 @@ struct Weapon {
         return innerRingDamage > sim::Mag{} || outerRingDamage > sim::Mag{};
     }
 
+    /// The firing arc, in DEGREES, and its centre — retail's `HeadingArcCenter`/`Range`.
+    ///
+    /// `arcRangeDegrees >= 180` means unrestricted, and the engine skips the test entirely in
+    /// that case rather than comparing against a half-turn (`C-167`); 180 is also the schema's
+    /// documented default, so a weapon stating nothing is unrestricted. The value is a HALF
+    /// angle either side of the centre.
+    float arcCentreDegrees = 0.0f;
+    float arcRangeDegrees = 180.0f;
+
+    /// The largest height difference the weapon can reach across, in elmos.
+    ///
+    /// Retail folds this into the same "cannot reach" class as being out of range, so a
+    /// weapon that cannot elevate treats a target above it as unreachable rather than as
+    /// merely distant (`C-167`). Zero means unlimited: no shipped weapon states 0, and a
+    /// literal zero would make every weapon unable to shoot anything not exactly level.
+    sim::Fx maxHeightDifference{};
+
+    /// What this weapon prefers to shoot, most-wanted first — retail's `TargetPriorities`.
+    ///
+    /// **An EMPTY list means acquire NOTHING**, not "anything" (`C-156`). That is verified
+    /// against all 494 shipped weapons: the 157 without the key are every one of them on a
+    /// path that does not use priority acquisition — death weapons, anti-projectile, manual
+    /// fire, explicit-order missiles. So the restrictive reading is safe only because those
+    /// paths exist, and a weapon that reaches here with no priorities genuinely stays silent.
+    ///
+    /// The INDEX is the rank and it sorts lexicographically ahead of the score (`C-157`): a
+    /// row-0 match beats a row-1 match however far away it is. That is the one term of
+    /// retail's ordering that is a true sort key rather than a score adjustment.
+    /// Spelled out rather than using `CategoryExpression`, because that alias lives in
+    /// `BuildTree.hpp`, which needs `UnitDef`, which includes this file. The type is
+    /// identical — `vector<vector<string>>`, outer index the priority rank, inner a term
+    /// whose tags are ANDed — and `matchesExpression` accepts it directly.
+    std::vector<std::vector<std::string>> targetPriorities;
+
     /// Whether the weapon has a turret. A turreted weapon may fire without the hull
     /// turning; 284 of the 399 that say so are turreted.
     bool turreted = false;

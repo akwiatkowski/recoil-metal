@@ -1,5 +1,6 @@
 #include "core/unit/Weapon.hpp"
 
+#include "core/unit/BuildTree.hpp"
 #include "core/unit/FaDuration.hpp"
 
 #include "core/map/Scmap.hpp"
@@ -154,6 +155,30 @@ std::vector<Weapon> weaponsFrom(const lua::Value& weaponArray, bool airborneSour
                                            * scmap::kElmosPerOgrid);
         weapon.minRange = sim::fxFromFloat(
             std::max(0.0f, numberOr(entry, "MinRadius", 0.0f)) * scmap::kElmosPerOgrid);
+
+        // The firing arc, in degrees, and the height the weapon can reach across (`C-167`).
+        // 180 is the schema's own default and means unrestricted — the engine skips the test
+        // rather than comparing against a half-turn, so a weapon stating nothing is free to
+        // fire in any direction.
+        weapon.arcCentreDegrees = numberOr(entry, "HeadingArcCenter", 0.0f);
+        weapon.arcRangeDegrees = numberOr(entry, "HeadingArcRange", 180.0f);
+        weapon.maxHeightDifference = sim::fxFromFloat(
+            std::max(0.0f, numberOr(entry, "MaxHeightDiff", 0.0f)) * scmap::kElmosPerOgrid);
+
+        // What it prefers to shoot, most-wanted first. **Absent means acquire nothing**
+        // (`C-156`) — the list is left empty and the sim reads that as silence, which is
+        // retail's behaviour and not a parse failure.
+        if (const lua::Value* priorities = entry.find("TargetPriorities")) {
+            for (const lua::Value& row : priorities->items) {
+                if (row.text.empty()) {
+                    continue;
+                }
+                CategoryTerm term = parseCategoryTerm(row.text);
+                if (!term.empty()) {
+                    weapon.targetPriorities.push_back(std::move(term));
+                }
+            }
+        }
 
         // The rings, in the same ogrids everything else is stated in.
         weapon.innerRingDamage = sim::magFromFloat(numberOr(entry, "NukeInnerRingDamage", 0.0f));

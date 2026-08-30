@@ -1,5 +1,7 @@
 #include "core/sim/Combat.hpp"
 
+#include "core/unit/BuildTree.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -381,6 +383,76 @@ Fx groundDistanceElmos(std::array<Fx, 3> from, std::array<Fx, 3> to) noexcept {
     return fxHypot(to[0] - from[0], to[2] - from[2]);
 }
 
+namespace {
+
+/// Retail's range/arc classification, `0x006dc5c0` (`C-167`). Lower is better.
+///
+/// **0** in range and within the arc; **1** inside the minimum radius; **2** outside the
+/// firing arc; **3** out of maximum range *or* beyond the weapon's height reach — the engine
+/// folds "too far" and "cannot elevate" into one class, so a weapon that cannot look up
+/// treats a target above it as unreachable rather than merely distant.
+///
+/// Distance is 2-D and squared, ignoring Y, exactly as the engine computes it.
+enum class ReachClass : int { InRange = 0, TooClose = 1, OutsideArc = 2, CannotReach = 3 };
+
+[[nodiscard]] ReachClass classifyReach(const unitdef::Weapon& weapon, Fx groundDistance,
+                                       Fx heightDifference) noexcept {
+    if (groundDistance > weapon.maxRange) {
+        return ReachClass::CannotReach;
+    }
+    // Zero means unlimited: no shipped weapon states 0, and a literal zero would stop every
+    // weapon shooting anything not exactly level with it.
+    if (weapon.maxHeightDifference > Fx{} && heightDifference > weapon.maxHeightDifference) {
+        return ReachClass::CannotReach;
+    }
+    if (groundDistance <= weapon.minRange) {
+        return ReachClass::TooClose;
+    }
+    // **The arc test is NOT implemented, and returning `OutsideArc` here would be worse than
+    // omitting it.** Retail compares the angle to the target against `HeadingArcRange` about
+    // `HeadingArcCenter`, skipping the test entirely at 180 or more (`C-167`). Both fields are
+    // parsed and both are on the weapon — what is missing is the shooter's FACING, which
+    // `nearestTarget` is not given.
+    //
+    // A first attempt classified every candidate of a restricted-arc weapon as `OutsideArc`,
+    // since without a facing there is nothing to compare. That is not "unimplemented", it is
+    // wrong: it hands every such weapon a 4x score penalty on every target and changes which
+    // one it picks. Omitting the test leaves those weapons slightly too permissive, which is
+    // the direction that does not silently alter targeting.
+    return ReachClass::InRange;
+}
+
+/// Which priority row a candidate matches, or `npos` for none.
+///
+/// The row index is retail's one true lexicographic sort key (`C-157`): a row-0 match beats a
+/// row-1 match however far away it is.
+///
+/// **An empty list means NO PREFERENCE here, where retail means ACQUIRE NOTHING (`C-156`) —
+/// and the divergence is deliberate, sequenced, and temporary.** `C-156` states the condition
+/// for the retail rule outright: it "is only survivable because death weapons, manual-fire
+/// weapons and anti-projectile weapons are on separate paths, so those paths must exist
+/// BEFORE priorities land, or ~157 of our equivalents go silent." Those paths do not exist
+/// here yet. Applying the rule anyway was tried and silenced roughly forty tests' worth of
+/// weapons in one step — the predicted failure, arriving exactly as described.
+///
+/// So: everything else about retail's ordering is implemented, and this one rule waits for
+/// the infrastructure it depends on. Flipping it later is a two-line change plus the paths.
+[[nodiscard]] std::size_t priorityRow(const unitdef::Weapon& weapon,
+                                      const unitdef::UnitDef& candidate) {
+    if (weapon.targetPriorities.empty()) {
+        return 0;  // see above: retail would return "no match" and refuse to fire
+    }
+    for (std::size_t row = 0; row < weapon.targetPriorities.size(); ++row) {
+        if (unitdef::matchesExpression(
+                unitdef::CategoryExpression{weapon.targetPriorities[row]}, candidate)) {
+            return row;
+        }
+    }
+    return std::numeric_limits<std::size_t>::max();
+}
+
+} // namespace
+
 std::optional<UnitId> nearestTarget(std::array<Fx, 3> from, int fromArmy,
                                     const unitdef::Weapon& weapon, const UnitStore& store,
                                     std::span<const Army> armies, const Intel* intel,
@@ -393,7 +465,8 @@ std::optional<UnitId> nearestTarget(std::array<Fx, 3> from, int fromArmy,
     const std::span<const MoveState> motion = store.motion();
 
     std::optional<UnitIndex> best;
-    std::uint64_t bestDistanceSquared = 0;
+    std::size_t bestRow = std::numeric_limits<std::size_t>::max();
+    std::uint64_t bestScore = 0;
 
     // THE GRID, rather than every slot in the store (§7 P5.2). The query radius is the weapon's
     // own reach, so a scan that used to be over every unit in the match is now over the handful
@@ -421,31 +494,60 @@ std::optional<UnitId> nearestTarget(std::array<Fx, 3> from, int fromArmy,
         const Fx dx = transforms[slot].x - from[0];
         const Fx dz = transforms[slot].z - from[2];
         const Fx distance = fxHypot(dx, dz);
-        if (distance > weapon.maxRange || distance < weapon.minRange) {
+
+        const Fx dy = transforms[slot].y > from[1] ? transforms[slot].y - from[1]
+                                                  : from[1] - transforms[slot].y;
+        const ReachClass reach = classifyReach(weapon, distance, dy);
+        if (reach == ReachClass::CannotReach) {
+            continue;  // out of range or out of elevation: not a candidate at all
+        }
+        // **A DIVERGENCE, and a deliberate one.** Retail keeps a too-close target as class 1
+        // and lets it win when nothing better exists, because acquiring and firing are
+        // separate there — the unit acquires, then manoeuvres. Here `nearestTarget`'s answer
+        // feeds firing directly, so returning a target the weapon cannot shoot would make a
+        // unit stand and click. The minimum radius therefore stays a hard reject until
+        // acquisition and firing are split. Recorded rather than silently kept.
+        if (reach == ReachClass::TooClose) {
             continue;
+        }
+
+        // WHICH ROW, and it outranks distance entirely. A weapon with no priorities matches
+        // no row and therefore acquires nothing — retail's behaviour, verified against every
+        // shipped weapon (`C-156`).
+        // Without a catalog there is nothing to match a category against, so every candidate
+        // sits at row 0 and the ordering falls back to score alone. Callers that do not pass
+        // one are asking "what is nearest", not "what does this weapon prefer".
+        const unitdef::UnitDef* def = catalog != nullptr ? catalog->def(store.typeAt(slot))
+                                                         : nullptr;
+        const std::size_t row = def != nullptr ? priorityRow(weapon, *def) : 0;
+        if (row == std::numeric_limits<std::size_t>::max()) {
+            continue;
+        }
+        if (row > bestRow) {
+            continue;  // retail early-outs once the row is worse than the incumbent's
         }
 
         // Retail ranks the unrounded squared distance. Taking the fixed-point root first
         // would collapse nearby candidates into false ties.
         const FxWide dxRaw = dx.raw();
         const FxWide dzRaw = dz.raw();
-        const std::uint64_t distanceSquared =
-            static_cast<std::uint64_t>(dxRaw * dxRaw)
-            + static_cast<std::uint64_t>(dzRaw * dzRaw);
+        std::uint64_t score = static_cast<std::uint64_t>(dxRaw * dxRaw)
+                              + static_cast<std::uint64_t>(dzRaw * dzRaw);
 
-        // Strictly nearer, so a true squared-distance tie falls to the LOWER SLOT — the
-        // iteration order. That is what makes the same scene pick the same target twice,
-        // which a screenshot depends on.
-        //
-        // It used to fall to the lower batch and then the lower instance, and slot order is
-        // not the same order: batches grouped one model together, and slots are spawn order
-        // interleaved across models. So this tie-break picks a different unit than it used
-        // to, and the match plays out differently — deliberately, and documented in PLAN2.md
-        // §7 P1.4. The property that mattered (the same scene decides the same way every
-        // run) is unchanged.
-        if (!best || distanceSquared < bestDistanceSquared) {
+        // THE CLASS PENALTY, and it is a penalty rather than a sort key (`C-181`). The engine
+        // multiplies the distance-mode score by 4.0 for a worse class; a close class-2 target
+        // can therefore still beat a distant class-0 one, which a lexicographic class key
+        // would forbid. This was read at `0x005de8d4` precisely because two earlier claims
+        // disagreed about it.
+        if (reach != ReachClass::InRange) {
+            score *= 4;
+        }
+
+        const bool better = !best || row < bestRow || (row == bestRow && score < bestScore);
+        if (better) {
             best = slot;
-            bestDistanceSquared = distanceSquared;
+            bestRow = row;
+            bestScore = score;
         }
     }
 

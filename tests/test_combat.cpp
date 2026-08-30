@@ -1640,3 +1640,56 @@ TEST_CASE("a unit facing the wrong way holds its shot rather than spending it") 
     roster.transform(gunner).heading = 0;
     CHECK(rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots, rm::sim::TickRate{}) == 1);
 }
+
+TEST_CASE("a priority row outranks distance, however far away it is") {
+    // Retail's ordering is (range/arc class, priority row, score, incumbency), and the ROW is
+    // the one term that is a true lexicographic key rather than a score adjustment (`C-157`).
+    // A row-0 match therefore beats a row-1 match at any distance — which is what makes an
+    // anti-air gun ignore the tank standing next to it.
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+
+    Roster roster;
+    UnitDef bomberDef = targetDef();
+    bomberDef.name = "test_air";
+    bomberDef.categories = {"AIR", "MOBILE"};
+    UnitDef tankDef = targetDef();
+    tankDef.name = "test_land";
+    tankDef.categories = {"LAND", "MOBILE"};
+
+    const rm::UnitTypeIndex air = roster.addType(bomberDef);
+    const rm::UnitTypeIndex land = roster.addType(tankDef);
+
+    const UnitId farAir = roster.add(air, 0.0f, 250.0f, 1, 100.0f);
+    (void)roster.add(land, 0.0f, 20.0f, 1, 100.0f);  // far nearer, and wanted less
+
+    Weapon weapon = directFire(10.0f, 300.0f);
+    weapon.targetPriorities = {{"AIR"}, {"LAND"}};
+
+    const auto target = rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, weapon, roster.store,
+                                               armies, nullptr, &roster.catalog);
+    REQUIRE(target.has_value());
+    CHECK(*target == farAir);  // the distant air unit, not the tank at arm's length
+}
+
+TEST_CASE("a target beyond the weapon's height reach is not a target at all") {
+    // Retail folds "too far" and "cannot elevate" into one class, so a weapon that cannot look
+    // up treats a target above it as unreachable rather than merely distant (`C-167`).
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+
+    Roster roster;
+    const rm::UnitTypeIndex type = roster.addType(targetDef());
+    const UnitId high = roster.add(type, 0.0f, 30.0f, 1, 100.0f);
+    roster.transform(high).y = rm::test::fx(200.0f);
+
+    Weapon weapon = directFire(10.0f, 300.0f);
+    weapon.maxHeightDifference = rm::test::fx(50.0f);
+
+    CHECK_FALSE(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, weapon, roster.store, armies)
+                    .has_value());
+
+    // Zero means UNLIMITED, not "must be exactly level" — no shipped weapon states 0, and
+    // reading it literally would stop every weapon shooting anything on a slope.
+    weapon.maxHeightDifference = rm::sim::Fx{};
+    CHECK(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, weapon, roster.store, armies)
+              .has_value());
+}
