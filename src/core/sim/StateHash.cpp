@@ -452,6 +452,31 @@ StateHash hashMatch(const UnitStore& store, const Match& match) {
                 }
             }
         }
+
+        // Retained radar knowledge is not a presentation cache: a dead source's last-known
+        // blip changes what this alliance knows. Preserve older empty-intel hash streams, but
+        // once any such knowledge exists feed every owning alliance and every field.
+        bool hasRetainedRadarContacts = false;
+        for (std::size_t alliance = 0; alliance < match.intel->alliances(); ++alliance) {
+            hasRetainedRadarContacts = hasRetainedRadarContacts
+                                    || !match.intel->retainedRadarContacts(
+                                            static_cast<int>(alliance)).empty();
+        }
+        if (hasRetainedRadarContacts) {
+            feed(h, true);
+            for (std::size_t alliance = 0; alliance < match.intel->alliances(); ++alliance) {
+                const auto contacts =
+                    match.intel->retainedRadarContacts(static_cast<int>(alliance));
+                feed(h, contacts.size());
+                for (const RetainedRadarContact& contact : contacts) {
+                    feed(h, static_cast<std::size_t>(contact.unit.index));
+                    feed(h, static_cast<std::size_t>(contact.unit.generation));
+                    feed(h, contact.x);
+                    feed(h, contact.z);
+                    feed(h, contact.maybeDead);
+                }
+            }
+        }
     }
 
     // Shots in flight. Nullable because a decorative crowd has no projectile list, and
@@ -552,6 +577,21 @@ StateHash hashMatch(const UnitStore& store, const Match& match) {
     }
     feed(h, match.baseStorage);
     feed(h, match.over);
+    // A pending result changes which future tick emits GameOver, so it is as authoritative as
+    // the terminal flag itself. The empty optional distinguishes a draw from a named alliance.
+    feed(h, match.winnerPending);
+    feed(h, match.pendingWinner.has_value());
+    if (match.pendingWinner) {
+        feed(h, *match.pendingWinner);
+    }
+    feed(h, static_cast<std::uint64_t>(match.winnerStableTicks));
+    // C-210's poll phase and delayed cleanups decide future defeats and deaths, so they are
+    // authority state rather than implementation detail.
+    feed(h, static_cast<std::uint64_t>(match.defeatPollElapsedTicks));
+    feed(h, match.defeatCleanupRemainingTicks.size());
+    for (const TickCount remaining : match.defeatCleanupRemainingTicks) {
+        feed(h, static_cast<std::uint64_t>(remaining));
+    }
 
     return h;
 }

@@ -64,17 +64,17 @@ excluded from the headline.
 | [`FA-SIM`](#fa-sim---simulation-kernel-and-object-lifecycle) | Simulation kernel and object lifecycle | `WP-03`-`04` | 65% | 40% | 90% | Add the safe script-object lifecycle seam needed by the Lua host. |
 | [`FA-CONTENT`](#fa-content---vfs-blueprints-maps-and-bootstrap) | VFS, blueprints, maps, bootstrap | `WP-05`, `06`, `09` | 65% | 35% | 55% | Trace and test exact retail SCD mount/override precedence. |
 | [`FA-LUA`](#fa-lua---gameplay-lua-and-mod-contract) | Gameplay Lua and mod contract | `WP-07`-`08` | 10% | 5% | 30% | Measure the exact Moho contract for the milestone-20 skirmish slice. |
-| [`FA-MATCH`](#fa-match---armies-setup-and-victory-rules) | Armies, setup, victory rules | `WP-10`-`11` | 45% | 20% | 85% | Implement retail defeat polling and stable-victory delays. |
+| [`FA-MATCH`](#fa-match---armies-setup-and-victory-rules) | Armies, setup, victory rules | `WP-10`-`11` | 55% | 20% | 85% | Implement retail victory-mode/category predicates and allied-victory handling. |
 | [`FA-CMD`](#fa-cmd---commands-controls-and-factories) | Commands, controls, factories | `WP-12`-`14` | 45% | 35% | 70% | Add the app-level live-versus-replay acceptance test for `WP-12` slice 4. |
 | [`FA-ECON`](#fa-econ---economy-construction-and-engineering) | Economy, construction, engineering | `WP-15`-`19` | 70% | 55% | 85% | Read capture plus ownership transfer, then specify the implementation. |
 | [`FA-LAND`](#fa-land---land-navigation-formations-and-spatial-world) | Land navigation, formations, spatial world | `WP-20`, `21`, `26` | 55% | 20% | 95% | Supply a persistent `PathService` to live and replay match construction, with one app-level FIFO-latency acceptance test. |
 | [`FA-AIR`](#fa-air---aircraft-flight-combat-and-staging) | Aircraft flight, combat, staging | `WP-22` | 30% | 10% | 95% | Implement the deterministic winged-aircraft mover foundation. |
 | [`FA-NAVY`](#fa-navy---surface-and-submerged-warfare) | Surface and submerged warfare | `WP-23`-`24` | 35% | 10% | 75% | Implement one complete `SurfacingSub` dive/surface slice. |
 | [`FA-TRANSPORT`](#fa-transport---attachments-cargo-and-ferries) | Attachments, cargo, ferries | `WP-25` | 5% | 0% | 95% | Implement the generic entity attachment graph foundation. |
-| [`FA-WEAPONS`](#fa-weapons---targeting-weapons-and-projectiles) | Targeting, weapons, projectiles | `WP-27`-`28` | 75% | 55% | 90% | Separate forced Attack targets from automatic acquisition (`recoil-metal-7599`). |
+| [`FA-WEAPONS`](#fa-weapons---targeting-weapons-and-projectiles) | Targeting, weapons, projectiles | `WP-27`-`28` | 80% | 55% | 90% | Add C-094 BENIGN filtering to automatic acquisition. |
 | [`FA-MISSILES`](#fa-missiles---silos-missiles-and-interception) | Silos, missiles, interception | `WP-29` | 5% | 0% | 90% | Implement tactical silo ammo production and decrement-then-fire. |
-| [`FA-DAMAGE`](#fa-damage---damage-death-and-shields) | Damage, death, shields | `WP-30`-`32` | 60% | 40% | 75% | Route direct projectiles through collidable shield entities. |
-| [`FA-INTEL`](#fa-intel---vision-radar-sonar-and-counter-intel) | Vision, radar, sonar, counter-intel | `WP-33` | 65% | 45% | 90% | Add remembered recon contacts and seen-now/seen-ever/maybe-dead state. |
+| [`FA-DAMAGE`](#fa-damage---damage-death-and-shields) | Damage, death, shields | `WP-30`-`32` | 65% | 40% | 75% | Add the next collidable shield slice: area-shield admission and stacking. |
+| [`FA-INTEL`](#fa-intel---vision-radar-sonar-and-counter-intel) | Vision, radar, sonar, counter-intel | `WP-33` | 70% | 45% | 90% | Add seen-now/seen-ever contact state and bounded retained-contact reaping/redetection. |
 | [`FA-PROGRESS`](#fa-progress---enhancements-veterancy-and-special-units) | Enhancements, veterancy, special units | `WP-34`-`36` | 35% | 20% | 35% | Complete the enhancement lifecycle specification around `CUnitScriptTask`. |
 | [`FA-TERRAIN`](#fa-terrain---mutable-terrain-and-craters) | Mutable terrain and craters | `WP-37` | 0% | 0% | 25% | Trace one crater from damage through terrain, pathing, and rendering invalidation. |
 | [`FA-AI`](#fa-ai---retail-ai-and-native-manager-boundary) | Retail AI and native manager boundary | `WP-38` | 35% | 5% | 30% | Remove the remaining condition-budget overruns (`recoil-metal-4754`). |

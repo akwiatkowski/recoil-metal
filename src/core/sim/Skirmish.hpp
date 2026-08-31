@@ -127,6 +127,20 @@ struct Match {
     /// Set once the match has been decided, so the result is announced once rather than
     /// every tick for the rest of the run.
     bool over = false;
+
+    /// C-210: a terminal winner (or draw) must remain unchanged for fifteen seconds before
+    /// it becomes GameOver. This is match state, rather than caller state, so every tick path
+    /// confirms the same candidate.
+    bool winnerPending = false;
+    std::optional<int> pendingWinner;
+    TickCount winnerStableTicks = 0;
+
+    /// C-210: commander defeat is sampled every three seconds, not every simulation tick.
+    TickCount defeatPollElapsedTicks = 0;
+
+    /// C-210: OnDefeat clears an army's non-wall units twenty seconds later. Entries are
+    /// indexed like `armies`; zero means that army has no cleanup pending.
+    std::vector<TickCount> defeatCleanupRemainingTicks;
 };
 
 /// A unit's death, with everything the caller needs to mark it.

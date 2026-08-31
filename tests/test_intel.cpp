@@ -5,6 +5,7 @@
 
 #include "core/map/HeightField.hpp"
 #include "core/sim/Army.hpp"
+#include "core/sim/Skirmish.hpp"
 #include "core/sim/Terrain.hpp"
 #include "core/sim/UnitCatalog.hpp"
 #include "core/sim/UnitStore.hpp"
@@ -694,6 +695,75 @@ TEST_CASE("an enemy in sight is seen exactly; one on radar alone is a blip") {
     const Fx offset = rm::sim::fxSqrt(dx * dx + dz * dz);
     CHECK(offset > Fx::fromInt(1));
     CHECK(offset <= Fx::fromInt(rm::sim::kRadarErrorElmos + 1));
+}
+
+TEST_CASE("a radar blip remains after its source dies") {
+    rm::unitdef::UnitDef watcherDef = seer(0.0f, 400.0f);  // radar only, no eyes
+    rm::unitdef::UnitDef quietDef = seer(0.0f);
+    UnitCatalog catalog;
+    const rm::UnitTypeIndex watcher = catalog.add(&watcherDef);
+    const rm::UnitTypeIndex quiet = catalog.add(&quietDef);
+
+    Intel intel;
+    intel.configure(2, Fx::fromInt(1024), Fx::fromInt(1024),
+                    rm::sim::VisionStyle::ForgedAlliance);
+
+    UnitStore store;
+    (void)place(store, watcher, 0, 500.0f, 500.0f);
+    const rm::sim::UnitId enemy = place(store, quiet, 1, 600.0f, 500.0f);
+    const std::vector<Army> armies = twoArmies(false);
+
+    intel.update(store, catalog, armies, nullptr);
+    store.kill(enemy);
+    intel.update(store, catalog, armies, nullptr);
+
+    std::vector<rm::sim::Contact> contacts;
+    rm::sim::contactsFor(0, store, catalog, armies, intel, 0, contacts);
+    const auto blip = std::find_if(contacts.begin(), contacts.end(),
+                                   [&](const rm::sim::Contact& contact) {
+                                       return contact.unit == enemy;
+                                   });
+    REQUIRE(blip != contacts.end());
+    CHECK(blip->kind == rm::sim::ContactKind::Radar);
+}
+
+TEST_CASE("a radar blip survives a source killed after intel refresh in the same skirmish tick") {
+    rm::unitdef::UnitDef watcherDef = seer(0.0f, 400.0f);  // radar only, no eyes
+    rm::unitdef::UnitDef quietDef = seer(0.0f);
+    UnitCatalog catalog;
+    const rm::UnitTypeIndex watcher = catalog.add(&watcherDef);
+    const rm::UnitTypeIndex quiet = catalog.add(&quietDef);
+
+    Intel intel;
+    intel.configure(2, Fx::fromInt(1024), Fx::fromInt(1024),
+                    rm::sim::VisionStyle::ForgedAlliance);
+
+    UnitStore store;
+    (void)place(store, watcher, 0, 500.0f, 500.0f);
+    const rm::sim::UnitId enemy = place(store, quiet, 1, 600.0f, 500.0f);
+    std::vector<Army> armies = twoArmies(false);
+    std::vector<rm::sim::Economy> economies(2);
+    const std::vector<int> commandersEver(2, 0);
+    rm::sim::Match match{.armies = armies,
+                          .economies = economies,
+                          .commandersEver = commandersEver,
+                          .intel = &intel};
+
+    // `tickSkirmish` refreshes Intel before its retirement pass. The already-destroyed target
+    // is therefore cached as radar-visible, then killed before the caller projects contacts.
+    store.health()[enemy.index].current = rm::sim::magFromFloat(0.0f);
+    (void)rm::sim::tickSkirmish(store, catalog, match,
+                                 rm::sim::Terrain{flatField(128, 0.0f)});
+    REQUIRE_FALSE(store.alive(enemy));
+
+    std::vector<rm::sim::Contact> contacts;
+    rm::sim::contactsFor(0, store, catalog, armies, intel, 0, contacts);
+    const auto blip = std::find_if(contacts.begin(), contacts.end(),
+                                   [&](const rm::sim::Contact& contact) {
+                                       return contact.unit == enemy;
+                                   });
+    REQUIRE(blip != contacts.end());
+    CHECK(blip->kind == rm::sim::ContactKind::Radar);
 }
 
 TEST_CASE("a unit nothing can sense is not a contact at all") {

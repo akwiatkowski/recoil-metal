@@ -198,8 +198,9 @@ TEST_CASE("damage reports the pre-health-clipping amount") {
     CHECK(rm::test::asFloat(total) == 1000.0f);
 }
 
-TEST_CASE("losing the last commander is a defeat and then a game over") {
-    // Both events, in that order, and the game-over names the winning alliance.
+TEST_CASE("losing the last commander is a defeat and then a stable game over") {
+    // Both events, in that order, and the game-over names the winning alliance after C-210's
+    // fifteen-second confirmation window.
     rm::HeightField field = flatField();
     const rm::sim::Terrain terrain{field};
     rm::test::Roster roster;
@@ -224,8 +225,13 @@ TEST_CASE("losing the last commander is a defeat and then a game over") {
                          .economies = economies,
                          .projectiles = &shots,
                          .events = &events,
-                         .commandersEver = commandersEver};
+                          .commandersEver = commandersEver};
     (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain, roster.rate);
+    const rm::TickCount defeatPollTicks = roster.rate.ticks(rm::sim::seconds(3.0f));
+    const rm::TickCount confirmationTicks = roster.rate.ticks(rm::sim::seconds(15.0f));
+    for (rm::TickCount tick = 1; tick < defeatPollTicks + confirmationTicks; ++tick) {
+        (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain, roster.rate);
+    }
 
     CHECK(events.count(EventKind::TeamDefeated) == 1);
     CHECK(events.count(EventKind::GameOver) == 1);

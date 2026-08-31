@@ -395,6 +395,49 @@ TEST_CASE("a projectile impact reaches the same bubble gate") {
     CHECK(rm::test::asFloat(roster.health(target).current) == Approx(100.0f));
 }
 
+TEST_CASE("a direct projectile sweep strikes a bubble before its owner's hull") {
+    rm::test::Roster roster;
+    const rm::UnitTypeIndex shieldType = roster.addType(shieldDef());
+    const rm::sim::UnitId generator = roster.add(shieldType, 0.0f, 0.0f, 1, 100.0f);
+    const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(2);
+
+    rm::sim::Projectile shot;
+    // The sweep enters the radius-80 bubble at z=-80, before reaching its owner at z=0.
+    shot.position = rm::test::at(0, 1, -100);
+    shot.velocity = rm::test::at(0, 0, 120);
+    shot.damage = rm::unitdef::flatDamage(rm::sim::Mag::fromInt(40));
+    shot.targetLayers = rm::unitdef::TargetLayerMask::Surface;
+    shot.firedByArmy = 0;
+    shot.ticksRemaining = 2;
+    std::vector<rm::sim::Projectile> shots{shot};
+
+    rm::HeightField field;
+    field.squaresX = 100;
+    field.squaresZ = 100;
+    field.baseHeight = -100.0f;
+    field.heightScale = 1.0f;
+    field.raw.assign(field.sampleCount(), std::uint16_t{0});
+    rm::sim::EventQueue events;
+
+    rm::sim::advanceProjectiles(shots, roster.store, armies, rm::sim::Terrain{field},
+                                roster.rate, &events, &roster.catalog);
+
+    REQUIRE(shots.size() == 1);
+    CHECK(shots.front().pendingImpact == rm::sim::ImpactType::Shield);
+    CHECK(shots.front().impactTarget == generator);
+    CHECK(rm::test::asFloat(roster.health(generator).current) == Approx(100.0f));
+    CHECK(rm::test::asFloat(roster.health(generator).shield.current) == Approx(100.0f));
+
+    rm::sim::advanceProjectiles(shots, roster.store, armies, rm::sim::Terrain{field},
+                                roster.rate, &events, &roster.catalog);
+
+    CHECK(shots.empty());
+    CHECK(rm::test::asFloat(roster.health(generator).shield.current) == Approx(60.0f));
+    CHECK(rm::test::asFloat(roster.health(generator).current) == Approx(100.0f));
+    REQUIRE(events.count(rm::sim::EventKind::ProjectileImpact) == 1);
+    CHECK(events.all().front().impactType == rm::sim::ImpactType::Shield);
+}
+
 TEST_CASE("a corner impact outside the bubble does not admit it for a covered target") {
     rm::test::Roster roster;
     const rm::UnitTypeIndex shieldType = roster.addType(shieldDef());

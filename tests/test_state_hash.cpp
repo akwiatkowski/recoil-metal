@@ -522,6 +522,17 @@ TEST_CASE("a decided match hashes differently from one still being played") {
     REQUIRE(hashMatch(a.store, running) != hashMatch(a.store, decided));
 }
 
+TEST_CASE("pending winner confirmation changes the hash") {
+    Fixture a;
+    rm::sim::Match running = a.match();
+    rm::sim::Match confirming = a.match();
+    confirming.winnerPending = true;
+    confirming.pendingWinner = 0;
+    confirming.winnerStableTicks = 1;
+
+    REQUIRE(hashMatch(a.store, running) != hashMatch(a.store, confirming));
+}
+
 TEST_CASE("negative zero is not a divergence") {
     // -0.0f == 0.0f arithmetically but their bit patterns differ. A sim that produced one
     // where it previously produced the other has not diverged, and reporting it as such

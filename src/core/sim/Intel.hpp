@@ -226,6 +226,18 @@ void intelSquares(const IntelGrid& grid, const Terrain* terrain, VisionStyle sty
 inline constexpr int kVisionMipLevel = 1;
 inline constexpr int kRadarMipLevel = 2;
 
+/// A radar source's last confirmed position for one viewing alliance.
+///
+/// This belongs to Intel rather than the source unit: once the source dies, the viewer still
+/// has a blip but cannot know whether that blip is a wreck or a live unit. No expiry policy is
+/// defined yet, so entries remain until a future recon rule explicitly reaps them.
+struct RetainedRadarContact {
+    UnitId unit;
+    Fx x{};
+    Fx z{};
+    bool maybeDead = false;
+};
+
 // The pass: every unit's coverage, kept up to date as the match moves.
 //
 // WHAT IT OWNS: one grid per alliance per sense, and one record per unit slot of what that
@@ -286,6 +298,10 @@ public:
 
     [[nodiscard]] std::size_t alliances() const noexcept { return grids_.size() / kIntelKindCount; }
 
+    /// Retained radar knowledge for the state hash and contact projection.
+    [[nodiscard]] std::span<const RetainedRadarContact> retainedRadarContacts(
+        int alliance) const noexcept;
+
 private:
     /// What one unit last contributed, one entry per sense.
     struct Emitter {
@@ -312,6 +328,10 @@ private:
     /// one flat vector would invite exactly the off-by-a-kind bug the assertion in
     /// `configure` records.
     std::vector<IntelGrid> hiddenGrids_;
+
+    /// Last radar positions, per viewing alliance. These are authoritative recon knowledge:
+    /// `contactsFor` emits an entry after its source is known dead as an uncertain blip.
+    std::vector<std::vector<RetainedRadarContact>> retainedRadarContacts_;
     std::vector<Placement> placements_;
     std::vector<std::array<Emitter, kIntelKindCount>> emitters_;
     std::vector<std::array<Emitter, kHiddenKindCount>> hiddenEmitters_;

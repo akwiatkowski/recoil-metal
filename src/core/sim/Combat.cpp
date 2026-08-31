@@ -99,6 +99,7 @@ struct SweptHit {
     UnitIndex slot = 0;
     SweepFraction fraction = 0;
     bool proximityFallback = false;
+    bool shield = false;
 };
 
 [[nodiscard]] Mag damageTarget(UnitIndex target, const unitdef::DamageProfile& damage,
@@ -196,6 +197,68 @@ struct SweptHit {
     return enter;
 }
 
+/// Earliest point an extended flight segment enters a spherical ordinary shield.  The search is
+/// fixed-point throughout: choosing the first Q31 fraction keeps shield and body ordering part
+/// of deterministic simulation state rather than depending on a platform floating-point root.
+[[nodiscard]] std::optional<SweepFraction> segmentSphereEntry(
+    std::array<Fx, 3> from, std::array<Fx, 3> to, std::array<Fx, 3> centre, Fx radius,
+    SweepFraction minimumFraction, SweepFraction maximumFraction) noexcept {
+    if (radius <= Fx{}) {
+        return std::nullopt;
+    }
+
+    // `FxWide` is deliberately enough for coordinate deltas but not for their products at the
+    // edge of the Fx domain.  The sweep's closest-point calculation therefore widens before
+    // multiplying, as `sphereBoxOverlap` does for its squared comparison.
+    using Product = __int128_t;
+    Product dot{};
+    Product lengthSquared{};
+    for (std::size_t axis = 0; axis < 3; ++axis) {
+        const Product offset = Product{from[axis].raw()} - centre[axis].raw();
+        const Product delta = Product{to[axis].raw()} - from[axis].raw();
+        dot += offset * delta;
+        lengthSquared += delta * delta;
+    }
+    if (lengthSquared == 0) {
+        return std::nullopt;
+    }
+
+    const auto contains = [&](SweepFraction fraction) {
+        Product distanceSquared{};
+        for (std::size_t axis = 0; axis < 3; ++axis) {
+            const Product coordinate = interpolateSweep(from[axis], to[axis], fraction).raw();
+            const Product delta = coordinate - centre[axis].raw();
+            distanceSquared += delta * delta;
+        }
+        const Product radiusRaw = radius.raw();
+        return distanceSquared <= radiusRaw * radiusRaw;
+    };
+
+    if (contains(minimumFraction)) {
+        return minimumFraction;
+    }
+
+    const Product closestRaw = (-dot * kSweepOne) / lengthSquared;
+    const Product boundedClosest = std::clamp(
+        closestRaw, Product{minimumFraction}, Product{maximumFraction});
+    const SweepFraction closest = static_cast<SweepFraction>(boundedClosest);
+    if (!contains(closest)) {
+        return std::nullopt;
+    }
+
+    SweepFraction outside = minimumFraction;
+    SweepFraction inside = closest;
+    while (inside - outside > 1) {
+        const SweepFraction middle = outside + (inside - outside) / 2;
+        if (contains(middle)) {
+            inside = middle;
+        } else {
+            outside = middle;
+        }
+    }
+    return inside;
+}
+
 /// First hostile body hit by this tick's extended 3D segment, or by C-168's radius-one sphere
 /// at the old position when the motion is below 0.01 elmo. Blast radius belongs to damage after
 /// impact, not the projectile's physical body.
@@ -220,10 +283,12 @@ struct SweptHit {
     // accepted interval, and one position LSB covers the rounded midpoint.
     const Fx roundingGuard = Fx::fromRaw(1);
     const bool proximityFallback = usesProximityFallback(from, to);
+    const Fx largestColliderRadius =
+        std::max(largestRadius(store), catalog != nullptr ? catalog->largestShieldRadius() : Fx{});
     const Fx reach = proximityFallback
-                       ? largestRadius(store) + kFxOne
-                       : std::max(spanX, spanZ) * (half + extension + roundingGuard)
-                             + largestRadius(store) + roundingGuard;
+                        ? largestColliderRadius + kFxOne
+                        : std::max(spanX, spanZ) * (half + extension + roundingGuard)
+                              + largestColliderRadius + roundingGuard;
     const SweepFraction minimumFraction = -kSweepExtension;
     const SweepFraction maximumFraction = kSweepOne + kSweepExtension;
     const Fx queryX = proximityFallback ? from[0] : middleX;
@@ -232,6 +297,30 @@ struct SweptHit {
     for (const UnitIndex slot : store.space().candidates(queryX, queryZ, reach)) {
         if (!shootable(shot.firedByArmy, store, slot, armies)) {
             continue;
+        }
+        if (slot >= transforms.size() || slot >= motion.size()) {
+            continue;
+        }
+
+        // An active ordinary bubble is its own swept collision primitive.  It is considered
+        // before the owner's body and is deliberately independent of unit target layers: the
+        // native shield primitive occupies its own collision layer (`C-169`).
+        if (!proximityFallback && catalog != nullptr) {
+            const UnitCatalog::ShieldInfo& shield = catalog->shield(store.typeAt(slot));
+            if (shield.exists() && store.health()[slot].shield.active()) {
+                std::array<Fx, 3> centre = positionOf(transforms[slot]);
+                centre[1] += shield.verticalOffsetElmos;
+                const std::optional<SweepFraction> hit = segmentSphereEntry(
+                    from, to, centre, shield.radiusElmos, minimumFraction, maximumFraction);
+                if (hit && (!best || *hit < best->fraction)) {
+                    best = SweptHit{
+                        .slot = slot,
+                        .fraction = *hit,
+                        .proximityFallback = false,
+                        .shield = true,
+                    };
+                }
+            }
         }
         if (slot >= motion.size()
             || ((static_cast<std::uint8_t>(shot.targetLayers)
@@ -267,6 +356,7 @@ struct SweptHit {
                 .slot = slot,
                 .fraction = *hit,
                 .proximityFallback = proximityFallback,
+                .shield = false,
             };
         }
     }
@@ -396,7 +486,7 @@ namespace {
 enum class ReachClass : int { InRange = 0, TooClose = 1, OutsideArc = 2, CannotReach = 3 };
 
 [[nodiscard]] ReachClass classifyReach(const unitdef::Weapon& weapon, Fx groundDistance,
-                                       Fx heightDifference) noexcept {
+                                        Fx heightDifference) noexcept {
     if (groundDistance > weapon.maxRange) {
         return ReachClass::CannotReach;
     }
@@ -420,6 +510,54 @@ enum class ReachClass : int { InRange = 0, TooClose = 1, OutsideArc = 2, CannotR
     // one it picks. Omitting the test leaves those weapons slightly too permissive, which is
     // the direction that does not silently alter targeting.
     return ReachClass::InRange;
+}
+
+/// The live entity target an active Attack order explicitly forces, if it has one.
+///
+/// An entity-target Attack is distinct from automatic acquisition: the command has already
+/// named its desired target, so it must not be replaced by a nearer hostile at fire time.
+[[nodiscard]] std::optional<UnitId> explicitAttackTarget(UnitIndex slot,
+                                                          const UnitStore& store) noexcept {
+    const std::span<const CommandQueue> orders = store.orders();
+    if (slot >= orders.size()) {
+        return std::nullopt;
+    }
+    const QueuedCommand* order = orders[slot].active();
+    if (order == nullptr || order->kind() != CommandKind::Attack
+        || !store.alive(order->target())) {
+        return std::nullopt;
+    }
+    return order->target();
+}
+
+/// Whether an explicit Attack's target passes the same fire gates as an acquired target,
+/// including a Seen contact when fog of war is active.
+[[nodiscard]] bool canShootExplicitTarget(UnitId target, std::array<Fx, 3> from, int fromArmy,
+                                           const unitdef::Weapon& weapon,
+                                           const UnitStore& store,
+                                           std::span<const Army> armies,
+                                           const UnitCatalog& catalog,
+                                           const Intel* intel) noexcept {
+    if (!shootable(fromArmy, store, target.index, armies)) {
+        return false;
+    }
+    const std::span<const MoveState> motion = store.motion();
+    if (target.index >= motion.size() || !weapon.canTarget(motion[target.index].airborne)) {
+        return false;
+    }
+    if (intel != nullptr) {
+        const Army* mine = armyFor(fromArmy, armies);
+        if (mine == nullptr
+            || contactKindForUnit(mine->alliance, target.index, store, catalog, armies, *intel)
+                   != ContactKind::Seen) {
+            return false;
+        }
+    }
+    const Transform& transform = store.transforms()[target.index];
+    const std::array<Fx, 3> to = positionOf(transform);
+    const Fx heightDifference = to[1] > from[1] ? to[1] - from[1] : from[1] - to[1];
+    const ReachClass reach = classifyReach(weapon, groundDistanceElmos(from, to), heightDifference);
+    return reach != ReachClass::CannotReach && reach != ReachClass::TooClose;
 }
 
 /// Which priority row a candidate matches, or `npos` for none.
@@ -604,6 +742,8 @@ std::size_t aimAtTargets(UnitStore& store, const UnitCatalog& catalog,
             continue;
         }
 
+        const std::optional<UnitId> forced = explicitAttackTarget(slot, store);
+
         // Only the weapons that need the hull pointed are worth turning for, and the longest
         // reach among them decides how far away a unit bothers to aim. Per unit now rather
         // than per batch, because the definition is per unit — the loop is over a handful of
@@ -616,9 +756,14 @@ std::size_t aimAtTargets(UnitStore& store, const UnitCatalog& catalog,
             if (!weapon.fires() || weapon.turreted) {
                 continue;
             }
-            const std::optional<UnitId> candidate = nearestTarget(
-                positionOf(transforms[slot]), motion[slot].armyIndex, weapon, store, armies,
-                intel, &catalog);
+            const std::array<Fx, 3> from = positionOf(transforms[slot]);
+            const std::optional<UnitId> candidate = forced
+                ? (canShootExplicitTarget(*forced, from, motion[slot].armyIndex, weapon, store,
+                                          armies, catalog, intel)
+                       ? forced
+                       : std::nullopt)
+                : nearestTarget(from, motion[slot].armyIndex, weapon, store, armies, intel,
+                                &catalog);
             if (!candidate) {
                 continue;
             }
@@ -684,6 +829,7 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
 
         const int army = armyAt(store, slot);
         const std::array<Fx, 3> from = positionOf(transforms[slot]);
+        const std::optional<UnitId> forced = explicitAttackTarget(slot, store);
 
         for (std::size_t w = 0; w < def->weapons.size(); ++w) {
             const unitdef::Weapon& weapon = def->weapons[w];
@@ -714,8 +860,12 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
                 continue;
             }
 
-            const std::optional<UnitId> target =
-                nearestTarget(from, army, weapon, store, armies, intel, &catalog);
+            const std::optional<UnitId> target = forced
+                ? (canShootExplicitTarget(*forced, from, army, weapon, store, armies, catalog,
+                                          intel)
+                       ? forced
+                       : std::nullopt)
+                : nearestTarget(from, army, weapon, store, armies, intel, &catalog);
             if (!target) {
                 continue;
             }
@@ -1440,7 +1590,9 @@ void advanceProjectiles(std::vector<Projectile>& projectiles, UnitStore& store,
                 }
             }
             shot.impactTarget = store.idAt(struck->slot);
-            if (shot.position[1] < terrain.waterLevel()) {
+            if (struck->shield) {
+                shot.pendingImpact = ImpactType::Shield;
+            } else if (shot.position[1] < terrain.waterLevel()) {
                 shot.pendingImpact = ImpactType::UnitUnderwater;
             } else {
                 shot.pendingImpact = store.motion()[struck->slot].airborne

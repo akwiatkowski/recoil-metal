@@ -103,6 +103,45 @@ void retireDead(UnitStore& store, const UnitCatalog& catalog, TickReport& report
     }
 }
 
+/// Carries out C-210's delayed OnDefeat cleanup. Health is set to zero rather than retiring a
+/// unit here: retirement is the start of the next tick, preserving the ordinary death path.
+void clearDefeatedArmy(UnitStore& store, const UnitCatalog& catalog, int armyIndex) {
+    std::span<Health> healths = store.health();
+    const std::span<const MoveState> motion = store.motion();
+
+    for (UnitIndex slot = 0; slot < healths.size() && slot < motion.size(); ++slot) {
+        if (!healths[slot].alive() || motion[slot].armyIndex != armyIndex) {
+            continue;
+        }
+
+        const unitdef::UnitDef* def = catalog.def(store.typeAt(slot));
+        if (def != nullptr && def->hasCategory("WALL")) {
+            continue;
+        }
+        healths[slot].current = Mag{};
+    }
+}
+
+/// Advances OnDefeat timers that were pending before this tick. A newly defeated army is
+/// scheduled below and first loses a tick on the following call, making the delay twenty full
+/// seconds after the poll that observed its commander missing.
+void advanceDefeatCleanup(UnitStore& store, const UnitCatalog& catalog, Match& match) {
+    if (match.defeatCleanupRemainingTicks.size() != match.armies.size()) {
+        match.defeatCleanupRemainingTicks.resize(match.armies.size());
+    }
+
+    for (std::size_t i = 0; i < match.defeatCleanupRemainingTicks.size(); ++i) {
+        TickCount& remaining = match.defeatCleanupRemainingTicks[i];
+        if (remaining == 0) {
+            continue;
+        }
+        --remaining;
+        if (remaining == 0) {
+            clearDefeatedArmy(store, catalog, match.armies[i].index);
+        }
+    }
+}
+
 /// Sums what every LIVING unit produces, costs to run, and stores, into its owner's
 /// economy.
 ///
@@ -348,9 +387,9 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
                            match.events, &catalog);
     }
 
-    // 4. The dead, then their explosions, then the defeated. In that order: an army
-    //    whose commander died to a shot that landed this tick is defeated this tick, not
-    //    next, and an ACU's detonation is enormous enough to decide the tick it goes off.
+    // 4. The dead, then their explosions, then C-210's defeat poll. A commander that died to a
+    //    shot this tick is visible to the next three-second poll, and an ACU's detonation is
+    //    still resolved before that poll samples the surviving commanders.
     retireDead(store, catalog, report, match.events, match.features);
 
     // 99 of the 494 shipped weapons are `WeaponCategory = 'Death'` — a blast with no
@@ -379,24 +418,38 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
         ++report.deathBlasts;
     }
 
-    const std::vector<int> alive = countCommanders(store, catalog, match.armies.size());
-    const std::vector<bool> defeatedBefore = [&match] {
-        std::vector<bool> before;
-        before.reserve(match.armies.size());
-        for (const Army& army : match.armies) {
-            before.push_back(army.defeated);
-        }
-        return before;
-    }();
-    report.defeated = applyDefeats(match.armies, alive, match.commandersEver);
+    advanceDefeatCleanup(store, catalog, match);
 
-    // WHICH armies fell, not just how many. `applyDefeats` returns a count, which is all the
-    // report ever needed; an event has to name the army, so the flags are compared either side
-    // of the call rather than by changing a function four tests assert the return value of.
-    for (std::size_t i = 0; i < match.armies.size() && i < defeatedBefore.size(); ++i) {
-        if (match.armies[i].defeated && !defeatedBefore[i]) {
-            emit(match.events, Event{.kind = EventKind::TeamDefeated,
-                                     .army = match.armies[i].index});
+    // C-210: the retail commander check is a three-second poll. Its phase is match state, not
+    // a caller-local counter, so a match remains deterministic when its tick rate changes.
+    const TickCount defeatPollTicks = rate.ticks(seconds(3.0f));
+    ++match.defeatPollElapsedTicks;
+    if (match.defeatPollElapsedTicks >= defeatPollTicks) {
+        match.defeatPollElapsedTicks = 0;
+        const std::vector<int> alive = countCommanders(store, catalog, match.armies.size());
+        const std::vector<bool> defeatedBefore = [&match] {
+            std::vector<bool> before;
+            before.reserve(match.armies.size());
+            for (const Army& army : match.armies) {
+                before.push_back(army.defeated);
+            }
+            return before;
+        }();
+        report.defeated = applyDefeats(match.armies, alive, match.commandersEver);
+
+        // WHICH armies fell, not just how many. `applyDefeats` returns a count, which is all the
+        // report ever needed; an event has to name the army, so the flags are compared either side
+        // of the call rather than by changing a function four tests assert the return value of.
+        if (match.defeatCleanupRemainingTicks.size() != match.armies.size()) {
+            match.defeatCleanupRemainingTicks.resize(match.armies.size());
+        }
+        const TickCount cleanupTicks = rate.ticks(seconds(20.0f));
+        for (std::size_t i = 0; i < match.armies.size() && i < defeatedBefore.size(); ++i) {
+            if (match.armies[i].defeated && !defeatedBefore[i]) {
+                emit(match.events, Event{.kind = EventKind::TeamDefeated,
+                                         .army = match.armies[i].index});
+                match.defeatCleanupRemainingTicks[i] = cleanupTicks;
+            }
         }
     }
 
@@ -405,14 +458,32 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
         // A team wins when it is the only ALLIANCE left, even if several allied armies
         // survived. `survivorCount <= 1` left a successful 2v2 running forever. No
         // survivors is the other terminal state and remains an ordinary draw.
-        if (winner || survivorCount(match.armies) == 0) {
-            match.over = true;
-            report.matchEnded = true;
-            report.winner = winner;
-            // A draw is an ordinary outcome — every commander dying at once — so the event
-            // carries `kNoArmy` rather than being suppressed.
-            emit(match.events, Event{.kind = EventKind::GameOver,
-                                     .army = report.winner.value_or(kNoArmy)});
+        const bool terminal = winner || survivorCount(match.armies) == 0;
+        if (!terminal) {
+            match.winnerPending = false;
+            match.pendingWinner.reset();
+            match.winnerStableTicks = 0;
+        } else {
+            if (!match.winnerPending || match.pendingWinner != winner) {
+                match.winnerPending = true;
+                match.pendingWinner = winner;
+                match.winnerStableTicks = 0;
+            }
+
+            // C-210: the retail win condition waits for fifteen seconds of the same winner.
+            // Derive the duration from this tick's rate so changing the simulation clock does
+            // not change the wall-clock confirmation time.
+            const TickCount confirmationTicks = rate.ticks(seconds(15.0f));
+            ++match.winnerStableTicks;
+            if (match.winnerStableTicks >= confirmationTicks) {
+                match.over = true;
+                report.matchEnded = true;
+                report.winner = winner;
+                // A draw is an ordinary outcome — every commander dying at once — so the event
+                // carries `kNoArmy` rather than being suppressed.
+                emit(match.events, Event{.kind = EventKind::GameOver,
+                                         .army = report.winner.value_or(kNoArmy)});
+            }
         }
     }
 

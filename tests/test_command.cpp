@@ -10,6 +10,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "core/sim/Command.hpp"
+#include "core/sim/Intel.hpp"
 #include "core/sim/StateHash.hpp"
 #include "core/sim/Skirmish.hpp"
 #include "core/sim/UnitStore.hpp"
@@ -82,7 +83,7 @@ struct Fixture {
 
     /// Runs the match forward, applying whatever the log says on each tick — which is the
     /// replay loop, and the only loop either a live match or a replay needs.
-    void run(const CommandLog& log, rm::TickIndex ticks) {
+    void run(const CommandLog& log, rm::TickIndex ticks, rm::sim::Intel* intel = nullptr) {
         std::vector<rm::sim::Projectile> shots;
         std::vector<rm::sim::Economy> economies(2);
         const std::vector<int> commandersEver(2, 0);
@@ -103,7 +104,8 @@ struct Fixture {
                                   .building = &building,
                                   .passability = grids,
                                   .pathService = &paths,
-                                  .commandersEver = commandersEver};
+                                  .commandersEver = commandersEver,
+                                  .intel = intel};
             (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain);
             for (const CommandIssue& issue : log.at(tick, CommandPhase::PostSpawn)) {
                 (void)apply(issue);
@@ -1023,4 +1025,95 @@ TEST_CASE("a short-range pursuit closes inside the target's path cell") {
                                        rm::sim::positionOf(fixture.roster.transform(prey)))
           <= gun.maxRange);
     CHECK_FALSE(fixture.roster.motion(hunter).moving);
+}
+
+TEST_CASE("an explicit attack fires at its ordered target, not the nearest hostile") {
+    Fixture fixture;
+
+    rm::unitdef::UnitDef turret;
+    turret.name = "test_turreted_beam";
+    rm::unitdef::Weapon beam;
+    beam.label = "beam";
+    beam.role = rm::unitdef::WeaponRole::DirectFire;
+    beam.damage = rm::sim::magFromFloat(10.0f);
+    beam.maxRange = rm::test::fx(200.0f);
+    beam.rateOfFire = 1.0f;
+    beam.beam = true;
+    beam.turreted = true;
+    turret.weapons.push_back(beam);
+    const UnitId attacker =
+        fixture.roster.add(fixture.roster.addType(turret), 200.0f, 200.0f, 0, 500.0f);
+    const UnitId decoy = fixture.roster.add(fixture.roster.store.typeAt(fixture.theirs.index),
+                                            250.0f, 200.0f, 1, 500.0f);
+    const UnitId target = fixture.theirs;
+    fixture.roster.transform(target).x = rm::test::fx(350.0f);
+    fixture.roster.transform(target).z = rm::test::fx(200.0f);
+    fixture.roster.reindex();
+
+    Command attack = moveOrder(0, 0, attacker, 350.0f, 200.0f);
+    attack.kind = CommandKind::Attack;
+    attack.target = target;
+    CommandLog log;
+    REQUIRE(log.record(logged(attack)));
+
+    const rm::sim::Mag targetHealth = fixture.roster.store.health()[target.index].current;
+    const rm::sim::Mag decoyHealth = fixture.roster.store.health()[decoy.index].current;
+    fixture.run(log, 1);
+
+    CHECK(fixture.roster.store.health()[target.index].current < targetHealth);
+    CHECK(fixture.roster.store.health()[decoy.index].current == decoyHealth);
+}
+
+TEST_CASE("an explicit attack cannot fire after its target is no longer seen") {
+    Fixture fixture;
+
+    rm::unitdef::UnitDef turret;
+    turret.name = "test_turreted_beam";
+    rm::unitdef::Weapon beam;
+    beam.label = "beam";
+    beam.role = rm::unitdef::WeaponRole::DirectFire;
+    beam.damage = rm::sim::magFromFloat(10.0f);
+    beam.maxRange = rm::test::fx(200.0f);
+    beam.rateOfFire = static_cast<float>(fixture.roster.rate.ticksPerSecond());
+    beam.beam = true;
+    beam.turreted = true;
+    turret.weapons.push_back(beam);
+    const UnitId attacker =
+        fixture.roster.add(fixture.roster.addType(turret), 200.0f, 200.0f, 0, 500.0f);
+
+    rm::unitdef::UnitDef targetDef;
+    targetDef.name = "test_target";
+    const rm::UnitTypeIndex targetType = fixture.roster.addType(targetDef);
+    const UnitId target = fixture.roster.add(targetType, 300.0f, 200.0f, 1, 500.0f);
+
+    rm::unitdef::UnitDef spotterDef;
+    spotterDef.name = "test_spotter";
+    spotterDef.visionRadiusElmos = 200.0f;
+    const UnitId spotter = fixture.roster.add(fixture.roster.addType(spotterDef), 200.0f,
+                                              220.0f, 0, 500.0f);
+
+    rm::sim::Intel intel;
+    const rm::sim::Fx mapWidth =
+        rm::sim::Fx::fromInt(fixture.field.squaresX * rm::kSquareSize);
+    const rm::sim::Fx mapDepth =
+        rm::sim::Fx::fromInt(fixture.field.squaresZ * rm::kSquareSize);
+    intel.configure(2, mapWidth, mapDepth, rm::sim::VisionStyle::ForgedAlliance);
+
+    Command attack = moveOrder(0, 0, attacker, 300.0f, 200.0f);
+    attack.kind = CommandKind::Attack;
+    attack.target = target;
+    CommandLog log;
+    REQUIRE(log.record(logged(attack)));
+    fixture.run(log, 1, &intel);
+    const rm::sim::Mag visibleHealth = fixture.roster.store.health()[target.index].current;
+    REQUIRE(visibleHealth < rm::sim::magFromFloat(500.0f));
+
+    fixture.roster.store.health()[spotter.index].current = rm::sim::Mag{};
+    // Intel updates before the dead unit is retired, so this tick spends the spotter's final
+    // sight and retires it. The next tick must reach the forced-target Seen gate without it.
+    fixture.run(CommandLog{}, 1, &intel);
+    const rm::sim::Mag retiredSpotterHealth = fixture.roster.store.health()[target.index].current;
+    fixture.run(CommandLog{}, 1, &intel);
+
+    CHECK(fixture.roster.store.health()[target.index].current == retiredSpotterHealth);
 }

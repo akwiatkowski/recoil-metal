@@ -363,6 +363,8 @@ void Intel::configure(std::size_t alliances, Fx widthElmos, Fx depthElmos,
     placements_.clear();
     emitters_.clear();
     hiddenEmitters_.clear();
+    retainedRadarContacts_.clear();
+    retainedRadarContacts_.resize(alliances);
 
     // ONE GRID PER KIND PER ALLIANCE, IN `IntelKind` ORDER, because every index into this is
     // `alliance * kIntelKindCount + kind` and nothing bounds-checks it. Adding a kind without
@@ -431,6 +433,14 @@ bool Intel::sees(int alliance, IntelKind kind, Fx x, Fx z) const noexcept {
         return false;
     }
     return grid(alliance, kind).covered(x, z);
+}
+
+std::span<const RetainedRadarContact> Intel::retainedRadarContacts(int alliance) const noexcept {
+    static const std::vector<RetainedRadarContact> kEmpty;
+    if (alliance < 0 || static_cast<std::size_t>(alliance) >= retainedRadarContacts_.size()) {
+        return kEmpty;
+    }
+    return retainedRadarContacts_[static_cast<std::size_t>(alliance)];
 }
 
 void Intel::withdraw(UnitIndex slot) {
@@ -556,6 +566,47 @@ void Intel::update(const UnitStore& store, const UnitCatalog& catalog,
 
         placement.square = square;
         placement.alliance = alliance;
+    }
+
+    // A radar return is knowledge owned by its VIEWER, not by the observed unit. Refresh the
+    // last known position while radar sees a live source; leave it behind if that source dies.
+    // There is deliberately no expiry or reacquisition policy in this bounded recon slice.
+    for (std::vector<RetainedRadarContact>& contacts : retainedRadarContacts_) {
+        for (RetainedRadarContact& contact : contacts) {
+            const bool sourceAlive = contact.unit.index < slots
+                                  && store.slotAlive(contact.unit.index)
+                                  && store.idAt(contact.unit.index).generation
+                                         == contact.unit.generation;
+            contact.maybeDead = !sourceAlive;
+        }
+    }
+    for (int alliance = 0; alliance < static_cast<int>(alliances()); ++alliance) {
+        std::vector<RetainedRadarContact>& contacts =
+            retainedRadarContacts_[static_cast<std::size_t>(alliance)];
+        for (UnitIndex slot = 0; slot < slots; ++slot) {
+            if (!store.slotAlive(slot)) {
+                continue;
+            }
+            if (contactKindForUnit(alliance, slot, store, catalog, armies, *this)
+                != ContactKind::Radar) {
+                continue;
+            }
+
+            const UnitId unit = store.idAt(slot);
+            const Transform& at = transforms[slot];
+            const auto found = std::ranges::find_if(
+                contacts, [unit](const RetainedRadarContact& contact) {
+                    return contact.unit.index == unit.index
+                        && contact.unit.generation == unit.generation;
+                });
+            if (found == contacts.end()) {
+                contacts.push_back({.unit = unit, .x = at.x, .z = at.z});
+            } else {
+                found->x = at.x;
+                found->z = at.z;
+                found->maybeDead = false;
+            }
+        }
     }
 }
 
@@ -716,6 +767,22 @@ void contactsFor(int alliance, const UnitStore& store, const UnitCatalog& catalo
                                            .kind = ContactKind::Radar});
             }
         }
+    }
+
+    // A dead source cannot contribute to the live-slot projection above, but the alliance's
+    // retained radar knowledge still projects as a blip at its last confirmed position.
+    for (const RetainedRadarContact& retained : intel.retainedRadarContacts(alliance)) {
+        // `Intel::update` precedes retirement in `tickSkirmish`. A source can therefore die
+        // after its cache refresh but before this projection in the same tick; consult the
+        // generational handle as well as the persisted marker so that tick does not lose it.
+        if (!retained.maybeDead && store.alive(retained.unit)) {
+            continue;
+        }
+        const auto [x, z] = blipPosition(retained.unit, retained.x, retained.z, tick, rate);
+        contacts.push_back(Contact{.unit = retained.unit,
+                                   .x = x,
+                                   .z = z,
+                                   .kind = ContactKind::Radar});
     }
 }
 

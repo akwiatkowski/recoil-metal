@@ -199,7 +199,7 @@ TEST_CASE("the tick reports its dead, and retires them from the fight") {
     CHECK(again.died.empty());
 }
 
-TEST_CASE("losing the last commander defeats an army and ends the match") {
+TEST_CASE("losing the last commander defeats an army and starts winner confirmation") {
     const rm::HeightField field = flatField();
 
     Roster roster;
@@ -233,14 +233,22 @@ TEST_CASE("losing the last commander defeats an army and ends the match") {
     roster.health(theirs).current = rm::test::mag(0.0f);
     report = rm::sim::tickSkirmish(roster.store, roster.catalog, match, rm::sim::Terrain{field});
 
+    const rm::sim::TickRate rate{};
+    const rm::TickCount pollTicks = rate.ticks(rm::sim::seconds(3.0f));
+    for (rm::TickCount tick = 1; tick < pollTicks - 1; ++tick) {
+        report = rm::sim::tickSkirmish(roster.store, roster.catalog, match,
+                                       rm::sim::Terrain{field}, rate);
+    }
+
     CHECK(report.defeated == 1);
     CHECK(armies[1].defeated);
-    CHECK(report.matchEnded);
-    REQUIRE(report.winner.has_value());
-    CHECK(*report.winner == armies[0].alliance);
+    CHECK_FALSE(report.matchEnded);
+    CHECK_FALSE(match.over);
+    REQUIRE(match.pendingWinner.has_value());
+    CHECK(*match.pendingWinner == armies[0].alliance);
 }
 
-TEST_CASE("defeating the other alliance ends a team match with both allies alive") {
+TEST_CASE("defeating the other alliance starts team-match winner confirmation") {
     const rm::HeightField field = flatField();
 
     Roster roster;
@@ -269,14 +277,21 @@ TEST_CASE("defeating the other alliance ends a team match with both allies alive
 
     roster.health(enemyA).current = rm::test::mag(0.0f);
     roster.health(enemyB).current = rm::test::mag(0.0f);
-    const TickReport report =
+    TickReport report =
         rm::sim::tickSkirmish(roster.store, roster.catalog, match, rm::sim::Terrain{field});
+    const rm::sim::TickRate rate{};
+    const rm::TickCount pollTicks = rate.ticks(rm::sim::seconds(3.0f));
+    for (rm::TickCount tick = 1; tick < pollTicks; ++tick) {
+        report = rm::sim::tickSkirmish(roster.store, roster.catalog, match,
+                                       rm::sim::Terrain{field}, rate);
+    }
 
     CHECK(report.defeated == 2);
     CHECK(rm::sim::survivorCount(armies) == 2);
-    CHECK(report.matchEnded);
-    REQUIRE(report.winner.has_value());
-    CHECK(*report.winner == 0);
+    CHECK_FALSE(report.matchEnded);
+    CHECK_FALSE(match.over);
+    REQUIRE(match.pendingWinner.has_value());
+    CHECK(*match.pendingWinner == 0);
 }
 
 TEST_CASE("a crowd with no commanders is not a draw on the first tick") {

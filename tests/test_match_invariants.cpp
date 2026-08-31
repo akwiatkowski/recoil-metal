@@ -323,6 +323,91 @@ TEST_CASE("the match is decided at most once") {
     REQUIRE(endings <= 1);
 }
 
+TEST_CASE("a winner must remain stable for fifteen seconds before the match ends") {
+    // C-210: retail polls defeat every three seconds and requires the same winner for fifteen.
+    // Keep Match alive across those ticks: the confirmation belongs to the match, not a caller's
+    // temporary TickReport.
+    const rm::HeightField field = flatField();
+    Fight fight;
+    fight.armies[1].defeated = true;
+    rm::sim::Match match = fight.match();
+    const rm::sim::TickRate rate{};
+    const rm::TickCount confirmationTicks = rate.ticks(rm::sim::seconds(15.0f));
+
+    for (rm::TickCount tick = 0; tick < confirmationTicks - 1; ++tick) {
+        (void)rm::sim::tickSkirmish(fight.roster.store, fight.roster.catalog, match,
+                                    rm::sim::Terrain{field}, rate);
+    }
+    REQUIRE_FALSE(match.over);
+
+    const rm::sim::TickReport report =
+        rm::sim::tickSkirmish(fight.roster.store, fight.roster.catalog, match,
+                              rm::sim::Terrain{field}, rate);
+    REQUIRE(match.over);
+    REQUIRE(report.matchEnded);
+    REQUIRE(report.winner == 0);
+}
+
+TEST_CASE("commander defeat is polled, then clears its army except walls") {
+    // C-210: retail checks commanders every three seconds. OnDefeat then schedules an
+    // ALLUNITS cleanup twenty seconds later, but WALL units are deliberately left standing.
+    const rm::HeightField field = flatField();
+    Roster roster;
+
+    UnitDef commanderDef;
+    commanderDef.name = "UEL0001";
+    UnitDef unitDef;
+    unitDef.name = "test_unit";
+    UnitDef wallDef;
+    wallDef.name = "test_wall";
+    wallDef.categories = {"STRUCTURE", "WALL"};
+    const rm::UnitTypeIndex commander = roster.addType(commanderDef);
+    const rm::UnitTypeIndex unit = roster.addType(unitDef);
+    const rm::UnitTypeIndex wall = roster.addType(wallDef);
+
+    const rm::sim::UnitId defeatedCommander = roster.add(commander, 0.0f, 0.0f, 1, 100.0f);
+    const rm::sim::UnitId defeatedUnit = roster.add(unit, 20.0f, 0.0f, 1, 100.0f);
+    const rm::sim::UnitId defeatedWall = roster.add(wall, 40.0f, 0.0f, 1, 100.0f);
+    (void)roster.add(commander, 100.0f, 0.0f, 0, 100.0f);
+
+    std::vector<Army> armies = rm::sim::freeForAll(2);
+    std::vector<rm::sim::Economy> economies(2);
+    std::vector<rm::sim::Projectile> projectiles;
+    const std::vector<int> commandersEver{1, 1};
+    rm::sim::Match match{.armies = armies,
+                         .economies = economies,
+                         .projectiles = &projectiles,
+                         .commandersEver = commandersEver};
+    const rm::sim::TickRate rate{};
+
+    roster.health(defeatedCommander).current = rm::sim::Mag{};
+    const rm::TickCount pollTicks = rate.ticks(rm::sim::seconds(3.0f));
+    for (rm::TickCount tick = 0; tick < pollTicks - 1; ++tick) {
+        (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, rm::sim::Terrain{field}, rate);
+    }
+    REQUIRE_FALSE(armies[1].defeated);
+
+    (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, rm::sim::Terrain{field}, rate);
+    REQUIRE(armies[1].defeated);
+    REQUIRE(roster.health(defeatedUnit).alive());
+    REQUIRE(roster.health(defeatedWall).alive());
+
+    const rm::TickCount cleanupTicks = rate.ticks(rm::sim::seconds(20.0f));
+    for (rm::TickCount tick = 0; tick < cleanupTicks - 1; ++tick) {
+        (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, rm::sim::Terrain{field}, rate);
+    }
+    REQUIRE(roster.health(defeatedUnit).alive());
+
+    (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, rm::sim::Terrain{field}, rate);
+    REQUIRE_FALSE(roster.health(defeatedUnit).alive());
+    REQUIRE(roster.health(defeatedWall).alive());
+
+    // Cleanup only sets health to zero; the ordinary retirement pass observes it next tick.
+    REQUIRE(roster.store.slotAlive(defeatedUnit.index));
+    (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, rm::sim::Terrain{field}, rate);
+    REQUIRE_FALSE(roster.store.slotAlive(defeatedUnit.index));
+}
+
 TEST_CASE("a defeated army stays defeated") {
     const rm::HeightField field = flatField();
     Fight fight;
