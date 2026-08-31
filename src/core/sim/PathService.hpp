@@ -51,8 +51,14 @@ public:
     /// Whether a command still owns queued or active path work.
     [[nodiscard]] bool contains(UnitId unit, CommandId command) const noexcept;
 
+    /// Removes all outstanding path work for a unit whose current order was replaced or stopped.
+    void cancel(UnitId unit);
+
     [[nodiscard]] const std::vector<std::deque<PathRequest>>& pending() const noexcept {
         return pending_;
+    }
+    [[nodiscard]] const std::vector<std::deque<PathRequest>>& admissions() const noexcept {
+        return admissions_;
     }
     [[nodiscard]] const std::vector<std::optional<PathRequest>>& activeRequests() const noexcept {
         return activeRequests_;
@@ -64,6 +70,8 @@ public:
 private:
     void ensureArmy(int army);
 
+    // Commands accepted during this beat become eligible only after its service pass completes.
+    std::vector<std::deque<PathRequest>> admissions_;
     std::vector<std::deque<PathRequest>> pending_;
     std::vector<std::optional<PathRequest>> activeRequests_;
     std::vector<std::optional<PathSearch>> activeSearches_;

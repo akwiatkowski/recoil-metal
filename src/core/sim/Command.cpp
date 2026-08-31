@@ -399,6 +399,9 @@ void teardownMovement(MoveState& motion) {
         }
         MoveState stopped = std::move(motion);
         motion = previous;
+        if (pathService != nullptr) {
+            pathService->cancel(command.unit);
+        }
         orders.clear();
         cancelActiveConstruction(building, command.unit);
         motion = std::move(stopped);
@@ -498,6 +501,7 @@ void teardownMovement(MoveState& motion) {
         const std::shared_ptr<const SharedCommand> payload =
             ensureSharedCommand(command, source, id, count, store, shared);
         MoveState& motion = store.motion()[command.unit.index];
+        pathService->cancel(command.unit);
         orders.clear();
         teardownMovement(motion);
         orders.append(QueuedCommand{command.unit, payload});
@@ -541,6 +545,9 @@ void teardownMovement(MoveState& motion) {
     if (command.kind == CommandKind::Patrol) {
         entry.setPatrolOrigin({store.transforms()[command.unit.index].x,
                                store.transforms()[command.unit.index].z});
+    }
+    if (pathService != nullptr) {
+        pathService->cancel(command.unit);
     }
     orders.clear();
     if (!keepMotion) {

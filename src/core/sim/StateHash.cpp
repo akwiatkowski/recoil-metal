@@ -305,9 +305,17 @@ void feedPathSearch(StateHash& h, const PathSearch& search) noexcept {
 }
 
 void feedPathService(StateHash& h, const PathService& service) noexcept {
+    const auto& admissions = service.admissions();
     const auto& pending = service.pending();
     const auto& activeRequests = service.activeRequests();
     const auto& activeSearches = service.activeSearches();
+    feed(h, admissions.size());
+    for (const auto& armyAdmissions : admissions) {
+        feed(h, armyAdmissions.size());
+        for (const PathRequest& request : armyAdmissions) {
+            feedPathRequest(h, request);
+        }
+    }
     feed(h, pending.size());
     for (std::size_t army = 0; army < pending.size(); ++army) {
         feed(h, pending[army].size());

@@ -148,7 +148,7 @@ TEST_CASE("a move command routes a unit, and a stop cancels it") {
 
     CHECK(fix.apply(moveOrder(0, 0, fix.mine, 500.0f, 200.0f)));
     CHECK(fix.roster.motion(fix.mine).path.empty());
-    fix.run(CommandLog{}, 1);
+    fix.run(CommandLog{}, 2);
     CHECK(fix.roster.motion(fix.mine).moving);
     CHECK_FALSE(fix.roster.motion(fix.mine).path.empty());
 
@@ -166,16 +166,18 @@ TEST_CASE("a move command routes a unit, and a stop cancels it") {
     CHECK(fix.roster.motion(fix.mine).path.empty());
 }
 
-TEST_CASE("a move command is accepted before its path is serviced") {
+TEST_CASE("path requests admitted during a beat wait until the next beat") {
     Fixture fix;
     const UnitId second = fix.roster.add(fix.roster.store.typeAt(fix.mine.index), 200.0f, 300.0f,
-                                         0, 500.0f);
+                                          0, 500.0f);
 
-    REQUIRE(fix.apply(moveOrder(0, 0, fix.mine, 500.0f, 200.0f)));
-    REQUIRE(fix.paths.pending().size() == 1);
-    REQUIRE(fix.paths.pending()[0].size() == 1);
-    REQUIRE(fix.apply(moveOrder(0, 0, second, 500.0f, 300.0f)));
-    REQUIRE(fix.paths.pending()[0].size() == 2);
+    CommandLog log;
+    REQUIRE(log.record(logged(moveOrder(0, 0, fix.mine, 500.0f, 200.0f))));
+    REQUIRE(log.record(logged(moveOrder(0, 0, second, 500.0f, 300.0f), 1)));
+
+    // Both orders are admitted during beat 0, so neither is eligible for that beat's path service.
+    // They wait for beat 1; the army's FIFO budget then admits only the first route.
+    fix.run(log, 1);
     CHECK(fix.roster.motion(fix.mine).path.empty());
     CHECK(fix.roster.motion(second).path.empty());
 
@@ -187,11 +189,23 @@ TEST_CASE("a move command is accepted before its path is serviced") {
     CHECK_FALSE(fix.roster.motion(second).path.empty());
 }
 
+TEST_CASE("a stopped move is removed before path service spends work on it") {
+    Fixture fix;
+
+    REQUIRE(fix.apply(moveOrder(0, 0, fix.mine, 500.0f, 200.0f)));
+    REQUIRE(fix.apply(Command{.tick = 0, .player = 0, .kind = CommandKind::Stop, .unit = fix.mine}));
+    REQUIRE(fix.apply(moveOrder(0, 0, fix.mine, 600.0f, 200.0f)));
+
+    fix.run(CommandLog{}, 2);
+    CHECK_FALSE(fix.roster.motion(fix.mine).path.empty());
+    CHECK(fix.roster.motion(fix.mine).path.back()[0] == rm::test::fx(600.0f));
+}
+
 TEST_CASE("a short move in one path cell reaches the clicked point") {
     Fixture fix;
 
     REQUIRE(fix.apply(moveOrder(0, 0, fix.mine, 220.0f, 220.0f)));
-    fix.run(CommandLog{}, 1);
+    fix.run(CommandLog{}, 2);
     const rm::sim::MoveState& motion = fix.roster.motion(fix.mine);
     REQUIRE(motion.path.size() == 1);
     CHECK(motion.path[0][0] == rm::test::fx(220.0f));
@@ -211,7 +225,7 @@ TEST_CASE("a player cannot order another army's units") {
 
     // And its own player can.
     CHECK(fix.apply(moveOrder(0, 1, fix.theirs, 100.0f, 100.0f)));
-    fix.run(CommandLog{}, 1);
+    fix.run(CommandLog{}, 2);
     CHECK(fix.roster.motion(fix.theirs).moving);
 }
 
@@ -241,7 +255,7 @@ TEST_CASE("a stale handle is refused, not resolved to whoever inherited the slot
 
     // The newcomer takes its own orders perfectly well.
     CHECK(fix.apply(moveOrder(0, 0, newcomer, 500.0f, 200.0f)));
-    fix.run(CommandLog{}, 1);
+    fix.run(CommandLog{}, 2);
     CHECK(fix.roster.motion(newcomer).moving);
 }
 
@@ -805,7 +819,7 @@ TEST_CASE("a build order names a place on the map, and the ground decides the he
 
     const UnitId engineer = fix.roster.add(engineerType, 300.0f, 300.0f, 0, 500.0f);
     REQUIRE(fix.apply(moveOrder(0, 0, engineer, 600.0f, 300.0f)));
-    fix.run(CommandLog{}, 1);
+    fix.run(CommandLog{}, 2);
     REQUIRE(fix.roster.motion(engineer).moving);
 
     REQUIRE(fix.apply(Command{.tick = 0,

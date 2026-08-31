@@ -1,6 +1,7 @@
 #include "core/sim/PathService.hpp"
 
 #include <algorithm>
+#include <iterator>
 
 namespace rm::sim {
 
@@ -9,6 +10,7 @@ void PathService::ensureArmy(int army) {
         return;
     }
     const std::size_t count = static_cast<std::size_t>(army) + 1;
+    admissions_.resize(std::max(admissions_.size(), count));
     pending_.resize(std::max(pending_.size(), count));
     activeRequests_.resize(std::max(activeRequests_.size(), count));
     activeSearches_.resize(std::max(activeSearches_.size(), count));
@@ -19,7 +21,7 @@ void PathService::enqueue(PathRequest request) {
         return;
     }
     ensureArmy(request.army);
-    pending_[static_cast<std::size_t>(request.army)].push_back(std::move(request));
+    admissions_[static_cast<std::size_t>(request.army)].push_back(std::move(request));
 }
 
 std::vector<PathResult> PathService::service() {
@@ -46,6 +48,15 @@ std::vector<PathResult> PathService::service() {
         activeRequests_[army].reset();
         activeSearches_[army].reset();
     }
+
+    // Admission is deliberately after every army has spent this beat's allowance. A request
+    // accepted during the beat cannot consume its issuing beat's path work budget.
+    for (std::size_t army = 0; army < pending_.size(); ++army) {
+        std::deque<PathRequest>& admissions = admissions_[army];
+        pending_[army].insert(pending_[army].end(), std::make_move_iterator(admissions.begin()),
+                              std::make_move_iterator(admissions.end()));
+        admissions.clear();
+    }
     return completed;
 }
 
@@ -60,8 +71,25 @@ bool PathService::contains(UnitId unit, CommandId command) const noexcept {
                 return true;
             }
         }
+        for (const PathRequest& request : admissions_[army]) {
+            if (request.unit == unit && request.command == command) {
+                return true;
+            }
+        }
     }
     return false;
+}
+
+void PathService::cancel(UnitId unit) {
+    const auto belongsTo = [unit](const PathRequest& request) { return request.unit == unit; };
+    for (std::size_t army = 0; army < pending_.size(); ++army) {
+        std::erase_if(admissions_[army], belongsTo);
+        std::erase_if(pending_[army], belongsTo);
+        if (activeRequests_[army] && belongsTo(*activeRequests_[army])) {
+            activeRequests_[army].reset();
+            activeSearches_[army].reset();
+        }
+    }
 }
 
 } // namespace rm::sim
