@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <fstream>
 #include <limits>
+#include <random>
 #include <string>
 #include <string_view>
 
@@ -18,8 +19,12 @@ namespace {
 /// `<root>/env/<biome>/props/<name>_prop.bp` beside `<name>_lod0.scm`.
 class Sandbox {
 public:
-    Sandbox() : root_{std::filesystem::temp_directory_path() / "rm_test_props"} {
-        std::filesystem::remove_all(root_);
+    Sandbox() {
+        auto suffix = std::random_device{}();
+        do {
+            root_ = std::filesystem::temp_directory_path()
+                    / ("rm_test_props_" + std::to_string(suffix++));
+        } while (!std::filesystem::create_directory(root_));
         std::filesystem::create_directories(dir());
     }
     ~Sandbox() { std::filesystem::remove_all(root_); }

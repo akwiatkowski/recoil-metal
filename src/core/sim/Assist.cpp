@@ -23,9 +23,9 @@ std::size_t applyAssistance(const UnitStore& store, const UnitCatalog& catalog,
         if (!store.slotAlive(slot)) {
             continue;
         }
-        const Command* head = orders[slot].active();
-        if (head == nullptr || head->kind != CommandKind::Assist
-            || !store.alive(head->target)) {
+        const QueuedCommand* head = orders[slot].active();
+        if (head == nullptr || head->kind() != CommandKind::Assist
+            || !store.alive(head->target())) {
             continue;
         }
 
@@ -37,9 +37,9 @@ std::size_t applyAssistance(const UnitStore& store, const UnitCatalog& catalog,
         // In reach of the TARGET, not of the site: "help that engineer" follows the
         // engineer, and the game's own assist is a guard order on the unit too.
         const Fx reach = catalog.rates(store.typeAt(slot)).buildReachElmos
-                       + motion[slot].radiusElmos + motion[head->target.index].radiusElmos;
+                       + motion[slot].radiusElmos + motion[head->target().index].radiusElmos;
         if (groundDistanceElmos(positionOf(transforms[slot]),
-                                positionOf(transforms[head->target.index]))
+                                positionOf(transforms[head->target().index]))
             > reach) {
             continue;  // still walking over
         }
@@ -48,7 +48,7 @@ std::size_t applyAssistance(const UnitStore& store, const UnitCatalog& catalog,
         // on. First match in list order, which is creation order, so every assister of one
         // target picks the same work and the answer is replay-stable.
         for (Construction& work : building) {
-            if (work.finished() || !(work.builder == head->target)) {
+            if (work.finished() || !(work.builder == head->target())) {
                 continue;
             }
             work.assistPerTick += rate;

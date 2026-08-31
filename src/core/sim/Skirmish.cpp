@@ -251,12 +251,29 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
                         const Terrain& terrain, TickRate rate) {
     TickReport report;
 
+    // 0a. WHO IS HELPING, read from where everyone stood at the end of the last tick. It
+    //     belongs with the dispatch stage below and immediately before it, because that is
+    //     when retail's assisting builders do their work: each keeps its own build task in the
+    //     same command-dispatch stage, judging its own reach from the previous beat's motion
+    //     output (`C-187`, `C-142`). Recomputed every tick from orders and positions, so a
+    //     helper that walked away, died or was re-tasked stops contributing at once
+    //     (`core/sim/Assist.hpp`).
+    if (match.building != nullptr) {
+        (void)applyAssistance(store, catalog, *match.building);
+    }
+
     // 0. THE ORDER QUEUES, before anything moves (§7 P4.1). A unit that finished its order last
     //    tick starts the next one now, so a shift-queued route runs waypoint to waypoint
     //    without a gap the player can see. First in the tick for the same reason the scripted
     //    opponents decide first: an order started this tick should move this tick.
+    //    CONSTRUCTION ADVANCES INSIDE IT, because that is the stage retail advances it in
+    //    (`C-112`, `C-142`, `C-188`): the builder's own task materialises the target and then
+    //    retires its own order, both in command dispatch. The bill for that work is still
+    //    settled by the economy pass at the foot of the tick, which is also where retail
+    //    writes the ratio this stage will multiply by next beat.
     report.ordersStarted = advanceOrders(store, catalog, terrain, match.passability, rate,
-                                         match.building, match.events, match.features);
+                                         match.building, match.events, match.features,
+                                         &report.finished);
 
     // 1. MOVEMENT, then collisions. Everything downstream reads where a unit has got to
     //    this tick rather than where it started it.
@@ -417,11 +434,6 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
         std::erase_if(*match.building, [&store](const Construction& work) {
             return work.isUpgrade() && !work.finished() && !store.alive(work.upgradeOf);
         });
-
-        // WHO IS HELPING, recomputed before the economy reads any rate: an assister in
-        // reach adds its BuildRate to its target's work, and the drain below rises with
-        // it (`core/sim/Assist.hpp`).
-        (void)applyAssistance(store, catalog, *match.building);
     }
 
     if (match.building != nullptr) {
@@ -443,25 +455,17 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
 
             // Written back over this army's entries, in order — the two lists were built
             // by the same filter in the same pass, so the nth of `mine` is the nth of
-            // this army's work. What NEWLY finished is reported; nothing is removed, for
-            // the reason on TickReport::finished.
+            // this army's work. Nothing completes here any more and nothing is reported:
+            // progress, completion and the queue mutation that follows from it all belong to
+            // the command-dispatch stage at the head of the tick (`C-112`). What is left is
+            // the bill.
             std::size_t next = 0;
             for (Construction& work : *match.building) {
                 if (work.armyIndex != static_cast<int>(army) || next >= mine.size()) {
                     continue;
                 }
-                const bool wasFinished = work.finished();
                 work = mine[next];
                 ++next;
-                if (!wasFinished && work.finished()) {
-                    finishBuildOrder(store, work);
-                    report.finished.push_back(work);
-                    emit(match.events,
-                         Event{.kind = EventKind::ConstructionFinished,
-                               .army = work.armyIndex,
-                               .amount = work.cost.mass,
-                               .at = work.position});
-                }
             }
         }
 

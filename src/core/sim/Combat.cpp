@@ -831,9 +831,9 @@ std::size_t fireOvercharge(UnitStore& store, const UnitCatalog& catalog,
         if (!store.slotAlive(slot) || slot >= healths.size() || !healths[slot].alive()) {
             continue;
         }
-        Command* head = orders[slot].activeMutable();
-        if (head == nullptr || head->kind != CommandKind::Overcharge
-            || !store.alive(head->target)) {
+        QueuedCommand* head = orders[slot].activeMutable();
+        if (head == nullptr || head->kind() != CommandKind::Overcharge
+            || !store.alive(head->target())) {
             continue;  // no order, or a spent/expired one advanceOrders will retire
         }
 
@@ -843,13 +843,13 @@ std::size_t fireOvercharge(UnitStore& store, const UnitCatalog& catalog,
         }
 
         const int army = armyAt(store, slot);
-        const int theirArmy = armyAt(store, head->target.index);
+        const int theirArmy = armyAt(store, head->target().index);
         const Army* mine = armyFor(army, armies);
         const Army* theirs = armyFor(theirArmy, armies);
         if (mine == nullptr || theirs == nullptr || !hostile(*mine, *theirs)) {
             // A target that stopped being shootable — captured maps aside, a defeated
             // army — retires the order the same way a fired one does.
-            head->target = UnitId{};
+            head->setTarget(UnitId{});
             continue;
         }
 
@@ -858,7 +858,7 @@ std::size_t fireOvercharge(UnitStore& store, const UnitCatalog& catalog,
             if (!weapon.manuallyFired()) {
                 continue;
             }
-            if (!weapon.canTarget(store.motion()[head->target.index].airborne)) {
+            if (!weapon.canTarget(store.motion()[head->target().index].airborne)) {
                 continue;
             }
             healths[slot].reloadRemaining.resize(def->weapons.size(), 0);
@@ -867,7 +867,7 @@ std::size_t fireOvercharge(UnitStore& store, const UnitCatalog& catalog,
             }
 
             const std::array<Fx, 3> from = positionOf(transforms[slot]);
-            const std::array<Fx, 3> to = positionOf(transforms[head->target.index]);
+            const std::array<Fx, 3> to = positionOf(transforms[head->target().index]);
             if (groundDistanceElmos(from, to) > weapon.maxRange) {
                 continue;  // the pursuit is still closing
             }
@@ -891,7 +891,7 @@ std::size_t fireOvercharge(UnitStore& store, const UnitCatalog& catalog,
             emit(events, Event{
                              .kind = EventKind::WeaponFired,
                              .unit = store.idAt(slot),
-                             .instigator = head->target,
+                             .instigator = head->target(),
                              .army = army,
                              .amount = weapon.damage,
                              .at = from,
@@ -900,7 +900,7 @@ std::size_t fireOvercharge(UnitStore& store, const UnitCatalog& catalog,
 
             // ONE SHOT PER ORDER: forgetting the target is what completes it —
             // `advanceOrders` retires a targetless overcharge like any arrival.
-            head->target = UnitId{};
+            head->setTarget(UnitId{});
             break;
         }
     }

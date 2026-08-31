@@ -160,7 +160,7 @@ TEST_CASE("an out-of-range overcharge pursues its enemy instead of becoming an a
     REQUIRE(f.overcharge(acu, victim));
     CHECK(f.roster.store.motion()[acu.index].moving);
     REQUIRE(f.roster.store.orders()[acu.index].current() != nullptr);
-    CHECK(f.roster.store.orders()[acu.index].current()->kind == CommandKind::Overcharge);
+    CHECK(f.roster.store.orders()[acu.index].current()->kind() == CommandKind::Overcharge);
 }
 
 TEST_CASE("one order is one shot, even into something that survives it") {
@@ -189,13 +189,17 @@ TEST_CASE("a unit with no manual weapon cannot be asked to overcharge") {
 
 TEST_CASE("an overcharge order survives the log round trip") {
     rm::sim::CommandLog log;
-    log.record(Command{.tick = 12,
-                       .player = 0,
-                       .kind = CommandKind::Overcharge,
-                       .unit = UnitId{1, 1},
-                       .targetX = rm::sim::fxFromFloat(230.0f),
-                       .targetZ = rm::sim::fxFromFloat(200.0f),
-                       .target = UnitId{2, 1}});
+    log.record(rm::sim::CommandIssue{
+        .tick = 12,
+        .source = 0,
+        .id = rm::commandId(0, 0),
+        .player = 0,
+        .kind = CommandKind::Overcharge,
+        .units = {UnitId{1, 1}},
+        .targetX = rm::sim::fxFromFloat(230.0f),
+        .targetZ = rm::sim::fxFromFloat(200.0f),
+        .target = UnitId{2, 1},
+    });
 
     const auto path = std::filesystem::temp_directory_path() / "rm_overcharge_log_test.txt";
     REQUIRE(rm::sim::writeCommandLog(log, path.string()));

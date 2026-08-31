@@ -9,6 +9,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include <memory>
 #include <span>
 #include <utility>
 #include <vector>
@@ -317,11 +318,15 @@ TEST_CASE("every field the sim owns reaches the hash") {
     }
     SECTION("a queued command's creation serial") {
         Fixture a;
+        Fixture b;
         a.store.orders()[0].append(rm::sim::Command{.unit = a.store.idAt(0)});
-        const rm::StateHash before = a.hash();
-        REQUIRE(a.store.orders()[0].currentMutable() != nullptr);
-        a.store.orders()[0].currentMutable()->creationSerial = 1;
-        REQUIRE(a.hash() != before);
+        b.store.orders()[0].append(rm::sim::QueuedCommand{
+            b.store.idAt(0),
+            std::make_shared<const rm::sim::SharedCommand>(rm::sim::SharedCommand{
+                .units = {b.store.idAt(0)},
+                .creationSerial = 1,
+            })});
+        REQUIRE(a.hash() != b.hash());
     }
     SECTION("which queued command is active") {
         Fixture a;
@@ -330,6 +335,136 @@ TEST_CASE("every field the sim owns reaches the hash") {
         a.store.orders()[0].markCurrentActive();
         REQUIRE(a.hash() != before);
     }
+}
+
+TEST_CASE("command hashing uses semantic identity and local execution, not ownership") {
+    const auto payloadFor = [](rm::sim::UnitId first, rm::sim::UnitId second,
+                               rm::CommandId id) {
+        return rm::sim::SharedCommand{
+            .source = rm::commandSource(id),
+            .id = id,
+            .kind = rm::sim::CommandKind::Move,
+            .units = {first, second},
+            .targetX = rm::test::fx(300.0f),
+            .targetZ = rm::test::fx(300.0f),
+            .creationSerial = 7,
+        };
+    };
+    const auto addSecond = [](Fixture& fixture) {
+        return fixture.store.spawn({
+            .type = 0,
+            .transform = {.x = rm::test::fx(200.0f), .z = rm::test::fx(100.0f)},
+            .motion = defaultMotionFor(0),
+            .health = {.current = rm::test::mag(500.0f), .maximum = rm::test::mag(500.0f)},
+        });
+    };
+
+    Fixture sharedOwners;
+    Fixture separateOwners;
+    const rm::sim::UnitId sharedFirst = sharedOwners.store.idAt(0);
+    const rm::sim::UnitId sharedSecond = addSecond(sharedOwners);
+    const rm::sim::UnitId separateFirst = separateOwners.store.idAt(0);
+    const rm::sim::UnitId separateSecond = addSecond(separateOwners);
+    const rm::CommandId id = rm::commandId(0, 9);
+
+    const auto shared = std::make_shared<const rm::sim::SharedCommand>(
+        payloadFor(sharedFirst, sharedSecond, id));
+    sharedOwners.store.orders()[sharedFirst.index].append(
+        rm::sim::QueuedCommand{sharedFirst, shared});
+    sharedOwners.store.orders()[sharedSecond.index].append(
+        rm::sim::QueuedCommand{sharedSecond, shared});
+
+    separateOwners.store.orders()[separateFirst.index].append(rm::sim::QueuedCommand{
+        separateFirst,
+        std::make_shared<const rm::sim::SharedCommand>(
+            payloadFor(separateFirst, separateSecond, id))});
+    separateOwners.store.orders()[separateSecond.index].append(rm::sim::QueuedCommand{
+        separateSecond,
+        std::make_shared<const rm::sim::SharedCommand>(
+            payloadFor(separateFirst, separateSecond, id))});
+
+    CHECK(sharedOwners.hash() == separateOwners.hash());
+
+    Fixture differentIdentity;
+    const rm::sim::UnitId differentFirst = differentIdentity.store.idAt(0);
+    const rm::sim::UnitId differentSecond = addSecond(differentIdentity);
+    const rm::CommandId otherId = rm::commandId(0, 10);
+    const auto other = std::make_shared<const rm::sim::SharedCommand>(
+        payloadFor(differentFirst, differentSecond, otherId));
+    differentIdentity.store.orders()[differentFirst.index].append(
+        rm::sim::QueuedCommand{differentFirst, other});
+    differentIdentity.store.orders()[differentSecond.index].append(
+        rm::sim::QueuedCommand{differentSecond, other});
+    CHECK(sharedOwners.hash() != differentIdentity.hash());
+
+    separateOwners.store.orders()[separateFirst.index].currentMutable()->setTargetPosition(
+        rm::test::fx(301.0f), rm::test::fx(300.0f));
+    CHECK(sharedOwners.hash() != separateOwners.hash());
+
+    separateOwners.store.orders()[separateFirst.index].currentMutable()->setTargetPosition(
+        rm::test::fx(300.0f), rm::test::fx(300.0f));
+    separateOwners.store.orders()[separateFirst.index].markCurrentActive();
+    CHECK(sharedOwners.hash() != separateOwners.hash());
+}
+
+TEST_CASE("an expired live-ID tombstone is not authoritative state") {
+    Fixture clean;
+    Fixture expired;
+    {
+        auto command = std::make_shared<rm::sim::SharedCommand>(rm::sim::SharedCommand{
+            .source = 0,
+            .id = rm::commandId(0, 77),
+        });
+        REQUIRE(expired.store.registerCommand(command));
+    }
+
+    CHECK(clean.hash() == expired.hash());
+    CHECK_FALSE(expired.store.commandIdLive(rm::commandId(0, 77)));
+}
+
+TEST_CASE("unit-set permutations and duplicates produce identical command state") {
+    Fixture canonical;
+    Fixture shuffled;
+    const rm::sim::UnitId canonicalFirst = canonical.store.idAt(0);
+    const rm::sim::UnitId shuffledFirst = shuffled.store.idAt(0);
+    const rm::sim::UnitId canonicalSecond = canonical.store.spawn({
+        .type = 0,
+        .transform = {.x = rm::test::fx(200.0f), .z = rm::test::fx(100.0f)},
+        .motion = defaultMotionFor(0),
+        .health = {.current = rm::test::mag(500.0f), .maximum = rm::test::mag(500.0f)},
+    });
+    const rm::sim::UnitId shuffledSecond = shuffled.store.spawn({
+        .type = 0,
+        .transform = {.x = rm::test::fx(200.0f), .z = rm::test::fx(100.0f)},
+        .motion = defaultMotionFor(0),
+        .health = {.current = rm::test::mag(500.0f), .maximum = rm::test::mag(500.0f)},
+    });
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    const rm::sim::PassabilityGrid grid = rm::sim::buildPassability(field, 0.0f);
+    const std::vector<rm::sim::Player> players{rm::sim::Player{.index = 0, .army = 0}};
+    const auto issue = [](std::vector<rm::sim::UnitId> units) {
+        return rm::sim::CommandIssue{
+            .source = 0,
+            .id = rm::commandId(0, 4),
+            .player = 0,
+            .kind = rm::sim::CommandKind::Move,
+            .units = std::move(units),
+            .targetX = rm::test::fx(400.0f),
+            .targetZ = rm::test::fx(400.0f),
+        };
+    };
+
+    REQUIRE(rm::sim::applyCommand(
+        issue({canonicalFirst, canonicalSecond}), canonical.store, canonical.catalog, players,
+        canonical.armies, terrain, [&grid](rm::sim::UnitId) { return &grid; },
+        rm::sim::TickRate{}));
+    REQUIRE(rm::sim::applyCommand(
+        issue({shuffledSecond, shuffledFirst, shuffledSecond}), shuffled.store, shuffled.catalog,
+        players, shuffled.armies, terrain, [&grid](rm::sim::UnitId) { return &grid; },
+        rm::sim::TickRate{}));
+
+    CHECK(canonical.hash() == shuffled.hash());
 }
 
 TEST_CASE("losing a unit changes the hash even though the survivors match") {

@@ -100,11 +100,11 @@ std::size_t harvestReclaim(UnitStore& store, const UnitCatalog& catalog,
         if (!store.slotAlive(slot) || !store.health()[slot].alive()) {
             continue;
         }
-        const Command* head = orders[slot].active();
-        if (head == nullptr || head->kind != CommandKind::Reclaim) {
+        const QueuedCommand* head = orders[slot].active();
+        if (head == nullptr || head->kind() != CommandKind::Reclaim) {
             continue;
         }
-        Feature* wreck = features.findMutable(head->target);
+        Feature* wreck = features.findMutable(head->target());
         if (wreck == nullptr) {
             continue;  // emptied by someone else; `advanceOrders` retires the order
         }
@@ -115,7 +115,7 @@ std::size_t harvestReclaim(UnitStore& store, const UnitCatalog& catalog,
             continue;  // still walking there
         }
 
-        if (drainWreck(slot, head->target, store, catalog, features, economies)) {
+        if (drainWreck(slot, head->target(), store, catalog, features, economies)) {
             ++harvesting;
         }
     }
@@ -132,10 +132,10 @@ std::size_t servicePatrolBuilders(UnitStore& store, const UnitCatalog& catalog,
         if (!store.slotAlive(builder) || !store.health()[builder].alive()) {
             continue;
         }
-        const Command* order = store.orders()[builder].active();
+        const QueuedCommand* order = store.orders()[builder].active();
         const UnitCatalog::Rates& rates = catalog.rates(store.typeAt(builder));
-        if (order == nullptr || order->kind != CommandKind::Patrol
-            || order->target.generation != 0
+        if (order == nullptr || order->kind() != CommandKind::Patrol
+            || order->target().generation != 0
             || rates.buildPerTick <= Mag{}) {
             continue;
         }

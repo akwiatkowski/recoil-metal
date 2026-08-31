@@ -859,17 +859,6 @@ int runWindowed(const Session& session) {
         // backwards. This is presentation state only; commands and snapshots remain unchanged.
         std::vector<rm::CurrentUnitProjection> responsiveDraws;
         std::vector<rm::sim::UnitId> responsiveDrawScratch;
-        const auto drawCurrentAfterOrder = [&](rm::sim::UnitId id) {
-            rm::scheduleCurrentUnitProjection(responsiveDraws, id, units.snapshotCurrent.tick);
-        };
-        const auto currentOrderFor = [&](rm::sim::UnitId id)
-            -> std::optional<rm::sim::Command> {
-            if (!units.store.alive(id)) {
-                return std::nullopt;
-            }
-            const rm::sim::Command* order = units.store.orders()[id.index].current();
-            return order != nullptr ? std::optional{*order} : std::nullopt;
-        };
 
         // Where the last few orders landed, and when. Markers expire on their own
         // (GroundDecals.hpp), so this only ever grows to the number of orders
@@ -968,11 +957,6 @@ int runWindowed(const Session& session) {
                 armedOption.reset();
                 return;
             }
-            const auto builderType =
-                static_cast<std::size_t>(units.store.typeAt(buildWho.builder.index));
-            const rm::sim::PassabilityGrid& grid = passability.gridForBuild(
-                units, static_cast<std::size_t>(*type), builderType);
-
             // THE PLACEMENT REPORTS EITHER WAY. Until construction has a body in the world
             // (nothing exists at the site until the work completes) this line is the ONLY
             // sign a build was ordered at all — so a refusal being silent meant a player
@@ -983,7 +967,7 @@ int runWindowed(const Session& session) {
             if (!armedPlaceable({at.x, at.z})) {
                 std::printf("build refused: %s does not fit at (%.0f, %.0f)\n", what.c_str(),
                             static_cast<double>(at.x), static_cast<double>(at.z));
-            } else if (issueBuild(units, grid, map->field, buildWho.builder,
+            } else if (issueBuild(units, buildWho.builder,
                                   playerDriving(units, units.playerArmy),
                                   static_cast<rm::TickIndex>(matchTicks), *type,
                                   rm::sim::fxFromFloat(at.x), rm::sim::fxFromFloat(at.z))) {
@@ -1021,89 +1005,64 @@ int runWindowed(const Session& session) {
                     .age = 0.0f,
                 });
 
-                std::size_t failed = 0;
-                std::size_t accepted = 0;
+                std::vector<rm::sim::UnitId> ordinary;
+                std::vector<rm::sim::UnitId> overcharging;
+                float shotCost = 0.0f;
                 for (const rm::sim::UnitId sel : selected) {
                     if (!units.store.alive(sel)) {
                         continue;  // selected, then killed before the order was given
                     }
-                    // Each unit routes on the map ITS limits see. Two units given the same
-                    // order can legitimately get different answers, and one of them can be
-                    // "no route" while the other walks off.
-                    const auto type = static_cast<std::size_t>(units.store.typeAt(sel.index));
-                    const rm::sim::PassabilityGrid& grid = passability.gridFor(units, type);
                     // ⌘-RIGHT-CLICK ON AN ENEMY IS AN OVERCHARGE, for the units that carry
                     // a manual weapon; the rest of the selection attacks as it would have.
                     // The escort keeps escorting while the commander spends the store.
                     const rm::unitdef::UnitDef* selDef =
                         units.catalog.def(units.store.typeAt(sel.index));
-                    const std::optional<rm::sim::Command> orderBefore = currentOrderFor(sel);
-                    float shotCost = 0.0f;  // the manual weapon's EnergyRequired, or zero
+                    float unitShotCost = 0.0f;
                     if (selDef != nullptr) {
                         for (const rm::unitdef::Weapon& weapon : selDef->weapons) {
                             if (weapon.manuallyFired()) {
-                                shotCost = rm::sim::magToFloat(weapon.energyRequired);
+                                unitShotCost = rm::sim::magToFloat(weapon.energyRequired);
                                 break;
                             }
                         }
                     }
-                    const bool wantOvercharge = target && mods.command && shotCost > 0.0f;
-                    bool took = false;
-                    if (wantOvercharge) {
-                        took = issueOvercharge(
-                            units, grid, map->field, sel,
-                            playerDriving(units, units.playerArmy),
-                            static_cast<rm::TickIndex>(matchTicks), *target,
-                            rm::sim::fxFromFloat(ground.x), rm::sim::fxFromFloat(ground.z), queue);
-                    } else if (target) {
-                        took = issueAttack(units, grid, map->field, sel,
-                                           playerDriving(units, units.playerArmy),
-                                           static_cast<rm::TickIndex>(matchTicks), *target,
-                                           rm::sim::fxFromFloat(ground.x),
-                                           rm::sim::fxFromFloat(ground.z), queue);
+                    if (target && mods.command && unitShotCost > 0.0f) {
+                        overcharging.push_back(sel);
+                        shotCost = unitShotCost;
                     } else {
-                        took = issueMove(units, grid, map->field, sel,
-                                         playerDriving(units, units.playerArmy),
-                                         static_cast<rm::TickIndex>(matchTicks),
-                                         rm::sim::fxFromFloat(ground.x),
-                                         rm::sim::fxFromFloat(ground.z), queue, groundKind);
+                        ordinary.push_back(sel);
                     }
-                    if (took) {
-                        ++accepted;
-                    }
-                    if (took && orderBefore != currentOrderFor(sel)) {
-                        drawCurrentAfterOrder(sel);
-                    }
-                    if (took && wantOvercharge && units.playerArmy >= 0
-                        && static_cast<std::size_t>(units.playerArmy)
-                               < units.economies.size()) {
-                        // The one piece of feedback the world does not show: whether the
-                        // shot leaves now or waits for the bar to fill.
-                        const float banked = rm::sim::magToFloat(
-                            units.economies[static_cast<std::size_t>(units.playerArmy)]
-                                .stored.energy);
-                        if (banked >= shotCost) {
-                            std::printf("overcharge: firing (%.0f energy banked)\n",
-                                        static_cast<double>(banked));
-                        } else {
-                            std::printf("overcharge: holding until charged (%.0f of %.0f "
-                                        "energy)\n",
-                                        static_cast<double>(banked),
-                                        static_cast<double>(shotCost));
-                        }
-                    }
-                    if (!took) {
-                        ++failed;
-                        // The refusal, ON the refusing unit: the destination already has
-                        // its marker, and the question a failure raises is which of the
-                        // selected are not coming. This replaces a printf nobody looked at
-                        // in the one moment it mattered.
-                        const rm::sim::Transform& at = units.store.transforms()[sel.index];
-                        noRouteMarks.push_back(OrderMark{
-                            .position = {rm::sim::fxToFloat(at.x), rm::sim::fxToFloat(at.y),
-                                         rm::sim::fxToFloat(at.z)},
-                            .age = 0.0f,
-                        });
+                }
+                const rm::PlayerIndex player = playerDriving(units, units.playerArmy);
+                const rm::TickIndex tick = static_cast<rm::TickIndex>(matchTicks);
+                std::size_t submitted = 0;
+                if (!overcharging.empty()
+                    && issueOvercharge(units, overcharging, player, tick, *target,
+                                       rm::sim::fxFromFloat(ground.x),
+                                       rm::sim::fxFromFloat(ground.z), queue)) {
+                    submitted += overcharging.size();
+                }
+                const bool ordinarySubmitted = ordinary.empty()
+                    || (target
+                            ? issueAttack(units, ordinary, player, tick, *target,
+                                          rm::sim::fxFromFloat(ground.x),
+                                          rm::sim::fxFromFloat(ground.z), queue)
+                            : issueMove(units, ordinary, player, tick,
+                                        rm::sim::fxFromFloat(ground.x),
+                                        rm::sim::fxFromFloat(ground.z), queue, groundKind));
+                if (ordinarySubmitted) {
+                    submitted += ordinary.size();
+                }
+                if (!overcharging.empty() && units.playerArmy >= 0
+                    && static_cast<std::size_t>(units.playerArmy) < units.economies.size()) {
+                    const float banked = rm::sim::magToFloat(
+                        units.economies[static_cast<std::size_t>(units.playerArmy)].stored.energy);
+                    if (banked >= shotCost) {
+                        std::printf("overcharge: submitted (%.0f energy banked)\n",
+                                    static_cast<double>(banked));
+                    } else {
+                        std::printf("overcharge: submitted (%.0f of %.0f energy)\n",
+                                    static_cast<double>(banked), static_cast<double>(shotCost));
                     }
                 }
                 // EVERY ORDER SAYS WHAT HAPPENED, not only the ones that went wrong. The old
@@ -1112,12 +1071,11 @@ int runWindowed(const Session& session) {
                 // anything at all?" — because silence is also what a click that never reached
                 // this lambda produces. One line per order makes the two distinguishable from
                 // the console alone, which is the only instrument a windowed session has.
-                std::printf("order: %s%s — %zu of %zu unit(s) at (%.0f, %.0f)%s\n",
+                std::printf("order: %s%s — %zu of %zu unit(s) submitted at (%.0f, %.0f)\n",
                             rm::sim::commandKindName(
                                 target ? rm::sim::CommandKind::Attack : groundKind),
-                            queue ? " (queued)" : "", accepted, selected.size(),
-                            static_cast<double>(ground.x), static_cast<double>(ground.z),
-                            failed > 0 ? " — the rest found no route" : "");
+                            queue ? " (queued)" : "", submitted, selected.size(),
+                            static_cast<double>(ground.x), static_cast<double>(ground.z));
                 std::fflush(stdout);
             };
 
@@ -1217,8 +1175,6 @@ int runWindowed(const Session& session) {
                                 rm::data::RosterEntry{.id = buildOptions[*cell].id}.path();
                             const std::optional<rm::UnitTypeIndex> type =
                                 resolveBuildable(units, content, path);
-                            const auto factoryType = static_cast<std::size_t>(
-                                units.store.typeAt(buildWho.builder.index));
                             const rm::sim::Transform& at =
                                 units.store.transforms()[buildWho.builder.index];
                             // The roll-off step is what puts a finished unit BESIDE its
@@ -1232,13 +1188,10 @@ int runWindowed(const Session& session) {
                                     : units.store.motion()[buildWho.builder.index].radiusElmos
                                           * 2;
                             if (type) {
-                                const rm::sim::PassabilityGrid& grid =
-                                    passability.gridForBuild(
-                                        units, static_cast<std::size_t>(*type), factoryType);
                                 const std::string& what = buildOptions[*cell].name.empty()
                                                             ? buildOptions[*cell].id
                                                             : buildOptions[*cell].name;
-                                if (issueBuild(units, grid, map->field, buildWho.builder,
+                                if (issueBuild(units, buildWho.builder,
                                                 playerDriving(units, units.playerArmy),
                                                 static_cast<rm::TickIndex>(matchTicks), *type,
                                                 at.x, at.z + rollOff, !upgrade)) {
@@ -1421,38 +1374,25 @@ int runWindowed(const Session& session) {
                 const rm::unitdef::UnitDef* targetDef =
                     units.catalog.def(units.store.typeAt(hit->index));
                 if (targetDef != nullptr && targetDef->isBuilder()) {
-                    std::size_t assisting = 0;
+                    std::vector<rm::sim::UnitId> builders;
+                    std::vector<rm::sim::UnitId> movers;
                     for (const rm::sim::UnitId sel : selected) {
                         if (!units.store.alive(sel) || sel == *hit) {
                             continue;  // a unit cannot assist itself
                         }
-                        const auto type =
-                            static_cast<std::size_t>(units.store.typeAt(sel.index));
-                        const rm::sim::PassabilityGrid& grid = passability.gridFor(units, type);
                         const rm::unitdef::UnitDef* def =
                             units.catalog.def(units.store.typeAt(sel.index));
-                        const bool builder = def != nullptr && def->isBuilder();
-                        const std::optional<rm::sim::Command> orderBefore =
-                            currentOrderFor(sel);
-                        const rm::sim::Transform& at = units.store.transforms()[hit->index];
-                        const bool took =
-                            builder ? issueAssist(units, grid, map->field, sel,
-                                                  playerDriving(units, units.playerArmy),
-                                                  static_cast<rm::TickIndex>(matchTicks),
-                                                  *hit, mods.shift)
-                                    : issueMove(units, grid, map->field, sel,
-                                                playerDriving(units, units.playerArmy),
-                                                static_cast<rm::TickIndex>(matchTicks),
-                                                at.x, at.z, mods.shift);
-                        if (took && builder) {
-                            ++assisting;
-                        }
-                        if (took && orderBefore != currentOrderFor(sel)) {
-                            drawCurrentAfterOrder(sel);
-                        }
+                        (def != nullptr && def->isBuilder() ? builders : movers).push_back(sel);
                     }
-                    if (assisting > 0) {
-                        std::printf("assist: %zu builder(s) helping %s\n", assisting,
+                    const rm::PlayerIndex player = playerDriving(units, units.playerArmy);
+                    const rm::TickIndex tick = static_cast<rm::TickIndex>(matchTicks);
+                    const rm::sim::Transform& at = units.store.transforms()[hit->index];
+                    const bool assisting = builders.empty()
+                        || issueAssist(units, builders, player, tick, *hit, mods.shift);
+                    (void)(movers.empty()
+                               || issueMove(units, movers, player, tick, at.x, at.z, mods.shift));
+                    if (assisting && !builders.empty()) {
+                        std::printf("assist: %zu builder(s) submitted for %s\n", builders.size(),
                                     targetDef->name.c_str());
                     }
                     return;
@@ -1498,38 +1438,26 @@ int runWindowed(const Session& session) {
                                      rm::sim::fxToFloat(found->at[2])},
                         .age = 0.0f,
                     });
-                    std::size_t reclaiming = 0;
+                    std::vector<rm::sim::UnitId> builders;
+                    std::vector<rm::sim::UnitId> movers;
                     for (const rm::sim::UnitId sel : selected) {
                         if (!units.store.alive(sel)) {
                             continue;
                         }
-                        const auto type =
-                            static_cast<std::size_t>(units.store.typeAt(sel.index));
-                        const rm::sim::PassabilityGrid& grid = passability.gridFor(units, type);
                         const rm::unitdef::UnitDef* def =
                             units.catalog.def(units.store.typeAt(sel.index));
-                        const bool builder = def != nullptr && def->isBuilder();
-                        const std::optional<rm::sim::Command> orderBefore =
-                            currentOrderFor(sel);
-                        const bool took =
-                            builder ? issueReclaim(units, grid, map->field, sel,
-                                                   playerDriving(units, units.playerArmy),
-                                                   static_cast<rm::TickIndex>(matchTicks),
-                                                   *wreck, mods.shift)
-                                    : issueMove(units, grid, map->field, sel,
-                                                playerDriving(units, units.playerArmy),
-                                                static_cast<rm::TickIndex>(matchTicks),
-                                                found->at[0], found->at[2], mods.shift);
-                        if (took && builder) {
-                            ++reclaiming;
-                        }
-                        if (took && orderBefore != currentOrderFor(sel)) {
-                            drawCurrentAfterOrder(sel);
-                        }
+                        (def != nullptr && def->isBuilder() ? builders : movers).push_back(sel);
                     }
-                    if (reclaiming > 0) {
-                        std::printf("reclaim: %zu builder(s) on the wreck (%.0f mass)\n",
-                                    reclaiming,
+                    const rm::PlayerIndex player = playerDriving(units, units.playerArmy);
+                    const rm::TickIndex tick = static_cast<rm::TickIndex>(matchTicks);
+                    const bool reclaiming = builders.empty()
+                        || issueReclaim(units, builders, player, tick, *wreck, mods.shift);
+                    (void)(movers.empty()
+                               || issueMove(units, movers, player, tick, found->at[0], found->at[2],
+                                            mods.shift));
+                    if (reclaiming && !builders.empty()) {
+                        std::printf("reclaim: %zu builder(s) submitted (%.0f mass)\n",
+                                    builders.size(),
                                     static_cast<double>(
                                         rm::sim::magToFloat(found->massRemaining)));
                     }
@@ -2095,19 +2023,19 @@ int runWindowed(const Session& session) {
                 // selected: forty queues at once is a map of spaghetti, and the question
                 // "where is THIS unit going" is asked of a selection.
                 {
-                    const std::deque<rm::sim::Command>& queue =
-                        units.store.orders()[sel.index].orders();
+                    const std::deque<rm::sim::QueuedCommand>& queue =
+                        units.store.orders()[sel.index].entries();
                     std::array<float, 2> from{ground[0], ground[2]};
-                    for (const rm::sim::Command& order : queue) {
-                        if (order.kind == rm::sim::CommandKind::Stop) {
+                    for (const rm::sim::QueuedCommand& order : queue) {
+                        if (order.kind() == rm::sim::CommandKind::Stop) {
                             continue;  // a stop has no destination to draw a line to
                         }
-                        const std::array<float, 2> to{rm::sim::fxToFloat(order.targetX),
-                                                      rm::sim::fxToFloat(order.targetZ)};
+                        const std::array<float, 2> to{rm::sim::fxToFloat(order.targetX()),
+                                                      rm::sim::fxToFloat(order.targetZ())};
                         appendGroundSegment(decalVertices, map->field, from, to,
                                             kQueueLineColour, kQueueLineWidthElmos);
                         appendGroundNode(decalVertices, map->field, to,
-                                         order.kind == rm::sim::CommandKind::Build
+                                         order.kind() == rm::sim::CommandKind::Build
                                              ? kBuildGhostColour
                                              : kQueueNodeColour,
                                          kQueueNodeHalfElmos);

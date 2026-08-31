@@ -10,6 +10,8 @@
 
 #include <algorithm>
 #include <fstream>
+#include <iomanip>
+#include <limits>
 #include <sstream>
 
 namespace rm::sim {
@@ -79,6 +81,16 @@ namespace {
     });
 }
 
+/// The unfinished work this builder founded, or null. The OLDEST such, which is the only one
+/// there can be: `startCommand` refuses a second build while the first is running.
+[[nodiscard]] Construction* activeConstruction(std::vector<Construction>& building,
+                                               UnitId builder) noexcept {
+    const auto found = std::ranges::find_if(building, [builder](const Construction& work) {
+        return !work.finished() && work.builder == builder;
+    });
+    return found == building.end() ? nullptr : &*found;
+}
+
 void cancelActiveConstruction(std::vector<Construction>* building, UnitId builder) {
     if (building == nullptr) {
         return;
@@ -96,7 +108,59 @@ void cancelActiveConstruction(std::vector<Construction>* building, UnitId builde
     return kind == CommandKind::Stop;
 }
 
+void canonicalizeUnits(std::vector<UnitId>& units) {
+    std::ranges::sort(units, [](UnitId a, UnitId b) {
+        return a.index < b.index || (a.index == b.index && a.generation < b.generation);
+    });
+    units.erase(std::unique(units.begin(), units.end()), units.end());
+}
+
 } // namespace
+
+std::optional<CommandId> CommandBuffer::submit(CommandIssue issue, UnitStore& store) {
+    if (issue.source == kInvalidCommandSource
+        || issue.player != static_cast<PlayerIndex>(issue.source) || issue.count == 0) {
+        return std::nullopt;
+    }
+    const bool explicitId = issue.id != kInvalidCommandId;
+    if (!explicitId) {
+        const std::optional<CommandId> allocated = store.allocateCommandId(issue.source);
+        if (!allocated) {
+            return std::nullopt;
+        }
+        issue.id = *allocated;
+    } else if (!store.consumeCommandId(issue.source, issue.id)) {
+        return std::nullopt;
+    }
+    canonicalizeUnits(issue.units);
+    // Live input cannot address nobody. Replay may carry an explicit empty accepted set because
+    // the original submission still consumed an ID, which is authoritative allocator state.
+    if (issue.units.empty() && !explicitId) {
+        return std::nullopt;
+    }
+    const CommandId id = issue.id;
+    pending_.push_back(std::move(issue));
+    return id;
+}
+
+std::vector<CommandIssue> CommandBuffer::take(TickIndex tick, CommandPhase phase) {
+    std::vector<CommandIssue> due;
+    std::vector<CommandIssue> waiting;
+    due.reserve(pending_.size());
+    waiting.reserve(pending_.size());
+    for (CommandIssue& issue : pending_) {
+        if (issue.tick == tick && issue.phase == phase) {
+            due.push_back(std::move(issue));
+        } else {
+            waiting.push_back(std::move(issue));
+        }
+    }
+    pending_ = std::move(waiting);
+    std::stable_sort(due.begin(), due.end(), [](const CommandIssue& a, const CommandIssue& b) {
+        return a.source < b.source;
+    });
+    return due;
+}
 
 const char* commandKindName(CommandKind kind) noexcept {
     switch (kind) {
@@ -184,6 +248,13 @@ bool operator==(const Command& a, const Command& b) noexcept {
            && a.buildType == b.buildType;
 }
 
+bool operator==(const CommandIssue& a, const CommandIssue& b) noexcept {
+    return a.tick == b.tick && a.phase == b.phase && a.source == b.source && a.id == b.id
+           && a.player == b.player && a.kind == b.kind && a.queued == b.queued
+           && a.units == b.units && a.targetX == b.targetX && a.targetZ == b.targetZ
+           && a.target == b.target && a.buildType == b.buildType && a.count == b.count;
+}
+
 bool buildSitePlaceable(const PassabilityGrid& grid, Fx x, Fx z, Fx radiusElmos,
                         const UnitStore& store, const UnitCatalog& catalog,
                         std::span<const Construction> building) noexcept {
@@ -222,11 +293,67 @@ bool buildSitePlaceable(const PassabilityGrid& grid, Fx x, Fx z, Fx radiusElmos,
     return true;
 }
 
-bool applyCommand(const Command& command, UnitStore& store, const UnitCatalog& catalog,
-                   std::span<const Player> players, std::span<const Army> armies,
-                   const Terrain& terrain, const PassabilityGrid& grid, TickRate rate,
-                   std::vector<Construction>* building, EventQueue* events,
-                   const FeatureStore* features) {
+namespace {
+
+[[nodiscard]] const std::shared_ptr<SharedCommand>& ensureSharedCommand(
+    const Command& command, CommandSource source, CommandId id, std::uint32_t count,
+    UnitStore& store, std::shared_ptr<SharedCommand>& shared) {
+    if (shared == nullptr) {
+        shared = std::make_shared<SharedCommand>(SharedCommand{
+            .tick = command.tick,
+            .source = source,
+            .id = id,
+            .player = command.player,
+            .kind = command.kind,
+            .queued = command.queued,
+            // Finalized to the accepted subset after every requested member has been tried.
+            .units = {},
+            .targetX = command.targetX,
+            .targetZ = command.targetZ,
+            .target = command.target,
+            .buildType = command.buildType,
+            .creationSerial = store.allocateCommandSerial(),
+            .originalCount = count,
+            .remainingCount = count,
+        });
+        (void)store.registerCommand(shared);
+    }
+    return shared;
+}
+
+/// Whether retail's outgoing move task preserves motion while this replacement clears it.
+/// Of the command kinds implemented here, C-212's keep set contains Stop, Reclaim,
+/// BuildMobile, and Upgrade. Factory production is BuildFactory and deliberately not included.
+[[nodiscard]] bool replacementKeepsMotion(const Command& command, const UnitStore& store,
+                                           const UnitCatalog& catalog) noexcept {
+    if (command.kind == CommandKind::Stop || command.kind == CommandKind::Reclaim) {
+        return true;
+    }
+    if (command.kind != CommandKind::Build) {
+        return false;
+    }
+    const unitdef::UnitDef* builder = catalog.def(store.typeAt(command.unit.index));
+    const unitdef::UnitDef* product = catalog.def(command.buildType);
+    if (builder == nullptr || product == nullptr) {
+        return false;
+    }
+    const bool upgrade = !builder->upgradesTo.empty() && builder->upgradesTo == product->name;
+    const bool factoryProduction = builder->hasCategory("FACTORY") && product->isMobile();
+    return upgrade || !factoryProduction;
+}
+
+void teardownMovement(MoveState& motion) {
+    motion.moving = false;
+    motion.path.clear();
+    motion.pathIndex = 0;
+}
+
+[[nodiscard]] bool applyCommandMember(
+    const Command& command, CommandSource source, CommandId id, std::uint32_t count,
+    std::shared_ptr<SharedCommand>& shared, UnitStore& store,
+    const UnitCatalog& catalog, std::span<const Player> players, std::span<const Army> armies,
+    const Terrain& terrain, const PassabilityGrid& grid, TickRate rate,
+    std::vector<Construction>* building, EventQueue* events, const FeatureStore* features) {
     // A stale handle first, before anything else looks at the slot. A player may click a unit
     // that died on the tick their order was issued, and a replay of an old log may name a unit
     // that no longer exists — in both cases the generation has moved on, so this must not
@@ -245,25 +372,41 @@ bool applyCommand(const Command& command, UnitStore& store, const UnitCatalog& c
 
     CommandQueue& orders = store.orders()[command.unit.index];
 
+    // THE CAP, retail's, at retail's boundary (`kCommandQueueCap`). It is checked here rather
+    // than inside `CommandQueue::give` because retail checks it in `Sim::IssueCommand` — on
+    // the way in from a command source, before anything is appended — so it bounds what a
+    // PLAYER can pile up and leaves the engine's own inserts (a patrol's synthetic origin)
+    // alone. An order that clears the queue is exempt, so a unit at the cap is still
+    // commandable.
+    if (command.queued && command.kind != CommandKind::Stop && orders.atCapacity()) {
+        return false;
+    }
+
     // A STOP IS NOT A QUEUED ORDER HERE, shift or no shift. Recoil allows one — its comment at
     // `CommandAI.cpp:996` says as much, with an exclamation mark — and it needs to, because it
     // has a wait command that a queued stop interacts with. We have none, so a queued stop
     // would be an order to stand still at some future point in a route, which is what deleting
     // the rest of the route already means. It clears and stops.
     if (command.kind == CommandKind::Stop) {
-        cancelActiveConstruction(building, command.unit);
-        orders.clear();
+        MoveState& motion = store.motion()[command.unit.index];
+        const MoveState previous = motion;
         if (!startCommand(command, store, catalog, terrain, grid, rate, building, events,
                           features)) {
+            motion = previous;
             return false;
         }
-        (void)store.allocateCommandSerial();
+        MoveState stopped = std::move(motion);
+        motion = previous;
+        orders.clear();
+        cancelActiveConstruction(building, command.unit);
+        motion = std::move(stopped);
+        (void)ensureSharedCommand(command, source, id, count, store, shared);
         return true;
     }
 
     if (command.queued) {
-        Command accepted = command;
-        accepted.creationSerial = store.allocateCommandSerial();
+        const std::shared_ptr<const SharedCommand> payload =
+            ensureSharedCommand(command, source, id, count, store, shared);
         // Factory production is repeatable: Shift-clicking the same tank twice means two tanks,
         // unlike placing the same structure twice, which retains the ordinary cancel gesture.
         if (command.kind == CommandKind::Build) {
@@ -271,42 +414,43 @@ bool applyCommand(const Command& command, UnitStore& store, const UnitCatalog& c
             const unitdef::UnitDef* product = catalog.def(command.buildType);
             if (builder != nullptr && product != nullptr && builder->hasCategory("FACTORY")
                 && product->isMobile()) {
-                orders.append(accepted);
+                orders.append(QueuedCommand{command.unit, payload});
                 return true;
             }
         }
         const bool currentWasPatrol =
-            orders.current() != nullptr && orders.current()->kind == CommandKind::Patrol;
+            orders.current() != nullptr && orders.current()->kind() == CommandKind::Patrol;
         const bool alreadyPatrolling = std::any_of(
-            orders.orders().begin(), orders.orders().end(), [](const Command& queued) {
-                return queued.kind == CommandKind::Patrol;
+            orders.entries().begin(), orders.entries().end(), [](const QueuedCommand& queued) {
+                return queued.kind() == CommandKind::Patrol;
             });
-        const CommandQueue::Result result = orders.give(accepted, true);
-        if (command.kind == CommandKind::Patrol && !alreadyPatrolling
-            && result == CommandQueue::Result::Appended) {
-            Command origin = accepted;
-            origin.targetX = store.transforms()[command.unit.index].x;
-            origin.targetZ = store.transforms()[command.unit.index].z;
-            origin.creationSerial = store.allocateCommandSerial();
-            orders.append(origin);
+        QueuedCommand entry{command.unit, payload};
+        if (command.kind == CommandKind::Patrol && !alreadyPatrolling) {
+            entry.setPatrolOrigin({store.transforms()[command.unit.index].x,
+                                   store.transforms()[command.unit.index].z});
         }
+        const CommandQueue::Result result = orders.give(std::move(entry), true);
         if (command.kind == CommandKind::Patrol
             && (result == CommandQueue::Result::Cancelled
                 || result == CommandQueue::Result::CancelledCurrent)) {
             const std::size_t points = static_cast<std::size_t>(std::count_if(
-                orders.orders().begin(), orders.orders().end(), [](const Command& queued) {
-                    return queued.kind == CommandKind::Patrol;
+                orders.entries().begin(), orders.entries().end(), [](const QueuedCommand& queued) {
+                    return queued.kind() == CommandKind::Patrol;
                 }));
-            if (points < 2) {
+            const bool hasHiddenOrigin = std::any_of(
+                orders.entries().begin(), orders.entries().end(), [](const QueuedCommand& queued) {
+                    return queued.kind() == CommandKind::Patrol && queued.patrolOrigin().has_value();
+                });
+            if (points + static_cast<std::size_t>(hasHiddenOrigin) < 2) {
                 orders.remove(CommandKind::Patrol);
                 if (currentWasPatrol) {
                     MoveState& motion = store.motion()[command.unit.index];
                     motion.moving = false;
                     motion.path.clear();
                     motion.pathIndex = 0;
-                    if (const Command* next = orders.current()) {
-                        if (startCommand(*next, store, catalog, terrain, grid, rate, building,
-                                         events, features)) {
+                    if (const QueuedCommand* next = orders.current()) {
+                        if (startCommand(next->asCommand(), store, catalog, terrain, grid, rate,
+                                         building, events, features)) {
                             orders.markCurrentActive();
                         }
                     }
@@ -325,9 +469,9 @@ bool applyCommand(const Command& command, UnitStore& store, const UnitCatalog& c
             motion.path.clear();
             motion.pathIndex = 0;
             cancelActiveConstruction(building, command.unit);
-            if (const Command* next = orders.current()) {
-                if (startCommand(*next, store, catalog, terrain, grid, rate, building, events,
-                                 features)) {
+            if (const QueuedCommand* next = orders.current()) {
+                if (startCommand(next->asCommand(), store, catalog, terrain, grid, rate, building,
+                                 events, features)) {
                     orders.markCurrentActive();
                 }
             }
@@ -344,37 +488,143 @@ bool applyCommand(const Command& command, UnitStore& store, const UnitCatalog& c
         return true;
     }
 
-    // A PLAIN ORDER IS ROUTED BEFORE IT IS QUEUED, so that a refused one changes nothing at
-    // all — not even clearing the queue. That is what keeps "a refused order is not part of the
-    // match" true, and it is why this cannot simply be `give` followed by `startCommand`.
+    // Stage the replacement before clearing so a refused order changes nothing. Once accepted,
+    // restore the outgoing task for the clear notifications, apply C-212's replacement-kind
+    // teardown, insert the replacement, then publish the staged motion from its successful
+    // start. Observers therefore see no replacement during `Cleared` and never see the old task
+    // destroyed according to the wrong incoming kind.
+    MoveState& motion = store.motion()[command.unit.index];
+    const MoveState previous = motion;
+    const bool keepMotion = replacementKeepsMotion(command, store, catalog);
+    if (!keepMotion) {
+        teardownMovement(motion);
+    }
     if (!startCommand(command, store, catalog, terrain, grid, rate, building, events,
                       features)) {
+        motion = previous;
         return false;
     }
+    MoveState replacementMotion = std::move(motion);
+    motion = previous;
     if (command.kind != CommandKind::Build) {
         cancelActiveConstruction(building, command.unit);
     }
-    Command accepted = command;
-    accepted.creationSerial = store.allocateCommandSerial();
-    (void)orders.give(accepted, false);
+    const std::shared_ptr<const SharedCommand> payload =
+        ensureSharedCommand(command, source, id, count, store, shared);
+    QueuedCommand entry{command.unit, payload};
     if (command.kind == CommandKind::Patrol) {
-        Command origin = accepted;
-        origin.targetX = store.transforms()[command.unit.index].x;
-        origin.targetZ = store.transforms()[command.unit.index].z;
-        origin.creationSerial = store.allocateCommandSerial();
-        orders.append(origin);
+        entry.setPatrolOrigin({store.transforms()[command.unit.index].x,
+                               store.transforms()[command.unit.index].z});
     }
+    orders.clear();
+    if (!keepMotion) {
+        teardownMovement(motion);
+    }
+    orders.append(std::move(entry));
     orders.markCurrentActive();
-    if (instantaneous(command.kind)) {
-        orders.clear();
-    }
+    motion = std::move(replacementMotion);
     return true;
+}
+
+} // namespace
+
+bool ApplyCommandResult::acceptedUnit(UnitId unit) const noexcept {
+    return std::ranges::find(accepted, unit) != accepted.end();
+}
+
+ApplyCommandResult applyCommand(const CommandIssue& issue, UnitStore& store,
+                                const UnitCatalog& catalog,
+                                std::span<const Player> players,
+                                std::span<const Army> armies, const Terrain& terrain,
+                                const CommandGridForUnit& gridForUnit, TickRate rate,
+                                std::vector<Construction>* building, EventQueue* events,
+                                const FeatureStore* features) {
+    ApplyCommandResult result;
+    if (issue.source == kInvalidCommandSource || issue.id == kInvalidCommandId
+        || issue.player != static_cast<PlayerIndex>(issue.source)
+        || commandSource(issue.id) != issue.source || issue.count == 0
+        || playerFor(issue.player, players) == nullptr || store.commandIdLive(issue.id)) {
+        return result;
+    }
+
+    std::vector<UnitId> canonical = issue.units;
+    canonicalizeUnits(canonical);
+
+    result.accepted.reserve(canonical.size());
+    std::shared_ptr<SharedCommand> shared;
+    for (const UnitId unit : canonical) {
+        // Validate the handle and authority before asking a resolver that may index by the
+        // handle. `applyCommandMember` repeats these checks at the mutation boundary.
+        if (!store.alive(unit)) {
+            continue;
+        }
+        const Player* player = playerFor(issue.player, players);
+        if (player == nullptr || !authorised(*player, store, unit, armies)) {
+            continue;
+        }
+        const PassabilityGrid* grid = gridForUnit != nullptr ? gridForUnit(unit) : nullptr;
+        if (grid == nullptr) {
+            continue;
+        }
+        const Command member{
+            .tick = issue.tick,
+            .player = issue.player,
+            .kind = issue.kind,
+            .queued = issue.queued,
+            .unit = unit,
+            .targetX = issue.targetX,
+            .targetZ = issue.targetZ,
+            .target = issue.target,
+            .buildType = issue.buildType,
+        };
+        if (applyCommandMember(member, issue.source, issue.id, issue.count, shared, store,
+                               catalog, players, armies,
+                               terrain, *grid, rate, building, events, features)) {
+            result.accepted.push_back(unit);
+        }
+    }
+    if (shared != nullptr) {
+        shared->units = result.accepted;
+    }
+    return result;
+}
+
+bool applyCommand(const Command& command, UnitStore& store, const UnitCatalog& catalog,
+                  std::span<const Player> players, std::span<const Army> armies,
+                  const Terrain& terrain, const PassabilityGrid& grid, TickRate rate,
+                  std::vector<Construction>* building, EventQueue* events,
+                  const FeatureStore* features) {
+    if (command.player >= static_cast<PlayerIndex>(kInvalidCommandSource)) {
+        return false;
+    }
+    const CommandSource source = static_cast<CommandSource>(command.player);
+    const std::optional<CommandId> id = store.allocateCommandId(source);
+    if (!id) {
+        return false;
+    }
+    const CommandIssue issue{
+        .tick = command.tick,
+        .source = source,
+        .id = *id,
+        .player = command.player,
+        .kind = command.kind,
+        .queued = command.queued,
+        .units = {command.unit},
+        .targetX = command.targetX,
+        .targetZ = command.targetZ,
+        .target = command.target,
+        .buildType = command.buildType,
+    };
+    const ApplyCommandResult result = applyCommand(
+        issue, store, catalog, players, armies, terrain,
+        [&grid](UnitId) { return &grid; }, rate, building, events, features);
+    return result.acceptedUnit(command.unit);
 }
 
 std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Terrain& terrain,
                           std::span<const PassabilityGrid* const> gridForType, TickRate rate,
                           std::vector<Construction>* building, EventQueue* events,
-                          const FeatureStore* features) {
+                          const FeatureStore* features, std::vector<Construction>* finished) {
     std::size_t started = 0;
 
     const std::span<CommandQueue> orders = store.orders();
@@ -387,21 +637,21 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
 
         // Movement uses this unit's grid; construction uses the PRODUCT's. Commands retain type
         // ids but not derived grids, so the choice must be repeated when a deferred order starts.
-        const auto gridFor = [&](const Command& command) -> const PassabilityGrid* {
+        const auto gridFor = [&](const QueuedCommand& command) -> const PassabilityGrid* {
             const auto builderType = static_cast<std::size_t>(store.typeAt(slot));
             const PassabilityGrid* builderGrid =
                 builderType < gridForType.size() ? gridForType[builderType] : nullptr;
-            if (command.kind != CommandKind::Build) {
+            if (command.kind() != CommandKind::Build) {
                 return builderGrid;
             }
 
-            const unitdef::UnitDef* product = catalog.def(command.buildType);
+            const unitdef::UnitDef* product = catalog.def(command.buildType());
             const bool navalFactory = product != nullptr && product->hasCategory("NAVAL")
                                      && product->hasCategory("FACTORY");
             if (product != nullptr && !product->isMobile() && !navalFactory) {
                 return builderGrid;  // the same ordinary-structure fallback as gridForBuild
             }
-            const auto productType = static_cast<std::size_t>(command.buildType);
+            const auto productType = static_cast<std::size_t>(command.buildType());
             return productType < gridForType.size() ? gridForType[productType] : nullptr;
         };
 
@@ -410,14 +660,14 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
         // is the barrier. Cyclic completion takes a different path below and deliberately does
         // not call this helper until the next beat.
         const auto startPending = [&] {
-            while (const Command* pending = orders[slot].current()) {
+            while (const QueuedCommand* pending = orders[slot].current()) {
                 const PassabilityGrid* pendingGrid = gridFor(*pending);
                 if (pendingGrid == nullptr) {
                     return;  // leave it pending until its movement domain exists
                 }
-                const bool wasInstant = instantaneous(pending->kind);
-                if (startCommand(*pending, store, catalog, terrain, *pendingGrid, rate, building,
-                                 events, features)) {
+                const bool wasInstant = instantaneous(pending->kind());
+                if (startCommand(pending->asCommand(), store, catalog, terrain, *pendingGrid,
+                                 rate, building, events, features)) {
                     orders[slot].markCurrentActive();
                     ++started;
                     if (!wasInstant) {
@@ -428,25 +678,72 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
             }
         };
 
+        // THE BUILD, in the stage retail puts it in (`C-112`, closing its last open residue).
+        //
+        // Retail's build task materialises its target and then retires its own order from
+        // inside the COMMAND-DISPATCH stage, the first stage of a beat (`C-142`, `C-188`) —
+        // not out of an end-of-beat economy write-back, which is where this used to happen and
+        // which made construction a SECOND queue-head mutation site. `C-211`'s surviving
+        // restatement is that exactly one site advances a unit's queue as a consequence of
+        // that unit's own sub-task finishing, and this is now it.
+        //
+        // IT CASCADES, and that is read from the binary rather than assumed:
+        // `CUnitMobileBuildTask::TaskTick` (`0x005fdf10`) is a five-state machine whose every
+        // state transition is followed by `xor eax,eax` — task status `0`, which `C-188` gives
+        // as "re-run the same task immediately, same beat". So a build ordered on a beat also
+        // materialises on that beat, and a build that completes retires and lets the next
+        // order start and materialise behind it without waiting for the next one.
+        //
+        // Returns true when a head was retired, so the caller can look at the new one.
+        const auto materialiseHead = [&]() -> bool {
+            const QueuedCommand* head = orders[slot].active();
+            if (head == nullptr || head->kind() != CommandKind::Build || building == nullptr) {
+                return false;
+            }
+            if (Construction* work = activeConstruction(*building, store.idAt(slot))) {
+                advanceConstruction(*work);
+                if (!work->finished()) {
+                    return false;  // still rising; the order stays at the head
+                }
+                if (finished != nullptr) {
+                    finished->push_back(*work);
+                }
+                emit(events, Event{.kind = EventKind::ConstructionFinished,
+                                   .army = work->armyIndex,
+                                   .amount = work->cost.mass,
+                                   .at = work->position});
+            }
+            // Finished, or cancelled out from under the order — either way this builder's own
+            // sub-task is over, so the dispatch stage retires the head and starts what follows.
+            (void)orders[slot].finish();
+            startPending();
+            return true;
+        };
+        const auto serviceBuilds = [&] {
+            while (materialiseHead()) {
+            }
+        };
+
         if (orders[slot].active() == nullptr) {
             startPending();
+            serviceBuilds();
             continue;
         }
 
-        const Command* current = orders[slot].active();
-        const PassabilityGrid* grid = current != nullptr ? gridFor(*current) : nullptr;
-        if (grid == nullptr) {
-            continue;  // a missing domain leaves the command queued rather than dropping it
+        // BEFORE the grid lookup, deliberately. A build in progress does not move, so asking
+        // which passability grid it would route on is a question with no bearing on whether it
+        // rises — and answering it first would stall every construction in a scene that has no
+        // grid for the product's motion class. `startPending`, which does need one, looks it up
+        // for itself.
+        const QueuedCommand* current = orders[slot].active();
+        if (current->kind() == CommandKind::Build) {
+            serviceBuilds();
+            continue;
         }
 
-        // A build remains at the head while its construction is active. A queued one reaching
-        // the head starts once, then waits there until the economy reports completion.
-        if (current->kind == CommandKind::Build) {
-            if (building != nullptr
-                && hasActiveConstruction(*building, store.idAt(slot))) {
-                continue;
-            }
-            continue;  // completion retires it through finishBuildOrder
+        const PassabilityGrid* grid = gridFor(*current);
+        if (grid == nullptr) {
+            continue;  // a missing domain leaves the command queued rather than dropping it
         }
 
         // THE CHASE. An attack naming a LIVING target never completes by arrival — it
@@ -463,11 +760,11 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
         // A position-target attack never enters this block: it is routed movement, and the
         // finish-or-cycle logic below owns it. An entity-target attack was already validated to
         // have a suitable weapon when it started.
-        if (const Command* head = orders[slot].active();
+        if (const QueuedCommand* head = orders[slot].active();
             head != nullptr
-            && (head->kind == CommandKind::Attack || head->kind == CommandKind::Overcharge
-                || head->kind == CommandKind::Assist)
-            && store.alive(head->target)) {
+            && (head->kind() == CommandKind::Attack || head->kind() == CommandKind::Overcharge
+                || head->kind() == CommandKind::Assist)
+            && store.alive(head->target())) {
             // An overcharge pursues exactly as an attack does; the reach is the MANUAL
             // weapon's, because that is the gun this order will fire. A fired overcharge
             // forgets its target (`fireOvercharge`), so a spent order falls out of this
@@ -475,15 +772,15 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
             // reach — follow the working engineer, hold beside the factory — and, being a
             // standing order, completes only when the target dies, which is exactly this
             // block's rule.
-            const bool manual = head->kind == CommandKind::Overcharge;
+            const bool manual = head->kind() == CommandKind::Overcharge;
             const unitdef::UnitDef* def = catalog.def(store.typeAt(slot));
             Fx reach{};
-            if (head->kind == CommandKind::Assist) {
+            if (head->kind() == CommandKind::Assist) {
                 reach = catalog.rates(store.typeAt(slot)).buildReachElmos
                       + store.motion()[slot].radiusElmos
-                      + store.motion()[head->target.index].radiusElmos;
+                      + store.motion()[head->target().index].radiusElmos;
             } else if (def != nullptr) {
-                const bool targetAirborne = store.motion()[head->target.index].airborne;
+                const bool targetAirborne = store.motion()[head->target().index].airborne;
                 for (const unitdef::Weapon& weapon : def->weapons) {
                     if ((manual ? weapon.manuallyFired() : weapon.fires())
                         && weapon.canTarget(targetAirborne)
@@ -495,7 +792,7 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
             if (reach > Fx{}) {
                 MoveState& chase = store.motion()[slot];
                 const Transform& mine = store.transforms()[slot];
-                const Transform& theirs = store.transforms()[head->target.index];
+                const Transform& theirs = store.transforms()[head->target().index];
                 const Fx gap = groundDistanceElmos({mine.x, mine.y, mine.z},
                                                    {theirs.x, theirs.y, theirs.z});
                 if (gap <= reach) {
@@ -509,16 +806,15 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
                     // still caught. Or when the unit stands idle out of range, which is
                     // how a fresh chase starts and how a failed route retries.
                     const Fx strayed = groundDistanceElmos(
-                        {head->targetX, Fx{}, head->targetZ}, {theirs.x, Fx{}, theirs.z});
+                        {head->targetX(), Fx{}, head->targetZ()}, {theirs.x, Fx{}, theirs.z});
                     if (strayed > Fx::fromRaw(reach.raw() / 2) || !chase.moving) {
                         const bool routed =
                             routeUnit(slot, theirs.x, theirs.z, store, terrain, *grid);
-                        if (Command* mutableHead = orders[slot].activeMutable()) {
+                        if (QueuedCommand* mutableHead = orders[slot].activeMutable()) {
                             // Recorded whether or not the route was found: a target in an
                             // unreachable spot must not be re-pathed every tick — the next
                             // attempt waits until it strays again.
-                            mutableHead->targetX = theirs.x;
-                            mutableHead->targetZ = theirs.z;
+                            mutableHead->setTargetPosition(theirs.x, theirs.z);
                         }
                         (void)routed;
                     }
@@ -529,9 +825,9 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
 
         // An entity attack ends on target death, not when its now-stale route happens to arrive.
         // It is an ordinary completion, so dispatch may start the follower in this same beat.
-        if (const Command* head = orders[slot].active();
-            head != nullptr && head->kind == CommandKind::Attack
-            && head->target.generation != 0 && !store.alive(head->target)) {
+        if (const QueuedCommand* head = orders[slot].active();
+            head != nullptr && head->kind() == CommandKind::Attack
+            && head->target().generation != 0 && !store.alive(head->target())) {
             MoveState& staleRoute = store.motion()[slot];
             staleRoute.moving = false;
             staleRoute.path.clear();
@@ -544,10 +840,10 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
         // An aggressive order with a temporary target belongs to the post-intel pass, even
         // when it is currently holding still. A stale target is cleared there and the original
         // waypoint resumed; treating the hold as arrival here would lose that destination.
-        if (const Command* head = orders[slot].active();
+        if (const QueuedCommand* head = orders[slot].active();
             head != nullptr
-            && (head->kind == CommandKind::AttackMove || head->kind == CommandKind::Patrol)
-            && head->target.generation != 0) {
+            && (head->kind() == CommandKind::AttackMove || head->kind() == CommandKind::Patrol)
+            && head->target().generation != 0) {
             continue;
         }
 
@@ -557,9 +853,9 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
         // `harvestReclaim` do the work; short of reach and idle, it walks the rest of the
         // way. A wreck it cannot route to is dropped by falling through to the finish
         // logic, which is what an unreachable order deserves.
-        if (const Command* head = orders[slot].active();
-            head != nullptr && head->kind == CommandKind::Reclaim && features != nullptr) {
-            if (const Feature* wreck = features->find(head->target)) {
+        if (const QueuedCommand* head = orders[slot].active();
+            head != nullptr && head->kind() == CommandKind::Reclaim && features != nullptr) {
+            if (const Feature* wreck = features->find(head->target())) {
                 MoveState& mine = store.motion()[slot];
                 const Fx gap = groundDistanceElmos(positionOf(store.transforms()[slot]),
                                                    wreck->at);
@@ -586,12 +882,37 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
             continue;  // still carrying out the order at the head
         }
 
+        // The first patrol's starting point is execution state, not a fabricated second command.
+        // Its destination leg keeps the same entry at the head and exposes the hidden origin;
+        // the return leg restores immutable intent and then rotates to the next real waypoint.
+        if (const QueuedCommand* head = orders[slot].active();
+            head != nullptr && head->kind() == CommandKind::Patrol) {
+            QueuedCommand* entry = orders[slot].currentEntryMutable();
+            if (entry != nullptr && entry->patrolOrigin()) {
+                if (entry->returningToPatrolOrigin()) {
+                    entry->restorePatrolDestination();
+                    if (orders[slot].size() > 1) {
+                        (void)orders[slot].cycle();
+                    } else {
+                        orders[slot].deactivateCurrent();
+                    }
+                } else {
+                    entry->routeToPatrolOrigin();
+                    orders[slot].deactivateCurrent();
+                }
+                continue;
+            }
+            if (orders[slot].size() > 1) {
+                (void)orders[slot].cycle();
+                continue;
+            }
+        }
+
         // Retail keys Attack cycling on target KIND. A position attack is a repeatable waypoint
-        // while another command follows; an entity attack and every lone cyclic command retire.
-        if (const Command* head = orders[slot].active();
+        // while another command follows; entity attacks and lone waypoints retire.
+        if (const QueuedCommand* head = orders[slot].active();
             head != nullptr && orders[slot].size() > 1
-            && (head->kind == CommandKind::Patrol
-                || (head->kind == CommandKind::Attack && head->target.generation == 0))) {
+            && head->kind() == CommandKind::Attack && head->target().generation == 0) {
             (void)orders[slot].cycle();
             continue;
         }
@@ -602,18 +923,6 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
     }
 
     return started;
-}
-
-void finishBuildOrder(UnitStore& store, const Construction& finished) noexcept {
-    if (!store.alive(finished.builder)) {
-        return;
-    }
-    CommandQueue& orders = store.orders()[finished.builder.index];
-    const Command* current = orders.active();
-    if (current != nullptr && current->kind == CommandKind::Build
-        && current->unit == finished.builder) {
-        (void)orders.finish();
-    }
 }
 
 void updateAggressiveOrders(UnitStore& store, const UnitCatalog& catalog,
@@ -633,9 +942,10 @@ void updateAggressiveOrders(UnitStore& store, const UnitCatalog& catalog,
         if (!store.slotAlive(slot)) {
             continue;
         }
-        Command* order = store.orders()[slot].activeMutable();
+        QueuedCommand* order = store.orders()[slot].activeMutable();
         if (order == nullptr
-            || (order->kind != CommandKind::AttackMove && order->kind != CommandKind::Patrol)) {
+            || (order->kind() != CommandKind::AttackMove
+                && order->kind() != CommandKind::Patrol)) {
             continue;
         }
 
@@ -661,8 +971,8 @@ void updateAggressiveOrders(UnitStore& store, const UnitCatalog& catalog,
             motion.moving = false;
             motion.path.clear();
             motion.pathIndex = 0;
-            return startCommand(*order, store, catalog, terrain, *grid, rate, nullptr, nullptr,
-                                nullptr);
+            return startCommand(order->asCommand(), store, catalog, terrain, *grid, rate, nullptr,
+                                nullptr, nullptr);
         };
         const int owner = store.motion()[slot].armyIndex;
         const Army* mine = armyFor(owner);
@@ -678,13 +988,13 @@ void updateAggressiveOrders(UnitStore& store, const UnitCatalog& catalog,
                                == ContactKind::Seen);
         };
 
-        if (order->target.generation != 0 && !targetVisibleAndHostile(order->target)) {
-            order->target = UnitId{};
+        if (order->target().generation != 0 && !targetVisibleAndHostile(order->target())) {
+            order->setTarget(UnitId{});
             (void)resumeWaypoint();
         }
 
         const std::array<Fx, 3> from = positionOf(store.transforms()[slot]);
-        if (order->target.generation == 0) {
+        if (order->target().generation == 0) {
             std::optional<UnitId> nearest;
             Fx nearestDistance{};
             for (const unitdef::Weapon& weapon : def->weapons) {
@@ -705,17 +1015,17 @@ void updateAggressiveOrders(UnitStore& store, const UnitCatalog& catalog,
                 }
             }
             if (nearest) {
-                order->target = *nearest;
+                order->setTarget(*nearest);
             }
         }
 
-        if (order->target.generation == 0) {
+        if (order->target().generation == 0) {
             continue;
         }
 
         const Transform& mineAt = store.transforms()[slot];
-        const Transform& targetAt = store.transforms()[order->target.index];
-        const bool targetAirborne = store.motion()[order->target.index].airborne;
+        const Transform& targetAt = store.transforms()[order->target().index];
+        const bool targetAirborne = store.motion()[order->target().index].airborne;
         const Fx gap = groundDistanceElmos(positionOf(mineAt), positionOf(targetAt));
         const bool canEngage = std::any_of(
             def->weapons.begin(), def->weapons.end(),
@@ -738,14 +1048,14 @@ void updateAggressiveOrders(UnitStore& store, const UnitCatalog& catalog,
             }
         }
         if (widest == nullptr || gap < widest->minRange) {
-            order->target = UnitId{};
+            order->setTarget(UnitId{});
             (void)resumeWaypoint();
             continue;
         }
 
         if (!motion.moving) {
             if (!routeUnit(slot, targetAt.x, targetAt.z, store, terrain, *grid)) {
-                order->target = UnitId{};
+                order->setTarget(UnitId{});
                 (void)resumeWaypoint();
             }
         }
@@ -897,14 +1207,13 @@ bool startCommand(const Command& command, UnitStore& store, const UnitCatalog& c
         }
 
         // AN UPGRADE, when the target is what the builder's blueprint says it becomes —
-        // `General.UpgradesTo`, the tech path. Same command, two differences: the work
-        // happens WHERE THE BUILDER STANDS whatever the order said (a factory does not
-        // upgrade into a field), and completion replaces the builder instead of standing
-        // a second building on top of it (the caller's spawn path reads `upgradeOf`).
+        // `General.UpgradesTo`, the tech path. Upgrades and factory products both happen on
+        // the builder's pad, whatever construction-plan location the command carried.
         const bool upgrade = !builder->upgradesTo.empty() && builder->upgradesTo == def->name;
+        const bool factoryProduction = builder->hasCategory("FACTORY") && def->isMobile();
         const Transform& builderAt = store.transforms()[command.unit.index];
-        const Fx siteX = upgrade ? builderAt.x : command.targetX;
-        const Fx siteZ = upgrade ? builderAt.z : command.targetZ;
+        const Fx siteX = (upgrade || factoryProduction) ? builderAt.x : command.targetX;
+        const Fx siteZ = (upgrade || factoryProduction) ? builderAt.z : command.targetZ;
 
         // Validate the TARGET's terrain domain before creating work. Callers pass the grid
         // selected for the product being built; aircraft need no ground footprint and upgrades
@@ -1000,31 +1309,70 @@ bool startCommand(const Command& command, UnitStore& store, const UnitCatalog& c
 
 // --- The log --------------------------------------------------------------------------
 
-void CommandLog::record(const Command& command) {
-    // Non-decreasing, checked at record time. A log that went backwards would replay as a
-    // different match, and the tick it went backwards on is the only useful thing to know
-    // about it — which is knowable here and not at replay time.
-    if (!commands_.empty() && command.tick < commands_.back().tick) {
-        return;
-    }
-    commands_.push_back(command);
+namespace {
+
+inline constexpr std::string_view kCommandLogMagic = "recoil-metal semantic command log";
+inline constexpr std::uint32_t kCommandLogVersion = 1;
+
+[[nodiscard]] const char* phaseName(CommandPhase phase) noexcept {
+    return phase == CommandPhase::PreTick ? "pre-tick" : "post-spawn";
 }
 
-std::span<const Command> CommandLog::at(TickIndex tick) const noexcept {
-    if (commands_.empty()) {
+[[nodiscard]] std::optional<CommandPhase> phaseFromName(std::string_view name) noexcept {
+    if (name == "pre-tick") {
+        return CommandPhase::PreTick;
+    }
+    if (name == "post-spawn") {
+        return CommandPhase::PostSpawn;
+    }
+    return std::nullopt;
+}
+
+[[nodiscard]] bool canonicalUnits(std::span<const UnitId> units) noexcept {
+    return std::adjacent_find(units.begin(), units.end(), [](UnitId a, UnitId b) {
+               return a.index > b.index
+                      || (a.index == b.index && a.generation >= b.generation);
+           }) == units.end();
+}
+
+[[nodiscard]] bool issueBefore(const CommandIssue& a, const CommandIssue& b) noexcept {
+    return a.tick < b.tick
+           || (a.tick == b.tick
+               && static_cast<std::uint8_t>(a.phase) < static_cast<std::uint8_t>(b.phase));
+}
+
+template <typename To, typename From>
+[[nodiscard]] bool fits(From value) noexcept {
+    return value <= static_cast<From>(std::numeric_limits<To>::max());
+}
+
+} // namespace
+
+bool CommandLog::record(CommandIssue issue) {
+    if (issue.source == kInvalidCommandSource || issue.id == kInvalidCommandId
+        || commandSource(issue.id) != issue.source
+        || issue.player != static_cast<PlayerIndex>(issue.source) || issue.count == 0
+        || !canonicalUnits(issue.units)
+        || (!issues_.empty() && issueBefore(issue, issues_.back()))) {
+        return false;
+    }
+    issues_.push_back(std::move(issue));
+    return true;
+}
+
+std::span<const CommandIssue> CommandLog::at(TickIndex tick, CommandPhase phase) const noexcept {
+    if (issues_.empty()) {
         return {};
     }
-    const auto begin =
-        std::lower_bound(commands_.begin(), commands_.end(), tick,
-                         [](const Command& c, TickIndex t) { return c.tick < t; });
-    const auto end = std::upper_bound(begin, commands_.end(), tick,
-                                      [](TickIndex t, const Command& c) { return t < c.tick; });
-    return std::span<const Command>{commands_.data() + (begin - commands_.begin()),
-                                    static_cast<std::size_t>(end - begin)};
+    const CommandIssue key{.tick = tick, .phase = phase};
+    const auto begin = std::lower_bound(issues_.begin(), issues_.end(), key, issueBefore);
+    const auto end = std::upper_bound(begin, issues_.end(), key, issueBefore);
+    return std::span<const CommandIssue>{issues_.data() + (begin - issues_.begin()),
+                                         static_cast<std::size_t>(end - begin)};
 }
 
 TickIndex CommandLog::lastTick() const noexcept {
-    return commands_.empty() ? TickIndex{0} : commands_.back().tick;
+    return issues_.empty() ? TickIndex{0} : issues_.back().tick;
 }
 
 bool writeCommandLog(const CommandLog& log, const std::string& path,
@@ -1034,23 +1382,26 @@ bool writeCommandLog(const CommandLog& log, const std::string& path,
         return false;
     }
 
-    out << "# recoil-metal command log\n";
-    out << "# tick player kind unit generation targetX targetZ buildType"
-           " targetUnit targetGeneration buildPath queued\n";
-    for (const Command& command : log.all()) {
-        out << command.tick << ' ' << command.player << ' ' << commandKindName(command.kind) << ' '
-            << command.unit.index << ' ' << command.unit.generation << ' '
-            << command.targetX.raw() << ' ' << command.targetZ.raw() << ' '
-            << command.buildType << ' ' << command.target.index << ' '
-            << command.target.generation;
-        // The content-addressed column: what the type index MEANT in this run. '-' for
-        // everything that is not a build, and for a caller with no resolver.
-        std::string blueprint;
-        if (command.kind == CommandKind::Build && pathFor != nullptr) {
-            blueprint = pathFor(command.buildType);
+    out << kCommandLogMagic << '\n';
+    out << "version " << kCommandLogVersion << '\n';
+    out << "issue-count " << log.size() << '\n';
+    out << "# tick phase source id player kind queued count targetX targetZ buildType"
+           " targetIndex targetGeneration unitCount [unitIndex unitGeneration]... buildPath\n";
+    for (const CommandIssue& issue : log.all()) {
+        out << issue.tick << ' ' << phaseName(issue.phase) << ' '
+            << static_cast<unsigned>(issue.source) << ' ' << issue.id << ' ' << issue.player << ' '
+            << commandKindName(issue.kind) << ' ' << (issue.queued ? 1 : 0) << ' '
+            << issue.count << ' ' << issue.targetX.raw() << ' ' << issue.targetZ.raw() << ' '
+            << issue.buildType << ' ' << issue.target.index << ' ' << issue.target.generation << ' '
+            << issue.units.size();
+        for (UnitId unit : issue.units) {
+            out << ' ' << unit.index << ' ' << unit.generation;
         }
-        out << ' ' << (blueprint.empty() ? "-" : blueprint.c_str()) << ' '
-            << (command.queued ? 1 : 0) << '\n';
+        std::string blueprint;
+        if (issue.kind == CommandKind::Build && pathFor != nullptr) {
+            blueprint = pathFor(issue.buildType);
+        }
+        out << ' ' << std::quoted(blueprint) << '\n';
     }
     return out.good();
 }
@@ -1062,68 +1413,127 @@ std::optional<CommandLog> readCommandLog(const std::string& path,
         return std::nullopt;
     }
 
-    CommandLog log;
     std::string line;
-    while (std::getline(in, line)) {
+    if (!std::getline(in, line) || line != kCommandLogMagic) {
+        return std::nullopt;
+    }
+    std::uint64_t version = 0;
+    if (!std::getline(in, line)) {
+        return std::nullopt;
+    }
+    {
+        std::istringstream fields{line};
+        std::string label;
+        std::string extra;
+        if (!(fields >> label >> version) || label != "version" || version != kCommandLogVersion
+            || fields >> extra) {
+            return std::nullopt;
+        }
+    }
+    std::uint64_t issueCount = 0;
+    if (!std::getline(in, line)) {
+        return std::nullopt;
+    }
+    {
+        std::istringstream fields{line};
+        std::string label;
+        std::string extra;
+        if (!(fields >> label >> issueCount) || label != "issue-count" || fields >> extra
+            || !fits<std::size_t>(issueCount)) {
+            return std::nullopt;
+        }
+    }
+
+    CommandLog log;
+    std::vector<std::string> paths;
+    paths.reserve(static_cast<std::size_t>(issueCount));
+    std::uint64_t parsedCount = 0;
+    while (parsedCount < issueCount && std::getline(in, line)) {
         if (line.empty() || line.front() == '#') {
             continue;
         }
 
         std::istringstream fields{line};
-        Command command;
-        std::string kind;
         std::uint64_t tick = 0;
-        unsigned player = 0;
-        unsigned long index = 0;
-        unsigned long generation = 0;
-        long targetX = 0;
-        long targetZ = 0;
-        unsigned buildType = 0;
-
-        if (!(fields >> tick >> player >> kind >> index >> generation >> targetX >> targetZ
-              >> buildType)) {
-            return std::nullopt;  // a partial log replays as a different match
+        std::string phaseText;
+        std::uint64_t source = 0;
+        std::uint64_t id = 0;
+        std::uint64_t player = 0;
+        std::string kindText;
+        std::uint64_t queued = 0;
+        std::uint64_t count = 0;
+        std::int64_t targetX = 0;
+        std::int64_t targetZ = 0;
+        std::uint64_t buildType = 0;
+        std::uint64_t targetIndex = 0;
+        std::uint64_t targetGeneration = 0;
+        std::uint64_t unitCount = 0;
+        if (!(fields >> tick >> phaseText >> source >> id >> player >> kindText >> queued >> count
+              >> targetX >> targetZ >> buildType >> targetIndex >> targetGeneration
+              >> unitCount)) {
+            return std::nullopt;
         }
-        const std::optional<CommandKind> parsed = kindFromName(kind);
-        if (!parsed) {
+        const std::optional<CommandPhase> phase = phaseFromName(phaseText);
+        const std::optional<CommandKind> kind = kindFromName(kindText);
+        if (!phase || !kind || source >= kInvalidCommandSource || queued > 1 || count == 0
+            || !fits<CommandId>(id) || !fits<PlayerIndex>(player)
+            || !fits<std::uint32_t>(count) || targetX < std::numeric_limits<FxRaw>::min()
+            || targetX > std::numeric_limits<FxRaw>::max()
+            || targetZ < std::numeric_limits<FxRaw>::min()
+            || targetZ > std::numeric_limits<FxRaw>::max()
+            || !fits<UnitTypeIndex>(buildType) || !fits<UnitIndex>(targetIndex)
+            || !fits<Generation>(targetGeneration) || !fits<std::size_t>(unitCount)) {
             return std::nullopt;
         }
 
-        // The attack target, appended to the format when chases arrived. OPTIONAL on read:
-        // a log written before the columns existed holds only untargeted orders, and those
-        // replay exactly as they did — an absent target IS the invalid handle.
-        unsigned long targetIndex = 0;
-        unsigned long targetGeneration = 0;
-        (void)(fields >> targetIndex >> targetGeneration);
-
-        // The blueprint column, optional the same way: '-' and absence both mean "none".
-        std::string blueprint;
-        (void)(fields >> blueprint);
-        if (buildPaths != nullptr) {
-            buildPaths->push_back(blueprint == "-" ? std::string{} : blueprint);
-        }
-
-        command.tick = tick;
-        command.player = static_cast<PlayerIndex>(player);
-        command.kind = *parsed;
-        command.unit = UnitId{static_cast<UnitIndex>(index), static_cast<Generation>(generation)};
-        command.targetX = Fx::fromRaw(static_cast<FxRaw>(targetX));
-        command.targetZ = Fx::fromRaw(static_cast<FxRaw>(targetZ));
-        command.target = UnitId{static_cast<UnitIndex>(targetIndex),
-                                static_cast<Generation>(targetGeneration)};
-        command.buildType = static_cast<UnitTypeIndex>(buildType);
-        unsigned queued = 0;
-        if (fields >> queued) {
-            if (queued > 1) {
+        CommandIssue issue{
+            .tick = tick,
+            .phase = *phase,
+            .source = static_cast<CommandSource>(source),
+            .id = static_cast<CommandId>(id),
+            .player = static_cast<PlayerIndex>(player),
+            .kind = *kind,
+            .queued = queued == 1,
+            .targetX = Fx::fromRaw(static_cast<FxRaw>(targetX)),
+            .targetZ = Fx::fromRaw(static_cast<FxRaw>(targetZ)),
+            .target = UnitId{static_cast<UnitIndex>(targetIndex),
+                             static_cast<Generation>(targetGeneration)},
+            .buildType = static_cast<UnitTypeIndex>(buildType),
+            .count = static_cast<std::uint32_t>(count),
+        };
+        issue.units.reserve(static_cast<std::size_t>(unitCount));
+        for (std::uint64_t unit = 0; unit < unitCount; ++unit) {
+            std::uint64_t index = 0;
+            std::uint64_t generation = 0;
+            if (!(fields >> index >> generation) || !fits<UnitIndex>(index)
+                || !fits<Generation>(generation)) {
                 return std::nullopt;
             }
-        } else if (!fields.eof()) {
-            return std::nullopt;  // present but not an integer; absence is the legacy default
+            issue.units.push_back(UnitId{static_cast<UnitIndex>(index),
+                                         static_cast<Generation>(generation)});
         }
-        command.queued = queued == 1;
-        log.record(command);
+        std::string blueprint;
+        std::string extra;
+        if (!(fields >> std::quoted(blueprint)) || fields >> extra || !log.record(std::move(issue))) {
+            return std::nullopt;
+        }
+        paths.push_back(std::move(blueprint));
+        ++parsedCount;
     }
-
+    if (parsedCount != issueCount) {
+        return std::nullopt;
+    }
+    while (std::getline(in, line)) {
+        if (!line.empty() && line.front() != '#') {
+            return std::nullopt;
+        }
+    }
+    if (!in.eof()) {
+        return std::nullopt;
+    }
+    if (buildPaths != nullptr) {
+        *buildPaths = std::move(paths);
+    }
     return log;
 }
 

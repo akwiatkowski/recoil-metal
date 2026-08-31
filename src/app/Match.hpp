@@ -174,44 +174,45 @@ extern bool gFafLog;
 
 // --- What the match layer does ------------------------------------------------------------
 
-[[nodiscard]] bool issueMove(UnitScene& scene, const rm::sim::PassabilityGrid& grid,
-                             const rm::HeightField& field, rm::sim::UnitId unit,
-                             rm::PlayerIndex player, rm::TickIndex tick, rm::sim::Fx toX,
-                             rm::sim::Fx toZ, bool queued = false,
-                             rm::sim::CommandKind kind = rm::sim::CommandKind::Move);
+[[nodiscard]] bool issueMove(UnitScene& scene, std::span<const rm::sim::UnitId> units,
+                              rm::PlayerIndex player, rm::TickIndex tick, rm::sim::Fx toX,
+                              rm::sim::Fx toZ, bool queued = false,
+                              rm::sim::CommandKind kind = rm::sim::CommandKind::Move,
+                              rm::sim::CommandPhase phase = rm::sim::CommandPhase::PreTick);
+[[nodiscard]] bool issueMove(UnitScene& scene, rm::sim::UnitId unit, rm::PlayerIndex player,
+                             rm::TickIndex tick, rm::sim::Fx toX, rm::sim::Fx toZ,
+                             bool queued = false,
+                             rm::sim::CommandKind kind = rm::sim::CommandKind::Move,
+                             rm::sim::CommandPhase phase = rm::sim::CommandPhase::PreTick);
 
 /// issueMove's sibling for a TARGETED attack: the handle turns the order into a pursuit —
 /// the unit follows the target's real position, holds at its own longest weapon's reach,
 /// and the order completes when the target dies. toX/toZ are where the target is right now.
-[[nodiscard]] bool issueAttack(UnitScene& scene, const rm::sim::PassabilityGrid& grid,
-                               const rm::HeightField& field, rm::sim::UnitId unit,
-                               rm::PlayerIndex player, rm::TickIndex tick,
-                               rm::sim::UnitId target, rm::sim::Fx toX, rm::sim::Fx toZ,
-                               bool queued = false);
+[[nodiscard]] bool issueAttack(UnitScene& scene, std::span<const rm::sim::UnitId> units,
+                                rm::PlayerIndex player, rm::TickIndex tick,
+                                rm::sim::UnitId target, rm::sim::Fx toX, rm::sim::Fx toZ,
+                                bool queued = false);
 
 /// issueAttack with the commander's manual weapon: walk into ITS range, wait for the
 /// energy, fire once, done. Refused for a unit with no manual weapon.
-[[nodiscard]] bool issueOvercharge(UnitScene& scene, const rm::sim::PassabilityGrid& grid,
-                                   const rm::HeightField& field, rm::sim::UnitId unit,
-                                   rm::PlayerIndex player, rm::TickIndex tick,
-                                   rm::sim::UnitId target, rm::sim::Fx toX, rm::sim::Fx toZ,
-                                   bool queued = false);
+[[nodiscard]] bool issueOvercharge(UnitScene& scene, std::span<const rm::sim::UnitId> units,
+                                    rm::PlayerIndex player, rm::TickIndex tick,
+                                    rm::sim::UnitId target, rm::sim::Fx toX, rm::sim::Fx toZ,
+                                    bool queued = false);
 
 /// The guard order: `unit` lends its BuildRate to whatever `target` is building, standing
 /// at build reach and following it (`core/sim/Assist.hpp`). Refused unless both units are
 /// distinct builders in the same army, exactly as the sim refuses it.
-[[nodiscard]] bool issueAssist(UnitScene& scene, const rm::sim::PassabilityGrid& grid,
-                               const rm::HeightField& field, rm::sim::UnitId unit,
-                               rm::PlayerIndex player, rm::TickIndex tick,
-                               rm::sim::UnitId target, bool queued = false);
+[[nodiscard]] bool issueAssist(UnitScene& scene, std::span<const rm::sim::UnitId> units,
+                                rm::PlayerIndex player, rm::TickIndex tick,
+                                rm::sim::UnitId target, bool queued = false);
 
 /// issueAttack's sibling for a wreck: the FEATURE handle rides in `target`, the builder
 /// walks into reach and the harvest drains it (`core/sim/Reclaim.hpp`). Refused for a
 /// non-builder and for a wreck with nothing in it, exactly as the sim refuses them.
-[[nodiscard]] bool issueReclaim(UnitScene& scene, const rm::sim::PassabilityGrid& grid,
-                                const rm::HeightField& field, rm::sim::UnitId unit,
-                                rm::PlayerIndex player, rm::TickIndex tick,
-                                rm::sim::FeatureId wreck, bool queued = false);
+[[nodiscard]] bool issueReclaim(UnitScene& scene, std::span<const rm::sim::UnitId> units,
+                                 rm::PlayerIndex player, rm::TickIndex tick,
+                                 rm::sim::FeatureId wreck, bool queued = false);
 
 [[nodiscard]] rm::PlayerIndex playerDriving(const UnitScene& scene, int army);
 
@@ -228,8 +229,7 @@ extern bool gFafLog;
 /// back decisions that this applies. Which implementation plays which army is settled at match
 /// setup, so this loop never asks what kind of opponent it is holding.
 void runOpponents(UnitScene& scene, const rm::vfs::Vfs& content, const rm::HeightField& field,
-                  PassabilitySet& passability,
-                  std::span<const rm::mapinfo::StartPosition> starts,
+                   std::span<const rm::mapinfo::StartPosition> starts,
                   std::span<const rm::scenario::Marker> markers,
                   std::vector<std::unique_ptr<rm::ai::Opponent>>& scripts, float elapsedSeconds,
                   rm::TickIndex tickIndex);

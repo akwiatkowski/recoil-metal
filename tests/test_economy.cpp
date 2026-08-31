@@ -9,6 +9,7 @@
 
 #include "core/sim/Economy.hpp"
 
+#include "support/EconomyTick.hpp"
 #include "support/FxMatchers.hpp"
 
 #include <vector>
@@ -93,7 +94,7 @@ TEST_CASE("a funded build finishes in the time the blueprint implies") {
 
     // Six seconds at ten ticks a second.
     for (int tick = 0; tick < 60; ++tick) {
-        rm::sim::tickEconomy(economy, building);
+        rm::test::tickBuild(economy, building);
     }
 
     REQUIRE(building.size() == 1);
@@ -110,7 +111,7 @@ TEST_CASE("a build is not nearly done half way through, it is exactly half done"
     std::vector<Construction> building{massExtractor()};
 
     for (int tick = 0; tick < 30; ++tick) {  // three of the six seconds
-        rm::sim::tickEconomy(economy, building);
+        rm::test::tickBuild(economy, building);
     }
     CHECK(rm::test::asFloat(building.front().fraction()) == Approx(0.5f));
     CHECK_FALSE(building.front().finished());
@@ -130,21 +131,21 @@ TEST_CASE("a shortfall reaches the build one tick late") {
     economy.stored.energy = rm::test::mag(10000.0f);
 
     std::vector<Construction> building{massExtractor()};
-    rm::sim::tickEconomy(economy, building);
+    rm::test::tickBuild(economy, building);
     CHECK(rm::test::asFloat(economy.fundedFraction) == Approx(1.0f));  // the first tick is affordable
 
     // Run it dry. The RATIO falls immediately...
     economy.stored.mass = rm::test::mag(0.0f);
     economy.incomePerTick.mass = kRate.magPerTick(3.0f);
     const float beforeLagged = amount(building.front().buildTimeRemaining);
-    rm::sim::tickEconomy(economy, building);
+    rm::test::tickBuild(economy, building);
     CHECK(rm::test::asFloat(economy.fundedFraction) == Approx(0.5f).margin(0.01));
     // ...but this tick still advances on the fraction cached while the economy was rich.
     CHECK(beforeLagged - amount(building.front().buildTimeRemaining) == Approx(1.0f).margin(0.01));
 
     // Only now does the build feel it.
     const float before = amount(building.front().buildTimeRemaining);
-    rm::sim::tickEconomy(economy, building);
+    rm::test::tickBuild(economy, building);
     CHECK(before - amount(building.front().buildTimeRemaining) == Approx(0.5f).margin(0.01));
 }
 
@@ -159,7 +160,7 @@ TEST_CASE("a shortfall slows every build equally, not the last one in the list")
     economy.storage.energy = rm::test::mag(100000.0f);
 
     std::vector<Construction> building{massExtractor(), massExtractor()};
-    rm::sim::tickEconomy(economy, building);
+    rm::test::tickBuild(economy, building);
 
     CHECK(rm::test::asFloat(economy.fundedFraction) == Approx(0.5f).margin(0.01));
     CHECK(amount(building[0].buildTimeRemaining)
@@ -174,7 +175,7 @@ TEST_CASE("energy can be the thing that stalls, not only mass") {
     economy.storage.energy = rm::test::mag(10000.0f);
 
     std::vector<Construction> building{massExtractor()};
-    rm::sim::tickEconomy(economy, building);
+    rm::test::tickBuild(economy, building);
 
     CHECK(rm::test::asFloat(economy.fundedFraction) == Approx(0.5f).margin(0.01));
 }
@@ -219,7 +220,7 @@ TEST_CASE("a full store spends current income before overflow is clamped") {
         .buildPerTick = rm::test::mag(1.0f),
     }};
 
-    rm::sim::tickEconomy(economy, building);
+    rm::test::tickBuild(economy, building);
 
     CHECK(amount(economy.stored.mass) == Approx(100.0f));
     CHECK(amount(economy.stored.energy) == Approx(100.0f));
@@ -237,7 +238,7 @@ TEST_CASE("current income is spendable with no storage headroom") {
         .buildPerTick = rm::test::mag(1.0f),
     }};
 
-    rm::sim::tickEconomy(economy, building);
+    rm::test::tickBuild(economy, building);
 
     CHECK(rm::test::asFloat(economy.fundedFraction) == Approx(1.0f));
     CHECK(amount(building[0].buildTimeRemaining) == Approx(1.0f));
@@ -257,7 +258,7 @@ TEST_CASE("carried overflow cannot fund this tick") {
         .buildPerTick = rm::test::mag(1.0f),
     }};
 
-    rm::sim::tickEconomy(economy, building);
+    rm::test::tickBuild(economy, building);
 
     CHECK(amount(economy.stored.mass) == Approx(99.0f));
     CHECK(amount(economy.stored.energy) == Approx(99.0f));
@@ -284,7 +285,7 @@ TEST_CASE("a store never goes negative, however the arithmetic falls") {
 
     std::vector<Construction> building{massExtractor()};
     for (int tick = 0; tick < 20; ++tick) {
-        rm::sim::tickEconomy(economy, building);
+        rm::test::tickBuild(economy, building);
         CHECK(amount(economy.stored.mass) >= 0.0f);
         CHECK(amount(economy.stored.energy) >= 0.0f);
         CHECK(amount(building.front().buildTimeRemaining) <= 60.0f);
@@ -300,7 +301,7 @@ TEST_CASE("a build with no rate never progresses and costs nothing") {
 
     std::vector<Construction> building{stalled};
     const float massBefore = amount(economy.stored.mass);
-    rm::sim::tickEconomy(economy, building);
+    rm::test::tickBuild(economy, building);
 
     CHECK(amount(economy.stored.mass) == Approx(massBefore));
     CHECK(amount(building.front().buildTimeRemaining) == Approx(60.0f));
@@ -332,7 +333,7 @@ TEST_CASE("a commander's trickle is enough to afford the first extractor") {
 
     int ticks = 0;
     while (!building.front().finished() && ticks < 10000) {
-        rm::sim::tickEconomy(economy, building);
+        rm::test::tickBuild(economy, building);
         ++ticks;
     }
 
@@ -356,7 +357,7 @@ TEST_CASE("upkeep competes with construction rather than preceding it") {
     economy.upkeepPerTick = perTick(0.0f, 60.0f);
 
     std::vector<Construction> building{massExtractor()};
-    rm::sim::tickEconomy(economy, building);
+    rm::test::tickBuild(economy, building);
 
     // Upkeep is energy-only, so it sits in the single-resource bucket; the build wants both
     // and sits in the multi-resource one. Energy binds, and neither is served first.
@@ -495,7 +496,7 @@ TEST_CASE("the per-unit consumed ratio is recovered from the demand shape") {
     economy.upkeepPerTick = perTick(0.0f, 60.0f);  // energy-only: single-resource bucket
 
     std::vector<Construction> building{massExtractor()};  // wants both: multi-resource
-    rm::sim::tickEconomy(economy, building);
+    rm::test::tickBuild(economy, building);
 
     CHECK_FALSE(economy.massIsBinding);  // energy binds
 

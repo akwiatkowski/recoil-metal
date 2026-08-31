@@ -10,7 +10,8 @@ namespace {
 /// Ground distance, and SQUARED on both sides so nothing takes a root: the comparison is the
 /// only thing wanted and `fxHypot` would cost a CORDIC sweep per queued order per click. `Mag`
 /// for the products because two coordinates 8,192 elmos apart square past `Fx`'s ceiling.
-[[nodiscard]] bool withinCancelDistance(const Command& a, const Command& b) noexcept {
+template <typename Order>
+[[nodiscard]] bool withinCancelDistance(const Order& a, const Order& b) noexcept {
     const Fx dx = a.targetX - b.targetX;
     const Fx dz = a.targetZ - b.targetZ;
     const Mag squared = Mag::fromRaw(static_cast<MagRaw>(dx.raw()) * dx.raw())
@@ -20,26 +21,19 @@ namespace {
     return squared < limit;
 }
 
-} // namespace
-
-bool sameOrder(const Command& a, const Command& b) noexcept {
+template <typename Order>
+[[nodiscard]] bool sameOrderValue(const Order& a, const Order& b) noexcept {
     if (a.kind != b.kind) {
         return false;
     }
     switch (a.kind) {
     case CommandKind::Stop:
-        // No target, nothing to compare, and nothing sensible to do with a match if there
-        // were one. Recoil arrives here too: its predicate wants one or three parameters.
         return false;
     case CommandKind::Move:
     case CommandKind::AttackMove:
     case CommandKind::Patrol:
         return withinCancelDistance(a, b);
     case CommandKind::Attack:
-        // A TARGETED attack matches on the target, not the ground: the chase rewrites its
-        // own targetX/Z as it pursues, so position comparison would never cancel — and
-        // "attack that unit" clicked twice plainly names the same order however far the
-        // unit has walked. A ground attack (no target) keeps the distance rule.
         if (a.target.generation != 0 || b.target.generation != 0) {
             return a.target == b.target;
         }
@@ -47,26 +41,74 @@ bool sameOrder(const Command& a, const Command& b) noexcept {
     case CommandKind::Build:
         return a.buildType == b.buildType && withinCancelDistance(a, b);
     case CommandKind::Reclaim:
-        // Two reclaims of one wreck are one order, however the clicks landed — the handle
-        // names the wreck the way a targeted attack's names its victim.
-        return a.target == b.target;
     case CommandKind::Overcharge:
-        // Same rule: the target names the order.
-        return a.target == b.target;
     case CommandKind::Assist:
         return a.target == b.target;
     }
     return false;
 }
 
+[[nodiscard]] std::shared_ptr<const SharedCommand> standalonePayload(const Command& command) {
+    return std::make_shared<const SharedCommand>(SharedCommand{
+        .tick = command.tick,
+        .player = command.player,
+        .kind = command.kind,
+        .queued = command.queued,
+        .units = {command.unit},
+        .targetX = command.targetX,
+        .targetZ = command.targetZ,
+        .target = command.target,
+        .buildType = command.buildType,
+    });
+}
+
+[[nodiscard]] QueuedCommand standaloneEntry(const Command& command) {
+    return QueuedCommand{command.unit, standalonePayload(command)};
+}
+
+} // namespace
+
+void CommandQueue::notify(CommandQueueStatus status, const QueuedCommand* command) const {
+    if (!observer_) {
+        return;
+    }
+    observer_(CommandQueueChange{
+                  .status = status,
+                  .id = command != nullptr ? command->payload().id : kInvalidCommandId,
+                  .kind = command != nullptr ? command->kind() : CommandKind::Stop,
+              },
+              *this);
+}
+
+void CommandQueue::eraseAt(std::size_t index, bool abortHead) {
+    if (index >= queue_.size()) {
+        return;
+    }
+    const QueuedCommand removed = queue_[index];
+    if (abortHead && index == 0) {
+        notify(CommandQueueStatus::Aborted, &removed);
+        activeSerial_.reset();
+    }
+    queue_.erase(queue_.begin() + static_cast<std::ptrdiff_t>(index));
+    notify(CommandQueueStatus::Removed, &removed);
+}
+
+bool sameOrder(const Command& a, const Command& b) noexcept {
+    return sameOrderValue(a, b);
+}
+
 CommandQueue::Result CommandQueue::give(const Command& command, bool queued) {
+    return give(standaloneEntry(command), queued);
+}
+
+CommandQueue::Result CommandQueue::give(QueuedCommand command, bool queued) {
     if (!queued) {
         // A plain order forgets everything. Recoil clears before appending
         // (`CommandAI.cpp:998-1011`); the cancel rules below then never fire, because there is
         // nothing left to match against.
-        queue_.clear();
-        activeSerial_.reset();
-        queue_.push_back(command);
+        clear();
+        queue_.push_back(std::move(command));
+        notify(CommandQueueStatus::Inserted, &queue_.back());
         return Result::Replaced;
     }
 
@@ -75,14 +117,11 @@ CommandQueue::Result CommandQueue::give(const Command& command, bool queued) {
     // the one just added, not the identical one from earlier in a patrol route.
     for (std::size_t behind = queue_.size(); behind > 0; --behind) {
         const std::size_t at = behind - 1;
-        if (!sameOrder(command, queue_[at])) {
+        if (!sameOrderValue(command.payload(), queue_[at].payload())) {
             continue;
         }
         const bool wasCurrent = at == 0;
-        queue_.erase(queue_.begin() + static_cast<std::ptrdiff_t>(at));
-        if (wasCurrent) {
-            activeSerial_.reset();
-        }
+        eraseAt(at, true);
         // ONE match only, and then stop looking — Recoil's "only delete one non-build order"
         // (`:1400`). Worth being honest about: it is currently indistinguishable from removing
         // ALL matches, because `give` is the only way into the queue and it cancels a match
@@ -97,54 +136,93 @@ CommandQueue::Result CommandQueue::give(const Command& command, bool queued) {
     // inserts a newly added waypoint at the end of the CURRENT lap: immediately before that
     // oldest command, unless the lap already starts at the head. The immutable serial matters
     // when several clicks landed on the same tick.
-    if (command.kind == CommandKind::Patrol && queue_.size() >= 2
-        && queue_.front().kind == CommandKind::Patrol) {
+    if (command.kind() == CommandKind::Patrol && queue_.size() >= 2
+        && queue_.front().kind() == CommandKind::Patrol) {
         const auto oldest = std::min_element(
-            queue_.begin(), queue_.end(), [](const Command& a, const Command& b) {
-                return a.creationSerial < b.creationSerial;
+            queue_.begin(), queue_.end(), [](const QueuedCommand& a, const QueuedCommand& b) {
+                return a.payload().creationSerial < b.payload().creationSerial;
             });
         if (oldest != queue_.begin()) {
-            queue_.insert(oldest, command);
+            const std::size_t at = static_cast<std::size_t>(oldest - queue_.begin());
+            queue_.insert(queue_.begin() + static_cast<std::ptrdiff_t>(at), std::move(command));
+            notify(CommandQueueStatus::Inserted, &queue_[at]);
             return Result::Appended;
         }
     }
 
-    queue_.push_back(command);
+    queue_.push_back(std::move(command));
+    notify(CommandQueueStatus::Inserted, &queue_.back());
     return Result::Appended;
 }
 
-const Command* CommandQueue::finish() {
+const QueuedCommand* CommandQueue::finish() {
     if (!queue_.empty()) {
-        queue_.pop_front();
+        eraseAt(0, false);
     }
     activeSerial_.reset();
     return current();
 }
 
-const Command* CommandQueue::cycle() {
+const QueuedCommand* CommandQueue::cycle() {
     if (!queue_.empty()) {
         queue_.push_back(queue_.front());
         queue_.pop_front();
+        notify(CommandQueueStatus::Reordered, &queue_.back());
     }
     activeSerial_.reset();
     return current();
 }
 
+void CommandQueue::append(QueuedCommand command) {
+    queue_.push_back(std::move(command));
+    notify(CommandQueueStatus::Inserted, &queue_.back());
+}
+
 void CommandQueue::remove(CommandKind kind) {
-    const bool removesCurrent = current() != nullptr && current()->kind == kind;
-    std::erase_if(queue_, [kind](const Command& command) { return command.kind == kind; });
-    if (removesCurrent) {
-        activeSerial_.reset();
+    const bool removesCurrent = current() != nullptr && current()->kind() == kind;
+    for (std::size_t after = queue_.size(); after > 0; --after) {
+        const std::size_t at = after - 1;
+        if (queue_[at].kind() == kind) {
+            eraseAt(at, removesCurrent);
+        }
     }
 }
 
-void CommandQueue::clear() noexcept {
-    queue_.clear();
+std::size_t CommandQueue::removeExact(const SharedCommand* command) {
+    if (command == nullptr) {
+        return 0;
+    }
+    std::size_t removed = 0;
+    for (std::size_t after = queue_.size(); after > 0; --after) {
+        const std::size_t at = after - 1;
+        if (&queue_[at].payload() == command) {
+            eraseAt(at, true);
+            ++removed;
+        }
+    }
+    return removed;
+}
+
+void CommandQueue::clear() {
+    notify(CommandQueueStatus::Cleared);
+    while (!queue_.empty()) {
+        eraseAt(queue_.size() - 1, true);
+    }
     activeSerial_.reset();
 }
 
 std::vector<Command> CommandQueue::all() const {
-    return std::vector<Command>{queue_.begin(), queue_.end()};
+    std::vector<Command> result;
+    result.reserve(queue_.size());
+    for (const QueuedCommand& entry : queue_) {
+        result.push_back(entry.asCommand());
+    }
+    return result;
+}
+
+void CommandQueue::append(Command command) {
+    queue_.push_back(standaloneEntry(command));
+    notify(CommandQueueStatus::Inserted, &queue_.back());
 }
 
 } // namespace rm::sim

@@ -32,6 +32,8 @@ std::uint64_t widthsFingerprint() noexcept {
     pack(sizeof(TickCount), 8);
     pack(sizeof(StateHash), 9);
     pack(sizeof(CommandSerial), 10);
+    pack(sizeof(CommandSource), 11);
+    pack(sizeof(CommandId), 12);
     return f;
 }
 

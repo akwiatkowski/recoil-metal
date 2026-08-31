@@ -21,6 +21,7 @@
 #include "core/sim/Combat.hpp"
 #include "core/sim/Economy.hpp"
 
+#include "support/EconomyTick.hpp"
 #include "support/FxMatchers.hpp"
 #include "support/TestRoster.hpp"
 
@@ -150,7 +151,7 @@ TEST_CASE("a build takes the time its blueprint implies, at every rate") {
 
         std::uint32_t ticks = 0;
         while (!building.front().finished() && ticks < 100000) {
-            rm::sim::tickEconomy(economy, building);
+            rm::test::tickBuild(economy, building);
             ++ticks;
         }
 

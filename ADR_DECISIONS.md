@@ -2364,3 +2364,71 @@ One test lost its purpose and says so — `test_armor.cpp`'s "armour before fall
 discriminate ordering because the share was fractional; with a share of 1 or 0 the two orders are
 arithmetically identical, so that ordering is no longer observable through it and will need
 catching elsewhere if it ever matters.
+
+## ADR-067 — Construction is settled in the command-dispatch stage, not the economy pass
+
+**Context.** A build advanced, completed and retired its own order inside `tickEconomy`'s
+write-back at the foot of the tick. Retail does all three inside the builder's own task in the
+**command-dispatch stage**, the first stage of a beat (`C-142`, `C-188`), and writes the economy
+ratio that work is multiplied by in the motion stage, the last one (`C-162`). Doing it our way
+made construction a second site that mutates a queue head, which is the residue `C-112` had left
+open against `C-211`'s "one site advances a unit's queue as a consequence of that unit's own
+sub-task finishing". The fix was blocked on one unread fact: whether a build ordered on a beat
+also advances on that beat. `C-232` answers it — every state transition in
+`CUnitMobileBuildTask::TaskTick` returns task status `0`, meaning re-run immediately, same beat.
+
+**Decision.** `advanceOrders` advances each builder's construction, reports what completed, and
+retires the finished order — all in one per-slot pass, cascading into whatever order follows.
+`tickEconomy` keeps the bill and the ratio, and charges work that finished this beat on a
+`workedThisTick` stamp, which is retail's `Entity+0x520` worked-this-beat flag (`C-187`). The
+assist scan moves to the head of the tick, alongside the stage retail's assisting builders run
+their own tasks in.
+
+**Alternatives considered.** Leaving construction where it was and moving only the queue pop to
+the next beat's dispatch was rejected: it buys the single-site invariant by making the pop a beat
+late, trading one mismatch for another. Leaving it entirely and recording the stage as a
+permanent divergence was rejected once `C-232` made the faithful version cheap. Keeping the
+economy's own completion reporting alongside the new one was rejected as a second source of
+truth about when a thing is built.
+
+**Consequences.** `docs/golden-p1.log` matches unchanged across the change, 7,000 ticks — the
+work is re-staged inside the beat without any outcome moving, which is the evidence that it is a
+fidelity fix. Two behaviours change and are now retail's: a completed build cascades, so the
+order behind it starts and, if it is a build, materialises in the same beat; and a construction
+whose founder is dead stops rather than continuing at the founder's rate, because a record with
+no live builder over it is advanced by nothing. Tests that drove `tickEconomy` as a whole beat
+now go through `tests/support/EconomyTick.hpp`, which pairs the two stages in tick order — a
+`tickEconomy` call on its own now bills for work that never happened, and that is a different
+beat rather than a smaller one.
+
+## ADR-068 — The order queue is capped at retail's boundary, checked where retail checks it
+
+**Context.** `C-214` recorded that retail rejects a new command when a unit's queue exceeds 500,
+and did not record the comparison. Read at `0x006f7e30`–`0x006f7e48`: the element count is
+compared with `cmpl $0x1f4` and `jbe`, so the test is strictly greater — a queue already holding
+500 accepts one more and 501 is the ceiling a player can reach. The whole test is skipped when
+the incoming command carries the clear-queue flag. We had no cap at all.
+
+**Decision.** `kCommandQueueCap = 500` with `CommandQueue::atCapacity()` as strictly-greater, and
+the check in `applyCommand` — retail's own site, on the way in from a command source — so it
+bounds what a player can pile up and leaves engine-generated inserts alone. Orders that clear the
+queue, which is every unqueued click and every `Stop`, are exempt, so a unit at the cap stays
+commandable. Recorded as claim `C-231`.
+
+**Alternatives considered.** Putting the check inside `CommandQueue::give` was rejected: it would
+also refuse the synthetic origin waypoint a patrol pairs with its first destination, which retail
+never sees because that insert does not come through `Sim::IssueCommand`. Rounding the boundary
+to "no more than 500 entries" was rejected because the off-by-one is the only part of this a test
+can fail on, and adopting it would quietly make the cap a different number from retail's.
+
+**Consequences.** A player shift-clicking past the cap gets a refused order that changes nothing,
+rather than an unbounded queue. The refusal is silent, as retail's is — the unit is simply
+skipped — so nothing in the UI reports it yet.
+
+**Not yet exact, and the reason is recorded rather than deferred silently.** Retail counts raw
+queue entries, and one player patrol issue currently costs us **two** of them — the destination
+plus a synthetic origin waypoint — where retail inserts one shared command. Exempting the
+engine-generated origin keeps the player-facing boundary right, which is what this ADR claims;
+it does not make the raw-entry count match. That reconciliation belongs to the shared-command
+work (`WP-12` slice 1 in the project plan), and the cap should be re-checked against retail once
+a patrol issue is one entry.

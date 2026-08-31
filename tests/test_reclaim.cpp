@@ -214,13 +214,17 @@ TEST_CASE("a reclaim order survives the log round trip") {
     // The replay contract: the kind serialises by name, the feature handle rides in the
     // target columns the chase already writes, and what comes back is what went in.
     rm::sim::CommandLog log;
-    log.record(Command{.tick = 7,
-                       .player = 1,
-                       .kind = CommandKind::Reclaim,
-                       .unit = UnitId{3, 2},
-                       .targetX = rm::sim::fxFromFloat(210.0f),
-                       .targetZ = rm::sim::fxFromFloat(200.0f),
-                       .target = UnitId{5, 1}});
+    log.record(rm::sim::CommandIssue{
+        .tick = 7,
+        .source = 1,
+        .id = rm::commandId(1, 0),
+        .player = 1,
+        .kind = CommandKind::Reclaim,
+        .units = {UnitId{3, 2}},
+        .targetX = rm::sim::fxFromFloat(210.0f),
+        .targetZ = rm::sim::fxFromFloat(200.0f),
+        .target = UnitId{5, 1},
+    });
 
     const auto path = std::filesystem::temp_directory_path() / "rm_reclaim_log_test.txt";
     REQUIRE(rm::sim::writeCommandLog(log, path.string()));
@@ -383,7 +387,7 @@ TEST_CASE("a patrol helper does no service while its combat target is active") {
     REQUIRE(rm::sim::applyCommand(patrol, f.roster.store, f.roster.catalog, f.players,
                                   f.armies, f.terrain, f.grid, f.roster.rate));
     REQUIRE(f.roster.store.orders()[engineer.index].currentMutable() != nullptr);
-    f.roster.store.orders()[engineer.index].currentMutable()->target = enemy;
+    f.roster.store.orders()[engineer.index].currentMutable()->setTarget(enemy);
 
     CHECK(rm::sim::servicePatrolBuilders(f.roster.store, f.roster.catalog, f.armies,
                                          &f.features, f.economies)

@@ -1,5 +1,7 @@
 #include "core/sim/UnitStore.hpp"
 
+#include <limits>
+
 namespace rm::sim {
 
 UnitId UnitStore::spawn(const Spawn& request) {
@@ -42,6 +44,10 @@ void UnitStore::kill(UnitId id) {
     if (!ids_.alive(id)) {
         return;
     }
+    // Queue ownership is live command state, not corpse state. Releasing it here lets a shared
+    // command ID expire when this was its final member; the other tombstone arrays remain.
+    orders_[id.index].clear();
+    orders_[id.index].clearObserver();
     ids_.release(id);
     // The arrays are deliberately left as they were — a dead unit is a tombstone, not a
     // hole (see the header). What zeroes a corpse's collision radius so it stops shoving
@@ -51,6 +57,109 @@ void UnitStore::kill(UnitId id) {
     // The generation mirror is NOT updated: the slot now holds a generation the pool has
     // moved past, so `idAt` returns a handle that fails `alive`, which is exactly what a
     // caller asking about an empty slot should get.
+}
+
+std::optional<CommandId> UnitStore::allocateCommandId(CommandSource source) {
+    if (source == kInvalidCommandSource) {
+        return std::nullopt;
+    }
+    std::uint32_t& next = nextCommandCounters_[source];
+    for (std::uint32_t tried = 0; tried <= kCommandCounterMask; ++tried) {
+        const CommandId candidate = commandId(source, next);
+        next = (next + 1U) & kCommandCounterMask;
+        if (!commandIdLive(candidate)) {
+            return candidate;
+        }
+    }
+    return std::nullopt;
+}
+
+bool UnitStore::consumeCommandId(CommandSource source, CommandId id) {
+    if (source == kInvalidCommandSource || commandSource(id) != source) {
+        return false;
+    }
+    std::uint32_t next = nextCommandCounters_[source];
+    for (std::uint32_t tried = 0; tried <= kCommandCounterMask; ++tried) {
+        const CommandId candidate = commandId(source, next);
+        next = (next + 1U) & kCommandCounterMask;
+        if (commandIdLive(candidate)) {
+            continue;
+        }
+        if (candidate != id) {
+            return false;
+        }
+        nextCommandCounters_[source] = next;
+        return true;
+    }
+    return false;
+}
+
+bool UnitStore::registerCommand(const std::shared_ptr<SharedCommand>& command) {
+    if (command == nullptr || command->id == kInvalidCommandId
+        || commandSource(command->id) != command->source) {
+        return false;
+    }
+    if (commandIdLive(command->id)) {
+        return false;
+    }
+    liveCommands_[command->id] = command;
+    return true;
+}
+
+std::shared_ptr<SharedCommand> UnitStore::liveCommand(CommandId id) {
+    const auto found = liveCommands_.find(id);
+    if (found == liveCommands_.end()) {
+        return nullptr;
+    }
+    std::shared_ptr<SharedCommand> command = found->second.lock();
+    if (command == nullptr) {
+        liveCommands_.erase(found);
+    }
+    return command;
+}
+
+bool UnitStore::commandIdLive(CommandId id) { return liveCommand(id) != nullptr; }
+
+std::size_t UnitStore::liveCommandCount() {
+    for (auto it = liveCommands_.begin(); it != liveCommands_.end();) {
+        if (it->second.expired()) {
+            it = liveCommands_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    return liveCommands_.size();
+}
+
+bool UnitStore::increaseCommandCount(CommandId id, std::uint32_t amount) {
+    std::shared_ptr<SharedCommand> command = liveCommand(id);
+    if (command == nullptr || amount == 0
+        || command->remainingCount > std::numeric_limits<std::uint32_t>::max() - amount
+        || command->originalCount > std::numeric_limits<std::uint32_t>::max() - amount) {
+        return false;
+    }
+    command->remainingCount += amount;
+    command->originalCount += amount;
+    return true;
+}
+
+bool UnitStore::decreaseCommandCount(CommandId id, std::uint32_t amount) {
+    std::shared_ptr<SharedCommand> command = liveCommand(id);
+    if (command == nullptr || amount == 0) {
+        return false;
+    }
+    if (amount < command->remainingCount) {
+        command->remainingCount -= amount;
+        return true;
+    }
+
+    command->remainingCount = 0;
+    for (const UnitId unit : command->units) {
+        if (unit.index < orders_.size()) {
+            (void)orders_[unit.index].removeExact(command.get());
+        }
+    }
+    return true;
 }
 
 } // namespace rm::sim

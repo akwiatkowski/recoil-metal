@@ -24,6 +24,12 @@ class UnitStore;
 class FeatureStore;
 class Intel;
 
+/// When an input is applied relative to one simulation tick.
+enum class CommandPhase : std::uint8_t {
+    PreTick = 0,
+    PostSpawn = 1,
+};
+
 // An order, as a value — and the single path every order takes into the sim.
 //
 // WHY THIS EXISTS (PLAN2.md §7 P2.5). Until now a human's click called `orderTo` directly and
@@ -141,14 +147,88 @@ struct Command {
     /// What to build, for `Build`. Ignored by the rest.
     UnitTypeIndex buildType = 0;
 
-    /// Match-global creation order, assigned by `applyCommand` after the command is accepted.
-    /// It is derived execution state rather than replay input: same-tick commands need distinct
-    /// values so a rotating patrol can still identify its oldest waypoint.
-    CommandSerial creationSerial = 0;
 };
+
+/// One semantic issue action, possibly addressed to several units.
+///
+/// Selection order is presentation state, not simulation order. `applyCommand` therefore sorts
+/// this set by the complete generational handle and removes duplicates before touching a unit.
+/// This is also the command-log record. A recorded issue replaces `units` with the canonical
+/// accepted set, preserving the issue boundary without retaining refused recipients.
+struct CommandIssue {
+    TickIndex tick = 0;
+    CommandPhase phase = CommandPhase::PreTick;
+    CommandSource source = kInvalidCommandSource;
+    CommandId id = kInvalidCommandId;
+    PlayerIndex player = 0;
+    CommandKind kind = CommandKind::Stop;
+    bool queued = false;
+    std::vector<UnitId> units;
+    Fx targetX{};
+    Fx targetZ{};
+    UnitId target{};
+    UnitTypeIndex buildType = 0;
+    std::uint32_t count = 1;
+};
+
+/// Transport-only command intake. It is deliberately absent from the state hash.
+///
+/// A drain orders sources ascending and preserves submission FIFO within one source. Unit order
+/// is canonicalized at submission, so every producer and replay records the same semantic set.
+class CommandBuffer {
+public:
+    /// Queues one issue, allocating a source-local ID when it has none.
+    [[nodiscard]] std::optional<CommandId> submit(CommandIssue issue, UnitStore& store);
+
+    /// Removes and returns one tick/phase batch in deterministic application order.
+    [[nodiscard]] std::vector<CommandIssue> take(TickIndex tick, CommandPhase phase);
+
+    [[nodiscard]] std::size_t size() const noexcept { return pending_.size(); }
+    [[nodiscard]] bool empty() const noexcept { return pending_.empty(); }
+
+private:
+    std::vector<CommandIssue> pending_;
+};
+
+/// Immutable intent shared by every queue entry created by one issue action.
+///
+/// `units` is the canonical accepted set. Individual requested members may be refused because
+/// they are dead, unauthorised, unroutable, or over the queue cap; those refusals do not enter
+/// authoritative state or split the accepted members into separately allocated commands.
+/// Pointer identity is useful for exact cross-queue edits, but addresses and ownership counts
+/// are never simulation data.
+struct SharedCommand {
+    TickIndex tick = 0;
+    CommandSource source = kInvalidCommandSource;
+    CommandId id = kInvalidCommandId;
+    PlayerIndex player = 0;
+    CommandKind kind = CommandKind::Stop;
+    bool queued = false;
+    std::vector<UnitId> units;
+    Fx targetX{};
+    Fx targetZ{};
+    UnitId target{};
+    UnitTypeIndex buildType = 0;
+    CommandSerial creationSerial = 0;
+    std::uint32_t originalCount = 1;
+    std::uint32_t remainingCount = 1;
+};
+
+/// Which members of a semantic issue were accepted, in canonical unit order.
+struct ApplyCommandResult {
+    std::vector<UnitId> accepted;
+
+    [[nodiscard]] explicit operator bool() const noexcept { return !accepted.empty(); }
+    [[nodiscard]] bool acceptedUnit(UnitId unit) const noexcept;
+};
+
+/// Resolves each recipient's movement domain. A heterogeneous selection may legitimately send
+/// a tank and an aircraft through different grids, so a grouped issue cannot use one grid.
+using CommandGridForUnit = std::function<const PassabilityGrid*(UnitId)>;
 
 /// Whether two commands are the same order. For comparing a recorded log with a replayed one.
 [[nodiscard]] bool operator==(const Command& a, const Command& b) noexcept;
+[[nodiscard]] bool operator==(const CommandIssue& a, const CommandIssue& b) noexcept;
 
 /// What an order is CALLED — the one spelling, shared by the command log and the console.
 ///
@@ -208,8 +288,20 @@ struct Command {
                                 std::span<const Army> armies, const Terrain& terrain,
                                  const PassabilityGrid& grid, TickRate rate,
                                  std::vector<Construction>* building = nullptr,
-                                 EventQueue* events = nullptr,
-                                 const FeatureStore* features = nullptr);
+                                  EventQueue* events = nullptr,
+                                  const FeatureStore* features = nullptr);
+
+/// Applies one semantic issue to a canonicalized unit set.
+///
+/// Each accepted unit receives one queue entry referring to the same immutable `SharedCommand`.
+/// Mutable pursuit and temporary-target state remains local to that entry. A serial is consumed
+/// once when the first member accepts the issue, not once per selected unit.
+[[nodiscard]] ApplyCommandResult applyCommand(
+    const CommandIssue& issue, UnitStore& store, const UnitCatalog& catalog,
+    std::span<const Player> players, std::span<const Army> armies, const Terrain& terrain,
+    const CommandGridForUnit& gridForUnit, TickRate rate,
+    std::vector<Construction>* building = nullptr, EventQueue* events = nullptr,
+    const FeatureStore* features = nullptr);
 
 /// Starts the next order for every unit that has finished its current one.
 ///
@@ -229,15 +321,22 @@ struct Command {
 /// `gridForType` is indexed by `UnitTypeIndex` and may hold nulls: passability is a property of
 /// the motion class (P3.4), so a hover tank and a bot route on different grids and a unit whose
 /// grid is missing is left alone rather than routed on somebody else's.
+///
+/// CONSTRUCTION IS ADVANCED HERE, and that is where retail advances it: a build task
+/// materialises its target and retires its own order inside the command-dispatch stage
+/// (`C-142`, `C-188`), not out of an end-of-beat economy write-back. Doing it anywhere else
+/// made construction a second queue-head mutation site, which is the residue `C-112` had left
+/// open. The economy pass at the end of the beat still owns the BILL and the ratio the next
+/// beat's progress is multiplied by (`Economy::advanceConstruction`).
+///
+/// `finished` collects the work that completed this tick, in builder-slot order, so the caller
+/// can put the new units on the map. Null when a caller does not care.
 std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Terrain& terrain,
                           std::span<const PassabilityGrid* const> gridForType, TickRate rate,
                           std::vector<Construction>* building = nullptr,
                           EventQueue* events = nullptr,
-                           const FeatureStore* features = nullptr);
-
-/// Releases the builder whose current construction completed. The generational builder handle
-/// prevents a recycled slot from consuming the new unit's order.
-void finishBuildOrder(UnitStore& store, const Construction& finished) noexcept;
+                           const FeatureStore* features = nullptr,
+                           std::vector<Construction>* finished = nullptr);
 
 /// Updates attack-move and patrol combat after movement and intel. These orders retain their
 /// waypoint while `target` temporarily names the visible hostile that interrupted the route.
@@ -251,7 +350,7 @@ void updateAggressiveOrders(UnitStore& store, const UnitCatalog& catalog,
 // Every command a match was given, in the order it was given. With the initial state, this IS
 // the match: §1.3's criterion in one file.
 
-/// Commands, in tick order.
+/// Semantic issues, in tick/phase order.
 ///
 /// A flat vector rather than a map from tick to commands: a match issues a few hundred orders
 /// over ten minutes, so the whole log fits in a cache line's worth of pages, and a flat array
@@ -259,42 +358,43 @@ void updateAggressiveOrders(UnitStore& store, const UnitCatalog& catalog,
 /// which for these sizes is faster than a hash and exactly reproducible.
 class CommandLog {
 public:
-    /// Appends a command. Must be non-decreasing in tick — a log that went backwards could not
-    /// be replayed, and finding that out at record time beats finding it out at replay time.
-    void record(const Command& command);
+    /// Appends one issue with its canonical accepted unit set. Returns false for malformed or
+    /// backwards input rather than silently producing an unreplayable artifact.
+    bool record(CommandIssue issue);
 
-    /// The commands issued on a tick, in the order they were recorded.
-    [[nodiscard]] std::span<const Command> at(TickIndex tick) const noexcept;
+    /// The issues issued in one explicit tick phase, in deterministic intake order.
+    [[nodiscard]] std::span<const CommandIssue> at(TickIndex tick,
+                                                   CommandPhase phase) const noexcept;
 
-    [[nodiscard]] std::span<const Command> all() const noexcept { return commands_; }
-    [[nodiscard]] std::size_t size() const noexcept { return commands_.size(); }
-    [[nodiscard]] bool empty() const noexcept { return commands_.empty(); }
+    [[nodiscard]] std::span<const CommandIssue> all() const noexcept { return issues_; }
+    [[nodiscard]] std::size_t size() const noexcept { return issues_.size(); }
+    [[nodiscard]] bool empty() const noexcept { return issues_.empty(); }
 
     /// The last tick with a command on it, or zero for an empty log. What a replay runs to.
     [[nodiscard]] TickIndex lastTick() const noexcept;
 
 private:
-    std::vector<Command> commands_;
+    std::vector<CommandIssue> issues_;
 };
 
-/// Writes a log as text, one command per line.
+/// Writes a strict, versioned text log, one semantic issue per line.
 ///
 /// TEXT, for the same reason the hash log is text: a log you can read is a log you can
 /// diff, quote in a bug report and hand-edit to reproduce something. The format is
-/// `tick player kind unit.index unit.generation targetX targetZ buildType`, all decimal, and
-/// the fixed-point targets are written as their RAW integers — a decimal expansion would be a
-/// lossy round trip, which in a determinism artifact is the one unacceptable kind of lossy.
+/// Fixed-point targets are written as their RAW integers — a decimal expansion would be a lossy
+/// round trip, which in a determinism artifact is the one unacceptable kind of lossy.
 /// `pathFor` resolves a build's type index into its blueprint path for the log's last
-/// column, or empty. Written because a TYPE INDEX is this run's private numbering — the
+/// final quoted column, or empty. Written because a TYPE INDEX is this run's private numbering — the
 /// original replay attempt refused every type it had never registered — while a path names
-/// content any run can resolve. Null keeps the ten-column legacy format.
+/// content any run can resolve.
 bool writeCommandLog(const CommandLog& log, const std::string& path,
                      const std::function<std::string(std::uint32_t)>& pathFor = nullptr);
 
 /// Reads one back. Returns nothing when the file cannot be read or a line will not parse:
 /// a partial log is worse than none, because it replays as a different match.
-/// `buildPaths`, when given, receives one entry per command — the blueprint path for a
-/// build written with a resolver, empty otherwise — index-aligned with the log.
+/// Legacy unversioned logs are rejected because they cannot express grouping, phase, source,
+/// identity, or repeat count without guessing. `buildPaths`, when given, receives one entry per
+/// issue — the blueprint path for a build, empty otherwise — index-aligned with the log.
 [[nodiscard]] std::optional<CommandLog> readCommandLog(
     const std::string& path, std::vector<std::string>* buildPaths = nullptr);
 

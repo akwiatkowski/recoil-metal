@@ -372,7 +372,7 @@ TEST_CASE("a finished construction is reported but left in the list") {
     Roster roster;
     UnitDef tankDef;
     tankDef.name = "test_tank";
-    (void)roster.add(roster.addType(tankDef), 0.0f, 0.0f, 0, 500.0f);
+    const rm::sim::UnitId builder = roster.add(roster.addType(tankDef), 0.0f, 0.0f, 0, 500.0f);
 
     std::vector<Army> armies = twoSides();
     std::vector<Projectile> projectiles;
@@ -390,7 +390,20 @@ TEST_CASE("a finished construction is reported but left in the list") {
     // A hundred build units a second against one unit of work: it finishes well within a
     // tick, whatever the rate.
     work.buildPerTick = rm::sim::TickRate{}.magPerTick(100.0f);
+    work.builder = builder;
     building.push_back(work);
+
+    // AND A FOUNDER HOLDING THE ORDER, because a construction advances inside its builder's
+    // own dispatch tick now (`C-112`) rather than out of the economy pass. A record with no
+    // live builder standing over it is inert — which is the same rule as retail's, where the
+    // helper dies with the builder and the half-built thing simply stops.
+    rm::sim::Command order;
+    order.kind = rm::sim::CommandKind::Build;
+    order.unit = builder;
+    order.targetX = rm::test::at(100, 0, 100)[0];
+    order.targetZ = rm::test::at(100, 0, 100)[2];
+    (void)roster.store.orders()[builder.index].give(order, /*queued=*/false);
+    roster.store.orders()[builder.index].markCurrentActive();
 
     economies[0].stored = {.mass = rm::test::mag(1000.0f),
                            .energy = rm::test::mag(1000.0f)};

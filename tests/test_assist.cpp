@@ -10,9 +10,12 @@
 #include "core/sim/Skirmish.hpp"
 #include "core/sim/UnitStore.hpp"
 
+#include "support/EconomyTick.hpp"
 #include "support/FxMatchers.hpp"
 #include "support/TestRoster.hpp"
 
+#include <algorithm>
+#include <array>
 #include <cstdint>
 #include <filesystem>
 #include <vector>
@@ -169,7 +172,7 @@ TEST_CASE("the final assisted tick requests every builder's full offered work") 
         },
     };
 
-    rm::sim::tickEconomy(economy, building);
+    rm::test::tickBuild(economy, building);
 
     CHECK(building[0].finished());
     // Materialize clamps progress at completion, but retail discards the applied amount and
@@ -200,7 +203,7 @@ TEST_CASE("final build progress scales the full request before clamping") {
         },
     };
 
-    rm::sim::tickEconomy(economy, building);
+    rm::test::tickBuild(economy, building);
 
     CHECK(rm::test::asFloat(economy.requestedLastTick.mass) == Approx(3.0f).margin(0.01));
     CHECK(rm::test::asFloat(economy.usageLastTick.mass) == Approx(1.5f).margin(0.01));
@@ -211,7 +214,7 @@ TEST_CASE("final build progress scales the full request before clamping") {
     CHECK(rm::test::asFloat(economy.stored.energy) == Approx(0.0f).margin(0.01));
     const rm::sim::Resources afterCompletion = economy.stored;
 
-    rm::sim::tickEconomy(economy, building);
+    rm::test::tickBuild(economy, building);
 
     CHECK(economy.requestedLastTick.mass == rm::sim::Mag{});
     CHECK(economy.requestedLastTick.energy == rm::sim::Mag{});
@@ -263,13 +266,17 @@ TEST_CASE("factory assist accelerates the oldest unfinished queue entry") {
     CHECK(rm::test::asFloat(f.building[0].buildTimeRemaining) == Approx(98.0f).margin(0.01));
     CHECK(rm::test::asFloat(f.building[0].assistPerTick) == Approx(1.0f).margin(0.001));
 
-    // Once the first product finishes, the next tick starts the second and the same standing
-    // assist order rolls onto it.
+    // Once the first product finishes, the SAME tick starts the second and puts a beat of work
+    // into it, because a task that reports done re-enters the dispatcher immediately rather
+    // than waiting for the next beat (`C-188`'s status `0`, and the state ladder of
+    // `CUnitMobileBuildTask::TaskTick` which returns it after every transition). The standing
+    // assist order rolls onto the new work a beat later, when the assist scan next runs — so
+    // the cascade tick puts in the factory's 1 and the tick after it puts in 2.
     f.building[0].buildTimeRemaining = rm::sim::magFromFloat(1.0f);
     f.tick(1);
     f.tick(1);
     REQUIRE(f.building.size() == 2);
-    CHECK(rm::test::asFloat(f.building[1].buildTimeRemaining) == Approx(98.0f).margin(0.01));
+    CHECK(rm::test::asFloat(f.building[1].buildTimeRemaining) == Approx(97.0f).margin(0.01));
     CHECK(rm::test::asFloat(f.building[1].assistPerTick) == Approx(1.0f).margin(0.001));
 }
 
@@ -301,11 +308,11 @@ TEST_CASE("a queued assist starts after the order ahead of it finishes") {
     REQUIRE(f.move(helper, 300.0f, 200.0f));
     REQUIRE(f.assist(helper, founder, true));
     REQUIRE(f.roster.store.orders()[helper.index].current() != nullptr);
-    CHECK(f.roster.store.orders()[helper.index].current()->kind == CommandKind::Move);
+    CHECK(f.roster.store.orders()[helper.index].current()->kind() == CommandKind::Move);
 
     f.tick(45);
     REQUIRE(f.roster.store.orders()[helper.index].current() != nullptr);
-    CHECK(f.roster.store.orders()[helper.index].current()->kind == CommandKind::Assist);
+    CHECK(f.roster.store.orders()[helper.index].current()->kind() == CommandKind::Assist);
     CHECK(rm::test::asFloat(f.building[0].assistPerTick) == Approx(1.0f).margin(0.001));
 }
 
@@ -328,11 +335,18 @@ TEST_CASE("an assist is a standing order: it waits through an idle queue and end
     CHECK(rm::test::asFloat(f.building[0].assistPerTick) == Approx(1.0f).margin(0.001));
 
     // The founder dies: help has nothing to attach to and the order retires.
+    //
+    // ONE MORE BEAT OF HELP IS COUNTED FIRST, and that is retail's shape rather than a lag.
+    // The assist scan belongs to the head of the tick, with the command-dispatch stage where
+    // retail's assisting builders run their own tasks; a death lands later in the same tick,
+    // in combat. So the beat a target dies on was already paid for before it died, exactly as
+    // an assister's dispatch-stage tick precedes the damage stage that kills its target.
     f.roster.health(founder).current = rm::sim::Mag{};
     f.tick(1);
-    CHECK(rm::test::asFloat(f.building[0].assistPerTick) == 0.0f);
+    CHECK(rm::test::asFloat(f.building[0].assistPerTick) == Approx(1.0f).margin(0.001));
     CHECK_FALSE(f.roster.store.orders()[helper.index].empty());
     f.tick(1);
+    CHECK(rm::test::asFloat(f.building[0].assistPerTick) == 0.0f);
     CHECK(f.roster.store.orders()[helper.index].empty());
 }
 
@@ -361,13 +375,17 @@ TEST_CASE("a queued assist rejects a non-builder target before entering authorit
 
 TEST_CASE("an assist order survives the log round trip") {
     rm::sim::CommandLog log;
-    log.record(Command{.tick = 3,
-                       .player = 0,
-                       .kind = CommandKind::Assist,
-                       .unit = UnitId{1, 1},
-                       .targetX = rm::sim::fxFromFloat(200.0f),
-                       .targetZ = rm::sim::fxFromFloat(200.0f),
-                       .target = UnitId{0, 1}});
+    log.record(rm::sim::CommandIssue{
+        .tick = 3,
+        .source = 0,
+        .id = rm::commandId(0, 0),
+        .player = 0,
+        .kind = CommandKind::Assist,
+        .units = {UnitId{1, 1}},
+        .targetX = rm::sim::fxFromFloat(200.0f),
+        .targetZ = rm::sim::fxFromFloat(200.0f),
+        .target = UnitId{0, 1},
+    });
 
     const auto path = std::filesystem::temp_directory_path() / "rm_assist_log_test.txt";
     REQUIRE(rm::sim::writeCommandLog(log, path.string()));
@@ -388,5 +406,106 @@ TEST_CASE("shift-clicking the same assist target removes the queued order") {
     CHECK(queue.give(assist, true) == rm::sim::CommandQueue::Result::Appended);
     CHECK(queue.give(assist, true) == rm::sim::CommandQueue::Result::Cancelled);
     REQUIRE(queue.current() != nullptr);
-    CHECK(queue.current()->kind == CommandKind::Move);
+    CHECK(queue.current()->kind() == CommandKind::Move);
+}
+
+// --- `C-112`'s two open differences ------------------------------------------------------
+
+TEST_CASE("clamping the summed build rate matches clamping each builder's call in turn") {
+    // THE FIRST OF `C-112`'s TWO OPEN DIFFERENCES, and it turns out to be arithmetic rather
+    // than architecture. Retail makes N independent `target->Materialize(delta_i)` calls, one
+    // per builder, each clamped inside the target (`C-187`); we sum the rates onto one record
+    // and clamp once. `C-151` flagged that as an order-dependent rule we implement
+    // order-independently — but the clamp only ever saturates at completion and no builder
+    // contributes a negative delta, so the two reach the SAME fraction, and per-call summation
+    // reaches the same fraction in any order. The order dependence retail really has is in the
+    // health it adds while a thing is being built and in whose stack frame the completion
+    // cascade runs, and neither is representable here: a construction is a record, not a
+    // partially built entity with health of its own.
+    //
+    // What is NOT identical is quantisation. `(a + b + c) * r` truncates once and
+    // `a*r + b*r + c*r` truncates three times, so the two answers may differ by a step or two
+    // of `Fx`'s last bit — a rounding residue in the same family as `C-160`, not an ordering
+    // difference. The margin below is stated in those steps rather than in decimals so that a
+    // real divergence cannot hide inside a generous tolerance.
+    const std::array<float, 3> authored{0.7f, 1.3f, 2.5f};  // unequal, so order could show
+    const rm::sim::Fx ratio = rm::sim::fxFromFloat(0.5f);   // a half-funded beat
+
+    // Retail's shape: one clamped call per builder, in whatever order the task threads run.
+    const auto perCall = [ratio](rm::sim::Mag remaining, const std::array<float, 3>& rates) {
+        for (const float rate : rates) {
+            remaining -= rm::sim::magFromFloat(rate) * ratio;
+            remaining = std::max(rm::sim::Mag{}, remaining);
+        }
+        return remaining;
+    };
+
+    // Ours: one record, the founder's rate plus everyone helping, clamped once.
+    const auto summed = [ratio](rm::sim::Mag remaining, const std::array<float, 3>& rates) {
+        rm::sim::Construction work;
+        work.totalBuildTime = rm::sim::magFromFloat(100.0f);
+        work.buildTimeRemaining = remaining;
+        work.buildPerTick = rm::sim::magFromFloat(rates[0]);
+        work.assistPerTick = rm::sim::magFromFloat(rates[1]) + rm::sim::magFromFloat(rates[2]);
+        work.fundedLastTick = ratio;
+        rm::sim::advanceConstruction(work);
+        return work.buildTimeRemaining;
+    };
+
+    // An ordinary beat, and the beat that COMPLETES — the only one where the clamp does
+    // anything at all, and therefore the only one where an ordering rule could bite.
+    for (const float start : {60.0f, 1.0f}) {
+        const rm::sim::Mag remaining = rm::sim::magFromFloat(start);
+
+        std::array<float, 3> order = authored;
+        std::ranges::sort(order);
+        const rm::sim::Mag first = perCall(remaining, order);
+        do {
+            CHECK(perCall(remaining, order) == first);  // exactly, not approximately
+        } while (std::ranges::next_permutation(order).found);
+
+        // Within two of `Fx`'s last steps of the per-call answer: three truncating multiplies
+        // against one.
+        CHECK(rm::test::asFloat(summed(remaining, authored))
+              == Approx(rm::test::asFloat(first)).margin(2.0f * rm::test::kFxStep));
+    }
+}
+
+TEST_CASE("a finished build is retired by the dispatch stage, and the next order starts behind it") {
+    // THE SECOND OF `C-112`'s TWO OPEN DIFFERENCES. This used to happen in the economy
+    // write-back at the foot of the tick, which made construction a SECOND site that mutates a
+    // queue head — the thing `C-096` said there was only one of and `C-211` restated as "one
+    // site advances a unit's queue as a consequence of that unit's own sub-task finishing".
+    // Retail's is the command-dispatch stage, and so is this.
+    Fixture f;
+    const UnitId founder = f.roster.add(f.engineerType, 200.0f, 200.0f, 0, 100.0f);
+    f.economies[0].stored = {.mass = rm::sim::magFromFloat(1000.0f),
+                             .energy = rm::sim::magFromFloat(1000.0f)};
+
+    REQUIRE(f.build(founder, 205.0f, 200.0f));
+    REQUIRE(f.apply(Command{.kind = CommandKind::Move,
+                            .queued = true,
+                            .unit = founder,
+                            .targetX = rm::sim::fxFromFloat(260.0f),
+                            .targetZ = rm::sim::fxFromFloat(200.0f)}));
+    REQUIRE(f.building.size() == 1);
+    REQUIRE(f.roster.store.orders()[founder.index].size() == 2);
+
+    // One tick's work away from done, so this dispatch beat both completes it and retires it.
+    f.building[0].buildTimeRemaining = rm::sim::magFromFloat(0.5f);
+
+    const std::vector<const rm::sim::PassabilityGrid*> grids(f.roster.catalog.size(), &f.grid);
+    std::vector<rm::sim::Construction> done;
+    (void)rm::sim::advanceOrders(f.roster.store, f.roster.catalog, f.terrain, grids,
+                                 f.roster.rate, &f.building, nullptr, nullptr, &done);
+
+    // Completed, reported, and the order gone — all inside the one call.
+    REQUIRE(done.size() == 1);
+    CHECK(f.building[0].finished());
+    REQUIRE(f.roster.store.orders()[founder.index].size() == 1);
+    REQUIRE(f.roster.store.orders()[founder.index].current() != nullptr);
+    // And the order behind it started in the SAME beat, which is what `C-188`'s status `0`
+    // re-entry does: a task that reports done hands the dispatcher straight back to itself.
+    CHECK(f.roster.store.orders()[founder.index].current()->kind() == CommandKind::Move);
+    CHECK(f.roster.store.motion()[founder.index].moving);
 }

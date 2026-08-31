@@ -15,6 +15,8 @@
 #include <fstream>
 #include <map>
 #include <numbers>
+#include <stdexcept>
+#include <utility>
 
 namespace rm::app {
 
@@ -738,30 +740,60 @@ rm::PlayerIndex playerDriving(const UnitScene& scene, int army) {
     return 0;
 }
 
-bool issueBuild(UnitScene& scene, const rm::sim::PassabilityGrid& grid,
-                               const rm::HeightField& field, rm::sim::UnitId builder,
-                               rm::PlayerIndex player, rm::TickIndex tick,
-                               rm::UnitTypeIndex type, rm::sim::Fx atX, rm::sim::Fx atZ,
-                               bool queued) {
-    const rm::sim::Command command{
+std::optional<rm::CommandId> submitCommand(UnitScene& scene, rm::sim::CommandIssue issue) {
+    return scene.commandInput.submit(std::move(issue), scene.store);
+}
+
+std::vector<DispatchedCommand> dispatchCommands(UnitScene& scene,
+                                                  const rm::HeightField& field,
+                                                  PassabilitySet& passability,
+                                                  rm::TickIndex tick,
+                                                  rm::sim::CommandPhase phase) {
+    std::vector<DispatchedCommand> dispatched;
+    std::vector<rm::sim::CommandIssue> due = scene.commandInput.take(tick, phase);
+    dispatched.reserve(due.size());
+    const rm::sim::Terrain terrain = scene.terrain(field);
+    for (rm::sim::CommandIssue& issue : due) {
+        const auto gridForUnit = [&](rm::sim::UnitId unit) -> const rm::sim::PassabilityGrid* {
+            if (!scene.store.alive(unit)) {
+                return nullptr;
+            }
+            const auto unitType = static_cast<std::size_t>(scene.store.typeAt(unit.index));
+            if (issue.kind == rm::sim::CommandKind::Build) {
+                return &passability.gridForBuild(
+                    scene, static_cast<std::size_t>(issue.buildType), unitType);
+            }
+            return &passability.gridFor(scene, unitType);
+        };
+        rm::sim::ApplyCommandResult result = rm::sim::applyCommand(
+            issue, scene.store, scene.catalog, scene.players, scene.armies, terrain, gridForUnit,
+            gAppTickRate, &scene.building, &scene.events, &scene.features);
+        issue.units = result.accepted;
+        if (!scene.commands.record(issue)) {
+            throw std::logic_error{"command dispatcher produced an invalid semantic log order"};
+        }
+        dispatched.push_back(DispatchedCommand{.recorded = std::move(issue),
+                                                .result = std::move(result)});
+    }
+    return dispatched;
+}
+
+bool issueBuild(UnitScene& scene, rm::sim::UnitId builder,
+                                rm::PlayerIndex player, rm::TickIndex tick,
+                                rm::UnitTypeIndex type, rm::sim::Fx atX, rm::sim::Fx atZ,
+                                bool queued) {
+    return submitCommand(scene, rm::sim::CommandIssue{
         .tick = tick,
+        .phase = rm::sim::CommandPhase::PreTick,
+        .source = static_cast<rm::CommandSource>(player),
         .player = player,
         .kind = rm::sim::CommandKind::Build,
         .queued = queued,
-        .unit = builder,
+        .units = {builder},
         .targetX = atX,
         .targetZ = atZ,
         .buildType = type,
-    };
-
-    const bool applied = rm::sim::applyCommand(command, scene.store, scene.catalog,
-                                               scene.players, scene.armies,
-                                                scene.terrain(field), grid, gAppTickRate,
-                                                 &scene.building, &scene.events);
-    if (applied) {
-        scene.commands.record(command);
-    }
-    return applied;
+    }).has_value();
 }
 
 std::size_t adoptOwnerlessUnits(UnitScene& scene) {
@@ -863,13 +895,9 @@ void orderFirstExtractors(UnitScene& scene, std::span<const rm::scenario::Marker
         // field's note: a build order names a place on the map and the ground decides the
         // height. Carrying it made two runs of one match differ in the state hash over a
         // number nothing ever read.
-        const std::size_t builderType =
-            static_cast<std::size_t>(scene.store.typeAt(slot));
-        const rm::sim::PassabilityGrid& grid = passability.gridForBuild(
-            scene, static_cast<std::size_t>(*registered), builderType);
-        if (!issueBuild(scene, grid, field, scene.store.idAt(slot), playerDriving(scene, army),
-                        0, *registered, rm::sim::fxFromFloat(nearest->position[0]),
-                        rm::sim::fxFromFloat(nearest->position[2]))) {
+        if (!issueBuild(scene, scene.store.idAt(slot), playerDriving(scene, army),
+                         0, *registered, rm::sim::fxFromFloat(nearest->position[0]),
+                         rm::sim::fxFromFloat(nearest->position[2]))) {
             continue;  // refused deterministically
         }
 
@@ -877,6 +905,8 @@ void orderFirstExtractors(UnitScene& scene, std::span<const rm::scenario::Marker
         lastEnergy = extractor->buildCostEnergy;
         lastTime = extractor->buildTime;
     }
+
+    (void)dispatchCommands(scene, field, passability, 0, rm::sim::CommandPhase::PreTick);
 
     std::printf("economy: %zu extractor(s) ordered on the map's own deposits,"
                 " %.0f mass / %.0f energy each over %.0fs\n",

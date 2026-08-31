@@ -189,6 +189,11 @@ struct UnitScene {
     /// `--command-log`.
     rm::sim::CommandLog commands;
 
+    /// Transport awaiting one of the match's two deterministic command phases. This is not
+    /// authoritative state: IDs are allocated at submission, while accepted issues become
+    /// authoritative only when the phase dispatcher applies and records them.
+    rm::sim::CommandBuffer commandInput;
+
     /// Who is participating, and which army each drives (P2.4).
     ///
     /// This replaces nothing yet — `playerArmy` below is still what the mouse and the HUD

@@ -157,7 +157,7 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
 /// An observer adopts nothing and the count is zero, which is what `--observer` means.
 std::size_t adoptOwnerlessUnits(UnitScene& scene);
 
-/// Issues a build order AS A COMMAND, records it, and says whether it took.
+/// Submits a build issue for deterministic application in its pre-tick phase.
 ///
 /// **THE HOLE THIS CLOSES, kept because it was documented at length as open.** Builds used to
 /// push a `Construction` straight onto `scene.building` and raise `ConstructionStarted`
@@ -181,10 +181,25 @@ std::size_t adoptOwnerlessUnits(UnitScene& scene);
 /// LIVES HERE rather than beside `issueMove` in `Match.cpp` because `orderFirstExtractors` below
 /// needs it too, and `Match.hpp` includes this header rather than the other way round. The first
 /// extractor of every match is a build like any other and goes the same way.
-[[nodiscard]] bool issueBuild(UnitScene& scene, const rm::sim::PassabilityGrid& grid,
-                               const rm::HeightField& field, rm::sim::UnitId builder,
+[[nodiscard]] bool issueBuild(UnitScene& scene, rm::sim::UnitId builder,
                                rm::PlayerIndex player, rm::TickIndex tick, rm::UnitTypeIndex type,
                                rm::sim::Fx atX, rm::sim::Fx atZ, bool queued = false);
+
+struct DispatchedCommand {
+    rm::sim::CommandIssue recorded;
+    rm::sim::ApplyCommandResult result;
+};
+
+/// Queues one semantic issue, assigning its source-local identity.
+[[nodiscard]] std::optional<rm::CommandId> submitCommand(UnitScene& scene,
+                                                          rm::sim::CommandIssue issue);
+
+/// Applies and records one deterministic tick/phase batch. The recorded issue contains the
+/// canonical accepted set, including an empty set when submission consumed an ID but no unit
+/// accepted the command.
+[[nodiscard]] std::vector<DispatchedCommand> dispatchCommands(
+    UnitScene& scene, const rm::HeightField& field, PassabilitySet& passability,
+    rm::TickIndex tick, rm::sim::CommandPhase phase);
 
 /// The player driving an army, or none. What an issued order is attributed to.
 [[nodiscard]] rm::PlayerIndex playerDriving(const UnitScene& scene, int army);

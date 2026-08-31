@@ -56,4 +56,23 @@ if [ -n "$hits" ]; then
     exit 1
 fi
 
-echo "order paths: one (movement and construction both go through applyCommand)"
+# App producers submit semantic issues. Only the phase dispatcher may cross into the sim or
+# append the authoritative log; otherwise one convenient helper can silently restore per-unit
+# application or record requested rather than accepted recipients.
+entry_pattern='applyCommand\(|commands\.record\('
+entry_allowed='src/core/sim/Command.cpp|src/core/sim/Command.hpp|src/app/SceneBuild.cpp'
+entry_hits=$(grep -rnE "$entry_pattern" "$root/src" 2>/dev/null \
+    | grep -vE "$entry_allowed" \
+    | grep -vE ':[0-9]+:[[:space:]]*(//|\*|/\*)' \
+    || true)
+
+if [ -n "$entry_hits" ]; then
+    echo "FAIL: an app producer bypasses semantic command intake."
+    echo "$entry_hits" | sed 's/^/        /'
+    echo
+    echo "Producers submit CommandIssue values. Only dispatchCommands may call applyCommand"
+    echo "and record the canonical accepted set in CommandLog."
+    exit 1
+fi
+
+echo "order paths: one semantic intake and one phase dispatcher"

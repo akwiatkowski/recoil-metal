@@ -38,7 +38,34 @@ namespace {
     return std::min(raw, kFxOne);
 }
 
+/// Whether this beat's economy still has to pay for a construction.
+///
+/// Unfinished work always does. Work that finished THIS beat does too, on its stamp: retail
+/// bills the builder for the full delta it offered and never reconciles that against the
+/// smaller amount `Materialize` was able to apply (`C-100`, `C-187`), so the completing beat
+/// is charged in full. Work that finished on an EARLIER beat is neither stamped nor unfinished
+/// and drops out here, which is what stops a completed record billing forever.
+[[nodiscard]] bool stillBilled(const Construction& work) noexcept {
+    return !work.finished() || work.workedThisTick;
+}
+
 } // namespace
+
+void advanceConstruction(Construction& work) noexcept {
+    if (work.finished()) {
+        return;
+    }
+    // Progress on LAST beat's funded fraction (`C-162`). Retail writes the ratio onto the
+    // builder in the motion stage, which runs last, and reads it here in command dispatch,
+    // which runs first (`C-142`) — so a builder always advances on the previous beat's
+    // funding. Using the fraction the economy is about to compute would be a one-tick head
+    // start the engine does not give, and it is the difference `C-100` measured.
+    work.buildTimeRemaining -= work.effectiveBuildPerTick() * work.fundedLastTick;
+    work.buildTimeRemaining = std::max(Mag{}, work.buildTimeRemaining);
+    // Stamped whether or not any progress was possible — retail's `Materialize(0.0f)`
+    // heartbeat writes `Entity+0x520` on a beat that moves nothing (`C-187`, `C-098`).
+    work.workedThisTick = true;
+}
 
 void tickEconomy(Economy& economy, std::span<Construction> building) {
     // Clamp only what CARRIED IN. Reclaim currently credits `stored` directly before this
@@ -90,7 +117,7 @@ void tickEconomy(Economy& economy, std::span<Construction> building) {
 
     Resources wanted = economy.upkeepPerTick;
     for (Construction& work : building) {
-        if (work.finished()) {
+        if (!stillBilled(work)) {
             continue;
         }
         const Resources demand = drainPerTick(work);
@@ -165,20 +192,17 @@ void tickEconomy(Economy& economy, std::span<Construction> building) {
     grantAndConsume(economy.upkeepPerTick, economy.upkeepAllocated);
 
     for (Construction& work : building) {
-        if (work.finished()) {
+        if (!stillBilled(work)) {
             continue;
         }
-        // Progress FIRST, on last tick's fraction (`C-162`). Retail writes the ratio onto the
-        // builder in the motion stage, which runs last, and reads it in command dispatch,
-        // which runs first (`C-142`) — so a builder always advances on the previous beat's
-        // funding. Using the fraction computed just above would be a one-tick head start the
-        // engine does not give, and it is the difference `C-100` measured.
-        work.buildTimeRemaining -= work.effectiveBuildPerTick() * work.fundedLastTick;
         // The request stays deliberately uncapped even on the completing tick: retail does not
         // reconcile it with what `Materialize` applies (`C-100`, `C-187`).
-        work.buildTimeRemaining = std::max(Mag{}, work.buildTimeRemaining);
-
+        //
+        // THE PROGRESS ITSELF ALREADY HAPPENED, at the start of the beat in the command-dispatch
+        // stage (`advanceConstruction`). All that is left here is the bill and the ratio the
+        // NEXT beat's progress will be multiplied by — retail's split across two stages exactly.
         work.fundedLastTick = grantAndConsume(drainPerTick(work), work.allocated);
+        work.workedThisTick = false;
     }
 
     economy.usageLastTick = granted;

@@ -97,6 +97,31 @@ using TickCount = std::uint32_t;
 /// match ceiling shared with retail's field width rather than hidden behind a wider local type.
 using CommandSerial = std::uint32_t;
 
+/// A deterministic command producer. Retail reserves 255 as "no source", leaving 0..254.
+using CommandSource = std::uint8_t;
+
+/// Identity of one semantic command while any unit queue still owns it.
+///
+/// The high byte is the source and the low 24 bits are that source's local counter. Unlike
+/// `CommandSerial`, this may be reused after the command is no longer live.
+using CommandId = std::uint32_t;
+
+inline constexpr CommandSource kInvalidCommandSource = 0xff;
+inline constexpr CommandId kInvalidCommandId = 0xffffffffU;
+inline constexpr CommandId kCommandCounterMask = 0x00ffffffU;
+
+[[nodiscard]] constexpr CommandId commandId(CommandSource source, std::uint32_t counter) noexcept {
+    return static_cast<CommandId>(source) << 24U | (counter & kCommandCounterMask);
+}
+
+[[nodiscard]] constexpr CommandSource commandSource(CommandId id) noexcept {
+    return static_cast<CommandSource>(id >> 24U);
+}
+
+[[nodiscard]] constexpr std::uint32_t commandCounter(CommandId id) noexcept {
+    return id & kCommandCounterMask;
+}
+
 // --- Fixed point (PLAN2.md §5.2, D1) --------------------------------------------------
 //
 // **This diverges from PLAN2 §5.2's stated Q16.16, on measurement.** The plan specified

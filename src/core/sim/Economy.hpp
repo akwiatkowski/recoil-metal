@@ -271,6 +271,18 @@ struct Construction {
     /// later in-beat read to return roughly zero — it is not an optimisation.
     Fx fundedLastTick = kFxOne;
 
+    /// Whether the command-dispatch stage advanced this work THIS tick.
+    ///
+    /// Retail's `Entity+0x520` (`C-187`): a stamp the build helper writes on the target every
+    /// beat it works on it, including the `Materialize(0.0f)` heartbeat when no progress is
+    /// possible. It exists here for the same reason it exists there — the beat's work and the
+    /// beat's bill are computed in different stages, and the bill has to know that the work
+    /// happened. Without it the beat that COMPLETES a structure would be free, because
+    /// `tickEconomy` runs after `advanceOrders` and would see nothing left to build.
+    ///
+    /// Set by `advanceConstruction`, cleared by `tickEconomy` once it has charged for it.
+    bool workedThisTick = false;
+
     /// The rate the work actually advances at: the founder's plus everyone helping.
     [[nodiscard]] Mag effectiveBuildPerTick() const noexcept {
         return buildPerTick + assistPerTick;
@@ -294,6 +306,29 @@ struct Construction {
         return Fx::fromRaw(saturate((done << kFxFractionalBits) / totalBuildTime.raw()));
     }
 };
+
+/// Puts one beat's work into one construction — retail's `Unit::Materialize` step.
+///
+/// WHY IT IS NOT PART OF `tickEconomy` ANY MORE. Retail advances a build inside the builder's
+/// own task, which runs in the **command-dispatch stage** — the FIRST stage of a beat
+/// (`C-142`, `C-188`) — and the same task then retires the build order when the work is done.
+/// The economy ratio it multiplies by is written in the motion stage, which runs LAST, so the
+/// figure a build advances on is always the previous beat's (`C-162`, `fundedLastTick`).
+/// Computing progress at the end of our beat instead put the work and the queue mutation that
+/// follows from it in the wrong stage, which is the residue `C-112` had left open.
+///
+/// THE CLAMP IS ON THE SUM, where retail clamps each builder's call separately inside
+/// `Materialize` (`C-187`). That is not an approximation: the clamp only saturates at
+/// completion and every contribution is non-negative, so clamping the sum and clamping each
+/// term in turn reach the same fraction whatever order the builders tick in. A test holds it.
+/// What genuinely cannot be reproduced is retail's health-during-construction — a late
+/// assister on the completing beat contributes no progress but still adds the full
+/// `maxHealth × delta` — because a construction here is a record and not a partially built
+/// entity with health of its own.
+///
+/// Stamps `workedThisTick` so the economy pass at the end of the beat still charges for a
+/// build that finished at the start of it.
+void advanceConstruction(Construction& work) noexcept;
 
 /// Advances one army's economy and everything it is building by one tick.
 ///

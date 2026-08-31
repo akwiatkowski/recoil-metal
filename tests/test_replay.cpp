@@ -186,7 +186,7 @@ TEST_CASE("the widths fingerprint changes when a width does") {
     // shape instead: every alias contributes, so the packed field is non-zero in each of
     // the slots the fingerprint claims to cover.
     const std::uint64_t f = rm::sim::widthsFingerprint();
-    for (int slot = 0; slot < 11; ++slot) {
+    for (int slot = 0; slot < 13; ++slot) {
         const std::uint64_t nibble = (f >> (slot * 4)) & 0xFULL;
         REQUIRE(nibble != 0);
     }

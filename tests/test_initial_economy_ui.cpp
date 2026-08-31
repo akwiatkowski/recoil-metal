@@ -24,6 +24,7 @@
 #include <array>
 #include <cstdlib>
 #include <filesystem>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -58,6 +59,7 @@ struct Fixture {
     std::vector<std::string> ids;
     rm::HeightField field = flatField();
     rm::sim::PassabilityGrid grid = rm::sim::buildPassability(field, 0.0f);
+    rm::app::PassabilitySet passability{field, false, 0.0f};
     rm::sim::TickRate rate{};
     rm::app::BuildSelection who;
     std::vector<rm::ui::BuildOption> options;
@@ -75,10 +77,12 @@ struct Fixture {
     }
 
     /// Registers a corpus def as a live catalog type — what `resolveBuildable` does when
-    /// the tray arms a cell.
+    /// the tray arms a cell, including the movement traits used for build placement.
     rm::UnitTypeIndex registerType(const rm::unitdef::UnitDef& def) {
         scene.definitions.push_back(def);
-        return scene.catalog.add(&scene.definitions.back(), rate);
+        const rm::UnitTypeIndex type = scene.catalog.add(&scene.definitions.back(), rate);
+        scene.setTypeTraits(type, rm::data::moveDefFor(def), def.meshToElmos);
+        return type;
     }
 
     rm::sim::UnitId spawn(const rm::unitdef::UnitDef& def, float x, float z) {
@@ -116,22 +120,22 @@ struct Fixture {
 
 /// The initial-economy cast: the UEF commander and everything the opening builds, plus two
 /// decoys the tray must exclude (a T2 extractor, a tank).
-[[nodiscard]] std::optional<Fixture> makeFixture() {
-    Fixture fixture;
+[[nodiscard]] std::unique_ptr<Fixture> makeFixture() {
+    auto fixture = std::make_unique<Fixture>();
     for (const char* id :
          {"UEL0001", "UEB1103", "UEB1101", "UEB0101", "UEB1105", "UEB1201", "UEL0201"}) {
-        if (!fixture.loadReal(id)) {
-            return std::nullopt;
+        if (!fixture->loadReal(id)) {
+            return nullptr;
         }
     }
-    fixture.scene.roster = rm::data::Roster::build(fixture.corpus, fixture.ids);
-    fixture.scene.armies.push_back(
+    fixture->scene.roster = rm::data::Roster::build(fixture->corpus, fixture->ids);
+    fixture->scene.armies.push_back(
         rm::sim::Army{.index = 0, .faction = rm::sim::Faction::Uef});
-    fixture.scene.economies.resize(1);
-    fixture.scene.economies[0].stored.mass = rm::sim::magFromFloat(650.0f);
-    fixture.scene.economies[0].stored.energy = rm::sim::magFromFloat(5000.0f);
-    fixture.scene.players = rm::sim::onePlayerPerArmy(1, 0);
-    fixture.scene.playerArmy = 0;
+    fixture->scene.economies.resize(1);
+    fixture->scene.economies[0].stored.mass = rm::sim::magFromFloat(650.0f);
+    fixture->scene.economies[0].stored.energy = rm::sim::magFromFloat(5000.0f);
+    fixture->scene.players = rm::sim::onePlayerPerArmy(1, 0);
+    fixture->scene.playerArmy = 0;
     return fixture;
 }
 
@@ -139,7 +143,7 @@ struct Fixture {
 
 TEST_CASE("a real commander's tray offers the initial economy, priced by the blueprints",
           "[corpus][ui][build]") {
-    std::optional<Fixture> fixture = makeFixture();
+    std::unique_ptr<Fixture> fixture = makeFixture();
     if (!fixture) {
         SKIP("no Supreme Commander unit blueprints at " + unitRoot().string());
     }
@@ -168,7 +172,7 @@ TEST_CASE("a real commander's tray offers the initial economy, priced by the blu
 
 TEST_CASE("a tray cell hit-tests to its option and the click becomes that construction",
           "[corpus][ui][build]") {
-    std::optional<Fixture> fixture = makeFixture();
+    std::unique_ptr<Fixture> fixture = makeFixture();
     if (!fixture) {
         SKIP("no Supreme Commander unit blueprints at " + unitRoot().string());
     }
@@ -202,9 +206,14 @@ TEST_CASE("a tray cell hit-tests to its option and the click becomes that constr
     const float clickZ = 300.0f;
     CHECK(rm::sim::sitePlaceable(fixture->grid, rm::sim::fxFromFloat(clickX),
                                  rm::sim::fxFromFloat(clickZ), rm::sim::fxFromFloat(3.0f)));
-    REQUIRE(rm::app::issueBuild(fixture->scene, fixture->grid, fixture->field, commander,
-                                rm::app::playerDriving(fixture->scene, 0), 0, mexType,
-                                rm::sim::fxFromFloat(clickX), rm::sim::fxFromFloat(clickZ)));
+    REQUIRE(rm::app::issueBuild(fixture->scene, commander,
+                                 rm::app::playerDriving(fixture->scene, 0), 0, mexType,
+                                 rm::sim::fxFromFloat(clickX), rm::sim::fxFromFloat(clickZ)));
+    const auto dispatched = rm::app::dispatchCommands(
+        fixture->scene, fixture->field, fixture->passability, 0,
+        rm::sim::CommandPhase::PreTick);
+    REQUIRE(dispatched.size() == 1);
+    REQUIRE(dispatched.front().result.accepted == std::vector{commander});
     REQUIRE(fixture->scene.building.size() == 1);
     const rm::sim::Construction& work = fixture->scene.building.front();
     CHECK(work.armyIndex == 0);
@@ -218,7 +227,7 @@ TEST_CASE("a tray cell hit-tests to its option and the click becomes that constr
 
 TEST_CASE("affordability dims what the bank cannot cover, at real prices",
           "[corpus][ui][build]") {
-    std::optional<Fixture> fixture = makeFixture();
+    std::unique_ptr<Fixture> fixture = makeFixture();
     if (!fixture) {
         SKIP("no Supreme Commander unit blueprints at " + unitRoot().string());
     }

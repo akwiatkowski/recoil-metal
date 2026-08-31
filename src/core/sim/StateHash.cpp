@@ -3,6 +3,7 @@
 #include <array>
 #include <bit>
 #include <cstdint>
+#include <map>
 
 namespace rm::sim {
 namespace {
@@ -164,6 +165,43 @@ void feedHealth(StateHash& h, const Health& health) noexcept {
     }
 }
 
+void feedSharedCommand(StateHash& h, const SharedCommand& command) noexcept {
+    feed(h, static_cast<std::uint64_t>(command.id));
+    feed(h, static_cast<std::uint8_t>(command.kind));
+    feed(h, static_cast<std::size_t>(command.buildType));
+    feed(h, static_cast<std::uint64_t>(command.creationSerial));
+    feed(h, command.targetX);
+    feed(h, command.targetZ);
+    if (command.target.generation != 0) {
+        feed(h, static_cast<std::size_t>(command.target.index));
+        feed(h, static_cast<std::size_t>(command.target.generation));
+    }
+    feed(h, command.units.size());
+    for (const UnitId unit : command.units) {
+        feed(h, static_cast<std::size_t>(unit.index));
+        feed(h, static_cast<std::size_t>(unit.generation));
+    }
+    feed(h, static_cast<std::uint64_t>(command.originalCount));
+    feed(h, static_cast<std::uint64_t>(command.remainingCount));
+}
+
+/// Shared command intent, exactly once per deterministic ID rather than once per queue owner.
+void feedSharedCommands(StateHash& h, std::span<const CommandQueue> queues) {
+    std::map<CommandId, const SharedCommand*> shared;
+    for (const CommandQueue& queue : queues) {
+        for (const QueuedCommand& entry : queue.entries()) {
+            if (entry.payload().id != kInvalidCommandId) {
+                shared.try_emplace(entry.payload().id, &entry.payload());
+            }
+        }
+    }
+    feed(h, shared.size());
+    for (const auto& [id, command] : shared) {
+        (void)id;
+        feedSharedCommand(h, *command);
+    }
+}
+
 /// A unit's outstanding orders (§7 P4.1).
 ///
 /// FED, because a queue is sim state in the strongest sense: two units standing in the same
@@ -185,29 +223,42 @@ void feedHealth(StateHash& h, const Health& health) noexcept {
 /// that is where provenance belongs.
 void feedOrders(StateHash& h, const CommandQueue& orders) noexcept {
     feed(h, orders.size());
-    const Command* active = orders.active();
+    const QueuedCommand* active = orders.activeEntry();
     feed(h, static_cast<std::uint8_t>(active != nullptr));
     if (active != nullptr) {
         // A newly exposed cyclic head starts next beat. Hashing this identity reports a
         // divergence at the queue transition rather than one tick later when movement differs.
-        feed(h, static_cast<std::uint64_t>(active->creationSerial));
+        feed(h, static_cast<std::uint64_t>(active->payload().id));
+        if (active->payload().id == kInvalidCommandId) {
+            feed(h, static_cast<std::uint64_t>(active->payload().creationSerial));
+        }
     }
-    for (const Command& command : orders.orders()) {
-        feed(h, static_cast<std::uint8_t>(command.kind));
-        feed(h, static_cast<std::size_t>(command.unit.index));
-        feed(h, static_cast<std::size_t>(command.unit.generation));
-        feed(h, command.targetX);
-        feed(h, command.targetZ);
+    for (const QueuedCommand& entry : orders.entries()) {
+        const SharedCommand& command = entry.payload();
+        feed(h, static_cast<std::uint64_t>(command.id));
+        // Direct queue tests may build an entry outside authoritative intake. Keep those
+        // distinguishable without pretending their invalid ID is shared identity.
+        if (command.id == kInvalidCommandId) {
+            feedSharedCommand(h, command);
+        }
+        feed(h, static_cast<std::size_t>(entry.unit().index));
+        feed(h, static_cast<std::size_t>(entry.unit().generation));
+        feed(h, entry.targetX());
+        feed(h, entry.targetZ());
         // Invalid means "no target" and predates targeted commands. Feeding nothing for it
         // preserves old hashes; a real generational handle joins the hash at acquisition.
-        if (command.target.generation != 0) {
-            feed(h, static_cast<std::size_t>(command.target.index));
-            feed(h, static_cast<std::size_t>(command.target.generation));
+        if (entry.target().generation != 0) {
+            feed(h, static_cast<std::size_t>(entry.target().index));
+            feed(h, static_cast<std::size_t>(entry.target().generation));
         }
-        feed(h, static_cast<std::size_t>(command.buildType));
-        // Unlike the input tick, this clock changes how a rotating patrol accepts its next
-        // waypoint: the oldest command marks the lap boundary even after it leaves the head.
-        feed(h, static_cast<std::uint64_t>(command.creationSerial));
+        if (entry.patrolOrigin()) {
+            // The hidden origin changes the route even while the visible destination is equal.
+            // Feed it only when present so non-patrol historical hashes retain their byte shape.
+            feed(h, true);
+            feed(h, (*entry.patrolOrigin())[0]);
+            feed(h, (*entry.patrolOrigin())[1]);
+            feed(h, entry.returningToPatrolOrigin());
+        }
     }
 }
 
@@ -222,11 +273,16 @@ StateHash hashMatch(const UnitStore& store, const Match& match) {
     // The next accepted command consumes this value. It is match state even while no live
     // command currently exposes it, and clearing or recycling a queue must not rewind it.
     feed(h, static_cast<std::uint64_t>(store.nextCommandSerial()));
+    for (std::uint16_t source = 0; source < kInvalidCommandSource; ++source) {
+        feed(h, static_cast<std::uint64_t>(
+                    store.nextCommandCounter(static_cast<CommandSource>(source))));
+    }
 
     const std::span<const Transform> transforms = store.transforms();
     const std::span<const MoveState> motion = store.motion();
     const std::span<const Health> healths = store.health();
     const std::span<const CommandQueue> orders = store.orders();
+    feedSharedCommands(h, orders);
 
     for (UnitIndex slot = 0; slot < store.slotCount(); ++slot) {
         feedTransform(h, transforms[slot]);

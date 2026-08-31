@@ -16,6 +16,7 @@
 #include <map>
 #include <memory>
 #include <set>
+#include <stdexcept>
 
 namespace rm::app {
 
@@ -41,159 +42,121 @@ bool gFafLog = false;
 /// `queued` is the shift key: the order goes behind whatever the unit is already doing rather
 /// than replacing it (§7 P4.1). The scripted opponents never pass it — an opponent that queued
 /// its orders would still be walking a route it decided on thirty seconds ago.
-[[nodiscard]] bool issueMove(UnitScene& scene, const rm::sim::PassabilityGrid& grid,
-                              const rm::HeightField& field, rm::sim::UnitId unit,
-                              rm::PlayerIndex player, rm::TickIndex tick, rm::sim::Fx toX,
-                              rm::sim::Fx toZ, bool queued, rm::sim::CommandKind kind) {
-    const rm::sim::Command command{
+[[nodiscard]] bool issueMove(UnitScene& scene, std::span<const rm::sim::UnitId> units,
+                               rm::PlayerIndex player, rm::TickIndex tick, rm::sim::Fx toX,
+                               rm::sim::Fx toZ, bool queued, rm::sim::CommandKind kind,
+                               rm::sim::CommandPhase phase) {
+    return submitCommand(scene, rm::sim::CommandIssue{
         .tick = tick,
+        .phase = phase,
+        .source = static_cast<rm::CommandSource>(player),
         .player = player,
         .kind = kind,
         .queued = queued,
-        .unit = unit,
+        .units = {units.begin(), units.end()},
         .targetX = toX,
         .targetZ = toZ,
         .buildType = 0,
-    };
-
-    const bool applied = rm::sim::applyCommand(command, scene.store, scene.catalog,
-                                                 scene.players, scene.armies,
-                                                 scene.terrain(field), grid, gAppTickRate,
-                                                 &scene.building,
-                                                 &scene.events);
-    if (applied) {
-        // Recorded only when it took. A refused order is not part of the match — replaying it
-        // would be refused again, so keeping it would only make the log longer.
-        scene.commands.record(command);
-    }
-    return applied;
+    }).has_value();
 }
 
-[[nodiscard]] bool issueAttack(UnitScene& scene, const rm::sim::PassabilityGrid& grid,
-                               const rm::HeightField& field, rm::sim::UnitId unit,
-                               rm::PlayerIndex player, rm::TickIndex tick,
-                               rm::sim::UnitId target, rm::sim::Fx toX, rm::sim::Fx toZ,
-                               bool queued) {
+[[nodiscard]] bool issueMove(UnitScene& scene, rm::sim::UnitId unit, rm::PlayerIndex player,
+                              rm::TickIndex tick, rm::sim::Fx toX, rm::sim::Fx toZ, bool queued,
+                              rm::sim::CommandKind kind, rm::sim::CommandPhase phase) {
+    return issueMove(scene, std::span<const rm::sim::UnitId>{&unit, 1}, player, tick, toX, toZ,
+                     queued, kind, phase);
+}
+
+[[nodiscard]] bool issueAttack(UnitScene& scene, std::span<const rm::sim::UnitId> units,
+                                rm::PlayerIndex player, rm::TickIndex tick,
+                                rm::sim::UnitId target, rm::sim::Fx toX, rm::sim::Fx toZ,
+                                bool queued) {
     // issueMove's sibling, and deliberately its shape: one command, one path through
     // applyCommand, recorded only when it took. The target handle is what turns the order
     // into a pursuit (`advanceOrders`' chase); toX/toZ are where the target IS right now,
     // which routes the first leg and seeds the chase's memory.
-    const rm::sim::Command command{
+    return submitCommand(scene, rm::sim::CommandIssue{
         .tick = tick,
+        .phase = rm::sim::CommandPhase::PreTick,
+        .source = static_cast<rm::CommandSource>(player),
         .player = player,
         .kind = rm::sim::CommandKind::Attack,
         .queued = queued,
-        .unit = unit,
+        .units = {units.begin(), units.end()},
         .targetX = toX,
         .targetZ = toZ,
         .target = target,
         .buildType = 0,
-    };
-
-    const bool applied = rm::sim::applyCommand(command, scene.store, scene.catalog,
-                                                 scene.players, scene.armies,
-                                                 scene.terrain(field), grid, gAppTickRate,
-                                                 &scene.building,
-                                                 &scene.events);
-    if (applied) {
-        scene.commands.record(command);
-    }
-    return applied;
+    }).has_value();
 }
 
-[[nodiscard]] bool issueOvercharge(UnitScene& scene, const rm::sim::PassabilityGrid& grid,
-                                   const rm::HeightField& field, rm::sim::UnitId unit,
-                                   rm::PlayerIndex player, rm::TickIndex tick,
-                                   rm::sim::UnitId target, rm::sim::Fx toX, rm::sim::Fx toZ,
-                                   bool queued) {
+[[nodiscard]] bool issueOvercharge(UnitScene& scene, std::span<const rm::sim::UnitId> units,
+                                    rm::PlayerIndex player, rm::TickIndex tick,
+                                    rm::sim::UnitId target, rm::sim::Fx toX, rm::sim::Fx toZ,
+                                    bool queued) {
     // issueAttack with a different kind: same pursuit, but the shot is the MANUAL
     // weapon's, gated on energy, and one per order (`fireOvercharge`).
-    const rm::sim::Command command{
+    return submitCommand(scene, rm::sim::CommandIssue{
         .tick = tick,
+        .phase = rm::sim::CommandPhase::PreTick,
+        .source = static_cast<rm::CommandSource>(player),
         .player = player,
         .kind = rm::sim::CommandKind::Overcharge,
         .queued = queued,
-        .unit = unit,
+        .units = {units.begin(), units.end()},
         .targetX = toX,
         .targetZ = toZ,
         .target = target,
         .buildType = 0,
-    };
-
-    const bool applied = rm::sim::applyCommand(command, scene.store, scene.catalog,
-                                                 scene.players, scene.armies,
-                                                 scene.terrain(field), grid, gAppTickRate,
-                                                 &scene.building,
-                                                 &scene.events);
-    if (applied) {
-        scene.commands.record(command);
-    }
-    return applied;
+    }).has_value();
 }
 
-[[nodiscard]] bool issueAssist(UnitScene& scene, const rm::sim::PassabilityGrid& grid,
-                               const rm::HeightField& field, rm::sim::UnitId unit,
-                               rm::PlayerIndex player, rm::TickIndex tick,
-                               rm::sim::UnitId target, bool queued) {
+[[nodiscard]] bool issueAssist(UnitScene& scene, std::span<const rm::sim::UnitId> units,
+                                rm::PlayerIndex player, rm::TickIndex tick,
+                                rm::sim::UnitId target, bool queued) {
     // issueAttack's shape with the guard order's kind: the target's position seeds the
     // route, the pursuit holds at build reach, and `applyAssistance` does the lending.
     if (!scene.store.alive(target)) {
         return false;
     }
     const rm::sim::Transform& at = scene.store.transforms()[target.index];
-    const rm::sim::Command command{
+    return submitCommand(scene, rm::sim::CommandIssue{
         .tick = tick,
+        .phase = rm::sim::CommandPhase::PreTick,
+        .source = static_cast<rm::CommandSource>(player),
         .player = player,
         .kind = rm::sim::CommandKind::Assist,
-        .unit = unit,
+        .queued = queued,
+        .units = {units.begin(), units.end()},
         .targetX = at.x,
         .targetZ = at.z,
         .target = target,
         .buildType = 0,
-        .queued = queued,
-    };
-
-    const bool applied = rm::sim::applyCommand(command, scene.store, scene.catalog,
-                                               scene.players, scene.armies,
-                                               scene.terrain(field), grid, gAppTickRate,
-                                               &scene.building, &scene.events);
-    if (applied) {
-        scene.commands.record(command);
-    }
-    return applied;
+    }).has_value();
 }
 
-[[nodiscard]] bool issueReclaim(UnitScene& scene, const rm::sim::PassabilityGrid& grid,
-                                const rm::HeightField& field, rm::sim::UnitId unit,
-                                rm::PlayerIndex player, rm::TickIndex tick,
-                                rm::sim::FeatureId wreck, bool queued) {
+[[nodiscard]] bool issueReclaim(UnitScene& scene, std::span<const rm::sim::UnitId> units,
+                                 rm::PlayerIndex player, rm::TickIndex tick,
+                                 rm::sim::FeatureId wreck, bool queued) {
     // issueAttack's sibling for the ground's own treasure: the feature handle rides in
     // `target`, the wreck's position seeds the route, and the one path applies it.
     const rm::sim::Feature* found = scene.features.find(wreck);
     if (found == nullptr) {
         return false;  // clicked a wreck that was reclaimed this very tick
     }
-    const rm::sim::Command command{
+    return submitCommand(scene, rm::sim::CommandIssue{
         .tick = tick,
+        .phase = rm::sim::CommandPhase::PreTick,
+        .source = static_cast<rm::CommandSource>(player),
         .player = player,
         .kind = rm::sim::CommandKind::Reclaim,
         .queued = queued,
-        .unit = unit,
+        .units = {units.begin(), units.end()},
         .targetX = found->at[0],
         .targetZ = found->at[2],
         .target = wreck,
         .buildType = 0,
-    };
-
-    const bool applied = rm::sim::applyCommand(command, scene.store, scene.catalog,
-                                                 scene.players, scene.armies,
-                                                 scene.terrain(field), grid, gAppTickRate,
-                                                 &scene.building, &scene.events,
-                                                 &scene.features);
-    if (applied) {
-        scene.commands.record(command);
-    }
-    return applied;
+    }).has_value();
 }
 
 // One loose end survives the routing, deliberate and small: a blueprint registered by
@@ -524,8 +487,7 @@ namespace rm::app {
 ///
 /// Order is preserved exactly, and it has to be: a structure decided before a tank was pushed
 /// before it, and the golden match is a per-tick hash of the result.
-void applyDecisions(UnitScene& scene, const rm::vfs::Vfs& content, const rm::HeightField& field,
-                    PassabilitySet& passability, const rm::sim::Army& army,
+void applyDecisions(UnitScene& scene, const rm::vfs::Vfs& content, const rm::sim::Army& army,
                     std::span<const rm::ai::Decision> decisions, float elapsedSeconds,
                     rm::TickIndex tickIndex) {
     std::size_t ordered = 0;
@@ -545,15 +507,7 @@ void applyDecisions(UnitScene& scene, const rm::vfs::Vfs& content, const rm::Hei
             // time and the builder's own rate off the definitions, raises `ConstructionStarted`
             // itself, and refuses the order if the player does not command the builder's army.
             //
-            const auto builderType =
-                static_cast<std::size_t>(scene.store.typeAt(decision.builder.index));
-            // Placement belongs to the PRODUCT's domain: land units stand on land and ships and
-            // naval yards stand in water. Immobile land structures retain the builder-grid
-            // simplification in PassabilitySet::gridForBuild.
-            const rm::sim::PassabilityGrid& grid = passability.gridForBuild(
-                scene, *blueprintIndex, builderType);
-
-            if (!issueBuild(scene, grid, field, decision.builder,
+            if (!issueBuild(scene, decision.builder,
                             playerDriving(scene, army.index), tickIndex,
                             static_cast<rm::UnitTypeIndex>(*blueprintIndex), decision.site[0],
                             decision.site[2])) {
@@ -575,9 +529,7 @@ void applyDecisions(UnitScene& scene, const rm::vfs::Vfs& content, const rm::Hei
             if (!scene.store.alive(decision.unit)) {
                 break;  // died between the census and the order
             }
-            const auto type = static_cast<std::size_t>(scene.store.typeAt(decision.unit.index));
-            const rm::sim::PassabilityGrid& grid = passability.gridFor(scene, type);
-            if (issueMove(scene, grid, field, decision.unit, playerDriving(scene, army.index),
+            if (issueMove(scene, decision.unit, playerDriving(scene, army.index),
                           tickIndex, decision.toX, decision.toZ)) {
                 ++marching;
             }
@@ -603,8 +555,7 @@ void applyDecisions(UnitScene& scene, const rm::vfs::Vfs& content, const rm::Hei
 /// Run once a second rather than every tick, because nothing here changes faster than a build
 /// finishes and the decisions read the whole scene.
 void runOpponents(UnitScene& scene, const rm::vfs::Vfs& content, const rm::HeightField& field,
-                  PassabilitySet& passability,
-                  std::span<const rm::mapinfo::StartPosition> starts,
+                   std::span<const rm::mapinfo::StartPosition> starts,
                   std::span<const rm::scenario::Marker> markers,
                   std::vector<std::unique_ptr<rm::ai::Opponent>>& scripts, float elapsedSeconds,
                   rm::TickIndex tickIndex) {
@@ -656,7 +607,7 @@ void runOpponents(UnitScene& scene, const rm::vfs::Vfs& content, const rm::Heigh
 
         opponent.observe(world, scene.events.all());
         opponent.advance(tickIndex);
-        applyDecisions(scene, content, field, passability, army, opponent.drain(),
+        applyDecisions(scene, content, army, opponent.drain(),
                        elapsedSeconds, tickIndex);
     }
 }
@@ -785,85 +736,75 @@ rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) 
     }
     runner.match.passability = runner.gridForType;
 
-    // The opponents decide FIRST, so an order given this tick moves this tick.
-    //
-    // THE REPLAY, at exactly the opponents' position in the tick: the original commands
-    // were applied by `applyDecisions` here, so playing them back anywhere else would be a
-    // different match. Setup's own orders (the seeded extractors) are regenerated by scene
-    // build in this run too, so the leading log entries that match what this run already
-    // recorded on the same tick are skipped rather than doubled — matched pairwise, which
-    // works because setup is deterministic and records in one order.
-    // Deferred to AFTER the tick's spawns: a replayed command whose unit does not exist
-    // yet was recorded after that unit's birth — the roll-off move of a tank finished this
-    // very tick. Applying it pre-tick would be a different match; see the second pass below.
-    std::vector<const rm::sim::Command*> bornThisTick;
-    const auto applyReplayed = [&](const rm::sim::Command& recorded) {
-        rm::sim::Command command = recorded;
-        // A build's type index was the ORIGINAL run's numbering. The path column is the
-        // content-addressed truth; resolving it registers the blueprint in THIS run's
-        // catalog exactly as the tray's arming would have.
-        if (command.kind == rm::sim::CommandKind::Build && runner.replayPaths != nullptr) {
-            const auto offset =
-                static_cast<std::size_t>(&recorded - runner.replay->all().data());
-            if (offset < runner.replayPaths->size()
-                && !(*runner.replayPaths)[offset].empty()) {
-                const std::optional<std::size_t> resolved = resolveBuildable(
-                    scene, runner.content, (*runner.replayPaths)[offset]);
-                if (!resolved) {
-                    return;  // content this install does not have; skipping is loud in the
-                             // hash check, silent corruption would not be
-                }
-                command.buildType = static_cast<rm::UnitTypeIndex>(*resolved);
-            }
+    // Replay submits the exact semantic phase the original run recorded. Setup commands are
+    // regenerated before the runner exists, so a matching prefix is already applied and owns
+    // the same IDs; all remaining records consume their explicit source-local IDs through the
+    // same intake as live producers.
+    const auto submitReplayPhase = [&](rm::sim::CommandPhase phase) {
+        std::vector<std::vector<rm::sim::UnitId>> expected;
+        if (runner.replay == nullptr) {
+            return expected;
         }
-        const auto builderType =
-            static_cast<std::size_t>(scene.store.typeAt(command.unit.index));
-        const rm::sim::PassabilityGrid& grid =
-            command.kind == rm::sim::CommandKind::Build
-                ? runner.passability.gridForBuild(
-                      scene, static_cast<std::size_t>(command.buildType), builderType)
-                : runner.passability.gridFor(scene, builderType);
-        if (rm::sim::applyCommand(command, scene.store, scene.catalog, scene.players,
-                                   scene.armies, scene.terrain(runner.field), grid,
-                                   gAppTickRate, &scene.building, &scene.events,
-                                   &scene.features)) {
-            scene.commands.record(command);
-        }
-    };
-    if (runner.replay != nullptr) {
-        const std::span<const rm::sim::Command> due =
-            runner.replay->at(static_cast<rm::TickIndex>(tickIndex));
-        const std::vector<rm::sim::Command> already(
-            scene.commands.at(static_cast<rm::TickIndex>(tickIndex)).begin(),
-            scene.commands.at(static_cast<rm::TickIndex>(tickIndex)).end());
+        const rm::TickIndex tick = static_cast<rm::TickIndex>(tickIndex);
+        const std::span<const rm::sim::CommandIssue> due = runner.replay->at(tick, phase);
+        const std::span<const rm::sim::CommandIssue> already = scene.commands.at(tick, phase);
         std::size_t matched = 0;
-        for (const rm::sim::Command& recorded : due) {
+        for (const rm::sim::CommandIssue& recorded : due) {
             if (matched < already.size() && recorded == already[matched]) {
                 ++matched;
                 continue;
             }
-            // Handle-valid AND breathing: `IdPool::release` bumps the generation the
-            // moment a slot frees, so a handle recorded for a unit born LATER this tick
-            // already "names" the freed slot — the wave tank reusing a casualty's slot.
-            // Health is what says somebody actually lives there yet.
-            if (!scene.store.alive(recorded.unit)
-                || !scene.store.health()[recorded.unit.index].alive()) {
-                bornThisTick.push_back(&recorded);
-                continue;
+            rm::sim::CommandIssue issue = recorded;
+            if (issue.kind == rm::sim::CommandKind::Build && runner.replayPaths != nullptr) {
+                const auto offset = static_cast<std::size_t>(
+                    &recorded - runner.replay->all().data());
+                if (offset < runner.replayPaths->size()
+                    && !(*runner.replayPaths)[offset].empty()) {
+                    const std::optional<std::size_t> resolved = resolveBuildable(
+                        scene, runner.content, (*runner.replayPaths)[offset]);
+                    if (!resolved) {
+                        throw std::runtime_error{"replay build blueprint is unavailable"};
+                    }
+                    issue.buildType = static_cast<rm::UnitTypeIndex>(*resolved);
+                }
             }
-            applyReplayed(recorded);
+            expected.push_back(recorded.units);
+            if (!submitCommand(scene, std::move(issue))) {
+                throw std::runtime_error{"replay command ID diverged from live allocation"};
+            }
         }
-    }
+        return expected;
+    };
+
+    const auto dispatchPhase = [&](rm::sim::CommandPhase phase,
+                                   const std::vector<std::vector<rm::sim::UnitId>>& expected) {
+        const std::vector<DispatchedCommand> dispatched = dispatchCommands(
+            scene, runner.field, runner.passability, static_cast<rm::TickIndex>(tickIndex), phase);
+        if (runner.replay != nullptr) {
+            if (dispatched.size() != expected.size()) {
+                throw std::runtime_error{"replay command batch size diverged"};
+            }
+            for (std::size_t i = 0; i < dispatched.size(); ++i) {
+                if (dispatched[i].result.accepted != expected[i]) {
+                    throw std::runtime_error{"replay command accepted set diverged"};
+                }
+            }
+        }
+    };
+
+    const auto replayPre = submitReplayPhase(rm::sim::CommandPhase::PreTick);
 
     // Called EVERY tick now, and the pacing lives inside — `runOpponents` asks a
     // `sim::SlowUpdate` whether each army's turn is this tick (§7 P3.6). The modulo that used
     // to be on this line was the hand-rolled version of that mechanism, and it could only ever
     // ask the question for all armies at once.
     if (!scene.armies.empty() && !runner.matchOver) {
-        runOpponents(scene, runner.content, runner.field, runner.passability, runner.starts,
-                     runner.markers, runner.scripts, now,
+        runOpponents(scene, runner.content, runner.field, runner.starts, runner.markers,
+                     runner.scripts, now,
                      static_cast<rm::TickIndex>(tickIndex));
     }
+
+    dispatchPhase(rm::sim::CommandPhase::PreTick, replayPre);
 
     // ONE call, and the same one both callers make. What used to be here — the order of
     // movement, collision, aiming, firing, death, defeat and economy — is a fact about
@@ -965,30 +906,22 @@ rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) 
                              rm::sim::Fx::fromInt(runner.field.squaresX * rm::kSquareSize / 2),
                              rm::sim::Fx::fromInt(runner.field.squaresZ * rm::kSquareSize
                                                   / 2));
-            const auto type = static_cast<std::size_t>(scene.store.typeAt(spawned->index));
-            const rm::sim::PassabilityGrid& grid = runner.passability.gridFor(scene, type);
             if (scene.store.motion()[spawned->index].surfaceWater) {
+                const auto type = static_cast<std::size_t>(scene.store.typeAt(spawned->index));
+                const rm::sim::PassabilityGrid& grid = runner.passability.gridFor(scene, type);
                 if (const auto waterTarget = rm::sim::reachablePointToward(
                         grid, work.position[0], work.position[2], to[0], to[1])) {
                     to = *waterTarget;
                 }
             }
-            (void)issueMove(scene, grid, runner.field, *spawned,
-                            playerDriving(scene, work.armyIndex),
-                            static_cast<rm::TickIndex>(tickIndex), to[0], to[1]);
+            (void)issueMove(scene, *spawned, playerDriving(scene, work.armyIndex),
+                            static_cast<rm::TickIndex>(tickIndex), to[0], to[1], false,
+                            rm::sim::CommandKind::Move, rm::sim::CommandPhase::PostSpawn);
         }
     }
 
-    // THE SECOND REPLAY PASS: commands for units born this tick, applied now that the
-    // spawn loop above has borne them — the roll-off move recorded right here in the
-    // original run. Anything still dead was dead in the original too (its order was
-    // recorded before its death was), so silence is the faithful reading.
-    for (const rm::sim::Command* recorded : bornThisTick) {
-        if (scene.store.alive(recorded->unit)
-            && scene.store.health()[recorded->unit.index].alive()) {
-            applyReplayed(*recorded);
-        }
-    }
+    const auto replayPost = submitReplayPhase(rm::sim::CommandPhase::PostSpawn);
+    dispatchPhase(rm::sim::CommandPhase::PostSpawn, replayPost);
 
     // Nothing to rebuild any more. This used to re-point a vector of per-batch spans,
     // because a spawn into an existing batch reallocated the vector it landed in and left
@@ -1026,9 +959,7 @@ void march(UnitScene& scene, const rm::HeightField& field, PassabilitySet& passa
         for (rm::UnitIndex slot = 0; slot < scene.store.slotCount(); ++slot) {
             {
                 ++total;
-                const auto type = static_cast<std::size_t>(scene.store.typeAt(slot));
-                const rm::sim::PassabilityGrid& grid = passability.gridFor(scene, type);
-                if (issueMove(scene, grid, field, scene.store.idAt(slot),
+                if (issueMove(scene, scene.store.idAt(slot),
                               playerDriving(scene, scene.store.motion()[slot].armyIndex), 0,
                               rm::sim::fxFromFloat(options.x),
                               rm::sim::fxFromFloat(options.z))) {
@@ -1036,6 +967,7 @@ void march(UnitScene& scene, const rm::HeightField& field, PassabilitySet& passa
                 }
             }
         }
+        (void)dispatchCommands(scene, field, passability, 0, rm::sim::CommandPhase::PreTick);
     }
 
     // Whole ticks from a duration, rather than feeding a wall clock: this has

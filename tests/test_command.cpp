@@ -24,8 +24,10 @@
 #include <vector>
 
 using rm::sim::Command;
+using rm::sim::CommandIssue;
 using rm::sim::CommandKind;
 using rm::sim::CommandLog;
+using rm::sim::CommandPhase;
 using rm::sim::Player;
 using rm::sim::UnitId;
 
@@ -69,6 +71,12 @@ struct Fixture {
                                      terrain, grid, roster.rate, &building);
     }
 
+    [[nodiscard]] bool apply(const CommandIssue& issue) {
+        return static_cast<bool>(rm::sim::applyCommand(
+            issue, roster.store, roster.catalog, players, armies, terrain,
+            [this](UnitId) { return &grid; }, roster.rate, &building));
+    }
+
     /// Runs the match forward, applying whatever the log says on each tick — which is the
     /// replay loop, and the only loop either a live match or a replay needs.
     void run(const CommandLog& log, rm::TickIndex ticks) {
@@ -77,8 +85,8 @@ struct Fixture {
         const std::vector<int> commandersEver(2, 0);
 
         for (rm::TickIndex tick = 0; tick < ticks; ++tick) {
-            for (const Command& command : log.at(tick)) {
-                (void)apply(command);
+            for (const CommandIssue& issue : log.at(tick, CommandPhase::PreTick)) {
+                (void)apply(issue);
             }
             // The routing table for queued orders, one entry per registered type (P4.1). The
             // fixture's units all share a grid, so this is a vector of one pointer repeated —
@@ -93,6 +101,9 @@ struct Fixture {
                                  .passability = grids,
                                  .commandersEver = commandersEver};
             (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain);
+            for (const CommandIssue& issue : log.at(tick, CommandPhase::PostSpawn)) {
+                (void)apply(issue);
+            }
         }
     }
 };
@@ -106,6 +117,24 @@ struct Fixture {
                    .targetX = rm::test::fx(x),
                    .targetZ = rm::test::fx(z),
                    .buildType = 0};
+}
+
+[[nodiscard]] CommandIssue logged(Command command, std::uint32_t counter = 0,
+                                  CommandPhase phase = CommandPhase::PreTick) {
+    return CommandIssue{
+        .tick = command.tick,
+        .phase = phase,
+        .source = static_cast<rm::CommandSource>(command.player),
+        .id = rm::commandId(static_cast<rm::CommandSource>(command.player), counter),
+        .player = command.player,
+        .kind = command.kind,
+        .queued = command.queued,
+        .units = {command.unit},
+        .targetX = command.targetX,
+        .targetZ = command.targetZ,
+        .target = command.target,
+        .buildType = command.buildType,
+    };
 }
 
 } // namespace
@@ -249,6 +278,69 @@ TEST_CASE("a build command creates a construction, costed from the blueprint") {
     CHECK(work.blueprintIndex == mexType);
 }
 
+TEST_CASE("a factory builds mobile products on its own pad, not the clicked plan") {
+    Fixture fix;
+
+    rm::unitdef::UnitDef factoryDef;
+    factoryDef.name = "air_factory";
+    factoryDef.categories = {"FACTORY"};
+    factoryDef.buildRate = 10.0f;
+    factoryDef.buildableCategory = {{"AIRPRODUCT"}};
+    const rm::UnitTypeIndex factoryType = fix.roster.addType(factoryDef);
+
+    rm::unitdef::UnitDef aircraftDef;
+    aircraftDef.name = "aircraft";
+    aircraftDef.categories = {"AIRPRODUCT"};
+    aircraftDef.motion = rm::unitdef::MotionType::Air;
+    aircraftDef.speedElmosPerSecond = 10.0f;
+    const rm::UnitTypeIndex aircraftType = fix.roster.addType(aircraftDef);
+
+    const UnitId factory = fix.roster.add(factoryType, 300.0f, 300.0f, 0, 500.0f);
+    const Command build{.tick = 0,
+                        .player = 0,
+                        .kind = CommandKind::Build,
+                        .unit = factory,
+                        .targetX = rm::test::fx(600.0f),
+                        .targetZ = rm::test::fx(600.0f),
+                        .buildType = aircraftType};
+
+    REQUIRE(fix.apply(build));
+    REQUIRE(fix.building.size() == 1);
+    CHECK(fix.building[0].position[0] == rm::test::fx(300.0f));
+    CHECK(fix.building[0].position[2] == rm::test::fx(300.0f));
+}
+
+TEST_CASE("a factory ignores an unplaceable plan for a land product") {
+    Fixture fix;
+
+    rm::unitdef::UnitDef factoryDef;
+    factoryDef.name = "land_factory";
+    factoryDef.categories = {"FACTORY"};
+    factoryDef.buildRate = 10.0f;
+    factoryDef.buildableCategory = {{"LANDPRODUCT"}};
+    const rm::UnitTypeIndex factoryType = fix.roster.addType(factoryDef);
+
+    rm::unitdef::UnitDef tankDef;
+    tankDef.name = "tank";
+    tankDef.categories = {"LANDPRODUCT"};
+    tankDef.speedElmosPerSecond = 10.0f;
+    const rm::UnitTypeIndex tankType = fix.roster.addType(tankDef);
+
+    const UnitId factory = fix.roster.add(factoryType, 300.0f, 300.0f, 0, 500.0f);
+    const Command build{.tick = 0,
+                        .player = 0,
+                        .kind = CommandKind::Build,
+                        .unit = factory,
+                        .targetX = rm::test::fx(600.0f),  // off the 512-elmo fixture map
+                        .targetZ = rm::test::fx(600.0f),
+                        .buildType = tankType};
+
+    REQUIRE(fix.apply(build));
+    REQUIRE(fix.building.size() == 1);
+    CHECK(fix.building[0].position[0] == rm::test::fx(300.0f));
+    CHECK(fix.building[0].position[2] == rm::test::fx(300.0f));
+}
+
 TEST_CASE("a build command refuses a blocked target footprint") {
     Fixture fix;
 
@@ -335,94 +427,84 @@ TEST_CASE("a build with nowhere to put it, or nothing to build, is refused") {
 
 // --- The log ---------------------------------------------------------------------------
 
-TEST_CASE("a log returns the commands for a tick, and nothing for an empty one") {
+TEST_CASE("a log returns semantic issues by tick and phase") {
     CommandLog log;
-    log.record(moveOrder(0, 0, UnitId{0, 1}, 100.0f, 100.0f));
-    log.record(moveOrder(5, 0, UnitId{0, 1}, 200.0f, 100.0f));
-    log.record(moveOrder(5, 1, UnitId{1, 1}, 300.0f, 100.0f));
-    log.record(moveOrder(9, 0, UnitId{0, 1}, 400.0f, 100.0f));
+    REQUIRE(log.record(logged(moveOrder(0, 0, UnitId{0, 1}, 100.0f, 100.0f))));
+    REQUIRE(log.record(logged(moveOrder(5, 0, UnitId{0, 1}, 200.0f, 100.0f), 1)));
+    REQUIRE(log.record(logged(moveOrder(5, 1, UnitId{1, 1}, 300.0f, 100.0f), 0)));
+    REQUIRE(log.record(logged(moveOrder(5, 0, UnitId{2, 1}, 400.0f, 100.0f), 2,
+                              CommandPhase::PostSpawn)));
 
-    CHECK(log.at(0).size() == 1);
-    CHECK(log.at(1).empty());  // a tick with no orders is the common case
-    CHECK(log.at(5).size() == 2);
-    CHECK(log.at(9).size() == 1);
-    CHECK(log.at(1000).empty());
-    CHECK(log.lastTick() == 9);
+    CHECK(log.at(0, CommandPhase::PreTick).size() == 1);
+    CHECK(log.at(1, CommandPhase::PreTick).empty());
+    CHECK(log.at(5, CommandPhase::PreTick).size() == 2);
+    CHECK(log.at(5, CommandPhase::PostSpawn).size() == 1);
+    CHECK(log.at(1000, CommandPhase::PreTick).empty());
+    CHECK(log.lastTick() == 5);
+    CHECK(log.at(5, CommandPhase::PreTick)[0].source == 0);
+    CHECK(log.at(5, CommandPhase::PreTick)[1].source == 1);
 
-    // In the order recorded: two players ordering on one tick must apply in a fixed sequence,
-    // or the same log is two different matches.
-    CHECK(log.at(5)[0].player == 0);
-    CHECK(log.at(5)[1].player == 1);
+    CHECK_FALSE(log.record(logged(moveOrder(5, 0, UnitId{0, 1}, 0.0f, 0.0f), 3)));
+    CHECK_FALSE(log.record(logged(moveOrder(3, 0, UnitId{0, 1}, 0.0f, 0.0f), 3)));
 }
 
-TEST_CASE("a log refuses to go backwards in time") {
-    // Checked at RECORD time, because the tick it went backwards on is the only useful thing
-    // to know about such a log, and that is knowable here rather than at replay.
-    CommandLog log;
-    log.record(moveOrder(10, 0, UnitId{0, 1}, 100.0f, 100.0f));
-    log.record(moveOrder(3, 0, UnitId{0, 1}, 200.0f, 100.0f));
-
-    CHECK(log.size() == 1);
-    CHECK(log.lastTick() == 10);
-}
-
-TEST_CASE("a log round-trips through a file exactly") {
-    // The fixed-point targets are written as RAW integers, so this is an exact round trip
-    // rather than one within a tolerance — which in a determinism artifact is the only
-    // acceptable kind.
+TEST_CASE("a grouped semantic log round-trips through a strict versioned file") {
     CommandLog original;
-    original.record(moveOrder(0, 0, UnitId{3, 7}, 123.456f, 789.012f));
-    original.record(Command{.tick = 4,
-                            .player = 1,
-                            .kind = CommandKind::Stop,
-                            .unit = UnitId{9, 2},
-                            .targetX = {},
-                            .targetZ = {},
-                            .buildType = 0});
-    original.record(Command{.tick = 4,
-                            .player = 1,
-                            .kind = CommandKind::Attack,
-                            .queued = true,
-                            .unit = UnitId{9, 2},
-                            .targetX = rm::test::fx(-42.5f),
-                            .targetZ = rm::test::fx(0.125f),
-                            .buildType = 0});
-    original.record(Command{.tick = 8,
-                            .player = 0,
-                            .kind = CommandKind::Build,
-                            .unit = UnitId{1, 1},
-                            .targetX = rm::test::fx(64.0f),
-                            .targetZ = rm::test::fx(64.0f),
-                            .buildType = 5});
-    original.record(Command{.tick = 9,
-                            .player = 0,
-                            .kind = CommandKind::AttackMove,
-                            .unit = UnitId{3, 7},
-                            .targetX = rm::test::fx(400.0f),
-                            .targetZ = rm::test::fx(500.0f)});
-    original.record(Command{.tick = 10,
-                            .player = 0,
-                            .kind = CommandKind::Patrol,
-                            .unit = UnitId{3, 7},
-                            .targetX = rm::test::fx(600.0f),
-                            .targetZ = rm::test::fx(700.0f)});
+    REQUIRE(original.record(CommandIssue{
+        .tick = 7,
+        .phase = CommandPhase::PreTick,
+        .source = 1,
+        .id = rm::commandId(1, 42),
+        .player = 1,
+        .kind = CommandKind::Attack,
+        .queued = true,
+        .units = {UnitId{3, 7}, UnitId{9, 2}},
+        .targetX = rm::test::fx(-42.5f),
+        .targetZ = rm::test::fx(0.125f),
+        .target = UnitId{12, 4},
+        .count = 9,
+    }));
+    REQUIRE(original.record(CommandIssue{
+        .tick = 8,
+        .phase = CommandPhase::PostSpawn,
+        .source = 1,
+        .id = rm::commandId(1, 43),
+        .player = 1,
+        .kind = CommandKind::Build,
+        .units = {UnitId{9, 2}},
+        .targetX = rm::test::fx(64.0f),
+        .targetZ = rm::test::fx(64.0f),
+        .buildType = 5,
+    }));
+    REQUIRE(original.record(CommandIssue{
+        .tick = 9,
+        .phase = CommandPhase::PreTick,
+        .source = 1,
+        .id = rm::commandId(1, 44),
+        .player = 1,
+        .kind = CommandKind::Stop,
+        .units = {},
+    }));
 
     const std::filesystem::path path =
         std::filesystem::temp_directory_path() / "rm-command-log-test.txt";
-    REQUIRE(rm::sim::writeCommandLog(original, path.string()));
+    REQUIRE(rm::sim::writeCommandLog(original, path.string(), [](std::uint32_t type) {
+        return type == 5 ? "/units/test build.bp" : std::string{};
+    }));
 
-    const std::optional<CommandLog> read = rm::sim::readCommandLog(path.string());
+    std::vector<std::string> paths;
+    const std::optional<CommandLog> read = rm::sim::readCommandLog(path.string(), &paths);
     REQUIRE(read.has_value());
-    REQUIRE(read->size() == original.size());
-    for (std::size_t i = 0; i < original.size(); ++i) {
-        REQUIRE(read->all()[i] == original.all()[i]);
-    }
-    CHECK(read->all()[2].queued);
+    CHECK(std::ranges::equal(read->all(), original.all()));
+    REQUIRE(paths.size() == 3);
+    CHECK(paths[0].empty());
+    CHECK(paths[1] == "/units/test build.bp");
+    CHECK(paths[2].empty());
 
     std::filesystem::remove(path);
 }
 
-TEST_CASE("a missing or malformed log is nothing, not a partial one") {
+TEST_CASE("the semantic reader rejects legacy, malformed, and truncated logs") {
     CHECK_FALSE(rm::sim::readCommandLog("/nonexistent/rm-command-log").has_value());
 
     const std::filesystem::path path =
@@ -430,44 +512,34 @@ TEST_CASE("a missing or malformed log is nothing, not a partial one") {
     {
         std::ofstream out{path};
         out << "0 0 move 1 1 100 200 0\n";
-        out << "4 0 fly 1 1 100 200 0\n";  // not a kind this engine knows
-    }
-    // Nothing, rather than the one good line: a partial log replays as a different match.
-    CHECK_FALSE(rm::sim::readCommandLog(path.string()).has_value());
-    std::filesystem::remove(path);
-}
-
-TEST_CASE("a present queue flag must be zero or one") {
-    const std::filesystem::path path =
-        std::filesystem::temp_directory_path() / "rm-command-log-bad-queue.txt";
-    {
-        std::ofstream out{path};
-        out << "0 0 move 1 1 100 200 0 0 0 - yes\n";
     }
     CHECK_FALSE(rm::sim::readCommandLog(path.string()).has_value());
-    std::filesystem::remove(path);
-}
-
-TEST_CASE("a legacy command without a queue column remains a replacement order") {
-    const std::filesystem::path path =
-        std::filesystem::temp_directory_path() / "rm-command-log-legacy.txt";
     {
-        std::ofstream out{path};
-        out << "0 0 move 1 1 100 200 0\n";
+        std::ofstream out{path, std::ios::trunc};
+        out << "recoil-metal semantic command log\nversion 2\nissue-count 0\n";
     }
-    const std::optional<CommandLog> read = rm::sim::readCommandLog(path.string());
-    REQUIRE(read.has_value());
-    REQUIRE(read->size() == 1);
-    CHECK_FALSE(read->all().front().queued);
+    CHECK_FALSE(rm::sim::readCommandLog(path.string()).has_value());
+    {
+        std::ofstream out{path, std::ios::trunc};
+        out << "recoil-metal semantic command log\nversion 1\nissue-count 2\n"
+               "0 pre-tick 0 0 0 move 0 1 100 200 0 0 0 1 1 1 \"\"\n";
+    }
+    CHECK_FALSE(rm::sim::readCommandLog(path.string()).has_value());
+    {
+        std::ofstream out{path, std::ios::trunc};
+        out << "recoil-metal semantic command log\nversion 1\nissue-count 1\n"
+               "0 pre-tick 0 0 0 move 0 1 100 200 0 0 0 2 4 1 3 1 \"\"\n";
+    }
+    CHECK_FALSE(rm::sim::readCommandLog(path.string()).has_value());
     std::filesystem::remove(path);
 }
 
 TEST_CASE("a queued route survives file round-trip and replay") {
     CommandLog original;
-    original.record(moveOrder(0, 0, UnitId{0, 1}, 300.0f, 200.0f));
+    REQUIRE(original.record(logged(moveOrder(0, 0, UnitId{0, 1}, 300.0f, 200.0f))));
     Command second = moveOrder(0, 0, UnitId{0, 1}, 300.0f, 500.0f);
     second.queued = true;
-    original.record(second);
+    REQUIRE(original.record(logged(second, 1)));
 
     const std::filesystem::path path =
         std::filesystem::temp_directory_path() / "rm-command-log-queued-route.txt";
@@ -503,15 +575,12 @@ TEST_CASE("a human log and a script log replay through the same path") {
     CommandLog human;
     {
         Fixture fix;
-        human.record(moveOrder(0, 0, fix.mine, 400.0f, 200.0f));
-        human.record(moveOrder(30, 0, fix.mine, 400.0f, 600.0f));
-        human.record(Command{.tick = 60,
-                             .player = 0,
-                             .kind = CommandKind::Stop,
-                             .unit = fix.mine,
-                             .targetX = {},
-                             .targetZ = {},
-                             .buildType = 0});
+        human.record(logged(moveOrder(0, 0, fix.mine, 400.0f, 200.0f), 0));
+        human.record(logged(moveOrder(30, 0, fix.mine, 400.0f, 600.0f), 1));
+        human.record(logged(Command{.tick = 60,
+                                    .player = 0,
+                                    .kind = CommandKind::Stop,
+                                    .unit = fix.mine}, 2));
     }
 
     // A log as a script would produce it: one decision a second, for the other army.
@@ -519,8 +588,9 @@ TEST_CASE("a human log and a script log replay through the same path") {
     {
         Fixture fix;
         for (rm::TickIndex tick = 0; tick < 100; tick += 10) {
-            script.record(moveOrder(tick, 1, fix.theirs, 300.0f,
-                                    300.0f + static_cast<float>(tick)));
+            script.record(logged(moveOrder(tick, 1, fix.theirs, 300.0f,
+                                           300.0f + static_cast<float>(tick)),
+                                 static_cast<std::uint32_t>(tick / 10)));
         }
     }
 
@@ -528,13 +598,15 @@ TEST_CASE("a human log and a script log replay through the same path") {
     // interleaved. That the two are indistinguishable once recorded IS the property.
     CommandLog both;
     {
-        std::vector<Command> merged;
+        std::vector<CommandIssue> merged;
         merged.insert(merged.end(), human.all().begin(), human.all().end());
         merged.insert(merged.end(), script.all().begin(), script.all().end());
         std::stable_sort(merged.begin(), merged.end(),
-                         [](const Command& a, const Command& b) { return a.tick < b.tick; });
-        for (const Command& command : merged) {
-            both.record(command);
+                         [](const CommandIssue& a, const CommandIssue& b) {
+                             return a.tick < b.tick;
+                         });
+        for (const CommandIssue& issue : merged) {
+            both.record(issue);
         }
     }
     REQUIRE(both.size() == human.size() + script.size());
@@ -585,8 +657,8 @@ TEST_CASE("a script's order and a click produce identical hashes") {
         fix.players = rm::sim::onePlayerPerArmy(2, humanArmy);
 
         CommandLog log;
-        log.record(moveOrder(0, 0, fix.mine, 400.0f, 200.0f));
-        log.record(moveOrder(30, 0, fix.mine, 400.0f, 600.0f));
+        log.record(logged(moveOrder(0, 0, fix.mine, 400.0f, 200.0f), 0));
+        log.record(logged(moveOrder(30, 0, fix.mine, 400.0f, 600.0f), 1));
         fix.run(log, 120);
 
         std::vector<rm::sim::Projectile> shots;
@@ -607,7 +679,7 @@ TEST_CASE("a script's order and a click produce identical hashes") {
     Fixture human;
     human.players = rm::sim::onePlayerPerArmy(2, 0);
     CommandLog log;
-    log.record(moveOrder(0, 0, human.mine, 400.0f, 200.0f));
+    log.record(logged(moveOrder(0, 0, human.mine, 400.0f, 200.0f)));
     human.run(log, 120);
     Fixture idle;
     idle.run(CommandLog{}, 120);
@@ -844,7 +916,7 @@ TEST_CASE("an attack with a target is a pursuit: chase, hold in range, finish on
     Command attack = moveOrder(0, 0, hunter, 600.0f, 600.0f);
     attack.kind = CommandKind::Attack;
     attack.target = prey;
-    log.record(attack);
+    log.record(logged(attack));
 
     // The hunter closes. After a while it is nearer the prey than it started, and once the
     // gap is inside the weapon's reach it HOLDS rather than walking to the prey's feet.
@@ -898,7 +970,7 @@ TEST_CASE("a short-range pursuit closes inside the target's path cell") {
     attack.kind = CommandKind::Attack;
     attack.target = prey;
     CommandLog log;
-    log.record(attack);
+    log.record(logged(attack));
     fixture.run(log, 300);
 
     CHECK(rm::sim::groundDistanceElmos(rm::sim::positionOf(fixture.roster.transform(hunter)),

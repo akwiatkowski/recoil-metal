@@ -9,6 +9,10 @@
 #include "core/sim/Transform.hpp"
 
 #include <cstddef>
+#include <array>
+#include <map>
+#include <memory>
+#include <optional>
 #include <span>
 #include <vector>
 
@@ -107,8 +111,8 @@ public:
     /// ON THE UNIT, which is where the plan puts it and where Recoil puts it too — the
     /// alternative, one table keyed by handle, would need clearing on death and would make
     /// "walk every unit's queue" a hash lookup per slot in a pass that already has the slot.
-    /// A slot's queue is cleared when the slot is reused, not when the unit dies: a corpse's
-    /// arrays are deliberately left intact (see the note on tombstones above).
+    /// A dead unit's queue is cleared immediately because its shared ownership determines
+    /// command-ID liveness. Position, motion, health, and type remain tombstone state.
     [[nodiscard]] std::span<CommandQueue> orders() noexcept { return orders_; }
     [[nodiscard]] std::span<const CommandQueue> orders() const noexcept { return orders_; }
 
@@ -118,6 +122,29 @@ public:
         return nextCommandSerial_++;
     }
     [[nodiscard]] CommandSerial nextCommandSerial() const noexcept { return nextCommandSerial_; }
+
+    /// Allocates the next source-tagged ID not currently owned by any queue.
+    [[nodiscard]] std::optional<CommandId> allocateCommandId(CommandSource source);
+
+    /// Consumes the next source-local ID while replaying an explicit semantic issue. The ID
+    /// must be exactly what live allocation would have produced, so replay reconstructs and
+    /// validates the hashed allocator state instead of merely injecting an identity.
+    [[nodiscard]] bool consumeCommandId(CommandSource source, CommandId id);
+
+    /// Registers an accepted shared command weakly. Duplicate live IDs are refused.
+    [[nodiscard]] bool registerCommand(const std::shared_ptr<SharedCommand>& command);
+    [[nodiscard]] bool commandIdLive(CommandId id);
+    [[nodiscard]] std::shared_ptr<SharedCommand> liveCommand(CommandId id);
+    [[nodiscard]] std::size_t liveCommandCount();
+
+    /// Shared repeat/count operations. Exhaustion removes this exact object from every member
+    /// queue, matching retail's cross-queue `DecreaseCommandCount` path.
+    [[nodiscard]] bool increaseCommandCount(CommandId id, std::uint32_t amount = 1);
+    [[nodiscard]] bool decreaseCommandCount(CommandId id, std::uint32_t amount = 1);
+
+    [[nodiscard]] std::uint32_t nextCommandCounter(CommandSource source) const noexcept {
+        return source < nextCommandCounters_.size() ? nextCommandCounters_[source] : 0;
+    }
 
     // --- The spatial index (PLAN2.md §6.5, §7 P5.2) ---------------------------
     //
@@ -171,6 +198,8 @@ private:
     std::vector<CommandQueue> orders_;
 
     CommandSerial nextCommandSerial_ = 0;
+    std::array<std::uint32_t, kInvalidCommandSource> nextCommandCounters_{};
+    std::map<CommandId, std::weak_ptr<SharedCommand>> liveCommands_;
 
     /// Not parallel to the arrays above: a sorted index INTO them, rebuilt by `reindex`.
     SpatialGrid space_;
