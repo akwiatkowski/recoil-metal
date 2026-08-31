@@ -199,7 +199,8 @@ struct DispatchedCommand {
 /// accepted the command.
 [[nodiscard]] std::vector<DispatchedCommand> dispatchCommands(
     UnitScene& scene, const rm::HeightField& field, PassabilitySet& passability,
-    rm::TickIndex tick, rm::sim::CommandPhase phase);
+    rm::TickIndex tick, rm::sim::CommandPhase phase,
+    rm::sim::PathService* pathService = nullptr);
 
 /// The player driving an army, or none. What an issued order is attributed to.
 [[nodiscard]] rm::PlayerIndex playerDriving(const UnitScene& scene, int army);

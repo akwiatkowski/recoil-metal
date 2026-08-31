@@ -23,6 +23,7 @@
 #include "core/scene/Particles.hpp"
 #include "core/sim/BuildOrder.hpp"
 #include "core/sim/Events.hpp"
+#include "core/sim/PathService.hpp"
 #include "core/sim/Skirmish.hpp"
 
 #include <array>
@@ -119,6 +120,10 @@ struct MatchRunner {
     /// Built once and kept, because `over` has to survive between ticks — a match is
     /// decided on one tick and stays decided.
     rm::sim::Match match;
+
+    /// Match-owned path work persists across ticks. Requests accepted on one beat become
+    /// eligible only after that beat, so this cannot be a dispatch-local temporary.
+    rm::sim::PathService pathService;
 
     /// The grid each unit TYPE routes on, indexed by `UnitTypeIndex`, for the sim's own
     /// advancing of queued orders (§7 P4.1).

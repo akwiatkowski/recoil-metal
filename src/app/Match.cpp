@@ -779,7 +779,8 @@ rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) 
     const auto dispatchPhase = [&](rm::sim::CommandPhase phase,
                                    const std::vector<std::vector<rm::sim::UnitId>>& expected) {
         const std::vector<DispatchedCommand> dispatched = dispatchCommands(
-            scene, runner.field, runner.passability, static_cast<rm::TickIndex>(tickIndex), phase);
+            scene, runner.field, runner.passability, static_cast<rm::TickIndex>(tickIndex), phase,
+            &runner.pathService);
         if (runner.replay != nullptr) {
             if (dispatched.size() != expected.size()) {
                 throw std::runtime_error{"replay command batch size diverged"};
@@ -805,6 +806,10 @@ rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) 
     }
 
     dispatchPhase(rm::sim::CommandPhase::PreTick, replayPre);
+
+    // MatchRunner owns this state, so every tick resumes the same per-army FIFO rather than
+    // constructing a service whose admissions vanish at the end of the beat.
+    runner.match.pathService = &runner.pathService;
 
     // ONE call, and the same one both callers make. What used to be here — the order of
     // movement, collision, aiming, firing, death, defeat and economy — is a fact about
