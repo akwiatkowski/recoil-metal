@@ -180,6 +180,7 @@ add_library(rm_core STATIC
     src/core/sim/Economy.cpp
     src/core/sim/Movement.cpp
     src/core/sim/Pathfinding.cpp
+    src/core/sim/PathService.cpp
     src/core/sim/IdPool.cpp
     src/core/sim/Fx.cpp
     src/core/sim/TickRate.cpp

@@ -262,6 +262,69 @@ void feedOrders(StateHash& h, const CommandQueue& orders) noexcept {
     }
 }
 
+void feedPathRequest(StateHash& h, const PathRequest& request) noexcept {
+    feed(h, static_cast<std::size_t>(request.unit.index));
+    feed(h, static_cast<std::size_t>(request.unit.generation));
+    feed(h, static_cast<std::uint64_t>(request.command));
+    feed(h, request.army);
+    feed(h, request.fromX);
+    feed(h, request.fromZ);
+    feed(h, request.targetX);
+    feed(h, request.targetZ);
+}
+
+void feedPathSearch(StateHash& h, const PathSearch& search) noexcept {
+    feed(h, search.startX());
+    feed(h, search.startZ());
+    feed(h, search.goalX());
+    feed(h, search.goalZ());
+    feed(h, search.targetX());
+    feed(h, search.targetZ());
+    feed(h, search.finished());
+    feed(h, search.costs().size());
+    for (const Fx cost : search.costs()) {
+        feed(h, cost);
+    }
+    feed(h, search.parents().size());
+    for (const int parent : search.parents()) {
+        feed(h, parent);
+    }
+    feed(h, search.closed().size());
+    for (const std::uint8_t closed : search.closed()) {
+        feed(h, static_cast<std::uint64_t>(closed));
+    }
+    feed(h, search.open().size());
+    for (const PathSearchNode& node : search.open()) {
+        feed(h, node.f);
+        feed(h, node.cell);
+    }
+    feed(h, search.path().size());
+    for (const std::array<Fx, 2>& waypoint : search.path()) {
+        feed(h, waypoint);
+    }
+}
+
+void feedPathService(StateHash& h, const PathService& service) noexcept {
+    const auto& pending = service.pending();
+    const auto& activeRequests = service.activeRequests();
+    const auto& activeSearches = service.activeSearches();
+    feed(h, pending.size());
+    for (std::size_t army = 0; army < pending.size(); ++army) {
+        feed(h, pending[army].size());
+        for (const PathRequest& request : pending[army]) {
+            feedPathRequest(h, request);
+        }
+        feed(h, activeRequests[army].has_value());
+        if (activeRequests[army]) {
+            feedPathRequest(h, *activeRequests[army]);
+        }
+        feed(h, activeSearches[army].has_value());
+        if (activeSearches[army]) {
+            feedPathSearch(h, *activeSearches[army]);
+        }
+    }
+}
+
 } // namespace
 
 StateHash hashMatch(const UnitStore& store, const Match& match) {
@@ -313,6 +376,13 @@ StateHash hashMatch(const UnitStore& store, const Match& match) {
         feed(h, static_cast<int>(army.faction));
         feed(h, army.alliance);
         feed(h, army.defeated);
+    }
+
+    if (match.pathService != nullptr) {
+        // Preserve the pre-service byte stream for compatibility seams that do not own one.
+        // A present service is authoritative execution state and therefore marks and extends it.
+        feed(h, true);
+        feedPathService(h, *match.pathService);
     }
 
     feed(h, match.economies.size());

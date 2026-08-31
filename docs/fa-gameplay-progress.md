@@ -9,7 +9,7 @@ Detailed retail evidence remains canonical in
 [`fa-exe-analysis-plan.md`](fa-exe-analysis-plan.md). This dashboard summarizes that ledger; it
 does not replace its claims, addresses, counterevidence, or confirmation gate.
 
-**Snapshot:** 2026-08-31, Recoil Metal `b4c062c` plus a dirty worktree, retail artifact
+**Snapshot:** 2026-08-31, Recoil Metal `01a2c76` plus a dirty worktree, retail artifact
 `ART-E001` (`c6783580c0b7a408ec2ad3bfe5eb1fdbef31a60d92c1007ff9b90c33bb960aa0`).
 
 ## Headline
@@ -67,7 +67,7 @@ excluded from the headline.
 | [`FA-MATCH`](#fa-match---armies-setup-and-victory-rules) | Armies, setup, victory rules | `WP-10`-`11` | 45% | 20% | 85% | Implement retail defeat polling and stable-victory delays. |
 | [`FA-CMD`](#fa-cmd---commands-controls-and-factories) | Commands, controls, factories | `WP-12`-`14` | 45% | 35% | 70% | Add the app-level live-versus-replay acceptance test for `WP-12` slice 4. |
 | [`FA-ECON`](#fa-econ---economy-construction-and-engineering) | Economy, construction, engineering | `WP-15`-`19` | 70% | 55% | 85% | Read capture plus ownership transfer, then specify the implementation. |
-| [`FA-LAND`](#fa-land---land-navigation-formations-and-spatial-world) | Land navigation, formations, spatial world | `WP-20`, `21`, `26` | 50% | 20% | 95% | Add the first resumable per-army path-service slice. |
+| [`FA-LAND`](#fa-land---land-navigation-formations-and-spatial-world) | Land navigation, formations, spatial world | `WP-20`, `21`, `26` | 55% | 20% | 95% | Supply a persistent `PathService` to live and replay match construction, with one app-level FIFO-latency acceptance test. |
 | [`FA-AIR`](#fa-air---aircraft-flight-combat-and-staging) | Aircraft flight, combat, staging | `WP-22` | 30% | 10% | 95% | Implement the deterministic winged-aircraft mover foundation. |
 | [`FA-NAVY`](#fa-navy---surface-and-submerged-warfare) | Surface and submerged warfare | `WP-23`-`24` | 35% | 10% | 75% | Implement one complete `SurfacingSub` dive/surface slice. |
 | [`FA-TRANSPORT`](#fa-transport---attachments-cargo-and-ferries) | Attachments, cargo, ferries | `WP-25` | 5% | 0% | 95% | Implement the generic entity attachment graph foundation. |
@@ -189,10 +189,10 @@ claims, and FA-ECON; create the smallest implementation task justified by the re
 step-budgeted path latency or command-owned formations.
 
 ```text
-/goal Advance FA-LAND with the first resumable path-service slice: per-army FIFO requests, one
-in-flight search per army, and a deterministic integer step budget while retaining the current
-route solver where possible. Write ordering and multi-beat latency tests first, run make test and
-make verify, document remaining HPA*/formation gaps in WP-20/21, and refresh FA-LAND.
+/goal Advance FA-LAND by supplying the completed per-army FIFO `PathService` to live and replay
+match construction, then adding one app-level latency acceptance test. Keep the existing route
+solver and fixed integer step budget; leave HPA*, replan/backoff, reservations, and formations
+explicitly deferred. Run make test and make verify, then refresh FA-LAND.
 ```
 
 ### FA-AIR - Aircraft Flight, Combat, And Staging

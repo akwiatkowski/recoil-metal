@@ -12,6 +12,7 @@
 #include <fstream>
 #include <iomanip>
 #include <limits>
+#include <memory>
 #include <sstream>
 
 namespace rm::sim {
@@ -353,7 +354,8 @@ void teardownMovement(MoveState& motion) {
     std::shared_ptr<SharedCommand>& shared, UnitStore& store,
     const UnitCatalog& catalog, std::span<const Player> players, std::span<const Army> armies,
     const Terrain& terrain, const PassabilityGrid& grid, TickRate rate,
-    std::vector<Construction>* building, EventQueue* events, const FeatureStore* features) {
+    std::vector<Construction>* building, EventQueue* events, const FeatureStore* features,
+    PathService* pathService) {
     // A stale handle first, before anything else looks at the slot. A player may click a unit
     // that died on the tick their order was issued, and a replay of an old log may name a unit
     // that no longer exists — in both cases the generation has moved on, so this must not
@@ -488,6 +490,30 @@ void teardownMovement(MoveState& motion) {
         return true;
     }
 
+    // A plain ground move is accepted as intent, then its owning army's FIFO service performs
+    // the existing A* over later beats. Keeping the entry active prevents ordinary dispatch from
+    // treating an unpublished path as an arrived move.
+    if (command.kind == CommandKind::Move && pathService != nullptr
+        && !store.motion()[command.unit.index].airborne) {
+        const std::shared_ptr<const SharedCommand> payload =
+            ensureSharedCommand(command, source, id, count, store, shared);
+        MoveState& motion = store.motion()[command.unit.index];
+        orders.clear();
+        teardownMovement(motion);
+        orders.append(QueuedCommand{command.unit, payload});
+        orders.markCurrentActive();
+        const Transform& at = store.transforms()[command.unit.index];
+        pathService->enqueue(PathRequest{.unit = command.unit,
+                                         .command = id,
+                                         .army = motion.armyIndex,
+                                         .fromX = at.x,
+                                         .fromZ = at.z,
+                                         .targetX = command.targetX,
+                                         .targetZ = command.targetZ,
+                                         .grid = std::make_shared<PassabilityGrid>(grid)});
+        return true;
+    }
+
     // Stage the replacement before clearing so a refused order changes nothing. Once accepted,
     // restore the outgoing task for the clear notifications, apply C-212's replacement-kind
     // teardown, insert the replacement, then publish the staged motion from its successful
@@ -536,9 +562,9 @@ ApplyCommandResult applyCommand(const CommandIssue& issue, UnitStore& store,
                                 const UnitCatalog& catalog,
                                 std::span<const Player> players,
                                 std::span<const Army> armies, const Terrain& terrain,
-                                const CommandGridForUnit& gridForUnit, TickRate rate,
-                                std::vector<Construction>* building, EventQueue* events,
-                                const FeatureStore* features) {
+                                 const CommandGridForUnit& gridForUnit, TickRate rate,
+                                 std::vector<Construction>* building, EventQueue* events,
+                                 const FeatureStore* features, PathService* pathService) {
     ApplyCommandResult result;
     if (issue.source == kInvalidCommandSource || issue.id == kInvalidCommandId
         || issue.player != static_cast<PlayerIndex>(issue.source)
@@ -578,8 +604,8 @@ ApplyCommandResult applyCommand(const CommandIssue& issue, UnitStore& store,
             .buildType = issue.buildType,
         };
         if (applyCommandMember(member, issue.source, issue.id, issue.count, shared, store,
-                               catalog, players, armies,
-                               terrain, *grid, rate, building, events, features)) {
+                               catalog, players, armies, terrain, *grid, rate, building, events,
+                               features, pathService)) {
             result.accepted.push_back(unit);
         }
     }
@@ -591,9 +617,9 @@ ApplyCommandResult applyCommand(const CommandIssue& issue, UnitStore& store,
 
 bool applyCommand(const Command& command, UnitStore& store, const UnitCatalog& catalog,
                   std::span<const Player> players, std::span<const Army> armies,
-                  const Terrain& terrain, const PassabilityGrid& grid, TickRate rate,
-                  std::vector<Construction>* building, EventQueue* events,
-                  const FeatureStore* features) {
+                   const Terrain& terrain, const PassabilityGrid& grid, TickRate rate,
+                   std::vector<Construction>* building, EventQueue* events,
+                   const FeatureStore* features, PathService* pathService) {
     if (command.player >= static_cast<PlayerIndex>(kInvalidCommandSource)) {
         return false;
     }
@@ -617,14 +643,28 @@ bool applyCommand(const Command& command, UnitStore& store, const UnitCatalog& c
     };
     const ApplyCommandResult result = applyCommand(
         issue, store, catalog, players, armies, terrain,
-        [&grid](UnitId) { return &grid; }, rate, building, events, features);
+        [&grid](UnitId) { return &grid; }, rate, building, events, features, pathService);
     return result.acceptedUnit(command.unit);
 }
 
+bool publishPathResult(const PathResult& result, UnitStore& store) {
+    if (result.path.empty() || !store.alive(result.unit)) {
+        return false;
+    }
+    CommandQueue& orders = store.orders()[result.unit.index];
+    const QueuedCommand* current = orders.active();
+    if (current == nullptr || current->payload().id != result.command) {
+        return false;
+    }
+    orderAlongPath(store.motion()[result.unit.index], result.path);
+    return true;
+}
+
 std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Terrain& terrain,
-                          std::span<const PassabilityGrid* const> gridForType, TickRate rate,
-                          std::vector<Construction>* building, EventQueue* events,
-                          const FeatureStore* features, std::vector<Construction>* finished) {
+                           std::span<const PassabilityGrid* const> gridForType, TickRate rate,
+                           std::vector<Construction>* building, EventQueue* events,
+                           const FeatureStore* features, std::vector<Construction>* finished,
+                           const PathService* pathService) {
     std::size_t started = 0;
 
     const std::span<CommandQueue> orders = store.orders();
@@ -738,6 +778,13 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
         const QueuedCommand* current = orders[slot].active();
         if (current->kind() == CommandKind::Build) {
             serviceBuilds();
+            continue;
+        }
+
+        // A service-owned plain move has an active command entry but no published route yet.
+        // It must remain the head until its army's resumable A* completes or refuses it.
+        if (current->kind() == CommandKind::Move && pathService != nullptr
+            && pathService->contains(store.idAt(slot), current->payload().id)) {
             continue;
         }
 

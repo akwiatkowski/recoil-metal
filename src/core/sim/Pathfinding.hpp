@@ -4,7 +4,9 @@
 #include "core/sim/Fx.hpp"
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <vector>
 
@@ -70,6 +72,51 @@ struct PassabilityGrid {
     /// path through cell corners would run along the boundary of whatever is
     /// next door, which is exactly where the impassable things are.
     [[nodiscard]] Fx worldAtCellCentre(int cell) const noexcept;
+};
+
+/// One open A* frontier entry. The cell index resolves equal-cost ties.
+struct PathSearchNode {
+    Fx f{};
+    int cell = 0;
+};
+
+/// Resumable form of `findPath`, retaining its geometry and tie-breaking exactly.
+class PathSearch {
+public:
+    PathSearch(std::shared_ptr<const PassabilityGrid> grid, Fx fromX, Fx fromZ, Fx toX, Fx toZ);
+
+    /// Expands no more than `budget` nodes. A zero budget is deliberately a no-op.
+    void step(std::size_t budget);
+
+    [[nodiscard]] bool finished() const noexcept { return finished_; }
+    [[nodiscard]] const std::vector<std::array<Fx, 2>>& path() const noexcept { return path_; }
+    [[nodiscard]] const std::vector<Fx>& costs() const noexcept { return costs_; }
+    [[nodiscard]] const std::vector<int>& parents() const noexcept { return parents_; }
+    [[nodiscard]] const std::vector<std::uint8_t>& closed() const noexcept { return closed_; }
+    [[nodiscard]] const std::vector<PathSearchNode>& open() const noexcept { return open_; }
+    [[nodiscard]] int startX() const noexcept { return startX_; }
+    [[nodiscard]] int startZ() const noexcept { return startZ_; }
+    [[nodiscard]] int goalX() const noexcept { return goalX_; }
+    [[nodiscard]] int goalZ() const noexcept { return goalZ_; }
+    [[nodiscard]] Fx targetX() const noexcept { return targetX_; }
+    [[nodiscard]] Fx targetZ() const noexcept { return targetZ_; }
+
+private:
+    void finish(bool reached);
+
+    std::shared_ptr<const PassabilityGrid> grid_;
+    Fx targetX_{};
+    Fx targetZ_{};
+    int startX_ = 0;
+    int startZ_ = 0;
+    int goalX_ = 0;
+    int goalZ_ = 0;
+    std::vector<Fx> costs_;
+    std::vector<int> parents_;
+    std::vector<std::uint8_t> closed_;
+    std::vector<PathSearchNode> open_;
+    std::vector<std::array<Fx, 2>> path_;
+    bool finished_ = false;
 };
 
 /// Whether a structure of `radiusElmos` may be founded at a world point.

@@ -99,6 +99,10 @@ struct Match {
     /// advanced at all, which is exactly right for a `--units` crowd that cannot have any.
     std::span<const PassabilityGrid* const> passability;
 
+    /// Optional match-owned path service. Null preserves the synchronous compatibility seam
+    /// for callers that do not model a full match yet.
+    PathService* pathService = nullptr;
+
     /// How many commanders each army STARTED with, indexed by army.
     ///
     /// The win condition needs it to tell "lost its commander" from "never had one": a

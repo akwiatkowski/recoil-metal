@@ -5,6 +5,7 @@
 #include <limits>
 #include <numbers>
 #include <queue>
+#include <utility>
 
 namespace {
 
@@ -231,6 +232,136 @@ PassabilityGrid buildSurfaceWaterPassability(const HeightField& field, float wat
         }
     }
     return grid;
+}
+
+PathSearch::PathSearch(std::shared_ptr<const PassabilityGrid> grid, Fx fromX, Fx fromZ, Fx toX,
+                       Fx toZ)
+    : grid_(std::move(grid)) {
+    if (grid_ == nullptr) {
+        finished_ = true;
+        return;
+    }
+    const PassabilityGrid& gridRef = *grid_;
+    if (gridRef.cellsX <= 0 || gridRef.cellsZ <= 0) {
+        finished_ = true;
+        return;
+    }
+
+    const auto cellAt = [&gridRef](Fx position, int cells) {
+        const int cell = (position / gridRef.elmosPerCell).floorToInt();
+        return std::clamp(cell, 0, cells - 1);
+    };
+    targetX_ = std::clamp(toX, Fx{}, Fx::fromInt(gridRef.cellsX) * gridRef.elmosPerCell);
+    targetZ_ = std::clamp(toZ, Fx{}, Fx::fromInt(gridRef.cellsZ) * gridRef.elmosPerCell);
+    startX_ = cellAt(fromX, gridRef.cellsX);
+    startZ_ = cellAt(fromZ, gridRef.cellsZ);
+    goalX_ = cellAt(targetX_, gridRef.cellsX);
+    goalZ_ = cellAt(targetZ_, gridRef.cellsZ);
+    if (!gridRef.passableAt(startX_, startZ_) || !gridRef.passableAt(goalX_, goalZ_)) {
+        finished_ = true;
+        return;
+    }
+
+    const std::size_t cells = static_cast<std::size_t>(gridRef.cellsX)
+                             * static_cast<std::size_t>(gridRef.cellsZ);
+    costs_.assign(cells, Fx::fromRaw(INT32_MAX));
+    parents_.assign(cells, -1);
+    closed_.assign(cells, 0);
+    const auto index = [&gridRef](int x, int z) {
+        return static_cast<std::size_t>(z) * static_cast<std::size_t>(gridRef.cellsX)
+             + static_cast<std::size_t>(x);
+    };
+    costs_[index(startX_, startZ_)] = Fx{};
+    open_.push_back(PathSearchNode{.f = octile(goalX_ - startX_, goalZ_ - startZ_),
+                                   .cell = static_cast<int>(index(startX_, startZ_))});
+}
+
+void PathSearch::finish(bool reached) {
+    finished_ = true;
+    if (!reached || grid_ == nullptr) {
+        return;
+    }
+    const auto index = [this](int x, int z) {
+        return static_cast<std::size_t>(z) * static_cast<std::size_t>(grid_->cellsX)
+             + static_cast<std::size_t>(x);
+    };
+    for (int cell = static_cast<int>(index(goalX_, goalZ_)); cell >= 0;
+         cell = parents_[static_cast<std::size_t>(cell)]) {
+        const int x = cell % grid_->cellsX;
+        const int z = cell / grid_->cellsX;
+        if (x == startX_ && z == startZ_) {
+            break;
+        }
+        path_.push_back({{grid_->worldAtCellCentre(x), grid_->worldAtCellCentre(z)}});
+    }
+    std::reverse(path_.begin(), path_.end());
+    if (path_.empty() || path_.back()[0] != targetX_ || path_.back()[1] != targetZ_) {
+        path_.push_back({{targetX_, targetZ_}});
+    }
+}
+
+void PathSearch::step(std::size_t budget) {
+    if (finished_ || grid_ == nullptr) {
+        return;
+    }
+    const auto before = [](const PathSearchNode& a, const PathSearchNode& b) {
+        return a.f != b.f ? a.f > b.f : a.cell > b.cell;
+    };
+    const auto index = [this](int x, int z) {
+        return static_cast<std::size_t>(z) * static_cast<std::size_t>(grid_->cellsX)
+             + static_cast<std::size_t>(x);
+    };
+    static constexpr std::array<std::array<int, 2>, 8> kNeighbours{{
+        {{1, 0}}, {{-1, 0}}, {{0, 1}}, {{0, -1}},
+        {{1, 1}}, {{1, -1}}, {{-1, 1}}, {{-1, -1}},
+    }};
+
+    std::size_t expanded = 0;
+    while (!open_.empty() && expanded < budget) {
+        std::pop_heap(open_.begin(), open_.end(), before);
+        const PathSearchNode node = open_.back();
+        open_.pop_back();
+        const std::size_t current = static_cast<std::size_t>(node.cell);
+        if (closed_[current] != 0) {
+            continue;
+        }
+        closed_[current] = 1;
+        ++expanded;
+        const int x = node.cell % grid_->cellsX;
+        const int z = node.cell / grid_->cellsX;
+        if (x == goalX_ && z == goalZ_) {
+            finish(true);
+            return;
+        }
+        for (const auto& step : kNeighbours) {
+            const int nx = x + step[0];
+            const int nz = z + step[1];
+            if (!grid_->passableAt(nx, nz)) {
+                continue;
+            }
+            const bool diagonal = step[0] != 0 && step[1] != 0;
+            if (diagonal && (!grid_->passableAt(x + step[0], z)
+                             || !grid_->passableAt(x, z + step[1]))) {
+                continue;
+            }
+            const std::size_t next = index(nx, nz);
+            if (closed_[next] != 0) {
+                continue;
+            }
+            const Fx candidate = costs_[current] + (diagonal ? kDiagonalCost : kFxOne);
+            if (candidate >= costs_[next]) {
+                continue;
+            }
+            costs_[next] = candidate;
+            parents_[next] = node.cell;
+            open_.push_back(PathSearchNode{.f = candidate + octile(goalX_ - nx, goalZ_ - nz),
+                                           .cell = static_cast<int>(next)});
+            std::push_heap(open_.begin(), open_.end(), before);
+        }
+    }
+    if (open_.empty()) {
+        finish(false);
+    }
 }
 
 std::vector<std::array<Fx, 2>> findPath(const PassabilityGrid& grid, Fx fromX, Fx fromZ,

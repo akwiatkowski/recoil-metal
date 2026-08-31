@@ -51,6 +51,7 @@ struct Fixture {
     rm::test::Roster roster;
     std::vector<rm::sim::Army> armies = rm::sim::freeForAll(2);
     std::vector<Player> players = rm::sim::onePlayerPerArmy(2, /*humanArmy=*/0);
+    rm::sim::PathService paths;
 
     UnitId mine;
     UnitId theirs;
@@ -68,13 +69,15 @@ struct Fixture {
 
     [[nodiscard]] bool apply(const Command& command) {
         return rm::sim::applyCommand(command, roster.store, roster.catalog, players, armies,
-                                     terrain, grid, roster.rate, &building);
+                                     terrain, grid, roster.rate, &building, nullptr, nullptr,
+                                     &paths);
     }
 
     [[nodiscard]] bool apply(const CommandIssue& issue) {
         return static_cast<bool>(rm::sim::applyCommand(
             issue, roster.store, roster.catalog, players, armies, terrain,
-            [this](UnitId) { return &grid; }, roster.rate, &building));
+            [this](UnitId) { return &grid; }, roster.rate, &building, nullptr, nullptr,
+            &paths));
     }
 
     /// Runs the match forward, applying whatever the log says on each tick — which is the
@@ -96,10 +99,11 @@ struct Fixture {
                                                                     &grid);
             rm::sim::Match match{.armies = armies,
                                  .economies = economies,
-                                 .projectiles = &shots,
-                                 .building = &building,
-                                 .passability = grids,
-                                 .commandersEver = commandersEver};
+                                  .projectiles = &shots,
+                                  .building = &building,
+                                  .passability = grids,
+                                  .pathService = &paths,
+                                  .commandersEver = commandersEver};
             (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain);
             for (const CommandIssue& issue : log.at(tick, CommandPhase::PostSpawn)) {
                 (void)apply(issue);
@@ -143,6 +147,8 @@ TEST_CASE("a move command routes a unit, and a stop cancels it") {
     Fixture fix;
 
     CHECK(fix.apply(moveOrder(0, 0, fix.mine, 500.0f, 200.0f)));
+    CHECK(fix.roster.motion(fix.mine).path.empty());
+    fix.run(CommandLog{}, 1);
     CHECK(fix.roster.motion(fix.mine).moving);
     CHECK_FALSE(fix.roster.motion(fix.mine).path.empty());
 
@@ -160,10 +166,32 @@ TEST_CASE("a move command routes a unit, and a stop cancels it") {
     CHECK(fix.roster.motion(fix.mine).path.empty());
 }
 
+TEST_CASE("a move command is accepted before its path is serviced") {
+    Fixture fix;
+    const UnitId second = fix.roster.add(fix.roster.store.typeAt(fix.mine.index), 200.0f, 300.0f,
+                                         0, 500.0f);
+
+    REQUIRE(fix.apply(moveOrder(0, 0, fix.mine, 500.0f, 200.0f)));
+    REQUIRE(fix.paths.pending().size() == 1);
+    REQUIRE(fix.paths.pending()[0].size() == 1);
+    REQUIRE(fix.apply(moveOrder(0, 0, second, 500.0f, 300.0f)));
+    REQUIRE(fix.paths.pending()[0].size() == 2);
+    CHECK(fix.roster.motion(fix.mine).path.empty());
+    CHECK(fix.roster.motion(second).path.empty());
+
+    fix.run(CommandLog{}, 1);
+    CHECK_FALSE(fix.roster.motion(fix.mine).path.empty());
+    CHECK(fix.roster.motion(second).path.empty());
+
+    fix.run(CommandLog{}, 1);
+    CHECK_FALSE(fix.roster.motion(second).path.empty());
+}
+
 TEST_CASE("a short move in one path cell reaches the clicked point") {
     Fixture fix;
 
     REQUIRE(fix.apply(moveOrder(0, 0, fix.mine, 220.0f, 220.0f)));
+    fix.run(CommandLog{}, 1);
     const rm::sim::MoveState& motion = fix.roster.motion(fix.mine);
     REQUIRE(motion.path.size() == 1);
     CHECK(motion.path[0][0] == rm::test::fx(220.0f));
@@ -183,6 +211,7 @@ TEST_CASE("a player cannot order another army's units") {
 
     // And its own player can.
     CHECK(fix.apply(moveOrder(0, 1, fix.theirs, 100.0f, 100.0f)));
+    fix.run(CommandLog{}, 1);
     CHECK(fix.roster.motion(fix.theirs).moving);
 }
 
@@ -212,10 +241,11 @@ TEST_CASE("a stale handle is refused, not resolved to whoever inherited the slot
 
     // The newcomer takes its own orders perfectly well.
     CHECK(fix.apply(moveOrder(0, 0, newcomer, 500.0f, 200.0f)));
+    fix.run(CommandLog{}, 1);
     CHECK(fix.roster.motion(newcomer).moving);
 }
 
-TEST_CASE("an unreachable destination is a refused order, not a straight line") {
+TEST_CASE("an unreachable destination is dropped after path service, not a straight line") {
     // Driving into the water is a worse answer than not moving.
     rm::HeightField sunken = flatField();
     sunken.baseHeight = -500.0f;  // the whole map is under water
@@ -223,7 +253,8 @@ TEST_CASE("an unreachable destination is a refused order, not a straight line") 
     Fixture fix;
     fix.grid = rm::sim::buildPassability(sunken, 0.0f);
 
-    CHECK_FALSE(fix.apply(moveOrder(0, 0, fix.mine, 500.0f, 200.0f)));
+    CHECK(fix.apply(moveOrder(0, 0, fix.mine, 500.0f, 200.0f)));
+    fix.run(CommandLog{}, 1);
     CHECK_FALSE(fix.roster.motion(fix.mine).moving);
 }
 
@@ -774,6 +805,7 @@ TEST_CASE("a build order names a place on the map, and the ground decides the he
 
     const UnitId engineer = fix.roster.add(engineerType, 300.0f, 300.0f, 0, 500.0f);
     REQUIRE(fix.apply(moveOrder(0, 0, engineer, 600.0f, 300.0f)));
+    fix.run(CommandLog{}, 1);
     REQUIRE(fix.roster.motion(engineer).moving);
 
     REQUIRE(fix.apply(Command{.tick = 0,

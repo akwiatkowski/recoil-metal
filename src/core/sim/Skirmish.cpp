@@ -271,9 +271,14 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
     //    retires its own order, both in command dispatch. The bill for that work is still
     //    settled by the economy pass at the foot of the tick, which is also where retail
     //    writes the ratio this stage will multiply by next beat.
+    if (match.pathService != nullptr) {
+        for (const PathResult& result : match.pathService->service()) {
+            (void)publishPathResult(result, store);
+        }
+    }
     report.ordersStarted = advanceOrders(store, catalog, terrain, match.passability, rate,
                                          match.building, match.events, match.features,
-                                         &report.finished);
+                                         &report.finished, match.pathService);
 
     // 1. MOVEMENT, then collisions. Everything downstream reads where a unit has got to
     //    this tick rather than where it started it.

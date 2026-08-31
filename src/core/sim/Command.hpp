@@ -7,6 +7,7 @@
 #include "core/sim/Economy.hpp"
 #include "core/sim/Events.hpp"
 #include "core/sim/Pathfinding.hpp"
+#include "core/sim/PathService.hpp"
 #include "core/sim/Terrain.hpp"
 #include "core/sim/TickRate.hpp"
 #include "core/sim/UnitCatalog.hpp"
@@ -275,21 +276,23 @@ using CommandGridForUnit = std::function<const PassabilityGrid*(UnitId)>;
 /// a matching one, except that repeatable mobile factory products are appended.
 ///
 /// THE TWO ARE VALIDATED DIFFERENTLY, and the asymmetry is deliberate rather than an oversight.
-/// A plain order is routed here and now, so an unroutable one is refused and *nothing changes*
-/// — the queue is not even cleared, which is what keeps "a refused order is not part of the
-/// match" true. A queued order cannot be validated at all: the unit will be somewhere else by
-/// the time it starts, so a route computed now would be a route from the wrong place. It is
-/// checked when it is reached, and an order that cannot be started then is dropped and the next
-/// one tried (`advanceOrders`). Recoil validates queued orders no earlier either.
+/// With a `PathService`, a plain ground `Move` is accepted as path intent and routed on a later
+/// beat by its army's FIFO service; an unreachable result is then dropped. The null-service seam
+/// retains synchronous routing for callers that do not own a complete match yet. A queued order
+/// cannot be validated at all: the unit will be somewhere else by the time it starts, so a route
+/// computed now would be a route from the wrong place. It is checked when it is reached, and an
+/// order that cannot be started then is dropped and the next one tried (`advanceOrders`). Recoil
+/// validates queued orders no earlier either.
 /// `features` is where a `Reclaim` resolves its target; null refuses the kind outright,
 /// which is what a scene with nothing on the ground should do.
 [[nodiscard]] bool applyCommand(const Command& command, UnitStore& store,
                                 const UnitCatalog& catalog, std::span<const Player> players,
                                 std::span<const Army> armies, const Terrain& terrain,
                                  const PassabilityGrid& grid, TickRate rate,
-                                 std::vector<Construction>* building = nullptr,
-                                  EventQueue* events = nullptr,
-                                  const FeatureStore* features = nullptr);
+                                  std::vector<Construction>* building = nullptr,
+                                   EventQueue* events = nullptr,
+                                   const FeatureStore* features = nullptr,
+                                   PathService* pathService = nullptr);
 
 /// Applies one semantic issue to a canonicalized unit set.
 ///
@@ -301,7 +304,14 @@ using CommandGridForUnit = std::function<const PassabilityGrid*(UnitId)>;
     std::span<const Player> players, std::span<const Army> armies, const Terrain& terrain,
     const CommandGridForUnit& gridForUnit, TickRate rate,
     std::vector<Construction>* building = nullptr, EventQueue* events = nullptr,
-    const FeatureStore* features = nullptr);
+    const FeatureStore* features = nullptr, PathService* pathService = nullptr);
+
+/// Publishes a finished asynchronous plain-move route through the command authority.
+///
+/// A result is ignored when its unit died or a later order replaced its command identity while
+/// the search was in flight. An empty result remains unpublished so normal dispatch drops the
+/// now-unroutable head.
+[[nodiscard]] bool publishPathResult(const PathResult& result, UnitStore& store);
 
 /// Starts the next order for every unit that has finished its current one.
 ///
@@ -332,11 +342,12 @@ using CommandGridForUnit = std::function<const PassabilityGrid*(UnitId)>;
 /// `finished` collects the work that completed this tick, in builder-slot order, so the caller
 /// can put the new units on the map. Null when a caller does not care.
 std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Terrain& terrain,
-                          std::span<const PassabilityGrid* const> gridForType, TickRate rate,
-                          std::vector<Construction>* building = nullptr,
-                          EventQueue* events = nullptr,
-                           const FeatureStore* features = nullptr,
-                           std::vector<Construction>* finished = nullptr);
+                           std::span<const PassabilityGrid* const> gridForType, TickRate rate,
+                           std::vector<Construction>* building = nullptr,
+                           EventQueue* events = nullptr,
+                            const FeatureStore* features = nullptr,
+                            std::vector<Construction>* finished = nullptr,
+                            const PathService* pathService = nullptr);
 
 /// Updates attack-move and patrol combat after movement and intel. These orders retain their
 /// waypoint while `target` temporarily names the visible hostile that interrupted the route.
