@@ -19,7 +19,7 @@ gets reimplemented.**
 - **Deterministic.** The sim is fixed point, proved identical at every
   optimisation level by a test. `--hash-log` writes a per-tick state hash and
   `--check-hash-log` names the tick a divergence began at.
-- **Tested.** **1169 tests across 103 files, all green.** Anything that does not
+- **Tested.** **1204 tests, all green.** Anything that does not
   touch the GPU gets a failing test first, and parsers are tested against the
   real retail corpus — all 2034 BAR `.s3o` models and 2552 `.dds` textures.
 - **It plays.** Economy, construction, weapons, shields, aircraft, fog of war,
@@ -67,28 +67,11 @@ platform and GPU code already stays inside `src/platform` and `src/render`.
 ### Forged Alliance gameplay gaps
 
 This is a playable vertical slice, not a claim of Forged Alliance feature
-parity. The generic implementations cover ordinary economy, construction,
-combat, shields, aircraft, surface ships, intel, reclaim and tech upgrades, but
-large parts of the retail roster still lack the behaviour that gives them their
-role.
-
-| State | Systems |
-|---|---|
-| **Partial** | large-army pathing; aircraft flight, bombing, fuel and staging; surface naval combat; experimentals; factory controls; repair and guard; wreck semantics; FAF AI; blueprint-driven animation, effects and audio |
-| **Absent** | formations; submarines and submerged combat; transports and cargo; tactical and strategic missiles, silo ammunition and interception; personal/transport/enhancement shield variants; ACU/SCU enhancements; capture and gifting; unit caps; terrain deformation; alternate victory conditions; full save/resume |
-
-Veterancy and hull regeneration moved out of **Absent** in August 2026. Both follow retail
-Forged Alliance exactly, including its per-blueprint kill thresholds and the detail that a
-veteran hits no harder — only survives longer. The evidence behind every constant is recorded
-as claims `C-024`, `C-028`–`C-031` in [`docs/fa-exe-analysis-plan.md`](docs/fa-exe-analysis-plan.md).
-
-The executable audit reduced that list to six shared foundations rather than one
-special case per unit: live construction objects with ordered economy requests;
-shared command objects and explicit command/script/motion stages; complete world
-and target layers; a resumable path service with command-owned formations;
-persistent unit capabilities and enhancements; and canonical full-match state
-for hashing, save/resume and scripting. The detailed evidence and dependency
-order live in [`docs/fa-exe-analysis-plan.md`](docs/fa-exe-analysis-plan.md).
+parity. The canonical [`Forged Alliance gameplay progress dashboard`](docs/fa-gameplay-progress.md)
+shows every subsystem's estimated implementation, retail-validation, and retail-analysis
+completion. Each stable subsystem ID also carries its exact next task and a copy-ready `/goal`
+prompt. The detailed evidence behind those estimates remains in
+[`docs/fa-exe-analysis-plan.md`](docs/fa-exe-analysis-plan.md).
 
 ### The question it exists to answer
 
@@ -799,7 +782,7 @@ recoil-metal/
 │   ├── render/         Metal renderer (Objective-C++ where bridging)
 │   ├── platform/       AppKit window + display link (pImpl hides ObjC)
 │   └── main.mm         thin entry point
-├── tests/              Catch2 unit tests, mirrors src/core — 103 files, 1169 tests
+├── tests/              Catch2 unit tests, mirrors src/core — 1204 tests
 ├── third_party/        metal-cpp and miniz (fetched, gitignored)
 ├── vendor/ai/          foreign AI corpora at pinned commits (fetched, gitignored,
 │                       NEVER modified — `make ai`, ADR-039)

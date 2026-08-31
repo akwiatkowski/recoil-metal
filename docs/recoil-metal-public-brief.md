@@ -20,23 +20,28 @@ hashes. This is not a feature-parity claim.
 The current fidelity phase analyzes Olek's owned retail executable, DLLs, Lua, blueprints and
 archives before implementing more systems. The executable campaign has recovered the complete
 script-visible native API, class and vtable maps, hundreds of object fields, the blueprint schema,
-serializer layouts and decisive behavior for twenty-seven work packages. Findings become concise
-behavioral evidence, failing tests and independent clean-room code. Decompiled source or
+serializer layouts, and `Analyzed` evidence for twenty-seven work packages, with partial scopes
+labelled explicitly in the ledger. Findings become concise behavioral evidence, failing tests and
+independent clean-room code. Decompiled source or
 proprietary assets are not copied into or distributed with the project.
 
 ## Current status snapshot
 
+The canonical live view is the
+[`Forged Alliance gameplay progress dashboard`](fa-gameplay-progress.md), which separates
+implementation, retail validation, and retail analysis and provides one next task per subsystem.
+
 | Readiness | Count |
 |---|---:|
 | **Not ready** | 23 |
-| **Ready but not confirmed** | 22 |
-| **Confirmed with EXE analysis** | 0 |
+| **Ready but not confirmed** | 21 |
+| **Confirmed with EXE analysis** | 1 |
 
 These are the 45 work packages in `fa-exe-analysis-plan.md`. Readiness measures the current Recoil
-Metal implementation; EXE knowledge is tracked separately. Twenty-seven packages now have their
-decisive native path analyzed. None is labelled Confirmed because that state additionally requires
-the corresponding Recoil Metal implementation and focused tests to match the recovered ordering,
-rounding, tie breaks and failure behavior.
+Metal implementation; EXE knowledge is tracked separately. Twenty-seven packages carry the
+ledger's `Analyzed` state, including explicitly partial scopes such as repair/guard in `WP-17`.
+`WP-15` economy is the first through the complete confirmation gate; the other packages still fail
+one or more implementation, evidence, or comparison requirements.
 
 ## Community motivation
 
@@ -67,15 +72,15 @@ Games, Square Enix, or THQ Nordic.
 - A vertical-slice skirmish progresses from commanders and economy through construction, combat,
   commander elimination, and a victory banner.
 - Human and AI commands use one authoritative path and can be recorded and replayed.
-- On 2026-08-30, the repository had 1,169 registered tests. The full run passed, with two expected
-  retail-content-dependent skips.
+- On 2026-08-31, the current worktree had 1,204 registered tests. The full run passed, with two
+  expected retail-content-dependent skips.
 - FAF's Lua builder data and conditions run through a partial adapter. The full manager stack and
   full native API semantics are not implemented.
 - The executable campaign is static-analysis-first, clean-room, artifact-hashed and
   hypothesis-driven. The retail executable is the behavior authority; the older engine DLL is used
   only as a naming dictionary because its offsets and behavior differ.
-- No subsystem is currently labelled Confirmed with EXE analysis because the implementation side
-  of the confirmation gate has not yet matched every recovered semantic detail.
+- `WP-15` economy is the first subsystem labelled Confirmed with EXE analysis; no other work
+  package has yet passed every implementation and evidence requirement.
 
 ## Claims the artifact must not make
 
@@ -154,8 +159,9 @@ Create a standalone public-facing artifact explaining Recoil Metal and its next 
 audience is technically curious game-engine developers, Supreme Commander/FAF community members,
 and potential collaborators who have not seen the repository.
 
-Use `docs/recoil-metal-public-brief.md` as the primary source and
-`docs/fa-exe-analysis-plan.md` as the canonical status source. You may use `README.md`,
+Use `docs/recoil-metal-public-brief.md` as the primary source,
+`docs/fa-gameplay-progress.md` as the canonical progress view, and
+`docs/fa-exe-analysis-plan.md` as the detailed evidence source. You may use `README.md`,
 `docs/milestones.md`, `PLAN.md`, and `ADR_DECISIONS.md` for supporting detail. Do not invent facts.
 
 Explain:
@@ -172,7 +178,7 @@ Explain:
    Lua/blueprints/docs, distinguish native mechanisms in Ghidra, preserve evidence across sessions,
    then derive tests and independent code.
 6. The three labels exactly: Not ready; Ready but not confirmed; Confirmed with EXE analysis. State
-   that no package is currently EXE-confirmed.
+   that `WP-15` economy is the first and currently only EXE-confirmed package.
 7. Why this is a long, multi-session research effort and how its ledgers make it resumable.
 8. Clean-room and copyright boundaries. No proprietary assets, executable code, or decompiler
    listings are redistributed.

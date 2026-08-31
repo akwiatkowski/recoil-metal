@@ -8,6 +8,10 @@ means here, what it needs, and what it deliberately does not.
 Milestones 1–20 are done and documented in the README. Their sections below
 record how they landed; the current direction starts at **Beyond 20**.
 
+Current Forged Alliance subsystem completion, exact next tasks, and copy-ready
+goal prompts live in the canonical
+[`gameplay progress dashboard`](docs/fa-gameplay-progress.md).
+
 **Near target, stated once so it can be checked:** two armies on a retail
 `.scmap`, each with an ACU, extracting mass, building from a factory, fighting
 with weapons read from the shipped blueprints, and a match that *ends* — last
