@@ -112,6 +112,16 @@ struct Fixture {
             }
         }
     }
+
+    [[nodiscard]] rm::StateHash hash() {
+        std::vector<rm::sim::Economy> economies(2);
+        const std::vector<int> commandersEver(2, 0);
+        rm::sim::Match match{.armies = armies,
+                              .economies = economies,
+                              .pathService = &paths,
+                              .commandersEver = commandersEver};
+        return rm::sim::hashMatch(roster.store, match);
+    }
 };
 
 [[nodiscard]] Command moveOrder(rm::TickIndex tick, rm::PlayerIndex player, UnitId unit,
@@ -261,8 +271,9 @@ TEST_CASE("a stale handle is refused, not resolved to whoever inherited the slot
     CHECK(fix.roster.motion(newcomer).moving);
 }
 
-TEST_CASE("an unreachable destination is dropped after path service, not a straight line") {
-    // Driving into the water is a worse answer than not moving.
+TEST_CASE("an unreachable move retries twice after ten idle service beats before retiring") {
+    // Driving into the water is a worse answer than not moving, but C-176 keeps the intent
+    // through two wait-then-repath attempts before it gives up on the third failure.
     rm::HeightField sunken = flatField();
     sunken.baseHeight = -500.0f;  // the whole map is under water
 
@@ -270,8 +281,39 @@ TEST_CASE("an unreachable destination is dropped after path service, not a strai
     fix.grid = rm::sim::buildPassability(sunken, 0.0f);
 
     CHECK(fix.apply(moveOrder(0, 0, fix.mine, 500.0f, 200.0f)));
+    fix.run(CommandLog{}, 2);  // admission, then the first failed search
+    CHECK_FALSE(fix.roster.store.orders()[fix.mine.index].empty());
+
+    fix.run(CommandLog{}, 10);  // C-176's wait contains ten complete idle service passes
+    CHECK_FALSE(fix.roster.store.orders()[fix.mine.index].empty());
+    REQUIRE(fix.paths.retryWaits()[0] == 0);
+    REQUIRE(fix.paths.failureCounts()[0] == 1);
+
+    fix.run(CommandLog{}, 1);  // only now does the second failed search run
+    CHECK_FALSE(fix.roster.store.orders()[fix.mine.index].empty());
+    REQUIRE(fix.paths.retryWaits()[0] == 10);
+    REQUIRE(fix.paths.failureCounts()[0] == 2);
+
+    fix.run(CommandLog{}, 10);  // the second wait is also ten complete idle service passes
+    REQUIRE(fix.paths.retryWaits()[0] == 0);
+    REQUIRE(fix.paths.failureCounts()[0] == 2);
+
+    fix.run(CommandLog{}, 1);  // the third failure retires the intent
+    CHECK(fix.roster.store.orders()[fix.mine.index].empty());
+}
+
+TEST_CASE("a path retry wait changes the authoritative hash") {
+    rm::HeightField sunken = flatField();
+    sunken.baseHeight = -500.0f;
+
+    Fixture fix;
+    fix.grid = rm::sim::buildPassability(sunken, 0.0f);
+    REQUIRE(fix.apply(moveOrder(0, 0, fix.mine, 500.0f, 200.0f)));
+    fix.run(CommandLog{}, 2);  // admission, then the failed search starts C-176's wait
+
+    const rm::StateHash waitingTenBeats = fix.hash();
     fix.run(CommandLog{}, 1);
-    CHECK_FALSE(fix.roster.motion(fix.mine).moving);
+    CHECK(fix.hash() != waitingTenBeats);
 }
 
 TEST_CASE("a build command creates a construction, costed from the blueprint") {

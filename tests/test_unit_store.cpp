@@ -1,4 +1,5 @@
 #include "core/sim/UnitStore.hpp"
+#include "core/sim/StateHash.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -224,4 +225,151 @@ TEST_CASE("the same sequence of spawns and kills gives the same store, every run
     };
 
     REQUIRE(run() == run());
+}
+
+TEST_CASE("a unit store snapshot restores live units, tombstones, and allocator reuse") {
+    UnitStore original;
+    UnitStore::Spawn moving = tankAt(12.0f, 34.0f, 2, 7);
+    moving.motion.moving = true;
+    moving.motion.path.push_back({rm::test::fx(56.0f), rm::test::fx(78.0f)});
+    moving.health = rm::sim::Health{.current = rm::test::mag(123.0f),
+                                    .maximum = rm::test::mag(500.0f)};
+
+    const UnitId live = original.spawn(moving);
+    const UnitId firstOccupant = original.spawn(tankAt(90.0f, 10.0f, 3, 9));
+    original.kill(firstOccupant);
+    const UnitId reusedLive = original.spawn(tankAt(91.0f, 11.0f, 3, 10));
+
+    UnitStore::Spawn olderTombstone = tankAt(20.0f, 30.0f, 4, 11);
+    olderTombstone.health = rm::sim::Health{.current = rm::test::mag(321.0f),
+                                             .maximum = rm::test::mag(600.0f)};
+    olderTombstone.motion.moving = true;
+    const UnitId olderDead = original.spawn(olderTombstone);
+
+    UnitStore::Spawn newerTombstone = tankAt(40.0f, 50.0f, 5, 12);
+    newerTombstone.health = rm::sim::Health{.current = rm::test::mag(222.0f),
+                                             .maximum = rm::test::mag(700.0f)};
+    newerTombstone.motion.path.push_back({rm::test::fx(60.0f), rm::test::fx(70.0f)});
+    const UnitId newerDead = original.spawn(newerTombstone);
+    original.kill(olderDead);
+    original.kill(newerDead);
+    REQUIRE(original.attach(live, reusedLive));
+
+    const UnitStore::Snapshot saved = original.snapshot();
+    UnitStore restored{saved};
+
+    REQUIRE(restored.alive(live));
+    REQUIRE(restored.alive(reusedLive));
+    REQUIRE(reusedLive.generation > 1);
+    REQUIRE_FALSE(restored.alive(olderDead));
+    REQUIRE_FALSE(restored.alive(newerDead));
+    REQUIRE(restored.typeAt(live.index) == 7);
+    REQUIRE(restored.transforms()[live.index].x == rm::test::fx(12.0f));
+    REQUIRE(restored.transforms()[live.index].z == rm::test::fx(34.0f));
+    REQUIRE(restored.health()[live.index].current == rm::test::mag(123.0f));
+    REQUIRE(restored.health()[live.index].maximum == rm::test::mag(500.0f));
+    REQUIRE(restored.motion()[live.index].moving);
+    REQUIRE(restored.motion()[live.index].path.size() == 1);
+    REQUIRE(restored.motion()[live.index].path[0]
+            == std::array<rm::sim::Fx, 2>{rm::test::fx(56.0f), rm::test::fx(78.0f)});
+    REQUIRE(restored.parentOf(reusedLive) == live);
+    REQUIRE(restored.childrenOf(live) == std::vector<UnitId>{reusedLive});
+
+    REQUIRE(restored.typeAt(olderDead.index) == 11);
+    REQUIRE(restored.transforms()[olderDead.index].x == rm::test::fx(20.0f));
+    REQUIRE(restored.health()[olderDead.index].current == rm::test::mag(321.0f));
+    REQUIRE(restored.motion()[olderDead.index].moving);
+    REQUIRE(restored.typeAt(newerDead.index) == 12);
+    REQUIRE(restored.transforms()[newerDead.index].z == rm::test::fx(50.0f));
+    REQUIRE(restored.health()[newerDead.index].maximum == rm::test::mag(700.0f));
+    REQUIRE(restored.motion()[newerDead.index].path
+            == std::vector<std::array<rm::sim::Fx, 2>>{{rm::test::fx(60.0f), rm::test::fx(70.0f)}});
+
+    const auto spawnThree = [](UnitStore& store) {
+        return std::array{store.spawn(tankAt(1.0f, 2.0f, 4)),
+                          store.spawn(tankAt(3.0f, 4.0f, 4)),
+                          store.spawn(tankAt(5.0f, 6.0f, 4))};
+    };
+    const auto originalNext = spawnThree(original);
+    const auto restoredNext = spawnThree(restored);
+
+    REQUIRE(originalNext == restoredNext);
+    REQUIRE(originalNext[0].index == newerDead.index);
+    REQUIRE(originalNext[1].index == olderDead.index);
+}
+
+TEST_CASE("attachments keep one parent per child and reject duplicate or cyclic links") {
+    UnitStore store;
+    const UnitId parent = store.spawn(tankAt(1.0f, 0.0f, 0));
+    const UnitId child = store.spawn(tankAt(2.0f, 0.0f, 0));
+    const UnitId otherParent = store.spawn(tankAt(3.0f, 0.0f, 0));
+
+    REQUIRE(store.attach(parent, child));
+    REQUIRE(store.parentOf(child) == parent);
+    REQUIRE(store.childrenOf(parent) == std::vector<UnitId>{child});
+    REQUIRE_FALSE(store.attach(otherParent, child));
+    REQUIRE_FALSE(store.attach(child, parent));
+    REQUIRE(store.attach(child, otherParent));
+    REQUIRE_FALSE(store.attach(otherParent, parent));
+    REQUIRE(store.detach(otherParent));
+    REQUIRE_FALSE(store.attach(parent, UnitId{}));
+
+    REQUIRE(store.detach(child));
+    REQUIRE_FALSE(store.parentOf(child).has_value());
+    REQUIRE(store.childrenOf(parent).empty());
+
+    REQUIRE(store.attach(parent, child));
+    store.kill(parent);
+    REQUIRE_FALSE(store.parentOf(child).has_value());
+    REQUIRE(store.childrenOf(parent).empty());
+    REQUIRE_FALSE(store.attach(parent, child));
+
+    const UnitId newParent = store.spawn(tankAt(4.0f, 0.0f, 0));
+    REQUIRE(store.attach(newParent, child));
+    store.kill(child);
+    REQUIRE(store.childrenOf(newParent).empty());
+}
+
+TEST_CASE("attachments change the match hash") {
+    UnitStore detached;
+    UnitStore attached;
+    const UnitId detachedParent = detached.spawn(tankAt(1.0f, 0.0f, 0));
+    const UnitId detachedChild = detached.spawn(tankAt(2.0f, 0.0f, 0));
+    const UnitId attachedParent = attached.spawn(tankAt(1.0f, 0.0f, 0));
+    const UnitId attachedChild = attached.spawn(tankAt(2.0f, 0.0f, 0));
+    (void)detachedParent;
+    (void)detachedChild;
+
+    REQUIRE(attached.attach(attachedParent, attachedChild));
+    std::vector<rm::sim::Army> armies(1);
+    std::vector<rm::sim::Economy> economies(1);
+    std::vector<int> commandersEver(1);
+    const rm::sim::Match match{.armies = armies,
+                                .economies = economies,
+                                .commandersEver = commandersEver};
+    REQUIRE(rm::sim::hashMatch(detached, match) != rm::sim::hashMatch(attached, match));
+}
+
+TEST_CASE("different valid attachment topologies hash differently") {
+    UnitStore chain;
+    UnitStore siblings;
+    const UnitId chainA = chain.spawn(tankAt(1.0f, 0.0f, 0));
+    const UnitId chainB = chain.spawn(tankAt(2.0f, 0.0f, 0));
+    const UnitId chainC = chain.spawn(tankAt(3.0f, 0.0f, 0));
+    const UnitId siblingsA = siblings.spawn(tankAt(1.0f, 0.0f, 0));
+    const UnitId siblingsB = siblings.spawn(tankAt(2.0f, 0.0f, 0));
+    const UnitId siblingsC = siblings.spawn(tankAt(3.0f, 0.0f, 0));
+
+    REQUIRE(chain.attach(chainA, chainB));
+    REQUIRE(chain.attach(chainB, chainC));
+    REQUIRE(siblings.attach(siblingsA, siblingsB));
+    REQUIRE(siblings.attach(siblingsA, siblingsC));
+
+    std::vector<rm::sim::Army> armies(1);
+    std::vector<rm::sim::Economy> economies(1);
+    std::vector<int> commandersEver(1);
+    const rm::sim::Match match{.armies = armies,
+                                .economies = economies,
+                                .commandersEver = commandersEver};
+    REQUIRE(rm::sim::hashMatch(chain, match) != rm::sim::hashMatch(siblings, match));
 }

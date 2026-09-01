@@ -2,6 +2,13 @@
 
 namespace rm::sim {
 
+IdPool::IdPool(const Snapshot& snapshot)
+    : generations_(snapshot.generations), free_(snapshot.free), live_(snapshot.live) {}
+
+IdPool::Snapshot IdPool::snapshot() const {
+    return {.generations = generations_, .free = free_, .live = live_};
+}
+
 UnitId IdPool::acquire() {
     ++live_;
 

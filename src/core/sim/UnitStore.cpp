@@ -1,8 +1,31 @@
 #include "core/sim/UnitStore.hpp"
 
+#include <algorithm>
 #include <limits>
 
 namespace rm::sim {
+
+UnitStore::UnitStore(const Snapshot& snapshot)
+    : ids_(snapshot.ids),
+      generations_(snapshot.generations),
+      transforms_(snapshot.transforms),
+      motion_(snapshot.motion),
+      health_(snapshot.health),
+      types_(snapshot.types),
+      orders_(snapshot.transforms.size()),
+      parents_(snapshot.parents),
+      children_(snapshot.children) {}
+
+UnitStore::Snapshot UnitStore::snapshot() const {
+    return {.ids = ids_.snapshot(),
+            .generations = generations_,
+            .transforms = transforms_,
+             .motion = motion_,
+             .health = health_,
+             .types = types_,
+             .parents = parents_,
+             .children = children_};
+}
 
 UnitId UnitStore::spawn(const Spawn& request) {
     const UnitId id = ids_.acquire();
@@ -17,6 +40,8 @@ UnitId UnitStore::spawn(const Spawn& request) {
         health_.emplace_back();
         types_.emplace_back();
         orders_.emplace_back();
+        parents_.emplace_back();
+        children_.emplace_back();
         generations_.emplace_back();
     }
 
@@ -29,6 +54,8 @@ UnitId UnitStore::spawn(const Spawn& request) {
     // something new moves in. A queue left behind would have the newcomer inherit the dead
     // unit's route — the same class of bug `UnitId`'s generation exists to prevent.
     orders_[slot].clear();
+    parents_[slot].reset();
+    children_[slot].clear();
     // And the same for who last hit the PREVIOUS occupant: `request.health` sets the fresh
     // unit's own, but a caller that leaves it unset would have the newcomer already remember
     // being shot by whoever killed its predecessor. Set from the request so an explicit value
@@ -40,6 +67,54 @@ UnitId UnitStore::spawn(const Spawn& request) {
 
 void UnitStore::reindex(Fx cellSize) { space_.rebuild(*this, cellSize); }
 
+bool UnitStore::attach(UnitId parent, UnitId child) {
+    if (!alive(parent) || !alive(child) || parent == child || parents_[child.index].has_value()) {
+        return false;
+    }
+
+    for (UnitId ancestor = parent;;) {
+        if (ancestor == child) {
+            return false;
+        }
+        const std::optional<UnitId> next = parentOf(ancestor);
+        if (!next) {
+            break;
+        }
+        ancestor = *next;
+    }
+
+    parents_[child.index] = parent;
+    children_[parent.index].push_back(child);
+    return true;
+}
+
+bool UnitStore::detach(UnitId child) {
+    if (!alive(child) || !parents_[child.index]) {
+        return false;
+    }
+
+    const UnitId parent = *parents_[child.index];
+    auto& siblings = children_[parent.index];
+    const auto entry = std::find(siblings.begin(), siblings.end(), child);
+    if (entry != siblings.end()) {
+        siblings.erase(entry);
+    }
+    parents_[child.index].reset();
+    return true;
+}
+
+std::optional<UnitId> UnitStore::parentOf(UnitId child) const noexcept {
+    if (!alive(child)) {
+        return std::nullopt;
+    }
+    return parents_[child.index];
+}
+
+const std::vector<UnitId>& UnitStore::childrenOf(UnitId parent) const noexcept {
+    static const std::vector<UnitId> noChildren;
+    return alive(parent) ? children_[parent.index] : noChildren;
+}
+
 void UnitStore::kill(UnitId id) {
     if (!ids_.alive(id)) {
         return;
@@ -48,6 +123,13 @@ void UnitStore::kill(UnitId id) {
     // command ID expire when this was its final member; the other tombstone arrays remain.
     orders_[id.index].clear();
     orders_[id.index].clearObserver();
+    (void)detach(id);
+    for (const UnitId child : children_[id.index]) {
+        if (child.index < parents_.size() && parents_[child.index] == id) {
+            parents_[child.index].reset();
+        }
+    }
+    children_[id.index].clear();
     ids_.release(id);
     // The arrays are deliberately left as they were — a dead unit is a tombstone, not a
     // hole (see the header). What zeroes a corpse's collision radius so it stops shoving

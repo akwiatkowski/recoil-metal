@@ -65,6 +65,24 @@ public:
         Health health{};
     };
 
+    /// State required to resume the unit slots without changing their identities or the next
+    /// allocator result. The spatial index is derived and rebuilt after restoring.
+    struct Snapshot {
+        IdPool::Snapshot ids;
+        std::vector<Generation> generations;
+        std::vector<Transform> transforms;
+        std::vector<MoveState> motion;
+        std::vector<Health> health;
+        std::vector<UnitTypeIndex> types;
+        std::vector<std::optional<UnitId>> parents;
+        std::vector<std::vector<UnitId>> children;
+    };
+
+    UnitStore() = default;
+    explicit UnitStore(const Snapshot& snapshot);
+
+    [[nodiscard]] Snapshot snapshot() const;
+
     /// Adds a unit and returns its handle.
     ///
     /// Reuses a dead unit's slot when one is free, which is what keeps a long match from
@@ -77,6 +95,16 @@ public:
     void kill(UnitId id);
 
     [[nodiscard]] bool alive(UnitId id) const noexcept { return ids_.alive(id); }
+
+    /// Attaches a live child to a live parent. A child has exactly one parent, and an
+    /// attachment may not introduce a cycle.
+    [[nodiscard]] bool attach(UnitId parent, UnitId child);
+
+    /// Removes a live child's attachment, if it has one.
+    [[nodiscard]] bool detach(UnitId child);
+
+    [[nodiscard]] std::optional<UnitId> parentOf(UnitId child) const noexcept;
+    [[nodiscard]] const std::vector<UnitId>& childrenOf(UnitId parent) const noexcept;
 
     /// Whether the unit in this slot is live. The form a pass wants, since a pass walks
     /// slots rather than carrying handles.
@@ -196,6 +224,8 @@ private:
     std::vector<Health> health_;
     std::vector<UnitTypeIndex> types_;
     std::vector<CommandQueue> orders_;
+    std::vector<std::optional<UnitId>> parents_;
+    std::vector<std::vector<UnitId>> children_;
 
     CommandSerial nextCommandSerial_ = 0;
     std::array<std::uint32_t, kInvalidCommandSource> nextCommandCounters_{};

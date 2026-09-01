@@ -282,6 +282,20 @@ TEST_CASE("pathfinding is deterministic") {
     }
 }
 
+TEST_CASE("path search phases use the row-major start cell and both beats") {
+    constexpr int cellsX = 10;
+    constexpr int startX = 3;
+    constexpr int startZ = 2;
+    constexpr int packedStartCell = startZ * cellsX + startX;
+
+    CHECK(rm::sim::pathPhase7(startX, startZ, cellsX) == packedStartCell % 7);
+    CHECK(rm::sim::pathPhase13(startX, startZ, cellsX) == packedStartCell % 13);
+
+    CHECK_FALSE(rm::sim::pathPhaseDue(startX, startZ, cellsX, packedStartCell + 7));
+    CHECK_FALSE(rm::sim::pathPhaseDue(startX, startZ, cellsX, packedStartCell + 13));
+    CHECK(rm::sim::pathPhaseDue(startX, startZ, cellsX, packedStartCell));
+}
+
 TEST_CASE("different unit limits give genuinely different passability") {
     // The reason for building a grid per limit pair rather than one per scene:
     // a slope one unit can climb is a wall to another, and a depth one can ford

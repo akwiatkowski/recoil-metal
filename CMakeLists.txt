@@ -191,6 +191,8 @@ add_library(rm_core STATIC
     src/core/sim/UnitCensus.cpp
     src/core/sim/Skirmish.cpp
     src/core/sim/StateHash.cpp
+    src/core/sim/RandomStream.cpp
+    src/core/sim/SaveState.cpp
     src/core/sim/SlowUpdate.cpp
     src/core/sim/SpatialGrid.cpp
     src/core/sim/Snapshot.cpp
@@ -280,6 +282,7 @@ if(BUILD_TESTING)
         tests/test_unit_census.cpp
         tests/test_match_invariants.cpp
         tests/test_match.cpp
+        tests/test_save_state.cpp
         tests/test_opponent_port.cpp
         tests/test_faf_ai.cpp
         tests/test_state_hash.cpp

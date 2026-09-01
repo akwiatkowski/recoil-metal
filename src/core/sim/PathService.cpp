@@ -14,6 +14,8 @@ void PathService::ensureArmy(int army) {
     pending_.resize(std::max(pending_.size(), count));
     activeRequests_.resize(std::max(activeRequests_.size(), count));
     activeSearches_.resize(std::max(activeSearches_.size(), count));
+    retryWaits_.resize(std::max(retryWaits_.size(), count));
+    failureCounts_.resize(std::max(failureCounts_.size(), count));
 }
 
 void PathService::enqueue(PathRequest request) {
@@ -27,9 +29,18 @@ void PathService::enqueue(PathRequest request) {
 std::vector<PathResult> PathService::service() {
     std::vector<PathResult> completed;
     for (std::size_t army = 0; army < pending_.size(); ++army) {
+        if (activeRequests_[army] && !activeSearches_[army] && retryWaits_[army] > 0) {
+            --retryWaits_[army];
+            // C-176's ten beats are all wait beats; the next service pass starts the re-path.
+            continue;
+        }
         if (!activeRequests_[army] && !pending_[army].empty()) {
             activeRequests_[army] = std::move(pending_[army].front());
             pending_[army].pop_front();
+            retryWaits_[army] = 0;
+            failureCounts_[army] = 0;
+        }
+        if (activeRequests_[army] && !activeSearches_[army]) {
             const PathRequest& request = *activeRequests_[army];
             activeSearches_[army].emplace(request.grid, request.fromX, request.fromZ,
                                           request.targetX, request.targetZ);
@@ -42,11 +53,20 @@ std::vector<PathResult> PathService::service() {
             continue;
         }
         const PathRequest request = *activeRequests_[army];
+        if (activeSearches_[army]->path().empty()
+            && failureCounts_[army] + 1 < kMaximumFailures) {
+            ++failureCounts_[army];
+            retryWaits_[army] = kRetryDelayBeats;
+            activeSearches_[army].reset();
+            continue;
+        }
         completed.push_back(PathResult{.unit = request.unit,
-                                       .command = request.command,
-                                       .path = activeSearches_[army]->path()});
+                                        .command = request.command,
+                                        .path = activeSearches_[army]->path()});
         activeRequests_[army].reset();
         activeSearches_[army].reset();
+        retryWaits_[army] = 0;
+        failureCounts_[army] = 0;
     }
 
     // Admission is deliberately after every army has spent this beat's allowance. A request
@@ -88,6 +108,8 @@ void PathService::cancel(UnitId unit) {
         if (activeRequests_[army] && belongsTo(*activeRequests_[army])) {
             activeRequests_[army].reset();
             activeSearches_[army].reset();
+            retryWaits_[army] = 0;
+            failureCounts_[army] = 0;
         }
     }
 }

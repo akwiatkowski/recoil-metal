@@ -9,7 +9,7 @@ Detailed retail evidence remains canonical in
 [`fa-exe-analysis-plan.md`](fa-exe-analysis-plan.md). This dashboard summarizes that ledger; it
 does not replace its claims, addresses, counterevidence, or confirmation gate.
 
-**Snapshot:** 2026-09-01, Recoil Metal `ca30033` plus a dirty worktree, retail artifact
+**Snapshot:** 2026-09-01, Recoil Metal `7c0923c` plus a dirty worktree, retail artifact
 `ART-E001` (`c6783580c0b7a408ec2ad3bfe5eb1fdbef31a60d92c1007ff9b90c33bb960aa0`).
 
 ## Headline
@@ -67,10 +67,10 @@ excluded from the headline.
 | [`FA-MATCH`](#fa-match---armies-setup-and-victory-rules) | Armies, setup, victory rules | `WP-10`-`11` | 55% | 20% | 85% | Implement retail victory-mode/category predicates and allied-victory handling. |
 | [`FA-CMD`](#fa-cmd---commands-controls-and-factories) | Commands, controls, factories | `WP-12`-`14` | 45% | 35% | 70% | Add the app-level live-versus-replay acceptance test for `WP-12` slice 4. |
 | [`FA-ECON`](#fa-econ---economy-construction-and-engineering) | Economy, construction, engineering | `WP-15`-`19` | 70% | 55% | 85% | Read capture plus ownership transfer, then specify the implementation. |
-| [`FA-LAND`](#fa-land---land-navigation-formations-and-spatial-world) | Land navigation, formations, spatial world | `WP-20`, `21`, `26` | 60% | 25% | 95% | Add deterministic event-driven replan backoff: 10 beats after a rejected path, then three-strike give-up. |
+| [`FA-LAND`](#fa-land---land-navigation-formations-and-spatial-world) | Land navigation, formations, spatial world | `WP-20`, `21`, `26` | 70% | 30% | 95% | Use the deterministic mod-7/mod-13 phase helpers to gate C-177 blocked-path checks before wait-then-repath. |
 | [`FA-AIR`](#fa-air---aircraft-flight-combat-and-staging) | Aircraft flight, combat, staging | `WP-22` | 30% | 10% | 95% | Implement the deterministic winged-aircraft mover foundation. |
 | [`FA-NAVY`](#fa-navy---surface-and-submerged-warfare) | Surface and submerged warfare | `WP-23`-`24` | 35% | 10% | 75% | Implement one complete `SurfacingSub` dive/surface slice. |
-| [`FA-TRANSPORT`](#fa-transport---attachments-cargo-and-ferries) | Attachments, cargo, ferries | `WP-25` | 5% | 0% | 95% | Implement the generic entity attachment graph foundation. |
+| [`FA-TRANSPORT`](#fa-transport---attachments-cargo-and-ferries) | Attachments, cargo, ferries | `WP-25` | 15% | 0% | 95% | Apply child offset transforms from the generic attachment graph during the simulation tick. |
 | [`FA-WEAPONS`](#fa-weapons---targeting-weapons-and-projectiles) | Targeting, weapons, projectiles | `WP-27`-`28` | 85% | 65% | 90% | Separate the death-weapon firing path from automatic acquisition before enabling C-156 empty-priority default-deny. |
 | [`FA-MISSILES`](#fa-missiles---silos-missiles-and-interception) | Silos, missiles, interception | `WP-29` | 5% | 0% | 90% | Implement tactical silo ammo production and decrement-then-fire. |
 | [`FA-DAMAGE`](#fa-damage---damage-death-and-shields) | Damage, death, shields | `WP-30`-`32` | 65% | 40% | 75% | Add the next collidable shield slice: area-shield admission and stacking. |
@@ -80,7 +80,7 @@ excluded from the headline.
 | [`FA-AI`](#fa-ai---retail-ai-and-native-manager-boundary) | Retail AI and native manager boundary | `WP-38` | 35% | 5% | 30% | Remove the remaining condition-budget overruns (`recoil-metal-4754`). |
 | [`FA-UI`](#fa-ui---player-interface-and-advanced-controls) | Player interface and advanced controls | `WP-39`-`40` | 65% | 5% | 15% | Capture the HUD visual/GPU baseline (`recoil-metal-3628`). |
 | [`FA-PRESENT`](#fa-present---animation-effects-and-audio) | Animation, effects, audio | `WP-41`-`42` | 55% | 5% | 25% | Complete one blueprint-audio-to-XSB-cue playback path. |
-| [`FA-PERSIST`](#fa-persist---replay-hashing-and-saveresume) | Replay, hashing, save/resume | `WP-43`-`44` | 40% | 15% | 90% | Round-trip tick and RNG in the first versioned save-state slice. |
+| [`FA-PERSIST`](#fa-persist---replay-hashing-and-saveresume) | Replay, hashing, save/resume | `WP-43`-`44` | 50% | 20% | 90% | Encode the allocator-safe `UnitStore` snapshot into SaveState v1 and prove continued hashes after restore. |
 
 ## Starting Work
 
@@ -185,13 +185,15 @@ claims, and FA-ECON; create the smallest implementation task justified by the re
 
 ### FA-LAND - Land Navigation, Formations, And Spatial World
 
-**Largest gap:** current per-unit A* cannot reproduce retail's per-army FIFO, resumable,
-step-budgeted path latency or command-owned formations.
+**Largest gap:** the per-army FIFO service, C-176 retry contract, and deterministic phase helpers
+exist, but completed paths do not yet detect dynamic blockage on those phases; formations are also
+absent.
 
 ```text
-/goal Advance FA-LAND by supplying the completed per-army FIFO `PathService` to live and replay
-match construction, then adding one app-level latency acceptance test. Keep the existing route
-solver and fixed integer step budget; leave HPA*, replan/backoff, reservations, and formations
+/goal Advance FA-LAND by using the existing C-177 phase helpers to gate deterministic blocked-path
+detection: retain each active route's packed-start identity, check it only on both matching beats,
+and wait-then-repath through the existing C-176 retry path. Start with a blocked-route regression;
+preserve per-army FIFO and its fixed integer budget. Leave HPA*, reservations, and formations
 explicitly deferred. Run make test and make verify, then refresh FA-LAND.
 ```
 
@@ -221,14 +223,14 @@ make verify, then update WP-24 and FA-NAVY.
 
 ### FA-TRANSPORT - Attachments, Cargo, And Ferries
 
-**Largest gap:** retail attachment and cargo semantics are analyzed, but no gameplay transport
-can load, carry, unload, ferry, or propagate carrier death.
+**Largest gap:** the authoritative attachment graph exists, but children do not follow parent
+transforms and no gameplay transport can load, carry, unload, ferry, or propagate carrier death.
 
 ```text
-/goal Advance FA-TRANSPORT by implementing the generic entity attachment graph foundation from
-C-195: cycle rejection, parent/bone attachment identity, deterministic child transforms each
-tick, and detach cleanup. Write graph and transform tests first, run make test and make verify,
-record deferred cargo/collision/death behavior in WP-25, and refresh FA-TRANSPORT.
+/goal Advance FA-TRANSPORT by applying generic attachment offsets to child transforms each tick
+from C-196. Preserve the existing one-parent graph and its deterministic child order; start with
+parent motion and detach regressions. Run make test and make verify, record deferred bones,
+cargo/collision/death behavior in WP-25, and refresh FA-TRANSPORT.
 ```
 
 ### FA-WEAPONS - Targeting, Weapons, And Projectiles
@@ -343,15 +345,15 @@ leave dynamic music and broad effect hosting as explicit later slices.
 
 ### FA-PERSIST - Replay, Hashing, And Save/Resume
 
-**Largest gap:** the versioned semantic command log exists, but its app-level acceptance evidence
-is still being closed under `FA-CMD`, and there is no canonical full-match save/resume state.
+**Largest gap:** `UnitStore` can now preserve its allocator-safe live and tombstone state, but that
+snapshot is not yet encoded by the versioned save/resume envelope or resumed as a full match.
 
 ```text
-/goal Advance FA-PERSIST by implementing the first versioned save/resume slice: serialize and
-restore the simulation tick and complete deterministic RNG state, then prove a save/load branch
-produces the same subsequent hashes as an uninterrupted run. Record the schema decision in a short
-ADR, run make test and make verify, update WP-44 and FA-PERSIST, and name the next authoritative
-state group rather than adding speculative fields.
+/goal Advance FA-PERSIST by encoding the allocator-safe UnitStore snapshot in the versioned v1
+save/resume envelope and restoring it into a fresh store. Add focused round-trip and continued-hash
+tests; preserve the existing tick/RNG envelope. Run make test and make verify, update WP-44 and
+FA-PERSIST, and leave commands, economy, armies, and path-service state as later authoritative
+groups.
 ```
 
 ## Maintenance Contract

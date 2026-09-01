@@ -66,15 +66,28 @@ public:
     [[nodiscard]] const std::vector<std::optional<PathSearch>>& activeSearches() const noexcept {
         return activeSearches_;
     }
+    [[nodiscard]] const std::vector<std::size_t>& retryWaits() const noexcept {
+        return retryWaits_;
+    }
+    [[nodiscard]] const std::vector<std::size_t>& failureCounts() const noexcept {
+        return failureCounts_;
+    }
 
 private:
     void ensureArmy(int army);
+
+    /// C-176: an unroutable move waits this many service beats before each re-path attempt.
+    static constexpr std::size_t kRetryDelayBeats = 10;
+    /// C-176: the third failed search publishes its empty route and retires the intent.
+    static constexpr std::size_t kMaximumFailures = 3;
 
     // Commands accepted during this beat become eligible only after its service pass completes.
     std::vector<std::deque<PathRequest>> admissions_;
     std::vector<std::deque<PathRequest>> pending_;
     std::vector<std::optional<PathRequest>> activeRequests_;
     std::vector<std::optional<PathSearch>> activeSearches_;
+    std::vector<std::size_t> retryWaits_;
+    std::vector<std::size_t> failureCounts_;
 };
 
 } // namespace rm::sim

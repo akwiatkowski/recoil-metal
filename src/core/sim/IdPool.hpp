@@ -51,6 +51,19 @@ struct UnitId {
 /// That is not a nicety — it is what lets the replay hash mean anything.
 class IdPool {
 public:
+    /// The complete allocator state. The free-list order is state: changing it changes the
+    /// handle given to the next spawn.
+    struct Snapshot {
+        std::vector<Generation> generations;
+        std::vector<UnitIndex> free;
+        std::size_t live = 0;
+    };
+
+    IdPool() = default;
+    explicit IdPool(const Snapshot& snapshot);
+
+    [[nodiscard]] Snapshot snapshot() const;
+
     /// A handle to a slot nothing else holds.
     ///
     /// Reuses the most recently released slot when there is one, so a long match does not

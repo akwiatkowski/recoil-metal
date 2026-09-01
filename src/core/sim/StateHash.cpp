@@ -309,6 +309,8 @@ void feedPathService(StateHash& h, const PathService& service) noexcept {
     const auto& pending = service.pending();
     const auto& activeRequests = service.activeRequests();
     const auto& activeSearches = service.activeSearches();
+    const auto& retryWaits = service.retryWaits();
+    const auto& failureCounts = service.failureCounts();
     feed(h, admissions.size());
     for (const auto& armyAdmissions : admissions) {
         feed(h, armyAdmissions.size());
@@ -330,6 +332,8 @@ void feedPathService(StateHash& h, const PathService& service) noexcept {
         if (activeSearches[army]) {
             feedPathSearch(h, *activeSearches[army]);
         }
+        feed(h, retryWaits[army]);
+        feed(h, failureCounts[army]);
     }
 }
 
@@ -374,6 +378,31 @@ StateHash hashMatch(const UnitStore& store, const Match& match) {
         // moved too (`retireDead` zeroes the radius, and health reached zero to get there),
         // which is why this went unnoticed until a test killed a unit at full health.
         feed(h, store.slotAlive(slot));
+    }
+
+    bool hasAttachments = false;
+    for (UnitIndex slot = 0; slot < store.slotCount(); ++slot) {
+        hasAttachments = hasAttachments || store.parentOf(store.idAt(slot)).has_value();
+    }
+    // Preserve the C-176 stream for attachment-free matches. Once an attachment exists, hash
+    // both reciprocal views: child order is observable state and must be replay-stable too.
+    if (hasAttachments) {
+        feed(h, true);
+        for (UnitIndex slot = 0; slot < store.slotCount(); ++slot) {
+            const UnitId unit = store.idAt(slot);
+            const std::optional<UnitId> parent = store.parentOf(unit);
+            feed(h, parent.has_value());
+            if (parent) {
+                feed(h, static_cast<std::size_t>(parent->index));
+                feed(h, static_cast<std::size_t>(parent->generation));
+            }
+            const std::vector<UnitId>& children = store.childrenOf(unit);
+            feed(h, children.size());
+            for (const UnitId child : children) {
+                feed(h, static_cast<std::size_t>(child.index));
+                feed(h, static_cast<std::size_t>(child.generation));
+            }
+        }
     }
 
     // The armies. There is no `colour` to skip any more (§7 P6.3): a palette entry

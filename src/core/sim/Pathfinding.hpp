@@ -26,6 +26,27 @@ namespace rm::sim {
 /// that is a movement-cost map consulted per step, not a search graph.
 inline constexpr int kPathCellSquares = 8;
 
+/// C-176/C-177 phase periods for staggered land-path work.
+inline constexpr int kPathPhase7Period = 7;
+inline constexpr int kPathPhase13Period = 13;
+
+/// The C-176 phase assigned to a path's row-major start cell.
+[[nodiscard]] constexpr int pathPhase7(int startX, int startZ, int cellsX) noexcept {
+    return (startZ * cellsX + startX) % kPathPhase7Period;
+}
+
+/// The C-177 phase assigned to a path's row-major start cell.
+[[nodiscard]] constexpr int pathPhase13(int startX, int startZ, int cellsX) noexcept {
+    return (startZ * cellsX + startX) % kPathPhase13Period;
+}
+
+/// Both staggered passes must select the path before its work is due.
+[[nodiscard]] constexpr bool pathPhaseDue(int startX, int startZ, int cellsX,
+                                          int tick) noexcept {
+    return pathPhase7(startX, startZ, cellsX) == tick % kPathPhase7Period
+           && pathPhase13(startX, startZ, cellsX) == tick % kPathPhase13Period;
+}
+
 /// Default slope limit, in the degrees a unit definition is authored in.
 ///
 /// 17 is BAR's Pawn (`units/ArmBots/armpw.lua:17`); its Stumpy tank says 10.
