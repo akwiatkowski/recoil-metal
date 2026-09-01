@@ -132,6 +132,11 @@ struct Weapon {
     /// implosion.
     sim::Fx damageRadius{};
 
+    /// `DamageFriendly = true` on a death weapon makes its blast damage allies as well as
+    /// enemies. `Unit.lua:956-966` passes this value to `DeathWeaponDamageThread`; ordinary
+    /// projectile impacts retain their hostile-only policy.
+    bool damageFriendly = false;
+
     /// How far the weapon reaches, in elmos. `MinRadius` is a dead zone inside which
     /// it cannot fire — 87 weapons have one, and without it a unit walks up to an
     /// artillery piece and stands in the one place it cannot be shot from.

@@ -66,6 +66,38 @@ TEST_CASE("a bubble absorbs damage before every hull beneath it") {
     CHECK(eventOf(events, rm::sim::EventKind::UnitDamaged) == nullptr);
 }
 
+TEST_CASE("an allied shield absorbs a death blast only when it damages friendlies") {
+    const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(2);
+
+    const auto detonate = [&](bool damageFriendly) {
+        rm::test::Roster roster;
+        const rm::UnitTypeIndex shieldType = roster.addType(shieldDef());
+        const rm::UnitTypeIndex targetType = roster.addType(plainDef());
+        const rm::sim::UnitId dying = roster.add(targetType, 0.0f, 0.0f, 0, 100.0f);
+        const rm::sim::UnitId generator = roster.add(shieldType, 160.0f, 0.0f, 0, 100.0f);
+        const rm::sim::UnitId ally = roster.add(targetType, 100.0f, 0.0f, 0, 100.0f);
+
+        rm::unitdef::UnitDef exploding = plainDef("exploding");
+        rm::unitdef::Weapon death;
+        death.role = rm::unitdef::WeaponRole::Death;
+        death.damage = rm::sim::Mag::fromInt(40);
+        death.damageRadius = rm::sim::Fx::fromInt(100);
+        death.damageFriendly = damageFriendly;
+        exploding.weapons.push_back(death);
+        (void)rm::sim::explodeOnDeath(exploding, rm::test::at(0, 0, 0), 0, roster.store,
+                                      armies, dying, nullptr, &roster.catalog);
+        return std::pair{roster.health(generator).shield.current, roster.health(ally).current};
+    };
+
+    const auto hostileOnly = detonate(false);
+    CHECK(hostileOnly.first == rm::sim::Mag::fromInt(100));
+    CHECK(hostileOnly.second == rm::sim::Mag::fromInt(100));
+
+    const auto friendly = detonate(true);
+    CHECK(friendly.first == rm::sim::Mag::fromInt(60));
+    CHECK(friendly.second == rm::sim::Mag::fromInt(100));
+}
+
 TEST_CASE("shield overkill collapses the bubble and leaks only the remainder") {
     rm::test::Roster roster;
     const rm::UnitTypeIndex shieldType = roster.addType(shieldDef());

@@ -9,7 +9,7 @@ Detailed retail evidence remains canonical in
 [`fa-exe-analysis-plan.md`](fa-exe-analysis-plan.md). This dashboard summarizes that ledger; it
 does not replace its claims, addresses, counterevidence, or confirmation gate.
 
-**Snapshot:** 2026-09-01, Recoil Metal `d26a32b` plus a dirty worktree, retail artifact
+**Snapshot:** 2026-09-01, Recoil Metal `c4f8c91` plus a dirty worktree, retail artifact
 `ART-E001` (`c6783580c0b7a408ec2ad3bfe5eb1fdbef31a60d92c1007ff9b90c33bb960aa0`).
 
 ## Headline
@@ -73,7 +73,7 @@ excluded from the headline.
 | [`FA-TRANSPORT`](#fa-transport---attachments-cargo-and-ferries) | Attachments, cargo, ferries | `WP-25` | 15% | 0% | 95% | Apply child offset transforms from the generic attachment graph during the simulation tick. |
 | [`FA-WEAPONS`](#fa-weapons---targeting-weapons-and-projectiles) | Targeting, weapons, projectiles | `WP-27`-`28` | 90% | 65% | 90% | Separate the death-weapon firing path from automatic acquisition before enabling C-156 empty-priority default-deny. |
 | [`FA-MISSILES`](#fa-missiles---silos-missiles-and-interception) | Silos, missiles, interception | `WP-29` | 5% | 0% | 90% | Implement tactical silo ammo production and decrement-then-fire. |
-| [`FA-DAMAGE`](#fa-damage---damage-death-and-shields) | Damage, death, shields | `WP-30`-`32` | 65% | 40% | 75% | Add the next collidable shield slice: area-shield admission and stacking. |
+| [`FA-DAMAGE`](#fa-damage---damage-death-and-shields) | Damage, death, shields | `WP-30`-`32` | 70% | 40% | 75% | Add the next collidable shield slice: area-shield admission and stacking. |
 | [`FA-INTEL`](#fa-intel---vision-radar-sonar-and-counter-intel) | Vision, radar, sonar, counter-intel | `WP-33` | 70% | 45% | 90% | Add seen-now/seen-ever contact state and bounded retained-contact reaping/redetection. |
 | [`FA-PROGRESS`](#fa-progress---enhancements-veterancy-and-special-units) | Enhancements, veterancy, special units | `WP-34`-`36` | 35% | 20% | 35% | Complete the enhancement lifecycle specification around `CUnitScriptTask`. |
 | [`FA-TERRAIN`](#fa-terrain---mutable-terrain-and-craters) | Mutable terrain and craters | `WP-37` | 0% | 0% | 25% | Trace one crater from damage through terrain, pathing, and rendering invalidation. |

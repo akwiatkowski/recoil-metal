@@ -154,6 +154,9 @@ std::vector<Weapon> weaponsFrom(const lua::Value& weaponArray, bool airborneSour
         // a negative radius is meaningless as a reach and would invert the containment test.
         weapon.damageRadius = sim::fxFromFloat(
             std::max(0.0f, numberOr(entry, "DamageRadius", 0.0f)) * scmap::kElmosPerOgrid);
+        if (const lua::Value* damageFriendly = entry.find("DamageFriendly")) {
+            weapon.damageFriendly = damageFriendly->asBoolean().value_or(false);
+        }
 
         weapon.maxRange = sim::fxFromFloat(numberOr(entry, "MaxRadius", 0.0f)
                                            * scmap::kElmosPerOgrid);

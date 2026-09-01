@@ -1548,6 +1548,45 @@ TEST_CASE("a death explosion goes off where the unit stood") {
     CHECK(rm::test::asFloat(roster.health(clear).current) == Approx(1000.0f));   // untouched
 }
 
+TEST_CASE("a friendly death blast hurts allies but not its dying unit") {
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    UnitDef def;
+    Weapon death = directFire(40.0f, 100.0f, 80.0f);
+    death.role = WeaponRole::Death;
+    death.damageFriendly = true;
+    def.weapons.push_back(death);
+
+    Roster roster;
+    const rm::UnitTypeIndex type = roster.addType(targetDef());
+    const UnitId dying = roster.add(type, 0.0f, 0.0f, 0, 100.0f);
+    const UnitId ally = roster.add(type, 0.0f, 40.0f, 0, 100.0f);
+
+    (void)rm::sim::explodeOnDeath(def, rm::test::at(0, 0, 0), 0, roster.store, armies, dying);
+
+    CHECK(rm::test::asFloat(roster.health(dying).current) == Approx(100.0f));
+    CHECK(rm::test::asFloat(roster.health(ally).current) == Approx(60.0f));
+}
+
+TEST_CASE("a defeated army's friendly death blast cannot hurt a live enemy") {
+    std::vector<Army> armies = rm::sim::freeForAll(2);
+    armies[0].defeated = true;
+
+    UnitDef def;
+    Weapon death = directFire(40.0f, 100.0f, 80.0f);
+    death.role = WeaponRole::Death;
+    death.damageFriendly = true;
+    def.weapons.push_back(death);
+
+    Roster roster;
+    const rm::UnitTypeIndex type = roster.addType(targetDef());
+    const UnitId dying = roster.add(type, 0.0f, 0.0f, 0, 100.0f);
+    const UnitId enemy = roster.add(type, 0.0f, 40.0f, 1, 100.0f);
+
+    CHECK(rm::sim::explodeOnDeath(def, rm::test::at(0, 0, 0), 0, roster.store, armies, dying)
+          == rm::sim::Mag{});
+    CHECK(rm::test::asFloat(roster.health(enemy).current) == Approx(100.0f));
+}
+
 TEST_CASE("a unit with no death weapon detonates harmlessly") {
     const std::vector<Army> armies = rm::sim::freeForAll(2);
     UnitDef def;

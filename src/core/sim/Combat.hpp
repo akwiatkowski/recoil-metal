@@ -328,12 +328,9 @@ Mag damageArea(std::array<Fx, 3> centre, Fx radiusElmos, const unitdef::DamagePr
 
 /// Sets off `def`'s death explosion at `at`, and returns the damage dealt.
 ///
-/// Attributed to the DYING unit's own army, which has one consequence worth stating: it
-/// hurts that army's enemies and not its allies. The game's death explosions hurt everything
-/// nearby including friends, and this does not — `damageArea` takes an attacker and asks
-/// `hostile`, so friendly fire would need a mode of its own rather than a different
-/// argument. Noted rather than hidden: a commander detonating in a friendly crowd should be
-/// a catastrophe and here it is merely an inconvenience.
+/// Attributed to the DYING unit's own army. `DamageFriendly` makes the blast affect that
+/// army's allies too, except for the dying unit itself; when absent it retains hostile-only
+/// damage. This policy is specific to the death path, not ordinary projectile impacts.
 /// `catalog` supplies both halves: the target's armour class, and the death weapon's own damage
 /// table, which it resolves on demand rather than from `weaponRates`. That split is deliberate —
 /// firing is per-shot and hot, so it reads a profile computed once at load; a death blast happens

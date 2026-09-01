@@ -161,6 +161,11 @@ TEST_CASE("a weapon with no salvo fields is an ordinary one") {
     CHECK_FALSE(plain.bursts());
 }
 
+TEST_CASE("DamageFriendly is retained for a death weapon") {
+    const Weapon death = parseOne("WeaponCategory = 'Death', DamageFriendly = true");
+    CHECK(death.damageFriendly);
+}
+
 // --- The corpus, which is what catches a misreading -------------------------------------
 
 TEST_CASE("every stated salvo delay in the corpus survives the correction") {

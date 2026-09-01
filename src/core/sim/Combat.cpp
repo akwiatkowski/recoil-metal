@@ -1190,15 +1190,28 @@ namespace {
 
 Mag damageTargets(std::array<Fx, 3> centre, Fx radiusElmos,
                   const unitdef::DamageProfile& damage, int byArmy, UnitStore& store,
-                  std::span<const Army> armies, const UnitCatalog* catalog, UnitId by,
-                  EventQueue* events, unitdef::TargetLayerMask targetLayers,
-                  std::optional<UnitIndex> exactTarget,
-                  std::optional<UnitIndex> impactTarget) {
+                   std::span<const Army> armies, const UnitCatalog* catalog, UnitId by,
+                   EventQueue* events, unitdef::TargetLayerMask targetLayers, bool damageFriendly,
+                   std::optional<UnitIndex> exactTarget,
+                   std::optional<UnitIndex> impactTarget) {
     Mag dealt{};
 
     const std::span<const Transform> transforms = store.transforms();
     const std::span<const MoveState> motion = store.motion();
     const std::span<Health> healths = store.health();
+    const auto damageable = [&](UnitIndex slot) {
+        if (!damageFriendly) {
+            return shootable(byArmy, store, slot, armies);
+        }
+        if (slot >= healths.size() || !healths[slot].alive()) {
+            return false;
+        }
+        const Army* source = armyFor(byArmy, armies);
+        const Army* target = armyFor(armyAt(store, slot), armies);
+        return source != nullptr && !source->defeated
+               && target != nullptr && !target->defeated
+               && store.idAt(slot) != by;
+    };
 
     // A blast is a sphere against collision boxes, not a centre-only ground circle. A square
     // box corner is at sqrt(2) body radii, so two radii are a cheap conservative broadphase;
@@ -1245,7 +1258,7 @@ Mag damageTargets(std::array<Fx, 3> centre, Fx radiusElmos,
         // body to the generator at the centre of its shield bubble.
         const Fx search = reach + catalog->largestShieldRadius();
         for (const UnitIndex slot : store.space().within(centre[0], centre[2], search)) {
-            if (!shootable(byArmy, store, slot, armies) || slot >= healths.size()) {
+            if (!damageable(slot) || slot >= healths.size()) {
                 continue;
             }
             const UnitCatalog::ShieldInfo& shield = catalog->shield(store.typeAt(slot));
@@ -1302,7 +1315,7 @@ Mag damageTargets(std::array<Fx, 3> centre, Fx radiusElmos,
         if (exactTarget && slot != *exactTarget) {
             return;
         }
-        if (!shootable(byArmy, store, slot, armies)) {
+        if (!damageable(slot)) {
             return;
         }
         if (slot >= motion.size()
@@ -1491,7 +1504,7 @@ Mag damageTargets(std::array<Fx, 3> centre, Fx radiusElmos,
         return Mag{};
     }
     return damageTargets(positionOf(store.transforms()[target]), Fx{}, damage, byArmy, store,
-                         armies, catalog, by, events, targetLayers, target, std::nullopt);
+                          armies, catalog, by, events, targetLayers, false, target, std::nullopt);
 }
 
 } // namespace
@@ -1501,7 +1514,7 @@ Mag damageArea(std::array<Fx, 3> centre, Fx radiusElmos,
                std::span<const Army> armies, const UnitCatalog* catalog, UnitId by,
                EventQueue* events, unitdef::TargetLayerMask targetLayers) {
     return damageTargets(centre, radiusElmos, damage, byArmy, store, armies, catalog, by,
-                         events, targetLayers, std::nullopt, std::nullopt);
+                          events, targetLayers, false, std::nullopt, std::nullopt);
 }
 
 void advanceProjectiles(std::vector<Projectile>& projectiles, UnitStore& store,
@@ -1540,8 +1553,8 @@ void advanceProjectiles(std::vector<Projectile>& projectiles, UnitStore& store,
                                                                       target.index}
                                                                 : std::nullopt;
                 (void)damageTargets(shot.position, shot.damageRadiusElmos, shot.damage,
-                                    shot.firedByArmy, store, armies, catalog, shot.firedBy,
-                                    events, shot.targetLayers, std::nullopt, impactTarget);
+                                     shot.firedByArmy, store, armies, catalog, shot.firedBy,
+                                     events, shot.targetLayers, false, std::nullopt, impactTarget);
             }
 
             // Recoil Metal has no Lua projectile lifecycle yet, so retain its established
@@ -1672,15 +1685,18 @@ Mag explodeOnDeath(const unitdef::UnitDef& def, std::array<Fx, 3> at, int byArmy
 
     if (blast->hasRings()) {
         Mag dealt{};
-        dealt += damageArea(at, blast->outerRingRadius, profile(blast->outerRingDamage), byArmy,
-                            store, armies, catalog, by, events, blast->targetLayers);
-        dealt += damageArea(at, blast->innerRingRadius, profile(blast->innerRingDamage), byArmy,
-                            store, armies, catalog, by, events, blast->targetLayers);
+        dealt += damageTargets(at, blast->outerRingRadius, profile(blast->outerRingDamage), byArmy,
+                                store, armies, catalog, by, events, blast->targetLayers,
+                                blast->damageFriendly, std::nullopt, std::nullopt);
+        dealt += damageTargets(at, blast->innerRingRadius, profile(blast->innerRingDamage), byArmy,
+                                store, armies, catalog, by, events, blast->targetLayers,
+                                blast->damageFriendly, std::nullopt, std::nullopt);
         return dealt;
     }
 
-    return damageArea(at, blast->damageRadius, profile(blast->damage), byArmy, store, armies,
-                       catalog, by, events, blast->targetLayers);
+    return damageTargets(at, blast->damageRadius, profile(blast->damage), byArmy, store, armies,
+                         catalog, by, events, blast->targetLayers, blast->damageFriendly,
+                         std::nullopt, std::nullopt);
 }
 
 std::vector<UnitId> deadUnits(const UnitStore& store) {
