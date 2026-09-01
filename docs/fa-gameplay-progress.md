@@ -65,7 +65,7 @@ excluded from the headline.
 | [`FA-CONTENT`](#fa-content---vfs-blueprints-maps-and-bootstrap) | VFS, blueprints, maps, bootstrap | `WP-05`, `06`, `09` | 65% | 35% | 55% | Trace and test exact retail SCD mount/override precedence. |
 | [`FA-LUA`](#fa-lua---gameplay-lua-and-mod-contract) | Gameplay Lua and mod contract | `WP-07`-`08` | 10% | 5% | 30% | Measure the exact Moho contract for the milestone-20 skirmish slice. |
 | [`FA-MATCH`](#fa-match---armies-setup-and-victory-rules) | Armies, setup, victory rules | `WP-10`-`11` | 55% | 20% | 85% | Implement retail victory-mode/category predicates and allied-victory handling. |
-| [`FA-CMD`](#fa-cmd---commands-controls-and-factories) | Commands, controls, factories | `WP-12`-`14` | 50% | 35% | 70% | Add `WP-12` slice 5's command replacement and lifecycle acceptance matrix. |
+| [`FA-CMD`](#fa-cmd---commands-controls-and-factories) | Commands, controls, factories | `WP-12`-`14` | 55% | 35% | 70% | Specify the next retail-backed command lifecycle slice before extending the acceptance matrix. |
 | [`FA-ECON`](#fa-econ---economy-construction-and-engineering) | Economy, construction, engineering | `WP-15`-`19` | 70% | 55% | 85% | Read capture plus ownership transfer, then specify the implementation. |
 | [`FA-LAND`](#fa-land---land-navigation-formations-and-spatial-world) | Land navigation, formations, spatial world | `WP-20`, `21`, `26` | 75% | 30% | 95% | Implement deterministic formation fan-out without weakening the per-army path-service budget. |
 | [`FA-AIR`](#fa-air---aircraft-flight-combat-and-staging) | Aircraft flight, combat, staging | `WP-22` | 30% | 10% | 95% | Implement the deterministic winged-aircraft mover foundation. |
@@ -159,14 +159,14 @@ make test and make verify, record deliberate mode gaps in WP-11, and refresh FA-
 
 ### FA-CMD - Commands, Controls, And Factories
 
-**Largest gap:** the app-level live/replay cutover is now accepted through a build and PostSpawn
-roll-off, but command replacement and lifecycle transitions still lack an acceptance matrix.
+**Largest gap:** the app-level live/replay cutover now covers build, PostSpawn roll-off, queued,
+stopped, replaced, and born-unit commands; the next lifecycle behavior needs a retail-backed slice.
 
 ```text
-/goal Advance FA-CMD by closing WP-12 slice 5's acceptance gap: add an app-level command
-replacement/lifecycle matrix across queued, stopped, replaced, and born units. Assert canonical
-accepted sets, source counters, creation serials, queue ownership, and hashes. Run make test and
-make verify, then update WP-12 and FA-CMD.
+/goal Advance FA-CMD by selecting the next retail-backed WP-12 lifecycle slice after the accepted
+queued/stopped/replaced/born-unit matrix. Record the controlling claim and counterevidence before
+implementation; preserve canonical accepted sets, source counters, creation serials, queue
+ownership, and hashes. Run make test and make verify, then update WP-12 and FA-CMD.
 ```
 
 ### FA-ECON - Economy, Construction, And Engineering

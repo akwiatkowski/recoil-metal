@@ -228,3 +228,219 @@ TEST_CASE("the match runner replays a build and its post-spawn roll-off semantic
     CHECK(replay.spawnedOrderSerial == live.spawnedOrderSerial);
     CHECK(replay.hash == live.hash);
 }
+
+TEST_CASE("the match runner preserves queued, stopping, replacement, and roll-off commands live and in replay") {
+    struct QueueHead {
+        rm::sim::UnitId owner;
+        rm::sim::CommandKind kind = rm::sim::CommandKind::Stop;
+        rm::CommandSerial creationSerial = 0;
+    };
+    struct Result {
+        std::vector<rm::sim::CommandIssue> accepted;
+        std::uint32_t sourceCounter = 0;
+        rm::CommandSerial commandSerial = 0;
+        rm::sim::UnitId stopped;
+        rm::sim::UnitId replaced;
+        rm::sim::UnitId spawned;
+        std::vector<QueueHead> stoppedQueue;
+        std::vector<QueueHead> queueHeads;
+        bool replacedAlive = false;
+        bool spawnedAlive = false;
+        rm::StateHash hash = 0;
+    };
+
+    const auto run = [](const rm::sim::CommandLog* replay) {
+        const rm::HeightField field = flatField();
+        rm::app::UnitScene scene;
+        scene.armies = rm::sim::freeForAll(1);
+        scene.players = rm::sim::onePlayerPerArmy(1, 0);
+        scene.economies.assign(1, rm::sim::Economy{});
+        scene.commandersEver.assign(1, 0);
+
+        rm::unitdef::UnitDef factory;
+        factory.name = "test_factory";
+        factory.buildRate = 60.0f;
+        factory.buildableCategory = {{"TEST_TANK"}};
+        scene.definitions.push_back(factory);
+        const rm::UnitTypeIndex factoryType =
+            scene.catalog.add(&scene.definitions.back(), rm::app::gAppTickRate);
+        scene.setTypeTraits(factoryType, rm::data::moveDefFor(factory), 1.0f);
+
+        rm::unitdef::UnitDef tank;
+        tank.name = "test_tank";
+        tank.categories = {"TEST_TANK"};
+        tank.motion = rm::unitdef::MotionType::Land;
+        tank.speedElmosPerSecond = 10.0f;
+        tank.buildTime = rm::sim::magFromFloat(1.0f);
+        scene.definitions.push_back(tank);
+        const rm::UnitTypeIndex tankType =
+            scene.catalog.add(&scene.definitions.back(), rm::app::gAppTickRate);
+        scene.setTypeTraits(tankType, rm::data::moveDefFor(tank), 1.0f);
+        constexpr std::string_view kTankPath{"/test_tank"};
+        scene.setPathForType(tankType, kTankPath);
+        scene.typeForBlueprint.emplace(kTankPath, tankType);
+
+        const auto spawn = [&](rm::UnitTypeIndex type, float x, float z) {
+            return scene.store.spawn(rm::sim::UnitStore::Spawn{
+                .type = type,
+                .transform = {.x = rm::sim::fxFromFloat(x), .z = rm::sim::fxFromFloat(z)},
+                .motion = rm::app::motionFor(scene.definitions[type], 0),
+                .health = rm::sim::initialHealth(rm::sim::Mag::fromInt(100)),
+            });
+        };
+        const rm::sim::UnitId factoryId = spawn(factoryType, 200.0f, 200.0f);
+        const rm::sim::UnitId stopped = spawn(tankType, 300.0f, 200.0f);
+
+        rm::app::PassabilitySet passability{field, false, 0.0f};
+        rm::vfs::Vfs content;
+        rm::app::MatchRunner runner =
+            rm::app::makeMatchRunner(scene, field, passability, content, {}, {});
+        runner.scripts.clear();
+        runner.replay = replay;
+
+        if (replay == nullptr) {
+            REQUIRE(rm::app::issueMove(scene, stopped, 0, 0, rm::sim::fxFromFloat(400.0f),
+                                       rm::sim::fxFromFloat(200.0f)));
+            REQUIRE(rm::app::issueMove(scene, stopped, 0, 0, rm::sim::fxFromFloat(500.0f),
+                                       rm::sim::fxFromFloat(200.0f), true));
+        }
+        (void)rm::app::advanceMatch(runner, 0, 0.0f);
+
+        const auto queuedHead = [&](rm::sim::UnitId unit) {
+            const rm::sim::QueuedCommand* entry = scene.store.orders()[unit.index].currentEntry();
+            REQUIRE(entry != nullptr);
+            return QueueHead{.owner = entry->unit(),
+                             .kind = entry->kind(),
+                             .creationSerial = entry->payload().creationSerial};
+        };
+        const rm::sim::CommandQueue& stoppedOrders = scene.store.orders()[stopped.index];
+        REQUIRE(stoppedOrders.size() == 2);
+        REQUIRE(stoppedOrders.currentEntry() == &stoppedOrders.entries()[0]);
+        REQUIRE(stoppedOrders.activeEntry() == stoppedOrders.currentEntry());
+        CHECK(stoppedOrders.entries()[0].kind() == rm::sim::CommandKind::Move);
+        CHECK(stoppedOrders.entries()[0].payload().creationSerial == 0);
+        CHECK(stoppedOrders.entries()[1].kind() == rm::sim::CommandKind::Move);
+        CHECK(stoppedOrders.entries()[1].payload().creationSerial == 1);
+        const std::vector<QueueHead> stoppedQueue = {
+            queuedHead(stopped),
+            QueueHead{.owner = stoppedOrders.entries()[1].unit(),
+                      .kind = stoppedOrders.entries()[1].kind(),
+                      .creationSerial = stoppedOrders.entries()[1].payload().creationSerial},
+        };
+
+        if (replay == nullptr) {
+            REQUIRE(rm::app::issueMove(scene, stopped, 0, 1, {}, {}, false,
+                                       rm::sim::CommandKind::Stop));
+        }
+        (void)rm::app::advanceMatch(runner, 1, 0.0f);
+        CHECK(scene.store.orders()[stopped.index].empty());
+        CHECK_FALSE(scene.store.motion()[stopped.index].moving);
+        CHECK(scene.store.motion()[stopped.index].path.empty());
+
+        scene.store.kill(stopped);
+        const rm::sim::UnitId replaced = spawn(tankType, 300.0f, 200.0f);
+
+        if (replay == nullptr) {
+            REQUIRE(rm::app::issueMove(scene, replaced, 0, 2, rm::sim::fxFromFloat(500.0f),
+                                       rm::sim::fxFromFloat(200.0f)));
+            REQUIRE(rm::app::issueBuild(scene, factoryId, 0, 2, tankType,
+                                         rm::sim::fxFromFloat(200.0f),
+                                         rm::sim::fxFromFloat(200.0f)));
+        }
+
+        for (int tick = 2; tick < 5; ++tick) {
+            (void)rm::app::advanceMatch(runner, tick, 0.0f);
+        }
+
+        const rm::sim::UnitId spawned = scene.store.idAt(2);
+        const auto queueHead = [&](rm::sim::UnitId unit) {
+            const rm::sim::QueuedCommand* entry = scene.store.orders()[unit.index].currentEntry();
+            REQUIRE(entry != nullptr);
+            return QueueHead{.owner = entry->unit(),
+                             .kind = entry->kind(),
+                             .creationSerial = entry->payload().creationSerial};
+        };
+
+        return Result{
+            .accepted = {scene.commands.all().begin(), scene.commands.all().end()},
+            .sourceCounter = scene.store.nextCommandCounter(0),
+            .commandSerial = scene.store.nextCommandSerial(),
+            .stopped = stopped,
+            .replaced = replaced,
+            .spawned = spawned,
+            .stoppedQueue = stoppedQueue,
+            .queueHeads = {queueHead(replaced), queueHead(spawned)},
+            .replacedAlive = scene.store.alive(replaced),
+            .spawnedAlive = scene.store.alive(spawned),
+            .hash = rm::sim::hashMatch(scene.store, runner.match),
+        };
+    };
+
+    const Result live = run(nullptr);
+    REQUIRE(live.accepted.size() == 6);
+    CHECK_FALSE(live.accepted[0].queued);
+    CHECK(live.accepted[0].kind == rm::sim::CommandKind::Move);
+    CHECK(live.accepted[0].units == std::vector{live.stopped});
+    CHECK(live.accepted[1].queued);
+    CHECK(live.accepted[1].kind == rm::sim::CommandKind::Move);
+    CHECK(live.accepted[1].units == std::vector{live.stopped});
+    CHECK_FALSE(live.accepted[2].queued);
+    CHECK(live.accepted[2].kind == rm::sim::CommandKind::Stop);
+    CHECK(live.accepted[2].units == std::vector{live.stopped});
+    CHECK(live.accepted[3].units == std::vector{live.replaced});
+    CHECK(live.accepted[5].phase == rm::sim::CommandPhase::PostSpawn);
+    CHECK(live.accepted[5].kind == rm::sim::CommandKind::Move);
+    CHECK(live.accepted[5].units == std::vector{live.spawned});
+    const auto rolloff = rm::sim::rolloffPoint(
+        {rm::sim::fxFromFloat(200.0f), {}, rm::sim::fxFromFloat(200.0f)},
+        rm::sim::Fx::fromInt(128 * rm::kSquareSize / 2),
+        rm::sim::Fx::fromInt(128 * rm::kSquareSize / 2));
+    CHECK(live.accepted[5].targetX == rolloff[0]);
+    CHECK(live.accepted[5].targetZ == rolloff[1]);
+    CHECK(live.sourceCounter == 6);
+    CHECK(live.commandSerial == 6);
+    REQUIRE(live.stoppedQueue.size() == 2);
+    CHECK(live.stoppedQueue[0].owner == live.stopped);
+    CHECK(live.stoppedQueue[0].kind == rm::sim::CommandKind::Move);
+    CHECK(live.stoppedQueue[0].creationSerial == 0);
+    CHECK(live.stoppedQueue[1].owner == live.stopped);
+    CHECK(live.stoppedQueue[1].kind == rm::sim::CommandKind::Move);
+    CHECK(live.stoppedQueue[1].creationSerial == 1);
+    REQUIRE(live.queueHeads.size() == 2);
+    CHECK(live.queueHeads[0].owner == live.replaced);
+    CHECK(live.queueHeads[0].kind == rm::sim::CommandKind::Move);
+    CHECK(live.queueHeads[0].creationSerial == 3);
+    CHECK(live.queueHeads[1].owner == live.spawned);
+    CHECK(live.queueHeads[1].kind == rm::sim::CommandKind::Move);
+    CHECK(live.queueHeads[1].creationSerial == 5);
+    CHECK(live.replacedAlive);
+    CHECK(live.spawnedAlive);
+
+    rm::sim::CommandLog replayLog;
+    for (const rm::sim::CommandIssue& issue : live.accepted) {
+        REQUIRE(replayLog.record(issue));
+    }
+    const Result replay = run(&replayLog);
+
+    CHECK(replay.accepted == live.accepted);
+    CHECK(replay.sourceCounter == live.sourceCounter);
+    CHECK(replay.commandSerial == live.commandSerial);
+    CHECK(replay.stopped == live.stopped);
+    CHECK(replay.replaced == live.replaced);
+    CHECK(replay.spawned == live.spawned);
+    REQUIRE(replay.stoppedQueue.size() == live.stoppedQueue.size());
+    for (std::size_t index = 0; index < live.stoppedQueue.size(); ++index) {
+        CHECK(replay.stoppedQueue[index].owner == live.stoppedQueue[index].owner);
+        CHECK(replay.stoppedQueue[index].kind == live.stoppedQueue[index].kind);
+        CHECK(replay.stoppedQueue[index].creationSerial == live.stoppedQueue[index].creationSerial);
+    }
+    REQUIRE(replay.queueHeads.size() == live.queueHeads.size());
+    for (std::size_t index = 0; index < live.queueHeads.size(); ++index) {
+        CHECK(replay.queueHeads[index].owner == live.queueHeads[index].owner);
+        CHECK(replay.queueHeads[index].kind == live.queueHeads[index].kind);
+        CHECK(replay.queueHeads[index].creationSerial == live.queueHeads[index].creationSerial);
+    }
+    CHECK(replay.replacedAlive == live.replacedAlive);
+    CHECK(replay.spawnedAlive == live.spawnedAlive);
+    CHECK(replay.hash == live.hash);
+}
