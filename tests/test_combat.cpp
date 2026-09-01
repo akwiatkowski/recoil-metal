@@ -191,6 +191,28 @@ TEST_CASE("a unit shoots the nearest enemy and never a friend") {
     CHECK(*target == near);  // the near enemy, not the nearer ally
 }
 
+TEST_CASE("automatic acquisition skips BENIGN enemies") {
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    Roster roster;
+
+    UnitDef benign = targetDef();
+    benign.name = "benign_target";
+    benign.categories = {"BENIGN"};
+    const UnitId nearBenign =
+        roster.add(roster.addType(benign), 0.0f, 50.0f, 1, 100.0f);
+    const UnitId farHostile =
+        roster.add(roster.addType(targetDef()), 0.0f, 100.0f, 1, 100.0f);
+
+    const Weapon weapon = directFire(10.0f, 300.0f);
+    const auto target = rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, weapon,
+                                                roster.store, armies, nullptr,
+                                                &roster.catalog);
+
+    REQUIRE(target.has_value());
+    CHECK(*target == farHostile);
+    CHECK(*target != nearBenign);
+}
+
 TEST_CASE("target ranking preserves distances below hypotenuse quantization") {
     const std::vector<Army> armies = rm::sim::freeForAll(2);
     Roster roster;

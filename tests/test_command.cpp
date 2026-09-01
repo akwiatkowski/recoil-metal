@@ -1027,7 +1027,7 @@ TEST_CASE("a short-range pursuit closes inside the target's path cell") {
     CHECK_FALSE(fixture.roster.motion(hunter).moving);
 }
 
-TEST_CASE("an explicit attack fires at its ordered target, not the nearest hostile") {
+TEST_CASE("an explicit attack fires at its ordered target, not the automatic nearest target") {
     Fixture fixture;
 
     rm::unitdef::UnitDef turret;
@@ -1037,7 +1037,7 @@ TEST_CASE("an explicit attack fires at its ordered target, not the nearest hosti
     beam.role = rm::unitdef::WeaponRole::DirectFire;
     beam.damage = rm::sim::magFromFloat(10.0f);
     beam.maxRange = rm::test::fx(200.0f);
-    beam.rateOfFire = 1.0f;
+    beam.rateOfFire = static_cast<float>(fixture.roster.rate.ticksPerSecond());
     beam.beam = true;
     beam.turreted = true;
     turret.weapons.push_back(beam);
@@ -1050,18 +1050,26 @@ TEST_CASE("an explicit attack fires at its ordered target, not the nearest hosti
     fixture.roster.transform(target).z = rm::test::fx(200.0f);
     fixture.roster.reindex();
 
+    const rm::sim::Mag targetHealth = fixture.roster.store.health()[target.index].current;
+    const rm::sim::Mag decoyHealth = fixture.roster.store.health()[decoy.index].current;
+
+    // Without an order, automatic acquisition selects the nearer eligible enemy.
+    fixture.run(CommandLog{}, 1);
+    CHECK(fixture.roster.store.health()[decoy.index].current < decoyHealth);
+    CHECK(fixture.roster.store.health()[target.index].current == targetHealth);
+
     Command attack = moveOrder(0, 0, attacker, 350.0f, 200.0f);
     attack.kind = CommandKind::Attack;
     attack.target = target;
     CommandLog log;
     REQUIRE(log.record(logged(attack)));
 
-    const rm::sim::Mag targetHealth = fixture.roster.store.health()[target.index].current;
-    const rm::sim::Mag decoyHealth = fixture.roster.store.health()[decoy.index].current;
+    const rm::sim::Mag decoyHealthAfterAutomatic =
+        fixture.roster.store.health()[decoy.index].current;
     fixture.run(log, 1);
 
     CHECK(fixture.roster.store.health()[target.index].current < targetHealth);
-    CHECK(fixture.roster.store.health()[decoy.index].current == decoyHealth);
+    CHECK(fixture.roster.store.health()[decoy.index].current == decoyHealthAfterAutomatic);
 }
 
 TEST_CASE("an explicit attack cannot fire after its target is no longer seen") {

@@ -656,7 +656,10 @@ std::optional<UnitId> nearestTarget(std::array<Fx, 3> from, int fromArmy,
         // sits at row 0 and the ordering falls back to score alone. Callers that do not pass
         // one are asking "what is nearest", not "what does this weapon prefer".
         const unitdef::UnitDef* def = catalog != nullptr ? catalog->def(store.typeAt(slot))
-                                                         : nullptr;
+                                                          : nullptr;
+        if (def != nullptr && def->hasCategory("BENIGN")) {
+            continue;
+        }
         const std::size_t row = def != nullptr ? priorityRow(weapon, *def) : 0;
         if (row == std::numeric_limits<std::size_t>::max()) {
             continue;

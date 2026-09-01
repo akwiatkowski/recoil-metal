@@ -9,7 +9,7 @@ Detailed retail evidence remains canonical in
 [`fa-exe-analysis-plan.md`](fa-exe-analysis-plan.md). This dashboard summarizes that ledger; it
 does not replace its claims, addresses, counterevidence, or confirmation gate.
 
-**Snapshot:** 2026-08-31, Recoil Metal `01a2c76` plus a dirty worktree, retail artifact
+**Snapshot:** 2026-09-01, Recoil Metal `ca30033` plus a dirty worktree, retail artifact
 `ART-E001` (`c6783580c0b7a408ec2ad3bfe5eb1fdbef31a60d92c1007ff9b90c33bb960aa0`).
 
 ## Headline
@@ -67,11 +67,11 @@ excluded from the headline.
 | [`FA-MATCH`](#fa-match---armies-setup-and-victory-rules) | Armies, setup, victory rules | `WP-10`-`11` | 55% | 20% | 85% | Implement retail victory-mode/category predicates and allied-victory handling. |
 | [`FA-CMD`](#fa-cmd---commands-controls-and-factories) | Commands, controls, factories | `WP-12`-`14` | 45% | 35% | 70% | Add the app-level live-versus-replay acceptance test for `WP-12` slice 4. |
 | [`FA-ECON`](#fa-econ---economy-construction-and-engineering) | Economy, construction, engineering | `WP-15`-`19` | 70% | 55% | 85% | Read capture plus ownership transfer, then specify the implementation. |
-| [`FA-LAND`](#fa-land---land-navigation-formations-and-spatial-world) | Land navigation, formations, spatial world | `WP-20`, `21`, `26` | 55% | 20% | 95% | Supply a persistent `PathService` to live and replay match construction, with one app-level FIFO-latency acceptance test. |
+| [`FA-LAND`](#fa-land---land-navigation-formations-and-spatial-world) | Land navigation, formations, spatial world | `WP-20`, `21`, `26` | 60% | 25% | 95% | Add deterministic event-driven replan backoff: 10 beats after a rejected path, then three-strike give-up. |
 | [`FA-AIR`](#fa-air---aircraft-flight-combat-and-staging) | Aircraft flight, combat, staging | `WP-22` | 30% | 10% | 95% | Implement the deterministic winged-aircraft mover foundation. |
 | [`FA-NAVY`](#fa-navy---surface-and-submerged-warfare) | Surface and submerged warfare | `WP-23`-`24` | 35% | 10% | 75% | Implement one complete `SurfacingSub` dive/surface slice. |
 | [`FA-TRANSPORT`](#fa-transport---attachments-cargo-and-ferries) | Attachments, cargo, ferries | `WP-25` | 5% | 0% | 95% | Implement the generic entity attachment graph foundation. |
-| [`FA-WEAPONS`](#fa-weapons---targeting-weapons-and-projectiles) | Targeting, weapons, projectiles | `WP-27`-`28` | 80% | 55% | 90% | Add C-094 BENIGN filtering to automatic acquisition. |
+| [`FA-WEAPONS`](#fa-weapons---targeting-weapons-and-projectiles) | Targeting, weapons, projectiles | `WP-27`-`28` | 85% | 65% | 90% | Separate the death-weapon firing path from automatic acquisition before enabling C-156 empty-priority default-deny. |
 | [`FA-MISSILES`](#fa-missiles---silos-missiles-and-interception) | Silos, missiles, interception | `WP-29` | 5% | 0% | 90% | Implement tactical silo ammo production and decrement-then-fire. |
 | [`FA-DAMAGE`](#fa-damage---damage-death-and-shields) | Damage, death, shields | `WP-30`-`32` | 65% | 40% | 75% | Add the next collidable shield slice: area-shield admission and stacking. |
 | [`FA-INTEL`](#fa-intel---vision-radar-sonar-and-counter-intel) | Vision, radar, sonar, counter-intel | `WP-33` | 70% | 45% | 90% | Add seen-now/seen-ever contact state and bounded retained-contact reaping/redetection. |
