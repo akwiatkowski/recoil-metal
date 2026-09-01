@@ -9,7 +9,7 @@ Detailed retail evidence remains canonical in
 [`fa-exe-analysis-plan.md`](fa-exe-analysis-plan.md). This dashboard summarizes that ledger; it
 does not replace its claims, addresses, counterevidence, or confirmation gate.
 
-**Snapshot:** 2026-09-01, Recoil Metal `9146916` plus a dirty worktree, retail artifact
+**Snapshot:** 2026-09-01, Recoil Metal `5ad3a46` plus a dirty worktree, retail artifact
 `ART-E001` (`c6783580c0b7a408ec2ad3bfe5eb1fdbef31a60d92c1007ff9b90c33bb960aa0`).
 
 ## Headline
@@ -65,7 +65,7 @@ excluded from the headline.
 | [`FA-CONTENT`](#fa-content---vfs-blueprints-maps-and-bootstrap) | VFS, blueprints, maps, bootstrap | `WP-05`, `06`, `09` | 65% | 35% | 55% | Trace and test exact retail SCD mount/override precedence. |
 | [`FA-LUA`](#fa-lua---gameplay-lua-and-mod-contract) | Gameplay Lua and mod contract | `WP-07`-`08` | 10% | 5% | 30% | Measure the exact Moho contract for the milestone-20 skirmish slice. |
 | [`FA-MATCH`](#fa-match---armies-setup-and-victory-rules) | Armies, setup, victory rules | `WP-10`-`11` | 55% | 20% | 85% | Implement retail victory-mode/category predicates and allied-victory handling. |
-| [`FA-CMD`](#fa-cmd---commands-controls-and-factories) | Commands, controls, factories | `WP-12`-`14` | 55% | 35% | 70% | Specify the next retail-backed command lifecycle slice before extending the acceptance matrix. |
+| [`FA-CMD`](#fa-cmd---commands-controls-and-factories) | Commands, controls, factories | `WP-12`-`14` | 60% | 40% | 70% | Implement the retail guard/factory out-of-band queue-edit path without weakening shared-command ownership. |
 | [`FA-ECON`](#fa-econ---economy-construction-and-engineering) | Economy, construction, engineering | `WP-15`-`19` | 70% | 55% | 85% | Read capture plus ownership transfer, then specify the implementation. |
 | [`FA-LAND`](#fa-land---land-navigation-formations-and-spatial-world) | Land navigation, formations, spatial world | `WP-20`, `21`, `26` | 75% | 30% | 95% | Implement deterministic formation fan-out without weakening the per-army path-service budget. |
 | [`FA-AIR`](#fa-air---aircraft-flight-combat-and-staging) | Aircraft flight, combat, staging | `WP-22` | 30% | 10% | 95% | Implement the deterministic winged-aircraft mover foundation. |
@@ -159,14 +159,15 @@ make test and make verify, record deliberate mode gaps in WP-11, and refresh FA-
 
 ### FA-CMD - Commands, Controls, And Factories
 
-**Largest gap:** the app-level live/replay cutover now covers build, PostSpawn roll-off, queued,
-stopped, replaced, and born-unit commands; the next lifecycle behavior needs a retail-backed slice.
+**Largest gap:** the app-level live/replay cutover covers build, PostSpawn roll-off, queued,
+stopped, replaced, born-unit, and factory-repeat commands; retail's guard-driven factory queue
+edits remain absent.
 
 ```text
-/goal Advance FA-CMD by selecting the next retail-backed WP-12 lifecycle slice after the accepted
-queued/stopped/replaced/born-unit matrix. Record the controlling claim and counterevidence before
-implementation; preserve canonical accepted sets, source counters, creation serials, queue
-ownership, and hashes. Run make test and make verify, then update WP-12 and FA-CMD.
+/goal Advance FA-CMD by implementing the retail guard/factory out-of-band queue-edit path from
+C-211 and C-183. Start with a focused shared-command lifecycle regression, preserve canonical
+accepted sets, source counters, creation serials, queue ownership, and hashes. Run make test and
+make verify, then update WP-12 and FA-CMD.
 ```
 
 ### FA-ECON - Economy, Construction, And Engineering

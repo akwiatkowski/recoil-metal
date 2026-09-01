@@ -376,6 +376,11 @@ StateHash hashMatch(const UnitStore& store, const Match& match) {
         // match. The generation says whether this is the same occupant.
         feed(h, static_cast<std::size_t>(store.typeAt(slot)));
         feed(h, static_cast<std::size_t>(store.idAt(slot).generation));
+        // Factory repeat changes what a completed mobile production order does. Keep the
+        // all-disabled stream intact, while a live enabled factory marks authoritative state.
+        if (store.factoryRepeat(store.idAt(slot))) {
+            feed(h, true);
+        }
         // WHETHER THE SLOT IS OCCUPIED, which the generation cannot say on its own. Death is
         // a tombstone: `kill` leaves every array untouched and deliberately does NOT advance
         // the generation mirror, because a stale mirror is what makes a dead unit's handle

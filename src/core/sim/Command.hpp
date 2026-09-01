@@ -101,6 +101,9 @@ enum class CommandKind : std::uint8_t {
     /// (`applyAssistance`). A target with an idle queue is simply waited on — the order is
     /// a standing one and completes only when the target dies.
     Assist = 8,
+    /// Toggle a factory's mobile-production repeat state. This is an authoritative action, not
+    /// presentation state, because it changes what completion does to the production command.
+    ToggleFactoryRepeat = 9,
 };
 
 /// One order, from one player, on one tick.

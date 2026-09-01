@@ -183,6 +183,8 @@ const char* commandKindName(CommandKind kind) noexcept {
         return "overcharge";
     case CommandKind::Assist:
         return "assist";
+    case CommandKind::ToggleFactoryRepeat:
+        return "toggle-factory-repeat";
     }
     return "stop";
 }
@@ -216,6 +218,9 @@ namespace {
     }
     if (name == "overcharge") {
         return CommandKind::Overcharge;
+    }
+    if (name == "toggle-factory-repeat") {
+        return CommandKind::ToggleFactoryRepeat;
     }
     return std::nullopt;
 }
@@ -588,6 +593,22 @@ ApplyCommandResult applyCommand(const CommandIssue& issue, UnitStore& store,
     canonicalizeUnits(canonical);
 
     result.accepted.reserve(canonical.size());
+    if (issue.kind == CommandKind::ToggleFactoryRepeat) {
+        for (const UnitId unit : canonical) {
+            if (!store.alive(unit)) {
+                continue;
+            }
+            const Player* player = playerFor(issue.player, players);
+            const unitdef::UnitDef* definition = catalog.def(store.typeAt(unit.index));
+            if (player == nullptr || !authorised(*player, store, unit, armies)
+                || definition == nullptr || !definition->hasCategory("FACTORY")) {
+                continue;
+            }
+            (void)store.setFactoryRepeat(unit, !store.factoryRepeat(unit));
+            result.accepted.push_back(unit);
+        }
+        return result;
+    }
     std::shared_ptr<SharedCommand> shared;
     for (const UnitId unit : canonical) {
         // Validate the handle and authority before asking a resolver that may index by the
@@ -763,7 +784,8 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
         // materialises on that beat, and a build that completes retires and lets the next
         // order start and materialise behind it without waiting for the next one.
         //
-        // Returns true when a head was retired, so the caller can look at the new one.
+        // Returns true when a completed build left work for dispatch, so the caller can service
+        // the resulting head (or the next repetition of the same one).
         const auto materialiseHead = [&]() -> bool {
             const QueuedCommand* head = orders[slot].active();
             if (head == nullptr || head->kind() != CommandKind::Build || building == nullptr) {
@@ -784,7 +806,39 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
             }
             // Finished, or cancelled out from under the order — either way this builder's own
             // sub-task is over, so the dispatch stage retires the head and starts what follows.
-            (void)orders[slot].finish();
+            const unitdef::UnitDef* builder = catalog.def(store.typeAt(slot));
+            const unitdef::UnitDef* product = catalog.def(head->buildType());
+            const bool repeats = store.factoryRepeat(store.idAt(slot)) && builder != nullptr
+                                  && product != nullptr && builder->hasCategory("FACTORY")
+                                  && product->isMobile();
+            const std::shared_ptr<SharedCommand> payload =
+                store.liveCommand(head->payload().id);
+            if (repeats) {
+                if (payload != nullptr && payload->remainingCount > 1) {
+                    // A repeated shared factory command still consumes each ordinary member
+                    // completion. Only its final member restores the batch before cycling.
+                    if (!store.decreaseCommandCount(payload->id)) {
+                        return false;
+                    }
+                    orders[slot].deactivateCurrent();
+                } else if (payload != nullptr) {
+                    payload->remainingCount = payload->originalCount;
+                    (void)orders[slot].cycle();
+                } else {
+                    (void)orders[slot].cycle();
+                }
+            } else {
+                if (payload != nullptr && !store.decreaseCommandCount(payload->id)) {
+                    return false;
+                }
+                if (payload != nullptr && payload->remainingCount == 0) {
+                    // Exhaustion removes this exact shared command from every member queue. Its
+                    // local head is therefore already gone; dispatch only the newly exposed one.
+                    startPending();
+                    return true;
+                }
+                (void)orders[slot].finish();
+            }
             startPending();
             return true;
         };
@@ -1405,6 +1459,8 @@ bool startCommand(const Command& command, UnitStore& store, const UnitCatalog& c
         }
         return routeUnit(command.unit.index, wreck->at[0], wreck->at[2], store, terrain, grid);
     }
+    case CommandKind::ToggleFactoryRepeat:
+        return false;  // applied immediately by semantic issue intake; it never enters a queue
     }
 
     return false;

@@ -66,7 +66,8 @@ commandAvailability(std::span<const unitdef::UnitDef* const> selection) noexcept
             available[slot] = hasManualWeapon;
             break;
         case sim::CommandKind::Build:
-            break;  // Build is owned by the construction panel and has no rack descriptor.
+        case sim::CommandKind::ToggleFactoryRepeat:
+            break;  // Neither has a command-rack descriptor.
         }
     }
     return available;

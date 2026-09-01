@@ -119,7 +119,7 @@ TEST_CASE("a v1 save state round-trips a unit store snapshot", "[save-state]") {
     CHECK(restored.spawn({}) == original.spawn({}));
 }
 
-TEST_CASE("a v2 save state preserves a published route's revalidation phase", "[save-state]") {
+TEST_CASE("save-state versions preserve route phase and versioned factory repeat state", "[save-state]") {
     UnitStore original;
     UnitStore::Spawn moving;
     moving.motion.path.push_back({rm::sim::Fx::fromInt(56), rm::sim::Fx::fromInt(78)});
@@ -127,11 +127,13 @@ TEST_CASE("a v2 save state preserves a published route's revalidation phase", "[
     moving.motion.pathPhaseStartZ = 5;
     moving.motion.pathPhaseCellsX = 128;
     const auto unit = original.spawn(moving);
+    REQUIRE(original.setFactoryRepeat(unit, true));
 
     RandomStream random{std::uint32_t{1}};
-    const auto v2 = SaveState::encode({.tick = 42, .random = random.snapshot(), .pathServiceBeats = 91,
-                                       .units = original.snapshot()});
-    const auto restored = SaveState::decode(v2);
+    const SaveState state{.tick = 42, .random = random.snapshot(), .pathServiceBeats = 91,
+                          .units = original.snapshot()};
+    const auto v3 = SaveState::encode(state);
+    const auto restored = SaveState::decode(v3);
 
     REQUIRE(restored.has_value());
     CHECK(restored->pathServiceBeats == 91);
@@ -142,13 +144,25 @@ TEST_CASE("a v2 save state preserves a published route's revalidation phase", "[
     CHECK(motion.pathPhaseStartX == 3);
     CHECK(motion.pathPhaseStartZ == 5);
     CHECK(motion.pathPhaseCellsX == 128);
-    CHECK(SaveState::encode(*restored) == v2);
+    CHECK(restored->units.factoryRepeat[unit.index]);
+    CHECK(SaveState::encode(*restored) == v3);
+
+    // v2 was published before factory repeat. It must remain decodable and default the new
+    // state to disabled rather than interpreting a different v2 payload shape.
+    const auto v2 = SaveState::encodeV2(state);
+    const auto published = SaveState::decodeV2(v2);
+    REQUIRE(published.has_value());
+    CHECK(published->units.motion[unit.index].pathPhaseCellsX == 128);
+    CHECK_FALSE(published->units.factoryRepeat[unit.index]);
+    CHECK(SaveState::encodeV2(*published) == v2);
+    REQUIRE(SaveState::decode(v2).has_value());
 
     const auto v1 = SaveState::encodeV1({.tick = 42, .random = random.snapshot(),
-                                         .units = original.snapshot()});
+                                          .units = original.snapshot()});
     const auto old = SaveState::decode(v1);
     REQUIRE(old.has_value());
     CHECK(old->units.motion[unit.index].pathPhaseCellsX == 0);
+    CHECK_FALSE(old->units.factoryRepeat[unit.index]);
 }
 
 TEST_CASE("a v1 save state refuses invalid and truncated input", "[save-state]") {

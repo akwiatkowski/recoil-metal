@@ -12,9 +12,12 @@ UnitStore::UnitStore(const Snapshot& snapshot)
       motion_(snapshot.motion),
       health_(snapshot.health),
       types_(snapshot.types),
+      factoryRepeat_(snapshot.factoryRepeat),
       orders_(snapshot.transforms.size()),
       parents_(snapshot.parents),
-      children_(snapshot.children) {}
+      children_(snapshot.children) {
+    factoryRepeat_.resize(transforms_.size(), false);
+}
 
 UnitStore::Snapshot UnitStore::snapshot() const {
     return {.ids = ids_.snapshot(),
@@ -23,6 +26,7 @@ UnitStore::Snapshot UnitStore::snapshot() const {
              .motion = motion_,
              .health = health_,
              .types = types_,
+             .factoryRepeat = factoryRepeat_,
              .parents = parents_,
              .children = children_};
 }
@@ -39,6 +43,7 @@ UnitId UnitStore::spawn(const Spawn& request) {
         motion_.emplace_back();
         health_.emplace_back();
         types_.emplace_back();
+        factoryRepeat_.emplace_back(false);
         orders_.emplace_back();
         parents_.emplace_back();
         children_.emplace_back();
@@ -49,6 +54,7 @@ UnitId UnitStore::spawn(const Spawn& request) {
     motion_[slot] = request.motion;
     health_[slot] = request.health;
     types_[slot] = request.type;
+    factoryRepeat_[slot] = false;
     // CLEARED HERE rather than in `kill`, which is the tombstone rule applied to orders: a
     // corpse keeps its arrays so the death blast can read them, and a slot is only wiped when
     // something new moves in. A queue left behind would have the newcomer inherit the dead
@@ -123,6 +129,7 @@ void UnitStore::kill(UnitId id) {
     // command ID expire when this was its final member; the other tombstone arrays remain.
     orders_[id.index].clear();
     orders_[id.index].clearObserver();
+    factoryRepeat_[id.index] = false;
     (void)detach(id);
     for (const UnitId child : children_[id.index]) {
         if (child.index < parents_.size() && parents_[child.index] == id) {
@@ -211,6 +218,18 @@ std::size_t UnitStore::liveCommandCount() {
         }
     }
     return liveCommands_.size();
+}
+
+bool UnitStore::setFactoryRepeat(UnitId unit, bool enabled) noexcept {
+    if (!alive(unit)) {
+        return false;
+    }
+    factoryRepeat_[unit.index] = enabled;
+    return true;
+}
+
+bool UnitStore::factoryRepeat(UnitId unit) const noexcept {
+    return alive(unit) && factoryRepeat_[unit.index];
 }
 
 bool UnitStore::increaseCommandCount(CommandId id, std::uint32_t amount) {

@@ -20,9 +20,12 @@ struct SaveState {
 
     [[nodiscard]] static std::vector<std::byte> encodeV1(const SaveState& state);
     [[nodiscard]] static std::optional<SaveState> decodeV1(std::span<const std::byte> bytes);
-    /// The current v2 format includes path-service and route-revalidation phase state.
+    /// The published v2 format includes path-service and route-revalidation phase state.
+    [[nodiscard]] static std::vector<std::byte> encodeV2(const SaveState& state);
+    [[nodiscard]] static std::optional<SaveState> decodeV2(std::span<const std::byte> bytes);
+    /// The latest v3 format additionally preserves factory-repeat state.
     [[nodiscard]] static std::vector<std::byte> encode(const SaveState& state);
-    /// Decodes supported save versions, including the original v1 format.
+    /// Decodes all supported save versions, including v1 and the published v2 format.
     [[nodiscard]] static std::optional<SaveState> decode(std::span<const std::byte> bytes);
 };
 

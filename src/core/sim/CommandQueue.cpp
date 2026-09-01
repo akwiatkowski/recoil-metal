@@ -28,6 +28,7 @@ template <typename Order>
     }
     switch (a.kind) {
     case CommandKind::Stop:
+    case CommandKind::ToggleFactoryRepeat:
         return false;
     case CommandKind::Move:
     case CommandKind::AttackMove:

@@ -74,6 +74,7 @@ public:
         std::vector<MoveState> motion;
         std::vector<Health> health;
         std::vector<UnitTypeIndex> types;
+        std::vector<bool> factoryRepeat;
         std::vector<std::optional<UnitId>> parents;
         std::vector<std::vector<UnitId>> children;
     };
@@ -165,6 +166,11 @@ public:
     [[nodiscard]] std::shared_ptr<SharedCommand> liveCommand(CommandId id);
     [[nodiscard]] std::size_t liveCommandCount();
 
+    /// Per-live-unit factory repeat execution state. Command dispatch reads this only when a
+    /// mobile factory product completes; semantic command intake owns the choice to change it.
+    [[nodiscard]] bool setFactoryRepeat(UnitId unit, bool enabled) noexcept;
+    [[nodiscard]] bool factoryRepeat(UnitId unit) const noexcept;
+
     /// Shared repeat/count operations. Exhaustion removes this exact object from every member
     /// queue, matching retail's cross-queue `DecreaseCommandCount` path.
     [[nodiscard]] bool increaseCommandCount(CommandId id, std::uint32_t amount = 1);
@@ -223,6 +229,7 @@ private:
     std::vector<MoveState> motion_;
     std::vector<Health> health_;
     std::vector<UnitTypeIndex> types_;
+    std::vector<bool> factoryRepeat_;
     std::vector<CommandQueue> orders_;
     std::vector<std::optional<UnitId>> parents_;
     std::vector<std::vector<UnitId>> children_;

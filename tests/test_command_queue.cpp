@@ -10,6 +10,7 @@
 #include "core/sim/CommandQueue.hpp"
 #include "core/sim/Pathfinding.hpp"
 #include "core/sim/Skirmish.hpp"
+#include "core/sim/StateHash.hpp"
 
 #include "support/TestRoster.hpp"
 
@@ -1446,6 +1447,178 @@ TEST_CASE("a queued mobile product waits for and starts on its own grid") {
           == 1);
     REQUIRE(building.size() == 1);
     CHECK(building.front().blueprintIndex == productType);
+}
+
+TEST_CASE("factory repeat consumes a shared count before cycling mobile production") {
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    const rm::sim::PassabilityGrid grid =
+        rm::sim::buildPassability(field, 0.0f, 60.0f, 0.0f);
+
+    rm::test::Roster roster;
+    rm::unitdef::UnitDef factoryDef;
+    factoryDef.name = "factory";
+    factoryDef.categories = {"FACTORY"};
+    factoryDef.buildRate = 10.0f;
+    factoryDef.buildableCategory = {{"PRODUCT"}};
+    const rm::UnitTypeIndex factoryType = roster.addType(factoryDef);
+    rm::unitdef::UnitDef productDef = walkerDef();
+    productDef.name = "product";
+    productDef.categories = {"PRODUCT"};
+    productDef.buildTime = rm::sim::magFromFloat(100.0f);
+    const rm::UnitTypeIndex productType = roster.addType(productDef);
+    const UnitId factory = roster.add(factoryType, 40.0f, 40.0f, 0, 100.0f);
+    const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(1);
+    const std::vector<rm::sim::Player> players{rm::sim::Player{.index = 0, .army = 0}};
+    const std::vector<const rm::sim::PassabilityGrid*> grids{&grid, &grid};
+    std::vector<rm::sim::Construction> building;
+
+    const CommandIssue first{.source = 0,
+                             .id = rm::commandId(0, 41),
+                               .player = 0,
+                               .kind = CommandKind::Build,
+                               .units = {factory},
+                               .buildType = productType,
+                               .count = 2};
+    REQUIRE(rm::sim::applyCommand(first, roster.store, roster.catalog, players, armies, terrain,
+                                  [&grid](UnitId) { return &grid; }, roster.rate, &building));
+    REQUIRE(rm::sim::applyCommand(
+        Command{.kind = CommandKind::Build,
+                .queued = true,
+                .unit = factory,
+                .buildType = productType},
+        roster.store, roster.catalog, players, armies, terrain, grid, roster.rate, &building));
+    const rm::CommandId repeated = roster.store.orders()[factory.index].current()->payload().id;
+    rm::sim::CommandBuffer input;
+    REQUIRE(input.submit(CommandIssue{.source = 0,
+                                      .player = 0,
+                                      .kind = CommandKind::ToggleFactoryRepeat,
+                                      .units = {factory}},
+                         roster.store));
+    const std::vector<CommandIssue> repeatToggle =
+        input.take(0, rm::sim::CommandPhase::PreTick);
+    REQUIRE(repeatToggle.size() == 1);
+    REQUIRE(rm::sim::applyCommand(repeatToggle.front(), roster.store, roster.catalog, players,
+                                  armies, terrain, [&grid](UnitId) { return &grid; }, roster.rate));
+    REQUIRE(roster.store.factoryRepeat(factory));
+
+    // The first completion consumes one member of the shared repeat batch. It stays ahead of
+    // the follower to start its final repetition rather than cycling early.
+    building.front().buildTimeRemaining = rm::sim::Mag{};
+    CHECK(rm::sim::advanceOrders(roster.store, roster.catalog, terrain, grids, roster.rate,
+                                  &building)
+          == 1);
+    const std::deque<rm::sim::QueuedCommand>& queue = roster.store.orders()[factory.index].entries();
+    REQUIRE(queue.size() == 2);
+    CHECK(queue.front().payload().id == repeated);
+    CHECK(queue.back().payload().id != repeated);
+    CHECK(roster.store.liveCommand(repeated)->remainingCount == 1);
+    CHECK(roster.store.liveCommand(repeated)->originalCount == 2);
+    REQUIRE(roster.store.orders()[factory.index].active() != nullptr);
+    CHECK(roster.store.orders()[factory.index].active()->payload().id == repeated);
+
+    // The final completion restores the original count and rotates the repeat behind its
+    // follower, where the next dispatch can start that follower normally.
+    building.back().buildTimeRemaining = rm::sim::Mag{};
+    CHECK(rm::sim::advanceOrders(roster.store, roster.catalog, terrain, grids, roster.rate,
+                                  &building)
+          == 1);
+    REQUIRE(queue.size() == 2);
+    CHECK(queue.front().payload().id != repeated);
+    CHECK(queue.back().payload().id == repeated);
+    CHECK(roster.store.liveCommand(repeated)->remainingCount
+          == roster.store.liveCommand(repeated)->originalCount);
+    CHECK(roster.store.liveCommand(repeated)->originalCount == 2);
+    REQUIRE(roster.store.orders()[factory.index].active() != nullptr);
+    CHECK(roster.store.orders()[factory.index].active()->payload().id != repeated);
+
+    // Turning repeat back off does not change the ordinary completion path.
+    REQUIRE(input.submit(CommandIssue{.source = 0,
+                                      .player = 0,
+                                      .kind = CommandKind::ToggleFactoryRepeat,
+                                      .units = {factory}},
+                         roster.store));
+    const std::vector<CommandIssue> repeatToggleOff =
+        input.take(0, rm::sim::CommandPhase::PreTick);
+    REQUIRE(repeatToggleOff.size() == 1);
+    REQUIRE(rm::sim::applyCommand(repeatToggleOff.front(), roster.store, roster.catalog, players,
+                                  armies, terrain, [&grid](UnitId) { return &grid; }, roster.rate));
+    REQUIRE_FALSE(roster.store.factoryRepeat(factory));
+    building.back().buildTimeRemaining = rm::sim::Mag{};
+    CHECK(rm::sim::advanceOrders(roster.store, roster.catalog, terrain, grids, roster.rate,
+                                 &building)
+          == 1);
+    REQUIRE(roster.store.orders()[factory.index].size() == 1);
+    CHECK(roster.store.orders()[factory.index].current()->payload().id == repeated);
+
+    building.back().buildTimeRemaining = rm::sim::Mag{};
+    CHECK(rm::sim::advanceOrders(roster.store, roster.catalog, terrain, grids, roster.rate,
+                                 &building)
+          == 0);
+    CHECK(roster.store.orders()[factory.index].empty());
+}
+
+TEST_CASE("factory repeat toggles through a logged semantic issue and replays") {
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    const rm::sim::PassabilityGrid grid =
+        rm::sim::buildPassability(field, 0.0f, 60.0f, 0.0f);
+    rm::unitdef::UnitDef factoryDef;
+    factoryDef.name = "factory";
+    factoryDef.categories = {"FACTORY"};
+    const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(1);
+    const std::vector<rm::sim::Player> players{rm::sim::Player{.index = 0, .army = 0}};
+    const auto makeRoster = [&] {
+        rm::test::Roster roster;
+        const UnitId factory = roster.add(roster.addType(factoryDef), 40.0f, 40.0f, 0, 100.0f);
+        return std::pair{std::move(roster), factory};
+    };
+
+    auto [live, factory] = makeRoster();
+    rm::sim::CommandBuffer input;
+    REQUIRE(input.submit(CommandIssue{.tick = 7,
+                                      .source = 0,
+                                      .player = 0,
+                                      .kind = CommandKind::ToggleFactoryRepeat,
+                                      .units = {factory}},
+                         live.store));
+    std::vector<CommandIssue> due = input.take(7, rm::sim::CommandPhase::PreTick);
+    REQUIRE(due.size() == 1);
+    const rm::sim::ApplyCommandResult accepted = rm::sim::applyCommand(
+        due.front(), live.store, live.catalog, players, armies, terrain,
+        [&grid](UnitId) { return &grid; }, live.rate);
+    due.front().units = accepted.accepted;
+    rm::sim::CommandLog log;
+    REQUIRE(log.record(due.front()));
+    CHECK(live.store.factoryRepeat(factory));
+
+    auto [replay, replayFactory] = makeRoster();
+    rm::sim::CommandBuffer replayInput;
+    REQUIRE(replayInput.submit(log.all().front(), replay.store));
+    const std::vector<CommandIssue> replayed =
+        replayInput.take(7, rm::sim::CommandPhase::PreTick);
+    REQUIRE(replayed.size() == 1);
+    CHECK(rm::sim::applyCommand(replayed.front(), replay.store, replay.catalog, players, armies,
+                                terrain, [&grid](UnitId) { return &grid; }, replay.rate));
+    CHECK(replay.store.factoryRepeat(replayFactory));
+}
+
+TEST_CASE("factory repeat state contributes to the match hash") {
+    rm::test::Roster disabled;
+    rm::test::Roster enabled;
+    const rm::UnitTypeIndex disabledType = disabled.addType(walkerDef());
+    const rm::UnitTypeIndex enabledType = enabled.addType(walkerDef());
+    const UnitId disabledUnit = disabled.add(disabledType, 40.0f, 40.0f, 0, 100.0f);
+    const UnitId enabledUnit = enabled.add(enabledType, 40.0f, 40.0f, 0, 100.0f);
+    REQUIRE(disabledUnit == enabledUnit);
+    REQUIRE(enabled.store.setFactoryRepeat(enabledUnit, true));
+
+    std::vector<rm::sim::Army> armies = rm::sim::freeForAll(1);
+    const rm::sim::Match match{.armies = armies,
+                               .economies = {},
+                               .passability = {},
+                               .commandersEver = {}};
+    CHECK(rm::sim::hashMatch(disabled.store, match) != rm::sim::hashMatch(enabled.store, match));
 }
 
 TEST_CASE("a queued immobile structure falls back to its builder grid") {
