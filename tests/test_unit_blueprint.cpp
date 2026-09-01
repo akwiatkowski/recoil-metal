@@ -16,6 +16,7 @@
 #include <fstream>
 #include <numbers>
 #include <string>
+#include <vector>
 
 #include "support/FxMatchers.hpp"
 
@@ -424,6 +425,32 @@ TEST_CASE("FA weapon target layers distinguish interceptors from bombers") {
         CHECK(def->weapons[0].canTarget(false));
         CHECK_FALSE(def->weapons[0].canTarget(true));
     }
+}
+
+TEST_CASE("FA weapon target restrictions retain complete category expressions") {
+    const Blueprint bp{"target_restrictions_unit.bp", R"(
+        UnitBlueprint {
+            Physics = { MotionType = 'RULEUMT_Land', MaxSpeed = 1 },
+            SizeX = 1, SizeZ = 1,
+            Weapon = {
+                {
+                    WeaponCategory = 'Direct Fire', Damage = 10, MaxRadius = 20, RateOfFire = 1,
+                    TargetRestrictOnlyAllow = 'NAVAL MOBILE',
+                    TargetRestrictOnlyDisallow = 'NAVAL EXPERIMENTAL',
+                },
+            },
+        }
+    )"};
+
+    const auto def = rm::unitbp::loadFile(bp.path());
+    REQUIRE(def.has_value());
+    REQUIRE(def->weapons.size() == 1);
+    REQUIRE(def->weapons[0].targetRestrictOnlyAllow.has_value());
+    REQUIRE(def->weapons[0].targetRestrictOnlyDisallow.has_value());
+    CHECK(*def->weapons[0].targetRestrictOnlyAllow
+          == std::vector<std::string>{"NAVAL", "MOBILE"});
+    CHECK(*def->weapons[0].targetRestrictOnlyDisallow
+          == std::vector<std::string>{"NAVAL", "EXPERIMENTAL"});
 }
 
 TEST_CASE("an ordinary FA shield reads its capacity, radius and recovery timing") {

@@ -258,6 +258,16 @@ struct Weapon {
     /// whose tags are ANDed — and `matchesExpression` accepts it directly.
     std::vector<std::vector<std::string>> targetPriorities;
 
+    /// Category expressions that constrain automatic acquisition: `OnlyAllow` admits a
+    /// candidate only when it matches, while `OnlyDisallow` rejects a matching candidate.
+    ///
+    /// These remain optional so an absent field differs from a present empty expression:
+    /// `matchesExpression` deliberately matches neither. They are spelled out instead of using
+    /// `CategoryTerm`, for the same include-cycle reason as `targetPriorities`; each is the
+    /// identical `vector<string>` shape, with all tags ANDed.
+    std::optional<std::vector<std::string>> targetRestrictOnlyAllow;
+    std::optional<std::vector<std::string>> targetRestrictOnlyDisallow;
+
     /// Whether the weapon has a turret. A turreted weapon may fire without the hull
     /// turning; 284 of the 399 that say so are turreted.
     bool turreted = false;

@@ -576,7 +576,7 @@ enum class ReachClass : int { InRange = 0, TooClose = 1, OutsideArc = 2, CannotR
 /// So: everything else about retail's ordering is implemented, and this one rule waits for
 /// the infrastructure it depends on. Flipping it later is a two-line change plus the paths.
 [[nodiscard]] std::size_t priorityRow(const unitdef::Weapon& weapon,
-                                      const unitdef::UnitDef& candidate) {
+                                       const unitdef::UnitDef& candidate) {
     if (weapon.targetPriorities.empty()) {
         return 0;  // see above: retail would return "no match" and refuse to fire
     }
@@ -587,6 +587,21 @@ enum class ReachClass : int { InRange = 0, TooClose = 1, OutsideArc = 2, CannotR
         }
     }
     return std::numeric_limits<std::size_t>::max();
+}
+
+/// Whether a candidate survives the weapon's category restrictions. This intentionally uses the
+/// common expression matcher: restrictions have the same AND-within, OR-across semantics as the
+/// other FA category expressions rather than treating their text as special targeting layers.
+[[nodiscard]] bool passesTargetRestrictions(const unitdef::Weapon& weapon,
+                                            const unitdef::UnitDef& candidate) {
+    if (weapon.targetRestrictOnlyAllow
+        && !unitdef::matchesExpression(
+            unitdef::CategoryExpression{*weapon.targetRestrictOnlyAllow}, candidate)) {
+        return false;
+    }
+    return !weapon.targetRestrictOnlyDisallow
+           || !unitdef::matchesExpression(
+               unitdef::CategoryExpression{*weapon.targetRestrictOnlyDisallow}, candidate);
 }
 
 } // namespace
@@ -615,6 +630,14 @@ std::optional<UnitId> nearestTarget(std::array<Fx, 3> from, int fromArmy,
             continue;
         }
         if (slot >= motion.size() || !weapon.canTarget(motion[slot].airborne)) {
+            continue;
+        }
+        const unitdef::UnitDef* def = catalog != nullptr ? catalog->def(store.typeAt(slot))
+                                                           : nullptr;
+        if (def != nullptr && def->hasCategory("BENIGN")) {
+            continue;
+        }
+        if (def != nullptr && !passesTargetRestrictions(weapon, *def)) {
             continue;
         }
 
@@ -655,11 +678,6 @@ std::optional<UnitId> nearestTarget(std::array<Fx, 3> from, int fromArmy,
         // Without a catalog there is nothing to match a category against, so every candidate
         // sits at row 0 and the ordering falls back to score alone. Callers that do not pass
         // one are asking "what is nearest", not "what does this weapon prefer".
-        const unitdef::UnitDef* def = catalog != nullptr ? catalog->def(store.typeAt(slot))
-                                                          : nullptr;
-        if (def != nullptr && def->hasCategory("BENIGN")) {
-            continue;
-        }
         const std::size_t row = def != nullptr ? priorityRow(weapon, *def) : 0;
         if (row == std::numeric_limits<std::size_t>::max()) {
             continue;

@@ -213,6 +213,41 @@ TEST_CASE("automatic acquisition skips BENIGN enemies") {
     CHECK(*target != nearBenign);
 }
 
+TEST_CASE("automatic acquisition applies category target restrictions before ranking") {
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    Roster roster;
+
+    UnitDef naval = targetDef();
+    naval.name = "naval_target";
+    naval.categories = {"NAVAL"};
+    UnitDef land = targetDef();
+    land.name = "land_target";
+    land.categories = {"LAND"};
+    const UnitId nearNaval = roster.add(roster.addType(naval), 0.0f, 50.0f, 1, 100.0f);
+    const UnitId farLand = roster.add(roster.addType(land), 0.0f, 100.0f, 1, 100.0f);
+
+    Weapon weapon = directFire(10.0f, 300.0f);
+    weapon.targetPriorities = {{"NAVAL"}, {"LAND"}};
+
+    SECTION("only-allow selects an eligible NAVAL target over a nearer non-NAVAL target") {
+        roster.transform(nearNaval).z = rm::test::fx(100.0f);
+        roster.transform(farLand).z = rm::test::fx(50.0f);
+        roster.reindex();
+        weapon.targetPriorities = {{"LAND"}, {"NAVAL"}};
+        weapon.targetRestrictOnlyAllow = std::vector<std::string>{"NAVAL"};
+        CHECK(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, weapon, roster.store, armies,
+                                     nullptr, &roster.catalog)
+              == nearNaval);
+    }
+
+    SECTION("only-disallow rejects a higher-ranked NAVAL target for another eligible target") {
+        weapon.targetRestrictOnlyDisallow = std::vector<std::string>{"NAVAL"};
+        CHECK(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, weapon, roster.store, armies,
+                                     nullptr, &roster.catalog)
+              == farLand);
+    }
+}
+
 TEST_CASE("target ranking preserves distances below hypotenuse quantization") {
     const std::vector<Army> armies = rm::sim::freeForAll(2);
     Roster roster;

@@ -129,17 +129,21 @@ std::vector<Weapon> weaponsFrom(const lua::Value& weaponArray, bool airborneSour
             cannotGround != nullptr && cannotGround->asBoolean().value_or(false)) {
             layers &= ~static_cast<std::uint8_t>(TargetLayerMask::Surface);
         }
-        if (const std::optional<std::string_view> only =
-                entry.stringAt("TargetRestrictOnlyAllow");
-            only && containsWord(*only, "AIR")) {
-            layers &= static_cast<std::uint8_t>(TargetLayerMask::Air);
-        }
         if (const std::optional<std::string_view> disallow =
                 entry.stringAt("TargetRestrictDisallow");
             disallow && containsWord(*disallow, "AIR")) {
             layers &= ~static_cast<std::uint8_t>(TargetLayerMask::Air);
         }
         weapon.targetLayers = static_cast<TargetLayerMask>(layers);
+
+        if (const std::optional<std::string_view> allow =
+                entry.stringAt("TargetRestrictOnlyAllow")) {
+            weapon.targetRestrictOnlyAllow = parseCategoryTerm(*allow);
+        }
+        if (const std::optional<std::string_view> disallow =
+                entry.stringAt("TargetRestrictOnlyDisallow")) {
+            weapon.targetRestrictOnlyDisallow = parseCategoryTerm(*disallow);
+        }
 
         weapon.damage = sim::magFromFloat(numberOr(entry, "Damage", 0.0f));
         weapon.damageType = std::string{entry.stringAt("DamageType").value_or("")};
