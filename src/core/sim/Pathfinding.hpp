@@ -42,7 +42,7 @@ inline constexpr int kPathPhase13Period = 13;
 
 /// Both staggered passes must select the path before its work is due.
 [[nodiscard]] constexpr bool pathPhaseDue(int startX, int startZ, int cellsX,
-                                          int tick) noexcept {
+                                           std::uint64_t tick) noexcept {
     return pathPhase7(startX, startZ, cellsX) == tick % kPathPhase7Period
            && pathPhase13(startX, startZ, cellsX) == tick % kPathPhase13Period;
 }

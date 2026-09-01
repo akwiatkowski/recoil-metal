@@ -9,7 +9,7 @@ Detailed retail evidence remains canonical in
 [`fa-exe-analysis-plan.md`](fa-exe-analysis-plan.md). This dashboard summarizes that ledger; it
 does not replace its claims, addresses, counterevidence, or confirmation gate.
 
-**Snapshot:** 2026-09-01, Recoil Metal `7c0923c` plus a dirty worktree, retail artifact
+**Snapshot:** 2026-09-01, Recoil Metal `9146916` plus a dirty worktree, retail artifact
 `ART-E001` (`c6783580c0b7a408ec2ad3bfe5eb1fdbef31a60d92c1007ff9b90c33bb960aa0`).
 
 ## Headline
@@ -67,7 +67,7 @@ excluded from the headline.
 | [`FA-MATCH`](#fa-match---armies-setup-and-victory-rules) | Armies, setup, victory rules | `WP-10`-`11` | 55% | 20% | 85% | Implement retail victory-mode/category predicates and allied-victory handling. |
 | [`FA-CMD`](#fa-cmd---commands-controls-and-factories) | Commands, controls, factories | `WP-12`-`14` | 45% | 35% | 70% | Add the app-level live-versus-replay acceptance test for `WP-12` slice 4. |
 | [`FA-ECON`](#fa-econ---economy-construction-and-engineering) | Economy, construction, engineering | `WP-15`-`19` | 70% | 55% | 85% | Read capture plus ownership transfer, then specify the implementation. |
-| [`FA-LAND`](#fa-land---land-navigation-formations-and-spatial-world) | Land navigation, formations, spatial world | `WP-20`, `21`, `26` | 70% | 30% | 95% | Use the deterministic mod-7/mod-13 phase helpers to gate C-177 blocked-path checks before wait-then-repath. |
+| [`FA-LAND`](#fa-land---land-navigation-formations-and-spatial-world) | Land navigation, formations, spatial world | `WP-20`, `21`, `26` | 75% | 30% | 95% | Implement deterministic formation fan-out without weakening the per-army path-service budget. |
 | [`FA-AIR`](#fa-air---aircraft-flight-combat-and-staging) | Aircraft flight, combat, staging | `WP-22` | 30% | 10% | 95% | Implement the deterministic winged-aircraft mover foundation. |
 | [`FA-NAVY`](#fa-navy---surface-and-submerged-warfare) | Surface and submerged warfare | `WP-23`-`24` | 35% | 10% | 75% | Implement one complete `SurfacingSub` dive/surface slice. |
 | [`FA-TRANSPORT`](#fa-transport---attachments-cargo-and-ferries) | Attachments, cargo, ferries | `WP-25` | 15% | 0% | 95% | Apply child offset transforms from the generic attachment graph during the simulation tick. |
@@ -185,16 +185,14 @@ claims, and FA-ECON; create the smallest implementation task justified by the re
 
 ### FA-LAND - Land Navigation, Formations, And Spatial World
 
-**Largest gap:** the per-army FIFO service, C-176 retry contract, and deterministic phase helpers
-exist, but completed paths do not yet detect dynamic blockage on those phases; formations are also
-absent.
+**Largest gap:** completed land routes now detect a newly blocked final cell on their deterministic
+mod-7/mod-13 phase and return through the C-176 retry path, but formations are absent.
 
 ```text
-/goal Advance FA-LAND by using the existing C-177 phase helpers to gate deterministic blocked-path
-detection: retain each active route's packed-start identity, check it only on both matching beats,
-and wait-then-repath through the existing C-176 retry path. Start with a blocked-route regression;
-preserve per-army FIFO and its fixed integer budget. Leave HPA*, reservations, and formations
-explicitly deferred. Run make test and make verify, then refresh FA-LAND.
+/goal Advance FA-LAND by implementing deterministic formation fan-out for one group move while
+preserving the per-army FIFO path-service budget and C-176/C-177 retry semantics. Start with a
+focused group-order regression, leave HPA* and reservations explicitly deferred, run make test and
+make verify, then refresh FA-LAND.
 ```
 
 ### FA-AIR - Aircraft Flight, Combat, And Staging

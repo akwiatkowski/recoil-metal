@@ -347,6 +347,7 @@ void teardownMovement(MoveState& motion) {
     motion.moving = false;
     motion.path.clear();
     motion.pathIndex = 0;
+    motion.pathPhaseCellsX = 0;
 }
 
 [[nodiscard]] bool applyCommandMember(
@@ -507,6 +508,9 @@ void teardownMovement(MoveState& motion) {
         orders.append(QueuedCommand{command.unit, payload});
         orders.markCurrentActive();
         const Transform& at = store.transforms()[command.unit.index];
+        motion.pathPhaseStartX = grid.cellAtWorld(at.x);
+        motion.pathPhaseStartZ = grid.cellAtWorld(at.z);
+        motion.pathPhaseCellsX = grid.cellsX;
         pathService->enqueue(PathRequest{.unit = command.unit,
                                          .command = id,
                                          .army = motion.armyIndex,
@@ -671,7 +675,7 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
                            std::span<const PassabilityGrid* const> gridForType, TickRate rate,
                            std::vector<Construction>* building, EventQueue* events,
                            const FeatureStore* features, std::vector<Construction>* finished,
-                           const PathService* pathService) {
+                            PathService* pathService) {
     std::size_t started = 0;
 
     const std::span<CommandQueue> orders = store.orders();
@@ -711,6 +715,24 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
                 const PassabilityGrid* pendingGrid = gridFor(*pending);
                 if (pendingGrid == nullptr) {
                     return;  // leave it pending until its movement domain exists
+                }
+                if (pending->kind() == CommandKind::Move && pathService != nullptr) {
+                    MoveState& pendingMotion = store.motion()[slot];
+                    const Transform& at = store.transforms()[slot];
+                    pendingMotion.pathPhaseStartX = pendingGrid->cellAtWorld(at.x);
+                    pendingMotion.pathPhaseStartZ = pendingGrid->cellAtWorld(at.z);
+                    pendingMotion.pathPhaseCellsX = pendingGrid->cellsX;
+                    pathService->enqueue(PathRequest{.unit = store.idAt(slot),
+                                                     .command = pending->payload().id,
+                                                     .army = pendingMotion.armyIndex,
+                                                     .fromX = at.x,
+                                                     .fromZ = at.z,
+                                                     .targetX = pending->asCommand().targetX,
+                                                     .targetZ = pending->asCommand().targetZ,
+                                                     .grid = std::make_shared<PassabilityGrid>(*pendingGrid)});
+                    orders[slot].markCurrentActive();
+                    ++started;
+                    return;
                 }
                 const bool wasInstant = instantaneous(pending->kind());
                 if (startCommand(pending->asCommand(), store, catalog, terrain, *pendingGrid,
@@ -798,6 +820,36 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
         const PassabilityGrid* grid = gridFor(*current);
         if (grid == nullptr) {
             continue;  // a missing domain leaves the command queued rather than dropping it
+        }
+
+        // C-177 validates an already-published land route only on its accepted start cell's
+        // staggered pass. The path service has just completed this tick's pass, so its retained
+        // beat is the shared match clock rather than a caller-local counter.
+        MoveState& currentMotion = store.motion()[slot];
+        if (current->kind() == CommandKind::Move && pathService != nullptr
+             && !currentMotion.path.empty() && currentMotion.pathPhaseCellsX > 0
+             && pathPhaseDue(currentMotion.pathPhaseStartX, currentMotion.pathPhaseStartZ,
+                             currentMotion.pathPhaseCellsX,
+                             pathService->lastServiceBeat())) {
+            const std::array<Fx, 2>& final = currentMotion.path.back();
+            if (!grid->passableAt(grid->cellAtWorld(final[0]), grid->cellAtWorld(final[1]))) {
+                // Withdraw only the derived route. The active command remains at the queue head
+                // and the admitted request keeps it command-owned until C-176's retry policy
+                // either finds a route or retires the third failed search.
+                currentMotion.moving = false;
+                currentMotion.path.clear();
+                currentMotion.pathIndex = 0;
+                const Transform& at = store.transforms()[slot];
+                pathService->enqueue(PathRequest{.unit = store.idAt(slot),
+                                                 .command = current->payload().id,
+                                                 .army = currentMotion.armyIndex,
+                                                 .fromX = at.x,
+                                                 .fromZ = at.z,
+                                                 .targetX = final[0],
+                                                 .targetZ = final[1],
+                                                 .grid = std::make_shared<PassabilityGrid>(*grid)});
+                continue;
+            }
         }
 
         // THE CHASE. An attack naming a LIVING target never completes by arrival — it
@@ -973,6 +1025,7 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
 
         // An ordinary completion immediately re-enters command dispatch in this beat.
         (void)orders[slot].finish();
+        currentMotion.pathPhaseCellsX = 0;
         startPending();
     }
 
@@ -1135,9 +1188,7 @@ bool startCommand(const Command& command, UnitStore& store, const UnitCatalog& c
     case CommandKind::Stop:
         // In place, and the route cleared: without that the unit resumes its old orders the
         // moment something else sets `moving`.
-        motion.moving = false;
-        motion.path.clear();
-        motion.pathIndex = 0;
+        teardownMovement(motion);
         return true;
 
     case CommandKind::Overcharge: {

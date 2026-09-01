@@ -72,6 +72,14 @@ public:
     [[nodiscard]] const std::vector<std::size_t>& failureCounts() const noexcept {
         return failureCounts_;
     }
+    /// The tick whose service pass most recently completed. `advanceOrders` runs immediately
+    /// afterwards, so this is the match tick for C-177's phase gate.
+    [[nodiscard]] std::uint64_t lastServiceBeat() const noexcept {
+        return serviceBeats_ == 0 ? 0 : serviceBeats_ - 1;
+    }
+    [[nodiscard]] std::uint64_t serviceBeats() const noexcept { return serviceBeats_; }
+    /// Restores the match-owned beat clock before service resumes from a save state.
+    void restoreServiceBeats(std::uint64_t beats) noexcept { serviceBeats_ = beats; }
 
 private:
     void ensureArmy(int army);
@@ -88,6 +96,7 @@ private:
     std::vector<std::optional<PathSearch>> activeSearches_;
     std::vector<std::size_t> retryWaits_;
     std::vector<std::size_t> failureCounts_;
+    std::uint64_t serviceBeats_ = 0;
 };
 
 } // namespace rm::sim

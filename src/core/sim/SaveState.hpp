@@ -11,14 +11,19 @@
 
 namespace rm::sim {
 
-/// The complete v1 state: simulation time, deterministic random generator, and unit slots.
+/// The complete save state: simulation time, deterministic random generator, and pathing/unit state.
 struct SaveState {
     std::uint64_t tick{};
     RandomStream::Snapshot random{};
+    std::uint64_t pathServiceBeats{};
     UnitStore::Snapshot units{};
 
     [[nodiscard]] static std::vector<std::byte> encodeV1(const SaveState& state);
     [[nodiscard]] static std::optional<SaveState> decodeV1(std::span<const std::byte> bytes);
+    /// The current v2 format includes path-service and route-revalidation phase state.
+    [[nodiscard]] static std::vector<std::byte> encode(const SaveState& state);
+    /// Decodes supported save versions, including the original v1 format.
+    [[nodiscard]] static std::optional<SaveState> decode(std::span<const std::byte> bytes);
 };
 
 } // namespace rm::sim

@@ -74,9 +74,10 @@ std::vector<PathResult> PathService::service() {
     for (std::size_t army = 0; army < pending_.size(); ++army) {
         std::deque<PathRequest>& admissions = admissions_[army];
         pending_[army].insert(pending_[army].end(), std::make_move_iterator(admissions.begin()),
-                              std::make_move_iterator(admissions.end()));
+                               std::make_move_iterator(admissions.end()));
         admissions.clear();
     }
+    ++serviceBeats_;
     return completed;
 }
 

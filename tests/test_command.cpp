@@ -53,6 +53,7 @@ struct Fixture {
     std::vector<rm::sim::Army> armies = rm::sim::freeForAll(2);
     std::vector<Player> players = rm::sim::onePlayerPerArmy(2, /*humanArmy=*/0);
     rm::sim::PathService paths;
+    rm::TickIndex nextTick = 0;
 
     UnitId mine;
     UnitId theirs;
@@ -88,7 +89,7 @@ struct Fixture {
         std::vector<rm::sim::Economy> economies(2);
         const std::vector<int> commandersEver(2, 0);
 
-        for (rm::TickIndex tick = 0; tick < ticks; ++tick) {
+        for (rm::TickIndex tick = nextTick; tick < nextTick + ticks; ++tick) {
             for (const CommandIssue& issue : log.at(tick, CommandPhase::PreTick)) {
                 (void)apply(issue);
             }
@@ -111,6 +112,7 @@ struct Fixture {
                 (void)apply(issue);
             }
         }
+        nextTick += ticks;
     }
 
     [[nodiscard]] rm::StateHash hash() {
@@ -314,6 +316,46 @@ TEST_CASE("a path retry wait changes the authoritative hash") {
     const rm::StateHash waitingTenBeats = fix.hash();
     fix.run(CommandLog{}, 1);
     CHECK(fix.hash() != waitingTenBeats);
+}
+
+TEST_CASE("a published route retries a newly blocked final cell on its due pass") {
+    Fixture fix;
+
+    // Put the route in cell (0, 0): its phase is due at tick zero and then every 91 ticks.
+    // The target is far enough away that the route remains published until the next due pass.
+    fix.roster.transform(fix.mine).x = rm::test::fx(32.0f);
+    fix.roster.transform(fix.mine).z = rm::test::fx(32.0f);
+    fix.roster.reindex();
+    constexpr rm::TickIndex kNextDueTick = 91;
+    REQUIRE(rm::sim::pathPhaseDue(0, 0, fix.grid.cellsX, 0));
+    REQUIRE(rm::sim::pathPhaseDue(0, 0, fix.grid.cellsX, kNextDueTick));
+
+    REQUIRE(fix.apply(moveOrder(0, 0, fix.mine, 900.0f, 32.0f)));
+    fix.run(CommandLog{}, 2);  // admission, then publication
+    REQUIRE_FALSE(fix.roster.motion(fix.mine).path.empty());
+    fix.roster.motion(fix.mine).speedPerTick = {};  // keep the published route in place
+
+    const int finalX = fix.grid.cellAtWorld(rm::test::fx(900.0f));
+    const int finalZ = fix.grid.cellAtWorld(rm::test::fx(32.0f));
+    fix.grid.passable[static_cast<std::size_t>(finalZ * fix.grid.cellsX + finalX)] = 0;
+
+    // A pass not selected by the existing phase gate leaves the published route alone.
+    REQUIRE_FALSE(rm::sim::pathPhaseDue(0, 0, fix.grid.cellsX, 2));
+    fix.run(CommandLog{}, 1);
+    CHECK_FALSE(fix.roster.motion(fix.mine).path.empty());
+
+    fix.run(CommandLog{}, kNextDueTick - 3);
+    REQUIRE_FALSE(fix.roster.motion(fix.mine).path.empty());
+
+    const rm::CommandId command =
+        fix.roster.store.orders()[fix.mine.index].active()->payload().id;
+    fix.run(CommandLog{}, 1);  // tick 91: the next due pass
+
+    // A stale route is withdrawn, but its command remains alive while the path service owns the
+    // retry; a blocked destination must not turn a previously accepted player order into a drop.
+    CHECK(fix.roster.motion(fix.mine).path.empty());
+    CHECK_FALSE(fix.roster.store.orders()[fix.mine.index].empty());
+    CHECK(fix.paths.contains(fix.mine, command));
 }
 
 TEST_CASE("a build command creates a construction, costed from the blueprint") {
@@ -1100,7 +1142,7 @@ TEST_CASE("an explicit attack fires at its ordered target, not the automatic nea
     CHECK(fixture.roster.store.health()[decoy.index].current < decoyHealth);
     CHECK(fixture.roster.store.health()[target.index].current == targetHealth);
 
-    Command attack = moveOrder(0, 0, attacker, 350.0f, 200.0f);
+    Command attack = moveOrder(fixture.nextTick, 0, attacker, 350.0f, 200.0f);
     attack.kind = CommandKind::Attack;
     attack.target = target;
     CommandLog log;

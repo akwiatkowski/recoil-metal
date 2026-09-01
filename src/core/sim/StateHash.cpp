@@ -120,6 +120,11 @@ void feedMotion(StateHash& h, const MoveState& motion) noexcept {
         feed(h, waypoint);
     }
     feed(h, motion.pathIndex);
+    if (motion.pathPhaseCellsX != 0) {
+        feed(h, motion.pathPhaseStartX);
+        feed(h, motion.pathPhaseStartZ);
+        feed(h, motion.pathPhaseCellsX);
+    }
 }
 
 void feedHealth(StateHash& h, const Health& health) noexcept {
@@ -311,6 +316,7 @@ void feedPathService(StateHash& h, const PathService& service) noexcept {
     const auto& activeSearches = service.activeSearches();
     const auto& retryWaits = service.retryWaits();
     const auto& failureCounts = service.failureCounts();
+    feed(h, service.serviceBeats());
     feed(h, admissions.size());
     for (const auto& armyAdmissions : admissions) {
         feed(h, armyAdmissions.size());

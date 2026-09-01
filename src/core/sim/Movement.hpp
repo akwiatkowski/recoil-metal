@@ -180,6 +180,12 @@ struct MoveState {
     // stays exactly as tightly packed as it was.
     std::vector<std::array<Fx, 2>> path;
     std::size_t pathIndex = 0;
+
+    /// The accepted route's start cell fixes C-177's staggered revalidation phase. A zero width
+    /// means this motion was not admitted through the match-owned path service.
+    int pathPhaseStartX = 0;
+    int pathPhaseStartZ = 0;
+    int pathPhaseCellsX = 0;
 };
 
 /// Sends a unit along a route, aiming it at the first waypoint.

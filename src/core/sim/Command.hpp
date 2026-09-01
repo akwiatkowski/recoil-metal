@@ -347,7 +347,7 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
                            EventQueue* events = nullptr,
                             const FeatureStore* features = nullptr,
                             std::vector<Construction>* finished = nullptr,
-                            const PathService* pathService = nullptr);
+                             PathService* pathService = nullptr);
 
 /// Updates attack-move and patrol combat after movement and intel. These orders retain their
 /// waypoint while `target` temporarily names the visible hostile that interrupted the route.

@@ -2,6 +2,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "core/sim/RandomStream.hpp"
+#include "core/sim/PathService.hpp"
 #include "core/sim/SaveState.hpp"
 #include "core/sim/UnitStore.hpp"
 
@@ -116,6 +117,38 @@ TEST_CASE("a v1 save state round-trips a unit store snapshot", "[save-state]") {
     CHECK(restored.childrenOf(live) == std::vector<rm::sim::UnitId>{child});
 
     CHECK(restored.spawn({}) == original.spawn({}));
+}
+
+TEST_CASE("a v2 save state preserves a published route's revalidation phase", "[save-state]") {
+    UnitStore original;
+    UnitStore::Spawn moving;
+    moving.motion.path.push_back({rm::sim::Fx::fromInt(56), rm::sim::Fx::fromInt(78)});
+    moving.motion.pathPhaseStartX = 3;
+    moving.motion.pathPhaseStartZ = 5;
+    moving.motion.pathPhaseCellsX = 128;
+    const auto unit = original.spawn(moving);
+
+    RandomStream random{std::uint32_t{1}};
+    const auto v2 = SaveState::encode({.tick = 42, .random = random.snapshot(), .pathServiceBeats = 91,
+                                       .units = original.snapshot()});
+    const auto restored = SaveState::decode(v2);
+
+    REQUIRE(restored.has_value());
+    CHECK(restored->pathServiceBeats == 91);
+    rm::sim::PathService resumedPaths;
+    resumedPaths.restoreServiceBeats(restored->pathServiceBeats);
+    CHECK(resumedPaths.lastServiceBeat() == 90);
+    const auto& motion = restored->units.motion[unit.index];
+    CHECK(motion.pathPhaseStartX == 3);
+    CHECK(motion.pathPhaseStartZ == 5);
+    CHECK(motion.pathPhaseCellsX == 128);
+    CHECK(SaveState::encode(*restored) == v2);
+
+    const auto v1 = SaveState::encodeV1({.tick = 42, .random = random.snapshot(),
+                                         .units = original.snapshot()});
+    const auto old = SaveState::decode(v1);
+    REQUIRE(old.has_value());
+    CHECK(old->units.motion[unit.index].pathPhaseCellsX == 0);
 }
 
 TEST_CASE("a v1 save state refuses invalid and truncated input", "[save-state]") {
