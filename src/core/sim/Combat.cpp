@@ -485,6 +485,10 @@ namespace {
 /// Distance is 2-D and squared, ignoring Y, exactly as the engine computes it.
 enum class ReachClass : int { InRange = 0, TooClose = 1, OutsideArc = 2, CannotReach = 3 };
 
+// Retail initializes an unidentified radar contact's priority row to this sentinel (`C-158`):
+// it remains acquirable but loses every authored row and compares by score against other blips.
+constexpr std::size_t kUnidentifiedPriorityRow = 9999;
+
 [[nodiscard]] ReachClass classifyReach(const unitdef::Weapon& weapon, Fx groundDistance,
                                         Fx heightDifference, std::optional<Brad> heading = std::nullopt,
                                         std::optional<Brad> targetBearing = std::nullopt) noexcept {
@@ -634,13 +638,19 @@ std::optional<UnitId> nearestTarget(std::array<Fx, 3> from, int fromArmy,
 
         // AND VISIBLE (ADR-037). Before the distance test rather than after, because a grid
         // lookup is one array read and a ground distance is two multiplies and a square root.
+        bool prioritiesApply = true;
         if (intel != nullptr) {
             const Army* mine = armyFor(fromArmy, armies);
-            if (mine == nullptr || catalog == nullptr
-                || contactKindForUnit(mine->alliance, slot, store, *catalog, armies, *intel)
-                       != ContactKind::Seen) {
+            if (mine == nullptr || catalog == nullptr) {
                 continue;
             }
+            const std::optional<ContactKind> contact =
+                contactKindForUnit(mine->alliance, slot, store, *catalog, armies, *intel);
+            if (!contact || (*contact != ContactKind::Seen && *contact != ContactKind::Radar)) {
+                continue;
+            }
+            prioritiesApply = *contact == ContactKind::Seen
+                           || intel->hasSeenEver(mine->alliance, store.idAt(slot));
         }
 
         const Fx dx = transforms[slot].x - from[0];
@@ -668,7 +678,9 @@ std::optional<UnitId> nearestTarget(std::array<Fx, 3> from, int fromArmy,
         // Without a catalog there is nothing to match a category against, so every candidate
         // sits at row 0 and the ordering falls back to score alone. Callers that do not pass
         // one are asking "what is nearest", not "what does this weapon prefer".
-        const std::size_t row = def != nullptr ? priorityRow(weapon, *def) : 0;
+        const std::size_t row = !prioritiesApply ? kUnidentifiedPriorityRow
+                              : def != nullptr  ? priorityRow(weapon, *def)
+                                                : 0;
         if (row == std::numeric_limits<std::size_t>::max()) {
             continue;
         }

@@ -1,6 +1,7 @@
 #include "core/sim/StateHash.hpp"
 
 #include "core/map/HeightField.hpp"
+#include "core/sim/Intel.hpp"
 #include "core/sim/Skirmish.hpp"
 #include "core/sim/UnitCatalog.hpp"
 #include "core/sim/UnitStore.hpp"
@@ -154,6 +155,54 @@ TEST_CASE("DoNotTarget does not collide with factory repeat in the hash") {
     REQUIRE(repeating.store.setFactoryRepeat(repeating.store.idAt(0), true));
     REQUIRE(excluded.store.setDoNotTarget(excluded.store.idAt(0), true));
     CHECK(repeating.hash() != excluded.hash());
+}
+
+TEST_CASE("visual identification history changes the hash after sight is gone") {
+    Fixture fixture;
+    fixture.armies = rm::sim::freeForAll(2);
+    fixture.economies.assign(2, rm::sim::Economy{});
+    fixture.commandersEver.assign(2, 1);
+
+    rm::unitdef::UnitDef radar;
+    radar.radarRadiusElmos = 300.0f;
+    rm::unitdef::UnitDef scout;
+    scout.visionRadiusElmos = 60.0f;
+    rm::unitdef::UnitDef target;
+    const rm::UnitTypeIndex radarType = fixture.catalog.add(&radar);
+    const rm::UnitTypeIndex scoutType = fixture.catalog.add(&scout);
+    const rm::UnitTypeIndex targetType = fixture.catalog.add(&target);
+    const auto spawn = [&](rm::UnitTypeIndex type, float z, int army) {
+        rm::sim::MoveState motion = defaultMotionFor(army);
+        return fixture.store.spawn({
+            .type = type,
+            .transform = {.z = rm::test::fx(z)},
+            .motion = motion,
+            .health = {.current = rm::test::mag(100.0f), .maximum = rm::test::mag(100.0f)},
+        });
+    };
+    (void)spawn(radarType, 0.0f, 0);
+    const rm::sim::UnitId observer = spawn(scoutType, 200.0f, 0);
+    (void)spawn(targetType, 200.0f, 1);
+
+    rm::sim::Intel remembered;
+    rm::sim::Intel neverSeen;
+    for (rm::sim::Intel* intel : {&remembered, &neverSeen}) {
+        intel->configure(2, rm::sim::Fx::fromInt(512), rm::sim::Fx::fromInt(512),
+                         rm::sim::VisionStyle::ForgedAlliance);
+    }
+
+    remembered.update(fixture.store, fixture.catalog, fixture.armies, nullptr);
+    fixture.store.transforms()[observer.index].z = rm::test::fx(400.0f);
+    remembered.update(fixture.store, fixture.catalog, fixture.armies, nullptr);
+    neverSeen.update(fixture.store, fixture.catalog, fixture.armies, nullptr);
+
+    // Both Intel instances now have the same current coverage. Only `remembered` saw the
+    // target before the scout moved, and that history changes C-158 target selection.
+    rm::sim::Match match = fixture.match();
+    match.intel = &remembered;
+    const rm::StateHash historyHash = hashMatch(fixture.store, match);
+    match.intel = &neverSeen;
+    CHECK(historyHash != hashMatch(fixture.store, match));
 }
 
 TEST_CASE("shield power and recovery timers change the hash") {

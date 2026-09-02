@@ -521,6 +521,26 @@ StateHash hashMatch(const UnitStore& store, const Match& match) {
                 }
             }
         }
+
+        // C-158's visual-identification latch changes automatic target ranking after a unit
+        // leaves sight, so it is live simulation state rather than a UI contact cache.
+        bool hasSeenEver = false;
+        for (std::size_t alliance = 0; alliance < match.intel->alliances(); ++alliance) {
+            for (const UnitId unit : match.intel->seenEver(static_cast<int>(alliance))) {
+                hasSeenEver = hasSeenEver || unit.generation != 0;
+            }
+        }
+        if (hasSeenEver) {
+            feed(h, true);
+            for (std::size_t alliance = 0; alliance < match.intel->alliances(); ++alliance) {
+                const auto known = match.intel->seenEver(static_cast<int>(alliance));
+                feed(h, known.size());
+                for (const UnitId unit : known) {
+                    feed(h, static_cast<std::size_t>(unit.index));
+                    feed(h, static_cast<std::size_t>(unit.generation));
+                }
+            }
+        }
     }
 
     // Shots in flight. Nullable because a decorative crowd has no projectile list, and

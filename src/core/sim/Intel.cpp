@@ -365,6 +365,8 @@ void Intel::configure(std::size_t alliances, Fx widthElmos, Fx depthElmos,
     hiddenEmitters_.clear();
     retainedRadarContacts_.clear();
     retainedRadarContacts_.resize(alliances);
+    seenEver_.clear();
+    seenEver_.resize(alliances);
 
     // ONE GRID PER KIND PER ALLIANCE, IN `IntelKind` ORDER, because every index into this is
     // `alliance * kIntelKindCount + kind` and nothing bounds-checks it. Adding a kind without
@@ -441,6 +443,19 @@ std::span<const RetainedRadarContact> Intel::retainedRadarContacts(int alliance)
         return kEmpty;
     }
     return retainedRadarContacts_[static_cast<std::size_t>(alliance)];
+}
+
+bool Intel::hasSeenEver(int alliance, UnitId unit) const noexcept {
+    const std::span<const UnitId> known = seenEver(alliance);
+    return unit.index < known.size() && known[unit.index] == unit;
+}
+
+std::span<const UnitId> Intel::seenEver(int alliance) const noexcept {
+    static const std::vector<UnitId> kEmpty;
+    if (alliance < 0 || static_cast<std::size_t>(alliance) >= seenEver_.size()) {
+        return kEmpty;
+    }
+    return seenEver_[static_cast<std::size_t>(alliance)];
 }
 
 void Intel::withdraw(UnitIndex slot) {
@@ -566,6 +581,28 @@ void Intel::update(const UnitStore& store, const UnitCatalog& catalog,
 
         placement.square = square;
         placement.alliance = alliance;
+    }
+
+    // C-158's `RECON_LOSEver` is per viewing alliance and full unit identity, not a property of
+    // the current contact. Update it only after every emitter has stamped this tick, otherwise a
+    // later vision source could lose to an earlier radar source by iteration order.
+    for (int alliance = 0; alliance < static_cast<int>(alliances()); ++alliance) {
+        std::vector<UnitId>& known = seenEver_[static_cast<std::size_t>(alliance)];
+        known.resize(slots);
+        for (UnitIndex slot = 0; slot < slots; ++slot) {
+            if (!store.slotAlive(slot)) {
+                known[slot] = {};
+                continue;
+            }
+            const UnitId unit = store.idAt(slot);
+            if (known[slot] != unit) {
+                known[slot] = {};
+            }
+            if (contactKindForUnit(alliance, slot, store, catalog, armies, *this)
+                == ContactKind::Seen) {
+                known[slot] = unit;
+            }
+        }
     }
 
     // A radar return is knowledge owned by its VIEWER, not by the observed unit. Refresh the

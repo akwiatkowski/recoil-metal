@@ -74,7 +74,7 @@ excluded from the headline.
 | [`FA-WEAPONS`](#fa-weapons---targeting-weapons-and-projectiles) | Targeting, weapons, projectiles | `WP-27`-`28` | 92% | 70% | 90% | Separate explicit Attack forced-target firing from automatic acquisition, then add the remaining death, manual-fire, and projectile-defense paths. |
 | [`FA-MISSILES`](#fa-missiles---silos-missiles-and-interception) | Silos, missiles, interception | `WP-29` | 5% | 0% | 90% | Implement tactical silo ammo production and decrement-then-fire. |
 | [`FA-DAMAGE`](#fa-damage---damage-death-and-shields) | Damage, death, shields | `WP-30`-`32` | 70% | 40% | 75% | Add the next collidable shield slice: area-shield admission and stacking. |
-| [`FA-INTEL`](#fa-intel---vision-radar-sonar-and-counter-intel) | Vision, radar, sonar, counter-intel | `WP-33` | 70% | 45% | 90% | Add seen-now/seen-ever contact state and bounded retained-contact reaping/redetection. |
+| [`FA-INTEL`](#fa-intel---vision-radar-sonar-and-counter-intel) | Vision, radar, sonar, counter-intel | `WP-33` | 70% | 45% | 90% | Add bounded retained-contact reaping/redetection and radar-error aiming. |
 | [`FA-PROGRESS`](#fa-progress---enhancements-veterancy-and-special-units) | Enhancements, veterancy, special units | `WP-34`-`36` | 35% | 20% | 35% | Complete the enhancement lifecycle specification around `CUnitScriptTask`. |
 | [`FA-TERRAIN`](#fa-terrain---mutable-terrain-and-craters) | Mutable terrain and craters | `WP-37` | 0% | 0% | 25% | Trace one crater from damage through terrain, pathing, and rendering invalidation. |
 | [`FA-AI`](#fa-ai---retail-ai-and-native-manager-boundary) | Retail AI and native manager boundary | `WP-38` | 35% | 5% | 30% | Remove the remaining condition-budget overruns (`recoil-metal-4754`). |
@@ -241,13 +241,12 @@ in WP-25, and refresh FA-TRANSPORT.
 **Largest gap:** automatic acquisition and explicit Attack orders share one target path, blocking
 exact forced-target, minimum-range, arc, incumbency, and empty-priority behavior.
 
-**Current slice:** `C-167` is now enforced for automatic acquisition: loader-derived binary-radian
-weapon arcs classify targets outside `heading + HeadingArcCenter +/- HeadingArcRange` as retail
-class 2, applying its existing 4x score penalty; an arc range of 180 degrees remains unrestricted.
-`C-156` also rejects automatic acquisition from a weapon with no authored `TargetPriorities`,
-including catalog-less simulation callers. Neither slice alters explicit Attack orders or wires
-`SetDoNotTarget` through the FAF Lua API, which remains a counted stub until a semantic
-script-command path exists.
+**Current slice:** `C-158` now admits automatic acquisition of current radar contacts but gives an
+unidentified target retail's sentinel priority row `9999`, so it competes by score until the
+viewing alliance has seen that exact unit generation. Sonar-only contacts remain rejected.
+`C-167` applies the 4x out-of-arc score penalty, while `C-156` rejects a weapon with no authored
+`TargetPriorities`. These automatic-acquisition slices do not alter explicit Attack orders or wire
+`SetDoNotTarget` through the FAF Lua API.
 
 ```text
 /goal Advance FA-WEAPONS by completing item recoil-metal-7599: separate explicit Attack

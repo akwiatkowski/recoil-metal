@@ -302,6 +302,15 @@ public:
     [[nodiscard]] std::span<const RetainedRadarContact> retainedRadarContacts(
         int alliance) const noexcept;
 
+    /// Whether this alliance has visually identified this exact unit generation. Retail's
+    /// `RECON_LOSEver` lets a radar return participate in acquisition but withholds authored
+    /// category priorities until this latch is set.
+    [[nodiscard]] bool hasSeenEver(int alliance, UnitId unit) const noexcept;
+
+    /// Per-slot identity latches for the state hash. A stored generation makes a retired slot
+    /// harmless when its index is reused by a different unit.
+    [[nodiscard]] std::span<const UnitId> seenEver(int alliance) const noexcept;
+
 private:
     /// What one unit last contributed, one entry per sense.
     struct Emitter {
@@ -332,6 +341,11 @@ private:
     /// Last radar positions, per viewing alliance. These are authoritative recon knowledge:
     /// `contactsFor` emits an entry after its source is known dead as an uncertain blip.
     std::vector<std::vector<RetainedRadarContact>> retainedRadarContacts_;
+
+    /// `[alliance][slot]` is the unit generation that alliance has seen visually. This is not
+    /// presentation history: C-158 uses it to decide whether a current radar contact may match
+    /// the weapon's target-priority categories.
+    std::vector<std::vector<UnitId>> seenEver_;
     std::vector<Placement> placements_;
     std::vector<std::array<Emitter, kIntelKindCount>> emitters_;
     std::vector<std::array<Emitter, kHiddenKindCount>> hiddenEmitters_;
@@ -375,8 +389,8 @@ struct Contact {
 };
 
 /// Classifies one real unit with the same cloak, stealth-field, omni and free-intel rules used
-/// by the contact list. Automatic targeting accepts only `Seen`; radar and sonar remain
-/// anonymous positions rather than targetable identities.
+/// by the contact list. Automatic targeting accepts `Seen` and `Radar`: an unidentified radar
+/// return competes at the worst priority rank, while sonar remains anonymous and untargetable.
 [[nodiscard]] std::optional<ContactKind> contactKindForUnit(
     int alliance, UnitIndex target, const UnitStore& store, const UnitCatalog& catalog,
     std::span<const Army> armies, const Intel& intel) noexcept;

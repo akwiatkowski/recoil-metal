@@ -463,6 +463,69 @@ TEST_CASE("a unit does not shoot what its side cannot see") {
     CHECK(*seen == enemy);
 }
 
+TEST_CASE("radar contacts acquire by score until vision has identified them") {
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    Roster roster;
+
+    UnitDef radar = targetDef();
+    radar.name = "radar";
+    radar.radarRadiusElmos = 300.0f;
+    (void)roster.add(roster.addType(radar), 0.0f, 0.0f, 0, 100.0f);
+
+    UnitDef highPriority = targetDef();
+    highPriority.name = "high_priority";
+    highPriority.categories = {"HIGH", "LAND"};
+    const UnitId farHigh = roster.add(roster.addType(highPriority), 0.0f, 200.0f, 1, 100.0f);
+    const UnitId nearLand = roster.add(roster.addType(targetDef()), 0.0f, 50.0f, 1, 100.0f);
+
+    Weapon weapon = directFire(10.0f, 300.0f);
+    weapon.targetPriorities = {{"HIGH"}, {"LAND"}};
+
+    rm::sim::Intel intel;
+    intel.configure(2, rm::sim::Fx::fromInt(512), rm::sim::Fx::fromInt(512),
+                    rm::sim::VisionStyle::ForgedAlliance);
+    intel.update(roster.store, roster.catalog, armies, nullptr);
+
+    // Radar is enough to acquire a real unit, but the blip has not revealed whether it is HIGH.
+    CHECK(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, weapon, roster.store, armies,
+                                 &intel, &roster.catalog)
+          == nearLand);
+
+    UnitDef scout = targetDef();
+    scout.name = "scout";
+    scout.visionRadiusElmos = 60.0f;
+    const UnitId observer = roster.add(roster.addType(scout), 0.0f, 200.0f, 0, 100.0f);
+    intel.update(roster.store, roster.catalog, armies, nullptr);
+
+    // Once the high-priority target leaves sight, its current radar contact still carries the
+    // visual-identification latch that retail calls RECON_LOSEver.
+    roster.transform(observer).z = rm::test::fx(400.0f);
+    intel.update(roster.store, roster.catalog, armies, nullptr);
+    CHECK(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, weapon, roster.store, armies,
+                                 &intel, &roster.catalog)
+          == farHigh);
+}
+
+TEST_CASE("automatic targeting does not acquire sonar-only contacts") {
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    Roster roster;
+    UnitDef sonar = targetDef();
+    sonar.name = "sonar";
+    sonar.sonarRadiusElmos = 300.0f;
+    (void)roster.add(roster.addType(sonar), 0.0f, 0.0f, 0, 100.0f);
+    const rm::UnitTypeIndex target = roster.addType(targetDef());
+    (void)roster.add(target, 0.0f, 50.0f, 1, 100.0f);
+
+    rm::sim::Intel intel;
+    intel.configure(2, rm::sim::Fx::fromInt(512), rm::sim::Fx::fromInt(512),
+                    rm::sim::VisionStyle::ForgedAlliance);
+    intel.update(roster.store, roster.catalog, armies, nullptr);
+
+    CHECK_FALSE(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0,
+                                        directFire(10.0f, 300.0f), roster.store, armies,
+                                        &intel, &roster.catalog));
+}
+
 TEST_CASE("automatic targeting obeys cloak, omni, and free-intel identity") {
     const std::vector<Army> armies = rm::sim::freeForAll(2);
     const Weapon weapon = directFire(10.0f, 300.0f);
