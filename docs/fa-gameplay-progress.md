@@ -296,14 +296,14 @@ update WP-30/31 plus C-143 residues, and refresh FA-DAMAGE.
 
 ### FA-INTEL - Vision, Radar, Sonar, And Counter-Intel
 
-**Largest gap:** coverage grids work, but contacts vanish immediately instead of retaining
-retail's seen-now, seen-ever, and maybe-dead identity.
+**Largest gap:** retained radar contacts now expose their stable identity and maybe-dead status,
+but their bounded reaping/redetection policy and other recon families remain incomplete.
 
 ```text
-/goal Advance FA-INTEL by implementing remembered recon contacts with per-army seen-now,
-seen-ever, and maybe-dead state from C-076 through C-079. Start with loss/reacquisition and hash
-tests, run make test and make verify, keep cloak/jamming/water-vision follow-ups explicit in
-WP-33, and refresh FA-INTEL.
+/goal Advance FA-INTEL by implementing bounded retained-radar reaping/redetection after C-079.
+Start with a reproducible re-contact or expiry rule and preserve UnitId/last-known position/order;
+keep cloak, jamming, water vision, sonar memory, and Lua bindings out of scope. Run make test and
+make verify, then refresh WP-33 and FA-INTEL.
 ```
 
 ### FA-PROGRESS - Enhancements, Veterancy, And Special Units

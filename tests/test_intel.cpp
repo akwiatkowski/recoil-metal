@@ -714,10 +714,21 @@ TEST_CASE("a radar blip remains after its source dies") {
     const std::vector<Army> armies = twoArmies(false);
 
     intel.update(store, catalog, armies, nullptr);
+    std::vector<rm::sim::Contact> contacts;
+    rm::sim::contactsFor(0, store, catalog, armies, intel, 0, contacts);
+    const auto liveBlip = std::find_if(contacts.begin(), contacts.end(),
+                                       [&](const rm::sim::Contact& contact) {
+                                           return contact.unit == enemy;
+                                       });
+    REQUIRE(liveBlip != contacts.end());
+    CHECK_FALSE(liveBlip->maybeDead);
+    const Fx retainedX = liveBlip->x;
+    const Fx retainedZ = liveBlip->z;
+
     store.kill(enemy);
     intel.update(store, catalog, armies, nullptr);
 
-    std::vector<rm::sim::Contact> contacts;
+    contacts.clear();
     rm::sim::contactsFor(0, store, catalog, armies, intel, 0, contacts);
     const auto blip = std::find_if(contacts.begin(), contacts.end(),
                                    [&](const rm::sim::Contact& contact) {
@@ -725,6 +736,9 @@ TEST_CASE("a radar blip remains after its source dies") {
                                    });
     REQUIRE(blip != contacts.end());
     CHECK(blip->kind == rm::sim::ContactKind::Radar);
+    CHECK(blip->maybeDead);
+    CHECK(blip->x == retainedX);
+    CHECK(blip->z == retainedZ);
 }
 
 TEST_CASE("a radar blip survives a source killed after intel refresh in the same skirmish tick") {

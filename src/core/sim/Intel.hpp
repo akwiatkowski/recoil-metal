@@ -385,6 +385,9 @@ struct Contact {
 
     ContactKind kind = ContactKind::Seen;
 
+    /// A retained radar return whose source was destroyed after this alliance last confirmed it.
+    bool maybeDead = false;
+
     [[nodiscard]] bool isBlip() const noexcept { return kind != ContactKind::Seen; }
 };
 

@@ -817,9 +817,10 @@ void contactsFor(int alliance, const UnitStore& store, const UnitCatalog& catalo
         }
         const auto [x, z] = blipPosition(retained.unit, retained.x, retained.z, tick, rate);
         contacts.push_back(Contact{.unit = retained.unit,
-                                   .x = x,
-                                   .z = z,
-                                   .kind = ContactKind::Radar});
+                                    .x = x,
+                                    .z = z,
+                                    .kind = ContactKind::Radar,
+                                    .maybeDead = retained.maybeDead});
     }
 }
 

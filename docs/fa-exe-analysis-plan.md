@@ -2383,6 +2383,14 @@ features only, Capture is absent, and `FeatureId`/`UnitId` raw handles share val
 tagged unit-work target under `WP-15` before admitting this predicate, rather than introducing an
 unsafe handle comparison or inert command.
 
+### 2026-09-02 / C-079 implementation update
+
+Recoil Metal retains radar contacts after source death and now projects their existing
+`maybeDead` state through `Contact`, preserving the retained UnitId and last-known position. Live
+radar contacts remain false. This does not infer retail's bounded reaping/redetection predicate or
+alter targeting, contact order, sonar retention, or Lua bindings; those remain separate `WP-33`
+work.
+
 ## Document maintenance rules
 
 - The dashboard is a shortcut, not a second source of truth. Its counts must match the work-package
