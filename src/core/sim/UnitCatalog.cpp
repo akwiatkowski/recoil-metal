@@ -4,29 +4,38 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <optional>
+#include <string_view>
 #include <utility>
 
 namespace rm::sim {
 namespace {
 
-/// The receiver-size row for a definition: the authored `SIZE<n>` category when stated,
-/// else `SkirtSizeX + SkirtSizeZ` rounded to the nearest step — the same arithmetic the
-/// corpus's own authoring follows (a 2×2 skirt is SIZE4, the factory's 8×8 is SIZE16;
-/// the one hand-authored outlier, UEB0103's 12×14 skirt marked SIZE16, is why the
-/// category wins when present).
-[[nodiscard]] std::uint8_t adjacencySizeIndex(const unitdef::UnitDef& def) noexcept {
+/// The authored receiver-size row. `SIZE` categories are a content contract, not an
+/// inference from skirt geometry: the latter only answers whether two units touch.
+[[nodiscard]] std::optional<std::uint8_t> adjacencySizeIndex(const unitdef::UnitDef& def) noexcept {
     static constexpr std::string_view kSizes[] = {"SIZE4", "SIZE8", "SIZE12", "SIZE16",
-                                                  "SIZE20"};
-    for (std::size_t i = 0; i < std::size(kSizes); ++i) {
-        for (const std::string& category : def.categories) {
+                                                   "SIZE20"};
+    std::optional<std::uint8_t> size;
+    for (const std::string& category : def.categories) {
+        if (category.starts_with("SIZE")) {
+            bool valid = false;
+            for (std::size_t i = 0; i < std::size(kSizes); ++i) {
             if (category == kSizes[i]) {
-                return static_cast<std::uint8_t>(i);
+                    valid = true;
+                    if (size.has_value()) {
+                        return std::nullopt;
+                    }
+                    size = static_cast<std::uint8_t>(i);
+                    break;
+                }
+            }
+            if (!valid) {
+                return std::nullopt;
             }
         }
     }
-    const float sum = def.skirtSquaresX + def.skirtSquaresZ;
-    const auto step = static_cast<int>((sum + 2.0f) / 4.0f);  // nearest of 4,8,12,16,20
-    return static_cast<std::uint8_t>(std::clamp(step - 1, 0, 4));
+    return size;
 }
 
 } // namespace
@@ -63,7 +72,12 @@ UnitTypeIndex UnitCatalog::add(const unitdef::UnitDef* def, TickRate rate) {
             fxFromFloat(def->skirtCentreOffsetSquaresX * scmap::kElmosPerOgrid);
         adjacency.skirtCentreOffsetZElmos =
             fxFromFloat(def->skirtCentreOffsetSquaresZ * scmap::kElmosPerOgrid);
-        adjacency.sizeIndex = adjacencySizeIndex(*def);
+        const bool structure = std::find(def->categories.begin(), def->categories.end(), "STRUCTURE")
+                               != def->categories.end();
+        if (const std::optional<std::uint8_t> size = adjacencySizeIndex(*def); structure && size) {
+            adjacency.sizeIndex = *size;
+            adjacency.receives = true;
+        }
         const unitdef::AdjacencyGrants& grants = unitdef::adjacencyGrants(
             unitdef::adjacencyClassFromName(def->adjacencyBuffs));
         for (std::size_t i = 0; i < unitdef::kAdjacencySizeSteps; ++i) {

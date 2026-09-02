@@ -45,7 +45,7 @@ namespace {
     def.motion = rm::unitdef::MotionType::None;
     def.skirtSquaresX = 2.0f;
     def.skirtSquaresZ = 2.0f;
-    def.categories = {"SIZE4"};
+    def.categories = {"STRUCTURE", "SIZE4"};
     return def;
 }
 
@@ -112,7 +112,7 @@ TEST_CASE("an FA skirt rectangle starts at footprint plus its offset") {
 
     Fixture f;
     rm::unitdef::UnitDef storage = *parsed;
-    storage.categories = {"SIZE4"};
+    storage.categories = {"STRUCTURE", "SIZE4"};
     storage.adjacencyBuffs = "T1MassStorageAdjacencyBuffs";
     const rm::UnitTypeIndex storageType = f.roster.addType(storage);
     CHECK(storage.skirtCentreOffsetSquaresX == Approx(0.5f));
@@ -245,6 +245,90 @@ TEST_CASE("an energy storage beside the generator raises what it makes") {
     // 20 e/s × 1.125 = 22.5/s → 2.25 a tick. One neighbour of five possible on a SIZE4
     // receiver; a full ring would be ×1.5, which is the retail oracle.
     CHECK(rm::test::asFloat(f.economies[0].incomePerTick.energy) == Approx(2.25f).margin(0.0001));
+}
+
+TEST_CASE("a skirted STRUCTURE without an authored size receives no adjacency") {
+    Fixture f;
+
+    rm::unitdef::UnitDef mex = smallStructure("unclassified_mex");
+    mex.categories = {"STRUCTURE"};
+    mex.producesMassPerSecond = 2.0f;
+    const rm::UnitTypeIndex mexType = f.roster.addType(mex);
+
+    rm::unitdef::UnitDef storage = smallStructure("test_mass_storage");
+    storage.adjacencyBuffs = "T1MassStorageAdjacencyBuffs";
+    const rm::UnitTypeIndex storageType = f.roster.addType(storage);
+
+    (void)f.roster.add(mexType, 200.0f, 200.0f, 0, 500.0f);
+    (void)f.roster.add(storageType, 216.0f, 200.0f, 0, 500.0f);
+    f.tick();
+
+    CHECK(rm::test::asFloat(f.economies[0].incomePerTick.mass) == Approx(0.2f).margin(0.0001));
+}
+
+TEST_CASE("a STRUCTURE with an authored size receives its adjacency row") {
+    Fixture f;
+
+    rm::unitdef::UnitDef mex = smallStructure("sized_mex");
+    mex.producesMassPerSecond = 2.0f;
+    const rm::UnitTypeIndex mexType = f.roster.addType(mex);
+
+    rm::unitdef::UnitDef storage = smallStructure("test_mass_storage");
+    storage.adjacencyBuffs = "T1MassStorageAdjacencyBuffs";
+    const rm::UnitTypeIndex storageType = f.roster.addType(storage);
+
+    (void)f.roster.add(mexType, 200.0f, 200.0f, 0, 500.0f);
+    (void)f.roster.add(storageType, 216.0f, 200.0f, 0, 500.0f);
+    f.tick();
+
+    CHECK(rm::test::asFloat(f.economies[0].incomePerTick.mass) == Approx(0.225f).margin(0.0001));
+}
+
+TEST_CASE("an authored size selects its row even when its skirt disagrees") {
+    Fixture f;
+
+    rm::unitdef::UnitDef mex = smallStructure("mismatched_mex");
+    mex.categories = {"STRUCTURE", "SIZE16"};
+    mex.producesMassPerSecond = 2.0f;
+    const rm::UnitTypeIndex mexType = f.roster.addType(mex);
+
+    rm::unitdef::UnitDef storage = smallStructure("test_mass_storage");
+    storage.adjacencyBuffs = "T1MassStorageAdjacencyBuffs";
+    const rm::UnitTypeIndex storageType = f.roster.addType(storage);
+
+    (void)f.roster.add(mexType, 200.0f, 200.0f, 0, 500.0f);
+    (void)f.roster.add(storageType, 216.0f, 200.0f, 0, 500.0f);
+    f.tick();
+
+    // A SIZE16 receiver takes the fourth mass-storage row (+3.125%), not the SIZE4 row
+    // suggested by its 2x2 skirt.
+    CHECK(rm::test::asFloat(f.economies[0].incomePerTick.mass)
+           == Approx(0.20625f).margin(0.0001));
+}
+
+TEST_CASE("a storage requires exactly STRUCTURE and one valid authored size") {
+    const auto incomeBesideStorage = [](std::vector<std::string> categories) {
+        Fixture f;
+
+        rm::unitdef::UnitDef receiver = smallStructure("test_receiver");
+        receiver.categories = std::move(categories);
+        receiver.producesMassPerSecond = 2.0f;
+        const rm::UnitTypeIndex receiverType = f.roster.addType(receiver);
+
+        rm::unitdef::UnitDef storage = smallStructure("test_mass_storage");
+        storage.adjacencyBuffs = "T1MassStorageAdjacencyBuffs";
+        const rm::UnitTypeIndex storageType = f.roster.addType(storage);
+
+        (void)f.roster.add(receiverType, 200.0f, 200.0f, 0, 500.0f);
+        (void)f.roster.add(storageType, 216.0f, 200.0f, 0, 500.0f);
+        f.tick();
+        return rm::test::asFloat(f.economies[0].incomePerTick.mass);
+    };
+
+    const auto baseIncome = Approx(0.2f).margin(0.0001); // 2 mass/s at 10 Hz.
+    CHECK(incomeBesideStorage({"SIZE4"}) == baseIncome);
+    CHECK(incomeBesideStorage({"STRUCTURE", "SIZE4", "SIZE8"}) == baseIncome);
+    CHECK(incomeBesideStorage({"STRUCTURE", "SIZE4", "SIZE24"}) == baseIncome);
 }
 
 TEST_CASE("a tank parked between the buildings changes nothing") {

@@ -66,14 +66,18 @@ void adjacencyEffects(const UnitStore& store, const UnitCatalog& catalog,
                                  b.info->skirtHalfZElmos)) {
                 continue;
             }
-            AdjacencyEffects& onB = out[b.slot];
-            onB.massProduction += a.info->givesMassProduction[b.info->sizeIndex];
-            onB.energyProduction += a.info->givesEnergyProduction[b.info->sizeIndex];
-            onB.energyUpkeep += a.info->givesEnergyUpkeep[b.info->sizeIndex];
-            AdjacencyEffects& onA = out[a.slot];
-            onA.massProduction += b.info->givesMassProduction[a.info->sizeIndex];
-            onA.energyProduction += b.info->givesEnergyProduction[a.info->sizeIndex];
-            onA.energyUpkeep += b.info->givesEnergyUpkeep[a.info->sizeIndex];
+            if (b.info->receives) {
+                AdjacencyEffects& onB = out[b.slot];
+                onB.massProduction += a.info->givesMassProduction[b.info->sizeIndex];
+                onB.energyProduction += a.info->givesEnergyProduction[b.info->sizeIndex];
+                onB.energyUpkeep += a.info->givesEnergyUpkeep[b.info->sizeIndex];
+            }
+            if (a.info->receives) {
+                AdjacencyEffects& onA = out[a.slot];
+                onA.massProduction += b.info->givesMassProduction[a.info->sizeIndex];
+                onA.energyProduction += b.info->givesEnergyProduction[a.info->sizeIndex];
+                onA.energyUpkeep += b.info->givesEnergyUpkeep[a.info->sizeIndex];
+            }
         }
     }
 

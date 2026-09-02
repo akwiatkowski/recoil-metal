@@ -2391,6 +2391,14 @@ radar contacts remain false. This does not infer retail's bounded reaping/redete
 alter targeting, contact order, sonar retention, or Lua bindings; those remain separate `WP-33`
 work.
 
+### 2026-09-02 / C-073 receiver eligibility update
+
+Adjacency receivers now require authored `STRUCTURE` plus exactly one valid `SIZE4`, `SIZE8`,
+`SIZE12`, `SIZE16`, or `SIZE20` category. Skirt geometry remains solely a contact test and never
+infers a receiver row. Invalid, duplicate, and non-structure size sets remain inert, while an
+authored size wins even when it disagrees with the skirt. The negative-modifier clamp and
+free-placement contact tolerance remain separate `C-073`/`C-074` work.
+
 ## Document maintenance rules
 
 - The dashboard is a shortcut, not a second source of truth. Its counts must match the work-package

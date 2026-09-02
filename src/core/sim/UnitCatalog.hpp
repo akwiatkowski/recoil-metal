@@ -130,11 +130,15 @@ public:
         Fx skirtCentreOffsetXElmos{};
         Fx skirtCentreOffsetZElmos{};
 
-        /// The receiver-size row, 0..4 for SIZE4..SIZE20. From the authored `SIZE<n>`
-        /// category when one is stated; derived as `SkirtSizeX + SkirtSizeZ` rounded to
-        /// the nearest step otherwise — which is exactly how the corpus authors it (a
-        /// 2×2 skirt is SIZE4, the factory's 8×8 is SIZE16).
+        /// The receiver-size row, 0..4 for SIZE4..SIZE20. This is meaningful only when
+        /// `receives` is true: the blueprint must author exactly one valid `SIZE<n>`
+        /// category as well as `STRUCTURE`. Skirt geometry decides contact, never this row.
         std::uint8_t sizeIndex = 0;
+
+        /// Whether this type may receive adjacency. A malformed or absent authored size is
+        /// not silently inferred from its skirt: that would assign a retail buff row the
+        /// blueprint did not state.
+        bool receives = false;
 
         /// What standing beside this type ADDS to a neighbour, indexed by the
         /// NEIGHBOUR's `sizeIndex`. Already fixed point; already per the giver's table.
