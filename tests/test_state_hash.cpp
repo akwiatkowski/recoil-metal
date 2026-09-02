@@ -39,6 +39,25 @@ namespace {
     return field;
 }
 
+// A non-flat field makes a stale post-propagation Y coordinate observable.
+[[nodiscard]] rm::HeightField rampField() {
+    rm::HeightField field;
+    field.squaresX = 100;
+    field.squaresZ = 100;
+    field.baseHeight = 0.0f;
+    field.heightScale = 1.0f;
+    field.raw.resize(field.sampleCount());
+    for (int z = 0; z < field.verticesZ(); ++z) {
+        for (int x = 0; x < field.verticesX(); ++x) {
+            const auto index = static_cast<std::size_t>(z)
+                                   * static_cast<std::size_t>(field.verticesX())
+                               + static_cast<std::size_t>(x);
+            field.raw[index] = static_cast<std::uint16_t>(x * 10);
+        }
+    }
+    return field;
+}
+
 // The smallest thing that is a match: one unit, one army, one economy.
 //
 // The unit lives in a `UnitStore` rather than in three parallel vectors, which is what the
@@ -596,4 +615,66 @@ TEST_CASE("a real tick moves the hash, and the same tick moves it the same way")
     Fixture fresh;
     fresh.motion()[0] = a.motion()[0];
     REQUIRE(a.transforms()[0].x != fresh.transforms()[0].x);
+}
+
+TEST_CASE("a skirmish tick propagates attached transforms and detach stops propagation") {
+    const rm::HeightField field = flatField();
+    Fixture fixture;
+    const rm::sim::UnitId parent = fixture.store.idAt(0);
+    const rm::sim::UnitId child = fixture.store.spawn({
+        .type = 0,
+        .transform = {.x = rm::test::fx(200.0f), .z = rm::test::fx(200.0f)},
+        .motion = defaultMotionFor(0),
+        .health = {.current = rm::test::mag(500.0f), .maximum = rm::test::mag(500.0f)},
+    });
+    REQUIRE(fixture.store.attach(parent, child));
+    // This overlaps the propagated child. Collision moves both mobile peers, so the final
+    // attachment assertion below proves the second post-collision propagation pass ran.
+    (void)fixture.store.spawn({
+        .type = 0,
+        .transform = {.x = rm::test::fx(200.0f), .z = rm::test::fx(200.0f)},
+        .motion = defaultMotionFor(0),
+        .health = {.current = rm::test::mag(500.0f), .maximum = rm::test::mag(500.0f)},
+    });
+    fixture.motion()[parent.index].moving = true;
+    fixture.motion()[parent.index].destinationX = rm::test::fx(400.0f);
+    fixture.motion()[parent.index].destinationZ = rm::test::fx(100.0f);
+
+    rm::sim::Match match = fixture.match();
+    (void)rm::sim::tickSkirmish(fixture.store, fixture.catalog, match, rm::sim::Terrain{field});
+    CHECK(fixture.store.transforms()[child.index].x
+          == fixture.store.transforms()[parent.index].x + rm::test::fx(100.0f));
+    CHECK(fixture.store.transforms()[child.index].z
+          == fixture.store.transforms()[parent.index].z + rm::test::fx(100.0f));
+
+    REQUIRE(fixture.store.detach(child));
+    const rm::sim::Transform detached = fixture.store.transforms()[child.index];
+    fixture.motion()[child.index].radiusElmos = {};
+    (void)rm::sim::tickSkirmish(fixture.store, fixture.catalog, match, rm::sim::Terrain{field});
+    CHECK(fixture.store.transforms()[child.index].x == detached.x);
+    CHECK(fixture.store.transforms()[child.index].z == detached.z);
+}
+
+TEST_CASE("attachment propagation refreshes an attached child's terrain layer") {
+    const rm::HeightField field = rampField();
+    const rm::sim::Terrain terrain{field};
+    Fixture fixture;
+    const rm::sim::UnitId parent = fixture.store.idAt(0);
+    const rm::sim::UnitId child = fixture.store.spawn({
+        .type = 0,
+        .transform = {.x = rm::test::fx(200.0f), .z = rm::test::fx(100.0f)},
+        .motion = defaultMotionFor(0),
+        .health = {.current = rm::test::mag(500.0f), .maximum = rm::test::mag(500.0f)},
+    });
+    fixture.motion()[child.index].radiusElmos = {};
+    REQUIRE(fixture.store.attach(parent, child));
+    fixture.motion()[parent.index].moving = true;
+    fixture.motion()[parent.index].destinationX = rm::test::fx(400.0f);
+    fixture.motion()[parent.index].destinationZ = rm::test::fx(100.0f);
+
+    rm::sim::Match match = fixture.match();
+    (void)rm::sim::tickSkirmish(fixture.store, fixture.catalog, match, terrain);
+
+    const rm::sim::Transform& childTransform = fixture.store.transforms()[child.index];
+    CHECK(childTransform.y == terrain.heightAt(childTransform.x, childTransform.z));
 }

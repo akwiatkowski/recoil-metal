@@ -20,6 +20,7 @@ constexpr std::array<std::byte, 4> kMagic{
 constexpr std::uint32_t kVersion1 = 1;
 constexpr std::uint32_t kVersion2 = 2;
 constexpr std::uint32_t kVersion3 = 3;
+constexpr std::uint32_t kVersion4 = 4;
 // MT19937 serializes its 624 state words plus an index, all as unsigned decimal numbers separated
 // by one space. This rejects oversized malformed frames before they allocate their payload.
 constexpr std::size_t kMaxRandomStatePayload =
@@ -116,7 +117,7 @@ void writeId(PayloadWriter& writer, UnitId id) { writer.u32(id.index); writer.u3
 [[nodiscard]] bool readId(PayloadReader& reader, UnitId& id) { return reader.u32(id.index) && reader.u32(id.generation); }
 
 void writeUnits(PayloadWriter& w, const UnitStore::Snapshot& s, bool includesPathPhase,
-                bool includesFactoryRepeat) {
+                 bool includesFactoryRepeat, bool includesAttachmentOffsets) {
     w.count(s.ids.generations.size()); for (Generation v : s.ids.generations) w.u32(v);
     w.count(s.ids.free.size()); for (UnitIndex v : s.ids.free) w.u32(v);
     w.u64(s.ids.live);
@@ -128,10 +129,11 @@ void writeUnits(PayloadWriter& w, const UnitStore::Snapshot& s, bool includesPat
     if (includesFactoryRepeat) { w.count(s.factoryRepeat.size()); for (bool v : s.factoryRepeat) w.u8(v); }
     w.count(s.parents.size()); for (const auto& v : s.parents) { w.u8(v.has_value()); if (v) writeId(w, *v); }
     w.count(s.children.size()); for (const auto& list : s.children) { w.count(list.size()); for (UnitId id : list) writeId(w, id); }
+    if (includesAttachmentOffsets) { w.count(s.attachmentOffsets.size()); for (const auto& offset : s.attachmentOffsets) { w.i32(offset[0].raw()); w.i32(offset[1].raw()); } }
 }
 
 [[nodiscard]] bool readUnits(PayloadReader& r, UnitStore::Snapshot& s, bool includesPathPhase,
-                             bool includesFactoryRepeat) {
+                              bool includesFactoryRepeat, bool includesAttachmentOffsets) {
     std::size_t n{};
     if (!r.count(n, 4)) return false; s.ids.generations.resize(n); for (auto& v : s.ids.generations) if (!r.u32(v)) return false;
     if (!r.count(n, 4)) return false; s.ids.free.resize(n); for (auto& v : s.ids.free) if (!r.u32(v)) return false;
@@ -146,11 +148,13 @@ void writeUnits(PayloadWriter& w, const UnitStore::Snapshot& s, bool includesPat
     if (includesFactoryRepeat) { if (!r.count(n, 1)) return false; s.factoryRepeat.resize(n); for (auto&& v : s.factoryRepeat) { std::uint8_t enabled{}; if (!r.u8(enabled) || enabled > 1) return false; v = enabled; } }
     if (!r.count(n,1)) return false; s.parents.resize(n); for(auto& v:s.parents){std::uint8_t has{};if(!r.u8(has)||has>1)return false;if(has){UnitId id;if(!readId(r,id))return false;v=id;}}
     if (!r.count(n,4)) return false; s.children.resize(n); for(auto& list:s.children){if(!r.count(n,8))return false;list.resize(n);for(auto& id:list)if(!readId(r,id))return false;}
+    if (includesAttachmentOffsets) { if (!r.count(n, 8)) return false; s.attachmentOffsets.resize(n); for (auto& offset : s.attachmentOffsets) { std::int32_t x{}, z{}; if (!r.i32(x) || !r.i32(z)) return false; offset = {Fx::fromRaw(x), Fx::fromRaw(z)}; } }
     const std::size_t slots=s.transforms.size();
     if (s.ids.generations.size()!=slots || s.generations.size()!=slots || s.motion.size()!=slots
-        || s.health.size()!=slots || s.types.size()!=slots
-        || (includesFactoryRepeat && s.factoryRepeat.size()!=slots) || s.parents.size()!=slots
-        || s.children.size()!=slots || s.ids.live>slots || s.ids.free.size()>slots) return false;
+         || s.health.size()!=slots || s.types.size()!=slots
+         || (includesFactoryRepeat && s.factoryRepeat.size()!=slots) || s.parents.size()!=slots
+         || s.children.size()!=slots || (includesAttachmentOffsets && s.attachmentOffsets.size()!=slots)
+         || s.ids.live>slots || s.ids.free.size()>slots) return false;
 
     std::vector<bool> free(slots);
     for (UnitIndex index : s.ids.free) {
@@ -197,6 +201,16 @@ void writeUnits(PayloadWriter& w, const UnitStore::Snapshot& s, bool includesPat
         }
     }
     if (!includesFactoryRepeat) s.factoryRepeat.resize(slots, false);
+    if (!includesAttachmentOffsets) {
+        s.attachmentOffsets.resize(slots);
+        for (std::size_t child = 0; child < slots; ++child) {
+            if (s.parents[child]) {
+                const UnitIndex parent = s.parents[child]->index;
+                s.attachmentOffsets[child] = {s.transforms[child].x - s.transforms[parent].x,
+                                              s.transforms[child].z - s.transforms[parent].z};
+            }
+        }
+    }
     return true;
 }
 
@@ -248,7 +262,8 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
     PayloadWriter payloadWriter;
     payloadWriter.text(randomState.str());
     if (version >= kVersion2) payloadWriter.u64(state.pathServiceBeats);
-    writeUnits(payloadWriter, state.units, version >= kVersion2, version >= kVersion3);
+    writeUnits(payloadWriter, state.units, version >= kVersion2, version >= kVersion3,
+               version >= kVersion4);
     const std::vector<std::byte> payload = payloadWriter.take();
     if (payload.size() > std::numeric_limits<std::uint32_t>::max()) {
         throw std::length_error("MT19937 state exceeds the v1 save-state payload limit");
@@ -278,7 +293,7 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
     std::uint64_t tick{};
     std::uint32_t payloadSize{};
     if (!readU32(bytes, offset, version)
-        || (version != kVersion1 && version != kVersion2 && version != kVersion3)
+        || (version != kVersion1 && version != kVersion2 && version != kVersion3 && version != kVersion4)
         || (requiredVersion && version != *requiredVersion) || !readU64(bytes, offset, tick)
         || !readU32(bytes, offset, payloadSize) || bytes.size() - offset != payloadSize) {
         return std::nullopt;
@@ -305,7 +320,7 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
     std::uint64_t pathServiceBeats{};
     if (version >= kVersion2 && !reader.u64(pathServiceBeats)) return std::nullopt;
     UnitStore::Snapshot units;
-    if (!readUnits(reader, units, version >= kVersion2, version >= kVersion3)
+    if (!readUnits(reader, units, version >= kVersion2, version >= kVersion3, version >= kVersion4)
         || !reader.finished()) return std::nullopt;
     SaveState decoded{.tick = tick,
                       .random = std::move(random),
@@ -335,7 +350,7 @@ std::optional<SaveState> SaveState::decodeV2(std::span<const std::byte> bytes) {
 }
 
 std::vector<std::byte> SaveState::encode(const SaveState& state) {
-    return rm::sim::encode(state, kVersion3);
+    return rm::sim::encode(state, kVersion4);
 }
 
 std::optional<SaveState> SaveState::decode(std::span<const std::byte> bytes) {

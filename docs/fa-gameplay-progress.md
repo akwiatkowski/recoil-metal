@@ -70,7 +70,7 @@ excluded from the headline.
 | [`FA-LAND`](#fa-land---land-navigation-formations-and-spatial-world) | Land navigation, formations, spatial world | `WP-20`, `21`, `26` | 75% | 30% | 95% | Implement deterministic formation fan-out without weakening the per-army path-service budget. |
 | [`FA-AIR`](#fa-air---aircraft-flight-combat-and-staging) | Aircraft flight, combat, staging | `WP-22` | 30% | 10% | 95% | Implement the deterministic winged-aircraft mover foundation. |
 | [`FA-NAVY`](#fa-navy---surface-and-submerged-warfare) | Surface and submerged warfare | `WP-23`-`24` | 35% | 10% | 75% | Implement one complete `SurfacingSub` dive/surface slice. |
-| [`FA-TRANSPORT`](#fa-transport---attachments-cargo-and-ferries) | Attachments, cargo, ferries | `WP-25` | 15% | 0% | 95% | Apply child offset transforms from the generic attachment graph during the simulation tick. |
+| [`FA-TRANSPORT`](#fa-transport---attachments-cargo-and-ferries) | Attachments, cargo, ferries | `WP-25` | 25% | 5% | 95% | Add authored bone-local transforms and attachment motion state before transport load/unload. |
 | [`FA-WEAPONS`](#fa-weapons---targeting-weapons-and-projectiles) | Targeting, weapons, projectiles | `WP-27`-`28` | 90% | 65% | 90% | Separate the death-weapon firing path from automatic acquisition before enabling C-156 empty-priority default-deny. |
 | [`FA-MISSILES`](#fa-missiles---silos-missiles-and-interception) | Silos, missiles, interception | `WP-29` | 5% | 0% | 90% | Implement tactical silo ammo production and decrement-then-fire. |
 | [`FA-DAMAGE`](#fa-damage---damage-death-and-shields) | Damage, death, shields | `WP-30`-`32` | 70% | 40% | 75% | Add the next collidable shield slice: area-shield admission and stacking. |
@@ -221,14 +221,19 @@ make verify, then update WP-24 and FA-NAVY.
 
 ### FA-TRANSPORT - Attachments, Cargo, And Ferries
 
-**Largest gap:** the authoritative attachment graph exists, but children do not follow parent
-transforms and no gameplay transport can load, carry, unload, ferry, or propagate carrier death.
+**Current slice:** generic attachments capture a deterministic local X/Z offset, propagate it
+parent-before-child after movement and collision, refresh their terrain/water/air layer, and persist
+it in SaveState v4 while v1-v3 derive it from saved transforms. Attached children remain in the
+collision grid, matching `C-196`. Parent death detaches surviving children and clears their local
+offsets. This is deliberately not transport loading: bones, attachment motion state, capacity,
+load/unload, storage, ferry, and carrier death are still absent.
 
 ```text
-/goal Advance FA-TRANSPORT by applying generic attachment offsets to child transforms each tick
-from C-196. Preserve the existing one-parent graph and its deterministic child order; start with
-parent motion and detach regressions. Run make test and make verify, record deferred bones,
-cargo/collision/death behavior in WP-25, and refresh FA-TRANSPORT.
+/goal Advance FA-TRANSPORT by adding authored bone-local transforms and attachment motion state
+from C-195/C-196 without inventing transport capacity or load commands. Preserve deterministic
+parent-before-child order, collision-grid presence, and the existing post-movement/post-collision
+propagation points. Run make test and make verify, record the deferred transport controller behavior
+in WP-25, and refresh FA-TRANSPORT.
 ```
 
 ### FA-WEAPONS - Targeting, Weapons, And Projectiles

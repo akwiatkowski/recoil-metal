@@ -1,6 +1,7 @@
 #include "core/sim/UnitStore.hpp"
 
 #include <algorithm>
+#include <functional>
 #include <limits>
 
 namespace rm::sim {
@@ -13,10 +14,12 @@ UnitStore::UnitStore(const Snapshot& snapshot)
       health_(snapshot.health),
       types_(snapshot.types),
       factoryRepeat_(snapshot.factoryRepeat),
-      orders_(snapshot.transforms.size()),
-      parents_(snapshot.parents),
-      children_(snapshot.children) {
+       orders_(snapshot.transforms.size()),
+       parents_(snapshot.parents),
+       children_(snapshot.children),
+       attachmentOffsets_(snapshot.attachmentOffsets) {
     factoryRepeat_.resize(transforms_.size(), false);
+    attachmentOffsets_.resize(transforms_.size());
 }
 
 UnitStore::Snapshot UnitStore::snapshot() const {
@@ -26,9 +29,10 @@ UnitStore::Snapshot UnitStore::snapshot() const {
              .motion = motion_,
              .health = health_,
              .types = types_,
-             .factoryRepeat = factoryRepeat_,
-             .parents = parents_,
-             .children = children_};
+              .factoryRepeat = factoryRepeat_,
+              .parents = parents_,
+              .children = children_,
+              .attachmentOffsets = attachmentOffsets_};
 }
 
 UnitId UnitStore::spawn(const Spawn& request) {
@@ -47,6 +51,7 @@ UnitId UnitStore::spawn(const Spawn& request) {
         orders_.emplace_back();
         parents_.emplace_back();
         children_.emplace_back();
+        attachmentOffsets_.emplace_back();
         generations_.emplace_back();
     }
 
@@ -62,6 +67,7 @@ UnitId UnitStore::spawn(const Spawn& request) {
     orders_[slot].clear();
     parents_[slot].reset();
     children_[slot].clear();
+    attachmentOffsets_[slot] = {};
     // And the same for who last hit the PREVIOUS occupant: `request.health` sets the fresh
     // unit's own, but a caller that leaves it unset would have the newcomer already remember
     // being shot by whoever killed its predecessor. Set from the request so an explicit value
@@ -90,6 +96,8 @@ bool UnitStore::attach(UnitId parent, UnitId child) {
     }
 
     parents_[child.index] = parent;
+    attachmentOffsets_[child.index] = {transforms_[child.index].x - transforms_[parent.index].x,
+                                       transforms_[child.index].z - transforms_[parent.index].z};
     children_[parent.index].push_back(child);
     return true;
 }
@@ -106,6 +114,7 @@ bool UnitStore::detach(UnitId child) {
         siblings.erase(entry);
     }
     parents_[child.index].reset();
+    attachmentOffsets_[child.index] = {};
     return true;
 }
 
@@ -121,6 +130,30 @@ const std::vector<UnitId>& UnitStore::childrenOf(UnitId parent) const noexcept {
     return alive(parent) ? children_[parent.index] : noChildren;
 }
 
+std::array<Fx, 2> UnitStore::attachmentOffsetOf(UnitId child) const noexcept {
+    return alive(child) ? attachmentOffsets_[child.index] : std::array<Fx, 2>{};
+}
+
+void UnitStore::propagateAttachments() {
+    std::function<void(UnitId)> updateChildren = [&](UnitId parent) {
+        for (const UnitId child : children_[parent.index]) {
+            if (!alive(child) || parents_[child.index] != parent) {
+                continue;
+            }
+            transforms_[child.index].x = transforms_[parent.index].x + attachmentOffsets_[child.index][0];
+            transforms_[child.index].z = transforms_[parent.index].z + attachmentOffsets_[child.index][1];
+            updateChildren(child);
+        }
+    };
+
+    for (UnitIndex slot = 0; slot < slotCount(); ++slot) {
+        const UnitId unit = idAt(slot);
+        if (alive(unit) && !parents_[slot]) {
+            updateChildren(unit);
+        }
+    }
+}
+
 void UnitStore::kill(UnitId id) {
     if (!ids_.alive(id)) {
         return;
@@ -134,6 +167,7 @@ void UnitStore::kill(UnitId id) {
     for (const UnitId child : children_[id.index]) {
         if (child.index < parents_.size() && parents_[child.index] == id) {
             parents_[child.index].reset();
+            attachmentOffsets_[child.index] = {};
         }
     }
     children_[id.index].clear();

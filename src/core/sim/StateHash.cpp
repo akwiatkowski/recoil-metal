@@ -406,6 +406,7 @@ StateHash hashMatch(const UnitStore& store, const Match& match) {
             if (parent) {
                 feed(h, static_cast<std::size_t>(parent->index));
                 feed(h, static_cast<std::size_t>(parent->generation));
+                feed(h, store.attachmentOffsetOf(unit));
             }
             const std::vector<UnitId>& children = store.childrenOf(unit);
             feed(h, children.size());

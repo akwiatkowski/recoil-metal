@@ -165,6 +165,69 @@ TEST_CASE("save-state versions preserve route phase and versioned factory repeat
     CHECK_FALSE(old->units.factoryRepeat[unit.index]);
 }
 
+TEST_CASE("the current save state preserves captured attachment offsets", "[save-state]") {
+    UnitStore original;
+    UnitStore::Spawn parent;
+    parent.transform.x = rm::sim::Fx::fromInt(10);
+    parent.transform.z = rm::sim::Fx::fromInt(20);
+    const auto parentId = original.spawn(parent);
+    UnitStore::Spawn child;
+    child.transform.x = rm::sim::Fx::fromInt(13);
+    child.transform.z = rm::sim::Fx::fromInt(25);
+    const auto childId = original.spawn(child);
+    REQUIRE(original.attach(parentId, childId));
+
+    RandomStream random{std::uint32_t{1}};
+    const auto saved = SaveState::decode(
+        SaveState::encode({.tick = 42, .random = random.snapshot(), .units = original.snapshot()}));
+    REQUIRE(saved.has_value());
+    REQUIRE(saved->units.attachmentOffsets[childId.index]
+            == std::array<rm::sim::Fx, 2>{rm::sim::Fx::fromInt(3), rm::sim::Fx::fromInt(5)});
+
+    UnitStore restored{saved->units};
+    restored.transforms()[parentId.index].x = rm::sim::Fx::fromInt(30);
+    restored.transforms()[parentId.index].z = rm::sim::Fx::fromInt(40);
+    restored.propagateAttachments();
+    CHECK(restored.transforms()[childId.index].x == rm::sim::Fx::fromInt(33));
+    CHECK(restored.transforms()[childId.index].z == rm::sim::Fx::fromInt(45));
+}
+
+TEST_CASE("historic attachment saves derive offsets from their transforms", "[save-state]") {
+    UnitStore original;
+    const auto parent = original.spawn({.transform = {.x = rm::sim::Fx::fromInt(10),
+                                                       .z = rm::sim::Fx::fromInt(20)}});
+    const auto child = original.spawn({.transform = {.x = rm::sim::Fx::fromInt(13),
+                                                      .z = rm::sim::Fx::fromInt(25)}});
+    REQUIRE(original.attach(parent, child));
+
+    RandomStream random{std::uint32_t{1}};
+    const SaveState state{.tick = 42, .random = random.snapshot(), .units = original.snapshot()};
+    std::vector<std::byte> v3 =
+        SaveState::encode(state);
+    // v4 appends the offset collection. Removing it and changing the frame version recreates
+    // the published v3 shape, which stored the attachment graph but no local offsets.
+    v3.resize(v3.size() - (sizeof(std::uint32_t) + 2 * 2 * sizeof(std::int32_t)));
+    writeU32(v3, 4, 3);
+    writeU32(v3, 16, static_cast<std::uint32_t>(v3.size() - 20));
+
+    const auto checkDerivedOffset = [&](const std::vector<std::byte>& bytes) {
+        const auto saved = SaveState::decode(bytes);
+        REQUIRE(saved.has_value());
+        UnitStore restored{saved->units};
+        CHECK(restored.attachmentOffsetOf(child)
+              == std::array<rm::sim::Fx, 2>{rm::sim::Fx::fromInt(3), rm::sim::Fx::fromInt(5)});
+        restored.transforms()[parent.index].x = rm::sim::Fx::fromInt(30);
+        restored.transforms()[parent.index].z = rm::sim::Fx::fromInt(40);
+        restored.propagateAttachments();
+        CHECK(restored.transforms()[child.index].x == rm::sim::Fx::fromInt(33));
+        CHECK(restored.transforms()[child.index].z == rm::sim::Fx::fromInt(45));
+    };
+
+    checkDerivedOffset(SaveState::encodeV1(state));
+    checkDerivedOffset(SaveState::encodeV2(state));
+    checkDerivedOffset(v3);
+}
+
 TEST_CASE("a v1 save state refuses invalid and truncated input", "[save-state]") {
     RandomStream random{std::uint32_t{1}};
     const auto bytes = SaveState::encodeV1({.tick = 42, .random = random.snapshot()});

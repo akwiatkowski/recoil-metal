@@ -321,13 +321,40 @@ TEST_CASE("attachments keep one parent per child and reject duplicate or cyclic 
     REQUIRE(store.attach(parent, child));
     store.kill(parent);
     REQUIRE_FALSE(store.parentOf(child).has_value());
+    CHECK(store.attachmentOffsetOf(child) == std::array<rm::sim::Fx, 2>{});
     REQUIRE(store.childrenOf(parent).empty());
     REQUIRE_FALSE(store.attach(parent, child));
 
     const UnitId newParent = store.spawn(tankAt(4.0f, 0.0f, 0));
     REQUIRE(store.attach(newParent, child));
+    CHECK(store.attachmentOffsetOf(child)
+          == std::array<rm::sim::Fx, 2>{rm::test::fx(-2.0f), rm::test::fx(0.0f)});
     store.kill(child);
     REQUIRE(store.childrenOf(newParent).empty());
+}
+
+TEST_CASE("attached children follow captured offsets until detached") {
+    UnitStore store;
+    const UnitId parent = store.spawn(tankAt(10.0f, 20.0f, 0));
+    const UnitId child = store.spawn(tankAt(13.0f, 25.0f, 0));
+    const UnitId grandchild = store.spawn(tankAt(15.0f, 28.0f, 0));
+    REQUIRE(store.attach(parent, child));
+    REQUIRE(store.attach(child, grandchild));
+
+    store.transforms()[parent.index].x = rm::test::fx(30.0f);
+    store.transforms()[parent.index].z = rm::test::fx(40.0f);
+    store.propagateAttachments();
+    CHECK(store.transforms()[child.index].x == rm::test::fx(33.0f));
+    CHECK(store.transforms()[child.index].z == rm::test::fx(45.0f));
+    CHECK(store.transforms()[grandchild.index].x == rm::test::fx(35.0f));
+    CHECK(store.transforms()[grandchild.index].z == rm::test::fx(48.0f));
+
+    REQUIRE(store.detach(child));
+    store.transforms()[parent.index].x = rm::test::fx(50.0f);
+    store.transforms()[parent.index].z = rm::test::fx(60.0f);
+    store.propagateAttachments();
+    CHECK(store.transforms()[child.index].x == rm::test::fx(33.0f));
+    CHECK(store.transforms()[child.index].z == rm::test::fx(45.0f));
 }
 
 TEST_CASE("attachments change the match hash") {
@@ -348,6 +375,26 @@ TEST_CASE("attachments change the match hash") {
                                 .economies = economies,
                                 .commandersEver = commandersEver};
     REQUIRE(rm::sim::hashMatch(detached, match) != rm::sim::hashMatch(attached, match));
+}
+
+TEST_CASE("attachment offsets change the match hash") {
+    UnitStore left;
+    UnitStore right;
+    const UnitId leftParent = left.spawn(tankAt(1.0f, 1.0f, 0));
+    const UnitId leftChild = left.spawn(tankAt(2.0f, 2.0f, 0));
+    const UnitId rightParent = right.spawn(tankAt(1.0f, 1.0f, 0));
+    const UnitId rightChild = right.spawn(tankAt(3.0f, 3.0f, 0));
+    REQUIRE(left.attach(leftParent, leftChild));
+    REQUIRE(right.attach(rightParent, rightChild));
+    right.transforms()[rightChild.index] = left.transforms()[leftChild.index];
+
+    std::vector<rm::sim::Army> armies(1);
+    std::vector<rm::sim::Economy> economies(1);
+    std::vector<int> commandersEver(1);
+    const rm::sim::Match match{.armies = armies,
+                                .economies = economies,
+                                .commandersEver = commandersEver};
+    CHECK(rm::sim::hashMatch(left, match) != rm::sim::hashMatch(right, match));
 }
 
 TEST_CASE("different valid attachment topologies hash differently") {

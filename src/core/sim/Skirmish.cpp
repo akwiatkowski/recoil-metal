@@ -327,6 +327,16 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
     //    of different models had to be able to see each other. With one flat array that
     //    problem does not arise.
     tick(store.transforms(), store.motion(), terrain);
+    store.propagateAttachments();
+    const auto placeAttachedUnitsOnMotionLayers = [&] {
+        for (UnitIndex slot = 0; slot < store.slotCount(); ++slot) {
+            const UnitId unit = store.idAt(slot);
+            if (store.parentOf(unit)) {
+                placeOnMotionLayer(store.transforms()[slot], store.motion()[slot], terrain);
+            }
+        }
+    };
+    placeAttachedUnitsOnMotionLayers();
 
     //    THE SPATIAL INDEX IS REBUILT TWICE, and both points are load-bearing (§7 P5.2).
     //    Here, because collisions ask which units are near each other and `tick` has just
@@ -337,6 +347,10 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
     //    which was a scan over every unit for every shooter, every projectile and every blast.
     store.reindex(spatialCellSize(store));
     resolveCollisions(store, terrain, match.passability);
+    // Collision resolution can move either member independently. Reapply attachment-local
+    // transforms before publishing positions to combat, so children never lag a parent by a tick.
+    store.propagateAttachments();
+    placeAttachedUnitsOnMotionLayers();
     store.reindex(spatialCellSize(store));
 
     // Everything below is a MATCH, and a scene with no armies is not one — a `--units`
