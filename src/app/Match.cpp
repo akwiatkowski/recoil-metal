@@ -135,6 +135,28 @@ bool gFafLog = false;
     }).has_value();
 }
 
+[[nodiscard]] bool issueRepair(UnitScene& scene, std::span<const rm::sim::UnitId> units,
+                                rm::PlayerIndex player, rm::TickIndex tick,
+                                rm::sim::UnitId target, bool queued) {
+    if (!scene.store.alive(target)) {
+        return false;
+    }
+    const rm::sim::Transform& at = scene.store.transforms()[target.index];
+    return submitCommand(scene, rm::sim::CommandIssue{
+        .tick = tick,
+        .phase = rm::sim::CommandPhase::PreTick,
+        .source = static_cast<rm::CommandSource>(player),
+        .player = player,
+        .kind = rm::sim::CommandKind::Repair,
+        .queued = queued,
+        .units = {units.begin(), units.end()},
+        .targetX = at.x,
+        .targetZ = at.z,
+        .target = target,
+        .buildType = 0,
+    }).has_value();
+}
+
 [[nodiscard]] bool issueReclaim(UnitScene& scene, std::span<const rm::sim::UnitId> units,
                                  rm::PlayerIndex player, rm::TickIndex tick,
                                  rm::sim::FeatureId wreck, bool queued) {

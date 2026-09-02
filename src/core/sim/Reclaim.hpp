@@ -7,6 +7,7 @@
 
 #include <cstddef>
 #include <span>
+#include <vector>
 
 namespace rm::sim {
 
@@ -33,7 +34,11 @@ namespace rm::sim {
 /// the same generosity the game's own build-range overlay draws
 /// (`blueprints-units.lua:250` adds the footprint to the radius for exactly this reason).
 [[nodiscard]] Fx reclaimReach(const UnitCatalog& catalog, UnitTypeIndex type,
-                              const MoveState& reclaimer, const Feature& wreck) noexcept;
+                               const MoveState& reclaimer, const Feature& wreck) noexcept;
+
+/// The initial build-distance reach for repairing another unit, centre to centre.
+[[nodiscard]] Fx repairReach(const UnitCatalog& catalog, UnitTypeIndex type,
+                              const MoveState& builder, const MoveState& target) noexcept;
 
 /// One tick of every reclaim order in the store: drains wrecks, credits economies,
 /// removes what is emptied. Returns how many units actually harvested this tick — the
@@ -44,13 +49,24 @@ namespace rm::sim {
 std::size_t harvestReclaim(UnitStore& store, const UnitCatalog& catalog,
                            FeatureStore& features, std::span<Economy> economies);
 
-/// One tick of PATROLHELPER work for builders whose current order is `Patrol`.
+/// Collects every explicit repair that is actively holding its target into economy requests.
+/// The caller awards these alongside construction and upkeep, then passes the same records to
+/// `applyRepairWork` so healing uses exactly the allocation ratio that paid for it.
+void collectRepairWork(const UnitStore& store, const UnitCatalog& catalog,
+                       std::span<const Army> armies, std::vector<RepairWork>& out);
+
+/// Applies repair healing after its requests have been awarded by `tickEconomy`.
+std::size_t applyRepairWork(UnitStore& store, const UnitCatalog& catalog,
+                            std::span<const RepairWork> repairs);
+
+/// One tick of patrol-helper work for builders.
 ///
-/// The builder does not leave its route or create an internal order: it repairs the nearest
-/// damaged allied unit already inside build reach, otherwise reclaims the nearest wreck there.
-/// A temporary combat target suppresses service, and explicit reclaim orders run first.
-/// Returns how many builders did useful work. Repair is intentionally free until explicit
-/// engineer assist generalises construction and repair resource consumption together.
+/// Patrol leaves its route intact while it repairs the nearest damaged allied unit already inside
+/// build reach, otherwise reclaims the nearest wreck there. An explicit Repair works only on its
+/// named target and holds through its two-range hysteresis. A temporary combat target suppresses
+/// patrol service, and explicit reclaim orders run first.
+/// Returns how many builders did useful work. Patrol help remains the existing free autonomous
+/// convenience; explicit repair is collected separately so its demand joins the economy pass.
 std::size_t servicePatrolBuilders(UnitStore& store, const UnitCatalog& catalog,
                                   std::span<const Army> armies, FeatureStore* features,
                                   std::span<Economy> economies);

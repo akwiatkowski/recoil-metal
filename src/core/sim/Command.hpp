@@ -104,6 +104,9 @@ enum class CommandKind : std::uint8_t {
     /// Toggle a factory's mobile-production repeat state. This is an authoritative action, not
     /// presentation state, because it changes what completion does to the production command.
     ToggleFactoryRepeat = 9,
+    /// Restore a damaged allied unit while it remains in build reach. Unlike Assist, this is a
+    /// finite repair task and does not contribute to construction.
+    Repair = 10,
 };
 
 /// One order, from one player, on one tick.
@@ -350,7 +353,8 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
                            EventQueue* events = nullptr,
                             const FeatureStore* features = nullptr,
                             std::vector<Construction>* finished = nullptr,
-                             PathService* pathService = nullptr);
+                              PathService* pathService = nullptr,
+                              std::span<const Army> armies = {});
 
 /// Updates attack-move and patrol combat after movement and intel. These orders retain their
 /// waypoint while `target` temporarily names the visible hostile that interrupted the route.

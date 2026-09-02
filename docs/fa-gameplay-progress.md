@@ -9,7 +9,7 @@ Detailed retail evidence remains canonical in
 [`fa-exe-analysis-plan.md`](fa-exe-analysis-plan.md). This dashboard summarizes that ledger; it
 does not replace its claims, addresses, counterevidence, or confirmation gate.
 
-**Snapshot:** 2026-09-01, Recoil Metal `c4f8c91` plus a dirty worktree, retail artifact
+**Snapshot:** 2026-09-02, Recoil Metal `c4f8c91` plus a dirty worktree, retail artifact
 `ART-E001` (`c6783580c0b7a408ec2ad3bfe5eb1fdbef31a60d92c1007ff9b90c33bb960aa0`).
 
 ## Headline
@@ -172,8 +172,9 @@ make verify, then update WP-12 and FA-CMD.
 
 ### FA-ECON - Economy, Construction, And Engineering
 
-**Largest gap:** economy is confirmed and build/repair/guard are analyzed, but capture, gifting,
-ownership transfer, and their callback order remain unread and unimplemented.
+**Largest gap:** explicit repair now has a tested semantic, replay, economy, and UI slice against
+`C-182`; capture, gifting, ownership transfer, and their callback order remain unread and
+unimplemented.
 
 ```text
 /goal Advance FA-ECON by reading CUnitCaptureTask::TaskTick at 0x0060AEB0 together with

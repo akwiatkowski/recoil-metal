@@ -31,7 +31,7 @@ using CommandAvailability = std::array<bool, kCommandSlots>;
 /// The fixed FA order positions, truncated to the requested 4x3 rack.
 ///
 /// Slots are zero-based here and one-based in FA's `preferredSlot`: AttackMove 1 through Assist
-/// 6, fire-state 7, Overcharge 8, unit-specific actions 9-11, and Reclaim 12. Build is absent on
+/// 6, fire-state 7, Overcharge 8, Repair 9, unit-specific actions 10-11, and Reclaim 12. Build is absent on
 /// purpose: choosing a blueprint belongs to the construction panel, not the order rack.
 inline constexpr CommandDescriptors kCommandDescriptors{{
     {{sim::CommandKind::AttackMove}, "ATTACK MOVE", "attack_move"},
@@ -42,7 +42,7 @@ inline constexpr CommandDescriptors kCommandDescriptors{{
     {{sim::CommandKind::Assist}, "ASSIST", "guard"},
     {std::nullopt, {}, {}},  // FA fire-state: not implemented by the simulation.
     {{sim::CommandKind::Overcharge}, "OVERCHARGE", "overcharge"},
-    {std::nullopt, {}, {}},  // FA unit-specific action.
+    {{sim::CommandKind::Repair}, "REPAIR", "repair"},
     {std::nullopt, {}, {}},  // FA launch, teleport, ferry, or sacrifice action.
     {std::nullopt, {}, {}},  // FA dive or another unit-specific action.
     {{sim::CommandKind::Reclaim}, "RECLAIM", "reclaim"},

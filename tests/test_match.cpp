@@ -444,3 +444,85 @@ TEST_CASE("the match runner preserves queued, stopping, replacement, and roll-of
     CHECK(replay.spawnedAlive == live.spawnedAlive);
     CHECK(replay.hash == live.hash);
 }
+
+TEST_CASE("the match runner dispatches a live repair through replay's command path") {
+    struct Result {
+        std::vector<rm::sim::CommandIssue> commands;
+        rm::sim::Mag health;
+        std::uint64_t hash = 0;
+    };
+    const auto run = [](const rm::sim::CommandLog* replay) {
+        const rm::HeightField field = flatField();
+        rm::app::UnitScene scene;
+        scene.armies = rm::sim::freeForAll(1);
+        scene.players = rm::sim::onePlayerPerArmy(1, 0);
+        scene.economies.assign(1, rm::sim::Economy{});
+        scene.commandersEver.assign(1, 0);
+
+        rm::unitdef::UnitDef engineer;
+        engineer.name = "test_engineer";
+        engineer.buildRate = 10.0f;
+        scene.definitions.push_back(engineer);
+        const rm::UnitTypeIndex engineerType =
+            scene.catalog.add(&scene.definitions.back(), rm::app::gAppTickRate);
+        scene.setTypeTraits(engineerType, rm::data::moveDefFor(engineer), 1.0f);
+
+        rm::unitdef::UnitDef tank;
+        tank.name = "test_tank";
+        tank.buildCostMass = rm::sim::Mag::fromInt(100);
+        tank.buildCostEnergy = rm::sim::Mag::fromInt(200);
+        tank.buildTime = rm::sim::Mag::fromInt(100);
+        scene.definitions.push_back(tank);
+        const rm::UnitTypeIndex tankType =
+            scene.catalog.add(&scene.definitions.back(), rm::app::gAppTickRate);
+        scene.setTypeTraits(tankType, rm::data::moveDefFor(tank), 1.0f);
+
+        const auto spawn = [&](rm::UnitTypeIndex type, float x) {
+            return scene.store.spawn(rm::sim::UnitStore::Spawn{
+                .type = type,
+                .transform = {.x = rm::sim::fxFromFloat(x), .z = rm::sim::fxFromFloat(200.0f)},
+                .motion = rm::app::motionFor(scene.definitions[type], 0),
+                .health = rm::sim::initialHealth(rm::sim::Mag::fromInt(100)),
+            });
+        };
+        const rm::sim::UnitId builder = spawn(engineerType, 200.0f);
+        const rm::sim::UnitId target = spawn(tankType, 210.0f);
+        scene.store.health()[target.index].current = rm::sim::Mag::fromInt(50);
+
+        rm::app::PassabilitySet passability{field, false, 0.0f};
+        rm::vfs::Vfs content;
+        rm::app::MatchRunner runner =
+            rm::app::makeMatchRunner(scene, field, passability, content, {}, {});
+        runner.scripts.clear();
+        runner.replay = replay;
+        runner.match.baseStorage = {.mass = rm::sim::Mag::fromInt(1000),
+                                    .energy = rm::sim::Mag::fromInt(1000)};
+        scene.economies[0].stored = runner.match.baseStorage;
+
+        if (replay == nullptr) {
+            REQUIRE(rm::app::issueRepair(scene, std::span{&builder, std::size_t{1}}, 0, 0,
+                                         target));
+        }
+        for (int tick = 0; tick < 3; ++tick) {
+            (void)rm::app::advanceMatch(runner, tick, 0.0f);
+        }
+
+        REQUIRE(scene.commands.size() == 1);
+        CHECK(scene.commands.all()[0].kind == rm::sim::CommandKind::Repair);
+        CHECK(scene.commands.all()[0].units == std::vector{builder});
+        REQUIRE(scene.store.orders()[builder.index].current() != nullptr);
+        CHECK(scene.store.orders()[builder.index].current()->kind() == rm::sim::CommandKind::Repair);
+        CHECK(scene.store.health()[target.index].current > rm::sim::Mag::fromInt(50));
+        return Result{.commands = {scene.commands.all().begin(), scene.commands.all().end()},
+                      .health = scene.store.health()[target.index].current,
+                      .hash = rm::sim::hashMatch(scene.store, runner.match)};
+    };
+
+    const Result live = run(nullptr);
+    rm::sim::CommandLog replay;
+    REQUIRE(replay.record(live.commands[0]));
+    const Result replayed = run(&replay);
+    CHECK(replayed.commands == live.commands);
+    CHECK(replayed.health == live.health);
+    CHECK(replayed.hash == live.hash);
+}

@@ -1365,6 +1365,36 @@ int runWindowed(const Session& session) {
                 return;
             }
 
+            // A RIGHT-CLICK ON A DAMAGED ALLY IS REPAIR. Builders receive the targeted repair
+            // order; the rest of a mixed selection moves there. This precedes Assist because a
+            // damaged builder is still a repair target, not an instruction to guard it.
+            if (!isAttack && !armedGroundOrder && hit && units.playerArmy != rm::sim::kNoArmy
+                && alliedTo(units, units.playerArmy, *hit)
+                && units.store.health()[hit->index].current
+                       < units.store.health()[hit->index].maximum) {
+                std::vector<rm::sim::UnitId> builders;
+                std::vector<rm::sim::UnitId> movers;
+                for (const rm::sim::UnitId sel : selected) {
+                    if (!units.store.alive(sel) || sel == *hit) {
+                        continue;
+                    }
+                    const rm::unitdef::UnitDef* def =
+                        units.catalog.def(units.store.typeAt(sel.index));
+                    (def != nullptr && def->isBuilder() ? builders : movers).push_back(sel);
+                }
+                const rm::PlayerIndex player = playerDriving(units, units.playerArmy);
+                const rm::TickIndex tick = static_cast<rm::TickIndex>(matchTicks);
+                const rm::sim::Transform& at = units.store.transforms()[hit->index];
+                const bool repairing = builders.empty()
+                    || issueRepair(units, builders, player, tick, *hit, mods.shift);
+                (void)(movers.empty()
+                           || issueMove(units, movers, player, tick, at.x, at.z, mods.shift));
+                if (repairing && !builders.empty()) {
+                    std::printf("repair: %zu builder(s) submitted\n", builders.size());
+                }
+                return;
+            }
+
             // A RIGHT-CLICK ON YOUR OWN BUILDER IS AN ASSIST — the guard order. The
             // builders in the selection lend their rate to whatever the target builds
             // (`core/sim/Assist.hpp`); everyone else just walks over. Beaten by an enemy

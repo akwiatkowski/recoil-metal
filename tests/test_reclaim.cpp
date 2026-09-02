@@ -64,6 +64,8 @@ struct Fixture {
 
         rm::unitdef::UnitDef tank;
         tank.name = "test_tank";
+        tank.buildCostMass = rm::sim::magFromFloat(100.0f);
+        tank.buildCostEnergy = rm::sim::magFromFloat(200.0f);
         tank.buildTime = rm::sim::magFromFloat(100.0f);
         tankType = roster.addType(tank);
     }
@@ -89,6 +91,15 @@ struct Fixture {
         return rm::sim::applyCommand(command, roster.store, roster.catalog, players, armies,
                                      terrain, grid, roster.rate, &building, nullptr,
                                      &features);
+    }
+
+    [[nodiscard]] bool repair(UnitId who, UnitId target, bool queued = false) {
+        return rm::sim::applyCommand(Command{.kind = CommandKind::Repair,
+                                             .queued = queued,
+                                             .unit = who,
+                                             .target = target},
+                                     roster.store, roster.catalog, players, armies, terrain,
+                                     grid, roster.rate, &building);
     }
 
     void tick(int times = 1, float storageMass = 1000.0f) {
@@ -234,6 +245,170 @@ TEST_CASE("a reclaim order survives the log round trip") {
     REQUIRE(reread.has_value());
     REQUIRE(reread->size() == 1);
     CHECK(reread->all()[0] == log.all()[0]);
+}
+
+TEST_CASE("a repair command records semantic intent and can approach an allied target") {
+    Fixture f;
+    f.armies[1].alliance = f.armies[0].alliance;
+    const UnitId engineer = f.roster.add(f.engineerType, 200.0f, 200.0f, 0, 100.0f);
+    const UnitId ally = f.roster.add(f.tankType, 300.0f, 200.0f, 1, 100.0f);
+    f.roster.health(ally).current = rm::sim::magFromFloat(50.0f);
+
+    REQUIRE(f.repair(engineer, ally));
+    REQUIRE(f.roster.store.orders()[engineer.index].current() != nullptr);
+    CHECK(f.roster.store.orders()[engineer.index].current()->kind() == CommandKind::Repair);
+    CHECK(f.roster.store.motion()[engineer.index].moving);
+
+    rm::sim::CommandLog log;
+    log.record(rm::sim::CommandIssue{.tick = 7,
+                                     .source = 0,
+                                     .id = rm::commandId(0, 0),
+                                     .player = 0,
+                                     .kind = CommandKind::Repair,
+                                     .units = {engineer},
+                                     .target = ally});
+    const auto path = std::filesystem::temp_directory_path() / "rm_repair_log_test.txt";
+    REQUIRE(rm::sim::writeCommandLog(log, path.string()));
+    const auto reread = rm::sim::readCommandLog(path.string());
+    std::filesystem::remove(path);
+
+    REQUIRE(reread.has_value());
+    REQUIRE(reread->size() == 1);
+    CHECK(reread->all()[0] == log.all()[0]);
+}
+
+TEST_CASE("repair spends target construction cost and stalls at the available economy ratio") {
+    Fixture f;
+    f.armies[1].alliance = f.armies[0].alliance;
+    const UnitId engineer = f.roster.add(f.engineerType, 200.0f, 200.0f, 0, 100.0f);
+    const UnitId ally = f.roster.add(f.tankType, 210.0f, 200.0f, 1, 100.0f);
+    f.roster.health(ally).current = rm::sim::magFromFloat(50.0f);
+    f.economies[0].stored = {.mass = rm::sim::magFromFloat(100.0f),
+                             .energy = rm::sim::magFromFloat(200.0f)};
+
+    REQUIRE(f.repair(engineer, ally));
+    f.tick();
+
+    // One build unit restores 1% of health and asks the target's 100/200 cost at the
+    // corresponding 1/100 rate: about one mass and two energy per tick. The per-tick
+    // share is quantized in the same way as construction, so it is just below the
+    // decimal values rather than exactly them.
+    CHECK(51.0f == rm::test::near(f.roster.health(ally).current));
+    CHECK(rm::test::asFloat(f.economies[0].stored.mass)
+          == Catch::Approx(99.0f).margin(0.01f));
+    CHECK(rm::test::asFloat(f.economies[0].stored.energy)
+          == Catch::Approx(198.0f).margin(0.02f));
+
+    f.economies[0].stored = {.mass = rm::sim::magFromFloat(0.5f),
+                              .energy = rm::sim::magFromFloat(1.0f)};
+    f.tick();
+    CHECK(rm::test::asFloat(f.roster.health(ally).current)
+          == Catch::Approx(51.5f).margin(0.01f));
+    CHECK(0.0f == rm::test::near(f.economies[0].stored.mass));
+    CHECK(0.0f == rm::test::near(f.economies[0].stored.energy));
+}
+
+TEST_CASE("repair competes with construction in the shared economy allocation") {
+    Fixture f;
+    f.armies[1].alliance = f.armies[0].alliance;
+    const UnitId engineer = f.roster.add(f.engineerType, 200.0f, 200.0f, 0, 100.0f);
+    const UnitId ally = f.roster.add(f.tankType, 210.0f, 200.0f, 1, 100.0f);
+    f.roster.health(ally).current = rm::sim::magFromFloat(50.0f);
+
+    // Both requests cost one mass and two energy at this rate. The shared bank can cover only
+    // one, so construction and repair must each receive half; repair may not debit first.
+    f.building.push_back(rm::sim::Construction{
+        .armyIndex = 0,
+        .cost = {.mass = rm::sim::magFromFloat(100.0f),
+                 .energy = rm::sim::magFromFloat(200.0f)},
+        .buildTimeRemaining = rm::sim::magFromFloat(100.0f),
+        .totalBuildTime = rm::sim::magFromFloat(100.0f),
+        .buildPerTick = rm::sim::magFromFloat(1.0f),
+    });
+    f.economies[0].stored = {.mass = rm::sim::magFromFloat(1.0f),
+                              .energy = rm::sim::magFromFloat(2.0f)};
+
+    REQUIRE(f.repair(engineer, ally));
+    f.tick();
+
+    CHECK(rm::test::asFloat(f.roster.health(ally).current)
+          == Catch::Approx(50.5f).margin(0.01f));
+    CHECK(rm::test::asFloat(f.building[0].fundedLastTick)
+          == Catch::Approx(0.5f).margin(0.01f));
+    CHECK(rm::test::asFloat(f.economies[0].usageLastTick.mass)
+          == Catch::Approx(1.0f).margin(0.01f));
+    CHECK(rm::test::asFloat(f.economies[0].usageLastTick.energy)
+          == Catch::Approx(2.0f).margin(0.01f));
+    CHECK(0.0f == rm::test::near(f.economies[0].stored.mass));
+    CHECK(0.0f == rm::test::near(f.economies[0].stored.energy));
+}
+
+TEST_CASE("repair finishes on alliance loss and dispatches its queued follower") {
+    Fixture f;
+    f.armies[1].alliance = f.armies[0].alliance;
+    const UnitId engineer = f.roster.add(f.engineerType, 200.0f, 200.0f, 0, 100.0f);
+    const UnitId ally = f.roster.add(f.tankType, 210.0f, 200.0f, 1, 100.0f);
+    f.roster.health(ally).current = rm::sim::magFromFloat(50.0f);
+    REQUIRE(f.repair(engineer, ally));
+    REQUIRE(rm::sim::applyCommand(Command{.kind = CommandKind::Move,
+                                           .queued = true,
+                                           .unit = engineer,
+                                           .targetX = rm::sim::fxFromFloat(300.0f),
+                                           .targetZ = rm::sim::fxFromFloat(200.0f)},
+                                   f.roster.store, f.roster.catalog, f.players, f.armies,
+                                   f.terrain, f.grid, f.roster.rate, &f.building));
+
+    f.armies[1].alliance = 1;
+    f.tick();
+
+    REQUIRE(f.roster.store.orders()[engineer.index].current() != nullptr);
+    CHECK(f.roster.store.orders()[engineer.index].current()->kind() == CommandKind::Move);
+    CHECK(f.roster.store.motion()[engineer.index].moving);
+}
+
+TEST_CASE("repair rejects enemies, full targets, and non-builders") {
+    Fixture f;
+    const UnitId engineer = f.roster.add(f.engineerType, 200.0f, 200.0f, 0, 100.0f);
+    const UnitId target = f.roster.add(f.tankType, 210.0f, 200.0f, 1, 100.0f);
+    const UnitId tank = f.roster.add(f.tankType, 220.0f, 200.0f, 0, 100.0f);
+    f.roster.health(target).current = rm::sim::magFromFloat(50.0f);
+
+    CHECK_FALSE(f.repair(engineer, target));
+    f.armies[1].alliance = f.armies[0].alliance;
+    f.roster.health(target).current = f.roster.health(target).maximum;
+    CHECK_FALSE(f.repair(engineer, target));
+    f.roster.health(target).current = rm::sim::magFromFloat(50.0f);
+    CHECK_FALSE(f.repair(tank, target));
+}
+
+TEST_CASE("repair starts at build reach, holds to twice that reach, then finishes") {
+    Fixture f;
+    f.armies[1].alliance = f.armies[0].alliance;
+    const UnitId engineer = f.roster.add(f.engineerType, 200.0f, 200.0f, 0, 100.0f);
+    const UnitId ally = f.roster.add(f.tankType, 210.0f, 200.0f, 1, 100.0f);
+    f.roster.health(ally).current = rm::sim::magFromFloat(50.0f);
+    f.economies[0].stored = {.mass = rm::sim::magFromFloat(1000.0f),
+                             .energy = rm::sim::magFromFloat(1000.0f)};
+    const rm::sim::Fx reach = rm::sim::repairReach(
+        f.roster.catalog, f.engineerType, f.roster.motion(engineer),
+        f.roster.motion(ally));
+    f.roster.transform(ally).x = f.roster.transform(engineer).x + reach;
+    f.roster.reindex();
+
+    REQUIRE(f.repair(engineer, ally));
+    f.tick();
+    CHECK(rm::test::asFloat(f.roster.health(ally).current) == 51.0f);
+
+    f.roster.transform(ally).x = f.roster.transform(engineer).x + reach * 2;
+    f.roster.reindex();
+    f.tick();
+    CHECK(rm::test::asFloat(f.roster.health(ally).current) == 52.0f);
+
+    f.roster.transform(ally).x = f.roster.transform(engineer).x + reach * 2 + rm::sim::Fx::fromInt(1);
+    f.roster.reindex();
+    f.tick();
+    CHECK(rm::test::asFloat(f.roster.health(ally).current) == 52.0f);
+    CHECK(f.roster.store.orders()[engineer.index].empty());
 }
 
 TEST_CASE("a patrolling engineer repairs an allied unit already inside build reach") {

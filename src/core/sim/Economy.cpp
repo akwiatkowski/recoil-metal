@@ -67,7 +67,8 @@ void advanceConstruction(Construction& work) noexcept {
     work.workedThisTick = true;
 }
 
-void tickEconomy(Economy& economy, std::span<Construction> building) {
+void tickEconomy(Economy& economy, std::span<Construction> building,
+                 std::span<RepairWork> repairs) {
     // Clamp only what CARRIED IN. Reclaim currently credits `stored` directly before this
     // pass, so its over-cap excess is still lost rather than becoming a hidden reserve.
     economy.stored.mass = std::max(Mag{}, std::min(economy.stored.mass, economy.storage.mass));
@@ -123,6 +124,10 @@ void tickEconomy(Economy& economy, std::span<Construction> building) {
         const Resources demand = drainPerTick(work);
         wanted += demand;
         bucket(outstanding(demand, work.allocated));
+    }
+    for (const RepairWork& repair : repairs) {
+        wanted += repair.demand;
+        bucket(repair.demand);
     }
 
     // The DEMAND, remembered for whoever asks how loaded this economy is. Construction
@@ -203,6 +208,12 @@ void tickEconomy(Economy& economy, std::span<Construction> building) {
         // NEXT beat's progress will be multiplied by — retail's split across two stages exactly.
         work.fundedLastTick = grantAndConsume(drainPerTick(work), work.allocated);
         work.workedThisTick = false;
+    }
+    for (RepairWork& repair : repairs) {
+        // Repairs have no carry-forward allocation: their live target can be healed, filled,
+        // or destroyed before the next tick, so this request is consumed in the award beat.
+        Resources allocated;
+        repair.funded = grantAndConsume(repair.demand, allocated);
     }
 
     economy.usageLastTick = granted;

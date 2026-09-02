@@ -316,8 +316,8 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
         }
     }
     report.ordersStarted = advanceOrders(store, catalog, terrain, match.passability, rate,
-                                         match.building, match.events, match.features,
-                                         &report.finished, match.pathService);
+                                          match.building, match.events, match.features,
+                                          &report.finished, match.pathService, match.armies);
 
     // 1. MOVEMENT, then collisions. Everything downstream reads where a unit has got to
     //    this tick rather than where it started it.
@@ -503,6 +503,11 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
     // final scrap. Patrol helpers also use the freshly recomputed storage cap to avoid waste.
     (void)servicePatrolBuilders(store, catalog, match.armies, match.features, match.economies);
 
+    // Explicit repair is an economy consumer, not a pre-allocation debit. Its requests enter
+    // the same pass as upkeep and construction; their awarded ratios are applied below.
+    std::vector<RepairWork> repairs;
+    collectRepairWork(store, catalog, match.armies, repairs);
+
     // An upgrade whose unit died is CANCELLED, not completed: the work was that unit
     // becoming something, and there is no longer anything to become it. Before the economy
     // pass, so a cancelled upgrade stops drawing resources the same tick its factory fell.
@@ -512,7 +517,7 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
         });
     }
 
-    if (match.building != nullptr) {
+    if (match.building != nullptr || !repairs.empty()) {
         for (std::size_t army = 0; army < match.economies.size(); ++army) {
             // Partitioned per army because `tickEconomy` is documented to be given one
             // army's work, and charging the wrong one is a caller's mistake to avoid.
@@ -521,13 +526,21 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
             // still runs its structures, and skipping the call would make upkeep free
             // whenever the build queue happened to be empty.
             std::vector<Construction> mine;
-            for (const Construction& work : *match.building) {
-                if (work.armyIndex == static_cast<int>(army)) {
-                    mine.push_back(work);
+            if (match.building != nullptr) {
+                for (const Construction& work : *match.building) {
+                    if (work.armyIndex == static_cast<int>(army)) {
+                        mine.push_back(work);
+                    }
+                }
+            }
+            std::vector<RepairWork> repairMine;
+            for (const RepairWork& repair : repairs) {
+                if (repair.armyIndex == static_cast<int>(army)) {
+                    repairMine.push_back(repair);
                 }
             }
 
-            tickEconomy(match.economies[army], mine);
+            tickEconomy(match.economies[army], mine, repairMine);
 
             // Written back over this army's entries, in order — the two lists were built
             // by the same filter in the same pass, so the nth of `mine` is the nth of
@@ -535,13 +548,22 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
             // progress, completion and the queue mutation that follows from it all belong to
             // the command-dispatch stage at the head of the tick (`C-112`). What is left is
             // the bill.
-            std::size_t next = 0;
-            for (Construction& work : *match.building) {
-                if (work.armyIndex != static_cast<int>(army) || next >= mine.size()) {
-                    continue;
+            if (match.building != nullptr) {
+                std::size_t next = 0;
+                for (Construction& work : *match.building) {
+                    if (work.armyIndex != static_cast<int>(army) || next >= mine.size()) {
+                        continue;
+                    }
+                    work = mine[next];
+                    ++next;
                 }
-                work = mine[next];
-                ++next;
+            }
+            std::size_t repairNext = 0;
+            for (RepairWork& repair : repairs) {
+                if (repair.armyIndex == static_cast<int>(army) && repairNext < repairMine.size()) {
+                    repair = repairMine[repairNext];
+                    ++repairNext;
+                }
             }
         }
 
@@ -550,6 +572,7 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
         // headroom that the recipient's own tick was about to change.
         shareOverflow(match.economies, match.armies);
     }
+    (void)applyRepairWork(store, catalog, repairs);
 
     return report;
 }

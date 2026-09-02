@@ -41,7 +41,7 @@ TEST_CASE("the command rack keeps Forged Alliance's fixed 4x3 positions") {
     CHECK(rm::ui::kCommandDescriptors[5].kind == CommandKind::Assist);
     CHECK_FALSE(rm::ui::kCommandDescriptors[6].kind.has_value());
     CHECK(rm::ui::kCommandDescriptors[7].kind == CommandKind::Overcharge);
-    CHECK_FALSE(rm::ui::kCommandDescriptors[8].kind.has_value());
+    CHECK(rm::ui::kCommandDescriptors[8].kind == CommandKind::Repair);
     CHECK_FALSE(rm::ui::kCommandDescriptors[9].kind.has_value());
     CHECK_FALSE(rm::ui::kCommandDescriptors[10].kind.has_value());
     CHECK(rm::ui::kCommandDescriptors[11].kind == CommandKind::Reclaim);
@@ -80,8 +80,8 @@ TEST_CASE("command availability is the union of selected unit capabilities") {
     CHECK(enabled(available, CommandKind::Assist));
     CHECK(enabled(available, CommandKind::Overcharge));
     CHECK(enabled(available, CommandKind::Reclaim));
+    CHECK(enabled(available, CommandKind::Repair));
     CHECK_FALSE(available[6]);
-    CHECK_FALSE(available[8]);
     CHECK_FALSE(available[9]);
     CHECK_FALSE(available[10]);
 }
@@ -125,6 +125,7 @@ TEST_CASE("a factory can reclaim but only a field builder can assist") {
     const rm::ui::CommandAvailability factoryAvailable =
         rm::ui::commandAvailability(factorySelection);
     CHECK(enabled(factoryAvailable, CommandKind::Reclaim));
+    CHECK(enabled(factoryAvailable, CommandKind::Repair));
     CHECK_FALSE(enabled(factoryAvailable, CommandKind::Assist));
 
     rm::unitdef::UnitDef engineer;
@@ -133,6 +134,7 @@ TEST_CASE("a factory can reclaim but only a field builder can assist") {
     const rm::ui::CommandAvailability engineerAvailable =
         rm::ui::commandAvailability(engineerSelection);
     CHECK(enabled(engineerAvailable, CommandKind::Reclaim));
+    CHECK(enabled(engineerAvailable, CommandKind::Repair));
     CHECK(enabled(engineerAvailable, CommandKind::Assist));
 
     rm::unitdef::UnitDef commander;

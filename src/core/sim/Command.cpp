@@ -185,6 +185,8 @@ const char* commandKindName(CommandKind kind) noexcept {
         return "assist";
     case CommandKind::ToggleFactoryRepeat:
         return "toggle-factory-repeat";
+    case CommandKind::Repair:
+        return "repair";
     }
     return "stop";
 }
@@ -222,6 +224,9 @@ namespace {
     if (name == "toggle-factory-repeat") {
         return CommandKind::ToggleFactoryRepeat;
     }
+    if (name == "repair") {
+        return CommandKind::Repair;
+    }
     return std::nullopt;
 }
 
@@ -243,6 +248,52 @@ namespace {
     }
     const unitdef::Role role = unitdef::roleOf(*assister);
     return role == unitdef::Role::Builder || role == unitdef::Role::Commander;
+}
+
+[[nodiscard]] bool validRepair(const Command& command, const UnitStore& store,
+                               const UnitCatalog& catalog, std::span<const Army> armies) noexcept {
+    if (!store.alive(command.target) || !store.health()[command.target.index].alive()
+        || command.target == command.unit) {
+        return false;
+    }
+    const unitdef::UnitDef* builder = catalog.def(store.typeAt(command.unit.index));
+    const unitdef::UnitDef* target = catalog.def(store.typeAt(command.target.index));
+    if (builder == nullptr || target == nullptr || !builder->isBuilder()
+        || store.health()[command.target.index].current >= store.health()[command.target.index].maximum
+        || target->buildTime <= Mag{}) {
+        return false;
+    }
+    const int owner = store.motion()[command.unit.index].armyIndex;
+    const int targetOwner = store.motion()[command.target.index].armyIndex;
+    const auto mine = std::ranges::find_if(armies, [owner](const Army& army) {
+        return army.index == owner;
+    });
+    const auto theirs = std::ranges::find_if(armies, [targetOwner](const Army& army) {
+        return army.index == targetOwner;
+    });
+    if (mine == armies.end() || theirs == armies.end() || !allied(*mine, *theirs)) {
+        return false;
+    }
+    return true;
+}
+
+[[nodiscard]] bool repairStillAllied(UnitIndex builder, UnitId target, const UnitStore& store,
+                                     std::span<const Army> armies) noexcept {
+    if (!store.alive(target)) {
+        return false;
+    }
+    if (armies.empty()) {
+        return true;  // the direct-dispatch compatibility seam has no alliance state to judge
+    }
+    const int owner = store.motion()[builder].armyIndex;
+    const int targetOwner = store.motion()[target.index].armyIndex;
+    const auto mine = std::ranges::find_if(armies, [owner](const Army& army) {
+        return army.index == owner;
+    });
+    const auto theirs = std::ranges::find_if(armies, [targetOwner](const Army& army) {
+        return army.index == targetOwner;
+    });
+    return mine != armies.end() && theirs != armies.end() && allied(*mine, *theirs);
 }
 
 } // namespace
@@ -375,6 +426,9 @@ void teardownMovement(MoveState& motion) {
         return false;
     }
     if (command.kind == CommandKind::Assist && !validAssist(command, store, catalog)) {
+        return false;
+    }
+    if (command.kind == CommandKind::Repair && !validRepair(command, store, catalog, armies)) {
         return false;
     }
 
@@ -696,7 +750,7 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
                            std::span<const PassabilityGrid* const> gridForType, TickRate rate,
                            std::vector<Construction>* building, EventQueue* events,
                            const FeatureStore* features, std::vector<Construction>* finished,
-                            PathService* pathService) {
+                             PathService* pathService, std::span<const Army> armies) {
     std::size_t started = 0;
 
     const std::span<CommandQueue> orders = store.orders();
@@ -736,6 +790,11 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
                 const PassabilityGrid* pendingGrid = gridFor(*pending);
                 if (pendingGrid == nullptr) {
                     return;  // leave it pending until its movement domain exists
+                }
+                if (pending->kind() == CommandKind::Repair
+                    && !repairStillAllied(slot, pending->target(), store, armies)) {
+                    (void)orders[slot].finish();
+                    continue;
                 }
                 if (pending->kind() == CommandKind::Move && pathService != nullptr) {
                     MoveState& pendingMotion = store.motion()[slot];
@@ -992,6 +1051,60 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
             staleRoute.moving = false;
             staleRoute.path.clear();
             staleRoute.pathIndex = 0;
+            (void)orders[slot].finish();
+            startPending();
+            continue;
+        }
+
+        // Repair starts only inside MaxBuildDistance, but an active beam is retained out to
+        // twice that distance before its finite order ends (`C-182`).
+        if (const QueuedCommand* head = orders[slot].active();
+            head != nullptr && head->kind() == CommandKind::Repair) {
+            if (!store.alive(head->target()) || !store.health()[head->target().index].alive()
+                || store.health()[head->target().index].current
+                       >= store.health()[head->target().index].maximum
+                || !repairStillAllied(slot, head->target(), store, armies)) {
+                (void)orders[slot].finish();
+                startPending();
+                continue;
+            }
+            const Fx reach = repairReach(catalog, store.typeAt(slot), store.motion()[slot],
+                                         store.motion()[head->target().index]);
+            const Transform& builderAt = store.transforms()[slot];
+            const Fx gap = groundDistanceElmos(positionOf(builderAt),
+                                                positionOf(store.transforms()[head->target().index]));
+            if (gap <= reach) {
+                // Repair has now genuinely reached its initial range. `Repair` has no
+                // positional intent, so its per-entry target coordinates can remember this
+                // established state without extending persisted command state.
+                if (QueuedCommand* mutableHead = orders[slot].activeMutable()) {
+                    mutableHead->setTargetPosition(builderAt.x, builderAt.z);
+                }
+                teardownMovement(store.motion()[slot]);
+                continue;
+            }
+            if (store.motion()[slot].moving) {
+                continue;  // still approaching the initial build-distance reach
+            }
+            const bool established = head->targetX() == builderAt.x
+                                     && head->targetZ() == builderAt.z;
+            // Only an established beam retains the target through retail's two-range
+            // hysteresis. An approach that ended short retries its route.
+            if (established && gap <= reach * 2) {
+                teardownMovement(store.motion()[slot]);
+                continue;
+            }
+            if (established) {
+                // The beam's two-range allowance has been exceeded. It is a terminal loss of
+                // the established repair contact, not a new approach to the target.
+                (void)orders[slot].finish();
+                startPending();
+                continue;
+            }
+            if (routeUnit(slot, store.transforms()[head->target().index].x,
+                          store.transforms()[head->target().index].z, store, terrain, *grid)) {
+                continue;
+            }
             (void)orders[slot].finish();
             startPending();
             continue;
@@ -1458,6 +1571,30 @@ bool startCommand(const Command& command, UnitStore& store, const UnitCatalog& c
             return true;
         }
         return routeUnit(command.unit.index, wreck->at[0], wreck->at[2], store, terrain, grid);
+    }
+    case CommandKind::Repair: {
+        // Validation at issue time establishes the alliance and damaged target. A queued repair
+        // is still refused when it reaches the head after the target has already been restored.
+        if (!store.alive(command.target) || !store.health()[command.target.index].alive()
+            || store.health()[command.target.index].current
+                   >= store.health()[command.target.index].maximum) {
+            return false;
+        }
+        const unitdef::UnitDef* builder = catalog.def(store.typeAt(command.unit.index));
+        const unitdef::UnitDef* target = catalog.def(store.typeAt(command.target.index));
+        if (builder == nullptr || target == nullptr || !builder->isBuilder()
+            || target->buildTime <= Mag{}) {
+            return false;
+        }
+        const Transform& at = store.transforms()[command.unit.index];
+        const Transform& theirs = store.transforms()[command.target.index];
+        const Fx reach = repairReach(catalog, store.typeAt(command.unit.index), motion,
+                                     store.motion()[command.target.index]);
+        if (groundDistanceElmos(positionOf(at), positionOf(theirs)) <= reach) {
+            teardownMovement(motion);
+            return true;
+        }
+        return routeUnit(command.unit.index, theirs.x, theirs.z, store, terrain, grid);
     }
     case CommandKind::ToggleFactoryRepeat:
         return false;  // applied immediately by semantic issue intake; it never enters a queue

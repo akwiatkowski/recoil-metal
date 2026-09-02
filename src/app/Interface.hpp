@@ -244,6 +244,7 @@ void appendHealthBars(rm::ui::Geometry& out, const UnitScene& scene,
                                                           const UnitScene& scene);
 
 [[nodiscard]] bool hostileTo(const UnitScene& scene, int army, rm::sim::UnitId id);
+[[nodiscard]] bool alliedTo(const UnitScene& scene, int army, rm::sim::UnitId id);
 
 [[nodiscard]] std::optional<rm::sim::UnitId> pickAcrossBatches(const rm::Ray& ray,
                                                               const UnitScene& scene);

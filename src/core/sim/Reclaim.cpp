@@ -81,11 +81,45 @@ namespace {
     return massGrant > Mag{} || energyGrant > Mag{};
 }
 
+[[nodiscard]] bool repairUnit(UnitIndex builder, UnitIndex target, UnitStore& store,
+                               const UnitCatalog& catalog, Fx funded) {
+    Health& health = store.health()[target];
+    const unitdef::UnitDef* targetDef = catalog.def(store.typeAt(target));
+    if (targetDef == nullptr || targetDef->buildTime <= Mag{}) {
+        return false;
+    }
+    // Recoil `CUnit::AddBuildPower` (`Unit.cpp:2030-2049`): repair step is build work /
+    // target BuildTime, and health gained is maxHealth * step.
+    const Mag restored = std::min(
+        health.maximum - health.current,
+        proportionalWork(health.maximum, catalog.rates(store.typeAt(builder)).buildPerTick * funded,
+                          targetDef->buildTime));
+    if (restored <= Mag{}) {
+        return false;
+    }
+    health.current += restored;
+    return true;
+}
+
+[[nodiscard]] Resources repairDrain(UnitIndex builder, const unitdef::UnitDef& target,
+                                    const UnitStore& store, const UnitCatalog& catalog) noexcept {
+    return drainPerTick(Construction{
+        .cost = {.mass = target.buildCostMass, .energy = target.buildCostEnergy},
+        .totalBuildTime = target.buildTime,
+        .buildPerTick = catalog.rates(store.typeAt(builder)).buildPerTick,
+    });
+}
+
 } // namespace
 
 Fx reclaimReach(const UnitCatalog& catalog, UnitTypeIndex type, const MoveState& reclaimer,
                 const Feature& wreck) noexcept {
     return catalog.rates(type).buildReachElmos + reclaimer.radiusElmos + wreck.radiusElmos;
+}
+
+Fx repairReach(const UnitCatalog& catalog, UnitTypeIndex type, const MoveState& builder,
+               const MoveState& target) noexcept {
+    return catalog.rates(type).buildReachElmos + builder.radiusElmos + target.radiusElmos;
 }
 
 std::size_t harvestReclaim(UnitStore& store, const UnitCatalog& catalog,
@@ -123,6 +157,62 @@ std::size_t harvestReclaim(UnitStore& store, const UnitCatalog& catalog,
     return harvesting;
 }
 
+void collectRepairWork(const UnitStore& store, const UnitCatalog& catalog,
+                       std::span<const Army> armies, std::vector<RepairWork>& out) {
+    out.clear();
+    for (UnitIndex builder = 0; builder < store.orders().size(); ++builder) {
+        if (!store.slotAlive(builder) || !store.health()[builder].alive()) {
+            continue;
+        }
+        const QueuedCommand* order = store.orders()[builder].active();
+        if (order == nullptr || order->kind() != CommandKind::Repair || !store.alive(order->target())
+            || !store.health()[order->target().index].alive()) {
+            continue;
+        }
+        const UnitIndex target = order->target().index;
+        const Health& health = store.health()[target];
+        const MoveState& builderMotion = store.motion()[builder];
+        const Army* owner = armyFor(builderMotion.armyIndex, armies);
+        const Army* targetArmy = armyFor(store.motion()[target].armyIndex, armies);
+        const unitdef::UnitDef* targetDef = catalog.def(store.typeAt(target));
+        if (health.current >= health.maximum || owner == nullptr || targetArmy == nullptr
+            || !allied(*owner, *targetArmy) || targetDef == nullptr
+            || targetDef->buildTime <= Mag{}) {
+            continue;
+        }
+        const Fx reach = repairReach(catalog, store.typeAt(builder), builderMotion,
+                                     store.motion()[target]);
+        const Transform& builderAt = store.transforms()[builder];
+        const Fx gap = groundDistanceElmos(positionOf(builderAt),
+                                           positionOf(store.transforms()[target]));
+        // A repair beam retains an established contact out to twice its start range. Before
+        // contact, the command is still only approaching and cannot request resources or heal.
+        const bool established = order->targetX() == builderAt.x && order->targetZ() == builderAt.z;
+        if (gap > (established ? reach * 2 : reach)) {
+            continue;
+        }
+        out.push_back(RepairWork{.armyIndex = builderMotion.armyIndex,
+                                 .builder = builder,
+                                 .target = target,
+                                 .demand = repairDrain(builder, *targetDef, store, catalog)});
+    }
+}
+
+std::size_t applyRepairWork(UnitStore& store, const UnitCatalog& catalog,
+                            std::span<const RepairWork> repairs) {
+    std::size_t serviced = 0;
+    for (const RepairWork& repair : repairs) {
+        if (repair.builder >= store.slotCount() || repair.target >= store.slotCount()
+            || !store.slotAlive(repair.builder) || !store.slotAlive(repair.target)) {
+            continue;
+        }
+        if (repairUnit(repair.builder, repair.target, store, catalog, repair.funded)) {
+            ++serviced;
+        }
+    }
+    return serviced;
+}
+
 std::size_t servicePatrolBuilders(UnitStore& store, const UnitCatalog& catalog,
                                   std::span<const Army> armies, FeatureStore* features,
                                   std::span<Economy> economies) {
@@ -134,8 +224,9 @@ std::size_t servicePatrolBuilders(UnitStore& store, const UnitCatalog& catalog,
         }
         const QueuedCommand* order = store.orders()[builder].active();
         const UnitCatalog::Rates& rates = catalog.rates(store.typeAt(builder));
-        if (order == nullptr || order->kind() != CommandKind::Patrol
-            || order->target().generation != 0
+        const bool patrol = order != nullptr && order->kind() == CommandKind::Patrol
+                            && order->target().generation == 0;
+        if (!patrol
             || rates.buildPerTick <= Mag{}) {
             continue;
         }
@@ -159,8 +250,8 @@ std::size_t servicePatrolBuilders(UnitStore& store, const UnitCatalog& catalog,
                 continue;
             }
             const Fx distance = groundDistanceElmos(from, positionOf(store.transforms()[target]));
-            const Fx reach = rates.buildReachElmos + builderMotion.radiusElmos
-                           + store.motion()[target].radiusElmos;
+            const Fx reach = repairReach(catalog, store.typeAt(builder), builderMotion,
+                                         store.motion()[target]);
             if (distance <= reach && (!repairTarget || distance < repairDistance)) {
                 repairTarget = target;
                 repairDistance = distance;
@@ -168,17 +259,7 @@ std::size_t servicePatrolBuilders(UnitStore& store, const UnitCatalog& catalog,
         }
 
         if (repairTarget) {
-            Health& health = store.health()[*repairTarget];
-            const unitdef::UnitDef* targetDef = catalog.def(store.typeAt(*repairTarget));
-            // Recoil `CUnit::AddBuildPower` (`Unit.cpp:2030-2049`): repair step is
-            // build work / target BuildTime, and health gained is maxHealth * step.
-            // FA's native engine uses the same build-work progression; its Lua layer
-            // only applies the resource discount, deferred to explicit assist here.
-            const Mag restored = std::min(
-                health.maximum - health.current,
-                proportionalWork(health.maximum, rates.buildPerTick, targetDef->buildTime));
-            if (restored > Mag{}) {
-                health.current += restored;
+            if (repairUnit(builder, *repairTarget, store, catalog, kFxOne)) {
                 ++serviced;
                 continue;  // repair is PATROLHELPER priority 1; reclaim is priority 3
             }

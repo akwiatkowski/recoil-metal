@@ -307,6 +307,20 @@ struct Construction {
     }
 };
 
+/// One explicit repair's economy request for this tick.
+///
+/// Unlike construction, a repair has no persistent partial object: it heals an already-live
+/// unit in the economy stage that awarded its request. Keeping the request as data lets repair
+/// compete with upkeep and construction in that one allocation pass rather than spending the
+/// store ahead of them.
+struct RepairWork {
+    int armyIndex = kNoArmy;
+    UnitIndex builder = 0;
+    UnitIndex target = 0;
+    Resources demand;
+    Fx funded{};
+};
+
 /// Puts one beat's work into one construction — retail's `Unit::Materialize` step.
 ///
 /// WHY IT IS NOT PART OF `tickEconomy` ANY MORE. Retail advances a build inside the builder's
@@ -350,7 +364,8 @@ void advanceConstruction(Construction& work) noexcept;
 /// wrong army is a caller's mistake to avoid rather than something to paper over here,
 /// because silently skipping a mismatched entry would leave it never built and never
 /// reported.
-void tickEconomy(Economy& economy, std::span<Construction> building);
+void tickEconomy(Economy& economy, std::span<Construction> building,
+                 std::span<RepairWork> repairs = {});
 
 /// Hand each army's over-cap excess to its allies, retail's `C-163` progressive split.
 ///

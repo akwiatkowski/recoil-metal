@@ -209,6 +209,12 @@ extern bool gFafLog;
 /// at build reach and following it (`core/sim/Assist.hpp`). Refused unless both units are
 /// distinct builders in the same army, exactly as the sim refuses it.
 [[nodiscard]] bool issueAssist(UnitScene& scene, std::span<const rm::sim::UnitId> units,
+                                 rm::PlayerIndex player, rm::TickIndex tick,
+                                 rm::sim::UnitId target, bool queued = false);
+
+/// Restores a damaged allied target. The target's current position seeds the approach; the sim
+/// validates builder capability and alliance, then the shared economy pass funds the healing.
+[[nodiscard]] bool issueRepair(UnitScene& scene, std::span<const rm::sim::UnitId> units,
                                 rm::PlayerIndex player, rm::TickIndex tick,
                                 rm::sim::UnitId target, bool queued = false);
 

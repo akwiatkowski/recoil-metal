@@ -792,6 +792,24 @@ void appendHealthBars(rm::ui::Geometry& out, const UnitScene& scene,
     return mine != nullptr && target != nullptr && rm::sim::hostile(*mine, *target);
 }
 
+[[nodiscard]] bool alliedTo(const UnitScene& scene, int army, rm::sim::UnitId id) {
+    const int theirs = scene.armyOf(id.index);
+    if (army == rm::sim::kNoArmy || theirs == rm::sim::kNoArmy) {
+        return false;
+    }
+    const auto find = [&scene](int index) -> const rm::sim::Army* {
+        for (const rm::sim::Army& candidate : scene.armies) {
+            if (candidate.index == index) {
+                return &candidate;
+            }
+        }
+        return nullptr;
+    };
+    const rm::sim::Army* mine = find(army);
+    const rm::sim::Army* target = find(theirs);
+    return mine != nullptr && target != nullptr && rm::sim::allied(*mine, *target);
+}
+
 /// The unit nearest the ray across every batch, or nothing.
 ///
 /// pickUnit searches one array at a time because that is how the instances are

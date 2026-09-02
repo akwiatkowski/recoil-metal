@@ -44,6 +44,7 @@ template <typename Order>
     case CommandKind::Reclaim:
     case CommandKind::Overcharge:
     case CommandKind::Assist:
+    case CommandKind::Repair:
         return a.target == b.target;
     }
     return false;

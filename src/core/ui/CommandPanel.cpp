@@ -60,6 +60,7 @@ commandAvailability(std::span<const unitdef::UnitDef* const> selection) noexcept
             available[slot] = hasAssister;
             break;
         case sim::CommandKind::Reclaim:
+        case sim::CommandKind::Repair:
             available[slot] = hasBuilder;
             break;
         case sim::CommandKind::Overcharge:
@@ -67,7 +68,7 @@ commandAvailability(std::span<const unitdef::UnitDef* const> selection) noexcept
             break;
         case sim::CommandKind::Build:
         case sim::CommandKind::ToggleFactoryRepeat:
-            break;  // Neither has a command-rack descriptor.
+            break;  // None has a command-rack descriptor.
         }
     }
     return available;
