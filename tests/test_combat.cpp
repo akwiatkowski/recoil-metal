@@ -416,6 +416,26 @@ TEST_CASE("automatic acquisition skips DoNotTarget enemies") {
     CHECK(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, weapon, roster.store, armies) == near);
 }
 
+TEST_CASE("automatic acquisition rejects a closer target outside the playable rectangle") {
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    Roster roster;
+    const rm::UnitTypeIndex type = roster.addType(targetDef());
+    const UnitId outside = roster.add(type, 20.0f, 0.0f, 1, 100.0f);
+    const UnitId inside = roster.add(type, 0.0f, 50.0f, 1, 100.0f);
+    const rm::sim::PlayableRect playable{
+        .minX = rm::test::fx(-10.0f),
+        .maxX = rm::test::fx(10.0f),
+        .minZ = rm::test::fx(-10.0f),
+        .maxZ = rm::test::fx(100.0f),
+    };
+
+    CHECK(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, directFire(10.0f, 300.0f),
+                                 roster.store, armies, nullptr, &roster.catalog, std::nullopt,
+                                 std::nullopt, &playable)
+          == inside);
+    CHECK(outside != inside);
+}
+
 TEST_CASE("automatic acquisition denies weapons with no target priorities") {
     const std::vector<Army> armies = rm::sim::freeForAll(2);
     Roster roster;
@@ -2213,6 +2233,59 @@ TEST_CASE("an automatic incumbent cannot survive its target slot being recycled"
     CHECK(rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots, roster.rate) == 1);
     CHECK(roster.health(replacement).current == rm::test::mag(90.0f));
     CHECK(roster.health(gunner).automaticTargets == std::vector<UnitId>{replacement});
+}
+
+TEST_CASE("automatic acquisition clears an incumbent moved outside the playable rectangle") {
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    Weapon weapon = directFire(10.0f, 300.0f);
+    weapon.beam = true;
+    Roster roster;
+    const UnitId gunner =
+        roster.add(roster.addType(gunnerDef(weapon)), 0.0f, 0.0f, 0, 100.0f);
+    const rm::UnitTypeIndex target = roster.addType(targetDef());
+    const UnitId incumbent = roster.add(target, 0.0f, 50.0f, 1, 100.0f);
+    roster.health(gunner).automaticTargets = {incumbent};
+    const rm::sim::PlayableRect playable{
+        .minX = rm::test::fx(-100.0f),
+        .maxX = rm::test::fx(100.0f),
+        .minZ = rm::test::fx(-100.0f),
+        .maxZ = rm::test::fx(100.0f),
+    };
+
+    roster.transform(incumbent).z = rm::test::fx(150.0f);
+    roster.reindex();
+    std::vector<Projectile> shots;
+    CHECK(rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots, roster.rate,
+                               nullptr, nullptr, &playable)
+          == 0);
+    CHECK(roster.health(gunner).automaticTargets == std::vector<UnitId>{UnitId{}});
+}
+
+TEST_CASE("an explicit Attack may fire outside the playable rectangle") {
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    Weapon weapon = directFire(10.0f, 300.0f);
+    weapon.beam = true;
+    Roster roster;
+    const UnitId gunner =
+        roster.add(roster.addType(gunnerDef(weapon)), 0.0f, 0.0f, 0, 100.0f);
+    const UnitId target = roster.add(roster.addType(targetDef()), 0.0f, 150.0f, 1, 100.0f);
+    const rm::sim::PlayableRect playable{
+        .minX = rm::test::fx(-100.0f),
+        .maxX = rm::test::fx(100.0f),
+        .minZ = rm::test::fx(-100.0f),
+        .maxZ = rm::test::fx(100.0f),
+    };
+    const rm::sim::Command attack{.kind = rm::sim::CommandKind::Attack,
+                                   .unit = gunner,
+                                   .target = target};
+    (void)roster.store.orders()[gunner.index].give(attack, false);
+    roster.store.orders()[gunner.index].markCurrentActive();
+
+    std::vector<Projectile> shots;
+    CHECK(rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots, roster.rate,
+                               nullptr, nullptr, &playable)
+          == 1);
+    CHECK(roster.health(target).current == rm::test::mag(90.0f));
 }
 
 TEST_CASE("a target beyond the weapon's height reach is not a target at all") {

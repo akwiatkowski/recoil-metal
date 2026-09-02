@@ -241,15 +241,18 @@ extern bool gFafLog;
 /// setup, so this loop never asks what kind of opponent it is holding.
 void runOpponents(UnitScene& scene, const rm::vfs::Vfs& content, const rm::HeightField& field,
                    std::span<const rm::mapinfo::StartPosition> starts,
-                  std::span<const rm::scenario::Marker> markers,
-                  std::vector<std::unique_ptr<rm::ai::Opponent>>& scripts, float elapsedSeconds,
-                  rm::TickIndex tickIndex);
+                    std::span<const rm::scenario::Marker> markers,
+                    std::vector<std::unique_ptr<rm::ai::Opponent>>& scripts, float elapsedSeconds,
+                    rm::TickIndex tickIndex,
+                    const std::optional<rm::sim::PlayableRect>& playableRect = std::nullopt);
 
 [[nodiscard]] MatchRunner makeMatchRunner(UnitScene& scene, const rm::HeightField& field,
                                           PassabilitySet& passability,
-                                          const rm::vfs::Vfs& content,
-                                          std::span<const rm::mapinfo::StartPosition> starts,
-                                          std::span<const rm::scenario::Marker> markers);
+                                            const rm::vfs::Vfs& content,
+                                            std::span<const rm::mapinfo::StartPosition> starts,
+                                            std::span<const rm::scenario::Marker> markers,
+                                            std::optional<rm::sim::PlayableRect> playableRect =
+                                                std::nullopt);
 
 void printEvents(const rm::sim::EventQueue& events, float now);
 

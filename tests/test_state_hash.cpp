@@ -124,6 +124,32 @@ TEST_CASE("the same state hashes the same, twice running") {
     REQUIRE(a.hash() == first);
 }
 
+TEST_CASE("playable-rectangle presence and every bound change the match hash") {
+    Fixture unrestricted;
+    Fixture bounded;
+    rm::sim::Match match = bounded.match();
+    match.playableRect = rm::sim::PlayableRect{
+        .minX = rm::test::fx(10.0f),
+        .maxX = rm::test::fx(20.0f),
+        .minZ = rm::test::fx(30.0f),
+        .maxZ = rm::test::fx(40.0f),
+    };
+    const rm::StateHash allBounds = hashMatch(bounded.store, match);
+
+    CHECK(unrestricted.hash() != allBounds);
+
+    const auto differsWhen = [&](auto change) {
+        rm::sim::Match changed = bounded.match();
+        changed.playableRect = *match.playableRect;
+        change(*changed.playableRect);
+        CHECK(hashMatch(bounded.store, changed) != allBounds);
+    };
+    differsWhen([](rm::sim::PlayableRect& rect) { rect.minX = rm::test::fx(11.0f); });
+    differsWhen([](rm::sim::PlayableRect& rect) { rect.maxX = rm::test::fx(21.0f); });
+    differsWhen([](rm::sim::PlayableRect& rect) { rect.minZ = rm::test::fx(31.0f); });
+    differsWhen([](rm::sim::PlayableRect& rect) { rect.maxZ = rm::test::fx(41.0f); });
+}
+
 TEST_CASE("the cached air movement layer changes the hash") {
     Fixture ground;
     Fixture air;

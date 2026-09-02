@@ -106,6 +106,129 @@ TEST_CASE("the match runner preserves same-army path FIFO latency live and in re
     SECTION("replay submissions") { run(true); }
 }
 
+TEST_CASE("the app match runner reacquires an attack-move target inside its playable rectangle") {
+    const rm::HeightField field = flatField();
+    rm::app::UnitScene scene;
+    scene.armies = rm::sim::freeForAll(2);
+    scene.players = rm::sim::onePlayerPerArmy(2, 0);
+    scene.economies.assign(2, rm::sim::Economy{});
+    scene.commandersEver.assign(2, 0);
+
+    rm::unitdef::UnitDef fighter;
+    fighter.name = "test_fighter";
+    fighter.categories = {"TARGET"};
+    fighter.motion = rm::unitdef::MotionType::Land;
+    fighter.speedElmosPerSecond = 10.0f;
+    fighter.weapons = {rm::unitdef::Weapon{
+        .role = rm::unitdef::WeaponRole::DirectFire,
+        .damage = rm::sim::Mag::fromInt(1),
+        .maxRange = rm::sim::Fx::fromInt(300),
+        .rateOfFire = 1.0f,
+        .targetPriorities = {{"TARGET"}},
+        .turreted = true,
+    }};
+    scene.definitions.push_back(fighter);
+    const rm::UnitTypeIndex fighterType =
+        scene.catalog.add(&scene.definitions.back(), rm::app::gAppTickRate);
+    scene.setTypeTraits(fighterType, rm::data::moveDefFor(fighter), 1.0f);
+
+    const auto spawn = [&](float x, int army) {
+        return scene.store.spawn(rm::sim::UnitStore::Spawn{
+            .type = fighterType,
+            .transform = {.x = rm::sim::fxFromFloat(x), .z = rm::sim::fxFromFloat(40.0f)},
+            .motion = rm::app::motionFor(fighter, army),
+            .health = rm::sim::initialHealth(rm::sim::Mag::fromInt(100)),
+        });
+    };
+    const rm::sim::UnitId attacker = spawn(40.0f, 0);
+    const rm::sim::UnitId firstTarget = spawn(100.0f, 1);
+    const rm::sim::UnitId replacementTarget = spawn(160.0f, 1);
+
+    const rm::sim::PlayableRect playable{
+        .minX = rm::sim::fxFromFloat(0.0f),
+        .maxX = rm::sim::fxFromFloat(256.0f),
+        .minZ = rm::sim::fxFromFloat(0.0f),
+        .maxZ = rm::sim::fxFromFloat(256.0f),
+    };
+    rm::app::PassabilitySet passability{field, false, 0.0f};
+    rm::vfs::Vfs content;
+    rm::app::MatchRunner runner =
+        rm::app::makeMatchRunner(scene, field, passability, content, {}, {}, playable);
+    runner.scripts.clear();
+
+    REQUIRE(rm::app::issueMove(scene, attacker, 0, 0, rm::sim::fxFromFloat(240.0f),
+                                rm::sim::fxFromFloat(40.0f), false,
+                                rm::sim::CommandKind::AttackMove));
+    (void)rm::app::advanceMatch(runner, 0, 0.0f);
+    REQUIRE(scene.store.orders()[attacker.index].current()->target() == firstTarget);
+
+    scene.store.transforms()[firstTarget.index].x = rm::sim::fxFromFloat(300.0f);
+    (void)rm::app::advanceMatch(runner, 1, 0.0f);
+
+    REQUIRE(scene.store.orders()[attacker.index].current() != nullptr);
+    CHECK(scene.store.orders()[attacker.index].current()->target() == replacementTarget);
+}
+
+TEST_CASE("march supplies the map rectangle to automatic target acquisition") {
+    const rm::HeightField field = flatField();
+    rm::app::UnitScene scene;
+    scene.armies = rm::sim::freeForAll(2);
+    scene.players = rm::sim::onePlayerPerArmy(2, 0);
+    scene.economies.assign(2, rm::sim::Economy{});
+    scene.commandersEver.assign(2, 0);
+
+    rm::unitdef::UnitDef fighter;
+    fighter.name = "test_fighter";
+    fighter.motion = rm::unitdef::MotionType::Land;
+    fighter.speedElmosPerSecond = 10.0f;
+    fighter.weapons = {rm::unitdef::Weapon{
+        .role = rm::unitdef::WeaponRole::DirectFire,
+        .damage = rm::sim::Mag::fromInt(1),
+        .maxRange = rm::sim::Fx::fromInt(100),
+        .rateOfFire = 1.0f,
+        .targetPriorities = {{"TARGET"}},
+        .turreted = true,
+    }};
+    scene.definitions.push_back(fighter);
+    const rm::UnitTypeIndex fighterType =
+        scene.catalog.add(&scene.definitions.back(), rm::app::gAppTickRate);
+    scene.setTypeTraits(fighterType, rm::data::moveDefFor(fighter), 1.0f);
+
+    rm::unitdef::UnitDef target;
+    target.name = "test_target";
+    target.categories = {"TARGET"};
+    target.motion = rm::unitdef::MotionType::Land;
+    scene.definitions.push_back(target);
+    const rm::UnitTypeIndex targetType =
+        scene.catalog.add(&scene.definitions.back(), rm::app::gAppTickRate);
+    scene.setTypeTraits(targetType, rm::data::moveDefFor(target), 1.0f);
+
+    const auto spawn = [&](rm::UnitTypeIndex type, float x, int army) {
+        return scene.store.spawn(rm::sim::UnitStore::Spawn{
+            .type = type,
+            .transform = {.x = rm::sim::fxFromFloat(x), .z = rm::sim::fxFromFloat(40.0f)},
+            .motion = rm::app::motionFor(scene.definitions[type], army),
+            .health = rm::sim::initialHealth(rm::sim::Mag::fromInt(100)),
+        });
+    };
+    const float width = field.widthElmos();
+    const rm::sim::UnitId attacker = spawn(fighterType, width - 20.0f, 0);
+    const rm::sim::UnitId outside = spawn(targetType, width + 10.0f, 1);
+    const rm::sim::UnitId inside = spawn(targetType, width - 60.0f, 1);
+
+    rm::app::PassabilitySet passability{field, false, 0.0f};
+    rm::vfs::Vfs content;
+    std::vector<rm::Particle> dust;
+    rm::app::march(scene, field, passability,
+                   rm::app::MarchOptions{.orderAll = false,
+                                         .seconds = rm::app::gAppTickRate.secondsPerTick()},
+                   {}, dust, content, {}, {});
+
+    REQUIRE(scene.store.health()[attacker.index].automaticTargets.size() == 1);
+    CHECK(scene.store.health()[attacker.index].automaticTargets[0] == inside);
+    CHECK(scene.store.health()[attacker.index].automaticTargets[0] != outside);
+}
+
 TEST_CASE("the match runner replays a build and its post-spawn roll-off semantically") {
     struct Result {
         std::vector<rm::sim::CommandIssue> accepted;

@@ -20,6 +20,22 @@
 
 namespace rm::sim {
 
+/// The fixed-point portion of a map where automatic target acquisition is allowed.
+///
+/// The rectangle is match configuration, not mutable simulation state: a caller supplies it
+/// once for a scenario, while a null pointer keeps unrestricted scenes unchanged.
+struct PlayableRect {
+    Fx minX{};
+    Fx maxX{};
+    Fx minZ{};
+    Fx maxZ{};
+
+    [[nodiscard]] bool contains(std::array<Fx, 3> position) const noexcept {
+        return position[0] >= minX && position[0] <= maxX && position[2] >= minZ
+               && position[2] <= maxZ;
+    }
+};
+
 // The first thing in this engine that can take something away.
 //
 // Everything here is grid- and vector arithmetic on the fixed tick, so it lives in
@@ -157,6 +173,8 @@ inline constexpr Seconds kProjectileLifetime = Seconds{30.0f};
 /// `heading` is the shooter's hull heading, used only for the weapon's automatic firing-arc
 /// reach class. A geometry-only caller with no unit transform omits it and therefore does not
 /// claim a made-up facing or apply an arc test.
+/// When `playableRect` is supplied, candidates outside it are rejected before target
+/// restrictions and ranking; explicit Attack orders use a separate path and do not consult it.
 ///
 /// AND ANYTHING THE SHOOTER'S SIDE CANNOT SEE (ADR-037). Until intel existed this pass
 /// picked from the whole store filtered by hostility and range, so every unit in the match
@@ -171,10 +189,11 @@ inline constexpr Seconds kProjectileLifetime = Seconds{30.0f};
                                                   const unitdef::Weapon& weapon,
                                                    const UnitStore& store,
                                                    std::span<const Army> armies,
-                                                   const Intel* intel = nullptr,
-                                                   const UnitCatalog* catalog = nullptr,
-                                                   std::optional<Brad> heading = std::nullopt,
-                                                   std::optional<UnitId> incumbent = std::nullopt);
+                                                    const Intel* intel = nullptr,
+                                                    const UnitCatalog* catalog = nullptr,
+                                                    std::optional<Brad> heading = std::nullopt,
+                                                    std::optional<UnitId> incumbent = std::nullopt,
+                                                    const PlayableRect* playableRect = nullptr);
 
 /// The bearing from `from` to `to`, in radians, measured the way a unit's yaw is.
 ///
@@ -214,7 +233,8 @@ inline constexpr Seconds kProjectileLifetime = Seconds{30.0f};
 /// intercept; callers without a projectile world simply have none to aim at.
 std::size_t aimAtTargets(UnitStore& store, const UnitCatalog& catalog,
                           std::span<const Army> armies, const Intel* intel = nullptr,
-                          const std::vector<Projectile>* projectiles = nullptr);
+                          const std::vector<Projectile>* projectiles = nullptr,
+                          const PlayableRect* playableRect = nullptr);
 
 /// Advances reloads, picks targets, and appends the shots fired this tick.
 ///
@@ -228,9 +248,10 @@ std::size_t aimAtTargets(UnitStore& store, const UnitCatalog& catalog,
 /// The rate is passed rather than read from a constant, because the shot it creates carries
 /// a lifetime in ticks and that number is only meaningful against a rate (§5.1).
 std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
-                        std::span<const Army> armies,
-                        std::vector<Projectile>& projectiles, TickRate rate,
-                        EventQueue* events = nullptr, const Intel* intel = nullptr);
+                         std::span<const Army> armies,
+                         std::vector<Projectile>& projectiles, TickRate rate,
+                         EventQueue* events = nullptr, const Intel* intel = nullptr,
+                         const PlayableRect* playableRect = nullptr);
 
 /// Fires every held OVERCHARGE whose moment has come: target alive, in the manual
 /// weapon's range, reload ready, and the army's stored energy covering the shot's

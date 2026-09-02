@@ -24,6 +24,7 @@ namespace rm::sim {
 class UnitStore;
 class FeatureStore;
 class Intel;
+struct PlayableRect;
 
 /// When an input is applied relative to one simulation tick.
 enum class CommandPhase : std::uint8_t {
@@ -359,9 +360,10 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
 /// Updates attack-move and patrol combat after movement and intel. These orders retain their
 /// waypoint while `target` temporarily names the visible hostile that interrupted the route.
 void updateAggressiveOrders(UnitStore& store, const UnitCatalog& catalog,
-                            std::span<const Army> armies, const Terrain& terrain,
-                            std::span<const PassabilityGrid* const> gridForType, TickRate rate,
-                            const Intel* intel = nullptr);
+                             std::span<const Army> armies, const Terrain& terrain,
+                             std::span<const PassabilityGrid* const> gridForType, TickRate rate,
+                             const Intel* intel = nullptr,
+                             const PlayableRect* playableRect = nullptr);
 
 // --- The log --------------------------------------------------------------------------
 //

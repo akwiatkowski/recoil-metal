@@ -71,7 +71,7 @@ excluded from the headline.
 | [`FA-AIR`](#fa-air---aircraft-flight-combat-and-staging) | Aircraft flight, combat, staging | `WP-22` | 30% | 10% | 95% | Implement the deterministic winged-aircraft mover foundation. |
 | [`FA-NAVY`](#fa-navy---surface-and-submerged-warfare) | Surface and submerged warfare | `WP-23`-`24` | 35% | 10% | 75% | Implement one complete `SurfacingSub` dive/surface slice. |
 | [`FA-TRANSPORT`](#fa-transport---attachments-cargo-and-ferries) | Attachments, cargo, ferries | `WP-25` | 25% | 5% | 95% | Add authored bone-local transforms and attachment motion state before transport load/unload. |
-| [`FA-WEAPONS`](#fa-weapons---targeting-weapons-and-projectiles) | Targeting, weapons, projectiles | `WP-27`-`28` | 95% | 70% | 90% | Implement `C-157` target exemption and playable-rectangle rejection, then add the remaining death, manual-fire, and projectile-defense paths. |
+| [`FA-WEAPONS`](#fa-weapons---targeting-weapons-and-projectiles) | Targeting, weapons, projectiles | `WP-27`-`28` | 97% | 72% | 90% | Implement `C-157` target exemption for engineer reclaim/capture, then add the remaining death and manual-fire paths. |
 | [`FA-MISSILES`](#fa-missiles---silos-missiles-and-interception) | Silos, missiles, interception | `WP-29` | 15% | 5% | 90% | Implement tactical silo ammo production and decrement-then-fire. |
 | [`FA-DAMAGE`](#fa-damage---damage-death-and-shields) | Damage, death, shields | `WP-30`-`32` | 70% | 40% | 75% | Add the next collidable shield slice: area-shield admission and stacking. |
 | [`FA-INTEL`](#fa-intel---vision-radar-sonar-and-counter-intel) | Vision, radar, sonar, counter-intel | `WP-33` | 70% | 45% | 90% | Add bounded retained-contact reaping/redetection and radar-error aiming. |
@@ -248,13 +248,16 @@ viewing alliance has seen that exact unit generation. Sonar-only contacts remain
 `TargetPriorities`. `C-091` retains a generation-safe automatic incumbent per weapon while it
 remains eligible, and replaces it only for a strictly better candidate; fixed-hull aiming consults
 the same incumbent. Explicit Attack remains separate, including when its target has gone stale.
-These automatic-acquisition slices do not wire `SetDoNotTarget` through the FAF Lua API.
+`C-157` now rejects automatic candidates outside the immutable playable rectangle before
+restriction/range/scoring and clears an incumbent that leaves it; live matches use their full map
+extent and explicit Attack remains unrestricted. These automatic-acquisition slices do not wire
+`SetDoNotTarget` or the engineer reclaim/capture target-exemption rule through the FAF Lua API.
 
 ```text
-/goal Advance FA-WEAPONS by implementing `C-157`'s `IsTargetExempt` reject and playable-rectangle
-filter for automatic acquisition. Start with engineer reclaim/capture and map-edge regressions;
-keep explicit Attack, candidate caches, and projectile-defense targeting out of scope. Run make test
-and make verify, then update WP-27 and FA-WEAPONS.
+/goal Advance FA-WEAPONS by implementing `C-157`'s `IsTargetExempt` reject for engineer
+reclaim/capture orders. Start with allied worker/target regressions; keep the completed
+playable-rectangle filter, explicit Attack, candidate caches, and projectile-defense targeting out
+of scope. Run make test and make verify, then update WP-27 and FA-WEAPONS.
 ```
 
 ### FA-MISSILES - Silos, Missiles, And Interception

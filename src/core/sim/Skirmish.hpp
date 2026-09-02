@@ -124,6 +124,11 @@ struct Match {
     /// was written against.
     Intel* intel = nullptr;
 
+    /// Immutable scenario boundary for automatic unit acquisition. Owning the optional value
+    /// makes the boundary part of deterministic match configuration rather than a borrowed
+    /// address into caller setup. An empty optional preserves unrestricted scenes.
+    std::optional<PlayableRect> playableRect;
+
     /// Set once the match has been decided, so the result is announced once rather than
     /// every tick for the rest of the run.
     bool over = false;

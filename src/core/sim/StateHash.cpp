@@ -651,6 +651,16 @@ StateHash hashMatch(const UnitStore& store, const Match& match) {
         feed(h, ever);
     }
     feed(h, match.baseStorage);
+    // The playable rectangle changes which units automatic orders may acquire. It is immutable
+    // configuration, but therefore still authoritative: two runs with different bounds are
+    // different matches before the first candidate is considered.
+    feed(h, match.playableRect.has_value());
+    if (match.playableRect) {
+        feed(h, match.playableRect->minX);
+        feed(h, match.playableRect->maxX);
+        feed(h, match.playableRect->minZ);
+        feed(h, match.playableRect->maxZ);
+    }
     feed(h, match.over);
     // A pending result changes which future tick emits GameOver, so it is as authoritative as
     // the terminal flag itself. The empty optional distinguishes a draw from a named alliance.

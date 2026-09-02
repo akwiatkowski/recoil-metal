@@ -1202,7 +1202,7 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
 void updateAggressiveOrders(UnitStore& store, const UnitCatalog& catalog,
                             std::span<const Army> armies, const Terrain& terrain,
                             std::span<const PassabilityGrid* const> gridForType, TickRate rate,
-                            const Intel* intel) {
+                            const Intel* intel, const PlayableRect* playableRect) {
     const auto armyFor = [armies](int index) -> const Army* {
         for (const Army& army : armies) {
             if (army.index == index) {
@@ -1254,6 +1254,10 @@ void updateAggressiveOrders(UnitStore& store, const UnitCatalog& catalog,
             if (!store.alive(target) || !store.health()[target.index].alive() || mine == nullptr) {
                 return false;
             }
+            if (playableRect != nullptr
+                && !playableRect->contains(positionOf(store.transforms()[target.index]))) {
+                return false;
+            }
             const Army* theirs = armyFor(store.motion()[target.index].armyIndex);
             return theirs != nullptr && hostile(*mine, *theirs)
                    && (intel == nullptr
@@ -1277,7 +1281,7 @@ void updateAggressiveOrders(UnitStore& store, const UnitCatalog& catalog,
                 }
                 const std::optional<UnitId> candidate =
                     nearestTarget(from, owner, weapon, store, armies, intel, &catalog,
-                                  store.transforms()[slot].heading);
+                                   store.transforms()[slot].heading, std::nullopt, playableRect);
                 if (!candidate) {
                     continue;
                 }

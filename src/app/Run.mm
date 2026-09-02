@@ -838,7 +838,13 @@ int runWindowed(const Session& session) {
         // the frame callback because a match is decided on one tick and stays decided, and
         // the opponents remember what they have already started.
         MatchRunner runner =
-            makeMatchRunner(units, map->field, passability, content, starts, map->markers);
+            makeMatchRunner(units, map->field, passability, content, starts, map->markers,
+                            rm::sim::PlayableRect{
+                                .minX = {},
+                                .maxX = rm::sim::fxFromFloat(map->field.widthElmos()),
+                                .minZ = {},
+                                .maxZ = rm::sim::fxFromFloat(map->field.depthElmos()),
+                            });
         // Match time in TICKS, for pacing the opponents' decisions. Counted rather than
         // read off `matchSeconds`, so a dropped frame cannot skip a decision or run one
         // twice.

@@ -45,6 +45,7 @@
 
 #include <array>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
@@ -65,6 +66,10 @@ struct World {
     const rm::HeightField& field;
     std::span<const rm::mapinfo::StartPosition> starts;
     std::span<const rm::scenario::Marker> markers;
+
+    /// A value copy keeps an opponent that retains its observation from retaining a borrowed
+    /// match-configuration address. An empty optional means automatic acquisition is unrestricted.
+    std::optional<rm::sim::PlayableRect> playableRect;
 
     /// The middle of the map, in fixed point — where `structureSite` and `rolloffPoint` aim.
     /// Passed rather than derived so an opponent never does map arithmetic of its own.

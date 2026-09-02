@@ -577,10 +577,11 @@ void applyDecisions(UnitScene& scene, const rm::vfs::Vfs& content, const rm::sim
 /// Run once a second rather than every tick, because nothing here changes faster than a build
 /// finishes and the decisions read the whole scene.
 void runOpponents(UnitScene& scene, const rm::vfs::Vfs& content, const rm::HeightField& field,
-                   std::span<const rm::mapinfo::StartPosition> starts,
-                  std::span<const rm::scenario::Marker> markers,
-                  std::vector<std::unique_ptr<rm::ai::Opponent>>& scripts, float elapsedSeconds,
-                  rm::TickIndex tickIndex) {
+                    std::span<const rm::mapinfo::StartPosition> starts,
+                    std::span<const rm::scenario::Marker> markers,
+                    std::vector<std::unique_ptr<rm::ai::Opponent>>& scripts, float elapsedSeconds,
+                    rm::TickIndex tickIndex,
+                    const std::optional<rm::sim::PlayableRect>& playableRect) {
     // The middle of the map, in fixed point: `structureSite` and `rolloffPoint` place things
     // relative to it, and both are sim geometry now. Computed here rather than inside an
     // opponent, so no implementation of the port does map arithmetic of its own.
@@ -613,6 +614,7 @@ void runOpponents(UnitScene& scene, const rm::vfs::Vfs& content, const rm::Heigh
         .field = field,
         .starts = starts,
         .markers = markers,
+        .playableRect = playableRect,
         .centreX = centreX,
         .centreZ = centreZ,
     };
@@ -635,10 +637,11 @@ void runOpponents(UnitScene& scene, const rm::vfs::Vfs& content, const rm::Heigh
 }
 
 [[nodiscard]] MatchRunner makeMatchRunner(UnitScene& scene, const rm::HeightField& field,
-                                          PassabilitySet& passability,
-                                          const rm::vfs::Vfs& content,
-                                          std::span<const rm::mapinfo::StartPosition> starts,
-                                          std::span<const rm::scenario::Marker> markers) {
+                                           PassabilitySet& passability,
+                                           const rm::vfs::Vfs& content,
+                                           std::span<const rm::mapinfo::StartPosition> starts,
+                                            std::span<const rm::scenario::Marker> markers,
+                                            std::optional<rm::sim::PlayableRect> playableRect) {
     MatchRunner runner{
         .scene = scene,
         .field = field,
@@ -658,6 +661,7 @@ void runOpponents(UnitScene& scene, const rm::vfs::Vfs& content, const rm::Heigh
                 .commandersEver = scene.commandersEver,
                 .baseStorage = kStartingStorage,
                 .intel = &scene.intel,
+                .playableRect = playableRect,
                 // Seeded from the scene rather than defaulted to false, using the same
                 // predicate the sim decides on (Skirmish.cpp): a match with one side left
                 // is already over. Two cases need it, and both are announcements that
@@ -823,8 +827,8 @@ rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) 
     // ask the question for all armies at once.
     if (!scene.armies.empty() && !runner.matchOver) {
         runOpponents(scene, runner.content, runner.field, runner.starts, runner.markers,
-                     runner.scripts, now,
-                     static_cast<rm::TickIndex>(tickIndex));
+                       runner.scripts, now,
+                       static_cast<rm::TickIndex>(tickIndex), runner.match.playableRect);
     }
 
     dispatchPhase(rm::sim::CommandPhase::PreTick, replayPre);
@@ -1008,7 +1012,13 @@ void march(UnitScene& scene, const rm::HeightField& field, PassabilitySet& passa
 
     // The caller-side tick, shared with the windowed frame loop. See MatchRunner.
     MatchRunner runner =
-        makeMatchRunner(scene, field, passability, content, starts, markers);
+        makeMatchRunner(scene, field, passability, content, starts, markers,
+                        rm::sim::PlayableRect{
+                            .minX = {},
+                            .maxX = rm::sim::fxFromFloat(field.widthElmos()),
+                            .minZ = {},
+                            .maxZ = rm::sim::fxFromFloat(field.depthElmos()),
+                        });
 
     // Per-tick state hashes, kept when this run has been asked to record or check them.
     // Reserved up front so the recording cannot itself perturb what it measures by

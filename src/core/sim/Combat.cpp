@@ -674,9 +674,10 @@ constexpr std::size_t kUnidentifiedPriorityRow = 9999;
 
 std::optional<UnitId> nearestTarget(std::array<Fx, 3> from, int fromArmy,
                                       const unitdef::Weapon& weapon, const UnitStore& store,
-                                      std::span<const Army> armies, const Intel* intel,
-                                      const UnitCatalog* catalog, std::optional<Brad> heading,
-                                      std::optional<UnitId> incumbent) {
+                                       std::span<const Army> armies, const Intel* intel,
+                                       const UnitCatalog* catalog, std::optional<Brad> heading,
+                                       std::optional<UnitId> incumbent,
+                                       const PlayableRect* playableRect) {
     if (!weapon.fires() || weapon.targetsProjectiles || weapon.targetPriorities.empty()) {
         return std::nullopt;
     }
@@ -691,6 +692,11 @@ std::optional<UnitId> nearestTarget(std::array<Fx, 3> from, int fromArmy,
     };
 
     const auto classifyCandidate = [&](UnitIndex slot) -> std::optional<Candidate> {
+        if (slot >= transforms.size()
+            || (playableRect != nullptr
+                && !playableRect->contains(positionOf(transforms[slot])))) {
+            return std::nullopt;
+        }
         if (!shootable(fromArmy, store, slot, armies)) {
             return std::nullopt;
         }
@@ -810,8 +816,9 @@ bool canFireAt(const unitdef::Weapon& weapon, Brad yaw, Brad bearing) noexcept {
 }
 
 std::size_t aimAtTargets(UnitStore& store, const UnitCatalog& catalog,
-                         std::span<const Army> armies, const Intel* intel,
-                         const std::vector<Projectile>* projectiles) {
+                          std::span<const Army> armies, const Intel* intel,
+                          const std::vector<Projectile>* projectiles,
+                          const PlayableRect* playableRect) {
     const std::span<Transform> transforms = store.transforms();
     const std::span<const MoveState> motion = store.motion();
     const std::span<const Health> healths = store.health();
@@ -870,8 +877,8 @@ std::size_t aimAtTargets(UnitStore& store, const UnitCatalog& catalog,
                             ? std::optional<UnitId>{healths[slot].automaticTargets[w]}
                             : std::nullopt;
                     candidateUnit = nearestTarget(from, motion[slot].armyIndex, weapon, store,
-                                                  armies, intel, &catalog,
-                                                  transforms[slot].heading, incumbent);
+                                                   armies, intel, &catalog,
+                                                   transforms[slot].heading, incumbent, playableRect);
                 }
                 if (candidateUnit) {
                     candidatePosition = positionOf(transforms[candidateUnit->index]);
@@ -918,9 +925,10 @@ std::size_t aimAtTargets(UnitStore& store, const UnitCatalog& catalog,
 }
 
 std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
-                        std::span<const Army> armies,
-                        std::vector<Projectile>& projectiles, TickRate rate,
-                        EventQueue* events, const Intel* intel) {
+                         std::span<const Army> armies,
+                         std::vector<Projectile>& projectiles, TickRate rate,
+                         EventQueue* events, const Intel* intel,
+                         const PlayableRect* playableRect) {
     std::size_t fired = 0;
 
     const std::span<const Transform> transforms = store.transforms();
@@ -1026,7 +1034,7 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
                        ? forced
                        : std::nullopt)
                 : nearestTarget(from, army, weapon, store, armies, intel, &catalog,
-                                transforms[slot].heading, health.automaticTargets[w]);
+                                 transforms[slot].heading, health.automaticTargets[w], playableRect);
             if (!hasExplicitAttack) {
                 health.automaticTargets[w] = target.value_or(UnitId{});
             }

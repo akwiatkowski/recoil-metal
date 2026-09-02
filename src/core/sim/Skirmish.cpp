@@ -373,21 +373,27 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
     // different game.
     tickRegeneration(store, catalog, rate);
 
+    // Match owns the configuration; these addresses exist only for this tick's pure combat and
+    // command passes, so neither pass can retain a borrowed scenario object between ticks.
+    const PlayableRect* const playableRect =
+        match.playableRect ? &*match.playableRect : nullptr;
+
     // Attack-move and patrol acquire only from the post-movement, post-intel world. Their
     // temporary target then feeds the ordinary aiming and firing passes below.
     updateAggressiveOrders(store, catalog, match.armies, terrain, match.passability, rate,
-                           match.intel);
+                            match.intel, playableRect);
 
     // 2. AIM, then fire. An unturreted weapon may only shoot along the hull, so a unit
     //    that has stopped facing the wrong way has to be brought round first; otherwise
     //    the facing gate reads as a weapon that does not work.
-    (void)aimAtTargets(store, catalog, match.armies, match.intel, match.projectiles);
+    (void)aimAtTargets(store, catalog, match.armies, match.intel, match.projectiles,
+                        playableRect);
 
     // 3. FIRE, fly, land.
     if (match.projectiles != nullptr) {
         report.shotsFired =
             fireWeapons(store, catalog, match.armies, *match.projectiles, rate, match.events,
-                        match.intel);
+                          match.intel, playableRect);
         // The held overcharges, after the guns and before the flight: a shot authorised
         // this tick flies this tick, and the energy it burned is gone before the economy
         // pass reads the store.
