@@ -54,6 +54,7 @@ namespace {
     Weapon weapon;
     weapon.label = "test gun";
     weapon.role = WeaponRole::DirectFire;
+    weapon.targetPriorities = {{"LAND"}};
     weapon.turreted = true;
     weapon.damage = rm::test::mag(damage);
     weapon.maxRange = rm::test::fx(rangeElmos);
@@ -79,6 +80,7 @@ TEST_CASE("one tick both moves a unit and fires its gun") {
     tankDef.weapons.push_back(turretedGun(100.0f, 400.0f));
     UnitDef targetDef;
     targetDef.name = "test_target";
+    targetDef.categories = {"LAND"};
 
     const rm::sim::UnitId tank = roster.add(roster.addType(tankDef), 0.0f, 0.0f, 0, 500.0f);
     (void)roster.add(roster.addType(targetDef), 200.0f, 0.0f, 1, 500.0f);
@@ -118,6 +120,7 @@ TEST_CASE("a unit with no enemy in range moves without firing") {
     tankDef.weapons.push_back(turretedGun(100.0f, 50.0f));  // short gun
     UnitDef targetDef;
     targetDef.name = "test_target";
+    targetDef.categories = {"LAND"};
 
     const rm::sim::UnitId tank = roster.add(roster.addType(tankDef), 0.0f, 0.0f, 0, 500.0f);
     (void)roster.add(roster.addType(targetDef), 900.0f, 0.0f, 1,

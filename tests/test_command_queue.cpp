@@ -263,6 +263,7 @@ namespace {
 [[nodiscard]] rm::unitdef::UnitDef walkerDef() {
     rm::unitdef::UnitDef def;
     def.name = "test_walker";
+    def.categories = {"LAND"};
     def.speedElmosPerSecond = 200.0f;  // fast, so the waypoints are reached in few ticks
     def.turnRateRadiansPerSecond = 100.0f;
     return def;
@@ -274,6 +275,7 @@ namespace {
     rm::unitdef::Weapon weapon;
     weapon.label = "test gun";
     weapon.role = rm::unitdef::WeaponRole::DirectFire;
+    weapon.targetPriorities = {{"LAND"}};
     weapon.damage = rm::sim::magFromFloat(10.0f);
     weapon.maxRange = rm::sim::fxFromFloat(100.0f);
     weapon.minRange = rm::sim::fxFromFloat(minimumRange);

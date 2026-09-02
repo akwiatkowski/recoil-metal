@@ -62,6 +62,7 @@ namespace {
     Weapon weapon;
     weapon.label = "test gun";
     weapon.role = WeaponRole::DirectFire;
+    weapon.targetPriorities = {{"LAND"}};
     weapon.turreted = true;
     weapon.damage = rm::test::mag(damage);
     weapon.maxRange = rm::test::fx(rangeElmos);
@@ -82,9 +83,11 @@ struct Fight {
     Fight() {
         UnitDef redDef;
         redDef.name = "red_gun";
+        redDef.categories = {"LAND"};
         redDef.weapons.push_back(turretedGun(40.0f, 300.0f));
         UnitDef blueDef;
         blueDef.name = "blue_gun";
+        blueDef.categories = {"LAND"};
         blueDef.weapons.push_back(turretedGun(40.0f, 300.0f));
 
         const rm::UnitTypeIndex red = roster.addType(redDef);

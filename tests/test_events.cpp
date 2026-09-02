@@ -39,10 +39,12 @@ namespace {
 [[nodiscard]] rm::unitdef::UnitDef gunnerDef() {
     rm::unitdef::UnitDef def;
     def.name = "test_gunner";
+    def.categories = {"LAND"};
 
     rm::unitdef::Weapon weapon;
     weapon.label = "test gun";
     weapon.role = rm::unitdef::WeaponRole::DirectFire;
+    weapon.targetPriorities = {{"LAND"}};
     weapon.damage = rm::sim::magFromFloat(1000.0f);  // one shot kills
     weapon.maxRange = rm::sim::fxFromFloat(300.0f);
     weapon.muzzleVelocityElmosPerSecond = 400.0f;
@@ -55,6 +57,7 @@ namespace {
 [[nodiscard]] rm::unitdef::UnitDef targetDef() {
     rm::unitdef::UnitDef def;
     def.name = "test_target";
+    def.categories = {"LAND"};
     return def;
 }
 

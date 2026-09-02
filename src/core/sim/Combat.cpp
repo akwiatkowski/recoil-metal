@@ -565,20 +565,10 @@ enum class ReachClass : int { InRange = 0, TooClose = 1, OutsideArc = 2, CannotR
 /// The row index is retail's one true lexicographic sort key (`C-157`): a row-0 match beats a
 /// row-1 match however far away it is.
 ///
-/// **An empty list means NO PREFERENCE here, where retail means ACQUIRE NOTHING (`C-156`) —
-/// and the divergence is deliberate, sequenced, and temporary.** `C-156` states the condition
-/// for the retail rule outright: it "is only survivable because death weapons, manual-fire
-/// weapons and anti-projectile weapons are on separate paths, so those paths must exist
-/// BEFORE priorities land, or ~157 of our equivalents go silent." Those paths do not exist
-/// here yet. Applying the rule anyway was tried and silenced roughly forty tests' worth of
-/// weapons in one step — the predicted failure, arriving exactly as described.
-///
-/// So: everything else about retail's ordering is implemented, and this one rule waits for
-/// the infrastructure it depends on. Flipping it later is a two-line change plus the paths.
 [[nodiscard]] std::size_t priorityRow(const unitdef::Weapon& weapon,
                                        const unitdef::UnitDef& candidate) {
     if (weapon.targetPriorities.empty()) {
-        return 0;  // see above: retail would return "no match" and refuse to fire
+        return std::numeric_limits<std::size_t>::max();
     }
     for (std::size_t row = 0; row < weapon.targetPriorities.size(); ++row) {
         if (unitdef::matchesExpression(
@@ -610,7 +600,7 @@ std::optional<UnitId> nearestTarget(std::array<Fx, 3> from, int fromArmy,
                                     const unitdef::Weapon& weapon, const UnitStore& store,
                                     std::span<const Army> armies, const Intel* intel,
                                     const UnitCatalog* catalog) {
-    if (!weapon.fires()) {
+    if (!weapon.fires() || weapon.targetPriorities.empty()) {
         return std::nullopt;
     }
 
@@ -675,9 +665,7 @@ std::optional<UnitId> nearestTarget(std::array<Fx, 3> from, int fromArmy,
             continue;
         }
 
-        // WHICH ROW, and it outranks distance entirely. A weapon with no priorities matches
-        // no row and therefore acquires nothing — retail's behaviour, verified against every
-        // shipped weapon (`C-156`).
+        // WHICH ROW, and it outranks distance entirely.
         // Without a catalog there is nothing to match a category against, so every candidate
         // sits at row 0 and the ordering falls back to score alone. Callers that do not pass
         // one are asking "what is nearest", not "what does this weapon prefer".

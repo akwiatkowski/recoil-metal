@@ -61,6 +61,7 @@ struct Fixture {
     Fixture() {
         rm::unitdef::UnitDef def;
         def.name = "test_tank";
+        def.categories = {"LAND"};
         const rm::UnitTypeIndex type = roster.addType(def);
         mine = roster.add(type, 200.0f, 200.0f, 0, 500.0f);
         theirs = roster.add(type, 600.0f, 600.0f, 1, 500.0f);
@@ -1119,6 +1120,7 @@ TEST_CASE("an explicit attack fires at its ordered target, not the automatic nea
     rm::unitdef::Weapon beam;
     beam.label = "beam";
     beam.role = rm::unitdef::WeaponRole::DirectFire;
+    beam.targetPriorities = {{"LAND"}};
     beam.damage = rm::sim::magFromFloat(10.0f);
     beam.maxRange = rm::test::fx(200.0f);
     beam.rateOfFire = static_cast<float>(fixture.roster.rate.ticksPerSecond());

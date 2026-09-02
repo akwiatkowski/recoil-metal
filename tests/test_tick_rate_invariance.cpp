@@ -51,6 +51,7 @@ constexpr std::uint32_t kRates[] = {5, 10, 20, 50};
     rm::unitdef::Weapon weapon;
     weapon.label = "test gun";
     weapon.role = rm::unitdef::WeaponRole::DirectFire;
+    weapon.targetPriorities = {{"LAND"}};
     weapon.turreted = true;
     weapon.damage = rm::test::mag(1.0f);  // harmless: this is about cadence, not killing
     weapon.maxRange = rm::test::fx(rangeElmos);
@@ -106,6 +107,7 @@ TEST_CASE("a weapon's cadence is its authored shots per second, at every rate") 
         gunner.weapons.push_back(gun(2.0f, 400.0f));  // two shots a second
         rm::unitdef::UnitDef target;
         target.name = "test_target";
+        target.categories = {"LAND"};
 
         (void)roster.add(roster.addType(gunner), 0.0f, 0.0f, 0, 500.0f);
         (void)roster.add(roster.addType(target), 0.0f, 100.0f, 1, 100000.0f);

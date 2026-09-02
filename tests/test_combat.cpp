@@ -45,6 +45,7 @@ namespace {
     Weapon weapon;
     weapon.label = "test gun";
     weapon.role = WeaponRole::DirectFire;
+    weapon.targetPriorities = {{"LAND"}};
     weapon.damage = rm::test::mag(damage);
     weapon.maxRange = rm::test::fx(rangeElmos);
     weapon.damageRadius = rm::test::fx(radiusElmos);
@@ -58,6 +59,7 @@ namespace {
 [[nodiscard]] UnitDef targetDef() {
     UnitDef def;
     def.name = "test_target";
+    def.categories = {"LAND"};
     return def;
 }
 
@@ -244,6 +246,19 @@ TEST_CASE("automatic acquisition skips DoNotTarget enemies") {
 
     REQUIRE(roster.store.setDoNotTarget(near, false));
     CHECK(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, weapon, roster.store, armies) == near);
+}
+
+TEST_CASE("automatic acquisition denies weapons with no target priorities") {
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    Roster roster;
+    const rm::UnitTypeIndex type = roster.addType(targetDef());
+    (void)roster.add(type, 0.0f, 50.0f, 1, 100.0f);
+    Weapon weapon = directFire(10.0f, 300.0f);
+    weapon.targetPriorities.clear();
+
+    CHECK_FALSE(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, weapon, roster.store, armies,
+                                        nullptr, &roster.catalog));
+    CHECK_FALSE(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, weapon, roster.store, armies));
 }
 
 TEST_CASE("automatic acquisition applies category target restrictions before ranking") {

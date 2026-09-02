@@ -63,12 +63,14 @@ constexpr double kRequiredSpeedup = 2.0;
 [[nodiscard]] rm::unitdef::UnitDef fighterDef() {
     rm::unitdef::UnitDef def;
     def.name = "test_fighter";
+    def.categories = {"LAND"};
     def.speedElmosPerSecond = 30.0f;
     def.turnRateRadiansPerSecond = 2.0f;
 
     rm::unitdef::Weapon weapon;
     weapon.label = "test gun";
     weapon.role = rm::unitdef::WeaponRole::DirectFire;
+    weapon.targetPriorities = {{"LAND"}};
     weapon.damage = rm::sim::magFromFloat(5.0f);
     weapon.maxRange = rm::sim::fxFromFloat(200.0f);
     weapon.muzzleVelocityElmosPerSecond = 300.0f;
