@@ -261,6 +261,61 @@ TEST_CASE("automatic acquisition denies weapons with no target priorities") {
     CHECK_FALSE(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, weapon, roster.store, armies));
 }
 
+TEST_CASE("automatic acquisition penalizes targets outside a weapon firing arc") {
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    Roster roster;
+    const rm::UnitTypeIndex type = roster.addType(targetDef());
+    const UnitId outside = roster.add(type, 10.0f, 0.0f, 1, 100.0f);
+    const UnitId within = roster.add(type, 0.0f, 15.0f, 1, 100.0f);
+    Weapon weapon = directFire(10.0f, 300.0f);
+    weapon.arcRangeDegrees = 30.0f;
+    weapon.arcRangeBrads = rm::unitdef::arcRangeBradsFromDegrees(weapon.arcRangeDegrees);
+
+    // The nearer side target scores 4 * 10^2 outside the arc; the 15-elmo forward target
+    // scores 15^2 in it, so retail's class penalty makes the farther target win.
+    CHECK(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, weapon, roster.store, armies,
+                                 nullptr, nullptr, rm::Brad{})
+          == within);
+
+    weapon.arcRangeDegrees = 180.0f;
+    weapon.arcRangeBrads = rm::unitdef::arcRangeBradsFromDegrees(weapon.arcRangeDegrees);
+    CHECK(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, weapon, roster.store, armies,
+                                 nullptr, nullptr, rm::Brad{})
+          == outside);
+}
+
+TEST_CASE("a firing arc centre rotates automatic acquisition around the hull heading") {
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    Roster roster;
+    const rm::UnitTypeIndex type = roster.addType(targetDef());
+    const UnitId forward = roster.add(type, 0.0f, 10.0f, 1, 100.0f);
+    const UnitId right = roster.add(type, 15.0f, 0.0f, 1, 100.0f);
+    Weapon weapon = directFire(10.0f, 300.0f);
+    weapon.arcCentreDegrees = 90.0f;
+    weapon.arcRangeDegrees = 30.0f;
+    weapon.arcCentreBrads = rm::unitdef::arcCentreBradsFromDegrees(weapon.arcCentreDegrees);
+    weapon.arcRangeBrads = rm::unitdef::arcRangeBradsFromDegrees(weapon.arcRangeDegrees);
+
+    CHECK(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, weapon, roster.store, armies,
+                                 nullptr, nullptr, rm::Brad{})
+          == right);
+    CHECK(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, weapon, roster.store, armies,
+                                 nullptr, nullptr, rm::Brad{})
+          != forward);
+
+    weapon.arcCentreDegrees = 0.0f;
+    weapon.arcCentreBrads = rm::unitdef::arcCentreBradsFromDegrees(weapon.arcCentreDegrees);
+    CHECK(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, weapon, roster.store, armies,
+                                 nullptr, nullptr, static_cast<rm::Brad>(16384))
+          == right);  // +90 degrees of hull heading points along +X.
+
+    weapon.arcCentreDegrees = 45.0f;
+    weapon.arcCentreBrads = rm::unitdef::arcCentreBradsFromDegrees(weapon.arcCentreDegrees);
+    CHECK(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, weapon, roster.store, armies,
+                                 nullptr, nullptr, static_cast<rm::Brad>(8192))
+          == right);  // 45 degrees of hull heading plus 45 degrees of weapon offset is +X.
+}
+
 TEST_CASE("automatic acquisition applies category target restrictions before ranking") {
     const std::vector<Army> armies = rm::sim::freeForAll(2);
     Roster roster;

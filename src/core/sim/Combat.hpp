@@ -151,6 +151,9 @@ inline constexpr Seconds kProjectileLifetime = Seconds{30.0f};
 /// Excludes the shooter itself, its allies, anything already dead, and anything a
 /// defeated army owns (see `hostile`). Range is checked against the WEAPON, so a unit
 /// with a long gun and a short one may find a target for the first and not the second.
+/// `heading` is the shooter's hull heading, used only for the weapon's automatic firing-arc
+/// reach class. A geometry-only caller with no unit transform omits it and therefore does not
+/// claim a made-up facing or apply an arc test.
 ///
 /// AND ANYTHING THE SHOOTER'S SIDE CANNOT SEE (ADR-037). Until intel existed this pass
 /// picked from the whole store filtered by hostility and range, so every unit in the match
@@ -164,9 +167,10 @@ inline constexpr Seconds kProjectileLifetime = Seconds{30.0f};
 [[nodiscard]] std::optional<UnitId> nearestTarget(std::array<Fx, 3> from, int fromArmy,
                                                   const unitdef::Weapon& weapon,
                                                    const UnitStore& store,
-                                                   std::span<const Army> armies,
-                                                   const Intel* intel = nullptr,
-                                                   const UnitCatalog* catalog = nullptr);
+                                                    std::span<const Army> armies,
+                                                    const Intel* intel = nullptr,
+                                                    const UnitCatalog* catalog = nullptr,
+                                                    std::optional<Brad> heading = std::nullopt);
 
 /// The bearing from `from` to `to`, in radians, measured the way a unit's yaw is.
 ///

@@ -76,12 +76,25 @@ inline constexpr float kDefaultFiringToleranceDegrees = 10.0f;
 /// converts to, kept as a constant so the field below needs no load-time work when the
 /// blueprint states nothing.
 inline constexpr std::int32_t kDefaultFiringToleranceBrads = 1820;
+inline constexpr std::int32_t kHalfTurnBrads = 32768;
 
 /// Degrees → binary radians, at LOAD time. A full turn is 65,536 brad, so a degree is
 /// 65,536/360 = 182.04; rounded rather than truncated. This is the one place the conversion
 /// runs: content converts once through the loader, and the sim compares integers — the same
 /// rule every other authored angle follows.
 [[nodiscard]] inline std::int32_t firingToleranceBradsFromDegrees(float degrees) noexcept {
+    return static_cast<std::int32_t>(
+        std::lround(std::max(0.0f, degrees) * (65536.0 / 360.0)));
+}
+
+/// The centre wraps around a full turn; range is a non-negative half-angle and values at least
+/// one half-turn mean no firing-arc test at all.
+[[nodiscard]] inline Brad arcCentreBradsFromDegrees(float degrees) noexcept {
+    return static_cast<Brad>(static_cast<std::int32_t>(
+        std::lround(degrees * (65536.0 / 360.0))));
+}
+
+[[nodiscard]] inline std::int32_t arcRangeBradsFromDegrees(float degrees) noexcept {
     return static_cast<std::int32_t>(
         std::lround(std::max(0.0f, degrees) * (65536.0 / 360.0)));
 }
@@ -242,6 +255,12 @@ struct Weapon {
     /// angle either side of the centre.
     float arcCentreDegrees = 0.0f;
     float arcRangeDegrees = 180.0f;
+
+    /// Loader-derived binary radians used by the fixed-point simulation. Keeping the authored
+    /// degrees above makes blueprint inspection intelligible without letting float math leak
+    /// into targeting every tick.
+    Brad arcCentreBrads{};
+    std::int32_t arcRangeBrads = kHalfTurnBrads;
 
     /// The largest height difference the weapon can reach across, in elmos.
     ///

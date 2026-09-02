@@ -1276,7 +1276,8 @@ void updateAggressiveOrders(UnitStore& store, const UnitCatalog& catalog,
                     continue;
                 }
                 const std::optional<UnitId> candidate =
-                    nearestTarget(from, owner, weapon, store, armies, intel, &catalog);
+                    nearestTarget(from, owner, weapon, store, armies, intel, &catalog,
+                                  store.transforms()[slot].heading);
                 if (!candidate) {
                     continue;
                 }

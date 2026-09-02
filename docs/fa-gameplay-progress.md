@@ -241,12 +241,13 @@ in WP-25, and refresh FA-TRANSPORT.
 **Largest gap:** automatic acquisition and explicit Attack orders share one target path, blocking
 exact forced-target, minimum-range, arc, incumbency, and empty-priority behavior.
 
-**Current slice:** `C-156` is now enforced: an automatic-acquisition weapon with no authored
-`TargetPriorities` acquires no unit, including catalog-less simulation callers. Ordinary synthetic
-fire fixtures state the retail-like `LAND` priority explicitly. `C-106`'s `DoNotTarget` state is
-authoritative, replay-hashed, SaveState-v5 persisted, and rejects hostile units before automatic
-target ranking. Neither slice alters explicit Attack orders or wires `SetDoNotTarget` through the
-FAF Lua API, which remains a counted stub until a semantic script-command path exists.
+**Current slice:** `C-167` is now enforced for automatic acquisition: loader-derived binary-radian
+weapon arcs classify targets outside `heading + HeadingArcCenter +/- HeadingArcRange` as retail
+class 2, applying its existing 4x score penalty; an arc range of 180 degrees remains unrestricted.
+`C-156` also rejects automatic acquisition from a weapon with no authored `TargetPriorities`,
+including catalog-less simulation callers. Neither slice alters explicit Attack orders or wires
+`SetDoNotTarget` through the FAF Lua API, which remains a counted stub until a semantic
+script-command path exists.
 
 ```text
 /goal Advance FA-WEAPONS by completing item recoil-metal-7599: separate explicit Attack

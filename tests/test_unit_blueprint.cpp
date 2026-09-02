@@ -427,6 +427,28 @@ TEST_CASE("FA weapon target layers distinguish interceptors from bombers") {
     }
 }
 
+TEST_CASE("FA weapon firing arcs are converted to binary radians at load") {
+    const Blueprint bp{"weapon_arc_unit.bp", R"(
+        UnitBlueprint {
+            Physics = { MotionType = 'RULEUMT_Land', MaxSpeed = 1 },
+            SizeX = 1, SizeZ = 1,
+            Weapon = {
+                {
+                    WeaponCategory = 'Direct Fire', Damage = 10, MaxRadius = 20, RateOfFire = 1,
+                    HeadingArcCenter = 90,
+                    HeadingArcRange = 30,
+                },
+            },
+        }
+    )"};
+
+    const auto def = rm::unitbp::loadFile(bp.path());
+    REQUIRE(def.has_value());
+    REQUIRE(def->weapons.size() == 1);
+    CHECK(def->weapons[0].arcCentreBrads == 16384);  // 90 / 360 of one 65,536-brad turn
+    CHECK(def->weapons[0].arcRangeBrads == 5461);    // rounded 30 / 360 of one turn
+}
+
 TEST_CASE("FA weapon target restrictions retain complete category expressions") {
     const Blueprint bp{"target_restrictions_unit.bp", R"(
         UnitBlueprint {

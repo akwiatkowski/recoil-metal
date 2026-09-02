@@ -171,6 +171,8 @@ std::vector<Weapon> weaponsFrom(const lua::Value& weaponArray, bool airborneSour
         // fire in any direction.
         weapon.arcCentreDegrees = numberOr(entry, "HeadingArcCenter", 0.0f);
         weapon.arcRangeDegrees = numberOr(entry, "HeadingArcRange", 180.0f);
+        weapon.arcCentreBrads = arcCentreBradsFromDegrees(weapon.arcCentreDegrees);
+        weapon.arcRangeBrads = arcRangeBradsFromDegrees(weapon.arcRangeDegrees);
         weapon.maxHeightDifference = sim::fxFromFloat(
             std::max(0.0f, numberOr(entry, "MaxHeightDiff", 0.0f)) * scmap::kElmosPerOgrid);
 

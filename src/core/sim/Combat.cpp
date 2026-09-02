@@ -486,7 +486,8 @@ namespace {
 enum class ReachClass : int { InRange = 0, TooClose = 1, OutsideArc = 2, CannotReach = 3 };
 
 [[nodiscard]] ReachClass classifyReach(const unitdef::Weapon& weapon, Fx groundDistance,
-                                        Fx heightDifference) noexcept {
+                                        Fx heightDifference, std::optional<Brad> heading = std::nullopt,
+                                        std::optional<Brad> targetBearing = std::nullopt) noexcept {
     if (groundDistance > weapon.maxRange) {
         return ReachClass::CannotReach;
     }
@@ -498,17 +499,14 @@ enum class ReachClass : int { InRange = 0, TooClose = 1, OutsideArc = 2, CannotR
     if (groundDistance <= weapon.minRange) {
         return ReachClass::TooClose;
     }
-    // **The arc test is NOT implemented, and returning `OutsideArc` here would be worse than
-    // omitting it.** Retail compares the angle to the target against `HeadingArcRange` about
-    // `HeadingArcCenter`, skipping the test entirely at 180 or more (`C-167`). Both fields are
-    // parsed and both are on the weapon — what is missing is the shooter's FACING, which
-    // `nearestTarget` is not given.
-    //
-    // A first attempt classified every candidate of a restricted-arc weapon as `OutsideArc`,
-    // since without a facing there is nothing to compare. That is not "unimplemented", it is
-    // wrong: it hands every such weapon a 4x score penalty on every target and changes which
-    // one it picks. Omitting the test leaves those weapons slightly too permissive, which is
-    // the direction that does not silently alter targeting.
+    if (heading && targetBearing && weapon.arcRangeBrads < unitdef::kHalfTurnBrads) {
+        const Brad arcCentre = static_cast<Brad>(static_cast<std::uint16_t>(*heading)
+                                                 + static_cast<std::uint16_t>(weapon.arcCentreBrads));
+        if (headingError(arcCentre, *targetBearing)
+            > static_cast<std::uint32_t>(weapon.arcRangeBrads)) {
+            return ReachClass::OutsideArc;
+        }
+    }
     return ReachClass::InRange;
 }
 
@@ -597,9 +595,9 @@ enum class ReachClass : int { InRange = 0, TooClose = 1, OutsideArc = 2, CannotR
 } // namespace
 
 std::optional<UnitId> nearestTarget(std::array<Fx, 3> from, int fromArmy,
-                                    const unitdef::Weapon& weapon, const UnitStore& store,
-                                    std::span<const Army> armies, const Intel* intel,
-                                    const UnitCatalog* catalog) {
+                                     const unitdef::Weapon& weapon, const UnitStore& store,
+                                     std::span<const Army> armies, const Intel* intel,
+                                     const UnitCatalog* catalog, std::optional<Brad> heading) {
     if (!weapon.fires() || weapon.targetPriorities.empty()) {
         return std::nullopt;
     }
@@ -651,7 +649,8 @@ std::optional<UnitId> nearestTarget(std::array<Fx, 3> from, int fromArmy,
 
         const Fx dy = transforms[slot].y > from[1] ? transforms[slot].y - from[1]
                                                   : from[1] - transforms[slot].y;
-        const ReachClass reach = classifyReach(weapon, distance, dy);
+        const ReachClass reach = classifyReach(weapon, distance, dy, heading,
+                                                bearingTo(from, positionOf(transforms[slot])));
         if (reach == ReachClass::CannotReach) {
             continue;  // out of range or out of elevation: not a candidate at all
         }
@@ -775,7 +774,7 @@ std::size_t aimAtTargets(UnitStore& store, const UnitCatalog& catalog,
                        ? forced
                        : std::nullopt)
                 : nearestTarget(from, motion[slot].armyIndex, weapon, store, armies, intel,
-                                &catalog);
+                                &catalog, transforms[slot].heading);
             if (!candidate) {
                 continue;
             }
@@ -877,7 +876,8 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
                                           intel)
                        ? forced
                        : std::nullopt)
-                : nearestTarget(from, army, weapon, store, armies, intel, &catalog);
+                : nearestTarget(from, army, weapon, store, armies, intel, &catalog,
+                                transforms[slot].heading);
             if (!target) {
                 continue;
             }
