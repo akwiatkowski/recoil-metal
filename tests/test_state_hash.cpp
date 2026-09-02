@@ -330,6 +330,12 @@ TEST_CASE("every field the sim owns reaches the hash") {
         a.health()[0].reloadRemaining.push_back(3);
         REQUIRE(a.hash() != before);
     }
+    SECTION("automatic weapon incumbent") {
+        Fixture a;
+        const rm::StateHash before = a.hash();
+        a.health()[0].automaticTargets.push_back(a.store.idAt(0));
+        REQUIRE(a.hash() != before);
+    }
     SECTION("motion order") {
         Fixture a;
         const rm::StateHash before = a.hash();

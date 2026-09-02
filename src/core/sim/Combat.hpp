@@ -167,10 +167,11 @@ inline constexpr Seconds kProjectileLifetime = Seconds{30.0f};
 [[nodiscard]] std::optional<UnitId> nearestTarget(std::array<Fx, 3> from, int fromArmy,
                                                   const unitdef::Weapon& weapon,
                                                    const UnitStore& store,
-                                                    std::span<const Army> armies,
-                                                    const Intel* intel = nullptr,
-                                                    const UnitCatalog* catalog = nullptr,
-                                                    std::optional<Brad> heading = std::nullopt);
+                                                   std::span<const Army> armies,
+                                                   const Intel* intel = nullptr,
+                                                   const UnitCatalog* catalog = nullptr,
+                                                   std::optional<Brad> heading = std::nullopt,
+                                                   std::optional<UnitId> incumbent = std::nullopt);
 
 /// The bearing from `from` to `to`, in radians, measured the way a unit's yaw is.
 ///

@@ -205,6 +205,19 @@ TEST_CASE("the current save state preserves DoNotTarget", "[save-state]") {
     CHECK(restored.doNotTarget(unit));
 }
 
+TEST_CASE("the current save state preserves generation-safe automatic weapon incumbents", "[save-state]") {
+    UnitStore original;
+    const auto gunner = original.spawn({});
+    const auto target = original.spawn({});
+    original.health()[gunner.index].automaticTargets = {target};
+
+    RandomStream random{std::uint32_t{1}};
+    const auto saved = SaveState::decode(
+        SaveState::encode({.tick = 42, .random = random.snapshot(), .units = original.snapshot()}));
+    REQUIRE(saved.has_value());
+    REQUIRE(saved->units.health[gunner.index].automaticTargets == std::vector<rm::sim::UnitId>{target});
+}
+
 TEST_CASE("historic attachment saves derive offsets from their transforms", "[save-state]") {
     UnitStore original;
     const auto parent = original.spawn({.transform = {.x = rm::sim::Fx::fromInt(10),
@@ -212,22 +225,49 @@ TEST_CASE("historic attachment saves derive offsets from their transforms", "[sa
     const auto child = original.spawn({.transform = {.x = rm::sim::Fx::fromInt(13),
                                                       .z = rm::sim::Fx::fromInt(25)}});
     REQUIRE(original.attach(parent, child));
+    original.health()[parent.index].veterancy.kills = 7;
 
     RandomStream random{std::uint32_t{1}};
     const SaveState state{.tick = 42, .random = random.snapshot(), .units = original.snapshot()};
-    std::vector<std::byte> v3 =
-        SaveState::encode(state);
-    // v4 adds the offset collection and v5 adds DoNotTarget. Removing both and changing the
-    // frame version recreates the published v3 shape, which stored the attachment graph but no
-    // local offsets or targetability state.
-    v3.resize(v3.size() - (sizeof(std::uint32_t) + 2 * sizeof(std::uint8_t))
-              - (sizeof(std::uint32_t) + 2 * 2 * sizeof(std::int32_t)));
+    std::vector<std::byte> v5 = SaveState::encode(state);
+    // v4 adds the offset collection, v5 adds DoNotTarget, and v6 adds one automatic-target
+    // count to every health record. Removing all three additions recreates the published v3
+    // shape, which stored the attachment graph but none of those later states.
+    constexpr std::size_t kSlots = 2;
+    constexpr std::size_t kV2MotionBytes = 55;
+    constexpr std::size_t kV6HealthBytes = 68;
+    constexpr std::size_t kAutomaticTargetCountOffset = 48;
+    const std::size_t units = 20 + sizeof(std::uint32_t) + readU32(v5, 20);
+    const std::size_t health = units
+                               + sizeof(std::uint32_t) + kSlots * sizeof(std::uint32_t)
+                               + sizeof(std::uint32_t) + sizeof(std::uint64_t)
+                               + sizeof(std::uint32_t) + kSlots * sizeof(std::uint32_t)
+                               + sizeof(std::uint32_t) + kSlots * 18
+                               + sizeof(std::uint32_t) + kSlots * kV2MotionBytes
+                               + sizeof(std::uint32_t);
+    for (std::size_t slot = kSlots; slot-- > 0;) {
+        const std::size_t count = health + slot * kV6HealthBytes + kAutomaticTargetCountOffset;
+        v5.erase(v5.begin() + static_cast<std::ptrdiff_t>(count),
+                 v5.begin() + static_cast<std::ptrdiff_t>(count + sizeof(std::uint32_t)));
+    }
+    writeU32(v5, 4, 5);
+    writeU32(v5, 16, static_cast<std::uint32_t>(v5.size() - 20));
+
+    std::vector<std::byte> v4 = v5;
+    v4.resize(v4.size() - (sizeof(std::uint32_t) + kSlots * sizeof(std::uint8_t)));
+    writeU32(v4, 4, 4);
+    writeU32(v4, 16, static_cast<std::uint32_t>(v4.size() - 20));
+
+    std::vector<std::byte> v3 = v4;
+    v3.resize(v3.size() - (sizeof(std::uint32_t) + kSlots * 2 * sizeof(std::int32_t)));
     writeU32(v3, 4, 3);
     writeU32(v3, 16, static_cast<std::uint32_t>(v3.size() - 20));
 
     const auto checkDerivedOffset = [&](const std::vector<std::byte>& bytes) {
         const auto saved = SaveState::decode(bytes);
         REQUIRE(saved.has_value());
+        CHECK(saved->units.health[parent.index].automaticTargets.empty());
+        CHECK(saved->units.health[parent.index].veterancy.kills == 7);
         UnitStore restored{saved->units};
         CHECK(restored.attachmentOffsetOf(child)
               == std::array<rm::sim::Fx, 2>{rm::sim::Fx::fromInt(3), rm::sim::Fx::fromInt(5)});
@@ -241,6 +281,8 @@ TEST_CASE("historic attachment saves derive offsets from their transforms", "[sa
     checkDerivedOffset(SaveState::encodeV1(state));
     checkDerivedOffset(SaveState::encodeV2(state));
     checkDerivedOffset(v3);
+    checkDerivedOffset(v4);
+    checkDerivedOffset(v5);
 }
 
 TEST_CASE("a v1 save state refuses invalid and truncated input", "[save-state]") {

@@ -152,6 +152,14 @@ void feedHealth(StateHash& h, const Health& health) noexcept {
         feed(h, remaining);
     }
 
+    if (!health.automaticTargets.empty()) {
+        feed(h, health.automaticTargets.size());
+        for (const UnitId target : health.automaticTargets) {
+            feed(h, static_cast<std::size_t>(target.index));
+            feed(h, static_cast<std::size_t>(target.generation));
+        }
+    }
+
     // WHO LAST HIT IT. State, not provenance — unlike a command's issuing player, this decides
     // something: it is the instigator a `UnitDestroyed` event names, and a consumer that awards
     // a kill, plays a sound or scores a match reads it. Two runs that disagree about who is

@@ -1933,6 +1933,93 @@ TEST_CASE("a priority row outranks distance, however far away it is") {
     CHECK(*target == farAir);  // the distant air unit, not the tank at arm's length
 }
 
+TEST_CASE("automatic acquisition keeps a per-weapon incumbent until a strictly better target appears") {
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+
+    Weapon weapon = directFire(10.0f, 300.0f);
+    weapon.beam = true;  // make the selected target observable on this firing tick
+    weapon.turreted = false;
+    Roster roster;
+    const UnitId gunner =
+        roster.add(roster.addType(gunnerDef(weapon)), 0.0f, 0.0f, 0, 100.0f);
+    const rm::UnitTypeIndex target = roster.addType(targetDef());
+    // The grid sees this equal-score challenger first. Without incumbent preference it wins the
+    // tie solely because of that insertion order.
+    const UnitId challenger = roster.add(target, 0.0f, 100.0f, 1, 100.0f);
+    const UnitId incumbent = roster.add(target, 0.0f, -100.0f, 1, 100.0f);
+    roster.health(gunner).automaticTargets = {incumbent};
+    roster.transform(gunner).heading = rm::sim::kBradHalfTurn;
+
+    std::vector<Projectile> shots;
+    // A fixed weapon must aim at its retained incumbent too. Re-deriving the equal challenger
+    // here would turn the hull away from the target that fireWeapons keeps.
+    CHECK(rm::sim::aimAtTargets(roster.store, roster.catalog, armies) == 0);
+    CHECK(rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots, roster.rate) == 1);
+    CHECK(roster.health(incumbent).current == rm::test::mag(90.0f));
+    CHECK(roster.health(challenger).current == rm::test::mag(100.0f));
+    CHECK(roster.health(gunner).automaticTargets == std::vector<UnitId>{incumbent});
+
+    // A strictly nearer candidate replaces the incumbent. Equal score did not; this one does.
+    const UnitId better = roster.add(target, 0.0f, -50.0f, 1, 100.0f);
+    roster.health(gunner).reloadRemaining[0] = 0;
+    CHECK(rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots, roster.rate) == 1);
+    CHECK(roster.health(better).current == rm::test::mag(90.0f));
+    CHECK(roster.health(gunner).automaticTargets == std::vector<UnitId>{better});
+}
+
+TEST_CASE("a stale explicit Attack does not fall through to automatic acquisition") {
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+
+    Weapon weapon = directFire(10.0f, 300.0f);
+    weapon.beam = true;
+    weapon.turreted = false;
+    Roster roster;
+    const UnitId gunner =
+        roster.add(roster.addType(gunnerDef(weapon)), 0.0f, 0.0f, 0, 100.0f);
+    const rm::UnitTypeIndex target = roster.addType(targetDef());
+    const UnitId stale = roster.add(target, 0.0f, 100.0f, 1, 100.0f);
+    const UnitId automatic = roster.add(target, 0.0f, 50.0f, 1, 100.0f);
+    roster.health(gunner).automaticTargets = {automatic};
+    roster.transform(gunner).heading = rm::sim::kBradHalfTurn;
+    roster.store.kill(stale);
+
+    rm::sim::Command attack{.kind = rm::sim::CommandKind::Attack,
+                            .unit = gunner,
+                            .target = stale};
+    (void)roster.store.orders()[gunner.index].give(attack, false);
+    roster.store.orders()[gunner.index].markCurrentActive();
+
+    std::vector<Projectile> shots;
+    CHECK(rm::sim::aimAtTargets(roster.store, roster.catalog, armies) == 0);
+    CHECK(roster.transform(gunner).heading == rm::sim::kBradHalfTurn);
+    CHECK(rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots, roster.rate) == 0);
+    CHECK(roster.health(automatic).current == rm::test::mag(100.0f));
+    CHECK(roster.health(gunner).automaticTargets == std::vector<UnitId>{automatic});
+}
+
+TEST_CASE("an automatic incumbent cannot survive its target slot being recycled") {
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+
+    Weapon weapon = directFire(10.0f, 300.0f);
+    weapon.beam = true;
+    weapon.turreted = true;
+    Roster roster;
+    const UnitId gunner =
+        roster.add(roster.addType(gunnerDef(weapon)), 0.0f, 0.0f, 0, 100.0f);
+    const rm::UnitTypeIndex target = roster.addType(targetDef());
+    const UnitId incumbent = roster.add(target, 0.0f, 100.0f, 1, 100.0f);
+    roster.health(gunner).automaticTargets = {incumbent};
+    roster.store.kill(incumbent);
+    const UnitId replacement = roster.add(target, 0.0f, 50.0f, 1, 100.0f);
+    REQUIRE(replacement.index == incumbent.index);
+    REQUIRE(replacement.generation != incumbent.generation);
+
+    std::vector<Projectile> shots;
+    CHECK(rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots, roster.rate) == 1);
+    CHECK(roster.health(replacement).current == rm::test::mag(90.0f));
+    CHECK(roster.health(gunner).automaticTargets == std::vector<UnitId>{replacement});
+}
+
 TEST_CASE("a target beyond the weapon's height reach is not a target at all") {
     // Retail folds "too far" and "cannot elevate" into one class, so a weapon that cannot look
     // up treats a target above it as unreachable rather than merely distant (`C-167`).

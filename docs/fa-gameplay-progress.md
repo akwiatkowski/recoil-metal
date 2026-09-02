@@ -9,7 +9,7 @@ Detailed retail evidence remains canonical in
 [`fa-exe-analysis-plan.md`](fa-exe-analysis-plan.md). This dashboard summarizes that ledger; it
 does not replace its claims, addresses, counterevidence, or confirmation gate.
 
-**Snapshot:** 2026-09-02, Recoil Metal `351ab9e` plus a dirty worktree, retail artifact
+**Snapshot:** 2026-09-02, Recoil Metal worktree through the `C-091` automatic-incumbent slice, retail artifact
 `ART-E001` (`c6783580c0b7a408ec2ad3bfe5eb1fdbef31a60d92c1007ff9b90c33bb960aa0`).
 
 ## Headline
@@ -71,7 +71,7 @@ excluded from the headline.
 | [`FA-AIR`](#fa-air---aircraft-flight-combat-and-staging) | Aircraft flight, combat, staging | `WP-22` | 30% | 10% | 95% | Implement the deterministic winged-aircraft mover foundation. |
 | [`FA-NAVY`](#fa-navy---surface-and-submerged-warfare) | Surface and submerged warfare | `WP-23`-`24` | 35% | 10% | 75% | Implement one complete `SurfacingSub` dive/surface slice. |
 | [`FA-TRANSPORT`](#fa-transport---attachments-cargo-and-ferries) | Attachments, cargo, ferries | `WP-25` | 25% | 5% | 95% | Add authored bone-local transforms and attachment motion state before transport load/unload. |
-| [`FA-WEAPONS`](#fa-weapons---targeting-weapons-and-projectiles) | Targeting, weapons, projectiles | `WP-27`-`28` | 92% | 70% | 90% | Separate explicit Attack forced-target firing from automatic acquisition, then add the remaining death, manual-fire, and projectile-defense paths. |
+| [`FA-WEAPONS`](#fa-weapons---targeting-weapons-and-projectiles) | Targeting, weapons, projectiles | `WP-27`-`28` | 95% | 70% | 90% | Implement `C-157` target exemption and playable-rectangle rejection, then add the remaining death, manual-fire, and projectile-defense paths. |
 | [`FA-MISSILES`](#fa-missiles---silos-missiles-and-interception) | Silos, missiles, interception | `WP-29` | 5% | 0% | 90% | Implement tactical silo ammo production and decrement-then-fire. |
 | [`FA-DAMAGE`](#fa-damage---damage-death-and-shields) | Damage, death, shields | `WP-30`-`32` | 70% | 40% | 75% | Add the next collidable shield slice: area-shield admission and stacking. |
 | [`FA-INTEL`](#fa-intel---vision-radar-sonar-and-counter-intel) | Vision, radar, sonar, counter-intel | `WP-33` | 70% | 45% | 90% | Add bounded retained-contact reaping/redetection and radar-error aiming. |
@@ -245,14 +245,16 @@ exact forced-target, minimum-range, arc, incumbency, and empty-priority behavior
 unidentified target retail's sentinel priority row `9999`, so it competes by score until the
 viewing alliance has seen that exact unit generation. Sonar-only contacts remain rejected.
 `C-167` applies the 4x out-of-arc score penalty, while `C-156` rejects a weapon with no authored
-`TargetPriorities`. These automatic-acquisition slices do not alter explicit Attack orders or wire
-`SetDoNotTarget` through the FAF Lua API.
+`TargetPriorities`. `C-091` retains a generation-safe automatic incumbent per weapon while it
+remains eligible, and replaces it only for a strictly better candidate; fixed-hull aiming consults
+the same incumbent. Explicit Attack remains separate, including when its target has gone stale.
+These automatic-acquisition slices do not wire `SetDoNotTarget` through the FAF Lua API.
 
 ```text
-/goal Advance FA-WEAPONS by completing item recoil-metal-7599: separate explicit Attack
-forced-target aiming/firing from automatic nearestTarget acquisition before adding C-094 BENIGN
-filtering. Start with a regression that distinguishes forced and automatic targets, run make test
-and make verify, update WP-27 and FA-WEAPONS, and leave unrelated projectile residues scoped out.
+/goal Advance FA-WEAPONS by implementing `C-157`'s `IsTargetExempt` reject and playable-rectangle
+filter for automatic acquisition. Start with engineer reclaim/capture and map-edge regressions;
+keep explicit Attack, candidate caches, and projectile-defense targeting out of scope. Run make test
+and make verify, then update WP-27 and FA-WEAPONS.
 ```
 
 ### FA-MISSILES - Silos, Missiles, And Interception

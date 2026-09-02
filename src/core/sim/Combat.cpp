@@ -514,6 +514,16 @@ constexpr std::size_t kUnidentifiedPriorityRow = 9999;
     return ReachClass::InRange;
 }
 
+/// Whether the active order is an explicit Attack, even when its target has gone stale.
+///
+/// A stale explicit order must hold fire rather than fall through into automatic acquisition.
+/// That separation also keeps player intent from consulting automatic-target state.
+[[nodiscard]] bool hasExplicitAttackOrder(UnitIndex slot, const UnitStore& store) noexcept {
+    const std::span<const CommandQueue> orders = store.orders();
+    return slot < orders.size() && orders[slot].active() != nullptr
+           && orders[slot].active()->kind() == CommandKind::Attack;
+}
+
 /// The live entity target an active Attack order explicitly forces, if it has one.
 ///
 /// An entity-target Attack is distinct from automatic acquisition: the command has already
@@ -525,8 +535,7 @@ constexpr std::size_t kUnidentifiedPriorityRow = 9999;
         return std::nullopt;
     }
     const QueuedCommand* order = orders[slot].active();
-    if (order == nullptr || order->kind() != CommandKind::Attack
-        || !store.alive(order->target())) {
+    if (!hasExplicitAttackOrder(slot, store) || !store.alive(order->target())) {
         return std::nullopt;
     }
     return order->target();
@@ -599,9 +608,10 @@ constexpr std::size_t kUnidentifiedPriorityRow = 9999;
 } // namespace
 
 std::optional<UnitId> nearestTarget(std::array<Fx, 3> from, int fromArmy,
-                                     const unitdef::Weapon& weapon, const UnitStore& store,
-                                     std::span<const Army> armies, const Intel* intel,
-                                     const UnitCatalog* catalog, std::optional<Brad> heading) {
+                                      const unitdef::Weapon& weapon, const UnitStore& store,
+                                      std::span<const Army> armies, const Intel* intel,
+                                      const UnitCatalog* catalog, std::optional<Brad> heading,
+                                      std::optional<UnitId> incumbent) {
     if (!weapon.fires() || weapon.targetPriorities.empty()) {
         return std::nullopt;
     }
@@ -609,45 +619,41 @@ std::optional<UnitId> nearestTarget(std::array<Fx, 3> from, int fromArmy,
     const std::span<const Transform> transforms = store.transforms();
     const std::span<const MoveState> motion = store.motion();
 
-    std::optional<UnitIndex> best;
-    std::size_t bestRow = std::numeric_limits<std::size_t>::max();
-    std::uint64_t bestScore = 0;
+    struct Candidate {
+        UnitIndex slot;
+        std::size_t row;
+        std::uint64_t score;
+    };
 
-    // THE GRID, rather than every slot in the store (§7 P5.2). The query radius is the weapon's
-    // own reach, so a scan that used to be over every unit in the match is now over the handful
-    // within range — and `minRange` is still applied below, because a dead zone is a hole in the
-    // middle of the disc and not a smaller disc.
-    for (const UnitIndex slot : store.space().within(from[0], from[2], weapon.maxRange)) {
+    const auto classifyCandidate = [&](UnitIndex slot) -> std::optional<Candidate> {
         if (!shootable(fromArmy, store, slot, armies)) {
-            continue;
+            return std::nullopt;
         }
         if (store.doNotTarget(store.idAt(slot))) {
-            continue;
+            return std::nullopt;
         }
         if (slot >= motion.size() || !weapon.canTarget(motion[slot].airborne)) {
-            continue;
+            return std::nullopt;
         }
         const unitdef::UnitDef* def = catalog != nullptr ? catalog->def(store.typeAt(slot))
                                                            : nullptr;
         if (def != nullptr && def->hasCategory("BENIGN")) {
-            continue;
+            return std::nullopt;
         }
         if (def != nullptr && !passesTargetRestrictions(weapon, *def)) {
-            continue;
+            return std::nullopt;
         }
 
-        // AND VISIBLE (ADR-037). Before the distance test rather than after, because a grid
-        // lookup is one array read and a ground distance is two multiplies and a square root.
         bool prioritiesApply = true;
         if (intel != nullptr) {
             const Army* mine = armyFor(fromArmy, armies);
             if (mine == nullptr || catalog == nullptr) {
-                continue;
+                return std::nullopt;
             }
             const std::optional<ContactKind> contact =
                 contactKindForUnit(mine->alliance, slot, store, *catalog, armies, *intel);
             if (!contact || (*contact != ContactKind::Seen && *contact != ContactKind::Radar)) {
-                continue;
+                return std::nullopt;
             }
             prioritiesApply = *contact == ContactKind::Seen
                            || intel->hasSeenEver(mine->alliance, store.idAt(slot));
@@ -656,66 +662,58 @@ std::optional<UnitId> nearestTarget(std::array<Fx, 3> from, int fromArmy,
         const Fx dx = transforms[slot].x - from[0];
         const Fx dz = transforms[slot].z - from[2];
         const Fx distance = fxHypot(dx, dz);
-
         const Fx dy = transforms[slot].y > from[1] ? transforms[slot].y - from[1]
-                                                  : from[1] - transforms[slot].y;
+                                                    : from[1] - transforms[slot].y;
         const ReachClass reach = classifyReach(weapon, distance, dy, heading,
                                                 bearingTo(from, positionOf(transforms[slot])));
-        if (reach == ReachClass::CannotReach) {
-            continue;  // out of range or out of elevation: not a candidate at all
-        }
-        // **A DIVERGENCE, and a deliberate one.** Retail keeps a too-close target as class 1
-        // and lets it win when nothing better exists, because acquiring and firing are
-        // separate there — the unit acquires, then manoeuvres. Here `nearestTarget`'s answer
-        // feeds firing directly, so returning a target the weapon cannot shoot would make a
-        // unit stand and click. The minimum radius therefore stays a hard reject until
-        // acquisition and firing are split. Recorded rather than silently kept.
-        if (reach == ReachClass::TooClose) {
-            continue;
+        if (reach == ReachClass::CannotReach || reach == ReachClass::TooClose) {
+            return std::nullopt;
         }
 
-        // WHICH ROW, and it outranks distance entirely.
-        // Without a catalog there is nothing to match a category against, so every candidate
-        // sits at row 0 and the ordering falls back to score alone. Callers that do not pass
-        // one are asking "what is nearest", not "what does this weapon prefer".
         const std::size_t row = !prioritiesApply ? kUnidentifiedPriorityRow
                               : def != nullptr  ? priorityRow(weapon, *def)
                                                 : 0;
         if (row == std::numeric_limits<std::size_t>::max()) {
-            continue;
-        }
-        if (row > bestRow) {
-            continue;  // retail early-outs once the row is worse than the incumbent's
+            return std::nullopt;
         }
 
-        // Retail ranks the unrounded squared distance. Taking the fixed-point root first
-        // would collapse nearby candidates into false ties.
         const FxWide dxRaw = dx.raw();
         const FxWide dzRaw = dz.raw();
         std::uint64_t score = static_cast<std::uint64_t>(dxRaw * dxRaw)
-                              + static_cast<std::uint64_t>(dzRaw * dzRaw);
-
-        // THE CLASS PENALTY, and it is a penalty rather than a sort key (`C-181`). The engine
-        // multiplies the distance-mode score by 4.0 for a worse class; a close class-2 target
-        // can therefore still beat a distant class-0 one, which a lexicographic class key
-        // would forbid. This was read at `0x005de8d4` precisely because two earlier claims
-        // disagreed about it.
+                            + static_cast<std::uint64_t>(dzRaw * dzRaw);
         if (reach != ReachClass::InRange) {
             score *= 4;
         }
+        return Candidate{.slot = slot, .row = row, .score = score};
+    };
 
-        const bool better = !best || row < bestRow || (row == bestRow && score < bestScore);
-        if (better) {
-            best = slot;
-            bestRow = row;
-            bestScore = score;
+    // An incumbent is evaluated before the grid walk, so insertion order cannot dislodge it on
+    // an equal score. The same predicate clears stale, dead, invisible, restricted, or
+    // out-of-range handles by declining to seed the comparison.
+    std::optional<Candidate> best;
+    if (incumbent && store.alive(*incumbent)) {
+        best = classifyCandidate(incumbent->index);
+    }
+
+    // THE GRID, rather than every slot in the store (§7 P5.2). The query radius is the weapon's
+    // own reach, so a scan that used to be over every unit in the match is now over the handful
+    // within range — and `minRange` is still applied below, because a dead zone is a hole in the
+    // middle of the disc and not a smaller disc.
+    for (const UnitIndex slot : store.space().within(from[0], from[2], weapon.maxRange)) {
+        const std::optional<Candidate> candidate = classifyCandidate(slot);
+        if (!candidate) {
+            continue;
+        }
+        if (!best || candidate->row < best->row
+            || (candidate->row == best->row && candidate->score < best->score)) {
+            best = candidate;
         }
     }
 
     if (!best) {
         return std::nullopt;
     }
-    return store.idAt(*best);
+    return store.idAt(best->slot);
 }
 
 Brad bearingTo(std::array<Fx, 3> from, std::array<Fx, 3> to) noexcept {
@@ -750,6 +748,7 @@ std::size_t aimAtTargets(UnitStore& store, const UnitCatalog& catalog,
                          std::span<const Army> armies, const Intel* intel) {
     const std::span<Transform> transforms = store.transforms();
     const std::span<const MoveState> motion = store.motion();
+    const std::span<const Health> healths = store.health();
 
     std::size_t turned = 0;
     for (UnitIndex slot = 0; slot < transforms.size() && slot < motion.size(); ++slot) {
@@ -765,6 +764,7 @@ std::size_t aimAtTargets(UnitStore& store, const UnitCatalog& catalog,
             continue;
         }
 
+        const bool hasExplicitAttack = hasExplicitAttackOrder(slot, store);
         const std::optional<UnitId> forced = explicitAttackTarget(slot, store);
 
         // Only the weapons that need the hull pointed are worth turning for, and the longest
@@ -775,18 +775,26 @@ std::size_t aimAtTargets(UnitStore& store, const UnitCatalog& catalog,
         // invents a gun the unit does not own (for example long surface range plus short AA).
         std::optional<UnitId> target;
         Fx targetDistance{};
-        for (const unitdef::Weapon& weapon : def->weapons) {
+        for (std::size_t w = 0; w < def->weapons.size(); ++w) {
+            const unitdef::Weapon& weapon = def->weapons[w];
             if (!weapon.fires() || weapon.turreted) {
                 continue;
             }
             const std::array<Fx, 3> from = positionOf(transforms[slot]);
-            const std::optional<UnitId> candidate = forced
-                ? (canShootExplicitTarget(*forced, from, motion[slot].armyIndex, weapon, store,
-                                          armies, catalog, intel)
-                       ? forced
-                       : std::nullopt)
-                : nearestTarget(from, motion[slot].armyIndex, weapon, store, armies, intel,
-                                &catalog, transforms[slot].heading);
+            std::optional<UnitId> candidate;
+            if (hasExplicitAttack) {
+                candidate = forced && canShootExplicitTarget(*forced, from, motion[slot].armyIndex,
+                                                              weapon, store, armies, catalog, intel)
+                                ? forced
+                                : std::nullopt;
+            } else {
+                const std::optional<UnitId> incumbent =
+                    slot < healths.size() && w < healths[slot].automaticTargets.size()
+                        ? std::optional<UnitId>{healths[slot].automaticTargets[w]}
+                        : std::nullopt;
+                candidate = nearestTarget(from, motion[slot].armyIndex, weapon, store, armies,
+                                          intel, &catalog, transforms[slot].heading, incumbent);
+            }
             if (!candidate) {
                 continue;
             }
@@ -852,7 +860,11 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
 
         const int army = armyAt(store, slot);
         const std::array<Fx, 3> from = positionOf(transforms[slot]);
+        const bool hasExplicitAttack = hasExplicitAttackOrder(slot, store);
         const std::optional<UnitId> forced = explicitAttackTarget(slot, store);
+        if (!hasExplicitAttack) {
+            health.automaticTargets.resize(def->weapons.size());
+        }
 
         for (std::size_t w = 0; w < def->weapons.size(); ++w) {
             const unitdef::Weapon& weapon = def->weapons[w];
@@ -883,13 +895,16 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
                 continue;
             }
 
-            const std::optional<UnitId> target = forced
-                ? (canShootExplicitTarget(*forced, from, army, weapon, store, armies, catalog,
-                                          intel)
+            const std::optional<UnitId> target = hasExplicitAttack
+                ? (forced && canShootExplicitTarget(*forced, from, army, weapon, store, armies,
+                                                    catalog, intel)
                        ? forced
                        : std::nullopt)
                 : nearestTarget(from, army, weapon, store, armies, intel, &catalog,
-                                transforms[slot].heading);
+                                transforms[slot].heading, health.automaticTargets[w]);
+            if (!hasExplicitAttack) {
+                health.automaticTargets[w] = target.value_or(UnitId{});
+            }
             if (!target) {
                 continue;
             }

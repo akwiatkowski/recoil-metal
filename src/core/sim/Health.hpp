@@ -58,6 +58,11 @@ struct Health {
     /// apart (PLAN2.md §7 P3.5).
     std::vector<int> burstRemaining;
 
+    /// The automatic target each weapon last accepted. Handles are generational: recycling a
+    /// dead target's slot cannot make a weapon inherit a target for the new occupant.
+    /// Explicit Attack orders deliberately do not consult this state.
+    std::vector<UnitId> automaticTargets;
+
     /// The unit that last took health off this one, or an unset handle.
     ///
     /// THE INSTIGATOR a `UnitDestroyed` event names (§7 P6.1). Recoil passes an attacker triple
