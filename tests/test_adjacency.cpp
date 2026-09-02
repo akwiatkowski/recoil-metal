@@ -207,7 +207,7 @@ TEST_CASE("an enemy's storage pays nobody, and a corner neighbour pays nothing")
     CHECK(rm::test::asFloat(f.economies[0].incomePerTick.mass) == Approx(0.2f).margin(0.0001));
 }
 
-TEST_CASE("a generator discounts its neighbour's upkeep, and never below free") {
+TEST_CASE("a generator discounts its neighbour's upkeep") {
     Fixture f;
 
     rm::unitdef::UnitDef mex = smallStructure("test_mex");
@@ -226,6 +226,30 @@ TEST_CASE("a generator discounts its neighbour's upkeep, and never below free") 
 
     // 2 e/s upkeep × (1 - 0.0625) = 1.875/s → 0.1875 a tick.
     CHECK(rm::test::asFloat(f.economies[0].upkeepPerTick.energy) == Approx(0.1875f).margin(0.0001));
+}
+
+TEST_CASE("adjacency modifiers remain unclamped") {
+    Fixture f;
+
+    rm::unitdef::UnitDef receiver = smallStructure("sized_upkeep_receiver");
+    receiver.upkeepEnergyPerSecond = 2.0f;
+    const rm::UnitTypeIndex receiverType = f.roster.addType(receiver);
+
+    rm::unitdef::UnitDef pgen = smallStructure("test_t3_pgen");
+    pgen.adjacencyBuffs = "T3PowerGeneratorAdjacencyBuffs";
+    const rm::UnitTypeIndex pgenType = f.roster.addType(pgen);
+
+    const UnitId receiverId = f.roster.add(receiverType, 200.0f, 200.0f, 0, 500.0f);
+    for (int giver = 0; giver < 6; ++giver) {
+        (void)f.roster.add(pgenType, 200.0f, 200.0f, 0, 500.0f);
+    }
+
+    std::vector<rm::sim::AdjacencyEffects> effects;
+    rm::sim::adjacencyEffects(f.roster.store, f.roster.catalog, effects);
+    CHECK(effects[receiverId.index].energyUpkeep < Fx{});
+
+    f.tick();
+    CHECK(rm::test::asFloat(f.economies[0].upkeepPerTick.energy) < 0.0f);
 }
 
 TEST_CASE("an energy storage beside the generator raises what it makes") {

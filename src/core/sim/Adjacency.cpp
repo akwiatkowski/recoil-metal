@@ -1,7 +1,5 @@
 #include "core/sim/Adjacency.hpp"
 
-#include <algorithm>
-
 namespace rm::sim {
 
 bool skirtsShareEdge(Fx ax, Fx az, Fx aHalfX, Fx aHalfZ, Fx bx, Fx bz, Fx bHalfX,
@@ -79,14 +77,6 @@ void adjacencyEffects(const UnitStore& store, const UnitCatalog& catalog,
                 onA.energyUpkeep += b.info->givesEnergyUpkeep[a.info->sizeIndex];
             }
         }
-    }
-
-    // A discount cannot go below free: enough T3 generators around one structure would
-    // otherwise push its upkeep negative and PAY the owner to run it.
-    for (AdjacencyEffects& effects : out) {
-        effects.energyUpkeep = std::max(effects.energyUpkeep, Fx{});
-        effects.massProduction = std::max(effects.massProduction, Fx{});
-        effects.energyProduction = std::max(effects.energyProduction, Fx{});
     }
 }
 

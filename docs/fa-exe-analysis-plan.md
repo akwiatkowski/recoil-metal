@@ -2399,6 +2399,14 @@ infers a receiver row. Invalid, duplicate, and non-structure size sets remain in
 authored size wins even when it disagrees with the skirt. The negative-modifier clamp and
 free-placement contact tolerance remain separate `C-073`/`C-074` work.
 
+### 2026-09-02 / C-048 unclamped adjacency update
+
+Modeled adjacency totals no longer floor mass production, energy production, or energy upkeep at
+zero. They remain deterministic fixed-point sums and can become negative, matching retail's
+`1 + Sum(Add * Count)` behavior. The regression uses six overlapping T3 power givers to prove that
+negative upkeep reaches the economy; overlap itself remains the existing deliberate `C-074`
+free-placement policy.
+
 ## Document maintenance rules
 
 - The dashboard is a shortcut, not a second source of truth. Its counts must match the work-package
