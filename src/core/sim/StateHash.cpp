@@ -381,6 +381,9 @@ StateHash hashMatch(const UnitStore& store, const Match& match) {
         if (store.factoryRepeat(store.idAt(slot))) {
             feed(h, true);
         }
+        if (store.doNotTarget(store.idAt(slot))) {
+            feed(h, std::uint8_t{2});
+        }
         // WHETHER THE SLOT IS OCCUPIED, which the generation cannot say on its own. Death is
         // a tombstone: `kill` leaves every array untouched and deliberately does NOT advance
         // the generation mirror, because a stale mirror is what makes a dead unit's handle

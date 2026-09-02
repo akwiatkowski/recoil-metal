@@ -23,7 +23,7 @@ struct SaveState {
     /// The published v2 format includes path-service and route-revalidation phase state.
     [[nodiscard]] static std::vector<std::byte> encodeV2(const SaveState& state);
     [[nodiscard]] static std::optional<SaveState> decodeV2(std::span<const std::byte> bytes);
-    /// The latest v4 format additionally preserves attachment offsets.
+    /// The latest v5 format additionally preserves DoNotTarget state.
     [[nodiscard]] static std::vector<std::byte> encode(const SaveState& state);
     /// Decodes all supported save versions, including v1 and the published v2 format.
     [[nodiscard]] static std::optional<SaveState> decode(std::span<const std::byte> bytes);

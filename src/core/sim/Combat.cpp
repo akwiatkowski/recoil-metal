@@ -629,6 +629,9 @@ std::optional<UnitId> nearestTarget(std::array<Fx, 3> from, int fromArmy,
         if (!shootable(fromArmy, store, slot, armies)) {
             continue;
         }
+        if (store.doNotTarget(store.idAt(slot))) {
+            continue;
+        }
         if (slot >= motion.size() || !weapon.canTarget(motion[slot].airborne)) {
             continue;
         }

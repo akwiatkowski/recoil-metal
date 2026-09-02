@@ -14,11 +14,13 @@ UnitStore::UnitStore(const Snapshot& snapshot)
       health_(snapshot.health),
       types_(snapshot.types),
       factoryRepeat_(snapshot.factoryRepeat),
+      doNotTarget_(snapshot.doNotTarget),
        orders_(snapshot.transforms.size()),
        parents_(snapshot.parents),
        children_(snapshot.children),
        attachmentOffsets_(snapshot.attachmentOffsets) {
     factoryRepeat_.resize(transforms_.size(), false);
+    doNotTarget_.resize(transforms_.size(), false);
     attachmentOffsets_.resize(transforms_.size());
 }
 
@@ -28,8 +30,9 @@ UnitStore::Snapshot UnitStore::snapshot() const {
             .transforms = transforms_,
              .motion = motion_,
              .health = health_,
-             .types = types_,
+              .types = types_,
               .factoryRepeat = factoryRepeat_,
+              .doNotTarget = doNotTarget_,
               .parents = parents_,
               .children = children_,
               .attachmentOffsets = attachmentOffsets_};
@@ -48,6 +51,7 @@ UnitId UnitStore::spawn(const Spawn& request) {
         health_.emplace_back();
         types_.emplace_back();
         factoryRepeat_.emplace_back(false);
+        doNotTarget_.emplace_back(false);
         orders_.emplace_back();
         parents_.emplace_back();
         children_.emplace_back();
@@ -60,6 +64,7 @@ UnitId UnitStore::spawn(const Spawn& request) {
     health_[slot] = request.health;
     types_[slot] = request.type;
     factoryRepeat_[slot] = false;
+    doNotTarget_[slot] = false;
     // CLEARED HERE rather than in `kill`, which is the tombstone rule applied to orders: a
     // corpse keeps its arrays so the death blast can read them, and a slot is only wiped when
     // something new moves in. A queue left behind would have the newcomer inherit the dead
@@ -163,6 +168,7 @@ void UnitStore::kill(UnitId id) {
     orders_[id.index].clear();
     orders_[id.index].clearObserver();
     factoryRepeat_[id.index] = false;
+    doNotTarget_[id.index] = false;
     (void)detach(id);
     for (const UnitId child : children_[id.index]) {
         if (child.index < parents_.size() && parents_[child.index] == id) {
@@ -264,6 +270,18 @@ bool UnitStore::setFactoryRepeat(UnitId unit, bool enabled) noexcept {
 
 bool UnitStore::factoryRepeat(UnitId unit) const noexcept {
     return alive(unit) && factoryRepeat_[unit.index];
+}
+
+bool UnitStore::setDoNotTarget(UnitId unit, bool enabled) noexcept {
+    if (!alive(unit)) {
+        return false;
+    }
+    doNotTarget_[unit.index] = enabled;
+    return true;
+}
+
+bool UnitStore::doNotTarget(UnitId unit) const noexcept {
+    return alive(unit) && doNotTarget_[unit.index];
 }
 
 bool UnitStore::increaseCommandCount(CommandId id, std::uint32_t amount) {

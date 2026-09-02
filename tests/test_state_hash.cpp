@@ -139,6 +139,23 @@ TEST_CASE("the cached surface-water movement layer changes the hash") {
     CHECK(ground.hash() != surface.hash());
 }
 
+TEST_CASE("the DoNotTarget state changes the hash") {
+    Fixture ordinary;
+    Fixture excluded;
+
+    REQUIRE(excluded.store.setDoNotTarget(excluded.store.idAt(0), true));
+    CHECK(ordinary.hash() != excluded.hash());
+}
+
+TEST_CASE("DoNotTarget does not collide with factory repeat in the hash") {
+    Fixture repeating;
+    Fixture excluded;
+
+    REQUIRE(repeating.store.setFactoryRepeat(repeating.store.idAt(0), true));
+    REQUIRE(excluded.store.setDoNotTarget(excluded.store.idAt(0), true));
+    CHECK(repeating.hash() != excluded.hash());
+}
+
 TEST_CASE("shield power and recovery timers change the hash") {
     const auto hashWith = [](rm::sim::ShieldState shield) {
         Fixture fixture;

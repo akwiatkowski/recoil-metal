@@ -231,6 +231,21 @@ TEST_CASE("automatic acquisition skips BENIGN enemies") {
     CHECK(*target != nearBenign);
 }
 
+TEST_CASE("automatic acquisition skips DoNotTarget enemies") {
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    Roster roster;
+    const rm::UnitTypeIndex type = roster.addType(targetDef());
+    const UnitId near = roster.add(type, 0.0f, 50.0f, 1, 100.0f);
+    const UnitId far = roster.add(type, 0.0f, 100.0f, 1, 100.0f);
+    const Weapon weapon = directFire(10.0f, 300.0f);
+
+    REQUIRE(roster.store.setDoNotTarget(near, true));
+    CHECK(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, weapon, roster.store, armies) == far);
+
+    REQUIRE(roster.store.setDoNotTarget(near, false));
+    CHECK(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, weapon, roster.store, armies) == near);
+}
+
 TEST_CASE("automatic acquisition applies category target restrictions before ranking") {
     const std::vector<Army> armies = rm::sim::freeForAll(2);
     Roster roster;

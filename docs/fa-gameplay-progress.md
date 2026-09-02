@@ -71,7 +71,7 @@ excluded from the headline.
 | [`FA-AIR`](#fa-air---aircraft-flight-combat-and-staging) | Aircraft flight, combat, staging | `WP-22` | 30% | 10% | 95% | Implement the deterministic winged-aircraft mover foundation. |
 | [`FA-NAVY`](#fa-navy---surface-and-submerged-warfare) | Surface and submerged warfare | `WP-23`-`24` | 35% | 10% | 75% | Implement one complete `SurfacingSub` dive/surface slice. |
 | [`FA-TRANSPORT`](#fa-transport---attachments-cargo-and-ferries) | Attachments, cargo, ferries | `WP-25` | 25% | 5% | 95% | Add authored bone-local transforms and attachment motion state before transport load/unload. |
-| [`FA-WEAPONS`](#fa-weapons---targeting-weapons-and-projectiles) | Targeting, weapons, projectiles | `WP-27`-`28` | 90% | 65% | 90% | Separate the death-weapon firing path from automatic acquisition before enabling C-156 empty-priority default-deny. |
+| [`FA-WEAPONS`](#fa-weapons---targeting-weapons-and-projectiles) | Targeting, weapons, projectiles | `WP-27`-`28` | 92% | 70% | 90% | Separate the death-weapon firing path from automatic acquisition before enabling C-156 empty-priority default-deny. |
 | [`FA-MISSILES`](#fa-missiles---silos-missiles-and-interception) | Silos, missiles, interception | `WP-29` | 5% | 0% | 90% | Implement tactical silo ammo production and decrement-then-fire. |
 | [`FA-DAMAGE`](#fa-damage---damage-death-and-shields) | Damage, death, shields | `WP-30`-`32` | 70% | 40% | 75% | Add the next collidable shield slice: area-shield admission and stacking. |
 | [`FA-INTEL`](#fa-intel---vision-radar-sonar-and-counter-intel) | Vision, radar, sonar, counter-intel | `WP-33` | 70% | 45% | 90% | Add seen-now/seen-ever contact state and bounded retained-contact reaping/redetection. |
@@ -240,6 +240,11 @@ in WP-25, and refresh FA-TRANSPORT.
 
 **Largest gap:** automatic acquisition and explicit Attack orders share one target path, blocking
 exact forced-target, minimum-range, arc, incumbency, and empty-priority behavior.
+
+**Current slice:** `C-106`'s `DoNotTarget` state is authoritative, replay-hashed, SaveState-v5
+persisted, and rejects hostile units before automatic target ranking. It deliberately does not alter
+explicit Attack orders or wire `SetDoNotTarget` through the FAF Lua API, which remains a counted
+stub until a semantic script-command path exists.
 
 ```text
 /goal Advance FA-WEAPONS by completing item recoil-metal-7599: separate explicit Attack

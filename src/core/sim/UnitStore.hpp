@@ -75,6 +75,7 @@ public:
         std::vector<Health> health;
         std::vector<UnitTypeIndex> types;
         std::vector<bool> factoryRepeat;
+        std::vector<bool> doNotTarget;
         std::vector<std::optional<UnitId>> parents;
         std::vector<std::vector<UnitId>> children;
         std::vector<std::array<Fx, 2>> attachmentOffsets;
@@ -177,6 +178,10 @@ public:
     [[nodiscard]] bool setFactoryRepeat(UnitId unit, bool enabled) noexcept;
     [[nodiscard]] bool factoryRepeat(UnitId unit) const noexcept;
 
+    /// Controls automatic acquisition only; explicit target orders remain authoritative.
+    [[nodiscard]] bool setDoNotTarget(UnitId unit, bool enabled) noexcept;
+    [[nodiscard]] bool doNotTarget(UnitId unit) const noexcept;
+
     /// Shared repeat/count operations. Exhaustion removes this exact object from every member
     /// queue, matching retail's cross-queue `DecreaseCommandCount` path.
     [[nodiscard]] bool increaseCommandCount(CommandId id, std::uint32_t amount = 1);
@@ -236,6 +241,7 @@ private:
     std::vector<Health> health_;
     std::vector<UnitTypeIndex> types_;
     std::vector<bool> factoryRepeat_;
+    std::vector<bool> doNotTarget_;
     std::vector<CommandQueue> orders_;
     std::vector<std::optional<UnitId>> parents_;
     std::vector<std::vector<UnitId>> children_;
