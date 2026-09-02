@@ -172,6 +172,24 @@ TEST_CASE("a manual weapon and an upgrade's weapon wait for orders that never co
     CHECK_FALSE(missile.fires());
 }
 
+TEST_CASE("point defence does not acquire or fire at units") {
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    Roster roster;
+
+    Weapon pointDefence = directFire(10.0f, 300.0f);
+    pointDefence.role = WeaponRole::DirectFire;  // `Defense` parses to this ordinary role.
+    pointDefence.targetsProjectiles = true;
+    (void)roster.add(roster.addType(gunnerDef(pointDefence)), 0.0f, 0.0f, 0, 100.0f);
+    (void)roster.add(roster.addType(targetDef()), 0.0f, 100.0f, 1, 100.0f);
+
+    std::vector<Projectile> shots;
+    CHECK_FALSE(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, pointDefence,
+                                       roster.store, armies, nullptr, &roster.catalog));
+    CHECK(rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots,
+                               rm::sim::TickRate{}) == 0);
+    CHECK(shots.empty());
+}
+
 TEST_CASE("a unit shoots the nearest enemy and never a friend") {
     const std::vector<Army> armies = rm::sim::freeForAll(2);
 

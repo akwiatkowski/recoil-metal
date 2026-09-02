@@ -104,6 +104,8 @@ std::vector<Weapon> weaponsFrom(const lua::Value& weaponArray, bool airborneSour
         weapon.label = std::string{entry.stringAt("Label").value_or("")};
         weapon.role =
             weaponRoleFromCategory(entry.stringAt("WeaponCategory").value_or("(none)"));
+        weapon.targetsProjectiles = entry.stringAt("TargetType").value_or("")
+                                   == "RULEWTT_Projectile";
         if (const std::optional<std::string_view> arc = entry.stringAt("BallisticArc")) {
             weapon.arc = ballisticArcFromName(*arc).value_or(BallisticArc::None);
         }

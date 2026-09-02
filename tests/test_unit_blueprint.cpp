@@ -453,6 +453,32 @@ TEST_CASE("FA weapon target restrictions retain complete category expressions") 
           == std::vector<std::string>{"NAVAL", "EXPERIMENTAL"});
 }
 
+TEST_CASE("FA point defence weapons retain their projectile target type") {
+    const Blueprint bp{"point_defence_unit.bp", R"(
+        UnitBlueprint {
+            Physics = { MotionType = 'RULEUMT_Land', MaxSpeed = 1 },
+            SizeX = 1, SizeZ = 1,
+            Weapon = {
+                {
+                    WeaponCategory = 'Defense', TargetType = 'RULEWTT_Projectile',
+                    Damage = 10, MaxRadius = 20, RateOfFire = 1,
+                },
+                {
+                    WeaponCategory = 'Direct Fire', Damage = 10, MaxRadius = 20, RateOfFire = 1,
+                },
+            },
+        }
+    )"};
+
+    const auto def = rm::unitbp::loadFile(bp.path());
+    REQUIRE(def.has_value());
+    REQUIRE(def->weapons.size() == 2);
+    CHECK(def->weapons[0].targetsProjectiles);
+    CHECK_FALSE(def->weapons[0].fires());
+    CHECK_FALSE(def->weapons[1].targetsProjectiles);
+    CHECK(def->weapons[1].fires());
+}
+
 TEST_CASE("an ordinary FA shield reads its capacity, radius and recovery timing") {
     const Blueprint bp{"UEB4202_unit.bp", R"(
         UnitBlueprint {

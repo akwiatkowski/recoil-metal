@@ -9,7 +9,7 @@ Detailed retail evidence remains canonical in
 [`fa-exe-analysis-plan.md`](fa-exe-analysis-plan.md). This dashboard summarizes that ledger; it
 does not replace its claims, addresses, counterevidence, or confirmation gate.
 
-**Snapshot:** 2026-09-02, Recoil Metal `c4f8c91` plus a dirty worktree, retail artifact
+**Snapshot:** 2026-09-02, Recoil Metal `351ab9e` plus a dirty worktree, retail artifact
 `ART-E001` (`c6783580c0b7a408ec2ad3bfe5eb1fdbef31a60d92c1007ff9b90c33bb960aa0`).
 
 ## Headline

@@ -92,6 +92,11 @@ struct Weapon {
     WeaponRole role = WeaponRole::Other;
     BallisticArc arc = BallisticArc::None;
 
+    /// `TargetType = 'RULEWTT_Projectile'` marks point defence. Its targets are shots rather
+    /// than units, so it must wait for the projectile-interception path rather than joining
+    /// ordinary unit acquisition.
+    bool targetsProjectiles = false;
+
     /// Unrestricted when content states no caps, preserving synthetic and Recoil weapons.
     TargetLayerMask targetLayers = TargetLayerMask::Both;
 
@@ -313,7 +318,7 @@ struct Weapon {
     /// range or no rate of fire is also excluded: both are things a gun must have, and
     /// a "weapon" lacking them is a table describing something else.
     [[nodiscard]] bool fires() const noexcept {
-        return role != WeaponRole::Death && !manualFire && !enabledByEnhancement
+        return role != WeaponRole::Death && !targetsProjectiles && !manualFire && !enabledByEnhancement
             && maxRange > sim::Fx{} && rateOfFire > 0.0f && damage > sim::Mag{};
     }
 
