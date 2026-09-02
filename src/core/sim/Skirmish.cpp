@@ -44,26 +44,6 @@ void retireDead(UnitStore& store, const UnitCatalog& catalog, TickReport& report
             .radiusElmos = motion[slot].radiusElmos,
         });
 
-        // THE WRECK, as an object (§7 P6.2). Made here rather than by the caller, and read from
-        // the slot BEFORE retirement zeroes the radius — which is the same reason `Death`
-        // carries its position and size rather than a handle to look them up through.
-        if (features != nullptr) {
-            // What the wreck is WORTH comes from the definition — `BuildCost × MassMult`,
-            // computed at parse time (`UnitDef::wreckMass`). A type with no definition, or
-            // one whose blueprint states no Wreckage table (the ACUs, the walls), leaves a
-            // scorch record with nothing in it, which is exactly `Unit.lua:1762-1765`.
-            const unitdef::UnitDef* def = catalog.def(store.typeAt(slot));
-            (void)features->add(Feature{
-                .at = positionOf(transforms[slot]),
-                .radiusElmos = motion[slot].radiusElmos,
-                .fromType = store.typeAt(slot),
-                .armyIndex = motion[slot].armyIndex,
-                .massRemaining = def != nullptr ? def->wreckMass : Mag{},
-                .energyRemaining = def != nullptr ? def->wreckEnergy : Mag{},
-                .reclaimPerBuildRate = def != nullptr ? def->reclaimPerBuildRate : Fx{},
-            });
-        }
-
         // EXACTLY ONCE PER DEATH, which is the property §7 P6.1's test asserts — and it is this
         // loop's `radiusElmos > 0` guard that provides it, not anything about events. A corpse
         // sits in its slot for the rest of the match; without the guard it would be reported
@@ -84,6 +64,22 @@ void retireDead(UnitStore& store, const UnitCatalog& catalog, TickReport& report
         // The same `radiusElmos > 0` guard makes this once per death too, which matters more
         // here than for the event: a kill counted twice is a unit promoted at half the cost.
         (void)creditKill(store, catalog, healths[slot].lastHitBy, events);
+
+        // THE WRECK, after the victim's owner has awarded kill credit. `Unit.lua` runs
+        // `instigator:OnKilledUnit(self)` before it creates the wreck; keep the event ordering
+        // above unchanged while matching that gameplay ordering.
+        if (features != nullptr) {
+            const unitdef::UnitDef* def = catalog.def(store.typeAt(slot));
+            (void)features->add(Feature{
+                .at = positionOf(transforms[slot]),
+                .radiusElmos = motion[slot].radiusElmos,
+                .fromType = store.typeAt(slot),
+                .armyIndex = motion[slot].armyIndex,
+                .massRemaining = def != nullptr ? def->wreckMass : Mag{},
+                .energyRemaining = def != nullptr ? def->wreckEnergy : Mag{},
+                .reclaimPerBuildRate = def != nullptr ? def->reclaimPerBuildRate : Fx{},
+            });
+        }
 
         // The scale that used to be zeroed here belonged to `UnitInstance`, which the store no
         // longer holds — a corpse is left out of the draw gather instead, which is both
