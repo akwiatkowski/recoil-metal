@@ -449,6 +449,29 @@ TEST_CASE("FA weapon firing arcs are converted to binary radians at load") {
     CHECK(def->weapons[0].arcRangeBrads == 5461);    // rounded 30 / 360 of one turn
 }
 
+TEST_CASE("FA weapon TrackingRadius is dimensionless and defaults without shortening range") {
+    const Blueprint bp{"tracking_radius_unit.bp", R"(
+        UnitBlueprint {
+            Physics = { MotionType = 'RULEUMT_Land', MaxSpeed = 1 },
+            SizeX = 1, SizeZ = 1,
+            Weapon = {
+                { WeaponCategory = 'Defense', Damage = 10, MaxRadius = 20, RateOfFire = 1 },
+                { WeaponCategory = 'Defense', Damage = 10, MaxRadius = 20, RateOfFire = 1,
+                  TrackingRadius = 0.75 },
+                { WeaponCategory = 'Defense', Damage = 10, MaxRadius = 20, RateOfFire = 1,
+                  TrackingRadius = 2 },
+            },
+        }
+    )"};
+
+    const auto def = rm::unitbp::loadFile(bp.path());
+    REQUIRE(def.has_value());
+    REQUIRE(def->weapons.size() == 3);
+    CHECK(def->weapons[0].trackingRadius == rm::sim::Fx::fromInt(1));
+    CHECK(def->weapons[1].trackingRadius == rm::test::fx(0.75f));
+    CHECK(def->weapons[2].trackingRadius == rm::sim::Fx::fromInt(2));
+}
+
 TEST_CASE("FA weapon target restrictions retain complete category expressions") {
     const Blueprint bp{"target_restrictions_unit.bp", R"(
         UnitBlueprint {

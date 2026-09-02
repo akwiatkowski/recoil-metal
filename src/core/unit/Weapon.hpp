@@ -379,6 +379,11 @@ struct Weapon {
     /// corpus (10 shots/second) is exactly one shot per tick, which is presumably why
     /// that is the fastest weapon in the corpus.
     [[nodiscard]] int reloadTicks(sim::TickRate rate = sim::TickRate{}) const noexcept;
+
+    /// `TrackingRadius` is the dimensionless multiplier a point-defence weapon applies to its
+    /// projectile acquisition reach. It is fixed-point at the content boundary; only projectile
+    /// selection may use it, while every unit-targeting path keeps `maxRange`.
+    sim::Fx trackingRadius = sim::Fx::fromInt(1);
 };
 
 /// Reads a blueprint's `Weapon` array — a Lua array, so its entries are positional.

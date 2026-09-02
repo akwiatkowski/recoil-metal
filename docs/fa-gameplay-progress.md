@@ -254,10 +254,11 @@ extent and explicit Attack remains unrestricted. These automatic-acquisition sli
 `SetDoNotTarget` or the engineer reclaim/capture target-exemption rule through the FAF Lua API.
 
 ```text
-/goal Advance FA-WEAPONS by implementing `C-157`'s `IsTargetExempt` reject for engineer
-reclaim/capture orders. Start with allied worker/target regressions; keep the completed
-playable-rectangle filter, explicit Attack, candidate caches, and projectile-defense targeting out
-of scope. Run make test and make verify, then update WP-27 and FA-WEAPONS.
+/goal Advance WP-15 with type-safe unit-target Reclaim/Capture command support before implementing
+`C-157`'s engineer `IsTargetExempt` reject. Feature-only reclaim handles cannot safely name a unit;
+keep the completed playable-rectangle filter, explicit Attack, candidate caches, and
+projectile-defense targeting out of scope. Run make test and make verify, then update WP-15 and
+FA-WEAPONS.
 ```
 
 ### FA-MISSILES - Silos, Missiles, And Interception
@@ -266,11 +267,13 @@ of scope. Run make test and make verify, then update WP-27 and FA-WEAPONS.
 complete ammunition production, launch accounting, or counter-missile gameplay path.
 
 **Current slice:** `C-095` now gives projectile-target weapons a separate nearest-hostile,
-in-range 2-D acquisition path; it neither uses nor mutates unit-target priority/incumbency state.
+in-range 2-D acquisition path with `max(MaxRadius, MaxRadius * TrackingRadius)` reach; it neither
+uses nor mutates unit-target priority/incumbency state.
 `C-086` runs its interceptors through the ordinary swept projectile tick and selects the earliest
 contact deterministically. Fixed-hull defence aims before firing. This is deliberately a baseline:
-there is no tracking/lead, shooter cap, ammo, target restriction, projectile health, or flare path;
-a positive-damage interceptor consumes both shots rather than modelling `C-087`'s projectile damage.
+there is no projectile guidance/lead, shooter cap, ammo, target restriction, projectile health, or
+flare path; a positive-damage interceptor consumes both shots rather than modelling `C-087`'s
+projectile damage.
 
 ```text
 /goal Advance FA-MISSILES by implementing one tactical silo ammunition path from C-081 through

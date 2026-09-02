@@ -41,8 +41,9 @@ namespace {
     return field;
 }
 
-[[nodiscard]] Weapon directFire(float damage, float rangeElmos, float radiusElmos = 0.0f) {
-    Weapon weapon;
+[[nodiscard]] Weapon directFire(float damage, float rangeElmos, float radiusElmos = 0.0f,
+                                rm::sim::Fx trackingRadius = rm::sim::Fx::fromInt(1)) {
+    Weapon weapon{.trackingRadius = trackingRadius};
     weapon.label = "test gun";
     weapon.role = WeaponRole::DirectFire;
     weapon.targetPriorities = {{"LAND"}};
@@ -228,6 +229,52 @@ TEST_CASE("point defence rejects friendly projectiles") {
     CHECK(rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots,
                                rm::sim::TickRate{}) == 0);
     CHECK(shots.size() == 1);
+}
+
+TEST_CASE("point defence applies TrackingRadius only to projectile acquisition") {
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    Roster roster;
+    Weapon pointDefence = directFire(10.0f, 100.0f, 0.0f, rm::sim::Fx::fromInt(2));
+    pointDefence.targetsProjectiles = true;
+    (void)roster.add(roster.addType(gunnerDef(pointDefence)), 0.0f, 0.0f, 0, 100.0f);
+
+    SECTION("it reaches a hostile projectile beyond MaxRadius") {
+        std::vector<Projectile> shots{{.position = rm::test::at(0, 4, 150),
+                                       .firedByArmy = 1,
+                                       .ticksRemaining = 10}};
+        CHECK(rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots,
+                                   rm::sim::TickRate{}) == 1);
+    }
+
+    SECTION("it rejects a hostile projectile beyond the expanded reach") {
+        std::vector<Projectile> shots{{.position = rm::test::at(0, 4, 201),
+                                       .firedByArmy = 1,
+                                       .ticksRemaining = 10}};
+        CHECK(rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots,
+                                   rm::sim::TickRate{}) == 0);
+    }
+
+    SECTION("it does not expand ordinary unit acquisition") {
+        const rm::UnitTypeIndex type = roster.addType(targetDef());
+        (void)roster.add(type, 0.0f, 150.0f, 1, 100.0f);
+        Weapon ordinary = directFire(10.0f, 100.0f, 0.0f, rm::sim::Fx::fromInt(2));
+        CHECK_FALSE(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, ordinary,
+                                            roster.store, armies));
+    }
+}
+
+TEST_CASE("a low TrackingRadius does not shorten point defence MaxRadius") {
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    Roster roster;
+    Weapon pointDefence = directFire(10.0f, 100.0f, 0.0f, rm::test::fx(0.75f));
+    pointDefence.targetsProjectiles = true;
+    (void)roster.add(roster.addType(gunnerDef(pointDefence)), 0.0f, 0.0f, 0, 100.0f);
+
+    std::vector<Projectile> shots{{.position = rm::test::at(0, 4, 100),
+                                   .firedByArmy = 1,
+                                   .ticksRemaining = 10}};
+    CHECK(rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots,
+                               rm::sim::TickRate{}) == 1);
 }
 
 TEST_CASE("a positive interceptor contact consumes both projectiles") {

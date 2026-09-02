@@ -2366,6 +2366,23 @@ registration bridge, but the reason must be explicit.
 - FAF source is supporting evidence only until compared against the owned retail scripts. Every FAF
   citation must state whether the behavior is inherited, changed, or unknown relative to retail.
 
+### 2026-09-02 / C-095 implementation update
+
+Recoil Metal now parses `Weapon.TrackingRadius` as fixed-point with a default of one. Only the
+separate projectile-target acquisition helper uses `max(MaxRadius, MaxRadius * TrackingRadius)`;
+ordinary unit targeting, priority/arc ranking, incumbency, and deterministic projectile tie order
+remain unchanged. Regression coverage pins the absent/low-multiplier floor and the expanded-reach
+boundary. This closes the authored-range portion of `C-095`; `DesiredShooterCap`, target
+restrictions, guidance, and projectile-health interception remain separate gaps.
+
+### 2026-09-02 / C-157 implementation dependency
+
+The playable-rectangle reject is implemented for automatic unit acquisition. The remaining
+engineer `IsTargetExempt` predicate is intentionally deferred: current Reclaim commands target
+features only, Capture is absent, and `FeatureId`/`UnitId` raw handles share values. Implement a
+tagged unit-work target under `WP-15` before admitting this predicate, rather than introducing an
+unsafe handle comparison or inert command.
+
 ## Document maintenance rules
 
 - The dashboard is a shortcut, not a second source of truth. Its counts must match the work-package

@@ -61,18 +61,21 @@ namespace {
 /// The nearest hostile in-flight projectile inside this weapon's authored 2-D reach.
 /// Ties retain vector order, which is deterministic projectile insertion order.
 [[nodiscard]] const Projectile* nearestProjectileTarget(std::array<Fx, 3> from, int fromArmy,
-                                                         const unitdef::Weapon& weapon,
-                                                         const std::vector<Projectile>& projectiles,
-                                                         std::span<const Army> armies) noexcept {
+                                                          const unitdef::Weapon& weapon,
+                                                          const std::vector<Projectile>& projectiles,
+                                                          std::span<const Army> armies) noexcept {
     const Projectile* nearest = nullptr;
     Fx bestDistance{};
+    // `TrackingRadius` belongs exclusively to point-defence acquisition. A multiplier at or
+    // below one cannot shorten ordinary `MaxRadius`; no unit-targeting path consults it.
+    const Fx reach = std::max(weapon.maxRange, weapon.maxRange * weapon.trackingRadius);
     for (const Projectile& candidate : projectiles) {
         if (candidate.ticksRemaining <= 0 || candidate.pendingImpact != ImpactType::Invalid
             || !projectileHostile(fromArmy, candidate, armies)) {
             continue;
         }
         const Fx distance = groundDistanceElmos(from, candidate.position);
-        if (distance > weapon.maxRange || (nearest != nullptr && distance >= bestDistance)) {
+        if (distance > reach || (nearest != nullptr && distance >= bestDistance)) {
             continue;
         }
         nearest = &candidate;

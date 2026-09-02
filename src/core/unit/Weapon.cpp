@@ -99,7 +99,9 @@ std::vector<Weapon> weaponsFrom(const lua::Value& weaponArray, bool airborneSour
     weapons.reserve(weaponArray.items.size());
 
     for (const lua::Value& entry : weaponArray.items) {
-        Weapon weapon;
+        // Dimensionless rather than an ogrid distance. Keep it fixed-point with the rest of
+        // simulation state; `nearestProjectileTarget` clamps values at the ordinary range.
+        Weapon weapon{.trackingRadius = sim::fxFromFloat(numberOr(entry, "TrackingRadius", 1.0f))};
 
         weapon.label = std::string{entry.stringAt("Label").value_or("")};
         weapon.role =
