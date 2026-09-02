@@ -50,6 +50,37 @@ namespace {
     return hostile(*mine, *theirs);
 }
 
+/// Whether a projectile belongs to an army hostile to `attackerArmy`.
+[[nodiscard]] bool projectileHostile(int attackerArmy, const Projectile& candidate,
+                                     std::span<const Army> armies) noexcept {
+    const Army* mine = armyFor(attackerArmy, armies);
+    const Army* theirs = armyFor(candidate.firedByArmy, armies);
+    return mine != nullptr && theirs != nullptr && hostile(*mine, *theirs);
+}
+
+/// The nearest hostile in-flight projectile inside this weapon's authored 2-D reach.
+/// Ties retain vector order, which is deterministic projectile insertion order.
+[[nodiscard]] const Projectile* nearestProjectileTarget(std::array<Fx, 3> from, int fromArmy,
+                                                         const unitdef::Weapon& weapon,
+                                                         const std::vector<Projectile>& projectiles,
+                                                         std::span<const Army> armies) noexcept {
+    const Projectile* nearest = nullptr;
+    Fx bestDistance{};
+    for (const Projectile& candidate : projectiles) {
+        if (candidate.ticksRemaining <= 0 || candidate.pendingImpact != ImpactType::Invalid
+            || !projectileHostile(fromArmy, candidate, armies)) {
+            continue;
+        }
+        const Fx distance = groundDistanceElmos(from, candidate.position);
+        if (distance > weapon.maxRange || (nearest != nullptr && distance >= bestDistance)) {
+            continue;
+        }
+        nearest = &candidate;
+        bestDistance = distance;
+    }
+    return nearest;
+}
+
 /// The biggest collision radius in the store.
 ///
 /// Needed because two of the queries below have a PER-TARGET tolerance — a big unit is easier
@@ -195,6 +226,40 @@ struct SweptHit {
         }
     }
     return enter;
+}
+
+/// The first hostile projectile touched by an interceptor's ordinary tick sweep.
+struct ProjectileTickStart {
+    std::array<Fx, 3> position{};
+    bool inFlight = false;
+};
+
+[[nodiscard]] Projectile* interceptedProjectile(const Projectile& interceptor,
+                                                 std::array<Fx, 3> from,
+                                                 std::array<Fx, 3> to,
+                                                 std::vector<Projectile>& projectiles,
+                                                 std::span<const ProjectileTickStart> starts,
+                                                 std::span<const Army> armies) noexcept {
+    Projectile* earliest = nullptr;
+    std::optional<SweepFraction> earliestEntry;
+    for (std::size_t index = 0; index < projectiles.size(); ++index) {
+        Projectile& candidate = projectiles[index];
+        if (&candidate == &interceptor || !starts[index].inFlight
+            || (candidate.ticksRemaining <= 0 && candidate.pendingImpact == ImpactType::Invalid)
+            || !projectileHostile(interceptor.firedByArmy, candidate, armies)) {
+            continue;
+        }
+        // Projectiles have no authored collision radius in this slice. Their positions are
+        // therefore the contact primitive, tested against the interceptor's swept segment.
+        const std::optional<SweepFraction> entry =
+            segmentBoxEntry(from, to, starts[index].position, starts[index].position,
+                            SweepFraction{}, kSweepOne);
+        if (entry && (!earliestEntry || *entry < *earliestEntry)) {
+            earliest = &candidate;
+            earliestEntry = entry;
+        }
+    }
+    return earliest;
 }
 
 /// Earliest point an extended flight segment enters a spherical ordinary shield.  The search is
@@ -612,7 +677,7 @@ std::optional<UnitId> nearestTarget(std::array<Fx, 3> from, int fromArmy,
                                       std::span<const Army> armies, const Intel* intel,
                                       const UnitCatalog* catalog, std::optional<Brad> heading,
                                       std::optional<UnitId> incumbent) {
-    if (!weapon.fires() || weapon.targetPriorities.empty()) {
+    if (!weapon.fires() || weapon.targetsProjectiles || weapon.targetPriorities.empty()) {
         return std::nullopt;
     }
 
@@ -745,7 +810,8 @@ bool canFireAt(const unitdef::Weapon& weapon, Brad yaw, Brad bearing) noexcept {
 }
 
 std::size_t aimAtTargets(UnitStore& store, const UnitCatalog& catalog,
-                         std::span<const Army> armies, const Intel* intel) {
+                         std::span<const Army> armies, const Intel* intel,
+                         const std::vector<Projectile>* projectiles) {
     const std::span<Transform> transforms = store.transforms();
     const std::span<const MoveState> motion = store.motion();
     const std::span<const Health> healths = store.health();
@@ -773,45 +839,61 @@ std::size_t aimAtTargets(UnitStore& store, const UnitCatalog& catalog,
         // weapons and costs nothing next to the sweep below.
         // Query the real weapons. Combining the longest range with a union of target masks
         // invents a gun the unit does not own (for example long surface range plus short AA).
-        std::optional<UnitId> target;
+        std::optional<std::array<Fx, 3>> targetPosition;
+        std::optional<UnitId> targetUnit;
         Fx targetDistance{};
         for (std::size_t w = 0; w < def->weapons.size(); ++w) {
             const unitdef::Weapon& weapon = def->weapons[w];
-            if (!weapon.fires() || weapon.turreted) {
+            if ((!weapon.fires() && !weapon.firesAtProjectiles()) || weapon.turreted) {
                 continue;
             }
             const std::array<Fx, 3> from = positionOf(transforms[slot]);
-            std::optional<UnitId> candidate;
-            if (hasExplicitAttack) {
-                candidate = forced && canShootExplicitTarget(*forced, from, motion[slot].armyIndex,
-                                                              weapon, store, armies, catalog, intel)
-                                ? forced
-                                : std::nullopt;
+            std::optional<std::array<Fx, 3>> candidatePosition;
+            std::optional<UnitId> candidateUnit;
+            if (weapon.targetsProjectiles) {
+                if (projectiles != nullptr) {
+                    if (const Projectile* candidate = nearestProjectileTarget(
+                            from, motion[slot].armyIndex, weapon, *projectiles, armies)) {
+                        candidatePosition = candidate->position;
+                    }
+                }
             } else {
-                const std::optional<UnitId> incumbent =
-                    slot < healths.size() && w < healths[slot].automaticTargets.size()
-                        ? std::optional<UnitId>{healths[slot].automaticTargets[w]}
-                        : std::nullopt;
-                candidate = nearestTarget(from, motion[slot].armyIndex, weapon, store, armies,
-                                          intel, &catalog, transforms[slot].heading, incumbent);
+                if (hasExplicitAttack) {
+                    candidateUnit = forced && canShootExplicitTarget(
+                                                 *forced, from, motion[slot].armyIndex, weapon,
+                                                 store, armies, catalog, intel)
+                                        ? forced
+                                        : std::nullopt;
+                } else {
+                    const std::optional<UnitId> incumbent =
+                        slot < healths.size() && w < healths[slot].automaticTargets.size()
+                            ? std::optional<UnitId>{healths[slot].automaticTargets[w]}
+                            : std::nullopt;
+                    candidateUnit = nearestTarget(from, motion[slot].armyIndex, weapon, store,
+                                                  armies, intel, &catalog,
+                                                  transforms[slot].heading, incumbent);
+                }
+                if (candidateUnit) {
+                    candidatePosition = positionOf(transforms[candidateUnit->index]);
+                }
             }
-            if (!candidate) {
+            if (!candidatePosition) {
                 continue;
             }
-            const Fx distance = groundDistanceElmos(positionOf(transforms[slot]),
-                                                    positionOf(transforms[candidate->index]));
-            if (!target || distance < targetDistance
-                || (distance == targetDistance && candidate->index < target->index)) {
-                target = candidate;
+            const Fx distance = groundDistanceElmos(from, *candidatePosition);
+            if (!targetPosition || distance < targetDistance
+                || (distance == targetDistance && candidateUnit && targetUnit
+                    && candidateUnit->index < targetUnit->index)) {
+                targetPosition = candidatePosition;
+                targetUnit = candidateUnit;
                 targetDistance = distance;
             }
         }
-        if (!target) {
+        if (!targetPosition) {
             continue;
         }
 
-        const std::array<Fx, 3> at = positionOf(transforms[target->index]);
-        const Brad bearing = bearingTo(positionOf(transforms[slot]), at);
+        const Brad bearing = bearingTo(positionOf(transforms[slot]), *targetPosition);
         const std::uint32_t error = headingError(transforms[slot].heading, bearing);
         // Aimed exactly: nothing to turn. (This used to read `error <= 1e-4f`, a float
         // literal against an unsigned integer — invisible to the no-float check because it
@@ -868,7 +950,7 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
 
         for (std::size_t w = 0; w < def->weapons.size(); ++w) {
             const unitdef::Weapon& weapon = def->weapons[w];
-            if (!weapon.fires()) {
+            if (!weapon.fires() && !weapon.firesAtProjectiles()) {
                 // A MANUAL weapon's reload still counts down here, where every reload
                 // does — `fireOvercharge` only checks readiness, and a cooldown that
                 // ticked only while an order was held would punish the second click for
@@ -892,6 +974,49 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
                 --health.reloadRemaining[w];
             }
             if (health.reloadRemaining[w] > 0) {
+                continue;
+            }
+
+            if (weapon.targetsProjectiles) {
+                const Projectile* target =
+                    nearestProjectileTarget(from, army, weapon, projectiles, armies);
+                if (target == nullptr) {
+                    continue;
+                }
+                const std::array<Fx, 3> targetPosition = target->position;
+                if (!canFireAt(weapon, transforms[slot].heading,
+                               bearingTo(from, targetPosition))) {
+                    continue;
+                }
+
+                const UnitCatalog::WeaponRates& rates =
+                    catalog.weaponRates(store.typeAt(slot), w);
+                const int volley = weapon.bursts() ? 1 : rates.burstSize;
+                for (int shot = 0; shot < volley; ++shot) {
+                    projectiles.push_back(launch(from, targetPosition, weapon, army, rate,
+                                                  rates.muzzlePerTick, rates.damage,
+                                                  store.idAt(slot), true));
+                }
+                emit(events, Event{
+                                 .kind = EventKind::WeaponFired,
+                                 .unit = store.idAt(slot),
+                                 .army = army,
+                                 .amount = weapon.damage,
+                                 .at = from,
+                             });
+                ++fired;
+                if (weapon.bursts()) {
+                    if (health.burstRemaining[w] == 0) {
+                        health.burstRemaining[w] = rates.burstSize;
+                    }
+                    --health.burstRemaining[w];
+                    health.reloadRemaining[w] = health.burstRemaining[w] > 0
+                                                    ? static_cast<int>(rates.burstDelayTicks)
+                                                    : static_cast<int>(rates.reloadTicks);
+                } else {
+                    health.burstRemaining[w] = 0;
+                    health.reloadRemaining[w] = static_cast<int>(rates.reloadTicks);
+                }
                 continue;
             }
 
@@ -1138,8 +1263,8 @@ void tickShields(UnitStore& store, const UnitCatalog& catalog, EventQueue* event
 }
 
 Projectile launch(std::array<Fx, 3> from, std::array<Fx, 3> to,
-                  const unitdef::Weapon& weapon, int byArmy, TickRate rate, Fx muzzlePerTick,
-                  const unitdef::DamageProfile& damage, UnitId firedBy) {
+                   const unitdef::Weapon& weapon, int byArmy, TickRate rate, Fx muzzlePerTick,
+                   const unitdef::DamageProfile& damage, UnitId firedBy, bool interceptor) {
     Projectile shot;
     shot.firedBy = firedBy;
     // The model's own muzzle when the app resolved one, the old constant when not —
@@ -1150,13 +1275,15 @@ Projectile launch(std::array<Fx, 3> from, std::array<Fx, 3> to,
     shot.damageRadiusElmos = weapon.damageRadius;
     shot.targetLayers = weapon.targetLayers;
     shot.firedByArmy = byArmy;
+    shot.interceptor = interceptor;
     shot.arc = weapon.arc;
     shot.ticksRemaining = static_cast<int>(rate.ticks(kProjectileLifetime));
 
     // Aimed from the MUZZLE at the target's middle, not from foot to foot: a shot that
     // leaves four elmos up and is aimed level would sail over its target.
     const Fx dx = to[0] - shot.position[0];
-    const Fx dy = (to[1] + kMuzzleHeight * Fx::fromRatio(1, 2)) - shot.position[1];
+    const Fx dy = (interceptor ? to[1] : to[1] + kMuzzleHeight * Fx::fromRatio(1, 2))
+                  - shot.position[1];
     const Fx dz = to[2] - shot.position[2];
     const Fx ground = fxHypot(dx, dz);
 
@@ -1539,6 +1666,13 @@ void advanceProjectiles(std::vector<Projectile>& projectiles, UnitStore& store,
                         std::span<const Army> armies, const Terrain& terrain, TickRate rate,
                         EventQueue* events, const UnitCatalog* catalog) {
     const Fx gravityPerTickSquared = projectileGravityPerTickSquared(rate);
+    std::vector<ProjectileTickStart> starts;
+    starts.reserve(projectiles.size());
+    for (const Projectile& shot : projectiles) {
+        starts.push_back({.position = shot.position,
+                          .inFlight = shot.ticksRemaining > 0
+                                      && shot.pendingImpact == ImpactType::Invalid});
+    }
 
     for (Projectile& shot : projectiles) {
         // Retail detects contact in one MotionTick and invokes Impact at the start of the next.
@@ -1601,6 +1735,22 @@ void advanceProjectiles(std::vector<Projectile>& projectiles, UnitStore& store,
                 oldVelocity[axis]
                 + (shot.velocity[axis] - oldVelocity[axis]) * Fx::fromRatio(1, 2);
             shot.position[axis] += averageVelocity;
+        }
+
+        if (shot.interceptor) {
+            // Untracked projectiles have no health pool in this baseline. A positive hit is
+            // enough to consume both shots; a zero-damage interceptor simply passes through.
+            if (shot.damage.base > Mag{}) {
+                if (Projectile* target = interceptedProjectile(shot, from, shot.position,
+                                                                projectiles, starts,
+                                                                armies)) {
+                    target->pendingImpact = ImpactType::Invalid;
+                    target->impactTarget = {};
+                    target->ticksRemaining = 0;
+                    shot.ticksRemaining = 0;
+                }
+            }
+            continue;
         }
 
         // TWO ways a shot ends, and both are needed.

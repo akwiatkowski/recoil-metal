@@ -72,7 +72,7 @@ excluded from the headline.
 | [`FA-NAVY`](#fa-navy---surface-and-submerged-warfare) | Surface and submerged warfare | `WP-23`-`24` | 35% | 10% | 75% | Implement one complete `SurfacingSub` dive/surface slice. |
 | [`FA-TRANSPORT`](#fa-transport---attachments-cargo-and-ferries) | Attachments, cargo, ferries | `WP-25` | 25% | 5% | 95% | Add authored bone-local transforms and attachment motion state before transport load/unload. |
 | [`FA-WEAPONS`](#fa-weapons---targeting-weapons-and-projectiles) | Targeting, weapons, projectiles | `WP-27`-`28` | 95% | 70% | 90% | Implement `C-157` target exemption and playable-rectangle rejection, then add the remaining death, manual-fire, and projectile-defense paths. |
-| [`FA-MISSILES`](#fa-missiles---silos-missiles-and-interception) | Silos, missiles, interception | `WP-29` | 5% | 0% | 90% | Implement tactical silo ammo production and decrement-then-fire. |
+| [`FA-MISSILES`](#fa-missiles---silos-missiles-and-interception) | Silos, missiles, interception | `WP-29` | 15% | 5% | 90% | Implement tactical silo ammo production and decrement-then-fire. |
 | [`FA-DAMAGE`](#fa-damage---damage-death-and-shields) | Damage, death, shields | `WP-30`-`32` | 70% | 40% | 75% | Add the next collidable shield slice: area-shield admission and stacking. |
 | [`FA-INTEL`](#fa-intel---vision-radar-sonar-and-counter-intel) | Vision, radar, sonar, counter-intel | `WP-33` | 70% | 45% | 90% | Add bounded retained-contact reaping/redetection and radar-error aiming. |
 | [`FA-PROGRESS`](#fa-progress---enhancements-veterancy-and-special-units) | Enhancements, veterancy, special units | `WP-34`-`36` | 35% | 20% | 35% | Complete the enhancement lifecycle specification around `CUnitScriptTask`. |
@@ -261,6 +261,13 @@ and make verify, then update WP-27 and FA-WEAPONS.
 
 **Largest gap:** retail silo and interception behavior is well analyzed, but Recoil Metal has no
 complete ammunition production, launch accounting, or counter-missile gameplay path.
+
+**Current slice:** `C-095` now gives projectile-target weapons a separate nearest-hostile,
+in-range 2-D acquisition path; it neither uses nor mutates unit-target priority/incumbency state.
+`C-086` runs its interceptors through the ordinary swept projectile tick and selects the earliest
+contact deterministically. Fixed-hull defence aims before firing. This is deliberately a baseline:
+there is no tracking/lead, shooter cap, ammo, target restriction, projectile health, or flare path;
+a positive-damage interceptor consumes both shots rather than modelling `C-087`'s projectile damage.
 
 ```text
 /goal Advance FA-MISSILES by implementing one tactical silo ammunition path from C-081 through

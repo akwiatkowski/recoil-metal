@@ -497,6 +497,7 @@ TEST_CASE("FA point defence weapons retain their projectile target type") {
     REQUIRE(def->weapons.size() == 2);
     CHECK(def->weapons[0].targetsProjectiles);
     CHECK_FALSE(def->weapons[0].fires());
+    CHECK(def->weapons[0].firesAtProjectiles());
     CHECK_FALSE(def->weapons[1].targetsProjectiles);
     CHECK(def->weapons[1].fires());
 }

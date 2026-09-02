@@ -68,6 +68,9 @@ struct Projectile {
     /// at launch, because a unit may change hands between the two.
     int firedByArmy = kNoArmy;
 
+    /// A point-defence shot. It contacts hostile projectiles rather than unit collision bodies.
+    bool interceptor = false;
+
     /// Whether it arcs. A flat shot travels in a straight line; an arced one is pulled
     /// down by gravity, which is what makes it clear a hill.
     unitdef::BallisticArc arc = unitdef::BallisticArc::None;
@@ -207,8 +210,11 @@ inline constexpr Seconds kProjectileLifetime = Seconds{30.0f};
 /// `fireWeapons`.
 /// `intel` gates what may be aimed at, exactly as it gates what may be shot — a hull
 /// swinging round to face something its side cannot see would give the position away.
+/// `projectiles` lets unturreted point defence bring its hull to the hostile shot it will
+/// intercept; callers without a projectile world simply have none to aim at.
 std::size_t aimAtTargets(UnitStore& store, const UnitCatalog& catalog,
-                         std::span<const Army> armies, const Intel* intel = nullptr);
+                          std::span<const Army> armies, const Intel* intel = nullptr,
+                          const std::vector<Projectile>* projectiles = nullptr);
 
 /// Advances reloads, picks targets, and appends the shots fired this tick.
 ///
@@ -277,9 +283,9 @@ void advanceProjectiles(std::vector<Projectile>& projectiles, UnitStore& store,
 /// for the same reason `muzzlePerTick` is: the authored figure becomes a usable one only once
 /// the match's armour classes are known, and that resolution belongs to `UnitCatalog`.
 [[nodiscard]] Projectile launch(std::array<Fx, 3> from, std::array<Fx, 3> to,
-                                const unitdef::Weapon& weapon, int byArmy, TickRate rate,
-                                Fx muzzlePerTick, const unitdef::DamageProfile& damage,
-                                UnitId firedBy = {});
+                                 const unitdef::Weapon& weapon, int byArmy, TickRate rate,
+                                 Fx muzzlePerTick, const unitdef::DamageProfile& damage,
+                                 UnitId firedBy = {}, bool interceptor = false);
 
 /// Spreads `damage` over everything within `radiusElmos` of `centre`, and returns how
 /// much was dealt in total.

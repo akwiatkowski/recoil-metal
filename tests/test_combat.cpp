@@ -192,6 +192,174 @@ TEST_CASE("point defence does not acquire or fire at units") {
     CHECK(shots.empty());
 }
 
+TEST_CASE("point defence fires an interceptor at the nearest hostile projectile") {
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    Roster roster;
+    Weapon pointDefence = directFire(10.0f, 300.0f);
+    pointDefence.targetsProjectiles = true;
+    (void)roster.add(roster.addType(gunnerDef(pointDefence)), 0.0f, 0.0f, 0, 100.0f);
+
+    Projectile friendly{.position = rm::test::at(0, 4, 20), .firedByArmy = 0,
+                        .ticksRemaining = 10};
+    Projectile farHostile{.position = rm::test::at(100, 4, 0), .firedByArmy = 1,
+                          .ticksRemaining = 10};
+    Projectile nearHostile{.position = rm::test::at(0, 4, 50), .firedByArmy = 1,
+                           .ticksRemaining = 10};
+    std::vector<Projectile> shots{friendly, farHostile, nearHostile};
+
+    REQUIRE(rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots,
+                                  rm::sim::TickRate{}) == 1);
+    REQUIRE(shots.size() == 4);
+    CHECK(shots.back().interceptor);
+    CHECK(shots.back().velocity[0] == rm::sim::Fx{});
+    CHECK(shots.back().velocity[2] == rm::test::fx(10.0f));
+}
+
+TEST_CASE("point defence rejects friendly projectiles") {
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    Roster roster;
+    Weapon pointDefence = directFire(10.0f, 300.0f);
+    pointDefence.targetsProjectiles = true;
+    (void)roster.add(roster.addType(gunnerDef(pointDefence)), 0.0f, 0.0f, 0, 100.0f);
+
+    std::vector<Projectile> shots{{.position = rm::test::at(0, 4, 50),
+                                   .firedByArmy = 0,
+                                   .ticksRemaining = 10}};
+    CHECK(rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots,
+                               rm::sim::TickRate{}) == 0);
+    CHECK(shots.size() == 1);
+}
+
+TEST_CASE("a positive interceptor contact consumes both projectiles") {
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    Roster roster;
+    Weapon pointDefence = directFire(10.0f, 300.0f);
+    pointDefence.targetsProjectiles = true;
+    (void)roster.add(roster.addType(gunnerDef(pointDefence)), 0.0f, 0.0f, 0, 100.0f);
+
+    std::vector<Projectile> shots{{.position = rm::test::at(0, 4, 10),
+                                   .damage = rm::unitdef::flatDamage(rm::test::mag(10.0f)),
+                                   .firedByArmy = 1,
+                                   .ticksRemaining = 10}};
+    REQUIRE(rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots,
+                                  roster.rate) == 1);
+    REQUIRE(shots.size() == 2);
+
+    rm::sim::advanceProjectiles(shots, roster.store, armies,
+                                rm::sim::Terrain{flatField()}, roster.rate, nullptr,
+                                &roster.catalog);
+    CHECK(shots.empty());
+}
+
+TEST_CASE("an interceptor removes the nearest projectile on its sweep") {
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    Roster roster;
+
+    Projectile far{.position = rm::test::at(0, 0, 15), .firedByArmy = 1, .ticksRemaining = 2};
+    Projectile near{.position = rm::test::at(0, 0, 5), .firedByArmy = 1, .ticksRemaining = 2};
+    Projectile interceptor{.position = rm::test::at(0, 0, 0),
+                           .velocity = rm::test::at(0, 0, 20),
+                           .damage = rm::unitdef::flatDamage(rm::test::mag(10.0f)),
+                           .firedByArmy = 0,
+                           .interceptor = true,
+                           .ticksRemaining = 2};
+    std::vector<Projectile> shots{far, near, interceptor};
+
+    rm::sim::advanceProjectiles(shots, roster.store, armies,
+                                rm::sim::Terrain{flatField(-100.0f)}, roster.rate, nullptr,
+                                &roster.catalog);
+    REQUIRE(shots.size() == 1);
+    CHECK(shots.front().position == far.position);
+}
+
+TEST_CASE("interception uses projectile positions from the start of the tick") {
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    Roster roster;
+    Projectile hostile{.position = rm::test::at(0, 0, 5),
+                       .velocity = rm::test::at(0, 0, 20),
+                       .firedByArmy = 1,
+                       .ticksRemaining = 2};
+    Projectile interceptor{.position = rm::test::at(0, 0, 0),
+                           .velocity = rm::test::at(0, 0, 20),
+                           .damage = rm::unitdef::flatDamage(rm::test::mag(10.0f)),
+                           .firedByArmy = 0,
+                           .interceptor = true,
+                           .ticksRemaining = 2};
+    const auto advance = [&](std::vector<Projectile> shots) {
+        rm::sim::advanceProjectiles(shots, roster.store, armies,
+                                    rm::sim::Terrain{flatField(-100.0f)}, roster.rate, nullptr,
+                                    &roster.catalog);
+        return shots;
+    };
+
+    CHECK(advance({hostile, interceptor}).empty());
+    CHECK(advance({interceptor, hostile}).empty());
+}
+
+TEST_CASE("interception considers a shot in flight before its terrain impact") {
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    Roster roster;
+    Projectile hostile{.position = rm::test::at(0, 10, 5),
+                       .velocity = rm::test::at(0, -20, 0),
+                       .firedByArmy = 1,
+                       .ticksRemaining = 2};
+    Projectile interceptor{.position = rm::test::at(0, 10, 0),
+                           .velocity = rm::test::at(0, 0, 20),
+                           .damage = rm::unitdef::flatDamage(rm::test::mag(10.0f)),
+                           .firedByArmy = 0,
+                           .interceptor = true,
+                           .ticksRemaining = 2};
+    const auto advance = [&](std::vector<Projectile> shots) {
+        rm::sim::advanceProjectiles(shots, roster.store, armies,
+                                    rm::sim::Terrain{flatField()}, roster.rate, nullptr,
+                                    &roster.catalog);
+        return shots;
+    };
+
+    CHECK(advance({hostile, interceptor}).empty());
+    CHECK(advance({interceptor, hostile}).empty());
+}
+
+TEST_CASE("an already-consumed projectile cannot consume another interceptor") {
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    Roster roster;
+    Projectile hostile{.position = rm::test::at(0, 0, 5), .firedByArmy = 1,
+                       .ticksRemaining = 2};
+    Projectile first{.position = rm::test::at(0, 0, 0),
+                     .velocity = rm::test::at(0, 0, 20),
+                     .damage = rm::unitdef::flatDamage(rm::test::mag(10.0f)),
+                     .firedByArmy = 0,
+                     .interceptor = true,
+                     .ticksRemaining = 2};
+    Projectile second = first;
+    std::vector<Projectile> shots{hostile, first, second};
+
+    rm::sim::advanceProjectiles(shots, roster.store, armies,
+                                rm::sim::Terrain{flatField(-100.0f)}, roster.rate, nullptr,
+                                &roster.catalog);
+    REQUIRE(shots.size() == 1);
+    CHECK(shots.front().interceptor);
+}
+
+TEST_CASE("an unturreted point defence weapon aims before it fires") {
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    Roster roster;
+    Weapon pointDefence = directFire(10.0f, 300.0f);
+    pointDefence.targetsProjectiles = true;
+    pointDefence.turreted = false;
+    pointDefence.firingToleranceBrads = rm::unitdef::firingToleranceBradsFromDegrees(2.0f);
+    const UnitId gunner =
+        roster.add(roster.addType(gunnerDef(pointDefence)), 0.0f, 0.0f, 0, 100.0f);
+    roster.motion(gunner).turnPerTick = rm::sim::kBradQuarterTurn;
+
+    std::vector<Projectile> shots{{.position = rm::test::at(50, 4, 0),
+                                   .firedByArmy = 1,
+                                   .ticksRemaining = 10}};
+    CHECK(rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots, roster.rate) == 0);
+    CHECK(rm::sim::aimAtTargets(roster.store, roster.catalog, armies, nullptr, &shots) == 1);
+    CHECK(rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots, roster.rate) == 1);
+}
+
 TEST_CASE("a unit shoots the nearest enemy and never a friend") {
     const std::vector<Army> armies = rm::sim::freeForAll(2);
 
@@ -1845,6 +2013,33 @@ TEST_CASE("an idle unit turns to bring its gun to bear, at its own rate") {
     }
     CHECK(rm::sim::headingError(roster.transform(gunner).heading, rm::sim::kBradQuarterTurn)
           < 200);  // within ~1 degree of due +X
+}
+
+TEST_CASE("fixed-hull aiming breaks equal-distance unit targets by lower ID") {
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    Weapon first = directFire(10.0f, 300.0f);
+    first.targetPriorities = {{"B"}};
+    Weapon second = directFire(10.0f, 300.0f);
+    second.targetPriorities = {{"A"}};
+    UnitDef gunner;
+    gunner.name = "test_fixed_hull";
+    gunner.weapons = {first, second};
+    UnitDef typeA = targetDef();
+    typeA.name = "test_type_a";
+    typeA.categories = {"A"};
+    UnitDef typeB = targetDef();
+    typeB.name = "test_type_b";
+    typeB.categories = {"B"};
+
+    Roster roster;
+    const UnitId shooter =
+        roster.add(roster.addType(gunner), 0.0f, 0.0f, 0, 100.0f);
+    roster.motion(shooter).turnPerTick = rm::sim::kBradQuarterTurn;
+    (void)roster.add(roster.addType(typeA), 100.0f, 0.0f, 1, 100.0f);
+    (void)roster.add(roster.addType(typeB), -100.0f, 0.0f, 1, 100.0f);
+
+    CHECK(rm::sim::aimAtTargets(roster.store, roster.catalog, armies) == 1);
+    CHECK(roster.transform(shooter).heading == rm::sim::kBradQuarterTurn);
 }
 
 TEST_CASE("a moving unit is not turned by aiming, and a turreted one has no reason to") {

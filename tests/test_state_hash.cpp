@@ -241,6 +241,15 @@ TEST_CASE("a projectile's target layer changes the hash") {
     CHECK(surface.hash() != air.hash());
 }
 
+TEST_CASE("a projectile's interceptor role changes the hash") {
+    Fixture ordinary;
+    Fixture interceptor;
+    ordinary.projectiles.push_back({.ticksRemaining = 1});
+    interceptor.projectiles.push_back({.interceptor = true, .ticksRemaining = 1});
+
+    CHECK(ordinary.hash() != interceptor.hash());
+}
+
 TEST_CASE("a projectile's pending impact and target generation change the hash") {
     const auto hashWith = [](rm::sim::ImpactType impact, rm::sim::UnitId target) {
         Fixture fixture;

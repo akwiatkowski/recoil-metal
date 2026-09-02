@@ -1079,6 +1079,27 @@ TEST_CASE("an attack with a target is a pursuit: chase, hold in range, finish on
     CHECK(fixture.roster.store.orders()[hunter.index].empty());
 }
 
+TEST_CASE("a projectile-only defence weapon cannot accept a unit attack order") {
+    Fixture fixture;
+    rm::unitdef::UnitDef pointDefence;
+    pointDefence.name = "test_point_defence";
+    pointDefence.motion = rm::unitdef::MotionType::Land;
+    rm::unitdef::Weapon interceptor;
+    interceptor.label = "interceptor";
+    interceptor.damage = rm::sim::magFromFloat(10.0f);
+    interceptor.maxRange = rm::test::fx(300.0f);
+    interceptor.rateOfFire = 1.0f;
+    interceptor.targetsProjectiles = true;
+    pointDefence.weapons.push_back(interceptor);
+    const UnitId defender =
+        fixture.roster.add(fixture.roster.addType(pointDefence), 200.0f, 200.0f, 0, 500.0f);
+
+    Command attack = moveOrder(0, 0, defender, 600.0f, 600.0f);
+    attack.kind = CommandKind::Attack;
+    attack.target = fixture.theirs;
+    CHECK_FALSE(fixture.apply(attack));
+}
+
 TEST_CASE("a short-range pursuit closes inside the target's path cell") {
     Fixture fixture;
 

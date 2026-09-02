@@ -576,6 +576,9 @@ StateHash hashMatch(const UnitStore& store, const Match& match) {
                 feed(h, static_cast<int>(shot.targetLayers));
             }
             feed(h, shot.firedByArmy);
+            if (shot.interceptor) {
+                feed(h, true);
+            }
             // The shooter's identity is live execution state: at impact it becomes
             // `lastHitBy`, which decides kill attribution. Two runs differing only here
             // hash identically for the whole flight — up to thirty seconds — before the

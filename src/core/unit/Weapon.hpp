@@ -330,14 +330,23 @@ struct Weapon {
     /// away before anything reached it.
     bool enabledByEnhancement = false;
 
-    /// Whether this weapon is one this engine fires at a target.
+    /// Whether this weapon automatically fires at units.
     ///
     /// The `Death` exclusion is the load-bearing one; manual and enhancement-gated
     /// weapons wait for orders and upgrades that never come here. A weapon with no
     /// range or no rate of fire is also excluded: both are things a gun must have, and
     /// a "weapon" lacking them is a table describing something else.
     [[nodiscard]] bool fires() const noexcept {
-        return role != WeaponRole::Death && !targetsProjectiles && !manualFire && !enabledByEnhancement
+        return automaticallyFires() && !targetsProjectiles;
+    }
+
+    /// Whether this weapon automatically fires at projectiles rather than units.
+    [[nodiscard]] bool firesAtProjectiles() const noexcept {
+        return automaticallyFires() && targetsProjectiles;
+    }
+
+    [[nodiscard]] bool automaticallyFires() const noexcept {
+        return role != WeaponRole::Death && !manualFire && !enabledByEnhancement
             && maxRange > sim::Fx{} && rateOfFire > 0.0f && damage > sim::Mag{};
     }
 
