@@ -120,6 +120,36 @@ TEST_CASE("only removing the queue head emits aborted") {
                                   rm::sim::CommandQueueStatus::Removed});
 }
 
+TEST_CASE("exact rotation moves only the named shared command and keeps the active head") {
+    const auto payload = [](std::uint32_t counter) {
+        return std::make_shared<const rm::sim::SharedCommand>(rm::sim::SharedCommand{
+            .source = 0,
+            .id = rm::commandId(0, counter),
+            .kind = CommandKind::Build,
+            .buildType = 7,
+            .creationSerial = counter,
+            .originalCount = 1,
+            .remainingCount = 1,
+        });
+    };
+    const auto first = payload(1);
+    const auto selected = payload(2);
+    const auto equalNeighbor = payload(3);
+    CommandQueue queue;
+    queue.append(rm::sim::QueuedCommand{UnitId{0, 1}, first});
+    queue.append(rm::sim::QueuedCommand{UnitId{0, 1}, selected});
+    queue.append(rm::sim::QueuedCommand{UnitId{0, 1}, equalNeighbor});
+    queue.markCurrentActive();
+
+    REQUIRE(queue.cycleExact(selected.get()) == 1);
+    REQUIRE(queue.entries().size() == 3);
+    CHECK(queue.entries()[0].payload().id == first->id);
+    CHECK(queue.entries()[1].payload().id == equalNeighbor->id);
+    CHECK(queue.entries()[2].payload().id == selected->id);
+    REQUIRE(queue.active() != nullptr);
+    CHECK(queue.active()->payload().id == first->id);
+}
+
 TEST_CASE("a shift-order appends behind what is already there") {
     CommandQueue queue;
     CHECK(queue.give(moveTo(100, 0), false) == Result::Replaced);
@@ -582,7 +612,7 @@ TEST_CASE("count exhaustion removes one exact shared command from every member q
         const rm::sim::QueuedCommand* remaining = roster.store.orders()[unit.index].current();
         REQUIRE(remaining != nullptr);
         CHECK(remaining->payload().id == follower.id);
-        CHECK(remaining->targetX() == follower.targetX);
+        CHECK(remaining->payload().targetX == follower.targetX);
     }
 }
 
@@ -1556,8 +1586,478 @@ TEST_CASE("factory repeat consumes a shared count before cycling mobile producti
     building.back().buildTimeRemaining = rm::sim::Mag{};
     CHECK(rm::sim::advanceOrders(roster.store, roster.catalog, terrain, grids, roster.rate,
                                  &building)
+          == 1);
+    REQUIRE(roster.store.orders()[factory.index].active() != nullptr);
+    CHECK(roster.store.orders()[factory.index].active()->payload().id == repeated);
+    CHECK(roster.store.liveCommand(repeated)->remainingCount == 1);
+
+    building.back().buildTimeRemaining = rm::sim::Mag{};
+    CHECK(rm::sim::advanceOrders(roster.store, roster.catalog, terrain, grids, roster.rate,
+                                 &building)
           == 0);
     CHECK(roster.store.orders()[factory.index].empty());
+}
+
+TEST_CASE("one factory finishing a grouped build leaves its sibling factory's order owned") {
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    const rm::sim::PassabilityGrid grid =
+        rm::sim::buildPassability(field, 0.0f, 60.0f, 0.0f);
+
+    rm::test::Roster roster;
+    rm::unitdef::UnitDef factoryDef;
+    factoryDef.name = "factory";
+    factoryDef.categories = {"FACTORY"};
+    factoryDef.buildRate = 10.0f;
+    factoryDef.buildableCategory = {{"PRODUCT"}};
+    const rm::UnitTypeIndex factoryType = roster.addType(factoryDef);
+    rm::unitdef::UnitDef productDef = walkerDef();
+    productDef.name = "product";
+    productDef.categories = {"PRODUCT"};
+    productDef.buildTime = rm::sim::magFromFloat(100.0f);
+    const rm::UnitTypeIndex productType = roster.addType(productDef);
+    const UnitId first = roster.add(factoryType, 40.0f, 40.0f, 0, 100.0f);
+    const UnitId second = roster.add(factoryType, 80.0f, 40.0f, 0, 100.0f);
+    const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(1);
+    const std::vector<rm::sim::Player> players{rm::sim::Player{.index = 0, .army = 0}};
+    const std::vector<const rm::sim::PassabilityGrid*> grids{&grid, &grid};
+    std::vector<rm::sim::Construction> building;
+
+    const CommandIssue grouped{.source = 0,
+                               .id = rm::commandId(0, 51),
+                               .player = 0,
+                               .kind = CommandKind::Build,
+                               .units = {second, first},
+                               .buildType = productType};
+    REQUIRE(rm::sim::applyCommand(grouped, roster.store, roster.catalog, players, armies,
+                                  terrain, [&grid](UnitId) { return &grid; }, roster.rate,
+                                  &building));
+    REQUIRE(building.size() == 2);
+    const auto firstWork = std::ranges::find(building, first, &rm::sim::Construction::builder);
+    REQUIRE(firstWork != building.end());
+    firstWork->buildTimeRemaining = rm::sim::Mag{};
+
+    (void)rm::sim::advanceOrders(roster.store, roster.catalog, terrain, grids, roster.rate,
+                                 &building);
+
+    CHECK(roster.store.orders()[first.index].empty());
+    REQUIRE(roster.store.orders()[second.index].active() != nullptr);
+    CHECK(roster.store.orders()[second.index].active()->payload().id == grouped.id);
+    const std::shared_ptr<rm::sim::SharedCommand> shared = roster.store.liveCommand(grouped.id);
+    REQUIRE(shared != nullptr);
+    CHECK(shared->units == std::vector{first, second});
+    CHECK(shared->remainingCount == 1);
+}
+
+TEST_CASE("a guarding factory reserves one shared build and finishes it without consuming twice") {
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    const rm::sim::PassabilityGrid grid =
+        rm::sim::buildPassability(field, 0.0f, 60.0f, 0.0f);
+
+    rm::test::Roster roster;
+    rm::unitdef::UnitDef factoryDef;
+    factoryDef.name = "factory";
+    factoryDef.categories = {"FACTORY"};
+    factoryDef.buildRate = 10.0f;
+    factoryDef.buildableCategory = {{"PRODUCT"}};
+    const rm::UnitTypeIndex factoryType = roster.addType(factoryDef);
+    rm::unitdef::UnitDef productDef = walkerDef();
+    productDef.name = "product";
+    productDef.categories = {"PRODUCT"};
+    productDef.buildTime = rm::sim::magFromFloat(100.0f);
+    const rm::UnitTypeIndex productType = roster.addType(productDef);
+    const UnitId guard = roster.add(factoryType, 40.0f, 40.0f, 0, 100.0f);
+    const UnitId guardee = roster.add(factoryType, 48.0f, 40.0f, 0, 100.0f);
+    const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(1);
+    const std::vector<rm::sim::Player> players{rm::sim::Player{.index = 0, .army = 0}};
+    const std::vector<const rm::sim::PassabilityGrid*> grids{&grid, &grid};
+    std::vector<rm::sim::Construction> building;
+
+    const CommandIssue build{.source = 0,
+                             .id = rm::commandId(0, 61),
+                             .player = 0,
+                             .kind = CommandKind::Build,
+                             .units = {guardee},
+                             .buildType = productType,
+                             .count = 2};
+    REQUIRE(rm::sim::applyCommand(build, roster.store, roster.catalog, players, armies, terrain,
+                                  [&grid](UnitId) { return &grid; }, roster.rate, &building));
+    const CommandIssue assist{.source = 0,
+                              .id = rm::commandId(0, 62),
+                              .player = 0,
+                              .kind = CommandKind::Assist,
+                              .units = {guard},
+                              .target = guardee};
+    REQUIRE(rm::sim::applyCommand(assist, roster.store, roster.catalog, players, armies, terrain,
+                                  [&grid](UnitId) { return &grid; }, roster.rate, &building));
+    const rm::CommandSerial serialAfterInputs = roster.store.nextCommandSerial();
+    const std::uint32_t counterAfterInputs = roster.store.nextCommandCounter(0);
+
+    (void)rm::sim::advanceOrders(roster.store, roster.catalog, terrain, grids, roster.rate,
+                                 &building);
+
+    REQUIRE(building.size() == 2);
+    const auto mirrored = std::ranges::find(building, guard, &rm::sim::Construction::builder);
+    REQUIRE(mirrored != building.end());
+    CHECK(mirrored->blueprintIndex == productType);
+    REQUIRE(roster.store.orders()[guard.index].active() != nullptr);
+    CHECK(roster.store.orders()[guard.index].active()->kind() == CommandKind::Assist);
+    REQUIRE(roster.store.orders()[guardee.index].active() != nullptr);
+    CHECK(roster.store.orders()[guardee.index].active()->payload().id == build.id);
+    REQUIRE(roster.store.liveCommand(build.id) != nullptr);
+    CHECK(roster.store.liveCommand(build.id)->remainingCount == 1);
+    CHECK(roster.store.nextCommandSerial() == serialAfterInputs);
+    CHECK(roster.store.nextCommandCounter(0) == counterAfterInputs);
+
+    mirrored->buildTimeRemaining = rm::sim::Mag{};
+    (void)rm::sim::advanceOrders(roster.store, roster.catalog, terrain, grids, roster.rate,
+                                 &building);
+    REQUIRE(roster.store.liveCommand(build.id) != nullptr);
+    CHECK(roster.store.liveCommand(build.id)->remainingCount == 1);
+    CHECK(roster.store.nextCommandSerial() == serialAfterInputs);
+    CHECK(roster.store.nextCommandCounter(0) == counterAfterInputs);
+
+    // Repeat makes the otherwise ineligible lone head available to the guarding factory. Its
+    // batch count is restored and the guardee's own active construction remains attached.
+    REQUIRE(roster.store.setFactoryRepeat(guardee, true));
+    (void)rm::sim::advanceOrders(roster.store, roster.catalog, terrain, grids, roster.rate,
+                                 &building);
+    REQUIRE(building.size() == 3);
+    CHECK(building.back().builder == guard);
+    CHECK(roster.store.liveCommand(build.id)->remainingCount == 2);
+    REQUIRE(roster.store.orders()[guardee.index].active() != nullptr);
+    CHECK(roster.store.orders()[guardee.index].active()->payload().id == build.id);
+    CHECK(roster.store.nextCommandSerial() == serialAfterInputs);
+    CHECK(roster.store.nextCommandCounter(0) == counterAfterInputs);
+
+    // The child build owns its remaining lifetime. Losing the guarded unit ends Assist only
+    // after that child is done; it must not strand an upkeep-charging construction.
+    rm::sim::Construction& inFlightMirror = building.back();
+    const rm::sim::Mag beforeTargetDeath = inFlightMirror.buildTimeRemaining;
+    roster.store.kill(guardee);
+    (void)rm::sim::advanceOrders(roster.store, roster.catalog, terrain, grids, roster.rate,
+                                 &building);
+    CHECK(inFlightMirror.buildTimeRemaining < beforeTargetDeath);
+    REQUIRE(roster.store.orders()[guard.index].active() != nullptr);
+    CHECK(roster.store.orders()[guard.index].active()->kind() == CommandKind::Assist);
+}
+
+TEST_CASE("factory guard skips a singleton head and locally takes the queued build behind it") {
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    const rm::sim::PassabilityGrid grid =
+        rm::sim::buildPassability(field, 0.0f, 60.0f, 0.0f);
+
+    rm::test::Roster roster;
+    rm::unitdef::UnitDef factoryDef;
+    factoryDef.name = "factory";
+    factoryDef.categories = {"FACTORY"};
+    factoryDef.buildRate = 10.0f;
+    factoryDef.buildableCategory = {{"PRODUCT"}};
+    const rm::UnitTypeIndex factoryType = roster.addType(factoryDef);
+    rm::unitdef::UnitDef firstProduct = walkerDef();
+    firstProduct.name = "first-product";
+    firstProduct.categories = {"PRODUCT"};
+    firstProduct.buildTime = rm::sim::magFromFloat(100.0f);
+    const rm::UnitTypeIndex firstType = roster.addType(firstProduct);
+    rm::unitdef::UnitDef queuedProduct = firstProduct;
+    queuedProduct.name = "queued-product";
+    const rm::UnitTypeIndex queuedType = roster.addType(queuedProduct);
+    const UnitId guard = roster.add(factoryType, 40.0f, 40.0f, 0, 100.0f);
+    const UnitId guardee = roster.add(factoryType, 48.0f, 40.0f, 0, 100.0f);
+    const UnitId peer = roster.add(factoryType, 80.0f, 40.0f, 0, 100.0f);
+    const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(1);
+    const std::vector<rm::sim::Player> players{rm::sim::Player{.index = 0, .army = 0}};
+    const std::vector<const rm::sim::PassabilityGrid*> grids{&grid, &grid, &grid};
+    std::vector<rm::sim::Construction> building;
+    const auto apply = [&](const CommandIssue& issue) {
+        return rm::sim::applyCommand(issue, roster.store, roster.catalog, players, armies,
+                                     terrain, [&grid](UnitId) { return &grid; }, roster.rate,
+                                     &building);
+    };
+
+    const CommandIssue current{.source = 0,
+                               .id = rm::commandId(0, 71),
+                               .player = 0,
+                               .kind = CommandKind::Build,
+                               .units = {guardee},
+                               .buildType = firstType};
+    const CommandIssue queued{.source = 0,
+                              .id = rm::commandId(0, 72),
+                              .player = 0,
+                              .kind = CommandKind::Build,
+                              .queued = true,
+                              .units = {peer, guardee},
+                              .buildType = queuedType};
+    const CommandIssue assist{.source = 0,
+                              .id = rm::commandId(0, 73),
+                              .player = 0,
+                              .kind = CommandKind::Assist,
+                              .units = {guard},
+                              .target = guardee};
+    REQUIRE(apply(current));
+    REQUIRE(apply(queued));
+    REQUIRE(apply(assist));
+
+    bool repeating = false;
+    SECTION("with repeat disabled") {}
+    SECTION("with repeat enabled") {
+        repeating = true;
+        REQUIRE(roster.store.setFactoryRepeat(guardee, true));
+    }
+
+    (void)rm::sim::advanceOrders(roster.store, roster.catalog, terrain, grids, roster.rate,
+                                 &building);
+
+    REQUIRE(roster.store.orders()[guardee.index].size() == (repeating ? 2 : 1));
+    CHECK(roster.store.orders()[guardee.index].current()->payload().id == current.id);
+    REQUIRE(roster.store.commandIdLive(queued.id));
+    REQUIRE(roster.store.orders()[peer.index].active() != nullptr);
+    CHECK(roster.store.orders()[peer.index].active()->payload().id == queued.id);
+    const std::shared_ptr<rm::sim::SharedCommand> shared = roster.store.liveCommand(queued.id);
+    REQUIRE(shared != nullptr);
+    CHECK(shared->units == std::vector{guardee, peer});
+    CHECK(shared->remainingCount == 1);
+    REQUIRE(building.size() == 3);
+    const auto mirrored = std::ranges::find(building, guard, &rm::sim::Construction::builder);
+    REQUIRE(mirrored != building.end());
+    CHECK(mirrored->blueprintIndex == queuedType);
+}
+
+TEST_CASE("a guarding factory builds its own queued product before the guardee's") {
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    const rm::sim::PassabilityGrid grid =
+        rm::sim::buildPassability(field, 0.0f, 60.0f, 0.0f);
+    rm::test::Roster roster;
+    rm::unitdef::UnitDef factoryDef;
+    factoryDef.name = "factory";
+    factoryDef.categories = {"FACTORY"};
+    factoryDef.buildRate = 10.0f;
+    factoryDef.buildableCategory = {{"PRODUCT"}};
+    const rm::UnitTypeIndex factoryType = roster.addType(factoryDef);
+    rm::unitdef::UnitDef ownProduct = walkerDef();
+    ownProduct.name = "own-product";
+    ownProduct.categories = {"PRODUCT"};
+    ownProduct.buildTime = rm::sim::magFromFloat(100.0f);
+    const rm::UnitTypeIndex ownProductType = roster.addType(ownProduct);
+    rm::unitdef::UnitDef guardedProduct = ownProduct;
+    guardedProduct.name = "guarded-product";
+    const rm::UnitTypeIndex guardedProductType = roster.addType(guardedProduct);
+    const UnitId guard = roster.add(factoryType, 40.0f, 40.0f, 0, 100.0f);
+    const UnitId guardee = roster.add(factoryType, 48.0f, 40.0f, 0, 100.0f);
+    const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(1);
+    const std::vector<rm::sim::Player> players{rm::sim::Player{.index = 0, .army = 0}};
+    const std::vector<const rm::sim::PassabilityGrid*> grids{&grid, &grid, &grid};
+    std::vector<rm::sim::Construction> building;
+    const auto apply = [&](const CommandIssue& issue) {
+        return rm::sim::applyCommand(issue, roster.store, roster.catalog, players, armies,
+                                     terrain, [&grid](UnitId) { return &grid; }, roster.rate,
+                                     &building);
+    };
+    const CommandIssue assist{.source = 0, .id = rm::commandId(0, 81), .player = 0,
+                              .kind = CommandKind::Assist, .units = {guard}, .target = guardee};
+    const CommandIssue own{.source = 0,
+                           .id = rm::commandId(0, 82),
+                           .player = 0,
+                           .kind = CommandKind::Build,
+                           .queued = true,
+                           .units = {guard},
+                           .buildType = ownProductType};
+    const CommandIssue guarded{.source = 0,
+                               .id = rm::commandId(0, 83),
+                               .player = 0,
+                               .kind = CommandKind::Build,
+                               .units = {guardee},
+                               .buildType = guardedProductType};
+    REQUIRE(apply(assist));
+    REQUIRE(apply(own));
+    REQUIRE(apply(guarded));
+    const std::shared_ptr<rm::sim::SharedCommand> ownPayload = roster.store.liveCommand(own.id);
+    const std::shared_ptr<rm::sim::SharedCommand> guardedPayload =
+        roster.store.liveCommand(guarded.id);
+    REQUIRE(ownPayload != nullptr);
+    REQUIRE(guardedPayload != nullptr);
+    const rm::CommandSerial serialAfterInputs = roster.store.nextCommandSerial();
+    const std::uint32_t counterAfterInputs = roster.store.nextCommandCounter(0);
+
+    (void)rm::sim::advanceOrders(roster.store, roster.catalog, terrain, grids, roster.rate,
+                                 &building);
+
+    REQUIRE(building.size() == 2);
+    const auto ownWork = std::ranges::find(building, guard, &rm::sim::Construction::builder);
+    REQUIRE(ownWork != building.end());
+    CHECK(ownWork->blueprintIndex == ownProductType);
+    REQUIRE(roster.store.orders()[guard.index].active() != nullptr);
+    CHECK(&roster.store.orders()[guard.index].active()->payload() != ownPayload.get());
+    CHECK(roster.store.orders()[guard.index].active()->kind() == CommandKind::Assist);
+    CHECK(roster.store.orders()[guard.index].entries().back().payload().id == own.id);
+    CHECK(roster.store.liveCommand(own.id) == ownPayload);
+    CHECK(ownPayload->id == own.id);
+    REQUIRE(roster.store.orders()[guardee.index].active() != nullptr);
+    CHECK(roster.store.orders()[guardee.index].active()->payload().id == guarded.id);
+    CHECK(roster.store.liveCommand(guarded.id) == guardedPayload);
+    CHECK(guardedPayload->remainingCount == 1);
+    CHECK(roster.store.nextCommandSerial() == serialAfterInputs);
+    CHECK(roster.store.nextCommandCounter(0) == counterAfterInputs);
+}
+
+TEST_CASE("a guarding factory retires its own queued build through normal count and repeat") {
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    const rm::sim::PassabilityGrid grid =
+        rm::sim::buildPassability(field, 0.0f, 60.0f, 0.0f);
+    rm::test::Roster roster;
+    rm::unitdef::UnitDef factoryDef;
+    factoryDef.name = "factory";
+    factoryDef.categories = {"FACTORY"};
+    factoryDef.buildRate = 10.0f;
+    factoryDef.buildableCategory = {{"PRODUCT"}};
+    const rm::UnitTypeIndex factoryType = roster.addType(factoryDef);
+    rm::unitdef::UnitDef product = walkerDef();
+    product.name = "product";
+    product.categories = {"PRODUCT"};
+    product.buildTime = rm::sim::magFromFloat(100.0f);
+    const rm::UnitTypeIndex productType = roster.addType(product);
+    const UnitId guard = roster.add(factoryType, 40.0f, 40.0f, 0, 100.0f);
+    const UnitId guardee = roster.add(factoryType, 48.0f, 40.0f, 0, 100.0f);
+    const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(1);
+    const std::vector<rm::sim::Player> players{rm::sim::Player{.index = 0, .army = 0}};
+    const std::vector<const rm::sim::PassabilityGrid*> grids{&grid, &grid};
+    std::vector<rm::sim::Construction> building;
+    const auto apply = [&](const CommandIssue& issue) {
+        return rm::sim::applyCommand(issue, roster.store, roster.catalog, players, armies,
+                                     terrain, [&grid](UnitId) { return &grid; }, roster.rate,
+                                     &building);
+    };
+    const CommandIssue assist{.source = 0, .id = rm::commandId(0, 91), .player = 0,
+                              .kind = CommandKind::Assist, .units = {guard}, .target = guardee};
+    const CommandIssue own{.source = 0,
+                           .id = rm::commandId(0, 92),
+                           .player = 0,
+                           .kind = CommandKind::Build,
+                           .queued = true,
+                           .units = {guard},
+                           .buildType = productType,
+                           .count = 1};
+    REQUIRE(apply(assist));
+    REQUIRE(apply(own));
+    (void)rm::sim::advanceOrders(roster.store, roster.catalog, terrain, grids, roster.rate,
+                                 &building);
+    const auto ownWork = std::ranges::find(building, guard, &rm::sim::Construction::builder);
+    REQUIRE(ownWork != building.end());
+    // Leave one sub-tick of work: `activeConstruction` only returns UNFINISHED records, so the
+    // completion ladder runs only when `advanceConstruction` itself lands the beat on zero —
+    // which is also the only way it ever runs in a live match.
+    ownWork->buildTimeRemaining = rm::sim::magFromFloat(0.5);
+
+    bool repeating = false;
+    SECTION("without repeat") {}
+    SECTION("with repeat") {
+        repeating = true;
+        REQUIRE(roster.store.setFactoryRepeat(guard, true));
+    }
+
+    (void)rm::sim::advanceOrders(roster.store, roster.catalog, terrain, grids, roster.rate,
+                                 &building);
+
+    // The ordinary dispatcher ladder (`C-211`): a final-count completion removes the entry,
+    // unless factory repeat restores the batch and cycles it behind the retained Assist head.
+    REQUIRE(roster.store.orders()[guard.index].active() != nullptr);
+    CHECK(roster.store.orders()[guard.index].active()->kind() == CommandKind::Assist);
+    if (repeating) {
+        const std::shared_ptr<rm::sim::SharedCommand> ownPayload =
+            roster.store.liveCommand(own.id);
+        REQUIRE(ownPayload != nullptr);
+        CHECK(ownPayload->remainingCount == ownPayload->originalCount);
+        CHECK(roster.store.orders()[guard.index].size() == 2);
+    } else {
+        CHECK(roster.store.liveCommand(own.id) == nullptr);
+        CHECK(roster.store.orders()[guard.index].size() == 1);
+    }
+}
+
+TEST_CASE("a guarding factory completion retires the first of identical own builds") {
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    const rm::sim::PassabilityGrid grid =
+        rm::sim::buildPassability(field, 0.0f, 60.0f, 0.0f);
+    rm::test::Roster roster;
+    rm::unitdef::UnitDef factoryDef;
+    factoryDef.name = "factory";
+    factoryDef.categories = {"FACTORY"};
+    factoryDef.buildRate = 10.0f;
+    factoryDef.buildableCategory = {{"PRODUCT"}};
+    const rm::UnitTypeIndex factoryType = roster.addType(factoryDef);
+    rm::unitdef::UnitDef product = walkerDef();
+    product.name = "product";
+    product.categories = {"PRODUCT"};
+    product.buildTime = rm::sim::magFromFloat(100.0f);
+    const rm::UnitTypeIndex productType = roster.addType(product);
+    const UnitId guard = roster.add(factoryType, 40.0f, 40.0f, 0, 100.0f);
+    const UnitId guardee = roster.add(factoryType, 48.0f, 40.0f, 0, 100.0f);
+    const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(1);
+    const std::vector<rm::sim::Player> players{rm::sim::Player{.index = 0, .army = 0}};
+    const std::vector<const rm::sim::PassabilityGrid*> grids{&grid, &grid};
+    std::vector<rm::sim::Construction> building;
+    const auto apply = [&](const CommandIssue& issue) {
+        return rm::sim::applyCommand(issue, roster.store, roster.catalog, players, armies,
+                                     terrain, [&grid](UnitId) { return &grid; }, roster.rate,
+                                     &building);
+    };
+    const CommandIssue assist{.source = 0, .id = rm::commandId(0, 101), .player = 0,
+                              .kind = CommandKind::Assist, .units = {guard}, .target = guardee};
+    const CommandIssue first{.source = 0,
+                             .id = rm::commandId(0, 102),
+                             .player = 0,
+                             .kind = CommandKind::Build,
+                             .queued = true,
+                             .units = {guard},
+                             .buildType = productType};
+    const CommandIssue second{.source = 0,
+                              .id = rm::commandId(0, 103),
+                              .player = 0,
+                              .kind = CommandKind::Build,
+                              .queued = true,
+                              .units = {guard},
+                              .buildType = productType};
+    REQUIRE(apply(assist));
+    REQUIRE(apply(first));
+    REQUIRE(apply(second));
+    REQUIRE(roster.store.orders()[guard.index].active() != nullptr);
+    CHECK(roster.store.orders()[guard.index].active()->kind() == CommandKind::Assist);
+
+    (void)rm::sim::advanceOrders(roster.store, roster.catalog, terrain, grids, roster.rate,
+                                 &building);
+    const auto started = std::ranges::find(building, guard, &rm::sim::Construction::builder);
+    REQUIRE(started != building.end());
+    started->buildTimeRemaining = rm::sim::magFromFloat(0.5f);
+
+    SECTION("without repeat") {
+        (void)rm::sim::advanceOrders(roster.store, roster.catalog, terrain, grids, roster.rate,
+                                     &building);
+
+        const std::deque<rm::sim::QueuedCommand>& entries =
+            roster.store.orders()[guard.index].entries();
+        REQUIRE(entries.size() == 2);
+        CHECK(entries[0].kind() == CommandKind::Assist);
+        CHECK(entries[1].payload().id == second.id);
+        CHECK_FALSE(roster.store.commandIdLive(first.id));
+    }
+
+    SECTION("with repeat") {
+        REQUIRE(roster.store.setFactoryRepeat(guard, true));
+        (void)rm::sim::advanceOrders(roster.store, roster.catalog, terrain, grids, roster.rate,
+                                     &building);
+
+        const std::deque<rm::sim::QueuedCommand>& entries =
+            roster.store.orders()[guard.index].entries();
+        REQUIRE(entries.size() == 3);
+        CHECK(entries[0].kind() == CommandKind::Assist);
+        CHECK(entries[1].payload().id == second.id);
+        CHECK(entries[2].payload().id == first.id);
+    }
 }
 
 TEST_CASE("factory repeat toggles through a logged semantic issue and replays") {

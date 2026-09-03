@@ -23,6 +23,8 @@ constexpr std::uint32_t kVersion3 = 3;
 constexpr std::uint32_t kVersion4 = 4;
 constexpr std::uint32_t kVersion5 = 5;
 constexpr std::uint32_t kVersion6 = 6;
+constexpr std::uint32_t kVersion7 = 7;
+constexpr std::uint32_t kVersion8 = 8;
 // MT19937 serializes its 624 state words plus an index, all as unsigned decimal numbers separated
 // by one space. This rejects oversized malformed frames before they allocate their payload.
 constexpr std::size_t kMaxRandomStatePayload =
@@ -118,27 +120,148 @@ private:
 void writeId(PayloadWriter& writer, UnitId id) { writer.u32(id.index); writer.u32(id.generation); }
 [[nodiscard]] bool readId(PayloadReader& reader, UnitId& id) { return reader.u32(id.index) && reader.u32(id.generation); }
 
+void writeSharedCommand(PayloadWriter& w, const SharedCommand& command) {
+    w.u64(command.tick);
+    w.u8(command.source);
+    w.u32(command.id);
+    w.u32(command.player);
+    w.u8(static_cast<std::uint8_t>(command.kind));
+    w.u8(command.queued);
+    w.count(command.units.size());
+    for (UnitId unit : command.units) writeId(w, unit);
+    w.i32(command.targetX.raw());
+    w.i32(command.targetZ.raw());
+    writeId(w, command.target);
+    w.u16(command.buildType);
+    w.u32(command.creationSerial);
+    w.u32(command.originalCount);
+    w.u32(command.remainingCount);
+}
+
+[[nodiscard]] bool readSharedCommand(PayloadReader& r, SharedCommand& command) {
+    std::uint8_t source{}, kind{}, queued{};
+    std::uint32_t player{};
+    std::size_t units{};
+    std::int32_t targetX{}, targetZ{};
+    if (!r.u64(command.tick) || !r.u8(source) || !r.u32(command.id) || !r.u32(player)
+        || !r.u8(kind) || !r.u8(queued) || source > kInvalidCommandSource
+        || player > std::numeric_limits<PlayerIndex>::max()
+        || kind > static_cast<std::uint8_t>(CommandKind::Repair) || queued > 1
+        || !r.count(units, 8)) {
+        return false;
+    }
+    command.source = source;
+    command.player = static_cast<PlayerIndex>(player);
+    command.kind = static_cast<CommandKind>(kind);
+    command.queued = queued;
+    command.units.resize(units);
+    for (UnitId& unit : command.units) if (!readId(r, unit)) return false;
+    if (!r.i32(targetX) || !r.i32(targetZ) || !readId(r, command.target)
+        || !r.u16(command.buildType) || !r.u32(command.creationSerial)
+        || !r.u32(command.originalCount) || !r.u32(command.remainingCount)) {
+        return false;
+    }
+    command.targetX = Fx::fromRaw(targetX);
+    command.targetZ = Fx::fromRaw(targetZ);
+    return true;
+}
+
+void writeCommandState(PayloadWriter& w, const UnitStore::Snapshot& s) {
+    w.u32(s.nextCommandSerial);
+    for (const std::uint32_t counter : s.nextCommandCounters) w.u32(counter);
+    w.count(s.sharedCommands.size());
+    for (const SharedCommand& command : s.sharedCommands) writeSharedCommand(w, command);
+    w.count(s.orders.size());
+    for (const CommandQueue::Snapshot& queue : s.orders) {
+        w.u8(queue.activeSerial.has_value());
+        if (queue.activeSerial) w.u32(*queue.activeSerial);
+        w.count(queue.entries.size());
+        for (const CommandQueue::SnapshotEntry& entry : queue.entries) {
+            w.count(entry.sharedCommand);
+            const QueuedCommand::Snapshot& execution = entry.execution;
+            writeId(w, execution.unit);
+            w.i32(execution.targetX.raw());
+            w.i32(execution.targetZ.raw());
+            writeId(w, execution.target);
+            w.u8(execution.patrolOrigin.has_value());
+            if (execution.patrolOrigin) {
+                w.i32((*execution.patrolOrigin)[0].raw());
+                w.i32((*execution.patrolOrigin)[1].raw());
+            }
+            w.u8(execution.returningToPatrolOrigin);
+        }
+    }
+}
+
+[[nodiscard]] bool readCommandState(PayloadReader& r, UnitStore::Snapshot& s) {
+    if (!r.u32(s.nextCommandSerial)) return false;
+    for (std::uint32_t& counter : s.nextCommandCounters) if (!r.u32(counter)) return false;
+    std::size_t count{};
+    if (!r.count(count, 1)) return false;
+    s.sharedCommands.resize(count);
+    for (SharedCommand& command : s.sharedCommands) if (!readSharedCommand(r, command)) return false;
+    if (!r.count(count, 1)) return false;
+    s.orders.resize(count);
+    for (CommandQueue::Snapshot& queue : s.orders) {
+        std::uint8_t active{};
+        if (!r.u8(active) || active > 1) return false;
+        if (active) {
+            CommandSerial serial{};
+            if (!r.u32(serial)) return false;
+            queue.activeSerial = serial;
+        }
+        if (!r.count(count, 1)) return false;
+        queue.entries.resize(count);
+        for (CommandQueue::SnapshotEntry& entry : queue.entries) {
+            std::size_t sharedCommand{};
+            std::int32_t targetX{}, targetZ{};
+            std::uint8_t hasPatrolOrigin{}, returning{};
+            if (!r.count(sharedCommand) || !readId(r, entry.execution.unit)
+                || !r.i32(targetX) || !r.i32(targetZ) || !readId(r, entry.execution.target)
+                || !r.u8(hasPatrolOrigin) || hasPatrolOrigin > 1) {
+                return false;
+            }
+            entry.sharedCommand = sharedCommand;
+            entry.execution.targetX = Fx::fromRaw(targetX);
+            entry.execution.targetZ = Fx::fromRaw(targetZ);
+            if (hasPatrolOrigin) {
+                std::int32_t originX{}, originZ{};
+                if (!r.i32(originX) || !r.i32(originZ)) return false;
+                entry.execution.patrolOrigin = {Fx::fromRaw(originX), Fx::fromRaw(originZ)};
+            }
+            if (!r.u8(returning) || returning > 1) return false;
+            entry.execution.returningToPatrolOrigin = returning;
+        }
+    }
+    return true;
+}
+
 void writeUnits(PayloadWriter& w, const UnitStore::Snapshot& s, bool includesPathPhase,
-                 bool includesFactoryRepeat, bool includesAttachmentOffsets, bool includesDoNotTarget,
-                 bool includesAutomaticTargets) {
+                   bool includesFactoryRepeat, bool includesAttachmentOffsets, bool includesDoNotTarget,
+                   bool includesAutomaticTargets, bool includesAttachmentHeights,
+                   bool includesAttachedMotion, bool includesCommands) {
     w.count(s.ids.generations.size()); for (Generation v : s.ids.generations) w.u32(v);
     w.count(s.ids.free.size()); for (UnitIndex v : s.ids.free) w.u32(v);
     w.u64(s.ids.live);
     w.count(s.generations.size()); for (Generation v : s.generations) w.u32(v);
     w.count(s.transforms.size()); for (const Transform& v : s.transforms) { w.i32(v.x.raw()); w.i32(v.y.raw()); w.i32(v.z.raw()); w.u16(v.heading); w.u16(v.pitch); w.u16(v.roll); }
-    w.count(s.motion.size()); for (const MoveState& v : s.motion) { w.i32(v.armyIndex); w.i32(v.destinationX.raw()); w.i32(v.destinationZ.raw()); w.u8(v.moving); w.u8(v.airborne); w.u8(v.surfaceWater); w.i32(v.speedPerTick.raw()); w.i32(v.turnPerTick); w.i32(v.radiusElmos.raw()); w.i32(v.distanceTravelledElmos.raw()); w.count(v.path.size()); for (const auto& p : v.path) { w.i32(p[0].raw()); w.i32(p[1].raw()); } w.u64(v.pathIndex); if (includesPathPhase) { w.i32(v.pathPhaseStartX); w.i32(v.pathPhaseStartZ); w.i32(v.pathPhaseCellsX); } }
+    w.count(s.motion.size()); for (const MoveState& v : s.motion) { w.i32(v.armyIndex); w.i32(v.destinationX.raw()); w.i32(v.destinationZ.raw()); w.u8(v.moving); if (includesAttachedMotion) w.u8(v.attached); w.u8(v.airborne); w.u8(v.surfaceWater); w.i32(v.speedPerTick.raw()); w.i32(v.turnPerTick); w.i32(v.radiusElmos.raw()); w.i32(v.distanceTravelledElmos.raw()); w.count(v.path.size()); for (const auto& p : v.path) { w.i32(p[0].raw()); w.i32(p[1].raw()); } w.u64(v.pathIndex); if (includesPathPhase) { w.i32(v.pathPhaseStartX); w.i32(v.pathPhaseStartZ); w.i32(v.pathPhaseCellsX); } }
     w.count(s.health.size()); for (const Health& v : s.health) { w.i64(v.current.raw()); w.i64(v.maximum.raw()); w.i64(v.shield.current.raw()); w.i64(v.shield.maximum.raw()); w.u32(v.shield.regenDelayRemaining); w.u32(v.shield.rechargeRemaining); w.count(v.reloadRemaining.size()); for (int x : v.reloadRemaining) w.i32(x); w.count(v.burstRemaining.size()); for (int x : v.burstRemaining) w.i32(x); if (includesAutomaticTargets) { w.count(v.automaticTargets.size()); for (UnitId target : v.automaticTargets) writeId(w, target); } writeId(w, v.lastHitBy); w.i32(v.veterancy.kills); w.i32(v.veterancy.level); }
     w.count(s.types.size()); for (UnitTypeIndex v : s.types) w.u16(v);
     if (includesFactoryRepeat) { w.count(s.factoryRepeat.size()); for (bool v : s.factoryRepeat) w.u8(v); }
     w.count(s.parents.size()); for (const auto& v : s.parents) { w.u8(v.has_value()); if (v) writeId(w, *v); }
     w.count(s.children.size()); for (const auto& list : s.children) { w.count(list.size()); for (UnitId id : list) writeId(w, id); }
     if (includesAttachmentOffsets) { w.count(s.attachmentOffsets.size()); for (const auto& offset : s.attachmentOffsets) { w.i32(offset[0].raw()); w.i32(offset[1].raw()); } }
+    if (includesAttachmentHeights) { w.count(s.attachmentHeights.size()); for (Fx height : s.attachmentHeights) w.i32(height.raw()); }
     if (includesDoNotTarget) { w.count(s.doNotTarget.size()); for (bool v : s.doNotTarget) w.u8(v); }
+    if (includesCommands) writeCommandState(w, s);
 }
 
 [[nodiscard]] bool readUnits(PayloadReader& r, UnitStore::Snapshot& s, bool includesPathPhase,
-                               bool includesFactoryRepeat, bool includesAttachmentOffsets,
-                               bool includesDoNotTarget, bool includesAutomaticTargets) {
+                                 bool includesFactoryRepeat, bool includesAttachmentOffsets,
+                                 bool includesDoNotTarget, bool includesAutomaticTargets,
+                                 bool includesAttachmentHeights, bool includesAttachedMotion,
+                                 bool includesCommands) {
     std::size_t n{};
     if (!r.count(n, 4)) return false; s.ids.generations.resize(n); for (auto& v : s.ids.generations) if (!r.u32(v)) return false;
     if (!r.count(n, 4)) return false; s.ids.free.resize(n); for (auto& v : s.ids.free) if (!r.u32(v)) return false;
@@ -147,19 +270,21 @@ void writeUnits(PayloadWriter& w, const UnitStore::Snapshot& s, bool includesPat
     s.ids.live = static_cast<std::size_t>(live);
     s.generations.resize(n); for (auto& v : s.generations) if (!r.u32(v)) return false;
     if (!r.count(n, 18)) return false; s.transforms.resize(n); for (auto& v : s.transforms) { std::int32_t x{},y{},z{}; if (!r.i32(x)||!r.i32(y)||!r.i32(z)||!r.u16(v.heading)||!r.u16(v.pitch)||!r.u16(v.roll)) return false; v.x=Fx::fromRaw(x); v.y=Fx::fromRaw(y); v.z=Fx::fromRaw(z); }
-    if (!r.count(n, includesPathPhase ? 58 : 46)) return false; s.motion.resize(n); for (auto& v : s.motion) { std::int32_t x{},z{},speed{},radius{},distance{}; std::uint8_t moving{},airborne{},water{}; if (!r.i32(v.armyIndex)||!r.i32(x)||!r.i32(z)||!r.u8(moving)||!r.u8(airborne)||!r.u8(water)||moving>1||airborne>1||water>1||!r.i32(speed)||!r.i32(v.turnPerTick)||!r.i32(radius)||!r.i32(distance)||!r.count(n,8)) return false; v.destinationX=Fx::fromRaw(x); v.destinationZ=Fx::fromRaw(z); v.moving=moving; v.airborne=airborne; v.surfaceWater=water; v.speedPerTick=Fx::fromRaw(speed); v.radiusElmos=Fx::fromRaw(radius); v.distanceTravelledElmos=Fx::fromRaw(distance); v.path.resize(n); for(auto& p:v.path){if(!r.i32(x)||!r.i32(z))return false;p={Fx::fromRaw(x),Fx::fromRaw(z)};} std::uint64_t index{}; if(!r.u64(index)||index>std::numeric_limits<std::size_t>::max())return false; v.pathIndex=static_cast<std::size_t>(index); if (includesPathPhase && (!r.i32(v.pathPhaseStartX) || !r.i32(v.pathPhaseStartZ) || !r.i32(v.pathPhaseCellsX))) return false; }
+    if (!r.count(n, (includesPathPhase ? 58 : 46) + (includesAttachedMotion ? 1 : 0))) return false; s.motion.resize(n); for (auto& v : s.motion) { std::int32_t x{},z{},speed{},radius{},distance{}; std::uint8_t moving{},attached{},airborne{},water{}; if (!r.i32(v.armyIndex)||!r.i32(x)||!r.i32(z)||!r.u8(moving)||(includesAttachedMotion && !r.u8(attached))||!r.u8(airborne)||!r.u8(water)||moving>1||attached>1||airborne>1||water>1||!r.i32(speed)||!r.i32(v.turnPerTick)||!r.i32(radius)||!r.i32(distance)||!r.count(n,8)) return false; v.destinationX=Fx::fromRaw(x); v.destinationZ=Fx::fromRaw(z); v.moving=moving; v.attached=attached; v.airborne=airborne; v.surfaceWater=water; v.speedPerTick=Fx::fromRaw(speed); v.radiusElmos=Fx::fromRaw(radius); v.distanceTravelledElmos=Fx::fromRaw(distance); v.path.resize(n); for(auto& p:v.path){if(!r.i32(x)||!r.i32(z))return false;p={Fx::fromRaw(x),Fx::fromRaw(z)};} std::uint64_t index{}; if(!r.u64(index)||index>std::numeric_limits<std::size_t>::max())return false; v.pathIndex=static_cast<std::size_t>(index); if (includesPathPhase && (!r.i32(v.pathPhaseStartX) || !r.i32(v.pathPhaseStartZ) || !r.i32(v.pathPhaseCellsX))) return false; }
     if (!r.count(n, 52)) return false; s.health.resize(n); for (auto& v : s.health) { std::int64_t a{},b{},c{},d{}; if(!r.i64(a)||!r.i64(b)||!r.i64(c)||!r.i64(d)||!r.u32(v.shield.regenDelayRemaining)||!r.u32(v.shield.rechargeRemaining)||!r.count(n,4))return false; v.current=Mag::fromRaw(a);v.maximum=Mag::fromRaw(b);v.shield.current=Mag::fromRaw(c);v.shield.maximum=Mag::fromRaw(d);v.reloadRemaining.resize(n);for(auto& x:v.reloadRemaining)if(!r.i32(x))return false;if(!r.count(n,4))return false;v.burstRemaining.resize(n);for(auto& x:v.burstRemaining)if(!r.i32(x))return false;if (includesAutomaticTargets) { if (!r.count(n, 8)) return false; v.automaticTargets.resize(n); for (auto& target : v.automaticTargets) if (!readId(r, target)) return false; } if(!readId(r,v.lastHitBy)||!r.i32(v.veterancy.kills)||!r.i32(v.veterancy.level))return false; }
     if (!r.count(n,2)) return false; s.types.resize(n); for(auto& v:s.types)if(!r.u16(v))return false;
     if (includesFactoryRepeat) { if (!r.count(n, 1)) return false; s.factoryRepeat.resize(n); for (auto&& v : s.factoryRepeat) { std::uint8_t enabled{}; if (!r.u8(enabled) || enabled > 1) return false; v = enabled; } }
     if (!r.count(n,1)) return false; s.parents.resize(n); for(auto& v:s.parents){std::uint8_t has{};if(!r.u8(has)||has>1)return false;if(has){UnitId id;if(!readId(r,id))return false;v=id;}}
     if (!r.count(n,4)) return false; s.children.resize(n); for(auto& list:s.children){if(!r.count(n,8))return false;list.resize(n);for(auto& id:list)if(!readId(r,id))return false;}
     if (includesAttachmentOffsets) { if (!r.count(n, 8)) return false; s.attachmentOffsets.resize(n); for (auto& offset : s.attachmentOffsets) { std::int32_t x{}, z{}; if (!r.i32(x) || !r.i32(z)) return false; offset = {Fx::fromRaw(x), Fx::fromRaw(z)}; } }
+    if (includesAttachmentHeights) { if (!r.count(n, 4)) return false; s.attachmentHeights.resize(n); for (Fx& height : s.attachmentHeights) { std::int32_t raw{}; if (!r.i32(raw)) return false; height = Fx::fromRaw(raw); } }
     if (includesDoNotTarget) { if (!r.count(n, 1)) return false; s.doNotTarget.resize(n); for (auto&& v : s.doNotTarget) { std::uint8_t enabled{}; if (!r.u8(enabled) || enabled > 1) return false; v = enabled; } }
     const std::size_t slots=s.transforms.size();
     if (s.ids.generations.size()!=slots || s.generations.size()!=slots || s.motion.size()!=slots
          || s.health.size()!=slots || s.types.size()!=slots
           || (includesFactoryRepeat && s.factoryRepeat.size()!=slots) || s.parents.size()!=slots
-          || s.children.size()!=slots || (includesAttachmentOffsets && s.attachmentOffsets.size()!=slots)
+           || s.children.size()!=slots || (includesAttachmentOffsets && s.attachmentOffsets.size()!=slots)
+           || (includesAttachmentHeights && s.attachmentHeights.size()!=slots)
           || (includesDoNotTarget && s.doNotTarget.size()!=slots)
          || s.ids.live>slots || s.ids.free.size()>slots) return false;
 
@@ -206,6 +331,12 @@ void writeUnits(PayloadWriter& w, const UnitStore::Snapshot& s, bool includesPat
         for (std::optional<UnitId> parent = s.parents[child]; parent; parent = s.parents[parent->index]) {
             if (++steps > slots) return false;
         }
+        if (includesAttachedMotion && s.motion[child].attached != s.parents[child].has_value()) {
+            return false;
+        }
+        if (!includesAttachedMotion) {
+            s.motion[child].attached = s.parents[child].has_value();
+        }
     }
     if (!includesFactoryRepeat) s.factoryRepeat.resize(slots, false);
     if (!includesDoNotTarget) s.doNotTarget.resize(slots, false);
@@ -216,6 +347,43 @@ void writeUnits(PayloadWriter& w, const UnitStore::Snapshot& s, bool includesPat
                 const UnitIndex parent = s.parents[child]->index;
                 s.attachmentOffsets[child] = {s.transforms[child].x - s.transforms[parent].x,
                                               s.transforms[child].z - s.transforms[parent].z};
+            }
+        }
+    }
+    if (!includesAttachmentHeights) {
+        s.attachmentHeights.resize(slots);
+        for (std::size_t child = 0; child < slots; ++child) {
+            if (s.parents[child]) {
+                s.attachmentHeights[child] =
+                    s.transforms[child].y - s.transforms[s.parents[child]->index].y;
+            }
+        }
+    }
+    if (includesCommands && (!readCommandState(r, s) || s.orders.size() != slots)) return false;
+    if (includesCommands) {
+        for (std::size_t slot = 0; slot < s.orders.size(); ++slot) {
+            const CommandQueue::Snapshot& queue = s.orders[slot];
+            const UnitId unit{static_cast<UnitIndex>(slot), s.ids.generations[slot]};
+            if (queue.entries.empty()) {
+                if (queue.activeSerial) return false;
+                continue;
+            }
+            if (!isLive(unit)) return false;
+            if (queue.activeSerial
+                && (queue.entries.empty()
+                    || queue.entries.front().sharedCommand >= s.sharedCommands.size()
+                    || s.sharedCommands[queue.entries.front().sharedCommand].creationSerial
+                           != *queue.activeSerial)) {
+                return false;
+            }
+            for (const CommandQueue::SnapshotEntry& entry : queue.entries) {
+                if (entry.sharedCommand >= s.sharedCommands.size()) return false;
+                const SharedCommand& command = s.sharedCommands[entry.sharedCommand];
+                if (entry.execution.unit != unit
+                    || std::find(command.units.begin(), command.units.end(), unit)
+                           == command.units.end()) {
+                    return false;
+                }
             }
         }
     }
@@ -271,7 +439,8 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
     payloadWriter.text(randomState.str());
     if (version >= kVersion2) payloadWriter.u64(state.pathServiceBeats);
     writeUnits(payloadWriter, state.units, version >= kVersion2, version >= kVersion3,
-                 version >= kVersion4, version >= kVersion5, version >= kVersion6);
+                   version >= kVersion4, version >= kVersion5, version >= kVersion6,
+                   version >= kVersion7, version >= kVersion7, version >= kVersion8);
     const std::vector<std::byte> payload = payloadWriter.take();
     if (payload.size() > std::numeric_limits<std::uint32_t>::max()) {
         throw std::length_error("MT19937 state exceeds the v1 save-state payload limit");
@@ -302,7 +471,8 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
     std::uint32_t payloadSize{};
     if (!readU32(bytes, offset, version)
         || (version != kVersion1 && version != kVersion2 && version != kVersion3
-            && version != kVersion4 && version != kVersion5 && version != kVersion6)
+              && version != kVersion4 && version != kVersion5 && version != kVersion6
+              && version != kVersion7 && version != kVersion8)
         || (requiredVersion && version != *requiredVersion) || !readU64(bytes, offset, tick)
         || !readU32(bytes, offset, payloadSize) || bytes.size() - offset != payloadSize) {
         return std::nullopt;
@@ -330,7 +500,8 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
     if (version >= kVersion2 && !reader.u64(pathServiceBeats)) return std::nullopt;
     UnitStore::Snapshot units;
     if (!readUnits(reader, units, version >= kVersion2, version >= kVersion3, version >= kVersion4,
-                    version >= kVersion5, version >= kVersion6)
+                      version >= kVersion5, version >= kVersion6, version >= kVersion7,
+                      version >= kVersion7, version >= kVersion8)
         || !reader.finished()) return std::nullopt;
     SaveState decoded{.tick = tick,
                       .random = std::move(random),
@@ -360,7 +531,7 @@ std::optional<SaveState> SaveState::decodeV2(std::span<const std::byte> bytes) {
 }
 
 std::vector<std::byte> SaveState::encode(const SaveState& state) {
-    return rm::sim::encode(state, kVersion6);
+    return rm::sim::encode(state, kVersion8);
 }
 
 std::optional<SaveState> SaveState::decode(std::span<const std::byte> bytes) {

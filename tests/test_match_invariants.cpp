@@ -411,6 +411,78 @@ TEST_CASE("commander defeat is polled, then clears its army except walls") {
     REQUIRE_FALSE(roster.store.slotAlive(defeatedUnit.index));
 }
 
+TEST_CASE("supremacy counts engineers but not walls") {
+    // C-210: Supremacy counts STRUCTURE + ENGINEER - WALL, rather than COMMAND.
+    const rm::HeightField field = flatField();
+    Roster roster;
+
+    UnitDef commanderDef;
+    commanderDef.name = "UEL0001";
+    UnitDef engineerDef;
+    engineerDef.name = "test_engineer";
+    engineerDef.categories = {"ENGINEER"};
+    UnitDef wallDef;
+    wallDef.name = "test_wall";
+    wallDef.categories = {"STRUCTURE", "WALL"};
+    const rm::UnitTypeIndex commander = roster.addType(commanderDef);
+    const rm::UnitTypeIndex engineer = roster.addType(engineerDef);
+    const rm::UnitTypeIndex wall = roster.addType(wallDef);
+
+    (void)roster.add(commander, 0.0f, 0.0f, 0, 100.0f);
+    (void)roster.add(engineer, 20.0f, 0.0f, 1, 100.0f);
+    (void)roster.add(wall, 40.0f, 0.0f, 2, 100.0f);
+
+    std::vector<Army> armies = rm::sim::freeForAll(3);
+    std::vector<rm::sim::Economy> economies(3);
+    std::vector<rm::sim::Projectile> projectiles;
+    const std::vector<int> commandersEver{1, 1, 1};
+    rm::sim::Match match{.armies = armies,
+                          .economies = economies,
+                          .projectiles = &projectiles,
+                          .commandersEver = commandersEver,
+                          .victoryMode = rm::sim::VictoryMode::Supremacy};
+    const rm::sim::TickRate rate{};
+
+    const rm::TickCount pollTicks = rate.ticks(rm::sim::seconds(3.0f));
+    for (rm::TickCount tick = 0; tick < pollTicks; ++tick) {
+        (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, rm::sim::Terrain{field}, rate);
+    }
+
+    REQUIRE_FALSE(armies[1].defeated);
+    REQUIRE(armies[2].defeated);
+}
+
+TEST_CASE("supremacy defeats an army with no qualifying units even without a commander") {
+    // C-210 polls the selected category count directly; only Assassination needs commander-ever.
+    const rm::HeightField field = flatField();
+    Roster roster;
+
+    UnitDef structureDef;
+    structureDef.name = "test_structure";
+    structureDef.categories = {"STRUCTURE"};
+    const rm::UnitTypeIndex structure = roster.addType(structureDef);
+    (void)roster.add(structure, 0.0f, 0.0f, 0, 100.0f);
+
+    std::vector<Army> armies = rm::sim::freeForAll(2);
+    std::vector<rm::sim::Economy> economies(2);
+    std::vector<rm::sim::Projectile> projectiles;
+    const std::vector<int> commandersEver{0, 0};
+    rm::sim::Match match{.armies = armies,
+                          .economies = economies,
+                          .projectiles = &projectiles,
+                          .commandersEver = commandersEver,
+                          .victoryMode = rm::sim::VictoryMode::Supremacy};
+    const rm::sim::TickRate rate{};
+    const rm::TickCount pollTicks = rate.ticks(rm::sim::seconds(3.0f));
+
+    for (rm::TickCount tick = 0; tick < pollTicks; ++tick) {
+        (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, rm::sim::Terrain{field}, rate);
+    }
+
+    REQUIRE_FALSE(armies[0].defeated);
+    REQUIRE(armies[1].defeated);
+}
+
 TEST_CASE("a defeated army stays defeated") {
     const rm::HeightField field = flatField();
     Fight fight;

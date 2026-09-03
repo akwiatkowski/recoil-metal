@@ -29,6 +29,11 @@ std::size_t applyAssistance(const UnitStore& store, const UnitCatalog& catalog,
             continue;
         }
 
+        const unitdef::UnitDef* assister = catalog.def(store.typeAt(slot));
+        if (assister != nullptr && assister->hasCategory("FACTORY") && !assister->isMobile()) {
+            continue;  // factory guard mirrors queued production in command dispatch
+        }
+
         const Mag rate = catalog.rates(store.typeAt(slot)).buildPerTick;
         if (rate <= Mag{}) {
             continue;

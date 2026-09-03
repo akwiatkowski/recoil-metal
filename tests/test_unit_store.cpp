@@ -357,6 +357,32 @@ TEST_CASE("attached children follow captured offsets until detached") {
     CHECK(store.transforms()[child.index].z == rm::test::fx(45.0f));
 }
 
+TEST_CASE("attachments retain a full local transform and suspend child movement") {
+    UnitStore store;
+    UnitStore::Spawn parent = tankAt(10.0f, 20.0f, 0);
+    parent.transform.y = rm::test::fx(30.0f);
+    const UnitId parentId = store.spawn(parent);
+    UnitStore::Spawn child = tankAt(13.0f, 25.0f, 0);
+    child.transform.y = rm::test::fx(37.0f);
+    child.motion.moving = true;
+    const UnitId childId = store.spawn(child);
+
+    REQUIRE(store.attach(parentId, childId));
+    CHECK_FALSE(store.motion()[childId.index].moving);
+
+    store.transforms()[parentId.index].x = rm::test::fx(40.0f);
+    store.transforms()[parentId.index].y = rm::test::fx(50.0f);
+    store.transforms()[parentId.index].z = rm::test::fx(60.0f);
+    store.propagateAttachments();
+
+    CHECK(store.transforms()[childId.index].x == rm::test::fx(43.0f));
+    CHECK(store.transforms()[childId.index].y == rm::test::fx(57.0f));
+    CHECK(store.transforms()[childId.index].z == rm::test::fx(65.0f));
+
+    REQUIRE(store.detach(childId));
+    CHECK_FALSE(store.motion()[childId.index].moving);
+}
+
 TEST_CASE("attachments change the match hash") {
     UnitStore detached;
     UnitStore attached;

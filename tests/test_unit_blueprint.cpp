@@ -525,6 +525,43 @@ TEST_CASE("FA point defence weapons retain their projectile target type") {
     CHECK(def->weapons[1].fires());
 }
 
+TEST_CASE("FA silo weapons retain their counted-projectile metadata") {
+    const Blueprint bp{"UEB4302_unit.bp", R"(
+        UnitBlueprint {
+            Physics = { MotionType = 'RULEUMT_None' },
+            SizeX = 1, SizeZ = 1,
+            Weapon = {
+                {
+                    WeaponCategory = 'Defense', CountedProjectile = true,
+                    NukeWeapon = true, MaxProjectileStorage = 7,
+                },
+                { WeaponCategory = 'Direct Fire' },
+            },
+        }
+    )"};
+
+    const auto def = rm::unitbp::loadFile(bp.path());
+    REQUIRE(def.has_value());
+    REQUIRE(def->weapons.size() == 2);
+
+    []<typename Weapon>(const Weapon& counted, const Weapon& ordinary) {
+        if constexpr (requires {
+                          counted.countedProjectile;
+                          counted.nukeWeapon;
+                          counted.maxProjectileStorage;
+                      }) {
+            CHECK(counted.countedProjectile);
+            CHECK(counted.nukeWeapon);
+            CHECK(counted.maxProjectileStorage == 7);
+            CHECK_FALSE(ordinary.countedProjectile);
+            CHECK_FALSE(ordinary.nukeWeapon);
+            CHECK(ordinary.maxProjectileStorage == 0);
+        } else {
+            FAIL("Weapon must retain CountedProjectile, NukeWeapon, and MaxProjectileStorage");
+        }
+    }(def->weapons[0], def->weapons[1]);
+}
+
 TEST_CASE("an ordinary FA shield reads its capacity, radius and recovery timing") {
     const Blueprint bp{"UEB4202_unit.bp", R"(
         UnitBlueprint {

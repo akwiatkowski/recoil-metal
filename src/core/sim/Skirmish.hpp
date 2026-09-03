@@ -20,6 +20,12 @@
 
 namespace rm::sim {
 
+/// Implemented C-210 skirmish defeat predicates.
+enum class VictoryMode : std::uint8_t {
+    Assassination,
+    Supremacy,
+};
+
 // One tick of a whole match, in one place.
 //
 // WHY THIS FILE EXISTS. Every rule a match is made of was already here and already
@@ -108,6 +114,9 @@ struct Match {
     /// The win condition needs it to tell "lost its commander" from "never had one": a
     /// decorative crowd has no commanders and must not be declared a draw on tick one.
     std::span<const int> commandersEver;
+
+    /// The Lua victory.lua category predicate selected for this skirmish.
+    VictoryMode victoryMode = VictoryMode::Assassination;
 
     /// The storage cap every army gets before anything it has built adds to it.
     ///
@@ -240,7 +249,7 @@ struct TickReport {
 /// need not say so. Defaulted rather than absent because a `TickRate` is cheap to construct
 /// and the alternative — reading a constant inside — is the thing §5.1 forbids.
 TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& match,
-                        const Terrain& terrain, TickRate rate = TickRate{});
+                         const Terrain& terrain, TickRate rate = TickRate{}, TickIndex tick = 0);
 
 /// Living commanders per army, indexed by army.
 ///

@@ -204,6 +204,106 @@ TEST_CASE("path requests admitted during a beat wait until the next beat") {
     CHECK_FALSE(fix.roster.motion(second).path.empty());
 }
 
+TEST_CASE("a homogeneous grouped ground move uses GrowthFormation land-slot topology") {
+    Fixture fix;
+    const UnitId second = fix.roster.add(fix.roster.store.typeAt(fix.mine.index), 200.0f, 300.0f,
+                                         0, 500.0f);
+    const UnitId third = fix.roster.add(fix.roster.store.typeAt(fix.mine.index), 200.0f, 400.0f,
+                                        0, 500.0f);
+    const UnitId fourth = fix.roster.add(fix.roster.store.typeAt(fix.mine.index), 200.0f, 500.0f,
+                                         0, 500.0f);
+    const UnitId fifth = fix.roster.add(fix.roster.store.typeAt(fix.mine.index), 200.0f, 600.0f,
+                                        0, 500.0f);
+    const rm::sim::Fx clickX = rm::test::fx(500.0f);
+    const rm::sim::Fx clickZ = rm::test::fx(200.0f);
+
+    // C-178 assigns slots once at issue time. GrowthFormation's five-unit land block fills its
+    // four-wide first row before entering the second, so only its fifth slot has a Z offset.
+    // Selection order is presentation-only, and the shared command retains the clicked anchor.
+    // The enemy is refused before formation membership, so it cannot consume the second slot.
+    // C-179/C-174 still admit one ordinary request per unit to the existing per-army FIFO.
+    const CommandIssue issue{.tick = 0,
+                             .source = 0,
+                             .id = rm::commandId(0, 0),
+                             .player = 0,
+                             .kind = CommandKind::Move,
+                              .units = {fifth, third, fix.theirs, second, fourth, fix.mine},
+                             .targetX = clickX,
+                             .targetZ = clickZ};
+    const rm::sim::ApplyCommandResult result = rm::sim::applyCommand(
+        issue, fix.roster.store, fix.roster.catalog, fix.players, fix.armies, fix.terrain,
+        [&fix](UnitId) { return &fix.grid; }, fix.roster.rate, &fix.building, nullptr, nullptr,
+        &fix.paths);
+
+    REQUIRE(result.accepted == std::vector<UnitId>{fix.mine, second, third, fourth, fifth});
+    REQUIRE(fix.paths.admissions().size() == 1);
+    CHECK(fix.paths.admissions()[0].size() == 5);
+
+    const auto& mineQueue = fix.roster.store.orders()[fix.mine.index].entries();
+    const auto& secondQueue = fix.roster.store.orders()[second.index].entries();
+    const auto& thirdQueue = fix.roster.store.orders()[third.index].entries();
+    const auto& fourthQueue = fix.roster.store.orders()[fourth.index].entries();
+    const auto& fifthQueue = fix.roster.store.orders()[fifth.index].entries();
+    REQUIRE(mineQueue.size() == 1);
+    REQUIRE(secondQueue.size() == 1);
+    REQUIRE(thirdQueue.size() == 1);
+    REQUIRE(fourthQueue.size() == 1);
+    REQUIRE(fifthQueue.size() == 1);
+
+    CHECK(mineQueue.front().payload().targetX == clickX);
+    CHECK(mineQueue.front().payload().targetZ == clickZ);
+    CHECK(secondQueue.front().payload().targetX == clickX);
+    CHECK(secondQueue.front().payload().targetZ == clickZ);
+    CHECK(thirdQueue.front().payload().targetX == clickX);
+    CHECK(thirdQueue.front().payload().targetZ == clickZ);
+    CHECK(fourthQueue.front().payload().targetX == clickX);
+    CHECK(fourthQueue.front().payload().targetZ == clickZ);
+    CHECK(fifthQueue.front().payload().targetX == clickX);
+    CHECK(fifthQueue.front().payload().targetZ == clickZ);
+
+    const auto differs = [](const rm::sim::QueuedCommand& a,
+                            const rm::sim::QueuedCommand& b) {
+        return a.targetX() != b.targetX() || a.targetZ() != b.targetZ();
+    };
+    CHECK(differs(mineQueue.front(), secondQueue.front()));
+    CHECK(differs(mineQueue.front(), thirdQueue.front()));
+    CHECK(differs(secondQueue.front(), thirdQueue.front()));
+    CHECK(differs(thirdQueue.front(), fourthQueue.front()));
+    CHECK(differs(fourthQueue.front(), fifthQueue.front()));
+    CHECK(mineQueue.front().targetZ() == clickZ);
+    CHECK(secondQueue.front().targetZ() == clickZ);
+    CHECK(thirdQueue.front().targetZ() == clickZ);
+    CHECK(fourthQueue.front().targetZ() == clickZ);
+    CHECK(fifthQueue.front().targetZ() != clickZ);
+
+    // A Shift-move bypasses the path-service intake and appends its local queue entry directly.
+    // It must keep the same fan-out rather than reconstructing targets from the shared anchor.
+    CommandIssue queuedIssue = issue;
+    queuedIssue.id = rm::commandId(0, 1);
+    queuedIssue.queued = true;
+    queuedIssue.targetX = rm::test::fx(700.0f);
+    const rm::sim::ApplyCommandResult queuedResult = rm::sim::applyCommand(
+        queuedIssue, fix.roster.store, fix.roster.catalog, fix.players, fix.armies, fix.terrain,
+        [&fix](UnitId) { return &fix.grid; }, fix.roster.rate, &fix.building, nullptr, nullptr,
+        &fix.paths);
+    REQUIRE(queuedResult.accepted == std::vector<UnitId>{fix.mine, second, third, fourth, fifth});
+    REQUIRE(mineQueue.size() == 2);
+    REQUIRE(secondQueue.size() == 2);
+    REQUIRE(thirdQueue.size() == 2);
+    REQUIRE(fourthQueue.size() == 2);
+    REQUIRE(fifthQueue.size() == 2);
+    CHECK(differs(mineQueue.back(), secondQueue.back()));
+    CHECK(differs(mineQueue.back(), thirdQueue.back()));
+    CHECK(differs(secondQueue.back(), thirdQueue.back()));
+    CHECK(differs(thirdQueue.back(), fourthQueue.back()));
+    CHECK(differs(fourthQueue.back(), fifthQueue.back()));
+    CHECK(mineQueue.back().targetZ() == queuedIssue.targetZ);
+    CHECK(secondQueue.back().targetZ() == queuedIssue.targetZ);
+    CHECK(thirdQueue.back().targetZ() == queuedIssue.targetZ);
+    CHECK(fourthQueue.back().targetZ() == queuedIssue.targetZ);
+    CHECK(fifthQueue.back().targetZ() != queuedIssue.targetZ);
+}
+
 TEST_CASE("a stopped move is removed before path service spends work on it") {
     Fixture fix;
 

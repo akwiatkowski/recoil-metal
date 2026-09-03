@@ -1401,10 +1401,10 @@ int runWindowed(const Session& session) {
                 return;
             }
 
-            // A RIGHT-CLICK ON YOUR OWN BUILDER IS AN ASSIST — the guard order. The
-            // builders in the selection lend their rate to whatever the target builds
-            // (`core/sim/Assist.hpp`); everyone else just walks over. Beaten by an enemy
-            // under the click (that is an attack) and beating a wreck and plain ground.
+            // A RIGHT-CLICK ON YOUR OWN BUILDER IS AN ASSIST — the guard order. Field builders
+            // lend rate; immobile factories mirror compatible queued production; everyone else
+            // just walks over. Beaten by an enemy under the click (that is an attack) and
+            // beating a wreck and plain ground.
             if (!isAttack && !armedGroundOrder && hit && units.playerArmy != rm::sim::kNoArmy
                 && units.armyOf(hit->index) == units.playerArmy) {
                 const rm::unitdef::UnitDef* targetDef =

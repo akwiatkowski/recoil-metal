@@ -762,7 +762,7 @@ TEST_CASE("a skirmish tick propagates attached transforms and detach stops propa
     CHECK(fixture.store.transforms()[child.index].z == detached.z);
 }
 
-TEST_CASE("attachment propagation refreshes an attached child's terrain layer") {
+TEST_CASE("attachment propagation retains an attached child's local height") {
     const rm::HeightField field = rampField();
     const rm::sim::Terrain terrain{field};
     Fixture fixture;
@@ -783,5 +783,6 @@ TEST_CASE("attachment propagation refreshes an attached child's terrain layer") 
     (void)rm::sim::tickSkirmish(fixture.store, fixture.catalog, match, terrain);
 
     const rm::sim::Transform& childTransform = fixture.store.transforms()[child.index];
-    CHECK(childTransform.y == terrain.heightAt(childTransform.x, childTransform.z));
+    CHECK(childTransform.y == fixture.store.transforms()[parent.index].y);
+    CHECK(childTransform.y != terrain.heightAt(childTransform.x, childTransform.z));
 }

@@ -205,9 +205,9 @@ extern bool gFafLog;
                                     rm::sim::UnitId target, rm::sim::Fx toX, rm::sim::Fx toZ,
                                     bool queued = false);
 
-/// The guard order: `unit` lends its BuildRate to whatever `target` is building, standing
-/// at build reach and following it (`core/sim/Assist.hpp`). Refused unless both units are
-/// distinct builders in the same army, exactly as the sim refuses it.
+/// The guard order: a field builder lends BuildRate to the target's work; an immobile factory
+/// mirrors compatible factory production. Refused unless both units are distinct compatible
+/// builders in the same army, exactly as the sim refuses it.
 [[nodiscard]] bool issueAssist(UnitScene& scene, std::span<const rm::sim::UnitId> units,
                                  rm::PlayerIndex player, rm::TickIndex tick,
                                  rm::sim::UnitId target, bool queued = false);

@@ -110,6 +110,17 @@ struct Weapon {
     /// ordinary unit acquisition.
     bool targetsProjectiles = false;
 
+    /// `CountedProjectile` means this weapon consumes a missile built and stored by its unit's
+    /// silo. The stored count is separate mutable state; this is only the authored capability.
+    bool countedProjectile = false;
+
+    /// `NukeWeapon` selects the strategic silo slot. Counted weapons without it, including an
+    /// SMD interceptor, occupy the tactical slot (`C-082`).
+    bool nukeWeapon = false;
+
+    /// The authored capacity for a counted projectile weapon. Zero preserves ordinary weapons.
+    int maxProjectileStorage = 0;
+
     /// Unrestricted when content states no caps, preserving synthetic and Recoil weapons.
     TargetLayerMask targetLayers = TargetLayerMask::Both;
 

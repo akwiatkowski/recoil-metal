@@ -114,8 +114,8 @@ bool gFafLog = false;
 [[nodiscard]] bool issueAssist(UnitScene& scene, std::span<const rm::sim::UnitId> units,
                                 rm::PlayerIndex player, rm::TickIndex tick,
                                 rm::sim::UnitId target, bool queued) {
-    // issueAttack's shape with the guard order's kind: the target's position seeds the
-    // route, the pursuit holds at build reach, and `applyAssistance` does the lending.
+    // issueAttack's shape with the guard order's kind: the target's position seeds the route.
+    // Field builders lend rate; immobile factories mirror compatible queued production.
     if (!scene.store.alive(target)) {
         return false;
     }
@@ -842,7 +842,8 @@ rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) 
     // core/sim/Skirmish.cpp rather than about whichever loop you are reading.
     const rm::sim::TickReport report =
         rm::sim::tickSkirmish(scene.store, scene.catalog, runner.match,
-                               scene.terrain(runner.field), gAppTickRate);
+                                scene.terrain(runner.field), gAppTickRate,
+                                static_cast<rm::TickIndex>(tickIndex));
 
     runner.shotsFired += report.shotsFired;
     scene.deathBlasts += report.deathBlasts;

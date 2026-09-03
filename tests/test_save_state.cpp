@@ -10,6 +10,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <memory>
 #include <vector>
 
 using rm::sim::RandomStream;
@@ -169,11 +170,14 @@ TEST_CASE("the current save state preserves captured attachment offsets", "[save
     UnitStore original;
     UnitStore::Spawn parent;
     parent.transform.x = rm::sim::Fx::fromInt(10);
+    parent.transform.y = rm::sim::Fx::fromInt(20);
     parent.transform.z = rm::sim::Fx::fromInt(20);
     const auto parentId = original.spawn(parent);
     UnitStore::Spawn child;
     child.transform.x = rm::sim::Fx::fromInt(13);
+    child.transform.y = rm::sim::Fx::fromInt(27);
     child.transform.z = rm::sim::Fx::fromInt(25);
+    child.motion.moving = true;
     const auto childId = original.spawn(child);
     REQUIRE(original.attach(parentId, childId));
 
@@ -183,12 +187,16 @@ TEST_CASE("the current save state preserves captured attachment offsets", "[save
     REQUIRE(saved.has_value());
     REQUIRE(saved->units.attachmentOffsets[childId.index]
             == std::array<rm::sim::Fx, 2>{rm::sim::Fx::fromInt(3), rm::sim::Fx::fromInt(5)});
+    REQUIRE(saved->units.attachmentHeights[childId.index] == rm::sim::Fx::fromInt(7));
+    REQUIRE(saved->units.motion[childId.index].attached);
 
     UnitStore restored{saved->units};
     restored.transforms()[parentId.index].x = rm::sim::Fx::fromInt(30);
+    restored.transforms()[parentId.index].y = rm::sim::Fx::fromInt(40);
     restored.transforms()[parentId.index].z = rm::sim::Fx::fromInt(40);
     restored.propagateAttachments();
     CHECK(restored.transforms()[childId.index].x == rm::sim::Fx::fromInt(33));
+    CHECK(restored.transforms()[childId.index].y == rm::sim::Fx::fromInt(47));
     CHECK(restored.transforms()[childId.index].z == rm::sim::Fx::fromInt(45));
 }
 
@@ -218,6 +226,51 @@ TEST_CASE("the current save state preserves generation-safe automatic weapon inc
     REQUIRE(saved->units.health[gunner.index].automaticTargets == std::vector<rm::sim::UnitId>{target});
 }
 
+TEST_CASE("the current save state restores shared queued commands and their allocators", "[save-state]") {
+    UnitStore original;
+    const auto first = original.spawn({});
+    const auto second = original.spawn({});
+    constexpr rm::CommandSource source = 7;
+    const auto id = original.allocateCommandId(source);
+    REQUIRE(id.has_value());
+
+    auto command = std::make_shared<rm::sim::SharedCommand>();
+    command->source = source;
+    command->id = *id;
+    command->kind = rm::sim::CommandKind::Move;
+    command->units = {first, second};
+    command->creationSerial = original.allocateCommandSerial();
+    REQUIRE(original.registerCommand(command));
+    original.orders()[first.index].append(rm::sim::QueuedCommand{first, command});
+    original.orders()[first.index].markCurrentActive();
+    original.orders()[second.index].append(rm::sim::QueuedCommand{second, command});
+    original.orders()[first.index].currentMutable()->setTargetPosition(rm::sim::Fx::fromInt(12),
+                                                                        rm::sim::Fx::fromInt(34));
+    original.orders()[second.index].currentMutable()->setTargetPosition(rm::sim::Fx::fromInt(56),
+                                                                         rm::sim::Fx::fromInt(78));
+    command.reset();
+
+    RandomStream random{std::uint32_t{1}};
+    const auto saved = SaveState::decode(
+        SaveState::encode({.tick = 42, .random = random.snapshot(), .units = original.snapshot()}));
+    REQUIRE(saved.has_value());
+    UnitStore restored{saved->units};
+
+    REQUIRE(restored.orders()[first.index].size() == 1);
+    REQUIRE(restored.orders()[second.index].size() == 1);
+    const auto& firstEntry = restored.orders()[first.index].entries().front();
+    const auto& secondEntry = restored.orders()[second.index].entries().front();
+    CHECK(&firstEntry.payload() == &secondEntry.payload());
+    CHECK(restored.orders()[first.index].activeEntry() == &firstEntry);
+    CHECK(firstEntry.targetX() == rm::sim::Fx::fromInt(12));
+    CHECK(firstEntry.targetZ() == rm::sim::Fx::fromInt(34));
+    CHECK(secondEntry.targetX() == rm::sim::Fx::fromInt(56));
+    CHECK(secondEntry.targetZ() == rm::sim::Fx::fromInt(78));
+    CHECK(restored.liveCommand(*id).get() == &firstEntry.payload());
+    CHECK(restored.allocateCommandSerial() == 1);
+    CHECK(restored.allocateCommandId(source) == rm::commandId(source, 1));
+}
+
 TEST_CASE("historic attachment saves derive offsets from their transforms", "[save-state]") {
     UnitStore original;
     const auto parent = original.spawn({.transform = {.x = rm::sim::Fx::fromInt(10),
@@ -229,27 +282,72 @@ TEST_CASE("historic attachment saves derive offsets from their transforms", "[sa
 
     RandomStream random{std::uint32_t{1}};
     const SaveState state{.tick = 42, .random = random.snapshot(), .units = original.snapshot()};
-    std::vector<std::byte> v5 = SaveState::encode(state);
-    // v4 adds the offset collection, v5 adds DoNotTarget, and v6 adds one automatic-target
-    // count to every health record. Removing all three additions recreates the published v3
-    // shape, which stored the attachment graph but none of those later states.
+    std::vector<std::byte> v7 = SaveState::encode(state);
     constexpr std::size_t kSlots = 2;
-    constexpr std::size_t kV2MotionBytes = 55;
+    // v8 appends allocator and queue state. This fixture starts from the final published v7
+    // shape, so the historical-layout edits below must remove that v8-only trailer first.
+    constexpr std::size_t kV8CommandStateBytes = sizeof(rm::CommandSerial)
+                                                  + std::size_t{rm::kInvalidCommandSource}
+                                                        * sizeof(std::uint32_t)
+                                                  + 2 * sizeof(std::uint32_t)
+                                                  + kSlots
+                                                        * (sizeof(std::uint8_t)
+                                                           + sizeof(std::uint32_t));
+    v7.resize(v7.size() - kV8CommandStateBytes);
+    writeU32(v7, 4, 7);
+    writeU32(v7, 16, static_cast<std::uint32_t>(v7.size() - 20));
+    // v4 adds the offset collection, v5 adds DoNotTarget, v6 adds one automatic-target count
+    // to every health record, and v7 adds attached motion plus the local height. Removing the
+    // additions recreates the published v3 shape, which stored the attachment graph but none of
+    // those later states.
+    constexpr std::size_t kV7MotionBytes = 56;
     constexpr std::size_t kV6HealthBytes = 68;
     constexpr std::size_t kAutomaticTargetCountOffset = 48;
-    const std::size_t units = 20 + sizeof(std::uint32_t) + readU32(v5, 20);
+    const std::size_t units = 20 + sizeof(std::uint32_t) + readU32(v7, 20);
     const std::size_t health = units
                                + sizeof(std::uint32_t) + kSlots * sizeof(std::uint32_t)
                                + sizeof(std::uint32_t) + sizeof(std::uint64_t)
                                + sizeof(std::uint32_t) + kSlots * sizeof(std::uint32_t)
                                + sizeof(std::uint32_t) + kSlots * 18
-                               + sizeof(std::uint32_t) + kSlots * kV2MotionBytes
-                               + sizeof(std::uint32_t);
+                                 + sizeof(std::uint32_t) + kSlots * kV7MotionBytes
+                                 + sizeof(std::uint32_t);
+    const auto publishedV7 = SaveState::decode(v7);
+    REQUIRE(publishedV7.has_value());
+    CHECK(publishedV7->units.orders.empty());
+
+    constexpr std::size_t kAttachedMotionOffset = 13;
+    const std::size_t motion = health - sizeof(std::uint32_t) - kSlots * kV7MotionBytes;
+    std::vector<std::byte> v6 = v7;
+    constexpr std::size_t kDoNotTargetBytes = sizeof(std::uint32_t) + kSlots * sizeof(std::uint8_t);
+    constexpr std::size_t kAttachmentHeightBytes = sizeof(std::uint32_t) + kSlots * sizeof(std::int32_t);
+    v6.erase(v6.end() - static_cast<std::ptrdiff_t>(kDoNotTargetBytes + kAttachmentHeightBytes),
+             v6.end() - static_cast<std::ptrdiff_t>(kDoNotTargetBytes));
+    for (std::size_t slot = kSlots; slot-- > 0;) {
+        const std::size_t attached = motion + sizeof(std::uint32_t) + slot * kV7MotionBytes
+                                     + kAttachedMotionOffset;
+        v6.erase(v6.begin() + static_cast<std::ptrdiff_t>(attached));
+    }
+    writeU32(v6, 4, 6);
+    writeU32(v6, 16, static_cast<std::uint32_t>(v6.size() - 20));
+    const auto publishedV6 = SaveState::decode(v6);
+    REQUIRE(publishedV6.has_value());
+    CHECK(publishedV6->units.orders.empty());
+    CHECK(publishedV6->units.motion[child.index].attached);
+
     for (std::size_t slot = kSlots; slot-- > 0;) {
         const std::size_t count = health + slot * kV6HealthBytes + kAutomaticTargetCountOffset;
-        v5.erase(v5.begin() + static_cast<std::ptrdiff_t>(count),
-                 v5.begin() + static_cast<std::ptrdiff_t>(count + sizeof(std::uint32_t)));
+        v7.erase(v7.begin() + static_cast<std::ptrdiff_t>(count),
+                  v7.begin() + static_cast<std::ptrdiff_t>(count + sizeof(std::uint32_t)));
     }
+    for (std::size_t slot = kSlots; slot-- > 0;) {
+        const std::size_t attached = motion + sizeof(std::uint32_t) + slot * kV7MotionBytes
+                                     + kAttachedMotionOffset;
+        v7.erase(v7.begin() + static_cast<std::ptrdiff_t>(attached));
+    }
+    v7.erase(v7.end() - static_cast<std::ptrdiff_t>(kDoNotTargetBytes + kAttachmentHeightBytes),
+             v7.end() - static_cast<std::ptrdiff_t>(kDoNotTargetBytes));
+
+    std::vector<std::byte> v5 = v7;
     writeU32(v5, 4, 5);
     writeU32(v5, 16, static_cast<std::uint32_t>(v5.size() - 20));
 

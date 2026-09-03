@@ -124,15 +124,15 @@ struct Army {
 /// character apart, and a prefix rule would end a match when a tank died.
 [[nodiscard]] bool isCommanderId(std::string_view blueprintId) noexcept;
 
-/// Marks every army with no commander left as defeated, and returns how many newly fell.
+/// Marks every army with no qualifying units left as defeated, and returns how many newly fell.
 ///
-/// `commandersAlive` is indexed by army: how many living commanders each still has. An
-/// army that never had one — nothing spawned for it — is NOT defeated by this, because
-/// "never had" and "lost it" are different states and a scene that spawns no commanders
-/// at all should not declare everyone dead on the first tick.
+/// `survivalUnits` is indexed by army. When `requireCommanderEver` is true, an army that never
+/// had a commander is not defeated: Assassination distinguishes "never had" from "lost it".
+/// Category predicates pass false because retail tests their current unit count directly.
 [[nodiscard]] std::size_t applyDefeats(std::vector<Army>& armies,
-                                       std::span<const int> commandersAlive,
-                                       std::span<const int> commandersEver);
+                                        std::span<const int> survivalUnits,
+                                        std::span<const int> commandersEver,
+                                        bool requireCommanderEver = true);
 
 /// Who has won, or nothing while the match is still on.
 ///

@@ -219,6 +219,31 @@ void recomputeIncome(const UnitStore& store, const UnitCatalog& catalog, Match& 
     }
 }
 
+/// C-210's Supremacy predicate: structures and engineers count, but walls do not.
+[[nodiscard]] std::vector<int> countSupremacyUnits(const UnitStore& store,
+                                                    const UnitCatalog& catalog,
+                                                    std::size_t armyCount) {
+    std::vector<int> alive(armyCount, 0);
+    const std::span<const MoveState> motion = store.motion();
+    const std::span<const Health> healths = store.health();
+
+    for (UnitIndex slot = 0; slot < motion.size(); ++slot) {
+        const unitdef::UnitDef* def = catalog.def(store.typeAt(slot));
+        if (def == nullptr || def->hasCategory("WALL")
+            || (!def->hasCategory("STRUCTURE") && !def->hasCategory("ENGINEER"))) {
+            continue;
+        }
+        const int army = motion[slot].armyIndex;
+        if (army < 0 || static_cast<std::size_t>(army) >= alive.size()) {
+            continue;
+        }
+        if (slot < healths.size() && healths[slot].alive()) {
+            ++alive[static_cast<std::size_t>(army)];
+        }
+    }
+    return alive;
+}
+
 } // namespace
 
 std::vector<int> countCommanders(const UnitStore& store, const UnitCatalog& catalog,
@@ -283,7 +308,7 @@ namespace {
 } // namespace
 
 TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& match,
-                        const Terrain& terrain, TickRate rate) {
+                          const Terrain& terrain, TickRate rate, TickIndex tickIndex) {
     TickReport report;
 
     // 0a. WHO IS HELPING, read from where everyone stood at the end of the last tick. It
@@ -324,15 +349,6 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
     //    problem does not arise.
     tick(store.transforms(), store.motion(), terrain);
     store.propagateAttachments();
-    const auto placeAttachedUnitsOnMotionLayers = [&] {
-        for (UnitIndex slot = 0; slot < store.slotCount(); ++slot) {
-            const UnitId unit = store.idAt(slot);
-            if (store.parentOf(unit)) {
-                placeOnMotionLayer(store.transforms()[slot], store.motion()[slot], terrain);
-            }
-        }
-    };
-    placeAttachedUnitsOnMotionLayers();
 
     //    THE SPATIAL INDEX IS REBUILT TWICE, and both points are load-bearing (§7 P5.2).
     //    Here, because collisions ask which units are near each other and `tick` has just
@@ -346,7 +362,6 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
     // Collision resolution can move either member independently. Reapply attachment-local
     // transforms before publishing positions to combat, so children never lag a parent by a tick.
     store.propagateAttachments();
-    placeAttachedUnitsOnMotionLayers();
     store.reindex(spatialCellSize(store));
 
     // Everything below is a MATCH, and a scene with no armies is not one — a `--units`
@@ -387,13 +402,13 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
     //    that has stopped facing the wrong way has to be brought round first; otherwise
     //    the facing gate reads as a weapon that does not work.
     (void)aimAtTargets(store, catalog, match.armies, match.intel, match.projectiles,
-                        playableRect);
+                          playableRect, tickIndex, rate);
 
     // 3. FIRE, fly, land.
     if (match.projectiles != nullptr) {
         report.shotsFired =
             fireWeapons(store, catalog, match.armies, *match.projectiles, rate, match.events,
-                          match.intel, playableRect);
+                            match.intel, playableRect, tickIndex);
         // The held overcharges, after the guns and before the flight: a shot authorised
         // this tick flies this tick, and the energy it burned is gone before the economy
         // pass reads the store.
@@ -442,7 +457,9 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
     ++match.defeatPollElapsedTicks;
     if (match.defeatPollElapsedTicks >= defeatPollTicks) {
         match.defeatPollElapsedTicks = 0;
-        const std::vector<int> alive = countCommanders(store, catalog, match.armies.size());
+        const std::vector<int> alive = match.victoryMode == VictoryMode::Supremacy
+                                           ? countSupremacyUnits(store, catalog, match.armies.size())
+                                           : countCommanders(store, catalog, match.armies.size());
         const std::vector<bool> defeatedBefore = [&match] {
             std::vector<bool> before;
             before.reserve(match.armies.size());
@@ -451,7 +468,8 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
             }
             return before;
         }();
-        report.defeated = applyDefeats(match.armies, alive, match.commandersEver);
+        report.defeated = applyDefeats(match.armies, alive, match.commandersEver,
+                                       match.victoryMode != VictoryMode::Supremacy);
 
         // WHICH armies fell, not just how many. `applyDefeats` returns a count, which is all the
         // report ever needed; an event has to name the army, so the flags are compared either side

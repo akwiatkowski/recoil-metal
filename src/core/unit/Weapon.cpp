@@ -107,7 +107,15 @@ std::vector<Weapon> weaponsFrom(const lua::Value& weaponArray, bool airborneSour
         weapon.role =
             weaponRoleFromCategory(entry.stringAt("WeaponCategory").value_or("(none)"));
         weapon.targetsProjectiles = entry.stringAt("TargetType").value_or("")
-                                   == "RULEWTT_Projectile";
+                                    == "RULEWTT_Projectile";
+        if (const lua::Value* counted = entry.find("CountedProjectile")) {
+            weapon.countedProjectile = counted->asBoolean().value_or(false);
+        }
+        if (const lua::Value* nuke = entry.find("NukeWeapon")) {
+            weapon.nukeWeapon = nuke->asBoolean().value_or(false);
+        }
+        weapon.maxProjectileStorage = static_cast<int>(
+            numberOr(entry, "MaxProjectileStorage", 0.0f));
         if (const std::optional<std::string_view> arc = entry.stringAt("BallisticArc")) {
             weapon.arc = ballisticArcFromName(*arc).value_or(BallisticArc::None);
         }

@@ -741,6 +741,43 @@ TEST_CASE("a radar blip remains after its source dies") {
     CHECK(blip->z == retainedZ);
 }
 
+TEST_CASE("radar reaping drops a dead contact when its slot is reused") {
+    rm::unitdef::UnitDef watcherDef = seer(0.0f, 400.0f);  // radar only, no eyes
+    rm::unitdef::UnitDef quietDef = seer(0.0f);
+    UnitCatalog catalog;
+    const rm::UnitTypeIndex watcher = catalog.add(&watcherDef);
+    const rm::UnitTypeIndex quiet = catalog.add(&quietDef);
+
+    Intel intel;
+    intel.configure(2, Fx::fromInt(1024), Fx::fromInt(1024),
+                    rm::sim::VisionStyle::ForgedAlliance);
+
+    UnitStore store;
+    (void)place(store, watcher, 0, 500.0f, 500.0f);
+    const rm::sim::UnitId dead = place(store, quiet, 1, 600.0f, 500.0f);
+    const std::vector<Army> armies = twoArmies(false);
+
+    intel.update(store, catalog, armies, nullptr);
+    store.kill(dead);
+    intel.update(store, catalog, armies, nullptr);
+    const rm::sim::UnitId replacement = place(store, quiet, 1, 650.0f, 500.0f);
+    REQUIRE(replacement.index == dead.index);
+    REQUIRE(replacement.generation != dead.generation);
+
+    std::vector<rm::sim::Contact> contacts;
+    rm::sim::contactsFor(0, store, catalog, armies, intel, 0, contacts);
+    CHECK(std::none_of(contacts.begin(), contacts.end(), [dead](const rm::sim::Contact& contact) {
+        return contact.unit == dead;
+    }));
+
+    intel.update(store, catalog, armies, nullptr);
+
+    const auto retained = intel.retainedRadarContacts(0);
+    REQUIRE(retained.size() == 1);
+    CHECK(retained.front().unit == replacement);
+    CHECK_FALSE(retained.front().maybeDead);
+}
+
 TEST_CASE("a radar blip survives a source killed after intel refresh in the same skirmish tick") {
     rm::unitdef::UnitDef watcherDef = seer(0.0f, 400.0f);  // radar only, no eyes
     rm::unitdef::UnitDef quietDef = seer(0.0f);

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <functional>
 #include <limits>
+#include <stdexcept>
 
 namespace rm::sim {
 
@@ -12,30 +13,82 @@ UnitStore::UnitStore(const Snapshot& snapshot)
       transforms_(snapshot.transforms),
       motion_(snapshot.motion),
       health_(snapshot.health),
-      types_(snapshot.types),
-      factoryRepeat_(snapshot.factoryRepeat),
-      doNotTarget_(snapshot.doNotTarget),
+       types_(snapshot.types),
+       factoryRepeat_(snapshot.factoryRepeat),
+       doNotTarget_(snapshot.doNotTarget),
        orders_(snapshot.transforms.size()),
        parents_(snapshot.parents),
        children_(snapshot.children),
-       attachmentOffsets_(snapshot.attachmentOffsets) {
+       attachmentOffsets_(snapshot.attachmentOffsets),
+        attachmentHeights_(snapshot.attachmentHeights),
+        nextCommandSerial_(snapshot.nextCommandSerial),
+        nextCommandCounters_(snapshot.nextCommandCounters) {
+    std::vector<std::shared_ptr<SharedCommand>> mutableCommands;
+    mutableCommands.reserve(snapshot.sharedCommands.size());
+    std::vector<std::shared_ptr<const SharedCommand>> sharedCommands;
+    sharedCommands.reserve(snapshot.sharedCommands.size());
+    for (const SharedCommand& command : snapshot.sharedCommands) {
+        auto restored = std::make_shared<SharedCommand>(command);
+        sharedCommands.push_back(restored);
+        mutableCommands.push_back(std::move(restored));
+    }
+    if (!snapshot.orders.empty() && snapshot.orders.size() != orders_.size()) {
+        throw std::invalid_argument("command queue snapshot does not match unit slots");
+    }
+    for (std::size_t slot = 0; slot < snapshot.orders.size(); ++slot) {
+        if (!orders_[slot].restore(snapshot.orders[slot], sharedCommands)) {
+            throw std::invalid_argument("invalid command queue snapshot");
+        }
+    }
+    for (const std::shared_ptr<SharedCommand>& command : mutableCommands) {
+        (void)registerCommand(command);
+    }
     factoryRepeat_.resize(transforms_.size(), false);
     doNotTarget_.resize(transforms_.size(), false);
     attachmentOffsets_.resize(transforms_.size());
+    const bool deriveAttachmentHeights = attachmentHeights_.empty();
+    attachmentHeights_.resize(transforms_.size());
+    for (std::size_t child = 0; child < transforms_.size(); ++child) {
+        if (parents_[child]) {
+            if (deriveAttachmentHeights) {
+                attachmentHeights_[child] =
+                    transforms_[child].y - transforms_[parents_[child]->index].y;
+            }
+            motion_[child].attached = true;
+        }
+    }
 }
 
 UnitStore::Snapshot UnitStore::snapshot() const {
-    return {.ids = ids_.snapshot(),
-            .generations = generations_,
-            .transforms = transforms_,
-             .motion = motion_,
-             .health = health_,
-              .types = types_,
-              .factoryRepeat = factoryRepeat_,
-              .doNotTarget = doNotTarget_,
-              .parents = parents_,
-              .children = children_,
-              .attachmentOffsets = attachmentOffsets_};
+    Snapshot saved{.ids = ids_.snapshot(),
+                   .generations = generations_,
+                   .transforms = transforms_,
+                   .motion = motion_,
+                   .health = health_,
+                   .types = types_,
+                   .factoryRepeat = factoryRepeat_,
+                   .doNotTarget = doNotTarget_,
+                   .parents = parents_,
+                   .children = children_,
+                   .attachmentOffsets = attachmentOffsets_,
+                   .attachmentHeights = attachmentHeights_,
+                   .nextCommandSerial = nextCommandSerial_,
+                   .nextCommandCounters = nextCommandCounters_};
+    std::map<const SharedCommand*, std::size_t> sharedCommands;
+    for (const CommandQueue& queue : orders_) {
+        for (const QueuedCommand& entry : queue.entries()) {
+            sharedCommands.try_emplace(&entry.payload(), sharedCommands.size());
+        }
+    }
+    saved.sharedCommands.resize(sharedCommands.size());
+    for (const auto& [command, index] : sharedCommands) {
+        saved.sharedCommands[index] = *command;
+    }
+    saved.orders.reserve(orders_.size());
+    for (const CommandQueue& queue : orders_) {
+        saved.orders.push_back(queue.snapshot(sharedCommands));
+    }
+    return saved;
 }
 
 UnitId UnitStore::spawn(const Spawn& request) {
@@ -56,11 +109,13 @@ UnitId UnitStore::spawn(const Spawn& request) {
         parents_.emplace_back();
         children_.emplace_back();
         attachmentOffsets_.emplace_back();
+        attachmentHeights_.emplace_back();
         generations_.emplace_back();
     }
 
     transforms_[slot] = request.transform;
     motion_[slot] = request.motion;
+    motion_[slot].attached = false;
     health_[slot] = request.health;
     types_[slot] = request.type;
     factoryRepeat_[slot] = false;
@@ -73,6 +128,7 @@ UnitId UnitStore::spawn(const Spawn& request) {
     parents_[slot].reset();
     children_[slot].clear();
     attachmentOffsets_[slot] = {};
+    attachmentHeights_[slot] = {};
     // And the same for who last hit the PREVIOUS occupant: `request.health` sets the fresh
     // unit's own, but a caller that leaves it unset would have the newcomer already remember
     // being shot by whoever killed its predecessor. Set from the request so an explicit value
@@ -102,7 +158,10 @@ bool UnitStore::attach(UnitId parent, UnitId child) {
 
     parents_[child.index] = parent;
     attachmentOffsets_[child.index] = {transforms_[child.index].x - transforms_[parent.index].x,
-                                       transforms_[child.index].z - transforms_[parent.index].z};
+                                        transforms_[child.index].z - transforms_[parent.index].z};
+    attachmentHeights_[child.index] = transforms_[child.index].y - transforms_[parent.index].y;
+    motion_[child.index].moving = false;
+    motion_[child.index].attached = true;
     children_[parent.index].push_back(child);
     return true;
 }
@@ -120,6 +179,8 @@ bool UnitStore::detach(UnitId child) {
     }
     parents_[child.index].reset();
     attachmentOffsets_[child.index] = {};
+    attachmentHeights_[child.index] = {};
+    motion_[child.index].attached = false;
     return true;
 }
 
@@ -139,6 +200,10 @@ std::array<Fx, 2> UnitStore::attachmentOffsetOf(UnitId child) const noexcept {
     return alive(child) ? attachmentOffsets_[child.index] : std::array<Fx, 2>{};
 }
 
+Fx UnitStore::attachmentHeightOf(UnitId child) const noexcept {
+    return alive(child) ? attachmentHeights_[child.index] : Fx{};
+}
+
 void UnitStore::propagateAttachments() {
     std::function<void(UnitId)> updateChildren = [&](UnitId parent) {
         for (const UnitId child : children_[parent.index]) {
@@ -146,6 +211,7 @@ void UnitStore::propagateAttachments() {
                 continue;
             }
             transforms_[child.index].x = transforms_[parent.index].x + attachmentOffsets_[child.index][0];
+            transforms_[child.index].y = transforms_[parent.index].y + attachmentHeights_[child.index];
             transforms_[child.index].z = transforms_[parent.index].z + attachmentOffsets_[child.index][1];
             updateChildren(child);
         }
@@ -174,6 +240,8 @@ void UnitStore::kill(UnitId id) {
         if (child.index < parents_.size() && parents_[child.index] == id) {
             parents_[child.index].reset();
             attachmentOffsets_[child.index] = {};
+            attachmentHeights_[child.index] = {};
+            motion_[child.index].attached = false;
         }
     }
     children_[id.index].clear();

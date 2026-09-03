@@ -13,6 +13,7 @@
 #include <iomanip>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <sstream>
 
 namespace rm::sim {
@@ -247,7 +248,9 @@ namespace {
         return false;
     }
     const unitdef::Role role = unitdef::roleOf(*assister);
-    return role == unitdef::Role::Builder || role == unitdef::Role::Commander;
+    return role == unitdef::Role::Builder || role == unitdef::Role::Commander
+        || (assister->hasCategory("FACTORY") && !assister->isMobile()
+            && assister->isBuilder());
 }
 
 [[nodiscard]] bool validRepair(const Command& command, const UnitStore& store,
@@ -350,11 +353,34 @@ bool buildSitePlaceable(const PassabilityGrid& grid, Fx x, Fx z, Fx radiusElmos,
     return true;
 }
 
+/// ART-S007 `GrowthFormation` selects these repeating land-block widths by total unit count.
+/// The native formation instance owns category matching and rotation; this intake slice is
+/// deliberately limited to one homogeneous ground type, where canonical rank fills each slot.
+[[nodiscard]] std::size_t growthFormationWidth(std::size_t units) noexcept {
+    if (units <= 3) {
+        return 3;
+    }
+    if (units <= 12) {
+        return 4;
+    }
+    if (units <= 20) {
+        return 5;
+    }
+    if (units <= 30) {
+        return 6;
+    }
+    if (units <= 42) {
+        return 7;
+    }
+    return 8;
+}
+
 namespace {
 
 [[nodiscard]] const std::shared_ptr<SharedCommand>& ensureSharedCommand(
     const Command& command, CommandSource source, CommandId id, std::uint32_t count,
-    UnitStore& store, std::shared_ptr<SharedCommand>& shared) {
+    Fx formationAnchorX, Fx formationAnchorZ, UnitStore& store,
+    std::shared_ptr<SharedCommand>& shared) {
     if (shared == nullptr) {
         shared = std::make_shared<SharedCommand>(SharedCommand{
             .tick = command.tick,
@@ -365,8 +391,8 @@ namespace {
             .queued = command.queued,
             // Finalized to the accepted subset after every requested member has been tried.
             .units = {},
-            .targetX = command.targetX,
-            .targetZ = command.targetZ,
+            .targetX = formationAnchorX,
+            .targetZ = formationAnchorZ,
             .target = command.target,
             .buildType = command.buildType,
             .creationSerial = store.allocateCommandSerial(),
@@ -408,7 +434,8 @@ void teardownMovement(MoveState& motion) {
 
 [[nodiscard]] bool applyCommandMember(
     const Command& command, CommandSource source, CommandId id, std::uint32_t count,
-    std::shared_ptr<SharedCommand>& shared, UnitStore& store,
+    Fx formationAnchorX, Fx formationAnchorZ, std::shared_ptr<SharedCommand>& shared,
+    UnitStore& store,
     const UnitCatalog& catalog, std::span<const Player> players, std::span<const Army> armies,
     const Terrain& terrain, const PassabilityGrid& grid, TickRate rate,
     std::vector<Construction>* building, EventQueue* events, const FeatureStore* features,
@@ -465,13 +492,15 @@ void teardownMovement(MoveState& motion) {
         orders.clear();
         cancelActiveConstruction(building, command.unit);
         motion = std::move(stopped);
-        (void)ensureSharedCommand(command, source, id, count, store, shared);
+        (void)ensureSharedCommand(command, source, id, count, formationAnchorX, formationAnchorZ,
+                                  store, shared);
         return true;
     }
 
     if (command.queued) {
         const std::shared_ptr<const SharedCommand> payload =
-            ensureSharedCommand(command, source, id, count, store, shared);
+            ensureSharedCommand(command, source, id, count, formationAnchorX, formationAnchorZ,
+                                store, shared);
         // Factory production is repeatable: Shift-clicking the same tank twice means two tanks,
         // unlike placing the same structure twice, which retains the ordinary cancel gesture.
         if (command.kind == CommandKind::Build) {
@@ -488,8 +517,11 @@ void teardownMovement(MoveState& motion) {
         const bool alreadyPatrolling = std::any_of(
             orders.entries().begin(), orders.entries().end(), [](const QueuedCommand& queued) {
                 return queued.kind() == CommandKind::Patrol;
-            });
+        });
         QueuedCommand entry{command.unit, payload};
+        if (command.kind == CommandKind::Move) {
+            entry.setTargetPosition(command.targetX, command.targetZ);
+        }
         if (command.kind == CommandKind::Patrol && !alreadyPatrolling) {
             entry.setPatrolOrigin({store.transforms()[command.unit.index].x,
                                    store.transforms()[command.unit.index].z});
@@ -559,12 +591,15 @@ void teardownMovement(MoveState& motion) {
     if (command.kind == CommandKind::Move && pathService != nullptr
         && !store.motion()[command.unit.index].airborne) {
         const std::shared_ptr<const SharedCommand> payload =
-            ensureSharedCommand(command, source, id, count, store, shared);
+            ensureSharedCommand(command, source, id, count, formationAnchorX, formationAnchorZ,
+                                store, shared);
         MoveState& motion = store.motion()[command.unit.index];
         pathService->cancel(command.unit);
         orders.clear();
         teardownMovement(motion);
-        orders.append(QueuedCommand{command.unit, payload});
+        QueuedCommand entry{command.unit, payload};
+        entry.setTargetPosition(command.targetX, command.targetZ);
+        orders.append(std::move(entry));
         orders.markCurrentActive();
         const Transform& at = store.transforms()[command.unit.index];
         motion.pathPhaseStartX = grid.cellAtWorld(at.x);
@@ -603,8 +638,12 @@ void teardownMovement(MoveState& motion) {
         cancelActiveConstruction(building, command.unit);
     }
     const std::shared_ptr<const SharedCommand> payload =
-        ensureSharedCommand(command, source, id, count, store, shared);
+        ensureSharedCommand(command, source, id, count, formationAnchorX, formationAnchorZ,
+                            store, shared);
     QueuedCommand entry{command.unit, payload};
+    if (command.kind == CommandKind::Move) {
+        entry.setTargetPosition(command.targetX, command.targetZ);
+    }
     if (command.kind == CommandKind::Patrol) {
         entry.setPatrolOrigin({store.transforms()[command.unit.index].x,
                                store.transforms()[command.unit.index].z});
@@ -646,6 +685,33 @@ ApplyCommandResult applyCommand(const CommandIssue& issue, UnitStore& store,
     std::vector<UnitId> canonical = issue.units;
     canonicalizeUnits(canonical);
 
+    // `GrowthFormation` is the travel formation for non-air groups (C-178). Its native slot
+    // matcher is not available here, so use its topology only for a homogeneous set of members
+    // that would reach the command boundary. Rejected handles must not consume a formation slot.
+    const Player* issuer = playerFor(issue.player, players);
+    std::vector<UnitId> formationMembers;
+    std::optional<UnitTypeIndex> homogeneousType;
+    bool useGrowthFormation = issue.kind == CommandKind::Move && canonical.size() > 1;
+    for (const UnitId unit : canonical) {
+        if (!useGrowthFormation) {
+            break;
+        }
+        if (!store.alive(unit) || issuer == nullptr || !authorised(*issuer, store, unit, armies)
+            || store.motion()[unit.index].airborne || gridForUnit == nullptr
+            || gridForUnit(unit) == nullptr) {
+            continue;
+        }
+        const UnitTypeIndex type = store.typeAt(unit.index);
+        if (homogeneousType.has_value() && *homogeneousType != type) {
+            useGrowthFormation = false;
+            break;
+        }
+        homogeneousType = type;
+        formationMembers.push_back(unit);
+    }
+    useGrowthFormation = useGrowthFormation && formationMembers.size() > 1;
+    const std::size_t formationWidth = growthFormationWidth(formationMembers.size());
+
     result.accepted.reserve(canonical.size());
     if (issue.kind == CommandKind::ToggleFactoryRepeat) {
         for (const UnitId unit : canonical) {
@@ -664,7 +730,8 @@ ApplyCommandResult applyCommand(const CommandIssue& issue, UnitStore& store,
         return result;
     }
     std::shared_ptr<SharedCommand> shared;
-    for (const UnitId unit : canonical) {
+    for (std::size_t rank = 0; rank < canonical.size(); ++rank) {
+        const UnitId unit = canonical[rank];
         // Validate the handle and authority before asking a resolver that may index by the
         // handle. `applyCommandMember` repeats these checks at the mutation boundary.
         if (!store.alive(unit)) {
@@ -678,7 +745,7 @@ ApplyCommandResult applyCommand(const CommandIssue& issue, UnitStore& store,
         if (grid == nullptr) {
             continue;
         }
-        const Command member{
+        Command member{
             .tick = issue.tick,
             .player = issue.player,
             .kind = issue.kind,
@@ -689,9 +756,48 @@ ApplyCommandResult applyCommand(const CommandIssue& issue, UnitStore& store,
             .target = issue.target,
             .buildType = issue.buildType,
         };
-        if (applyCommandMember(member, issue.source, issue.id, issue.count, shared, store,
-                               catalog, players, armies, terrain, *grid, rate, building, events,
-                               features, pathService)) {
+
+        if (useGrowthFormation) {
+            // ART-S007's homogeneous GrowthFormation rows enumerate columns centre-outward:
+            // odd widths are 0,+1,-1,+2,-2 and even widths are -.5,+.5,-1.5,+1.5. A
+            // collision diameter is the existing local-target spacing, so its half supplies the
+            // even-row half positions; successive rows are one diameter behind the anchor.
+            const std::size_t formationRank = static_cast<std::size_t>(
+                std::ranges::find(formationMembers, unit) - formationMembers.begin());
+            const std::size_t column = formationRank % formationWidth;
+            const std::size_t row = formationRank / formationWidth;
+            const Fx radius = store.motion()[unit.index].radiusElmos;
+            const Fx diameter = Fx::fromRaw(saturate(FxWide{radius.raw()} * 2));
+            if (formationWidth % 2 == 0) {
+                const FxWide halfDiameterOffsets = column % 2 == 0
+                                                       ? -static_cast<FxWide>(column + 1)
+                                                       : static_cast<FxWide>(column);
+                member.targetX += Fx::fromRaw(
+                    saturate(FxWide{radius.raw()} * halfDiameterOffsets));
+            } else {
+                const FxWide diameterOffsets = column % 2 == 0
+                                                   ? -static_cast<FxWide>(column / 2)
+                                                   : static_cast<FxWide>((column + 1) / 2);
+                member.targetX += Fx::fromRaw(
+                    saturate(FxWide{diameter.raw()} * diameterOffsets));
+            }
+            member.targetZ -= Fx::fromRaw(saturate(FxWide{diameter.raw()}
+                                                    * static_cast<FxWide>(row)));
+        } else if (issue.kind == CommandKind::Move && canonical.size() > 1
+                   && !store.motion()[unit.index].airborne) {
+            // This is deliberately only a generic intake fan-out, not retail's Lua-owned
+            // formation geometry. Centre an unrotated line on the clicked anchor; adjacent
+            // ranks are one collision diameter apart, so canonical ranks receive distinct local
+            // destinations while the immutable shared command still records the click itself.
+            const FxWide offsetRanks = static_cast<FxWide>(rank) * 2
+                                       - static_cast<FxWide>(canonical.size() - 1);
+            const Fx spacing = store.motion()[unit.index].radiusElmos;
+            member.targetX += Fx::fromRaw(saturate(FxWide{spacing.raw()} * offsetRanks));
+        }
+
+        if (applyCommandMember(member, issue.source, issue.id, issue.count, issue.targetX,
+                               issue.targetZ, shared, store, catalog, players, armies, terrain,
+                               *grid, rate, building, events, features, pathService)) {
             result.accepted.push_back(unit);
         }
     }
@@ -887,16 +993,17 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
                     (void)orders[slot].cycle();
                 }
             } else {
-                if (payload != nullptr && !store.decreaseCommandCount(payload->id)) {
-                    return false;
+                if (payload != nullptr && payload->remainingCount > 1) {
+                    if (!store.decreaseCommandCount(payload->id)) {
+                        return false;
+                    }
+                    orders[slot].deactivateCurrent();
+                } else {
+                    // Ordinary final-count completion retires only this unit's queue entry.
+                    // Retail's global zero-count removal is a distinct out-of-band operation
+                    // (`C-211`), not the dispatcher's final-count path.
+                    (void)orders[slot].finish();
                 }
-                if (payload != nullptr && payload->remainingCount == 0) {
-                    // Exhaustion removes this exact shared command from every member queue. Its
-                    // local head is therefore already gone; dispatch only the newly exposed one.
-                    startPending();
-                    return true;
-                }
-                (void)orders[slot].finish();
             }
             startPending();
             return true;
@@ -921,6 +1028,151 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
         if (current->kind() == CommandKind::Build) {
             serviceBuilds();
             continue;
+        }
+
+        // An immobile factory guarding another builder mirrors compatible factory production.
+        // Retail reserves the guarded command up front, creates a child factory-build task with
+        // no command pointer, and leaves the Guard task itself active (`C-183`, `C-211`). The
+        // existing Construction record is that child task: it therefore completes without a
+        // second command-count mutation.
+        if (current->kind() == CommandKind::Assist && building != nullptr) {
+            const unitdef::UnitDef* guardDef = catalog.def(store.typeAt(slot));
+            if (guardDef != nullptr && guardDef->hasCategory("FACTORY")
+                && !guardDef->isMobile() && guardDef->isBuilder()) {
+                if (Construction* work = activeConstruction(*building, store.idAt(slot))) {
+                    advanceConstruction(*work);
+                    if (!work->finished()) {
+                        continue;
+                    }
+                    // This is the guarding factory's OWN queued build, which block A starts
+                    // with its command retained. Complete it through the ordinary factory
+                    // count/repeat ladder, but operate behind the active guard order (`C-211`).
+                    // Block A starts the first compatible own build. Until this child finishes,
+                    // `startCommand` refuses another build for this factory; input can only
+                    // append behind Assist, while stop, replacement, or cancellation cancels the
+                    // child. Thus the first matching Build here is precisely the one Block A
+                    // started, even when later entries build the same product type.
+                    const auto own = std::ranges::find_if(
+                        orders[slot].entries(), [work](const QueuedCommand& candidate) {
+                            return candidate.kind() == CommandKind::Build
+                                   && candidate.buildType() == work->blueprintIndex;
+                        });
+                    if (own != orders[slot].entries().end()) {
+                        const std::shared_ptr<SharedCommand> payload =
+                            store.liveCommand(own->payload().id);
+                        if (payload != nullptr && payload->remainingCount > 1) {
+                            (void)store.decreaseCommandCount(payload->id);
+                        } else if (payload != nullptr && store.factoryRepeat(store.idAt(slot))) {
+                            payload->remainingCount = payload->originalCount;
+                            (void)orders[slot].cycleExact(payload.get());
+                        } else if (payload != nullptr) {
+                            (void)orders[slot].removeExact(payload.get());
+                        }
+                    }
+                    if (finished != nullptr) {
+                        finished->push_back(*work);
+                    }
+                    emit(events, Event{.kind = EventKind::ConstructionFinished,
+                                       .army = work->armyIndex,
+                                       .amount = work->cost.mass,
+                                       .at = work->position});
+                }
+
+                if (!store.alive(current->target())) {
+                    // An already-created child is independent of the guarded unit. The branch
+                    // above returned while it was unfinished; once none remains, retire Assist.
+                    (void)orders[slot].finish();
+                    continue;
+                }
+
+                // Retail's factory-assist helper scans the guarding factory's retained queue
+                // before it considers the guardee's queue. The selected entry remains behind
+                // the active Assist and is retired only when its factory-build task completes
+                // (`C-211` block A at 0x00619337–0x00619408).
+                const std::deque<QueuedCommand>& ownCandidates = orders[slot].entries();
+                for (const QueuedCommand& candidate : ownCandidates) {
+                    if (candidate.kind() != CommandKind::Build) {
+                        continue;
+                    }
+                    const unitdef::UnitDef* product = catalog.def(candidate.buildType());
+                    if (product == nullptr || !product->isMobile()
+                        || !unitdef::matchesExpression(guardDef->buildableCategory, *product)) {
+                        continue;
+                    }
+                    const auto productType = static_cast<std::size_t>(candidate.buildType());
+                    const PassabilityGrid* productGrid =
+                        productType < gridForType.size() ? gridForType[productType] : nullptr;
+                    if (productGrid == nullptr
+                        || (product->motion != unitdef::MotionType::Air
+                            && !sitePlaceable(*productGrid, store.transforms()[slot].x,
+                                              store.transforms()[slot].z,
+                                              fxFromFloat(product->collisionRadiusElmos)))) {
+                        continue;
+                    }
+                    if (startCommand(candidate.asCommand(), store, catalog, terrain, *productGrid,
+                                     rate, building, events, features)) {
+                        break;
+                    }
+                }
+                if (activeConstruction(*building, store.idAt(slot)) != nullptr) {
+                    continue;
+                }
+
+                CommandQueue& guarded = orders[current->target().index];
+                std::shared_ptr<SharedCommand> selected;
+                Command mirrored;
+                const PassabilityGrid* productGrid = nullptr;
+                const std::deque<QueuedCommand>& candidates = guarded.entries();
+                for (std::size_t at = 0; at < candidates.size(); ++at) {
+                    const QueuedCommand& candidate = candidates[at];
+                    if (candidate.kind() != CommandKind::Build) {
+                        continue;
+                    }
+                    const unitdef::UnitDef* product = catalog.def(candidate.buildType());
+                    if (product == nullptr || !product->isMobile()
+                        || !unitdef::matchesExpression(guardDef->buildableCategory, *product)) {
+                        continue;
+                    }
+                    const std::shared_ptr<SharedCommand> payload =
+                        store.liveCommand(candidate.payload().id);
+                    if (payload == nullptr) {
+                        continue;
+                    }
+                    const bool repeating = store.factoryRepeat(current->target());
+                    if (at == 0 && payload->remainingCount <= 1
+                        && (candidates.size() > 1 || !repeating)) {
+                        continue;
+                    }
+                    const auto productType = static_cast<std::size_t>(candidate.buildType());
+                    productGrid = productType < gridForType.size() ? gridForType[productType]
+                                                                   : nullptr;
+                    if (productGrid == nullptr
+                        || (product->motion != unitdef::MotionType::Air
+                            && !sitePlaceable(*productGrid, store.transforms()[slot].x,
+                                              store.transforms()[slot].z,
+                                              fxFromFloat(product->collisionRadiusElmos)))) {
+                        continue;
+                    }
+                    selected = payload;
+                    mirrored = candidate.asCommand();
+                    mirrored.unit = store.idAt(slot);
+                    break;
+                }
+
+                if (selected != nullptr) {
+                    if (selected->remainingCount > 1) {
+                        (void)store.decreaseCommandCount(selected->id);
+                    } else if (store.factoryRepeat(current->target())) {
+                        selected->remainingCount = selected->originalCount;
+                        (void)guarded.cycleExact(selected.get());
+                    } else {
+                        (void)guarded.removeExact(selected.get());
+                    }
+                    (void)startCommand(mirrored, store, catalog, terrain, *productGrid, rate,
+                                       building, events, features);
+                    continue;
+                }
+            }
         }
 
         // A service-owned plain move has an active command entry but no published route yet.

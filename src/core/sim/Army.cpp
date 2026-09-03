@@ -73,21 +73,18 @@ bool isCommanderId(std::string_view blueprintId) noexcept {
     return false;
 }
 
-std::size_t applyDefeats(std::vector<Army>& armies, std::span<const int> commandersAlive,
-                         std::span<const int> commandersEver) {
+std::size_t applyDefeats(std::vector<Army>& armies, std::span<const int> survivalUnits,
+                          std::span<const int> commandersEver, bool requireCommanderEver) {
     std::size_t newlyDefeated = 0;
     for (Army& army : armies) {
         if (army.defeated) {
             continue;
         }
         const auto i = static_cast<std::size_t>(army.index);
-        if (i >= commandersAlive.size() || i >= commandersEver.size()) {
+        if (i >= survivalUnits.size() || (requireCommanderEver && i >= commandersEver.size())) {
             continue;
         }
-        // Only an army that HAD a commander can lose it. Without this a scene with no
-        // commanders at all — a `--units` crowd, or a map with no spawns — declares every
-        // army defeated on the first tick and announces a draw before anything happens.
-        if (commandersEver[i] > 0 && commandersAlive[i] == 0) {
+        if ((!requireCommanderEver || commandersEver[i] > 0) && survivalUnits[i] == 0) {
             army.defeated = true;
             ++newlyDefeated;
         }

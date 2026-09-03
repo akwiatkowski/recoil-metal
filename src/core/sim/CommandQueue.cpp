@@ -175,9 +175,59 @@ const QueuedCommand* CommandQueue::cycle() {
     return current();
 }
 
+std::size_t CommandQueue::cycleExact(const SharedCommand* command) {
+    if (command == nullptr) {
+        return 0;
+    }
+    const auto found = std::ranges::find_if(queue_, [command](const QueuedCommand& entry) {
+        return &entry.payload() == command;
+    });
+    if (found == queue_.end()) {
+        return 0;
+    }
+    const bool movedActiveHead = found == queue_.begin() && queue_.size() > 1
+                              && activeSerial_ == found->payload().creationSerial;
+    const QueuedCommand moved = *found;
+    queue_.erase(found);
+    queue_.push_back(moved);
+    notify(CommandQueueStatus::Reordered, &queue_.back());
+    if (movedActiveHead) {
+        activeSerial_.reset();
+    }
+    return 1;
+}
+
 void CommandQueue::append(QueuedCommand command) {
     queue_.push_back(std::move(command));
     notify(CommandQueueStatus::Inserted, &queue_.back());
+}
+
+CommandQueue::Snapshot CommandQueue::snapshot(
+    const std::map<const SharedCommand*, std::size_t>& sharedCommands) const {
+    Snapshot result{.activeSerial = activeSerial_};
+    result.entries.reserve(queue_.size());
+    for (const QueuedCommand& entry : queue_) {
+        const auto found = sharedCommands.find(&entry.payload());
+        if (found != sharedCommands.end()) {
+            result.entries.push_back(
+                {.execution = entry.snapshot(), .sharedCommand = found->second});
+        }
+    }
+    return result;
+}
+
+bool CommandQueue::restore(
+    const Snapshot& snapshot, std::span<const std::shared_ptr<const SharedCommand>> sharedCommands) {
+    std::deque<QueuedCommand> restored;
+    for (const SnapshotEntry& entry : snapshot.entries) {
+        if (entry.sharedCommand >= sharedCommands.size() || !sharedCommands[entry.sharedCommand]) {
+            return false;
+        }
+        restored.emplace_back(entry.execution, sharedCommands[entry.sharedCommand]);
+    }
+    queue_ = std::move(restored);
+    activeSerial_ = snapshot.activeSerial;
+    return true;
 }
 
 void CommandQueue::remove(CommandKind kind) {

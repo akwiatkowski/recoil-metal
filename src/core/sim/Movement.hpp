@@ -128,6 +128,10 @@ struct MoveState {
     Fx destinationZ{};
     bool moving = false;
 
+    /// Attached units receive their transform from their parent rather than advancing their own
+    /// movement path. Attachment does not remove them from collision or other sim passes.
+    bool attached = false;
+
     /// This unit occupies the air movement layer. Derived from its immutable `UnitDef` when
     /// spawned; stored here because movement and collision are hot span passes with no catalog.
     bool airborne = false;

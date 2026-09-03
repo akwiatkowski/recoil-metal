@@ -607,8 +607,14 @@ void Intel::update(const UnitStore& store, const UnitCatalog& catalog,
 
     // A radar return is knowledge owned by its VIEWER, not by the observed unit. Refresh the
     // last known position while radar sees a live source; leave it behind if that source dies.
-    // There is deliberately no expiry or reacquisition policy in this bounded recon slice.
+    // A later generation in the same slot is concrete contrary evidence: retaining both would
+    // project one stale blip alongside the replacement forever. This is deliberately not a
+    // time-based expiry or a general re-acquisition policy.
     for (std::vector<RetainedRadarContact>& contacts : retainedRadarContacts_) {
+        std::erase_if(contacts, [&store, slots](const RetainedRadarContact& contact) {
+            return contact.unit.index < slots && store.slotAlive(contact.unit.index)
+                   && store.idAt(contact.unit.index) != contact.unit;
+        });
         for (RetainedRadarContact& contact : contacts) {
             const bool sourceAlive = contact.unit.index < slots
                                   && store.slotAlive(contact.unit.index)
@@ -671,9 +677,10 @@ namespace {
     return static_cast<Brad>(mix(unit.index, unit.generation, bucket) & 0xFFFFu);
 }
 
-/// Where an alliance thinks a blip is: the truth plus a drifting offset.
-[[nodiscard]] std::pair<Fx, Fx> blipPosition(UnitId unit, Fx x, Fx z, TickIndex tick,
-                                             TickRate rate) noexcept {
+} // namespace
+
+std::array<Fx, 2> radarBlipPosition(UnitId unit, Fx x, Fx z, TickIndex tick,
+                                    TickRate rate) noexcept {
     // The period in ticks, derived from the rate rather than written down — §5.1. `ticks`
     // floors at one, so an absurd rate degrades to a fresh direction every tick rather than
     // to a division by zero.
@@ -697,8 +704,6 @@ namespace {
 
     return {x + fromX + (toX - fromX) * blend, z + fromZ + (toZ - fromZ) * blend};
 }
-
-} // namespace
 
 std::optional<ContactKind> contactKindForUnit(int alliance, UnitIndex target,
                                               const UnitStore& store,
@@ -768,7 +773,7 @@ void contactsFor(int alliance, const UnitStore& store, const UnitCatalog& catalo
             continue;
         }
         if (kind) {
-            const auto [x, z] = blipPosition(store.idAt(slot), at.x, at.z, tick, rate);
+            const auto [x, z] = radarBlipPosition(store.idAt(slot), at.x, at.z, tick, rate);
             contacts.push_back(Contact{.unit = store.idAt(slot),
                                        .x = x,
                                        .z = z,
@@ -797,7 +802,7 @@ void contactsFor(int alliance, const UnitStore& store, const UnitCatalog& catalo
                 const Fx offsetX = fxCos(spread) * hiding.jamRadius;
                 const Fx offsetZ = fxSin(spread) * hiding.jamRadius;
                 const auto [x, z] =
-                    blipPosition(ghost, at.x + offsetX, at.z + offsetZ, tick, rate);
+                    radarBlipPosition(ghost, at.x + offsetX, at.z + offsetZ, tick, rate);
                 contacts.push_back(Contact{.unit = carrier,
                                            .x = x,
                                            .z = z,
@@ -809,13 +814,20 @@ void contactsFor(int alliance, const UnitStore& store, const UnitCatalog& catalo
     // A dead source cannot contribute to the live-slot projection above, but the alliance's
     // retained radar knowledge still projects as a blip at its last confirmed position.
     for (const RetainedRadarContact& retained : intel.retainedRadarContacts(alliance)) {
+        // A slot can be recycled after `Intel::update` and before this projection. The new
+        // generation is decisive contrary evidence even before the next retained-contact pass.
+        if (retained.unit.index < store.slotCount() && store.slotAlive(retained.unit.index)
+            && store.idAt(retained.unit.index) != retained.unit) {
+            continue;
+        }
         // `Intel::update` precedes retirement in `tickSkirmish`. A source can therefore die
         // after its cache refresh but before this projection in the same tick; consult the
         // generational handle as well as the persisted marker so that tick does not lose it.
         if (!retained.maybeDead && store.alive(retained.unit)) {
             continue;
         }
-        const auto [x, z] = blipPosition(retained.unit, retained.x, retained.z, tick, rate);
+        const auto [x, z] =
+            radarBlipPosition(retained.unit, retained.x, retained.z, tick, rate);
         contacts.push_back(Contact{.unit = retained.unit,
                                     .x = x,
                                     .z = z,

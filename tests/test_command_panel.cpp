@@ -117,7 +117,7 @@ TEST_CASE("ordinary and manual weapons enable only their own attack semantics") 
                         CommandKind::Overcharge));
 }
 
-TEST_CASE("a factory can reclaim but only a field builder can assist") {
+TEST_CASE("an immobile factory and a field builder can assist") {
     rm::unitdef::UnitDef factory;
     factory.buildRate = 5.0f;
     factory.categories = {"FACTORY"};
@@ -126,7 +126,7 @@ TEST_CASE("a factory can reclaim but only a field builder can assist") {
         rm::ui::commandAvailability(factorySelection);
     CHECK(enabled(factoryAvailable, CommandKind::Reclaim));
     CHECK(enabled(factoryAvailable, CommandKind::Repair));
-    CHECK_FALSE(enabled(factoryAvailable, CommandKind::Assist));
+    CHECK(enabled(factoryAvailable, CommandKind::Assist));
 
     rm::unitdef::UnitDef engineer;
     engineer.buildRate = 5.0f;

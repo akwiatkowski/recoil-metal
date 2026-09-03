@@ -101,6 +101,9 @@ void feedMotion(StateHash& h, const MoveState& motion) noexcept {
     feed(h, motion.destinationX);
     feed(h, motion.destinationZ);
     feed(h, motion.moving);
+    if (motion.attached) {
+        feed(h, motion.attached);
+    }
     // Derived from the already-hashed unit type, but still execution state: feeding only the
     // true case catches a broken spawn invariant without changing every historical ground hash.
     if (motion.airborne) {
@@ -418,6 +421,7 @@ StateHash hashMatch(const UnitStore& store, const Match& match) {
                 feed(h, static_cast<std::size_t>(parent->index));
                 feed(h, static_cast<std::size_t>(parent->generation));
                 feed(h, store.attachmentOffsetOf(unit));
+                feed(h, store.attachmentHeightOf(unit));
             }
             const std::vector<UnitId>& children = store.childrenOf(unit);
             feed(h, children.size());
@@ -650,6 +654,8 @@ StateHash hashMatch(const UnitStore& store, const Match& match) {
     for (const int ever : match.commandersEver) {
         feed(h, ever);
     }
+    // The selected C-210 predicate changes which future poll defeats an army.
+    feed(h, static_cast<std::uint8_t>(match.victoryMode));
     feed(h, match.baseStorage);
     // The playable rectangle changes which units automatic orders may acquire. It is immutable
     // configuration, but therefore still authoritative: two runs with different bounds are

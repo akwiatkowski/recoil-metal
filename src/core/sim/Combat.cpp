@@ -639,6 +639,27 @@ constexpr std::size_t kUnidentifiedPriorityRow = 9999;
     return reach != ReachClass::CannotReach && reach != ReachClass::TooClose;
 }
 
+/// Automatic acquisition keeps its selected UnitId and truth-based rank. Only the muzzle's
+/// point of aim is uncertain, and only while that live unit is currently radar-only.
+[[nodiscard]] std::array<Fx, 3> automaticProjectileAimPosition(
+    UnitId target, int fromArmy, const UnitStore& store, const UnitCatalog& catalog,
+    std::span<const Army> armies, const Intel* intel, TickIndex tick, TickRate rate) noexcept {
+    std::array<Fx, 3> position = positionOf(store.transforms()[target.index]);
+    if (intel == nullptr) {
+        return position;
+    }
+    const Army* mine = armyFor(fromArmy, armies);
+    if (mine == nullptr
+        || contactKindForUnit(mine->alliance, target.index, store, catalog, armies, *intel)
+               != ContactKind::Radar) {
+        return position;
+    }
+    const auto [x, z] = radarBlipPosition(target, position[0], position[2], tick, rate);
+    position[0] = x;
+    position[2] = z;
+    return position;
+}
+
 /// Which priority row a candidate matches, or `npos` for none.
 ///
 /// The row index is retail's one true lexicographic sort key (`C-157`): a row-0 match beats a
@@ -727,6 +748,12 @@ std::optional<UnitId> nearestTarget(std::array<Fx, 3> from, int fromArmy,
             const std::optional<ContactKind> contact =
                 contactKindForUnit(mine->alliance, slot, store, *catalog, armies, *intel);
             if (!contact || (*contact != ContactKind::Seen && *contact != ContactKind::Radar)) {
+                return std::nullopt;
+            }
+            // A beam damages its target directly, so it cannot represent radar-position error.
+            // Keep radar-only automatic acquisition to projectile weapons until beam endpoints
+            // have a coherent uncertain-hit model.
+            if (*contact == ContactKind::Radar && weapon.beam) {
                 return std::nullopt;
             }
             prioritiesApply = *contact == ContactKind::Seen
@@ -819,9 +846,9 @@ bool canFireAt(const unitdef::Weapon& weapon, Brad yaw, Brad bearing) noexcept {
 }
 
 std::size_t aimAtTargets(UnitStore& store, const UnitCatalog& catalog,
-                          std::span<const Army> armies, const Intel* intel,
-                          const std::vector<Projectile>* projectiles,
-                          const PlayableRect* playableRect) {
+                           std::span<const Army> armies, const Intel* intel,
+                           const std::vector<Projectile>* projectiles,
+                           const PlayableRect* playableRect, TickIndex tick, TickRate rate) {
     const std::span<Transform> transforms = store.transforms();
     const std::span<const MoveState> motion = store.motion();
     const std::span<const Health> healths = store.health();
@@ -884,7 +911,11 @@ std::size_t aimAtTargets(UnitStore& store, const UnitCatalog& catalog,
                                                    transforms[slot].heading, incumbent, playableRect);
                 }
                 if (candidateUnit) {
-                    candidatePosition = positionOf(transforms[candidateUnit->index]);
+                    candidatePosition = !hasExplicitAttack && !weapon.beam
+                                            ? automaticProjectileAimPosition(
+                                                  *candidateUnit, motion[slot].armyIndex, store,
+                                                  catalog, armies, intel, tick, rate)
+                                            : positionOf(transforms[candidateUnit->index]);
                 }
             }
             if (!candidatePosition) {
@@ -929,9 +960,9 @@ std::size_t aimAtTargets(UnitStore& store, const UnitCatalog& catalog,
 
 std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
                          std::span<const Army> armies,
-                         std::vector<Projectile>& projectiles, TickRate rate,
-                         EventQueue* events, const Intel* intel,
-                         const PlayableRect* playableRect) {
+                          std::vector<Projectile>& projectiles, TickRate rate,
+                          EventQueue* events, const Intel* intel,
+                          const PlayableRect* playableRect, TickIndex tick) {
     std::size_t fired = 0;
 
     const std::span<const Transform> transforms = store.transforms();
@@ -1045,7 +1076,11 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
                 continue;
             }
 
-            const std::array<Fx, 3> to = positionOf(transforms[target->index]);
+            const std::array<Fx, 3> to = !hasExplicitAttack && !weapon.beam
+                                             ? automaticProjectileAimPosition(
+                                                   *target, army, store, catalog, armies, intel,
+                                                   tick, rate)
+                                             : positionOf(transforms[target->index]);
 
             // Pointing at it? A turreted weapon always is; an unturreted one has to be
             // brought round, which `aimAtTargets` does. The reload is NOT consumed while

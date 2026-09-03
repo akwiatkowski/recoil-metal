@@ -26,7 +26,8 @@ commandAvailability(std::span<const unitdef::UnitDef* const> selection) noexcept
                          || std::ranges::any_of(def->weapons, &unitdef::Weapon::fires);
         const unitdef::Role role = unitdef::roleOf(*def);
         hasAssister = hasAssister || role == unitdef::Role::Builder
-                   || role == unitdef::Role::Commander;
+                   || role == unitdef::Role::Commander
+                   || (def->hasCategory("FACTORY") && !def->isMobile() && def->isBuilder());
         hasBuilder = hasBuilder || def->isBuilder();
         hasManualWeapon = hasManualWeapon
                        || std::ranges::any_of(def->weapons, [](const unitdef::Weapon& weapon) {

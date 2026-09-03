@@ -741,6 +741,47 @@ TEST_CASE("radar contacts acquire by score until vision has identified them") {
           == farHigh);
 }
 
+TEST_CASE("automatic projectile fire aims at a live radar contact's deterministic blip") {
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    Roster roster;
+
+    Weapon weapon = directFire(10.0f, 300.0f);
+    UnitDef gunner = gunnerDef(weapon);
+    gunner.radarRadiusElmos = 300.0f;
+    const UnitId shooter =
+        roster.add(roster.addType(gunner), 0.0f, 0.0f, 0, 100.0f);
+    // This case calls the separate aim and fire passes once. A full-turn allowance makes that
+    // precondition independent of the blip's deterministic lateral offset.
+    roster.motion(shooter).turnPerTick = rm::sim::kBradHalfTurn;
+    const UnitId target =
+        roster.add(roster.addType(targetDef()), 0.0f, 100.0f, 1, 100.0f);
+
+    rm::sim::Intel intel;
+    intel.configure(2, rm::sim::Fx::fromInt(512), rm::sim::Fx::fromInt(512),
+                    rm::sim::VisionStyle::ForgedAlliance);
+    intel.update(roster.store, roster.catalog, armies, nullptr);
+
+    constexpr rm::TickIndex tick = 3;
+    std::vector<Projectile> shots;
+    REQUIRE(rm::sim::aimAtTargets(roster.store, roster.catalog, armies, &intel, nullptr, nullptr,
+                                  tick, roster.rate)
+            == 1);
+    REQUIRE(rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots, roster.rate,
+                                  nullptr, &intel, nullptr, tick)
+            == 1);
+    REQUIRE(shots.size() == 1);
+    REQUIRE(roster.health(shooter).automaticTargets[0] == target);
+
+    const auto [blipX, blipZ] = rm::sim::radarBlipPosition(
+        target, roster.transform(target).x, roster.transform(target).z, tick, roster.rate);
+    const Projectile expected = rm::sim::launch(
+        rm::sim::positionOf(roster.transform(shooter)),
+        {blipX, roster.transform(target).y, blipZ}, weapon, 0, roster.rate,
+        roster.catalog.weaponRates(roster.store.typeAt(shooter.index), 0).muzzlePerTick,
+        roster.catalog.weaponRates(roster.store.typeAt(shooter.index), 0).damage, shooter);
+    CHECK(shots.front().velocity == expected.velocity);
+}
+
 TEST_CASE("automatic targeting does not acquire sonar-only contacts") {
     const std::vector<Army> armies = rm::sim::freeForAll(2);
     Roster roster;

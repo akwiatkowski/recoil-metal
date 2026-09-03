@@ -95,7 +95,7 @@ void tick(std::span<Transform> transforms, std::span<MoveState> motion,
 
     for (std::size_t i = 0; i < count; ++i) {
         MoveState& state = motion[i];
-        if (!state.moving) {
+        if (!state.moving || state.attached) {
             continue;
         }
 

@@ -181,10 +181,10 @@ inline constexpr Seconds kProjectileLifetime = Seconds{30.0f};
 /// shot at things across the map it had no way of knowing were there. `intel` may be null,
 /// which restores exactly that behaviour and is what a scene with no fog of war gets.
 ///
-/// SIGHT, NOT RADAR. A radar contact is a position without an identity, and what to do with
-/// one is the contact rules rather than a target-selection question — see `IntelKind`. So a
-/// unit lit only by radar is not auto-attacked, deliberately, and that is a choice this
-/// engine is making rather than one it inherited.
+/// SIGHT OR RADAR. A radar contact acquires its real live UnitId but, until visually identified,
+/// competes at the worst priority row; `fireWeapons` alone turns its projectile point of aim into
+/// the deterministic blip. Sonar and retained/dead radar contacts never enter this live-unit
+/// selection path.
 [[nodiscard]] std::optional<UnitId> nearestTarget(std::array<Fx, 3> from, int fromArmy,
                                                   const unitdef::Weapon& weapon,
                                                    const UnitStore& store,
@@ -232,9 +232,10 @@ inline constexpr Seconds kProjectileLifetime = Seconds{30.0f};
 /// `projectiles` lets unturreted point defence bring its hull to the hostile shot it will
 /// intercept; callers without a projectile world simply have none to aim at.
 std::size_t aimAtTargets(UnitStore& store, const UnitCatalog& catalog,
-                          std::span<const Army> armies, const Intel* intel = nullptr,
-                          const std::vector<Projectile>* projectiles = nullptr,
-                          const PlayableRect* playableRect = nullptr);
+                           std::span<const Army> armies, const Intel* intel = nullptr,
+                           const std::vector<Projectile>* projectiles = nullptr,
+                           const PlayableRect* playableRect = nullptr, TickIndex tick = 0,
+                           TickRate rate = TickRate{});
 
 /// Advances reloads, picks targets, and appends the shots fired this tick.
 ///
@@ -249,9 +250,9 @@ std::size_t aimAtTargets(UnitStore& store, const UnitCatalog& catalog,
 /// a lifetime in ticks and that number is only meaningful against a rate (§5.1).
 std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
                          std::span<const Army> armies,
-                         std::vector<Projectile>& projectiles, TickRate rate,
-                         EventQueue* events = nullptr, const Intel* intel = nullptr,
-                         const PlayableRect* playableRect = nullptr);
+                          std::vector<Projectile>& projectiles, TickRate rate,
+                          EventQueue* events = nullptr, const Intel* intel = nullptr,
+                          const PlayableRect* playableRect = nullptr, TickIndex tick = 0);
 
 /// Fires every held OVERCHARGE whose moment has come: target alive, in the manual
 /// weapon's range, reload ready, and the army's stored energy covering the shot's

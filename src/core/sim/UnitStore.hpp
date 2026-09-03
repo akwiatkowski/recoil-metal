@@ -79,6 +79,11 @@ public:
         std::vector<std::optional<UnitId>> parents;
         std::vector<std::vector<UnitId>> children;
         std::vector<std::array<Fx, 2>> attachmentOffsets;
+        std::vector<Fx> attachmentHeights;
+        CommandSerial nextCommandSerial = 0;
+        std::array<std::uint32_t, kInvalidCommandSource> nextCommandCounters{};
+        std::vector<SharedCommand> sharedCommands;
+        std::vector<CommandQueue::Snapshot> orders;
     };
 
     UnitStore() = default;
@@ -109,8 +114,9 @@ public:
     [[nodiscard]] std::optional<UnitId> parentOf(UnitId child) const noexcept;
     [[nodiscard]] const std::vector<UnitId>& childrenOf(UnitId parent) const noexcept;
     [[nodiscard]] std::array<Fx, 2> attachmentOffsetOf(UnitId child) const noexcept;
+    [[nodiscard]] Fx attachmentHeightOf(UnitId child) const noexcept;
 
-    /// Updates attached children from their parents' current X/Z positions. The hierarchy is
+    /// Updates attached children from their parents' current transforms. The hierarchy is
     /// traversed parent before child so an attached chain receives one coherent transform.
     void propagateAttachments();
 
@@ -246,6 +252,7 @@ private:
     std::vector<std::optional<UnitId>> parents_;
     std::vector<std::vector<UnitId>> children_;
     std::vector<std::array<Fx, 2>> attachmentOffsets_;
+    std::vector<Fx> attachmentHeights_;
 
     CommandSerial nextCommandSerial_ = 0;
     std::array<std::uint32_t, kInvalidCommandSource> nextCommandCounters_{};

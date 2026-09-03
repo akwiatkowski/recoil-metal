@@ -350,18 +350,25 @@ TEST_CASE("an assist is a standing order: it waits through an idle queue and end
     CHECK(f.roster.store.orders()[helper.index].empty());
 }
 
-TEST_CASE("assist requires two friendly builders that are not the same unit") {
+TEST_CASE("assist requires a compatible friendly assister and a distinct builder target") {
     Fixture f;
     const UnitId engineer = f.roster.add(f.engineerType, 200.0f, 200.0f, 0, 100.0f);
     const UnitId factory = f.roster.add(f.factoryType, 205.0f, 200.0f, 0, 100.0f);
     const UnitId tank = f.roster.add(f.tankType, 210.0f, 200.0f, 0, 100.0f);
     const UnitId theirs = f.roster.add(f.engineerType, 220.0f, 200.0f, 1, 100.0f);
 
-    CHECK_FALSE(f.assist(factory, engineer));
+    CHECK(f.assist(factory, engineer));
     CHECK_FALSE(f.assist(tank, engineer));
     CHECK_FALSE(f.assist(engineer, tank));
     CHECK_FALSE(f.assist(engineer, engineer));
     CHECK_FALSE(f.assist(engineer, theirs));
+
+    REQUIRE(f.build(engineer, 240.0f, 200.0f));
+    f.tick(1);
+    REQUIRE(f.building.size() == 1);
+    CHECK(rm::test::asFloat(f.building.front().buildTimeRemaining)
+          == Approx(99.0f).margin(0.01));
+    CHECK(f.building.front().assistPerTick == rm::sim::Mag{});
 }
 
 TEST_CASE("a queued assist rejects a non-builder target before entering authoritative state") {

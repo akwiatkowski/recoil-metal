@@ -6,8 +6,10 @@
 #include <cstddef>
 #include <deque>
 #include <functional>
+#include <map>
 #include <memory>
 #include <optional>
+#include <span>
 #include <utility>
 #include <vector>
 
@@ -102,9 +104,32 @@ inline constexpr std::size_t kCommandQueueCap = 500;
 /// One unit's mutable execution of a shared immutable command.
 class QueuedCommand {
 public:
+    struct Snapshot {
+        UnitId unit{};
+        Fx targetX{};
+        Fx targetZ{};
+        UnitId target{};
+        std::optional<std::array<Fx, 2>> patrolOrigin;
+        bool returningToPatrolOrigin = false;
+    };
+
     QueuedCommand(UnitId unit, std::shared_ptr<const SharedCommand> payload)
         : unit_(unit), targetX_(payload->targetX), targetZ_(payload->targetZ),
           target_(payload->target), payload_(std::move(payload)) {}
+    QueuedCommand(Snapshot snapshot, std::shared_ptr<const SharedCommand> payload)
+        : unit_(snapshot.unit), targetX_(snapshot.targetX), targetZ_(snapshot.targetZ),
+          target_(snapshot.target), payload_(std::move(payload)),
+          patrolOrigin_(std::move(snapshot.patrolOrigin)),
+          returningToPatrolOrigin_(snapshot.returningToPatrolOrigin) {}
+
+    [[nodiscard]] Snapshot snapshot() const {
+        return {.unit = unit_,
+                .targetX = targetX_,
+                .targetZ = targetZ_,
+                .target = target_,
+                .patrolOrigin = patrolOrigin_,
+                .returningToPatrolOrigin = returningToPatrolOrigin_};
+    }
 
     [[nodiscard]] const SharedCommand& payload() const noexcept { return *payload_; }
     [[nodiscard]] UnitId unit() const noexcept { return unit_; }
@@ -174,6 +199,15 @@ private:
 class CommandQueue {
 public:
     using Observer = std::function<void(const CommandQueueChange&, const CommandQueue&)>;
+
+    struct SnapshotEntry {
+        QueuedCommand::Snapshot execution;
+        std::size_t sharedCommand = 0;
+    };
+    struct Snapshot {
+        std::vector<SnapshotEntry> entries;
+        std::optional<CommandSerial> activeSerial;
+    };
 
     /// What giving an order did, because a caller shows different feedback for each.
     enum class Result : std::uint8_t {
@@ -266,6 +300,10 @@ public:
     /// instead of finishing, so its two endpoints remain a loop rather than being consumed.
     const QueuedCommand* cycle();
 
+    /// Moves the entry owning this exact shared command to the back. Factory guard uses this
+    /// for a repeated build selected behind the guarded factory's active order.
+    [[nodiscard]] std::size_t cycleExact(const SharedCommand* command);
+
     /// Adds an engine-generated order without player cancellation rules. Used only for the
     /// starting-point waypoint paired with a player's first patrol destination.
     void append(Command command);
@@ -295,6 +333,11 @@ public:
 
     /// Every order, without copying — for the state hash, which reads and discards.
     [[nodiscard]] const std::deque<QueuedCommand>& entries() const noexcept { return queue_; }
+
+    [[nodiscard]] Snapshot snapshot(
+        const std::map<const SharedCommand*, std::size_t>& sharedCommands) const;
+    [[nodiscard]] bool restore(const Snapshot& snapshot,
+                               std::span<const std::shared_ptr<const SharedCommand>> sharedCommands);
 
 private:
     void notify(CommandQueueStatus status, const QueuedCommand* command = nullptr) const;

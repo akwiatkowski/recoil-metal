@@ -411,6 +411,12 @@ inline constexpr std::int32_t kRadarErrorElmos = 96;
 /// the whole reason PLAN2 §5.1 asks for a script rather than for care.
 inline constexpr Seconds kBlipDriftPeriod = Seconds{0.5f};
 
+/// The deterministic position an alliance assigns to a live radar contact. This is separate
+/// from contact projection so automatic projectile fire can use the same uncertainty without
+/// turning a retained contact or a sonar return into an acquirable target.
+[[nodiscard]] std::array<Fx, 2> radarBlipPosition(UnitId unit, Fx x, Fx z, TickIndex tick,
+                                                   TickRate rate = TickRate{}) noexcept;
+
 /// Everything `alliance` knows about right now, appended to `contacts` in slot order.
 ///
 /// Own and allied units are always `Seen` at their true position. A hostile unit is `Seen`
