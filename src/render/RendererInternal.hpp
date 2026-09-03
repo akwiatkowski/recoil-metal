@@ -212,6 +212,12 @@ constexpr NS::UInteger kInstanceBufferIndex = 2;
 constexpr NS::UInteger kBoneBufferIndex = 3;
 constexpr NS::UInteger kPoseUniformBufferIndex = 4;
 
+// The build effect's own block, beside the frame uniforms rather than in their
+// slot: it used to squat on kUniformBufferIndex, which is why the construction
+// shader could not see the map's light or the shadow map — the frame block was
+// evicted by its own effect parameters.
+constexpr NS::UInteger kBuildUniformBufferIndex = 5;
+
 // Well clear of the splat's ten layer slots, which run from kSplatLayerBaseIndex.
 constexpr NS::UInteger kShadowTextureIndex = 13;
 constexpr NS::UInteger kShadowSamplerIndex = 2;

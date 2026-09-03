@@ -1237,6 +1237,12 @@ void Renderer::encodeScene(MTL::CommandBuffer* commandBuffer, MTL::RenderPassDes
         encoder->setDepthStencilState(depthState_);
         encoder->setVertexBytes(&uniforms, sizeof(uniforms), kUniformBufferIndex);
 
+        // The fragment side reads the frame uniforms and the shadow map too, so a
+        // site is lit by the map's sun exactly as the finished building will be.
+        encoder->setFragmentBytes(&uniforms, sizeof(uniforms), kUniformBufferIndex);
+        encoder->setFragmentTexture(shadowMap_, kShadowTextureIndex);
+        encoder->setFragmentSamplerState(shadowSampler_, kShadowSamplerIndex);
+
         auto* slots = static_cast<UnitInstance*>(constructionInstanceBuffer_->contents())
                     + instanceSlot_ * kMaxConstructions;
 
@@ -1298,7 +1304,7 @@ void Renderer::encodeScene(MTL::CommandBuffer* commandBuffer, MTL::RenderPassDes
                 .style = static_cast<std::uint32_t>(site.style),
                 .pad0 = 0,
             };
-            encoder->setFragmentBytes(&build, sizeof(build), kUniformBufferIndex);
+            encoder->setFragmentBytes(&build, sizeof(build), kBuildUniformBufferIndex);
             encoder->drawIndexedPrimitives(MTL::PrimitiveType::PrimitiveTypeTriangle,
                                            static_cast<NS::UInteger>(batch.indexCount),
                                            MTL::IndexType::IndexTypeUInt32, batch.indexBuffer,

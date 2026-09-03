@@ -14,7 +14,9 @@
 
 #include "app/Scene.hpp"
 
+#include "core/map/HeightField.hpp"
 #include "core/map/ScenarioSave.hpp"
+#include "core/sim/Fx.hpp"
 #include "core/scene/UnitPlacement.hpp"
 #include "core/vfs/AssetSearch.hpp"
 #include "core/vfs/Vfs.hpp"
@@ -130,6 +132,27 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
                                                        std::string_view blueprintPath,
                                                        std::array<float, 3> position,
                                                        const rm::sim::Army& army, rm::Brad yaw);
+
+/// Which way a structure at (x, z) faces: toward the map centre, so a base laid out
+/// toward the fight reads as one.
+///
+/// THE ONE AUTHORITY on that bearing, and it exists because there used to be two.
+/// `Match.cpp` computed it at completion while the in-progress site drew at yaw zero
+/// (with a comment claiming the spawn would face north — once true, then not), so
+/// every diagonal base watched its buildings snap ~45° the moment they finished. The
+/// site, the completion spawn, and the placement ghost all ask here now; a future
+/// player-chosen facing (retail stores one of four cardinals per order — Recoil's
+/// `buildFacing`) replaces this body and every caller follows.
+///
+/// FIXED POINT, not `std::atan2`: the completion path feeds this into
+/// `Transform.heading`, which the state hash covers, and libm is where two
+/// architectures disagree in the last ulp. Presentation callers convert with
+/// `radiansFromBrad` at their own edge.
+[[nodiscard]] inline rm::Brad structureFacing(const rm::HeightField& field, rm::sim::Fx x,
+                                              rm::sim::Fx z) noexcept {
+    return rm::sim::fxBearing(rm::sim::fxFromFloat(field.widthElmos() * 0.5f) - x,
+                              rm::sim::fxFromFloat(field.depthElmos() * 0.5f) - z);
+}
 
 [[nodiscard]] std::optional<rm::UnitTypeIndex> resolveBuildable(UnitScene& scene,
                                                                 const rm::vfs::Vfs& content,

@@ -390,7 +390,11 @@ void gatherConstructions(UnitScene& scene, const rm::vfs::Vfs& content,
 
         rm::UnitInstance instance{};
         instance.position = {{x, groundY, z}};
-        instance.rotationY = 0.0f;  // structures face north, as the finished spawn will
+        // The SAME facing the finished spawn will get, from the same authority — this used
+        // to be a hardcoded zero under a comment claiming spawns face north, which they had
+        // long stopped doing, so every building on a diagonal base snapped ~45° at completion.
+        instance.rotationY = rm::sim::radiansFromBrad(
+            structureFacing(field, work.position[0], work.position[2]));
         instance.scale =
             typeIndex < scene.typeScale.size() ? scene.typeScale[typeIndex] : 1.0f;
         instance.teamColour = army >= 0 && static_cast<std::size_t>(army) < scene.armies.size()

@@ -896,15 +896,10 @@ rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) 
         const std::array<float, 3> site{rm::sim::fxToFloat(work.position[0]),
                                         rm::sim::fxToFloat(work.position[1]),
                                         rm::sim::fxToFloat(work.position[2])};
-        // Face the map centre — a base laid out toward the fight reads as one. The bearing
-        // is computed in FIXED POINT (`fxBearing`, the same CORDIC the sim's own aiming
-        // uses), not `std::atan2`: this yaw becomes `Transform.heading`, which the state
-        // hash covers, and libm's atan2 is exactly where two architectures disagree in the
-        // last ulp. The old float path was a cross-machine desync waiting on every
-        // factory roll-off.
-        const rm::Brad yaw = rm::sim::fxBearing(
-            rm::sim::fxFromFloat(runner.field.widthElmos() * 0.5f) - work.position[0],
-            rm::sim::fxFromFloat(runner.field.depthElmos() * 0.5f) - work.position[2]);
+        // The shared authority (`structureFacing`) rather than a local bearing: the
+        // in-progress site and the placement ghost draw with the same call, which is what
+        // keeps a finished building from snapping away from its own construction model.
+        const rm::Brad yaw = structureFacing(runner.field, work.position[0], work.position[2]);
         const auto spawned = spawnUnit(scene, runner.content, runner.field,
                                        std::string{scene.pathOf(static_cast<rm::UnitTypeIndex>(work.blueprintIndex))},
                                        site, scene.armies[army], yaw);

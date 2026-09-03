@@ -34,13 +34,16 @@
 #include "core/unit/UnitDef.hpp"
 
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <deque>
 #include <map>
+#include <numbers>
 #include <set>
 #include <optional>
 #include <span>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace rm::app {
@@ -171,6 +174,30 @@ struct UnitScene {
     // Picking happens against what is DRAWN — that is what the ray can see — and this is
     // what turns the hit back into a unit the sim knows about.
     std::vector<std::vector<rm::UnitIndex>> drawSlotOf;
+
+    // --- A builder faces its work: presentation only ---------------------------------------
+    //
+    // The SIM never turns a builder. The Build command parks the founder where it stands
+    // (`Command.cpp`'s own comment: construction "occupies" it), and retail agrees the hull
+    // does not move — its BuilderArmManipulator aims torso/arm BONES at the site
+    // (Unit.lua:2666-2685), which one shared baked pose per batch cannot express yet. Until
+    // per-instance bone poses exist, the DRAWN yaw is overridden here: `Transform::heading`
+    // is hashed sim state and stays untouched, so this whole feature is invisible to
+    // `hashMatch` by construction.
+    //
+    // `builderFacingSite` is rebuilt every gather from `building` (slot → site, world
+    // elmos). `builderShownYaw` persists across frames: the yaw actually drawn last frame,
+    // advanced toward its goal at kBuilderTurnRate so the turn reads as motion rather than
+    // a cut — and advanced BACK to the sim's heading when the work ends, then forgotten.
+    std::unordered_map<rm::UnitIndex, std::array<float, 2>> builderFacingSite;
+    std::unordered_map<rm::UnitIndex, float> builderShownYaw;
+
+    /// How fast the drawn hull turns toward the work, radians per second. Retail's build
+    /// arm aims at 360°/s (`SetAimingArc(-180,180,360,...)`, Unit.lua:2678) — near-instant,
+    /// which suits a small arm bone but reads as a cut on a whole hull. Half that, ~180°/s,
+    /// finishes any turn inside a second and still visibly TURNS: a CALIBRATION against how
+    /// the motion reads, not a decoded figure — tune it, don't trust it.
+    static constexpr float kBuilderTurnRate = 3.5f;
 
     // The sides in the match, empty outside a skirmish. Held with the scene rather
     // than beside it because every question that needs an army — may I select this,
@@ -511,8 +538,13 @@ struct UnitScene {
     /// `eye`, when given, is the camera position in world elmos and switches far
     /// instances onto their coarse batches — the windowed loop passes it; headless
     /// captures do not, and draw everything fine, which is what a screenshot wants.
+    ///
+    /// `dtSeconds` paces the builder-facing turn (presentation only, see the members).
+    /// Zero — the headless default — means "arrive at once", which is what a screenshot
+    /// wants: the same command captures the same facing every run.
     void gatherForDrawing(float alpha = 1.0f, const std::array<float, 3>* eye = nullptr,
-                          std::span<const rm::sim::UnitId> currentUnits = {}) {
+                          std::span<const rm::sim::UnitId> currentUnits = {},
+                          float dtSeconds = 0.0f) {
         // FROM THE SNAPSHOTS, not from the store (§7 P7.1/P7.2). This used to walk
         // `store.transforms()` and `store.motion()` directly, which is why motion stepped at
         // the tick rate: a frame drew wherever the sim happened to be, and there was no second
@@ -536,6 +568,27 @@ struct UnitScene {
         shieldScratch.clear();
 
         refreshViewerContacts();
+
+        // Who is building what, by builder slot — the goal each drawn builder turns toward.
+        // First entry wins: a builder works one site at a time (`startCommand` refuses
+        // concurrent builds), so a second row naming the same builder is queued work.
+        builderFacingSite.clear();
+        for (const rm::sim::Construction& work : building) {
+            if (work.finished() || work.upgradeOf != rm::sim::UnitId{}
+                || !store.alive(work.builder)) {
+                continue;  // done, an in-place upgrade, or a builder already gone
+            }
+            builderFacingSite.emplace(
+                work.builder.index,
+                std::array<float, 2>{rm::sim::fxToFloat(work.position[0]),
+                                     rm::sim::fxToFloat(work.position[2])});
+        }
+        // Forget the drawn yaw of anything no longer alive — a freed slot will be reused,
+        // and the new tenant must not inherit its predecessor's turn. A default UnitId is
+        // never live (generations start at 1), so `idAt` answers for a freed slot too.
+        std::erase_if(builderShownYaw, [this](const auto& kv) {
+            return !store.alive(store.idAt(kv.first));
+        });
 
         for (const rm::DrawUnit& unit : drawUnits) {
             // FOG OF WAR (ADR-037). A unit the viewer's side cannot see is not drawn at all —
@@ -585,7 +638,9 @@ struct UnitScene {
                 drawIndexOf[slot] =
                     rm::SelectionEntry{.batch = batch, .instance = drawScratch[batch].size()};
             }
-            drawScratch[batch].push_back(instanceFor(unit));
+            rm::UnitInstance instance = instanceFor(unit);
+            applyBuilderFacing(instance, unit, dtSeconds);
+            drawScratch[batch].push_back(instance);
             drawSlotOf[batch].push_back(unit.id.index);
         }
 
@@ -647,6 +702,54 @@ struct UnitScene {
         }
 
         return instance;
+    }
+
+    /// Turns a drawn builder toward its construction site — and back again when the work
+    /// ends. Presentation only: writes `instance.rotationY`, never the store. See the
+    /// `builderFacingSite` members for why the sim cannot own this yet.
+    void applyBuilderFacing(rm::UnitInstance& instance, const rm::DrawUnit& unit,
+                            float dtSeconds) {
+        const rm::UnitIndex slot = unit.id.index;
+        const auto siteIt = builderFacingSite.find(slot);
+        const auto shownIt = builderShownYaw.find(slot);
+        if (siteIt == builderFacingSite.end() && shownIt == builderShownYaw.end()) {
+            return;  // not building, not returning from a build: the common case
+        }
+
+        // The goal: the site while building, the sim's own heading again once done.
+        // `atan2(dx, dz)` is the same convention the sim's heading draws with — zero
+        // faces +Z, positive turns toward +X (`Transform.hpp`) — and float is fine
+        // here because nothing below ever reaches sim state.
+        float goal = unit.rotationY;
+        bool atWork = false;
+        if (siteIt != builderFacingSite.end()) {
+            const float dx = siteIt->second[0] - unit.position[0];
+            const float dz = siteIt->second[1] - unit.position[2];
+            // A factory "builds" at its own position (the pad redirect in `Command.cpp`),
+            // and an engineer can stand on its own site: no direction to face there.
+            if (dx * dx + dz * dz > 1.0f) {
+                goal = std::atan2(dx, dz);
+                atWork = true;
+            }
+        }
+
+        // Advance the drawn yaw toward the goal along the shorter arc. A zero dt is the
+        // headless capture: arrive at once, so the same command captures the same frame.
+        float shown = shownIt != builderShownYaw.end() ? shownIt->second : unit.rotationY;
+        const float delta =
+            std::remainder(goal - shown, 2.0f * std::numbers::pi_v<float>);
+        const float step = dtSeconds > 0.0f ? kBuilderTurnRate * dtSeconds
+                                            : std::abs(delta);
+        shown = std::abs(delta) <= step ? goal : shown + std::copysign(step, delta);
+
+        if (!atWork && shown == goal) {
+            // Back at the sim's heading with no site to face: the override has nothing
+            // left to say, and forgetting it is what keeps the map from growing.
+            builderShownYaw.erase(slot);
+            return;
+        }
+        builderShownYaw[slot] = shown;
+        instance.rotationY = shown;
     }
 
     /// The unit behind a drawn instance, or nothing when the pair names nothing drawn.

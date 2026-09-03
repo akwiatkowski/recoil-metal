@@ -548,7 +548,11 @@ int runScreenshot(const Session& session) {
                             batch,
                             rm::UnitInstance{
                                 .position = {{gx, map->field.heightAtWorld(gx, gz), gz}},
-                                .rotationY = 0.0f,
+                                // The facing the building will actually have, from the one
+                                // authority all three previews and the spawn share.
+                                .rotationY = rm::sim::radiansFromBrad(rm::app::structureFacing(
+                                    map->field, rm::sim::fxFromFloat(gx),
+                                    rm::sim::fxFromFloat(gz))),
                                 .scale = typeIndex < units.typeScale.size()
                                              ? units.typeScale[typeIndex]
                                              : 1.0f,
@@ -1648,7 +1652,7 @@ int runWindowed(const Session& session) {
                     responsiveDrawScratch.push_back(draw.id);
                 }
             }
-            units.gatherForDrawing(clock.alpha(), &lodEye, responsiveDrawScratch);
+            units.gatherForDrawing(clock.alpha(), &lodEye, responsiveDrawScratch, elapsed);
 
             // WHAT IS BEING BUILT, as something to look at. Before the upload below, because
             // this is where a blueprint's model comes into existence: a construction is the
@@ -2176,7 +2180,11 @@ int runWindowed(const Session& session) {
                             ghostBatch,
                             rm::UnitInstance{
                                 .position = {{at->x, at->y, at->z}},
-                                .rotationY = 0.0f,  // spawns face north; so does the promise
+                                // The promise faces where the spawn will: the silhouette
+                                // asks the same authority the completion path does.
+                                .rotationY = rm::sim::radiansFromBrad(rm::app::structureFacing(
+                                    map->field, rm::sim::fxFromFloat(at->x),
+                                    rm::sim::fxFromFloat(at->z))),
                                 .scale = typeIndex < units.typeScale.size()
                                              ? units.typeScale[typeIndex]
                                              : 1.0f,

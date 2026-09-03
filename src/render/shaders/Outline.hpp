@@ -189,16 +189,28 @@ static float buildHash(float3 p) {
 }
 
 fragment float4 unitBuildFragment(UnitOut in [[stage_in]],
-                                  constant BuildUniforms& b [[buffer(1)]]) {
+                                  constant Uniforms& u [[buffer(1)]],
+                                  constant BuildUniforms& b [[buffer(5)]],
+                                  depth2d<float> shadowMap [[texture(13)]],
+                                  sampler shadowSampler [[sampler(2)]]) {
     // How far up this fragment sits within the model's own height, 0 at the ground and 1 at
     // the roof. Guarded because a model with no stated height would divide by zero and take
     // the whole building with it.
     const float span = max(b.height, 0.001);
     const float up = saturate((in.world.y - b.baseY) / span);
 
-    // The shading the ghost uses, for the same reason: a flat tint renders a model as one
-    // shapeless slab and the silhouette is where identity lives.
-    const float shape = 0.55 + 0.45 * saturate(in.normal.y * 0.5 + 0.5);
+    // THE MAP'S OWN LIGHT, same as the finished building will wear — a construction is a
+    // real object standing on real ground, so it sits in the map's sun and casts into the
+    // map's shade like everything around it. This used to be a fake hemisphere term from
+    // the normal's Y (the ghost's shading), which is why a site glowed evenly at dusk and
+    // sat flat grey at noon: it was lit by nothing in the scene. The energy layers below
+    // — the working edge, the pulse, Aeon's promise — ride on top of the lit metal, since
+    // they ARE light and answer to no sun.
+    const float3 N = normalize(in.normal);
+    const float rawNdotL = saturate(dot(N, u.sunDirection));
+    const float sunlight = sunlightAt(in.world, rawNdotL, u, shadowMap, shadowSampler);
+    float3 light = u.sunColour * (rawNdotL * sunlight) + u.sunAmbience;
+    light = u.lightingMultiplier * light + u.shadowFill * (1.0 - light);
 
     float revealed = 0.0;   // 1 where the structure exists, 0 where it does not yet
     float edge = 0.0;       // 1 at the working face, where the energy is going in
@@ -246,7 +258,7 @@ fragment float4 unitBuildFragment(UnitOut in [[stage_in]],
 
     // The working face, blown out toward white — this is the energy going in, and it is the
     // one part of the effect that reads from across the map.
-    const float3 metal = float3(0.42, 0.44, 0.47) * shape;
+    const float3 metal = float3(0.42, 0.44, 0.47) * light;
     const float3 built = mix(metal, b.tint.rgb, 0.35);
     const float3 hot = mix(built, float3(1.0), saturate(edge) * 0.85);
 
@@ -365,7 +377,22 @@ fragment float4 unitFragment(UnitOut in [[stage_in]],
     const float rawNdotL = saturate(dot(N, L));
     const float sun = sunlightAt(in.world, rawNdotL, u, shadowMap, shadowSampler);
     const float NdotL = rawNdotL * sun;
-    float3 light = kUnitAmbient + NdotL * kUnitDiffuse;
+
+    // THE MAP'S OWN LIGHT — the same two lines the terrain shader ends with,
+    // because they are the same two lines in the game: `mesh.fx`'s ComputeLight
+    // (mesh.fx:565-578) is `terrain.fx:2279-2280` with the variables renamed.
+    // The engine feeds one lighting block to ground and models alike, and its
+    // own comment says why: "This way all dark areas match (very cool.)" — a
+    // shadowed hull and the shadowed ground it stands on converge on the same
+    // fill colour, and a map's LightingMultiplier scales both or neither.
+    //
+    // Until now this shader held Recoil's mapinfo.lua defaults (0.4 ambient,
+    // 0.7 diffuse) while the terrain read the `.scmap` block, which is exactly
+    // why units sat dark on any map whose authored light was not the default.
+    // On an SMF map nothing changes: Environment's defaults land within 1% of
+    // the constants they replace, in sun and in shade both.
+    float3 light = u.sunColour * NdotL + u.sunAmbience;
+    light = u.lightingMultiplier * light + u.shadowFill * (1.0 - light);
 
     if (supCom) {
         // Supreme Commander, from `effects/mesh.fx`'s NormalMappedPS

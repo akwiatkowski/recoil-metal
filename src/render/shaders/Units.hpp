@@ -71,12 +71,11 @@ struct UnitOut {
     float4 teamColour [[flat]];  // per instance, so never interpolated
 };
 
-// Recoil's own defaults for model lighting, from mapinfo.lua's `lighting` table
-// (rts/Map/MapInfo.cpp:215-220). A map may override all of these; we do not read
-// that table yet, so these stand in — and being the engine's defaults, they are
-// what a map that says nothing gets there too.
-constant float3 kUnitAmbient = float3(0.4);   // unitAmbientColor
-constant float3 kUnitDiffuse = float3(0.7);   // unitDiffuseColor
+// Recoil's own defaults for model specular, from mapinfo.lua's `lighting` table
+// (rts/Map/MapInfo.cpp:215-221). The ambient and diffuse constants that used to
+// sit beside these are gone: the diffuse light now comes from the same
+// map-authored terms the terrain reads (`u.sunColour` and friends), which is
+// how both engines light their models — see unitFragment.
 constant float3 kUnitSpecular = float3(0.7);  // unitSpecularColor, defaults to diffuse
 constant float kSpecularExponent = 100.0;     // specularExponent (MapInfo.cpp:221)
 
