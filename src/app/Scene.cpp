@@ -35,6 +35,20 @@ bool gInterpolate = true;
             continue;  // a blueprint this engine cannot read is not in the roster, and that is
                        // reported by the roster being short rather than by failing the load
         }
+        for (rm::unitdef::Weapon& weapon : def->weapons) {
+            if (!weapon.countedProjectile || weapon.projectileId.empty()) {
+                continue;
+            }
+            const auto projectile = content.read(weapon.projectileId);
+            if (!projectile) {
+                continue;
+            }
+            const std::string_view projectileSource{
+                reinterpret_cast<const char*>(projectile->data()), projectile->size()};
+            if (auto economy = rm::unitbp::loadProjectileEconomy(projectileSource)) {
+                weapon.projectileEconomy = *economy;
+            }
+        }
         ids.push_back(def->name);
         defs.push_back(std::move(*def));
     }

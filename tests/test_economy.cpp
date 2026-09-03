@@ -106,6 +106,37 @@ TEST_CASE("a funded build finishes in the time the blueprint implies") {
     CHECK(amount(economy.stored.energy) == Approx(10000.0f - 360.0f).margin(0.1));
 }
 
+TEST_CASE("UEB4302's interceptor economy event completes after its projectile-derived ticks") {
+    // ART-S013 TIMMissileIntercerptor01_proj.bp:Economy: 3600 mass, 360000 energy,
+    // BuildTime 259200. ART-S001 UEB4302 BuildRate 1080; C-083 gives 2400 ticks.
+    Economy economy = rich();
+    economy.stored = res(10000.0f, 1000000.0f);
+    economy.storage = economy.stored;
+    rm::sim::SiloAmmo ammo = rm::sim::makeSiloAmmo(
+        {}, 0, false, 7, res(3600.0f, 360000.0f), rm::test::mag(259200.0f),
+        rm::test::mag(108.0f));  // ART-S001 BuildRate 1080 / ten-Hz beat
+    CHECK(ammo.totalTicks == 2400);
+    CHECK(amount(ammo.costPerTick.mass) == Approx(1.5f));
+    CHECK(amount(ammo.costPerTick.energy) == Approx(150.0f));
+    for (int tick = 0; tick < 2400; ++tick) {
+        rm::sim::tickEconomy(economy, {}, {}, std::span<rm::sim::SiloAmmo>{&ammo, 1});
+    }
+    CHECK(ammo.stored == 1);
+    CHECK(ammo.elapsedTicks == 0);
+}
+
+TEST_CASE("a silo economy event retains partial deliveries until a whole production tick") {
+    Economy economy = rich();
+    economy.stored = res(0.75f, 75.0f);
+    rm::sim::SiloAmmo ammo{.capacity = 1, .totalTicks = 1, .costPerTick = res(1.5f, 150.0f)};
+    rm::sim::tickEconomy(economy, {}, {}, std::span<rm::sim::SiloAmmo>{&ammo, 1});
+    CHECK(ammo.stored == 0);
+    CHECK(amount(ammo.delivered.mass) == Approx(0.75f));
+    economy.stored = res(0.75f, 75.0f);
+    rm::sim::tickEconomy(economy, {}, {}, std::span<rm::sim::SiloAmmo>{&ammo, 1});
+    CHECK(ammo.stored == 1);
+}
+
 TEST_CASE("a build is not nearly done half way through, it is exactly half done") {
     Economy economy = rich();
     std::vector<Construction> building{massExtractor()};

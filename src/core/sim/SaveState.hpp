@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/sim/RandomStream.hpp"
+#include "core/sim/Economy.hpp"
 #include "core/sim/UnitStore.hpp"
 
 #include <cstddef>
@@ -17,13 +18,14 @@ struct SaveState {
     RandomStream::Snapshot random{};
     std::uint64_t pathServiceBeats{};
     UnitStore::Snapshot units{};
+    std::vector<SiloAmmo> siloAmmo;
 
     [[nodiscard]] static std::vector<std::byte> encodeV1(const SaveState& state);
     [[nodiscard]] static std::optional<SaveState> decodeV1(std::span<const std::byte> bytes);
     /// The published v2 format includes path-service and route-revalidation phase state.
     [[nodiscard]] static std::vector<std::byte> encodeV2(const SaveState& state);
     [[nodiscard]] static std::optional<SaveState> decodeV2(std::span<const std::byte> bytes);
-    /// The latest v8 format additionally preserves queued command and allocator state.
+    /// The latest v9 format additionally preserves CAiSiloBuildImpl-shaped ammunition state.
     [[nodiscard]] static std::vector<std::byte> encode(const SaveState& state);
     /// Decodes all supported save versions, including v1 and the published v2 format.
     [[nodiscard]] static std::optional<SaveState> decode(std::span<const std::byte> bytes);

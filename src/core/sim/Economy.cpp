@@ -51,6 +51,21 @@ namespace {
 
 } // namespace
 
+SiloAmmo makeSiloAmmo(UnitId owner, std::size_t weapon, bool nukeWeapon, int capacity,
+                      Resources projectileCost, Mag buildTime, Mag buildPerTick) noexcept {
+    const Mag pace = std::max(buildPerTick, Mag::fromRaw(1));
+    const TickCount total = static_cast<TickCount>(buildTime.raw() / pace.raw());
+    if (total == 0) return SiloAmmo{.owner = owner, .weapon = weapon,
+                                    .slot = static_cast<std::uint8_t>(nukeWeapon), .capacity = capacity};
+    return SiloAmmo{.owner = owner,
+                    .weapon = weapon,
+                    .slot = static_cast<std::uint8_t>(nukeWeapon),
+                    .capacity = capacity,
+                    .totalTicks = total,
+                    .costPerTick = {.mass = Mag::fromRaw(projectileCost.mass.raw() / total),
+                                    .energy = Mag::fromRaw(projectileCost.energy.raw() / total)}};
+}
+
 void advanceConstruction(Construction& work) noexcept {
     if (work.finished()) {
         return;
@@ -68,7 +83,7 @@ void advanceConstruction(Construction& work) noexcept {
 }
 
 void tickEconomy(Economy& economy, std::span<Construction> building,
-                 std::span<RepairWork> repairs) {
+                  std::span<RepairWork> repairs, std::span<SiloAmmo> siloAmmo) {
     // Clamp only what CARRIED IN. Reclaim currently credits `stored` directly before this
     // pass, so its over-cap excess is still lost rather than becoming a hidden reserve.
     economy.stored.mass = std::max(Mag{}, std::min(economy.stored.mass, economy.storage.mass));
@@ -128,6 +143,19 @@ void tickEconomy(Economy& economy, std::span<Construction> building,
     for (const RepairWork& repair : repairs) {
         wanted += repair.demand;
         bucket(repair.demand);
+    }
+    const auto autoBuilding = [&siloAmmo](const SiloAmmo& ammo) {
+        if (!ammo.building()) return false;
+        // C-241 starts tactical first; nuke is considered only when tactical could not queue.
+        return ammo.slot == 0 || std::none_of(siloAmmo.begin(), siloAmmo.end(),
+            [&ammo](const SiloAmmo& other) { return other.owner == ammo.owner && other.slot == 0
+                                                      && other.building(); });
+    };
+    for (const SiloAmmo& ammo : siloAmmo) {
+        if (autoBuilding(ammo)) {
+            wanted += ammo.costPerTick;
+            bucket(outstanding(ammo.costPerTick, ammo.delivered));
+        }
     }
 
     // The DEMAND, remembered for whoever asks how loaded this economy is. Construction
@@ -214,6 +242,27 @@ void tickEconomy(Economy& economy, std::span<Construction> building,
         // or destroyed before the next tick, so this request is consumed in the award beat.
         Resources allocated;
         repair.funded = grantAndConsume(repair.demand, allocated);
+    }
+    for (SiloAmmo& ammo : siloAmmo) {
+        if (!autoBuilding(ammo)) {
+            continue;
+        }
+        // C-084: this is an event delivery accumulator, not Construction's lagged ratio.
+        // A partial award remains here until an entire production beat is affordable.
+        const Resources out = outstanding(ammo.costPerTick, ammo.delivered);
+        const Fx ratio = grantFor(out);
+        const Resources share = out * ratio;
+        ammo.delivered += share;
+        granted += share;
+        if (ammo.delivered.mass >= ammo.costPerTick.mass
+            && ammo.delivered.energy >= ammo.costPerTick.energy) {
+            ammo.delivered = {};
+            ++ammo.elapsedTicks;
+            if (ammo.elapsedTicks >= ammo.totalTicks) {
+                ++ammo.stored;
+                ammo.elapsedTicks = 0;
+            }
+        }
     }
 
     economy.usageLastTick = granted;

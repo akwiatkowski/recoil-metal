@@ -25,6 +25,7 @@ constexpr std::uint32_t kVersion5 = 5;
 constexpr std::uint32_t kVersion6 = 6;
 constexpr std::uint32_t kVersion7 = 7;
 constexpr std::uint32_t kVersion8 = 8;
+constexpr std::uint32_t kVersion9 = 9;
 // MT19937 serializes its 624 state words plus an index, all as unsigned decimal numbers separated
 // by one space. This rejects oversized malformed frames before they allocate their payload.
 constexpr std::size_t kMaxRandomStatePayload =
@@ -191,6 +192,43 @@ void writeCommandState(PayloadWriter& w, const UnitStore::Snapshot& s) {
             w.u8(execution.returningToPatrolOrigin);
         }
     }
+}
+
+void writeSiloAmmo(PayloadWriter& w, std::span<const SiloAmmo> ammo) {
+    w.count(ammo.size());
+    for (const SiloAmmo& value : ammo) {
+        writeId(w, value.owner);
+        w.count(value.weapon);
+        w.u8(value.slot);
+        w.i32(value.stored);
+        w.i32(value.capacity);
+        w.u64(value.totalTicks);
+        w.u64(value.elapsedTicks);
+        w.i64(value.costPerTick.mass.raw()); w.i64(value.costPerTick.energy.raw());
+        w.i64(value.delivered.mass.raw()); w.i64(value.delivered.energy.raw());
+    }
+}
+
+[[nodiscard]] bool readSiloAmmo(PayloadReader& r, std::vector<SiloAmmo>& ammo) {
+    std::size_t count{};
+    if (!r.count(count, 56)) return false;
+    ammo.resize(count);
+    for (SiloAmmo& value : ammo) {
+        std::int64_t mass{}, energy{}, deliveredMass{}, deliveredEnergy{};
+        std::uint64_t total{}, elapsed{};
+        if (!readId(r, value.owner) || !r.count(value.weapon) || !r.u8(value.slot) || value.slot > 1
+            || !r.i32(value.stored)
+            || !r.i32(value.capacity) || !r.u64(total) || !r.u64(elapsed)
+            || !r.i64(mass) || !r.i64(energy) || !r.i64(deliveredMass) || !r.i64(deliveredEnergy)
+            || value.stored < 0 || value.capacity < 0 || value.stored > value.capacity
+            || total > std::numeric_limits<TickCount>::max()
+            || elapsed > std::numeric_limits<TickCount>::max()) return false;
+        value.totalTicks = static_cast<TickCount>(total);
+        value.elapsedTicks = static_cast<TickCount>(elapsed);
+        value.costPerTick = {.mass = Mag::fromRaw(mass), .energy = Mag::fromRaw(energy)};
+        value.delivered = {.mass = Mag::fromRaw(deliveredMass), .energy = Mag::fromRaw(deliveredEnergy)};
+    }
+    return true;
 }
 
 [[nodiscard]] bool readCommandState(PayloadReader& r, UnitStore::Snapshot& s) {
@@ -440,7 +478,8 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
     if (version >= kVersion2) payloadWriter.u64(state.pathServiceBeats);
     writeUnits(payloadWriter, state.units, version >= kVersion2, version >= kVersion3,
                    version >= kVersion4, version >= kVersion5, version >= kVersion6,
-                   version >= kVersion7, version >= kVersion7, version >= kVersion8);
+                    version >= kVersion7, version >= kVersion7, version >= kVersion8);
+    if (version >= kVersion9) writeSiloAmmo(payloadWriter, state.siloAmmo);
     const std::vector<std::byte> payload = payloadWriter.take();
     if (payload.size() > std::numeric_limits<std::uint32_t>::max()) {
         throw std::length_error("MT19937 state exceeds the v1 save-state payload limit");
@@ -472,7 +511,7 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
     if (!readU32(bytes, offset, version)
         || (version != kVersion1 && version != kVersion2 && version != kVersion3
               && version != kVersion4 && version != kVersion5 && version != kVersion6
-              && version != kVersion7 && version != kVersion8)
+               && version != kVersion7 && version != kVersion8 && version != kVersion9)
         || (requiredVersion && version != *requiredVersion) || !readU64(bytes, offset, tick)
         || !readU32(bytes, offset, payloadSize) || bytes.size() - offset != payloadSize) {
         return std::nullopt;
@@ -500,13 +539,15 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
     if (version >= kVersion2 && !reader.u64(pathServiceBeats)) return std::nullopt;
     UnitStore::Snapshot units;
     if (!readUnits(reader, units, version >= kVersion2, version >= kVersion3, version >= kVersion4,
-                      version >= kVersion5, version >= kVersion6, version >= kVersion7,
-                      version >= kVersion7, version >= kVersion8)
-        || !reader.finished()) return std::nullopt;
+                       version >= kVersion5, version >= kVersion6, version >= kVersion7,
+                       version >= kVersion7, version >= kVersion8)) return std::nullopt;
+    std::vector<SiloAmmo> siloAmmo;
+    if (version >= kVersion9 && !readSiloAmmo(reader, siloAmmo)) return std::nullopt;
+    if (!reader.finished()) return std::nullopt;
     SaveState decoded{.tick = tick,
                       .random = std::move(random),
-                      .pathServiceBeats = pathServiceBeats,
-                      .units = std::move(units)};
+                       .pathServiceBeats = pathServiceBeats,
+                       .units = std::move(units), .siloAmmo = std::move(siloAmmo)};
     // One binary representation per state rejects alternate encodings and trailing data.
     const std::vector<std::byte> canonical = encode(decoded, version);
     if (canonical.size() != bytes.size()
@@ -531,7 +572,7 @@ std::optional<SaveState> SaveState::decodeV2(std::span<const std::byte> bytes) {
 }
 
 std::vector<std::byte> SaveState::encode(const SaveState& state) {
-    return rm::sim::encode(state, kVersion8);
+    return rm::sim::encode(state, kVersion9);
 }
 
 std::optional<SaveState> SaveState::decode(std::span<const std::byte> bytes) {

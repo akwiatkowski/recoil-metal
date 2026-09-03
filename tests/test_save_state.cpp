@@ -284,8 +284,9 @@ TEST_CASE("historic attachment saves derive offsets from their transforms", "[sa
     const SaveState state{.tick = 42, .random = random.snapshot(), .units = original.snapshot()};
     std::vector<std::byte> v7 = SaveState::encode(state);
     constexpr std::size_t kSlots = 2;
-    // v8 appends allocator and queue state. This fixture starts from the final published v7
-    // shape, so the historical-layout edits below must remove that v8-only trailer first.
+    // v8 appends allocator and queue state, and v9 then appends the silo-ammo section (empty
+    // here, so a single count word). This fixture starts from the final published v7 shape, so
+    // the historical-layout edits below must remove both later trailers first.
     constexpr std::size_t kV8CommandStateBytes = sizeof(rm::CommandSerial)
                                                   + std::size_t{rm::kInvalidCommandSource}
                                                         * sizeof(std::uint32_t)
@@ -293,7 +294,8 @@ TEST_CASE("historic attachment saves derive offsets from their transforms", "[sa
                                                   + kSlots
                                                         * (sizeof(std::uint8_t)
                                                            + sizeof(std::uint32_t));
-    v7.resize(v7.size() - kV8CommandStateBytes);
+    constexpr std::size_t kV9SiloAmmoBytes = sizeof(std::uint32_t);
+    v7.resize(v7.size() - kV9SiloAmmoBytes - kV8CommandStateBytes);
     writeU32(v7, 4, 7);
     writeU32(v7, 16, static_cast<std::uint32_t>(v7.size() - 20));
     // v4 adds the offset collection, v5 adds DoNotTarget, v6 adds one automatic-target count
@@ -381,6 +383,33 @@ TEST_CASE("historic attachment saves derive offsets from their transforms", "[sa
     checkDerivedOffset(v3);
     checkDerivedOffset(v4);
     checkDerivedOffset(v5);
+}
+
+TEST_CASE("a v9 save round-trips silo ammunition state", "[save-state]") {
+    RandomStream random{std::uint32_t{1}};
+    const SaveState state{
+        .tick = 42,
+        .random = random.snapshot(),
+        .siloAmmo = {{.owner = {.index = 3, .generation = 2},
+                      .weapon = 1,
+                      .slot = 1,  // the nuke slot — a v9 field this test must prove survives
+                      .stored = 4,
+                      .capacity = 7,
+                      .totalTicks = 2400,
+                      .elapsedTicks = 17,
+                      .costPerTick = {.mass = rm::sim::Mag::fromInt(1),
+                                      .energy = rm::sim::Mag::fromInt(150)},
+                      .delivered = {.mass = rm::sim::Mag::fromInt(1),
+                                    .energy = rm::sim::Mag::fromInt(75)}}},
+    };
+    const auto bytes = SaveState::encode(state);
+    const auto restored = SaveState::decode(bytes);
+    REQUIRE(restored.has_value());
+    REQUIRE(restored->siloAmmo.size() == 1);
+    CHECK(restored->siloAmmo.front().slot == 1);
+    CHECK(restored->siloAmmo.front().stored == 4);
+    CHECK(restored->siloAmmo.front().elapsedTicks == 17);
+    CHECK(SaveState::encode(*restored) == bytes);
 }
 
 TEST_CASE("a v1 save state refuses invalid and truncated input", "[save-state]") {

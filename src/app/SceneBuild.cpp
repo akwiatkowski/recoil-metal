@@ -245,11 +245,22 @@ void resolveMuzzleBones(rm::unitdef::UnitDef& def, const rm::Model& model) {
     }
 
     const std::string text{reinterpret_cast<const char*>(source->data()), source->size()};
-    const auto def = rm::unitbp::load(text, blueprintPath);
+    auto def = rm::unitbp::load(text, blueprintPath);
     if (!def) {
         std::fprintf(stderr, "unit blueprint \"%s\" not read: %s\n", blueprintPath.c_str(),
                      def.error().message.c_str());
         return std::nullopt;
+    }
+
+    for (rm::unitdef::Weapon& gun : def->weapons) {
+        if (!gun.countedProjectile || gun.projectileId.empty()) continue;
+        const auto projectile = content.read(gun.projectileId);
+        if (!projectile) continue;
+        const std::string_view projectileSource{reinterpret_cast<const char*>(projectile->data()),
+                                      projectile->size()};
+        if (auto economy = rm::unitbp::loadProjectileEconomy(projectileSource)) {
+            gun.projectileEconomy = *economy;
+        }
     }
 
     const std::string meshPath = rm::unitbp::resolveMeshInVfs(*def, blueprintPath, content);
@@ -474,12 +485,39 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
             def != nullptr ? motionFor(*def, army.index)
                            : rm::sim::MoveState{.armyIndex = army.index};
         const rm::sim::Mag hp = def != nullptr ? def->health : rm::sim::Mag{};
-        (void)scene.store.spawn(rm::sim::UnitStore::Spawn{
+        const rm::sim::UnitId id = scene.store.spawn(rm::sim::UnitStore::Spawn{
             .type = type,
             .transform = transformAt(one.front().position, one.front().rotationY),
             .motion = motion,
             .health = rm::sim::initialHealth(hp, scene.catalog.shield(type).maximum),
         });
+        if (def != nullptr) {
+            const rm::sim::Mag minimumRate = gAppTickRate.magPerTick(0.1f);
+            const rm::sim::Mag buildPerTick =
+                std::max(scene.catalog.rates(type).buildPerTick, minimumRate);
+            for (std::size_t weapon = 0; weapon < def->weapons.size(); ++weapon) {
+                const rm::unitdef::Weapon& gun = def->weapons[weapon];
+                if (!gun.countedProjectile || gun.projectileEconomy.buildTime <= rm::sim::Mag{}) {
+                    continue;
+                }
+                // C-241 names an adjacency build modifier. It is fixed at 1 in this slice:
+                // per-unit adjacency is not threaded into silo-event demand yet.
+                // One record per retail silo SLOT (C-081): same-slot duplicates keep the
+                // FIRST weapon, the selection C-085 records for `GetCountedProjectileWeapon`.
+                const bool slotTaken = std::any_of(
+                    scene.siloAmmo.begin(), scene.siloAmmo.end(),
+                    [&](const rm::sim::SiloAmmo& existing) {
+                        return existing.owner == id
+                               && existing.slot == static_cast<std::uint8_t>(gun.nukeWeapon);
+                    });
+                if (slotTaken) continue;
+                scene.siloAmmo.push_back(rm::sim::makeSiloAmmo(
+                    id, weapon, gun.nukeWeapon, gun.maxProjectileStorage,
+                    {.mass = gun.projectileEconomy.buildCostMass,
+                     .energy = gun.projectileEconomy.buildCostEnergy},
+                    gun.projectileEconomy.buildTime, buildPerTick));
+            }
+        }
     }
 
     // The batches' spans are filled from the store, once, here. They used to be re-pointed
@@ -642,6 +680,29 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
         .health = rm::sim::initialHealth(def.health, scene.catalog.shield(type).maximum),
     });
 
+    const rm::sim::Mag minimumRate = gAppTickRate.magPerTick(0.1f);
+    const rm::sim::Mag buildPerTick =
+        std::max(scene.catalog.rates(type).buildPerTick, minimumRate);
+    for (std::size_t weapon = 0; weapon < def.weapons.size(); ++weapon) {
+        const rm::unitdef::Weapon& gun = def.weapons[weapon];
+        if (!gun.countedProjectile || gun.projectileEconomy.buildTime <= rm::sim::Mag{}) continue;
+        // C-241's queued builds count toward capacity; queue issuance is deliberately absent.
+        // One record per retail silo SLOT (C-081): a unit with two counted weapons on the
+        // same slot keeps the FIRST, the order-dependent selection C-085 records for
+        // `Unit::GetCountedProjectileWeapon` (0x006b1fb0).
+        const bool slotTaken = std::any_of(
+            scene.siloAmmo.begin(), scene.siloAmmo.end(), [&](const rm::sim::SiloAmmo& existing) {
+                return existing.owner == id
+                       && existing.slot == static_cast<std::uint8_t>(gun.nukeWeapon);
+            });
+        if (slotTaken) continue;
+        scene.siloAmmo.push_back(rm::sim::makeSiloAmmo(
+            id, weapon, gun.nukeWeapon, gun.maxProjectileStorage,
+            {.mass = gun.projectileEconomy.buildCostMass,
+             .energy = gun.projectileEconomy.buildCostEnergy},
+            gun.projectileEconomy.buildTime, buildPerTick));
+    }
+
     // `UnitCreated` is THE CALLER'S to raise (§7 P6.1). The sim never spawns a unit — a spawn
     // needs a model out of the VFS, which is exactly the line the sim does not cross — so this
     // is the one event kind that cannot come from a pass. Raised here rather than at each of
@@ -699,11 +760,21 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
                      std::string{blueprintPath}.c_str());
         return std::nullopt;
     }
-    const auto def = rm::unitbp::load(
+    auto def = rm::unitbp::load(
         std::string{reinterpret_cast<const char*>(bytes->data()), bytes->size()},
         std::string{blueprintPath});
     if (!def) {
         return std::nullopt;
+    }
+    for (rm::unitdef::Weapon& gun : def->weapons) {
+        if (!gun.countedProjectile || gun.projectileId.empty()) continue;
+        const auto projectile = content.read(gun.projectileId);
+        if (!projectile) continue;
+        const std::string_view projectileSource{reinterpret_cast<const char*>(projectile->data()),
+                                      projectile->size()};
+        if (auto economy = rm::unitbp::loadProjectileEconomy(projectileSource)) {
+            gun.projectileEconomy = *economy;
+        }
     }
 
     scene.definitions.push_back(*def);

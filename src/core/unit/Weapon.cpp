@@ -116,6 +116,7 @@ std::vector<Weapon> weaponsFrom(const lua::Value& weaponArray, bool airborneSour
         }
         weapon.maxProjectileStorage = static_cast<int>(
             numberOr(entry, "MaxProjectileStorage", 0.0f));
+        weapon.projectileId = std::string{entry.stringAt("ProjectileId").value_or("")};
         if (const std::optional<std::string_view> arc = entry.stringAt("BallisticArc")) {
             weapon.arc = ballisticArcFromName(*arc).value_or(BallisticArc::None);
         }

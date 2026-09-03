@@ -492,3 +492,63 @@ TEST_CASE("income is what is standing, and a destroyed producer stops paying") {
     CHECK(perSecond(economies[0].incomePerTick.mass) == Approx(0.0f));
     CHECK(perSecond(economies[0].upkeepPerTick.energy) == Approx(0.0f));
 }
+
+TEST_CASE("a dead silo's record is reaped before the economy pass and a recycled slot inherits nothing") {
+    // SiloAmmo is keyed by a generational UnitId (`C-081`). A silo destroyed mid-production must
+    // stop drawing the same tick, and the UnitStore reusing its slot for a LATER unit must not
+    // resurrect the record — the reaping compares the generation, not the index.
+    const rm::HeightField field = flatField();
+
+    Roster roster;
+    UnitDef siloDef;
+    siloDef.name = "test_silo";
+    const rm::UnitTypeIndex siloType = roster.addType(siloDef);
+    const rm::sim::UnitId silo = roster.add(siloType, 0.0f, 0.0f, 0, 500.0f);
+    // A second army standing around, so the match has an opponent and the victory logic stays
+    // out of a test that is about the economy stage.
+    (void)roster.add(siloType, 900.0f, 900.0f, 1, 500.0f);
+
+    std::vector<Army> armies = twoSides();
+    std::vector<Projectile> projectiles;
+    std::vector<Construction> building;
+    std::vector<Economy> economies(2);
+    economies[0].stored = {.mass = rm::test::mag(10000.0f), .energy = rm::test::mag(1000000.0f)};
+    economies[0].storage = economies[0].stored;
+    const std::vector<int> commandersEver(2, 0);
+
+    // ART-S013/ART-S001 values, as in test_economy.cpp: 3600 mass, 360000 energy, 2400 ticks.
+    std::vector<rm::sim::SiloAmmo> siloAmmo{rm::sim::makeSiloAmmo(
+        silo, 0, false, 7,
+        {.mass = rm::test::mag(3600.0f), .energy = rm::test::mag(360000.0f)},
+        rm::test::mag(259200.0f), rm::test::mag(108.0f))};
+
+    Match match{.armies = armies,
+                .economies = economies,
+                .projectiles = &projectiles,
+                .building = &building,
+                .siloAmmo = &siloAmmo,
+                .commandersEver = commandersEver,
+                // The tick REBUILDS storage from baseStorage plus per-unit contributions
+                // (C-069/C-234), so a bare def would clamp an army's bank to zero.
+                .baseStorage = {.mass = rm::test::mag(10000.0f),
+                                .energy = rm::test::mag(1000000.0f)}};
+
+    (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, rm::sim::Terrain{field});
+    REQUIRE(siloAmmo.size() == 1);
+    CHECK(siloAmmo.front().elapsedTicks == 1);  // fully funded, so one production beat landed
+    const rm::sim::Mag massAfterFirstTick = economies[0].stored.mass;
+
+    // Kill the silo and IMMEDIATELY refill its slot before the next tick: the record's owner
+    // generation is now stale while the index is live again, which is exactly the case an
+    // index-only ownership check would get wrong.
+    roster.store.kill(silo);
+    const rm::sim::UnitId recycled = roster.add(siloType, 50.0f, 0.0f, 0, 500.0f);
+    INFO("recycled slot: " << recycled.index << " was " << silo.index);
+    CHECK(recycled.index == silo.index);
+    CHECK(recycled.generation != silo.generation);
+    REQUIRE(roster.store.alive(recycled));
+
+    (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, rm::sim::Terrain{field});
+    CHECK(siloAmmo.empty());  // neither the dead silo nor its slot's new tenant owns a record
+    CHECK(economies[0].stored.mass == massAfterFirstTick);  // and nothing was charged for it
+}

@@ -408,7 +408,9 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
     if (match.projectiles != nullptr) {
         report.shotsFired =
             fireWeapons(store, catalog, match.armies, *match.projectiles, rate, match.events,
-                            match.intel, playableRect, tickIndex);
+                             match.intel, playableRect, tickIndex,
+                             match.siloAmmo != nullptr ? std::span<SiloAmmo>{*match.siloAmmo}
+                                                       : std::span<SiloAmmo>{});
         // The held overcharges, after the guns and before the flight: a shot authorised
         // this tick flies this tick, and the energy it burned is gone before the economy
         // pass reads the store.
@@ -542,6 +544,14 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
     std::vector<RepairWork> repairs;
     collectRepairWork(store, catalog, match.armies, repairs);
 
+    // Components are keyed by a generational UnitId. Remove before partitioning so a dead silo
+    // cannot pay, and a subsequently recycled slot cannot inherit its ammunition (`C-081`).
+    if (match.siloAmmo != nullptr) {
+        std::erase_if(*match.siloAmmo, [&store](const SiloAmmo& ammo) {
+            return !store.alive(ammo.owner);
+        });
+    }
+
     // An upgrade whose unit died is CANCELLED, not completed: the work was that unit
     // becoming something, and there is no longer anything to become it. Before the economy
     // pass, so a cancelled upgrade stops drawing resources the same tick its factory fell.
@@ -551,7 +561,7 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
         });
     }
 
-    if (match.building != nullptr || !repairs.empty()) {
+    if (match.building != nullptr || match.siloAmmo != nullptr || !repairs.empty()) {
         for (std::size_t army = 0; army < match.economies.size(); ++army) {
             // Partitioned per army because `tickEconomy` is documented to be given one
             // army's work, and charging the wrong one is a caller's mistake to avoid.
@@ -573,8 +583,17 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
                     repairMine.push_back(repair);
                 }
             }
+            std::vector<SiloAmmo> siloMine;
+            if (match.siloAmmo != nullptr) {
+                for (const SiloAmmo& ammo : *match.siloAmmo) {
+                    if (store.alive(ammo.owner)
+                        && store.motion()[ammo.owner.index].armyIndex == static_cast<int>(army)) {
+                        siloMine.push_back(ammo);
+                    }
+                }
+            }
 
-            tickEconomy(match.economies[army], mine, repairMine);
+            tickEconomy(match.economies[army], mine, repairMine, siloMine);
 
             // Written back over this army's entries, in order — the two lists were built
             // by the same filter in the same pass, so the nth of `mine` is the nth of
@@ -597,6 +616,16 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
                 if (repair.armyIndex == static_cast<int>(army) && repairNext < repairMine.size()) {
                     repair = repairMine[repairNext];
                     ++repairNext;
+                }
+            }
+            if (match.siloAmmo != nullptr) {
+                std::size_t next = 0;
+                for (SiloAmmo& ammo : *match.siloAmmo) {
+                    if (store.alive(ammo.owner)
+                        && store.motion()[ammo.owner.index].armyIndex == static_cast<int>(army)
+                        && next < siloMine.size()) {
+                        ammo = siloMine[next++];
+                    }
                 }
             }
         }

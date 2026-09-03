@@ -121,6 +121,17 @@ struct Weapon {
     /// The authored capacity for a counted projectile weapon. Zero preserves ordinary weapons.
     int maxProjectileStorage = 0;
 
+    /// The counted projectile's own economy, not the launcher's. Filled by the VFS-side
+    /// blueprint resolver; `TIMMissileIntercerptor01_proj.bp:Economy` is the UEB4302 case.
+    struct ProjectileEconomy {
+        sim::Mag buildCostMass{};
+        sim::Mag buildCostEnergy{};
+        sim::Mag buildTime{};
+    } projectileEconomy;
+
+    /// The VFS locator whose blueprint supplies `projectileEconomy`.
+    std::string projectileId;
+
     /// Unrestricted when content states no caps, preserving synthetic and Recoil weapons.
     TargetLayerMask targetLayers = TargetLayerMask::Both;
 

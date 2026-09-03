@@ -250,9 +250,10 @@ std::size_t aimAtTargets(UnitStore& store, const UnitCatalog& catalog,
 /// a lifetime in ticks and that number is only meaningful against a rate (§5.1).
 std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
                          std::span<const Army> armies,
-                          std::vector<Projectile>& projectiles, TickRate rate,
-                          EventQueue* events = nullptr, const Intel* intel = nullptr,
-                          const PlayableRect* playableRect = nullptr, TickIndex tick = 0);
+                           std::vector<Projectile>& projectiles, TickRate rate,
+                           EventQueue* events = nullptr, const Intel* intel = nullptr,
+                           const PlayableRect* playableRect = nullptr, TickIndex tick = 0,
+                           std::span<SiloAmmo> siloAmmo = {});
 
 /// Fires every held OVERCHARGE whose moment has come: target alive, in the manual
 /// weapon's range, reload ready, and the army's stored energy covering the shot's

@@ -554,6 +554,23 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
     return def;
 }
 
+std::expected<unitdef::Weapon::ProjectileEconomy, lua::ParseError>
+loadProjectileEconomy(std::string_view source) {
+    auto parsed = lua::parseTable(source);
+    if (!parsed) {
+        return std::unexpected{parsed.error()};
+    }
+    const lua::Value* economy = parsed->path("Economy");
+    if (economy == nullptr) {
+        return std::unexpected{lua::ParseError{"projectile blueprint has no Economy table", 0}};
+    }
+    return unitdef::Weapon::ProjectileEconomy{
+        .buildCostMass = sim::magFromFloat(numberOr(*economy, "BuildCostMass", 0.0f)),
+        .buildCostEnergy = sim::magFromFloat(numberOr(*economy, "BuildCostEnergy", 0.0f)),
+        .buildTime = sim::magFromFloat(numberOr(*economy, "BuildTime", 0.0f)),
+    };
+}
+
 std::string resolveMeshInVfs(const unitdef::UnitDef& def, std::string_view blueprintVfsPath,
                              const vfs::Vfs& content, std::size_t level) {
     // A `MeshName` is a VFS path already, so it needs no root and no joining —

@@ -656,6 +656,7 @@ void runOpponents(UnitScene& scene, const rm::vfs::Vfs& content, const rm::Heigh
                 .economies = scene.economies,
                 .projectiles = &scene.projectiles,
                 .building = &scene.building,
+                .siloAmmo = &scene.siloAmmo,
                 .events = &scene.events,
                 .features = &scene.features,
                 .commandersEver = scene.commandersEver,

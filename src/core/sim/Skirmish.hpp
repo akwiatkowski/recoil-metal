@@ -69,6 +69,9 @@ struct Match {
     /// charging the wrong one is a caller's mistake to avoid.
     std::vector<Construction>* building = nullptr;
 
+    /// CAiSiloBuildImpl-shaped state, separate from UnitStore (`C-081`).
+    std::vector<SiloAmmo>* siloAmmo = nullptr;
+
     /// What is on the ground that is not a unit — wrecks (§7 P6.2). Null for a scene with
     /// nothing to leave behind.
     ///

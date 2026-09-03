@@ -959,10 +959,11 @@ std::size_t aimAtTargets(UnitStore& store, const UnitCatalog& catalog,
 }
 
 std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
-                         std::span<const Army> armies,
-                          std::vector<Projectile>& projectiles, TickRate rate,
-                          EventQueue* events, const Intel* intel,
-                          const PlayableRect* playableRect, TickIndex tick) {
+                          std::span<const Army> armies,
+                           std::vector<Projectile>& projectiles, TickRate rate,
+                           EventQueue* events, const Intel* intel,
+                           const PlayableRect* playableRect, TickIndex tick,
+                           std::span<SiloAmmo> siloAmmo) {
     std::size_t fired = 0;
 
     const std::span<const Transform> transforms = store.transforms();
@@ -1036,8 +1037,20 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
                 const int volley = weapon.bursts() ? 1 : rates.burstSize;
                 for (int shot = 0; shot < volley; ++shot) {
                     projectiles.push_back(launch(from, targetPosition, weapon, army, rate,
-                                                  rates.muzzlePerTick, rates.damage,
-                                                  store.idAt(slot), true));
+                                                   rates.muzzlePerTick, rates.damage,
+                                                   store.idAt(slot), true));
+                }
+                if (weapon.countedProjectile) {
+                    // C-085's Lua sequence creates the projectile before this guarded consume.
+                    // The unread HasSiloAmmo caller may gate a zero-ammo launch; do not invent it.
+                    for (SiloAmmo& ammo : siloAmmo) {
+                        if (ammo.owner == store.idAt(slot)
+                            && ammo.slot == static_cast<std::uint8_t>(weapon.nukeWeapon)
+                            && ammo.stored > 0) {
+                            --ammo.stored;
+                            break;
+                        }
+                    }
                 }
                 emit(events, Event{
                                  .kind = EventKind::WeaponFired,

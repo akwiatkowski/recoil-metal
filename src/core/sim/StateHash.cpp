@@ -626,6 +626,23 @@ StateHash hashMatch(const UnitStore& store, const Match& match) {
         }
     }
 
+    feed(h, match.siloAmmo != nullptr);
+    if (match.siloAmmo != nullptr) {
+        feed(h, match.siloAmmo->size());
+        for (const SiloAmmo& ammo : *match.siloAmmo) {
+            feed(h, static_cast<std::size_t>(ammo.owner.index));
+            feed(h, static_cast<std::size_t>(ammo.owner.generation));
+            feed(h, ammo.weapon);
+            feed(h, static_cast<std::size_t>(ammo.slot));
+            feed(h, ammo.stored);
+            feed(h, ammo.capacity);
+            feed(h, static_cast<std::size_t>(ammo.totalTicks));
+            feed(h, static_cast<std::size_t>(ammo.elapsedTicks));
+            feed(h, ammo.costPerTick);
+            feed(h, ammo.delivered);
+        }
+    }
+
     // THE WRECKS, since reclaim reads them back into a rule — the moment FeatureStore.hpp's
     // old note said they would have to be here. How much of a wreck is LEFT depends on who
     // reclaimed it and when, which no unit's row records; two matches that differ only in a

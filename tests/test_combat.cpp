@@ -216,6 +216,22 @@ TEST_CASE("point defence fires an interceptor at the nearest hostile projectile"
     CHECK(shots.back().velocity[2] == rm::test::fx(10.0f));
 }
 
+TEST_CASE("a counted projectile launches before its guarded silo-ammo consume") {
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    Roster roster;
+    Weapon interceptor = directFire(10.0f, 300.0f);
+    interceptor.targetsProjectiles = true;
+    interceptor.countedProjectile = true;
+    const UnitId silo = roster.add(roster.addType(gunnerDef(interceptor)), 0.0f, 0.0f, 0, 100.0f);
+    std::vector<Projectile> shots{{.position = rm::test::at(0, 4, 50), .firedByArmy = 1, .ticksRemaining = 10}};
+    rm::sim::SiloAmmo ammo{.owner = silo, .weapon = 0, .stored = 1, .capacity = 7};
+    REQUIRE(rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots, roster.rate,
+                                  nullptr, nullptr, nullptr, 0,
+                                  std::span<rm::sim::SiloAmmo>{&ammo, 1}) == 1);
+    CHECK(shots.size() == 2);
+    CHECK(ammo.stored == 0);
+}
+
 TEST_CASE("point defence rejects friendly projectiles") {
     const std::vector<Army> armies = rm::sim::freeForAll(2);
     Roster roster;

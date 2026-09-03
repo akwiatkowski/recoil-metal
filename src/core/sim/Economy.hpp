@@ -321,6 +321,31 @@ struct RepairWork {
     Fx funded{};
 };
 
+/// One CAiSiloBuildImpl-shaped counted-projectile record.  It is match-owned rather than a
+/// `UnitStore` field: C-081 locates retail's state behind Unit+0x558, not on Unit itself.
+struct SiloAmmo {
+    UnitId owner{};
+    std::size_t weapon = 0;
+    /// CAiSiloBuildImpl slot: tactical 0, nuke 1 (`C-081`, `C-082`).
+    std::uint8_t slot = 0;
+    int stored = 0;
+    int capacity = 0;
+    TickCount totalTicks = 0;
+    TickCount elapsedTicks = 0;
+    Resources costPerTick;
+    Resources delivered;
+
+    [[nodiscard]] bool building() const noexcept {
+        return stored < capacity && totalTicks > 0 && costPerTick.mass >= Mag{}
+               && costPerTick.energy >= Mag{};
+    }
+};
+
+/// Creates one silo component from already-bound fixed-point blueprint values (`C-083`, C-241).
+[[nodiscard]] SiloAmmo makeSiloAmmo(UnitId owner, std::size_t weapon, bool nukeWeapon,
+                                    int capacity, Resources projectileCost, Mag buildTime,
+                                    Mag buildPerTick) noexcept;
+
 /// Puts one beat's work into one construction — retail's `Unit::Materialize` step.
 ///
 /// WHY IT IS NOT PART OF `tickEconomy` ANY MORE. Retail advances a build inside the builder's
@@ -365,7 +390,7 @@ void advanceConstruction(Construction& work) noexcept;
 /// because silently skipping a mismatched entry would leave it never built and never
 /// reported.
 void tickEconomy(Economy& economy, std::span<Construction> building,
-                 std::span<RepairWork> repairs = {});
+                  std::span<RepairWork> repairs = {}, std::span<SiloAmmo> siloAmmo = {});
 
 /// Hand each army's over-cap excess to its allies, retail's `C-163` progressive split.
 ///

@@ -533,7 +533,7 @@ TEST_CASE("FA silo weapons retain their counted-projectile metadata") {
             Weapon = {
                 {
                     WeaponCategory = 'Defense', CountedProjectile = true,
-                    NukeWeapon = true, MaxProjectileStorage = 7,
+                    NukeWeapon = false, MaxProjectileStorage = 7,
                 },
                 { WeaponCategory = 'Direct Fire' },
             },
@@ -551,7 +551,9 @@ TEST_CASE("FA silo weapons retain their counted-projectile metadata") {
                           counted.maxProjectileStorage;
                       }) {
             CHECK(counted.countedProjectile);
-            CHECK(counted.nukeWeapon);
+            // ART-S001 /units/UEB4302/UEB4302_unit.bp:Weapon[1].NukeWeapon is absent.
+            // C-082: a counted weapon without NukeWeapon occupies the tactical silo slot.
+            CHECK_FALSE(counted.nukeWeapon);
             CHECK(counted.maxProjectileStorage == 7);
             CHECK_FALSE(ordinary.countedProjectile);
             CHECK_FALSE(ordinary.nukeWeapon);

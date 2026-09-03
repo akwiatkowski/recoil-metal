@@ -71,6 +71,7 @@ struct Fixture {
     std::vector<rm::sim::Economy> economies;
     std::vector<rm::sim::Projectile> projectiles;
     std::vector<rm::sim::Construction> building;
+    std::vector<rm::sim::SiloAmmo> siloAmmo;
     std::vector<int> commandersEver;
 
     Fixture() {
@@ -100,7 +101,8 @@ struct Fixture {
             .armies = armies,
             .economies = economies,
             .projectiles = &projectiles,
-            .building = &building,
+                .building = &building,
+                .siloAmmo = &siloAmmo,
             .commandersEver = commandersEver,
         };
     }
@@ -122,6 +124,25 @@ TEST_CASE("the same state hashes the same, twice running") {
     const rm::StateHash first = a.hash();
     REQUIRE(a.hash() == first);
     REQUIRE(a.hash() == first);
+}
+
+TEST_CASE("silo ammunition state changes the match hash") {
+    Fixture fixture;
+    const auto baseline = fixture.hash();
+    fixture.siloAmmo.push_back({.owner = fixture.store.idAt(0),
+                                .capacity = 7,
+                                .totalTicks = 2400,
+                                .costPerTick = {.mass = rm::sim::Mag::fromInt(1),
+                                                .energy = rm::sim::Mag::fromInt(150)}});
+    CHECK(fixture.hash() != baseline);
+    const auto withAmmo = fixture.hash();
+    ++fixture.siloAmmo.front().elapsedTicks;
+    CHECK(fixture.hash() != withAmmo);
+    // The slot is part of the identity: a nuke-slot record is not a tactical one (`C-081`).
+    const auto withElapsed = fixture.hash();
+    fixture.siloAmmo.front().slot = 1;
+    CHECK(fixture.hash() != withElapsed);
+    CHECK(fixture.hash() != withAmmo);
 }
 
 TEST_CASE("playable-rectangle presence and every bound change the match hash") {

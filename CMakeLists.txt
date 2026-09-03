@@ -365,6 +365,7 @@ if(BUILD_TESTING)
         tests/test_asset_search.cpp
         tests/test_vfs.cpp
         tests/test_real_vfs.cpp
+        tests/test_real_silo.cpp
         tests/test_real_unit_blueprints.cpp
         tests/test_real_unitdefs.cpp
         tests/test_team_colours.cpp
