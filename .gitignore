@@ -36,3 +36,11 @@ local.mk
 # is a copy nobody can quietly edit. vendor/README.md and vendor/NOTICE.md ARE
 # committed; they are what says which versions and on whose terms.
 vendor/ai/
+
+# A local mirror of the Supreme Commander Fandom wiki, fetched through api.php
+# (its HTML pages 403 any client). Behaviour and role descriptions the blueprints
+# do not carry — what a unit is FOR, what counters it, why a hover tank ignores
+# torpedoes. Never committed: it is someone else's text under CC-BY-SA, it is
+# `WEB`-tier evidence that must never be cited without blueprint or EXE support,
+# and it is regenerable by one script.
+reference/
