@@ -9,13 +9,16 @@ Detailed retail evidence remains canonical in
 [`fa-exe-analysis-plan.md`](fa-exe-analysis-plan.md). This dashboard summarizes that ledger; it
 does not replace its claims, addresses, counterevidence, or confirmation gate.
 
-**Snapshot:** 2026-09-03, dirty Recoil Metal worktree through the `C-211` own-queue-before-guardee
-slice — with the own-queue lifecycle now closed in the ledger (selection-only block A, dispatcher
-retirement at completion) — plus the `C-236`–`C-238` capture/ownership-transfer contract read,
-and prior: the `C-091` automatic-incumbent slice plus group-move fan-out, 3-D generic attachments,
-silo weapon metadata, SaveState v8 command round-tripping, the `C-210` Supremacy category-predicate
-foundation, generation-safe retained-radar-contact reaping, and the `C-183`/`C-211` guarded-unit
-factory-mirroring slice, retail artifact `ART-E001`
+**Snapshot:** 2026-09-03, dirty Recoil Metal worktree through the `WP-29` tactical silo ammunition
+slice — projectile-economy parsing, one `SiloAmmo` component per (unit, slot) created at spawn,
+`C-241` auto-refill with `C-083`/`C-084` whole-tick economy funding, `C-085` launch-then-guarded-
+consume, generation-safe owner-death reaping, SaveState v9 — plus the `C-239`/`C-240` capture
+timing and transfer-inventory reads, the `C-211` own-queue-before-guardee slice, and the `C-236`–
+`C-238` capture/ownership-transfer contract, and prior: the `C-091` automatic-incumbent slice plus
+group-move fan-out, 3-D generic attachments, silo weapon metadata, SaveState v8 command
+round-tripping, the `C-210` Supremacy category-predicate foundation, generation-safe
+retained-radar-contact reaping, and the `C-183`/`C-211` guarded-unit factory-mirroring slice,
+retail artifact `ART-E001`
 (`c6783580c0b7a408ec2ad3bfe5eb1fdbef31a60d92c1007ff9b90c33bb960aa0`).
 
 ## Headline
@@ -23,7 +26,7 @@ factory-mirroring slice, retail artifact `ART-E001`
 Equal-weight average across the 20 gameplay subsystem rows below; `FA-FOUND` is excluded:
 
 ```text
-Implemented       [##########----------] about 50%
+Implemented       [###########---------] about 55%
 Retail-validated  [#####---------------] about 25%
 Retail-analyzed   [##############------] about 70%
 ```
@@ -33,14 +36,14 @@ confirmation gate. The three percentages must never be combined: understanding a
 does not make the game more complete.
 
 The independent evidence-state count is **27 of 45 WPs at `Analyzed`**. That 60% inventory count
-and the 65% equal-subsystem estimate answer different questions and are shown together to keep the
+and the 70% equal-subsystem estimate answer different questions and are shown together to keep the
 headline honest.
 
 **Current implementation critical path:**
-[`FA-MISSILES`](#fa-missiles---silos-missiles-and-interception), tactical silo integer ammo state
-then economy-funded production and decrement-then-fire in `WP-29`. **Current EXE-analysis action:**
-[`FA-ECON`](#fa-econ---economy-construction-and-engineering), decoding the capture tick-unit
-conversion (`0x0060B4A8`/`0x0060B759`) and `Sim::TransferUnit`'s native copy/reset inventory.
+[`FA-MISSILES`](#fa-missiles---silos-missiles-and-interception), interception accounting against
+the new stored-ammo state (`C-086`/`C-087`) in `WP-29`. **Current EXE-analysis action:** the
+unread `HasSiloAmmo` callers (the zero-ammo launch gate, `C-085`'s open edge) and the capture
+increment semantic at `Unit+0x690` (`C-239`).
 
 ## Reading The Scores
 
@@ -72,13 +75,13 @@ excluded from the headline.
 | [`FA-LUA`](#fa-lua---gameplay-lua-and-mod-contract) | Gameplay Lua and mod contract | `WP-07`-`08` | 10% | 5% | 30% | Measure the exact Moho contract for the milestone-20 skirmish slice. |
 | [`FA-MATCH`](#fa-match---armies-setup-and-victory-rules) | Armies, setup, victory rules | `WP-10`-`11` | 60% | 25% | 85% | Recover the retail lobby/scenario victory-mode selector; do not wire a synthetic app setting. |
 | [`FA-CMD`](#fa-cmd---commands-controls-and-factories) | Commands, controls, factories | `WP-12`-`14` | 70% | 50% | 75% | Extend the guard ladder with `C-183`'s attack branch (`GuardScanRadius`, ordinary-attacker delegation) ahead of the remaining assist branches. |
-| [`FA-ECON`](#fa-econ---economy-construction-and-engineering) | Economy, construction, engineering | `WP-15`-`19` | 70% | 55% | 90% | Decode the capture tick-unit conversion and `Sim::TransferUnit` copy/reset inventory, then specify the smallest capture slice. |
+| [`FA-ECON`](#fa-econ---economy-construction-and-engineering) | Economy, construction, engineering | `WP-15`-`19` | 70% | 55% | 90% | Name the capture increment at `Unit+0x690` and read `Sim::TransferUnit`'s copy/reset inventory, then specify the smallest capture slice. |
 | [`FA-LAND`](#fa-land---land-navigation-formations-and-spatial-world) | Land navigation, formations, spatial world | `WP-20`, `21`, `26` | 85% | 30% | 95% | Add bounded formation rotation or category matching without changing path-service ordering. |
 | [`FA-AIR`](#fa-air---aircraft-flight-combat-and-staging) | Aircraft flight, combat, staging | `WP-22` | 30% | 10% | 95% | Implement the deterministic winged-aircraft mover foundation. |
 | [`FA-NAVY`](#fa-navy---surface-and-submerged-warfare) | Surface and submerged warfare | `WP-23`-`24` | 35% | 10% | 75% | Implement one complete `SurfacingSub` dive/surface slice. |
 | [`FA-TRANSPORT`](#fa-transport---attachments-cargo-and-ferries) | Attachments, cargo, ferries | `WP-25` | 35% | 5% | 95% | Add parent/self bone indices and authored rest-bone composition to generic attachments. |
 | [`FA-WEAPONS`](#fa-weapons---targeting-weapons-and-projectiles) | Targeting, weapons, projectiles | `WP-27`-`28` | 97% | 72% | 90% | Implement `C-157` target exemption for engineer reclaim/capture, then add the remaining death and manual-fire paths. |
-| [`FA-MISSILES`](#fa-missiles---silos-missiles-and-interception) | Silos, missiles, interception | `WP-29` | 20% | 5% | 90% | Add tactical silo integer ammo state, then economy-funded production and decrement-then-fire. |
+| [`FA-MISSILES`](#fa-missiles---silos-missiles-and-interception) | Silos, missiles, interception | `WP-29` | 35% | 15% | 95% | Add interception accounting against stored ammo (`C-086`/`C-087`), reading `HasSiloAmmo`'s callers for the fire gate first. |
 | [`FA-DAMAGE`](#fa-damage---damage-death-and-shields) | Damage, death, shields | `WP-30`-`32` | 70% | 40% | 75% | Add the next collidable shield slice: area-shield admission and stacking. |
 | [`FA-INTEL`](#fa-intel---vision-radar-sonar-and-counter-intel) | Vision, radar, sonar, counter-intel | `WP-33` | 75% | 45% | 90% | Apply radar-position error to automatic targeting without changing contact identity or ordering. |
 | [`FA-PROGRESS`](#fa-progress---enhancements-veterancy-and-special-units) | Enhancements, veterancy, special units | `WP-34`-`36` | 35% | 20% | 35% | Complete the enhancement lifecycle specification around `CUnitScriptTask`. |
@@ -188,17 +191,19 @@ do not synthesize commands. Run make test and make verify, then update WP-12 and
 ### FA-ECON - Economy, Construction, And Engineering
 
 **Largest gap:** explicit repair now has a tested semantic, replay, economy, and UI slice against
-`C-182`, and the capture contract is read (`C-236`–`C-238`): Lua-sourced costs, the five-state
-task machine, callback order, and replacement-unit transfer. What blocks an implementation slice
-is the native tick-unit conversion, multi-captor aggregation, and `Sim::TransferUnit`'s exact
+`C-182`, and the capture contract is fully read: costs (`C-236`), callback order (`C-237`),
+replacement-unit transfer (`C-238`), the reclaim-idiom timing with its funding gate and
+multi-captor aggregation (`C-239`), and the native transfer inventory — transform copied,
+transports rebuilt, old entity destroyed (`C-240`). What still blocks an implementation slice:
+the progress-increment semantic at `Unit+0x690` and `Sim::TransferUnit`'s complete native
 copy/reset field inventory — all named, none guessed.
 
 ```text
-/goal Advance FA-ECON by decoding the capture timing path at 0x0060B4A8/0x0060B759 and the native
-copy/reset branches of Sim::TransferUnit (0x0074DC40-0x0074E4D6) with exact ART-E001 locators and
-counterevidence: how GetCaptureCosts time becomes ticks, whether multiple captors aggregate, and
-exactly which unit state the native transfer preserves or resets. Update WP-17, C-236-C-238, and
-FA-ECON, then define the smallest capture implementation slice the evidence supports.
+/goal Advance FA-ECON by reading the capture progress increment at Unit+0x690 (C-239's open edge,
+used at 0x0060B7C9-0x0060B7D9) and the native copy/reset branches of Sim::TransferUnit
+(0x0074DC40-0x0074E4D6, C-240) with exact ART-E001 locators and counterevidence. Update WP-17,
+C-239/C-240, and FA-ECON, then define the smallest capture implementation slice the evidence
+supports. Do not derive heterogeneous-captor duration before Unit+0x690 is named.
 ```
 
 ### FA-LAND - Land Navigation, Formations, And Spatial World
@@ -285,27 +290,31 @@ FA-WEAPONS.
 
 ### FA-MISSILES - Silos, Missiles, And Interception
 
-**Largest gap:** retail silo and interception behavior is well analyzed, but Recoil Metal has no
-complete ammunition production, launch accounting, or counter-missile gameplay path.
+**Largest gap:** the tactical silo ammunition path now runs end to end, but interception
+accounting, strategic-nuke silos, and the counter/fire commands are absent.
 
-**Current slice:** `C-095` now gives projectile-target weapons a separate nearest-hostile,
+**Current slice:** `C-095` gives projectile-target weapons a separate nearest-hostile,
 in-range 2-D acquisition path with `max(MaxRadius, MaxRadius * TrackingRadius)` reach; it neither
-uses nor mutates unit-target priority/incumbency state.
-`C-086` runs its interceptors through the ordinary swept projectile tick and selects the earliest
-contact deterministically. Fixed-hull defence aims before firing. This is deliberately a baseline:
-there is no projectile guidance/lead, shooter cap, ammo, target restriction, projectile health, or
-flare path; a positive-damage interceptor consumes both shots rather than modelling `C-087`'s
-projectile damage.
-
-Weapon blueprints now retain `CountedProjectile`, `NukeWeapon`, and `MaxProjectileStorage`,
-including UEB4302's tactical slot metadata from `C-082`. This is content metadata only: no unit
-owns ammo or production progress yet.
+uses nor mutates unit-target priority/incumbency state. `C-086` runs its interceptors through the
+ordinary swept projectile tick and selects the earliest contact deterministically. Fixed-hull
+defence aims before firing. **WP-29's ammo path is implemented:** projectile blueprints resolve
+through the VFS for Economy costs/BuildTime; a CAiSiloBuildImpl-shaped `SiloAmmo` component per
+(unit, slot) — slot from `NukeWeapon` alone (`C-081`/`C-082`, first same-slot weapon wins per
+`C-085`) — is created at spawn, auto-refills tactical-first while `stored < capacity` (`C-241`),
+funds as a whole-tick economy-event consumer with partial-delivery residue (`C-083`/`C-084`,
+UEB4302: 2400 ticks, 1.5 mass / 150 energy per tick from ART-S013/ART-S001), launches then
+guarded-decrements (`C-085`), reaps generation-safe when the owner dies, round-trips in SaveState
+v9 and participates in the match hash. **Named divergences:** no build queue, adjacency modifier
+fixed at 1, zero-ammo fire gate unimplemented (`HasSiloAmmo`'s callers unread), `--units` crowds
+unwired; an interceptor still consumes both shots rather than modelling `C-087`'s projectile
+damage. No projectile guidance/lead, shooter cap, projectile health, or flare path.
 
 ```text
-/goal Advance FA-MISSILES by implementing one tactical silo ammunition path from C-081 through
-C-084: economy-throttled ammo build progress, integer stored ammo, and decrement-before-launch.
-Use a real launcher blueprint and failing scarcity/launch tests, run make test and make verify,
-record interception as the next slice in WP-29, and refresh FA-MISSILES.
+/goal Advance FA-MISSILES by implementing interception accounting against the stored-ammo state:
+read HasSiloAmmo's callers first to close the zero-ammo gate, then model C-087 projectile damage
+between interceptor and target instead of the consume-both shortcut. Use real intercepting
+blueprints, write failing tests first, run make test and make verify, record the nuke-slot and
+command-queue slices as the next boundary in WP-29, and refresh FA-MISSILES.
 ```
 
 ### FA-DAMAGE - Damage, Death, And Shields
