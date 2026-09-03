@@ -427,6 +427,14 @@ measuring against something that does not yet play.
 - **The seam.** Sim state stays plain structs behind narrow free functions, as
   `Movement.hpp` already does. No Lua host is built in milestones 16–20; the four
   decisions above are what keep one buildable in 21+.
+- **Parallel work.** From the parity campaign on, this plan is executed by a
+  fleet: analysis agents fan out one per open possibility envelope, implementer
+  agents take one work package each in a `git worktree`, and one integrator owns
+  tick order and the golden log. The rules are in AGENT.md under *Working as a
+  fleet*, the reasoning in `ADR-069`, and the running order in
+  `docs/fa-gameplay-progress.md` — which stays the single scheduler. Nothing
+  about the fleet changes what counts as done: the confirmation gate is the same
+  gate a single agent would face.
 
 ---
 

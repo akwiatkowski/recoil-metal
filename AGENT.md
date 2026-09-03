@@ -90,6 +90,85 @@ formats, built test-first in modern C++, as both research and a C++ showcase.
   never hand-crafted fixtures when the real thing is on disk.
 - Anything visual must run in the app. A screenshot or it didn't happen.
 
+### The three instruments, and what each one can prove
+
+Confusing these is the fastest way to report parity that does not exist.
+
+| Instrument | Question it answers | Ground truth |
+|---|---|---|
+| Focused test | Is this value, order or edge case what retail does? | An `EXE` address, or a `LUA-R`/`BP-R` locator |
+| `make verify` | Did this edit change simulation behaviour, and from which tick? | Our own previous run |
+| `OBS` experiment | What does retail actually do when you run it? | The retail game, recorded |
+
+`docs/golden-p1.log` is **7000 hashes of our own sim**, not of retail's — `C-154`
+found retail's replay checksum is a bounded change-set ring, so the two digests
+are not comparable even in principle. The golden log is therefore a change
+detector with a blast radius, never a parity oracle.
+
+**An unexplained golden diff is a bug.** Re-blessing one requires a sentence
+naming the first divergent tick and the mechanism that moved it ("tick 4312,
+because construction now settles at dispatch — `ADR-067`"). "Re-ran golden" is
+not a bless. And a worktree's `make verify` compares against *that worktree's*
+log, so a branch can bless away its own regression: whoever merges re-runs
+`verify` against `main`'s log.
+
+## Working as a fleet — subagents and worktrees
+
+Parallel agents are welcome on analysis and dangerous on the sim. The split:
+
+- **Analysis agents parallelise freely.** Ghidra, `objdump`, `tools/re/*`, the
+  retail Lua and blueprint corpus, FAF source. They edit nothing under `src/`.
+  Output is claims, counterevidence and narrowed possibility envelopes in
+  `docs/fa-exe-analysis-plan.md`. Fan out one per open `PE-nn` or work package.
+- **Implementer agents are serialised on shared sim state.** `src/core/sim/`
+  is one fixed-point machine with one tick order; two writers in `UnitStore`,
+  `Command`, `Movement`, `SaveState` or `StateHash` is a merge conflict at best
+  and a silent determinism change at worst. At most one agent per wave touches
+  any shared sim file; the rest own leaf systems.
+- **One integrator merges.** It is the only role that changes tick order, the
+  `SaveState` version, or `StateHash` coverage, and it re-runs `make test` and
+  `make verify` against `main`'s golden log after every merge.
+
+**Worktree setup.** `git worktree` materialises tracked files only, and this
+repo tracks no game content — but it also does not materialise the three things
+a build needs. Symlink the two that are read-only, give each worktree its own
+`build/` (CMake bakes absolute source paths, so it cannot be shared):
+
+```sh
+git worktree add ../rm-wt-<name> -b wt/<name>
+ln -s "$PWD/third_party" ../rm-wt-<name>/third_party        # metal-cpp + miniz
+mkdir -p ../rm-wt-<name>/vendor
+ln -s "$PWD/vendor/ai" ../rm-wt-<name>/vendor/ai            # pinned AI corpora, never edited
+cp local.mk ../rm-wt-<name>/ 2>/dev/null || true            # content paths
+```
+
+Budget ~560 MB of `build/` per worktree and share a `ccache`; the retail content
+itself lives outside the repo behind `$FA`, so every worktree inherits it free.
+
+**What a merge is: a finished feature, not a step toward one.** The unit of
+delivery is a difference you can *see in a match* — aircraft that fly, a shield
+that blocks, a silo that fires. A parser with no caller, a refactor with no
+behavioural change, or slice 2 of 4 is not a merge; it waits and lands with the
+visible thing it serves. This is why the fleet exists: several agents each
+finishing something beats one agent advancing everything.
+
+The test suite is run **per merge, not per edit** — measured 2026-09-03 on an
+M4 Pro: incremental build 9 s, all 1305 tests 6.2 s, `make verify` 19 s, so the
+whole gate is about 35 seconds. It is cheap enough that skipping it only ever
+buys a longer bisect later. TDD still applies per change; it is the *suite* that
+batches, not the failing test that starts the work.
+
+**Critics.** Two of them, and they must stay separate:
+
+- The **parity critic** gates. It writes no code, assumes the builder is wrong,
+  spot-checks that each cited locator actually says what the builder claims,
+  and passes only on the confirmation gate in `docs/fa-exe-analysis-plan.md`.
+- The **feel critic** (`FA-FEEL`) advises. It scores battle legibility, scale,
+  spectacle and headroom at 1000+ units from fixed screenshots of a fixed
+  match. It may never propose a change to a simulation constant, and its score
+  never enters the parity dashboard — an advisory critic that can move the gate
+  stops being advisory.
+
 ## Gotchas (grow this list)
 
 - **metal-cpp is not ARC.** C++ objects from `alloc()->init()` and

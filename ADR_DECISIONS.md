@@ -2432,3 +2432,92 @@ engine-generated origin keeps the player-facing boundary right, which is what th
 it does not make the raw-entry count match. That reconciliation belongs to the shared-command
 work (`WP-12` slice 1 in the project plan), and the cap should be re-checked against retail once
 a patrol issue is one entry.
+
+---
+
+## ADR-069 — Parallel agents get worktrees; the sim core gets one writer per wave
+
+**Context.** The parity campaign is wide — 20 subsystems, 45 work packages — and
+most of its cost is reverse engineering, which parallelises perfectly because it
+writes nothing. Implementation does not: `src/core/sim/` is a single fixed-point
+machine with one tick order, and `docs/golden-p1.log` is a whole-sim baseline
+that any behavioural change invalidates. Running several implementer agents
+against one checkout produces interleaved edits to `UnitStore`, `Command` and
+`StateHash`, and a golden log that nobody can attribute.
+
+**Decision.** Two agent classes with different concurrency rules, recorded in
+AGENT.md under *Working as a fleet*. Analysis agents are read-only and unbounded
+in number. Implementer agents run in `git worktree` checkouts, own a work
+package rather than a folder, and at most one per wave may touch any shared sim
+file; a single integrator owns tick order, `SaveState` version and `StateHash`
+coverage, and re-runs `make verify` against `main`'s golden log after each merge.
+Worktrees symlink `third_party/` and `vendor/ai/` and keep their own `build/`.
+
+**Alternatives considered.** One shared checkout with file-level locking —
+rejected: the conflicts that matter are semantic (two agents each adding a pass
+to the same tick) and no lock catches those. Branch-per-agent in one working
+directory — rejected: agents run builds concurrently and would fight over
+`build/`. Copying the repo instead of worktrees — rejected: it detaches history,
+and worktrees already exclude game content because nothing tracked contains any.
+Letting builders re-bless the golden log — rejected: a worktree's `make verify`
+compares against that worktree's own log, so a branch can bless away its own
+regression; only the integrator's re-run against `main` is evidence.
+
+**Consequences.** Fleet width is set by evidence, not by cores: analysis scales
+to as many agents as there are open envelopes, implementation stays near one
+writer per shared file. Disk cost is ~560 MB of build output per worktree, which
+is why a shared `ccache` is assumed. Attribution survives — every behavioural
+change arrives as one branch with one explained golden diff.
+
+**What this does not decide.** How the waves are ordered, which is a scheduling
+question owned by `docs/fa-gameplay-progress.md`'s critical path, not by this
+record.
+
+---
+
+## ADR-070 — Factory guard reserves guarded-unit work for a commandless child task
+
+**Context.** Retail's immobile-factory branch in `CUnitGuardTask` does not lend BuildRate like
+an engineer. It scans the guarded unit's queue, mutates the selected shared command before work
+starts, and creates a `CFactoryBuildTask` with a null command pointer. The evidence ledger used
+to point at `0x0061952c`, an epilogue; the actual reservation ladder is
+`0x00619532`–`0x0061958f`, followed by child creation at `0x0061958f`–`0x006195ab`. The same
+audit exposed a local bug: ordinary count-one factory completion called the global
+`DecreaseCommandCount` path and could remove a grouped build from sibling factories.
+
+**Decision.** An immobile factory may hold the existing `Assist` order. While that order is
+active and the factory has no unfinished construction, command dispatch scans the guardee's
+factory-build commands in queue order. A head is eligible above count one, or at final count only
+when it is the lone repeat-enabled entry; qualifying non-head entries are eligible. Consumption
+then decrements above one, otherwise restores and exact-rotates for repeat, or exact-removes only
+from the guardee.
+It then starts an ordinary `Construction` owned by the guarding factory while leaving Assist at
+the head. The child gets no semantic command, id, source counter, creation serial, accepted-unit
+membership, or log record, and its completion performs no second queue mutation. Ordinary build
+completion now always retires only the completing unit's local entry; global zero-count removal
+remains an explicit out-of-band operation.
+
+**Alternatives considered.** Reusing engineer assistance was rejected because it accelerates the
+guardee's one project rather than producing a second unit. Enqueuing a copied Build on the guard
+factory was rejected because retail passes a null command pointer and such a copy would invent
+authoritative input and allocator state. Calling global count exhaustion on final completion was
+rejected because retail's dispatcher locally removes while the global helper is a separate site.
+Adding a new task/state type was unnecessary: active Assist, existing construction ownership,
+shared counts, and queue order already carry the visible state.
+
+**Consequences.** Compatible factories now mirror guarded production with retail's shared-count,
+local-removal, repeat, and no-double-consumption rules. The command panel
+exposes Assist for immobile factories, while `applyAssistance` keeps them out of the engineer
+BuildRate path. Replay encoding is unchanged: existing Build, Assist, and repeat records derive
+the mirror during playback, so old replay streams remain importable. The guarding factory's own
+queued BuildFactory/Upgrade priority branch and the rest of the nine-step guard ladder remain
+explicit follow-up work. SaveState still serializes the unit store but not `Match::building`;
+that pre-existing construction-resume gap now also means a save made during a mirrored build
+loses already-reserved work and belongs to `WP-44`. Savegames may version that state independently
+without changing the replay command format.
+
+One architectural residue remains explicit: Recoil checks the product grid and pad before
+reservation, whereas retail reserves after `Unit::CanBuild` and lets `CFactoryBuildTask` retry
+placement. A blocked pad therefore leaves Recoil's guardee command untouched for a later scan;
+retail has already consumed it into a retrying child task. Matching that timing requires child
+task state rather than a guessed destructive fallback.

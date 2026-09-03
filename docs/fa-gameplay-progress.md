@@ -9,17 +9,23 @@ Detailed retail evidence remains canonical in
 [`fa-exe-analysis-plan.md`](fa-exe-analysis-plan.md). This dashboard summarizes that ledger; it
 does not replace its claims, addresses, counterevidence, or confirmation gate.
 
-**Snapshot:** 2026-09-02, Recoil Metal worktree through the `C-091` automatic-incumbent slice, retail artifact
-`ART-E001` (`c6783580c0b7a408ec2ad3bfe5eb1fdbef31a60d92c1007ff9b90c33bb960aa0`).
+**Snapshot:** 2026-09-03, dirty Recoil Metal worktree through the `C-211` own-queue-before-guardee
+slice — with the own-queue lifecycle now closed in the ledger (selection-only block A, dispatcher
+retirement at completion) — plus the `C-236`–`C-238` capture/ownership-transfer contract read,
+and prior: the `C-091` automatic-incumbent slice plus group-move fan-out, 3-D generic attachments,
+silo weapon metadata, SaveState v8 command round-tripping, the `C-210` Supremacy category-predicate
+foundation, generation-safe retained-radar-contact reaping, and the `C-183`/`C-211` guarded-unit
+factory-mirroring slice, retail artifact `ART-E001`
+(`c6783580c0b7a408ec2ad3bfe5eb1fdbef31a60d92c1007ff9b90c33bb960aa0`).
 
 ## Headline
 
 Equal-weight average across the 20 gameplay subsystem rows below; `FA-FOUND` is excluded:
 
 ```text
-Implemented       [#########-----------] about 45%
-Retail-validated  [####----------------] about 20%
-Retail-analyzed   [#############-------] about 65%
+Implemented       [##########----------] about 50%
+Retail-validated  [#####---------------] about 25%
+Retail-analyzed   [##############------] about 70%
 ```
 
 Only **1 of 45 work packages**, `WP-15` economy, currently passes the complete retail
@@ -31,10 +37,10 @@ and the 65% equal-subsystem estimate answer different questions and are shown to
 headline honest.
 
 **Current implementation critical path:**
-[`FA-CMD`](#fa-cmd---commands-controls-and-factories), closing the app-level live-versus-replay
-acceptance gap in `WP-12` slice 4. **Current EXE-analysis action:**
-[`FA-ECON`](#fa-econ---economy-construction-and-engineering), reading capture and ownership
-transfer. Further broad EXE discovery is not the blocker.
+[`FA-MISSILES`](#fa-missiles---silos-missiles-and-interception), tactical silo integer ammo state
+then economy-funded production and decrement-then-fire in `WP-29`. **Current EXE-analysis action:**
+[`FA-ECON`](#fa-econ---economy-construction-and-engineering), decoding the capture tick-unit
+conversion (`0x0060B4A8`/`0x0060B759`) and `Sim::TransferUnit`'s native copy/reset inventory.
 
 ## Reading The Scores
 
@@ -64,23 +70,23 @@ excluded from the headline.
 | [`FA-SIM`](#fa-sim---simulation-kernel-and-object-lifecycle) | Simulation kernel and object lifecycle | `WP-03`-`04` | 65% | 40% | 90% | Add the safe script-object lifecycle seam needed by the Lua host. |
 | [`FA-CONTENT`](#fa-content---vfs-blueprints-maps-and-bootstrap) | VFS, blueprints, maps, bootstrap | `WP-05`, `06`, `09` | 65% | 35% | 55% | Trace and test exact retail SCD mount/override precedence. |
 | [`FA-LUA`](#fa-lua---gameplay-lua-and-mod-contract) | Gameplay Lua and mod contract | `WP-07`-`08` | 10% | 5% | 30% | Measure the exact Moho contract for the milestone-20 skirmish slice. |
-| [`FA-MATCH`](#fa-match---armies-setup-and-victory-rules) | Armies, setup, victory rules | `WP-10`-`11` | 55% | 20% | 85% | Implement retail victory-mode/category predicates and allied-victory handling. |
-| [`FA-CMD`](#fa-cmd---commands-controls-and-factories) | Commands, controls, factories | `WP-12`-`14` | 60% | 40% | 70% | Implement the retail guard/factory out-of-band queue-edit path without weakening shared-command ownership. |
-| [`FA-ECON`](#fa-econ---economy-construction-and-engineering) | Economy, construction, engineering | `WP-15`-`19` | 70% | 55% | 85% | Read capture plus ownership transfer, then specify the implementation. |
-| [`FA-LAND`](#fa-land---land-navigation-formations-and-spatial-world) | Land navigation, formations, spatial world | `WP-20`, `21`, `26` | 75% | 30% | 95% | Implement deterministic formation fan-out without weakening the per-army path-service budget. |
+| [`FA-MATCH`](#fa-match---armies-setup-and-victory-rules) | Armies, setup, victory rules | `WP-10`-`11` | 60% | 25% | 85% | Recover the retail lobby/scenario victory-mode selector; do not wire a synthetic app setting. |
+| [`FA-CMD`](#fa-cmd---commands-controls-and-factories) | Commands, controls, factories | `WP-12`-`14` | 70% | 50% | 75% | Extend the guard ladder with `C-183`'s attack branch (`GuardScanRadius`, ordinary-attacker delegation) ahead of the remaining assist branches. |
+| [`FA-ECON`](#fa-econ---economy-construction-and-engineering) | Economy, construction, engineering | `WP-15`-`19` | 70% | 55% | 90% | Decode the capture tick-unit conversion and `Sim::TransferUnit` copy/reset inventory, then specify the smallest capture slice. |
+| [`FA-LAND`](#fa-land---land-navigation-formations-and-spatial-world) | Land navigation, formations, spatial world | `WP-20`, `21`, `26` | 85% | 30% | 95% | Add bounded formation rotation or category matching without changing path-service ordering. |
 | [`FA-AIR`](#fa-air---aircraft-flight-combat-and-staging) | Aircraft flight, combat, staging | `WP-22` | 30% | 10% | 95% | Implement the deterministic winged-aircraft mover foundation. |
 | [`FA-NAVY`](#fa-navy---surface-and-submerged-warfare) | Surface and submerged warfare | `WP-23`-`24` | 35% | 10% | 75% | Implement one complete `SurfacingSub` dive/surface slice. |
-| [`FA-TRANSPORT`](#fa-transport---attachments-cargo-and-ferries) | Attachments, cargo, ferries | `WP-25` | 25% | 5% | 95% | Add authored bone-local transforms and attachment motion state before transport load/unload. |
+| [`FA-TRANSPORT`](#fa-transport---attachments-cargo-and-ferries) | Attachments, cargo, ferries | `WP-25` | 35% | 5% | 95% | Add parent/self bone indices and authored rest-bone composition to generic attachments. |
 | [`FA-WEAPONS`](#fa-weapons---targeting-weapons-and-projectiles) | Targeting, weapons, projectiles | `WP-27`-`28` | 97% | 72% | 90% | Implement `C-157` target exemption for engineer reclaim/capture, then add the remaining death and manual-fire paths. |
-| [`FA-MISSILES`](#fa-missiles---silos-missiles-and-interception) | Silos, missiles, interception | `WP-29` | 15% | 5% | 90% | Implement tactical silo ammo production and decrement-then-fire. |
+| [`FA-MISSILES`](#fa-missiles---silos-missiles-and-interception) | Silos, missiles, interception | `WP-29` | 20% | 5% | 90% | Add tactical silo integer ammo state, then economy-funded production and decrement-then-fire. |
 | [`FA-DAMAGE`](#fa-damage---damage-death-and-shields) | Damage, death, shields | `WP-30`-`32` | 70% | 40% | 75% | Add the next collidable shield slice: area-shield admission and stacking. |
-| [`FA-INTEL`](#fa-intel---vision-radar-sonar-and-counter-intel) | Vision, radar, sonar, counter-intel | `WP-33` | 70% | 45% | 90% | Add bounded retained-contact reaping/redetection and radar-error aiming. |
+| [`FA-INTEL`](#fa-intel---vision-radar-sonar-and-counter-intel) | Vision, radar, sonar, counter-intel | `WP-33` | 75% | 45% | 90% | Apply radar-position error to automatic targeting without changing contact identity or ordering. |
 | [`FA-PROGRESS`](#fa-progress---enhancements-veterancy-and-special-units) | Enhancements, veterancy, special units | `WP-34`-`36` | 35% | 20% | 35% | Complete the enhancement lifecycle specification around `CUnitScriptTask`. |
 | [`FA-TERRAIN`](#fa-terrain---mutable-terrain-and-craters) | Mutable terrain and craters | `WP-37` | 0% | 0% | 25% | Trace one crater from damage through terrain, pathing, and rendering invalidation. |
 | [`FA-AI`](#fa-ai---retail-ai-and-native-manager-boundary) | Retail AI and native manager boundary | `WP-38` | 35% | 5% | 30% | Remove the remaining condition-budget overruns (`recoil-metal-4754`). |
 | [`FA-UI`](#fa-ui---player-interface-and-advanced-controls) | Player interface and advanced controls | `WP-39`-`40` | 65% | 5% | 15% | Capture the HUD visual/GPU baseline (`recoil-metal-3628`). |
 | [`FA-PRESENT`](#fa-present---animation-effects-and-audio) | Animation, effects, audio | `WP-41`-`42` | 55% | 5% | 25% | Complete one blueprint-audio-to-XSB-cue playback path. |
-| [`FA-PERSIST`](#fa-persist---replay-hashing-and-saveresume) | Replay, hashing, save/resume | `WP-43`-`44` | 60% | 20% | 90% | Version and round-trip queued commands and command allocator state in SaveState. |
+| [`FA-PERSIST`](#fa-persist---replay-hashing-and-saveresume) | Replay, hashing, save/resume | `WP-43`-`44` | 70% | 20% | 90% | Version and round-trip authoritative economy and army state in SaveState. |
 
 ## Starting Work
 
@@ -148,51 +154,66 @@ without implementing speculative bindings.
 
 ### FA-MATCH - Armies, Setup, And Victory Rules
 
-**Largest gap:** the current last-ACU-standing rule omits retail modes, 3-second defeat polling,
-15-second winner stability, delayed cleanup, and unit caps.
+**Largest gap:** the deterministic match layer now exposes `VictoryMode` and implements the
+`C-210` Supremacy qualifying-unit predicate, but the app runner has no selected mode to pass to
+it. Both production constructors currently use the Assassination default; CLI has no victory
+option, and map loading intentionally reads `_save.lua` rather than `_scenario.lua`. Allied
+victory, winner stability, delayed cleanup, and unit caps remain incomplete.
 
 ```text
-/goal Advance FA-MATCH by implementing retail's defeat poll and stable-victory timing from
-lua/victory.lua behind failing match-rule tests, including delayed defeated-army cleanup. Run
-make test and make verify, record deliberate mode gaps in WP-11, and refresh FA-MATCH.
+/goal Advance FA-MATCH by recovering the retail lobby or scenario contract that selects a victory
+mode. Do not infer a `ScenarioInfo.Options` key from the empty FAF shim or add a CLI/UI setting.
+Only once an exact field/value locator exists, pass it into Match and exercise Assassination and
+Supremacy through the app-level path. Preserve the 3-second poll cadence and C-210's
+STRUCTURE-or-ENGINEER-minus-WALL predicate, run make test and make verify, record remaining
+allied-victory/stability/cleanup gaps in WP-11, and refresh FA-MATCH.
 ```
 
 ### FA-CMD - Commands, Controls, And Factories
 
 **Largest gap:** the app-level live/replay cutover covers build, PostSpawn roll-off, queued,
-stopped, replaced, born-unit, and factory-repeat commands; retail's guard-driven factory queue
-edits remain absent.
+stopped, replaced, born-unit, factory-repeat, and guarded-factory mirror commands. The
+own-queue-before-guardee branch is now implemented with its lifecycle closed in `C-211`, but the
+rest of `C-183`'s nine-step guard ladder — attack via `GuardScanRadius` ahead of every assist, the
+transitive build-assist chain walk, reclaim-copy, and the repair scan — remains absent.
 
 ```text
-/goal Advance FA-CMD by implementing the retail guard/factory out-of-band queue-edit path from
-C-211 and C-183. Start with a focused shared-command lifecycle regression, preserve canonical
-accepted sets, source counters, creation serials, queue ownership, and hashes. Run make test and
-make verify, then update WP-12 and FA-CMD.
+/goal Advance FA-CMD by implementing C-183's guard-attack branch for a guarding combat unit:
+GuardScanRadius acquisition delegating to the ordinary attacker path, ordered after factory assist
+and ahead of the remaining assist branches. Start with a focused guard-order regression; preserve
+the active Assist/Guard head, shared-command ownership, ids, counters, serials, replay, and hashes;
+do not synthesize commands. Run make test and make verify, then update WP-12 and FA-CMD.
 ```
 
 ### FA-ECON - Economy, Construction, And Engineering
 
 **Largest gap:** explicit repair now has a tested semantic, replay, economy, and UI slice against
-`C-182`; capture, gifting, ownership transfer, and their callback order remain unread and
-unimplemented.
+`C-182`, and the capture contract is read (`C-236`–`C-238`): Lua-sourced costs, the five-state
+task machine, callback order, and replacement-unit transfer. What blocks an implementation slice
+is the native tick-unit conversion, multi-captor aggregation, and `Sim::TransferUnit`'s exact
+copy/reset field inventory — all named, none guessed.
 
 ```text
-/goal Advance FA-ECON by reading CUnitCaptureTask::TaskTick at 0x0060AEB0 together with
-Sim::TransferUnit at 0x0074DC40, recovering capture cost/progress, completion, ownership transfer,
-gifting, and callback order with exact ART-E001 locators and counterevidence. Update WP-17, its
-claims, and FA-ECON; create the smallest implementation task justified by the result.
+/goal Advance FA-ECON by decoding the capture timing path at 0x0060B4A8/0x0060B759 and the native
+copy/reset branches of Sim::TransferUnit (0x0074DC40-0x0074E4D6) with exact ART-E001 locators and
+counterevidence: how GetCaptureCosts time becomes ticks, whether multiple captors aggregate, and
+exactly which unit state the native transfer preserves or resets. Update WP-17, C-236-C-238, and
+FA-ECON, then define the smallest capture implementation slice the evidence supports.
 ```
 
 ### FA-LAND - Land Navigation, Formations, And Spatial World
 
-**Largest gap:** completed land routes now detect a newly blocked final cell on their deterministic
-mod-7/mod-13 phase and return through the C-176 retry path, but formations are absent.
+**Largest gap:** plain multi-unit ground `Move` now assigns canonical UnitId ranks to distinct local
+targets, preserving the shared click anchor and one existing per-army FIFO request per unit. Its
+unrotated radius-based line is deliberately only an intake foundation: retail Lua geometry,
+category matching, and arrival re-forming remain absent.
 
 ```text
-/goal Advance FA-LAND by implementing deterministic formation fan-out for one group move while
-preserving the per-army FIFO path-service budget and C-176/C-177 retry semantics. Start with a
-focused group-order regression, leave HPA* and reservations explicitly deferred, run make test and
-make verify, then refresh FA-LAND.
+/goal Advance FA-LAND by porting one bounded formation geometry from ART-S007:lua/formations.lua
+onto the existing deterministic group-move fan-out. Preserve canonical UnitId ordering, shared
+click anchors, per-army FIFO path-service budget, and C-176/C-177 retry semantics. Start with a
+focused group-order regression, leave HPA*, reservations, category matching, and arrival
+re-forming explicitly deferred, run make test and make verify, then refresh FA-LAND.
 ```
 
 ### FA-AIR - Aircraft Flight, Combat, And Staging
@@ -221,19 +242,20 @@ make verify, then update WP-24 and FA-NAVY.
 
 ### FA-TRANSPORT - Attachments, Cargo, And Ferries
 
-**Current slice:** generic attachments capture a deterministic local X/Z offset, propagate it
-parent-before-child after movement and collision, refresh their terrain/water/air layer, and persist
-it in SaveState v4 while v1-v3 derive it from saved transforms. Attached children remain in the
-collision grid, matching `C-196`. Parent death detaches surviving children and clears their local
-offsets. This is deliberately not transport loading: bones, attachment motion state, capacity,
-load/unload, storage, ferry, and carrier death are still absent.
+**Current slice:** generic attachments capture a deterministic local X/Y/Z offset, suspend child
+movement, propagate it parent-before-child after movement and collision, and persist it in
+SaveState v7 while v1-v6 derive the local height from saved transforms. Attached children remain
+in the collision grid, matching `C-196`. Parent death detaches surviving children and clears their
+local offsets. This is deliberately not transport loading: authored bone indices/composition,
+capacity, load/unload, storage, ferry, and carrier death are still absent.
 
 ```text
-/goal Advance FA-TRANSPORT by adding authored bone-local transforms and attachment motion state
-from C-195/C-196 without inventing transport capacity or load commands. Preserve deterministic
-parent-before-child order, collision-grid presence, and the existing post-movement/post-collision
-propagation points. Run make test and make verify, record the deferred transport controller behavior
-in WP-25, and refresh FA-TRANSPORT.
+/goal Advance FA-TRANSPORT by adding parent/self bone indices and authored rest-bone composition
+from C-195/C-196 to existing generic attachments without inventing transport capacity or load
+commands. Preserve deterministic parent-before-child order, attached motion suspension,
+collision-grid presence, and the existing post-movement/post-collision propagation points. Run make
+test and make verify, record the deferred transport controller behavior in WP-25, and refresh
+FA-TRANSPORT.
 ```
 
 ### FA-WEAPONS - Targeting, Weapons, And Projectiles
@@ -275,6 +297,10 @@ there is no projectile guidance/lead, shooter cap, ammo, target restriction, pro
 flare path; a positive-damage interceptor consumes both shots rather than modelling `C-087`'s
 projectile damage.
 
+Weapon blueprints now retain `CountedProjectile`, `NukeWeapon`, and `MaxProjectileStorage`,
+including UEB4302's tactical slot metadata from `C-082`. This is content metadata only: no unit
+owns ammo or production progress yet.
+
 ```text
 /goal Advance FA-MISSILES by implementing one tactical silo ammunition path from C-081 through
 C-084: economy-throttled ammo build progress, integer stored ammo, and decrement-before-launch.
@@ -296,14 +322,16 @@ update WP-30/31 plus C-143 residues, and refresh FA-DAMAGE.
 
 ### FA-INTEL - Vision, Radar, Sonar, And Counter-Intel
 
-**Largest gap:** retained radar contacts now expose their stable identity and maybe-dead status,
-but their bounded reaping/redetection policy and other recon families remain incomplete.
+**Largest gap:** a retained dead radar contact now reaps on the next intel update when a different
+live generation reuses its slot, and is suppressed from projection immediately; time-based expiry
+and other recon families remain incomplete.
 
 ```text
-/goal Advance FA-INTEL by implementing bounded retained-radar reaping/redetection after C-079.
-Start with a reproducible re-contact or expiry rule and preserve UnitId/last-known position/order;
-keep cloak, jamming, water vision, sonar memory, and Lua bindings out of scope. Run make test and
-make verify, then refresh WP-33 and FA-INTEL.
+/goal Advance FA-INTEL by applying existing deterministic radar-position error to automatic
+targeting without changing retained-contact identity, ordering, or visual identification. Preserve
+generation-safe slot-reuse reaping; keep temporal expiry, cloak, jamming, water vision, sonar
+memory, and Lua bindings out of scope. Run make test and make verify, then refresh WP-33 and
+FA-INTEL.
 ```
 
 ### FA-PROGRESS - Enhancements, Veterancy, And Special Units
@@ -370,14 +398,17 @@ leave dynamic music and broad effect hosting as explicit later slices.
 
 ### FA-PERSIST - Replay, Hashing, And Save/Resume
 
-**Largest gap:** `UnitStore` can now preserve its allocator-safe live and tombstone state, but that
-snapshot is not yet encoded by the versioned save/resume envelope or resumed as a full match.
+**Largest gap:** SaveState v8 now round-trips shared queued commands, their mutable per-unit
+execution state, live command lookup, and allocators while v1-v7 remain decodable. Economy,
+armies, and path-service runtime state are still absent from resumed matches. The savegame
+envelope may gain independent versions; replay playback remains bound to the existing command
+format and must continue importing old replay streams.
 
 ```text
-/goal Advance FA-PERSIST by encoding the allocator-safe UnitStore snapshot in the versioned v1
-save/resume envelope and restoring it into a fresh store. Add focused round-trip and continued-hash
-tests; preserve the existing tick/RNG envelope. Run make test and make verify, update WP-44 and
-FA-PERSIST, and leave commands, economy, armies, and path-service state as later authoritative
+/goal Advance FA-PERSIST by encoding authoritative economy and army state in the versioned
+save/resume envelope, preserving the existing UnitStore, queued-command, tick, and RNG state.
+Add focused round-trip and continued-hash tests; run make test and make verify, update WP-44 and
+FA-PERSIST, and leave path-service runtime searches and replay transport as later authoritative
 groups.
 ```
 
