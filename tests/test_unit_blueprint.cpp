@@ -717,3 +717,38 @@ UnitBlueprint {
     REQUIRE(none.has_value());
     CHECK(none->strategicIcon.empty());
 }
+
+TEST_CASE("a guard scan radius arrives in elmos, and its unread neighbour stays unread") {
+    // DEA0202 states `AI = { GuardReturnRadius = 100, GuardScanRadius = 80 }`. The scan
+    // radius is ogrids like every sibling range (`C-183`); the return radius is
+    // deliberately not read anywhere — retail never reads it either.
+    const Blueprint named{"XXB0005_unit.bp", R"(
+UnitBlueprint {
+    Physics = { MotionType = 'RULEUMT_Land' },
+    AI = { GuardReturnRadius = 100, GuardScanRadius = 80 },
+})"};
+    const auto def = rm::unitbp::loadFile(named.path());
+    REQUIRE(def.has_value());
+    CHECK(rm::sim::fxToFloat(def->guardScanRadiusElmos) == Approx(640.0f));
+}
+
+TEST_CASE("a missile redirector arrives with radius and rate, or neither") {
+    // URL0303 states `Defense = { AntiMissile = { AttachBone = 'Turret_Muzzle',
+    // Radius = 5, RedirectRateOfFire = 1 } }` (`C-088`). Radius is ogrids; the rate is
+    // shots per second. AttachBone is presentation and is not read.
+    const Blueprint named{"XXB0006_unit.bp", R"(
+UnitBlueprint {
+    Physics = { MotionType = 'RULEUMT_Land' },
+    Defense = { AntiMissile = { Radius = 5, RedirectRateOfFire = 1 } },
+})"};
+    const auto def = rm::unitbp::loadFile(named.path());
+    REQUIRE(def.has_value());
+    CHECK(rm::sim::fxToFloat(def->antiMissileRadiusElmos) == Approx(40.0f));
+    CHECK(def->antiMissileRatePerSecond == Approx(1.0f));
+
+    const Blueprint bare{"XXB0007_unit.bp", kMediumTank};
+    const auto none = rm::unitbp::loadFile(bare.path());
+    REQUIRE(none.has_value());
+    CHECK(none->antiMissileRadiusElmos == rm::sim::Fx{});
+    CHECK(none->antiMissileRatePerSecond == 0.0f);
+}

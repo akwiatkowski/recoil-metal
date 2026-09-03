@@ -26,6 +26,7 @@ constexpr std::uint32_t kVersion6 = 6;
 constexpr std::uint32_t kVersion7 = 7;
 constexpr std::uint32_t kVersion8 = 8;
 constexpr std::uint32_t kVersion9 = 9;
+constexpr std::uint32_t kVersion10 = 10;
 // MT19937 serializes its 624 state words plus an index, all as unsigned decimal numbers separated
 // by one space. This rejects oversized malformed frames before they allocate their payload.
 constexpr std::size_t kMaxRandomStatePayload =
@@ -207,6 +208,33 @@ void writeSiloAmmo(PayloadWriter& w, std::span<const SiloAmmo> ammo) {
         w.i64(value.costPerTick.mass.raw()); w.i64(value.costPerTick.energy.raw());
         w.i64(value.delivered.mass.raw()); w.i64(value.delivered.energy.raw());
     }
+}
+
+void writeRedirects(PayloadWriter& w, std::span<const MissileRedirect> redirects) {
+    w.count(redirects.size());
+    for (const MissileRedirect& value : redirects) {
+        writeId(w, value.owner);
+        w.i32(value.radiusElmos.raw());
+        w.i32(value.cooldownTicks);
+        w.i32(value.remaining);
+    }
+}
+
+[[nodiscard]] bool readRedirects(PayloadReader& r, std::vector<MissileRedirect>& redirects) {
+    std::size_t count{};
+    if (!r.count(count, 20)) return false;
+    redirects.resize(count);
+    for (MissileRedirect& value : redirects) {
+        std::int32_t radius{}, cooldown{}, remaining{};
+        if (!readId(r, value.owner) || !r.i32(radius) || !r.i32(cooldown) || !r.i32(remaining)
+            || radius < 0 || cooldown < 0 || remaining < 0 || remaining > cooldown) {
+            return false;
+        }
+        value.radiusElmos = Fx::fromRaw(radius);
+        value.cooldownTicks = cooldown;
+        value.remaining = remaining;
+    }
+    return true;
 }
 
 [[nodiscard]] bool readSiloAmmo(PayloadReader& r, std::vector<SiloAmmo>& ammo) {
@@ -480,6 +508,7 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
                    version >= kVersion4, version >= kVersion5, version >= kVersion6,
                     version >= kVersion7, version >= kVersion7, version >= kVersion8);
     if (version >= kVersion9) writeSiloAmmo(payloadWriter, state.siloAmmo);
+    if (version >= kVersion10) writeRedirects(payloadWriter, state.redirects);
     const std::vector<std::byte> payload = payloadWriter.take();
     if (payload.size() > std::numeric_limits<std::uint32_t>::max()) {
         throw std::length_error("MT19937 state exceeds the v1 save-state payload limit");
@@ -511,7 +540,8 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
     if (!readU32(bytes, offset, version)
         || (version != kVersion1 && version != kVersion2 && version != kVersion3
               && version != kVersion4 && version != kVersion5 && version != kVersion6
-               && version != kVersion7 && version != kVersion8 && version != kVersion9)
+               && version != kVersion7 && version != kVersion8 && version != kVersion9
+               && version != kVersion10)
         || (requiredVersion && version != *requiredVersion) || !readU64(bytes, offset, tick)
         || !readU32(bytes, offset, payloadSize) || bytes.size() - offset != payloadSize) {
         return std::nullopt;
@@ -543,11 +573,14 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
                        version >= kVersion7, version >= kVersion8)) return std::nullopt;
     std::vector<SiloAmmo> siloAmmo;
     if (version >= kVersion9 && !readSiloAmmo(reader, siloAmmo)) return std::nullopt;
+    std::vector<MissileRedirect> redirects;
+    if (version >= kVersion10 && !readRedirects(reader, redirects)) return std::nullopt;
     if (!reader.finished()) return std::nullopt;
     SaveState decoded{.tick = tick,
                       .random = std::move(random),
                        .pathServiceBeats = pathServiceBeats,
-                       .units = std::move(units), .siloAmmo = std::move(siloAmmo)};
+                       .units = std::move(units), .siloAmmo = std::move(siloAmmo),
+                       .redirects = std::move(redirects)};
     // One binary representation per state rejects alternate encodings and trailing data.
     const std::vector<std::byte> canonical = encode(decoded, version);
     if (canonical.size() != bytes.size()
@@ -572,7 +605,7 @@ std::optional<SaveState> SaveState::decodeV2(std::span<const std::byte> bytes) {
 }
 
 std::vector<std::byte> SaveState::encode(const SaveState& state) {
-    return rm::sim::encode(state, kVersion9);
+    return rm::sim::encode(state, kVersion10);
 }
 
 std::optional<SaveState> SaveState::decode(std::span<const std::byte> bytes) {

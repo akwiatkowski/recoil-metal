@@ -298,6 +298,17 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
             static_cast<int>(numberOr(*intel, "JammerBlips", 0.0f));
     }
 
+    // --- guard scan --------------------------------------------------------
+    //
+    // Ogrids to elmos, like every sibling range. `AI.GuardScanRadius` is how far a
+    // guarding unit looks for something to attack (`C-183`'s ATTACK branch); the
+    // neighbouring `AI.GuardReturnRadius` is deliberately unread — retail never reads
+    // it either, and parsing it would be a divergence dressed as fidelity.
+    if (const lua::Value* ai = parsed->path("AI")) {
+        def.guardScanRadiusElmos =
+            sim::fxFromFloat(numberOr(*ai, "GuardScanRadius", 0.0f) * scmap::kElmosPerOgrid);
+    }
+
     // --- size --------------------------------------------------------------
     //
     // `SizeX`/`SizeY`/`SizeZ` sit at the file's ROOT, not under `Footprint`, and
@@ -489,6 +500,16 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
         // `ArmorClass` here; the short version is that resolving it needs a registry, and a
         // parser that needs a registry cannot be called with a Lua table and nothing else.
         def.armorType = std::string{defense->stringAt("ArmorType").value_or("")};
+        // `Defense.AntiMissile = {Radius, RedirectRateOfFire}` on the one unit that carries
+        // it (URL0303, `C-088`): a missile redirector, not a weapon. Radius is ogrids like
+        // every sibling range; the rate is shots per second.
+        if (const lua::Value* antiMissile = defense->find("AntiMissile")) {
+            def.antiMissileRadiusElmos = sim::fxFromFloat(
+                std::max(0.0f, numberOr(*antiMissile, "Radius", 0.0f))
+                * scmap::kElmosPerOgrid);
+            def.antiMissileRatePerSecond =
+                std::max(0.0f, numberOr(*antiMissile, "RedirectRateOfFire", 0.0f));
+        }
 
         if (const lua::Value* shield = defense->find("Shield");
             shield != nullptr && shield->isTable()) {
@@ -554,8 +575,8 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
     return def;
 }
 
-std::expected<unitdef::Weapon::ProjectileEconomy, lua::ParseError>
-loadProjectileEconomy(std::string_view source) {
+std::expected<unitdef::Weapon::ProjectileTraits, lua::ParseError>
+loadProjectileTraits(std::string_view source) {
     auto parsed = lua::parseTable(source);
     if (!parsed) {
         return std::unexpected{parsed.error()};
@@ -564,10 +585,28 @@ loadProjectileEconomy(std::string_view source) {
     if (economy == nullptr) {
         return std::unexpected{lua::ParseError{"projectile blueprint has no Economy table", 0}};
     }
-    return unitdef::Weapon::ProjectileEconomy{
+    sim::Mag maxHealth{};
+    if (const lua::Value* defense = parsed->path("Defense")) {
+        maxHealth = sim::magFromFloat(numberOr(*defense, "MaxHealth", 0.0f));
+    }
+    std::vector<std::string> categories;
+    if (const lua::Value* listed = parsed->path("Categories")) {
+        categories.reserve(listed->items.size());
+        for (const lua::Value& entry : listed->items) {
+            if (!entry.text.empty()) {
+                categories.emplace_back(entry.text);
+            }
+        }
+        // Sorted and deduplicated, like a unit's — the acquisition check binary-searches.
+        std::sort(categories.begin(), categories.end());
+        categories.erase(std::unique(categories.begin(), categories.end()), categories.end());
+    }
+    return unitdef::Weapon::ProjectileTraits{
         .buildCostMass = sim::magFromFloat(numberOr(*economy, "BuildCostMass", 0.0f)),
         .buildCostEnergy = sim::magFromFloat(numberOr(*economy, "BuildCostEnergy", 0.0f)),
         .buildTime = sim::magFromFloat(numberOr(*economy, "BuildTime", 0.0f)),
+        .maxHealth = maxHealth,
+        .categories = std::move(categories),
     };
 }
 

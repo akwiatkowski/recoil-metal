@@ -552,3 +552,44 @@ TEST_CASE("a dead silo's record is reaped before the economy pass and a recycled
     CHECK(siloAmmo.empty());  // neither the dead silo nor its slot's new tenant owns a record
     CHECK(economies[0].stored.mass == massAfterFirstTick);  // and nothing was charged for it
 }
+
+TEST_CASE("a dead redirector's record is reaped before projectiles fly") {
+    // Same generational keying as silo ammunition (`C-081`): a destroyed Loyalist stops
+    // diverting the same tick, and a recycled slot inherits no redirector.
+    const rm::HeightField field = flatField();
+
+    Roster roster;
+    UnitDef loyalistDef;
+    loyalistDef.name = "loyalist";
+    const rm::UnitTypeIndex loyalistType = roster.addType(loyalistDef);
+    const rm::sim::UnitId loyalist = roster.add(loyalistType, 0.0f, 0.0f, 0, 500.0f);
+    (void)roster.add(loyalistType, 900.0f, 900.0f, 1, 500.0f);
+
+    std::vector<Army> armies = twoSides();
+    std::vector<Projectile> projectiles;
+    std::vector<Construction> building;
+    std::vector<Economy> economies(2);
+    const std::vector<int> commandersEver(2, 0);
+    std::vector<rm::sim::MissileRedirect> redirects{
+        rm::sim::MissileRedirect{.owner = loyalist,
+                                 .radiusElmos = rm::sim::fxFromFloat(120.0f),
+                                 .cooldownTicks = 10,
+                                 .remaining = 0}};
+
+    Match match{.armies = armies,
+                .economies = economies,
+                .projectiles = &projectiles,
+                .building = &building,
+                .commandersEver = commandersEver,
+                .redirects = &redirects,
+                .baseStorage = {.mass = rm::test::mag(10000.0f),
+                                .energy = rm::test::mag(1000000.0f)}};
+
+    roster.store.kill(loyalist);
+    const rm::sim::UnitId recycled = roster.add(loyalistType, 50.0f, 0.0f, 0, 500.0f);
+    REQUIRE(recycled.index == loyalist.index);
+    REQUIRE(recycled.generation != loyalist.generation);
+
+    (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, rm::sim::Terrain{field});
+    CHECK(redirects.empty());
+}

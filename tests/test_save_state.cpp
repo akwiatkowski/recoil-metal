@@ -284,9 +284,10 @@ TEST_CASE("historic attachment saves derive offsets from their transforms", "[sa
     const SaveState state{.tick = 42, .random = random.snapshot(), .units = original.snapshot()};
     std::vector<std::byte> v7 = SaveState::encode(state);
     constexpr std::size_t kSlots = 2;
-    // v8 appends allocator and queue state, and v9 then appends the silo-ammo section (empty
-    // here, so a single count word). This fixture starts from the final published v7 shape, so
-    // the historical-layout edits below must remove both later trailers first.
+    // v8 appends allocator and queue state, v9 the silo-ammo section, and v10 the
+    // redirector section (each empty here, so a single count word apiece). This fixture
+    // starts from the final published v7 shape, so the historical-layout edits below
+    // must remove all three later trailers first.
     constexpr std::size_t kV8CommandStateBytes = sizeof(rm::CommandSerial)
                                                   + std::size_t{rm::kInvalidCommandSource}
                                                         * sizeof(std::uint32_t)
@@ -295,7 +296,8 @@ TEST_CASE("historic attachment saves derive offsets from their transforms", "[sa
                                                         * (sizeof(std::uint8_t)
                                                            + sizeof(std::uint32_t));
     constexpr std::size_t kV9SiloAmmoBytes = sizeof(std::uint32_t);
-    v7.resize(v7.size() - kV9SiloAmmoBytes - kV8CommandStateBytes);
+    constexpr std::size_t kV10RedirectBytes = sizeof(std::uint32_t);
+    v7.resize(v7.size() - kV10RedirectBytes - kV9SiloAmmoBytes - kV8CommandStateBytes);
     writeU32(v7, 4, 7);
     writeU32(v7, 16, static_cast<std::uint32_t>(v7.size() - 20));
     // v4 adds the offset collection, v5 adds DoNotTarget, v6 adds one automatic-target count
@@ -409,6 +411,25 @@ TEST_CASE("a v9 save round-trips silo ammunition state", "[save-state]") {
     CHECK(restored->siloAmmo.front().slot == 1);
     CHECK(restored->siloAmmo.front().stored == 4);
     CHECK(restored->siloAmmo.front().elapsedTicks == 17);
+    CHECK(SaveState::encode(*restored) == bytes);
+}
+
+TEST_CASE("a v10 save round-trips redirector state", "[save-state]") {
+    RandomStream random{std::uint32_t{1}};
+    const SaveState state{
+        .tick = 42,
+        .random = random.snapshot(),
+        .redirects = {{.owner = {.index = 5, .generation = 1},
+                       .radiusElmos = rm::sim::fxFromFloat(40.0f),
+                       .cooldownTicks = 10,
+                       .remaining = 4}},
+    };
+    const auto bytes = SaveState::encode(state);
+    const auto restored = SaveState::decode(bytes);
+    REQUIRE(restored.has_value());
+    REQUIRE(restored->redirects.size() == 1);
+    CHECK(restored->redirects.front().remaining == 4);
+    CHECK(restored->redirects.front().cooldownTicks == 10);
     CHECK(SaveState::encode(*restored) == bytes);
 }
 

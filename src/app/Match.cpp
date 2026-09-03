@@ -657,6 +657,7 @@ void runOpponents(UnitScene& scene, const rm::vfs::Vfs& content, const rm::Heigh
                 .projectiles = &scene.projectiles,
                 .building = &scene.building,
                 .siloAmmo = &scene.siloAmmo,
+                .redirects = &scene.redirects,
                 .events = &scene.events,
                 .features = &scene.features,
                 .commandersEver = scene.commandersEver,

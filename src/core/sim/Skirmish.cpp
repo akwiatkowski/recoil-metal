@@ -338,7 +338,10 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
     }
     report.ordersStarted = advanceOrders(store, catalog, terrain, match.passability, rate,
                                           match.building, match.events, match.features,
-                                          &report.finished, match.pathService, match.armies);
+                                          &report.finished, match.pathService, match.armies,
+                                          match.intel,
+                                          match.playableRect ? &*match.playableRect
+                                                             : nullptr);
 
     // 1. MOVEMENT, then collisions. Everything downstream reads where a unit has got to
     //    this tick rather than where it started it.
@@ -417,7 +420,9 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
         report.shotsFired += fireOvercharge(store, catalog, match.armies, *match.projectiles,
                                             match.economies, rate, match.events);
         advanceProjectiles(*match.projectiles, store, match.armies, terrain, rate,
-                           match.events, &catalog);
+                           match.events, &catalog,
+                           match.redirects != nullptr ? std::span<MissileRedirect>{*match.redirects}
+                                                      : std::span<MissileRedirect>{});
     }
 
     // 4. The dead, then their explosions, then C-210's defeat poll. A commander that died to a
@@ -549,6 +554,12 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
     if (match.siloAmmo != nullptr) {
         std::erase_if(*match.siloAmmo, [&store](const SiloAmmo& ammo) {
             return !store.alive(ammo.owner);
+        });
+    }
+    // Redirectors die with their owners for the same reason (`C-088`).
+    if (match.redirects != nullptr) {
+        std::erase_if(*match.redirects, [&store](const MissileRedirect& redirect) {
+            return !store.alive(redirect.owner);
         });
     }
 

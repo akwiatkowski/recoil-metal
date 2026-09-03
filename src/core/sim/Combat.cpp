@@ -58,6 +58,141 @@ namespace {
     return mine != nullptr && theirs != nullptr && hostile(*mine, *theirs);
 }
 
+/// Whether a projectile candidate survives the weapon's category restrictions — the
+/// `C-088` TMD/SMD split. Same AND-within semantics as the unit-side check, evaluated
+/// against the shot's own authored categories: an allow list admits only a shot carrying
+/// every tag, so a defence with one never fires at an ordinary shell, which carries none.
+[[nodiscard]] bool passesProjectileRestrictions(const unitdef::Weapon& weapon,
+                                                const Projectile& candidate) noexcept {
+    const auto carriesAll = [&candidate](const std::vector<std::string>& tags) {
+        return std::all_of(tags.begin(), tags.end(), [&candidate](const std::string& tag) {
+            return std::binary_search(candidate.categories.begin(), candidate.categories.end(),
+                                      tag);
+        });
+    };
+    if (weapon.targetRestrictOnlyAllow && !carriesAll(*weapon.targetRestrictOnlyAllow)) {
+        return false;
+    }
+    return !weapon.targetRestrictOnlyDisallow
+           || !carriesAll(*weapon.targetRestrictOnlyDisallow);
+}
+
+/// The Cybran redirector (`C-088`, ART-S007 `lua/sim/defaultantiprojectile.lua`):
+/// a non-strategic enemy MISSILE inside the radius is turned back on its launcher
+/// (`other:SetNewTarget(self.Enemy)`), one redirect per rate cycle. A launcher that is
+/// already gone takes the Lua's fallback instead: the shot suffers 30 damage from the
+/// redirector. Friendly, strategic, and category-less shots fly on untouched, and so does
+/// everything while the unit cools down.
+void redirectMissile(Projectile& shot, const UnitStore& store,
+                     std::span<const Army> armies,
+                     std::span<MissileRedirect> redirects) noexcept {
+    if (shot.ticksRemaining <= 0 || shot.pendingImpact != ImpactType::Invalid) {
+        return;
+    }
+    const bool missile = std::binary_search(shot.categories.begin(), shot.categories.end(),
+                                            std::string{"MISSILE"});
+    const bool strategic = std::binary_search(shot.categories.begin(), shot.categories.end(),
+                                              std::string{"STRATEGIC"});
+    if (!missile || strategic) {
+        return;
+    }
+    const Army* shotArmy = armyFor(shot.firedByArmy, armies);
+    if (shotArmy == nullptr) {
+        return;
+    }
+    const std::span<const Transform> transforms = store.transforms();
+    for (MissileRedirect& redirect : redirects) {
+        if (!store.alive(redirect.owner) || redirect.remaining > 0) {
+            continue;
+        }
+        const Army* ownerArmy =
+            armyFor(store.motion()[redirect.owner.index].armyIndex, armies);
+        if (ownerArmy == nullptr || !hostile(*ownerArmy, *shotArmy)) {
+            continue;
+        }
+        const std::array<Fx, 3> at = positionOf(transforms[redirect.owner.index]);
+        const Fx dx = at[0] - shot.position[0];
+        const Fx dy = at[1] - shot.position[1];
+        const Fx dz = at[2] - shot.position[2];
+        if (fxHypot(fxHypot(dx, dz), dy) > redirect.radiusElmos) {
+            continue;
+        }
+        if (store.alive(shot.firedBy)) {
+            const std::array<Fx, 3> home =
+                positionOf(transforms[shot.firedBy.index]);
+            const Fx hx = home[0] - shot.position[0];
+            const Fx hy = home[1] - shot.position[1];
+            const Fx hz = home[2] - shot.position[2];
+            const Fx leg = fxHypot(fxHypot(hx, hz), hy);
+            if (leg > Fx{}) {
+                const Fx speed = fxHypot(fxHypot(shot.velocity[0], shot.velocity[2]),
+                                         shot.velocity[1]);
+                shot.velocity = {hx / leg * speed, hy / leg * speed, hz / leg * speed};
+            }
+        } else {
+            shot.health -= Mag::fromInt(30);
+            if (shot.maxHealth <= Mag{} || shot.health <= Mag{}) {
+                shot.pendingImpact = ImpactType::Invalid;
+                shot.impactTarget = {};
+                shot.ticksRemaining = 0;
+            }
+        }
+        redirect.remaining = redirect.cooldownTicks;
+        return;
+    }
+}
+/// Aeon's decoy flare (`C-088` (c), ART-S007 `lua/sim/defaultantiprojectile.lua`): a Flare
+/// entity attached to its owner retargets category-matching hostile shots onto the owner
+/// (`other:SetNewTarget(self.Owner)`), never damaging them. The redirect re-aims the shot's
+/// velocity at the owner while keeping its speed — the structural equivalent of a tracking
+/// missile acquiring a new target. No cooldown exists in the Lua; every in-flight match
+/// diverts, before any impact resolves this tick. First matching flare in slot order wins.
+void divertToFlareOwner(Projectile& shot, const UnitStore& store, const UnitCatalog* catalog,
+                        std::span<const Army> armies) noexcept {
+    if (catalog == nullptr || shot.ticksRemaining <= 0
+        || shot.pendingImpact != ImpactType::Invalid) {
+        return;
+    }
+    const std::span<const Transform> transforms = store.transforms();
+    const std::span<const Health> health = store.health();
+    for (UnitIndex slot = 0; slot < transforms.size(); ++slot) {
+        if (!health[slot].alive()) {
+            continue;
+        }
+        const unitdef::UnitDef* def = catalog->def(store.typeAt(slot));
+        if (def == nullptr) {
+            continue;
+        }
+        const Army* ownerArmy = armyFor(store.motion()[slot].armyIndex, armies);
+        const Army* shotArmy = armyFor(shot.firedByArmy, armies);
+        if (ownerArmy == nullptr || shotArmy == nullptr || !hostile(*ownerArmy, *shotArmy)) {
+            continue;
+        }
+        for (const unitdef::Weapon& weapon : def->weapons) {
+            if (!weapon.flare.has_value()) {
+                continue;
+            }
+            const unitdef::Weapon::Flare& flare = *weapon.flare;
+            if (!std::binary_search(shot.categories.begin(), shot.categories.end(),
+                                    flare.category)) {
+                continue;
+            }
+            const std::array<Fx, 3> at = positionOf(transforms[slot]);
+            const Fx dx = at[0] - shot.position[0];
+            const Fx dy = at[1] - shot.position[1];
+            const Fx dz = at[2] - shot.position[2];
+            const Fx leg = fxHypot(fxHypot(dx, dz), dy);
+            if (leg <= Fx{} || leg > flare.radiusElmos) {
+                continue;
+            }
+            const Fx speed = fxHypot(fxHypot(shot.velocity[0], shot.velocity[2]),
+                                     shot.velocity[1]);
+            shot.velocity = {dx / leg * speed, dy / leg * speed, dz / leg * speed};
+            return;
+        }
+    }
+}
+
 /// The nearest hostile in-flight projectile inside this weapon's authored 2-D reach.
 /// Ties retain vector order, which is deterministic projectile insertion order.
 [[nodiscard]] const Projectile* nearestProjectileTarget(std::array<Fx, 3> from, int fromArmy,
@@ -71,7 +206,8 @@ namespace {
     const Fx reach = std::max(weapon.maxRange, weapon.maxRange * weapon.trackingRadius);
     for (const Projectile& candidate : projectiles) {
         if (candidate.ticksRemaining <= 0 || candidate.pendingImpact != ImpactType::Invalid
-            || !projectileHostile(fromArmy, candidate, armies)) {
+            || !projectileHostile(fromArmy, candidate, armies)
+            || !passesProjectileRestrictions(weapon, candidate)) {
             continue;
         }
         const Fx distance = groundDistanceElmos(from, candidate.position);
@@ -694,6 +830,41 @@ constexpr std::size_t kUnidentifiedPriorityRow = 9999;
                unitdef::CategoryExpression{*weapon.targetRestrictOnlyDisallow}, candidate);
 }
 
+/// Retail's `UnitWeapon::CanFire` ANDs `HasSiloAmmo` (ART-E001 `0x006E01D9`), reached from
+/// Lua's `OnGotTarget` early return for counted weapons (ART-S010
+/// `lua/sim/defaultweapons.lua:416`): a counted weapon fires only while its slot holds
+/// ammunition. A counted weapon with NO silo record still fires — `HasSiloAmmo` is true
+/// when the unit has no silo object (`C-085`).
+[[nodiscard]] bool siloGateOpen(const UnitId owner, const unitdef::Weapon& weapon,
+                                std::span<SiloAmmo> siloAmmo) noexcept {
+    if (!weapon.countedProjectile) {
+        return true;
+    }
+    const std::uint8_t slot = static_cast<std::uint8_t>(weapon.nukeWeapon);
+    for (const SiloAmmo& ammo : siloAmmo) {
+        if (ammo.owner == owner && ammo.slot == slot) {
+            return ammo.stored > 0;
+        }
+    }
+    return true;
+}
+
+/// The `C-085` accounting in our call shape: the launch above creates the projectile
+/// FIRST (ART-S010 `defaultweapons.lua:582`ff), and this guarded consume follows it.
+void consumeSiloAmmo(const UnitId owner, const unitdef::Weapon& weapon,
+                     std::span<SiloAmmo> siloAmmo) noexcept {
+    if (!weapon.countedProjectile) {
+        return;
+    }
+    const std::uint8_t slot = static_cast<std::uint8_t>(weapon.nukeWeapon);
+    for (SiloAmmo& ammo : siloAmmo) {
+        if (ammo.owner == owner && ammo.slot == slot && ammo.stored > 0) {
+            --ammo.stored;
+            return;
+        }
+    }
+}
+
 } // namespace
 
 std::optional<UnitId> nearestTarget(std::array<Fx, 3> from, int fromArmy,
@@ -1034,24 +1205,18 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
 
                 const UnitCatalog::WeaponRates& rates =
                     catalog.weaponRates(store.typeAt(slot), w);
+                // Empty silo holds the shot entirely (`C-085`'s gate, now read); the reload
+                // is NOT consumed by waiting, so the weapon fires the tick ammo arrives.
+                if (!siloGateOpen(store.idAt(slot), weapon, siloAmmo)) {
+                    continue;
+                }
                 const int volley = weapon.bursts() ? 1 : rates.burstSize;
                 for (int shot = 0; shot < volley; ++shot) {
                     projectiles.push_back(launch(from, targetPosition, weapon, army, rate,
                                                    rates.muzzlePerTick, rates.damage,
                                                    store.idAt(slot), true));
                 }
-                if (weapon.countedProjectile) {
-                    // C-085's Lua sequence creates the projectile before this guarded consume.
-                    // The unread HasSiloAmmo caller may gate a zero-ammo launch; do not invent it.
-                    for (SiloAmmo& ammo : siloAmmo) {
-                        if (ammo.owner == store.idAt(slot)
-                            && ammo.slot == static_cast<std::uint8_t>(weapon.nukeWeapon)
-                            && ammo.stored > 0) {
-                            --ammo.stored;
-                            break;
-                        }
-                    }
-                }
+                consumeSiloAmmo(store.idAt(slot), weapon, siloAmmo);
                 emit(events, Event{
                                  .kind = EventKind::WeaponFired,
                                  .unit = store.idAt(slot),
@@ -1140,12 +1305,19 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
                 // numMuzzlesFiring to the whole rack. It is a different mechanic from the
                 // timed burst below (delay > 0), and reading it as one shot per reload
                 // cost those 106 weapons up to half their authored damage.
+                //
+                // The same `C-085` silo gate as the projectile-target branch: a tactical
+                // launcher's trigger pull is a counted launch too.
+                if (!siloGateOpen(store.idAt(slot), weapon, siloAmmo)) {
+                    continue;
+                }
                 const int volley = weapon.bursts() ? 1 : rates.burstSize;
                 for (int shot = 0; shot < volley; ++shot) {
                     projectiles.push_back(
                         launch(from, to, weapon, army, rate, rates.muzzlePerTick,
                                rates.damage, store.idAt(slot)));
                 }
+                consumeSiloAmmo(store.idAt(slot), weapon, siloAmmo);
 
                 emit(events, Event{
                                  .kind = EventKind::WeaponFired,
@@ -1335,6 +1507,13 @@ Projectile launch(std::array<Fx, 3> from, std::array<Fx, 3> to,
     shot.targetLayers = weapon.targetLayers;
     shot.firedByArmy = byArmy;
     shot.interceptor = interceptor;
+    // The authored damage pool rides the shot out of the muzzle (`C-087`): a shot whose
+    // shooter dies mid-flight keeps the pool it was launched with.
+    shot.maxHealth = weapon.projectileTraits.maxHealth;
+    shot.health = weapon.projectileTraits.maxHealth;
+    // So does the shot's own category set (`C-088`): restriction checks evaluate the
+    // target's categories, and a shot with no resolved blueprint carries none.
+    shot.categories = weapon.projectileTraits.categories;
     shot.arc = weapon.arc;
     shot.ticksRemaining = static_cast<int>(rate.ticks(kProjectileLifetime));
 
@@ -1723,8 +1902,16 @@ Mag damageArea(std::array<Fx, 3> centre, Fx radiusElmos,
 
 void advanceProjectiles(std::vector<Projectile>& projectiles, UnitStore& store,
                         std::span<const Army> armies, const Terrain& terrain, TickRate rate,
-                        EventQueue* events, const UnitCatalog* catalog) {
+                        EventQueue* events, const UnitCatalog* catalog,
+                        std::span<MissileRedirect> redirects) {
     const Fx gravityPerTickSquared = projectileGravityPerTickSquared(rate);
+    // Redirect rate cycles tick down whether or not a missile arrives — a unit that just
+    // spent its redirect watches for exactly one full cycle (`C-088` MissileRedirect).
+    for (MissileRedirect& redirect : redirects) {
+        if (redirect.remaining > 0) {
+            --redirect.remaining;
+        }
+    }
     std::vector<ProjectileTickStart> starts;
     starts.reserve(projectiles.size());
     for (const Projectile& shot : projectiles) {
@@ -1796,16 +1983,29 @@ void advanceProjectiles(std::vector<Projectile>& projectiles, UnitStore& store,
             shot.position[axis] += averageVelocity;
         }
 
+        // Aeon flares divert before anything impacts: a retargeted shot must not resolve
+        // a unit hit on its pre-diversion course in the same tick (`C-088` (c)).
+        divertToFlareOwner(shot, store, catalog, armies);
+        // The Cybran redirect answers second: it only fires on shots the flare ignored.
+        redirectMissile(shot, store, armies, redirects);
+
         if (shot.interceptor) {
-            // Untracked projectiles have no health pool in this baseline. A positive hit is
-            // enough to consume both shots; a zero-damage interceptor simply passes through.
+            // C-087: interception DAMAGES; it does not force-destroy. The struck shot dies
+            // only when its authored pool (`Defense.MaxHealth`: tacticals 1-3, nukes 25)
+            // runs out; a shot with no authored pool dies to any damage, and the interceptor
+            // itself is consumed on contact either way.
             if (shot.damage.base > Mag{}) {
                 if (Projectile* target = interceptedProjectile(shot, from, shot.position,
                                                                 projectiles, starts,
                                                                 armies)) {
-                    target->pendingImpact = ImpactType::Invalid;
-                    target->impactTarget = {};
-                    target->ticksRemaining = 0;
+                    if (target->maxHealth > Mag{}) {
+                        target->health -= shot.damage.base;
+                    }
+                    if (target->maxHealth <= Mag{} || target->health <= Mag{}) {
+                        target->pendingImpact = ImpactType::Invalid;
+                        target->impactTarget = {};
+                        target->ticksRemaining = 0;
+                    }
                     shot.ticksRemaining = 0;
                 }
             }

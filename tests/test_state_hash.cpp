@@ -72,6 +72,7 @@ struct Fixture {
     std::vector<rm::sim::Projectile> projectiles;
     std::vector<rm::sim::Construction> building;
     std::vector<rm::sim::SiloAmmo> siloAmmo;
+    std::vector<rm::sim::MissileRedirect> redirects;
     std::vector<int> commandersEver;
 
     Fixture() {
@@ -103,6 +104,7 @@ struct Fixture {
             .projectiles = &projectiles,
                 .building = &building,
                 .siloAmmo = &siloAmmo,
+                .redirects = &redirects,
             .commandersEver = commandersEver,
         };
     }
@@ -143,6 +145,19 @@ TEST_CASE("silo ammunition state changes the match hash") {
     fixture.siloAmmo.front().slot = 1;
     CHECK(fixture.hash() != withElapsed);
     CHECK(fixture.hash() != withAmmo);
+}
+
+TEST_CASE("redirector state changes the match hash") {
+    Fixture fixture;
+    const auto baseline = fixture.hash();
+    fixture.redirects.push_back({.owner = fixture.store.idAt(0),
+                                 .radiusElmos = rm::sim::fxFromFloat(40.0f),
+                                 .cooldownTicks = 10,
+                                 .remaining = 4});
+    CHECK(fixture.hash() != baseline);
+    const auto cooling = fixture.hash();
+    fixture.redirects.front().remaining = 0;
+    CHECK(fixture.hash() != cooling);
 }
 
 TEST_CASE("playable-rectangle presence and every bound change the match hash") {

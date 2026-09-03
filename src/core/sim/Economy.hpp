@@ -341,10 +341,28 @@ struct SiloAmmo {
     }
 };
 
+/// One Cybran Loyalist-style missile redirector (`C-088`, ART-S007
+/// `lua/sim/defaultantiprojectile.lua:MissileRedirect`). Match-owned like `SiloAmmo`:
+/// the redirector is an entity attached to its owner in retail, not unit state.
+/// Each redirect costs one full rate cycle (`RedirectRateOfFire`, URL0303: 1/sec);
+/// while `remaining` is nonzero the unit watches but does not touch.
+struct MissileRedirect {
+    UnitId owner{};
+    Fx radiusElmos{};
+    int cooldownTicks = 0;
+    int remaining = 0;
+};
+
 /// Creates one silo component from already-bound fixed-point blueprint values (`C-083`, C-241).
 [[nodiscard]] SiloAmmo makeSiloAmmo(UnitId owner, std::size_t weapon, bool nukeWeapon,
                                     int capacity, Resources projectileCost, Mag buildTime,
                                     Mag buildPerTick) noexcept;
+
+/// Creates one redirector component from already-bound blueprint values (`C-088`).
+/// The cooldown arrives in ticks: the rate-to-ticks conversion is content-side work
+/// done once at load, and the sim never sees the float again (PLAN2.md §5.1).
+[[nodiscard]] MissileRedirect makeMissileRedirect(UnitId owner, Fx radiusElmos,
+                                                  int cooldownTicks) noexcept;
 
 /// Puts one beat's work into one construction — retail's `Unit::Materialize` step.
 ///

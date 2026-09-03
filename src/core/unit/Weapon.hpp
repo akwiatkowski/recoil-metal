@@ -121,16 +121,34 @@ struct Weapon {
     /// The authored capacity for a counted projectile weapon. Zero preserves ordinary weapons.
     int maxProjectileStorage = 0;
 
-    /// The counted projectile's own economy, not the launcher's. Filled by the VFS-side
-    /// blueprint resolver; `TIMMissileIntercerptor01_proj.bp:Economy` is the UEB4302 case.
-    struct ProjectileEconomy {
+    /// The counted projectile's own authored data, not the launcher's. Filled by the VFS-side
+    /// blueprint resolver; `TIMMissileIntercerptor01_proj.bp:Economy` is the UEB4302 case,
+    /// `Defense.MaxHealth` its damage pool (`C-087`: tacticals 1-3, nukes 25).
+    struct ProjectileTraits {
         sim::Mag buildCostMass{};
         sim::Mag buildCostEnergy{};
         sim::Mag buildTime{};
-    } projectileEconomy;
+        sim::Mag maxHealth{};
+        /// The projectile's own authored categories, sorted and deduplicated exactly like
+        /// a unit's (`C-088`: tacticals carry TACTICAL/MISSILE, nukes STRATEGIC/MISSILE).
+        /// Point-defence target restrictions evaluate against these.
+        std::vector<std::string> categories{};
+    } projectileTraits;
 
-    /// The VFS locator whose blueprint supplies `projectileEconomy`.
+    /// The VFS locator whose blueprint supplies `projectileTraits`.
     std::string projectileId;
+
+    /// A decoy flare (`C-088`): Aeon TMDs wear one instead of (UAB4201: alongside) an
+    /// interceptor. `Weapon.Flare = {Category, Radius}` — hostile shots carrying the
+    /// category that enter the radius are retargeted onto the flare's owner, never
+    /// damaged. Absent for every non-Aeon defence in the corpus.
+    struct Flare {
+        /// The diverted category; the Lua defaults a missing one to `'MISSILE'`.
+        std::string category = "MISSILE";
+        /// Elmos, converted from the authored ogrids like every other range.
+        sim::Fx radiusElmos{};
+    };
+    std::optional<Flare> flare;
 
     /// Unrestricted when content states no caps, preserving synthetic and Recoil weapons.
     TargetLayerMask targetLayers = TargetLayerMask::Both;

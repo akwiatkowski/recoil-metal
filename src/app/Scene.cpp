@@ -45,8 +45,8 @@ bool gInterpolate = true;
             }
             const std::string_view projectileSource{
                 reinterpret_cast<const char*>(projectile->data()), projectile->size()};
-            if (auto economy = rm::unitbp::loadProjectileEconomy(projectileSource)) {
-                weapon.projectileEconomy = *economy;
+            if (auto traits = rm::unitbp::loadProjectileTraits(projectileSource)) {
+                weapon.projectileTraits = *traits;
             }
         }
         ids.push_back(def->name);

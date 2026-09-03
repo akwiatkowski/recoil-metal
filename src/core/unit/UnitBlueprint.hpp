@@ -52,10 +52,11 @@ namespace rm::unitbp {
 [[nodiscard]] std::expected<unitdef::UnitDef, lua::ParseError> load(
     std::string_view source, std::string_view vfsPath);
 
-/// The three `Economy` fields a counted projectile's silo event consumes.  This intentionally
-/// does not create a projectile simulation model: WP-29 needs only production economics.
-[[nodiscard]] std::expected<unitdef::Weapon::ProjectileEconomy, lua::ParseError>
-loadProjectileEconomy(std::string_view source);
+/// The counted projectile's `Economy` fields plus its `Defense.MaxHealth` damage pool
+/// (`C-087`). This intentionally does not create a projectile simulation model: WP-29
+/// needs production economics and interception health, nothing more.
+[[nodiscard]] std::expected<unitdef::Weapon::ProjectileTraits, lua::ParseError>
+loadProjectileTraits(std::string_view source);
 
 /// The VFS path of a unit's mesh at `level`, or empty when the VFS has none.
 ///

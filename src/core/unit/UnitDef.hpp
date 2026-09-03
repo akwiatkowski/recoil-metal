@@ -171,6 +171,13 @@ struct UnitDef {
     /// that family does state.
     MotionType motion = MotionType::None;
 
+    /// How far a guarding unit looks for something to attack, in elmos —
+    /// `AI.GuardScanRadius`, ogrids like every sibling range (`C-183`). Only 43 of 568
+    /// blueprints state it; absent reads as zero and the guard-attack branch stays shut.
+    /// `AI.GuardReturnRadius` sits beside it in the file and is deliberately NOT read:
+    /// the loader-level scan in `C-183` proved retail never reads it either.
+    sim::Fx guardScanRadiusElmos{};
+
     // --- intel -------------------------------------------------------------
     //
     // How far this unit can see, and by what means (ADR-037). Elmos, converted at parse
@@ -486,6 +493,11 @@ struct UnitDef {
     /// way round, as a class listing the units that belong to it, and the importer inverts it
     /// into this field.
     std::string armorType;
+
+    /// A missile redirector (`Defense.AntiMissile`, URL0303 only, `C-088`). Radius in elmos,
+    /// rate in shots per second; both zero when the blueprint states no redirector.
+    sim::Fx antiMissileRadiusElmos{};
+    float antiMissileRatePerSecond = 0.0f;
 
     /// Whether this unit flies.
     ///

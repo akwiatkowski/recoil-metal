@@ -100,6 +100,9 @@ struct UnitScene {
     /// Silo-build components are distinct from units, matching CAiSiloBuildImpl (`C-081`).
     std::vector<rm::sim::SiloAmmo> siloAmmo;
 
+    /// Missile-redirector components, likewise distinct from units (`C-088`).
+    std::vector<rm::sim::MissileRedirect> redirects;
+
     // What each unit TYPE is. A batch is exactly one unit type, so a type index and a batch
     // index are THE SAME NUMBER and deliberately so: it keeps the render batching and the
     // sim's type numbering in step without a mapping table, and `batches[type]` is how a

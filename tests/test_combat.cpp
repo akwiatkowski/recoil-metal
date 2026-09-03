@@ -232,6 +232,39 @@ TEST_CASE("a counted projectile launches before its guarded silo-ammo consume") 
     CHECK(ammo.stored == 0);
 }
 
+TEST_CASE("a counted projectile with an empty silo does not launch") {
+    // The gate behind the fire is retail's `UnitWeapon::CanFire` AND-ing `HasSiloAmmo`
+    // (ART-E001 `0x006E01D9`: false pushes false), reached from Lua's `OnGotTarget` early
+    // return for counted weapons (ART-S010 `lua/sim/defaultweapons.lua:416`). No launch
+    // means no consume either — and a counted weapon on a unit with NO silo record still
+    // fires, because `HasSiloAmmo` is true when the unit has no silo object (`C-085`).
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    Roster roster;
+    Weapon interceptor = directFire(10.0f, 300.0f);
+    interceptor.targetsProjectiles = true;
+    interceptor.countedProjectile = true;
+    const UnitId silo = roster.add(roster.addType(gunnerDef(interceptor)), 0.0f, 0.0f, 0, 100.0f);
+
+    SECTION("an empty stored count holds the shot") {
+        std::vector<Projectile> shots{{.position = rm::test::at(0, 4, 50), .firedByArmy = 1,
+                                       .ticksRemaining = 10}};
+        rm::sim::SiloAmmo ammo{.owner = silo, .weapon = 0, .stored = 0, .capacity = 7};
+        CHECK(rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots, roster.rate,
+                                    nullptr, nullptr, nullptr, 0,
+                                    std::span<rm::sim::SiloAmmo>{&ammo, 1}) == 0);
+        CHECK(shots.size() == 1);
+        CHECK(ammo.stored == 0);
+    }
+
+    SECTION("a counted weapon with no silo record still fires") {
+        std::vector<Projectile> shots{{.position = rm::test::at(0, 4, 50), .firedByArmy = 1,
+                                       .ticksRemaining = 10}};
+        CHECK(rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots,
+                                    roster.rate) == 1);
+        CHECK(shots.size() == 2);
+    }
+}
+
 TEST_CASE("point defence rejects friendly projectiles") {
     const std::vector<Army> armies = rm::sim::freeForAll(2);
     Roster roster;
@@ -291,6 +324,137 @@ TEST_CASE("a low TrackingRadius does not shorten point defence MaxRadius") {
                                    .ticksRemaining = 10}};
     CHECK(rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots,
                                rm::sim::TickRate{}) == 1);
+}
+
+TEST_CASE("an interceptor damages a projectile's health rather than force-destroying it") {
+    // C-087: interception damages; it does not force-destroy. 34 projectile blueprints
+    // declare Defense.MaxHealth — tacticals 1-3, nukes 25 (ART-S013) — so an SMD
+    // interceptor's 30 damage one-shots a nuke while the UEF TMD's 1 needs several hits.
+    // A projectile with no authored pool still dies to any damage (`OnImpactDestroy`
+    // otherwise), and the interceptor itself is consumed on contact either way.
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+
+    const auto flyInterceptor = [&](float damage, float targetMaxHealth,
+                                    const std::array<rm::sim::Fx, 3>& at) {
+        Roster roster;
+        Projectile target{.position = at,
+                          .firedByArmy = 1,
+                          .health = rm::test::mag(targetMaxHealth),
+                          .maxHealth = rm::test::mag(targetMaxHealth),
+                          .ticksRemaining = 10};
+        Projectile interceptor{.position = rm::test::at(0, 4, 0),
+                               .velocity = rm::test::at(0, 0, 20),
+                               .damage = rm::unitdef::flatDamage(rm::test::mag(damage)),
+                               .firedByArmy = 0,
+                               .interceptor = true,
+                               .ticksRemaining = 10};
+        std::vector<Projectile> shots{target, interceptor};
+        rm::sim::advanceProjectiles(shots, roster.store, armies,
+                                    rm::sim::Terrain{flatField()}, roster.rate, nullptr,
+                                    &roster.catalog);
+        return shots;
+    };
+
+    SECTION("a 30-damage interceptor one-shots a 25-health nuke") {
+        CHECK(flyInterceptor(30.0f, 25.0f, rm::test::at(0, 4, 10)).empty());
+    }
+
+    SECTION("a 1-damage interceptor leaves a 2-health missile alive at 1") {
+        const std::vector<Projectile> survivors = flyInterceptor(1.0f, 2.0f, rm::test::at(0, 4, 10));
+        REQUIRE(survivors.size() == 1);
+        CHECK_FALSE(survivors.front().interceptor);
+        CHECK(rm::sim::magToFloat(survivors.front().health) == Approx(1.0f));
+    }
+}
+
+TEST_CASE("point defence applies target restrictions to projectile acquisition") {
+    // C-088's TMD/SMD split: the TMD (UEB4201) carries
+    // `TargetRestrictOnlyAllow = 'TACTICAL MISSILE'` and no ammo, the SMD (UEB4302)
+    // `TargetRestrictOnlyAllow = 'STRATEGIC MISSILE'` — both also disallow UNTARGETABLE.
+    // A restriction admits a shot only when it carries every listed tag, so a defence
+    // with an allow list never wastes a shot on an ordinary shell, which has no resolved
+    // blueprint categories at all.
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+
+    const auto restrictedGun = [](std::optional<std::vector<std::string>> allow) {
+        Weapon gun = directFire(10.0f, 300.0f);
+        gun.targetsProjectiles = true;
+        gun.targetRestrictOnlyAllow = std::move(allow);
+        gun.targetRestrictOnlyDisallow = std::vector<std::string>{"UNTARGETABLE"};
+        return gun;
+    };
+    // Sorted: the acquisition check is the same binary search the unit side uses.
+    const std::vector<std::string> tactical{"MISSILE", "TACTICAL"};
+    const std::vector<std::string> strategic{"MISSILE", "STRATEGIC"};
+
+    SECTION("a TMD-pattern allow list takes a tactical and refuses a strategic") {
+        Roster roster;
+        (void)roster.add(roster.addType(gunnerDef(restrictedGun(
+                            std::vector<std::string>{"TACTICAL", "MISSILE"}))),
+                         0.0f, 0.0f, 0, 100.0f);
+        std::vector<Projectile> tacticalShot{{.position = rm::test::at(0, 4, 50),
+                                              .categories = tactical,
+                                              .firedByArmy = 1,
+                                              .ticksRemaining = 10}};
+        CHECK(rm::sim::fireWeapons(roster.store, roster.catalog, armies, tacticalShot,
+                                    roster.rate) == 1);
+        std::vector<Projectile> strategicShot{{.position = rm::test::at(0, 4, 50),
+                                               .categories = strategic,
+                                               .firedByArmy = 1,
+                                               .ticksRemaining = 10}};
+        CHECK(rm::sim::fireWeapons(roster.store, roster.catalog, armies, strategicShot,
+                                    roster.rate) == 0);
+        CHECK(strategicShot.size() == 1);
+    }
+
+    SECTION("an untargetable tactical is refused despite the allow list") {
+        Roster roster;
+        (void)roster.add(roster.addType(gunnerDef(restrictedGun(
+                            std::vector<std::string>{"TACTICAL", "MISSILE"}))),
+                         0.0f, 0.0f, 0, 100.0f);
+        // Sorted: MISSILE < TACTICAL < UNTARGETABLE.
+        const std::vector<std::string> cloaked{"MISSILE", "TACTICAL", "UNTARGETABLE"};
+        std::vector<Projectile> shots{{.position = rm::test::at(0, 4, 50),
+                                       .categories = cloaked,
+                                       .firedByArmy = 1,
+                                       .ticksRemaining = 10}};
+        CHECK(rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots,
+                                    roster.rate) == 0);
+        CHECK(shots.size() == 1);
+    }
+
+    SECTION("an ordinary shell with no categories never triggers an allow list") {
+        Roster roster;
+        (void)roster.add(roster.addType(gunnerDef(restrictedGun(
+                            std::vector<std::string>{"TACTICAL", "MISSILE"}))),
+                         0.0f, 0.0f, 0, 100.0f);
+        std::vector<Projectile> shots{{.position = rm::test::at(0, 4, 50),
+                                       .firedByArmy = 1,
+                                       .ticksRemaining = 10}};
+        CHECK(rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots,
+                                    roster.rate) == 0);
+        CHECK(shots.size() == 1);
+    }
+
+    SECTION("an SMD-pattern allow list takes the strategic and refuses the tactical") {
+        Roster roster;
+        (void)roster.add(roster.addType(gunnerDef(restrictedGun(
+                            std::vector<std::string>{"STRATEGIC", "MISSILE"}))),
+                         0.0f, 0.0f, 0, 100.0f);
+        std::vector<Projectile> strategicShot{{.position = rm::test::at(0, 4, 50),
+                                               .categories = strategic,
+                                               .firedByArmy = 1,
+                                               .ticksRemaining = 10}};
+        CHECK(rm::sim::fireWeapons(roster.store, roster.catalog, armies, strategicShot,
+                                    roster.rate) == 1);
+        std::vector<Projectile> tacticalShot{{.position = rm::test::at(0, 4, 50),
+                                              .categories = tactical,
+                                              .firedByArmy = 1,
+                                              .ticksRemaining = 10}};
+        CHECK(rm::sim::fireWeapons(roster.store, roster.catalog, armies, tacticalShot,
+                                    roster.rate) == 0);
+        CHECK(tacticalShot.size() == 1);
+    }
 }
 
 TEST_CASE("a positive interceptor contact consumes both projectiles") {
@@ -2413,4 +2577,162 @@ TEST_CASE("a target beyond the weapon's height reach is not a target at all") {
     weapon.maxHeightDifference = rm::sim::Fx{};
     CHECK(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, weapon, roster.store, armies)
               .has_value());
+}
+
+TEST_CASE("a flare diverts a matching hostile projectile onto its owner") {
+    // C-088 (c): the Aeon decoy. ART-S007 `lua/sim/defaultantiprojectile.lua` — a Flare
+    // entity attached to its owner retargets category-matching hostile shots onto the
+    // owner (`other:SetNewTarget(self.Owner)`), never damaging them. UAB4201 authors
+    // `Flare = {Category = 'MISSILE', Radius = 15}` in ogrids. A shot with no matching
+    // category, a friendly shot, and a shot outside the radius all fly on untouched.
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    // Sorted, as the category check binary-searches.
+    const std::vector<std::string> missile{"MISSILE", "TACTICAL"};
+
+    const auto flareUnit = [&](Roster& roster) {
+        Weapon decoy = directFire(10.0f, 300.0f);
+        decoy.flare = Weapon::Flare{.category = "MISSILE",
+                                    .radiusElmos = rm::test::fx(120.0f)};
+        return roster.add(roster.addType(gunnerDef(decoy)), 0.0f, 0.0f, 0, 100.0f);
+    };
+    const auto incoming = [&](int x, int z, int vx) {
+        Projectile shot{.position = rm::test::at(x, 4, z),
+                        .velocity = rm::test::at(vx, 0, 0),
+                        .categories = missile,
+                        .firedByArmy = 1,
+                        .ticksRemaining = 10};
+        return shot;
+    };
+    const auto flyOne = [&](Roster& roster, Projectile shot) {
+        std::vector<Projectile> shots{shot};
+        rm::sim::advanceProjectiles(shots, roster.store, armies,
+                                    rm::sim::Terrain{flatField()}, roster.rate, nullptr,
+                                    &roster.catalog);
+        return shots;
+    };
+
+    SECTION("a missile crossing the radius is turned onto the flare owner") {
+        Roster roster;
+        (void)flareUnit(roster);
+        // Flying past well inside the 120-elmo radius, moving away from the owner.
+        const std::vector<Projectile> shots = flyOne(roster, incoming(80, 0, 20));
+        REQUIRE(shots.size() == 1);
+        // The velocity now points back at the owner: negative x, still level in z.
+        CHECK(shots.front().velocity[0] < rm::sim::Fx{});
+        CHECK(shots.front().velocity[2] == rm::sim::Fx{});
+    }
+
+    SECTION("a category mismatch flies on") {
+        Roster roster;
+        (void)flareUnit(roster);
+        // An interceptor carries ANTIMISSILE, not MISSILE — the flare is not its decoy.
+        Projectile shot = incoming(100, 0, 20);
+        shot.categories = std::vector<std::string>{"ANTIMISSILE"};
+        const std::vector<Projectile> shots = flyOne(roster, shot);
+        REQUIRE(shots.size() == 1);
+        CHECK(shots.front().velocity[0] > rm::sim::Fx{});
+    }
+
+    SECTION("a friendly missile flies on") {
+        Roster roster;
+        (void)flareUnit(roster);
+        Projectile shot = incoming(100, 0, 20);
+        shot.firedByArmy = 0;
+        const std::vector<Projectile> shots = flyOne(roster, shot);
+        REQUIRE(shots.size() == 1);
+        CHECK(shots.front().velocity[0] > rm::sim::Fx{});
+    }
+
+    SECTION("a missile outside the radius flies on") {
+        Roster roster;
+        (void)flareUnit(roster);
+        const std::vector<Projectile> shots = flyOne(roster, incoming(500, 0, 20));
+        REQUIRE(shots.size() == 1);
+        CHECK(shots.front().velocity[0] > rm::sim::Fx{});
+    }
+}
+
+TEST_CASE("a redirector turns an enemy missile back on its launcher") {
+    // C-088's Cybran MissileRedirect (ART-S007 `lua/sim/defaultantiprojectile.lua`): a
+    // redirector retargets a non-strategic enemy MISSILE onto its launcher
+    // (`other:SetNewTarget(self.Enemy)`), rate-limited by `RedirectRateOfFire`. URL0303
+    // authors `Defense.AntiMissile = {Radius = 5, RedirectRateOfFire = 1}`. Each redirect
+    // costs one full rate cycle; while cooling, the unit only watches.
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    // Sorted, as the category check binary-searches.
+    const std::vector<std::string> missile{"MISSILE", "TACTICAL"};
+
+    Roster roster;
+    (void)roster.add(roster.addType(targetDef()), 0.0f, 0.0f, 0, 100.0f);
+    const UnitId launcher = roster.add(roster.addType(targetDef()), 300.0f, 0.0f, 1, 100.0f);
+    const auto flyOne = [&](std::vector<rm::sim::MissileRedirect>& redirects,
+                            rm::sim::Projectile shot) {
+        std::vector<Projectile> shots{shot};
+        rm::sim::advanceProjectiles(shots, roster.store, armies,
+                                    rm::sim::Terrain{flatField()}, roster.rate, nullptr,
+                                    &roster.catalog, redirects);
+        return shots;
+    };
+    const auto incoming = [&]() {
+        Projectile shot{.position = rm::test::at(100, 4, 0),
+                        .velocity = rm::test::at(-20, 0, 0),
+                        .categories = missile,
+                        .firedBy = launcher,
+                        .firedByArmy = 1,
+                        .ticksRemaining = 10};
+        return shot;
+    };
+
+    SECTION("a missile in radius is re-aimed at its launcher and the rate is spent") {
+        std::vector<rm::sim::MissileRedirect> redirects{
+            rm::sim::MissileRedirect{.owner = roster.store.idAt(0),
+                                     .radiusElmos = rm::sim::fxFromFloat(120.0f),
+                                     .cooldownTicks = 10,
+                                     .remaining = 0}};
+        const std::vector<Projectile> shots = flyOne(redirects, incoming());
+        REQUIRE(shots.size() == 1);
+        // Was flying away from the launcher at x=300; now flies back toward it.
+        CHECK(shots.front().velocity[0] > rm::sim::Fx{});
+        CHECK(redirects.front().remaining == 10);
+    }
+
+    SECTION("a cooling redirector only watches") {
+        std::vector<rm::sim::MissileRedirect> redirects{
+            rm::sim::MissileRedirect{.owner = roster.store.idAt(0),
+                                     .radiusElmos = rm::sim::fxFromFloat(120.0f),
+                                     .cooldownTicks = 10,
+                                     .remaining = 10}};
+        const std::vector<Projectile> shots = flyOne(redirects, incoming());
+        REQUIRE(shots.size() == 1);
+        CHECK(shots.front().velocity[0] < rm::sim::Fx{});
+        CHECK(redirects.front().remaining == 9);
+    }
+
+    SECTION("a strategic missile is not redirected") {
+        std::vector<rm::sim::MissileRedirect> redirects{
+            rm::sim::MissileRedirect{.owner = roster.store.idAt(0),
+                                     .radiusElmos = rm::sim::fxFromFloat(120.0f),
+                                     .cooldownTicks = 10,
+                                     .remaining = 0}};
+        Projectile shot = incoming();
+        shot.categories = std::vector<std::string>{"MISSILE", "STRATEGIC"};
+        const std::vector<Projectile> shots = flyOne(redirects, shot);
+        REQUIRE(shots.size() == 1);
+        CHECK(shots.front().velocity[0] < rm::sim::Fx{});
+        CHECK(redirects.front().remaining == 0);
+    }
+
+    SECTION("a friendly missile is not redirected") {
+        std::vector<rm::sim::MissileRedirect> redirects{
+            rm::sim::MissileRedirect{.owner = roster.store.idAt(0),
+                                     .radiusElmos = rm::sim::fxFromFloat(120.0f),
+                                     .cooldownTicks = 10,
+                                     .remaining = 0}};
+        Projectile shot = incoming();
+        shot.firedByArmy = 0;
+        const std::vector<Projectile> shots = flyOne(redirects, shot);
+        REQUIRE(shots.size() == 1);
+        CHECK(shots.front().velocity[0] < rm::sim::Fx{});
+        CHECK(redirects.front().remaining == 0);
+    }
 }

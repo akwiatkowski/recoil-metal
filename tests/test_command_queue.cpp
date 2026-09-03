@@ -1668,7 +1668,7 @@ TEST_CASE("a guarding factory reserves one shared build and finishes it without 
     productDef.buildTime = rm::sim::magFromFloat(100.0f);
     const rm::UnitTypeIndex productType = roster.addType(productDef);
     const UnitId guard = roster.add(factoryType, 40.0f, 40.0f, 0, 100.0f);
-    const UnitId guardee = roster.add(factoryType, 48.0f, 40.0f, 0, 100.0f);
+    const UnitId guardee = roster.add(factoryType, 44.0f, 40.0f, 0, 100.0f);
     const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(1);
     const std::vector<rm::sim::Player> players{rm::sim::Player{.index = 0, .army = 0}};
     const std::vector<const rm::sim::PassabilityGrid*> grids{&grid, &grid};
@@ -1765,7 +1765,7 @@ TEST_CASE("factory guard skips a singleton head and locally takes the queued bui
     queuedProduct.name = "queued-product";
     const rm::UnitTypeIndex queuedType = roster.addType(queuedProduct);
     const UnitId guard = roster.add(factoryType, 40.0f, 40.0f, 0, 100.0f);
-    const UnitId guardee = roster.add(factoryType, 48.0f, 40.0f, 0, 100.0f);
+    const UnitId guardee = roster.add(factoryType, 44.0f, 40.0f, 0, 100.0f);
     const UnitId peer = roster.add(factoryType, 80.0f, 40.0f, 0, 100.0f);
     const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(1);
     const std::vector<rm::sim::Player> players{rm::sim::Player{.index = 0, .army = 0}};
@@ -1846,7 +1846,7 @@ TEST_CASE("a guarding factory builds its own queued product before the guardee's
     guardedProduct.name = "guarded-product";
     const rm::UnitTypeIndex guardedProductType = roster.addType(guardedProduct);
     const UnitId guard = roster.add(factoryType, 40.0f, 40.0f, 0, 100.0f);
-    const UnitId guardee = roster.add(factoryType, 48.0f, 40.0f, 0, 100.0f);
+    const UnitId guardee = roster.add(factoryType, 44.0f, 40.0f, 0, 100.0f);
     const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(1);
     const std::vector<rm::sim::Player> players{rm::sim::Player{.index = 0, .army = 0}};
     const std::vector<const rm::sim::PassabilityGrid*> grids{&grid, &grid, &grid};
@@ -1921,7 +1921,7 @@ TEST_CASE("a guarding factory retires its own queued build through normal count 
     product.buildTime = rm::sim::magFromFloat(100.0f);
     const rm::UnitTypeIndex productType = roster.addType(product);
     const UnitId guard = roster.add(factoryType, 40.0f, 40.0f, 0, 100.0f);
-    const UnitId guardee = roster.add(factoryType, 48.0f, 40.0f, 0, 100.0f);
+    const UnitId guardee = roster.add(factoryType, 44.0f, 40.0f, 0, 100.0f);
     const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(1);
     const std::vector<rm::sim::Player> players{rm::sim::Player{.index = 0, .army = 0}};
     const std::vector<const rm::sim::PassabilityGrid*> grids{&grid, &grid};
@@ -1996,7 +1996,7 @@ TEST_CASE("a guarding factory completion retires the first of identical own buil
     product.buildTime = rm::sim::magFromFloat(100.0f);
     const rm::UnitTypeIndex productType = roster.addType(product);
     const UnitId guard = roster.add(factoryType, 40.0f, 40.0f, 0, 100.0f);
-    const UnitId guardee = roster.add(factoryType, 48.0f, 40.0f, 0, 100.0f);
+    const UnitId guardee = roster.add(factoryType, 44.0f, 40.0f, 0, 100.0f);
     const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(1);
     const std::vector<rm::sim::Player> players{rm::sim::Player{.index = 0, .army = 0}};
     const std::vector<const rm::sim::PassabilityGrid*> grids{&grid, &grid};
@@ -2276,4 +2276,125 @@ TEST_CASE("the order queue stops taking shift-clicks at retail's cap, and a plai
     CHECK(rm::sim::applyCommand(moveTo(300.0f, 40.0f, walker, /*queued=*/false), roster.store,
                                 roster.catalog, players, armies, terrain, grid, roster.rate));
     CHECK(roster.store.orders()[walker.index].size() == 1);
+}
+
+TEST_CASE("a guarding commander chases an enemy inside its scan radius instead of assisting") {
+    // C-183's ATTACK branch outranks every assist: a guard whose scan (GuardScanRadius,
+    // 43 blueprints) covers a hostile acquires through the ordinary path and pursues it
+    // while the Assist head stays untouched underneath — no child command, no ids.
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    const rm::sim::PassabilityGrid grid =
+        rm::sim::buildPassability(field, 0.0f, 60.0f, 0.0f);
+    rm::test::Roster roster;
+    rm::unitdef::UnitDef guardDef;
+    guardDef.name = "commander";
+    guardDef.categories = {"COMMAND"};
+    guardDef.buildRate = 10.0f;
+    guardDef.speedElmosPerSecond = 20.0f;
+    rm::unitdef::Weapon gun;
+    gun.label = "commander gun";
+    gun.role = rm::unitdef::WeaponRole::DirectFire;
+    gun.targetPriorities = {{"LAND"}};
+    gun.damage = rm::sim::magFromFloat(10.0f);
+    gun.maxRange = rm::sim::fxFromFloat(100.0f);
+    gun.rateOfFire = 1.0f;
+    guardDef.weapons.push_back(gun);
+    guardDef.guardScanRadiusElmos = rm::sim::fxFromFloat(240.0f);
+    const rm::UnitTypeIndex guardType = roster.addType(guardDef);
+    rm::unitdef::UnitDef factoryDef;
+    factoryDef.name = "factory";
+    factoryDef.categories = {"FACTORY"};
+    factoryDef.buildRate = 10.0f;
+    const rm::UnitTypeIndex factoryType = roster.addType(factoryDef);
+    rm::unitdef::UnitDef enemyDef;
+    enemyDef.name = "enemy";
+    enemyDef.categories = {"LAND"};
+    const rm::UnitTypeIndex enemyType = roster.addType(enemyDef);
+    const UnitId guard = roster.add(guardType, 40.0f, 40.0f, 0, 100.0f);
+    const UnitId guardee = roster.add(factoryType, 44.0f, 40.0f, 0, 100.0f);
+    const UnitId enemy = roster.add(enemyType, 40.0f, 190.0f, 1, 100.0f);
+    (void)enemy;
+    const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(2);
+    const std::vector<rm::sim::Player> players{rm::sim::Player{.index = 0, .army = 0}};
+    const std::vector<const rm::sim::PassabilityGrid*> grids{&grid, &grid, &grid};
+    std::vector<rm::sim::Construction> building;
+    const auto apply = [&](const CommandIssue& issue) {
+        return rm::sim::applyCommand(issue, roster.store, roster.catalog, players, armies,
+                                     terrain, [&grid](UnitId) { return &grid; }, roster.rate,
+                                     &building);
+    };
+    const CommandIssue assist{.source = 0, .id = rm::commandId(0, 101), .player = 0,
+                              .kind = CommandKind::Assist, .units = {guard}, .target = guardee};
+    REQUIRE(apply(assist));
+    const rm::CommandSerial serialAfterInputs = roster.store.nextCommandSerial();
+    const std::uint32_t counterAfterInputs = roster.store.nextCommandCounter(0);
+
+    // The enemy sits 150 elmos out: inside the 240-elmo scan, outside the 100-elmo gun.
+    (void)rm::sim::advanceOrders(roster.store, roster.catalog, terrain, grids, roster.rate,
+                                 &building, nullptr, nullptr, nullptr, nullptr, armies);
+
+    // Pursuit, not assistance: the guard moves toward the enemy while Assist stays head.
+    CHECK(roster.store.motion()[guard.index].moving);
+    REQUIRE(roster.store.orders()[guard.index].active() != nullptr);
+    CHECK(roster.store.orders()[guard.index].active()->kind() == CommandKind::Assist);
+    CHECK(roster.store.orders()[guardee.index].empty());
+    CHECK(roster.store.nextCommandSerial() == serialAfterInputs);
+    CHECK(roster.store.nextCommandCounter(0) == counterAfterInputs);
+}
+
+TEST_CASE("a guarding commander ignores an enemy outside its scan radius") {
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    const rm::sim::PassabilityGrid grid =
+        rm::sim::buildPassability(field, 0.0f, 60.0f, 0.0f);
+    rm::test::Roster roster;
+    rm::unitdef::UnitDef guardDef;
+    guardDef.name = "commander";
+    guardDef.categories = {"COMMAND"};
+    guardDef.buildRate = 10.0f;
+    guardDef.speedElmosPerSecond = 20.0f;
+    rm::unitdef::Weapon gun;
+    gun.label = "commander gun";
+    gun.role = rm::unitdef::WeaponRole::DirectFire;
+    gun.targetPriorities = {{"LAND"}};
+    gun.damage = rm::sim::magFromFloat(10.0f);
+    gun.maxRange = rm::sim::fxFromFloat(100.0f);
+    gun.rateOfFire = 1.0f;
+    guardDef.weapons.push_back(gun);
+    guardDef.guardScanRadiusElmos = rm::sim::fxFromFloat(240.0f);
+    const rm::UnitTypeIndex guardType = roster.addType(guardDef);
+    rm::unitdef::UnitDef factoryDef;
+    factoryDef.name = "factory";
+    factoryDef.categories = {"FACTORY"};
+    factoryDef.buildRate = 10.0f;
+    const rm::UnitTypeIndex factoryType = roster.addType(factoryDef);
+    rm::unitdef::UnitDef enemyDef;
+    enemyDef.name = "enemy";
+    enemyDef.categories = {"LAND"};
+    const rm::UnitTypeIndex enemyType = roster.addType(enemyDef);
+    const UnitId guard = roster.add(guardType, 40.0f, 40.0f, 0, 100.0f);
+    const UnitId guardee = roster.add(factoryType, 44.0f, 40.0f, 0, 100.0f);
+    // 300 elmos out: beyond the scan, so the guard keeps assisting and holds still —
+    // the guardee is 8 elmos off, inside assist reach.
+    (void)roster.add(enemyType, 40.0f, 340.0f, 1, 100.0f);
+    const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(2);
+    const std::vector<rm::sim::Player> players{rm::sim::Player{.index = 0, .army = 0}};
+    const std::vector<const rm::sim::PassabilityGrid*> grids{&grid, &grid, &grid};
+    std::vector<rm::sim::Construction> building;
+    const auto apply = [&](const CommandIssue& issue) {
+        return rm::sim::applyCommand(issue, roster.store, roster.catalog, players, armies,
+                                     terrain, [&grid](UnitId) { return &grid; }, roster.rate,
+                                     &building);
+    };
+    const CommandIssue assist{.source = 0, .id = rm::commandId(0, 102), .player = 0,
+                              .kind = CommandKind::Assist, .units = {guard}, .target = guardee};
+    REQUIRE(apply(assist));
+
+    (void)rm::sim::advanceOrders(roster.store, roster.catalog, terrain, grids, roster.rate,
+                                 &building, nullptr, nullptr, nullptr, nullptr, armies);
+
+    CHECK_FALSE(roster.store.motion()[guard.index].moving);
+    REQUIRE(roster.store.orders()[guard.index].active() != nullptr);
+    CHECK(roster.store.orders()[guard.index].active()->kind() == CommandKind::Assist);
 }

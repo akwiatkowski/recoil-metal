@@ -103,6 +103,23 @@ struct Projectile {
     /// Underwater; Terrain and the Unit variants retain where ordinary collision ended.
     ImpactType pendingImpact = ImpactType::Invalid;
 
+    /// The authored damage pool from the projectile blueprint's `Defense.MaxHealth`
+    /// (`C-087`: tacticals 1-3, nukes 25). Zero means the blueprint states none and the
+    /// shot dies to any damage — the interceptor's own case. Set from the shooter's
+    /// resolved traits at launch, so a shot whose shooter died keeps its pool.
+    Mag maxHealth{};
+
+    /// Remaining health. Interception damages rather than force-destroys: the struck
+    /// shot dies only when this reaches zero.
+    Mag health{};
+
+    /// The shot's own authored categories, from its projectile blueprint (`C-088`:
+    /// tactical missiles carry TACTICAL/MISSILE, nukes STRATEGIC/MISSILE). Point-defence
+    /// target restrictions evaluate against these, which is what stops a TMD from
+    /// wasting an interceptor on a tank shell — ordinary shots resolve no blueprint and
+    /// carry none. Sorted, like every other category list in this engine.
+    std::vector<std::string> categories{};
+
     /// The body recorded by a pending unit impact. Generational so a retired slot reused before
     /// delivery cannot redirect the damage to its new occupant.
     UnitId impactTarget{};
@@ -284,7 +301,8 @@ void tickShields(UnitStore& store, const UnitCatalog& catalog,
 /// and armour; null falls back to a diameter-high box and ordinary armour.
 void advanceProjectiles(std::vector<Projectile>& projectiles, UnitStore& store,
                         std::span<const Army> armies, const Terrain& terrain, TickRate rate,
-                        EventQueue* events = nullptr, const UnitCatalog* catalog = nullptr);
+                        EventQueue* events = nullptr, const UnitCatalog* catalog = nullptr,
+                        std::span<MissileRedirect> redirects = {});
 
 /// Gravity's pull on an arced shot, in elmos per tick per tick.
 ///

@@ -856,7 +856,8 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
                            std::span<const PassabilityGrid* const> gridForType, TickRate rate,
                            std::vector<Construction>* building, EventQueue* events,
                            const FeatureStore* features, std::vector<Construction>* finished,
-                             PathService* pathService, std::span<const Army> armies) {
+                             PathService* pathService, std::span<const Army> armies,
+                             const Intel* intel, const PlayableRect* playableRect) {
     std::size_t started = 0;
 
     const std::span<CommandQueue> orders = store.orders();
@@ -1170,6 +1171,86 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
                     }
                     (void)startCommand(mirrored, store, catalog, terrain, *productGrid, rate,
                                        building, events, features);
+                    continue;
+                }
+            }
+        }
+
+        // C-183's ATTACK branch outranks every assist. A mobile guard whose scan covers a
+        // hostile acquires through the ordinary path and pursues it, while Assist stays at
+        // the head — no child command, no ids, no log entries. Factory guards never arrive
+        // here with live mirror work: that branch continued above, which is the ladder order.
+        //
+        // The acquisition is a range-overridden copy of each firing weapon, so priorities,
+        // restrictions, arcs, incumbency and recon all apply exactly as in combat — the
+        // structural equivalent of delegating to `IAiAttacker` with `GuardScanRadius`.
+        // Three retail behaviours are NOT here, all recorded: the leash that reins a guard
+        // back to its guardee (its endpoints are unread), the multi-weapon selection among
+        // a guard's own guns (nearest wins), and combat-unit guard orders themselves (Assist
+        // refusal for non-builders is pinned behaviour — a Guard order is the deferred
+        // vehicle, so this branch serves Assist-capable guards only).
+        if (current->kind() == CommandKind::Assist && !armies.empty()
+            && store.alive(current->target())) {
+            const unitdef::UnitDef* guardDef = catalog.def(store.typeAt(slot));
+            if (guardDef != nullptr && guardDef->isMobile()
+                && guardDef->guardScanRadiusElmos > Fx{}) {
+                const std::span<const Transform> sight = store.transforms();
+                const int armyIndex = store.motion()[slot].armyIndex;
+                std::optional<UnitId> prey;
+                Fx preyDistance{};
+                for (std::size_t w = 0; w < guardDef->weapons.size(); ++w) {
+                    const unitdef::Weapon& weapon = guardDef->weapons[w];
+                    if (!weapon.fires() || weapon.manuallyFired()
+                        || weapon.targetsProjectiles) {
+                        continue;
+                    }
+                    unitdef::Weapon ranged = weapon;
+                    ranged.maxRange = guardDef->guardScanRadiusElmos;
+                    std::optional<UnitId> incumbent;
+                    const auto& cache = store.health()[slot].automaticTargets;
+                    if (w < cache.size()) {
+                        incumbent = cache[w];
+                    }
+                    const std::optional<UnitId> found = nearestTarget(
+                        positionOf(sight[slot]), armyIndex, ranged, store, armies, intel,
+                        &catalog, sight[slot].heading, incumbent, playableRect);
+                    if (!found) {
+                        continue;
+                    }
+                    const Fx distance = groundDistanceElmos(
+                        positionOf(sight[slot]), positionOf(sight[found->index]));
+                    if (!prey || distance < preyDistance
+                        || (distance == preyDistance && found->index < prey->index)) {
+                        prey = found;
+                        preyDistance = distance;
+                    }
+                }
+                if (prey.has_value()) {
+                    Fx reach{};
+                    const bool targetAirborne = store.motion()[prey->index].airborne;
+                    for (const unitdef::Weapon& weapon : guardDef->weapons) {
+                        if (!weapon.fires() || weapon.manuallyFired()
+                            || weapon.targetsProjectiles
+                            || !weapon.canTarget(targetAirborne) || weapon.maxRange <= reach) {
+                            continue;
+                        }
+                        reach = weapon.maxRange;
+                    }
+                    MoveState& chase = store.motion()[slot];
+                    const Fx gap = groundDistanceElmos(positionOf(sight[slot]),
+                                                       positionOf(sight[prey->index]));
+                    if (reach <= Fx{} || gap <= reach) {
+                        chase.moving = false;
+                        chase.path.clear();
+                        chase.pathIndex = 0;
+                    } else {
+                        const PassabilityGrid* chaseGrid = gridFor(*current);
+                        if (chaseGrid == nullptr) {
+                            continue;
+                        }
+                        (void)routeUnit(slot, sight[prey->index].x, sight[prey->index].z,
+                                        store, terrain, *chaseGrid);
+                    }
                     continue;
                 }
             }

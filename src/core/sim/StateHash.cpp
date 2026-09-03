@@ -583,6 +583,25 @@ StateHash hashMatch(const UnitStore& store, const Match& match) {
             if (shot.interceptor) {
                 feed(h, true);
             }
+            // The damage pool, only when the blueprint authored one — otherwise the
+            // golden duel's shots keep the byte stream they were blessed with (`C-087`).
+            if (shot.maxHealth > Mag{}) {
+                feed(h, true);
+                feed(h, shot.maxHealth);
+                feed(h, shot.health);
+            }
+            // Same conditional treatment for categories: only resolved missile shots
+            // carry any, so ordinary fire keeps its existing digest (`C-088`).
+            if (!shot.categories.empty()) {
+                feed(h, true);
+                feed(h, shot.categories.size());
+                for (const std::string& tag : shot.categories) {
+                    feed(h, tag.size());
+                    for (const char c : tag) {
+                        feed(h, static_cast<std::size_t>(c));
+                    }
+                }
+            }
             // The shooter's identity is live execution state: at impact it becomes
             // `lastHitBy`, which decides kill attribution. Two runs differing only here
             // hash identically for the whole flight — up to thirty seconds — before the
@@ -640,6 +659,20 @@ StateHash hashMatch(const UnitStore& store, const Match& match) {
             feed(h, static_cast<std::size_t>(ammo.elapsedTicks));
             feed(h, ammo.costPerTick);
             feed(h, ammo.delivered);
+        }
+    }
+
+    // Redirector state, same presence-then-contents shape as silo ammo: a match with no
+    // redirectors folds one flag, so scenes without them keep their existing digest.
+    feed(h, match.redirects != nullptr);
+    if (match.redirects != nullptr) {
+        feed(h, match.redirects->size());
+        for (const MissileRedirect& redirect : *match.redirects) {
+            feed(h, static_cast<std::size_t>(redirect.owner.index));
+            feed(h, static_cast<std::size_t>(redirect.owner.generation));
+            feed(h, redirect.radiusElmos);
+            feed(h, redirect.cooldownTicks);
+            feed(h, redirect.remaining);
         }
     }
 

@@ -250,6 +250,20 @@ std::vector<Weapon> weaponsFrom(const lua::Value& weaponArray, bool airborneSour
         weapon.muzzleVelocityElmosPerSecond =
             numberOr(entry, "MuzzleVelocity", 0.0f) * scmap::kElmosPerOgrid;
 
+        // `Flare = {Category, Radius}` on the Aeon decoy defences (`C-088`). Radius is
+        // ogrids like every sibling range; a missing category defaults to 'MISSILE',
+        // which is what the Lua passes when the table omits it.
+        if (const lua::Value* flare = entry.find("Flare")) {
+            Weapon::Flare parsed;
+            if (const std::optional<std::string_view> category =
+                    flare->stringAt("Category")) {
+                parsed.category = std::string{*category};
+            }
+            parsed.radiusElmos = sim::fxFromFloat(
+                std::max(0.0f, numberOr(*flare, "Radius", 0.0f)) * scmap::kElmosPerOgrid);
+            weapon.flare = std::move(parsed);
+        }
+
         weapon.firingToleranceBrads = firingToleranceBradsFromDegrees(
             numberOr(entry, "FiringTolerance", kDefaultFiringToleranceDegrees));
 

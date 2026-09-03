@@ -258,8 +258,8 @@ void resolveMuzzleBones(rm::unitdef::UnitDef& def, const rm::Model& model) {
         if (!projectile) continue;
         const std::string_view projectileSource{reinterpret_cast<const char*>(projectile->data()),
                                       projectile->size()};
-        if (auto economy = rm::unitbp::loadProjectileEconomy(projectileSource)) {
-            gun.projectileEconomy = *economy;
+        if (auto traits = rm::unitbp::loadProjectileTraits(projectileSource)) {
+            gun.projectileTraits = *traits;
         }
     }
 
@@ -497,7 +497,7 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
                 std::max(scene.catalog.rates(type).buildPerTick, minimumRate);
             for (std::size_t weapon = 0; weapon < def->weapons.size(); ++weapon) {
                 const rm::unitdef::Weapon& gun = def->weapons[weapon];
-                if (!gun.countedProjectile || gun.projectileEconomy.buildTime <= rm::sim::Mag{}) {
+                if (!gun.countedProjectile || gun.projectileTraits.buildTime <= rm::sim::Mag{}) {
                     continue;
                 }
                 // C-241 names an adjacency build modifier. It is fixed at 1 in this slice:
@@ -513,9 +513,19 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
                 if (slotTaken) continue;
                 scene.siloAmmo.push_back(rm::sim::makeSiloAmmo(
                     id, weapon, gun.nukeWeapon, gun.maxProjectileStorage,
-                    {.mass = gun.projectileEconomy.buildCostMass,
-                     .energy = gun.projectileEconomy.buildCostEnergy},
-                    gun.projectileEconomy.buildTime, buildPerTick));
+                    {.mass = gun.projectileTraits.buildCostMass,
+                     .energy = gun.projectileTraits.buildCostEnergy},
+                    gun.projectileTraits.buildTime, buildPerTick));
+            }
+            // A missile redirector (`Defense.AntiMissile`, URL0303, `C-088`) — one per unit,
+            // created alongside the silo records above. The rate-to-ticks conversion is
+            // content-side work done once here, at load (PLAN2.md §5.1).
+            if (def->antiMissileRadiusElmos > rm::sim::Fx{}
+                && def->antiMissileRatePerSecond > 0.0f) {
+                const int cooldown = static_cast<int>(gAppTickRate.ticks(
+                    rm::sim::Seconds{1.0f / def->antiMissileRatePerSecond}));
+                scene.redirects.push_back(
+                    rm::sim::makeMissileRedirect(id, def->antiMissileRadiusElmos, cooldown));
             }
         }
     }
@@ -685,7 +695,7 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
         std::max(scene.catalog.rates(type).buildPerTick, minimumRate);
     for (std::size_t weapon = 0; weapon < def.weapons.size(); ++weapon) {
         const rm::unitdef::Weapon& gun = def.weapons[weapon];
-        if (!gun.countedProjectile || gun.projectileEconomy.buildTime <= rm::sim::Mag{}) continue;
+        if (!gun.countedProjectile || gun.projectileTraits.buildTime <= rm::sim::Mag{}) continue;
         // C-241's queued builds count toward capacity; queue issuance is deliberately absent.
         // One record per retail silo SLOT (C-081): a unit with two counted weapons on the
         // same slot keeps the FIRST, the order-dependent selection C-085 records for
@@ -698,9 +708,17 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
         if (slotTaken) continue;
         scene.siloAmmo.push_back(rm::sim::makeSiloAmmo(
             id, weapon, gun.nukeWeapon, gun.maxProjectileStorage,
-            {.mass = gun.projectileEconomy.buildCostMass,
-             .energy = gun.projectileEconomy.buildCostEnergy},
-            gun.projectileEconomy.buildTime, buildPerTick));
+            {.mass = gun.projectileTraits.buildCostMass,
+             .energy = gun.projectileTraits.buildCostEnergy},
+            gun.projectileTraits.buildTime, buildPerTick));
+    }
+    // A missile redirector (`Defense.AntiMissile`, URL0303, `C-088`) — see above.
+    if (def.antiMissileRadiusElmos > rm::sim::Fx{}
+        && def.antiMissileRatePerSecond > 0.0f) {
+        const int cooldown = static_cast<int>(
+            gAppTickRate.ticks(rm::sim::Seconds{1.0f / def.antiMissileRatePerSecond}));
+        scene.redirects.push_back(
+            rm::sim::makeMissileRedirect(id, def.antiMissileRadiusElmos, cooldown));
     }
 
     // `UnitCreated` is THE CALLER'S to raise (§7 P6.1). The sim never spawns a unit — a spawn
@@ -772,8 +790,8 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
         if (!projectile) continue;
         const std::string_view projectileSource{reinterpret_cast<const char*>(projectile->data()),
                                       projectile->size()};
-        if (auto economy = rm::unitbp::loadProjectileEconomy(projectileSource)) {
-            gun.projectileEconomy = *economy;
+        if (auto traits = rm::unitbp::loadProjectileTraits(projectileSource)) {
+            gun.projectileTraits = *traits;
         }
     }
 
