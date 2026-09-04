@@ -20,7 +20,7 @@ resource/game-profile descriptors plus one aspect-preserving minimap projection 
 pips, input, and true-line camera footprint, explicit BAR and neutral vocabulary/material fallbacks,
 the exact retail mobile-builder approach-to-range gate, per-instance builder torso/arm/tool aiming from authored
 bone rigs, unit `_NormalsTS` maps with retail `.gaa` decoding and UV1, the final HUD
-stress/accessibility and real-window performance pass, and README counts at 1386) —
+stress/accessibility and real-window performance pass, and README counts at 1388) —
 `ComputeAirControl`, `CalcWingedLift`, the damping factor and the terrain look-ahead read and
 implemented (`C-244`–`C-246`): authored `KMove`/`KLift` gains with their damping terms, the
 vertical lift-off to half elevation that replaces the invented runway roll, the pyramid look-ahead
@@ -112,7 +112,7 @@ excluded from the headline.
 | [`FA-TRANSPORT`](#fa-transport---attachments-cargo-and-ferries) | Attachments, cargo, ferries | `WP-25` | 35% | 5% | 95% | Add parent/self bone indices and authored rest-bone composition to generic attachments. |
 | [`FA-WEAPONS`](#fa-weapons---targeting-weapons-and-projectiles) | Targeting, weapons, projectiles | `WP-27`-`28` | 97% | 72% | 90% | Implement `C-157` target exemption for engineer reclaim/capture, then add the remaining death and manual-fire paths. |
 | [`FA-MISSILES`](#fa-missiles---silos-missiles-and-interception) | Silos, missiles, interception | `WP-29` | 55% | 35% | 95% | Add interceptor guidance/lead and shooter caps, then the build queue and UI. |
-| [`FA-DAMAGE`](#fa-damage---damage-death-and-shields) | Damage, death, shields | `WP-30`-`32` | 70% | 40% | 75% | Add the next collidable shield slice: area-shield admission and stacking. |
+| [`FA-DAMAGE`](#fa-damage---damage-death-and-shields) | Damage, death, shields | `WP-30`-`32` | 75% | 45% | 80% | Apply the shield owner's armour multiplier, then specify PersonalBubble and transport coverage. |
 | [`FA-INTEL`](#fa-intel---vision-radar-sonar-and-counter-intel) | Vision, radar, sonar, counter-intel | `WP-33` | 75% | 45% | 90% | Apply radar-position error to automatic targeting without changing contact identity or ordering. |
 | [`FA-PROGRESS`](#fa-progress---enhancements-veterancy-and-special-units) | Enhancements, veterancy, special units | `WP-34`-`36` | 35% | 20% | 35% | Complete the enhancement lifecycle specification around `CUnitScriptTask`. |
 | [`FA-TERRAIN`](#fa-terrain---mutable-terrain-and-craters) | Mutable terrain and craters | `WP-37` | 0% | 0% | 25% | Trace one crater from damage through terrain, pathing, and rendering invalidation. |
@@ -388,14 +388,16 @@ tactical/nuke UI as the next boundary in WP-29, and refresh FA-MISSILES.
 
 ### FA-DAMAGE - Damage, Death, And Shields
 
-**Largest gap:** ordinary damage is close, but shields are damage-gate records rather than
-collidable entities, which prevents retail direct-fire and personal-shield semantics.
+**Largest gap:** ordinary bubbles and personal UnitShield boxes now share the collidable shield
+path. `CollisionCenter*` and `CollisionSize*` drive box containment and projectile sweeps, while a
+conservative bound is used only for spatial admission. The remaining C-143 residue is the owner's
+armour multiplier; PersonalBubble and transport coverage still need their separate semantics.
 
 ```text
-/goal Advance FA-DAMAGE by introducing the smallest collidable shield-entity path needed for a
-direct projectile to hit a dome before its owner, then remove the corresponding direct-fire
-damage-gate shortcut. Write projectile/shield ordering tests first, run make test and make verify,
-update WP-30/31 plus C-143 residues, and refresh FA-DAMAGE.
+/goal Advance FA-DAMAGE by applying the shield owner's armour multiplier from C-143 instead of
+the synthetic Shield armour class. Write mixed-owner and damage-type regressions first, preserve
+the established sphere/box admission and one-charge rules, run make test and make verify, then
+update WP-30/31 plus the remaining PersonalBubble and transport-shield boundary.
 ```
 
 ### FA-INTEL - Vision, Radar, Sonar, And Counter-Intel
@@ -498,7 +500,7 @@ builders, fixed command/resource capacity, safe areas, 1x/2x display changes, re
 and every presentation/effects level. Long production names now truncate visibly inside their
 fixed panel instead of crossing the repeat/count columns. Full, Reduced, and Off screenshot smoke
 tests preserve semantic layer order. Real windows sustain 60 Hz at 5088x2862 pixels: Full measured
-6.694 ms GPU mean and Off 6.792 ms, a noise-level difference. The complete 1386-test suite passes
+6.694 ms GPU mean and Off 6.792 ms, a noise-level difference. The complete 1388-test suite passes
 and the 7000-tick golden replay remains identical.
 
 The native HUD also has a measured baseline (HUD slice 0, `docs/hud-baseline.md`,

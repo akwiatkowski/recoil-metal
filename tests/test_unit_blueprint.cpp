@@ -594,7 +594,7 @@ TEST_CASE("an ordinary FA shield reads its capacity, radius and recovery timing"
     CHECK(def->shield.rechargeDelay.value == Approx(15.1f));
 }
 
-TEST_CASE("a personal shield is not imported as a protective bubble") {
+TEST_CASE("a personal shield imports its retail box collision shape") {
     const Blueprint bp{"UAL0202_unit.bp", R"(
         UnitBlueprint {
             Physics = { MotionType = 'RULEUMT_Land', MaxSpeed = 1 },
@@ -605,6 +605,12 @@ TEST_CASE("a personal shield is not imported as a protective bubble") {
                     PersonalShield = true,
                     ShieldMaxHealth = 1750,
                     ShieldSize = 3,
+                    CollisionSizeX = 2,
+                    CollisionSizeY = 3,
+                    CollisionSizeZ = 4,
+                    CollisionCenterX = 0.25,
+                    CollisionCenterY = 0.5,
+                    CollisionCenterZ = -0.25,
                     ShieldRegenRate = 2,
                     ShieldRegenStartTime = 1,
                     ShieldRechargeTime = 75,
@@ -615,7 +621,15 @@ TEST_CASE("a personal shield is not imported as a protective bubble") {
 
     const auto def = rm::unitbp::loadFile(bp.path());
     REQUIRE(def.has_value());
-    CHECK_FALSE(def->shield.exists());
+    REQUIRE(def->shield.exists());
+    CHECK(def->shield.shape == rm::unitdef::ShieldShape::Box);
+    CHECK(def->shield.maximum == rm::sim::Mag::fromInt(1750));
+    CHECK(def->shield.boxHalfExtentsElmos[0] == rm::sim::Fx::fromInt(8));
+    CHECK(def->shield.boxHalfExtentsElmos[1] == rm::sim::Fx::fromInt(12));
+    CHECK(def->shield.boxHalfExtentsElmos[2] == rm::sim::Fx::fromInt(16));
+    CHECK(def->shield.collisionCenterElmos[0] == rm::sim::Fx::fromInt(2));
+    CHECK(def->shield.collisionCenterElmos[1] == rm::sim::Fx::fromInt(4));
+    CHECK(def->shield.collisionCenterElmos[2] == rm::sim::Fx::fromInt(-2));
 }
 
 TEST_CASE("a blueprint with no Physics table is refused, not read as a building") {

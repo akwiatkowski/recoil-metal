@@ -2757,3 +2757,30 @@ an offline conversion step.
 Metal path, while units lacking the optional map keep their geometric normal. The extra 8 bytes are
 paid by every model vertex; no extra texture is loaded for BAR content. The prop channel-order
 question remains separate because its content contract is not established by the unit shader.
+
+---
+
+## ADR-079 — Shield geometry is an explicit sphere-or-box contract
+
+**Context.** Ordinary Forged Alliance bubbles create a spherical shield entity, while retail
+`UnitShield` creates an attached box from `CollisionCenter*` and `CollisionSize*`. Treating the
+personal shield as either absent or as `ShieldSize / 2` loses its health pool or lets it protect
+nearby units outside the owner's collision shell.
+
+**Decision.** Carry an explicit sphere-or-box shape from `Defense.Shield` through `UnitCatalog`.
+PersonalShield imports the retail box fields, with the Lua defaults of centre zero and size one,
+and converts full ogrid sizes into elmo half-extents. Area containment, blast admission, and direct
+projectile sweeps dispatch on that shape. A conservative enclosing radius is retained only for the
+spatial broadphase and retail's inside-origin admission rule. PersonalBubble and TransportShield
+remain excluded because their owner and cargo semantics are separate work.
+
+**Alternatives considered.** Using `ShieldSize` as a personal sphere was rejected because retail
+does not use it for UnitShield collision. Treating every personal shield as owner-only extra health
+was rejected because it erases the collision shape and direct-projectile ordering already supported
+by the shield entity path. A polymorphic collision hierarchy was rejected in favor of one enum and
+two compact geometry records.
+
+**Consequences.** Personal shields absorb only for points inside their attached box, and shots
+outside a face do not hit a spherical approximation. Ordinary bubble behavior is unchanged. Box
+shields currently have no separate presentation shell; the owner model remains the visible retail
+surface, while PersonalBubble and transport coverage stay explicitly unsupported.

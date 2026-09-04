@@ -576,16 +576,35 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
                 const lua::Value* value = shield->find(key);
                 return value != nullptr && value->asBoolean().value_or(false);
             };
-            // Personal and transport shields attach to one owner instead of covering a bubble.
-            if (!flag("PersonalShield") && !flag("PersonalBubble")
-                && !flag("TransportShield")) {
+            // PersonalBubble and transport behavior have separate owner/cargo rules. Retail's
+            // original UnitShield, however, is an ordinary shield entity whose coverage
+            // primitive is an attached box (`shield.lua:420-477`).
+            const bool personal = flag("PersonalShield");
+            if (!flag("PersonalBubble") && !flag("TransportShield")) {
                 def.shield.maximum =
                     sim::magFromFloat(numberOr(*shield, "ShieldMaxHealth", 0.0f));
-                def.shield.radiusElmos = sim::fxFromFloat(
-                    numberOr(*shield, "ShieldSize", 0.0f) * scmap::kElmosPerOgrid * 0.5f);
                 def.shield.verticalOffsetElmos = sim::fxFromFloat(
                     numberOr(*shield, "ShieldVerticalOffset", 0.0f)
                     * scmap::kElmosPerOgrid);
+                if (personal) {
+                    def.shield.shape = unitdef::ShieldShape::Box;
+                    for (std::size_t axis = 0; axis < 3; ++axis) {
+                        static constexpr std::string_view kSize[] = {
+                            "CollisionSizeX", "CollisionSizeY", "CollisionSizeZ"};
+                        static constexpr std::string_view kCentre[] = {
+                            "CollisionCenterX", "CollisionCenterY", "CollisionCenterZ"};
+                        def.shield.boxHalfExtentsElmos[axis] = sim::fxFromFloat(
+                            numberOr(*shield, kSize[axis], 1.0f)
+                            * scmap::kElmosPerOgrid * 0.5f);
+                        def.shield.collisionCenterElmos[axis] = sim::fxFromFloat(
+                            numberOr(*shield, kCentre[axis], 0.0f)
+                            * scmap::kElmosPerOgrid);
+                    }
+                } else {
+                    def.shield.radiusElmos = sim::fxFromFloat(
+                        numberOr(*shield, "ShieldSize", 0.0f)
+                        * scmap::kElmosPerOgrid * 0.5f);
+                }
                 def.shield.regenPerSecond = numberOr(*shield, "ShieldRegenRate", 0.0f);
                 def.shield.regenDelay = unitdef::faWaitSeconds(
                     sim::seconds(numberOr(*shield, "ShieldRegenStartTime", 0.0f)));

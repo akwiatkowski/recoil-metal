@@ -116,14 +116,18 @@ public:
     /// One ordinary bubble in fixed-point, per-tick simulation units.
     struct ShieldInfo {
         Mag maximum{};
+        unitdef::ShieldShape shape = unitdef::ShieldShape::Sphere;
         Fx radiusElmos{};
         Fx verticalOffsetElmos{};
+        std::array<Fx, 3> boxHalfExtentsElmos{};
+        std::array<Fx, 3> collisionCenterElmos{};
+        Fx boundingRadiusElmos{};
         Mag regenPerTick{};
         TickCount regenDelay = 0;
         TickCount recharge = 0;
 
         [[nodiscard]] bool exists() const noexcept {
-            return maximum > Mag{} && radiusElmos > Fx{};
+            return maximum > Mag{} && boundingRadiusElmos > Fx{};
         }
     };
 

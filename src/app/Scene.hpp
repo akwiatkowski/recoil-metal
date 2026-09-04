@@ -623,7 +623,8 @@ struct UnitScene {
                 }
             }
             const rm::sim::UnitCatalog::ShieldInfo& shield = catalog.shield(unit.type);
-            if (unit.shieldActive && shield.exists()) {
+            if (unit.shieldActive && shield.exists()
+                && shield.shape == rm::unitdef::ShieldShape::Sphere) {
                 std::array<float, 3> centre = unit.position;
                 centre[1] += rm::sim::fxToFloat(shield.verticalOffsetElmos);
                 // Same cyan as the shield HUD, with calibrated low alpha so overlapping shells

@@ -463,6 +463,67 @@ struct ProjectileTickStart {
     return inside;
 }
 
+[[nodiscard]] std::array<Fx, 3> shieldCentre(
+    const UnitCatalog::ShieldInfo& shield, const Transform& owner) noexcept {
+    std::array<Fx, 3> centre = positionOf(owner);
+    centre[0] += shield.collisionCenterElmos[0];
+    centre[1] += shield.verticalOffsetElmos + shield.collisionCenterElmos[1];
+    centre[2] += shield.collisionCenterElmos[2];
+    return centre;
+}
+
+[[nodiscard]] bool shieldContains(const UnitCatalog::ShieldInfo& shield,
+                                  std::array<Fx, 3> centre,
+                                  std::array<Fx, 3> point) noexcept {
+    if (shield.shape == unitdef::ShieldShape::Sphere) {
+        const Fx dx = point[0] - centre[0];
+        const Fx dy = point[1] - centre[1];
+        const Fx dz = point[2] - centre[2];
+        return fxSqrt(dx * dx + dy * dy + dz * dz) <= shield.radiusElmos;
+    }
+    for (std::size_t axis = 0; axis < 3; ++axis) {
+        if (point[axis] < centre[axis] - shield.boxHalfExtentsElmos[axis]
+            || point[axis] > centre[axis] + shield.boxHalfExtentsElmos[axis]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+[[nodiscard]] bool shieldIntersectsSphere(const UnitCatalog::ShieldInfo& shield,
+                                          std::array<Fx, 3> shieldAt,
+                                          std::array<Fx, 3> sphereAt,
+                                          Fx sphereRadius) noexcept {
+    if (shield.shape == unitdef::ShieldShape::Sphere) {
+        return sphereBoxOverlap(sphereAt, shieldAt, shieldAt,
+                                shield.radiusElmos + sphereRadius, true);
+    }
+    std::array<Fx, 3> minimum{};
+    std::array<Fx, 3> maximum{};
+    for (std::size_t axis = 0; axis < 3; ++axis) {
+        minimum[axis] = shieldAt[axis] - shield.boxHalfExtentsElmos[axis];
+        maximum[axis] = shieldAt[axis] + shield.boxHalfExtentsElmos[axis];
+    }
+    return sphereBoxOverlap(sphereAt, minimum, maximum, sphereRadius, true);
+}
+
+[[nodiscard]] std::optional<SweepFraction> segmentShieldEntry(
+    std::array<Fx, 3> from, std::array<Fx, 3> to,
+    const UnitCatalog::ShieldInfo& shield, std::array<Fx, 3> centre,
+    SweepFraction minimumFraction, SweepFraction maximumFraction) noexcept {
+    if (shield.shape == unitdef::ShieldShape::Sphere) {
+        return segmentSphereEntry(from, to, centre, shield.radiusElmos,
+                                  minimumFraction, maximumFraction);
+    }
+    std::array<Fx, 3> minimum{};
+    std::array<Fx, 3> maximum{};
+    for (std::size_t axis = 0; axis < 3; ++axis) {
+        minimum[axis] = centre[axis] - shield.boxHalfExtentsElmos[axis];
+        maximum[axis] = centre[axis] + shield.boxHalfExtentsElmos[axis];
+    }
+    return segmentBoxEntry(from, to, minimum, maximum, minimumFraction, maximumFraction);
+}
+
 /// First hostile body hit by this tick's extended 3D segment, or by C-168's radius-one sphere
 /// at the old position when the motion is below 0.01 elmo. Blast radius belongs to damage after
 /// impact, not the projectile's physical body.
@@ -506,16 +567,15 @@ struct ProjectileTickStart {
             continue;
         }
 
-        // An active ordinary bubble is its own swept collision primitive.  It is considered
+        // An active shield is its own swept collision primitive. It is considered
         // before the owner's body and is deliberately independent of unit target layers: the
         // native shield primitive occupies its own collision layer (`C-169`).
         if (!proximityFallback && catalog != nullptr) {
             const UnitCatalog::ShieldInfo& shield = catalog->shield(store.typeAt(slot));
             if (shield.exists() && store.health()[slot].shield.active()) {
-                std::array<Fx, 3> centre = positionOf(transforms[slot]);
-                centre[1] += shield.verticalOffsetElmos;
-                const std::optional<SweepFraction> hit = segmentSphereEntry(
-                    from, to, centre, shield.radiusElmos, minimumFraction, maximumFraction);
+                const std::array<Fx, 3> centre = shieldCentre(shield, transforms[slot]);
+                const std::optional<SweepFraction> hit = segmentShieldEntry(
+                    from, to, shield, centre, minimumFraction, maximumFraction);
                 if (hit && (!best || *hit < best->fraction)) {
                     best = SweptHit{
                         .slot = slot,
@@ -1621,7 +1681,7 @@ Mag damageTargets(std::array<Fx, 3> centre, Fx radiusElmos,
     struct BlastShield {
         UnitIndex slot;
         std::array<Fx, 3> centre;
-        Fx radius;
+        UnitCatalog::ShieldInfo geometry;
         Mag absorb;      ///< decided once from the whole blast, spent across every target
         bool covered;    ///< radius-zero compatibility: whether this dome covered the hit
     };
@@ -1648,25 +1708,23 @@ Mag damageTargets(std::array<Fx, 3> centre, Fx radiusElmos,
             if (!shield.exists() || !healths[slot].shield.active()) {
                 continue;
             }
-            std::array<Fx, 3> shieldCentre = positionOf(transforms[slot]);
-            shieldCentre[1] += shield.verticalOffsetElmos;
+            const std::array<Fx, 3> shieldAt = shieldCentre(shield, transforms[slot]);
             if (areaBlast) {
-                const Fx insideRadius = shield.radiusElmos - Fx::fromRatio(1, 10);
+                const Fx insideRadius = shield.boundingRadiusElmos - Fx::fromRatio(1, 10);
                 // A degenerate box is an exact point-distance test using the helper's widened
                 // raw squares; ordinary Fx multiplication would saturate above ~362 elmos.
                 const bool centreInside =
-                    (insideRadius == Fx{} && centre == shieldCentre)
-                    || sphereBoxOverlap(centre, shieldCentre, shieldCentre, insideRadius, true);
+                    (insideRadius == Fx{} && centre == shieldAt)
+                    || sphereBoxOverlap(centre, shieldAt, shieldAt, insideRadius, true);
                 if (centreInside
-                    || !sphereBoxOverlap(centre, shieldCentre, shieldCentre,
-                                         shield.radiusElmos + radiusElmos, true)) {
+                    || !shieldIntersectsSphere(shield, shieldAt, centre, radiusElmos)) {
                     continue;
                 }
             }
             shields.push_back(BlastShield{
                 .slot = slot,
-                .centre = shieldCentre,
-                .radius = shield.radiusElmos,
+                .centre = shieldAt,
+                .geometry = shield,
                 .absorb = std::min(healths[slot].shield.current, shieldIncoming),
                 .covered = false,
             });
@@ -1682,10 +1740,7 @@ Mag damageTargets(std::array<Fx, 3> centre, Fx radiusElmos,
     const auto absorbedOver = [&shields](std::array<Fx, 3> at) {
         Mag total{};
         for (BlastShield& bubble : shields) {
-            const Fx dx = at[0] - bubble.centre[0];
-            const Fx dy = at[1] - bubble.centre[1];
-            const Fx dz = at[2] - bubble.centre[2];
-            if (fxSqrt(dx * dx + dy * dy + dz * dz) > bubble.radius) {
+            if (!shieldContains(bubble.geometry, bubble.centre, at)) {
                 continue;
             }
             bubble.covered = true;

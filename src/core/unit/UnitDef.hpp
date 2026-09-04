@@ -58,18 +58,31 @@ enum class MotionType : std::uint8_t {
 /// approximated.
 [[nodiscard]] bool travelsOnGround(MotionType motion) noexcept;
 
-/// One ordinary FA bubble shield as authored by `Defense.Shield`.
-/// `ShieldSize` is a diameter: Shield.lua creates its sphere at `Size / 2` (`:816-821`).
+enum class ShieldShape {
+    Sphere,
+    Box,
+};
+
+/// One FA shield as authored by `Defense.Shield`. Ordinary bubbles use `ShieldSize` as a
+/// diameter; retail `UnitShield` personal shields use an axis-aligned collision box instead.
 struct ShieldSpec {
     sim::Mag maximum{};
+    ShieldShape shape = ShieldShape::Sphere;
     sim::Fx radiusElmos{};
     sim::Fx verticalOffsetElmos{};
+    std::array<sim::Fx, 3> boxHalfExtentsElmos{};
+    std::array<sim::Fx, 3> collisionCenterElmos{};
     float regenPerSecond = 0.0f;
     sim::Seconds regenDelay{};
     sim::Seconds rechargeDelay{};
 
     [[nodiscard]] bool exists() const noexcept {
-        return maximum > sim::Mag{} && radiusElmos > sim::Fx{};
+        const bool geometry = shape == ShieldShape::Sphere
+                                ? radiusElmos > sim::Fx{}
+                                : boxHalfExtentsElmos[0] > sim::Fx{}
+                                      && boxHalfExtentsElmos[1] > sim::Fx{}
+                                      && boxHalfExtentsElmos[2] > sim::Fx{};
+        return maximum > sim::Mag{} && geometry;
     }
 };
 

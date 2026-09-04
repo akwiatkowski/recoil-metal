@@ -116,12 +116,23 @@ UnitTypeIndex UnitCatalog::add(const unitdef::UnitDef* def, TickRate rate) {
     ShieldInfo shield{};
     if (def != nullptr && def->shield.exists()) {
         shield.maximum = def->shield.maximum;
+        shield.shape = def->shield.shape;
         shield.radiusElmos = def->shield.radiusElmos;
         shield.verticalOffsetElmos = def->shield.verticalOffsetElmos;
+        shield.boxHalfExtentsElmos = def->shield.boxHalfExtentsElmos;
+        shield.collisionCenterElmos = def->shield.collisionCenterElmos;
+        shield.boundingRadiusElmos = shield.shape == unitdef::ShieldShape::Sphere
+                                       ? shield.radiusElmos
+                                       : fxSqrt(shield.boxHalfExtentsElmos[0]
+                                                    * shield.boxHalfExtentsElmos[0]
+                                                + shield.boxHalfExtentsElmos[1]
+                                                    * shield.boxHalfExtentsElmos[1]
+                                                + shield.boxHalfExtentsElmos[2]
+                                                    * shield.boxHalfExtentsElmos[2]);
         shield.regenPerTick = rate.magPerTick(def->shield.regenPerSecond);
         shield.regenDelay = rate.ticks(def->shield.regenDelay);
         shield.recharge = rate.ticks(def->shield.rechargeDelay);
-        largestShieldRadius_ = std::max(largestShieldRadius_, shield.radiusElmos);
+        largestShieldRadius_ = std::max(largestShieldRadius_, shield.boundingRadiusElmos);
     }
     shields_.push_back(shield);
 

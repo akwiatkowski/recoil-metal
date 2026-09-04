@@ -31,6 +31,15 @@ namespace {
     return def;
 }
 
+[[nodiscard]] rm::unitdef::UnitDef personalShieldDef() {
+    rm::unitdef::UnitDef def = plainDef("personal_shield");
+    def.shield.maximum = rm::sim::Mag::fromInt(100);
+    def.shield.shape = rm::unitdef::ShieldShape::Box;
+    def.shield.boxHalfExtentsElmos = {
+        rm::sim::Fx::fromInt(4), rm::sim::Fx::fromInt(4), rm::sim::Fx::fromInt(4)};
+    return def;
+}
+
 [[nodiscard]] const rm::sim::Event* eventOf(const rm::sim::EventQueue& events,
                                              rm::sim::EventKind kind) {
     for (const rm::sim::Event& event : events.all()) {
@@ -151,6 +160,25 @@ TEST_CASE("overlapping bubbles both absorb, and their protection stacks") {
     CHECK(rm::test::asFloat(roster.health(sheltered).current) == Approx(100.0f));
     CHECK(roster.health(first).shield.current == rm::sim::Mag{});
     CHECK(roster.health(second).shield.current == rm::sim::Mag{});
+}
+
+TEST_CASE("a personal shield contains by its box instead of its nominal sphere") {
+    rm::test::Roster roster;
+    const rm::UnitTypeIndex shieldType = roster.addType(personalShieldDef());
+    const rm::UnitTypeIndex targetType = roster.addType(plainDef());
+    const rm::sim::UnitId owner = roster.add(shieldType, 0.0f, 0.0f, 1, 100.0f);
+    const rm::sim::UnitId neighbour = roster.add(targetType, 6.0f, 0.0f, 1, 100.0f);
+    const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(2);
+
+    // The blast intersects the 8x8x8 personal-shield box from outside. The owner's
+    // position is contained; the neighbour is only two elmos beyond its X face.
+    (void)rm::sim::damageArea(rm::test::at(0, 0, 20), rm::sim::Fx::fromInt(25),
+                              rm::sim::Mag::fromInt(40), 0, roster.store, armies, {}, nullptr,
+                              &roster.catalog);
+
+    CHECK(roster.health(owner).current == rm::sim::Mag::fromInt(100));
+    CHECK(roster.health(neighbour).current == rm::sim::Mag::fromInt(60));
+    CHECK(roster.health(owner).shield.current == rm::sim::Mag::fromInt(60));
 }
 
 TEST_CASE("an area blast that starts inside a bubble bypasses it") {
@@ -468,6 +496,37 @@ TEST_CASE("a direct projectile sweep strikes a bubble before its owner's hull") 
     CHECK(rm::test::asFloat(roster.health(generator).current) == Approx(100.0f));
     REQUIRE(events.count(rm::sim::EventKind::ProjectileImpact) == 1);
     CHECK(events.all().front().impactType == rm::sim::ImpactType::Shield);
+}
+
+TEST_CASE("a projectile outside a personal shield box misses its bounding sphere") {
+    rm::test::Roster roster;
+    const rm::UnitTypeIndex shieldType = roster.addType(personalShieldDef());
+    const rm::sim::UnitId owner = roster.add(shieldType, 0.0f, 0.0f, 1, 100.0f);
+    const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(2);
+
+    rm::sim::Projectile shot;
+    // x=5 lies outside both the box's x=4 face and the owner's radius-4 hull, but
+    // inside the box's radius-6.9 spherical broadphase bound.
+    shot.position = rm::test::at(5, 1, -10);
+    shot.velocity = rm::test::at(0, 0, 20);
+    shot.damage = rm::unitdef::flatDamage(rm::sim::Mag::fromInt(40));
+    shot.targetLayers = rm::unitdef::TargetLayerMask::Surface;
+    shot.firedByArmy = 0;
+    shot.ticksRemaining = 2;
+    std::vector<rm::sim::Projectile> shots{shot};
+
+    rm::HeightField field;
+    field.squaresX = 100;
+    field.squaresZ = 100;
+    field.baseHeight = -100.0f;
+    field.heightScale = 1.0f;
+    field.raw.assign(field.sampleCount(), std::uint16_t{0});
+    rm::sim::advanceProjectiles(shots, roster.store, armies, rm::sim::Terrain{field},
+                                roster.rate, nullptr, &roster.catalog);
+
+    REQUIRE(shots.size() == 1);
+    CHECK(shots.front().pendingImpact == rm::sim::ImpactType::Invalid);
+    CHECK(roster.health(owner).shield.current == rm::sim::Mag::fromInt(100));
 }
 
 TEST_CASE("a corner impact outside the bubble does not admit it for a covered target") {

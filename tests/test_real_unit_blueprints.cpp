@@ -85,7 +85,7 @@ TEST_CASE("every retail unit blueprint parses into a definition", "[corpus]") {
     int byConvention = 0;
     int resolvedByConvention = 0;
     int statesZeroScale = 0;
-    int ordinaryShields = 0;
+    int shieldSpecs = 0;
     float fastest = 0.0f;
     float largestRadius = 0.0f;
 
@@ -101,7 +101,7 @@ TEST_CASE("every retail unit blueprint parses into a definition", "[corpus]") {
             ++mobile;
         }
         if (def->shield.exists()) {
-            ++ordinaryShields;
+            ++shieldSpecs;
         }
         if (def->meshToElmos == 0.0f) {
             ++statesZeroScale;
@@ -189,7 +189,8 @@ TEST_CASE("every retail unit blueprint parses into a definition", "[corpus]") {
 
     // Two state a scale of zero, read as stated rather than corrected to one.
     CHECK(statesZeroScale == 2);
-    CHECK(ordinaryShields == 19);
+    // Nineteen ordinary bubbles plus the two base blueprints with a PersonalShield box.
+    CHECK(shieldSpecs == 21);
 
     // Sanity on the extremes, in the engine's units. The fastest thing in the
     // game cruises at 30 ogrids/s (the old 20.5 maximum was Physics.MaxSpeed, which is an
