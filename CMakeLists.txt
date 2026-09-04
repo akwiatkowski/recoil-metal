@@ -162,6 +162,7 @@ add_library(rm_core STATIC
     src/core/scene/Selection.cpp
     src/core/scene/GroundDecals.cpp
     src/core/scene/Particles.cpp
+    src/core/scene/BuildEffects.cpp
     src/core/scene/CombatEffects.cpp
     src/core/scene/ProjectileFx.cpp
     src/core/sim/Army.cpp
@@ -348,6 +349,7 @@ if(BUILD_TESTING)
         tests/test_skirmish.cpp
         tests/test_ground_decals.cpp
         tests/test_particles.cpp
+        tests/test_build_effects.cpp
         tests/test_prop_culling.cpp
         tests/test_pathfinding.cpp
         tests/test_unit_blueprint.cpp

@@ -283,6 +283,11 @@ struct Construction {
     /// Set by `advanceConstruction`, cleared by `tickEconomy` once it has charged for it.
     bool workedThisTick = false;
 
+    /// Presentation copy of the work stamp, retained through the completed tick so a renderer
+    /// can distinguish an active beam from a stalled site. Cleared at the next `tickSkirmish`
+    /// boundary; transient like `workedThisTick`, so it is neither saved nor hashed.
+    bool advancedLastTick = false;
+
     /// The rate the work actually advances at: the founder's plus everyone helping.
     [[nodiscard]] Mag effectiveBuildPerTick() const noexcept {
         return buildPerTick + assistPerTick;
@@ -383,8 +388,8 @@ struct MissileRedirect {
 /// `maxHealth × delta` — because a construction here is a record and not a partially built
 /// entity with health of its own.
 ///
-/// Stamps `workedThisTick` so the economy pass at the end of the beat still charges for a
-/// build that finished at the start of it.
+/// Stamps `workedThisTick` for billing and `advancedLastTick` for presentation, including a
+/// build that finished at the start of the beat.
 void advanceConstruction(Construction& work) noexcept;
 
 /// Advances one army's economy and everything it is building by one tick.

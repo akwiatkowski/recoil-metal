@@ -311,6 +311,15 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
                           const Terrain& terrain, TickRate rate, TickIndex tickIndex) {
     TickReport report;
 
+    // This presentation-facing stamp survives the completed tick so the frame can tell a
+    // working beam from a stalled site. Clear it at the next tick boundary; an active build
+    // stamps it again below when its command actually advances the construction.
+    if (match.building != nullptr) {
+        for (Construction& work : *match.building) {
+            work.advancedLastTick = false;
+        }
+    }
+
     // 0a. WHO IS HELPING, read from where everyone stood at the end of the last tick. It
     //     belongs with the dispatch stage below and immediately before it, because that is
     //     when retail's assisting builders do their work: each keeps its own build task in the

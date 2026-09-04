@@ -212,8 +212,9 @@ void gatherConstructions(UnitScene& scene, const rm::vfs::Vfs& content,
                          const rm::HeightField& field,
                          std::vector<rm::Renderer::ConstructionDraw>& out);
 
-/// The ground and air effects that go with them: a glowing pad under each site, and a stream
-/// of motes from every builder working on one.
+/// The ground and air effects that go with them: a glowing pad under each site, and construction
+/// beams from every builder that worked on one this tick. UEF uses its authored build bone and
+/// paired descending cube-edge sweep; other factions retain the centre stream for now.
 ///
 /// SEPARATE FROM THE MODEL PASS because they ride existing machinery — the pad is a ground
 /// decal like a selection ring, the stream is particles like dust — and adding a third

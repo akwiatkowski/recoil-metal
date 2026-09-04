@@ -2,6 +2,8 @@
 
 #include "app/SceneBuild.hpp"  // ensureDrawableType — a construction is the first time a
                                // blueprint needs to be DRAWN rather than merely simulated
+#include "core/model/Pose.hpp"
+#include "core/scene/BuildEffects.hpp"
 #include "core/ui/IconAtlas.hpp"
 #include "core/unit/Role.hpp"
 
@@ -29,6 +31,27 @@ namespace {
         return {{1.00f, 0.82f, 0.36f, 1.0f}};  // the gold its rings contract in
     }
     return {{0.42f, 0.68f, 1.00f, 1.0f}};
+}
+
+void appendBuildBeam(std::vector<rm::Particle>& particles, std::array<float, 3> from,
+                     std::array<float, 3> to, const std::array<float, 4>& colour) {
+    constexpr int kMotesPerBeam = 7;
+    for (int mote = 0; mote <= kMotesPerBeam; ++mote) {
+        const float t = static_cast<float>(mote) / static_cast<float>(kMotesPerBeam);
+        particles.push_back(rm::Particle{
+            .origin = {{from[0] + (to[0] - from[0]) * t,
+                        from[1] + (to[1] - from[1]) * t,
+                        from[2] + (to[2] - from[2]) * t}},
+            // These motes are rebuilt every frame. Age zero is also zero opacity during the
+            // particle shader's fade-in, so start at its visible crest.
+            .age = 0.02f,
+            .velocity = {{0.0f, 0.0f, 0.0f}},
+            .lifetime = 0.12f,
+            .colour = {{colour[0] * 0.9f, colour[1] * 0.9f, colour[2] * 0.9f, 0.0f}},
+            .size = 1.6f,
+            .growth = 0.0f,
+        });
+    }
 }
 
 /// A handle eligible to own the build panel, or null.
@@ -449,13 +472,9 @@ void appendConstructionEffects(std::vector<rm::DecalVertex>& decals,
             {{energy[0], energy[1], energy[2], 0.30f + 0.25f * glow}},
             /*thicknessElmos=*/2.5f);
 
-        // THE STREAM, from whoever is working. Particles rather than a beam pipeline: a
-        // build stream IS a line of motes, which is what the particle pass already draws, and
-        // a pipeline for one effect is a pipeline to maintain for one effect.
-        //
-        // Emitted along the line each frame with no velocity, so they hang where they are put
-        // and the line reads as continuous rather than as a spray.
-        if (!scene.store.alive(work.builder)) {
+        // A site can remain allocated while its economy is stalled. The beam marks work that
+        // actually advanced during the completed sim tick, not merely an existing command.
+        if (!work.advancedLastTick || !scene.store.alive(work.builder)) {
             continue;
         }
         const rm::sim::Transform& from = scene.store.transforms()[work.builder.index];
@@ -464,24 +483,69 @@ void appendConstructionEffects(std::vector<rm::DecalVertex>& decals,
         const float fz = rm::sim::fxToFloat(from.z);
         const float toY = field.heightAtWorld(x, z) + radius * 0.5f;
 
-        constexpr int kMotesPerStream = 7;
-        for (int mote = 0; mote < kMotesPerStream; ++mote) {
-            // Marched from the builder to the site, with the phase running so the motes
-            // travel rather than sitting in a static dotted line.
-            const float step = static_cast<float>(mote) / static_cast<float>(kMotesPerStream);
-            const float t = std::fmod(step + seconds * 0.9f, 1.0f);
-            particles.push_back(rm::Particle{
-                .origin = {{fx + (x - fx) * t, fy + 4.0f + (toY - fy - 4.0f) * t,
-                            fz + (z - fz) * t}},
-                .age = 0.0f,
-                .velocity = {{0.0f, 0.0f, 0.0f}},
-                .lifetime = 0.12f,
-                // Premultiplied and alpha zero: additive, so the stream adds light and
-                // obscures nothing behind it. See `Particle::colour`.
-                .colour = {{energy[0] * 0.9f, energy[1] * 0.9f, energy[2] * 0.9f, 0.0f}},
-                .size = 1.6f,
-                .growth = 0.0f,
-            });
+        bool emittedUefPair = false;
+        const rm::unitdef::UnitDef* builderDef =
+            scene.catalog.def(scene.store.typeAt(work.builder.index));
+        if (faction == rm::sim::Faction::Uef && def != nullptr && builderDef != nullptr
+            && def->meshExtentsXElmos > 0.0f && def->meshExtentsZElmos > 0.0f
+            && !builderDef->buildEffectBones.empty()
+            && work.builder.index < scene.drawIndexOf.size()) {
+            const rm::SelectionEntry where = scene.drawIndexOf[work.builder.index];
+            if (where.batch < scene.batches.size() && where.batch < scene.drawScratch.size()
+                && where.batch < scene.drawSlotOf.size()
+                && where.instance < scene.drawScratch[where.batch].size()
+                && where.instance < scene.drawSlotOf[where.batch].size()
+                && scene.drawSlotOf[where.batch][where.instance] == work.builder.index) {
+                const rm::UnitBatch& batch = scene.batches[where.batch];
+                if (batch.model != nullptr) {
+                    const rm::UnitInstance& drawn = scene.drawScratch[where.batch][where.instance];
+                    const rm::BuildBeamEnds ends = rm::uefBuildBeamEnds(
+                        {{x, field.heightAtWorld(x, z), z}}, drawn.position,
+                        def->meshExtentsXElmos, def->meshHeightElmos,
+                        def->meshExtentsZElmos, progress, seconds);
+                    const rm::InstancePlacement placement{
+                        .position = drawn.position,
+                        .rotationX = drawn.rotationX,
+                        .rotationY = drawn.rotationY,
+                        .rotationZ = drawn.rotationZ,
+                        .scale = drawn.scale,
+                    };
+                    for (const std::string& name : builderDef->buildEffectBones) {
+                        const auto bone = std::find_if(
+                            batch.model->bones.begin(), batch.model->bones.end(),
+                            [&name](const rm::ModelBone& candidate) {
+                                return candidate.name == name;
+                            });
+                        if (bone == batch.model->bones.end()) {
+                            continue;
+                        }
+                        rm::BoneTransform rest{};
+                        rest.translation = bone->globalOffset;
+                        const std::array<float, 3> origin =
+                            rm::boneWorldPosition(rest, placement);
+                        appendBuildBeam(particles, origin, ends.first, energy);
+                        appendBuildBeam(particles, origin, ends.second, energy);
+                        emittedUefPair = true;
+                    }
+                    if (emittedUefPair) {
+                        for (const std::array<float, 3>& endpoint : {ends.first, ends.second}) {
+                            particles.push_back(rm::Particle{
+                                .origin = endpoint,
+                                .age = 0.02f,
+                                .velocity = {{0.0f, 0.0f, 0.0f}},
+                                .lifetime = 0.12f,
+                                .colour = {{energy[0], energy[1], energy[2], 0.0f}},
+                                .size = 4.0f,
+                                .growth = 0.0f,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        if (!emittedUefPair) {
+            appendBuildBeam(particles, {{fx, fy + 4.0f, fz}}, {{x, toY, z}}, energy);
         }
     }
 }

@@ -339,6 +339,21 @@ TEST_CASE("a build with no rate never progresses and costs nothing") {
     CHECK_FALSE(building.front().finished());
 }
 
+TEST_CASE("a fully stalled build is billed but does not advertise visible progress") {
+    Construction work{
+        .totalBuildTime = rm::test::mag(100.0f),
+        .buildTimeRemaining = rm::test::mag(50.0f),
+        .buildPerTick = rm::test::mag(10.0f),
+        .fundedLastTick = rm::sim::Fx{},
+    };
+
+    rm::sim::advanceConstruction(work);
+
+    CHECK(work.workedThisTick);  // the economy request still receives its heartbeat
+    CHECK_FALSE(work.advancedLastTick);
+    CHECK(rm::test::asFloat(work.buildTimeRemaining) == Approx(50.0f));
+}
+
 TEST_CASE("finished work is taken out and handed back") {
     std::vector<Construction> building{massExtractor(), massExtractor()};
     building[0].buildTimeRemaining = {};

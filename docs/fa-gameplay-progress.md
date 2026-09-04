@@ -13,7 +13,8 @@ does not replace its claims, addresses, counterevidence, or confirmation gate.
 baseline (`docs/hud-baseline.md`, `tools/hud_baseline.sh`, `--backing`, `--bench-hud`,
 `--bench-size`) — after the `WP-22` controller read and six follow-ups (parked flyers recharge, the look-ahead max pyramid, attached children take their
 carrier's tilt, mesh extents and build-effect bones parsed with a bone-to-world helper, the
-factory production panel in the deck's command rectangle, README counts at 1357) —
+factory production panel in the deck's command rectangle, UEF construction beams from authored
+builder bones to descending build-cube edges, README counts at 1360) —
 `ComputeAirControl`, `CalcWingedLift`, the damping factor and the terrain look-ahead read and
 implemented (`C-244`–`C-246`): authored `KMove`/`KLift` gains with their damping terms, the
 vertical lift-off to half elevation that replaces the invented runway roll, the pyramid look-ahead
@@ -464,6 +465,12 @@ and refresh FA-UI.
 ```
 
 ### FA-PRESENT - Animation, Effects, And Audio
+
+**Current slice:** UEF construction now emits its paired blue-white streams from every authored
+`General.BuildBones.BuildEffectBones` model bone to the nearest two top corners of the target's
+`Physics.MeshExtents` cube. The endpoints descend with progress and exchange places every 0.6
+seconds, matching `EffectUtilities.lua:227-303`; stalled work emits nothing. Other factions keep
+the existing centre stream until their authored construction styles land.
 
 **Largest gap:** generic rendering and mixing exist, but script-driven manipulators/effects and
 blueprint/XSB-authored sound behavior do not run end to end.

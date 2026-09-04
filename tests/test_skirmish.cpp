@@ -443,10 +443,12 @@ TEST_CASE("a finished construction is reported but left in the list") {
     CHECK(report.finished[0].armyIndex == 0);
     CHECK(building.size() == 1);      // still there
     CHECK(building[0].finished());
+    CHECK(building[0].advancedLastTick);  // presentation can draw the completing beam
 
     // And reported once: a second tick must not spawn the same building again.
     report = rm::sim::tickSkirmish(roster.store, roster.catalog, match, rm::sim::Terrain{field});
     CHECK(report.finished.empty());
+    CHECK_FALSE(building[0].advancedLastTick);
 }
 
 TEST_CASE("income is what is standing, and a destroyed producer stops paying") {

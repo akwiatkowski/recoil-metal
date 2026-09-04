@@ -81,11 +81,13 @@ void advanceConstruction(Construction& work) noexcept {
     // which runs first (`C-142`) — so a builder always advances on the previous beat's
     // funding. Using the fraction the economy is about to compute would be a one-tick head
     // start the engine does not give, and it is the difference `C-100` measured.
-    work.buildTimeRemaining -= work.effectiveBuildPerTick() * work.fundedLastTick;
+    const Mag progress = work.effectiveBuildPerTick() * work.fundedLastTick;
+    work.buildTimeRemaining -= progress;
     work.buildTimeRemaining = std::max(Mag{}, work.buildTimeRemaining);
     // Stamped whether or not any progress was possible — retail's `Materialize(0.0f)`
     // heartbeat writes `Entity+0x520` on a beat that moves nothing (`C-187`, `C-098`).
     work.workedThisTick = true;
+    work.advancedLastTick = progress > Mag{};
 }
 
 void tickEconomy(Economy& economy, std::span<Construction> building,

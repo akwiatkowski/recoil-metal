@@ -166,7 +166,7 @@ struct UnitDef {
     /// would leave a factory's roof standing complete before the work was a fifth done.
     float meshHeightElmos = 0.0f;
 
-    /// The mesh's footprint half-extents in elmos (`Physics.MeshExtentsX/Z`), the same
+    /// The mesh's full extents in elmos (`Physics.MeshExtentsX/Z`), the same
     /// question as `meshHeightElmos` asked sideways: where the MODEL ends, which is where a
     /// build beam or a construction plane meets it, as opposed to where the collision box
     /// does. Zero when unauthored.
