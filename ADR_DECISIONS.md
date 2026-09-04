@@ -2576,3 +2576,38 @@ bone upload. Blueprint limits and slew rates are honored, numeric tool reference
 authored build-effect bone when appropriate, and simulation hashes remain unchanged. The Metal
 uniform uses explicitly packed padding, guarded by matching CPU layout assertions. Build-open
 animation sequencing and alternate `BuildBonesAlt1` rigs remain explicit follow-up work.
+
+---
+
+## ADR-073 — Script commands have native scheduling and an injected Lua host
+
+**Context.** Retail's `CUnitScriptTask` is neither an ordinary native command nor a free-running
+Lua coroutine. `IssueScript` creates a serializable native command task, loads a named task module,
+calls `OnCreate`, drives `TaskTick` through the native task-status scheduler, and calls `OnDestroy`.
+The task's Lua object and command link survive serialization. Recoil Metal already has an app-side
+Lua VM for opponent decisions, but making the deterministic sim depend on that AI adapter would
+combine two unrelated sandboxes and leave cancellation cleanup outside queue ownership.
+
+**Decision.** Add a semantic `Script` command whose shared payload carries a bounded task name and
+opaque command bytes. Each queue entry owns bounded opaque execution bytes plus creation,
+suspension, sleep, and AI-result state. Command dispatch implements the recovered status contract:
+zero repeats in the same beat, positive values wait that many beats, `-4` resumes at the end of the
+beat, `-2` suspends, `-1` completes, and `-3` aborts the task thread. An injected
+`ScriptTaskHost` implements `OnCreate`, `TaskTick`, and `OnDestroy`; it owns interpreter behavior
+but cannot retain pointers into movable queue storage. The queue retains the transient host pointer
+so every removal path—including replacement, cancellation, and unit retirement—destroys a created
+task exactly once. SaveState v12, semantic command-log v2, and the state hash preserve the new
+identity and execution state. Restored queues bind a host before resuming.
+
+**Alternatives considered.** Reusing the FAF opponent VM was rejected because it is an app-side AI
+sandbox, not unit-script state. Encoding arbitrary Lua tables in the sim was rejected because table
+semantics belong to the adapter and would turn a narrow seam into a second interpreter. A registry
+of numeric task IDs was rejected because load-order IDs are not portable across replay or mods.
+Skipping `OnDestroy` on out-of-band queue edits was rejected because retail cleanup is part of the
+task contract and replacement is the common failure path.
+
+**Consequences.** Native scheduling, replay, save/load, hashing, and cleanup can be tested with a
+small host double before gameplay Lua exists. A later adapter can load
+`/lua/sim/tasks/<TaskName>.lua` with the retail fallback and serialize its own object into the opaque
+bytes without changing core command machinery. There is deliberately no production Lua adapter or
+EnhanceTask implementation in this slice; those remain `WP-07` and `WP-34` work.

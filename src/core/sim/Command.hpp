@@ -24,6 +24,7 @@ namespace rm::sim {
 class UnitStore;
 class FeatureStore;
 class Intel;
+class ScriptTaskHost;
 struct PlayableRect;
 
 /// When an input is applied relative to one simulation tick.
@@ -108,6 +109,9 @@ enum class CommandKind : std::uint8_t {
     /// Restore a damaged allied unit while it remains in build reach. Unlike Assist, this is a
     /// finite repair task and does not contribute to construction.
     Repair = 10,
+    /// Run a named Lua task through the native command scheduler. Core simulation owns the
+    /// lifecycle and opaque serializable bytes; an injected ScriptTaskHost owns Lua itself.
+    Script = 11,
 };
 
 /// One order, from one player, on one tick.
@@ -177,6 +181,8 @@ struct CommandIssue {
     UnitId target{};
     UnitTypeIndex buildType = 0;
     std::uint32_t count = 1;
+    std::string scriptTask;
+    std::vector<std::uint8_t> scriptData;
 };
 
 /// Transport-only command intake. It is deliberately absent from the state hash.
@@ -220,7 +226,12 @@ struct SharedCommand {
     CommandSerial creationSerial = 0;
     std::uint32_t originalCount = 1;
     std::uint32_t remainingCount = 1;
+    std::string scriptTask;
+    std::vector<std::uint8_t> scriptData;
 };
+
+inline constexpr std::size_t kMaxScriptTaskNameBytes = 256;
+inline constexpr std::size_t kMaxScriptTaskDataBytes = 1024 * 1024;
 
 /// Which members of a semantic issue were accepted, in canonical unit order.
 struct ApplyCommandResult {
@@ -301,7 +312,8 @@ using CommandGridForUnit = std::function<const PassabilityGrid*(UnitId)>;
                                   std::vector<Construction>* building = nullptr,
                                    EventQueue* events = nullptr,
                                    const FeatureStore* features = nullptr,
-                                   PathService* pathService = nullptr);
+                                   PathService* pathService = nullptr,
+                                   ScriptTaskHost* scriptTasks = nullptr);
 
 /// Applies one semantic issue to a canonicalized unit set.
 ///
@@ -313,7 +325,8 @@ using CommandGridForUnit = std::function<const PassabilityGrid*(UnitId)>;
     std::span<const Player> players, std::span<const Army> armies, const Terrain& terrain,
     const CommandGridForUnit& gridForUnit, TickRate rate,
     std::vector<Construction>* building = nullptr, EventQueue* events = nullptr,
-    const FeatureStore* features = nullptr, PathService* pathService = nullptr);
+    const FeatureStore* features = nullptr, PathService* pathService = nullptr,
+    ScriptTaskHost* scriptTasks = nullptr);
 
 /// Publishes a finished asynchronous plain-move route through the command authority.
 ///
@@ -360,7 +373,8 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
                               PathService* pathService = nullptr,
                               std::span<const Army> armies = {},
                               const Intel* intel = nullptr,
-                              const PlayableRect* playableRect = nullptr);
+                              const PlayableRect* playableRect = nullptr,
+                              ScriptTaskHost* scriptTasks = nullptr);
 
 /// Updates attack-move and patrol combat after movement and intel. These orders retain their
 /// waypoint while `target` temporarily names the visible hostile that interrupted the route.

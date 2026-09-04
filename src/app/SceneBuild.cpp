@@ -885,7 +885,8 @@ std::vector<DispatchedCommand> dispatchCommands(UnitScene& scene,
                                                    PassabilitySet& passability,
                                                    rm::TickIndex tick,
                                                    rm::sim::CommandPhase phase,
-                                                   rm::sim::PathService* pathService) {
+                                                   rm::sim::PathService* pathService,
+                                                   rm::sim::ScriptTaskHost* scriptTasks) {
     std::vector<DispatchedCommand> dispatched;
     std::vector<rm::sim::CommandIssue> due = scene.commandInput.take(tick, phase);
     dispatched.reserve(due.size());
@@ -904,7 +905,8 @@ std::vector<DispatchedCommand> dispatchCommands(UnitScene& scene,
         };
         rm::sim::ApplyCommandResult result = rm::sim::applyCommand(
             issue, scene.store, scene.catalog, scene.players, scene.armies, terrain, gridForUnit,
-            gAppTickRate, &scene.building, &scene.events, &scene.features, pathService);
+            gAppTickRate, &scene.building, &scene.events, &scene.features, pathService,
+            scriptTasks);
         issue.units = result.accepted;
         if (!scene.commands.record(issue)) {
             throw std::logic_error{"command dispatcher produced an invalid semantic log order"};

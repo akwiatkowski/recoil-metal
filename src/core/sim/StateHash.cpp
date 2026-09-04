@@ -4,6 +4,8 @@
 #include <bit>
 #include <cstdint>
 #include <map>
+#include <span>
+#include <string_view>
 
 namespace rm::sim {
 namespace {
@@ -48,6 +50,20 @@ void feed(StateHash& h, std::size_t value) noexcept {
 }
 
 void feed(StateHash& h, bool value) noexcept { feed(h, value ? 1ULL : 0ULL); }
+
+void feedBytes(StateHash& h, std::span<const std::uint8_t> bytes) noexcept {
+    feed(h, bytes.size());
+    for (const std::uint8_t byte : bytes) {
+        feed(h, static_cast<std::uint64_t>(byte));
+    }
+}
+
+void feedText(StateHash& h, std::string_view text) noexcept {
+    feed(h, text.size());
+    for (const char character : text) {
+        feed(h, static_cast<std::uint64_t>(static_cast<unsigned char>(character)));
+    }
+}
 
 /// Fixed-point values are fed as their RAW INTEGERS, which is the whole point of having them:
 /// there is no bit pattern to normalise and no tolerance to worry about, because two runs that
@@ -210,6 +226,10 @@ void feedSharedCommand(StateHash& h, const SharedCommand& command) noexcept {
     }
     feed(h, static_cast<std::uint64_t>(command.originalCount));
     feed(h, static_cast<std::uint64_t>(command.remainingCount));
+    if (command.kind == CommandKind::Script) {
+        feedText(h, command.scriptTask);
+        feedBytes(h, command.scriptData);
+    }
 }
 
 /// Shared command intent, exactly once per deterministic ID rather than once per queue owner.
@@ -285,6 +305,14 @@ void feedOrders(StateHash& h, const CommandQueue& orders) noexcept {
             feed(h, (*entry.patrolOrigin())[0]);
             feed(h, (*entry.patrolOrigin())[1]);
             feed(h, entry.returningToPatrolOrigin());
+        }
+        if (command.kind == CommandKind::Script) {
+            const ScriptTaskState& state = entry.scriptState();
+            feed(h, state.created);
+            feed(h, state.suspended);
+            feed(h, static_cast<std::uint64_t>(state.sleepBeats));
+            feed(h, state.aiResult);
+            feedBytes(h, state.opaque);
         }
     }
 }

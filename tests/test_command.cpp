@@ -803,7 +803,7 @@ TEST_CASE("the semantic reader rejects legacy, malformed, and truncated logs") {
     CHECK_FALSE(rm::sim::readCommandLog(path.string()).has_value());
     {
         std::ofstream out{path, std::ios::trunc};
-        out << "recoil-metal semantic command log\nversion 2\nissue-count 0\n";
+        out << "recoil-metal semantic command log\nversion 3\nissue-count 0\n";
     }
     CHECK_FALSE(rm::sim::readCommandLog(path.string()).has_value());
     {

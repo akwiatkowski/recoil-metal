@@ -285,11 +285,12 @@ TEST_CASE("historic attachment saves derive offsets from their transforms", "[sa
     std::vector<std::byte> v7 = SaveState::encode(state);
     constexpr std::size_t kSlots = 2;
     // v8 appends allocator and queue state, v9 the silo-ammo section, v10 the
-    // redirector section, and v11 the per-motion air section (a count word plus one
+    // redirector section, v11 the per-motion air section (a count word plus one
     // fixed record per motion slot — empty vectors still write their counts, which is
     // what makes these trailers computable without parsing). This fixture starts from
     // the final published v7 shape, so the historical-layout edits below must remove
-    // all four later trailers first.
+    // all four later trailers first. V12 extends command records in place, so this empty-queue
+    // fixture adds no bytes for it.
     constexpr std::size_t kV8CommandStateBytes = sizeof(rm::CommandSerial)
                                                   + std::size_t{rm::kInvalidCommandSource}
                                                         * sizeof(std::uint32_t)

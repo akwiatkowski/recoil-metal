@@ -46,6 +46,10 @@ template <typename Order>
     case CommandKind::Assist:
     case CommandKind::Repair:
         return a.target == b.target;
+    case CommandKind::Script:
+        // Script command data is opaque. Issuing it twice means two invocations, not a
+        // shift-click cancellation gesture whose equality the core could safely infer.
+        return false;
     }
     return false;
 }
@@ -86,7 +90,13 @@ void CommandQueue::eraseAt(std::size_t index, bool abortHead) {
     if (index >= queue_.size()) {
         return;
     }
-    const QueuedCommand removed = queue_[index];
+    QueuedCommand& removing = queue_[index];
+    if (removing.kind() == CommandKind::Script && removing.scriptState().created
+        && scriptTasks_ != nullptr) {
+        scriptTasks_->onDestroy(removing.unit(), removing.payload().scriptTask,
+                                removing.payload().scriptData, removing.scriptState());
+    }
+    const QueuedCommand removed = removing;
     if (abortHead && index == 0) {
         notify(CommandQueueStatus::Aborted, &removed);
         activeSerial_.reset();
@@ -160,6 +170,14 @@ CommandQueue::Result CommandQueue::give(QueuedCommand command, bool queued) {
 const QueuedCommand* CommandQueue::finish() {
     if (!queue_.empty()) {
         eraseAt(0, false);
+    }
+    activeSerial_.reset();
+    return current();
+}
+
+const QueuedCommand* CommandQueue::abort() {
+    if (!queue_.empty()) {
+        eraseAt(0, true);
     }
     activeSerial_.reset();
     return current();

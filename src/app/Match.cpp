@@ -808,7 +808,7 @@ rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) 
                                    const std::vector<std::vector<rm::sim::UnitId>>& expected) {
         const std::vector<DispatchedCommand> dispatched = dispatchCommands(
             scene, runner.field, runner.passability, static_cast<rm::TickIndex>(tickIndex), phase,
-            &runner.pathService);
+            &runner.pathService, runner.match.scriptTasks);
         if (runner.replay != nullptr) {
             if (dispatched.size() != expected.size()) {
                 throw std::runtime_error{"replay command batch size diverged"};

@@ -350,7 +350,8 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
                                           &report.finished, match.pathService, match.armies,
                                           match.intel,
                                           match.playableRect ? &*match.playableRect
-                                                             : nullptr);
+                                                             : nullptr,
+                                          match.scriptTasks);
 
     // 1. MOVEMENT, then collisions. Everything downstream reads where a unit has got to
     //    this tick rather than where it started it.

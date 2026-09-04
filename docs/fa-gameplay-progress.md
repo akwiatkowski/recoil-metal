@@ -206,6 +206,9 @@ own-queue-before-guardee branch is implemented with its lifecycle closed in `C-2
 `C-183` ATTACK branch is implemented for Assist-capable guards — `AI.GuardScanRadius` parses,
 acquisition runs the ordinary path over range-overridden weapon copies with shared incumbency
 and threaded recon, pursuit holds inside weapon reach and chases outside it, Assist stays head.
+The native `CUnitScriptTask` boundary is also implemented: script issues are authorized and logged,
+the command stage runs retail task-status timing, lifecycle cleanup is queue-owned, and opaque host
+state survives SaveState v12 and hashing without coupling Lua to the sim core.
 Still absent: the transitive build-assist chain walk, reclaim-copy, the repair scan, the leash
 (endpoints unread), and combat-unit guard orders (Assist refusal for non-builders is pinned —
 a Guard order is the deferred vehicle).
@@ -406,7 +409,8 @@ FA-INTEL.
 ### FA-PROGRESS - Enhancements, Veterancy, And Special Units
 
 **Largest gap:** veterancy is implemented, but the generic enhancement lifecycle and bespoke
-experimental script/native interactions are largely absent.
+experimental script/native interactions are largely absent. The serializable native task host is
+now available; the missing work is the Lua adapter and EnhanceTask's actual gameplay contract.
 
 ```text
 /goal Advance FA-PROGRESS by completing the enhancement lifecycle specification around

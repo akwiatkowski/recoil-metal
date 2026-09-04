@@ -115,6 +115,10 @@ struct Match {
     /// for callers that do not model a full match yet.
     PathService* pathService = nullptr;
 
+    /// Optional runtime for native-scheduled Lua tasks. The sim owns deterministic lifecycle
+    /// and serialized bytes; the host owns interpreter objects and task module dispatch.
+    ScriptTaskHost* scriptTasks = nullptr;
+
     /// How many commanders each army STARTED with, indexed by army.
     ///
     /// The win condition needs it to tell "lost its commander" from "never had one": a

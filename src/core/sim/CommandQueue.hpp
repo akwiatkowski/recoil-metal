@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/sim/Command.hpp"
+#include "core/sim/ScriptTask.hpp"
 
 #include <array>
 #include <cstddef>
@@ -111,6 +112,7 @@ public:
         UnitId target{};
         std::optional<std::array<Fx, 2>> patrolOrigin;
         bool returningToPatrolOrigin = false;
+        ScriptTaskState scriptState;
     };
 
     QueuedCommand(UnitId unit, std::shared_ptr<const SharedCommand> payload)
@@ -120,7 +122,8 @@ public:
         : unit_(snapshot.unit), targetX_(snapshot.targetX), targetZ_(snapshot.targetZ),
           target_(snapshot.target), payload_(std::move(payload)),
           patrolOrigin_(std::move(snapshot.patrolOrigin)),
-          returningToPatrolOrigin_(snapshot.returningToPatrolOrigin) {}
+          returningToPatrolOrigin_(snapshot.returningToPatrolOrigin),
+          scriptState_(std::move(snapshot.scriptState)) {}
 
     [[nodiscard]] Snapshot snapshot() const {
         return {.unit = unit_,
@@ -128,7 +131,8 @@ public:
                 .targetZ = targetZ_,
                 .target = target_,
                 .patrolOrigin = patrolOrigin_,
-                .returningToPatrolOrigin = returningToPatrolOrigin_};
+                .returningToPatrolOrigin = returningToPatrolOrigin_,
+                .scriptState = scriptState_};
     }
 
     [[nodiscard]] const SharedCommand& payload() const noexcept { return *payload_; }
@@ -138,6 +142,8 @@ public:
     [[nodiscard]] Fx targetZ() const noexcept { return targetZ_; }
     [[nodiscard]] UnitId target() const noexcept { return target_; }
     [[nodiscard]] UnitTypeIndex buildType() const noexcept { return payload_->buildType; }
+    [[nodiscard]] const ScriptTaskState& scriptState() const noexcept { return scriptState_; }
+    [[nodiscard]] ScriptTaskState& scriptState() noexcept { return scriptState_; }
 
     void setTargetPosition(Fx x, Fx z) noexcept {
         targetX_ = x;
@@ -193,6 +199,7 @@ private:
     std::shared_ptr<const SharedCommand> payload_;
     std::optional<std::array<Fx, 2>> patrolOrigin_;
     bool returningToPatrolOrigin_ = false;
+    ScriptTaskState scriptState_;
 };
 
 /// A unit's order list.
@@ -242,6 +249,10 @@ public:
     /// state, so the callback itself is neither serialized nor hashed.
     void setObserver(Observer observer) { observer_ = std::move(observer); }
     void clearObserver() { observer_ = nullptr; }
+
+    /// Binds the runtime used for script-task lifecycle. The pointer is transient: snapshots
+    /// preserve task state, while a restored match binds its runtime before dispatch resumes.
+    void bindScriptTaskHost(ScriptTaskHost* host) noexcept { scriptTasks_ = host; }
 
     [[nodiscard]] const QueuedCommand* currentEntry() const noexcept {
         return queue_.empty() ? nullptr : &queue_.front();
@@ -295,6 +306,9 @@ public:
     /// the queue cannot tell: whether an order is complete is a fact about the world, and the
     /// queue holds no world.
     const QueuedCommand* finish();
+
+    /// Terminates the current task abnormally, preserving the queue's Aborted notification.
+    const QueuedCommand* abort();
 
     /// Moves the completed head to the back and returns the next waypoint. Patrol uses this
     /// instead of finishing, so its two endpoints remain a loop rather than being consumed.
@@ -352,6 +366,7 @@ private:
     /// deliberately has no active serial until the next dispatch step starts it.
     std::optional<CommandSerial> activeSerial_;
     Observer observer_;
+    ScriptTaskHost* scriptTasks_ = nullptr;
 };
 
 } // namespace rm::sim

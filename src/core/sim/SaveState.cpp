@@ -28,6 +28,7 @@ constexpr std::uint32_t kVersion8 = 8;
 constexpr std::uint32_t kVersion9 = 9;
 constexpr std::uint32_t kVersion10 = 10;
 constexpr std::uint32_t kVersion11 = 11;
+constexpr std::uint32_t kVersion12 = 12;
 // MT19937 serializes its 624 state words plus an index, all as unsigned decimal numbers separated
 // by one space. This rejects oversized malformed frames before they allocate their payload.
 constexpr std::size_t kMaxRandomStatePayload =
@@ -65,6 +66,10 @@ public:
         for (const char character : value) {
             u8(static_cast<std::uint8_t>(character));
         }
+    }
+    void bytes(std::span<const std::uint8_t> value) {
+        count(value.size());
+        for (const std::uint8_t byte : value) u8(byte);
     }
     [[nodiscard]] std::vector<std::byte> take() { return std::move(bytes_); }
 
@@ -114,6 +119,13 @@ public:
         for (std::size_t i = 0; i < size; ++i) value.push_back(static_cast<char>(std::to_integer<unsigned char>(bytes_[offset_++])));
         return true;
     }
+    [[nodiscard]] bool bytes(std::vector<std::uint8_t>& value, std::size_t maximum) {
+        std::size_t size{};
+        if (!count(size) || size > maximum || size > bytes_.size() - offset_) return false;
+        value.resize(size);
+        for (std::uint8_t& byte : value) if (!u8(byte)) return false;
+        return true;
+    }
     [[nodiscard]] bool finished() const { return offset_ == bytes_.size(); }
 private:
     std::span<const std::byte> bytes_;
@@ -123,7 +135,13 @@ private:
 void writeId(PayloadWriter& writer, UnitId id) { writer.u32(id.index); writer.u32(id.generation); }
 [[nodiscard]] bool readId(PayloadReader& reader, UnitId& id) { return reader.u32(id.index) && reader.u32(id.generation); }
 
-void writeSharedCommand(PayloadWriter& w, const SharedCommand& command) {
+void writeSharedCommand(PayloadWriter& w, const SharedCommand& command,
+                        bool includesScriptTasks) {
+    if (includesScriptTasks
+        && (command.scriptTask.size() > kMaxScriptTaskNameBytes
+            || command.scriptData.size() > kMaxScriptTaskDataBytes)) {
+        throw std::length_error("script command exceeds the v12 save-state limit");
+    }
     w.u64(command.tick);
     w.u8(command.source);
     w.u32(command.id);
@@ -139,9 +157,14 @@ void writeSharedCommand(PayloadWriter& w, const SharedCommand& command) {
     w.u32(command.creationSerial);
     w.u32(command.originalCount);
     w.u32(command.remainingCount);
+    if (includesScriptTasks) {
+        w.text(command.scriptTask);
+        w.bytes(command.scriptData);
+    }
 }
 
-[[nodiscard]] bool readSharedCommand(PayloadReader& r, SharedCommand& command) {
+[[nodiscard]] bool readSharedCommand(PayloadReader& r, SharedCommand& command,
+                                     bool includesScriptTasks) {
     std::uint8_t source{}, kind{}, queued{};
     std::uint32_t player{};
     std::size_t units{};
@@ -149,7 +172,9 @@ void writeSharedCommand(PayloadWriter& w, const SharedCommand& command) {
     if (!r.u64(command.tick) || !r.u8(source) || !r.u32(command.id) || !r.u32(player)
         || !r.u8(kind) || !r.u8(queued) || source > kInvalidCommandSource
         || player > std::numeric_limits<PlayerIndex>::max()
-        || kind > static_cast<std::uint8_t>(CommandKind::Repair) || queued > 1
+        || kind > static_cast<std::uint8_t>(includesScriptTasks ? CommandKind::Script
+                                                                : CommandKind::Repair)
+        || queued > 1
         || !r.count(units, 8)) {
         return false;
     }
@@ -166,14 +191,29 @@ void writeSharedCommand(PayloadWriter& w, const SharedCommand& command) {
     }
     command.targetX = Fx::fromRaw(targetX);
     command.targetZ = Fx::fromRaw(targetZ);
+    if (includesScriptTasks
+        && (!r.text(command.scriptTask)
+            || command.scriptTask.size() > kMaxScriptTaskNameBytes
+            || !r.bytes(command.scriptData, kMaxScriptTaskDataBytes))) {
+        return false;
+    }
+    if (includesScriptTasks
+        && ((command.kind == CommandKind::Script && command.scriptTask.empty())
+            || (command.kind != CommandKind::Script
+                && (!command.scriptTask.empty() || !command.scriptData.empty())))) {
+        return false;
+    }
     return true;
 }
 
-void writeCommandState(PayloadWriter& w, const UnitStore::Snapshot& s) {
+void writeCommandState(PayloadWriter& w, const UnitStore::Snapshot& s,
+                       bool includesScriptTasks) {
     w.u32(s.nextCommandSerial);
     for (const std::uint32_t counter : s.nextCommandCounters) w.u32(counter);
     w.count(s.sharedCommands.size());
-    for (const SharedCommand& command : s.sharedCommands) writeSharedCommand(w, command);
+    for (const SharedCommand& command : s.sharedCommands) {
+        writeSharedCommand(w, command, includesScriptTasks);
+    }
     w.count(s.orders.size());
     for (const CommandQueue::Snapshot& queue : s.orders) {
         w.u8(queue.activeSerial.has_value());
@@ -192,6 +232,16 @@ void writeCommandState(PayloadWriter& w, const UnitStore::Snapshot& s) {
                 w.i32((*execution.patrolOrigin)[1].raw());
             }
             w.u8(execution.returningToPatrolOrigin);
+            if (includesScriptTasks) {
+                if (execution.scriptState.opaque.size() > kMaxScriptTaskDataBytes) {
+                    throw std::length_error("script task state exceeds the v12 save-state limit");
+                }
+                w.u8(execution.scriptState.created);
+                w.u8(execution.scriptState.suspended);
+                w.u32(execution.scriptState.sleepBeats);
+                w.i32(execution.scriptState.aiResult);
+                w.bytes(execution.scriptState.opaque);
+            }
         }
     }
 }
@@ -299,13 +349,16 @@ void writeAirMotion(PayloadWriter& w, std::span<const MoveState> motion) {
     return true;
 }
 
-[[nodiscard]] bool readCommandState(PayloadReader& r, UnitStore::Snapshot& s) {
+[[nodiscard]] bool readCommandState(PayloadReader& r, UnitStore::Snapshot& s,
+                                    bool includesScriptTasks) {
     if (!r.u32(s.nextCommandSerial)) return false;
     for (std::uint32_t& counter : s.nextCommandCounters) if (!r.u32(counter)) return false;
     std::size_t count{};
     if (!r.count(count, 1)) return false;
     s.sharedCommands.resize(count);
-    for (SharedCommand& command : s.sharedCommands) if (!readSharedCommand(r, command)) return false;
+    for (SharedCommand& command : s.sharedCommands) {
+        if (!readSharedCommand(r, command, includesScriptTasks)) return false;
+    }
     if (!r.count(count, 1)) return false;
     s.orders.resize(count);
     for (CommandQueue::Snapshot& queue : s.orders) {
@@ -337,6 +390,18 @@ void writeAirMotion(PayloadWriter& w, std::span<const MoveState> motion) {
             }
             if (!r.u8(returning) || returning > 1) return false;
             entry.execution.returningToPatrolOrigin = returning;
+            if (includesScriptTasks) {
+                std::uint8_t created{}, suspended{};
+                if (!r.u8(created) || created > 1 || !r.u8(suspended) || suspended > 1
+                    || !r.u32(entry.execution.scriptState.sleepBeats)
+                    || !r.i32(entry.execution.scriptState.aiResult)
+                    || !r.bytes(entry.execution.scriptState.opaque,
+                                kMaxScriptTaskDataBytes)) {
+                    return false;
+                }
+                entry.execution.scriptState.created = created != 0;
+                entry.execution.scriptState.suspended = suspended != 0;
+            }
         }
     }
     return true;
@@ -345,7 +410,8 @@ void writeAirMotion(PayloadWriter& w, std::span<const MoveState> motion) {
 void writeUnits(PayloadWriter& w, const UnitStore::Snapshot& s, bool includesPathPhase,
                    bool includesFactoryRepeat, bool includesAttachmentOffsets, bool includesDoNotTarget,
                    bool includesAutomaticTargets, bool includesAttachmentHeights,
-                   bool includesAttachedMotion, bool includesCommands) {
+                   bool includesAttachedMotion, bool includesCommands,
+                   bool includesScriptTasks) {
     w.count(s.ids.generations.size()); for (Generation v : s.ids.generations) w.u32(v);
     w.count(s.ids.free.size()); for (UnitIndex v : s.ids.free) w.u32(v);
     w.u64(s.ids.live);
@@ -360,14 +426,14 @@ void writeUnits(PayloadWriter& w, const UnitStore::Snapshot& s, bool includesPat
     if (includesAttachmentOffsets) { w.count(s.attachmentOffsets.size()); for (const auto& offset : s.attachmentOffsets) { w.i32(offset[0].raw()); w.i32(offset[1].raw()); } }
     if (includesAttachmentHeights) { w.count(s.attachmentHeights.size()); for (Fx height : s.attachmentHeights) w.i32(height.raw()); }
     if (includesDoNotTarget) { w.count(s.doNotTarget.size()); for (bool v : s.doNotTarget) w.u8(v); }
-    if (includesCommands) writeCommandState(w, s);
+    if (includesCommands) writeCommandState(w, s, includesScriptTasks);
 }
 
 [[nodiscard]] bool readUnits(PayloadReader& r, UnitStore::Snapshot& s, bool includesPathPhase,
                                  bool includesFactoryRepeat, bool includesAttachmentOffsets,
                                  bool includesDoNotTarget, bool includesAutomaticTargets,
                                  bool includesAttachmentHeights, bool includesAttachedMotion,
-                                 bool includesCommands) {
+                                 bool includesCommands, bool includesScriptTasks) {
     std::size_t n{};
     if (!r.count(n, 4)) return false; s.ids.generations.resize(n); for (auto& v : s.ids.generations) if (!r.u32(v)) return false;
     if (!r.count(n, 4)) return false; s.ids.free.resize(n); for (auto& v : s.ids.free) if (!r.u32(v)) return false;
@@ -465,7 +531,10 @@ void writeUnits(PayloadWriter& w, const UnitStore::Snapshot& s, bool includesPat
             }
         }
     }
-    if (includesCommands && (!readCommandState(r, s) || s.orders.size() != slots)) return false;
+    if (includesCommands
+        && (!readCommandState(r, s, includesScriptTasks) || s.orders.size() != slots)) {
+        return false;
+    }
     if (includesCommands) {
         for (std::size_t slot = 0; slot < s.orders.size(); ++slot) {
             const CommandQueue::Snapshot& queue = s.orders[slot];
@@ -546,7 +615,8 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
     if (version >= kVersion2) payloadWriter.u64(state.pathServiceBeats);
     writeUnits(payloadWriter, state.units, version >= kVersion2, version >= kVersion3,
                    version >= kVersion4, version >= kVersion5, version >= kVersion6,
-                    version >= kVersion7, version >= kVersion7, version >= kVersion8);
+                    version >= kVersion7, version >= kVersion7, version >= kVersion8,
+                    version >= kVersion12);
     if (version >= kVersion9) writeSiloAmmo(payloadWriter, state.siloAmmo);
     if (version >= kVersion10) writeRedirects(payloadWriter, state.redirects);
     if (version >= kVersion11) writeAirMotion(payloadWriter, state.units.motion);
@@ -582,7 +652,7 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
         || (version != kVersion1 && version != kVersion2 && version != kVersion3
               && version != kVersion4 && version != kVersion5 && version != kVersion6
                && version != kVersion7 && version != kVersion8 && version != kVersion9
-               && version != kVersion10 && version != kVersion11)
+               && version != kVersion10 && version != kVersion11 && version != kVersion12)
         || (requiredVersion && version != *requiredVersion) || !readU64(bytes, offset, tick)
         || !readU32(bytes, offset, payloadSize) || bytes.size() - offset != payloadSize) {
         return std::nullopt;
@@ -611,7 +681,8 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
     UnitStore::Snapshot units;
     if (!readUnits(reader, units, version >= kVersion2, version >= kVersion3, version >= kVersion4,
                        version >= kVersion5, version >= kVersion6, version >= kVersion7,
-                       version >= kVersion7, version >= kVersion8)) return std::nullopt;
+                       version >= kVersion7, version >= kVersion8,
+                       version >= kVersion12)) return std::nullopt;
     std::vector<SiloAmmo> siloAmmo;
     if (version >= kVersion9 && !readSiloAmmo(reader, siloAmmo)) return std::nullopt;
     std::vector<MissileRedirect> redirects;
@@ -647,7 +718,7 @@ std::optional<SaveState> SaveState::decodeV2(std::span<const std::byte> bytes) {
 }
 
 std::vector<std::byte> SaveState::encode(const SaveState& state) {
-    return rm::sim::encode(state, kVersion11);
+    return rm::sim::encode(state, kVersion12);
 }
 
 std::optional<SaveState> SaveState::decode(std::span<const std::byte> bytes) {

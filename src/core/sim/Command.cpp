@@ -3,6 +3,7 @@
 #include "core/sim/Combat.hpp"
 #include "core/sim/Movement.hpp"
 #include "core/sim/Reclaim.hpp"
+#include "core/sim/ScriptTask.hpp"
 #include "core/sim/UnitStore.hpp"
 
 #include "core/unit/BuildTree.hpp"
@@ -141,6 +142,77 @@ void cancelActiveConstruction(std::vector<Construction>* building, UnitId builde
     return kind == CommandKind::Stop;
 }
 
+enum class ScriptDispatch : std::uint8_t {
+    Waiting,
+    Finished,
+    Aborted,
+    Delay,
+};
+
+struct ScriptDispatchResult {
+    ScriptDispatch state = ScriptDispatch::Waiting;
+    bool created = false;
+};
+
+/// Runs one native scheduler turn for the active script command.
+///
+/// Status zero deliberately loops without a safety cap: retail's task scheduler does the same,
+/// and an adapter that returns Repeat forever has authored an infinite simulation task. Hiding
+/// that bug behind an arbitrary cap would make the resulting match depend on our chosen number.
+[[nodiscard]] ScriptDispatchResult dispatchScriptTask(CommandQueue& orders,
+                                                       ScriptTaskHost& host,
+                                                       bool endOfBeat) {
+    QueuedCommand* command = orders.currentMutable();
+    if (command == nullptr || command->kind() != CommandKind::Script) {
+        return {};
+    }
+
+    ScriptTaskState& state = command->scriptState();
+    bool created = false;
+    if (!state.created) {
+        state.created = true;
+        host.onCreate(command->unit(), command->payload().scriptTask,
+                      command->payload().scriptData, state);
+        orders.markCurrentActive();
+        created = true;
+    }
+    if (state.suspended) {
+        return {.created = created};
+    }
+    if (state.sleepBeats > 0) {
+        --state.sleepBeats;
+        return {.created = created};
+    }
+
+    while (true) {
+        const std::int32_t result = host.taskTick(
+            command->unit(), command->payload().scriptTask, command->payload().scriptData, state);
+        if (result == static_cast<std::int32_t>(ScriptTaskStatus::Repeat)) {
+            continue;
+        }
+        if (result == static_cast<std::int32_t>(ScriptTaskStatus::Done)) {
+            (void)orders.finish();
+            return {.state = ScriptDispatch::Finished, .created = created};
+        }
+        if (result == static_cast<std::int32_t>(ScriptTaskStatus::Abort) || result < -4) {
+            (void)orders.abort();
+            return {.state = ScriptDispatch::Aborted, .created = created};
+        }
+        if (result == static_cast<std::int32_t>(ScriptTaskStatus::Suspend)) {
+            state.suspended = true;
+            return {.created = created};
+        }
+        if (result == static_cast<std::int32_t>(ScriptTaskStatus::Delay)) {
+            return {.state = endOfBeat ? ScriptDispatch::Waiting : ScriptDispatch::Delay,
+                    .created = created};
+        }
+        if (result > static_cast<std::int32_t>(ScriptTaskStatus::NextBeat)) {
+            state.sleepBeats = static_cast<std::uint32_t>(result - 1);
+        }
+        return {.created = created};
+    }
+}
+
 void canonicalizeUnits(std::vector<UnitId>& units) {
     std::ranges::sort(units, [](UnitId a, UnitId b) {
         return a.index < b.index || (a.index == b.index && a.generation < b.generation);
@@ -152,7 +224,13 @@ void canonicalizeUnits(std::vector<UnitId>& units) {
 
 std::optional<CommandId> CommandBuffer::submit(CommandIssue issue, UnitStore& store) {
     if (issue.source == kInvalidCommandSource
-        || issue.player != static_cast<PlayerIndex>(issue.source) || issue.count == 0) {
+        || issue.player != static_cast<PlayerIndex>(issue.source) || issue.count == 0
+        || (issue.kind == CommandKind::Script
+            && (issue.scriptTask.empty()
+                || issue.scriptTask.size() > kMaxScriptTaskNameBytes
+                || issue.scriptData.size() > kMaxScriptTaskDataBytes))
+        || (issue.kind != CommandKind::Script
+            && (!issue.scriptTask.empty() || !issue.scriptData.empty()))) {
         return std::nullopt;
     }
     const bool explicitId = issue.id != kInvalidCommandId;
@@ -219,6 +297,8 @@ const char* commandKindName(CommandKind kind) noexcept {
         return "toggle-factory-repeat";
     case CommandKind::Repair:
         return "repair";
+    case CommandKind::Script:
+        return "script";
     }
     return "stop";
 }
@@ -258,6 +338,9 @@ namespace {
     }
     if (name == "repair") {
         return CommandKind::Repair;
+    }
+    if (name == "script") {
+        return CommandKind::Script;
     }
     return std::nullopt;
 }
@@ -343,7 +426,8 @@ bool operator==(const CommandIssue& a, const CommandIssue& b) noexcept {
     return a.tick == b.tick && a.phase == b.phase && a.source == b.source && a.id == b.id
            && a.player == b.player && a.kind == b.kind && a.queued == b.queued
            && a.units == b.units && a.targetX == b.targetX && a.targetZ == b.targetZ
-           && a.target == b.target && a.buildType == b.buildType && a.count == b.count;
+           && a.target == b.target && a.buildType == b.buildType && a.count == b.count
+           && a.scriptTask == b.scriptTask && a.scriptData == b.scriptData;
 }
 
 bool buildSitePlaceable(const PassabilityGrid& grid, Fx x, Fx z, Fx radiusElmos,
@@ -410,7 +494,8 @@ namespace {
 
 [[nodiscard]] const std::shared_ptr<SharedCommand>& ensureSharedCommand(
     const Command& command, CommandSource source, CommandId id, std::uint32_t count,
-    Fx formationAnchorX, Fx formationAnchorZ, UnitStore& store,
+    Fx formationAnchorX, Fx formationAnchorZ, std::string_view scriptTask,
+    std::span<const std::uint8_t> scriptData, UnitStore& store,
     std::shared_ptr<SharedCommand>& shared) {
     if (shared == nullptr) {
         shared = std::make_shared<SharedCommand>(SharedCommand{
@@ -429,6 +514,8 @@ namespace {
             .creationSerial = store.allocateCommandSerial(),
             .originalCount = count,
             .remainingCount = count,
+            .scriptTask = std::string{scriptTask},
+            .scriptData = {scriptData.begin(), scriptData.end()},
         });
         (void)store.registerCommand(shared);
     }
@@ -468,9 +555,10 @@ void teardownMovement(MoveState& motion) {
     Fx formationAnchorX, Fx formationAnchorZ, std::shared_ptr<SharedCommand>& shared,
     UnitStore& store,
     const UnitCatalog& catalog, std::span<const Player> players, std::span<const Army> armies,
-    const Terrain& terrain, const PassabilityGrid& grid, TickRate rate,
+    const Terrain& terrain, const PassabilityGrid* grid, TickRate rate,
     std::vector<Construction>* building, EventQueue* events, const FeatureStore* features,
-    PathService* pathService) {
+    PathService* pathService, std::string_view scriptTask,
+    std::span<const std::uint8_t> scriptData, ScriptTaskHost* scriptTasks) {
     // A stale handle first, before anything else looks at the slot. A player may click a unit
     // that died on the tick their order was issued, and a replay of an old log may name a unit
     // that no longer exists — in both cases the generation has moved on, so this must not
@@ -491,6 +579,43 @@ void teardownMovement(MoveState& motion) {
     }
 
     CommandQueue& orders = store.orders()[command.unit.index];
+    if (scriptTasks != nullptr) {
+        orders.bindScriptTaskHost(scriptTasks);
+    }
+
+    // Retail enforces the cap before dispatching the command kind, so an opaque script task is
+    // bounded exactly like a move or build promise.
+    if (command.queued && command.kind != CommandKind::Stop && orders.atCapacity()) {
+        return false;
+    }
+
+    if (command.kind == CommandKind::Script) {
+        if (scriptTasks == nullptr || scriptTask.empty()
+            || scriptTask.size() > kMaxScriptTaskNameBytes
+            || scriptData.size() > kMaxScriptTaskDataBytes) {
+            return false;
+        }
+        const std::shared_ptr<const SharedCommand> payload = ensureSharedCommand(
+            command, source, id, count, formationAnchorX, formationAnchorZ, scriptTask,
+            scriptData, store, shared);
+        QueuedCommand entry{command.unit, payload};
+        if (command.queued) {
+            (void)orders.give(std::move(entry), true);
+            return true;
+        }
+        if (pathService != nullptr) {
+            pathService->cancel(command.unit);
+        }
+        cancelActiveConstruction(building, command.unit);
+        teardownMovement(store.motion()[command.unit.index]);
+        orders.clear();
+        orders.append(std::move(entry));
+        return true;
+    }
+    if (grid == nullptr) {
+        return false;
+    }
+    const PassabilityGrid& movementGrid = *grid;
 
     // THE CAP, retail's, at retail's boundary (`kCommandQueueCap`). It is checked here rather
     // than inside `CommandQueue::give` because retail checks it in `Sim::IssueCommand` — on
@@ -498,10 +623,6 @@ void teardownMovement(MoveState& motion) {
     // PLAYER can pile up and leaves the engine's own inserts (a patrol's synthetic origin)
     // alone. An order that clears the queue is exempt, so a unit at the cap is still
     // commandable.
-    if (command.queued && command.kind != CommandKind::Stop && orders.atCapacity()) {
-        return false;
-    }
-
     // A STOP IS NOT A QUEUED ORDER HERE, shift or no shift. Recoil allows one — its comment at
     // `CommandAI.cpp:996` says as much, with an exclamation mark — and it needs to, because it
     // has a wait command that a queued stop interacts with. We have none, so a queued stop
@@ -510,7 +631,7 @@ void teardownMovement(MoveState& motion) {
     if (command.kind == CommandKind::Stop) {
         MoveState& motion = store.motion()[command.unit.index];
         const MoveState previous = motion;
-        if (!startCommand(command, store, catalog, terrain, grid, rate, building, events,
+        if (!startCommand(command, store, catalog, terrain, movementGrid, rate, building, events,
                           features)) {
             motion = previous;
             return false;
@@ -524,14 +645,14 @@ void teardownMovement(MoveState& motion) {
         cancelActiveConstruction(building, command.unit);
         motion = std::move(stopped);
         (void)ensureSharedCommand(command, source, id, count, formationAnchorX, formationAnchorZ,
-                                  store, shared);
+                                  {}, {}, store, shared);
         return true;
     }
 
     if (command.queued) {
         const std::shared_ptr<const SharedCommand> payload =
             ensureSharedCommand(command, source, id, count, formationAnchorX, formationAnchorZ,
-                                store, shared);
+                                {}, {}, store, shared);
         // Factory production is repeatable: Shift-clicking the same tank twice means two tanks,
         // unlike placing the same structure twice, which retains the ordinary cancel gesture.
         if (command.kind == CommandKind::Build) {
@@ -577,7 +698,7 @@ void teardownMovement(MoveState& motion) {
                     motion.path.clear();
                     motion.pathIndex = 0;
                     if (const QueuedCommand* next = orders.current()) {
-                        if (startCommand(next->asCommand(), store, catalog, terrain, grid, rate,
+                        if (startCommand(next->asCommand(), store, catalog, terrain, movementGrid, rate,
                                          building, events, features)) {
                             orders.markCurrentActive();
                         }
@@ -598,7 +719,7 @@ void teardownMovement(MoveState& motion) {
             motion.pathIndex = 0;
             cancelActiveConstruction(building, command.unit);
             if (const QueuedCommand* next = orders.current()) {
-                if (startCommand(next->asCommand(), store, catalog, terrain, grid, rate, building,
+                if (startCommand(next->asCommand(), store, catalog, terrain, movementGrid, rate, building,
                                  events, features)) {
                     orders.markCurrentActive();
                 }
@@ -623,7 +744,7 @@ void teardownMovement(MoveState& motion) {
         && !store.motion()[command.unit.index].airborne) {
         const std::shared_ptr<const SharedCommand> payload =
             ensureSharedCommand(command, source, id, count, formationAnchorX, formationAnchorZ,
-                                store, shared);
+                                {}, {}, store, shared);
         MoveState& motion = store.motion()[command.unit.index];
         pathService->cancel(command.unit);
         orders.clear();
@@ -633,9 +754,9 @@ void teardownMovement(MoveState& motion) {
         orders.append(std::move(entry));
         orders.markCurrentActive();
         const Transform& at = store.transforms()[command.unit.index];
-        motion.pathPhaseStartX = grid.cellAtWorld(at.x);
-        motion.pathPhaseStartZ = grid.cellAtWorld(at.z);
-        motion.pathPhaseCellsX = grid.cellsX;
+        motion.pathPhaseStartX = movementGrid.cellAtWorld(at.x);
+        motion.pathPhaseStartZ = movementGrid.cellAtWorld(at.z);
+        motion.pathPhaseCellsX = movementGrid.cellsX;
         pathService->enqueue(PathRequest{.unit = command.unit,
                                          .command = id,
                                          .army = motion.armyIndex,
@@ -643,7 +764,7 @@ void teardownMovement(MoveState& motion) {
                                          .fromZ = at.z,
                                          .targetX = command.targetX,
                                          .targetZ = command.targetZ,
-                                         .grid = std::make_shared<PassabilityGrid>(grid)});
+                                         .grid = std::make_shared<PassabilityGrid>(movementGrid)});
         return true;
     }
 
@@ -658,7 +779,7 @@ void teardownMovement(MoveState& motion) {
     if (!keepMotion) {
         teardownMovement(motion);
     }
-    if (!startCommand(command, store, catalog, terrain, grid, rate, building, events,
+    if (!startCommand(command, store, catalog, terrain, movementGrid, rate, building, events,
                       features)) {
         motion = previous;
         return false;
@@ -670,7 +791,7 @@ void teardownMovement(MoveState& motion) {
     }
     const std::shared_ptr<const SharedCommand> payload =
         ensureSharedCommand(command, source, id, count, formationAnchorX, formationAnchorZ,
-                            store, shared);
+                            {}, {}, store, shared);
     QueuedCommand entry{command.unit, payload};
     if (command.kind == CommandKind::Move) {
         entry.setTargetPosition(command.targetX, command.targetZ);
@@ -704,12 +825,19 @@ ApplyCommandResult applyCommand(const CommandIssue& issue, UnitStore& store,
                                 std::span<const Army> armies, const Terrain& terrain,
                                  const CommandGridForUnit& gridForUnit, TickRate rate,
                                  std::vector<Construction>* building, EventQueue* events,
-                                 const FeatureStore* features, PathService* pathService) {
+                                 const FeatureStore* features, PathService* pathService,
+                                 ScriptTaskHost* scriptTasks) {
     ApplyCommandResult result;
     if (issue.source == kInvalidCommandSource || issue.id == kInvalidCommandId
         || issue.player != static_cast<PlayerIndex>(issue.source)
         || commandSource(issue.id) != issue.source || issue.count == 0
-        || playerFor(issue.player, players) == nullptr || store.commandIdLive(issue.id)) {
+        || playerFor(issue.player, players) == nullptr || store.commandIdLive(issue.id)
+        || (issue.kind == CommandKind::Script
+            && (issue.scriptTask.empty()
+                || issue.scriptTask.size() > kMaxScriptTaskNameBytes
+                || issue.scriptData.size() > kMaxScriptTaskDataBytes))
+        || (issue.kind != CommandKind::Script
+            && (!issue.scriptTask.empty() || !issue.scriptData.empty()))) {
         return result;
     }
 
@@ -773,7 +901,7 @@ ApplyCommandResult applyCommand(const CommandIssue& issue, UnitStore& store,
             continue;
         }
         const PassabilityGrid* grid = gridForUnit != nullptr ? gridForUnit(unit) : nullptr;
-        if (grid == nullptr) {
+        if (grid == nullptr && issue.kind != CommandKind::Script) {
             continue;
         }
         Command member{
@@ -828,7 +956,8 @@ ApplyCommandResult applyCommand(const CommandIssue& issue, UnitStore& store,
 
         if (applyCommandMember(member, issue.source, issue.id, issue.count, issue.targetX,
                                issue.targetZ, shared, store, catalog, players, armies, terrain,
-                               *grid, rate, building, events, features, pathService)) {
+                               grid, rate, building, events, features, pathService,
+                               issue.scriptTask, issue.scriptData, scriptTasks)) {
             result.accepted.push_back(unit);
         }
     }
@@ -842,8 +971,10 @@ bool applyCommand(const Command& command, UnitStore& store, const UnitCatalog& c
                   std::span<const Player> players, std::span<const Army> armies,
                    const Terrain& terrain, const PassabilityGrid& grid, TickRate rate,
                    std::vector<Construction>* building, EventQueue* events,
-                   const FeatureStore* features, PathService* pathService) {
-    if (command.player >= static_cast<PlayerIndex>(kInvalidCommandSource)) {
+                   const FeatureStore* features, PathService* pathService,
+                   ScriptTaskHost* scriptTasks) {
+    if (command.player >= static_cast<PlayerIndex>(kInvalidCommandSource)
+        || command.kind == CommandKind::Script) {
         return false;
     }
     const CommandSource source = static_cast<CommandSource>(command.player);
@@ -866,7 +997,8 @@ bool applyCommand(const Command& command, UnitStore& store, const UnitCatalog& c
     };
     const ApplyCommandResult result = applyCommand(
         issue, store, catalog, players, armies, terrain,
-        [&grid](UnitId) { return &grid; }, rate, building, events, features, pathService);
+        [&grid](UnitId) { return &grid; }, rate, building, events, features, pathService,
+        scriptTasks);
     return result.acceptedUnit(command.unit);
 }
 
@@ -888,8 +1020,10 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
                            std::vector<Construction>* building, EventQueue* events,
                            const FeatureStore* features, std::vector<Construction>* finished,
                              PathService* pathService, std::span<const Army> armies,
-                             const Intel* intel, const PlayableRect* playableRect) {
+                             const Intel* intel, const PlayableRect* playableRect,
+                             ScriptTaskHost* scriptTasks) {
     std::size_t started = 0;
+    std::vector<UnitIndex> delayedScripts;
 
     const std::span<CommandQueue> orders = store.orders();
     const std::span<const MoveState> motion = store.motion();
@@ -897,6 +1031,9 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
     for (UnitIndex slot = 0; slot < orders.size(); ++slot) {
         if (!store.slotAlive(slot) || orders[slot].empty()) {
             continue;
+        }
+        if (scriptTasks != nullptr) {
+            orders[slot].bindScriptTaskHost(scriptTasks);
         }
 
         // Movement uses this unit's grid; construction uses the PRODUCT's. Commands retain type
@@ -925,6 +1062,21 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
         // not call this helper until the next beat.
         const auto startPending = [&] {
             while (const QueuedCommand* pending = orders[slot].current()) {
+                if (pending->kind() == CommandKind::Script) {
+                    if (scriptTasks == nullptr) {
+                        return;
+                    }
+                    const ScriptDispatchResult result =
+                        dispatchScriptTask(orders[slot], *scriptTasks, false);
+                    started += static_cast<std::size_t>(result.created);
+                    if (result.state == ScriptDispatch::Finished) {
+                        continue;
+                    }
+                    if (result.state == ScriptDispatch::Delay) {
+                        delayedScripts.push_back(slot);
+                    }
+                    return;
+                }
                 const PassabilityGrid* pendingGrid = gridFor(*pending);
                 if (pendingGrid == nullptr) {
                     return;  // leave it pending until its movement domain exists
@@ -1057,6 +1209,20 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
         // grid for the product's motion class. `startPending`, which does need one, looks it up
         // for itself.
         const QueuedCommand* current = orders[slot].active();
+        if (current->kind() == CommandKind::Script) {
+            if (scriptTasks == nullptr) {
+                continue;
+            }
+            const ScriptDispatchResult result =
+                dispatchScriptTask(orders[slot], *scriptTasks, false);
+            if (result.state == ScriptDispatch::Finished) {
+                startPending();
+                serviceBuilds();
+            } else if (result.state == ScriptDispatch::Delay) {
+                delayedScripts.push_back(slot);
+            }
+            continue;
+        }
         if (current->kind() == CommandKind::Build) {
             // A mobile build task is active while its engineer approaches. It owns no
             // Construction row until the exact range gate passes, so revisit `startCommand`
@@ -1580,6 +1746,21 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
         startPending();
     }
 
+    // Status -4 resumes after every unit has had its ordinary command-dispatch turn. A second
+    // -4 waits for the next beat rather than spinning forever at the end-of-beat boundary.
+    if (scriptTasks != nullptr) {
+        for (const UnitIndex slot : delayedScripts) {
+            if (!store.slotAlive(slot)) {
+                continue;
+            }
+            QueuedCommand* command = orders[slot].activeMutable();
+            if (command == nullptr || command->kind() != CommandKind::Script
+                || command->scriptState().suspended) {
+                continue;
+            }
+            (void)dispatchScriptTask(orders[slot], *scriptTasks, true);
+        }
+    }
     return started;
 }
 
@@ -2001,6 +2182,8 @@ bool startCommand(const Command& command, UnitStore& store, const UnitCatalog& c
     }
     case CommandKind::ToggleFactoryRepeat:
         return false;  // applied immediately by semantic issue intake; it never enters a queue
+    case CommandKind::Script:
+        return false;  // dispatched through ScriptTaskHost, never as a movement/build command
     }
 
     return false;
@@ -2013,7 +2196,7 @@ bool startCommand(const Command& command, UnitStore& store, const UnitCatalog& c
 namespace {
 
 inline constexpr std::string_view kCommandLogMagic = "recoil-metal semantic command log";
-inline constexpr std::uint32_t kCommandLogVersion = 1;
+inline constexpr std::uint32_t kCommandLogVersion = 2;
 
 [[nodiscard]] const char* phaseName(CommandPhase phase) noexcept {
     return phase == CommandPhase::PreTick ? "pre-tick" : "post-spawn";
@@ -2054,6 +2237,12 @@ bool CommandLog::record(CommandIssue issue) {
         || commandSource(issue.id) != issue.source
         || issue.player != static_cast<PlayerIndex>(issue.source) || issue.count == 0
         || !canonicalUnits(issue.units)
+        || (issue.kind == CommandKind::Script
+            && (issue.scriptTask.empty()
+                || issue.scriptTask.size() > kMaxScriptTaskNameBytes
+                || issue.scriptData.size() > kMaxScriptTaskDataBytes))
+        || (issue.kind != CommandKind::Script
+            && (!issue.scriptTask.empty() || !issue.scriptData.empty()))
         || (!issues_.empty() && issueBefore(issue, issues_.back()))) {
         return false;
     }
@@ -2087,7 +2276,8 @@ bool writeCommandLog(const CommandLog& log, const std::string& path,
     out << "version " << kCommandLogVersion << '\n';
     out << "issue-count " << log.size() << '\n';
     out << "# tick phase source id player kind queued count targetX targetZ buildType"
-           " targetIndex targetGeneration unitCount [unitIndex unitGeneration]... buildPath\n";
+           " targetIndex targetGeneration unitCount [unitIndex unitGeneration]..."
+           " buildPath scriptTask scriptDataHex\n";
     for (const CommandIssue& issue : log.all()) {
         out << issue.tick << ' ' << phaseName(issue.phase) << ' '
             << static_cast<unsigned>(issue.source) << ' ' << issue.id << ' ' << issue.player << ' '
@@ -2102,7 +2292,15 @@ bool writeCommandLog(const CommandLog& log, const std::string& path,
         if (issue.kind == CommandKind::Build && pathFor != nullptr) {
             blueprint = pathFor(issue.buildType);
         }
-        out << ' ' << std::quoted(blueprint) << '\n';
+        static constexpr char kHex[] = "0123456789abcdef";
+        std::string scriptData;
+        scriptData.reserve(issue.scriptData.size() * 2);
+        for (const std::uint8_t byte : issue.scriptData) {
+            scriptData.push_back(kHex[byte >> 4]);
+            scriptData.push_back(kHex[byte & 0x0F]);
+        }
+        out << ' ' << std::quoted(blueprint) << ' ' << std::quoted(issue.scriptTask) << ' '
+            << std::quoted(scriptData) << '\n';
     }
     return out.good();
 }
@@ -2214,10 +2412,30 @@ std::optional<CommandLog> readCommandLog(const std::string& path,
                                          static_cast<Generation>(generation)});
         }
         std::string blueprint;
+        std::string scriptTask;
+        std::string scriptDataHex;
         std::string extra;
-        if (!(fields >> std::quoted(blueprint)) || fields >> extra || !log.record(std::move(issue))) {
+        if (!(fields >> std::quoted(blueprint) >> std::quoted(scriptTask)
+              >> std::quoted(scriptDataHex))
+            || fields >> extra || scriptTask.size() > kMaxScriptTaskNameBytes
+            || scriptDataHex.size() > kMaxScriptTaskDataBytes * 2
+            || scriptDataHex.size() % 2 != 0) {
             return std::nullopt;
         }
+        issue.scriptTask = std::move(scriptTask);
+        issue.scriptData.reserve(scriptDataHex.size() / 2);
+        const auto nibble = [](char digit) -> std::optional<std::uint8_t> {
+            if (digit >= '0' && digit <= '9') return static_cast<std::uint8_t>(digit - '0');
+            if (digit >= 'a' && digit <= 'f') return static_cast<std::uint8_t>(digit - 'a' + 10);
+            return std::nullopt;
+        };
+        for (std::size_t at = 0; at < scriptDataHex.size(); at += 2) {
+            const std::optional<std::uint8_t> high = nibble(scriptDataHex[at]);
+            const std::optional<std::uint8_t> low = nibble(scriptDataHex[at + 1]);
+            if (!high || !low) return std::nullopt;
+            issue.scriptData.push_back(static_cast<std::uint8_t>((*high << 4) | *low));
+        }
+        if (!log.record(std::move(issue))) return std::nullopt;
         paths.push_back(std::move(blueprint));
         ++parsedCount;
     }
