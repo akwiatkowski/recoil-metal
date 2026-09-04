@@ -17,6 +17,7 @@
 #include "core/log/Log.hpp"
 #include "core/sim/Intel.hpp"
 #include "core/ui/GameProfile.hpp"
+#include "core/ui/Effects.hpp"
 
 #include "core/vfs/AssetSearch.hpp"
 #include "core/vfs/Vfs.hpp"
@@ -128,6 +129,10 @@ struct LoggingOptions {
 /// are explicit until a run-wide content-family policy exists; individual model formats are not
 /// enough evidence because one scene may contain both.
 [[nodiscard]] rm::ui::GameProfile parseGameProfile(int argc, const char* argv[]);
+
+/// `--ui-effects full|reduced|off`: override the shared HUD backdrop effect.
+/// Absent means Full unless macOS Reduced Transparency resolves it to Off in the windowed path.
+[[nodiscard]] rm::ui::EffectsPreference parseUiEffects(int argc, const char* argv[]);
 
 /// `--vision-style fa|recoil`: whether terrain blocks sight (ADR-037).
 ///

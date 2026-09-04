@@ -2669,3 +2669,34 @@ favor of the four concrete profiles actually supported.
 and rectangular maps. X1CA_003's 2048x1024 geometry visibly occupies a centered 2:1 content region,
 with inert bars above and below. Content-specific BAR faction emblems and the later material tuning
 remain separate from this profile seam.
+
+---
+
+## ADR-076 — One shared quarter-resolution backdrop, with a genuinely direct Off path
+
+**Context.** Every HUD panel needs the same post-water battlefield behind it, but blurring each
+panel independently would repeat filtering work and sampling a drawable after rendering is not a
+portable Metal contract. Water refraction already owns a pre-water colour copy; reusing it would
+give the interface an incomplete scene. Reduced Transparency also needs to remove the composition
+cost, not merely hide a blurred result below an opaque colour.
+
+**Decision.** Full and Reduced render the world without UI into one full-resolution
+shader-readable texture, raster-downsample it into a quarter-resolution pair, run exactly one
+`MPSImageGaussianBlur`, and compose the sharp world before semantic UI layers. Only solid panel
+surfaces sample the shared result; minimap art, chrome, icons, labels, and readouts remain crisp.
+Reduced selects a smaller immutable kernel and stronger veil. Off calls the original direct scene
+encoder, never ensuring the backdrop textures or encoding downsample, blur, or composition. The
+window resolves macOS Reduced Transparency to Off unless `--ui-effects` explicitly overrides it.
+
+**Alternatives considered.** A blur per panel was rejected as duplicate GPU work. Reusing the
+water refraction copy was rejected because it is deliberately captured before water. A custom
+compute blur was rejected because Metal Performance Shaders already supplies the platform kernel.
+Keeping the intermediate graph alive under an opaque Off material was rejected because it would
+make the accessibility path cosmetically different but no cheaper.
+
+**Consequences.** The material has one shared scene source and one filter dispatch per frame at
+every HUD size. The direct Off graph is preserved outside the extracted UI helper. The Objective-C
+MPS call is isolated in a tiny `.mm` bridge because importing Objective-C Metal and metal-cpp
+declarations in one translation unit produces symbol redeclarations. On the same headless scene,
+Full versus Off measured +0.012 ms GPU mean at 2560x1440 pixels and +0.390 ms at 5120x2880; the
+later window-size task remains responsible for equivalent real-window 5K evidence.

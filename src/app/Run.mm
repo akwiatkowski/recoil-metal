@@ -577,6 +577,7 @@ int runOffscreenBenchmark(const Session& session) {
         // the only mode whose CPU numbers describe the renderer instead of the
         // display, so it is the one comparable against another engine.
             rm::Renderer renderer{nullptr};
+            renderer.setUiEffects(session.uiEffects.level);
             renderer.setTerrain(mesh);
             applyGround(renderer, *map);
             renderer.setUnits(units.textures.all(), units.batches);
@@ -640,6 +641,7 @@ int runOffscreenBenchmark(const Session& session) {
 int runScreenshot(const Session& session) {
     RM_UNPACK_SESSION(session)
             rm::Renderer renderer{nullptr};
+            renderer.setUiEffects(session.uiEffects.level);
             renderer.setTerrain(mesh);
             applyGround(renderer, *map);
             renderer.setUnits(units.textures.all(), units.batches);
@@ -704,6 +706,17 @@ int runWindowed(const Session& session) {
 
         // 1280x720 points: comfortable debug size on a laptop screen.
         rm::Window window{1280, 720, "recoil-metal — m8: movable units"};
+        const bool systemReducesTransparency =
+            [NSWorkspace sharedWorkspace].accessibilityDisplayShouldReduceTransparency;
+        const rm::ui::EffectsLevel uiEffects =
+            rm::ui::resolveEffects(session.uiEffects, systemReducesTransparency);
+        window.setUiEffects(uiEffects);
+        std::printf("interface effects: %.*s%s\n",
+                    static_cast<int>(rm::ui::effectsLevelName(uiEffects).size()),
+                    rm::ui::effectsLevelName(uiEffects).data(),
+                    systemReducesTransparency && !session.uiEffects.explicitOverride
+                      ? " (macOS Reduced Transparency)"
+                      : "");
 
         // SOUND, windowed only: the headless paths are captures and a capture is silent.
         // The mixer lives on the stack beside the window; the output pulls from it on the

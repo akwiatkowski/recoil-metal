@@ -278,6 +278,31 @@ TEST_CASE("game-interface profile parsing carries no process-global state") {
           == rm::ui::GameProfile::ClassicFaf);
 }
 
+TEST_CASE("HUD effects are automatic until an explicit command-line override") {
+    using rm::ui::EffectsLevel;
+
+    Args absent{{"--skirmish"}};
+    const rm::ui::EffectsPreference automatic =
+        rm::app::parseUiEffects(absent.argc(), absent.argv());
+    CHECK(automatic.level == EffectsLevel::Full);
+    CHECK_FALSE(automatic.explicitOverride);
+    CHECK(rm::ui::resolveEffects(automatic, false) == EffectsLevel::Full);
+    CHECK(rm::ui::resolveEffects(automatic, true) == EffectsLevel::Off);
+
+    for (const auto& [word, expected] :
+         std::vector<std::pair<std::string, EffectsLevel>>{{"full", EffectsLevel::Full},
+                                                           {"reduced", EffectsLevel::Reduced},
+                                                           {"off", EffectsLevel::Off}}) {
+        Args args{{"--ui-effects", word}};
+        const rm::ui::EffectsPreference parsed =
+            rm::app::parseUiEffects(args.argc(), args.argv());
+        CHECK(parsed.level == expected);
+        CHECK(parsed.explicitOverride);
+        CHECK(rm::ui::resolveEffects(parsed, true) == expected);
+        CHECK(rm::ui::effectsLevelName(expected) == word);
+    }
+}
+
 TEST_CASE("the --data-dir flag collects every root it is given") {
     // Repeated flags ACCUMULATE rather than overwrite: order is priority, since an asset search
     // tries each root in turn.

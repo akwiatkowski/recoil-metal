@@ -9,7 +9,7 @@ Detailed retail evidence remains canonical in
 [`fa-exe-analysis-plan.md`](fa-exe-analysis-plan.md). This dashboard summarizes that ledger; it
 does not replace its claims, addresses, counterevidence, or confirmation gate.
 
-**Snapshot:** 2026-09-04, Recoil Metal main through HUD slice 4 — the measured interface
+**Snapshot:** 2026-09-04, Recoil Metal main through HUD slice 5 — the measured interface
 baseline (`docs/hud-baseline.md`, `tools/hud_baseline.sh`, `--backing`, `--bench-hud`,
 `--bench-size`) — after the `WP-22` controller read and six follow-ups (parked flyers recharge, the look-ahead max pyramid, attached children take their
 carrier's tilt, mesh extents and build-effect bones parsed with a bone-to-world helper, the
@@ -471,6 +471,15 @@ camera footprint use it. Rectangular maps letterbox, clicks in the bars miss, an
 are rotated quads rather than axis-aligned bounding slivers. X1CA_003 (2048x1024) was captured both
 whole-map and close-camera to verify the 2:1 content rectangle and true-line footprint.
 
+HUD slice 5 splits world and interface encoding only when a translucent backdrop is requested.
+Full and Reduced render the complete post-water world into one full-resolution shader-readable
+target, downsample it to one quarter-resolution pair, encode one MPS Gaussian blur, restore the
+sharp world, and let only panel surfaces sample the blur before later chrome and text. Off keeps
+the former direct render path and allocates or encodes none of those frame resources. macOS
+Reduced Transparency resolves automatic effects to Off; `--ui-effects` supplies the explicit
+Full/Reduced/Off override used by captures and benchmarks. At 2560x1440 pixels Full measured
+4.844 ms GPU mean against Off's 4.832 ms; at 5120x2880 it measured 9.911 ms against 9.521 ms.
+
 The native HUD also has a measured baseline (HUD slice 0, `docs/hud-baseline.md`,
 `tools/hud_baseline.sh`): seven interface states — default, commander, mixed selection,
 engineer, placement, observer, FAF chrome — at 1280x720 and 1600x900 at 1x and at the 14-inch
@@ -488,9 +497,8 @@ strategic-icon fallback decisions identical.
 command pages, overlays, key contexts, or split views (`WP-40`).
 
 ```text
-/goal Advance FA-UI with HUD slice 5 (recoil-metal-3735): add one shared quarter-resolution Metal
-Performance Shaders backdrop blur with Full, Reduced, and Off paths, preserving an actually free
-Off path and measuring Full against it.
+/goal Advance FA-UI with HUD slice 6 (recoil-metal-3755): tune faction, BAR, neutral, and classic
+FAF materials on pixel-identical geometry, without changing layout or interaction.
 ```
 
 ### FA-PRESENT - Animation, Effects, And Audio

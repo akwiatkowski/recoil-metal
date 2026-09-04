@@ -468,7 +468,8 @@ static_assert(sourceAlphaBlendFactor(BlendMode::PremultipliedAlpha)
 
 [[nodiscard]] inline MTL::RenderPipelineState* makePipeline(MTL::Device* device, MTL::Library* library,
                                                       const char* vertexName,
-                                                      const char* fragmentName, BlendMode blend) {
+                                                      const char* fragmentName, BlendMode blend,
+                                                      MTL::PixelFormat depthFormat = kDepthFormat) {
     MTL::Function* vertexFn =
         library->newFunction(NS::String::string(vertexName, NS::UTF8StringEncoding));
     MTL::Function* fragmentFn =
@@ -490,7 +491,7 @@ static_assert(sourceAlphaBlendFactor(BlendMode::PremultipliedAlpha)
     }
     // The pipeline must know the depth format or the render pass silently
     // refuses to write depth.
-    descriptor->setDepthAttachmentPixelFormat(kDepthFormat);
+    descriptor->setDepthAttachmentPixelFormat(depthFormat);
 
     NS::Error* error = nullptr;
     MTL::RenderPipelineState* pipeline = device->newRenderPipelineState(descriptor, &error);

@@ -250,6 +250,23 @@ rm::ui::GameProfile parseGameProfile(int argc, const char* argv[]) {
     return rm::ui::GameProfile::Fa;
 }
 
+rm::ui::EffectsPreference parseUiEffects(int argc, const char* argv[]) {
+    for (int i = 1; i + 1 < argc; ++i) {
+        if (std::string_view{argv[i]} != "--ui-effects") {
+            continue;
+        }
+        const std::string_view value = argv[i + 1];
+        if (value == "full") return {rm::ui::EffectsLevel::Full, true};
+        if (value == "reduced") return {rm::ui::EffectsLevel::Reduced, true};
+        if (value == "off") return {rm::ui::EffectsLevel::Off, true};
+        rm::log::writef(rm::log::Level::Warn, "cli",
+                        "unknown --ui-effects level '%.*s'; using automatic",
+                        static_cast<int>(value.size()), value.data());
+        return {};
+    }
+    return {};
+}
+
 /// `--dump-weapon <ID>`: print one unit's weapon timings, authored beside corrected.
 ///
 /// §7 P3.5's stated manual check. It exists because the FA duration correction is invisible

@@ -94,6 +94,7 @@ target_compile_options(lua54 PRIVATE -w)
 find_library(FOUNDATION_FW Foundation REQUIRED)
 find_library(APPKIT_FW AppKit REQUIRED)
 find_library(METAL_FW Metal REQUIRED)
+find_library(MPS_FW MetalPerformanceShaders REQUIRED)
 find_library(QUARTZCORE_FW QuartzCore REQUIRED)
 # ImageIO: PNG encoding for --screenshot. Part of the OS, not a dependency.
 find_library(IMAGEIO_FW ImageIO REQUIRED)
@@ -250,6 +251,7 @@ add_executable(recoil-metal
     src/platform/Audio.mm
     src/platform/Window.mm
     src/render/Renderer.mm
+    src/render/MpsBlur.mm
     # One class, several translation units (PLAN2.md §7 P7.3). `Renderer.mm` keeps the device,
     # the queue, the frame orchestration and the metal-cpp PRIVATE_IMPLEMENTATION defines, which
     # must stay in exactly one TU; each of these defines that domain's members.
@@ -259,7 +261,7 @@ add_executable(recoil-metal
     src/render/UiRenderer.mm)
 target_link_libraries(recoil-metal PRIVATE
     rm_app rm_core rm_project_warnings metal_cpp ${APPKIT_FW}
-    ${IMAGEIO_FW} ${COREGRAPHICS_FW} ${AVFOUNDATION_FW})
+    ${IMAGEIO_FW} ${COREGRAPHICS_FW} ${AVFOUNDATION_FW} ${MPS_FW})
 # ARC for the Objective-C side only. metal-cpp objects are C++ and unaffected
 # (they are manually retained/released — see AGENT.md gotchas).
 target_compile_options(recoil-metal PRIVATE

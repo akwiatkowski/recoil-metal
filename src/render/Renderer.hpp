@@ -18,6 +18,7 @@
 #include "core/mesh/ChunkDraws.hpp"
 #include "core/mesh/TerrainMesh.hpp"
 #include "core/ui/UiLayers.hpp"
+#include "core/ui/Effects.hpp"
 #include "core/ui/Viewport.hpp"
 
 #include <limits>
@@ -390,6 +391,8 @@ public:
     /// Each semantic layer has an independent fixed upload partition, so one overflowing layer
     /// cannot evict another. `uiCapacityReport()` exposes the resulting per-frame evidence.
     void setHud(const ui::Geometry& geometry) noexcept;
+    void setUiEffects(ui::EffectsLevel level) noexcept { uiEffects_ = level; }
+    [[nodiscard]] ui::EffectsLevel uiEffects() const noexcept { return uiEffects_; }
     [[nodiscard]] const ui::UiCapacityReport& uiCapacityReport() const noexcept {
         return uiCapacityReport_;
     }
@@ -567,6 +570,11 @@ private:
     // Allocates (or reallocates) the depth attachment to match the drawable.
     // Cheap no-op when the size is unchanged, which is the common case.
     void ensureDepthTexture(unsigned int width, unsigned int height) noexcept;
+    void ensureBackdropTextures(unsigned int width, unsigned int height) noexcept;
+    void encodeFrame(MTL::CommandBuffer* commandBuffer, MTL::RenderPassDescriptor* pass,
+                     unsigned int width, unsigned int height) noexcept;
+    void encodeUi(MTL::RenderCommandEncoder* encoder, unsigned int width,
+                  unsigned int height, bool glass) noexcept;
 
     void releaseTerrainBuffers() noexcept;
     void releaseUnitBuffers() noexcept;
@@ -609,7 +617,7 @@ private:
     /// cannot drift apart and quietly benchmark different work.
     void encodeScene(MTL::CommandBuffer* commandBuffer, MTL::RenderPassDescriptor* pass,
                      unsigned int width, unsigned int height,
-                     const SceneOverride* override = nullptr) noexcept;
+                     const SceneOverride* override = nullptr, bool includeUi = true) noexcept;
 
     /// The copy of the colour target the water samples to refract, and whether
     /// taking it is worth the cost.
@@ -617,6 +625,17 @@ private:
     /// Reallocated when the viewport changes; a no-op when it has not.
     void ensureSceneColour(unsigned int width, unsigned int height) noexcept;
     MTL::Texture* sceneColour_ = nullptr;  // owned
+
+    // Full/Reduced only. Off never calls ensureBackdropTextures and retains the direct path.
+    MTL::Texture* worldColour_ = nullptr;  // owned, full resolution
+    MTL::Texture* blurA_ = nullptr;        // owned, quarter resolution
+    MTL::Texture* blurB_ = nullptr;        // owned, quarter resolution
+    MTL::RenderPipelineState* downsamplePipeline_ = nullptr; // owned, no depth attachment
+    MTL::RenderPipelineState* composePipeline_ = nullptr;    // owned, with depth attachment
+    MTL::RenderPipelineState* glassPipeline_ = nullptr;      // owned
+    void* fullBlur_ = nullptr;                               // retained MPSImageGaussianBlur
+    void* reducedBlur_ = nullptr;                            // retained MPSImageGaussianBlur
+    ui::EffectsLevel uiEffects_ = ui::EffectsLevel::Full;
 
     CA::MetalLayer* layer_;                    // not owned
     MTL::Device* device_ = nullptr;            // owned

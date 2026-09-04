@@ -66,6 +66,7 @@ struct TextVertexIn {
 struct TextOut {
     float4 position [[position]];
     float2 uv;
+    float2 screenUv;
     float4 colour;
 };
 
@@ -83,6 +84,7 @@ vertex TextOut textVertex(uint vid [[vertex_id]],
     TextOut out;
     out.position = float4(ndc, 0.0, 1.0);
     out.uv = float2(v.uv);
+    out.screenUv = v.position / max(viewport, float2(1.0));
     out.colour = float4(v.colour);
     return out;
 }
@@ -101,6 +103,39 @@ fragment float4 textFragment(TextOut in [[stage_in]],
 // battlefield overlays do not borrow an opaque texel from whichever font happened to build.
 fragment float4 solidFragment(TextOut in [[stage_in]]) {
     return float4(in.colour.rgb * in.colour.a, in.colour.a);
+}
+
+struct ScreenOut {
+    float4 position [[position]];
+    float2 uv;
+};
+
+// One oversized triangle, used both to quarter the scene and to put the sharp world back.
+vertex ScreenOut screenVertex(uint vid [[vertex_id]]) {
+    const float2 corners[3] = {float2(-1.0, -1.0), float2(3.0, -1.0), float2(-1.0, 3.0)};
+    const float2 ndc = corners[vid];
+    ScreenOut out;
+    out.position = float4(ndc, 0.0, 1.0);
+    out.uv = float2((ndc.x + 1.0) * 0.5, (1.0 - ndc.y) * 0.5);
+    return out;
+}
+
+fragment float4 screenFragment(ScreenOut in [[stage_in]],
+                               texture2d<float> image [[texture(0)]],
+                               sampler imageSampler [[sampler(0)]]) {
+    return image.sample(imageSampler, in.uv);
+}
+
+// The one shared blurred scene is sampled through every solid panel surface. The result is
+// opaque: it replaces the sharp world already composed at that pixel, then absorbs it into the
+// panel tint. Chrome remains a later semantic layer and supplies the material's edge.
+fragment float4 glassFragment(TextOut in [[stage_in]],
+                              texture2d<float> backdrop [[texture(0)]],
+                              sampler backdropSampler [[sampler(0)]],
+                              constant float& tintStrength [[buffer(1)]]) {
+    const float3 blurred = backdrop.sample(backdropSampler, in.screenUv).rgb;
+    const float strength = saturate(tintStrength * in.colour.a);
+    return float4(mix(blurred, in.colour.rgb, strength), 1.0);
 }
 
 // The same geometry, sampling a full-colour IMAGE rather than a coverage mask.

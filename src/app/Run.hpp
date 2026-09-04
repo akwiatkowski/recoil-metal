@@ -72,6 +72,9 @@ struct Session {
     /// `--ui`: the run-wide interface vocabulary and material policy.
     rm::ui::GameProfile uiProfile = rm::ui::GameProfile::Fa;
 
+    /// Shared backdrop quality and whether the command line overrides macOS accessibility.
+    rm::ui::EffectsPreference uiEffects{};
+
     /// How many prop instances were placed, for the quality line each mode prints.
     std::size_t propInstances = 0;
 };

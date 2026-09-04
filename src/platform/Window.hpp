@@ -211,6 +211,9 @@ public:
     /// This frame's semantic UI layers. See Renderer::setHud.
     void setHud(const ui::Geometry& geometry);
 
+    /// Shared HUD backdrop quality. See Renderer::setUiEffects.
+    void setUiEffects(ui::EffectsLevel level);
+
     /// The build tray's packed unit icons. See Renderer::setIconAtlas.
     void setIconAtlas(const dds::Texture& atlas);
 

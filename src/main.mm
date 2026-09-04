@@ -363,6 +363,7 @@ int main(int argc, const char* argv[]) {
             .animationTime = animationTime,
             .uiScale = parseUiScale(argc, argv),
             .uiProfile = parseGameProfile(argc, argv),
+            .uiEffects = parseUiEffects(argc, argv),
             .propInstances = propInstances,
         };
 

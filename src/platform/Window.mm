@@ -752,6 +752,10 @@ void Window::setHud(const ui::Geometry& geometry) {
     impl_->renderer->setHud(geometry);
 }
 
+void Window::setUiEffects(ui::EffectsLevel level) {
+    impl_->renderer->setUiEffects(level);
+}
+
 void Window::show() {
     [impl_->window makeKeyAndOrderFront:nil];
 }

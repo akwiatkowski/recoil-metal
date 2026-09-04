@@ -9,7 +9,6 @@
 #include <QuartzCore/QuartzCore.hpp>
 
 #import <CoreText/CoreText.h>
-
 #include "render/Renderer.hpp"
 
 #include "core/Error.hpp"
@@ -32,6 +31,7 @@
 #include <string>
 
 #include "render/RendererInternal.hpp"
+#include "render/MpsBlur.hpp"
 
 namespace rm {
 
@@ -120,6 +120,12 @@ Renderer::Renderer(CA::MetalLayer* layer)
                                   BlendMode::PremultipliedAlpha);
     minimapFogPipeline_ = makePipeline(device_, library, "textVertex", "minimapFogFragment",
                                        BlendMode::PremultipliedAlpha);
+    downsamplePipeline_ = makePipeline(device_, library, "screenVertex", "screenFragment",
+                                       BlendMode::Opaque, MTL::PixelFormatInvalid);
+    composePipeline_ = makePipeline(device_, library, "screenVertex", "screenFragment",
+                                    BlendMode::Opaque);
+    glassPipeline_ = makePipeline(device_, library, "textVertex", "glassFragment",
+                                  BlendMode::Opaque);
 
     // A selection ring is interface laid over the ground, and a solid band would hide the
     // terrain it marks.
@@ -144,6 +150,12 @@ Renderer::Renderer(CA::MetalLayer* layer)
     particlePipeline_ = makePipeline(device_, library, "particleVertex", "particleFragment",
                                      BlendMode::PremultipliedAlpha);
     library->release();
+
+    // Two immutable kernels, one selected per frame. Only one is ever encoded, and both work
+    // on the same quarter-resolution pair. At quarter scale these are roughly 14 px and 7 px
+    // radii in the drawable, enough to separate the panel from motion without frosting it.
+    fullBlur_ = mps::createGaussianBlur(device_, 3.5f);
+    reducedBlur_ = mps::createGaussianBlur(device_, 1.75f);
 
     // --- Depth state -------------------------------------------------------
     auto* depthDescriptor = MTL::DepthStencilDescriptor::alloc()->init();
@@ -412,6 +424,9 @@ Renderer::~Renderer() {
     if (solidPipeline_ != nullptr) solidPipeline_->release();
     if (imagePipeline_ != nullptr) imagePipeline_->release();
     if (minimapFogPipeline_ != nullptr) minimapFogPipeline_->release();
+    if (glassPipeline_ != nullptr) glassPipeline_->release();
+    if (composePipeline_ != nullptr) composePipeline_->release();
+    if (downsamplePipeline_ != nullptr) downsamplePipeline_->release();
     if (minimapTexture_ != nullptr) minimapTexture_->release();
     if (iconAtlas_ != nullptr) iconAtlas_->release();
     if (labelFont_.atlas != nullptr) labelFont_.atlas->release();
@@ -420,6 +435,11 @@ Renderer::~Renderer() {
     if (uiBuffer_ != nullptr) uiBuffer_->release();
     if (decalPipeline_ != nullptr) decalPipeline_->release();
     if (sceneColour_ != nullptr) sceneColour_->release();
+    if (blurB_ != nullptr) blurB_->release();
+    if (blurA_ != nullptr) blurA_->release();
+    if (worldColour_ != nullptr) worldColour_->release();
+    mps::destroyGaussianBlur(reducedBlur_);
+    mps::destroyGaussianBlur(fullBlur_);
     releaseTerrainBuffers();
     releasePropBuffers();  // before the units: acquired after them
     releaseUnitBuffers();  // frees the unit textures too
@@ -578,7 +598,7 @@ Renderer::CapturedImage Renderer::renderToImage(unsigned int width, unsigned int
     depth->setStoreAction(MTL::StoreAction::StoreActionDontCare);
     depth->setClearDepth(1.0);
 
-    encodeScene(commandBuffer, pass, width, height);
+    encodeFrame(commandBuffer, pass, width, height);
 
     commandBuffer->commit();
     commandBuffer->waitUntilCompleted();  // a capture wants the result, not throughput
@@ -725,7 +745,7 @@ bench::FrameRecorder Renderer::runOffscreenBenchmark(unsigned int width, unsigne
         depth->setStoreAction(MTL::StoreAction::StoreActionDontCare);
         depth->setClearDepth(1.0);
 
-        encodeScene(commandBuffer, pass, width, height);
+        encodeFrame(commandBuffer, pass, width, height);
 
         commandBuffer->addCompletedHandler(MTL::HandlerFunction{
             [&recorder, &recordMutex, &inFlight, cpuMs](MTL::CommandBuffer* completed) {
@@ -780,9 +800,103 @@ void Renderer::ensureSceneColour(unsigned int width, unsigned int height) noexce
     sceneColour_ = device_->newTexture(descriptor);
 }
 
+void Renderer::ensureBackdropTextures(unsigned int width, unsigned int height) noexcept {
+    const unsigned int blurWidth = std::max(1u, (width + 3u) / 4u);
+    const unsigned int blurHeight = std::max(1u, (height + 3u) / 4u);
+    if (worldColour_ != nullptr && worldColour_->width() == width
+        && worldColour_->height() == height && blurA_ != nullptr
+        && blurA_->width() == blurWidth && blurA_->height() == blurHeight
+        && blurB_ != nullptr) {
+        return;
+    }
+
+    if (blurB_ != nullptr) blurB_->release();
+    if (blurA_ != nullptr) blurA_->release();
+    if (worldColour_ != nullptr) worldColour_->release();
+    blurB_ = nullptr;
+    blurA_ = nullptr;
+    worldColour_ = nullptr;
+
+    MTL::TextureDescriptor* descriptor = MTL::TextureDescriptor::texture2DDescriptor(
+        kColorFormat, width, height, /*mipmapped=*/false);
+    descriptor->setUsage(MTL::TextureUsageRenderTarget | MTL::TextureUsageShaderRead);
+    descriptor->setStorageMode(MTL::StorageModePrivate);
+    worldColour_ = device_->newTexture(descriptor);
+
+    descriptor->setWidth(blurWidth);
+    descriptor->setHeight(blurHeight);
+    descriptor->setUsage(MTL::TextureUsageRenderTarget | MTL::TextureUsageShaderRead
+                         | MTL::TextureUsageShaderWrite);
+    blurA_ = device_->newTexture(descriptor);
+    blurB_ = device_->newTexture(descriptor);
+}
+
+void Renderer::encodeFrame(MTL::CommandBuffer* commandBuffer, MTL::RenderPassDescriptor* pass,
+                           unsigned int width, unsigned int height) noexcept {
+    const std::size_t panelIndex = ui::uiLayerIndex(ui::UiLayer::PanelSurface);
+    const bool hasGlassPanels = uiLayerVertexCounts_[panelIndex][0] > 0;
+    if (uiEffects_ == ui::EffectsLevel::Off || !hasGlassPanels) {
+        encodeScene(commandBuffer, pass, width, height);
+        return;
+    }
+
+    ensureBackdropTextures(width, height);
+    if (worldColour_ == nullptr || blurA_ == nullptr || blurB_ == nullptr
+        || fullBlur_ == nullptr || reducedBlur_ == nullptr) {
+        encodeScene(commandBuffer, pass, width, height);
+        return;
+    }
+
+    // World first, into a shader-readable target. The water's pre-water refraction copy stays
+    // separate (`sceneColour_`); this texture is the complete post-water world the HUD sees.
+    MTL::RenderPassDescriptor* worldPass = MTL::RenderPassDescriptor::alloc()->init();
+    auto* worldColor = worldPass->colorAttachments()->object(0);
+    worldColor->setTexture(worldColour_);
+    worldColor->setLoadAction(MTL::LoadAction::LoadActionClear);
+    worldColor->setStoreAction(MTL::StoreAction::StoreActionStore);
+    worldColor->setClearColor(MTL::ClearColor::Make(kSkyR, kSkyG, kSkyB, 1.0));
+    auto* worldDepth = worldPass->depthAttachment();
+    worldDepth->setTexture(depthTexture_);
+    worldDepth->setLoadAction(MTL::LoadAction::LoadActionClear);
+    worldDepth->setStoreAction(MTL::StoreAction::StoreActionDontCare);
+    worldDepth->setClearDepth(1.0);
+    encodeScene(commandBuffer, worldPass, width, height, nullptr, false);
+
+    // One cheap raster downsample followed by exactly one MPS blur over the quarter-size pair.
+    MTL::RenderPassDescriptor* downsamplePass = MTL::RenderPassDescriptor::alloc()->init();
+    auto* downsampleColor = downsamplePass->colorAttachments()->object(0);
+    downsampleColor->setTexture(blurA_);
+    downsampleColor->setLoadAction(MTL::LoadAction::LoadActionDontCare);
+    downsampleColor->setStoreAction(MTL::StoreAction::StoreActionStore);
+    MTL::RenderCommandEncoder* downsample = commandBuffer->renderCommandEncoder(downsamplePass);
+    downsample->setRenderPipelineState(downsamplePipeline_);
+    downsample->setFragmentTexture(worldColour_, NS::UInteger{0});
+    downsample->setFragmentSamplerState(fontSampler_, NS::UInteger{0});
+    downsample->drawPrimitives(MTL::PrimitiveType::PrimitiveTypeTriangle, NS::UInteger{0},
+                               NS::UInteger{3});
+    downsample->endEncoding();
+
+    mps::encodeGaussianBlur(uiEffects_ == ui::EffectsLevel::Reduced ? reducedBlur_ : fullBlur_,
+                            commandBuffer, blurA_, blurB_);
+
+    // Restore the sharp world, then put semantic HUD layers over it. Only PanelSurface samples
+    // the shared blur; every icon, label, edge and readout remains crisp.
+    MTL::RenderCommandEncoder* composite = commandBuffer->renderCommandEncoder(pass);
+    composite->setRenderPipelineState(composePipeline_);
+    composite->setFragmentTexture(worldColour_, NS::UInteger{0});
+    composite->setFragmentSamplerState(fontSampler_, NS::UInteger{0});
+    composite->drawPrimitives(MTL::PrimitiveType::PrimitiveTypeTriangle, NS::UInteger{0},
+                              NS::UInteger{3});
+    encodeUi(composite, width, height, true);
+    composite->endEncoding();
+
+    downsamplePass->release();
+    worldPass->release();
+}
+
 void Renderer::encodeScene(MTL::CommandBuffer* commandBuffer, MTL::RenderPassDescriptor* pass,
                            unsigned int width, unsigned int height,
-                           const SceneOverride* override) noexcept {
+                           const SceneOverride* override, bool includeUi) noexcept {
     if (height == 0) {
         return;
     }
@@ -1439,104 +1553,119 @@ void Renderer::encodeScene(MTL::CommandBuffer* commandBuffer, MTL::RenderPassDes
                                        NS::UInteger{0});
     }
 
-    // --- UI -----------------------------------------------------------------
-    // Last of all and skipped in the reflection pass: semantic layers composite from world
-    // overlays toward foreground readouts, with no depth state between them.
+    if (includeUi && override == nullptr) {
+        encodeUi(encoder, width, height, false);
+    }
+
+    encoder->endEncoding();
+}
+
+void Renderer::encodeUi(MTL::RenderCommandEncoder* encoder, unsigned int width,
+                        unsigned int height, bool glass) noexcept {
     const bool hasUiGeometry = std::any_of(
         uiCapacityReport_.layers.begin(), uiCapacityReport_.layers.end(),
         [](const ui::UiLayerUsage& usage) { return usage.uploaded > 0; });
     const bool hasMinimap = minimapTexture_ != nullptr && minimapRect_[2] > 0.0f
                          && minimapRect_[3] > 0.0f;
-    if ((hasUiGeometry || hasMinimap) && override == nullptr) {
-        encoder->setFragmentSamplerState(fontSampler_, NS::UInteger{0});
+    if (!hasUiGeometry && !hasMinimap) return;
 
-        const ui::Extent hudExtent = uiViewport_.hudExtent();
-        const simd_float2 viewport{
-            hudExtent.width > 0.0f ? hudExtent.width : static_cast<float>(width),
-            hudExtent.height > 0.0f ? hudExtent.height : static_cast<float>(height)};
-        encoder->setVertexBytes(&viewport, sizeof(viewport), kUniformBufferIndex);
+    encoder->setFragmentSamplerState(fontSampler_, NS::UInteger{0});
+    const ui::Extent hudExtent = uiViewport_.hudExtent();
+    const simd_float2 viewport{
+        hudExtent.width > 0.0f ? hudExtent.width : static_cast<float>(width),
+        hudExtent.height > 0.0f ? hudExtent.height : static_cast<float>(height)};
+    encoder->setVertexBytes(&viewport, sizeof(viewport), kUniformBufferIndex);
 
-        const std::size_t slotBase = instanceSlot_ * ui::kUiVerticesPerFrame;
-        const auto count = [&](ui::UiLayer layer, std::size_t stream) {
-            return uiLayerVertexCounts_[ui::uiLayerIndex(layer)][stream];
-        };
-        const auto offset = [&](ui::UiLayer layer, std::size_t stream) {
-            const std::size_t index = ui::uiLayerIndex(layer);
-            return slotBase + index * ui::kUiLayerVertexCapacity
-                 + (stream == 0 ? 0 : uiLayerVertexCounts_[index][0]);
-        };
-        const auto bindRange = [&](ui::UiLayer layer, std::size_t stream) {
-            encoder->setVertexBuffer(
-                uiBuffer_,
-                static_cast<NS::UInteger>(offset(layer, stream) * sizeof(text::TextVertex)),
-                kVertexBufferIndex);
-        };
-        const auto drawSolid = [&](ui::UiLayer layer, std::size_t stream) {
-            const std::size_t vertices = count(layer, stream);
-            if (vertices == 0 || solidPipeline_ == nullptr) return;
-            encoder->setRenderPipelineState(solidPipeline_);
-            bindRange(layer, stream);
-            encoder->drawPrimitives(MTL::PrimitiveType::PrimitiveTypeTriangle, NS::UInteger{0},
-                                    static_cast<NS::UInteger>(vertices));
-        };
-        const auto drawImage = [&](ui::UiLayer layer, std::size_t stream) {
-            const std::size_t vertices = count(layer, stream);
-            if (vertices == 0 || imagePipeline_ == nullptr || iconAtlas_ == nullptr) return;
-            encoder->setRenderPipelineState(imagePipeline_);
-            bindRange(layer, stream);
-            encoder->setFragmentTexture(iconAtlas_, NS::UInteger{0});
-            encoder->drawPrimitives(MTL::PrimitiveType::PrimitiveTypeTriangle, NS::UInteger{0},
-                                    static_cast<NS::UInteger>(vertices));
-        };
-        const auto drawText = [&](ui::UiLayer layer, MTL::Texture* atlas) {
-            const std::size_t vertices = count(layer, 0);
-            if (vertices == 0 || textPipeline_ == nullptr || atlas == nullptr) return;
-            encoder->setRenderPipelineState(textPipeline_);
-            bindRange(layer, 0);
-            encoder->setFragmentTexture(atlas, NS::UInteger{0});
-            encoder->drawPrimitives(MTL::PrimitiveType::PrimitiveTypeTriangle, NS::UInteger{0},
-                                    static_cast<NS::UInteger>(vertices));
-        };
+    const std::size_t slotBase = instanceSlot_ * ui::kUiVerticesPerFrame;
+    const auto count = [&](ui::UiLayer layer, std::size_t stream) {
+        return uiLayerVertexCounts_[ui::uiLayerIndex(layer)][stream];
+    };
+    const auto offset = [&](ui::UiLayer layer, std::size_t stream) {
+        const std::size_t index = ui::uiLayerIndex(layer);
+        return slotBase + index * ui::kUiLayerVertexCapacity
+             + (stream == 0 ? 0 : uiLayerVertexCounts_[index][0]);
+    };
+    const auto bindRange = [&](ui::UiLayer layer, std::size_t stream) {
+        encoder->setVertexBuffer(
+            uiBuffer_,
+            static_cast<NS::UInteger>(offset(layer, stream) * sizeof(text::TextVertex)),
+            kVertexBufferIndex);
+    };
+    const auto drawSolid = [&](ui::UiLayer layer, std::size_t stream) {
+        const std::size_t vertices = count(layer, stream);
+        if (vertices == 0 || solidPipeline_ == nullptr) return;
+        encoder->setRenderPipelineState(solidPipeline_);
+        bindRange(layer, stream);
+        encoder->drawPrimitives(MTL::PrimitiveType::PrimitiveTypeTriangle, NS::UInteger{0},
+                                static_cast<NS::UInteger>(vertices));
+    };
+    const auto drawImage = [&](ui::UiLayer layer, std::size_t stream) {
+        const std::size_t vertices = count(layer, stream);
+        if (vertices == 0 || imagePipeline_ == nullptr || iconAtlas_ == nullptr) return;
+        encoder->setRenderPipelineState(imagePipeline_);
+        bindRange(layer, stream);
+        encoder->setFragmentTexture(iconAtlas_, NS::UInteger{0});
+        encoder->drawPrimitives(MTL::PrimitiveType::PrimitiveTypeTriangle, NS::UInteger{0},
+                                static_cast<NS::UInteger>(vertices));
+    };
+    const auto drawText = [&](ui::UiLayer layer, MTL::Texture* atlas) {
+        const std::size_t vertices = count(layer, 0);
+        if (vertices == 0 || textPipeline_ == nullptr || atlas == nullptr) return;
+        encoder->setRenderPipelineState(textPipeline_);
+        bindRange(layer, 0);
+        encoder->setFragmentTexture(atlas, NS::UInteger{0});
+        encoder->drawPrimitives(MTL::PrimitiveType::PrimitiveTypeTriangle, NS::UInteger{0},
+                                static_cast<NS::UInteger>(vertices));
+    };
 
-        // Battlefield annotations remain behind every panel, including the minimap preview.
-        drawImage(ui::UiLayer::WorldOverlay, 0);
-        drawSolid(ui::UiLayer::WorldOverlay, 1);
+    drawImage(ui::UiLayer::WorldOverlay, 0);
+    drawSolid(ui::UiLayer::WorldOverlay, 1);
 
-        // The map preview and its fog are the first panel-surface artwork. Pips and footprint
-        // edges arrive later with chrome, so they cannot disappear below the picture.
-        if (hasMinimap && imagePipeline_ != nullptr) {
-            const float x0 = minimapRect_[0];
-            const float y0 = minimapRect_[1];
-            const float x1 = x0 + minimapRect_[2];
-            const float y1 = y0 + minimapRect_[3];
-            const std::array<float, 4> white{{1.0f, 1.0f, 1.0f, 1.0f}};
-            const std::array<text::TextVertex, 6> quad{{
-                {{x0, y0}, {0.0f, 0.0f}, white}, {{x1, y0}, {1.0f, 0.0f}, white},
-                {{x1, y1}, {1.0f, 1.0f}, white}, {{x0, y0}, {0.0f, 0.0f}, white},
-                {{x1, y1}, {1.0f, 1.0f}, white}, {{x0, y1}, {0.0f, 1.0f}, white},
-            }};
-            encoder->setRenderPipelineState(imagePipeline_);
-            encoder->setVertexBytes(quad.data(), sizeof(quad), kVertexBufferIndex);
-            encoder->setFragmentTexture(minimapTexture_, NS::UInteger{0});
-            encoder->drawPrimitives(MTL::PrimitiveType::PrimitiveTypeTriangle, NS::UInteger{0},
-                                    NS::UInteger{6});
-            if (hasFog_ && fogTexture_ != nullptr && minimapFogPipeline_ != nullptr) {
-                encoder->setRenderPipelineState(minimapFogPipeline_);
-                encoder->setFragmentTexture(fogTexture_, NS::UInteger{0});
-                encoder->drawPrimitives(MTL::PrimitiveType::PrimitiveTypeTriangle,
-                                        NS::UInteger{0}, NS::UInteger{6});
-            }
-        }
-
-        drawSolid(ui::UiLayer::PanelSurface, 0);
-        drawImage(ui::UiLayer::PanelSurface, 1);
-        drawSolid(ui::UiLayer::Chrome, 0);
-        drawImage(ui::UiLayer::Icon, 0);
-        drawText(ui::UiLayer::Label, labelFont_.atlas);
-        drawText(ui::UiLayer::ForegroundReadout, readoutFont_.atlas);
+    // Glass replaces the world below panel surfaces, so it must precede the minimap's own
+    // artwork. The opaque Off material retains the historical tint-over-preview ordering.
+    if (glass && count(ui::UiLayer::PanelSurface, 0) > 0) {
+        const float tintStrength = ui::glassTintStrength(uiEffects_);
+        encoder->setRenderPipelineState(glassPipeline_);
+        bindRange(ui::UiLayer::PanelSurface, 0);
+        encoder->setFragmentTexture(blurB_, NS::UInteger{0});
+        encoder->setFragmentBytes(&tintStrength, sizeof(tintStrength), kUniformBufferIndex);
+        encoder->drawPrimitives(
+            MTL::PrimitiveType::PrimitiveTypeTriangle, NS::UInteger{0},
+            static_cast<NS::UInteger>(count(ui::UiLayer::PanelSurface, 0)));
     }
 
-    encoder->endEncoding();
+    if (hasMinimap && imagePipeline_ != nullptr) {
+        const float x0 = minimapRect_[0];
+        const float y0 = minimapRect_[1];
+        const float x1 = x0 + minimapRect_[2];
+        const float y1 = y0 + minimapRect_[3];
+        const std::array<float, 4> white{{1.0f, 1.0f, 1.0f, 1.0f}};
+        const std::array<text::TextVertex, 6> quad{{
+            {{x0, y0}, {0.0f, 0.0f}, white}, {{x1, y0}, {1.0f, 0.0f}, white},
+            {{x1, y1}, {1.0f, 1.0f}, white}, {{x0, y0}, {0.0f, 0.0f}, white},
+            {{x1, y1}, {1.0f, 1.0f}, white}, {{x0, y1}, {0.0f, 1.0f}, white},
+        }};
+        encoder->setRenderPipelineState(imagePipeline_);
+        encoder->setVertexBytes(quad.data(), sizeof(quad), kVertexBufferIndex);
+        encoder->setFragmentTexture(minimapTexture_, NS::UInteger{0});
+        encoder->drawPrimitives(MTL::PrimitiveType::PrimitiveTypeTriangle, NS::UInteger{0},
+                                NS::UInteger{6});
+        if (hasFog_ && fogTexture_ != nullptr && minimapFogPipeline_ != nullptr) {
+            encoder->setRenderPipelineState(minimapFogPipeline_);
+            encoder->setFragmentTexture(fogTexture_, NS::UInteger{0});
+            encoder->drawPrimitives(MTL::PrimitiveType::PrimitiveTypeTriangle,
+                                    NS::UInteger{0}, NS::UInteger{6});
+        }
+    }
+
+    if (!glass) {
+        drawSolid(ui::UiLayer::PanelSurface, 0);
+    }
+    drawImage(ui::UiLayer::PanelSurface, 1);
+    drawSolid(ui::UiLayer::Chrome, 0);
+    drawImage(ui::UiLayer::Icon, 0);
+    drawText(ui::UiLayer::Label, labelFont_.atlas);
+    drawText(ui::UiLayer::ForegroundReadout, readoutFont_.atlas);
 }
 
 void Renderer::drawFrame(CA::MetalDrawable* drawable) noexcept {
@@ -1616,7 +1745,7 @@ void Renderer::drawFrame(CA::MetalDrawable* drawable) noexcept {
         // The pass runs even with zero draw calls: a render pass with
         // LoadActionClear is what performs the clear. encodeScene creates and ends
         // the encoder — it may need two of them, around the refraction's blit.
-        encodeScene(commandBuffer, pass, width, height);
+        encodeFrame(commandBuffer, pass, width, height);
 
         // Releases the ring slot this frame read its instances from. Metal runs
         // this on its own thread; std::counting_semaphore is the synchronisation
