@@ -1018,9 +1018,10 @@ TEST_CASE("a mobile unit is born able to move, whichever spawn path made it",
 
 namespace {
 
-/// A flyer with UEA0101's control numbers (`C-221`): approach gain 0.1/tick, lift gain
-/// 0.3/tick, climb authority 7 elmos/tick, auto-land after 10 idle ticks. Speed is
-/// written directly — 16 elmos/tick is MaxAirspeed 20 at this file's 10 Hz clock.
+/// A flyer with UEA0101's control numbers (`C-221`, `C-244`): KMove 1, KMoveDamping 1,
+/// KLift 3, KLiftDamping 2.5, climb authority 7 elmos/s, auto-land after 10 idle ticks,
+/// elevation 80. Speed is written directly — 16 elmos/tick is MaxAirspeed 20 at this
+/// file's 10 Hz clock.
 [[nodiscard]] MoveState flyer() {
     MoveState motion = ordinary();
     motion.canFly = true;
@@ -1028,9 +1029,12 @@ namespace {
     motion.airborne = true;
     motion.speedPerTick = rm::sim::Fx::fromInt(16);
     motion.airMaxSpeedElmosPerSec = rm::sim::Fx::fromInt(160);
-    motion.airApproachGain = rm::sim::Fx::fromRatio(1, 10);
-    motion.airLiftGain = rm::sim::Fx::fromRatio(3, 10);
+    motion.airKMove = rm::sim::Fx::fromInt(1);
+    motion.airKMoveDamping = rm::sim::Fx::fromInt(1);
+    motion.airKLift = rm::sim::Fx::fromInt(3);
+    motion.airKLiftDamping = rm::sim::Fx::fromRatio(5, 2);
     motion.airLiftFactor = rm::sim::Fx::fromInt(7);
+    motion.airElevation = rm::sim::Fx::fromInt(80);
     motion.idleLandThreshold = 10;
     motion.fuelDrainPerTick = rm::sim::Fx::fromRatio(1, 5000);
     motion.fuelRatio = rm::sim::Fx::fromInt(1);
@@ -1040,16 +1044,19 @@ namespace {
 }  // namespace
 
 TEST_CASE("a flyer integrates velocity trapezoidally") {
-    // `C-221`: `pos += (v_old + v_new) x 0.05` with `v_new = v_old + P*dt`, velocity in
+    // `C-221`: `pos += (v_old + v_new) x 0.05` with `v_new = v_old + a*dt`, velocity in
     // elmos per SECOND — per-tick velocity would fly every leg at a tenth of its authored
-    // speed. Hand-computed: standing start toward +Z at a 160-elmos/s cruise and gain 0.1
-    // gives v = 16 after one tick and z += (0 + 16) x 0.05 = 0.8. Level flight — the
-    // reference sits at the unit's own altitude, so nothing climbs.
+    // speed. Hand-computed (`C-244`): standing start toward +Z at a 160-elmos/s cruise,
+    // KMove 1 and nothing to damp gives a = 160, v = 16 after one tick and
+    // z += (0 + 16) x 0.05 = 0.8. Level flight: at cruise elevation with no lift
+    // authority the lift law returns its zero cap, so nothing climbs.
     const HeightField field = flatField();
     const rm::sim::Terrain terrain{field};
     std::vector<rm::sim::Transform> units{unitAt(100.0f, 100.0f)};
+    units[0].y = rm::sim::Fx::fromInt(80);
     std::vector<MoveState> motion{flyer()};
-    motion[0].altitudeRef = rm::sim::Fx{};
+    motion[0].altitudeRef = rm::sim::Fx::fromInt(80);
+    motion[0].airLiftFactor = rm::sim::Fx{};
     rm::sim::orderTo(motion[0], terrain, rm::test::fx(100.0f), rm::test::fx(700.0f));
 
     rm::sim::tick(units, motion, terrain);
@@ -1057,48 +1064,156 @@ TEST_CASE("a flyer integrates velocity trapezoidally") {
     CHECK(rm::sim::fxToFloat(motion[0].velocity[2]) == Approx(16.0f).margin(0.1));
     CHECK(rm::sim::fxToFloat(motion[0].velocity[0]) == Approx(0.0f).margin(0.01));
     CHECK(rm::sim::fxToFloat(units[0].z) == Approx(100.8f).margin(0.01));
-    CHECK(rm::sim::fxToFloat(units[0].y) == Approx(0.0f).margin(0.01));
+    CHECK(rm::sim::fxToFloat(units[0].y) == Approx(80.0f).margin(0.01));
 }
 
-TEST_CASE("climb authority dies below half max airspeed") {
-    // `C-221`'s lift law: climb is capped at `max(0, speedRatio - 0.5) x LiftFactor`, so
-    // a flyer at 0.04 of max speed cannot climb at all while one at full speed climbs
-    // at most 0.5 x 7 = 3.5 elmos/s against a far reference.
+TEST_CASE("the horizontal damping is KMove unless the controller is faster than its desire") {
+    // `C-244`: `s = max(1, min(|desired|, KMove))`; `KMove` when `KMove <= s`, otherwise
+    // `min(KMove / s, KMoveDamping)`. At cruise every shipped aircraft sits in the first
+    // branch; the fast controllers (KMove 1.5 and 4) reach the second on final approach.
+    using rm::sim::Fx;
+    const Fx one = Fx::fromInt(1);
+    // URA0102: KMove 1 against a cruise-speed desire.
+    CHECK(rm::sim::airDampingFactor(one, one, Fx::fromInt(120)) == one);
+    // A KMove of 4 against a desire of 2: s = 2, KMove > s, 4 / 2 = 2 under a damping of 10.
+    CHECK(rm::sim::airDampingFactor(Fx::fromInt(4), Fx::fromInt(10), Fx::fromInt(2))
+          == Fx::fromInt(2));
+    // The same controller nearly at rest: s floors at 1, and KMoveDamping caps the ratio.
+    CHECK(rm::sim::airDampingFactor(Fx::fromInt(4), Fx::fromInt(3), Fx::fromRatio(1, 2))
+          == Fx::fromInt(3));
+}
+
+TEST_CASE("the lift law caps a fast climb and lifts a slow flyer to half elevation") {
+    // `C-245`: `cap = (speedRatio - 0.5) x LiftFactor`. With lift, the need is capped by
+    // it; without, a flyer under half its elevation gets exactly the climb to that half,
+    // and one already there gets the non-positive cap.
+    using rm::sim::Fx;
+    const Fx lift7 = Fx::fromInt(7);
+    const Fx half = Fx::fromRatio(1, 2);
+    // Full speed, far reference: 0.5 x 7 = 3.5.
+    CHECK(rm::sim::wingedLift(Fx::fromInt(100), Fx::fromInt(1), lift7, Fx::fromInt(80),
+                              Fx::fromInt(80)) == Fx::fromRatio(7, 2));
+    // Full speed, one elmo short: the need wins.
+    CHECK(rm::sim::wingedLift(Fx::fromInt(1), Fx::fromInt(1), lift7, Fx::fromInt(80),
+                              Fx::fromInt(80)) == Fx::fromInt(1));
+    // On the deck at rest: straight up to half of 80.
+    CHECK(rm::sim::wingedLift(Fx::fromInt(80), Fx{}, lift7, Fx{}, Fx::fromInt(80))
+          == Fx::fromInt(40));
+    // Slow but already above half: the cap, which is now negative.
+    CHECK(rm::sim::wingedLift(Fx::fromInt(20), half * half, lift7, Fx::fromInt(60),
+                              Fx::fromInt(80)) == (half * half - half) * lift7);
+}
+
+TEST_CASE("climb authority above half elevation dies below half max airspeed") {
+    // `C-221`/`C-245`: a flyer at 0.04 of max speed already above half its elevation
+    // cannot climb, while one at full speed climbs at most 0.5 x 7 = 3.5 elmos/s against
+    // a far reference — KLift 3 turns that into 1.05 elmos/s of velocity in one beat.
     const HeightField field = flatField();
     const rm::sim::Terrain terrain{field};
 
-    SECTION("slow flyer holds altitude") {
+    SECTION("slow flyer above half elevation does not climb") {
         std::vector<rm::sim::Transform> units{unitAt(100.0f, 100.0f)};
+        units[0].y = rm::sim::Fx::fromInt(60);
         std::vector<MoveState> motion{flyer()};
         motion[0].velocity = {rm::sim::Fx::fromInt(6), rm::sim::Fx{},
                               rm::sim::Fx{}};
         motion[0].altitudeRef = rm::sim::Fx::fromInt(100);
         motion[0].moving = true;
         rm::sim::tick(units, motion, terrain);
-        CHECK(units[0].y == rm::sim::Fx{});
+        CHECK(units[0].y <= rm::sim::Fx::fromInt(60));
     }
 
     SECTION("fast flyer climbs within the cap") {
         std::vector<rm::sim::Transform> units{unitAt(100.0f, 100.0f)};
+        units[0].y = rm::sim::Fx::fromInt(60);
         std::vector<MoveState> motion{flyer()};
         motion[0].velocity = {rm::sim::Fx{}, rm::sim::Fx{}, rm::sim::Fx::fromInt(160)};
         motion[0].altitudeRef = rm::sim::Fx::fromInt(100);
         // Straight ahead: no turn couples into the horizontal speed the lift law reads.
         rm::sim::orderTo(motion[0], terrain, rm::test::fx(100.0f), rm::test::fx(700.0f));
         rm::sim::tick(units, motion, terrain);
-        CHECK(units[0].y > rm::sim::Fx{});
+        CHECK(units[0].y > rm::sim::Fx::fromInt(60));
         CHECK(rm::sim::fxToFloat(motion[0].velocity[1]) == Approx(1.05f).margin(0.01));
     }
 }
 
-TEST_CASE("a grounded flyer rolls, lifts, cruises and lands on arrival") {
-    // The full loop with no invented thresholds: an order takes a Bottom flyer Up (still
-    // on the deck — the lift law keeps it there until fast), full speed opens the climb,
-    // reaching the reference levels to Top, arrival commits Down, touchdown returns
-    // Bottom with the airborne flag cleared. Lift authority is raised for this transition
-    // coverage so the climb finishes before arrival on an 800-elmo field; the B-tests
-    // above pin the real UEA0101 pacing, at which a short hop lands without ever
-    // levelling off (see below).
+TEST_CASE("a slow flyer lifts straight up to half its elevation before moving forward") {
+    // `C-245`: at rest the lift cap is negative, so the lift law climbs toward half the
+    // elevation; below that half and under 0.08 of cruise the horizontal desire is held
+    // back by height-over-elevation (`0x006c66e3`), which is zero on the deck. So the
+    // first beat rises and does not advance — the retail lift-off, not a runway roll.
+    const HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    std::vector<rm::sim::Transform> units{unitAt(100.0f, 100.0f)};
+    std::vector<MoveState> motion{flyer()};
+    motion[0].airState = MoveState::AirState::Bottom;
+    motion[0].airborne = false;
+    motion[0].altitudeRef = rm::sim::Fx::fromInt(80);
+    rm::sim::orderTo(motion[0], terrain, rm::test::fx(100.0f), rm::test::fx(700.0f));
+
+    rm::sim::tick(units, motion, terrain);
+    CHECK(motion[0].airState == MoveState::AirState::Up);
+    CHECK(motion[0].airborne);
+    // KLift 3 x (40 - 0) = 120 elmos/s2 -> 12 elmos/s -> 0.6 elmos this beat.
+    CHECK(rm::sim::fxToFloat(units[0].y) == Approx(0.6f).margin(0.01));
+    CHECK(motion[0].velocity[2] == rm::sim::Fx{});
+    CHECK(rm::sim::fxToFloat(units[0].z) == Approx(100.0f).margin(0.001));
+
+    // As it rises the gate opens in proportion, so forward motion begins before half
+    // elevation and cruise follows.
+    for (int tick = 0; tick < 20; ++tick) {
+        rm::sim::tick(units, motion, terrain);
+    }
+    CHECK(motion[0].velocity[2] > rm::sim::Fx{});
+    CHECK(units[0].y > rm::sim::Fx::fromInt(10));
+}
+
+TEST_CASE("a hill ahead raises the altitude reference and holds the forward desire back") {
+    // `C-246`: the reference chases the highest surface within five seconds of cruise (or
+    // the destination, if nearer), and when that climb exceeds a second of lift the nearer
+    // half-reach scan decides the hold-back: (halfReach - max(0, 1.5 x nearHeight - y)) /
+    // halfReach, floored at 0.2, squared. Here a 600-elmo wall starts 100 elmos ahead: the far cell
+    // sees it (reference target 680, slewed 0.7 per beat from 80), the near cell sees it
+    // too, so the desire is cut to 0.04 of cruise: v = 160 x 0.04 x 0.1 = 0.64.
+    HeightField field = flatField();
+    for (int z = 25; z < field.verticesZ(); ++z) {
+        for (int x = 0; x < field.verticesX(); ++x) {
+            field.raw[static_cast<std::size_t>(z) * static_cast<std::size_t>(field.verticesX())
+                      + static_cast<std::size_t>(x)] = 600;
+        }
+    }
+    const rm::sim::Terrain terrain{field};
+    std::vector<rm::sim::Transform> units{unitAt(100.0f, 100.0f)};
+    units[0].y = rm::sim::Fx::fromInt(80);
+    std::vector<MoveState> motion{flyer()};
+    motion[0].altitudeRef = rm::sim::Fx::fromInt(80);
+    rm::sim::orderTo(motion[0], terrain, rm::test::fx(100.0f), rm::test::fx(700.0f));
+
+    rm::sim::tick(units, motion, terrain);
+
+    CHECK(rm::sim::fxToFloat(motion[0].altitudeRef) == Approx(80.7f).margin(0.01));
+    CHECK(rm::sim::fxToFloat(motion[0].velocity[2]) == Approx(0.64f).margin(0.01));
+
+    // The same flyer on a flat field wants the full 16.
+    const HeightField flat = flatField();
+    const rm::sim::Terrain level{flat};
+    std::vector<rm::sim::Transform> units2{unitAt(100.0f, 100.0f)};
+    units2[0].y = rm::sim::Fx::fromInt(80);
+    std::vector<MoveState> motion2{flyer()};
+    motion2[0].altitudeRef = rm::sim::Fx::fromInt(80);
+    rm::sim::orderTo(motion2[0], level, rm::test::fx(100.0f), rm::test::fx(700.0f));
+    rm::sim::tick(units2, motion2, level);
+    CHECK(rm::sim::fxToFloat(motion2[0].velocity[2]) == Approx(16.0f).margin(0.1));
+    CHECK(motion2[0].altitudeRef == rm::sim::Fx::fromInt(80));
+}
+
+TEST_CASE("a grounded flyer lifts, cruises and lands on arrival") {
+    // The full loop with no invented thresholds: an order takes a Bottom flyer Up and off
+    // the deck the same beat (`C-245`), speed opens the climb, reaching the reference
+    // levels to Top, arrival commits Down, touchdown returns Bottom with the airborne
+    // flag cleared. Lift authority is raised for this transition coverage so the climb
+    // finishes before arrival on an 800-elmo field; the B-tests above pin the real
+    // UEA0101 pacing, at which a short hop lands without ever levelling off (see below).
     const HeightField field = flatField();
     const rm::sim::Terrain terrain{field};
     std::vector<rm::sim::Transform> units{unitAt(100.0f, 100.0f)};
@@ -1109,12 +1224,11 @@ TEST_CASE("a grounded flyer rolls, lifts, cruises and lands on arrival") {
     motion[0].airLiftFactor = rm::sim::Fx::fromInt(70);
     rm::sim::orderTo(motion[0], terrain, rm::test::fx(700.0f), rm::test::fx(700.0f));
 
-    // First tick: committed to takeoff but still on the deck — the lift law, not the
-    // order, decides when wheels leave ground.
+    // First tick: committed to takeoff and already rising.
     rm::sim::tick(units, motion, terrain);
     CHECK(motion[0].airState == MoveState::AirState::Up);
-    CHECK_FALSE(motion[0].airborne);
-    CHECK(units[0].y == rm::sim::Fx{});
+    CHECK(motion[0].airborne);
+    CHECK(units[0].y > rm::sim::Fx{});
 
     bool sawTop = false;
     bool sawDown = false;

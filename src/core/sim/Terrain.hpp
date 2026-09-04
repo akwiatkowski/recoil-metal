@@ -43,6 +43,17 @@ public:
     /// The interpolated height under a world position. The sim's `heightAtWorld`.
     [[nodiscard]] Fx heightAt(Fx x, Fx z) const noexcept;
 
+    /// The surface under a world position: the ground, or the water where the ground is
+    /// drowned. What an aircraft measures its height above and lands on (`C-222`).
+    [[nodiscard]] Fx surfaceHeightAt(Fx x, Fx z) const noexcept;
+
+    /// The highest surface a flyer must clear within `reachElmos` of a position — retail's
+    /// terrain look-ahead (`C-246`). Not a directional scan: retail indexes a max-height
+    /// pyramid at the level whose cell is at least half the reach wide, so the answer is the
+    /// maximum over the power-of-two cell CONTAINING the position, aligned to the grid.
+    /// Below one ogrid of reach it is the point sample. Water counts as surface.
+    [[nodiscard]] Fx maxSurfaceHeightNear(Fx x, Fx z, Fx reachElmos) const noexcept;
+
     /// The field this samples, for the passes that still need its integer geometry — square
     /// counts, extents. Deliberately not a way back to the float accessors: those are the
     /// renderer's.

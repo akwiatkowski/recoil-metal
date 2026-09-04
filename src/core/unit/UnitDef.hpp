@@ -270,15 +270,21 @@ struct UnitDef {
     sim::Mag buildCostMass{};
 
     /// The authored `Air` control block, floats as the file states them. Only the fields
-    /// the winged mover reads are here (`C-221`): `KMove`/`KLift` are the proportional
-    /// control inputs (their exact gain schedule is unread — the mover uses them times
-    /// the retail step and says so), `LiftFactor` the climb authority, `AutoLandTime`
-    /// the idle seconds before auto-land, `FuelUseTime` the seconds of flight per tank.
-    /// Damping, banking, `MinAirspeed`, `Winged`, combat speeds and turn rates are parsed
-    /// nowhere yet — each is a named follow-up, not a silent default.
+    /// the winged mover reads are here (`C-221`, `C-244`): `KMove`/`KLift` the proportional
+    /// gains and `KMoveDamping`/`KLiftDamping` their damping terms, `LiftFactor` the climb
+    /// authority, `AutoLandTime` the idle seconds before auto-land, `FuelUseTime` the
+    /// seconds of flight per tank. Banking, `MinAirspeed`, `Winged`, the turn/roll gains,
+    /// combat speeds and turn rates are parsed nowhere yet — each is a named follow-up,
+    /// not a silent default.
     float airKMove = 0.0f;
+    float airKMoveDamping = 0.0f;
     float airKLift = 0.0f;
+    float airKLiftDamping = 0.0f;
     float airLiftFactor = 0.0f;
+    /// `Physics.Elevation` in elmos — the one `Physics` key the winged mover reads
+    /// (`C-221`): cruise height above the terrain reference, and the height a slow flyer
+    /// climbs half of before moving forward (`C-245`). Zero when unauthored.
+    float elevationElmos = 0.0f;
     float airAutoLandTimeSec = 0.0f;
     float airFuelUseTimeSec = 0.0f;
     sim::Mag buildCostEnergy{};

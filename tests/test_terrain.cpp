@@ -114,3 +114,44 @@ TEST_CASE("an empty field is flat at its base height, not a crash") {
     CHECK(rm::test::asFloat(terrain.heightAt(Fx::fromInt(500), Fx::fromInt(500)))
           == Approx(7.0f).margin(rm::test::kFxStep));
 }
+
+TEST_CASE("the look-ahead reports the highest surface in the containing power-of-two cell") {
+    // `C-246`: retail indexes a max-height pyramid at the level whose cell is at least
+    // half the reach wide, aligned to the grid — so the answer is a neighbourhood maximum,
+    // not a directional scan, and below one square of reach it is the point sample.
+    rm::HeightField field;
+    field.squaresX = 64;
+    field.squaresZ = 64;
+    field.baseHeight = 0.0f;
+    field.heightScale = 1.0f;
+    field.raw.assign(field.sampleCount(), std::uint16_t{0});
+    // One spike at corner (20, 20): 500 elmos.
+    field.raw[static_cast<std::size_t>(20) * static_cast<std::size_t>(field.verticesX()) + 20] = 500;
+    const Terrain dry{field};
+
+    // Standing at square (2, 2), 16 elmos in: a reach of 200 elmos is 25 squares, half is
+    // 12, whose highest bit is 3, so level 4 and a 16-square cell [0, 16] — the spike at 20
+    // is outside it.
+    CHECK(dry.maxSurfaceHeightNear(Fx::fromInt(16), Fx::fromInt(16), Fx::fromInt(200)) == Fx{});
+    // A reach of 400 elmos: 50 squares, half 25, bit 4, level 5, cell [0, 32] — inside.
+    CHECK(dry.maxSurfaceHeightNear(Fx::fromInt(16), Fx::fromInt(16), Fx::fromInt(400))
+          == Fx::fromInt(500));
+    // Under a square of reach the point sample is what comes back.
+    CHECK(dry.maxSurfaceHeightNear(Fx::fromInt(160), Fx::fromInt(160), Fx::fromInt(4))
+          == Fx::fromInt(500));
+    CHECK(dry.maxSurfaceHeightNear(Fx::fromInt(16), Fx::fromInt(16), Fx::fromInt(4)) == Fx{});
+
+    // From square 62 the level-5 cell is [32, 64], up against the map edge: its far
+    // corners are the border itself and the spike at 20 is not in it. A reach past the
+    // whole map caps at the level whose cell is the map, and that cell has the spike.
+    CHECK(dry.maxSurfaceHeightNear(Fx::fromInt(500), Fx::fromInt(500), Fx::fromInt(400)) == Fx{});
+    CHECK(dry.maxSurfaceHeightNear(Fx::fromInt(16), Fx::fromInt(16), Fx::fromInt(100000))
+          == Fx::fromInt(500));
+
+    // Water is surface: a drowned cell reports the water level, and so does the point.
+    const Terrain wet{field, true, 30.0f};
+    CHECK(wet.maxSurfaceHeightNear(Fx::fromInt(16), Fx::fromInt(16), Fx::fromInt(200))
+          == Fx::fromInt(30));
+    CHECK(wet.surfaceHeightAt(Fx::fromInt(16), Fx::fromInt(16)) == Fx::fromInt(30));
+    CHECK(wet.surfaceHeightAt(Fx::fromInt(160), Fx::fromInt(160)) == Fx::fromInt(500));
+}

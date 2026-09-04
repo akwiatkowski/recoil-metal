@@ -53,14 +53,19 @@ rm::sim::MoveState motionFor(const rm::unitdef::UnitDef& def, int armyIndex) {
     }
     if (motion.airborne) {
         // Flyers spawn cruising (the status quo ante — spawn changes nothing observable);
-        // the winged mover (`C-221`) takes them from there. Gains use the retail step
-        // (0.1), not the clock: at 10 Hz they coincide, elsewhere the formula is retail's.
+        // the winged mover (`C-221`) takes them from there. Gains stay per second as
+        // authored; the integrator applies the retail 0.1 step itself.
         motion.canFly = true;
         motion.airState = rm::sim::MoveState::AirState::Top;
         motion.airMaxSpeedElmosPerSec = rm::sim::fxFromFloat(def.speedElmosPerSecond);
-        motion.airApproachGain = rm::sim::fxFromFloat(def.airKMove * 0.1f);
-        motion.airLiftGain = rm::sim::fxFromFloat(def.airKLift * 0.1f);
+        motion.airKMove = rm::sim::fxFromFloat(def.airKMove);
+        motion.airKMoveDamping = rm::sim::fxFromFloat(def.airKMoveDamping);
+        motion.airKLift = rm::sim::fxFromFloat(def.airKLift);
+        motion.airKLiftDamping = rm::sim::fxFromFloat(def.airKLiftDamping);
         motion.airLiftFactor = rm::sim::fxFromFloat(def.airLiftFactor);
+        motion.airElevation = def.elevationElmos > 0.0f
+            ? rm::sim::fxFromFloat(def.elevationElmos)
+            : rm::sim::kAirClearanceElmos;
         motion.idleLandThreshold = def.airAutoLandTimeSec > 0.0f
             ? static_cast<std::uint32_t>(def.airAutoLandTimeSec
                                          * gAppTickRate.ticksPerSecond())
@@ -1292,9 +1297,14 @@ void orderFirstExtractors(UnitScene& scene, std::span<const rm::scenario::Marker
                     state.airState = rm::sim::MoveState::AirState::Top;
                     state.airMaxSpeedElmosPerSec =
                         rm::sim::fxFromFloat(def->speedElmosPerSecond);
-                    state.airApproachGain = rm::sim::fxFromFloat(def->airKMove * 0.1f);
-                    state.airLiftGain = rm::sim::fxFromFloat(def->airKLift * 0.1f);
+                    state.airKMove = rm::sim::fxFromFloat(def->airKMove);
+                    state.airKMoveDamping = rm::sim::fxFromFloat(def->airKMoveDamping);
+                    state.airKLift = rm::sim::fxFromFloat(def->airKLift);
+                    state.airKLiftDamping = rm::sim::fxFromFloat(def->airKLiftDamping);
                     state.airLiftFactor = rm::sim::fxFromFloat(def->airLiftFactor);
+                    state.airElevation = def->elevationElmos > 0.0f
+                        ? rm::sim::fxFromFloat(def->elevationElmos)
+                        : rm::sim::kAirClearanceElmos;
                     state.idleLandThreshold = def->airAutoLandTimeSec > 0.0f
                         ? static_cast<std::uint32_t>(def->airAutoLandTimeSec
                                                      * gAppTickRate.ticksPerSecond())

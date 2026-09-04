@@ -9,10 +9,12 @@ Detailed retail evidence remains canonical in
 [`fa-exe-analysis-plan.md`](fa-exe-analysis-plan.md). This dashboard summarizes that ledger; it
 does not replace its claims, addresses, counterevidence, or confirmation gate.
 
-**Snapshot:** 2026-09-04, Recoil Metal `0a555cb` through the `WP-22` winged-mover foundation —
-explicit per-second velocity on retail's trapezoid, the `LiftFactor` climb cap, takeoff/landing
-vertical events, the auto-land timer and fuel drain (`C-221`–`C-223`), SaveState v11 with the
-hash gated on `canFly`; FA-AIR 45/25/95, headline unchanged at 55/25/70. Prior: the `WP-29`
+**Snapshot:** 2026-09-04, dirty Recoil Metal worktree through the `WP-22` controller read —
+`ComputeAirControl`, `CalcWingedLift`, the damping factor and the terrain look-ahead read and
+implemented (`C-244`–`C-246`): authored `KMove`/`KLift` gains with their damping terms, the
+vertical lift-off to half elevation that replaces the invented runway roll, the pyramid look-ahead
+feeding the altitude reference; FA-AIR 55/40/95, headline unchanged at 55/25/70. Prior, same day:
+the winged-mover foundation `0a555cb` (`C-221`–`C-223`, SaveState v11). Prior: the `WP-29`
 redirect follow-up —
 a non-strategic enemy MISSILE inside a redirector radius turns back on its live launcher, one
 redirect per rate cycle with per-tick cooldown, SaveState v10 (`C-088` MissileRedirect, URL0303
@@ -93,7 +95,7 @@ excluded from the headline.
 | [`FA-CMD`](#fa-cmd---commands-controls-and-factories) | Commands, controls, factories | `WP-12`-`14` | 75% | 55% | 75% | Add the remaining guard-ladder branches (build-assist chain, reclaim-copy, repair scan) and read the leash endpoints. |
 | [`FA-ECON`](#fa-econ---economy-construction-and-engineering) | Economy, construction, engineering | `WP-15`-`19` | 70% | 55% | 90% | Name the capture increment at `Unit+0x690` and read `Sim::TransferUnit`'s copy/reset inventory, then specify the smallest capture slice. |
 | [`FA-LAND`](#fa-land---land-navigation-formations-and-spatial-world) | Land navigation, formations, spatial world | `WP-20`, `21`, `26` | 85% | 30% | 95% | Add bounded formation rotation or category matching without changing path-service ordering. |
-| [`FA-AIR`](#fa-air---aircraft-flight-combat-and-staging) | Aircraft flight, combat, staging | `WP-22` | 45% | 25% | 95% | Replace the stand-in proportional gains with the read `ComputeAirControl` schedule and add the terrain look-ahead, then start `C-224`'s attack-run pair. |
+| [`FA-AIR`](#fa-air---aircraft-flight-combat-and-staging) | Aircraft flight, combat, staging | `WP-22` | 55% | 40% | 95% | Read `CalcWingedOrientation` for the `+0x9c` landing adjustment and `C-222`'s two-stage descent, then start `C-224`'s attack-run pair. |
 | [`FA-NAVY`](#fa-navy---surface-and-submerged-warfare) | Surface and submerged warfare | `WP-23`-`24` | 35% | 10% | 75% | Implement one complete `SurfacingSub` dive/surface slice. |
 | [`FA-TRANSPORT`](#fa-transport---attachments-cargo-and-ferries) | Attachments, cargo, ferries | `WP-25` | 35% | 5% | 95% | Add parent/self bone indices and authored rest-bone composition to generic attachments. |
 | [`FA-WEAPONS`](#fa-weapons---targeting-weapons-and-projectiles) | Targeting, weapons, projectiles | `WP-27`-`28` | 97% | 72% | 90% | Implement `C-157` target exemption for engineer reclaim/capture, then add the remaining death and manual-fire paths. |
@@ -244,23 +246,29 @@ re-forming explicitly deferred, run make test and make verify, then refresh FA-L
 
 ### FA-AIR - Aircraft Flight, Combat, And Staging
 
-**Current slice:** winged flyers run retail's disjoint `canFly` mover (`C-221`): explicit
-per-second velocity integrated trapezoidally at the retail 0.1 step, the `(speedRatio − 0.5) ×
-LiftFactor` climb cap (so a takeoff roll stays on the deck until fast enough), a slewing altitude
-reference, `Bottom/Up/Top/Down` vertical events with landing on arrival, the `AutoLandTime`
-idle timer (`C-222`), and `FuelUseTime` drain/recharge with no native consequence at zero
+**Current slice:** winged flyers run retail's disjoint `canFly` mover with its controller read
+from the executable (`C-221`, `C-244`–`C-246`): explicit per-second velocity integrated
+trapezoidally at the 0.1 step; `a = KMove × desired − damp × v` horizontally and `KLift × lift
+− KLiftDamping × vy` vertically, gains as authored; the desired velocity toward the target at
+`min(distance, cruise)`; `CalcWingedLift`'s two branches, so a slow aircraft lifts straight up
+to half its `Physics.Elevation` before the horizontal gate lets it fly forward — the retail
+lift-off, replacing the runway roll the first slice invented; the pyramid terrain look-ahead
+feeding a slewing altitude reference and the squared horizontal hold-back; `Bottom/Up/Top/Down`
+events with landing on arrival and touchdown on the surface (water included); the
+`AutoLandTime` idle timer (`C-222`); `FuelUseTime` drain with no native consequence at zero
 (`C-223`). SaveState v11 carries the air state; the hash gates it on `canFly`, so the golden
 log is unchanged.
 
-**Largest gap:** the horizontal/vertical gains are proportional stand-ins for the unread
-`ComputeAirControl` schedule; there is no terrain look-ahead, banking/orientation, `Hover`,
-combat state machine (`C-224`), staging, or carrier docking (`C-225`).
+**Largest gap:** the landing elevation adjustment at `CUnitMotion+0x9c` and the two-stage
+descent are modelled as "elevation off the deck, zero while landing"; the cargo mass ratio,
+banking/orientation torque, `Hover`, the combat state machine (`C-224`), staging and carrier
+docking (`C-225`) are absent.
 
 ```text
-/goal Advance FA-AIR by reading ComputeAirControl's gain schedule (KTurn/KRoll/KLift over mass
-plus the damping terms) from C-221's addresses and replacing the stand-in gains with it, then add
-the terrain look-ahead that scales horizontal steering down so a flyer can climb. Keep the
-golden log byte-identical for ground units, run make test and make verify, then refresh FA-AIR.
+/goal Advance FA-AIR by reading CalcWingedOrientation (0x006c4230) for the elevation adjustment
+at CUnitMotion+0x9c and C-222's two-stage descent (Elevation x 0.5 until within 0.5 elmos, then
+0), replacing the landing model in Movement.cpp with the read one. Keep the golden log
+byte-identical, run make test and make verify, then refresh FA-AIR.
 ```
 
 ### FA-NAVY - Surface And Submerged Warfare

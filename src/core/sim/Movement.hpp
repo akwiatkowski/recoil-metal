@@ -214,8 +214,9 @@ struct MoveState {
     /// speed, never from `speedPerTick`.
     std::array<Fx, 3> velocity{};
 
-    /// The altitude the lift law is chasing, in elmos. Slews toward terrain plus clearance
-    /// at `airLift × 0.1` per tick upward, half that downward (`C-221`).
+    /// The altitude the lift law is chasing, in elmos: the highest surface within the
+    /// look-ahead reach plus `airElevation`, slewed at `LiftFactor × 0.1` per tick upward
+    /// and half that downward unless landing (`C-221`, `C-246`).
     Fx altitudeRef{};
 
     /// Remaining fuel as a 0..1 ratio. Drains `1 / (FuelUseTime × 10)` per tick while
@@ -232,15 +233,20 @@ struct MoveState {
     /// a zero threshold would ground everything the tick after spawn. Open edge, noted.
     std::uint32_t idleLandThreshold = std::numeric_limits<std::uint32_t>::max();
 
-    /// Per-tick proportional approach rates, converted once at spawn from the authored
-    /// `Air.KMove` / `Air.KLift` (`C-221`). The exact gain schedule is unread — these stand
-    /// in for it, and the ledger says so.
-    Fx airApproachGain{};
-    Fx airLiftGain{};
+    /// Retail's `Air` controller gains (`C-244`), per SECOND as authored, applied against
+    /// the 0.1 step inside the integrator. Horizontal acceleration is `KMove × desired −
+    /// damp × v` with `damp` from `airDampingFactor`; vertical is `KLift × lift −
+    /// KLiftDamping × vy` with `lift` from the winged lift law. Retail divides both
+    /// proportional gains by the ratio of carried-plus-own mass to own mass (`C-244`),
+    /// which is 1 for anything that is not a loaded transport, so the ratio is not carried.
+    Fx airKMove{};
+    Fx airKMoveDamping{};
+    Fx airKLift{};
+    Fx airKLiftDamping{};
 
     /// The climb authority (`Air.LiftFactor`, `C-221`) in elmos per SECOND, matching the
-    /// velocity state below. Below half max airspeed the lift cap goes negative and the
-    /// aircraft cannot climb at all.
+    /// velocity state above. Below half max airspeed the lift cap goes negative; what a
+    /// flyer does then is the lift law's business (`C-245`), not "nothing".
     Fx airLiftFactor{};
 
     /// Cruise speed in elmos per SECOND (`Air.MaxAirspeed`, converted once at spawn).
@@ -249,13 +255,32 @@ struct MoveState {
     /// logic thinks per tick.
     Fx airMaxSpeedElmosPerSec{};
 
-    /// per-second (`C-221`'s trapezoid only balances in those units) while the waypoint
-    /// logic thinks per tick.
+    /// `Physics.Elevation` in elmos (`C-245`): the height above the terrain reference the
+    /// lift law chases, and the height a slow flyer climbs HALF of, straight up, before it
+    /// may move forward. `kAirClearanceElmos` when the blueprint authors none.
+    Fx airElevation = kAirClearanceElmos;
 
     /// Fuel ratio spent per tick while climbing, cruising or descending
     /// (`1 / (FuelUseTime × 10)`, `C-223`), converted once at spawn.
     Fx fuelDrainPerTick{};
 };
+
+/// `CalcAirMovementDampingFactor` (`0x006c3490`, `C-244`): the horizontal velocity damping
+/// a winged mover applies, from the length of its desired velocity. With `s = max(1,
+/// min(|desired|, KMove))` the result is `KMove` when `KMove <= s`, else `min(KMove / s,
+/// KMoveDamping)`. At cruise every shipped aircraft (`KMove <= 4`) takes the first branch;
+/// the second fires on final approach, where the desired vector shrinks with the distance.
+/// (`TARGETCHASER` units return 1 in retail; none of them fly.)
+[[nodiscard]] Fx airDampingFactor(Fx kMove, Fx kMoveDamping, Fx desiredLength) noexcept;
+
+/// `CalcWingedLift` (`0x006c33d0`, `C-245`): the vertical velocity the lift gain acts on.
+/// `cap = (speedRatio − 0.5) × LiftFactor`. With lift available the climb need is capped by
+/// it. Without — too slow, as on the deck — a flyer below HALF its elevation reference
+/// climbs toward that half regardless of speed, and one already there gets the
+/// (non-positive) cap. This is the retail takeoff: straight up to half elevation, then
+/// forward; the deck roll is not how a Forged Alliance aircraft leaves the ground.
+[[nodiscard]] Fx wingedLift(Fx need, Fx speedRatio, Fx liftFactor, Fx heightAbove,
+                            Fx elevationRef) noexcept;
 
 /// Sends a unit along a route, aiming it at the first waypoint.
 ///

@@ -83,10 +83,11 @@ void orderAlongPath(MoveState& state, std::span<const std::array<Fx, 2>> path) {
 
 namespace {
 
-// The vertical half of the winged mover (`C-221`/`C-222`): state transitions, fuel and the
-// slewing altitude reference. Runs before the waypoint logic so a takeoff or landing commit
-// takes effect the same tick the order (or its absence) arrives.
-void tickAirState(MoveState& state, const Transform& unit, const Terrain& terrain) noexcept {
+// The vertical events of the winged mover (`C-222`/`C-223`): state transitions and fuel.
+// Runs before the waypoint logic so a takeoff or landing commit takes effect the same tick
+// the order (or its absence) arrives. The altitude reference slews inside the beat, where
+// the look-ahead that feeds it is computed.
+void tickAirState(MoveState& state) noexcept {
     using AirState = MoveState::AirState;
     // Recharge while grounded runs at the drain rate — its exact rate is open, and with
     // no native consequence at zero either choice is behaviourally identical today.
@@ -97,9 +98,9 @@ void tickAirState(MoveState& state, const Transform& unit, const Terrain& terrai
         if (!state.moving) {
             return;
         }
-        // A fresh order starts the takeoff roll ON the deck: `airborne` flips only at
-        // liftoff below, so collision layers and the align pass treat the roll as ground
-        // movement — and the lift law lifts off exactly when fast enough (`C-221`).
+        // A fresh order commits to takeoff. `airborne` flips the first beat the lift law
+        // raises the unit, which with retail's law (`C-245`) is this same tick: a slow
+        // flyer below half its elevation climbs straight up before it moves forward.
         state.airState = AirState::Up;
         return;
     }
@@ -115,61 +116,158 @@ void tickAirState(MoveState& state, const Transform& unit, const Terrain& terrai
             state.idleTicks = 0;
         }
     } else if (state.airState == AirState::Up) {
-        // An order cancelled mid-roll never lifts: back down rather than idling Up.
+        // An order cancelled mid-climb comes back down rather than idling Up.
         state.airState = AirState::Down;
     }
     // Fuel drains whenever off the ground and the clamp is the whole native story
     // (`C-223`): no speed penalty, no crash, every consequence Lua.
     state.fuelRatio = std::max(Fx{}, state.fuelRatio - state.fuelDrainPerTick);
-    // The altitude reference chases terrain plus clearance, upward at `LiftFactor × 0.1`
-    // per tick and half that downward (`C-221`). A committed descent aims at dirt, not at
-    // cruise clearance — otherwise the reference would hold the aircraft up forever and
-    // touchdown could never complete.
-    const Fx ground = terrain.heightAt(unit.x, unit.z);
-    const Fx target = (state.airState == MoveState::AirState::Down)
-                        ? ground
-                        : ground + kAirClearanceElmos;
-    const Fx slewUp = state.airLiftFactor * Fx::fromRatio(1, 10);
-    const Fx slewDown = slewUp / Fx::fromInt(2);
+}
+
+// The retail step and half-step (`C-221`: `dt = 0.1` at `0x00E4CEA4`, `0.05` at
+// `0x00EA2BA0`) — the projectile's two constants, reused by the aircraft.
+constexpr Fx kAirDt = Fx::fromRatio(1, 10);
+constexpr Fx kTrapezoidHalfStep = Fx::fromRatio(1, 20);
+
+/// How far ahead a flyer looks for terrain, in seconds of cruise (`C-246`: `5.0` at
+/// `0x00E4D960`, times `MaxAirspeed` times the unit's speed multiplier, which is 1 here).
+constexpr Fx kLookAheadSeconds = Fx::fromInt(5);
+
+/// The look-ahead's second, nearer scan is weighed at `1.5` (`0x00E4DA50`) and the
+/// horizontal hold-back it produces bottoms out at `0.2` (`0x00EA2C48`) (`C-246`).
+constexpr Fx kNearScanWeight = Fx::fromRatio(3, 2);
+constexpr Fx kLookAheadFloor = Fx::fromRatio(1, 5);
+
+/// Below this fraction of cruise speed (`0.08` at `0x00EA2CBC`) a flyer under half its
+/// elevation holds its horizontal desire back in proportion to how high it has got
+/// (`C-245`): the vertical lift-off before the forward run.
+constexpr Fx kTakeoffSpeedFraction = Fx::fromRatio(2, 25);
+
+// One winged beat (`C-221`, `C-244`–`C-246`), velocity in elmos per SECOND — the only
+// units the formula balances in:
+//
+//   desired  = towards the destination at min(distance, cruise), held back by the terrain
+//              look-ahead and the takeoff gate
+//   a_xz     = KMove × desired − damp(desired) × v
+//   a_y      = KLift × lift − KLiftDamping × vy
+//   v       += a × 0.1;   pos += (v_old + v_new) × 0.05
+//
+// Retail hands the controller's force to a physics body that also applies gravity; the
+// controller subtracts the same gravity first, so the two cancel and only the
+// acceleration above survives — which is what is integrated here. Touchdown and
+// takeoff-completion are the caller's.
+void integrateAir(Transform& unit, MoveState& state, const Terrain& terrain) noexcept {
+    using AirState = MoveState::AirState;
+    const Fx cruise = state.airMaxSpeedElmosPerSec;
+    const bool landing = state.airState == AirState::Down;
+    // What the lift law measures against while landing is the ground, not cruise
+    // elevation: retail rewrites its elevation offset for the descent (`C-222`), and this
+    // is the smallest reading of that which lets touchdown complete.
+    const Fx elevationRef = landing ? Fx{} : state.airElevation;
+
+    // --- desired horizontal velocity: at the destination, at cruise or the distance ---
+    const Fx dx = state.destinationX - unit.x;
+    const Fx dz = state.destinationZ - unit.z;
+    const Fx distance = fxHypot(dx, dz);
+    Fx desiredX{};
+    Fx desiredZ{};
+    if (state.moving && distance > Fx{}) {
+        const Fx speed = std::min(distance, cruise);
+        desiredX = dx / distance * speed;
+        desiredZ = dz / distance * speed;
+    }
+
+    // --- terrain look-ahead (`C-246`) ---
+    //
+    // The highest surface within five seconds of cruise (or the destination, if nearer)
+    // is what the altitude reference chases. When the climb it demands exceeds a second
+    // of lift authority, a nearer scan at half the reach decides how much horizontal
+    // desire to give up so the aircraft can climb: the fraction of the half-reach left
+    // after the nearer climb, floored, squared.
+    // Idle, retail's target sits under the aircraft and the reach collapses to the point
+    // sample; a stale destination must not choose the cell for a flyer going nowhere.
+    const Fx reach = state.moving ? std::min(cruise * kLookAheadSeconds, distance) : Fx{};
+    const Fx aheadHeight = terrain.maxSurfaceHeightNear(unit.x, unit.z, reach);
+    const Fx climbAhead = std::max(Fx{}, aheadHeight - unit.y);
+    if (climbAhead > state.airLiftFactor && reach > Fx::fromInt(kSquareSize)) {
+        const Fx halfReach = reach * Fx::fromRatio(1, 2);
+        const Fx nearHeight =
+            terrain.maxSurfaceHeightNear(unit.x, unit.z, halfReach) * kNearScanWeight;
+        const Fx climbNear = std::max(Fx{}, nearHeight - unit.y);
+        const Fx factor = std::max(kLookAheadFloor, (halfReach - climbNear) / halfReach);
+        desiredX = desiredX * factor * factor;
+        desiredZ = desiredZ * factor * factor;
+    }
+
+    // The reference slews toward the look-ahead surface plus elevation at `LiftFactor ×
+    // 0.1` per tick, half that downward — unless landing, when the descent is not eased
+    // (`C-221`, `C-222`).
+    const Fx target = aheadHeight + elevationRef;
+    const Fx slewUp = state.airLiftFactor * kAirDt;
+    const Fx slewDown = landing ? slewUp : slewUp * Fx::fromRatio(1, 2);
     if (target > state.altitudeRef) {
         state.altitudeRef = std::min(target, state.altitudeRef + slewUp);
     } else {
         state.altitudeRef = std::max(target, state.altitudeRef - slewDown);
     }
-}
 
-// One trapezoidal beat (`C-221`: `v_new = v_old + P·dt`, `pos += (v_old + v_new) ×
-// 0.05`, `dt = 0.1` at `0x00E4CEA4`/`0x00EA2BA0`). Velocity is elmos per SECOND — the
-// only units the formula balances in. Desired horizontal velocity is the post-turn
-// heading at cruise speed, or holding still when there is nowhere to go; desired
-// vertical is the lift-capped climb need. Touchdown and takeoff-completion are the
-// caller's.
-void integrateAir(Transform& unit, MoveState& state) noexcept {
-    const Fx cruise = state.airMaxSpeedElmosPerSec;
-    const Fx desiredX = state.moving ? fxSin(unit.heading) * cruise : Fx{};
-    const Fx desiredZ = state.moving ? fxCos(unit.heading) * cruise : Fx{};
+    // --- the lift law and the takeoff gate (`C-245`) ---
+    const Fx surface = terrain.surfaceHeightAt(unit.x, unit.z);
+    const Fx heightAbove = unit.y - surface;
     const std::array<Fx, 3> old = state.velocity;
-    state.velocity[0] += state.airApproachGain * (desiredX - old[0]);
-    state.velocity[2] += state.airApproachGain * (desiredZ - old[2]);
-    // The lift law (`C-221`): climb authority is `max(0, speedRatio − 0.5) × LiftFactor`,
-    // so below half max airspeed the cap is zero and the takeoff roll stays on the deck.
-    // `min` binds climbs only — a negative need (diving at the reference) passes through,
-    // which is what the formula says rather than a symmetric choice.
-    const Fx horizontal = fxHypot(state.velocity[0], state.velocity[2]);
-    const Fx ratio =
-        state.airMaxSpeedElmosPerSec > Fx{} ? horizontal / state.airMaxSpeedElmosPerSec
-                                            : Fx{};
-    const Fx cap = std::max(Fx{}, ratio - Fx::fromRatio(1, 2)) * state.airLiftFactor;
-    const Fx need = state.altitudeRef - unit.y;
-    const Fx desiredVy = std::min(need, cap);
-    state.velocity[1] += state.airLiftGain * (desiredVy - old[1]);
-    constexpr Fx kTrapezoidHalfStep = Fx::fromRatio(1, 20);  // `0.05`, ART-E001 `0x00EA2BA0`
+    const Fx horizontalSpeed = fxHypot(old[0], old[2]);
+    const Fx speedRatio = cruise > Fx{} ? horizontalSpeed / cruise : Fx{};
+    const Fx lift = wingedLift(state.altitudeRef - unit.y, speedRatio, state.airLiftFactor,
+                               heightAbove, elevationRef);
+    // The gate reads the whole velocity, climb included: the lift-off itself is what
+    // first carries a flyer past the threshold and frees its forward desire.
+    const Fx speed = fxHypot(horizontalSpeed, old[1]);
+    if (elevationRef > Fx{} && elevationRef * Fx::fromRatio(1, 2) > heightAbove
+        && speed < cruise * kTakeoffSpeedFraction) {
+        // Clamped at the deck: our reference slews slower than a flyer travels, so a
+        // cliff can put the surface above the unit for a beat, and retail's unclamped
+        // ratio would then REVERSE the desire. Holding still is the honest reading.
+        const Fx gate =
+            std::min(Fx::fromInt(1), std::max(Fx{}, heightAbove) / elevationRef);
+        desiredX *= gate;
+        desiredZ *= gate;
+    }
+
+    // --- the controller (`C-244`) and the trapezoid (`C-221`) ---
+    const Fx desiredLength = fxHypot(fxHypot(desiredX, desiredZ), lift);
+    const Fx damp = airDampingFactor(state.airKMove, state.airKMoveDamping, desiredLength);
+    const Fx ax = state.airKMove * desiredX - damp * old[0];
+    const Fx ay = state.airKLift * lift - state.airKLiftDamping * old[1];
+    const Fx az = state.airKMove * desiredZ - damp * old[2];
+    state.velocity[0] += ax * kAirDt;
+    state.velocity[1] += ay * kAirDt;
+    state.velocity[2] += az * kAirDt;
     unit.x += (old[0] + state.velocity[0]) * kTrapezoidHalfStep;
     unit.y += (old[1] + state.velocity[1]) * kTrapezoidHalfStep;
     unit.z += (old[2] + state.velocity[2]) * kTrapezoidHalfStep;
 }
 
 }  // namespace
+
+Fx airDampingFactor(Fx kMove, Fx kMoveDamping, Fx desiredLength) noexcept {
+    const Fx s = std::max(Fx::fromInt(1), std::min(desiredLength, kMove));
+    if (kMove <= s) {
+        return kMove;
+    }
+    return std::min(kMove / s, kMoveDamping);
+}
+
+Fx wingedLift(Fx need, Fx speedRatio, Fx liftFactor, Fx heightAbove, Fx elevationRef) noexcept {
+    const Fx cap = (speedRatio - Fx::fromRatio(1, 2)) * liftFactor;
+    if (cap > Fx{}) {
+        return std::min(need, cap);
+    }
+    const Fx half = elevationRef * Fx::fromRatio(1, 2);
+    if (half > heightAbove) {
+        return half - heightAbove;
+    }
+    return cap;
+}
 
 void tick(std::span<Transform> transforms, std::span<MoveState> motion,
           const Terrain& terrain) noexcept {
@@ -196,7 +294,7 @@ void tick(std::span<Transform> transforms, std::span<MoveState> motion,
         Transform& unit = transforms[i];
 
         if (state.canFly) {
-            tickAirState(state, unit, terrain);
+            tickAirState(state);
         }
 
         const Fx dx = state.destinationX - unit.x;
@@ -278,23 +376,24 @@ void tick(std::span<Transform> transforms, std::span<MoveState> motion,
                 || state.airState == MoveState::AirState::Down)) {
             // Winged flight (`C-221`) instead of the ground stride below: explicit
             // velocity integrated trapezoidally, with the lift law owning the vertical.
-            // A rolling takeoff stays wheels-on-deck here until the lift law lifts it;
-            // a grounded descent still enters so touchdown can complete it.
-            integrateAir(unit, state);
+            // A committed takeoff enters from the deck and a grounded descent still
+            // enters so touchdown can complete it. The surface — water where the ground
+            // is drowned — is what a flyer leaves and lands on (`C-222`).
+            integrateAir(unit, state, terrain);
             unit.x = std::clamp(unit.x, Fx{}, width);
             unit.z = std::clamp(unit.z, Fx{}, depth);
-            const Fx ground = terrain.heightAt(unit.x, unit.z);
-            if (!state.airborne && unit.y > ground) {
+            const Fx surface = terrain.surfaceHeightAt(unit.x, unit.z);
+            if (!state.airborne && unit.y > surface) {
                 state.airborne = true;
             } else if (!state.airborne) {
-                unit.y = ground;
+                unit.y = surface;
             }
             if (state.airState == MoveState::AirState::Up && unit.y >= state.altitudeRef) {
                 unit.y = state.altitudeRef;
                 state.airState = MoveState::AirState::Top;
             }
-            if (state.airState == MoveState::AirState::Down && unit.y <= ground) {
-                unit.y = ground;
+            if (state.airState == MoveState::AirState::Down && unit.y <= surface) {
+                unit.y = surface;
                 state.airState = MoveState::AirState::Bottom;
                 state.airborne = false;
                 state.moving = false;

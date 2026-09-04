@@ -316,8 +316,13 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
     // authored here — the sim converts once at spawn.
     if (const lua::Value* airBlock = parsed->path("Air")) {
         def.airKMove = numberOr(*airBlock, "KMove", 0.0f);
+        def.airKMoveDamping = numberOr(*airBlock, "KMoveDamping", 0.0f);
         def.airKLift = numberOr(*airBlock, "KLift", 0.0f);
+        def.airKLiftDamping = numberOr(*airBlock, "KLiftDamping", 0.0f);
         def.airLiftFactor = numberOr(*airBlock, "LiftFactor", 0.0f);
+        // Ogrids to elmos, like every other length in this file (`C-221` reads it from
+        // `Physics`, but only a flyer consults it, so it rides with the block).
+        def.elevationElmos = numberOr(*physics, "Elevation", 0.0f) * scmap::kElmosPerOgrid;
         def.airAutoLandTimeSec = numberOr(*airBlock, "AutoLandTime", 0.0f);
         def.airFuelUseTimeSec = numberOr(*airBlock, "FuelUseTime", 0.0f);
     }

@@ -1,6 +1,7 @@
 #include "core/sim/Terrain.hpp"
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
 
 namespace rm::sim {
@@ -69,6 +70,49 @@ Fx Terrain::heightAt(Fx x, Fx z) const noexcept {
     const Fx alongZ0 = h00 + (h10 - h00) * fx;
     const Fx alongZ1 = h01 + (h11 - h01) * fx;
     return alongZ0 + (alongZ1 - alongZ0) * fz;
+}
+
+Fx Terrain::surfaceHeightAt(Fx x, Fx z) const noexcept {
+    const Fx ground = heightAt(x, z);
+    return hasWater_ ? std::max(ground, waterLevel_) : ground;
+}
+
+Fx Terrain::maxSurfaceHeightNear(Fx x, Fx z, Fx reachElmos) const noexcept {
+    // Retail works in ogrids — one heightmap sample per ogrid, one square here — and
+    // takes the point sample under a reach of one (`0x006340f0`).
+    const Fx reachSquares = reachElmos / Fx::fromInt(kSquareSize);
+    if (reachSquares < Fx::fromInt(1) || field_->squaresX <= 0 || field_->squaresZ <= 0) {
+        return surfaceHeightAt(x, z);
+    }
+
+    // The pyramid level: the highest set bit of half the reach, plus one — so the cell is
+    // at least half the reach wide and less than the whole of it — capped by the level
+    // whose cell is the map. `bsr` of a positive integer is `bit_width − 1`.
+    const auto bsr = [](std::int32_t value) noexcept -> int {
+        return value > 0 ? std::bit_width(static_cast<std::uint32_t>(value)) - 1 : -1;
+    };
+    const int mapCap = bsr(std::min(field_->squaresX, field_->squaresZ) - 2) + 1;
+    int level = bsr((reachSquares * Fx::fromRatio(1, 2)).floorToInt()) + 1;
+    level = std::max(1, std::min(level, mapCap));
+
+    const Fx gridX = std::clamp(x / Fx::fromInt(kSquareSize), Fx{}, Fx::fromInt(field_->squaresX));
+    const Fx gridZ = std::clamp(z / Fx::fromInt(kSquareSize), Fx{}, Fx::fromInt(field_->squaresZ));
+    const std::int32_t cellX = gridX.floorToInt() >> level;
+    const std::int32_t cellZ = gridZ.floorToInt() >> level;
+    const std::int32_t first = 1 << level;
+
+    // Every corner of the cell, inclusive of its far edge: a square's height is decided by
+    // its four corners, so the last corner row belongs to the cell as much as the first.
+    Fx highest = baseHeight_;
+    bool any = false;
+    for (std::int32_t cz = cellZ * first; cz <= (cellZ + 1) * first; ++cz) {
+        for (std::int32_t cx = cellX * first; cx <= (cellX + 1) * first; ++cx) {
+            const Fx h = cornerHeight(cx, cz);
+            highest = any ? std::max(highest, h) : h;
+            any = true;
+        }
+    }
+    return hasWater_ ? std::max(highest, waterLevel_) : highest;
 }
 
 } // namespace rm::sim

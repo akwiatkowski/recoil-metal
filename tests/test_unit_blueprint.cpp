@@ -754,29 +754,35 @@ UnitBlueprint {
 }
 
 TEST_CASE("a winged mover arrives with its control block, or nothing") {
-    // UEA0101's `Air` table (`C-221`): the proportional inputs, the climb authority,
-    // and the two timers. Damping, banking, speeds and combat turn rates are parsed
+    // URA0102's `Air` table (`C-221`, `C-244`): the proportional and damping gains, the
+    // climb authority, the two timers, and `Physics.Elevation` in ogrids turned into
+    // elmos. Banking, speeds, the turn/roll gains and combat turn rates are parsed
     // nowhere yet — each is a named follow-up, not a silent default.
     const Blueprint named{"XXB0008_unit.bp", R"(
 UnitBlueprint {
-    Physics = { MotionType = 'RULEUMT_Air' },
+    Physics = { MotionType = 'RULEUMT_Air', Elevation = 18 },
     Air = {
-        KMove = 1, KLift = 3, LiftFactor = 7,
+        KMove = 1, KMoveDamping = 1, KLift = 3, KLiftDamping = 2.5, LiftFactor = 7,
         AutoLandTime = 1, FuelUseTime = 500,
     },
 })"};
     const auto def = rm::unitbp::loadFile(named.path());
     REQUIRE(def.has_value());
     CHECK(def->airKMove == Approx(1.0f));
+    CHECK(def->airKMoveDamping == Approx(1.0f));
     CHECK(def->airKLift == Approx(3.0f));
+    CHECK(def->airKLiftDamping == Approx(2.5f));
     CHECK(def->airLiftFactor == Approx(7.0f));
     CHECK(def->airAutoLandTimeSec == Approx(1.0f));
     CHECK(def->airFuelUseTimeSec == Approx(500.0f));
+    CHECK(def->elevationElmos == Approx(144.0f));
 
     const Blueprint bare{"XXB0009_unit.bp", kMediumTank};
     const auto none = rm::unitbp::loadFile(bare.path());
     REQUIRE(none.has_value());
     CHECK(none->airKMove == 0.0f);
+    CHECK(none->airKLiftDamping == 0.0f);
     CHECK(none->airLiftFactor == 0.0f);
     CHECK(none->airFuelUseTimeSec == 0.0f);
+    CHECK(none->elevationElmos == 0.0f);
 }
