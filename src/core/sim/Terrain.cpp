@@ -6,8 +6,10 @@
 
 namespace rm::sim {
 
-Terrain::Terrain(const HeightField& field, bool hasWater, float waterLevelElmos) noexcept
+Terrain::Terrain(const HeightField& field, bool hasWater, float waterLevelElmos,
+                 const MaxHeightPyramid* lookAhead) noexcept
     : field_(&field),
+      lookAhead_(lookAhead),
       baseHeight_(fxFromFloat(field.baseHeight)),
       hasWater_(hasWater),
       waterLevel_(fxFromFloat(waterLevelElmos)),
@@ -28,10 +30,14 @@ Fx Terrain::cornerHeight(std::int32_t x, std::int32_t z) const noexcept {
         return baseHeight_;
     }
 
+    return decodeRaw(field_->raw[index]);
+}
+
+Fx Terrain::decodeRaw(std::uint16_t raw) const noexcept {
     // `raw` is a `uint16` and the scale is kept to 2^-30, so the product is exact to well
     // inside one step of the result. 65,535 times a scale of ~0.01 at 2^30 is about 7e11 —
     // comfortable in 64 bits, and nowhere near what a 32-bit intermediate would survive.
-    const FxWide scaled = FxWide{field_->raw[index]} * heightScale_;
+    const FxWide scaled = FxWide{raw} * heightScale_;
     return baseHeight_ + Fx::fromRaw(saturate(roundShift(scaled, kScaleBits
                                                                      - kFxFractionalBits)));
 }
@@ -99,6 +105,14 @@ Fx Terrain::maxSurfaceHeightNear(Fx x, Fx z, Fx reachElmos) const noexcept {
     const Fx gridZ = std::clamp(z / Fx::fromInt(kSquareSize), Fx{}, Fx::fromInt(field_->squaresZ));
     const std::int32_t cellX = gridX.floorToInt() >> level;
     const std::int32_t cellZ = gridZ.floorToInt() >> level;
+
+    // The pyramid answers in one load. It holds raw maxima, which are height maxima only
+    // while the scale is positive; a downhill scale takes the scan below instead.
+    if (lookAhead_ != nullptr && heightScale_ > 0 && level <= lookAhead_->levelCount()) {
+        const Fx highest = decodeRaw(lookAhead_->maxRaw(level, cellX, cellZ));
+        return hasWater_ ? std::max(highest, waterLevel_) : highest;
+    }
+
     const std::int32_t first = 1 << level;
 
     // Every corner of the cell, inclusive of its far edge: a square's height is decided by

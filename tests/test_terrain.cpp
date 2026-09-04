@@ -7,6 +7,7 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include "core/map/MaxHeightPyramid.hpp"
 #include "core/sim/Terrain.hpp"
 
 #include "support/FxMatchers.hpp"
@@ -154,4 +155,59 @@ TEST_CASE("the look-ahead reports the highest surface in the containing power-of
           == Fx::fromInt(30));
     CHECK(wet.surfaceHeightAt(Fx::fromInt(16), Fx::fromInt(16)) == Fx::fromInt(30));
     CHECK(wet.surfaceHeightAt(Fx::fromInt(160), Fx::fromInt(160)) == Fx::fromInt(500));
+}
+
+TEST_CASE("the max-height pyramid answers exactly what the corner scan answers") {
+    // `C-246`'s O(1) lookup must be indistinguishable from the scan it replaces: same cell
+    // semantics (grid-aligned, far corner inclusive, corners clamped at the edge), same
+    // water floor. Swept over positions, reaches and both odd and even map sizes so the
+    // clamped last cell and every level get exercised.
+    for (const int squares : {64, 37}) {
+        rm::HeightField field;
+        field.squaresX = squares;
+        field.squaresZ = squares + 5;
+        field.baseHeight = -20.0f;
+        field.heightScale = 0.5f;
+        field.raw.assign(field.sampleCount(), std::uint16_t{0});
+        // A deterministic scatter of heights, with one tall spike near the far corner.
+        for (int z = 0; z <= field.squaresZ; ++z) {
+            for (int x = 0; x <= field.squaresX; ++x) {
+                const auto index = static_cast<std::size_t>(z) * static_cast<std::size_t>(field.verticesX())
+                                   + static_cast<std::size_t>(x);
+                field.raw[index] = static_cast<std::uint16_t>((x * 37 + z * 91) % 997);
+            }
+        }
+        field.raw[static_cast<std::size_t>(field.squaresZ - 1) * static_cast<std::size_t>(field.verticesX())
+                  + static_cast<std::size_t>(field.squaresX - 1)] = 60000;
+        const rm::MaxHeightPyramid pyramid{field};
+        const Terrain scan{field, true, 15.0f};
+        const Terrain fast{field, true, 15.0f, &pyramid};
+
+        for (int px = 0; px <= squares * 8; px += 29) {
+            for (int pz = 0; pz <= (squares + 5) * 8; pz += 31) {
+                for (const int reach : {4, 8, 16, 60, 200, 401, 1000, 5000, 100000}) {
+                    const Fx x = Fx::fromInt(px);
+                    const Fx z = Fx::fromInt(pz);
+                    const Fx r = Fx::fromInt(reach);
+                    REQUIRE(fast.maxSurfaceHeightNear(x, z, r) == scan.maxSurfaceHeightNear(x, z, r));
+                }
+            }
+        }
+    }
+}
+
+TEST_CASE("a downhill vertical scale bypasses the pyramid") {
+    // Raw maxima are height MINIMA when the scale is negative (legal: `setVerticalRange`
+    // with min > max), so the view must scan instead of trusting the pyramid.
+    rm::HeightField field;
+    field.squaresX = 16;
+    field.squaresZ = 16;
+    field.baseHeight = 100.0f;
+    field.heightScale = -1.0f;
+    field.raw.assign(field.sampleCount(), std::uint16_t{50});
+    field.raw[static_cast<std::size_t>(3) * static_cast<std::size_t>(field.verticesX()) + 3] = 0;  // the HIGH point: 100 - 0
+    const rm::MaxHeightPyramid pyramid{field};
+    const Terrain fast{field, false, 0.0f, &pyramid};
+    CHECK(fast.maxSurfaceHeightNear(Fx::fromInt(8), Fx::fromInt(8), Fx::fromInt(100))
+          == Fx::fromInt(100));
 }

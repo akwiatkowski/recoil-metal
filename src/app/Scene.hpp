@@ -33,6 +33,7 @@
 #include "core/sim/UnitStore.hpp"
 #include "core/unit/UnitDef.hpp"
 
+#include <memory>
 #include <array>
 #include <cmath>
 #include <cstdint>
@@ -118,8 +119,13 @@ struct UnitScene {
     bool hasWater = false;
     float waterLevelElmos = 0.0f;
 
+    /// The map's max-height pyramid, built once at scene construction for the flyers'
+    /// terrain look-ahead (`C-246`). Shared because scenes are copied; null in the synthetic
+    /// scenes tests build, where the terrain view falls back to scanning corners.
+    std::shared_ptr<const rm::MaxHeightPyramid> lookAhead;
+
     [[nodiscard]] rm::sim::Terrain terrain(const rm::HeightField& field) const noexcept {
-        return rm::sim::Terrain{field, hasWater, waterLevelElmos};
+        return rm::sim::Terrain{field, hasWater, waterLevelElmos, lookAhead.get()};
     }
 
     /// How much to scale each type's mesh by, from its blueprint's `meshToElmos`.

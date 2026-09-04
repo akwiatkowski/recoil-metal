@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/map/HeightField.hpp"
+#include "core/map/MaxHeightPyramid.hpp"
 #include "core/sim/Fx.hpp"
 
 namespace rm::sim {
@@ -31,7 +32,8 @@ public:
     /// Holds a REFERENCE to the field. The field outlives the sim in every caller — it is the
     /// map — and copying a heightfield to sample it would be absurd.
     explicit Terrain(const HeightField& field, bool hasWater = false,
-                     float waterLevelElmos = 0.0f) noexcept;
+                     float waterLevelElmos = 0.0f,
+                     const MaxHeightPyramid* lookAhead = nullptr) noexcept;
 
     /// The height at a grid corner, clamped at the edges.
     ///
@@ -52,6 +54,10 @@ public:
     /// pyramid at the level whose cell is at least half the reach wide, so the answer is the
     /// maximum over the power-of-two cell CONTAINING the position, aligned to the grid.
     /// Below one ogrid of reach it is the point sample. Water counts as surface.
+    ///
+    /// One load from the map's `MaxHeightPyramid` when the view was given one and the
+    /// vertical scale is positive; otherwise the cell's corners are scanned, which answers
+    /// identically and costs `(2^L + 1)^2` reads.
     [[nodiscard]] Fx maxSurfaceHeightNear(Fx x, Fx z, Fx reachElmos) const noexcept;
 
     /// The field this samples, for the passes that still need its integer geometry — square
@@ -78,7 +84,12 @@ public:
     static constexpr int kScaleBits = 30;
 
 private:
+    /// One raw word decoded to elmos: `baseHeight + raw × scale`, the affine map every
+    /// sample shares (see `kScaleBits`).
+    [[nodiscard]] Fx decodeRaw(std::uint16_t raw) const noexcept;
+
     const HeightField* field_;
+    const MaxHeightPyramid* lookAhead_ = nullptr;
     Fx baseHeight_;
     bool hasWater_ = false;
     Fx waterLevel_{};

@@ -120,6 +120,7 @@ target_include_directories(miniz_impl PUBLIC ${CMAKE_SOURCE_DIR}/third_party/min
 # Everything in here is unit-testable on any machine, even one without a GPU.
 add_library(rm_core STATIC
     src/core/map/HeightField.cpp
+    src/core/map/MaxHeightPyramid.cpp
     src/core/map/MapInfo.cpp
     src/core/map/Smt.cpp
     src/core/map/TileAtlas.cpp
