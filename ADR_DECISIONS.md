@@ -2700,3 +2700,33 @@ MPS call is isolated in a tiny `.mm` bridge because importing Objective-C Metal 
 declarations in one translation unit produces symbol redeclarations. On the same headless scene,
 Full versus Off measured +0.012 ms GPU mean at 2560x1440 pixels and +0.390 ms at 5120x2880; the
 later window-size task remains responsible for equivalent real-window 5K evidence.
+
+---
+
+## ADR-077 — Material identity changes response, never interface meaning or geometry
+
+**Context.** Accent colour alone made the six native presentations look like recolours, while
+decorative texture, distortion, or animation would compete with information and violate the first
+glass review. Classic FAF also has a different implementation: nine retail image slices replace
+procedural fill and bevel, and a partial set must not leak unused pieces or faction glass into an
+otherwise neutral fallback.
+
+**Decision.** Keep frame rectangles, vertex positions, typography, semantic resource/state colours,
+and hit tests profile-independent. Each native material supplies only three backdrop coefficients:
+tint strength, source saturation, and absorption. UEF is laminated blue tactical glass; Aeon is
+light, desaturated opalescent ceramic; Cybran is a dark smoked magenta composite; Seraphim is a
+bright warm crystalline plate; BAR is warm field acrylic; Neutral is restrained cyan observer
+chrome. Existing bevel colours provide the edge response. Complete classic art replaces native
+fill atomically; missing or incomplete art selects the entire Neutral material.
+
+**Alternatives considered.** Grain, refraction, fracture textures, glints, and decorative motion
+were rejected because the screenshot review showed no need for them and the binding plan reserves
+them until evidence does. Faction-specific frame shapes were rejected because controls must not
+move when presentation changes. Mixing successfully loaded classic pieces with native glass was
+rejected because it creates an accidental seventh material and unstable atlas behavior.
+
+**Consequences.** Every native presentation is recognizable in the seven-case 1280x720 contact
+set without moving a pixel of module geometry. Full and Reduced reuse the same one-blur graph with
+different coefficients; Off keeps semantic chrome but bypasses material sampling. Solid black
+shadow quads remain ordinary premultiplied alpha and, by themselves, no longer activate the blur,
+so classic FAF pays no native-glass cost.

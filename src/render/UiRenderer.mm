@@ -234,6 +234,13 @@ void Renderer::setUiViewport(const ui::UiViewport& viewport) {
 }
 
 void Renderer::setHud(const ui::Geometry& geometry) noexcept {
+    uiMaterial_ = {geometry.material.tintStrength, geometry.material.saturation,
+                   geometry.material.absorption};
+    uiHasGlassPanels_ = std::any_of(
+        geometry.panelSurface.solid.begin(), geometry.panelSurface.solid.end(),
+        [](const text::TextVertex& vertex) {
+            return vertex.colour[0] + vertex.colour[1] + vertex.colour[2] > 0.001f;
+        });
     uiLayerVertexCounts_ = {};
     const bool hasMinimap = minimapTexture_ != nullptr && minimapRect_[2] > 0.0f
                          && minimapRect_[3] > 0.0f;

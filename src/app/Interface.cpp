@@ -627,8 +627,12 @@ void appendConstructionEffects(std::vector<rm::DecalVertex>& decals,
         theme = rm::ui::barTheme();
     }
     if (descriptor.classicChrome) {
-        // Classic chrome rides the faction livery: panel art changes, semantic accents do not.
-        theme.skin = skin;
+        if (skin.active) {
+            // Complete classic chrome rides the faction livery; partial/missing art never does.
+            theme.skin = skin;
+        } else {
+            theme = rm::ui::neutralTheme();
+        }
     }
     return theme;
 }

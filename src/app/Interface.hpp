@@ -153,7 +153,7 @@ void appendViewFootprint(std::vector<std::array<float, 2>>& out, const rm::Orbit
     const UnitScene& scene, float elapsedSeconds, rm::ui::GameProfile profile);
 
 /// Resolves the run's explicit profile against the player's faction and an optional packed skin.
-/// BAR and Neutral intentionally use neutral chrome until their material slice lands.
+/// BAR and Neutral own concrete materials; incomplete classic art falls back atomically to Neutral.
 [[nodiscard]] rm::ui::Theme hudThemeFor(const UnitScene& scene, rm::ui::GameProfile profile,
                                          const rm::ui::PanelSkin& skin = {});
 

@@ -73,12 +73,22 @@ struct PanelSkin {
     std::array<std::array<float, 2>, 9> size{};
 };
 
+/// How the shared blurred world becomes a panel surface. Geometry never depends on these values.
+struct PanelMaterial {
+    float tintStrength = 0.56f;
+    float saturation = 0.55f;
+    float absorption = 0.66f;
+
+    constexpr bool operator==(const PanelMaterial&) const noexcept = default;
+};
+
 struct Theme {
     Colour glass;    ///< a panel's fill
     Colour well;     ///< a recess inside a panel: a bar's track, a readout's field
     Colour edge;     ///< the bevel around a panel
     Colour edgeLit;  ///< the top edge, and the corner brackets. The one bright line
     Colour label;    ///< silkscreen text. Quieter than kInk, because a label is read once
+    PanelMaterial material;
 
     PanelSkin skin;  ///< the FAF chrome, inactive by default
 };
@@ -264,6 +274,7 @@ struct MixedGeometryLayer {
 
 /// The geometry for one interface frame, split by semantic compositing order.
 struct Geometry {
+    PanelMaterial material{};
     MixedGeometryLayer worldOverlay;  ///< strategic images, bars, contacts, selection band
     MixedGeometryLayer panelSurface;  ///< glass/shadows and optional nine-slice art
     std::vector<text::TextVertex> chrome;             ///< bevels, wells, bars, minimap marks
@@ -272,6 +283,7 @@ struct Geometry {
     std::vector<text::TextVertex> foregroundReadout;  ///< monospaced values and badges
 
     void clear() noexcept {
+        material = {};
         worldOverlay.clear();
         panelSurface.clear();
         chrome.clear();

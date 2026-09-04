@@ -407,8 +407,12 @@ Seraphim's gold with energy — and the collision is resolved by moving the *liv
 resource's colour is an identity and a faction's is a coat of paint. A test asserts the
 distance, and it caught the first two attempts being too close to tell apart.
 
-Panels are glass with a lit top edge and corner brackets rather than full borders: brackets say
-where a panel's bounds are without the frame competing with the numbers inside it.
+Panels share one quarter-resolution Metal Performance Shaders backdrop, with distinct response
+rather than extra decoration: UEF laminated glass, Aeon opalescent ceramic, Cybran smoked
+composite, Seraphim crystalline plate, BAR field acrylic, and restrained Neutral chrome. Their
+lit edge and corner brackets say where a panel ends without a full border competing with the
+numbers. Classic FAF uses its complete retail nine-slice; an incomplete set falls back atomically
+to Neutral. Geometry, typography, and semantic colours do not move between any of them.
 
 `--ui fa|bar|neutral|faf` changes vocabulary and chrome without moving controls. BAR uses
 **METAL** and a warm field-acrylic fallback; neutral observer presentation uses **MATERIAL** and

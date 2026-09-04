@@ -13,7 +13,7 @@ namespace {
 /// and none of them drifts. The glass is the accent taken almost to black and the well darker
 /// still, which is what makes a bar's track read as cut INTO the panel rather than drawn on
 /// it — the only depth cue a flat interface gets.
-[[nodiscard]] Theme themeFrom(Colour accent) noexcept {
+[[nodiscard]] Theme themeFrom(Colour accent, PanelMaterial material) noexcept {
     return Theme{
         .glass = Colour{{accent[0] * 0.10f, accent[1] * 0.13f, accent[2] * 0.16f, 0.82f}},
         .well = Colour{{accent[0] * 0.05f, accent[1] * 0.07f, accent[2] * 0.09f, 0.90f}},
@@ -21,6 +21,7 @@ namespace {
         .edgeLit = Colour{{accent[0], accent[1], accent[2], 0.95f}},
         .label = Colour{{accent[0] * 0.55f + 0.30f, accent[1] * 0.55f + 0.34f,
                          accent[2] * 0.55f + 0.36f, 1.0f}},
+        .material = material,
     };
 }
 
@@ -31,7 +32,9 @@ Theme themeFor(sim::Faction faction) noexcept {
         // Steel blue, and the only faction whose own colour needed no adjustment — nothing
         // fixed is blue.
         case sim::Faction::Uef:
-            return themeFrom(Colour{{0.290f, 0.608f, 0.847f, 1.0f}});  // #4A9BD8
+            return themeFrom(Colour{{0.290f, 0.608f, 0.847f, 1.0f}},
+                             {.tintStrength = 0.52f, .saturation = 0.72f,
+                              .absorption = 0.68f});  // laminated tactical glass
 
         // PALE MINT, not the leaf green the faction wears in the field: mass is green, and a
         // green frame around a green number makes the number disappear into it. Turquoise was
@@ -39,7 +42,9 @@ Theme themeFor(sim::Faction faction) noexcept {
         // Taken up in value and down in saturation instead, so it reads as Aeon's green-white
         // rather than as a second green.
         case sim::Faction::Aeon:
-            return themeFrom(Colour{{0.659f, 0.941f, 0.863f, 1.0f}});  // #A8F0DC
+            return themeFrom(Colour{{0.659f, 0.941f, 0.863f, 1.0f}},
+                             {.tintStrength = 0.65f, .saturation = 0.42f,
+                              .absorption = 0.82f});  // opalescent ceramic
 
         // ROSE, not the faction's own orange-red: a LOSS is orange-red, and a Cybran player
         // would otherwise read their own chrome as a deficit. Crimson was the first attempt and
@@ -47,25 +52,33 @@ Theme themeFor(sim::Faction faction) noexcept {
         // toward magenta, which is still unmistakably the red faction and nothing else in the
         // interface is.
         case sim::Faction::Cybran:
-            return themeFrom(Colour{{0.910f, 0.251f, 0.561f, 1.0f}});  // #E8408F
+            return themeFrom(Colour{{0.910f, 0.251f, 0.561f, 1.0f}},
+                             {.tintStrength = 0.47f, .saturation = 0.30f,
+                              .absorption = 0.50f});  // smoked composite
 
         // PALE CREAM, not amber: energy is amber. Taken most of the way to white so it still
         // reads as Seraphim's gold without being the energy bar's colour.
         case sim::Faction::Seraphim:
-            return themeFrom(Colour{{0.937f, 0.890f, 0.690f, 1.0f}});  // #EFE3B0
+            return themeFrom(Colour{{0.937f, 0.890f, 0.690f, 1.0f}},
+                             {.tintStrength = 0.54f, .saturation = 0.86f,
+                              .absorption = 0.86f});  // crystalline etched plate
     }
     return neutralTheme();
 }
 
 Theme neutralTheme() noexcept {
     // The cyan the interface would have had with no factions in it at all.
-    return themeFrom(Colour{{0.412f, 0.812f, 0.902f, 1.0f}});  // #69CFE6
+    return themeFrom(Colour{{0.412f, 0.812f, 0.902f, 1.0f}},
+                     {.tintStrength = 0.56f, .saturation = 0.50f,
+                      .absorption = 0.64f});  // restrained observer chrome
 }
 
 Theme barTheme() noexcept {
     // Warm field acrylic rather than observer cyan. Semantic resource and warning colours stay
     // unchanged, so this is unmistakably chrome rather than another economy signal.
-    return themeFrom(Colour{{0.718f, 0.608f, 0.447f, 1.0f}});  // #B79B72
+    return themeFrom(Colour{{0.718f, 0.608f, 0.447f, 1.0f}},
+                     {.tintStrength = 0.60f, .saturation = 0.58f,
+                      .absorption = 0.62f});  // field acrylic
 }
 
 std::vector<std::string> wrapToWidth(std::span<const text::Glyph> glyphs, std::string_view text,
@@ -529,6 +542,7 @@ namespace {
 
 void build(Geometry& out, const text::Font& labelFont, const text::Font& readoutFont,
            const Theme& theme, const MatchState& state, const FrameLayout& frame) {
+    out.material = theme.material;
     const text::Font& chrome = labelFont.usable() ? labelFont : readoutFont;
     if (!chrome.usable()) {
         return;  // no font at all: the interface degrades to nothing rather than to a crash

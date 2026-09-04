@@ -350,6 +350,22 @@ TEST_CASE("every faction's livery is tellable from every other") {
     }
 }
 
+TEST_CASE("faction materials differ without changing their semantic palette") {
+    const std::array<rm::ui::PanelMaterial, 6> materials{{
+        rm::ui::themeFor(rm::sim::Faction::Uef).material,
+        rm::ui::themeFor(rm::sim::Faction::Aeon).material,
+        rm::ui::themeFor(rm::sim::Faction::Cybran).material,
+        rm::ui::themeFor(rm::sim::Faction::Seraphim).material,
+        rm::ui::barTheme().material,
+        rm::ui::neutralTheme().material,
+    }};
+    for (std::size_t first = 0; first < materials.size(); ++first) {
+        for (std::size_t second = first + 1; second < materials.size(); ++second) {
+            CHECK(materials[first] != materials[second]);
+        }
+    }
+}
+
 TEST_CASE("a livery's glass is dark enough to read numbers over") {
     // A panel is behind text. However bright a faction's accent, the glass derived from it has
     // to stay near black or the readouts lose their contrast — which is why the glass is

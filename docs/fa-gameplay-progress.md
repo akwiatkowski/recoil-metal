@@ -9,7 +9,7 @@ Detailed retail evidence remains canonical in
 [`fa-exe-analysis-plan.md`](fa-exe-analysis-plan.md). This dashboard summarizes that ledger; it
 does not replace its claims, addresses, counterevidence, or confirmation gate.
 
-**Snapshot:** 2026-09-04, Recoil Metal main through HUD slice 5 — the measured interface
+**Snapshot:** 2026-09-04, Recoil Metal main through HUD slice 6 — the measured interface
 baseline (`docs/hud-baseline.md`, `tools/hud_baseline.sh`, `--backing`, `--bench-hud`,
 `--bench-size`) — after the `WP-22` controller read and six follow-ups (parked flyers recharge, the look-ahead max pyramid, attached children take their
 carrier's tilt, mesh extents and build-effect bones parsed with a bone-to-world helper, the
@@ -480,6 +480,15 @@ Reduced Transparency resolves automatic effects to Off; `--ui-effects` supplies 
 Full/Reduced/Off override used by captures and benchmarks. At 2560x1440 pixels Full measured
 4.844 ms GPU mean against Off's 4.832 ms; at 5120x2880 it measured 9.911 ms against 9.521 ms.
 
+HUD slice 6 keeps the frame and semantic palette fixed while giving each surface a concrete
+absorption, saturation, and tint response: UEF laminated tactical glass, Aeon opalescent ceramic,
+Cybran smoked composite, Seraphim crystalline plate, BAR field acrylic, and restrained Neutral
+observer chrome. The complete retail `generic_brd` nine-slice remains the classic FAF material;
+missing or partial art falls back as one unit to Neutral rather than combining faction glass with
+stray classic pieces. Black panel-shadow quads retain ordinary alpha and no longer trigger or
+sample the shared blur. Seven 1280x720 contact captures verify identical module silhouettes,
+typography, information colours, and hit geometry across the presentations.
+
 The native HUD also has a measured baseline (HUD slice 0, `docs/hud-baseline.md`,
 `tools/hud_baseline.sh`): seven interface states — default, commander, mixed selection,
 engineer, placement, observer, FAF chrome — at 1280x720 and 1600x900 at 1x and at the 14-inch
@@ -497,8 +506,8 @@ strategic-icon fallback decisions identical.
 command pages, overlays, key contexts, or split views (`WP-40`).
 
 ```text
-/goal Advance FA-UI with HUD slice 6 (recoil-metal-3755): tune faction, BAR, neutral, and classic
-FAF materials on pixel-identical geometry, without changing layout or interaction.
+/goal Advance FA-UI with HUD slice 7 (recoil-metal-3787): run the layout/content/accessibility
+stress matrix, real windowed Full-versus-Off timing, full tests/golden, and documentation cleanup.
 ```
 
 ### FA-PRESENT - Animation, Effects, And Audio

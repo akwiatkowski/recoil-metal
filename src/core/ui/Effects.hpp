@@ -11,10 +11,6 @@ enum class EffectsLevel {
     Off,
 };
 
-[[nodiscard]] constexpr float glassTintStrength(EffectsLevel level) noexcept {
-    return level == EffectsLevel::Reduced ? 0.68f : 0.56f;
-}
-
 [[nodiscard]] constexpr std::string_view effectsLevelName(EffectsLevel level) noexcept {
     switch (level) {
     case EffectsLevel::Full: return "full";

@@ -125,7 +125,7 @@ Renderer::Renderer(CA::MetalLayer* layer)
     composePipeline_ = makePipeline(device_, library, "screenVertex", "screenFragment",
                                     BlendMode::Opaque);
     glassPipeline_ = makePipeline(device_, library, "textVertex", "glassFragment",
-                                  BlendMode::Opaque);
+                                  BlendMode::PremultipliedAlpha);
 
     // A selection ring is interface laid over the ground, and a solid band would hide the
     // terrain it marks.
@@ -833,9 +833,7 @@ void Renderer::ensureBackdropTextures(unsigned int width, unsigned int height) n
 
 void Renderer::encodeFrame(MTL::CommandBuffer* commandBuffer, MTL::RenderPassDescriptor* pass,
                            unsigned int width, unsigned int height) noexcept {
-    const std::size_t panelIndex = ui::uiLayerIndex(ui::UiLayer::PanelSurface);
-    const bool hasGlassPanels = uiLayerVertexCounts_[panelIndex][0] > 0;
-    if (uiEffects_ == ui::EffectsLevel::Off || !hasGlassPanels) {
+    if (uiEffects_ == ui::EffectsLevel::Off || !uiHasGlassPanels_) {
         encodeScene(commandBuffer, pass, width, height);
         return;
     }
@@ -1624,11 +1622,16 @@ void Renderer::encodeUi(MTL::RenderCommandEncoder* encoder, unsigned int width,
     // Glass replaces the world below panel surfaces, so it must precede the minimap's own
     // artwork. The opaque Off material retains the historical tint-over-preview ordering.
     if (glass && count(ui::UiLayer::PanelSurface, 0) > 0) {
-        const float tintStrength = ui::glassTintStrength(uiEffects_);
+        std::array<float, 4> material{{uiMaterial_[0], uiMaterial_[1], uiMaterial_[2], 0.0f}};
+        if (uiEffects_ == ui::EffectsLevel::Reduced) {
+            material[0] = std::min(material[0] + 0.12f, 1.0f);
+            material[1] *= 0.75f;
+            material[2] *= 0.88f;
+        }
         encoder->setRenderPipelineState(glassPipeline_);
         bindRange(ui::UiLayer::PanelSurface, 0);
         encoder->setFragmentTexture(blurB_, NS::UInteger{0});
-        encoder->setFragmentBytes(&tintStrength, sizeof(tintStrength), kUniformBufferIndex);
+        encoder->setFragmentBytes(material.data(), sizeof(material), kUniformBufferIndex);
         encoder->drawPrimitives(
             MTL::PrimitiveType::PrimitiveTypeTriangle, NS::UInteger{0},
             static_cast<NS::UInteger>(count(ui::UiLayer::PanelSurface, 0)));

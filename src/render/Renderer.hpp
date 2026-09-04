@@ -636,6 +636,8 @@ private:
     void* fullBlur_ = nullptr;                               // retained MPSImageGaussianBlur
     void* reducedBlur_ = nullptr;                            // retained MPSImageGaussianBlur
     ui::EffectsLevel uiEffects_ = ui::EffectsLevel::Full;
+    std::array<float, 3> uiMaterial_{{0.56f, 0.55f, 0.66f}};
+    bool uiHasGlassPanels_ = false;
 
     CA::MetalLayer* layer_;                    // not owned
     MTL::Device* device_ = nullptr;            // owned

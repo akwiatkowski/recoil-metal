@@ -132,10 +132,17 @@ fragment float4 screenFragment(ScreenOut in [[stage_in]],
 fragment float4 glassFragment(TextOut in [[stage_in]],
                               texture2d<float> backdrop [[texture(0)]],
                               sampler backdropSampler [[sampler(0)]],
-                              constant float& tintStrength [[buffer(1)]]) {
+                              constant float4& material [[buffer(1)]]) {
+    // Panel shadows share this solid stream but are not glass. Preserve their ordinary
+    // premultiplied source-over output, especially for classic nine-slice panels.
+    if (dot(in.colour.rgb, float3(1.0)) < 0.001) {
+        return float4(0.0, 0.0, 0.0, in.colour.a);
+    }
     const float3 blurred = backdrop.sample(backdropSampler, in.screenUv).rgb;
-    const float strength = saturate(tintStrength * in.colour.a);
-    return float4(mix(blurred, in.colour.rgb, strength), 1.0);
+    const float luminance = dot(blurred, float3(0.2126, 0.7152, 0.0722));
+    const float3 absorbed = mix(float3(luminance), blurred, material.y) * material.z;
+    const float strength = saturate(material.x * in.colour.a);
+    return float4(mix(absorbed, in.colour.rgb, strength), 1.0);
 }
 
 // The same geometry, sampling a full-colour IMAGE rather than a coverage mask.
