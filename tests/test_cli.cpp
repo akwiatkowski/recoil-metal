@@ -87,6 +87,20 @@ TEST_CASE("a count is the value after its flag, and zero when there is none") {
     CHECK(rm::app::parseCount(dangling.argc(), dangling.argv(), "--armies") == 0);
 }
 
+TEST_CASE("the capture selection type is the blueprint id after its flag") {
+    Args engineer{{"--select-type", "UEL0105"}};
+    CHECK(rm::app::parseSelectType(engineer.argc(), engineer.argv()) == "UEL0105");
+
+    Args absent{{"--select", "1"}};
+    CHECK(rm::app::parseSelectType(absent.argc(), absent.argv()).empty());
+
+    Args dangling{{"--select-type"}};
+    CHECK(rm::app::parseSelectType(dangling.argc(), dangling.argv()).empty());
+
+    Args nextFlag{{"--select-type", "--screenshot", "/tmp/x.png"}};
+    CHECK(rm::app::parseSelectType(nextFlag.argc(), nextFlag.argv()).empty());
+}
+
 TEST_CASE("the --screenshot flag takes a path and an optional size") {
     Args bare{{"--screenshot", "/tmp/x.png"}};
     const ShotOptions justPath = rm::app::parseShot(bare.argc(), bare.argv());

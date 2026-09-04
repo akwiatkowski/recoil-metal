@@ -240,7 +240,8 @@ void composeHeadlessInterface(rm::Renderer& renderer, const Session& session,
                               const rm::ui::UiViewport& viewport) {
     RM_UNPACK_SESSION(session)
             // Selection rings need a selection, and a headless run has no
-            // clicks. `--select N` rings the first N units so that what a
+            // clicks. `--select N` rings the first N units and `--select-type ID`
+            // rings the first unit with that blueprint id, so that what a
             // click produces can be captured and compared between builds —
             // otherwise the one piece of interface this renderer draws is the
             // one thing no screenshot can show.
@@ -252,7 +253,9 @@ void composeHeadlessInterface(rm::Renderer& renderer, const Session& session,
             std::vector<rm::DecalVertex> vertices;
             appendVisibleWreckDecals(vertices, units);
             {
-                const std::size_t rings = parseCount(argc, argv, "--select");
+                const std::string_view selectedType = parseSelectType(argc, argv);
+                const std::size_t rings =
+                    selectedType.empty() ? parseCount(argc, argv, "--select") : 1;
                 std::vector<rm::SelectionEntry> captured;
                 // The same selection as UnitIds, so the BUILD PANEL can be captured too. The
                 // comment above says why this matters: interface that only exists under a click
@@ -263,8 +266,15 @@ void composeHeadlessInterface(rm::Renderer& renderer, const Session& session,
                 for (std::size_t batch = 0; batch < units.drawScratch.size() && made < rings;
                      ++batch) {
                     for (std::size_t i = 0; i < units.drawScratch[batch].size() && made < rings;
-                         ++i, ++made) {
+                         ++i) {
                         const rm::UnitIndex slot = units.drawSlotOf[batch][i];
+                        if (!selectedType.empty()) {
+                            const rm::unitdef::UnitDef* def =
+                                units.catalog.def(units.store.typeAt(slot));
+                            if (def == nullptr || def->name != selectedType) {
+                                continue;
+                            }
+                        }
                         const rm::sim::Transform& at = units.store.transforms()[slot];
                         const std::array<float, 3> ground{rm::sim::fxToFloat(at.x),
                                                           rm::sim::fxToFloat(at.y),
@@ -298,6 +308,7 @@ void composeHeadlessInterface(rm::Renderer& renderer, const Session& session,
                         std::printf("    ring %zu at (%.0f, %.0f)\n", made + 1,
                                     static_cast<double>(ground[0]),
                                     static_cast<double>(ground[2]));
+                        ++made;
                     }
                 }
                 // No beginFrame: that acquires a frames-in-flight slot which

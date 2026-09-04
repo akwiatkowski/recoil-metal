@@ -19,7 +19,7 @@ gets reimplemented.**
 - **Deterministic.** The sim is fixed point, proved identical at every
   optimisation level by a test. `--hash-log` writes a per-tick state hash and
   `--check-hash-log` names the tick a divergence began at.
-- **Tested.** **1356 tests, all green.** Anything that does not
+- **Tested.** **1357 tests, all green.** Anything that does not
   touch the GPU gets a failing test first, and parsers are tested against the
   real retail corpus — all 2034 BAR `.s3o` models and 2552 `.dds` textures.
 - **It plays.** Economy, construction, weapons, shields, aircraft, fog of war,
@@ -175,7 +175,7 @@ Then build and test. Catch2 is fetched by CMake at configure time:
 ```sh
 make build
 make test
-#   100% tests passed, 0 tests failed out of 1356
+#   100% tests passed, 0 tests failed out of 1357
 ```
 
 Or without the Makefile:
@@ -663,7 +663,7 @@ only appears under one cannot otherwise be captured, tested, or diffed.
 | `--tick-rate <hz>` | the sim's rate for this run, 5–50 Hz. Applied *first*, because speeds and reloads derive from it at spawn |
 | `--no-interpolate` | draw the newest snapshot rather than blending two. **Every golden image is taken with this** — a screenshot of tick N should *be* tick N, not depend on when the process was scheduled |
 | `--focus` / `--look <x> <z> <r>` | aim the capture at the first instance, or at a world point |
-| `--select <n>` / `--hover <n>` / `--ghost <x> <z>` | light up interface a headless run has no cursor to produce: N units selected, the Nth tray option hovered with its info card, the placement ghost at a world point |
+| `--select <n>` / `--select-type <id>` / `--hover <n>` / `--ghost <x> <z>` | light up interface a headless run has no cursor to produce: N units selected or the first unit with a blueprint id selected, the Nth tray option hovered with its info card, the placement ghost at a world point |
 | `--ui <fa\|bar\|neutral\|faf>` / `--ui-scale <0.5..3>` | select FA, BAR, neutral, or classic FAF presentation (`fa` is the default; the first resource reads Mass, Metal, or Material respectively; `faf` wears the game's own nine-slice chrome); request HUD scaling relative to automatic size. Values clamp; available fit wins, and enlargement uses only room beyond the automatic 2.5× cap |
 | `--vision-style <recoil\|fa>` | whether terrain blocks sight |
 | `--ai-faf` | FAF's own AI plays every army, through the sandbox |
@@ -783,7 +783,7 @@ recoil-metal/
 │   ├── render/         Metal renderer (Objective-C++ where bridging)
 │   ├── platform/       AppKit window + display link (pImpl hides ObjC)
 │   └── main.mm         thin entry point
-├── tests/              Catch2 unit tests, mirrors src/core — 1356 tests
+├── tests/              Catch2 unit tests, mirrors src/core — 1357 tests
 ├── third_party/        metal-cpp and miniz (fetched, gitignored)
 ├── vendor/ai/          foreign AI corpora at pinned commits (fetched, gitignored,
 │                       NEVER modified — `make ai`, ADR-039)

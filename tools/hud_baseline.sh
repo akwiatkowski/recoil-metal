@@ -30,7 +30,7 @@ mkdir -p "$OUT/shots" "$OUT/bench"
 # the player's commander to select. `--no-interpolate` because every golden image is taken
 # with it (README, "Every flag").
 SKIRMISH=("$MAP" --gamedata "$GAMEDATA" --skirmish --armies 2 --play 300 --focus --no-interpolate)
-ENGINEER=("$MAP" --gamedata "$GAMEDATA" --units "$FA_UNITS/URL0105/URL0105_unit.bp" 1 --focus --no-interpolate)
+ENGINEER=("${SKIRMISH[@]}" --units "$FA_UNITS/UEL0105/UEL0105_unit.bp" 1)
 
 # Where to put the placement ghost: beside the commander the skirmish selects, so the ghost is
 # inside the framed shot. Probed once, headless, from the capture's own "ring N at (x, z)" line.
@@ -46,7 +46,7 @@ STATES=(
   "default|"
   "commander|--select 1"
   "selection|--select 6"
-  "engineer|ENGINEER --select 1"
+  "engineer|ENGINEER --select-type UEL0105"
   "placement|--select 1 --hover 1 --ghost $GX $GZ"
   "observer|--observer"
   "faf|--select 1 --ui faf"

@@ -373,7 +373,7 @@ shot-ui: build check-fa
 # which is what makes it selectable rather than scenery.
 shot-engineer: build check-fa
 	$(BIN) "$(FA_MAP)" $(FA_FLAGS) --skirmish --armies 2 --units $(FA_ENGINEER) 4 \
-	  --play $(SECONDS) --select 1 --look $(MARCH) 400 --screenshot $(SHOT) $(SHOT_SIZE)
+	  --play $(SECONDS) --select-type UEL0105 --look $(MARCH) 400 --screenshot $(SHOT) $(SHOT_SIZE)
 	@echo "  wrote $(SHOT)"
 
 # Moments of ONE battle, captured. The match is deterministic, so re-running to a later

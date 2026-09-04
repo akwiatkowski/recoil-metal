@@ -105,6 +105,11 @@ Captured 2026-09-04 at `9c98c69`+ on an Apple M4 Pro, 300 benchmark frames per p
   palette, and the mesh draws untextured because that loader path resolves textures beside the
   blueprint. A `--select-type <blueprint id>` for the headless paths closes this; it is the
   dashboard's next FA-UI task.
+
+  **Closed after this baseline:** `--select-type <blueprint id>` now selects the first matching
+  unit in deterministic draw order, and `tools/hud_baseline.sh` injects UEL0105 into the same
+  five-minute skirmish used by the other states. A 1400x900 proof capture reports the engineer's
+  15-option build palette; the next full baseline refresh will replace the historical row above.
 - **`HUD ms` is a noisy subtraction.** The world-only benchmark builds its particles and icons on
   its own path (`appendSceneIcons` without strategic refs) while the HUD benchmark composes the
   scene exactly as a capture does, so the two differ by more than the interface; the observer

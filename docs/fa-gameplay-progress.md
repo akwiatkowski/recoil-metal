@@ -13,7 +13,7 @@ does not replace its claims, addresses, counterevidence, or confirmation gate.
 baseline (`docs/hud-baseline.md`, `tools/hud_baseline.sh`, `--backing`, `--bench-hud`,
 `--bench-size`) — after the `WP-22` controller read and six follow-ups (parked flyers recharge, the look-ahead max pyramid, attached children take their
 carrier's tilt, mesh extents and build-effect bones parsed with a bone-to-world helper, the
-factory production panel in the deck's command rectangle, README counts at 1356) —
+factory production panel in the deck's command rectangle, README counts at 1357) —
 `ComputeAirControl`, `CalcWingedLift`, the damping factor and the terrain look-ahead read and
 implemented (`C-244`–`C-246`): authored `KMove`/`KLift` gains with their damping terms, the
 vertical lift-off to half elevation that replaces the invented runway roll, the pyramid look-ahead
@@ -109,7 +109,7 @@ excluded from the headline.
 | [`FA-PROGRESS`](#fa-progress---enhancements-veterancy-and-special-units) | Enhancements, veterancy, special units | `WP-34`-`36` | 35% | 20% | 35% | Complete the enhancement lifecycle specification around `CUnitScriptTask`. |
 | [`FA-TERRAIN`](#fa-terrain---mutable-terrain-and-craters) | Mutable terrain and craters | `WP-37` | 0% | 0% | 25% | Trace one crater from damage through terrain, pathing, and rendering invalidation. |
 | [`FA-AI`](#fa-ai---retail-ai-and-native-manager-boundary) | Retail AI and native manager boundary | `WP-38` | 35% | 5% | 30% | Remove the remaining condition-budget overruns (`recoil-metal-4754`). |
-| [`FA-UI`](#fa-ui---player-interface-and-advanced-controls) | Player interface and advanced controls | `WP-39`-`40` | 65% | 5% | 15% | Add `--select-type <id>` so an engineer inside a skirmish can be captured with its build panel, then start HUD slice 3 (`recoil-metal-3937`). |
+| [`FA-UI`](#fa-ui---player-interface-and-advanced-controls) | Player interface and advanced controls | `WP-39`-`40` | 65% | 5% | 15% | Clean the world-only benchmark composition (`recoil-metal-14383`), then start HUD slice 3 (`recoil-metal-3937`). |
 | [`FA-PRESENT`](#fa-present---animation-effects-and-audio) | Animation, effects, audio | `WP-41`-`42` | 55% | 5% | 25% | Complete one blueprint-audio-to-XSB-cue playback path. |
 | [`FA-PERSIST`](#fa-persist---replay-hashing-and-saveresume) | Replay, hashing, save/resume | `WP-43`-`44` | 70% | 20% | 90% | Version and round-trip authoritative economy and army state in SaveState. |
 
@@ -440,18 +440,18 @@ MacBook Pro and 5K logical sizes at 2x, each a deterministic headless capture wi
 HUD vertex counts and an offscreen GPU frame time with and without the interface. Two tracked
 flags made the 2x points possible: `--backing` gives a capture or benchmark a display scale, and
 `--bench-hud` / `--bench-size` let the benchmark draw the interface a capture shows. The factory
-production panel now fills the deck's command rectangle.
+production panel now fills the deck's command rectangle. `--select-type <blueprint id>` selects
+the first matching unit by deterministic draw order, so an injected UEL0105 can now be captured
+inside the five-minute skirmish with its army, economy, textures, and 15-option build palette.
 
 **Largest gap:** the interface is functionally usable but carries none of retail's data-driven
-command pages, overlays, key contexts, or split views (`WP-40`); the engineer state cannot yet
-be captured inside a skirmish because `--select` picks by draw order, so its build panel is
-unmeasured; and the world-only benchmark composes icons on a different path from the HUD
-benchmark, which makes the subtraction noisy (see the baseline's caveats).
+command pages, overlays, key contexts, or split views (`WP-40`); and the world-only benchmark
+composes icons on a different path from the HUD benchmark, which makes the subtraction noisy
+(see the baseline's caveats).
 
 ```text
-/goal Advance FA-UI by adding --select-type <blueprint id> to the headless capture so an
-engineer inside the five-minute skirmish can be ringed with its build panel, re-running
-tools/hud_baseline.sh for the engineer and placement states, then starting HUD slice 3
+/goal Advance FA-UI by routing the world-only offscreen benchmark through the same headless
+composition as the HUD benchmark minus the interface, then start HUD slice 3
 (recoil-metal-3937): the fixed inspector, paged roster and build palette, and the existing
 command rack in the deck. Keep every capture headless and deterministic, run make test, and
 refresh FA-UI.

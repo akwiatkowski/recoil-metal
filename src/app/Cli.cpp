@@ -350,6 +350,16 @@ rm::ui::GameProfile parseGameProfile(int argc, const char* argv[]) {
     return 0;
 }
 
+[[nodiscard]] std::string_view parseSelectType(int argc, const char* argv[]) {
+    for (int i = 1; i + 1 < argc; ++i) {
+        if (std::string_view{argv[i]} == "--select-type"
+            && std::string_view{argv[i + 1]}.starts_with('-') == false) {
+            return argv[i + 1];
+        }
+    }
+    return {};
+}
+
 /// Whether a bare flag appears anywhere in the arguments.
 [[nodiscard]] bool hasFlag(int argc, const char* argv[], std::string_view flag) {
     for (int i = 1; i < argc; ++i) {
