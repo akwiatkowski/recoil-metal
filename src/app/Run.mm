@@ -229,75 +229,16 @@ void gatherVisibleEvents(std::vector<rm::sim::Event>& out, const UnitScene& unit
 
 } // namespace
 
-int runOffscreenBenchmark(const Session& session) {
+// --- The headless interface ------------------------------------------------------------------
+//
+// Everything a capture shows that a live window would draw under a cursor: selection and range
+// rings, the order marker, the HUD with its panels, the minimap, strategic icons, contact blips,
+// construction sites, projectiles, the hovered card and the placement ghost. ONE FUNCTION for
+// the screenshot and the offscreen benchmark, so the benchmark's HUD cost is the cost of the
+// interface the screenshot proves, not a second approximation of it.
+void composeHeadlessInterface(rm::Renderer& renderer, const Session& session,
+                              const rm::ui::UiViewport& viewport) {
     RM_UNPACK_SESSION(session)
-        // --- Headless offscreen benchmark ----------------------------------
-        // No NSApplication, no window, no display link, hence no vsync. This is
-        // the only mode whose CPU numbers describe the renderer instead of the
-        // display, so it is the one comparable against another engine.
-            rm::Renderer renderer{nullptr};
-            renderer.setTerrain(mesh);
-            applyGround(renderer, *map);
-            renderer.setUnits(units.textures.all(), units.batches);
-            renderer.setGroundDecals(units.shieldScratch);
-            units.applyFog(renderer);
-            renderer.setProps(props.textures.all(), props.batches);
-            renderer.setAnimationTime(animationTime);
-            renderer.setReflections(settings.reflections);
-            renderer.setStratumNormals(settings.stratumNormals);
-            renderer.setRefraction(settings.refraction);
-            // The march's dust, so a benchmark measures the same scene a capture
-            // shows rather than one without particles in it — plus the icons, for the
-            // units the camera has left too small to read.
-            std::vector<rm::Particle> captureParticles;
-            captureParticles.assign(marchDust.begin(), marchDust.end());
-            appendSceneIcons(captureParticles, units, renderer.camera());
-            renderer.setParticles(captureParticles);
-            // --focus works here too, so the benchmark can measure a close
-            // camera as well as a whole-map one. They are different workloads:
-            // anything that culls to what the camera sees is invisible at full
-            // zoom and everything up close.
-            if (focus > 0.0f) {
-                focusOnFirstUnit(renderer, units, focus);
-            }
-
-            std::printf("offscreen benchmark: %ux%u, %zu frames (discarding %zu warmup),"
-                        " %zu frames in flight, no vsync\n",
-                        bench.width, bench.height, bench.frames, bench.warmup,
-                        rm::Renderer::kMaxFramesInFlight);
-            std::printf("  %s\n", describeQuality(settings, propInstances, marchDust.size()).c_str());
-
-            const rm::bench::FrameRecorder recorder =
-                renderer.runOffscreenBenchmark(bench.width, bench.height, bench.frames,
-                                               bench.warmup);
-
-            std::printf("%s\n", recorder.summaryLine("recoil-metal offscreen").c_str());
-            writeCsv(bench.csvPath, recorder);
-    return 0;
-}
-
-// --- Headless screenshot -------------------------------------------------------------------
-// No window, so this works regardless of which Space is active — the reason it exists.
-int runScreenshot(const Session& session) {
-    RM_UNPACK_SESSION(session)
-            rm::Renderer renderer{nullptr};
-            renderer.setTerrain(mesh);
-            applyGround(renderer, *map);
-            renderer.setUnits(units.textures.all(), units.batches);
-            units.applyFog(renderer);
-            renderer.setProps(props.textures.all(), props.batches);
-            renderer.setAnimationTime(animationTime);
-            renderer.setReflections(settings.reflections);
-            renderer.setStratumNormals(settings.stratumNormals);
-            renderer.setRefraction(settings.refraction);
-            if (focus > 0.0f) {
-                focusOnFirstUnit(renderer, units, focus);
-            }
-            if (look.enabled) {
-                renderer.focusOn({look.x, map->field.heightAtWorld(look.x, look.z), look.z},
-                                 look.radiusElmos);
-            }
-
             // Selection rings need a selection, and a headless run has no
             // clicks. `--select N` rings the first N units so that what a
             // click produces can be captured and compared between builds —
@@ -352,6 +293,11 @@ int runScreenshot(const Session& session) {
                         }
                         captured.push_back(rm::SelectionEntry{batch, i});
                         capturedSelection.push_back(units.store.idAt(slot));
+                        // Where the ringed unit stands, so a script can place a ghost or aim a
+                        // second capture beside it without guessing the map's start positions.
+                        std::printf("    ring %zu at (%.0f, %.0f)\n", made + 1,
+                                    static_cast<double>(ground[0]),
+                                    static_cast<double>(ground[2]));
                     }
                 }
                 // No beginFrame: that acquires a frames-in-flight slot which
@@ -395,13 +341,9 @@ int runScreenshot(const Session& session) {
             // The HUD in a capture too. A screenshot is how this project verifies anything,
             // and an interface only visible in a live window cannot be checked at all.
             rm::ui::Geometry hud;
-            // THE CAPTURE SCALES LIKE THE WINDOW DOES, from the same function, or a screenshot
-            // would stop being evidence about the interface the player sees. `--screenshot`
-            // takes PIXELS and a window is measured in points; a capture has no backing scale
-            // of its own, so the two coincide here and the pixel size is the logical size.
-            const rm::ui::UiViewport shotViewport = rm::ui::UiViewport::full(
-                static_cast<float>(shot.width), static_cast<float>(shot.height), 1.0f,
-                session.uiScale);
+            // THE CAPTURE SCALES LIKE THE WINDOW DOES, from the same viewport contract, or a
+            // capture would stop being evidence about the interface the player sees.
+            const rm::ui::UiViewport& shotViewport = viewport;
             renderer.setUiViewport(shotViewport);
             const rm::ui::FrameLayout shotFrame = rm::ui::frameLayout(shotViewport);
             const rm::ui::Theme baseTheme = hudThemeFor(units, session.uiProfile);
@@ -589,6 +531,113 @@ int runScreenshot(const Session& session) {
                             usage.uploaded, usage.submitted, usage.capacity);
             }
             std::printf("\n");
+}
+
+int runOffscreenBenchmark(const Session& session) {
+    RM_UNPACK_SESSION(session)
+        // --- Headless offscreen benchmark ----------------------------------
+        // No NSApplication, no window, no display link, hence no vsync. This is
+        // the only mode whose CPU numbers describe the renderer instead of the
+        // display, so it is the one comparable against another engine.
+            rm::Renderer renderer{nullptr};
+            renderer.setTerrain(mesh);
+            applyGround(renderer, *map);
+            renderer.setUnits(units.textures.all(), units.batches);
+            renderer.setGroundDecals(units.shieldScratch);
+            units.applyFog(renderer);
+            renderer.setProps(props.textures.all(), props.batches);
+            renderer.setAnimationTime(animationTime);
+            renderer.setReflections(settings.reflections);
+            renderer.setStratumNormals(settings.stratumNormals);
+            renderer.setRefraction(settings.refraction);
+            // The march's dust, so a benchmark measures the same scene a capture
+            // shows rather than one without particles in it — plus the icons, for the
+            // units the camera has left too small to read.
+            std::vector<rm::Particle> captureParticles;
+            captureParticles.assign(marchDust.begin(), marchDust.end());
+            appendSceneIcons(captureParticles, units, renderer.camera());
+            renderer.setParticles(captureParticles);
+            // --focus works here too, so the benchmark can measure a close
+            // camera as well as a whole-map one. They are different workloads:
+            // anything that culls to what the camera sees is invisible at full
+            // zoom and everything up close.
+            if (focus > 0.0f) {
+                focusOnFirstUnit(renderer, units, focus);
+            }
+            if (look.enabled) {
+                renderer.focusOn({look.x, map->field.heightAtWorld(look.x, look.z), look.z},
+                                 look.radiusElmos);
+            }
+
+            // `--bench-hud`: the interface too, exactly as a screenshot composes it, so the
+            // frame time includes the HUD a player sees. OPT-IN, because every published
+            // number in docs/benchmark-m4.md is world-only and must stay comparable. The
+            // benchmark size is the logical size and `--backing` scales the pixels, as for
+            // a capture.
+            const bool withHud = hasFlag(argc, argv, "--bench-hud");
+            const auto pixelsWide = static_cast<unsigned int>(std::lround(bench.width * shot.backing));
+            const auto pixelsHigh = static_cast<unsigned int>(std::lround(bench.height * shot.backing));
+            if (withHud) {
+                const rm::ui::UiViewport benchViewport = rm::ui::UiViewport::full(
+                    static_cast<float>(bench.width), static_cast<float>(bench.height),
+                    shot.backing, session.uiScale);
+                composeHeadlessInterface(renderer, session, benchViewport);
+            }
+
+            std::printf("offscreen benchmark: %ux%u points at backing %.2f -> %ux%u pixels,"
+                        " %s, %zu frames (discarding %zu warmup), %zu frames in flight, no vsync\n",
+                        bench.width, bench.height, static_cast<double>(shot.backing), pixelsWide,
+                        pixelsHigh, withHud ? "with HUD" : "world only", bench.frames,
+                        bench.warmup, rm::Renderer::kMaxFramesInFlight);
+            std::printf("  %s\n", describeQuality(settings, propInstances, marchDust.size()).c_str());
+
+            const rm::bench::FrameRecorder recorder =
+                renderer.runOffscreenBenchmark(pixelsWide, pixelsHigh, bench.frames,
+                                               bench.warmup);
+
+            std::printf("%s\n", recorder.summaryLine("recoil-metal offscreen").c_str());
+            writeCsv(bench.csvPath, recorder);
+    return 0;
+}
+
+// --- Headless screenshot -------------------------------------------------------------------
+// No window, so this works regardless of which Space is active — the reason it exists.
+int runScreenshot(const Session& session) {
+    RM_UNPACK_SESSION(session)
+            rm::Renderer renderer{nullptr};
+            renderer.setTerrain(mesh);
+            applyGround(renderer, *map);
+            renderer.setUnits(units.textures.all(), units.batches);
+            units.applyFog(renderer);
+            renderer.setProps(props.textures.all(), props.batches);
+            renderer.setAnimationTime(animationTime);
+            renderer.setReflections(settings.reflections);
+            renderer.setStratumNormals(settings.stratumNormals);
+            renderer.setRefraction(settings.refraction);
+            if (focus > 0.0f) {
+                focusOnFirstUnit(renderer, units, focus);
+            }
+            if (look.enabled) {
+                renderer.focusOn({look.x, map->field.heightAtWorld(look.x, look.z), look.z},
+                                 look.radiusElmos);
+            }
+
+            // `--screenshot W H` is the LOGICAL size and `--backing S` the display scale it
+            // stands in for: the interface lays out in W×H points, fonts rasterise at S, and
+            // the image is W·S × H·S pixels — the same contract a Retina window gives the
+            // renderer, so a 2x capture is evidence about a 2x display.
+            const rm::ui::UiViewport shotViewport = rm::ui::UiViewport::full(
+                static_cast<float>(shot.width), static_cast<float>(shot.height), shot.backing,
+                session.uiScale);
+            const auto pixelsWide =
+                static_cast<unsigned int>(std::lround(shot.width * shot.backing));
+            const auto pixelsHigh =
+                static_cast<unsigned int>(std::lround(shot.height * shot.backing));
+            std::printf("  capture: %ux%u points at backing %.2f -> %ux%u pixels, hud scale %.3f\n",
+                        shot.width, shot.height, static_cast<double>(shot.backing), pixelsWide,
+                        pixelsHigh, static_cast<double>(shotViewport.hudScale()));
+            composeHeadlessInterface(renderer, session, shotViewport);
+
 
             // WHAT REACHED THE GPU, against what the sim holds. The two disagreeing is the
             // signature of a dropped instance, and it used to be invisible: a batch capped at
@@ -604,7 +653,7 @@ int runScreenshot(const Session& session) {
             std::printf("  units: %zu instance(s) drawn, %zu alive in the sim\n",
                         renderer.drawnUnitInstances(), liveUnits);
 
-            const auto image = renderer.renderToImage(shot.width, shot.height);
+            const auto image = renderer.renderToImage(pixelsWide, pixelsHigh);
             return writePng(shot.path, image) ? 0 : 1;
 }
 

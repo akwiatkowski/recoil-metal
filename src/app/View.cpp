@@ -73,6 +73,21 @@ namespace rm::app {
         }
         break;
     }
+    // `--bench-size <w> <h>`: the logical size to measure at, for the same reason
+    // `--screenshot` takes one — a HUD lays out differently at 1280x720 and 2560x1440,
+    // and a benchmark of the interface has to say which. Absent means 1920x1080, which
+    // every published world-only number was taken at.
+    for (int i = 1; i + 2 < argc; ++i) {
+        if (std::string{argv[i]} == "--bench-size") {
+            const int w = std::atoi(argv[i + 1]);
+            const int h = std::atoi(argv[i + 2]);
+            if (w > 0 && h > 0) {
+                options.width = static_cast<unsigned int>(w);
+                options.height = static_cast<unsigned int>(h);
+            }
+            break;
+        }
+    }
     return options;
 }
 

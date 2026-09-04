@@ -674,7 +674,8 @@ only appears under one cannot otherwise be captured, tested, or diffed.
 | `--volume <0–1>` / `--mute` | the mixer |
 | `--dump-weapon <id>` | print one blueprint's weapons as the loader read them |
 | `--bench <n>` / `--bench-offscreen <n> <csv>` | windowed and vsync-limited, or headless and unthrottled — the second is the comparable number |
-| `--screenshot <f> <w> <h>` | render one frame offscreen and exit |
+| `--screenshot <f> <w> <h>` / `--backing <s>` | render one frame offscreen and exit; `<w> <h>` is the logical size and `--backing` the display scale it stands in for, so `1280 720 --backing 2` is a 2560x1440 capture laid out and font-rasterised exactly as a 2x window would be |
+| `--bench-hud` / `--bench-size <w> <h>` | make the offscreen benchmark draw the interface a screenshot of the same scene shows, and at a logical size other than 1920x1080; `--backing` applies too. World-only remains the default so published numbers stay comparable |
 | `--time <s>` / `--animate` | advance the clock before capturing; run model animation |
 | `--no-reflections` `--no-stratum-normals` `--no-props` `--refraction` | quality, as in the table above |
 

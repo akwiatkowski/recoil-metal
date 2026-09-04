@@ -33,6 +33,15 @@ namespace rm::app {
         }
         break;
     }
+    for (int i = 1; i + 1 < argc; ++i) {
+        if (std::string{argv[i]} == "--backing") {
+            const auto asked = static_cast<float>(std::atof(argv[i + 1]));
+            // Clamped like `--ui-scale`: a backing scale changes pixels, not the match, and
+            // the caller can see the result. Nonsense reads as 1.
+            options.backing = asked > 0.0f ? std::clamp(asked, 1.0f, 4.0f) : 1.0f;
+            break;
+        }
+    }
     return options;
 }
 

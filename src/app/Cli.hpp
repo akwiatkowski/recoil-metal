@@ -35,6 +35,10 @@ struct ShotOptions {
     std::string path;
     unsigned int width = 1920;
     unsigned int height = 1080;
+    /// `--backing <s>`: the display scale a headless capture or benchmark stands in for.
+    /// Width and height stay LOGICAL; the image gets `s` times the pixels, the interface
+    /// lays out in points and rasterises its fonts at `s`, as a Retina window would. 1 to 4.
+    float backing = 1.0f;
 };
 
 /// `--march <x> <z> <seconds>`: order every unit to a world position and run the
