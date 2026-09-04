@@ -283,6 +283,12 @@ void tick(std::span<Transform> transforms, std::span<MoveState> motion,
 
     for (std::size_t i = 0; i < count; ++i) {
         MoveState& state = motion[i];
+        // The vertical events run for every flyer, grounded ones included: a parked
+        // aircraft recharges (`C-223`) and a fresh order commits it to takeoff, both
+        // before the idle skip below would otherwise pass it over.
+        if (state.canFly && !state.attached) {
+            tickAirState(state);
+        }
         // A flyer off the ground stays in the tick after its orders end: it must land,
         // hold, or keep flying on its velocity rather than freeze mid-air.
         const bool flying =
@@ -292,10 +298,6 @@ void tick(std::span<Transform> transforms, std::span<MoveState> motion,
         }
 
         Transform& unit = transforms[i];
-
-        if (state.canFly) {
-            tickAirState(state);
-        }
 
         const Fx dx = state.destinationX - unit.x;
         const Fx dz = state.destinationZ - unit.z;

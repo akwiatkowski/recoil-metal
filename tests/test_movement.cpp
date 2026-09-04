@@ -1292,6 +1292,28 @@ TEST_CASE("an idle flyer auto-lands after its auto-land interval") {
     CHECK(motion[0].airState == MoveState::AirState::Down);
 }
 
+TEST_CASE("a parked flyer recharges fuel while it waits") {
+    // `C-223`: recharge runs while the vert event is Bottom. A grounded aircraft with no
+    // orders is exactly that, and the idle skip in the tick must not starve it — at a
+    // drain of one sixteenth (exact in fixed point), four ticks take a half tank to three
+    // quarters, eight fill it, and the clamp holds there.
+    const HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    std::vector<rm::sim::Transform> units{unitAt(100.0f, 100.0f)};
+    std::vector<MoveState> motion{flyer()};
+    motion[0].airState = MoveState::AirState::Bottom;
+    motion[0].airborne = false;
+    motion[0].fuelDrainPerTick = rm::sim::Fx::fromRatio(1, 16);
+    motion[0].fuelRatio = rm::sim::Fx::fromRatio(1, 2);
+
+    run(units, motion, field, 4);
+    CHECK(motion[0].fuelRatio == rm::sim::Fx::fromRatio(3, 4));
+    run(units, motion, field, 10);
+    CHECK(motion[0].fuelRatio == rm::sim::Fx::fromInt(1));
+    CHECK(motion[0].airState == MoveState::AirState::Bottom);
+    CHECK(units[0].y == rm::sim::Fx{});
+}
+
 TEST_CASE("fuel drains in flight, clamps at zero, and means nothing natively") {
     // `1 / (FuelUseTime x 10)` per tick while off the ground (`C-223`): at drain 0.1,
     // ten ticks empty the tank and it stays empty — no speed penalty, no crash, every
