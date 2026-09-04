@@ -144,6 +144,17 @@ TEST_CASE("an immobile factory and a field builder can assist") {
         rm::ui::commandAvailability(commanderSelection);
     CHECK_FALSE(enabled(commanderAvailable, CommandKind::Reclaim));
     CHECK(enabled(commanderAvailable, CommandKind::Assist));
+
+    // URL0107's shape: primarily a combat unit, but its BuildRate=1 repair arm can assist.
+    rm::unitdef::UnitDef combatBuilder;
+    combatBuilder.buildRate = 1.0f;
+    combatBuilder.categories = {"DIRECTFIRE", "LAND", "MOBILE", "TECH1"};
+    combatBuilder.weapons.push_back(weapon(false));
+    const std::array<const rm::unitdef::UnitDef*, 1> combatSelection{&combatBuilder};
+    const rm::ui::CommandAvailability combatAvailable =
+        rm::ui::commandAvailability(combatSelection);
+    CHECK(enabled(combatAvailable, CommandKind::Attack));
+    CHECK(enabled(combatAvailable, CommandKind::Assist));
 }
 
 TEST_CASE("the command rack is a fixed 4 by 3 fitting with dead gutters") {

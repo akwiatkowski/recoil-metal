@@ -100,9 +100,10 @@ enum class Role : std::uint8_t {
 ///      defended village must not enter a build order.
 ///   4. The ECONOMIC kinds — extractor, energy, storage — before the military ones, because a
 ///      mass extractor with a token gun is still an extractor.
-///   5. `FACTORY` before `builder`: a factory is a builder that cannot move, and the
-///      distinction is what a build order needs.
-///   6. Then the military kinds, from the most specific outward.
+///   5. `FACTORY` before an explicit `ENGINEER`/`CONSTRUCTION` builder. A bare BuildRate is a
+///      capability fallback after military roles, because the Mantis carries one for repair.
+///   6. Then the military kinds, from the most specific outward. An explicit `SCOUT` beats
+///      the `RADAR` it commonly carries; the generic `INTELLIGENCE` tag is not itself a role.
 ///
 /// Reading the precedence top to bottom is reading the classifier; there is no second place
 /// where it is decided.

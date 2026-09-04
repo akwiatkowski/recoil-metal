@@ -123,12 +123,18 @@ Role roleOf(const UnitDef& def) noexcept {
     if (def.hasCategory("FACTORY")) {
         return Role::Factory;
     }
-    if (def.hasCategory("ENGINEER") || def.hasCategory("CONSTRUCTION") || def.isBuilder()) {
+    if (def.hasCategory("ENGINEER") || def.hasCategory("CONSTRUCTION")) {
         return Role::Builder;
     }
 
-    // 6. The support kinds, before the combat ones, because a radar with a gun is still what
-    //    you build for the radar.
+    // 6. An explicit scout is a scout even when it carries radar. Mobile scouts are the
+    //    common counterexample to classifying every RADAR carrier as a radar installation.
+    if (def.hasCategory("SCOUT")) {
+        return Role::Scout;
+    }
+
+    // The remaining support kinds precede the combat ones because a radar with a gun is still
+    // what you build for the radar.
     if (def.hasCategory("SHIELD") || def.hasCategory("SHIELDDOME")) {
         return Role::Shield;
     }
@@ -139,10 +145,6 @@ Role roleOf(const UnitDef& def) noexcept {
     if (def.hasCategory("TRANSPORTATION")) {
         return Role::Transport;
     }
-    if (def.hasCategory("SCOUT") || def.hasCategory("INTELLIGENCE")) {
-        return Role::Scout;
-    }
-
     // 7. A STRUCTURE that shoots is a defence, whatever it shoots at — the distinction a
     //    build order cares about is "does this hold ground", and that is what being immobile
     //    and armed means. Tested before the weapon-class kinds so a point-defence turret does
@@ -194,9 +196,13 @@ Role roleOf(const UnitDef& def) noexcept {
         return techOf(def) <= 1 ? Role::Raider : Role::Assault;
     }
 
-    // 10. Last, the economic FIGURES — for content that states one and declares no category
-    //     this classifier recognises. Deliberately after everything: a figure is weaker
-    //     evidence than a tag, and putting it first is what misclassified every factory.
+    // 10. Last, capability FIGURES — for content that states one and declares no category this
+    //     classifier recognises. Deliberately after everything: a figure is weaker evidence
+    //     than a tag. In particular the Cybran Mantis has BuildRate=1 for its auxiliary repair
+    //     arm, but DIRECTFIRE is still its primary role.
+    if (def.isBuilder()) {
+        return Role::Builder;
+    }
     if (def.producesMassPerSecond > 0.0f) {
         return Role::Extractor;
     }

@@ -361,10 +361,7 @@ namespace {
     if (assister == nullptr || target == nullptr || !target->isBuilder()) {
         return false;
     }
-    const unitdef::Role role = unitdef::roleOf(*assister);
-    return role == unitdef::Role::Builder || role == unitdef::Role::Commander
-        || (assister->hasCategory("FACTORY") && !assister->isMobile()
-            && assister->isBuilder());
+    return assister->isBuilder() || assister->hasCategory("COMMAND");
 }
 
 [[nodiscard]] bool validRepair(const Command& command, const UnitStore& store,

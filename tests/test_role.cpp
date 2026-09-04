@@ -128,6 +128,10 @@ TEST_CASE("a build rate alone makes a builder") {
     UnitDef def = withCategories({"MOBILE", "LAND"});
     def.buildRate = 10.0f;
     CHECK(roleOf(def) == Role::Builder);
+
+    // A repair arm is secondary to an explicitly authored combat role (URL0107, Mantis).
+    def.categories = {"DIRECTFIRE", "LAND", "MOBILE", "TECH1"};
+    CHECK(roleOf(def) == Role::Raider);
 }
 
 TEST_CASE("an armed structure is a defence, whatever it is armed with") {
@@ -191,6 +195,9 @@ TEST_CASE("the corpus's own tags for lobbing things are artillery") {
     // `INDIRECTFIRE` and `SILO` are what the blueprints actually say; testing only `ARTILLERY`
     // left eleven units unclassified.
     CHECK(roleOf(withCategories({"INDIRECTFIRE", "MOBILE", "LAND", "TECH2"}))
+          == Role::Artillery);
+    // UEL0103 carries this generic intel tag as well; it does not turn artillery into a scout.
+    CHECK(roleOf(withCategories({"ARTILLERY", "INTELLIGENCE", "MOBILE", "LAND", "TECH1"}))
           == Role::Artillery);
     CHECK(roleOf(withCategories({"SILO", "MOBILE", "LAND", "TECH3"})) == Role::Artillery);
     CHECK(roleOf(withCategories({"SILO", "STRUCTURE", "TECH3"})) == Role::Defence);
@@ -278,6 +285,8 @@ TEST_CASE("the shipped blueprints classify as what they are") {
         {"UEB1101", Role::Energy, 1},
         {"UEB0101", Role::Factory, 1},
         {"UEL0105", Role::Builder, 1},
+        {"UEL0101", Role::Scout, 1},
+        {"UEL0103", Role::Artillery, 1},
         {"UEL0201", Role::Raider, 1},
     };
 
