@@ -816,6 +816,7 @@ private:
         // picks a pose, so a moving scene costs one memcpy and no allocation.
         std::size_t instanceCapacity = 0;
         TexturePair textures;
+        int normals = -1;
         /// Which family's channel layout the fragment shader should read.
         bool supremeCommanderShading = false;
 

@@ -162,6 +162,7 @@ struct Walk {
                               rm::readF32(bytes, at + 8)}},
                 .normal = normal,
                 .uv = {{rm::readF32(bytes, at + 24), rm::readF32(bytes, at + 28)}},
+                .uv2 = {{rm::readF32(bytes, at + 24), rm::readF32(bytes, at + 28)}},
                 .boneIndex = boneIndex,
             });
         }

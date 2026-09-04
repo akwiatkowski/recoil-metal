@@ -123,6 +123,7 @@ struct TerrainUniforms {
     simd_float4 waveRepeats;
     simd_float4 waveMovements;
     float hasWaterWaves;
+    float hasUnitNormals;
 };
 
 
@@ -155,7 +156,9 @@ static_assert(offsetof(TerrainUniforms, fogDepthElmos) == 492, "filling it exact
 static_assert(offsetof(TerrainUniforms, waveRepeats) == 496,
               "the wave block starts on the fresh 16-byte slot after the fog block");
 static_assert(sizeof(TerrainUniforms) == 544,
-              "the wave block grows the struct by three 16-byte slots");
+              "the wave block and its flags occupy three 16-byte slots");
+static_assert(offsetof(TerrainUniforms, hasUnitNormals) == 532,
+              "unit normal availability packs beside the water-wave flag");
 static_assert(offsetof(TerrainUniforms, fogColour) == 288, "the map block follows the matrices");
 // A float3 is sixteen bytes AND sixteen-aligned, so the float after one does
 // NOT pack into its tail — it starts a fresh slot and the next float3 realigns
@@ -304,6 +307,9 @@ constexpr float kStratumNormalStrength = 1.5f;
 /// The model shading texture — S3O's tex2, and the same slot Supreme Commander's
 /// `_specTeam` texture will take.
 constexpr NS::UInteger kShadingTextureIndex = 1;
+/// Supreme Commander's optional `_NormalsTS` map. The terrain pipeline also uses slot 2,
+/// but these bindings are replaced before each pipeline draws.
+constexpr NS::UInteger kUnitNormalsTextureIndex = 2;
 constexpr NS::UInteger kGroundSamplerIndex = 0;
 /// The repeating sampler the splat layers need — see where it is created.
 constexpr NS::UInteger kSplatSamplerIndex = 1;

@@ -27,17 +27,18 @@ namespace rm {
 // becomes a full transform and nothing else changes.
 
 // One model vertex, laid out for direct upload with no repacking.
-// 12 + 12 + 8 + 4 = 36 bytes, tightly packed.
+// 12 + 12 + 8 + 8 + 4 = 44 bytes, tightly packed.
 struct ModelVertex {
     std::array<float, 3> position;  ///< bone-local
     std::array<float, 3> normal;
-    std::array<float, 2> uv;
+    std::array<float, 2> uv;   ///< albedo and shading
+    std::array<float, 2> uv2;  ///< Supreme Commander normal maps; same as uv for S3O
     std::uint32_t boneIndex;  ///< index into Model::bones
 };
 
-static_assert(sizeof(ModelVertex) == 36,
+static_assert(sizeof(ModelVertex) == 44,
               "ModelVertex must stay tightly packed — the shader reads it as two "
-              "packed_float3s, a float2 and a uint");
+              "packed_float3s, two packed_float2s and a uint");
 
 // A node in the model's hierarchy. Called a bone rather than a piece because
 // that is the term both formats' animation paths use, and because .scm has bones

@@ -19,7 +19,8 @@ inspector with paged selection/build instruments and a dispatching 4x3 command r
 resource/game-profile descriptors plus one aspect-preserving minimap projection for preview, fog,
 pips, input, and true-line camera footprint, explicit BAR and neutral vocabulary/material fallbacks,
 the exact retail mobile-builder approach-to-range gate, per-instance builder torso/arm/tool aiming from authored
-bone rigs, the final HUD stress/accessibility and real-window performance pass, and README counts at 1385) —
+bone rigs, unit `_NormalsTS` maps with retail `.gaa` decoding and UV1, the final HUD
+stress/accessibility and real-window performance pass, and README counts at 1386) —
 `ComputeAirControl`, `CalcWingedLift`, the damping factor and the terrain look-ahead read and
 implemented (`C-244`–`C-246`): authored `KMove`/`KLift` gains with their damping terms, the
 vertical lift-off to half elevation that replaces the invented runway roll, the pyramid look-ahead
@@ -497,7 +498,7 @@ builders, fixed command/resource capacity, safe areas, 1x/2x display changes, re
 and every presentation/effects level. Long production names now truncate visibly inside their
 fixed panel instead of crossing the repeat/count columns. Full, Reduced, and Off screenshot smoke
 tests preserve semantic layer order. Real windows sustain 60 Hz at 5088x2862 pixels: Full measured
-6.694 ms GPU mean and Off 6.792 ms, a noise-level difference. The complete 1385-test suite passes
+6.694 ms GPU mean and Off 6.792 ms, a noise-level difference. The complete 1386-test suite passes
 and the 7000-tick golden replay remains identical.
 
 The native HUD also has a measured baseline (HUD slice 0, `docs/hud-baseline.md`,

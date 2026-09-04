@@ -608,8 +608,8 @@ are in [`ADR_DECISIONS.md`](../ADR_DECISIONS.md).
     red, green and blue EQUAL — one axis replicated across the colour channels, a
     second in alpha, the third reconstructed — where a stratum map puts z in blue near
     255. The tangent frame comes from screen-space derivatives rather than per-vertex
-    tangents, which `.scm` does carry: plumbing those through would grow every model's
-    vertex from 36 bytes to 60, 2000 BAR unit meshes included, to normal-map scenery.
+    tangents, which `.scm` does carry: after UV1 was retained for unit normals, plumbing those
+    through would grow every model's vertex from 44 bytes to 68, 2000 BAR unit meshes included.
     What is *not* settled is which channel is x and which is y ([ADR-026](../ADR_DECISIONS.md)).
 
     **The ambient effects a map marks** — steam, mist, bubbles, blowing sand and snow.
@@ -907,4 +907,3 @@ reimplementation has had); lockstep networking and FAF lobby integration
 ([ADR-032](../ADR_DECISIONS.md)), for which the only present obligation is confinement —
 platform and GPU code stays inside `src/platform` and `src/render`, which is already
 the layout.
-

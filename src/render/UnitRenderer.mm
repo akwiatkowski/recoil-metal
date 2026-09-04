@@ -323,6 +323,7 @@ void Renderer::setUnits(std::span<const dds::Texture> textures,
 
         GpuUnitBatch uploaded;
         uploaded.textures = batch.textures;
+        uploaded.normals = batch.normals;
         uploaded.supremeCommanderShading = model.family == Family::SupremeCommander;
         uploaded.poseCount = poseCount;
         uploaded.boneStrideBytes = model.bones.size() * sizeof(BoneTransform);

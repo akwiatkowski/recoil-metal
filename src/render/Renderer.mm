@@ -1161,6 +1161,7 @@ void Renderer::encodeScene(MTL::CommandBuffer* commandBuffer, MTL::RenderPassDes
             }
             MTL::Texture* diffuse = textureAt(batch.textures.diffuse);
             MTL::Texture* shading = textureAt(batch.textures.shading);
+            MTL::Texture* normals = textureAt(batch.normals);
 
             if (!(batch.textures == bound)) {
                 bound = batch.textures;
@@ -1173,6 +1174,10 @@ void Renderer::encodeScene(MTL::CommandBuffer* commandBuffer, MTL::RenderPassDes
                 encoder->setFragmentTexture(shading != nullptr ? shading : groundTexture_,
                                             kShadingTextureIndex);
             }
+            // Normal maps are not part of Recoil's authored two-texture batching key, so
+            // bind this optional Supreme Commander slot per batch.
+            encoder->setFragmentTexture(normals != nullptr ? normals : groundTexture_,
+                                        kUnitNormalsTextureIndex);
 
             // Per batch, not per pair: which family's channel layout to read is
             // a property of the MODEL, and two models could share a texture pair
@@ -1181,6 +1186,7 @@ void Renderer::encodeScene(MTL::CommandBuffer* commandBuffer, MTL::RenderPassDes
             TerrainUniforms unitUniforms = uniforms;
             unitUniforms.hasTexture = diffuse != nullptr ? 1.0f : 0.0f;
             unitUniforms.hasTexture2 = shading != nullptr ? 1.0f : 0.0f;
+            unitUniforms.hasUnitNormals = normals != nullptr ? 1.0f : 0.0f;
             unitUniforms.supremeCommanderShading = batch.supremeCommanderShading ? 1.0f : 0.0f;
             unitUniforms.alphaIsOpacity = batch.alphaIsOpacity ? 1.0f : 0.0f;
             encoder->setFragmentBytes(&unitUniforms, sizeof(unitUniforms), kUniformBufferIndex);

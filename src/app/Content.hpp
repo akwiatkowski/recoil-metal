@@ -161,10 +161,11 @@ constexpr float kPanReferenceHeightPoints = 1000.0f;
 
 // A .scm names no textures at all — Supreme Commander resolves them by
 // convention from the model's own file name, which is what these reproduce.
-// `_normalsTS` exists too and is not read: there is no normal-map path yet.
 constexpr const char* kScmDiffuseSuffix = "_Albedo.dds";
 
 constexpr const char* kScmShadingSuffix = "_SpecTeam.dds";
+
+constexpr const char* kScmNormalsSuffix = "_NormalsTS.dds";
 
 /// How many scattered instances by default. A single unit is well under 1% of an
 /// 8192-elmo map's width and effectively invisible when framed, so seeing units

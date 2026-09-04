@@ -269,10 +269,32 @@ fragment float4 unitBuildFragment(UnitOut in [[stage_in]],
     return float4(hot * pulse, 1.0);
 }
 
+static float3 derivativeMappedNormal(float3 geometricNormal, float3 world, float2 uv,
+                                     float2 packed) {
+    const float z = sqrt(saturate(1.0 - dot(packed, packed)));
+    const float3 tangentNormal = float3(packed, z);
+    float3 shadingNormal = normalize(geometricNormal);
+
+    const float3 dpdx = dfdx(world);
+    const float3 dpdy = dfdy(world);
+    const float2 dudx = dfdx(uv);
+    const float2 dudy = dfdy(uv);
+    const float determinant = dudx.x * dudy.y - dudy.x * dudx.y;
+    if (abs(determinant) > 1e-12) {
+        const float3 tangent = normalize((dpdx * dudy.y - dpdy * dudx.y) / determinant);
+        const float3 T = normalize(tangent - shadingNormal * dot(shadingNormal, tangent));
+        const float3 B = cross(shadingNormal, T);
+        shadingNormal = normalize(T * tangentNormal.x + B * tangentNormal.y
+                                  + shadingNormal * tangentNormal.z);
+    }
+    return shadingNormal;
+}
+
 fragment float4 unitFragment(UnitOut in [[stage_in]],
                              constant Uniforms& u [[buffer(1)]],
                              texture2d<float> diffuse [[texture(0)]],
                              texture2d<float> shading [[texture(1)]],
+                             texture2d<float> normals [[texture(2)]],
                              depth2d<float> shadowMap [[texture(13)]],
                              sampler texSampler [[sampler(0)]],
                              sampler shadowSampler [[sampler(2)]]) {
@@ -310,38 +332,19 @@ fragment float4 unitFragment(UnitOut in [[stage_in]],
     // so an axis kept there survives compression. Read as a stratum map — z in blue
     // (ADR-020) — a prop would be lit from a direction nobody chose.
     //
-    // The BASIS comes from screen-space derivatives rather than from per-vertex
-    // tangents. The .scm format does carry a tangent and a binormal per vertex, and
-    // this loader reads past them, deliberately: plumbing them through would grow
-    // ModelVertex from 36 bytes to 60 for EVERY model in the project — 2000 BAR unit
-    // meshes included — to normal-map scenery. Derivatives cost a few instructions
-    // on this path alone and no memory anywhere.
+    // The BASIS comes from screen-space derivatives rather than per-vertex tangent
+    // and binormal vectors. Unit normals reuse the same frame below; only their second
+    // UV pair is retained, keeping ModelVertex at 44 bytes rather than 68.
     float3 shadingNormal = normalize(in.normal);
     if (u.alphaIsOpacity > 0.5 && u.hasTexture2 > 0.5) {
         const float2 packed = float2(tex2.a, tex2.g) * 2.0 - 1.0;
-        // Reconstructed rather than stored, which is the point of keeping two:
-        // clamped because a compressed pair can leave the unit disc, and a negative
-        // radicand would come back NaN and paint the fragment black.
-        const float z = sqrt(saturate(1.0 - dot(packed, packed)));
-        const float3 tangentNormal = float3(packed, z);
-
-        // The tangent frame, per pixel, from how the world position and the uv change
-        // across the triangle. Gram-Schmidt against the interpolated normal so the
-        // frame stays orthogonal where the derivatives disagree with it.
-        const float3 dpdx = dfdx(in.world);
-        const float3 dpdy = dfdy(in.world);
-        const float2 dudx = dfdx(in.uv);
-        const float2 dudy = dfdy(in.uv);
-
-        const float determinant = dudx.x * dudy.y - dudy.x * dudx.y;
-        if (abs(determinant) > 1e-12) {
-            const float3 tangent =
-                normalize((dpdx * dudy.y - dpdy * dudx.y) / determinant);
-            const float3 T = normalize(tangent - shadingNormal * dot(shadingNormal, tangent));
-            const float3 B = cross(shadingNormal, T);
-            shadingNormal = normalize(T * tangentNormal.x + B * tangentNormal.y
-                                      + shadingNormal * tangentNormal.z);
-        }
+        shadingNormal = derivativeMappedNormal(in.normal, in.world, in.uv, packed);
+    } else if (u.supremeCommanderShading > 0.5 && u.hasUnitNormals > 0.5) {
+        // Retail mesh.fx:594 says `.gaa`: X is GREEN, Y is ALPHA, then Z is
+        // reconstructed. The former float2(a,g) reading reversed those authored axes.
+        const float4 normalSample = normals.sample(texSampler, in.uv2);
+        const float2 packed = normalSample.ga * 2.0 - 1.0;
+        shadingNormal = derivativeMappedNormal(in.normal, in.world, in.uv2, packed);
     }
 
     // A PROP's alpha is opacity, not a mask. Trees and bushes are quads with the

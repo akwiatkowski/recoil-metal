@@ -63,6 +63,7 @@ struct VfsUnit {
     rm::Model model;
     std::string albedoPath;
     std::string shadingPath;
+    std::string normalsPath;
 };
 
 // --- What the build layer does ------------------------------------------------------------

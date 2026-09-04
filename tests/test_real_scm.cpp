@@ -156,6 +156,22 @@ TEST_CASE("a .scm's vertices are in model space, not bone-local") {
     REQUIRE(model->boundsMax[1] > model->boundsMin[1]);
 }
 
+TEST_CASE("a .scm keeps the second UV pair used by unit normal maps") {
+    const std::filesystem::path path = corpusRoot() / "UAA0101/UAA0101_LOD0.scm";
+    if (!std::filesystem::exists(path)) {
+        SKIP("UAA0101 model not extracted");
+    }
+
+    const auto model = rm::scm::loadFile(path);
+    REQUIRE(model.has_value());
+    REQUIRE_FALSE(model->vertices.empty());
+
+    // Pinned to the first retail vertex. This model authors both UV sets identically,
+    // but reading UV0 twice would still be wrong: mesh.fx deliberately samples .zw.
+    CHECK(model->vertices.front().uv2[0] == Approx(0.12361176f));
+    CHECK(model->vertices.front().uv2[1] == Approx(0.28525025f));
+}
+
 TEST_CASE("a buffer that is not a .scm is refused by its magic") {
     const std::vector<std::byte> notAModel(128, std::byte{0x42});
 

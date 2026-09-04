@@ -1046,8 +1046,8 @@ settle it in one screenshot.
 
 **Alternatives considered.** Per-vertex tangents, which is the textbook way and which
 the data supports — `.scm` carries a tangent and a binormal per vertex and this
-loader reads past them. Rejected on cost: plumbing them through would grow
-`ModelVertex` from 36 bytes to 60 for EVERY model in the project, 2000 BAR unit
+loader reads past them. Rejected on cost: after ADR-078's UV1 addition, plumbing them through
+would grow `ModelVertex` from 44 bytes to 68 for EVERY model in the project, 2000 BAR unit
 meshes included, to normal-map scenery. The basis is instead derived per pixel from
 screen-space derivatives of world position and uv, Gram-Schmidt'd against the
 interpolated normal — a few instructions on the prop path alone and no memory
@@ -2730,3 +2730,30 @@ set without moving a pixel of module geometry. Full and Reduced reuse the same o
 different coefficients; Off keeps semantic chrome but bypasses material sampling. Solid black
 shadow quads remain ordinary premultiplied alpha and, by themselves, no longer activate the blur,
 so classic FAF pays no native-glass cost.
+
+---
+
+## ADR-078 — Unit normal maps keep UV1 and derive their tangent frame per pixel
+
+**Context.** Forged Alliance units conventionally ship a third `_NormalsTS.dds` texture. Retail
+`mesh.fx` samples it with the SCM vertex's second UV pair and decodes `.gaa`: green is X, alpha is
+Y, and Z is reconstructed. Recoil Metal retained only UV0 and therefore could not bind this map.
+The SCM record also carries tangent and binormal vectors, but retaining both would grow every
+shared model vertex—including BAR models—from 36 to 68 bytes.
+
+**Decision.** Retain UV1, growing the shared vertex to 44 bytes, and load `_NormalsTS.dds` as an
+optional third Supreme Commander texture. Decode green then alpha exactly as `mesh.fx:594` states.
+Reuse the prop shader's derivative-built tangent frame and guarded Z reconstruction; S3O duplicates
+UV0 into UV1 but never binds a unit normal map. Fine and coarse SCM levels resolve their maps by
+their own mesh names.
+
+**Alternatives considered.** Alpha-then-green was rejected because it contradicts the retail
+shader. Retaining authored tangent and binormal vectors was rejected for a 24-byte per-vertex cost
+when the existing derivative frame supplies the needed basis. Repacking three retail textures into
+Recoil's two-texture convention was rejected because it is lossy and makes mounted content require
+an offline conversion step.
+
+**Consequences.** Normal-mapped units gain authored surface relief through the existing VFS and
+Metal path, while units lacking the optional map keep their geometric normal. The extra 8 bytes are
+paid by every model vertex; no extra texture is loaded for BAR content. The prop channel-order
+question remains separate because its content contract is not established by the unit shader.

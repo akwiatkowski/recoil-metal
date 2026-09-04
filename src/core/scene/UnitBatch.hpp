@@ -38,6 +38,9 @@ struct UnitBatch {
     const Model* model = nullptr;
     std::span<const UnitInstance> instances;
     TexturePair textures;
+    /// Optional Supreme Commander `_NormalsTS` texture. Kept outside TexturePair because
+    /// Recoil's native batching contract remains exactly its authored two-texture pair.
+    int normals = -1;
 
     // Optional animation to play. Its bones are matched to the model's by name,
     // so a mismatched pair moves only what it can rather than knotting the

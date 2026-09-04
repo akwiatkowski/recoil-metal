@@ -18,12 +18,13 @@ namespace rm::shaders {
 
 inline constexpr const char* kUnits = R"MSL(
 // --- Units ------------------------------------------------------------------
-// packed_float2 for the UV, NOT float2: float2 is 8-byte aligned and would pad
-// this struct to 40 bytes against the C++ ModelVertex's 36, shearing the stream.
+// packed_float2 for the UVs, NOT float2: float2's alignment would insert padding
+// against the C++ ModelVertex's tightly packed 44 bytes and shear the stream.
 struct UnitVertexIn {
     packed_float3 position;
     packed_float3 normal;
     packed_float2 uv;
+    packed_float2 uv2;
     uint boneIndex;
 };
 
@@ -111,6 +112,7 @@ struct UnitOut {
     float4 position [[position]];
     float3 normal;
     float2 uv;
+    float2 uv2;
     float3 world;             // for the view vector the specular term needs
     float4 teamColour [[flat]];  // per instance, so never interpolated
 };
@@ -224,6 +226,7 @@ vertex UnitOut unitVertex(uint vid [[vertex_id]],
     // V is inverted here. Flipping the compressed blocks instead would mean
     // reordering bits inside every one of them.
     out.uv = float2(v.uv.x, 1.0 - v.uv.y);
+    out.uv2 = float2(v.uv2.x, 1.0 - v.uv2.y);
     return out;
 }
 

@@ -68,6 +68,7 @@ struct Uniforms {
     float4 waveRepeats;
     float4 waveMovements;
     float hasWaterWaves;
+    float hasUnitNormals;
 };
 
 // The sky, as Supreme Commander's own `effects/sky.fx` builds it: a lerp

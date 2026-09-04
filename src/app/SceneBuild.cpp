@@ -331,6 +331,7 @@ void resolveMuzzleBones(rm::unitdef::UnitDef& def, const rm::Model& model) {
         .model = std::move(*model),
         .albedoPath = scmTextureInVfs(meshPath, kScmDiffuseSuffix, content),
         .shadingPath = scmTextureInVfs(meshPath, kScmShadingSuffix, content),
+        .normalsPath = scmTextureInVfs(meshPath, kScmNormalsSuffix, content),
     };
 }
 
@@ -467,6 +468,7 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
                     .diffuse = scene.textures.resolve(content, unit->albedoPath, "albedo"),
                     .shading = scene.textures.resolve(content, unit->shadingPath, "specTeam"),
                 },
+                .normals = scene.textures.resolve(content, unit->normalsPath, "normalsTS"),
                 .builderAim = rm::resolveBuilderAim(scene.models.back(), unit->def.builderArm,
                                                     unit->def.buildEffectBones),
             });
@@ -632,6 +634,7 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
                 .diffuse = scene.textures.resolve(content, unit->albedoPath, "albedo"),
                 .shading = scene.textures.resolve(content, unit->shadingPath, "specTeam"),
             },
+            .normals = scene.textures.resolve(content, unit->normalsPath, "normalsTS"),
             .builderAim = rm::resolveBuilderAim(scene.models.back(), unit->def.builderArm,
                                                 unit->def.buildEffectBones),
         });
@@ -671,6 +674,10 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
                                 .shading =
                                     scene.textures.resolve(content, shading, "specTeam"),
                             },
+                            .normals = scene.textures.resolve(
+                                content,
+                                scmTextureInVfs(coarsePath, kScmNormalsSuffix, content),
+                                "normalsTS"),
                             .builderAim = rm::resolveBuilderAim(
                                 scene.models.back(), unit->def.builderArm,
                                 unit->def.buildEffectBones),
@@ -1214,7 +1221,14 @@ void orderFirstExtractors(UnitScene& scene, std::span<const rm::scenario::Marker
                              barTexturePath(search, model->textures[0]), "diffuse"),
                          .shading = scene.textures.resolve(
                              barTexturePath(search, model->textures[1]), "shading"),
-                     };
+                   };
+
+        const int normals =
+            fromContent
+                ? scene.textures.resolve(content, fromContent->normalsPath, "normalsTS")
+                : supCom ? scene.textures.resolve(
+                               scmTexturePath(modelPath, kScmNormalsSuffix), "normalsTS")
+                         : -1;
 
         // How big the model is, and the answer depends on whether a blueprint
         // said.
@@ -1354,6 +1368,7 @@ void orderFirstExtractors(UnitScene& scene, std::span<const rm::scenario::Marker
             .model = &scene.models.back(),
             .instances = {},
             .textures = pair,
+            .normals = normals,
             .animation = animation,
             .builderAim = def ? rm::resolveBuilderAim(scene.models.back(), def->builderArm,
                                                       def->buildEffectBones)

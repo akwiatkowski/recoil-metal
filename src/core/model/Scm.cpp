@@ -27,11 +27,12 @@ constexpr std::size_t kBoneRotation = 76;
 constexpr std::size_t kBoneNameOffset = 92;
 constexpr std::size_t kBoneParent = 96;
 
-// Field offsets within a vertex record. Tangent and binormal are read past —
-// they are for normal mapping, and there is no normal map path yet.
+// Field offsets within a vertex record. Tangent and binormal remain read past: the
+// renderer derives that frame per pixel, but the normal map needs the second UV pair.
 constexpr std::size_t kVertexPosition = 0;
 constexpr std::size_t kVertexNormal = 24;
 constexpr std::size_t kVertexUv0 = 48;
+constexpr std::size_t kVertexUv1 = 56;
 constexpr std::size_t kVertexBoneIndices = 64;
 
 /// A bone name longer than this is corruption, not a name — the same rule the
@@ -223,6 +224,8 @@ std::expected<Model, MapError> load(std::span<const std::byte> bytes) {
             .normal = readVec3(bytes, record + kVertexNormal),
             .uv = {{readF32(bytes, record + kVertexUv0),
                     readF32(bytes, record + kVertexUv0 + 4)}},
+            .uv2 = {{readF32(bytes, record + kVertexUv1),
+                     readF32(bytes, record + kVertexUv1 + 4)}},
             .boneIndex = boneIndex,
         });
     }

@@ -7,6 +7,7 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include "app/SceneBuild.hpp"
 #include "core/model/Scm.hpp"
 #include "core/model/BuilderAim.hpp"
 #include "core/unit/UnitBlueprint.hpp"
@@ -67,6 +68,14 @@ TEST_CASE("the retail archives mount and answer by VFS path", "[corpus]") {
     // The textures too, which is what makes a unit look like itself.
     CHECK(vfs.contains("/units/UEL0201/UEL0201_Albedo.dds"));
     CHECK(vfs.contains("/units/UEL0201/UEL0201_SpecTeam.dds"));
+
+    // UAA0101 is one of the units that carries the optional third texture. Resolve it
+    // through the same end-to-end path the app uses so a spelling-only loader change
+    // cannot leave the shader permanently bound to its flat fallback.
+    const auto normalMapped =
+        rm::app::resolveUnitFromContent("/units/UAA0101/UAA0101_unit.bp", vfs);
+    REQUIRE(normalMapped.has_value());
+    CHECK(normalMapped->normalsPath == "/units/UAA0101/UAA0101_NormalsTS.dds");
 }
 
 TEST_CASE("mounting the whole gamedata directory gives one namespace", "[corpus]") {
