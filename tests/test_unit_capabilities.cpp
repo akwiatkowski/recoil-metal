@@ -11,6 +11,7 @@
 #include "core/unit/Role.hpp"
 #include "core/unit/UnitBlueprint.hpp"
 #include "core/unit/Weapon.hpp"
+#include "core/ui/CommandPanel.hpp"
 
 #include <algorithm>
 #include <array>
@@ -149,6 +150,14 @@ TEST_CASE("every retail T1 land factory product has its playable core capability
         checkPlayableCapability(*unit, expected.role);
         if (expected.auxiliaryBuilder) {
             CHECK(unit->isBuilder());
+            CHECK(unit->commandCapsDeclared);
+            CHECK(unit->hasCommandCap("RULEUCC_Repair"));
+            CHECK_FALSE(unit->hasCommandCap("RULEUCC_Reclaim"));
+            const std::array<const UnitDef*, 1> selection{&*unit};
+            const rm::ui::CommandAvailability available =
+                rm::ui::commandAvailability(selection);
+            CHECK(available[8]);  // Repair
+            CHECK_FALSE(available[11]);  // Reclaim
         }
     }
 

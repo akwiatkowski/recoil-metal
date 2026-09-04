@@ -1,7 +1,5 @@
 #include "core/ui/CommandPanel.hpp"
 
-#include "core/unit/Role.hpp"
-
 #include <algorithm>
 #include <cmath>
 #include <string>
@@ -11,10 +9,13 @@ namespace rm::ui {
 CommandAvailability
 commandAvailability(std::span<const unitdef::UnitDef* const> selection) noexcept {
     bool hasSelection = false;
-    bool hasMobile = false;
+    bool hasMove = false;
+    bool hasPatrol = false;
+    bool hasStop = false;
     bool hasOrdinaryWeapon = false;
     bool hasAssister = false;
-    bool hasBuilder = false;
+    bool hasReclaimer = false;
+    bool hasRepairer = false;
     bool hasManualWeapon = false;
 
     for (const unitdef::UnitDef* def : selection) {
@@ -23,18 +24,29 @@ commandAvailability(std::span<const unitdef::UnitDef* const> selection) noexcept
         }
 
         hasSelection = true;
-        hasMobile = hasMobile || def->isMobile();
+        const auto permits = [def](std::string_view cap) {
+            return !def->commandCapsDeclared || def->hasCommandCap(cap);
+        };
+        hasMove = hasMove || (def->isMobile() && permits("RULEUCC_Move"));
+        hasPatrol = hasPatrol || (def->isMobile() && permits("RULEUCC_Patrol"));
+        hasStop = hasStop || permits("RULEUCC_Stop");
         hasOrdinaryWeapon = hasOrdinaryWeapon
-                         || std::ranges::any_of(def->weapons, &unitdef::Weapon::fires);
-        hasAssister = hasAssister || def->isBuilder() || def->hasCategory("COMMAND");
-        hasBuilder = hasBuilder || def->isBuilder();
+                         || (permits("RULEUCC_Attack")
+                             && std::ranges::any_of(def->weapons, &unitdef::Weapon::fires));
+        hasAssister = hasAssister
+                   || (permits("RULEUCC_Guard")
+                       && (def->isBuilder() || def->hasCategory("COMMAND")));
+        hasReclaimer = hasReclaimer
+                    || (def->isBuilder() && permits("RULEUCC_Reclaim"));
+        hasRepairer = hasRepairer || (def->isBuilder() && permits("RULEUCC_Repair"));
         hasManualWeapon = hasManualWeapon
-                       || std::ranges::any_of(def->weapons, [](const unitdef::Weapon& weapon) {
+                       || (permits("RULEUCC_Overcharge")
+                           && std::ranges::any_of(def->weapons, [](const unitdef::Weapon& weapon) {
                               // The current input path enters Overcharge mode only for a charged
                               // manual weapon; a zero-cost manual weapon falls back to Attack.
                               return weapon.manuallyFired()
                                   && weapon.energyRequired > sim::Mag{};
-                          });
+                          }));
     }
 
     CommandAvailability available{};
@@ -47,11 +59,13 @@ commandAvailability(std::span<const unitdef::UnitDef* const> selection) noexcept
         switch (*kind) {
         case sim::CommandKind::Move:
         case sim::CommandKind::AttackMove:
+            available[slot] = hasMove;
+            break;
         case sim::CommandKind::Patrol:
-            available[slot] = hasMobile;
+            available[slot] = hasPatrol;
             break;
         case sim::CommandKind::Stop:
-            available[slot] = hasSelection;
+            available[slot] = hasSelection && hasStop;
             break;
         case sim::CommandKind::Attack:
             available[slot] = hasOrdinaryWeapon;
@@ -60,8 +74,10 @@ commandAvailability(std::span<const unitdef::UnitDef* const> selection) noexcept
             available[slot] = hasAssister;
             break;
         case sim::CommandKind::Reclaim:
+            available[slot] = hasReclaimer;
+            break;
         case sim::CommandKind::Repair:
-            available[slot] = hasBuilder;
+            available[slot] = hasRepairer;
             break;
         case sim::CommandKind::Overcharge:
             available[slot] = hasManualWeapon;

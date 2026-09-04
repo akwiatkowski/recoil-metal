@@ -20,7 +20,7 @@ resource/game-profile descriptors plus one aspect-preserving minimap projection 
 pips, input, and true-line camera footprint, explicit BAR and neutral vocabulary/material fallbacks,
 the exact retail mobile-builder approach-to-range gate, per-instance builder torso/arm/tool aiming from authored
 bone rigs, unit `_NormalsTS` maps with retail `.gaa` decoding and UV1, the final HUD
-stress/accessibility and real-window performance pass, and README counts at 1389) —
+stress/accessibility and real-window performance pass, and README counts at 1391) —
 `ComputeAirControl`, `CalcWingedLift`, the damping factor and the terrain look-ahead read and
 implemented (`C-244`–`C-246`): authored `KMove`/`KLift` gains with their damping terms, the
 vertical lift-off to half elevation that replaces the invented runway roll, the pyramid look-ahead
@@ -500,8 +500,16 @@ builders, fixed command/resource capacity, safe areas, 1x/2x display changes, re
 and every presentation/effects level. Long production names now truncate visibly inside their
 fixed panel instead of crossing the repeat/count columns. Full, Reduced, and Off screenshot smoke
 tests preserve semantic layer order. Real windows sustain 60 Hz at 5088x2862 pixels: Full measured
-6.694 ms GPU mean and Off 6.792 ms, a noise-level difference. The complete 1389-test suite passes
+6.694 ms GPU mean and Off 6.792 ms, a noise-level difference. The complete 1391-test suite passes
 and the 7000-tick golden replay remains identical.
+
+The first `WP-40` data-driven command page now follows retail's selection boundary:
+`lua/ui/game/orders.lua:SetAvailableOrders` receives `GetUnitCommandData(newSelection)`, whose
+per-unit authority is `General.CommandCaps`. The loader retains only authored `true` caps while
+remembering that the table existed, so BAR and synthetic content keep capability inference but an
+FA unit's explicit `false` wins. The Cybran Mantis is the end-to-end discriminator: its auxiliary
+BuildRate arm exposes Assist and Repair while its blueprint-forbidden Reclaim cell stays disabled.
+Mixed selections retain the rack's existing any-capable-unit semantics and no slot geometry moves.
 
 The native HUD also has a measured baseline (HUD slice 0, `docs/hud-baseline.md`,
 `tools/hud_baseline.sh`): seven interface states — default, commander, mixed selection,
@@ -516,13 +524,13 @@ Both offscreen benchmark modes now run that same composition; world-only clears 
 and minimap after composition, keeping particles, construction effects, world overlays, and
 strategic-icon fallback decisions identical.
 
-**Largest gap:** the interface is functionally usable but carries none of retail's data-driven
-command pages, overlays, key contexts, or split views (`WP-40`).
+**Largest gap:** the first retail command page is data-driven, but toggle caps/order overrides,
+idle selectors, overlays, key contexts, and split views remain absent (`WP-40`).
 
 ```text
-/goal Advance FA-UI by tracing one retail data-driven command page from WP-40, naming its source
-data and input context, then implementing the smallest end-to-end page without disturbing the
-bounded native deck. Add focused tests, run the full suite and golden replay, and update FA-UI.
+/goal Advance FA-UI with the next WP-40 retail boundary: ToggleCaps plus OrderOverrides, keeping
+unsupported toggle actions visibly disabled until their simulation state exists. Add focused tests,
+run the full suite and golden replay, and update FA-UI.
 ```
 
 ### FA-PRESENT - Animation, Effects, And Audio

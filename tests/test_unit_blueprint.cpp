@@ -746,6 +746,36 @@ UnitBlueprint {
     CHECK(rm::sim::fxToFloat(def->guardScanRadiusElmos) == Approx(640.0f));
 }
 
+TEST_CASE("retail command capabilities keep true and false distinct") {
+    // URL0107's discriminator: its auxiliary arm repairs but cannot reclaim. The order page
+    // receives these true entries from GetUnitCommandData rather than inferring both from
+    // BuildRate=1 (`lua/ui/game/orders.lua:SetAvailableOrders`).
+    const Blueprint named{"URL0107_unit.bp", R"(
+UnitBlueprint {
+    General = {
+        CommandCaps = {
+            RULEUCC_Attack = true,
+            RULEUCC_Reclaim = false,
+            RULEUCC_Repair = true,
+        },
+    },
+    Physics = { MotionType = 'RULEUMT_Land' },
+})"};
+    const auto def = rm::unitbp::loadFile(named.path());
+    REQUIRE(def.has_value());
+    CHECK(def->commandCapsDeclared);
+    CHECK(def->hasCommandCap("RULEUCC_Attack"));
+    CHECK_FALSE(def->hasCommandCap("RULEUCC_Reclaim"));
+    CHECK(def->hasCommandCap("RULEUCC_Repair"));
+    CHECK(def->commandCaps.size() == 2);
+
+    const Blueprint bare{"XXB0012_unit.bp", kMediumTank};
+    const auto fallback = rm::unitbp::loadFile(bare.path());
+    REQUIRE(fallback.has_value());
+    CHECK_FALSE(fallback->commandCapsDeclared);
+    CHECK(fallback->commandCaps.empty());
+}
+
 TEST_CASE("a missile redirector arrives with radius and rate, or neither") {
     // URL0303 states `Defense = { AntiMissile = { AttachBone = 'Turret_Muzzle',
     // Radius = 5, RedirectRateOfFire = 1 } }` (`C-088`). Radius is ogrids; the rate is

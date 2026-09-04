@@ -2784,3 +2784,30 @@ two compact geometry records.
 outside a face do not hit a spherical approximation. Ordinary bubble behavior is unchanged. Box
 shields currently have no separate presentation shell; the owner model remains the visible retail
 surface, while PersonalBubble and transport coverage stay explicitly unsupported.
+
+---
+
+## ADR-080 — Retail command caps constrain the native command rack
+
+**Context.** The native rack inferred every command from broad engine capabilities. That mostly
+works, but it cannot express authored exceptions: URL0107 has BuildRate 1 for its Mantis repair arm,
+so inference enabled both Repair and Reclaim even though `General.CommandCaps` explicitly enables
+the first and disables the second. Retail `lua/ui/game/orders.lua:SetAvailableOrders` instead
+receives `GetUnitCommandData(selection)` and builds the page from that result.
+
+**Decision.** Import the true entries in `General.CommandCaps` and separately retain whether the
+table was authored. For FA content, a supported command needs both the simulation capability and
+the corresponding retail cap. Mixed selections keep any-capable-unit semantics. Definitions with
+no command-cap table, including BAR and focused test fixtures, retain the existing capability
+fallback. The rack geometry, labels, and semantic dispatch remain unchanged.
+
+**Alternatives considered.** Inferring everything from movement, weapons, and BuildRate was
+rejected because it cannot represent explicit false entries. Treating an empty imported list as
+"missing" was rejected because an authored all-false table is meaningful. Importing ToggleCaps and
+OrderOverrides in the same slice was deferred because their actions and conflict rules need state
+the simulation does not yet expose.
+
+**Consequences.** The first production command page is selected-data-driven without moving learned
+controls. The Mantis can Assist and Repair but no longer advertises Reclaim. Unsupported retail
+toggles and presentation overrides remain a named next slice rather than inert buttons pretending
+to work.

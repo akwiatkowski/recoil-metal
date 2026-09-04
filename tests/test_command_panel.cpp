@@ -157,6 +157,26 @@ TEST_CASE("an immobile factory and a field builder can assist") {
     CHECK(enabled(combatAvailable, CommandKind::Assist));
 }
 
+TEST_CASE("an authored retail command page distinguishes repair from reclaim") {
+    rm::unitdef::UnitDef mantis;
+    mantis.speedElmosPerSecond = 10.0f;
+    mantis.buildRate = 1.0f;
+    mantis.weapons.push_back(weapon(false));
+    mantis.commandCapsDeclared = true;
+    mantis.commandCaps = {"RULEUCC_Attack", "RULEUCC_Guard", "RULEUCC_Move",
+                          "RULEUCC_Patrol", "RULEUCC_Repair", "RULEUCC_Stop"};
+
+    const std::array<const rm::unitdef::UnitDef*, 1> selection{&mantis};
+    const rm::ui::CommandAvailability available = rm::ui::commandAvailability(selection);
+    CHECK(enabled(available, CommandKind::Move));
+    CHECK(enabled(available, CommandKind::Attack));
+    CHECK(enabled(available, CommandKind::Patrol));
+    CHECK(enabled(available, CommandKind::Stop));
+    CHECK(enabled(available, CommandKind::Assist));
+    CHECK(enabled(available, CommandKind::Repair));
+    CHECK_FALSE(enabled(available, CommandKind::Reclaim));
+}
+
 TEST_CASE("the command rack is a fixed 4 by 3 fitting with dead gutters") {
     const rm::ui::FrameLayout frame = rm::ui::frameLayout(
         rm::ui::UiViewport::authored(1280.0f, 720.0f));

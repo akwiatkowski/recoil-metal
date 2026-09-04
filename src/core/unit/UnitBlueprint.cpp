@@ -206,7 +206,19 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
             def.upgradesTo = std::string{*upgrades};
             std::transform(def.upgradesTo.begin(), def.upgradesTo.end(),
                            def.upgradesTo.begin(),
-                           [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+                               [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+        }
+        if (const lua::Value* caps = general->find("CommandCaps");
+            caps != nullptr && caps->isTable()) {
+            def.commandCapsDeclared = true;
+            for (const lua::Field& field : caps->fields) {
+                if (field.value.asBoolean().value_or(false)) {
+                    def.commandCaps.push_back(field.key);
+                }
+            }
+            std::ranges::sort(def.commandCaps);
+            const auto duplicate = std::ranges::unique(def.commandCaps);
+            def.commandCaps.erase(duplicate.begin(), duplicate.end());
         }
     }
 

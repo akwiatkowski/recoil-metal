@@ -7,6 +7,7 @@
 #include "core/unit/Weapon.hpp"
 #include "core/vfs/AssetSearch.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <expected>
 #include <filesystem>
@@ -488,6 +489,20 @@ struct UnitDef {
     /// milestone 1 "but must be recorded as deferred", so this is that record: when upgrades
     /// land, applying one is a set union on `BuildTree` rather than a new mechanism.
     std::vector<std::vector<std::string>> buildableCategoryAdds;
+
+    /// The true entries in `General.CommandCaps`, sorted for lookup.
+    ///
+    /// Retail passes these through `GetUnitCommandData(selection)` into
+    /// `ui/game/orders.lua:SetAvailableOrders`; they are therefore the authored source for an
+    /// order page, not merely metadata. `commandCapsDeclared` distinguishes an absent table
+    /// (BAR and synthetic definitions use capability fallback) from an authored table with no
+    /// enabled commands.
+    std::vector<std::string> commandCaps;
+    bool commandCapsDeclared = false;
+
+    [[nodiscard]] bool hasCommandCap(std::string_view cap) const noexcept {
+        return std::binary_search(commandCaps.begin(), commandCaps.end(), cap);
+    }
 
     /// Whether this unit declares a tag. Case-sensitive: the corpus is consistently upper
     /// case, and a case-insensitive compare would hide a typo in a data file rather than
