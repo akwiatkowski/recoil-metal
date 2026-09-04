@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/sim/Command.hpp"
+#include "core/ui/Hud.hpp"
 #include "core/unit/UnitDef.hpp"
 
 #include <array>
@@ -27,6 +28,16 @@ inline constexpr std::size_t kCommandSlots = kCommandColumns * kCommandRows;
 
 using CommandDescriptors = std::array<CommandDescriptor, kCommandSlots>;
 using CommandAvailability = std::array<bool, kCommandSlots>;
+
+/// One immutable 4x3 fitting inside the universal frame's command rectangle.
+struct CommandRackLayout {
+    Rect rect;
+    float gridX = 0.0f;
+    float gridY = 0.0f;
+    float cellWidth = 0.0f;
+    float cellHeight = 0.0f;
+    bool visible = false;
+};
 
 /// The fixed FA order positions, truncated to the requested 4x3 rack.
 ///
@@ -55,5 +66,28 @@ inline constexpr CommandDescriptors kCommandDescriptors{{
 /// Null definitions are ignored; an empty or wholly unknown selection disables every slot.
 [[nodiscard]] CommandAvailability
 commandAvailability(std::span<const unitdef::UnitDef* const> selection) noexcept;
+
+[[nodiscard]] CommandRackLayout commandRackLayout(const FrameLayout& frame,
+                                                   bool hasSelection) noexcept;
+
+[[nodiscard]] bool insideCommandRack(const CommandRackLayout& layout, float pointX,
+                                     float pointY) noexcept;
+
+[[nodiscard]] std::array<float, 2> commandCellOrigin(const CommandRackLayout& layout,
+                                                     std::size_t slot) noexcept;
+
+/// The stable slot under a HUD point. Gutters and the header are deliberate misses.
+[[nodiscard]] std::optional<std::size_t> commandSlotAt(const CommandRackLayout& layout,
+                                                       float pointX, float pointY) noexcept;
+
+[[nodiscard]] InfoCard commandCard(const CommandDescriptor& command, bool available,
+                                   bool armed = false);
+
+void appendCommandRack(Geometry& out, const text::Font& labelFont,
+                       const text::Font& readoutFont, const Theme& theme,
+                       const CommandRackLayout& layout,
+                       const CommandAvailability& available,
+                       std::optional<std::size_t> hovered = std::nullopt,
+                       std::optional<sim::CommandKind> armed = std::nullopt);
 
 } // namespace rm::ui

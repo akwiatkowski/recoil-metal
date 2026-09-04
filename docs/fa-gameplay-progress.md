@@ -9,14 +9,15 @@ Detailed retail evidence remains canonical in
 [`fa-exe-analysis-plan.md`](fa-exe-analysis-plan.md). This dashboard summarizes that ledger; it
 does not replace its claims, addresses, counterevidence, or confirmation gate.
 
-**Snapshot:** 2026-09-04, Recoil Metal main through HUD slice 0 — the measured interface
+**Snapshot:** 2026-09-04, Recoil Metal main through HUD slice 3 — the measured interface
 baseline (`docs/hud-baseline.md`, `tools/hud_baseline.sh`, `--backing`, `--bench-hud`,
 `--bench-size`) — after the `WP-22` controller read and six follow-ups (parked flyers recharge, the look-ahead max pyramid, attached children take their
 carrier's tilt, mesh extents and build-effect bones parsed with a bone-to-world helper, the
 factory production panel in the deck's command rectangle, UEF construction beams from authored
-builder bones to descending build-cube edges, structured runtime logging, the exact retail
+builder bones to descending build-cube edges, structured runtime logging, a bounded fixed
+inspector with paged selection/build instruments and a dispatching 4x3 command rack, the exact retail
 mobile-builder approach-to-range gate, per-instance builder torso/arm/tool aiming from authored
-bone rigs, and README counts at 1371) —
+bone rigs, and README counts at 1372) —
 `ComputeAirControl`, `CalcWingedLift`, the damping factor and the terrain look-ahead read and
 implemented (`C-244`–`C-246`): authored `KMove`/`KLift` gains with their damping terms, the
 vertical lift-off to half elevation that replaces the invented runway roll, the pyramid look-ahead
@@ -451,14 +452,22 @@ native-manager behavior exposed.
 
 ### FA-UI - Player Interface And Advanced Controls
 
-**Current slice:** the native HUD has a measured baseline (HUD slice 0, `docs/hud-baseline.md`,
+**Current slice:** HUD slice 3 replaces the lower floating/variable instruments with one bounded
+deck. The selection bay has a fixed inspector whose priority is armed mode, hovered build or
+command, hovered roster type, then selection summary. Roster slots and the two-row build palette
+page without moving or shrinking, their page state belongs to selection and builder type, and
+only visible-page art enters the fixed icon atlas. The bottom-right 4x3 rack keeps existing FA
+command positions stable, visibly disables unsupported capabilities, swallows its whole rectangle,
+and dispatches Stop, movement, attack, patrol, assist, repair, reclaim, and overcharge through the
+same semantic command path as keyboard/context orders.
+
+The native HUD also has a measured baseline (HUD slice 0, `docs/hud-baseline.md`,
 `tools/hud_baseline.sh`): seven interface states — default, commander, mixed selection,
 engineer, placement, observer, FAF chrome — at 1280x720 and 1600x900 at 1x and at the 14-inch
 MacBook Pro and 5K logical sizes at 2x, each a deterministic headless capture with per-layer
 HUD vertex counts and an offscreen GPU frame time with and without the interface. Two tracked
 flags made the 2x points possible: `--backing` gives a capture or benchmark a display scale, and
-`--bench-hud` / `--bench-size` let the benchmark draw the interface a capture shows. The factory
-production panel now fills the deck's command rectangle. `--select-type <blueprint id>` selects
+`--bench-hud` / `--bench-size` let the benchmark draw the interface a capture shows. `--select-type <blueprint id>` selects
 the first matching unit by deterministic draw order, so an injected UEL0105 can now be captured
 inside the five-minute skirmish with its army, economy, textures, and 15-option build palette.
 Both offscreen benchmark modes now run that same composition; world-only clears only the 2D HUD
@@ -469,10 +478,9 @@ strategic-icon fallback decisions identical.
 command pages, overlays, key contexts, or split views (`WP-40`).
 
 ```text
-/goal Advance FA-UI with HUD slice 3 (recoil-metal-3937): replace the floating selection card
-and vertical command tray with the fixed inspector, paged stable roster/build palette, and the
-existing-command rack in the deck. Keep every capture headless and deterministic, run make test,
-and refresh FA-UI.
+/goal Advance FA-UI with HUD slice 4 (recoil-metal-3757): finish concrete FA/BAR/Neutral/Classic
+resource and command descriptors, give preview/fog/pips/clicks/footprint one rectangular-map
+projection, and capture FA, BAR, and observer scenes.
 ```
 
 ### FA-PRESENT - Animation, Effects, And Audio

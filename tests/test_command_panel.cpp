@@ -145,3 +145,47 @@ TEST_CASE("an immobile factory and a field builder can assist") {
     CHECK_FALSE(enabled(commanderAvailable, CommandKind::Reclaim));
     CHECK(enabled(commanderAvailable, CommandKind::Assist));
 }
+
+TEST_CASE("the command rack is a fixed 4 by 3 fitting with dead gutters") {
+    const rm::ui::FrameLayout frame = rm::ui::frameLayout(
+        rm::ui::UiViewport::authored(1280.0f, 720.0f));
+    const rm::ui::CommandRackLayout rack = rm::ui::commandRackLayout(frame, true);
+    REQUIRE(rack.visible);
+    CHECK(rack.rect.x == frame.commands.x);
+    CHECK(rack.rect.y == frame.commands.y);
+    CHECK(rack.rect.width == frame.commands.width);
+    CHECK(rack.rect.height == frame.commands.height);
+
+    for (std::size_t slot = 0; slot < rm::ui::kCommandSlots; ++slot) {
+        const auto origin = rm::ui::commandCellOrigin(rack, slot);
+        CHECK(rm::ui::commandSlotAt(rack, origin[0] + rack.cellWidth * 0.5f,
+                                    origin[1] + rack.cellHeight * 0.5f)
+              == slot);
+    }
+
+    const auto first = rm::ui::commandCellOrigin(rack, 0);
+    CHECK_FALSE(rm::ui::commandSlotAt(rack, first[0] + rack.cellWidth + 1.0f,
+                                      first[1] + rack.cellHeight * 0.5f));
+    CHECK_FALSE(rm::ui::commandSlotAt(rack, rack.gridX, rack.rect.y + 4.0f));
+    CHECK(rm::ui::insideCommandRack(rack, rack.rect.x + 1.0f, rack.rect.y + 1.0f));
+}
+
+TEST_CASE("the command rack is absent without a selection") {
+    const rm::ui::FrameLayout frame = rm::ui::frameLayout(
+        rm::ui::UiViewport::authored(1280.0f, 720.0f));
+    const rm::ui::CommandRackLayout rack = rm::ui::commandRackLayout(frame, false);
+    CHECK_FALSE(rack.visible);
+    CHECK_FALSE(rm::ui::insideCommandRack(rack, frame.commands.x, frame.commands.y));
+}
+
+TEST_CASE("command inspector distinguishes ready disabled and targeting states") {
+    const rm::ui::CommandDescriptor& move = rm::ui::kCommandDescriptors[1];
+    const rm::ui::InfoCard ready = rm::ui::commandCard(move, true);
+    REQUIRE(ready.rows.size() == 2);
+    CHECK(ready.title == "MOVE");
+    CHECK(ready.rows[0].value == "READY");
+    CHECK(ready.rows[1].value == "WORLD / UNIT");
+
+    CHECK(rm::ui::commandCard(move, false).rows[0].value == "UNAVAILABLE");
+    CHECK(rm::ui::commandCard(move, true, true).rows[0].value == "TARGETING");
+}

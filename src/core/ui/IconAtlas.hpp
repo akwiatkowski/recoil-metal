@@ -37,6 +37,8 @@ inline constexpr std::size_t kBlockBytes = 16;
 /// the roster's twelve, and the ~100 strategic icon glyphs the corpus declares, together with
 /// room to grow — at a 768x768 texture, which is still one modest bind.
 inline constexpr int kAtlasColumns = 12;
+inline constexpr std::size_t kAtlasCapacity =
+    static_cast<std::size_t>(kAtlasColumns) * static_cast<std::size_t>(kAtlasColumns);
 
 /// Where one icon sits in the atlas, as uv corners.
 struct IconUv {

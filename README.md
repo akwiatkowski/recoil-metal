@@ -19,7 +19,7 @@ gets reimplemented.**
 - **Deterministic.** The sim is fixed point, proved identical at every
   optimisation level by a test. `--hash-log` writes a per-tick state hash and
   `--check-hash-log` names the tick a divergence began at.
-- **Tested.** **1371 tests, all green.** Anything that does not
+- **Tested.** **1372 tests, all green.** Anything that does not
   touch the GPU gets a failing test first, and parsers are tested against the
   real retail corpus — all 2034 BAR `.s3o` models and 2552 `.dds` textures.
 - **It plays.** Economy, construction, weapons, shields, aircraft, fog of war,
@@ -176,7 +176,7 @@ Then build and test. Catch2 is fetched by CMake at configure time:
 ```sh
 make build
 make test
-#   100% tests passed, 0 tests failed out of 1371
+#   100% tests passed, 0 tests failed out of 1372
 ```
 
 Or without the Makefile:
@@ -355,6 +355,7 @@ swings when you meant to select is the most disorienting thing an RTS camera can
 | shift + any order | queue it behind the ones already given, drawn in the world as you go |
 | `ctrl`+`0`–`9` / `0`–`9` | set a control group / recall it, the dead pruned out on recall |
 | click a tray cell, then the ground | build: the ghost is cyan where the footprint fits and red where it does not. Right-click or a second cell click cancels |
+| click a command cell, then right click | arm the command shown in the fixed 4×3 rack; Stop applies immediately and disabled positions stay put |
 | hold `space` + drag | swing the camera. Let go and it returns to the overhead view the app opened with, so a glance never costs you your bearings |
 | shift + drag | pan with the mouse |
 | scroll | zoom |
@@ -785,7 +786,7 @@ recoil-metal/
 │   ├── render/         Metal renderer (Objective-C++ where bridging)
 │   ├── platform/       AppKit window + display link (pImpl hides ObjC)
 │   └── main.mm         thin entry point
-├── tests/              Catch2 unit tests, mirrors src/core — 1371 tests
+├── tests/              Catch2 unit tests, mirrors src/core — 1372 tests
 ├── third_party/        metal-cpp and miniz (fetched, gitignored)
 ├── vendor/ai/          foreign AI corpora at pinned commits (fetched, gitignored,
 │                       NEVER modified — `make ai`, ADR-039)

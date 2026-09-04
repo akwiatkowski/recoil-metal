@@ -92,7 +92,7 @@ void gatherBuildOptions(const UnitScene& scene, rm::sim::UnitId activeBuilder,
                          const rm::ui::Theme& theme, std::vector<rm::ui::BuildOption>& out,
                          BuildSelection& who);
 
-/// Every icon the interface needs this frame, packed into ONE atlas.
+/// Every visible icon the interface needs this frame, packed into ONE atlas.
 ///
 /// BOTH PANELS AT ONCE, and that is forced rather than chosen: the renderer binds one icon
 /// texture, so a build tray and a roster with separate atlases would be two binds and two
@@ -105,9 +105,9 @@ void gatherBuildOptions(const UnitScene& scene, rm::sim::UnitId activeBuilder,
 /// slot blank rather than borrowing its neighbour's: `packIcons` is positional, so the slot a
 /// cell reads is the slot its own icon went into whether or not that icon existed.
 ///
-/// ASSIGNS `iconSlot` on every option and tile as a side effect, which is the whole point — the
-/// atlas and the indices into it are one answer, and separating them would let a caller pair
-/// last frame's slots with this frame's atlas.
+/// Clears every `iconSlot`, then assigns slots only inside the two visible ranges. A catalog can
+/// therefore contain hundreds of entries without pushing strategic glyphs or classic chrome out
+/// of the fixed atlas; changing page is one of the caller's repack keys.
 ///
 /// Rebuilt when the SET changes, not per frame. The caller decides that; this just does the
 /// work, and it is a memcpy per icon rather than a decode (`core/ui/IconAtlas.hpp`).
@@ -119,10 +119,15 @@ struct PackedInterfaceAtlas {
     rm::ui::PanelSkin skin;
 };
 
+struct VisibleIconRange {
+    std::size_t first = 0;
+    std::size_t count = 0;
+};
+
 [[nodiscard]] PackedInterfaceAtlas packInterfaceIcons(
     const rm::vfs::Vfs& content, std::vector<rm::ui::BuildOption>& options,
     std::vector<rm::ui::RosterTile>& tiles,
-    rm::ui::GameProfile profile,
+    VisibleIconRange visibleBuild, VisibleIconRange visibleRoster, rm::ui::GameProfile profile,
     std::span<const std::pair<std::string, rm::dds::Texture>> strategic = {},
     std::size_t* strategicBase = nullptr);
 

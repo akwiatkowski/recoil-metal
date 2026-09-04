@@ -8,6 +8,7 @@
 #include "core/unit/Role.hpp"
 
 #include <algorithm>
+#include <cassert>
 #include <cmath>
 
 namespace rm::app {
@@ -1011,17 +1012,24 @@ void buildStrategicIconRefs(const UnitScene& scene, std::size_t base,
 
 PackedInterfaceAtlas packInterfaceIcons(
     const rm::vfs::Vfs& content, std::vector<rm::ui::BuildOption>& options,
-    std::vector<rm::ui::RosterTile>& tiles, rm::ui::GameProfile profile,
+    std::vector<rm::ui::RosterTile>& tiles, VisibleIconRange visibleBuild,
+    VisibleIconRange visibleRoster, rm::ui::GameProfile profile,
     std::span<const std::pair<std::string, rm::dds::Texture>> strategic,
     std::size_t* strategicBase) {
     std::vector<rm::dds::Texture> icons;
-    icons.reserve(options.size() + tiles.size() + strategic.size());
+    icons.reserve(visibleBuild.count + visibleRoster.count + strategic.size() + 9);
 
     // ONE NUMBERING ACROSS BOTH PANELS. A slot is an index into `icons`, and `packIcons` places
     // by that index, so appending the roster's after the tray's is all "one atlas" needs to be
     // true — there is no second base to add and get wrong.
     for (rm::ui::BuildOption& option : options) {
         option.iconSlot.reset();
+    }
+    const std::size_t buildEnd =
+        std::min(options.size(), visibleBuild.first + visibleBuild.count);
+    for (std::size_t index = std::min(visibleBuild.first, options.size()); index < buildEnd;
+         ++index) {
+        rm::ui::BuildOption& option = options[index];
         rm::dds::Texture icon = iconFor(content, option.id);
         if (!icon.data.empty()) {
             option.iconSlot = icons.size();
@@ -1030,6 +1038,12 @@ PackedInterfaceAtlas packInterfaceIcons(
     }
     for (rm::ui::RosterTile& tile : tiles) {
         tile.iconSlot.reset();
+    }
+    const std::size_t rosterEnd =
+        std::min(tiles.size(), visibleRoster.first + visibleRoster.count);
+    for (std::size_t index = std::min(visibleRoster.first, tiles.size()); index < rosterEnd;
+         ++index) {
+        rm::ui::RosterTile& tile = tiles[index];
         rm::dds::Texture icon = iconFor(content, tile.id);
         if (!icon.data.empty()) {
             tile.iconSlot = icons.size();
@@ -1074,6 +1088,10 @@ PackedInterfaceAtlas packInterfaceIcons(
             icons.push_back(*art);
         }
     }
+
+
+    assert(icons.size() <= rm::ui::kAtlasCapacity
+           && "visible interface icons exceed the fixed atlas");
 
     rm::dds::Texture atlas = rm::ui::packIcons(icons);
     if (skinComplete && !atlas.data.empty()) {

@@ -13,6 +13,7 @@
 #include "core/sim/Adjacency.hpp"
 #include "core/sim/Replay.hpp"
 #include "core/sim/StateHash.hpp"
+#include "core/ui/CommandPanel.hpp"
 #include "core/ui/PanelPages.hpp"
 
 #include <algorithm>
@@ -400,14 +401,38 @@ void composeHeadlessInterface(rm::Renderer& renderer, const Session& session,
             gatherBuilderCandidates(units, capturedSelection, shotBuilders);
             gatherBuildOptions(units, activeBuilderFor(shotBuilders), baseTheme, shotOptions,
                                shotWho);
+            std::vector<const rm::unitdef::UnitDef*> shotCommandSelection;
+            for (const rm::sim::UnitId id : capturedSelection) {
+                if (units.store.alive(id)) {
+                    shotCommandSelection.push_back(
+                        units.catalog.def(units.store.typeAt(id.index)));
+                }
+            }
+            const rm::ui::CommandAvailability shotCommandAvailable =
+                rm::ui::commandAvailability(shotCommandSelection);
+            const std::size_t hoverAt = parseCount(argc, argv, "--hover");
+            const std::optional<std::size_t> shotHovered =
+                hoverAt > 0 && hoverAt <= shotOptions.size()
+                    ? std::optional<std::size_t>{hoverAt - 1}
+                    : std::nullopt;
+            const std::size_t shotCapacity =
+                shotFrame.buildColumns * static_cast<std::size_t>(rm::ui::kBuildRows);
+            const std::size_t shotPage =
+                shotHovered && shotCapacity > 0 ? *shotHovered / shotCapacity : 0;
+            const rm::ui::BuildPanelLayout shotPanel =
+                rm::ui::buildPanelLayout(shotFrame, shotOptions.size(), shotPage);
+            const rm::ui::RosterLayout shotRosterLayout =
+                rm::ui::rosterLayout(shotFrame, shotRoster.size());
 
             // Packed unconditionally now: the strategic glyphs exist with nothing selected
             // at all, which is precisely the far-zoom capture that shows them.
             rm::app::ensureStrategicIconArt(units, content);
             std::size_t shotStrategicBase = 0;
             rm::app::PackedInterfaceAtlas shotAtlas = rm::app::packInterfaceIcons(
-                content, shotOptions, shotRoster, session.uiProfile, units.strategicIconArt,
-                &shotStrategicBase);
+                content, shotOptions, shotRoster,
+                {.first = shotPanel.first, .count = shotPanel.shown},
+                {.first = shotRosterLayout.first, .count = shotRosterLayout.shown},
+                session.uiProfile, units.strategicIconArt, &shotStrategicBase);
             renderer.setIconAtlas(shotAtlas.texture);
             const rm::ui::Theme shotTheme =
                 hudThemeFor(units, session.uiProfile, shotAtlas.skin);
@@ -460,21 +485,10 @@ void composeHeadlessInterface(rm::Renderer& renderer, const Session& session,
                                       rm::kIconReferenceHeightPoints));
             renderer.setParticles(shotParticles);
 
-            std::optional<std::size_t> shotHovered;
             if (!shotOptions.empty()) {
                 // `--hover N` lights the Nth option (1-based) and draws its info card, for
                 // the same reason `--select` exists: a headless run has no cursor, and
                 // interface that appears only under one cannot reach a screenshot.
-                const std::size_t hoverAt = parseCount(argc, argv, "--hover");
-                shotHovered = hoverAt > 0 && hoverAt <= shotOptions.size()
-                                ? std::optional<std::size_t>{hoverAt - 1}
-                                : std::nullopt;
-                const std::size_t shotCapacity =
-                    shotFrame.buildColumns * static_cast<std::size_t>(rm::ui::kBuildRows);
-                const std::size_t shotPage =
-                    shotHovered && shotCapacity > 0 ? *shotHovered / shotCapacity : 0;
-                const rm::ui::BuildPanelLayout shotPanel =
-                    rm::ui::buildPanelLayout(shotFrame, shotOptions.size(), shotPage);
                 rm::ui::appendBuildPanel(hud, renderer.labelFont(), renderer.readoutFont(),
                                          shotTheme, shotPanel, shotOptions, shotHovered,
                                          shotWho.name, shotWho.role);
@@ -531,10 +545,15 @@ void composeHeadlessInterface(rm::Renderer& renderer, const Session& session,
                         : rm::ui::rosterTileCard(shotRoster.front());
                 rm::ui::appendRoster(hud, renderer.labelFont(), renderer.readoutFont(),
                                      shotTheme,
-                                     rm::ui::rosterLayout(shotFrame, shotRoster.size()),
+                                     shotRosterLayout,
                                      shotRoster, std::nullopt, &inspector);
                 std::printf("  roster: %zu type(s) selected\n", shotRoster.size());
             }
+
+            rm::ui::appendCommandRack(
+                hud, renderer.labelFont(), renderer.readoutFont(), shotTheme,
+                rm::ui::commandRackLayout(shotFrame, !capturedSelection.empty()),
+                shotCommandAvailable);
 
             renderer.setHud(hud);
             const rm::ui::UiCapacityReport& hudCapacity = renderer.uiCapacityReport();
@@ -784,14 +803,14 @@ int runWindowed(const Session& session) {
         // is normal. An empty recall is a no-op rather than a deselect: fat-fingering '4'
         // must not throw away the army under the cursor.
         std::array<std::vector<rm::sim::UnitId>, 10> controlGroups;
-        std::optional<rm::sim::CommandKind> armedGroundOrder;
+        std::optional<rm::sim::CommandKind> armedCommand;
 
         // The overhead view the camera returns to when space is released. Captured at the start,
         // when `OrbitCamera::frame` has fitted the whole map.
         const float restPitch = window.camera().pitch;
         const float restYaw = window.camera().yaw;
 
-        window.onKey([&window, &selected, &controlGroups, &units, &armedGroundOrder, restPitch,
+        window.onKey([&window, &selected, &controlGroups, &units, &armedCommand, restPitch,
                       restYaw](rm::KeyEvent event) {
             if (event.phase == rm::KeyPhase::Release) {
                 if (event.key == rm::Key::Space) {
@@ -824,10 +843,10 @@ int runWindowed(const Session& session) {
                 std::printf("props %s\n", visible ? "on" : "off");
                 std::fflush(stdout);
             } else if (event.key == rm::Key::A && event.modifiers.shift) {
-                armedGroundOrder = rm::sim::CommandKind::AttackMove;
+                armedCommand = rm::sim::CommandKind::AttackMove;
                 std::printf("attack-move armed: right-click a destination\n");
             } else if (event.key == rm::Key::P) {
-                armedGroundOrder = rm::sim::CommandKind::Patrol;
+                armedCommand = rm::sim::CommandKind::Patrol;
                 std::printf("patrol armed: right-click a destination\n");
             } else if (const std::optional<std::size_t> digit = rm::digitForKey(event.key)) {
                 auto& group = controlGroups[*digit];
@@ -867,6 +886,8 @@ int runWindowed(const Session& session) {
         // into a list that has been rebuilt is a different building.
         std::optional<std::size_t> armedOption;
         rm::ui::PanelPages panelPages;
+        rm::ui::CommandAvailability commandAvailable{};
+        std::vector<const rm::unitdef::UnitDef*> commandSelection;
 
         // WHOSE MENU THE ICON ATLAS WAS PACKED FOR. Keyed on the builder rather than on the
         // option list, because the list is rebuilt every frame and compares equal every frame —
@@ -892,6 +913,8 @@ int runWindowed(const Session& session) {
         /// positional slot reapplication then showed the previous selection's icon until some
         /// count happened to change. Ids are what the atlas actually drew.
         std::uint64_t rosterPackedKey = 0;
+        std::size_t buildPagePacked = static_cast<std::size_t>(-1);
+        std::size_t rosterPagePacked = static_cast<std::size_t>(-1);
 
         // The strategic layer's per-type icon table, rebuilt with every pack — the slots
         // move with the tray's and roster's counts. `typesPackedFor` starts impossible so
@@ -1171,6 +1194,13 @@ int runWindowed(const Session& session) {
             const rm::ui::FrameLayout frame = rm::ui::frameLayout(clickViewport);
             const rm::ui::MinimapLayout minimap = rm::ui::minimapLayout(frame);
             if (rm::ui::insideMinimap(minimap, hudPoint[0], hudPoint[1])) {
+                if (armedCommand && *armedCommand != rm::sim::CommandKind::Move
+                    && *armedCommand != rm::sim::CommandKind::AttackMove
+                    && *armedCommand != rm::sim::CommandKind::Patrol) {
+                    rm::log::write(rm::log::Level::Info, "orders",
+                                   "targeted command needs a world unit, not the minimap");
+                    return;
+                }
                 const std::array<float, 2> where =
                     rm::ui::minimapToWorld(minimap, map->field.widthElmos(),
                                            map->field.depthElmos(), hudPoint[0], hudPoint[1]);
@@ -1183,9 +1213,9 @@ int runWindowed(const Session& session) {
                 if (button == rm::MouseButton::Right) {
                     if (!selected.empty()) {
                         orderSelectionTo(ground, mods.shift, std::nullopt,
-                                         armedGroundOrder.value_or(
+                                         armedCommand.value_or(
                                              rm::sim::CommandKind::Move));
-                        armedGroundOrder.reset();
+                        armedCommand.reset();
                     }
                     return;
                 }
@@ -1194,6 +1224,39 @@ int runWindowed(const Session& session) {
                 // moves where you are looking, not how. Height sampled from the terrain so
                 // the target sits on the ground rather than at y = 0.
                 window.camera().target = ground;
+                return;
+            }
+
+            // The command rack owns the complete bottom-right rectangle. Implemented commands
+            // keep stable FA positions; disabled and unimplemented cells still swallow input so
+            // a miss on the instrument never becomes an order to the world behind it.
+            const rm::ui::CommandRackLayout commandRack =
+                rm::ui::commandRackLayout(frame, !selected.empty());
+            if (rm::ui::insideCommandRack(commandRack, hudPoint[0], hudPoint[1])) {
+                const std::optional<std::size_t> slot =
+                    rm::ui::commandSlotAt(commandRack, hudPoint[0], hudPoint[1]);
+                if (button == rm::MouseButton::Right) {
+                    armedCommand.reset();
+                } else if (slot && commandAvailable[*slot]
+                           && rm::ui::kCommandDescriptors[*slot].kind) {
+                    const rm::sim::CommandKind kind =
+                        *rm::ui::kCommandDescriptors[*slot].kind;
+                    if (kind == rm::sim::CommandKind::Stop) {
+                        (void)submitCommand(units, rm::sim::CommandIssue{
+                            .tick = static_cast<rm::TickIndex>(matchTicks),
+                            .phase = rm::sim::CommandPhase::PreTick,
+                            .source = static_cast<rm::CommandSource>(
+                                playerDriving(units, units.playerArmy)),
+                            .player = playerDriving(units, units.playerArmy),
+                            .kind = kind,
+                            .units = selected,
+                        });
+                        armedCommand.reset();
+                    } else {
+                        armedCommand = kind;
+                    }
+                }
+                swallowedByPanel("command");
                 return;
             }
 
@@ -1438,13 +1501,55 @@ int runWindowed(const Session& session) {
                 return;
             }
 
+            // Commands armed from the rack make the next right-click explicit. They reuse the
+            // same submission helpers as contextual right-clicks; the rack changes intent, not
+            // the simulation path.
+            if (armedCommand == rm::sim::CommandKind::Attack
+                || armedCommand == rm::sim::CommandKind::Overcharge) {
+                if (!isAttack || !hit) {
+                    rm::log::write(rm::log::Level::Info, "orders",
+                                   "attack command needs a hostile unit target");
+                    return;
+                }
+                const rm::sim::Transform& at = units.store.transforms()[hit->index];
+                const rm::PlayerIndex player = playerDriving(units, units.playerArmy);
+                const rm::TickIndex tick = static_cast<rm::TickIndex>(matchTicks);
+                if (*armedCommand == rm::sim::CommandKind::Overcharge) {
+                    std::vector<rm::sim::UnitId> manual;
+                    for (const rm::sim::UnitId id : selected) {
+                        if (!units.store.alive(id)) {
+                            continue;
+                        }
+                        const rm::unitdef::UnitDef* def =
+                            units.catalog.def(units.store.typeAt(id.index));
+                        if (def != nullptr
+                            && std::ranges::any_of(
+                                def->weapons, [](const rm::unitdef::Weapon& weapon) {
+                                    return weapon.manuallyFired()
+                                        && weapon.energyRequired > rm::sim::Mag{};
+                                })) {
+                            manual.push_back(id);
+                        }
+                    }
+                    (void)issueOvercharge(units, manual, player, tick, *hit, at.x, at.z,
+                                          mods.shift);
+                } else {
+                    (void)issueAttack(units, selected, player, tick, *hit, at.x, at.z,
+                                      mods.shift);
+                }
+                armedCommand.reset();
+                return;
+            }
+
             // A RIGHT-CLICK ON A DAMAGED ALLY IS REPAIR. Builders receive the targeted repair
             // order; the rest of a mixed selection moves there. This precedes Assist because a
             // damaged builder is still a repair target, not an instruction to guard it.
-            if (!isAttack && !armedGroundOrder && hit && units.playerArmy != rm::sim::kNoArmy
+            const bool explicitRepair = armedCommand == rm::sim::CommandKind::Repair;
+            if (!isAttack && (!armedCommand || explicitRepair) && hit
+                && units.playerArmy != rm::sim::kNoArmy
                 && alliedTo(units, units.playerArmy, *hit)
-                && units.store.health()[hit->index].current
-                       < units.store.health()[hit->index].maximum) {
+                && (explicitRepair || units.store.health()[hit->index].current
+                                          < units.store.health()[hit->index].maximum)) {
                 std::vector<rm::sim::UnitId> builders;
                 std::vector<rm::sim::UnitId> movers;
                 for (const rm::sim::UnitId sel : selected) {
@@ -1465,6 +1570,9 @@ int runWindowed(const Session& session) {
                 if (repairing && !builders.empty()) {
                     std::printf("repair: %zu builder(s) submitted\n", builders.size());
                 }
+                if (explicitRepair) {
+                    armedCommand.reset();
+                }
                 return;
             }
 
@@ -1472,7 +1580,9 @@ int runWindowed(const Session& session) {
             // lend rate; immobile factories mirror compatible queued production; everyone else
             // just walks over. Beaten by an enemy under the click (that is an attack) and
             // beating a wreck and plain ground.
-            if (!isAttack && !armedGroundOrder && hit && units.playerArmy != rm::sim::kNoArmy
+            const bool explicitAssist = armedCommand == rm::sim::CommandKind::Assist;
+            if (!isAttack && (!armedCommand || explicitAssist) && hit
+                && units.playerArmy != rm::sim::kNoArmy
                 && units.armyOf(hit->index) == units.playerArmy) {
                 const rm::unitdef::UnitDef* targetDef =
                     units.catalog.def(units.store.typeAt(hit->index));
@@ -1498,6 +1608,9 @@ int runWindowed(const Session& session) {
                         std::printf("assist: %zu builder(s) submitted for %s\n", builders.size(),
                                     targetDef->name.c_str());
                     }
+                    if (explicitAssist) {
+                        armedCommand.reset();
+                    }
                     return;
                 }
             }
@@ -1507,7 +1620,8 @@ int runWindowed(const Session& session) {
             // above already decided that), and a wreck beats plain ground. The hit disc is
             // the mark the player can actually SEE — the decal's radius, not the sim's —
             // with a floor so a tiny unit's wreck is still clickable.
-            if (!isAttack && !armedGroundOrder) {
+            const bool explicitReclaim = armedCommand == rm::sim::CommandKind::Reclaim;
+            if (!isAttack && (!armedCommand || explicitReclaim)) {
                 std::optional<rm::sim::FeatureId> wreck;
                 float wreckGap = 0.0f;
                 for (rm::UnitIndex slot = 0; slot < units.features.size(); ++slot) {
@@ -1564,8 +1678,19 @@ int runWindowed(const Session& session) {
                                     static_cast<double>(
                                         rm::sim::magToFloat(found->massRemaining)));
                     }
+                    if (explicitReclaim) {
+                        armedCommand.reset();
+                    }
                     return;
                 }
+            }
+
+            if (armedCommand == rm::sim::CommandKind::Repair
+                || armedCommand == rm::sim::CommandKind::Assist
+                || armedCommand == rm::sim::CommandKind::Reclaim) {
+                rm::log::write(rm::log::Level::Info, "orders",
+                               "the armed command cannot use that target");
+                return;
             }
 
             // Marked before the routing is attempted (inside orderSelectionTo), and
@@ -1577,11 +1702,11 @@ int runWindowed(const Session& session) {
             // An attack carries the TARGET'S HANDLE, which is what makes it a pursuit
             // rather than a walk to where the target used to be (`advanceOrders`' chase).
             orderSelectionTo(*ground, mods.shift,
-                             isAttack && !armedGroundOrder
+                             isAttack && !armedCommand
                                  ? hit
                                  : std::optional<rm::sim::UnitId>{},
-                             armedGroundOrder.value_or(rm::sim::CommandKind::Move));
-            armedGroundOrder.reset();
+                             armedCommand.value_or(rm::sim::CommandKind::Move));
+            armedCommand.reset();
         });
 
         // Scratch for the icon pass, held outside the frame callback so a frame costs no
@@ -1853,10 +1978,29 @@ int runWindowed(const Session& session) {
             }
 
             rm::app::gatherRoster(units, selected, rosterTiles);
+            commandSelection.clear();
+            for (const rm::sim::UnitId id : selected) {
+                if (units.store.alive(id)) {
+                    commandSelection.push_back(
+                        units.catalog.def(units.store.typeAt(id.index)));
+                }
+            }
+            commandAvailable = rm::ui::commandAvailability(commandSelection);
             // Advance page ownership with the tiles, not with input. A control-group key can
             // change `selected` between display callbacks; until this rebuild, clicks must keep
             // addressing the roster that is still visible rather than page zero of a future one.
             panelPages.showRoster(selected);
+            rm::ui::BuildPanelLayout buildPanel;
+            if (!buildOptions.empty()) {
+                std::size_t& buildPage =
+                    panelPages.build(units.store.typeAt(buildWho.builder.index));
+                buildPanel = rm::ui::buildPanelLayout(frame, buildOptions.size(), buildPage);
+                buildPage = buildPanel.page;
+            }
+            std::size_t& visibleRosterPage = panelPages.roster();
+            const rm::ui::RosterLayout roster =
+                rm::ui::rosterLayout(frame, rosterTiles.size(), visibleRosterPage);
+            visibleRosterPage = roster.page;
 
             // The icons for BOTH panels, in one atlas: packed when either set changes, and
             // reapplied from the cache otherwise. Reapplied rather than repacked because the
@@ -1864,17 +2008,22 @@ int runWindowed(const Session& session) {
             // slot — repacking to recover them would be two dozen archive reads a frame for
             // pictures that have not moved.
             if (buildWho.builder != iconsPackedFor || rosterPackedKey != rosterKeyFor(rosterTiles)
-                || units.catalog.size() != typesPackedFor) {
+                || units.catalog.size() != typesPackedFor || buildPagePacked != buildPanel.page
+                || rosterPagePacked != roster.page) {
                 iconsPackedFor = buildWho.builder;
                 rosterPackedKey = rosterKeyFor(rosterTiles);
                 typesPackedFor = units.catalog.size();
+                buildPagePacked = buildPanel.page;
+                rosterPagePacked = roster.page;
                 // Any glyph a newly registered type names is fetched before the pack, so a
                 // unit type first seen this frame gets its icon in this atlas rather than
                 // a square until the next selection change.
                 rm::app::ensureStrategicIconArt(units, content);
                 std::size_t strategicBase = 0;
                 rm::app::PackedInterfaceAtlas packed = rm::app::packInterfaceIcons(
-                    content, buildOptions, rosterTiles, session.uiProfile,
+                    content, buildOptions, rosterTiles,
+                    {.first = buildPanel.first, .count = buildPanel.shown},
+                    {.first = roster.first, .count = roster.shown}, session.uiProfile,
                     units.strategicIconArt, &strategicBase);
                 window.setIconAtlas(packed.texture);
                 interfaceSkin = packed.skin;
@@ -1904,16 +2053,10 @@ int runWindowed(const Session& session) {
                                   minimapView, !hasPreview);
             std::optional<std::size_t> overBuild;
             if (!buildOptions.empty()) {
-                std::size_t& buildPage =
-                    panelPages.build(units.store.typeAt(buildWho.builder.index));
-                const rm::ui::BuildPanelLayout panel =
-                    rm::ui::buildPanelLayout(frame, buildOptions.size(), buildPage);
-                buildPage = panel.page;
-
                 // The lit cell under the cursor, which is most of what makes a grid of squares
                 // read as BUTTONS rather than as a readout. Polled once here rather than
                 // tracked through a mouseMoved handler — see `Window::cursor`.
-                overBuild = rm::ui::buildOptionAt(panel, buildOptions.size(), hudCursor[0],
+                overBuild = rm::ui::buildOptionAt(buildPanel, buildOptions.size(), hudCursor[0],
                                                   hudCursor[1]);
                 // THE ARMED CELL STAYS LIT while the cursor is out over the map, which is
                 // exactly when the player needs to be told what they are about to place. A
@@ -1924,17 +2067,21 @@ int runWindowed(const Session& session) {
                 }
 
                 rm::ui::appendBuildPanel(hudScratch, window.labelFont(), window.readoutFont(),
-                                         theme, panel, buildOptions, lit,
+                                         theme, buildPanel, buildOptions, lit,
                                          buildWho.name, buildWho.role);
             }
+
+            const rm::ui::CommandRackLayout commandRack =
+                rm::ui::commandRackLayout(frame, !selected.empty());
+            const std::optional<std::size_t> overCommand =
+                rm::ui::commandSlotAt(commandRack, hudCursor[0], hudCursor[1]);
+            rm::ui::appendCommandRack(hudScratch, window.labelFont(), window.readoutFont(),
+                                      theme, commandRack, commandAvailable, overCommand,
+                                      armedCommand);
 
             // The roster, bottom centre. After the tray so both are in one buffer; they do not
             // overlap, so the order between them is arbitrary and stated only to be stable.
             if (!rosterTiles.empty()) {
-                std::size_t& rosterPage = panelPages.roster();
-                const rm::ui::RosterLayout roster =
-                    rm::ui::rosterLayout(frame, rosterTiles.size(), rosterPage);
-                rosterPage = roster.page;
                 const std::optional<std::size_t> overTile =
                     rm::ui::rosterTileAt(roster, hudCursor[0], hudCursor[1]);
 
@@ -1942,9 +2089,24 @@ int runWindowed(const Session& session) {
                 if (armedOption && *armedOption < buildOptions.size()) {
                     inspector =
                         rm::ui::buildOptionCard(buildOptions[*armedOption], session.uiProfile);
+                } else if (armedCommand) {
+                    const auto found = std::ranges::find_if(
+                        rm::ui::kCommandDescriptors,
+                        [&](const rm::ui::CommandDescriptor& descriptor) {
+                            return descriptor.kind == armedCommand;
+                        });
+                    if (found != rm::ui::kCommandDescriptors.end()) {
+                        const std::size_t slot = static_cast<std::size_t>(
+                            std::distance(rm::ui::kCommandDescriptors.begin(), found));
+                        inspector = rm::ui::commandCard(*found, commandAvailable[slot], true);
+                    }
                 } else if (overBuild && *overBuild < buildOptions.size()) {
                     inspector =
                         rm::ui::buildOptionCard(buildOptions[*overBuild], session.uiProfile);
+                } else if (overCommand && *overCommand < rm::ui::kCommandSlots) {
+                    inspector = rm::ui::commandCard(
+                        rm::ui::kCommandDescriptors[*overCommand],
+                        commandAvailable[*overCommand]);
                 } else if (overTile && *overTile < rosterTiles.size()) {
                     inspector = rm::ui::rosterTileCard(rosterTiles[*overTile]);
                 } else {
@@ -1953,15 +2115,6 @@ int runWindowed(const Session& session) {
                 rm::ui::appendRoster(hudScratch, window.labelFont(), window.readoutFont(),
                                      theme, roster, rosterTiles, overTile,
                                      &inspector);
-            }
-
-            // The production panel, bottom right, in the deck's command rectangle: what the
-            // selected factory is building, in order, and how far the current one has got.
-            if (const std::optional<rm::ui::ProductionView> production =
-                    gatherProduction(units, buildWho.builder)) {
-                rm::ui::appendProductionPanel(hudScratch, window.labelFont(),
-                                              window.readoutFont(), theme, frame.commands,
-                                              *production);
             }
 
             // --- The band box, and the minimap's drag-to-pan --------------------------

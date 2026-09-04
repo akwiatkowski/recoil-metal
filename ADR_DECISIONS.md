@@ -2611,3 +2611,34 @@ small host double before gameplay Lua exists. A later adapter can load
 `/lua/sim/tasks/<TaskName>.lua` with the retail fallback and serialize its own object into the opaque
 bytes without changing core command machinery. There is deliberately no production Lua adapter or
 EnhanceTask implementation in this slice; those remain `WP-07` and `WP-34` work.
+
+---
+
+## ADR-074 — Lower-deck controls keep stable slots and pack only visible pages
+
+**Context.** The HUD already had fixed frame rectangles, deterministic page ownership, and command
+descriptors, but the bottom-right rectangle still showed factory production instead of actionable
+commands. Build and roster art for every page was packed into one 144-slot atlas, so a synthetic
+large catalog could evict strategic glyphs even though almost all of those icons were invisible.
+
+**Decision.** The selection bay owns one fixed inspector and paged stable roster. Construction uses
+the frame's fixed two-row page. The command rectangle always becomes a 4x3 rack when a selection
+exists; canonical positions never compact, unsupported or unavailable commands remain disabled,
+and the complete rectangle swallows input. Enabled cells dispatch through the existing semantic
+command helpers, with Stop immediate and other commands arming the next target. Atlas packing clears
+all item slots and assigns slots only to the currently visible build and roster ranges, followed by
+strategic glyphs and optional classic chrome. Page changes are explicit repack keys and the combined
+slot count is asserted against atlas capacity.
+
+**Alternatives considered.** Keeping the factory production panel in the command rectangle was
+rejected because two instruments cannot own the same hit geometry. Compacting enabled commands was
+rejected because capabilities would move learned orders between selections. Growing the atlas or
+adding one texture per page was rejected because invisible content should consume neither capacity
+nor binds.
+
+**Consequences.** The lower deck is bounded and actionable at the 1280x720 floor, command hover and
+targeting participate in inspector priority, and hundreds of catalog entries no longer threaten the
+atlas. The production view remains as tested view data but has no deck surface until a later design
+assigns it non-conflicting geometry. Command artwork and secondary content-specific pages remain
+future work; the first rack deliberately uses readable labels and only simulation semantics that
+already exist.
