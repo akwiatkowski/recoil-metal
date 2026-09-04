@@ -81,6 +81,96 @@ void orderAlongPath(MoveState& state, std::span<const std::array<Fx, 2>> path) {
     state.moving = true;
 }
 
+namespace {
+
+// The vertical half of the winged mover (`C-221`/`C-222`): state transitions, fuel and the
+// slewing altitude reference. Runs before the waypoint logic so a takeoff or landing commit
+// takes effect the same tick the order (or its absence) arrives.
+void tickAirState(MoveState& state, const Transform& unit, const Terrain& terrain) noexcept {
+    using AirState = MoveState::AirState;
+    // Recharge while grounded runs at the drain rate — its exact rate is open, and with
+    // no native consequence at zero either choice is behaviourally identical today.
+    if (state.airState == AirState::Bottom) {
+        state.fuelRatio =
+            std::min(Fx::fromInt(1), state.fuelRatio + state.fuelDrainPerTick);
+        state.idleTicks = 0;
+        if (!state.moving) {
+            return;
+        }
+        // A fresh order starts the takeoff roll ON the deck: `airborne` flips only at
+        // liftoff below, so collision layers and the align pass treat the roll as ground
+        // movement — and the lift law lifts off exactly when fast enough (`C-221`).
+        state.airState = AirState::Up;
+        return;
+    }
+    if (state.moving) {
+        state.idleTicks = 0;
+        if (state.airState == AirState::Down) {
+            state.airState = AirState::Up;
+        }
+    } else if (state.airState == AirState::Top) {
+        // The auto-land timer (`floor(AutoLandTime × 10)` idle ticks, `C-222`).
+        if (++state.idleTicks >= state.idleLandThreshold) {
+            state.airState = AirState::Down;
+            state.idleTicks = 0;
+        }
+    } else if (state.airState == AirState::Up) {
+        // An order cancelled mid-roll never lifts: back down rather than idling Up.
+        state.airState = AirState::Down;
+    }
+    // Fuel drains whenever off the ground and the clamp is the whole native story
+    // (`C-223`): no speed penalty, no crash, every consequence Lua.
+    state.fuelRatio = std::max(Fx{}, state.fuelRatio - state.fuelDrainPerTick);
+    // The altitude reference chases terrain plus clearance, upward at `LiftFactor × 0.1`
+    // per tick and half that downward (`C-221`). A committed descent aims at dirt, not at
+    // cruise clearance — otherwise the reference would hold the aircraft up forever and
+    // touchdown could never complete.
+    const Fx ground = terrain.heightAt(unit.x, unit.z);
+    const Fx target = (state.airState == MoveState::AirState::Down)
+                        ? ground
+                        : ground + kAirClearanceElmos;
+    const Fx slewUp = state.airLiftFactor * Fx::fromRatio(1, 10);
+    const Fx slewDown = slewUp / Fx::fromInt(2);
+    if (target > state.altitudeRef) {
+        state.altitudeRef = std::min(target, state.altitudeRef + slewUp);
+    } else {
+        state.altitudeRef = std::max(target, state.altitudeRef - slewDown);
+    }
+}
+
+// One trapezoidal beat (`C-221`: `v_new = v_old + P·dt`, `pos += (v_old + v_new) ×
+// 0.05`, `dt = 0.1` at `0x00E4CEA4`/`0x00EA2BA0`). Velocity is elmos per SECOND — the
+// only units the formula balances in. Desired horizontal velocity is the post-turn
+// heading at cruise speed, or holding still when there is nowhere to go; desired
+// vertical is the lift-capped climb need. Touchdown and takeoff-completion are the
+// caller's.
+void integrateAir(Transform& unit, MoveState& state) noexcept {
+    const Fx cruise = state.airMaxSpeedElmosPerSec;
+    const Fx desiredX = state.moving ? fxSin(unit.heading) * cruise : Fx{};
+    const Fx desiredZ = state.moving ? fxCos(unit.heading) * cruise : Fx{};
+    const std::array<Fx, 3> old = state.velocity;
+    state.velocity[0] += state.airApproachGain * (desiredX - old[0]);
+    state.velocity[2] += state.airApproachGain * (desiredZ - old[2]);
+    // The lift law (`C-221`): climb authority is `max(0, speedRatio − 0.5) × LiftFactor`,
+    // so below half max airspeed the cap is zero and the takeoff roll stays on the deck.
+    // `min` binds climbs only — a negative need (diving at the reference) passes through,
+    // which is what the formula says rather than a symmetric choice.
+    const Fx horizontal = fxHypot(state.velocity[0], state.velocity[2]);
+    const Fx ratio =
+        state.airMaxSpeedElmosPerSec > Fx{} ? horizontal / state.airMaxSpeedElmosPerSec
+                                            : Fx{};
+    const Fx cap = std::max(Fx{}, ratio - Fx::fromRatio(1, 2)) * state.airLiftFactor;
+    const Fx need = state.altitudeRef - unit.y;
+    const Fx desiredVy = std::min(need, cap);
+    state.velocity[1] += state.airLiftGain * (desiredVy - old[1]);
+    constexpr Fx kTrapezoidHalfStep = Fx::fromRatio(1, 20);  // `0.05`, ART-E001 `0x00EA2BA0`
+    unit.x += (old[0] + state.velocity[0]) * kTrapezoidHalfStep;
+    unit.y += (old[1] + state.velocity[1]) * kTrapezoidHalfStep;
+    unit.z += (old[2] + state.velocity[2]) * kTrapezoidHalfStep;
+}
+
+}  // namespace
+
 void tick(std::span<Transform> transforms, std::span<MoveState> motion,
           const Terrain& terrain) noexcept {
     const std::size_t count = std::min(transforms.size(), motion.size());
@@ -95,15 +185,22 @@ void tick(std::span<Transform> transforms, std::span<MoveState> motion,
 
     for (std::size_t i = 0; i < count; ++i) {
         MoveState& state = motion[i];
-        if (!state.moving || state.attached) {
+        // A flyer off the ground stays in the tick after its orders end: it must land,
+        // hold, or keep flying on its velocity rather than freeze mid-air.
+        const bool flying =
+            state.canFly && state.airState != MoveState::AirState::Bottom;
+        if ((!state.moving && !flying) || state.attached) {
             continue;
         }
 
         Transform& unit = transforms[i];
 
+        if (state.canFly) {
+            tickAirState(state, unit, terrain);
+        }
+
         const Fx dx = state.destinationX - unit.x;
         const Fx dz = state.destinationZ - unit.z;
-
         // Bearing and distance from one CORDIC pass rather than two: the pass needs both, and
         // vectoring mode produces both.
         const Polar toTarget = fxPolar(dx, dz);
@@ -122,18 +219,35 @@ void tick(std::span<Transform> transforms, std::span<MoveState> motion,
                                           : kWaypointRadius;
         const Fx travel = state.speedPerTick;
 
+        // Whether this tick completes a journey, as opposed to loitering where a previous
+        // one ended: only a fresh arrival commits a flyer to landing (`C-222`).
+        const bool wasMoving = state.moving;
+        // A flyer off the deck keeps flying through arrival waypoints: stopping dead
+        // would freeze a descent (or a climb) the same tick it was committed, because
+        // the `continue` below skips the air branch that performs it.
+        const bool flyThrough =
+            state.canFly && state.airborne && state.airState != MoveState::AirState::Bottom;
         if (distance <= std::max(radius, travel)) {
             if (!onFinalWaypoint) {
                 ++state.pathIndex;
                 state.destinationX = state.path[state.pathIndex][0];
                 state.destinationZ = state.path[state.pathIndex][1];
-                continue;  // aim at the next one on the following tick
+                if (!flyThrough) {
+                    continue;  // aim at the next one on the following tick
+                }
+            } else {
+                state.moving = false;
+                state.path.clear();
+                state.pathIndex = 0;
+                // Arrival is a landing commit for a flyer (`C-222`): it descends from here
+                // rather than stopping dead at cruise altitude.
+                if (wasMoving) {
+                    state.airState = MoveState::AirState::Down;
+                }
+                if (!flyThrough) {
+                    continue;
+                }
             }
-
-            state.moving = false;
-            state.path.clear();
-            state.pathIndex = 0;
-            continue;
         }
 
         // Turn toward the destination, but no faster than the unit can. The bearing already
@@ -158,6 +272,37 @@ void tick(std::span<Transform> transforms, std::span<MoveState> motion,
 
         const Fx previousX = unit.x;
         const Fx previousZ = unit.z;
+
+        if (state.canFly
+            && (state.airborne || state.airState == MoveState::AirState::Up
+                || state.airState == MoveState::AirState::Down)) {
+            // Winged flight (`C-221`) instead of the ground stride below: explicit
+            // velocity integrated trapezoidally, with the lift law owning the vertical.
+            // A rolling takeoff stays wheels-on-deck here until the lift law lifts it;
+            // a grounded descent still enters so touchdown can complete it.
+            integrateAir(unit, state);
+            unit.x = std::clamp(unit.x, Fx{}, width);
+            unit.z = std::clamp(unit.z, Fx{}, depth);
+            const Fx ground = terrain.heightAt(unit.x, unit.z);
+            if (!state.airborne && unit.y > ground) {
+                state.airborne = true;
+            } else if (!state.airborne) {
+                unit.y = ground;
+            }
+            if (state.airState == MoveState::AirState::Up && unit.y >= state.altitudeRef) {
+                unit.y = state.altitudeRef;
+                state.airState = MoveState::AirState::Top;
+            }
+            if (state.airState == MoveState::AirState::Down && unit.y <= ground) {
+                unit.y = ground;
+                state.airState = MoveState::AirState::Bottom;
+                state.airborne = false;
+                state.moving = false;
+                state.velocity = {};
+                state.idleTicks = 0;
+            }
+            continue;
+        }
 
         unit.x += fxSin(unit.heading) * step;
         unit.z += fxCos(unit.heading) * step;
@@ -189,6 +334,12 @@ void tick(std::span<Transform> transforms, std::span<MoveState> motion,
     // A separate pass rather than a line in the loop above, because it applies
     // to a different set: the loop moves what is moving, this tilts everything.
     for (std::size_t i = 0; i < count; ++i) {
+        // A flyer off the deck owns its altitude AND attitude in the winged integrator
+        // above — this pass would otherwise teleport every climb back to clearance
+        // height at the end of the same tick that earned it.
+        if (motion[i].canFly && motion[i].airborne) {
+            continue;
+        }
         if (motion[i].airborne || motion[i].surfaceWater) {
             placeOnMotionLayer(transforms[i], motion[i], terrain);
             continue;
@@ -274,7 +425,10 @@ void placeOnMotionLayer(Transform& transform, const MoveState& state,
         return;
     }
     transform.y = terrain.heightAt(transform.x, transform.z);
-    if (state.airborne) {
+    // A flyer's altitude belongs to the winged integrator above, not to this pass —
+    // assigning clearance here would teleport every climb back to level flight.
+    // Non-flyer airborne units (synthetic test fixtures) keep the old behavior.
+    if (state.airborne && !state.canFly) {
         transform.y += kAirClearanceElmos;
         transform.pitch = Brad{0};
         transform.roll = Brad{0};

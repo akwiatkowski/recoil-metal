@@ -752,3 +752,31 @@ UnitBlueprint {
     CHECK(none->antiMissileRadiusElmos == rm::sim::Fx{});
     CHECK(none->antiMissileRatePerSecond == 0.0f);
 }
+
+TEST_CASE("a winged mover arrives with its control block, or nothing") {
+    // UEA0101's `Air` table (`C-221`): the proportional inputs, the climb authority,
+    // and the two timers. Damping, banking, speeds and combat turn rates are parsed
+    // nowhere yet — each is a named follow-up, not a silent default.
+    const Blueprint named{"XXB0008_unit.bp", R"(
+UnitBlueprint {
+    Physics = { MotionType = 'RULEUMT_Air' },
+    Air = {
+        KMove = 1, KLift = 3, LiftFactor = 7,
+        AutoLandTime = 1, FuelUseTime = 500,
+    },
+})"};
+    const auto def = rm::unitbp::loadFile(named.path());
+    REQUIRE(def.has_value());
+    CHECK(def->airKMove == Approx(1.0f));
+    CHECK(def->airKLift == Approx(3.0f));
+    CHECK(def->airLiftFactor == Approx(7.0f));
+    CHECK(def->airAutoLandTimeSec == Approx(1.0f));
+    CHECK(def->airFuelUseTimeSec == Approx(500.0f));
+
+    const Blueprint bare{"XXB0009_unit.bp", kMediumTank};
+    const auto none = rm::unitbp::loadFile(bare.path());
+    REQUIRE(none.has_value());
+    CHECK(none->airKMove == 0.0f);
+    CHECK(none->airLiftFactor == 0.0f);
+    CHECK(none->airFuelUseTimeSec == 0.0f);
+}

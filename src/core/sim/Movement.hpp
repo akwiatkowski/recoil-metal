@@ -190,6 +190,71 @@ struct MoveState {
     int pathPhaseStartX = 0;
     int pathPhaseStartZ = 0;
     int pathPhaseCellsX = 0;
+
+    // --- winged flight (`C-221`) ------------------------------------------------
+    //
+    // Retail's air mover is a disjoint path keyed on the blueprint, not a variant of the
+    // ground one — and ours is too, gated on `canFly` below. Ground units carry these
+    // fields at zero forever; they hash to nothing (the hash skips non-flyers) and save
+    // through the v11 air sidecar rather than the motion record.
+
+    /// Whether this unit may leave the ground. Set once at spawn from the definition;
+    /// the movement pass has no catalog, so everything authored it needs arrives here.
+    bool canFly = false;
+
+    /// Retail's vertical events (`C-222`/`C-223`): Bottom = on the ground, Up = climbing
+    /// out, Top = cruising, Down = coming in. Hover belongs to transports and is deferred.
+    /// Spawned airborne (the status quo ante); landing and takeoff move it from there.
+    enum class AirState : std::uint8_t { Bottom, Up, Top, Down };
+    AirState airState = AirState::Bottom;
+
+    /// Elmos per SECOND, all three axes. Retail's trapezoid (`C-221`) only balances in
+    /// per-second units — per-tick velocity would fly every leg at a tenth of its
+    /// authored speed — so the desired vector below is built from the per-second cruise
+    /// speed, never from `speedPerTick`.
+    std::array<Fx, 3> velocity{};
+
+    /// The altitude the lift law is chasing, in elmos. Slews toward terrain plus clearance
+    /// at `airLift × 0.1` per tick upward, half that downward (`C-221`).
+    Fx altitudeRef{};
+
+    /// Remaining fuel as a 0..1 ratio. Drains `1 / (FuelUseTime × 10)` per tick while
+    /// climbing, cruising or descending and refills at the same rate on the ground
+    /// (`C-223`); clamped at both ends, with no native consequence at zero — every
+    /// consequence retail has is Lua. Spawned full.
+    Fx fuelRatio = Fx::fromInt(1);
+
+    /// Idle ticks since this flyer last had an order. Past `idleLandThreshold` a cruising
+    /// flyer commits to landing (`floor(AutoLandTime × 10)` — `C-222`'s auto-land timer).
+    std::uint32_t idleTicks = 0;
+
+    /// Ticks of idleness that trigger auto-land. `AutoLandTime <= 0` reads as never:
+    /// a zero threshold would ground everything the tick after spawn. Open edge, noted.
+    std::uint32_t idleLandThreshold = std::numeric_limits<std::uint32_t>::max();
+
+    /// Per-tick proportional approach rates, converted once at spawn from the authored
+    /// `Air.KMove` / `Air.KLift` (`C-221`). The exact gain schedule is unread — these stand
+    /// in for it, and the ledger says so.
+    Fx airApproachGain{};
+    Fx airLiftGain{};
+
+    /// The climb authority (`Air.LiftFactor`, `C-221`) in elmos per SECOND, matching the
+    /// velocity state below. Below half max airspeed the lift cap goes negative and the
+    /// aircraft cannot climb at all.
+    Fx airLiftFactor{};
+
+    /// Cruise speed in elmos per SECOND (`Air.MaxAirspeed`, converted once at spawn).
+    /// Separate from `speedPerTick` because the winged integrator's velocity is
+    /// per-second (`C-221`'s trapezoid only balances in those units) while the waypoint
+    /// logic thinks per tick.
+    Fx airMaxSpeedElmosPerSec{};
+
+    /// per-second (`C-221`'s trapezoid only balances in those units) while the waypoint
+    /// logic thinks per tick.
+
+    /// Fuel ratio spent per tick while climbing, cruising or descending
+    /// (`1 / (FuelUseTime × 10)`, `C-223`), converted once at spawn.
+    Fx fuelDrainPerTick{};
 };
 
 /// Sends a unit along a route, aiming it at the first waypoint.

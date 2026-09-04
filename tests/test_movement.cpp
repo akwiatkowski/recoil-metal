@@ -1015,3 +1015,184 @@ TEST_CASE("a mobile unit is born able to move, whichever spawn path made it",
     bomber.motion = rm::unitdef::MotionType::Air;
     CHECK(rm::app::motionFor(bomber, 0).airborne);
 }
+
+namespace {
+
+/// A flyer with UEA0101's control numbers (`C-221`): approach gain 0.1/tick, lift gain
+/// 0.3/tick, climb authority 7 elmos/tick, auto-land after 10 idle ticks. Speed is
+/// written directly — 16 elmos/tick is MaxAirspeed 20 at this file's 10 Hz clock.
+[[nodiscard]] MoveState flyer() {
+    MoveState motion = ordinary();
+    motion.canFly = true;
+    motion.airState = MoveState::AirState::Top;
+    motion.airborne = true;
+    motion.speedPerTick = rm::sim::Fx::fromInt(16);
+    motion.airMaxSpeedElmosPerSec = rm::sim::Fx::fromInt(160);
+    motion.airApproachGain = rm::sim::Fx::fromRatio(1, 10);
+    motion.airLiftGain = rm::sim::Fx::fromRatio(3, 10);
+    motion.airLiftFactor = rm::sim::Fx::fromInt(7);
+    motion.idleLandThreshold = 10;
+    motion.fuelDrainPerTick = rm::sim::Fx::fromRatio(1, 5000);
+    motion.fuelRatio = rm::sim::Fx::fromInt(1);
+    return motion;
+}
+
+}  // namespace
+
+TEST_CASE("a flyer integrates velocity trapezoidally") {
+    // `C-221`: `pos += (v_old + v_new) x 0.05` with `v_new = v_old + P*dt`, velocity in
+    // elmos per SECOND — per-tick velocity would fly every leg at a tenth of its authored
+    // speed. Hand-computed: standing start toward +Z at a 160-elmos/s cruise and gain 0.1
+    // gives v = 16 after one tick and z += (0 + 16) x 0.05 = 0.8. Level flight — the
+    // reference sits at the unit's own altitude, so nothing climbs.
+    const HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    std::vector<rm::sim::Transform> units{unitAt(100.0f, 100.0f)};
+    std::vector<MoveState> motion{flyer()};
+    motion[0].altitudeRef = rm::sim::Fx{};
+    rm::sim::orderTo(motion[0], terrain, rm::test::fx(100.0f), rm::test::fx(700.0f));
+
+    rm::sim::tick(units, motion, terrain);
+
+    CHECK(rm::sim::fxToFloat(motion[0].velocity[2]) == Approx(16.0f).margin(0.1));
+    CHECK(rm::sim::fxToFloat(motion[0].velocity[0]) == Approx(0.0f).margin(0.01));
+    CHECK(rm::sim::fxToFloat(units[0].z) == Approx(100.8f).margin(0.01));
+    CHECK(rm::sim::fxToFloat(units[0].y) == Approx(0.0f).margin(0.01));
+}
+
+TEST_CASE("climb authority dies below half max airspeed") {
+    // `C-221`'s lift law: climb is capped at `max(0, speedRatio - 0.5) x LiftFactor`, so
+    // a flyer at 0.04 of max speed cannot climb at all while one at full speed climbs
+    // at most 0.5 x 7 = 3.5 elmos/s against a far reference.
+    const HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+
+    SECTION("slow flyer holds altitude") {
+        std::vector<rm::sim::Transform> units{unitAt(100.0f, 100.0f)};
+        std::vector<MoveState> motion{flyer()};
+        motion[0].velocity = {rm::sim::Fx::fromInt(6), rm::sim::Fx{},
+                              rm::sim::Fx{}};
+        motion[0].altitudeRef = rm::sim::Fx::fromInt(100);
+        motion[0].moving = true;
+        rm::sim::tick(units, motion, terrain);
+        CHECK(units[0].y == rm::sim::Fx{});
+    }
+
+    SECTION("fast flyer climbs within the cap") {
+        std::vector<rm::sim::Transform> units{unitAt(100.0f, 100.0f)};
+        std::vector<MoveState> motion{flyer()};
+        motion[0].velocity = {rm::sim::Fx{}, rm::sim::Fx{}, rm::sim::Fx::fromInt(160)};
+        motion[0].altitudeRef = rm::sim::Fx::fromInt(100);
+        // Straight ahead: no turn couples into the horizontal speed the lift law reads.
+        rm::sim::orderTo(motion[0], terrain, rm::test::fx(100.0f), rm::test::fx(700.0f));
+        rm::sim::tick(units, motion, terrain);
+        CHECK(units[0].y > rm::sim::Fx{});
+        CHECK(rm::sim::fxToFloat(motion[0].velocity[1]) == Approx(1.05f).margin(0.01));
+    }
+}
+
+TEST_CASE("a grounded flyer rolls, lifts, cruises and lands on arrival") {
+    // The full loop with no invented thresholds: an order takes a Bottom flyer Up (still
+    // on the deck — the lift law keeps it there until fast), full speed opens the climb,
+    // reaching the reference levels to Top, arrival commits Down, touchdown returns
+    // Bottom with the airborne flag cleared. Lift authority is raised for this transition
+    // coverage so the climb finishes before arrival on an 800-elmo field; the B-tests
+    // above pin the real UEA0101 pacing, at which a short hop lands without ever
+    // levelling off (see below).
+    const HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    std::vector<rm::sim::Transform> units{unitAt(100.0f, 100.0f)};
+    std::vector<MoveState> motion{flyer()};
+    motion[0].airState = MoveState::AirState::Bottom;
+    motion[0].airborne = false;
+    motion[0].altitudeRef = rm::sim::Fx::fromInt(80);
+    motion[0].airLiftFactor = rm::sim::Fx::fromInt(70);
+    rm::sim::orderTo(motion[0], terrain, rm::test::fx(700.0f), rm::test::fx(700.0f));
+
+    // First tick: committed to takeoff but still on the deck — the lift law, not the
+    // order, decides when wheels leave ground.
+    rm::sim::tick(units, motion, terrain);
+    CHECK(motion[0].airState == MoveState::AirState::Up);
+    CHECK_FALSE(motion[0].airborne);
+    CHECK(units[0].y == rm::sim::Fx{});
+
+    bool sawTop = false;
+    bool sawDown = false;
+    for (int tick = 0; tick < 1000; ++tick) {
+        rm::sim::tick(units, motion, terrain);
+        sawTop = sawTop || motion[0].airState == MoveState::AirState::Top;
+        sawDown = sawDown || motion[0].airState == MoveState::AirState::Down;
+        if (motion[0].airState == MoveState::AirState::Bottom) {
+            break;
+        }
+    }
+    CHECK(sawTop);
+    CHECK(sawDown);
+    REQUIRE(motion[0].airState == MoveState::AirState::Bottom);
+    CHECK_FALSE(motion[0].airborne);
+    CHECK(units[0].y == rm::sim::Fx{});
+}
+
+TEST_CASE("a short hop lands without ever levelling off") {
+    // The retail-realistic common case at UEA0101 pacing: the destination arrives long
+    // before the 3.5-elmos/s climb could level off, so the loop runs Bottom-Up-Down-
+    // Bottom with no Top — and, crucially, terminates instead of stranding Down.
+    const HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    std::vector<rm::sim::Transform> units{unitAt(100.0f, 100.0f)};
+    std::vector<MoveState> motion{flyer()};
+    motion[0].airState = MoveState::AirState::Bottom;
+    motion[0].airborne = false;
+    motion[0].altitudeRef = rm::sim::Fx::fromInt(80);
+    rm::sim::orderTo(motion[0], terrain, rm::test::fx(160.0f), rm::test::fx(100.0f));
+
+    bool sawDown = false;
+    for (int tick = 0; tick < 1000; ++tick) {
+        rm::sim::tick(units, motion, terrain);
+        sawDown = sawDown || motion[0].airState == MoveState::AirState::Down;
+        if (motion[0].airState == MoveState::AirState::Bottom && tick > 0) {
+            break;
+        }
+    }
+    CHECK(sawDown);
+    REQUIRE(motion[0].airState == MoveState::AirState::Bottom);
+    CHECK_FALSE(motion[0].airborne);
+    CHECK(units[0].y == rm::sim::Fx{});
+}
+
+TEST_CASE("an idle flyer auto-lands after its auto-land interval") {
+    // `floor(AutoLandTime x 10)` idle ticks (`C-222`): ten here, so nine ticks of
+    // loitering and the tenth commits Down.
+    const HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    std::vector<rm::sim::Transform> units{unitAt(100.0f, 100.0f)};
+    units[0].y = rm::sim::Fx::fromInt(80);
+    std::vector<MoveState> motion{flyer()};
+    motion[0].altitudeRef = rm::sim::Fx::fromInt(80);
+
+    for (int tick = 0; tick < 9; ++tick) {
+        rm::sim::tick(units, motion, terrain);
+        CHECK(motion[0].airState == MoveState::AirState::Top);
+    }
+    rm::sim::tick(units, motion, terrain);
+    CHECK(motion[0].airState == MoveState::AirState::Down);
+}
+
+TEST_CASE("fuel drains in flight, clamps at zero, and means nothing natively") {
+    // `1 / (FuelUseTime x 10)` per tick while off the ground (`C-223`): at drain 0.1,
+    // ten ticks empty the tank and it stays empty — no speed penalty, no crash, every
+    // consequence Lua, so the assertions stop at the clamp.
+    const HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    std::vector<rm::sim::Transform> units{unitAt(100.0f, 100.0f)};
+    std::vector<MoveState> motion{flyer()};
+    motion[0].altitudeRef = rm::sim::Fx{};
+    motion[0].fuelDrainPerTick = rm::sim::Fx::fromRatio(1, 10);
+    motion[0].fuelRatio = rm::sim::Fx::fromInt(1);
+    motion[0].moving = true;
+
+    run(units, motion, field, 11);
+    CHECK(motion[0].fuelRatio == rm::sim::Fx{});
+    run(units, motion, field, 10);
+    CHECK(motion[0].fuelRatio == rm::sim::Fx{});
+}

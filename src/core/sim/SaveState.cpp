@@ -27,6 +27,7 @@ constexpr std::uint32_t kVersion7 = 7;
 constexpr std::uint32_t kVersion8 = 8;
 constexpr std::uint32_t kVersion9 = 9;
 constexpr std::uint32_t kVersion10 = 10;
+constexpr std::uint32_t kVersion11 = 11;
 // MT19937 serializes its 624 state words plus an index, all as unsigned decimal numbers separated
 // by one space. This rejects oversized malformed frames before they allocate their payload.
 constexpr std::size_t kMaxRandomStatePayload =
@@ -218,6 +219,45 @@ void writeRedirects(PayloadWriter& w, std::span<const MissileRedirect> redirects
         w.i32(value.cooldownTicks);
         w.i32(value.remaining);
     }
+}
+
+void writeAirMotion(PayloadWriter& w, std::span<const MoveState> motion) {
+    w.count(motion.size());
+    for (const MoveState& state : motion) {
+        for (const Fx& axis : state.velocity) {
+            w.i32(axis.raw());
+        }
+        w.u8(static_cast<std::uint8_t>(state.airState));
+        w.i32(state.altitudeRef.raw());
+        w.i32(state.fuelRatio.raw());
+        w.u64(state.idleTicks);
+        w.u8(state.canFly ? 1 : 0);
+        w.i32(state.airMaxSpeedElmosPerSec.raw());
+    }
+}
+
+[[nodiscard]] bool readAirMotion(PayloadReader& r, std::vector<MoveState>& motion) {
+    std::size_t count{};
+    if (!r.count(count, 34) || count != motion.size()) return false;
+    for (MoveState& state : motion) {
+        std::int32_t vx{}, vy{}, vz{}, ref{}, fuel{}, cruise{};
+        std::uint64_t idle{};
+        std::uint8_t air{}, fly{};
+        if (!r.i32(vx) || !r.i32(vy) || !r.i32(vz) || !r.u8(air) || air > 3
+            || !r.i32(ref) || !r.i32(fuel) || !r.u64(idle)
+            || idle > std::numeric_limits<std::uint32_t>::max() || !r.u8(fly) || fly > 1
+            || !r.i32(cruise)) {
+            return false;
+        }
+        state.velocity = {Fx::fromRaw(vx), Fx::fromRaw(vy), Fx::fromRaw(vz)};
+        state.airState = static_cast<MoveState::AirState>(air);
+        state.altitudeRef = Fx::fromRaw(ref);
+        state.fuelRatio = Fx::fromRaw(fuel);
+        state.idleTicks = static_cast<std::uint32_t>(idle);
+        state.canFly = fly != 0;
+        state.airMaxSpeedElmosPerSec = Fx::fromRaw(cruise);
+    }
+    return true;
 }
 
 [[nodiscard]] bool readRedirects(PayloadReader& r, std::vector<MissileRedirect>& redirects) {
@@ -509,6 +549,7 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
                     version >= kVersion7, version >= kVersion7, version >= kVersion8);
     if (version >= kVersion9) writeSiloAmmo(payloadWriter, state.siloAmmo);
     if (version >= kVersion10) writeRedirects(payloadWriter, state.redirects);
+    if (version >= kVersion11) writeAirMotion(payloadWriter, state.units.motion);
     const std::vector<std::byte> payload = payloadWriter.take();
     if (payload.size() > std::numeric_limits<std::uint32_t>::max()) {
         throw std::length_error("MT19937 state exceeds the v1 save-state payload limit");
@@ -541,7 +582,7 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
         || (version != kVersion1 && version != kVersion2 && version != kVersion3
               && version != kVersion4 && version != kVersion5 && version != kVersion6
                && version != kVersion7 && version != kVersion8 && version != kVersion9
-               && version != kVersion10)
+               && version != kVersion10 && version != kVersion11)
         || (requiredVersion && version != *requiredVersion) || !readU64(bytes, offset, tick)
         || !readU32(bytes, offset, payloadSize) || bytes.size() - offset != payloadSize) {
         return std::nullopt;
@@ -575,6 +616,7 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
     if (version >= kVersion9 && !readSiloAmmo(reader, siloAmmo)) return std::nullopt;
     std::vector<MissileRedirect> redirects;
     if (version >= kVersion10 && !readRedirects(reader, redirects)) return std::nullopt;
+    if (version >= kVersion11 && !readAirMotion(reader, units.motion)) return std::nullopt;
     if (!reader.finished()) return std::nullopt;
     SaveState decoded{.tick = tick,
                       .random = std::move(random),
@@ -605,7 +647,7 @@ std::optional<SaveState> SaveState::decodeV2(std::span<const std::byte> bytes) {
 }
 
 std::vector<std::byte> SaveState::encode(const SaveState& state) {
-    return rm::sim::encode(state, kVersion10);
+    return rm::sim::encode(state, kVersion11);
 }
 
 std::optional<SaveState> SaveState::decode(std::span<const std::byte> bytes) {

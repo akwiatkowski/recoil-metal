@@ -822,3 +822,16 @@ TEST_CASE("attachment propagation retains an attached child's local height") {
     CHECK(childTransform.y == fixture.store.transforms()[parent.index].y);
     CHECK(childTransform.y != terrain.heightAt(childTransform.x, childTransform.z));
 }
+
+TEST_CASE("winged-flight state changes the match hash") {
+    Fixture fixture;
+    const auto baseline = fixture.hash();
+    fixture.motion()[0].canFly = true;
+    fixture.motion()[0].airState = rm::sim::MoveState::AirState::Up;
+    fixture.motion()[0].velocity = {rm::sim::Fx::fromInt(10), rm::sim::Fx{},
+                                    rm::sim::Fx{}};
+    CHECK(fixture.hash() != baseline);
+    const auto flying = fixture.hash();
+    ++fixture.motion()[0].idleTicks;
+    CHECK(fixture.hash() != flying);
+}

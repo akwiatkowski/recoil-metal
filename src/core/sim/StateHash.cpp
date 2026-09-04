@@ -128,6 +128,17 @@ void feedMotion(StateHash& h, const MoveState& motion) noexcept {
         feed(h, motion.pathPhaseStartZ);
         feed(h, motion.pathPhaseCellsX);
     }
+    // Winged-flight execution state, gated on capability: ground units carry zeros here
+    // that must not move their digests. Gains and thresholds are spawn-derived from the
+    // already-hashed type, so only the live values feed (`C-221`).
+    if (motion.canFly) {
+        feed(h, motion.canFly);
+        feed(h, static_cast<std::uint64_t>(motion.airState));
+        feed(h, motion.velocity);
+        feed(h, motion.altitudeRef);
+        feed(h, motion.fuelRatio);
+        feed(h, static_cast<std::size_t>(motion.idleTicks));
+    }
 }
 
 void feedHealth(StateHash& h, const Health& health) noexcept {

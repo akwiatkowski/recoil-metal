@@ -51,6 +51,25 @@ rm::sim::MoveState motionFor(const rm::unitdef::UnitDef& def, int armyIndex) {
                 ? gAppTickRate.bradPerTick(def.turnRateRadiansPerSecond)
                 : gAppTickRate.bradPerTick(rm::sim::kDefaultTurnRateRadiansPerSecond);
     }
+    if (motion.airborne) {
+        // Flyers spawn cruising (the status quo ante — spawn changes nothing observable);
+        // the winged mover (`C-221`) takes them from there. Gains use the retail step
+        // (0.1), not the clock: at 10 Hz they coincide, elsewhere the formula is retail's.
+        motion.canFly = true;
+        motion.airState = rm::sim::MoveState::AirState::Top;
+        motion.airMaxSpeedElmosPerSec = rm::sim::fxFromFloat(def.speedElmosPerSecond);
+        motion.airApproachGain = rm::sim::fxFromFloat(def.airKMove * 0.1f);
+        motion.airLiftGain = rm::sim::fxFromFloat(def.airKLift * 0.1f);
+        motion.airLiftFactor = rm::sim::fxFromFloat(def.airLiftFactor);
+        motion.idleLandThreshold = def.airAutoLandTimeSec > 0.0f
+            ? static_cast<std::uint32_t>(def.airAutoLandTimeSec
+                                         * gAppTickRate.ticksPerSecond())
+            : std::numeric_limits<std::uint32_t>::max();
+        motion.fuelDrainPerTick = def.airFuelUseTimeSec > 0.0f
+            ? rm::sim::fxFromFloat(1.0f / (def.airFuelUseTimeSec * 10.0f))
+            : rm::sim::Fx{};
+        motion.fuelRatio = rm::sim::Fx::fromInt(1);
+    }
     return motion;
 }
 
@@ -689,6 +708,13 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
         .motion = motion,
         .health = rm::sim::initialHealth(def.health, scene.catalog.shield(type).maximum),
     });
+    // A flyer spawns cruising at its placed altitude: seed the reference the lift law
+    // chases from the same ground-plus-clearance the align pass would assign (`C-221`).
+    if (motion.canFly) {
+        scene.store.motion()[id.index].altitudeRef =
+            scene.terrain(field).heightAt(transform.x, transform.z)
+            + rm::sim::kAirClearanceElmos;
+    }
 
     const rm::sim::Mag minimumRate = gAppTickRate.magPerTick(0.1f);
     const rm::sim::Mag buildPerTick =
@@ -1261,9 +1287,31 @@ void orderFirstExtractors(UnitScene& scene, std::span<const rm::scenario::Marker
                             ? def->turnRateRadiansPerSecond
                             : rm::sim::kDefaultTurnRateRadiansPerSecond);
                 }
+                if (state.airborne) {
+                    state.canFly = true;
+                    state.airState = rm::sim::MoveState::AirState::Top;
+                    state.airMaxSpeedElmosPerSec =
+                        rm::sim::fxFromFloat(def->speedElmosPerSecond);
+                    state.airApproachGain = rm::sim::fxFromFloat(def->airKMove * 0.1f);
+                    state.airLiftGain = rm::sim::fxFromFloat(def->airKLift * 0.1f);
+                    state.airLiftFactor = rm::sim::fxFromFloat(def->airLiftFactor);
+                    state.idleLandThreshold = def->airAutoLandTimeSec > 0.0f
+                        ? static_cast<std::uint32_t>(def->airAutoLandTimeSec
+                                                     * gAppTickRate.ticksPerSecond())
+                        : std::numeric_limits<std::uint32_t>::max();
+                    state.fuelDrainPerTick = def->airFuelUseTimeSec > 0.0f
+                        ? rm::sim::fxFromFloat(1.0f / (def->airFuelUseTimeSec * 10.0f))
+                        : rm::sim::Fx{};
+                    state.fuelRatio = rm::sim::Fx::fromInt(1);
+                }
             }
             rm::sim::Transform transform = transformAt(instance.position, instance.rotationY);
             rm::sim::placeOnMotionLayer(transform, state, scene.terrain(field));
+            // The lift law chases this from the first tick: seed it from the same
+            // ground-plus-clearance the align pass just assigned (`C-221`).
+            if (state.canFly) {
+                state.altitudeRef = transform.y;
+            }
             (void)scene.store.spawn(rm::sim::UnitStore::Spawn{
                 .type = type,
                 .transform = transform,

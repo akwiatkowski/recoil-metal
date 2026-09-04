@@ -284,10 +284,12 @@ TEST_CASE("historic attachment saves derive offsets from their transforms", "[sa
     const SaveState state{.tick = 42, .random = random.snapshot(), .units = original.snapshot()};
     std::vector<std::byte> v7 = SaveState::encode(state);
     constexpr std::size_t kSlots = 2;
-    // v8 appends allocator and queue state, v9 the silo-ammo section, and v10 the
-    // redirector section (each empty here, so a single count word apiece). This fixture
-    // starts from the final published v7 shape, so the historical-layout edits below
-    // must remove all three later trailers first.
+    // v8 appends allocator and queue state, v9 the silo-ammo section, v10 the
+    // redirector section, and v11 the per-motion air section (a count word plus one
+    // fixed record per motion slot — empty vectors still write their counts, which is
+    // what makes these trailers computable without parsing). This fixture starts from
+    // the final published v7 shape, so the historical-layout edits below must remove
+    // all four later trailers first.
     constexpr std::size_t kV8CommandStateBytes = sizeof(rm::CommandSerial)
                                                   + std::size_t{rm::kInvalidCommandSource}
                                                         * sizeof(std::uint32_t)
@@ -297,7 +299,9 @@ TEST_CASE("historic attachment saves derive offsets from their transforms", "[sa
                                                            + sizeof(std::uint32_t));
     constexpr std::size_t kV9SiloAmmoBytes = sizeof(std::uint32_t);
     constexpr std::size_t kV10RedirectBytes = sizeof(std::uint32_t);
-    v7.resize(v7.size() - kV10RedirectBytes - kV9SiloAmmoBytes - kV8CommandStateBytes);
+    constexpr std::size_t kV11AirBytes = sizeof(std::uint32_t) + kSlots * 34;
+    v7.resize(v7.size() - kV11AirBytes - kV10RedirectBytes - kV9SiloAmmoBytes
+              - kV8CommandStateBytes);
     writeU32(v7, 4, 7);
     writeU32(v7, 16, static_cast<std::uint32_t>(v7.size() - 20));
     // v4 adds the offset collection, v5 adds DoNotTarget, v6 adds one automatic-target count
@@ -509,4 +513,33 @@ TEST_CASE("a v1 save state refuses invalid unit allocator and attachment state",
     // Parent slot zero is absent; slot one names `parent` immediately after its presence flag.
     writeU32(malformed, parents + sizeof(std::uint32_t) + 2, std::numeric_limits<std::uint32_t>::max());
     CHECK_FALSE(SaveState::decodeV1(malformed).has_value());
+}
+
+TEST_CASE("a v11 save round-trips winged-flight state", "[save-state]") {
+    rm::sim::UnitStore original;
+    const auto flyer = original.spawn({});
+    rm::sim::MoveState& motion = original.motion()[flyer.index];
+    motion.canFly = true;
+    motion.airState = rm::sim::MoveState::AirState::Up;
+    motion.velocity = {rm::sim::Fx::fromInt(10), rm::sim::Fx::fromInt(1),
+                       rm::sim::Fx::fromInt(-3)};
+    motion.altitudeRef = rm::sim::Fx::fromInt(80);
+    motion.fuelRatio = rm::sim::Fx::fromRatio(1, 2);
+    motion.idleTicks = 7;
+    motion.airMaxSpeedElmosPerSec = rm::sim::Fx::fromInt(160);
+
+    RandomStream random{std::uint32_t{1}};
+    const auto bytes =
+        SaveState::encode({.tick = 42, .random = random.snapshot(), .units = original.snapshot()});
+    const auto restored = SaveState::decode(bytes);
+    REQUIRE(restored.has_value());
+    REQUIRE(restored->units.motion.size() == original.motion().size());
+    const rm::sim::MoveState& back = restored->units.motion[flyer.index];
+    CHECK(back.airState == rm::sim::MoveState::AirState::Up);
+    CHECK(back.canFly);
+    CHECK(back.velocity[0] == rm::sim::Fx::fromInt(10));
+    CHECK(back.altitudeRef == rm::sim::Fx::fromInt(80));
+    CHECK(back.idleTicks == 7);
+    CHECK(back.airMaxSpeedElmosPerSec == rm::sim::Fx::fromInt(160));
+    CHECK(SaveState::encode(*restored) == bytes);
 }

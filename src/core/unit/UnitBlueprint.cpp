@@ -309,6 +309,19 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
             sim::fxFromFloat(numberOr(*ai, "GuardScanRadius", 0.0f) * scmap::kElmosPerOgrid);
     }
 
+    // --- winged flight -------------------------------------------------------
+    //
+    // The `Air` control block (`C-221`). Read for flyers only; ground units keep zeroes
+    // and the mover never consults these for them. Seconds and per-second floats stay
+    // authored here — the sim converts once at spawn.
+    if (const lua::Value* airBlock = parsed->path("Air")) {
+        def.airKMove = numberOr(*airBlock, "KMove", 0.0f);
+        def.airKLift = numberOr(*airBlock, "KLift", 0.0f);
+        def.airLiftFactor = numberOr(*airBlock, "LiftFactor", 0.0f);
+        def.airAutoLandTimeSec = numberOr(*airBlock, "AutoLandTime", 0.0f);
+        def.airFuelUseTimeSec = numberOr(*airBlock, "FuelUseTime", 0.0f);
+    }
+
     // --- size --------------------------------------------------------------
     //
     // `SizeX`/`SizeY`/`SizeZ` sit at the file's ROOT, not under `Footprint`, and
