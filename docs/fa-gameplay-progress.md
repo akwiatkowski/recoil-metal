@@ -9,7 +9,11 @@ Detailed retail evidence remains canonical in
 [`fa-exe-analysis-plan.md`](fa-exe-analysis-plan.md). This dashboard summarizes that ledger; it
 does not replace its claims, addresses, counterevidence, or confirmation gate.
 
-**Snapshot:** 2026-09-03, dirty Recoil Metal worktree through the `WP-29` redirect follow-up —
+**Snapshot:** 2026-09-04, Recoil Metal `0a555cb` through the `WP-22` winged-mover foundation —
+explicit per-second velocity on retail's trapezoid, the `LiftFactor` climb cap, takeoff/landing
+vertical events, the auto-land timer and fuel drain (`C-221`–`C-223`), SaveState v11 with the
+hash gated on `canFly`; FA-AIR 45/25/95, headline unchanged at 55/25/70. Prior: the `WP-29`
+redirect follow-up —
 a non-strategic enemy MISSILE inside a redirector radius turns back on its live launcher, one
 redirect per rate cycle with per-tick cooldown, SaveState v10 (`C-088` MissileRedirect, URL0303
 `Defense.AntiMissile{Radius=5, RedirectRateOfFire=1}`); prior: the `C-183` guard-attack slice —
@@ -89,7 +93,7 @@ excluded from the headline.
 | [`FA-CMD`](#fa-cmd---commands-controls-and-factories) | Commands, controls, factories | `WP-12`-`14` | 75% | 55% | 75% | Add the remaining guard-ladder branches (build-assist chain, reclaim-copy, repair scan) and read the leash endpoints. |
 | [`FA-ECON`](#fa-econ---economy-construction-and-engineering) | Economy, construction, engineering | `WP-15`-`19` | 70% | 55% | 90% | Name the capture increment at `Unit+0x690` and read `Sim::TransferUnit`'s copy/reset inventory, then specify the smallest capture slice. |
 | [`FA-LAND`](#fa-land---land-navigation-formations-and-spatial-world) | Land navigation, formations, spatial world | `WP-20`, `21`, `26` | 85% | 30% | 95% | Add bounded formation rotation or category matching without changing path-service ordering. |
-| [`FA-AIR`](#fa-air---aircraft-flight-combat-and-staging) | Aircraft flight, combat, staging | `WP-22` | 30% | 10% | 95% | Implement the deterministic winged-aircraft mover foundation. |
+| [`FA-AIR`](#fa-air---aircraft-flight-combat-and-staging) | Aircraft flight, combat, staging | `WP-22` | 45% | 25% | 95% | Replace the stand-in proportional gains with the read `ComputeAirControl` schedule and add the terrain look-ahead, then start `C-224`'s attack-run pair. |
 | [`FA-NAVY`](#fa-navy---surface-and-submerged-warfare) | Surface and submerged warfare | `WP-23`-`24` | 35% | 10% | 75% | Implement one complete `SurfacingSub` dive/surface slice. |
 | [`FA-TRANSPORT`](#fa-transport---attachments-cargo-and-ferries) | Attachments, cargo, ferries | `WP-25` | 35% | 5% | 95% | Add parent/self bone indices and authored rest-bone composition to generic attachments. |
 | [`FA-WEAPONS`](#fa-weapons---targeting-weapons-and-projectiles) | Targeting, weapons, projectiles | `WP-27`-`28` | 97% | 72% | 90% | Implement `C-157` target exemption for engineer reclaim/capture, then add the remaining death and manual-fire paths. |
@@ -240,14 +244,23 @@ re-forming explicitly deferred, run make test and make verify, then refresh FA-L
 
 ### FA-AIR - Aircraft Flight, Combat, And Staging
 
-**Largest gap:** aircraft use simplified terrain-following X/Z movement instead of retail's
-trapezoidal flight solver, combat states, fuel, takeoff/landing, and staging.
+**Current slice:** winged flyers run retail's disjoint `canFly` mover (`C-221`): explicit
+per-second velocity integrated trapezoidally at the retail 0.1 step, the `(speedRatio − 0.5) ×
+LiftFactor` climb cap (so a takeoff roll stays on the deck until fast enough), a slewing altitude
+reference, `Bottom/Up/Top/Down` vertical events with landing on arrival, the `AutoLandTime`
+idle timer (`C-222`), and `FuelUseTime` drain/recharge with no native consequence at zero
+(`C-223`). SaveState v11 carries the air state; the hash gates it on `canFly`, so the golden
+log is unchanged.
+
+**Largest gap:** the horizontal/vertical gains are proportional stand-ins for the unread
+`ComputeAirControl` schedule; there is no terrain look-ahead, banking/orientation, `Hover`,
+combat state machine (`C-224`), staging, or carrier docking (`C-225`).
 
 ```text
-/goal Advance FA-AIR by implementing the deterministic winged-aircraft mover foundation from
-C-221: explicit velocity and trapezoidal integration at 10 Hz plus the minimum takeoff/landing
-state needed by one real aircraft. Start with focused fixed-point tests, run make test and make
-verify, enumerate deferred combat/fuel/staging behavior in WP-22, and refresh FA-AIR.
+/goal Advance FA-AIR by reading ComputeAirControl's gain schedule (KTurn/KRoll/KLift over mass
+plus the damping terms) from C-221's addresses and replacing the stand-in gains with it, then add
+the terrain look-ahead that scales horizontal steering down so a flyer can climb. Keep the
+golden log byte-identical for ground units, run make test and make verify, then refresh FA-AIR.
 ```
 
 ### FA-NAVY - Surface And Submerged Warfare
