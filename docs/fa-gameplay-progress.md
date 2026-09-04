@@ -307,8 +307,8 @@ FA-TRANSPORT.
 
 ### FA-WEAPONS - Targeting, Weapons, And Projectiles
 
-**Largest gap:** automatic acquisition and explicit Attack orders share one target path, blocking
-exact forced-target, minimum-range, arc, incumbency, and empty-priority behavior.
+**Largest gap:** automatic acquisition cannot yet exempt enemy units that an allied engineer is
+reclaiming or capturing, because those commands cannot yet carry a type-safe unit target.
 
 **Current slice:** `C-158` now admits automatic acquisition of current radar contacts but gives an
 unidentified target retail's sentinel priority row `9999`, so it competes by score until the
@@ -319,8 +319,9 @@ remains eligible, and replaces it only for a strictly better candidate; fixed-hu
 the same incumbent. Explicit Attack remains separate, including when its target has gone stale.
 `C-157` now rejects automatic candidates outside the immutable playable rectangle before
 restriction/range/scoring and clears an incumbent that leaves it; live matches use their full map
-extent and explicit Attack remains unrestricted. These automatic-acquisition slices do not wire
-`SetDoNotTarget` or the engineer reclaim/capture target-exemption rule through the FAF Lua API.
+extent and explicit Attack remains unrestricted. `SetDoNotTarget` is represented, persisted,
+hashed, and consulted during automatic acquisition; the engineer reclaim/capture target-exemption
+rule remains unwired because those command paths do not yet expose their unit targets.
 
 ```text
 /goal Advance WP-15 with type-safe unit-target Reclaim/Capture command support before implementing
