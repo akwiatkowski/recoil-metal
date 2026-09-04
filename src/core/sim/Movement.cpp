@@ -160,18 +160,21 @@ void integrateAir(Transform& unit, MoveState& state, const Terrain& terrain) noe
     using AirState = MoveState::AirState;
     const Fx cruise = state.airMaxSpeedElmosPerSec;
     const bool landing = state.airState == AirState::Down;
-    // What the lift law measures against while landing is the ground, not cruise
-    // elevation: retail rewrites its elevation offset for the descent (`C-222`), and this
-    // is the smallest reading of that which lets touchdown complete.
-    const Fx elevationRef = landing ? Fx{} : state.airElevation;
 
     // --- desired horizontal velocity: at the destination, at cruise or the distance ---
     const Fx dx = state.destinationX - unit.x;
     const Fx dz = state.destinationZ - unit.z;
     const Fx distance = fxHypot(dx, dz);
+    const Fx elevationRef = landing
+        ? wingedLandingElevation(state.airElevation, state.airElevationAdjustment, distance)
+        : state.airElevation + state.airElevationAdjustment;
     Fx desiredX{};
     Fx desiredZ{};
-    if (state.moving && distance > Fx{}) {
+    // Retail keeps steering toward its landing site after the command has retired. Without
+    // that approach the aircraft can stop inside the ordinary arrival radius but never enter
+    // the final half-elmo stage that drops the elevation target to the deck.
+    const bool approaching = state.moving || landing;
+    if (approaching && distance > Fx{}) {
         const Fx speed = std::min(distance, cruise);
         desiredX = dx / distance * speed;
         desiredZ = dz / distance * speed;
@@ -186,7 +189,7 @@ void integrateAir(Transform& unit, MoveState& state, const Terrain& terrain) noe
     // after the nearer climb, floored, squared.
     // Idle, retail's target sits under the aircraft and the reach collapses to the point
     // sample; a stale destination must not choose the cell for a flyer going nowhere.
-    const Fx reach = state.moving ? std::min(cruise * kLookAheadSeconds, distance) : Fx{};
+    const Fx reach = approaching ? std::min(cruise * kLookAheadSeconds, distance) : Fx{};
     const Fx aheadHeight = terrain.maxSurfaceHeightNear(unit.x, unit.z, reach);
     const Fx climbAhead = std::max(Fx{}, aheadHeight - unit.y);
     if (climbAhead > state.airLiftFactor && reach > Fx::fromInt(kSquareSize)) {
@@ -199,16 +202,18 @@ void integrateAir(Transform& unit, MoveState& state, const Terrain& terrain) noe
         desiredZ = desiredZ * factor * factor;
     }
 
-    // The reference slews toward the look-ahead surface plus elevation at `LiftFactor ×
-    // 0.1` per tick, half that downward — unless landing, when the descent is not eased
-    // (`C-221`, `C-222`).
+    // Outside landing, the reference slews at `LiftFactor × 0.1` per tick upward and half
+    // that downward (`C-221`). Landing uses C-222's separate category-dependent clamp.
     const Fx target = aheadHeight + elevationRef;
     const Fx slewUp = state.airLiftFactor * kAirDt;
-    const Fx slewDown = landing ? slewUp : slewUp * Fx::fromRatio(1, 2);
     if (target > state.altitudeRef) {
         state.altitudeRef = std::min(target, state.altitudeRef + slewUp);
+    } else if (landing) {
+        state.altitudeRef =
+            wingedLandingReference(state.altitudeRef, target, state.airTransportation);
     } else {
-        state.altitudeRef = std::max(target, state.altitudeRef - slewDown);
+        state.altitudeRef =
+            std::max(target, state.altitudeRef - slewUp * Fx::fromRatio(1, 2));
     }
 
     // --- the lift law and the takeoff gate (`C-245`) ---
@@ -255,6 +260,24 @@ Fx airDampingFactor(Fx kMove, Fx kMoveDamping, Fx desiredLength) noexcept {
         return kMove;
     }
     return std::min(kMove / s, kMoveDamping);
+}
+
+Fx wingedLandingElevation(Fx elevation, Fx adjustment, Fx distanceToSite) noexcept {
+    constexpr Fx kFinalApproach = Fx::fromRatio(1, 2);
+    if (distanceToSite <= kFinalApproach) {
+        return Fx{};
+    }
+    return (elevation + adjustment) * Fx::fromRatio(1, 2);
+}
+
+Fx wingedLandingReference(Fx current, Fx target, bool transportation) noexcept {
+    const Fx error = target - current;
+    if (error >= Fx{}) {
+        return target;
+    }
+    const Fx floor = transportation ? -Fx::fromInt(3) : -Fx::fromRatio(1, 4);
+    const Fx step = transportation ? error : error * Fx::fromRatio(1, 2);
+    return current + std::max(step, floor);
 }
 
 Fx wingedLift(Fx need, Fx speedRatio, Fx liftFactor, Fx heightAbove, Fx elevationRef) noexcept {

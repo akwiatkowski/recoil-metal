@@ -64,6 +64,7 @@ rm::sim::MoveState motionFor(const rm::unitdef::UnitDef& def, int armyIndex) {
         motion.airKLift = rm::sim::fxFromFloat(def.airKLift);
         motion.airKLiftDamping = rm::sim::fxFromFloat(def.airKLiftDamping);
         motion.airLiftFactor = rm::sim::fxFromFloat(def.airLiftFactor);
+        motion.airTransportation = def.hasCategory("TRANSPORTATION");
         motion.airElevation = def.elevationElmos > 0.0f
             ? rm::sim::fxFromFloat(def.elevationElmos)
             : rm::sim::kAirClearanceElmos;

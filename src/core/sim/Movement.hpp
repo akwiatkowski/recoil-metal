@@ -260,6 +260,15 @@ struct MoveState {
     /// may move forward. `kAirClearanceElmos` when the blueprint authors none.
     Fx airElevation = kAirClearanceElmos;
 
+    /// Retail `CUnitMotion+0x9c`: an extra elevation offset used by the winged lift law.
+    /// It is zero for ordinary aircraft; retail randomises it only for `POD` units, whose
+    /// staging lifecycle is outside the current simulation slice.
+    Fx airElevationAdjustment{};
+
+    /// The `TRANSPORTATION` category selects retail's faster landing-reference clamp.
+    /// Spawn-derived and immutable, like the controller gains above.
+    bool airTransportation = false;
+
     /// Fuel ratio spent per tick while climbing, cruising or descending
     /// (`1 / (FuelUseTime × 10)`, `C-223`), converted once at spawn.
     Fx fuelDrainPerTick{};
@@ -272,6 +281,17 @@ struct MoveState {
 /// the second fires on final approach, where the desired vector shrinks with the distance.
 /// (`TARGETCHASER` units return 1 in retail; none of them fly.)
 [[nodiscard]] Fx airDampingFactor(Fx kMove, Fx kMoveDamping, Fx desiredLength) noexcept;
+
+/// The two-stage landing offset (`C-222`): half the adjusted elevation while approaching
+/// the site, then the deck itself inside the final half elmo.
+[[nodiscard]] Fx wingedLandingElevation(Fx elevation, Fx adjustment,
+                                        Fx distanceToSite) noexcept;
+
+/// One landing beat of retail's altitude-reference clamp (`C-222`). Ordinary aircraft
+/// halve a small remaining error but descend by at most 0.25 elmos; transports descend by
+/// at most 3 elmos.
+[[nodiscard]] Fx wingedLandingReference(Fx current, Fx target,
+                                        bool transportation) noexcept;
 
 /// `CalcWingedLift` (`0x006c33d0`, `C-245`): the vertical velocity the lift gain acts on.
 /// `cap = (speedRatio − 0.5) × LiftFactor`. With lift available the climb need is capped by

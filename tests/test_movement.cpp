@@ -1014,6 +1014,8 @@ TEST_CASE("a mobile unit is born able to move, whichever spawn path made it",
     rm::unitdef::UnitDef bomber = tank;
     bomber.motion = rm::unitdef::MotionType::Air;
     CHECK(rm::app::motionFor(bomber, 0).airborne);
+    bomber.categories = {"TRANSPORTATION"};
+    CHECK(rm::app::motionFor(bomber, 0).airTransportation);
 }
 
 namespace {
@@ -1081,6 +1083,57 @@ TEST_CASE("the horizontal damping is KMove unless the controller is faster than 
     // The same controller nearly at rest: s floors at 1, and KMoveDamping caps the ratio.
     CHECK(rm::sim::airDampingFactor(Fx::fromInt(4), Fx::fromInt(3), Fx::fromRatio(1, 2))
           == Fx::fromInt(3));
+}
+
+TEST_CASE("winged landing keeps half elevation until the final half elmo") {
+    // `C-222`: the approach uses half of Physics.Elevation plus the mover's `+0x9c`
+    // adjustment. Crossing the exact 0.5-elmo boundary switches the target to the deck.
+    using rm::sim::Fx;
+    CHECK(rm::sim::wingedLandingElevation(Fx::fromInt(80), Fx{}, Fx::fromInt(1))
+          == Fx::fromInt(40));
+    CHECK(rm::sim::wingedLandingElevation(Fx::fromInt(80), Fx::fromInt(20),
+                                          Fx::fromInt(1)) == Fx::fromInt(50));
+    CHECK(rm::sim::wingedLandingElevation(Fx::fromInt(80), Fx{}, Fx::fromRatio(1, 2))
+          == Fx{});
+}
+
+TEST_CASE("winged landing clamps ordinary and transport descent at retail rates") {
+    // The constants are literal in CalcMoveAir: max(error * 0.5, -0.25) ordinarily,
+    // max(error, -3) for TRANSPORTATION. A short ordinary error is therefore halved.
+    using rm::sim::Fx;
+    CHECK(rm::sim::wingedLandingReference(Fx::fromInt(80), Fx::fromInt(40), false)
+          == Fx::fromRatio(319, 4));
+    const Fx near = Fx::fromRatio(201, 5);
+    CHECK(rm::sim::wingedLandingReference(near, Fx::fromInt(40), false)
+          == near + (Fx::fromInt(40) - near) * Fx::fromRatio(1, 2));
+    CHECK(rm::sim::wingedLandingReference(Fx::fromInt(80), Fx::fromInt(40), true)
+          == Fx::fromInt(77));
+    CHECK(rm::sim::wingedLandingReference(Fx::fromInt(41), Fx::fromInt(40), true)
+          == Fx::fromInt(40));
+}
+
+TEST_CASE("a landing flyer switches from half elevation to the deck at the site") {
+    const HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    std::vector<rm::sim::Transform> units{unitAt(100.0f, 100.0f)};
+    units[0].y = rm::sim::Fx::fromInt(40);
+    std::vector<MoveState> motion{flyer()};
+    motion[0].airState = MoveState::AirState::Down;
+    motion[0].moving = false;
+    motion[0].destinationX = rm::sim::Fx::fromInt(101);
+    motion[0].destinationZ = rm::sim::Fx::fromInt(100);
+    motion[0].altitudeRef = rm::sim::Fx::fromInt(40);
+    motion[0].airKMove = rm::sim::Fx{};
+    motion[0].airKLift = rm::sim::Fx{};
+
+    // One elmo out, half of the 80-elmo elevation is still the target.
+    rm::sim::tick(units, motion, terrain);
+    CHECK(motion[0].altitudeRef == rm::sim::Fx::fromInt(40));
+
+    // At the boundary the target becomes zero, and the ordinary 0.25-elmo clamp applies.
+    units[0].x = rm::sim::Fx::fromRatio(201, 2);
+    rm::sim::tick(units, motion, terrain);
+    CHECK(motion[0].altitudeRef == rm::sim::Fx::fromRatio(159, 4));
 }
 
 TEST_CASE("the lift law caps a fast climb and lifts a slow flyer to half elevation") {
