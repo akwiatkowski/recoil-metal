@@ -64,4 +64,25 @@ static_assert(sizeof(BoneTransform) == 32,
                                                 const sca::Animation& animation,
                                                 std::span<const int> boneMap, float seconds);
 
+/// How one drawn instance is placed in the world — the fields the vertex shader reads from
+/// `UnitInstanceIn` to orient a model (`shaders/Units.hpp`), and nothing it does not.
+struct InstancePlacement {
+    std::array<float, 3> position{{0.0f, 0.0f, 0.0f}};
+    float rotationX = 0.0f;  ///< pitch, radians about +X
+    float rotationY = 0.0f;  ///< yaw, radians about +Y
+    float rotationZ = 0.0f;  ///< roll, radians about +Z
+    float scale = 1.0f;      ///< mesh units to elmos
+};
+
+/// Where a posed bone's origin sits in the world for one instance.
+///
+/// The CPU twin of the shader's `unitOrient(local, inst) * scale + position`, applied to
+/// the bone's translation from `restPose` or `poseAt`: roll about Z, then pitch about X,
+/// then yaw about Y, then scale, then the instance's position. It exists so anything that
+/// must meet a drawn bone — a build beam's end, a muzzle, an aiming arm — asks the same
+/// arithmetic the picture was made with, rather than a second convention that agrees on
+/// flat ground and drifts on a slope.
+[[nodiscard]] std::array<float, 3> boneWorldPosition(const BoneTransform& bone,
+                                                     const InstancePlacement& instance) noexcept;
+
 } // namespace rm

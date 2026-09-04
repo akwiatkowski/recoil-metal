@@ -166,6 +166,20 @@ struct UnitDef {
     /// would leave a factory's roof standing complete before the work was a fifth done.
     float meshHeightElmos = 0.0f;
 
+    /// The mesh's footprint half-extents in elmos (`Physics.MeshExtentsX/Z`), the same
+    /// question as `meshHeightElmos` asked sideways: where the MODEL ends, which is where a
+    /// build beam or a construction plane meets it, as opposed to where the collision box
+    /// does. Zero when unauthored.
+    float meshExtentsXElmos = 0.0f;
+    float meshExtentsZElmos = 0.0f;
+
+    /// `General.BuildBones.BuildEffectBones`: the bones a builder's construction effect
+    /// leaves from, in the file's order — a UEF engineer names its `Turret_Muzzle`, an ACU
+    /// both arms. Names, not indices: the model resolves them (`Model::boneNamed`) at the
+    /// moment both are in hand, exactly as muzzle bones are. Empty for anything that does
+    /// not build.
+    std::vector<std::string> buildEffectBones;
+
     /// What this unit moves through. See MotionType: for the Supreme Commander
     /// family it is read from the file, for BAR it is inferred from the fields
     /// that family does state.

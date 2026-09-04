@@ -185,4 +185,30 @@ std::vector<BoneTransform> poseAt(const Model& model, const sca::Animation& anim
     return pose;
 }
 
+std::array<float, 3> boneWorldPosition(const BoneTransform& bone,
+                                       const InstancePlacement& instance) noexcept {
+    const std::array<float, 3>& local = bone.translation;
+
+    // The same three rotations in the same order as `unitOrient` in `shaders/Units.hpp`,
+    // written out rather than as a matrix so that a reader can hold the two side by side.
+    const float cosR = std::cos(instance.rotationZ);
+    const float sinR = std::sin(instance.rotationZ);
+    const std::array<float, 3> rolled{{cosR * local[0] - sinR * local[1],
+                                       sinR * local[0] + cosR * local[1], local[2]}};
+
+    const float cosP = std::cos(instance.rotationX);
+    const float sinP = std::sin(instance.rotationX);
+    const std::array<float, 3> pitched{{rolled[0], cosP * rolled[1] - sinP * rolled[2],
+                                        sinP * rolled[1] + cosP * rolled[2]}};
+
+    const float s = std::sin(instance.rotationY);
+    const float c = std::cos(instance.rotationY);
+    const std::array<float, 3> oriented{{c * pitched[0] + s * pitched[2], pitched[1],
+                                         -s * pitched[0] + c * pitched[2]}};
+
+    return {{oriented[0] * instance.scale + instance.position[0],
+             oriented[1] * instance.scale + instance.position[1],
+             oriented[2] * instance.scale + instance.position[2]}};
+}
+
 } // namespace rm

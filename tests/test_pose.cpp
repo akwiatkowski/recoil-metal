@@ -201,3 +201,55 @@ TEST_CASE("an empty or mismatched animation falls back to the rest pose") {
     const auto wrongMap = rm::poseAt(model, staticAnimation(model, 1.0f), std::vector<int>{0}, 0.5f);
     REQUIRE(wrongMap.size() == model.bones.size());
 }
+
+TEST_CASE("a bone's world position follows the shader's roll, pitch, yaw, scale, translate") {
+    // The CPU twin of `unitOrient` in `shaders/Units.hpp`. Each stage checked alone so a
+    // sign or an order error names itself, then all of them together.
+    rm::BoneTransform bone;
+    bone.translation = {{1.0f, 0.0f, 0.0f}};  // a bone one mesh unit along +X
+    constexpr float kQuarter = std::numbers::pi_v<float> / 2.0f;
+
+    // Nothing but scale and position.
+    {
+        rm::InstancePlacement inst;
+        inst.position = {{10.0f, 20.0f, 30.0f}};
+        inst.scale = 2.0f;
+        const std::array<float, 3> w = rm::boneWorldPosition(bone, inst);
+        CHECK(w[0] == Approx(12.0f));
+        CHECK(w[1] == Approx(20.0f));
+        CHECK(w[2] == Approx(30.0f));
+    }
+    // Yaw a quarter turn: the shader maps +X to -Z (`world.z = -s*x + c*z`).
+    {
+        rm::InstancePlacement inst;
+        inst.rotationY = kQuarter;
+        const std::array<float, 3> w = rm::boneWorldPosition(bone, inst);
+        CHECK(w[0] == Approx(0.0f).margin(1e-6f));
+        CHECK(w[2] == Approx(-1.0f));
+    }
+    // Roll a quarter turn: +X rises to +Y.
+    {
+        rm::InstancePlacement inst;
+        inst.rotationZ = kQuarter;
+        const std::array<float, 3> w = rm::boneWorldPosition(bone, inst);
+        CHECK(w[0] == Approx(0.0f).margin(1e-6f));
+        CHECK(w[1] == Approx(1.0f));
+    }
+    // Pitch a quarter turn acts on Y and Z, so a +X bone is untouched by it alone...
+    {
+        rm::InstancePlacement inst;
+        inst.rotationX = kQuarter;
+        const std::array<float, 3> w = rm::boneWorldPosition(bone, inst);
+        CHECK(w[0] == Approx(1.0f));
+        CHECK(w[1] == Approx(0.0f).margin(1e-6f));
+    }
+    // ...but roll first lifts it to +Y, and THEN pitch swings +Y to +Z: the order is real.
+    {
+        rm::InstancePlacement inst;
+        inst.rotationZ = kQuarter;
+        inst.rotationX = kQuarter;
+        const std::array<float, 3> w = rm::boneWorldPosition(bone, inst);
+        CHECK(w[1] == Approx(0.0f).margin(1e-6f));
+        CHECK(w[2] == Approx(1.0f));
+    }
+}

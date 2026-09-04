@@ -252,6 +252,20 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
     // `UnitDef::meshHeightElmos`. Read here because it lives under `Physics`; combined with
     // `SizeY` below, once that has been read.
     def.meshHeightElmos = numberOr(*physics, "MeshExtentsY", 0.0f) * scmap::kElmosPerOgrid;
+    def.meshExtentsXElmos = numberOr(*physics, "MeshExtentsX", 0.0f) * scmap::kElmosPerOgrid;
+    def.meshExtentsZElmos = numberOr(*physics, "MeshExtentsZ", 0.0f) * scmap::kElmosPerOgrid;
+
+    // Where a builder's construction effect leaves from. Read for every unit — 143 build, and
+    // the rest simply have no block — because the effect asks by name and a missing list is
+    // the honest answer, not a default bone.
+    if (const lua::Value* effectBones = parsed->path("General", "BuildBones", "BuildEffectBones")) {
+        def.buildEffectBones.reserve(effectBones->items.size());
+        for (const lua::Value& entry : effectBones->items) {
+            if (!entry.text.empty()) {
+                def.buildEffectBones.emplace_back(entry.text);
+            }
+        }
+    }
 
     def.skirtSquaresX = numberOr(*physics, "SkirtSizeX", 0.0f);
     def.skirtSquaresZ = numberOr(*physics, "SkirtSizeZ", 0.0f);

@@ -753,6 +753,36 @@ UnitBlueprint {
     CHECK(none->antiMissileRatePerSecond == 0.0f);
 }
 
+TEST_CASE("mesh extents and build-effect bones arrive as the file states them") {
+    // UEL0105's shape: `MeshExtentsX/Z` in ogrids become elmos like every other length, and
+    // `General.BuildBones.BuildEffectBones` keeps its names in file order for the model to
+    // resolve. A unit that does not build has no bones and no extents rather than defaults.
+    const Blueprint named{"XXB0010_unit.bp", R"(
+UnitBlueprint {
+    General = {
+        BuildBones = {
+            AimBone = 0,
+            BuildEffectBones = { 'Turret_Muzzle', 'Left_Arm' },
+        },
+    },
+    Physics = { MotionType = 'RULEUMT_Land', MeshExtentsX = 1.5, MeshExtentsY = 2, MeshExtentsZ = 0.75 },
+})"};
+    const auto def = rm::unitbp::loadFile(named.path());
+    REQUIRE(def.has_value());
+    CHECK(def->meshExtentsXElmos == Approx(12.0f));
+    CHECK(def->meshHeightElmos == Approx(16.0f));
+    CHECK(def->meshExtentsZElmos == Approx(6.0f));
+    REQUIRE(def->buildEffectBones.size() == 2);
+    CHECK(def->buildEffectBones[0] == "Turret_Muzzle");
+    CHECK(def->buildEffectBones[1] == "Left_Arm");
+
+    const Blueprint bare{"XXB0011_unit.bp", kMediumTank};
+    const auto none = rm::unitbp::loadFile(bare.path());
+    REQUIRE(none.has_value());
+    CHECK(none->meshExtentsXElmos == 0.0f);
+    CHECK(none->buildEffectBones.empty());
+}
+
 TEST_CASE("a winged mover arrives with its control block, or nothing") {
     // URA0102's `Air` table (`C-221`, `C-244`): the proportional and damping gains, the
     // climb authority, the two timers, and `Physics.Elevation` in ogrids turned into
