@@ -19,7 +19,7 @@ gets reimplemented.**
 - **Deterministic.** The sim is fixed point, proved identical at every
   optimisation level by a test. `--hash-log` writes a per-tick state hash and
   `--check-hash-log` names the tick a divergence began at.
-- **Tested.** **1360 tests, all green.** Anything that does not
+- **Tested.** **1362 tests, all green.** Anything that does not
   touch the GPU gets a failing test first, and parsers are tested against the
   real retail corpus — all 2034 BAR `.s3o` models and 2552 `.dds` textures.
 - **It plays.** Economy, construction, weapons, shields, aircraft, fog of war,
@@ -176,7 +176,7 @@ Then build and test. Catch2 is fetched by CMake at configure time:
 ```sh
 make build
 make test
-#   100% tests passed, 0 tests failed out of 1360
+#   100% tests passed, 0 tests failed out of 1362
 ```
 
 Or without the Makefile:
@@ -669,6 +669,7 @@ only appears under one cannot otherwise be captured, tested, or diffed.
 | `--vision-style <recoil\|fa>` | whether terrain blocks sight |
 | `--ai-faf` | FAF's own AI plays every army, through the sandbox |
 | `--ai-log` / `--ai-debug` / `--ai-sanity` | narrate the AI's decisions and the corpus's own `LOG` lines; the debug report; the closing census of what was built, which bindings were called, and which corpus functions ran |
+| `--log-level <trace\|debug\|info\|warn\|error\|off>` / `--log-file <f>` | filter timestamped operational diagnostics (default `info`) and optionally append the same records to a file; stderr remains enabled so failures are visible interactively |
 | `--hash-log <f>` / `--check-hash-log <f>` | write a per-tick state hash, or replay against one and name the tick a divergence began at |
 | `--command-log <f>` / `--replay-commands <f>` | record the orders given, or play them back into the same match |
 | `--print-events` | narrate the sim's own event queue |
@@ -784,7 +785,7 @@ recoil-metal/
 │   ├── render/         Metal renderer (Objective-C++ where bridging)
 │   ├── platform/       AppKit window + display link (pImpl hides ObjC)
 │   └── main.mm         thin entry point
-├── tests/              Catch2 unit tests, mirrors src/core — 1360 tests
+├── tests/              Catch2 unit tests, mirrors src/core — 1362 tests
 ├── third_party/        metal-cpp and miniz (fetched, gitignored)
 ├── vendor/ai/          foreign AI corpora at pinned commits (fetched, gitignored,
 │                       NEVER modified — `make ai`, ADR-039)

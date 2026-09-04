@@ -3,6 +3,7 @@
 #import <ImageIO/ImageIO.h>
 
 #include "core/map/MapInfo.hpp"
+#include "core/log/Log.hpp"
 #include "core/map/ProceduralField.hpp"
 #include "core/map/ScenarioSave.hpp"
 #include "core/map/Scmap.hpp"
@@ -100,9 +101,20 @@ namespace {
 
 int main(int argc, const char* argv[]) {
     @autoreleasepool {
+        const LoggingOptions logging = parseLogging(argc, argv);
+        const auto loggingReady = rm::log::configure(logging.sink);
+        for (const std::string& problem : logging.problems) {
+            rm::log::write(rm::log::Level::Warn, "cli", problem);
+        }
+        if (!loggingReady) {
+            rm::log::write(rm::log::Level::Error, "log", loggingReady.error());
+        }
+        rm::log::writef(rm::log::Level::Info, "app", "starting with %d argument(s)", argc - 1);
+
         // The content is mounted BEFORE the map, because the map's ground layers
         // and props are content too — a `.scmap` names its strata as VFS paths and
         // has always needed somewhere to look them up.
+        rm::log::write(rm::log::Level::Debug, "content", "mounting content sources");
         const rm::vfs::Vfs content = parseContent(argc, argv);
 
         // `--tick-rate N`: the sim's rate for this run, 5–50 Hz. FIRST, because a unit's speed
@@ -250,7 +262,7 @@ int main(int argc, const char* argv[]) {
         std::vector<std::string> settingsProblems;
         rm::Settings settings = rm::loadSettings(rm::settingsPath(), settingsProblems);
         for (const std::string& problem : settingsProblems) {
-            std::fprintf(stderr, "%s\n", problem.c_str());
+            rm::log::write(rm::log::Level::Warn, "settings", problem);
         }
         if (hasFlag(argc, argv, "--no-reflections")) {
             settings.reflections = false;
@@ -320,6 +332,10 @@ int main(int argc, const char* argv[]) {
 
         const ShotOptions shot = parseShot(argc, argv);
         const BenchOptions bench = parseBench(argc, argv);
+        const char* runMode = bench.enabled && bench.offscreen
+                                ? "offscreen benchmark"
+                                : shot.enabled ? "screenshot" : "windowed";
+        rm::log::writef(rm::log::Level::Info, "app", "dispatching %s mode", runMode);
 
         // --- Which way this scene reaches a screen -------------------------
         //

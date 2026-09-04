@@ -1,6 +1,7 @@
 #include "app/Content.hpp"
 
 #include "core/Error.hpp"
+#include "core/log/Log.hpp"
 
 #include <algorithm>
 #include <cstdio>
@@ -17,8 +18,8 @@ namespace rm::app {
 [[nodiscard]] std::optional<rm::HeightField> resolveSmfHeightField(const std::string& path) {
     auto field = rm::smf::loadFile(path);
     if (!field) {
-        std::fprintf(stderr, "failed to load \"%s\": %s\n",
-                     path.c_str(), field.error().message.c_str());
+        rm::log::writef(rm::log::Level::Error, "map", "failed to load \"%s\": %s",
+                        path.c_str(), field.error().message.c_str());
         return std::nullopt;
     }
 
@@ -40,8 +41,9 @@ namespace rm::app {
     if (!info) {
         // A mapinfo.lua we cannot read is worth saying out loud rather than
         // ignoring: the header values we fall back to may well be wrong.
-        std::fprintf(stderr, "  warning: could not read %s (%s); keeping header range\n",
-                     infoPath->filename().string().c_str(), info.error().message.c_str());
+        rm::log::writef(rm::log::Level::Warn, "map",
+                        "could not read %s (%s); keeping header range",
+                        infoPath->filename().string().c_str(), info.error().message.c_str());
         return std::move(*field);
     }
 
@@ -69,7 +71,8 @@ namespace rm::app {
 [[nodiscard]] std::optional<rm::TileAtlas> resolveAtlas(const std::filesystem::path& smfPath) {
     const auto index = rm::smf::loadTileIndexFile(smfPath);
     if (!index) {
-        std::fprintf(stderr, "  no tile index: %s\n", index.error().message.c_str());
+        rm::log::writef(rm::log::Level::Warn, "map", "no tile index: %s",
+                        index.error().message.c_str());
         return std::nullopt;
     }
 
@@ -85,15 +88,15 @@ namespace rm::app {
     }
 
     if (names.empty()) {
-        std::fprintf(stderr, "  map declares no tile files\n");
+        rm::log::write(rm::log::Level::Warn, "map", "map declares no tile files");
         return std::nullopt;
     }
     if (names.size() > 1) {
         // Multi-file tile sets concatenate their index spaces. Nothing here
         // stops that working, but no test covers it, so say so rather than
         // quietly rendering the first file's tiles for every index.
-        std::fprintf(stderr, "  warning: %zu tile files; only the first is loaded\n",
-                     names.size());
+        rm::log::writef(rm::log::Level::Warn, "map",
+                        "%zu tile files; only the first is loaded", names.size());
     }
 
     // Names are relative to the map file's directory (SMFGroundTextures.cpp:138-145).
@@ -102,14 +105,16 @@ namespace rm::app {
 
     const auto tiles = rm::smt::loadFile(smtPath);
     if (!tiles) {
-        std::fprintf(stderr, "  no ground texture (%s): %s\n",
-                     smtPath.filename().string().c_str(), tiles.error().message.c_str());
+        rm::log::writef(rm::log::Level::Warn, "map", "no ground texture (%s): %s",
+                        smtPath.filename().string().c_str(),
+                        tiles.error().message.c_str());
         return std::nullopt;
     }
 
     auto atlas = rm::buildTileAtlas(*index, *tiles);
     if (!atlas) {
-        std::fprintf(stderr, "  could not build atlas: %s\n", atlas.error().message.c_str());
+        rm::log::writef(rm::log::Level::Warn, "map", "could not build atlas: %s",
+                        atlas.error().message.c_str());
         return std::nullopt;
     }
 
@@ -155,8 +160,9 @@ namespace rm::app {
             if (texture) {
                 return std::move(*texture);
             }
-            std::fprintf(stderr, "  splat %s %zu (%s) will not decode: %s\n", what, slot,
-                         ref.path.c_str(), texture.error().message.c_str());
+            rm::log::writef(rm::log::Level::Warn, "map",
+                            "splat %s %zu (%s) will not decode: %s", what, slot,
+                            ref.path.c_str(), texture.error().message.c_str());
             return std::nullopt;
         }
 
@@ -167,8 +173,9 @@ namespace rm::app {
 
         auto texture = rm::dds::loadFile(root / relative);
         if (!texture) {
-            std::fprintf(stderr, "  splat %s %zu (%s) unavailable: %s\n", what, slot,
-                         ref.path.c_str(), texture.error().message.c_str());
+            rm::log::writef(rm::log::Level::Warn, "map",
+                            "splat %s %zu (%s) unavailable: %s", what, slot,
+                            ref.path.c_str(), texture.error().message.c_str());
             return std::nullopt;
         }
         return std::move(*texture);
@@ -205,8 +212,8 @@ namespace rm::app {
     const auto maskA = rm::dds::load(map.maskA);
     const auto maskB = rm::dds::load(map.maskB);
     if (!maskA || !maskB) {
-        std::fprintf(stderr, "  splat masks did not decode; falling back to terrain-type "
-                             "colouring\n");
+        rm::log::write(rm::log::Level::Warn, "map",
+                       "splat masks did not decode; falling back to terrain-type colouring");
         return std::nullopt;
     }
     splat.maskA = *maskA;
@@ -233,8 +240,8 @@ namespace rm::app {
                                                     const rm::vfs::Vfs& content) {
     auto map = rm::scmap::loadFile(path);
     if (!map) {
-        std::fprintf(stderr, "failed to load \"%s\": %s\n", path.c_str(),
-                     map.error().message.c_str());
+        rm::log::writef(rm::log::Level::Error, "map", "failed to load \"%s\": %s",
+                        path.c_str(), map.error().message.c_str());
         return std::nullopt;
     }
 
@@ -247,8 +254,8 @@ namespace rm::app {
         // Not fatal — everything drawn is read before the last two sections —
         // but it means a field width above them is wrong, and saying so is the
         // whole value of parsing them.
-        std::fprintf(stderr, "  warning: the sequential parse did not land on EOF; a "
-                             "section width is wrong\n");
+        rm::log::write(rm::log::Level::Warn, "map",
+                       "the sequential parse did not land on EOF; a section width is wrong");
     }
 
     LoadedMap loaded;
@@ -335,7 +342,8 @@ namespace rm::app {
     rm::ColourImage colours =
         rm::colourTerrainTypes(map->terrainType, map->typesX, map->typesZ);
     if (colours.empty()) {
-        std::fprintf(stderr, "  no terrain-type colouring; shading by elevation instead\n");
+        rm::log::write(rm::log::Level::Warn, "map",
+                       "no terrain-type colouring; shading by elevation instead");
     } else {
         std::printf("  ground: %d x %d terrain-type bands (%zu MiB RGBA8)\n", colours.width,
                     colours.height, colours.rgba.size() / (1024 * 1024));
@@ -353,8 +361,9 @@ namespace rm::app {
         } else {
             // Not fatal, and worth saying out loud rather than silently drawing a flat panel:
             // a map whose thumbnail will not decode is a map worth looking at.
-            std::fprintf(stderr, "  preview: not decoded (%s); the minimap stays plain\n",
-                         preview.error().message.c_str());
+            rm::log::writef(rm::log::Level::Warn, "map",
+                            "preview not decoded (%s); the minimap stays plain",
+                            preview.error().message.c_str());
         }
     }
 
@@ -395,9 +404,10 @@ namespace rm::app {
         } else {
             // Worth a word: a map whose starts fail to read still draws, but
             // its units land in a scatter and it is not obvious why.
-            std::fprintf(stderr, "  warning: could not read start positions from %s: %s\n",
-                         savePath->filename().string().c_str(),
-                         starts.error().message.c_str());
+            rm::log::writef(rm::log::Level::Warn, "map",
+                            "could not read start positions from %s: %s",
+                            savePath->filename().string().c_str(),
+                            starts.error().message.c_str());
         }
     }
 
@@ -542,8 +552,8 @@ namespace rm::app {
                 ++emitters;
             } else {
                 ++unreadable;
-                std::fprintf(stderr, "  prop %s: %s\n", blueprint.c_str(),
-                             info.error().message.c_str());
+                rm::log::writef(rm::log::Level::Warn, "props", "%s: %s",
+                                blueprint.c_str(), info.error().message.c_str());
             }
             continue;
         }
@@ -583,9 +593,9 @@ namespace rm::app {
                 return rm::scm::load(*bytes);
             }();
             if (!model) {
-                std::fprintf(stderr, "  prop mesh %s: %s\n",
-                             lod.mesh.filename().string().c_str(),
-                             model.error().message.c_str());
+                rm::log::writef(rm::log::Level::Warn, "props", "mesh %s: %s",
+                                lod.mesh.filename().string().c_str(),
+                                model.error().message.c_str());
                 break;  // and the finer levels already loaded still stand
             }
             scene.models.push_back(std::move(*model));

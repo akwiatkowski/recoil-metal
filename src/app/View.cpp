@@ -1,5 +1,7 @@
 #include "app/View.hpp"
 
+#include "core/log/Log.hpp"
+
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -98,7 +100,8 @@ void writeCsv(const std::string& path, const rm::bench::FrameRecorder& recorder)
     }
     std::ofstream out{path, std::ios::binary};
     if (!out) {
-        std::fprintf(stderr, "  could not write %s\n", path.c_str());
+        rm::log::writef(rm::log::Level::Error, "benchmark", "could not write %s",
+                        path.c_str());
         return;
     }
     out << recorder.toCsv();

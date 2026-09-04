@@ -1,5 +1,7 @@
 #include "app/Run.hpp"
 
+#include "core/log/Log.hpp"
+
 #include "core/audio/CueEvents.hpp"
 #include "core/audio/Xwb.hpp"
 #include "core/audio/Cues.hpp"
@@ -61,7 +63,8 @@
             std::printf("  wrote %s (%zu frames)\n", self.csvPath.UTF8String,
                         recorder.recorded());
         } else {
-            std::fprintf(stderr, "  could not write %s\n", self.csvPath.UTF8String);
+            rm::log::writef(rm::log::Level::Error, "benchmark", "could not write %s",
+                            self.csvPath.UTF8String);
         }
     }
 
@@ -76,7 +79,8 @@ namespace rm::app {
 /// dependency. Reports rather than throwing on failure.
 bool writePng(const std::string& path, const rm::Renderer::CapturedImage& image) {
     if (image.width <= 0 || image.height <= 0 || image.bgra.empty()) {
-        std::fprintf(stderr, "nothing to write to %s\n", path.c_str());
+        rm::log::writef(rm::log::Level::Error, "capture", "nothing to write to %s",
+                        path.c_str());
         return false;
     }
 
@@ -122,7 +126,8 @@ bool writePng(const std::string& path, const rm::Renderer::CapturedImage& image)
     if (ok) {
         std::printf("wrote %s (%dx%d)\n", path.c_str(), image.width, image.height);
     } else {
-        std::fprintf(stderr, "failed to encode %s\n", path.c_str());
+        rm::log::writef(rm::log::Level::Error, "capture", "failed to encode %s",
+                        path.c_str());
     }
     return ok;
 }

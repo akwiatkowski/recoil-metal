@@ -12,6 +12,32 @@
 
 namespace rm::app {
 
+[[nodiscard]] LoggingOptions parseLogging(int argc, const char* argv[]) {
+    LoggingOptions parsed;
+    for (int i = 1; i < argc; ++i) {
+        const std::string_view argument = argv[i];
+        if (argument == "--log-level") {
+            if (i + 1 >= argc || argv[i + 1][0] == '-') {
+                parsed.problems.emplace_back("--log-level requires a level");
+                continue;
+            }
+            const std::string_view value = argv[++i];
+            if (const std::optional<rm::log::Level> level = rm::log::parseLevel(value)) {
+                parsed.sink.level = *level;
+            } else {
+                parsed.problems.emplace_back("unknown --log-level '" + std::string{value}
+                                             + "'; keeping the current level");
+            }
+        } else if (argument == "--log-file") {
+            if (i + 1 >= argc || argv[i + 1][0] == '-') {
+                parsed.problems.emplace_back("--log-file requires a path");
+                continue;
+            }
+            parsed.sink.filePath = argv[++i];
+        }
+    }
+    return parsed;
+}
 
 [[nodiscard]] ShotOptions parseShot(int argc, const char* argv[]) {
     ShotOptions options;
@@ -64,7 +90,8 @@ namespace rm::app {
             if (i + 1 < argc && !requests.empty()) {
                 requests.back().animationPath = argv[i + 1];
             } else if (requests.empty()) {
-                std::fprintf(stderr, "--animate before any --units; ignored\n");
+                rm::log::write(rm::log::Level::Warn, "cli",
+                               "--animate before any --units; ignored");
             }
             continue;
         }
@@ -93,7 +120,8 @@ namespace rm::app {
         }
 
         if (options.modelPath.empty()) {
-            std::fprintf(stderr, "--units with no model path; ignored\n");
+            rm::log::write(rm::log::Level::Warn, "cli",
+                           "--units with no model path; ignored");
             continue;
         }
         requests.push_back(std::move(options));
@@ -151,14 +179,16 @@ namespace rm::app {
                 if (content.mountArchive(archive)) {
                     ++archives;
                 } else {
-                    std::fprintf(stderr, "failed to mount %s\n", archive.string().c_str());
+                    rm::log::writef(rm::log::Level::Error, "content", "failed to mount %s",
+                                    archive.string().c_str());
                 }
             }
         } else if (arg == "--archive") {
             if (content.mountArchive(argv[i + 1])) {
                 ++archives;
             } else {
-                std::fprintf(stderr, "failed to mount archive %s\n", argv[i + 1]);
+                rm::log::writef(rm::log::Level::Error, "content",
+                                "failed to mount archive %s", argv[i + 1]);
             }
         } else if (arg == "--data-dir") {
             content.mountDirectory(argv[i + 1]);
@@ -212,8 +242,9 @@ rm::ui::GameProfile parseGameProfile(int argc, const char* argv[]) {
         if (value == "bar") return rm::ui::GameProfile::Bar;
         if (value == "neutral") return rm::ui::GameProfile::Neutral;
         if (value == "faf") return rm::ui::GameProfile::ClassicFaf;
-        std::fprintf(stderr, "unknown --ui profile '%.*s'; using fa\n",
-                     static_cast<int>(value.size()), value.data());
+        rm::log::writef(rm::log::Level::Warn, "cli",
+                        "unknown --ui profile '%.*s'; using fa",
+                        static_cast<int>(value.size()), value.data());
         return rm::ui::GameProfile::Fa;
     }
     return rm::ui::GameProfile::Fa;
@@ -233,14 +264,16 @@ rm::ui::GameProfile parseGameProfile(int argc, const char* argv[]) {
     const std::string path = "/units/" + id + "/" + id + "_unit.bp";
     const std::optional<std::vector<std::byte>> bytes = content.read(path);
     if (!bytes) {
-        std::fprintf(stderr, "no blueprint at %s\n", path.c_str());
+        rm::log::writef(rm::log::Level::Error, "content", "no blueprint at %s",
+                        path.c_str());
         return false;
     }
     const std::string_view source{reinterpret_cast<const char*>(bytes->data()), bytes->size()};
 
     const auto def = rm::unitbp::load(source, path);
     if (!def) {
-        std::fprintf(stderr, "%s not read: %s\n", path.c_str(), def.error().message.c_str());
+        rm::log::writef(rm::log::Level::Error, "content", "%s not read: %s",
+                        path.c_str(), def.error().message.c_str());
         return false;
     }
     // The same source parsed as a plain table, for the AUTHORED figures the corrected `UnitDef`
@@ -391,10 +424,10 @@ std::vector<rm::sim::Faction> parseFactions(int argc, const char* argv[]) {
                     // Reported and skipped rather than aborting — the --vision-style manner.
                     // Skipped rather than defaulted, because seating the wrong faction is a
                     // worse answer than seating one fewer.
-                    std::fprintf(stderr,
-                                 "--factions: unknown faction \"%s\"; expected uef, aeon,"
-                                 " cybran or seraphim\n",
-                                 name.c_str());
+                    rm::log::writef(rm::log::Level::Warn, "cli",
+                                    "--factions: unknown faction \"%s\"; expected uef, aeon,"
+                                    " cybran or seraphim",
+                                    name.c_str());
                 }
             }
             from = comma + 1;
@@ -416,9 +449,10 @@ rm::sim::VisionStyle parseVisionStyle(int argc, const char* argv[]) {
         if (value == "recoil") {
             return rm::sim::VisionStyle::Recoil;
         }
-        std::fprintf(stderr, "--vision-style: unknown value \"%s\"; using fa."
-                             " Expected fa or recoil.\n",
-                     value.c_str());
+        rm::log::writef(rm::log::Level::Warn, "cli",
+                        "--vision-style: unknown value \"%s\"; using fa."
+                        " Expected fa or recoil.",
+                        value.c_str());
         break;
     }
     return rm::sim::VisionStyle::ForgedAlliance;

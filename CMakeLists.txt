@@ -119,6 +119,7 @@ target_include_directories(miniz_impl PUBLIC ${CMAKE_SOURCE_DIR}/third_party/min
 # --- rm_core: pure C++, no Metal, no AppKit --------------------------------
 # Everything in here is unit-testable on any machine, even one without a GPU.
 add_library(rm_core STATIC
+    src/core/log/Log.cpp
     src/core/map/HeightField.cpp
     src/core/map/MaxHeightPyramid.cpp
     src/core/map/MapInfo.cpp
@@ -301,6 +302,7 @@ if(BUILD_TESTING)
         tests/test_smt.cpp
         tests/test_tile_atlas.cpp
         tests/test_frame_stats.cpp
+        tests/test_log.cpp
         tests/test_s3o.cpp
         tests/test_real_model.cpp
         tests/test_real_scm.cpp

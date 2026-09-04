@@ -74,6 +74,23 @@ TEST_CASE("a flag is found wherever it is, and only when it is there") {
     CHECK_FALSE(rm::app::hasFlag(similar.argc(), similar.argv(), "--props"));
 }
 
+TEST_CASE("logging flags select a level and optional file without swallowing flags") {
+    Args configured{{"--log-level", "debug", "--log-file", "/tmp/recoil-metal.log"}};
+    const rm::app::LoggingOptions logging =
+        rm::app::parseLogging(configured.argc(), configured.argv());
+    CHECK(logging.sink.level == rm::log::Level::Debug);
+    CHECK(logging.sink.filePath == "/tmp/recoil-metal.log");
+    CHECK(logging.problems.empty());
+
+    Args invalid{{"--log-level", "verbose", "--log-file", "--skirmish"}};
+    const rm::app::LoggingOptions refused =
+        rm::app::parseLogging(invalid.argc(), invalid.argv());
+    CHECK(refused.sink.level == rm::log::Level::Info);
+    REQUIRE(refused.problems.size() == 2);
+    CHECK(refused.problems[0].find("verbose") != std::string::npos);
+    CHECK(refused.problems[1].find("--log-file") != std::string::npos);
+}
+
 TEST_CASE("a count is the value after its flag, and zero when there is none") {
     Args armies{{"--armies", "4"}};
     CHECK(rm::app::parseCount(armies.argc(), armies.argv(), "--armies") == 4);

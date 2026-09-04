@@ -23,6 +23,7 @@
 #include "core/map/Smt.hpp"
 #include "core/map/TerrainType.hpp"
 #include "core/map/TileAtlas.hpp"
+#include "core/log/Log.hpp"
 #include "core/mesh/TerrainMesh.hpp"
 #include "core/model/Model.hpp"
 #include "core/model/Pose.hpp"
@@ -206,8 +207,9 @@ public:
             // Not fatal: the shader has a defined fallback for each slot, and
             // half a model's shading beats no model. Remembered as -1 so a
             // second model naming the same missing file does not retry it.
-            std::fprintf(stderr, "  no %s texture (%s): %s\n", slot,
-                         path.filename().string().c_str(), texture.error().message.c_str());
+            rm::log::writef(rm::log::Level::Warn, "texture", "no %s texture (%s): %s",
+                            slot, path.filename().string().c_str(),
+                            texture.error().message.c_str());
             indexByPath_.emplace(key, -1);
             return -1;
         }
@@ -239,16 +241,17 @@ public:
 
         const auto bytes = content.read(vfsPath);
         if (!bytes) {
-            std::fprintf(stderr, "  no %s texture (%s): not in the mounted content\n", slot,
-                         vfsPath.c_str());
+            rm::log::writef(rm::log::Level::Warn, "texture",
+                            "no %s texture (%s): not in the mounted content", slot,
+                            vfsPath.c_str());
             indexByPath_.emplace(vfsPath, -1);
             return -1;
         }
 
         auto texture = rm::dds::load(*bytes);
         if (!texture) {
-            std::fprintf(stderr, "  no %s texture (%s): %s\n", slot, vfsPath.c_str(),
-                         texture.error().message.c_str());
+            rm::log::writef(rm::log::Level::Warn, "texture", "no %s texture (%s): %s",
+                            slot, vfsPath.c_str(), texture.error().message.c_str());
             indexByPath_.emplace(vfsPath, -1);
             return -1;
         }

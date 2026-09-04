@@ -2,6 +2,8 @@
 
 #include "platform/Audio.hpp"
 
+#include "core/log/Log.hpp"
+
 #include "core/audio/Mixer.hpp"
 
 #include <cstdio>
@@ -63,17 +65,18 @@ bool Output::start(Mixer& mixer) {
 
             NSError* error = nil;
             if (![impl_->engine startAndReturnError:&error]) {
-                std::fprintf(stderr,
-                             "audio: device declined (%s) — the match plays silent\n",
-                             error != nil ? error.localizedDescription.UTF8String : "?");
+                rm::log::writef(rm::log::Level::Warn, "audio",
+                                "device declined (%s) — the match plays silent",
+                                error != nil ? error.localizedDescription.UTF8String : "?");
                 impl_->engine = nil;
                 impl_->source = nil;
                 return false;
             }
             return true;
         } @catch (NSException* exception) {
-            std::fprintf(stderr, "audio: engine threw (%s) — the match plays silent\n",
-                         exception.reason != nil ? exception.reason.UTF8String : "?");
+            rm::log::writef(rm::log::Level::Error, "audio",
+                            "engine threw (%s) — the match plays silent",
+                            exception.reason != nil ? exception.reason.UTF8String : "?");
             impl_->engine = nil;
             impl_->source = nil;
             return false;

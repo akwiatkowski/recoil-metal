@@ -21,6 +21,7 @@
 
 #import <CoreText/CoreText.h>
 
+#include "core/log/Log.hpp"
 #include "render/RendererInternal.hpp"
 
 #include "core/Error.hpp"
@@ -63,8 +64,9 @@ void Renderer::buildFontAtlas(FontSlot& slot, const char* familyName, float poin
     if (font == nullptr) {
         // Not fatal: `ui::build` degrades whatever this face was for. Reported, because a
         // missing face is otherwise indistinguishable from an interface with nothing to say.
-        std::fprintf(stderr, "no HUD font \"%s\"; that part of the interface will not draw\n",
-                     familyName);
+        rm::log::writef(rm::log::Level::Warn, "hud",
+                        "no font \"%s\"; that part of the interface will not draw",
+                        familyName);
         return;
     }
 
@@ -84,7 +86,8 @@ void Renderer::buildFontAtlas(FontSlot& slot, const char* familyName, float poin
                                       static_cast<CFIndex>(text::kGlyphCount))) {
         // Partial coverage is still usable — appendText drops what it has no glyph for — so
         // this is a warning rather than a bail.
-        std::fprintf(stderr, "the HUD font does not cover all of printable ASCII\n");
+        rm::log::write(rm::log::Level::Warn, "hud",
+                       "font does not cover all of printable ASCII");
     }
 
     std::array<CGRect, text::kGlyphCount> bounds{};
@@ -132,7 +135,7 @@ void Renderer::buildFontAtlas(FontSlot& slot, const char* familyName, float poin
     CGColorSpaceRelease(grey);
     if (ctx == nullptr) {
         CFRelease(font);
-        std::fprintf(stderr, "could not rasterise the HUD font\n");
+        rm::log::write(rm::log::Level::Error, "hud", "could not rasterise the font");
         return;
     }
     CGContextSetGrayFillColor(ctx, 1.0, 1.0);
@@ -198,7 +201,8 @@ void Renderer::buildFontAtlas(FontSlot& slot, const char* familyName, float poin
     slot.atlas = device_->newTexture(descriptor);
     if (slot.atlas == nullptr) {
         slot.glyphs.clear();
-        std::fprintf(stderr, "could not upload the atlas for \"%s\"\n", familyName);
+        rm::log::writef(rm::log::Level::Error, "hud", "could not upload atlas for \"%s\"",
+                        familyName);
         return;
     }
 
@@ -291,10 +295,11 @@ void Renderer::setHud(const ui::Geometry& geometry) noexcept {
         for (std::size_t index = 0; index < ui::kUiLayerCount; ++index) {
             const ui::UiLayerUsage& usage = uiCapacityReport_.layers[index];
             if (usage.dropped() > 0) {
-                std::fprintf(stderr, "HUD %.*s layer dropped %zu of %zu vertices\n",
-                             static_cast<int>(ui::uiLayerName(static_cast<ui::UiLayer>(index)).size()),
-                             ui::uiLayerName(static_cast<ui::UiLayer>(index)).data(),
-                             usage.dropped(), usage.submitted);
+                rm::log::writef(
+                    rm::log::Level::Error, "hud", "%.*s layer dropped %zu of %zu vertices",
+                    static_cast<int>(ui::uiLayerName(static_cast<ui::UiLayer>(index)).size()),
+                    ui::uiLayerName(static_cast<ui::UiLayer>(index)).data(), usage.dropped(),
+                    usage.submitted);
             }
         }
         uiOverflowWarned_ = true;

@@ -2521,3 +2521,30 @@ reservation, whereas retail reserves after `Unit::CanBuild` and lets `CFactoryBu
 placement. A blocked pad therefore leaves Recoil's guardee command untouched for a later scan;
 retail has already consumed it into a retrying child task. Matching that timing requires child
 task state rather than a guessed destructive fallback.
+
+---
+
+## ADR-071 — Operational diagnostics use one dependency-free process logger
+
+**Context.** Runtime failures were printed directly from 51 call sites, without timestamps,
+severity, consistent categories, or a way to retain them. The status text consumed by benchmark
+and verification tools is separate stdout output and must remain stable.
+
+**Decision.** Operational diagnostics route through one thread-safe C++ logger with UTC
+millisecond timestamps, `trace` through `error` filtering, a short category, stderr output, and an
+optional append-mode file sink. `--log-level` and `--log-file` configure it before content is
+mounted. Each record is flushed immediately so the useful tail survives a crash. The logger uses
+only the standard library and keeps the existing printf-style formatter so migrating diagnostics
+does not add a formatting dependency or rebuild messages by hand.
+
+**Alternatives considered.** A third-party logging package was rejected because the required
+surface is small and does not justify another fetched dependency. Apple unified logging alone was
+rejected because the core and planned Linux build are portable C++, and file logs must behave the
+same in headless runs. Redirecting stdout was rejected because it would mix machine-readable
+benchmark and hash reports with operational records.
+
+**Consequences.** All runtime stderr diagnostics now share a searchable record shape and can be
+retained with `--log-file`; normal status and benchmark stdout remain unchanged. The sink uses one
+mutex and flushes each record, intentionally favoring reliable debug evidence over throughput.
+Per-thread queues or rotation belong only after profiling or long-running deployment demonstrates
+a need.

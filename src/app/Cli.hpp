@@ -14,6 +14,7 @@
 
 #include "app/SceneBuild.hpp"
 
+#include "core/log/Log.hpp"
 #include "core/sim/Intel.hpp"
 #include "core/ui/GameProfile.hpp"
 
@@ -94,6 +95,11 @@ struct MarchOptions {
     bool aiSanity = false;
 };
 
+struct LoggingOptions {
+    rm::log::Options sink;
+    std::vector<std::string> problems;
+};
+
 // --- The parsers ---------------------------------------------------------------------------
 
 [[nodiscard]] ShotOptions parseShot(int argc, const char* argv[]);
@@ -102,6 +108,10 @@ struct MarchOptions {
 [[nodiscard]] rm::vfs::Vfs parseContent(int argc, const char* argv[]);
 [[nodiscard]] float parseAnimationTime(int argc, const char* argv[]);
 [[nodiscard]] MarchOptions parseMarch(int argc, const char* argv[]);
+
+/// `--log-level trace|debug|info|warn|error|off` and `--log-file <path>`.
+/// Invalid or missing values retain safe defaults and are returned as reportable problems.
+[[nodiscard]] LoggingOptions parseLogging(int argc, const char* argv[]);
 
 /// `--ui-scale N`: the requested multiplier relative to automatic HUD size.
 ///

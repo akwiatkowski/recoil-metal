@@ -2,6 +2,7 @@
 
 #include "core/data/ArmorDefs.hpp"
 #include "core/data/MoveDef.hpp"
+#include "core/log/Log.hpp"
 #include "core/model/Scm.hpp"
 #include "core/model/Sca.hpp"
 #include "core/unit/BarNames.hpp"
@@ -123,8 +124,10 @@ void resolveMuzzleBones(rm::unitdef::UnitDef& def, const rm::Model& model) {
     if (path.extension() == ".bp") {
         const auto def = rm::unitbp::loadFile(path);
         if (!def) {
-            std::fprintf(stderr, "unit blueprint \"%s\" not read: %s\n",
-                         path.filename().string().c_str(), def.error().message.c_str());
+            rm::log::writef(rm::log::Level::Error, "unit",
+                            "blueprint \"%s\" not read: %s",
+                            path.filename().string().c_str(),
+                            def.error().message.c_str());
             return std::nullopt;
         }
 
@@ -133,9 +136,10 @@ void resolveMuzzleBones(rm::unitdef::UnitDef& def, const rm::Model& model) {
         const std::filesystem::path root = path.parent_path().parent_path().parent_path();
         modelOut = rm::unitbp::resolveMesh(*def, path, root);
         if (modelOut.empty()) {
-            std::fprintf(stderr,
-                         "unit \"%s\" has no mesh beside it%s\n", def->name.c_str(),
-                         def->modelPath.empty() ? "" : " and its MeshName did not resolve");
+            rm::log::writef(rm::log::Level::Error, "unit",
+                            "\"%s\" has no mesh beside it%s", def->name.c_str(),
+                            def->modelPath.empty() ? ""
+                                                   : " and its MeshName did not resolve");
             return std::nullopt;
         }
 
@@ -156,8 +160,8 @@ void resolveMuzzleBones(rm::unitdef::UnitDef& def, const rm::Model& model) {
 
     auto def = rm::unitdef::loadFile(path);
     if (!def) {
-        std::fprintf(stderr, "unit definition \"%s\" not read: %s\n",
-                     path.filename().string().c_str(), def.error().message.c_str());
+        rm::log::writef(rm::log::Level::Error, "unit", "definition \"%s\" not read: %s",
+                        path.filename().string().c_str(), def.error().message.c_str());
         return std::nullopt;
     }
 
@@ -203,9 +207,9 @@ void resolveMuzzleBones(rm::unitdef::UnitDef& def, const rm::Model& model) {
     }
 
     if (modelOut.empty()) {
-        std::fprintf(stderr, "unit \"%s\" names model \"%s\", which was not found"
-                             " (try --data-dir)\n",
-                     def->name.c_str(), def->modelPath.c_str());
+        rm::log::writef(rm::log::Level::Error, "unit",
+                        "\"%s\" names model \"%s\", which was not found (try --data-dir)",
+                        def->name.c_str(), def->modelPath.c_str());
         return std::nullopt;
     }
 
@@ -271,8 +275,8 @@ void resolveMuzzleBones(rm::unitdef::UnitDef& def, const rm::Model& model) {
     const std::string text{reinterpret_cast<const char*>(source->data()), source->size()};
     auto def = rm::unitbp::load(text, blueprintPath);
     if (!def) {
-        std::fprintf(stderr, "unit blueprint \"%s\" not read: %s\n", blueprintPath.c_str(),
-                     def.error().message.c_str());
+        rm::log::writef(rm::log::Level::Error, "unit", "blueprint \"%s\" not read: %s",
+                        blueprintPath.c_str(), def.error().message.c_str());
         return std::nullopt;
     }
 
@@ -289,8 +293,8 @@ void resolveMuzzleBones(rm::unitdef::UnitDef& def, const rm::Model& model) {
 
     const std::string meshPath = rm::unitbp::resolveMeshInVfs(*def, blueprintPath, content);
     if (meshPath.empty()) {
-        std::fprintf(stderr, "unit \"%s\" has no mesh in the mounted content\n",
-                     def->name.c_str());
+        rm::log::writef(rm::log::Level::Error, "unit",
+                        "\"%s\" has no mesh in the mounted content", def->name.c_str());
         return std::nullopt;
     }
 
@@ -300,8 +304,8 @@ void resolveMuzzleBones(rm::unitdef::UnitDef& def, const rm::Model& model) {
     }
     auto model = loadModelBytes(*meshBytes);
     if (!model) {
-        std::fprintf(stderr, "failed to load mesh \"%s\": %s\n", meshPath.c_str(),
-                     model.error().message.c_str());
+        rm::log::writef(rm::log::Level::Error, "unit", "failed to load mesh \"%s\": %s",
+                        meshPath.c_str(), model.error().message.c_str());
         return std::nullopt;
     }
 
@@ -360,7 +364,8 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
                      const rm::vfs::Vfs& content, bool observer,
                      std::span<const rm::sim::Faction> factions) {
     if (starts.empty()) {
-        std::fprintf(stderr, "skirmish: the map declares no start positions\n");
+        rm::log::write(rm::log::Level::Error, "skirmish",
+                       "the map declares no start positions");
         return;
     }
 
@@ -443,8 +448,8 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
         if (existing == batchForFaction.end()) {
             const auto unit = resolveUnitFromContent(path, content);
             if (!unit) {
-                std::fprintf(stderr, "skirmish: no commander for %s\n",
-                             std::string{rm::sim::factionName(army.faction)}.c_str());
+                rm::log::writef(rm::log::Level::Error, "skirmish", "no commander for %s",
+                                std::string{rm::sim::factionName(army.faction)}.c_str());
                 continue;
             }
 
@@ -604,8 +609,9 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
     if (found == scene.typeForBlueprint.end()) {
         const auto unit = resolveUnitFromContent(std::string{blueprintPath}, content);
         if (!unit) {
-            std::fprintf(stderr, "spawn: no unit at %s in the mounted content\n",
-                         std::string{blueprintPath}.c_str());
+            rm::log::writef(rm::log::Level::Error, "spawn",
+                            "no unit at %s in the mounted content",
+                            std::string{blueprintPath}.c_str());
             return std::nullopt;
         }
 
@@ -805,8 +811,9 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
 
     const auto bytes = content.read(std::string{blueprintPath});
     if (!bytes) {
-        std::fprintf(stderr, "economy: no blueprint at %s in the mounted content\n",
-                     std::string{blueprintPath}.c_str());
+        rm::log::writef(rm::log::Level::Error, "economy",
+                        "no blueprint at %s in the mounted content",
+                        std::string{blueprintPath}.c_str());
         return std::nullopt;
     }
     auto def = rm::unitbp::load(
@@ -1134,8 +1141,9 @@ void orderFirstExtractors(UnitScene& scene, std::span<const rm::scenario::Marker
 
             model = loadModel(modelPath);
             if (!model) {
-                std::fprintf(stderr, "failed to load model \"%s\": %s\n",
-                             modelPath.string().c_str(), model.error().message.c_str());
+                rm::log::writef(rm::log::Level::Error, "unit",
+                                "failed to load model \"%s\": %s",
+                                modelPath.string().c_str(), model.error().message.c_str());
                 continue;  // one bad model should not cost the whole scene
             }
         }
@@ -1155,9 +1163,9 @@ void orderFirstExtractors(UnitScene& scene, std::span<const rm::scenario::Marker
         if (!request.animationPath.empty()) {
             auto loaded = rm::sca::loadFile(request.animationPath);
             if (!loaded) {
-                std::fprintf(stderr, "  no animation (%s): %s\n",
-                             request.animationPath.filename().string().c_str(),
-                             loaded.error().message.c_str());
+                rm::log::writef(rm::log::Level::Warn, "animation", "no animation (%s): %s",
+                                request.animationPath.filename().string().c_str(),
+                                loaded.error().message.c_str());
             } else {
                 const auto map = rm::mapBonesToAnimation(*model, *loaded);
                 const auto driven = static_cast<std::size_t>(
