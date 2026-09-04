@@ -9,7 +9,10 @@ Detailed retail evidence remains canonical in
 [`fa-exe-analysis-plan.md`](fa-exe-analysis-plan.md). This dashboard summarizes that ledger; it
 does not replace its claims, addresses, counterevidence, or confirmation gate.
 
-**Snapshot:** 2026-09-04, dirty Recoil Metal worktree through the `WP-22` controller read —
+**Snapshot:** 2026-09-04, Recoil Metal main through the `WP-22` controller read and six
+follow-ups (parked flyers recharge, the look-ahead max pyramid, attached children take their
+carrier's tilt, mesh extents and build-effect bones parsed with a bone-to-world helper, the
+factory production panel in the deck's command rectangle, README counts at 1356) —
 `ComputeAirControl`, `CalcWingedLift`, the damping factor and the terrain look-ahead read and
 implemented (`C-244`–`C-246`): authored `KMove`/`KLift` gains with their damping terms, the
 vertical lift-off to half elevation that replaces the invented runway roll, the pyramid look-ahead
