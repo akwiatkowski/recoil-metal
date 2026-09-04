@@ -298,6 +298,36 @@ TEST_CASE("a unit store snapshot restores live units, tombstones, and allocator 
     REQUIRE(originalNext[1].index == olderDead.index);
 }
 
+TEST_CASE("an attached child takes its carrier's tilt as well as its position") {
+    // The movement tick skips attached units, so propagation is the only pass that ever
+    // touches them: after it a child must sit where the carrier is, at its captured offset,
+    // AND leaning as the carrier leans — a passenger picked up on a slope does not keep the
+    // slope's pitch on a level deck. Heading is deliberately the child's own.
+    UnitStore store;
+    const UnitId parent = store.spawn(tankAt(10.0f, 20.0f, 0));
+    const UnitId child = store.spawn(tankAt(14.0f, 22.0f, 0));
+    store.transforms()[child.index].pitch = rm::Brad{700};
+    store.transforms()[child.index].roll = rm::Brad{300};
+    store.transforms()[child.index].heading = rm::Brad{4000};
+    REQUIRE(store.attach(parent, child));
+
+    rm::sim::Transform& carrier = store.transforms()[parent.index];
+    carrier.x = rm::sim::Fx::fromInt(100);
+    carrier.z = rm::sim::Fx::fromInt(200);
+    carrier.y = rm::sim::Fx::fromInt(30);
+    carrier.pitch = rm::Brad{1200};
+    carrier.roll = rm::Brad{800};
+    store.propagateAttachments();
+
+    const rm::sim::Transform& rider = store.transforms()[child.index];
+    CHECK(rider.x == rm::sim::Fx::fromInt(104));
+    CHECK(rider.z == rm::sim::Fx::fromInt(202));
+    CHECK(rider.y == rm::sim::Fx::fromInt(30) + store.attachmentHeightOf(child));
+    CHECK(rider.pitch == rm::Brad{1200});
+    CHECK(rider.roll == rm::Brad{800});
+    CHECK(rider.heading == rm::Brad{4000});
+}
+
 TEST_CASE("attachments keep one parent per child and reject duplicate or cyclic links") {
     UnitStore store;
     const UnitId parent = store.spawn(tankAt(1.0f, 0.0f, 0));

@@ -213,6 +213,13 @@ void UnitStore::propagateAttachments() {
             transforms_[child.index].x = transforms_[parent.index].x + attachmentOffsets_[child.index][0];
             transforms_[child.index].y = transforms_[parent.index].y + attachmentHeights_[child.index];
             transforms_[child.index].z = transforms_[parent.index].z + attachmentOffsets_[child.index][1];
+            // An attached unit rides its carrier: the movement tick skips it, so nothing else
+            // ever refreshes its tilt, and a child left with the pitch and roll of the slope
+            // it was picked up from would sit askew on a level deck. It takes the carrier's,
+            // exactly as a bone-mounted passenger would (`C-196`). Heading stays its own —
+            // the captured offsets are world-axis, and turning them is transport scope.
+            transforms_[child.index].pitch = transforms_[parent.index].pitch;
+            transforms_[child.index].roll = transforms_[parent.index].roll;
             updateChildren(child);
         }
     };
