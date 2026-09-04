@@ -581,6 +581,12 @@ TEST_CASE("game-interface themes do not leak classic skin or faction state", "[u
     CHECK_FALSE(fa.skin.active);
 
     const rm::ui::Theme bar = rm::app::hudThemeFor(scene, rm::ui::GameProfile::Bar, packedSkin);
-    CHECK(bar.edge == rm::ui::neutralTheme().edge);
+    CHECK(bar.edge == rm::ui::barTheme().edge);
+    CHECK(bar.edge != rm::ui::neutralTheme().edge);
     CHECK_FALSE(bar.skin.active);
+
+    const rm::ui::Theme neutral =
+        rm::app::hudThemeFor(scene, rm::ui::GameProfile::Neutral, packedSkin);
+    CHECK(neutral.edge == rm::ui::neutralTheme().edge);
+    CHECK_FALSE(neutral.skin.active);
 }

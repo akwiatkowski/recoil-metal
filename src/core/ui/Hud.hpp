@@ -89,6 +89,9 @@ struct Theme {
 /// The livery for an interface belonging to nobody — a scene with no armies.
 [[nodiscard]] Theme neutralTheme() noexcept;
 
+/// Deterministic BAR-family fallback until content-specific faction accents are ingested.
+[[nodiscard]] Theme barTheme() noexcept;
+
 /// A colour at a different opacity. Used constantly — a bar's track is its own fill at a
 /// tenth — and worth naming so the intent reads as "the same colour, quieter".
 [[nodiscard]] constexpr Colour fade(Colour colour, float alpha) noexcept {

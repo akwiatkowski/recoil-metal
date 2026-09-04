@@ -5,6 +5,7 @@
 
 #include <array>
 #include <cstddef>
+#include <optional>
 #include <span>
 
 namespace rm::ui {
@@ -52,6 +53,16 @@ struct MinimapLayout {
 /// smaller, so a wide monitor does not stretch it.
 [[nodiscard]] MinimapLayout minimapLayout(const FrameLayout& frame) noexcept;
 
+/// The one aspect-preserving map projection shared by art, fog, pips, input, and footprint.
+struct MinimapProjection {
+    Rect content;
+    float pointsPerElmo = 0.0f;
+};
+
+[[nodiscard]] MinimapProjection minimapProjection(const MinimapLayout& layout,
+                                                   float mapWidthElmos,
+                                                   float mapDepthElmos) noexcept;
+
 /// A world position in elmos, projected into the minimap panel.
 ///
 /// LETTERBOXED: a non-square map keeps its aspect ratio and is centred in the square, so a unit
@@ -69,11 +80,10 @@ struct MinimapLayout {
 /// wrong place and a click that goes to the wrong place are the same bug, and it is invisible in
 /// a screenshot: everything looks plausible.
 ///
-/// A point outside the projected area still returns a world position; it is clamped to the map,
-/// because a click one authored point off a letterboxed map obviously means the edge.
-[[nodiscard]] std::array<float, 2> minimapToWorld(const MinimapLayout& layout,
-                                                 float mapWidthElmos, float mapDepthElmos,
-                                                 float pointX, float pointY) noexcept;
+/// A point in the fixed panel's letterbox is not a point on the map and therefore misses.
+[[nodiscard]] std::optional<std::array<float, 2>>
+minimapToWorld(const MinimapLayout& layout, float mapWidthElmos, float mapDepthElmos,
+               float pointX, float pointY) noexcept;
 
 /// Whether an authored HUD point is on the panel at all.
 [[nodiscard]] bool insideMinimap(const MinimapLayout& layout, float pointX,

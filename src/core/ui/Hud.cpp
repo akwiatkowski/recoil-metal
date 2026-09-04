@@ -62,6 +62,12 @@ Theme neutralTheme() noexcept {
     return themeFrom(Colour{{0.412f, 0.812f, 0.902f, 1.0f}});  // #69CFE6
 }
 
+Theme barTheme() noexcept {
+    // Warm field acrylic rather than observer cyan. Semantic resource and warning colours stay
+    // unchanged, so this is unmistakably chrome rather than another economy signal.
+    return themeFrom(Colour{{0.718f, 0.608f, 0.447f, 1.0f}});  // #B79B72
+}
+
 std::vector<std::string> wrapToWidth(std::span<const text::Glyph> glyphs, std::string_view text,
                                      float maxWidth, std::size_t maxLines, float scale) {
     std::vector<std::string> lines;
@@ -218,13 +224,7 @@ bool Gauge::wasting() const noexcept {
 }
 
 ResourceViews resourceViews(GameProfile profile, Gauge primary, Gauge energy) noexcept {
-    std::string_view primaryName = "MASS";
-    if (profile == GameProfile::Bar) {
-        primaryName = "METAL";
-    } else if (profile == GameProfile::Neutral) {
-        primaryName = "MATERIAL";
-    }
-    return {{{.name = primaryName, .gauge = primary, .tint = kMass},
+    return {{{.name = gameProfile(profile).primaryResource, .gauge = primary, .tint = kMass},
              {.name = "ENERGY", .gauge = energy, .tint = kEnergy}}};
 }
 

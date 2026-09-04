@@ -9,14 +9,16 @@ Detailed retail evidence remains canonical in
 [`fa-exe-analysis-plan.md`](fa-exe-analysis-plan.md). This dashboard summarizes that ledger; it
 does not replace its claims, addresses, counterevidence, or confirmation gate.
 
-**Snapshot:** 2026-09-04, Recoil Metal main through HUD slice 3 — the measured interface
+**Snapshot:** 2026-09-04, Recoil Metal main through HUD slice 4 — the measured interface
 baseline (`docs/hud-baseline.md`, `tools/hud_baseline.sh`, `--backing`, `--bench-hud`,
 `--bench-size`) — after the `WP-22` controller read and six follow-ups (parked flyers recharge, the look-ahead max pyramid, attached children take their
 carrier's tilt, mesh extents and build-effect bones parsed with a bone-to-world helper, the
 factory production panel in the deck's command rectangle, UEF construction beams from authored
 builder bones to descending build-cube edges, structured runtime logging, a bounded fixed
-inspector with paged selection/build instruments and a dispatching 4x3 command rack, the exact retail
-mobile-builder approach-to-range gate, per-instance builder torso/arm/tool aiming from authored
+inspector with paged selection/build instruments and a dispatching 4x3 command rack,
+resource/game-profile descriptors plus one aspect-preserving minimap projection for preview, fog,
+pips, input, and true-line camera footprint, explicit BAR and neutral vocabulary/material fallbacks,
+the exact retail mobile-builder approach-to-range gate, per-instance builder torso/arm/tool aiming from authored
 bone rigs, and README counts at 1372) —
 `ComputeAirControl`, `CalcWingedLift`, the damping factor and the terrain look-ahead read and
 implemented (`C-244`–`C-246`): authored `KMove`/`KLift` gains with their damping terms, the
@@ -461,6 +463,14 @@ command positions stable, visibly disables unsupported capabilities, swallows it
 and dispatches Stop, movement, attack, patrol, assist, repair, reclaim, and overcharge through the
 same semantic command path as keyboard/context orders.
 
+HUD slice 4 makes the four concrete game profiles the authority for resource vocabulary and
+ownership: FA/classic say Mass and take the player's faction livery, BAR says Metal and uses a
+deterministic warm field-acrylic fallback, and neutral says Material with no faction ownership.
+The minimap exposes one content rectangle and scale; preview, fog, pips, click/drag input, and the
+camera footprint use it. Rectangular maps letterbox, clicks in the bars miss, and footprint edges
+are rotated quads rather than axis-aligned bounding slivers. X1CA_003 (2048x1024) was captured both
+whole-map and close-camera to verify the 2:1 content rectangle and true-line footprint.
+
 The native HUD also has a measured baseline (HUD slice 0, `docs/hud-baseline.md`,
 `tools/hud_baseline.sh`): seven interface states — default, commander, mixed selection,
 engineer, placement, observer, FAF chrome — at 1280x720 and 1600x900 at 1x and at the 14-inch
@@ -478,9 +488,9 @@ strategic-icon fallback decisions identical.
 command pages, overlays, key contexts, or split views (`WP-40`).
 
 ```text
-/goal Advance FA-UI with HUD slice 4 (recoil-metal-3757): finish concrete FA/BAR/Neutral/Classic
-resource and command descriptors, give preview/fog/pips/clicks/footprint one rectangular-map
-projection, and capture FA, BAR, and observer scenes.
+/goal Advance FA-UI with HUD slice 5 (recoil-metal-3735): add one shared quarter-resolution Metal
+Performance Shaders backdrop blur with Full, Reduced, and Off paths, preserving an actually free
+Off path and measuring Full against it.
 ```
 
 ### FA-PRESENT - Animation, Effects, And Audio

@@ -379,12 +379,14 @@ void composeHeadlessInterface(rm::Renderer& renderer, const Session& session,
             appendMinimapPips(pips, units);
             appendViewFootprint(view, renderer.camera(), map->field, shotViewport);
             const rm::ui::MinimapLayout shotMinimap = rm::ui::minimapLayout(shotFrame);
+            const rm::ui::MinimapProjection shotMinimapProjection =
+                rm::ui::minimapProjection(shotMinimap, map->field.widthElmos(),
+                                           map->field.depthElmos());
             const bool shotPreview = map->preview.width > 0;
             if (shotPreview) {
-                renderer.setMinimapRect(shotMinimap.x + shotMinimap.inset,
-                                        shotMinimap.y + shotMinimap.inset,
-                                        shotMinimap.size - shotMinimap.inset * 2.0f,
-                                        shotMinimap.size - shotMinimap.inset * 2.0f);
+                const rm::ui::Rect& contentRect = shotMinimapProjection.content;
+                renderer.setMinimapRect(contentRect.x, contentRect.y, contentRect.width,
+                                        contentRect.height);
             }
             // The build panel and the roster, for whatever `--select` ringed. This is what
             // makes either verifiable at all: a headless run has no clicks, so `--select` is
@@ -1201,11 +1203,14 @@ int runWindowed(const Session& session) {
                                    "targeted command needs a world unit, not the minimap");
                     return;
                 }
-                const std::array<float, 2> where =
+                const std::optional<std::array<float, 2>> where =
                     rm::ui::minimapToWorld(minimap, map->field.widthElmos(),
                                            map->field.depthElmos(), hudPoint[0], hudPoint[1]);
+                if (!where) {
+                    return;  // panel letterbox: swallowed, but not clamped onto the map edge
+                }
                 const simd_float3 ground = simd_make_float3(
-                    where[0], map->field.heightAtWorld(where[0], where[1]), where[1]);
+                    (*where)[0], map->field.heightAtWorld((*where)[0], (*where)[1]), (*where)[1]);
 
                 // THE RIGHT BUTTON MEANS THE SAME THING ON THE MAP AS IN THE WORLD: go
                 // there. Ordering across the map without swinging the camera off the fight
@@ -1952,13 +1957,16 @@ int runWindowed(const Session& session) {
             appendMinimapPips(minimapPips, units);
             appendViewFootprint(minimapView, window.camera(), map->field, viewport);
             const rm::ui::MinimapLayout minimap = rm::ui::minimapLayout(frame);
+            const rm::ui::MinimapProjection minimapProjection =
+                rm::ui::minimapProjection(minimap, map->field.widthElmos(),
+                                           map->field.depthElmos());
             // The preview under the panel, inset by the border so the chrome frames it. The
             // panel then draws everything BUT its own fill, so the picture shows through.
             const bool hasPreview = map->preview.width > 0;
             if (hasPreview) {
-                window.setMinimapRect(minimap.x + minimap.inset, minimap.y + minimap.inset,
-                                      minimap.size - minimap.inset * 2.0f,
-                                      minimap.size - minimap.inset * 2.0f);
+                const rm::ui::Rect& contentRect = minimapProjection.content;
+                window.setMinimapRect(contentRect.x, contentRect.y, contentRect.width,
+                                      contentRect.height);
             }
             // What the selection can build, above the minimap — the bottom-left control block
             // Beyond All Reason arranges the same way. Absent entirely when nothing selected
@@ -2160,20 +2168,26 @@ int runWindowed(const Session& session) {
                     || (!rosterTiles.empty()
                         && rm::ui::insideRoster(
                             rm::ui::rosterLayout(frame, rosterTiles.size(), rosterPage), origin[0],
-                            origin[1]));
+                            origin[1]))
+                    || rm::ui::insideCommandRack(
+                        rm::ui::commandRackLayout(frame, !selected.empty()), origin[0], origin[1]);
 
                 if (held && onMinimap) {
                     // Drag-to-pan: the ground under the finger, continuously. The same
-                    // projection the click-jump uses, at frame rate, and clamped to the map
-                    // by minimapToWorld — dragging past the letterbox pins to the edge.
-                    const std::array<float, 2> where = rm::ui::minimapToWorld(
+                    // projection the click-jump uses, at frame rate. Letterbox space is not a
+                    // map coordinate, so dragging through it leaves the camera where it was.
+                    const std::optional<std::array<float, 2>> where = rm::ui::minimapToWorld(
                         minimap, map->field.widthElmos(), map->field.depthElmos(), at[0],
                         at[1]);
-                    window.camera().target = simd_make_float3(
-                        where[0], map->field.heightAtWorld(where[0], where[1]), where[1]);
+                    if (where) {
+                        window.camera().target = simd_make_float3(
+                            (*where)[0], map->field.heightAtWorld((*where)[0], (*where)[1]),
+                            (*where)[1]);
+                    }
                 }
 
-                const bool worldBand = !onMinimap && !onPanel && !armedOption && traveled;
+                const bool worldBand = !onMinimap && !onPanel && !armedOption && !armedCommand
+                                    && traveled;
                 if (held && worldBand) {
                     // The box: a whisper of fill so the caught area reads, and a hairline
                     // in the lit edge so the bounds are exact. Interface, not effect — the

@@ -61,14 +61,15 @@ TEST_CASE("world to minimap and back is the identity") {
 
                 const std::array<float, 2> point =
                     worldToMinimap(layout, map.width, map.depth, worldX, worldZ);
-                const std::array<float, 2> back =
+                const std::optional<std::array<float, 2>> back =
                     minimapToWorld(layout, map.width, map.depth, point[0], point[1]);
 
                 // A tenth of an elmo on a map thousands of elmos across — the round trip goes
                 // through a points-per-elmo scale of about 0.02, so a point of screen precision
                 // is ~40 elmos and this is far inside it.
-                CHECK(back[0] == Approx(worldX).margin(0.1));
-                CHECK(back[1] == Approx(worldZ).margin(0.1));
+                REQUIRE(back);
+                CHECK((*back)[0] == Approx(worldX).margin(0.1));
+                CHECK((*back)[1] == Approx(worldZ).margin(0.1));
             }
         }
     }
@@ -111,20 +112,21 @@ TEST_CASE("the map's corners land on the projected area's corners") {
     CHECK(bottomRight[1] == Approx(layout.y + layout.size - layout.inset));
 }
 
-TEST_CASE("a click outside the map clamps to its edge") {
-    // A click a pixel off the edge of a letterboxed map obviously means the edge. Unclamped it
-    // would send the camera off the world, where the ground pick finds nothing and the view
-    // appears to freeze.
+TEST_CASE("letterbox and outside-panel clicks miss the map") {
     const MinimapLayout layout = square();
-    const std::array<float, 2> before =
-        minimapToWorld(layout, 4096.0f, 4096.0f, layout.x - 50.0f, layout.y - 50.0f);
-    CHECK(before[0] == 0.0f);
-    CHECK(before[1] == 0.0f);
+    CHECK_FALSE(minimapToWorld(layout, 8192.0f, 4096.0f, layout.x + 100.0f,
+                               layout.y + layout.inset + 1.0f));
+    CHECK_FALSE(minimapToWorld(layout, 4096.0f, 4096.0f, layout.x - 50.0f,
+                               layout.y - 50.0f));
 
-    const std::array<float, 2> after = minimapToWorld(
-        layout, 4096.0f, 4096.0f, layout.x + layout.size + 50.0f, layout.y + layout.size + 50.0f);
-    CHECK(after[0] == 4096.0f);
-    CHECK(after[1] == 4096.0f);
+    const rm::ui::MinimapProjection projection =
+        rm::ui::minimapProjection(layout, 8192.0f, 4096.0f);
+    const auto edge = minimapToWorld(layout, 8192.0f, 4096.0f,
+                                     projection.content.right(),
+                                     projection.content.bottom());
+    REQUIRE(edge);
+    CHECK((*edge)[0] == 8192.0f);
+    CHECK((*edge)[1] == 4096.0f);
 }
 
 TEST_CASE("the panel knows what is on it") {
@@ -163,9 +165,7 @@ TEST_CASE("a degenerate layout draws nothing rather than dividing by zero") {
 
     // And a map of no size is answered rather than divided by.
     CHECK_NOTHROW((void)worldToMinimap(square(), 0.0f, 0.0f, 0.0f, 0.0f));
-    const std::array<float, 2> world = minimapToWorld(square(), 0.0f, 0.0f, 100.0f, 600.0f);
-    CHECK(world[0] == 0.0f);
-    CHECK(world[1] == 0.0f);
+    CHECK_FALSE(minimapToWorld(square(), 0.0f, 0.0f, 100.0f, 600.0f));
 }
 
 TEST_CASE("pips and a view outline produce geometry") {

@@ -614,7 +614,8 @@ void appendConstructionEffects(std::vector<rm::DecalVertex>& decals,
 [[nodiscard]] rm::ui::Theme hudThemeFor(const UnitScene& scene, rm::ui::GameProfile profile,
                                          const rm::ui::PanelSkin& skin) {
     rm::ui::Theme theme = rm::ui::neutralTheme();
-    if (profile == rm::ui::GameProfile::Fa || profile == rm::ui::GameProfile::ClassicFaf) {
+    const rm::ui::GameProfileDescriptor descriptor = rm::ui::gameProfile(profile);
+    if (descriptor.factionOwned) {
         for (const rm::sim::Army& army : scene.armies) {
             if (army.index == scene.playerArmy) {
                 theme = rm::ui::themeFor(army.faction);
@@ -622,7 +623,10 @@ void appendConstructionEffects(std::vector<rm::DecalVertex>& decals,
             }
         }
     }
-    if (profile == rm::ui::GameProfile::ClassicFaf) {
+    if (profile == rm::ui::GameProfile::Bar) {
+        theme = rm::ui::barTheme();
+    }
+    if (descriptor.classicChrome) {
         // Classic chrome rides the faction livery: panel art changes, semantic accents do not.
         theme.skin = skin;
     }

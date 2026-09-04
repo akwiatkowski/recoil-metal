@@ -91,6 +91,11 @@ TEST_CASE("each game profile presents exactly two ordered resource views") {
         CHECK(views[1].gauge.stored == 22.0f);
         CHECK(views[1].tint == rm::ui::kEnergy);
     }
+
+    CHECK(rm::ui::gameProfile(rm::ui::GameProfile::Fa).factionOwned);
+    CHECK(rm::ui::gameProfile(rm::ui::GameProfile::ClassicFaf).classicChrome);
+    CHECK_FALSE(rm::ui::gameProfile(rm::ui::GameProfile::Bar).factionOwned);
+    CHECK_FALSE(rm::ui::gameProfile(rm::ui::GameProfile::Neutral).factionOwned);
 }
 
 TEST_CASE("the responsive frame selects the largest profile that fits") {

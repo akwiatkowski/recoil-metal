@@ -410,6 +410,11 @@ distance, and it caught the first two attempts being too close to tell apart.
 Panels are glass with a lit top edge and corner brackets rather than full borders: brackets say
 where a panel's bounds are without the frame competing with the numbers inside it.
 
+`--ui fa|bar|neutral|faf` changes vocabulary and chrome without moving controls. BAR uses
+**METAL** and a warm field-acrylic fallback; neutral observer presentation uses **MATERIAL** and
+ownerless cyan. Rectangular maps keep one aspect-preserving minimap projection, so the preview,
+fog, pips, camera footprint, and clicks all agree and the letterbox itself is inert.
+
 ---
 
 ## Quality settings

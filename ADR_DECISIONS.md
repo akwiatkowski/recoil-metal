@@ -2642,3 +2642,30 @@ atlas. The production view remains as tested view data but has no deck surface u
 assigns it non-conflicting geometry. Command artwork and secondary content-specific pages remain
 future work; the first rack deliberately uses readable labels and only simulation semantics that
 already exist.
+
+---
+
+## ADR-075 — One minimap projection owns every map-space surface and input
+
+**Context.** Pips and world clicks already used an aspect-preserving fit, but the preview and fog
+still filled the square panel, clicks in letterbox bars clamped to a map edge, and diagonal camera
+footprint edges were axis-aligned bounding rectangles. A rectangular map therefore had several
+plausible but mutually inconsistent projections.
+
+**Decision.** `minimapProjection` returns the sole content rectangle and points-per-elmo scale for
+a fixed square panel. World projection and inverse input use it; inverse input returns no point in
+letterbox space. Headless and windowed render paths give the same content rectangle to the shared
+preview/fog pass. Camera footprint edges are emitted as rotated solid quads with constant point
+thickness. The closed game-profile descriptor supplies resource vocabulary and ownership policy;
+BAR gets a deterministic warm field-acrylic fallback while neutral remains explicitly ownerless.
+
+**Alternatives considered.** Clamping letterbox clicks was rejected because an empty bar is not a
+map edge. Stretching the short map axis was rejected because it makes positions, motion, and camera
+coverage disagree with world aspect. A separate preview fit was rejected because duplicated
+projection arithmetic caused the divergence. A general plugin/profile resolver was rejected in
+favor of the four concrete profiles actually supported.
+
+**Consequences.** Preview, fog, pips, click/drag navigation, and camera footprint align on square
+and rectangular maps. X1CA_003's 2048x1024 geometry visibly occupies a centered 2:1 content region,
+with inert bars above and below. Content-specific BAR faction emblems and the later material tuning
+remain separate from this profile seam.
