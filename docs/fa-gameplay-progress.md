@@ -108,7 +108,7 @@ excluded from the headline.
 | [`FA-INTEL`](#fa-intel---vision-radar-sonar-and-counter-intel) | Vision, radar, sonar, counter-intel | `WP-33` | 75% | 45% | 90% | Apply radar-position error to automatic targeting without changing contact identity or ordering. |
 | [`FA-PROGRESS`](#fa-progress---enhancements-veterancy-and-special-units) | Enhancements, veterancy, special units | `WP-34`-`36` | 35% | 20% | 35% | Complete the enhancement lifecycle specification around `CUnitScriptTask`. |
 | [`FA-TERRAIN`](#fa-terrain---mutable-terrain-and-craters) | Mutable terrain and craters | `WP-37` | 0% | 0% | 25% | Trace one crater from damage through terrain, pathing, and rendering invalidation. |
-| [`FA-AI`](#fa-ai---retail-ai-and-native-manager-boundary) | Retail AI and native manager boundary | `WP-38` | 35% | 5% | 30% | Remove the remaining condition-budget overruns (`recoil-metal-4754`). |
+| [`FA-AI`](#fa-ai---retail-ai-and-native-manager-boundary) | Retail AI and native manager boundary | `WP-38` | 35% | 5% | 30% | Implement the next observed manager methods: `GetCurrentEnemy` and `GetUnitBlueprint`. |
 | [`FA-UI`](#fa-ui---player-interface-and-advanced-controls) | Player interface and advanced controls | `WP-39`-`40` | 65% | 5% | 15% | Start HUD slice 3 (`recoil-metal-3937`): fixed inspector, paged roster/build palette, and command rack. |
 | [`FA-PRESENT`](#fa-present---animation-effects-and-audio) | Animation, effects, audio | `WP-41`-`42` | 55% | 5% | 25% | Complete one blueprint-audio-to-XSB-cue playback path. |
 | [`FA-PERSIST`](#fa-persist---replay-hashing-and-saveresume) | Replay, hashing, save/resume | `WP-43`-`44` | 70% | 20% | 90% | Version and round-trip authoritative economy and army state in SaveState. |
@@ -421,14 +421,19 @@ and FA-TERRAIN, and create only the implementation task the trace supports.
 
 ### FA-AI - Retail AI And Native Manager Boundary
 
-**Largest gap:** the deterministic FAF Lua opening works through many bindings, but condition
-budget overruns and stand-in native managers keep it far from the retail AI architecture.
+**Largest gap:** the deterministic FAF Lua opening works through many bindings, but stand-in
+native managers keep it far from the retail AI architecture. The 650-second sanity run is clean
+at both two armies and all eight SCMP_009 seats: no instruction-budget exhaustion without raising
+the 20-million-instruction watchdog. The two-army run also reports zero thread errors.
+`make ai-sanity` now fails if an overrun returns. The next observed condition gaps are
+`GetCurrentEnemy` (90 calls in the
+eight-army run) and `GetUnitBlueprint` (7).
 
 ```text
-/goal Advance FA-AI by completing item recoil-metal-4754: reproduce and remove the remaining FAF
-condition instruction-budget overruns from the 650-second sanity run without raising the budget
-blindly. Add focused regressions, rerun the AI report and long sanity match, update WP-38 and
-FA-AI, and record the next missing native-manager behavior exposed.
+/goal Advance FA-AI by implementing the `GetCurrentEnemy` and `GetUnitBlueprint` behavior exposed
+by the eight-army 650-second sanity run. Keep conditions fail-closed, add focused regressions,
+rerun the AI report and long sanity match, update WP-38 and FA-AI, and record the next missing
+native-manager behavior exposed.
 ```
 
 ### FA-UI - Player Interface And Advanced Controls

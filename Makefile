@@ -295,10 +295,15 @@ ai-sanity: build check-fa check-ai
 	@echo
 	@echo "  Headless sanity: $(ARMIES) armies on $$(basename "$(FA_MAP)"), $(AI_SECONDS)s, profiler on."
 	@echo
-	$(BIN) "$(FA_MAP)" $(FA_FLAGS) --skirmish --observer --armies $(ARMIES) \
+	@output="$$( $(BIN) "$(FA_MAP)" $(FA_FLAGS) --skirmish --observer --armies $(ARMIES) \
 	  $(ALLIANCE_FLAG) $(FACTION_FLAG) --ai-faf $(if $(FAF),--ai-log,) \
 	  --play $(AI_SECONDS) --ai-sanity \
-	  --screenshot /tmp/rm-ai-sanity.png 320 180 | tail -80
+	  --screenshot /tmp/rm-ai-sanity.png 320 180 2>&1 )" || { printf '%s\n' "$$output" | tail -80; exit 1; }; \
+	  printf '%s\n' "$$output" | tail -80; \
+	  if printf '%s\n' "$$output" | grep -Fq 'instruction budget exhausted'; then \
+	    echo 'AI sanity failed: instruction budget exhausted' >&2; exit 1; \
+	  fi; \
+	  echo 'AI sanity: no instruction-budget overruns'
 
 # The default playable duel: army 0 is the human, army 1 runs FAF's AI, and the responsive HUD
 # chooses its profile from the logical window size. Use `play` for other army counts and knobs.

@@ -32,7 +32,8 @@ gets reimplemented.**
   condition functions choose the opponent's opening through a native placement
   adapter. The corpus is vendored at a pinned commit and **never patched**: 254
   engine names are bound and 107 of 255 vendored files ran in the latest
-  650-second headless sanity match. Its manager stack is not hosted yet.
+  650-second headless sanity match. Both the two-army run and all eight map seats complete
+  without an instruction-budget overrun; its manager stack is not hosted yet.
 - **No Xcode, no assets.** Apple clang from the Command Line Tools is enough;
   shaders compile from source at runtime. Two small vendored dependencies, both
   fetched. No game content is committed, ever.
