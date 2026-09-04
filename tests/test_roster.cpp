@@ -167,15 +167,16 @@ TEST_CASE("the gutter between tiles is a miss", "[ui][roster]") {
     CHECK(insideRoster(layout, gutterX, y));
 }
 
-TEST_CASE("a selection wider than the profile capacity reports what is not on the page",
-          "[ui][roster]") {
+TEST_CASE("hundreds of selection types page and report what is not shown",
+          "[ui][roster][stress]") {
     // A roster that silently omits types lies about the selection, and the lie is invisible —
     // the row looks complete. `hidden` is what the panel prints as `+N`.
-    const auto layout = rosterLayout(aFrame(), 10);
+    constexpr std::size_t kTypes = 501;
+    const auto layout = rosterLayout(aFrame(), kTypes);
 
     CHECK(layout.shown == 5);
-    CHECK(layout.hidden == 5);
-    CHECK(layout.pages == 2);
+    CHECK(layout.hidden == kTypes - layout.shown);
+    CHECK(layout.pages == (kTypes + layout.shown - 1) / layout.shown);
 
     // And nothing past the cap hit-tests, so a click cannot select a tile that is not drawn.
     const auto past = rosterTileOrigin(layout, 5);

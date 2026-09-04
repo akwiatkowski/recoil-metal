@@ -14,6 +14,12 @@ constexpr float kFirstRowBaseline = 56.0f;
 constexpr float kRowPitch = 16.0f;
 constexpr float kFooter = 6.0f;  ///< breathing room under the last baseline
 
+[[nodiscard]] std::string fitLine(std::span<const text::Glyph> glyphs,
+                                  std::string_view value, float width) {
+    const std::vector<std::string> lines = wrapToWidth(glyphs, value, width, 1);
+    return lines.empty() ? std::string{} : lines.front();
+}
+
 }  // namespace
 
 std::size_t productionRowsFor(const Rect& rect) noexcept {
@@ -35,13 +41,18 @@ void appendProductionPanel(Geometry& out, const text::Font& labelFont,
     // The header names the factory; the corner says whether the queue loops. "REPEAT" in ink
     // when on, quiet when off, so the state is readable at a glance without a toggle widget.
     const float titleBaseline = rect.y + kTitleBaseline;
-    (void)text::appendText(out.label, labelFont.glyphs, view.factoryName, rect.x + kInset,
+    const std::string corner = view.repeat ? "REPEAT" : "ONCE";
+    const float cornerWidth = readoutFont.usable()
+                                ? text::measureText(readoutFont.glyphs, corner)
+                                : 0.0f;
+    const float titleWidth = rect.width - kInset * 2.0f
+                           - (readoutFont.usable() ? cornerWidth + kInset : 0.0f);
+    const std::string title = fitLine(labelFont.glyphs, view.factoryName, titleWidth);
+    (void)text::appendText(out.label, labelFont.glyphs, title, rect.x + kInset,
                            titleBaseline, kInk);
     if (readoutFont.usable()) {
-        const std::string corner = view.repeat ? "REPEAT" : "ONCE";
-        const float width = text::measureText(readoutFont.glyphs, corner);
         (void)text::appendText(out.foregroundReadout, readoutFont.glyphs, corner,
-                               rect.right() - kInset - width, titleBaseline,
+                               rect.right() - kInset - cornerWidth, titleBaseline,
                                view.repeat ? kInk : fade(kInk, 0.5f));
     }
 
@@ -70,20 +81,27 @@ void appendProductionPanel(Geometry& out, const text::Font& labelFont,
     const std::size_t shown = overflow ? (room > 0 ? room - 1 : 0) : view.queue.size();
     for (std::size_t i = 0; i < shown; ++i) {
         const ProductionEntry& entry = view.queue[i];
-        (void)text::appendText(out.label, labelFont.glyphs,
-                               entry.name.empty() ? entry.id : entry.name, rect.x + kInset,
-                               baseline, i == 0 ? kInk : theme.label);
+        const std::string count = "x" + std::to_string(entry.count);
+        const float countWidth = readoutFont.usable()
+                                   ? text::measureText(readoutFont.glyphs, count)
+                                   : 0.0f;
+        const float nameWidth = rect.width - kInset * 2.0f
+                              - (readoutFont.usable() ? countWidth + kInset : 0.0f);
+        const std::string name = fitLine(labelFont.glyphs,
+                                         entry.name.empty() ? entry.id : entry.name, nameWidth);
+        (void)text::appendText(out.label, labelFont.glyphs, name, rect.x + kInset, baseline,
+                               i == 0 ? kInk : theme.label);
         if (readoutFont.usable()) {
-            const std::string count = "x" + std::to_string(entry.count);
-            const float width = text::measureText(readoutFont.glyphs, count);
             (void)text::appendText(out.foregroundReadout, readoutFont.glyphs, count,
-                                   rect.right() - kInset - width, baseline, kInk);
+                                   rect.right() - kInset - countWidth, baseline, kInk);
         }
         baseline += kRowPitch;
     }
     if (overflow && room > 0) {
         const std::string more = "+" + std::to_string(view.queue.size() - shown) + " MORE";
-        (void)text::appendText(out.label, labelFont.glyphs, more, rect.x + kInset, baseline,
+        const std::string fitted =
+            fitLine(labelFont.glyphs, more, rect.width - kInset * 2.0f);
+        (void)text::appendText(out.label, labelFont.glyphs, fitted, rect.x + kInset, baseline,
                                theme.label);
     }
 }

@@ -125,3 +125,37 @@ Captured 2026-09-04 at `9c98c69`+ on an Apple M4 Pro, 300 benchmark frames per p
   displays' logical sizes; the windowed CLI still has a fixed 1280x720 window and no fullscreen
   option, and a backgrounded display link throttles. The offscreen numbers are the comparable
   ones; a windowed fullscreen figure would need a `--window <w> <h>` / `--fullscreen` flag.
+
+  **Closed in HUD slice 7:** `--window <w> <h>` now sets the initial logical-point size and
+  `--fullscreen` uses the current display. The benchmark prints the measured viewport and backing
+  scale after the fullscreen transition, so the result records the surface actually rendered.
+
+## Final acceptance — slice 7
+
+Validated 2026-09-04 on the same Apple M4 Pro after HUD slices 1–6:
+
+- The focused stress suite passes with 501 build options, 501 selected unit types, oversized
+  factory and queue labels, bounded production overflow, isolated semantic-layer capacity, and
+  missing-icon fallbacks. Existing focused cases also cover mixed/dead builders, selection page
+  invalidation, fixed command capacity, safe areas, 1x/2x coordinate round trips, rectangular-map
+  letterboxing, and every game profile/material.
+- Fresh 1280x720 captures through Full, Reduced, and Off all completed through the Metal shader
+  path; the contact review found the same panel order, geometry, labels, minimap, and semantic
+  colours in each. Full and Reduced change only the intended backdrop response.
+- The complete suite passes: 1383 tests, with only the two explicitly optional corpus cases
+  skipped. `make verify` reports `MATCH` for all 7000 golden ticks.
+
+Real-window timings use the deterministic SCMP_009 two-army scene after 60 simulated seconds,
+180 measured frames after 60 warmup frames:
+
+| window | pixels rendered | effects | GPU mean | GPU p95 | display rate |
+|---|---:|---|---:|---:|---:|
+| 1280x720 points at 2x | 2560x1440 | Full | 5.133 ms | 6.479 ms | 60.0 fps |
+| 1280x720 points at 2x | 2560x1440 | Off | 3.915 ms | 9.466 ms | background-throttled |
+| 2544x1431 points at 2x fullscreen | 5088x2862 | Full | 6.694 ms | 10.688 ms | 60.0 fps |
+| 2544x1431 points at 2x fullscreen | 5088x2862 | Off | 6.792 ms | 10.835 ms | 60.0 fps |
+
+The fullscreen pair is the useful live comparison: both sustain the display's 60 Hz cadence and
+their 0.098 ms mean difference is below run-to-run noise. The windowed Off run was background
+throttled by macOS; its GPU samples are retained for transparency but should not be used as a
+precise Full-versus-Off delta.

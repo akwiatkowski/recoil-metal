@@ -90,15 +90,18 @@ TEST_CASE("the build palette occupies the frame's bounded rectangle", "[ui][buil
     CHECK(layout.height == frame.build.height);
 }
 
-TEST_CASE("a longer list pages without changing panel geometry", "[ui][build]") {
+TEST_CASE("hundreds of options page without changing panel geometry",
+          "[ui][build][stress]") {
     const rm::ui::FrameLayout frame = aFrame();
     const std::size_t capacity =
         frame.buildColumns * static_cast<std::size_t>(rm::ui::kBuildRows);
     const auto few = buildPanelLayout(frame, 3);
-    const auto many = buildPanelLayout(frame, capacity * 2 + 1);
+    constexpr std::size_t kOptions = 501;
+    const auto many = buildPanelLayout(frame, kOptions);
     CHECK(many.width == few.width);
     CHECK(many.height == few.height);
-    CHECK(many.pages == 3);
+    CHECK(many.shown == capacity);
+    CHECK(many.pages == (kOptions + capacity - 1) / capacity);
 }
 
 TEST_CASE("a later build page maps its first cell to the global option", "[ui][build]") {

@@ -6,6 +6,7 @@
 
 #include "core/ui/ProductionPanel.hpp"
 
+#include <algorithm>
 #include <string>
 #include <vector>
 
@@ -33,6 +34,14 @@ namespace {
 /// Six quads of six vertices per glyph, so the number of glyphs a layer drew.
 [[nodiscard]] std::size_t glyphsIn(const std::vector<rm::text::TextVertex>& layer) {
     return layer.size() / 6;
+}
+
+[[nodiscard]] float rightmost(const std::vector<rm::text::TextVertex>& layer) {
+    float right = 0.0f;
+    for (const rm::text::TextVertex& vertex : layer) {
+        right = std::max(right, vertex.position[0]);
+    }
+    return right;
 }
 
 [[nodiscard]] rm::ui::ProductionView factoryWith(std::size_t orders) {
@@ -83,6 +92,22 @@ TEST_CASE("orders past the room are summarised, never dropped silently", "[ui][p
                                   rm::ui::Rect{0, 0, 200, 78}, factoryWith(7));
     CHECK(glyphsIn(out.label) == 12 + 6 + 7);  // title, "Mantis", "+6 MORE"
     CHECK(glyphsIn(out.foregroundReadout) == 4 + 2);  // "ONCE", one "x1"
+}
+
+TEST_CASE("long factory and order names stay inside the production panel",
+          "[ui][production][stress]") {
+    const std::vector<rm::text::Glyph> glyphs = boxGlyphs();
+    const rm::text::Font font = fontOver(glyphs);
+    rm::ui::ProductionView view = factoryWith(1);
+    view.factoryName = "Experimental Mobile Rapid-Fire Artillery Installation";
+    view.queue[0].name = "Experimental Strategic Missile Defence Construction Vehicle";
+
+    constexpr rm::ui::Rect kPanel{20.0f, 10.0f, 200.0f, 126.0f};
+    rm::ui::Geometry out;
+    rm::ui::appendProductionPanel(out, font, font, rm::ui::neutralTheme(), kPanel, view);
+
+    CHECK(rightmost(out.label) <= kPanel.right());
+    CHECK(rightmost(out.foregroundReadout) <= kPanel.right());
 }
 
 TEST_CASE("an idle factory says so and a non-factory draws nothing", "[ui][production]") {

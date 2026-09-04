@@ -9,7 +9,7 @@ Detailed retail evidence remains canonical in
 [`fa-exe-analysis-plan.md`](fa-exe-analysis-plan.md). This dashboard summarizes that ledger; it
 does not replace its claims, addresses, counterevidence, or confirmation gate.
 
-**Snapshot:** 2026-09-04, Recoil Metal main through HUD slice 6 — the measured interface
+**Snapshot:** 2026-09-04, Recoil Metal main through HUD slice 7 — the measured interface
 baseline (`docs/hud-baseline.md`, `tools/hud_baseline.sh`, `--backing`, `--bench-hud`,
 `--bench-size`) — after the `WP-22` controller read and six follow-ups (parked flyers recharge, the look-ahead max pyramid, attached children take their
 carrier's tilt, mesh extents and build-effect bones parsed with a bone-to-world helper, the
@@ -19,7 +19,7 @@ inspector with paged selection/build instruments and a dispatching 4x3 command r
 resource/game-profile descriptors plus one aspect-preserving minimap projection for preview, fog,
 pips, input, and true-line camera footprint, explicit BAR and neutral vocabulary/material fallbacks,
 the exact retail mobile-builder approach-to-range gate, per-instance builder torso/arm/tool aiming from authored
-bone rigs, and README counts at 1372) —
+bone rigs, the final HUD stress/accessibility and real-window performance pass, and README counts at 1383) —
 `ComputeAirControl`, `CalcWingedLift`, the damping factor and the terrain look-ahead read and
 implemented (`C-244`–`C-246`): authored `KMove`/`KLift` gains with their damping terms, the
 vertical lift-off to half elevation that replaces the invented runway roll, the pyramid look-ahead
@@ -116,7 +116,7 @@ excluded from the headline.
 | [`FA-PROGRESS`](#fa-progress---enhancements-veterancy-and-special-units) | Enhancements, veterancy, special units | `WP-34`-`36` | 35% | 20% | 35% | Complete the enhancement lifecycle specification around `CUnitScriptTask`. |
 | [`FA-TERRAIN`](#fa-terrain---mutable-terrain-and-craters) | Mutable terrain and craters | `WP-37` | 0% | 0% | 25% | Trace one crater from damage through terrain, pathing, and rendering invalidation. |
 | [`FA-AI`](#fa-ai---retail-ai-and-native-manager-boundary) | Retail AI and native manager boundary | `WP-38` | 35% | 5% | 30% | Implement the next observed manager methods: `GetCurrentEnemy` and `GetUnitBlueprint`. |
-| [`FA-UI`](#fa-ui---player-interface-and-advanced-controls) | Player interface and advanced controls | `WP-39`-`40` | 65% | 5% | 15% | Start HUD slice 3 (`recoil-metal-3937`): fixed inspector, paged roster/build palette, and command rack. |
+| [`FA-UI`](#fa-ui---player-interface-and-advanced-controls) | Player interface and advanced controls | `WP-39`-`40` | 75% | 5% | 15% | Trace and implement the first retail data-driven command page from `WP-40`. |
 | [`FA-PRESENT`](#fa-present---animation-effects-and-audio) | Animation, effects, audio | `WP-41`-`42` | 55% | 5% | 25% | Complete one blueprint-audio-to-XSB-cue playback path. |
 | [`FA-PERSIST`](#fa-persist---replay-hashing-and-saveresume) | Replay, hashing, save/resume | `WP-43`-`44` | 70% | 20% | 90% | Version and round-trip authoritative economy and army state in SaveState. |
 
@@ -489,6 +489,15 @@ stray classic pieces. Black panel-shadow quads retain ordinary alpha and no long
 sample the shared blur. Seven 1280x720 contact captures verify identical module silhouettes,
 typography, information colours, and hit geometry across the presentations.
 
+HUD slice 7 closes the native-HUD acceptance pass. Stress cases cover 501 build options, 501
+selection types, oversized production labels, missing icons, page invalidation, dead and mixed
+builders, fixed command/resource capacity, safe areas, 1x/2x display changes, rectangular maps,
+and every presentation/effects level. Long production names now truncate visibly inside their
+fixed panel instead of crossing the repeat/count columns. Full, Reduced, and Off screenshot smoke
+tests preserve semantic layer order. Real windows sustain 60 Hz at 5088x2862 pixels: Full measured
+6.694 ms GPU mean and Off 6.792 ms, a noise-level difference. The complete 1383-test suite passes
+and the 7000-tick golden replay remains identical.
+
 The native HUD also has a measured baseline (HUD slice 0, `docs/hud-baseline.md`,
 `tools/hud_baseline.sh`): seven interface states — default, commander, mixed selection,
 engineer, placement, observer, FAF chrome — at 1280x720 and 1600x900 at 1x and at the 14-inch
@@ -506,8 +515,9 @@ strategic-icon fallback decisions identical.
 command pages, overlays, key contexts, or split views (`WP-40`).
 
 ```text
-/goal Advance FA-UI with HUD slice 7 (recoil-metal-3787): run the layout/content/accessibility
-stress matrix, real windowed Full-versus-Off timing, full tests/golden, and documentation cleanup.
+/goal Advance FA-UI by tracing one retail data-driven command page from WP-40, naming its source
+data and input context, then implementing the smallest end-to-end page without disturbing the
+bounded native deck. Add focused tests, run the full suite and golden replay, and update FA-UI.
 ```
 
 ### FA-PRESENT - Animation, Effects, And Audio
