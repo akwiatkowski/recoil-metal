@@ -116,6 +116,11 @@ Captured 2026-09-04 at `9c98c69`+ on an Apple M4 Pro, 300 benchmark frames per p
   state, which draws the most units, comes out negative at every size. The honest reading is
   "below noise at 1x, about a millisecond at 5K". Routing the world-only benchmark through the
   same composition minus the HUD would make the subtraction clean.
+
+  **Closed after this baseline:** both benchmark modes now call the same headless composition;
+  world-only then clears only the 2D HUD and minimap. A 120-frame 1280x720 smoke pair measured
+  3.578 ms world versus 3.602 ms with HUD (0.024 ms), consistent with the old 1x conclusion but
+  recorded only as proof of the corrected method. The next full refresh replaces the table.
 - **Real fullscreen windows were not measured.** The 2x points are headless captures at the
   displays' logical sizes; the windowed CLI still has a fixed 1280x720 window and no fullscreen
   option, and a backgrounded display link throttles. The offscreen numbers are the comparable

@@ -109,7 +109,7 @@ excluded from the headline.
 | [`FA-PROGRESS`](#fa-progress---enhancements-veterancy-and-special-units) | Enhancements, veterancy, special units | `WP-34`-`36` | 35% | 20% | 35% | Complete the enhancement lifecycle specification around `CUnitScriptTask`. |
 | [`FA-TERRAIN`](#fa-terrain---mutable-terrain-and-craters) | Mutable terrain and craters | `WP-37` | 0% | 0% | 25% | Trace one crater from damage through terrain, pathing, and rendering invalidation. |
 | [`FA-AI`](#fa-ai---retail-ai-and-native-manager-boundary) | Retail AI and native manager boundary | `WP-38` | 35% | 5% | 30% | Remove the remaining condition-budget overruns (`recoil-metal-4754`). |
-| [`FA-UI`](#fa-ui---player-interface-and-advanced-controls) | Player interface and advanced controls | `WP-39`-`40` | 65% | 5% | 15% | Clean the world-only benchmark composition (`recoil-metal-14383`), then start HUD slice 3 (`recoil-metal-3937`). |
+| [`FA-UI`](#fa-ui---player-interface-and-advanced-controls) | Player interface and advanced controls | `WP-39`-`40` | 65% | 5% | 15% | Start HUD slice 3 (`recoil-metal-3937`): fixed inspector, paged roster/build palette, and command rack. |
 | [`FA-PRESENT`](#fa-present---animation-effects-and-audio) | Animation, effects, audio | `WP-41`-`42` | 55% | 5% | 25% | Complete one blueprint-audio-to-XSB-cue playback path. |
 | [`FA-PERSIST`](#fa-persist---replay-hashing-and-saveresume) | Replay, hashing, save/resume | `WP-43`-`44` | 70% | 20% | 90% | Version and round-trip authoritative economy and army state in SaveState. |
 
@@ -443,18 +443,18 @@ flags made the 2x points possible: `--backing` gives a capture or benchmark a di
 production panel now fills the deck's command rectangle. `--select-type <blueprint id>` selects
 the first matching unit by deterministic draw order, so an injected UEL0105 can now be captured
 inside the five-minute skirmish with its army, economy, textures, and 15-option build palette.
+Both offscreen benchmark modes now run that same composition; world-only clears only the 2D HUD
+and minimap after composition, keeping particles, construction effects, world overlays, and
+strategic-icon fallback decisions identical.
 
 **Largest gap:** the interface is functionally usable but carries none of retail's data-driven
-command pages, overlays, key contexts, or split views (`WP-40`); and the world-only benchmark
-composes icons on a different path from the HUD benchmark, which makes the subtraction noisy
-(see the baseline's caveats).
+command pages, overlays, key contexts, or split views (`WP-40`).
 
 ```text
-/goal Advance FA-UI by routing the world-only offscreen benchmark through the same headless
-composition as the HUD benchmark minus the interface, then start HUD slice 3
-(recoil-metal-3937): the fixed inspector, paged roster and build palette, and the existing
-command rack in the deck. Keep every capture headless and deterministic, run make test, and
-refresh FA-UI.
+/goal Advance FA-UI with HUD slice 3 (recoil-metal-3937): replace the floating selection card
+and vertical command tray with the fixed inspector, paged stable roster/build palette, and the
+existing-command rack in the deck. Keep every capture headless and deterministic, run make test,
+and refresh FA-UI.
 ```
 
 ### FA-PRESENT - Animation, Effects, And Audio

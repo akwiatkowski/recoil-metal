@@ -554,20 +554,12 @@ int runOffscreenBenchmark(const Session& session) {
             renderer.setTerrain(mesh);
             applyGround(renderer, *map);
             renderer.setUnits(units.textures.all(), units.batches);
-            renderer.setGroundDecals(units.shieldScratch);
             units.applyFog(renderer);
             renderer.setProps(props.textures.all(), props.batches);
             renderer.setAnimationTime(animationTime);
             renderer.setReflections(settings.reflections);
             renderer.setStratumNormals(settings.stratumNormals);
             renderer.setRefraction(settings.refraction);
-            // The march's dust, so a benchmark measures the same scene a capture
-            // shows rather than one without particles in it — plus the icons, for the
-            // units the camera has left too small to read.
-            std::vector<rm::Particle> captureParticles;
-            captureParticles.assign(marchDust.begin(), marchDust.end());
-            appendSceneIcons(captureParticles, units, renderer.camera());
-            renderer.setParticles(captureParticles);
             // --focus works here too, so the benchmark can measure a close
             // camera as well as a whole-map one. They are different workloads:
             // anything that culls to what the camera sees is invisible at full
@@ -588,11 +580,17 @@ int runOffscreenBenchmark(const Session& session) {
             const bool withHud = hasFlag(argc, argv, "--bench-hud");
             const auto pixelsWide = static_cast<unsigned int>(std::lround(bench.width * shot.backing));
             const auto pixelsHigh = static_cast<unsigned int>(std::lround(bench.height * shot.backing));
-            if (withHud) {
-                const rm::ui::UiViewport benchViewport = rm::ui::UiViewport::full(
-                    static_cast<float>(bench.width), static_cast<float>(bench.height),
-                    shot.backing, session.uiScale);
-                composeHeadlessInterface(renderer, session, benchViewport);
+            const rm::ui::UiViewport benchViewport = rm::ui::UiViewport::full(
+                static_cast<float>(bench.width), static_cast<float>(bench.height),
+                shot.backing, session.uiScale);
+            composeHeadlessInterface(renderer, session, benchViewport);
+            if (!withHud) {
+                // SAME COMPOSITION, MINUS THE HUD. In particular, both variants now make the
+                // same strategic-glyph/fallback-square decision and carry the same particles,
+                // construction effects and world overlays. Clearing after composition leaves
+                // one measured difference: the 2D interface draw itself.
+                renderer.setMinimapRect(0.0f, 0.0f, 0.0f, 0.0f);
+                renderer.setHud({});
             }
 
             std::printf("offscreen benchmark: %ux%u points at backing %.2f -> %ux%u pixels,"
