@@ -14,8 +14,8 @@ baseline (`docs/hud-baseline.md`, `tools/hud_baseline.sh`, `--backing`, `--bench
 `--bench-size`) — after the `WP-22` controller read and six follow-ups (parked flyers recharge, the look-ahead max pyramid, attached children take their
 carrier's tilt, mesh extents and build-effect bones parsed with a bone-to-world helper, the
 factory production panel in the deck's command rectangle, UEF construction beams from authored
-builder bones to descending build-cube edges, structured runtime logging, and README counts at
-1365) —
+builder bones to descending build-cube edges, structured runtime logging, the exact retail
+mobile-builder approach-to-range gate, and README counts at 1366) —
 `ComputeAirControl`, `CalcWingedLift`, the damping factor and the terrain look-ahead read and
 implemented (`C-244`–`C-246`): authored `KMove`/`KLift` gains with their damping terms, the
 vertical lift-off to half elevation that replaces the invented runway roll, the pyramid look-ahead
@@ -226,7 +226,10 @@ replacement-unit transfer (`C-238`), the reclaim-idiom timing with its funding g
 multi-captor aggregation (`C-239`), and the native transfer inventory — transform copied,
 transports rebuilt, old entity destroyed (`C-240`). What still blocks an implementation slice:
 the progress-increment semantic at `Unit+0x690` and `Sim::TransferUnit`'s complete native
-copy/reset field inventory — all named, none guessed.
+copy/reset field inventory — all named, none guessed. Ordinary mobile construction now follows
+`C-248`: the active Build order routes the engineer toward the site and creates no construction
+until centre distance minus the builder's smaller footprint and target's larger skirt is within
+`Economy.MaxBuildDistance`; factory production and upgrades retain their separate immediate paths.
 
 ```text
 /goal Advance FA-ECON by reading the capture progress increment at Unit+0x690 (C-239's open edge,

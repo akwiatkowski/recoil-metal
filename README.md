@@ -19,7 +19,7 @@ gets reimplemented.**
 - **Deterministic.** The sim is fixed point, proved identical at every
   optimisation level by a test. `--hash-log` writes a per-tick state hash and
   `--check-hash-log` names the tick a divergence began at.
-- **Tested.** **1365 tests, all green.** Anything that does not
+- **Tested.** **1366 tests, all green.** Anything that does not
   touch the GPU gets a failing test first, and parsers are tested against the
   real retail corpus — all 2034 BAR `.s3o` models and 2552 `.dds` textures.
 - **It plays.** Economy, construction, weapons, shields, aircraft, fog of war,
@@ -176,7 +176,7 @@ Then build and test. Catch2 is fetched by CMake at configure time:
 ```sh
 make build
 make test
-#   100% tests passed, 0 tests failed out of 1365
+#   100% tests passed, 0 tests failed out of 1366
 ```
 
 Or without the Makefile:
@@ -785,7 +785,7 @@ recoil-metal/
 │   ├── render/         Metal renderer (Objective-C++ where bridging)
 │   ├── platform/       AppKit window + display link (pImpl hides ObjC)
 │   └── main.mm         thin entry point
-├── tests/              Catch2 unit tests, mirrors src/core — 1365 tests
+├── tests/              Catch2 unit tests, mirrors src/core — 1366 tests
 ├── third_party/        metal-cpp and miniz (fetched, gitignored)
 ├── vendor/ai/          foreign AI corpora at pinned commits (fetched, gitignored,
 │                       NEVER modified — `make ai`, ADR-039)

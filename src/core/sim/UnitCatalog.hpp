@@ -54,6 +54,13 @@ public:
         /// and the reach is compared against fixed-point distances inside the tick.
         Fx buildReachElmos{};
 
+        /// Retail's mobile-build range test subtracts the builder's smaller footprint
+        /// dimension and the product's larger construction skirt from centre distance before
+        /// comparing `MaxBuildDistance`. Kept separately because a command combines values
+        /// from two different types.
+        Fx buildFootprintElmos{};
+        Fx buildSkirtElmos{};
+
         /// Hull regeneration, health per tick, from `Defense.RegenRate`.
         ///
         /// The type's BASE rate only. A unit's actual rate is this plus its veterancy bonus,

@@ -489,8 +489,8 @@ TEST_CASE("a build command creates a construction, costed from the blueprint") {
                         .player = 0,
                         .kind = CommandKind::Build,
                         .unit = engineer,
-                        .targetX = rm::test::fx(400.0f),
-                        .targetZ = rm::test::fx(400.0f),
+                        .targetX = rm::test::fx(320.0f),
+                        .targetZ = rm::test::fx(300.0f),
                         .buildType = mexType};
 
     REQUIRE(fix.apply(build));
@@ -508,6 +508,61 @@ TEST_CASE("a build command creates a construction, costed from the blueprint") {
           == rm::test::asFloat(fix.roster.rate.magPerTick(10.0f)));
     // The index is the type index, which is the whole point: the caller can resolve it.
     CHECK(work.blueprintIndex == mexType);
+}
+
+TEST_CASE("a mobile builder approaches until its footprint and the target skirt reach") {
+    Fixture fix;
+
+    rm::unitdef::UnitDef engineerDef;
+    engineerDef.name = "engineer";
+    engineerDef.speedElmosPerSecond = 80.0f;
+    engineerDef.turnRateRadiansPerSecond = 100.0f;
+    engineerDef.buildRate = 10.0f;
+    engineerDef.buildDistanceElmos = 40.0f;
+    engineerDef.footprintSquaresX = 2;
+    engineerDef.footprintSquaresZ = 4;
+    engineerDef.buildableCategory = {{"TESTSTRUCTURE"}};
+    const rm::UnitTypeIndex engineerType = fix.roster.addType(engineerDef);
+
+    rm::unitdef::UnitDef structureDef;
+    structureDef.name = "structure";
+    structureDef.categories = {"TESTSTRUCTURE"};
+    structureDef.skirtSquaresX = 3.0f;
+    structureDef.skirtSquaresZ = 5.0f;
+    structureDef.buildTime = rm::test::mag(60.0f);
+    const rm::UnitTypeIndex structureType = fix.roster.addType(structureDef);
+
+    const UnitId engineer = fix.roster.add(engineerType, 100.0f, 100.0f, 0, 500.0f);
+    const Command build{.tick = 0,
+                        .player = 0,
+                        .kind = CommandKind::Build,
+                        .unit = engineer,
+                        .targetX = rm::test::fx(300.0f),
+                        .targetZ = rm::test::fx(100.0f),
+                        .buildType = structureType};
+
+    REQUIRE(fix.apply(build));
+    CHECK(fix.building.empty());
+    CHECK(fix.roster.motion(engineer).moving);
+
+    // Retail subtracts min(builder footprint) and max(target skirt) from centre distance:
+    // 40 + 2*8 + 5*8 = 96 elmos. Half an elmo outside remains an approach.
+    fix.roster.transform(engineer).x = rm::test::fx(203.5f);
+    const std::vector<const rm::sim::PassabilityGrid*> grids(fix.roster.catalog.size(),
+                                                              &fix.grid);
+    CHECK(rm::sim::advanceOrders(fix.roster.store, fix.roster.catalog, fix.terrain, grids,
+                                 fix.roster.rate, &fix.building)
+          == 0);
+    CHECK(fix.building.empty());
+
+    // The active build starts exactly at the boundary, even though its route still says it is
+    // moving toward the site's centre.
+    fix.roster.transform(engineer).x = rm::test::fx(204.0f);
+    CHECK(rm::sim::advanceOrders(fix.roster.store, fix.roster.catalog, fix.terrain, grids,
+                                 fix.roster.rate, &fix.building)
+          == 0);
+    REQUIRE(fix.building.size() == 1);
+    CHECK_FALSE(fix.roster.motion(engineer).moving);
 }
 
 TEST_CASE("a factory builds mobile products on its own pad, not the clicked plan") {
@@ -1013,15 +1068,15 @@ TEST_CASE("a build order names a place on the map, and the ground decides the he
                               .player = 0,
                               .kind = CommandKind::Build,
                               .unit = engineer,
-                              .targetX = rm::test::fx(400.0f),
-                              .targetZ = rm::test::fx(700.0f),
+                              .targetX = rm::test::fx(320.0f),
+                              .targetZ = rm::test::fx(300.0f),
                               .buildType = mexType}));
     REQUIRE(fix.building.size() == 1);
 
     const rm::sim::Construction& work = fix.building.front();
-    CHECK(rm::test::asFloat(work.position[0]) == 400.0f);
+    CHECK(rm::test::asFloat(work.position[0]) == 320.0f);
     CHECK(work.position[1] == rm::sim::Fx{});
-    CHECK(rm::test::asFloat(work.position[2]) == 700.0f);
+    CHECK(rm::test::asFloat(work.position[2]) == 300.0f);
 }
 
 TEST_CASE("a build occupies its builder and refuses parallel work") {
@@ -1047,8 +1102,8 @@ TEST_CASE("a build occupies its builder and refuses parallel work") {
                               .player = 0,
                               .kind = CommandKind::Build,
                               .unit = engineer,
-                              .targetX = rm::test::fx(400.0f),
-                               .targetZ = rm::test::fx(400.0f),
+                              .targetX = rm::test::fx(320.0f),
+                               .targetZ = rm::test::fx(300.0f),
                                .buildType = mexType}));
 
     CHECK_FALSE(fix.roster.motion(engineer).moving);
@@ -1058,8 +1113,8 @@ TEST_CASE("a build occupies its builder and refuses parallel work") {
                                   .player = 0,
                                   .kind = CommandKind::Build,
                                   .unit = engineer,
-                                  .targetX = rm::test::fx(500.0f),
-                                  .targetZ = rm::test::fx(500.0f),
+                                  .targetX = rm::test::fx(340.0f),
+                                  .targetZ = rm::test::fx(300.0f),
                                   .buildType = mexType}));
     CHECK(fix.building.size() == 1);
 
@@ -1068,8 +1123,8 @@ TEST_CASE("a build occupies its builder and refuses parallel work") {
                    .kind = CommandKind::Build,
                    .queued = true,
                    .unit = engineer,
-                   .targetX = rm::test::fx(500.0f),
-                   .targetZ = rm::test::fx(500.0f),
+                   .targetX = rm::test::fx(340.0f),
+                   .targetZ = rm::test::fx(300.0f),
                    .buildType = mexType};
     REQUIRE(fix.apply(queued));
     CHECK(fix.roster.store.orders()[engineer.index].size() == 2);
@@ -1101,7 +1156,7 @@ TEST_CASE("a structure build refuses live occupancy and only unfinished work") {
 
     const UnitId firstBuilder = fix.roster.add(engineerType, 300.0f, 300.0f, 0, 500.0f);
     const UnitId secondBuilder = fix.roster.add(engineerType, 320.0f, 300.0f, 0, 500.0f);
-    const UnitId blocker = fix.roster.add(engineerType, 400.0f, 400.0f, 0, 500.0f);
+    const UnitId blocker = fix.roster.add(engineerType, 340.0f, 300.0f, 0, 500.0f);
     const auto build = [&](UnitId builder, float x, float z) {
         return fix.apply(Command{.tick = 0,
                                  .player = 0,
@@ -1113,16 +1168,16 @@ TEST_CASE("a structure build refuses live occupancy and only unfinished work") {
     };
 
     CHECK_FALSE(build(firstBuilder, 300.0f, 300.0f));  // the builder itself occupies the site
-    CHECK_FALSE(build(firstBuilder, 400.0f, 400.0f));
+    CHECK_FALSE(build(firstBuilder, 340.0f, 300.0f));
     fix.roster.store.kill(blocker);
-    REQUIRE(build(firstBuilder, 400.0f, 400.0f));
-    CHECK_FALSE(build(secondBuilder, 405.0f, 400.0f));
+    REQUIRE(build(firstBuilder, 340.0f, 300.0f));
+    CHECK_FALSE(build(secondBuilder, 345.0f, 300.0f));
     CHECK(fix.building.size() == 1);
 
     // Finished entries remain as history but no longer occupy ground. The spawned structure
     // would normally become the live blocker; this fixture deliberately has not spawned it.
     fix.building[0].buildTimeRemaining = rm::sim::Mag{};
-    REQUIRE(build(secondBuilder, 400.0f, 400.0f));
+    REQUIRE(build(secondBuilder, 340.0f, 300.0f));
     CHECK(fix.building.size() == 2);
 }
 

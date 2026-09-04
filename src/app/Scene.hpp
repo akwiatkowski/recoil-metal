@@ -186,9 +186,9 @@ struct UnitScene {
 
     // --- A builder faces its work: presentation only ---------------------------------------
     //
-    // The SIM never turns a builder. The Build command parks the founder where it stands
-    // (`Command.cpp`'s own comment: construction "occupies" it), and retail agrees the hull
-    // does not move — its BuilderArmManipulator aims torso/arm BONES at the site
+    // Once the sim has moved a mobile builder into its exact build reach, the active
+    // construction parks it there. Retail does not apply a separate hull turn while working —
+    // its BuilderArmManipulator aims torso/arm BONES at the site
     // (Unit.lua:2666-2685), which one shared baked pose per batch cannot express yet. Until
     // per-instance bone poses exist, the DRAWN yaw is overridden here: `Transform::heading`
     // is hashed sim state and stays untouched, so this whole feature is invisible to

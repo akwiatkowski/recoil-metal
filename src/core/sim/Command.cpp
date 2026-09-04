@@ -93,6 +93,37 @@ namespace {
     return found == building.end() ? nullptr : &*found;
 }
 
+/// Retail's mobile-build range test (`CUnitMobileBuildTask` state 1): compare centre distance
+/// after subtracting the builder's smaller footprint side and the product's larger skirt side.
+[[nodiscard]] Fx constructionReach(const UnitCatalog& catalog, UnitTypeIndex builder,
+                                   UnitTypeIndex product) noexcept {
+    const UnitCatalog::Rates& builderRates = catalog.rates(builder);
+    return builderRates.buildReachElmos + builderRates.buildFootprintElmos
+         + catalog.rates(product).buildSkirtElmos;
+}
+
+/// Whether the active queue entry already owns a completed row. Finished constructions remain
+/// as match history, so "no unfinished row" alone cannot distinguish completion from approach.
+[[nodiscard]] bool finishedConstructionFor(const QueuedCommand& command, UnitIndex slot,
+                                           const UnitStore& store, const UnitCatalog& catalog,
+                                           std::span<const Construction> building) noexcept {
+    const unitdef::UnitDef* builder = catalog.def(store.typeAt(slot));
+    const unitdef::UnitDef* product = catalog.def(command.buildType());
+    if (builder == nullptr || product == nullptr) {
+        return false;
+    }
+    const bool upgrade = !builder->upgradesTo.empty() && builder->upgradesTo == product->name;
+    const bool factoryProduction = builder->hasCategory("FACTORY") && product->isMobile();
+    const Transform& at = store.transforms()[slot];
+    const Fx siteX = (upgrade || factoryProduction) ? at.x : command.targetX();
+    const Fx siteZ = (upgrade || factoryProduction) ? at.z : command.targetZ();
+    return std::ranges::any_of(building, [&](const Construction& work) {
+        return work.finished() && work.builder == store.idAt(slot)
+            && work.blueprintIndex == command.buildType() && work.position[0] == siteX
+            && work.position[2] == siteZ;
+    });
+}
+
 void cancelActiveConstruction(std::vector<Construction>* building, UnitId builder) {
     if (building == nullptr) {
         return;
@@ -1027,6 +1058,26 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
         // for itself.
         const QueuedCommand* current = orders[slot].active();
         if (current->kind() == CommandKind::Build) {
+            // A mobile build task is active while its engineer approaches. It owns no
+            // Construction row until the exact range gate passes, so revisit `startCommand`
+            // each beat to turn an arrived approach into materialised work.
+            if (building != nullptr
+                && activeConstruction(*building, store.idAt(slot)) == nullptr
+                && !finishedConstructionFor(*current, slot, store, catalog, *building)) {
+                const PassabilityGrid* buildGrid = gridFor(*current);
+                if (buildGrid == nullptr) {
+                    continue;
+                }
+                if (!startCommand(current->asCommand(), store, catalog, terrain, *buildGrid,
+                                  rate, building, events, features)) {
+                    (void)orders[slot].finish();
+                    startPending();
+                    continue;
+                }
+                if (activeConstruction(*building, store.idAt(slot)) == nullptr) {
+                    continue;  // still walking into build range
+                }
+            }
             serviceBuilds();
             continue;
         }
@@ -1841,14 +1892,28 @@ bool startCommand(const Command& command, UnitStore& store, const UnitCatalog& c
             }
         }
 
+        // A mobile builder does not create work remotely. Retail subtracts the engineer's
+        // smaller footprint and the product's larger skirt from centre distance, then compares
+        // MaxBuildDistance. Factories and upgrades already use their own pad and bypass this
+        // mobile-task approach state.
+        if (!upgrade && !factoryProduction
+            && groundDistanceElmos(positionOf(builderAt), {siteX, Fx{}, siteZ})
+                   > constructionReach(catalog, store.typeAt(command.unit.index),
+                                       command.buildType)) {
+            const bool routedToSite = motion.airborne
+                ? motion.moving && motion.destinationX == siteX && motion.destinationZ == siteZ
+                : motion.moving && !motion.path.empty() && motion.path.back()[0] == siteX
+                      && motion.path.back()[1] == siteZ;
+            return routedToSite
+                || routeUnit(command.unit.index, siteX, siteZ, store, terrain, grid);
+        }
+
         // The cost and the time come from the DEFINITION, and the rate from the clock — the
         // same derivation `UnitCatalog::Rates` does for income, at the one place a construction
         // is created.
         // Construction occupies the builder until completion, so an earlier route must not
         // keep moving the founder while it builds remotely.
-        motion.moving = false;
-        motion.path.clear();
-        motion.pathIndex = 0;
+        teardownMovement(motion);
 
         building->push_back(Construction{
             .armyIndex = store.motion()[command.unit.index].armyIndex,

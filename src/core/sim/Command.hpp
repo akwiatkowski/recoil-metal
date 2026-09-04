@@ -263,7 +263,9 @@ using CommandGridForUnit = std::function<const PassabilityGrid*(UnitId)>;
 /// longer exists. What matters is that the rejection is deterministic, so a replay rejects
 /// exactly what the original did.
 ///
-/// `Build` IS applied now (P3), and the gap this comment used to describe is closed.
+/// `Build` IS applied now (P3), and the gap this comment used to describe is closed. A mobile
+/// builder first approaches its exact retail build range; only then is the `Construction` row
+/// created. Factory products and upgrades remain immediate on the builder's own pad.
 ///
 /// It could not be before, for a reason worth keeping: `Construction::blueprintIndex` meant "an
 /// index into whatever list the caller is building from", so the sim had no way to name a
@@ -331,7 +333,8 @@ using CommandGridForUnit = std::function<const PassabilityGrid*(UnitId)>;
 ///
 /// COMPLETION IS DEFINED HERE because only the caller of the passes can know it. A `Move` or
 /// `Attack` is finished when the unit has stopped moving; `Stop` finishes immediately, while a
-/// `Build` remains current until its construction completes. An order that
+/// `Build` remains current while its mobile builder approaches and until its construction
+/// completes. An order that
 /// cannot be started — a route that no longer exists, a target that died — is dropped and the
 /// next one tried in the same tick, so a dead waypoint does not stall a route.
 ///

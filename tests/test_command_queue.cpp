@@ -858,6 +858,7 @@ TEST_CASE("replacement kind controls movement teardown between clear and insert"
     rm::unitdef::UnitDef engineerDef = walkerDef();
     engineerDef.name = "engineer";
     engineerDef.buildRate = 10.0f;
+    engineerDef.buildDistanceElmos = 40.0f;
     engineerDef.buildableCategory = {{"STRUCTURE"}};
     const rm::UnitTypeIndex engineerType = roster.addType(engineerDef);
     rm::unitdef::UnitDef structureDef;
@@ -905,8 +906,8 @@ TEST_CASE("replacement kind controls movement teardown between clear and insert"
         .player = 0,
         .kind = CommandKind::Build,
         .unit = engineer,
-        .targetX = rm::sim::fxFromFloat(300.0f),
-        .targetZ = rm::sim::fxFromFloat(300.0f),
+        .targetX = rm::sim::fxFromFloat(70.0f),
+        .targetZ = rm::sim::fxFromFloat(40.0f),
         .buildType = structureType,
     };
     REQUIRE(rm::sim::applyCommand(build, roster.store, roster.catalog, players, armies, terrain,
@@ -2155,8 +2156,8 @@ TEST_CASE("a queued immobile structure falls back to its builder grid") {
                         .kind = CommandKind::Build,
                         .queued = true,
                         .unit = engineer,
-                        .targetX = rm::sim::fxFromFloat(400.0f),
-                        .targetZ = rm::sim::fxFromFloat(400.0f),
+                        .targetX = rm::sim::fxFromFloat(70.0f),
+                        .targetZ = rm::sim::fxFromFloat(40.0f),
                         .buildType = structureType};
     REQUIRE(rm::sim::applyCommand(build, roster.store, roster.catalog, players, armies,
                                   terrain, open, roster.rate, &building));

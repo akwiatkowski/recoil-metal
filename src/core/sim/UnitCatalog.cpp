@@ -54,6 +54,10 @@ UnitTypeIndex UnitCatalog::add(const unitdef::UnitDef* def, TickRate rate) {
         derived.upkeepEnergyPerTick = rate.magPerTick(def->upkeepEnergyPerSecond);
         derived.buildPerTick = rate.magPerTick(def->buildRate);
         derived.buildReachElmos = fxFromFloat(def->buildDistanceElmos);
+        derived.buildFootprintElmos = Fx::fromInt(
+            std::min(def->footprintSquaresX, def->footprintSquaresZ) * kSquareSize);
+        derived.buildSkirtElmos = fxFromFloat(
+            std::max(def->skirtSquaresX, def->skirtSquaresZ) * scmap::kElmosPerOgrid);
         derived.regenPerTick = rate.magPerTick(def->regenPerSecond);
     }
     rates_.push_back(derived);
