@@ -297,6 +297,40 @@ TEST_CASE("multiple helpers add their build rates to the same project") {
     CHECK(rm::test::asFloat(f.building[0].buildTimeRemaining) == Approx(97.0f).margin(0.01));
 }
 
+TEST_CASE("assist walks a transitive guard chain to the builder at its end") {
+    Fixture f;
+    const UnitId founder = f.roster.add(f.engineerType, 200.0f, 200.0f, 0, 100.0f);
+    const UnitId relay = f.roster.add(f.engineerType, 210.0f, 200.0f, 0, 100.0f);
+    const UnitId helper = f.roster.add(f.engineerType, 220.0f, 200.0f, 0, 100.0f);
+    f.economies[0].stored = {.mass = rm::sim::magFromFloat(1000.0f),
+                             .energy = rm::sim::magFromFloat(1000.0f)};
+
+    REQUIRE(f.build(founder, 205.0f, 200.0f));
+    REQUIRE(f.assist(relay, founder));
+    REQUIRE(f.assist(helper, relay));
+    f.tick(1);
+
+    REQUIRE(f.building.size() == 1);
+    CHECK(rm::test::asFloat(f.building[0].assistPerTick) == Approx(2.0f).margin(0.001));
+    CHECK(rm::test::asFloat(f.building[0].buildTimeRemaining) == Approx(97.0f).margin(0.01));
+}
+
+TEST_CASE("a cyclic assist chain contributes no work") {
+    Fixture f;
+    const UnitId first = f.roster.add(f.engineerType, 200.0f, 200.0f, 0, 100.0f);
+    const UnitId second = f.roster.add(f.engineerType, 210.0f, 200.0f, 0, 100.0f);
+    REQUIRE(f.assist(first, second));
+    REQUIRE(f.assist(second, first));
+    f.building.push_back(rm::sim::Construction{
+        .builder = first,
+        .totalBuildTime = rm::sim::magFromFloat(100.0f),
+        .buildTimeRemaining = rm::sim::magFromFloat(100.0f),
+    });
+
+    CHECK(rm::sim::applyAssistance(f.roster.store, f.roster.catalog, f.building) == 0);
+    CHECK(f.building.front().assistPerTick == rm::sim::Mag{});
+}
+
 TEST_CASE("a queued assist starts after the order ahead of it finishes") {
     Fixture f;
     const UnitId founder = f.roster.add(f.engineerType, 200.0f, 200.0f, 0, 100.0f);

@@ -19,7 +19,7 @@ inspector with paged selection/build instruments and a dispatching 4x3 command r
 resource/game-profile descriptors plus one aspect-preserving minimap projection for preview, fog,
 pips, input, and true-line camera footprint, explicit BAR and neutral vocabulary/material fallbacks,
 the exact retail mobile-builder approach-to-range gate, per-instance builder torso/arm/tool aiming from authored
-bone rigs, the final HUD stress/accessibility and real-window performance pass, and README counts at 1383) —
+bone rigs, the final HUD stress/accessibility and real-window performance pass, and README counts at 1385) —
 `ComputeAirControl`, `CalcWingedLift`, the damping factor and the terrain look-ahead read and
 implemented (`C-244`–`C-246`): authored `KMove`/`KLift` gains with their damping terms, the
 vertical lift-off to half elevation that replaces the invented runway roll, the pyramid look-ahead
@@ -103,7 +103,7 @@ excluded from the headline.
 | [`FA-CONTENT`](#fa-content---vfs-blueprints-maps-and-bootstrap) | VFS, blueprints, maps, bootstrap | `WP-05`, `06`, `09` | 65% | 35% | 55% | Trace and test exact retail SCD mount/override precedence. |
 | [`FA-LUA`](#fa-lua---gameplay-lua-and-mod-contract) | Gameplay Lua and mod contract | `WP-07`-`08` | 10% | 5% | 30% | Measure the exact Moho contract for the milestone-20 skirmish slice. |
 | [`FA-MATCH`](#fa-match---armies-setup-and-victory-rules) | Armies, setup, victory rules | `WP-10`-`11` | 60% | 25% | 85% | Recover the retail lobby/scenario victory-mode selector; do not wire a synthetic app setting. |
-| [`FA-CMD`](#fa-cmd---commands-controls-and-factories) | Commands, controls, factories | `WP-12`-`14` | 75% | 55% | 75% | Add the remaining guard-ladder branches (build-assist chain, reclaim-copy, repair scan) and read the leash endpoints. |
+| [`FA-CMD`](#fa-cmd---commands-controls-and-factories) | Commands, controls, factories | `WP-12`-`14` | 75% | 55% | 75% | Add the remaining guard-ladder branches (reclaim-copy and repair scan) and read the leash endpoints. |
 | [`FA-ECON`](#fa-econ---economy-construction-and-engineering) | Economy, construction, engineering | `WP-15`-`19` | 70% | 55% | 90% | Name the capture increment at `Unit+0x690` and read `Sim::TransferUnit`'s copy/reset inventory, then specify the smallest capture slice. |
 | [`FA-LAND`](#fa-land---land-navigation-formations-and-spatial-world) | Land navigation, formations, spatial world | `WP-20`, `21`, `26` | 85% | 30% | 95% | Add bounded formation rotation or category matching without changing path-service ordering. |
 | [`FA-AIR`](#fa-air---aircraft-flight-combat-and-staging) | Aircraft flight, combat, staging | `WP-22` | 60% | 50% | 95% | Implement `C-224` states 1 and 2 as the smallest attack-run pair. |
@@ -209,17 +209,19 @@ own-queue-before-guardee branch is implemented with its lifecycle closed in `C-2
 `C-183` ATTACK branch is implemented for Assist-capable guards — `AI.GuardScanRadius` parses,
 acquisition runs the ordinary path over range-overridden weapon copies with shared incumbency
 and threaded recon, pursuit holds inside weapon reach and chases outside it, Assist stays head.
+Build assistance now follows active Assist targets transitively to the terminal builder, with a
+visited set so cyclic guard chains contribute no work; reach is still measured to that resolved
+builder, preserving the existing range rule.
 The native `CUnitScriptTask` boundary is also implemented: script issues are authorized and logged,
 the command stage runs retail task-status timing, lifecycle cleanup is queue-owned, and opaque host
 state survives SaveState v12 and hashing without coupling Lua to the sim core.
-Still absent: the transitive build-assist chain walk, reclaim-copy, the repair scan, the leash
+Still absent: reclaim-copy, the repair scan, the leash
 (endpoints unread), and combat-unit guard orders (Assist refusal for non-builders is pinned —
 a Guard order is the deferred vehicle).
 
 ```text
 /goal Advance FA-CMD by implementing the next C-183 guard-ladder branch for Assist-capable
-guards: the build-assist transitive chain walk through Unit+0x4e0 with visited set and cycle
-guard, then reclaim-copy (guardee state 28) and the repair scan (GuardScanRadius around the
+guards: reclaim-copy (guardee state 28) and then the repair scan (GuardScanRadius around the
 guardee, layer mask 0x100, nearest to the guard). Read the leash endpoints first — the formula
 is known, the anchor is not. Start with focused guard-order regressions, preserve the active
 head and all ids/counters/serials, run make test and make verify, then update WP-12 and FA-CMD.
@@ -495,7 +497,7 @@ builders, fixed command/resource capacity, safe areas, 1x/2x display changes, re
 and every presentation/effects level. Long production names now truncate visibly inside their
 fixed panel instead of crossing the repeat/count columns. Full, Reduced, and Off screenshot smoke
 tests preserve semantic layer order. Real windows sustain 60 Hz at 5088x2862 pixels: Full measured
-6.694 ms GPU mean and Off 6.792 ms, a noise-level difference. The complete 1383-test suite passes
+6.694 ms GPU mean and Off 6.792 ms, a noise-level difference. The complete 1385-test suite passes
 and the 7000-tick golden replay remains identical.
 
 The native HUD also has a measured baseline (HUD slice 0, `docs/hud-baseline.md`,

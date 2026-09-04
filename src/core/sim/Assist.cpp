@@ -2,6 +2,8 @@
 
 #include "core/sim/Combat.hpp"
 
+#include <algorithm>
+
 namespace rm::sim {
 
 std::size_t applyAssistance(const UnitStore& store, const UnitCatalog& catalog,
@@ -39,12 +41,35 @@ std::size_t applyAssistance(const UnitStore& store, const UnitCatalog& catalog,
             continue;
         }
 
-        // In reach of the TARGET, not of the site: "help that engineer" follows the
-        // engineer, and the game's own assist is a guard order on the unit too.
+        // C-183 follows Unit+0x4e0 (the active guard target) until it reaches the builder
+        // actually doing the work. A cycle is malformed but legal to issue one edge at a time;
+        // it contributes nothing instead of choosing an arbitrary member as the founder.
+        UnitId founder = head->target();
+        std::vector<UnitId> visited;
+        bool cyclic = false;
+        while (store.alive(founder)) {
+            if (std::ranges::find(visited, founder) != visited.end()) {
+                cyclic = true;
+                break;
+            }
+            visited.push_back(founder);
+            const QueuedCommand* guarded = orders[founder.index].active();
+            if (guarded == nullptr || guarded->kind() != CommandKind::Assist
+                || !store.alive(guarded->target())) {
+                break;
+            }
+            founder = guarded->target();
+        }
+        if (cyclic || !store.alive(founder)) {
+            continue;
+        }
+
+        // In reach of the resolved builder, not of the site. Intermediate guards follow the
+        // next unit in the chain, so a stretched chain cannot lend build power at a distance.
         const Fx reach = catalog.rates(store.typeAt(slot)).buildReachElmos
-                       + motion[slot].radiusElmos + motion[head->target().index].radiusElmos;
+                       + motion[slot].radiusElmos + motion[founder.index].radiusElmos;
         if (groundDistanceElmos(positionOf(transforms[slot]),
-                                positionOf(transforms[head->target().index]))
+                                positionOf(transforms[founder.index]))
             > reach) {
             continue;  // still walking over
         }
@@ -53,7 +78,7 @@ std::size_t applyAssistance(const UnitStore& store, const UnitCatalog& catalog,
         // on. First match in list order, which is creation order, so every assister of one
         // target picks the same work and the answer is replay-stable.
         for (Construction& work : building) {
-            if (work.finished() || !(work.builder == head->target())) {
+            if (work.finished() || !(work.builder == founder)) {
                 continue;
             }
             work.assistPerTick += rate;
