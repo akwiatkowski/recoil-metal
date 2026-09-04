@@ -1892,6 +1892,15 @@ int runWindowed(const Session& session) {
                                      &inspector);
             }
 
+            // The production panel, bottom right, in the deck's command rectangle: what the
+            // selected factory is building, in order, and how far the current one has got.
+            if (const std::optional<rm::ui::ProductionView> production =
+                    gatherProduction(units, buildWho.builder)) {
+                rm::ui::appendProductionPanel(hudScratch, window.labelFont(),
+                                              window.readoutFont(), theme, frame.commands,
+                                              *production);
+            }
+
             // --- The band box, and the minimap's drag-to-pan --------------------------
             // Both are DERIVED FROM POLLED STATE — is the left button down, where did the
             // press begin, where is the cursor now — rather than from drag events, because

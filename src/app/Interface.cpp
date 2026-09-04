@@ -1057,4 +1057,49 @@ void gatherRoster(const UnitScene& scene, std::span<const rm::sim::UnitId> selec
     out = rm::ui::groupSelection(ids, health, maxHealth, names);
 }
 
+std::optional<rm::ui::ProductionView> gatherProduction(const UnitScene& scene,
+                                                       rm::sim::UnitId builder) {
+    if (!scene.store.alive(builder)) {
+        return std::nullopt;
+    }
+    const rm::unitdef::UnitDef* def = scene.catalog.def(scene.store.typeAt(builder.index));
+    // A factory is a builder that does not move. The definition has no flag for it and needs
+    // none: the corpus's factories are exactly its immobile builders.
+    if (def == nullptr || !def->isBuilder() || def->motion != rm::unitdef::MotionType::None) {
+        return std::nullopt;
+    }
+
+    rm::ui::ProductionView view;
+    view.factoryId = def->name;
+    view.factoryName = def->description.empty() ? def->name : def->description;
+    view.repeat = scene.store.factoryRepeat(builder);
+
+    // The queue as the sim holds it, current first; only Build orders are production. A
+    // shared order's remaining count is the stack a player shift-clicked.
+    for (const rm::sim::QueuedCommand& entry : scene.store.orders()[builder.index].entries()) {
+        if (entry.kind() != rm::sim::CommandKind::Build) {
+            continue;
+        }
+        const rm::sim::SharedCommand& order = entry.payload();
+        const rm::unitdef::UnitDef* product = scene.catalog.def(order.buildType);
+        rm::ui::ProductionEntry row;
+        row.id = product != nullptr ? product->name : std::to_string(order.buildType);
+        row.name = product != nullptr && !product->description.empty() ? product->description
+                                                                        : row.id;
+        row.count = std::max<std::uint32_t>(1, order.remainingCount);
+        view.queue.push_back(std::move(row));
+    }
+
+    // The construction this factory is running, if any — matched by builder, the same link
+    // an Assist resolves through.
+    for (const rm::sim::Construction& work : scene.building) {
+        if (work.builder == builder && constructionInProgress(work)) {
+            view.building = true;
+            view.progress = constructionProgress(work);
+            break;
+        }
+    }
+    return view;
+}
+
 } // namespace rm::app

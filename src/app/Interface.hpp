@@ -24,6 +24,7 @@
 #include "core/ui/GameProfile.hpp"
 #include "core/ui/Hud.hpp"
 #include "core/ui/Minimap.hpp"
+#include "core/ui/ProductionPanel.hpp"
 #include "core/ui/Roster.hpp"
 
 #include <array>
@@ -132,6 +133,13 @@ struct PackedInterfaceAtlas {
 /// Dead handles are skipped, which is how a selection outlives the units in it.
 void gatherRoster(const UnitScene& scene, std::span<const rm::sim::UnitId> selection,
                   std::vector<rm::ui::RosterTile>& out);
+
+/// What the active builder is producing, when it is a factory: its Build orders in queue
+/// order with their counts, the progress of the construction it is running, and its repeat
+/// state. Nothing for a mobile builder, a dead handle, or a unit that cannot build — an
+/// engineer's queue is drawn in the world, not in the deck.
+[[nodiscard]] std::optional<rm::ui::ProductionView> gatherProduction(const UnitScene& scene,
+                                                                     rm::sim::UnitId builder);
 
 void appendViewFootprint(std::vector<std::array<float, 2>>& out, const rm::OrbitCamera& camera,
                          const rm::HeightField& field, const rm::ui::UiViewport& viewport);
