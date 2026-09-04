@@ -52,7 +52,12 @@
     [timer invalidate];
 
     const rm::bench::FrameRecorder recorder = self.window->benchmarkSnapshot();
+    const rm::ui::UiViewport viewport = self.window->uiViewport();
+    const rm::ui::Extent extent = viewport.logicalExtent;
     std::printf("%s\n", recorder.summaryLine("recoil-metal").c_str());
+    std::printf("  measured viewport: %.0f x %.0f points at %.2fx backing\n",
+                static_cast<double>(extent.width), static_cast<double>(extent.height),
+                static_cast<double>(viewport.backingScale));
     std::printf("  note: cpu ms is display-paced by CAMetalDisplayLink; gpu ms is the\n"
                 "        renderer's own cost and is the number worth comparing.\n");
 
@@ -704,8 +709,9 @@ int runWindowed(const Session& session) {
         [app setDelegate:[[RMAppDelegate alloc] init]];
         [app finishLaunching];
 
-        // 1280x720 points: comfortable debug size on a laptop screen.
-        rm::Window window{1280, 720, "recoil-metal — m8: movable units"};
+        rm::Window window{static_cast<int>(session.window.width),
+                          static_cast<int>(session.window.height),
+                          "recoil-metal — m8: movable units", session.window.fullscreen};
         const bool systemReducesTransparency =
             [NSWorkspace sharedWorkspace].accessibilityDisplayShouldReduceTransparency;
         const rm::ui::EffectsLevel uiEffects =

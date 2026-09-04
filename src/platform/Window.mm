@@ -462,6 +462,7 @@ struct rm::Window::Impl {
     CAMetalDisplayLink* displayLink;  // owned (ARC)
     RMDisplayLinkDelegate* delegate;  // owned (ARC)
     std::unique_ptr<rm::Renderer> renderer;
+    bool fullscreen = false;
 
     // The app's hooks. Held here — rather than copied into the ObjC objects —
     // so that installing one after construction takes effect immediately: the
@@ -471,7 +472,8 @@ struct rm::Window::Impl {
     std::function<void(rm::KeyEvent)> keyCallback;
     std::set<rm::Key> heldKeys;
 
-    Impl(int width, int height, const char* title) {
+    Impl(int width, int height, const char* title, bool startFullscreen)
+        : fullscreen{startFullscreen} {
         constexpr NSUInteger style = NSWindowStyleMaskTitled
                                    | NSWindowStyleMaskClosable
                                    | NSWindowStyleMaskMiniaturizable
@@ -541,8 +543,8 @@ struct rm::Window::Impl {
 
 namespace rm {
 
-Window::Window(int width, int height, const char* title)
-    : impl_{std::make_unique<Impl>(width, height, title)}
+Window::Window(int width, int height, const char* title, bool fullscreen)
+    : impl_{std::make_unique<Impl>(width, height, title, fullscreen)}
 {}
 
 Window::~Window() = default;
@@ -758,6 +760,9 @@ void Window::setUiEffects(ui::EffectsLevel level) {
 
 void Window::show() {
     [impl_->window makeKeyAndOrderFront:nil];
+    if (impl_->fullscreen) {
+        [impl_->window toggleFullScreen:nil];
+    }
 }
 
 } // namespace rm

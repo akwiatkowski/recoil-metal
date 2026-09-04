@@ -67,7 +67,7 @@ public:
     // width/height are in points, not pixels — on a Retina display the Metal
     // drawable is 2x; the Impl matches contentsScale so we render at full
     // backing resolution (a classic silent half-resolution bug otherwise).
-    Window(int width, int height, const char* title);
+    Window(int width, int height, const char* title, bool fullscreen = false);
     ~Window();
 
     Window(const Window&) = delete;

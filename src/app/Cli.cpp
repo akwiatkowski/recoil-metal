@@ -39,6 +39,22 @@ namespace rm::app {
     return parsed;
 }
 
+WindowOptions parseWindow(int argc, const char* argv[]) {
+    WindowOptions options;
+    options.fullscreen = hasFlag(argc, argv, "--fullscreen");
+    for (int i = 1; i + 2 < argc; ++i) {
+        if (std::string_view{argv[i]} != "--window") continue;
+        const int width = std::atoi(argv[i + 1]);
+        const int height = std::atoi(argv[i + 2]);
+        if (width > 0 && height > 0) {
+            options.width = static_cast<unsigned int>(std::max(width, 1280));
+            options.height = static_cast<unsigned int>(std::max(height, 720));
+        }
+        break;
+    }
+    return options;
+}
+
 [[nodiscard]] ShotOptions parseShot(int argc, const char* argv[]) {
     ShotOptions options;
     for (int i = 1; i < argc; ++i) {

@@ -364,6 +364,7 @@ int main(int argc, const char* argv[]) {
             .uiScale = parseUiScale(argc, argv),
             .uiProfile = parseGameProfile(argc, argv),
             .uiEffects = parseUiEffects(argc, argv),
+            .window = parseWindow(argc, argv),
             .propInstances = propInstances,
         };
 

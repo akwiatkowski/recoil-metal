@@ -75,6 +75,8 @@ struct Session {
     /// Shared backdrop quality and whether the command line overrides macOS accessibility.
     rm::ui::EffectsPreference uiEffects{};
 
+    WindowOptions window;
+
     /// How many prop instances were placed, for the quality line each mode prints.
     std::size_t propInstances = 0;
 };

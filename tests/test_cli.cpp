@@ -25,6 +25,7 @@ using rm::app::BenchOptions;
 using rm::app::LookOptions;
 using rm::app::MarchOptions;
 using rm::app::ShotOptions;
+using rm::app::WindowOptions;
 
 namespace {
 
@@ -89,6 +90,24 @@ TEST_CASE("logging flags select a level and optional file without swallowing fla
     REQUIRE(refused.problems.size() == 2);
     CHECK(refused.problems[0].find("verbose") != std::string::npos);
     CHECK(refused.problems[1].find("--log-file") != std::string::npos);
+}
+
+TEST_CASE("window size is logical, bounded by the supported HUD floor, and fullscreen is explicit") {
+    Args absent{{}};
+    CHECK(rm::app::parseWindow(absent.argc(), absent.argv()).width == 1280);
+    CHECK(rm::app::parseWindow(absent.argc(), absent.argv()).height == 720);
+    CHECK_FALSE(rm::app::parseWindow(absent.argc(), absent.argv()).fullscreen);
+
+    Args sized{{"--window", "2560", "1440"}};
+    const WindowOptions large = rm::app::parseWindow(sized.argc(), sized.argv());
+    CHECK(large.width == 2560);
+    CHECK(large.height == 1440);
+
+    Args bounded{{"--fullscreen", "--window", "800", "600"}};
+    const WindowOptions floor = rm::app::parseWindow(bounded.argc(), bounded.argv());
+    CHECK(floor.width == 1280);
+    CHECK(floor.height == 720);
+    CHECK(floor.fullscreen);
 }
 
 TEST_CASE("a count is the value after its flag, and zero when there is none") {

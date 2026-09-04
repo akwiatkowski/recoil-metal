@@ -101,6 +101,12 @@ struct LoggingOptions {
     std::vector<std::string> problems;
 };
 
+struct WindowOptions {
+    unsigned int width = 1280;
+    unsigned int height = 720;
+    bool fullscreen = false;
+};
+
 // --- The parsers ---------------------------------------------------------------------------
 
 [[nodiscard]] ShotOptions parseShot(int argc, const char* argv[]);
@@ -113,6 +119,9 @@ struct LoggingOptions {
 /// `--log-level trace|debug|info|warn|error|off` and `--log-file <path>`.
 /// Invalid or missing values retain safe defaults and are returned as reportable problems.
 [[nodiscard]] LoggingOptions parseLogging(int argc, const char* argv[]);
+
+/// `--window <w> <h>` sets the initial logical-point size; `--fullscreen` uses the display.
+[[nodiscard]] WindowOptions parseWindow(int argc, const char* argv[]);
 
 /// `--ui-scale N`: the requested multiplier relative to automatic HUD size.
 ///
