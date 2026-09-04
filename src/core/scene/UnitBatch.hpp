@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/model/Model.hpp"
+#include "core/model/BuilderAim.hpp"
 #include "core/model/Sca.hpp"
 #include "core/scene/UnitPlacement.hpp"
 
@@ -44,6 +45,10 @@ struct UnitBatch {
     // UnitInstance::animationPhase, so a batch is a squad rather than one unit
     // drawn many times.
     const sca::Animation* animation = nullptr;
+
+    /// Optional authored construction-arm rig for this exact model. Its subtree flags are baked
+    /// into the batch's bone buffer; yaw and pitch remain per UnitInstance.
+    BuilderAimRig builderAim;
 
     // Whether the phase in each instance is the WHOLE answer, or an offset
     // added to a clock the renderer advances.

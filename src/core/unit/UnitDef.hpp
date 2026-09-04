@@ -73,6 +73,36 @@ struct ShieldSpec {
     }
 };
 
+/// One bone reference from `General.BuildBones`: either a model bone name or the numeric index
+/// accepted by retail's `CreateBuilderArmController`. Index zero is common and is therefore not
+/// representable as "missing".
+struct BoneRef {
+    std::string name;
+    int index = -1;
+
+    [[nodiscard]] bool present() const noexcept { return !name.empty() || index >= 0; }
+};
+
+/// The two-axis construction arm authored by `General.BuildBones`.
+///
+/// Angles and slew rates stay in the blueprint's degrees here. Presentation converts them once
+/// when it resolves the names against a model; the data layer should not silently change units.
+struct BuilderArmSpec {
+    BoneRef yawBone;
+    BoneRef pitchBone;
+    BoneRef aimBone;
+    float yawMinDegrees = -180.0f;
+    float yawMaxDegrees = 180.0f;
+    float yawSlewDegreesPerSecond = 360.0f;
+    float pitchMinDegrees = -90.0f;
+    float pitchMaxDegrees = 90.0f;
+    float pitchSlewDegreesPerSecond = 360.0f;
+
+    [[nodiscard]] bool exists() const noexcept {
+        return yawBone.present() && pitchBone.present() && aimBone.present();
+    }
+};
+
 // What a unit *is*, read from the game's own unit definitions rather than
 // hardcoded here.
 //
@@ -179,6 +209,10 @@ struct UnitDef {
     /// moment both are in hand, exactly as muzzle bones are. Empty for anything that does
     /// not build.
     std::vector<std::string> buildEffectBones;
+
+    /// `General.BuildBones`' retail `BuilderArmManipulator` contract. Empty when any of the
+    /// three required bone references is absent; callers then leave the model's pose alone.
+    BuilderArmSpec builderArm;
 
     /// What this unit moves through. See MotionType: for the Supreme Commander
     /// family it is read from the file, for BAR it is inferred from the fields

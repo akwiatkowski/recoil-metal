@@ -19,7 +19,7 @@ namespace rm {
 // selectable, and would take a move order.
 //
 // It reuses UnitInstance for the per-instance data even so, because the two want
-// exactly the same 48 bytes and the vertex shader is already written to read
+// exactly the same 56 bytes and the vertex shader is already written to read
 // them. The team-colour field goes unused, which is 16 bytes a prop does not need
 // against a whole second instance layout, a second shader input struct and a
 // second vertex function that would differ from the first in nothing.

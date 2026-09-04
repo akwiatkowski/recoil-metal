@@ -35,6 +35,8 @@ struct UnitInstanceIn {
     float animationPhase;   // cycles, added to the batch clock
     float rotationX;        // pitch, radians about +X
     float rotationZ;        // roll, radians about +Z
+    float builderYaw;       // authored BuilderArmManipulator yaw, per instance
+    float builderPitch;     // authored BuilderArmManipulator pitch, per instance
 };
 
 // Everything the vertex shader needs to find one instance's pose inside the
@@ -45,6 +47,12 @@ struct PoseUniforms {
     uint boneCount;   // stride, in bones, between consecutive poses
     float duration;   // seconds; 0 when the batch does not animate
     float time;       // the batch clock, in seconds
+    uint builderAim;
+    packed_uint3 padding;
+    float4 yawPivot;    // xyz pivot; w unused
+    float4 yawAxis;     // xyz unit axis; w unused
+    float4 pitchPivot;  // xyz pivot; w unused
+    float4 pitchAxis;   // xyz unit axis; w unused
 };
 
 // One bone's contribution: a rotation and a translation, no scale. Matches the
@@ -53,8 +61,44 @@ struct PoseUniforms {
 struct BoneTransformIn {
     packed_float4 rotation;     // w, x, y, z
     packed_float3 translation;
-    float padding;
+    uint builderFlags;
 };
+
+static float3 rotateBuilderAxis(float3 vector, float3 axis, float angle) {
+    const float c = cos(angle);
+    const float s = sin(angle);
+    return vector * c + cross(axis, vector) * s + axis * dot(axis, vector) * (1.0 - c);
+}
+
+static float3 applyBuilderAim(float3 point, BoneTransformIn bone, UnitInstanceIn inst,
+                              PoseUniforms p) {
+    if (p.builderAim == 0) {
+        return point;
+    }
+    if ((bone.builderFlags & 2u) != 0u) {
+        const float3 pivot = p.pitchPivot.xyz;
+        point = pivot + rotateBuilderAxis(point - pivot, p.pitchAxis.xyz, inst.builderPitch);
+    }
+    if ((bone.builderFlags & 1u) != 0u) {
+        const float3 pivot = p.yawPivot.xyz;
+        point = pivot + rotateBuilderAxis(point - pivot, p.yawAxis.xyz, inst.builderYaw);
+    }
+    return point;
+}
+
+static float3 applyBuilderAimNormal(float3 normal, BoneTransformIn bone, UnitInstanceIn inst,
+                                    PoseUniforms p) {
+    if (p.builderAim == 0) {
+        return normal;
+    }
+    if ((bone.builderFlags & 2u) != 0u) {
+        normal = rotateBuilderAxis(normal, p.pitchAxis.xyz, inst.builderPitch);
+    }
+    if ((bone.builderFlags & 1u) != 0u) {
+        normal = rotateBuilderAxis(normal, p.yawAxis.xyz, inst.builderYaw);
+    }
+    return normal;
+}
 
 /// Rotates a vector by a quaternion, the same sandwich the C++ side uses.
 static float3 rotateBy(float4 q, float3 v) {
@@ -157,7 +201,8 @@ vertex UnitOut unitVertex(uint vid [[vertex_id]],
     // (core/model/Pose.hpp); under animation it is the full rigid transform.
     const BoneTransformIn bone = bones[poseIndex * p.boneCount + v.boneIndex];
     const float4 boneRotation = float4(bone.rotation);
-    const float3 local = rotateBy(boneRotation, float3(v.position)) + float3(bone.translation);
+    const float3 local = applyBuilderAim(
+        rotateBy(boneRotation, float3(v.position)) + float3(bone.translation), bone, inst, p);
 
     // Roll (Z), then pitch (X), then yaw (Y). The C++ side computes pitch/roll
     // in the unit's local frame (after undoing yaw) so that the model's up axis
@@ -166,7 +211,8 @@ vertex UnitOut unitVertex(uint vid [[vertex_id]],
     const float3 world = unitOrient(local, inst) * inst.scale + float3(inst.position);
 
     // The normal takes the bone's rotation but not its translation.
-    const float3 spunNormal = unitOrient(rotateBy(boneRotation, float3(v.normal)), inst);
+    const float3 spunNormal = unitOrient(
+        applyBuilderAimNormal(rotateBy(boneRotation, float3(v.normal)), bone, inst, p), inst);
 
     UnitOut out;
     out.position = u.viewProjection * float4(world, 1.0);

@@ -5,6 +5,7 @@
 
 #include <array>
 #include <cstddef>
+#include <cstdint>
 #include <span>
 #include <vector>
 
@@ -21,7 +22,9 @@ namespace rm {
 struct BoneTransform {
     std::array<float, 4> rotation{{1.0f, 0.0f, 0.0f, 0.0f}};  ///< quaternion (w, x, y, z)
     std::array<float, 3> translation{{0.0f, 0.0f, 0.0f}};
-    float padding = 0.0f;  ///< keeps the stride at 32, matching the MSL struct
+    /// Presentation-only builder-arm subtree membership. Zero for ordinary models; filled per
+    /// uploaded batch from its resolved BuilderAimRig and consumed by the unit shader.
+    std::uint32_t builderFlags = 0;
 };
 
 static_assert(sizeof(BoneTransform) == 32,

@@ -312,12 +312,22 @@ void Renderer::setUnits(std::span<const dds::Texture> textures,
             }
         }
 
+        if (batch.builderAim.boneFlags.size() == model.bones.size()) {
+            for (std::size_t pose = 0; pose < poseCount; ++pose) {
+                for (std::size_t bone = 0; bone < model.bones.size(); ++bone) {
+                    poses[pose * model.bones.size() + bone].builderFlags =
+                        batch.builderAim.boneFlags[bone];
+                }
+            }
+        }
+
         GpuUnitBatch uploaded;
         uploaded.textures = batch.textures;
         uploaded.supremeCommanderShading = model.family == Family::SupremeCommander;
         uploaded.poseCount = poseCount;
         uploaded.boneStrideBytes = model.bones.size() * sizeof(BoneTransform);
         uploaded.duration = duration;
+        uploaded.builderAim = batch.builderAim;
         uploaded.animationDrivenByInstance = batch.animationDrivenByInstance;
         uploaded.vertexBuffer =
             device_->newBuffer(model.vertices.data(), model.vertices.size() * sizeof(ModelVertex),

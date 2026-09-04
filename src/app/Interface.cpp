@@ -519,8 +519,17 @@ void appendConstructionEffects(std::vector<rm::DecalVertex>& decals,
                         if (bone == batch.model->bones.end()) {
                             continue;
                         }
+                        const std::size_t boneIndex = static_cast<std::size_t>(
+                            std::distance(batch.model->bones.begin(), bone));
                         rm::BoneTransform rest{};
                         rest.translation = bone->globalOffset;
+                        if (boneIndex < batch.builderAim.boneFlags.size()) {
+                            rest.translation = rm::applyBuilderAim(
+                                rest.translation, batch.builderAim.boneFlags[boneIndex],
+                                batch.builderAim,
+                                rm::BuilderAimAngles{.yaw = drawn.builderYaw,
+                                                     .pitch = drawn.builderPitch});
+                        }
                         const std::array<float, 3> origin =
                             rm::boneWorldPosition(rest, placement);
                         appendBuildBeam(particles, origin, ends.first, energy);

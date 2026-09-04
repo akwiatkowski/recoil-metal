@@ -1002,6 +1002,7 @@ void Renderer::encodeScene(MTL::CommandBuffer* commandBuffer, MTL::RenderPassDes
                 static_cast<std::uint32_t>(batch.boneStrideBytes / sizeof(BoneTransform));
             pose.duration = batch.duration;
             pose.time = batch.animationDrivenByInstance ? 0.0f : animationTime_;
+            setBuilderAimUniforms(pose, batch.builderAim);
             encoder->setVertexBytes(&pose, sizeof(pose), kPoseUniformBufferIndex);
 
             encoder->drawIndexedPrimitives(MTL::PrimitiveType::PrimitiveTypeTriangle,
@@ -1076,7 +1077,7 @@ void Renderer::encodeScene(MTL::CommandBuffer* commandBuffer, MTL::RenderPassDes
 
             encoder->setVertexBuffer(batch.vertexBuffer, 0, kVertexBufferIndex);
             // This frame's ring slot: an offset, not a rebind. UnitInstance is
-            // 40 bytes, so a slot's stride is a multiple of 4 and satisfies
+            // tightly packed on a 4-byte boundary, so a slot's stride satisfies
             // Apple silicon's buffer-offset alignment.
             encoder->setVertexBuffer(
                 batch.instanceBuffer,
@@ -1097,6 +1098,7 @@ void Renderer::encodeScene(MTL::CommandBuffer* commandBuffer, MTL::RenderPassDes
             pose.duration = batch.duration;
             // Zero hands the whole decision to the instances — see UnitBatch.
             pose.time = batch.animationDrivenByInstance ? 0.0f : animationTime_;
+            setBuilderAimUniforms(pose, batch.builderAim);
             encoder->setVertexBytes(&pose, sizeof(pose), kPoseUniformBufferIndex);
 
             // One call for every instance — the whole point of the instance

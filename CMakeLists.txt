@@ -144,6 +144,7 @@ add_library(rm_core STATIC
     src/core/model/Scm.cpp
     src/core/model/Sca.cpp
     src/core/model/Pose.cpp
+    src/core/model/BuilderAim.cpp
     src/core/text/TextLayout.cpp
     src/core/ui/Hud.cpp
     src/core/ui/CommandPanel.cpp
@@ -307,6 +308,7 @@ if(BUILD_TESTING)
         tests/test_real_model.cpp
         tests/test_real_scm.cpp
         tests/test_pose.cpp
+        tests/test_builder_aim.cpp
         tests/test_real_sca.cpp
         tests/test_text_layout.cpp
         tests/test_ui_viewport.cpp

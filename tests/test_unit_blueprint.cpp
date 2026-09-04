@@ -763,6 +763,11 @@ UnitBlueprint {
         BuildBones = {
             AimBone = 0,
             BuildEffectBones = { 'Turret_Muzzle', 'Left_Arm' },
+            PitchBone = 'Turret_Barrel',
+            PitchMax = 45,
+            PitchSlew = 120,
+            YawBone = 'Turret',
+            YawMin = -70,
         },
     },
     Physics = { MotionType = 'RULEUMT_Land', MeshExtentsX = 1.5, MeshExtentsY = 2, MeshExtentsZ = 0.75 },
@@ -775,12 +780,21 @@ UnitBlueprint {
     REQUIRE(def->buildEffectBones.size() == 2);
     CHECK(def->buildEffectBones[0] == "Turret_Muzzle");
     CHECK(def->buildEffectBones[1] == "Left_Arm");
+    REQUIRE(def->builderArm.exists());
+    CHECK(def->builderArm.yawBone.name == "Turret");
+    CHECK(def->builderArm.pitchBone.name == "Turret_Barrel");
+    CHECK(def->builderArm.aimBone.index == 0);
+    CHECK(def->builderArm.yawMinDegrees == Approx(-70.0f));
+    CHECK(def->builderArm.yawMaxDegrees == Approx(180.0f));
+    CHECK(def->builderArm.pitchMaxDegrees == Approx(45.0f));
+    CHECK(def->builderArm.pitchSlewDegreesPerSecond == Approx(120.0f));
 
     const Blueprint bare{"XXB0011_unit.bp", kMediumTank};
     const auto none = rm::unitbp::loadFile(bare.path());
     REQUIRE(none.has_value());
     CHECK(none->meshExtentsXElmos == 0.0f);
     CHECK(none->buildEffectBones.empty());
+    CHECK_FALSE(none->builderArm.exists());
 }
 
 TEST_CASE("a winged mover arrives with its control block, or nothing") {

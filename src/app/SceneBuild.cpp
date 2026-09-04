@@ -3,6 +3,7 @@
 #include "core/data/ArmorDefs.hpp"
 #include "core/data/MoveDef.hpp"
 #include "core/log/Log.hpp"
+#include "core/model/BuilderAim.hpp"
 #include "core/model/Scm.hpp"
 #include "core/model/Sca.hpp"
 #include "core/unit/BarNames.hpp"
@@ -466,6 +467,8 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
                     .diffuse = scene.textures.resolve(content, unit->albedoPath, "albedo"),
                     .shading = scene.textures.resolve(content, unit->shadingPath, "specTeam"),
                 },
+                .builderAim = rm::resolveBuilderAim(scene.models.back(), unit->def.builderArm,
+                                                    unit->def.buildEffectBones),
             });
             batchForFaction.emplace(army.faction, scene.batches.size() - 1);
             scaleForFaction.emplace(army.faction, unit->def.meshToElmos);
@@ -629,6 +632,8 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
                 .diffuse = scene.textures.resolve(content, unit->albedoPath, "albedo"),
                 .shading = scene.textures.resolve(content, unit->shadingPath, "specTeam"),
             },
+            .builderAim = rm::resolveBuilderAim(scene.models.back(), unit->def.builderArm,
+                                                unit->def.buildEffectBones),
         });
         scene.definitions.push_back(unit->def);
         resolveMuzzleBones(scene.definitions.back(), scene.models.back());
@@ -666,6 +671,9 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
                                 .shading =
                                     scene.textures.resolve(content, shading, "specTeam"),
                             },
+                            .builderAim = rm::resolveBuilderAim(
+                                scene.models.back(), unit->def.builderArm,
+                                unit->def.buildEffectBones),
                         });
                         scene.lodOfType[type] = UnitScene::LodLevel{
                             .batch = scene.batches.size() - 1,
@@ -1345,6 +1353,9 @@ void orderFirstExtractors(UnitScene& scene, std::span<const rm::scenario::Marker
             .instances = {},
             .textures = pair,
             .animation = animation,
+            .builderAim = def ? rm::resolveBuilderAim(scene.models.back(), def->builderArm,
+                                                      def->buildEffectBones)
+                              : rm::BuilderAimRig{},
         });
         scene.setBatchForType(type, scene.batches.size() - 1);
     }

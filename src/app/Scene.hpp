@@ -39,7 +39,6 @@
 #include <cstdint>
 #include <deque>
 #include <map>
-#include <numbers>
 #include <set>
 #include <optional>
 #include <span>
@@ -184,29 +183,18 @@ struct UnitScene {
     // what turns the hit back into a unit the sim knows about.
     std::vector<std::vector<rm::UnitIndex>> drawSlotOf;
 
-    // --- A builder faces its work: presentation only ---------------------------------------
+    // --- Per-instance builder-arm aiming: presentation only --------------------------------
     //
     // Once the sim has moved a mobile builder into its exact build reach, the active
-    // construction parks it there. Retail does not apply a separate hull turn while working —
-    // its BuilderArmManipulator aims torso/arm BONES at the site
-    // (Unit.lua:2666-2685), which one shared baked pose per batch cannot express yet. Until
-    // per-instance bone poses exist, the DRAWN yaw is overridden here: `Transform::heading`
-    // is hashed sim state and stays untouched, so this whole feature is invisible to
-    // `hashMatch` by construction.
+    // construction parks it there. Retail's BuilderArmManipulator aims the authored yaw and
+    // pitch bone subtrees at the work; the hull does not turn. These maps are presentation
+    // projections only: `Transform::heading` remains hashed sim state and is untouched.
     //
-    // `builderFacingSite` is rebuilt every gather from `building` (slot → site, world
-    // elmos). `builderShownYaw` persists across frames: the yaw actually drawn last frame,
-    // advanced toward its goal at kBuilderTurnRate so the turn reads as motion rather than
-    // a cut — and advanced BACK to the sim's heading when the work ends, then forgotten.
-    std::unordered_map<rm::UnitIndex, std::array<float, 2>> builderFacingSite;
-    std::unordered_map<rm::UnitIndex, float> builderShownYaw;
-
-    /// How fast the drawn hull turns toward the work, radians per second. Retail's build
-    /// arm aims at 360°/s (`SetAimingArc(-180,180,360,...)`, Unit.lua:2678) — near-instant,
-    /// which suits a small arm bone but reads as a cut on a whole hull. Half that, ~180°/s,
-    /// finishes any turn inside a second and still visibly TURNS: a CALIBRATION against how
-    /// the motion reads, not a decoded figure — tune it, don't trust it.
-    static constexpr float kBuilderTurnRate = 3.5f;
+    // `builderTarget` is rebuilt from active constructions (slot → x, z, height above the
+    // builder). `builderShownAim` persists across frames so each instance slews at its authored
+    // rates and returns to rest when work ends, then is forgotten.
+    std::unordered_map<rm::UnitIndex, std::array<float, 3>> builderTarget;
+    std::unordered_map<rm::UnitIndex, rm::BuilderAimAngles> builderShownAim;
 
     // The sides in the match, empty outside a skirmish. Held with the scene rather
     // than beside it because every question that needs an army — may I select this,
@@ -548,7 +536,7 @@ struct UnitScene {
     /// instances onto their coarse batches — the windowed loop passes it; headless
     /// captures do not, and draw everything fine, which is what a screenshot wants.
     ///
-    /// `dtSeconds` paces the builder-facing turn (presentation only, see the members).
+    /// `dtSeconds` paces the builder-arm turn (presentation only, see the members).
     /// Zero — the headless default — means "arrive at once", which is what a screenshot
     /// wants: the same command captures the same facing every run.
     void gatherForDrawing(float alpha = 1.0f, const std::array<float, 3>* eye = nullptr,
@@ -581,21 +569,25 @@ struct UnitScene {
         // Who is building what, by builder slot — the goal each drawn builder turns toward.
         // First entry wins: a builder works one site at a time (`startCommand` refuses
         // concurrent builds), so a second row naming the same builder is queued work.
-        builderFacingSite.clear();
+        builderTarget.clear();
         for (const rm::sim::Construction& work : building) {
             if (work.finished() || work.upgradeOf != rm::sim::UnitId{}
                 || !store.alive(work.builder)) {
                 continue;  // done, an in-place upgrade, or a builder already gone
             }
-            builderFacingSite.emplace(
+            const rm::unitdef::UnitDef* product =
+                catalog.def(static_cast<rm::UnitTypeIndex>(work.blueprintIndex));
+            builderTarget.emplace(
                 work.builder.index,
-                std::array<float, 2>{rm::sim::fxToFloat(work.position[0]),
-                                     rm::sim::fxToFloat(work.position[2])});
+                std::array<float, 3>{rm::sim::fxToFloat(work.position[0]),
+                                     rm::sim::fxToFloat(work.position[2]),
+                                     product != nullptr ? product->meshHeightElmos * 0.5f
+                                                        : 0.0f});
         }
-        // Forget the drawn yaw of anything no longer alive — a freed slot will be reused,
-        // and the new tenant must not inherit its predecessor's turn. A default UnitId is
+        // Forget the drawn arm pose of anything no longer alive — a freed slot will be reused,
+        // and the new tenant must not inherit its predecessor's aim. A default UnitId is
         // never live (generations start at 1), so `idAt` answers for a freed slot too.
-        std::erase_if(builderShownYaw, [this](const auto& kv) {
+        std::erase_if(builderShownAim, [this](const auto& kv) {
             return !store.alive(store.idAt(kv.first));
         });
 
@@ -648,7 +640,7 @@ struct UnitScene {
                     rm::SelectionEntry{.batch = batch, .instance = drawScratch[batch].size()};
             }
             rm::UnitInstance instance = instanceFor(unit);
-            applyBuilderFacing(instance, unit, dtSeconds);
+            applyBuilderArm(instance, unit, batch, dtSeconds);
             drawScratch[batch].push_back(instance);
             drawSlotOf[batch].push_back(unit.id.index);
         }
@@ -713,52 +705,50 @@ struct UnitScene {
         return instance;
     }
 
-    /// Turns a drawn builder toward its construction site — and back again when the work
-    /// ends. Presentation only: writes `instance.rotationY`, never the store. See the
-    /// `builderFacingSite` members for why the sim cannot own this yet.
-    void applyBuilderFacing(rm::UnitInstance& instance, const rm::DrawUnit& unit,
-                            float dtSeconds) {
+    /// Aims one drawn builder's authored bone subtrees and returns them to rest after work.
+    /// Presentation only: writes per-instance shader input, never the store.
+    void applyBuilderArm(rm::UnitInstance& instance, const rm::DrawUnit& unit,
+                         std::size_t batch, float dtSeconds) {
         const rm::UnitIndex slot = unit.id.index;
-        const auto siteIt = builderFacingSite.find(slot);
-        const auto shownIt = builderShownYaw.find(slot);
-        if (siteIt == builderFacingSite.end() && shownIt == builderShownYaw.end()) {
+        const auto siteIt = builderTarget.find(slot);
+        const auto shownIt = builderShownAim.find(slot);
+        if (siteIt == builderTarget.end() && shownIt == builderShownAim.end()) {
             return;  // not building, not returning from a build: the common case
         }
 
-        // The goal: the site while building, the sim's own heading again once done.
-        // `atan2(dx, dz)` is the same convention the sim's heading draws with — zero
-        // faces +Z, positive turns toward +X (`Transform.hpp`) — and float is fine
-        // here because nothing below ever reaches sim state.
-        float goal = unit.rotationY;
-        bool atWork = false;
-        if (siteIt != builderFacingSite.end()) {
-            const float dx = siteIt->second[0] - unit.position[0];
-            const float dz = siteIt->second[1] - unit.position[2];
-            // A factory "builds" at its own position (the pad redirect in `Command.cpp`),
-            // and an engineer can stand on its own site: no direction to face there.
-            if (dx * dx + dz * dz > 1.0f) {
-                goal = std::atan2(dx, dz);
-                atWork = true;
-            }
-        }
-
-        // Advance the drawn yaw toward the goal along the shorter arc. A zero dt is the
-        // headless capture: arrive at once, so the same command captures the same frame.
-        float shown = shownIt != builderShownYaw.end() ? shownIt->second : unit.rotationY;
-        const float delta =
-            std::remainder(goal - shown, 2.0f * std::numbers::pi_v<float>);
-        const float step = dtSeconds > 0.0f ? kBuilderTurnRate * dtSeconds
-                                            : std::abs(delta);
-        shown = std::abs(delta) <= step ? goal : shown + std::copysign(step, delta);
-
-        if (!atWork && shown == goal) {
-            // Back at the sim's heading with no site to face: the override has nothing
-            // left to say, and forgetting it is what keeps the map from growing.
-            builderShownYaw.erase(slot);
+        if (batch >= batches.size() || !batches[batch].builderAim.exists()) {
+            builderShownAim.erase(slot);
             return;
         }
-        builderShownYaw[slot] = shown;
-        instance.rotationY = shown;
+        const rm::BuilderAimRig& rig = batches[batch].builderAim;
+
+        rm::BuilderAimAngles goal;
+        bool atWork = false;
+        if (siteIt != builderTarget.end()) {
+            const std::array<float, 3> worldTarget{{siteIt->second[0],
+                                                    unit.position[1] + siteIt->second[2],
+                                                    siteIt->second[1]}};
+            const rm::InstancePlacement placement{
+                .position = instance.position,
+                .rotationX = instance.rotationX,
+                .rotationY = instance.rotationY,
+                .rotationZ = instance.rotationZ,
+                .scale = instance.scale,
+            };
+            goal = rm::builderAimAt(rig, rm::builderTargetInModel(worldTarget, placement));
+            atWork = true;
+        }
+
+        rm::BuilderAimAngles shown =
+            shownIt != builderShownAim.end() ? shownIt->second : rm::BuilderAimAngles{};
+        shown = rm::stepBuilderAim(shown, goal, rig, dtSeconds);
+        if (!atWork && shown.yaw == 0.0f && shown.pitch == 0.0f) {
+            builderShownAim.erase(slot);
+            return;
+        }
+        builderShownAim[slot] = shown;
+        instance.builderYaw = shown.yaw;
+        instance.builderPitch = shown.pitch;
     }
 
     /// The unit behind a drawn instance, or nothing when the pair names nothing drawn.

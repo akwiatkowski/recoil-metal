@@ -98,6 +98,20 @@ constexpr float kAnyDepthElmos = 100000.0f;
     return value ? static_cast<float>(*value) : fallback;
 }
 
+[[nodiscard]] unitdef::BoneRef boneRef(const lua::Value& table, std::string_view key) {
+    unitdef::BoneRef ref;
+    const lua::Value* value = table.find(key);
+    if (value == nullptr) {
+        return ref;
+    }
+    if (const std::optional<std::string_view> name = value->asString()) {
+        ref.name = *name;
+    } else if (const std::optional<double> index = value->asNumber(); index && *index >= 0.0) {
+        ref.index = static_cast<int>(*index);
+    }
+    return ref;
+}
+
 /// A boolean field, defaulting to false.
 ///
 /// `false` FOR A MISSING KEY AND FOR AN EXPLICIT `false` ALIKE, which is what these flags
@@ -258,13 +272,26 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
     // Where a builder's construction effect leaves from. Read for every unit — 143 build, and
     // the rest simply have no block — because the effect asks by name and a missing list is
     // the honest answer, not a default bone.
-    if (const lua::Value* effectBones = parsed->path("General", "BuildBones", "BuildEffectBones")) {
-        def.buildEffectBones.reserve(effectBones->items.size());
-        for (const lua::Value& entry : effectBones->items) {
-            if (!entry.text.empty()) {
-                def.buildEffectBones.emplace_back(entry.text);
+    if (const lua::Value* buildBones = parsed->path("General", "BuildBones")) {
+        if (const lua::Value* effectBones = buildBones->find("BuildEffectBones")) {
+            def.buildEffectBones.reserve(effectBones->items.size());
+            for (const lua::Value& entry : effectBones->items) {
+                if (!entry.text.empty()) {
+                    def.buildEffectBones.emplace_back(entry.text);
+                }
             }
         }
+        def.builderArm = unitdef::BuilderArmSpec{
+            .yawBone = boneRef(*buildBones, "YawBone"),
+            .pitchBone = boneRef(*buildBones, "PitchBone"),
+            .aimBone = boneRef(*buildBones, "AimBone"),
+            .yawMinDegrees = numberOr(*buildBones, "YawMin", -180.0f),
+            .yawMaxDegrees = numberOr(*buildBones, "YawMax", 180.0f),
+            .yawSlewDegreesPerSecond = numberOr(*buildBones, "YawSlew", 360.0f),
+            .pitchMinDegrees = numberOr(*buildBones, "PitchMin", -90.0f),
+            .pitchMaxDegrees = numberOr(*buildBones, "PitchMax", 90.0f),
+            .pitchSlewDegreesPerSecond = numberOr(*buildBones, "PitchSlew", 360.0f),
+        };
     }
 
     def.skirtSquaresX = numberOr(*physics, "SkirtSizeX", 0.0f);

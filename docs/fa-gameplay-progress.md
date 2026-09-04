@@ -15,7 +15,8 @@ baseline (`docs/hud-baseline.md`, `tools/hud_baseline.sh`, `--backing`, `--bench
 carrier's tilt, mesh extents and build-effect bones parsed with a bone-to-world helper, the
 factory production panel in the deck's command rectangle, UEF construction beams from authored
 builder bones to descending build-cube edges, structured runtime logging, the exact retail
-mobile-builder approach-to-range gate, and README counts at 1366) —
+mobile-builder approach-to-range gate, per-instance builder torso/arm/tool aiming from authored
+bone rigs, and README counts at 1371) —
 `ComputeAirControl`, `CalcWingedLift`, the damping factor and the terrain look-ahead read and
 implemented (`C-244`–`C-246`): authored `KMove`/`KLift` gains with their damping terms, the
 vertical lift-off to half elevation that replaces the invented runway roll, the pyramid look-ahead

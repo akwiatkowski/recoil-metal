@@ -12,11 +12,10 @@
 namespace rm {
 
 // One drawn instance of a model. Uploaded straight to the GPU as per-instance
-// data, so the layout is fixed: 12 + 4 + 4 + 16 = 36 bytes, tightly packed.
+// data, so the layout is fixed and asserted below.
 //
-// Rotation is a single yaw because that is all ground units need and all the
-// S3O hierarchy can express anyway (the format carries no rotation at all —
-// s3o.h:20-22). A full transform belongs here when animation arrives.
+// Body rotation is yaw plus terrain pitch/roll. Builder-arm yaw/pitch are separate: they
+// rotate only authored bone subtrees in the shader and may differ between instances in one draw.
 //
 // The team colour is per instance rather than per draw because that is the
 // cheapest thing that lets one instanced draw cover several armies. Both
@@ -46,11 +45,16 @@ struct UnitInstance {
     // direction plants both feet on the same slope.
     float rotationX = 0.0f;
     float rotationZ = 0.0f;
+
+    /// Per-instance `BuilderArmManipulator` pose, radians around the batch's resolved yaw and
+    /// pitch axes. Zero leaves every bone in its ordinary animation pose.
+    float builderYaw = 0.0f;
+    float builderPitch = 0.0f;
 };
 
-static_assert(sizeof(UnitInstance) == 48,
+static_assert(sizeof(UnitInstance) == 56,
               "UnitInstance must stay tightly packed — the shader reads it as a "
-              "packed_float3, two floats, a packed_float4 and three floats");
+              "packed_float3, two floats, a packed_float4 and five floats");
 
 // Scatters instances across the map's land, sitting on the terrain.
 //

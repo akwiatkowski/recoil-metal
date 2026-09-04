@@ -8,9 +8,12 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "core/model/Scm.hpp"
+#include "core/model/BuilderAim.hpp"
 #include "core/unit/UnitBlueprint.hpp"
 #include "core/vfs/Vfs.hpp"
 
+#include <algorithm>
+#include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <string>
@@ -161,4 +164,37 @@ TEST_CASE("a unit is read end to end out of the archives", "[corpus]") {
         }
     }
     CHECK(read == 568);
+}
+
+TEST_CASE("a retail engineer resolves its authored builder arm onto its model", "[corpus]") {
+    const std::filesystem::path units = gamedata() / "units.scd";
+    if (!std::filesystem::exists(units)) {
+        SKIP("no retail install at " + gamedata().string());
+    }
+
+    rm::vfs::Vfs vfs;
+    REQUIRE(vfs.mountArchive(units));
+    constexpr std::string_view kBlueprint = "/units/UEL0105/UEL0105_unit.bp";
+    const auto source = vfs.read(kBlueprint);
+    REQUIRE(source.has_value());
+    const std::string text{reinterpret_cast<const char*>(source->data()), source->size()};
+    const auto def = rm::unitbp::load(text, kBlueprint);
+    REQUIRE(def.has_value());
+    REQUIRE(def->builderArm.exists());
+    CHECK(def->builderArm.yawBone.name == "Turret");
+    CHECK(def->builderArm.pitchBone.name == "Turret_Barrel");
+    CHECK(def->builderArm.aimBone.index == 0);
+
+    const std::string mesh = rm::unitbp::resolveMeshInVfs(*def, kBlueprint, vfs);
+    const auto meshBytes = vfs.read(mesh);
+    REQUIRE(meshBytes.has_value());
+    const auto model = rm::scm::load(*meshBytes);
+    REQUIRE(model.has_value());
+    const rm::BuilderAimRig rig =
+        rm::resolveBuilderAim(*model, def->builderArm, def->buildEffectBones);
+    REQUIRE(rig.exists());
+    CHECK(rig.boneFlags.size() == model->bones.size());
+    CHECK(std::ranges::count_if(rig.boneFlags, [](std::uint32_t flags) {
+              return flags != 0U;
+          }) > 0);
 }

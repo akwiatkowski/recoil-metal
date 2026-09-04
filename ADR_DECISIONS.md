@@ -2548,3 +2548,31 @@ retained with `--log-file`; normal status and benchmark stdout remain unchanged.
 mutex and flushes each record, intentionally favoring reliable debug evidence over throughput.
 Per-thread queues or rotation belong only after profiling or long-running deployment demonstrates
 a need.
+
+---
+
+## ADR-072 — Builder arms use per-instance shader offsets over shared authored poses
+
+**Context.** A unit batch shares one baked skeletal pose, but builders in that batch can work on
+different targets. Rotating the whole unit toward its construction target made the simulation
+heading visually wrong and still did not reproduce retail's `BuilderArmManipulator`, which aims
+the authored yaw, pitch, and tool bones independently for each builder.
+
+**Decision.** Parse the primary `BuildBones` arm rig and its authored arcs and slew rates from the
+blueprint, then resolve bone indices, descendant flags, pivots, and axes once per model. Keep the
+shared static pose buffer and add only yaw and pitch offsets to each unit instance. The unit
+shader applies pitch and then yaw to marked bone subtrees for the normal, outline, and shadow
+passes. Presentation derives the current target from construction state without changing the
+simulation heading, and construction beams apply the same transform to their tool origin.
+
+**Alternatives considered.** Uploading a complete pose per instance was rejected because two
+angles describe the varying state and a dynamic bone buffer would add avoidable memory and upload
+work. Splitting active builders into separate draw batches was rejected because it would trade a
+small instance payload for draw-call churn. Mutating simulation heading was rejected because it
+does not match retail behavior and would contaminate deterministic state for a visual concern.
+
+**Consequences.** Independent builder arms cost eight bytes per unit instance and no per-frame
+bone upload. Blueprint limits and slew rates are honored, numeric tool references fall back to an
+authored build-effect bone when appropriate, and simulation hashes remain unchanged. The Metal
+uniform uses explicitly packed padding, guarded by matching CPU layout assertions. Build-open
+animation sequencing and alternate `BuildBonesAlt1` rigs remain explicit follow-up work.

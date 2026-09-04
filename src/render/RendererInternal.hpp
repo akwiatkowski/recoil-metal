@@ -236,7 +236,28 @@ struct PoseUniforms {
     std::uint32_t boneCount = 0;
     float duration = 0.0f;
     float time = 0.0f;
+    std::uint32_t builderAim = 0;
+    std::array<std::uint32_t, 3> padding{};
+    std::array<float, 4> yawPivot{};
+    std::array<float, 4> yawAxis{};
+    std::array<float, 4> pitchPivot{};
+    std::array<float, 4> pitchAxis{};
 };
+static_assert(sizeof(PoseUniforms) == 96, "PoseUniforms must match the MSL layout");
+static_assert(offsetof(PoseUniforms, yawPivot) == 32, "builder vectors start on float4 alignment");
+
+inline void setBuilderAimUniforms(PoseUniforms& pose, const BuilderAimRig& rig) noexcept {
+    if (!rig.exists()) {
+        return;
+    }
+    pose.builderAim = 1;
+    for (std::size_t i = 0; i < 3; ++i) {
+        pose.yawPivot[i] = rig.yawPivot[i];
+        pose.yawAxis[i] = rig.yawAxis[i];
+        pose.pitchPivot[i] = rig.pitchPivot[i];
+        pose.pitchAxis[i] = rig.pitchAxis[i];
+    }
+}
 // The splat's own constant buffer, kept separate from the shared Uniforms
 // rather than appended to it: Uniforms' layout is pinned by static_asserts that
 // several stages depend on, and growing it to serve one stage would mean
