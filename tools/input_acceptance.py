@@ -13,6 +13,8 @@ PROFILES = {
     "wide": (2240, 1260, "0.5"),
 }
 FACTORIES = {"UEB0101": "uef", "UAB0101": "aeon", "URB0101": "cybran", "XSB0101": "seraphim"}
+# Independent retail roster expectation: engineers and Cybran's scout have no Attack.
+ARMED_PRODUCTS = {"UEB0101": 5, "UAB0101": 5, "URB0101": 4, "XSB0101": 4}
 
 
 def main():
@@ -62,6 +64,9 @@ def main():
                     raise SystemExit(f"FAIL missing production-control evidence; see {log}")
                 if text.count("native Guard target and Stop PASS") != expected:
                     raise SystemExit(f"FAIL incomplete Guard evidence; see {log}")
+                if (text.count("native Attack target and Stop PASS") != ARMED_PRODUCTS[factory]
+                        or text.count("native Attack unavailable PASS") != expected - ARMED_PRODUCTS[factory]):
+                    raise SystemExit(f"FAIL incomplete Attack evidence; see {log}")
                 png = image.read_bytes()
                 if png[:8] != b"\x89PNG\r\n\x1a\n" or struct.unpack(">II", png[16:24]) != (width * backing, height * backing):
                     raise SystemExit(f"FAIL capture dimensions: {image}")

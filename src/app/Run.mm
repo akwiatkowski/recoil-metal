@@ -2627,7 +2627,7 @@ int runWindowed(const Session& session) {
         std::size_t observedFrame = 0;
         std::size_t productIndex = 0;
         std::vector<std::string> inputProducts;
-        rm::sim::UnitId inputFactory{}, inputProduct{};
+        rm::sim::UnitId inputFactory{}, inputProduct{}, inputAttackTarget{};
         std::string inputGenerator;
         rm::sim::Transform moveStarted{};
         std::vector<rm::sim::UnitId> beforeProduct;
@@ -2879,9 +2879,59 @@ int runWindowed(const Session& session) {
                     inputCheck(units.store.orders()[inputProduct.index].empty(), "Stop did not cancel Guard");
                     std::printf("input acceptance: %s native Guard target and Stop PASS\n",
                                 inputProducts[productIndex].c_str());
-                    if (inputProducts[productIndex].ends_with("0105")) {
-                        nextInputStage(7);
-                    } else nextInputStage(10);
+                    if (commandAvailable[2]) {
+                        const auto* def = units.catalog.def(units.store.typeAt(inputProduct.index));
+                        const bool targetsGround = std::ranges::any_of(def->weapons,
+                            [](const auto& weapon) { return weapon.fires() && weapon.canTarget(false); });
+                        const auto at = units.store.transforms()[inputProduct.index];
+                        // Fixture setup only: place an unarmed enemy in the weapon's target
+                        // layer. The test issues Attack exclusively through the drawn rack
+                        // and a native world click after the target has been rendered.
+                        const auto target = spawnUnit(units, content, map->field,
+                            targetsGround ? "/units/UEB1101/UEB1101_unit.bp"
+                                          : "/units/UEA0101/UEA0101_unit.bp",
+                            {rm::sim::fxToFloat(at.x) + 100, 0, rm::sim::fxToFloat(at.z) + 48},
+                            units.armies.at(1), 0);
+                        inputCheck(target.has_value(), "cannot spawn native Attack target fixture");
+                        inputAttackTarget = *target;
+                        nextInputStage(21);
+                    } else {
+                        const auto before = units.commandInput.size();
+                        const auto armedBefore = armedCommand;
+                        inputCommandClick(2);
+                        inputCheck(units.commandInput.size() == before && armedCommand == armedBefore,
+                                   "unavailable Attack widget accepted input");
+                        std::printf("input acceptance: %s native Attack unavailable PASS\n",
+                                    inputProducts[productIndex].c_str());
+                        nextInputStage(inputProducts[productIndex].ends_with("0105") ? 7 : 10);
+                    }
+                } else if (inputStage == 21) {
+                    inputCheck(units.store.alive(inputAttackTarget), "Attack fixture died before input");
+                    inputCommandClick(2);
+                    inputCheck(armedCommand == rm::sim::CommandKind::Attack, "Attack widget did not arm");
+                    const auto& at = units.store.transforms()[inputAttackTarget.index];
+                    inputWorldClick(at.x, at.z, rm::MouseButton::Right, false, rm::sim::fxToFloat(at.y));
+                    expectInputCommand(rm::sim::CommandKind::Attack, inputProduct);
+                    nextInputStage(22);
+                } else if (inputStage == 22) {
+                    const auto* attack = units.store.orders()[inputProduct.index].active();
+                    inputCheck(attack != nullptr && attack->kind() == rm::sim::CommandKind::Attack
+                        && attack->target() == inputAttackTarget,
+                        "native Attack did not retain the selected enemy handle");
+                    inputCheck(writePng(session.window.inputAcceptancePath + "."
+                        + inputProducts[productIndex] + ".attack.png", window.capture()),
+                        "Attack capture write failed");
+                    inputCommandClick(4);
+                    expectInputCommand(rm::sim::CommandKind::Stop, inputProduct);
+                    nextInputStage(23);
+                } else if (inputStage == 23) {
+                    inputCheck(units.store.orders()[inputProduct.index].empty(), "Stop did not cancel Attack");
+                    std::printf("input acceptance: %s native Attack target and Stop PASS\n",
+                                inputProducts[productIndex].c_str());
+                    // Remove the fixture so it cannot distract the next product's Guard
+                    // check or obstruct the engineer's placement. This is not combat proof.
+                    units.store.kill(inputAttackTarget);
+                    nextInputStage(inputProducts[productIndex].ends_with("0105") ? 7 : 10);
                 } else if (inputStage == 7) {
                     inputCheck(activeBuilder == inputProduct, "engineer selection did not expose construction tray");
                     if (!engineerPageProbe) {
