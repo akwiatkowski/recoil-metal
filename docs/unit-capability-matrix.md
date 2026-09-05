@@ -21,8 +21,9 @@ not imply that its other abilities work.
   **Native common** below means real factory-tray production, world selection,
   Move, queued Move, Stop and Guard, plus generator construction for engineers.
   All 23 land products passed on `aw04.smf` with the extracted FA tree, across
-  compact/standard/wide layouts and simulated 1x/2x backing; logs are in
-  `/tmp/recoil-native-guard-matrix`. See [native acceptance](native-input-acceptance.md)
+  compact/standard/wide layouts and simulated 1x/2x backing. See
+  [native acceptance](native-input-acceptance.md) for the recorded results,
+  artifact-retention limits and reproduction command, and
   for the subsequent Attack extension and its verification. Air-factory input
   remains unverified. Direct `issueBuild` calls are not UI evidence.
 
@@ -76,8 +77,10 @@ above; producing them through an air-factory tray remains unverified.
 
 UEA0102 additionally has a bounded flight contract: real authored tuning, planar
 combat turns/breakoff/recovery, and fresh-scene save continuation with matching
-per-tick hashes. The 900-tick app pursuit capture at `/tmp/recoil-air-turn.png`
-was inspected, and its replay compared against the saved hashes. It uses an
+per-tick hashes. A 900-tick app pursuit capture was inspected during the session,
+and its replay compared against the saved hashes; those temporary artifacts
+were not durably archived. The headless `[air-combat]` tests retain executable
+controller checks. The inspected scenario uses an
 allied moving target to isolate pursuit; it does not prove interceptor weapon
 parity, three-axis banking, or air-factory input. See ADR-091.
 

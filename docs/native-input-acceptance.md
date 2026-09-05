@@ -58,10 +58,11 @@ Run the complete 24-case matrix (four factories, three HUD profiles, two scales)
 mise exec -- python3 tools/input_acceptance.py \
   --map '/Volumes/Samsung_T5/faf/Supreme Commander Forged Alliance/maps/SCMP_009/SCMP_009.scmap' \
   --gamedata '/Volumes/Samsung_T5/faf/Supreme Commander Forged Alliance/gamedata' \
-  --output /tmp/recoil-native-input
+  --output "$HOME/projects/llm/input/recoil-metal/acceptance/2026-09-05-native-input"
 ```
 
 Use `--factories UEB0101 --profiles compact --backings 1` for a focused run.
+Choose a new dated output directory for each run to retain earlier evidence.
 The runner requires the real map and content, retains each process's log, checks
 every product result and checks PNG pixel dimensions against logical window size
 times backing. Independent expected armed-product counts are 5 UEF, 5 Aeon,
@@ -86,18 +87,17 @@ It does not prove weapon damage, radar, special abilities,
 transport behavior or retail simulation parity; those require their own tests.
 
 On 2026-09-05, all 24 expanded cases passed using `aw04.smf` and the extracted
-FA unit tree, including Guard targeting and Stop for every product. Logs and captures
-are under `/tmp/recoil-native-guard-matrix` (the earlier queue-only expansion is
-under `/tmp/recoil-native-cancel-matrix`).
+FA unit tree, including Guard targeting and Stop for every product.
 The compact UEF queue capture and compact Aeon product capture were inspected.
+These are recorded session observations; their original temporary logs and
+captures were not durably archived. The runner above reproduces the checks.
 
 The subsequent Attack extension in `76e781b` exposed inactive-window left-click
 loss at unrelated Stop/selection checks. The current helper fixes that dispatch
 boundary and starts the fixture inactive. The focused standard 1x UEF case
-passed at `/tmp/recoil-native-inactive-probe-2`; all four compact 1x faction
-cases passed at `/tmp/recoil-native-inactive-matrix`. A later startup deactivation
+passed; all four compact 1x faction cases also passed. A later startup deactivation
 race is handled by waiting for AppKit's inactive state before starting input.
-The final isolated-input run at `/tmp/recoil-native-isolated-matrix` recorded
+The final isolated-input run recorded
 22 complete passing cases before session wrap-up. Wide 2x Cybran was incomplete
 and wide 2x Seraphim had no completed result. No further headed runs were made
 at the user's request; the Attack extension is not verified across all 24 cases.
