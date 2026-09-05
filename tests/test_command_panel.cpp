@@ -211,12 +211,33 @@ TEST_CASE("the command rack is absent without a selection") {
 
 TEST_CASE("command inspector distinguishes ready disabled and targeting states") {
     const rm::ui::CommandDescriptor& move = rm::ui::kCommandDescriptors[1];
-    const rm::ui::InfoCard ready = rm::ui::commandCard(move, true);
-    REQUIRE(ready.rows.size() == 2);
+    rm::unitdef::UnitDef mobile;
+    mobile.speedElmosPerSecond = 10;
+    const std::array<const rm::unitdef::UnitDef*, 1> selection{&mobile};
+    const rm::ui::InfoCard ready = rm::ui::commandCard(move, selection);
+    REQUIRE(ready.rows.size() == 3);
     CHECK(ready.title == "MOVE");
     CHECK(ready.rows[0].value == "READY");
-    CHECK(ready.rows[1].value == "WORLD / UNIT");
+    CHECK(ready.rows[1].value == "1 OF 1 UNITS");
 
-    CHECK(rm::ui::commandCard(move, false).rows[0].value == "UNAVAILABLE");
-    CHECK(rm::ui::commandCard(move, true, true).rows[0].value == "TARGETING");
+    CHECK(rm::ui::commandCard(move, {}).rows[0].value == "SELECT A UNIT");
+    CHECK(rm::ui::commandCard(move, selection, true).rows[0].value == "TARGETING");
+}
+
+TEST_CASE("command explanations distinguish unsupported actions and mixed selections", "[ui][command-reason]") {
+    rm::unitdef::UnitDef mobile;
+    mobile.speedElmosPerSecond = 10;
+    rm::unitdef::UnitDef building;
+    const std::array<const rm::unitdef::UnitDef*, 3> mixed{&mobile, nullptr, &building};
+    const auto& move = rm::ui::kCommandDescriptors[1];
+    const auto card = rm::ui::commandCard(move, mixed);
+    CHECK(card.rows[0].value == "READY");
+    CHECK(card.rows[1].value == "1 OF 2 UNITS");
+    mobile.commandCapsDeclared = true;  // mobile, but the blueprint forbids movement
+    const auto disabled = rm::ui::commandCard(move, mixed);
+    CHECK(disabled.rows[0].value == "SELECTION CANNOT DO THIS");
+    CHECK(disabled.rows.back().value == "SELECT A UNIT WITH THIS COMMAND");
+    const auto unsupported = rm::ui::commandCard(rm::ui::kCommandDescriptors[6], mixed);
+    CHECK(unsupported.rows[0].value == "NOT IMPLEMENTED");
+    CHECK(unsupported.rows.back().value == "NO UNIT CAN USE THIS YET");
 }

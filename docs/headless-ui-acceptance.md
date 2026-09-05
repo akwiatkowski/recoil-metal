@@ -78,3 +78,13 @@ option or command tooltip. Completed work and dead builders draw no bar; selecti
 does not bypass fog. Live and offscreen paths share `appendConstructionBars`.
 The `[world-progress]` test checks selection, hover, fill width, completion, death
 and fog; the construction and factory captures also require a rendered bar.
+
+## Command explanations
+
+Hovering a command explains whether it is ready, requires a different selection,
+or has no implementation yet. Ready commands show how many selected units can
+use them; this uses the same capability checks as the enabled buttons. Null
+definitions do not inflate the count. Target hints name the supported target.
+`--hover-command N` selects a one-based rack slot for deterministic screenshots;
+build-option hover retains precedence. Tests: `[command-reason]` and the command
+inspector state test in `tests/test_command_panel.cpp`.

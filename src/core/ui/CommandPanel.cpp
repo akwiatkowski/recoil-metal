@@ -153,17 +153,49 @@ std::optional<std::size_t> commandSlotAt(const CommandRackLayout& layout, float 
          + static_cast<std::size_t>(column);
 }
 
-InfoCard commandCard(const CommandDescriptor& command, bool available, bool armed) {
+InfoCard commandCard(const CommandDescriptor& command,
+    std::span<const unitdef::UnitDef* const> selection, bool armed) {
     InfoCard card;
-    card.title = command.name.empty() ? "UNAVAILABLE COMMAND" : std::string{command.name};
-    card.rows.push_back(InfoRow{
-        .label = "STATE",
-        .value = armed ? "TARGETING" : (available ? "READY" : "UNAVAILABLE"),
-        .tint = available ? kGain : kLoss,
-    });
-    if (command.kind && *command.kind != sim::CommandKind::Stop) {
-        card.rows.push_back(InfoRow{.label = "TARGET", .value = "WORLD / UNIT"});
+    card.title = command.name.empty() ? "UNIT ACTION" : std::string{command.name};
+    if (!command.kind) {
+        card.rows.push_back({"STATE", "NOT IMPLEMENTED", kLoss});
+        card.rows.push_back({"", "NO UNIT CAN USE THIS YET"});
+        return card;
     }
+    const auto descriptor = std::ranges::find(kCommandDescriptors, command.kind,
+        &CommandDescriptor::kind);
+    const auto slot = static_cast<std::size_t>(descriptor - kCommandDescriptors.begin());
+    std::size_t total = 0, eligible = 0;
+    for (const auto* def : selection) {
+        if (!def) continue;
+        ++total;
+        const std::array single{def};
+        if (slot < kCommandSlots && commandAvailability(single)[slot]) ++eligible;
+    }
+    if (total == 0) {
+        card.rows.push_back({"STATE", "SELECT A UNIT", kLoss});
+        return card;
+    }
+    if (eligible == 0) {
+        card.rows.push_back({"STATE", "SELECTION CANNOT DO THIS", kLoss});
+        card.rows.push_back({"", "SELECT A UNIT WITH THIS COMMAND"});
+        return card;
+    }
+    card.rows.push_back({"STATE", armed ? "TARGETING" : "READY", kGain});
+    card.rows.push_back({"APPLIES TO", std::to_string(eligible) + " OF "
+        + std::to_string(total) + " UNITS"});
+    const auto target = [&]() -> std::string_view {
+        switch (*command.kind) {
+        case sim::CommandKind::Stop: return "NO TARGET NEEDED";
+        case sim::CommandKind::Assist: return "ALLIED BUILDER";
+        case sim::CommandKind::Repair: return "DAMAGED ALLY";
+        case sim::CommandKind::Reclaim: return "WRECK";
+        case sim::CommandKind::Attack:
+        case sim::CommandKind::Overcharge: return "ENEMY UNIT";
+        default: return "GROUND POSITION";
+        }
+    }();
+    card.rows.push_back({"TARGET", std::string{target}});
     return card;
 }
 

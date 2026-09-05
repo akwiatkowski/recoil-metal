@@ -565,12 +565,22 @@ void composeHeadlessInterface(rm::Renderer& renderer, const Session& session,
                 }
             }
 
+            const std::size_t hoverCommand = parseCount(argc, argv, "--hover-command");
+            const std::optional<std::size_t> shotHoveredCommand =
+                hoverCommand > 0 && hoverCommand <= rm::ui::kCommandSlots
+                    ? std::optional<std::size_t>{hoverCommand - 1} : std::nullopt;
             if (!shotRoster.empty()) {
                 const rm::ui::InfoCard inspector =
                     shotHovered && *shotHovered < shotOptions.size()
                         ? rm::ui::buildOptionCard(shotOptions[*shotHovered], session.uiProfile)
-                        : constructionCard(units, activeBuilderFor(shotBuilders))
+                        : shotHoveredCommand
+                            ? rm::ui::commandCard(rm::ui::kCommandDescriptors[*shotHoveredCommand],
+                                shotCommandSelection)
+                            : constructionCard(units, activeBuilderFor(shotBuilders))
                               .value_or(rm::ui::rosterTileCard(shotRoster.front()));
+                if (shotHoveredCommand) {
+                    std::printf("  command inspector: %s\n", inspector.rows.front().value.c_str());
+                }
                 rm::ui::appendRoster(hud, renderer.labelFont(), renderer.readoutFont(),
                                      shotTheme,
                                      shotRosterLayout,
@@ -581,7 +591,7 @@ void composeHeadlessInterface(rm::Renderer& renderer, const Session& session,
             rm::ui::appendCommandRack(
                 hud, renderer.labelFont(), renderer.readoutFont(), shotTheme,
                 rm::ui::commandRackLayout(shotFrame, !capturedSelection.empty()),
-                shotCommandAvailable);
+                shotCommandAvailable, shotHoveredCommand);
 
             if (shotProduction) {
                 rm::ui::appendProductionPanel(hud, renderer.labelFont(), renderer.readoutFont(),
@@ -2174,9 +2184,7 @@ int runWindowed(const Session& session) {
                             return descriptor.kind == armedCommand;
                         });
                     if (found != rm::ui::kCommandDescriptors.end()) {
-                        const std::size_t slot = static_cast<std::size_t>(
-                            std::distance(rm::ui::kCommandDescriptors.begin(), found));
-                        inspector = rm::ui::commandCard(*found, commandAvailable[slot], true);
+                        inspector = rm::ui::commandCard(*found, commandSelection, true);
                     }
                 } else if (overBuild && *overBuild < buildOptions.size()) {
                     inspector =
@@ -2184,7 +2192,7 @@ int runWindowed(const Session& session) {
                 } else if (overCommand && *overCommand < rm::ui::kCommandSlots) {
                     inspector = rm::ui::commandCard(
                         rm::ui::kCommandDescriptors[*overCommand],
-                        commandAvailable[*overCommand]);
+                        commandSelection);
                 } else if (overTile && *overTile < rosterTiles.size()) {
                     inspector = rm::ui::rosterTileCard(rosterTiles[*overTile]);
                 } else {

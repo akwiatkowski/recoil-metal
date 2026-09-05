@@ -80,7 +80,8 @@ commandAvailability(std::span<const unitdef::UnitDef* const> selection) noexcept
 [[nodiscard]] std::optional<std::size_t> commandSlotAt(const CommandRackLayout& layout,
                                                        float pointX, float pointY) noexcept;
 
-[[nodiscard]] InfoCard commandCard(const CommandDescriptor& command, bool available,
+[[nodiscard]] InfoCard commandCard(const CommandDescriptor& command,
+                                   std::span<const unitdef::UnitDef* const> selection,
                                    bool armed = false);
 
 void appendCommandRack(Geometry& out, const text::Font& labelFont,
