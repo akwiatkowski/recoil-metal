@@ -8,6 +8,13 @@
 #include <string>
 
 namespace rm::ui {
+BuildOptionAction buildOptionAction(const BuildOption& option,
+                                    std::string_view builderRole) noexcept {
+    return option.upgrade || builderRole == "factory"
+        ? BuildOptionAction::SubmitAtBuilder
+        : BuildOptionAction::ArmPlacement;
+}
+
 InfoCard buildOptionCard(const BuildOption& option, GameProfile profile) {
     InfoCard card;
     card.title = option.name.empty() ? option.id : option.name;
@@ -24,7 +31,7 @@ InfoCard buildOptionCard(const BuildOption& option, GameProfile profile) {
     }
 
     // The construction material is always stated first, named as this profile names it, and in
-    // the loss colour when the store cannot pay it — the card agreeing with the dimmed cell.
+    // the loss colour when the store cannot cover it — advisory, not a disabled state.
     card.rows.push_back(InfoRow{.label = std::string{resourceViews(profile, {}, {})[0].name},
                                 .value = formatAmount(option.massCost),
                                 .tint = option.affordable ? kMass : kLoss});
@@ -228,10 +235,9 @@ void appendBuildPanel(Geometry& out, const text::Font& labelFont, const text::Fo
         const float cx = origin[0];
         const float cy = origin[1];
 
-        // UNAFFORDABLE DIMS, it does not vanish — see the note on `BuildOption::affordable`.
-        // Everything in the cell fades together so the cell reads as one disabled object rather
-        // than as a lit frame around grey contents.
-        const float alpha = option.affordable ? 1.0f : 0.38f;
+        // A resource shortfall changes the cost colour below, never the cell's availability.
+        // Construction is flow-funded and may start before the full price is stored.
+        constexpr float alpha = 1.0f;
 
         // The well in gradient glass, like its panel — one light for chrome and cells alike.
         const Colour well = fade(theme.well, alpha);
@@ -284,7 +290,7 @@ void appendBuildPanel(Geometry& out, const text::Font& labelFont, const text::Fo
 
         // The icon itself goes in the semantic icon layer, below type but above panel chrome.
         // Six vertices, uv'd into the shared atlas, tinted white so the artwork arrives as
-        // authored and faded with the rest of an unaffordable cell.
+        // authored. A short bank changes only the mass-cost colour; the action stays enabled.
         if (option.iconSlot) {
             const IconUv uv = iconUv(*option.iconSlot);
             const Colour tint{{1.0f, 1.0f, 1.0f, alpha}};

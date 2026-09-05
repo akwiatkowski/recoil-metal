@@ -111,12 +111,11 @@ struct BuildOption {
     /// adding to the base.
     bool upgrade = false;
 
-    /// Whether the army can pay for it RIGHT NOW, from stored mass.
+    /// Whether the army's stored mass covers the full price RIGHT NOW.
     ///
-    /// Shown by dimming rather than by hiding: a player deciding what to build next needs to see
-    /// the thing they cannot yet afford, because "not yet" is the information. Hiding it would
-    /// make the grid reflow as the economy moves, which is the one thing a
-    /// learned-by-position layout must never do.
+    /// This is advisory presentation state, never an eligibility gate. Supreme Commander lets
+    /// construction start against resource flow and slows it when the economy cannot keep up.
+    /// The cost turns to the loss colour, but the cell stays fully visible and clickable.
     bool affordable = true;
 
     /// The tint band across the top of the cell. Carries the tech tier, so a grid of a dozen
@@ -131,6 +130,13 @@ struct BuildOption {
     /// before there were icons at all.
     std::optional<std::size_t> iconSlot;
 };
+
+enum class BuildOptionAction { ArmPlacement, SubmitAtBuilder };
+
+/// What clicking a build cell does. Stored resources deliberately do not participate: a
+/// shortfall is resolved by economy funding after the order starts, not by disabling the order.
+[[nodiscard]] BuildOptionAction buildOptionAction(const BuildOption& option,
+                                                  std::string_view builderRole) noexcept;
 
 /// Where the grid sits and how it is divided.
 struct BuildPanelLayout {

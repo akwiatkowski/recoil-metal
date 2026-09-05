@@ -13,6 +13,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "app/Interface.hpp"
+#include "app/Match.hpp"
 #include "app/Scene.hpp"
 #include "app/SceneBuild.hpp"
 
@@ -225,14 +226,66 @@ TEST_CASE("a tray cell hit-tests to its option and the click becomes that constr
           == Approx(rm::sim::magToFloat(fixture->real("UEB1103")->buildCostMass)));
 }
 
-TEST_CASE("affordability dims what the bank cannot cover, at real prices",
+TEST_CASE("a real T2 upgrade starts with an empty bank and progresses from income",
+          "[corpus][ui][build]") {
+    auto fixture = makeFixture();
+    if (!fixture) {
+        SKIP("no Supreme Commander unit blueprints at " + unitRoot().string());
+    }
+    REQUIRE(fixture->loadReal("UEB0201"));
+    fixture->scene.roster = rm::data::Roster::build(fixture->corpus, fixture->ids);
+    fixture->scene.economies[0].stored = {};
+    const auto factory = fixture->spawn(*fixture->real("UEB0101"), 300.0f, 300.0f);
+    const auto successor = fixture->registerType(*fixture->real("UEB0201"));
+    rm::app::gatherBuildOptions(fixture->scene, factory, rm::ui::neutralTheme(),
+                                fixture->options, fixture->who);
+    const auto* option = fixture->option("UEB0201");
+    REQUIRE(option != nullptr);
+    CHECK_FALSE(option->affordable);
+    CHECK(rm::ui::buildOptionAction(*option, fixture->who.role)
+          == rm::ui::BuildOptionAction::SubmitAtBuilder);
+    REQUIRE(rm::app::issueBuild(fixture->scene, factory, 0, 0, successor,
+                                rm::sim::Fx::fromInt(300), rm::sim::Fx::fromInt(300)));
+    rm::vfs::Vfs content;
+    auto runner = rm::app::makeMatchRunner(fixture->scene, fixture->field,
+                                          fixture->passability, content, {}, {});
+    runner.scripts.clear();
+    for (int tick = 0; tick < 10; ++tick) {
+        (void)rm::app::advanceMatch(runner, tick, 0.0f);
+    }
+    REQUIRE(fixture->scene.building.size() == 1);
+    CHECK(fixture->scene.building.front().upgradeOf == factory);
+    CHECK_FALSE(fixture->scene.building.front().finished());
+    const auto stalled = fixture->scene.building.front().buildTimeRemaining;
+    for (int tick = 10; tick < 20; ++tick) {
+        (void)rm::app::advanceMatch(runner, tick, 0.0f);
+    }
+    CHECK(fixture->scene.building.front().buildTimeRemaining == stalled);
+    const auto stalledCard = rm::app::constructionCard(fixture->scene, factory);
+    REQUIRE(stalledCard);
+    CHECK(stalledCard->title == "UPGRADING");
+    CHECK(stalledCard->rows.back().value == "STALLED");
+
+    // A real commander supplies resource flow; its bank is still empty when it arrives.
+    (void)fixture->spawn(*fixture->real("UEL0001"), 700.0f, 700.0f);
+    for (int tick = 20; tick < 40; ++tick) {
+        (void)rm::app::advanceMatch(runner, tick, 0.0f);
+    }
+    CHECK(fixture->scene.building.front().buildTimeRemaining < stalled);
+    const auto fundedCard = rm::app::constructionCard(fixture->scene, factory);
+    REQUIRE(fundedCard);
+    CHECK(*fundedCard->progress > *stalledCard->progress);
+    CHECK(fixture->scene.economies[0].stored.mass < fixture->real("UEB0201")->buildCostMass);
+}
+
+TEST_CASE("a short bank marks but does not disable a real build option",
           "[corpus][ui][build]") {
     std::unique_ptr<Fixture> fixture = makeFixture();
     if (!fixture) {
         SKIP("no Supreme Commander unit blueprints at " + unitRoot().string());
     }
-    // 100 mass: a 36-mass extractor is buildable now; the land factory is not — and the
-    // tray says so by dimming rather than hiding, so the layout never reflows.
+    // 100 mass: the bank covers a 36-mass extractor but not the land factory's full price.
+    // Both remain valid actions because construction is paid from flow after it starts.
     fixture->scene.economies[0].stored.mass = rm::sim::magFromFloat(100.0f);
     const rm::sim::UnitId commander = fixture->spawn(*fixture->real("UEL0001"), 300.0f, 300.0f);
     rm::app::gatherBuildOptions(fixture->scene, commander, rm::ui::neutralTheme(),
@@ -242,4 +295,6 @@ TEST_CASE("affordability dims what the bank cannot cover, at real prices",
     REQUIRE(fixture->option("UEB0101") != nullptr);
     CHECK(fixture->option("UEB1103")->affordable);
     CHECK_FALSE(fixture->option("UEB0101")->affordable);
+    CHECK(rm::ui::buildOptionAction(*fixture->option("UEB0101"), "commander")
+          == rm::ui::BuildOptionAction::ArmPlacement);
 }

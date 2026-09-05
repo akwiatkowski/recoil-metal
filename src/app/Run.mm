@@ -1372,9 +1372,9 @@ int runWindowed(const Session& session) {
                         } else if (*step > 0 && buildPage + 1 < panel.pages) {
                             ++buildPage;
                         }
-                    } else if (cell && buildOptions[*cell].affordable
-                               && (buildOptions[*cell].upgrade
-                                   || buildWho.role == "factory")) {
+                    } else if (cell
+                               && rm::ui::buildOptionAction(buildOptions[*cell], buildWho.role)
+                                      == rm::ui::BuildOptionAction::SubmitAtBuilder) {
                         // BUILT AT ONCE, with no site to pick, for two different reasons that
                         // reach the same place. A FACTORY is the place — arming a ghost for its
                         // products would be a step with no decision in it. An UPGRADE has no
@@ -1418,15 +1418,8 @@ int runWindowed(const Session& session) {
                                 std::fflush(stdout);
                             }
                         }
-                    } else if (cell && buildOptions[*cell].affordable) {
-                        armedOption = cell;
                     } else if (cell) {
-                        // UNAFFORDABLE ARMS NOTHING, and the cell is still drawn — "not yet" is
-                        // the information. Arming it would leave a ghost the player cannot
-                        // place and no way to learn why.
-                        std::printf("cannot afford %s (%.0f mass)\n",
-                                    buildOptions[*cell].id.c_str(),
-                                    static_cast<double>(buildOptions[*cell].massCost));
+                        armedOption = cell;
                     }
                     return;
                 }

@@ -235,6 +235,17 @@ TEST_CASE("the hover card states the facts and omits what the content did not sa
     CHECK(sparse.rows.size() == 1);
 }
 
+TEST_CASE("a resource shortfall never disables a build cell", "[ui][build]") {
+    BuildOption poor{.id = "UEB1103", .affordable = false};
+    CHECK(rm::ui::buildOptionAction(poor, "commander")
+          == rm::ui::BuildOptionAction::ArmPlacement);
+
+    poor.id = "UEB0201";
+    poor.upgrade = true;
+    CHECK(rm::ui::buildOptionAction(poor, "factory")
+          == rm::ui::BuildOptionAction::SubmitAtBuilder);
+}
+
 TEST_CASE("tier tints brighten with tier and stay short of white", "[ui][build]") {
     const rm::ui::Theme theme = rm::ui::neutralTheme();
 

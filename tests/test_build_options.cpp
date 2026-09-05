@@ -65,6 +65,7 @@ struct Fixture {
         add(aDef("UEB1103", {"UEF", "TECH1", "STRUCTURE", "MASSEXTRACTION"}, 36.0f));
         add(aDef("UEB1101", {"UEF", "TECH1", "STRUCTURE", "ENERGYPRODUCTION"}, 75.0f));
         add(aDef("UEB0101", {"UEF", "TECH1", "STRUCTURE", "FACTORY"}, 240.0f));
+        add(aDef("UEB0103", {"UEF", "TECH1", "STRUCTURE", "FACTORY", "NAVAL"}, 300.0f));
         // Tier two: in the corpus, and never in the panel — see the note in `gatherBuildOptions`.
         add(aDef("UEB1201", {"UEF", "TECH2", "STRUCTURE", "MASSEXTRACTION"}, 900.0f));
         // A mobile unit of no buildable role: it must not reach a structure menu.
@@ -161,6 +162,7 @@ TEST_CASE("a selected engineer is offered its faction's tier-one structures", "[
     CHECK(fixture.offers(got, "UEB1103"));
     CHECK(fixture.offers(got, "UEB1101"));
     CHECK(fixture.offers(got, "UEB0101"));
+    CHECK(fixture.offers(got, "UEB0103"));
 }
 
 TEST_CASE("a commander is offered the same structures as an engineer", "[ui][build]") {
@@ -295,9 +297,8 @@ TEST_CASE("an ineligible builder falls through to the next candidate", "[ui][bui
 }
 
 TEST_CASE("an option the army cannot pay for is offered, and marked", "[ui][build]") {
-    // DIMMED RATHER THAN HIDDEN. "Not yet" is the information a player deciding what to build
-    // next needs, and hiding it would make the grid reflow as the economy moves — the one
-    // thing a learned-by-position layout must never do.
+    // A short bank is INFORMATION, not authorization. The option stays in its learned position
+    // and marks the cost; the click path still starts it and lets economy funding throttle work.
     Fixture fixture;
     fixture.setStoredMass(50.0f);  // the extractor at 36 is affordable, the factory at 240 is not
     const auto got = fixture.optionsFor({fixture.spawnEngineer()});
@@ -559,6 +560,34 @@ TEST_CASE("a construction is drawn while it is work, and not once it is a record
         .totalBuildTime = rm::sim::Mag{},
     };
     CHECK(rm::app::constructionProgress(untimed) == Catch::Approx(0.0f));
+}
+
+TEST_CASE("construction inspector follows selected work and ignores finished records", "[ui][build]") {
+    Fixture fixture;
+    const auto builder = fixture.spawnEngineer();
+    const auto other = fixture.spawnEngineer();
+    CHECK_FALSE(rm::app::constructionCard(fixture.scene, builder));
+    rm::sim::Construction work{
+        .buildTimeRemaining = rm::sim::magFromFloat(30.0f),
+        .totalBuildTime = rm::sim::magFromFloat(60.0f),
+    };
+    work.builder = builder;
+    work.fundedLastTick = {};
+    fixture.scene.building.push_back(work);
+    auto card = rm::app::constructionCard(fixture.scene, builder);
+    REQUIRE(card);
+    CHECK(card->title == "BUILDING");
+    CHECK(card->corner == "50%");
+    CHECK(*card->progress == Catch::Approx(0.5f));
+    CHECK(card->rows.back().value == "STALLED");
+    CHECK_FALSE(rm::app::constructionCard(fixture.scene, other));
+    fixture.scene.building.front().upgradeOf = builder;
+    CHECK(rm::app::constructionCard(fixture.scene, builder)->title == "UPGRADING");
+    fixture.scene.building.front().buildTimeRemaining = {};
+    CHECK_FALSE(rm::app::constructionCard(fixture.scene, builder));
+    fixture.scene.building.front().buildTimeRemaining = work.buildTimeRemaining;
+    fixture.scene.store.kill(builder);
+    CHECK_FALSE(rm::app::constructionCard(fixture.scene, builder));
 }
 
 TEST_CASE("game-interface themes do not leak classic skin or faction state", "[ui]") {
