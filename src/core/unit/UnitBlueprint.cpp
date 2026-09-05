@@ -485,6 +485,11 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
             sim::magFromFloat(costMass * numberOr(*wreckage, "MassMult", 0.0f));
         def.wreckEnergy =
             sim::magFromFloat(costEnergy * numberOr(*wreckage, "EnergyMult", 0.0f));
+        const lua::Value* defense = parsed->path("Defense");
+        const float maximumHealth =
+            defense != nullptr ? numberOr(*defense, "MaxHealth", 0.0f) : 0.0f;
+        def.wreckHealth =
+            sim::magFromFloat(maximumHealth * numberOr(*wreckage, "HealthMult", 1.0f));
 
         // FA Prop.lua:153-162 divides the work budget by 10 before the native task multiplies
         // it back by 10, so these inverses leave 10 / ReclaimTimeMultiplier. The 10 belongs to

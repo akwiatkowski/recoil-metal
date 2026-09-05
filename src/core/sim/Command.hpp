@@ -26,6 +26,7 @@ class FeatureStore;
 class Intel;
 class ScriptTaskHost;
 struct PlayableRect;
+struct GuardWork;
 
 /// When an input is applied relative to one simulation tick.
 enum class CommandPhase : std::uint8_t {
@@ -374,7 +375,8 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
                               std::span<const Army> armies = {},
                               const Intel* intel = nullptr,
                               const PlayableRect* playableRect = nullptr,
-                              ScriptTaskHost* scriptTasks = nullptr);
+                              ScriptTaskHost* scriptTasks = nullptr,
+                              std::vector<GuardWork>* guardWork = nullptr);
 
 /// Updates attack-move and patrol combat after movement and intel. These orders retain their
 /// waypoint while `target` temporarily names the visible hostile that interrupted the route.

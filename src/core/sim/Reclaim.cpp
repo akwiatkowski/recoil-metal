@@ -52,6 +52,14 @@ namespace {
     return Mag::fromRaw(static_cast<MagRaw>(whole + quotient));
 }
 
+[[nodiscard]] Fx fractionOf(Mag part, Mag total) noexcept {
+    if (part <= Mag{} || total <= Mag{}) {
+        return Fx{};
+    }
+    const Mag clipped = std::min(part, total);
+    return Fx::fromRaw(saturate((FxWide{clipped.raw()} << kFxFractionalBits) / total.raw()));
+}
+
 [[nodiscard]] bool drainWreck(UnitIndex reclaimer, FeatureId id, UnitStore& store,
                               const UnitCatalog& catalog, FeatureStore& features,
                               std::span<Economy> economies) {
@@ -61,24 +69,43 @@ namespace {
     }
     const Mag pace = catalog.rates(store.typeAt(reclaimer)).buildPerTick
                    * wreck->reclaimPerBuildRate;
-    if (pace <= Mag{}) {
+    if (pace <= Mag{} || wreck->reclaimWorkRemaining <= Mag{}
+        || wreck->reclaimWorkTotal <= Mag{}) {
         return false;
     }
 
-    const Mag massGrant = std::min(wreck->massRemaining, pace);
-    const Mag energyGrant = std::min(wreck->energyRemaining, pace);
+    const Mag applied = std::min(pace, wreck->reclaimWorkRemaining);
+    const Mag fullMass = wreck->maximumMassReclaim * wreck->damageRatio;
+    const Mag fullEnergy = wreck->maximumEnergyReclaim * wreck->damageRatio;
+    // The final applied slice receives any fixed-point remainder. Without this, a value whose
+    // ratio is not exactly representable can leave dust behind when the shared work bar reaches
+    // zero, and removing the wreck would silently delete that resource.
+    const bool finalSlice = applied == wreck->reclaimWorkRemaining;
+    const Mag massGrant = finalSlice
+        ? wreck->massRemaining
+        : std::min(wreck->massRemaining,
+                   proportionalWork(fullMass, applied, wreck->reclaimWorkTotal));
+    const Mag energyGrant = finalSlice
+        ? wreck->energyRemaining
+        : std::min(wreck->energyRemaining,
+                   proportionalWork(fullEnergy, applied, wreck->reclaimWorkTotal));
     wreck->massRemaining -= massGrant;
     wreck->energyRemaining -= energyGrant;
+    wreck->reclaimWorkRemaining -= applied;
+    wreck->reclaimFraction = fractionOf(wreck->reclaimWorkRemaining,
+                                        wreck->reclaimWorkTotal);
+    wreck->health = std::min(wreck->health,
+                             wreck->maximumHealth * wreck->reclaimFraction);
 
     const int owner = store.motion()[reclaimer].armyIndex;
     if (owner >= 0 && static_cast<std::size_t>(owner) < economies.size()) {
         economies[static_cast<std::size_t>(owner)].stored.mass += massGrant;
         economies[static_cast<std::size_t>(owner)].stored.energy += energyGrant;
     }
-    if (wreck->massRemaining <= Mag{} && wreck->energyRemaining <= Mag{}) {
+    if (wreck->reclaimWorkRemaining <= Mag{}) {
         features.remove(id);
     }
-    return massGrant > Mag{} || energyGrant > Mag{};
+    return applied > Mag{};
 }
 
 [[nodiscard]] bool repairUnit(UnitIndex builder, UnitIndex target, UnitStore& store,
@@ -122,6 +149,32 @@ Fx repairReach(const UnitCatalog& catalog, UnitTypeIndex type, const MoveState& 
     return catalog.rates(type).buildReachElmos + builder.radiusElmos + target.radiusElmos;
 }
 
+Mag damageFeature(FeatureStore& features, FeatureId id, Mag damage) {
+    Feature* wreck = features.findMutable(id);
+    if (wreck == nullptr || damage <= Mag{} || wreck->health <= Mag{}) {
+        return Mag{};
+    }
+    const Mag applied = std::min(damage, wreck->health);
+    wreck->health -= applied;
+    if (wreck->health <= Mag{}) {
+        features.remove(id);
+        return applied;
+    }
+    if (wreck->maximumHealth <= Mag{}) {
+        return applied;
+    }
+
+    wreck->damageRatio = fractionOf(wreck->health, wreck->maximumHealth);
+    const Mag fullMass = wreck->maximumMassReclaim * wreck->damageRatio;
+    const Mag fullEnergy = wreck->maximumEnergyReclaim * wreck->damageRatio;
+    wreck->massRemaining = fullMass * wreck->reclaimFraction;
+    wreck->energyRemaining = fullEnergy * wreck->reclaimFraction;
+    wreck->reclaimWorkTotal = std::max(fullMass, fullEnergy);
+    wreck->reclaimWorkRemaining = wreck->reclaimWorkTotal * wreck->reclaimFraction;
+    wreck->reclaimPerBuildRate = wreck->maximumReclaimPerBuildRate / wreck->damageRatio;
+    return applied;
+}
+
 std::size_t harvestReclaim(UnitStore& store, const UnitCatalog& catalog,
                            FeatureStore& features, std::span<Economy> economies) {
     std::size_t harvesting = 0;
@@ -157,8 +210,30 @@ std::size_t harvestReclaim(UnitStore& store, const UnitCatalog& catalog,
     return harvesting;
 }
 
+std::size_t applyGuardReclaim(UnitStore& store, const UnitCatalog& catalog,
+                              FeatureStore& features, std::span<Economy> economies,
+                              std::span<const GuardWork> work) {
+    std::size_t serviced = 0;
+    for (const GuardWork& item : work) {
+        if (item.kind != GuardWorkKind::Reclaim || !store.slotAlive(item.builder)
+            || !store.health()[item.builder].alive()) {
+            continue;
+        }
+        Feature* wreck = features.findMutable(item.target);
+        if (wreck == nullptr) continue;
+        const MoveState& motion = store.motion()[item.builder];
+        if (groundDistanceElmos(positionOf(store.transforms()[item.builder]), wreck->at)
+            <= reclaimReach(catalog, store.typeAt(item.builder), motion, *wreck)
+            && drainWreck(item.builder, item.target, store, catalog, features, economies)) {
+            ++serviced;
+        }
+    }
+    return serviced;
+}
+
 void collectRepairWork(const UnitStore& store, const UnitCatalog& catalog,
-                       std::span<const Army> armies, std::vector<RepairWork>& out) {
+                       std::span<const Army> armies, std::vector<RepairWork>& out,
+                       std::span<const GuardWork> guardWork) {
     out.clear();
     for (UnitIndex builder = 0; builder < store.orders().size(); ++builder) {
         if (!store.slotAlive(builder) || !store.health()[builder].alive()) {
@@ -195,6 +270,26 @@ void collectRepairWork(const UnitStore& store, const UnitCatalog& catalog,
                                  .builder = builder,
                                  .target = target,
                                  .demand = repairDrain(builder, *targetDef, store, catalog)});
+    }
+    for (const GuardWork& item : guardWork) {
+        if (item.kind != GuardWorkKind::Repair || !store.slotAlive(item.builder)
+            || !store.alive(item.target) || !store.health()[item.builder].alive()) continue;
+        const UnitIndex target = item.target.index;
+        const MoveState& builderMotion = store.motion()[item.builder];
+        const Army* owner = armyFor(builderMotion.armyIndex, armies);
+        const Army* targetArmy = armyFor(store.motion()[target].armyIndex, armies);
+        const unitdef::UnitDef* targetDef = catalog.def(store.typeAt(target));
+        if (owner == nullptr || targetArmy == nullptr || !allied(*owner, *targetArmy)
+            || targetDef == nullptr || targetDef->buildTime <= Mag{}
+            || store.health()[target].current >= store.health()[target].maximum
+            || groundDistanceElmos(positionOf(store.transforms()[item.builder]),
+                                   positionOf(store.transforms()[target]))
+                   > repairReach(catalog, store.typeAt(item.builder), builderMotion,
+                                 store.motion()[target])) continue;
+        out.push_back(RepairWork{.armyIndex = builderMotion.armyIndex,
+                                 .builder = item.builder,
+                                 .target = target,
+                                 .demand = repairDrain(item.builder, *targetDef, store, catalog)});
     }
 }
 

@@ -75,8 +75,20 @@ void retireDead(UnitStore& store, const UnitCatalog& catalog, TickReport& report
                 .radiusElmos = motion[slot].radiusElmos,
                 .fromType = store.typeAt(slot),
                 .armyIndex = motion[slot].armyIndex,
+                .health = def != nullptr ? def->wreckHealth : Mag{},
+                .maximumHealth = def != nullptr ? def->health : Mag{},
+                .maximumMassReclaim = def != nullptr ? def->wreckMass : Mag{},
+                .maximumEnergyReclaim = def != nullptr ? def->wreckEnergy : Mag{},
                 .massRemaining = def != nullptr ? def->wreckMass : Mag{},
                 .energyRemaining = def != nullptr ? def->wreckEnergy : Mag{},
+                .reclaimWorkRemaining = def != nullptr
+                    ? std::max(def->wreckMass, def->wreckEnergy) : Mag{},
+                .reclaimWorkTotal = def != nullptr
+                    ? std::max(def->wreckMass, def->wreckEnergy) : Mag{},
+                .reclaimFraction = kFxOne,
+                .damageRatio = kFxOne,
+                .maximumReclaimPerBuildRate =
+                    def != nullptr ? def->reclaimPerBuildRate : Fx{},
                 .reclaimPerBuildRate = def != nullptr ? def->reclaimPerBuildRate : Fx{},
             });
         }
@@ -345,13 +357,14 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
             (void)publishPathResult(result, store);
         }
     }
+    std::vector<GuardWork> guardWork;
     report.ordersStarted = advanceOrders(store, catalog, terrain, match.passability, rate,
                                           match.building, match.events, match.features,
                                           &report.finished, match.pathService, match.armies,
                                           match.intel,
                                           match.playableRect ? &*match.playableRect
                                                              : nullptr,
-                                          match.scriptTasks);
+                                          match.scriptTasks, &guardWork);
 
     // 1. MOVEMENT, then collisions. Everything downstream reads where a unit has got to
     //    this tick rather than where it started it.
@@ -549,6 +562,7 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
     recomputeIncome(store, catalog, match, rate);
     if (match.features != nullptr) {
         (void)harvestReclaim(store, catalog, *match.features, match.economies);
+        (void)applyGuardReclaim(store, catalog, *match.features, match.economies, guardWork);
     }
     // Manual reclaim has priority over autonomous patrol service when both reach the same
     // final scrap. Patrol helpers also use the freshly recomputed storage cap to avoid waste.
@@ -557,7 +571,7 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
     // Explicit repair is an economy consumer, not a pre-allocation debit. Its requests enter
     // the same pass as upkeep and construction; their awarded ratios are applied below.
     std::vector<RepairWork> repairs;
-    collectRepairWork(store, catalog, match.armies, repairs);
+    collectRepairWork(store, catalog, match.armies, repairs, guardWork);
 
     // Components are keyed by a generational UnitId. Remove before partitioning so a dead silo
     // cannot pay, and a subsequently recycled slot cannot inherit its ammunition (`C-081`).

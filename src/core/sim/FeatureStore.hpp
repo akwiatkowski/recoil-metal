@@ -63,6 +63,16 @@ struct Feature {
     UnitTypeIndex fromType = 0;
     int armyIndex = kNoArmy;
 
+    /// Wreck durability and reclaim progress. Retail starts a finished wreck at materialized
+    /// fraction 1 even when `HealthMult` gives it less than maximum health. Reclaim lowers the
+    /// fraction and health together; ordinary damage lowers health and re-derives value.
+    Mag health{};
+    Mag maximumHealth{};
+
+    /// The unscaled `SetMaxReclaimValues` baseline retained for damage recalculation.
+    Mag maximumMassReclaim{};
+    Mag maximumEnergyReclaim{};
+
     /// What reclaiming this still yields. Set at creation from the definition's wreck value
     /// (`UnitDef::wreckMass`, the blueprint's `BuildCost × MassMult`), drained per tick by
     /// the harvest pass, and the feature is removed when both reach zero. A wreck with
@@ -70,10 +80,18 @@ struct Feature {
     Mag massRemaining{};
     Mag energyRemaining{};
 
+    /// Work is the larger current resource value. Advancing one shared work bar is what makes
+    /// mixed mass/energy reclaim credit both resources by exactly the same fraction.
+    Mag reclaimWorkRemaining{};
+    Mag reclaimWorkTotal{};
+    Fx reclaimFraction = kFxOne;
+    Fx damageRatio = kFxOne;
+
     /// The value one point of a reclaimer's BuildRate recovers per second — 10 for every
     /// wreck in the corpus. Carried on the feature rather than looked up through
     /// `fromType` because a wreck outlives content changes and, later, map props will
     /// state their own (`Prop.lua:39-47`).
+    Fx maximumReclaimPerBuildRate{};
     Fx reclaimPerBuildRate{};
 };
 

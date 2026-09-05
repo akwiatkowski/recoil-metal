@@ -389,6 +389,10 @@ struct UnitDef {
     sim::Mag wreckMass{};
     sim::Mag wreckEnergy{};
 
+    /// Wreck durability. Its maximum is the unit's `Defense.MaxHealth`; the initial value is
+    /// that maximum times `Wreckage.HealthMult` (1 when omitted).
+    sim::Mag wreckHealth{};
+
     /// The value one point of a reclaimer's `BuildRate` recovers per second, as a ratio.
     ///
     /// FA `Prop.lua:153-162` divides `max(TimeMult × value / BuildRate)` by 10 before the

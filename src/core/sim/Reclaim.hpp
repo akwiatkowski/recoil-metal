@@ -11,24 +11,32 @@
 
 namespace rm::sim {
 
+enum class GuardWorkKind : std::uint8_t { Reclaim, Repair };
+
+/// A guard-ladder decision made during command dispatch and consumed later in the same beat.
+/// It is derived, never saved: command dispatch always runs before the economy work it drives.
+struct GuardWork {
+    UnitIndex builder = 0;
+    GuardWorkKind kind = GuardWorkKind::Reclaim;
+    UnitId target{};
+};
+
 // Turning wrecks back into mass.
 //
-// THE MECHANIC, read from the game's own Lua (the value chain is cited on `UnitDef` and
-// `Feature`): a builder within its build reach of a wreck drains it continuously, at
-// `BuildRate × Feature::reclaimPerBuildRate` value per second — 10 × BuildRate for every
-// wreck in the corpus — and the income lands in the army's store the tick it is earned,
-// subject to the same storage cap as every other income (`tickEconomy` clamps; overflow
-// is lost, exactly as extraction over a full store is).
+// THE MECHANIC, read from retail Lua and the native reclaim task (the value chain is cited on
+// `UnitDef` and `Feature`): a builder within build reach advances one materialisation-work bar
+// at `BuildRate × Feature::reclaimPerBuildRate` per second. The actual applied work fraction
+// pays both mass and energy in the same proportion and lands in the army's store that tick,
+// subject to the same storage cap as other income (`tickEconomy` clamps overflow).
 //
 // SEVERAL RECLAIMERS SHARE ONE WRECK, each at its own rate, first slot first — the last
 // tick's grant is whatever is left, so the total never exceeds what the wreck held.
 // `Unit.lua:909`'s comment ("can end up negative if another engineer finishes reclaiming
 // the prop between us") is the original engine saying the same thing less politely.
 //
-// WHAT IS DELIBERATELY NOT HERE: FA's overkill and fraction-complete scaling of the
-// wreck's value (needs state the death report does not carry), damage to wrecks reducing
-// what is left (`wreckage.lua:44` — wrecks are not targetable here yet), and the rebuild
-// bonus. Each is named in the survey doc's gap list rather than silently absent.
+// Damage can reduce a wreck's durability, value, and remaining work through `damageFeature`.
+// Wreck collision, ordinary combat targeting, and the rebuild bonus remain outside this slice;
+// each is named in the survey doc's gap list rather than silently absent.
 
 /// How close a reclaimer must be, centre to centre: its build reach plus both radii —
 /// the same generosity the game's own build-range overlay draws
@@ -40,6 +48,10 @@ namespace rm::sim {
 [[nodiscard]] Fx repairReach(const UnitCatalog& catalog, UnitTypeIndex type,
                               const MoveState& builder, const MoveState& target) noexcept;
 
+/// Damages a wreck and recalculates its reclaim value from the immutable maximums, exactly as
+/// `wreckage.lua::DoTakeDamage`; a lethal hit removes it. Returns health actually removed.
+Mag damageFeature(FeatureStore& features, FeatureId id, Mag damage);
+
 /// One tick of every reclaim order in the store: drains wrecks, credits economies,
 /// removes what is emptied. Returns how many units actually harvested this tick — the
 /// outward sign a reclaim is progressing, for the report and for tests.
@@ -49,11 +61,18 @@ namespace rm::sim {
 std::size_t harvestReclaim(UnitStore& store, const UnitCatalog& catalog,
                            FeatureStore& features, std::span<Economy> economies);
 
+/// Applies reclaim-copy decisions made by the guard ladder. Manual reclaim has already run;
+/// patrol work runs afterwards.
+std::size_t applyGuardReclaim(UnitStore& store, const UnitCatalog& catalog,
+                              FeatureStore& features, std::span<Economy> economies,
+                              std::span<const GuardWork> work);
+
 /// Collects every explicit repair that is actively holding its target into economy requests.
 /// The caller awards these alongside construction and upkeep, then passes the same records to
 /// `applyRepairWork` so healing uses exactly the allocation ratio that paid for it.
 void collectRepairWork(const UnitStore& store, const UnitCatalog& catalog,
-                       std::span<const Army> armies, std::vector<RepairWork>& out);
+                       std::span<const Army> armies, std::vector<RepairWork>& out,
+                       std::span<const GuardWork> guardWork = {});
 
 /// Applies repair healing after its requests have been awarded by `tickEconomy`.
 std::size_t applyRepairWork(UnitStore& store, const UnitCatalog& catalog,

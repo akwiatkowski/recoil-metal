@@ -280,8 +280,10 @@ TEST_CASE("a wreck's value and the builder's reach arrive from the economy table
             Wreckage = {
                 EnergyMult = 0.5,
                 MassMult = 0.9,
+                HealthMult = 0.9,
                 ReclaimTimeMultiplier = 1,
             },
+            Defense = { MaxHealth = 1000 },
         }
     )"};
     const auto def = rm::unitbp::loadFile(bp.path());
@@ -290,6 +292,7 @@ TEST_CASE("a wreck's value and the builder's reach arrive from the economy table
     // 200 * 0.9 and 1000 * 0.5, computed at parse time so the sim never multiplies floats.
     CHECK(rm::test::asFloat(def->wreckMass) == Approx(180.0f));
     CHECK(rm::test::asFloat(def->wreckEnergy) == Approx(500.0f));
+    CHECK(rm::test::asFloat(def->wreckHealth) == Approx(900.0f));
 
     // FA Prop.lua:153-162 divides the work budget by 10 before the native task multiplies it
     // back by 10. The inverses leave 10 / ReclaimTimeMultiplier value per BuildRate-second.

@@ -31,6 +31,13 @@ namespace {
     return nullptr;
 }
 
+[[nodiscard]] const Army* armyFor(int index, std::span<const Army> armies) noexcept {
+    for (const Army& army : armies) {
+        if (army.index == index) return &army;
+    }
+    return nullptr;
+}
+
 /// Whether this player may order this unit.
 ///
 /// TWO conditions, and both matter. The player must command the unit's army — that is the
@@ -1018,9 +1025,12 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
                            const FeatureStore* features, std::vector<Construction>* finished,
                              PathService* pathService, std::span<const Army> armies,
                              const Intel* intel, const PlayableRect* playableRect,
-                             ScriptTaskHost* scriptTasks) {
+                             ScriptTaskHost* scriptTasks, std::vector<GuardWork>* guardWork) {
     std::size_t started = 0;
     std::vector<UnitIndex> delayedScripts;
+    if (guardWork != nullptr) {
+        guardWork->clear();
+    }
 
     const std::span<CommandQueue> orders = store.orders();
     const std::span<const MoveState> motion = store.motion();
@@ -1407,6 +1417,41 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
             }
         }
 
+        // C-183's leash is measured from the guard to the guarded unit's current position
+        // (or, in retail's richer task object, its resolved guarded/build position). The
+        // guardee's full blueprint width is added to half GuardScanRadius. GuardReturnRadius
+        // is not involved: retail never reads it.
+        if (current->kind() == CommandKind::Assist && store.alive(current->target())) {
+            const unitdef::UnitDef* guardDef = catalog.def(store.typeAt(slot));
+            const unitdef::UnitDef* guardedDef = catalog.def(store.typeAt(current->target().index));
+            if (guardDef != nullptr && guardedDef != nullptr && guardDef->isMobile()
+                && guardDef->guardScanRadiusElmos > Fx{}) {
+                std::array<Fx, 3> anchor = positionOf(store.transforms()[current->target().index]);
+                if (building != nullptr) {
+                    const auto work = std::ranges::find_if(*building, [&](const Construction& item) {
+                        return !item.finished() && item.builder == current->target();
+                    });
+                    if (work != building->end()) {
+                        anchor = work->position;
+                    }
+                }
+                const Fx guardedWidth = fxFromFloat(guardedDef->collisionRadiusElmos * 2.0f);
+                const Fx leash = guardedWidth
+                               + guardDef->guardScanRadiusElmos / Fx::fromInt(2);
+                const std::array<Fx, 3> from = positionOf(store.transforms()[slot]);
+                const Fx distance = fxHypot(fxHypot(anchor[0] - from[0],
+                                                     anchor[2] - from[2]),
+                                            anchor[1] - from[1]);
+                if (distance > leash) {
+                    const PassabilityGrid* returnGrid = gridFor(*current);
+                    if (returnGrid != nullptr) {
+                        (void)routeUnit(slot, anchor[0], anchor[2], store, terrain, *returnGrid);
+                    }
+                    continue;
+                }
+            }
+        }
+
         // C-183's ATTACK branch outranks every assist. A mobile guard whose scan covers a
         // hostile acquires through the ordinary path and pursues it, while Assist stays at
         // the head — no child command, no ids, no log entries. Factory guards never arrive
@@ -1415,11 +1460,8 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
         // The acquisition is a range-overridden copy of each firing weapon, so priorities,
         // restrictions, arcs, incumbency and recon all apply exactly as in combat — the
         // structural equivalent of delegating to `IAiAttacker` with `GuardScanRadius`.
-        // Three retail behaviours are NOT here, all recorded: the leash that reins a guard
-        // back to its guardee (its endpoints are unread), the multi-weapon selection among
-        // a guard's own guns (nearest wins), and combat-unit guard orders themselves (Assist
-        // refusal for non-builders is pinned behaviour — a Guard order is the deferred
-        // vehicle, so this branch serves Assist-capable guards only).
+        // Multi-weapon selection among the guard's own guns still resolves to nearest here,
+        // and combat-unit Guard remains represented by the existing Assist-capable path.
         if (current->kind() == CommandKind::Assist && !armies.empty()
             && store.alive(current->target())) {
             const unitdef::UnitDef* guardDef = catalog.def(store.typeAt(slot));
@@ -1484,6 +1526,107 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
                     }
                     continue;
                 }
+            }
+        }
+
+        // BUILD ASSIST outranks reclaim and repair. Resolve the same transitive guard chain as
+        // applyAssistance; if its founder is actively building, the ordinary Assist chase and
+        // work pass below own this beat.
+        bool guardBuildAssist = false;
+        if (current->kind() == CommandKind::Assist && building != nullptr
+            && store.alive(current->target())) {
+            UnitId founder = current->target();
+            std::vector<UnitId> visited;
+            while (store.alive(founder) && std::ranges::find(visited, founder) == visited.end()) {
+                visited.push_back(founder);
+                const QueuedCommand* guarded = orders[founder.index].active();
+                if (guarded == nullptr || guarded->kind() != CommandKind::Assist
+                    || !store.alive(guarded->target())) {
+                    break;
+                }
+                founder = guarded->target();
+            }
+            guardBuildAssist = std::ranges::any_of(*building, [&](const Construction& item) {
+                return !item.finished() && item.builder == founder;
+            });
+        }
+
+        // RECLAIM copies the guardee's live feature target. It remains an Assist command: this
+        // derived work record only bridges command dispatch to the end-of-beat economy pass.
+        if (current->kind() == CommandKind::Assist && !guardBuildAssist && features != nullptr
+            && store.alive(current->target())) {
+            const QueuedCommand* guarded = orders[current->target().index].active();
+            if (guarded != nullptr && guarded->kind() == CommandKind::Reclaim
+                && features->find(guarded->target()) != nullptr) {
+                const Feature& wreck = *features->find(guarded->target());
+                if (guardWork != nullptr) {
+                    guardWork->push_back(GuardWork{.builder = slot,
+                                                   .kind = GuardWorkKind::Reclaim,
+                                                   .target = guarded->target()});
+                }
+                MoveState& move = store.motion()[slot];
+                const Fx reach = reclaimReach(catalog, store.typeAt(slot), move, wreck);
+                if (groundDistanceElmos(positionOf(store.transforms()[slot]), wreck.at) <= reach) {
+                    move.moving = false;
+                    move.path.clear();
+                    move.pathIndex = 0;
+                } else if (const PassabilityGrid* reclaimGrid = gridFor(*current)) {
+                    (void)routeUnit(slot, wreck.at[0], wreck.at[2], store, terrain, *reclaimGrid);
+                }
+                continue;
+            }
+        }
+
+        // REPAIR is the final useful rung: scan around the guardee, but rank by distance to
+        // the guard. Strict improvement preserves slot/grid order on an exact tie.
+        if (current->kind() == CommandKind::Assist && !guardBuildAssist
+            && store.alive(current->target())) {
+            const unitdef::UnitDef* guardDef = catalog.def(store.typeAt(slot));
+            const Army* owner = armyFor(store.motion()[slot].armyIndex, armies);
+            std::optional<UnitIndex> repair;
+            Fx repairDistance{};
+            if (guardDef != nullptr && owner != nullptr && guardDef->guardScanRadiusElmos > Fx{}) {
+                const std::array<Fx, 3> centre = positionOf(
+                    store.transforms()[current->target().index]);
+                const std::array<Fx, 3> from = positionOf(store.transforms()[slot]);
+                for (UnitIndex target = 0; target < store.slotCount(); ++target) {
+                    if (!store.slotAlive(target) || target == slot) continue;
+                    const Health& health = store.health()[target];
+                    const Army* candidateArmy = armyFor(store.motion()[target].armyIndex, armies);
+                    const unitdef::UnitDef* targetDef = catalog.def(store.typeAt(target));
+                    if (!health.alive() || health.current >= health.maximum
+                        || candidateArmy == nullptr || !allied(*owner, *candidateArmy)
+                        || targetDef == nullptr || targetDef->buildTime <= Mag{}
+                        || groundDistanceElmos(centre, positionOf(store.transforms()[target]))
+                               > guardDef->guardScanRadiusElmos) {
+                        continue;
+                    }
+                    const Fx distance = groundDistanceElmos(
+                        from, positionOf(store.transforms()[target]));
+                    if (!repair || distance < repairDistance) {
+                        repair = target;
+                        repairDistance = distance;
+                    }
+                }
+            }
+            if (repair) {
+                if (guardWork != nullptr) {
+                    guardWork->push_back(GuardWork{.builder = slot,
+                                                   .kind = GuardWorkKind::Repair,
+                                                   .target = store.idAt(*repair)});
+                }
+                MoveState& move = store.motion()[slot];
+                const Fx reach = repairReach(catalog, store.typeAt(slot), move,
+                                             store.motion()[*repair]);
+                const Transform& targetAt = store.transforms()[*repair];
+                if (repairDistance <= reach) {
+                    move.moving = false;
+                    move.path.clear();
+                    move.pathIndex = 0;
+                } else if (const PassabilityGrid* repairGrid = gridFor(*current)) {
+                    (void)routeUnit(slot, targetAt.x, targetAt.z, store, terrain, *repairGrid);
+                }
+                continue;
             }
         }
 

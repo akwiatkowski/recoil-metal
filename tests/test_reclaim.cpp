@@ -5,6 +5,7 @@
 // rate-10 engineer takes 10 mass a tick at 10 Hz, and the arithmetic below is exact in
 // fixed point, which is what lets these tests use == rather than margins.
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/catch_approx.hpp>
 
 #include "core/sim/Command.hpp"
 #include "core/sim/FeatureStore.hpp"
@@ -15,6 +16,7 @@
 #include "support/FxMatchers.hpp"
 #include "support/TestRoster.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <filesystem>
 #include <vector>
@@ -26,6 +28,7 @@ using rm::sim::FeatureId;
 using rm::sim::FeatureStore;
 using rm::sim::Player;
 using rm::sim::UnitId;
+using Catch::Approx;
 
 namespace {
 
@@ -54,6 +57,7 @@ struct Fixture {
     FeatureStore features;
 
     rm::UnitTypeIndex engineerType{};
+    rm::UnitTypeIndex guardType{};
     rm::UnitTypeIndex tankType{};
 
     Fixture() {
@@ -61,6 +65,20 @@ struct Fixture {
         engineer.name = "test_engineer";
         engineer.buildRate = 10.0f;  // 1 build unit per tick at 10 Hz
         engineerType = roster.addType(engineer);
+
+        rm::unitdef::UnitDef guard = engineer;
+        guard.name = "test_guard";
+        guard.speedElmosPerSecond = 20.0f;
+        guard.guardScanRadiusElmos = rm::sim::fxFromFloat(80.0f);
+        rm::unitdef::Weapon gun;
+        gun.label = "guard gun";
+        gun.role = rm::unitdef::WeaponRole::DirectFire;
+        gun.targetPriorities = {{"LAND"}};
+        gun.damage = rm::sim::magFromFloat(10.0f);
+        gun.maxRange = rm::sim::fxFromFloat(30.0f);
+        gun.rateOfFire = 1.0f;
+        guard.weapons.push_back(gun);
+        guardType = roster.addType(guard);
 
         rm::unitdef::UnitDef tank;
         tank.name = "test_tank";
@@ -71,13 +89,25 @@ struct Fixture {
     }
 
     /// A standard 90-mass wreck — what a 100-mass unit leaves at the corpus's 0.9.
-    [[nodiscard]] FeatureId wreckAt(float x, float z, float mass = 90.0f) {
+    [[nodiscard]] FeatureId wreckAt(float x, float z, float mass = 90.0f,
+                                    float energy = 0.0f, float health = 100.0f) {
         return features.add(Feature{.at = {rm::sim::fxFromFloat(x), rm::sim::Fx{},
                                            rm::sim::fxFromFloat(z)},
                                     .radiusElmos = rm::sim::Fx::fromInt(4),
                                     .fromType = tankType,
                                     .armyIndex = 1,
+                                    .health = rm::sim::magFromFloat(health),
+                                    .maximumHealth = rm::sim::magFromFloat(health),
+                                    .maximumMassReclaim = rm::sim::magFromFloat(mass),
+                                    .maximumEnergyReclaim = rm::sim::magFromFloat(energy),
                                     .massRemaining = rm::sim::magFromFloat(mass),
+                                    .energyRemaining = rm::sim::magFromFloat(energy),
+                                    .reclaimWorkRemaining = rm::sim::magFromFloat(
+                                        std::max(mass, energy)),
+                                    .reclaimWorkTotal = rm::sim::magFromFloat(
+                                        std::max(mass, energy)),
+                                    .reclaimFraction = rm::sim::kFxOne,
+                                    .maximumReclaimPerBuildRate = rm::sim::fxFromFloat(10.0f),
                                     .reclaimPerBuildRate = rm::sim::fxFromFloat(10.0f)});
     }
 
@@ -100,6 +130,17 @@ struct Fixture {
                                              .target = target},
                                      roster.store, roster.catalog, players, armies, terrain,
                                      grid, roster.rate, &building);
+    }
+
+    [[nodiscard]] bool assist(UnitId who, UnitId target) {
+        const rm::sim::Transform& at = roster.store.transforms()[target.index];
+        return rm::sim::applyCommand(Command{.kind = CommandKind::Assist,
+                                             .unit = who,
+                                             .targetX = at.x,
+                                             .targetZ = at.z,
+                                             .target = target},
+                                     roster.store, roster.catalog, players, armies, terrain,
+                                     grid, roster.rate, &building, nullptr, &features);
     }
 
     void tick(int times = 1, float storageMass = 1000.0f) {
@@ -193,6 +234,104 @@ TEST_CASE("two engineers empty one wreck faster, and the total never exceeds wha
     f.tick(1);
     CHECK(f.roster.store.orders()[first.index].empty());
     CHECK(f.roster.store.orders()[second.index].empty());
+}
+
+TEST_CASE("reclaim progress credits mass and energy by the same applied fraction") {
+    Fixture f;
+    const UnitId engineer = f.roster.add(f.engineerType, 200.0f, 200.0f, 0, 100.0f);
+    const FeatureId wreck = f.wreckAt(210.0f, 200.0f, /*mass=*/90.0f,
+                                      /*energy=*/180.0f);
+
+    REQUIRE(f.reclaim(engineer, wreck));
+    f.tick(1);
+
+    // Energy is the longer side of GetReclaimCosts, so one eighteenth of BOTH values is
+    // earned. Draining each resource by the same absolute pace would incorrectly pay 10 mass.
+    CHECK(rm::test::asFloat(f.economies[0].stored.mass) == Approx(5.0f).margin(0.01f));
+    CHECK(rm::test::asFloat(f.economies[0].stored.energy) == Approx(10.0f).margin(0.01f));
+    REQUIRE(f.features.find(wreck) != nullptr);
+    CHECK(rm::sim::fxToFloat(f.features.find(wreck)->reclaimFraction)
+          == Approx(17.0f / 18.0f).margin(0.001f));
+
+    f.tick(17);
+    CHECK(f.features.find(wreck) == nullptr);
+    CHECK(rm::test::asFloat(f.economies[0].stored.mass) == Approx(90.0f).margin(0.01f));
+    CHECK(rm::test::asFloat(f.economies[0].stored.energy) == Approx(180.0f).margin(0.01f));
+}
+
+TEST_CASE("damage scales a wreck's value and reclaim time from its maximums") {
+    Fixture f;
+    const FeatureId wreck = f.wreckAt(210.0f, 200.0f, /*mass=*/90.0f,
+                                      /*energy=*/180.0f, /*health=*/100.0f);
+
+    CHECK(rm::test::asFloat(rm::sim::damageFeature(f.features, wreck,
+                                                   rm::sim::magFromFloat(25.0f)))
+          == 25.0f);
+    const Feature* damaged = f.features.find(wreck);
+    REQUIRE(damaged != nullptr);
+    CHECK(rm::test::asFloat(damaged->health) == 75.0f);
+    CHECK(rm::test::asFloat(damaged->massRemaining) == Approx(67.5f).margin(0.01f));
+    CHECK(rm::test::asFloat(damaged->energyRemaining) == Approx(135.0f).margin(0.01f));
+    CHECK(rm::sim::fxToFloat(damaged->reclaimPerBuildRate)
+          == Approx(40.0f / 3.0f).margin(0.01f));
+
+    CHECK(rm::test::asFloat(rm::sim::damageFeature(f.features, wreck,
+                                                   rm::sim::magFromFloat(100.0f)))
+          == 75.0f);
+    CHECK(f.features.find(wreck) == nullptr);
+}
+
+TEST_CASE("a guard copies its guardee's reclaim target before considering repair") {
+    Fixture f;
+    const UnitId guardee = f.roster.add(f.engineerType, 200.0f, 200.0f, 0, 100.0f);
+    const UnitId guard = f.roster.add(f.guardType, 205.0f, 200.0f, 0, 100.0f);
+    const UnitId damaged = f.roster.add(f.tankType, 210.0f, 200.0f, 0, 100.0f);
+    f.roster.health(damaged).current = rm::sim::magFromFloat(50.0f);
+    f.economies[0].stored = {.mass = rm::sim::magFromFloat(100.0f),
+                             .energy = rm::sim::magFromFloat(100.0f)};
+    const FeatureId wreck = f.wreckAt(208.0f, 200.0f);
+
+    REQUIRE(f.reclaim(guardee, wreck));
+    REQUIRE(f.assist(guard, guardee));
+    f.tick(1);
+
+    REQUIRE(f.features.find(wreck) != nullptr);
+    CHECK(rm::test::asFloat(f.features.find(wreck)->massRemaining) == 70.0f);
+    CHECK(rm::test::asFloat(f.roster.health(damaged).current) == 50.0f);
+}
+
+TEST_CASE("guard repair scans around the guardee and chooses the nearest unit to the guard") {
+    Fixture f;
+    const UnitId guardee = f.roster.add(f.engineerType, 200.0f, 200.0f, 0, 100.0f);
+    const UnitId guard = f.roster.add(f.guardType, 240.0f, 200.0f, 0, 100.0f);
+    const UnitId nearerGuard = f.roster.add(f.tankType, 245.0f, 200.0f, 0, 100.0f);
+    const UnitId nearerGuardee = f.roster.add(f.tankType, 190.0f, 200.0f, 0, 100.0f);
+    f.roster.health(nearerGuard).current = rm::sim::magFromFloat(50.0f);
+    f.roster.health(nearerGuardee).current = rm::sim::magFromFloat(50.0f);
+    f.economies[0].stored = {.mass = rm::sim::magFromFloat(100.0f),
+                             .energy = rm::sim::magFromFloat(100.0f)};
+
+    REQUIRE(f.assist(guard, guardee));
+    f.tick(1);
+
+    CHECK(rm::test::asFloat(f.roster.health(nearerGuard).current)
+          == Approx(51.0f).margin(0.01f));
+    CHECK(rm::test::asFloat(f.roster.health(nearerGuardee).current) == 50.0f);
+}
+
+TEST_CASE("the guard leash returns to the guardee before engaging a nearby enemy") {
+    Fixture f;
+    const UnitId guardee = f.roster.add(f.engineerType, 200.0f, 200.0f, 0, 100.0f);
+    const UnitId guard = f.roster.add(f.guardType, 300.0f, 200.0f, 0, 100.0f);
+    const UnitId enemy = f.roster.add(f.tankType, 310.0f, 200.0f, 1, 100.0f);
+    (void)enemy;
+
+    REQUIRE(f.assist(guard, guardee));
+    f.tick(1);
+
+    CHECK(f.roster.transform(guard).x < rm::sim::fxFromFloat(300.0f));
+    REQUIRE(f.roster.store.orders()[guard.index].active() != nullptr);
+    CHECK(f.roster.store.orders()[guard.index].active()->kind() == CommandKind::Assist);
 }
 
 TEST_CASE("a death leaves a wreck worth the definition's word, and reclaim empties it") {

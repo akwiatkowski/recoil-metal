@@ -740,8 +740,17 @@ StateHash hashMatch(const UnitStore& store, const Match& match) {
             feed(h, wreck.radiusElmos);
             feed(h, static_cast<std::size_t>(wreck.fromType));
             feed(h, wreck.armyIndex);
+            feed(h, wreck.health);
+            feed(h, wreck.maximumHealth);
+            feed(h, wreck.maximumMassReclaim);
+            feed(h, wreck.maximumEnergyReclaim);
             feed(h, wreck.massRemaining);
             feed(h, wreck.energyRemaining);
+            feed(h, wreck.reclaimWorkRemaining);
+            feed(h, wreck.reclaimWorkTotal);
+            feed(h, wreck.reclaimFraction);
+            feed(h, wreck.damageRatio);
+            feed(h, wreck.maximumReclaimPerBuildRate);
             feed(h, wreck.reclaimPerBuildRate);
             feed(h, match.features->slotAlive(slot));
             feed(h, static_cast<std::size_t>(match.features->idAt(slot).generation));
