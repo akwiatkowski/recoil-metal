@@ -26,7 +26,7 @@ struct SaveState {
     /// The published v2 format includes path-service and route-revalidation phase state.
     [[nodiscard]] static std::vector<std::byte> encodeV2(const SaveState& state);
     [[nodiscard]] static std::optional<SaveState> decodeV2(std::span<const std::byte> bytes);
-    /// The latest v12 format additionally preserves script-task identity and execution state.
+    /// The latest v13 format additionally preserves winged-aircraft combat state.
     [[nodiscard]] static std::vector<std::byte> encode(const SaveState& state);
     /// Decodes all supported save versions, including v1 and the published v2 format.
     [[nodiscard]] static std::optional<SaveState> decode(std::span<const std::byte> bytes);

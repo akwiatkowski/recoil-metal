@@ -1069,6 +1069,35 @@ TEST_CASE("a flyer integrates velocity trapezoidally") {
     CHECK(rm::sim::fxToFloat(units[0].y) == Approx(80.0f).margin(0.01));
 }
 
+TEST_CASE("head-on and tail-chase runs select their recovered speed and elevation") {
+    // `C-224`: state 1 ignores final-approach distance and asks for max airspeed while
+    // slewing toward Physics.AttackElevation. State 2 returns to cruise elevation but will
+    // not ask for less than MinAirspeed. At 50 elmos away those desired speeds are therefore
+    // 160, 80 and (without combat) 50 elmos/s.
+    const HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    std::vector<rm::sim::Transform> units(3, unitAt(100.0f, 100.0f));
+    std::vector<MoveState> motion(3, flyer());
+    for (std::size_t i = 0; i < motion.size(); ++i) {
+        units[i].y = rm::sim::Fx::fromInt(80);
+        motion[i].altitudeRef = rm::sim::Fx::fromInt(80);
+        motion[i].airMinSpeedElmosPerSec = rm::sim::Fx::fromInt(80);
+        motion[i].airAttackElevation = rm::sim::Fx::fromInt(32);
+        rm::sim::orderTo(motion[i], terrain, rm::sim::Fx::fromInt(100),
+                         rm::sim::Fx::fromInt(150));
+    }
+    motion[0].airCombatState = MoveState::AirCombatState::HeadOn;
+    motion[1].airCombatState = MoveState::AirCombatState::TailChase;
+
+    rm::sim::tick(units, motion, terrain);
+
+    CHECK(rm::sim::fxToFloat(motion[0].velocity[2]) == Approx(16.0f).margin(0.01));
+    CHECK(rm::sim::fxToFloat(motion[1].velocity[2]) == Approx(8.0f).margin(0.01));
+    CHECK(rm::sim::fxToFloat(motion[2].velocity[2]) == Approx(5.0f).margin(0.01));
+    CHECK(motion[0].altitudeRef < rm::sim::Fx::fromInt(80));
+    CHECK(motion[1].altitudeRef == rm::sim::Fx::fromInt(80));
+}
+
 TEST_CASE("the horizontal damping is KMove unless the controller is faster than its desire") {
     // `C-244`: `s = max(1, min(|desired|, KMove))`; `KMove` when `KMove <= s`, otherwise
     // `min(KMove / s, KMoveDamping)`. At cruise every shipped aircraft sits in the first

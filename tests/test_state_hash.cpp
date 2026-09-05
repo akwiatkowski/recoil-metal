@@ -834,4 +834,7 @@ TEST_CASE("winged-flight state changes the match hash") {
     const auto flying = fixture.hash();
     ++fixture.motion()[0].idleTicks;
     CHECK(fixture.hash() != flying);
+    const auto idling = fixture.hash();
+    fixture.motion()[0].airCombatState = rm::sim::MoveState::AirCombatState::HeadOn;
+    CHECK(fixture.hash() != idling);
 }

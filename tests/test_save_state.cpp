@@ -290,7 +290,7 @@ TEST_CASE("historic attachment saves derive offsets from their transforms", "[sa
     // what makes these trailers computable without parsing). This fixture starts from
     // the final published v7 shape, so the historical-layout edits below must remove
     // all four later trailers first. V12 extends command records in place, so this empty-queue
-    // fixture adds no bytes for it.
+    // fixture adds no bytes for it; v13 adds one combat-state byte per air record.
     constexpr std::size_t kV8CommandStateBytes = sizeof(rm::CommandSerial)
                                                   + std::size_t{rm::kInvalidCommandSource}
                                                         * sizeof(std::uint32_t)
@@ -300,8 +300,8 @@ TEST_CASE("historic attachment saves derive offsets from their transforms", "[sa
                                                            + sizeof(std::uint32_t));
     constexpr std::size_t kV9SiloAmmoBytes = sizeof(std::uint32_t);
     constexpr std::size_t kV10RedirectBytes = sizeof(std::uint32_t);
-    constexpr std::size_t kV11AirBytes = sizeof(std::uint32_t) + kSlots * 34;
-    v7.resize(v7.size() - kV11AirBytes - kV10RedirectBytes - kV9SiloAmmoBytes
+    constexpr std::size_t kV13AirBytes = sizeof(std::uint32_t) + kSlots * 35;
+    v7.resize(v7.size() - kV13AirBytes - kV10RedirectBytes - kV9SiloAmmoBytes
               - kV8CommandStateBytes);
     writeU32(v7, 4, 7);
     writeU32(v7, 16, static_cast<std::uint32_t>(v7.size() - 20));
@@ -516,12 +516,13 @@ TEST_CASE("a v1 save state refuses invalid unit allocator and attachment state",
     CHECK_FALSE(SaveState::decodeV1(malformed).has_value());
 }
 
-TEST_CASE("a v11 save round-trips winged-flight state", "[save-state]") {
+TEST_CASE("a v13 save round-trips winged-flight state", "[save-state]") {
     rm::sim::UnitStore original;
     const auto flyer = original.spawn({});
     rm::sim::MoveState& motion = original.motion()[flyer.index];
     motion.canFly = true;
     motion.airState = rm::sim::MoveState::AirState::Up;
+    motion.airCombatState = rm::sim::MoveState::AirCombatState::TailChase;
     motion.velocity = {rm::sim::Fx::fromInt(10), rm::sim::Fx::fromInt(1),
                        rm::sim::Fx::fromInt(-3)};
     motion.altitudeRef = rm::sim::Fx::fromInt(80);
@@ -537,6 +538,7 @@ TEST_CASE("a v11 save round-trips winged-flight state", "[save-state]") {
     REQUIRE(restored->units.motion.size() == original.motion().size());
     const rm::sim::MoveState& back = restored->units.motion[flyer.index];
     CHECK(back.airState == rm::sim::MoveState::AirState::Up);
+    CHECK(back.airCombatState == rm::sim::MoveState::AirCombatState::TailChase);
     CHECK(back.canFly);
     CHECK(back.velocity[0] == rm::sim::Fx::fromInt(10));
     CHECK(back.altitudeRef == rm::sim::Fx::fromInt(80));

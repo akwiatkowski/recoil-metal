@@ -373,9 +373,18 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
         def.airKLift = numberOr(*airBlock, "KLift", 0.0f);
         def.airKLiftDamping = numberOr(*airBlock, "KLiftDamping", 0.0f);
         def.airLiftFactor = numberOr(*airBlock, "LiftFactor", 0.0f);
+        def.airWinged = flagAt(*airBlock, "Winged");
+        // Retail derives a missing MinAirspeed from MaxAirspeed before publishing the
+        // blueprint (`C-217`). Both Air speeds are ogrids/s.
+        def.airMinSpeedElmosPerSecond =
+            numberOr(*airBlock, "MinAirspeed",
+                     numberOr(*airBlock, "MaxAirspeed", numberOr(*physics, "MaxSpeed", 0.0f)))
+            * scmap::kElmosPerOgrid;
         // Ogrids to elmos, like every other length in this file (`C-221` reads it from
         // `Physics`, but only a flyer consults it, so it rides with the block).
         def.elevationElmos = numberOr(*physics, "Elevation", 0.0f) * scmap::kElmosPerOgrid;
+        def.airAttackElevationElmos =
+            numberOr(*physics, "AttackElevation", 0.0f) * scmap::kElmosPerOgrid;
         def.airAutoLandTimeSec = numberOr(*airBlock, "AutoLandTime", 0.0f);
         def.airFuelUseTimeSec = numberOr(*airBlock, "FuelUseTime", 0.0f);
     }

@@ -2201,6 +2201,51 @@ TEST_CASE("an aircraft flies directly across a map no ground unit can route") {
     CHECK(roster.store.transforms()[flyer.index].y == rm::sim::kAirClearanceElmos);
 }
 
+TEST_CASE("a winged entity attack enters head-on then tail-chase inside the 30 degree cone") {
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    const rm::sim::PassabilityGrid grid =
+        rm::sim::buildPassability(field, 0.0f, 60.0f, 0.0f);
+
+    rm::test::Roster roster;
+    rm::unitdef::UnitDef aircraft = fighterDef();
+    aircraft.motion = rm::unitdef::MotionType::Air;
+    aircraft.airWinged = true;
+    const rm::UnitTypeIndex fighterType = roster.addType(aircraft);
+    const rm::UnitTypeIndex targetType = roster.addType(walkerDef());
+    const UnitId fighter = roster.add(fighterType, 40.0f, 40.0f, 0, 100.0f);
+    const UnitId target = roster.add(targetType, 40.0f, 120.0f, 1, 100.0f);
+    rm::sim::MoveState& flight = roster.motion(fighter);
+    flight.canFly = true;
+    flight.airWinged = true;
+    flight.airState = rm::sim::MoveState::AirState::Top;
+    flight.airMaxSpeedElmosPerSec = rm::sim::Fx::fromInt(160);
+    roster.transform(target).heading = rm::sim::kBradHalfTurn;
+
+    const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(2);
+    const std::vector<rm::sim::Player> players{rm::sim::Player{.index = 0, .army = 0}};
+    const std::vector<const rm::sim::PassabilityGrid*> grids{&grid, &grid};
+    Command attack = moveTo(40.0f, 120.0f, fighter);
+    attack.kind = CommandKind::Attack;
+    attack.target = target;
+    REQUIRE(rm::sim::applyCommand(attack, roster.store, roster.catalog, players, armies,
+                                  terrain, grid, roster.rate));
+
+    (void)rm::sim::advanceOrders(roster.store, roster.catalog, terrain, grids, roster.rate);
+    CHECK(flight.airCombatState == rm::sim::MoveState::AirCombatState::HeadOn);
+    CHECK(flight.makingAttackRun());
+    CHECK(flight.moving);  // unlike a ground attacker already inside weapon range
+
+    roster.transform(target).heading = 0;
+    (void)rm::sim::advanceOrders(roster.store, roster.catalog, terrain, grids, roster.rate);
+    CHECK(flight.airCombatState == rm::sim::MoveState::AirCombatState::TailChase);
+
+    roster.store.orders()[fighter.index].clear();
+    (void)rm::sim::advanceOrders(roster.store, roster.catalog, terrain, grids, roster.rate);
+    CHECK(flight.airCombatState == rm::sim::MoveState::AirCombatState::None);
+    CHECK_FALSE(flight.makingAttackRun());
+}
+
 TEST_CASE("a recycled slot does not inherit the dead unit's route") {
     // The tombstone rule applied to orders. A corpse keeps its arrays so the death blast can
     // read them, so the queue is cleared when something new moves INTO the slot rather than

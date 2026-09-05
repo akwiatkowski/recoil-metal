@@ -843,14 +843,15 @@ UnitBlueprint {
 
 TEST_CASE("a winged mover arrives with its control block, or nothing") {
     // URA0102's `Air` table (`C-221`, `C-244`): the proportional and damping gains, the
-    // climb authority, the two timers, and `Physics.Elevation` in ogrids turned into
-    // elmos. Banking, speeds, the turn/roll gains and combat turn rates are parsed
-    // nowhere yet — each is a named follow-up, not a silent default.
+    // climb authority, the two timers, winged combat inputs, and both Physics heights in
+    // ogrids turned into elmos. Banking, the turn/roll gains and later combat states are
+    // parsed nowhere yet.
     const Blueprint named{"XXB0008_unit.bp", R"(
 UnitBlueprint {
-    Physics = { MotionType = 'RULEUMT_Air', Elevation = 18 },
+    Physics = { MotionType = 'RULEUMT_Air', Elevation = 18, AttackElevation = 4 },
     Air = {
         KMove = 1, KMoveDamping = 1, KLift = 3, KLiftDamping = 2.5, LiftFactor = 7,
+        MaxAirspeed = 15, MinAirspeed = 10, Winged = true,
         AutoLandTime = 1, FuelUseTime = 500,
     },
 })"};
@@ -861,6 +862,9 @@ UnitBlueprint {
     CHECK(def->airKLift == Approx(3.0f));
     CHECK(def->airKLiftDamping == Approx(2.5f));
     CHECK(def->airLiftFactor == Approx(7.0f));
+    CHECK(def->airWinged);
+    CHECK(def->airMinSpeedElmosPerSecond == Approx(80.0f));
+    CHECK(def->airAttackElevationElmos == Approx(32.0f));
     CHECK(def->airAutoLandTimeSec == Approx(1.0f));
     CHECK(def->airFuelUseTimeSec == Approx(500.0f));
     CHECK(def->elevationElmos == Approx(144.0f));
@@ -871,6 +875,20 @@ UnitBlueprint {
     CHECK(none->airKMove == 0.0f);
     CHECK(none->airKLiftDamping == 0.0f);
     CHECK(none->airLiftFactor == 0.0f);
+    CHECK_FALSE(none->airWinged);
+    CHECK(none->airMinSpeedElmosPerSecond == 0.0f);
+    CHECK(none->airAttackElevationElmos == 0.0f);
     CHECK(none->airFuelUseTimeSec == 0.0f);
     CHECK(none->elevationElmos == 0.0f);
+}
+
+TEST_CASE("a missing minimum airspeed derives from maximum airspeed") {
+    const Blueprint named{"XXB0012_unit.bp", R"(
+UnitBlueprint {
+    Physics = { MotionType = 'RULEUMT_Air' },
+    Air = { MaxAirspeed = 12, Winged = true },
+})"};
+    const auto def = rm::unitbp::loadFile(named.path());
+    REQUIRE(def.has_value());
+    CHECK(def->airMinSpeedElmosPerSecond == Approx(96.0f));
 }

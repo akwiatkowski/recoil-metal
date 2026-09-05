@@ -60,6 +60,9 @@ rm::sim::MoveState motionFor(const rm::unitdef::UnitDef& def, int armyIndex) {
         motion.canFly = true;
         motion.airState = rm::sim::MoveState::AirState::Top;
         motion.airMaxSpeedElmosPerSec = rm::sim::fxFromFloat(def.speedElmosPerSecond);
+        motion.airMinSpeedElmosPerSec = rm::sim::fxFromFloat(def.airMinSpeedElmosPerSecond);
+        motion.airAttackElevation = rm::sim::fxFromFloat(def.airAttackElevationElmos);
+        motion.airWinged = def.airWinged;
         motion.airKMove = rm::sim::fxFromFloat(def.airKMove);
         motion.airKMoveDamping = rm::sim::fxFromFloat(def.airKMoveDamping);
         motion.airKLift = rm::sim::fxFromFloat(def.airKLift);
@@ -1350,6 +1353,11 @@ void orderFirstExtractors(UnitScene& scene, std::span<const rm::scenario::Marker
                     state.airState = rm::sim::MoveState::AirState::Top;
                     state.airMaxSpeedElmosPerSec =
                         rm::sim::fxFromFloat(def->speedElmosPerSecond);
+                    state.airMinSpeedElmosPerSec =
+                        rm::sim::fxFromFloat(def->airMinSpeedElmosPerSecond);
+                    state.airAttackElevation =
+                        rm::sim::fxFromFloat(def->airAttackElevationElmos);
+                    state.airWinged = def->airWinged;
                     state.airKMove = rm::sim::fxFromFloat(def->airKMove);
                     state.airKMoveDamping = rm::sim::fxFromFloat(def->airKMoveDamping);
                     state.airKLift = rm::sim::fxFromFloat(def->airKLift);

@@ -165,9 +165,12 @@ void integrateAir(Transform& unit, MoveState& state, const Terrain& terrain) noe
     const Fx dx = state.destinationX - unit.x;
     const Fx dz = state.destinationZ - unit.z;
     const Fx distance = fxHypot(dx, dz);
+    const Fx flightElevation = state.airCombatState == MoveState::AirCombatState::HeadOn
+        ? state.airAttackElevation
+        : state.airElevation;
     const Fx elevationRef = landing
         ? wingedLandingElevation(state.airElevation, state.airElevationAdjustment, distance)
-        : state.airElevation + state.airElevationAdjustment;
+        : flightElevation + state.airElevationAdjustment;
     Fx desiredX{};
     Fx desiredZ{};
     // Retail keeps steering toward its landing site after the command has retired. Without
@@ -175,7 +178,12 @@ void integrateAir(Transform& unit, MoveState& state, const Terrain& terrain) noe
     // the final half-elmo stage that drops the elevation target to the deck.
     const bool approaching = state.moving || landing;
     if (approaching && distance > Fx{}) {
-        const Fx speed = std::min(distance, cruise);
+        Fx speed = std::min(distance, cruise);
+        if (state.airCombatState == MoveState::AirCombatState::HeadOn) {
+            speed = cruise;
+        } else if (state.airCombatState == MoveState::AirCombatState::TailChase) {
+            speed = std::max(speed, state.airMinSpeedElmosPerSec);
+        }
         desiredX = dx / distance * speed;
         desiredZ = dz / distance * speed;
     }
@@ -350,7 +358,7 @@ void tick(std::span<Transform> transforms, std::span<MoveState> motion,
         // the `continue` below skips the air branch that performs it.
         const bool flyThrough =
             state.canFly && state.airborne && state.airState != MoveState::AirState::Bottom;
-        if (distance <= std::max(radius, travel)) {
+        if (distance <= std::max(radius, travel) && !state.makingAttackRun()) {
             if (!onFinalWaypoint) {
                 ++state.pathIndex;
                 state.destinationX = state.path[state.pathIndex][0];

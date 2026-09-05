@@ -150,6 +150,7 @@ void feedMotion(StateHash& h, const MoveState& motion) noexcept {
     if (motion.canFly) {
         feed(h, motion.canFly);
         feed(h, static_cast<std::uint64_t>(motion.airState));
+        feed(h, static_cast<std::uint64_t>(motion.airCombatState));
         feed(h, motion.velocity);
         feed(h, motion.altitudeRef);
         feed(h, motion.fuelRatio);

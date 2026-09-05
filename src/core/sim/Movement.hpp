@@ -208,6 +208,18 @@ struct MoveState {
     enum class AirState : std::uint8_t { Bottom, Up, Top, Down };
     AirState airState = AirState::Bottom;
 
+    /// The implemented front of retail's eight-state winged combat controller (`C-224`).
+    /// A live entity Attack enters HeadOn; once both aircraft point into the same 30-degree
+    /// cone while the target is ahead, it becomes TailChase. The remaining states stay
+    /// deliberately absent until their steering laws are implemented.
+    enum class AirCombatState : std::uint8_t { None, HeadOn, TailChase };
+    AirCombatState airCombatState = AirCombatState::None;
+
+    [[nodiscard]] bool makingAttackRun() const noexcept {
+        return airCombatState == AirCombatState::HeadOn
+            || airCombatState == AirCombatState::TailChase;
+    }
+
     /// Elmos per SECOND, all three axes. Retail's trapezoid (`C-221`) only balances in
     /// per-second units — per-tick velocity would fly every leg at a tenth of its
     /// authored speed — so the desired vector below is built from the per-second cruise
@@ -254,6 +266,13 @@ struct MoveState {
     /// per-second (`C-221`'s trapezoid only balances in those units) while the waypoint
     /// logic thinks per tick.
     Fx airMaxSpeedElmosPerSec{};
+
+    /// State 2's lower speed bound and state 1's terrain-relative attack height (`C-224`).
+    /// Both are per-blueprint constants copied at spawn; zero attack elevation is authored
+    /// and therefore remains distinct from ordinary cruise elevation.
+    Fx airMinSpeedElmosPerSec{};
+    Fx airAttackElevation{};
+    bool airWinged = false;
 
     /// `Physics.Elevation` in elmos (`C-245`): the height above the terrain reference the
     /// lift law chases, and the height a slow flyer climbs HALF of, straight up, before it

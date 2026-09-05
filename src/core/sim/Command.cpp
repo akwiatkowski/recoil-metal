@@ -1026,7 +1026,13 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
     const std::span<const MoveState> motion = store.motion();
 
     for (UnitIndex slot = 0; slot < orders.size(); ++slot) {
-        if (!store.slotAlive(slot) || orders[slot].empty()) {
+        if (!store.slotAlive(slot)) {
+            continue;
+        }
+        if (orders[slot].empty()) {
+            if (store.motion()[slot].canFly) {
+                store.motion()[slot].airCombatState = MoveState::AirCombatState::None;
+            }
             continue;
         }
         if (scriptTasks != nullptr) {
@@ -1197,6 +1203,9 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
         if (orders[slot].active() == nullptr) {
             startPending();
             serviceBuilds();
+            if (orders[slot].active() == nullptr && store.motion()[slot].canFly) {
+                store.motion()[slot].airCombatState = MoveState::AirCombatState::None;
+            }
             continue;
         }
 
@@ -1206,6 +1215,14 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
         // grid for the product's motion class. `startPending`, which does need one, looks it up
         // for itself.
         const QueuedCommand* current = orders[slot].active();
+        MoveState& activeMotion = store.motion()[slot];
+        const bool wingedAttack = current->kind() == CommandKind::Attack
+                               && current->target().generation != 0
+                               && store.alive(current->target())
+                               && activeMotion.canFly && activeMotion.airWinged;
+        if (activeMotion.canFly && !wingedAttack) {
+            activeMotion.airCombatState = MoveState::AirCombatState::None;
+        }
         if (current->kind() == CommandKind::Script) {
             if (scriptTasks == nullptr) {
                 continue;
@@ -1559,6 +1576,34 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
                 MoveState& chase = store.motion()[slot];
                 const Transform& mine = store.transforms()[slot];
                 const Transform& theirs = store.transforms()[head->target().index];
+                if (head->kind() == CommandKind::Attack && chase.canFly && chase.airWinged) {
+                    // `C-224` states 1 and 2. A winged entity attack is a fly-through,
+                    // never the ground mover's stop-at-weapon-range chase. State 1 attacks
+                    // head-on at max speed and at AttackElevation. Once the target is ahead
+                    // and both forward vectors agree inside the recovered 30-degree cone,
+                    // the attacker is on its six and state 2 owns the chase.
+                    if (chase.airCombatState == MoveState::AirCombatState::None) {
+                        chase.airCombatState = MoveState::AirCombatState::HeadOn;
+                    }
+                    const Polar targetDirection = fxPolar(theirs.x - mine.x,
+                                                          theirs.z - mine.z);
+                    constexpr Fx kThirtyDegreeCos = Fx::fromRatio(866, 1000);
+                    const bool targetAhead = targetDirection.length > Fx{}
+                        && fxCos(static_cast<Brad>(mine.heading - targetDirection.bearing))
+                               > kThirtyDegreeCos;
+                    const bool headingsAgree =
+                        fxCos(static_cast<Brad>(mine.heading - theirs.heading))
+                        > kThirtyDegreeCos;
+                    if (chase.airCombatState == MoveState::AirCombatState::HeadOn
+                        && targetAhead && headingsAgree) {
+                        chase.airCombatState = MoveState::AirCombatState::TailChase;
+                    }
+                    (void)routeUnit(slot, theirs.x, theirs.z, store, terrain, *grid);
+                    if (QueuedCommand* mutableHead = orders[slot].activeMutable()) {
+                        mutableHead->setTargetPosition(theirs.x, theirs.z);
+                    }
+                    continue;
+                }
                 const Fx gap = groundDistanceElmos({mine.x, mine.y, mine.z},
                                                    {theirs.x, theirs.y, theirs.z});
                 if (gap <= reach) {
