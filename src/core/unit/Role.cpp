@@ -163,6 +163,12 @@ Role roleOf(const UnitDef& def) noexcept {
         if (def.hasCategory("BOMBER")) {
             return Role::Bomber;
         }
+        // A gunship can carry ANTIAIR as a secondary capability. GROUNDATTACK is the corpus's
+        // explicit statement of its primary job, so it stays a general combat aircraft rather
+        // than being selected when a build order asks for an interceptor.
+        if (def.hasCategory("GROUNDATTACK")) {
+            return Role::Air;
+        }
         if (def.hasCategory("ANTIAIR")) {
             return Role::AntiAir;
         }
