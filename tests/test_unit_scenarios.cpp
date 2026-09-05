@@ -268,6 +268,34 @@ TEST_CASE("factory panel clicks control the real production queue", "[corpus][ui
     CHECK_FALSE(rm::app::gatherProduction(scenario.scene, builder));
 }
 
+TEST_CASE("construction inspector explains partial funding and the allocation limit", "[ui][funding]") {
+    Scenario scene;
+    rm::unitdef::UnitDef def;
+    const auto builder = scene.spawn(def, 200, 200);
+    rm::sim::Construction work{
+        .armyIndex = 0,
+        .buildTimeRemaining = rm::sim::Mag::fromInt(30),
+        .totalBuildTime = rm::sim::Mag::fromInt(60),
+    };
+    work.builder = builder;
+    work.fundedLastTick = rm::sim::kFxOne / rm::sim::Fx::fromInt(4);
+    scene.scene.building.push_back(work);
+    scene.scene.economies[0].massIsBinding = true;
+    auto card = rm::app::constructionCard(scene.scene, builder);
+    REQUIRE(card);
+    REQUIRE(card->rows.size() <= 2);  // the progress inspector's visible row budget
+    CHECK(card->rows.back().value == "25% FUNDED");
+    CHECK(card->rows.back().label == "MASS");
+    scene.scene.economies[0].massIsBinding = false;
+    CHECK(rm::app::constructionCard(scene.scene, builder)->rows.back().label == "ENERGY");
+    scene.scene.building.front().fundedLastTick = rm::sim::Fx::fromRaw(1);
+    CHECK(rm::app::constructionCard(scene.scene, builder)->rows.back().value == "<1% FUNDED");
+    scene.scene.building.front().fundedLastTick = {};
+    CHECK(rm::app::constructionCard(scene.scene, builder)->rows.back().value == "STALLED");
+    scene.scene.building.front().fundedLastTick = rm::sim::kFxOne;
+    CHECK(rm::app::constructionCard(scene.scene, builder)->rows.back().value == "ACTIVE");
+}
+
 TEST_CASE("real construction lifecycle is reflected by the active inspector", "[corpus][ui][lifecycle]") {
     const auto root = corpusRoot();
     if (!std::filesystem::is_directory(root)) SKIP("no retail unit corpus at " + root.string());

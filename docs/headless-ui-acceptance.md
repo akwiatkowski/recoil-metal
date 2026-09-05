@@ -88,3 +88,14 @@ definitions do not inflate the count. Target hints name the supported target.
 `--hover-command N` selects a one-based rack slot for deterministic screenshots;
 build-option hover retains precedence. Tests: `[command-reason]` and the command
 inspector state test in `tests/test_command_panel.cpp`.
+
+## Construction funding
+
+The inspector shows `ACTIVE` for full funding, `STALLED` for zero funding, and
+the actual work funding percentage otherwise (`<1%` keeps tiny progress honest).
+The funding row's label names the army allocator's current binding resource,
+mass or energy. It does not infer shortages from stored resources alone. Work uses its
+cached per-build funding ratio; the allocation label describes the current army
+constraint, so the two can differ for a beat during a transition. `[funding]`
+checks both resource labels and funding boundaries, and the starved-factory
+capture requires the partial-funding message.

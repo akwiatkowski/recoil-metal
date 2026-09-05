@@ -49,7 +49,7 @@ capture mixed 22 tests/fixtures/hud-construction.commands \
 capture production 405 tests/fixtures/hud-production.commands \
     'hud-state: selected=1 types=1 work=BUILDING .*queued=30' --select-type UEB0101 --look 5410 2772 160
 capture starved 410 tests/fixtures/hud-production.commands \
-    'hud-state: selected=1 types=1 work=BUILDING .*queued=30' --select-type UEB0101 --look 5410 2772 160
+    'hud-state: selected=1 types=1 work=BUILDING .*flow=(<1|1)% FUNDED queued=30' --select-type UEB0101 --look 5410 2772 160
 # Income still trickles in: this is an energy stall, not a claim of zero progress.
 rg -q 'economy: .* / 0 energy,.* [01]% funded' "$capture_dir/starved.first.log"
 for scenario in production starved; do

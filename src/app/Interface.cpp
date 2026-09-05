@@ -112,8 +112,18 @@ std::optional<rm::ui::InfoCard> constructionCard(const UnitScene& scene,
             card.rows.push_back({"", def->description.empty() ? def->name : def->description});
         }
         const bool stalled = work.fundedLastTick == rm::sim::Fx{};
-        card.rows.push_back({"FLOW", stalled ? "STALLED" : "ACTIVE",
-                             stalled ? rm::ui::kLoss : rm::ui::kGain});
+        const bool limited = work.fundedLastTick < rm::sim::kFxOne;
+        std::string label = "FLOW";
+        if (limited && work.armyIndex >= 0
+            && static_cast<std::size_t>(work.armyIndex) < scene.economies.size()) {
+            // This is the army allocator's constraint, not a guess from an empty bank.
+            label = scene.economies[static_cast<std::size_t>(work.armyIndex)].massIsBinding
+                ? "MASS" : "ENERGY";
+        }
+        const int percent = static_cast<int>(rm::sim::fxToFloat(work.fundedLastTick) * 100);
+        const std::string flow = stalled ? "STALLED" : !limited ? "ACTIVE"
+            : (percent == 0 ? "<1" : std::to_string(percent)) + "% FUNDED";
+        card.rows.push_back({label, flow, limited ? rm::ui::kLoss : rm::ui::kGain});
         return card;
     }
     return std::nullopt;
