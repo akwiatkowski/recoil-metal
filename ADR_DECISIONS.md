@@ -2211,23 +2211,6 @@ is deterministic and independently testable without retail assets.
 
 ## ADR-060 — Economy presentation is a fixed pair of resource views
 
-
-## ADR-084 — Behavioral T1 contracts and bounded projectile pursuit
-
-**Context.** Running every real T1 land factory product through MatchRunner exposed
-aircraft flattened by collision alignment and Cybran AA unable to hit a patrolling
-aircraft because authored tracking projectiles flew straight.
-
-**Decision.** Preserve integrated airborne altitude during collision resolution.
-Resolve ordinary projectile blueprints as well as counted ammunition, and use
-generation-safe fixed-point pursuit with the authored turn, acceleration and speed
-limits. Keep reusable primary-role scenarios beside independent roster contracts.
-
-**Alternatives.** Stationary-only AA tests would conceal the failure. Reproducing
-the complete undocumented retail guidance controller is a separate parity task.
-
-**Consequences.** Guidance is executable and hashed, but not claimed retail-exact.
-See `docs/t1-headless-contracts.md` for sources, checks and named limitations.
 **Context.** The HUD renderer reached into `MatchState::mass` and `MatchState::energy` and wrote
 their labels itself. BAR calls the construction material Metal, while a game-neutral presentation
 cannot honestly call it either game's resource.
@@ -2828,6 +2811,96 @@ the simulation does not yet expose.
 controls. The Mantis can Assist and Repair but no longer advertises Reclaim. Unsupported retail
 toggles and presentation overrides remain a named next slice rather than inert buttons pretending
 to work.
+
+---
+
+## ADR-081 — Retail unit playability is checked by data-driven capability contracts
+
+**Context.** The downloaded unit corpus can prove that blueprints parse, but successful parsing
+does not prove a factory product is playable. A scout with no vision, a bomber with no ground
+weapon, or a transport without its command cap would all pass a structural corpus test. Writing a
+separate test per unit would duplicate the same loading, factory-membership, and role assertions
+hundreds of times.
+
+**Decision.** Keep one table of factory id, product id, expected role, domain, and only genuinely
+exceptional capabilities. A shared harness loads the corpus once, verifies the table is the exact
+`TECH1 + MOBILE` result of each factory's authored build expression, then applies the capability
+contract for the declared role. Land and air T1 products are the first complete slices.
+
+**Alternatives considered.** One bespoke test per unit was rejected as repetitive and difficult to
+audit for omissions. Inferring the expected role from the same blueprint fields under test was
+rejected because it would make a broken role classifier its own oracle. Treating the wiki mirror
+as executable authority was rejected; it supplies product intent, while shipped blueprints remain
+authoritative for membership and capabilities.
+
+**Consequences.** Adding another factory or tier is predominantly table data, and exact roster
+comparison exposes both missing and unexpected products. The table is intentionally explicit and
+must be reviewed when retail intent is ambiguous; it is not a generated restatement of production
+logic.
+
+---
+
+## ADR-082 — Wreck reclaim advances one shared work fraction
+
+**Context.** Retail returns mass, energy, and time separately but advances the target once through
+`Materialize`. The actual applied fraction then scales both resource credits. Independently
+draining mass and energy produces the wrong completion time for mixed-resource wrecks and can lose
+fixed-point residue on the final tick.
+
+**Decision.** Store immutable maximum values, damage ratio, and one current work fraction on each
+wreck. Each reclaimer applies a bounded work slice and credits mass and energy by that same slice;
+the final slice receives the exact remaining fixed-point values. Wreck damage recomputes value,
+work, and reclaim rate from health without discarding the already-materialised fraction.
+
+**Alternatives considered.** Independent resource drains were rejected because they cannot model
+one `Materialize` return value. Using health alone as progress was rejected because a finished wreck
+may start below maximum health while materialised fraction remains one. Floating-point ratios were
+rejected because simulation state is fixed point and must hash deterministically.
+
+**Consequences.** Mixed-resource reclaim has one completion boundary, concurrent reclaimers share
+it safely in deterministic slot order, and exact totals survive rounding. Features carry more
+persistent fields, so the state hash and golden determinism log intentionally change when the first
+wreck appears: tick 5734 is the first divergence, when `hashMatch` begins feeding the new wreck
+health, maximum-value, and shared-work fields. The first 5734 hashes remain unchanged.
+
+---
+
+## ADR-083 — Stored resources inform build cells but never authorize them
+
+**Context.** The build tray treated `stored mass >= total mass cost` as an enable gate. That is a
+bank-purchase model, but Forged Alliance construction is flow-funded: a player may start a build or
+upgrade with an empty store, after which the economy allocator slows progress under shortage.
+
+**Decision.** Keep the bank comparison only as presentation state for the mass-cost colour. Every
+authored build option remains fully visible and clickable. Factory products and upgrades submit at
+the builder immediately; placed structures arm their ordinary placement ghost regardless of the
+current store.
+
+**Alternatives considered.** Keeping the dimmed disabled cell was rejected because it contradicts
+the economy model and makes a valid order look inert. Hiding unaffordable options was rejected
+because it would also reflow learned tray positions. Removing the indicator entirely was rejected
+because a short bank is still useful planning information.
+
+**Consequences.** UI authorization now agrees with simulation authorization, while the existing
+economy request path remains the sole authority over construction speed. A focused pure-UI test
+pins both low-resource activation modes without requiring a window or synthetic pointer events.
+
+## ADR-084 — Behavioral T1 contracts and bounded projectile pursuit
+
+**Context.** Running every real T1 land factory product through MatchRunner exposed
+aircraft flattened by collision alignment and Cybran AA unable to hit a patrolling
+aircraft because authored tracking projectiles flew straight.
+
+**Decision.** Preserve integrated airborne altitude during collision resolution.
+Resolve ordinary projectile blueprints as well as counted ammunition, and use
+generation-safe fixed-point pursuit with the authored turn, acceleration and speed
+limits. Keep reusable primary-role scenarios beside independent roster contracts.
+
+**Alternatives.** Stationary-only AA tests would conceal the failure. Reproducing
+the complete undocumented retail guidance controller is a separate parity task.
+
+**Consequences.** Guidance is executable and hashed, but not claimed retail-exact.
+See `docs/t1-headless-contracts.md` for sources, checks and named limitations.
 
 ## ADR-085 — Factory queue controls alongside the command rack
 

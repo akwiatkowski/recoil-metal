@@ -69,9 +69,10 @@ and the 70% equal-subsystem estimate answer different questions and are shown to
 headline honest.
 
 **Current implementation critical path:**
-[`FA-CMD`](#fa-cmd---commands-controls-and-factories), the remaining `C-183` guard-ladder
-branches (build-assist chain, reclaim-copy, repair scan) plus the leash-endpoint read in
-`WP-12`. **Current EXE-analysis action:** the capture increment semantic at `Unit+0x690`
+[`FA-CMD`](#fa-cmd---commands-controls-and-factories), the explicit combat-unit Guard command
+and the earlier refuel/staging rungs of `C-183`; the build-assist, reclaim-copy, repair-scan and
+measured leash rungs now run through the existing Assist path. **Current EXE-analysis action:**
+the capture increment semantic at `Unit+0x690`
 (`C-239`/`C-243`) plus `Sim::TransferUnit`'s native copy/reset inventory, and naming the third
 `HasSiloAmmo` caller at `0x005DEAD0`.
 
@@ -104,15 +105,15 @@ excluded from the headline.
 | [`FA-CONTENT`](#fa-content---vfs-blueprints-maps-and-bootstrap) | VFS, blueprints, maps, bootstrap | `WP-05`, `06`, `09` | 65% | 35% | 55% | Trace and test exact retail SCD mount/override precedence. |
 | [`FA-LUA`](#fa-lua---gameplay-lua-and-mod-contract) | Gameplay Lua and mod contract | `WP-07`-`08` | 10% | 5% | 30% | Measure the exact Moho contract for the milestone-20 skirmish slice. |
 | [`FA-MATCH`](#fa-match---armies-setup-and-victory-rules) | Armies, setup, victory rules | `WP-10`-`11` | 60% | 25% | 85% | Recover the retail lobby/scenario victory-mode selector; do not wire a synthetic app setting. |
-| [`FA-CMD`](#fa-cmd---commands-controls-and-factories) | Commands, controls, factories | `WP-12`-`14` | 75% | 55% | 75% | Add the remaining guard-ladder branches (reclaim-copy and repair scan) and read the leash endpoints. |
+| [`FA-CMD`](#fa-cmd---commands-controls-and-factories) | Commands, controls, factories | `WP-12`-`14` | 80% | 65% | 75% | Add an explicit combat-unit Guard command, then the refuel/staging rungs. |
 | [`FA-ECON`](#fa-econ---economy-construction-and-engineering) | Economy, construction, engineering | `WP-15`-`19` | 70% | 55% | 90% | Name the capture increment at `Unit+0x690` and read `Sim::TransferUnit`'s copy/reset inventory, then specify the smallest capture slice. |
 | [`FA-LAND`](#fa-land---land-navigation-formations-and-spatial-world) | Land navigation, formations, spatial world | `WP-20`, `21`, `26` | 85% | 30% | 95% | Add bounded formation rotation or category matching without changing path-service ordering. |
-| [`FA-AIR`](#fa-air---aircraft-flight-combat-and-staging) | Aircraft flight, combat, staging | `WP-22` | 60% | 50% | 95% | Implement `C-224` states 1 and 2 as the smallest attack-run pair. |
+| [`FA-AIR`](#fa-air---aircraft-flight-combat-and-staging) | Aircraft flight, combat, staging | `WP-22` | 65% | 55% | 95% | Implement `C-224` sustained-turn states 3-5 and break-off state 6. |
 | [`FA-NAVY`](#fa-navy---surface-and-submerged-warfare) | Surface and submerged warfare | `WP-23`-`24` | 35% | 10% | 75% | Implement one complete `SurfacingSub` dive/surface slice. |
 | [`FA-TRANSPORT`](#fa-transport---attachments-cargo-and-ferries) | Attachments, cargo, ferries | `WP-25` | 35% | 5% | 95% | Add parent/self bone indices and authored rest-bone composition to generic attachments. |
 | [`FA-WEAPONS`](#fa-weapons---targeting-weapons-and-projectiles) | Targeting, weapons, projectiles | `WP-27`-`28` | 97% | 72% | 90% | Implement `C-157` target exemption for engineer reclaim/capture, then add the remaining death and manual-fire paths. |
 | [`FA-MISSILES`](#fa-missiles---silos-missiles-and-interception) | Silos, missiles, interception | `WP-29` | 55% | 35% | 95% | Add interceptor guidance/lead and shooter caps, then the build queue and UI. |
-| [`FA-DAMAGE`](#fa-damage---damage-death-and-shields) | Damage, death, shields | `WP-30`-`32` | 75% | 45% | 80% | Apply the shield owner's armour multiplier, then specify PersonalBubble and transport coverage. |
+| [`FA-DAMAGE`](#fa-damage---damage-death-and-shields) | Damage, death, shields | `WP-30`-`32` | 78% | 50% | 80% | Specify PersonalBubble and transport coverage. |
 | [`FA-INTEL`](#fa-intel---vision-radar-sonar-and-counter-intel) | Vision, radar, sonar, counter-intel | `WP-33` | 75% | 45% | 90% | Apply radar-position error to automatic targeting without changing contact identity or ordering. |
 | [`FA-PROGRESS`](#fa-progress---enhancements-veterancy-and-special-units) | Enhancements, veterancy, special units | `WP-34`-`36` | 35% | 20% | 35% | Complete the enhancement lifecycle specification around `CUnitScriptTask`. |
 | [`FA-TERRAIN`](#fa-terrain---mutable-terrain-and-craters) | Mutable terrain and craters | `WP-37` | 0% | 0% | 25% | Trace one crater from damage through terrain, pathing, and rendering invalidation. |
@@ -212,20 +213,21 @@ acquisition runs the ordinary path over range-overridden weapon copies with shar
 and threaded recon, pursuit holds inside weapon reach and chases outside it, Assist stays head.
 Build assistance now follows active Assist targets transitively to the terminal builder, with a
 visited set so cyclic guard chains contribute no work; reach is still measured to that resolved
-builder, preserving the existing range rule.
+builder, preserving the existing range rule. The remaining selected ladder branches now run too:
+the recovered 3D leash returns before attack, reclaim copies the guardee's active feature target,
+and repair scans around the guardee while ranking candidates by distance to the guard.
 The native `CUnitScriptTask` boundary is also implemented: script issues are authorized and logged,
 the command stage runs retail task-status timing, lifecycle cleanup is queue-owned, and opaque host
 state survives SaveState v12 and hashing without coupling Lua to the sim core.
-Still absent: reclaim-copy, the repair scan, the leash
-(endpoints unread), and combat-unit guard orders (Assist refusal for non-builders is pinned —
-a Guard order is the deferred vehicle).
+Still absent: the earlier refuel/staging and ferry rungs, exact multi-weapon guard arbitration,
+and combat-unit guard orders (Assist refusal for non-builders is pinned — a Guard order is the
+deferred vehicle).
 
 ```text
-/goal Advance FA-CMD by implementing the next C-183 guard-ladder branch for Assist-capable
-guards: reclaim-copy (guardee state 28) and then the repair scan (GuardScanRadius around the
-guardee, layer mask 0x100, nearest to the guard). Read the leash endpoints first — the formula
-is known, the anchor is not. Start with focused guard-order regressions, preserve the active
-head and all ids/counters/serials, run make test and make verify, then update WP-12 and FA-CMD.
+/goal Advance FA-CMD with an explicit semantic Guard command for combat units, reusing the
+tested Assist ladder without granting builder capabilities. Start with authorization and
+live/replay regressions, keep the shared active command intact across temporary combat/work,
+then run make test and make verify and update WP-12 and FA-CMD.
 ```
 
 ### FA-ECON - Economy, Construction, And Engineering
@@ -278,18 +280,23 @@ events with landing on arrival; the landing target stays at half the adjusted au
 until the last 0.5 elmo, then switches to the surface, with retail's separate ordinary and
 `TRANSPORTATION` descent clamps (`C-222`, `C-247`); the
 `AutoLandTime` idle timer (`C-222`); `FuelUseTime` drain with no native consequence at zero
-(`C-223`). SaveState v11 carries the air state; the hash gates it on `canFly`, so the golden
-log is unchanged.
+(`C-223`). Winged entity attacks now implement `C-224` states 1 and 2: the head-on run flies
+through weapon range at maximum airspeed and is the only state using `AttackElevation`; the
+tail chase starts when target direction and both forward vectors agree inside the recovered
+30-degree cone, and floors desired speed at `MinAirspeed`. Both states expose the
+`MakingAttackRun` lifecycle. SaveState v13 carries the combat state; the hash gates all air
+execution state on `canFly`.
 
-**Largest gap:** the eight-state combat machine (`C-224`) is absent. The cargo mass ratio,
-banking/orientation torque, `Hover`, `POD`-only random initialization of the otherwise-zero
-`CUnitMotion+0x9c` elevation adjustment, staging and carrier docking (`C-225`) also remain.
+**Largest gap:** sustained-turn states 3-5, break-off state 6 and recovery state 7 remain.
+Bomb-drop prediction for state 1, the cargo mass ratio, banking/orientation torque, `Hover`,
+`POD`-only random initialization of the otherwise-zero `CUnitMotion+0x9c` elevation adjustment,
+staging and carrier docking (`C-225`) also remain.
 
 ```text
-/goal Advance FA-AIR with C-224 states 1 and 2 (head-on and tail-chase attack runs). Pin the 30°
-cone, AttackElevation's state-1-only use, and the MakingAttackRun lifecycle without introducing
-the broader combat-state machine. Keep the golden log byte-identical, run make test and make
-verify, then refresh FA-AIR.
+/goal Advance FA-AIR with C-224 sustained-turn states 3-5 and break-off state 6. Preserve the
+implemented state-1-only AttackElevation, state-2 MinAirspeed floor, 30-degree cone and
+MakingAttackRun lifecycle; pin the turn-speed and break-off transitions before expanding the
+machine, then run make test and make verify and refresh FA-AIR.
 ```
 
 ### FA-NAVY - Surface And Submerged Warfare
