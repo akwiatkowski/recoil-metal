@@ -8,6 +8,7 @@
 #include "core/unit/Role.hpp"
 #include "core/unit/UnitBlueprint.hpp"
 #include "core/ui/CommandPanel.hpp"
+#include "core/log/Log.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -15,8 +16,10 @@
 #include <array>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <string>
 #include <vector>
+#include <unistd.h>
 
 namespace {
 
@@ -294,6 +297,53 @@ TEST_CASE("construction inspector explains partial funding and the allocation li
     CHECK(rm::app::constructionCard(scene.scene, builder)->rows.back().value == "STALLED");
     scene.scene.building.front().fundedLastTick = rm::sim::kFxOne;
     CHECK(rm::app::constructionCard(scene.scene, builder)->rows.back().value == "ACTIVE");
+}
+
+TEST_CASE("order logging joins submission rejection and construction transitions", "[corpus][order-trace]") {
+    const auto root = corpusRoot();
+    if (!std::filesystem::is_directory(root)) SKIP("no retail unit corpus at " + root.string());
+    const auto engineer = rm::unitbp::loadFile(root / "UEL0105/UEL0105_unit.bp");
+    const auto generator = rm::unitbp::loadFile(root / "UEB1101/UEB1101_unit.bp");
+    REQUIRE(engineer);
+    REQUIRE(generator);
+    const auto path = std::filesystem::temp_directory_path()
+        / ("recoil-order-trace-" + std::to_string(getpid()) + ".log");
+    std::ofstream{path, std::ios::trunc}.close();
+    struct RestoreLog {
+        ~RestoreLog() { (void)rm::log::configure({}); }
+    } restore;
+    REQUIRE(rm::log::configure({.level = rm::log::Level::Debug,
+        .filePath = path.string(), .stderrEnabled = false}));
+    Scenario scene;
+    const auto builder = scene.spawn(*engineer, 200, 200);
+    const auto product = scene.registerType(*generator);
+    auto& bank = scene.scene.economies[0];
+    const rm::sim::Resources supply{rm::sim::Mag::fromInt(10000), rm::sim::Mag::fromInt(100000)};
+    bank.storage = bank.stored = supply;
+    auto runner = scene.runner();
+    int tick = 0;
+    const auto advance = [&](int count) {
+        for (int i = 0; i < count; ++i) (void)rm::app::advanceMatch(runner, tick++, 0);
+    };
+    REQUIRE(rm::app::issueBuild(scene.scene, builder, 0, 0, product,
+        rm::sim::Fx::fromInt(240), rm::sim::Fx::fromInt(200)));
+    advance(20);
+    REQUIRE(rm::app::issueMove(scene.scene, builder, 1, static_cast<rm::TickIndex>(tick),
+        {}, {}, false, rm::sim::CommandKind::Stop));  // unauthorized player
+    bank.stored = {};
+    advance(40);
+    bank.stored = supply;
+    advance(1200);
+    std::ifstream input{path};
+    const std::string log{std::istreambuf_iterator<char>{input}, {}};
+    for (const auto* stage : {"submitted", "accepted", "rejected", "started", "stalled",
+                              "resumed", "completed"}) {
+        INFO(stage);
+        CHECK(log.find(std::string{"stage="} + stage) != std::string::npos);
+    }
+    CHECK(log.find("command=0 unit=0:1") != std::string::npos);
+    CHECK(log.find("[construction] tick=") != std::string::npos);
+    CHECK(std::count(log.begin(), log.end(), '\n') < 20);  // no per-tick flood
 }
 
 TEST_CASE("real construction lifecycle is reflected by the active inspector", "[corpus][ui][lifecycle]") {

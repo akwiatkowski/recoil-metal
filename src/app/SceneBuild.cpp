@@ -884,7 +884,17 @@ rm::PlayerIndex playerDriving(const UnitScene& scene, int army) {
 }
 
 std::optional<rm::CommandId> submitCommand(UnitScene& scene, rm::sim::CommandIssue issue) {
-    return scene.commandInput.submit(std::move(issue), scene.store);
+    const bool tracing = rm::log::enabled(rm::log::Level::Debug);
+    const auto recipients = tracing ? issue.units : std::vector<rm::sim::UnitId>{};
+    const auto id = scene.commandInput.submit(std::move(issue), scene.store);
+    for (const auto unit : recipients) {
+        rm::log::writef(rm::log::Level::Debug, "order",
+            "tick=%llu command=%u unit=%u:%u stage=%s kind=%s player=%u",
+            static_cast<unsigned long long>(issue.tick), id.value_or(rm::kInvalidCommandId),
+            unit.index, unit.generation, id ? "submitted" : "intake-rejected",
+            rm::sim::commandKindName(issue.kind), static_cast<unsigned>(issue.player));
+    }
+    return id;
 }
 
 std::vector<DispatchedCommand> dispatchCommands(UnitScene& scene,
@@ -914,6 +924,15 @@ std::vector<DispatchedCommand> dispatchCommands(UnitScene& scene,
             issue, scene.store, scene.catalog, scene.players, scene.armies, terrain, gridForUnit,
             gAppTickRate, &scene.building, &scene.events, &scene.features, pathService,
             scriptTasks);
+        if (rm::log::enabled(rm::log::Level::Debug)) {
+            for (const auto unit : issue.units) {
+                rm::log::writef(rm::log::Level::Debug, "order",
+                    "tick=%llu command=%u unit=%u:%u stage=%s kind=%s player=%u",
+                    static_cast<unsigned long long>(tick), issue.id, unit.index, unit.generation,
+                    result.acceptedUnit(unit) ? "accepted" : "rejected",
+                    rm::sim::commandKindName(issue.kind), static_cast<unsigned>(issue.player));
+            }
+        }
         issue.units = result.accepted;
         if (!scene.commands.record(issue)) {
             throw std::logic_error{"command dispatcher produced an invalid semantic log order"};

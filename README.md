@@ -681,7 +681,7 @@ only appears under one cannot otherwise be captured, tested, or diffed.
 | `--vision-style <recoil\|fa>` | whether terrain blocks sight |
 | `--ai-faf` | FAF's own AI plays every army, through the sandbox |
 | `--ai-log` / `--ai-debug` / `--ai-sanity` | narrate the AI's decisions and the corpus's own `LOG` lines; the debug report; the closing census of what was built, which bindings were called, and which corpus functions ran |
-| `--log-level <trace\|debug\|info\|warn\|error\|off>` / `--log-file <f>` | filter timestamped operational diagnostics (default `info`) and optionally append the same records to a file; stderr remains enabled so failures are visible interactively |
+| `--log-level <trace\|debug\|info\|warn\|error\|off>` / `--log-file <f>` | filter timestamped operational diagnostics (default `info`) and optionally append the same records to a file; `debug` includes [order and construction lifecycle traces](docs/order-tracing.md) |
 | `--hash-log <f>` / `--check-hash-log <f>` | write a per-tick state hash, or replay against one and name the tick a divergence began at |
 | `--command-log <f>` / `--replay-commands <f>` | record the orders given, or play them back into the same match |
 | `--print-events` | narrate the sim's own event queue |

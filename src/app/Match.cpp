@@ -7,6 +7,7 @@
 #include "core/sim/Replay.hpp"
 #include "core/sim/SlowUpdate.hpp"
 #include "core/sim/StateHash.hpp"
+#include "core/log/Log.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -733,6 +734,16 @@ void printEvents(const rm::sim::EventQueue& events, float now) {
 
 rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) {
     UnitScene& scene = runner.scene;
+    const bool tracing = rm::log::enabled(rm::log::Level::Debug);
+    std::map<std::pair<rm::UnitIndex, rm::Generation>, rm::sim::Fx> fundingBefore;
+    if (tracing) {
+        for (const auto& work : scene.building) {
+            if (!work.finished() && scene.store.alive(work.builder)) {
+                fundingBefore.emplace(std::pair{work.builder.index, work.builder.generation},
+                    work.fundedLastTick);
+            }
+        }
+    }
 
     // THE SANDBOX'S HEARTBEAT, when FAF opponents play: `pump` resumes due corpus threads
     // AND advances the clock GetGameTimeSeconds reads. It was pumped only by the sanity
@@ -964,6 +975,37 @@ rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) 
     // appeared this tick is in it. `publish` rotates: what was current becomes previous, and
     // the frame loop draws between the two.
     scene.publish(static_cast<rm::TickIndex>(tickIndex) + 1);
+
+    if (tracing) {
+        for (const auto& event : scene.events.all()) {
+            if (event.kind == rm::sim::EventKind::ConstructionStarted) {
+                rm::log::writef(rm::log::Level::Debug, "construction",
+                    "tick=%d unit=%u:%u stage=started army=%d", tickIndex,
+                    event.instigator.index, event.instigator.generation, event.army);
+            }
+        }
+        for (const auto& work : report.finished) {
+            rm::log::writef(rm::log::Level::Debug, "construction",
+                "tick=%d unit=%u:%u stage=completed product=%zu", tickIndex,
+                work.builder.index, work.builder.generation, work.blueprintIndex);
+            fundingBefore.erase({work.builder.index, work.builder.generation});
+        }
+        for (const auto& work : scene.building) {
+            const auto before = fundingBefore.find({work.builder.index, work.builder.generation});
+            if (work.finished() || before == fundingBefore.end()) continue;
+            const auto fundingState = [](rm::sim::Fx funded) {
+                return funded == rm::sim::Fx{} ? 0 : funded < rm::sim::kFxOne ? 1 : 2;
+            };
+            if (fundingState(before->second) == fundingState(work.fundedLastTick)) continue;
+            const char* stage = work.fundedLastTick == rm::sim::Fx{} ? "stalled"
+                : before->second == rm::sim::Fx{} ? "resumed"
+                : work.fundedLastTick < rm::sim::kFxOne ? "throttled" : "fully-funded";
+            rm::log::writef(rm::log::Level::Debug, "construction",
+                "tick=%d unit=%u:%u stage=%s product=%zu funded=%.4f", tickIndex,
+                work.builder.index, work.builder.generation, stage, work.blueprintIndex,
+                static_cast<double>(rm::sim::fxToFloat(work.fundedLastTick)));
+        }
+    }
 
     // LAST, so the dump is the whole tick: the sim's own events and then the caller's
     // `UnitCreated`/`UnitFinished`, in the order they happened. Printed before the caller-side
