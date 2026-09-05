@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/ui/Hud.hpp"
+#include "core/sim/Command.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -9,7 +10,7 @@
 
 namespace rm::ui {
 
-// The selected factory's production, in the deck's command rectangle.
+// The active selected factory's production, above the deck's command rectangle.
 //
 // WHAT A PLAYER ASKS OF A FACTORY is "what is it making, how far along, and what comes next"
 // — three facts the roster and the build tray cannot carry: the roster says a factory is
@@ -34,6 +35,13 @@ struct ProductionView {
 
     [[nodiscard]] bool empty() const noexcept { return factoryName.empty(); }
 };
+
+/// Same anchored rectangle for rendering, click interception and drag exclusion.
+[[nodiscard]] Rect productionPanelRect(const FrameLayout& frame) noexcept;
+[[nodiscard]] Rect productionRepeatRect(const Rect& rect) noexcept;
+[[nodiscard]] Rect productionClearRect(const Rect& rect) noexcept;
+[[nodiscard]] std::optional<sim::CommandKind> productionCommandAt(
+    const Rect& rect, const ProductionView& view, float x, float y) noexcept;
 
 /// How many order rows the rectangle has room for below the header and the progress bar.
 [[nodiscard]] std::size_t productionRowsFor(const Rect& rect) noexcept;

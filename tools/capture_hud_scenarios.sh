@@ -52,4 +52,9 @@ capture starved 410 tests/fixtures/hud-production.commands \
     'hud-state: selected=1 types=1 work=BUILDING .*queued=30' --select-type UEB0101 --look 5410 2772 160
 # Income still trickles in: this is an energy stall, not a claim of zero progress.
 rg -q 'economy: .* / 0 energy,.* [01]% funded' "$capture_dir/starved.first.log"
+for scenario in production starved; do
+    for pass in first repeat; do
+        rg -q 'production panel: 1 rows, repeat=off' "$capture_dir/$scenario.$pass.log"
+    done
+done
 echo "HUD artifacts: $capture_dir"

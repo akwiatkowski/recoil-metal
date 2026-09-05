@@ -36,6 +36,12 @@
 
 namespace rm::app {
 
+/// Queues the factory control under a HUD point through the normal semantic command path.
+/// Dispatch still validates ownership; the view and button state are never mutated directly.
+[[nodiscard]] bool submitProductionControl(UnitScene& scene, rm::sim::UnitId builder,
+    rm::PlayerIndex player, rm::TickIndex tick, const rm::ui::FrameLayout& frame,
+    float x, float y);
+
 void appendMinimapPips(std::vector<rm::ui::MinimapPip>& out, const UnitScene& scene);
 
 /// Which unit the panel is showing the options OF.

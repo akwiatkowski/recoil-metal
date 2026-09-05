@@ -150,6 +150,65 @@ TEST_CASE("guided projectile state participates in the match hash", "[guidance][
     }
 }
 
+TEST_CASE("factory panel clicks control the real production queue", "[corpus][ui][production]") {
+    const auto root = corpusRoot();
+    if (!std::filesystem::is_directory(root)) SKIP("no retail unit corpus at " + root.string());
+    const auto factory = rm::unitbp::loadFile(root / "UEB0101/UEB0101_unit.bp");
+    const auto tank = rm::unitbp::loadFile(root / "UEL0201/UEL0201_unit.bp");
+    REQUIRE(factory);
+    REQUIRE(tank);
+    Scenario scenario;
+    const auto builder = scenario.spawn(*factory, 200, 200);
+    const auto type = scenario.registerType(*tank);
+    auto& bank = scenario.scene.economies[0];
+    bank.storage = bank.stored = {rm::sim::Mag::fromInt(10000), rm::sim::Mag::fromInt(100000)};
+    auto runner = scenario.runner();
+    const auto frame = rm::ui::frameLayout(rm::ui::UiViewport::authored(1600, 900));
+    const auto rect = rm::ui::productionPanelRect(frame);
+    const auto repeat = rm::ui::productionRepeatRect(rect);
+    const auto clear = rm::ui::productionClearRect(rect);
+    const auto click = [&](rm::ui::Rect button, rm::PlayerIndex player, rm::TickIndex tick) {
+        return rm::app::submitProductionControl(scenario.scene, builder, player, tick,
+            frame, button.x + 1, button.y + 1);
+    };
+    REQUIRE(rm::app::gatherProduction(scenario.scene, builder));
+    CHECK_FALSE(click(clear, 0, 0));  // idle clear is disabled
+    REQUIRE(rm::app::issueBuild(scenario.scene, builder, 0, 0, type,
+        rm::sim::Fx::fromInt(240), rm::sim::Fx::fromInt(200), true));
+    REQUIRE(rm::app::issueBuild(scenario.scene, builder, 0, 0, type,
+        rm::sim::Fx::fromInt(240), rm::sim::Fx::fromInt(200), true));
+    for (int tick = 0; tick < 20; ++tick) (void)rm::app::advanceMatch(runner, tick, 0);
+    const auto view = rm::app::gatherProduction(scenario.scene, builder);
+    REQUIRE(view);
+    REQUIRE_FALSE(view->queue.empty());
+    std::uint32_t count = 0;
+    for (const auto& row : view->queue) count += row.count;
+    CHECK(count == 2);
+    CHECK(view->queue.front().id == "UEL0201");
+    CHECK(view->building);
+    CHECK(view->progress > 0);
+    CHECK(view->progress < 1);
+    REQUIRE(click(repeat, 0, 20));
+    (void)rm::app::advanceMatch(runner, 20, 0);
+    CHECK(rm::app::gatherProduction(scenario.scene, builder)->repeat);
+    REQUIRE(click(repeat, 1, 21));  // queued, but dispatch must reject the enemy player
+    (void)rm::app::advanceMatch(runner, 21, 0);
+    CHECK(rm::app::gatherProduction(scenario.scene, builder)->repeat);
+    REQUIRE(click(repeat, 0, 22));
+    (void)rm::app::advanceMatch(runner, 22, 0);
+    CHECK_FALSE(rm::app::gatherProduction(scenario.scene, builder)->repeat);
+    REQUIRE(click(clear, 0, 23));
+    for (int tick = 23; tick < 1200; ++tick) (void)rm::app::advanceMatch(runner, tick, 0);
+    const auto stopped = rm::app::gatherProduction(scenario.scene, builder);
+    REQUIRE(stopped);
+    CHECK(stopped->queue.empty());
+    CHECK_FALSE(stopped->building);
+    CHECK(scenario.scene.store.liveCount() == 1);
+    scenario.scene.store.kill(builder);
+    CHECK_FALSE(click(repeat, 0, 1200));
+    CHECK_FALSE(rm::app::gatherProduction(scenario.scene, builder));
+}
+
 TEST_CASE("real construction lifecycle is reflected by the active inspector", "[corpus][ui][lifecycle]") {
     const auto root = corpusRoot();
     if (!std::filesystem::is_directory(root)) SKIP("no retail unit corpus at " + root.string());

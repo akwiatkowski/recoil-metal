@@ -43,7 +43,29 @@ The capture runner checks exact replay hashes and byte-identical PNGs across two
 runs, plus semantic `hud-state` diagnostics from the actual selected builder.
 Artifacts stay outside the repository. Failure prints the relevant log tail.
 
-Queue count is verified in simulation diagnostics; the current inspector shows
-the current product, not the queue list. Connecting that list is item 5, and these
-same fixtures will verify its rendered result. Headless player selection excludes
-enemy units; observer captures remain unrestricted.
+Queue count is verified in simulation diagnostics and rendered by the connected
+production panel above the command rack. Both factory captures require its
+diagnostic, and the image shows the current product and x30 count. Headless
+player selection excludes enemy units; observer captures remain unrestricted.
+
+## Factory queue controls
+
+The live and offscreen paths both use `gatherProduction`, `productionPanelRect`
+and `appendProductionPanel`. The active builder owns the panel, matching the
+build tray; it does not combine queues from multiple factories. The existing
+command rack stays accessible. The first row is the current/next product, with
+remaining count and a progress bar. Long queues retain the existing overflow
+summary rather than drawing outside the panel.
+
+Click REPEAT OFF/ON to toggle queue repetition; click CLEAR QUEUE to submit Stop
+to this factory, cancelling its current work and queued orders. Clear is disabled
+when idle. Add products through the existing build tray. Per-row deletion and
+drag reordering are not controls in this slice. Panel clicks and drags are
+intercepted, so they cannot select/order units behind the panel.
+
+`mise exec -- ./build/rm_tests '[production]'` checks shared rendered/hit-test
+bounds, overflow and text bounds, and real UEB0101 production through MatchRunner.
+The scenario submits two tank builds, observes the product/count and partial
+progress, clicks the same control handler as the window, checks Repeat on/off,
+rejects an enemy player's toggle at dispatch, and clears work with no delayed
+unit appearing. Dead factory handles hide the panel and reject controls.

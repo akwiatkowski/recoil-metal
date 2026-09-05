@@ -580,6 +580,13 @@ void composeHeadlessInterface(rm::Renderer& renderer, const Session& session,
                 rm::ui::commandRackLayout(shotFrame, !capturedSelection.empty()),
                 shotCommandAvailable);
 
+            if (shotProduction) {
+                rm::ui::appendProductionPanel(hud, renderer.labelFont(), renderer.readoutFont(),
+                    shotTheme, rm::ui::productionPanelRect(shotFrame), *shotProduction);
+                std::printf("  production panel: %zu rows, repeat=%s\n",
+                    shotProduction->queue.size(), shotProduction->repeat ? "on" : "off");
+            }
+
             renderer.setHud(hud);
             const rm::ui::UiCapacityReport& hudCapacity = renderer.uiCapacityReport();
             std::printf("  hud vertices (uploaded/submitted/capacity):");
@@ -1266,6 +1273,20 @@ int runWindowed(const Session& session) {
                 // moves where you are looking, not how. Height sampled from the terrain so
                 // the target sits on the ground rather than at y = 0.
                 window.camera().target = ground;
+                return;
+            }
+
+            const auto production = gatherProduction(units, activeBuilder);
+            const auto productionRect = rm::ui::productionPanelRect(frame);
+            if (production && productionRect.contains(hudPoint[0], hudPoint[1])) {
+                if (button == rm::MouseButton::Left) {
+                    (void)submitProductionControl(units, activeBuilder,
+                        playerDriving(units, units.playerArmy),
+                        static_cast<rm::TickIndex>(matchTicks), frame, hudPoint[0], hudPoint[1]);
+                }
+                armedCommand.reset();
+                armedOption.reset();
+                swallowedByPanel("production");
                 return;
             }
 
@@ -2124,6 +2145,13 @@ int runWindowed(const Session& session) {
                                       theme, commandRack, commandAvailable, overCommand,
                                       armedCommand);
 
+            const auto production = gatherProduction(units, activeBuilder);
+            const auto productionRect = rm::ui::productionPanelRect(frame);
+            if (production) {
+                rm::ui::appendProductionPanel(hudScratch, window.labelFont(), window.readoutFont(),
+                    theme, productionRect, *production);
+            }
+
             // The roster, bottom centre. After the tray so both are in one buffer; they do not
             // overlap, so the order between them is arbitrary and stated only to be stable.
             if (!rosterTiles.empty()) {
@@ -2199,7 +2227,8 @@ int runWindowed(const Session& session) {
                         : panelPages.build(units.store.typeAt(buildWho.builder.index));
                 const std::size_t rosterPage = panelPages.roster();
                 const bool onPanel =
-                    (!buildOptions.empty()
+                    (production && productionRect.contains(origin[0], origin[1]))
+                    || (!buildOptions.empty()
                       && rm::ui::insideBuildPanel(
                           rm::ui::buildPanelLayout(frame, buildOptions.size(), buildPage), origin[0],
                           origin[1]))

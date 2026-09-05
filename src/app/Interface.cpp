@@ -1226,4 +1226,21 @@ std::optional<rm::ui::ProductionView> gatherProduction(const UnitScene& scene,
     return view;
 }
 
+bool submitProductionControl(UnitScene& scene, rm::sim::UnitId builder,
+    rm::PlayerIndex player, rm::TickIndex tick, const rm::ui::FrameLayout& frame,
+    float x, float y) {
+    const auto view = gatherProduction(scene, builder);
+    if (!view) return false;
+    const auto kind = rm::ui::productionCommandAt(rm::ui::productionPanelRect(frame), *view, x, y);
+    if (!kind) return false;
+    return submitCommand(scene, rm::sim::CommandIssue{
+        .tick = tick,
+        .phase = rm::sim::CommandPhase::PreTick,
+        .source = static_cast<rm::CommandSource>(player),
+        .player = player,
+        .kind = *kind,
+        .units = {builder},
+    }).has_value();
+}
+
 } // namespace rm::app

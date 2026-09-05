@@ -56,12 +56,32 @@ namespace {
 
 } // namespace
 
+TEST_CASE("factory queue controls share the rendered panel bounds", "[ui][production]") {
+    const auto frame = rm::ui::frameLayout(rm::ui::UiViewport::authored(1600, 900));
+    const auto rect = rm::ui::productionPanelRect(frame);
+    CHECK(rect.x == frame.commands.x);
+    CHECK(rect.bottom() < frame.commands.y);
+    CHECK(rect.y >= frame.battlefield.y);
+    const auto repeat = rm::ui::productionRepeatRect(rect);
+    const auto clear = rm::ui::productionClearRect(rect);
+    auto view = factoryWith(1);
+    CHECK(rm::ui::productionCommandAt(rect, view, repeat.x + 1, repeat.y + 1)
+          == rm::sim::CommandKind::ToggleFactoryRepeat);
+    CHECK(rm::ui::productionCommandAt(rect, view, clear.x + 1, clear.y + 1)
+          == rm::sim::CommandKind::Stop);
+    CHECK_FALSE(rm::ui::productionCommandAt(rect, view, rect.x - 1, rect.y));
+    CHECK_FALSE(rm::ui::productionCommandAt(rect, view, rect.x + 10, rect.y + 50));
+    view.queue.clear();
+    CHECK_FALSE(rm::ui::productionCommandAt(rect, view, clear.x + 1, clear.y + 1));
+    CHECK_FALSE(rm::ui::productionCommandAt({}, view, 0, 0));
+}
+
 TEST_CASE("the row budget follows the rectangle's height", "[ui][production]") {
-    // Header and bar take the top 56 points; then one row per 16, the last needing 6 of room.
+    // Header and bar take 56 points; rows need the 34-point footer for Clear Queue.
     CHECK(rm::ui::productionRowsFor(rm::ui::Rect{0, 0, 200, 40}) == 0);
-    CHECK(rm::ui::productionRowsFor(rm::ui::Rect{0, 0, 200, 62}) == 1);
-    CHECK(rm::ui::productionRowsFor(rm::ui::Rect{0, 0, 200, 78}) == 2);
-    CHECK(rm::ui::productionRowsFor(rm::ui::Rect{0, 0, 200, 126}) == 5);
+    CHECK(rm::ui::productionRowsFor(rm::ui::Rect{0, 0, 200, 90}) == 1);
+    CHECK(rm::ui::productionRowsFor(rm::ui::Rect{0, 0, 200, 106}) == 2);
+    CHECK(rm::ui::productionRowsFor(rm::ui::Rect{0, 0, 200, 154}) == 5);
 }
 
 TEST_CASE("every order gets a row when they fit, and a count on the right", "[ui][production]") {
@@ -73,12 +93,12 @@ TEST_CASE("every order gets a row when they fit, and a count on the right", "[ui
     view.building = true;
     view.progress = 0.5f;
     rm::ui::appendProductionPanel(out, font, font, rm::ui::neutralTheme(),
-                                  rm::ui::Rect{0, 0, 200, 126}, view);
+                                  rm::ui::Rect{0, 0, 320, 154}, view);
 
-    // Title (12) plus three "Mantis" rows (6 each): 30 label glyphs, no overflow line.
-    CHECK(glyphsIn(out.label) == 12 + 3 * 6);
-    // "ONCE" (4) plus "x1", "x5", "x1" (2 each) on the readout layer.
-    CHECK(glyphsIn(out.foregroundReadout) == 4 + 3 * 2);
+    // Title, three product names, and the Clear Queue button, with no overflow line.
+    CHECK(glyphsIn(out.label) == 12 + 3 * 6 + 11);
+    // "REPEAT OFF" (10) plus three counts on the readout layer.
+    CHECK(glyphsIn(out.foregroundReadout) == 10 + 3 * 2);
     // The well and its half fill, on top of the panel's own chrome.
     CHECK_FALSE(out.chrome.empty());
 }
@@ -89,9 +109,9 @@ TEST_CASE("orders past the room are summarised, never dropped silently", "[ui][p
     rm::ui::Geometry out;
     // Two rows of room, seven orders: one row shown and "+6 MORE" in the second.
     rm::ui::appendProductionPanel(out, font, font, rm::ui::neutralTheme(),
-                                  rm::ui::Rect{0, 0, 200, 78}, factoryWith(7));
-    CHECK(glyphsIn(out.label) == 12 + 6 + 7);  // title, "Mantis", "+6 MORE"
-    CHECK(glyphsIn(out.foregroundReadout) == 4 + 2);  // "ONCE", one "x1"
+                                  rm::ui::Rect{0, 0, 320, 106}, factoryWith(7));
+    CHECK(glyphsIn(out.label) == 12 + 6 + 7 + 11);  // title, row, overflow, clear
+    CHECK(glyphsIn(out.foregroundReadout) == 10 + 2);  // repeat state, one count
 }
 
 TEST_CASE("long factory and order names stay inside the production panel",
@@ -115,8 +135,8 @@ TEST_CASE("an idle factory says so and a non-factory draws nothing", "[ui][produ
     const rm::text::Font font = fontOver(glyphs);
     rm::ui::Geometry out;
     rm::ui::appendProductionPanel(out, font, font, rm::ui::neutralTheme(),
-                                  rm::ui::Rect{0, 0, 200, 126}, factoryWith(0));
-    CHECK(glyphsIn(out.label) == 12 + 4);  // title and "IDLE"
+                                  rm::ui::Rect{0, 0, 320, 154}, factoryWith(0));
+    CHECK(glyphsIn(out.label) == 12 + 4 + 11);  // title, idle and clear
 
     rm::ui::Geometry none;
     rm::ui::appendProductionPanel(none, font, font, rm::ui::neutralTheme(),

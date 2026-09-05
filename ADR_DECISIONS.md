@@ -2828,3 +2828,21 @@ the simulation does not yet expose.
 controls. The Mantis can Assist and Repair but no longer advertises Reclaim. Unsupported retail
 toggles and presentation overrides remain a named next slice rather than inert buttons pretending
 to work.
+
+## ADR-085 — Factory queue controls alongside the command rack
+
+**Context.** ProductionPanel had queue/progress drawing but no active HUD caller.
+Replacing the command rack would make existing factory commands inaccessible.
+
+**Decision.** Anchor the existing production panel immediately above the rack.
+Share its rectangle and control hit tests across drawing and input. Repeat and
+Clear Queue submit existing ToggleFactoryRepeat and Stop commands through the
+normal recorded dispatch path; the UI never mutates a queue or repeat flag.
+
+**Alternatives.** Replacing the rack loses controls. A separate queue model or
+new cancellation protocol is unnecessary for repeat and whole-queue clearing.
+
+**Consequences.** The panel occupies some battlefield space only when an active
+factory is selected. Click and drag interception use its rendered bounds. The
+build tray still adds products; per-row deletion and reordering remain outside
+this slice. Headless real-factory controls and deterministic captures verify it.
