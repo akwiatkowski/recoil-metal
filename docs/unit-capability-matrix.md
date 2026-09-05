@@ -17,9 +17,14 @@ not imply that its other abilities work.
   executes movement and one primary-role job using real definitions.
 - **UI model**: that same per-unit scenario checks the named command exists in
   the rack descriptors and is enabled for this unit. It does not click a widget.
-- **UI reachable**: end-to-end input/selection/command execution for each unit.
-  This remains **unverified for every row**. In particular, calling `issueBuild`
-  directly does not prove a product is reachable from the factory build tray.
+- **UI reachable**: end-to-end native input/selection/command execution for each unit.
+  **Native common** below means real factory-tray production, world selection,
+  Move, queued Move, Stop and Guard, plus generator construction for engineers.
+  All 23 land products passed on `aw04.smf` with the extracted FA tree, across
+  compact/standard/wide layouts and simulated 1x/2x backing; logs are in
+  `/tmp/recoil-native-guard-matrix`. See [native acceptance](native-input-acceptance.md)
+  for the subsequent Attack extension and its verification. Air-factory input
+  remains unverified. Direct `issueBuild` calls are not UI evidence.
 
 Behavior abbreviations: **M** = reaches a movement goal; **S** = reveals a new
 location through vision and radar; **B** = finishes its faction's real T1 power
@@ -27,33 +32,38 @@ generator; **G** = damages an enemy ground structure; **A** = damages a patrolli
 enemy scout aircraft. Damage proves a usable weapon, not exact damage, cadence,
 range, projectile scripting, or performance against all eligible target layers.
 
+The Behavior column inventories the role scenarios and their intended coverage.
+The latest full CTest run cannot execute the required 23-product role case
+because the retail `projectiles.scd` mount is unavailable. Native input
+success does not replace that content gate or prove the weapon-role results.
+
 ## T1 land matrix
 
 | Factory | Product | BP | Behavior | UI model | UI reachable |
 |---|---|---|---|---|---|
-| UEB0101 | UEL0101 | Checked | M, S | Move | Unverified |
-| UEB0101 | UEL0103 | Checked | M, G | Move, Attack | Unverified |
-| UEB0101 | UEL0104 | Checked | M, A | Move, Attack | Unverified |
-| UEB0101 | UEL0105 | Checked | M, B | Move | Unverified |
-| UEB0101 | UEL0106 | Checked | M, G | Move, Attack | Unverified |
-| UEB0101 | UEL0201 | Checked | M, G | Move, Attack | Unverified |
-| UAB0101 | UAL0101 | Checked | M, S | Move | Unverified |
-| UAB0101 | UAL0103 | Checked | M, G | Move, Attack | Unverified |
-| UAB0101 | UAL0104 | Checked | M, A | Move, Attack | Unverified |
-| UAB0101 | UAL0105 | Checked | M, B | Move | Unverified |
-| UAB0101 | UAL0106 | Checked | M, G | Move, Attack | Unverified |
-| UAB0101 | UAL0201 | Checked | M, G | Move, Attack | Unverified |
-| URB0101 | URL0101 | Checked | M, S | Move | Unverified |
-| URB0101 | URL0103 | Checked | M, G | Move, Attack | Unverified |
-| URB0101 | URL0104 | Checked | M, A | Move, Attack | Unverified |
-| URB0101 | URL0105 | Checked | M, B | Move | Unverified |
-| URB0101 | URL0106 | Checked | M, G | Move, Attack | Unverified |
-| URB0101 | URL0107 | Checked | M, G | Move, Attack | Unverified |
-| XSB0101 | XSL0101 | Checked | M, S | Move | Unverified |
-| XSB0101 | XSL0103 | Checked | M, G | Move, Attack | Unverified |
-| XSB0101 | XSL0104 | Checked | M, A | Move, Attack | Unverified |
-| XSB0101 | XSL0105 | Checked | M, B | Move | Unverified |
-| XSB0101 | XSL0201 | Checked | M, G | Move, Attack | Unverified |
+| UEB0101 | UEL0101 | Checked | M, S | Move | Native common |
+| UEB0101 | UEL0103 | Checked | M, G | Move, Attack | Native common |
+| UEB0101 | UEL0104 | Checked | M, A | Move, Attack | Native common |
+| UEB0101 | UEL0105 | Checked | M, B | Move | Native common |
+| UEB0101 | UEL0106 | Checked | M, G | Move, Attack | Native common |
+| UEB0101 | UEL0201 | Checked | M, G | Move, Attack | Native common |
+| UAB0101 | UAL0101 | Checked | M, S | Move | Native common |
+| UAB0101 | UAL0103 | Checked | M, G | Move, Attack | Native common |
+| UAB0101 | UAL0104 | Checked | M, A | Move, Attack | Native common |
+| UAB0101 | UAL0105 | Checked | M, B | Move | Native common |
+| UAB0101 | UAL0106 | Checked | M, G | Move, Attack | Native common |
+| UAB0101 | UAL0201 | Checked | M, G | Move, Attack | Native common |
+| URB0101 | URL0101 | Checked | M, S | Move | Native common |
+| URB0101 | URL0103 | Checked | M, G | Move, Attack | Native common |
+| URB0101 | URL0104 | Checked | M, A | Move, Attack | Native common |
+| URB0101 | URL0105 | Checked | M, B | Move | Native common |
+| URB0101 | URL0106 | Checked | M, G | Move, Attack | Native common |
+| URB0101 | URL0107 | Checked | M, G | Move, Attack | Native common |
+| XSB0101 | XSL0101 | Checked | M, S | Move | Native common |
+| XSB0101 | XSL0103 | Checked | M, G | Move, Attack | Native common |
+| XSB0101 | XSL0104 | Checked | M, A | Move, Attack | Native common |
+| XSB0101 | XSL0105 | Checked | M, B | Move | Native common |
+| XSB0101 | XSL0201 | Checked | M, G | Move, Attack | Native common |
 
 ## T1 air-factory matrix
 

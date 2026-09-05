@@ -9,7 +9,16 @@ Detailed retail evidence remains canonical in
 [`fa-exe-analysis-plan.md`](fa-exe-analysis-plan.md). This dashboard summarizes that ledger; it
 does not replace its claims, addresses, counterevidence, or confirmation gate.
 
-**Snapshot:** 2026-09-04, Recoil Metal main through HUD slice 7 — the measured interface
+**Snapshot:** 2026-09-05, main through `76e781b`, plus the native inactive-window
+acceptance fix and evidence reconciliation. The selected
+batch adds combat Guard, individual factory cancellation, bounded air combat
+states 3-7, economy/army save continuation, observed FAF query bindings and wreck
+blast damage. Native input and bounded simulation tests are documented below.
+The required retail projectile archive and retail-map/golden gates remain blocked
+by the disconnected install. Existing subsystem estimates are retained until
+that acceptance can be completed; implementation does not establish whole-WP parity.
+
+**Prior snapshot:** 2026-09-04, Recoil Metal main through HUD slice 7 — the measured interface
 baseline (`docs/hud-baseline.md`, `tools/hud_baseline.sh`, `--backing`, `--bench-hud`,
 `--bench-size`) — after the `WP-22` controller read and six follow-ups (parked flyers recharge, the look-ahead max pyramid, attached children take their
 carrier's tilt, mesh extents and build-effect bones parsed with a bone-to-world helper, the
@@ -56,9 +65,13 @@ Equal-weight average across the 20 gameplay subsystem rows below; `FA-FOUND` is 
 
 ```text
 Implemented       [###########---------] about 55%
-Retail-validated  [#####---------------] about 25%
+Retail-validated  [######--------------] about 30%
 Retail-analyzed   [##############------] about 70%
 ```
+
+The retained row estimates average 57.25%, 29.1% and 68.0%, respectively.
+The validation headline corrects the earlier arithmetic; no subsystem score was
+raised by this reconciliation.
 
 Only **1 of 45 work packages**, `WP-15` economy, currently passes the complete retail
 confirmation gate. The three percentages must never be combined: understanding absent behavior
@@ -69,9 +82,11 @@ and the 70% equal-subsystem estimate answer different questions and are shown to
 headline honest.
 
 **Current implementation critical path:**
-[`FA-CMD`](#fa-cmd---commands-controls-and-factories), the explicit combat-unit Guard command
-and the earlier refuel/staging rungs of `C-183`; the build-assist, reclaim-copy, repair-scan and
-measured leash rungs now run through the existing Assist path. **Current EXE-analysis action:**
+Finish the selected batch's retail-content, retail-map and golden acceptance when
+the install is available. The remaining [`FA-CMD`](#fa-cmd---commands-controls-and-factories)
+implementation gaps include the earlier refuel/staging rungs of `C-183`; explicit
+combat Guard now reuses the tested assistance ladder without granting builder powers.
+**Current EXE-analysis action:**
 the capture increment semantic at `Unit+0x690`
 (`C-239`/`C-243`) plus `Sim::TransferUnit`'s native copy/reset inventory, and naming the third
 `HasSiloAmmo` caller at `0x005DEAD0`.
@@ -105,10 +120,10 @@ excluded from the headline.
 | [`FA-CONTENT`](#fa-content---vfs-blueprints-maps-and-bootstrap) | VFS, blueprints, maps, bootstrap | `WP-05`, `06`, `09` | 65% | 35% | 55% | Trace and test exact retail SCD mount/override precedence. |
 | [`FA-LUA`](#fa-lua---gameplay-lua-and-mod-contract) | Gameplay Lua and mod contract | `WP-07`-`08` | 10% | 5% | 30% | Measure the exact Moho contract for the milestone-20 skirmish slice. |
 | [`FA-MATCH`](#fa-match---armies-setup-and-victory-rules) | Armies, setup, victory rules | `WP-10`-`11` | 60% | 25% | 85% | Recover the retail lobby/scenario victory-mode selector; do not wire a synthetic app setting. |
-| [`FA-CMD`](#fa-cmd---commands-controls-and-factories) | Commands, controls, factories | `WP-12`-`14` | 80% | 65% | 75% | Add an explicit combat-unit Guard command, then the refuel/staging rungs. |
+| [`FA-CMD`](#fa-cmd---commands-controls-and-factories) | Commands, controls, factories | `WP-12`-`14` | 80% | 65% | 75% | Complete retail acceptance of Guard/cancellation; refuel/staging remains. |
 | [`FA-ECON`](#fa-econ---economy-construction-and-engineering) | Economy, construction, engineering | `WP-15`-`19` | 70% | 55% | 90% | Name the capture increment at `Unit+0x690` and read `Sim::TransferUnit`'s copy/reset inventory, then specify the smallest capture slice. |
 | [`FA-LAND`](#fa-land---land-navigation-formations-and-spatial-world) | Land navigation, formations, spatial world | `WP-20`, `21`, `26` | 85% | 30% | 95% | Add bounded formation rotation or category matching without changing path-service ordering. |
-| [`FA-AIR`](#fa-air---aircraft-flight-combat-and-staging) | Aircraft flight, combat, staging | `WP-22` | 65% | 55% | 95% | Implement `C-224` sustained-turn states 3-5 and break-off state 6. |
+| [`FA-AIR`](#fa-air---aircraft-flight-combat-and-staging) | Aircraft flight, combat, staging | `WP-22` | 65% | 55% | 95% | Complete retail/golden acceptance of planar states 3-7; full banking remains. |
 | [`FA-NAVY`](#fa-navy---surface-and-submerged-warfare) | Surface and submerged warfare | `WP-23`-`24` | 35% | 10% | 75% | Implement one complete `SurfacingSub` dive/surface slice. |
 | [`FA-TRANSPORT`](#fa-transport---attachments-cargo-and-ferries) | Attachments, cargo, ferries | `WP-25` | 35% | 5% | 95% | Add parent/self bone indices and authored rest-bone composition to generic attachments. |
 | [`FA-WEAPONS`](#fa-weapons---targeting-weapons-and-projectiles) | Targeting, weapons, projectiles | `WP-27`-`28` | 97% | 72% | 90% | Implement `C-157` target exemption for engineer reclaim/capture, then add the remaining death and manual-fire paths. |
@@ -117,10 +132,10 @@ excluded from the headline.
 | [`FA-INTEL`](#fa-intel---vision-radar-sonar-and-counter-intel) | Vision, radar, sonar, counter-intel | `WP-33` | 75% | 45% | 90% | Apply radar-position error to automatic targeting without changing contact identity or ordering. |
 | [`FA-PROGRESS`](#fa-progress---enhancements-veterancy-and-special-units) | Enhancements, veterancy, special units | `WP-34`-`36` | 35% | 20% | 35% | Complete the enhancement lifecycle specification around `CUnitScriptTask`. |
 | [`FA-TERRAIN`](#fa-terrain---mutable-terrain-and-craters) | Mutable terrain and craters | `WP-37` | 0% | 0% | 25% | Trace one crater from damage through terrain, pathing, and rendering invalidation. |
-| [`FA-AI`](#fa-ai---retail-ai-and-native-manager-boundary) | Retail AI and native manager boundary | `WP-38` | 35% | 5% | 30% | Implement the next observed manager methods: `GetCurrentEnemy` and `GetUnitBlueprint`. |
+| [`FA-AI`](#fa-ai---retail-ai-and-native-manager-boundary) | Retail AI and native manager boundary | `WP-38` | 35% | 5% | 30% | Rerun retail-map sanity; specify observed GridReclaim, Nickname and islandMarker gaps. |
 | [`FA-UI`](#fa-ui---player-interface-and-advanced-controls) | Player interface and advanced controls | `WP-39`-`40` | 75% | 5% | 15% | Trace and implement the first retail data-driven command page from `WP-40`. |
 | [`FA-PRESENT`](#fa-present---animation-effects-and-audio) | Animation, effects, audio | `WP-41`-`42` | 55% | 5% | 25% | Complete one blueprint-audio-to-XSB-cue playback path. |
-| [`FA-PERSIST`](#fa-persist---replay-hashing-and-saveresume) | Replay, hashing, save/resume | `WP-43`-`44` | 70% | 20% | 90% | Version and round-trip authoritative economy and army state in SaveState. |
+| [`FA-PERSIST`](#fa-persist---replay-hashing-and-saveresume) | Replay, hashing, save/resume | `WP-43`-`44` | 70% | 20% | 90% | Complete retail/golden acceptance of v16 continuation; general app saves remain absent. |
 
 ## Starting Work
 
@@ -219,15 +234,18 @@ and repair scans around the guardee while ranking candidates by distance to the 
 The native `CUnitScriptTask` boundary is also implemented: script issues are authorized and logged,
 the command stage runs retail task-status timing, lifecycle cleanup is queue-owned, and opaque host
 state survives SaveState v12 and hashing without coupling Lua to the sim core.
-Still absent: the earlier refuel/staging and ferry rungs, exact multi-weapon guard arbitration,
-and combat-unit guard orders (Assist refusal for non-builders is pinned — a Guard order is the
-deferred vehicle).
+Explicit combat-unit Guard now reuses that ladder while checking authored build,
+repair and reclaim eligibility. Stable-ID cancellation removes one active or
+pending factory row without consuming unrelated work. Guard's mirrored construction
+identity is separate from its retained own-build command. Command-log v3 retains
+v2 readers. Native acceptance exercises Guard targeting, Stop, paginated queue
+cancellation and Clear Queue; see [native input acceptance](native-input-acceptance.md).
+Still absent: the earlier refuel/staging and ferry rungs and exact multi-weapon guard arbitration.
 
 ```text
-/goal Advance FA-CMD with an explicit semantic Guard command for combat units, reusing the
-tested Assist ladder without granting builder capabilities. Start with authorization and
-live/replay regressions, keep the shared active command intact across temporary combat/work,
-then run make test and make verify and update WP-12 and FA-CMD.
+/goal Finish Guard and factory-cancellation acceptance on the retail map and full content,
+then specify the next refuel/staging rung from C-183. Preserve authored capabilities and
+retained construction identity, and run make test and make verify before updating FA-CMD.
 ```
 
 ### FA-ECON - Economy, Construction, And Engineering
@@ -284,19 +302,24 @@ until the last 0.5 elmo, then switches to the surface, with retail's separate or
 through weapon range at maximum airspeed and is the only state using `AttackElevation`; the
 tail chase starts when target direction and both forward vectors agree inside the recovered
 30-degree cone, and floors desired speed at `MinAirspeed`. Both states expose the
-`MakingAttackRun` lifecycle. SaveState v13 carries the combat state; the hash gates all air
-execution state on `canFly`.
+`MakingAttackRun` lifecycle. The planar reduction now also runs sustained-turn
+states 3/4/5, breakoff 6 and off-map recovery 7. Authored timers and match-owned
+MT19937 draws choose transitions; new entity attacks reset tactical counters.
+SaveState v16 and hashing preserve controller state, cached tuning and the random
+sequence. Real UEA0102 turn/recovery checkpoints continue with matching per-tick
+hashes; the inspected app pursuit replay matches 900 ticks. See ADR-091 for the
+planar controller boundary and [unit evidence](unit-capability-matrix.md).
 
-**Largest gap:** sustained-turn states 3-5, break-off state 6 and recovery state 7 remain.
-Bomb-drop prediction for state 1, the cargo mass ratio, banking/orientation torque, `Hover`,
+**Largest gap:** full three-axis banking/orientation torque remains outside the planar model.
+Bomb-drop prediction for state 1, the cargo mass ratio, `Hover`,
 `POD`-only random initialization of the otherwise-zero `CUnitMotion+0x9c` elevation adjustment,
 staging and carrier docking (`C-225`) also remain.
 
 ```text
-/goal Advance FA-AIR with C-224 sustained-turn states 3-5 and break-off state 6. Preserve the
-implemented state-1-only AttackElevation, state-2 MinAirspeed floor, 30-degree cone and
-MakingAttackRun lifecycle; pin the turn-speed and break-off transitions before expanding the
-machine, then run make test and make verify and refresh FA-AIR.
+/goal Finish the current air slice's retail-map and golden acceptance. Attribute the first
+hash divergence before considering a new baseline; v16 now hashes the future RNG sequence.
+Keep full banking, cargo inertia and bomb prediction explicitly separate from the implemented
+planar states, then choose the next evidenced controller gap and refresh FA-AIR.
 ```
 
 ### FA-NAVY - Surface And Submerged Warfare
@@ -453,15 +476,20 @@ and FA-TERRAIN, and create only the implementation task the trace supports.
 native managers keep it far from the retail AI architecture. The 650-second sanity run is clean
 at both two armies and all eight SCMP_009 seats: no instruction-budget exhaustion without raising
 the 20-million-instruction watchdog. The two-army run also reports zero thread errors.
-`make ai-sanity` now fails if an overrun returns. The next observed condition gaps are
-`GetCurrentEnemy` (90 calls in the
-eight-army run) and `GetUnitBlueprint` (7).
+`make ai-sanity` now fails if an overrun returns. The previously observed
+`GetCurrentEnemy` and `GetUnitBlueprint` gaps are implemented and exercised by
+their FAF consumers. Current-enemy lookup returns a stable brain proxy;
+blueprint lookup returns cached published tables. The 2026-09-05 local BAR-map
+runs completed 6,500 ticks with two/eight armies, built 16/64 units, and reported
+zero module failures, thread errors or instruction-budget overruns. They fired
+no shots and do not replace the retail-map combat run. Remaining observed fields
+are GridReclaim, Nickname and islandMarker; no dummy bindings were added.
 
 ```text
-/goal Advance FA-AI by implementing the `GetCurrentEnemy` and `GetUnitBlueprint` behavior exposed
-by the eight-army 650-second sanity run. Keep conditions fail-closed, add focused regressions,
-rerun the AI report and long sanity match, update WP-38 and FA-AI, and record the next missing
-native-manager behavior exposed.
+/goal Rerun the two/eight-army 650-second sanity matches with full retail content. Specify
+GridReclaim, Nickname and islandMarker from their actual callers and state ownership before
+implementing them. Keep missing conditions fail-closed and update WP-38 and FA-AI with measured
+construction/combat progression and remaining native-manager gaps.
 ```
 
 ### FA-UI - Player Interface And Advanced Controls
@@ -560,18 +588,22 @@ leave dynamic music and broad effect hosting as explicit later slices.
 
 ### FA-PERSIST - Replay, Hashing, And Save/Resume
 
-**Largest gap:** SaveState v8 now round-trips shared queued commands, their mutable per-unit
-execution state, live command lookup, and allocators while v1-v7 remain decodable. Economy,
-armies, and path-service runtime state are still absent from resumed matches. The savegame
-envelope may gain independent versions; replay playback remains bound to the existing command
-format and must continue importing old replay streams.
+**Current slice:** SaveState v16 retains v1-v15 decoding and adds optional economy,
+construction identity/funding, army lifecycle and aircraft-controller state to
+the existing units, queues, tick and RNG envelope. Fresh-scene economy/army
+continuation matches 690 further tick hashes through construction, allied sharing,
+defeat cleanup and winner confirmation. Restore owns the arrays and rebinds match
+spans. Whole-match overflow sharing now runs before capacity clamping.
+
+**Largest gap:** this is not a general mid-combat app save. Projectile/feature
+pools, pending path searches, intel history, external input and the opponent VM
+remain outside the envelope. Replay is a separate compatibility boundary.
 
 ```text
-/goal Advance FA-PERSIST by encoding authoritative economy and army state in the versioned
-save/resume envelope, preserving the existing UnitStore, queued-command, tick, and RNG state.
-Add focused round-trip and continued-hash tests; run make test and make verify, update WP-44 and
-FA-PERSIST, and leave path-service runtime searches and replay transport as later authoritative
-groups.
+/goal Finish full-content and golden verification of the v16 economy/army continuation slice.
+Before claiming general app save/load, inventory every omitted authoritative group and implement
+its continued-hash proof. Keep pending path searches and replay transport separate, preserve old
+readers, and update WP-44 and FA-PERSIST.
 ```
 
 ## Maintenance Contract
