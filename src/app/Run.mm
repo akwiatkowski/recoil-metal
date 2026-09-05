@@ -279,6 +279,10 @@ void composeHeadlessInterface(rm::Renderer& renderer, const Session& session,
                     for (std::size_t i = 0; i < units.drawScratch[batch].size() && made < rings;
                          ++i) {
                         const rm::UnitIndex slot = units.drawSlotOf[batch][i];
+                        if (units.playerArmy != rm::sim::kNoArmy
+                            && units.armyOf(slot) != units.playerArmy) {
+                            continue; // Headless player selection obeys ownership, like clicking.
+                        }
                         if (!selectedType.empty()) {
                             const rm::unitdef::UnitDef* def =
                                 units.catalog.def(units.store.typeAt(slot));
@@ -408,6 +412,19 @@ void composeHeadlessInterface(rm::Renderer& renderer, const Session& session,
             gatherBuilderCandidates(units, capturedSelection, shotBuilders);
             gatherBuildOptions(units, activeBuilderFor(shotBuilders), baseTheme, shotOptions,
                                shotWho);
+            // Pair pixels with facts from the same selection, so a visually plausible idle
+            // capture cannot pass an active-construction regression.
+            const auto shotWork = constructionCard(units, activeBuilderFor(shotBuilders));
+            const auto shotProduction = gatherProduction(units, activeBuilderFor(shotBuilders));
+            std::uint64_t queuedProducts = 0;
+            if (shotProduction) {
+                for (const auto& entry : shotProduction->queue) queuedProducts += entry.count;
+            }
+            std::printf("  hud-state: selected=%zu types=%zu work=%s progress=%d flow=%s queued=%llu\n",
+                capturedSelection.size(), shotRoster.size(), shotWork ? shotWork->title.c_str() : "NONE",
+                shotWork ? static_cast<int>(*shotWork->progress * 100.0f) : 0,
+                shotWork ? shotWork->rows.back().value.c_str() : "NONE",
+                static_cast<unsigned long long>(queuedProducts));
             std::vector<const rm::unitdef::UnitDef*> shotCommandSelection;
             for (const rm::sim::UnitId id : capturedSelection) {
                 if (units.store.alive(id)) {

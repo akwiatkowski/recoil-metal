@@ -221,6 +221,27 @@ TEST_CASE("real construction lifecycle is reflected by the active inspector", "[
     }
 }
 
+TEST_CASE("HUD capture replays have explicit setup-relative identities and blueprint paths", "[ui][replay]") {
+    const auto fixtures = std::filesystem::path{__FILE__}.parent_path() / "fixtures";
+    for (const std::string name : {"hud-construction.commands", "hud-production.commands"}) {
+        INFO(name);
+        std::vector<std::string> paths;
+        const auto log = rm::sim::readCommandLog((fixtures / name).string(), &paths);
+        REQUIRE(log);
+        REQUIRE_FALSE(log->empty());
+        CHECK(log->all().front().tick == 70);
+        CHECK(log->all().front().id == 1); // Opening extractor consumed source 0's first ID.
+        REQUIRE(paths.size() == log->size());
+        for (const auto& path : paths) CHECK(path.starts_with("/units/"));
+        if (name == "hud-production.commands") {
+            REQUIRE(log->size() == 2);
+            CHECK(log->all().back().tick == 4000);
+            CHECK(log->all().back().count == 30);
+            CHECK(log->all().back().units == std::vector{rm::sim::UnitId{4, 1}});
+        }
+    }
+}
+
 TEST_CASE("every retail T1 land factory product performs its role through the match runner",
           "[corpus][capability][scenario]") {
     const auto root = corpusRoot();

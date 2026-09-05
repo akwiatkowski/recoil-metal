@@ -815,7 +815,8 @@ rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) 
             }
             for (std::size_t i = 0; i < dispatched.size(); ++i) {
                 if (dispatched[i].result.accepted != expected[i]) {
-                    throw std::runtime_error{"replay command accepted set diverged"};
+                    throw std::runtime_error{"replay command accepted set diverged at tick "
+                                             + std::to_string(tickIndex)};
                 }
             }
         }
