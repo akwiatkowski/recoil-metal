@@ -710,6 +710,11 @@ void resolveCollisions(UnitStore& store, const Terrain& terrain,
         Transform& unit = transforms[i];
         unit.x = std::clamp(unit.x, Fx{}, width);
         unit.z = std::clamp(unit.z, Fx{}, depth);
+        // Collision resolution must preserve the winged integrator's altitude, just
+        // like the alignment pass in moveUnits. Flattening it here grounds real aircraft.
+        if (motion[i].canFly && motion[i].airborne) {
+            continue;
+        }
         if (motion[i].airborne || motion[i].surfaceWater) {
             placeOnMotionLayer(unit, motion[i], terrain);
         } else {

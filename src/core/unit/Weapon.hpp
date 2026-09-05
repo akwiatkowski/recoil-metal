@@ -133,6 +133,10 @@ struct Weapon {
         /// a unit's (`C-088`: tacticals carry TACTICAL/MISSILE, nukes STRATEGIC/MISSILE).
         /// Point-defence target restrictions evaluate against these.
         std::vector<std::string> categories{};
+        bool trackTarget = false;
+        float turnRateDegreesPerSecond = 0.0f;
+        float accelerationElmosPerSecond2 = 0.0f;
+        float maxSpeedElmosPerSecond = 0.0f;
     } projectileTraits;
 
     /// The VFS locator whose blueprint supplies `projectileTraits`.

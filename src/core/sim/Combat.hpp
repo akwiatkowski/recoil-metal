@@ -79,6 +79,10 @@ struct Projectile {
     /// (§7 P6.1). May be stale by the time the shot lands — a duel where both sides die on the
     /// same tick is ordinary — so it is a name for the shooter rather than a way back to one.
     UnitId firedBy{};
+    UnitId guidanceTarget{};
+    std::int32_t turnPerTick = 0;
+    Fx accelerationPerTickSquared{};
+    Fx maxSpeedPerTick{};
 
     /// Who fired it, so a shot cannot kill its own side — checked at impact rather than
     /// at launch, because a unit may change hands between the two.
@@ -326,7 +330,8 @@ void advanceProjectiles(std::vector<Projectile>& projectiles, UnitStore& store,
 [[nodiscard]] Projectile launch(std::array<Fx, 3> from, std::array<Fx, 3> to,
                                  const unitdef::Weapon& weapon, int byArmy, TickRate rate,
                                  Fx muzzlePerTick, const unitdef::DamageProfile& damage,
-                                 UnitId firedBy = {}, bool interceptor = false);
+                                 UnitId firedBy = {}, bool interceptor = false,
+                                 UnitId target = {});
 
 /// Spreads `damage` over everything within `radiusElmos` of `centre`, and returns how
 /// much was dealt in total.

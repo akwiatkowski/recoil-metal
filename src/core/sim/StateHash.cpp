@@ -603,6 +603,14 @@ StateHash hashMatch(const UnitStore& store, const Match& match) {
         for (const Projectile& shot : *match.projectiles) {
             feed(h, shot.position);
             feed(h, shot.velocity);
+            if (shot.guidanceTarget != UnitId{} || shot.turnPerTick != 0) {
+                feedText(h, "guidance");
+                feed(h, static_cast<std::size_t>(shot.guidanceTarget.index));
+                feed(h, static_cast<std::size_t>(shot.guidanceTarget.generation));
+                feed(h, shot.turnPerTick);
+                feed(h, shot.accelerationPerTickSquared);
+                feed(h, shot.maxSpeedPerTick);
+            }
             // THE WHOLE TABLE, field by field. A profile is trivially copyable but its padding
             // is unspecified, so it is fed like every other struct here rather than as bytes.
             feed(h, shot.damage.base);

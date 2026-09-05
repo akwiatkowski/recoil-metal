@@ -672,9 +672,7 @@ loadProjectileTraits(std::string_view source) {
         return std::unexpected{parsed.error()};
     }
     const lua::Value* economy = parsed->path("Economy");
-    if (economy == nullptr) {
-        return std::unexpected{lua::ParseError{"projectile blueprint has no Economy table", 0}};
-    }
+    const lua::Value* physics = parsed->path("Physics");
     sim::Mag maxHealth{};
     if (const lua::Value* defense = parsed->path("Defense")) {
         maxHealth = sim::magFromFloat(numberOr(*defense, "MaxHealth", 0.0f));
@@ -692,11 +690,15 @@ loadProjectileTraits(std::string_view source) {
         categories.erase(std::unique(categories.begin(), categories.end()), categories.end());
     }
     return unitdef::Weapon::ProjectileTraits{
-        .buildCostMass = sim::magFromFloat(numberOr(*economy, "BuildCostMass", 0.0f)),
-        .buildCostEnergy = sim::magFromFloat(numberOr(*economy, "BuildCostEnergy", 0.0f)),
-        .buildTime = sim::magFromFloat(numberOr(*economy, "BuildTime", 0.0f)),
+        .buildCostMass = economy ? sim::magFromFloat(numberOr(*economy, "BuildCostMass", 0.0f)) : sim::Mag{},
+        .buildCostEnergy = economy ? sim::magFromFloat(numberOr(*economy, "BuildCostEnergy", 0.0f)) : sim::Mag{},
+        .buildTime = economy ? sim::magFromFloat(numberOr(*economy, "BuildTime", 0.0f)) : sim::Mag{},
         .maxHealth = maxHealth,
         .categories = std::move(categories),
+        .trackTarget = physics && flagAt(*physics, "TrackTarget"),
+        .turnRateDegreesPerSecond = physics ? numberOr(*physics, "TurnRate", 0.0f) : 0.0f,
+        .accelerationElmosPerSecond2 = physics ? numberOr(*physics, "Acceleration", 0.0f) * scmap::kElmosPerOgrid : 0.0f,
+        .maxSpeedElmosPerSecond = physics ? numberOr(*physics, "MaxSpeed", 0.0f) * scmap::kElmosPerOgrid : 0.0f,
     };
 }
 

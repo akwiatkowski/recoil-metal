@@ -2211,6 +2211,23 @@ is deterministic and independently testable without retail assets.
 
 ## ADR-060 — Economy presentation is a fixed pair of resource views
 
+
+## ADR-084 — Behavioral T1 contracts and bounded projectile pursuit
+
+**Context.** Running every real T1 land factory product through MatchRunner exposed
+aircraft flattened by collision alignment and Cybran AA unable to hit a patrolling
+aircraft because authored tracking projectiles flew straight.
+
+**Decision.** Preserve integrated airborne altitude during collision resolution.
+Resolve ordinary projectile blueprints as well as counted ammunition, and use
+generation-safe fixed-point pursuit with the authored turn, acceleration and speed
+limits. Keep reusable primary-role scenarios beside independent roster contracts.
+
+**Alternatives.** Stationary-only AA tests would conceal the failure. Reproducing
+the complete undocumented retail guidance controller is a separate parity task.
+
+**Consequences.** Guidance is executable and hashed, but not claimed retail-exact.
+See `docs/t1-headless-contracts.md` for sources, checks and named limitations.
 **Context.** The HUD renderer reached into `MatchState::mass` and `MatchState::energy` and wrote
 their labels itself. BAR calls the construction material Metal, while a game-neutral presentation
 cannot honestly call it either game's resource.

@@ -128,6 +128,7 @@ void redirectMissile(Projectile& shot, const UnitStore& store,
                 const Fx speed = fxHypot(fxHypot(shot.velocity[0], shot.velocity[2]),
                                          shot.velocity[1]);
                 shot.velocity = {hx / leg * speed, hy / leg * speed, hz / leg * speed};
+                shot.guidanceTarget = shot.firedBy;
             }
         } else {
             shot.health -= Mag::fromInt(30);
@@ -188,6 +189,7 @@ void divertToFlareOwner(Projectile& shot, const UnitStore& store, const UnitCata
             const Fx speed = fxHypot(fxHypot(shot.velocity[0], shot.velocity[2]),
                                      shot.velocity[1]);
             shot.velocity = {dx / leg * speed, dy / leg * speed, dz / leg * speed};
+            shot.guidanceTarget = store.idAt(slot);
             return;
         }
     }
@@ -1375,7 +1377,7 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
                 for (int shot = 0; shot < volley; ++shot) {
                     projectiles.push_back(
                         launch(from, to, weapon, army, rate, rates.muzzlePerTick,
-                               rates.damage, store.idAt(slot)));
+                               rates.damage, store.idAt(slot), false, *target));
                 }
                 consumeSiloAmmo(store.idAt(slot), weapon, siloAmmo);
 
@@ -1491,7 +1493,7 @@ std::size_t fireOvercharge(UnitStore& store, const UnitCatalog& catalog,
 
             const UnitCatalog::WeaponRates& rates = catalog.weaponRates(store.typeAt(slot), w);
             projectiles.push_back(launch(from, to, weapon, army, rate, rates.muzzlePerTick,
-                                         rates.damage, store.idAt(slot)));
+                                         rates.damage, store.idAt(slot), false, head->target()));
             healths[slot].reloadRemaining[w] = static_cast<int>(rates.reloadTicks);
             emit(events, Event{
                              .kind = EventKind::WeaponFired,
@@ -1555,9 +1557,19 @@ void tickShields(UnitStore& store, const UnitCatalog& catalog, EventQueue* event
 
 Projectile launch(std::array<Fx, 3> from, std::array<Fx, 3> to,
                    const unitdef::Weapon& weapon, int byArmy, TickRate rate, Fx muzzlePerTick,
-                   const unitdef::DamageProfile& damage, UnitId firedBy, bool interceptor) {
+                   const unitdef::DamageProfile& damage, UnitId firedBy, bool interceptor,
+                   UnitId target) {
     Projectile shot;
     shot.firedBy = firedBy;
+    if (weapon.projectileTraits.trackTarget) {
+        constexpr float kRadiansPerDegree = 0.017453292519943295f;
+        shot.guidanceTarget = target;
+        shot.turnPerTick = rate.bradPerTick(weapon.projectileTraits.turnRateDegreesPerSecond
+                                            * kRadiansPerDegree);
+        shot.accelerationPerTickSquared = rate.perTick(weapon.projectileTraits.accelerationElmosPerSecond2)
+            / Fx::fromInt(static_cast<int>(rate.ticksPerSecond()));
+        shot.maxSpeedPerTick = rate.perTick(weapon.projectileTraits.maxSpeedElmosPerSecond);
+    }
     // The model's own muzzle when the app resolved one, the old constant when not —
     // Weapon::muzzleHeight's contract.
     const Fx muzzle = weapon.muzzleHeight > Fx{} ? weapon.muzzleHeight : kMuzzleHeight;
@@ -2024,6 +2036,34 @@ void advanceProjectiles(std::vector<Projectile>& projectiles, UnitStore& store,
         --shot.ticksRemaining;
 
         const std::array<Fx, 3> oldVelocity = shot.velocity;
+        if (store.alive(shot.guidanceTarget) && shot.turnPerTick > 0) {
+            const auto target = positionOf(store.transforms()[shot.guidanceTarget.index]);
+            const Fx dx = target[0] - shot.position[0];
+            const Fx dy = target[1] + kMuzzleHeight * Fx::fromRatio(1, 2) - shot.position[1];
+            const Fx dz = target[2] - shot.position[2];
+            const Brad yaw = fxBearing(shot.velocity[0], shot.velocity[2]);
+            const Brad pitch = fxBearing(shot.velocity[1], fxHypot(shot.velocity[0], shot.velocity[2]));
+            // A bounded yaw/pitch pursuit controller, not a claim of retail's native
+            // steering law. Both axes share the authored angular budget.
+            const auto error = [](Brad from, Brad to) {
+                const std::uint16_t wrapped = static_cast<std::uint16_t>(to - from);
+                return wrapped > kBradHalfTurn ? static_cast<std::int32_t>(wrapped) - 65536
+                                               : static_cast<std::int32_t>(wrapped);
+            };
+            const Fx yawError = Fx::fromInt(error(yaw, fxBearing(dx, dz)));
+            const Fx pitchError = Fx::fromInt(error(pitch, fxBearing(dy, fxHypot(dx, dz))));
+            const Fx length = fxHypot(yawError, pitchError);
+            const Fx fraction = length > Fx{} ? std::min(Fx::fromInt(1), Fx::fromInt(shot.turnPerTick) / length)
+                                              : Fx{};
+            const Brad nextYaw = static_cast<Brad>(yaw + (yawError * fraction).raw() / (1 << kFxFractionalBits));
+            const Brad nextPitch = static_cast<Brad>(pitch + (pitchError * fraction).raw() / (1 << kFxFractionalBits));
+            Fx speed = fxHypot(fxHypot(shot.velocity[0], shot.velocity[2]), shot.velocity[1]);
+            if (shot.maxSpeedPerTick > Fx{}) {
+                speed = std::min(shot.maxSpeedPerTick, speed + shot.accelerationPerTickSquared);
+            }
+            shot.velocity = {fxSin(nextYaw) * fxCos(nextPitch) * speed,
+                             fxSin(nextPitch) * speed, fxCos(nextYaw) * fxCos(nextPitch) * speed};
+        }
         if (shot.arc != unitdef::BallisticArc::None) {
             shot.velocity[1] -= gravityPerTickSquared;
         }

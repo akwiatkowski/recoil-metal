@@ -283,7 +283,7 @@ void resolveMuzzleBones(rm::unitdef::UnitDef& def, const rm::Model& model) {
     }
 
     for (rm::unitdef::Weapon& gun : def->weapons) {
-        if (!gun.countedProjectile || gun.projectileId.empty()) continue;
+        if (gun.projectileId.empty()) continue;
         const auto projectile = content.read(gun.projectileId);
         if (!projectile) continue;
         const std::string_view projectileSource{reinterpret_cast<const char*>(projectile->data()),
@@ -839,7 +839,7 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
         return std::nullopt;
     }
     for (rm::unitdef::Weapon& gun : def->weapons) {
-        if (!gun.countedProjectile || gun.projectileId.empty()) continue;
+        if (gun.projectileId.empty()) continue;
         const auto projectile = content.read(gun.projectileId);
         if (!projectile) continue;
         const std::string_view projectileSource{reinterpret_cast<const char*>(projectile->data()),
