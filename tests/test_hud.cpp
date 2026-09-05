@@ -54,6 +54,34 @@ namespace {
 
 } // namespace
 
+TEST_CASE("construction inspector renders a bounded progress bar in the real roster slot", "[ui][build]") {
+    const auto glyphs = boxGlyphs();
+    const auto font = fontOver(glyphs);
+    const rm::ui::Rect rect{20, 30, 200, 68};
+    rm::ui::InfoCard card;
+    card.title = "BUILDING";
+    for (const float progress : {0.0f, 0.5f, 1.0f, 2.0f}) {
+        card.progress = progress;
+        rm::ui::Geometry geometry;
+        rm::ui::appendInspector(geometry, font, font, rm::ui::neutralTheme(), rect, card);
+        REQUIRE(geometry.chrome.size() >= 6);
+        float right = rect.x + 4;
+        for (const auto& vertex : geometry.chrome) {
+            CHECK(vertex.position[0] >= rect.x);
+            CHECK(vertex.position[0] <= rect.right());
+            CHECK(vertex.position[1] >= rect.y);
+            CHECK(vertex.position[1] <= rect.bottom());
+        }
+        if (progress > 0) {
+            REQUIRE(geometry.chrome.size() == 12);
+            for (std::size_t i = 6; i < 12; ++i) {
+                right = std::max(right, geometry.chrome[i].position[0]);
+            }
+            CHECK(right == Approx(rect.x + 4 + 192 * std::min(progress, 1.0f)));
+        }
+    }
+}
+
 TEST_CASE("a gauge's fill clamps, and no capacity reads as empty") {
     CHECK(Gauge{.stored = 50.0f, .capacity = 100.0f}.fill() == Approx(0.5f));
     CHECK(Gauge{.stored = 0.0f, .capacity = 100.0f}.fill() == Approx(0.0f));

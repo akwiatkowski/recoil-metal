@@ -435,7 +435,7 @@ void appendInspector(Geometry& out, const text::Font& labelFont,
                                rect.right() - kInset - width, baseline, fade(kInk, 0.6f));
     }
 
-    const std::size_t rows = std::min<std::size_t>(3, card.rows.size());
+    const std::size_t rows = std::min<std::size_t>(card.progress ? 2 : 3, card.rows.size());
     for (std::size_t i = 0; i < rows; ++i) {
         baseline += kLine;
         const InfoRow& row = card.rows[i];
@@ -448,6 +448,14 @@ void appendInspector(Geometry& out, const text::Font& labelFont,
             (void)text::appendText(out.foregroundReadout, readoutFont.glyphs, row.value,
                                    rect.right() - kInset - width, baseline, row.tint);
         }
+    }
+    if (card.progress && rect.width > 2.0f * kInset && rect.height >= 64.0f) {
+        const text::Font& chrome = labelFont.usable() ? labelFont : readoutFont;
+        const float width = rect.width - 2.0f * kInset;
+        const float y = rect.bottom() - 10.0f;
+        text::appendRect(out.chrome, chrome, rect.x + kInset, y, width, 6.0f, theme.well);
+        text::appendRect(out.chrome, chrome, rect.x + kInset, y,
+                         width * std::clamp(*card.progress, 0.0f, 1.0f), 6.0f, theme.edgeLit);
     }
 }
 

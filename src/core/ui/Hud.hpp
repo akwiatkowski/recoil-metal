@@ -10,6 +10,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -330,6 +331,7 @@ struct InfoCard {
     std::string title;
     std::string corner;
     std::vector<InfoRow> rows;
+    std::optional<float> progress;  ///< active construction fraction; absent for ordinary facts
 
     [[nodiscard]] bool empty() const noexcept { return title.empty() && rows.empty(); }
 };

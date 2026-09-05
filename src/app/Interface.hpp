@@ -198,6 +198,9 @@ void appendStrategicIcons(rm::ui::Geometry& out, const UnitScene& scene,
 /// work still runs on the economy's own schedule.
 [[nodiscard]] bool constructionInProgress(const rm::sim::Construction& work) noexcept;
 [[nodiscard]] float constructionProgress(const rm::sim::Construction& work) noexcept;
+/// Active work owned by the selected builder (including self-upgrades), for the inspector.
+[[nodiscard]] std::optional<rm::ui::InfoCard> constructionCard(
+    const UnitScene& scene, rm::sim::UnitId builder);
 
 /// Every construction the player can see, as something to draw at its site.
 ///

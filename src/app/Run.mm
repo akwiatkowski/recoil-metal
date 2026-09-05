@@ -549,7 +549,8 @@ void composeHeadlessInterface(rm::Renderer& renderer, const Session& session,
                 const rm::ui::InfoCard inspector =
                     shotHovered && *shotHovered < shotOptions.size()
                         ? rm::ui::buildOptionCard(shotOptions[*shotHovered], session.uiProfile)
-                        : rm::ui::rosterTileCard(shotRoster.front());
+                        : constructionCard(units, activeBuilderFor(shotBuilders))
+                              .value_or(rm::ui::rosterTileCard(shotRoster.front()));
                 rm::ui::appendRoster(hud, renderer.labelFont(), renderer.readoutFont(),
                                      shotTheme,
                                      shotRosterLayout,
@@ -2137,7 +2138,8 @@ int runWindowed(const Session& session) {
                 } else if (overTile && *overTile < rosterTiles.size()) {
                     inspector = rm::ui::rosterTileCard(rosterTiles[*overTile]);
                 } else {
-                    inspector = rm::ui::rosterTileCard(rosterTiles.front());
+                    inspector = constructionCard(units, activeBuilder)
+                                    .value_or(rm::ui::rosterTileCard(rosterTiles.front()));
                 }
                 rm::ui::appendRoster(hudScratch, window.labelFont(), window.readoutFont(),
                                      theme, roster, rosterTiles, overTile,

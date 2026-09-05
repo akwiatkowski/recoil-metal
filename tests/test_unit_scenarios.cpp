@@ -1,5 +1,6 @@
 // Behavioral contracts run real factory products through the same runner as the window.
 #include "app/Match.hpp"
+#include "app/Interface.hpp"
 #include "app/SceneBuild.hpp"
 #include "core/data/MoveDef.hpp"
 #include "core/sim/StateHash.hpp"
@@ -145,6 +146,78 @@ TEST_CASE("guided projectile state participates in the match hash", "[guidance][
         if (field == 3) shot.accelerationPerTickSquared = rm::sim::Fx::fromInt(1);
         if (field == 4) shot.maxSpeedPerTick = rm::sim::Fx::fromInt(1);
         CHECK(rm::sim::hashMatch(scenario.scene.store, runner.match) != hash);
+    }
+}
+
+TEST_CASE("real construction lifecycle is reflected by the active inspector", "[corpus][ui][lifecycle]") {
+    const auto root = corpusRoot();
+    if (!std::filesystem::is_directory(root)) SKIP("no retail unit corpus at " + root.string());
+    const auto engineer = rm::unitbp::loadFile(root / "UEL0105/UEL0105_unit.bp");
+    const auto generator = rm::unitbp::loadFile(root / "UEB1101/UEB1101_unit.bp");
+    REQUIRE(engineer);
+    REQUIRE(generator);
+    Scenario scene;
+    const auto builder = scene.spawn(*engineer, 200, 200);
+    const auto product = scene.registerType(*generator);
+    auto& economy = scene.scene.economies[0];
+    const rm::sim::Resources fullBank{rm::sim::Mag::fromInt(10000), rm::sim::Mag::fromInt(100000)};
+    economy.storage = economy.stored = fullBank;
+    auto runner = scene.runner();
+    int tick = 0;
+    const auto advance = [&](float seconds) {
+        const int count = static_cast<int>(rm::app::gAppTickRate.ticks(rm::sim::Seconds{seconds}));
+        for (int step = 0; step < count; ++step) {
+            (void)rm::app::advanceMatch(runner, tick++, 0.0f);
+        }
+    };
+    CHECK_FALSE(rm::app::constructionCard(scene.scene, builder));
+    REQUIRE(rm::app::issueBuild(scene.scene, builder, 0, 0, product,
+        rm::sim::Fx::fromInt(240), rm::sim::Fx::fromInt(200)));
+    advance(2);
+    const auto started = rm::app::constructionCard(scene.scene, builder);
+    REQUIRE(started);
+    REQUIRE(started->progress);
+    CHECK(*started->progress > 0);
+    CHECK(*started->progress < 1);
+    CHECK(started->rows.back().value == "ACTIVE");
+
+    SECTION("stall then funding recovery and completion") {
+        economy.stored = {};
+        advance(2); // Drain the previous beat's allocation and its retained residue.
+        const auto stalled = rm::app::constructionCard(scene.scene, builder);
+        REQUIRE(stalled);
+        CHECK(stalled->rows.back().value == "STALLED");
+        advance(2);
+        REQUIRE(rm::app::constructionCard(scene.scene, builder));
+        CHECK(rm::app::constructionCard(scene.scene, builder)->progress == stalled->progress);
+        economy.stored = fullBank;
+        advance(2);
+        const auto resumed = rm::app::constructionCard(scene.scene, builder);
+        REQUIRE(resumed);
+        CHECK(*resumed->progress > *stalled->progress);
+        CHECK(resumed->rows.back().value == "ACTIVE");
+        advance(120);
+        CHECK_FALSE(rm::app::constructionCard(scene.scene, builder));
+        REQUIRE(scene.scene.building.size() == 1);
+        CHECK(scene.scene.building.front().finished());
+        CHECK(scene.scene.store.liveCount() == 2);
+    }
+    SECTION("stop cancels the active work and its inspector") {
+        REQUIRE(rm::app::issueMove(scene.scene, builder, 0, static_cast<rm::TickIndex>(tick),
+            {}, {}, false, rm::sim::CommandKind::Stop));
+        advance(1);
+        CHECK_FALSE(rm::app::constructionCard(scene.scene, builder));
+        advance(120);
+        CHECK(scene.scene.store.liveCount() == 1);
+    }
+    SECTION("builder death stops progress and removes its inspector") {
+        const auto remaining = scene.scene.building.front().buildTimeRemaining;
+        scene.scene.store.kill(builder);
+        advance(2);
+        CHECK_FALSE(rm::app::constructionCard(scene.scene, builder));
+        REQUIRE(scene.scene.building.size() == 1);
+        CHECK(scene.scene.building.front().buildTimeRemaining == remaining);
+        CHECK(scene.scene.store.liveCount() == 0);
     }
 }
 

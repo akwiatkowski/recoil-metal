@@ -94,6 +94,31 @@ float constructionProgress(const rm::sim::Construction& work) noexcept {
     return std::clamp(1.0f - remaining / total, 0.0f, 1.0f);
 }
 
+std::optional<rm::ui::InfoCard> constructionCard(const UnitScene& scene,
+                                               rm::sim::UnitId builder) {
+    if (!scene.store.alive(builder)) {
+        return std::nullopt;
+    }
+    for (const auto& work : scene.building) {
+        if ((work.builder != builder && work.upgradeOf != builder)
+            || !constructionInProgress(work)) {
+            continue;
+        }
+        rm::ui::InfoCard card;
+        card.title = work.isUpgrade() ? "UPGRADING" : "BUILDING";
+        card.progress = constructionProgress(work);
+        card.corner = std::to_string(static_cast<int>(*card.progress * 100.0f)) + "%";
+        if (const auto* def = scene.catalog.def(static_cast<rm::UnitTypeIndex>(work.blueprintIndex))) {
+            card.rows.push_back({"", def->description.empty() ? def->name : def->description});
+        }
+        const bool stalled = work.fundedLastTick == rm::sim::Fx{};
+        card.rows.push_back({"FLOW", stalled ? "STALLED" : "ACTIVE",
+                             stalled ? rm::ui::kLoss : rm::ui::kGain});
+        return card;
+    }
+    return std::nullopt;
+}
+
 /// The minimap's pips, from the snapshot the renderer is already drawing.
 ///
 /// FROM THE SNAPSHOT, which is the whole reason §7 calls P7.4 "nearly free once a `Map` object
