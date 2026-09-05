@@ -2617,12 +2617,12 @@ int runWindowed(const Session& session) {
             ++acceptanceFrames;
         });
 
-        window.show();
+        window.show(inputAcceptance);
 
         // This driver lives at the application boundary because the assertion is specifically
         // that AppKit selection and the DRAWN widgets reach the match. Calling issueBuild here
         // would bypass exactly the integration this acceptance run must exercise.
-        int inputStage = 0;
+        int inputStage = -1;
         int stageStarted = matchTicks;
         std::size_t observedFrame = 0;
         std::size_t productIndex = 0;
@@ -2765,7 +2765,18 @@ int runWindowed(const Session& session) {
                     inputCheck(accepted == 1, "native input did not dispatch exactly one accepted command");
                     expectedInputCommand.reset();
                 }
-                if (inputStage == 0) {
+                if (inputStage == -1) {
+                    // Exercise the inactive-window path deliberately: switching to another
+                    // app previously made AppKit silently discard the helper's left clicks.
+                    [app deactivate];
+                    nextInputStage(0);
+                } else if (inputStage == 0) {
+                    // Launch activation can finish after the first display callback. Wait
+                    // for AppKit's state change before testing input, under the normal timeout.
+                    if (app.isActive) {
+                        [app deactivate];
+                        return;
+                    }
                     for (rm::UnitIndex slot = 0; slot < units.store.slotCount(); ++slot) {
                         if (!units.store.slotAlive(slot)) continue;
                         const auto* def = units.catalog.def(units.store.typeAt(slot));
@@ -2853,10 +2864,13 @@ int runWindowed(const Session& session) {
                         && selected.front() == inputProduct, "disabled rack cell leaked input into world");
                     inputCommandClick(4);
                     inputCheck(units.commandInput.size() == before + 1,
-                        "Stop widget did not submit exactly one Stop");
+                        "Stop widget did not submit exactly one Stop; before=" + std::to_string(before)
+                        + " after=" + std::to_string(units.commandInput.size())
+                        + " tick=" + std::to_string(matchTicks));
                     expectInputCommand(rm::sim::CommandKind::Stop, inputProduct);
                     nextInputStage(6);
                 } else if (inputStage == 6) {
+                    inputCheck(units.store.alive(inputProduct), "produced unit died before the Guard check");
                     inputCheck(!units.store.motion()[inputProduct.index].moving
                         && units.store.orders()[inputProduct.index].active() == nullptr,
                         "Stop did not clear movement and queued orders");
@@ -3080,7 +3094,7 @@ int runWindowed(const Session& session) {
                                             repeats:YES];
         }
 
-        [app activateIgnoringOtherApps:YES];
+        if (!inputAcceptance) [app activateIgnoringOtherApps:YES];
         [app run]; // never returns until the app quits
     return acceptanceResult;
 }

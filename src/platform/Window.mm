@@ -91,6 +91,8 @@ namespace {
 /// The player's requested multiplier on automatic size — `--ui-scale`. 1 is automatic.
 @property(nonatomic, assign) float userHudScale;
 @property(nonatomic, assign) float simulatedBacking;
+/// Only the explicit test helper opts into click-through while the app is inactive.
+@property(nonatomic, assign) BOOL injectingMouseClick;
 
 /// Re-derives the layer's drawableSize from bounds x contentsScale.
 - (void)rmSyncDrawableSize;
@@ -125,6 +127,10 @@ namespace {
 
 - (BOOL)acceptsFirstResponder {
     return YES;
+}
+
+- (BOOL)acceptsFirstMouse:(NSEvent*)event {
+    return self.injectingMouseClick || [super acceptsFirstMouse:event];
 }
 
 /// Keeps the CAMetalLayer's drawableSize equal to bounds x contentsScale.
@@ -760,8 +766,15 @@ void Window::setUiEffects(ui::EffectsLevel level) {
     impl_->renderer->setUiEffects(level);
 }
 
-void Window::show() {
+void Window::show(bool inputAcceptance) {
     [impl_->window makeKeyAndOrderFront:nil];
+    if (inputAcceptance) {
+        // WindowServer input must not interleave with the scripted sequence. Explicit
+        // NSEvents still pass through sendEvent and the ordinary responder handlers.
+        [impl_->window setIgnoresMouseEvents:YES];
+        [impl_->window setLevel:NSFloatingWindowLevel];
+        [impl_->window orderFrontRegardless];
+    }
     if (impl_->fullscreen) {
         [impl_->window toggleFullScreen:nil];
     }
@@ -772,6 +785,10 @@ void Window::sendMouseClick(float pointX, float pointY, MouseButton button, bool
     const NSPoint point = [impl_->view convertPoint:local toView:nil];
     const NSEventModifierFlags flags = shift ? NSEventModifierFlagShift : 0;
     const bool left = button == MouseButton::Left;
+    // NSWindow otherwise drops left clicks when another app has focus. Permit only this
+    // synchronous injected pair through acceptsFirstMouse; hardware clicks retain the
+    // normal activation behavior and the test need not repeatedly steal desktop focus.
+    impl_->view.injectingMouseClick = YES;
     for (const NSEventType type : {left ? NSEventTypeLeftMouseDown : NSEventTypeRightMouseDown,
                                   left ? NSEventTypeLeftMouseUp : NSEventTypeRightMouseUp}) {
         NSEvent* event = [NSEvent mouseEventWithType:type location:point modifierFlags:flags
@@ -779,6 +796,7 @@ void Window::sendMouseClick(float pointX, float pointY, MouseButton button, bool
             context:nil eventNumber:0 clickCount:1 pressure:1.0];
         [impl_->window sendEvent:event];
     }
+    impl_->view.injectingMouseClick = NO;
 }
 
 void Window::setSimulatedBacking(float scale) {

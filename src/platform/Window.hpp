@@ -257,10 +257,14 @@ public:
     [[nodiscard]] std::size_t recordedFrames() const;
     [[nodiscard]] bench::FrameRecorder benchmarkSnapshot() const;
 
-    void show();
+    /// Input acceptance keeps the window visible without activating the app, so macOS
+    /// cannot suspend display callbacks when another ordinary window would cover it.
+    /// It ignores WindowServer mouse input; explicit test NSEvents still use sendEvent.
+    void show(bool inputAcceptance = false);
 
     /// Native-event acceptance only: logical top-left points go through NSWindow's ordinary
     /// responder dispatch, including press/release handling. Requires no Accessibility access.
+    /// Injected pairs accept first mouse while inactive; physical clicks keep normal behavior.
     void sendMouseClick(float pointX, float pointY, MouseButton button, bool shift = false);
     /// Simulated display backing, explicitly distinct from testing a physical Retina screen.
     void setSimulatedBacking(float scale);
