@@ -847,8 +847,8 @@ UnitBlueprint {
 TEST_CASE("a winged mover arrives with its control block, or nothing") {
     // URA0102's `Air` table (`C-221`, `C-244`): the proportional and damping gains, the
     // climb authority, the two timers, winged combat inputs, and both Physics heights in
-    // ogrids turned into elmos. Banking, the turn/roll gains and later combat states are
-    // parsed nowhere yet.
+    // ogrids turned into elmos. The real interceptor scenario also checks combat tuning
+    // through the parser and spawn path; three-axis banking remains outside this model.
     const Blueprint named{"XXB0008_unit.bp", R"(
 UnitBlueprint {
     Physics = { MotionType = 'RULEUMT_Air', Elevation = 18, AttackElevation = 4 },

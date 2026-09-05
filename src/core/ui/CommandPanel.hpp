@@ -50,7 +50,7 @@ inline constexpr CommandDescriptors kCommandDescriptors{{
     {{sim::CommandKind::Attack}, "ATTACK", "attack"},
     {{sim::CommandKind::Patrol}, "PATROL", "patrol"},
     {{sim::CommandKind::Stop}, "STOP", "stop"},
-    {{sim::CommandKind::Assist}, "ASSIST", "guard"},
+    {{sim::CommandKind::Guard}, "GUARD", "guard"},
     {std::nullopt, {}, {}},  // FA fire-state: not implemented by the simulation.
     {{sim::CommandKind::Overcharge}, "OVERCHARGE", "overcharge"},
     {{sim::CommandKind::Repair}, "REPAIR", "repair"},

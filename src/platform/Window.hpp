@@ -259,6 +259,15 @@ public:
 
     void show();
 
+    /// Native-event acceptance only: logical top-left points go through NSWindow's ordinary
+    /// responder dispatch, including press/release handling. Requires no Accessibility access.
+    void sendMouseClick(float pointX, float pointY, MouseButton button, bool shift = false);
+    /// Simulated display backing, explicitly distinct from testing a physical Retina screen.
+    void setSimulatedBacking(float scale);
+    /// Call between frames, never from onFrame (which owns an active renderer write slot).
+    [[nodiscard]] Renderer::CapturedImage capture();
+    void stop();
+
 private:
     struct Impl;
     // unique_ptr to incomplete type: the destructor MUST be defined (even if

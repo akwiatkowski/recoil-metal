@@ -518,6 +518,23 @@ TEST_CASE("a gift arrives as income, so a full ally gains nothing from it") {
     CHECK(amount(economies[1].sharedIn.mass) == Approx(0.0f));  // consumed, not re-credited
 }
 
+TEST_CASE("disabled sharing still discards the tick's deferred excess", "[economy-save]") {
+    auto armies = rm::sim::freeForAll(2);
+    armies[1].alliance = 0;
+    std::vector<Economy> economies(2);
+    for (auto& economy : economies) economy.storage = res(100.0f, 100.0f);
+    economies[0].stored = res(100.0f, 100.0f);
+    economies[0].incomePerTick = res(10.0f, 20.0f);
+    economies[0].sharesOverflow = false;
+    rm::sim::tickEconomy(economies[0], {}, {}, {}, true);
+    REQUIRE(amount(economies[0].stored.mass) == Approx(110.0f));
+    rm::sim::shareOverflow(economies, armies);
+    CHECK(amount(economies[0].stored.mass) == Approx(100.0f));
+    CHECK(amount(economies[0].stored.energy) == Approx(100.0f));
+    CHECK(amount(economies[1].sharedIn.mass) == Approx(0.0f));
+    CHECK(amount(economies[1].sharedIn.energy) == Approx(0.0f));
+}
+
 TEST_CASE("storage capacity truncates per structure, not on the sum") {
     // The economy's ONE rounding point (`C-069`, `C-104`(e), `C-160`). Retail adds each
     // structure's contribution through a truncating conversion, so three structures offering

@@ -113,6 +113,93 @@ namespace {
 
 } // namespace
 
+TEST_CASE("projectile splash reaches wrecks on the deferred impact beat only", "[wreck-combat]") {
+    using rm::sim::Fx;
+    using rm::sim::Mag;
+    const auto armies = rm::sim::freeForAll(2);
+    Roster roster;
+    const auto target = roster.add(roster.addType(targetDef()), 100, 100, 1, 100);
+    roster.reindex();
+    rm::sim::FeatureStore features;
+    const rm::sim::Feature body{.at = {Fx::fromInt(100), {}, Fx::fromInt(100)},
+        .radiusElmos = Fx::fromInt(2), .health = Mag::fromInt(100),
+        .maximumHealth = Mag::fromInt(100), .maximumMassReclaim = Mag::fromInt(50),
+        .massRemaining = Mag::fromInt(50), .reclaimWorkRemaining = Mag::fromInt(50),
+        .reclaimWorkTotal = Mag::fromInt(50)};
+    const auto wreck = features.add(body);
+    REQUIRE(wreck == target);
+    Projectile shot;
+    shot.position = {Fx::fromInt(100), Fx::fromInt(10), Fx::fromInt(100)};
+    shot.velocity = {Fx{}, Fx::fromInt(-20), Fx{}};
+    shot.damage = rm::unitdef::flatDamage(Mag::fromInt(40));
+    shot.damageRadiusElmos = Fx::fromInt(5);
+    shot.firedByArmy = 0;
+    shot.ticksRemaining = 5;
+    std::vector<Projectile> shots{shot};
+    const auto tick = [&] {
+        rm::sim::advanceProjectiles(shots, roster.store, armies, rm::sim::Terrain{flatField()},
+            roster.rate, nullptr, &roster.catalog, {}, &features);
+    };
+    tick();
+    REQUIRE(shots.size() == 1);
+    REQUIRE(shots.front().pendingImpact != rm::sim::ImpactType::Invalid);
+    CHECK(features.find(wreck)->health == Mag::fromInt(100));
+    SECTION("area damage includes both distinct pools") {
+        tick();
+        REQUIRE(features.find(wreck));
+        CHECK(features.find(wreck)->health == Mag::fromInt(60));
+        CHECK(rm::test::asFloat(features.find(wreck)->massRemaining) == Approx(30).margin(0.01));
+        CHECK(roster.health(target).current == Mag::fromInt(60));
+    }
+    SECTION("point damage names the unit even if a feature has the same ID") {
+        shots.front().damageRadiusElmos = {};
+        tick();
+        CHECK(features.find(wreck)->health == Mag::fromInt(100));
+        CHECK(roster.health(target).current == Mag::fromInt(60));
+    }
+    SECTION("splash queries current geometry after a feature slot is reused") {
+        features.remove(wreck);
+        auto distant = body;
+        distant.at[0] = Fx::fromInt(200);
+        const auto replacement = features.add(distant);
+        REQUIRE(replacement.index == wreck.index);
+        REQUIRE(replacement.generation != wreck.generation);
+        tick();
+        CHECK(features.find(replacement)->health == Mag::fromInt(100));
+    }
+    CHECK(shots.empty());
+}
+
+TEST_CASE("wreck blast bounds and ordinary projectile sweeps use different candidate sets", "[wreck-combat]") {
+    using rm::sim::Fx;
+    using rm::sim::Mag;
+    Roster roster;
+    const auto armies = rm::sim::freeForAll(2);
+    rm::sim::FeatureStore features;
+    const auto wreck = features.add({.at = {Fx::fromInt(100), {}, Fx::fromInt(100)},
+        .radiusElmos = Fx::fromInt(2), .health = Mag::fromInt(50), .maximumHealth = Mag::fromInt(50)});
+    Projectile shot;
+    shot.position = {Fx::fromInt(90), Fx::fromInt(1), Fx::fromInt(100)};
+    shot.velocity = {Fx::fromInt(20), {}, {}};
+    shot.damage = rm::unitdef::flatDamage(Mag::fromInt(100));
+    shot.firedByArmy = 0;
+    shot.ticksRemaining = 5;
+    std::vector<Projectile> shots{shot};
+    rm::sim::advanceProjectiles(shots, roster.store, armies, rm::sim::Terrain{flatField()},
+        roster.rate, nullptr, nullptr, {}, &features);
+    REQUIRE(shots.size() == 1);
+    CHECK(shots.front().pendingImpact == rm::sim::ImpactType::Invalid);
+    CHECK(features.find(wreck)->health == Mag::fromInt(50));
+    const auto blast = [&](int x) {
+        return rm::sim::damageArea({Fx::fromInt(x), {}, Fx::fromInt(100)}, Fx::fromInt(5),
+            Mag::fromInt(100), 0, roster.store, armies, {}, nullptr, nullptr, &features);
+    };
+    CHECK(blast(108) == Mag{}); // one elmo beyond the box-plus-blast reach
+    CHECK(blast(107) == Mag::fromInt(50)); // tangent is included, damage capped at remaining health
+    CHECK(features.find(wreck) == nullptr);
+    CHECK(blast(100) == Mag{}); // a dead feature cannot be damaged twice
+}
+
 TEST_CASE("range is measured on the ground, so high ground is not cover") {
     // A weapon's range is a footprint on the map, not a sphere. Using the 3-D distance
     // would make a unit on a cliff harder to shoot than the same unit on the flat, which
@@ -1484,6 +1571,34 @@ TEST_CASE("a beam delivers the tick it fires: damage lands, nothing flies") {
         }
     }
     CHECK(beamSeen);
+}
+
+TEST_CASE("area beams and death blasts deliver to the feature pool", "[wreck-combat]") {
+    using rm::sim::Fx;
+    using rm::sim::Mag;
+    const auto armies = rm::sim::freeForAll(2);
+    Roster roster;
+    Weapon weapon = directFire(25, 300, 5);
+    weapon.beam = true;
+    (void)roster.add(roster.addType(gunnerDef(weapon)), 0, 0, 0, 100);
+    (void)roster.add(roster.addType(targetDef()), 0, 100, 1, 1000);
+    rm::sim::FeatureStore features;
+    const auto wreck = features.add({.at = {Fx{}, Fx{}, Fx::fromInt(100)},
+        .radiusElmos = Fx::fromInt(2), .health = Mag::fromInt(100), .maximumHealth = Mag::fromInt(100)});
+    SECTION("beam area damage") {
+        std::vector<Projectile> shots;
+        REQUIRE(rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots, roster.rate,
+            nullptr, nullptr, nullptr, 0, {}, &features) == 1);
+        CHECK(shots.empty());
+    }
+    SECTION("death area damage") {
+        weapon.role = WeaponRole::Death;
+        const auto def = gunnerDef(weapon);
+        (void)rm::sim::explodeOnDeath(def, {Fx{}, Fx{}, Fx::fromInt(100)}, 0,
+            roster.store, armies, {}, nullptr, &roster.catalog, &features);
+    }
+    REQUIRE(features.find(wreck));
+    CHECK(features.find(wreck)->health == Mag::fromInt(75));
 }
 
 TEST_CASE("a unit with nothing to shoot at holds its fire and stays loaded") {

@@ -27,6 +27,7 @@
 #include "app/Opponent.hpp"
 
 #include <set>
+#include <map>
 #include <span>
 #include <string>
 #include <vector>
@@ -60,6 +61,8 @@ private:
     /// Blueprint ids whose category sets the driver has been taught. Per opponent rather
     /// than per sandbox; re-teaching an id the sandbox knows is a cheap no-op there.
     std::set<std::string> sentTypes_;
+    /// Like FAF's CanPathToCurrentEnemy, cache static MAIN-to-start connectivity per enemy.
+    std::map<int, std::string> enemyPaths_;
     const World* world_ = nullptr;
     std::vector<Decision> decisions_;
     /// Snapshot ordinal -> unit, rebuilt every advance. Lua refers to units by ordinal so

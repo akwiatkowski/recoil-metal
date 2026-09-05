@@ -2919,3 +2919,162 @@ new cancellation protocol is unnecessary for repeat and whole-queue clearing.
 factory is selected. Click and drag interception use its rendered bounds. The
 build tray still adds products; per-row deletion and reordering remain outside
 this slice. Headless real-factory controls and deterministic captures verify it.
+
+## ADR-086 — Hovercraft have a surface layer independent of ship routing
+
+**Context.** The real Aurora land-water-land test routed successfully but submerged the unit:
+hover passability allowed water while movement and collision alignment still used seabed height.
+
+**Decision.** Cache the Hover motion class and authored Physics.Elevation in MoveState. Both
+movement and collision placement use max(ground, water) plus that clearance, with a level hull.
+Keep ship-only passability separate. Save v14 carries the cached hover state and StateHash covers
+it; the test checks movement into water and back onto dry land through MatchRunner.
+
+**Alternatives.** Marking hovercraft as ships would constrain them to water and put dry-land units
+at water height. Correcting only render positions would leave targeting and collision submerged.
+
+**Consequences.** The surface invariant is executable, but this does not claim retail suspension,
+banking or hover acceleration parity. Historical save versions remain readable; old snapshots did
+not preserve a hover layer. Golden changes must be attributed before updating the baseline.
+
+## ADR-087 — Explicit Guard shares the assistance ladder without granting build power
+
+**Context.** The assistance ladder could escort, fight and help construction, but its Assist
+entry point required a builder. Combat units could not receive a dedicated Guard order.
+
+**Decision.** Append a semantic Guard kind and expose it in the command rack. Reuse the existing
+ladder and standing-order lifecycle, checking the guard capability, allied ownership and living
+non-self target. Reclaim/repair/build assistance still require engineering rates. Save v14 accepts
+Guard queues; command logs preserve the kind. Legacy Assist retains its builder-only contract.
+
+**Alternatives.** Relaxing Assist would silently change its public capability contract. Giving
+combat guards synthetic build rates would permit them to repair or construct.
+
+**Consequences.** Real-unit tests cover escort, automatic fire, refusal, target alliance/death,
+queued followers and live/replay equality. Those tests also exposed ordinary targeting treating
+ALLUNITS as an authored tag; category expressions now recognize the universal set while retaining
+conjunctive restrictions. That changes automatic targeting beyond Guard and needs a newly
+attributed golden comparison once retail assets are accessible. Refuel/staging, ferry, exact
+multi-weapon arbitration and physical display migration remain outside the verified behavior.
+Native NSEvent Guard targeting and Stop now pass for all 23 T1 land products across all
+24 faction/profile/simulated-backing cases on aw04.smf.
+
+The construction prepass now shares the dispatcher's return/attack eligibility checks, so help
+is not credited before a higher-priority attack or a changed alliance cancels it. Copied reclaim
+and scanned repair also honor declared capabilities; the real Mantis cannot gain reclaim by
+guarding an engineer. These cases are exercised through the complete skirmish tick.
+
+## ADR-088 — Factory cancellation names one queued command
+
+**Context.** Repeat and Clear Queue do not let a player remove one production entry. A row
+index cannot serve as command identity because earlier production can finish before dispatch.
+
+**Decision.** Add an immediate CancelFactoryBuild issue carrying a stable cancelCommandId.
+Dispatch checks factory ownership and removes only that factory's matching mobile-build entry,
+including its remaining count. Cancelling active work discards its unfinished construction;
+pending deletion leaves current progress intact. Other factories sharing the issue retain it.
+Own production behind a standing Guard records its retained command ID on the child construction,
+so cancelling that row also aborts the child without disturbing mirrored guardee work. The ID
+participates in the state hash; construction persistence is part of the separate save/resume work.
+The UI shows a Cancel control per row and pages through all entries. Semantic log v3 preserves
+the selected command ID, while reading v2 remains supported.
+
+**Alternatives.** Direct UI mutation bypasses replay and authorization. Deleting by product type
+or queue index can delete a different request. Reusing unit target coordinates for a command ID
+would hide its distinct meaning from validation and serialization.
+
+**Consequences.** This is an instantaneous issue, not a persistent queued command; save snapshots
+already preserve the resulting queue and allocator state. Focused tests cover active/pending
+work, forbidden owners, stale clicks, shared issues, UI routing and continued file replay.
+Native responder acceptance covers pagination, pending and active row cancellation, surviving
+command identities and Clear Queue in all 24 faction/layout/backing cases using extracted units
+on the available BAR map. Reordering and decrementing a stack by one unit are separate operations.
+
+## ADR-089 — Save economy carry and army lifecycle at completed tick boundaries
+
+**Context.** Unit snapshots could round-trip while losing construction funding, allied gifts,
+and the pending victory/defeat timers. Recreating armies from initial conditions silently changes
+the next tick, even if unit positions match.
+
+**Decision.** Save v15 adds an optional economy/army section containing every Economy field,
+construction history and active work (including retained factory command IDs), army identity and
+alliances, commander history, storage configuration and lifecycle timers. Capture after the
+economy pass settles its work stamps; encoding unfinished tick work is rejected. Restore replaces
+owning vectors and rebinds Match spans after runner construction. Historic v1–v14 decoding remains.
+
+**Alternatives.** Recomputing carry or resetting lifecycle loses next-tick state. Serializing only
+resource balances would miss allocated-but-unspent resources and gifts due on the following tick.
+
+**Consequences.** Two fresh-scene continuations with real blueprints compare every tick through
+completed construction, resource sharing, delayed defeated-army cleanup and winner confirmation.
+The test exposed a separate C-163 wiring bug: tickEconomy clamped excess before shareOverflow.
+Whole-match allocation now defers capacity until sharing finishes; non-sharing armies still lose
+their excess. This behavioral change requires golden attribution once retail assets return.
+
+This completes the economy/army subsystem snapshot, not general in-game save/load: pending path
+searches, feature pools, projectiles, intel history, queued external input and opponent VM state
+still need their own persistence. The continuation fixture has no such outstanding state and
+keeps the immutable blueprint registration order. No save/load UI is exposed by this change.
+
+## ADR-090 — Wrecks receive area damage through their own object pool
+
+**Context.** Wreck damage/reclaim-value recalculation existed, but ordinary combat never called
+it. Prop collision callbacks alone do not establish projectile interception: retail's ordinary
+sweep uses mask 0xD00, excluding props, while DealDamage's area query uses 0xF00 (C-065, C-086,
+C-137). Wreckage.lua:17–39 reduces health and recalculates reclaim values after damage.
+
+**Decision.** Positive-radius projectile impacts, beams and death blasts enumerate the live
+feature pool and call damageFeature. Deferred projectile impacts query current geometry at their
+recorded impact position on the following beat. Radius-zero hits retain their named unit target;
+ordinary sweeps still exclude wrecks. Feature handles never resolve through UnitStore, even when
+the two pools issue numerically identical handles.
+
+**Alternatives.** Adding wreck interception to every projectile would contradict the recovered
+query mask. Converting a FeatureId to UnitId would damage an unrelated live unit. Recalculating
+reclaim independently would duplicate Wreckage.lua's existing damage path.
+
+**Consequences.** Tests cover artillery through MatchRunner, continued command replay hashes,
+the delayed impact beat, point-hit pool separation, slot reuse, box/sphere boundaries and lethal
+damage. This uses the current upright unit-box approximation, not exact authored wreck offsets
+and orientation from Unit.lua:1111–1113. Named wreck attacks remain unavailable. The existing
+instantaneous death-blast/wreck creation order remains a separate approximation to Unit.lua's
+independent delayed threads (1195–1219). No general save/load of features or projectiles is claimed.
+
+## ADR-091 — Persist winged combat tactics and use a planar turning controller
+
+**Context.** Winged attacks implemented only states 1 and 2. They aimed horizontal velocity
+directly at the target, clamped aircraft to map edges, and saved neither authored controller
+tuning nor any random state actually consumed by the match. These shortcuts prevented sustained
+turns, timed breakoff and off-map recovery from functioning or continuing after a save.
+
+**Decision.** C-224's state/deadline controller now runs for winged entity attacks: states 3/4
+request minimum airspeed, 5 maximum, 6 flies forward until its deadline, and 7 steers to map centre
+until inside the five-ogrid inset. Turn choice and duration consume separate multiply-high MT19937
+draws, with exclusive upper bounds and inclusive deadlines. The sustained-turn counter uses a
+strict threshold comparison before incrementing. New attacks reset tactical state. The match owns
+the random stream; its future sequence and dynamic aircraft state enter the match hash.
+
+Horizontal combat desire follows aircraft heading. A planar PD controller uses Air.TurnSpeed,
+CombatTurnSpeed, KTurn, KTurnDamping and TightTurnMultiplier; the hard-turn multiplier augments
+the gain, not the angular rate. This is a deliberate reduction of the three-axis solver, with
+mass ratio fixed at one, no quaternion bank/pitch torque and no bomb-drop prediction. It does not
+establish complete retail flight parity. The two spawn paths now share motionFor.
+
+**Sources.** ART-E001 ComputeAirCombatTactics 0x006c3830–0x006c420d; random turn choice
+0x006c3e9f–0x006c3eee, breakoff deadline 0x006c3cb5–0x006c3d16, recovery 0x006c3a6c–0x006c3bbd.
+CalcWingedOrientation 0x006c4908–0x006c4951 adds the hard-turn gain correction. Air schema
+0x00527a40 maps KTurn/KTurnDamping to offsets 0x50/0x54; constructor 0x00525a00 initializes
+both to 3, while UEA0102 authors 1 and 1.5. Lengths convert from ogrids to elmos once at load.
+
+**Alternatives.** Resetting a local RNG per call repeats tactics; a process-global RNG couples
+matches. Keeping the edge clamp makes recovery unreachable. A full rigid-body solver is outside
+this bounded state-machine change and must be validated independently.
+
+**Consequences.** Save v16 appends dynamic and spawn-cached aircraft controller state, retains
+v1–v15 readers, and restores the match RNG. Real-interceptor tests compare each continued tick
+from both a turn and a recovery checkpoint, with weapons held in reload to isolate motion from
+the still-unsaved projectile pool. A 900-tick app pursuit capture on aw04.smf exercises the live
+renderer with extracted assets; missing interceptor textures remain visible. Existing 24-case
+native land controls include per-product Guard targeting and Stop. The full suite still requires
+the disconnected retail projectile archive. The added RNG hash coverage changes hashes from
+tick zero; the existing retail-map golden has not been regenerated or blessed.

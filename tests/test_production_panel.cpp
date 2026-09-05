@@ -7,6 +7,7 @@
 #include "core/ui/ProductionPanel.hpp"
 
 #include <algorithm>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -49,12 +50,55 @@ namespace {
     view.factoryId = "URB0101";
     view.factoryName = "Land Factory";
     for (std::size_t i = 0; i < orders; ++i) {
-        view.queue.push_back({.id = "URL0107", .name = "Mantis", .count = 1});
+        view.queue.push_back({.id = "URL0107", .name = "Mantis", .count = 1,
+            .commandId = rm::commandId(static_cast<rm::CommandSource>(1),
+                                      static_cast<std::uint32_t>(i + 10))});
     }
     return view;
 }
 
 } // namespace
+
+TEST_CASE("every production entry has a reachable cancellation target across pages",
+          "[ui][production][production-cancel]") {
+    constexpr rm::ui::Rect rect{100, 50, 320, 154};
+    auto view = factoryWith(12);
+    for (std::size_t page = 0; page < 3; ++page) {
+        const auto layout = rm::ui::productionPage(rect, view.queue.size(), page);
+        REQUIRE(layout.pages == 3);
+        CHECK(layout.first == page * 5);
+        for (std::size_t row = 0; row < layout.shown; ++row) {
+            const auto cancel = rm::ui::productionCancelRect(rect, row);
+            CHECK(rect.contains(cancel.x, cancel.y));
+            CHECK(rect.contains(cancel.right() - 1, cancel.bottom() - 1));
+            CHECK(rm::ui::productionCancelAt(rect, view, cancel.x + 1, cancel.y + 1, page)
+                == view.queue[layout.first + row].commandId);
+            CHECK_FALSE(rm::ui::productionCancelAt(rect, view, cancel.x - 1, cancel.y + 1, page));
+        }
+    }
+    const auto lastRow = rm::ui::productionCancelRect(rect, 2);
+    CHECK_FALSE(rm::ui::productionCancelAt(rect, view, lastRow.x + 1, lastRow.y + 1, 2));
+    const auto first = rm::ui::productionCancelRect(rect, 0);
+    const auto id = view.queue[10].commandId;
+    view.queue.erase(view.queue.begin());
+    CHECK(view.queue[9].commandId == id);  // identity survives queue index changes
+    CHECK(rm::ui::productionPage(rect, 1, 2).page == 0);
+    view.queue[0].commandId = rm::kInvalidCommandId;
+    CHECK_FALSE(rm::ui::productionCancelAt(rect, view, first.x + 1, first.y + 1));
+}
+
+TEST_CASE("production paging shares bounds and stops at each end", "[ui][production]") {
+    constexpr rm::ui::Rect rect{100, 50, 320, 154};
+    const auto view = factoryWith(12);
+    const auto previous = rm::ui::productionPageButtonRect(rect, false);
+    const auto next = rm::ui::productionPageButtonRect(rect, true);
+    CHECK_FALSE(rm::ui::productionPageStepAt(rect, view, previous.x + 1, previous.y + 1, 0));
+    CHECK(rm::ui::productionPageStepAt(rect, view, next.x + 1, next.y + 1, 0) == 1);
+    CHECK(rm::ui::productionPageStepAt(rect, view, previous.x + 1, previous.y + 1, 2) == -1);
+    CHECK_FALSE(rm::ui::productionPageStepAt(rect, view, next.x + 1, next.y + 1, 2));
+    CHECK_FALSE(rm::ui::productionCommandAt(rect, view, next.x + 1, next.y + 1));
+    CHECK_FALSE(rm::ui::productionCancelAt(rect, view, next.x + 1, next.y + 1));
+}
 
 TEST_CASE("factory queue controls share the rendered panel bounds", "[ui][production]") {
     const auto frame = rm::ui::frameLayout(rm::ui::UiViewport::authored(1600, 900));
@@ -95,23 +139,23 @@ TEST_CASE("every order gets a row when they fit, and a count on the right", "[ui
     rm::ui::appendProductionPanel(out, font, font, rm::ui::neutralTheme(),
                                   rm::ui::Rect{0, 0, 320, 154}, view);
 
-    // Title, three product names, and the Clear Queue button, with no overflow line.
-    CHECK(glyphsIn(out.label) == 12 + 3 * 6 + 11);
+    // Title, three product names, Clear Queue, and each row's CANCEL label.
+    CHECK(glyphsIn(out.label) == 12 + 3 * 6 + 11 + 3 * 6);
     // "REPEAT OFF" (10) plus three counts on the readout layer.
     CHECK(glyphsIn(out.foregroundReadout) == 10 + 3 * 2);
     // The well and its half fill, on top of the panel's own chrome.
     CHECK_FALSE(out.chrome.empty());
 }
 
-TEST_CASE("orders past the room are summarised, never dropped silently", "[ui][production]") {
+TEST_CASE("orders past the room expose page controls instead of losing cancellation", "[ui][production]") {
     const std::vector<rm::text::Glyph> glyphs = boxGlyphs();
     const rm::text::Font font = fontOver(glyphs);
     rm::ui::Geometry out;
-    // Two rows of room, seven orders: one row shown and "+6 MORE" in the second.
+    // Two rows of room, seven orders: two rows, both cancel controls, and four pages.
     rm::ui::appendProductionPanel(out, font, font, rm::ui::neutralTheme(),
                                   rm::ui::Rect{0, 0, 320, 106}, factoryWith(7));
-    CHECK(glyphsIn(out.label) == 12 + 6 + 7 + 11);  // title, row, overflow, clear
-    CHECK(glyphsIn(out.foregroundReadout) == 10 + 2);  // repeat state, one count
+    CHECK(glyphsIn(out.label) == 12 + 2 * 6 + 11 + 2 * 6 + 2);
+    CHECK(glyphsIn(out.foregroundReadout) == 10 + 2 * 2 + 3);
 }
 
 TEST_CASE("long factory and order names stay inside the production panel",
@@ -121,6 +165,7 @@ TEST_CASE("long factory and order names stay inside the production panel",
     rm::ui::ProductionView view = factoryWith(1);
     view.factoryName = "Experimental Mobile Rapid-Fire Artillery Installation";
     view.queue[0].name = "Experimental Strategic Missile Defence Construction Vehicle";
+    view.queue[0].count = std::numeric_limits<std::uint32_t>::max();
 
     constexpr rm::ui::Rect kPanel{20.0f, 10.0f, 200.0f, 126.0f};
     rm::ui::Geometry out;

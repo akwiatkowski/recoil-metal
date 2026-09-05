@@ -40,7 +40,7 @@ namespace rm::app {
 /// Dispatch still validates ownership; the view and button state are never mutated directly.
 [[nodiscard]] bool submitProductionControl(UnitScene& scene, rm::sim::UnitId builder,
     rm::PlayerIndex player, rm::TickIndex tick, const rm::ui::FrameLayout& frame,
-    float x, float y);
+    float x, float y, std::size_t page = 0);
 
 void appendMinimapPips(std::vector<rm::ui::MinimapPip>& out, const UnitScene& scene);
 

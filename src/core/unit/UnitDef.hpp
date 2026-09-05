@@ -336,17 +336,31 @@ struct UnitDef {
     /// gains and `KMoveDamping`/`KLiftDamping` their damping terms, `LiftFactor` the climb
     /// authority, `AutoLandTime` the idle seconds before auto-land, `FuelUseTime` the
     /// seconds of flight per tank. `MinAirspeed` and `Physics.AttackElevation` feed the
-    /// first two combat states (`C-224`); `Winged` is their gate. Banking, the turn/roll
-    /// gains and the remaining combat turn rates are parsed nowhere yet.
+    /// combat states (`C-224`); `Winged` is their gate. The planar turn controller
+    /// uses the turn gains below; three-axis banking and roll remain separate work.
     float airKMove = 0.0f;
     float airKMoveDamping = 0.0f;
     float airKLift = 0.0f;
     float airKLiftDamping = 0.0f;
     float airLiftFactor = 0.0f;
     bool airWinged = false;
+    // C-218/C-224: rates in radians/s, lengths in elmos, deadlines in seconds.
+    float airTurnSpeed = 1.0f;
+    float airCombatTurnSpeed = 1.0f;
+    float airKTurn = 3.0f;
+    float airKTurnDamping = 3.0f;
+    float airTightTurnMultiplier = 1.0f;
+    float airBreakOffTrigger = 0.0f;
+    float airBreakOffDistance = 0.0f;
+    float airRandomBreakOffMultiplier = 1.5f;
+    float airSustainedThresholdSec = 10.0f;
+    float airMinChangeSec = 3.0f;
+    float airMaxChangeSec = 6.0f;
+    bool airBreakOffNearTarget = false;
     float airMinSpeedElmosPerSecond = 0.0f;
     float airAttackElevationElmos = 0.0f;
-    /// `Physics.Elevation` in elmos — the one `Physics` key the winged mover reads
+    /// `Physics.Elevation` in elmos — also the hovercraft's clearance above land/water.
+    /// The winged mover reads it
     /// (`C-221`): cruise height above the terrain reference, and the height a slow flyer
     /// climbs half of before moving forward (`C-245`). Zero when unauthored.
     float elevationElmos = 0.0f;

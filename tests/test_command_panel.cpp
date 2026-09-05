@@ -38,7 +38,7 @@ TEST_CASE("the command rack keeps Forged Alliance's fixed 4x3 positions") {
     CHECK(rm::ui::kCommandDescriptors[2].kind == CommandKind::Attack);
     CHECK(rm::ui::kCommandDescriptors[3].kind == CommandKind::Patrol);
     CHECK(rm::ui::kCommandDescriptors[4].kind == CommandKind::Stop);
-    CHECK(rm::ui::kCommandDescriptors[5].kind == CommandKind::Assist);
+    CHECK(rm::ui::kCommandDescriptors[5].kind == CommandKind::Guard);
     CHECK_FALSE(rm::ui::kCommandDescriptors[6].kind.has_value());
     CHECK(rm::ui::kCommandDescriptors[7].kind == CommandKind::Overcharge);
     CHECK(rm::ui::kCommandDescriptors[8].kind == CommandKind::Repair);
@@ -77,7 +77,7 @@ TEST_CASE("command availability is the union of selected unit capabilities") {
     CHECK(enabled(available, CommandKind::Attack));
     CHECK(enabled(available, CommandKind::Patrol));
     CHECK(enabled(available, CommandKind::Stop));
-    CHECK(enabled(available, CommandKind::Assist));
+    CHECK(enabled(available, CommandKind::Guard));
     CHECK(enabled(available, CommandKind::Overcharge));
     CHECK(enabled(available, CommandKind::Reclaim));
     CHECK(enabled(available, CommandKind::Repair));
@@ -126,7 +126,7 @@ TEST_CASE("an immobile factory and a field builder can assist") {
         rm::ui::commandAvailability(factorySelection);
     CHECK(enabled(factoryAvailable, CommandKind::Reclaim));
     CHECK(enabled(factoryAvailable, CommandKind::Repair));
-    CHECK(enabled(factoryAvailable, CommandKind::Assist));
+    CHECK(enabled(factoryAvailable, CommandKind::Guard));
 
     rm::unitdef::UnitDef engineer;
     engineer.buildRate = 5.0f;
@@ -135,7 +135,7 @@ TEST_CASE("an immobile factory and a field builder can assist") {
         rm::ui::commandAvailability(engineerSelection);
     CHECK(enabled(engineerAvailable, CommandKind::Reclaim));
     CHECK(enabled(engineerAvailable, CommandKind::Repair));
-    CHECK(enabled(engineerAvailable, CommandKind::Assist));
+    CHECK(enabled(engineerAvailable, CommandKind::Guard));
 
     rm::unitdef::UnitDef commander;
     commander.categories = {"COMMAND"};
@@ -143,7 +143,7 @@ TEST_CASE("an immobile factory and a field builder can assist") {
     const rm::ui::CommandAvailability commanderAvailable =
         rm::ui::commandAvailability(commanderSelection);
     CHECK_FALSE(enabled(commanderAvailable, CommandKind::Reclaim));
-    CHECK(enabled(commanderAvailable, CommandKind::Assist));
+    CHECK(enabled(commanderAvailable, CommandKind::Guard));
 
     // URL0107's shape: primarily a combat unit, but its BuildRate=1 repair arm can assist.
     rm::unitdef::UnitDef combatBuilder;
@@ -154,7 +154,7 @@ TEST_CASE("an immobile factory and a field builder can assist") {
     const rm::ui::CommandAvailability combatAvailable =
         rm::ui::commandAvailability(combatSelection);
     CHECK(enabled(combatAvailable, CommandKind::Attack));
-    CHECK(enabled(combatAvailable, CommandKind::Assist));
+    CHECK(enabled(combatAvailable, CommandKind::Guard));
 }
 
 TEST_CASE("an authored retail command page distinguishes repair from reclaim") {
@@ -172,7 +172,7 @@ TEST_CASE("an authored retail command page distinguishes repair from reclaim") {
     CHECK(enabled(available, CommandKind::Attack));
     CHECK(enabled(available, CommandKind::Patrol));
     CHECK(enabled(available, CommandKind::Stop));
-    CHECK(enabled(available, CommandKind::Assist));
+    CHECK(enabled(available, CommandKind::Guard));
     CHECK(enabled(available, CommandKind::Repair));
     CHECK_FALSE(enabled(available, CommandKind::Reclaim));
 }

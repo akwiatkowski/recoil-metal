@@ -3,6 +3,7 @@
 #include "core/map/HeightField.hpp"
 #include "core/sim/Economy.hpp"
 #include "core/sim/Events.hpp"
+#include "core/sim/FeatureStore.hpp"
 #include "core/sim/Army.hpp"
 #include "core/sim/Health.hpp"
 #include "core/sim/Intel.hpp"
@@ -274,7 +275,7 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
                            std::vector<Projectile>& projectiles, TickRate rate,
                            EventQueue* events = nullptr, const Intel* intel = nullptr,
                            const PlayableRect* playableRect = nullptr, TickIndex tick = 0,
-                           std::span<SiloAmmo> siloAmmo = {});
+                           std::span<SiloAmmo> siloAmmo = {}, FeatureStore* features = nullptr);
 
 /// Fires every held OVERCHARGE whose moment has come: target alive, in the manual
 /// weapon's range, reload ready, and the army's stored energy covering the shot's
@@ -306,7 +307,7 @@ void tickShields(UnitStore& store, const UnitCatalog& catalog,
 void advanceProjectiles(std::vector<Projectile>& projectiles, UnitStore& store,
                         std::span<const Army> armies, const Terrain& terrain, TickRate rate,
                         EventQueue* events = nullptr, const UnitCatalog* catalog = nullptr,
-                        std::span<MissileRedirect> redirects = {});
+                        std::span<MissileRedirect> redirects = {}, FeatureStore* features = nullptr);
 
 /// Gravity's pull on an arced shot, in elmos per tick per tick.
 ///
@@ -351,7 +352,8 @@ void advanceProjectiles(std::vector<Projectile>& projectiles, UnitStore& store,
 /// the existing call sites unchanged.
 Mag damageArea(std::array<Fx, 3> centre, Fx radiusElmos, Mag damage, int byArmy,
                UnitStore& store, std::span<const Army> armies, UnitId by = {},
-               EventQueue* events = nullptr, const UnitCatalog* catalog = nullptr);
+               EventQueue* events = nullptr, const UnitCatalog* catalog = nullptr,
+               FeatureStore* features = nullptr);
 
 /// The same, with a weapon's full damage table rather than one number (PLAN2.md §7 P10.1,
 /// `ADR-033`, D12).
@@ -371,7 +373,8 @@ Mag damageArea(std::array<Fx, 3> centre, Fx radiusElmos, const unitdef::DamagePr
                int byArmy, UnitStore& store, std::span<const Army> armies,
                const UnitCatalog* catalog = nullptr, UnitId by = {},
                EventQueue* events = nullptr,
-               unitdef::TargetLayerMask targetLayers = unitdef::TargetLayerMask::Both);
+               unitdef::TargetLayerMask targetLayers = unitdef::TargetLayerMask::Both,
+               FeatureStore* features = nullptr);
 
 /// The unit's own destruction, if its definition describes one.
 ///
@@ -395,7 +398,8 @@ Mag damageArea(std::array<Fx, 3> centre, Fx radiusElmos, const unitdef::DamagePr
 /// the death report.
 Mag explodeOnDeath(const unitdef::UnitDef& def, std::array<Fx, 3> at, int byArmy,
                      UnitStore& store, std::span<const Army> armies, UnitId by = {},
-                     EventQueue* events = nullptr, const UnitCatalog* catalog = nullptr);
+                     EventQueue* events = nullptr, const UnitCatalog* catalog = nullptr,
+                     FeatureStore* features = nullptr);
 
 /// Which units died this tick, so a caller can leave wreckage and check for a defeat.
 [[nodiscard]] std::vector<UnitId> deadUnits(const UnitStore& store);

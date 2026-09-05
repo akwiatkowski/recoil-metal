@@ -4,6 +4,7 @@
 #include "app/Scene.hpp"
 
 #include "core/sim/BuildOrder.hpp"
+#include "core/lua/LuaTable.hpp"
 #include "core/unit/UnitBlueprint.hpp"
 
 extern "C" {
@@ -37,7 +38,23 @@ namespace {
 constexpr const char* kFafDriver = R"lua(
 if __rm_faf == nil then
 
-__rm_faf = { brains = {}, missing = {}, condErrors = {}, cats = {}, threat = {}, scenario = false }
+__rm_faf = { brains = {}, armyViews = {}, blueprints = {}, missing = {}, condErrors = {}, cats = {}, threat = {}, scenario = false }
+
+local function unitBlueprint(id)
+    local key = string.lower(id)
+    if not __rm_faf.blueprints[key] then
+        -- Read the complete source table: callers need fields outside the simulation's
+        -- normalized UnitDef, e.g. Physics.SkirtSizeX in UnitCountBuildConditions.lua:984.
+        local bp = __rm_faf_load_blueprint(key)
+        -- The deterministic metadata consumed by StructureCheck/EngineerManager;
+        -- FAF's system/Blueprints.lua:498,863 derives these from id and Categories.
+        bp.BlueprintId = bp.BlueprintId or key
+        bp.CategoriesHash = {}
+        for _, category in ipairs(bp.Categories or {}) do bp.CategoriesHash[category] = true end
+        __rm_faf.blueprints[key] = bp
+    end
+    return __rm_faf.blueprints[key]
+end
 
 local factionNames = { 'UEF', 'Aeon', 'Cybran', 'Seraphim' }
 
@@ -119,6 +136,7 @@ __rm_faf.unitMeta = {
         GetFractionComplete = function() return 1 end,
         GetHealthPercent = function(u) return u.healthPercent end,
         GetPosition = function(u) return { u.x, 0, u.z } end,
+        GetBlueprint = function(u) return unitBlueprint(u.bp) end,
         -- 'Upgrading' is the one state the snapshot tracks (the upgrade-in-place tech
         -- path); everything else honestly answers false.
         IsUnitState = function(u, state)
@@ -173,6 +191,23 @@ local methods = {}
 function methods:GetArmyIndex() return self.army + 1 end
 function methods:GetFactionIndex() return self.faction end
 function methods:GetArmyStartPos() return self.startX, self.startZ end
+function methods:IsDefeated() return self.defeated == true end
+function methods:GetUnitBlueprint(id) return unitBlueprint(id) end
+-- The API comment calls this a number; actual callers require the brain object
+-- (base-ai.lua:1125, platoon.lua:2799). Selection follows our existing attack-wave target.
+function methods:GetCurrentEnemy()
+    return __rm_faf.armyViews[self.snap.currentEnemy]
+end
+function __rm_faf_army(army, x, z, faction, defeated)
+    local view = __rm_faf.armyViews[army]
+    if not view then
+        view = { army = army }
+        for name, fn in pairs(methods) do view[name] = fn end
+        setmetatable(view, brainMeta)
+        __rm_faf.armyViews[army] = view
+    end
+    view.startX, view.startZ, view.faction, view.defeated = x, z, faction, defeated
+end
 function methods:GetEconomyStored(kind)
     if kind == 'MASS' then return self.snap.mass end
     return self.snap.energy
@@ -278,6 +313,7 @@ function __rm_faf_boot(army, info)
         startX = info.startX,
         startZ = info.startZ,
         snap = { units = {}, occupied = {} },
+        CanPathToEnemy = {},
         hasNavalSite = info.hasNavalSite == true,
         Name = 'rm-faf-' .. tostring(army),
     }
@@ -529,6 +565,11 @@ function __rm_faf_decide(army, snap)
     local brain = __rm_faf.brains[army]
     if not brain then return {} end
     brain.snap = snap
+    if snap.currentEnemy ~= nil and snap.enemyPath then
+        local ownIndex, enemyIndex = brain:GetArmyIndex(), snap.currentEnemy + 1
+        brain.CanPathToEnemy[ownIndex] = brain.CanPathToEnemy[ownIndex] or {}
+        brain.CanPathToEnemy[ownIndex][enemyIndex] = { MAIN = snap.enemyPath }
+    end
     for _, u in ipairs(snap.units) do u.__brain = brain end
 
     -- What base-ai's economy thread maintains, refreshed from the sim's own numbers.
@@ -790,6 +831,69 @@ end
     return std::move(*loaded);
 }
 
+void pushBlueprintValue(lua_State* lua, const rm::lua::Value& value) {
+    using Type = rm::lua::Value::Type;
+    switch (value.type) {
+    case Type::None: lua_pushnil(lua); break;
+    case Type::Bool: lua_pushboolean(lua, value.boolean); break;
+    case Type::Number: lua_pushnumber(lua, value.number); break;
+    case Type::Text: lua_pushlstring(lua, value.text.data(), value.text.size()); break;
+    case Type::Table:
+        lua_newtable(lua);
+        for (std::size_t i = 0; i < value.items.size(); ++i) {
+            pushBlueprintValue(lua, value.items[i]);
+            lua_rawseti(lua, -2, static_cast<lua_Integer>(i + 1));
+        }
+        for (const auto& field : value.fields) {
+            pushBlueprintValue(lua, field.value);
+            lua_setfield(lua, -2, field.key.c_str());
+        }
+        break;
+    }
+}
+
+int loadBlueprint(lua_State* lua) {
+    const char* id = luaL_checkstring(lua, 1);
+    const auto* content = static_cast<const rm::vfs::Vfs*>(
+        lua_touserdata(lua, lua_upvalueindex(1)));
+    // Destroy parsed tables and byte buffers BEFORE lua_error's longjmp.
+    {
+        const std::string path = blueprintPathFor(id);
+        const auto bytes = content->read(path);
+        if (!bytes) {
+            lua_pushfstring(lua, "unit blueprint not found: %s", id);
+        } else {
+            const auto parsed = rm::lua::parseTable(std::string_view{
+                reinterpret_cast<const char*>(bytes->data()), bytes->size()});
+            if (parsed) {
+                pushBlueprintValue(lua, *parsed);
+                return 1;
+            }
+            lua_pushfstring(lua, "invalid unit blueprint %s: %s", id,
+                            parsed.error().message.c_str());
+        }
+    }
+    return lua_error(lua);
+}
+
+[[nodiscard]] std::string enemyPathType(const World& world, std::size_t own,
+                                        std::size_t enemy) {
+    const auto& from = world.starts[own];
+    const auto& to = world.starts[enemy];
+    // base-ai.lua:1617–1630 tries Land, then Amphibious; Air means neither route exists.
+    // Use the same motion-class grids as our units, not a guessed map classification.
+    for (const auto motion : {rm::unitdef::MotionType::Land, rm::unitdef::MotionType::Amphibious}) {
+        const auto move = rm::data::moveDefFor(motion);
+        const auto grid = rm::sim::buildPassability(world.field, world.scene.waterLevelElmos,
+                                                   move.maxSlopeDegrees, move.maxWaterDepthElmos);
+        if (!rm::sim::findPath(grid, rm::sim::fxFromFloat(from.x), rm::sim::fxFromFloat(from.z),
+                              rm::sim::fxFromFloat(to.x), rm::sim::fxFromFloat(to.z)).empty()) {
+            return motion == rm::unitdef::MotionType::Land ? "Land" : "Amphibious";
+        }
+    }
+    return "Air";
+}
+
 [[nodiscard]] std::optional<std::array<rm::sim::Fx, 3>> nearestNavalSite(
     const World& world, const std::array<rm::sim::Fx, 3>& home, rm::sim::Fx radius) {
     if (!world.scene.hasWater) {
@@ -914,6 +1018,11 @@ void FafOpponent::advance(rm::TickIndex tick) {
             std::printf("faf-opponent: driver failed: %s\n", sandbox_.lastError().c_str());
             return;
         }
+        // The shared match VFS outlives its opponents. The callback reads it lazily, so
+        // queries also work for blueprints which have never spawned or entered a queue.
+        lua_pushlightuserdata(lua, const_cast<rm::vfs::Vfs*>(&world_->content));
+        lua_pushcclosure(lua, loadBlueprint, 1);
+        lua_setglobal(lua, "__rm_faf_load_blueprint");
         // __rm_faf_boot(army, info)
         lua_getglobal(lua, "__rm_faf_boot");
         lua_pushinteger(lua, army_);
@@ -1018,6 +1127,47 @@ void FafOpponent::advance(rm::TickIndex tick) {
     lua_newtable(lua);  // snap
     lua_pushinteger(lua, static_cast<lua_Integer>(tick));
     lua_setfield(lua, -2, "tick");
+
+    for (std::size_t i = 0; i < scene.armies.size() && i < world_->starts.size(); ++i) {
+        lua_getglobal(lua, "__rm_faf_army");
+        lua_pushinteger(lua, static_cast<lua_Integer>(i));
+        lua_pushnumber(lua, world_->starts[i].x);
+        lua_pushnumber(lua, world_->starts[i].z);
+        lua_pushinteger(lua, fafFactionIndex(scene.armies[i].faction));
+        lua_pushboolean(lua, scene.armies[i].defeated);
+        if (lua_pcall(lua, 5, 0, 0) != LUA_OK) {
+            std::printf("faf-opponent: army snapshot failed: %s\n", lua_tostring(lua, -1));
+            lua_pop(lua, 2);  // error and unfinished snapshot
+            return;
+        }
+    }
+    const auto& start = world_->starts[armyIndex];
+    const std::array<rm::sim::Fx, 3> home{
+        rm::sim::fxFromFloat(start.x), {}, rm::sim::fxFromFloat(start.z)};
+    if (const auto target = rm::app::nearestEnemyCommander(scene, army_, home)) {
+        // Resolve the very same target the attack adapter uses; preserve its alliance,
+        // defeat, live-commander and deterministic slot-order rules in one authority.
+        for (rm::UnitIndex slot = 0; slot < scene.store.slotCount(); ++slot) {
+            const int owner = motion[slot].armyIndex;
+            const auto* def = scene.catalog.def(scene.store.typeAt(slot));
+            if (def && rm::sim::isCommanderId(def->name) && health[slot].alive()
+                && owner >= 0 && static_cast<std::size_t>(owner) < scene.armies.size()
+                && static_cast<std::size_t>(owner) < world_->starts.size()
+                && rm::sim::hostile(scene.armies[armyIndex], scene.armies[static_cast<std::size_t>(owner)])
+                && rm::sim::positionOf(scene.store.transforms()[slot]) == *target) {
+                lua_pushinteger(lua, owner);
+                lua_setfield(lua, -2, "currentEnemy");
+                auto path = enemyPaths_.find(owner);
+                if (path == enemyPaths_.end()) {
+                    path = enemyPaths_.emplace(owner, enemyPathType(
+                        *world_, armyIndex, static_cast<std::size_t>(owner))).first;
+                }
+                lua_pushstring(lua, path->second.c_str());
+                lua_setfield(lua, -2, "enemyPath");
+                break;
+            }
+        }
+    }
 
     // Economy, per tick — the scale FAF's own thresholds are written against.
     const rm::sim::Economy& economy = scene.economies[armyIndex];

@@ -136,6 +136,29 @@ bool gFafLog = false;
     }).has_value();
 }
 
+bool issueGuard(UnitScene& scene, std::span<const rm::sim::UnitId> units,
+                rm::PlayerIndex player, rm::TickIndex tick, rm::sim::UnitId target, bool queued) {
+    if (!scene.store.alive(target)) return false;
+    const auto& at = scene.store.transforms()[target.index];
+    return submitCommand(scene, rm::sim::CommandIssue{
+        .tick = tick, .phase = rm::sim::CommandPhase::PreTick,
+        .source = static_cast<rm::CommandSource>(player), .player = player,
+        .kind = rm::sim::CommandKind::Guard, .queued = queued,
+        .units = {units.begin(), units.end()}, .targetX = at.x, .targetZ = at.z, .target = target,
+    }).has_value();
+}
+
+bool issueCancelFactoryBuild(UnitScene& scene, rm::sim::UnitId factory,
+    rm::PlayerIndex player, rm::TickIndex tick, rm::CommandId commandId) {
+    if (commandId == rm::kInvalidCommandId) return false;
+    return submitCommand(scene, rm::sim::CommandIssue{
+        .tick = tick, .phase = rm::sim::CommandPhase::PreTick,
+        .source = static_cast<rm::CommandSource>(player), .player = player,
+        .kind = rm::sim::CommandKind::CancelFactoryBuild, .units = {factory},
+        .cancelCommandId = commandId,
+    }).has_value();
+}
+
 [[nodiscard]] bool issueRepair(UnitScene& scene, std::span<const rm::sim::UnitId> units,
                                 rm::PlayerIndex player, rm::TickIndex tick,
                                 rm::sim::UnitId target, bool queued) {

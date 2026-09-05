@@ -251,6 +251,10 @@ struct Construction {
     /// as the game has it.
     UnitId builder{};
 
+    /// A factory's own Build retained behind Guard. A mirrored guardee build has no retained
+    /// entry; remembering identity prevents later same-type requests from stealing its completion.
+    CommandId retainedCommandId = kInvalidCommandId;
+
     /// What ASSISTERS add this tick, in build units per tick — recomputed every tick by
     /// `applyAssistance` from who is standing in reach with an Assist order, so a helper
     /// that walks away or dies stops helping the same tick. Derived state in a hashed
@@ -412,8 +416,10 @@ void advanceConstruction(Construction& work) noexcept;
 /// wrong army is a caller's mistake to avoid rather than something to paper over here,
 /// because silently skipping a mismatched entry would leave it never built and never
 /// reported.
+/// A whole-match caller defers the final capacity clamp until `shareOverflow` has run.
 void tickEconomy(Economy& economy, std::span<Construction> building,
-                  std::span<RepairWork> repairs = {}, std::span<SiloAmmo> siloAmmo = {});
+                  std::span<RepairWork> repairs = {}, std::span<SiloAmmo> siloAmmo = {},
+                  bool deferOverflow = false);
 
 /// Hand each army's over-cap excess to its allies, retail's `C-163` progressive split.
 ///

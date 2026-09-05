@@ -45,6 +45,9 @@ rm::sim::MoveState motionFor(const rm::unitdef::UnitDef& def, int armyIndex) {
     motion.armyIndex = armyIndex;
     motion.airborne = def.motion == rm::unitdef::MotionType::Air;
     motion.surfaceWater = floatsOnWater(def);
+    motion.hovering = def.motion == rm::unitdef::MotionType::Hover;
+    motion.hoverElevation = motion.hovering ? rm::sim::fxFromFloat(def.elevationElmos)
+                                           : rm::sim::Fx{};
     motion.radiusElmos = rm::sim::fxFromFloat(def.collisionRadiusElmos);
     if (def.isMobile()) {
         motion.speedPerTick = gAppTickRate.perTick(def.speedElmosPerSecond);
@@ -63,6 +66,18 @@ rm::sim::MoveState motionFor(const rm::unitdef::UnitDef& def, int armyIndex) {
         motion.airMinSpeedElmosPerSec = rm::sim::fxFromFloat(def.airMinSpeedElmosPerSecond);
         motion.airAttackElevation = rm::sim::fxFromFloat(def.airAttackElevationElmos);
         motion.airWinged = def.airWinged;
+        motion.airTurnSpeed = rm::sim::fxFromFloat(def.airTurnSpeed);
+        motion.airCombatTurnSpeed = rm::sim::fxFromFloat(def.airCombatTurnSpeed);
+        motion.airKTurn = rm::sim::fxFromFloat(def.airKTurn);
+        motion.airKTurnDamping = rm::sim::fxFromFloat(def.airKTurnDamping);
+        motion.airTightTurnMultiplier = rm::sim::fxFromFloat(def.airTightTurnMultiplier);
+        motion.airBreakOffTrigger = rm::sim::fxFromFloat(def.airBreakOffTrigger);
+        motion.airBreakOffDistance = rm::sim::fxFromFloat(def.airBreakOffDistance);
+        motion.airRandomBreakOffMultiplier = rm::sim::fxFromFloat(def.airRandomBreakOffMultiplier);
+        motion.airSustainedThreshold = static_cast<rm::TickCount>(def.airSustainedThresholdSec * 10);
+        motion.airMinChangeTicks = static_cast<rm::TickCount>(def.airMinChangeSec * 10);
+        motion.airMaxChangeTicks = static_cast<rm::TickCount>(def.airMaxChangeSec * 10);
+        motion.airBreakOffNearTarget = def.airBreakOffNearTarget;
         motion.airKMove = rm::sim::fxFromFloat(def.airKMove);
         motion.airKMoveDamping = rm::sim::fxFromFloat(def.airKMoveDamping);
         motion.airKLift = rm::sim::fxFromFloat(def.airKLift);
@@ -1336,45 +1351,7 @@ void orderFirstExtractors(UnitScene& scene, std::span<const rm::scenario::Marker
         for (const rm::UnitInstance& instance : placed) {
             rm::sim::MoveState state;
             if (def) {
-                // The footprint is what a unit takes up, whether or not it moves — a
-                // building is still something to be pushed out of.
-                state.radiusElmos = rm::sim::fxFromFloat(def->collisionRadiusElmos);
-                state.airborne = def->motion == rm::unitdef::MotionType::Air;
-                state.surfaceWater = floatsOnWater(*def);
-                if (def->isMobile()) {
-                    state.speedPerTick = gAppTickRate.perTick(def->speedElmosPerSecond);
-                    state.turnPerTick = gAppTickRate.bradPerTick(
-                        def->turnRateRadiansPerSecond > 0.0f
-                            ? def->turnRateRadiansPerSecond
-                            : rm::sim::kDefaultTurnRateRadiansPerSecond);
-                }
-                if (state.airborne) {
-                    state.canFly = true;
-                    state.airState = rm::sim::MoveState::AirState::Top;
-                    state.airMaxSpeedElmosPerSec =
-                        rm::sim::fxFromFloat(def->speedElmosPerSecond);
-                    state.airMinSpeedElmosPerSec =
-                        rm::sim::fxFromFloat(def->airMinSpeedElmosPerSecond);
-                    state.airAttackElevation =
-                        rm::sim::fxFromFloat(def->airAttackElevationElmos);
-                    state.airWinged = def->airWinged;
-                    state.airKMove = rm::sim::fxFromFloat(def->airKMove);
-                    state.airKMoveDamping = rm::sim::fxFromFloat(def->airKMoveDamping);
-                    state.airKLift = rm::sim::fxFromFloat(def->airKLift);
-                    state.airKLiftDamping = rm::sim::fxFromFloat(def->airKLiftDamping);
-                    state.airLiftFactor = rm::sim::fxFromFloat(def->airLiftFactor);
-                    state.airElevation = def->elevationElmos > 0.0f
-                        ? rm::sim::fxFromFloat(def->elevationElmos)
-                        : rm::sim::kAirClearanceElmos;
-                    state.idleLandThreshold = def->airAutoLandTimeSec > 0.0f
-                        ? static_cast<std::uint32_t>(def->airAutoLandTimeSec
-                                                     * gAppTickRate.ticksPerSecond())
-                        : std::numeric_limits<std::uint32_t>::max();
-                    state.fuelDrainPerTick = def->airFuelUseTimeSec > 0.0f
-                        ? rm::sim::fxFromFloat(1.0f / (def->airFuelUseTimeSec * 10.0f))
-                        : rm::sim::Fx{};
-                    state.fuelRatio = rm::sim::Fx::fromInt(1);
-                }
+                state = motionFor(*def, rm::sim::kNoArmy);
             }
             rm::sim::Transform transform = transformAt(instance.position, instance.rotationY);
             rm::sim::placeOnMotionLayer(transform, state, scene.terrain(field));

@@ -90,6 +90,7 @@ namespace {
 @property(nonatomic, assign) std::set<rm::Key>* heldKeys;
 /// The player's requested multiplier on automatic size — `--ui-scale`. 1 is automatic.
 @property(nonatomic, assign) float userHudScale;
+@property(nonatomic, assign) float simulatedBacking;
 
 /// Re-derives the layer's drawableSize from bounds x contentsScale.
 - (void)rmSyncDrawableSize;
@@ -154,7 +155,7 @@ namespace {
 - (rm::ui::UiViewport)rmUiViewport {
     const float width = static_cast<float>(std::max(self.bounds.size.width, 1.0));
     const float height = static_cast<float>(std::max(self.bounds.size.height, 1.0));
-    const CGFloat backing =
+    const CGFloat backing = self.simulatedBacking > 0.0f ? self.simulatedBacking :
         self.window != nil && self.window.backingScaleFactor > 0.0
             ? self.window.backingScaleFactor
             : 1.0;
@@ -194,7 +195,8 @@ namespace {
     [super viewDidChangeBackingProperties];
     CAMetalLayer* metalLayer = static_cast<CAMetalLayer*>(self.layer);
     if (metalLayer != nil && self.window != nil && self.window.backingScaleFactor > 0.0) {
-        metalLayer.contentsScale = self.window.backingScaleFactor;
+        metalLayer.contentsScale = self.simulatedBacking > 0.0f
+            ? self.simulatedBacking : self.window.backingScaleFactor;
         [self rmSyncUiViewport];
     }
     [self rmSyncDrawableSize];
@@ -763,6 +765,43 @@ void Window::show() {
     if (impl_->fullscreen) {
         [impl_->window toggleFullScreen:nil];
     }
+}
+
+void Window::sendMouseClick(float pointX, float pointY, MouseButton button, bool shift) {
+    const NSPoint local = NSMakePoint(pointX, impl_->view.bounds.size.height - pointY);
+    const NSPoint point = [impl_->view convertPoint:local toView:nil];
+    const NSEventModifierFlags flags = shift ? NSEventModifierFlagShift : 0;
+    const bool left = button == MouseButton::Left;
+    for (const NSEventType type : {left ? NSEventTypeLeftMouseDown : NSEventTypeRightMouseDown,
+                                  left ? NSEventTypeLeftMouseUp : NSEventTypeRightMouseUp}) {
+        NSEvent* event = [NSEvent mouseEventWithType:type location:point modifierFlags:flags
+            timestamp:NSProcessInfo.processInfo.systemUptime windowNumber:impl_->window.windowNumber
+            context:nil eventNumber:0 clickCount:1 pressure:1.0];
+        [impl_->window sendEvent:event];
+    }
+}
+
+void Window::setSimulatedBacking(float scale) {
+    impl_->view.simulatedBacking = scale;
+    [impl_->view viewDidChangeBackingProperties];
+}
+
+Renderer::CapturedImage Window::capture() {
+    const auto viewport = uiViewport();
+    return impl_->renderer->renderToImage(
+        static_cast<unsigned int>(std::lround(viewport.logicalExtent.width * viewport.backingScale)),
+        static_cast<unsigned int>(std::lround(viewport.logicalExtent.height * viewport.backingScale)));
+}
+
+void Window::stop() {
+    // Impl owns the single invalidate. CAMetalDisplayLink's second invalidate crashes in
+    // CAMetalLayerSetMetalLinkToken; stopping the run loop leaves destruction safe.
+    [NSApp stop:nil];
+    // A timer can stop an app while AppKit is waiting for its next event. Wake that wait so
+    // unattended acceptance returns without needing a physical mouse or keyboard event.
+    [NSApp postEvent:[NSEvent otherEventWithType:NSEventTypeApplicationDefined
+        location:NSZeroPoint modifierFlags:0 timestamp:0 windowNumber:0 context:nil
+        subtype:0 data1:0 data2:0] atStart:NO];
 }
 
 } // namespace rm

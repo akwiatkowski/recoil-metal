@@ -12,12 +12,14 @@
 #include "core/sim/Reclaim.hpp"
 #include "core/sim/Skirmish.hpp"
 #include "core/sim/UnitStore.hpp"
+#include "core/unit/UnitBlueprint.hpp"
 
 #include "support/FxMatchers.hpp"
 #include "support/TestRoster.hpp"
 
 #include <algorithm>
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <vector>
 
@@ -132,9 +134,9 @@ struct Fixture {
                                      grid, roster.rate, &building);
     }
 
-    [[nodiscard]] bool assist(UnitId who, UnitId target) {
+    [[nodiscard]] bool assist(UnitId who, UnitId target, CommandKind kind = CommandKind::Assist) {
         const rm::sim::Transform& at = roster.store.transforms()[target.index];
-        return rm::sim::applyCommand(Command{.kind = CommandKind::Assist,
+        return rm::sim::applyCommand(Command{.kind = kind,
                                              .unit = who,
                                              .targetX = at.x,
                                              .targetZ = at.z,
@@ -298,6 +300,44 @@ TEST_CASE("a guard copies its guardee's reclaim target before considering repair
     REQUIRE(f.features.find(wreck) != nullptr);
     CHECK(rm::test::asFloat(f.features.find(wreck)->massRemaining) == 70.0f);
     CHECK(rm::test::asFloat(f.roster.health(damaged).current) == 50.0f);
+}
+
+TEST_CASE("a Mantis Guard cannot borrow a reclaim capability from its guardee", "[guard][guard-work-regression]") {
+    const char* home = std::getenv("HOME");
+    REQUIRE(home != nullptr);
+    const auto path = std::filesystem::path{home} / "projects/llm/input/faf/units/URL0107/URL0107_unit.bp";
+    if (!std::filesystem::is_regular_file(path)) SKIP("no retail Mantis blueprint");
+    const auto mantis = rm::unitbp::loadFile(path);
+    REQUIRE(mantis);
+    REQUIRE(mantis->buildRate > 0);
+    REQUIRE(mantis->hasCommandCap("RULEUCC_Guard"));
+    REQUIRE_FALSE(mantis->hasCommandCap("RULEUCC_Reclaim"));
+    Fixture f;
+    const auto type = f.roster.addType(*mantis);
+    const auto founder = f.roster.add(f.engineerType, 200, 200, 0, 100);
+    const auto guard = f.roster.add(type, 205, 200, 0, 100);
+    const auto wreck = f.wreckAt(208, 200);
+    REQUIRE(f.reclaim(founder, wreck));
+    REQUIRE(f.assist(guard, founder, CommandKind::Guard));
+    f.tick();
+    REQUIRE(f.features.find(wreck));
+    CHECK(rm::test::asFloat(f.features.find(wreck)->massRemaining) == 80.0f);
+}
+
+TEST_CASE("Guard repair respects an explicitly forbidden repair capability", "[guard][guard-work-regression]") {
+    Fixture f;
+    auto restricted = *f.roster.catalog.def(f.guardType);
+    restricted.commandCapsDeclared = true;
+    restricted.commandCaps = {"RULEUCC_Guard"};
+    const auto type = f.roster.addType(restricted);
+    const auto founder = f.roster.add(f.engineerType, 200, 200, 0, 100);
+    const auto guard = f.roster.add(type, 205, 200, 0, 100);
+    const auto damaged = f.roster.add(f.tankType, 210, 200, 0, 100);
+    f.roster.health(damaged).current = rm::sim::Mag::fromInt(50);
+    f.economies[0].stored = {rm::sim::Mag::fromInt(100), rm::sim::Mag::fromInt(100)};
+    REQUIRE(f.assist(guard, founder, CommandKind::Guard));
+    f.tick();
+    CHECK(f.roster.health(damaged).current == rm::sim::Mag::fromInt(50));
 }
 
 TEST_CASE("guard repair scans around the guardee and chooses the nearest unit to the guard") {

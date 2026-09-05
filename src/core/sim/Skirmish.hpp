@@ -57,6 +57,9 @@ enum class VictoryMode : std::uint8_t {
 struct Match {
     std::vector<Army>& armies;
 
+    /// Simulation-owned randomness; never reset per order or per tick.
+    RandomStream random{std::uint32_t{1}};
+
     /// One economy per army, indexed by army. Empty outside a skirmish, which is what a
     /// `--units` crowd is — the economy passes then do nothing rather than being skipped
     /// by a flag.

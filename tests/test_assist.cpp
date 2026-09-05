@@ -155,6 +155,60 @@ TEST_CASE("an assisted build advances at the combined rate, and drains for it") 
     CHECK(f.building[0].finished());
 }
 
+TEST_CASE("Guard attack priority suppresses construction assistance in the same tick",
+          "[guard][guard-work-regression]") {
+    Fixture f;
+    auto armed = *f.roster.catalog.def(f.engineerType);
+    armed.name = "armed_guard";
+    armed.speedElmosPerSecond = 20.0f;
+    armed.guardScanRadiusElmos = rm::sim::Fx::fromInt(80);
+    rm::unitdef::Weapon gun;
+    gun.role = rm::unitdef::WeaponRole::DirectFire;
+    gun.targetPriorities = {{"ALLUNITS"}};
+    gun.damage = rm::sim::Mag::fromInt(10);
+    gun.maxRange = rm::sim::Fx::fromInt(20);
+    gun.rateOfFire = 1.0f;
+    armed.weapons.push_back(gun);
+    const auto armedType = f.roster.addType(armed);
+    const auto founder = f.roster.add(f.engineerType, 200, 200, 0, 100);
+    const auto guard = f.roster.add(armedType, 220, 200, 0, 100);
+    (void)f.roster.add(f.tankType, 270, 200, 1, 100);
+    f.economies[0].stored = {rm::sim::Mag::fromInt(1000), rm::sim::Mag::fromInt(1000)};
+    REQUIRE(f.build(founder, 205, 200));
+    REQUIRE(f.apply(Command{.kind = CommandKind::Guard, .unit = guard, .target = founder}));
+
+    f.tick();
+
+    REQUIRE(f.building.size() == 1);
+    CHECK(f.building.front().assistPerTick == rm::sim::Mag{});
+    CHECK(f.building.front().buildTimeRemaining == rm::sim::Mag::fromInt(99));
+    REQUIRE(f.roster.store.orders()[guard.index].active());
+    CHECK(f.roster.store.orders()[guard.index].active()->kind() == CommandKind::Guard);
+    // An in-build-reach helper would stand still. Pursuit proves ATTACK won the ladder.
+    CHECK(f.roster.motion(guard).moving);
+    CHECK(f.roster.motion(guard).destinationX > rm::sim::Fx::fromInt(220));
+}
+
+TEST_CASE("a newly hostile Guard contributes no construction work before cancellation",
+          "[guard][guard-work-regression]") {
+    Fixture f;
+    f.armies[1].alliance = f.armies[0].alliance;
+    const auto founder = f.roster.add(f.engineerType, 200, 200, 0, 100);
+    const auto guard = f.roster.add(f.engineerType, 220, 200, 1, 100);
+    f.economies[0].stored = {rm::sim::Mag::fromInt(1000), rm::sim::Mag::fromInt(1000)};
+    REQUIRE(f.build(founder, 205, 200));
+    REQUIRE(f.apply(Command{.player = 1, .kind = CommandKind::Guard,
+                            .unit = guard, .target = founder}));
+    f.armies[1].alliance = 1;
+
+    f.tick();
+
+    REQUIRE(f.building.size() == 1);
+    CHECK(f.building.front().assistPerTick == rm::sim::Mag{});
+    CHECK(f.building.front().buildTimeRemaining == rm::sim::Mag::fromInt(99));
+    CHECK(f.roster.store.orders()[guard.index].empty());
+}
+
 TEST_CASE("the final assisted tick requests every builder's full offered work") {
     rm::sim::Economy economy;
     economy.storage = {.mass = rm::sim::magFromFloat(1000.0f),

@@ -803,7 +803,7 @@ TEST_CASE("the semantic reader rejects legacy, malformed, and truncated logs") {
     CHECK_FALSE(rm::sim::readCommandLog(path.string()).has_value());
     {
         std::ofstream out{path, std::ios::trunc};
-        out << "recoil-metal semantic command log\nversion 3\nissue-count 0\n";
+        out << "recoil-metal semantic command log\nversion 99\nissue-count 0\n";
     }
     CHECK_FALSE(rm::sim::readCommandLog(path.string()).has_value());
     {
@@ -818,6 +818,38 @@ TEST_CASE("the semantic reader rejects legacy, malformed, and truncated logs") {
                "0 pre-tick 0 0 0 move 0 1 100 200 0 0 0 2 4 1 3 1 \"\"\n";
     }
     CHECK_FALSE(rm::sim::readCommandLog(path.string()).has_value());
+    std::filesystem::remove(path);
+}
+
+TEST_CASE("factory cancellation logs preserve the selected command identity", "[factory-cancel]") {
+    CommandLog log;
+    const auto cancelled = rm::commandId(0, 17);
+    REQUIRE(log.record(CommandIssue{
+        .tick = 7, .source = 0, .id = rm::commandId(0, 18), .player = 0,
+        .kind = CommandKind::CancelFactoryBuild, .units = {UnitId{0, 1}},
+        .cancelCommandId = cancelled,
+    }));
+    const auto path = std::filesystem::temp_directory_path() / "rm-cancel-command-log.txt";
+    REQUIRE(rm::sim::writeCommandLog(log, path.string()));
+    const auto restored = rm::sim::readCommandLog(path.string());
+    REQUIRE(restored);
+    REQUIRE(restored->size() == 1);
+    CHECK(restored->all().front().cancelCommandId == cancelled);
+    std::filesystem::remove(path);
+}
+
+TEST_CASE("version two command logs remain readable after factory cancellation") {
+    const auto path = std::filesystem::temp_directory_path() / "rm-v2-command-log.txt";
+    {
+        std::ofstream file{path};
+        file << "recoil-metal semantic command log\nversion 2\nissue-count 1\n"
+                "0 pre-tick 0 0 0 stop 0 1 0 0 0 0 0 1 0 1 \"\" \"\" \"\"\n";
+    }
+    const auto commands = rm::sim::readCommandLog(path.string());
+    REQUIRE(commands);
+    REQUIRE(commands->size() == 1);
+    CHECK(commands->all().front().kind == CommandKind::Stop);
+    CHECK(commands->all().front().cancelCommandId == rm::kInvalidCommandId);
     std::filesystem::remove(path);
 }
 

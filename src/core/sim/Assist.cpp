@@ -7,7 +7,8 @@
 namespace rm::sim {
 
 std::size_t applyAssistance(const UnitStore& store, const UnitCatalog& catalog,
-                            std::vector<Construction>& building) {
+                            std::vector<Construction>& building, std::span<const Army> armies,
+                            const Intel* intel, const PlayableRect* playableRect) {
     // Cleared first, unconditionally: last tick's help is not this tick's fact.
     for (Construction& work : building) {
         work.assistPerTick = Mag{};
@@ -26,8 +27,11 @@ std::size_t applyAssistance(const UnitStore& store, const UnitCatalog& catalog,
             continue;
         }
         const QueuedCommand* head = orders[slot].active();
-        if (head == nullptr || head->kind() != CommandKind::Assist
+        if (head == nullptr || !isGuardCommand(head->kind())
             || !store.alive(head->target())) {
+            continue;
+        }
+        if (!guardAllowsBuildAssistance(slot, store, catalog, building, armies, intel, playableRect)) {
             continue;
         }
 
@@ -54,7 +58,7 @@ std::size_t applyAssistance(const UnitStore& store, const UnitCatalog& catalog,
             }
             visited.push_back(founder);
             const QueuedCommand* guarded = orders[founder.index].active();
-            if (guarded == nullptr || guarded->kind() != CommandKind::Assist
+            if (guarded == nullptr || !isGuardCommand(guarded->kind())
                 || !store.alive(guarded->target())) {
                 break;
             }

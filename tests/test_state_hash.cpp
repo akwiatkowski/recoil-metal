@@ -202,6 +202,16 @@ TEST_CASE("the cached surface-water movement layer changes the hash") {
     CHECK(ground.hash() != surface.hash());
 }
 
+TEST_CASE("hover surface motion and elevation change the hash") {
+    Fixture ground;
+    Fixture hover;
+    hover.motion()[0].hovering = true;
+    const auto surface = hover.hash();
+    CHECK(ground.hash() != surface);
+    hover.motion()[0].hoverElevation = rm::sim::Fx::fromInt(2);
+    CHECK(hover.hash() != surface);
+}
+
 TEST_CASE("the DoNotTarget state changes the hash") {
     Fixture ordinary;
     Fixture excluded;
@@ -463,6 +473,13 @@ TEST_CASE("every field the sim owns reaches the hash") {
         a.building.push_back(rm::sim::Construction{});
         const rm::StateHash before = a.hash();
         a.building[0].builder = rm::sim::UnitId{0, 1};
+        REQUIRE(a.hash() != before);
+    }
+    SECTION("the factory command retained behind Guard") {
+        Fixture a;
+        a.building.push_back(rm::sim::Construction{});
+        const auto before = a.hash();
+        a.building.front().retainedCommandId = rm::commandId(0, 3);
         REQUIRE(a.hash() != before);
     }
     SECTION("assistance applied this tick") {
@@ -823,6 +840,17 @@ TEST_CASE("attachment propagation retains an attached child's local height") {
     CHECK(childTransform.y != terrain.heightAt(childTransform.x, childTransform.z));
 }
 
+TEST_CASE("the match hash includes the future random sequence", "[air-combat]") {
+    Fixture fixture;
+    auto match = fixture.match();
+    const auto before = hashMatch(fixture.store, match);
+    const auto saved = match.random.snapshot();
+    (void)match.random.next();
+    CHECK(hashMatch(fixture.store, match) != before);
+    match.random = rm::sim::RandomStream{saved};
+    CHECK(hashMatch(fixture.store, match) == before);
+}
+
 TEST_CASE("winged-flight state changes the match hash") {
     Fixture fixture;
     const auto baseline = fixture.hash();
@@ -837,4 +865,13 @@ TEST_CASE("winged-flight state changes the match hash") {
     const auto idling = fixture.hash();
     fixture.motion()[0].airCombatState = rm::sim::MoveState::AirCombatState::HeadOn;
     CHECK(fixture.hash() != idling);
+    auto previous = fixture.hash();
+    ++fixture.motion()[0].airCombatDeadline;
+    CHECK(fixture.hash() != previous);
+    previous = fixture.hash();
+    ++fixture.motion()[0].airSustainedTicks;
+    CHECK(fixture.hash() != previous);
+    previous = fixture.hash();
+    fixture.motion()[0].airYawVelocity = rm::sim::kFxOne;
+    CHECK(fixture.hash() != previous);
 }

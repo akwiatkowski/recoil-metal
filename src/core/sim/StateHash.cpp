@@ -128,6 +128,10 @@ void feedMotion(StateHash& h, const MoveState& motion) noexcept {
     if (motion.surfaceWater) {
         feed(h, motion.surfaceWater);
     }
+    if (motion.hovering) {
+        feed(h, motion.hovering);
+        feed(h, motion.hoverElevation);
+    }
     feed(h, motion.speedPerTick);
     feed(h, motion.turnPerTick);
     feed(h, motion.radiusElmos);
@@ -151,6 +155,9 @@ void feedMotion(StateHash& h, const MoveState& motion) noexcept {
         feed(h, motion.canFly);
         feed(h, static_cast<std::uint64_t>(motion.airState));
         feed(h, static_cast<std::uint64_t>(motion.airCombatState));
+        feed(h, motion.airCombatDeadline);
+        feed(h, static_cast<std::uint64_t>(motion.airSustainedTicks));
+        feed(h, motion.airYawVelocity);
         feed(h, motion.velocity);
         feed(h, motion.altitudeRef);
         feed(h, motion.fuelRatio);
@@ -398,6 +405,12 @@ void feedPathService(StateHash& h, const PathService& service) noexcept {
 
 StateHash hashMatch(const UnitStore& store, const Match& match) {
     StateHash h = kOffsetBasis;
+    // MT19937's next state_size outputs determine its future sequence. Hash a copy
+    // to include both state and cursor without locale-dependent text serialization.
+    auto random = match.random.snapshot();
+    for (std::size_t i = 0; i < RandomStream::Snapshot::state_size; ++i) {
+        feed(h, static_cast<std::uint64_t>(random()));
+    }
 
     // Slot count first, so a store that grew differs even if the new slot is empty — a spawn
     // that produced nothing is still a different match.
@@ -690,6 +703,9 @@ StateHash hashMatch(const UnitStore& store, const Match& match) {
             // the fingerprint said they agreed — the exact failure this log exists to catch.
             feed(h, work.allocated);
             feed(h, work.fundedLastTick);
+            if (work.retainedCommandId != kInvalidCommandId) {
+                feed(h, static_cast<std::uint64_t>(work.retainedCommandId));
+            }
         }
     }
 

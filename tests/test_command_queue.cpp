@@ -2220,7 +2220,9 @@ TEST_CASE("a winged entity attack enters head-on then tail-chase inside the 30 d
     flight.airWinged = true;
     flight.airState = rm::sim::MoveState::AirState::Top;
     flight.airMaxSpeedElmosPerSec = rm::sim::Fx::fromInt(160);
+    roster.motion(target).airborne = true;
     roster.transform(target).heading = rm::sim::kBradHalfTurn;
+    rm::sim::RandomStream random{std::uint32_t{1}};
 
     const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(2);
     const std::vector<rm::sim::Player> players{rm::sim::Player{.index = 0, .army = 0}};
@@ -2231,17 +2233,28 @@ TEST_CASE("a winged entity attack enters head-on then tail-chase inside the 30 d
     REQUIRE(rm::sim::applyCommand(attack, roster.store, roster.catalog, players, armies,
                                   terrain, grid, roster.rate));
 
-    (void)rm::sim::advanceOrders(roster.store, roster.catalog, terrain, grids, roster.rate);
+    (void)rm::sim::advanceOrders(roster.store, roster.catalog, terrain, grids, roster.rate,
+        nullptr, nullptr, nullptr, nullptr, nullptr, {}, nullptr, nullptr, nullptr, nullptr, &random);
     CHECK(flight.airCombatState == rm::sim::MoveState::AirCombatState::HeadOn);
     CHECK(flight.makingAttackRun());
     CHECK(flight.moving);  // unlike a ground attacker already inside weapon range
 
     roster.transform(target).heading = 0;
-    (void)rm::sim::advanceOrders(roster.store, roster.catalog, terrain, grids, roster.rate);
+    (void)rm::sim::advanceOrders(roster.store, roster.catalog, terrain, grids, roster.rate,
+        nullptr, nullptr, nullptr, nullptr, nullptr, {}, nullptr, nullptr, nullptr, nullptr, &random);
     CHECK(flight.airCombatState == rm::sim::MoveState::AirCombatState::TailChase);
 
+    flight.airSustainedTicks = 101;
+    flight.airCombatDeadline = 999;
+    REQUIRE(rm::sim::applyCommand(attack, roster.store, roster.catalog, players, armies,
+                                  terrain, grid, roster.rate));
+    CHECK(flight.airCombatState == rm::sim::MoveState::AirCombatState::None);
+    CHECK(flight.airSustainedTicks == 0);
+    CHECK(flight.airCombatDeadline == 0);
+
     roster.store.orders()[fighter.index].clear();
-    (void)rm::sim::advanceOrders(roster.store, roster.catalog, terrain, grids, roster.rate);
+    (void)rm::sim::advanceOrders(roster.store, roster.catalog, terrain, grids, roster.rate,
+        nullptr, nullptr, nullptr, nullptr, nullptr, {}, nullptr, nullptr, nullptr, nullptr, &random);
     CHECK(flight.airCombatState == rm::sim::MoveState::AirCombatState::None);
     CHECK_FALSE(flight.makingAttackRun());
 }

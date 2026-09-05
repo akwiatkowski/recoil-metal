@@ -35,6 +35,75 @@ void writeU32(std::vector<std::byte>& bytes, std::size_t offset, std::uint32_t v
 
 } // namespace
 
+TEST_CASE("a save preserves economy carry and pending army lifecycle", "[save-state][economy-save]") {
+    rm::sim::EconomyArmyState state;
+    state.armies = rm::sim::freeForAll(3);
+    state.armies[1].alliance = 0;
+    state.armies[2].defeated = true;
+    state.economies.resize(3);
+    state.economies[1].sharedIn = {rm::sim::Mag::fromInt(7), rm::sim::Mag::fromInt(11)};
+    state.economies[1].upkeepAllocated = {rm::sim::Mag::fromInt(2), rm::sim::Mag::fromInt(3)};
+    state.economies[1].requestedLastTick.mass = rm::sim::Mag::fromInt(19);
+    state.economies[1].usageLastTick.mass = rm::sim::Mag::fromInt(13);
+    state.commandersEver = {1, 1, 1};
+    state.winnerPending = true;
+    state.pendingWinner = 0;
+    state.winnerStableTicks = 43;
+    state.defeatPollElapsedTicks = 17;
+    state.defeatCleanupRemainingTicks = {0, 0, 81};
+    state.building.push_back({.armyIndex = 1,
+        .buildTimeRemaining = rm::sim::Mag::fromInt(5),
+        .totalBuildTime = rm::sim::Mag::fromInt(10),
+        .retainedCommandId = 123,
+        .allocated = {rm::sim::Mag::fromInt(2), rm::sim::Mag::fromInt(4)},
+        .fundedLastTick = rm::sim::kFxOne / rm::sim::Fx::fromInt(2)});
+    RandomStream random{std::uint32_t{1}};
+    const auto bytes = SaveState::encode({.random = random.snapshot(), .economyArmies = state});
+    const auto decoded = SaveState::decode(bytes);
+    REQUIRE(decoded);
+    REQUIRE(decoded->economyArmies);
+    const auto& saved = *decoded->economyArmies;
+    REQUIRE(saved.armies.size() == 3);
+    CHECK(saved.armies[1].alliance == 0);
+    CHECK(saved.armies[2].defeated);
+    REQUIRE(saved.economies.size() == 3);
+    CHECK(saved.economies[1].sharedIn.mass == rm::sim::Mag::fromInt(7));
+    CHECK(saved.economies[1].upkeepAllocated.energy == rm::sim::Mag::fromInt(3));
+    CHECK(saved.economies[1].requestedLastTick.mass == rm::sim::Mag::fromInt(19));
+    CHECK(saved.economies[1].usageLastTick.mass == rm::sim::Mag::fromInt(13));
+    CHECK(saved.commandersEver == state.commandersEver);
+    CHECK(saved.winnerPending);
+    CHECK(saved.pendingWinner == 0);
+    CHECK(saved.winnerStableTicks == 43);
+    CHECK(saved.defeatPollElapsedTicks == 17);
+    CHECK(saved.defeatCleanupRemainingTicks == state.defeatCleanupRemainingTicks);
+    REQUIRE(saved.building.size() == 1);
+    CHECK(saved.building.front().retainedCommandId == 123);
+    CHECK(saved.building.front().allocated.energy == rm::sim::Mag::fromInt(4));
+    CHECK(saved.building.front().fundedLastTick == rm::sim::kFxOne / rm::sim::Fx::fromInt(2));
+    CHECK(SaveState::encode(*decoded) == bytes);
+    SECTION("mid-tick work must settle before saving") {
+        state.building.front().workedThisTick = true;
+        CHECK_THROWS_AS(SaveState::encode({.random = random.snapshot(), .economyArmies = state}),
+                        std::invalid_argument);
+    }
+    SECTION("corrupt section counts cannot allocate from an unbounded payload") {
+        const auto absent = SaveState::encode({.random = random.snapshot()});
+        auto corrupt = bytes;
+        // The empty v16 aircraft trailer follows v15's presence byte. The first
+        // economy army count replaces that position in the populated snapshot.
+        writeU32(corrupt, absent.size() - sizeof(std::uint32_t),
+                 std::numeric_limits<std::uint32_t>::max());
+        CHECK_FALSE(SaveState::decode(corrupt));
+    }
+    SECTION("incomplete current save payloads are rejected") {
+        auto truncated = bytes;
+        truncated.pop_back();
+        writeU32(truncated, 16, static_cast<std::uint32_t>(truncated.size() - 20));
+        CHECK_FALSE(SaveState::decode(truncated));
+    }
+}
+
 TEST_CASE("a save state random stream resumes at exactly its saved MT state", "[save-state]") {
     RandomStream original{std::uint32_t{1}};
     (void)original.next();
@@ -290,7 +359,7 @@ TEST_CASE("historic attachment saves derive offsets from their transforms", "[sa
     // what makes these trailers computable without parsing). This fixture starts from
     // the final published v7 shape, so the historical-layout edits below must remove
     // all four later trailers first. V12 extends command records in place, so this empty-queue
-    // fixture adds no bytes for it; v13 adds one combat-state byte per air record.
+    // fixture adds no bytes for it; v13 adds combat state and v14 adds hover state.
     constexpr std::size_t kV8CommandStateBytes = sizeof(rm::CommandSerial)
                                                   + std::size_t{rm::kInvalidCommandSource}
                                                         * sizeof(std::uint32_t)
@@ -300,8 +369,10 @@ TEST_CASE("historic attachment saves derive offsets from their transforms", "[sa
                                                            + sizeof(std::uint32_t));
     constexpr std::size_t kV9SiloAmmoBytes = sizeof(std::uint32_t);
     constexpr std::size_t kV10RedirectBytes = sizeof(std::uint32_t);
-    constexpr std::size_t kV13AirBytes = sizeof(std::uint32_t) + kSlots * 35;
-    v7.resize(v7.size() - kV13AirBytes - kV10RedirectBytes - kV9SiloAmmoBytes
+    constexpr std::size_t kV14MotionBytes = sizeof(std::uint32_t) + kSlots * 40;
+    constexpr std::size_t kV15AbsentEconomyBytes = 1;
+    constexpr std::size_t kV16ControllerBytes = sizeof(std::uint32_t) + kSlots * 107;
+    v7.resize(v7.size() - kV16ControllerBytes - kV15AbsentEconomyBytes - kV14MotionBytes - kV10RedirectBytes - kV9SiloAmmoBytes
               - kV8CommandStateBytes);
     writeU32(v7, 4, 7);
     writeU32(v7, 16, static_cast<std::uint32_t>(v7.size() - 20));
@@ -516,7 +587,22 @@ TEST_CASE("a v1 save state refuses invalid unit allocator and attachment state",
     CHECK_FALSE(SaveState::decodeV1(malformed).has_value());
 }
 
-TEST_CASE("a v13 save round-trips winged-flight state", "[save-state]") {
+TEST_CASE("a current save retains the hover motion layer and clearance", "[save-state]") {
+    rm::sim::UnitStore original;
+    const auto unit = original.spawn({});
+    original.motion()[unit.index].hovering = true;
+    original.motion()[unit.index].hoverElevation = rm::sim::Fx::fromInt(2);
+    RandomStream random{std::uint32_t{1}};
+    const auto bytes = SaveState::encode({.random = random.snapshot(), .units = original.snapshot()});
+    const auto restored = SaveState::decode(bytes);
+    REQUIRE(restored);
+    REQUIRE(restored->units.motion.size() == 1);
+    CHECK(restored->units.motion.front().hovering);
+    CHECK(restored->units.motion.front().hoverElevation == rm::sim::Fx::fromInt(2));
+    CHECK(SaveState::encode(*restored) == bytes);
+}
+
+TEST_CASE("a current save round-trips winged-flight state", "[save-state]") {
     rm::sim::UnitStore original;
     const auto flyer = original.spawn({});
     rm::sim::MoveState& motion = original.motion()[flyer.index];
@@ -529,6 +615,13 @@ TEST_CASE("a v13 save round-trips winged-flight state", "[save-state]") {
     motion.fuelRatio = rm::sim::Fx::fromRatio(1, 2);
     motion.idleTicks = 7;
     motion.airMaxSpeedElmosPerSec = rm::sim::Fx::fromInt(160);
+    motion.airCombatDeadline = 57;
+    motion.airSustainedTicks = 12;
+    motion.airYawVelocity = rm::sim::Fx::fromRatio(1, 3);
+    motion.airWinged = true;
+    motion.airKTurn = rm::sim::kFxOne;
+    motion.airKMove = rm::sim::kFxOne;
+    motion.airBreakOffDistance = rm::sim::Fx::fromInt(40);
 
     RandomStream random{std::uint32_t{1}};
     const auto bytes =
@@ -544,5 +637,12 @@ TEST_CASE("a v13 save round-trips winged-flight state", "[save-state]") {
     CHECK(back.altitudeRef == rm::sim::Fx::fromInt(80));
     CHECK(back.idleTicks == 7);
     CHECK(back.airMaxSpeedElmosPerSec == rm::sim::Fx::fromInt(160));
+    CHECK(back.airCombatDeadline == 57);
+    CHECK(back.airSustainedTicks == 12);
+    CHECK(back.airYawVelocity == motion.airYawVelocity);
+    CHECK(back.airWinged);
+    CHECK(back.airKTurn == motion.airKTurn);
+    CHECK(back.airKMove == motion.airKMove);
+    CHECK(back.airBreakOffDistance == motion.airBreakOffDistance);
     CHECK(SaveState::encode(*restored) == bytes);
 }

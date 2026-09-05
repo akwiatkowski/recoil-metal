@@ -13,7 +13,9 @@
 
 #include "app/FafAi.hpp"
 #include "app/FafOpponent.hpp"
+#include "core/unit/UnitBlueprint.hpp"
 
+#include <cstdlib>
 #include <cstdio>
 #include <filesystem>
 #include <string>
@@ -58,6 +60,116 @@ constexpr const char* kProbe[] = {
 };
 
 } // namespace
+
+TEST_CASE("FAF enemy and blueprint queries read the observed match and retail content",
+          "[faf][ai][brain-query]") {
+    const auto root = corpusRoot();
+    const char* home = std::getenv("HOME");
+    const auto contentRoot = home ? std::filesystem::path{home} / "projects/llm/input/faf"
+                                  : std::filesystem::path{};
+    if (root.empty() || !std::filesystem::exists(contentRoot / "units/UEL0001/UEL0001_unit.bp")) {
+        SKIP("requires the vendored FAF corpus and extracted retail unit blueprints");
+    }
+    rm::vfs::Vfs content;
+    content.mountDirectory(contentRoot);
+    auto scene = std::make_unique<rm::app::UnitScene>();
+    scene->armies = {{.index = 0, .alliance = 0}, {.index = 1, .alliance = 0},
+                     {.index = 2, .alliance = 2}, {.index = 3, .alliance = 3}};
+    scene->economies.resize(scene->armies.size());
+    auto commander = rm::unitbp::loadFile(contentRoot / "units/UEL0001/UEL0001_unit.bp");
+    REQUIRE(commander);
+    scene->definitions.push_back(*commander);
+    const auto type = scene->catalog.add(&scene->definitions.back(), rm::sim::TickRate{});
+    for (int army = 1; army < 4; ++army) {
+        (void)scene->store.spawn({
+            .type = type,
+            .transform = {.x = rm::sim::fxFromFloat(static_cast<float>(army * 50)),
+                          .z = rm::sim::fxFromFloat(100)},
+            .motion = {.armyIndex = army},
+            .health = {.current = rm::sim::magFromFloat(100),
+                       .maximum = rm::sim::magFromFloat(100)},
+        });
+    }
+    auto generator = rm::unitbp::loadFile(contentRoot / "units/UEB1101/UEB1101_unit.bp");
+    REQUIRE(generator);
+    scene->definitions.push_back(*generator);
+    const auto generatorType = scene->catalog.add(&scene->definitions.back(), rm::sim::TickRate{});
+    (void)scene->store.spawn({
+        .type = generatorType,
+        .transform = {.x = rm::sim::fxFromFloat(10), .z = rm::sim::fxFromFloat(100)},
+        .motion = {.armyIndex = 0},
+        .health = {.current = rm::sim::magFromFloat(100), .maximum = rm::sim::magFromFloat(100)},
+    });
+    rm::HeightField field{.squaresX = 64, .squaresZ = 64};
+    field.raw.resize(field.sampleCount());
+    const std::array<rm::mapinfo::StartPosition, 4> starts{{
+        {.x = 0, .z = 100}, {.x = 50, .z = 100},
+        {.x = 100, .z = 100}, {.x = 150, .z = 100},
+    }};
+    const char* expectedPath = "Land";
+    SECTION("dry terrain connects the bases") {}
+    SECTION("water requires the amphibious movement grid") {
+        scene->hasWater = true;
+        scene->waterLevelElmos = 10;
+        expectedPath = "Amphibious";
+    }
+    SECTION("neither movement grid admits the endpoints") {
+        scene->hasWater = true;
+        // Exercise the existing amphibious MoveDef's explicit depth ceiling.
+        scene->waterLevelElmos = 2 * rm::data::moveDefFor(
+            rm::unitdef::MotionType::Amphibious).maxWaterDepthElmos;
+        expectedPath = "Air";
+    }
+    const rm::ai::World world{.scene = *scene, .content = content, .field = field,
+                              .starts = starts, .markers = {}};
+    FafAi ai(root);
+    REQUIRE(installFafDriver(ai));
+    importAiEntryPoints(ai);
+    rm::ai::FafOpponent opponent(ai, 0);
+    opponent.observe(world, {});
+    opponent.advance(0);
+    bool ok = ai.eval(R"(
+        local brain = __rm_faf.brains[0]
+        local enemy = brain:GetCurrentEnemy()
+        previousEnemy = enemy
+        assert(enemy:GetArmyIndex() == 3, 'nearest hostile, not the closer ally')
+        assert(not enemy:IsDefeated())
+        local x, z = enemy:GetArmyStartPos()
+        assert(x == 100 and z == 100)
+        local bp = brain:GetUnitBlueprint('ueb1101')
+        assert(bp.Physics.SkirtSizeX == 2)
+        assert(bp.Economy.BuildCostMass == 75 and bp.Economy.BuildTime == 125)
+        assert(bp.BlueprintId == 'ueb1101' and bp.CategoriesHash.BUILTBYTIER1ENGINEER)
+        assert(bp == brain:GetUnitBlueprint('UEB1101'), 'case-insensitive cached identity')
+        local unit = setmetatable({ bp = 'UEB1101' }, __rm_faf.unitMeta)
+        assert(unit:GetBlueprint() == bp, 'unit and brain queries share the source table')
+        local found, err = pcall(brain.GetUnitBlueprint, brain, 'missing-blueprint')
+        assert(not found and string.find(err, 'missing%-blueprint'), 'unknown content fails closed')
+        assert(brain:GetUnitBlueprint('UEL0001').General.Icon == 'amph')
+        -- The real condition invokes both brain:GetUnitBlueprint and unit:GetBlueprint.
+        assert(import('/lua/editor/UnitCountBuildConditions.lua').AdjacencyCheck(
+            brain, 'MAIN', categories.ENERGYPRODUCTION, 100, 'ueb0101'))
+    )");
+    INFO(ai.lastError());
+    REQUIRE(ok);
+    ok = ai.eval(std::string{"assert(import('/lua/editor/MiscBuildConditions.lua').PathToEnemy("}
+        + "__rm_faf.brains[0], 'MAIN', '" + expectedPath + "'))");
+    INFO(ai.lastError());
+    REQUIRE(ok);
+    scene->armies[2].defeated = true;
+    opponent.advance(30);
+    ok = ai.eval(R"(
+        assert(__rm_faf.brains[0]:GetCurrentEnemy():GetArmyIndex() == 4)
+        assert(previousEnemy:IsDefeated(), 'held brain views refresh after defeat')
+    )");
+    INFO(ai.lastError());
+    REQUIRE(ok);
+    scene->armies[3].defeated = true;
+    opponent.advance(60);
+    ok = ai.eval("assert(__rm_faf.brains[0]:GetCurrentEnemy() == nil)");
+    INFO(ai.lastError());
+    REQUIRE(ok);
+}
 
 TEST_CASE("the FAF sandbox binds every name before any AI runs", "[faf][ai]") {
     const std::filesystem::path root = corpusRoot();

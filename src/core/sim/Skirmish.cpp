@@ -340,7 +340,8 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
     //     helper that walked away, died or was re-tasked stops contributing at once
     //     (`core/sim/Assist.hpp`).
     if (match.building != nullptr) {
-        (void)applyAssistance(store, catalog, *match.building);
+        (void)applyAssistance(store, catalog, *match.building, match.armies, match.intel,
+            match.playableRect ? &*match.playableRect : nullptr);
     }
 
     // 0. THE ORDER QUEUES, before anything moves (§7 P4.1). A unit that finished its order last
@@ -364,7 +365,7 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
                                           match.intel,
                                           match.playableRect ? &*match.playableRect
                                                              : nullptr,
-                                          match.scriptTasks, &guardWork);
+                                          match.scriptTasks, &guardWork, &match.random, tickIndex);
 
     // 1. MOVEMENT, then collisions. Everything downstream reads where a unit has got to
     //    this tick rather than where it started it.
@@ -436,7 +437,7 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
             fireWeapons(store, catalog, match.armies, *match.projectiles, rate, match.events,
                              match.intel, playableRect, tickIndex,
                              match.siloAmmo != nullptr ? std::span<SiloAmmo>{*match.siloAmmo}
-                                                       : std::span<SiloAmmo>{});
+                                                       : std::span<SiloAmmo>{}, match.features);
         // The held overcharges, after the guns and before the flight: a shot authorised
         // this tick flies this tick, and the energy it burned is gone before the economy
         // pass reads the store.
@@ -445,7 +446,7 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
         advanceProjectiles(*match.projectiles, store, match.armies, terrain, rate,
                            match.events, &catalog,
                            match.redirects != nullptr ? std::span<MissileRedirect>{*match.redirects}
-                                                      : std::span<MissileRedirect>{});
+                                                      : std::span<MissileRedirect>{}, match.features);
     }
 
     // 4. The dead, then their explosions, then C-210's defeat poll. A commander that died to a
@@ -475,7 +476,7 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
         report.deathBlastDamage += explodeOnDeath(*def, death.at,
                                                  store.motion()[slot].armyIndex, store,
                                                  match.armies, death.ref, match.events,
-                                                 &catalog);
+                                                 &catalog, match.features);
         ++report.deathBlasts;
     }
 
@@ -628,7 +629,7 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
                 }
             }
 
-            tickEconomy(match.economies[army], mine, repairMine, siloMine);
+            tickEconomy(match.economies[army], mine, repairMine, siloMine, true);
 
             // Written back over this army's entries, in order — the two lists were built
             // by the same filter in the same pass, so the nth of `mine` is the nth of

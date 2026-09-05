@@ -17,6 +17,7 @@
 #include "core/ui/PanelPages.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <fstream>
@@ -750,6 +751,10 @@ int runWindowed(const Session& session) {
         rm::Window window{static_cast<int>(session.window.width),
                           static_cast<int>(session.window.height),
                           "recoil-metal — m8: movable units", session.window.fullscreen};
+        const bool inputAcceptance = !session.window.inputAcceptancePath.empty();
+        if (inputAcceptance) {
+            window.setSimulatedBacking(session.window.simulatedBacking);
+        }
         const bool systemReducesTransparency =
             [NSWorkspace sharedWorkspace].accessibilityDisplayShouldReduceTransparency;
         const rm::ui::EffectsLevel uiEffects =
@@ -945,6 +950,7 @@ int runWindowed(const Session& session) {
         // into a list that has been rebuilt is a different building.
         std::optional<std::size_t> armedOption;
         rm::ui::PanelPages panelPages;
+        std::size_t productionPage = 0;
         rm::ui::CommandAvailability commandAvailable{};
         std::vector<const rm::unitdef::UnitDef*> commandSelection;
 
@@ -994,6 +1000,9 @@ int runWindowed(const Session& session) {
                                 .minZ = {},
                                 .maxZ = rm::sim::fxFromFloat(map->field.depthElmos()),
                             });
+        // Acceptance fixtures keep normal economy, construction, movement and roll-off ticks;
+        // opponents are silent so an unrelated attack cannot destroy the controls under test.
+        if (inputAcceptance) runner.scripts.clear();
         // Match time in TICKS, for pacing the opponents' decisions. Counted rather than
         // read off `matchSeconds`, so a dropped frame cannot skip a decision or run one
         // twice.
@@ -1293,9 +1302,16 @@ int runWindowed(const Session& session) {
             const auto productionRect = rm::ui::productionPanelRect(frame);
             if (production && productionRect.contains(hudPoint[0], hudPoint[1])) {
                 if (button == rm::MouseButton::Left) {
-                    (void)submitProductionControl(units, activeBuilder,
-                        playerDriving(units, units.playerArmy),
-                        static_cast<rm::TickIndex>(matchTicks), frame, hudPoint[0], hudPoint[1]);
+                    if (const auto step = rm::ui::productionPageStepAt(
+                            productionRect, *production, hudPoint[0], hudPoint[1], productionPage)) {
+                        if (*step < 0) --productionPage;
+                        else ++productionPage;
+                    } else {
+                        (void)submitProductionControl(units, activeBuilder,
+                            playerDriving(units, units.playerArmy),
+                            static_cast<rm::TickIndex>(matchTicks), frame, hudPoint[0], hudPoint[1],
+                            productionPage);
+                    }
                 }
                 armedCommand.reset();
                 armedOption.reset();
@@ -1613,6 +1629,26 @@ int runWindowed(const Session& session) {
             // A RIGHT-CLICK ON A DAMAGED ALLY IS REPAIR. Builders receive the targeted repair
             // order; the rest of a mixed selection moves there. This precedes Assist because a
             // damaged builder is still a repair target, not an instruction to guard it.
+            if (armedCommand == rm::sim::CommandKind::Guard) {
+                if (!hit || !units.store.alive(*hit)
+                    || !alliedTo(units, units.playerArmy, *hit)) {
+                    rm::log::write(rm::log::Level::Info, "orders", "guard needs a living allied unit");
+                    return;
+                }
+                std::vector<rm::sim::UnitId> guards;
+                for (const auto id : selected) {
+                    if (!units.store.alive(id) || id == *hit) continue;
+                    const rm::unitdef::UnitDef* def = units.catalog.def(units.store.typeAt(id.index));
+                    const std::array<const rm::unitdef::UnitDef*, 1> one{def};
+                    if (rm::ui::commandAvailability(one)[5]) guards.push_back(id);
+                }
+                if (!guards.empty()) {
+                    (void)issueGuard(units, guards, playerDriving(units, units.playerArmy),
+                                     static_cast<rm::TickIndex>(matchTicks), *hit, mods.shift);
+                    armedCommand.reset();
+                }
+                return;
+            }
             const bool explicitRepair = armedCommand == rm::sim::CommandKind::Repair;
             if (!isAttack && (!armedCommand || explicitRepair) && hit
                 && units.playerArmy != rm::sim::kNoArmy
@@ -1755,6 +1791,7 @@ int runWindowed(const Session& session) {
             }
 
             if (armedCommand == rm::sim::CommandKind::Repair
+                || armedCommand == rm::sim::CommandKind::Guard
                 || armedCommand == rm::sim::CommandKind::Assist
                 || armedCommand == rm::sim::CommandKind::Reclaim) {
                 rm::log::write(rm::log::Level::Info, "orders",
@@ -1816,7 +1853,14 @@ int runWindowed(const Session& session) {
             uploadedBatches = units.batches.size();
         };
 
+        std::size_t acceptanceFrames = 0;
+        bool acceptanceFastForward = false;
+        int acceptanceResult = inputAcceptance ? 1 : 0;
         window.onFrame([&](float elapsed) {
+            if (inputAcceptance) {
+                // Only wall-clock pacing changes; every simulated beat still uses advanceMatch.
+                elapsed = gAppTickRate.secondsPerTick() * (acceptanceFastForward ? 20.0f : 1.0f);
+            }
             // WASD pans the map, every frame rather than per keypress: a pan driven by
             // key EVENTS moves in jerks the length of the auto-repeat interval, and stops
             // dead the moment the repeat lapses.
@@ -1843,7 +1887,8 @@ int runWindowed(const Session& session) {
             }
 
             matchSeconds += elapsed;
-            const int ticks = clock.advance(elapsed);
+            const int pacedTicks = clock.advance(elapsed);
+            const int ticks = inputAcceptance ? (acceptanceFastForward ? 20 : 1) : pacedTicks;
 
             // THE SAME TICK the headless pre-run makes. This loop used to call
             // `sim::tick` and `resolveCollisions` and nothing else, so a unit in the
@@ -2038,7 +2083,9 @@ int runWindowed(const Session& session) {
             // Beyond All Reason arranges the same way. Absent entirely when nothing selected
             // builds, rather than an empty frame asking to be explained.
             rm::app::gatherBuilderCandidates(units, selected, builderCandidates);
+            const auto previousBuilder = activeBuilder;
             activeBuilder = rm::app::activeBuilderFor(builderCandidates, activeBuilder);
+            if (activeBuilder != previousBuilder) productionPage = 0;
             rm::app::gatherBuildOptions(units, activeBuilder, baseTheme, buildOptions, buildWho);
             // AN INDEX INTO A LIST THAT HAS BEEN REBUILT IS A DIFFERENT BUILDING. Deselecting,
             // or selecting a different builder, must not leave cell 4 armed and meaning
@@ -2156,8 +2203,10 @@ int runWindowed(const Session& session) {
             const auto production = gatherProduction(units, activeBuilder);
             const auto productionRect = rm::ui::productionPanelRect(frame);
             if (production) {
+                productionPage = rm::ui::productionPage(
+                    productionRect, production->queue.size(), productionPage).page;
                 rm::ui::appendProductionPanel(hudScratch, window.labelFont(), window.readoutFont(),
-                    theme, productionRect, *production);
+                    theme, productionRect, *production, productionPage);
             }
 
             // The roster, bottom centre. After the tray so both are in one buffer; they do not
@@ -2565,9 +2614,401 @@ int runWindowed(const Session& session) {
                 }
             }
             window.setSelection(selectionScratch);
+            ++acceptanceFrames;
         });
 
         window.show();
+
+        // This driver lives at the application boundary because the assertion is specifically
+        // that AppKit selection and the DRAWN widgets reach the match. Calling issueBuild here
+        // would bypass exactly the integration this acceptance run must exercise.
+        int inputStage = 0;
+        int stageStarted = matchTicks;
+        std::size_t observedFrame = 0;
+        std::size_t productIndex = 0;
+        std::vector<std::string> inputProducts;
+        rm::sim::UnitId inputFactory{}, inputProduct{};
+        std::string inputGenerator;
+        rm::sim::Transform moveStarted{};
+        std::vector<rm::sim::UnitId> beforeProduct;
+        std::vector<rm::sim::UnitId> beforeGenerator;
+        std::size_t pageClicks = 0;
+        bool engineerPageProbe = false;
+        bool productionProbeDone = false;
+        std::size_t queuedProbeEntries = 0;
+        std::vector<rm::CommandId> productionProbeIds;
+        struct ExpectedInputCommand {
+            rm::sim::CommandKind kind;
+            rm::sim::UnitId unit;
+            bool queued;
+            std::size_t logStart;
+        };
+        std::optional<ExpectedInputCommand> expectedInputCommand;
+        const auto expectInputCommand = [&](rm::sim::CommandKind kind, rm::sim::UnitId unit,
+                                             bool queued = false) {
+            expectedInputCommand = ExpectedInputCommand{kind, unit, queued, units.commands.size()};
+        };
+        const auto uppercase = [](std::string value) {
+            for (char& c : value) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+            return value;
+        };
+        const auto inputCheck = [](bool condition, const std::string& problem) {
+            if (!condition) throw std::runtime_error{problem};
+        };
+        const auto inputWorldClick = [&](rm::sim::Fx x, rm::sim::Fx z,
+                                         rm::MouseButton button, bool shift = false,
+                                         std::optional<float> height = {}) {
+            const float wx = rm::sim::fxToFloat(x), wz = rm::sim::fxToFloat(z);
+            const auto point = rm::worldToScreen(window.camera(),
+                simd_make_float3(wx, height.value_or(map->field.heightAtWorld(wx, wz)), wz),
+                static_cast<float>(window.width()), static_cast<float>(window.height()));
+            inputCheck(point.has_value(), "world target is behind the camera");
+            const auto viewport = window.uiViewport();
+            const auto hud = viewport.toHud(*point);
+            const auto frame = rm::ui::frameLayout(viewport);
+            inputCheck((*point)[0] > 0 && (*point)[0] < window.width()
+                && (*point)[1] > 0 && (*point)[1] < window.height()
+                && !frame.commands.contains(hud[0], hud[1])
+                && !frame.build.contains(hud[0], hud[1]), "world target overlaps HUD or window edge");
+            window.sendMouseClick((*point)[0], (*point)[1], button, shift);
+        };
+        std::optional<rm::sim::UnitId> pendingInputSelection;
+        const auto inputSelect = [&](rm::sim::UnitId id) {
+            inputCheck(units.store.alive(id), "selection target died");
+            const auto& at = units.store.transforms()[id.index];
+            if (pendingInputSelection != id) {
+                window.focusOn({rm::sim::fxToFloat(at.x), rm::sim::fxToFloat(at.y),
+                                rm::sim::fxToFloat(at.z)}, 420.0f);
+                pendingInputSelection = id;
+                return false; // Present the new camera and spawned unit before clicking it.
+            }
+            inputWorldClick(at.x, at.z, rm::MouseButton::Left, false, rm::sim::fxToFloat(at.y));
+            std::string picked = "none";
+            if (!selected.empty() && units.store.alive(selected.front())) {
+                const auto* definition = units.catalog.def(units.store.typeAt(selected.front().index));
+                picked = definition != nullptr ? definition->name : "unknown type";
+                picked += " slot " + std::to_string(selected.front().index);
+            }
+            inputCheck(selected.size() == 1 && selected.front() == id,
+                       "native world click did not select slot " + std::to_string(id.index)
+                           + "; picked " + picked);
+            pendingInputSelection.reset();
+            return true;
+        };
+        const auto inputHudClick = [&](float x, float y, rm::MouseButton button = rm::MouseButton::Left) {
+            const float scale = window.uiViewport().hudScale();
+            window.sendMouseClick(x * scale, y * scale, button);
+        };
+        const auto inputCommandClick = [&](std::size_t slot, rm::MouseButton button = rm::MouseButton::Left) {
+            const auto rack = rm::ui::commandRackLayout(rm::ui::frameLayout(window.uiViewport()), true);
+            const auto at = rm::ui::commandCellOrigin(rack, slot);
+            inputHudClick(at[0] + rack.cellWidth / 2, at[1] + rack.cellHeight / 2, button);
+        };
+        const auto inputBuildClick = [&](const std::string& name) {
+            const auto wanted = std::find_if(buildOptions.begin(), buildOptions.end(),
+                [&](const auto& option) { return uppercase(option.id) == name; });
+            inputCheck(wanted != buildOptions.end(), "missing build tray option " + name);
+            const auto index = static_cast<std::size_t>(wanted - buildOptions.begin());
+            const auto layout = rm::ui::buildPanelLayout(rm::ui::frameLayout(window.uiViewport()),
+                buildOptions.size(), panelPages.build(units.store.typeAt(buildWho.builder.index)));
+            if (index < layout.first || index >= layout.first + layout.shown) {
+                const float right = layout.x + layout.width - rm::ui::kBuildPadding;
+                inputHudClick(right - (index < layout.first ? 33.0f : 11.0f),
+                              layout.y + rm::ui::kBuildHeader / 2);
+                ++pageClicks;
+                return false; // Wait until the changed page is drawn before its next click.
+            }
+            const auto cell = rm::ui::buildCellOrigin(layout, index - layout.first);
+            inputHudClick(cell[0] + layout.cellWidth / 2, cell[1] + layout.cellHeight / 2);
+            return true;
+        };
+        const auto inputLiveUnits = [&] {
+            std::vector<rm::sim::UnitId> ids;
+            for (rm::UnitIndex slot = 0; slot < units.store.slotCount(); ++slot) {
+                if (units.store.slotAlive(slot)) ids.push_back(units.store.idAt(slot));
+            }
+            return ids;
+        };
+        const auto inputFindSpawn = [&](const std::string& name,
+                                         std::span<const rm::sim::UnitId> before) {
+            // A completed build can reuse a dead slot. Compare the full handle, not slot count.
+            for (rm::UnitIndex slot = 0; slot < units.store.slotCount(); ++slot) {
+                if (!units.store.slotAlive(slot)) continue;
+                const auto id = units.store.idAt(slot);
+                if (std::ranges::find(before, id) != before.end()) continue;
+                const auto* def = units.catalog.def(units.store.typeAt(slot));
+                if (def && uppercase(def->name) == name) return id;
+            }
+            return rm::sim::UnitId{};
+        };
+        const auto nextInputStage = [&](int stage) {
+            inputStage = stage;
+            stageStarted = matchTicks;
+            acceptanceFastForward = stage == 2 || stage == 9;
+        };
+        std::function<void(NSTimer*)> inputTick = [&](NSTimer* timer) {
+            if (acceptanceFrames == observedFrame) return;
+            observedFrame = acceptanceFrames;
+            try {
+                inputCheck(matchTicks - stageStarted < 12000 && acceptanceFrames < 12000,
+                           "timeout at input stage " + std::to_string(inputStage));
+                if (expectedInputCommand) {
+                    const auto& expected = *expectedInputCommand;
+                    std::size_t accepted = 0;
+                    const auto log = units.commands.all();
+                    for (std::size_t i = expected.logStart; i < log.size(); ++i) {
+                        if (log[i].kind == expected.kind && log[i].queued == expected.queued
+                            && std::ranges::find(log[i].units, expected.unit) != log[i].units.end()) {
+                            ++accepted;
+                        }
+                    }
+                    inputCheck(accepted == 1, "native input did not dispatch exactly one accepted command");
+                    expectedInputCommand.reset();
+                }
+                if (inputStage == 0) {
+                    for (rm::UnitIndex slot = 0; slot < units.store.slotCount(); ++slot) {
+                        if (!units.store.slotAlive(slot)) continue;
+                        const auto* def = units.catalog.def(units.store.typeAt(slot));
+                        if (!def) continue;
+                        const std::string factory = uppercase(def->name);
+                        if (factory != "UEB0101" && factory != "UAB0101"
+                            && factory != "URB0101" && factory != "XSB0101") continue;
+                        if (units.armyOf(slot) != units.playerArmy) continue;
+                        // --units seats fixtures at map starts, including the ACUs' starts.
+                        // Choose an unobstructed factory; a coincident ACU is a different click target.
+                        const auto& at = units.store.transforms()[slot];
+                        bool crowded = false;
+                        for (rm::UnitIndex other = 0; other < units.store.slotCount(); ++other) {
+                            if (other == slot || !units.store.slotAlive(other)) continue;
+                            const auto& neighbour = units.store.transforms()[other];
+                            if (rm::sim::fxHypot(at.x - neighbour.x, at.z - neighbour.z)
+                                < rm::sim::fxFromFloat(2 * rm::kDefaultPickRadiusElmos)) {
+                                crowded = true;
+                                break;
+                            }
+                        }
+                        if (crowded) continue;
+                        inputFactory = units.store.idAt(slot);
+                        const std::string prefix = factory.substr(0, 2) + "L";
+                        for (const char* suffix : {"0101", "0103", "0104", "0105"}) {
+                            inputProducts.push_back(prefix + suffix);
+                        }
+                        if (factory != "XSB0101") inputProducts.push_back(prefix + "0106");
+                        inputProducts.push_back(prefix + (factory == "URB0101" ? "0107" : "0201"));
+                        inputGenerator = factory.substr(0, 3) + "1101";
+                        break;
+                    }
+                    inputCheck(inputFactory.generation != 0, "supply a retail T1 land factory with --units");
+                    inputCheck(units.playerArmy >= 0 && !units.economies.empty(), "input acceptance requires --skirmish");
+                    const auto viewport = window.uiViewport();
+                    std::printf("input acceptance: %.0fx%.0f logical points, simulated %.1fx backing, %zu products\n",
+                        viewport.logicalExtent.width, viewport.logicalExtent.height,
+                        viewport.backingScale, inputProducts.size());
+                    nextInputStage(12);
+                } else if (inputStage == 1) {
+                    inputCheck(activeBuilder == inputFactory, "factory selection did not expose its build tray");
+                    beforeProduct = inputLiveUnits();
+                    const auto before = units.commandInput.size();
+                    if (inputBuildClick(inputProducts[productIndex])) {
+                        inputCheck(units.commandInput.size() == before + 1,
+                            "factory cell did not submit exactly one Build");
+                        expectInputCommand(rm::sim::CommandKind::Build, inputFactory, true);
+                        nextInputStage(2);
+                    }
+                } else if (inputStage == 2) {
+                    inputProduct = inputFindSpawn(inputProducts[productIndex], beforeProduct);
+                    if (inputProduct.generation == 0) return;
+                    if (!inputSelect(inputProduct)) return;
+                    nextInputStage(3);
+                } else if (inputStage == 3) {
+                    inputCheck(commandAvailable[1], "produced unit has no reachable Move control");
+                    moveStarted = units.store.transforms()[inputProduct.index];
+                    const auto before = units.commandInput.size();
+                    inputCommandClick(1);
+                    inputCheck(armedCommand == rm::sim::CommandKind::Move, "Move widget did not arm");
+                    inputWorldClick(moveStarted.x + rm::sim::Fx::fromInt(80), moveStarted.z,
+                                    rm::MouseButton::Right);
+                    inputCheck(units.commandInput.size() == before + 1,
+                        "native right click did not dispatch exactly one Move");
+                    expectInputCommand(rm::sim::CommandKind::Move, inputProduct);
+                    nextInputStage(4);
+                } else if (inputStage == 4) {
+                    const auto& at = units.store.transforms()[inputProduct.index];
+                    if (rm::sim::fxHypot(at.x - moveStarted.x, at.z - moveStarted.z)
+                        < rm::sim::Fx::fromInt(12)) return;
+                    const auto before = units.commandInput.size();
+                    inputWorldClick(moveStarted.x + rm::sim::Fx::fromInt(80),
+                                    moveStarted.z + rm::sim::Fx::fromInt(48), rm::MouseButton::Right, true);
+                    inputCheck(units.commandInput.size() == before + 1,
+                               "Shift-right did not append exactly one queued order on release");
+                    expectInputCommand(rm::sim::CommandKind::Move, inputProduct, true);
+                    nextInputStage(5);
+                } else if (inputStage == 5) {
+                    inputCheck(units.store.orders()[inputProduct.index].size() == 2,
+                               "Shift-right replaced the active route instead of appending a waypoint");
+                    const auto before = units.commandInput.size();
+                    inputCommandClick(6); // Unimplemented cell must swallow left and right input.
+                    inputCommandClick(6, rm::MouseButton::Right);
+                    inputCheck(units.commandInput.size() == before && selected.size() == 1
+                        && selected.front() == inputProduct, "disabled rack cell leaked input into world");
+                    inputCommandClick(4);
+                    inputCheck(units.commandInput.size() == before + 1,
+                        "Stop widget did not submit exactly one Stop");
+                    expectInputCommand(rm::sim::CommandKind::Stop, inputProduct);
+                    nextInputStage(6);
+                } else if (inputStage == 6) {
+                    inputCheck(!units.store.motion()[inputProduct.index].moving
+                        && units.store.orders()[inputProduct.index].active() == nullptr,
+                        "Stop did not clear movement and queued orders");
+                    inputCheck(commandAvailable[5], "produced unit has no reachable Guard control");
+                    inputCommandClick(5);
+                    inputCheck(armedCommand == rm::sim::CommandKind::Guard, "Guard widget did not arm");
+                    const auto& guarded = units.store.transforms()[inputFactory.index];
+                    inputWorldClick(guarded.x, guarded.z, rm::MouseButton::Right, false,
+                                    rm::sim::fxToFloat(guarded.y));
+                    expectInputCommand(rm::sim::CommandKind::Guard, inputProduct);
+                    nextInputStage(19);
+                } else if (inputStage == 19) {
+                    const auto* guard = units.store.orders()[inputProduct.index].active();
+                    inputCheck(guard != nullptr && guard->kind() == rm::sim::CommandKind::Guard
+                        && guard->target() == inputFactory, "native Guard did not retain the selected ally");
+                    inputCommandClick(4);
+                    expectInputCommand(rm::sim::CommandKind::Stop, inputProduct);
+                    nextInputStage(20);
+                } else if (inputStage == 20) {
+                    inputCheck(units.store.orders()[inputProduct.index].empty(), "Stop did not cancel Guard");
+                    std::printf("input acceptance: %s native Guard target and Stop PASS\n",
+                                inputProducts[productIndex].c_str());
+                    if (inputProducts[productIndex].ends_with("0105")) {
+                        nextInputStage(7);
+                    } else nextInputStage(10);
+                } else if (inputStage == 7) {
+                    inputCheck(activeBuilder == inputProduct, "engineer selection did not expose construction tray");
+                    if (!engineerPageProbe) {
+                        engineerPageProbe = true;
+                        const auto panel = rm::ui::buildPanelLayout(rm::ui::frameLayout(window.uiViewport()),
+                            buildOptions.size(), panelPages.build(units.store.typeAt(inputProduct.index)));
+                        if (panel.pages > 1) {
+                            inputHudClick(panel.x + panel.width - rm::ui::kBuildPadding - 11.0f,
+                                          panel.y + rm::ui::kBuildHeader / 2);
+                            ++pageClicks;
+                            return;
+                        }
+                    }
+                    if (inputBuildClick(inputGenerator)) {
+                        inputCheck(armedOption.has_value(), "generator build cell did not arm placement");
+                        nextInputStage(8);
+                    }
+                } else if (inputStage == 8) {
+                    const auto& at = units.store.transforms()[inputProduct.index];
+                    beforeGenerator = inputLiveUnits();
+                    bool placed = false;
+                    for (float dx : {48.0f, -48.0f, 72.0f, -72.0f}) {
+                        for (float dz : {0.0f, 48.0f, -48.0f}) {
+                            const float x = rm::sim::fxToFloat(at.x) + dx;
+                            const float z = rm::sim::fxToFloat(at.z) + dz;
+                            if (!armedPlaceable({x, z})) continue;
+                            const auto before = units.commandInput.size();
+                            inputWorldClick(rm::sim::fxFromFloat(x), rm::sim::fxFromFloat(z), rm::MouseButton::Left);
+                            inputCheck(units.commandInput.size() == before + 1,
+                                "world placement did not submit exactly one Build");
+                            expectInputCommand(rm::sim::CommandKind::Build, inputProduct);
+                            placed = true;
+                            break;
+                        }
+                        if (placed) break;
+                    }
+                    inputCheck(placed, "fixture has no visible placeable generator site");
+                    nextInputStage(9);
+                } else if (inputStage == 9) {
+                    if (inputFindSpawn(inputGenerator, beforeGenerator).generation == 0) return;
+                    std::printf("input acceptance: %s placed and completed %s\n",
+                                inputProducts[productIndex].c_str(), inputGenerator.c_str());
+                    nextInputStage(10);
+                } else if (inputStage == 10) {
+                    std::printf("input acceptance: %s production, selection, Move, Shift queue, Stop, input swallowing PASS\n",
+                                inputProducts[productIndex].c_str());
+                    if (++productIndex < inputProducts.size()) {
+                        nextInputStage(12);
+                    } else nextInputStage(11);
+                } else if (inputStage == 12) {
+                    if (inputSelect(inputFactory)) nextInputStage(productionProbeDone ? 1 : 13);
+                } else if (inputStage >= 13 && inputStage <= 18) {
+                    const auto rect = rm::ui::productionPanelRect(rm::ui::frameLayout(window.uiViewport()));
+                    const auto click = [&](const rm::ui::Rect& button) {
+                        inputHudClick(button.x + button.width / 2, button.y + button.height / 2);
+                    };
+                    const auto production = gatherProduction(units, inputFactory);
+                    inputCheck(production.has_value(), "factory production panel is missing");
+                    if (inputStage == 13) {
+                        // Fill two pages through real tray clicks before testing a pending row.
+                        if (queuedProbeEntries <= rm::ui::productionRowsFor(rect)) {
+                            if (inputBuildClick(inputProducts.back())) {
+                                ++queuedProbeEntries;
+                                expectInputCommand(rm::sim::CommandKind::Build, inputFactory, true);
+                            }
+                            return;
+                        }
+                        inputCheck(production->queue.size() == queuedProbeEntries,
+                                   "production entries merged or finished before the cancellation probe");
+                        for (const auto& row : production->queue) productionProbeIds.push_back(row.commandId);
+                        click(rm::ui::productionPageButtonRect(rect, true));
+                        nextInputStage(14);
+                    } else if (inputStage == 14) {
+                        const auto page = rm::ui::productionPage(rect, production->queue.size(), productionPage);
+                        inputCheck(page.page == 1 && page.shown == 1, "next-page widget did not expose the pending row");
+                        inputCheck(writePng(session.window.inputAcceptancePath + ".queue.png", window.capture()),
+                                   "queue capture write failed");
+                        click(rm::ui::productionCancelRect(rect, 0));
+                        expectInputCommand(rm::sim::CommandKind::CancelFactoryBuild, inputFactory);
+                        productionProbeIds.pop_back();
+                        nextInputStage(15);
+                    } else if (inputStage == 15 || inputStage == 17) {
+                        inputCheck(std::ranges::equal(production->queue, productionProbeIds, {},
+                            &rm::ui::ProductionEntry::commandId), "cancellation removed a different production entry");
+                        inputCheck(productionPage == 0, "production page did not clamp after deletion");
+                        if (inputStage == 15) {
+                            nextInputStage(16);
+                        } else {
+                            click(rm::ui::productionClearRect(rect));
+                            expectInputCommand(rm::sim::CommandKind::Stop, inputFactory);
+                            nextInputStage(18);
+                        }
+                    } else if (inputStage == 16) {
+                        click(rm::ui::productionCancelRect(rect, 0));
+                        expectInputCommand(rm::sim::CommandKind::CancelFactoryBuild, inputFactory);
+                        productionProbeIds.erase(productionProbeIds.begin());
+                        nextInputStage(17);
+                    } else {
+                        inputCheck(production->queue.empty() && !production->building,
+                                   "Clear Queue did not stop the remaining production");
+                        productionProbeDone = true;
+                        std::printf("input acceptance: production pagination, pending/active cancellation, Clear Queue PASS\n");
+                        nextInputStage(1);
+                    }
+                } else {
+                    inputCheck(writePng(session.window.inputAcceptancePath, window.capture()), "capture write failed");
+                    acceptanceResult = 0;
+                    std::printf("input acceptance: PASS %zu products, %zu page clicks, %d normal match ticks\n",
+                                inputProducts.size(), pageClicks, matchTicks);
+                    [timer invalidate];
+                    window.stop();
+                }
+            } catch (const std::exception& error) {
+                std::fprintf(stderr, "input acceptance: FAIL stage=%d: %s\n", inputStage, error.what());
+                if (!writePng(session.window.inputAcceptancePath, window.capture())) {
+                    std::fprintf(stderr, "input acceptance: failure capture could not be written\n");
+                }
+                [timer invalidate];
+                window.stop();
+            }
+            std::fflush(stdout);
+        };
+        if (inputAcceptance) {
+            [NSTimer scheduledTimerWithTimeInterval:0.01 repeats:YES block:^(NSTimer* timer) {
+                inputTick(timer);
+            }];
+        }
 
         RMBenchWatcher* watcher = nil;
         if (bench.enabled) {
@@ -2591,7 +3032,7 @@ int runWindowed(const Session& session) {
 
         [app activateIgnoringOtherApps:YES];
         [app run]; // never returns until the app quits
-    return 0;
+    return acceptanceResult;
 }
 
 } // namespace rm::app

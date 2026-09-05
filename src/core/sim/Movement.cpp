@@ -183,9 +183,15 @@ void integrateAir(Transform& unit, MoveState& state, const Terrain& terrain) noe
             speed = cruise;
         } else if (state.airCombatState == MoveState::AirCombatState::TailChase) {
             speed = std::max(speed, state.airMinSpeedElmosPerSec);
+        } else if (state.airCombatState == MoveState::AirCombatState::HardTurn
+                   || state.airCombatState == MoveState::AirCombatState::Turn) {
+            speed = state.airMinSpeedElmosPerSec;
+        } else if (state.airCombatState != MoveState::AirCombatState::None) {
+            speed = cruise;
         }
-        desiredX = dx / distance * speed;
-        desiredZ = dz / distance * speed;
+        const bool combat = state.airCombatState != MoveState::AirCombatState::None;
+        desiredX = (combat ? fxSin(unit.heading) : dx / distance) * speed;
+        desiredZ = (combat ? fxCos(unit.heading) : dz / distance) * speed;
     }
 
     // --- terrain look-ahead (`C-246`) ---
@@ -268,6 +274,76 @@ Fx airDampingFactor(Fx kMove, Fx kMoveDamping, Fx desiredLength) noexcept {
         return kMove;
     }
     return std::min(kMove / s, kMoveDamping);
+}
+
+void updateWingedAttack(MoveState& state, const Transform& aircraft, const Transform& target,
+                        bool targetAirborne, Fx mapWidth, Fx mapDepth, TickIndex tick,
+                        RandomStream& random) {
+    using State = MoveState::AirCombatState;
+    // C-224, 0x006c3a6c–0x006c4206. Random ranges use multiply-high, with an
+    // exclusive upper bound; even a zero-width range consumes its draw.
+    const auto draw = [&](TickCount lo, TickCount hi) {
+        return lo + static_cast<TickCount>((std::uint64_t{random.next()}
+                                            * (std::max(lo, hi) - lo)) >> 32);
+    };
+    const auto inside = [&](Fx inset) {
+        return aircraft.x >= inset && aircraft.z >= inset
+            && aircraft.x <= mapWidth - Fx::fromInt(8) - inset
+            && aircraft.z <= mapDepth - Fx::fromInt(8) - inset;
+    };
+    const Polar direction = fxPolar(target.x - aircraft.x, target.z - aircraft.z);
+    const Fx ahead = direction.length > Fx{}
+        ? fxCos(static_cast<Brad>(direction.bearing - aircraft.heading)) : Fx{};
+    const bool inCone = ahead > (state.airCombatState == State::HardTurn
+                                    ? Fx{} : Fx::fromRatio(866, 1000));
+    const bool recovery = (state.airCombatState == State::Recovery && !inside(Fx::fromInt(40)))
+                       || (targetAirborne && !inside(Fx{}));
+    if (recovery) {
+        state.airCombatState = State::Recovery;
+    } else if ((state.airCombatState == State::HeadOn
+                && direction.length < state.airBreakOffTrigger)
+               || (state.airCombatState == State::None && state.airBreakOffNearTarget
+                   && direction.length < state.airBreakOffDistance)
+               || (state.airCombatState == State::TailChase && ahead < Fx{})
+               || state.airSustainedTicks > state.airSustainedThreshold) {
+        state.airCombatState = State::BreakOff;
+        // ceil(distance / authored maximum speed * 10), before randomization.
+        const auto speed = std::max(1, state.airMaxSpeedElmosPerSec.raw());
+        const auto numerator = std::int64_t{std::max(0, state.airBreakOffDistance.raw())} * 10;
+        const TickCount lo = static_cast<TickCount>((numerator + speed - 1) / speed);
+        const TickCount hi = static_cast<TickCount>(
+            std::int64_t{lo} * std::max(0, state.airRandomBreakOffMultiplier.raw())
+            / kFxOne.raw());
+        state.airCombatDeadline = tick + draw(lo, hi);
+    } else if (state.airCombatState == State::None
+               || state.airCombatDeadline < tick
+               || (inCone && state.airCombatState != State::BreakOff)) {
+        if (inCone) {
+            state.airCombatState = targetAirborne
+                && fxCos(static_cast<Brad>(aircraft.heading - target.heading)) > Fx{}
+                ? State::TailChase : State::HeadOn;
+        } else if (state.airCombatState != State::TailChase || ahead <= Fx{}) {
+            state.airCombatState = static_cast<State>(draw(3, 6));
+            state.airCombatDeadline = tick + draw(state.airMinChangeTicks, state.airMaxChangeTicks);
+        }
+    }
+    if (state.airCombatState >= State::HardTurn && state.airCombatState <= State::FastTurn) {
+        ++state.airSustainedTicks;
+    } else if (state.airCombatState == State::BreakOff || state.airCombatState == State::Recovery) {
+        state.airSustainedTicks = 0;
+    }
+    state.destinationX = target.x;
+    state.destinationZ = target.z;
+    if (state.airCombatState == State::BreakOff) {
+        state.destinationX = aircraft.x + fxSin(aircraft.heading) * state.airMaxSpeedElmosPerSec;
+        state.destinationZ = aircraft.z + fxCos(aircraft.heading) * state.airMaxSpeedElmosPerSec;
+    } else if (state.airCombatState == State::Recovery) {
+        state.destinationX = (mapWidth - Fx::fromInt(8)) * Fx::fromRatio(1, 2);
+        state.destinationZ = (mapDepth - Fx::fromInt(8)) * Fx::fromRatio(1, 2);
+    }
+    state.moving = true;
+    state.path.clear();
+    state.pathIndex = 0;
 }
 
 Fx wingedLandingElevation(Fx elevation, Fx adjustment, Fx distanceToSite) noexcept {
@@ -358,7 +434,8 @@ void tick(std::span<Transform> transforms, std::span<MoveState> motion,
         // the `continue` below skips the air branch that performs it.
         const bool flyThrough =
             state.canFly && state.airborne && state.airState != MoveState::AirState::Bottom;
-        if (distance <= std::max(radius, travel) && !state.makingAttackRun()) {
+        if (distance <= std::max(radius, travel)
+            && state.airCombatState == MoveState::AirCombatState::None) {
             if (!onFinalWaypoint) {
                 ++state.pathIndex;
                 state.destinationX = state.path[state.pathIndex][0];
@@ -385,10 +462,40 @@ void tick(std::span<Transform> transforms, std::span<MoveState> motion,
         // came out of `fxPolar` above, measured from +Z toward +X — the engine's convention,
         // which the function's argument order enforces rather than a comment.
         const std::int32_t error = shortestTurn(unit.heading, toTarget.bearing);
-        const std::int32_t maxTurn = state.turnPerTick;
-        unit.heading = static_cast<Brad>(static_cast<std::uint16_t>(unit.heading)
-                                         + static_cast<std::uint16_t>(
-                                             std::clamp(error, -maxTurn, maxTurn)));
+        if (state.canFly && state.airCombatState != MoveState::AirCombatState::None) {
+            // ponytail: planar PD reduction of C-221/C-247; full quaternion pitch,
+            // bank and cargo inertia require the three-axis rigid-body solver.
+            // The rate limits the desired angular velocity, not the gain: C-247
+            // 0x006c4908 adds TightTurnMultiplier*(1-dot) to KTurn for state 3.
+            constexpr Fx kTau = Fx::fromRaw(102944); // 2*pi in Q18.14
+            const Fx angularError = Fx::fromRatio(error, kBradFullTurn) * kTau;
+            const bool hard = state.airCombatState == MoveState::AirCombatState::HardTurn;
+            const Fx rate = hard ? state.airCombatTurnSpeed : state.airTurnSpeed;
+            const Fx desired = std::clamp(angularError / kAirDt, -rate, rate);
+            Fx alignment = fxCos(static_cast<Brad>(error));
+            if (state.airCombatState == MoveState::AirCombatState::TailChase) {
+                alignment *= alignment;
+                alignment *= alignment;
+                alignment *= alignment;
+            }
+            Fx gain = state.airKTurn;
+            if (hard || state.airCombatState == MoveState::AirCombatState::HeadOn
+                     || state.airCombatState == MoveState::AirCombatState::TailChase) {
+                gain += (hard ? state.airTightTurnMultiplier : kFxOne)
+                      * (kFxOne - std::max(Fx{}, alignment));
+            }
+            const Fx oldYaw = state.airYawVelocity;
+            state.airYawVelocity += (gain * desired - state.airKTurnDamping * oldYaw) * kAirDt;
+            const Fx rotation = (oldYaw + state.airYawVelocity) * kTrapezoidHalfStep;
+            const auto turn = static_cast<std::int32_t>(
+                std::int64_t{rotation.raw()} * kBradFullTurn / kTau.raw());
+            unit.heading = static_cast<Brad>(unit.heading + turn);
+        } else {
+            const std::int32_t maxTurn = state.turnPerTick;
+            unit.heading = static_cast<Brad>(static_cast<std::uint16_t>(unit.heading)
+                                             + static_cast<std::uint16_t>(
+                                                 std::clamp(error, -maxTurn, maxTurn)));
+        }
 
         // Forward speed falls off with how badly the unit is still pointed the
         // wrong way, reaching zero at 90 degrees off. This is what makes a unit
@@ -413,8 +520,10 @@ void tick(std::span<Transform> transforms, std::span<MoveState> motion,
             // enters so touchdown can complete it. The surface — water where the ground
             // is drowned — is what a flyer leaves and lands on (`C-222`).
             integrateAir(unit, state, terrain);
-            unit.x = std::clamp(unit.x, Fx{}, width);
-            unit.z = std::clamp(unit.z, Fx{}, depth);
+            if (state.airCombatState == MoveState::AirCombatState::None) {
+                unit.x = std::clamp(unit.x, Fx{}, width);
+                unit.z = std::clamp(unit.z, Fx{}, depth);
+            }
             const Fx surface = terrain.surfaceHeightAt(unit.x, unit.z);
             if (!state.airborne && unit.y > surface) {
                 state.airborne = true;
@@ -449,7 +558,9 @@ void tick(std::span<Transform> transforms, std::span<MoveState> motion,
         // walk cycle is paced by ground covered, not by height climbed.
         state.distanceTravelledElmos += fxHypot(unit.x - previousX, unit.z - previousZ);
 
-        if (state.surfaceWater && terrain.hasWater()) {
+        if (state.hovering) {
+            unit.y = terrain.surfaceHeightAt(unit.x, unit.z) + state.hoverElevation;
+        } else if (state.surfaceWater && terrain.hasWater()) {
             unit.y = terrain.waterLevel();
         } else if (!state.airborne) {
             // Ground behavior stays exactly where it was: moving units update height here;
@@ -472,7 +583,7 @@ void tick(std::span<Transform> transforms, std::span<MoveState> motion,
         if (motion[i].canFly && motion[i].airborne) {
             continue;
         }
-        if (motion[i].airborne || motion[i].surfaceWater) {
+        if (motion[i].airborne || motion[i].surfaceWater || motion[i].hovering) {
             placeOnMotionLayer(transforms[i], motion[i], terrain);
             continue;
         }
@@ -550,6 +661,12 @@ std::array<Brad, 2> slopeAlignment(const Terrain& terrain, Fx x, Fx z, Brad yaw)
 
 void placeOnMotionLayer(Transform& transform, const MoveState& state,
                         const Terrain& terrain) noexcept {
+    if (state.hovering) {
+        transform.y = terrain.surfaceHeightAt(transform.x, transform.z) + state.hoverElevation;
+        transform.pitch = Brad{0};
+        transform.roll = Brad{0};
+        return;
+    }
     if (state.surfaceWater && terrain.hasWater()) {
         transform.y = terrain.waterLevel();
         transform.pitch = Brad{0};
@@ -723,7 +840,7 @@ void resolveCollisions(UnitStore& store, const Terrain& terrain,
         if (motion[i].canFly && motion[i].airborne) {
             continue;
         }
-        if (motion[i].airborne || motion[i].surfaceWater) {
+        if (motion[i].airborne || motion[i].surfaceWater || motion[i].hovering) {
             placeOnMotionLayer(unit, motion[i], terrain);
         } else {
             unit.y = terrain.heightAt(unit.x, unit.z);

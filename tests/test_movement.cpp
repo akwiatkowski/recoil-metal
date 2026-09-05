@@ -121,6 +121,60 @@ void run(std::vector<rm::sim::Transform>& instances, std::vector<MoveState>& mot
     }
 }
 
+TEST_CASE("winged combat keeps turn deadlines breakoff and map recovery distinct", "[air-combat]") {
+    using rm::sim::Fx;
+    using State = MoveState::AirCombatState;
+    MoveState state;
+    state.airMaxSpeedElmosPerSec = Fx::fromInt(40);
+    state.airMinSpeedElmosPerSec = Fx::fromInt(20);
+    const rm::sim::Transform aircraft{.x = Fx::fromInt(400), .z = Fx::fromInt(400)};
+    auto current = aircraft;
+    rm::sim::Transform target{.x = Fx::fromInt(400), .z = Fx::fromInt(200)};
+    rm::sim::RandomStream random{std::uint32_t{1}};
+    const auto step = [&](rm::TickIndex tick) {
+        rm::sim::updateWingedAttack(state, current, target, true, Fx::fromInt(1024), Fx::fromInt(1024), tick, random);
+    };
+    SECTION("a target behind picks a turn and an independent deadline") {
+        step(10);
+        CHECK(state.airCombatState == State::Turn); // MT19937 seed 1: first draw maps to choice 1 of 3
+        CHECK(state.airCombatDeadline == 69); // second draw maps to 59 ticks in [30,60)
+        CHECK(state.airSustainedTicks == 1);
+        CHECK_FALSE(state.makingAttackRun());
+        step(69);
+        CHECK(state.airCombatState == State::Turn);
+        CHECK(state.airCombatDeadline == 69);
+        step(70);
+        CHECK(state.airCombatDeadline > 70);
+    }
+    SECTION("sustained counter breaks off only after exceeding its threshold") {
+        state.airCombatState = State::Turn;
+        state.airCombatDeadline = 1000;
+        state.airSustainedTicks = state.airSustainedThreshold;
+        state.airBreakOffDistance = Fx::fromInt(20);
+        step(10);
+        CHECK(state.airCombatState == State::Turn);
+        step(11);
+        CHECK(state.airCombatState == State::BreakOff);
+        CHECK(state.airCombatDeadline == 16);
+        CHECK(state.airSustainedTicks == 0);
+        CHECK(state.makingAttackRun());
+        CHECK(state.destinationZ > aircraft.z);
+    }
+    SECTION("an airborne target triggers off-map recovery until the inset is reached") {
+        current.x = Fx::fromInt(-1);
+        step(10);
+        CHECK(state.airCombatState == State::Recovery);
+        CHECK(state.destinationX == Fx::fromInt(508)); // centre of [0,127] ogrids, converted to elmos
+        CHECK_FALSE(state.makingAttackRun());
+        current.x = Fx::fromInt(20);
+        step(11);
+        CHECK(state.airCombatState == State::Recovery);
+        current.x = Fx::fromInt(41);
+        step(12);
+        CHECK(state.airCombatState != State::Recovery);
+    }
+}
+
 TEST_CASE("aircraft keep fixed terrain clearance and remain level") {
     const HeightField field = rampField();
     const rm::sim::Terrain terrain{field};
@@ -1067,6 +1121,30 @@ TEST_CASE("a flyer integrates velocity trapezoidally") {
     CHECK(rm::sim::fxToFloat(motion[0].velocity[0]) == Approx(0.0f).margin(0.01));
     CHECK(rm::sim::fxToFloat(units[0].z) == Approx(100.8f).margin(0.01));
     CHECK(rm::sim::fxToFloat(units[0].y) == Approx(80.0f).margin(0.01));
+}
+
+TEST_CASE("combat turns keep flying forward at their state speed", "[air-combat]") {
+    using rm::sim::Fx;
+    using State = MoveState::AirCombatState;
+    const auto field = flatField();
+    std::vector<rm::sim::Transform> units(3, unitAt(400.0f, 400.0f));
+    std::vector<MoveState> motion(3, flyer());
+    for (std::size_t i = 0; i < motion.size(); ++i) {
+        units[i].y = Fx::fromInt(80);
+        motion[i].altitudeRef = Fx::fromInt(80);
+        motion[i].airCombatState = static_cast<State>(3 + i);
+        motion[i].airMinSpeedElmosPerSec = Fx::fromInt(80);
+        motion[i].airCombatTurnSpeed = Fx::fromInt(2);
+        rm::sim::orderTo(motion[i], rm::sim::Terrain{field}, Fx::fromInt(600), Fx::fromInt(400));
+    }
+    rm::sim::tick(units, motion, rm::sim::Terrain{field});
+    CHECK(motion[0].velocity[2] > Fx::fromInt(7));
+    CHECK(motion[1].velocity[2] > Fx::fromInt(7));
+    CHECK(motion[2].velocity[2] > Fx::fromInt(15));
+    CHECK(motion[0].airYawVelocity > motion[1].airYawVelocity);
+    CHECK(units[0].heading > units[1].heading);
+    CHECK(motion[1].moving);
+    CHECK(motion[1].airState == MoveState::AirState::Top);
 }
 
 TEST_CASE("head-on and tail-chase runs select their recovered speed and elevation") {

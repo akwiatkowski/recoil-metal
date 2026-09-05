@@ -67,7 +67,9 @@ bool matchesExpression(const CategoryExpression& expression, const UnitDef& def)
         std::vector<std::string_view> tags;
         tags.reserve(term.size());
         for (const std::string& tag : term) {
-            tags.emplace_back(tag);
+            // ALLUNITS is the engine's universal set (C-210), not an authored tag.
+            // Keep the other terms: ALLUNITS STRUCTURE still excludes mobile units.
+            if (tag != "ALLUNITS") tags.emplace_back(tag);
         }
         if (def.hasAllCategories(tags)) {
             return true;  // ANY term is enough — the list means OR

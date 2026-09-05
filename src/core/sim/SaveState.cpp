@@ -30,6 +30,9 @@ constexpr std::uint32_t kVersion10 = 10;
 constexpr std::uint32_t kVersion11 = 11;
 constexpr std::uint32_t kVersion12 = 12;
 constexpr std::uint32_t kVersion13 = 13;
+constexpr std::uint32_t kVersion14 = 14;
+constexpr std::uint32_t kVersion15 = 15;
+constexpr std::uint32_t kVersion16 = 16;
 // MT19937 serializes its 624 state words plus an index, all as unsigned decimal numbers separated
 // by one space. This rejects oversized malformed frames before they allocate their payload.
 constexpr std::size_t kMaxRandomStatePayload =
@@ -136,6 +139,135 @@ private:
 void writeId(PayloadWriter& writer, UnitId id) { writer.u32(id.index); writer.u32(id.generation); }
 [[nodiscard]] bool readId(PayloadReader& reader, UnitId& id) { return reader.u32(id.index) && reader.u32(id.generation); }
 
+void writeResources(PayloadWriter& w, Resources value) {
+    w.i64(value.mass.raw()); w.i64(value.energy.raw());
+}
+bool readResources(PayloadReader& r, Resources& value) {
+    std::int64_t mass{}, energy{};
+    if (!r.i64(mass) || !r.i64(energy)) return false;
+    value = {Mag::fromRaw(mass), Mag::fromRaw(energy)};
+    return true;
+}
+bool readFlag(PayloadReader& r, bool& value) {
+    std::uint8_t raw{};
+    if (!r.u8(raw) || raw > 1) return false;
+    value = raw != 0;
+    return true;
+}
+bool readFx(PayloadReader& r, Fx& value) {
+    std::int32_t raw{};
+    if (!r.i32(raw)) return false;
+    value = Fx::fromRaw(raw);
+    return true;
+}
+bool readMag(PayloadReader& r, Mag& value) {
+    std::int64_t raw{};
+    if (!r.i64(raw)) return false;
+    value = Mag::fromRaw(raw);
+    return true;
+}
+
+void writeEconomyArmies(PayloadWriter& w, const std::optional<EconomyArmyState>& state) {
+    w.u8(state.has_value());
+    if (!state) return;
+    const auto& s = *state;
+    w.count(s.armies.size());
+    for (const auto& army : s.armies) {
+        w.i32(army.index); w.u8(static_cast<std::uint8_t>(army.faction));
+        w.i32(army.alliance); w.u8(army.defeated);
+    }
+    w.count(s.economies.size());
+    for (const auto& economy : s.economies) {
+        for (const auto value : {economy.stored, economy.storage, economy.incomePerTick,
+                economy.upkeepPerTick, economy.requestedLastTick, economy.usageLastTick,
+                economy.sharedIn, economy.upkeepAllocated}) writeResources(w, value);
+        w.i32(economy.fundedFraction.raw()); w.i32(economy.multiResourceFunded.raw());
+        w.i32(economy.singleResourceFunded.raw());
+        w.u8(economy.massIsBinding); w.u8(economy.sharesOverflow);
+    }
+    w.count(s.building.size());
+    for (const auto& work : s.building) {
+        if (work.workedThisTick) throw std::invalid_argument("save construction after the economy tick settles");
+        w.i32(work.armyIndex);
+        for (const auto position : work.position) w.i32(position.raw());
+        writeResources(w, work.cost);
+        w.i64(work.buildTimeRemaining.raw()); w.i64(work.totalBuildTime.raw());
+        w.i64(work.buildPerTick.raw()); w.u64(work.blueprintIndex);
+        writeId(w, work.upgradeOf); writeId(w, work.builder); w.u32(work.retainedCommandId);
+        w.i64(work.assistPerTick.raw()); writeResources(w, work.allocated);
+        w.i32(work.fundedLastTick.raw()); w.u8(work.advancedLastTick);
+    }
+    w.count(s.commandersEver.size());
+    for (const int value : s.commandersEver) w.i32(value);
+    w.u8(static_cast<std::uint8_t>(s.victoryMode)); writeResources(w, s.baseStorage);
+    w.u8(s.over); w.u8(s.winnerPending); w.u8(s.pendingWinner.has_value());
+    if (s.pendingWinner) w.i32(*s.pendingWinner);
+    w.u32(s.winnerStableTicks); w.u32(s.defeatPollElapsedTicks);
+    w.count(s.defeatCleanupRemainingTicks.size());
+    for (const auto ticks : s.defeatCleanupRemainingTicks) w.u32(ticks);
+}
+
+bool readEconomyArmies(PayloadReader& r, std::optional<EconomyArmyState>& state) {
+    bool present{};
+    if (!readFlag(r, present)) return false;
+    if (!present) return true;
+    auto& s = state.emplace();
+    std::size_t count{};
+    if (!r.count(count, 10)) return false;
+    s.armies.resize(count);
+    for (auto& army : s.armies) {
+        std::uint8_t faction{};
+        if (!r.i32(army.index) || !r.u8(faction) || faction > static_cast<int>(Faction::Seraphim)
+            || !r.i32(army.alliance) || !readFlag(r, army.defeated)) return false;
+        army.faction = static_cast<Faction>(faction);
+        if (army.index != &army - s.armies.data()) return false;
+    }
+    if (!r.count(count, 142) || count != s.armies.size()) return false;
+    s.economies.resize(count);
+    for (auto& economy : s.economies) {
+        for (auto* value : {&economy.stored, &economy.storage, &economy.incomePerTick,
+                &economy.upkeepPerTick, &economy.requestedLastTick, &economy.usageLastTick,
+                &economy.sharedIn, &economy.upkeepAllocated}) if (!readResources(r, *value)) return false;
+        if (!readFx(r, economy.fundedFraction) || !readFx(r, economy.multiResourceFunded)
+            || !readFx(r, economy.singleResourceFunded) || !readFlag(r, economy.massIsBinding)
+            || !readFlag(r, economy.sharesOverflow)) return false;
+    }
+    if (!r.count(count, 113)) return false;
+    s.building.resize(count);
+    for (auto& work : s.building) {
+        std::uint64_t type{};
+        if (!r.i32(work.armyIndex)) return false;
+        for (auto& position : work.position) if (!readFx(r, position)) return false;
+        if (!readResources(r, work.cost) || !readMag(r, work.buildTimeRemaining)
+            || !readMag(r, work.totalBuildTime) || !readMag(r, work.buildPerTick) || !r.u64(type)
+            || type > std::numeric_limits<std::size_t>::max()
+            || !readId(r, work.upgradeOf) || !readId(r, work.builder) || !r.u32(work.retainedCommandId)
+            || !readMag(r, work.assistPerTick) || !readResources(r, work.allocated)
+            || !readFx(r, work.fundedLastTick) || !readFlag(r, work.advancedLastTick)) return false;
+        work.blueprintIndex = static_cast<std::size_t>(type);
+        if (work.armyIndex < 0 || static_cast<std::size_t>(work.armyIndex) >= s.armies.size()) return false;
+    }
+    if (!r.count(count, 4) || count != s.armies.size()) return false;
+    s.commandersEver.resize(count);
+    for (int& value : s.commandersEver) if (!r.i32(value) || value < 0) return false;
+    std::uint8_t mode{};
+    bool winner{};
+    if (!r.u8(mode) || mode > static_cast<int>(VictoryMode::Supremacy)
+        || !readResources(r, s.baseStorage) || !readFlag(r, s.over)
+        || !readFlag(r, s.winnerPending) || !readFlag(r, winner)) return false;
+    s.victoryMode = static_cast<VictoryMode>(mode);
+    if (winner) {
+        int alliance{};
+        if (!r.i32(alliance)) return false;
+        s.pendingWinner = alliance;
+    }
+    if (!r.u32(s.winnerStableTicks) || !r.u32(s.defeatPollElapsedTicks)
+        || !r.count(count, 4) || (count != 0 && count != s.armies.size())) return false;
+    s.defeatCleanupRemainingTicks.resize(count);
+    for (auto& ticks : s.defeatCleanupRemainingTicks) if (!r.u32(ticks)) return false;
+    return true;
+}
+
 void writeSharedCommand(PayloadWriter& w, const SharedCommand& command,
                         bool includesScriptTasks) {
     if (includesScriptTasks
@@ -165,7 +297,7 @@ void writeSharedCommand(PayloadWriter& w, const SharedCommand& command,
 }
 
 [[nodiscard]] bool readSharedCommand(PayloadReader& r, SharedCommand& command,
-                                     bool includesScriptTasks) {
+                                     bool includesScriptTasks, bool includesGuard) {
     std::uint8_t source{}, kind{}, queued{};
     std::uint32_t player{};
     std::size_t units{};
@@ -173,7 +305,8 @@ void writeSharedCommand(PayloadWriter& w, const SharedCommand& command,
     if (!r.u64(command.tick) || !r.u8(source) || !r.u32(command.id) || !r.u32(player)
         || !r.u8(kind) || !r.u8(queued) || source > kInvalidCommandSource
         || player > std::numeric_limits<PlayerIndex>::max()
-        || kind > static_cast<std::uint8_t>(includesScriptTasks ? CommandKind::Script
+        || kind > static_cast<std::uint8_t>(includesGuard ? CommandKind::Guard
+                                          : includesScriptTasks ? CommandKind::Script
                                                                 : CommandKind::Repair)
         || queued > 1
         || !r.count(units, 8)) {
@@ -272,7 +405,70 @@ void writeRedirects(PayloadWriter& w, std::span<const MissileRedirect> redirects
     }
 }
 
-void writeAirMotion(PayloadWriter& w, std::span<const MoveState> motion, bool combat) {
+// V16 completes the aircraft controller snapshot, including spawn-cached tuning:
+// UnitStore::restore has no catalog from which to reconstruct it.
+constexpr std::array kAirControllerFx{
+    &MoveState::airYawVelocity,
+    &MoveState::airTurnSpeed,
+    &MoveState::airCombatTurnSpeed,
+    &MoveState::airKTurn,
+    &MoveState::airKTurnDamping,
+    &MoveState::airTightTurnMultiplier,
+    &MoveState::airBreakOffTrigger,
+    &MoveState::airBreakOffDistance,
+    &MoveState::airRandomBreakOffMultiplier,
+    &MoveState::airKMove,
+    &MoveState::airKMoveDamping,
+    &MoveState::airKLift,
+    &MoveState::airKLiftDamping,
+    &MoveState::airLiftFactor,
+    &MoveState::airMinSpeedElmosPerSec,
+    &MoveState::airAttackElevation,
+    &MoveState::airElevation,
+    &MoveState::airElevationAdjustment,
+    &MoveState::fuelDrainPerTick
+};
+
+void writeAirController(PayloadWriter& w, std::span<const MoveState> motion) {
+    w.count(motion.size());
+    for (const auto& state : motion) {
+        w.u64(state.airCombatDeadline);
+        w.u32(state.airSustainedTicks);
+        w.u32(state.airSustainedThreshold);
+        w.u32(state.airMinChangeTicks);
+        w.u32(state.airMaxChangeTicks);
+        w.u32(state.idleLandThreshold);
+        w.u8(state.airWinged);
+        w.u8(state.airTransportation);
+        w.u8(state.airBreakOffNearTarget);
+        for (auto field : kAirControllerFx) w.i32((state.*field).raw());
+    }
+}
+
+bool readAirController(PayloadReader& r, std::vector<MoveState>& motion) {
+    std::size_t count{};
+    constexpr std::size_t kRecordBytes = 8 + 5 * 4 + 3 + kAirControllerFx.size() * 4;
+    if (!r.count(count, kRecordBytes) || count != motion.size()) return false;
+    for (auto& state : motion) {
+        std::uint8_t winged{}, transport{}, near{};
+        if (!r.u64(state.airCombatDeadline) || !r.u32(state.airSustainedTicks)
+            || !r.u32(state.airSustainedThreshold) || !r.u32(state.airMinChangeTicks)
+            || !r.u32(state.airMaxChangeTicks) || !r.u32(state.idleLandThreshold)
+            || !r.u8(winged) || winged > 1 || !r.u8(transport) || transport > 1
+            || !r.u8(near) || near > 1) return false;
+        state.airWinged = winged != 0;
+        state.airTransportation = transport != 0;
+        state.airBreakOffNearTarget = near != 0;
+        for (auto field : kAirControllerFx) {
+            std::int32_t value{};
+            if (!r.i32(value)) return false;
+            state.*field = Fx::fromRaw(value);
+        }
+    }
+    return true;
+}
+
+void writeAirMotion(PayloadWriter& w, std::span<const MoveState> motion, bool combat, bool hover) {
     w.count(motion.size());
     for (const MoveState& state : motion) {
         for (const Fx& axis : state.velocity) {
@@ -285,12 +481,17 @@ void writeAirMotion(PayloadWriter& w, std::span<const MoveState> motion, bool co
         w.u8(state.canFly ? 1 : 0);
         w.i32(state.airMaxSpeedElmosPerSec.raw());
         if (combat) w.u8(static_cast<std::uint8_t>(state.airCombatState));
+        if (hover) {
+            w.u8(state.hovering);
+            w.i32(state.hoverElevation.raw());
+        }
     }
 }
 
-[[nodiscard]] bool readAirMotion(PayloadReader& r, std::vector<MoveState>& motion, bool combat) {
+[[nodiscard]] bool readAirMotion(PayloadReader& r, std::vector<MoveState>& motion, bool combat,
+                                  bool hover, bool fullCombat) {
     std::size_t count{};
-    if (!r.count(count, combat ? 35 : 34) || count != motion.size()) return false;
+    if (!r.count(count, (combat ? 35 : 34) + (hover ? 5 : 0)) || count != motion.size()) return false;
     for (MoveState& state : motion) {
         std::int32_t vx{}, vy{}, vz{}, ref{}, fuel{}, cruise{};
         std::uint64_t idle{};
@@ -310,8 +511,15 @@ void writeAirMotion(PayloadWriter& w, std::span<const MoveState> motion, bool co
         state.airMaxSpeedElmosPerSec = Fx::fromRaw(cruise);
         if (combat) {
             std::uint8_t airCombat{};
-            if (!r.u8(airCombat) || airCombat > 2) return false;
+            if (!r.u8(airCombat) || airCombat > (fullCombat ? 7 : 2)) return false;
             state.airCombatState = static_cast<MoveState::AirCombatState>(airCombat);
+        }
+        if (hover) {
+            std::uint8_t hovering{};
+            std::int32_t elevation{};
+            if (!r.u8(hovering) || hovering > 1 || !r.i32(elevation)) return false;
+            state.hovering = hovering != 0;
+            state.hoverElevation = Fx::fromRaw(elevation);
         }
     }
     return true;
@@ -357,14 +565,14 @@ void writeAirMotion(PayloadWriter& w, std::span<const MoveState> motion, bool co
 }
 
 [[nodiscard]] bool readCommandState(PayloadReader& r, UnitStore::Snapshot& s,
-                                    bool includesScriptTasks) {
+                                    bool includesScriptTasks, bool includesGuard) {
     if (!r.u32(s.nextCommandSerial)) return false;
     for (std::uint32_t& counter : s.nextCommandCounters) if (!r.u32(counter)) return false;
     std::size_t count{};
     if (!r.count(count, 1)) return false;
     s.sharedCommands.resize(count);
     for (SharedCommand& command : s.sharedCommands) {
-        if (!readSharedCommand(r, command, includesScriptTasks)) return false;
+        if (!readSharedCommand(r, command, includesScriptTasks, includesGuard)) return false;
     }
     if (!r.count(count, 1)) return false;
     s.orders.resize(count);
@@ -440,7 +648,7 @@ void writeUnits(PayloadWriter& w, const UnitStore::Snapshot& s, bool includesPat
                                  bool includesFactoryRepeat, bool includesAttachmentOffsets,
                                  bool includesDoNotTarget, bool includesAutomaticTargets,
                                  bool includesAttachmentHeights, bool includesAttachedMotion,
-                                 bool includesCommands, bool includesScriptTasks) {
+                                 bool includesCommands, bool includesScriptTasks, bool includesGuard) {
     std::size_t n{};
     if (!r.count(n, 4)) return false; s.ids.generations.resize(n); for (auto& v : s.ids.generations) if (!r.u32(v)) return false;
     if (!r.count(n, 4)) return false; s.ids.free.resize(n); for (auto& v : s.ids.free) if (!r.u32(v)) return false;
@@ -539,7 +747,7 @@ void writeUnits(PayloadWriter& w, const UnitStore::Snapshot& s, bool includesPat
         }
     }
     if (includesCommands
-        && (!readCommandState(r, s, includesScriptTasks) || s.orders.size() != slots)) {
+        && (!readCommandState(r, s, includesScriptTasks, includesGuard) || s.orders.size() != slots)) {
         return false;
     }
     if (includesCommands) {
@@ -627,8 +835,11 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
     if (version >= kVersion9) writeSiloAmmo(payloadWriter, state.siloAmmo);
     if (version >= kVersion10) writeRedirects(payloadWriter, state.redirects);
     if (version >= kVersion11) {
-        writeAirMotion(payloadWriter, state.units.motion, version >= kVersion13);
+        writeAirMotion(payloadWriter, state.units.motion, version >= kVersion13,
+                       version >= kVersion14);
     }
+    if (version >= kVersion15) writeEconomyArmies(payloadWriter, state.economyArmies);
+    if (version >= kVersion16) writeAirController(payloadWriter, state.units.motion);
     const std::vector<std::byte> payload = payloadWriter.take();
     if (payload.size() > std::numeric_limits<std::uint32_t>::max()) {
         throw std::length_error("MT19937 state exceeds the v1 save-state payload limit");
@@ -662,7 +873,8 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
               && version != kVersion4 && version != kVersion5 && version != kVersion6
                && version != kVersion7 && version != kVersion8 && version != kVersion9
                && version != kVersion10 && version != kVersion11 && version != kVersion12
-               && version != kVersion13)
+               && version != kVersion13 && version != kVersion14 && version != kVersion15
+               && version != kVersion16)
         || (requiredVersion && version != *requiredVersion) || !readU64(bytes, offset, tick)
         || !readU32(bytes, offset, payloadSize) || bytes.size() - offset != payloadSize) {
         return std::nullopt;
@@ -692,19 +904,23 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
     if (!readUnits(reader, units, version >= kVersion2, version >= kVersion3, version >= kVersion4,
                        version >= kVersion5, version >= kVersion6, version >= kVersion7,
                        version >= kVersion7, version >= kVersion8,
-                       version >= kVersion12)) return std::nullopt;
+                       version >= kVersion12, version >= kVersion14)) return std::nullopt;
     std::vector<SiloAmmo> siloAmmo;
     if (version >= kVersion9 && !readSiloAmmo(reader, siloAmmo)) return std::nullopt;
     std::vector<MissileRedirect> redirects;
     if (version >= kVersion10 && !readRedirects(reader, redirects)) return std::nullopt;
     if (version >= kVersion11
-        && !readAirMotion(reader, units.motion, version >= kVersion13)) return std::nullopt;
+        && !readAirMotion(reader, units.motion, version >= kVersion13,
+                          version >= kVersion14, version >= kVersion16)) return std::nullopt;
+    std::optional<EconomyArmyState> economyArmies;
+    if (version >= kVersion15 && !readEconomyArmies(reader, economyArmies)) return std::nullopt;
+    if (version >= kVersion16 && !readAirController(reader, units.motion)) return std::nullopt;
     if (!reader.finished()) return std::nullopt;
     SaveState decoded{.tick = tick,
                       .random = std::move(random),
                        .pathServiceBeats = pathServiceBeats,
                        .units = std::move(units), .siloAmmo = std::move(siloAmmo),
-                       .redirects = std::move(redirects)};
+                       .redirects = std::move(redirects), .economyArmies = std::move(economyArmies)};
     // One binary representation per state rejects alternate encodings and trailing data.
     const std::vector<std::byte> canonical = encode(decoded, version);
     if (canonical.size() != bytes.size()
@@ -729,11 +945,44 @@ std::optional<SaveState> SaveState::decodeV2(std::span<const std::byte> bytes) {
 }
 
 std::vector<std::byte> SaveState::encode(const SaveState& state) {
-    return rm::sim::encode(state, kVersion13);
+    return rm::sim::encode(state, kVersion16);
 }
 
 std::optional<SaveState> SaveState::decode(std::span<const std::byte> bytes) {
     return rm::sim::decode(bytes, std::nullopt);
+}
+
+EconomyArmyState EconomyArmyState::capture(const Match& match) {
+    return {.armies = match.armies,
+        .economies = {match.economies.begin(), match.economies.end()},
+        .building = match.building != nullptr ? *match.building : std::vector<Construction>{},
+        .commandersEver = {match.commandersEver.begin(), match.commandersEver.end()},
+        .victoryMode = match.victoryMode, .baseStorage = match.baseStorage,
+        .over = match.over, .winnerPending = match.winnerPending,
+        .pendingWinner = match.pendingWinner, .winnerStableTicks = match.winnerStableTicks,
+        .defeatPollElapsedTicks = match.defeatPollElapsedTicks,
+        .defeatCleanupRemainingTicks = match.defeatCleanupRemainingTicks};
+}
+
+void EconomyArmyState::restore(Match& match, std::vector<Economy>& economyStorage,
+                               std::vector<int>& commanderStorage) const {
+    if (match.building == nullptr && !building.empty()) {
+        throw std::invalid_argument("restoring construction requires match building storage");
+    }
+    match.armies = armies;
+    economyStorage = economies;
+    commanderStorage = commandersEver;
+    match.economies = economyStorage;
+    match.commandersEver = commanderStorage;
+    if (match.building != nullptr) *match.building = building;
+    match.victoryMode = victoryMode;
+    match.baseStorage = baseStorage;
+    match.over = over;
+    match.winnerPending = winnerPending;
+    match.pendingWinner = pendingWinner;
+    match.winnerStableTicks = winnerStableTicks;
+    match.defeatPollElapsedTicks = defeatPollElapsedTicks;
+    match.defeatCleanupRemainingTicks = defeatCleanupRemainingTicks;
 }
 
 } // namespace rm::sim

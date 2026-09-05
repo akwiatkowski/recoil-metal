@@ -1265,6 +1265,7 @@ std::optional<rm::ui::ProductionView> gatherProduction(const UnitScene& scene,
         row.name = product != nullptr && !product->description.empty() ? product->description
                                                                         : row.id;
         row.count = std::max<std::uint32_t>(1, order.remainingCount);
+        row.commandId = order.id;
         view.queue.push_back(std::move(row));
     }
 
@@ -1282,10 +1283,14 @@ std::optional<rm::ui::ProductionView> gatherProduction(const UnitScene& scene,
 
 bool submitProductionControl(UnitScene& scene, rm::sim::UnitId builder,
     rm::PlayerIndex player, rm::TickIndex tick, const rm::ui::FrameLayout& frame,
-    float x, float y) {
+    float x, float y, std::size_t page) {
     const auto view = gatherProduction(scene, builder);
     if (!view) return false;
-    const auto kind = rm::ui::productionCommandAt(rm::ui::productionPanelRect(frame), *view, x, y);
+    const auto rect = rm::ui::productionPanelRect(frame);
+    if (const auto command = rm::ui::productionCancelAt(rect, *view, x, y, page)) {
+        return issueCancelFactoryBuild(scene, builder, player, tick, *command);
+    }
+    const auto kind = rm::ui::productionCommandAt(rect, *view, x, y);
     if (!kind) return false;
     return submitCommand(scene, rm::sim::CommandIssue{
         .tick = tick,

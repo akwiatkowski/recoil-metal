@@ -88,6 +88,15 @@ TEST_CASE("a space means AND") {
                                                                  "UEF", "STRUCTURE"})));
 }
 
+TEST_CASE("ALLUNITS is the universal category even when absent from authored tags") {
+    const auto generator = unitWith("UEB1101", {"STRUCTURE", "ENERGYPRODUCTION"});
+    CHECK(matchesExpression(CategoryExpression{{"ALLUNITS"}}, generator));
+    CHECK(matchesExpression(CategoryExpression{{"ALLUNITS", "STRUCTURE"}}, generator));
+    CHECK_FALSE(matchesExpression(CategoryExpression{{"ALLUNITS", "MOBILE"}}, generator));
+    CHECK_FALSE(matchesExpression(CategoryExpression{{"UNKNOWN"}}, generator));
+    CHECK_FALSE(matchesExpression(CategoryExpression{{}}, generator));
+}
+
 TEST_CASE("the list means OR") {
     // A real UEF T1 land factory states three expressions.
     const CategoryExpression expression{

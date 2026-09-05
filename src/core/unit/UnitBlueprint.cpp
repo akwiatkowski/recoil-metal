@@ -367,6 +367,8 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
     // The `Air` control block (`C-221`). Read for flyers only; ground units keep zeroes
     // and the mover never consults these for them. Seconds and per-second floats stay
     // authored here — the sim converts once at spawn.
+    // Both winged flight and RULEUMT_Hover use the authored height above the surface.
+    def.elevationElmos = numberOr(*physics, "Elevation", 0.0f) * scmap::kElmosPerOgrid;
     if (const lua::Value* airBlock = parsed->path("Air")) {
         def.airKMove = numberOr(*airBlock, "KMove", 0.0f);
         def.airKMoveDamping = numberOr(*airBlock, "KMoveDamping", 0.0f);
@@ -374,6 +376,19 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
         def.airKLiftDamping = numberOr(*airBlock, "KLiftDamping", 0.0f);
         def.airLiftFactor = numberOr(*airBlock, "LiftFactor", 0.0f);
         def.airWinged = flagAt(*airBlock, "Winged");
+        // Defaults recovered from 0x00525a00; schema at 0x00527a40.
+        def.airTurnSpeed = std::max(0.0f, numberOr(*airBlock, "TurnSpeed", 1.0f));
+        def.airCombatTurnSpeed = std::max(0.0f, numberOr(*airBlock, "CombatTurnSpeed", 1.0f));
+        def.airKTurn = std::max(0.0f, numberOr(*airBlock, "KTurn", 3.0f));
+        def.airKTurnDamping = std::max(0.0f, numberOr(*airBlock, "KTurnDamping", 3.0f));
+        def.airTightTurnMultiplier = std::max(0.0f, numberOr(*airBlock, "TightTurnMultiplier", 1.0f));
+        def.airBreakOffTrigger = std::max(0.0f, numberOr(*airBlock, "BreakOffTrigger", 0.0f)) * scmap::kElmosPerOgrid;
+        def.airBreakOffDistance = std::max(0.0f, numberOr(*airBlock, "BreakOffDistance", 0.0f)) * scmap::kElmosPerOgrid;
+        def.airRandomBreakOffMultiplier = std::max(0.0f, numberOr(*airBlock, "RandomBreakOffDistanceMult", 1.5f));
+        def.airSustainedThresholdSec = std::max(0.0f, numberOr(*airBlock, "SustainedTurnThreshold", 10.0f));
+        def.airMinChangeSec = std::max(0.0f, numberOr(*airBlock, "RandomMinChangeCombatStateTime", 3.0f));
+        def.airMaxChangeSec = std::max(0.0f, numberOr(*airBlock, "RandomMaxChangeCombatStateTime", 6.0f));
+        def.airBreakOffNearTarget = flagAt(*airBlock, "BreakOffIfNearNewTarget");
         // Retail derives a missing MinAirspeed from MaxAirspeed before publishing the
         // blueprint (`C-217`). Both Air speeds are ogrids/s.
         def.airMinSpeedElmosPerSecond =
@@ -382,7 +397,6 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
             * scmap::kElmosPerOgrid;
         // Ogrids to elmos, like every other length in this file (`C-221` reads it from
         // `Physics`, but only a flyer consults it, so it rides with the block).
-        def.elevationElmos = numberOr(*physics, "Elevation", 0.0f) * scmap::kElmosPerOgrid;
         def.airAttackElevationElmos =
             numberOr(*physics, "AttackElevation", 0.0f) * scmap::kElmosPerOgrid;
         def.airAutoLandTimeSec = numberOr(*airBlock, "AutoLandTime", 0.0f);

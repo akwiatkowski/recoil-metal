@@ -27,12 +27,12 @@ namespace rm::sim {
 // WHAT §6.6 ASKS FOR AND THIS DOES NOT DO YET, stated plainly: one `ObjectId` space covering
 // units, features and projectiles, so that targeting, collision and area damage take an
 // `ObjectId` and do not care which they got. That is the right end state and it has no consumer
-// today — nothing shoots a wreck, nothing collides with one, no blast damages one. Building the
+// for named attacks today. Area damage already enumerates the feature pool separately. Building the
 // shared id space before anything asks a question through it would be a refactor of every
 // `UnitId` in the sim in exchange for nothing observable. `FeatureId` is its own handle from
 // the same `IdPool`, so the merge later is a rename plus a tag rather than a redesign.
 //
-// WHAT A FEATURE IS NOT, yet: targetable, or an obstacle. RECLAIMABLE it now is — a wreck
+// WHAT A FEATURE IS NOT, yet: a named attack target or an obstacle. RECLAIMABLE it now is — a wreck
 // carries what reclaiming it still yields, the harvest pass drains it, and an emptied one is
 // REMOVED. That ended two older decisions at once, both recorded below where they applied:
 // append-only storage, and staying out of the state hash.
@@ -98,7 +98,7 @@ struct Feature {
 /// Everything on the map that is not a unit.
 ///
 /// SEPARATE STORAGE from `UnitStore`, which is what §6.6 asks for — "separate storage per kind"
-/// — and not merely convenient: a feature has no health, no orders, no reload and no motion, so
+/// — and not merely convenient: a feature has no orders, no reload and no motion, so
 /// putting one in the unit arrays would mean six columns of nothing per wreck, and a wreck is
 /// the most numerous object a long match produces.
 ///

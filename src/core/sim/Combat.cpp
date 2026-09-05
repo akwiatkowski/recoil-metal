@@ -1,4 +1,5 @@
 #include "core/sim/Combat.hpp"
+#include "core/sim/Reclaim.hpp"
 
 #include "core/unit/BuildTree.hpp"
 
@@ -1196,7 +1197,7 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
                            std::vector<Projectile>& projectiles, TickRate rate,
                            EventQueue* events, const Intel* intel,
                            const PlayableRect* playableRect, TickIndex tick,
-                           std::span<SiloAmmo> siloAmmo) {
+                           std::span<SiloAmmo> siloAmmo, FeatureStore* features) {
     std::size_t fired = 0;
 
     const std::span<const Transform> transforms = store.transforms();
@@ -1359,7 +1360,7 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
                                        weapon.targetLayers);
                 } else {
                     damageArea(to, weapon.damageRadius, rates.damage, army, store, armies,
-                               &catalog, store.idAt(slot), events, weapon.targetLayers);
+                               &catalog, store.idAt(slot), events, weapon.targetLayers, features);
                 }
             } else {
                 // THE SIMULTANEOUS SALVO (11 §3.3): a salvo size above one with NO delay
@@ -1632,13 +1633,13 @@ Projectile launch(std::array<Fx, 3> from, std::array<Fx, 3> to,
 
 Mag damageArea(std::array<Fx, 3> centre, Fx radiusElmos, Mag damage, int byArmy,
                UnitStore& store, std::span<const Army> armies, UnitId by,
-               EventQueue* events, const UnitCatalog* catalog) {
+               EventQueue* events, const UnitCatalog* catalog, FeatureStore* features) {
     // The scalar form, kept because it is what two dozen call sites mean — most of them tests
     // asserting blast reach, which is a property of the geometry and has nothing to say
     // about armour. A flat profile answers the same for every class, so this is not an
     // approximation of the call below: it is the same call with a table that has no entries.
     return damageArea(centre, radiusElmos, unitdef::flatDamage(damage), byArmy, store, armies,
-                       catalog, by, events);
+                       catalog, by, events, unitdef::TargetLayerMask::Both, features);
 }
 
 namespace {
@@ -1648,8 +1649,30 @@ Mag damageTargets(std::array<Fx, 3> centre, Fx radiusElmos,
                    std::span<const Army> armies, const UnitCatalog* catalog, UnitId by,
                    EventQueue* events, unitdef::TargetLayerMask targetLayers, bool damageFriendly,
                    std::optional<UnitIndex> exactTarget,
-                   std::optional<UnitIndex> impactTarget) {
+                   std::optional<UnitIndex> impactTarget, FeatureStore* features = nullptr) {
     Mag dealt{};
+
+    // C-086/C-137: area queries (0xF00) include props; ordinary projectile sweeps (0xD00)
+    // exclude them. Enumerate the feature pool only for a positive-radius blast. Its IDs can
+    // numerically equal unit IDs and must never be resolved through UnitStore.
+    if (features != nullptr && radiusElmos > Fx{} && damage.base > Mag{}) {
+        for (UnitIndex slot = 0; slot < features->size(); ++slot) {
+            if (!features->slotAlive(slot)) continue;
+            const auto& wreck = features->all()[slot];
+            if (wreck.radiusElmos <= Fx{} || wreck.health <= Mag{}) continue;
+            // Use the same upright box approximation as unit blast geometry. Exact authored
+            // wreck offsets and orientation need a persisted prop collision shape.
+            const Fx radius = wreck.radiusElmos;
+            Fx height = catalog != nullptr ? catalog->intel(wreck.fromType).eyeHeight : Fx{};
+            if (height <= Fx{}) height = radius * Fx::fromInt(2);
+            const std::array<Fx, 3> minimum{wreck.at[0] - radius, wreck.at[1], wreck.at[2] - radius};
+            const std::array<Fx, 3> maximum{wreck.at[0] + radius, wreck.at[1] + height, wreck.at[2] + radius};
+            if (sphereBoxOverlap(centre, minimum, maximum, radiusElmos, true)) {
+                // Prop.OnDamage receives raw damage, not the former unit's armour multiplier.
+                dealt += damageFeature(*features, features->idAt(slot), damage.base);
+            }
+        }
+    }
 
     const std::span<const Transform> transforms = store.transforms();
     const std::span<const MoveState> motion = store.motion();
@@ -1961,15 +1984,15 @@ Mag damageTargets(std::array<Fx, 3> centre, Fx radiusElmos,
 Mag damageArea(std::array<Fx, 3> centre, Fx radiusElmos,
                const unitdef::DamageProfile& damage, int byArmy, UnitStore& store,
                std::span<const Army> armies, const UnitCatalog* catalog, UnitId by,
-               EventQueue* events, unitdef::TargetLayerMask targetLayers) {
+               EventQueue* events, unitdef::TargetLayerMask targetLayers, FeatureStore* features) {
     return damageTargets(centre, radiusElmos, damage, byArmy, store, armies, catalog, by,
-                          events, targetLayers, false, std::nullopt, std::nullopt);
+                          events, targetLayers, false, std::nullopt, std::nullopt, features);
 }
 
 void advanceProjectiles(std::vector<Projectile>& projectiles, UnitStore& store,
                         std::span<const Army> armies, const Terrain& terrain, TickRate rate,
                         EventQueue* events, const UnitCatalog* catalog,
-                        std::span<MissileRedirect> redirects) {
+                        std::span<MissileRedirect> redirects, FeatureStore* features) {
     const Fx gravityPerTickSquared = projectileGravityPerTickSquared(rate);
     // Redirect rate cycles tick down whether or not a missile arrives — a unit that just
     // spent its redirect watches for exactly one full cycle (`C-088` MissileRedirect).
@@ -2018,7 +2041,7 @@ void advanceProjectiles(std::vector<Projectile>& projectiles, UnitStore& store,
                                                                 : std::nullopt;
                 (void)damageTargets(shot.position, shot.damageRadiusElmos, shot.damage,
                                      shot.firedByArmy, store, armies, catalog, shot.firedBy,
-                                     events, shot.targetLayers, false, std::nullopt, impactTarget);
+                                     events, shot.targetLayers, false, std::nullopt, impactTarget, features);
             }
 
             // Recoil Metal has no Lua projectile lifecycle yet, so retain its established
@@ -2183,7 +2206,7 @@ const unitdef::Weapon* deathWeapon(const unitdef::UnitDef& def) noexcept {
 
 Mag explodeOnDeath(const unitdef::UnitDef& def, std::array<Fx, 3> at, int byArmy,
                      UnitStore& store, std::span<const Army> armies, UnitId by,
-                     EventQueue* events, const UnitCatalog* catalog) {
+                     EventQueue* events, const UnitCatalog* catalog, FeatureStore* features) {
     const unitdef::Weapon* blast = deathWeapon(def);
     if (blast == nullptr || !blast->harmful()) {
         return Mag{};
@@ -2208,16 +2231,16 @@ Mag explodeOnDeath(const unitdef::UnitDef& def, std::array<Fx, 3> at, int byArmy
         Mag dealt{};
         dealt += damageTargets(at, blast->outerRingRadius, profile(blast->outerRingDamage), byArmy,
                                 store, armies, catalog, by, events, blast->targetLayers,
-                                blast->damageFriendly, std::nullopt, std::nullopt);
+                                blast->damageFriendly, std::nullopt, std::nullopt, features);
         dealt += damageTargets(at, blast->innerRingRadius, profile(blast->innerRingDamage), byArmy,
                                 store, armies, catalog, by, events, blast->targetLayers,
-                                blast->damageFriendly, std::nullopt, std::nullopt);
+                                blast->damageFriendly, std::nullopt, std::nullopt, features);
         return dealt;
     }
 
     return damageTargets(at, blast->damageRadius, profile(blast->damage), byArmy, store, armies,
                          catalog, by, events, blast->targetLayers, blast->damageFriendly,
-                         std::nullopt, std::nullopt);
+                         std::nullopt, std::nullopt, features);
 }
 
 std::vector<UnitId> deadUnits(const UnitStore& store) {

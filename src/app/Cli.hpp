@@ -105,6 +105,9 @@ struct WindowOptions {
     unsigned int width = 1280;
     unsigned int height = 720;
     bool fullscreen = false;
+    /// Opt-in native-event acceptance run; saves its final frame and returns nonzero on failure.
+    std::string inputAcceptancePath;
+    float simulatedBacking = 0.0f;
 };
 
 // --- The parsers ---------------------------------------------------------------------------

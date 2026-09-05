@@ -23,6 +23,7 @@ struct ProductionEntry {
     std::string id;    ///< blueprint id, e.g. "URL0107"
     std::string name;  ///< the unit's description, or the id when it has none
     std::uint32_t count = 1;
+    CommandId commandId = kInvalidCommandId;
 };
 
 struct ProductionView {
@@ -39,17 +40,30 @@ struct ProductionView {
 /// Same anchored rectangle for rendering, click interception and drag exclusion.
 [[nodiscard]] Rect productionPanelRect(const FrameLayout& frame) noexcept;
 [[nodiscard]] Rect productionRepeatRect(const Rect& rect) noexcept;
-[[nodiscard]] Rect productionClearRect(const Rect& rect) noexcept;
+[[nodiscard]] Rect productionClearRect(const Rect& rect, bool paged = false) noexcept;
+struct ProductionPage {
+    std::size_t page = 0;
+    std::size_t pages = 1;
+    std::size_t first = 0;
+    std::size_t shown = 0;
+};
+[[nodiscard]] ProductionPage productionPage(const Rect& rect, std::size_t orders,
+                                            std::size_t requested = 0) noexcept;
+[[nodiscard]] Rect productionCancelRect(const Rect& rect, std::size_t row) noexcept;
+[[nodiscard]] Rect productionPageButtonRect(const Rect& rect, bool next) noexcept;
+[[nodiscard]] std::optional<CommandId> productionCancelAt(
+    const Rect& rect, const ProductionView& view, float x, float y, std::size_t page = 0) noexcept;
+[[nodiscard]] std::optional<int> productionPageStepAt(
+    const Rect& rect, const ProductionView& view, float x, float y, std::size_t page = 0) noexcept;
 [[nodiscard]] std::optional<sim::CommandKind> productionCommandAt(
     const Rect& rect, const ProductionView& view, float x, float y) noexcept;
 
 /// How many order rows the rectangle has room for below the header and the progress bar.
 [[nodiscard]] std::size_t productionRowsFor(const Rect& rect) noexcept;
 
-/// Draws the panel into `rect`. Rows past the room are summarised as "+N MORE" rather than
-/// dropped silently, for the same reason the roster says what it paged away.
+/// Draws a page of orders, each with a cancellation control addressing its stable command id.
 void appendProductionPanel(Geometry& out, const text::Font& labelFont,
                            const text::Font& readoutFont, const Theme& theme, const Rect& rect,
-                           const ProductionView& view);
+                           const ProductionView& view, std::size_t page = 0);
 
 } // namespace rm::ui

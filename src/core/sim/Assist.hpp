@@ -26,6 +26,8 @@ namespace rm::sim {
 /// Recomputes every construction's `assistPerTick` from who is currently helping.
 /// Returns how many assisters contributed this tick — the outward sign the order works.
 std::size_t applyAssistance(const UnitStore& store, const UnitCatalog& catalog,
-                            std::vector<Construction>& building);
+                            std::vector<Construction>& building,
+                            std::span<const Army> armies = {}, const Intel* intel = nullptr,
+                            const PlayableRect* playableRect = nullptr);
 
 } // namespace rm::sim

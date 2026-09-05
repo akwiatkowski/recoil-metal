@@ -91,7 +91,7 @@ void advanceConstruction(Construction& work) noexcept {
 }
 
 void tickEconomy(Economy& economy, std::span<Construction> building,
-                  std::span<RepairWork> repairs, std::span<SiloAmmo> siloAmmo) {
+                  std::span<RepairWork> repairs, std::span<SiloAmmo> siloAmmo, bool deferOverflow) {
     // Clamp only what CARRIED IN. Reclaim currently credits `stored` directly before this
     // pass, so its over-cap excess is still lost rather than becoming a hidden reserve.
     economy.stored.mass = std::max(Mag{}, std::min(economy.stored.mass, economy.storage.mass));
@@ -276,8 +276,9 @@ void tickEconomy(Economy& economy, std::span<Construction> building,
     economy.usageLastTick = granted;
     economy.stored.mass = std::max(Mag{}, economy.stored.mass - granted.mass);
     economy.stored.energy = std::max(Mag{}, economy.stored.energy - granted.energy);
-    // Capacity is applied AFTER spending. Excess is still lost here because allied sharing is
-    // not implemented; retail offers it to allies before this same final clamp (`C-163`).
+    // A whole match offers this beat's excess to allies before applying capacity (`C-163`).
+    // Standalone economy callers retain the final clamp here.
+    if (deferOverflow) return;
     // The zero floor is OUTSIDE the cap and not redundant: a negative capacity would otherwise
     // pull the store below zero, and the next tick's ratios would then run every build
     // backwards. A test holds this.
@@ -344,10 +345,11 @@ void shareOverflow(std::span<Economy> economies, std::span<const Army> armies) {
             --remaining;
         }
 
-        // The giver keeps only its cap. Whatever no ally could hold is destroyed, which is
-        // retail's outcome too — sharing reduces the waste, it does not remove it.
-        from.stored.mass = std::min(from.stored.mass, from.storage.mass);
-        from.stored.energy = std::min(from.stored.energy, from.storage.energy);
+    }
+    // Non-sharing armies must discard excess too; the tick deferred capacity for everyone.
+    for (auto& economy : economies) {
+        economy.stored.mass = std::max(Mag{}, std::min(economy.stored.mass, economy.storage.mass));
+        economy.stored.energy = std::max(Mag{}, std::min(economy.stored.energy, economy.storage.energy));
     }
 }
 

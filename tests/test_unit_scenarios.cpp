@@ -4,6 +4,7 @@
 #include "app/SceneBuild.hpp"
 #include "core/data/MoveDef.hpp"
 #include "core/sim/StateHash.hpp"
+#include "core/sim/SaveState.hpp"
 #include "core/unit/BuildTree.hpp"
 #include "core/unit/Role.hpp"
 #include "core/unit/UnitBlueprint.hpp"
@@ -39,12 +40,15 @@ rm::HeightField flatField() {
 }
 
 struct Scenario {
-    rm::HeightField field = flatField();
+    rm::HeightField field;
     rm::app::UnitScene scene;
-    rm::app::PassabilitySet passability{field, false, 0.0f};
+    rm::app::PassabilitySet passability;
     rm::vfs::Vfs content;
 
-    Scenario() {
+    explicit Scenario(rm::HeightField terrain = flatField(), bool water = false, float level = 0)
+        : field(std::move(terrain)), passability(field, water, level) {
+        scene.hasWater = water;
+        scene.waterLevelElmos = level;
         scene.armies = rm::sim::freeForAll(2);
         scene.players = rm::sim::onePlayerPerArmy(2, 0);
         scene.playerArmy = 0;
@@ -85,6 +89,244 @@ struct Scenario {
 };
 
 } // namespace
+
+TEST_CASE("retail interceptor combat tuning reaches its spawned mover", "[corpus][air-combat]") {
+    const auto root = corpusRoot();
+    if (!std::filesystem::is_directory(root)) SKIP("no retail unit corpus");
+    const auto def = rm::unitbp::loadFile(root / "UEA0102/UEA0102_unit.bp");
+    REQUIRE(def);
+    const auto motion = rm::app::motionFor(*def, 0);
+    CHECK(motion.airTurnSpeed == rm::sim::Fx::fromRatio(3, 2));
+    CHECK(motion.airCombatTurnSpeed == rm::sim::Fx::fromRatio(3, 2));
+    CHECK(motion.airKTurn == rm::sim::kFxOne);
+    CHECK(motion.airKTurnDamping == rm::sim::Fx::fromRatio(3, 2));
+    CHECK(motion.airBreakOffTrigger == rm::sim::Fx::fromInt(120));
+    CHECK(motion.airBreakOffDistance == rm::sim::Fx::fromInt(40));
+    CHECK(motion.airMinChangeTicks == 30);
+    CHECK(motion.airMaxChangeTicks == 60);
+}
+
+TEST_CASE("a saved interceptor continues its turns with the same random stream",
+          "[corpus][air-combat][save-state]") {
+    using rm::sim::Fx;
+    using State = rm::sim::MoveState::AirCombatState;
+    const auto root = corpusRoot();
+    if (!std::filesystem::is_directory(root)) SKIP("no retail unit corpus");
+    const auto def = rm::unitbp::loadFile(root / "UEA0102/UEA0102_unit.bp");
+    REQUIRE(def);
+    Scenario live;
+    const auto fighter = live.spawn(*def, 400, 400);
+    const auto target = live.spawn(*def, 400, 200, 1);
+    // Isolate the aircraft controller: no outstanding projectile state at the save.
+    // Reload timers are ordinary serialized state; blueprint weapons stay unmodified.
+    for (auto id : {fighter, target}) {
+        live.scene.store.health()[id.index].reloadRemaining.assign(def->weapons.size(), 10000);
+        live.scene.store.motion()[id.index].idleLandThreshold = 10000;
+    }
+    const std::array selection{fighter};
+    REQUIRE(rm::app::issueAttack(live.scene, selection, 0, 0, target,
+        Fx::fromInt(400), Fx::fromInt(200)));
+    auto runner = live.runner();
+    for (int tick = 0; tick < 10; ++tick) (void)rm::app::advanceMatch(runner, tick, 0);
+    REQUIRE(live.scene.store.motion()[fighter.index].airCombatState >= State::HardTurn);
+    REQUIRE(live.scene.store.motion()[fighter.index].airCombatDeadline > 10);
+    REQUIRE(live.scene.projectiles.empty());
+    SECTION("continue a sustained turn") {}
+    SECTION("continue an off-map recovery") {
+        live.scene.store.transforms()[fighter.index].x = Fx::fromInt(-20);
+        (void)rm::app::advanceMatch(runner, 10, 0);
+        REQUIRE(live.scene.store.motion()[fighter.index].airCombatState == State::Recovery);
+    }
+    const auto saved = rm::sim::SaveState::decode(rm::sim::SaveState::encode({
+        .tick = runner.pathService.serviceBeats(), .random = runner.match.random.snapshot(),
+        .pathServiceBeats = runner.pathService.serviceBeats(), .units = live.scene.store.snapshot(),
+        .economyArmies = rm::sim::EconomyArmyState::capture(runner.match)}));
+    REQUIRE(saved);
+    Scenario resumed;
+    (void)resumed.registerType(*def);
+    (void)resumed.registerType(*def);
+    resumed.scene.store = rm::sim::UnitStore{saved->units};
+    auto continued = resumed.runner();
+    saved->economyArmies->restore(continued.match, resumed.scene.economies, resumed.scene.commandersEver);
+    continued.match.random = rm::sim::RandomStream{saved->random};
+    continued.pathService.restoreServiceBeats(saved->pathServiceBeats);
+    continued.match.pathService = &continued.pathService;
+    REQUIRE(rm::sim::hashMatch(live.scene.store, runner.match)
+        == rm::sim::hashMatch(resumed.scene.store, continued.match));
+    std::array<bool, 8> seen{};
+    for (int tick = static_cast<int>(saved->tick); tick < 610; ++tick) {
+        (void)rm::app::advanceMatch(runner, tick, 0);
+        (void)rm::app::advanceMatch(continued, tick, 0);
+        INFO("air continuation tick " << tick);
+        REQUIRE(rm::sim::hashMatch(live.scene.store, runner.match)
+            == rm::sim::hashMatch(resumed.scene.store, continued.match));
+        seen[static_cast<std::size_t>(live.scene.store.motion()[fighter.index].airCombatState)] = true;
+    }
+    CHECK(seen[static_cast<std::size_t>(State::BreakOff)]);
+    CHECK(live.scene.projectiles.empty());
+    CHECK(live.scene.store.motion()[fighter.index].moving);
+}
+
+TEST_CASE("a combat Guard escorts and fights without becoming a builder",
+          "[corpus][guard]") {
+    const auto root = corpusRoot();
+    if (!std::filesystem::is_directory(root)) SKIP("no retail unit corpus");
+    const auto tank = rm::unitbp::loadFile(root / "UEL0201/UEL0201_unit.bp");
+    const auto generator = rm::unitbp::loadFile(root / "UEB1101/UEB1101_unit.bp");
+    REQUIRE(tank);
+    REQUIRE(generator);
+    REQUIRE_FALSE(tank->isBuilder());
+    Scenario scenario;
+    scenario.scene.intel.configure(2, rm::sim::Fx::fromInt(1024), rm::sim::Fx::fromInt(1024),
+        rm::sim::VisionStyle::ForgedAlliance);
+    const auto guard = scenario.spawn(*tank, 100, 200);
+    const auto guarded = scenario.spawn(*generator, 300, 200);
+    const auto target = scenario.spawn(*generator, 340, 200, 1);
+    const std::array guards{guard};
+    REQUIRE(rm::app::issueGuard(scenario.scene, guards, 0, 0, guarded));
+    REQUIRE(rm::app::issueMove(scenario.scene, guard, 0, 0,
+        rm::sim::Fx::fromInt(700), rm::sim::Fx::fromInt(200), true));
+    auto runner = scenario.runner();
+    std::size_t shots = 0;
+    for (int tick = 0; tick < 100; ++tick) {
+        shots += rm::app::advanceMatch(runner, tick, 0).shotsFired;
+    }
+    REQUIRE(scenario.scene.store.orders()[guard.index].active());
+    CHECK(scenario.scene.store.orders()[guard.index].active()->kind() == rm::sim::CommandKind::Guard);
+    CHECK(scenario.scene.store.transforms()[guard.index].x > rm::sim::Fx::fromInt(100));
+    CHECK(scenario.scene.intel.sees(0, rm::sim::IntelKind::Vision,
+        rm::sim::Fx::fromInt(340), rm::sim::Fx::fromInt(200)));
+    CHECK(shots > 0);
+    CHECK((!scenario.scene.store.alive(target)
+        || scenario.scene.store.health()[target.index].current < generator->health));
+    CHECK(scenario.scene.building.empty());
+    CHECK(scenario.scene.catalog.rates(scenario.scene.store.typeAt(guard.index)).buildPerTick
+        == rm::sim::Mag{});
+    const auto guardOrder = scenario.scene.store.orders()[guard.index].active()->payload().id;
+    CHECK(guardOrder == scenario.scene.commands.all().front().id);
+    rm::sim::RandomStream random{std::uint32_t{1}};
+    const auto saved = rm::sim::SaveState::decode(rm::sim::SaveState::encode({
+        .random = random.snapshot(), .units = scenario.scene.store.snapshot()}));
+    REQUIRE(saved);
+    REQUIRE(saved->units.sharedCommands.size() == 2);
+    CHECK(saved->units.sharedCommands.front().kind == rm::sim::CommandKind::Guard);
+
+    Scenario replay;
+    replay.scene.intel.configure(2, rm::sim::Fx::fromInt(1024), rm::sim::Fx::fromInt(1024),
+        rm::sim::VisionStyle::ForgedAlliance);
+    (void)replay.spawn(*tank, 100, 200);
+    (void)replay.spawn(*generator, 300, 200);
+    (void)replay.spawn(*generator, 340, 200, 1);
+    auto replayRunner = replay.runner();
+    replayRunner.replay = &scenario.scene.commands;
+    for (int tick = 0; tick < 100; ++tick) {
+        (void)rm::app::advanceMatch(replayRunner, tick, 0);
+    }
+    CHECK(rm::sim::hashMatch(replay.scene.store, replayRunner.match)
+        == rm::sim::hashMatch(scenario.scene.store, runner.match));
+    scenario.scene.store.kill(guarded);
+    (void)rm::app::advanceMatch(runner, 100, 0);
+    REQUIRE(scenario.scene.store.orders()[guard.index].active());
+    CHECK(scenario.scene.store.orders()[guard.index].active()->kind() == rm::sim::CommandKind::Move);
+}
+
+TEST_CASE("Guard validates capability ownership alliance and target lifetime", "[corpus][guard]") {
+    const auto root = corpusRoot();
+    if (!std::filesystem::is_directory(root)) SKIP("no retail unit corpus");
+    const auto tank = rm::unitbp::loadFile(root / "UEL0201/UEL0201_unit.bp");
+    REQUIRE(tank);
+    for (const std::string condition : {"ally", "enemy", "self", "dead", "forbidden", "unauthorized"}) {
+        DYNAMIC_SECTION(condition) {
+            Scenario scenario;
+            scenario.scene.armies[1].alliance = 0;
+            auto actorDef = *tank;
+            if (condition == "forbidden") {
+                actorDef.commandCapsDeclared = true;
+                actorDef.commandCaps.clear();
+            }
+            const auto guard = scenario.spawn(actorDef, 200, 200);
+            auto target = scenario.spawn(*tank, 240, 200, 1);
+            if (condition == "enemy") scenario.scene.armies[1].alliance = 1;
+            if (condition == "self") target = guard;
+            if (condition == "dead") scenario.scene.store.kill(target);
+            const std::array guards{guard};
+            (void)rm::app::issueGuard(scenario.scene, guards,
+                condition == "unauthorized" ? 1 : 0, 0, target);
+            auto runner = scenario.runner();
+            (void)rm::app::advanceMatch(runner, 0, 0);
+            CHECK(scenario.scene.store.orders()[guard.index].empty() == (condition != "ally"));
+            if (condition == "ally") {
+                scenario.scene.armies[1].alliance = 1;
+                (void)rm::app::advanceMatch(runner, 1, 0);
+                CHECK(scenario.scene.store.orders()[guard.index].empty());
+            }
+        }
+    }
+}
+
+TEST_CASE("retail Mantis repairs an ally without gaining reclaim capability",
+          "[corpus][exceptional]") {
+    const auto root = corpusRoot();
+    if (!std::filesystem::is_directory(root)) SKIP("no retail unit corpus");
+    const auto mantis = rm::unitbp::loadFile(root / "URL0107/URL0107_unit.bp");
+    REQUIRE(mantis);
+    REQUIRE(mantis->hasCommandCap("RULEUCC_Repair"));
+    REQUIRE_FALSE(mantis->hasCommandCap("RULEUCC_Reclaim"));
+    Scenario scenario;
+    const auto repairer = scenario.spawn(*mantis, 200, 200);
+    const auto target = scenario.spawn(*mantis, 215, 200);
+    const auto damaged = mantis->health - rm::sim::Mag::fromInt(5);
+    scenario.scene.store.health()[target.index].current = damaged;
+    auto runner = scenario.runner();
+    runner.match.baseStorage = {rm::sim::Mag::fromInt(1000), rm::sim::Mag::fromInt(10000)};
+    scenario.scene.economies[0].stored = runner.match.baseStorage;
+    const std::array selection{repairer};
+    REQUIRE(rm::app::issueRepair(scenario.scene, selection, 0, 0, target));
+    const int limit = static_cast<int>(rm::app::gAppTickRate.ticks(rm::sim::Seconds{30}));
+    for (int tick = 0; tick < limit; ++tick) {
+        (void)rm::app::advanceMatch(runner, tick, 0);
+    }
+    CHECK(scenario.scene.store.health()[target.index].current == mantis->health);
+    CHECK(scenario.scene.store.orders()[repairer.index].empty());
+    CHECK(scenario.scene.economies[0].stored.mass < runner.match.baseStorage.mass);
+}
+
+TEST_CASE("retail Aurora crosses water above the seabed and returns to land",
+          "[corpus][exceptional]") {
+    const auto root = corpusRoot();
+    if (!std::filesystem::is_directory(root)) SKIP("no retail unit corpus");
+    const auto aurora = rm::unitbp::loadFile(root / "UAL0201/UAL0201_unit.bp");
+    REQUIRE(aurora);
+    REQUIRE(aurora->motion == rm::unitdef::MotionType::Hover);
+    // A shallow channel with gentle shores: no slope barrier can conceal a water-layer bug.
+    auto field = flatField();
+    for (int z = 0; z < field.verticesZ(); ++z) {
+        for (int x = 0; x < field.verticesX(); ++x) {
+            const int shore = std::clamp(std::max(40 - x, x - 88), 0, 8);
+            field.raw[static_cast<std::size_t>(z * field.verticesX() + x)] =
+                static_cast<std::uint16_t>(shore * 2);
+        }
+    }
+    Scenario scenario(std::move(field), true, 8);
+    const auto unit = scenario.spawn(*aurora, 160, 200);
+    auto runner = scenario.runner();
+    REQUIRE(rm::app::issueMove(scenario.scene, unit, 0, 0,
+        rm::sim::Fx::fromInt(840), rm::sim::Fx::fromInt(200)));
+    bool crossed = false;
+    const int limit = static_cast<int>(rm::app::gAppTickRate.ticks(rm::sim::Seconds{60}));
+    for (int tick = 0; tick < limit; ++tick) {
+        (void)rm::app::advanceMatch(runner, tick, 0);
+        const auto& at = scenario.scene.store.transforms()[unit.index];
+        if (at.x > rm::sim::Fx::fromInt(350) && at.x < rm::sim::Fx::fromInt(680)) {
+            crossed = true;
+            REQUIRE(at.y >= rm::sim::Fx::fromInt(8));
+        }
+    }
+    CHECK(crossed);
+    const auto& at = scenario.scene.store.transforms()[unit.index];
+    CHECK(at.x > rm::sim::Fx::fromInt(820));
+    CHECK(at.y >= rm::sim::Fx::fromInt(16));
+}
 
 TEST_CASE("projectile guidance does not require a silo economy table", "[capability][guidance]") {
     const auto traits = rm::unitbp::loadProjectileTraits(R"(
@@ -269,6 +511,333 @@ TEST_CASE("factory panel clicks control the real production queue", "[corpus][ui
     scenario.scene.store.kill(builder);
     CHECK_FALSE(click(repeat, 0, 1200));
     CHECK_FALSE(rm::app::gatherProduction(scenario.scene, builder));
+}
+
+TEST_CASE("factory cancellation removes only the named entry and replays", "[corpus][factory-cancel]") {
+    const auto root = corpusRoot();
+    if (!std::filesystem::is_directory(root)) SKIP("no retail unit corpus");
+    const auto factory = rm::unitbp::loadFile(root / "UEB0101/UEB0101_unit.bp");
+    const auto tank = rm::unitbp::loadFile(root / "UEL0201/UEL0201_unit.bp");
+    REQUIRE(factory);
+    REQUIRE(tank);
+    for (const std::size_t cancelledRow : {std::size_t{0}, std::size_t{1}}) {
+        DYNAMIC_SECTION("cancel " << (cancelledRow == 0 ? "active" : "pending")) {
+            Scenario live;
+            const auto builder = live.spawn(*factory, 200, 200);
+            const auto type = live.registerType(*tank);
+            live.scene.economies[0].stored = {rm::sim::Mag::fromInt(1000), rm::sim::Mag::fromInt(10000)};
+            auto runner = live.runner();
+            for (int entry = 0; entry < 3; ++entry) {
+                REQUIRE(rm::app::submitCommand(live.scene, rm::sim::CommandIssue{
+                    .tick = 0, .source = 0, .player = 0,
+                    .kind = rm::sim::CommandKind::Build, .queued = true,
+                    .units = {builder}, .buildType = type,
+                    .count = entry == 1 ? 5u : 1u,
+                }));
+            }
+            for (int tick = 0; tick < 5; ++tick) (void)rm::app::advanceMatch(runner, tick, 0);
+            auto& queue = live.scene.store.orders()[builder.index];
+            REQUIRE(queue.size() == 3);
+            REQUIRE(live.scene.building.size() == 1);
+            const auto firstId = queue.entries()[0].payload().id;
+            const auto secondId = queue.entries()[1].payload().id;
+            const auto lastId = queue.entries()[2].payload().id;
+            const auto cancelId = queue.entries()[cancelledRow].payload().id;
+            const auto remaining = live.scene.building.front().buildTimeRemaining;
+            REQUIRE(rm::app::issueCancelFactoryBuild(live.scene, builder, 1, 5, cancelId));
+            (void)rm::app::advanceMatch(runner, 5, 0);
+            CHECK(queue.size() == 3);  // another player cannot edit the queue
+            const auto frame = rm::ui::frameLayout(rm::ui::UiViewport::authored(1600, 900));
+            const auto button = rm::ui::productionCancelRect(rm::ui::productionPanelRect(frame), cancelledRow);
+            REQUIRE(rm::app::submitProductionControl(live.scene, builder, 0, 6, frame,
+                button.x + 1, button.y + 1));
+            (void)rm::app::advanceMatch(runner, 6, 0);
+            REQUIRE(queue.size() == 2);
+            CHECK(queue.entries()[0].payload().id == (cancelledRow == 0 ? secondId : firstId));
+            CHECK(queue.entries()[1].payload().id == lastId);
+            REQUIRE(live.scene.building.size() == 1);
+            if (cancelledRow == 0) {
+                CHECK(live.scene.building.front().buildTimeRemaining > remaining);
+                CHECK(queue.entries()[0].payload().remainingCount == 5);
+            } else {
+                CHECK(live.scene.building.front().buildTimeRemaining < remaining);
+            }
+            REQUIRE(rm::app::issueCancelFactoryBuild(live.scene, builder, 0, 7, cancelId));
+            (void)rm::app::advanceMatch(runner, 7, 0);
+            CHECK(queue.size() == 2);  // stale UI clicks never remove the replacement row
+
+            const auto path = std::filesystem::temp_directory_path() / "rm-factory-cancel.commands";
+            REQUIRE(rm::sim::writeCommandLog(live.scene.commands, path.string()));
+            const auto commands = rm::sim::readCommandLog(path.string());
+            REQUIRE(commands);
+            CHECK(std::ranges::equal(commands->all(), live.scene.commands.all()));
+            CHECK(commands->all()[4].cancelCommandId == cancelId);
+            Scenario replay;
+            (void)replay.spawn(*factory, 200, 200);
+            (void)replay.registerType(*tank);
+            replay.scene.economies[0].stored = {rm::sim::Mag::fromInt(1000), rm::sim::Mag::fromInt(10000)};
+            auto replayRunner = replay.runner();
+            replayRunner.replay = &*commands;
+            for (int tick = 0; tick < 8; ++tick) (void)rm::app::advanceMatch(replayRunner, tick, 0);
+            CHECK(rm::sim::hashMatch(replay.scene.store, replayRunner.match)
+                == rm::sim::hashMatch(live.scene.store, runner.match));
+            for (int tick = 8; tick < 80; ++tick) {
+                (void)rm::app::advanceMatch(runner, tick, 0);
+                (void)rm::app::advanceMatch(replayRunner, tick, 0);
+                CHECK(rm::sim::hashMatch(replay.scene.store, replayRunner.match)
+                    == rm::sim::hashMatch(live.scene.store, runner.match));
+            }
+            std::filesystem::remove(path);
+        }
+    }
+}
+
+TEST_CASE("cancelling one factory leaves a shared build on the other factory", "[corpus][factory-cancel]") {
+    const auto root = corpusRoot();
+    if (!std::filesystem::is_directory(root)) SKIP("no retail unit corpus");
+    const auto factory = rm::unitbp::loadFile(root / "UEB0101/UEB0101_unit.bp");
+    const auto tank = rm::unitbp::loadFile(root / "UEL0201/UEL0201_unit.bp");
+    REQUIRE(factory);
+    REQUIRE(tank);
+    Scenario scene;
+    const auto first = scene.spawn(*factory, 200, 200);
+    const auto second = scene.spawn(*factory, 400, 200);
+    const auto type = scene.registerType(*tank);
+    REQUIRE(scene.scene.store.setFactoryRepeat(first, true));
+    const auto order = rm::app::submitCommand(scene.scene, rm::sim::CommandIssue{
+        .source = 0, .player = 0, .kind = rm::sim::CommandKind::Build,
+        .units = {first, second}, .buildType = type, .count = 3,
+    });
+    REQUIRE(order);
+    auto runner = scene.runner();
+    (void)rm::app::advanceMatch(runner, 0, 0);
+    REQUIRE(scene.scene.building.size() == 2);
+    REQUIRE(rm::app::issueCancelFactoryBuild(scene.scene, first, 0, 1, *order));
+    for (int tick = 1; tick < 20; ++tick) (void)rm::app::advanceMatch(runner, tick, 0);
+    CHECK(scene.scene.store.orders()[first.index].empty());
+    CHECK(scene.scene.store.factoryRepeat(first));
+    REQUIRE(scene.scene.store.orders()[second.index].size() == 1);
+    CHECK(scene.scene.store.orders()[second.index].active()->payload().id == *order);
+    CHECK(scene.scene.store.orders()[second.index].active()->payload().remainingCount == 3);
+    REQUIRE(scene.scene.building.size() == 1);
+    CHECK(scene.scene.building.front().builder == second);
+}
+
+TEST_CASE("factory cancellation aborts its own build behind a standing Guard", "[corpus][factory-cancel]") {
+    const auto root = corpusRoot();
+    if (!std::filesystem::is_directory(root)) SKIP("no retail unit corpus");
+    const auto factory = rm::unitbp::loadFile(root / "UEB0101/UEB0101_unit.bp");
+    const auto tank = rm::unitbp::loadFile(root / "UEL0201/UEL0201_unit.bp");
+    const auto scout = rm::unitbp::loadFile(root / "UEL0101/UEL0101_unit.bp");
+    REQUIRE(factory);
+    REQUIRE(tank);
+    REQUIRE(scout);
+    Scenario scene;
+    const auto builder = scene.spawn(*factory, 200, 200);
+    const auto guarded = scene.spawn(*factory, 250, 200);
+    const auto tankType = scene.registerType(*tank);
+    const auto scoutType = scene.registerType(*scout);
+    const std::array selected{builder};
+    REQUIRE(rm::app::issueGuard(scene.scene, selected, 0, 0, guarded));
+    REQUIRE(rm::app::issueBuild(scene.scene, builder, 0, 0, tankType, {}, {}, true));
+    REQUIRE(rm::app::issueBuild(scene.scene, builder, 0, 0, scoutType, {}, {}, true));
+    auto runner = scene.runner();
+    (void)rm::app::advanceMatch(runner, 0, 0);
+    (void)rm::app::advanceMatch(runner, 1, 0);
+    auto& queue = scene.scene.store.orders()[builder.index];
+    REQUIRE(queue.size() == 3);
+    REQUIRE(queue.active()->kind() == rm::sim::CommandKind::Guard);
+    REQUIRE(scene.scene.building.size() == 1);
+    REQUIRE(scene.scene.building.front().blueprintIndex == tankType);
+    REQUIRE(rm::app::issueCancelFactoryBuild(scene.scene, builder, 0, 2, queue.entries()[1].payload().id));
+    (void)rm::app::advanceMatch(runner, 2, 0);
+    REQUIRE(queue.size() == 2);
+    CHECK(queue.active()->kind() == rm::sim::CommandKind::Guard);
+    REQUIRE(scene.scene.building.size() == 1);
+    CHECK(scene.scene.building.front().blueprintIndex == scoutType);
+}
+
+TEST_CASE("mirrored factory work never acquires a later matching build command", "[corpus][factory-cancel]") {
+    const auto root = corpusRoot();
+    if (!std::filesystem::is_directory(root)) SKIP("no retail unit corpus");
+    const auto factory = rm::unitbp::loadFile(root / "UEB0101/UEB0101_unit.bp");
+    const auto tank = rm::unitbp::loadFile(root / "UEL0201/UEL0201_unit.bp");
+    REQUIRE(factory);
+    REQUIRE(tank);
+    Scenario scenario;
+    const auto builder = scenario.spawn(*factory, 200, 200);
+    const auto guarded = scenario.spawn(*factory, 250, 200);
+    const auto type = scenario.registerType(*tank);
+    const std::array selected{builder};
+    REQUIRE(rm::app::issueGuard(scenario.scene, selected, 0, 0, guarded));
+    REQUIRE(rm::app::submitCommand(scenario.scene, rm::sim::CommandIssue{
+        .source = 0, .player = 0, .kind = rm::sim::CommandKind::Build,
+        .units = {guarded}, .buildType = type, .count = 2,
+    }));
+    auto runner = scenario.runner();
+    (void)rm::app::advanceMatch(runner, 0, 0);
+    (void)rm::app::advanceMatch(runner, 1, 0);
+    const auto work = [&]() -> rm::sim::Construction& {
+        const auto found = std::ranges::find_if(scenario.scene.building, [&](const auto& child) {
+            return child.builder == builder && !child.finished();
+        });
+        REQUIRE(found != scenario.scene.building.end());
+        return *found;
+    };
+    REQUIRE(work().retainedCommandId == rm::kInvalidCommandId);
+    REQUIRE(rm::app::issueBuild(scenario.scene, builder, 0, 2, type, {}, {}, true));
+    (void)rm::app::advanceMatch(runner, 2, 0);
+    auto& queue = scenario.scene.store.orders()[builder.index];
+    REQUIRE(queue.size() == 2);
+    const auto ownId = queue.entries()[1].payload().id;
+    SECTION("cancelling the new row leaves the existing mirror child") {
+        const auto remaining = work().buildTimeRemaining;
+        REQUIRE(rm::app::issueCancelFactoryBuild(scenario.scene, builder, 0, 3, ownId));
+        (void)rm::app::advanceMatch(runner, 3, 0);
+        CHECK(queue.size() == 1);
+        CHECK(work().retainedCommandId == rm::kInvalidCommandId);
+        CHECK(work().buildTimeRemaining <= remaining);
+    }
+    SECTION("completing the mirror child starts the new row without consuming it") {
+        work().buildTimeRemaining = rm::sim::Mag::fromRaw(1);
+        work().fundedLastTick = rm::sim::kFxOne;
+        (void)rm::app::advanceMatch(runner, 3, 0);
+        // Completion spawns a unit, which may reallocate the store's queue array.
+        const auto& after = scenario.scene.store.orders()[builder.index];
+        REQUIRE(after.size() == 2);
+        CHECK(after.entries()[1].payload().id == ownId);
+        CHECK(work().retainedCommandId == ownId);
+    }
+}
+
+TEST_CASE("saved economies and armies continue construction sharing and defeat timers", "[corpus][economy-save]") {
+    const auto root = corpusRoot();
+    if (!std::filesystem::is_directory(root)) SKIP("no retail unit corpus");
+    const auto engineer = rm::unitbp::loadFile(root / "UEL0105/UEL0105_unit.bp");
+    const auto generator = rm::unitbp::loadFile(root / "UEB1101/UEB1101_unit.bp");
+    REQUIRE(engineer);
+    REQUIRE(generator);
+    Scenario live;
+    const auto builder = live.spawn(*engineer, 200, 200, 1);
+    const auto donor = live.spawn(*generator, 800, 800, 0);
+    const auto defeatedUnit = live.spawn(*generator, 900, 800, 2);
+    const auto type = live.registerType(*generator);
+    live.scene.armies = rm::sim::freeForAll(3);
+    live.scene.armies[1].alliance = 0;
+    live.scene.players = rm::sim::onePlayerPerArmy(3, 1);
+    live.scene.economies.resize(3);
+    live.scene.commandersEver.resize(3);
+    live.scene.economies[0].stored = {rm::sim::Mag::fromInt(10000), rm::sim::Mag::fromInt(100000)};
+    // Enough mass for the authored generator; its energy comes partly from the allied donor.
+    live.scene.economies[1].stored = {rm::sim::Mag::fromInt(100), rm::sim::Mag::fromInt(50)};
+    REQUIRE(rm::app::issueBuild(live.scene, builder, 1, 0, type,
+        rm::sim::Fx::fromInt(225), rm::sim::Fx::fromInt(200)));
+    auto runner = live.runner();
+    for (int tick = 0; tick < 10; ++tick) (void)rm::app::advanceMatch(runner, tick, 0);
+    REQUIRE(live.scene.store.alive(donor));
+    REQUIRE(live.scene.building.size() == 1);
+    REQUIRE_FALSE(live.scene.building.front().finished());
+    REQUIRE(live.scene.building.front().buildTimeRemaining < live.scene.building.front().totalBuildTime);
+    REQUIRE(live.scene.economies[1].sharedIn.energy > rm::sim::Mag{});
+    SECTION("funded work and the next allied gift") {}
+    SECTION("pending winner and delayed defeated-army cleanup") {
+        live.scene.armies[2].defeated = true;
+        runner.match.winnerPending = true;
+        runner.match.pendingWinner = 0;
+        runner.match.winnerStableTicks = 100;
+        runner.match.defeatCleanupRemainingTicks = {0, 0, 25};
+    }
+    const auto encoded = rm::sim::SaveState::encode({.tick = 10, .random = runner.match.random.snapshot(),
+        .pathServiceBeats = runner.pathService.serviceBeats(), .units = live.scene.store.snapshot(),
+        .siloAmmo = live.scene.siloAmmo, .redirects = live.scene.redirects,
+        .economyArmies = rm::sim::EconomyArmyState::capture(runner.match)});
+    const auto saved = rm::sim::SaveState::decode(encoded);
+    REQUIRE(saved);
+    REQUIRE(saved->economyArmies);
+    // Restore into fresh owners, retaining only the immutable map and blueprint registration order.
+    Scenario resumed;
+    (void)resumed.spawn(*engineer, 200, 200, 1);
+    (void)resumed.spawn(*generator, 800, 800, 0);
+    (void)resumed.spawn(*generator, 900, 800, 2);
+    (void)resumed.registerType(*generator);
+    resumed.scene.store = rm::sim::UnitStore{saved->units};
+    resumed.scene.armies = saved->economyArmies->armies;
+    resumed.scene.players = rm::sim::onePlayerPerArmy(3, 1);
+    resumed.scene.siloAmmo = saved->siloAmmo;
+    resumed.scene.redirects = saved->redirects;
+    auto resumedRunner = resumed.runner();
+    resumedRunner.match.random = rm::sim::RandomStream{saved->random};
+    saved->economyArmies->restore(resumedRunner.match, resumed.scene.economies, resumed.scene.commandersEver);
+    resumedRunner.pathService.restoreServiceBeats(saved->pathServiceBeats);
+    resumedRunner.match.pathService = &resumedRunner.pathService;
+    REQUIRE(rm::sim::hashMatch(resumed.scene.store, resumedRunner.match)
+        == rm::sim::hashMatch(live.scene.store, runner.match));
+    CHECK(resumed.scene.economies[1].requestedLastTick.mass == live.scene.economies[1].requestedLastTick.mass);
+    CHECK(resumed.scene.economies[1].usageLastTick.energy == live.scene.economies[1].usageLastTick.energy);
+    for (int tick = static_cast<int>(saved->tick); tick < 700; ++tick) {
+        INFO("continued tick " << tick);
+        (void)rm::app::advanceMatch(runner, tick, 0);
+        (void)rm::app::advanceMatch(resumedRunner, tick, 0);
+        REQUIRE(rm::sim::hashMatch(resumed.scene.store, resumedRunner.match)
+            == rm::sim::hashMatch(live.scene.store, runner.match));
+    }
+    CHECK(live.scene.building.front().finished());
+    CHECK(resumed.scene.building.front().finished());
+    if (saved->economyArmies->winnerPending) {
+        CHECK(runner.match.over);
+        CHECK(resumedRunner.match.over);
+        CHECK_FALSE(resumed.scene.store.alive(defeatedUnit));
+    }
+}
+
+TEST_CASE("ordinary artillery splash damages nearby wrecks through the match", "[corpus][wreck-combat]") {
+    const auto root = corpusRoot();
+    if (!std::filesystem::is_directory(root)) SKIP("no retail unit corpus");
+    const auto artillery = rm::unitbp::loadFile(root / "UEL0103/UEL0103_unit.bp");
+    const auto generator = rm::unitbp::loadFile(root / "UEB1101/UEB1101_unit.bp");
+    REQUIRE(artillery);
+    REQUIRE(generator);
+    Scenario scenario;
+    const auto gun = scenario.spawn(*artillery, 200, 200);
+    const auto target = scenario.spawn(*generator, 340, 200, 1);
+    const rm::sim::Feature wreckBody{
+        .at = {rm::sim::Fx::fromInt(340), {}, rm::sim::Fx::fromInt(200)},
+        .radiusElmos = rm::sim::Fx::fromInt(4), .fromType = scenario.scene.store.typeAt(target.index),
+        .armyIndex = 0, .health = rm::sim::Mag::fromInt(1000),
+        .maximumHealth = rm::sim::Mag::fromInt(1000),
+        .maximumMassReclaim = rm::sim::Mag::fromInt(100),
+        .massRemaining = rm::sim::Mag::fromInt(100),
+        .reclaimWorkRemaining = rm::sim::Mag::fromInt(100),
+        .reclaimWorkTotal = rm::sim::Mag::fromInt(100),
+    };
+    const auto wreck = scenario.scene.features.add(wreckBody);
+    REQUIRE(wreck == gun); // Separate pools intentionally share numeric handles.
+    const std::array guns{gun};
+    REQUIRE(rm::app::issueAttack(scenario.scene, guns, 0, 0, target,
+        rm::sim::Fx::fromInt(340), rm::sim::Fx::fromInt(200)));
+    auto runner = scenario.runner();
+    std::size_t shots = 0;
+    for (int tick = 0; tick < 100; ++tick) shots += rm::app::advanceMatch(runner, tick, 0).shotsFired;
+    REQUIRE(shots > 0);
+    const auto* remaining = scenario.scene.features.find(wreck);
+    CHECK((remaining == nullptr || remaining->health < rm::sim::Mag::fromInt(1000)));
+    CHECK((remaining == nullptr || remaining->massRemaining < rm::sim::Mag::fromInt(100)));
+    CHECK(scenario.scene.store.health()[gun.index].current == artillery->health);
+    Scenario replay;
+    (void)replay.spawn(*artillery, 200, 200);
+    (void)replay.spawn(*generator, 340, 200, 1);
+    REQUIRE(replay.scene.features.add(wreckBody) == wreck);
+    auto replayRunner = replay.runner();
+    replayRunner.replay = &scenario.scene.commands;
+    for (int tick = 0; tick < 100; ++tick) (void)rm::app::advanceMatch(replayRunner, tick, 0);
+    REQUIRE(rm::sim::hashMatch(replay.scene.store, replayRunner.match)
+        == rm::sim::hashMatch(scenario.scene.store, runner.match));
+    for (int tick = 100; tick < 160; ++tick) {
+        (void)rm::app::advanceMatch(runner, tick, 0);
+        (void)rm::app::advanceMatch(replayRunner, tick, 0);
+        REQUIRE(rm::sim::hashMatch(replay.scene.store, replayRunner.match)
+            == rm::sim::hashMatch(scenario.scene.store, runner.match));
+    }
 }
 
 TEST_CASE("construction inspector explains partial funding and the allocation limit", "[ui][funding]") {

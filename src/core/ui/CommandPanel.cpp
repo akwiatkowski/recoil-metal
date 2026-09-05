@@ -13,7 +13,7 @@ commandAvailability(std::span<const unitdef::UnitDef* const> selection) noexcept
     bool hasPatrol = false;
     bool hasStop = false;
     bool hasOrdinaryWeapon = false;
-    bool hasAssister = false;
+    bool hasGuard = false;
     bool hasReclaimer = false;
     bool hasRepairer = false;
     bool hasManualWeapon = false;
@@ -33,9 +33,9 @@ commandAvailability(std::span<const unitdef::UnitDef* const> selection) noexcept
         hasOrdinaryWeapon = hasOrdinaryWeapon
                          || (permits("RULEUCC_Attack")
                              && std::ranges::any_of(def->weapons, &unitdef::Weapon::fires));
-        hasAssister = hasAssister
+        hasGuard = hasGuard
                    || (permits("RULEUCC_Guard")
-                       && (def->isBuilder() || def->hasCategory("COMMAND")));
+                       && (def->isMobile() || def->isBuilder() || def->hasCategory("COMMAND")));
         hasReclaimer = hasReclaimer
                     || (def->isBuilder() && permits("RULEUCC_Reclaim"));
         hasRepairer = hasRepairer || (def->isBuilder() && permits("RULEUCC_Repair"));
@@ -70,8 +70,8 @@ commandAvailability(std::span<const unitdef::UnitDef* const> selection) noexcept
         case sim::CommandKind::Attack:
             available[slot] = hasOrdinaryWeapon;
             break;
-        case sim::CommandKind::Assist:
-            available[slot] = hasAssister;
+        case sim::CommandKind::Guard:
+            available[slot] = hasGuard;
             break;
         case sim::CommandKind::Reclaim:
             available[slot] = hasReclaimer;
@@ -82,8 +82,10 @@ commandAvailability(std::span<const unitdef::UnitDef* const> selection) noexcept
         case sim::CommandKind::Overcharge:
             available[slot] = hasManualWeapon;
             break;
+        case sim::CommandKind::Assist:
         case sim::CommandKind::Build:
         case sim::CommandKind::ToggleFactoryRepeat:
+        case sim::CommandKind::CancelFactoryBuild:
         case sim::CommandKind::Script:
             break;  // None has a command-rack descriptor.
         }
@@ -188,6 +190,7 @@ InfoCard commandCard(const CommandDescriptor& command,
         switch (*command.kind) {
         case sim::CommandKind::Stop: return "NO TARGET NEEDED";
         case sim::CommandKind::Assist: return "ALLIED BUILDER";
+        case sim::CommandKind::Guard: return "ALLIED UNIT";
         case sim::CommandKind::Repair: return "DAMAGED ALLY";
         case sim::CommandKind::Reclaim: return "WRECK";
         case sim::CommandKind::Attack:

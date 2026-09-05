@@ -174,6 +174,17 @@ TEST_CASE("the --march flag takes a place and a duration") {
     CHECK(ran.z == Approx(0.0f));
 }
 
+TEST_CASE("native input acceptance requires a capture path and carries simulated backing") {
+    Args args{{"--input-acceptance", "/tmp/input.png", "--backing", "2"}};
+    const auto options = rm::app::parseWindow(args.argc(), args.argv());
+    REQUIRE(options.inputAcceptancePath == "/tmp/input.png");
+    REQUIRE(options.simulatedBacking == 2.0f);
+    Args absent{{"--input-acceptance"}};
+    REQUIRE_THROWS(rm::app::parseWindow(absent.argc(), absent.argv()));
+    Args nextFlag{{"--input-acceptance", "--backing", "2"}};
+    REQUIRE_THROWS(rm::app::parseWindow(nextFlag.argc(), nextFlag.argv()));
+}
+
 TEST_CASE("the --units flag takes a path, a count and a scale, in that order") {
     Args args{{"--units", "/units/UEL0201/UEL0201_unit.bp", "200", "1.5"}};
     const std::vector<rm::app::UnitOptions> units =

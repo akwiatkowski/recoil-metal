@@ -1,7 +1,8 @@
 # Unit capability evidence
 
 This is a coverage inventory, not a declaration of Forged Alliance parity.
-Scope: all 23 mobile TECH1 products of the four retail T1 land factories.
+Scope: all 23 mobile TECH1 products of the four retail T1 land factories and
+all 21 product/factory pairs of the four T1 air factories (including their land engineers).
 The factory build expressions determine membership; the independent roster
 table detects missing or extra entries. A unit passing one role scenario does
 not imply that its other abilities work.
@@ -54,6 +55,46 @@ range, projectile scripting, or performance against all eligible target layers.
 | XSB0101 | XSL0105 | Checked | M, B | Move | Unverified |
 | XSB0101 | XSL0201 | Checked | M, G | Move, Attack | Unverified |
 
+## T1 air-factory matrix
+
+The independent roster contract checks all 21 pairs, including the Cybran
+XRA0105 gunship. Air scouts need vision; radar is not assumed. Interceptors
+need an air-targeting weapon, bombers/gunships a ground-targeting weapon, and
+transports the authored Transport cap. Those are blueprint checks, not flight,
+bombing or cargo execution. The four engineers share the land behavior evidence
+above; producing them through an air-factory tray remains unverified.
+
+UEA0102 additionally has a bounded flight contract: real authored tuning, planar
+combat turns/breakoff/recovery, and fresh-scene save continuation with matching
+per-tick hashes. The 900-tick app pursuit capture at `/tmp/recoil-air-turn.png`
+was inspected, and its replay compared against the saved hashes. It uses an
+allied moving target to isolate pursuit; it does not prove interceptor weapon
+parity, three-axis banking, or air-factory input. See ADR-091.
+
+| Factory | Product | Role | BP | Behavior | UI reachable |
+|---|---|---|---|---|---|
+| UEB0102 | UEL0105 | Engineer | Checked | M, B (land scenario) | Unverified |
+| UEB0102 | UEA0101 | Scout | Checked | Unverified | Unverified |
+| UEB0102 | UEA0102 | Interceptor | Checked | Planar pursuit and save continuation | Air-factory production unverified |
+| UEB0102 | UEA0103 | Bomber | Checked | Unverified | Unverified |
+| UEB0102 | UEA0107 | Transport | Checked | Unverified | Unverified |
+| UAB0102 | UAL0105 | Engineer | Checked | M, B (land scenario) | Unverified |
+| UAB0102 | UAA0101 | Scout | Checked | Unverified | Unverified |
+| UAB0102 | UAA0102 | Interceptor | Checked | Unverified | Unverified |
+| UAB0102 | UAA0103 | Bomber | Checked | Unverified | Unverified |
+| UAB0102 | UAA0107 | Transport | Checked | Unverified | Unverified |
+| URB0102 | URL0105 | Engineer | Checked | M, B (land scenario) | Unverified |
+| URB0102 | URA0101 | Scout | Checked | Unverified | Unverified |
+| URB0102 | URA0102 | Interceptor | Checked | Unverified | Unverified |
+| URB0102 | URA0103 | Bomber | Checked | Unverified | Unverified |
+| URB0102 | URA0107 | Transport | Checked | Unverified | Unverified |
+| URB0102 | XRA0105 | Gunship | Checked | Unverified | Unverified |
+| XSB0102 | XSL0105 | Engineer | Checked | M, B (land scenario) | Unverified |
+| XSB0102 | XSA0101 | Scout | Checked | Unverified | Unverified |
+| XSB0102 | XSA0102 | Interceptor | Checked | Unverified | Unverified |
+| XSB0102 | XSA0103 | Bomber | Checked | Unverified | Unverified |
+| XSB0102 | XSA0107 | Transport | Checked | Unverified | Unverified |
+
 ## Exceptional abilities: evidence still needed
 
 The downloaded wiki is WEB-tier evidence for selecting scenarios, never the
@@ -64,10 +105,10 @@ before implementing behavior.
 
 | Product | Ability not covered by its primary-role scenario | Reference / limit |
 |---|---|---|
-| UAL0201 | Aurora crossing water and water-layer targeting | `reference/supcom-wiki/units/Aeon/Aeon_T1_Light_Tank.md`, description of hover movement; the current field is dry |
+| UAL0201 | Water-layer targeting remains unverified | `[exceptional]` now executes a land-water-land crossing with the retail Aurora, checking surface height throughout; it exposed and corrected seabed-height movement. This does not verify hover dynamics or water-layer weapon filters. |
 | XSL0103 | Zthuee crossing water and complete artillery salvo behavior | `reference/supcom-wiki/units/Seraphim/Seraphim_T1_Mobile_Light_Artillery.md`, amphibious indirect-fire role; damaging one nearby structure does not prove either |
 | XSL0101 | Selen stationary cloak/stealth, losing concealment on movement or attack, and secondary combat role | `reference/supcom-wiki/units/Seraphim/Seraphim_T1_Combat_Scout.md`; the scout scenario tests only movement/vision/radar |
-| URL0107 | Mantis repair | Retail `URL0107/URL0107_unit.bp` builder and Repair command-cap fields; the BP table checks these and Repair availability, but does not repair a damaged unit; no verified Mantis wiki page is claimed |
+| URL0107 | Mantis repair now exercised | `[exceptional]` loads retail `URL0107/URL0107_unit.bp`, issues Repair through MatchRunner, restores an ally to full health, checks resource use and command completion, and retains the authored Reclaim prohibition. |
 | URL0104 | Complete nanodart guidance behavior | Retail `projectiles/CAANanoDart01/CAANanoDart01_proj.bp`; moving-target damage is exercised, but target leading, zigzag, and authored lifetime remain outside the implemented controller |
 | All engineers | Repair, reclaim, assist, and every buildable structure | The primary-role job builds one generator, not the complete engineering repertoire |
 | All combat products | Target filters, terrain obstruction, range boundaries, exact weapon cadence and special damage | One successful attack is intentionally only a minimum role contract |
@@ -82,6 +123,7 @@ Run `mise exec -- ./build/rm_tests '[capability]'`. Missing corpus currently can
 skip content cases; a green summary with skips is not evidence for these rows.
 Confirm both the independent roster case and the 23-product scenario execute.
 The source corpus and projectile archive must be present.
+Use `mise exec -- make test-content` for acceptance that rejects any skipped case.
 
 For another factory/tier, add an independent expected roster, extend the
 scenario enumeration, and provide an executable role branch before marking

@@ -16,6 +16,7 @@
 #include <memory>
 #include <optional>
 #include <sstream>
+#include <stdexcept>
 
 namespace rm::sim {
 namespace {
@@ -227,10 +228,15 @@ void canonicalizeUnits(std::vector<UnitId>& units) {
     units.erase(std::unique(units.begin(), units.end()), units.end());
 }
 
+[[nodiscard]] bool validCancellation(const CommandIssue& issue) noexcept {
+    return (issue.kind == CommandKind::CancelFactoryBuild)
+        == (issue.cancelCommandId != kInvalidCommandId);
+}
+
 } // namespace
 
 std::optional<CommandId> CommandBuffer::submit(CommandIssue issue, UnitStore& store) {
-    if (issue.source == kInvalidCommandSource
+    if (!validCancellation(issue) || issue.source == kInvalidCommandSource
         || issue.player != static_cast<PlayerIndex>(issue.source) || issue.count == 0
         || (issue.kind == CommandKind::Script
             && (issue.scriptTask.empty()
@@ -300,12 +306,16 @@ const char* commandKindName(CommandKind kind) noexcept {
         return "overcharge";
     case CommandKind::Assist:
         return "assist";
+    case CommandKind::Guard:
+        return "guard";
     case CommandKind::ToggleFactoryRepeat:
         return "toggle-factory-repeat";
     case CommandKind::Repair:
         return "repair";
     case CommandKind::Script:
         return "script";
+    case CommandKind::CancelFactoryBuild:
+        return "cancel-factory-build";
     }
     return "stop";
 }
@@ -313,6 +323,7 @@ const char* commandKindName(CommandKind kind) noexcept {
 namespace {
 
 [[nodiscard]] std::optional<CommandKind> kindFromName(std::string_view name) noexcept {
+    if (name == "guard") return CommandKind::Guard;
     if (name == "move") {
         return CommandKind::Move;
     }
@@ -343,6 +354,7 @@ namespace {
     if (name == "toggle-factory-repeat") {
         return CommandKind::ToggleFactoryRepeat;
     }
+    if (name == "cancel-factory-build") return CommandKind::CancelFactoryBuild;
     if (name == "repair") {
         return CommandKind::Repair;
     }
@@ -369,6 +381,15 @@ namespace {
         return false;
     }
     return assister->isBuilder() || assister->hasCategory("COMMAND");
+}
+
+[[nodiscard]] bool validGuard(const Command& command, const UnitStore& store,
+                              const UnitCatalog& catalog) noexcept {
+    if (!store.alive(command.target) || command.target == command.unit
+        || !store.health()[command.target.index].alive()) return false;
+    const auto* def = catalog.def(store.typeAt(command.unit.index));
+    return def != nullptr && (def->isMobile() || def->isBuilder())
+        && (!def->commandCapsDeclared || def->hasCommandCap("RULEUCC_Guard"));
 }
 
 [[nodiscard]] bool validRepair(const Command& command, const UnitStore& store,
@@ -417,7 +438,80 @@ namespace {
     return mine != armies.end() && theirs != armies.end() && allied(*mine, *theirs);
 }
 
+[[nodiscard]] std::optional<std::array<Fx, 3>> guardReturnPosition(
+    UnitIndex slot, UnitId guardee, const UnitStore& store, const UnitCatalog& catalog,
+    std::span<const Construction> building) {
+    if (!store.alive(guardee)) return {};
+    const auto* guard = catalog.def(store.typeAt(slot));
+    const auto* guarded = catalog.def(store.typeAt(guardee.index));
+    if (guard == nullptr || guarded == nullptr || !guard->isMobile()
+        || guard->guardScanRadiusElmos <= Fx{}) return {};
+    auto anchor = positionOf(store.transforms()[guardee.index]);
+    const auto work = std::ranges::find_if(building, [&](const Construction& item) {
+        return !item.finished() && item.builder == guardee;
+    });
+    if (work != building.end()) anchor = work->position;
+    // C-183: full guarded-unit width plus half the scan radius; distance is three-dimensional.
+    const Fx leash = fxFromFloat(guarded->collisionRadiusElmos * 2.0f)
+        + guard->guardScanRadiusElmos / Fx::fromInt(2);
+    const auto from = positionOf(store.transforms()[slot]);
+    const Fx distance = fxHypot(fxHypot(anchor[0] - from[0], anchor[2] - from[2]),
+                               anchor[1] - from[1]);
+    return distance > leash ? std::optional{anchor} : std::nullopt;
+}
+
+[[nodiscard]] std::optional<UnitId> guardAttackTarget(
+    UnitIndex slot, const UnitStore& store, const UnitCatalog& catalog,
+    std::span<const Army> armies, const Intel* intel, const PlayableRect* playableRect) {
+    const auto* guard = catalog.def(store.typeAt(slot));
+    if (armies.empty() || guard == nullptr || !guard->isMobile()
+        || guard->guardScanRadiusElmos <= Fx{}) return {};
+    const auto& at = store.transforms()[slot];
+    std::optional<UnitId> prey;
+    Fx preyDistance{};
+    for (std::size_t w = 0; w < guard->weapons.size(); ++w) {
+        const auto& weapon = guard->weapons[w];
+        if (!weapon.fires() || weapon.manuallyFired() || weapon.targetsProjectiles) continue;
+        auto ranged = weapon;
+        ranged.maxRange = guard->guardScanRadiusElmos;
+        const auto& cache = store.health()[slot].automaticTargets;
+        const auto incumbent = w < cache.size() ? std::optional{cache[w]} : std::nullopt;
+        const auto found = nearestTarget(positionOf(at), store.motion()[slot].armyIndex, ranged,
+            store, armies, intel, &catalog, at.heading, incumbent, playableRect);
+        if (!found) continue;
+        const Fx distance = groundDistanceElmos(positionOf(at),
+            positionOf(store.transforms()[found->index]));
+        if (!prey || distance < preyDistance
+            || (distance == preyDistance && found->index < prey->index)) {
+            prey = found;
+            preyDistance = distance;
+        }
+    }
+    return prey;
+}
+
+[[nodiscard]] bool guardCanWork(UnitIndex slot, const UnitStore& store,
+    const UnitCatalog& catalog, std::string_view cap) {
+    const auto* def = catalog.def(store.typeAt(slot));
+    return def != nullptr && catalog.rates(store.typeAt(slot)).buildPerTick > Mag{}
+        && (!def->commandCapsDeclared || def->hasCommandCap(cap));
+}
+
 } // namespace
+
+bool guardAllowsBuildAssistance(UnitIndex slot, const UnitStore& store,
+    const UnitCatalog& catalog, std::span<const Construction> building,
+    std::span<const Army> armies, const Intel* intel, const PlayableRect* playableRect) {
+    if (!store.slotAlive(slot)) return false;
+    const auto* head = store.orders()[slot].active();
+    if (head == nullptr || !isGuardCommand(head->kind()) || !store.alive(head->target())
+        || !repairStillAllied(slot, head->target(), store, armies)) return false;
+    if (head->kind() == CommandKind::Guard && !validGuard(head->asCommand(), store, catalog)) return false;
+    // The economy prepass and dispatch use the same C-183 return/attack decisions. A helper
+    // cannot lend build power before dispatch chooses a higher-priority activity for it.
+    return !guardReturnPosition(slot, head->target(), store, catalog, building)
+        && !guardAttackTarget(slot, store, catalog, armies, intel, playableRect);
+}
 
 bool operator==(const Command& a, const Command& b) noexcept {
     return a.tick == b.tick && a.player == b.player && a.kind == b.kind && a.queued == b.queued
@@ -431,7 +525,8 @@ bool operator==(const CommandIssue& a, const CommandIssue& b) noexcept {
            && a.player == b.player && a.kind == b.kind && a.queued == b.queued
            && a.units == b.units && a.targetX == b.targetX && a.targetZ == b.targetZ
            && a.target == b.target && a.buildType == b.buildType && a.count == b.count
-           && a.scriptTask == b.scriptTask && a.scriptData == b.scriptData;
+           && a.scriptTask == b.scriptTask && a.scriptData == b.scriptData
+           && a.cancelCommandId == b.cancelCommandId;
 }
 
 bool buildSitePlaceable(const PassabilityGrid& grid, Fx x, Fx z, Fx radiusElmos,
@@ -576,6 +671,11 @@ void teardownMovement(MoveState& motion) {
         return false;
     }
     if (command.kind == CommandKind::Assist && !validAssist(command, store, catalog)) {
+        return false;
+    }
+    if (command.kind == CommandKind::Guard
+        && (!validGuard(command, store, catalog)
+            || !repairStillAllied(command.unit.index, command.target, store, armies))) {
         return false;
     }
     if (command.kind == CommandKind::Repair && !validRepair(command, store, catalog, armies)) {
@@ -832,7 +932,7 @@ ApplyCommandResult applyCommand(const CommandIssue& issue, UnitStore& store,
                                  const FeatureStore* features, PathService* pathService,
                                  ScriptTaskHost* scriptTasks) {
     ApplyCommandResult result;
-    if (issue.source == kInvalidCommandSource || issue.id == kInvalidCommandId
+    if (!validCancellation(issue) || issue.source == kInvalidCommandSource || issue.id == kInvalidCommandId
         || issue.player != static_cast<PlayerIndex>(issue.source)
         || commandSource(issue.id) != issue.source || issue.count == 0
         || playerFor(issue.player, players) == nullptr || store.commandIdLive(issue.id)
@@ -876,6 +976,32 @@ ApplyCommandResult applyCommand(const CommandIssue& issue, UnitStore& store,
     const std::size_t formationWidth = growthFormationWidth(formationMembers.size());
 
     result.accepted.reserve(canonical.size());
+    if (issue.kind == CommandKind::CancelFactoryBuild) {
+        for (const UnitId unit : canonical) {
+            if (!store.alive(unit) || !authorised(*issuer, store, unit, armies)) continue;
+            const auto* factory = catalog.def(store.typeAt(unit.index));
+            if (factory == nullptr || !factory->hasCategory("FACTORY")) continue;
+            auto& queue = store.orders()[unit.index];
+            const auto found = std::ranges::find_if(queue.entries(), [&](const QueuedCommand& entry) {
+                return entry.kind() == CommandKind::Build
+                    && entry.payload().id == issue.cancelCommandId;
+            });
+            if (found == queue.entries().end()) continue;
+            const auto* product = catalog.def(found->buildType());
+            if (product == nullptr || !product->isMobile()) continue;
+            const auto* payload = &found->payload();
+            const bool active = queue.active() != nullptr && &queue.active()->payload() == payload;
+            const auto* work = building != nullptr ? activeConstruction(*building, unit) : nullptr;
+            if (active || (work != nullptr && work->retainedCommandId == issue.cancelCommandId)) {
+                cancelActiveConstruction(building, unit);
+                if (pathService != nullptr) pathService->cancel(unit);
+                teardownMovement(store.motion()[unit.index]);
+            }
+            (void)queue.removeExact(payload);
+            result.accepted.push_back(unit);
+        }
+        return result;
+    }
     if (issue.kind == CommandKind::ToggleFactoryRepeat) {
         for (const UnitId unit : canonical) {
             if (!store.alive(unit)) {
@@ -1025,7 +1151,8 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
                            const FeatureStore* features, std::vector<Construction>* finished,
                              PathService* pathService, std::span<const Army> armies,
                              const Intel* intel, const PlayableRect* playableRect,
-                             ScriptTaskHost* scriptTasks, std::vector<GuardWork>* guardWork) {
+                             ScriptTaskHost* scriptTasks, std::vector<GuardWork>* guardWork,
+                             RandomStream* random, TickIndex tick) {
     std::size_t started = 0;
     std::vector<UnitIndex> delayedScripts;
     if (guardWork != nullptr) {
@@ -1042,6 +1169,9 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
         if (orders[slot].empty()) {
             if (store.motion()[slot].canFly) {
                 store.motion()[slot].airCombatState = MoveState::AirCombatState::None;
+                store.motion()[slot].airCombatDeadline = 0;
+                store.motion()[slot].airSustainedTicks = 0;
+                store.motion()[slot].airYawVelocity = {};
             }
             continue;
         }
@@ -1094,7 +1224,7 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
                 if (pendingGrid == nullptr) {
                     return;  // leave it pending until its movement domain exists
                 }
-                if (pending->kind() == CommandKind::Repair
+                if ((pending->kind() == CommandKind::Repair || pending->kind() == CommandKind::Guard)
                     && !repairStillAllied(slot, pending->target(), store, armies)) {
                     (void)orders[slot].finish();
                     continue;
@@ -1215,6 +1345,9 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
             serviceBuilds();
             if (orders[slot].active() == nullptr && store.motion()[slot].canFly) {
                 store.motion()[slot].airCombatState = MoveState::AirCombatState::None;
+                store.motion()[slot].airCombatDeadline = 0;
+                store.motion()[slot].airSustainedTicks = 0;
+                store.motion()[slot].airYawVelocity = {};
             }
             continue;
         }
@@ -1225,6 +1358,14 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
         // grid for the product's motion class. `startPending`, which does need one, looks it up
         // for itself.
         const QueuedCommand* current = orders[slot].active();
+        if (current->kind() == CommandKind::Guard
+            && (!validGuard(current->asCommand(), store, catalog)
+                || !repairStillAllied(slot, current->target(), store, armies))) {
+            teardownMovement(store.motion()[slot]);
+            (void)orders[slot].finish();
+            startPending();
+            continue;
+        }
         MoveState& activeMotion = store.motion()[slot];
         const bool wingedAttack = current->kind() == CommandKind::Attack
                                && current->target().generation != 0
@@ -1232,6 +1373,9 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
                                && activeMotion.canFly && activeMotion.airWinged;
         if (activeMotion.canFly && !wingedAttack) {
             activeMotion.airCombatState = MoveState::AirCombatState::None;
+            activeMotion.airCombatDeadline = 0;
+            activeMotion.airSustainedTicks = 0;
+            activeMotion.airYawVelocity = {};
         }
         if (current->kind() == CommandKind::Script) {
             if (scriptTasks == nullptr) {
@@ -1277,7 +1421,7 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
         // no command pointer, and leaves the Guard task itself active (`C-183`, `C-211`). The
         // existing Construction record is that child task: it therefore completes without a
         // second command-count mutation.
-        if (current->kind() == CommandKind::Assist && building != nullptr) {
+        if (isGuardCommand(current->kind()) && building != nullptr) {
             const unitdef::UnitDef* guardDef = catalog.def(store.typeAt(slot));
             if (guardDef != nullptr && guardDef->hasCategory("FACTORY")
                 && !guardDef->isMobile() && guardDef->isBuilder()) {
@@ -1289,15 +1433,11 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
                     // This is the guarding factory's OWN queued build, which block A starts
                     // with its command retained. Complete it through the ordinary factory
                     // count/repeat ladder, but operate behind the active guard order (`C-211`).
-                    // Block A starts the first compatible own build. Until this child finishes,
-                    // `startCommand` refuses another build for this factory; input can only
-                    // append behind Assist, while stop, replacement, or cancellation cancels the
-                    // child. Thus the first matching Build here is precisely the one Block A
-                    // started, even when later entries build the same product type.
+                    // Identity matters: later input can append another request for this type.
                     const auto own = std::ranges::find_if(
                         orders[slot].entries(), [work](const QueuedCommand& candidate) {
                             return candidate.kind() == CommandKind::Build
-                                   && candidate.buildType() == work->blueprintIndex;
+                                   && candidate.payload().id == work->retainedCommandId;
                         });
                     if (own != orders[slot].entries().end()) {
                         const std::shared_ptr<SharedCommand> payload =
@@ -1353,6 +1493,9 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
                     }
                     if (startCommand(candidate.asCommand(), store, catalog, terrain, *productGrid,
                                      rate, building, events, features)) {
+                        if (auto* work = activeConstruction(*building, store.idAt(slot))) {
+                            work->retainedCommandId = candidate.payload().id;
+                        }
                         break;
                     }
                 }
@@ -1421,83 +1564,34 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
         // (or, in retail's richer task object, its resolved guarded/build position). The
         // guardee's full blueprint width is added to half GuardScanRadius. GuardReturnRadius
         // is not involved: retail never reads it.
-        if (current->kind() == CommandKind::Assist && store.alive(current->target())) {
-            const unitdef::UnitDef* guardDef = catalog.def(store.typeAt(slot));
-            const unitdef::UnitDef* guardedDef = catalog.def(store.typeAt(current->target().index));
-            if (guardDef != nullptr && guardedDef != nullptr && guardDef->isMobile()
-                && guardDef->guardScanRadiusElmos > Fx{}) {
-                std::array<Fx, 3> anchor = positionOf(store.transforms()[current->target().index]);
-                if (building != nullptr) {
-                    const auto work = std::ranges::find_if(*building, [&](const Construction& item) {
-                        return !item.finished() && item.builder == current->target();
-                    });
-                    if (work != building->end()) {
-                        anchor = work->position;
-                    }
+        if (isGuardCommand(current->kind())) {
+            const auto work = building != nullptr ? std::span<const Construction>{*building}
+                                                  : std::span<const Construction>{};
+            if (const auto anchor = guardReturnPosition(slot, current->target(), store, catalog, work)) {
+                if (const auto* returnGrid = gridFor(*current)) {
+                    (void)routeUnit(slot, (*anchor)[0], (*anchor)[2], store, terrain, *returnGrid);
                 }
-                const Fx guardedWidth = fxFromFloat(guardedDef->collisionRadiusElmos * 2.0f);
-                const Fx leash = guardedWidth
-                               + guardDef->guardScanRadiusElmos / Fx::fromInt(2);
-                const std::array<Fx, 3> from = positionOf(store.transforms()[slot]);
-                const Fx distance = fxHypot(fxHypot(anchor[0] - from[0],
-                                                     anchor[2] - from[2]),
-                                            anchor[1] - from[1]);
-                if (distance > leash) {
-                    const PassabilityGrid* returnGrid = gridFor(*current);
-                    if (returnGrid != nullptr) {
-                        (void)routeUnit(slot, anchor[0], anchor[2], store, terrain, *returnGrid);
-                    }
-                    continue;
-                }
+                continue;
             }
         }
 
         // C-183's ATTACK branch outranks every assist. A mobile guard whose scan covers a
-        // hostile acquires through the ordinary path and pursues it, while Assist stays at
+        // hostile acquires through the ordinary path and pursues it, while Guard/Assist stays at
         // the head — no child command, no ids, no log entries. Factory guards never arrive
         // here with live mirror work: that branch continued above, which is the ladder order.
         //
         // The acquisition is a range-overridden copy of each firing weapon, so priorities,
         // restrictions, arcs, incumbency and recon all apply exactly as in combat — the
         // structural equivalent of delegating to `IAiAttacker` with `GuardScanRadius`.
-        // Multi-weapon selection among the guard's own guns still resolves to nearest here,
-        // and combat-unit Guard remains represented by the existing Assist-capable path.
-        if (current->kind() == CommandKind::Assist && !armies.empty()
+        // Multi-weapon selection among the guard's own guns still resolves to nearest here.
+        // Combat guards share this ladder; engineering rungs separately require build power.
+        if (isGuardCommand(current->kind()) && !armies.empty()
             && store.alive(current->target())) {
             const unitdef::UnitDef* guardDef = catalog.def(store.typeAt(slot));
             if (guardDef != nullptr && guardDef->isMobile()
                 && guardDef->guardScanRadiusElmos > Fx{}) {
                 const std::span<const Transform> sight = store.transforms();
-                const int armyIndex = store.motion()[slot].armyIndex;
-                std::optional<UnitId> prey;
-                Fx preyDistance{};
-                for (std::size_t w = 0; w < guardDef->weapons.size(); ++w) {
-                    const unitdef::Weapon& weapon = guardDef->weapons[w];
-                    if (!weapon.fires() || weapon.manuallyFired()
-                        || weapon.targetsProjectiles) {
-                        continue;
-                    }
-                    unitdef::Weapon ranged = weapon;
-                    ranged.maxRange = guardDef->guardScanRadiusElmos;
-                    std::optional<UnitId> incumbent;
-                    const auto& cache = store.health()[slot].automaticTargets;
-                    if (w < cache.size()) {
-                        incumbent = cache[w];
-                    }
-                    const std::optional<UnitId> found = nearestTarget(
-                        positionOf(sight[slot]), armyIndex, ranged, store, armies, intel,
-                        &catalog, sight[slot].heading, incumbent, playableRect);
-                    if (!found) {
-                        continue;
-                    }
-                    const Fx distance = groundDistanceElmos(
-                        positionOf(sight[slot]), positionOf(sight[found->index]));
-                    if (!prey || distance < preyDistance
-                        || (distance == preyDistance && found->index < prey->index)) {
-                        prey = found;
-                        preyDistance = distance;
-                    }
-                }
+                const auto prey = guardAttackTarget(slot, store, catalog, armies, intel, playableRect);
                 if (prey.has_value()) {
                     Fx reach{};
                     const bool targetAirborne = store.motion()[prey->index].airborne;
@@ -1533,14 +1627,14 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
         // applyAssistance; if its founder is actively building, the ordinary Assist chase and
         // work pass below own this beat.
         bool guardBuildAssist = false;
-        if (current->kind() == CommandKind::Assist && building != nullptr
+        if (isGuardCommand(current->kind()) && building != nullptr
             && store.alive(current->target())) {
             UnitId founder = current->target();
             std::vector<UnitId> visited;
             while (store.alive(founder) && std::ranges::find(visited, founder) == visited.end()) {
                 visited.push_back(founder);
                 const QueuedCommand* guarded = orders[founder.index].active();
-                if (guarded == nullptr || guarded->kind() != CommandKind::Assist
+                if (guarded == nullptr || !isGuardCommand(guarded->kind())
                     || !store.alive(guarded->target())) {
                     break;
                 }
@@ -1553,7 +1647,8 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
 
         // RECLAIM copies the guardee's live feature target. It remains an Assist command: this
         // derived work record only bridges command dispatch to the end-of-beat economy pass.
-        if (current->kind() == CommandKind::Assist && !guardBuildAssist && features != nullptr
+        if (isGuardCommand(current->kind()) && guardCanWork(slot, store, catalog, "RULEUCC_Reclaim")
+            && !guardBuildAssist && features != nullptr
             && store.alive(current->target())) {
             const QueuedCommand* guarded = orders[current->target().index].active();
             if (guarded != nullptr && guarded->kind() == CommandKind::Reclaim
@@ -1579,7 +1674,8 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
 
         // REPAIR is the final useful rung: scan around the guardee, but rank by distance to
         // the guard. Strict improvement preserves slot/grid order on an exact tie.
-        if (current->kind() == CommandKind::Assist && !guardBuildAssist
+        if (isGuardCommand(current->kind()) && guardCanWork(slot, store, catalog, "RULEUCC_Repair")
+            && !guardBuildAssist
             && store.alive(current->target())) {
             const unitdef::UnitDef* guardDef = catalog.def(store.typeAt(slot));
             const Army* owner = armyFor(store.motion()[slot].armyIndex, armies);
@@ -1689,7 +1785,7 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
         if (const QueuedCommand* head = orders[slot].active();
             head != nullptr
             && (head->kind() == CommandKind::Attack || head->kind() == CommandKind::Overcharge
-                || head->kind() == CommandKind::Assist)
+                || isGuardCommand(head->kind()))
             && store.alive(head->target())) {
             // An overcharge pursues exactly as an attack does; the reach is the MANUAL
             // weapon's, because that is the gun this order will fire. A fired overcharge
@@ -1701,7 +1797,7 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
             const bool manual = head->kind() == CommandKind::Overcharge;
             const unitdef::UnitDef* def = catalog.def(store.typeAt(slot));
             Fx reach{};
-            if (head->kind() == CommandKind::Assist) {
+            if (isGuardCommand(head->kind())) {
                 reach = catalog.rates(store.typeAt(slot)).buildReachElmos
                       + store.motion()[slot].radiusElmos
                       + store.motion()[head->target().index].radiusElmos;
@@ -1720,28 +1816,13 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
                 const Transform& mine = store.transforms()[slot];
                 const Transform& theirs = store.transforms()[head->target().index];
                 if (head->kind() == CommandKind::Attack && chase.canFly && chase.airWinged) {
-                    // `C-224` states 1 and 2. A winged entity attack is a fly-through,
-                    // never the ground mover's stop-at-weapon-range chase. State 1 attacks
-                    // head-on at max speed and at AttackElevation. Once the target is ahead
-                    // and both forward vectors agree inside the recovered 30-degree cone,
-                    // the attacker is on its six and state 2 owns the chase.
-                    if (chase.airCombatState == MoveState::AirCombatState::None) {
-                        chase.airCombatState = MoveState::AirCombatState::HeadOn;
+                    if (random == nullptr) {
+                        throw std::logic_error("winged attacks require the match random stream");
                     }
-                    const Polar targetDirection = fxPolar(theirs.x - mine.x,
-                                                          theirs.z - mine.z);
-                    constexpr Fx kThirtyDegreeCos = Fx::fromRatio(866, 1000);
-                    const bool targetAhead = targetDirection.length > Fx{}
-                        && fxCos(static_cast<Brad>(mine.heading - targetDirection.bearing))
-                               > kThirtyDegreeCos;
-                    const bool headingsAgree =
-                        fxCos(static_cast<Brad>(mine.heading - theirs.heading))
-                        > kThirtyDegreeCos;
-                    if (chase.airCombatState == MoveState::AirCombatState::HeadOn
-                        && targetAhead && headingsAgree) {
-                        chase.airCombatState = MoveState::AirCombatState::TailChase;
-                    }
-                    (void)routeUnit(slot, theirs.x, theirs.z, store, terrain, *grid);
+                    updateWingedAttack(chase, mine, theirs,
+                        store.motion()[head->target().index].airborne,
+                        Fx::fromInt(terrain.field().squaresX * kSquareSize),
+                        Fx::fromInt(terrain.field().squaresZ * kSquareSize), tick, *random);
                     if (QueuedCommand* mutableHead = orders[slot].activeMutable()) {
                         mutableHead->setTargetPosition(theirs.x, theirs.z);
                     }
@@ -2152,10 +2233,12 @@ bool startCommand(const Command& command, UnitStore& store, const UnitCatalog& c
         // that command's validation; spelling the shared routing out keeps the kinds independent.
         return routeUnit(command.unit.index, theirs.x, theirs.z, store, terrain, grid);
     }
+    case CommandKind::Guard:
     case CommandKind::Assist: {
-        // The guard order. A builder helps a LIVING unit of its own army — helping the
-        // enemy build is not a thing, and "assist yourself" is a click that means nothing.
-        if (!validAssist(command, store, catalog)) {
+        // Legacy Assist requires a builder. Explicit Guard also permits combat units;
+        // dispatch and each subsequent beat validate the allied, living, non-self target.
+        if (!(command.kind == CommandKind::Guard ? validGuard(command, store, catalog)
+                                                : validAssist(command, store, catalog))) {
             return false;
         }
         // In build reach already: stand and help. The same coarse-cell trap as the
@@ -2195,6 +2278,13 @@ bool startCommand(const Command& command, UnitStore& store, const UnitCatalog& c
                                 return weapon.fires() && weapon.canTarget(targetAirborne);
                             })) {
             return false;
+        }
+        if (motion.canFly && motion.airWinged) {
+            // A newly accepted entity attack starts a fresh tactical run. Retaining
+            // the prior run's counter can immediately break away from the new target.
+            motion.airCombatState = MoveState::AirCombatState::None;
+            motion.airCombatDeadline = 0;
+            motion.airSustainedTicks = 0;
         }
         // ROUTED, not aimed straight at the destination — which is the difference between a
         // unit walking round a lake and one walking into it. A route that cannot be found is
@@ -2366,6 +2456,7 @@ bool startCommand(const Command& command, UnitStore& store, const UnitCatalog& c
         return routeUnit(command.unit.index, theirs.x, theirs.z, store, terrain, grid);
     }
     case CommandKind::ToggleFactoryRepeat:
+    case CommandKind::CancelFactoryBuild:
         return false;  // applied immediately by semantic issue intake; it never enters a queue
     case CommandKind::Script:
         return false;  // dispatched through ScriptTaskHost, never as a movement/build command
@@ -2381,7 +2472,7 @@ bool startCommand(const Command& command, UnitStore& store, const UnitCatalog& c
 namespace {
 
 inline constexpr std::string_view kCommandLogMagic = "recoil-metal semantic command log";
-inline constexpr std::uint32_t kCommandLogVersion = 2;
+inline constexpr std::uint32_t kCommandLogVersion = 3;
 
 [[nodiscard]] const char* phaseName(CommandPhase phase) noexcept {
     return phase == CommandPhase::PreTick ? "pre-tick" : "post-spawn";
@@ -2418,7 +2509,7 @@ template <typename To, typename From>
 } // namespace
 
 bool CommandLog::record(CommandIssue issue) {
-    if (issue.source == kInvalidCommandSource || issue.id == kInvalidCommandId
+    if (!validCancellation(issue) || issue.source == kInvalidCommandSource || issue.id == kInvalidCommandId
         || commandSource(issue.id) != issue.source
         || issue.player != static_cast<PlayerIndex>(issue.source) || issue.count == 0
         || !canonicalUnits(issue.units)
@@ -2462,7 +2553,7 @@ bool writeCommandLog(const CommandLog& log, const std::string& path,
     out << "issue-count " << log.size() << '\n';
     out << "# tick phase source id player kind queued count targetX targetZ buildType"
            " targetIndex targetGeneration unitCount [unitIndex unitGeneration]..."
-           " buildPath scriptTask scriptDataHex\n";
+           " buildPath scriptTask scriptDataHex cancelCommandId\n";
     for (const CommandIssue& issue : log.all()) {
         out << issue.tick << ' ' << phaseName(issue.phase) << ' '
             << static_cast<unsigned>(issue.source) << ' ' << issue.id << ' ' << issue.player << ' '
@@ -2485,7 +2576,7 @@ bool writeCommandLog(const CommandLog& log, const std::string& path,
             scriptData.push_back(kHex[byte & 0x0F]);
         }
         out << ' ' << std::quoted(blueprint) << ' ' << std::quoted(issue.scriptTask) << ' '
-            << std::quoted(scriptData) << '\n';
+            << std::quoted(scriptData) << ' ' << issue.cancelCommandId << '\n';
     }
     return out.good();
 }
@@ -2509,7 +2600,8 @@ std::optional<CommandLog> readCommandLog(const std::string& path,
         std::istringstream fields{line};
         std::string label;
         std::string extra;
-        if (!(fields >> label >> version) || label != "version" || version != kCommandLogVersion
+        if (!(fields >> label >> version) || label != "version"
+            || (version != 2 && version != kCommandLogVersion)
             || fields >> extra) {
             return std::nullopt;
         }
@@ -2602,11 +2694,17 @@ std::optional<CommandLog> readCommandLog(const std::string& path,
         std::string extra;
         if (!(fields >> std::quoted(blueprint) >> std::quoted(scriptTask)
               >> std::quoted(scriptDataHex))
-            || fields >> extra || scriptTask.size() > kMaxScriptTaskNameBytes
+            || scriptTask.size() > kMaxScriptTaskNameBytes
             || scriptDataHex.size() > kMaxScriptTaskDataBytes * 2
             || scriptDataHex.size() % 2 != 0) {
             return std::nullopt;
         }
+        if (version >= 3) {
+            std::uint64_t cancelCommandId{};
+            if (!(fields >> cancelCommandId) || !fits<CommandId>(cancelCommandId)) return std::nullopt;
+            issue.cancelCommandId = static_cast<CommandId>(cancelCommandId);
+        }
+        if (fields >> extra) return std::nullopt;
         issue.scriptTask = std::move(scriptTask);
         issue.scriptData.reserve(scriptDataHex.size() / 2);
         const auto nibble = [](char digit) -> std::optional<std::uint8_t> {

@@ -6,6 +6,7 @@
 #include "core/sim/Terrain.hpp"
 #include "core/sim/TickRate.hpp"
 #include "core/sim/Transform.hpp"
+#include "core/sim/RandomStream.hpp"
 
 #include <algorithm>
 #include <array>
@@ -140,6 +141,10 @@ struct MoveState {
     /// ships route on the inverse water grid and do not inherit seabed height or slope.
     bool surfaceWater = false;
 
+    /// Hovercraft follow the higher of land and water, unlike ships restricted to water.
+    bool hovering = false;
+    Fx hoverElevation{}; ///< authored Physics.Elevation, in elmos above that surface
+
     /// PER TICK, both of them, derived once from the authored per-second figures (§5.1).
     ///
     /// They default to ZERO rather than to the constants above, and that is deliberate: a
@@ -208,16 +213,32 @@ struct MoveState {
     enum class AirState : std::uint8_t { Bottom, Up, Top, Down };
     AirState airState = AirState::Bottom;
 
-    /// The implemented front of retail's eight-state winged combat controller (`C-224`).
-    /// A live entity Attack enters HeadOn; once both aircraft point into the same 30-degree
-    /// cone while the target is ahead, it becomes TailChase. The remaining states stay
-    /// deliberately absent until their steering laws are implemented.
-    enum class AirCombatState : std::uint8_t { None, HeadOn, TailChase };
+    /// C-224's eight tactical states. Motion uses a planar angular controller;
+    /// full quaternion banking and carried-mass corrections remain outside this model.
+    enum class AirCombatState : std::uint8_t { None, HeadOn, TailChase, HardTurn, Turn, FastTurn, BreakOff, Recovery };
     AirCombatState airCombatState = AirCombatState::None;
+    TickIndex airCombatDeadline = 0;
+    TickCount airSustainedTicks = 0;
+    Fx airYawVelocity{}; ///< radians per second; planar reduction of C-247's angular controller
+
+    // Authored C-224 tuning, converted at spawn. Constructor defaults: 0x00525a00–0x00525b1e.
+    Fx airTurnSpeed = kFxOne;
+    Fx airCombatTurnSpeed = kFxOne;
+    Fx airKTurn = Fx::fromInt(3);
+    Fx airKTurnDamping = Fx::fromInt(3);
+    Fx airTightTurnMultiplier = kFxOne;
+    Fx airBreakOffTrigger{};
+    Fx airBreakOffDistance{};
+    Fx airRandomBreakOffMultiplier = Fx::fromRatio(3, 2);
+    TickCount airSustainedThreshold = 100;
+    TickCount airMinChangeTicks = 30;
+    TickCount airMaxChangeTicks = 60;
+    bool airBreakOffNearTarget = false;
 
     [[nodiscard]] bool makingAttackRun() const noexcept {
         return airCombatState == AirCombatState::HeadOn
-            || airCombatState == AirCombatState::TailChase;
+            || airCombatState == AirCombatState::TailChase
+            || airCombatState == AirCombatState::BreakOff;
     }
 
     /// Elmos per SECOND, all three axes. Retail's trapezoid (`C-221`) only balances in
@@ -292,6 +313,11 @@ struct MoveState {
     /// (`1 / (FuelUseTime × 10)`, `C-223`), converted once at spawn.
     Fx fuelDrainPerTick{};
 };
+
+/// C-224 state/deadline transitions, owning the aircraft's next steering destination.
+void updateWingedAttack(MoveState& state, const Transform& aircraft, const Transform& target,
+                        bool targetAirborne, Fx mapWidth, Fx mapDepth, TickIndex tick,
+                        RandomStream& random);
 
 /// `CalcAirMovementDampingFactor` (`0x006c3490`, `C-244`): the horizontal velocity damping
 /// a winged mover applies, from the length of its desired velocity. With `s = max(1,

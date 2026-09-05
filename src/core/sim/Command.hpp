@@ -113,7 +113,15 @@ enum class CommandKind : std::uint8_t {
     /// Run a named Lua task through the native command scheduler. Core simulation owns the
     /// lifecycle and opaque serializable bytes; an injected ScriptTaskHost owns Lua itself.
     Script = 11,
+    /// Escort an allied unit; combat capability and engineering capability stay independent.
+    Guard = 12,
+    /// Cancel one factory production entry by stable command ID, including its remaining count.
+    CancelFactoryBuild = 13,
 };
+
+[[nodiscard]] constexpr bool isGuardCommand(CommandKind kind) noexcept {
+    return kind == CommandKind::Assist || kind == CommandKind::Guard;
+}
 
 /// One order, from one player, on one tick.
 ///
@@ -184,6 +192,8 @@ struct CommandIssue {
     std::uint32_t count = 1;
     std::string scriptTask;
     std::vector<std::uint8_t> scriptData;
+    /// Used only by CancelFactoryBuild; this action never becomes a queued order.
+    CommandId cancelCommandId = kInvalidCommandId;
 };
 
 /// Transport-only command intake. It is deliberately absent from the state hash.
@@ -336,6 +346,11 @@ using CommandGridForUnit = std::function<const PassabilityGrid*(UnitId)>;
 /// now-unroutable head.
 [[nodiscard]] bool publishPathResult(const PathResult& result, UnitStore& store);
 
+/// C-183 eligibility shared by the construction prepass and guard dispatch.
+[[nodiscard]] bool guardAllowsBuildAssistance(UnitIndex slot, const UnitStore& store,
+    const UnitCatalog& catalog, std::span<const Construction> building,
+    std::span<const Army> armies, const Intel* intel, const PlayableRect* playableRect);
+
 /// Starts the next order for every unit that has finished its current one.
 ///
 /// Returns how many orders were started, which is what a test asserts on and a caller reports.
@@ -376,7 +391,8 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
                               const Intel* intel = nullptr,
                               const PlayableRect* playableRect = nullptr,
                               ScriptTaskHost* scriptTasks = nullptr,
-                              std::vector<GuardWork>* guardWork = nullptr);
+                              std::vector<GuardWork>* guardWork = nullptr,
+                              RandomStream* random = nullptr, TickIndex tick = 0);
 
 /// Updates attack-move and patrol combat after movement and intel. These orders retain their
 /// waypoint while `target` temporarily names the visible hostile that interrupted the route.

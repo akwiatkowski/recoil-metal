@@ -29,6 +29,7 @@ template <typename Order>
     switch (a.kind) {
     case CommandKind::Stop:
     case CommandKind::ToggleFactoryRepeat:
+    case CommandKind::CancelFactoryBuild:
         return false;
     case CommandKind::Move:
     case CommandKind::AttackMove:
@@ -44,6 +45,7 @@ template <typename Order>
     case CommandKind::Reclaim:
     case CommandKind::Overcharge:
     case CommandKind::Assist:
+    case CommandKind::Guard:
     case CommandKind::Repair:
         return a.target == b.target;
     case CommandKind::Script:
