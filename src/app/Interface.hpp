@@ -263,6 +263,13 @@ void appendHealthBars(rm::ui::Geometry& out, const UnitScene& scene,
                       const rm::OrbitCamera& camera, const rm::text::Font& font,
                       const rm::ui::UiViewport& viewport);
 
+/// Visible work belonging to selected builders, or a site under the HUD cursor.
+/// Returns the number drawn so offscreen acceptance can assert the same overlay.
+std::size_t appendConstructionBars(rm::ui::Geometry& out, const UnitScene& scene,
+    const rm::OrbitCamera& camera, const rm::HeightField& field, const rm::text::Font& font,
+    const rm::ui::UiViewport& viewport, std::span<const rm::sim::UnitId> selected,
+    std::optional<std::array<float, 2>> cursor = std::nullopt);
+
 [[nodiscard]] std::optional<rm::sim::UnitId> pickAnyBatch(const rm::Ray& ray,
                                                           const UnitScene& scene);
 

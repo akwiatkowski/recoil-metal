@@ -377,6 +377,9 @@ void composeHeadlessInterface(rm::Renderer& renderer, const Session& session,
             // Health bars in a capture too, for the usual reason: a battle screenshot is
             // the one place a damaged unit reliably exists to verify them against.
             appendHealthBars(hud, units, renderer.camera(), renderer.labelFont(), shotViewport);
+            const auto shotProgressBars = appendConstructionBars(hud, units, renderer.camera(),
+                map->field, renderer.labelFont(), shotViewport, capturedSelection);
+            std::printf("  construction bars: %zu\n", shotProgressBars);
 
             // THE MINIMAP IN A CAPTURE TOO, for the same reason the rest of the HUD is here: a
             // screenshot is how this project verifies anything, and an interface only visible in
@@ -2002,6 +2005,8 @@ int runWindowed(const Session& session) {
             // Health over the units that need it: damaged, and close enough to be units
             // rather than icons. Absence is what "fine" looks like (Interface.hpp).
             appendHealthBars(hudScratch, units, window.camera(), window.labelFont(), viewport);
+            appendConstructionBars(hudScratch, units, window.camera(), map->field,
+                window.labelFont(), viewport, selected, hudCursor);
 
             // The strategic layer: the game's own glyphs where units are too small to read,
             // in the army's colour, under all the chrome (Geometry::worldOverlay).

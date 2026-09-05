@@ -150,6 +150,65 @@ TEST_CASE("guided projectile state participates in the match hash", "[guidance][
     }
 }
 
+TEST_CASE("world construction bars follow selection hover progress and sight", "[ui][world-progress]") {
+    Scenario scenario;
+    rm::unitdef::UnitDef def;
+    def.visionRadiusElmos = 100;
+    def.health = rm::sim::Mag::fromInt(100);
+    const auto builder = scenario.spawn(def, 200, 200);
+    scenario.scene.playerArmy = rm::sim::kNoArmy;
+    rm::sim::Construction work{
+        .buildTimeRemaining = rm::sim::Mag::fromInt(30),
+        .totalBuildTime = rm::sim::Mag::fromInt(60),
+    };
+    work.builder = builder;
+    work.blueprintIndex = scenario.scene.store.typeAt(builder.index);
+    work.position = {rm::sim::Fx::fromInt(200), {}, rm::sim::Fx::fromInt(200)};
+    scenario.scene.building.push_back(work);
+    rm::OrbitCamera camera;
+    camera.target = simd_make_float3(200, 0, 200);
+    camera.distance = 200;
+    std::vector<rm::text::Glyph> glyphs(rm::text::kGlyphCount);
+    const rm::text::Font font{.glyphs = glyphs, .lineHeight = 18,
+        .solidUv = {0.5f, 0.5f, 0.6f, 0.6f}};
+    const auto viewport = rm::ui::UiViewport::authored(1600, 900);
+    const std::array selected{builder};
+    const auto draw = [&](std::span<const rm::sim::UnitId> selection,
+                          std::optional<std::array<float, 2>> cursor = std::nullopt) {
+        rm::ui::Geometry geometry;
+        const auto count = rm::app::appendConstructionBars(geometry, scenario.scene, camera,
+            scenario.field, font, viewport, selection, cursor);
+        return std::pair{count, geometry};
+    };
+    CHECK(draw({}).first == 0);
+    const auto [count, geometry] = draw(selected);
+    REQUIRE(count == 1);
+    REQUIRE(geometry.worldOverlay.solid.size() == 12);
+    const auto& vertices = geometry.worldOverlay.solid;
+    const auto width = [&](std::size_t first) {
+        float left = vertices[first].position[0], right = left;
+        for (std::size_t i = first; i < first + 6; ++i) {
+            left = std::min(left, vertices[i].position[0]);
+            right = std::max(right, vertices[i].position[0]);
+        }
+        return right - left;
+    };
+    CHECK(width(6) == width(0) / 2);
+    const auto extent = viewport.hudExtent();
+    CHECK(draw({}, std::array{extent.width / 2, extent.height / 2}).first == 1);
+    CHECK(draw({}, std::array{0.0f, 0.0f}).first == 0);
+    scenario.scene.building.front().buildTimeRemaining = {};
+    CHECK(draw(selected).first == 0);
+    scenario.scene.building.front() = work;
+    scenario.scene.playerArmy = 0;
+    scenario.scene.intel.configure(2, rm::sim::Fx::fromInt(1024), rm::sim::Fx::fromInt(1024),
+        rm::sim::VisionStyle::ForgedAlliance);
+    CHECK(draw(selected).first == 0);  // selection cannot bypass fog
+    scenario.scene.playerArmy = rm::sim::kNoArmy;
+    scenario.scene.store.kill(builder);
+    CHECK(draw(selected).first == 0);
+}
+
 TEST_CASE("factory panel clicks control the real production queue", "[corpus][ui][production]") {
     const auto root = corpusRoot();
     if (!std::filesystem::is_directory(root)) SKIP("no retail unit corpus at " + root.string());

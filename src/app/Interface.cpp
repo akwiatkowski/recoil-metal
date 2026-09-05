@@ -784,6 +784,50 @@ void appendContactBlips(rm::ui::Geometry& out, const UnitScene& scene,
     }
 }
 
+std::size_t appendConstructionBars(rm::ui::Geometry& out, const UnitScene& scene,
+    const rm::OrbitCamera& camera, const rm::HeightField& field, const rm::text::Font& font,
+    const rm::ui::UiViewport& viewport, std::span<const rm::sim::UnitId> selected,
+    std::optional<std::array<float, 2>> cursor) {
+    const auto extent = viewport.hudExtent();
+    if (!font.usable() || extent.width <= 0 || extent.height <= 0) return 0;
+    const float elmosPerPoint = camera.elmosPerPoint(extent.height);
+    if (elmosPerPoint <= 0) return 0;
+    const auto battlefield = rm::ui::frameLayout(viewport).battlefield;
+    std::size_t drawn = 0;
+    for (const auto& work : scene.building) {
+        if (!constructionInProgress(work) || !scene.store.alive(work.builder)
+            || !scene.store.health()[work.builder.index].alive()
+            || !scene.visibleToViewer(work.position[0], work.position[2])) continue;
+        const auto* def = scene.catalog.def(static_cast<rm::UnitTypeIndex>(work.blueprintIndex));
+        if (!def) continue;
+        const float x = rm::sim::fxToFloat(work.position[0]);
+        const float z = rm::sim::fxToFloat(work.position[2]);
+        const float ground = field.heightAtWorld(x, z);
+        const auto base = rm::worldToScreen(camera, simd_make_float3(x, ground, z),
+            extent.width, extent.height);
+        if (!base) continue;
+        const float radius = std::max(12.0f, def->collisionRadiusElmos / elmosPerPoint);
+        const bool hovered = cursor && battlefield.contains((*cursor)[0], (*cursor)[1])
+            && std::hypot((*cursor)[0] - (*base)[0], (*cursor)[1] - (*base)[1]) <= radius;
+        if (!hovered && std::ranges::find(selected, work.builder) == selected.end()
+            && std::ranges::find(selected, work.upgradeOf) == selected.end()) continue;
+        const auto top = rm::worldToScreen(camera,
+            simd_make_float3(x, ground + std::max(def->meshHeightElmos,
+                def->collisionRadiusElmos * 2), z), extent.width, extent.height);
+        if (!top || !battlefield.contains((*top)[0], (*top)[1])) continue;
+        // A short cyan work bar stays distinct from green health and survives inspector hover.
+        constexpr float width = 40.0f, height = 4.0f;
+        const float left = (*top)[0] - width / 2;
+        const float y = (*top)[1] - 12.0f;
+        rm::text::appendRect(out.worldOverlay.solid, font, left, y, width, height,
+            rm::ui::Colour{{0, 0, 0, 0.8f}});
+        rm::text::appendRect(out.worldOverlay.solid, font, left, y,
+            width * constructionProgress(work), height, rm::ui::Colour{{0.2f, 0.75f, 1, 1}});
+        ++drawn;
+    }
+    return drawn;
+}
+
 void appendHealthBars(rm::ui::Geometry& out, const UnitScene& scene,
                       const rm::OrbitCamera& camera, const rm::text::Font& font,
                       const rm::ui::UiViewport& viewport) {

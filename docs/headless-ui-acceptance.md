@@ -69,3 +69,12 @@ The scenario submits two tank builds, observes the product/count and partial
 progress, clicks the same control handler as the window, checks Repeat on/off,
 rejects an enemy player's toggle at dispatch, and clears work with no delayed
 unit appearing. Dead factory handles hide the panel and reject controls.
+
+## World construction progress
+
+A cyan progress bar appears above visible work belonging to a selected builder,
+or while hovering the site. It stays visible when the inspector shows a build
+option or command tooltip. Completed work and dead builders draw no bar; selection
+does not bypass fog. Live and offscreen paths share `appendConstructionBars`.
+The `[world-progress]` test checks selection, hover, fill width, completion, death
+and fog; the construction and factory captures also require a rendered bar.

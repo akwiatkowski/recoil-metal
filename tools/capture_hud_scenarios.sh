@@ -57,4 +57,7 @@ for scenario in production starved; do
         rg -q 'production panel: 1 rows, repeat=off' "$capture_dir/$scenario.$pass.log"
     done
 done
+for scenario in construction production starved; do
+    rg -q 'construction bars: 1' "$capture_dir/$scenario.first.log"
+done
 echo "HUD artifacts: $capture_dir"
