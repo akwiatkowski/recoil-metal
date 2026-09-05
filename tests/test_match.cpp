@@ -106,6 +106,57 @@ TEST_CASE("the match runner preserves same-army path FIFO latency live and in re
     SECTION("replay submissions") { run(true); }
 }
 
+TEST_CASE("idle queued and same-cell moves advance through the live app path") {
+    const rm::HeightField field = flatField();
+    rm::app::UnitScene scene;
+    scene.armies = rm::sim::freeForAll(1);
+    scene.players = rm::sim::onePlayerPerArmy(1, 0);
+    scene.economies.assign(1, rm::sim::Economy{});
+    scene.commandersEver.assign(1, 0);
+
+    rm::unitdef::UnitDef tank;
+    tank.name = "test_tank";
+    tank.motion = rm::unitdef::MotionType::Land;
+    tank.speedElmosPerSecond = 100.0f;
+    tank.turnRateRadiansPerSecond = 100.0f;
+    scene.definitions.push_back(tank);
+    const rm::UnitTypeIndex type =
+        scene.catalog.add(&scene.definitions.back(), rm::app::gAppTickRate);
+    scene.setTypeTraits(type, rm::data::moveDefFor(tank), 1.0f);
+
+    const auto spawn = [&](float z) {
+        return scene.store.spawn(rm::sim::UnitStore::Spawn{
+            .type = type,
+            .transform = {.x = rm::sim::fxFromFloat(200.0f),
+                          .z = rm::sim::fxFromFloat(z)},
+            .motion = rm::app::motionFor(tank, 0),
+            .health = rm::sim::initialHealth(rm::sim::Mag::fromInt(100)),
+        });
+    };
+    const rm::sim::UnitId queuedFirst = spawn(200.0f);
+    const rm::sim::UnitId sameCellFirst = spawn(300.0f);
+
+    rm::app::PassabilitySet passability{field, false, 0.0f};
+    rm::vfs::Vfs content;
+    rm::app::MatchRunner runner =
+        rm::app::makeMatchRunner(scene, field, passability, content, {}, {});
+    runner.scripts.clear();
+
+    REQUIRE(rm::app::issueMove(scene, queuedFirst, 0, 0, rm::sim::fxFromFloat(500.0f),
+                               rm::sim::fxFromFloat(200.0f), true));
+    REQUIRE(rm::app::issueMove(scene, sameCellFirst, 0, 0, rm::sim::fxFromFloat(200.0f),
+                               rm::sim::fxFromFloat(300.0f)));
+    REQUIRE(rm::app::issueMove(scene, sameCellFirst, 0, 0, rm::sim::fxFromFloat(500.0f),
+                               rm::sim::fxFromFloat(300.0f), true));
+
+    for (int tick = 0; tick < 20; ++tick) {
+        (void)rm::app::advanceMatch(runner, tick, 0.0f);
+    }
+
+    CHECK(scene.store.transforms()[queuedFirst.index].x > rm::sim::fxFromFloat(200.0f));
+    CHECK(scene.store.transforms()[sameCellFirst.index].x > rm::sim::fxFromFloat(200.0f));
+}
+
 TEST_CASE("the app match runner reacquires an attack-move target inside its playable rectangle") {
     const rm::HeightField field = flatField();
     rm::app::UnitScene scene;
