@@ -99,3 +99,23 @@ cached per-build funding ratio; the allocation label describes the current army
 constraint, so the two can differ for a beat during a transition. `[funding]`
 checks both resource labels and funding boundaries, and the starved-factory
 capture requires the partial-funding message.
+
+## Strict content acceptance
+
+Run `mise exec -- make test-content` for the complete Catch suite with all
+required local FA and BAR content present. The runner starts from the repository
+root, so the shipped opening-file tests also execute. Any skipped case, assertion
+failure, process error, missing report or empty report fails acceptance. It prints
+the affected test names and missing-content messages, and retains the JUnit report
+and runner output outside the repository. A successful run does not certify unit
+behaviors that have no test; the capability matrix still defines those limits.
+
+For a fixed artifact location:
+
+```sh
+mise exec -- python3 tools/content_acceptance.py --report /tmp/recoil-content.xml
+```
+
+`make test` remains the regular development suite, including its existing
+optional skips and CTest boundary checks. `make test-content` adds the strict
+content gate; it does not replace the determinism replay or visual acceptance.

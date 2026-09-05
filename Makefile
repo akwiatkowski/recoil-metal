@@ -97,6 +97,7 @@ help:
 	@echo
 	@echo '  build           configure and build'
 	@echo '  test            the whole suite'
+	@echo '  test-content    strict content acceptance — no skips allowed'
 	@echo '  verify          replay the golden match — MATCH, or the tick it broke'
 	@echo '  golden          re-record it (only when the change was meant to alter the match)'
 	@echo '  ai              fetch the vendored AI corpora at their pins (FORCE=1 to re-fetch)'
@@ -155,6 +156,11 @@ build:
 
 test: build
 	mise exec -- ctest --test-dir $(BUILD) --output-on-failure
+
+.PHONY: test-content
+test-content: build
+	mise exec -- python3 -m unittest discover -s tools -p test_content_acceptance.py
+	mise exec -- python3 tools/content_acceptance.py --binary $(BUILD)/rm_tests
 
 # --- The AI corpora ----------------------------------------------------------
 #

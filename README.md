@@ -189,6 +189,8 @@ mise exec -- ctest --test-dir build --output-on-failure
 
 A handful of tests skip rather than fail when no game content is present — see
 [Getting content](#getting-content).
+For [strict content acceptance](docs/headless-ui-acceptance.md#strict-content-acceptance),
+run `mise exec -- make test-content`; any skipped or failed check fails the run.
 
 ---
 

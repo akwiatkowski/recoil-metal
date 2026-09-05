@@ -404,6 +404,9 @@ if(BUILD_TESTING)
     include(Catch)
     catch_discover_tests(rm_tests)
 
+    add_test(NAME "strict content acceptance rejects skipped checks"
+             COMMAND mise exec -- python3 ${CMAKE_SOURCE_DIR}/tools/test_content_acceptance.py)
+
     # --- Boundary checks --------------------------------------------------------
     #
     # Invariants a Catch2 test cannot reach, because what they constrain is
