@@ -1694,18 +1694,14 @@ Mag damageTargets(std::array<Fx, 3> centre, Fx radiusElmos,
         UnitIndex slot;
         std::array<Fx, 3> centre;
         UnitCatalog::ShieldInfo geometry;
+        Mag incoming;    ///< damage after this owner's armour multiplier
         Mag absorb;      ///< decided once from the whole blast, spent across every target
         bool covered;    ///< radius-zero compatibility: whether this dome covered the hit
     };
     std::vector<BlastShield> shields;
     const bool areaBlast = radiusElmos > Fx{};
 
-    // What a bubble sees, as opposed to what a hull sees. Computed from the ORIGINAL profile,
-    // once: every bubble in the blast faces the same shot.
-    const Mag shieldIncoming =
-        catalog != nullptr ? damage.against(catalog->armor().classFor("Shield")) : Mag{};
-
-    if (catalog != nullptr && shieldIncoming > Mag{} && catalog->largestShieldRadius() > Fx{}) {
+    if (catalog != nullptr && damage.harmful() && catalog->largestShieldRadius() > Fx{}) {
         // A bubble whose CENTRE is far outside the blast can still cover a target inside it,
         // so the search has to be widened by the largest bubble's radius. Querying at the
         // blast radius alone is how the old code came to miss shields it should have found.
@@ -1718,6 +1714,13 @@ Mag damageTargets(std::array<Fx, 3> centre, Fx radiusElmos,
             }
             const UnitCatalog::ShieldInfo& shield = catalog->shield(store.typeAt(slot));
             if (!shield.exists() || !healths[slot].shield.active()) {
+                continue;
+            }
+            // shield.lua:100-108 asks the OWNER for its armour multiplier. A shield has no
+            // synthetic armour class of its own; two generators under the same blast can
+            // therefore take different amounts from the same damage type.
+            const Mag incoming = damage.against(catalog->armorOf(store.typeAt(slot)));
+            if (incoming <= Mag{}) {
                 continue;
             }
             const std::array<Fx, 3> shieldAt = shieldCentre(shield, transforms[slot]);
@@ -1737,7 +1740,8 @@ Mag damageTargets(std::array<Fx, 3> centre, Fx radiusElmos,
                 .slot = slot,
                 .centre = shieldAt,
                 .geometry = shield,
-                .absorb = std::min(healths[slot].shield.current, shieldIncoming),
+                .incoming = incoming,
+                .absorb = std::min(healths[slot].shield.current, incoming),
                 .covered = false,
             });
         }
@@ -1749,16 +1753,16 @@ Mag damageTargets(std::array<Fx, 3> centre, Fx radiusElmos,
     /// overlapping shields stacking is a real Forged Alliance mechanic and the old `break`
     /// silently gave it away — a probe put 150 damage into two overlapping 100-point domes and
     /// drained one to zero while the other never fired.
-    const auto absorbedOver = [&shields](std::array<Fx, 3> at) {
-        Mag total{};
+    const auto shieldedFractionOver = [&shields](std::array<Fx, 3> at) {
+        Fx absorbed{};
         for (BlastShield& bubble : shields) {
             if (!shieldContains(bubble.geometry, bubble.centre, at)) {
                 continue;
             }
             bubble.covered = true;
-            total += bubble.absorb;
+            absorbed += fraction(bubble.absorb, bubble.incoming);
         }
-        return total;
+        return kFxOne - std::min(kFxOne, absorbed);
     };
 
     const auto damageOne = [&](UnitIndex slot) {
@@ -1853,14 +1857,9 @@ Mag damageTargets(std::array<Fx, 3> centre, Fx radiusElmos,
         // WHAT THE BUBBLES OVER **THIS** TARGET TAKE OFF THE SHOT. Tested against the target's
         // own position, which is the whole of `C-110`: a unit is sheltered when it is under a
         // dome, not when the explosion happens to be.
-        Fx shielded = kFxOne;
-        if (shieldIncoming > Mag{}) {
-            const Mag absorbed =
-                std::min(shieldIncoming, absorbedOver(positionOf(transforms[slot])));
-            if (absorbed >= shieldIncoming) {
-                return;   // fully covered: this target takes nothing at all
-            }
-            shielded = fraction(shieldIncoming - absorbed, shieldIncoming);
+        const Fx shielded = shieldedFractionOver(positionOf(transforms[slot]));
+        if (shielded <= Fx{}) {
+            return;   // fully covered: this target takes nothing at all
         }
 
         const Mag wanted = damage.against(armor) * share * shielded;

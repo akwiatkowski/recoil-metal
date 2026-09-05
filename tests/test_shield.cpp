@@ -398,29 +398,45 @@ TEST_CASE("a bubble is a sphere rather than an infinite vertical cylinder") {
     CHECK(rm::test::asFloat(roster.health(target).current) == Approx(60.0f));
 }
 
-TEST_CASE("shield-class damage controls absorption and proportional hull leakage") {
+TEST_CASE("each shield uses its owner's armour multiplier for absorption") {
     rm::test::Roster roster;
-    // Retail does not declare a Shield block. The content importer supplies that engine-level
-    // pseudo-class so a real mounted catalog, not just a synthetic registry, can address it.
     const rm::data::ArmorTable armor = rm::data::armorTableFromSource(
-        "armordefinition = { { 'Normal', 'Normal 1.0', }, }");
-    REQUIRE(armor.registry.knows("Shield"));
+        "armordefinition = {"
+        " { 'Normal', 'Normal 1.0', },"
+        " { 'Light', 'Overcharge 0.5', },"
+        " { 'Structure', 'Overcharge 0.25', },"
+        " }");
     roster.catalog.setArmor(armor.registry, armor.multipliers);
-    const rm::UnitTypeIndex shieldType = roster.addType(shieldDef());
-    const rm::UnitTypeIndex targetType = roster.addType(plainDef());
-    const rm::sim::UnitId generator = roster.add(shieldType, 0.0f, 0.0f, 1, 100.0f);
+
+    rm::unitdef::UnitDef lightShield = shieldDef();
+    lightShield.name = "light_shield";
+    lightShield.armorType = "Light";
+    rm::unitdef::UnitDef structureShield = shieldDef();
+    structureShield.name = "structure_shield";
+    structureShield.armorType = "Structure";
+    rm::unitdef::UnitDef targetDef = plainDef();
+    targetDef.armorType = "Structure";
+
+    const rm::UnitTypeIndex lightType = roster.addType(lightShield);
+    const rm::UnitTypeIndex structureType = roster.addType(structureShield);
+    const rm::UnitTypeIndex targetType = roster.addType(targetDef);
+    const rm::sim::UnitId light = roster.add(lightType, 0.0f, 0.0f, 1, 100.0f);
+    const rm::sim::UnitId structure = roster.add(structureType, 40.0f, 0.0f, 1, 100.0f);
     const rm::sim::UnitId target = roster.add(targetType, 20.0f, 0.0f, 1, 100.0f);
-    roster.health(generator).shield.current = rm::sim::Mag::fromInt(40);
+    roster.health(light).shield.current = rm::sim::Mag::fromInt(20);
+    roster.health(structure).shield.current = rm::sim::Mag::fromInt(5);
     const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(2);
 
-    rm::unitdef::DamageProfile damage =
-        rm::unitdef::flatDamage(rm::sim::Mag::fromInt(40));
-    REQUIRE(damage.addOverride(armor.registry.classFor("Shield"), rm::sim::Mag::fromInt(80)));
+    const rm::unitdef::DamageProfile damage = rm::unitdef::damageFromMatrix(
+        rm::sim::Mag::fromInt(80), "Overcharge", armor.multipliers);
     (void)rm::sim::damageArea(rm::test::at(20, 0, 0), rm::sim::Fx{}, damage, 0,
                               roster.store, armies, &roster.catalog);
 
-    CHECK(roster.health(generator).shield.current == rm::sim::Mag{});
-    CHECK(rm::test::asFloat(roster.health(target).current) == Approx(80.0f));
+    // Light sees 40 damage and absorbs half; Structure sees 20 and absorbs a quarter.
+    // Their protection stacks to 75%, then the target's own Structure multiplier applies.
+    CHECK(roster.health(light).shield.current == rm::sim::Mag{});
+    CHECK(roster.health(structure).shield.current == rm::sim::Mag{});
+    CHECK(rm::test::asFloat(roster.health(target).current) == Approx(95.0f));
 }
 
 TEST_CASE("a projectile impact reaches the same bubble gate") {

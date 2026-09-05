@@ -83,14 +83,14 @@ armordefinition = {
 TEST_CASE("the shipped retail armour table parses") {
     const ArmorTable table = armorTableFromSource(kRetail);
 
-    // Six content classes plus the engine's shield pseudo-class. `Default` is class 0 rather
-    // than another entry, while `Shield` must exist even though retail does not author a block
-    // for it: damage profiles need a stable class to distinguish bubble damage from hull damage.
-    CHECK(table.registry.size() == 7);
+    // Six content classes. `Default` is class 0 rather than another entry; shields use their
+    // owning unit's authored armour class, as retail shield.lua does.
+    CHECK(table.registry.size() == 6);
     for (const std::string_view name :
-         {"Default", "Normal", "Light", "Commander", "Structure", "Experimental", "Shield"}) {
+         {"Default", "Normal", "Light", "Commander", "Structure", "Experimental"}) {
         CHECK(table.registry.knows(name));
     }
+    CHECK_FALSE(table.registry.knows("Shield"));
 
     // **FIVE non-1.0 entries in the whole of retail Forged Alliance.** Every `Normal 1.0` row is
     // dropped, because 1.0 is what an absent row already means. If this number moves, the game's
