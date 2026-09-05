@@ -1,5 +1,8 @@
 # T1 land behavioral contracts
 
+The [capability matrix](unit-capability-matrix.md) separates blueprint, behavior,
+UI-model and end-to-end UI evidence, including untested exceptional abilities.
+
 `tests/test_unit_scenarios.cpp` enumerates the real products of all four retail T1
 land factories using their build expressions. It requires 23 products, then runs
 each through `MatchRunner` in isolation: movement plus its primary role. Scouts

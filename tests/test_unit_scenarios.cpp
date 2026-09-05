@@ -7,6 +7,7 @@
 #include "core/unit/BuildTree.hpp"
 #include "core/unit/Role.hpp"
 #include "core/unit/UnitBlueprint.hpp"
+#include "core/ui/CommandPanel.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -278,6 +279,22 @@ TEST_CASE("every retail T1 land factory product performs its role through the ma
                 continue;
             }
             DYNAMIC_SECTION(factoryId << " / " << def.name) {
+                // UI-model evidence is separate from execution evidence below. An enabled
+                // descriptor is not proof of hit-testing, factory-tray access or special abilities.
+                const std::array selection{&def};
+                const auto available = rm::ui::commandAvailability(selection);
+                const auto permits = [&](rm::sim::CommandKind kind) {
+                    const auto descriptor = std::ranges::find(
+                        rm::ui::kCommandDescriptors, kind, &rm::ui::CommandDescriptor::kind);
+                    REQUIRE(descriptor != rm::ui::kCommandDescriptors.end());
+                    return available[static_cast<std::size_t>(
+                        descriptor - rm::ui::kCommandDescriptors.begin())];
+                };
+                CHECK(permits(rm::sim::CommandKind::Move));
+                const auto role = rm::unitdef::roleOf(def);
+                if (role != rm::unitdef::Role::Scout && role != rm::unitdef::Role::Builder) {
+                    CHECK(permits(rm::sim::CommandKind::Attack));
+                }
                 Scenario scenario;
                 const auto unit = scenario.spawn(def, 200.0f, 200.0f);
                 auto runner = scenario.runner();
@@ -294,7 +311,6 @@ TEST_CASE("every retail T1 land factory product performs its role through the ma
                 // a target or consume the resources that the role scenario needs.
                 Scenario job;
                 const auto actor = job.spawn(def, 200.0f, 200.0f);
-                const auto role = rm::unitdef::roleOf(def);
                 if (role == rm::unitdef::Role::Scout) {
                     job.scene.intel.configure(2, rm::sim::Fx::fromInt(1024),
                         rm::sim::Fx::fromInt(1024), rm::sim::VisionStyle::ForgedAlliance);
