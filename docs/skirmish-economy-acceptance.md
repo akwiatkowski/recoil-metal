@@ -69,6 +69,21 @@ builders carry a platoon state machine the driver does not dispatch. The
 map reported no instruction-budget overruns, zero thread errors and 107 modules
 executed (`build/ai-sanity-2.log`, `build/ai-sanity-8.log`).
 
+## With reclaim decisions
+
+After `bf0ef56` the reclaim builders act: the driver sends an idle engineer to
+the richest reclaim-grid cell near its base, capped by the builder's
+InstanceCount (`2d0b749`, `bf0ef56`). The same 1,800-second duel
+(`build/ai-reclaim.log`, run with `--ai-log`) issued 197 reclaim orders from 219
+decisions, zero decision failures, and **did not end**: 6,003 shots, 139 units
+destroyed, 184,118 of 185,068 hit points left, army 0 at 91% funding with 458 of
+464 constructions complete. Before the cap the first attempt issued 557 orders
+because a standing reclaimer read as idle. Reclaiming wreckage changes the AI's
+course; whether the longer game is better or worse play is not judged here, and
+the earlier 1,373-second victory is no longer the expected outcome of this
+command. A recording of a complete skirmish now needs a longer `--play` or a
+judgement about the reclaim builders' priority (1000 for `T1 Engineer Reclaim`).
+
 Engineer menu checks use `[engineer-tiers]` against real T1/T2/T3 blueprints.
 The T3 offscreen menu exposed 45 options with higher tiers first, including
 authored experimentals, and pagination for lower tiers. Unenhanced ACUs remain

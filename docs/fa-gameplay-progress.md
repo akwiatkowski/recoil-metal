@@ -9,19 +9,23 @@ Detailed retail evidence remains canonical in
 [`fa-exe-analysis-plan.md`](fa-exe-analysis-plan.md). This dashboard summarizes that ledger; it
 does not replace its claims, addresses, counterevidence, or confirmation gate.
 
-**Snapshot:** 2026-09-06, main through `cb65218`. This batch lands the skirmish
+**Snapshot:** 2026-09-06, main through `bf0ef56`. This day lands the skirmish
 economy correction, engineer construction tiers with per-tier upgrade cancellation
 (ADR-095), weapon visuals resolved from the original Lua declarations with authored
 emitters, muzzle/impact effects, live beam endpoints, ribbon trails and original
-projectile meshes (ADR-096 to ADR-099, ADR-101, ADR-103), the FAF watchdog cascade
-fix with paced condition evaluation and a native reclaim-grid snapshot (ADR-100,
-ADR-102), a per-process VFS test scratch directory, and the last two native input
-cases, completing the 24-case matrix. The 1,800-second retail SCMP_009 duel
-completes with zero instruction-budget failures, no missing brain methods and a
-hash-identical repeat. `make verify` still diverges at tick 0 against the golden
-recorded before the economy correction; reblessing it is a pending decision.
-`C-157` remains gated on a typed unit-work target (no unit-targeted reclaim or
-capture command exists yet). Implementation does not establish whole-WP parity.
+projectile meshes with mesh-blueprint LOD tables (ADR-096 to ADR-099, ADR-101,
+ADR-103), the FAF watchdog cascade fix, a native reclaim-grid snapshot and a
+dispatched reclaim decision (ADR-100, ADR-102), the script-object lifecycle seam
+(ADR-104), unit reclaim as a typed work target with the `C-157` targeting exemption
+(ADR-105, SaveState v17, command log v4), a per-process VFS test scratch directory,
+and the last two native input cases, completing the 24-case matrix. Strict
+retail-content acceptance passes 1,635 cases with no skips. The 1,800-second retail
+SCMP_009 duel runs with zero instruction-budget failures and no missing brain
+methods; with reclaim decisions active it no longer ends inside 1,800 seconds
+([skirmish acceptance](skirmish-economy-acceptance.md)). `make verify` still
+diverges at tick 0 against the golden recorded before the economy correction;
+reblessing it is a pending decision that also gates the FA-AIR and FA-PERSIST
+golden halves. Implementation does not establish whole-WP parity.
 
 **Prior snapshot:** 2026-09-05, main through `76e781b`, plus the native inactive-window
 acceptance fix and evidence reconciliation. The selected
@@ -83,10 +87,11 @@ Retail-validated  [######--------------] about 30%
 Retail-analyzed   [##############------] about 70%
 ```
 
-The row estimates average 58.5%, 29.1% and 68.75%, respectively. The 2026-09-06
-refresh raised `FA-CMD` and `FA-ECON` implementation by 5 and `FA-PRESENT` by 15
-(analyzed by 15) for the weapon-visuals, ribbon-trail, projectile-mesh and
-upgrade-cancellation slices; no validation score changed.
+The row estimates average 59.05%, 29.25% and 68.75%, respectively. The 2026-09-06
+refreshes raised `FA-CMD` and `FA-ECON` implementation by 5, `FA-PRESENT` by 15
+(analyzed by 15), `FA-SIM` by 5, `FA-AI` by 5 and `FA-WEAPONS` by 1 (validated by 3)
+for the weapon-visuals, ribbon-trail, projectile-mesh, upgrade-cancellation,
+script-object-seam, reclaim-decision and unit-reclaim/C-157 slices.
 
 Only **1 of 45 work packages**, `WP-15` economy, currently passes the complete retail
 confirmation gate. The three percentages must never be combined: understanding absent behavior
@@ -138,19 +143,19 @@ excluded from the headline.
 | [`FA-CMD`](#fa-cmd---commands-controls-and-factories) | Commands, controls, factories | `WP-12`-`14` | 85% | 65% | 75% | Complete retail acceptance of Guard; refuel/staging remains. |
 | [`FA-ECON`](#fa-econ---economy-construction-and-engineering) | Economy, construction, engineering | `WP-15`-`19` | 75% | 55% | 90% | Name the capture increment at `Unit+0x690` and read `Sim::TransferUnit`'s copy/reset inventory, then specify the smallest capture slice. |
 | [`FA-LAND`](#fa-land---land-navigation-formations-and-spatial-world) | Land navigation, formations, spatial world | `WP-20`, `21`, `26` | 85% | 30% | 95% | Add bounded formation rotation or category matching without changing path-service ordering. |
-| [`FA-AIR`](#fa-air---aircraft-flight-combat-and-staging) | Aircraft flight, combat, staging | `WP-22` | 65% | 55% | 95% | Complete retail/golden acceptance of planar states 3-7; full banking remains. |
+| [`FA-AIR`](#fa-air---aircraft-flight-combat-and-staging) | Aircraft flight, combat, staging | `WP-22` | 65% | 55% | 95% | Golden acceptance of planar states 3-7 once the baseline is reblessed (retail-content half passed 2026-09-06); full banking remains. |
 | [`FA-NAVY`](#fa-navy---surface-and-submerged-warfare) | Surface and submerged warfare | `WP-23`-`24` | 35% | 10% | 75% | Implement one complete `SurfacingSub` dive/surface slice. |
 | [`FA-TRANSPORT`](#fa-transport---attachments-cargo-and-ferries) | Attachments, cargo, ferries | `WP-25` | 35% | 5% | 95% | Add parent/self bone indices and authored rest-bone composition to generic attachments. |
-| [`FA-WEAPONS`](#fa-weapons---targeting-weapons-and-projectiles) | Targeting, weapons, projectiles | `WP-27`-`28` | 97% | 72% | 90% | Implement `C-157` target exemption for engineer reclaim/capture, then add the remaining death and manual-fire paths. |
+| [`FA-WEAPONS`](#fa-weapons---targeting-weapons-and-projectiles) | Targeting, weapons, projectiles | `WP-27`-`28` | 98% | 75% | 90% | Add the remaining death and manual-fire paths; `C-157`'s capture half waits on Capture. |
 | [`FA-MISSILES`](#fa-missiles---silos-missiles-and-interception) | Silos, missiles, interception | `WP-29` | 55% | 35% | 95% | Add interceptor guidance/lead and shooter caps, then the build queue and UI. |
 | [`FA-DAMAGE`](#fa-damage---damage-death-and-shields) | Damage, death, shields | `WP-30`-`32` | 78% | 50% | 80% | Specify PersonalBubble and transport coverage. |
 | [`FA-INTEL`](#fa-intel---vision-radar-sonar-and-counter-intel) | Vision, radar, sonar, counter-intel | `WP-33` | 75% | 45% | 90% | Apply radar-position error to automatic targeting without changing contact identity or ordering. |
 | [`FA-PROGRESS`](#fa-progress---enhancements-veterancy-and-special-units) | Enhancements, veterancy, special units | `WP-34`-`36` | 35% | 20% | 35% | Complete the enhancement lifecycle specification around `CUnitScriptTask`. |
 | [`FA-TERRAIN`](#fa-terrain---mutable-terrain-and-craters) | Mutable terrain and craters | `WP-37` | 0% | 0% | 25% | Trace one crater from damage through terrain, pathing, and rendering invalidation. |
-| [`FA-AI`](#fa-ai---retail-ai-and-native-manager-boundary) | Retail AI and native manager boundary | `WP-38` | 35% | 5% | 30% | Dispatch a reclaim decision kind so the now-answered `ReclaimAvailableInGrid` can act; islandMarker remains. |
+| [`FA-AI`](#fa-ai---retail-ai-and-native-manager-boundary) | Retail AI and native manager boundary | `WP-38` | 40% | 5% | 30% | Specify islandMarker from its callers; measure how reclaim decisions change the SCMP_009 duel's course. |
 | [`FA-UI`](#fa-ui---player-interface-and-advanced-controls) | Player interface and advanced controls | `WP-39`-`40` | 75% | 5% | 15% | Trace and implement the first retail data-driven command page from `WP-40`. |
 | [`FA-PRESENT`](#fa-present---animation-effects-and-audio) | Animation, effects, audio | `WP-41`-`42` | 70% | 5% | 40% | Implement one ordinary weapon's blueprint Audio field to XSB cue to positional playback path. |
-| [`FA-PERSIST`](#fa-persist---replay-hashing-and-saveresume) | Replay, hashing, save/resume | `WP-43`-`44` | 70% | 20% | 90% | Complete retail/golden acceptance of v16 continuation; general app saves remain absent. |
+| [`FA-PERSIST`](#fa-persist---replay-hashing-and-saveresume) | Replay, hashing, save/resume | `WP-43`-`44` | 70% | 20% | 90% | Golden acceptance of save continuation (now v17) once the baseline is reblessed (retail-content half passed 2026-09-06); general app saves remain absent. |
 
 ## Starting Work
 
@@ -520,10 +525,13 @@ are memoised per pass by category text (ADR-100). The earlier 13 decision
 failures and 38 condition errors were one genuine overrun per pass plus a
 watchdog cascade. Team 0 still wins. `GridReclaim` is now answered from a native
 per-cell reclaim snapshot (ADR-102): only `ReclaimAvailableInGrid` reads it in this
-slice, and its passing changes no decision yet because reclaim builders carry a
-platoon state machine the driver does not dispatch. The 650-second two- and
-eight-army retail sanity runs on 2026-09-06 reported no instruction-budget
-overruns, zero thread errors and 107 modules executed. See
+slice. The reclaim builders now act: the driver sends an idle engineer to the
+richest cell near the base, capped by InstanceCount, and the match resolves the
+cell to its most valuable wreck (`2d0b749`, `bf0ef56`). With that the same duel
+issues about two hundred reclaim orders and no longer ends inside 1,800 seconds;
+the change of course is recorded, not judged. The 650-second two- and eight-army
+retail sanity runs on 2026-09-06 reported no instruction-budget overruns, zero
+thread errors and 107 modules executed. See
 [skirmish acceptance](skirmish-economy-acceptance.md).
 
 ```text
