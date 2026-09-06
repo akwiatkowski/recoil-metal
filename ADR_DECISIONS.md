@@ -3333,3 +3333,21 @@ Emitting persistent per-tick puffs cannot bend a textured ribbon or apply a ramp
 it. Particle grows from 112 to 120 bytes. Bolt strips skip ribbon materials; the gallery
 still previews them straight. TextureRepeatRate is interpreted as repeats per ogrid of
 TrailLength without a retail shader read.
+
+## ADR-102 — Answer GridReclaim from a native per-cell reclaim snapshot
+
+**Context.** The hosted FAF AI read `aiBrain.GridReclaim` 783 times per duel and every
+read failed closed; retail's GridReclaim.lua is event-driven over prop objects this
+adapter does not mirror. Only `ReclaimAvailableInGrid` executes in our slice.
+
+**Decision.** The decision-pass snapshot carries wreck mass, energy and count per
+retail grid cell (Grid.lua geometry: sixteen cells a side, eight on a 256 map), summed
+from the same feature pool the harvest pass drains. A small Lua view on the brain
+answers `ToGridSpace`, `ToCellFromGridSpace` and `MaximumInRadius` from it, and the
+engineer-manager stand-in gains the `Location` the condition reads. Missing cells are
+empty; a snapshot without a grid means no reclaim.
+
+**Alternatives and consequences.** Running GridReclaim.lua needs prop objects,
+reclaim events and surface heights the sim does not publish. The condition's result
+changes no decision yet: reclaim builders carry a platoon state machine the driver does
+not dispatch. Platoon readers that also need GridBrain remain unserved.

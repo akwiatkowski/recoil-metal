@@ -554,6 +554,28 @@ TEST_CASE("the FAF driver boots a brain and the corpus's own builders decide", "
         assert(brain:GetCurrentUnits(categories.COMMAND * categories.MOBILE) == 2,
                'a new snapshot must invalidate the count memo')
 
+        -- The reclaim grid the corpus's ReclaimAvailableInGrid reads: Grid.lua cell mapping
+        -- over the native per-cell wreck totals, richest cell within N rings, 10 mass floor.
+        snap2.reclaim = { cellCount = 16, cellSize = 32,
+                          cells = { [4] = { [4] = { mass = 120, energy = 40, count = 2 } } } }
+        local gx, gz = brain.GridReclaim:ToGridSpace(100, 100)
+        assert(gx == 4 and gz == 4, 'ToGridSpace floors world/CellSize and is 1-based')
+        assert(select(1, brain.GridReclaim:ToGridSpace(-5, 0)) == 1)
+        assert(select(1, brain.GridReclaim:ToGridSpace(100000, 0)) == 16, 'clamped to the grid')
+        assert(brain.GridReclaim:MaximumInRadius(4, 4, 0).TotalMass == 120)
+        assert(brain.GridReclaim:MaximumInRadius(1, 1, 3).TotalMass == 120, 'the square reaches cell 4')
+        assert(brain.GridReclaim:MaximumInRadius(10, 10, 2).TotalMass == 0, 'nothing that far away')
+        assert(brain.GridReclaim:MaximumInRadius(10, 10, 2).ReclaimCount == 0)
+        local conditions = import('/lua/editor/MiscBuildConditions.lua')
+        assert(conditions.ReclaimAvailableInGrid(brain, 'MAIN') == true,
+               'the base at (100,100) sees 120 mass within three rings')
+        snap2.reclaim.cells[4][4].mass = 5
+        assert(conditions.ReclaimAvailableInGrid(brain, 'MAIN') == false,
+               'under ten mass there is nothing worth reclaiming')
+        snap2.reclaim = nil
+        assert(conditions.ReclaimAvailableInGrid(brain, 'MAIN') == false,
+               'no snapshot grid means no reclaim, not an error')
+
         -- C-163: requested demand and granted usage are different published counters, while
         -- trend converts their per-tick difference back to a per-second rate.
         snap.massRequested = 0.4

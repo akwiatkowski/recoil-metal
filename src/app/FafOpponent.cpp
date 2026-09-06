@@ -16,6 +16,7 @@ extern "C" {
 #include <array>
 #include <cctype>
 #include <cstdio>
+#include <map>
 #include <optional>
 #include <string>
 
@@ -281,6 +282,56 @@ end
 function methods:GetCurrentUnits(category)
     return countCurrentUnits(self, category)
 end
+
+-- The brain's reclaim grid, read from `snap.reclaim`, which the native side fills every pass
+-- from the same feature pool the harvest pass drains. Retail's GridReclaim.lua is event-driven
+-- over prop objects this adapter does not mirror; this view answers the one surface the
+-- executed corpus reads — `ReclaimAvailableInGrid` (MiscBuildConditions.lua) asks for the
+-- richest cell within a few rings of the base and compares its TotalMass with 10. Cell
+-- geometry follows Grid.lua: 16 cells a side (8 on a 256 map), CellSize = max(size) / cells.
+-- Platoon readers (ReclaimGridAI, the adaptive reclaim behaviour) also need GridBrain and
+-- are not dispatched here.
+local GridReclaimView = {}
+GridReclaimView.__index = GridReclaimView
+local function reclaimGridOf(view)
+    local grid = view.brain.snap.reclaim
+    if grid then return grid end
+    local size = math.max(ScenarioInfo.size[1], ScenarioInfo.size[2])
+    return { cellCount = 16, cellSize = size / 16, cells = {} }
+end
+function GridReclaimView:ToGridSpace(wx, wz)
+    local grid = reclaimGridOf(self)
+    local function axis(w)
+        if not (w > 0) then return 1 end
+        return math.min(grid.cellCount, math.floor(w / grid.cellSize) + 1)
+    end
+    return axis(wx), axis(wz)
+end
+function GridReclaimView:ToCellFromGridSpace(gx, gz)
+    local column = reclaimGridOf(self).cells[gx]
+    local cell = column and column[gz]
+    return { X = gx, Z = gz,
+             TotalMass = cell and cell.mass or 0,
+             TotalEnergy = cell and cell.energy or 0,
+             ReclaimCount = cell and cell.count or 0 }
+end
+function GridReclaimView:ToCellFromWorldSpace(wx, wz)
+    return self:ToCellFromGridSpace(self:ToGridSpace(wx, wz))
+end
+-- The richest cell in the square of `radius` rings around (bx, bz); the cell itself when
+-- the radius is zero or less. Never nil, matching GridReclaim.lua:213.
+function GridReclaimView:MaximumInRadius(bx, bz, radius)
+    local best = self:ToCellFromGridSpace(bx, bz)
+    if not (radius > 0) then return best end
+    local count = reclaimGridOf(self).cellCount
+    for x = math.max(1, bx - radius), math.min(count, bx + radius) do
+        for z = math.max(1, bz - radius), math.min(count, bz + radius) do
+            local cell = self:ToCellFromGridSpace(x, z)
+            if cell.TotalMass > best.TotalMass then best = cell end
+        end
+    end
+    return best
+end
 function methods:GetListOfUnits(category, needToBeIdle)
     local out = {}
     for _, u in ipairs(self.snap.units) do
@@ -393,6 +444,7 @@ function __rm_faf_boot(army, info)
     brain.condCache = {}
     brain.condSerial = 0
     brain.countMemo = { snap = false }
+    brain.GridReclaim = setmetatable({ brain = brain }, GridReclaimView)
 
     -- The pool platoon (see GetPlatoonUniquelyNamed): counts over the army's own units.
     brain.pool = {
@@ -438,6 +490,8 @@ function __rm_faf_boot(army, info)
     end
     local manager = {
         GetLocationCoords = coords,
+        -- Read as a position by ReclaimAvailableInGrid (`manager.Location[1]`, `[3]`).
+        Location = { info.startX, 0, info.startZ },
         Radius = 200,
         GetNumFactories = function() return countUnits(categories.STRUCTURE * categories.FACTORY) end,
         GetNumCategoryFactories = function(self, category) return countUnits(category) end,
@@ -1409,6 +1463,66 @@ void FafOpponent::advance(rm::TickIndex tick) {
         }
     }
     lua_setfield(lua, -2, "enemies");
+
+    // snap.reclaim — the wreck mass and energy left per retail reclaim-grid cell (Grid.lua:
+    // sixteen cells a side, eight on a 256 map, CellSize = max(sizeX, sizeZ) / cells). The
+    // brain's GridReclaim view answers ReclaimAvailableInGrid from this, so the AI sees the
+    // same pool the harvest pass drains. Only occupied cells are written; the view reads a
+    // missing cell as empty.
+    {
+        const int sizeX = world_->field.squaresX * rm::kSquareSize;
+        const int sizeZ = world_->field.squaresZ * rm::kSquareSize;
+        const int cellCount = (sizeX == sizeZ && sizeX == 256) ? 8 : 16;
+        const float cellSize = static_cast<float>(std::max(sizeX, sizeZ))
+                               / static_cast<float>(cellCount);
+        struct Cell {
+            float mass = 0;
+            float energy = 0;
+            lua_Integer count = 0;
+        };
+        std::map<std::pair<int, int>, Cell> cells;  // ordered, so columns close in sequence
+        const auto gridAxis = [&](rm::sim::Fx world) {
+            const float w = rm::sim::fxToFloat(world);
+            return w > 0 ? std::min(cellCount, static_cast<int>(w / cellSize) + 1) : 1;
+        };
+        const auto features = scene.features.all();
+        for (rm::UnitIndex slot = 0; slot < features.size(); ++slot) {
+            if (!scene.features.slotAlive(slot)) continue;
+            const rm::sim::Feature& feature = features[slot];
+            const float mass = rm::sim::magToFloat(feature.massRemaining);
+            const float energy = rm::sim::magToFloat(feature.energyRemaining);
+            if (mass <= 0 && energy <= 0) continue;
+            Cell& cell = cells[{gridAxis(feature.at[0]), gridAxis(feature.at[2])}];
+            cell.mass += mass;
+            cell.energy += energy;
+            ++cell.count;
+        }
+        lua_newtable(lua);  // snap.reclaim
+        lua_pushinteger(lua, cellCount);
+        lua_setfield(lua, -2, "cellCount");
+        lua_pushnumber(lua, static_cast<lua_Number>(cellSize));
+        lua_setfield(lua, -2, "cellSize");
+        lua_newtable(lua);  // snap.reclaim.cells[gx][gz]
+        int openColumn = 0;
+        for (const auto& [key, cell] : cells) {
+            if (key.first != openColumn) {
+                if (openColumn != 0) lua_rawseti(lua, -2, openColumn);
+                openColumn = key.first;
+                lua_newtable(lua);
+            }
+            lua_newtable(lua);
+            lua_pushnumber(lua, static_cast<lua_Number>(cell.mass));
+            lua_setfield(lua, -2, "mass");
+            lua_pushnumber(lua, static_cast<lua_Number>(cell.energy));
+            lua_setfield(lua, -2, "energy");
+            lua_pushinteger(lua, cell.count);
+            lua_setfield(lua, -2, "count");
+            lua_rawseti(lua, -2, key.second);
+        }
+        if (openColumn != 0) lua_rawseti(lua, -2, openColumn);
+        lua_setfield(lua, -2, "cells");
+        lua_setfield(lua, -2, "reclaim");
+    }
 
     // --- The decision pass --------------------------------------------------------------
     lua_getglobal(lua, "__rm_faf_decide");
