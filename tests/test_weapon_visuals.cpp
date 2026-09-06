@@ -2,6 +2,7 @@
 #include "core/scene/ProjectileFx.hpp"
 #include "core/scene/CombatEffects.hpp"
 #include "app/Scene.hpp"
+#include "app/SceneBuild.hpp"
 #include "app/FafAi.hpp"
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
@@ -118,6 +119,59 @@ TEST_CASE("retail weapons resolve distinct textured bolts and beam strips", "[co
         }
     }
     CHECK(visuals.find("unknown").empty());
+
+    // Original projectile meshes: `X_lod0.scm` beside `X_proj.bp`, drawn through the unit
+    // pipeline pointed along the velocity, with the bolt strip stepping aside.
+    {
+        rm::app::UnitScene scene;
+        scene.weaponVisuals = visuals;
+        rm::app::loadProjectileMeshes(scene, content);
+        const char* gauss = "/projectiles/TDFGauss01/TDFGauss01_proj.bp";
+        REQUIRE(scene.projectileMeshes.contains(rm::foldedVisualKey(gauss)));
+        const auto mesh = scene.projectileMeshes.at(rm::foldedVisualKey(gauss));
+        CHECK(mesh.scale > 0);
+        REQUIRE(mesh.batch < scene.batches.size());
+        REQUIRE(scene.batches[mesh.batch].model != nullptr);
+        CHECK_FALSE(scene.batches[mesh.batch].model->vertices.empty());
+        CHECK(scene.weaponVisuals.hasMesh(gauss));
+        // 43 retail projectile blueprints sit beside a lod0 mesh; more resolve through
+        // Display.MeshBlueprint, some into archives this test does not mount.
+        CHECK(scene.projectileMeshes.size() >= 43);
+        // Blueprints naming the same mesh blueprint share one loaded model and batch.
+        const auto shell1 = scene.projectileMeshes.find(
+            rm::foldedVisualKey("/projectiles/AIFFragmentationSensorShell01/AIFFragmentationSensorShell01_proj.bp"));
+        const auto shell2 = scene.projectileMeshes.find(
+            rm::foldedVisualKey("/projectiles/AIFFragmentationSensorShell02/AIFFragmentationSensorShell02_proj.bp"));
+        REQUIRE(shell1 != scene.projectileMeshes.end());
+        REQUIRE(shell2 != scene.projectileMeshes.end());
+        CHECK(shell1->second.batch == shell2->second.batch);
+        CHECK(shell1->second.batch != mesh.batch);
+
+        rm::sim::Projectile flying;
+        flying.visualId = gauss;
+        flying.position = {rm::sim::Fx::fromInt(100), rm::sim::Fx::fromInt(10), rm::sim::Fx::fromInt(50)};
+        flying.velocity = {rm::sim::Fx::fromInt(10), rm::sim::Fx::fromInt(5), rm::sim::Fx::fromInt(10)};
+        scene.projectiles.push_back(flying);
+        scene.gatherForDrawing(1.0f);
+        REQUIRE(scene.drawScratch.size() > mesh.batch);
+        REQUIRE(scene.drawScratch[mesh.batch].size() == 1);
+        CHECK(scene.drawSlotOf[mesh.batch].empty()); // no unit slot: picking cannot land on it
+        const auto& instance = scene.drawScratch[mesh.batch].front();
+        CHECK(instance.position[0] == Catch::Approx(100));
+        CHECK(instance.position[2] == Catch::Approx(50));
+        CHECK(instance.scale == Catch::Approx(mesh.scale));
+        CHECK(instance.rotationY == Catch::Approx(std::atan2(10.0, 10.0)));
+        CHECK(instance.rotationX == Catch::Approx(-std::atan2(5.0, std::hypot(10.0, 10.0))));
+        // A frame between ticks extrapolates the shot; a delivered shot is not drawn.
+        scene.gatherForDrawing(0.5f);
+        CHECK(scene.drawScratch[mesh.batch].front().position[0] == Catch::Approx(105));
+        scene.projectiles.front().pendingImpact = rm::sim::ImpactType::Terrain;
+        scene.gatherForDrawing(1.0f);
+        CHECK(scene.drawScratch[mesh.batch].empty());
+        std::vector<rm::Particle> strips;
+        rm::appendProjectiles(strips, std::array{flying}, 0.0f, 1.0f, &scene.weaponVisuals);
+        CHECK(strips.empty());
+    }
     rm::sim::Event beam;
     beam.kind = rm::sim::EventKind::BeamFired;
     beam.visualId = "URB2301:MainGun";

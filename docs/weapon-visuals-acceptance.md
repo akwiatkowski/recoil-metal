@@ -103,7 +103,18 @@ each bolt sample (`weapon gallery ribbon:` lines report the segment count); the
 gallery scale. TextureRepeatRate is read as repeats per ogrid of TrailLength, the
 beam convention; retail's exact trail shader was not consulted.
 
-The remaining approved work is original projectile meshes.
-Original mesh projectile rendering and full retail pixel parity are not claimed.
+Original projectile meshes now draw through the unit pipeline (ADR-103): the mesh
+beside `Display.MeshBlueprint`'s mesh blueprint, or beside the projectile blueprint,
+is loaded once per distinct mesh and scaled by `Display.UniformScale`; visible shots
+with a mesh are drawn as instances pointed along their velocity, team coloured, and
+their bolt strip is skipped. The corpus test checks the Gauss mesh, a shared
+mesh-blueprint batch and the instance's yaw and pitch. Of the 287 retail projectile
+blueprints, 43 have a mesh beside them and 55 of the 65 mesh-blueprint references
+resolve by the file-name rule; ten (the default missile and the Laanse tactical
+missile among them) name a LOD mesh that does not follow it and keep their strips.
+No offscreen capture of a mesh in flight was made in this slice; orientation
+handedness is asserted against the unit shader's rotation order, not a picture.
+
+Full retail pixel parity is not claimed.
 Unresolved visuals retain the existing procedural fallback. Full native-emitter
 parity, including drag and every alignment/water flag, is not yet claimed.

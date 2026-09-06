@@ -3351,3 +3351,25 @@ empty; a snapshot without a grid means no reclaim.
 reclaim events and surface heights the sim does not publish. The condition's result
 changes no decision yet: reclaim builders carry a platoon state machine the driver does
 not dispatch. Platoon readers that also need GridBrain remain unserved.
+
+## ADR-103 — Original projectile meshes through the unit pipeline
+
+**Context.** Retail shells, bombs and missiles are meshes, not strips: 43 projectile
+blueprints sit beside a `_lod0.scm` and 65 more name a mesh blueprint through
+`Display.MeshBlueprint`, many sharing `/meshes/projectiles/missile_default_mesh.bp`.
+
+**Decision.** At content load, every projectile blueprint's mesh is located by the one
+file-name rule of BlueprintMesh.hpp — beside the named mesh blueprint when there is one,
+beside the projectile blueprint otherwise — loaded once per distinct mesh into its own
+`UnitBatch`, textured from the files beside it, and scaled by `Display.UniformScale`
+times the ogrid. Per frame the scene appends one `UnitInstance` per visible in-flight
+shot with a mesh, yawed to atan2(vx, vz) and pitched to minus the climb angle, team
+coloured by the firing army and extrapolated by the frame fraction; the bolt strip skips
+those definitions. Mesh batches carry no unit slots, so picking never lands on a shot.
+
+**Alternatives and consequences.** A dedicated projectile pipeline would duplicate the
+unit shader for the same geometry. Lazy loading would need the VFS at draw time; eager
+loading costs about a hundred small models at startup. Not covered: mesh blueprints
+whose LOD table names a mesh that does not follow the rule (ten retail blueprints,
+including the Seraphim Laanse missile), `MeshScaleVelocity`, LOD cutoffs, and roll
+about the flight axis.

@@ -1,7 +1,9 @@
 #include "app/SceneBuild.hpp"
 
+#include "core/blueprint/BlueprintMesh.hpp"
 #include "core/data/ArmorDefs.hpp"
 #include "core/data/MoveDef.hpp"
+#include "core/lua/LuaTable.hpp"
 #include "core/log/Log.hpp"
 #include "core/model/BuilderAim.hpp"
 #include "core/model/Scm.hpp"
@@ -1411,6 +1413,60 @@ void orderFirstExtractors(UnitScene& scene, std::span<const rm::scenario::Marker
     }
 
     return scene;
+}
+
+void loadProjectileMeshes(UnitScene& scene, const rm::vfs::Vfs& content) {
+    // Shared geometry is loaded once: 65 retail projectiles name a mesh blueprint, and many
+    // of them name the same one (`/meshes/projectiles/missile_default_mesh.bp`).
+    std::map<std::string, std::size_t> batchByMesh;
+    for (const std::string& path : content.list("/projectiles", "_proj.bp")) {
+        const auto bytes = content.read(path);
+        if (!bytes) continue;
+        const auto table = rm::lua::parseTable(
+            std::string_view{reinterpret_cast<const char*>(bytes->data()), bytes->size()});
+        if (!table) continue;
+        const rm::lua::Value* display = table->find("Display");
+
+        // Where the geometry is. `Display.MeshBlueprint` names a mesh blueprint
+        // (`X_mesh.bp`) whose LOD 0 sits beside IT; otherwise the mesh sits beside the
+        // projectile blueprint. Both are the one file-name rule of BlueprintMesh.hpp. A
+        // blueprint with neither is an effect-only projectile and keeps its strip.
+        std::optional<std::string_view> declared;
+        if (display != nullptr) declared = display->stringAt("MeshBlueprint");
+        const std::string meshPath =
+            declared ? rm::blueprint::meshBeside(std::string{*declared}, "_mesh", 0).generic_string()
+                     : rm::blueprint::meshBeside(path, rm::blueprint::kProjectileSuffix, 0).generic_string();
+        const std::string meshKey = rm::foldedVisualKey(meshPath);
+        auto batch = batchByMesh.find(meshKey);
+        if (batch == batchByMesh.end()) {
+            const auto scm = content.read(meshPath);
+            if (!scm) continue;
+            auto model = loadModelBytes(*scm);
+            if (!model) {
+                rm::log::writef(rm::log::Level::Warn, "content", "projectile mesh %s: %s",
+                                meshPath.c_str(), model.error().message.c_str());
+                continue;
+            }
+            scene.models.push_back(std::move(*model));
+            const rm::Model& stored = scene.models.back();
+            const rm::TexturePair pair{
+                .diffuse = scene.textures.resolve(content, scmTextureInVfs(meshPath, kScmDiffuseSuffix, content), "albedo"),
+                .shading = scene.textures.resolve(content, scmTextureInVfs(meshPath, kScmShadingSuffix, content), "specTeam"),
+            };
+            const int normals =
+                scene.textures.resolve(content, scmTextureInVfs(meshPath, kScmNormalsSuffix, content), "normalsTS");
+            scene.batches.push_back(rm::UnitBatch{
+                .model = &stored, .instances = {}, .textures = pair, .normals = normals});
+            batch = batchByMesh.emplace(meshKey, scene.batches.size() - 1).first;
+        }
+        // `Display.UniformScale` times the eight elmos in an ogrid — the same answer a unit's
+        // `meshToElmos` gives (SceneBuild's model registration above).
+        const double uniform = display != nullptr ? display->numberAt("UniformScale").value_or(1.0) : 1.0;
+        const std::string key = rm::foldedVisualKey(path);
+        scene.projectileMeshes[key] = UnitScene::ProjectileMesh{
+            .batch = batch->second, .scale = static_cast<float>(uniform) * kOgridScale};
+        scene.weaponVisuals.meshed.insert(key);
+    }
 }
 
 } // namespace rm::app

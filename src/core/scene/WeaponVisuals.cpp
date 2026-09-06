@@ -83,6 +83,8 @@ float WeaponVisuals::scale(std::string_view key) const {
 }
 
 bool WeaponVisuals::contains(std::string_view key) const { return definitions.contains(folded(key)); }
+bool WeaponVisuals::hasMesh(std::string_view key) const { return meshed.contains(folded(key)); }
+std::string foldedVisualKey(std::string_view key) { return folded(key); }
 
 void loadWeaponMaterials(WeaponVisuals& result, const vfs::Vfs& content,
     std::string_view key, std::span<const std::string> emitters) {

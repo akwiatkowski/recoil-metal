@@ -39,5 +39,8 @@ namespace rm::blueprint {
 /// mesh" — a legitimate answer for an emitter, so it would not look like a bug.
 inline constexpr std::string_view kPropSuffix = "_prop";
 inline constexpr std::string_view kUnitSuffix = "_unit";
+/// And a projectile's: `/projectiles/TDFGauss01/TDFGauss01_proj.bp` sits beside
+/// `TDFGauss01_lod0.scm`, the same rule again.
+inline constexpr std::string_view kProjectileSuffix = "_proj";
 
 } // namespace rm::blueprint

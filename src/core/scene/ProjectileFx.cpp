@@ -54,6 +54,9 @@ void appendProjectiles(std::vector<Particle>& into, std::span<const sim::Project
             sim::fxToFloat(shot.position[2]) + sim::fxToFloat(shot.velocity[2]) * shotBlend,
         };
 
+        // A shot with an original mesh is drawn by the unit pipeline; a strip on top of it
+        // would read as a second projectile.
+        if (visuals && visuals->hasMesh(shot.visualId)) continue;
         if (visuals && !visuals->find(shot.visualId).empty()) {
             // Ribbon materials are left out here: ProjectileTrails draws them over the
             // shot's recorded path.

@@ -321,6 +321,8 @@ int main(int argc, const char* argv[]) {
         std::printf("weapon visuals: %zu definitions, %zu materials, %zu unresolved entries\n",
             units.weaponVisuals.definitions.size(), units.weaponVisuals.materials.size(),
             units.weaponVisuals.unavailable.size());
+        rm::app::loadProjectileMeshes(units, content);
+        std::printf("weapon visuals: %zu projectile meshes\n", units.projectileMeshes.size());
         for (std::size_t i=0; i<std::min<std::size_t>(5, units.weaponVisuals.unavailable.size()); ++i)
             std::fprintf(stderr, "weapon visuals: %s\n", units.weaponVisuals.unavailable[i].c_str());
         std::vector<rm::Particle> marchDust;

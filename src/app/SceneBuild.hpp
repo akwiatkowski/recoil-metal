@@ -232,4 +232,11 @@ void orderFirstExtractors(UnitScene& scene, std::span<const rm::scenario::Marker
                                      const rm::vfs::AssetSearch& search,
                                      const rm::vfs::Vfs& content);
 
+/// Loads every projectile blueprint's original mesh — `X_lod0.scm` beside `X_proj.bp`, the
+/// file-name rule of BlueprintMesh.hpp — into its own draw batch, scaled by the blueprint's
+/// `Display.UniformScale`, and marks the definition in `scene.weaponVisuals` so the bolt strip
+/// stays out of its way. Call after `weaponVisuals` is loaded. Blueprints with no mesh file
+/// beside them keep drawing as strips.
+void loadProjectileMeshes(UnitScene& scene, const rm::vfs::Vfs& content);
+
 } // namespace rm::app

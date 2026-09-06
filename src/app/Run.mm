@@ -286,7 +286,9 @@ void composeHeadlessInterface(rm::Renderer& renderer, const Session& session,
                 std::size_t made = 0;
                 for (std::size_t batch = 0; batch < units.drawScratch.size() && made < rings;
                      ++batch) {
-                    for (std::size_t i = 0; i < units.drawScratch[batch].size() && made < rings;
+                    // Bounded by the slot list, not the instance list: a projectile-mesh
+                    // batch draws instances that belong to no unit slot.
+                    for (std::size_t i = 0; i < units.drawSlotOf[batch].size() && made < rings;
                          ++i) {
                         const rm::UnitIndex slot = units.drawSlotOf[batch][i];
                         if (units.playerArmy != rm::sim::kNoArmy

@@ -5,6 +5,7 @@
 #include "core/vfs/Vfs.hpp"
 
 #include <map>
+#include <set>
 #include <string>
 #include <string_view>
 
@@ -58,11 +59,18 @@ struct WeaponVisuals {
     std::map<std::string, std::vector<std::uint32_t>, std::less<>> definitions;
     std::map<std::string, float, std::less<>> scales;
     std::vector<std::string> unavailable;
+    /// Definitions drawn as an original mesh (case-folded projectile keys). The app loads
+    /// and draws those through the unit pipeline; the bolt strip stays out of their way.
+    std::set<std::string, std::less<>> meshed;
 
     [[nodiscard]] std::span<const std::uint32_t> find(std::string_view key) const;
     [[nodiscard]] float scale(std::string_view key) const;
     [[nodiscard]] bool contains(std::string_view key) const;
+    [[nodiscard]] bool hasMesh(std::string_view key) const;
 };
+
+/// The case-folded form every key is stored under.
+[[nodiscard]] std::string foldedVisualKey(std::string_view key);
 
 /// Execute original script declarations, then load their original emitter/DDS data.
 /// Missing content is reported in unavailable; unknown weapons keep the generic fallback.

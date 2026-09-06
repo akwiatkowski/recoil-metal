@@ -701,8 +701,53 @@ struct UnitScene {
             drawSlotOf[batch].push_back(unit.id.index);
         }
 
+        // Shots with an original mesh. An alpha of one means "exactly the current tick" (the
+        // headless capture's call); anything below it is a frame's fraction of a tick and the
+        // shot is extrapolated by it, the way its strip would be.
+        gatherProjectileMeshes(alpha < 1.0f ? alpha : 0.0f);
+
         for (std::size_t batch = 0; batch < batches.size(); ++batch) {
             batches[batch].instances = drawScratch[batch];
+        }
+    }
+
+    /// One original projectile mesh: the batch that draws it and its blueprint scale.
+    struct ProjectileMesh {
+        std::size_t batch = kNoBatch;
+        float scale = 1.0f;
+    };
+    /// By case-folded `_proj.bp` path. Filled by `loadProjectileMeshes`; empty when the
+    /// content ships none. Their batches have no unit slots, so `drawSlotOf` stays empty for
+    /// them and picking never lands on a shot.
+    std::map<std::string, ProjectileMesh, std::less<>> projectileMeshes;
+
+    /// Appends one instance per visible in-flight shot whose definition has a mesh, pointed
+    /// along its velocity. The unit shader yaws +Z to (sin, cos) and a positive pitch tips
+    /// the nose down, so yaw is atan2(vx, vz) and pitch is minus the climb angle.
+    void gatherProjectileMeshes(float ahead) {
+        if (projectileMeshes.empty()) return;
+        for (const rm::sim::Projectile& shot : projectiles) {
+            if (shot.pendingImpact != rm::sim::ImpactType::Invalid) continue; // delivered this tick
+            const auto found = projectileMeshes.find(rm::foldedVisualKey(shot.visualId));
+            if (found == projectileMeshes.end() || found->second.batch >= drawScratch.size()) continue;
+            const std::array<float, 3> velocity{rm::sim::fxToFloat(shot.velocity[0]),
+                                                rm::sim::fxToFloat(shot.velocity[1]),
+                                                rm::sim::fxToFloat(shot.velocity[2])};
+            const std::array<float, 3> at{rm::sim::fxToFloat(shot.position[0]) + velocity[0] * ahead,
+                                          rm::sim::fxToFloat(shot.position[1]) + velocity[1] * ahead,
+                                          rm::sim::fxToFloat(shot.position[2]) + velocity[2] * ahead};
+            if (!visibleToViewer(rm::sim::fxFromFloat(at[0]), rm::sim::fxFromFloat(at[2]))) continue;
+            const float level = std::hypot(velocity[0], velocity[2]);
+            const int owner = shot.firedByArmy;
+            drawScratch[found->second.batch].push_back(rm::UnitInstance{
+                .position = at,
+                .rotationY = std::atan2(velocity[0], velocity[2]),
+                .scale = found->second.scale,
+                .teamColour = owner >= 0 && static_cast<std::size_t>(owner) < armies.size()
+                                  ? rm::teamColour(static_cast<std::size_t>(owner))
+                                  : rm::kTeamColours[0],
+                .rotationX = -std::atan2(velocity[1], level),
+            });
         }
     }
 
