@@ -5,7 +5,8 @@
 namespace rm::audio {
 
 void playForEvents(Mixer& mixer, std::span<const sim::Event> events,
-                   const WaveBank* explosions, const WaveBank* impacts) {
+                   const WaveBank* explosions, const WaveBank* impacts,
+                   const WeaponSounds* weapons) {
     // A deterministic pick from a bank: the unit's own handle scrambles into an index, so
     // two runs of one match boom identically and neighbouring deaths do not all share one
     // sample. Not a real random — sound is presentation, but a replay should still SOUND
@@ -21,6 +22,15 @@ void playForEvents(Mixer& mixer, std::span<const sim::Event> events,
         const float z = sim::fxToFloat(event.at[2]);
         switch (event.kind) {
         case sim::EventKind::WeaponFired:
+            // The weapon's own cue when the blueprint names one and the bank is loaded; the
+            // shooter's handle picks among the cue's takes, as a death picks its boom.
+            if (weapons != nullptr) {
+                if (const Cue* cue = weapons->cueFor(
+                        event.visualId, event.unit.index * 7u + event.unit.generation)) {
+                    mixer.play(*cue, x, z, 0.5f);
+                    break;
+                }
+            }
             mixer.play(shotCue(), x, z, 0.5f);
             break;
         case sim::EventKind::BeamFired:

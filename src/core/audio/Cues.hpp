@@ -1,16 +1,16 @@
 #pragma once
 
-// The cue set: every sound the game currently makes, synthesised.
+// The synthesised cue set: the engine's own voice, for whatever the shipped banks do not
+// yet name.
 //
-// SYNTHESISED RATHER THAN SHIPPED, and the reason is recorded rather than hidden: Forged
-// Alliance's audio lives in XACT wave banks (`sounds.scd` holds `.xwb` files) whose entries
-// are xWMA — a WMA variant with no decoder this project can reasonably carry. The formats
-// converted so far (DDS, SCM, SCMAP, blueprints) all decode with published layouts; xWMA
-// needs a licensed codec or ffmpeg, either of which is a dependency ADR-044's standard would
-// have to weigh separately. Until then the engine speaks with its own voice: short procedural
-// cues, deterministic (a seeded xorshift, no clock, no libc rand), shaped on the same
-// principles the real ones follow — a shot is a bright transient, an explosion is low noise
-// with a long tail, a completion is a tuned blip.
+// This file first shipped believing the retail wave banks were xWMA and undecodable. That
+// was measured wrong (core/audio/Xwb.hpp: all 1,737 entries are plain PCM), and the banks
+// now play — deaths and impacts by bank index, weapon fire by the blueprint's own cue through
+// the sound bank (core/audio/Xsb.hpp). These procedural cues remain as the fallback for a
+// procedural map, a missing drive, or a weapon whose bank is not loaded: short, deterministic
+// (a seeded xorshift, no clock, no libc rand), shaped on the same principles the real ones
+// follow — a shot is a bright transient, an explosion is low noise with a long tail, a
+// completion is a tuned blip.
 //
 // Every cue is generated ONCE (static locals) at first use, mono float at Mixer::kSampleRate.
 

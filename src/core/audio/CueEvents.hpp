@@ -7,6 +7,7 @@
 // bookkeeping kinds stay silent, which is what the game does too.
 
 #include "core/audio/Mixer.hpp"
+#include "core/audio/WeaponSounds.hpp"
 #include "core/audio/Xwb.hpp"
 #include "core/sim/Events.hpp"
 
@@ -21,7 +22,12 @@ namespace rm::audio {
 /// boom from the explosions bank (deterministically, by the unit's own handle, so a replay
 /// booms identically) and an impact a thud from the impacts bank. Null falls back to the
 /// synthesised cues — the engine's own voice, as before.
+///
+/// `weapons`, when given, plays a `WeaponFired` shot with the blueprint's own `Audio.Fire`
+/// cue, keyed by the event's `visualId`; a weapon it cannot resolve keeps the synthesised
+/// shot.
 void playForEvents(Mixer& mixer, std::span<const sim::Event> events,
-                   const WaveBank* explosions = nullptr, const WaveBank* impacts = nullptr);
+                   const WaveBank* explosions = nullptr, const WaveBank* impacts = nullptr,
+                   const WeaponSounds* weapons = nullptr);
 
 } // namespace rm::audio

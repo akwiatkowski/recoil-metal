@@ -3416,3 +3416,23 @@ incumbent too. Save v17 admits the kind; command log v4 names it.
 consumer and the save layout; the kind byte was already saved and logged. The FAF formula's
 bit-for-bit match with the native one is unverified, `ReclaimTimeMultiplier` is taken as one,
 and Capture is still absent, so the second retail pass has nothing to test.
+
+## ADR-106 — Weapon fire by the blueprint's own XACT cue
+
+**Context.** The wave banks decode (all retail entries are PCM) but carry no names, so
+deaths and impacts played by bank index and every shot was one synthesised click. The
+blueprints name their sounds through the sound bank: `Audio.Fire = Sound { Bank, Cue }`.
+
+**Decision.** Parse `Audio.Fire` into the weapon. Read the companion `.xsb` (XACT2 format
+43) far enough to turn a cue name into wave-bank entries: header, cue names, complex and
+simple cues, sounds, clips, and the two wave-carrying event kinds the retail banks use
+(one track with ranges; a weighted track list). `WeaponSounds` loads bank pairs as the
+catalog names them and resolves a `WeaponFired` event's `UNIT:Label` key to one of the
+cue's takes, picked by the shooter's handle so a replay sounds the same. Unresolved weapons
+keep the synthesised shot.
+
+**Alternatives and consequences.** A hand table of cue indices would repeat the sound
+bank. The layout was measured on retail bytes rather than taken from a specification, and
+anything the walk does not recognise ends that cue's list rather than failing the bank. Not
+interpreted: pitch and volume ranges, RPC curves, categories, instance limits, `LodCutoff`
+distances, loops.

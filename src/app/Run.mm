@@ -935,12 +935,16 @@ int runWindowed(const Session& session) {
         // procedural map, a missing drive — the synthesised cues carry on.
         std::optional<rm::audio::WaveBank> explosionBank;
         std::optional<rm::audio::WaveBank> impactBank;
+        std::optional<rm::audio::WeaponSounds> weaponSounds;
         for (int i = 1; i + 1 < session.argc; ++i) {
             if (std::string_view{session.argv[i]} == "--gamedata") {
                 const std::filesystem::path sounds =
                     std::filesystem::path{session.argv[i + 1]}.parent_path() / "sounds";
                 explosionBank = rm::audio::loadWaveBank(sounds / "Explosions.xwb");
                 impactBank = rm::audio::loadWaveBank(sounds / "Impacts.xwb");
+                // Weapon fire by the blueprint's own cue: the bank pairs load as the catalog
+                // names them, so a type registered mid-match brings its sound along.
+                weaponSounds.emplace(sounds);
                 if (explosionBank) {
                     std::printf("audio: %zu explosion(s), %zu impact(s) from the game's own"
                                 " banks\n",
@@ -2037,9 +2041,13 @@ int runWindowed(const Session& session) {
                 // listener rides the camera every tick, so panning follows the view.
                 mixer.setListener(window.camera().target.x, window.camera().target.z,
                                   window.camera().distance);
+                if (weaponSounds) {
+                    weaponSounds->learn(units.catalog);
+                }
                 rm::audio::playForEvents(mixer, visibleEvents,
                                          explosionBank ? &*explosionBank : nullptr,
-                                         impactBank ? &*impactBank : nullptr);
+                                         impactBank ? &*impactBank : nullptr,
+                                         weaponSounds ? &*weaponSounds : nullptr);
 
                 // ...and the arcs' smoke, one puff per shell per tick — the emission rate
                 // is the sim's own, so the trail spacing is a tick of travel (ProjectileFx).

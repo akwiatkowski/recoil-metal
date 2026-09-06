@@ -104,6 +104,18 @@ std::vector<Weapon> weaponsFrom(const lua::Value& weaponArray, bool airborneSour
         Weapon weapon{.trackingRadius = sim::fxFromFloat(numberOr(entry, "TrackingRadius", 1.0f))};
 
         weapon.label = std::string{entry.stringAt("Label").value_or("")};
+        // The firing sound's address in the XACT banks. `Sound { ... }` parses as a plain
+        // table here; a weapon without one (or without a Fire entry) stays silent by name and
+        // keeps the synthesised cue.
+        if (const lua::Value* audio = entry.find("Audio")) {
+            if (const lua::Value* fire = audio->find("Fire")) {
+                const auto bank = fire->stringAt("Bank");
+                const auto cue = fire->stringAt("Cue");
+                if (bank && cue && !bank->empty() && !cue->empty()) {
+                    weapon.fireSound = unitdef::Weapon::FireSound{std::string{*bank}, std::string{*cue}};
+                }
+            }
+        }
         weapon.role =
             weaponRoleFromCategory(entry.stringAt("WeaponCategory").value_or("(none)"));
         weapon.targetsProjectiles = entry.stringAt("TargetType").value_or("")

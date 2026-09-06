@@ -103,6 +103,15 @@ inline constexpr std::int32_t kHalfTurnBrads = 32768;
 struct Weapon {
     std::string label;  ///< the blueprint's own `Label`, for messages
 
+    /// `Audio.Fire = Sound { Bank = 'UELWeapon', Cue = 'UEL0201_Cannon_Sgl' }`: the XACT
+    /// sound bank and cue this weapon fires with. Presentation only; the sim never reads it.
+    /// `LodCutoff` (a distance class named in `SupCom.xgs`) is not kept yet.
+    struct FireSound {
+        std::string bank;
+        std::string cue;
+    };
+    std::optional<FireSound> fireSound;
+
     WeaponRole role = WeaponRole::Other;
     BallisticArc arc = BallisticArc::None;
 
