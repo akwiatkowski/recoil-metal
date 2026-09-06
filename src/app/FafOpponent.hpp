@@ -65,9 +65,14 @@ private:
     std::map<int, std::string> enemyPaths_;
     const World* world_ = nullptr;
     std::vector<Decision> decisions_;
-    /// Snapshot ordinal -> unit, rebuilt every advance. Lua refers to units by ordinal so
-    /// no id crosses the boundary in a form Lua arithmetic could damage.
-    std::vector<rm::sim::UnitId> handles_;
+    /// Lua refers to a unit by its packed `UnitId` — generation in the high 32 bits, index in
+    /// the low — carried as an exact 64-bit Lua integer. A handle from an earlier pass is
+    /// therefore still meaningful, and resolves through the script-object seam
+    /// (`UnitStore::resolve`) rather than through a per-pass table.
+    [[nodiscard]] static std::int64_t packHandle(rm::sim::UnitId id) noexcept;
+    [[nodiscard]] static rm::sim::UnitId unpackHandle(std::int64_t handle) noexcept;
+    /// `__rm_faf_beenDestroyed(h)`: retail's `Entity:BeenDestroyed` over the live store.
+    static int beenDestroyedBinding(lua_State* lua);
 
     /// Sites already chosen THIS pass. Several decisions convert before any of them
     /// reaches `scene.building`, so the free-site and free-deposit checks would hand every

@@ -4,6 +4,7 @@
 #include "app/Scene.hpp"
 
 #include "core/sim/BuildOrder.hpp"
+#include "core/sim/ScriptObject.hpp"
 #include "core/lua/LuaTable.hpp"
 #include "core/unit/UnitBlueprint.hpp"
 
@@ -126,12 +127,23 @@ function __rm_faf_scenario(markers, sizeX, sizeZ, armies)
     end
 end
 
+-- A unit handle is the packed UnitId: generation in the high 32 bits, index in the low —
+-- exact in Lua 5.4's 64-bit integers. The same packing the native side uses, so a test can
+-- forge one.
+function __rm_faf_handle(index, generation)
+    return generation * 4294967296 + index
+end
+
 -- Unit objects in snapshots are plain tables; the methods conditions call on them live on
--- this shared metatable. A snapshot only ever holds LIVING units, which is why
--- BeenDestroyed is false and completion is 1 — both facts, not guesses.
+-- this shared metatable. A snapshot only ever holds LIVING units, which is why completion
+-- is 1 — a fact, not a guess. BeenDestroyed asks the live store through the script-object
+-- seam when the native binding is present (the match), and is false in the bare sandbox.
 __rm_faf.unitMeta = {
     __index = {
-        BeenDestroyed = function() return false end,
+        BeenDestroyed = function(u)
+            if __rm_faf_beenDestroyed then return __rm_faf_beenDestroyed(u.h) end
+            return false
+        end,
         GetAIBrain = function(u) return u.__brain end,
         IsBeingBuilt = function() return false end,
         GetFractionComplete = function() return 1 end,
@@ -1156,13 +1168,35 @@ void FafOpponent::teachType(lua_State* lua, const rm::unitdef::UnitDef& def) {
     }
 }
 
+std::int64_t FafOpponent::packHandle(rm::sim::UnitId id) noexcept {
+    // Generation high, index low; both are 32-bit, so the value is exact in a Lua integer
+    // and never zero for a live unit (generations start at one).
+    return static_cast<std::int64_t>((std::uint64_t{id.generation} << 32) | std::uint64_t{id.index});
+}
+
+rm::sim::UnitId FafOpponent::unpackHandle(std::int64_t handle) noexcept {
+    const auto bits = static_cast<std::uint64_t>(handle);
+    return rm::sim::UnitId{.index = static_cast<rm::UnitIndex>(bits & 0xffffffffu),
+                           .generation = static_cast<rm::Generation>(bits >> 32)};
+}
+
+int FafOpponent::beenDestroyedBinding(lua_State* lua) {
+    const auto* self = static_cast<const FafOpponent*>(lua_touserdata(lua, lua_upvalueindex(1)));
+    const lua_Integer handle = lua_tointeger(lua, 1);
+    if (self == nullptr || self->world_ == nullptr || handle <= 0) {
+        lua_pushboolean(lua, 1);  // nothing to resolve against is as destroyed as it gets
+        return 1;
+    }
+    lua_pushboolean(lua, rm::sim::beenDestroyed(self->world_->scene.store, unpackHandle(handle)) ? 1 : 0);
+    return 1;
+}
+
 void FafOpponent::observe(const World& world, std::span<const rm::sim::Event> /*events*/) {
     world_ = &world;
 }
 
 void FafOpponent::advance(rm::TickIndex tick) {
     decisions_.clear();
-    handles_.clear();
     plannedThisPass_.clear();
     if (world_ == nullptr || !sandbox_.ready()) {
         return;
@@ -1188,6 +1222,11 @@ void FafOpponent::advance(rm::TickIndex tick) {
         lua_pushlightuserdata(lua, const_cast<rm::vfs::Vfs*>(&world_->content));
         lua_pushcclosure(lua, loadBlueprint, 1);
         lua_setglobal(lua, "__rm_faf_load_blueprint");
+        // Retail's Entity:BeenDestroyed over the live store, through the script-object seam.
+        // The opponent outlives the sandbox's use of it; `world_` is read at call time.
+        lua_pushlightuserdata(lua, this);
+        lua_pushcclosure(lua, beenDestroyedBinding, 1);
+        lua_setglobal(lua, "__rm_faf_beenDestroyed");
         // __rm_faf_boot(army, info)
         lua_getglobal(lua, "__rm_faf_boot");
         lua_pushinteger(lua, army_);
@@ -1431,11 +1470,11 @@ void FafOpponent::advance(rm::TickIndex tick) {
 
         teachType(lua, *def);
 
-        handles_.push_back(scene.store.idAt(slot));
+        const rm::sim::UnitId id = scene.store.idAt(slot);
         lua_newtable(lua);  // the unit
         lua_pushstring(lua, def->name.c_str());
         lua_setfield(lua, -2, "bp");
-        lua_pushinteger(lua, static_cast<lua_Integer>(handles_.size()));
+        lua_pushinteger(lua, packHandle(id));
         lua_setfield(lua, -2, "h");
         lua_pushnumber(lua, static_cast<lua_Number>(x));
         lua_setfield(lua, -2, "x");
@@ -1461,8 +1500,7 @@ void FafOpponent::advance(rm::TickIndex tick) {
                 || head->kind() == rm::sim::CommandKind::ReclaimUnit);
         lua_pushboolean(lua, reclaiming ? 1 : 0);
         lua_setfield(lua, -2, "reclaiming");
-        if (std::find(upgrading.begin(), upgrading.end(), handles_.back())
-            != upgrading.end()) {
+        if (std::find(upgrading.begin(), upgrading.end(), id) != upgrading.end()) {
             lua_pushboolean(lua, 1);
             lua_setfield(lua, -2, "upgrading");
         }
@@ -1613,7 +1651,31 @@ void FafOpponent::convertDecision(lua_State* lua) {
         lua_pop(lua, 1);
         return out;
     };
-    const auto handleAt = [this, lua](int index) -> std::optional<rm::sim::UnitId> {
+    const rm::app::UnitScene& scene = world_->scene;
+    // A packed handle resolves FRESH through the script-object seam (C-044). A unit that died
+    // this tick is dropped silently — the ordinary race between census and order. A released
+    // handle is retail's "Game object has been destroyed", and logged as such: it means Lua
+    // kept a unit across passes, which the driver is not supposed to do.
+    const auto resolveHandle = [this, &scene](lua_Integer h) -> std::optional<rm::sim::UnitId> {
+        if (h <= 0) {
+            return std::nullopt;
+        }
+        const rm::sim::UnitId id = unpackHandle(h);
+        const rm::sim::UnitStore::Resolved resolved = scene.store.resolve(id);
+        if (resolved.state == rm::sim::UnitStore::HandleState::Stale) {
+            if (rm::app::gFafLog) {
+                std::printf("  [faf %d] handle %u:%u: %.*s\n", army_, id.index, id.generation,
+                            static_cast<int>(rm::sim::kDestroyedObjectError.size()),
+                            rm::sim::kDestroyedObjectError.data());
+            }
+            return std::nullopt;
+        }
+        if (resolved.state == rm::sim::UnitStore::HandleState::Destroyed) {
+            return std::nullopt;
+        }
+        return id;
+    };
+    const auto handleAt = [lua, &resolveHandle](int index) -> std::optional<rm::sim::UnitId> {
         lua_Integer h = 0;
         if (index == 0) {
             lua_getfield(lua, -1, "builder");
@@ -1622,14 +1684,10 @@ void FafOpponent::convertDecision(lua_State* lua) {
         } else {
             h = index;
         }
-        if (h < 1 || static_cast<std::size_t>(h) > handles_.size()) {
-            return std::nullopt;
-        }
-        return handles_[static_cast<std::size_t>(h - 1)];
+        return resolveHandle(h);
     };
 
     const std::string kind = field("kind");
-    const rm::app::UnitScene& scene = world_->scene;
 
     if (kind == "upgrade") {
         // The corpus picked WHICH unit upgrades (UnitUpgradeAI's platoon of one); the
@@ -1840,13 +1898,9 @@ void FafOpponent::convertDecision(lua_State* lua) {
             const auto count = static_cast<lua_Integer>(lua_rawlen(lua, -1));
             for (lua_Integer i = 1; i <= count; ++i) {
                 lua_rawgeti(lua, -1, i);
-                const auto h = static_cast<int>(lua_tointeger(lua, -1));
+                const lua_Integer h = lua_tointeger(lua, -1);
                 lua_pop(lua, 1);
-                if (const std::optional<rm::sim::UnitId> unit =
-                        h >= 1 && static_cast<std::size_t>(h) <= handles_.size()
-                            ? std::optional<rm::sim::UnitId>{handles_[static_cast<std::size_t>(
-                                  h - 1)]}
-                            : std::nullopt) {
+                if (const std::optional<rm::sim::UnitId> unit = resolveHandle(h)) {
                     std::array<rm::sim::Fx, 2> objective{(*target)[0], (*target)[2]};
                     if (scene.store.motion()[unit->index].surfaceWater) {
                         const rm::sim::Transform& from = scene.store.transforms()[unit->index];

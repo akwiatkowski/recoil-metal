@@ -520,12 +520,16 @@ TEST_CASE("the FAF driver boots a brain and the corpus's own builders decide", "
         local builders = #__rm_faf.brains[0].builders
         assert(builders > 100, 'expected NormalMain builder list, got ' .. tostring(builders))
         __rm_faf_type('UEL0001', { 'COMMAND', 'MOBILE', 'LAND' })
-        local commander = { bp = 'UEL0001', h = 1, x = 100, z = 100, idle = true,
-                            healthPercent = 0.75,
+        -- Handles are packed UnitIds: generation in the high 32 bits, index in the low.
+        assert(__rm_faf_handle(3, 2) == 2 * 4294967296 + 3)
+        local commander = { bp = 'UEL0001', h = __rm_faf_handle(1, 1), x = 100, z = 100,
+                            idle = true, healthPercent = 0.75,
                             __cats = __rm_faf.cats.UEL0001 }
         setmetatable(commander, __rm_faf.unitMeta)
         assert(commander:GetHealthPercent() == 0.75,
                'unit proxy does not expose its hull health')
+        -- The bare sandbox has no live store to ask; the match binds __rm_faf_beenDestroyed.
+        assert(commander:BeenDestroyed() == false)
         local snap = { units = { commander }, occupied = {}, underway = {},
                        mass = 400, energy = 1500, massStorage = 650, energyStorage = 4000,
                        massIncome = 0.2, energyIncome = 10,
@@ -544,7 +548,7 @@ TEST_CASE("the FAF driver boots a brain and the corpus's own builders decide", "
         assert(brain:GetCurrentUnits(categories.COMMAND * categories.MOBILE) == 1)
         assert(brain:GetCurrentUnits(categories.COMMAND * categories.MOBILE) == 1)
         assert(brain:GetCurrentUnits(categories.MOBILE - categories.COMMAND) == 0)
-        local second = setmetatable({ bp = 'UEL0001', h = 1, x = 120, z = 100, idle = true,
+        local second = setmetatable({ bp = 'UEL0001', h = __rm_faf_handle(2, 1), x = 120, z = 100, idle = true,
                                       healthPercent = 1, __cats = __rm_faf.cats.UEL0001 },
                                     __rm_faf.unitMeta)
         local snap2 = {}
