@@ -584,6 +584,38 @@ void applyDecisions(UnitScene& scene, const rm::vfs::Vfs& content, const rm::sim
             }
             break;
         }
+        case rm::ai::Decision::Kind::Reclaim: {
+            if (!scene.store.alive(decision.unit)) {
+                break;
+            }
+            // The most valuable wreck inside the named cell, by mass left. The AI reads the
+            // cell totals from the same feature pool, so a cell it calls rich has one.
+            std::optional<rm::sim::FeatureId> best;
+            rm::sim::Mag bestMass{};
+            const auto features = scene.features.all();
+            for (rm::UnitIndex slot = 0; slot < features.size(); ++slot) {
+                if (!scene.features.slotAlive(slot)) continue;
+                const rm::sim::Feature& wreck = features[slot];
+                if (wreck.massRemaining <= bestMass) continue;
+                if (rm::sim::groundDistanceElmos(wreck.at, {decision.toX, rm::sim::Fx{}, decision.toZ})
+                    > decision.radius) {
+                    continue;
+                }
+                best = scene.features.idAt(slot);
+                bestMass = wreck.massRemaining;
+            }
+            if (!best) {
+                break;  // emptied since the snapshot
+            }
+            const std::array<rm::sim::UnitId, 1> reclaimer{decision.unit};
+            if (issueReclaim(scene, reclaimer, playerDriving(scene, army.index), tickIndex, *best,
+                             false)) {
+                std::printf("  [%6.1fs] army %d RECLAIMS %.0f mass of wreckage\n",
+                            static_cast<double>(elapsedSeconds), army.index,
+                            static_cast<double>(rm::sim::magToFloat(bestMass)));
+            }
+            break;
+        }
         }
     }
 

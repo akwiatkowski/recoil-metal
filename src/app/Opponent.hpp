@@ -89,6 +89,10 @@ struct Decision {
         StartConstruction,
         /// Send `unit` to (`toX`, `toZ`).
         Move,
+        /// Send `unit` to reclaim the most valuable wreck within `radius` of (`toX`, `toZ`).
+        /// The AI names the reclaim-grid cell; the match resolves the wreck, because the
+        /// brain sees cells and the sim sees features.
+        Reclaim,
     };
 
     Kind kind = Kind::Move;
@@ -100,10 +104,12 @@ struct Decision {
     rm::sim::UnitId builder{};
     float buildRate = 0.0f;
 
-    /// Move.
+    /// Move, and Reclaim's search centre.
     rm::sim::UnitId unit{};
     rm::sim::Fx toX{};
     rm::sim::Fx toZ{};
+    /// Reclaim: how far from the centre a wreck may be, in elmos (half a reclaim-grid cell).
+    rm::sim::Fx radius{};
 };
 
 /// An opponent: something that plays one army.

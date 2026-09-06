@@ -576,6 +576,20 @@ TEST_CASE("the FAF driver boots a brain and the corpus's own builders decide", "
         assert(conditions.ReclaimAvailableInGrid(brain, 'MAIN') == false,
                'no snapshot grid means no reclaim, not an error')
 
+        -- The reclaim decision's target: the richest cell's centre and half-size, or nil.
+        snap2.reclaim = { cellCount = 16, cellSize = 32,
+                          cells = { [4] = { [4] = { mass = 120, energy = 0, count = 2 } },
+                                    [6] = { [2] = { mass = 300, energy = 0, count = 1 } } } }
+        local rx, rz, rr, rmass = __rm_faf_reclaimTarget(brain, 3)
+        assert(rx == 6 * 32 - 16 and rz == 2 * 32 - 16, 'the richer cell (6,2) wins within three rings')
+        assert(rr == 16 and rmass == 300)
+        snap2.reclaim.cells[6][2].mass = 5
+        local px = __rm_faf_reclaimTarget(brain, 3)
+        assert(px == 4 * 32 - 16, 'a cell under ten mass is skipped for the next richest')
+        snap2.reclaim.cells[4][4].mass = 5
+        assert(__rm_faf_reclaimTarget(brain, 3) == nil, 'nothing worth reclaiming means no target')
+        snap2.reclaim = nil
+
         -- C-163: requested demand and granted usage are different published counters, while
         -- trend converts their per-tick difference back to a per-second rate.
         snap.massRequested = 0.4

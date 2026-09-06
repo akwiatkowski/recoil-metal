@@ -332,6 +332,21 @@ function GridReclaimView:MaximumInRadius(bx, bz, radius)
     end
     return best
 end
+
+-- Where a reclaim engineer should go: the richest reclaim-grid cell within `rings` of the
+-- base, as world coordinates of its centre plus half a cell as reach, or nil when the richest
+-- holds under the ten mass that `ReclaimAvailableInGrid` itself treats as nothing
+-- (MiscBuildConditions.lua:369). The retail platoon behaviour
+-- (AIPlatoonAdaptiveReclaimBehavior) is a state machine over props this adapter does not
+-- run; this is the one decision it would reach first.
+function __rm_faf_reclaimTarget(brain, rings)
+    local grid = brain.GridReclaim
+    local bx, bz = grid:ToGridSpace(brain.startX, brain.startZ)
+    local cell = grid:MaximumInRadius(bx, bz, rings or 3)
+    if cell.TotalMass < 10 then return nil end
+    local size = reclaimGridOf(grid).cellSize
+    return (cell.X - 0.5) * size, (cell.Z - 0.5) * size, size * 0.5, cell.TotalMass
+end
 function methods:GetListOfUnits(category, needToBeIdle)
     local out = {}
     for _, u in ipairs(self.snap.units) do
@@ -736,7 +751,31 @@ function __rm_faf_decide(army, snap)
             or (EntityCategoryContains(categories.TECH2, nextBuilder) and 'BUILTBYTIER2ENGINEER')
             or 'BUILTBYTIER1ENGINEER'
         walkPriority(brain, 'EngineerBuilder', function(item)
-            local construction = item.spec.BuilderData and item.spec.BuilderData.Construction
+            local data = item.spec.BuilderData
+            -- Reclaim builders carry no structure queue; they hand an engineer to the
+            -- adaptive reclaim state machine. The decision that machine reaches first is
+            -- "go to the richest cell near the base", which the match turns into a reclaim
+            -- order on the best wreck there. `mapSearch` (the Excess builders' second
+            -- condition argument) widens the search from three rings to eight, as the
+            -- condition itself does.
+            if data and data.StateMachine == 'AIPlatoonAdaptiveReclaimBehavior' then
+                local rings = 3
+                for _, cond in ipairs(item.spec.BuilderConditions or {}) do
+                    if cond[2] == 'ReclaimAvailableInGrid' and cond[3] and cond[3][2] then
+                        rings = 8
+                    end
+                end
+                local x, z, radius = __rm_faf_reclaimTarget(brain, rings)
+                if not x then return false end
+                local builderUnit = builderPool[#builderPool - slots + 1]
+                table.insert(decisions, {
+                    kind = 'reclaim', builder = builderUnit.h, name = item.spec.BuilderName,
+                    x = x, z = z, radius = radius,
+                })
+                slots = slots - 1
+                return slots <= 0
+            end
+            local construction = data and data.Construction
             local names = construction and construction.BuildStructures
             if not names or #names == 0 then return false end
             -- BuildStructures is a QUEUE the engineer works through, not a menu that
@@ -1596,6 +1635,32 @@ void FafOpponent::convertDecision(lua_State* lua) {
         if (rm::app::gFafLog) {
             std::printf("  [faf %d] upgrade '%s' -> %s\n", army_, field("name").c_str(),
                         def->upgradesTo.c_str());
+        }
+        return;
+    }
+
+    if (kind == "reclaim") {
+        // The corpus named the cell; the match picks the wreck in it.
+        const std::optional<rm::sim::UnitId> builder = handleAt(0);
+        if (!builder || !scene.store.alive(*builder)) {
+            return;
+        }
+        const auto number = [lua](const char* name) {
+            lua_getfield(lua, -1, name);
+            const float value = static_cast<float>(lua_tonumber(lua, -1));
+            lua_pop(lua, 1);
+            return value;
+        };
+        decisions_.push_back(Decision{
+            .kind = Decision::Kind::Reclaim,
+            .unit = *builder,
+            .toX = rm::sim::fxFromFloat(number("x")),
+            .toZ = rm::sim::fxFromFloat(number("z")),
+            .radius = rm::sim::fxFromFloat(number("radius")),
+        });
+        if (rm::app::gFafLog) {
+            std::printf("  [faf %d] reclaim '%s' near (%.0f, %.0f)\n", army_, field("name").c_str(),
+                        static_cast<double>(number("x")), static_cast<double>(number("z")));
         }
         return;
     }
