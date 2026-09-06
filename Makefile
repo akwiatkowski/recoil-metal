@@ -84,6 +84,9 @@ VISION_FLAG = $(if $(VISION),--vision-style $(VISION),)
 # uses spare viewport room and stops before Compact would overlap itself.
 UI_SCALE  ?=
 UI_FLAG   = $(if $(UI_SCALE),--ui-scale $(UI_SCALE),)
+LOG_LEVEL ?= info
+LOG_FILE  ?=
+LOG_FLAGS = --log-level $(LOG_LEVEL) $(if $(LOG_FILE),--log-file "$(LOG_FILE)",)
 
 FA_FLAGS  = --gamedata "$(FA_ROOT)/gamedata"
 
@@ -156,6 +159,12 @@ build:
 
 test: build
 	mise exec -- ctest --test-dir $(BUILD) --output-on-failure
+
+.PHONY: test-upgrade-ui
+test-upgrade-ui: build check-fa
+	mise exec -- ./$(BUILD)/rm_tests '[headless-ui]'
+	FA_INSTALL="$(FA_ROOT)" CAPTURE_BINARY="$(BIN)" CAPTURE_SCENARIOS=upgrade \
+	  mise exec -- bash tools/capture_hud_scenarios.sh $(BUILD)/upgrade-ui
 
 .PHONY: test-content
 test-content: build
@@ -314,7 +323,7 @@ ai-sanity: build check-fa check-ai
 # The default playable duel: army 0 is the human, army 1 runs FAF's AI, and the responsive HUD
 # chooses its profile from the logical window size. Use `play` for other army counts and knobs.
 skirmish: build check-fa check-ai
-	$(BIN) "$(FA_MAP)" $(FA_FLAGS) --skirmish --armies 2 --ai-faf $(FACTION_FLAG) $(VISION_FLAG) $(UI_FLAG)
+	$(BIN) "$(FA_MAP)" $(FA_FLAGS) --skirmish --armies 2 --ai-faf $(FACTION_FLAG) $(VISION_FLAG) $(UI_FLAG) $(LOG_FLAGS)
 
 # The same, fought. `--march` sends everything at one point and pre-runs the sim, so the
 # result is the same every run — which is what makes a screenshot of it worth comparing.

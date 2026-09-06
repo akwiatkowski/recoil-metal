@@ -244,6 +244,15 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
             "unit blueprint \"" + def.name + "\" has an unknown MotionType \""
                 + std::string{*motionName} + "\"", 0}};
     }
+    const auto restriction = physics->stringAt("BuildRestriction").value_or("");
+    if (restriction == "RULEUBR_OnMassDeposit") {
+        def.buildRestriction = unitdef::BuildRestriction::MassDeposit;
+    } else if (restriction == "RULEUBR_OnHydrocarbonDeposit") {
+        def.buildRestriction = unitdef::BuildRestriction::HydrocarbonDeposit;
+    } else if (!restriction.empty()) {
+        return std::unexpected{lua::ParseError{
+            "unknown Physics.BuildRestriction: " + std::string{restriction}, 0}};
+    }
     def.motion = *motion;
     def.canFly = (def.motion == unitdef::MotionType::Air);
 

@@ -72,6 +72,7 @@ void appendBuildBeam(std::vector<rm::Particle>& particles, std::array<float, 3> 
     const rm::unitdef::Role role = rm::unitdef::roleOf(*def);
     return role == rm::unitdef::Role::Commander || role == rm::unitdef::Role::Builder
             || role == rm::unitdef::Role::Factory
+            || (def->isBuilder() && !def->upgradesTo.empty())
          ? def
          : nullptr;
 }
@@ -168,9 +169,62 @@ void appendMinimapBlips(std::vector<rm::ui::MinimapPip>& out, const UnitScene& s
 /// important things are, and every pip the same size says only "units".
 ///
 
+namespace {
+std::array<float, 4> depositColour(rm::unitdef::BuildRestriction kind) {
+    return kind == rm::unitdef::BuildRestriction::MassDeposit
+        ? std::array<float, 4>{0.25f, 1.0f, 0.55f, 1.0f}
+        : std::array<float, 4>{1.0f, 0.75f, 0.2f, 1.0f};
+}
+}
+
+void appendUnitSelection(std::vector<rm::DecalVertex>& out, const rm::HeightField& field,
+                         std::array<float, 3> centre, float radius, rm::ui::GameProfile profile) {
+    if (profile == rm::ui::GameProfile::Fa || profile == rm::ui::GameProfile::ClassicFaf) {
+        rm::appendSelectionSquare(out, field, centre, radius, kSelectionRingColour);
+    } else {
+        rm::appendSelectionRing(out, field, centre, radius, kSelectionRingColour);
+    }
+}
+
+void appendResourceDeposits(std::vector<rm::DecalVertex>& out, const UnitScene& scene,
+                            const rm::HeightField& field) {
+    for (const auto& deposit : scene.resourceDeposits) {
+        const std::array<float, 3> at{rm::sim::fxToFloat(deposit.x), 0.0f,
+                                     rm::sim::fxToFloat(deposit.z)};
+        // Two rings distinguish permanent deposits from a selected unit's single ring.
+        for (float radius : {8.0f, 12.0f}) {
+            rm::appendSelectionRing(out, field, at, radius, depositColour(deposit.kind), 1.5f);
+        }
+    }
+}
+
+std::array<float, 2> snapResourceSite(const UnitScene& scene, rm::UnitTypeIndex type,
+                                     std::array<float, 2> at) {
+    const auto* def = scene.catalog.def(type);
+    if (!def || def->buildRestriction == rm::unitdef::BuildRestriction::None) return at;
+    // Four ogrids of cursor tolerance; only the exact centre is sent to the simulation.
+    float bestSquared = 32.0f * 32.0f;
+    auto result = at;
+    for (const auto& deposit : scene.resourceDeposits) {
+        if (deposit.kind != def->buildRestriction) continue;
+        const float x = rm::sim::fxToFloat(deposit.x), z = rm::sim::fxToFloat(deposit.z);
+        const float dx = x - at[0], dz = z - at[1];
+        const float distanceSquared = dx * dx + dz * dz;
+        if (distanceSquared <= bestSquared) {
+            bestSquared = distanceSquared;
+            result = {x, z};
+        }
+    }
+    return result;
+}
+
 void appendMinimapPips(std::vector<rm::ui::MinimapPip>& out, const UnitScene& scene) {
     out.clear();
-    out.reserve(scene.snapshotCurrent.size());
+    out.reserve(scene.snapshotCurrent.size() + scene.resourceDeposits.size());
+    for (const auto& deposit : scene.resourceDeposits) {
+        out.push_back({rm::sim::fxToFloat(deposit.x), rm::sim::fxToFloat(deposit.z),
+                       depositColour(deposit.kind), 4.0f});
+    }
 
     scene.refreshViewerContacts();
 
@@ -233,6 +287,30 @@ void appendViewFootprint(std::vector<std::array<float, 2>>& out, const rm::Orbit
 /// about stores, catalogs, rosters or deques. The two halves are tested separately for the
 /// same reason they are separate: `tests/test_build_panel.cpp` asks where a cell is,
 /// `tests/test_build_options.cpp` asks what belongs in it.
+bool submitBuildOption(UnitScene& scene, const rm::vfs::Vfs& content,
+    rm::sim::UnitId builder, rm::PlayerIndex player, rm::TickIndex tick,
+    const rm::ui::BuildOption& option, bool shift) {
+    const auto* def = buildCandidateDef(scene, builder);
+    if (!def || rm::ui::buildOptionAction(option, rm::unitdef::roleName(rm::unitdef::roleOf(*def)))
+                    != rm::ui::BuildOptionAction::SubmitAtBuilder) return false;
+    const auto type = resolveBuildable(scene, content, rm::data::RosterEntry{.id = option.id}.path());
+    if (!type) return false;
+    const auto& at = scene.store.transforms()[builder.index];
+    const auto rollOff = option.upgrade ? rm::sim::Fx{}
+        : scene.store.motion()[builder.index].radiusElmos * 2;
+    return issueBuild(scene, builder, player, tick, *type, at.x, at.z + rollOff,
+                      !option.upgrade || shift || option.queuedUpgrade);
+}
+
+void followUpgradeSelection(const UnitScene& scene, std::span<rm::sim::UnitId> selection) {
+    for (const auto& event : scene.events.all()) {
+        if (event.kind == rm::sim::EventKind::UnitFinished
+            && event.instigator != rm::sim::UnitId{} && scene.store.alive(event.unit)) {
+            std::replace(selection.begin(), selection.end(), event.instigator, event.unit);
+        }
+    }
+}
+
 void gatherBuilderCandidates(const UnitScene& scene,
                              std::span<const rm::sim::UnitId> selection,
                              std::vector<rm::sim::UnitId>& out) {
@@ -311,11 +389,24 @@ void gatherBuildOptions(const UnitScene& scene, rm::sim::UnitId activeBuilder,
     // the corpus, understood by `startCommand` (which recognises an upgrade by exactly this
     // field) and offered by nothing. The chain continues on its own — the T2 factory's
     // blueprint names the T3 — so this one lookup gives all three tiers as each is reached.
+    const rm::unitdef::UnitDef* upgradeFrom = def;
+    for (const auto& work : scene.building) {
+        if (work.isUpgrade() && !work.finished() && work.upgradeOf == activeBuilder) {
+            if (const auto* product = scene.catalog.def(static_cast<rm::UnitTypeIndex>(work.blueprintIndex)))
+                upgradeFrom = product;
+        }
+    }
+    // Follow already queued upgrade steps too, so the tray never offers the same tier twice.
+    for (const auto& entry : scene.store.orders()[activeBuilder.index].entries()) {
+        if (entry.kind() != rm::sim::CommandKind::Build) continue;
+        const auto* product = scene.catalog.def(entry.buildType());
+        if (product && upgradeFrom->upgradesTo == product->name) upgradeFrom = product;
+    }
     if (const std::optional<rm::data::RosterEntry> next =
-            def->upgradesTo.empty() ? std::nullopt : scene.roster.byId(def->upgradesTo)) {
+            upgradeFrom->upgradesTo.empty() ? std::nullopt : scene.roster.byId(upgradeFrom->upgradesTo)) {
         const float mass = rm::sim::magToFloat(next->costMass);
-        const float seconds = def->buildRate > 0.0f
-                                ? rm::sim::magToFloat(next->buildTime) / def->buildRate
+        const float seconds = upgradeFrom->buildRate > 0.0f
+                                ? rm::sim::magToFloat(next->buildTime) / upgradeFrom->buildRate
                                 : 0.0f;
         // NAMED BY ITS TIER, because all three tiers of a land factory are called "Land
         // Factory" in the shipped corpus and a cell reading the same as its neighbour tells
@@ -331,18 +422,20 @@ void gatherBuildOptions(const UnitScene& scene, rm::sim::UnitId activeBuilder,
             .buildSeconds = seconds,
             .health = rm::sim::magToFloat(next->health),
             .upgrade = true,
+            .queuedUpgrade = upgradeFrom != def,
             .affordable = mass <= storedMass,
             .tint = rm::ui::tierTint(theme, next->tech),
         });
     }
 
     if (isFactory) {
-        for (const rm::data::RosterEntry& entry :
-             scene.roster.buildableBy(faction, def->buildableCategory)) {
-            // TIER ONE ONLY, the structure tray's rule for the structure tray's reason.
-            if (entry.tech > 1) {
-                continue;
-            }
+        auto products = scene.roster.buildableBy(faction, def->buildableCategory);
+        // The authored build tree gates tiers. Put newly unlocked units on the first page.
+        std::stable_sort(products.begin(), products.end(), [](const auto& a, const auto& b) {
+            return a.tech > b.tech;
+        });
+        for (const rm::data::RosterEntry& entry : products) {
+            if (entry.id == def->upgradesTo) continue; // Already offered as an upgrade.
             const float mass = rm::sim::magToFloat(entry.costMass);
             const float seconds =
                 def->buildRate > 0.0f
@@ -350,7 +443,8 @@ void gatherBuildOptions(const UnitScene& scene, rm::sim::UnitId activeBuilder,
                     : 0.0f;
             out.push_back(rm::ui::BuildOption{
                 .id = entry.id,
-                .name = entry.description,
+                .name = "T" + std::to_string(entry.tech) + " "
+                    + (entry.description.empty() ? entry.id : entry.description),
                 .massCost = mass,
                 .energyCost = rm::sim::magToFloat(entry.costEnergy),
                 .buildSeconds = seconds,
@@ -361,6 +455,8 @@ void gatherBuildOptions(const UnitScene& scene, rm::sim::UnitId activeBuilder,
         }
         return;
     }
+    // Upgrade-only structures are not general-purpose construction units.
+    if (role != rm::unitdef::Role::Commander && role != rm::unitdef::Role::Builder) return;
     for (const rm::unitdef::Role wanted : kStructureRoles) {
         for (const rm::data::RosterEntry& entry : scene.roster.all(faction, wanted)) {
             // TIER ONE ONLY, for now. A commander can build a T1 structure of each kind, and
@@ -624,16 +720,18 @@ void appendConstructionEffects(std::vector<rm::DecalVertex>& decals,
             return rm::sim::magToFloat(perTick)
                    * static_cast<float>(gAppTickRate.ticksPerSecond());
         };
+        // Net flow includes every funded request (construction, repair, ammo and upkeep).
+        // Maintenance alone can show a surplus while construction consumes all income.
         state.resources = rm::ui::resourceViews(
             profile,
             rm::ui::Gauge{.stored = rm::sim::magToFloat(mine.stored.mass),
                           .capacity = rm::sim::magToFloat(mine.storage.mass),
                           .incomePerSecond = perSecond(mine.incomePerTick.mass),
-                          .drainPerSecond = perSecond(mine.upkeepPerTick.mass)},
+                          .drainPerSecond = perSecond(mine.usageLastTick.mass)},
             rm::ui::Gauge{.stored = rm::sim::magToFloat(mine.stored.energy),
                           .capacity = rm::sim::magToFloat(mine.storage.energy),
                           .incomePerSecond = perSecond(mine.incomePerTick.energy),
-                          .drainPerSecond = perSecond(mine.upkeepPerTick.energy)});
+                          .drainPerSecond = perSecond(mine.usageLastTick.energy)});
         state.fundedFraction = rm::sim::fxToFloat(mine.fundedFraction);
     }
 
@@ -1233,6 +1331,35 @@ void gatherRoster(const UnitScene& scene, std::span<const rm::sim::UnitId> selec
     }
 
     out = rm::ui::groupSelection(ids, health, maxHealth, names);
+    const float hz = static_cast<float>(gAppTickRate.ticksPerSecond());
+    for (const auto id : selection) {
+        if (!scene.store.alive(id) || id.index >= scene.resourceFlows.size()) continue;
+        const auto& flow = scene.resourceFlows[id.index];
+        const auto* def = scene.catalog.def(scene.store.typeAt(id.index));
+        if (flow.unit != id || def == nullptr) continue;
+        auto tile = std::ranges::find(out, def->name, &rm::ui::RosterTile::id);
+        if (tile == out.end()) continue;
+        if (!tile->resourceRates) tile->resourceRates.emplace();
+        auto& rates = *tile->resourceRates;
+        rates[0].incomePerSecond += rm::sim::magToFloat(flow.incomePerTick.mass) * hz;
+        rates[1].incomePerSecond += rm::sim::magToFloat(flow.incomePerTick.energy) * hz;
+        rates[0].drainPerSecond += rm::sim::magToFloat(flow.usageLastTick.mass) * hz;
+        rates[1].drainPerSecond += rm::sim::magToFloat(flow.usageLastTick.energy) * hz;
+    }
+}
+
+rm::ui::InfoCard selectedUnitCard(const UnitScene& scene, const rm::ui::RosterTile& tile,
+                                 rm::sim::UnitId activeBuilder) {
+    auto card = rm::ui::rosterTileCard(tile);
+    const auto* def = scene.store.alive(activeBuilder)
+        ? scene.catalog.def(scene.store.typeAt(activeBuilder.index)) : nullptr;
+    if (def && def->name == tile.id) {
+        if (const auto work = constructionCard(scene, activeBuilder)) {
+            card.progress = work->progress;
+            card.corner = work->rows.back().value + " " + work->corner;
+        }
+    }
+    return card;
 }
 
 std::optional<rm::ui::ProductionView> gatherProduction(const UnitScene& scene,
@@ -1241,9 +1368,8 @@ std::optional<rm::ui::ProductionView> gatherProduction(const UnitScene& scene,
         return std::nullopt;
     }
     const rm::unitdef::UnitDef* def = scene.catalog.def(scene.store.typeAt(builder.index));
-    // A factory is a builder that does not move. The definition has no flag for it and needs
-    // none: the corpus's factories are exactly its immobile builders.
-    if (def == nullptr || !def->isBuilder() || def->motion != rm::unitdef::MotionType::None) {
+    // Upgradeable extractors are also immobile builders, but have no production queue.
+    if (def == nullptr || rm::unitdef::roleOf(*def) != rm::unitdef::Role::Factory) {
         return std::nullopt;
     }
 

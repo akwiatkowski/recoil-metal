@@ -42,6 +42,16 @@ namespace rm::app {
     rm::PlayerIndex player, rm::TickIndex tick, const rm::ui::FrameLayout& frame,
     float x, float y, std::size_t page = 0);
 
+/// The selected-unit outline for the active game presentation.
+void appendUnitSelection(std::vector<rm::DecalVertex>& out, const rm::HeightField& field,
+                         std::array<float, 3> centre, float radius, rm::ui::GameProfile profile);
+
+/// Public map resources: green mass rings and amber hydrocarbon rings.
+void appendResourceDeposits(std::vector<rm::DecalVertex>& out, const UnitScene& scene,
+                            const rm::HeightField& field);
+[[nodiscard]] std::array<float, 2> snapResourceSite(const UnitScene& scene,
+    rm::UnitTypeIndex type, std::array<float, 2> at);
+
 void appendMinimapPips(std::vector<rm::ui::MinimapPip>& out, const UnitScene& scene);
 
 /// Which unit the panel is showing the options OF.
@@ -60,6 +70,14 @@ struct BuildSelection {
 
     [[nodiscard]] bool any() const noexcept { return !name.empty(); }
 };
+
+/// Submit the same immediate build-cell action used by the window and headless UI tests.
+[[nodiscard]] bool submitBuildOption(UnitScene& scene, const rm::vfs::Vfs& content,
+    rm::sim::UnitId builder, rm::PlayerIndex player, rm::TickIndex tick,
+    const rm::ui::BuildOption& option, bool shift = false);
+
+/// Follow completed upgrades while preserving selection membership.
+void followUpgradeSelection(const UnitScene& scene, std::span<rm::sim::UnitId> selection);
 
 /// Build-capable handles in selection order.
 ///
@@ -144,6 +162,9 @@ struct VisibleIconRange {
 /// Dead handles are skipped, which is how a selection outlives the units in it.
 void gatherRoster(const UnitScene& scene, std::span<const rm::sim::UnitId> selection,
                   std::vector<rm::ui::RosterTile>& out);
+
+[[nodiscard]] rm::ui::InfoCard selectedUnitCard(const UnitScene& scene,
+    const rm::ui::RosterTile& tile, rm::sim::UnitId activeBuilder);
 
 /// What the active builder is producing, when it is a factory: its Build orders in queue
 /// order with their counts, the progress of the construction it is running, and its repeat

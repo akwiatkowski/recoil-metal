@@ -122,9 +122,10 @@ struct UnitScene {
     /// terrain look-ahead (`C-246`). Shared because scenes are copied; null in the synthetic
     /// scenes tests build, where the terrain view falls back to scanning corners.
     std::shared_ptr<const rm::MaxHeightPyramid> lookAhead;
+    std::vector<rm::sim::ResourceDeposit> resourceDeposits;
 
     [[nodiscard]] rm::sim::Terrain terrain(const rm::HeightField& field) const noexcept {
-        return rm::sim::Terrain{field, hasWater, waterLevelElmos, lookAhead.get()};
+        return rm::sim::Terrain{field, hasWater, waterLevelElmos, lookAhead.get(), resourceDeposits};
     }
 
     /// How much to scale each type's mesh by, from its blueprint's `meshToElmos`.
@@ -271,6 +272,7 @@ struct UnitScene {
 
     /// One economy per army, indexed by army. Empty outside a skirmish.
     std::vector<rm::sim::Economy> economies;
+    std::vector<rm::sim::UnitResourceFlow> resourceFlows;
 
     /// Everything under construction, all armies together. Partitioned per army each tick
     /// rather than held per army, because a build is a thing in the world and belongs with

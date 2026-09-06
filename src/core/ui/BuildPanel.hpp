@@ -110,6 +110,7 @@ struct BuildOption {
     /// PLACE (the factory upgrades where it stands), and it CONSUMES the builder rather than
     /// adding to the base.
     bool upgrade = false;
+    bool queuedUpgrade = false; ///< successor of an upgrade already in progress
 
     /// Whether the army's stored mass covers the full price RIGHT NOW.
     ///

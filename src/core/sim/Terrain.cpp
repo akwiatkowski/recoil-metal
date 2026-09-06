@@ -7,8 +7,9 @@
 namespace rm::sim {
 
 Terrain::Terrain(const HeightField& field, bool hasWater, float waterLevelElmos,
-                 const MaxHeightPyramid* lookAhead) noexcept
-    : field_(&field),
+                 const MaxHeightPyramid* lookAhead,
+                 std::span<const ResourceDeposit> deposits) noexcept
+    : deposits_(deposits), field_(&field),
       lookAhead_(lookAhead),
       baseHeight_(fxFromFloat(field.baseHeight)),
       hasWater_(hasWater),
@@ -18,6 +19,14 @@ Terrain::Terrain(const HeightField& field, bool hasWater, float waterLevelElmos,
       heightScale_(static_cast<FxWide>(
           std::llround(static_cast<double>(field.heightScale)
                        * static_cast<double>(FxWide{1} << kScaleBits)))) {}
+
+bool Terrain::resourceSitePlaceable(unitdef::BuildRestriction restriction, Fx x, Fx z) const noexcept {
+    if (restriction == unitdef::BuildRestriction::None) return true;
+    // Orders use the marker's exact fixed-point centre; the UI snaps before issuing them.
+    return std::ranges::any_of(deposits_, [&](const ResourceDeposit& deposit) {
+        return deposit.kind == restriction && deposit.x == x && deposit.z == z;
+    });
+}
 
 Fx Terrain::cornerHeight(std::int32_t x, std::int32_t z) const noexcept {
     const std::int32_t cx = std::clamp(x, 0, field_->squaresX);

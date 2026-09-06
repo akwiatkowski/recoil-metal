@@ -113,9 +113,9 @@ void appendWreckMark(std::vector<DecalVertex>& out, const HeightField& field,
     }
 }
 
-void appendSelectionRing(std::vector<DecalVertex>& out, const HeightField& field,
+static void appendSelectionOutline(std::vector<DecalVertex>& out, const HeightField& field,
                          std::array<float, 3> centre, float radiusElmos,
-                         std::array<float, 4> colour, float thicknessElmos, int segments) {
+                         std::array<float, 4> colour, float thicknessElmos, int segments, bool square) {
     // A ring with no radius, no width or no segments is not a degenerate ring,
     // it is a caller mistake — and emitting a fan of zero-area triangles would
     // hide it behind something that renders as nothing anyway.
@@ -135,8 +135,15 @@ void appendSelectionRing(std::vector<DecalVertex>& out, const HeightField& field
     // than under the unit. On a slope the two differ by metres, and a ring at
     // the unit's own height buries its uphill half.
     const auto vertexAt = [&](float angle, float radius) {
-        const float x = centre[0] + std::cos(angle) * radius;
-        const float z = centre[2] + std::sin(angle) * radius;
+        float dx = std::cos(angle), dz = std::sin(angle);
+        if (square) {
+            // Project the circle onto an axis-aligned square, retaining terrain samples.
+            const float edge = std::max(std::abs(dx), std::abs(dz));
+            dx /= edge;
+            dz /= edge;
+        }
+        const float x = centre[0] + dx * radius;
+        const float z = centre[2] + dz * radius;
         return DecalVertex{
             .position = {x, field.heightAtWorld(x, z) + kRingLiftElmos, z},
             .colour = colour,
@@ -307,6 +314,19 @@ void appendGroundNode(std::vector<DecalVertex>& out, const HeightField& field,
     out.push_back(north);
     out.push_back(south);
     out.push_back(west);
+}
+
+void appendSelectionRing(std::vector<DecalVertex>& out, const HeightField& field,
+                         std::array<float, 3> centre, float radiusElmos,
+                         std::array<float, 4> colour, float thicknessElmos, int segments) {
+    appendSelectionOutline(out, field, centre, radiusElmos, colour, thicknessElmos, segments, false);
+}
+
+void appendSelectionSquare(std::vector<DecalVertex>& out, const HeightField& field,
+                           std::array<float, 3> centre, float halfExtentElmos,
+                           std::array<float, 4> colour) {
+    appendSelectionOutline(out, field, centre, halfExtentElmos, colour,
+                           kRingThicknessElmos, kRingSegments, true);
 }
 
 void appendOrderMarker(std::vector<DecalVertex>& out, const HeightField& field,

@@ -439,3 +439,17 @@ TEST_CASE("a node is one diamond, centred where it was asked for") {
     CHECK(minX == 196.0f);
     CHECK(maxX == 204.0f);
 }
+
+TEST_CASE("square selection outlines follow the grid and terrain", "[selection-square]") {
+    const auto field = rampAlongX(64);
+    std::vector<DecalVertex> vertices;
+    rm::appendSelectionSquare(vertices, field, {100, 0, 100}, 20, {0, 1, 0, 1});
+    REQUIRE(vertices.size() == rm::ringVertexCount(rm::kRingSegments));
+    for (const auto& vertex : vertices) {
+        const auto& p = vertex.position;
+        const float distance = std::max(std::abs(p[0] - 100), std::abs(p[2] - 100));
+        CHECK((distance == Approx(20 - rm::kRingThicknessElmos / 2)
+            || distance == Approx(20 + rm::kRingThicknessElmos / 2)));
+        CHECK(p[1] == Approx(field.heightAtWorld(p[0], p[2]) + rm::kRingLiftElmos));
+    }
+}

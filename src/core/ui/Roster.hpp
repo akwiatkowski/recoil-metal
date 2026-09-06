@@ -87,6 +87,9 @@ struct RosterTile {
     /// which panel is asking.
     std::optional<std::size_t> iconSlot;
 
+    /// Measured production and spending for this selected group, mass then energy.
+    std::optional<std::array<Gauge, 2>> resourceRates;
+
     /// 0..1 of maximum, clamped. A group with no stated maximum reads as FULL rather than
     /// empty: an indestructible or unread type is not a group in trouble, and an empty bar
     /// under a healthy selection is the more alarming of the two wrong answers.

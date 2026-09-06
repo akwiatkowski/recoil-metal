@@ -138,6 +138,9 @@ struct Match {
     /// that a code change.
     Resources baseStorage{};
 
+    /// Optional presentation/debug output; excluded from saves and state hashes.
+    std::vector<UnitResourceFlow>* resourceFlows = nullptr;
+
     /// What each alliance can see (ADR-037), or null for a scene with no fog of war.
     ///
     /// CALLER-OWNED like the rest of this struct, and null is a real configuration rather

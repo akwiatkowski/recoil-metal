@@ -127,7 +127,17 @@ InfoCard rosterTileCard(const RosterTile& tile) {
     // Stated even at one — "COUNT 1" is the difference between "this tile is one unit" and a
     // reader wondering whether the badge was dropped. The tile's own badge stays silent at
     // one for the opposite reason: on the grid the common case must cost no ink.
-    card.rows.push_back(InfoRow{.label = "COUNT", .value = std::to_string(tile.count)});
+    if (tile.resourceRates) {
+        card.corner = tile.count > 1 ? "x" + std::to_string(tile.count) : "";
+        for (std::size_t resource = 0; resource < 2; ++resource) {
+            const auto& gauge = (*tile.resourceRates)[resource];
+            card.rows.push_back({resource == 0 ? "MASS /s" : "ENERGY /s",
+                "+" + formatAmount(gauge.incomePerSecond) + " / -"
+                    + formatAmount(gauge.drainPerSecond)});
+        }
+    } else {
+        card.rows.push_back(InfoRow{.label = "COUNT", .value = std::to_string(tile.count)});
+    }
 
     // The exact numbers the underbar compresses into colour, in that bar's own colour — the
     // card and the bar must not disagree about how bad it is.

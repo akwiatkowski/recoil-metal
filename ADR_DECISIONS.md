@@ -3078,3 +3078,85 @@ renderer with extracted assets; missing interceptor textures remain visible. Exi
 native land controls include per-product Guard targeting and Stop. The full suite still requires
 the disconnected retail projectile archive. The added RNG hash coverage changes hashes from
 tick zero; the existing retail-map golden has not been regenerated or blessed.
+
+
+## ADR-092 — Attribute resource spending and enforce authored deposit restrictions
+
+**Context.** The HUD omitted construction spending, and both spawn paths created
+ammo production for enhancement-only ACU weapons. A real SCMP_009 replay with one
+extractor and one generator reproduced an idle ACU's 120 energy/s tactical-ammo
+bill, then nuclear-ammo demand. The army ledgers were separate. Blueprints also
+stated deposit restrictions that construction ignored.
+
+**Decision.** Exclude enhancement-only weapons from automatic ammo setup, matching
+their existing disabled firing rules. Expose derived per-unit income and actual
+allocator grants for selection and five-second debug reports; retain the existing
+allocation algorithm and exclude this telemetry from hashes and saves.
+
+Parse `Physics.BuildRestriction` and carry static map deposits through the existing
+terrain view. The shared build command requires an exact matching marker centre;
+upgrades retain their established foundation. Snap the placement cursor within
+32 elmos (four ogrids), a UI tolerance rather than a retail simulation claim.
+Render green mass and amber hydrocarbon rings and minimap markers. Existing
+footprint collision checks prevent overlapping extraction sites.
+
+**Alternatives.** UI-only restrictions leave replay and AI bypasses. Inferring
+restrictions from unit categories ignores authored blueprint rules. Recomputing
+spending in the HUD disagrees with funding limits and retained allocations.
+
+**Consequences.** New games no longer charge uninstalled missile enhancements.
+Construction away from required deposits is rejected, including old invalid replay
+orders. Map deposits remain static map input, like terrain, rather than saved unit
+state. This intentionally changes simulation hashes at tick zero by removing ACU
+silo records; no golden baseline is silently regenerated. Tests cover both spawn
+paths, enemy-bank isolation, real extractor restrictions, snapping, inspector rates
+and diagnostic cadence. An offscreen opening capture verifies +23 energy/s with
+one generator and extractor, full storage, and visible deposits.
+
+
+## ADR-093 — Expose authored upgrades and align building presentation with placement
+
+**Context.** A hard-coded T1 factory-menu filter hid unlocked T2/T3 products.
+Extractor roles could not own the build tray despite authored upgrade paths.
+Structures faced arbitrary bearings toward map centre, rotating their rendered
+models away from axis-aligned foundations. Building placement discarded Shift.
+
+**Decision.** Let factory BuildableCategory determine available products, list
+higher tiers first, and keep the successor exclusively in the upgrade button.
+Allow upgradeable structures to expose their upgrade without a general build menu
+or a factory production panel. Forward Shift to the existing build-command queue
+and retain the armed placement while queuing.
+
+Quantize structure facing to the nearest cardinal using fixed-point rounding in
+the shared preview/construction/completion helper. FA selection outlines use square
+perimeters with terrain samples; range and resource rings retain their meaning.
+
+**Alternatives and consequences.** Additional tier tabs would duplicate existing
+pagination. UI-only rotation would disagree with saved headings; the cardinal rule
+therefore intentionally changes headings of newly built units, and no golden is
+silently blessed. Existing placed units retain their headings. Tests cover real
+factory tiers and extractor upgrade orders, sequential queued construction and
+outline geometry. The retained `hud-factory-t2.commands` replay produces a completed
+T2 factory with the new tray and selection outline for offscreen verification.
+
+
+## ADR-094 — Carry pending commands through building upgrades
+
+**Context.** The tray offered the active upgrade again instead of its successor.
+The dispatcher also tried subsequent commands against the old blueprint, and the
+completion spawn discarded the old unit's remaining orders.
+
+**Decision.** Project the upgrade button through active and already queued upgrade
+steps. A successor button queues automatically and explains that in its inspector.
+Completing an upgrade retires its current command but leaves the rest pending until
+the replacement spawns. Transfer each pending execution and shared command identity
+to the replacement, update its canonical member handle, and retain factory repeat.
+The original recorded issue remains unchanged. UnitFinished names the replaced
+handle as its instigator so selection can follow it.
+
+**Alternatives and consequences.** Reissuing new commands loses IDs and changes replay
+history. In-place unit mutation would require reworking the existing spawn and draw
+registration path. Transfer uses the existing queue/save representations without a
+schema version change. Commands validate against the successor on its next dispatch
+beat; Stop still clears the whole chain. Tests complete real T1→T2→T3 upgrades,
+restore the pending queue from a save, preserve selection, and cancel with Stop.

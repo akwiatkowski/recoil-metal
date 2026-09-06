@@ -10,6 +10,7 @@
 #include "core/log/Log.hpp"
 
 #include <algorithm>
+#include <cassert>
 #include <cctype>
 #include <cmath>
 #include <cstdio>
@@ -686,6 +687,7 @@ void runOpponents(UnitScene& scene, const rm::vfs::Vfs& content, const rm::Heigh
                 .features = &scene.features,
                 .commandersEver = scene.commandersEver,
                 .baseStorage = kStartingStorage,
+                .resourceFlows = &scene.resourceFlows,
                 .intel = &scene.intel,
                 .playableRect = playableRect,
                 // Seeded from the scene rather than defaulted to false, using the same
@@ -923,7 +925,12 @@ rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) 
         // leaves without a wreck — a factory becoming its T2 self did not die. Straight
         // through the store: no death report means no debris and no defeat accounting,
         // both of which are for units the war removed.
+        std::vector<rm::sim::QueuedCommand> pending;
+        bool repeatProduction = false;
         if (work.isUpgrade() && scene.store.alive(work.upgradeOf)) {
+            const auto& entries = scene.store.orders()[work.upgradeOf.index].entries();
+            pending.assign(entries.begin(), entries.end()); // Keeps shared command IDs alive.
+            repeatProduction = scene.store.factoryRepeat(work.upgradeOf);
             scene.store.kill(work.upgradeOf);
         }
         // OUT of fixed point, here at the edge (§7 P10.0). Putting a unit on the map needs
@@ -944,9 +951,23 @@ rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) 
         // distinction matters to anything that treats a built unit differently from one placed
         // at match start. Both come from the caller, because both need the model to exist.
         if (spawned) {
+            for (const auto& entry : pending) {
+                auto state = entry.snapshot();
+                state.unit = *spawned;
+                auto payload = scene.store.liveCommand(entry.payload().id);
+                assert(payload != nullptr); // Retained by pending until transferred.
+                std::replace(payload->units.begin(), payload->units.end(), work.upgradeOf, *spawned);
+                std::ranges::sort(payload->units, {}, [](rm::sim::UnitId id) {
+                    return std::pair{id.index, id.generation};
+                });
+                (void)scene.store.orders()[spawned->index].give(
+                    rm::sim::QueuedCommand{std::move(state), payload}, true);
+            }
+            if (work.isUpgrade()) (void)scene.store.setFactoryRepeat(*spawned, repeatProduction);
             scene.events.emit(rm::sim::Event{
                 .kind = rm::sim::EventKind::UnitFinished,
                 .unit = *spawned,
+                .instigator = work.isUpgrade() ? work.upgradeOf : rm::sim::UnitId{},
                 .army = work.armyIndex,
                 .amount = work.cost.mass,
                 .at = work.position,
@@ -998,6 +1019,36 @@ rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) 
     // appeared this tick is in it. `publish` rotates: what was current becomes previous, and
     // the frame loop draws between the two.
     scene.publish(static_cast<rm::TickIndex>(tickIndex) + 1);
+
+    // Five seconds of simulation time: useful attribution without a per-frame log flood.
+    if (tracing && tickIndex % static_cast<int>(5 * gAppTickRate.ticksPerSecond()) == 0) {
+        const auto perSecond = [](rm::sim::Mag value) {
+            return static_cast<double>(rm::sim::magToFloat(value))
+                * gAppTickRate.ticksPerSecond();
+        };
+        for (std::size_t army = 0; army < scene.economies.size(); ++army) {
+            const auto& economy = scene.economies[army];
+            rm::log::writef(rm::log::Level::Debug, "economy",
+                "tick=%d army=%zu stored=M:%.1f,E:%.1f income/s=M:%.2f,E:%.2f use/s=M:%.2f,E:%.2f requested/s=M:%.2f,E:%.2f",
+                tickIndex, army, static_cast<double>(rm::sim::magToFloat(economy.stored.mass)),
+                static_cast<double>(rm::sim::magToFloat(economy.stored.energy)),
+                perSecond(economy.incomePerTick.mass), perSecond(economy.incomePerTick.energy),
+                perSecond(economy.usageLastTick.mass), perSecond(economy.usageLastTick.energy),
+                perSecond(economy.requestedLastTick.mass), perSecond(economy.requestedLastTick.energy));
+        }
+        for (const auto& flow : scene.resourceFlows) {
+            if (flow.incomePerTick.mass == rm::sim::Mag{} && flow.incomePerTick.energy == rm::sim::Mag{}
+                && flow.usageLastTick.mass == rm::sim::Mag{} && flow.usageLastTick.energy == rm::sim::Mag{}) continue;
+            const auto* def = scene.store.alive(flow.unit)
+                ? scene.catalog.def(scene.store.typeAt(flow.unit.index)) : nullptr;
+            rm::log::writef(rm::log::Level::Debug, "economy",
+                "tick=%d army=%d unit=%u:%u type=%s income/s=M:%.2f,E:%.2f use/s=M:%.2f,E:%.2f",
+                tickIndex, flow.armyIndex, flow.unit.index, flow.unit.generation,
+                def ? def->name.c_str() : "unknown", perSecond(flow.incomePerTick.mass),
+                perSecond(flow.incomePerTick.energy), perSecond(flow.usageLastTick.mass),
+                perSecond(flow.usageLastTick.energy));
+        }
+    }
 
     if (tracing) {
         for (const auto& event : scene.events.all()) {

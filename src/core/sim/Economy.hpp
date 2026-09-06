@@ -47,6 +47,16 @@ struct Resources {
     }
 };
 
+/// Derived display/debug readings, rebuilt each tick and never used to drive simulation.
+/// Construction charges belong to the founding builder, including its assisted work.
+struct UnitResourceFlow {
+    UnitId unit{};
+    int armyIndex = kNoArmy;
+    Resources incomePerTick;
+    Resources upkeepPerTick;
+    Resources usageLastTick;
+};
+
 /// One army's economy for one tick.
 struct Economy {
     Resources stored;
@@ -419,7 +429,8 @@ void advanceConstruction(Construction& work) noexcept;
 /// A whole-match caller defers the final capacity clamp until `shareOverflow` has run.
 void tickEconomy(Economy& economy, std::span<Construction> building,
                   std::span<RepairWork> repairs = {}, std::span<SiloAmmo> siloAmmo = {},
-                  bool deferOverflow = false);
+                  bool deferOverflow = false, std::span<UnitResourceFlow> flows = {},
+                  int armyIndex = kNoArmy);
 
 /// Hand each army's over-cap excess to its allies, retail's `C-163` progressive split.
 ///

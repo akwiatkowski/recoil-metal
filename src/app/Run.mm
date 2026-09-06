@@ -264,6 +264,7 @@ void composeHeadlessInterface(rm::Renderer& renderer, const Session& session,
             std::vector<rm::sim::UnitId> capturedSelection;
             std::vector<rm::DecalVertex> vertices;
             appendVisibleWreckDecals(vertices, units);
+            appendResourceDeposits(vertices, units, map->field);
             {
                 const std::string_view selectedType = parseSelectType(argc, argv);
                 const std::size_t rings =
@@ -295,11 +296,11 @@ void composeHeadlessInterface(rm::Renderer& renderer, const Session& session,
                         const std::array<float, 3> ground{rm::sim::fxToFloat(at.x),
                                                           rm::sim::fxToFloat(at.y),
                                                           rm::sim::fxToFloat(at.z)};
-                        rm::appendSelectionRing(
+                        appendUnitSelection(
                             vertices, map->field, ground,
                             rm::sim::fxToFloat(units.store.motion()[slot].radiusElmos)
                                 * kSelectionRingMargin,
-                            kSelectionRingColour);
+                            session.uiProfile);
                         // The range ring in a capture too, or the feature is unverifiable —
                         // same reasoning and same arithmetic as the windowed loop's.
                         if (const rm::unitdef::UnitDef* def =
@@ -416,6 +417,10 @@ void composeHeadlessInterface(rm::Renderer& renderer, const Session& session,
             gatherBuilderCandidates(units, capturedSelection, shotBuilders);
             gatherBuildOptions(units, activeBuilderFor(shotBuilders), baseTheme, shotOptions,
                                shotWho);
+            for (const auto& option : shotOptions) {
+                std::printf("  hud-build-option: id=%s upgrade=%d queued-upgrade=%d\n",
+                    option.id.c_str(), option.upgrade, option.queuedUpgrade);
+            }
             // Pair pixels with facts from the same selection, so a visually plausible idle
             // capture cannot pass an active-construction regression.
             const auto shotWork = constructionCard(units, activeBuilderFor(shotBuilders));
@@ -530,8 +535,8 @@ void composeHeadlessInterface(rm::Renderer& renderer, const Session& session,
                     if (std::string{argv[i]} != "--ghost") {
                         continue;
                     }
-                    const float gx = static_cast<float>(std::atof(argv[i + 1]));
-                    const float gz = static_cast<float>(std::atof(argv[i + 2]));
+                    float gx = static_cast<float>(std::atof(argv[i + 1]));
+                    float gz = static_cast<float>(std::atof(argv[i + 2]));
                     const std::size_t option = shotHovered.value_or(0);
                     const std::string path =
                         rm::data::RosterEntry{.id = shotOptions[option].id}.path();
@@ -544,6 +549,17 @@ void composeHeadlessInterface(rm::Renderer& renderer, const Session& session,
                         // windowed loop's growth check, done by hand.
                         renderer.setUnits(units.textures.all(), units.batches);
                         const auto typeIndex = static_cast<std::size_t>(*type);
+                        const auto snapped = snapResourceSite(units, *type, {gx, gz});
+                        gx = snapped[0];
+                        gz = snapped[1];
+                        const auto& grid = passability.gridForBuild(units, typeIndex,
+                            static_cast<std::size_t>(units.store.typeAt(shotWho.builder.index)));
+                        const auto* def = units.catalog.def(*type);
+                        const bool placeable = units.terrain(map->field).resourceSitePlaceable(
+                            def->buildRestriction, rm::sim::fxFromFloat(gx), rm::sim::fxFromFloat(gz))
+                            && rm::sim::buildSitePlaceable(grid, rm::sim::fxFromFloat(gx),
+                                rm::sim::fxFromFloat(gz), rm::sim::fxFromFloat(def->collisionRadiusElmos),
+                                units.store, units.catalog, units.building);
                         renderer.setGhost(
                             batch,
                             rm::UnitInstance{
@@ -557,7 +573,7 @@ void composeHeadlessInterface(rm::Renderer& renderer, const Session& session,
                                              ? units.typeScale[typeIndex]
                                              : 1.0f,
                             },
-                            kBuildGhostColour);
+                            placeable ? kBuildGhostColour : kBuildGhostBlockedColour);
                         std::printf("  ghost: %s at %.0f, %.0f\n",
                                     shotOptions[option].id.c_str(),
                                     static_cast<double>(gx), static_cast<double>(gz));
@@ -577,8 +593,7 @@ void composeHeadlessInterface(rm::Renderer& renderer, const Session& session,
                         : shotHoveredCommand
                             ? rm::ui::commandCard(rm::ui::kCommandDescriptors[*shotHoveredCommand],
                                 shotCommandSelection)
-                            : constructionCard(units, activeBuilderFor(shotBuilders))
-                              .value_or(rm::ui::rosterTileCard(shotRoster.front()));
+                            : selectedUnitCard(units, shotRoster.front(), activeBuilderFor(shotBuilders));
                 if (shotHoveredCommand) {
                     std::printf("  command inspector: %s\n", inspector.rows.front().value.c_str());
                 }
@@ -1102,18 +1117,17 @@ int runWindowed(const Session& session) {
                 static_cast<std::size_t>(units.store.typeAt(buildWho.builder.index));
             const rm::sim::PassabilityGrid& grid = passability.gridForBuild(
                 units, static_cast<std::size_t>(*targetType), builderType);
+            if (!units.terrain(map->field).resourceSitePlaceable(
+                    units.catalog.def(*targetType)->buildRestriction,
+                    rm::sim::fxFromFloat(at[0]), rm::sim::fxFromFloat(at[1]))) return false;
             return rm::sim::buildSitePlaceable(
                 grid, rm::sim::fxFromFloat(at[0]), rm::sim::fxFromFloat(at[1]),
                 rm::sim::fxFromFloat(armedRadius()), units.store, units.catalog,
                 units.building);
         };
 
-        /// Orders the armed build at a world point, through the one order path, and disarms.
-        ///
-        /// DISARMS WHETHER OR NOT IT TOOK. A refused placement that stayed armed would leave
-        /// the player clicking at a spot that will never work, with the ghost saying so and
-        /// nothing else happening — better to put the tool down and let them pick it up again.
-        const auto placeArmedBuild = [&](simd_float3 at) {
+        /// Shift appends work and keeps placement armed for another site.
+        const auto placeArmedBuild = [&](simd_float3 at, bool queued) {
             const std::string path = armedPath();
             const std::optional<rm::UnitTypeIndex> type =
                 path.empty() ? std::nullopt : resolveBuildable(units, content, path);
@@ -1121,6 +1135,9 @@ int runWindowed(const Session& session) {
                 armedOption.reset();
                 return;
             }
+            const auto snapped = snapResourceSite(units, *type, {at.x, at.z});
+            at.x = snapped[0];
+            at.z = snapped[1];
             // THE PLACEMENT REPORTS EITHER WAY. Until construction has a body in the world
             // (nothing exists at the site until the work completes) this line is the ONLY
             // sign a build was ordered at all — so a refusal being silent meant a player
@@ -1134,8 +1151,9 @@ int runWindowed(const Session& session) {
             } else if (issueBuild(units, buildWho.builder,
                                   playerDriving(units, units.playerArmy),
                                   static_cast<rm::TickIndex>(matchTicks), *type,
-                                  rm::sim::fxFromFloat(at.x), rm::sim::fxFromFloat(at.z))) {
-                std::printf("build: %s started at (%.0f, %.0f)\n", what.c_str(),
+                                  rm::sim::fxFromFloat(at.x), rm::sim::fxFromFloat(at.z), queued)) {
+                std::printf("build: %s %s at (%.0f, %.0f)\n", what.c_str(),
+                            queued ? "queued" : "ordered",
                             static_cast<double>(at.x), static_cast<double>(at.z));
             } else {
                 std::printf("build refused: %s was not accepted at (%.0f, %.0f)\n",
@@ -1143,7 +1161,7 @@ int runWindowed(const Session& session) {
                             static_cast<double>(at.z));
             }
             std::fflush(stdout);
-            armedOption.reset();
+            if (!queued) armedOption.reset();
         };
 
         window.onClick([&](const rm::Ray& ray, rm::MouseButton button,
@@ -1397,43 +1415,18 @@ int runWindowed(const Session& session) {
                         // site at all: `startCommand` overrides whatever the order says with
                         // the builder's own position, because a factory does not upgrade into
                         // a field.
-                        if (units.store.alive(buildWho.builder)) {
-                            const bool upgrade = buildOptions[*cell].upgrade;
-                            const std::string path =
-                                rm::data::RosterEntry{.id = buildOptions[*cell].id}.path();
-                            const std::optional<rm::UnitTypeIndex> type =
-                                resolveBuildable(units, content, path);
-                            const rm::sim::Transform& at =
-                                units.store.transforms()[buildWho.builder.index];
-                            // The roll-off step is what puts a finished unit BESIDE its
-                            // factory rather than inside it. An upgrade wants the opposite —
-                            // exactly where the builder stands — and the sim enforces that
-                            // anyway; passing the offset would only make the recorded command
-                            // disagree with what happened.
-                            const rm::sim::Fx rollOff =
-                                upgrade
-                                    ? rm::sim::Fx{}
-                                    : units.store.motion()[buildWho.builder.index].radiusElmos
-                                          * 2;
-                            if (type) {
-                                const std::string& what = buildOptions[*cell].name.empty()
-                                                            ? buildOptions[*cell].id
-                                                            : buildOptions[*cell].name;
-                                if (issueBuild(units, buildWho.builder,
-                                                playerDriving(units, units.playerArmy),
-                                                static_cast<rm::TickIndex>(matchTicks), *type,
-                                                at.x, at.z + rollOff, !upgrade)) {
-                                    std::printf("%s: %s\n",
-                                                upgrade ? "upgrade started" : "factory queued",
-                                                what.c_str());
-                                } else {
-                                    std::printf("%s refused: %s\n",
-                                                upgrade ? "upgrade" : "factory order",
-                                                what.c_str());
-                                }
-                                std::fflush(stdout);
-                            }
+                        const auto& option = buildOptions[*cell];
+                        const auto& what = option.name.empty() ? option.id : option.name;
+                        if (submitBuildOption(units, content, buildWho.builder,
+                                playerDriving(units, units.playerArmy),
+                                static_cast<rm::TickIndex>(matchTicks), option, mods.shift)) {
+                            std::printf("%s: %s\n", option.upgrade
+                                ? (option.queuedUpgrade ? "upgrade queued" : "upgrade started")
+                                : "factory queued", what.c_str());
+                        } else {
+                            std::printf("build refused: %s\n", what.c_str());
                         }
+                        std::fflush(stdout);
                     } else if (cell) {
                         armedOption = cell;
                     }
@@ -1494,7 +1487,7 @@ int runWindowed(const Session& session) {
                 if (!at) {
                     return;  // the sky, or past the edge — the order simply does not happen
                 }
-                placeArmedBuild(*at);
+                placeArmedBuild(*at, mods.shift);
                 return;
             }
             if (armedOption && button == rm::MouseButton::Right) {
@@ -1900,6 +1893,7 @@ int runWindowed(const Session& session) {
                 const rm::sim::TickReport report =
                     advanceMatch(runner, matchTicks, static_cast<float>(matchTicks)
                                                          * gAppTickRate.secondsPerTick());
+                followUpgradeSelection(units, selected);
                 ++matchTicks;
 
                 // The tick's combat, as particles — read HERE because an event is a
@@ -2236,10 +2230,9 @@ int runWindowed(const Session& session) {
                         rm::ui::kCommandDescriptors[*overCommand],
                         commandSelection);
                 } else if (overTile && *overTile < rosterTiles.size()) {
-                    inspector = rm::ui::rosterTileCard(rosterTiles[*overTile]);
+                    inspector = selectedUnitCard(units, rosterTiles[*overTile], activeBuilder);
                 } else {
-                    inspector = constructionCard(units, activeBuilder)
-                                    .value_or(rm::ui::rosterTileCard(rosterTiles.front()));
+                    inspector = selectedUnitCard(units, rosterTiles.front(), activeBuilder);
                 }
                 rm::ui::appendRoster(hudScratch, window.labelFont(), window.readoutFont(),
                                      theme, roster, rosterTiles, overTile,
@@ -2380,6 +2373,7 @@ int runWindowed(const Session& session) {
             // is permanent and there is nothing to recompute.
             decalVertices.clear();
             appendVisibleWreckDecals(decalVertices, units);
+            appendResourceDeposits(decalVertices, units, map->field);
             // Dead selections draw nothing rather than being pruned here: a frame is not
             // where a selection changes, and a ring under a wreck is the bug this avoids.
             for (const rm::sim::UnitId sel : selected) {
@@ -2390,11 +2384,11 @@ int runWindowed(const Session& session) {
                 const std::array<float, 3> ground{rm::sim::fxToFloat(at.x),
                                                   rm::sim::fxToFloat(at.y),
                                                   rm::sim::fxToFloat(at.z)};
-                rm::appendSelectionRing(
+                appendUnitSelection(
                     decalVertices, map->field, ground,
                     rm::sim::fxToFloat(units.store.motion()[sel.index].radiusElmos)
                         * kSelectionRingMargin,
-                    kSelectionRingColour);
+                    session.uiProfile);
 
                 // THE RANGE RING: the longest firing weapon's reach, only while selected.
                 // What a player is deciding with a selection is where to send it, and "from
@@ -2462,8 +2456,14 @@ int runWindowed(const Session& session) {
                 const rm::Ray under = rm::screenRay(
                     window.camera(), cursor[0], viewport.logicalExtent.height - cursor[1],
                     viewport.logicalExtent.width, viewport.logicalExtent.height);
-                const std::optional<simd_float3> at = rm::pickGround(under, map->field);
+                std::optional<simd_float3> at = rm::pickGround(under, map->field);
                 if (at) {
+                    if (const auto type = resolveBuildable(units, content, armedPath())) {
+                        const auto snapped = snapResourceSite(units, *type, {at->x, at->z});
+                        at->x = snapped[0];
+                        at->z = snapped[1];
+                        at->y = map->field.heightAtWorld(at->x, at->z);
+                    }
                     const bool ok = armedPlaceable({at->x, at->z});
                     rm::appendSelectionRing(decalVertices, map->field, {at->x, at->y, at->z},
                                             armedRadius() * kSelectionRingMargin,

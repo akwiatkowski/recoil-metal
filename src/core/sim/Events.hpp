@@ -50,6 +50,7 @@ enum class EventKind : std::uint8_t {
     /// this is the one kind the CALLER raises (see `EventQueue::emit`).
     UnitCreated,
     /// A unit finished being built, as opposed to being placed at match start.
+    /// For upgrades, instigator is the replaced unit handle.
     UnitFinished,
     /// A unit took damage. `amount` is the post-armour/shield amount before health clips it, so
     /// an overkill reports the full incoming blow rather than only the health it removed

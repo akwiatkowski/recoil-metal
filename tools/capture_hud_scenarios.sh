@@ -2,7 +2,7 @@
 # Run from the repository root. Assets and generated images never enter git.
 set -euo pipefail
 
-capture_dir=${1:-$(mktemp -d /tmp/recoil-hud.XXXXXX)}
+capture_dir=${1:-build/hud-acceptance}
 fa_install=${FA_INSTALL:-/Volumes/Samsung_T5/faf/Supreme Commander Forged Alliance}
 capture_binary=${CAPTURE_BINARY:-./build/recoil-metal}
 capture_width=${CAPTURE_WIDTH:-1600}
@@ -40,6 +40,19 @@ capture() {
     cmp "$capture_dir/$name.first.png" "$capture_dir/$name.repeat.png"
     echo "$name: matching pixels and simulation hashes"
 }
+
+capture extractor-upgrade 10 tests/fixtures/hud-extractor-upgrade.commands \
+    'hud-state: selected=1 types=1 work=UPGRADING progress=[1-9][0-9]* flow=ACTIVE queued=0' \
+    --select-type UEB1103 --look 5410 2772 450
+for pass in first repeat; do
+    rg -q 'hud-build-option: id=UEB1302 upgrade=1 queued-upgrade=1' \
+        "$capture_dir/extractor-upgrade.$pass.log"
+    test -s "$capture_dir/extractor-upgrade.$pass.png"
+done
+if [[ ${CAPTURE_SCENARIOS:-all} == upgrade ]]; then
+    echo "HUD upgrade artifacts: $capture_dir"
+    exit 0
+fi
 
 capture construction 12 tests/fixtures/hud-construction.commands \
     'hud-state: selected=1 types=1 work=BUILDING progress=[1-9][0-9] flow=ACTIVE queued=0' \

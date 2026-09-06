@@ -172,6 +172,7 @@ void recomputeIncome(const UnitStore& store, const UnitCatalog& catalog, Match& 
     // bonuses with it in the same tick its production stops.
     std::vector<AdjacencyEffects> adjacency;
     adjacencyEffects(store, catalog, adjacency);
+    if (match.resourceFlows) match.resourceFlows->assign(store.slotCount(), {});
 
     for (Economy& economy : match.economies) {
         economy.incomePerTick = {};
@@ -196,6 +197,8 @@ void recomputeIncome(const UnitStore& store, const UnitCatalog& catalog, Match& 
         }
 
         Economy& economy = match.economies[static_cast<std::size_t>(owner)];
+        const Resources incomeBefore = economy.incomePerTick;
+        const Resources upkeepBefore = economy.upkeepPerTick;
 
         // The per-tick rates come from the CATALOG, which derived them once when it learned
         // the type (§5.1). This loop runs over every unit every tick, so a conversion here
@@ -227,6 +230,15 @@ void recomputeIncome(const UnitStore& store, const UnitCatalog& catalog, Match& 
             // diverge for every other, which is the case that decides it.
             economy.storage.mass += Mag::fromInt(def->storageMass.floorToInt());
             economy.storage.energy += Mag::fromInt(def->storageEnergy.floorToInt());
+        }
+        if (match.resourceFlows) {
+            (*match.resourceFlows)[slot] = {
+                .unit = store.idAt(slot), .armyIndex = owner,
+                .incomePerTick = {.mass = economy.incomePerTick.mass - incomeBefore.mass,
+                                  .energy = economy.incomePerTick.energy - incomeBefore.energy},
+                .upkeepPerTick = {.mass = economy.upkeepPerTick.mass - upkeepBefore.mass,
+                                  .energy = economy.upkeepPerTick.energy - upkeepBefore.energy},
+            };
         }
     }
 }
@@ -629,7 +641,9 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
                 }
             }
 
-            tickEconomy(match.economies[army], mine, repairMine, siloMine, true);
+            tickEconomy(match.economies[army], mine, repairMine, siloMine, true,
+                match.resourceFlows ? std::span<UnitResourceFlow>{*match.resourceFlows}
+                                    : std::span<UnitResourceFlow>{}, static_cast<int>(army));
 
             // Written back over this army's entries, in order — the two lists were built
             // by the same filter in the same pass, so the nth of `mine` is the nth of

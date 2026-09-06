@@ -19,6 +19,8 @@
 
 namespace rm::unitdef {
 
+enum class BuildRestriction { None, MassDeposit, HydrocarbonDeposit };
+
 // What a unit moves through, and this engine's authority on where it may go.
 //
 // Supreme Commander's own names, because it is the family that HAS this concept:
@@ -232,6 +234,7 @@ struct UnitDef {
     /// family it is read from the file, for BAR it is inferred from the fields
     /// that family does state.
     MotionType motion = MotionType::None;
+    BuildRestriction buildRestriction = BuildRestriction::None;
 
     /// How far a guarding unit looks for something to attack, in elmos —
     /// `AI.GuardScanRadius`, ogrids like every sibling range (`C-183`). Only 43 of 568

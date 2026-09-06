@@ -91,7 +91,8 @@ void advanceConstruction(Construction& work) noexcept {
 }
 
 void tickEconomy(Economy& economy, std::span<Construction> building,
-                  std::span<RepairWork> repairs, std::span<SiloAmmo> siloAmmo, bool deferOverflow) {
+                  std::span<RepairWork> repairs, std::span<SiloAmmo> siloAmmo, bool deferOverflow,
+                  std::span<UnitResourceFlow> flows, int armyIndex) {
     // Clamp only what CARRIED IN. Reclaim currently credits `stored` directly before this
     // pass, so its over-cap excess is still lost rather than becoming a hidden reserve.
     economy.stored.mass = std::max(Mag{}, std::min(economy.stored.mass, economy.storage.mass));
@@ -215,6 +216,12 @@ void tickEconomy(Economy& economy, std::span<Construction> building,
     // into the next tick as a pre-credit (`C-162`). Zeroing `allocated` here instead would
     // look tidier and would delete that behaviour entirely.
     Resources granted;
+    const auto recordCharge = [flows, armyIndex](UnitId unit, Resources charge) {
+        if (unit.index < flows.size() && flows[unit.index].unit == unit
+            && flows[unit.index].armyIndex == armyIndex) {
+            flows[unit.index].usageLastTick += charge;
+        }
+    };
     const auto grantAndConsume = [&granted, &outstanding, &grantFor](Resources demand,
                                                                      Resources& allocated) {
         const Resources out = outstanding(demand, allocated);
@@ -231,6 +238,24 @@ void tickEconomy(Economy& economy, std::span<Construction> building,
     };
 
     grantAndConsume(economy.upkeepPerTick, economy.upkeepAllocated);
+    // The allocator has one aggregate upkeep request. Attribute its actual charge
+    // proportionally to the units that submitted it, preserving the final residue.
+    Resources remainingCharge = granted;
+    Resources remainingDemand = economy.upkeepPerTick;
+    for (auto& flow : flows) {
+        if (flow.armyIndex != armyIndex) continue;
+        const Resources share{
+            .mass = flow.upkeepPerTick.mass == remainingDemand.mass ? remainingCharge.mass
+                : remainingCharge.mass * fundingRatio(flow.upkeepPerTick.mass, remainingDemand.mass),
+            .energy = flow.upkeepPerTick.energy == remainingDemand.energy ? remainingCharge.energy
+                : remainingCharge.energy * fundingRatio(flow.upkeepPerTick.energy, remainingDemand.energy),
+        };
+        flow.usageLastTick += share;
+        remainingCharge.mass -= share.mass;
+        remainingCharge.energy -= share.energy;
+        remainingDemand.mass -= flow.upkeepPerTick.mass;
+        remainingDemand.energy -= flow.upkeepPerTick.energy;
+    }
 
     for (Construction& work : building) {
         if (!stillBilled(work)) {
@@ -242,14 +267,22 @@ void tickEconomy(Economy& economy, std::span<Construction> building,
         // THE PROGRESS ITSELF ALREADY HAPPENED, at the start of the beat in the command-dispatch
         // stage (`advanceConstruction`). All that is left here is the bill and the ratio the
         // NEXT beat's progress will be multiplied by — retail's split across two stages exactly.
+        const Resources before = granted;
         work.fundedLastTick = grantAndConsume(drainPerTick(work), work.allocated);
+        recordCharge(work.builder, {.mass = granted.mass - before.mass,
+                                   .energy = granted.energy - before.energy});
         work.workedThisTick = false;
     }
     for (RepairWork& repair : repairs) {
         // Repairs have no carry-forward allocation: their live target can be healed, filled,
         // or destroyed before the next tick, so this request is consumed in the award beat.
         Resources allocated;
+        const Resources before = granted;
         repair.funded = grantAndConsume(repair.demand, allocated);
+        if (repair.builder < flows.size()) {
+            recordCharge(flows[repair.builder].unit, {.mass = granted.mass - before.mass,
+                                                     .energy = granted.energy - before.energy});
+        }
     }
     for (SiloAmmo& ammo : siloAmmo) {
         if (!autoBuilding(ammo)) {
@@ -261,6 +294,7 @@ void tickEconomy(Economy& economy, std::span<Construction> building,
         const Fx ratio = grantFor(out);
         const Resources share = out * ratio;
         ammo.delivered += share;
+        recordCharge(ammo.owner, share);
         granted += share;
         if (ammo.delivered.mass >= ammo.costPerTick.mass
             && ammo.delivered.energy >= ammo.costPerTick.energy) {

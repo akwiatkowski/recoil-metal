@@ -21,7 +21,8 @@ InfoCard buildOptionCard(const BuildOption& option, GameProfile profile) {
     // The card is where an upgrade gets to say what it does in words: the cell's frame says
     // "this one is different" and only this can say how.
     if (option.upgrade) {
-        card.rows.push_back(InfoRow{.label = "UPGRADE", .value = "replaces this building"});
+        card.rows.push_back(InfoRow{.label = "UPGRADE", .value = option.queuedUpgrade
+            ? "queued after current upgrade" : "replaces this building"});
     }
     // The corner repeats nothing: when the title IS the id there is no second fact to state.
     // And with ids hidden it states nothing at all — a blueprint id is a filename, useful in a

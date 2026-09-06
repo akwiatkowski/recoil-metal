@@ -180,3 +180,36 @@ TEST_CASE("a spawned UEB4302 automatically builds one interceptor in its bluepri
     CHECK(rm::sim::magToFloat(scene.economies[0].stored.energy)
           == Approx(1000000.0 - 360000.0).margin(100.0));
 }
+
+TEST_CASE("an unenhanced ACU never manufactures enhancement-only missile ammunition",
+          "[corpus][economy-acu]") {
+    rm::vfs::Vfs vfs;
+    if (!std::filesystem::exists(gamedata() / "projectiles.scd")) SKIP("retail install unavailable");
+    REQUIRE(vfs.mountArchive(gamedata() / "units.scd"));
+    REQUIRE(vfs.mountArchive(gamedata() / "projectiles.scd"));
+    rm::app::UnitScene scene;
+    const auto field = flatField();
+    SECTION("skirmish commander spawn") {
+        const std::array<rm::mapinfo::StartPosition, 1> starts{{{0, 200, 200}}};
+        rm::app::spawnCommanders(scene, field, starts, vfs);
+    }
+    SECTION("ordinary unit spawn") {
+        scene.armies = rm::sim::freeForAll(1);
+        scene.economies.resize(1);
+        scene.commandersEver = {0};
+        REQUIRE(rm::app::spawnUnit(scene, vfs, field, "/units/UEL0001/UEL0001_unit.bp",
+            {200, 0, 200}, scene.armies[0], rm::Brad{0}));
+    }
+    REQUIRE(scene.store.liveCount() == 1);
+    CHECK(scene.siloAmmo.empty());
+    scene.economies[0].stored = {};
+    rm::sim::Match match{.armies = scene.armies, .economies = scene.economies,
+        .projectiles = &scene.projectiles, .building = &scene.building,
+        .siloAmmo = &scene.siloAmmo, .baseStorage = rm::app::kStartingStorage};
+    for (rm::TickIndex tick = 0; tick < 100; ++tick) {
+        (void)rm::sim::tickSkirmish(scene.store, scene.catalog, match,
+            scene.terrain(field), rm::app::gAppTickRate, tick);
+        CHECK(scene.economies[0].usageLastTick.energy == rm::sim::Mag{});
+    }
+    CHECK(scene.economies[0].stored.energy > rm::sim::Mag::fromInt(49));
+}

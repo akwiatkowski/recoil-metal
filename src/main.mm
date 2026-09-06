@@ -205,6 +205,15 @@ int main(int argc, const char* argv[]) {
         // BEFORE the skirmish block, because `orderFirstExtractors` issues real build commands
         // and `applyCommand` takes a grid for every kind of order.
         PassabilitySet passability{map->field, map->hasWater, map->waterLevel};
+        for (const auto& marker : map->markers) {
+            const auto kind = marker.isType("Mass") ? rm::unitdef::BuildRestriction::MassDeposit
+                : marker.isType("Hydrocarbon") ? rm::unitdef::BuildRestriction::HydrocarbonDeposit
+                : rm::unitdef::BuildRestriction::None;
+            if (kind != rm::unitdef::BuildRestriction::None) {
+                units.resourceDeposits.push_back({kind,
+                    rm::sim::fxFromFloat(marker.position[0]), rm::sim::fxFromFloat(marker.position[2])});
+            }
+        }
 
         if (hasFlag(argc, argv, "--skirmish")) {
             // `--factions uef,seraphim,...` picks each seat's faction, cycled; absent keeps

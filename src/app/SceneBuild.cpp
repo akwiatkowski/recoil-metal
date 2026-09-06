@@ -550,7 +550,8 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
                 std::max(scene.catalog.rates(type).buildPerTick, minimumRate);
             for (std::size_t weapon = 0; weapon < def->weapons.size(); ++weapon) {
                 const rm::unitdef::Weapon& gun = def->weapons[weapon];
-                if (!gun.countedProjectile || gun.projectileTraits.buildTime <= rm::sim::Mag{}) {
+                if (!gun.countedProjectile || gun.enabledByEnhancement
+                    || gun.projectileTraits.buildTime <= rm::sim::Mag{}) {
                     continue;
                 }
                 // C-241 names an adjacency build modifier. It is fixed at 1 in this slice:
@@ -766,7 +767,9 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
         std::max(scene.catalog.rates(type).buildPerTick, minimumRate);
     for (std::size_t weapon = 0; weapon < def.weapons.size(); ++weapon) {
         const rm::unitdef::Weapon& gun = def.weapons[weapon];
-        if (!gun.countedProjectile || gun.projectileTraits.buildTime <= rm::sim::Mag{}) continue;
+        // Enhancement weapons are disabled at spawn, including their automatic ammo bill.
+        if (!gun.countedProjectile || gun.enabledByEnhancement
+            || gun.projectileTraits.buildTime <= rm::sim::Mag{}) continue;
         // C-241's queued builds count toward capacity; queue issuance is deliberately absent.
         // One record per retail silo SLOT (C-081): a unit with two counted weapons on the
         // same slot keeps the FIRST, the order-dependent selection C-085 records for

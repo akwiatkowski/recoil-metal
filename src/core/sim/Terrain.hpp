@@ -3,8 +3,16 @@
 #include "core/map/HeightField.hpp"
 #include "core/map/MaxHeightPyramid.hpp"
 #include "core/sim/Fx.hpp"
+#include "core/unit/UnitDef.hpp"
+#include <span>
 
 namespace rm::sim {
+
+struct ResourceDeposit {
+    unitdef::BuildRestriction kind = unitdef::BuildRestriction::MassDeposit;
+    Fx x{}, z{};
+};
+
 
 // The ground, as the sim sees it: fixed point in, fixed point out.
 //
@@ -33,7 +41,11 @@ public:
     /// map — and copying a heightfield to sample it would be absurd.
     explicit Terrain(const HeightField& field, bool hasWater = false,
                      float waterLevelElmos = 0.0f,
-                     const MaxHeightPyramid* lookAhead = nullptr) noexcept;
+                     const MaxHeightPyramid* lookAhead = nullptr,
+                     std::span<const ResourceDeposit> deposits = {}) noexcept;
+
+    [[nodiscard]] bool resourceSitePlaceable(unitdef::BuildRestriction restriction,
+                                             Fx x, Fx z) const noexcept;
 
     /// The height at a grid corner, clamped at the edges.
     ///
@@ -88,6 +100,7 @@ private:
     /// sample shares (see `kScaleBits`).
     [[nodiscard]] Fx decodeRaw(std::uint16_t raw) const noexcept;
 
+    std::span<const ResourceDeposit> deposits_;
     const HeightField* field_;
     const MaxHeightPyramid* lookAhead_ = nullptr;
     Fx baseHeight_;

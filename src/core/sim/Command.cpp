@@ -1283,11 +1283,13 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
             if (head == nullptr || head->kind() != CommandKind::Build || building == nullptr) {
                 return false;
             }
+            bool completedUpgrade = false;
             if (Construction* work = activeConstruction(*building, store.idAt(slot))) {
                 advanceConstruction(*work);
                 if (!work->finished()) {
                     return false;  // still rising; the order stays at the head
                 }
+                completedUpgrade = work->isUpgrade();
                 if (finished != nullptr) {
                     finished->push_back(*work);
                 }
@@ -1332,6 +1334,9 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
                     (void)orders[slot].finish();
                 }
             }
+            // The app replaces an upgraded unit after this pass. Leave its successor's
+            // orders pending; validating them against the old blueprint would discard them.
+            if (completedUpgrade) return false;
             startPending();
             return true;
         };
@@ -2331,6 +2336,10 @@ bool startCommand(const Command& command, UnitStore& store, const UnitCatalog& c
         const Transform& builderAt = store.transforms()[command.unit.index];
         const Fx siteX = (upgrade || factoryProduction) ? builderAt.x : command.targetX;
         const Fx siteZ = (upgrade || factoryProduction) ? builderAt.z : command.targetZ;
+
+        if (!upgrade && !terrain.resourceSitePlaceable(def->buildRestriction, siteX, siteZ)) {
+            return false;
+        }
 
         // Validate the TARGET's terrain domain before creating work. Callers pass the grid
         // selected for the product being built; aircraft need no ground footprint and upgrades

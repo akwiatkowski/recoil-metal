@@ -63,6 +63,11 @@ inline constexpr float kRingThicknessElmos = 2.5f;
 /// as hovering, and it is drawn without writing depth so nothing hides behind it.
 inline constexpr float kRingLiftElmos = 1.5f;
 
+/// Axis-aligned square outline, sampled around its perimeter to follow terrain.
+void appendSelectionSquare(std::vector<DecalVertex>& out, const HeightField& field,
+                           std::array<float, 3> centre, float halfExtentElmos,
+                           std::array<float, 4> colour);
+
 // Appends one ring, as a triangle list, following the ground under it.
 //
 // Conforming rather than a flat disc tilted by the terrain normal, which is the

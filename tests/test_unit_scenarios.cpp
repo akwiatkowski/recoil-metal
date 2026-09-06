@@ -912,7 +912,19 @@ TEST_CASE("order logging joins submission rejection and construction transitions
     }
     CHECK(log.find("command=0 unit=0:1") != std::string::npos);
     CHECK(log.find("[construction] tick=") != std::string::npos);
-    CHECK(std::count(log.begin(), log.end(), '\n') < 20);  // no per-tick flood
+    std::size_t economyLines = 0, summaries = 0;
+    std::istringstream lines{log};
+    for (std::string line; std::getline(lines, line);) {
+        const auto start = line.find("[economy] tick=");
+        if (start == std::string::npos) continue;
+        ++economyLines;
+        const int loggedTick = std::stoi(line.substr(start + std::string{"[economy] tick="}.size()));
+        CHECK(loggedTick % 50 == 0); // Five seconds at the app's 10 Hz clock.
+        if (line.find("stored=") != std::string::npos) ++summaries;
+    }
+    CHECK(summaries == 26 * scene.scene.economies.size()); // Ticks 0..1250, each army.
+    CHECK(log.find("type=UEB1101 income/s=M:0.00,E:20.00") != std::string::npos);
+    CHECK(static_cast<std::size_t>(std::count(log.begin(), log.end(), '\n')) - economyLines < 20);
 }
 
 TEST_CASE("real construction lifecycle is reflected by the active inspector", "[corpus][ui][lifecycle]") {
@@ -989,7 +1001,7 @@ TEST_CASE("real construction lifecycle is reflected by the active inspector", "[
 
 TEST_CASE("HUD capture replays have explicit setup-relative identities and blueprint paths", "[ui][replay]") {
     const auto fixtures = std::filesystem::path{__FILE__}.parent_path() / "fixtures";
-    for (const std::string name : {"hud-construction.commands", "hud-production.commands"}) {
+    for (const std::string name : {"hud-construction.commands", "hud-production.commands", "hud-factory-t2.commands", "hud-extractor-upgrade.commands"}) {
         INFO(name);
         std::vector<std::string> paths;
         const auto log = rm::sim::readCommandLog((fixtures / name).string(), &paths);
@@ -1140,4 +1152,142 @@ TEST_CASE("every retail T1 land factory product performs its role through the ma
         }
     }
     CHECK(tested == 23);
+}
+
+TEST_CASE("queued building placements preserve work and complete in click order",
+          "[corpus][build-queue]") {
+    const auto root = corpusRoot();
+    if (!std::filesystem::is_directory(root)) SKIP("retail corpus unavailable");
+    const auto engineer = rm::unitbp::loadFile(root / "UEL0105/UEL0105_unit.bp");
+    const auto generator = rm::unitbp::loadFile(root / "UEB1101/UEB1101_unit.bp");
+    REQUIRE(engineer);
+    REQUIRE(generator);
+    Scenario job;
+    const auto builder = job.spawn(*engineer, 300, 300);
+    const auto type = job.registerType(*generator);
+    job.scene.economies[0].stored = {rm::sim::Mag::fromInt(650), rm::sim::Mag::fromInt(5000)};
+    auto runner = job.runner();
+    REQUIRE(rm::app::issueBuild(job.scene, builder, 0, 0, type,
+        rm::sim::Fx::fromInt(340), rm::sim::Fx::fromInt(300)));
+    for (int tick = 0; tick < 10; ++tick) (void)rm::app::advanceMatch(runner, tick, 0);
+    REQUIRE(job.scene.building.size() == 1);
+    const auto remaining = job.scene.building.front().buildTimeRemaining;
+    REQUIRE(rm::app::issueBuild(job.scene, builder, 0, 10, type,
+        rm::sim::Fx::fromInt(300), rm::sim::Fx::fromInt(340), true));
+    (void)rm::app::advanceMatch(runner, 10, 0);
+    REQUIRE(job.scene.building.size() == 1);
+    CHECK(job.scene.building.front().position[0] == rm::sim::Fx::fromInt(340));
+    CHECK(job.scene.building.front().buildTimeRemaining < remaining);
+    CHECK(job.scene.store.orders()[builder.index].entries().size() == 2);
+    for (int tick = 11; tick < 1000; ++tick) (void)rm::app::advanceMatch(runner, tick, 0);
+    REQUIRE(job.scene.building.size() == 2);
+    CHECK(job.scene.building[0].finished());
+    CHECK(job.scene.building[1].finished());
+    CHECK(job.scene.building[1].position[2] == rm::sim::Fx::fromInt(340));
+    CHECK(job.scene.store.liveCount() == 3);
+}
+
+TEST_CASE("an extractor can queue its next tier while upgrading", "[corpus][upgrade-chain][headless-ui]") {
+    const auto root = corpusRoot();
+    if (!std::filesystem::is_directory(root)) SKIP("retail corpus unavailable");
+    std::vector<rm::unitdef::UnitDef> defs;
+    std::vector<std::string> ids{"UEB1103", "UEB1202", "UEB1302"};
+    for (const auto& id : ids) {
+        auto def = rm::unitbp::loadFile(root / id / (id + "_unit.bp"));
+        REQUIRE(def);
+        defs.push_back(*def);
+    }
+    Scenario job;
+    job.scene.roster = rm::data::Roster::build(defs, ids);
+    const auto t1 = job.spawn(defs[0], 200, 200);
+    const auto t2Type = job.registerType(defs[1]);
+    const auto t3Type = job.registerType(defs[2]);
+    auto runner = job.runner();
+    std::vector<rm::sim::UnitId> selection{t1};
+    const auto step = [&](int tick) {
+        job.scene.economies[0].stored = rm::app::kStartingStorage;
+        (void)rm::app::advanceMatch(runner, tick, 0);
+        rm::app::followUpgradeSelection(job.scene, selection);
+    };
+    const auto clickUpgrade = [&](int tick, std::string_view expected, float width) {
+        std::vector<rm::ui::BuildOption> options;
+        rm::app::BuildSelection who;
+        rm::app::gatherBuildOptions(job.scene, selection.front(), rm::ui::neutralTheme(), options, who);
+        REQUIRE(options.size() == 1);
+        CHECK(options.front().id == expected);
+        const auto frame = rm::ui::frameLayout(rm::ui::UiViewport::full(width, 800));
+        const auto panel = rm::ui::buildPanelLayout(frame, options.size());
+        REQUIRE(panel.shown == 1);
+        const auto origin = rm::ui::buildCellOrigin(panel, 0);
+        const auto hit = rm::ui::buildOptionAt(panel, options.size(),
+            origin[0] + panel.cellWidth / 2, origin[1] + panel.cellHeight / 2);
+        REQUIRE(hit);
+        // Same action handler as the real mouse callback; no Shift for either click.
+        REQUIRE(rm::app::submitBuildOption(job.scene, job.content, who.builder, 0,
+            static_cast<rm::TickIndex>(tick), options[*hit], false));
+    };
+    clickUpgrade(0, "UEB1202", 1280);
+    step(0);
+    REQUIRE(job.scene.building.size() == 1);
+    SECTION("the tray offers T3 during T2 construction") {
+        std::vector<rm::ui::BuildOption> options;
+        rm::app::BuildSelection who;
+        rm::app::gatherBuildOptions(job.scene, t1, rm::ui::neutralTheme(), options, who);
+        REQUIRE(options.size() == 1);
+        CHECK(options.front().id == "UEB1302");
+        CHECK(options.front().queuedUpgrade);
+        CHECK(rm::ui::buildOptionCard(options.front(), rm::ui::GameProfile::Fa).rows.front().value
+              == "queued after current upgrade");
+    }
+    SECTION("the queued command survives replacement and builds T3") {
+        const auto remaining = job.scene.building.front().buildTimeRemaining;
+        clickUpgrade(1, "UEB1302", 800);
+        step(1);
+        REQUIRE(job.scene.building.size() == 1);
+        CHECK(job.scene.building.front().buildTimeRemaining < remaining);
+        REQUIRE(job.scene.store.orders()[t1.index].entries().size() == 2);
+        const auto queuedId = job.scene.store.orders()[t1.index].entries().back().payload().id;
+        bool cancel = false;
+        SECTION("Stop cancels the current and queued upgrades") { cancel = true; }
+        SECTION("complete both upgrades across saved command-queue restoration") {}
+        if (cancel) {
+            REQUIRE(rm::app::issueMove(job.scene, t1, 0, 2, {}, {}, false, rm::sim::CommandKind::Stop));
+            for (int tick = 2; tick < 100; ++tick) step(tick);
+            CHECK(job.scene.store.alive(t1));
+            CHECK(job.scene.building.empty());
+            CHECK(job.scene.store.orders()[t1.index].empty());
+            CHECK_FALSE(job.scene.store.commandIdLive(queuedId));
+            return;
+        }
+        const auto saved = rm::sim::SaveState::decode(rm::sim::SaveState::encode({
+            .units = job.scene.store.snapshot()}));
+        REQUIRE(saved);
+        job.scene.store = rm::sim::UnitStore{saved->units};
+        int tick = 2;
+        while (job.scene.store.alive(t1) && tick < 3000) step(tick++);
+        REQUIRE_FALSE(job.scene.store.alive(t1));
+        rm::sim::UnitId t2{};
+        for (rm::UnitIndex slot = 0; slot < job.scene.store.slotCount(); ++slot) {
+            if (job.scene.store.slotAlive(slot) && job.scene.store.typeAt(slot) == t2Type)
+                t2 = job.scene.store.idAt(slot);
+        }
+        REQUIRE(job.scene.store.alive(t2));
+        CHECK(selection == std::vector{t2});
+        const auto& queue = job.scene.store.orders()[t2.index];
+        REQUIRE(queue.size() == 1);
+        CHECK(queue.entries().front().unit() == t2);
+        CHECK(queue.entries().front().payload().id == queuedId);
+        CHECK(queue.entries().front().payload().units == std::vector{t2});
+        while (job.scene.store.alive(t2) && tick < 10000) step(tick++);
+        CHECK_FALSE(job.scene.store.alive(t2));
+        REQUIRE(job.scene.store.liveCount() == 1);
+        bool finalTier = false;
+        for (rm::UnitIndex slot = 0; slot < job.scene.store.slotCount(); ++slot)
+            if (job.scene.store.slotAlive(slot)) finalTier = job.scene.store.typeAt(slot) == t3Type;
+        CHECK(finalTier);
+        REQUIRE(selection.size() == 1);
+        CHECK(job.scene.store.alive(selection.front()));
+        CHECK(job.scene.store.typeAt(selection.front().index) == t3Type);
+        CHECK_FALSE(job.scene.store.commandIdLive(queuedId));
+    }
 }
