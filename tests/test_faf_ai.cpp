@@ -538,6 +538,22 @@ TEST_CASE("the FAF driver boots a brain and the corpus's own builders decide", "
                'expected a build, got ' .. tostring(decisions[1].kind))
         assert(type(decisions[1].bp) == 'string' and #decisions[1].bp > 0)
 
+        -- Unit counts are memoised per pass by category TEXT: a rebuilt expression hits the
+        -- memo, and the next pass's snapshot invalidates it.
+        local brain = __rm_faf.brains[0]
+        assert(brain:GetCurrentUnits(categories.COMMAND * categories.MOBILE) == 1)
+        assert(brain:GetCurrentUnits(categories.COMMAND * categories.MOBILE) == 1)
+        assert(brain:GetCurrentUnits(categories.MOBILE - categories.COMMAND) == 0)
+        local second = setmetatable({ bp = 'UEL0001', h = 1, x = 120, z = 100, idle = true,
+                                      healthPercent = 1, __cats = __rm_faf.cats.UEL0001 },
+                                    __rm_faf.unitMeta)
+        local snap2 = {}
+        for k, v in pairs(snap) do snap2[k] = v end
+        snap2.units = { commander, second }
+        __rm_faf_decide(0, snap2)
+        assert(brain:GetCurrentUnits(categories.COMMAND * categories.MOBILE) == 2,
+               'a new snapshot must invalidate the count memo')
+
         -- C-163: requested demand and granted usage are different published counters, while
         -- trend converts their per-tick difference back to a per-second rate.
         snap.massRequested = 0.4
@@ -610,4 +626,27 @@ TEST_CASE("the sanity report names every distinct condition failure", "[faf][ai]
 
     CHECK(rm::ai::formatFafConditionErrorReport(errors) == expected);
     CHECK(rm::ai::formatFafConditionErrorReport({}).empty());
+}
+
+TEST_CASE("an exhausted instruction budget is one error, not a cascade", "[faf][ai]") {
+    const std::filesystem::path root = corpusRoot();
+    if (root.empty()) {
+        SKIP("no vendored corpus; run `make ai`");
+    }
+    FafAi ai(root);
+    REQUIRE(ai.ready());
+
+    // The corpus wraps condition calls in pcall. A runaway condition is caught there, and
+    // the work after it must run on a fresh budget: the loop below is a hundred times the
+    // hook interval, and used to die after the first thousand instructions.
+    REQUIRE(ai.eval(R"(
+        local ok, err = pcall(function() while true do end end)
+        assert(not ok and string.find(err, 'instruction budget'), tostring(err))
+        local sum = 0
+        for i = 1, 100000 do sum = sum + 1 end
+        assert(sum == 100000)
+    )"));
+    // Not tested, because no hook can promise it: a chunk that swallows the error in pcall
+    // forever cannot be stopped from inside the VM. The refill cap only bounds how much
+    // budget such a chunk is GIVEN; the corpus is not adversarial and never does this.
 }

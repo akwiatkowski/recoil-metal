@@ -3288,3 +3288,28 @@ stable particle identity the buffer does not have. Overlapping strips would doub
 additive brightness, so lifetimes are exact and expiry keeps half a tick of slack.
 Simulation state and hashes are untouched. Endpoints are ground transforms, not
 target bones.
+
+## ADR-100 — Bound the FAF watchdog's refills and pace condition evaluation
+
+**Context.** The reproducible 1,800-second SCMP_009 duel reported 13 decision
+failures and 38 condition errors, all "instruction budget exhausted". Tracing showed
+one genuine overrun per affected pass — counting ~200 engineers against every
+builder's conditions — and a cascade: the watchdog never refilled after raising, so
+once the corpus's `pcall` caught the first error every further thousand instructions
+raised again, at whatever line happened to be running.
+
+**Decision.** Refill the budget before raising, at most four times per chunk or
+decision pass; past that the fuel stays spent so the chunk still ends. Spread each
+builder's first condition-cache expiry over three passes by a per-brain serial, so
+the whole list is no longer re-evaluated in one pass. Memoise unit counts per pass
+by category text, since expression trees are rebuilt on every call and cannot be
+keyed by identity. All three are deterministic.
+
+**Alternatives and consequences.** Raising the 20-million budget hides the cost and
+depends on machine speed not at all but on corpus growth. An uncatchable error does
+not exist in Lua: a chunk that swallows the error in `pcall` forever cannot be stopped
+from inside the VM, so the cap bounds what such a chunk is given, not whether it ends.
+String categories keep counting zero as before rather than being parsed, to leave AI
+behaviour unchanged. Staggering changes when a condition is re-checked, so the duel's
+course differs from the earlier hash log; the outcome is recorded in
+`docs/skirmish-economy-acceptance.md`.

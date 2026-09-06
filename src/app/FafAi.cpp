@@ -55,6 +55,8 @@ struct Sandbox {
     bool verbose = false;
     /// Instructions the current chunk may still execute before the watchdog stops it.
     long long fuel = 0;
+    /// How many times the watchdog has fired since the last refill. See `fuelHook`.
+    int overruns = 0;
 
     /// The scheduler: Moho's thread model, on coroutines. `ForkThread` files one here,
     /// `pump` resumes what is due, `WaitSeconds`/`WaitTicks` yield a wake delay. Errors are
@@ -98,6 +100,20 @@ constexpr long long kTicksPerSecond = 10;
 /// and in every build — a timeout would make the report depend on how busy the laptop was.
 constexpr long long kInstructionBudget = 20'000'000;
 
+/// How many exhausted budgets one chunk or decision pass may swallow before the watchdog
+/// stops refilling. The corpus wraps its condition calls in `pcall`, so a single runaway
+/// condition is caught and the pass carries on — which is right, and the budget must be
+/// restored for the work after it or every subsequent thousand instructions raise again
+/// (that cascade is what turned one slow condition into a dozen "failures" in the SCMP_009
+/// duel logs). Four keeps a pathological `while true do pcall(...) end` bounded at five
+/// budgets, about a hundred million instructions, rather than forever.
+constexpr int kMaxOverruns = 4;
+
+void refill(Sandbox& sandbox) noexcept {
+    sandbox.fuel = kInstructionBudget;
+    sandbox.overruns = 0;
+}
+
 void fuelHook(lua_State* lua, lua_Debug* ar) {
     Sandbox* sandbox = sandboxOf(lua);
     if (sandbox == nullptr) {
@@ -125,6 +141,12 @@ void fuelHook(lua_State* lua, lua_Debug* ar) {
     }
     sandbox->fuel -= 1000;
     if (sandbox->fuel <= 0) {
+        // Refill BEFORE raising, so the code that catches this error gets a whole budget for
+        // what follows; past kMaxOverruns the fuel stays spent and every hook raises, which
+        // is what guarantees the chunk ends.
+        if (++sandbox->overruns <= kMaxOverruns) {
+            refill(*sandbox);
+        }
         // No %lld: lua_pushfstring supports only %d %f %s %p %c %U %%, and passing %lld makes
         // Lua raise "invalid option '%l'" INSTEAD of this message — which is how this bug first
         // showed up, as a format complaint standing in for a real diagnosis.
@@ -758,7 +780,7 @@ int importModule(lua_State* lua) {
     // Refuelled per chunk. The hook itself is armed once at VM creation and never cleared:
     // clearing it here disarmed the PARENT's watchdog every time a nested import returned, so
     // an outer module could spin forever while its own budget sat untouched.
-    sandbox->fuel = kInstructionBudget;
+    refill(*sandbox);
     if (luaL_loadbuffer(lua, source.data(), source.size(), chunk.c_str()) != 0) {
         --sandbox->importDepth;
         const char* message = lua_tostring(lua, -1);
@@ -1332,7 +1354,7 @@ std::size_t FafAi::pump(long long tick) {
         }
 
         sandbox->currentThread = i;
-        sandbox->fuel = kInstructionBudget;
+        refill(*sandbox);
         int results = 0;
         const int args = thread.firstArgs >= 0 ? thread.firstArgs : 0;
         thread.firstArgs = -1;
@@ -1410,7 +1432,7 @@ bool FafAi::eval(std::string_view chunk) {
     }
     Sandbox* sandbox = sandboxOf(state_);
     if (sandbox != nullptr) {
-        sandbox->fuel = kInstructionBudget;
+        refill(*sandbox);
     }
     if (luaL_loadbuffer(state_, chunk.data(), chunk.size(), "@rm:eval") != 0
         || lua_pcall(state_, 0, 0, 0) != 0) {
@@ -1456,7 +1478,7 @@ void FafAi::setLogPassthrough(bool enabled) {
 void FafAi::refuel() {
     Sandbox* sandbox = state_ != nullptr ? sandboxOf(state_) : nullptr;
     if (sandbox != nullptr) {
-        sandbox->fuel = kInstructionBudget;
+        refill(*sandbox);
     }
 }
 

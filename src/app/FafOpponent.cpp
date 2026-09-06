@@ -236,8 +236,50 @@ end
 function methods:GetEconomyTrend(kind)
     return (self:GetEconomyIncome(kind) - self:GetEconomyUsage(kind)) * 10
 end
+-- A category expression is REBUILT on every condition call — `categories.LAND * categories.TECH1`
+-- allocates fresh nodes — so node identity cannot key a cache; the expression's text can. The
+-- key is stored on the node, so the cached atoms under `categories` pay for theirs once.
+local function categoryKey(cat)
+    -- Some corpus callers hand over a plain string. `__rm_catMatch` has always answered
+    -- those with false, so they count zero; keep that answer rather than parsing them here.
+    if type(cat) ~= 'table' then return tostring(cat) end
+    local key = rawget(cat, '__key')
+    if key then return key end
+    local op = cat.__cat
+    if op == 'tag' then
+        key = cat.a
+    elseif op == 'neg' then
+        key = '-(' .. categoryKey(cat.a) .. ')'
+    else
+        key = '(' .. categoryKey(cat.a) .. ' ' .. op .. ' ' .. categoryKey(cat.b) .. ')'
+    end
+    rawset(cat, '__key', key)
+    return key
+end
+
+-- Counted once per decision pass per distinct category. Every pass installs a fresh snapshot
+-- and then asks about the same few hundred categories over the same units, condition after
+-- condition — counting them each time was the one genuine instruction-budget overrun left in
+-- the SCMP_009 duel once the watchdog cascade was fixed. The memo is keyed by the snapshot
+-- table, so a new pass starts empty and the answer never outlives the units it counted.
+local function countCurrentUnits(brain, category)
+    if category == nil then return 0 end
+    local memo = brain.countMemo
+    if memo.snap ~= brain.snap then
+        memo = { snap = brain.snap }
+        brain.countMemo = memo
+    end
+    local key = categoryKey(category)
+    local n = memo[key]
+    if n == nil then
+        n = EntityCategoryCount(category, brain.snap.units)
+        memo[key] = n
+    end
+    return n
+end
+
 function methods:GetCurrentUnits(category)
-    return EntityCategoryCount(category, self.snap.units)
+    return countCurrentUnits(self, category)
 end
 function methods:GetListOfUnits(category, needToBeIdle)
     local out = {}
@@ -344,8 +386,13 @@ function __rm_faf_boot(army, info)
     -- Per-builder position in its BuildStructures queue (see the engineer walk).
     brain.progress = {}
 
-    -- The condition cadence cache (see conditionsPass), keyed by spec table.
+    -- The condition cadence cache (see conditionsPass), keyed by spec table, with the
+    -- serial that spreads first expiries; and the per-pass unit-count memo (see
+    -- countCurrentUnits). Initialised here because the brain's __index records every
+    -- unknown field read as a missing method.
     brain.condCache = {}
+    brain.condSerial = 0
+    brain.countMemo = { snap = false }
 
     -- The pool platoon (see GetPlatoonUniquelyNamed): counts over the army's own units.
     brain.pool = {
@@ -384,7 +431,7 @@ function __rm_faf_boot(army, info)
     -- Their counting methods answer over the whole army, because MAIN is the whole base.
     local coords = function() return { info.startX, 0, info.startZ } end
     local function countUnits(category)
-        return EntityCategoryCount(category, brain.snap.units)
+        return countCurrentUnits(brain, category)
     end
     local function countUnderway(category)
         return EntityCategoryCount(category, brain.snap.underway or {})
@@ -507,7 +554,7 @@ local function conditionsPass(brain, spec)
     -- (stable for the life of the brain).
     local now = brain.snap.tick or 0
     local cached = brain.condCache[spec]
-    if cached and (now - cached.tick) < 30 then
+    if cached and now < cached.expires then
         return cached.result
     end
     local result = true
@@ -543,7 +590,18 @@ local function conditionsPass(brain, spec)
         end
         if not result then break end
     end
-    brain.condCache[spec] = { tick = now, result = result }
+    -- A spec's FIRST expiry is spread over three passes (passes run every ten ticks), and
+    -- it keeps that phase afterwards. Without this every builder was first evaluated in the
+    -- same pass and so re-evaluated together every third pass; late in the SCMP_009 duel,
+    -- with ~200 engineers to count per condition, that peak alone exhausted the instruction
+    -- budget. The serial is per brain and assigned in walk order, so the phases are the
+    -- same on every machine and every run.
+    local hold = 30
+    if not cached then
+        brain.condSerial = brain.condSerial + 1
+        hold = hold + 10 * (brain.condSerial % 3)
+    end
+    brain.condCache[spec] = { expires = now + hold, result = result }
     return result
 end
 
