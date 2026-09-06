@@ -2874,8 +2874,14 @@ int runWindowed(const Session& session) {
             if (acceptanceFrames == observedFrame) return;
             observedFrame = acceptanceFrames;
             try {
+                // Stage 0 waits for AppKit to grant deactivation, which needs another app
+                // willing to take focus; on an unattended desktop that can never happen, and
+                // the report should say so rather than look like a Cybran-specific stall.
                 inputCheck(matchTicks - stageStarted < 12000 && acceptanceFrames < 12000,
-                           "timeout at input stage " + std::to_string(inputStage));
+                           "timeout at input stage " + std::to_string(inputStage)
+                               + (inputStage == 0 && app.isActive
+                                      ? " (the app never became inactive: no other app took focus)"
+                                      : ""));
                 if (expectedInputCommand) {
                     const auto& expected = *expectedInputCommand;
                     std::size_t accepted = 0;

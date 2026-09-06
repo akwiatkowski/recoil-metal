@@ -99,5 +99,20 @@ passed; all four compact 1x faction cases also passed. A later startup deactivat
 race is handled by waiting for AppKit's inactive state before starting input.
 The final isolated-input run recorded
 22 complete passing cases before session wrap-up. Wide 2x Cybran was incomplete
-and wide 2x Seraphim had no completed result. No further headed runs were made
-at the user's request; the Attack extension is not verified across all 24 cases.
+and wide 2x Seraphim had no completed result.
+
+On 2026-09-06 the two remaining cases, wide 2x Cybran and wide 2x Seraphim,
+passed (`acceptance/2026-09-06-native-input-wide2x`, 5 and 6 products, zero page
+clicks), completing the 24-case matrix for the Attack extension. Two earlier
+attempts that day timed out at input stage 0 for a reason the report now names:
+the fixture waits for AppKit to grant deactivation, which needs another app
+willing to take focus, and an unattended desktop launched from a background
+shell never grants it. The passing run kept a helper activating Finder every
+twelve seconds during startup:
+
+```sh
+( for i in $(seq 1 40); do sleep 12; osascript -e 'tell application "Finder" to activate'; done ) &
+```
+
+This is a property of the deactivation handshake, not of Cybran or the wide
+profile; the earlier "incomplete" result most likely had the same cause.
