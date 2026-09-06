@@ -729,7 +729,8 @@ function __rm_faf_decide(army, snap)
     -- more parallel build, exactly what an engineer is for.
     local builderPool = {}
     for _, u in ipairs(snap.units) do
-        if u.idle and EntityCategoryContains(categories.ENGINEER - categories.COMMAND, u) then
+        if u.idle and not u.reclaiming
+            and EntityCategoryContains(categories.ENGINEER - categories.COMMAND, u) then
             table.insert(builderPool, u)
         end
     end
@@ -759,6 +760,13 @@ function __rm_faf_decide(army, snap)
             -- condition argument) widens the search from three rings to eight, as the
             -- condition itself does.
             if data and data.StateMachine == 'AIPlatoonAdaptiveReclaimBehavior' then
+                -- InstanceCount: how many reclaim platoons this builder may run at once.
+                -- Engineers already reclaiming are those platoons.
+                local active = 0
+                for _, u in ipairs(snap.units) do
+                    if u.reclaiming then active = active + 1 end
+                end
+                if active >= (item.spec.InstanceCount or 1) then return false end
                 local rings = 3
                 for _, cond in ipairs(item.spec.BuilderConditions or {}) do
                     if cond[2] == 'ReclaimAvailableInGrid' and cond[3] and cond[3][2] then
@@ -1444,6 +1452,15 @@ void FafOpponent::advance(rm::TickIndex tick) {
         // builder — stated in the driver where the counts gate decisions.
         lua_pushboolean(lua, motion[slot].moving ? 0 : 1);
         lua_setfield(lua, -2, "idle");
+        // Reclaiming: standing at a wreck counts as idle above, so the reclaim builders read
+        // this instead — retail's InstanceCount caps their platoons, and an engineer already
+        // on one is not handed another every pass.
+        const rm::sim::QueuedCommand* head = scene.store.orders()[slot].active();
+        const bool reclaiming = head != nullptr
+            && (head->kind() == rm::sim::CommandKind::Reclaim
+                || head->kind() == rm::sim::CommandKind::ReclaimUnit);
+        lua_pushboolean(lua, reclaiming ? 1 : 0);
+        lua_setfield(lua, -2, "reclaiming");
         if (std::find(upgrading.begin(), upgrading.end(), handles_.back())
             != upgrading.end()) {
             lua_pushboolean(lua, 1);
