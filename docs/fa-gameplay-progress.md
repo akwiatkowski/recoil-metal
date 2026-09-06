@@ -9,15 +9,19 @@ Detailed retail evidence remains canonical in
 [`fa-exe-analysis-plan.md`](fa-exe-analysis-plan.md). This dashboard summarizes that ledger; it
 does not replace its claims, addresses, counterevidence, or confirmation gate.
 
-**Snapshot:** 2026-09-06, main through `860056c`. This batch lands the skirmish
+**Snapshot:** 2026-09-06, main through `cb65218`. This batch lands the skirmish
 economy correction, engineer construction tiers with per-tier upgrade cancellation
 (ADR-095), weapon visuals resolved from the original Lua declarations with authored
-emitters, muzzle/impact effects and live beam endpoints (ADR-096 to ADR-099), the FAF
-watchdog cascade fix with paced condition evaluation (ADR-100), and a per-process
-VFS test scratch directory. The 1,800-second retail SCMP_009 duel now completes with
-zero instruction-budget failures and a hash-identical repeat. Retail-map/golden
-acceptance of the earlier selected batch remains outstanding; the golden baseline
-was not reblessed. Implementation does not establish whole-WP parity.
+emitters, muzzle/impact effects, live beam endpoints, ribbon trails and original
+projectile meshes (ADR-096 to ADR-099, ADR-101, ADR-103), the FAF watchdog cascade
+fix with paced condition evaluation and a native reclaim-grid snapshot (ADR-100,
+ADR-102), a per-process VFS test scratch directory, and the last two native input
+cases, completing the 24-case matrix. The 1,800-second retail SCMP_009 duel
+completes with zero instruction-budget failures, no missing brain methods and a
+hash-identical repeat. `make verify` still diverges at tick 0 against the golden
+recorded before the economy correction; reblessing it is a pending decision.
+`C-157` remains gated on a typed unit-work target (no unit-targeted reclaim or
+capture command exists yet). Implementation does not establish whole-WP parity.
 
 **Prior snapshot:** 2026-09-05, main through `76e781b`, plus the native inactive-window
 acceptance fix and evidence reconciliation. The selected
@@ -79,10 +83,10 @@ Retail-validated  [######--------------] about 30%
 Retail-analyzed   [##############------] about 70%
 ```
 
-The row estimates average 58.25%, 29.1% and 68.75%, respectively. The 2026-09-06
-refresh raised `FA-CMD` and `FA-ECON` implementation by 5 and `FA-PRESENT` by 10
-(analyzed by 15) for the weapon-visuals and upgrade-cancellation slices; no
-validation score changed.
+The row estimates average 58.5%, 29.1% and 68.75%, respectively. The 2026-09-06
+refresh raised `FA-CMD` and `FA-ECON` implementation by 5 and `FA-PRESENT` by 15
+(analyzed by 15) for the weapon-visuals, ribbon-trail, projectile-mesh and
+upgrade-cancellation slices; no validation score changed.
 
 Only **1 of 45 work packages**, `WP-15` economy, currently passes the complete retail
 confirmation gate. The three percentages must never be combined: understanding absent behavior
@@ -143,9 +147,9 @@ excluded from the headline.
 | [`FA-INTEL`](#fa-intel---vision-radar-sonar-and-counter-intel) | Vision, radar, sonar, counter-intel | `WP-33` | 75% | 45% | 90% | Apply radar-position error to automatic targeting without changing contact identity or ordering. |
 | [`FA-PROGRESS`](#fa-progress---enhancements-veterancy-and-special-units) | Enhancements, veterancy, special units | `WP-34`-`36` | 35% | 20% | 35% | Complete the enhancement lifecycle specification around `CUnitScriptTask`. |
 | [`FA-TERRAIN`](#fa-terrain---mutable-terrain-and-craters) | Mutable terrain and craters | `WP-37` | 0% | 0% | 25% | Trace one crater from damage through terrain, pathing, and rendering invalidation. |
-| [`FA-AI`](#fa-ai---retail-ai-and-native-manager-boundary) | Retail AI and native manager boundary | `WP-38` | 35% | 5% | 30% | Rerun retail-map sanity; specify observed GridReclaim, Nickname and islandMarker gaps. |
+| [`FA-AI`](#fa-ai---retail-ai-and-native-manager-boundary) | Retail AI and native manager boundary | `WP-38` | 35% | 5% | 30% | Dispatch a reclaim decision kind so the now-answered `ReclaimAvailableInGrid` can act; islandMarker remains. |
 | [`FA-UI`](#fa-ui---player-interface-and-advanced-controls) | Player interface and advanced controls | `WP-39`-`40` | 75% | 5% | 15% | Trace and implement the first retail data-driven command page from `WP-40`. |
-| [`FA-PRESENT`](#fa-present---animation-effects-and-audio) | Animation, effects, audio | `WP-41`-`42` | 65% | 5% | 40% | Implement historical ribbon trails from the resolved TrailBlueprints, then the XSB audio path. |
+| [`FA-PRESENT`](#fa-present---animation-effects-and-audio) | Animation, effects, audio | `WP-41`-`42` | 70% | 5% | 40% | Read mesh-blueprint LOD tables for the ten projectiles whose mesh breaks the file-name rule, then the XSB audio path. |
 | [`FA-PERSIST`](#fa-persist---replay-hashing-and-saveresume) | Replay, hashing, save/resume | `WP-43`-`44` | 70% | 20% | 90% | Complete retail/golden acceptance of v16 continuation; general app saves remain absent. |
 
 ## Starting Work
@@ -506,7 +510,12 @@ instruction-budget failures: the watchdog refills before raising with a bounded
 cap, first condition-cache expiries are staggered across passes, and unit counts
 are memoised per pass by category text (ADR-100). The earlier 13 decision
 failures and 38 condition errors were one genuine overrun per pass plus a
-watchdog cascade. Team 0 still wins; only `GridReclaim` remains missing. See
+watchdog cascade. Team 0 still wins. `GridReclaim` is now answered from a native
+per-cell reclaim snapshot (ADR-102): only `ReclaimAvailableInGrid` reads it in this
+slice, and its passing changes no decision yet because reclaim builders carry a
+platoon state machine the driver does not dispatch. The 650-second two- and
+eight-army retail sanity runs on 2026-09-06 reported no instruction-budget
+overruns, zero thread errors and 107 modules executed. See
 [skirmish acceptance](skirmish-economy-acceptance.md).
 
 ```text
@@ -605,19 +614,22 @@ scripts, faction classes, `EffectTemplates.lua`, `defaultcollisionbeams.lua` —
 isolated Lua state: PolyTrails, FxTrails, beams, `FxMuzzleFlash` and the impact lists, with
 their emitter blueprints and DDS textures. Emitters follow authored curves, emission rates,
 blend modes including inverse modulation and refraction, and sort order; muzzle emitters
-track the resolved bone; beams follow live endpoints for the authored lifetime (ADR-096 to
-ADR-099, [weapon visuals acceptance](weapon-visuals-acceptance.md)).
+track the resolved bone; beams follow live endpoints for the authored lifetime; ribbon
+trails draw the original TrailBlueprints over each shot's recorded path; original
+projectile meshes draw through the unit pipeline, pointed along the shot's velocity
+(ADR-096 to ADR-103, [weapon visuals acceptance](weapon-visuals-acceptance.md)).
 
-**Largest gap:** historical ribbon trails, original projectile meshes and script-driven
-manipulators do not run, and blueprint/XSB-authored sound behavior does not run end to end.
-The gallery verifies this renderer, not pixel parity with retail.
+**Largest gap:** script-driven manipulators do not run, ten projectiles whose mesh
+blueprint breaks the file-name rule keep their strips, and blueprint/XSB-authored sound
+behavior does not run end to end. The gallery verifies this renderer, not pixel parity
+with retail.
 
 ```text
-/goal Advance FA-PRESENT by implementing historical ribbon trails from the resolved
-TrailBlueprints: a per-projectile position history keyed by a presentation serial, strips
-clipped to the authored length that keep fading after impact, drawn in the existing particle
-pass. Write focused tests first, verify in the offscreen weapon gallery, run make test and
-make verify, then update WP-41 and FA-PRESENT; the XSB audio path follows.
+/goal Advance FA-PRESENT by reading mesh-blueprint LOD tables (MeshName) for the ten
+projectiles whose lod0 mesh does not sit beside the mesh blueprint, then implement one
+ordinary weapon's blueprint Audio field to XSB cue to positional mixer playback path with
+owned retail data. Write focused tests first, run make test, update WP-41/WP-42 and
+FA-PRESENT, and leave dynamic music and broad effect hosting as explicit later slices.
 ```
 
 ### FA-PERSIST - Replay, Hashing, And Save/Resume

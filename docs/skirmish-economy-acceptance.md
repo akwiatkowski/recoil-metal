@@ -33,7 +33,12 @@ mise exec -- ./build/recoil-metal "$fa_install/maps/SCMP_009/SCMP_009.scmap" \
 ```
 
 For the second run, replace `--hash-log` with `--check-hash-log` using the same
-hash path and write stdout/stderr to `build/ai-economy-fixed-repeat.log`.
+hash path and write stdout/stderr to `build/ai-economy-fixed-repeat.log`. Keep
+the `--screenshot` arguments: they are what makes the pre-run exit headlessly.
+Without them the binary dispatches windowed mode after the simulation and opens
+a real window that stays up until closed, which once made a repeat look fifteen
+times slower than the recording run. The hash compare itself runs after the
+simulation and costs nothing measurable.
 Generated logs, hashes and images are local, reproducible build artifacts; the
 observations above are retained here so they survive a build-directory cleanup.
 
@@ -53,6 +58,16 @@ changes when conditions are re-checked; the outcome does not.
 
 The earlier 13 decision failures were one genuine overrun per affected pass plus
 a watchdog cascade, not thirteen slow conditions.
+
+A further rerun after `0eddc93` (GridReclaim answered from the native reclaim
+snapshot, ADR-102) reported no missing brain methods at all and reproduced the
+same battle to the tick: team 0 wins at 1,373.8 seconds, 3,395 shots, 345 units
+destroyed, all 500 constructions complete (`build/ai-gridreclaim.log`). The
+condition now passes truthfully but drives nothing yet, because reclaim
+builders carry a platoon state machine the driver does not dispatch. The
+650-second `make ai-sanity` runs with two and eight armies on the same retail
+map reported no instruction-budget overruns, zero thread errors and 107 modules
+executed (`build/ai-sanity-2.log`, `build/ai-sanity-8.log`).
 
 Engineer menu checks use `[engineer-tiers]` against real T1/T2/T3 blueprints.
 The T3 offscreen menu exposed 45 options with higher tiers first, including
