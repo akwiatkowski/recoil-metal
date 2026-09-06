@@ -1433,9 +1433,27 @@ void loadProjectileMeshes(UnitScene& scene, const rm::vfs::Vfs& content) {
         // blueprint with neither is an effect-only projectile and keeps its strip.
         std::optional<std::string_view> declared;
         if (display != nullptr) declared = display->stringAt("MeshBlueprint");
-        const std::string meshPath =
+        std::string meshPath =
             declared ? rm::blueprint::meshBeside(std::string{*declared}, "_mesh", 0).generic_string()
                      : rm::blueprint::meshBeside(path, rm::blueprint::kProjectileSuffix, 0).generic_string();
+        // A mesh blueprint's LOD table may point elsewhere: retail's shared
+        // `missile_default_mesh.bp` names `TAAMissileFlayer01_lod0.scm` and its textures
+        // outright. Its LOD 0 wins over the file-name rule when it says so.
+        std::string albedoPath;
+        std::string normalsPath;
+        if (declared) {
+            if (const auto meshBytes = content.read(*declared)) {
+                const auto meshTable = rm::lua::parseTable(std::string_view{
+                    reinterpret_cast<const char*>(meshBytes->data()), meshBytes->size()});
+                const rm::lua::Value* lods = meshTable ? meshTable->find("LODs") : nullptr;
+                if (lods != nullptr && !lods->items.empty()) {
+                    const rm::lua::Value& lod0 = lods->items.front();
+                    if (const auto name = lod0.stringAt("MeshName")) meshPath = std::string{*name};
+                    if (const auto name = lod0.stringAt("AlbedoName")) albedoPath = std::string{*name};
+                    if (const auto name = lod0.stringAt("NormalsName")) normalsPath = std::string{*name};
+                }
+            }
+        }
         const std::string meshKey = rm::foldedVisualKey(meshPath);
         auto batch = batchByMesh.find(meshKey);
         if (batch == batchByMesh.end()) {
@@ -1449,12 +1467,13 @@ void loadProjectileMeshes(UnitScene& scene, const rm::vfs::Vfs& content) {
             }
             scene.models.push_back(std::move(*model));
             const rm::Model& stored = scene.models.back();
+            if (albedoPath.empty()) albedoPath = scmTextureInVfs(meshPath, kScmDiffuseSuffix, content);
+            if (normalsPath.empty()) normalsPath = scmTextureInVfs(meshPath, kScmNormalsSuffix, content);
             const rm::TexturePair pair{
-                .diffuse = scene.textures.resolve(content, scmTextureInVfs(meshPath, kScmDiffuseSuffix, content), "albedo"),
+                .diffuse = scene.textures.resolve(content, albedoPath, "albedo"),
                 .shading = scene.textures.resolve(content, scmTextureInVfs(meshPath, kScmShadingSuffix, content), "specTeam"),
             };
-            const int normals =
-                scene.textures.resolve(content, scmTextureInVfs(meshPath, kScmNormalsSuffix, content), "normalsTS");
+            const int normals = scene.textures.resolve(content, normalsPath, "normalsTS");
             scene.batches.push_back(rm::UnitBatch{
                 .model = &stored, .instances = {}, .textures = pair, .normals = normals});
             batch = batchByMesh.emplace(meshKey, scene.batches.size() - 1).first;

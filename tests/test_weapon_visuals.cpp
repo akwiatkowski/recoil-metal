@@ -21,6 +21,7 @@ TEST_CASE("retail weapons resolve distinct textured bolts and beam strips", "[co
     REQUIRE(content.mountArchive(root / "mohodata.scd"));
     REQUIRE(content.mountArchive(root / "lua.scd"));
     REQUIRE(content.mountArchive(root / "units.scd"));
+    REQUIRE(content.mountArchive(root / "meshes.scd")); // shared projectile mesh blueprints
     auto visuals = rm::loadWeaponVisuals(content);
     REQUIRE_FALSE(visuals.find("UEL0201:MainGun#FxMuzzleFlash").empty());
     REQUIRE_FALSE(visuals.find("XSL0001:ChronotronCannon#FxMuzzleFlash").empty());
@@ -146,6 +147,16 @@ TEST_CASE("retail weapons resolve distinct textured bolts and beam strips", "[co
         REQUIRE(shell2 != scene.projectileMeshes.end());
         CHECK(shell1->second.batch == shell2->second.batch);
         CHECK(shell1->second.batch != mesh.batch);
+        // A mesh blueprint's LOD table can name another mesh outright: the shared
+        // missile_default_mesh.bp points the Aeon rocket at the Flayer missile's geometry,
+        // so both share one batch.
+        const auto rocket = scene.projectileMeshes.find(
+            rm::foldedVisualKey("/projectiles/ADFRocket01/ADFRocket01_proj.bp"));
+        const auto flayer = scene.projectileMeshes.find(
+            rm::foldedVisualKey("/projectiles/TAAMissileFlayer01/TAAMissileFlayer01_proj.bp"));
+        REQUIRE(rocket != scene.projectileMeshes.end());
+        REQUIRE(flayer != scene.projectileMeshes.end());
+        CHECK(rocket->second.batch == flayer->second.batch);
 
         rm::sim::Projectile flying;
         flying.visualId = gauss;

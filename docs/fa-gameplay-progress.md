@@ -149,7 +149,7 @@ excluded from the headline.
 | [`FA-TERRAIN`](#fa-terrain---mutable-terrain-and-craters) | Mutable terrain and craters | `WP-37` | 0% | 0% | 25% | Trace one crater from damage through terrain, pathing, and rendering invalidation. |
 | [`FA-AI`](#fa-ai---retail-ai-and-native-manager-boundary) | Retail AI and native manager boundary | `WP-38` | 35% | 5% | 30% | Dispatch a reclaim decision kind so the now-answered `ReclaimAvailableInGrid` can act; islandMarker remains. |
 | [`FA-UI`](#fa-ui---player-interface-and-advanced-controls) | Player interface and advanced controls | `WP-39`-`40` | 75% | 5% | 15% | Trace and implement the first retail data-driven command page from `WP-40`. |
-| [`FA-PRESENT`](#fa-present---animation-effects-and-audio) | Animation, effects, audio | `WP-41`-`42` | 70% | 5% | 40% | Read mesh-blueprint LOD tables for the ten projectiles whose mesh breaks the file-name rule, then the XSB audio path. |
+| [`FA-PRESENT`](#fa-present---animation-effects-and-audio) | Animation, effects, audio | `WP-41`-`42` | 70% | 5% | 40% | Implement one ordinary weapon's blueprint Audio field to XSB cue to positional playback path. |
 | [`FA-PERSIST`](#fa-persist---replay-hashing-and-saveresume) | Replay, hashing, save/resume | `WP-43`-`44` | 70% | 20% | 90% | Complete retail/golden acceptance of v16 continuation; general app saves remain absent. |
 
 ## Starting Work
@@ -619,16 +619,15 @@ trails draw the original TrailBlueprints over each shot's recorded path; origina
 projectile meshes draw through the unit pipeline, pointed along the shot's velocity
 (ADR-096 to ADR-103, [weapon visuals acceptance](weapon-visuals-acceptance.md)).
 
-**Largest gap:** script-driven manipulators do not run, ten projectiles whose mesh
-blueprint breaks the file-name rule keep their strips, and blueprint/XSB-authored sound
-behavior does not run end to end. The gallery verifies this renderer, not pixel parity
-with retail.
+**Largest gap:** script-driven manipulators do not run, and blueprint/XSB-authored sound
+behavior does not run end to end. Mesh blueprints' LOD tables are honoured (100 retail
+projectile meshes load); only blueprints whose mesh blueprint is absent from the archives
+keep their strips. The gallery verifies this renderer, not pixel parity with retail.
 
 ```text
-/goal Advance FA-PRESENT by reading mesh-blueprint LOD tables (MeshName) for the ten
-projectiles whose lod0 mesh does not sit beside the mesh blueprint, then implement one
-ordinary weapon's blueprint Audio field to XSB cue to positional mixer playback path with
-owned retail data. Write focused tests first, run make test, update WP-41/WP-42 and
+/goal Advance FA-PRESENT by implementing one ordinary weapon's complete blueprint Audio field
+to XSB cue resolution to positional mixer playback path using owned retail data. Write parser
+and cue selection tests, verify the sound in a real match, run make test, update WP-42 and
 FA-PRESENT, and leave dynamic music and broad effect hosting as explicit later slices.
 ```
 

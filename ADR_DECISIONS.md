@@ -3369,7 +3369,8 @@ those definitions. Mesh batches carry no unit slots, so picking never lands on a
 
 **Alternatives and consequences.** A dedicated projectile pipeline would duplicate the
 unit shader for the same geometry. Lazy loading would need the VFS at draw time; eager
-loading costs about a hundred small models at startup. Not covered: mesh blueprints
-whose LOD table names a mesh that does not follow the rule (ten retail blueprints,
-including the Seraphim Laanse missile), `MeshScaleVelocity`, LOD cutoffs, and roll
-about the flight axis.
+loading costs about a hundred small models at startup. A mesh blueprint's LOD 0
+`MeshName`/`AlbedoName`/`NormalsName` override the rule when present, which is how
+the shared default missile resolves. Not covered: mesh blueprints absent from the
+archives (the Seraphim Laanse missile), `MeshScaleVelocity`, LOD cutoffs, the
+`TMeshNoLighting` shader, and roll about the flight axis.
