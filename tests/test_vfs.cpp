@@ -17,10 +17,18 @@
 #include <string_view>
 #include <vector>
 
+#include <unistd.h>
+
 namespace {
 
+// One directory PER PROCESS. `ctest -j` runs every test case as its own rm_tests
+// process, and two of them wiping a shared "rm_vfs_test" around each other made
+// the archive tests fail under load and pass on rerun. Within one process the
+// cases run sequentially, so the pid is all the uniqueness needed.
 [[nodiscard]] std::filesystem::path scratch() {
-    return std::filesystem::temp_directory_path() / "rm_vfs_test";
+    static const std::filesystem::path dir =
+        std::filesystem::temp_directory_path() / ("rm_vfs_test-" + std::to_string(getpid()));
+    return dir;
 }
 
 /// Writes a ZIP with the given (name, contents) pairs. Deleted by the fixture.
