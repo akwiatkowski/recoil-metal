@@ -37,6 +37,23 @@ hash path and write stdout/stderr to `build/ai-economy-fixed-repeat.log`.
 Generated logs, hashes and images are local, reproducible build artifacts; the
 observations above are retained here so they survive a build-directory cleanup.
 
+## After the instruction-budget fix
+
+Rerun on 2026-09-06 with the same command after `860056c` (ADR-100: bounded
+watchdog refills, staggered condition-cache expiry, per-pass unit-count memo),
+writing `build/ai-budget-fixed.{log,hash,png}`. The AI reported zero decision
+failures and zero condition errors; the only missing brain field is `GridReclaim`
+(783 reads). It executed 107 modules with nine absent, zero failed modules and
+zero thread errors. Team 0 won at 1,373.8 seconds after 3,395 shots and 345 units
+destroyed, completing all 500 construction records; army 0 held 1,750 mass and
+5,000 energy, earning 110.5 mass and 665 energy per second, 100% funded against
+284 energy per second of upkeep. A repeat with `--check-hash-log` matched all
+18,000 tick hashes. The course differs from the earlier log because staggering
+changes when conditions are re-checked; the outcome does not.
+
+The earlier 13 decision failures were one genuine overrun per affected pass plus
+a watchdog cascade, not thirteen slow conditions.
+
 Engineer menu checks use `[engineer-tiers]` against real T1/T2/T3 blueprints.
 The T3 offscreen menu exposed 45 options with higher tiers first, including
 authored experimentals, and pagination for lower tiers. Unenhanced ACUs remain

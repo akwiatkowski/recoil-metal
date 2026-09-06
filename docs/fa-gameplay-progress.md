@@ -9,7 +9,17 @@ Detailed retail evidence remains canonical in
 [`fa-exe-analysis-plan.md`](fa-exe-analysis-plan.md). This dashboard summarizes that ledger; it
 does not replace its claims, addresses, counterevidence, or confirmation gate.
 
-**Snapshot:** 2026-09-05, main through `76e781b`, plus the native inactive-window
+**Snapshot:** 2026-09-06, main through `860056c`. This batch lands the skirmish
+economy correction, engineer construction tiers with per-tier upgrade cancellation
+(ADR-095), weapon visuals resolved from the original Lua declarations with authored
+emitters, muzzle/impact effects and live beam endpoints (ADR-096 to ADR-099), the FAF
+watchdog cascade fix with paced condition evaluation (ADR-100), and a per-process
+VFS test scratch directory. The 1,800-second retail SCMP_009 duel now completes with
+zero instruction-budget failures and a hash-identical repeat. Retail-map/golden
+acceptance of the earlier selected batch remains outstanding; the golden baseline
+was not reblessed. Implementation does not establish whole-WP parity.
+
+**Prior snapshot:** 2026-09-05, main through `76e781b`, plus the native inactive-window
 acceptance fix and evidence reconciliation. The selected
 batch adds combat Guard, individual factory cancellation, bounded air combat
 states 3-7, economy/army save continuation, observed FAF query bindings and wreck
@@ -18,7 +28,7 @@ The required retail projectile archive and retail-map/golden gates remain blocke
 by the disconnected install. Existing subsystem estimates are retained until
 that acceptance can be completed; implementation does not establish whole-WP parity.
 
-**Prior snapshot:** 2026-09-04, Recoil Metal main through HUD slice 7 — the measured interface
+**Earlier snapshot:** 2026-09-04, Recoil Metal main through HUD slice 7 — the measured interface
 baseline (`docs/hud-baseline.md`, `tools/hud_baseline.sh`, `--backing`, `--bench-hud`,
 `--bench-size`) — after the `WP-22` controller read and six follow-ups (parked flyers recharge, the look-ahead max pyramid, attached children take their
 carrier's tilt, mesh extents and build-effect bones parsed with a bone-to-world helper, the
@@ -64,14 +74,15 @@ retail artifact `ART-E001`
 Equal-weight average across the 20 gameplay subsystem rows below; `FA-FOUND` is excluded:
 
 ```text
-Implemented       [###########---------] about 55%
+Implemented       [############--------] about 60%
 Retail-validated  [######--------------] about 30%
 Retail-analyzed   [##############------] about 70%
 ```
 
-The retained row estimates average 57.25%, 29.1% and 68.0%, respectively.
-The validation headline corrects the earlier arithmetic; no subsystem score was
-raised by this reconciliation.
+The row estimates average 58.25%, 29.1% and 68.75%, respectively. The 2026-09-06
+refresh raised `FA-CMD` and `FA-ECON` implementation by 5 and `FA-PRESENT` by 10
+(analyzed by 15) for the weapon-visuals and upgrade-cancellation slices; no
+validation score changed.
 
 Only **1 of 45 work packages**, `WP-15` economy, currently passes the complete retail
 confirmation gate. The three percentages must never be combined: understanding absent behavior
@@ -120,8 +131,8 @@ excluded from the headline.
 | [`FA-CONTENT`](#fa-content---vfs-blueprints-maps-and-bootstrap) | VFS, blueprints, maps, bootstrap | `WP-05`, `06`, `09` | 65% | 35% | 55% | Trace and test exact retail SCD mount/override precedence. |
 | [`FA-LUA`](#fa-lua---gameplay-lua-and-mod-contract) | Gameplay Lua and mod contract | `WP-07`-`08` | 10% | 5% | 30% | Measure the exact Moho contract for the milestone-20 skirmish slice. |
 | [`FA-MATCH`](#fa-match---armies-setup-and-victory-rules) | Armies, setup, victory rules | `WP-10`-`11` | 60% | 25% | 85% | Recover the retail lobby/scenario victory-mode selector; do not wire a synthetic app setting. |
-| [`FA-CMD`](#fa-cmd---commands-controls-and-factories) | Commands, controls, factories | `WP-12`-`14` | 80% | 65% | 75% | Complete retail acceptance of Guard/cancellation; refuel/staging remains. |
-| [`FA-ECON`](#fa-econ---economy-construction-and-engineering) | Economy, construction, engineering | `WP-15`-`19` | 70% | 55% | 90% | Name the capture increment at `Unit+0x690` and read `Sim::TransferUnit`'s copy/reset inventory, then specify the smallest capture slice. |
+| [`FA-CMD`](#fa-cmd---commands-controls-and-factories) | Commands, controls, factories | `WP-12`-`14` | 85% | 65% | 75% | Complete retail acceptance of Guard; refuel/staging remains. |
+| [`FA-ECON`](#fa-econ---economy-construction-and-engineering) | Economy, construction, engineering | `WP-15`-`19` | 75% | 55% | 90% | Name the capture increment at `Unit+0x690` and read `Sim::TransferUnit`'s copy/reset inventory, then specify the smallest capture slice. |
 | [`FA-LAND`](#fa-land---land-navigation-formations-and-spatial-world) | Land navigation, formations, spatial world | `WP-20`, `21`, `26` | 85% | 30% | 95% | Add bounded formation rotation or category matching without changing path-service ordering. |
 | [`FA-AIR`](#fa-air---aircraft-flight-combat-and-staging) | Aircraft flight, combat, staging | `WP-22` | 65% | 55% | 95% | Complete retail/golden acceptance of planar states 3-7; full banking remains. |
 | [`FA-NAVY`](#fa-navy---surface-and-submerged-warfare) | Surface and submerged warfare | `WP-23`-`24` | 35% | 10% | 75% | Implement one complete `SurfacingSub` dive/surface slice. |
@@ -134,7 +145,7 @@ excluded from the headline.
 | [`FA-TERRAIN`](#fa-terrain---mutable-terrain-and-craters) | Mutable terrain and craters | `WP-37` | 0% | 0% | 25% | Trace one crater from damage through terrain, pathing, and rendering invalidation. |
 | [`FA-AI`](#fa-ai---retail-ai-and-native-manager-boundary) | Retail AI and native manager boundary | `WP-38` | 35% | 5% | 30% | Rerun retail-map sanity; specify observed GridReclaim, Nickname and islandMarker gaps. |
 | [`FA-UI`](#fa-ui---player-interface-and-advanced-controls) | Player interface and advanced controls | `WP-39`-`40` | 75% | 5% | 15% | Trace and implement the first retail data-driven command page from `WP-40`. |
-| [`FA-PRESENT`](#fa-present---animation-effects-and-audio) | Animation, effects, audio | `WP-41`-`42` | 55% | 5% | 25% | Complete one blueprint-audio-to-XSB-cue playback path. |
+| [`FA-PRESENT`](#fa-present---animation-effects-and-audio) | Animation, effects, audio | `WP-41`-`42` | 65% | 5% | 40% | Implement historical ribbon trails from the resolved TrailBlueprints, then the XSB audio path. |
 | [`FA-PERSIST`](#fa-persist---replay-hashing-and-saveresume) | Replay, hashing, save/resume | `WP-43`-`44` | 70% | 20% | 90% | Complete retail/golden acceptance of v16 continuation; general app saves remain absent. |
 
 ## Starting Work
@@ -236,7 +247,10 @@ the command stage runs retail task-status timing, lifecycle cleanup is queue-own
 state survives SaveState v12 and hashing without coupling Lua to the sim core.
 Explicit combat-unit Guard now reuses that ladder while checking authored build,
 repair and reclaim eligibility. Stable-ID cancellation removes one active or
-pending factory row without consuming unrelated work. Guard's mirrored construction
+pending factory row without consuming unrelated work, and now also a pending or
+active structure upgrade together with its dependent later tiers, through the same
+production panel; engineers and factories share the authored `BuildableCategory`
+menu by tier (ADR-095). Guard's mirrored construction
 identity is separate from its retained own-build command. Command-log v3 retains
 v2 readers. Native acceptance exercises Guard targeting, Stop, paginated queue
 cancellation and Clear Queue; see [native input acceptance](native-input-acceptance.md).
@@ -260,6 +274,9 @@ copy/reset field inventory — all named, none guessed. Ordinary mobile construc
 `C-248`: the active Build order routes the engineer toward the site and creates no construction
 until centre distance minus the builder's smaller footprint and target's larger skirt is within
 `Economy.MaxBuildDistance`; factory production and upgrades retain their separate immediate paths.
+T1/T2/T3 engineers now offer their authored construction tiers, including shields and
+experimentals, while unenhanced ACUs keep the T1 menu until enhancements are modelled;
+extractor upgrade chains can be cancelled per tier (`[engineer-tiers]`, `make test-upgrade-ui`).
 
 ```text
 /goal Advance FA-ECON by reading the capture progress increment at Unit+0x690 (C-239's open edge,
@@ -484,6 +501,13 @@ runs completed 6,500 ticks with two/eight armies, built 16/64 units, and reporte
 zero module failures, thread errors or instruction-budget overruns. They fired
 no shots and do not replace the retail-map combat run. Remaining observed fields
 are GridReclaim, Nickname and islandMarker; no dummy bindings were added.
+The 2026-09-06 retail SCMP_009 duel (1,800 s, two FAF armies) is now free of
+instruction-budget failures: the watchdog refills before raising with a bounded
+cap, first condition-cache expiries are staggered across passes, and unit counts
+are memoised per pass by category text (ADR-100). The earlier 13 decision
+failures and 38 condition errors were one genuine overrun per pass plus a
+watchdog cascade. Team 0 still wins; only `GridReclaim` remains missing. See
+[skirmish acceptance](skirmish-economy-acceptance.md).
 
 ```text
 /goal Rerun the two/eight-army 650-second sanity matches with full retail content. Specify
@@ -576,14 +600,24 @@ run the full suite and golden replay, and update FA-UI.
 seconds, matching `EffectUtilities.lua:227-303`; stalled work emits nothing. Other factions keep
 the existing centre stream until their authored construction styles land.
 
-**Largest gap:** generic rendering and mixing exist, but script-driven manipulators/effects and
-blueprint/XSB-authored sound behavior do not run end to end.
+Weapon effects now resolve from the original Lua declarations — projectile and unit
+scripts, faction classes, `EffectTemplates.lua`, `defaultcollisionbeams.lua` — executed in an
+isolated Lua state: PolyTrails, FxTrails, beams, `FxMuzzleFlash` and the impact lists, with
+their emitter blueprints and DDS textures. Emitters follow authored curves, emission rates,
+blend modes including inverse modulation and refraction, and sort order; muzzle emitters
+track the resolved bone; beams follow live endpoints for the authored lifetime (ADR-096 to
+ADR-099, [weapon visuals acceptance](weapon-visuals-acceptance.md)).
+
+**Largest gap:** historical ribbon trails, original projectile meshes and script-driven
+manipulators do not run, and blueprint/XSB-authored sound behavior does not run end to end.
+The gallery verifies this renderer, not pixel parity with retail.
 
 ```text
-/goal Advance FA-PRESENT by implementing one ordinary weapon's complete blueprint Audio field to
-XSB cue resolution to positional mixer playback path using owned retail data. Write parser and cue
-selection tests, verify the sound in a real match, run make test, update WP-42 and FA-PRESENT, and
-leave dynamic music and broad effect hosting as explicit later slices.
+/goal Advance FA-PRESENT by implementing historical ribbon trails from the resolved
+TrailBlueprints: a per-projectile position history keyed by a presentation serial, strips
+clipped to the authored length that keep fading after impact, drawn in the existing particle
+pass. Write focused tests first, verify in the offscreen weapon gallery, run make test and
+make verify, then update WP-41 and FA-PRESENT; the XSB audio path follows.
 ```
 
 ### FA-PERSIST - Replay, Hashing, And Save/Resume
