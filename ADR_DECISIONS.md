@@ -3374,3 +3374,25 @@ loading costs about a hundred small models at startup. A mesh blueprint's LOD 0
 the shared default missile resolves. Not covered: mesh blueprints absent from the
 archives (the Seraphim Laanse missile), `MeshScaleVelocity`, LOD cutoffs, the
 `TMeshNoLighting` shader, and roll about the flight axis.
+
+## ADR-104 — A script-object seam that names the store's two destruction moments
+
+**Context.** WP-03 was analyzed but "not ready" for want of a script boundary to test:
+retail resolves every native call's receiver fresh from `_c_object` (C-044), nulls it in
+`~CScriptObject` (C-045), and distinguishes "death queued, object still readable" from
+"pointer gone" (C-046). Fifty-four resolvers raise "Game object has been destroyed";
+nineteen lifecycle queries accept a destroyed object.
+
+**Decision.** `UnitStore::resolve(UnitId)` returns the slot and one of `Alive`,
+`Destroyed` (health gone this tick, handle still held; the tombstone slot is readable)
+or `Stale` (released in `retireDead`; the slot may belong to another unit). It is computed
+on every call and never cached. `ScriptObject.hpp` maps the two retail resolver families
+onto it: `requireAlive` yields the slot or the retail error string verbatim, and
+`lifecycleSlot` accepts `Destroyed`; `beenDestroyed` is retail's `Entity:BeenDestroyed`.
+Tests cover all three states, slot reuse, and hash neutrality.
+
+**Alternatives and consequences.** Deferring `kill()` to the next tick would mirror
+retail's purge window but flips `slotAlive` a tick later in every state hash and needs a
+serialized pending list; the generation already gives the safety the delay exists for, so
+tick order and hashes are untouched. Adopting the seam in the FAF driver (replacing its
+per-pass index handles) is FA-LUA work and is not done here.

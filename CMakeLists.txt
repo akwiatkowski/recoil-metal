@@ -338,6 +338,7 @@ if(BUILD_TESTING)
         tests/test_command.cpp
         tests/test_command_queue.cpp
         tests/test_script_task.cpp
+        tests/test_script_handle.cpp
         tests/test_events.cpp
         tests/test_features.cpp
         tests/test_reclaim.cpp

@@ -131,7 +131,7 @@ excluded from the headline.
 | ID | Subsystem | Source WPs | Implemented | Retail-validated | Retail-analyzed | Exact next task |
 |---|---|---|---:|---:|---:|---|
 | [`FA-FOUND`](#fa-found---retail-build-and-api-foundation) | Retail build and API foundation | `WP-00`-`02` | n/a | 75% | 85% | Bind an authoritative Steam depot/build manifest to `ART-E001`. |
-| [`FA-SIM`](#fa-sim---simulation-kernel-and-object-lifecycle) | Simulation kernel and object lifecycle | `WP-03`-`04` | 65% | 40% | 90% | Add the safe script-object lifecycle seam needed by the Lua host. |
+| [`FA-SIM`](#fa-sim---simulation-kernel-and-object-lifecycle) | Simulation kernel and object lifecycle | `WP-03`-`04` | 70% | 40% | 90% | Route the FAF driver's unit handles through the new script-object seam instead of per-pass indices. |
 | [`FA-CONTENT`](#fa-content---vfs-blueprints-maps-and-bootstrap) | VFS, blueprints, maps, bootstrap | `WP-05`, `06`, `09` | 65% | 35% | 55% | Trace and test exact retail SCD mount/override precedence. |
 | [`FA-LUA`](#fa-lua---gameplay-lua-and-mod-contract) | Gameplay Lua and mod contract | `WP-07`-`08` | 10% | 5% | 30% | Measure the exact Moho contract for the milestone-20 skirmish slice. |
 | [`FA-MATCH`](#fa-match---armies-setup-and-victory-rules) | Armies, setup, victory rules | `WP-10`-`11` | 60% | 25% | 85% | Recover the retail lobby/scenario victory-mode selector; do not wire a synthetic app setting. |
@@ -182,14 +182,22 @@ provenance uncertainty, and updating WP-00 plus docs/fa-gameplay-progress.md wit
 
 ### FA-SIM - Simulation Kernel And Object Lifecycle
 
-**Largest gap:** core deterministic simulation exists, but there is no retail-shaped script object
-whose native handle is resolved safely and invalidated during deferred destruction.
+The script-object lifecycle seam exists (ADR-104): `UnitStore::resolve` names a handle's
+state as `Alive`, `Destroyed` (dead this tick, slot still readable, retail's `BeenDestroyed`)
+or `Stale` (released by `retireDead`), computed fresh on every call; `ScriptObject.hpp` maps
+retail's two resolver families onto it, raising "Game object has been destroyed" verbatim
+for the strict one. `[script-handle]` tests cover all three states, slot reuse and hash
+neutrality. Tick order, the tombstone store and the state hash are unchanged.
+
+**Largest gap:** no script host uses the seam yet — the FAF driver still hands Lua per-pass
+indices — and retail's purge delay is represented by the generation, not by a deferred kill.
 
 ```text
-/goal Advance FA-SIM by implementing the smallest safe script-object lifecycle seam: stable native
-entity handles, fresh resolution, deferred-destruction invalidation, and destroyed-handle failure
-tests. Preserve deterministic state, run make test and make verify, then update WP-03 and the
-FA-SIM dashboard row with evidence.
+/goal Advance FA-SIM by routing the FAF driver's unit handles through the script-object seam:
+replace per-pass index handles with UnitId-backed objects resolved through requireAlive and
+lifecycleSlot, raise the retail error on stale use, and add a destroyed-handle test through
+the driver. Preserve deterministic state, run make test and make verify, then update WP-03
+and the FA-SIM dashboard row with evidence.
 ```
 
 ### FA-CONTENT - VFS, Blueprints, Maps, And Bootstrap

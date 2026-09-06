@@ -104,6 +104,32 @@ public:
 
     [[nodiscard]] bool alive(UnitId id) const noexcept { return ids_.alive(id); }
 
+    /// What a handle names right now — the script-object lifecycle seam (WP-03, C-044 to
+    /// C-046). Retail has two meanings of "destroyed": a unit whose death is queued but whose
+    /// native object still exists, which scripts may keep reading, and a unit whose object
+    /// pointer has been nulled, which raises "Game object has been destroyed". The tombstone
+    /// store already has both moments: health reaches zero in the tick's combat phase and the
+    /// handle is released in `retireDead` at the tick's end. This names them.
+    enum class HandleState : std::uint8_t {
+        Alive,      ///< live unit, every field meaningful
+        Destroyed,  ///< dead this tick, slot still resolvable for final-state reads (C-046)
+        Stale,      ///< handle released; the slot may already belong to someone else (C-045)
+    };
+    struct Resolved {
+        UnitIndex slot = 0;
+        HandleState state = HandleState::Stale;
+    };
+    /// Resolved FRESH on every call and never cached, which is C-044's rule: the answer can
+    /// change within a tick, and a cached slot would follow the slot's next occupant.
+    [[nodiscard]] Resolved resolve(UnitId id) const noexcept {
+        if (!ids_.alive(id)) {
+            return Resolved{.slot = id.index, .state = HandleState::Stale};
+        }
+        const bool living = id.index < health_.size() && health_[id.index].alive();
+        return Resolved{.slot = id.index,
+                        .state = living ? HandleState::Alive : HandleState::Destroyed};
+    }
+
     /// Attaches a live child to a live parent. A child has exactly one parent, and an
     /// attachment may not introduce a cycle.
     [[nodiscard]] bool attach(UnitId parent, UnitId child);
