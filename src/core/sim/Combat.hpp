@@ -217,6 +217,18 @@ inline constexpr Seconds kProjectileLifetime = Seconds{30.0f};
 /// competes at the worst priority row; `fireWeapons` alone turns its projectile point of aim into
 /// the deterministic blip. Sonar and retained/dead radar contacts never enter this live-unit
 /// selection path.
+/// A unit some engineer is un-building this tick, and whose side that engineer is on.
+///
+/// Retail's `IsTargetExempt` (C-157, reject step 11 of `FindBestEnemy`): a candidate that an
+/// own-side engineer is reclaiming or capturing can neither become nor remain the incumbent
+/// — "do not shoot what my own side is taking apart." Derived per tick from the active
+/// `ReclaimUnit` orders (`collectUnitWorkClaims`), never saved. Capture does not exist yet,
+/// so today every claim is a reclaim.
+struct WorkClaim {
+    UnitIndex target = 0;
+    int workerArmy = kNoArmy;
+};
+
 [[nodiscard]] std::optional<UnitId> nearestTarget(std::array<Fx, 3> from, int fromArmy,
                                                   const unitdef::Weapon& weapon,
                                                    const UnitStore& store,
@@ -225,7 +237,8 @@ inline constexpr Seconds kProjectileLifetime = Seconds{30.0f};
                                                     const UnitCatalog* catalog = nullptr,
                                                     std::optional<Brad> heading = std::nullopt,
                                                     std::optional<UnitId> incumbent = std::nullopt,
-                                                    const PlayableRect* playableRect = nullptr);
+                                                    const PlayableRect* playableRect = nullptr,
+                                                    std::span<const WorkClaim> claims = {});
 
 /// The bearing from `from` to `to`, in radians, measured the way a unit's yaw is.
 ///
@@ -267,7 +280,7 @@ std::size_t aimAtTargets(UnitStore& store, const UnitCatalog& catalog,
                            std::span<const Army> armies, const Intel* intel = nullptr,
                            const std::vector<Projectile>* projectiles = nullptr,
                            const PlayableRect* playableRect = nullptr, TickIndex tick = 0,
-                           TickRate rate = TickRate{});
+                           TickRate rate = TickRate{}, std::span<const WorkClaim> claims = {});
 
 /// Advances reloads, picks targets, and appends the shots fired this tick.
 ///
@@ -285,7 +298,8 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
                            std::vector<Projectile>& projectiles, TickRate rate,
                            EventQueue* events = nullptr, const Intel* intel = nullptr,
                            const PlayableRect* playableRect = nullptr, TickIndex tick = 0,
-                           std::span<SiloAmmo> siloAmmo = {}, FeatureStore* features = nullptr);
+                           std::span<SiloAmmo> siloAmmo = {}, FeatureStore* features = nullptr,
+                           std::span<const WorkClaim> claims = {});
 
 /// Fires every held OVERCHARGE whose moment has come: target alive, in the manual
 /// weapon's range, reload ready, and the army's stored energy covering the shot's

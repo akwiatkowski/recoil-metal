@@ -3396,3 +3396,23 @@ retail's purge window but flips `slotAlive` a tick later in every state hash and
 serialized pending list; the generation already gives the safety the delay exists for, so
 tick order and hashes are untouched. Adopting the seam in the FAF driver (replacing its
 per-pass index handles) is FA-LUA work and is not done here.
+
+## ADR-105 — Unit reclaim as its own command kind, and the C-157 exemption on top
+
+**Context.** Retail's `IsTargetExempt` keeps a unit from shooting what an own-side engineer
+is reclaiming or capturing. The 2026-09-02 gate refused the predicate until a typed unit-work
+target existed, because `Reclaim` names a feature and `FeatureId`/`UnitId` share values.
+
+**Decision.** `CommandKind::ReclaimUnit` is the tag: one kind names a unit, the other a
+feature, and no handle is ever compared across streams. It executes with FAF's unit
+`GetReclaimCosts` formula (work = max(build cost mass, energy) at the reclaimer's BuildRate
+per second), C-147's proportional credit, and the fraction falling as health (C-099); a fully
+reclaimed unit is destroyed without a wreck, as `OnReclaimed` calls `Destroy`. Own and
+allied units are refused. Per tick, `collectUnitWorkClaims` derives claims from the queue
+heads and `nearestTarget` rejects a claimed candidate ahead of `DoNotTarget`, dropping an
+incumbent too. Save v17 admits the kind; command log v4 names it.
+
+**Alternatives and consequences.** A tagged target field or variant would touch every
+consumer and the save layout; the kind byte was already saved and logged. The FAF formula's
+bit-for-bit match with the native one is unverified, `ReclaimTimeMultiplier` is taken as one,
+and Capture is still absent, so the second retail pass has nothing to test.

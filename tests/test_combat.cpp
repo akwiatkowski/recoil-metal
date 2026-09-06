@@ -730,6 +730,35 @@ TEST_CASE("automatic acquisition skips DoNotTarget enemies") {
     CHECK(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, weapon, roster.store, armies) == near);
 }
 
+TEST_CASE("automatic acquisition skips a unit an own-side engineer is reclaiming (C-157)") {
+    // Retail's IsTargetExempt, step 11 of FindBestEnemy: what my side is taking apart is not
+    // shot, whether it would be the new target or the incumbent. An enemy's own reclaim of
+    // its unit exempts nothing for us.
+    std::vector<Army> armies = rm::sim::freeForAll(3);
+    armies[2].alliance = armies[0].alliance;  // army 2 is our ally
+    Roster roster;
+    const rm::UnitTypeIndex type = roster.addType(targetDef());
+    const UnitId near = roster.add(type, 0.0f, 50.0f, 1, 100.0f);
+    const UnitId far = roster.add(type, 0.0f, 100.0f, 1, 100.0f);
+    const Weapon weapon = directFire(10.0f, 300.0f);
+    const auto pick = [&](std::span<const rm::sim::WorkClaim> claims,
+                          std::optional<UnitId> incumbent = std::nullopt) {
+        return rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, weapon, roster.store, armies,
+                                      nullptr, nullptr, std::nullopt, incumbent, nullptr, claims);
+    };
+
+    const std::array<rm::sim::WorkClaim, 1> ours{{{.target = near.index, .workerArmy = 0}}};
+    CHECK(pick(ours) == far);
+    const std::array<rm::sim::WorkClaim, 1> allied{{{.target = near.index, .workerArmy = 2}}};
+    CHECK(pick(allied) == far);
+    const std::array<rm::sim::WorkClaim, 1> theirs{{{.target = near.index, .workerArmy = 1}}};
+    CHECK(pick(theirs) == near);
+    CHECK(pick({}) == near);
+    // The incumbent cannot remain one once our engineer starts on it.
+    CHECK(pick({}, near) == near);
+    CHECK(pick(ours, near) == far);
+}
+
 TEST_CASE("automatic acquisition rejects a closer target outside the playable rectangle") {
     const std::vector<Army> armies = rm::sim::freeForAll(2);
     Roster roster;

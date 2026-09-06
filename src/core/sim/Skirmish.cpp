@@ -440,8 +440,11 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
     // 2. AIM, then fire. An unturreted weapon may only shoot along the hull, so a unit
     //    that has stopped facing the wrong way has to be brought round first; otherwise
     //    the facing gate reads as a weapon that does not work.
+    // What own-side engineers are taking apart this tick, so no gun of theirs shoots it
+    // (C-157). Derived from the queue heads after dispatch, consumed by aim and fire only.
+    const std::vector<WorkClaim> claims = collectUnitWorkClaims(store);
     (void)aimAtTargets(store, catalog, match.armies, match.intel, match.projectiles,
-                          playableRect, tickIndex, rate);
+                          playableRect, tickIndex, rate, claims);
 
     // 3. FIRE, fly, land.
     if (match.projectiles != nullptr) {
@@ -449,7 +452,8 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
             fireWeapons(store, catalog, match.armies, *match.projectiles, rate, match.events,
                              match.intel, playableRect, tickIndex,
                              match.siloAmmo != nullptr ? std::span<SiloAmmo>{*match.siloAmmo}
-                                                       : std::span<SiloAmmo>{}, match.features);
+                                                       : std::span<SiloAmmo>{}, match.features,
+                             claims);
         // The held overcharges, after the guns and before the flight: a shot authorised
         // this tick flies this tick, and the energy it burned is gone before the economy
         // pass reads the store.
@@ -577,6 +581,8 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
         (void)harvestReclaim(store, catalog, *match.features, match.economies);
         (void)applyGuardReclaim(store, catalog, *match.features, match.economies, guardWork);
     }
+    // Units being un-built, in the same economy step and for the same reason as wrecks.
+    (void)reclaimUnits(store, catalog, match.economies, match.events);
     // Manual reclaim has priority over autonomous patrol service when both reach the same
     // final scrap. Patrol helpers also use the freshly recomputed storage cap to avoid waste.
     (void)servicePatrolBuilders(store, catalog, match.armies, match.features, match.economies);

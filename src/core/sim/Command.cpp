@@ -302,6 +302,8 @@ const char* commandKindName(CommandKind kind) noexcept {
         return "build";
     case CommandKind::Reclaim:
         return "reclaim";
+    case CommandKind::ReclaimUnit:
+        return "reclaim-unit";
     case CommandKind::Overcharge:
         return "overcharge";
     case CommandKind::Assist:
@@ -347,6 +349,9 @@ namespace {
     }
     if (name == "reclaim") {
         return CommandKind::Reclaim;
+    }
+    if (name == "reclaim-unit") {
+        return CommandKind::ReclaimUnit;
     }
     if (name == "overcharge") {
         return CommandKind::Overcharge;
@@ -417,6 +422,35 @@ namespace {
         return false;
     }
     return true;
+}
+
+/// Issue-time gate for ReclaimUnit: a builder, a living target of another side, and a target
+/// with a build cost to give back. Own and allied units are refused (Command.hpp explains).
+[[nodiscard]] bool validReclaimUnit(const Command& command, const UnitStore& store,
+                                    const UnitCatalog& catalog,
+                                    std::span<const Army> armies) noexcept {
+    if (!store.alive(command.target) || !store.health()[command.target.index].alive()
+        || command.target == command.unit) {
+        return false;
+    }
+    const unitdef::UnitDef* builder = catalog.def(store.typeAt(command.unit.index));
+    const unitdef::UnitDef* target = catalog.def(store.typeAt(command.target.index));
+    if (builder == nullptr || target == nullptr || !builder->isBuilder()
+        || std::max(target->buildCostMass, target->buildCostEnergy) <= Mag{}) {
+        return false;
+    }
+    if (armies.empty()) {
+        return true;  // the direct-dispatch compatibility seam has no alliance state to judge
+    }
+    const int owner = store.motion()[command.unit.index].armyIndex;
+    const int targetOwner = store.motion()[command.target.index].armyIndex;
+    const auto mine = std::ranges::find_if(armies, [owner](const Army& army) {
+        return army.index == owner;
+    });
+    const auto theirs = std::ranges::find_if(armies, [targetOwner](const Army& army) {
+        return army.index == targetOwner;
+    });
+    return mine != armies.end() && theirs != armies.end() && !allied(*mine, *theirs);
 }
 
 [[nodiscard]] bool repairStillAllied(UnitIndex builder, UnitId target, const UnitStore& store,
@@ -679,6 +713,10 @@ void teardownMovement(MoveState& motion) {
         return false;
     }
     if (command.kind == CommandKind::Repair && !validRepair(command, store, catalog, armies)) {
+        return false;
+    }
+    if (command.kind == CommandKind::ReclaimUnit
+        && !validReclaimUnit(command, store, catalog, armies)) {
         return false;
     }
 
@@ -1965,6 +2003,34 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
             continue;
         }
 
+        // THE UNIT-RECLAIM HOLD: the target is a unit, so it can walk away. In reach, hold
+        // still while `reclaimUnits` un-builds it; short of reach, follow — a fresh route
+        // every tick it is out of reach, the way an assist follows its target. The order
+        // completes when the target is gone, however it went.
+        if (const QueuedCommand* head = orders[slot].active();
+            head != nullptr && head->kind() == CommandKind::ReclaimUnit) {
+            if (store.alive(head->target()) && store.health()[head->target().index].alive()) {
+                MoveState& mine = store.motion()[slot];
+                const Transform& there = store.transforms()[head->target().index];
+                const Fx gap = groundDistanceElmos(positionOf(store.transforms()[slot]),
+                                                   positionOf(there));
+                if (gap <= repairReach(catalog, store.typeAt(slot), mine,
+                                       store.motion()[head->target().index])) {
+                    mine.moving = false;
+                    mine.path.clear();
+                    mine.pathIndex = 0;
+                    continue;
+                }
+                if (mine.moving) {
+                    continue;
+                }
+                if (routeUnit(slot, there.x, there.z, store, terrain, *grid)) {
+                    continue;
+                }
+            }
+            // Gone, or unreachable: the order is done. Fall through.
+        }
+
         // THE HARVEST HOLD, the reclaim twin of the chase above: a reclaim naming a wreck
         // that still holds value never completes by arrival — it completes when the wreck
         // is GONE, drained by this unit or any other. In reach it holds still and lets
@@ -2464,6 +2530,31 @@ bool startCommand(const Command& command, UnitStore& store, const UnitCatalog& c
         }
         return routeUnit(command.unit.index, wreck->at[0], wreck->at[2], store, terrain, grid);
     }
+    case CommandKind::ReclaimUnit: {
+        // The unit twin of Reclaim: the target is a living unit of another side, the
+        // reclaimer a builder, and the reach the build reach. Own or allied units are not
+        // reclaimable here: retail permits it, but its rules for that case are unread, and an
+        // order that quietly ate one's own tanks would be worse than a refused one.
+        if (!store.alive(command.target) || command.target.index == command.unit.index
+            || !store.health()[command.target.index].alive()) {
+            return false;
+        }
+        const unitdef::UnitDef* reclaimer = catalog.def(store.typeAt(command.unit.index));
+        const unitdef::UnitDef* target = catalog.def(store.typeAt(command.target.index));
+        if (reclaimer == nullptr || target == nullptr || !reclaimer->isBuilder()
+            || std::max(target->buildCostMass, target->buildCostEnergy) <= Mag{}) {
+            return false;
+        }
+        const Transform& at = store.transforms()[command.unit.index];
+        const Transform& there = store.transforms()[command.target.index];
+        const Fx reach = repairReach(catalog, store.typeAt(command.unit.index), motion,
+                                     store.motion()[command.target.index]);
+        if (groundDistanceElmos(positionOf(at), positionOf(there)) <= reach) {
+            teardownMovement(motion);
+            return true;
+        }
+        return routeUnit(command.unit.index, there.x, there.z, store, terrain, grid);
+    }
     case CommandKind::Repair: {
         // Validation at issue time establishes the alliance and damaged target. A queued repair
         // is still refused when it reaches the head after the target has already been restored.
@@ -2505,7 +2596,9 @@ bool startCommand(const Command& command, UnitStore& store, const UnitCatalog& c
 namespace {
 
 inline constexpr std::string_view kCommandLogMagic = "recoil-metal semantic command log";
-inline constexpr std::uint32_t kCommandLogVersion = 3;
+/// Version 4 adds the `reclaim-unit` kind name; versions 2 and 3 are still read, since a
+/// name their writers never produced cannot appear in them.
+inline constexpr std::uint32_t kCommandLogVersion = 4;
 
 [[nodiscard]] const char* phaseName(CommandPhase phase) noexcept {
     return phase == CommandPhase::PreTick ? "pre-tick" : "post-spawn";
@@ -2634,7 +2727,7 @@ std::optional<CommandLog> readCommandLog(const std::string& path,
         std::string label;
         std::string extra;
         if (!(fields >> label >> version) || label != "version"
-            || (version != 2 && version != kCommandLogVersion)
+            || (version != 2 && version != 3 && version != kCommandLogVersion)
             || fields >> extra) {
             return std::nullopt;
         }

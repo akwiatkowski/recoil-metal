@@ -210,6 +210,112 @@ std::size_t harvestReclaim(UnitStore& store, const UnitCatalog& catalog,
     return harvesting;
 }
 
+std::size_t reclaimUnits(UnitStore& store, const UnitCatalog& catalog,
+                         std::span<Economy> economies, EventQueue* events) {
+    std::size_t reclaiming = 0;
+    const std::span<const CommandQueue> orders = store.orders();
+    const std::span<const Transform> transforms = store.transforms();
+    const std::span<MoveState> motion = store.motion();
+
+    for (UnitIndex slot = 0; slot < orders.size(); ++slot) {
+        if (!store.slotAlive(slot) || !store.health()[slot].alive()) {
+            continue;
+        }
+        const QueuedCommand* head = orders[slot].active();
+        if (head == nullptr || head->kind() != CommandKind::ReclaimUnit) {
+            continue;
+        }
+        const UnitId target = head->target();
+        if (!store.alive(target) || !store.health()[target.index].alive()) {
+            continue;  // gone; `advanceOrders` retires the order
+        }
+        const UnitIndex victim = target.index;
+        const unitdef::UnitDef* def = catalog.def(store.typeAt(victim));
+        if (def == nullptr) {
+            continue;
+        }
+        const Mag total = std::max(def->buildCostMass, def->buildCostEnergy);
+        if (total <= Mag{}) {
+            continue;
+        }
+        const UnitTypeIndex type = store.typeAt(slot);
+        const Fx gap = groundDistanceElmos(positionOf(transforms[slot]),
+                                           positionOf(transforms[victim]));
+        if (gap > repairReach(catalog, type, motion[slot], motion[victim])) {
+            continue;  // still walking there
+        }
+
+        // Work per tick is the reclaimer's BuildRate per SECOND: FAF's duration is
+        // 0.1 × cost / BuildRate seconds for `cost` units of work, so a tick advances
+        // BuildRate of them — ten times the per-tick build figure the catalog derived.
+        Mag pace = catalog.rates(type).buildPerTick;
+        pace *= Fx::fromInt(10);
+        Health& health = store.health()[victim];
+        // The work left follows the fraction, and the fraction is the health (C-099).
+        const Mag remaining = proportionalWork(total, health.current, health.maximum);
+        const Mag applied = std::min(pace, remaining);
+        if (applied <= Mag{}) {
+            continue;
+        }
+        // The final slice pays whatever fraction is left exactly, so fixed-point dust never
+        // leaves a unit worth 0.3 mass standing.
+        const bool finalSlice = applied >= remaining;
+        const Mag massGrant = finalSlice
+            ? proportionalWork(def->buildCostMass, health.current, health.maximum)
+            : proportionalWork(def->buildCostMass, applied, total);
+        const Mag energyGrant = finalSlice
+            ? proportionalWork(def->buildCostEnergy, health.current, health.maximum)
+            : proportionalWork(def->buildCostEnergy, applied, total);
+        const int owner = motion[slot].armyIndex;
+        if (owner >= 0 && static_cast<std::size_t>(owner) < economies.size()) {
+            economies[static_cast<std::size_t>(owner)].stored.mass += massGrant;
+            economies[static_cast<std::size_t>(owner)].stored.energy += energyGrant;
+        }
+
+        if (finalSlice) {
+            // Destroyed, not killed: no kill credit, no wreck, no death explosion. Retiring
+            // the corpse here (radius zero, health zero, handle released) is what keeps
+            // `retireDead` from treating it as a death next tick — its `radiusElmos > 0`
+            // guard is the once-per-death rule, and this unit never died.
+            emit(events, Event{
+                             .kind = EventKind::UnitDestroyed,
+                             .unit = target,
+                             .instigator = store.idAt(slot),
+                             .army = motion[victim].armyIndex,
+                             .at = positionOf(transforms[victim]),
+                         });
+            health.current = Mag{};
+            motion[victim].moving = false;
+            motion[victim].speedPerTick = Fx{};
+            motion[victim].radiusElmos = Fx{};
+            store.kill(target);
+        } else {
+            health.current -= proportionalWork(health.maximum, applied, total);
+        }
+        ++reclaiming;
+    }
+    return reclaiming;
+}
+
+std::vector<WorkClaim> collectUnitWorkClaims(const UnitStore& store) {
+    std::vector<WorkClaim> claims;
+    const std::span<const CommandQueue> orders = store.orders();
+    const std::span<const MoveState> motion = store.motion();
+    for (UnitIndex slot = 0; slot < orders.size(); ++slot) {
+        if (!store.slotAlive(slot) || !store.health()[slot].alive()) {
+            continue;
+        }
+        const QueuedCommand* head = orders[slot].active();
+        if (head == nullptr || head->kind() != CommandKind::ReclaimUnit
+            || !store.alive(head->target())) {
+            continue;
+        }
+        claims.push_back(WorkClaim{.target = head->target().index,
+                                   .workerArmy = motion[slot].armyIndex});
+    }
+    return claims;
+}
+
 std::size_t applyGuardReclaim(UnitStore& store, const UnitCatalog& catalog,
                               FeatureStore& features, std::span<Economy> economies,
                               std::span<const GuardWork> work) {

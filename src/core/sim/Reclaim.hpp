@@ -1,6 +1,8 @@
 #pragma once
 
+#include "core/sim/Combat.hpp"
 #include "core/sim/Economy.hpp"
+#include "core/sim/Events.hpp"
 #include "core/sim/FeatureStore.hpp"
 #include "core/sim/UnitCatalog.hpp"
 #include "core/sim/UnitStore.hpp"
@@ -89,5 +91,32 @@ std::size_t applyRepairWork(UnitStore& store, const UnitCatalog& catalog,
 std::size_t servicePatrolBuilders(UnitStore& store, const UnitCatalog& catalog,
                                   std::span<const Army> armies, FeatureStore* features,
                                   std::span<Economy> economies);
+
+// Reclaiming a LIVING UNIT (`CommandKind::ReclaimUnit`).
+//
+// THE MECHANIC. Retail's `CUnitReclaimTask::TaskTick` (C-147) asks the target's Lua
+// `GetReclaimCosts` for a duration and both costs, converts the duration to ticks, then each
+// beat drives the target's `Materialize` with one negative progress step and credits the
+// army by the fraction actually applied. FAF's `Unit.lua:4024 GetReclaimCosts` for a unit:
+// duration = 0.1 × max(BuildCostEnergy, BuildCostMass) / BuildRate seconds, returning the
+// full build costs — so work per tick is the reclaimer's BuildRate per second, the total
+// work is the larger build cost, and a fully reclaimed unit pays its whole build cost. The
+// unit's fraction falls with the work (C-099: no health floor on a decrease), which here is
+// its health. At zero it is destroyed WITHOUT a wreck (`Unit.lua:819 OnReclaimed` calls
+// `Destroy`, not the kill path that leaves wreckage).
+//
+// NOT READ FROM RETAIL: whether that Lua formula matches the native one bit for bit (the
+// claim table has the native mechanism, not the unit-cost formula), the reclaimer's
+// `ReclaimTimeMultiplier` (a script field, taken as 1), and reclaiming one's own units.
+
+/// One tick of every ReclaimUnit order in reach: un-builds the target, credits the reclaimer's
+/// army, and destroys a fully reclaimed unit without a wreck. Run in the economy step with
+/// `harvestReclaim`. Returns how many reclaimers made progress.
+std::size_t reclaimUnits(UnitStore& store, const UnitCatalog& catalog,
+                         std::span<Economy> economies, EventQueue* events);
+
+/// The units being un-built this tick and by whose side, for C-157's targeting exemption.
+/// Derived from the active ReclaimUnit queue heads after dispatch; never saved.
+[[nodiscard]] std::vector<WorkClaim> collectUnitWorkClaims(const UnitStore& store);
 
 } // namespace rm::sim

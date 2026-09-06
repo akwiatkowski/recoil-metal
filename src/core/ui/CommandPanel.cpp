@@ -87,6 +87,7 @@ commandAvailability(std::span<const unitdef::UnitDef* const> selection) noexcept
         case sim::CommandKind::ToggleFactoryRepeat:
         case sim::CommandKind::CancelFactoryBuild:
         case sim::CommandKind::Script:
+        case sim::CommandKind::ReclaimUnit:  // reached through Reclaim's descriptor, not its own
             break;  // None has a command-rack descriptor.
         }
     }

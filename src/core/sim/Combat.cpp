@@ -935,7 +935,8 @@ std::optional<UnitId> nearestTarget(std::array<Fx, 3> from, int fromArmy,
                                        std::span<const Army> armies, const Intel* intel,
                                        const UnitCatalog* catalog, std::optional<Brad> heading,
                                        std::optional<UnitId> incumbent,
-                                       const PlayableRect* playableRect) {
+                                       const PlayableRect* playableRect,
+                                       std::span<const WorkClaim> claims) {
     if (!weapon.fires() || weapon.targetsProjectiles || weapon.targetPriorities.empty()) {
         return std::nullopt;
     }
@@ -957,6 +958,19 @@ std::optional<UnitId> nearestTarget(std::array<Fx, 3> from, int fromArmy,
         }
         if (!shootable(fromArmy, store, slot, armies)) {
             return std::nullopt;
+        }
+        // C-157's exemption, in retail's place: step 11, ahead of DoNotTarget. A unit an
+        // own-side engineer is un-building is not shot, whatever its priority row, and the
+        // incumbent passes through here too, so it is dropped the tick the reclaim begins.
+        for (const WorkClaim& claim : claims) {
+            if (claim.target != slot) continue;
+            const bool ownSide = claim.workerArmy == fromArmy
+                || (claim.workerArmy >= 0 && fromArmy >= 0
+                    && static_cast<std::size_t>(claim.workerArmy) < armies.size()
+                    && static_cast<std::size_t>(fromArmy) < armies.size()
+                    && allied(armies[static_cast<std::size_t>(claim.workerArmy)],
+                              armies[static_cast<std::size_t>(fromArmy)]));
+            if (ownSide) return std::nullopt;
         }
         if (store.doNotTarget(store.idAt(slot))) {
             return std::nullopt;
@@ -1082,7 +1096,8 @@ bool canFireAt(const unitdef::Weapon& weapon, Brad yaw, Brad bearing) noexcept {
 std::size_t aimAtTargets(UnitStore& store, const UnitCatalog& catalog,
                            std::span<const Army> armies, const Intel* intel,
                            const std::vector<Projectile>* projectiles,
-                           const PlayableRect* playableRect, TickIndex tick, TickRate rate) {
+                           const PlayableRect* playableRect, TickIndex tick, TickRate rate,
+                           std::span<const WorkClaim> claims) {
     const std::span<Transform> transforms = store.transforms();
     const std::span<const MoveState> motion = store.motion();
     const std::span<const Health> healths = store.health();
@@ -1142,7 +1157,8 @@ std::size_t aimAtTargets(UnitStore& store, const UnitCatalog& catalog,
                             : std::nullopt;
                     candidateUnit = nearestTarget(from, motion[slot].armyIndex, weapon, store,
                                                    armies, intel, &catalog,
-                                                   transforms[slot].heading, incumbent, playableRect);
+                                                   transforms[slot].heading, incumbent, playableRect,
+                                                   claims);
                 }
                 if (candidateUnit) {
                     candidatePosition = !hasExplicitAttack && !weapon.beam
@@ -1197,7 +1213,8 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
                            std::vector<Projectile>& projectiles, TickRate rate,
                            EventQueue* events, const Intel* intel,
                            const PlayableRect* playableRect, TickIndex tick,
-                           std::span<SiloAmmo> siloAmmo, FeatureStore* features) {
+                           std::span<SiloAmmo> siloAmmo, FeatureStore* features,
+                           std::span<const WorkClaim> claims) {
     std::size_t fired = 0;
 
     const std::span<const Transform> transforms = store.transforms();
@@ -1312,7 +1329,8 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
                        ? forced
                        : std::nullopt)
                 : nearestTarget(from, army, weapon, store, armies, intel, &catalog,
-                                 transforms[slot].heading, health.automaticTargets[w], playableRect);
+                                 transforms[slot].heading, health.automaticTargets[w], playableRect,
+                                 claims);
             if (!hasExplicitAttack) {
                 health.automaticTargets[w] = target.value_or(UnitId{});
             }

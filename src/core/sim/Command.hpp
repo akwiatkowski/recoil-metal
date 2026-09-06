@@ -118,6 +118,13 @@ enum class CommandKind : std::uint8_t {
     /// Cancel a factory product or structure upgrade by stable ID. Cancelling an upgrade also
     /// removes dependent later tiers. The historical name is retained in semantic logs.
     CancelFactoryBuild = 13,
+    /// Reclaim a UNIT rather than a wreck: walk into build reach and un-build it, crediting
+    /// its build cost as its fraction falls (`core/sim/Reclaim.hpp`). `target` names a unit,
+    /// which is what makes this a distinct kind from `Reclaim`: the kind byte IS the tag that
+    /// keeps a `UnitId` and a `FeatureId` from ever being compared (the C-157 gate). Retail
+    /// has one UNITCOMMAND_Reclaim for both; our numbering is already our own. Completes when
+    /// the target is gone — fully reclaimed by this unit or destroyed by anything else.
+    ReclaimUnit = 14,
 };
 
 [[nodiscard]] constexpr bool isGuardCommand(CommandKind kind) noexcept {

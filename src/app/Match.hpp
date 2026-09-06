@@ -230,6 +230,11 @@ extern bool gFafLog;
 /// issueAttack's sibling for a wreck: the FEATURE handle rides in `target`, the builder
 /// walks into reach and the harvest drains it (`core/sim/Reclaim.hpp`). Refused for a
 /// non-builder and for a wreck with nothing in it, exactly as the sim refuses them.
+/// Order `units` to reclaim the living unit `target` (`CommandKind::ReclaimUnit`).
+[[nodiscard]] bool issueReclaimUnit(UnitScene& scene, std::span<const rm::sim::UnitId> units,
+                                     rm::PlayerIndex player, rm::TickIndex tick,
+                                     rm::sim::UnitId target, bool queued);
+
 [[nodiscard]] bool issueReclaim(UnitScene& scene, std::span<const rm::sim::UnitId> units,
                                  rm::PlayerIndex player, rm::TickIndex tick,
                                  rm::sim::FeatureId wreck, bool queued = false);

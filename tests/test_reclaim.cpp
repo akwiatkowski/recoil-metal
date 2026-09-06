@@ -125,6 +125,17 @@ struct Fixture {
                                      &features);
     }
 
+    [[nodiscard]] bool reclaimUnit(UnitId who, UnitId target) {
+        const rm::sim::Transform& at = roster.store.transforms()[target.index];
+        return rm::sim::applyCommand(Command{.kind = CommandKind::ReclaimUnit,
+                                             .unit = who,
+                                             .targetX = at.x,
+                                             .targetZ = at.z,
+                                             .target = target},
+                                     roster.store, roster.catalog, players, armies, terrain,
+                                     grid, roster.rate, &building, nullptr, &features);
+    }
+
     [[nodiscard]] bool repair(UnitId who, UnitId target, bool queued = false) {
         return rm::sim::applyCommand(Command{.kind = CommandKind::Repair,
                                              .queued = queued,
@@ -398,6 +409,68 @@ TEST_CASE("a death leaves a wreck worth the definition's word, and reclaim empti
     f.tick(18);
     CHECK(f.features.find(wreck) == nullptr);
     CHECK(rm::test::asFloat(f.economies[0].stored.mass) == 180.0f);
+}
+
+TEST_CASE("an engineer un-builds an enemy unit into its store, and the unit leaves no wreck") {
+    // FAF GetReclaimCosts: work = max(mass 100, energy 200) = 200 at BuildRate 10 per second,
+    // so twenty ticks; each tick pays a twentieth of both costs and takes a twentieth of the
+    // health. The end is a Destroy, not a death: no wreck, no kill credit.
+    Fixture f;
+    const UnitId engineer = f.roster.add(f.engineerType, 200.0f, 200.0f, 0, 100.0f);
+    const UnitId victim = f.roster.add(f.tankType, 206.0f, 200.0f, 1, 100.0f);
+    REQUIRE(f.reclaimUnit(engineer, victim));
+    REQUIRE(f.roster.store.orders()[engineer.index].active() != nullptr);
+    CHECK(f.roster.store.orders()[engineer.index].active()->kind() == CommandKind::ReclaimUnit);
+
+    f.tick(10);
+    CHECK(f.roster.store.alive(victim));
+    CHECK(rm::test::asFloat(f.roster.health(victim).current) == 50.0f);
+    CHECK(rm::test::asFloat(f.economies[0].stored.mass) == 50.0f);
+    CHECK(rm::test::asFloat(f.economies[0].stored.energy) == 100.0f);
+
+    f.tick(10);
+    CHECK_FALSE(f.roster.store.alive(victim));
+    CHECK(rm::test::asFloat(f.economies[0].stored.mass) == 100.0f);
+    CHECK(rm::test::asFloat(f.economies[0].stored.energy) == 200.0f);
+    CHECK(f.features.size() == 0);  // reclaimed away, not killed: nothing left on the ground
+
+    f.tick(1);
+    CHECK(f.features.size() == 0);  // and retireDead does not mistake it for a death later
+    CHECK(f.roster.store.orders()[engineer.index].empty());  // the order completed with the unit
+}
+
+TEST_CASE("only a builder un-builds, and never an ally or itself") {
+    Fixture f;
+    const UnitId engineer = f.roster.add(f.engineerType, 200.0f, 200.0f, 0, 100.0f);
+    const UnitId tank = f.roster.add(f.tankType, 210.0f, 200.0f, 0, 100.0f);
+    const UnitId enemy = f.roster.add(f.tankType, 220.0f, 200.0f, 1, 100.0f);
+    CHECK_FALSE(f.reclaimUnit(tank, enemy));        // a tank has no build rate
+    CHECK_FALSE(f.reclaimUnit(engineer, tank));     // own side: retail permits it, we do not yet
+    CHECK_FALSE(f.reclaimUnit(engineer, engineer)); // itself
+    CHECK(f.reclaimUnit(engineer, enemy));
+}
+
+TEST_CASE("a unit reclaim survives the log round trip") {
+    rm::sim::CommandLog log;
+    log.record(rm::sim::CommandIssue{
+        .tick = 9,
+        .source = 1,
+        .id = rm::commandId(1, 0),
+        .player = 1,
+        .kind = CommandKind::ReclaimUnit,
+        .units = {UnitId{3, 2}},
+        .targetX = rm::sim::fxFromFloat(210.0f),
+        .targetZ = rm::sim::fxFromFloat(200.0f),
+        .target = UnitId{5, 1},
+    });
+    const auto path = std::filesystem::temp_directory_path() / "rm_reclaim_unit_log_test.txt";
+    REQUIRE(rm::sim::writeCommandLog(log, path.string()));
+    const auto reread = rm::sim::readCommandLog(path.string());
+    std::filesystem::remove(path);
+    REQUIRE(reread.has_value());
+    REQUIRE(reread->size() == 1);
+    CHECK(reread->all()[0] == log.all()[0]);
+    CHECK(reread->all()[0].kind == CommandKind::ReclaimUnit);
 }
 
 TEST_CASE("a reclaim order survives the log round trip") {

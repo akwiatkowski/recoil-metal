@@ -43,6 +43,7 @@ template <typename Order>
     case CommandKind::Build:
         return a.buildType == b.buildType && withinCancelDistance(a, b);
     case CommandKind::Reclaim:
+    case CommandKind::ReclaimUnit:
     case CommandKind::Overcharge:
     case CommandKind::Assist:
     case CommandKind::Guard:
