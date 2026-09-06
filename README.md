@@ -498,6 +498,9 @@ Weapon sprites and beam strips now resolve their effects from original Lua class
 declarations and load the referenced emitter/DDS assets. See
 [weapon visual checks and current limits](docs/weapon-visuals-acceptance.md).
 
+`mise exec -- make test-guard-ui` replays a Guard scenario on the retail map twice: a
+mortar escorts a tank across SCMP_009 terrain, and the run must reproduce pixels and
+simulation hashes with the guard order still standing.
 `mise exec -- make test-upgrade-ui` additionally renders the upgrading extractor
 offscreen twice, checks the T3 queue button and the two-tier queue, and compares pixels and simulation
 hashes. It requires the retail install and Metal; artifacts stay in `build/upgrade-ui/`.

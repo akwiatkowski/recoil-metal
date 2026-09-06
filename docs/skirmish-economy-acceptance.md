@@ -88,5 +88,8 @@ Engineer menu checks use `[engineer-tiers]` against real T1/T2/T3 blueprints.
 The T3 offscreen menu exposed 45 options with higher tiers first, including
 authored experimentals, and pagination for lower tiers. Unenhanced ACUs remain
 restricted to their T1 menu. The extractor queue capture uses
-`tests/fixtures/hud-extractor-queue.commands`; `make test-upgrade-ui` compares
+`tests/fixtures/hud-extractor-queue.commands`; `make test-guard-ui` replays
+`tests/fixtures/hud-guard.commands` (a mortar guarding a tank that walks 250 elmos
+across SCMP_009) and requires the guard order standing 50 seconds later with the
+guard away from the factory; `make test-upgrade-ui` compares
 repeated pixels and hashes and checks that both upgrade rows are present.

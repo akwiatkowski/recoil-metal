@@ -136,11 +136,11 @@ excluded from the headline.
 | ID | Subsystem | Source WPs | Implemented | Retail-validated | Retail-analyzed | Exact next task |
 |---|---|---|---:|---:|---:|---|
 | [`FA-FOUND`](#fa-found---retail-build-and-api-foundation) | Retail build and API foundation | `WP-00`-`02` | n/a | 75% | 85% | Bind an authoritative Steam depot/build manifest to `ART-E001`. |
-| [`FA-SIM`](#fa-sim---simulation-kernel-and-object-lifecycle) | Simulation kernel and object lifecycle | `WP-03`-`04` | 70% | 40% | 90% | Route the FAF driver's unit handles through the new script-object seam instead of per-pass indices. |
+| [`FA-SIM`](#fa-sim---simulation-kernel-and-object-lifecycle) | Simulation kernel and object lifecycle | `WP-03`-`04` | 70% | 45% | 90% | Give the FAF unit proxies live position and health reads through the seam; then WP-04's RNG/checksum comparison. |
 | [`FA-CONTENT`](#fa-content---vfs-blueprints-maps-and-bootstrap) | VFS, blueprints, maps, bootstrap | `WP-05`, `06`, `09` | 65% | 35% | 55% | Trace and test exact retail SCD mount/override precedence. |
 | [`FA-LUA`](#fa-lua---gameplay-lua-and-mod-contract) | Gameplay Lua and mod contract | `WP-07`-`08` | 10% | 5% | 30% | Measure the exact Moho contract for the milestone-20 skirmish slice. |
 | [`FA-MATCH`](#fa-match---armies-setup-and-victory-rules) | Armies, setup, victory rules | `WP-10`-`11` | 60% | 25% | 85% | Recover the retail lobby/scenario victory-mode selector; do not wire a synthetic app setting. |
-| [`FA-CMD`](#fa-cmd---commands-controls-and-factories) | Commands, controls, factories | `WP-12`-`14` | 85% | 65% | 75% | Complete retail acceptance of Guard; refuel/staging remains. |
+| [`FA-CMD`](#fa-cmd---commands-controls-and-factories) | Commands, controls, factories | `WP-12`-`14` | 85% | 70% | 75% | Specify the refuel/staging rung of `C-183`; Guard is accepted on the retail map (`make test-guard-ui`). |
 | [`FA-ECON`](#fa-econ---economy-construction-and-engineering) | Economy, construction, engineering | `WP-15`-`19` | 75% | 55% | 90% | Name the capture increment at `Unit+0x690` and read `Sim::TransferUnit`'s copy/reset inventory, then specify the smallest capture slice. |
 | [`FA-LAND`](#fa-land---land-navigation-formations-and-spatial-world) | Land navigation, formations, spatial world | `WP-20`, `21`, `26` | 85% | 30% | 95% | Add bounded formation rotation or category matching without changing path-service ordering. |
 | [`FA-AIR`](#fa-air---aircraft-flight-combat-and-staging) | Aircraft flight, combat, staging | `WP-22` | 65% | 55% | 95% | Golden acceptance of planar states 3-7 once the baseline is reblessed (retail-content half passed 2026-09-06); full banking remains. |
@@ -154,7 +154,7 @@ excluded from the headline.
 | [`FA-TERRAIN`](#fa-terrain---mutable-terrain-and-craters) | Mutable terrain and craters | `WP-37` | 0% | 0% | 25% | Trace one crater from damage through terrain, pathing, and rendering invalidation. |
 | [`FA-AI`](#fa-ai---retail-ai-and-native-manager-boundary) | Retail AI and native manager boundary | `WP-38` | 40% | 5% | 30% | Specify islandMarker from its callers; measure how reclaim decisions change the SCMP_009 duel's course. |
 | [`FA-UI`](#fa-ui---player-interface-and-advanced-controls) | Player interface and advanced controls | `WP-39`-`40` | 75% | 5% | 15% | Trace and implement the first retail data-driven command page from `WP-40`. |
-| [`FA-PRESENT`](#fa-present---animation-effects-and-audio) | Animation, effects, audio | `WP-41`-`42` | 70% | 5% | 40% | Implement one ordinary weapon's blueprint Audio field to XSB cue to positional playback path. |
+| [`FA-PRESENT`](#fa-present---animation-effects-and-audio) | Animation, effects, audio | `WP-41`-`42` | 75% | 5% | 45% | Honour `LodCutoff` distances and XACT pitch/volume ranges on weapon cues; script-driven manipulators remain. |
 | [`FA-PERSIST`](#fa-persist---replay-hashing-and-saveresume) | Replay, hashing, save/resume | `WP-43`-`44` | 70% | 20% | 90% | Golden acceptance of save continuation (now v17) once the baseline is reblessed (retail-content half passed 2026-09-06); general app saves remain absent. |
 
 ## Starting Work
@@ -271,12 +271,18 @@ menu by tier (ADR-095). Guard's mirrored construction
 identity is separate from its retained own-build command. Command-log v3 retains
 v2 readers. Native acceptance exercises Guard targeting, Stop, paginated queue
 cancellation and Clear Queue; see [native input acceptance](native-input-acceptance.md).
+Guard is accepted on the retail map: `make test-guard-ui` replays
+`tests/fixtures/hud-guard.commands` on SCMP_009 twice — a mortar guards a tank that walks
+250 elmos across the terrain — and requires matching pixels and hashes with the guard
+order still standing and the guard away from the factory (`hud-order:` line). Strict
+`make test-content` runs every `[corpus][guard]` case with no skips.
 Still absent: the earlier refuel/staging and ferry rungs and exact multi-weapon guard arbitration.
 
 ```text
-/goal Finish Guard and factory-cancellation acceptance on the retail map and full content,
-then specify the next refuel/staging rung from C-183. Preserve authored capabilities and
-retained construction identity, and run make test and make verify before updating FA-CMD.
+/goal Specify the refuel/staging rung of C-183 from its retail callers and implement the
+smallest bounded slice that lets a guarded air unit refuel at a staging platform. Preserve
+authored capabilities and retained construction identity, and run make test and make verify
+before updating FA-CMD.
 ```
 
 ### FA-ECON - Economy, Construction, And Engineering
@@ -635,16 +641,23 @@ trails draw the original TrailBlueprints over each shot's recorded path; origina
 projectile meshes draw through the unit pipeline, pointed along the shot's velocity
 (ADR-096 to ADR-103, [weapon visuals acceptance](weapon-visuals-acceptance.md)).
 
-**Largest gap:** script-driven manipulators do not run, and blueprint/XSB-authored sound
-behavior does not run end to end. Mesh blueprints' LOD tables are honoured (100 retail
-projectile meshes load); only blueprints whose mesh blueprint is absent from the archives
-keep their strips. The gallery verifies this renderer, not pixel parity with retail.
+Weapon fire now plays the blueprint's own `Audio.Fire` cue: the companion `.xsb` sound bank
+resolves the cue name to wave-bank entries and `WeaponSounds` picks one take per shot by
+the shooter's handle (ADR-106). The retail UEF weapon bank's Gauss cue resolves to entries
+6, 5 and 7 as measured on the bytes.
+
+**Largest gap:** script-driven manipulators do not run; weapon cues ignore `LodCutoff`
+distances, XACT pitch/volume ranges, RPC curves and instance limits. Mesh blueprints' LOD
+tables are honoured (100 retail projectile meshes load); only blueprints whose mesh
+blueprint is absent from the archives keep their strips. The gallery verifies this renderer,
+not pixel parity with retail.
 
 ```text
-/goal Advance FA-PRESENT by implementing one ordinary weapon's complete blueprint Audio field
-to XSB cue resolution to positional mixer playback path using owned retail data. Write parser
-and cue selection tests, verify the sound in a real match, run make test, update WP-42 and
-FA-PRESENT, and leave dynamic music and broad effect hosting as explicit later slices.
+/goal Advance FA-PRESENT by honouring the weapon cues' authored ranges: read the XACT
+pitch/volume variation and the instance limit per cue, map LodCutoff through SupCom.xgs to a
+distance, and apply them in the mixer. Write tests on the retail UELWeapon pair, run make
+test, update WP-42 and FA-PRESENT, and leave dynamic music and broad effect hosting as
+explicit later slices.
 ```
 
 ### FA-PERSIST - Replay, Hashing, And Save/Resume
