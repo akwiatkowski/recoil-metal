@@ -3268,3 +3268,23 @@ bone movement/rotation, slot reuse, source scales and emitter scheduling.
 The offscreen `--weapon-gallery --impact-gallery` path shows muzzle, terrain-hit
 and unit-hit columns using those same event consumers, fifty milliseconds after
 creation.
+
+## ADR-099 — Beams follow live endpoints, drawn one tick at a time
+
+**Context.** ADR-096 drew a beam as one strip particle whose endpoints were the
+firing event's snapshot for the authored lifetime. A continuous Cybran microwave
+laser therefore stayed nailed to where the target stood when the shot resolved.
+
+**Decision.** `BeamFired` registers a `CombatBeam` in the presentation state with the
+shooter, target, key and remaining lifetime; a new shot from the same weapon replaces
+its live beam. Each tick draws one fresh strip between the current endpoints with a
+lifetime of exactly one tick, carrying the beam's accumulated age so texture scrolling
+is continuous. The app moves `from` to the resolved muzzle bone and `to` to the
+target's transform, removes beams whose shooter died, and leaves a dead target's beam
+pointing where it last stood.
+
+**Alternatives and consequences.** Rewriting the existing strip in place would need
+stable particle identity the buffer does not have. Overlapping strips would double
+additive brightness, so lifetimes are exact and expiry keeps half a tick of slack.
+Simulation state and hashes are untouched. Endpoints are ground transforms, not
+target bones.

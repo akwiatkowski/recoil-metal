@@ -83,9 +83,16 @@ void emitCombatEffects(std::vector<Particle>& into, std::span<const sim::Event> 
                                                sim::fxToFloat(event.at2[1]),
                                                sim::fxToFloat(event.at2[2])};
             (void)burst(event.visualId + "#FxMuzzleFlash", from, direction, event.unit, event.visualId);
-            if (visuals && !visuals->find(event.visualId).empty()) {
-                appendWeaponVisual(into, *visuals, event.visualId, from, to, 0.0f, true,
-                    sim::fxToFloat(event.visualDuration));
+            if (visuals && state && !visuals->find(event.visualId).empty()) {
+                // A weapon fires one beam at a time: a new shot replaces the live one rather
+                // than stacking a second strip on top of it. The strips themselves are drawn
+                // below, one per tick, so the endpoints can move while the beam lasts.
+                std::erase_if(state->beams, [&](const CombatBeam& live) {
+                    return live.owner == event.unit && live.weapon == event.visualId;
+                });
+                state->beams.push_back(CombatBeam{.weapon = event.visualId, .owner = event.unit,
+                    .target = event.instigator, .from = from, .to = to,
+                    .remaining = std::max(sim::fxToFloat(event.visualDuration), seconds)});
             } else {
                 const float dx = to[0] - from[0];
                 const float dy = to[1] - from[1];
@@ -195,6 +202,21 @@ void emitCombatEffects(std::vector<Particle>& into, std::span<const sim::Event> 
         std::erase_if(state->bursts, [&](const auto& emitter) {
             const auto& material = visuals->materials[emitter.material];
             return material.emitterLifetime >= 0 && emitter.age >= material.emitterLifetime;
+        });
+        for (auto& beam : state->beams) {
+            // One strip that lives exactly until the next tick redraws it. Its age starts
+            // where the previous strip's ended, which is what keeps texture scrolling smooth.
+            const auto first = into.size();
+            appendWeaponVisual(into, *visuals, beam.weapon, beam.from, beam.to, 0.0f, true,
+                beam.age + seconds);
+            for (auto i = first; i < into.size(); ++i) into[i].age = beam.age;
+            beam.age += seconds;
+            beam.remaining -= seconds;
+        }
+        // Half a tick of slack so 0.3 s at 0.1 s ticks draws three strips, not a fourth
+        // from floating-point residue.
+        std::erase_if(state->beams, [&](const CombatBeam& beam) {
+            return beam.remaining < seconds * 0.5f;
         });
     }
 }

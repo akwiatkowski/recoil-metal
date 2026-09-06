@@ -33,8 +33,22 @@ struct CombatEffectBurst {
     std::array<float,3> direction{};
     bool started = false;
 };
+/// A beam that is still being drawn. The firing event fixes its lifetime; the app moves
+/// `from` to the shooter's muzzle and `to` to the target each tick, and every tick draws
+/// one fresh strip between them. The strip's age keeps counting from the shot so a
+/// scrolling beam texture runs continuously rather than restarting each tick.
+struct CombatBeam {
+    std::string weapon;          ///< UNIT:WeaponLabel, the visual definition key
+    sim::UnitId owner{};
+    sim::UnitId target{};
+    std::array<float,3> from{};
+    std::array<float,3> to{};
+    float age = 0;               ///< seconds since the shot
+    float remaining = 0;         ///< seconds still to draw
+};
 struct CombatEffectState {
     std::vector<CombatEffectBurst> bursts;
+    std::vector<CombatBeam> beams;
     std::uint32_t seed = 1;
 };
 

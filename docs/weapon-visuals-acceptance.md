@@ -79,9 +79,16 @@ creation; finite lifetimes stop further emission while particles finish naturall
 Negative authored lifetimes remain unbounded, with attached emitters removed when
 their original owner dies.
 
-The remaining approved work proceeds in order: historical ribbon trails,
-live beam endpoints and original projectile meshes.
-Beam endpoints are currently snapshots of the firing event.
+Beams now follow live endpoints: each tick draws one strip from the shooter's
+resolved muzzle bone to the target's current position for the authored lifetime,
+a refire replaces the weapon's live beam, and a dead shooter removes it (ADR-099).
+Endpoints are unit transforms, not target bones. The `[weapon-visuals]` case
+"beam strips follow their live endpoints" covers registration, moved endpoints,
+continuous strip age, expiry and replacement; no separate visual capture was made
+for this slice.
+
+The remaining approved work proceeds in order: historical ribbon trails and
+original projectile meshes.
 Original mesh projectile rendering and full retail pixel parity are not claimed.
 Unresolved visuals retain the existing procedural fallback. Full native-emitter
 parity, including drag and every alignment/water flag, is not yet claimed.

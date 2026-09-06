@@ -124,6 +124,19 @@ struct UnitScene {
         });
         for (auto& emitter : combatEffectState.bursts)
             if (const auto position = weaponMuzzle(emitter.owner,emitter.weapon)) emitter.position = *position;
+        // A live beam follows its shooter's muzzle and its target; it dies with the shooter,
+        // and a target that dies leaves the beam pointing where it last stood.
+        std::erase_if(combatEffectState.beams, [&](const rm::CombatBeam& beam) {
+            return beam.owner.generation != 0 && !store.alive(beam.owner);
+        });
+        for (auto& beam : combatEffectState.beams) {
+            if (const auto muzzle = weaponMuzzle(beam.owner, beam.weapon)) beam.from = *muzzle;
+            if (beam.target.generation != 0 && store.alive(beam.target)) {
+                const auto& transform = store.transforms()[beam.target.index];
+                beam.to = {rm::sim::fxToFloat(transform.x), rm::sim::fxToFloat(transform.y),
+                           rm::sim::fxToFloat(transform.z)};
+            }
+        }
     }
     std::deque<rm::Model> models;
     std::deque<rm::sca::Animation> animations;

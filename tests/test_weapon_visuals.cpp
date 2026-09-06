@@ -114,10 +114,16 @@ TEST_CASE("retail weapons resolve distinct textured bolts and beam strips", "[co
     REQUIRE(particles.size() >= visuals.find(beam.visualId).size());
     CHECK_FALSE(beamEffects.bursts.empty()); // Impact emitters may start after the first step.
     for (const auto& drawn : particles) CHECK(drawn.material != UINT32_MAX);
-    CHECK(particles.front().length == Catch::Approx(100));
-    CHECK(particles.front().lifetime == Catch::Approx(0.6).margin(0.0001));
-    CHECK(particles.front().origin[0] == Catch::Approx(0));
-    CHECK(particles.front().material < visuals.materials.size());
+    // The beam itself is live state drawn one tick at a time; the strip spans muzzle to target.
+    REQUIRE(beamEffects.beams.size() == 1);
+    // 0.6 s authored, one default 0.1 s tick already drawn by this call.
+    CHECK(beamEffects.beams.front().remaining == Catch::Approx(0.5).margin(0.0001));
+    const auto strip = std::ranges::find_if(particles, [](const auto& p) { return p.length > 0; });
+    REQUIRE(strip != particles.end());
+    CHECK(strip->length == Catch::Approx(100));
+    CHECK(strip->lifetime == Catch::Approx(0.1));
+    CHECK(strip->origin[0] == Catch::Approx(0));
+    CHECK(strip->material < visuals.materials.size());
     CHECK(visuals.find("urb2301:maingun").size() == visuals.find(beam.visualId).size());
 
     // A mod changes the original declaration, not a C++ weapon-name lookup table.
@@ -250,4 +256,66 @@ TEST_CASE("event emitters honour finite, unbounded and explicitly empty definiti
     rm::emitCombatEffects(particles,std::array{event},&visuals,&state);
     CHECK(particles.empty());
     CHECK(state.bursts.empty());
+}
+
+TEST_CASE("beam strips follow their live endpoints for the authored lifetime", "[weapon-visuals]") {
+    // One strip material, no emitter curves: a straight textured beam.
+    rm::WeaponVisuals visuals;
+    rm::WeaponMaterial material;
+    material.width = 2;
+    visuals.materials.push_back(material);
+    visuals.definitions["laser"] = {0};
+    // Authored-empty muzzle and impact lists are intentional silence, not a fallback spark.
+    // Definition keys are stored case-folded, as the loader writes them.
+    visuals.definitions["laser#fxmuzzleflash"] = {};
+    visuals.definitions["laser#fximpactunit"] = {};
+
+    const rm::sim::UnitId shooter{.index = 3, .generation = 1};
+    const rm::sim::UnitId target{.index = 7, .generation = 1};
+    rm::sim::Event event{.kind = rm::sim::EventKind::BeamFired, .unit = shooter, .instigator = target,
+        .at = {rm::sim::Fx::fromInt(100), {}, {}}, .at2 = {}, .visualId = "laser",
+        .visualDuration = rm::sim::Fx::fromRatio(3, 10)};
+    rm::CombatEffectState state;
+    std::vector<rm::Particle> particles;
+
+    // Firing registers the beam and draws its first one-tick strip from muzzle to target.
+    rm::emitCombatEffects(particles, std::array{event}, &visuals, &state, 0.1f);
+    REQUIRE(state.beams.size() == 1);
+    CHECK(state.beams.front().owner == shooter);
+    CHECK(state.beams.front().target == target);
+    REQUIRE(particles.size() == 1);
+    CHECK(particles.front().length == Catch::Approx(100));
+    CHECK(particles.front().axis[0] == Catch::Approx(1));
+    CHECK(particles.front().age == Catch::Approx(0));
+    CHECK(particles.front().lifetime == Catch::Approx(0.1));
+
+    // The app moves the endpoints; the next tick's strip follows them and keeps the clock
+    // running so a scrolling texture does not restart every tick.
+    state.beams.front().to = {0, 0, 50};
+    rm::emitCombatEffects(particles, {}, &visuals, &state, 0.1f);
+    REQUIRE(particles.size() == 2);
+    CHECK(particles.back().length == Catch::Approx(50));
+    CHECK(particles.back().axis[2] == Catch::Approx(1));
+    CHECK(particles.back().age == Catch::Approx(0.1));
+    CHECK(particles.back().lifetime == Catch::Approx(0.2));
+
+    // Three ticks of 0.1 s exhaust a 0.3 s beam; nothing is drawn afterwards.
+    rm::emitCombatEffects(particles, {}, &visuals, &state, 0.1f);
+    CHECK(particles.size() == 3);
+    CHECK(state.beams.empty());
+    rm::emitCombatEffects(particles, {}, &visuals, &state, 0.1f);
+    CHECK(particles.size() == 3);
+
+    // A weapon fires one beam at a time: refiring replaces its live beam instead of stacking.
+    rm::emitCombatEffects(particles, std::array{event, event}, &visuals, &state, 0.1f);
+    CHECK(state.beams.size() == 1);
+    CHECK(state.beams.front().remaining == Catch::Approx(0.2).margin(0.0001)); // Fx precision
+
+    // Unknown keys keep the procedural bead chain and register no live beam.
+    rm::CombatEffectState fallback;
+    std::vector<rm::Particle> beads;
+    event.visualId = "unknown";
+    rm::emitCombatEffects(beads, std::array{event}, &visuals, &fallback, 0.1f);
+    CHECK(fallback.beams.empty());
+    CHECK(beads.size() > 2);
 }
