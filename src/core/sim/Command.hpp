@@ -115,7 +115,8 @@ enum class CommandKind : std::uint8_t {
     Script = 11,
     /// Escort an allied unit; combat capability and engineering capability stay independent.
     Guard = 12,
-    /// Cancel one factory production entry by stable command ID, including its remaining count.
+    /// Cancel a factory product or structure upgrade by stable ID. Cancelling an upgrade also
+    /// removes dependent later tiers. The historical name is retained in semantic logs.
     CancelFactoryBuild = 13,
 };
 

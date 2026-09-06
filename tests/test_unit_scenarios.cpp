@@ -1247,9 +1247,57 @@ TEST_CASE("an extractor can queue its next tier while upgrading", "[corpus][upgr
         CHECK(job.scene.building.front().buildTimeRemaining < remaining);
         REQUIRE(job.scene.store.orders()[t1.index].entries().size() == 2);
         const auto queuedId = job.scene.store.orders()[t1.index].entries().back().payload().id;
-        bool cancel = false;
+        bool cancel = false, cancelActive = false, cancelPending = false;
+        SECTION("cancelling T2 also removes its dependent T3") { cancelActive = true; }
+        SECTION("the queue panel cancels pending T3 without restarting T2") { cancelPending = true; }
         SECTION("Stop cancels the current and queued upgrades") { cancel = true; }
         SECTION("complete both upgrades across saved command-queue restoration") {}
+        if (cancelActive) {
+            const auto view = rm::app::gatherProduction(job.scene, t1);
+            REQUIRE(view);
+            REQUIRE(view->queue.size() == 2);
+            const auto frame = rm::ui::frameLayout(rm::ui::UiViewport::full(800, 800));
+            const auto button = rm::ui::productionCancelRect(rm::ui::productionPanelRect(frame), 0);
+            REQUIRE(rm::app::submitProductionControl(job.scene, t1, 0, 2, frame,
+                button.x + 1, button.y + 1));
+            step(2);
+            CHECK(job.scene.store.alive(t1));
+            CHECK(job.scene.building.empty());
+            CHECK(job.scene.store.orders()[t1.index].empty());
+            CHECK_FALSE(job.scene.store.commandIdLive(queuedId));
+            CHECK_FALSE(rm::app::gatherProduction(job.scene, t1));
+            return;
+        }
+        if (cancelPending) {
+            const auto view = rm::app::gatherProduction(job.scene, t1);
+            REQUIRE(view);
+            REQUIRE(view->queue.size() == 2);
+            CHECK(view->queue[0].name.starts_with("T2 "));
+            CHECK(view->queue[1].name.starts_with("T3 "));
+            CHECK(view->building);
+            const auto frame = rm::ui::frameLayout(rm::ui::UiViewport::full(1280, 800));
+            const auto rect = rm::ui::productionPanelRect(frame);
+            const auto repeat = rm::ui::productionRepeatRect(rect);
+            CHECK_FALSE(rm::ui::productionCommandAt(rect, *view, repeat.x + 1, repeat.y + 1));
+            const auto button = rm::ui::productionCancelRect(rect, 1);
+            REQUIRE(rm::app::submitProductionControl(job.scene, t1, 1, 2, frame,
+                button.x + 1, button.y + 1));
+            step(2);
+            CHECK(job.scene.store.orders()[t1.index].size() == 2); // Enemy cannot cancel.
+            const auto before = job.scene.building.front().buildTimeRemaining;
+            REQUIRE(rm::app::submitProductionControl(job.scene, t1, 0, 3, frame,
+                button.x + 1, button.y + 1));
+            step(3);
+            CHECK(job.scene.store.orders()[t1.index].size() == 1);
+            CHECK_FALSE(job.scene.store.commandIdLive(queuedId));
+            CHECK(job.scene.building.front().buildTimeRemaining < before);
+            int tick = 4;
+            while (job.scene.store.alive(t1) && tick < 3000) step(tick++);
+            REQUIRE_FALSE(job.scene.store.alive(t1));
+            CHECK(job.scene.store.typeAt(selection.front().index) == t2Type);
+            CHECK(job.scene.store.orders()[selection.front().index].empty());
+            return;
+        }
         if (cancel) {
             REQUIRE(rm::app::issueMove(job.scene, t1, 0, 2, {}, {}, false, rm::sim::CommandKind::Stop));
             for (int tick = 2; tick < 100; ++tick) step(tick);

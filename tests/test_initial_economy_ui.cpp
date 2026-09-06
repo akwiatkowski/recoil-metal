@@ -164,7 +164,7 @@ TEST_CASE("a real commander's tray offers the initial economy, priced by the blu
               == Approx(rm::sim::magToFloat(def->buildCostMass)).margin(0.01));
         CHECK_FALSE(offered->name.empty());
     }
-    CHECK(fixture->option("UEB1103")->name == "Mass Extractor");
+    CHECK(fixture->option("UEB1103")->name == "T1 Mass Extractor");
 
     // The decoys stay off it: T2 needs a T2 engineer, and a tank is not a structure.
     CHECK(fixture->option("UEB1201") == nullptr);
@@ -505,6 +505,37 @@ TEST_CASE("building facings stay on the cardinal grid", "[ui][building-facing]")
             CHECK(facing % rm::sim::kBradQuarterTurn == 0);
         }
     }
+}
+
+TEST_CASE("engineer trays follow the authored construction tiers", "[corpus][ui][engineer-tiers]") {
+    auto fixture = makeFixture();
+    if (!fixture) SKIP("retail corpus unavailable");
+    for (const auto* id : {"UEL0105", "UEL0208", "UEL0309", "UEB1301", "UEB4202"})
+        REQUIRE(fixture->loadReal(id));
+    fixture->scene.roster = rm::data::Roster::build(fixture->corpus, fixture->ids);
+    const char* engineerId = "UEL0105";
+    int tier = 1;
+    SECTION("T1") {}
+    SECTION("T2") { engineerId = "UEL0208"; tier = 2; }
+    SECTION("T3") { engineerId = "UEL0309"; tier = 3; }
+    const auto engineer = fixture->spawn(*fixture->real(engineerId), 400, 400);
+    rm::app::gatherBuildOptions(fixture->scene, engineer, rm::ui::neutralTheme(),
+        fixture->options, fixture->who);
+    REQUIRE(fixture->option("UEB1101"));
+    CHECK((fixture->option("UEB1201") != nullptr) == (tier >= 2));
+    CHECK((fixture->option("UEB1301") != nullptr) == (tier >= 3));
+    CHECK((fixture->option("UEB4202") != nullptr) == (tier >= 2)); // Shield, outside the old role list.
+    CHECK_FALSE(fixture->option("UEL0201"));
+    REQUIRE_FALSE(fixture->options.empty());
+    CHECK(fixture->options.front().name.starts_with("T" + std::to_string(tier) + " "));
+    const auto* productId = tier == 3 ? "UEB1301" : tier == 2 ? "UEB1201" : "UEB1101";
+    const auto type = fixture->registerType(*fixture->real(productId));
+    REQUIRE(rm::app::issueBuild(fixture->scene, engineer, 0, 0, type,
+        rm::sim::Fx::fromInt(480), rm::sim::Fx::fromInt(400)));
+    const auto dispatched = rm::app::dispatchCommands(fixture->scene, fixture->field,
+        fixture->passability, 0, rm::sim::CommandPhase::PreTick);
+    REQUIRE(dispatched.size() == 1);
+    CHECK(dispatched.front().result.accepted == std::vector{engineer});
 }
 
 TEST_CASE("extractors offer their next upgrade and no unrelated construction",

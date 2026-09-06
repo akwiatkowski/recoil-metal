@@ -3160,3 +3160,26 @@ registration path. Transfer uses the existing queue/save representations without
 schema version change. Commands validate against the successor on its next dispatch
 beat; Stop still clears the whole chain. Tests complete real T1→T2→T3 upgrades,
 restore the pending queue from a save, preserve selection, and cancel with Stop.
+
+## ADR-095 — Reuse authored engineer menus and upgrade queue controls
+
+**Context.** Engineer menus still hid all structures above T1 and excluded roles
+such as shields. Pending extractor upgrades survived replacement but were invisible
+after being queued.
+
+**Decision.** Engineers use the same blueprint BuildableCategory menu as factories,
+sorted by tier, including earlier tiers and authored experimentals. Unenhanced ACU
+menus retain their T1 restriction because their base blueprints also list categories
+unlocked by engineering enhancements, whose installation is not implemented.
+
+Reuse the production panel for an immobile builder's upgrades, with tier labels and
+no repeat control. Extend the existing stable-ID cancellation command to upgrades;
+cancel a pending T3 without disturbing active T2 work, or cancel T2 and its dependent
+T3 together. Ownership checks remain in shared dispatch. Preserve the historical
+CancelFactoryBuild command name and numeric value for recorded logs.
+
+**Alternatives and consequences.** A second queue widget or command format would
+duplicate existing paths. Keeping later tiers after cancelling their prerequisite
+would leave invalid work. No save-format change is needed. Headless tests cover
+authored T1/T2/T3 engineer menus, active/pending cancellation, enemy rejection and
+completion after cancellation; offscreen captures repeat pixels and hashes.

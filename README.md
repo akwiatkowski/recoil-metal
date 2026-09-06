@@ -482,15 +482,20 @@ Everything below needs game content — see [Getting content](#getting-content).
 ### Building, upgrades and queues
 
 Factory trays offer every unit allowed by the factory's blueprint, with the highest
-unlocked tier first and tier labels on the buttons. Use the header's page arrows
+unlocked tier first and tier labels on the buttons. Engineers likewise expose their
+authored construction tiers, including shields and other supported build categories.
+Unupgraded commanders keep their T1 menu. Use the header's page arrows
 for remaining units. Select a T1 or T2 extractor to see its next-tier upgrade. While T1→T2 is running,
 the tray offers T3; clicking it queues T3 automatically after T2. Pending orders
 and selection follow the replacement building, and Stop cancels the chain.
+The upgrade queue shows each tier with a Cancel button. Cancel queued T3 to keep
+T2 progressing; cancel T2 to remove it and the dependent T3. Clear Queue stops both.
 
 `mise exec -- ./build/rm_tests '[headless-ui]'` exercises button hit-testing and the
-shared click handler, the full upgrade chain, save/restore and Stop without a GPU.
+shared click handler, the full upgrade chain, save/restore, cancellation and enemy
+ownership rejection without a GPU.
 `mise exec -- make test-upgrade-ui` additionally renders the upgrading extractor
-offscreen twice, checks the T3 queue button, and compares pixels and simulation
+offscreen twice, checks the T3 queue button and the two-tier queue, and compares pixels and simulation
 hashes. It requires the retail install and Metal; artifacts stay in `build/upgrade-ui/`.
 
 Hold **Shift while placing buildings** to append orders and keep placement armed

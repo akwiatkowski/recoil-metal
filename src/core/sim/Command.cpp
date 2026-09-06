@@ -980,7 +980,7 @@ ApplyCommandResult applyCommand(const CommandIssue& issue, UnitStore& store,
         for (const UnitId unit : canonical) {
             if (!store.alive(unit) || !authorised(*issuer, store, unit, armies)) continue;
             const auto* factory = catalog.def(store.typeAt(unit.index));
-            if (factory == nullptr || !factory->hasCategory("FACTORY")) continue;
+            if (factory == nullptr || !factory->isBuilder() || factory->isMobile()) continue;
             auto& queue = store.orders()[unit.index];
             const auto found = std::ranges::find_if(queue.entries(), [&](const QueuedCommand& entry) {
                 return entry.kind() == CommandKind::Build
@@ -988,7 +988,30 @@ ApplyCommandResult applyCommand(const CommandIssue& issue, UnitStore& store,
             });
             if (found == queue.entries().end()) continue;
             const auto* product = catalog.def(found->buildType());
-            if (product == nullptr || !product->isMobile()) continue;
+            if (product == nullptr) continue;
+            // Upgrade orders form a dependency chain, including successors of the active tier.
+            const auto* tier = factory;
+            bool upgrade = false;
+            for (auto it = queue.entries().begin(); it != std::next(found); ++it) {
+                if (it->kind() != CommandKind::Build) continue;
+                const auto* next = catalog.def(it->buildType());
+                if (next && tier->upgradesTo == next->name) {
+                    tier = next;
+                    if (it == found) upgrade = true;
+                }
+            }
+            if (!upgrade && !(factory->hasCategory("FACTORY") && product->isMobile())) continue;
+            std::vector<const SharedCommand*> dependents;
+            if (upgrade) {
+                for (auto it = std::next(found); it != queue.entries().end(); ++it) {
+                    if (it->kind() != CommandKind::Build) continue;
+                    const auto* next = catalog.def(it->buildType());
+                    if (next && tier->upgradesTo == next->name) {
+                        dependents.push_back(&it->payload());
+                        tier = next;
+                    }
+                }
+            }
             const auto* payload = &found->payload();
             const bool active = queue.active() != nullptr && &queue.active()->payload() == payload;
             const auto* work = building != nullptr ? activeConstruction(*building, unit) : nullptr;
@@ -998,6 +1021,7 @@ ApplyCommandResult applyCommand(const CommandIssue& issue, UnitStore& store,
                 teardownMovement(store.motion()[unit.index]);
             }
             (void)queue.removeExact(payload);
+            for (const auto* dependent : dependents) (void)queue.removeExact(dependent);
             result.accepted.push_back(unit);
         }
         return result;

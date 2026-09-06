@@ -1,0 +1,5 @@
+recoil-metal semantic command log
+version 2
+issue-count 2
+70 pre-tick 0 1 0 build 0 1 0 0 0 0 0 1 2 1 "/units/UEB1202/UEB1202_unit.bp" "" ""
+71 pre-tick 0 2 0 build 1 1 0 0 0 0 0 1 2 1 "/units/UEB1302/UEB1302_unit.bp" "" ""

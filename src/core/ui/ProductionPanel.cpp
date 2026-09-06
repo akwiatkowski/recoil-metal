@@ -91,7 +91,8 @@ std::optional<sim::CommandKind> productionCommandAt(
     if (view.empty() || rect.width <= 0 || rect.height <= 0 || !rect.contains(x, y)) {
         return std::nullopt;
     }
-    if (productionRepeatRect(rect).contains(x, y)) return sim::CommandKind::ToggleFactoryRepeat;
+    if (view.canRepeat && productionRepeatRect(rect).contains(x, y))
+        return sim::CommandKind::ToggleFactoryRepeat;
     if ((!view.queue.empty() || view.building)
         && productionClearRect(rect, productionPage(rect, view.queue.size()).pages > 1).contains(x, y)) {
         return sim::CommandKind::Stop;
@@ -117,10 +118,11 @@ void appendProductionPanel(Geometry& out, const text::Font& labelFont,
 
     // The repeat button is both a control and the current state, not a second stored toggle.
     const Rect repeat = productionRepeatRect(rect);
-    text::appendRect(out.chrome, labelFont, repeat.x, repeat.y, repeat.width, repeat.height,
-                     view.repeat ? theme.edgeLit : theme.well);
+    if (view.canRepeat)
+        text::appendRect(out.chrome, labelFont, repeat.x, repeat.y, repeat.width, repeat.height,
+                         view.repeat ? theme.edgeLit : theme.well);
     const float titleBaseline = rect.y + kTitleBaseline;
-    const std::string corner = view.repeat ? "REPEAT ON" : "REPEAT OFF";
+    const std::string corner = !view.canRepeat ? "UPGRADES" : view.repeat ? "REPEAT ON" : "REPEAT OFF";
     const float cornerWidth = readoutFont.usable()
                                 ? text::measureText(readoutFont.glyphs, corner)
                                 : 0.0f;

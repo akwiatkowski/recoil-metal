@@ -33,6 +33,7 @@ struct ProductionView {
     bool building = false;               ///< a construction is under way
     float progress = 0.0f;               ///< of the current build, 0..1
     bool repeat = false;
+    bool canRepeat = true;               ///< upgrades are never repeatable
 
     [[nodiscard]] bool empty() const noexcept { return factoryName.empty(); }
 };

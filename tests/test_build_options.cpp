@@ -44,6 +44,8 @@ namespace {
     def.buildRate = buildRate;
     std::sort(categories.begin(), categories.end());
     def.categories = std::move(categories);
+    if (def.hasCategory("ENGINEER") || def.hasCategory("COMMAND"))
+        def.buildableCategory.push_back(rm::unitdef::parseCategoryTerm("STRUCTURE TECH1"));
     return def;
 }
 
@@ -66,7 +68,7 @@ struct Fixture {
         add(aDef("UEB1101", {"UEF", "TECH1", "STRUCTURE", "ENERGYPRODUCTION"}, 75.0f));
         add(aDef("UEB0101", {"UEF", "TECH1", "STRUCTURE", "FACTORY"}, 240.0f));
         add(aDef("UEB0103", {"UEF", "TECH1", "STRUCTURE", "FACTORY", "NAVAL"}, 300.0f));
-        // Tier two: in the corpus, and never in the panel — see the note in `gatherBuildOptions`.
+        // Tier two is outside these T1 builders' authored build expression.
         add(aDef("UEB1201", {"UEF", "TECH2", "STRUCTURE", "MASSEXTRACTION"}, 900.0f));
         // A mobile unit of no buildable role: it must not reach a structure menu.
         add(aDef("UEL0201", {"UEF", "TECH1", "LAND", "TANK", "DIRECTFIRE"}, 52.0f));
@@ -179,10 +181,8 @@ TEST_CASE("a commander is offered the same structures as an engineer", "[ui][bui
     CHECK(byEngineer == byCommander);
 }
 
-TEST_CASE("a tier-two structure is in the corpus and never in the panel", "[ui][build]") {
-    // Listing it would offer a player something no order can satisfy: the higher tiers need an
-    // upgraded engineer this engine does not model. A menu entry that cannot be clicked is
-    // worse than a short menu.
+TEST_CASE("a T1 engineer cannot offer a tier-two structure", "[ui][build]") {
+    // The builder's authored expression excludes it, even when the roster contains it.
     Fixture fixture;
     const auto got = fixture.optionsFor({fixture.spawnEngineer()});
 
@@ -191,8 +191,7 @@ TEST_CASE("a tier-two structure is in the corpus and never in the panel", "[ui][
 }
 
 TEST_CASE("only structures are offered, never mobile units", "[ui][build]") {
-    // A tank is in the roster, is tier one, and is the builder's own faction — the three
-    // things the query filters on. What keeps it out is its ROLE, and nothing else would.
+    // This builder's expression requires STRUCTURE, so a same-tier tank stays out.
     Fixture fixture;
     const auto got = fixture.optionsFor({fixture.spawnEngineer()});
 

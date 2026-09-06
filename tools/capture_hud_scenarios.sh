@@ -42,12 +42,18 @@ capture() {
 }
 
 capture extractor-upgrade 10 tests/fixtures/hud-extractor-upgrade.commands \
-    'hud-state: selected=1 types=1 work=UPGRADING progress=[1-9][0-9]* flow=ACTIVE queued=0' \
+    'hud-state: selected=1 types=1 work=UPGRADING progress=[1-9][0-9]* flow=ACTIVE queued=1' \
     --select-type UEB1103 --look 5410 2772 450
 for pass in first repeat; do
     rg -q 'hud-build-option: id=UEB1302 upgrade=1 queued-upgrade=1' \
         "$capture_dir/extractor-upgrade.$pass.log"
     test -s "$capture_dir/extractor-upgrade.$pass.png"
+done
+capture extractor-queue 10 tests/fixtures/hud-extractor-queue.commands \
+    'hud-state: selected=1 types=1 work=UPGRADING progress=[1-9][0-9]* flow=ACTIVE queued=2' \
+    --select-type UEB1103 --look 5410 2772 450
+for pass in first repeat; do
+    rg -q 'production panel: 2 rows, repeat=off' "$capture_dir/extractor-queue.$pass.log"
 done
 if [[ ${CAPTURE_SCENARIOS:-all} == upgrade ]]; then
     echo "HUD upgrade artifacts: $capture_dir"

@@ -346,14 +346,8 @@ void gatherBuildOptions(const UnitScene& scene, rm::sim::UnitId activeBuilder,
     // asked for. Everything a player has not built yet is, by definition, exactly what a build
     // menu is for.
     //
-    // `Roster` is built from the whole blueprint corpus at content load, and `Roster::all` says
-    // in its own comment that it exists for "a caller listing options rather than picking one —
-    // the build tray, eventually". This is that caller.
-    static constexpr std::array<rm::unitdef::Role, 6> kStructureRoles{
-        rm::unitdef::Role::Extractor, rm::unitdef::Role::Energy, rm::unitdef::Role::Factory,
-        rm::unitdef::Role::Storage,   rm::unitdef::Role::Defence, rm::unitdef::Role::Radar,
-    };
-
+    // Roster carries the full corpus's categories so every menu can use its builder's
+    // authored BuildableCategory, even before products have been registered in the scene.
     float storedMass = 0.0f;
     if (scene.playerArmy != rm::sim::kNoArmy
         && static_cast<std::size_t>(scene.playerArmy) < scene.economies.size()) {
@@ -366,10 +360,8 @@ void gatherBuildOptions(const UnitScene& scene, rm::sim::UnitId activeBuilder,
         return;
     }
     const rm::unitdef::Role role = rm::unitdef::roleOf(*def);
-    // A COMMANDER, AN ENGINEER — or a FACTORY. The first two build STRUCTURES, answered
-    // by role; a factory builds MOBILE units, answered by its own `BuildableCategory`
-    // expression, which is the game's statement of what rolls off this floor and needs
-    // no taxonomy of ours.
+    // General-purpose builders share the authored build tree; upgrade-only structures
+    // expose just their successor below.
     const bool isFactory = role == rm::unitdef::Role::Factory;
 
     const int army = scene.armyOf(activeBuilder.index);
@@ -428,13 +420,16 @@ void gatherBuildOptions(const UnitScene& scene, rm::sim::UnitId activeBuilder,
         });
     }
 
-    if (isFactory) {
+    if (isFactory || role == rm::unitdef::Role::Commander || role == rm::unitdef::Role::Builder) {
         auto products = scene.roster.buildableBy(faction, def->buildableCategory);
         // The authored build tree gates tiers. Put newly unlocked units on the first page.
         std::stable_sort(products.begin(), products.end(), [](const auto& a, const auto& b) {
             return a.tech > b.tech;
         });
         for (const rm::data::RosterEntry& entry : products) {
+            // ACU blueprints include T2/T3 engineering enhancement categories even at spawn.
+            // Enhancement installation is not modelled yet; keep the initial ACU menu at T1.
+            if (role == rm::unitdef::Role::Commander && entry.tech > 1) continue;
             if (entry.id == def->upgradesTo) continue; // Already offered as an upgrade.
             const float mass = rm::sim::magToFloat(entry.costMass);
             const float seconds =
@@ -454,36 +449,6 @@ void gatherBuildOptions(const UnitScene& scene, rm::sim::UnitId activeBuilder,
             });
         }
         return;
-    }
-    // Upgrade-only structures are not general-purpose construction units.
-    if (role != rm::unitdef::Role::Commander && role != rm::unitdef::Role::Builder) return;
-    for (const rm::unitdef::Role wanted : kStructureRoles) {
-        for (const rm::data::RosterEntry& entry : scene.roster.all(faction, wanted)) {
-            // TIER ONE ONLY, for now. A commander can build a T1 structure of each kind, and
-            // the higher tiers need an upgraded engineer this engine does not yet model —
-            // listing them would offer a player something no order could satisfy, which is
-            // worse than a short menu.
-            if (entry.tech > 1) {
-                continue;
-            }
-            const float mass = rm::sim::magToFloat(entry.costMass);
-            // Seconds at THIS builder's rate — the blueprint states work, the builder
-            // states work per second, and the player is only ever told the quotient.
-            const float seconds =
-                def->buildRate > 0.0f
-                    ? rm::sim::magToFloat(entry.buildTime) / def->buildRate
-                    : 0.0f;
-            out.push_back(rm::ui::BuildOption{
-                .id = entry.id,
-                .name = entry.description,
-                .massCost = mass,
-                .energyCost = rm::sim::magToFloat(entry.costEnergy),
-                .buildSeconds = seconds,
-                .health = rm::sim::magToFloat(entry.health),
-                .affordable = mass <= storedMass,
-                .tint = rm::ui::tierTint(theme, entry.tech),
-            });
-        }
     }
 }
 
@@ -1368,8 +1333,7 @@ std::optional<rm::ui::ProductionView> gatherProduction(const UnitScene& scene,
         return std::nullopt;
     }
     const rm::unitdef::UnitDef* def = scene.catalog.def(scene.store.typeAt(builder.index));
-    // Upgradeable extractors are also immobile builders, but have no production queue.
-    if (def == nullptr || rm::unitdef::roleOf(*def) != rm::unitdef::Role::Factory) {
+    if (def == nullptr || !def->isBuilder() || def->isMobile()) {
         return std::nullopt;
     }
 
@@ -1377,6 +1341,7 @@ std::optional<rm::ui::ProductionView> gatherProduction(const UnitScene& scene,
     view.factoryId = def->name;
     view.factoryName = def->description.empty() ? def->name : def->description;
     view.repeat = scene.store.factoryRepeat(builder);
+    view.canRepeat = def->hasCategory("FACTORY");
 
     // The queue as the sim holds it, current first; only Build orders are production. A
     // shared order's remaining count is the stack a player shift-clicked.
@@ -1390,6 +1355,8 @@ std::optional<rm::ui::ProductionView> gatherProduction(const UnitScene& scene,
         row.id = product != nullptr ? product->name : std::to_string(order.buildType);
         row.name = product != nullptr && !product->description.empty() ? product->description
                                                                         : row.id;
+        if (!view.canRepeat && product)
+            row.name = "T" + std::to_string(rm::unitdef::techOf(*product)) + " " + row.name;
         row.count = std::max<std::uint32_t>(1, order.remainingCount);
         row.commandId = order.id;
         view.queue.push_back(std::move(row));
@@ -1404,6 +1371,7 @@ std::optional<rm::ui::ProductionView> gatherProduction(const UnitScene& scene,
             break;
         }
     }
+    if (!view.canRepeat && view.queue.empty() && !view.building) return std::nullopt;
     return view;
 }
 
