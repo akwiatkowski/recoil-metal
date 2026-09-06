@@ -166,6 +166,13 @@ test-upgrade-ui: build check-fa
 	FA_INSTALL="$(FA_ROOT)" CAPTURE_BINARY="$(BIN)" CAPTURE_SCENARIOS=upgrade \
 	  mise exec -- bash tools/capture_hud_scenarios.sh $(BUILD)/upgrade-ui
 
+# Guard on the retail map: a tank guards a scout that walks across SCMP_009 terrain, replayed
+# from a command log twice with matching pixels and hashes, and the guard order still standing.
+.PHONY: test-guard-ui
+test-guard-ui: build check-fa
+	FA_INSTALL="$(FA_ROOT)" CAPTURE_BINARY="$(BIN)" CAPTURE_SCENARIOS=guard \
+	  mise exec -- bash tools/capture_hud_scenarios.sh $(BUILD)/guard-ui
+
 .PHONY: test-content
 test-content: build
 	mise exec -- python3 -m unittest discover -s tools -p test_content_acceptance.py

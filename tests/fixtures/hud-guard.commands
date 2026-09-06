@@ -1,0 +1,8 @@
+recoil-metal semantic command log
+version 2
+issue-count 5
+70 pre-tick 0 1 0 build 0 1 88637440 45416448 0 0 0 1 0 1 "/units/UEB0101/UEB0101_unit.bp" "" ""
+4000 pre-tick 0 2 0 build 0 1 0 0 0 0 0 1 4 1 "/units/UEL0201/UEL0201_unit.bp" "" ""
+4001 pre-tick 0 3 0 build 1 1 0 0 0 0 0 1 4 1 "/units/UEL0103/UEL0103_unit.bp" "" ""
+4700 pre-tick 0 4 0 guard 0 1 88637440 45416448 0 5 1 1 6 1 "" "" ""
+4701 pre-tick 0 5 0 move 0 1 92733440 45416448 0 0 0 1 5 1 "" "" ""

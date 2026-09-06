@@ -444,6 +444,22 @@ void composeHeadlessInterface(rm::Renderer& renderer, const Session& session,
                 shotWork ? static_cast<int>(*shotWork->progress * 100.0f) : 0,
                 shotWork ? shotWork->rows.back().value.c_str() : "NONE",
                 static_cast<unsigned long long>(queuedProducts));
+            // The selection's ACTIVE ORDER, for acceptance of orders the panels do not show:
+            // a guard or a move has no card, so a headless run needs this line to prove one
+            // is still standing after the replayed commands and the simulated seconds.
+            if (!capturedSelection.empty() && units.store.alive(capturedSelection.front())) {
+                const rm::sim::QueuedCommand* head =
+                    units.store.orders()[capturedSelection.front().index].active();
+                const rm::sim::Transform& where =
+                    units.store.transforms()[capturedSelection.front().index];
+                std::printf("  hud-order: unit=%u:%u kind=%s target=%u:%u at=%.0f,%.0f\n",
+                            capturedSelection.front().index, capturedSelection.front().generation,
+                            head != nullptr ? rm::sim::commandKindName(head->kind()) : "none",
+                            head != nullptr ? head->target().index : 0u,
+                            head != nullptr ? head->target().generation : 0u,
+                            static_cast<double>(rm::sim::fxToFloat(where.x)),
+                            static_cast<double>(rm::sim::fxToFloat(where.z)));
+            }
             std::vector<const rm::unitdef::UnitDef*> shotCommandSelection;
             for (const rm::sim::UnitId id : capturedSelection) {
                 if (units.store.alive(id)) {

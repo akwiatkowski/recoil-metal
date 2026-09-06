@@ -41,6 +41,21 @@ capture() {
     echo "$name: matching pixels and simulation hashes"
 }
 
+if [[ ${CAPTURE_SCENARIOS:-all} == guard ]]; then
+    # Guard on the retail map: the factory trains a tank (unit 5) and a mortar (unit 6);
+    # the mortar guards the tank, the tank walks 250 elmos east across SCMP_009 terrain.
+    # Fifty seconds later the guard order still stands and the guard has left the factory
+    # apron, so the escort followed rather than sat. Two runs must agree to the pixel.
+    capture guard 520 tests/fixtures/hud-guard.commands \
+        'hud-order: unit=6:1 kind=guard target=5:1 at=5[5-9][0-9][0-9],' \
+        --select-type UEL0103 --look 5520 2772 220
+    for pass in first repeat; do
+        rg -q 'hud-state: selected=1 types=1' "$capture_dir/guard.$pass.log"
+    done
+    echo "HUD guard artifacts: $capture_dir"
+    exit 0
+fi
+
 capture extractor-upgrade 10 tests/fixtures/hud-extractor-upgrade.commands \
     'hud-state: selected=1 types=1 work=UPGRADING progress=[1-9][0-9]* flow=ACTIVE queued=1' \
     --select-type UEB1103 --look 5410 2772 450
