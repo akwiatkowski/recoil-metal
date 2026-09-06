@@ -130,6 +130,13 @@ TEST_CASE("FAF enemy and blueprint queries read the observed match and retail co
     opponent.advance(0);
     bool ok = ai.eval(R"(
         local brain = __rm_faf.brains[0]
+        assert(brain.Nickname == brain.Name, 'adapter identity is available to FAF diagnostics')
+        local misc = import('/lua/editor/MiscBuildConditions.lua')
+        assert(misc.IsIsland(brain, false), 'no Island marker is a valid negative result')
+        assert(brain.islandMarker == nil)
+        assert(__rm_faf.missing.islandMarker == nil, 'optional nil is not an unbound method')
+        assert(not misc.ReclaimAvailableInGrid(brain, 'MAIN', false),
+            'unsupported reclaim grid fails closed without a formatting exception')
         local enemy = brain:GetCurrentEnemy()
         previousEnemy = enemy
         assert(enemy:GetArmyIndex() == 3, 'nearest hostile, not the closer ally')

@@ -182,6 +182,9 @@ end
 
 local brainMeta = {
     __index = function(brain, key)
+        -- MiscBuildConditions.IsIsland stores nil when no marker exists. That is
+        -- a valid cached result, not a missing native API (FAF: lines 285-298).
+        if key == 'islandMarker' then return nil end
         recordMissing(key)
         return nil  -- the caller's pcall turns this into a failed condition
     end,
@@ -318,6 +321,9 @@ function __rm_faf_boot(army, info)
         Name = 'rm-faf-' .. tostring(army),
     }
     for name, fn in pairs(methods) do brain[name] = fn end
+    -- This adapter has no lobby player name; its actual brain name identifies
+    -- diagnostics such as MiscBuildConditions.ReclaimAvailableInGrid.
+    brain.Nickname = brain.Name
 
     -- Flags the corpus reads off the brain. All false, all true statements about this
     -- adapter: no cheat multipliers, no transports requested, no pre-built base.
