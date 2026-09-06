@@ -39,6 +39,9 @@ struct WeaponMaterial {
     std::array<EffectCurve, 3> direction, acceleration, position;
     bool gravity = false;
     bool flat = false;
+    /// A TrailBlueprint: drawn as a ribbon over the projectile's recorded path by
+    /// ProjectileTrails, not as one straight strip. `length` is its TrailLength in elmos.
+    bool ribbon = false;
     bool localVelocity = false;
     bool localAcceleration = false;
     std::uint32_t frames = 1, strips = 1;
@@ -77,8 +80,11 @@ void emitWeaponParticles(std::vector<Particle>& out, const WeaponMaterial& mater
     bool initial = true);
 
 /// A camera-facing bolt or beam strip. Direction and length are independent of motion.
+/// Ribbon materials are drawn as straight strips only when `straightRibbons` is set — the
+/// gallery's preview; the live path leaves them to ProjectileTrails.
 void appendWeaponVisual(std::vector<Particle>& out, const WeaponVisuals& visuals,
     std::string_view key, std::array<float, 3> from, std::array<float, 3> to,
-    float elmosPerPoint, bool beam = false, float duration = 0.25f, bool previewEmitters = true);
+    float elmosPerPoint, bool beam = false, float duration = 0.25f, bool previewEmitters = true,
+    bool straightRibbons = true);
 
 } // namespace rm

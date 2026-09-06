@@ -20,6 +20,7 @@
 #include "core/scene/GroundDecals.hpp"
 #include "core/scene/WeaponVisuals.hpp"
 #include "core/scene/CombatEffects.hpp"
+#include "core/scene/ProjectileTrails.hpp"
 #include "core/scene/Selection.hpp"
 #include "core/scene/UnitBatch.hpp"
 #include "core/scene/UnitDraw.hpp"
@@ -91,6 +92,7 @@ extern bool gInterpolate;
 struct UnitScene {
     rm::WeaponVisuals weaponVisuals;
     rm::CombatEffectState combatEffectState;
+    rm::ProjectileTrails projectileTrails;
 
     [[nodiscard]] std::optional<std::array<float,3>> weaponMuzzle(rm::sim::UnitId id,
                                                                 std::string_view key) const {

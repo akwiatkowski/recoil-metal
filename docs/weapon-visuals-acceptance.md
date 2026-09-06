@@ -87,8 +87,23 @@ Endpoints are unit transforms, not target bones. The `[weapon-visuals]` case
 continuous strip age, expiry and replacement; no separate visual capture was made
 for this slice.
 
-The remaining approved work proceeds in order: historical ribbon trails and
-original projectile meshes.
+Historical ribbon trails now draw the original TrailBlueprints over each shot's
+recorded path (ADR-101). A shot whose visuals include a trail material receives a
+presentation serial on first sight; its positions are recorded once per tick from
+the muzzle onward, and every frame the last TrailLength elmos of that path are
+emitted as strip segments carrying a trail-relative coordinate, so the authored
+ramp reads head to tail across the whole ribbon and TextureRepeatRate repeats
+along it. After impact the ribbon keeps moving at the shot's last speed and slides
+out of the window. The `[weapon-visuals]` case "projectile ribbons retain turns"
+covers serial assignment, the turn, clipping to the authored length, head
+extrapolation between ticks and draining; the state-hash case confirms the
+serial and origin are cosmetic. The offscreen gallery adds a bending arc behind
+each bolt sample (`weapon gallery ribbon:` lines report the segment count); the
+2026-09-06 capture shows the Gauss and heavy-laser ribbons curving, faint at the
+gallery scale. TextureRepeatRate is read as repeats per ogrid of TrailLength, the
+beam convention; retail's exact trail shader was not consulted.
+
+The remaining approved work is original projectile meshes.
 Original mesh projectile rendering and full retail pixel parity are not claimed.
 Unresolved visuals retain the existing procedural fallback. Full native-emitter
 parity, including drag and every alignment/water flag, is not yet claimed.

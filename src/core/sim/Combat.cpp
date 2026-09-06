@@ -1578,6 +1578,7 @@ Projectile launch(std::array<Fx, 3> from, std::array<Fx, 3> to,
     Projectile shot;
     shot.firedBy = firedBy;
     shot.visualId = weapon.projectileId;
+    shot.visualOrigin = from;
     if (weapon.projectileTraits.trackTarget) {
         constexpr float kRadiansPerDegree = 0.017453292519943295f;
         shot.guidanceTarget = target;

@@ -55,9 +55,11 @@ void appendProjectiles(std::vector<Particle>& into, std::span<const sim::Project
         };
 
         if (visuals && !visuals->find(shot.visualId).empty()) {
+            // Ribbon materials are left out here: ProjectileTrails draws them over the
+            // shot's recorded path.
             appendWeaponVisual(into, *visuals, shot.visualId, at,
                 {at[0]+sim::fxToFloat(shot.velocity[0]), at[1]+sim::fxToFloat(shot.velocity[1]),
-                 at[2]+sim::fxToFloat(shot.velocity[2])}, elmosPerPoint, false, 0.25f, false);
+                 at[2]+sim::fxToFloat(shot.velocity[2])}, elmosPerPoint, false, 0.25f, false, false);
             continue;
         }
 

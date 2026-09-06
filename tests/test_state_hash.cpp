@@ -353,6 +353,8 @@ TEST_CASE("projectile visual identity is excluded from simulation hashes", "[wea
     fixture.projectiles.emplace_back();
     const auto before = fixture.hash();
     fixture.projectiles.front().visualId = "/projectiles/tdfgauss01/tdfgauss01_proj.bp";
+    fixture.projectiles.front().visualOrigin = {rm::sim::Fx::fromInt(3), {}, rm::sim::Fx::fromInt(4)};
+    fixture.projectiles.front().visualSerial = 17;
     CHECK(fixture.hash() == before);
 }
 

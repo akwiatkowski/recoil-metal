@@ -524,6 +524,12 @@ void composeHeadlessInterface(rm::Renderer& renderer, const Session& session,
             rm::appendProjectiles(shotParticles, shotProjectiles, 0.0f,
                                   renderer.camera().elmosPerPoint(
                                       rm::kIconReferenceHeightPoints), &units.weaponVisuals);
+            units.projectileTrails.append(shotParticles, units.weaponVisuals, 0.0f,
+                renderer.camera().elmosPerPoint(rm::kIconReferenceHeightPoints),
+                [&](const std::array<float, 3>& at) {
+                    return units.visibleToViewer(rm::sim::fxFromFloat(at[0]),
+                                                 rm::sim::fxFromFloat(at[2]));
+                });
             if (weaponGallery) {
                 shotParticles.clear();
                 const std::array<std::pair<const char*, const char*>, 6> examples{{
@@ -572,6 +578,31 @@ void composeHeadlessInterface(rm::Renderer& renderer, const Session& session,
                         for (const auto id : units.weaponVisuals.find(examples[i].second))
                             rm::emitWeaponParticles(shotParticles, units.weaponVisuals.materials[id],
                                 id, from, from, 0, 0.2f, id+1);
+                        // The ribbon, over a bending path behind the bolt: eight ticks of an
+                        // arc rising and falling, so a straight strip and a ribbon cannot be
+                        // confused in the capture.
+                        rm::ProjectileTrails ribbons;
+                        std::vector<rm::sim::Projectile> path(1);
+                        path[0].visualId = examples[i].second;
+                        constexpr int kArcSamples = 8;      // recorded positions along the arc
+                        constexpr float kArcStepElmos = 8.0f;
+                        const auto arc = [&](int sample) {
+                            const float t = static_cast<float>(sample) / kArcSamples;
+                            return std::array<rm::sim::Fx,3>{
+                                rm::sim::fxFromFloat(from[0] - kArcStepElmos * (kArcSamples - sample)),
+                                rm::sim::fxFromFloat(from[1] + 6.0f * std::sin(t * 3.14159265f)),
+                                rm::sim::fxFromFloat(z)};
+                        };
+                        path[0].visualOrigin = arc(0);
+                        for (int sample = 1; sample <= kArcSamples; ++sample) {
+                            path[0].position = arc(sample);
+                            path[0].velocity = {rm::sim::fxFromFloat(kArcStepElmos), {}, {}};
+                            ribbons.update(path, units.weaponVisuals, 0.1f);
+                        }
+                        const auto before = shotParticles.size();
+                        ribbons.append(shotParticles, units.weaponVisuals, 0.0f, 1.0f);
+                        std::printf("weapon gallery ribbon: %s, %zu segments\n", examples[i].second,
+                            shotParticles.size() - before);
                     }
                     }
                     const auto screen = rm::worldToScreen(renderer.camera(),
@@ -1997,6 +2028,10 @@ int runWindowed(const Session& session) {
                 gatherVisibleProjectiles(visibleProjectiles, units);
                 rm::emitProjectileTrails(particles, visibleProjectiles, &units.weaponVisuals,
                     gAppTickRate.secondsPerTick());
+                // ...and the ribbons' path record, over ALL shots: visibility is applied when
+                // they are drawn, so a shot that leaves the fog brings its history with it.
+                units.projectileTrails.update(units.projectiles, units.weaponVisuals,
+                    gAppTickRate.secondsPerTick());
 
                 // The match, announced once. The frame loop draws the fight rather than
                 // narrating it, so this is the one thing worth saying out loud — and only
@@ -2113,6 +2148,12 @@ int runWindowed(const Session& session) {
             rm::appendProjectiles(iconScratch, visibleProjectiles, clock.alpha(),
                                   window.camera().elmosPerPoint(
                                       rm::kIconReferenceHeightPoints), &units.weaponVisuals);
+            units.projectileTrails.append(iconScratch, units.weaponVisuals, clock.alpha(),
+                window.camera().elmosPerPoint(rm::kIconReferenceHeightPoints),
+                [&](const std::array<float, 3>& at) {
+                    return units.visibleToViewer(rm::sim::fxFromFloat(at[0]),
+                                                 rm::sim::fxFromFloat(at[2]));
+                });
             window.setParticles(iconScratch);
 
             hudScratch.clear();

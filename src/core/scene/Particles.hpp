@@ -46,15 +46,19 @@ struct Particle {
     float rotation = 0; ///< radians
     float rotationRate = 0; ///< radians/second
     std::array<float, 3> animation{}; ///< frames/second, texture strip, ramp row [0,1]
-    std::uint32_t flags = 0; ///< bit 0: flat in world XZ plane
-
+    std::uint32_t flags = 0; ///< bit 0: flat in world XZ plane; bit 1: ribbon segment
+    /// For a ribbon segment (flags bit 1): the trail-relative coordinate at the strip's
+    /// origin end and at its far end, 0 at the projectile's head and 1 at the authored
+    /// TrailLength. The texture, ramp and colour mix read this rather than the segment's
+    /// own 0..1, so one ribbon made of many strips shades as one trail.
+    std::array<float, 2> trailRange{};
 };
 
-static_assert(sizeof(Particle) == 112, "Particle must match the packed shader input");
+static_assert(sizeof(Particle) == 120, "Particle must match the packed shader input");
 
 /// The most particles drawn at once.
 ///
-/// 4096 is about eight seconds of dust from two hundred moving units, and 448 KiB
+/// 4096 is about eight seconds of dust from two hundred moving units, and 480 KiB
 /// of buffer. Past it, new particles are dropped rather than the buffer grown: it
 /// cannot be resized while the GPU may be reading it, and a scene that wants more
 /// dust than this wants a different system rather than a bigger number.

@@ -39,6 +39,7 @@ struct ParticleIn {
     float rotationRate;
     packed_float3 animation;
     uint flags;
+    packed_float2 trailRange;
 };
 
 struct ParticleOut {
@@ -46,6 +47,8 @@ struct ParticleOut {
     float4 colour;
     float2 offset;  // -1..1 across the quad, for the round falloff
     uint material [[flat]];
+    uint flags [[flat]];
+    float2 trailRange;
     float along;
     float age;
     float length;
@@ -129,6 +132,8 @@ vertex ParticleOut particleVertex(uint vid [[vertex_id]],
     // both a translucent puff and an additive spark.
     out.colour = float4(p.colour) * (textured ? 1.0 : alpha);
     out.material = p.material;
+    out.flags = p.flags;
+    out.trailRange = float2(p.trailRange);
     out.along = along;
     out.age = p.age;
     out.length = p.length;
@@ -153,10 +158,15 @@ fragment float4 particleFragment(ParticleOut in [[stage_in]],
         constexpr sampler linearSampler(filter::linear, address::clamp_to_edge);
         constexpr sampler wrappedSampler(filter::linear, address::repeat);
         const bool beam = material.sampling.y > 0.5;
+        const bool ribbon = (in.flags & 2u) != 0u;
         const float across = in.offset.x * 0.5 + 0.5;
-        const float repeats = beam && material.sampling.z > 0
-            ? in.length * 0.125 * material.sampling.z : 1.0;
-        float2 uv = float2(across, in.along * repeats + in.age * material.sampling.w);
+        // A ribbon segment is one piece of a longer trail: its texture position is the
+        // trail-relative coordinate, 0 at the head and 1 at the authored length, and the
+        // repeat count for the whole trail was folded into sampling.z at load.
+        const float along = ribbon ? mix(in.trailRange.x, in.trailRange.y, in.along) : in.along;
+        const float repeats = ribbon ? material.sampling.z
+            : beam && material.sampling.z > 0 ? in.length * 0.125 * material.sampling.z : 1.0;
+        float2 uv = float2(across, along * repeats + in.age * material.sampling.w);
         if (in.length == 0) {
             const float frames = max(1.0, material.format.y);
             const float strips = max(1.0, material.format.z);
@@ -167,11 +177,13 @@ fragment float4 particleFragment(ParticleOut in [[stage_in]],
         const float4 texel = texture.sample(wrappedSampler, uv);
         float4 colour = texel;
         if (material.sampling.x > 0.5) {
-            const float rampTime = in.length > 0 ? 1.0 - in.along : in.animation.w;
+            // TrailBlueprint: the ramp's left edge is the head of the trail, its right edge
+            // the tail. A bolt strip is drawn tail to head, so its ramp reads backwards.
+            const float rampTime = ribbon ? along : in.length > 0 ? 1.0 - in.along : in.animation.w;
             const float rampRow = in.length > 0 ? across : in.animation.z;
             colour *= ramp.sample(linearSampler, float2(rampTime, rampRow));
         }
-        colour *= mix(material.startColour, material.endColour, in.along);
+        colour *= mix(material.startColour, material.endColour, along);
         const uint blend = uint(material.format.x);
         if (blend == 5) {
             // Retail particle.fx WorldRefractPS: RG is an offset, alpha masks distortion.

@@ -131,6 +131,13 @@ struct Projectile {
 
     /// Cosmetic source identity; never affects simulation or state hashes.
     std::string visualId;
+    /// Where the shot left the muzzle, so a ribbon trail can start there rather than one
+    /// tick downrange. Presentation only.
+    std::array<Fx, 3> visualOrigin{};
+    /// Presentation identity, assigned by ProjectileTrails the first time it sees the shot
+    /// and never by the sim. Zero until then. The projectile list compacts on impact, so an
+    /// index cannot name a shot across ticks; this can.
+    std::uint32_t visualSerial = 0;
 };
 
 /// Gravity applied to an arced shot, in elmos per second squared.

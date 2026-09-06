@@ -168,6 +168,7 @@ add_library(rm_core STATIC
     src/core/scene/BuildEffects.cpp
     src/core/scene/CombatEffects.cpp
     src/core/scene/ProjectileFx.cpp
+    src/core/scene/ProjectileTrails.cpp
     src/core/scene/WeaponVisuals.cpp
     src/core/sim/Army.cpp
     src/core/sim/Command.cpp

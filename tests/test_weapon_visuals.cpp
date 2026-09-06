@@ -95,12 +95,27 @@ TEST_CASE("retail weapons resolve distinct textured bolts and beam strips", "[co
         shot.velocity = {rm::sim::Fx::fromInt(8), {}, {}};
         std::vector<rm::Particle> particles;
         rm::appendProjectiles(particles, std::array{shot}, 0.5f, 1.0f, &visuals);
-        REQUIRE(particles.size() == static_cast<std::size_t>(std::ranges::count_if(visuals.find(key),
-            [&](auto id) { return visuals.materials[id].emitRate.keys.empty(); })));
-        CHECK(particles.front().origin[0] + particles.front().length == Catch::Approx(104));
-        CHECK(particles.front().material < visuals.materials.size());
-        CHECK(particles.front().size > 0);
-        CHECK(particles.front().axis[0] == Catch::Approx(1));
+        // Straight strips only: emitters run on the tick path and ribbons over the recorded path.
+        const auto straight = static_cast<std::size_t>(std::ranges::count_if(visuals.find(key),
+            [&](auto id) { return visuals.materials[id].emitRate.keys.empty()
+                                  && !visuals.materials[id].ribbon; }));
+        REQUIRE(particles.size() == straight);
+        for (const auto& strip : particles) {
+            CHECK(strip.origin[0] + strip.length == Catch::Approx(104));
+            CHECK(strip.material < visuals.materials.size());
+            CHECK(strip.size > 0);
+            CHECK(strip.axis[0] == Catch::Approx(1));
+        }
+        // A PolyTrail resolves as a ribbon with its authored TrailLength, and the gallery's
+        // straight preview still draws it.
+        const auto ribbon = std::ranges::find_if(visuals.find(key),
+            [&](auto id) { return visuals.materials[id].ribbon; });
+        if (ribbon != visuals.find(key).end()) {
+            CHECK(visuals.materials[*ribbon].length > 0);
+            std::vector<rm::Particle> preview;
+            rm::appendWeaponVisual(preview, visuals, key, {100, 10, 0}, {108, 10, 0}, 1.0f);
+            CHECK(std::ranges::any_of(preview, [&](const auto& p) { return p.material == *ribbon; }));
+        }
     }
     CHECK(visuals.find("unknown").empty());
     rm::sim::Event beam;
@@ -318,4 +333,81 @@ TEST_CASE("beam strips follow their live endpoints for the authored lifetime", "
     rm::emitCombatEffects(beads, std::array{event}, &visuals, &fallback, 0.1f);
     CHECK(fallback.beams.empty());
     CHECK(beads.size() > 2);
+}
+
+TEST_CASE("projectile ribbons retain turns, clip to the authored length and drain after impact",
+          "[weapon-visuals]") {
+    rm::WeaponVisuals visuals;
+    rm::WeaponMaterial material;
+    material.ribbon = true;
+    material.length = 15; // TrailLength, elmos
+    material.width = 2;
+    visuals.materials.push_back(material);
+    visuals.definitions["shot"] = {0};
+
+    // Muzzle at the origin; one tick later the shot is at x=10 heading +x, then it turns +z.
+    rm::ProjectileTrails trails;
+    std::vector<rm::sim::Projectile> shots(1);
+    shots[0].visualId = "shot";
+    using Fx = rm::sim::Fx;
+    shots[0].visualOrigin = std::array<Fx, 3>{};
+    shots[0].position = std::array<Fx, 3>{Fx::fromInt(10), Fx{}, Fx{}};
+    shots[0].velocity = std::array<Fx, 3>{Fx::fromInt(10), Fx{}, Fx{}};
+    trails.update(shots, visuals, 0.1f);
+    const auto serial = shots[0].visualSerial;
+    REQUIRE(serial != 0);
+    shots[0].position = std::array<Fx, 3>{Fx::fromInt(10), Fx{}, Fx::fromInt(10)};
+    shots[0].velocity = std::array<Fx, 3>{Fx{}, Fx{}, Fx::fromInt(10)};
+    trails.update(shots, visuals, 0.1f);
+    CHECK(shots[0].visualSerial == serial);
+    CHECK(trails.size() == 1);
+
+    // Head first: the +z leg is whole (u 0..2/3); the +x leg is clipped to the 5 elmos left.
+    std::vector<rm::Particle> ribbons;
+    trails.append(ribbons, visuals, 0.0f, 0.0f);
+    REQUIRE(ribbons.size() == 2);
+    CHECK((ribbons[0].flags & 2u) != 0);
+    CHECK(ribbons[0].origin[2] == Catch::Approx(0));
+    CHECK(ribbons[0].axis[2] == Catch::Approx(1));
+    CHECK(ribbons[0].length == Catch::Approx(10));
+    CHECK(ribbons[0].trailRange[1] == Catch::Approx(0));
+    CHECK(ribbons[0].trailRange[0] == Catch::Approx(10.0 / 15));
+    CHECK(ribbons[1].origin[0] == Catch::Approx(5));
+    CHECK(ribbons[1].axis[0] == Catch::Approx(1));
+    CHECK(ribbons[1].length == Catch::Approx(5));
+    CHECK(ribbons[1].trailRange[0] == Catch::Approx(1));
+    CHECK(ribbons[1].trailRange[1] == Catch::Approx(ribbons[0].trailRange[0]));
+    CHECK(ribbons[0].material == 0);
+    CHECK(ribbons[0].size == Catch::Approx(2));
+
+    // Between ticks the live head is extrapolated by the frame's tick fraction.
+    ribbons.clear();
+    trails.append(ribbons, visuals, 0.5f, 0.0f);
+    REQUIRE(ribbons.size() == 2);
+    CHECK(ribbons[0].origin[2] + ribbons[0].length == Catch::Approx(15));
+
+    // Impact: the shot is gone, the ribbon keeps moving at its last speed (100 elmos/s) and
+    // slides out of the authored window; nothing is left once the whole path has drained.
+    shots.clear();
+    trails.update(shots, visuals, 0.05f); // drained 5 elmos
+    ribbons.clear();
+    trails.append(ribbons, visuals, 0.0f, 0.0f);
+    REQUIRE(ribbons.size() == 1);
+    CHECK(ribbons[0].trailRange[1] == Catch::Approx(5.0 / 15));
+    CHECK(ribbons[0].trailRange[0] == Catch::Approx(1));
+    trails.update(shots, visuals, 0.2f); // drained 25 > the 20 elmos recorded
+    CHECK(trails.size() == 0);
+    ribbons.clear();
+    trails.append(ribbons, visuals, 0.0f, 0.0f);
+    CHECK(ribbons.empty());
+
+    // A shot without ribbon materials is never tracked, and the bolt path skips ribbons.
+    std::vector<rm::sim::Projectile> plain(1);
+    plain[0].visualId = "unknown";
+    trails.update(plain, visuals, 0.1f);
+    CHECK(plain[0].visualSerial == 0);
+    CHECK(trails.size() == 0);
+    std::vector<rm::Particle> bolts;
+    rm::appendProjectiles(bolts, shots, 0.0f, 1.0f, &visuals);
+    CHECK(bolts.empty());
 }

@@ -1284,6 +1284,7 @@ void march(UnitScene& scene, const rm::HeightField& field, PassabilitySet& passa
         rm::emitCombatEffects(dust, visualEvents, &scene.weaponVisuals,
             &scene.combatEffectState, kTickSeconds);
         rm::emitProjectileTrails(dust, scene.projectiles, &scene.weaponVisuals, kTickSeconds);
+        scene.projectileTrails.update(scene.projectiles, scene.weaponVisuals, kTickSeconds);
         rm::emitDust(dust, emitters, field, kTickSeconds, dustDebt, dustSeed);
         rm::emitAmbient(dust, ambient, kTickSeconds, ambientDebt, dustSeed);
     }

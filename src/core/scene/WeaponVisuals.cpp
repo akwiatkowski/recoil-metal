@@ -146,9 +146,19 @@ void loadWeaponMaterials(WeaponVisuals& result, const vfs::Vfs& content,
             material.ramp = std::move(*ramp);
         }
         const bool beam = table->find("Thickness") != nullptr;
+        material.ribbon = table->find("TrailLength") != nullptr;
         material.sampling = {material.ramp.data.empty() ? 0.0f : 1.0f, beam ? 1.0f : 0.0f,
             static_cast<float>(table->numberAt("RepeatRate").value_or(0)),
             static_cast<float>(table->numberAt("VShift").value_or(0)) * 10};
+        if (material.ribbon) {
+            // TrailBlueprint.TextureRepeatRate: "how often the texture is repeated" along the
+            // trail. Read as repeats per ogrid of TrailLength, the same convention as a beam's
+            // RepeatRate per ogrid of length, folded into one whole-trail repeat count here
+            // because a ribbon's segments do not know the trail's length in the shader.
+            material.sampling[2] = static_cast<float>(table->numberAt("TextureRepeatRate").value_or(
+                table->numberAt("RepeatRate").value_or(1)))
+                * static_cast<float>(table->numberAt("TrailLength").value_or(0));
+        }
         const std::array<const char*,4> channels{"x","y","z","w"};
         for (std::size_t i=0; i<channels.size(); ++i) {
             if (const auto* colour = table->find("StartColor"))
@@ -171,12 +181,13 @@ void loadWeaponMaterials(WeaponVisuals& result, const vfs::Vfs& content,
 
 void appendWeaponVisual(std::vector<Particle>& out, const WeaponVisuals& visuals,
     std::string_view key, std::array<float, 3> from, std::array<float, 3> to,
-    float elmosPerPoint, bool beam, float duration, bool previewEmitters) {
+    float elmosPerPoint, bool beam, float duration, bool previewEmitters, bool straightRibbons) {
     std::array<float, 3> axis{to[0]-from[0], to[1]-from[1], to[2]-from[2]};
     const float distance = std::sqrt(axis[0]*axis[0]+axis[1]*axis[1]+axis[2]*axis[2]);
     if (distance > 0) for (auto& value : axis) value /= distance;
     for (const auto id : visuals.find(key)) {
         const auto& material = visuals.materials[id];
+        if (!beam && material.ribbon && !straightRibbons) continue;
         if (!beam && !material.emitRate.keys.empty()) {
             if (!previewEmitters) continue;
             // Preview of an attached emitter; persistent emission is handled on the tick path.

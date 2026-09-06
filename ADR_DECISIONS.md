@@ -3313,3 +3313,23 @@ String categories keep counting zero as before rather than being parsed, to leav
 behaviour unchanged. Staggering changes when a condition is re-checked, so the duel's
 course differs from the earlier hash log; the outcome is recorded in
 `docs/skirmish-economy-acceptance.md`.
+
+## ADR-101 — Ribbon trails over a recorded path, identified by a cosmetic serial
+
+**Context.** A PolyTrail is a ribbon of the projectile's recent positions; the straight
+one-tick strip of ADR-096 cannot show an arc bending. The sim compacts its projectile
+list on impact and offers no identity across ticks.
+
+**Decision.** `ProjectileTrails` (presentation state on the scene) records positions
+once per tick and gives each shot a serial in a cosmetic `Projectile` field the state
+hash never reads, alongside the launch origin so the ribbon starts at the muzzle. Per
+frame it emits one strip per segment within the authored TrailLength, each carrying a
+trail-relative coordinate (`Particle::trailRange`, flag bit 1) so texture, ramp and
+colour mix read head-to-tail across the whole ribbon. A dead shot's ribbon keeps moving
+at its last speed and drains out; visibility is decided at draw time by the head.
+
+**Alternatives and consequences.** Keying by shooter and tick collides on salvos.
+Emitting persistent per-tick puffs cannot bend a textured ribbon or apply a ramp along
+it. Particle grows from 112 to 120 bytes. Bolt strips skip ribbon materials; the gallery
+still previews them straight. TextureRepeatRate is interpreted as repeats per ogrid of
+TrailLength without a retail shader read.
