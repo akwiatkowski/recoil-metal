@@ -234,7 +234,7 @@ void gatherVisibleEvents(std::vector<rm::sim::Event>& out, const UnitScene& unit
                                   && units.alliedWithViewer(event.army);
         if (matchEvent || alliedUnitEvent || units.visibleToViewer(event.unit)
             || units.visibleToViewer(event.at[0], event.at[2])) {
-            out.push_back(event);
+            out.push_back(units.combatVisualEvent(event));
         }
     }
 }
@@ -251,6 +251,14 @@ void gatherVisibleEvents(std::vector<rm::sim::Event>& out, const UnitScene& unit
 void composeHeadlessInterface(rm::Renderer& renderer, const Session& session,
                               const rm::ui::UiViewport& viewport) {
     RM_UNPACK_SESSION(session)
+    renderer.setWeaponMaterials(units.weaponVisuals.materials);
+    const bool weaponGallery = hasFlag(argc, argv, "--weapon-gallery");
+    if (weaponGallery) {
+        const float x = map->field.widthElmos() * 0.5f;
+        const float z = map->field.depthElmos() * 0.5f;
+        renderer.focusOn({x, map->field.heightAtWorld(x,z) + 100.0f, z}, 170.0f);
+        renderer.camera().pitch = 1.4f;
+    }
             // Selection rings need a selection, and a headless run has no
             // clicks. `--select N` rings the first N units and `--select-type ID`
             // rings the first unit with that blueprint id, so that what a
@@ -515,7 +523,78 @@ void composeHeadlessInterface(rm::Renderer& renderer, const Session& session,
             gatherVisibleProjectiles(shotProjectiles, units);
             rm::appendProjectiles(shotParticles, shotProjectiles, 0.0f,
                                   renderer.camera().elmosPerPoint(
-                                      rm::kIconReferenceHeightPoints));
+                                      rm::kIconReferenceHeightPoints), &units.weaponVisuals);
+            if (weaponGallery) {
+                shotParticles.clear();
+                const std::array<std::pair<const char*, const char*>, 6> examples{{
+                    {"UEF Gauss", "/projectiles/TDFGauss01/TDFGauss01_proj.bp"},
+                    {"Aeon Disruptor", "/projectiles/ADFDisruptor01/ADFDisruptor01_proj.bp"},
+                    {"Cybran heavy laser", "/projectiles/CDFLaserHeavy01/CDFLaserHeavy01_proj.bp"},
+                    {"Seraphim Oh cannon", "/projectiles/SDFOhCannon01/SDFOhCannon01_proj.bp"},
+                    {"Cybran particle beam", "URB2301:MainGun"},
+                    {"Cybran microwave beam", "URL0402:MainGun"},
+                }};
+                const auto centre = renderer.camera().target;
+                for (std::size_t i=0; i<examples.size(); ++i) {
+                    const float z = centre.z + (static_cast<float>(i)-2.5f)*16.0f;
+                    const bool beam = i >= 4;
+                    const std::array<float,3> from{centre.x + (beam ? -25.0f : 25.0f), centre.y, z};
+                    const std::array<float,3> to{centre.x+65.0f, centre.y, z};
+                    const auto first = shotParticles.size();
+                    if (!beam && hasFlag(argc, argv, "--impact-gallery")) {
+                        const std::array<const char*,4> weapons{"UEL0201:MainGun", "UAL0201:MainGun",
+                            "URL0107:LaserArms", "XSL0201:MainGun"};
+                        const auto at = [&](float x) {
+                            return std::array<rm::sim::Fx,3>{rm::sim::fxFromFloat(x),
+                                rm::sim::fxFromFloat(centre.y),rm::sim::fxFromFloat(z)};
+                        };
+                        const std::array<rm::sim::Event,3> events{{
+                            {.kind=rm::sim::EventKind::WeaponFired, .at2=at(centre.x-25),
+                             .visualId=weapons[i], .visualDirection={rm::sim::Fx::fromInt(1),{}, {}}},
+                            {.kind=rm::sim::EventKind::ProjectileImpact, .at=at(centre.x+25),
+                             .impactType=rm::sim::ImpactType::Terrain, .visualId=examples[i].second},
+                            {.kind=rm::sim::EventKind::ProjectileImpact, .at=at(centre.x+65),
+                             .impactType=rm::sim::ImpactType::Unit, .visualId=examples[i].second},
+                        }};
+                        rm::CombatEffectState effects;
+                        rm::emitCombatEffects(shotParticles, events, &units.weaponVisuals, &effects);
+                        // Inspect the flash fifty milliseconds after creation, as a live frame
+                        // does between simulation ticks; zero-age ramps can be transparent.
+                        for (auto p=first; p<shotParticles.size(); ++p) shotParticles[p].age += 0.05f;
+                        rm::emitCombatEffects(shotParticles, {}, &units.weaponVisuals, &effects, 0.05f);
+                        std::printf("impact gallery: %s muzzle, land and unit hits\n", weapons[i]);
+                    } else {
+                      rm::appendWeaponVisual(shotParticles, units.weaponVisuals, examples[i].second,
+                        from, to, 1.0f, beam, 0.6f, false);
+                    if (beam) {
+                        for (auto p=first; p<shotParticles.size(); ++p) shotParticles[p].age = 0.2f;
+                    } else {
+                        for (const auto id : units.weaponVisuals.find(examples[i].second))
+                            rm::emitWeaponParticles(shotParticles, units.weaponVisuals.materials[id],
+                                id, from, from, 0, 0.2f, id+1);
+                    }
+                    }
+                    const auto screen = rm::worldToScreen(renderer.camera(),
+                        simd_make_float3(centre.x-95.0f, centre.y,z),
+                        shotViewport.hudExtent().width, shotViewport.hudExtent().height);
+                    if (screen) (void)rm::text::appendText(hud.label, renderer.labelFont().glyphs,
+                        examples[i].first, (*screen)[0], (*screen)[1], {1,1,1,1});
+                    std::printf("weapon gallery: %s, %zu layers\n", examples[i].second,
+                        units.weaponVisuals.find(examples[i].second).size());
+                }
+                // Exercise the scene-copy path using an original refracting emitter too.
+                const auto refract = std::ranges::find_if(units.weaponVisuals.materials,
+                    [](const auto& material) { return material.blend == rm::EffectBlend::Refract; });
+                if (refract != units.weaponVisuals.materials.end()) {
+                    const auto id = static_cast<std::uint32_t>(refract-units.weaponVisuals.materials.begin());
+                    std::uint32_t seed = id+1;
+                    auto particle = rm::makeWeaponParticle(*refract, id, 0.5f,
+                        {centre.x+25, centre.y, centre.z+56}, seed);
+                    particle.age = particle.lifetime*0.5f;
+                    shotParticles.push_back(particle);
+                    std::printf("weapon gallery refraction: %s\n", refract->emitter.c_str());
+                }
+            }
             renderer.setParticles(shotParticles);
 
             if (!shotOptions.empty()) {
@@ -766,6 +845,7 @@ int runWindowed(const Session& session) {
         rm::Window window{static_cast<int>(session.window.width),
                           static_cast<int>(session.window.height),
                           "recoil-metal — m8: movable units", session.window.fullscreen};
+        window.setWeaponMaterials(units.weaponVisuals.materials);
         const bool inputAcceptance = !session.window.inputAcceptancePath.empty();
         if (inputAcceptance) {
             window.setSimulatedBacking(session.window.simulatedBacking);
@@ -1900,7 +1980,9 @@ int runWindowed(const Session& session) {
                 // per-tick notification (Events.hpp): the next advanceMatch clears the
                 // queue, so this tick's shots are visible now or never.
                 gatherVisibleEvents(visibleEvents, units);
-                rm::emitCombatEffects(particles, visibleEvents);
+                units.updateCombatAttachments();
+                rm::emitCombatEffects(particles, visibleEvents, &units.weaponVisuals,
+                    &units.combatEffectState, gAppTickRate.secondsPerTick());
 
                 // ...and as SOUND, from the same per-tick queue for the same reason. The
                 // listener rides the camera every tick, so panning follows the view.
@@ -1913,7 +1995,8 @@ int runWindowed(const Session& session) {
                 // ...and the arcs' smoke, one puff per shell per tick — the emission rate
                 // is the sim's own, so the trail spacing is a tick of travel (ProjectileFx).
                 gatherVisibleProjectiles(visibleProjectiles, units);
-                rm::emitProjectileTrails(particles, visibleProjectiles);
+                rm::emitProjectileTrails(particles, visibleProjectiles, &units.weaponVisuals,
+                    gAppTickRate.secondsPerTick());
 
                 // The match, announced once. The frame loop draws the fight rather than
                 // narrating it, so this is the one thing worth saying out loud — and only
@@ -2029,7 +2112,7 @@ int runWindowed(const Session& session) {
             gatherVisibleProjectiles(visibleProjectiles, units, clock.alpha());
             rm::appendProjectiles(iconScratch, visibleProjectiles, clock.alpha(),
                                   window.camera().elmosPerPoint(
-                                      rm::kIconReferenceHeightPoints));
+                                      rm::kIconReferenceHeightPoints), &units.weaponVisuals);
             window.setParticles(iconScratch);
 
             hudScratch.clear();

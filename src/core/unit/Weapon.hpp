@@ -5,6 +5,7 @@
 #include "core/lua/LuaValue.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <optional>
@@ -262,6 +263,8 @@ struct Weapon {
     /// to its old constant — every unit firing from four elmos up, which is what this
     /// field exists to retire.
     sim::Fx muzzleHeight{};
+    /// Presentation-only rest bone position in elmos; the simulation still uses muzzleHeight.
+    std::optional<std::array<float,3>> visualMuzzleOffset;
 
     /// A BEAM: damage arrives the instant the weapon fires, nothing flies. From
     /// `BeamLifetime` (a pulse that exists for a fraction of a second) or `ContinuousBeam`
@@ -269,6 +272,7 @@ struct Weapon {
     /// as fast bullets both misses (the sim would integrate a flight) and reads wrong (a
     /// laser is a LINE). One pulse per trigger-pull at the weapon's own rate of fire.
     bool beam = false;
+    sim::Fx beamVisualLifetime{}; ///< authored seconds; presentation only
 
     // A TWO-RING BLAST, for the weapons that state one instead of a plain damage figure.
     //

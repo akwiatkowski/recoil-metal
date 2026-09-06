@@ -30,8 +30,8 @@ struct Particle {
 
     /// Colour at birth, PREMULTIPLIED by alpha.
     ///
-    /// Premultiplied so that one pipeline covers both kinds of particle this will
-    /// ever want. Ordinary translucency is (rgb·a, a) and blends over the scene;
+    /// Procedural particles share a premultiplied pipeline. Ordinary translucency
+    /// is (rgb·a, a) and blends over the scene;
     /// an additive spark or muzzle flash is (rgb, 0), which adds its colour and
     /// obscures nothing. With straight alpha those need two blend states and
     /// therefore two pipelines, and dust and sparks would not share a draw.
@@ -39,18 +39,22 @@ struct Particle {
 
     float size = 1.0f;   ///< elmos across, at birth
     float growth = 0.0f; ///< elmos per second; dust swells as it disperses
+    std::array<float, 3> axis{}; ///< textured strip direction; zero length means billboard
+    float length = 0.0f;
+    std::uint32_t material = UINT32_MAX; ///< no material retains the procedural particle
+    std::array<float, 3> acceleration{};
+    float rotation = 0; ///< radians
+    float rotationRate = 0; ///< radians/second
+    std::array<float, 3> animation{}; ///< frames/second, texture strip, ramp row [0,1]
+    std::uint32_t flags = 0; ///< bit 0: flat in world XZ plane
+
 };
 
-static_assert(sizeof(Particle) == 56,
-              "Particle must stay tightly packed — the shader reads it as two "
-              "packed_float3s with a float each, a packed_float4 and two floats. "
-              "56 rather than a round number: std::array<float,3> is 12 bytes and "
-              "4-aligned, unlike simd_float3, which is what keeps these fields "
-              "packed at all (see TerrainVertex for the same reasoning)");
+static_assert(sizeof(Particle) == 112, "Particle must match the packed shader input");
 
 /// The most particles drawn at once.
 ///
-/// 4096 is about eight seconds of dust from two hundred moving units, and 192 KB
+/// 4096 is about eight seconds of dust from two hundred moving units, and 448 KiB
 /// of buffer. Past it, new particles are dropped rather than the buffer grown: it
 /// cannot be resized while the GPU may be reading it, and a scene that wants more
 /// dust than this wants a different system rather than a bigger number.

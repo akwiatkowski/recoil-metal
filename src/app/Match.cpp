@@ -1,4 +1,6 @@
 #include "app/Match.hpp"
+#include "core/scene/CombatEffects.hpp"
+#include "core/scene/ProjectileFx.hpp"
 
 #include "app/FafAi.hpp"
 #include "app/FafOpponent.hpp"
@@ -1276,6 +1278,12 @@ void march(UnitScene& scene, const rm::HeightField& field, PassabilitySet& passa
             });
         }
         rm::advanceParticles(dust, kTickSeconds);
+        scene.updateCombatAttachments();
+        std::vector<rm::sim::Event> visualEvents;
+        for (const auto& event : scene.events.all()) visualEvents.push_back(scene.combatVisualEvent(event));
+        rm::emitCombatEffects(dust, visualEvents, &scene.weaponVisuals,
+            &scene.combatEffectState, kTickSeconds);
+        rm::emitProjectileTrails(dust, scene.projectiles, &scene.weaponVisuals, kTickSeconds);
         rm::emitDust(dust, emitters, field, kTickSeconds, dustDebt, dustSeed);
         rm::emitAmbient(dust, ambient, kTickSeconds, ambientDebt, dustSeed);
     }

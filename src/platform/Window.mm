@@ -754,6 +754,10 @@ void Window::setMinimapRect(float x, float y, float width, float height) noexcep
     impl_->renderer->setMinimapRect(x, y, width, height);
 }
 
+void Window::setWeaponMaterials(std::span<const WeaponMaterial> materials) {
+    impl_->renderer->setWeaponMaterials(materials);
+}
+
 void Window::setIconAtlas(const dds::Texture& atlas) {
     impl_->renderer->setIconAtlas(atlas);
 }

@@ -9,6 +9,7 @@
 #include "core/model/Pose.hpp"
 #include "core/scene/GroundDecals.hpp"
 #include "core/scene/Particles.hpp"
+#include "core/scene/WeaponVisuals.hpp"
 #include "core/scene/PropBatch.hpp"
 #include "core/scene/Selection.hpp"
 #include "core/scene/UnitBatch.hpp"
@@ -402,6 +403,7 @@ public:
     /// Uploaded when the SET of options changes, which is on selection — not per frame. An
     /// empty texture means the menu draws its reserved squares and no pictures.
     void setIconAtlas(const dds::Texture& atlas);
+    void setWeaponMaterials(std::span<const WeaponMaterial> materials);
 
     /// The map's own preview thumbnail, for the minimap to stand on.
     ///
@@ -914,6 +916,14 @@ private:
 
     // The build tray's icons, packed into one texture. Semantic UI layer quads occupy fixed
     // partitions of one triple-buffered allocation; mixed layers use the two counts in draw order.
+    struct WeaponTextures {
+        MTL::Texture* texture;
+        MTL::Texture* ramp;
+        std::array<float,16> uniforms{};
+        float sortOrder = 0;
+    };
+    std::vector<WeaponTextures> weaponTextures_;
+    std::array<MTL::RenderPipelineState*, 2> modulatedParticlePipelines_{};
     MTL::Texture* iconAtlas_ = nullptr;  // owned
     MTL::Buffer* uiBuffer_ = nullptr;  // owned
     std::array<std::array<std::size_t, 2>, ui::kUiLayerCount> uiLayerVertexCounts_{};

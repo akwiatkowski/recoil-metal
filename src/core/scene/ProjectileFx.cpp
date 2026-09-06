@@ -36,7 +36,7 @@ void dot(std::vector<Particle>& into, std::array<float, 3> at, std::array<float,
 } // namespace
 
 void appendProjectiles(std::vector<Particle>& into, std::span<const sim::Projectile> shots,
-                       float alpha, float elmosPerPoint) {
+                       float alpha, float elmosPerPoint, const WeaponVisuals* visuals) {
     if (!(elmosPerPoint > 0.0f)) {
         return;
     }
@@ -53,6 +53,13 @@ void appendProjectiles(std::vector<Particle>& into, std::span<const sim::Project
             sim::fxToFloat(shot.position[1]) + sim::fxToFloat(shot.velocity[1]) * shotBlend,
             sim::fxToFloat(shot.position[2]) + sim::fxToFloat(shot.velocity[2]) * shotBlend,
         };
+
+        if (visuals && !visuals->find(shot.visualId).empty()) {
+            appendWeaponVisual(into, *visuals, shot.visualId, at,
+                {at[0]+sim::fxToFloat(shot.velocity[0]), at[1]+sim::fxToFloat(shot.velocity[1]),
+                 at[2]+sim::fxToFloat(shot.velocity[2])}, elmosPerPoint, false, 0.25f, false);
+            continue;
+        }
 
         switch (shot.arc) {
         case unitdef::BallisticArc::None: {
@@ -90,8 +97,26 @@ void appendProjectiles(std::vector<Particle>& into, std::span<const sim::Project
 }
 
 void emitProjectileTrails(std::vector<Particle>& into,
-                          std::span<const sim::Projectile> shots) {
+                          std::span<const sim::Projectile> shots,
+                          const WeaponVisuals* visuals, float secondsPerTick) {
     for (const sim::Projectile& shot : shots) {
+        if (visuals && !visuals->find(shot.visualId).empty()) {
+            // The simulation assigns every launch the same lifetime. Its remaining time
+            // gives emitter age without storing presentation state in the simulation.
+            const auto lifetimeTicks = static_cast<int>(std::lround(sim::kProjectileLifetime.value/secondsPerTick));
+            const auto elapsedTicks = std::max(0, lifetimeTicks-shot.ticksRemaining);
+            const float begin = static_cast<float>(std::max(0,elapsedTicks-1))*secondsPerTick;
+            const float end = static_cast<float>(elapsedTicks)*secondsPerTick;
+            std::array<float,3> from{}, to{};
+            for (std::size_t axis=0; axis<3; ++axis) {
+                to[axis] = sim::fxToFloat(shot.position[axis]);
+                from[axis] = to[axis] - sim::fxToFloat(shot.velocity[axis]);
+            }
+            for (const auto id : visuals->find(shot.visualId))
+                emitWeaponParticles(into, visuals->materials[id], id, from, to,
+                    begin, end, shot.firedBy.index ^ (id+1));
+            continue;
+        }
         if (shot.arc == unitdef::BallisticArc::None) {
             continue;  // a tracer's shape is its streak; smoke belongs to the arcs
         }

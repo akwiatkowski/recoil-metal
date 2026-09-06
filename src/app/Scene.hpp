@@ -18,6 +18,8 @@
 #include "core/data/MoveDef.hpp"
 #include "core/data/Roster.hpp"
 #include "core/scene/GroundDecals.hpp"
+#include "core/scene/WeaponVisuals.hpp"
+#include "core/scene/CombatEffects.hpp"
 #include "core/scene/Selection.hpp"
 #include "core/scene/UnitBatch.hpp"
 #include "core/scene/UnitDraw.hpp"
@@ -87,6 +89,42 @@ extern bool gInterpolate;
 // them, and a vector that reallocates while later models load would leave every
 // batch built so far dangling. A deque never moves what it already holds.
 struct UnitScene {
+    rm::WeaponVisuals weaponVisuals;
+    rm::CombatEffectState combatEffectState;
+
+    [[nodiscard]] std::optional<std::array<float,3>> weaponMuzzle(rm::sim::UnitId id,
+                                                                std::string_view key) const {
+        if (!store.alive(id)) return std::nullopt;
+        const auto* def = catalog.def(store.typeAt(id.index));
+        if (!def) return std::nullopt;
+        for (const auto& weapon : def->weapons) {
+            if (def->name+":"+weapon.label != key || !weapon.visualMuzzleOffset) continue;
+            const auto& transform = store.transforms()[id.index];
+            constexpr float radiansPerBrad = 6.283185307179586f / 65536;
+            return rm::boneWorldPosition({.translation=*weapon.visualMuzzleOffset}, {
+                .position={rm::sim::fxToFloat(transform.x),rm::sim::fxToFloat(transform.y),rm::sim::fxToFloat(transform.z)},
+                .rotationX=static_cast<float>(transform.pitch)*radiansPerBrad,
+                .rotationY=static_cast<float>(transform.heading)*radiansPerBrad,
+                .rotationZ=static_cast<float>(transform.roll)*radiansPerBrad});
+        }
+        return std::nullopt;
+    }
+
+    [[nodiscard]] rm::sim::Event combatVisualEvent(rm::sim::Event event) const {
+        if (event.kind == rm::sim::EventKind::WeaponFired || event.kind == rm::sim::EventKind::BeamFired) {
+            if (const auto position = weaponMuzzle(event.unit,event.visualId))
+                for (std::size_t axis=0; axis<3; ++axis) event.at2[axis] = rm::sim::fxFromFloat((*position)[axis]);
+        }
+        return event;
+    }
+
+    void updateCombatAttachments() {
+        std::erase_if(combatEffectState.bursts, [&](const auto& emitter) {
+            return emitter.owner.generation != 0 && !store.alive(emitter.owner);
+        });
+        for (auto& emitter : combatEffectState.bursts)
+            if (const auto position = weaponMuzzle(emitter.owner,emitter.weapon)) emitter.position = *position;
+    }
     std::deque<rm::Model> models;
     std::deque<rm::sca::Animation> animations;
     std::vector<rm::UnitBatch> batches;

@@ -348,6 +348,14 @@ TEST_CASE("one unit moving one step changes the hash") {
     REQUIRE(a.hash() != before);
 }
 
+TEST_CASE("projectile visual identity is excluded from simulation hashes", "[weapon-visuals]") {
+    Fixture fixture;
+    fixture.projectiles.emplace_back();
+    const auto before = fixture.hash();
+    fixture.projectiles.front().visualId = "/projectiles/tdfgauss01/tdfgauss01_proj.bp";
+    CHECK(fixture.hash() == before);
+}
+
 TEST_CASE("a change too small to see is still a divergence") {
     // The point of hashing bit patterns rather than comparing with a tolerance. A sim that
     // drifts by one bit per tick has diverged, and finding that on tick 1 rather than tick

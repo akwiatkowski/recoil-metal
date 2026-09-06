@@ -230,6 +230,7 @@ std::vector<Weapon> weaponsFrom(const lua::Value& weaponArray, bool airborneSour
 
         // Beams: `BeamLifetime` above zero is a pulsed beam, `ContinuousBeam` a held one.
         // Both deliver on fire rather than by flight.
+        weapon.beamVisualLifetime = sim::fxFromFloat(numberOr(entry, "BeamLifetime", 0.0f));
         const lua::Value* continuous = entry.find("ContinuousBeam");
         weapon.beam = numberOr(entry, "BeamLifetime", 0.0f) > 0.0f
                       || (continuous != nullptr

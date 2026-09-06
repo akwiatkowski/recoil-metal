@@ -21,6 +21,7 @@
 //   because the projectile list compacts on impact and has none to offer.
 
 #include "core/scene/Particles.hpp"
+#include "core/scene/WeaponVisuals.hpp"
 #include "core/sim/Combat.hpp"
 
 #include <span>
@@ -42,11 +43,12 @@ inline constexpr float kArtilleryFloorPoints = 3.5f;
 /// at most one tick of flight and what turns bead-stepping into glide. `elmosPerPoint` is
 /// the camera's, measured against the icon reference height.
 void appendProjectiles(std::vector<Particle>& into, std::span<const sim::Projectile> shots,
-                       float alpha, float elmosPerPoint);
+                       float alpha, float elmosPerPoint, const WeaponVisuals* visuals = nullptr);
 
 /// Emits one trail puff per ARCED shot — called once per advanced tick, from the tick loop.
 /// Flat fire gets no trail: a tracer's shape is its streak, and a thousand rifle rounds
 /// smoking would bury the arcs the trail exists to show.
-void emitProjectileTrails(std::vector<Particle>& into, std::span<const sim::Projectile> shots);
+void emitProjectileTrails(std::vector<Particle>& into, std::span<const sim::Projectile> shots,
+    const WeaponVisuals* visuals = nullptr, float secondsPerTick = 0.1f);
 
 } // namespace rm

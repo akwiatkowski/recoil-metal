@@ -216,6 +216,7 @@ public:
 
     /// The build tray's packed unit icons. See Renderer::setIconAtlas.
     void setIconAtlas(const dds::Texture& atlas);
+    void setWeaponMaterials(std::span<const WeaponMaterial> materials);
 
     /// This frame's selection rings. See Renderer::setGroundDecals. Like
     /// setInstances, only meaningful from inside an onFrame callback.

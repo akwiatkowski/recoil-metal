@@ -1286,6 +1286,9 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
                                  .army = army,
                                  .amount = weapon.damage,
                                  .at = from,
+                                 .at2 = projectiles.back().position,
+                                 .visualId = def->name + ":" + weapon.label,
+                                 .visualDirection = {targetPosition[0]-from[0], targetPosition[1]-from[1], targetPosition[2]-from[2]},
                              });
                 ++fired;
                 if (weapon.bursts()) {
@@ -1353,6 +1356,12 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
                                                     ? weapon.muzzleHeight
                                                     : kMuzzleHeight),
                                          from[2]},
+                                 .visualId = def->name + ":" + weapon.label,
+                                 .visualDuration = weapon.beamVisualLifetime > Fx{}
+                                     ? weapon.beamVisualLifetime
+                                     : Fx::fromRatio(static_cast<std::int32_t>(rates.reloadTicks),
+                                                     static_cast<std::int32_t>(rate.ticksPerSecond())),
+                                 .visualDirection = {to[0]-from[0], to[1]-from[1], to[2]-from[2]},
                              });
                 if (weapon.damageRadius <= Fx{}) {
                     (void)damageTarget(target->index, rates.damage, army, store, armies,
@@ -1389,6 +1398,9 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
                                  .army = army,
                                  .amount = weapon.damage,
                                  .at = from,
+                                 .at2 = projectiles.back().position,
+                                 .visualId = def->name + ":" + weapon.label,
+                                 .visualDirection = {to[0]-from[0], to[1]-from[1], to[2]-from[2]},
                              });
             }
             ++fired;
@@ -1503,6 +1515,9 @@ std::size_t fireOvercharge(UnitStore& store, const UnitCatalog& catalog,
                              .army = army,
                              .amount = weapon.damage,
                              .at = from,
+                             .at2 = projectiles.back().position,
+                             .visualId = def->name + ":" + weapon.label,
+                             .visualDirection = {to[0]-from[0], to[1]-from[1], to[2]-from[2]},
                          });
             ++fired;
 
@@ -1562,6 +1577,7 @@ Projectile launch(std::array<Fx, 3> from, std::array<Fx, 3> to,
                    UnitId target) {
     Projectile shot;
     shot.firedBy = firedBy;
+    shot.visualId = weapon.projectileId;
     if (weapon.projectileTraits.trackTarget) {
         constexpr float kRadiansPerDegree = 0.017453292519943295f;
         shot.guidanceTarget = target;
@@ -2027,6 +2043,8 @@ void advanceProjectiles(std::vector<Projectile>& projectiles, UnitStore& store,
                              .amount = shot.damage.base,
                              .at = shot.position,
                              .impactType = shot.pendingImpact,
+                             .visualId = shot.visualId,
+                             .visualDirection = shot.velocity,
                          });
             if (shot.damageRadiusElmos <= Fx{}) {
                 if (target.generation != 0) {

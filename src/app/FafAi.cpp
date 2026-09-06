@@ -408,7 +408,7 @@ int currentThread(lua_State* lua) {
 ///
 /// LINE NUMBERS ARE PRESERVED. No rewrite inserts a newline, so an error at line 158 still means
 /// line 158 of the file a reader will open.
-[[nodiscard]] std::string rewriteMohoSource(const std::string& source) {
+[[nodiscard]] std::string rewriteMohoSource(const std::string& source, bool hashComments = false) {
     /// What kind of block we are inside. `continue` binds to the innermost enclosing LOOP, and
     /// the search for it stops at a Function boundary — a `continue` inside a closure nested in
     /// a loop belongs to that closure, not to the loop.
@@ -483,6 +483,12 @@ int currentThread(lua_State* lua) {
     while (i < source.size()) {
         const char c = source[i];
 
+        if (hashComments && c == '#') {
+            out.append("--");
+            ++i;
+            while (i < source.size() && source[i] != '\n') out.push_back(source[i++]);
+            continue;
+        }
         // A comment, short or long: copied verbatim, because `!=` in prose is not code.
         if (c == '-' && i + 1 < source.size() && source[i + 1] == '-') {
             const int level = i + 2 < source.size() ? longLevel(i + 2) : -1;
@@ -528,6 +534,10 @@ int currentThread(lua_State* lua) {
                 ++i;
             }
             const std::string_view word(source.data() + start, i - start);
+            // Retail AIUtilities.lua contains `> 0then`. Its older lexer accepts this;
+            // Lua 5.4 treats the adjacent keyword as a malformed numeric suffix.
+            if (hashComments && word == "then" && start > 0
+                && std::isdigit(static_cast<unsigned char>(source[start-1])) != 0) out.push_back(' ');
 
             if (word == "function") {
                 blocks.push_back(Block{Kind::Function, false});
@@ -1049,6 +1059,8 @@ end
 )lua";
 
 } // namespace
+
+std::string rewriteLegacyLua(const std::string& source) { return rewriteMohoSource(source, true); }
 
 std::string_view fidelityName(Fidelity fidelity) noexcept {
     switch (fidelity) {

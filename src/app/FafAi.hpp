@@ -38,6 +38,9 @@ struct lua_State;
 
 namespace rm::ai {
 
+/// Translate the retail Lua dialect without changing source line numbers.
+[[nodiscard]] std::string rewriteLegacyLua(const std::string& source);
+
 /// How much we believe a binding.
 enum class Fidelity : std::uint8_t {
     Stub,     ///< counted no-op

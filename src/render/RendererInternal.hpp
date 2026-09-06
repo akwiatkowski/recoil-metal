@@ -450,9 +450,13 @@ enum class BlendMode {
     Opaque,
     StraightAlpha,
     PremultipliedAlpha,
+    ModulateInverse,
+    Modulate2xInverse,
 };
 
 [[nodiscard]] constexpr MTL::BlendFactor sourceRgbBlendFactor(BlendMode mode) noexcept {
+    if (mode == BlendMode::ModulateInverse) return MTL::BlendFactorZero;
+    if (mode == BlendMode::Modulate2xInverse) return MTL::BlendFactorOneMinusDestinationColor;
     return mode == BlendMode::StraightAlpha ? MTL::BlendFactor::BlendFactorSourceAlpha
                                             : MTL::BlendFactor::BlendFactorOne;
 }
@@ -491,7 +495,9 @@ static_assert(sourceAlphaBlendFactor(BlendMode::PremultipliedAlpha)
     if (blend != BlendMode::Opaque) {
         color0->setBlendingEnabled(true);
         color0->setSourceRGBBlendFactor(sourceRgbBlendFactor(blend));
-        color0->setDestinationRGBBlendFactor(MTL::BlendFactor::BlendFactorOneMinusSourceAlpha);
+        color0->setDestinationRGBBlendFactor(
+            blend == BlendMode::ModulateInverse || blend == BlendMode::Modulate2xInverse
+                ? MTL::BlendFactorOneMinusSourceColor : MTL::BlendFactorOneMinusSourceAlpha);
         color0->setSourceAlphaBlendFactor(sourceAlphaBlendFactor(blend));
         color0->setDestinationAlphaBlendFactor(MTL::BlendFactor::BlendFactorOneMinusSourceAlpha);
     }

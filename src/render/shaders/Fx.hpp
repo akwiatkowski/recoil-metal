@@ -31,12 +31,25 @@ struct ParticleIn {
     packed_float4 colour;   // premultiplied
     float size;
     float growth;
+    packed_float3 axis;
+    float length;
+    uint material;
+    packed_float3 acceleration;
+    float rotation;
+    float rotationRate;
+    packed_float3 animation;
+    uint flags;
 };
 
 struct ParticleOut {
     float4 position [[position]];
     float4 colour;
     float2 offset;  // -1..1 across the quad, for the round falloff
+    uint material [[flat]];
+    float along;
+    float age;
+    float length;
+    float4 animation;
 };
 
 // How hard dust is pulled back down, in elmos per second squared.
@@ -52,10 +65,11 @@ vertex ParticleOut particleVertex(uint vid [[vertex_id]],
                                   constant Uniforms& u [[buffer(1)]]) {
     const ParticleIn p = particles[iid];
     const float t = p.age;
+    const bool textured = p.material != 0xffffffffu;
 
     // Where it is now. The whole of the simulation, and it costs one multiply-add
     // per axis rather than a per-frame pass over the buffer on the CPU.
-    const float3 world = float3(p.origin) + float3(p.velocity) * t
+    float3 world = float3(p.origin) + float3(p.velocity) * t
                        + float3(0.0, -0.5 * kDustSettle * t * t, 0.0);
 
     const float life = max(p.lifetime, 1e-4);
@@ -87,14 +101,39 @@ vertex ParticleOut particleVertex(uint vid [[vertex_id]],
     const float3 up = normalize(float3(u.viewProjection[0][1], u.viewProjection[1][1],
                                        u.viewProjection[2][1]));
 
-    const float3 corner3 = world + (right * corner.x + up * corner.y) * size * 0.5;
+    float3 corner3 = world + (right * corner.x + up * corner.y) * size * 0.5;
+    float along = (vid >= 2) ? 1.0 : 0.0;
+    float side = (vid == 1 || vid == 3) ? 1.0 : -1.0;
+    if (textured) {
+        world = float3(p.origin) + float3(p.velocity) * t + 0.5 * float3(p.acceleration) * t * t;
+        if (p.length > 0) {
+            const float3 axis = float3(p.axis);
+            const float3 view = normalize(cross(right, up));
+            float3 across = cross(view, axis);
+            across = dot(across, across) > 0.00001 ? normalize(across) : right;
+            corner3 = world + axis * (p.length * along) + across * (side * p.size * 0.5);
+        } else {
+            const float angle = p.rotation + p.rotationRate * t;
+            const float2 corner = float2(side, along * 2.0 - 1.0);
+            const float2 rotated = float2(corner.x*cos(angle)-corner.y*sin(angle),
+                                         corner.x*sin(angle)+corner.y*cos(angle));
+            const float3 spriteRight = (p.flags & 1u) ? float3(1,0,0) : right;
+            const float3 spriteUp = (p.flags & 1u) ? float3(0,0,1) : up;
+            corner3 = world + (spriteRight * rotated.x + spriteUp * rotated.y) * max(0.0, size) * 0.5;
+        }
+    }
 
     ParticleOut out;
     out.position = u.viewProjection * float4(corner3, 1.0);
     // Premultiplied, so scaling the whole thing by alpha is the correct fade for
     // both a translucent puff and an additive spark.
-    out.colour = float4(p.colour) * alpha;
-    out.offset = corner;
+    out.colour = float4(p.colour) * (textured ? 1.0 : alpha);
+    out.material = p.material;
+    out.along = along;
+    out.age = p.age;
+    out.length = p.length;
+    out.animation = float4(float3(p.animation), t / life);
+    out.offset = textured ? float2(side, along * 2.0 - 1.0) : corner;
 
     // A particle past its life is collapsed rather than branched around: a vertex
     // shader cannot decline to emit, and the CPU has already dropped the expired
@@ -105,7 +144,49 @@ vertex ParticleOut particleVertex(uint vid [[vertex_id]],
     return out;
 }
 
-fragment float4 particleFragment(ParticleOut in [[stage_in]]) {
+struct WeaponMaterialIn { float4 startColour; float4 endColour; float4 sampling; float4 format; };
+fragment float4 particleFragment(ParticleOut in [[stage_in]],
+    texture2d<float> texture [[texture(0)]], texture2d<float> ramp [[texture(1)]],
+    texture2d<float> background [[texture(2)]],
+    constant WeaponMaterialIn& material [[buffer(0)]]) {
+    if (in.material != 0xffffffffu) {
+        constexpr sampler linearSampler(filter::linear, address::clamp_to_edge);
+        constexpr sampler wrappedSampler(filter::linear, address::repeat);
+        const bool beam = material.sampling.y > 0.5;
+        const float across = in.offset.x * 0.5 + 0.5;
+        const float repeats = beam && material.sampling.z > 0
+            ? in.length * 0.125 * material.sampling.z : 1.0;
+        float2 uv = float2(across, in.along * repeats + in.age * material.sampling.w);
+        if (in.length == 0) {
+            const float frames = max(1.0, material.format.y);
+            const float strips = max(1.0, material.format.z);
+            const float frame = fmod(floor(in.age * max(0.0, in.animation.x)), frames);
+            const float strip = clamp(floor(in.animation.y * strips), 0.0, strips-1.0);
+            uv = (float2(across, in.along) + float2(frame, strip)) / float2(frames, strips);
+        }
+        const float4 texel = texture.sample(wrappedSampler, uv);
+        float4 colour = texel;
+        if (material.sampling.x > 0.5) {
+            const float rampTime = in.length > 0 ? 1.0 - in.along : in.animation.w;
+            const float rampRow = in.length > 0 ? across : in.animation.z;
+            colour *= ramp.sample(linearSampler, float2(rampTime, rampRow));
+        }
+        colour *= mix(material.startColour, material.endColour, in.along);
+        const uint blend = uint(material.format.x);
+        if (blend == 5) {
+            // Retail particle.fx WorldRefractPS: RG is an offset, alpha masks distortion.
+            const float2 screen = in.position.xy / float2(background.get_width(), background.get_height());
+            const float2 offset = 0.005 * (2.0 * texel.rg - 1.0);
+            return float4(background.sample(linearSampler, screen+offset).rgb * colour.a, colour.a);
+        }
+        // Retail particle.fx uses distinct blend states. Premultiplying only the alpha
+        // mode lets it share the procedural pipeline; inverse modes need their own states.
+        if (blend == 1 || blend == 2) return float4(colour.rgb * in.colour.rgb, 0);
+        if (blend == 3) return float4(colour.rgb * (beam ? 1.0 : colour.a) * in.colour.rgb, 0);
+        if (blend == 4) return float4(colour.rgb * in.colour.rgb, colour.a);
+        return float4(colour.rgb * colour.a * in.colour.rgb, colour.a);
+
+    }
     // Round, and soft at the edge. A square puff reads as a square, and a hard
     // circle reads as a coin; the falloff is what makes overlapping puffs merge
     // into a cloud rather than stacking as discs.

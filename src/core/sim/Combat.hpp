@@ -128,6 +128,9 @@ struct Projectile {
     /// The body recorded by a pending unit impact. Generational so a retired slot reused before
     /// delivery cannot redirect the damage to its new occupant.
     UnitId impactTarget{};
+
+    /// Cosmetic source identity; never affects simulation or state hashes.
+    std::string visualId;
 };
 
 /// Gravity applied to an arced shot, in elmos per second squared.

@@ -3,6 +3,7 @@
 #include "core/sim/Combat.hpp"
 
 #include <cmath>
+#include <algorithm>
 
 namespace rm {
 namespace {
@@ -38,10 +39,26 @@ inline constexpr float kSparkSize = 4.0f;
 
 } // namespace
 
-void emitCombatEffects(std::vector<Particle>& into, std::span<const sim::Event> events) {
+void emitCombatEffects(std::vector<Particle>& into, std::span<const sim::Event> events,
+    const WeaponVisuals* visuals, CombatEffectState* state, float seconds) {
+    CombatEffectState immediate;
+    if (visuals && !state) state = &immediate;
+    const auto burst = [&](const std::string& key, std::array<float,3> position,
+                           std::array<float,3> direction, sim::UnitId owner = {}, const std::string& weapon = "") {
+        if (!visuals || !visuals->contains(key)) return false;
+        for (const auto id : visuals->find(key)) {
+            state->bursts.push_back({id, position, 0, ++state->seed, visuals->scale(key), owner, weapon, direction});
+        }
+        return true;
+    };
     for (const sim::Event& event : events) {
+        const std::array<float,3> direction{sim::fxToFloat(event.visualDirection[0]),
+            sim::fxToFloat(event.visualDirection[1]), sim::fxToFloat(event.visualDirection[2])};
         switch (event.kind) {
         case sim::EventKind::WeaponFired: {
+            const std::array<float,3> muzzle{sim::fxToFloat(event.at2[0]),
+                sim::fxToFloat(event.at2[1]), sim::fxToFloat(event.at2[2])};
+            if (burst(event.visualId + "#FxMuzzleFlash", muzzle, direction, event.unit, event.visualId)) break;
             std::array<float, 3> at = atOf(event);
             // The muzzle's own height, the same constant the projectile spawns at
             // (Combat.hpp) — the flash must sit where the shot comes from or the two read
@@ -65,23 +82,30 @@ void emitCombatEffects(std::vector<Particle>& into, std::span<const sim::Event> 
             const std::array<float, 3> from = {sim::fxToFloat(event.at2[0]),
                                                sim::fxToFloat(event.at2[1]),
                                                sim::fxToFloat(event.at2[2])};
-            const float dx = to[0] - from[0];
-            const float dy = to[1] - from[1];
-            const float dz = to[2] - from[2];
-            const float length = std::sqrt(dx * dx + dy * dy + dz * dz);
-            const int steps = std::max(2, static_cast<int>(length / kBeamSpacingElmos));
-            for (int i = 0; i <= steps; ++i) {
-                const float t = static_cast<float>(i) / static_cast<float>(steps);
-                into.push_back(Particle{
-                    .origin = {from[0] + dx * t, from[1] + dy * t, from[2] + dz * t},
-                    .age = 0.0f,
-                    .velocity = {0.0f, 0.0f, 0.0f},
-                    .lifetime = kBeamLifetime,
-                    // Hot blue-white, additive — a laser is light and nothing else.
-                    .colour = {0.55f, 0.75f, 1.0f, 0.0f},
-                    .size = kBeamSize,
-                });
+            (void)burst(event.visualId + "#FxMuzzleFlash", from, direction, event.unit, event.visualId);
+            if (visuals && !visuals->find(event.visualId).empty()) {
+                appendWeaponVisual(into, *visuals, event.visualId, from, to, 0.0f, true,
+                    sim::fxToFloat(event.visualDuration));
+            } else {
+                const float dx = to[0] - from[0];
+                const float dy = to[1] - from[1];
+                const float dz = to[2] - from[2];
+                const float length = std::sqrt(dx * dx + dy * dy + dz * dz);
+                const int steps = std::max(2, static_cast<int>(length / kBeamSpacingElmos));
+                for (int i = 0; i <= steps; ++i) {
+                    const float t = static_cast<float>(i) / static_cast<float>(steps);
+                    into.push_back(Particle{
+                        .origin = {from[0] + dx * t, from[1] + dy * t, from[2] + dz * t},
+                        .age = 0.0f,
+                        .velocity = {0.0f, 0.0f, 0.0f},
+                        .lifetime = kBeamLifetime,
+                        // Hot blue-white, additive — a laser is light and nothing else.
+                        .colour = {0.55f, 0.75f, 1.0f, 0.0f},
+                        .size = kBeamSize,
+                    });
+                }
             }
+            if (burst(event.visualId + "#FxImpactUnit", to, direction)) break;
             // And the spark where it lands, so the strike point reads even when the line
             // is foreshortened to nothing by the camera.
             into.push_back(Particle{
@@ -96,6 +120,21 @@ void emitCombatEffects(std::vector<Particle>& into, std::span<const sim::Event> 
         }
         case sim::EventKind::ProjectileImpact: {
             const std::array<float, 3> at = atOf(event);
+            const char* field = "FxImpactNone";
+            switch (event.impactType) {
+            case sim::ImpactType::Terrain: field="FxImpactLand"; break;
+            case sim::ImpactType::Water: field="FxImpactWater"; break;
+            case sim::ImpactType::Underwater:
+            case sim::ImpactType::UnitUnderwater: field="FxImpactUnderWater"; break;
+            case sim::ImpactType::Projectile: field="FxImpactProjectile"; break;
+            case sim::ImpactType::ProjectileUnderwater: field="FxImpactProjectileUnderWater"; break;
+            case sim::ImpactType::Prop: field="FxImpactProp"; break;
+            case sim::ImpactType::Shield: field="FxImpactShield"; break;
+            case sim::ImpactType::Unit: field="FxImpactUnit"; break;
+            case sim::ImpactType::UnitAir: field="FxImpactAirUnit"; break;
+            default: break;
+            }
+            if (burst(event.visualId + "#" + field, at, direction)) break;
             // The smoke: premultiplied grey, drifting up, gone in half a second. One puff
             // per impact rather than a burst — a battle is many impacts, and the burst is
             // the battle.
@@ -131,6 +170,32 @@ void emitCombatEffects(std::vector<Particle>& into, std::span<const sim::Event> 
         default:
             break;
         }
+    }
+    if (state && visuals) {
+        for (auto& emitter : state->bursts) {
+            const auto& material = visuals->materials[emitter.material];
+            const auto first = into.size();
+            const float end = emitter.started ? emitter.age+seconds : emitter.age;
+            emitWeaponParticles(into, material, emitter.material, emitter.position, emitter.position,
+                emitter.age, end, emitter.seed, emitter.direction, !emitter.started);
+            for (auto i=first; i<into.size(); ++i) {
+                auto& particle = into[i];
+                particle.size *= emitter.scale;
+                particle.growth *= emitter.scale;
+                for (std::size_t axis=0; axis<3; ++axis) {
+                    particle.origin[axis] = emitter.position[axis]
+                        + (particle.origin[axis]-emitter.position[axis])*emitter.scale;
+                    particle.velocity[axis] *= emitter.scale;
+                    particle.acceleration[axis] *= emitter.scale;
+                }
+            }
+            emitter.age = end;
+            emitter.started = true;
+        }
+        std::erase_if(state->bursts, [&](const auto& emitter) {
+            const auto& material = visuals->materials[emitter.material];
+            return material.emitterLifetime >= 0 && emitter.age >= material.emitterLifetime;
+        });
     }
 }
 

@@ -3183,3 +3183,88 @@ duplicate existing paths. Keeping later tiers after cancelling their prerequisit
 would leave invalid work. No save-format change is needed. Headless tests cover
 authored T1/T2/T3 engineer menus, active/pending cancellation, enemy rejection and
 completion after cancellation; offscreen captures repeat pixels and hashes.
+
+## ADR-096 — Resolve weapon visuals from original Lua declarations
+
+**Context.** Generic coloured dots and bead chains hide weapon identity. Projectile
+blueprints alone do not name the effects: script classes inherit PolyTrails,
+FxTrails and BeamType/FxBeam through faction modules and EffectTemplates.
+
+**Decision.** Execute those original declarations in a separate Lua state using
+the existing legacy-dialect rewriter and read-only VFS imports. Supply class
+inheritance and native base-class shells, without running simulation callbacks.
+Bound instruction execution and report missing/unsupported content. Load the
+referenced emitter blueprints and DDS textures into presentation-only materials.
+Shots retain their projectile path; beam events retain the unit/weapon key and
+authored lifetime. Continuous beams remain visible until the next firing beat.
+These fields do not participate in simulation hashes.
+
+Render attached sprites and straight textured strips in the existing particle
+pass. Read dimensions, colour ramps, beam tints and scrolling from emitter data.
+Use additive rendering with the original beam-versus-particle alpha distinction.
+Unknown definitions keep the procedural fallback. The verification gallery uses
+a one-elmo width floor to make small effects inspectable.
+
+**Alternatives and consequences.** A C++ table of weapon names would duplicate
+Lua and miss mod overrides. Running the complete native simulation scripting API
+is unnecessary for declarations. This is not a complete emitter engine: historical
+trails, emission curves, mesh projectiles, non-additive blend modes, live beam
+endpoint tracking, and new muzzle/impact effects remain outside this slice. Short
+beams display at least one texture repeat for visibility. The gallery verifies our
+rendering, not pixel parity against the original game.
+
+## ADR-097 — Execute authored emitter timing and blend semantics
+
+**Context.** Resolving original assets is insufficient: an Aeon Disruptor uses
+inverse modulation, and electron-bolter particles begin at zero size. The initial
+additive-only renderer and first-key width validation changed those effects.
+
+**Decision.** Read effect curves as linear segments with per-key random ranges.
+Integrate emission rate and invert cumulative births within each step, preserving
+fractional emission and interpolating positions. Particles retain sampled birth
+values and evolve in the shader using their own lifetime, growth, rotation,
+animation and ramp row. Reuse the existing particle storage and tick paths.
+
+Follow retail `effects/particle.fx` blend equations and geometry: authored sizes
+are half-widths; flat sprites use XZ; inverse modulation requires separate blend
+states; refraction samples the copied scene with the authored RG distortion mask.
+The existing water scene-copy mechanism supplies the background, with a post-water
+copy when necessary. Draw order follows emitter SortOrder before material batching.
+
+**Alternatives and consequences.** Artificial brightness/width boosts hide source
+mismatches. One static sprite cannot represent an emitter's rate or lifetime.
+This remains presentation-only and does not change simulation state. Refraction
+adds a scene copy only when a refracting particle is actually present. Particle
+buffers grow from 76 to 112 bytes per entry. Full native-emitter parity remains a
+separate claim: drag, some alignment/water flags and callback-driven modifiers
+still need coverage.
+
+## ADR-098 — Drive muzzle and impact emitters from combat events
+
+**Context.** Generic flashes and puffs discarded the weapon scripts' FxMuzzleFlash
+and impact-type lists. The native Projectile and DefaultWeapons Lua declarations
+also carry inherited defaults and scales, so replacing them with empty classes
+lost authored data.
+
+**Decision.** Execute those original declarations in the isolated visual Lua host.
+Resolve muzzle lists by unit/weapon label and impact lists by projectile and native
+impact type. Retain empty lists as intentional silence, and keep source scales.
+Combat events carry cosmetic source identity, initial muzzle and trajectory; their
+simulation damage and movement remain unchanged.
+
+Persistent presentation emitters retain their clock and sampled particles outlive
+them. Emit at creation before scheduling subsequent particles by integrated rate:
+otherwise the retail Gauss flash expires before its first whole rate interval.
+Muzzle emitters follow the resolved rest bone through the same roll/pitch/yaw
+placement used for drawing, guarded by the unit's generation. Detached impacts
+remain at contact and retain projectile direction. The runtime does not execute
+gameplay callbacks; terrain-material secondary effects and custom callback-only
+effect creation remain outside this declaration-driven path.
+
+**Verification.** Corpus checks cover all four tank effect families and the
+Seraphim ACU's inherited muzzle list; a regression handles retail `0then` syntax
+without changing strings/comments. Tests cover impact identity after delivery,
+bone movement/rotation, slot reuse, source scales and emitter scheduling.
+The offscreen `--weapon-gallery --impact-gallery` path shows muzzle, terrain-hit
+and unit-hit columns using those same event consumers, fifty milliseconds after
+creation.

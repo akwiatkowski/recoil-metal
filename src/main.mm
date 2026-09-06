@@ -313,6 +313,16 @@ int main(int argc, const char* argv[]) {
 
         // Held here rather than inside march(): the capture path below uploads
         // them, and the windowed path raises its own as the sim runs.
+        units.weaponVisuals = rm::loadWeaponVisuals(content);
+        if (hasFlag(argc, argv, "--weapon-gallery")) {
+            const std::array<std::string,1> emitters{"/effects/emitters/distortion_ring_01_emit.bp"};
+            rm::loadWeaponMaterials(units.weaponVisuals, content, "gallery:refraction", emitters);
+        }
+        std::printf("weapon visuals: %zu definitions, %zu materials, %zu unresolved entries\n",
+            units.weaponVisuals.definitions.size(), units.weaponVisuals.materials.size(),
+            units.weaponVisuals.unavailable.size());
+        for (std::size_t i=0; i<std::min<std::size_t>(5, units.weaponVisuals.unavailable.size()); ++i)
+            std::fprintf(stderr, "weapon visuals: %s\n", units.weaponVisuals.unavailable[i].c_str());
         std::vector<rm::Particle> marchDust;
 
         const MarchOptions marchOptions = parseMarch(argc, argv);

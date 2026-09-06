@@ -168,6 +168,7 @@ add_library(rm_core STATIC
     src/core/scene/BuildEffects.cpp
     src/core/scene/CombatEffects.cpp
     src/core/scene/ProjectileFx.cpp
+    src/core/scene/WeaponVisuals.cpp
     src/core/sim/Army.cpp
     src/core/sim/Command.cpp
     src/core/sim/Events.cpp
@@ -235,6 +236,7 @@ add_library(rm_app STATIC
     src/app/SceneBuild.cpp
     src/app/Cli.cpp
     src/app/FafAi.cpp
+    src/app/WeaponVisualLoader.cpp
     src/app/FafOpponent.cpp
     src/app/Match.cpp
     src/app/Interface.cpp
@@ -363,6 +365,7 @@ if(BUILD_TESTING)
         tests/test_bar_names.cpp
         tests/test_combat_effects.cpp
         tests/test_projectile_fx.cpp
+        tests/test_weapon_visuals.cpp
         tests/test_unit_def.cpp
         tests/test_armor.cpp
         tests/test_armor_defs.cpp

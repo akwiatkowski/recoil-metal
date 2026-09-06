@@ -494,6 +494,10 @@ T2 progressing; cancel T2 to remove it and the dependent T3. Clear Queue stops b
 `mise exec -- ./build/rm_tests '[headless-ui]'` exercises button hit-testing and the
 shared click handler, the full upgrade chain, save/restore, cancellation and enemy
 ownership rejection without a GPU.
+Weapon sprites and beam strips now resolve their effects from original Lua class
+declarations and load the referenced emitter/DDS assets. See
+[weapon visual checks and current limits](docs/weapon-visuals-acceptance.md).
+
 `mise exec -- make test-upgrade-ui` additionally renders the upgrading extractor
 offscreen twice, checks the T3 queue button and the two-tier queue, and compares pixels and simulation
 hashes. It requires the retail install and Metal; artifacts stay in `build/upgrade-ui/`.

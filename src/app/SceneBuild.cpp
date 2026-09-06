@@ -117,6 +117,8 @@ void resolveMuzzleBones(rm::unitdef::UnitDef& def, const rm::Model& model) {
         }
         for (const rm::ModelBone& bone : model.bones) {
             if (sameName(bone.name, weapon.muzzleBone)) {
+                weapon.visualMuzzleOffset = std::array<float,3>{bone.globalOffset[0]*def.meshToElmos,
+                    bone.globalOffset[1]*def.meshToElmos, bone.globalOffset[2]*def.meshToElmos};
                 const float heightElmos = bone.globalOffset[1] * def.meshToElmos;
                 if (heightElmos > 0.05f) {
                     weapon.muzzleHeight = rm::sim::fxFromFloat(heightElmos);

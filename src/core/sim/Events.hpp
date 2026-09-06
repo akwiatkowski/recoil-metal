@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <span>
 #include <string_view>
+#include <string>
 #include <vector>
 
 namespace rm::sim {
@@ -142,11 +143,16 @@ struct Event {
     std::array<Fx, 3> at{};
 
     /// The OTHER end, for the kinds that are a line rather than a point — the muzzle of a
-    /// `BeamFired`. Zero for everything else.
+    /// `BeamFired`, or initial muzzle position for `WeaponFired`.
     std::array<Fx, 3> at2{};
 
     /// Native impact classification for `ProjectileImpact`; `Invalid` for every other event.
     ImpactType impactType = ImpactType::Invalid;
+
+    /// Presentation metadata copied before a shooter can die or its slot be reused.
+    std::string visualId;
+    Fx visualDuration{};
+    std::array<Fx,3> visualDirection{};
 };
 
 [[nodiscard]] bool operator==(const Event& a, const Event& b) noexcept;

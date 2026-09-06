@@ -14,6 +14,7 @@
 // shot landing is the screenshot's job.
 
 #include "core/scene/Particles.hpp"
+#include "core/scene/WeaponVisuals.hpp"
 #include "core/sim/Events.hpp"
 
 #include <span>
@@ -21,8 +22,26 @@
 
 namespace rm {
 
+struct CombatEffectBurst {
+    std::uint32_t material = 0;
+    std::array<float,3> position{};
+    float age = 0;
+    std::uint32_t seed = 1;
+    float scale = 1;
+    sim::UnitId owner{};
+    std::string weapon;
+    std::array<float,3> direction{};
+    bool started = false;
+};
+struct CombatEffectState {
+    std::vector<CombatEffectBurst> bursts;
+    std::uint32_t seed = 1;
+};
+
 /// Appends the particles `events` earn. Kinds other than WeaponFired and ProjectileImpact
 /// earn nothing here — a death already has its wreck decal, and construction its ghost.
-void emitCombatEffects(std::vector<Particle>& into, std::span<const sim::Event> events);
+void emitCombatEffects(std::vector<Particle>& into, std::span<const sim::Event> events,
+                       const WeaponVisuals* visuals = nullptr,
+                       CombatEffectState* state = nullptr, float seconds = 0.1f);
 
 } // namespace rm

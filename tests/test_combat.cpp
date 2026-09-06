@@ -1680,6 +1680,7 @@ TEST_CASE("a swept projectile hits the first unit crossed in three dimensions") 
     roster.reindex();
 
     rm::sim::Projectile shot;
+    shot.visualId = "/projectiles/TDFGauss01/TDFGauss01_proj.bp";
     shot.position = rm::test::at(0, 5, 0);
     shot.velocity = rm::test::at(0, 0, 100);
     shot.damage = rm::unitdef::flatDamage(rm::test::mag(40.0f));
@@ -1701,6 +1702,8 @@ TEST_CASE("a swept projectile hits the first unit crossed in three dimensions") 
         if (event.kind == rm::sim::EventKind::ProjectileImpact) {
             sawImpact = true;
             CHECK(event.at == rm::test::at(0, 5, 26));
+            CHECK(event.visualId == shot.visualId);
+            CHECK(event.visualDirection == shot.velocity);
         }
     }
     CHECK(sawImpact);

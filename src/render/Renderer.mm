@@ -149,6 +149,10 @@ Renderer::Renderer(CA::MetalLayer* layer)
     // dust and additive sparks. The explicit mode keeps that contract beside every other one.
     particlePipeline_ = makePipeline(device_, library, "particleVertex", "particleFragment",
                                      BlendMode::PremultipliedAlpha);
+    modulatedParticlePipelines_[0] = makePipeline(device_, library, "particleVertex", "particleFragment",
+                                                 BlendMode::ModulateInverse);
+    modulatedParticlePipelines_[1] = makePipeline(device_, library, "particleVertex", "particleFragment",
+                                                 BlendMode::Modulate2xInverse);
     library->release();
 
     // Two immutable kernels, one selected per frame. Only one is ever encoded, and both work
@@ -415,9 +419,14 @@ Renderer::~Renderer() {
     if (terrainShadowPipeline_ != nullptr) terrainShadowPipeline_->release();
     if (outlineBuffer_ != nullptr) outlineBuffer_->release();
     if (outlinePipeline_ != nullptr) outlinePipeline_->release();
+    for (auto& entry : weaponTextures_) {
+        entry.texture->release();
+        if (entry.ramp) entry.ramp->release();
+    }
     if (particleBuffer_ != nullptr) particleBuffer_->release();
     if (particleDepthState_ != nullptr) particleDepthState_->release();
     if (particlePipeline_ != nullptr) particlePipeline_->release();
+    for (auto* pipeline : modulatedParticlePipelines_) if (pipeline) pipeline->release();
     if (decalBuffer_ != nullptr) decalBuffer_->release();
     if (decalDepthState_ != nullptr) decalDepthState_->release();
     if (textPipeline_ != nullptr) textPipeline_->release();
@@ -907,7 +916,18 @@ void Renderer::encodeScene(MTL::CommandBuffer* commandBuffer, MTL::RenderPassDes
     // to refract.
     const bool wantsWater = waterIndexCount_ > 0 && hasWater_ && terrainMinY_ < waterLevel_
                             && (override == nullptr || !override->skipWater);
-    const bool grabScene = wantsWater && refractionEnabled_ && override == nullptr;
+    const auto* uploadedParticles = particleBuffer_ ? static_cast<const Particle*>(particleBuffer_->contents())
+        + instanceSlot_ * kMaxParticles : nullptr;
+    bool refractingParticles = false;
+    if (override == nullptr && uploadedParticles) {
+        for (std::size_t i=0; i<particleCount_; ++i) {
+            const auto id = uploadedParticles[i].material;
+            if (id < weaponTextures_.size() && weaponTextures_[id].uniforms[12] == 5) {
+                refractingParticles = true; break;
+            }
+        }
+    }
+    const bool grabScene = (wantsWater && refractionEnabled_ && override == nullptr) || refractingParticles;
     if (grabScene) {
         ensureSceneColour(width, height);
     }
@@ -1481,7 +1501,9 @@ void Renderer::encodeScene(MTL::CommandBuffer* commandBuffer, MTL::RenderPassDes
     // pass renders at a quarter resolution into a texture the water then samples
     // through a wave normal, so what arrives is a smear — and dust is the one thing
     // in the scene whose whole appearance is a soft gradient.
-    if (particleCount_ > 0 && particlePipeline_ != nullptr && override == nullptr) {
+    const auto drawParticles = [&](bool refracting) {
+      if (particleCount_ > 0 && particlePipeline_ != nullptr && override == nullptr) {
+        encoder->setCullMode(MTL::CullModeNone); // Retail particle techniques are double-sided.
         encoder->setRenderPipelineState(particlePipeline_);
         encoder->setDepthStencilState(particleDepthState_);
         encoder->setVertexBuffer(
@@ -1490,13 +1512,34 @@ void Renderer::encodeScene(MTL::CommandBuffer* commandBuffer, MTL::RenderPassDes
             kVertexBufferIndex);
         encoder->setVertexBytes(&uniforms, sizeof(uniforms), kUniformBufferIndex);
 
-        // One instanced draw for every puff on the map: four vertices each, with
-        // the quad expanded from the vertex id, so there is no geometry to upload
-        // and no index buffer at all.
-        encoder->drawPrimitives(MTL::PrimitiveType::PrimitiveTypeTriangleStrip, NS::UInteger{0},
-                                NS::UInteger{4},
-                                static_cast<NS::UInteger>(particleCount_));
-    }
+        const auto* particles = static_cast<const Particle*>(particleBuffer_->contents())
+                              + instanceSlot_ * kMaxParticles;
+        for (std::size_t first = 0; first < particleCount_;) {
+            std::size_t end = first + 1;
+            while (end < particleCount_ && particles[end].material == particles[first].material) ++end;
+            const auto id = particles[first].material;
+            const bool textured = id < weaponTextures_.size();
+            const bool isRefraction = textured && weaponTextures_[id].uniforms[12] == 5;
+            if (isRefraction != refracting) { first=end; continue; }
+            const float hasRamp = textured && weaponTextures_[id].ramp ? 1.0f : 0.0f;
+            encoder->setFragmentTexture(textured ? weaponTextures_[id].texture : groundTexture_, 0);
+            encoder->setFragmentTexture(hasRamp > 0 ? weaponTextures_[id].ramp : groundTexture_, 1);
+            encoder->setFragmentTexture(isRefraction ? sceneColour_ : groundTexture_, 2);
+            const std::array<float,16> procedural{};
+            const auto& material = textured ? weaponTextures_[id].uniforms : procedural;
+            const int blend = static_cast<int>(material[12]);
+            encoder->setRenderPipelineState(blend == 1 || blend == 2
+                ? modulatedParticlePipelines_[static_cast<std::size_t>(blend-1)] : particlePipeline_);
+            encoder->setFragmentBytes(material.data(), sizeof(material), 0);
+            encoder->setVertexBuffer(particleBuffer_,
+                (instanceSlot_ * kMaxParticles + first) * sizeof(Particle), kVertexBufferIndex);
+            encoder->drawPrimitives(MTL::PrimitiveTypeTriangleStrip, NS::UInteger{0},
+                NS::UInteger{4}, static_cast<NS::UInteger>(end-first));
+            first = end;
+        }
+      }
+    };
+    drawParticles(false);
 
     // --- The grab ----------------------------------------------------------
     // A copy of everything drawn so far, for the water to refract. This is the
@@ -1506,7 +1549,7 @@ void Renderer::encodeScene(MTL::CommandBuffer* commandBuffer, MTL::RenderPassDes
     //
     // A blit rather than rendering the world a second time: one copy of one
     // texture against a second pass over all the geometry.
-    if (grabbing) {
+    const auto captureScene = [&]() {
         encoder->endEncoding();
 
         MTL::BlitCommandEncoder* blit = commandBuffer->blitCommandEncoder();
@@ -1523,16 +1566,18 @@ void Renderer::encodeScene(MTL::CommandBuffer* commandBuffer, MTL::RenderPassDes
         pass->colorAttachments()->object(0)->setStoreAction(MTL::StoreAction::StoreActionStore);
         if (pass->depthAttachment()->texture() != nullptr) {
             pass->depthAttachment()->setLoadAction(MTL::LoadAction::LoadActionLoad);
-            pass->depthAttachment()->setStoreAction(MTL::StoreAction::StoreActionDontCare);
+            pass->depthAttachment()->setStoreAction(refractingParticles ? MTL::StoreActionStore
+                : MTL::StoreActionDontCare);
         }
         encoder = commandBuffer->renderCommandEncoder(pass);
-    }
+    };
+    if (grabbing) captureScene();
 
     // --- Water -------------------------------------------------------------
     // Last, so it blends over whatever terrain and units sit below y = 0. Only
     // worth drawing when something actually is below it.
     if (wantsWater) {
-        uniforms.hasSceneColour = grabbing ? 1.0f : 0.0f;
+        uniforms.hasSceneColour = grabbing && refractionEnabled_ ? 1.0f : 0.0f;
 
         encoder->setRenderPipelineState(waterPipeline_);
         encoder->setDepthStencilState(waterDepthState_);
@@ -1555,6 +1600,11 @@ void Renderer::encodeScene(MTL::CommandBuffer* commandBuffer, MTL::RenderPassDes
                                        static_cast<NS::UInteger>(waterIndexCount_),
                                        MTL::IndexType::IndexTypeUInt32, waterIndexBuffer_,
                                        NS::UInteger{0});
+    }
+
+    if (refractingParticles) {
+        if (wantsWater) captureScene();
+        drawParticles(true);
     }
 
     if (includeUi && override == nullptr) {

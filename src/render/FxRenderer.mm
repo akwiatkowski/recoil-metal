@@ -58,6 +58,28 @@ void Renderer::setGroundDecals(std::span<const DecalVertex> vertices) noexcept {
                 decalVertexCount_ * sizeof(DecalVertex));
 }
 
+void Renderer::setWeaponMaterials(std::span<const WeaponMaterial> materials) {
+    for (auto& entry : weaponTextures_) {
+        entry.texture->release();
+        if (entry.ramp) entry.ramp->release();
+    }
+    weaponTextures_.clear();
+    for (const auto& material : materials) {
+        auto* texture = uploadTexture(material.texture, material.emitter.c_str());
+        weaponTextures_.push_back({texture, nullptr, {}});
+        weaponTextures_.back().sortOrder = material.sortOrder;
+        auto& uniforms = weaponTextures_.back().uniforms;
+        std::copy(material.startColour.begin(), material.startColour.end(), uniforms.begin());
+        std::copy(material.endColour.begin(), material.endColour.end(), uniforms.begin()+4);
+        std::copy(material.sampling.begin(), material.sampling.end(), uniforms.begin()+8);
+        uniforms[12] = static_cast<float>(material.blend);
+        uniforms[13] = static_cast<float>(material.frames);
+        uniforms[14] = static_cast<float>(material.strips);
+        if (!material.ramp.data.empty())
+            weaponTextures_.back().ramp = uploadTexture(material.ramp, material.emitter.c_str());
+    }
+}
+
 void Renderer::setParticles(std::span<const Particle> particles) noexcept {
     particleCount_ = 0;
     if (particleBuffer_ == nullptr || particles.empty()) {
@@ -72,6 +94,13 @@ void Renderer::setParticles(std::span<const Particle> particles) noexcept {
     auto* base = static_cast<Particle*>(particleBuffer_->contents());
     std::memcpy(base + instanceSlot_ * kMaxParticles, particles.data(),
                 particleCount_ * sizeof(Particle));
+    auto* first = base + instanceSlot_ * kMaxParticles;
+    std::stable_sort(first, first + particleCount_, [&](const Particle& a, const Particle& b) {
+        const float aOrder = a.material < weaponTextures_.size() ? weaponTextures_[a.material].sortOrder : 0;
+        const float bOrder = b.material < weaponTextures_.size() ? weaponTextures_[b.material].sortOrder : 0;
+        if (aOrder != bOrder) return aOrder < bOrder;
+        return a.material < b.material;
+    });
 }
 
 void Renderer::updateLightMatrix() noexcept {
