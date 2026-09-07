@@ -353,18 +353,19 @@ bool issueCancelFactoryBuild(UnitScene& scene, rm::sim::UnitId factory,
     return best;
 }
 
+/// A deposit within this of a build site is the SAME deposit — half an extractor footprint.
+/// The old comment said "generous against float drift"; there is no float drift here any more,
+/// and the generosity is now purely about the deposit being a point and the extractor a
+/// footprint. Shared by the scripted opponent's pick and auto-expand's, so the two cannot
+/// disagree about what "taken" means.
+constexpr rm::sim::Fx kDepositClaimRadius = rm::sim::Fx::fromInt(8);
+
 /// The nearest Mass deposit to `from` that nothing has claimed — no construction
 /// (finished ones stay in the list, so a standing extractor counts) within a
 /// footprint of it.
 [[nodiscard]] const rm::scenario::Marker* nearestFreeDeposit(
     const UnitScene& scene, std::span<const rm::scenario::Marker> markers,
     const std::array<rm::sim::Fx, 3>& from) {
-    /// A deposit within this of an existing build site is the SAME deposit —
-    /// half an extractor footprint. The old comment said "generous against float drift";
-    /// there is no float drift here any more, and the generosity is now purely about the
-    /// deposit being a point and the extractor a footprint.
-    constexpr rm::sim::Fx kClaimedRadius = rm::sim::Fx::fromInt(8);
-
     const rm::scenario::Marker* nearest = nullptr;
     rm::sim::Fx nearestDistance{};
     for (const rm::scenario::Marker& marker : markers) {
@@ -376,7 +377,7 @@ bool issueCancelFactoryBuild(UnitScene& scene, rm::sim::UnitId factory,
             // `work.position` is already fixed point (§7 P10.0); only the MARKER still
             // needs converting, because it comes out of a map file as floats.
             if (rm::sim::groundDistanceElmos(work.position, fxPoint(marker.position))
-                < kClaimedRadius) {
+                < kDepositClaimRadius) {
                 claimed = true;
                 break;
             }
@@ -402,9 +403,11 @@ rm::unitdef::BuildRestriction depositKind(const rm::scenario::Marker& marker) no
 
 namespace {
 
-/// A deposit within this of a site is the SAME deposit — half an extractor footprint, the
-/// radius `nearestFreeDeposit` uses for the same judgement.
-constexpr rm::sim::Fx kDepositClaimRadius = rm::sim::Fx::fromInt(8);
+/// How long auto-expand leaves a refused site alone before offering it to the same engineer
+/// again. Thirty seconds is a T1 engineer's walk across a base at ~1.8 elmos a tick: long
+/// enough that whatever blocked the footprint has usually moved on, short enough that a site
+/// wrongly written off (the player interrupted the walk) is not lost for the match.
+constexpr float kRefusalGraceSeconds = 30.0f;
 
 [[nodiscard]] bool within(const std::array<rm::sim::Fx, 3>& a, const std::array<rm::sim::Fx, 3>& b,
                           rm::sim::Fx radius) noexcept {
@@ -592,22 +595,28 @@ std::size_t runAutoExpansion(MatchRunner& runner, rm::TickIndex tick) {
             continue;  // busy with something, about to be, or told to wait
         }
         const int army = scene.armyOf(expander.unit.index);
+        const rm::TickIndex grace = tick + static_cast<rm::TickIndex>(kRefusalGraceSeconds * second);
+        const auto refuse = [&](const std::array<rm::sim::Fx, 3>& site) {
+            expander.refused.push_back(RefusedSite{.site = site, .until = grace});
+        };
         // Idle again. If the last site handed out never got a construction, the sim refused
-        // the order after accepting it (an unplaceable footprint is found at dispatch): do not
-        // hand it out to this engineer again, or the pass would spin on it every tick.
+        // the order after accepting it (an unplaceable footprint is found at dispatch) — or the
+        // player pulled the engineer off it. Either way, not this site again for a while, or
+        // the pass would spin on it every tick.
         if (expander.lastSite) {
             const bool built = std::ranges::any_of(scene.building, [&](const rm::sim::Construction& work) {
                 return work.armyIndex == army && within(work.position, *expander.lastSite, kDepositClaimRadius);
             });
-            if (!built) expander.refused.push_back(*expander.lastSite);
+            if (!built) refuse(*expander.lastSite);
             expander.lastSite.reset();
         }
+        std::erase_if(expander.refused, [tick](const RefusedSite& r) { return tick >= r.until; });
         const rm::unitdef::UnitDef* def = scene.catalog.def(scene.store.typeAt(expander.unit.index));
         if (army == rm::sim::kNoArmy || def == nullptr) {
             continue;
         }
         std::vector<std::array<rm::sim::Fx, 3>> claimed = takenThisPass;
-        claimed.insert(claimed.end(), expander.refused.begin(), expander.refused.end());
+        for (const RefusedSite& r : expander.refused) claimed.push_back(r.site);
         const std::array<rm::sim::Fx, 3> from =
             rm::sim::positionOf(scene.store.transforms()[expander.unit.index]);
         const rm::scenario::Marker* deposit =
@@ -623,7 +632,7 @@ std::size_t runAutoExpansion(MatchRunner& runner, rm::TickIndex tick) {
         if (!type) {
             // This builder's tree has nothing for that kind of deposit (a faction without a
             // hydrocarbon plant this engine can read): skip the site, keep the others.
-            expander.refused.push_back(site);
+            refuse(site);
             continue;
         }
         if (issueBuild(scene, expander.unit, playerDriving(scene, army), tick, *type, site[0],
@@ -639,7 +648,7 @@ std::size_t runAutoExpansion(MatchRunner& runner, rm::TickIndex tick) {
                         expander.unit.index, expander.unit.generation);
             std::fflush(stdout);
         } else {
-            expander.refused.push_back(site);  // not placeable for this engineer: never again
+            refuse(site);  // the intake itself said no: not for this engineer, not for a while
         }
     }
     return issued;

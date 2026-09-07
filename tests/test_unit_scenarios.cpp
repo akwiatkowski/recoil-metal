@@ -1573,7 +1573,25 @@ TEST_CASE("auto-expand sends an idle engineer to the nearest free deposit on its
         const rm::sim::QueuedCommand* head = headOf(builder);
         REQUIRE(head != nullptr);
         CHECK(head->buildType() == hydroType);
-        CHECK(runner.autoExpanders.front().refused.size() <= 1);
+        REQUIRE(runner.autoExpanders.front().refused.size() == 1);
+
+        // The refusal is a grace period, not a verdict: once it lapses and the tanks are gone,
+        // a fresh idle engineer is offered the deposit again.
+        const rm::TickIndex lapse = runner.autoExpanders.front().refused.front().until;
+        for (rm::UnitIndex slot = 0; slot < job.scene.store.transforms().size(); ++slot) {
+            if (job.scene.store.slotAlive(slot) && job.scene.armyOf(slot) == 1) {
+                job.scene.store.kill(job.scene.store.idAt(slot));
+            }
+        }
+        const auto later = job.spawn(*engineer, 300, 290);
+        const std::array<rm::sim::UnitId, 1> next{later};
+        REQUIRE(rm::app::toggleAutoExpand(runner, next));
+        runner.autoExpanders.back().refused = runner.autoExpanders.front().refused;
+        (void)rm::app::advanceMatch(runner, static_cast<int>(lapse), 0);
+        REQUIRE(headOf(later) != nullptr);
+        CHECK(headOf(later)->buildType() == mexType);
+        CHECK(siteOf(*headOf(later)) == std::array<float, 2>{340.0f, 300.0f});
+        CHECK(runner.autoExpanders.back().refused.empty());
     }
 
     SECTION("the standing order resumes after a manual order and stops when the map is full") {

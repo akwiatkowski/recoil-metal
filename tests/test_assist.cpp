@@ -444,6 +444,50 @@ TEST_CASE("an idle engineering station repairs the nearest damaged ally, but bui
     CHECK(rm::test::asFloat(f.roster.health(hurt).current) == Approx(52.0f).margin(0.01));
 }
 
+TEST_CASE("an idle station ignores an orphaned construction and repairs instead") {
+    Fixture f;
+    (void)f.roster.add(f.stationType, 200.0f, 200.0f, 0, 100.0f);
+    const UnitId engineer = f.roster.add(f.engineerType, 210.0f, 200.0f, 0, 100.0f);
+    const UnitId hurt = f.roster.add(f.repairableType, 190.0f, 200.0f, 0, 100.0f);
+    f.roster.health(hurt).current = rm::sim::magFromFloat(50.0f);
+    f.economies[0].stored = {.mass = rm::sim::magFromFloat(1000.0f),
+                             .energy = rm::sim::magFromFloat(1000.0f)};
+
+    REQUIRE(f.build(engineer, 215.0f, 200.0f));
+    f.tick(1);
+    REQUIRE(f.building.size() == 1);
+    CHECK(rm::test::asFloat(f.building[0].assistPerTick) == Approx(2.0f).margin(0.001));
+
+    // The founder dies. Its row stays, unfinished, but nobody advances it: the station must
+    // not keep feeding a construction that cannot progress, and its repair arm comes back.
+    f.roster.health(engineer).current = rm::sim::Mag{};
+    f.tick(2);
+    CHECK(rm::test::asFloat(f.building[0].assistPerTick) == 0.0f);
+    CHECK(rm::test::asFloat(f.roster.health(hurt).current) > 50.0f);
+}
+
+TEST_CASE("a station lends nothing to an enemy's construction or wounds") {
+    Fixture f;
+    (void)f.roster.add(f.stationType, 200.0f, 200.0f, 0, 100.0f);
+    const UnitId enemy = f.roster.add(f.engineerType, 210.0f, 200.0f, 1, 100.0f);
+    const UnitId enemyHurt = f.roster.add(f.repairableType, 190.0f, 200.0f, 1, 100.0f);
+    f.roster.health(enemyHurt).current = rm::sim::magFromFloat(50.0f);
+    f.economies[1].stored = {.mass = rm::sim::magFromFloat(1000.0f),
+                             .energy = rm::sim::magFromFloat(1000.0f)};
+
+    // Issued by army 1's own player: a build order names who gave it.
+    REQUIRE(f.apply(Command{.kind = CommandKind::Build,
+                            .player = 1,
+                            .unit = enemy,
+                            .targetX = rm::sim::fxFromFloat(215.0f),
+                            .targetZ = rm::sim::fxFromFloat(200.0f),
+                            .buildType = f.hutType}));
+    f.tick(2);
+    REQUIRE(f.building.size() == 1);
+    CHECK(rm::test::asFloat(f.building[0].assistPerTick) == 0.0f);
+    CHECK(rm::test::asFloat(f.roster.health(enemyHurt).current) == Approx(50.0f).margin(0.01));
+}
+
 TEST_CASE("a station with an assist order of its own follows the order, not the nearest work") {
     Fixture f;
     const UnitId station = f.roster.add(f.stationType, 200.0f, 200.0f, 0, 100.0f);

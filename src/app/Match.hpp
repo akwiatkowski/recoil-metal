@@ -68,10 +68,19 @@ struct Standing {
 /// walk knows only where everything ended up.
 /// One engineer on auto-expand, with the sites it has been refused so it does not ask for
 /// them again every pass (`refused`) and the tick before which it is not retried.
+/// A site an engineer is not offered again until `until`: the sim dropped an order there, or the
+/// engineer came back idle without a construction to show for it. Expiring rather than permanent
+/// because the pass cannot tell a wall of enemy tanks from a passing one, or a blocked footprint
+/// from a player who interrupted the walk — after the grace period the site is simply tried again.
+struct RefusedSite {
+    std::array<rm::sim::Fx, 3> site{};
+    rm::TickIndex until = 0;
+};
+
 struct AutoExpander {
     rm::sim::UnitId unit{};
     rm::TickIndex retryAt = 0;
-    std::vector<std::array<rm::sim::Fx, 3>> refused;
+    std::vector<RefusedSite> refused;
     /// The site of the last order handed out, so a refusal the sim only discovers at dispatch
     /// (the order is accepted, then dropped a beat later) is recognised: the engineer is idle
     /// again and nothing was ever built there.

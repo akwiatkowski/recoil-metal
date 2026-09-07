@@ -28,9 +28,17 @@ namespace rm::sim {
 // the Cybran Hive) cannot move and take no Guard order (`RULEUCC_Guard = false` in their
 // blueprints), so the only way they can ever lend their BuildRate is on their own initiative.
 // An idle station — alive, no order of its own — adds its rate to the NEAREST unfinished
-// allied construction it can reach, judged with the same rule a mobile builder's build task
-// uses (`constructionReach`); with nothing to build in reach it repairs the nearest damaged
-// ally instead (`collectRepairWork`). Build before repair is the C-183 guard ladder's order.
+// allied construction it can reach whose founder is alive and still on its Build order, judged
+// with the same rule a mobile builder's build task uses (`constructionReach`); with nothing to
+// build in reach it repairs the nearest damaged ally instead (`collectRepairWork`). Build before
+// repair is the C-183 guard ladder's order.
+//
+// THE TWO SCANS RUN AT DIFFERENT POINTS OF THE TICK: assistance is judged before `advanceOrders`
+// (with the dispatch stage, where retail's assisters work), repair after it. A construction that
+// starts or finishes inside `advanceOrders` can therefore make a station do both, or neither,
+// for that one tick. Deterministic and replay-stable — both read state the hash covers — and
+// accepted rather than fused, because fusing them would move one of the passes off retail's
+// stage.
 //
 // The player's decision (2026-09-07) was "assist and repair in reach", which is what a Kennel
 // left alone does in a retail base once its pods have a target; retail additionally lets a

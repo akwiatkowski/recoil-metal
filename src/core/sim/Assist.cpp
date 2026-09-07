@@ -48,6 +48,17 @@ stationConstructionInReach(UnitIndex slot, const UnitStore& store, const UnitCat
         if (work.finished() || payer == nullptr || !allied(*owner, *payer)) {
             continue;
         }
+        // Only work someone is DOING. Progress happens inside the founder's build task, so a
+        // row whose builder died or was re-tasked never advances; a station that locked onto it
+        // would pour its rate into nothing and, having "a project", never fall back to repair.
+        // The ordered Assist path resolves through a living founder for the same reason.
+        if (!store.alive(work.builder)) {
+            continue;
+        }
+        const QueuedCommand* founding = store.orders()[work.builder.index].active();
+        if (founding == nullptr || founding->kind() != CommandKind::Build) {
+            continue;
+        }
         const Fx gap = groundDistanceElmos(at, work.position);
         if (gap > constructionReach(catalog, store.typeAt(slot),
                                     static_cast<UnitTypeIndex>(work.blueprintIndex))) {
