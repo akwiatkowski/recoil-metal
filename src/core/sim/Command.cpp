@@ -133,6 +133,35 @@ namespace {
     });
 }
 
+/// A construction of `blueprint` at exactly this site, by anyone — the colleague an arriving
+/// engineer finds when another builder claimed the same deposit first.
+[[nodiscard]] Construction* constructionAtSite(std::vector<Construction>& building,
+                                               UnitTypeIndex blueprint, Fx x, Fx z) noexcept {
+    for (Construction& work : building) {
+        if (work.blueprintIndex == blueprint && work.position[0] == x && work.position[2] == z) {
+            return &work;
+        }
+    }
+    return nullptr;
+}
+
+/// Whether `builder`'s army is on `slot`'s side. No alliance state (a bare test store) counts
+/// as allied, the way the repair path already reads it.
+[[nodiscard]] bool alliedBuilder(UnitId builder, UnitIndex slot, const UnitStore& store,
+                                 std::span<const Army> armies) noexcept {
+    if (!store.alive(builder)) {
+        return false;
+    }
+    if (armies.empty()) {
+        return true;
+    }
+    const int mine = store.motion()[slot].armyIndex;
+    const int theirs = store.motion()[builder.index].armyIndex;
+    const auto a = std::ranges::find_if(armies, [mine](const Army& army) { return army.index == mine; });
+    const auto b = std::ranges::find_if(armies, [theirs](const Army& army) { return army.index == theirs; });
+    return a != armies.end() && b != armies.end() && allied(*a, *b);
+}
+
 void cancelActiveConstruction(std::vector<Construction>* building, UnitId builder) {
     if (building == nullptr) {
         return;
@@ -1471,6 +1500,43 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
                 }
                 if (!startCommand(current->asCommand(), store, catalog, terrain, *buildGrid,
                                   rate, building, events, features)) {
+                    // Refused on the way in: the site changed under the order. Two cases.
+                    //
+                    // A COLLEAGUE got there first — an allied builder's construction of the
+                    // same blueprint stands on the site. Retail treats a build order onto an
+                    // existing construction as assisting it, so hold in reach, lend this beat's
+                    // rate, and let the order complete with the colleague's work. A finished
+                    // one means the job is done.
+                    //
+                    // ANYTHING ELSE — an enemy on the spot, a different structure — refuses
+                    // the order, and the refusal must stop the engineer: without the teardown
+                    // it kept coasting along its stale route and parked on the deposit with an
+                    // empty queue, which read as "walked there and did nothing".
+                    MoveState& mine = store.motion()[slot];
+                    Construction* colleague = constructionAtSite(
+                        *building, current->buildType(), current->targetX(), current->targetZ());
+                    if (colleague != nullptr && !(colleague->builder == store.idAt(slot))
+                        && alliedBuilder(colleague->builder, slot, store, armies)) {
+                        if (colleague->finished()) {
+                            teardownMovement(mine);
+                            (void)orders[slot].finish();
+                            startPending();
+                            continue;
+                        }
+                        const Fx reach = constructionReach(catalog, store.typeAt(slot),
+                                                           current->buildType());
+                        const Fx gap = groundDistanceElmos(positionOf(store.transforms()[slot]),
+                                                           colleague->position);
+                        if (gap <= reach) {
+                            teardownMovement(mine);
+                            colleague->assistPerTick += catalog.rates(store.typeAt(slot)).buildPerTick;
+                        } else if (!mine.moving) {
+                            (void)routeUnit(slot, colleague->position[0], colleague->position[2],
+                                            store, terrain, *buildGrid);
+                        }
+                        continue;
+                    }
+                    teardownMovement(mine);
                     (void)orders[slot].finish();
                     startPending();
                     continue;

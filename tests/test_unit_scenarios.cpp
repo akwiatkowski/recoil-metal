@@ -1187,6 +1187,66 @@ TEST_CASE("queued building placements preserve work and complete in click order"
     CHECK(job.scene.store.liveCount() == 3);
 }
 
+TEST_CASE("a build site taken during the approach stops the engineer or joins a colleague",
+          "[corpus][build-queue]") {
+    // The reported bug: an extractor ordered on a far deposit, the engineer walks there and
+    // stands idle. The site check runs every beat of the approach; when the site is taken the
+    // order was dropped without stopping the walk. Now an enemy on the spot stops the engineer
+    // where it is, and an allied colleague already building the same thing is joined.
+    const auto root = corpusRoot();
+    if (!std::filesystem::is_directory(root)) SKIP("retail corpus unavailable");
+    const auto engineer = rm::unitbp::loadFile(root / "UEL0105/UEL0105_unit.bp");
+    const auto extractor = rm::unitbp::loadFile(root / "UEB1103/UEB1103_unit.bp");
+    REQUIRE(engineer);
+    REQUIRE(extractor);
+    Scenario job;
+    job.scene.resourceDeposits.push_back({rm::unitdef::BuildRestriction::MassDeposit,
+                                          rm::sim::Fx::fromInt(420), rm::sim::Fx::fromInt(300)});
+    const auto builder = job.spawn(*engineer, 300, 300);
+    const auto type = job.registerType(*extractor);
+    job.scene.economies[0].stored = {rm::sim::Mag::fromInt(650), rm::sim::Mag::fromInt(5000)};
+    auto runner = job.runner();
+    const auto x = [&](rm::sim::UnitId id) {
+        return rm::sim::fxToFloat(job.scene.store.transforms()[id.index].x);
+    };
+
+    SECTION("an enemy standing on the deposit refuses the order and stops the engineer") {
+        REQUIRE(rm::app::issueBuild(job.scene, builder, 0, 0, type, rm::sim::Fx::fromInt(420),
+                                    rm::sim::Fx::fromInt(300)));
+        for (int tick = 0; tick < 5; ++tick) (void)rm::app::advanceMatch(runner, tick, 0);
+        REQUIRE(job.scene.store.motion()[builder.index].moving);
+        (void)job.spawn(*engineer, 420, 300, 1);
+        for (int tick = 5; tick < 200; ++tick) (void)rm::app::advanceMatch(runner, tick, 0);
+        CHECK(job.scene.building.empty());
+        CHECK(job.scene.store.orders()[builder.index].empty());
+        CHECK_FALSE(job.scene.store.motion()[builder.index].moving);
+        CHECK(x(builder) < 400.0f);  // stopped where it was refused, not parked on the deposit
+    }
+
+    SECTION("an allied colleague already building it is joined until the work completes") {
+        REQUIRE(rm::app::issueBuild(job.scene, builder, 0, 0, type, rm::sim::Fx::fromInt(420),
+                                    rm::sim::Fx::fromInt(300)));
+        const auto colleague = job.spawn(*engineer, 426, 300, 0);
+        REQUIRE(rm::app::issueBuild(job.scene, colleague, 0, 0, type, rm::sim::Fx::fromInt(420),
+                                    rm::sim::Fx::fromInt(300)));
+        // Dispatch creates the construction: the colleague is in reach, the builder routes.
+        (void)rm::app::advanceMatch(runner, 0, 0);
+        REQUIRE(job.scene.building.size() == 1);
+        bool lentRate = false;
+        int finishedAt = -1;
+        for (int tick = 1; tick < 3000 && finishedAt < 0; ++tick) {
+            (void)rm::app::advanceMatch(runner, tick, 0);
+            if (job.scene.building.front().assistPerTick > rm::sim::Mag{}) lentRate = true;
+            if (job.scene.building.front().finished()) finishedAt = tick;
+        }
+        REQUIRE(finishedAt > 0);
+        CHECK(lentRate);
+        CHECK(job.scene.building.size() == 1);  // one extractor, not two
+        (void)rm::app::advanceMatch(runner, finishedAt + 1, 0);
+        CHECK(job.scene.store.orders()[builder.index].empty());  // the order completed with it
+    }
+}
+
 TEST_CASE("an extractor can queue its next tier while upgrading", "[corpus][upgrade-chain][headless-ui]") {
     const auto root = corpusRoot();
     if (!std::filesystem::is_directory(root)) SKIP("retail corpus unavailable");
