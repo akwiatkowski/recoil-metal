@@ -10,7 +10,9 @@
 #include "core/unit/UnitBlueprint.hpp"
 #include "core/ui/CommandPanel.hpp"
 #include "core/log/Log.hpp"
+#include "support/FxMatchers.hpp"
 
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
@@ -1627,4 +1629,250 @@ TEST_CASE("auto-expand sends an idle engineer to the nearest free deposit on its
         for (int tick = 420; tick < 460; ++tick) (void)rm::app::advanceMatch(runner, tick, 0);
         CHECK(headOf(idle) == nullptr);
     }
+}
+
+// The review of 64167db/9a9f2d0 named three gaps in the auto-expand and station coverage
+// (item 61524). These close them: the END-TO-END chain (a finished mex handing the engineer
+// its next deposit), the DETERMINISM half (two runs of a match with an assisting station hash
+// identically), and the REPLAY half (a log that contains auto-expand builds reproduces the
+// match without the standing order existing). The Kennel scenario beside them is item 61432:
+// the same station behaviour against the RETAIL blueprint rather than a synthetic one.
+
+TEST_CASE("auto-expand hands the engineer the next deposit once its mex is standing",
+          "[corpus][auto-expand]") {
+    const auto root = corpusRoot();
+    if (!std::filesystem::is_directory(root)) SKIP("retail corpus unavailable");
+    const auto engineer = rm::unitbp::loadFile(root / "UEL0105/UEL0105_unit.bp");
+    const auto extractor = rm::unitbp::loadFile(root / "UEB1103/UEB1103_unit.bp");
+    const auto hydro = rm::unitbp::loadFile(root / "UEB1102/UEB1102_unit.bp");
+    REQUIRE(engineer);
+    REQUIRE(extractor);
+    REQUIRE(hydro);
+
+    Scenario job;
+    const std::vector<rm::scenario::Marker> markers{
+        {.name = "Mass 1", .type = "Mass", .position = {340.0f, 0.0f, 300.0f}},
+        {.name = "Hydro 1", .type = "Hydrocarbon", .position = {300.0f, 0.0f, 360.0f}},
+        {.name = "ARMY_1", .type = "Blank Marker", .position = {200.0f, 0.0f, 300.0f}},
+    };
+    const std::vector<rm::mapinfo::StartPosition> starts{{.team = 0, .x = 200.0f, .z = 300.0f},
+                                                          {.team = 1, .x = 1000.0f, .z = 300.0f}};
+    for (const rm::scenario::Marker& marker : markers) {
+        const auto kind = rm::app::depositKind(marker);
+        if (kind == rm::unitdef::BuildRestriction::None) continue;
+        job.scene.resourceDeposits.push_back({kind, rm::sim::fxFromFloat(marker.position[0]),
+                                              rm::sim::fxFromFloat(marker.position[2])});
+    }
+    const std::vector<rm::unitdef::UnitDef> corpus{*engineer, *extractor, *hydro};
+    const std::vector<std::string> ids{"UEL0105", "UEB1103", "UEB1102"};
+    job.scene.roster = rm::data::Roster::build(corpus, ids);
+    const auto mexType = job.registerType(*extractor);
+    const auto hydroType = job.registerType(*hydro);
+    const auto builder = job.spawn(*engineer, 300, 300);
+    job.scene.economies[0].stored = {rm::sim::Mag::fromInt(2000), rm::sim::Mag::fromInt(5000)};
+    auto runner = job.runner();
+    runner.markers = markers;
+    runner.starts = starts;
+
+    const auto headOf = [&](rm::sim::UnitId id) {
+        return job.scene.store.orders()[id.index].active();
+    };
+    const auto standingAt = [&](float x, float z) {
+        for (rm::UnitIndex slot = 0; slot < job.scene.store.transforms().size(); ++slot) {
+            if (!job.scene.store.slotAlive(slot) || job.scene.armyOf(slot) != 0) continue;
+            const auto& where = job.scene.store.transforms()[slot];
+            if (rm::sim::fxToFloat(where.x) == x && rm::sim::fxToFloat(where.z) == z) return true;
+        }
+        return false;
+    };
+
+    const std::array<rm::sim::UnitId, 1> one{builder};
+    REQUIRE(rm::app::toggleAutoExpand(runner, one));
+
+    // Phase 1: the first deposit is ordered and BUILT — walked to, paid for, finished, and
+    // standing on the map as a unit. Not merely ordered: the gap this closes is everything
+    // between "ordered" and "standing", because only a finished construction empties the
+    // engineer's queue again while the standing extractor claims the site for good.
+    int tick = 0;
+    bool mexOrdered = false;
+    for (; tick < 4000 && !standingAt(340.0f, 300.0f); ++tick) {
+        (void)rm::app::advanceMatch(runner, tick, 0);
+        if (!mexOrdered && headOf(builder) != nullptr
+            && headOf(builder)->kind() == rm::sim::CommandKind::Build) {
+            REQUIRE(headOf(builder)->buildType() == mexType);
+            mexOrdered = true;
+        }
+    }
+    REQUIRE(mexOrdered);
+    REQUIRE(standingAt(340.0f, 300.0f));
+
+    // Phase 2: idle again with the standing order still on and nobody clicking anything, the
+    // engineer must be handed the hydro deposit. The pass throttles an engineer it has just
+    // looked at to once a second, so give it that long.
+    const rm::sim::QueuedCommand* next = nullptr;
+    for (int wait = 0; wait < 30 && next == nullptr; ++wait, ++tick) {
+        (void)rm::app::advanceMatch(runner, tick, 0);
+        next = headOf(builder);
+    }
+    REQUIRE(next != nullptr);
+    CHECK(next->kind() == rm::sim::CommandKind::Build);
+    CHECK(next->buildType() == hydroType);
+    CHECK(std::array{rm::sim::fxToFloat(next->targetX()), rm::sim::fxToFloat(next->targetZ())}
+          == std::array<float, 2>{300.0f, 360.0f});
+}
+
+// The Kennel-assist corpus test (KB item 61432) is POSTPONED. Three attempts to stand a live
+// Build next to a spawned XEB0104 in this harness all failed the same way: the Build order is
+// accepted at intake and then never materialises a construction row — no rows, no events, the
+// engineer's queue empty — across site distances 5..40 elmos, with a Mass deposit under the
+// site and the roster registered. Root cause not yet found; the synthetic-fixture coverage in
+// test_assist.cpp stands until it is.
+
+TEST_CASE("a match with an engineering station standing over live work hashes identically"
+          " across two runs",
+          "[corpus][station][determinism]") {
+    // Item 61524's second gap. The station scan runs inside the sim's assist pass, so its
+    // choices are live state; two fresh runs of the same scenario must agree or the standing
+    // order's replay promise is false wherever a station is standing. The live work is driven
+    // by auto-expand — the known-good Build path in this harness — with the Kennel standing
+    // between the two deposits so every construction the engineer founds passes its scan.
+    const auto root = corpusRoot();
+    if (!std::filesystem::is_directory(root)) SKIP("retail corpus unavailable");
+    const auto kennel = rm::unitbp::loadFile(root / "XEB0104/XEB0104_unit.bp");
+    const auto engineer = rm::unitbp::loadFile(root / "UEL0105/UEL0105_unit.bp");
+    const auto extractor = rm::unitbp::loadFile(root / "UEB1103/UEB1103_unit.bp");
+    const auto hydro = rm::unitbp::loadFile(root / "UEB1102/UEB1102_unit.bp");
+    REQUIRE(kennel);
+    REQUIRE(engineer);
+    REQUIRE(extractor);
+    REQUIRE(hydro);
+
+    const std::vector<rm::scenario::Marker> markers{
+        {.name = "Mass 1", .type = "Mass", .position = {340.0f, 0.0f, 300.0f}},
+        {.name = "Hydro 1", .type = "Hydrocarbon", .position = {300.0f, 0.0f, 360.0f}},
+        {.name = "ARMY_1", .type = "Blank Marker", .position = {200.0f, 0.0f, 300.0f}},
+    };
+    const std::vector<rm::mapinfo::StartPosition> starts{{.team = 0, .x = 200.0f, .z = 300.0f},
+                                                          {.team = 1, .x = 1000.0f, .z = 300.0f}};
+
+    const auto play = [&](rm::StateHash* final) {
+        Scenario job;
+        for (const rm::scenario::Marker& marker : markers) {
+            const auto kind = rm::app::depositKind(marker);
+            if (kind == rm::unitdef::BuildRestriction::None) continue;
+            job.scene.resourceDeposits.push_back(
+                {kind, rm::sim::fxFromFloat(marker.position[0]),
+                 rm::sim::fxFromFloat(marker.position[2])});
+        }
+        const std::vector<rm::unitdef::UnitDef> corpus{*engineer, *extractor, *hydro};
+        const std::vector<std::string> ids{"UEL0105", "UEB1103", "UEB1102"};
+        job.scene.roster = rm::data::Roster::build(corpus, ids);
+        (void)job.registerType(*extractor);
+        (void)job.registerType(*hydro);
+        (void)job.spawn(*kennel, 320, 330);  // between the deposits, alive and scanning
+        const auto builder = job.spawn(*engineer, 300, 300);
+        job.scene.economies[0].stored = {rm::sim::Mag::fromInt(2000), rm::sim::Mag::fromInt(5000)};
+        auto runner = job.runner();
+        runner.markers = markers;
+        runner.starts = starts;
+        const std::array<rm::sim::UnitId, 1> one{builder};
+        REQUIRE(rm::app::toggleAutoExpand(runner, one));
+        std::size_t builds = 0;
+        for (int tick = 0; tick < 400; ++tick) {
+            (void)rm::app::advanceMatch(runner, tick, 0);
+            builds = job.scene.building.size();
+        }
+        REQUIRE(builds >= 1);  // live work existed for the station's scan to see
+        *final = rm::sim::hashMatch(job.scene.store, runner.match);
+    };
+
+    rm::StateHash first{};
+    rm::StateHash second{};
+    play(&first);
+    play(&second);
+    CHECK(first == second);
+}
+
+TEST_CASE("a command log holding auto-expand builds replays to the same match",
+          "[corpus][auto-expand][replay]") {
+    // Item 61524's third gap. ADR-109's promise is that a replay needs no knowledge of the
+    // standing order: every build the pass issues is an ordinary logged Build. Run the live
+    // match with auto-expand on, then replay its log into a fresh scenario with the flag
+    // never set, and demand the same state hash.
+    const auto root = corpusRoot();
+    if (!std::filesystem::is_directory(root)) SKIP("retail corpus unavailable");
+    const auto engineer = rm::unitbp::loadFile(root / "UEL0105/UEL0105_unit.bp");
+    const auto extractor = rm::unitbp::loadFile(root / "UEB1103/UEB1103_unit.bp");
+    const auto hydro = rm::unitbp::loadFile(root / "UEB1102/UEB1102_unit.bp");
+    REQUIRE(engineer);
+    REQUIRE(extractor);
+    REQUIRE(hydro);
+
+    const std::vector<rm::scenario::Marker> markers{
+        {.name = "Mass 1", .type = "Mass", .position = {340.0f, 0.0f, 300.0f}},
+        {.name = "Hydro 1", .type = "Hydrocarbon", .position = {300.0f, 0.0f, 360.0f}},
+        {.name = "ARMY_1", .type = "Blank Marker", .position = {200.0f, 0.0f, 300.0f}},
+    };
+    const std::vector<rm::mapinfo::StartPosition> starts{{.team = 0, .x = 200.0f, .z = 300.0f},
+                                                          {.team = 1, .x = 1000.0f, .z = 300.0f}};
+    const auto seat = [&](Scenario& job) {
+        for (const rm::scenario::Marker& marker : markers) {
+            const auto kind = rm::app::depositKind(marker);
+            if (kind == rm::unitdef::BuildRestriction::None) continue;
+            job.scene.resourceDeposits.push_back(
+                {kind, rm::sim::fxFromFloat(marker.position[0]),
+                 rm::sim::fxFromFloat(marker.position[2])});
+        }
+        const std::vector<rm::unitdef::UnitDef> corpus{*engineer, *extractor, *hydro};
+        const std::vector<std::string> ids{"UEL0105", "UEB1103", "UEB1102"};
+        job.scene.roster = rm::data::Roster::build(corpus, ids);
+        (void)job.registerType(*extractor);
+        (void)job.registerType(*hydro);
+        const auto builder = job.spawn(*engineer, 300, 300);
+        job.scene.economies[0].stored = {rm::sim::Mag::fromInt(2000), rm::sim::Mag::fromInt(5000)};
+        return builder;
+    };
+
+    constexpr int kTicks = 900;  // long enough for the mex to finish and the hydro to be ordered
+    Scenario live;
+    const auto builder = seat(live);
+    auto liveRunner = live.runner();
+    liveRunner.markers = markers;
+    liveRunner.starts = starts;
+    const std::array<rm::sim::UnitId, 1> one{builder};
+    REQUIRE(rm::app::toggleAutoExpand(liveRunner, one));
+    std::size_t loggedBuilds = 0;
+    for (int tick = 0; tick < kTicks; ++tick) {
+        (void)rm::app::advanceMatch(liveRunner, tick, 0);
+        loggedBuilds = static_cast<std::size_t>(std::count_if(
+            live.scene.commands.all().begin(), live.scene.commands.all().end(),
+            [](const rm::sim::CommandIssue& issue) {
+                return issue.kind == rm::sim::CommandKind::Build;
+            }));
+    }
+    REQUIRE(loggedBuilds >= 2);  // the mex AND the chained hydro, or the run proves nothing
+
+    const auto path = std::filesystem::temp_directory_path() / "rm-auto-expand-replay.commands";
+    REQUIRE(rm::sim::writeCommandLog(live.scene.commands, path.string(),
+                                     [&live](std::uint32_t type) {
+                                         return std::string{live.scene.pathOf(
+                                             static_cast<rm::UnitTypeIndex>(type))};
+                                     }));
+    std::vector<std::string> buildPaths;
+    const auto replayLog = rm::sim::readCommandLog(path.string(), &buildPaths);
+    REQUIRE(replayLog.has_value());
+
+    Scenario replay;
+    (void)seat(replay);
+    auto replayRunner = replay.runner();
+    replayRunner.markers = markers;
+    replayRunner.starts = starts;
+    replayRunner.replay = &*replayLog;
+    replayRunner.replayPaths = &buildPaths;
+    for (int tick = 0; tick < kTicks; ++tick) {
+        (void)rm::app::advanceMatch(replayRunner, tick, 0);
+    }
+    CHECK(rm::sim::hashMatch(replay.scene.store, replayRunner.match)
+          == rm::sim::hashMatch(live.scene.store, liveRunner.match));
+    std::filesystem::remove(path);
 }
