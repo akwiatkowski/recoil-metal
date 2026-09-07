@@ -184,6 +184,7 @@ add_library(rm_core STATIC
     src/core/audio/Cues.cpp
     src/core/audio/CueEvents.cpp
     src/core/audio/Mixer.cpp
+    src/core/audio/Xgs.cpp
     src/core/audio/Xwb.cpp
     src/core/audio/Xsb.cpp
     src/core/audio/WeaponSounds.cpp

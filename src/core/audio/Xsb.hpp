@@ -12,10 +12,12 @@
 // complex cues (15 bytes each; flag bit 2 means the entry points straight at a sound, else at
 // a variation table) → sound (9-byte header; complex sounds own clips, simple ones name one
 // track) → clip → events. Two event kinds carry waves in the retail banks: type 4, one track
-// with pitch and volume ranges, and type 6, a weighted list of tracks. Only track indices are
-// kept; pitch and volume variation, RPC curves, categories and instance limits are not
-// interpreted yet, and every one of those omissions is a cue playing at its authored wave and
-// the mixer's gain rather than a wrong cue.
+// with pitch/volume/filter ranges, and type 6, a weighted list of tracks. Kept per cue: the
+// tracks, the authored PITCH range (hundredths of a semitone), and the sound's category index
+// into the global settings (SupCom.xgs, Xgs.hpp). NOT interpreted: the volume/filter bytes —
+// measured flat where it matters (the first five range bytes are `00 00 00 a0 8c` on 35 of 36
+// UELWeapon cues and identical across every faction weapon and impact bank), so every take
+// plays at the mixer's gain rather than a wrong variation. RPC curves live in the .xgs.
 //
 // Anything the walk does not understand ends that cue's list where it stands, so a malformed
 // or unexpected bank degrades per cue and never throws.
@@ -39,9 +41,19 @@ struct SoundBank {
         std::uint16_t entry = 0;
         std::uint8_t waveBank = 0;
     };
-    /// Cue name -> its tracks. A cue with an empty list resolved to no wave this walk
+    /// A cue: its takes, the authored PITCH VARIATION RANGE (hundredths of a semitone,
+    /// measured on the retail banks — ±100..±300 around zero), and the XACT category its
+    /// sound record names (an index into the global settings' category table, SupCom.xgs;
+    /// 0xffff when nothing named one).
+    struct Cue {
+        std::vector<Track> tracks;
+        std::int16_t pitchMin = 0;
+        std::int16_t pitchMax = 0;
+        std::uint16_t category = 0xffff;
+    };
+    /// Cue name -> its takes. A cue with an empty list resolved to no wave this walk
     /// understands.
-    std::map<std::string, std::vector<Track>, std::less<>> cues;
+    std::map<std::string, Cue, std::less<>> cues;
 };
 
 /// Parses one sound bank from its bytes, or nothing when they are not an XACT2 sound bank.

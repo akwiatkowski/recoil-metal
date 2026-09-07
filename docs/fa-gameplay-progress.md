@@ -154,7 +154,7 @@ excluded from the headline.
 | [`FA-TERRAIN`](#fa-terrain---mutable-terrain-and-craters) | Mutable terrain and craters | `WP-37` | 0% | 0% | 25% | Trace one crater from damage through terrain, pathing, and rendering invalidation. |
 | [`FA-AI`](#fa-ai---retail-ai-and-native-manager-boundary) | Retail AI and native manager boundary | `WP-38` | 40% | 5% | 30% | Specify islandMarker from its callers; measure how reclaim decisions change the SCMP_009 duel's course. |
 | [`FA-UI`](#fa-ui---player-interface-and-advanced-controls) | Player interface and advanced controls | `WP-39`-`40` | 75% | 5% | 15% | Trace and implement the first retail data-driven command page from `WP-40`. |
-| [`FA-PRESENT`](#fa-present---animation-effects-and-audio) | Animation, effects, audio | `WP-41`-`42` | 75% | 5% | 45% | Honour `LodCutoff` distances and XACT pitch/volume ranges on weapon cues; script-driven manipulators remain. |
+| [`FA-PRESENT`](#fa-present---animation-effects-and-audio) | Animation, effects, audio | `WP-41`-`42` | 75% | 5% | 45% | Script-driven manipulators on the authored weapon effects; then dynamic music. |
 | [`FA-PERSIST`](#fa-persist---replay-hashing-and-saveresume) | Replay, hashing, save/resume | `WP-43`-`44` | 70% | 20% | 90% | Golden acceptance of save continuation (now v17) once the baseline is reblessed (retail-content half passed 2026-09-06); general app saves remain absent. |
 
 ## Starting Work
@@ -650,20 +650,22 @@ projectile meshes draw through the unit pipeline, pointed along the shot's veloc
 Weapon fire now plays the blueprint's own `Audio.Fire` cue: the companion `.xsb` sound bank
 resolves the cue name to wave-bank entries and `WeaponSounds` picks one take per shot by
 the shooter's handle (ADR-106). The retail UEF weapon bank's Gauss cue resolves to entries
-6, 5 and 7 as measured on the bytes.
+6, 5 and 7 as measured on the bytes. Takes play detuned within the bank's authored pitch
+range (deterministic per seed, so replays sound identical), thinned by SupCom.xgs
+per-category instance limits, and refused beyond the median world-scale silence distance
+as the `LodCutoff`; volume bytes measured flat across the weapon banks, so takes play at
+the mixer's gain.
 
-**Largest gap:** script-driven manipulators do not run; weapon cues ignore `LodCutoff`
-distances, XACT pitch/volume ranges, RPC curves and instance limits. Mesh blueprints' LOD
+**Largest gap:** script-driven manipulators do not run; weapon cues ignore the volume/filter
+range bytes, RPC curves beyond the cutoff median, and dynamic music. Mesh blueprints' LOD
 tables are honoured (100 retail projectile meshes load); only blueprints whose mesh
 blueprint is absent from the archives keep their strips. The gallery verifies this renderer,
 not pixel parity with retail.
 
 ```text
-/goal Advance FA-PRESENT by honouring the weapon cues' authored ranges: read the XACT
-pitch/volume variation and the instance limit per cue, map LodCutoff through SupCom.xgs to a
-distance, and apply them in the mixer. Write tests on the retail UELWeapon pair, run make
-test, update WP-42 and FA-PRESENT, and leave dynamic music and broad effect hosting as
-explicit later slices.
+/goal Advance FA-PRESENT with script-driven manipulators on the weapon effects above, then
+dynamic music; leave broad effect hosting as an explicit later slice. Write tests on the
+retail corpus, run make test, update WP-42 and FA-PRESENT.
 ```
 
 ### FA-PERSIST - Replay, Hashing, And Save/Resume

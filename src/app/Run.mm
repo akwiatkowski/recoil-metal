@@ -945,6 +945,22 @@ int runWindowed(const Session& session) {
                 // Weapon fire by the blueprint's own cue: the bank pairs load as the catalog
                 // names them, so a type registered mid-match brings its sound along.
                 weaponSounds.emplace(sounds);
+                // The authored mix the banks assume (SupCom.xgs): per-category instance
+                // limits, and the LodCutoff distance beyond which a cue is silence anyway.
+                if (const rm::audio::GlobalSettings* xgs = weaponSounds->globalSettings()) {
+                    for (std::size_t c = 0; c < xgs->categories.size(); ++c) {
+                        if (xgs->categories[c].maxInstances != rm::audio::kUnlimitedInstances) {
+                            mixer.setCategoryLimit(static_cast<std::uint16_t>(c),
+                                                   xgs->categories[c].maxInstances);
+                        }
+                    }
+                    if (const float cutoff = xgs->cutoffElmos(); cutoff > 0.0f) {
+                        mixer.setCutoffElmos(cutoff);
+                        std::printf("audio: %zu categories, cutoff %.0f elmos from"
+                                    " SupCom.xgs\n",
+                                    xgs->categories.size(), cutoff);
+                    }
+                }
                 if (explosionBank) {
                     std::printf("audio: %zu explosion(s), %zu impact(s) from the game's own"
                                 " banks\n",

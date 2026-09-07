@@ -17,11 +17,59 @@ void Mixer::setMasterGain(float gain) {
     masterGain_ = std::clamp(gain, 0.0f, 1.0f);
 }
 
+void Mixer::setCategoryLimit(std::uint16_t category, std::size_t maxInstances) {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    for (std::size_t i = 0; i < limitsSet_; ++i) {
+        if (limits_[i].first == category) {
+            limits_[i].second = maxInstances;
+            return;
+        }
+    }
+    if (limitsSet_ < limits_.size()) {
+        limits_[limitsSet_++] = {category, maxInstances};
+    }
+}
+
+void Mixer::setCutoffElmos(float elmos) {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    cutoffElmos_ = std::max(0.0f, elmos);
+}
+
 void Mixer::play(const Cue& cue, float x, float z, float gain) {
+    play(cue, x, z, gain, 1.0f, kUnlimitedInstances);
+}
+
+void Mixer::play(const Cue& cue, float x, float z, float gain, float rate,
+                 std::uint16_t category) {
     if (cue.samples.empty()) {
         return;
     }
     const std::lock_guard<std::mutex> lock(mutex_);
+
+    // THE LOD CUTOFF, before anything else costs a slot: a cue beyond the authored silence
+    // distance is not quiet, it is absent — the curves the global settings carry end in
+    // silence, and honouring that is cheaper than attenuating toward it.
+    if (cutoffElmos_ > 0.0f) {
+        const float dx = x - listenerX_;
+        const float dz = z - listenerZ_;
+        if (std::sqrt(dx * dx + dz * dz) > cutoffElmos_) {
+            return;
+        }
+    }
+
+    // The category's authored instance limit: over it the play is dropped, XACT's "fail"
+    // behaviour — a capped category should thin out, not stack.
+    for (std::size_t i = 0; i < limitsSet_; ++i) {
+        if (limits_[i].first != category) continue;
+        const std::size_t active = static_cast<std::size_t>(std::count_if(
+            voices_.begin(), voices_.end(), [&](const Voice& voice) {
+                return voice.cue != nullptr && voice.category == category;
+            }));
+        if (active >= limits_[i].second) {
+            return;
+        }
+        break;
+    }
 
     // Attenuation: full inside half a screen, then inverse with distance measured in
     // screens — the audible version of "off screen is far away". Below a floor the voice
@@ -59,9 +107,13 @@ void Mixer::play(const Cue& cue, float x, float z, float gain) {
         }
     }
     slot->cue = &cue;
-    slot->position = 0;
+    slot->position = 0.0;
     slot->gainLeft = level * std::cos(angle);
     slot->gainRight = level * std::sin(angle);
+    // The authored pitch variation, as a playback rate: 2^(cents/1200), the same relation
+    // a semitone always has to a frequency.
+    slot->rate = std::max(0.25f, std::min(4.0f, rate));
+    slot->category = category;
 }
 
 void Mixer::render(float* out, std::size_t frames) {
@@ -72,15 +124,22 @@ void Mixer::render(float* out, std::size_t frames) {
             continue;
         }
         const std::span<const float> samples = voice.cue->samples;
-        const std::size_t remaining = samples.size() - voice.position;
-        const std::size_t count = std::min(frames, remaining);
-        const float* source = samples.data() + voice.position;
-        for (std::size_t i = 0; i < count; ++i) {
-            out[i * 2] += source[i] * voice.gainLeft * masterGain_;
-            out[i * 2 + 1] += source[i] * voice.gainRight * masterGain_;
+        // A fractional playhead: the pitch variation resamples the take as it reads it,
+        // linearly interpolated — two semitones of shift should not buy zipper noise.
+        for (std::size_t i = 0; i < frames; ++i) {
+            const auto whole = static_cast<std::size_t>(voice.position);
+            if (whole + 1 >= samples.size()) {
+                voice.cue = nullptr;
+                break;
+            }
+            const float frac = static_cast<float>(voice.position - whole);
+            const float sample = samples[whole] * (1.0f - frac) + samples[whole + 1] * frac;
+            out[i * 2] += sample * voice.gainLeft * masterGain_;
+            out[i * 2 + 1] += sample * voice.gainRight * masterGain_;
+            voice.position += voice.rate;
         }
-        voice.position += count;
-        if (voice.position >= samples.size()) {
+        const auto whole = static_cast<std::size_t>(voice.position);
+        if (voice.cue != nullptr && whole + 1 >= samples.size()) {
             voice.cue = nullptr;
         }
     }

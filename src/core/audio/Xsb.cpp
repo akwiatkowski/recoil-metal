@@ -57,8 +57,13 @@ constexpr std::size_t kClipEntry = 5;         ///< volume u8 + clip offset u32
 constexpr std::size_t kEventHeader = 6;       ///< info u32 (type in the low 5 bits) + random u16
 constexpr std::size_t kVariationEntry = 5;    ///< track u16, wave bank u8, weight min/max u8
 
-/// Appends the tracks of the wave events in one clip.
-void readClip(const Reader& r, std::size_t at, std::vector<SoundBank::Track>& out) {
+/// Appends the tracks of the wave events in one clip, and the first authored pitch range it
+/// carries. Pitch lives per EVENT (the whole variation list shares it): type 4 names one wave
+/// with ranges after track/bank, type 6 is a weighted list whose ranges sit three bytes
+/// earlier because it carries no track/bank of its own. Hundredths of a semitone, measured on
+/// the retail banks: weapon cues sit in ±100..±300.
+void readClip(const Reader& r, std::size_t at, std::vector<SoundBank::Track>& out,
+              std::int16_t& pitchMin, std::int16_t& pitchMax) {
     const std::uint8_t events = r.u8(at);
     std::size_t o = at + 1;
     for (std::uint8_t e = 0; e < events; ++e) {
@@ -70,13 +75,22 @@ void readClip(const Reader& r, std::size_t at, std::vector<SoundBank::Track>& ou
             out.push_back({.entry = r.u16(o + 1), .waveBank = r.u8(o + 3)});
             o += 9;
             break;
-        case 4:  // one wave with pitch/volume/filter ranges: flags, loop, track, bank, 12 bytes
+        case 4: {  // one wave with pitch/volume/filter ranges: flags, loop, track, bank, 12 bytes
             out.push_back({.entry = r.u16(o + 2), .waveBank = r.u8(o + 4)});
+            pitchMin = static_cast<std::int16_t>(r.u16(o + 10));
+            pitchMax = static_cast<std::int16_t>(r.u16(o + 12));
             o += 17;
             break;
+        }
         case 3:    // weighted track list without ranges
         case 6: {  // weighted track list with pitch/volume/filter ranges (12 bytes)
-            o += type == 6 ? 14 : 2;
+            if (type == 6) {
+                pitchMin = static_cast<std::int16_t>(r.u16(o + 7));
+                pitchMax = static_cast<std::int16_t>(r.u16(o + 9));
+                o += 14;
+            } else {
+                o += 2;
+            }
             const std::uint16_t count = r.u16(o);
             o += 2 + 6;  // count, then variation flags u16 and four unused bytes
             for (std::uint16_t v = 0; v < count; ++v) {
@@ -92,10 +106,14 @@ void readClip(const Reader& r, std::size_t at, std::vector<SoundBank::Track>& ou
     }
 }
 
-/// Appends the tracks of one sound record.
-void readSound(const Reader& r, std::size_t at, std::vector<SoundBank::Track>& out) {
+/// Appends the tracks of one sound record. The category the sound names rides along: an
+/// index into the global settings' category table, where the per-category instance limits
+/// live.
+void readSound(const Reader& r, std::size_t at, std::vector<SoundBank::Track>& out,
+               std::int16_t& pitchMin, std::int16_t& pitchMax, std::uint16_t& category) {
     if (!r.has(at, kSoundHeader)) return;
     const std::uint8_t flags = r.u8(at);
+    category = r.u16(at + 1);
     std::size_t o = at + kSoundHeader;
     std::uint8_t clips = 0;
     if ((flags & kSoundComplex) != 0) {
@@ -109,12 +127,14 @@ void readSound(const Reader& r, std::size_t at, std::vector<SoundBank::Track>& o
     if ((flags & kSoundHasDsp) != 0) o += r.u16(o);
     for (std::uint8_t c = 0; c < clips; ++c) {
         const std::uint32_t clipAt = r.u32(o + 1 + c * kClipEntry);
-        if (clipAt != 0 && r.has(clipAt, 1)) readClip(r, clipAt, out);
+        if (clipAt != 0 && r.has(clipAt, 1)) readClip(r, clipAt, out, pitchMin, pitchMax);
     }
 }
 
 /// A variation table: a cue that picks among sounds or tracks by weight.
-void readVariationTable(const Reader& r, std::size_t at, std::vector<SoundBank::Track>& out) {
+void readVariationTable(const Reader& r, std::size_t at, std::vector<SoundBank::Track>& out,
+                        std::int16_t& pitchMin, std::int16_t& pitchMax,
+                        std::uint16_t& category) {
     const std::uint16_t count = r.u16(at);
     const std::uint16_t flags = r.u16(at + 2);
     const std::uint16_t kind = static_cast<std::uint16_t>((flags >> 3) & 0x7u);
@@ -130,11 +150,11 @@ void readVariationTable(const Reader& r, std::size_t at, std::vector<SoundBank::
             o += 3;
             break;
         case 1:  // sound offset u32, weight min/max u8
-            readSound(r, r.u32(o), out);
+            readSound(r, r.u32(o), out, pitchMin, pitchMax, category);
             o += 6;
             break;
         case 3:  // sound offset u32, weights f32 x2, flags u32
-            readSound(r, r.u32(o), out);
+            readSound(r, r.u32(o), out, pitchMin, pitchMax, category);
             o += 16;
             break;
         default:
@@ -180,21 +200,28 @@ std::optional<SoundBank> parseSoundBank(const std::vector<std::uint8_t>& bytes) 
 
     for (std::uint16_t i = 0; i < totalCues && i < names.size(); ++i) {
         std::vector<SoundBank::Track> tracks;
+        std::int16_t pitchMin = 0;
+        std::int16_t pitchMax = 0;
+        std::uint16_t category = 0xffff;
         if (i < simpleCues) {
             if (simpleAt != kAbsent) {
-                readSound(r, r.u32(simpleAt + i * kSimpleCueSize + 1), tracks);
+                readSound(r, r.u32(simpleAt + i * kSimpleCueSize + 1), tracks, pitchMin,
+                          pitchMax, category);
             }
         } else if (complexAt != kAbsent) {
             const std::size_t at = complexAt + (i - simpleCues) * kComplexCueSize;
             const std::uint8_t flags = r.u8(at);
             const std::uint32_t target = r.u32(at + 1);
             if ((flags & kCueHasSound) != 0) {
-                readSound(r, target, tracks);
+                readSound(r, target, tracks, pitchMin, pitchMax, category);
             } else {
-                readVariationTable(r, target, tracks);
+                readVariationTable(r, target, tracks, pitchMin, pitchMax, category);
             }
         }
-        bank.cues[names[i]] = std::move(tracks);
+        bank.cues[names[i]] = SoundBank::Cue{.tracks = std::move(tracks),
+                                             .pitchMin = pitchMin,
+                                             .pitchMax = pitchMax,
+                                             .category = category};
     }
     (void)complexCues;
     return bank;

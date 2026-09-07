@@ -23,11 +23,13 @@ void playForEvents(Mixer& mixer, std::span<const sim::Event> events,
         switch (event.kind) {
         case sim::EventKind::WeaponFired:
             // The weapon's own cue when the blueprint names one and the bank is loaded; the
-            // shooter's handle picks among the cue's takes, as a death picks its boom.
+            // shooter's handle picks among the cue's takes, as a death picks its boom, and
+            // the bank's authored pitch range detunes it so a volley is not one note.
             if (weapons != nullptr) {
-                if (const Cue* cue = weapons->cueFor(
-                        event.visualId, event.unit.index * 7u + event.unit.generation)) {
-                    mixer.play(*cue, x, z, 0.5f);
+                if (const WeaponSounds::Take take = weapons->takeFor(
+                        event.visualId, event.unit.index * 7u + event.unit.generation);
+                    take.cue != nullptr) {
+                    mixer.play(*take.cue, x, z, 0.5f, take.rate, take.category);
                     break;
                 }
             }

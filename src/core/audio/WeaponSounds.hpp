@@ -13,6 +13,7 @@
 // by a clock, so a replay sounds like the match it replays.
 
 #include "core/audio/Mixer.hpp"
+#include "core/audio/Xgs.hpp"
 #include "core/audio/Xsb.hpp"
 #include "core/audio/Xwb.hpp"
 #include "core/sim/UnitCatalog.hpp"
@@ -30,7 +31,18 @@ namespace rm::audio {
 
 class WeaponSounds {
 public:
-    /// `soundsDir` is `<install>/sounds`, where retail keeps its 80 `.xsb`/`.xwb` pairs.
+    /// A resolved take: the wave, the pitch the bank authored for it (as a playback-rate
+    /// multiplier), and the XACT category the cue's sound names — what a play needs to
+    /// honour the bank's variation and the mix's limits at once.
+    struct Take {
+        const Cue* cue = nullptr;
+        float rate = 1.0f;
+        std::uint16_t category = kUnlimitedInstances;
+    };
+
+    /// `soundsDir` is `<install>/sounds`, where retail keeps its 80 `.xsb`/`.xwb` pairs —
+    /// and `SupCom.xgs`, the authored mix (category instance limits, LodCutoff curves) the
+    /// banks assume, loaded here so callers can wire it into the mixer.
     explicit WeaponSounds(std::filesystem::path soundsDir);
 
     /// Learns the fire cues of every type registered since the last call. Cheap when nothing
@@ -41,11 +53,30 @@ public:
     /// the cue resolved to no wave. `seed` picks among the cue's variations.
     [[nodiscard]] const Cue* cueFor(std::string_view key, std::uint32_t seed) const;
 
+    /// The cue's own answer to "how does THIS shot sound": the take `seed` picks, detuned
+    /// within the bank's authored pitch range (deterministically, so a replay sounds like the
+    /// match it replays), tagged with the cue's category.
+    [[nodiscard]] Take takeFor(std::string_view key, std::uint32_t seed) const;
+
+    /// The global settings the sounds directory carried, or nothing when SupCom.xgs was
+    /// absent or foreign.
+    [[nodiscard]] const GlobalSettings* globalSettings() const noexcept {
+        return settings_ ? &*settings_ : nullptr;
+    }
+
     /// Banks loaded so far, and weapons with a playable cue — for the startup report.
     [[nodiscard]] std::size_t bankCount() const noexcept { return loaded_; }
     [[nodiscard]] std::size_t weaponCount() const noexcept { return byKey_.size(); }
 
 private:
+    /// A weapon's resolved cue: its takes plus the bank's authored variation and category.
+    struct Resolved {
+        std::vector<const Cue*> takes;
+        std::int16_t pitchMin = 0;
+        std::int16_t pitchMax = 0;
+        std::uint16_t category = kUnlimitedInstances;
+    };
+
     /// A wave bank by name, or nothing after a failed attempt so a missing file is asked for
     /// once. Nodes never move, so pointers into `entries` stay valid for the match.
     const WaveBank* wavesNamed(const std::string& name);
@@ -54,7 +85,8 @@ private:
     std::filesystem::path dir_;
     std::map<std::string, std::optional<WaveBank>> waves_;
     std::map<std::string, std::optional<SoundBank>> cues_;
-    std::map<std::string, std::vector<const Cue*>, std::less<>> byKey_;
+    std::map<std::string, Resolved, std::less<>> byKey_;
+    std::optional<GlobalSettings> settings_;
     std::size_t learnedTypes_ = 0;
     std::size_t loaded_ = 0;
 };
