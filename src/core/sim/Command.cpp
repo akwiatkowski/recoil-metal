@@ -102,6 +102,23 @@ namespace {
     return found == building.end() ? nullptr : &*found;
 }
 
+/// Whether `builder` is running an unfinished FACTORY construction. Production queued "on a
+/// factory still under construction" parks on the founder's queue (the factory unit does not
+/// exist until the work completes), and this is the state that makes such an order legal —
+/// retail lets a player queue units on a rising factory and have them start the moment it
+/// comes online.
+[[nodiscard]] bool constructingFactory(std::span<const Construction> building, UnitId builder,
+                                       const UnitCatalog& catalog) noexcept {
+    return std::ranges::any_of(building, [&](const Construction& work) {
+        if (work.finished() || work.builder != builder) {
+            return false;
+        }
+        const unitdef::UnitDef* def =
+            catalog.def(static_cast<UnitTypeIndex>(work.blueprintIndex));
+        return def != nullptr && def->hasCategory("FACTORY") && !def->isMobile();
+    });
+}
+
 } // namespace
 
 // Retail's mobile-build range test (`CUnitMobileBuildTask` state 1): compare centre distance
@@ -832,11 +849,16 @@ void teardownMovement(MoveState& motion) {
                                 {}, {}, store, shared);
         // Factory production is repeatable: Shift-clicking the same tank twice means two tanks,
         // unlike placing the same structure twice, which retains the ordinary cancel gesture.
+        // The same repeatable stacking applies to production queued on a factory STILL UNDER
+        // CONSTRUCTION — the order parks on the founder's queue and `advanceMatch`'s completion
+        // hand-over moves it to the factory the moment the factory unit exists.
         if (command.kind == CommandKind::Build) {
             const unitdef::UnitDef* builder = catalog.def(store.typeAt(command.unit.index));
             const unitdef::UnitDef* product = catalog.def(command.buildType);
-            if (builder != nullptr && product != nullptr && builder->hasCategory("FACTORY")
-                && product->isMobile()) {
+            if (builder != nullptr && product != nullptr && product->isMobile()
+                && (builder->hasCategory("FACTORY")
+                    || (building != nullptr
+                        && constructingFactory(*building, command.unit, catalog)))) {
                 orders.append(QueuedCommand{command.unit, payload});
                 return true;
             }
@@ -1379,8 +1401,37 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
                     if (!wasInstant) {
                         return;
                     }
+                } else if (pending->kind() == CommandKind::Build && building != nullptr
+                           && finished != nullptr) {
+                    // PRODUCTION QUEUED ON A RISING FACTORY. The founder's construction
+                    // completed THIS BEAT (`finished` holds the row) and the cascade would
+                    // otherwise drop the parked mobile-product order before the caller's
+                    // completion hand-over can move it to the factory unit that is about to
+                    // stand. Leave it at the head for that hand-over; a factory construction
+                    // that was cancelled never reaches `finished`, so the refusal below stays
+                    // the answer for every other illegal build.
+                    const unitdef::UnitDef* founder = catalog.def(store.typeAt(slot));
+                    const unitdef::UnitDef* product = catalog.def(pending->buildType());
+                    if (founder != nullptr && product != nullptr && product->isMobile()
+                        && !founder->hasCategory("FACTORY")) {
+                        const bool risingNow = std::ranges::any_of(
+                            *finished, [&](const Construction& work) {
+                                if (work.builder != store.idAt(slot) || work.isUpgrade()) {
+                                    return false;
+                                }
+                                const unitdef::UnitDef* def = catalog.def(
+                                    static_cast<UnitTypeIndex>(work.blueprintIndex));
+                                return def != nullptr && def->hasCategory("FACTORY")
+                                    && !def->isMobile();
+                            });
+                        if (risingNow) {
+                            return;
+                        }
+                    }
+                    (void)orders[slot].finish();
+                } else {
+                    (void)orders[slot].finish();
                 }
-                (void)orders[slot].finish();
             }
         };
 

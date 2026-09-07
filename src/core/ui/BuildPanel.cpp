@@ -10,7 +10,7 @@
 namespace rm::ui {
 BuildOptionAction buildOptionAction(const BuildOption& option,
                                     std::string_view builderRole) noexcept {
-    return option.upgrade || builderRole == "factory"
+    return option.upgrade || option.atBuilder || builderRole == "factory"
         ? BuildOptionAction::SubmitAtBuilder
         : BuildOptionAction::ArmPlacement;
 }

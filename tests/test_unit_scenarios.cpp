@@ -1876,3 +1876,98 @@ TEST_CASE("a command log holding auto-expand builds replays to the same match",
           == rm::sim::hashMatch(live.scene.store, liveRunner.match));
     std::filesystem::remove(path);
 }
+
+TEST_CASE("production queued on a factory under construction starts when it completes",
+          "[corpus][factory-queue]") {
+    const auto root = corpusRoot();
+    if (!std::filesystem::is_directory(root)) SKIP("no retail unit corpus");
+    const auto engineer = rm::unitbp::loadFile(root / "UEL0105/UEL0105_unit.bp");
+    const auto factory = rm::unitbp::loadFile(root / "UEB0101/UEB0101_unit.bp");
+    const auto tank = rm::unitbp::loadFile(root / "UEL0201/UEL0201_unit.bp");
+    REQUIRE(engineer);
+    REQUIRE(factory);
+    REQUIRE(tank);
+
+    const auto seat = [&](Scenario& job) {
+        const auto factoryType = job.registerType(*factory);
+        const auto tankType = job.registerType(*tank);
+        const auto builder = job.spawn(*engineer, 300, 300);
+        job.scene.economies[0].stored = {rm::sim::Mag::fromInt(2000), rm::sim::Mag::fromInt(5000)};
+        return std::pair{builder, std::pair{factoryType, tankType}};
+    };
+
+    // The factory rises a short walk from the engineer (a site overlapping its own builder's
+    // footprint is refused), and the tank is queued on the engineer WHILE the factory is
+    // still under construction — the retail gesture.
+    constexpr int kTicks = 6000;  // factory completion plus the tank's own build
+    Scenario live;
+    const auto [builder, types] = seat(live);
+    auto liveRunner = live.runner();
+    bool queuedWhileRising = false;
+    bool factoryStood = false;
+    bool tankStood = false;
+    bool handoverSeen = false;
+    rm::sim::UnitId risen{};
+    int ranUntil = 0;
+    for (int tick = 0; tick < kTicks; ++tick) {
+        if (tick == 1) {
+            REQUIRE(rm::app::issueBuild(live.scene, builder, 0, 1, types.first,
+                                        rm::sim::Fx::fromInt(320), rm::sim::Fx::fromInt(300),
+                                        false));
+        }
+        const bool rising = std::ranges::any_of(live.scene.building, [&](const auto& work) {
+            return work.builder == builder && !work.finished()
+                && work.blueprintIndex == types.first;
+        });
+        if (tick > 1 && rising && !queuedWhileRising) {
+            queuedWhileRising = true;
+            REQUIRE(rm::app::issueBuild(live.scene, builder, 0, static_cast<rm::TickIndex>(tick),
+                                        types.second,
+                                        rm::sim::Fx::fromInt(300), rm::sim::Fx::fromInt(300),
+                                        true));
+        }
+        (void)rm::app::advanceMatch(liveRunner, tick, 0);
+        ranUntil = tick + 1;
+        for (rm::UnitIndex slot = 0; slot < live.scene.store.slotCount(); ++slot) {
+            if (!live.scene.store.slotAlive(slot)) continue;
+            if (live.scene.store.typeAt(slot) == types.first) {
+                factoryStood = true;
+                risen = live.scene.store.idAt(slot);
+            } else if (live.scene.store.typeAt(slot) == types.second) {
+                tankStood = true;
+            }
+        }
+        // THE HAND-OVER, asserted at the moment it is observable: the tank order must be on
+        // the risen factory's queue (and gone from the engineer's) before production runs and
+        // consumes it.
+        if (factoryStood && !handoverSeen
+            && !live.scene.store.orders()[risen.index].entries().empty()) {
+            handoverSeen = true;
+            const auto& entry = live.scene.store.orders()[risen.index].entries().front();
+            CHECK(entry.kind() == rm::sim::CommandKind::Build);
+            CHECK(entry.buildType() == types.second);
+            CHECK(std::ranges::none_of(live.scene.store.orders()[builder.index].entries(),
+                                       [](const auto& queued) {
+                                           return queued.kind() == rm::sim::CommandKind::Build;
+                                       }));
+        }
+        if (tankStood) break;
+    }
+    REQUIRE(queuedWhileRising);
+    REQUIRE(factoryStood);
+    REQUIRE(handoverSeen);
+    // And production ran: the tank itself stands before the budget runs out.
+    CHECK(tankStood);
+
+    // The whole story — parked order, same-beat retention, hand-over, production — must
+    // replay from the command log alone and hash identically.
+    Scenario replay;
+    (void)seat(replay);
+    auto replayRunner = replay.runner();
+    replayRunner.replay = &live.scene.commands;
+    for (int tick = 0; tick < ranUntil; ++tick) {
+        (void)rm::app::advanceMatch(replayRunner, tick, 0);
+    }
+    CHECK(rm::sim::hashMatch(replay.scene.store, replayRunner.match)
+          == rm::sim::hashMatch(live.scene.store, liveRunner.match));
+}

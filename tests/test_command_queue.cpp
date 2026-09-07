@@ -1482,6 +1482,73 @@ TEST_CASE("a queued mobile product waits for and starts on its own grid") {
     CHECK(building.front().blueprintIndex == productType);
 }
 
+TEST_CASE("production queued on a factory under construction stacks on the founder") {
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    const rm::sim::PassabilityGrid grid =
+        rm::sim::buildPassability(field, 0.0f, 60.0f, 0.0f);
+
+    rm::test::Roster roster;
+    rm::unitdef::UnitDef engineerDef = walkerDef();
+    engineerDef.name = "engineer";
+    engineerDef.buildRate = 10.0f;
+    engineerDef.buildableCategory = {{"STRUCTURE"}};
+    const rm::UnitTypeIndex engineerType = roster.addType(engineerDef);
+
+    rm::unitdef::UnitDef factoryDef;
+    factoryDef.name = "factory";
+    factoryDef.categories = {"FACTORY", "STRUCTURE"};
+    factoryDef.buildRate = 10.0f;
+    factoryDef.buildableCategory = {{"PRODUCT"}};
+    // A real build time, so the factory is genuinely UNDER CONSTRUCTION while the products
+    // are queued on it (a zero build time completes the work the moment it is founded).
+    factoryDef.buildTime = rm::sim::magFromFloat(100.0f);
+    const rm::UnitTypeIndex factoryType = roster.addType(factoryDef);
+
+    rm::unitdef::UnitDef productDef = walkerDef();
+    productDef.name = "product";
+    productDef.categories = {"PRODUCT"};
+    const rm::UnitTypeIndex productType = roster.addType(productDef);
+
+    const UnitId engineer = roster.add(engineerType, 40.0f, 40.0f, 0, 100.0f);
+    const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(1);
+    const std::vector<rm::sim::Player> players{rm::sim::Player{.index = 0, .army = 0}};
+    std::vector<rm::sim::Construction> building;
+
+    // The factory rises under the engineer's feet, so the order starts work at once.
+    const Command found{.tick = 0,
+                        .player = 0,
+                        .kind = CommandKind::Build,
+                        .unit = engineer,
+                        .targetX = rm::sim::fxFromFloat(40.0f),
+                        .targetZ = rm::sim::fxFromFloat(40.0f),
+                        .buildType = factoryType};
+    REQUIRE(rm::sim::applyCommand(found, roster.store, roster.catalog, players, armies,
+                                  terrain, grid, roster.rate, &building));
+    REQUIRE(building.size() == 1);
+
+    // Two identical queued orders for the mobile product: like factory production, the pair
+    // STACKS rather than the second cancelling the first, because the rising factory will
+    // take both the moment it comes online.
+    const Command produced{.tick = 0,
+                           .player = 0,
+                           .kind = CommandKind::Build,
+                           .queued = true,
+                           .unit = engineer,
+                           .targetX = rm::sim::fxFromFloat(40.0f),
+                           .targetZ = rm::sim::fxFromFloat(40.0f),
+                           .buildType = productType};
+    REQUIRE(rm::sim::applyCommand(produced, roster.store, roster.catalog, players, armies,
+                                  terrain, grid, roster.rate, &building));
+    REQUIRE(rm::sim::applyCommand(produced, roster.store, roster.catalog, players, armies,
+                                  terrain, grid, roster.rate, &building));
+    const std::deque<rm::sim::QueuedCommand>& queued =
+        roster.store.orders()[engineer.index].entries();
+    REQUIRE(queued.size() == 3); // the rising factory + two stacked products
+    CHECK(queued[1].buildType() == productType);
+    CHECK(queued[2].buildType() == productType);
+}
+
 TEST_CASE("factory repeat consumes a shared count before cycling mobile production") {
     const rm::HeightField field = flatField();
     const rm::sim::Terrain terrain{field};

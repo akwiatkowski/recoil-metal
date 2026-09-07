@@ -1645,7 +1645,51 @@ int runWindowed(const Session& session) {
                 // themselves are not repainted, and the rings are rebuilt from
                 // this list by the frame callback.
                 const bool addToSet = mods.shift || mods.command || mods.control;
-                const std::optional<rm::sim::UnitId> pick = pickAcrossBatches(ray, units);
+                std::optional<rm::sim::UnitId> pick = pickAcrossBatches(ray, units);
+
+                // A FACTORY STILL RISING IS CLICKABLE, the way it is in retail: a
+                // construction site has no unit to pick (the factory unit is spawned at
+                // completion), so the click lands on the founder and the build tray offers
+                // the rising factory's products through it. Only the player's own sites —
+                // clicking an enemy's half-built factory is scouting, not selecting.
+                if (!pick) {
+                    const std::optional<simd_float3> ground = rm::pickGround(ray, map->field);
+                    if (ground) {
+                        const rm::sim::Fx gx = rm::sim::fxFromFloat((*ground)[0]);
+                        const rm::sim::Fx gz = rm::sim::fxFromFloat((*ground)[2]);
+                        const rm::sim::Construction* nearest = nullptr;
+                        rm::sim::Fx nearestDistance{};
+                        for (const rm::sim::Construction& work : units.building) {
+                            if (work.finished() || work.isUpgrade()
+                                || work.armyIndex != units.playerArmy
+                                || !units.store.alive(work.builder)) {
+                                continue;
+                            }
+                            const rm::unitdef::UnitDef* def =
+                                units.catalog.def(static_cast<rm::UnitTypeIndex>(
+                                    work.blueprintIndex));
+                            if (def == nullptr) {
+                                continue;
+                            }
+                            const float dx = rm::sim::fxToFloat(gx - work.position[0]);
+                            const float dz = rm::sim::fxToFloat(gz - work.position[2]);
+                            const float distance = std::hypot(dx, dz);
+                            const float reach =
+                                std::max(def->collisionRadiusElmos, 4.0f);
+                            if (distance > reach) {
+                                continue;
+                            }
+                            if (nearest == nullptr
+                                || rm::sim::fxFromFloat(distance) < nearestDistance) {
+                                nearest = &work;
+                                nearestDistance = rm::sim::fxFromFloat(distance);
+                            }
+                        }
+                        if (nearest != nullptr) {
+                            pick = nearest->builder;
+                        }
+                    }
+                }
 
                 // DOUBLE-CLICK WIDENS TO THE TYPE, on screen: every one of the player's
                 // units of the clicked type whose position projects into the viewport.

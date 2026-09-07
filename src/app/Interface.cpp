@@ -462,7 +462,46 @@ void gatherBuildOptions(const UnitScene& scene, rm::sim::UnitId activeBuilder,
                 .tint = rm::ui::tierTint(theme, entry.tech),
             });
         }
-        return;
+    }
+
+    // PRODUCTION ON A FACTORY STILL RISING. Retail lets a player queue units on a factory
+    // that has not finished construction; the factory unit does not exist yet, so its
+    // products appear in the FOUNDER's tray here and are issued to the founder's queue.
+    // `advanceMatch`'s completion hand-over moves them to the factory the moment it stands.
+    // Cost and time come from the rising factory's own build rate, which is the rate that
+    // will actually drive the work.
+    for (const auto& work : scene.building) {
+        if (work.finished() || work.isUpgrade() || work.builder != activeBuilder) {
+            continue;
+        }
+        const rm::unitdef::UnitDef* rising =
+            scene.catalog.def(static_cast<rm::UnitTypeIndex>(work.blueprintIndex));
+        if (rising == nullptr || !rising->hasCategory("FACTORY") || rising->isMobile()) {
+            continue;
+        }
+        auto products = scene.roster.buildableBy(faction, rising->buildableCategory);
+        std::stable_sort(products.begin(), products.end(), [](const auto& a, const auto& b) {
+            return a.tech > b.tech;
+        });
+        for (const rm::data::RosterEntry& entry : products) {
+            const float mass = rm::sim::magToFloat(entry.costMass);
+            const float seconds =
+                rising->buildRate > 0.0f
+                    ? rm::sim::magToFloat(entry.buildTime) / rising->buildRate
+                    : 0.0f;
+            out.push_back(rm::ui::BuildOption{
+                .id = entry.id,
+                .name = "T" + std::to_string(entry.tech) + " "
+                    + (entry.description.empty() ? entry.id : entry.description),
+                .massCost = mass,
+                .energyCost = rm::sim::magToFloat(entry.costEnergy),
+                .buildSeconds = seconds,
+                .health = rm::sim::magToFloat(entry.health),
+                .atBuilder = true,
+                .affordable = mass <= storedMass,
+                .tint = rm::ui::tierTint(theme, entry.tech),
+            });
+        }
     }
 }
 

@@ -1296,6 +1296,40 @@ rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) 
                     rm::sim::QueuedCommand{std::move(state), payload}, true);
             }
             if (work.isUpgrade()) (void)scene.store.setFactoryRepeat(*spawned, repeatProduction);
+            // PRODUCTION QUEUED ON THE RISING FACTORY. A player may queue units on a factory
+            // that has not finished construction (retail does); the sim parks those orders on
+            // the founder's queue because the factory unit does not exist until this moment.
+            // Hand them over now, through the same payload-rewrite machinery the upgrade
+            // transfer above uses. Deterministic in replay: both runs hold identical builder
+            // queues at the identical completion tick.
+            if (!work.isUpgrade() && scene.store.alive(work.builder)) {
+                const rm::unitdef::UnitDef* risen =
+                    &buildableDef(scene, work.blueprintIndex);
+                if (risen->hasCategory("FACTORY") && !risen->isMobile()) {
+                    std::vector<rm::sim::QueuedCommand> handover;
+                    for (const auto& entry : scene.store.orders()[work.builder.index].entries()) {
+                        if (entry.kind() != rm::sim::CommandKind::Build) continue;
+                        const auto* product = scene.catalog.def(entry.buildType());
+                        if (product == nullptr || !product->isMobile()) continue;
+                        handover.push_back(entry); // Keeps shared command IDs alive.
+                    }
+                    for (const auto& entry : handover) {
+                        auto& queue = scene.store.orders()[work.builder.index];
+                        (void)queue.removeExact(&entry.payload());
+                        auto state = entry.snapshot();
+                        state.unit = *spawned;
+                        auto payload = scene.store.liveCommand(entry.payload().id);
+                        assert(payload != nullptr); // Retained by handover until transferred.
+                        std::replace(payload->units.begin(), payload->units.end(),
+                                     work.builder, *spawned);
+                        std::ranges::sort(payload->units, {}, [](rm::sim::UnitId id) {
+                            return std::pair{id.index, id.generation};
+                        });
+                        (void)scene.store.orders()[spawned->index].give(
+                            rm::sim::QueuedCommand{std::move(state), payload}, true);
+                    }
+                }
+            }
             scene.events.emit(rm::sim::Event{
                 .kind = rm::sim::EventKind::UnitFinished,
                 .unit = *spawned,

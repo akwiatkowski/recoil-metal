@@ -112,6 +112,12 @@ struct BuildOption {
     bool upgrade = false;
     bool queuedUpgrade = false; ///< successor of an upgrade already in progress
 
+    /// Whether this cell submits at the builder itself even though the selected unit is not a
+    /// factory — production queued on a factory STILL UNDER CONSTRUCTION. The order parks on
+    /// the founder's queue and starts when the rising factory comes online, so it needs no
+    /// placement click the way the founder's own structures do.
+    bool atBuilder = false;
+
     /// Whether the army's stored mass covers the full price RIGHT NOW.
     ///
     /// This is advisory presentation state, never an eligibility gate. Supreme Commander lets
