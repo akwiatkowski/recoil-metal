@@ -1459,3 +1459,154 @@ TEST_CASE("an extractor can queue its next tier while upgrading", "[corpus][upgr
         CHECK_FALSE(job.scene.store.commandIdLive(queuedId));
     }
 }
+
+TEST_CASE("auto-expand sends an idle engineer to the nearest free deposit on its own side",
+          "[corpus][auto-expand]") {
+    // ADR-109. Two armies seated at x=200 and x=1000 on a 1024-elmo field; the engineer at
+    // x=300 sees three deposits. The Mass spot at 340 is nearest; the Hydrocarbon spot at
+    // (300, 360) is next; the Mass spot at 700 is nearer to the enemy's start than to ours.
+    const auto root = corpusRoot();
+    if (!std::filesystem::is_directory(root)) SKIP("retail corpus unavailable");
+    const auto engineer = rm::unitbp::loadFile(root / "UEL0105/UEL0105_unit.bp");
+    const auto extractor = rm::unitbp::loadFile(root / "UEB1103/UEB1103_unit.bp");
+    const auto hydro = rm::unitbp::loadFile(root / "UEB1102/UEB1102_unit.bp");
+    REQUIRE(engineer);
+    REQUIRE(extractor);
+    REQUIRE(hydro);
+
+    Scenario job;
+    const std::vector<rm::scenario::Marker> markers{
+        {.name = "Mass 1", .type = "Mass", .position = {340.0f, 0.0f, 300.0f}},
+        {.name = "Hydro 1", .type = "Hydrocarbon", .position = {300.0f, 0.0f, 360.0f}},
+        {.name = "Mass 2", .type = "Mass", .position = {700.0f, 0.0f, 300.0f}},
+        {.name = "ARMY_1", .type = "Blank Marker", .position = {200.0f, 0.0f, 300.0f}},
+    };
+    const std::vector<rm::mapinfo::StartPosition> starts{{.team = 0, .x = 200.0f, .z = 300.0f},
+                                                         {.team = 1, .x = 1000.0f, .z = 300.0f}};
+    for (const rm::scenario::Marker& marker : markers) {
+        const auto kind = rm::app::depositKind(marker);
+        if (kind == rm::unitdef::BuildRestriction::None) continue;
+        job.scene.resourceDeposits.push_back({kind, rm::sim::fxFromFloat(marker.position[0]),
+                                              rm::sim::fxFromFloat(marker.position[2])});
+    }
+    // The roster is what auto-expand picks blueprints from; registering the structures up
+    // front is what lets an empty VFS resolve them (the path is already known to the scene).
+    const std::vector<rm::unitdef::UnitDef> corpus{*engineer, *extractor, *hydro};
+    const std::vector<std::string> ids{"UEL0105", "UEB1103", "UEB1102"};
+    job.scene.roster = rm::data::Roster::build(corpus, ids);
+    const auto mexType = job.registerType(*extractor);
+    const auto hydroType = job.registerType(*hydro);
+    const auto builder = job.spawn(*engineer, 300, 300);
+    job.scene.economies[0].stored = {rm::sim::Mag::fromInt(2000), rm::sim::Mag::fromInt(5000)};
+    auto runner = job.runner();
+    runner.markers = markers;
+    runner.starts = starts;
+
+    const auto headOf = [&](rm::sim::UnitId id) {
+        return job.scene.store.orders()[id.index].active();
+    };
+    const auto siteOf = [&](const rm::sim::QueuedCommand& order) {
+        return std::array<float, 2>{rm::sim::fxToFloat(order.targetX()),
+                                    rm::sim::fxToFloat(order.targetZ())};
+    };
+
+    SECTION("nothing happens until the order is put on, and it toggles off again") {
+        (void)rm::app::advanceMatch(runner, 0, 0);
+        CHECK(headOf(builder) == nullptr);
+        const std::array<rm::sim::UnitId, 1> one{builder};
+        CHECK(rm::app::toggleAutoExpand(runner, one));
+        CHECK(rm::app::autoExpanding(runner, builder));
+        CHECK_FALSE(rm::app::toggleAutoExpand(runner, one));
+        CHECK_FALSE(rm::app::autoExpanding(runner, builder));
+    }
+
+    SECTION("the nearest own-side deposit first, then the hydro, then the enemy's side") {
+        const std::array<rm::sim::UnitId, 1> one{builder};
+        REQUIRE(rm::app::toggleAutoExpand(runner, one));
+        (void)rm::app::advanceMatch(runner, 0, 0);
+        const rm::sim::QueuedCommand* first = headOf(builder);
+        REQUIRE(first != nullptr);
+        CHECK(first->kind() == rm::sim::CommandKind::Build);
+        CHECK(first->buildType() == mexType);
+        CHECK(siteOf(*first) == std::array<float, 2>{340.0f, 300.0f});
+
+        // The engineer's own pending order claims that deposit: a second idle engineer put on
+        // the same standing order the same tick takes the hydro spot with the hydro plant.
+        const auto second = job.spawn(*engineer, 300, 310);
+        const std::array<rm::sim::UnitId, 1> other{second};
+        REQUIRE(rm::app::toggleAutoExpand(runner, other));
+        (void)rm::app::advanceMatch(runner, 1, 0);
+        const rm::sim::QueuedCommand* hydroOrder = headOf(second);
+        REQUIRE(hydroOrder != nullptr);
+        CHECK(hydroOrder->buildType() == hydroType);
+        CHECK(siteOf(*hydroOrder) == std::array<float, 2>{300.0f, 360.0f});
+
+        // With every own-side deposit spoken for, the enemy-side one is all that is left.
+        const auto third = job.spawn(*engineer, 300, 320);
+        const std::array<rm::sim::UnitId, 1> last{third};
+        REQUIRE(rm::app::toggleAutoExpand(runner, last));
+        (void)rm::app::advanceMatch(runner, 2, 0);
+        const rm::sim::QueuedCommand* farOrder = headOf(third);
+        REQUIRE(farOrder != nullptr);
+        CHECK(siteOf(*farOrder) == std::array<float, 2>{700.0f, 300.0f});
+    }
+
+    SECTION("a standing extractor claims its deposit, whoever owns it") {
+        (void)job.spawn(*extractor, 340, 300, 1);  // the enemy got there first
+        const auto from = rm::sim::positionOf(job.scene.store.transforms()[builder.index]);
+        const rm::scenario::Marker* pick =
+            rm::app::pickExpansionDeposit(job.scene, markers, starts, 0, from);
+        REQUIRE(pick != nullptr);
+        CHECK(pick->name == "Hydro 1");
+    }
+
+    SECTION("a site the sim refuses at dispatch is not asked for again") {
+        // A wall of enemy tanks on the nearest deposit: the intake accepts the order (the
+        // deposit is real and free of structures), dispatch finds the footprint blocked and
+        // drops it. The pass must move on to the hydro spot rather than re-order every tick.
+        const auto tank = rm::unitbp::loadFile(root / "UEL0201/UEL0201_unit.bp");
+        REQUIRE(tank);
+        for (float dz : {-6.0f, 0.0f, 6.0f}) (void)job.spawn(*tank, 340, 300 + dz, 1);
+        const std::array<rm::sim::UnitId, 1> one{builder};
+        REQUIRE(rm::app::toggleAutoExpand(runner, one));
+        for (int tick = 0; tick < 5; ++tick) (void)rm::app::advanceMatch(runner, tick, 0);
+        const rm::sim::QueuedCommand* head = headOf(builder);
+        REQUIRE(head != nullptr);
+        CHECK(head->buildType() == hydroType);
+        CHECK(runner.autoExpanders.front().refused.size() <= 1);
+    }
+
+    SECTION("the standing order resumes after a manual order and stops when the map is full") {
+        const std::array<rm::sim::UnitId, 1> one{builder};
+        REQUIRE(rm::app::toggleAutoExpand(runner, one));
+        // A manual move takes precedence: the pass leaves a busy engineer alone.
+        REQUIRE(rm::app::issueMove(job.scene, one, 0, 0, rm::sim::Fx::fromInt(300),
+                                   rm::sim::Fx::fromInt(280), false));
+        (void)rm::app::advanceMatch(runner, 0, 0);
+        REQUIRE(headOf(builder) != nullptr);
+        CHECK(headOf(builder)->kind() == rm::sim::CommandKind::Move);
+        for (int tick = 1; tick < 400 && headOf(builder) != nullptr
+                                     && headOf(builder)->kind() == rm::sim::CommandKind::Move;
+             ++tick) {
+            (void)rm::app::advanceMatch(runner, tick, 0);
+        }
+        // Idle again: the next pass hands out the nearest deposit without another click.
+        for (int tick = 400; tick < 420 && headOf(builder) == nullptr; ++tick) {
+            (void)rm::app::advanceMatch(runner, tick, 0);
+        }
+        REQUIRE(headOf(builder) != nullptr);
+        CHECK(headOf(builder)->kind() == rm::sim::CommandKind::Build);
+
+        // Every deposit taken: the standing order has nothing to say and issues nothing.
+        for (std::size_t spot = 0; spot < 3; ++spot) {
+            const rm::scenario::Marker& marker = markers[spot];
+            (void)job.spawn(marker.isType("Mass") ? *extractor : *hydro, marker.position[0],
+                            marker.position[2], 0);
+        }
+        const auto idle = job.spawn(*engineer, 300, 330);
+        const std::array<rm::sim::UnitId, 1> spare{idle};
+        REQUIRE(rm::app::toggleAutoExpand(runner, spare));
+        for (int tick = 420; tick < 460; ++tick) (void)rm::app::advanceMatch(runner, tick, 0);
+        CHECK(headOf(idle) == nullptr);
+    }
+}

@@ -66,6 +66,18 @@ struct Standing {
 /// show a trail. Emitted DURING the ticks rather than at the end, which is the only
 /// way to get one: dust marks where a unit has been, and a scene sampled after the
 /// walk knows only where everything ended up.
+/// One engineer on auto-expand, with the sites it has been refused so it does not ask for
+/// them again every pass (`refused`) and the tick before which it is not retried.
+struct AutoExpander {
+    rm::sim::UnitId unit{};
+    rm::TickIndex retryAt = 0;
+    std::vector<std::array<rm::sim::Fx, 3>> refused;
+    /// The site of the last order handed out, so a refusal the sim only discovers at dispatch
+    /// (the order is accepted, then dropped a beat later) is recognised: the engineer is idle
+    /// again and nothing was ever built there.
+    std::optional<std::array<rm::sim::Fx, 3>> lastSite;
+};
+
 // Everything one tick of a match is, from the CALLER's side.
 //
 // WHY THIS EXISTS. `rm::sim::tickSkirmish` owns the order the sim's own passes run in.
@@ -116,6 +128,12 @@ struct MatchRunner {
     /// (FafAi's one-per-match rule), owned here because the opponents hold references into
     /// it and the runner is what outlives them. Null on the scripted path.
     std::unique_ptr<rm::ai::FafAi> fafSandbox;
+
+    /// The engineers a player has put on AUTO-EXPAND (ADR-109): a standing order the app
+    /// keeps, not the sim. Each pass of `runAutoExpansion` turns an idle flagged engineer into
+    /// one ordinary logged Build order, so a replay of the command log reproduces the match
+    /// without knowing the flag existed — the same shape as an armed rack command.
+    std::vector<AutoExpander> autoExpanders;
 
     /// Built once and kept, because `over` has to survive between ticks — a match is
     /// decided on one tick and stays decided.
@@ -245,6 +263,38 @@ extern bool gFafLog;
 
 [[nodiscard]] std::optional<std::array<rm::sim::Fx, 3>> nearestEnemyCommander(
     const UnitScene& scene, int army, const std::array<rm::sim::Fx, 3>& from);
+
+/// Which deposit a map marker is, or `None` for every other marker kind.
+[[nodiscard]] rm::unitdef::BuildRestriction depositKind(const rm::scenario::Marker& marker) noexcept;
+
+/// AUTO-EXPAND'S CHOICE OF SITE (ADR-109): the free Mass or Hydrocarbon deposit nearest to
+/// `from` on the army's OWN side of the map — a deposit nearer to a hostile army's start than to
+/// this army's is the enemy's and is taken only when nothing else is free. Free means: no
+/// unfinished construction, no living structure, no queued or still-staged Build order for it,
+/// and nothing in `alsoClaimed` (sites handed out earlier in the same pass, or refused
+/// to this engineer) within half an extractor footprint of it. Ties go to the earlier marker, so
+/// the answer is replay-stable. Armies past the end of `starts` have no side and take the nearest.
+[[nodiscard]] const rm::scenario::Marker* pickExpansionDeposit(
+    const UnitScene& scene, std::span<const rm::scenario::Marker> markers,
+    std::span<const rm::mapinfo::StartPosition> starts, int army,
+    const std::array<rm::sim::Fx, 3>& from,
+    std::span<const std::array<rm::sim::Fx, 3>> alsoClaimed = {});
+
+/// Flips auto-expand for a set of builders: when every one of them is already flagged the
+/// order is lifted from all of them, otherwise it is put on all of them. Returns the new
+/// state. Non-builders and the dead are ignored.
+bool toggleAutoExpand(MatchRunner& runner, std::span<const rm::sim::UnitId> builders);
+
+/// Whether one unit is on auto-expand.
+[[nodiscard]] bool autoExpanding(const MatchRunner& runner, rm::sim::UnitId unit) noexcept;
+
+/// One pass of the standing order, run by `advanceMatch` before the sim ticks: every flagged
+/// engineer with an EMPTY queue is ordered to build its faction's extractor or hydrocarbon
+/// plant on the deposit `pickExpansionDeposit` chooses, through `issueBuild` like any player
+/// order. A manual order simply takes precedence — the engineer resumes when idle again. A
+/// refused site is remembered and not asked for again; an engineer with nothing to do is
+/// looked at once a second. Returns how many orders were issued.
+std::size_t runAutoExpansion(MatchRunner& runner, rm::TickIndex tick);
 
 [[nodiscard]] const rm::scenario::Marker* nearestFreeDeposit(
     const UnitScene& scene, std::span<const rm::scenario::Marker> markers,

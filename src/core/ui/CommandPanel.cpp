@@ -17,6 +17,7 @@ commandAvailability(std::span<const unitdef::UnitDef* const> selection) noexcept
     bool hasReclaimer = false;
     bool hasRepairer = false;
     bool hasAssister = false;
+    bool hasFieldBuilder = false;
     bool hasManualWeapon = false;
 
     for (const unitdef::UnitDef* def : selection) {
@@ -43,6 +44,8 @@ commandAvailability(std::span<const unitdef::UnitDef* const> selection) noexcept
         // Any build arm can be lent — the sim's `validAssist` asks only for a builder, and a
         // factory's assist mirrors compatible production (`Assist.hpp`).
         hasAssister = hasAssister || def->isBuilder();
+        // Auto-expand wants a builder that can WALK to the next deposit.
+        hasFieldBuilder = hasFieldBuilder || (def->isBuilder() && def->isMobile());
         hasManualWeapon = hasManualWeapon
                        || (permits("RULEUCC_Overcharge")
                            && std::ranges::any_of(def->weapons, [](const unitdef::Weapon& weapon) {
@@ -55,6 +58,10 @@ commandAvailability(std::span<const unitdef::UnitDef* const> selection) noexcept
 
     CommandAvailability available{};
     for (std::size_t slot = 0; slot < kCommandDescriptors.size(); ++slot) {
+        if (kCommandDescriptors[slot].action == RackAction::AutoExpand) {
+            available[slot] = hasFieldBuilder;
+            continue;
+        }
         const std::optional<sim::CommandKind> kind = kCommandDescriptors[slot].kind;
         if (!kind) {
             continue;
@@ -166,6 +173,30 @@ InfoCard commandCard(const CommandDescriptor& command,
     std::span<const unitdef::UnitDef* const> selection, bool armed) {
     InfoCard card;
     card.title = command.name.empty() ? "UNIT ACTION" : std::string{command.name};
+    if (command.action == RackAction::AutoExpand) {
+        // A standing order, not a targeted one: it is on or off for the selection.
+        std::size_t total = 0, eligible = 0;
+        for (const auto* def : selection) {
+            if (!def) continue;
+            ++total;
+            if (def->isBuilder() && def->isMobile()) ++eligible;
+        }
+        if (total == 0) {
+            card.rows.push_back({"STATE", "SELECT A UNIT", kLoss});
+            return card;
+        }
+        if (eligible == 0) {
+            card.rows.push_back({"STATE", "SELECTION CANNOT DO THIS", kLoss});
+            card.rows.push_back({"", "SELECT A FIELD ENGINEER"});
+            return card;
+        }
+        card.rows.push_back({"STATE", armed ? "ON" : "OFF", kGain});
+        card.rows.push_back({"APPLIES TO", std::to_string(eligible) + " OF "
+            + std::to_string(total) + " UNITS"});
+        card.rows.push_back({"TARGET", "NEAREST FREE MASS OR HYDRO SPOT"});
+        card.rows.push_back({"", "STAYS ON YOUR SIDE OF THE MAP"});
+        return card;
+    }
     if (!command.kind) {
         card.rows.push_back({"STATE", "NOT IMPLEMENTED", kLoss});
         card.rows.push_back({"", "NO UNIT CAN USE THIS YET"});
@@ -214,7 +245,8 @@ void appendCommandRack(Geometry& out, const text::Font& labelFont,
                        const CommandRackLayout& layout,
                        const CommandAvailability& available,
                        std::optional<std::size_t> hovered,
-                       std::optional<sim::CommandKind> armed) {
+                       std::optional<sim::CommandKind> armed,
+                       const CommandAvailability& engaged) {
     if (!layout.visible || !labelFont.usable()) {
         return;
     }
@@ -231,8 +263,8 @@ void appendCommandRack(Geometry& out, const text::Font& labelFont,
 
     for (std::size_t slot = 0; slot < kCommandSlots; ++slot) {
         const CommandDescriptor& command = kCommandDescriptors[slot];
-        const bool enabled = command.kind.has_value() && available[slot];
-        const bool active = command.kind && armed == command.kind;
+        const bool enabled = command.implemented() && available[slot];
+        const bool active = (command.kind && armed == command.kind) || engaged[slot];
         const auto origin = commandCellOrigin(layout, slot);
         const Colour well = fade(theme.well, enabled ? 1.0f : 0.42f);
         text::appendRectV(out.chrome, labelFont, origin[0], origin[1], layout.cellWidth,

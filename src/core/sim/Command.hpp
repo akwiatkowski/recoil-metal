@@ -218,6 +218,9 @@ public:
 
     [[nodiscard]] std::size_t size() const noexcept { return pending_.size(); }
     [[nodiscard]] bool empty() const noexcept { return pending_.empty(); }
+    /// What has been submitted and not yet taken, for a caller deciding whether to submit
+    /// more — the app's standing orders must not override a player's click that is still here.
+    [[nodiscard]] std::span<const CommandIssue> pending() const noexcept { return pending_; }
 
 private:
     std::vector<CommandIssue> pending_;

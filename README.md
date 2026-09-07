@@ -350,7 +350,7 @@ swings when you meant to select is the most disorienting thing an RTS camera can
 | left click | select one of YOUR units. Shift/cmd/ctrl adds to the set |
 | left drag | band-select everything of yours inside the rectangle |
 | double click | widen to the TYPE — every unit like it that projects into the viewport. On screen rather than map-wide, because both reference games do that, and "everything like this, everywhere" silently commits units you cannot see |
-| right click | order: move to the ground, attack the enemy under the cursor, **assist** your own builder (lend it your build rate), or **reclaim** the wreck |
+| right click | order: move to the ground, attack the enemy under the cursor, **assist** your own builder (lend it your build rate — a factory turning out units or an extractor mid-upgrade takes assist even when scratched), **repair** a damaged ally, or **reclaim** the wreck |
 | cmd + right click | overcharge: fire the commander's manual weapon at the target once the energy bar has filled |
 | `shift+A`, then right click | attack-move: engage visible enemies on the route, then resume the destination |
 | `P`, then right click | patrol between the unit's starting point and the destination; repeat `P`, then shift-right-click to add a waypoint |
@@ -358,6 +358,7 @@ swings when you meant to select is the most disorienting thing an RTS camera can
 | `ctrl`+`0`–`9` / `0`–`9` | set a control group / recall it, the dead pruned out on recall |
 | click a tray cell, then the ground | build: the ghost is cyan where the footprint fits and red where it does not. Right-click or a second cell click cancels |
 | click a command cell, then right click | arm the command shown in the fixed 4×3 rack; Stop applies immediately and disabled positions stay put |
+| click **AUTO MEX** | a standing order for the selected field engineers: whenever one is idle it walks to the nearest free mass or hydrocarbon deposit on your side of the map and builds there, then the next. Lit while on; click again to lift it. A manual order takes precedence and the engineer resumes when idle |
 | hold `space` + drag | swing the camera. Let go and it returns to the overhead view the app opened with, so a glance never costs you your bearings |
 | shift + drag | pan with the mouse |
 | scroll | zoom |
@@ -728,6 +729,7 @@ only appears under one cannot otherwise be captured, tested, or diffed.
 | `--ui-effects <full\|reduced\|off>` | override the HUD backdrop material. Full and Reduced share one quarter-resolution MPS blur; Off renders directly to the drawable with no backdrop targets or composition passes. Without an override, macOS Reduced Transparency selects Off |
 | `--window <w> <h>` / `--fullscreen` | choose the initial window size in logical points (bounded by the HUD's 1280x720 floor), or use the current display's native fullscreen size |
 | `--vision-style <recoil\|fa>` | whether terrain blocks sight |
+| `--placement <grid\|free>` | snap structures to the 8-elmo build grid as Supreme Commander does (the default), or place them at the exact click |
 | `--ai-faf` | FAF's own AI plays every army, through the sandbox |
 | `--ai-log` / `--ai-debug` / `--ai-sanity` | narrate the AI's decisions and the corpus's own `LOG` lines; the debug report; the closing census of what was built, which bindings were called, and which corpus functions ran |
 | `--log-level <trace\|debug\|info\|warn\|error\|off>` / `--log-file <f>` | filter timestamped operational diagnostics (default `info`) and optionally append the same records to a file; `debug` includes [order and construction lifecycle traces](docs/order-tracing.md) |

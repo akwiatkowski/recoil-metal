@@ -3481,3 +3481,30 @@ a distinction this sim keeps. Modelling pods (XEA3204) as units that travel was 
 station's reach stands for the pods' leash, and the cost is that a station out of reach of
 everything is inert, as in retail. Auto-help runs from positions the hash covers, so it is
 replay-stable; it changes any golden with an idle station in reach of work (none recorded).
+
+## ADR-109 — Auto-expand is an app-level standing order that issues ordinary logged builds
+
+**Context.** The player asked for engineers that keep claiming mass and hydrocarbon deposits
+on their own, preferring the part of the map without the enemy. The sim has no notion of a
+standing "keep expanding" order, and inventing one would put map knowledge (markers, start
+positions, factions' blueprints) into `core/sim`, which owns none of it.
+
+**Decision.** The order lives in the app's `MatchRunner` (`autoExpanders`), toggled from a
+rack cell (`RackAction::AutoExpand`, FA's second unit-specific slot, lit while on for the whole
+selection). Each tick before anything else thinks, `runAutoExpansion` gives every flagged
+engineer with an empty queue — and no order still staged in the intake — one Build through
+`issueBuild`, so the command log holds every order and a replay reproduces the match with no
+knowledge of the flag (the pass does not run in replay). The site is `pickExpansionDeposit`:
+the nearest free deposit not nearer to a hostile army's start than to the army's own, falling
+back to the nearest anywhere; free means no unfinished construction, no standing structure, no
+queued or staged Build for it, nothing handed out earlier in the pass and nothing refused to
+that engineer. Blueprint: the faction's cheapest extractor, or its cheapest `HYDROCARBON`
+energy producer, provided the engineer's build tree names it. A manual order takes precedence
+and the engineer resumes when idle; a site the sim accepts and then drops at dispatch is
+remembered as refused, which is what stops the pass re-ordering it every tick.
+
+**Alternatives and consequences.** A sim `CommandKind` would have been replay-visible for free
+but needs the world's markers inside the sim. Scoring with a soft enemy-distance penalty was
+dropped for the simple own-side/other-side split: it is explainable and the bisector already
+is "away from the enemy". The claim test is omniscient about enemy structures (the app knows
+the whole map); a fogged-in enemy extractor still stops the engineer, by the approach check.

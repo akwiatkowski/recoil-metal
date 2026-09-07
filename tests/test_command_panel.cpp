@@ -44,6 +44,8 @@ TEST_CASE("the command rack keeps Forged Alliance's fixed 4x3 positions") {
     CHECK(rm::ui::kCommandDescriptors[8].kind == CommandKind::Repair);
     CHECK(rm::ui::kCommandDescriptors[9].kind == CommandKind::Assist);
     CHECK_FALSE(rm::ui::kCommandDescriptors[10].kind.has_value());
+    CHECK(rm::ui::kCommandDescriptors[10].action == rm::ui::RackAction::AutoExpand);
+    CHECK(rm::ui::rackSlotFor(rm::ui::RackAction::AutoExpand) == 10);
     CHECK(rm::ui::kCommandDescriptors[11].kind == CommandKind::Reclaim);
 
     CHECK(std::ranges::none_of(rm::ui::kCommandDescriptors, [](const auto& descriptor) {
@@ -158,6 +160,33 @@ TEST_CASE("an immobile factory and a field builder can assist") {
         rm::ui::commandAvailability(combatSelection);
     CHECK(enabled(combatAvailable, CommandKind::Attack));
     CHECK(enabled(combatAvailable, CommandKind::Guard));
+}
+
+TEST_CASE("auto-expand is offered to field builders only, and its card reads on or off") {
+    rm::unitdef::UnitDef engineer;
+    engineer.buildRate = 5.0f;
+    engineer.speedElmosPerSecond = 10.0f;
+    rm::unitdef::UnitDef factory;
+    factory.buildRate = 5.0f;  // builds, but cannot walk to a deposit
+    factory.categories = {"FACTORY"};
+    rm::unitdef::UnitDef tank;
+    tank.speedElmosPerSecond = 10.0f;
+
+    const std::size_t slot = rm::ui::rackSlotFor(rm::ui::RackAction::AutoExpand);
+    const std::array<const rm::unitdef::UnitDef*, 1> engineerOnly{&engineer};
+    CHECK(rm::ui::commandAvailability(engineerOnly)[slot]);
+    const std::array<const rm::unitdef::UnitDef*, 2> immobileOrUnarmed{&factory, &tank};
+    CHECK_FALSE(rm::ui::commandAvailability(immobileOrUnarmed)[slot]);
+
+    const rm::ui::CommandDescriptor& cell = rm::ui::kCommandDescriptors[slot];
+    const std::array<const rm::unitdef::UnitDef*, 2> mixed{&engineer, &tank};
+    const auto off = rm::ui::commandCard(cell, mixed, false);
+    CHECK(off.title == "AUTO MEX");
+    CHECK(off.rows[0].value == "OFF");
+    CHECK(off.rows[1].value == "1 OF 2 UNITS");
+    CHECK(rm::ui::commandCard(cell, mixed, true).rows[0].value == "ON");
+    CHECK(rm::ui::commandCard(cell, immobileOrUnarmed).rows[0].value
+          == "SELECTION CANNOT DO THIS");
 }
 
 TEST_CASE("an authored retail command page distinguishes repair from reclaim") {

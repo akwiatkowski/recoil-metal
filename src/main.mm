@@ -206,9 +206,7 @@ int main(int argc, const char* argv[]) {
         // and `applyCommand` takes a grid for every kind of order.
         PassabilitySet passability{map->field, map->hasWater, map->waterLevel};
         for (const auto& marker : map->markers) {
-            const auto kind = marker.isType("Mass") ? rm::unitdef::BuildRestriction::MassDeposit
-                : marker.isType("Hydrocarbon") ? rm::unitdef::BuildRestriction::HydrocarbonDeposit
-                : rm::unitdef::BuildRestriction::None;
+            const auto kind = rm::app::depositKind(marker);
             if (kind != rm::unitdef::BuildRestriction::None) {
                 units.resourceDeposits.push_back({kind,
                     rm::sim::fxFromFloat(marker.position[0]), rm::sim::fxFromFloat(marker.position[2])});

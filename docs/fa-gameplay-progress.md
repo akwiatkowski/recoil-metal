@@ -259,6 +259,9 @@ visited set so cyclic guard chains contribute no work; reach is still measured t
 builder, preserving the existing range rule. The remaining selected ladder branches now run too:
 the recovered 3D leash returns before attack, reclaim copies the guardee's active feature target,
 and repair scans around the guardee while ranking candidates by distance to the guard.
+Assist is now reachable from the rack and the right-click ladder prefers it over Repair when the
+target owns an unfinished construction; the production panel shows the lent rate (ADR-108). The
+AUTO MEX cell is an app-level standing order that issues ordinary logged builds (ADR-109).
 The native `CUnitScriptTask` boundary is also implemented: script issues are authorized and logged,
 the command stage runs retail task-status timing, lifecycle cleanup is queue-owned, and opaque host
 state survives SaveState v12 and hashing without coupling Lua to the sim core.
@@ -297,6 +300,9 @@ copy/reset field inventory — all named, none guessed. Ordinary mobile construc
 `C-248`: the active Build order routes the engineer toward the site and creates no construction
 until centre distance minus the builder's smaller footprint and target's larger skirt is within
 `Economy.MaxBuildDistance`; factory production and upgrades retain their separate immediate paths.
+Idle `ENGINEERSTATION` units lend their rate to the nearest allied construction within that same
+reach and otherwise repair the nearest damaged ally (ADR-108; `tests/test_assist.cpp`). Structures
+snap to the 8-elmo build grid by default, `--placement free` restores exact-click placement (ADR-107).
 T1/T2/T3 engineers now offer their authored construction tiers, including shields and
 experimentals, while unenhanced ACUs keep the T1 menu until enhancements are modelled;
 extractor upgrade chains can be cancelled per tier (`[engineer-tiers]`, `make test-upgrade-ui`).

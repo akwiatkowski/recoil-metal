@@ -394,6 +394,257 @@ bool issueCancelFactoryBuild(UnitScene& scene, rm::sim::UnitId factory,
     return nearest;
 }
 
+rm::unitdef::BuildRestriction depositKind(const rm::scenario::Marker& marker) noexcept {
+    if (marker.isType("Mass")) return rm::unitdef::BuildRestriction::MassDeposit;
+    if (marker.isType("Hydrocarbon")) return rm::unitdef::BuildRestriction::HydrocarbonDeposit;
+    return rm::unitdef::BuildRestriction::None;
+}
+
+namespace {
+
+/// A deposit within this of a site is the SAME deposit — half an extractor footprint, the
+/// radius `nearestFreeDeposit` uses for the same judgement.
+constexpr rm::sim::Fx kDepositClaimRadius = rm::sim::Fx::fromInt(8);
+
+[[nodiscard]] bool within(const std::array<rm::sim::Fx, 3>& a, const std::array<rm::sim::Fx, 3>& b,
+                          rm::sim::Fx radius) noexcept {
+    return rm::sim::groundDistanceElmos(a, b) < radius;
+}
+
+/// Whether a command submitted and not yet dispatched names this unit: a player's click lands
+/// in the intake first, and a pass at the head of the tick that read only the unit's queue
+/// would take the engineer for idle and override the click a beat later.
+[[nodiscard]] bool hasStagedOrder(const UnitScene& scene, rm::sim::UnitId unit) {
+    return std::ranges::any_of(scene.commandInput.pending(), [&](const rm::sim::CommandIssue& issue) {
+        return std::ranges::find(issue.units, unit) != issue.units.end();
+    });
+}
+
+/// Whether anything already stands, grows or is ordered on a deposit.
+[[nodiscard]] bool depositClaimed(const UnitScene& scene, int army,
+                                  rm::unitdef::BuildRestriction kind,
+                                  const std::array<rm::sim::Fx, 3>& site,
+                                  std::span<const std::array<rm::sim::Fx, 3>> alsoClaimed) {
+    for (const std::array<rm::sim::Fx, 3>& taken : alsoClaimed) {
+        if (within(taken, site, kDepositClaimRadius)) return true;
+    }
+    // Ordered and not yet dispatched, by anyone: a player's own extractor click, still staged.
+    for (const rm::sim::CommandIssue& issue : scene.commandInput.pending()) {
+        if (issue.kind != rm::sim::CommandKind::Build) continue;
+        const rm::unitdef::UnitDef* product = scene.catalog.def(issue.buildType);
+        if (product != nullptr && product->buildRestriction == kind
+            && within({issue.targetX, rm::sim::Fx{}, issue.targetZ}, site, kDepositClaimRadius)) {
+            return true;
+        }
+    }
+    // Growing: a construction still under way, anyone's. A FINISHED construction is not a
+    // claim — its record stays in the list for the match's history, but the structure it made
+    // may since have been destroyed, and a deposit whose extractor died is free again.
+    for (const rm::sim::Construction& work : scene.building) {
+        if (!work.finished() && within(work.position, site, kDepositClaimRadius)) return true;
+    }
+    const std::span<const rm::sim::Transform> transforms = scene.store.transforms();
+    const std::span<const rm::sim::CommandQueue> orders = scene.store.orders();
+    for (rm::UnitIndex slot = 0; slot < transforms.size(); ++slot) {
+        if (!scene.store.slotAlive(slot)) continue;
+        const rm::unitdef::UnitDef* def = scene.catalog.def(scene.store.typeAt(slot));
+        // Standing: a living structure on the spot, anyone's — an extractor, or anything else
+        // that would make the site unplaceable.
+        if (def != nullptr && !def->isMobile()
+            && within(rm::sim::positionOf(transforms[slot]), site, kDepositClaimRadius)) {
+            return true;
+        }
+        // Ordered: a Build this army has already issued for the site, still on its way. Two
+        // idle engineers must not race for one deposit.
+        if (scene.armyOf(slot) != army) continue;
+        for (const rm::sim::QueuedCommand& entry : orders[slot].entries()) {
+            if (entry.kind() != rm::sim::CommandKind::Build) continue;
+            const rm::unitdef::UnitDef* product = scene.catalog.def(entry.buildType());
+            if (product != nullptr && product->buildRestriction == kind
+                && within({entry.targetX(), rm::sim::Fx{}, entry.targetZ()}, site,
+                          kDepositClaimRadius)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+/// The blueprint an army's builder puts on a deposit of `kind`: the cheapest of the faction's
+/// extractors, or of its hydrocarbon plants (`ENERGYPRODUCTION` role with the `HYDROCARBON`
+/// category), provided the builder's own build tree names it. Registered on first use.
+[[nodiscard]] std::optional<rm::UnitTypeIndex> expansionBlueprint(
+    UnitScene& scene, const rm::vfs::Vfs& content, const rm::sim::Army& army,
+    const rm::unitdef::UnitDef& builder, rm::unitdef::BuildRestriction kind) {
+    static const std::array<std::string, 1> kHydrocarbon{"HYDROCARBON"};
+    const std::optional<rm::data::RosterEntry> entry =
+        kind == rm::unitdef::BuildRestriction::MassDeposit
+            ? scene.roster.pickCheapest(army.faction, rm::unitdef::Role::Extractor)
+            : scene.roster.pickCheapest(army.faction, rm::unitdef::Role::Energy, kHydrocarbon);
+    if (!entry || !entry->matches(builder.buildableCategory)) {
+        return std::nullopt;
+    }
+    return resolveBuildable(scene, content, entry->path());
+}
+
+} // namespace
+
+const rm::scenario::Marker* pickExpansionDeposit(
+    const UnitScene& scene, std::span<const rm::scenario::Marker> markers,
+    std::span<const rm::mapinfo::StartPosition> starts, int army,
+    const std::array<rm::sim::Fx, 3>& from,
+    std::span<const std::array<rm::sim::Fx, 3>> alsoClaimed) {
+    if (army < 0 || static_cast<std::size_t>(army) >= scene.armies.size()) {
+        return nullptr;
+    }
+    const rm::sim::Army& mine = scene.armies[static_cast<std::size_t>(army)];
+
+    // The army's own start and every hostile army's, as far as the map states them. The AI
+    // reads its start the same way (`world_->starts[army]`): starts are seated by army index.
+    const auto startOf = [&](int index) -> std::optional<std::array<rm::sim::Fx, 3>> {
+        if (index < 0 || static_cast<std::size_t>(index) >= starts.size()) return std::nullopt;
+        const rm::mapinfo::StartPosition& start = starts[static_cast<std::size_t>(index)];
+        return std::array<rm::sim::Fx, 3>{rm::sim::fxFromFloat(start.x), rm::sim::Fx{},
+                                          rm::sim::fxFromFloat(start.z)};
+    };
+    const std::optional<std::array<rm::sim::Fx, 3>> home = startOf(army);
+    std::vector<std::array<rm::sim::Fx, 3>> enemyStarts;
+    for (const rm::sim::Army& other : scene.armies) {
+        if (!rm::sim::hostile(mine, other)) continue;
+        if (const auto start = startOf(other.index)) enemyStarts.push_back(*start);
+    }
+    // A deposit is on the enemy's side when some hostile start is nearer to it than our own.
+    const auto enemySide = [&](const std::array<rm::sim::Fx, 3>& site) {
+        if (!home) return false;
+        const rm::sim::Fx ours = rm::sim::groundDistanceElmos(site, *home);
+        return std::ranges::any_of(enemyStarts, [&](const std::array<rm::sim::Fx, 3>& theirs) {
+            return rm::sim::groundDistanceElmos(site, theirs) < ours;
+        });
+    };
+
+    const rm::scenario::Marker* ownSide = nullptr;
+    const rm::scenario::Marker* anywhere = nullptr;
+    rm::sim::Fx ownSideDistance{};
+    rm::sim::Fx anywhereDistance{};
+    for (const rm::scenario::Marker& marker : markers) {
+        const rm::unitdef::BuildRestriction kind = depositKind(marker);
+        if (kind == rm::unitdef::BuildRestriction::None) continue;
+        const std::array<rm::sim::Fx, 3> site = fxPoint(marker.position);
+        if (depositClaimed(scene, army, kind, site, alsoClaimed)) continue;
+        const rm::sim::Fx distance = rm::sim::groundDistanceElmos(from, site);
+        if (anywhere == nullptr || distance < anywhereDistance) {
+            anywhere = &marker;
+            anywhereDistance = distance;
+        }
+        if (!enemySide(site) && (ownSide == nullptr || distance < ownSideDistance)) {
+            ownSide = &marker;
+            ownSideDistance = distance;
+        }
+    }
+    return ownSide != nullptr ? ownSide : anywhere;
+}
+
+bool toggleAutoExpand(MatchRunner& runner, std::span<const rm::sim::UnitId> builders) {
+    const UnitScene& scene = runner.scene;
+    std::vector<rm::sim::UnitId> eligible;
+    for (const rm::sim::UnitId id : builders) {
+        if (!scene.store.alive(id)) continue;
+        const rm::unitdef::UnitDef* def = scene.catalog.def(scene.store.typeAt(id.index));
+        if (def != nullptr && def->isBuilder() && def->isMobile()) eligible.push_back(id);
+    }
+    if (eligible.empty()) {
+        return false;
+    }
+    const bool allOn = std::ranges::all_of(eligible, [&](rm::sim::UnitId id) {
+        return autoExpanding(runner, id);
+    });
+    if (allOn) {
+        std::erase_if(runner.autoExpanders, [&](const AutoExpander& e) {
+            return std::ranges::find(eligible, e.unit) != eligible.end();
+        });
+        return false;
+    }
+    for (const rm::sim::UnitId id : eligible) {
+        if (!autoExpanding(runner, id)) runner.autoExpanders.push_back(AutoExpander{.unit = id});
+    }
+    return true;
+}
+
+bool autoExpanding(const MatchRunner& runner, rm::sim::UnitId unit) noexcept {
+    return std::ranges::any_of(runner.autoExpanders,
+                               [&](const AutoExpander& e) { return e.unit == unit; });
+}
+
+std::size_t runAutoExpansion(MatchRunner& runner, rm::TickIndex tick) {
+    UnitScene& scene = runner.scene;
+    std::erase_if(runner.autoExpanders, [&](const AutoExpander& e) {
+        return !scene.store.alive(e.unit);
+    });
+    if (runner.autoExpanders.empty()) {
+        return 0;
+    }
+    const rm::TickIndex second = gAppTickRate.ticksPerSecond();
+    std::size_t issued = 0;
+    std::vector<std::array<rm::sim::Fx, 3>> takenThisPass;
+    for (AutoExpander& expander : runner.autoExpanders) {
+        if (tick < expander.retryAt || !scene.store.orders()[expander.unit.index].empty()
+            || hasStagedOrder(scene, expander.unit)) {
+            continue;  // busy with something, about to be, or told to wait
+        }
+        const int army = scene.armyOf(expander.unit.index);
+        // Idle again. If the last site handed out never got a construction, the sim refused
+        // the order after accepting it (an unplaceable footprint is found at dispatch): do not
+        // hand it out to this engineer again, or the pass would spin on it every tick.
+        if (expander.lastSite) {
+            const bool built = std::ranges::any_of(scene.building, [&](const rm::sim::Construction& work) {
+                return work.armyIndex == army && within(work.position, *expander.lastSite, kDepositClaimRadius);
+            });
+            if (!built) expander.refused.push_back(*expander.lastSite);
+            expander.lastSite.reset();
+        }
+        const rm::unitdef::UnitDef* def = scene.catalog.def(scene.store.typeAt(expander.unit.index));
+        if (army == rm::sim::kNoArmy || def == nullptr) {
+            continue;
+        }
+        std::vector<std::array<rm::sim::Fx, 3>> claimed = takenThisPass;
+        claimed.insert(claimed.end(), expander.refused.begin(), expander.refused.end());
+        const std::array<rm::sim::Fx, 3> from =
+            rm::sim::positionOf(scene.store.transforms()[expander.unit.index]);
+        const rm::scenario::Marker* deposit =
+            pickExpansionDeposit(scene, runner.markers, runner.starts, army, from, claimed);
+        if (deposit == nullptr) {
+            expander.retryAt = tick + second;  // the map is full: look again in a second
+            continue;
+        }
+        const rm::unitdef::BuildRestriction kind = depositKind(*deposit);
+        const std::optional<rm::UnitTypeIndex> type = expansionBlueprint(
+            scene, runner.content, scene.armies[static_cast<std::size_t>(army)], *def, kind);
+        const std::array<rm::sim::Fx, 3> site = fxPoint(deposit->position);
+        if (!type) {
+            // This builder's tree has nothing for that kind of deposit (a faction without a
+            // hydrocarbon plant this engine can read): skip the site, keep the others.
+            expander.refused.push_back(site);
+            continue;
+        }
+        if (issueBuild(scene, expander.unit, playerDriving(scene, army), tick, *type, site[0],
+                       site[2], /*queued=*/false)) {
+            ++issued;
+            takenThisPass.push_back(site);
+            expander.lastSite = site;
+            const rm::unitdef::UnitDef* product = scene.catalog.def(*type);
+            std::printf("auto-expand: %s ordered at (%.0f, %.0f) for unit %u:%u\n",
+                        product != nullptr ? product->name.c_str() : "structure",
+                        static_cast<double>(rm::sim::fxToFloat(site[0])),
+                        static_cast<double>(rm::sim::fxToFloat(site[2])),
+                        expander.unit.index, expander.unit.generation);
+            std::fflush(stdout);
+        } else {
+            expander.refused.push_back(site);  // not placeable for this engineer: never again
+        }
+    }
+    return issued;
+}
+
 } // namespace rm::app
 
 namespace rm::ai {
@@ -843,6 +1094,13 @@ rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) 
     // headless pre-run and the windowed loop go through this tick.
     if (runner.fafSandbox != nullptr) {
         (void)runner.fafSandbox->pump(tickIndex);
+    }
+
+    // The player's standing orders, before anything else thinks: an idle auto-expand
+    // engineer gets its next deposit as an ordinary logged Build (ADR-109). Not in replay —
+    // every order it ever issued is already in the log being played back.
+    if (runner.replay == nullptr) {
+        (void)runAutoExpansion(runner, static_cast<rm::TickIndex>(tickIndex));
     }
 
     // THE TICK'S EVENTS START HERE, not inside `tickSkirmish`. The caller raises some of them

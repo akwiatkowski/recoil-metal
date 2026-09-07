@@ -1100,6 +1100,8 @@ int runWindowed(const Session& session) {
         rm::ui::PanelPages panelPages;
         std::size_t productionPage = 0;
         rm::ui::CommandAvailability commandAvailable{};
+        /// Standing orders that are ON for the whole selection, lit on the rack.
+        rm::ui::CommandAvailability commandEngaged{};
         std::vector<const rm::unitdef::UnitDef*> commandSelection;
 
         // WHOSE MENU THE ICON ATLAS WAS PACKED FOR. Keyed on the builder rather than on the
@@ -1479,6 +1481,15 @@ int runWindowed(const Session& session) {
                 const std::optional<std::size_t> slot =
                     rm::ui::commandSlotAt(commandRack, hudPoint[0], hudPoint[1]);
                 if (button == rm::MouseButton::Right) {
+                    armedCommand.reset();
+                } else if (slot && commandAvailable[*slot]
+                           && rm::ui::kCommandDescriptors[*slot].action
+                                  == rm::ui::RackAction::AutoExpand) {
+                    // A STANDING ORDER, toggled: the selection's field builders go on (or
+                    // come off) auto-expand at once; nothing to target.
+                    const bool on = toggleAutoExpand(runner, selected);
+                    std::printf("auto-expand %s for the selection\n", on ? "on" : "off");
+                    std::fflush(stdout);
                     armedCommand.reset();
                 } else if (slot && commandAvailable[*slot]
                            && rm::ui::kCommandDescriptors[*slot].kind) {
@@ -2267,6 +2278,20 @@ int runWindowed(const Session& session) {
                 }
             }
             commandAvailable = rm::ui::commandAvailability(commandSelection);
+            // Auto-expand is lit when every field builder in the selection is on it.
+            commandEngaged = {};
+            {
+                std::size_t fieldBuilders = 0, expanding = 0;
+                for (const rm::sim::UnitId id : selected) {
+                    if (!units.store.alive(id)) continue;
+                    const rm::unitdef::UnitDef* def = units.catalog.def(units.store.typeAt(id.index));
+                    if (def == nullptr || !def->isBuilder() || !def->isMobile()) continue;
+                    ++fieldBuilders;
+                    if (autoExpanding(runner, id)) ++expanding;
+                }
+                commandEngaged[rm::ui::rackSlotFor(rm::ui::RackAction::AutoExpand)] =
+                    fieldBuilders > 0 && expanding == fieldBuilders;
+            }
             // Advance page ownership with the tiles, not with input. A control-group key can
             // change `selected` between display callbacks; until this rebuild, clicks must keep
             // addressing the roster that is still visible rather than page zero of a future one.
@@ -2358,7 +2383,7 @@ int runWindowed(const Session& session) {
                 rm::ui::commandSlotAt(commandRack, hudCursor[0], hudCursor[1]);
             rm::ui::appendCommandRack(hudScratch, window.labelFont(), window.readoutFont(),
                                       theme, commandRack, commandAvailable, overCommand,
-                                      armedCommand);
+                                      armedCommand, commandEngaged);
 
             const auto production = gatherProduction(units, activeBuilder);
             const auto productionRect = rm::ui::productionPanelRect(frame);
@@ -2392,9 +2417,11 @@ int runWindowed(const Session& session) {
                     inspector =
                         rm::ui::buildOptionCard(buildOptions[*overBuild], session.uiProfile);
                 } else if (overCommand && *overCommand < rm::ui::kCommandSlots) {
+                    // For a standing order the flag reads ON/OFF; a targeted command is not
+                    // being aimed while merely hovered, and `commandEngaged` is false for it.
                     inspector = rm::ui::commandCard(
                         rm::ui::kCommandDescriptors[*overCommand],
-                        commandSelection);
+                        commandSelection, commandEngaged[*overCommand]);
                 } else if (overTile && *overTile < rosterTiles.size()) {
                     inspector = selectedUnitCard(units, rosterTiles[*overTile], activeBuilder);
                 } else {
