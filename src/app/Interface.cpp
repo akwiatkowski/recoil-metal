@@ -1382,6 +1382,9 @@ std::optional<rm::ui::ProductionView> gatherProduction(const UnitScene& scene,
         if (work.builder == builder && constructionInProgress(work)) {
             view.building = true;
             view.progress = constructionProgress(work);
+            // Per second, as the HUD reads every rate (`Fx.hpp`'s float boundary).
+            view.assistRate = rm::sim::magToFloat(work.assistPerTick)
+                            * static_cast<float>(gAppTickRate.ticksPerSecond());
             break;
         }
     }

@@ -69,12 +69,16 @@ std::size_t applyGuardReclaim(UnitStore& store, const UnitCatalog& catalog,
                               FeatureStore& features, std::span<Economy> economies,
                               std::span<const GuardWork> work);
 
-/// Collects every explicit repair that is actively holding its target into economy requests.
+/// Collects every explicit repair that is actively holding its target into economy requests,
+/// then every guard's repair pick, then every idle engineering station's: a station with no
+/// construction in reach (`stationConstructionInReach`, which is why `building` is passed)
+/// heals the nearest damaged allied unit within its repair reach.
 /// The caller awards these alongside construction and upkeep, then passes the same records to
 /// `applyRepairWork` so healing uses exactly the allocation ratio that paid for it.
 void collectRepairWork(const UnitStore& store, const UnitCatalog& catalog,
                        std::span<const Army> armies, std::vector<RepairWork>& out,
-                       std::span<const GuardWork> guardWork = {});
+                       std::span<const GuardWork> guardWork = {},
+                       std::span<const Construction> building = {});
 
 /// Applies repair healing after its requests have been awarded by `tickEconomy`.
 std::size_t applyRepairWork(UnitStore& store, const UnitCatalog& catalog,

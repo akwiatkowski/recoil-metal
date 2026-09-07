@@ -147,6 +147,28 @@ TEST_CASE("every order gets a row when they fit, and a count on the right", "[ui
     CHECK_FALSE(out.chrome.empty());
 }
 
+TEST_CASE("a helped build says who is lending rate, in the title line", "[ui][production]") {
+    const std::vector<rm::text::Glyph> glyphs = boxGlyphs();
+    const rm::text::Font font = fontOver(glyphs);
+    rm::ui::ProductionView view = factoryWith(1);
+    view.building = true;
+    view.progress = 0.25f;
+    view.assistRate = 20.0f;
+
+    rm::ui::Geometry helped;
+    rm::ui::appendProductionPanel(helped, font, font, rm::ui::neutralTheme(),
+                                  rm::ui::Rect{0, 0, 320, 154}, view);
+    // "REPEAT OFF" (10), one count (2) and "ASSIST +20/S" (12) on the readout layer.
+    CHECK(glyphsIn(helped.foregroundReadout) == 10 + 2 + 12);
+
+    // Help nobody is giving is not announced, and neither is help to an idle factory.
+    view.assistRate = 0.0f;
+    rm::ui::Geometry alone;
+    rm::ui::appendProductionPanel(alone, font, font, rm::ui::neutralTheme(),
+                                  rm::ui::Rect{0, 0, 320, 154}, view);
+    CHECK(glyphsIn(alone.foregroundReadout) == 10 + 2);
+}
+
 TEST_CASE("orders past the room expose page controls instead of losing cancellation", "[ui][production]") {
     const std::vector<rm::text::Glyph> glyphs = boxGlyphs();
     const rm::text::Font font = fontOver(glyphs);

@@ -1,5 +1,7 @@
 #include "core/sim/Reclaim.hpp"
 
+#include "core/sim/Assist.hpp"
+
 #include "core/sim/Combat.hpp"
 
 #include <algorithm>
@@ -339,7 +341,8 @@ std::size_t applyGuardReclaim(UnitStore& store, const UnitCatalog& catalog,
 
 void collectRepairWork(const UnitStore& store, const UnitCatalog& catalog,
                        std::span<const Army> armies, std::vector<RepairWork>& out,
-                       std::span<const GuardWork> guardWork) {
+                       std::span<const GuardWork> guardWork,
+                       std::span<const Construction> building) {
     out.clear();
     for (UnitIndex builder = 0; builder < store.orders().size(); ++builder) {
         if (!store.slotAlive(builder) || !store.health()[builder].alive()) {
@@ -396,6 +399,43 @@ void collectRepairWork(const UnitStore& store, const UnitCatalog& catalog,
                                  .builder = item.builder,
                                  .target = target,
                                  .demand = repairDrain(item.builder, *targetDef, store, catalog)});
+    }
+
+    // Idle engineering stations (`Assist.hpp`): construction in reach comes first, exactly as
+    // the guard ladder ranks build-assist above repair; otherwise the nearest damaged ally the
+    // station can reach is healed, nearest first and lowest index on a tie.
+    for (UnitIndex station = 0; station < store.orders().size(); ++station) {
+        if (!idleEngineeringStation(station, store, catalog)
+            || stationConstructionInReach(station, store, catalog, building, armies)) {
+            continue;
+        }
+        const MoveState& stationMotion = store.motion()[station];
+        const Army* owner = armyFor(stationMotion.armyIndex, armies);
+        if (owner == nullptr) continue;
+        const std::array<Fx, 3> at = positionOf(store.transforms()[station]);
+        std::optional<UnitIndex> nearest;
+        Fx nearestGap{};
+        for (UnitIndex target = 0; target < store.orders().size(); ++target) {
+            if (target == station || !store.slotAlive(target) || !store.health()[target].alive()
+                || store.health()[target].current >= store.health()[target].maximum) continue;
+            const Army* targetArmy = armyFor(store.motion()[target].armyIndex, armies);
+            const unitdef::UnitDef* targetDef = catalog.def(store.typeAt(target));
+            if (targetArmy == nullptr || !allied(*owner, *targetArmy) || targetDef == nullptr
+                || targetDef->buildTime <= Mag{}) continue;
+            const Fx gap = groundDistanceElmos(at, positionOf(store.transforms()[target]));
+            if (gap > repairReach(catalog, store.typeAt(station), stationMotion,
+                                  store.motion()[target])) continue;
+            if (!nearest || gap < nearestGap) {
+                nearest = target;
+                nearestGap = gap;
+            }
+        }
+        if (!nearest) continue;
+        const unitdef::UnitDef* targetDef = catalog.def(store.typeAt(*nearest));
+        out.push_back(RepairWork{.armyIndex = stationMotion.armyIndex,
+                                 .builder = station,
+                                 .target = *nearest,
+                                 .demand = repairDrain(station, *targetDef, store, catalog)});
     }
 }
 

@@ -123,7 +123,7 @@ before implementing behavior.
 | XSL0101 | Selen stationary cloak/stealth, losing concealment on movement or attack, and secondary combat role | `reference/supcom-wiki/units/Seraphim/Seraphim_T1_Combat_Scout.md`; the scout scenario tests only movement/vision/radar |
 | URL0107 | Mantis repair now exercised | `[exceptional]` loads retail `URL0107/URL0107_unit.bp`, issues Repair through MatchRunner, restores an ally to full health, checks resource use and command completion, and retains the authored Reclaim prohibition. |
 | URL0104 | Complete nanodart guidance behavior | Retail `projectiles/CAANanoDart01/CAANanoDart01_proj.bp`; moving-target damage is exercised, but target leading, zigzag, and authored lifetime remain outside the implemented controller |
-| All engineers | Repair, reclaim, assist, and every buildable structure | The primary-role job builds one generator, not the complete engineering repertoire |
+| All engineers | Reclaim and every buildable structure | The primary-role job builds one generator, not the complete engineering repertoire. Assist (walk-up to a structure, factory production, in-place upgrade) and idle engineering-station help are covered by `tests/test_assist.cpp` with synthetic types, not retail blueprints. |
 | All combat products | Target filters, terrain obstruction, range boundaries, exact weapon cadence and special damage | One successful attack is intentionally only a minimum role contract |
 
 See [T1 behavioral contract limits](t1-headless-contracts.md) for guidance details

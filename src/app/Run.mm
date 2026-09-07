@@ -1754,7 +1754,15 @@ int runWindowed(const Session& session) {
 
             // A RIGHT-CLICK ON A DAMAGED ALLY IS REPAIR. Builders receive the targeted repair
             // order; the rest of a mixed selection moves there. This precedes Assist because a
-            // damaged builder is still a repair target, not an instruction to guard it.
+            // damaged builder is still a repair target, not an instruction to guard it — UNLESS
+            // that builder is in the middle of a construction. A scratched factory turning out
+            // tanks, or an extractor mid-upgrade, is what a player right-clicks an engineer onto
+            // to make it go faster; repair stays a click away on the rack. The link is the one
+            // the production panel and the assist scan both use: the construction's builder.
+            const bool hitIsBuilding = hit && units.store.alive(*hit)
+                && std::ranges::any_of(units.building, [&](const rm::sim::Construction& work) {
+                       return work.builder == *hit && !work.finished();
+                   });
             if (armedCommand == rm::sim::CommandKind::Guard) {
                 if (!hit || !units.store.alive(*hit)
                     || !alliedTo(units, units.playerArmy, *hit)) {
@@ -1779,8 +1787,9 @@ int runWindowed(const Session& session) {
             if (!isAttack && (!armedCommand || explicitRepair) && hit
                 && units.playerArmy != rm::sim::kNoArmy
                 && alliedTo(units, units.playerArmy, *hit)
-                && (explicitRepair || units.store.health()[hit->index].current
-                                          < units.store.health()[hit->index].maximum)) {
+                && (explicitRepair || (!hitIsBuilding
+                                       && units.store.health()[hit->index].current
+                                              < units.store.health()[hit->index].maximum))) {
                 std::vector<rm::sim::UnitId> builders;
                 std::vector<rm::sim::UnitId> movers;
                 for (const rm::sim::UnitId sel : selected) {
@@ -1844,6 +1853,13 @@ int runWindowed(const Session& session) {
                     }
                     return;
                 }
+            }
+            if (explicitAssist) {
+                // The rack button was pressed and the click landed on something that cannot
+                // take help: say so and keep the button armed, as every targeted order does.
+                rm::log::write(rm::log::Level::Info, "orders",
+                               "assist needs one of your own builders under the click");
+                return;
             }
 
             // A WRECK UNDER THE CLICK MAKES IT A RECLAIM — for the builders in the

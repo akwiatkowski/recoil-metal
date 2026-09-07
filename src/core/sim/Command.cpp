@@ -102,14 +102,20 @@ namespace {
     return found == building.end() ? nullptr : &*found;
 }
 
-/// Retail's mobile-build range test (`CUnitMobileBuildTask` state 1): compare centre distance
-/// after subtracting the builder's smaller footprint side and the product's larger skirt side.
-[[nodiscard]] Fx constructionReach(const UnitCatalog& catalog, UnitTypeIndex builder,
-                                   UnitTypeIndex product) noexcept {
+} // namespace
+
+// Retail's mobile-build range test (`CUnitMobileBuildTask` state 1): compare centre distance
+// after subtracting the builder's smaller footprint side and the product's larger skirt side.
+// Declared in the header because the assist pass judges an engineering station's reach to a
+// construction with the very same rule.
+Fx constructionReach(const UnitCatalog& catalog, UnitTypeIndex builder,
+                     UnitTypeIndex product) noexcept {
     const UnitCatalog::Rates& builderRates = catalog.rates(builder);
     return builderRates.buildReachElmos + builderRates.buildFootprintElmos
          + catalog.rates(product).buildSkirtElmos;
 }
+
+namespace {
 
 /// Whether the active queue entry already owns a completed row. Finished constructions remain
 /// as match history, so "no unfinished row" alone cannot distinguish completion from approach.

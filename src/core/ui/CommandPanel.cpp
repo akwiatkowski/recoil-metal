@@ -16,6 +16,7 @@ commandAvailability(std::span<const unitdef::UnitDef* const> selection) noexcept
     bool hasGuard = false;
     bool hasReclaimer = false;
     bool hasRepairer = false;
+    bool hasAssister = false;
     bool hasManualWeapon = false;
 
     for (const unitdef::UnitDef* def : selection) {
@@ -39,6 +40,9 @@ commandAvailability(std::span<const unitdef::UnitDef* const> selection) noexcept
         hasReclaimer = hasReclaimer
                     || (def->isBuilder() && permits("RULEUCC_Reclaim"));
         hasRepairer = hasRepairer || (def->isBuilder() && permits("RULEUCC_Repair"));
+        // Any build arm can be lent — the sim's `validAssist` asks only for a builder, and a
+        // factory's assist mirrors compatible production (`Assist.hpp`).
+        hasAssister = hasAssister || def->isBuilder();
         hasManualWeapon = hasManualWeapon
                        || (permits("RULEUCC_Overcharge")
                            && std::ranges::any_of(def->weapons, [](const unitdef::Weapon& weapon) {
@@ -83,6 +87,8 @@ commandAvailability(std::span<const unitdef::UnitDef* const> selection) noexcept
             available[slot] = hasManualWeapon;
             break;
         case sim::CommandKind::Assist:
+            available[slot] = hasAssister;
+            break;
         case sim::CommandKind::Build:
         case sim::CommandKind::ToggleFactoryRepeat:
         case sim::CommandKind::CancelFactoryBuild:

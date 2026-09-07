@@ -354,6 +354,11 @@ using CommandGridForUnit = std::function<const PassabilityGrid*(UnitId)>;
 /// now-unroutable head.
 [[nodiscard]] bool publishPathResult(const PathResult& result, UnitStore& store);
 
+/// How close a builder must stand to a site to work on a product there, centre to centre:
+/// its build reach plus its own footprint plus the product's skirt (`CUnitMobileBuildTask`).
+[[nodiscard]] Fx constructionReach(const UnitCatalog& catalog, UnitTypeIndex builder,
+                                   UnitTypeIndex product) noexcept;
+
 /// C-183 eligibility shared by the construction prepass and guard dispatch.
 [[nodiscard]] bool guardAllowsBuildAssistance(UnitIndex slot, const UnitStore& store,
     const UnitCatalog& catalog, std::span<const Construction> building,

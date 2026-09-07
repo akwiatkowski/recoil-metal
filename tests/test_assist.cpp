@@ -56,6 +56,14 @@ struct Fixture {
     rm::UnitTypeIndex factoryType{};
     rm::UnitTypeIndex tankType{};
     rm::UnitTypeIndex hutType{};
+    /// An engineering station: FA's Kennel shape — immobile, no orders of its own, twice an
+    /// engineer's rate. It has no build tree because it never founds anything.
+    rm::UnitTypeIndex stationType{};
+    /// A structure that upgrades in place (an extractor's tech path) and what it becomes.
+    rm::UnitTypeIndex mexType{};
+    rm::UnitTypeIndex mex2Type{};
+    /// A unit repair can price: it has a build time and a cost, unlike the bare `tankType`.
+    rm::UnitTypeIndex repairableType{};
 
     Fixture() {
         rm::unitdef::UnitDef engineer;
@@ -80,6 +88,30 @@ struct Fixture {
         hut.buildCostEnergy = rm::sim::magFromFloat(100.0f);
         hut.buildTime = rm::sim::magFromFloat(100.0f);  // 100 ticks alone, 50 helped
         hutType = roster.addType(hut);
+
+        rm::unitdef::UnitDef station;
+        station.name = "test_station";
+        station.categories = {"ENGINEERSTATION"};
+        station.buildRate = 20.0f;  // 2 build units per tick at 10 Hz
+        stationType = roster.addType(station);
+
+        rm::unitdef::UnitDef mex;
+        mex.name = "test_mex";
+        mex.buildRate = 10.0f;
+        mex.upgradesTo = "test_mex2";
+        mex.buildableCategory = {{"TESTMEX2"}};
+        mexType = roster.addType(mex);
+        rm::unitdef::UnitDef mex2 = hut;
+        mex2.name = "test_mex2";
+        mex2.categories = {"TESTMEX2"};
+        mex2Type = roster.addType(mex2);
+
+        rm::unitdef::UnitDef repairable = tank;
+        repairable.name = "test_repairable";
+        repairable.buildCostMass = rm::sim::magFromFloat(100.0f);
+        repairable.buildCostEnergy = rm::sim::magFromFloat(200.0f);
+        repairable.buildTime = rm::sim::magFromFloat(100.0f);  // one build unit heals 1%
+        repairableType = roster.addType(repairable);
     }
 
     [[nodiscard]] bool apply(const Command& command) {
@@ -94,6 +126,17 @@ struct Fixture {
                              .targetX = rm::sim::fxFromFloat(x),
                              .targetZ = rm::sim::fxFromFloat(z),
                              .buildType = hutType});
+    }
+
+    /// The in-place upgrade order: a structure builds what its blueprint says it becomes,
+    /// on its own pad.
+    [[nodiscard]] bool upgrade(UnitId who) {
+        const rm::sim::Transform& at = roster.store.transforms()[who.index];
+        return apply(Command{.kind = CommandKind::Build,
+                             .unit = who,
+                             .targetX = at.x,
+                             .targetZ = at.z,
+                             .buildType = mex2Type});
     }
 
     [[nodiscard]] bool move(UnitId who, float x, float z) {
@@ -302,6 +345,124 @@ TEST_CASE("a helper out of reach contributes nothing until it arrives") {
     f.tick(45);
     CHECK(f.roster.transform(helper).x < rm::sim::fxFromFloat(600.0f));
     CHECK(rm::test::asFloat(f.building[0].assistPerTick) == Approx(1.0f).margin(0.001));
+}
+
+TEST_CASE("an engineer ordered to assist a distant structure walks over and joins its work") {
+    Fixture f;
+    const UnitId factory = f.roster.add(f.factoryType, 200.0f, 200.0f, 0, 100.0f);
+    // 400 elmos away, far outside build reach — the case a player sees when they right-click
+    // a factory across the base: the engineer has to arrive before it can lend anything.
+    const UnitId helper = f.roster.add(f.engineerType, 600.0f, 200.0f, 0, 100.0f);
+    f.economies[0].stored = {.mass = rm::sim::magFromFloat(1000.0f),
+                             .energy = rm::sim::magFromFloat(1000.0f)};
+
+    REQUIRE(f.build(factory, 205.0f, 200.0f));
+    REQUIRE(f.assist(helper, factory));
+
+    f.tick(5);
+    REQUIRE(f.building.size() == 1);
+    CHECK(rm::test::asFloat(f.building[0].assistPerTick) == 0.0f);
+
+    f.tick(45);
+    CHECK(f.roster.transform(helper).x < rm::sim::fxFromFloat(600.0f));
+    CHECK(rm::test::asFloat(f.building[0].assistPerTick) == Approx(1.0f).margin(0.001));
+}
+
+TEST_CASE("assisting an upgrading structure speeds the upgrade") {
+    Fixture f;
+    const UnitId mex = f.roster.add(f.mexType, 200.0f, 200.0f, 0, 100.0f);
+    const UnitId helper = f.roster.add(f.engineerType, 210.0f, 200.0f, 0, 100.0f);
+    f.economies[0].stored = {.mass = rm::sim::magFromFloat(1000.0f),
+                             .energy = rm::sim::magFromFloat(1000.0f)};
+
+    REQUIRE(f.upgrade(mex));
+    REQUIRE(f.assist(helper, mex));
+    f.tick(1);
+
+    // The upgrade is a construction founded by the structure itself, which is the link an
+    // Assist resolves through — so the helper's 1 a tick lands on it beside the mex's own 1.
+    REQUIRE(f.building.size() == 1);
+    CHECK(f.building[0].upgradeOf == mex);
+    CHECK(rm::test::asFloat(f.building[0].assistPerTick) == Approx(1.0f).margin(0.001));
+    CHECK(rm::test::asFloat(f.building[0].buildTimeRemaining) == Approx(98.0f).margin(0.01));
+}
+
+TEST_CASE("an idle engineering station lends its rate to the nearest construction in reach") {
+    Fixture f;
+    const UnitId station = f.roster.add(f.stationType, 200.0f, 200.0f, 0, 100.0f);
+    const UnitId near = f.roster.add(f.engineerType, 210.0f, 200.0f, 0, 100.0f);
+    const UnitId far = f.roster.add(f.engineerType, 600.0f, 200.0f, 0, 100.0f);
+    f.economies[0].stored = {.mass = rm::sim::magFromFloat(1000.0f),
+                             .energy = rm::sim::magFromFloat(1000.0f)};
+
+    // Two builds start the same tick: one 15 elmos from the station, one across the map.
+    REQUIRE(f.build(near, 215.0f, 200.0f));
+    REQUIRE(f.build(far, 605.0f, 200.0f));
+    f.tick(1);
+    REQUIRE(f.building.size() == 2);
+    CHECK(f.roster.store.orders()[station.index].empty());  // nobody told it anything
+
+    // The station's 2 a tick joins the engineer's 1 on the build in reach; the far one is
+    // out of reach and gets nothing.
+    CHECK(rm::test::asFloat(f.building[0].assistPerTick) == Approx(2.0f).margin(0.001));
+    CHECK(rm::test::asFloat(f.building[0].buildTimeRemaining) == Approx(97.0f).margin(0.01));
+    CHECK(rm::test::asFloat(f.building[1].assistPerTick) == 0.0f);
+
+    // Help is recomputed each tick from the facts: once the near build is done the station
+    // has nothing in reach and stops.
+    f.building[0].buildTimeRemaining = rm::sim::magFromFloat(1.0f);
+    f.tick(2);
+    CHECK(f.building[0].finished());
+    CHECK(rm::test::asFloat(f.building[1].assistPerTick) == 0.0f);
+}
+
+TEST_CASE("an idle engineering station repairs the nearest damaged ally, but builds first") {
+    Fixture f;
+    (void)f.roster.add(f.stationType, 200.0f, 200.0f, 0, 100.0f);
+    const UnitId hurt = f.roster.add(f.repairableType, 210.0f, 200.0f, 0, 100.0f);
+    const UnitId farHurt = f.roster.add(f.repairableType, 600.0f, 200.0f, 0, 100.0f);
+    f.roster.health(hurt).current = rm::sim::magFromFloat(50.0f);
+    f.roster.health(farHurt).current = rm::sim::magFromFloat(50.0f);
+    f.economies[0].stored = {.mass = rm::sim::magFromFloat(1000.0f),
+                             .energy = rm::sim::magFromFloat(1000.0f)};
+
+    // Two build units a tick heal 2% of a 100-build-time unit: 50 -> 52, paid for from the
+    // bank like any repair. The unit across the map is out of reach.
+    f.tick(1);
+    CHECK(rm::test::asFloat(f.roster.health(hurt).current) == Approx(52.0f).margin(0.01));
+    CHECK(rm::test::asFloat(f.roster.health(farHurt).current) == Approx(50.0f).margin(0.01));
+    CHECK(rm::test::asFloat(f.economies[0].stored.mass) < 1000.0f);
+
+    // A construction in reach takes precedence over the repair (the C-183 ladder ranks
+    // build-assist above repair): the station's rate moves to the build and the wounded
+    // unit waits.
+    const UnitId engineer = f.roster.add(f.engineerType, 190.0f, 200.0f, 0, 100.0f);
+    REQUIRE(f.build(engineer, 185.0f, 200.0f));
+    f.tick(1);
+    REQUIRE(f.building.size() == 1);
+    CHECK(rm::test::asFloat(f.building[0].assistPerTick) == Approx(2.0f).margin(0.001));
+    CHECK(rm::test::asFloat(f.roster.health(hurt).current) == Approx(52.0f).margin(0.01));
+}
+
+TEST_CASE("a station with an assist order of its own follows the order, not the nearest work") {
+    Fixture f;
+    const UnitId station = f.roster.add(f.stationType, 200.0f, 200.0f, 0, 100.0f);
+    const UnitId ordered = f.roster.add(f.engineerType, 230.0f, 200.0f, 0, 100.0f);
+    const UnitId nearer = f.roster.add(f.engineerType, 210.0f, 200.0f, 0, 100.0f);
+    f.economies[0].stored = {.mass = rm::sim::magFromFloat(1000.0f),
+                             .energy = rm::sim::magFromFloat(1000.0f)};
+
+    // Both sites are within the station's 40-elmo reach; the nearer one is 15 elmos off.
+    REQUIRE(f.build(nearer, 215.0f, 200.0f));
+    REQUIRE(f.build(ordered, 235.0f, 200.0f));
+    REQUIRE(f.assist(station, ordered));
+    f.tick(1);
+
+    // The ordered target gets the station's whole rate, once; the nearer build gets none of
+    // it — an ordered station is not idle, so the automatic scan skips it.
+    REQUIRE(f.building.size() == 2);
+    CHECK(rm::test::asFloat(f.building[0].assistPerTick) == 0.0f);
+    CHECK(rm::test::asFloat(f.building[1].assistPerTick) == Approx(2.0f).margin(0.001));
 }
 
 TEST_CASE("factory assist accelerates the oldest unfinished queue entry") {

@@ -3457,3 +3457,27 @@ path unsnapped and make replays depend on the client. Validating alignment inste
 would turn misaligned AI orders into refusals. Retail's exact snap rule was not read from the
 executable; the footprint parity rule matches the deposit positions and the skirt geometry the
 repo already records. Fixtures that hand-place structures for other mechanics pin Free mode.
+
+## ADR-108 — Engineer support: assist wins over repair on a building target; stations help unasked
+
+**Context.** The sim's Assist order worked (rate lent within reach of the resolved builder,
+C-183 chain), but a player could not see it: the production panel showed progress only, the
+rack had no Assist button, and a right-click on a damaged factory issued Repair, never Assist.
+Engineering stations (FA `ENGINEERSTATION`: XEB0104/0204, XRB0104/0204/0304) did nothing and
+could not be ordered — their blueprints forbid Guard and they cannot move.
+
+**Decision.** (1) Right-click ladder: a target that owns an unfinished construction (matched
+by `Construction::builder`, the link the panel and the assist scan use) gets Assist even when
+damaged; Repair remains one rack click away. (2) Assist has its own rack descriptor in FA's
+first unit-specific slot, enabled for any builder. (3) The production panel prints
+`ASSIST +N/S` from `assistPerTick` while a helped build runs. (4) An idle station — alive, no
+order — lends its rate to the nearest unfinished allied construction within `constructionReach`;
+with none in reach it repairs the nearest damaged ally within repair reach (build before
+repair, the guard ladder's order; nearest first, lowest index on a tie). A station with an
+order of its own is not idle. The player's answer (2026-09-07) was "assist and repair in reach".
+
+**Alternatives and consequences.** Folding Assist into the Guard button as FA does would hide
+a distinction this sim keeps. Modelling pods (XEA3204) as units that travel was rejected: the
+station's reach stands for the pods' leash, and the cost is that a station out of reach of
+everything is inert, as in retail. Auto-help runs from positions the hash covers, so it is
+replay-stable; it changes any golden with an idle station in reach of work (none recorded).

@@ -592,7 +592,9 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
     // Explicit repair is an economy consumer, not a pre-allocation debit. Its requests enter
     // the same pass as upkeep and construction; their awarded ratios are applied below.
     std::vector<RepairWork> repairs;
-    collectRepairWork(store, catalog, match.armies, repairs, guardWork);
+    collectRepairWork(store, catalog, match.armies, repairs, guardWork,
+                      match.building != nullptr ? std::span<const Construction>{*match.building}
+                                                : std::span<const Construction>{});
 
     // Components are keyed by a generational UnitId. Remove before partitioning so a dead silo
     // cannot pay, and a subsequently recycled slot cannot inherit its ammunition (`C-081`).

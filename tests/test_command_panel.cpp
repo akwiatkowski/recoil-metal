@@ -42,7 +42,7 @@ TEST_CASE("the command rack keeps Forged Alliance's fixed 4x3 positions") {
     CHECK_FALSE(rm::ui::kCommandDescriptors[6].kind.has_value());
     CHECK(rm::ui::kCommandDescriptors[7].kind == CommandKind::Overcharge);
     CHECK(rm::ui::kCommandDescriptors[8].kind == CommandKind::Repair);
-    CHECK_FALSE(rm::ui::kCommandDescriptors[9].kind.has_value());
+    CHECK(rm::ui::kCommandDescriptors[9].kind == CommandKind::Assist);
     CHECK_FALSE(rm::ui::kCommandDescriptors[10].kind.has_value());
     CHECK(rm::ui::kCommandDescriptors[11].kind == CommandKind::Reclaim);
 
@@ -81,8 +81,8 @@ TEST_CASE("command availability is the union of selected unit capabilities") {
     CHECK(enabled(available, CommandKind::Overcharge));
     CHECK(enabled(available, CommandKind::Reclaim));
     CHECK(enabled(available, CommandKind::Repair));
+    CHECK(enabled(available, CommandKind::Assist));
     CHECK_FALSE(available[6]);
-    CHECK_FALSE(available[9]);
     CHECK_FALSE(available[10]);
 }
 
@@ -127,6 +127,7 @@ TEST_CASE("an immobile factory and a field builder can assist") {
     CHECK(enabled(factoryAvailable, CommandKind::Reclaim));
     CHECK(enabled(factoryAvailable, CommandKind::Repair));
     CHECK(enabled(factoryAvailable, CommandKind::Guard));
+    CHECK(enabled(factoryAvailable, CommandKind::Assist));
 
     rm::unitdef::UnitDef engineer;
     engineer.buildRate = 5.0f;
@@ -136,6 +137,7 @@ TEST_CASE("an immobile factory and a field builder can assist") {
     CHECK(enabled(engineerAvailable, CommandKind::Reclaim));
     CHECK(enabled(engineerAvailable, CommandKind::Repair));
     CHECK(enabled(engineerAvailable, CommandKind::Guard));
+    CHECK(enabled(engineerAvailable, CommandKind::Assist));
 
     rm::unitdef::UnitDef commander;
     commander.categories = {"COMMAND"};
@@ -144,6 +146,7 @@ TEST_CASE("an immobile factory and a field builder can assist") {
         rm::ui::commandAvailability(commanderSelection);
     CHECK_FALSE(enabled(commanderAvailable, CommandKind::Reclaim));
     CHECK(enabled(commanderAvailable, CommandKind::Guard));
+    CHECK_FALSE(enabled(commanderAvailable, CommandKind::Assist));  // no build arm to lend
 
     // URL0107's shape: primarily a combat unit, but its BuildRate=1 repair arm can assist.
     rm::unitdef::UnitDef combatBuilder;

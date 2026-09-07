@@ -44,6 +44,10 @@ struct CommandRackLayout {
 /// Slots are zero-based here and one-based in FA's `preferredSlot`: AttackMove 1 through Assist
 /// 6, fire-state 7, Overcharge 8, Repair 9, unit-specific actions 10-11, and Reclaim 12. Build is absent on
 /// purpose: choosing a blueprint belongs to the construction panel, not the order rack.
+///
+/// FA folds Assist into the Guard button (one `RULEUCC_Guard` order reads the target). This
+/// simulation keeps them distinct — Guard follows a unit, Assist lends a build arm — so Assist
+/// takes the first unit-specific slot, next to Repair, where a builder's rack has room for it.
 inline constexpr CommandDescriptors kCommandDescriptors{{
     {{sim::CommandKind::AttackMove}, "ATTACK MOVE", "attack_move"},
     {{sim::CommandKind::Move}, "MOVE", "move"},
@@ -54,7 +58,7 @@ inline constexpr CommandDescriptors kCommandDescriptors{{
     {std::nullopt, {}, {}},  // FA fire-state: not implemented by the simulation.
     {{sim::CommandKind::Overcharge}, "OVERCHARGE", "overcharge"},
     {{sim::CommandKind::Repair}, "REPAIR", "repair"},
-    {std::nullopt, {}, {}},  // FA launch, teleport, ferry, or sacrifice action.
+    {{sim::CommandKind::Assist}, "ASSIST", "assist"},
     {std::nullopt, {}, {}},  // FA dive or another unit-specific action.
     {{sim::CommandKind::Reclaim}, "RECLAIM", "reclaim"},
 }};

@@ -32,6 +32,10 @@ struct ProductionView {
     std::vector<ProductionEntry> queue;  ///< current first
     bool building = false;               ///< a construction is under way
     float progress = 0.0f;               ///< of the current build, 0..1
+    /// Build units per SECOND lent by assisting engineers and stations, on top of the
+    /// factory's own rate; zero when nobody is helping. The only place a player can see that
+    /// an Assist order is doing anything.
+    float assistRate = 0.0f;
     bool repeat = false;
     bool canRepeat = true;               ///< upgrades are never repeatable
 

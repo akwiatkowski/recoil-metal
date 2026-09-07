@@ -1,6 +1,7 @@
 #include "core/ui/ProductionPanel.hpp"
 
 #include <algorithm>
+#include <cmath>
 
 namespace rm::ui {
 
@@ -126,7 +127,14 @@ void appendProductionPanel(Geometry& out, const text::Font& labelFont,
     const float cornerWidth = readoutFont.usable()
                                 ? text::measureText(readoutFont.glyphs, corner)
                                 : 0.0f;
-    const float titleWidth = std::max(0.0f, rect.width - 128.0f);
+    // Who is helping, left of the corner: "ASSIST +20/S" is the production panel's only
+    // evidence that an Assist order or an idle engineering station is lending its rate.
+    const std::string assist = view.building && view.assistRate > 0.0f && readoutFont.usable()
+        ? "ASSIST +" + std::to_string(static_cast<int>(std::lround(view.assistRate))) + "/S"
+        : std::string{};
+    const float assistWidth = assist.empty() ? 0.0f
+        : text::measureText(readoutFont.glyphs, assist) + kInset;
+    const float titleWidth = std::max(0.0f, rect.width - 128.0f - assistWidth);
     const std::string title = fitLine(labelFont.glyphs, view.factoryName, titleWidth);
     (void)text::appendText(out.label, labelFont.glyphs, title, rect.x + kInset,
                            titleBaseline, kInk);
@@ -134,6 +142,11 @@ void appendProductionPanel(Geometry& out, const text::Font& labelFont,
         (void)text::appendText(out.foregroundReadout, readoutFont.glyphs, corner,
                                rect.right() - kInset - cornerWidth, titleBaseline,
                                kInk);
+        if (!assist.empty()) {
+            (void)text::appendText(out.foregroundReadout, readoutFont.glyphs, assist,
+                                   rect.right() - kInset - cornerWidth - assistWidth,
+                                   titleBaseline, theme.label);
+        }
     }
 
     // The progress of the build under way: a well the full width, filled from the left. An
