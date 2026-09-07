@@ -582,7 +582,16 @@ void applyDecisions(UnitScene& scene, const rm::vfs::Vfs& content, const rm::sim
                             playerDriving(scene, army.index), tickIndex,
                             static_cast<rm::UnitTypeIndex>(*blueprintIndex), decision.site[0],
                             decision.site[2])) {
-                break;  // refused deterministically — a dead builder, or one this army lost
+                // Refused deterministically — a dead builder, one this army lost, or a
+                // factory still mid-product. Silent in the ordinary log; named under
+                // --ai-log, because a refused train every pass looks like a decision made.
+                if (gFafLog) {
+                    std::printf("  [faf %d] refused %.*s for unit %u:%u\n", army.index,
+                                static_cast<int>(decision.blueprint.size()),
+                                decision.blueprint.data(), decision.builder.index,
+                                decision.builder.generation);
+                }
+                break;
             }
             // Structures announce themselves and tanks do not, which is what the original
             // printed: the commander's build order is the story of the opening, while a

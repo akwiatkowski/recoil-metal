@@ -522,7 +522,13 @@ function __rm_faf_boot(army, info)
         Radius = 200,
         GetNumFactories = function() return countUnits(categories.STRUCTURE * categories.FACTORY) end,
         GetNumCategoryFactories = function(self, category) return countUnits(category) end,
-        GetNumCategoryUnits = function(self, category) return countUnits(category) end,
+        -- The corpus calls this as `engineerManager:GetNumCategoryUnits('Engineers', category)`
+        -- (UnitCountBuildConditions.lua:574, :949): the first argument is a GROUP NAME. Binding
+        -- the group name as the category made every engineer cap read zero, and the
+        -- priority-900 engineer builder never stopped — half of everything built was engineers.
+        GetNumCategoryUnits = function(self, group, category)
+            return countUnits(category ~= nil and category or group)
+        end,
         GetNumCategoryBeingBuilt = function(self, category) return countUnderway(category) end,
         -- A list, not a count: callers table.getn it. Nobody wants assistance — the
         -- adapter has no assist orders to give.
@@ -855,11 +861,14 @@ function __rm_faf_decide(army, snap)
     local factories = {}
     for _, u in ipairs(snap.units) do
         if not u.upgrading
+            and not u.building
             and EntityCategoryContains(categories.STRUCTURE * categories.FACTORY, u) then
             table.insert(factories, u)
         end
     end
-    local free = #factories - snap.mobileUnderway
+    -- Only factories with nothing on the floor are candidates, so every train below lands
+    -- on a factory that can take it; the sim would refuse one mid-product without a word.
+    local free = #factories
     if free > 0 then
         walkPriority(brain, 'FactoryBuilder', function(item)
             local template = PlatoonTemplates[item.spec.PlatoonTemplate]
@@ -1500,6 +1509,18 @@ void FafOpponent::advance(rm::TickIndex tick) {
                 || head->kind() == rm::sim::CommandKind::ReclaimUnit);
         lua_pushboolean(lua, reclaiming ? 1 : 0);
         lua_setfield(lua, -2, "reclaiming");
+        // Building: this unit owns an unfinished construction. A factory mid-product is
+        // "idle" by the motion rule above, and a train sent to it is refused by the sim
+        // every pass; the picker needs the truth to hand the order to a free factory.
+        bool constructing = false;
+        for (const rm::sim::Construction& work : scene.building) {
+            if (!work.finished() && work.builder == id) {
+                constructing = true;
+                break;
+            }
+        }
+        lua_pushboolean(lua, constructing ? 1 : 0);
+        lua_setfield(lua, -2, "building");
         if (std::find(upgrading.begin(), upgrading.end(), id) != upgrading.end()) {
             lua_pushboolean(lua, 1);
             lua_setfield(lua, -2, "upgrading");

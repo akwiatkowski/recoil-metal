@@ -542,9 +542,17 @@ TEST_CASE("the FAF driver boots a brain and the corpus's own builders decide", "
                'expected a build, got ' .. tostring(decisions[1].kind))
         assert(type(decisions[1].bp) == 'string' and #decisions[1].bp > 0)
 
+        -- The engineer manager stand-in takes the corpus's (group, category) arity: with the
+        -- group name bound as the category every engineer cap read zero and the base built
+        -- a hundred engineers.
+        local brain = __rm_faf.brains[0]
+        local manager = brain.BuilderManagers.MAIN.EngineerManager
+        assert(manager:GetNumCategoryUnits('Engineers', categories.COMMAND) == 1,
+               'GetNumCategoryUnits must read the category, not the group name')
+        assert(manager:GetNumCategoryUnits('Engineers', categories.TECH1 * categories.ENGINEER) == 0)
+
         -- Unit counts are memoised per pass by category TEXT: a rebuilt expression hits the
         -- memo, and the next pass's snapshot invalidates it.
-        local brain = __rm_faf.brains[0]
         assert(brain:GetCurrentUnits(categories.COMMAND * categories.MOBILE) == 1)
         assert(brain:GetCurrentUnits(categories.COMMAND * categories.MOBILE) == 1)
         assert(brain:GetCurrentUnits(categories.MOBILE - categories.COMMAND) == 0)
