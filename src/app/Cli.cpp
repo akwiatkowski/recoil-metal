@@ -480,6 +480,26 @@ std::vector<rm::sim::Faction> parseFactions(int argc, const char* argv[]) {
     return factions;
 }
 
+rm::sim::PlacementMode parsePlacementMode(int argc, const char* argv[]) {
+    for (int i = 1; i + 1 < argc; ++i) {
+        if (std::string{argv[i]} != "--placement") {
+            continue;
+        }
+        const std::string value{argv[i + 1]};
+        if (value == "grid") {
+            return rm::sim::PlacementMode::Grid;
+        }
+        if (value == "free") {
+            return rm::sim::PlacementMode::Free;
+        }
+        rm::log::writef(rm::log::Level::Warn, "cli",
+                        "--placement: unknown value \"%s\"; using grid. Expected grid or free.",
+                        value.c_str());
+        break;
+    }
+    return rm::sim::PlacementMode::Grid;
+}
+
 rm::sim::VisionStyle parseVisionStyle(int argc, const char* argv[]) {
     for (int i = 1; i + 1 < argc; ++i) {
         if (std::string{argv[i]} != "--vision-style") {

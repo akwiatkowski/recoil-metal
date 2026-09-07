@@ -13,6 +13,26 @@ struct ResourceDeposit {
     Fx x{}, z{};
 };
 
+/// Where a structure may stand.
+///
+/// GRID is the game's rule and the default: Supreme Commander places structures on the
+/// one-ogrid build grid so that skirts abut exactly — a power generator's edge meets the
+/// factory's, a storage's meets the extractor's — and adjacency is a matter of placement,
+/// not luck. An even footprint centres on a grid line, an odd one on a cell centre, which is
+/// also where every retail deposit sits (`SCMP_009_save.lua`: 346.5, 678.5 ...).
+///
+/// FREE keeps the exact ordered coordinate. It is what this engine did before the grid
+/// existed and stays available for comparison and for tests that reason about distances.
+enum class PlacementMode : std::uint8_t { Grid, Free };
+
+/// One ogrid in elmos — the build grid's pitch.
+inline constexpr Fx kBuildGridElmos = Fx::fromInt(8);
+
+/// Snaps one axis of a structure's centre to the build grid for a footprint of
+/// `footprintSquares` ogrids along that axis: even footprints land on grid lines, odd ones on
+/// cell centres. A footprint of zero (unread) is treated as one.
+[[nodiscard]] Fx snapToBuildGrid(Fx centre, int footprintSquares) noexcept;
+
 
 // The ground, as the sim sees it: fixed point in, fixed point out.
 //
@@ -42,10 +62,19 @@ public:
     explicit Terrain(const HeightField& field, bool hasWater = false,
                      float waterLevelElmos = 0.0f,
                      const MaxHeightPyramid* lookAhead = nullptr,
-                     std::span<const ResourceDeposit> deposits = {}) noexcept;
+                     std::span<const ResourceDeposit> deposits = {},
+                     PlacementMode placement = PlacementMode::Grid) noexcept;
 
     [[nodiscard]] bool resourceSitePlaceable(unitdef::BuildRestriction restriction,
                                              Fx x, Fx z) const noexcept;
+
+    [[nodiscard]] PlacementMode placement() const noexcept { return placement_; }
+
+    /// The site a structure order at (`x`, `z`) actually claims: the coordinate itself in
+    /// Free mode; in Grid mode the footprint-aligned grid point, except that a deposit-bound
+    /// structure keeps the deposit's own centre, which is authoritative.
+    [[nodiscard]] std::array<Fx, 2> buildSite(const unitdef::UnitDef& def, Fx x,
+                                              Fx z) const noexcept;
 
     /// The height at a grid corner, clamped at the edges.
     ///
@@ -101,6 +130,7 @@ private:
     [[nodiscard]] Fx decodeRaw(std::uint16_t raw) const noexcept;
 
     std::span<const ResourceDeposit> deposits_;
+    PlacementMode placement_ = PlacementMode::Grid;
     const HeightField* field_;
     const MaxHeightPyramid* lookAhead_ = nullptr;
     Fx baseHeight_;

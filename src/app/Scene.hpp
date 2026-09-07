@@ -176,9 +176,12 @@ struct UnitScene {
     /// scenes tests build, where the terrain view falls back to scanning corners.
     std::shared_ptr<const rm::MaxHeightPyramid> lookAhead;
     std::vector<rm::sim::ResourceDeposit> resourceDeposits;
+    /// Grid by default — the game's rule; `--placement free` for the exact-coordinate mode.
+    rm::sim::PlacementMode placementMode = rm::sim::PlacementMode::Grid;
 
     [[nodiscard]] rm::sim::Terrain terrain(const rm::HeightField& field) const noexcept {
-        return rm::sim::Terrain{field, hasWater, waterLevelElmos, lookAhead.get(), resourceDeposits};
+        return rm::sim::Terrain{field, hasWater, waterLevelElmos, lookAhead.get(), resourceDeposits,
+                                placementMode};
     }
 
     /// How much to scale each type's mesh by, from its blueprint's `meshToElmos`.

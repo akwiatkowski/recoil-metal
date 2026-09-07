@@ -158,7 +158,7 @@ void advanceDefeatCleanup(UnitStore& store, const UnitCatalog& catalog, Match& m
 /// mode of getting that wrong is an economy that drifts over a long match with nothing
 /// pointing at when it started.
 void recomputeIncome(const UnitStore& store, const UnitCatalog& catalog, Match& match,
-                     TickRate rate) {
+                     TickRate rate, const Terrain& terrain) {
     // The commander's trickle, per tick. Computed once for the whole pass rather than per
     // commander: it is the same number for all of them.
     const Resources trickle{
@@ -171,7 +171,9 @@ void recomputeIncome(const UnitStore& store, const UnitCatalog& catalog, Match& 
     // recomputed like the income itself — a structure that died in step 3 takes its
     // bonuses with it in the same tick its production stops.
     std::vector<AdjacencyEffects> adjacency;
-    adjacencyEffects(store, catalog, adjacency);
+    // Grid placement meets exactly; free placement keeps the half-ogrid slack (C-074).
+    adjacencyEffects(store, catalog, adjacency,
+                     terrain.placement() == PlacementMode::Grid ? Fx{} : kAdjacencyGapElmos);
     if (match.resourceFlows) match.resourceFlows->assign(store.slotCount(), {});
 
     for (Economy& economy : match.economies) {
@@ -576,7 +578,7 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
     //    and running before `tickEconomy` means this tick's haul meets this tick's storage
     //    cap — reclaiming over a full mass bar overflows and is lost, the same rule as
     //    every other income (`core/sim/Reclaim.hpp`).
-    recomputeIncome(store, catalog, match, rate);
+    recomputeIncome(store, catalog, match, rate, terrain);
     if (match.features != nullptr) {
         (void)harvestReclaim(store, catalog, *match.features, match.economies);
         (void)applyGuardReclaim(store, catalog, *match.features, match.economies, guardWork);

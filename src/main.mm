@@ -233,6 +233,8 @@ int main(int argc, const char* argv[]) {
             // AFTER the alliances are grouped: the grids are per alliance, and one sized
             // for the wrong count would leave a side with nowhere to see.
             configureIntel(units, map->field, parseVisionStyle(argc, argv));
+            // Structures snap to the build grid unless `--placement free` asks otherwise.
+            units.placementMode = parsePlacementMode(argc, argv);
 
             // A `--units` crowd spawned before there were armies to spawn into, so it belongs
             // to nobody and nothing can select it. Hand it to the seated player now that there

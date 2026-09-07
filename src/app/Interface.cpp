@@ -218,6 +218,20 @@ std::array<float, 2> snapResourceSite(const UnitScene& scene, rm::UnitTypeIndex 
     return result;
 }
 
+std::array<float, 2> snapBuildSite(const UnitScene& scene, rm::UnitTypeIndex type,
+                                   std::array<float, 2> at) {
+    const auto snapped = snapResourceSite(scene, type, at);
+    const auto* def = scene.catalog.def(type);
+    if (!def || scene.placementMode == rm::sim::PlacementMode::Free
+        || def->buildRestriction != rm::unitdef::BuildRestriction::None) {
+        return snapped;
+    }
+    return {rm::sim::fxToFloat(rm::sim::snapToBuildGrid(rm::sim::fxFromFloat(snapped[0]),
+                                                        def->footprintSquaresX)),
+            rm::sim::fxToFloat(rm::sim::snapToBuildGrid(rm::sim::fxFromFloat(snapped[1]),
+                                                        def->footprintSquaresZ))};
+}
+
 void appendMinimapPips(std::vector<rm::ui::MinimapPip>& out, const UnitScene& scene) {
     out.clear();
     out.reserve(scene.snapshotCurrent.size() + scene.resourceDeposits.size());

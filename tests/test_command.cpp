@@ -47,7 +47,9 @@ namespace {
 /// A match with two armies, one unit each, and one player driving each.
 struct Fixture {
     rm::HeightField field = flatField();
-    rm::sim::Terrain terrain{field};
+    // Free placement: these cases reason about exact order coordinates; the grid rule has
+    // its own tests ([placement]).
+    rm::sim::Terrain terrain{field, false, 0.0f, nullptr, {}, rm::sim::PlacementMode::Free};
     rm::sim::PassabilityGrid grid = rm::sim::buildPassability(field, 0.0f);
     rm::test::Roster roster;
     std::vector<rm::sim::Army> armies = rm::sim::freeForAll(2);

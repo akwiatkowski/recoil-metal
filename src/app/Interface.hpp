@@ -52,6 +52,12 @@ void appendResourceDeposits(std::vector<rm::DecalVertex>& out, const UnitScene& 
 [[nodiscard]] std::array<float, 2> snapResourceSite(const UnitScene& scene,
     rm::UnitTypeIndex type, std::array<float, 2> at);
 
+/// Where a structure order at `at` will actually stand: the deposit centre for deposit-bound
+/// structures, otherwise the build grid point in Grid mode or `at` itself in Free mode. The
+/// same rule the sim applies at command intake, so the ghost never disagrees with the order.
+[[nodiscard]] std::array<float, 2> snapBuildSite(const UnitScene& scene, rm::UnitTypeIndex type,
+                                                 std::array<float, 2> at);
+
 void appendMinimapPips(std::vector<rm::ui::MinimapPip>& out, const UnitScene& scene);
 
 /// Which unit the panel is showing the options OF.

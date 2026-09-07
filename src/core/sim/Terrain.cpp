@@ -6,10 +6,30 @@
 
 namespace rm::sim {
 
+Fx snapToBuildGrid(Fx centre, int footprintSquares) noexcept {
+    // Even footprints centre on a grid line, odd ones on a cell centre: a 2-wide structure
+    // spans two whole cells, a 1-wide one sits inside one. Rounding is to the nearest such
+    // point, computed on the raw fixed-point words so negative coordinates floor correctly.
+    const std::int64_t pitch = kBuildGridElmos.raw();
+    const std::int64_t half = (std::max(footprintSquares, 1) % 2 == 1) ? pitch / 2 : 0;
+    const std::int64_t shifted = static_cast<std::int64_t>(centre.raw()) - half + pitch / 2;
+    std::int64_t cells = shifted / pitch;
+    if (shifted < 0 && shifted % pitch != 0) --cells;  // floor, not truncation
+    return Fx::fromRaw(static_cast<std::int32_t>(cells * pitch + half));
+}
+
+std::array<Fx, 2> Terrain::buildSite(const unitdef::UnitDef& def, Fx x, Fx z) const noexcept {
+    if (placement_ == PlacementMode::Free
+        || def.buildRestriction != unitdef::BuildRestriction::None) {
+        return {x, z};  // free mode, or a deposit whose own centre is the site
+    }
+    return {snapToBuildGrid(x, def.footprintSquaresX), snapToBuildGrid(z, def.footprintSquaresZ)};
+}
+
 Terrain::Terrain(const HeightField& field, bool hasWater, float waterLevelElmos,
                  const MaxHeightPyramid* lookAhead,
-                 std::span<const ResourceDeposit> deposits) noexcept
-    : deposits_(deposits), field_(&field),
+                 std::span<const ResourceDeposit> deposits, PlacementMode placement) noexcept
+    : deposits_(deposits), placement_(placement), field_(&field),
       lookAhead_(lookAhead),
       baseHeight_(fxFromFloat(field.baseHeight)),
       hasWater_(hasWater),

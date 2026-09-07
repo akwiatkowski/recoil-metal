@@ -1268,7 +1268,7 @@ int runWindowed(const Session& session) {
                 armedOption.reset();
                 return;
             }
-            const auto snapped = snapResourceSite(units, *type, {at.x, at.z});
+            const auto snapped = snapBuildSite(units, *type, {at.x, at.z});
             at.x = snapped[0];
             at.z = snapped[1];
             // THE PLACEMENT REPORTS EITHER WAY. Until construction has a body in the world
@@ -2609,7 +2609,7 @@ int runWindowed(const Session& session) {
                 std::optional<simd_float3> at = rm::pickGround(under, map->field);
                 if (at) {
                     if (const auto type = resolveBuildable(units, content, armedPath())) {
-                        const auto snapped = snapResourceSite(units, *type, {at->x, at->z});
+                        const auto snapped = snapBuildSite(units, *type, {at->x, at->z});
                         at->x = snapped[0];
                         at->z = snapped[1];
                         at->y = map->field.heightAtWorld(at->x, at->z);

@@ -3,7 +3,7 @@
 namespace rm::sim {
 
 bool skirtsShareEdge(Fx ax, Fx az, Fx aHalfX, Fx aHalfZ, Fx bx, Fx bz, Fx bHalfX,
-                     Fx bHalfZ) noexcept {
+                     Fx bHalfZ, Fx tolerance) noexcept {
     const Fx dx = ax > bx ? ax - bx : bx - ax;
     const Fx dz = az > bz ? az - bz : bz - az;
     const Fx reachX = aHalfX + bHalfX;
@@ -12,14 +12,16 @@ bool skirtsShareEdge(Fx ax, Fx az, Fx aHalfX, Fx aHalfZ, Fx bx, Fx bz, Fx bHalfX
     // Touching along X (side by side): the x-gap is within tolerance of the two halves
     // meeting, and the z-intervals genuinely overlap — an edge, not a corner. And the
     // mirror case. Overlapping rects count too: free placement allows them, and a
-    // structure standing ON the apron is no less adjacent than one beside it.
-    const bool sideBySide = dx <= reachX + kAdjacencyGapElmos && dz < reachZ;
-    const bool endToEnd = dz <= reachZ + kAdjacencyGapElmos && dx < reachX;
+    // structure standing ON the apron is no less adjacent than one beside it. Grid
+    // placement passes a ZERO tolerance: there the edges meet exactly or not at all, which
+    // is retail's rule (C-074) and the reason the slack existed only for free placement.
+    const bool sideBySide = dx <= reachX + tolerance && dz < reachZ;
+    const bool endToEnd = dz <= reachZ + tolerance && dx < reachX;
     return sideBySide || endToEnd;
 }
 
 void adjacencyEffects(const UnitStore& store, const UnitCatalog& catalog,
-                      std::vector<AdjacencyEffects>& out) {
+                      std::vector<AdjacencyEffects>& out, Fx tolerance) {
     out.assign(store.slotCount(), AdjacencyEffects{});
 
     // The participants, gathered once: alive, skirted. A few dozen in a real match.
@@ -61,7 +63,7 @@ void adjacencyEffects(const UnitStore& store, const UnitCatalog& catalog,
             }
             if (!skirtsShareEdge(a.x, a.z, a.info->skirtHalfXElmos, a.info->skirtHalfZElmos,
                                  b.x, b.z, b.info->skirtHalfXElmos,
-                                 b.info->skirtHalfZElmos)) {
+                                 b.info->skirtHalfZElmos, tolerance)) {
                 continue;
             }
             if (b.info->receives) {

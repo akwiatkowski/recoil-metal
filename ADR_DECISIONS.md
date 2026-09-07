@@ -3436,3 +3436,24 @@ bank. The layout was measured on retail bytes rather than taken from a specifica
 anything the walk does not recognise ends that cue's list rather than failing the bank. Not
 interpreted: pitch and volume ranges, RPC curves, categories, instance limits, `LodCutoff`
 distances, loops.
+
+## ADR-107 — Structures snap to the build grid by default; free placement stays a flag
+
+**Context.** Structures were placed at the exact click. Supreme Commander sites them on the
+one-ogrid build grid so skirts abut exactly and adjacency bonuses are a matter of placement;
+this engine's adjacency carried a half-ogrid slack and counted overlap as contact only
+because nothing snapped (C-074). Retail deposits sit at half-ogrid centres.
+
+**Decision.** `PlacementMode { Grid, Free }` on the sim's `Terrain`, Grid by default, set by
+`--placement grid|free`. The snap is applied ONCE, at command intake, for every structure
+order whatever its source — the click, the panel, the AI, a replayed log — so the queue, the
+finished-work match and the construction row all hold the same site; the ghost preview calls
+the same rule. An even footprint centres on a grid line, an odd one on a cell centre;
+deposit-bound structures keep the deposit centre. In Grid mode adjacency uses a zero
+tolerance. Mobile products site at their factory and are untouched.
+
+**Alternatives and consequences.** Snapping in the UI alone would leave the AI and the panel
+path unsnapped and make replays depend on the client. Validating alignment instead of snapping
+would turn misaligned AI orders into refusals. Retail's exact snap rule was not read from the
+executable; the footprint parity rule matches the deposit positions and the skirt geometry the
+repo already records. Fixtures that hand-place structures for other mechanics pin Free mode.

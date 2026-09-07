@@ -990,7 +990,32 @@ bool ApplyCommandResult::acceptedUnit(UnitId unit) const noexcept {
     return std::ranges::find(accepted, unit) != accepted.end();
 }
 
-ApplyCommandResult applyCommand(const CommandIssue& issue, UnitStore& store,
+namespace {
+
+/// A structure order's site on the build grid, applied ONCE at intake so the queue, the
+/// replayed log, the finished-work match and every downstream consumer agree on the site the
+/// order claims. Mobile products site at their factory and are left alone; deposit-bound
+/// structures keep the deposit centre (`Terrain::buildSite`).
+template <typename Order>
+[[nodiscard]] Order onBuildGrid(const Order& order, const UnitCatalog& catalog,
+                                const Terrain& terrain) {
+    if (order.kind != CommandKind::Build) {
+        return order;
+    }
+    const unitdef::UnitDef* def = catalog.def(order.buildType);
+    if (def == nullptr || def->isMobile()) {
+        return order;
+    }
+    Order snapped = order;
+    const std::array<Fx, 2> site = terrain.buildSite(*def, order.targetX, order.targetZ);
+    snapped.targetX = site[0];
+    snapped.targetZ = site[1];
+    return snapped;
+}
+
+} // namespace
+
+ApplyCommandResult applyCommand(const CommandIssue& issued, UnitStore& store,
                                 const UnitCatalog& catalog,
                                 std::span<const Player> players,
                                 std::span<const Army> armies, const Terrain& terrain,
@@ -998,6 +1023,7 @@ ApplyCommandResult applyCommand(const CommandIssue& issue, UnitStore& store,
                                  std::vector<Construction>* building, EventQueue* events,
                                  const FeatureStore* features, PathService* pathService,
                                  ScriptTaskHost* scriptTasks) {
+    const CommandIssue issue = onBuildGrid(issued, catalog, terrain);
     ApplyCommandResult result;
     if (!validCancellation(issue) || issue.source == kInvalidCommandSource || issue.id == kInvalidCommandId
         || issue.player != static_cast<PlayerIndex>(issue.source)
@@ -1188,12 +1214,13 @@ ApplyCommandResult applyCommand(const CommandIssue& issue, UnitStore& store,
     return result;
 }
 
-bool applyCommand(const Command& command, UnitStore& store, const UnitCatalog& catalog,
+bool applyCommand(const Command& ordered, UnitStore& store, const UnitCatalog& catalog,
                   std::span<const Player> players, std::span<const Army> armies,
                    const Terrain& terrain, const PassabilityGrid& grid, TickRate rate,
                    std::vector<Construction>* building, EventQueue* events,
                    const FeatureStore* features, PathService* pathService,
                    ScriptTaskHost* scriptTasks) {
+    const Command command = onBuildGrid(ordered, catalog, terrain);
     if (command.player >= static_cast<PlayerIndex>(kInvalidCommandSource)
         || command.kind == CommandKind::Script) {
         return false;

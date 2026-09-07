@@ -51,7 +51,9 @@ namespace {
 
 struct Fixture {
     rm::HeightField field = flatField();
-    rm::sim::Terrain terrain{field};
+    // Free placement, deliberately: these cases probe the half-ogrid slack and skirt offsets
+    // at hand-chosen coordinates. Grid mode's zero tolerance is tested on skirtsShareEdge.
+    rm::sim::Terrain terrain{field, false, 0.0f, nullptr, {}, rm::sim::PlacementMode::Free};
     rm::test::Roster roster;
     std::vector<rm::sim::Army> armies = rm::sim::freeForAll(2);
     std::vector<rm::sim::Economy> economies{2};
@@ -88,6 +90,11 @@ TEST_CASE("skirts share an edge, not a corner, and free placement gets its slack
     // Overlapping counts: standing ON the apron is no less adjacent than beside it.
     CHECK(rm::sim::skirtsShareEdge(Fx::fromInt(100), Fx::fromInt(100), eight, eight,
                                    Fx::fromInt(108), Fx::fromInt(100), eight, eight));
+    // Grid placement: zero tolerance. Exact contact counts, the half-ogrid slack does not.
+    CHECK(rm::sim::skirtsShareEdge(Fx::fromInt(100), Fx::fromInt(100), eight, eight,
+                                   Fx::fromInt(116), Fx::fromInt(100), eight, eight, Fx{}));
+    CHECK_FALSE(rm::sim::skirtsShareEdge(Fx::fromInt(100), Fx::fromInt(100), eight, eight,
+                                         Fx::fromInt(119), Fx::fromInt(100), eight, eight, Fx{}));
 }
 
 TEST_CASE("an FA skirt rectangle starts at footprint plus its offset") {

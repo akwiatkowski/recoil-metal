@@ -164,6 +164,9 @@ struct WindowOptions {
 /// rendering-adjacent flag should not stop a match starting.
 [[nodiscard]] rm::sim::VisionStyle parseVisionStyle(int argc, const char* argv[]);
 
+/// `--placement grid|free`: how structures are sited. Grid, the game's rule, is the default.
+[[nodiscard]] rm::sim::PlacementMode parsePlacementMode(int argc, const char* argv[]);
+
 /// `--factions uef,seraphim,...`: which faction each army plays, in seat order, cycled over
 /// more armies than names. Empty — flag absent, or nothing parsed — keeps the round-robin
 /// default. Unknown names are reported and skipped: seating the wrong faction is a worse

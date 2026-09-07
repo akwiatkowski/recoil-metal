@@ -40,7 +40,8 @@ inline constexpr Fx kAdjacencyGapElmos = Fx::fromInt(4);
 /// original's own beam code handles only the two edge cases, and a corner shares no
 /// concrete to run a cable across.
 [[nodiscard]] bool skirtsShareEdge(Fx ax, Fx az, Fx aHalfX, Fx aHalfZ, Fx bx, Fx bz,
-                                   Fx bHalfX, Fx bHalfZ) noexcept;
+                                   Fx bHalfX, Fx bHalfZ,
+                                   Fx tolerance = kAdjacencyGapElmos) noexcept;
 
 /// Every unit's multipliers this tick, indexed by slot. `out` is resized and reset —
 /// caller-owned so the per-tick call reuses one allocation.
@@ -48,7 +49,10 @@ inline constexpr Fx kAdjacencyGapElmos = Fx::fromInt(4);
 /// Additive stacking, the original's: each adjacent giver ADDS its grant for the
 /// receiver's size row, the sum lands on 1, and nothing caps it but geometry
 /// (`Buff.lua:140-190`, `Stacks = 'ALWAYS'`). Same-army pairs only, both alive.
+///
+/// `tolerance` is the edge-contact slack: `kAdjacencyGapElmos` under free placement, zero
+/// under grid placement where skirts meet exactly (`Terrain::placement`).
 void adjacencyEffects(const UnitStore& store, const UnitCatalog& catalog,
-                      std::vector<AdjacencyEffects>& out);
+                      std::vector<AdjacencyEffects>& out, Fx tolerance = kAdjacencyGapElmos);
 
 } // namespace rm::sim

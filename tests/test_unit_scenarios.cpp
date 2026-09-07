@@ -1187,6 +1187,66 @@ TEST_CASE("queued building placements preserve work and complete in click order"
     CHECK(job.scene.store.liveCount() == 3);
 }
 
+TEST_CASE("structure orders snap to the build grid by default, and not under free placement",
+          "[corpus][build-queue][placement]") {
+    // The game's rule: an even footprint centres on a grid line, an odd one on a cell centre.
+    // Snapping happens once, at intake, so the construction row IS the snapped site.
+    const auto root = corpusRoot();
+    if (!std::filesystem::is_directory(root)) SKIP("retail corpus unavailable");
+    const auto engineer = rm::unitbp::loadFile(root / "UEL0105/UEL0105_unit.bp");
+    const auto generator = rm::unitbp::loadFile(root / "UEB1101/UEB1101_unit.bp");
+    REQUIRE(engineer);
+    REQUIRE(generator);
+    REQUIRE(generator->footprintSquaresX > 0);
+    const auto click = std::array{rm::sim::fxFromFloat(341.3f), rm::sim::fxFromFloat(299.7f)};
+    const auto expectGrid = std::array{
+        rm::sim::snapToBuildGrid(click[0], generator->footprintSquaresX),
+        rm::sim::snapToBuildGrid(click[1], generator->footprintSquaresZ)};
+    // The rule itself, on both parities.
+    CHECK(rm::sim::snapToBuildGrid(rm::sim::fxFromFloat(341.3f), 2) == rm::sim::Fx::fromInt(344));
+    CHECK(rm::sim::snapToBuildGrid(rm::sim::fxFromFloat(299.7f), 2) == rm::sim::Fx::fromInt(296));
+    CHECK(rm::sim::snapToBuildGrid(rm::sim::fxFromFloat(341.3f), 1) == rm::sim::Fx::fromInt(340));
+    CHECK(rm::sim::snapToBuildGrid(rm::sim::fxFromFloat(299.7f), 3) == rm::sim::Fx::fromInt(300));
+    CHECK(rm::sim::snapToBuildGrid(rm::sim::fxFromFloat(-3.0f), 2) == rm::sim::Fx::fromInt(0));
+    CHECK(rm::sim::snapToBuildGrid(rm::sim::fxFromFloat(-5.0f), 2) == rm::sim::Fx::fromInt(-8));
+
+    const auto run = [&](rm::sim::PlacementMode mode) {
+        Scenario job;
+        job.scene.placementMode = mode;
+        const auto builder = job.spawn(*engineer, 300, 300);
+        const auto type = job.registerType(*generator);
+        job.scene.economies[0].stored = {rm::sim::Mag::fromInt(650), rm::sim::Mag::fromInt(5000)};
+        auto runner = job.runner();
+        REQUIRE(rm::app::issueBuild(job.scene, builder, 0, 0, type, click[0], click[1]));
+        for (int tick = 0; tick < 10; ++tick) (void)rm::app::advanceMatch(runner, tick, 0);
+        REQUIRE(job.scene.building.size() == 1);
+        return std::array{job.scene.building.front().position[0],
+                          job.scene.building.front().position[2]};
+    };
+    SECTION("grid") {
+        const auto site = run(rm::sim::PlacementMode::Grid);
+        CHECK(site[0] == expectGrid[0]);
+        CHECK(site[1] == expectGrid[1]);
+        CHECK(site[0] != click[0]);
+    }
+    SECTION("free") {
+        const auto site = run(rm::sim::PlacementMode::Free);
+        CHECK(site[0] == click[0]);
+        CHECK(site[1] == click[1]);
+    }
+    SECTION("the ghost helper agrees with the sim") {
+        Scenario job;
+        (void)job.spawn(*engineer, 300, 300);
+        const auto type = job.registerType(*generator);
+        const auto ghost = rm::app::snapBuildSite(job.scene, type, {341.3f, 299.7f});
+        CHECK(rm::sim::fxFromFloat(ghost[0]) == expectGrid[0]);
+        CHECK(rm::sim::fxFromFloat(ghost[1]) == expectGrid[1]);
+        job.scene.placementMode = rm::sim::PlacementMode::Free;
+        const auto freeGhost = rm::app::snapBuildSite(job.scene, type, {341.3f, 299.7f});
+        CHECK(freeGhost[0] == 341.3f);
+    }
+}
+
 TEST_CASE("a build site taken during the approach stops the engineer or joins a colleague",
           "[corpus][build-queue]") {
     // The reported bug: an extractor ordered on a far deposit, the engineer walks there and
