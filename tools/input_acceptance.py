@@ -58,6 +58,8 @@ def main():
                 expected = 5 if factory == "XSB0101" else 6
                 if result.returncode or f"input acceptance: PASS {expected} products," not in text:
                     raise SystemExit(f"FAIL input acceptance; see {log}")
+                if text.count("selection and native right-click Move PASS") != 1:
+                    raise SystemExit(f"FAIL missing ACU acceptance evidence; see {log}")
                 if text.count("production, selection, Move, Shift queue, Stop, input swallowing PASS") != expected:
                     raise SystemExit(f"FAIL incomplete per-product evidence; see {log}")
                 if "production pagination, pending/active cancellation, Clear Queue PASS" not in text:

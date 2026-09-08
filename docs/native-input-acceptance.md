@@ -23,6 +23,12 @@ definitions, build times, terrain and every `MatchRunner` simulation stage retai
 their ordinary behavior. Waiting stages process twenty ordinary beats per frame;
 this accelerates wall-clock pacing without modifying construction or movement rates.
 
+The run opens with the spawned commander: the driver finds the player ACU by its
+faction blueprint (`UEB0101` → `UEL0001`, and so for Aeon/Cybran/Seraphim),
+selects it with a native world click, orders it with an ordinary right-click 80
+elmos away, and waits until it has visibly moved 12 elmos. This is the exact
+player-ready flow the 2026-08-24 rejection named.
+
 For every product of that factory, the driver clicks its build cell, waits for
 production to finish, selects it in the world, clicks Move, observes movement,
 uses Shift-right to append a waypoint, clicks an unimplemented rack slot to check

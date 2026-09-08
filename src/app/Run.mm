@@ -2882,6 +2882,9 @@ int runWindowed(const Session& session) {
         std::vector<std::string> inputProducts;
         rm::sim::UnitId inputFactory{}, inputProduct{}, inputAttackTarget{};
         std::string inputGenerator;
+        rm::sim::UnitId inputAcu{};
+        std::string inputAcuName;
+        rm::sim::Transform acuMoveStarted{};
         rm::sim::Transform moveStarted{};
         std::vector<rm::sim::UnitId> beforeProduct;
         std::vector<rm::sim::UnitId> beforeGenerator;
@@ -3074,6 +3077,41 @@ int runWindowed(const Session& session) {
                     std::printf("input acceptance: %.0fx%.0f logical points, simulated %.1fx backing, %zu products\n",
                         viewport.logicalExtent.width, viewport.logicalExtent.height,
                         viewport.backingScale, inputProducts.size());
+                    nextInputStage(30);
+                } else if (inputStage == 30) {
+                    // The spawned commander's first order goes through the same native
+                    // path as every later one: a world click selects it, an ordinary
+                    // right-click moves it, and the run waits until it has visibly moved.
+                    if (inputAcu.generation == 0) {
+                        const auto* factoryDef =
+                            units.catalog.def(units.store.typeAt(inputFactory.index));
+                        inputCheck(factoryDef != nullptr, "acceptance factory lost its definition");
+                        inputAcuName = uppercase(factoryDef->name).substr(0, 2) + "L0001";
+                        for (rm::UnitIndex slot = 0; slot < units.store.slotCount(); ++slot) {
+                            if (!units.store.slotAlive(slot)) continue;
+                            const auto* def = units.catalog.def(units.store.typeAt(slot));
+                            if (def == nullptr || uppercase(def->name) != inputAcuName
+                                || units.armyOf(slot) != units.playerArmy) continue;
+                            inputAcu = units.store.idAt(slot);
+                            break;
+                        }
+                        inputCheck(inputAcu.generation != 0, "skirmish spawned no player ACU to order");
+                    }
+                    if (!inputSelect(inputAcu)) return;
+                    acuMoveStarted = units.store.transforms()[inputAcu.index];
+                    const auto before = units.commandInput.size();
+                    inputWorldClick(acuMoveStarted.x + rm::sim::Fx::fromInt(80), acuMoveStarted.z,
+                                    rm::MouseButton::Right);
+                    inputCheck(units.commandInput.size() == before + 1,
+                               "native right click did not move the spawned ACU");
+                    expectInputCommand(rm::sim::CommandKind::Move, inputAcu);
+                    nextInputStage(31);
+                } else if (inputStage == 31) {
+                    const auto& at = units.store.transforms()[inputAcu.index];
+                    if (rm::sim::fxHypot(at.x - acuMoveStarted.x, at.z - acuMoveStarted.z)
+                        < rm::sim::Fx::fromInt(12)) return;
+                    std::printf("input acceptance: %s selection and native right-click Move PASS\n",
+                                inputAcuName.c_str());
                     nextInputStage(12);
                 } else if (inputStage == 1) {
                     inputCheck(activeBuilder == inputFactory, "factory selection did not expose its build tray");
