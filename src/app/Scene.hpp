@@ -13,6 +13,7 @@
 // recorded here rather than left as a diff.
 
 #include "app/Content.hpp"
+#include "core/sim/Enhancement.hpp"
 
 #include "core/data/Opening.hpp"
 #include "core/data/MoveDef.hpp"
@@ -148,6 +149,10 @@ struct UnitScene {
     // EVERY UNIT, flat, addressed by handle. Was three parallel deques of per-batch
     // vectors — `instances[batch][i]`, `motion[batch][i]`, `health[batch][i]` — which made
     // a unit's identity its position in a draw call (PLAN2.md §1.1).
+    // Created after scene construction, once its address is stable. These precede the
+    // store so command queues can destroy their tasks while host and work still exist.
+    std::vector<rm::sim::EnhancementWork> enhancementWork;
+    std::unique_ptr<rm::sim::EnhancementTasks> enhancementTasks;
     rm::sim::UnitStore store;
 
     /// Silo-build components are distinct from units, matching CAiSiloBuildImpl (`C-081`).
@@ -902,6 +907,10 @@ public:
     PassabilitySet(const rm::HeightField& field, bool hasWater, float waterLevel)
         : field_{&field}, hasWater_{hasWater}, waterLevel_{waterLevel} {}
 
+    [[nodiscard]] bool matches(const rm::HeightField& field, bool hasWater, float waterLevel) const noexcept {
+        return field_==&field && hasWater_==hasWater && waterLevel_==waterLevel;
+    }
+
     [[nodiscard]] const rm::sim::PassabilityGrid& gridFor(float slopeDegrees, float depthElmos) {
         const auto key = std::make_pair(slopeDegrees, depthElmos);
         const auto existing = grids_.find(key);
@@ -933,7 +942,11 @@ public:
         if (type >= scene.moveDefForType.size()) {
             return empty_;
         }
-        const rm::data::MoveDef& move = scene.moveDefForType[type];
+        return gridFor(scene.moveDefForType[type]);
+    }
+
+    /// Unregistered AI construction candidates use the same movement-domain cache.
+    [[nodiscard]] const rm::sim::PassabilityGrid& gridFor(const rm::data::MoveDef& move) {
         if (move.usesSurfaceWaterGrid) {
             if (!hasWater_) {
                 return empty_;

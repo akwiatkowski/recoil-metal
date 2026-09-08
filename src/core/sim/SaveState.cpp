@@ -37,6 +37,7 @@ constexpr std::uint32_t kVersion16 = 16;
 /// was already written, only the range a reader accepts widened.
 constexpr std::uint32_t kVersion17 = 17;
 constexpr std::uint32_t kVersion18 = 18;
+constexpr std::uint32_t kVersion19 = 19;
 // MT19937 serializes its 624 state words plus an index, all as unsigned decimal numbers separated
 // by one space. This rejects oversized malformed frames before they allocate their payload.
 constexpr std::size_t kMaxRandomStatePayload =
@@ -403,6 +404,74 @@ void writeSiloAmmo(PayloadWriter& w, std::span<const SiloAmmo> ammo) {
         w.i64(value.costPerTick.mass.raw()); w.i64(value.costPerTick.energy.raw());
         w.i64(value.delivered.mass.raw()); w.i64(value.delivered.energy.raw());
     }
+}
+
+void writeInstalledEnhancements(PayloadWriter& w, const UnitStore::Snapshot& units) {
+    w.count(static_cast<std::size_t>(std::count_if(units.enhancements.begin(), units.enhancements.end(),
+        [](const auto& slots) { return !slots.empty(); })));
+    for (std::size_t unit = 0; unit < units.enhancements.size(); ++unit) {
+        const auto& slots = units.enhancements[unit];
+        if (slots.empty()) continue;
+        w.u32(static_cast<std::uint32_t>(unit));
+        w.count(slots.size());
+        for (const auto& [slot, name] : slots) { w.text(slot); w.text(name); }
+    }
+}
+bool readInstalledEnhancements(PayloadReader& r, UnitStore::Snapshot& units) {
+    std::size_t count{};
+    if (!r.count(count, 8) || count > units.transforms.size()) return false;
+    if (count != 0) units.enhancements.resize(units.transforms.size());
+    for (std::size_t entry = 0; entry < count; ++entry) {
+        std::uint32_t unit{};
+        std::size_t slots{};
+        if (!r.u32(unit) || unit >= units.enhancements.size() || !r.count(slots, 8)
+            || slots == 0 || !units.enhancements[unit].empty()) return false;
+        for (std::size_t item = 0; item < slots; ++item) {
+            std::string slot, name;
+            if (!r.text(slot) || !r.text(name) || slot.empty() || name.empty()
+                || !units.enhancements[unit].emplace(std::move(slot), std::move(name)).second) return false;
+        }
+    }
+    return true;
+}
+
+void writeEnhancements(PayloadWriter& w, std::span<const EnhancementWork> work) {
+    w.count(work.size());
+    for (const auto& value : work) {
+        writeId(w, value.owner);
+        w.text(value.name);
+        writeResources(w, value.cost);
+        w.i64(value.totalBuildTime.raw());
+        w.i64(value.buildTimeRemaining.raw());
+        w.i64(value.buildPerTick.raw());
+        writeResources(w, value.allocated);
+        w.i32(value.fundedLastTick.raw());
+        w.u8(value.paused ? 1 : 0);
+    }
+}
+
+bool readEnhancements(PayloadReader& r, std::vector<EnhancementWork>& work) {
+    std::size_t count{};
+    if (!r.count(count, 1)) return false;
+    work.resize(count);
+    for (auto& value : work) {
+        std::int64_t total{}, remaining{}, rate{};
+        std::int32_t funded{};
+        std::uint8_t paused{};
+        if (!readId(r, value.owner) || !r.text(value.name)
+            || !readResources(r, value.cost) || !r.i64(total) || !r.i64(remaining)
+            || !r.i64(rate) || !readResources(r, value.allocated) || !r.i32(funded)
+            || !r.u8(paused) || paused > 1 || total <= 0 || remaining < 0 || remaining > total
+            || rate <= 0 || funded < 0 || funded > kFxOne.raw()
+            || value.cost.mass < Mag{} || value.cost.energy < Mag{}
+            || value.allocated.mass < Mag{} || value.allocated.energy < Mag{}) return false;
+        value.totalBuildTime = Mag::fromRaw(total);
+        value.buildTimeRemaining = Mag::fromRaw(remaining);
+        value.buildPerTick = Mag::fromRaw(rate);
+        value.fundedLastTick = Fx::fromRaw(funded);
+        value.paused = paused != 0;
+    }
+    return true;
 }
 
 void writeRedirects(PayloadWriter& w, std::span<const MissileRedirect> redirects) {
@@ -889,6 +958,10 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
     if (version >= kVersion15) writeEconomyArmies(payloadWriter, state.economyArmies);
     if (version >= kVersion16) writeAirController(payloadWriter, state.units.motion);
     if (version >= kVersion18) writeSubMotion(payloadWriter, state.units.motion);
+    if (version >= kVersion19) {
+        writeEnhancements(payloadWriter, state.enhancements);
+        writeInstalledEnhancements(payloadWriter, state.units);
+    }
     const std::vector<std::byte> payload = payloadWriter.take();
     if (payload.size() > std::numeric_limits<std::uint32_t>::max()) {
         throw std::length_error("MT19937 state exceeds the v1 save-state payload limit");
@@ -923,7 +996,8 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
                && version != kVersion7 && version != kVersion8 && version != kVersion9
                && version != kVersion10 && version != kVersion11 && version != kVersion12
                && version != kVersion13 && version != kVersion14 && version != kVersion15
-               && version != kVersion16 && version != kVersion17 && version != kVersion18)
+               && version != kVersion16 && version != kVersion17 && version != kVersion18
+               && version != kVersion19)
         || (requiredVersion && version != *requiredVersion) || !readU64(bytes, offset, tick)
         || !readU32(bytes, offset, payloadSize) || bytes.size() - offset != payloadSize) {
         return std::nullopt;
@@ -966,12 +1040,16 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
     if (version >= kVersion15 && !readEconomyArmies(reader, economyArmies)) return std::nullopt;
     if (version >= kVersion16 && !readAirController(reader, units.motion)) return std::nullopt;
     if (version >= kVersion18 && !readSubMotion(reader, units.motion)) return std::nullopt;
+    std::vector<EnhancementWork> enhancements;
+    if (version >= kVersion19 && (!readEnhancements(reader, enhancements)
+        || !readInstalledEnhancements(reader, units))) return std::nullopt;
     if (!reader.finished()) return std::nullopt;
     SaveState decoded{.tick = tick,
                       .random = std::move(random),
                        .pathServiceBeats = pathServiceBeats,
                        .units = std::move(units), .siloAmmo = std::move(siloAmmo),
-                       .redirects = std::move(redirects), .economyArmies = std::move(economyArmies)};
+                       .redirects = std::move(redirects), .economyArmies = std::move(economyArmies),
+                       .enhancements = std::move(enhancements)};
     // One binary representation per state rejects alternate encodings and trailing data.
     const std::vector<std::byte> canonical = encode(decoded, version);
     if (canonical.size() != bytes.size()
@@ -996,7 +1074,7 @@ std::optional<SaveState> SaveState::decodeV2(std::span<const std::byte> bytes) {
 }
 
 std::vector<std::byte> SaveState::encode(const SaveState& state) {
-    return rm::sim::encode(state, kVersion18);
+    return rm::sim::encode(state, kVersion19);
 }
 
 std::optional<SaveState> SaveState::decode(std::span<const std::byte> bytes) {

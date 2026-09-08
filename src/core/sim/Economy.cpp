@@ -4,6 +4,22 @@
 
 namespace rm::sim {
 
+Resources drainPerTick(const EnhancementWork& work) noexcept {
+    if (work.paused || work.finished() || work.totalBuildTime <= Mag{} || work.buildPerTick <= Mag{}) {
+        return {};
+    }
+    const Fx fraction = Fx::fromRaw(saturate(
+        (FxWide{work.buildPerTick.raw()} << kFxFractionalBits) / work.totalBuildTime.raw()));
+    return work.cost * fraction;
+}
+
+void advanceEnhancement(EnhancementWork& work) noexcept {
+    if (work.paused || work.finished()) return;
+    // EnhanceTask.lua:56–60. Completion stops active consumption before the next economy pass.
+    work.buildTimeRemaining = std::max(Mag{}, work.buildTimeRemaining
+        - std::max(Mag{}, work.buildPerTick) * work.fundedLastTick);
+}
+
 Resources drainPerTick(const Construction& work) noexcept {
     // The EFFECTIVE rate — founder plus assisters — throughout: help makes the work drain
     // faster as well as finish sooner, which is what `BuildRate` means and why piling
@@ -92,7 +108,8 @@ void advanceConstruction(Construction& work) noexcept {
 
 void tickEconomy(Economy& economy, std::span<Construction> building,
                   std::span<RepairWork> repairs, std::span<SiloAmmo> siloAmmo, bool deferOverflow,
-                  std::span<UnitResourceFlow> flows, int armyIndex) {
+                  std::span<UnitResourceFlow> flows, int armyIndex,
+                  std::span<EnhancementWork> enhancements) {
     // Clamp only what CARRIED IN. Reclaim currently credits `stored` directly before this
     // pass, so its over-cap excess is still lost rather than becoming a hidden reserve.
     economy.stored.mass = std::max(Mag{}, std::min(economy.stored.mass, economy.storage.mass));
@@ -152,6 +169,11 @@ void tickEconomy(Economy& economy, std::span<Construction> building,
     for (const RepairWork& repair : repairs) {
         wanted += repair.demand;
         bucket(repair.demand);
+    }
+    for (const EnhancementWork& work : enhancements) {
+        const Resources demand = drainPerTick(work);
+        wanted += demand;
+        bucket(outstanding(demand, work.allocated));
     }
     const auto autoBuilding = [&siloAmmo](const SiloAmmo& ammo) {
         if (!ammo.building()) return false;
@@ -272,6 +294,16 @@ void tickEconomy(Economy& economy, std::span<Construction> building,
         recordCharge(work.builder, {.mass = granted.mass - before.mass,
                                    .energy = granted.energy - before.energy});
         work.workedThisTick = false;
+    }
+    for (EnhancementWork& work : enhancements) {
+        if (work.paused || work.finished()) {
+            work.fundedLastTick = Fx{};
+            continue;
+        }
+        const Resources before = granted;
+        work.fundedLastTick = grantAndConsume(drainPerTick(work), work.allocated);
+        recordCharge(work.owner, {.mass = granted.mass - before.mass,
+                                 .energy = granted.energy - before.energy});
     }
     for (RepairWork& repair : repairs) {
         // Repairs have no carry-forward allocation: their live target can be healed, filled,

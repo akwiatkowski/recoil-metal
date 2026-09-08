@@ -75,6 +75,9 @@ struct Match {
     /// CAiSiloBuildImpl-shaped state, separate from UnitStore (`C-081`).
     std::vector<SiloAmmo>* siloAmmo = nullptr;
 
+    /// Continuous self-upgrade work; dispatch advances it, economy grants its resources.
+    std::vector<EnhancementWork>* enhancements = nullptr;
+
     /// Missile-redirector state, separate from UnitStore (`C-088`).
     std::vector<MissileRedirect>* redirects = nullptr;
 

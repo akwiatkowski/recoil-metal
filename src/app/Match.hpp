@@ -198,6 +198,8 @@ extern bool gPrintEvents;
 /// windowed loop call, and threading a parameter through both call chains would touch every
 /// caller to carry one bit that changes no signature's meaning.
 extern bool gFafOpponents;
+/// Explicit base template selected by --ai-personality, shared by all FAF armies.
+extern std::string gFafBaseTemplate;
 
 /// `--ai-log`: narrate the FAF opponents — every decision with the corpus builder that
 /// fired it, and the corpus's own LOG/WARN lines (normally counted and discarded). The

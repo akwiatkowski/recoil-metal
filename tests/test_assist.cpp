@@ -183,7 +183,12 @@ TEST_CASE("an assisted build advances at the combined rate, and drains for it") 
                              .energy = rm::sim::magFromFloat(1000.0f)};
 
     REQUIRE(f.build(founder, 205.0f, 200.0f));
-    REQUIRE(f.assist(helper, founder));
+    SECTION("explicit Assist") {
+        REQUIRE(f.assist(helper, founder));
+    }
+    SECTION("FAF manager assistance uses Guard") {
+        REQUIRE(f.apply(Command{.kind = CommandKind::Guard, .unit = helper, .target = founder}));
+    }
 
     // Ten ticks helped: 2 build units a tick, 20 of 100 done — where alone it would be 10.
     f.tick(10);

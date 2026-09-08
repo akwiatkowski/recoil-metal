@@ -140,7 +140,9 @@ int main(int argc, const char* argv[]) {
         gPrintEvents = hasFlag(argc, argv, "--print-events");
 
         // `--ai-faf`: FAF's own AI plays every army, through the sandbox (ADR-039).
-        gFafOpponents = hasFlag(argc, argv, "--ai-faf");
+        gFafBaseTemplate = parseFafBaseTemplate(argc, argv);
+        gFafOpponents = hasFlag(argc, argv, "--ai-faf")
+            || hasFlag(argc, argv, "--ai-personality");
 
         // `--ai-log`: narrate the FAF opponents' decisions and the corpus's own LOG lines.
         gFafLog = hasFlag(argc, argv, "--ai-log");

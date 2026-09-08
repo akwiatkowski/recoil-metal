@@ -19,6 +19,63 @@ using rm::sim::Construction;
 using rm::sim::Economy;
 using rm::sim::Resources;
 
+TEST_CASE("enhancement work competes for funding and consumes the previous tick grant",
+          "[economy][enhancement]") {
+    using namespace rm::sim;
+    Economy economy;
+    economy.storage = {Mag::fromInt(10000), Mag::fromInt(10000)};
+    economy.incomePerTick = {Mag::fromInt(5), Mag::fromInt(50)};
+    std::vector<EnhancementWork> upgrades{{
+        .owner = {.index=0,.generation=1},
+        .cost = {Mag::fromInt(160), Mag::fromInt(1600)},
+        .totalBuildTime = Mag::fromInt(16), .buildTimeRemaining = Mag::fromInt(16),
+        .buildPerTick = Mag::fromInt(1),
+    }};
+    std::vector<RepairWork> repairs{{.builder=1,.demand={Mag::fromInt(10), Mag::fromInt(100)}}};
+    advanceEnhancement(upgrades[0]);
+    CHECK(upgrades[0].buildTimeRemaining == Mag::fromInt(16));
+    tickEconomy(economy, {}, repairs, {}, false, {}, kNoArmy, upgrades);
+    CHECK(upgrades[0].fundedLastTick == Fx::fromRatio(1,4));
+    CHECK(repairs[0].funded == upgrades[0].fundedLastTick);
+    CHECK(economy.requestedLastTick.mass == Mag::fromInt(20));
+    CHECK(economy.usageLastTick.mass == Mag::fromInt(5));
+    advanceEnhancement(upgrades[0]);
+    CHECK(upgrades[0].buildTimeRemaining == Mag::fromInt(16) - Mag::fromInt(1) * Fx::fromRatio(1,4));
+    upgrades[0].paused = true;
+    const auto remaining = upgrades[0].buildTimeRemaining;
+    advanceEnhancement(upgrades[0]);
+    tickEconomy(economy, {}, repairs, {}, false, {}, kNoArmy, upgrades);
+    CHECK(upgrades[0].buildTimeRemaining == remaining);
+    CHECK(economy.requestedLastTick.mass == Mag::fromInt(10));
+    CHECK(upgrades[0].fundedLastTick == Fx{});
+}
+
+TEST_CASE("completed enhancement work stops billing and never advances unfunded",
+          "[economy][enhancement]") {
+    using namespace rm::sim;
+    Economy economy;
+    economy.storage = {Mag::fromInt(10000), Mag::fromInt(10000)};
+    std::vector<EnhancementWork> upgrades{{
+        .cost = {Mag::fromInt(8), Mag::fromInt(80)},
+        .totalBuildTime=Mag::fromInt(8), .buildTimeRemaining=Mag::fromInt(8),
+        .buildPerTick=Mag::fromInt(1),
+    }};
+    tickEconomy(economy, {}, {}, {}, false, {}, kNoArmy, upgrades);
+    advanceEnhancement(upgrades[0]);
+    CHECK(upgrades[0].buildTimeRemaining == Mag::fromInt(8));
+    economy.stored = {Mag::fromInt(8), Mag::fromInt(80)};
+    for (int tick=0; tick<8; ++tick) {
+        tickEconomy(economy, {}, {}, {}, false, {}, kNoArmy, upgrades);
+        advanceEnhancement(upgrades[0]);
+    }
+    CHECK(upgrades[0].finished());
+    CHECK(economy.stored.mass == Mag{});
+    CHECK(economy.stored.energy == Mag{});
+    tickEconomy(economy, {}, {}, {}, false, {}, kNoArmy, upgrades);
+    CHECK(economy.requestedLastTick.mass == Mag{});
+    CHECK(economy.requestedLastTick.energy == Mag{});
+}
+
 namespace {
 
 /// The clock these cases are written against. Every assertion below is stated in SECONDS,

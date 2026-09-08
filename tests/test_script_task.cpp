@@ -3,6 +3,7 @@
 #include "core/sim/CommandQueue.hpp"
 #include "core/sim/SaveState.hpp"
 #include "core/sim/ScriptTask.hpp"
+#include "core/sim/Enhancement.hpp"
 #include "core/sim/Skirmish.hpp"
 #include "core/sim/StateHash.hpp"
 
@@ -227,4 +228,74 @@ TEST_CASE("opaque script execution state contributes to the match hash") {
     changed.orders()[fixture.unit.index].activeMutable()->scriptState().opaque.push_back(1);
     rm::sim::Match match{.armies = fixture.armies, .economies = {}, .passability = {}};
     CHECK(rm::sim::hashMatch(fixture.roster.store, match) != rm::sim::hashMatch(changed, match));
+}
+
+TEST_CASE("native enhancement task installs only after funded work and cancels without refund", "[enhancement][script-task]") {
+    using namespace rm::sim;
+    const auto field = flatField();
+    const Terrain terrain{field};
+    const auto grid = buildPassability(field, 0, 60, 0);
+    rm::test::Roster roster;
+    rm::unitdef::UnitDef def;
+    def.name = "test_commander";
+    def.buildRate = 10;
+    def.health = Mag::fromInt(100);
+    const auto parameters = rm::lua::parseTable("{ NewBuildRate=30, NewHealth=20, NewRegenRate=2 }");
+    REQUIRE(parameters);
+    def.enhancements.push_back({.name="AdvancedEngineering", .slot="LCH",
+        .buildCostMass=Mag::fromInt(8), .buildCostEnergy=Mag::fromInt(80),
+        .buildTime=Fx::fromInt(8), .parameters=*parameters});
+    const auto unit = roster.add(roster.addType(def), 40, 40, 0, 100);
+    auto armies = freeForAll(1);
+    std::vector<Player> players{{.index=0,.army=0}};
+    std::vector<Economy> economies(1);
+    std::vector<EnhancementWork> work;
+    EnhancementTasks tasks(roster.store, roster.catalog, work);
+    const std::vector<const PassabilityGrid*> grids{&grid};
+    Match match{.armies=armies, .economies=economies, .enhancements=&work,
+        .passability=grids, .scriptTasks=&tasks, .baseStorage={Mag::fromInt(100),Mag::fromInt(1000)}};
+    const std::string name = "AdvancedEngineering";
+    const auto issue = [&] {
+        return applyCommand(CommandIssue{.source=0,.id=roster.store.allocateCommandId(0).value(),
+            .player=0,.kind=CommandKind::Script,.units={unit},.scriptTask="EnhanceTask",
+            .scriptData={name.begin(),name.end()}}, roster.store, roster.catalog, players, armies,
+            terrain, [&](UnitId) { return &grid; }, roster.rate, nullptr, nullptr, nullptr, nullptr, &tasks);
+    };
+    REQUIRE(issue());
+    (void)tickSkirmish(roster.store, roster.catalog, match, terrain);
+    REQUIRE(work.size() == 1);
+    CHECK(work[0].buildTimeRemaining == Mag::fromInt(8));
+    CHECK(roster.store.enhancements()[unit.index].empty());
+    economies[0].stored = {Mag::fromInt(8),Mag::fromInt(80)};
+    (void)tickSkirmish(roster.store, roster.catalog, match, terrain);
+    roster.store.orders()[unit.index].clear();
+    CHECK(work.empty());
+    CHECK(economies[0].stored.mass == Mag::fromInt(7));
+    CHECK(roster.store.enhancements()[unit.index].empty());
+    REQUIRE(issue());
+    economies[0].stored = {Mag::fromInt(8),Mag::fromInt(80)};
+    (void)tickSkirmish(roster.store, roster.catalog, match, terrain);
+    const SaveState saved{.units=roster.store.snapshot(), .enhancements=work};
+    const auto decoded = SaveState::decode(SaveState::encode(saved));
+    REQUIRE(decoded);
+    UnitStore restored(decoded->units);
+    auto resumedWork = decoded->enhancements;
+    auto resumedEconomies = economies;
+    EnhancementTasks resumedTasks(restored, roster.catalog, resumedWork);
+    Match resumed = match;
+    resumed.economies = resumedEconomies;
+    resumed.enhancements = &resumedWork;
+    resumed.scriptTasks = &resumedTasks;
+    for (int tick = 0; tick < 8; ++tick) {
+        (void)tickSkirmish(roster.store, roster.catalog, match, terrain);
+        (void)tickSkirmish(restored, roster.catalog, resumed, terrain);
+        CHECK(hashMatch(roster.store, match) == hashMatch(restored, resumed));
+    }
+    CHECK(work.empty());
+    CHECK(roster.store.orders()[unit.index].empty());
+    CHECK(roster.store.enhancements()[unit.index].at("LCH") == name);
+    CHECK(roster.store.health()[unit.index].maximum == Mag::fromInt(120));
+    CHECK(economies[0].stored.mass == Mag{});
+    CHECK(economies[0].stored.energy == Mag{});
+    roster.store.orders()[unit.index].clear();
 }

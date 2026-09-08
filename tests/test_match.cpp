@@ -700,3 +700,144 @@ TEST_CASE("the match runner dispatches a live repair through replay's command pa
     CHECK(replayed.health == live.health);
     CHECK(replayed.hash == live.hash);
 }
+
+TEST_CASE("opponent construction queues complete in order and replay identically", "[faf][construction][match]") {
+    using namespace rm::sim;
+    const auto run = [](const CommandLog* replay) {
+        const auto field = flatField();
+        rm::app::UnitScene scene;
+        scene.armies = freeForAll(2);
+        scene.players = onePlayerPerArmy(2, 0);
+        scene.economies.resize(2);
+        scene.commandersEver.assign(2, 0);
+        rm::unitdef::UnitDef engineer;
+        engineer.name = "test_engineer";
+        engineer.buildRate = 10;
+        engineer.motion = rm::unitdef::MotionType::Land;
+        engineer.buildableCategory = {{"TEST_STRUCTURE"}};
+        scene.definitions.push_back(engineer);
+        const auto builderType = scene.catalog.add(&scene.definitions.back());
+        scene.setTypeTraits(builderType, rm::data::moveDefFor(engineer), 1);
+        rm::unitdef::UnitDef structure;
+        structure.name = "test_structure";
+        structure.categories = {"STRUCTURE", "TEST_STRUCTURE"};
+        structure.health = Mag::fromInt(100);
+        structure.footprintSquaresX = 2;
+        structure.footprintSquaresZ = 2;
+        structure.buildTime = Mag::fromInt(4);
+        structure.buildCostMass = Mag::fromInt(4);
+        scene.definitions.push_back(structure);
+        const auto type = scene.catalog.add(&scene.definitions.back());
+        scene.setTypeTraits(type, rm::data::moveDefFor(structure), 1);
+        scene.setPathForType(type, "/test_structure");
+        scene.typeForBlueprint.emplace("/test_structure", type);
+        const auto builder = scene.store.spawn({.type=builderType,
+            .transform={.x=Fx::fromInt(200),.z=Fx::fromInt(200)},
+            .motion=rm::app::motionFor(engineer,0),.health=initialHealth(Mag::fromInt(100))});
+        scene.economies[0].stored.mass = Mag::fromInt(100);
+        rm::app::PassabilitySet passability{field, false, 0};
+        rm::vfs::Vfs content;
+        auto runner = rm::app::makeMatchRunner(scene, field, passability, content, {}, {});
+        runner.scripts.clear();
+        runner.replay = replay;
+        std::vector<Event> observedCompletions;
+        if (!replay) {
+            class BuildingOpponent final : public rm::ai::Opponent {
+            public:
+                std::vector<rm::ai::Decision> decisions;
+                std::vector<Event>* completions = nullptr;
+                void observe(const rm::ai::World&, std::span<const Event> events) override {
+                    for (const auto& event : events) {
+                        if (event.kind == EventKind::UnitFinished) completions->push_back(event);
+                    }
+                }
+                void advance(rm::TickIndex tick) override { if (tick != 0) decisions.clear(); }
+                std::span<const rm::ai::Decision> drain() const override { return decisions; }
+            };
+            auto opponent = std::make_unique<BuildingOpponent>();
+            opponent->completions = &observedCompletions;
+            // Two 16-elmo footprints touch without overlapping. The movement-order
+            // cancel radius (17 elmos) must not turn this build queue into a cancel.
+            for (const int x : {176, 192}) opponent->decisions.push_back({
+                .kind=rm::ai::Decision::Kind::StartConstruction, .blueprint="/test_structure",
+                .site={Fx::fromInt(x),Fx{},Fx::fromInt(200)}, .builder=builder, .queued=x==192});
+            runner.scripts.push_back(std::move(opponent));
+        }
+        for (int tick=0; tick<20; ++tick) (void)rm::app::advanceMatch(runner,tick,0);
+        REQUIRE(scene.commands.size()==2);
+        CHECK_FALSE(scene.commands.all()[0].queued);
+        CHECK(scene.commands.all()[1].queued);
+        CAPTURE(scene.building.size(), scene.store.health()[builder.index].alive(),
+            magToFloat(scene.economies[0].stored.mass));
+        for (const auto& work : scene.building) {
+            INFO("remaining work " << magToFloat(work.buildTimeRemaining));
+            CHECK(work.finished());
+        }
+        REQUIRE(scene.store.slotCount()==3);
+        CHECK(scene.store.transforms()[1].x==Fx::fromInt(176));
+        CHECK(scene.store.transforms()[2].x==Fx::fromInt(192));
+        CHECK(scene.economies[0].stored.mass==Mag::fromInt(92));
+        CHECK(scene.store.orders()[builder.index].current()==nullptr);
+        if (!replay) {
+            REQUIRE(observedCompletions.size()==2);
+            for (const auto& event : observedCompletions) {
+                CHECK(event.builder==builder);
+                CHECK(event.instigator==UnitId{}); // ordinary builds cannot move upgrade selection
+            }
+        }
+        return std::pair{scene.commands, hashMatch(scene.store,runner.match)};
+    };
+    const auto live=run(nullptr);
+    const auto replayed=run(&live.first);
+    CHECK(replayed.second==live.second);
+}
+
+TEST_CASE("app match runner executes a logged paid engineering enhancement", "[enhancement][match]") {
+    using namespace rm::sim;
+    const auto field = flatField();
+    rm::app::UnitScene scene;
+    scene.armies = freeForAll(2);
+    scene.players = onePlayerPerArmy(2, 0);
+    scene.economies.resize(2);
+    scene.commandersEver.assign(2, 0);
+    rm::unitdef::UnitDef def;
+    def.name = "test_commander";
+    def.buildRate = 10;
+    def.health = Mag::fromInt(100);
+    def.enhancements.push_back({.name="AdvancedEngineering", .slot="LCH",
+        .buildCostMass=Mag::fromInt(8), .buildCostEnergy=Mag::fromInt(80),
+        .buildTime=Fx::fromInt(8)});
+    scene.definitions.push_back(def);
+    const auto type = scene.catalog.add(&scene.definitions.back(), rm::app::gAppTickRate);
+    scene.setTypeTraits(type, rm::data::moveDefFor(def), 1);
+    const auto unit = scene.store.spawn({.type=type, .motion=rm::app::motionFor(def, 0), .health={.current=def.health,.maximum=def.health}});
+    scene.economies[0].stored = {Mag::fromInt(8),Mag::fromInt(80)};
+    rm::app::PassabilitySet passability{field, false, 0};
+    rm::vfs::Vfs content;
+    auto runner = rm::app::makeMatchRunner(scene, field, passability, content, {}, {});
+    runner.scripts.clear();
+    const std::string name = "AdvancedEngineering";
+    SECTION("logged intake") {
+        REQUIRE(rm::app::submitCommand(scene, CommandIssue{.tick=0,.source=0,.player=0,
+            .kind=CommandKind::Script,.units={unit},.scriptTask="EnhanceTask",
+            .scriptData={name.begin(),name.end()}}));
+    }
+    SECTION("opponent decision uses the same logged intake") {
+        class EnhancingOpponent final : public rm::ai::Opponent {
+        public:
+            std::vector<rm::ai::Decision> decisions;
+            void observe(const rm::ai::World&, std::span<const Event>) override {}
+            void advance(rm::TickIndex tick) override { if (tick != 0) decisions.clear(); }
+            std::span<const rm::ai::Decision> drain() const override { return decisions; }
+        };
+        auto opponent = std::make_unique<EnhancingOpponent>();
+        opponent->decisions.push_back({.kind=rm::ai::Decision::Kind::Enhance,
+            .enhancement=name,.unit=unit});
+        runner.scripts.push_back(std::move(opponent));
+    }
+    for (int tick = 0; tick < 9; ++tick) (void)rm::app::advanceMatch(runner, tick, 0);
+    REQUIRE(scene.store.enhancements()[unit.index].contains("LCH"));
+    CHECK(scene.store.enhancements()[unit.index].at("LCH") == name);
+    CHECK(scene.economies[0].stored.mass == Mag{});
+    CHECK(scene.commands.all().size() == 1);
+}

@@ -87,8 +87,13 @@ struct Decision {
     enum class Kind : std::uint8_t {
         /// Start building `blueprint` at `site`, paid for by `builder` at `buildRate`.
         StartConstruction,
+        /// Run a paid native commander enhancement task.
+        Enhance,
         /// Send `unit` to (`toX`, `toZ`).
         Move,
+        /// Clear this unit's orders, or guard a living unit through native assistance.
+        Stop,
+        Guard,
         /// Send `unit` to reclaim the most valuable wreck within `radius` of (`toX`, `toZ`).
         /// The AI names the reclaim-grid cell; the match resolves the wreck, because the
         /// brain sees cells and the sim sees features.
@@ -96,6 +101,7 @@ struct Decision {
     };
 
     Kind kind = Kind::Move;
+    std::string enhancement;
 
     /// StartConstruction. The blueprint is a PATH, not a resolved index: resolving it needs the
     /// VFS and the scene's buildable list, which is the caller's side of the fence.
@@ -106,8 +112,10 @@ struct Decision {
 
     /// Move, and Reclaim's search centre.
     rm::sim::UnitId unit{};
+    rm::sim::UnitId target{};
     rm::sim::Fx toX{};
     rm::sim::Fx toZ{};
+    bool queued = false;
     /// Reclaim: how far from the centre a wreck may be, in elmos (half a reclaim-grid cell).
     rm::sim::Fx radius{};
 };

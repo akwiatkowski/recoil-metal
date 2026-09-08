@@ -40,7 +40,7 @@ class FafOpponent final : public Opponent {
 public:
     /// `sandbox` outlives the opponent and is shared by every FAF opponent in the match —
     /// one VM, one corpus, per-army brains inside it (see FafAi's one-per-match note).
-    FafOpponent(FafAi& sandbox, int army);
+    FafOpponent(FafAi& sandbox, int army, std::string baseTemplate = "NormalMain");
 
     void observe(const World& world, std::span<const rm::sim::Event> events) override;
     void advance(rm::TickIndex tick) override;
@@ -57,13 +57,18 @@ private:
 
     FafAi& sandbox_;
     int army_ = -1;
+    std::string baseTemplate_;
     bool booted_ = false;
     /// Blueprint ids whose category sets the driver has been taught. Per opponent rather
     /// than per sandbox; re-teaching an id the sandbox knows is a cheap no-op there.
     std::set<std::string> sentTypes_;
     /// Like FAF's CanPathToCurrentEnemy, cache static MAIN-to-start connectivity per enemy.
     std::map<int, std::string> enemyPaths_;
-    const World* world_ = nullptr;
+    /// Own the view, whose scene/content references outlive us. observe callers may
+    /// pass a temporary view; Lua callbacks also run between decision passes.
+    std::optional<World> world_;
+    /// Static terrain grids, shared across this opponent's placement candidates.
+    std::optional<rm::app::PassabilitySet> placement_;
     std::vector<Decision> decisions_;
     /// Lua refers to a unit by its packed `UnitId` — generation in the high 32 bits, index in
     /// the low — carried as an exact 64-bit Lua integer. A handle from an earlier pass is
@@ -73,12 +78,19 @@ private:
     [[nodiscard]] static rm::sim::UnitId unpackHandle(std::int64_t handle) noexcept;
     /// `__rm_faf_beenDestroyed(h)`: retail's `Entity:BeenDestroyed` over the live store.
     static int beenDestroyedBinding(lua_State* lua);
+    static int scoutRouteBinding(lua_State* lua);
+    static int enhancementSequenceBinding(lua_State* lua);
+    static int openingSurveyBinding(lua_State* lua);
 
     /// Sites already chosen THIS pass. Several decisions convert before any of them
     /// reaches `scene.building`, so the free-site and free-deposit checks would hand every
     /// one of them the same spot — four power plants on one slot, four extractors on one
     /// deposit. Cleared at the top of every advance.
-    std::vector<std::array<rm::sim::Fx, 3>> plannedThisPass_;
+    struct PlannedSite {
+        std::array<rm::sim::Fx,3> position;
+        float radius = 0;
+    };
+    std::vector<PlannedSite> plannedThisPass_;
 };
 
 /// Installs the driver chunk into the sandbox. Idempotent; false with `lastError` set when
@@ -92,6 +104,9 @@ private:
 /// Distinct errors raised inside condition functions, as "error xN" lines. A condition that
 /// errors fails closed, so these are silent behaviour changes — worth naming.
 [[nodiscard]] std::vector<std::string> fafConditionErrors(FafAi& ai);
+
+/// Last observed first failure and evaluation counts; reporting never runs conditions.
+[[nodiscard]] std::vector<std::string> fafBuilderConditions(FafAi& ai);
 
 /// Formats the complete condition-error section. Unlike the ranked summary sections, this
 /// list is the repair queue: omitting its tail hides independently broken conditions.

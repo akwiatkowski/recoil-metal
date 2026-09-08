@@ -23,6 +23,17 @@
 using Catch::Approx;
 using rm::unitdef::MotionType;
 
+TEST_CASE("malformed enhancement work data is rejected rather than silently omitted",
+          "[unitbp][enhancement]") {
+    const auto result = rm::unitbp::load(R"(
+        UnitBlueprint { Physics={MotionType='RULEUMT_None'}, Enhancements = { Broken = {
+            BuildCostMass=1, BuildCostEnergy=1, BuildTime='900', Slot='LCH'
+        } } }
+    )", "/units/TEST/TEST_unit.bp");
+    REQUIRE_FALSE(result);
+    CHECK(result.error().message.find("Broken") != std::string::npos);
+}
+
 namespace {
 
 // Blueprints are read from disk rather than from a string, because that is the

@@ -9,6 +9,7 @@
 #include <array>
 #include <cstddef>
 #include <span>
+#include <string>
 #include <vector>
 
 namespace rm::sim {
@@ -340,6 +341,26 @@ struct RepairWork {
     Fx funded{};
 };
 
+/// Continuous enhancement work, funded by the same allocator as construction.
+/// EnhanceTask consumes the previous beat's resource fraction at command dispatch;
+/// unlike a silo economy event, a partially funded beat makes partial progress.
+struct EnhancementWork {
+    UnitId owner{};
+    std::string name;
+    Resources cost;
+    Mag totalBuildTime{};
+    Mag buildTimeRemaining{};
+    Mag buildPerTick{};
+    Resources allocated;
+    Fx fundedLastTick{};
+    bool paused = false;
+
+    [[nodiscard]] bool finished() const noexcept { return buildTimeRemaining <= Mag{}; }
+};
+
+[[nodiscard]] Resources drainPerTick(const EnhancementWork& work) noexcept;
+void advanceEnhancement(EnhancementWork& work) noexcept;
+
 /// One CAiSiloBuildImpl-shaped counted-projectile record.  It is match-owned rather than a
 /// `UnitStore` field: C-081 locates retail's state behind Unit+0x558, not on Unit itself.
 struct SiloAmmo {
@@ -430,7 +451,7 @@ void advanceConstruction(Construction& work) noexcept;
 void tickEconomy(Economy& economy, std::span<Construction> building,
                   std::span<RepairWork> repairs = {}, std::span<SiloAmmo> siloAmmo = {},
                   bool deferOverflow = false, std::span<UnitResourceFlow> flows = {},
-                  int armyIndex = kNoArmy);
+                  int armyIndex = kNoArmy, std::span<EnhancementWork> enhancements = {});
 
 /// Hand each army's over-cap excess to its allies, retail's `C-163` progressive split.
 ///

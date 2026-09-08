@@ -1,5 +1,7 @@
 #include "core/sim/Assist.hpp"
 
+#include "core/sim/Enhancement.hpp"
+
 #include "core/sim/Combat.hpp"
 #include "core/sim/Command.hpp"
 
@@ -27,7 +29,7 @@ bool idleEngineeringStation(UnitIndex slot, const UnitStore& store,
     }
     const unitdef::UnitDef* def = catalog.def(store.typeAt(slot));
     return def != nullptr && def->hasCategory("ENGINEERSTATION")
-        && catalog.rates(store.typeAt(slot)).buildPerTick > Mag{}
+        && effectiveBuildPerTick(store, catalog, slot) > Mag{}
         && store.orders()[slot].active() == nullptr;
 }
 
@@ -106,7 +108,7 @@ std::size_t applyAssistance(const UnitStore& store, const UnitCatalog& catalog,
             continue;  // factory guard mirrors queued production in command dispatch
         }
 
-        const Mag rate = catalog.rates(store.typeAt(slot)).buildPerTick;
+        const Mag rate = effectiveBuildPerTick(store, catalog, slot);
         if (rate <= Mag{}) {
             continue;
         }
@@ -168,7 +170,7 @@ std::size_t applyAssistance(const UnitStore& store, const UnitCatalog& catalog,
         if (!project) {
             continue;
         }
-        building[*project].assistPerTick += catalog.rates(store.typeAt(slot)).buildPerTick;
+        building[*project].assistPerTick += effectiveBuildPerTick(store, catalog, slot);
         ++helping;
     }
 

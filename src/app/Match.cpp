@@ -27,6 +27,7 @@ namespace rm::app {
 // Defined here, declared `extern` in the header.
 bool gPrintEvents = false;
 bool gFafOpponents = false;
+std::string gFafBaseTemplate = "NormalMain";
 bool gFafLog = false;
 
 /// Sends one unit to a world position, routed around whatever is in the way.
@@ -841,7 +842,7 @@ void applyDecisions(UnitScene& scene, const rm::vfs::Vfs& content, const rm::sim
             if (!issueBuild(scene, decision.builder,
                             playerDriving(scene, army.index), tickIndex,
                             static_cast<rm::UnitTypeIndex>(*blueprintIndex), decision.site[0],
-                            decision.site[2])) {
+                            decision.site[2], decision.queued)) {
                 // Refused deterministically — a dead builder, one this army lost, or a
                 // factory still mid-product. Silent in the ordinary log; named under
                 // --ai-log, because a refused train every pass looks like a decision made.
@@ -857,11 +858,19 @@ void applyDecisions(UnitScene& scene, const rm::vfs::Vfs& content, const rm::sim
             // printed: the commander's build order is the story of the opening, while a
             // factory turning out its ninth tank is noise.
             if (!def.isMobile()) {
-                std::printf("  [%6.1fs] army %d starts %.*s\n",
+                std::printf("  [%6.1fs] army %d orders %.*s\n",
                             static_cast<double>(elapsedSeconds), army.index,
                             static_cast<int>(decision.blueprint.size()),
                             decision.blueprint.data());
             }
+            break;
+        }
+        case rm::ai::Decision::Kind::Enhance: {
+            (void)submitCommand(scene, rm::sim::CommandIssue{
+                .tick=tickIndex, .source=static_cast<rm::CommandSource>(playerDriving(scene, army.index)),
+                .player=playerDriving(scene, army.index), .kind=rm::sim::CommandKind::Script,
+                .queued=decision.queued, .units={decision.unit}, .scriptTask="EnhanceTask",
+                .scriptData={decision.enhancement.begin(),decision.enhancement.end()}});
             break;
         }
         case rm::ai::Decision::Kind::Move: {
@@ -870,9 +879,21 @@ void applyDecisions(UnitScene& scene, const rm::vfs::Vfs& content, const rm::sim
                 break;  // died between the census and the order
             }
             if (issueMove(scene, decision.unit, playerDriving(scene, army.index),
-                          tickIndex, decision.toX, decision.toZ)) {
+                          tickIndex, decision.toX, decision.toZ, decision.queued)) {
                 ++marching;
             }
+            break;
+        }
+        case rm::ai::Decision::Kind::Stop: {
+            (void)submitCommand(scene,rm::sim::CommandIssue{
+                .tick=tickIndex,.source=static_cast<rm::CommandSource>(playerDriving(scene,army.index)),
+                .player=playerDriving(scene,army.index),.kind=rm::sim::CommandKind::Stop,
+                .units={decision.unit}});
+            break;
+        }
+        case rm::ai::Decision::Kind::Guard: {
+            (void)issueGuard(scene,std::span{&decision.unit,std::size_t{1}},
+                playerDriving(scene,army.index),tickIndex,decision.target,decision.queued);
             break;
         }
         case rm::ai::Decision::Kind::Reclaim: {
@@ -978,8 +999,7 @@ void runOpponents(UnitScene& scene, const rm::vfs::Vfs& content, const rm::Heigh
             continue;
         }
         rm::ai::Opponent& opponent = *scripts[static_cast<std::size_t>(army.index)];
-
-        opponent.observe(world, scene.events.all());
+        opponent.observe(world, {}); // refresh the current world; events arrive before beginFrame
         opponent.advance(tickIndex);
         applyDecisions(scene, content, army, opponent.drain(),
                        elapsedSeconds, tickIndex);
@@ -992,6 +1012,10 @@ void runOpponents(UnitScene& scene, const rm::vfs::Vfs& content, const rm::Heigh
                                            std::span<const rm::mapinfo::StartPosition> starts,
                                             std::span<const rm::scenario::Marker> markers,
                                             std::optional<rm::sim::PlayableRect> playableRect) {
+    if (!scene.enhancementTasks) {
+        scene.enhancementTasks = std::make_unique<rm::sim::EnhancementTasks>(
+            scene.store, scene.catalog, scene.enhancementWork);
+    }
     MatchRunner runner{
         .scene = scene,
         .field = field,
@@ -1007,9 +1031,11 @@ void runOpponents(UnitScene& scene, const rm::vfs::Vfs& content, const rm::Heigh
                 .projectiles = &scene.projectiles,
                 .building = &scene.building,
                 .siloAmmo = &scene.siloAmmo,
+                .enhancements = &scene.enhancementWork,
                 .redirects = &scene.redirects,
                 .events = &scene.events,
                 .features = &scene.features,
+                .scriptTasks = scene.enhancementTasks.get(),
                 .commandersEver = scene.commandersEver,
                 .baseStorage = kStartingStorage,
                 .resourceFlows = &scene.resourceFlows,
@@ -1050,11 +1076,11 @@ void runOpponents(UnitScene& scene, const rm::vfs::Vfs& content, const rm::Heigh
             if (driverUp) {
                 for (std::size_t army = 0; army < scene.armies.size(); ++army) {
                     runner.scripts[army] = std::make_unique<rm::ai::FafOpponent>(
-                        *sandbox, static_cast<int>(army));
+                        *sandbox, static_cast<int>(army), gFafBaseTemplate);
                 }
                 runner.fafSandbox = std::move(sandbox);
-                std::printf("faf: %zu armies seated with FAF opponents\n",
-                            scene.armies.size());
+                std::printf("faf: %zu armies seated with FAF opponents (%s)\n",
+                            scene.armies.size(), gFafBaseTemplate.c_str());
             } else {
                 std::printf("faf: driver failed (%s) — scripted opponents play instead\n",
                             sandbox->lastError().c_str());
@@ -1084,6 +1110,18 @@ void printEvents(const rm::sim::EventQueue& events, float now) {
 
 rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) {
     UnitScene& scene = runner.scene;
+    // Deliver the previous tick's complete event stream before Lua tasks can transfer
+    // a builder to another manager and before beginFrame clears the notifications.
+    if (runner.replay == nullptr && !runner.scripts.empty()) {
+        const rm::ai::World world{
+            .scene=scene,.content=runner.content,.field=runner.field,.starts=runner.starts,
+            .markers=runner.markers,.playableRect=runner.match.playableRect,
+            .centreX=rm::sim::Fx::fromInt(runner.field.squaresX*rm::kSquareSize/2),
+            .centreZ=rm::sim::Fx::fromInt(runner.field.squaresZ*rm::kSquareSize/2)};
+        for (auto& opponent : runner.scripts) {
+            if (opponent) opponent->observe(world,scene.events.all());
+        }
+    }
     const bool tracing = rm::log::enabled(rm::log::Level::Debug);
     std::map<std::pair<rm::UnitIndex, rm::Generation>, rm::sim::Fx> fundingBefore;
     if (tracing) {
@@ -1334,6 +1372,7 @@ rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) 
                 .kind = rm::sim::EventKind::UnitFinished,
                 .unit = *spawned,
                 .instigator = work.isUpgrade() ? work.upgradeOf : rm::sim::UnitId{},
+                .builder = work.builder,
                 .army = work.armyIndex,
                 .amount = work.cost.mass,
                 .at = work.position,
@@ -1794,6 +1833,13 @@ void march(UnitScene& scene, const rm::HeightField& field, PassabilitySet& passa
         const std::string conditionErrorReport =
             rm::ai::formatFafConditionErrorReport(conditionErrors);
         std::printf("%s", conditionErrorReport.c_str());
+        const auto builderConditions = rm::ai::fafBuilderConditions(*sanity);
+        if (!builderConditions.empty()) {
+            std::printf("  BUILDER CONDITION OBSERVATIONS (last check, not final-state reevaluation):\n");
+            for (const auto& line : builderConditions) {
+                std::printf("    %s\n", line.c_str());
+            }
+        }
 
         // Coverage from the other side: not "what did the imports miss" but "what sits in
         // the vendored tree that NOTHING imported". Missing modules above are files we chose

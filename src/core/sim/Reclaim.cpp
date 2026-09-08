@@ -1,5 +1,7 @@
 #include "core/sim/Reclaim.hpp"
 
+#include "core/sim/Enhancement.hpp"
+
 #include "core/sim/Assist.hpp"
 
 #include "core/sim/Combat.hpp"
@@ -69,7 +71,7 @@ namespace {
     if (wreck == nullptr) {
         return false;
     }
-    const Mag pace = catalog.rates(store.typeAt(reclaimer)).buildPerTick
+    const Mag pace = effectiveBuildPerTick(store, catalog, reclaimer)
                    * wreck->reclaimPerBuildRate;
     if (pace <= Mag{} || wreck->reclaimWorkRemaining <= Mag{}
         || wreck->reclaimWorkTotal <= Mag{}) {
@@ -121,7 +123,7 @@ namespace {
     // target BuildTime, and health gained is maxHealth * step.
     const Mag restored = std::min(
         health.maximum - health.current,
-        proportionalWork(health.maximum, catalog.rates(store.typeAt(builder)).buildPerTick * funded,
+        proportionalWork(health.maximum, effectiveBuildPerTick(store, catalog, builder) * funded,
                           targetDef->buildTime));
     if (restored <= Mag{}) {
         return false;
@@ -135,7 +137,7 @@ namespace {
     return drainPerTick(Construction{
         .cost = {.mass = target.buildCostMass, .energy = target.buildCostEnergy},
         .totalBuildTime = target.buildTime,
-        .buildPerTick = catalog.rates(store.typeAt(builder)).buildPerTick,
+        .buildPerTick = effectiveBuildPerTick(store, catalog, builder),
     });
 }
 
@@ -250,7 +252,7 @@ std::size_t reclaimUnits(UnitStore& store, const UnitCatalog& catalog,
         // Work per tick is the reclaimer's BuildRate per SECOND: FAF's duration is
         // 0.1 × cost / BuildRate seconds for `cost` units of work, so a tick advances
         // BuildRate of them — ten times the per-tick build figure the catalog derived.
-        Mag pace = catalog.rates(type).buildPerTick;
+        Mag pace = effectiveBuildPerTick(store, catalog, slot);
         pace *= Fx::fromInt(10);
         Health& health = store.health()[victim];
         // The work left follows the fraction, and the fraction is the health (C-099).
@@ -464,11 +466,10 @@ std::size_t servicePatrolBuilders(UnitStore& store, const UnitCatalog& catalog,
             continue;
         }
         const QueuedCommand* order = store.orders()[builder].active();
-        const UnitCatalog::Rates& rates = catalog.rates(store.typeAt(builder));
         const bool patrol = order != nullptr && order->kind() == CommandKind::Patrol
                             && order->target().generation == 0;
         if (!patrol
-            || rates.buildPerTick <= Mag{}) {
+            || effectiveBuildPerTick(store, catalog, builder) <= Mag{}) {
             continue;
         }
 

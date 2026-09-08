@@ -619,7 +619,7 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
         });
     }
 
-    if (match.building != nullptr || match.siloAmmo != nullptr || !repairs.empty()) {
+    if (match.building != nullptr || match.siloAmmo != nullptr || match.enhancements != nullptr || !repairs.empty()) {
         for (std::size_t army = 0; army < match.economies.size(); ++army) {
             // Partitioned per army because `tickEconomy` is documented to be given one
             // army's work, and charging the wrong one is a caller's mistake to avoid.
@@ -651,9 +651,19 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
                 }
             }
 
+            std::vector<EnhancementWork> enhancementMine;
+            if (match.enhancements != nullptr) {
+                for (const EnhancementWork& work : *match.enhancements) {
+                    if (store.alive(work.owner)
+                        && store.motion()[work.owner.index].armyIndex == static_cast<int>(army)) {
+                        enhancementMine.push_back(work);
+                    }
+                }
+            }
+
             tickEconomy(match.economies[army], mine, repairMine, siloMine, true,
                 match.resourceFlows ? std::span<UnitResourceFlow>{*match.resourceFlows}
-                                    : std::span<UnitResourceFlow>{}, static_cast<int>(army));
+                                    : std::span<UnitResourceFlow>{}, static_cast<int>(army), enhancementMine);
 
             // Written back over this army's entries, in order — the two lists were built
             // by the same filter in the same pass, so the nth of `mine` is the nth of
@@ -669,6 +679,15 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
                     }
                     work = mine[next];
                     ++next;
+                }
+            }
+            if (match.enhancements != nullptr) {
+                std::size_t next = 0;
+                for (EnhancementWork& work : *match.enhancements) {
+                    if (store.alive(work.owner)
+                        && store.motion()[work.owner.index].armyIndex == static_cast<int>(army)) {
+                        work = enhancementMine[next++];
+                    }
                 }
             }
             std::size_t repairNext = 0;

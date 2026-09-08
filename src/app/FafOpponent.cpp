@@ -16,7 +16,9 @@ extern "C" {
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cmath>
 #include <cstdio>
+#include <limits>
 #include <map>
 #include <optional>
 #include <string>
@@ -37,10 +39,21 @@ namespace {
 //
 // EMBEDDED rather than shipped as a data file: the driver is part of the adapter, versioned
 // with the C++ that marshals for it, and a test must never run against a stale copy on disk.
-constexpr const char* kFafDriver = R"lua(
+// Keep each literal below the standard's 64 KiB support limit. Concatenating at
+// initialization still evaluates the driver as one Lua chunk with shared locals.
+const std::string kFafDriver = std::string{R"lua(
 if __rm_faf == nil then
 
 __rm_faf = { brains = {}, armyViews = {}, blueprints = {}, missing = {}, condErrors = {}, cats = {}, threat = {}, scenario = false }
+ArmyBrains = {}
+function IsAlly(a, b)
+    local first, second = ArmyBrains[a], ArmyBrains[b]
+    return first ~= nil and second ~= nil and first.alliance == second.alliance
+end
+function IsEnemy(a, b)
+    local first, second = ArmyBrains[a], ArmyBrains[b]
+    return first ~= nil and second ~= nil and first.alliance ~= second.alliance
+end
 
 local function unitBlueprint(id)
     local key = string.lower(id)
@@ -57,6 +70,7 @@ local function unitBlueprint(id)
     end
     return __rm_faf.blueprints[key]
 end
+GetUnitBlueprintByName = unitBlueprint
 
 local factionNames = { 'UEF', 'Aeon', 'Cybran', 'Seraphim' }
 
@@ -76,7 +90,11 @@ end
 function __rm_faf_threat(u, threatType)
     local t = __rm_faf.threat[u.bp]
     if not t then return 0 end
-    if threatType == 'Air' or threatType == 'AntiAir' then return t.a or 0 end
+    if threatType == 'Air' then
+        local tags = __rm_faf.cats[u.bp]
+        return tags and tags.AIR and (t.a or 0) or 0
+    end
+    if threatType == 'AntiAir' then return t.a or 0 end
     if threatType == 'Sub' or threatType == 'AntiSub' or threatType == 'Naval' then
         return t.u or 0
     end
@@ -150,10 +168,10 @@ __rm_faf.unitMeta = {
         GetHealthPercent = function(u) return u.healthPercent end,
         GetPosition = function(u) return { u.x, 0, u.z } end,
         GetBlueprint = function(u) return unitBlueprint(u.bp) end,
-        -- 'Upgrading' is the one state the snapshot tracks (the upgrade-in-place tech
-        -- path); everything else honestly answers false.
+        HasEnhancement = function(u, name) return u.enhancements and u.enhancements[name] == true or false end,
         IsUnitState = function(u, state)
             if state == 'Upgrading' then return u.upgrading == true end
+            if state == 'Enhancing' then return u.enhancing == true end
             return false
         end,
     },
@@ -214,7 +232,7 @@ function methods:GetUnitBlueprint(id) return unitBlueprint(id) end
 function methods:GetCurrentEnemy()
     return __rm_faf.armyViews[self.snap.currentEnemy]
 end
-function __rm_faf_army(army, x, z, faction, defeated)
+function __rm_faf_army(army, x, z, faction, defeated, alliance)
     local view = __rm_faf.armyViews[army]
     if not view then
         view = { army = army }
@@ -223,6 +241,17 @@ function __rm_faf_army(army, x, z, faction, defeated)
         __rm_faf.armyViews[army] = view
     end
     view.startX, view.startZ, view.faction, view.defeated = x, z, faction, defeated
+    view.alliance = alliance
+    view.BrainType = 'AI'
+    local own = __rm_faf.brains[army]
+    view.BuilderManagers = own and own.BuilderManagers or { MAIN = {Position = {x, 0, z}} }
+    if own then
+        own.startX, own.startZ, own.faction, own.defeated = x, z, faction, defeated
+        own.alliance, own.BrainType = alliance, 'AI'
+    end
+    -- aiutilities.GetAlliesThreat excludes self by object identity. Keep foreign
+    -- army views, but publish the actual querying brain at its one-based index.
+    ArmyBrains[army + 1] = own or view
 end
 function methods:GetEconomyStored(kind)
     if kind == 'MASS' then return self.snap.mass end
@@ -247,7 +276,9 @@ function methods:GetEconomyRequested(kind)
     return self.snap.energyRequested
 end
 function methods:GetEconomyTrend(kind)
-    return (self:GetEconomyIncome(kind) - self:GetEconomyUsage(kind)) * 10
+    -- C-071 / retail 0x005968b6–0x005968c2: no per-second multiplier.
+    -- The UI's Economy_Trend statistic is a different API.
+    return self:GetEconomyIncome(kind) - self:GetEconomyUsage(kind)
 end
 -- A category expression is REBUILT on every condition call — `categories.LAND * categories.TECH1`
 -- allocates fresh nodes — so node identity cannot key a cache; the expression's text can. The
@@ -268,6 +299,26 @@ local function categoryKey(cat)
     end
     rawset(cat, '__key', key)
     return key
+end
+
+-- Snapshot units share immutable blueprint tag sets. Cache category membership per
+-- type/expression, not per tank; equivalent expressions are rebuilt by many builders.
+local containsCategory = EntityCategoryContains
+local membership = {}
+function EntityCategoryContains(category, unit)
+    local tags = unit and rawget(unit, '__cats')
+    if not tags or not unit.bp or __rm_faf.cats[unit.bp] ~= tags then
+        return containsCategory(category, unit)
+    end
+    local memo = membership[tags]
+    if not memo then memo = {}; membership[tags] = memo end
+    local key = categoryKey(category)
+    local result = memo[key]
+    if result == nil then
+        result = containsCategory(category, unit)
+        memo[key] = result
+    end
+    return result
 end
 
 -- Counted once per decision pass per distinct category. Every pass installs a fresh snapshot
@@ -368,15 +419,34 @@ function methods:GetListOfUnits(category, needToBeIdle)
     end
     return out
 end
-function methods:GetUnitsAroundPoint(category, position, radius)
+function methods:PBMGetLocationCoords(location)
+    local manager = self.BuilderManagers[location]
+    return manager and manager.FactoryManager:GetLocationCoords() or nil
+end
+methods.GetLocationPosition = methods.PBMGetLocationCoords
+function methods:GetUnitsAroundPoint(category, position, radius, alliance)
+    alliance = alliance or 'Own'
+    assert(alliance == 'Own' or alliance == 'Ally' or alliance == 'Enemy',
+        'unknown unit-query alliance: ' .. tostring(alliance))
+    radius = radius * 8 -- Public radii are ogrids; snapshot positions are elmos.
     local out = {}
-    for _, u in ipairs(self.snap.units) do
-        if EntityCategoryContains(category, u)
-            and VDist2(u.x, u.z, position[1], position[3]) <= radius then
-            table.insert(out, u)
+    local function gather(units)
+        for _, u in ipairs(units or {}) do
+            local dx, dz = u.x - position[1], u.z - position[3]
+            if EntityCategoryContains(category, u) and dx * dx + dz * dz <= radius * radius then
+                table.insert(out, u)
+            end
         end
     end
+    if alliance == 'Enemy' then gather(self.snap.enemies)
+    else
+        gather(self.snap.units)
+        if alliance == 'Ally' then gather(self.snap.allies) end
+    end
     return out
+end
+function methods:GetNumUnitsAroundPoint(category, position, radius, alliance)
+    return #self:GetUnitsAroundPoint(category, position, radius, alliance)
 end
 -- Whether the footprint at `position` is free. Judged against every army's standing
 -- structures — the one cross-army fact the snapshot carries — because "is this mass
@@ -389,15 +459,15 @@ function methods:CanBuildStructureAt(bp, position)
     end
     return true
 end
--- Threat at a point: the blueprints' own estimates summed over ENEMIES THE ARMY CAN SEE —
--- the snapshot's enemies list is already intel-filtered, so fog hides threat exactly as it
--- hides units. The ring-to-radius mapping is Guessed against Moho's iMAP cells: one ring
--- is read as roughly one and a half grid squares.
+-- Threat over visible enemies in the queried iMAP cell and its neighboring rings.
+-- FAF's IMAPSize is in ogrids; our observed positions are in elmos (8 per ogrid).
 function methods:GetThreatAtPosition(position, rings, _, threatType)
-    local radius = ((rings or 0) + 1) * 96
+    local cellSize = self.IMAPConfig.IMAPSize * 8
+    local x, z = math.floor(position[1] / cellSize), math.floor(position[3] / cellSize)
     local total = 0
     for _, e in ipairs(self.snap.enemies or {}) do
-        if VDist2(e.x, e.z, position[1], position[3]) <= radius then
+        if math.abs(math.floor(e.x / cellSize) - x) <= (rings or 0)
+            and math.abs(math.floor(e.z / cellSize) - z) <= (rings or 0) then
             total = total + __rm_faf_threat(e, threatType)
         end
     end
@@ -427,6 +497,75 @@ end
 
 -- --- Boot: the builder list, assembled from FAF's own registries ---------------------------
 
+local function assistGuards(brain,u)
+    return (u.guardCount or 0)+(brain.assistReservations[u.h] or 0)
+end
+
+local function buildingTargets(brain,kind,category,builderCategory,position,radius,location)
+    -- Most late-game units cannot be assistees. Index active work once per snapshot,
+    -- retaining snapshot unit/work order for the corpus's first-tie selection rule.
+    if brain.assistSnapshot~=brain.snap then
+        local byBuilder={}
+        for _,work in ipairs(brain.snap.underway or {}) do
+            if work.builder then
+                local list=byBuilder[work.builder]
+                if not list then list={}; byBuilder[work.builder]=list end
+                list[#list+1]=work
+            end
+        end
+        brain.assistCandidates={}
+        for _,u in ipairs(brain.snap.units) do
+            if byBuilder[u.h] then
+                brain.assistCandidates[#brain.assistCandidates+1]={unit=u,work=byBuilder[u.h]}
+            end
+        end
+        brain.assistSnapshot=brain.snap
+        brain.assistMatches={}
+    end
+    local group=kind=='Engineer' and (categories.ENGINEER-categories.ENGINEERSTATION)
+        or kind=='Factory' and categories.FACTORY or categories.ALLUNITS
+    local required=group*(builderCategory or categories.ALLUNITS)
+    local key=categoryKey(required)..':'..categoryKey(category)
+    local matches=brain.assistMatches[key]
+    if not matches then
+        matches={}
+        for _,candidate in ipairs(brain.assistCandidates) do
+            if EntityCategoryContains(required,candidate.unit) then
+                for _,work in ipairs(candidate.work) do
+                    if EntityCategoryContains(category,work) then
+                        matches[#matches+1]={unit=candidate.unit,work=work}
+                        break
+                    end
+                end
+            end
+        end
+        brain.assistMatches[key]=matches
+    end
+    local result={}
+    for _,candidate in ipairs(matches) do
+        local u=candidate.unit
+        if (not location or (brain.unitLocations[u.h] or 'MAIN')==location)
+            and (kind~='Engineer' or not u.upgrading)
+            and (not position or VDist2(u.x,u.z,position[1],position[3])<=radius) then
+            result[#result+1]=candidate
+        end
+    end
+    return result
+end
+
+local function assistanceTargets(brain,kind,category,builderCategory,position,radius,location)
+    local result={}
+    for _,candidate in ipairs(buildingTargets(brain,kind,category,builderCategory,position,radius,location)) do
+        local u=candidate.unit
+        local limit=brain.assistLimits[u.h]
+        -- Building counts do not depend on whether the producer wants helpers.
+        if u.desiresAssist~=false and (not limit or assistGuards(brain,u)<limit) then
+            result[#result+1]=candidate
+        end
+    end
+    return result
+end
+
 function __rm_faf_boot(army, info)
     __rm_faf_scenario(info.markers, info.sizeX, info.sizeZ, info.armies)
 
@@ -450,6 +589,7 @@ function __rm_faf_boot(army, info)
     brain.CheatEnabled = false
     brain.TransportRequested = false
     brain.PreBuilt = false
+    brain.HasPlatoonList = false -- no legacy PBM list; BuilderManagers owns our locations
     brain.islandCheck = false
     brain.islandMarker = false
     brain.LowEnergyMode = false
@@ -460,9 +600,37 @@ function __rm_faf_boot(army, info)
     -- Refreshed every decision pass from the snapshot; the corpus's own base-ai maintains
     -- this table from a thread, and the efficiency conditions read it directly.
     brain.EconomyOverTimeCurrent = {}
+    brain.economySamples = {}
+    brain.economyTotals = {}
+    brain.economySampleIndex = 1
+    brain.economySampleTick = false
+    -- Authored IMAPConfiguration: lua/aibrains/base-ai.lua:1640. Map sizes
+    -- arrive here in elmos; keep the public config in FAF's original ogrids.
+    local mapSize = math.max(info.sizeX, info.sizeZ) / 8
+    if mapSize == 256 or mapSize == 512 then
+        brain.IMAPConfig = { OgridRadius = 22.5, IMAPSize = 32, Rings = 2 }
+    elseif mapSize == 1024 then
+        brain.IMAPConfig = { OgridRadius = 45, IMAPSize = 64, Rings = 1 }
+    elseif mapSize == 2048 then
+        brain.IMAPConfig = { OgridRadius = 89.5, IMAPSize = 128, Rings = 0 }
+    else
+        brain.IMAPConfig = { OgridRadius = 180, IMAPSize = 256, Rings = 0 }
+    end
 
     -- Per-builder position in its BuildStructures queue (see the engineer walk).
     brain.progress = {}
+    brain.opening = false
+    brain.openingDone = {}
+    brain.assists = {}
+    brain.assistLimits = {}
+    brain.assistReservations = {}
+    brain.fafTickScale = info.fafTickScale or 1
+    brain.scoutSites = info.scoutSites or {}
+    brain.scoutAssignments = {}
+    brain.scoutVisits = { land = 0, air = 0 }
+    brain.scoutSerial = 0
+    brain.numOpponents = info.numOpponents or math.max(1, info.armies - 1)
+    brain.mapSize = {info.sizeX, info.sizeZ}
 
     -- The condition cadence cache (see conditionsPass), keyed by spec table, with the
     -- serial that spreads first expiries; and the per-pass unit-count memo (see
@@ -474,13 +642,15 @@ function __rm_faf_boot(army, info)
     brain.GridReclaim = setmetatable({ brain = brain }, GridReclaimView)
 
     -- The pool platoon (see GetPlatoonUniquelyNamed): counts over the army's own units.
+    -- Pool-at-location and SeaAttackCondition pass manager radii in authored ogrids;
+    -- both observed unit positions and manager coordinates are already in elmos.
     brain.pool = {
         GetNumCategoryUnits = function(pool, category, coords, radius)
             local n = 0
             for _, u in ipairs(brain.snap.units) do
                 if EntityCategoryContains(category, u)
                     and (not coords or not radius
-                         or VDist2(u.x, u.z, coords[1], coords[3]) <= radius) then
+                         or VDist2(u.x, u.z, coords[1], coords[3]) <= radius*8) then
                     n = n + 1
                 end
             end
@@ -497,7 +667,7 @@ function __rm_faf_boot(army, info)
             for _, u in ipairs(brain.snap.units) do
                 if EntityCategoryContains(category, u)
                     and (not position or not radius
-                         or VDist2(u.x, u.z, position[1], position[3]) <= radius) then
+                         or VDist2(u.x, u.z, position[1], position[3]) <= radius*8) then
                     total = total + __rm_faf_threat(u, threatType)
                 end
             end
@@ -509,65 +679,185 @@ function __rm_faf_boot(army, info)
     -- `BuilderManagers[locationType]`, honest about being location MAIN and nothing else.
     -- Their counting methods answer over the whole army, because MAIN is the whole base.
     local coords = function() return { info.startX, 0, info.startZ } end
-    local function countUnits(category)
-        return countCurrentUnits(brain, category)
+    local function countUnits(location,category)
+        local cache=brain.managerCounts
+        if not cache or cache.snap~=brain.snap or cache.locations~=brain.unitLocations then
+            cache={snap=brain.snap,locations=brain.unitLocations,units={},counts={}}
+            for _,unit in ipairs(brain.snap.units) do
+                local owner=brain.unitLocations[unit.h] or 'MAIN'
+                local list=cache.units[owner]
+                if not list then list={}; cache.units[owner]=list end
+                list[#list+1]=unit
+            end
+            brain.managerCounts=cache
+        end
+        local key=location..':'..categoryKey(category)
+        if cache.counts[key]==nil then
+            cache.counts[key]=EntityCategoryCount(category,cache.units[location] or {})
+        end
+        return cache.counts[key]
     end
-    local function countUnderway(category)
-        return EntityCategoryCount(category, brain.snap.underway or {})
-    end
+    -- EngineerManager.lua:37–45,416: counts are restricted to the named
+    -- consumption group before applying the caller's category (often just TECH2).
+    local consumptionGroups={
+        Engineers=categories.ENGINEER-categories.ENGINEERSTATION,
+        EngineerStations=categories.ENGINEERSTATION,
+        Fabricators=categories.MASSFABRICATION*categories.STRUCTURE,
+        Shields=categories.SHIELD*categories.STRUCTURE,
+        MobileShields=categories.SHIELD*categories.MOBILE,
+        Intel=categories.STRUCTURE*(categories.SONAR+categories.RADAR+categories.OMNI),
+        MobileIntel=categories.MOBILE-categories.ENGINEER-categories.SHIELD,
+    }
     local manager = {
+        LocationType = 'MAIN',
+        -- Registration is ownership, not a distance query. FAF transfers engineers
+        -- explicitly and finished children inherit their builder's current manager.
+        AddUnit = function(self,unit)
+            brain.unitLocations[unit.h]=self.LocationType
+            brain.managerCounts=nil
+        end,
+        AddFactory = function(self,unit)
+            brain.unitLocations[unit.h]=self.LocationType
+            brain.managerCounts=nil
+        end,
+        RemoveUnit = function(self,unit)
+            -- Empty location means explicitly unmanaged; nil is an initial MAIN unit.
+            if (brain.unitLocations[unit.h] or 'MAIN')==self.LocationType then brain.unitLocations[unit.h]='' end
+            brain.managerCounts=nil
+        end,
         GetLocationCoords = coords,
         -- Read as a position by ReclaimAvailableInGrid (`manager.Location[1]`, `[3]`).
         Location = { info.startX, 0, info.startZ },
-        Radius = 200,
-        GetNumFactories = function() return countUnits(categories.STRUCTURE * categories.FACTORY) end,
-        GetNumCategoryFactories = function(self, category) return countUnits(category) end,
+        Radius = 100, -- aibrains/{base,tech,adaptive,medium,rush,turtle}-ai MAIN setup (ogrids)
+        GetNumFactories = function(self)
+            return countUnits(self.LocationType,categories.STRUCTURE*categories.FACTORY)
+        end,
+        GetNumCategoryFactories = function(self,category)
+            return countUnits(self.LocationType,categories.STRUCTURE*categories.FACTORY*category)
+        end,
         -- The corpus calls this as `engineerManager:GetNumCategoryUnits('Engineers', category)`
         -- (UnitCountBuildConditions.lua:574, :949): the first argument is a GROUP NAME. Binding
         -- the group name as the category made every engineer cap read zero, and the
         -- priority-900 engineer builder never stopped — half of everything built was engineers.
         GetNumCategoryUnits = function(self, group, category)
-            return countUnits(category ~= nil and category or group)
+            local members=consumptionGroups[group]
+            return members and countUnits(self.LocationType,members*category) or 0
         end,
-        GetNumCategoryBeingBuilt = function(self, category) return countUnderway(category) end,
-        -- A list, not a count: callers table.getn it. Nobody wants assistance — the
-        -- adapter has no assist orders to give.
-        GetEngineersWantingAssistance = function() return {} end,
+        GetNumCategoryBeingBuilt = function(self,category,producerCategory)
+            return #buildingTargets(brain,'Engineer',category,producerCategory,nil,nil,self.LocationType)
+        end,
+        GetEngineersWantingAssistance = function(self,category,engineerCategory)
+            local units={}
+            for _,candidate in ipairs(assistanceTargets(brain,'Engineer',category,engineerCategory,
+                nil,nil,self.LocationType)) do
+                units[#units+1]=candidate.unit
+            end
+            return units
+        end,
     }
+    local function factoryManager(engineers)
+        local factory={}
+        for key,value in pairs(engineers) do factory[key]=value end
+        factory.GetNumCategoryBeingBuilt=function(self,category,producerCategory)
+            return #buildingTargets(brain,'Factory',category,producerCategory,nil,nil,self.LocationType)
+        end
+        factory.GetFactoriesWantingAssistance=function(self,category,producerCategory)
+            local units={}
+            for _,candidate in ipairs(assistanceTargets(brain,'Factory',category,producerCategory,
+                nil,nil,self.LocationType)) do units[#units+1]=candidate.unit end
+            return units
+        end
+        return factory
+    end
     brain.BuilderManagers = {
         MAIN = {
             Position = { info.startX, 0, info.startZ },
             EngineerManager = manager,
-            FactoryManager = manager,
+            FactoryManager = factoryManager(manager),
         },
     }
+    brain.builderLocations = {}
+    brain.unitLocations = {}
+    if brain.hasNavalSite then
+        local naval = {}
+        for key, value in pairs(manager) do naval[key] = value end
+        naval.LocationType = 'NAVAL'
+        naval.Location = { assert(info.navalX, 'naval site x missing'), 0,
+                           assert(info.navalZ, 'naval site z missing') }
+        naval.GetLocationCoords = function() return naval.Location end
+        brain.BuilderManagers.NAVAL = {
+            Position = naval.Location, EngineerManager = naval, FactoryManager = factoryManager(naval),
+        }
+    end
     -- Filled below once the template is known — conditions read it off the location.
     setmetatable(brain, brainMeta)
 
     -- FAF's own base description drives the list: template -> builder groups -> builders,
     -- flattened and sorted once. Priority first, name as the tiebreak, so the walk order is
     -- a fact about the data rather than about table iteration.
-    local template = BaseBuilderTemplates[info.base]
+    local base = info.base
+    if base == 'adaptive' or base == 'random' then
+        ScenarioInfo.ArmySetup[brain.Name] = { AIPersonality = base }
+        -- FAF GetHighestBuilder scores every main-base template. Sort names before
+        -- consuming randomness so Lua table iteration cannot change a replay.
+        local candidates = {}
+        for name, candidate in pairs(BaseBuilderTemplates) do
+            if candidate.FirstBaseFunction then table.insert(candidates, name) end
+        end
+        table.sort(candidates)
+        local savedRandom, savedMapSize = Random, GetMapSize
+        -- Local xorshift32, as in core/scene/Particles.cpp. This selects a strategy,
+        -- not combat outcomes; repeat the same map/army setup for the same selection.
+        local state = (info.sizeX ~ (info.sizeZ << 16) ~ (army + 1)) & 0xffffffff
+        if state == 0 then state = 1 end
+        Random = function(low, high)
+            state = (state ~ (state << 13)) & 0xffffffff
+            state = (state ~ (state >> 17)) & 0xffffffff
+            state = (state ~ (state << 5)) & 0xffffffff
+            return low + state % (high - low + 1)
+        end
+        -- Authored map thresholds use ogrids; our positions and scenario size use elmos.
+        GetMapSize = function() return info.sizeX / 8, info.sizeZ / 8 end
+        brain.GetMapWaterRatio = function() return info.waterRatio end
+        local best, selected, personality = 0
+        local ok, err = pcall(function()
+            for _, name in ipairs(candidates) do
+                local score, kind = BaseBuilderTemplates[name].FirstBaseFunction(brain)
+                -- Some authored functions fall through at exact map-size boundaries.
+                if score and score > best then best, selected, personality = score, name, kind end
+            end
+        end)
+        Random, GetMapSize = savedRandom, savedMapSize
+        if not ok then error('FAF base selection failed: ' .. tostring(err)) end
+        assert(selected, 'FAF base selection found no eligible template')
+        ScenarioInfo.ArmySetup[brain.Name].AIBase = selected
+        if base == 'random' then ScenarioInfo.ArmySetup[brain.Name].AIPersonality = personality end
+        base = selected
+    end
+    brain.baseTemplate = base
+    brain.openingRushAir = info.base=='RushMainAir' or (info.base=='random'
+        and ScenarioInfo.ArmySetup[brain.Name].AIPersonality=='rushair')
+    local template = assert(BaseBuilderTemplates[base], 'unknown FAF base: ' .. tostring(base))
     local list = {}
+    local added = {}
     local function addGroup(groupName)
         local group = BuilderGroups[groupName]
         if not group then return end
+        local naval = groupName == 'EngineerNavalFactoryBuilder'
+            or groupName == 'T1SeaFactoryBuilders' or groupName == 'T2SeaFactoryBuilders'
+            or groupName == 'T3SeaFactoryBuilders' or groupName == 'FrequentSeaAttackFormBuilders'
+        if naval and not brain.hasNavalSite then return end
         for _, builderName in ipairs(group) do
             local spec = Builders[builderName]
             local supported = spec ~= nil
-            if groupName == 'EngineerNavalFactoryBuilder' then
-                supported = builderName == 'T1 Naval Factory Builder'
-            elseif groupName == 'FrequentSeaAttackFormBuilders' then
+            if groupName == 'FrequentSeaAttackFormBuilders' then
                 supported = builderName == 'Frequent Sea Attack T1'
+                    or builderName == 'Frequent Sea Attack T2'
+                    or builderName == 'Frequent Sea Attack T3'
             end
-            -- The slice stops at T1. NormalMain already carries generic economy-upgrade
-            -- groups, so filter their naval platoon templates even though they were not added
-            -- by the naval block below.
-            if spec and (spec.PlatoonTemplate == 'T1SeaFactoryUpgrade'
-                         or spec.PlatoonTemplate == 'T2SeaFactoryUpgrade') then
-                supported = false
-            end
-            if supported then
+            if supported and not added[builderName] then
+                added[builderName] = true
+                brain.builderLocations[spec] = naval and 'NAVAL' or 'MAIN'
                 table.insert(list, { spec = spec, kind = group.BuildersType })
             end
         end
@@ -577,10 +867,12 @@ function __rm_faf_boot(army, info)
         for _, groupName in ipairs(template.NonCheatBuilders or {}) do addGroup(groupName) end
     end
     if brain.hasNavalSite then
-        -- Smallest complete naval lane: one T1 yard, surface products, and the stock T1
-        -- fleet former. Submarines are filtered below until depth and sonar are simulated.
+        -- Surface production and factory upgrades share the ordinary tier/build-tree
+        -- checks. Submersible products still require their separate underwater support.
         addGroup('EngineerNavalFactoryBuilder')
         addGroup('T1SeaFactoryBuilders')
+        addGroup('T2SeaFactoryBuilders')
+        addGroup('T3SeaFactoryBuilders')
         addGroup('FrequentSeaAttackFormBuilders')
     end
     table.sort(list, function(a, b)
@@ -599,10 +891,14 @@ function __rm_faf_boot(army, info)
         if brain.hasNavalSite then factoryCount.Sea = 1 end
         settings.FactoryCount = factoryCount
         brain.BuilderManagers.MAIN.BaseSettings = settings
+        if brain.BuilderManagers.NAVAL then brain.BuilderManagers.NAVAL.BaseSettings = settings end
     end
 
     brain.buildingTemplates = import('/lua/buildingtemplates.lua').BuildingTemplates
     __rm_faf.brains[army] = brain
+    local view = __rm_faf.armyViews[army]
+    __rm_faf_army(army, info.startX, info.startZ, info.faction,
+        view and view.defeated or false, view and view.alliance or army)
 
     -- Every unit id this faction's factory builders could ask for, handed back so the
     -- adapter can teach their category sets — the tech gate below needs the categories of
@@ -623,11 +919,17 @@ function __rm_faf_boot(army, info)
             want(squad and squad[1] and squad[1][1])
         elseif item.kind == 'EngineerBuilder' then
             local construction = item.spec.BuilderData and item.spec.BuilderData.Construction
+            local platoon = PlatoonTemplates[item.spec.PlatoonTemplate]
+            if platoon and platoon.Plan == 'CommanderInitialBOAI' then
+                for _, structure in ipairs({'T1LandFactory','T1AirFactory','T1SeaFactory',
+                    'T1EnergyProduction','T1Resource'}) do want(buildingIdFor(brain,structure)) end
+            end
             for _, structure in ipairs((construction and construction.BuildStructures) or {}) do
                 want(buildingIdFor(brain, structure))
             end
         end
     end
+    wanted.baseTemplate = base
     return wanted
 end
 
@@ -644,7 +946,7 @@ local function conditionsPass(brain, spec)
     if cached and now < cached.expires then
         return cached.result
     end
-    local result = true
+    local result, failure = true, 'none'
     for _, cond in ipairs(spec.BuilderConditions or {}) do
         local fn, args
         if type(cond[1]) == 'function' then
@@ -655,17 +957,21 @@ local function conditionsPass(brain, spec)
             args = cond[3] or {}
             if not fn then
                 recordMissing(tostring(cond[1]) .. ':' .. tostring(cond[2]))
+                failure = tostring(cond[1]) .. ':' .. tostring(cond[2]) .. ' (missing)'
                 result = false
                 break
             end
         end
         if result then
             -- 'LocationType' is FAF's placeholder, substituted per base when a real manager
-            -- instantiates a builder. The stand-in has exactly one base.
+            -- instantiates a builder. Naval groups use the shipyard's own location.
             local actual = {}
             for i, v in ipairs(args) do
-                actual[i] = (v == 'LocationType') and 'MAIN' or v
+                actual[i] = (v == 'LocationType') and (brain.builderLocations[spec] or 'MAIN') or v
             end
+            -- This corpus condition compares VDist3 of our elmo-valued marker/base
+            -- positions with its authored ogrid distance (UnitCountBuildConditions).
+            if cond[2]=='CanBuildOnHydroLessThanDistance' then actual[2]=actual[2]*8 end
             local ok, value = pcall(fn, brain, unpack(actual))
             if not ok then
                 local key = tostring(value)
@@ -675,7 +981,10 @@ local function conditionsPass(brain, spec)
                 result = false
             end
         end
-        if not result then break end
+        if not result then
+            failure = type(cond[1])=='function' and 'inline condition' or tostring(cond[2])
+            break
+        end
     end
     -- A spec's FIRST expiry is spread over three passes (passes run every ten ticks), and
     -- it keeps that phase afterwards. Without this every builder was first evaluated in the
@@ -688,7 +997,9 @@ local function conditionsPass(brain, spec)
         brain.condSerial = brain.condSerial + 1
         hold = hold + 10 * (brain.condSerial % 3)
     end
-    brain.condCache[spec] = { expires = now + hold, result = result }
+    brain.condCache[spec] = { expires = now + hold, result = result,
+        checkedAt = now, failure = failure, checks = (cached and cached.checks or 0)+1,
+        passes = (cached and cached.passes or 0)+(result and 1 or 0) }
     return result
 end
 
@@ -700,10 +1011,181 @@ end
 -- the budget again, the watchdog says so by name rather than by a stall.
 local function walkPriority(brain, kindName, visit)
     for _, item in ipairs(brain.builders) do
-        if item.kind == kindName and conditionsPass(brain, item.spec) and visit(item) then
+        if item.kind == kindName and (item.spec.Priority or 0) > 0
+            and conditionsPass(brain, item.spec) and visit(item) then
             return
         end
     end
+end
+
+)lua"} + R"lua(
+-- CommanderInitialBOAI, platoon.lua:4549–5015. Keep its resource-dependent phases
+-- across observations; the native command queue owns construction and approach work.
+-- All coordinates are elmos, so the authored squared-ogrid thresholds multiply by 64.
+local function advanceOpening(brain, decisions)
+    local opening = brain.opening
+    if not opening then return end
+    local snap = brain.snap
+    local acu
+    for _, u in ipairs(snap.units) do if u.h == opening.builder then acu=u; break end end
+    if not acu then brain.opening=false; return end
+    if opening.waitQueue and (acu.queueBusy or acu.building) then return end
+    opening.waitQueue=false
+    local now=snap.tick or 0
+    local issued=0
+    local function emit(kind, data)
+        data=data or {}
+        data.kind, data.builder, data.name = kind, acu.h, opening.name
+        data.queued=issued>0
+        table.insert(decisions,data)
+        issued=issued+1
+    end
+    local function build(structure, site, anchor)
+        local bp=buildingIdFor(brain,structure)
+        if not bp then error('opening building template missing '..structure) end
+        -- The app seeds one mex before the AI starts. It remains in the survey's
+        -- original marker count, but a claimed marker must not become a second build.
+        if site and not brain:CanBuildStructureAt(bp,{site[1],0,site[2]}) then return end
+        emit('build',{bp=bp,structure=structure,site=site,anchor=anchor})
+    end
+    local function distance(site)
+        return (acu.x-site[1])^2+(acu.z-site[2])^2
+    end
+    local function approachMass(site, after)
+        emit('move',{x=site[1],z=site[2]})
+        opening.massSite,opening.afterMassMove,opening.phase=site,after,'massMove'
+    end
+    local function wait(phase)
+        opening.phase,opening.waitQueue=phase,true
+    end
+    local survey=opening.survey
+    if opening.phase=='initial' then
+        build(survey.inWater and 'T1SeaFactory'
+            or (opening.rushair and 'T1AirFactory' or 'T1LandFactory'))
+        if #survey.close>0 then
+            build('T1Resource',table.remove(survey.close,1))
+            wait('powerMass')
+        elseif #survey.distant>0 then
+            approachMass(table.remove(survey.distant,1),'powerMass')
+        else wait('powerMass') end
+        return
+    end
+    if opening.phase=='massMove' then
+        if distance(opening.massSite)>165*64 and acu.queueBusy then return end
+        emit('stop')
+        build('T1Resource',opening.massSite)
+        wait(opening.afterMassMove)
+        return
+    end
+    if opening.phase=='powerMass' then
+        for i=1,(survey.hydro and 1 or 2) do build('T1EnergyProduction') end
+        local closeRemaining=#survey.close
+        if #survey.close>=3 then
+            for i=1,2 do build('T1Resource',table.remove(survey.close,1)) end
+            build('T1EnergyProduction')
+        end
+        for _,site in ipairs(survey.close) do build('T1Resource',site) end
+        survey.close={}
+        if #survey.distant>0 and #survey.distant<3 and closeRemaining==0 then
+            approachMass(table.remove(survey.distant,1),'distantMass')
+        else wait('afterMass') end
+        return
+    end
+    if opening.phase=='distantMass' then
+        while #survey.distant>0 do
+            local site=table.remove(survey.distant,1)
+            if brain:CanBuildStructureAt(buildingIdFor(brain,'T1Resource'),{site[1],0,site[2]}) then
+                approachMass(site,'distantMass')
+                return
+            end
+        end
+        opening.phase='afterMass'
+    end
+    if opening.phase=='afterMass' then
+        if not survey.hydro then
+            local count=3
+            if opening.closeCount>0 and opening.closeCount<4 and opening.distantCount<=1 then count=2 end
+            for i=1,count do build('T1EnergyProduction') end
+            if opening.closeCount>3 then build('T1LandFactory') end
+            wait('finish')
+            return
+        end
+        if opening.closeCount+opening.distantCount==0 then brain.opening=false; return end
+        opening.phase='hydroMove'
+        if distance(survey.hydro)>144*64 then
+            emit('move',{x=survey.hydro[1],z=survey.hydro[2]})
+            return
+        end
+    end
+    if opening.phase=='hydroMove' then
+        if distance(survey.hydro)>100*64 and acu.queueBusy then return end
+        emit('stop')
+        opening.phase,opening.polls,opening.wake='hydroFind',0,now
+    end
+    if opening.phase=='hydroFind' then
+        if now<opening.wake then return end
+        local best,low,any
+        for _,work in ipairs(snap.underway or {}) do
+            if EntityCategoryContains(categories.HYDROCARBON,work) then
+                for _,u in ipairs(snap.units) do
+                    if u.h==work.builder and EntityCategoryContains(categories.ENGINEER,u) then
+                        any=true
+                        local dist=(acu.x-u.x)^2+(acu.z-u.z)^2
+                        if (not low or dist<low) and dist<225*64 and (u.guardCount or 0)<20 then
+                            best,low={builder=u.h,x=work.x,z=work.z},dist
+                        end
+                    end
+                end
+            end
+        end
+        if best then
+            opening.assistee=best
+            emit('guard',{target=best.builder})
+            opening.phase,opening.wake='hydroGuard',now+30*brain.fafTickScale
+        elseif any or opening.polls>=11 then brain.opening=false
+        else
+            opening.polls=opening.polls+1
+            opening.wake=now+15*brain.fafTickScale
+        end
+        return
+    end
+    if opening.phase=='hydroGuard' then
+        if now<opening.wake then return end
+        local target=opening.assistee
+        local finished,underway,targetAlive=false,false,false
+        for _,u in ipairs(snap.units) do
+            if u.h==target.builder then targetAlive=true end
+            if EntityCategoryContains(categories.HYDROCARBON,u)
+                and (u.x-target.x)^2+(u.z-target.z)^2<64 then finished=true end
+        end
+        for _,work in ipairs(snap.underway or {}) do
+            if work.builder==target.builder and work.x==target.x and work.z==target.z
+                and EntityCategoryContains(categories.HYDROCARBON,work) then underway=true; break end
+        end
+        if not finished and underway and targetAlive and acu.queueBusy then
+            opening.wake=now+30*brain.fafTickScale
+            return
+        end
+        emit('stop')
+        local count=opening.closeCount+opening.distantCount
+        if finished and (count>2 or (count>1 and brain:GetEconomyStored('MASS')>120)) then
+            local width,height=brain.mapSize[1]/8,brain.mapSize[2]/8
+            if width>512 or height>512 or opening.rushair then
+                build('T1AirFactory',nil,survey.hydro)
+            else
+                build('T1LandFactory',nil,survey.hydro)
+                -- Preserve the source's AND precedence on the height branch.
+                if width>256 or (height>256
+                    and brain:GetEngineerManagerUnitsBeingBuilt(categories.FACTORY*categories.AIR)<1
+                    and brain:GetCurrentUnits(categories.FACTORY*categories.AIR)<1) then
+                    build('T1AirFactory',nil,survey.hydro)
+                end
+            end
+            wait('finish')
+        else brain.opening=false end
+        return
+    end
+    if opening.phase=='finish' then brain.opening=false end
 end
 
 -- --- The decision pass ---------------------------------------------------------------------
@@ -712,65 +1194,243 @@ end
 -- serialization is the stand-in for the manager stack, stated here once. What fires within
 -- those slots is entirely the corpus's call.
 
+local function sampleEconomy(brain,snap)
+    -- base-ai.lua:EconomyMonitor: 300 FAF ticks, sampled every ten ticks, with
+    -- thirty initially-zero slots. Keep instantaneous brain queries separate:
+    -- GreaterThanEconEfficiencyCombined deliberately checks both time scales.
+    local now=snap.tick or 0
+    if brain.economySampleTick and now<brain.economySampleTick+10*brain.fafTickScale then return end
+    brain.economySampleTick=now
+    local values={MassIncome=snap.massIncome,EnergyIncome=snap.energyIncome,
+        MassRequested=snap.massRequested,EnergyRequested=snap.energyRequested,
+        MassTrendOverTime=brain:GetEconomyTrend('MASS'),
+        EnergyTrendOverTime=brain:GetEconomyTrend('ENERGY')}
+    local index=brain.economySampleIndex
+    local previous=brain.economySamples[index] or {}
+    local totals,eco=brain.economyTotals,brain.EconomyOverTimeCurrent
+    for name,value in pairs(values) do
+        totals[name]=(totals[name] or 0)-(previous[name] or 0)+value
+        eco[name]=totals[name]/30
+    end
+    brain.economySamples[index]=values
+    brain.economySampleIndex=index%30+1
+    eco.MassEfficiencyOverTime=math.min(totals.MassIncome/totals.MassRequested,2)
+    eco.EnergyEfficiencyOverTime=math.min(totals.EnergyIncome/totals.EnergyRequested,2)
+end
+
+local function advanceAssists(brain,decisions)
+    local living={}
+    for _,u in ipairs(brain.snap.units) do living[u.h]=u end
+    local handles={}
+    for h in pairs(brain.assists) do handles[#handles+1]=h end
+    table.sort(handles)
+    for _,h in ipairs(handles) do
+        local state=brain.assists[h]
+        local helper=living[h]
+        local now=brain.snap.tick or 0
+        local release=not helper
+        if helper and state.untilFinished and now>=state.checkAt then
+            local underway=false
+            for _,work in ipairs(brain.snap.underway or {}) do
+                if work.builder==state.target and work.bp==state.bp
+                    and work.command==state.command and work.remaining==state.remaining
+                    and work.x==state.x and work.z==state.z then underway=true; break end
+            end
+            release=not living[state.target] or not underway or helper.queueBusy==false
+            state.checkAt=now+15*brain.fafTickScale
+        elseif helper and not state.untilFinished then
+            release=now>=state.expires
+        end
+        if release then
+            if helper then decisions[#decisions+1]={kind='stop',builder=h} end
+            brain.assists[h]=nil
+        end
+    end
+end
+
+local function startAssist(brain,item,helper,decisions)
+    local data=item.spec.BuilderData.Assist
+    local kind=data.AssisteeType
+    if kind~='Engineer' and kind~='Factory' and kind~='Structure' then
+        recordMissing('assist target '..tostring(kind)); return false
+    end
+    local location=data.AssistLocation
+    if location=='LocationType' then location=brain.builderLocations[item.spec] or 'MAIN' end
+    local base=location and brain.BuilderManagers[location]
+    if not base then return false end
+    local count=0
+    for _,state in pairs(brain.assists) do
+        if state.name==item.spec.BuilderName then count=count+1 end
+    end
+    if count>=(item.spec.InstanceCount or 1) then return false end
+    local builderCategory=data.AssisteeCategory or categories.ALLUNITS
+    if type(builderCategory)=='string' then builderCategory=ParseEntityCategory(builderCategory) end
+    local best,low
+    for _,name in ipairs(data.BeingBuiltCategories or {'ALLUNITS'}) do
+        local candidates=assistanceTargets(brain,kind,ParseEntityCategory(name),builderCategory,
+            kind=='Structure' and base.Position or nil,base.EngineerManager.Radius*8,
+            kind~='Structure' and location or nil)
+        for _,candidate in ipairs(candidates) do
+            local u=candidate.unit
+            local guards=assistGuards(brain,u)
+            local distance=VDist2(helper.x,helper.z,u.x,u.z)
+            local score=data.AssistClosestUnit and distance or guards
+            if u.h~=helper.h and guards<20 and distance<(data.AssistRange or 80)*8
+                and (not low or score<low) then best,low=candidate,score end
+        end
+        -- EconAssistBody stops at the first nonempty category, even if out of range.
+        if #candidates>0 then break end
+    end
+    if not best then return false end
+    local now=brain.snap.tick or 0
+    local work=best.work
+    brain.assists[helper.h]={target=best.unit.h,name=item.spec.BuilderName,
+        untilFinished=data.AssistUntilFinished,checkAt=now+10*brain.fafTickScale,
+        expires=now+(10+(data.Time or 60)*10)*brain.fafTickScale,
+        bp=work.bp,command=work.command,remaining=work.remaining,x=work.x,z=work.z}
+    brain.assistReservations[best.unit.h]=(brain.assistReservations[best.unit.h] or 0)+1
+    -- Foundations have no native unit handle yet. Guard their actual builder,
+    -- and use the build command identity to release the helper when that work ends.
+    decisions[#decisions+1]={kind='guard',builder=helper.h,target=best.unit.h,name=item.spec.BuilderName}
+    return true
+end
+
 function __rm_faf_decide(army, snap)
     local brain = __rm_faf.brains[army]
     if not brain then return {} end
     brain.snap = snap
+    local locations={}
+    for _,u in ipairs(snap.units) do locations[u.h]=brain.unitLocations[u.h] or 'MAIN' end
+    -- A surviving foundation can finish after its founder dies. Keep the ownership
+    -- needed by its eventual completion event until that work leaves the snapshot.
+    for _,work in ipairs(snap.underway or {}) do
+        if work.builder and brain.unitLocations[work.builder] then
+            locations[work.builder]=brain.unitLocations[work.builder]
+        end
+    end
+    brain.unitLocations=locations
+    brain.assistReservations={}
+    brain.assistSnapshot=nil
     if snap.currentEnemy ~= nil and snap.enemyPath then
         local ownIndex, enemyIndex = brain:GetArmyIndex(), snap.currentEnemy + 1
         brain.CanPathToEnemy[ownIndex] = brain.CanPathToEnemy[ownIndex] or {}
         brain.CanPathToEnemy[ownIndex][enemyIndex] = { MAIN = snap.enemyPath }
     end
     for _, u in ipairs(snap.units) do u.__brain = brain end
+    local naval = brain.BuilderManagers.NAVAL
+    if naval then
+        for _, u in ipairs(snap.units) do
+            if EntityCategoryContains(categories.FACTORY * categories.NAVAL, u) then
+                naval.Position[1], naval.Position[3] = u.x, u.z
+                break
+            end
+        end
+    end
 
-    -- What base-ai's economy thread maintains, refreshed from the sim's own numbers.
-    -- Retail keeps requested demand separate from granted usage (`C-163`). Efficiency uses
-    -- demand; trend uses actual consumption and is published per second.
-    local eco = brain.EconomyOverTimeCurrent
-    eco.MassIncome = snap.massIncome
-    eco.EnergyIncome = snap.energyIncome
-    eco.MassRequested = snap.massRequested
-    eco.EnergyRequested = snap.energyRequested
-    eco.MassEfficiencyOverTime =
-        math.min(snap.massIncome / math.max(snap.massRequested, 0.0001), 2)
-    eco.EnergyEfficiencyOverTime =
-        math.min(snap.energyIncome / math.max(snap.energyRequested, 0.0001), 2)
-    eco.MassTrendOverTime = (snap.massIncome - snap.massUsage) * 10
-    eco.EnergyTrendOverTime = (snap.energyIncome - snap.energyUsage) * 10
+    sampleEconomy(brain,snap)
 
     local decisions = {}
+    advanceAssists(brain,decisions)
+    advanceOpening(brain,decisions)
 
-    -- The builder pool: idle engineers first, the commander last — FAF's own habit, and it
-    -- keeps the commander free once real engineers exist. One structure may be underway PER
-    -- POOL MEMBER: the sim funds a construction without modelling the builder standing at
-    -- it, so this count is what stands in for attendance — each engineer trained buys one
-    -- more parallel build, exactly what an engineer is for.
+    -- Idle engineers first, commander last. Native construction owns its builder,
+    -- including the approach order before a foundation exists. A global underway count
+    -- cannot identify which pool member is free and used to overwrite busy builders.
     local builderPool = {}
     for _, u in ipairs(snap.units) do
-        if u.idle and not u.reclaiming
+        if u.idle and not u.reclaiming and not u.building
+            and not brain.assists[u.h]
+            and (not brain.opening or brain.opening.builder~=u.h)
             and EntityCategoryContains(categories.ENGINEER - categories.COMMAND, u) then
             table.insert(builderPool, u)
         end
     end
     for _, u in ipairs(snap.units) do
-        if EntityCategoryContains(categories.COMMAND, u) then
+        if u.idle and not u.reclaiming and not u.building
+            and not brain.assists[u.h]
+            and (not brain.opening or brain.opening.builder~=u.h)
+            and EntityCategoryContains(categories.COMMAND, u) then
             table.insert(builderPool, u)
         end
     end
-    local slots = #builderPool - snap.structuresUnderway
+    local slots = #builderPool
 
     if slots > 0 then
-        -- What the NEXT builder in the pool may legally build, by the tag the blueprints
-        -- grant its tier — the sim would refuse anyway, but a refused decision burns the
-        -- slot for a whole pass, which is how a T3 power plant order starved a base.
-        local nextBuilder = builderPool[#builderPool - slots + 1]
-        local builderTag =
-            (EntityCategoryContains(categories.COMMAND, nextBuilder) and 'BUILTBYCOMMANDER')
-            or (EntityCategoryContains(categories.TECH3, nextBuilder) and 'BUILTBYTIER3ENGINEER')
-            or (EntityCategoryContains(categories.TECH2, nextBuilder) and 'BUILTBYTIER2ENGINEER')
-            or 'BUILTBYTIER1ENGINEER'
         walkPriority(brain, 'EngineerBuilder', function(item)
+            -- Select the unit required by this platoon, not simply the first free engineer.
+            -- Otherwise a T1 engineer hides both an idle commander and higher-tier engineers.
+            local firstFree = #builderPool - slots + 1
+            local selected = firstFree
+            local template = PlatoonTemplates[item.spec.PlatoonTemplate]
+            local squads = template and (template.GlobalSquads
+                or (template.FactionSquads and template.FactionSquads[factionNames[brain.faction]]))
+            local required = squads and squads[1] and squads[1][1]
+            -- FactionSquads name blueprint IDs; GlobalSquads use category expressions.
+            if type(required) == 'string' then required = ParseEntityCategory(required) end
+            local assistPlan=template and template.Plan=='ManagerEngineerAssistAI'
+            if required or assistPlan then
+                selected = nil
+                for index = firstFree, #builderPool do
+                    local candidate=builderPool[index]
+                    if (not required or EntityCategoryContains(required,candidate))
+                        and (not assistPlan or brain.unitLocations[candidate.h]
+                            ==(brain.builderLocations[item.spec] or 'MAIN')) then
+                        selected = index
+                        break
+                    end
+                end
+                if not selected then return false end
+            end
+            local nextBuilder = builderPool[selected]
             local data = item.spec.BuilderData
+            local function reserveBuilder()
+                -- EngineerManager.AssignEngineerTask resets then applies this metadata
+                -- for every selected platoon, including assistance and opening plans.
+                brain.assistLimits[nextBuilder.h]=data and data.NumAssistees or nil
+                builderPool[firstFree], builderPool[selected] = builderPool[selected], builderPool[firstFree]
+                slots = slots - 1
+            end
+            local builderTag =
+                (EntityCategoryContains(categories.COMMAND, nextBuilder) and 'BUILTBYCOMMANDER')
+                or (EntityCategoryContains(categories.TECH3, nextBuilder) and 'BUILTBYTIER3ENGINEER')
+                or (EntityCategoryContains(categories.TECH2, nextBuilder) and 'BUILTBYTIER2ENGINEER')
+                or 'BUILTBYTIER1ENGINEER'
+            if template and template.Plan=='ManagerEngineerAssistAI' and data and data.Assist then
+                if not startAssist(brain,item,nextBuilder,decisions) then return false end
+                reserveBuilder()
+                return slots<=0
+            end
+            if template and template.Plan=='CommanderInitialBOAI' then
+                if brain.opening or brain.openingDone[item.spec.BuilderName]
+                    or not __rm_faf_opening_survey then return false end
+                local survey=__rm_faf_opening_survey(nextBuilder.h)
+                if not survey then return false end
+                brain.opening={builder=nextBuilder.h,name=item.spec.BuilderName,phase='initial',
+                    survey=survey,closeCount=#survey.close,distantCount=#survey.distant,
+                    rushair=brain.openingRushAir}
+                brain.openingDone[item.spec.BuilderName]=true
+                advanceOpening(brain,decisions)
+                reserveBuilder()
+                return slots<=0
+            end
+            if data and data.Enhancement then
+                local sequence = {}
+                for _, name in ipairs(data.Enhancement) do
+                    if not nextBuilder:HasEnhancement(name) then table.insert(sequence, name) end
+                end
+                -- EnhanceAI queues all scripts first; TimeBetweenEnhancements delays
+                -- its completion polling, not the individual enhancement commands.
+                if not template or template.Plan ~= 'EnhanceAI'
+                    or not EntityCategoryContains(template.GlobalSquads[1][1], nextBuilder)
+                    or not __rm_faf_enhancement_sequence
+                    or not __rm_faf_enhancement_sequence(nextBuilder.h, sequence) then return false end
+                for index, enhancement in ipairs(sequence) do
+                    table.insert(decisions, {kind='enhance',builder=nextBuilder.h,
+                        enhancement=enhancement,queued=index > 1,name=item.spec.BuilderName})
+                end
+                reserveBuilder()
+                return slots <= 0
+            end
             -- Reclaim builders carry no structure queue; they hand an engineer to the
             -- adaptive reclaim state machine. The decision that machine reaches first is
             -- "go to the richest cell near the base", which the match turns into a reclaim
@@ -793,12 +1453,12 @@ function __rm_faf_decide(army, snap)
                 end
                 local x, z, radius = __rm_faf_reclaimTarget(brain, rings)
                 if not x then return false end
-                local builderUnit = builderPool[#builderPool - slots + 1]
+                local builderUnit = nextBuilder
                 table.insert(decisions, {
                     kind = 'reclaim', builder = builderUnit.h, name = item.spec.BuilderName,
                     x = x, z = z, radius = radius,
                 })
-                slots = slots - 1
+                reserveBuilder()
                 return slots <= 0
             end
             local construction = data and data.Construction
@@ -829,7 +1489,15 @@ function __rm_faf_decide(army, snap)
                 if bp then
                     local bpUpper = string.upper(bp)
                     local cats = __rm_faf.cats[bpUpper]
-                    if cats and not cats[builderTag] then
+                    local allowed = cats and cats[builderTag]
+                    if cats and builderTag == 'BUILTBYCOMMANDER' then
+                        local installed = nextBuilder.enhancements or {}
+                        local t3 = installed.T3Engineering
+                        local t2 = t3 or installed.AdvancedEngineering
+                        allowed = allowed or (t2 and cats.BUILTBYTIER2COMMANDER)
+                            or (t3 and cats.BUILTBYTIER3COMMANDER)
+                    end
+                    if cats and not allowed then
                         bp = nil
                     else
                         local live = 0
@@ -843,12 +1511,12 @@ function __rm_faf_decide(army, snap)
                 end
                 if bp then
                     brain.progress[item.spec.BuilderName] = progress
-                    local builderUnit = builderPool[#builderPool - slots + 1]
+                    local builderUnit = nextBuilder
                     table.insert(decisions, {
                         kind = 'build', bp = bp, structure = structure,
                         builder = builderUnit.h, name = item.spec.BuilderName,
                     })
-                    slots = slots - 1
+                    reserveBuilder()
                     return slots <= 0
                 end
             end
@@ -861,7 +1529,7 @@ function __rm_faf_decide(army, snap)
     -- stationary: let its current product finish, then upgrade before training again.
     -- Keep the accepted intent across economy fluctuations, like an assigned upgrade
     -- platoon, but discard it when the generation-bearing handle disappears or upgrades.
-    local upgrade = brain.pendingFactoryUpgrade
+    local upgrade = rawget(brain, 'pendingFactoryUpgrade') -- private state, not a native API
     local upgradeUnit
     if upgrade then
         for _, u in ipairs(snap.units) do
@@ -913,7 +1581,7 @@ function __rm_faf_decide(army, snap)
             local squad = squads and squads[factionNames[brain.faction]]
             local bp = squad and squad[1] and squad[1][1]
             if not bp then return false end
-            -- A factory only builds its own domain — the unit id's third letter is FAF's
+            -- Combat products use their factory's domain — the unit id's third letter is FAF's
             -- own encoding (l land, a air, s sea), and the factory's categories carry the
             -- matching tag. Without this a land factory accepted air-scout orders the sim
             -- then refused every second, wasting the slot.
@@ -925,13 +1593,16 @@ function __rm_faf_decide(army, snap)
             -- the same way, and without it a T3 engineer order wastes a T1 factory's slot
             -- every single pass.
             local unitCats = __rm_faf.cats[string.upper(bp)]
+            -- Factory Economy.BuildableCategory also permits MOBILE CONSTRUCTION
+            -- across domains (e.g. UEB0302 builds the land engineer UEL0309).
+            local construction = unitCats and unitCats.MOBILE and unitCats.CONSTRUCTION
             for _, factory in ipairs(factories) do
                 local tierTag = (EntityCategoryContains(categories.TECH3, factory)
                                      and 'BUILTBYTIER3FACTORY')
                     or (EntityCategoryContains(categories.TECH2, factory)
                             and 'BUILTBYTIER2FACTORY')
                     or 'BUILTBYTIER1FACTORY'
-                if not factory.__taken and EntityCategoryContains(need, factory)
+                if not factory.__taken and (construction or EntityCategoryContains(need, factory))
                     and unitCats and unitCats[tierTag] and not unitCats.SUBMERSIBLE then
                     factory.__taken = true
                     table.insert(decisions, {
@@ -946,11 +1617,94 @@ function __rm_faf_decide(army, snap)
         end)
     end
 
+    -- ScoutingAI owns a separate formation slot and keeps its assignments until arrival
+    -- or death. FAF platoon.lua:1190 alternates enemy-base visits with low-priority areas.
+    local living = {}
+    for _, u in ipairs(snap.units) do living[u.h] = u end
+    for h, assignment in pairs(brain.scoutAssignments) do
+        local u = living[h]
+        if not u or (u.idle and not u.scoutingBusy and (snap.tick or 0) > assignment.tick) then
+            brain.scoutAssignments[h] = nil
+        end
+    end
+    for _, enemy in ipairs(snap.enemies or {}) do
+        if EntityCategoryContains(categories.STRUCTURE - categories.MASSEXTRACTION, enemy) then
+            local found = false
+            for _, site in ipairs(brain.scoutSites) do
+                if (site.x-enemy.x)^2 + (site.z-enemy.z)^2 < (100*8)^2 then
+                    site.high = true; found = true; break
+                end
+            end
+            if not found then table.insert(brain.scoutSites, {x=enemy.x,z=enemy.z,high=true}) end
+        end
+    end
+    walkPriority(brain, 'PlatoonFormBuilder', function(item)
+        local template = PlatoonTemplates[item.spec.PlatoonTemplate]
+        if not template or template.Plan ~= 'ScoutingAI' then return false end
+        local squad = template.GlobalSquads and template.GlobalSquads[1]
+        if not squad then return false end
+        local active = 0
+        local reserved = {}
+        for _, assignment in pairs(brain.scoutAssignments) do
+            reserved[assignment.site] = true
+            if assignment.name == item.spec.BuilderName then active = active + 1 end
+        end
+        if active >= (item.spec.InstanceCount or 1) then return false end
+        for _, u in ipairs(snap.units) do
+            if u.idle and not u.scoutingBusy and not brain.scoutAssignments[u.h]
+                and EntityCategoryContains(squad[1], u) then
+                local air = EntityCategoryContains(categories.AIR, u)
+                local layer = air and 'air' or 'land'
+                local preferHigh = brain.scoutVisits[layer] < brain.numOpponents
+                local sites = {}
+                for _, site in ipairs(brain.scoutSites) do
+                    if not reserved[site] then table.insert(sites, site) end
+                end
+                table.sort(sites, function(a,b)
+                    if a.high ~= b.high then return a.high == preferHigh end
+                    if (a.visited or 0) ~= (b.visited or 0) then return (a.visited or 0) < (b.visited or 0) end
+                    local da, db = (a.x-brain.startX)^2+(a.z-brain.startZ)^2,
+                                   (b.x-brain.startX)^2+(b.z-brain.startZ)^2
+                    if da ~= db then return da < db end
+                    if a.x ~= b.x then return a.x < b.x end
+                    return a.z < b.z
+                end)
+                for _, site in ipairs(sites) do
+                    local x,z = site.x,site.z
+                    if air then
+                        local dx,dz = x-u.x,z-u.z
+                        local length = math.sqrt(dx*dx+dz*dz)
+                        if length == 0 then dx,dz,length = 1,0,1 end
+                        local side = u.h % 2 == 0 and 1 or -1
+                        -- DoAirScoutVecs: vision-radius lateral offset and 75 ogrids forward.
+                        x = x + dz/length*u.vision*side + dx/length*75*8
+                        z = z - dx/length*u.vision*side + dz/length*75*8
+                        x = math.max(40, math.min(brain.mapSize[1]-40,x))
+                        z = math.max(40, math.min(brain.mapSize[2]-40,z))
+                    end
+                    local route = __rm_faf_scout_route(u.h,x,z,brain.IMAPConfig.IMAPSize*8,brain.IMAPConfig.Rings)
+                    -- platoon.lua:1225-1228 always issues the destination, even when
+                    -- threat-aware routing fails. Ordinary movement still checks terrain.
+                    if #route == 0 then route = {{x,z}} end
+                    if #route > 0 then
+                        brain.scoutSerial = brain.scoutSerial + 1
+                        site.visited = brain.scoutSerial
+                        brain.scoutVisits[layer] = site.high and (brain.scoutVisits[layer]+1) or 0
+                        brain.scoutAssignments[u.h] = {site=site, name=item.spec.BuilderName, tick=snap.tick or 0}
+                        table.insert(decisions, {kind='scout',builder=u.h,x=x,z=z,route=route,name=item.spec.BuilderName})
+                        return true
+                    end
+                end
+            end
+        end
+        return false
+    end)
+
     walkPriority(brain, 'PlatoonFormBuilder', function(item)
         local template = PlatoonTemplates[item.spec.PlatoonTemplate]
         local squads = template and template.GlobalSquads
         if not squads then return false end
-        if template.Plan == 'UnitUpgradeAI' then
+        if template.Plan == 'UnitUpgradeAI' or template.Plan == 'ScoutingAI' then
             return false  -- the upgrade slot above owns these
         end
         local gathered = {}
@@ -960,7 +1714,8 @@ function __rm_faf_decide(army, snap)
             local cap = squad[3] or 1
             for _, u in ipairs(snap.units) do
                 if cap <= 0 then break end
-                if u.idle and EntityCategoryContains(squad[1], u) then
+                if u.idle and not EntityCategoryContains(categories.SCOUT, u)
+                    and EntityCategoryContains(squad[1], u) then
                     table.insert(gathered, u.h)
                     cap = cap - 1
                 end
@@ -996,6 +1751,20 @@ local function sortedLedger(t)
 end
 function __rm_faf_missing() return sortedLedger(__rm_faf.missing) end
 function __rm_faf_cond_errors() return sortedLedger(__rm_faf.condErrors) end
+
+function __rm_faf_builder_conditions()
+    -- Observations only: never re-run a condition for reporting, and never imply
+    -- that a short-circuited condition or an unvisited builder was evaluated.
+    local rows={}
+    for army,brain in pairs(__rm_faf.brains) do
+        for spec,entry in pairs(brain.condCache) do
+            rows[#rows+1]=string.format('army %d %s: checked tick %g, %d/%d passes, first failure: %s',
+                army,spec.BuilderName or 'unnamed',entry.checkedAt,entry.passes,entry.checks,entry.failure)
+        end
+    end
+    table.sort(rows)
+    return rows
+end
 
 end
 )lua";
@@ -1151,6 +1920,10 @@ std::vector<std::string> fafConditionErrors(FafAi& ai) {
     return readStringArray(ai, "__rm_faf_cond_errors");
 }
 
+std::vector<std::string> fafBuilderConditions(FafAi& ai) {
+    return readStringArray(ai, "__rm_faf_builder_conditions");
+}
+
 std::string formatFafConditionErrorReport(std::span<const std::string> errors) {
     if (errors.empty()) {
         return {};
@@ -1162,7 +1935,8 @@ std::string formatFafConditionErrorReport(std::span<const std::string> errors) {
     return report;
 }
 
-FafOpponent::FafOpponent(FafAi& sandbox, int army) : sandbox_(sandbox), army_(army) {}
+FafOpponent::FafOpponent(FafAi& sandbox, int army, std::string baseTemplate)
+    : sandbox_(sandbox), army_(army), baseTemplate_(std::move(baseTemplate)) {}
 
 /// Teaches the driver this type's category set, once per blueprint id per opponent —
 /// `__rm_faf_type` is a no-op for a type the sandbox already knows.
@@ -1207,7 +1981,7 @@ rm::sim::UnitId FafOpponent::unpackHandle(std::int64_t handle) noexcept {
 int FafOpponent::beenDestroyedBinding(lua_State* lua) {
     const auto* self = static_cast<const FafOpponent*>(lua_touserdata(lua, lua_upvalueindex(1)));
     const lua_Integer handle = lua_tointeger(lua, 1);
-    if (self == nullptr || self->world_ == nullptr || handle <= 0) {
+    if (self == nullptr || !self->world_ || handle <= 0) {
         lua_pushboolean(lua, 1);  // nothing to resolve against is as destroyed as it gets
         return 1;
     }
@@ -1215,21 +1989,205 @@ int FafOpponent::beenDestroyedBinding(lua_State* lua) {
     return 1;
 }
 
-void FafOpponent::observe(const World& world, std::span<const rm::sim::Event> /*events*/) {
-    world_ = &world;
+int FafOpponent::enhancementSequenceBinding(lua_State* lua) {
+    const auto* self = static_cast<const FafOpponent*>(lua_touserdata(lua, lua_upvalueindex(1)));
+    const auto id = unpackHandle(luaL_checkinteger(lua, 1));
+    luaL_checktype(lua, 2, LUA_TTABLE);
+    std::vector<std::string> sequence;
+    const auto count = lua_rawlen(lua, 2);
+    for (std::size_t index = 1; index <= count; ++index) {
+        lua_rawgeti(lua, 2, static_cast<lua_Integer>(index));
+        const char* name = lua_tostring(lua, -1);
+        if (!name) { lua_pop(lua, 1); lua_pushboolean(lua, 0); return 1; }
+        sequence.emplace_back(name);
+        lua_pop(lua, 1);
+    }
+    const bool valid = self && self->world_
+        && rm::sim::validateEnhancementSequence(self->world_->scene.store,
+            self->world_->scene.catalog, id, sequence).has_value();
+    lua_pushboolean(lua, valid);
+    return 1;
+}
+
+int FafOpponent::openingSurveyBinding(lua_State* lua) {
+    const auto* self = static_cast<const FafOpponent*>(lua_touserdata(lua, lua_upvalueindex(1)));
+    const auto id = unpackHandle(luaL_checkinteger(lua, 1));
+    if (!self || !self->world_ || !self->world_->scene.store.alive(id)) {
+        lua_pushnil(lua);
+        return 1;
+    }
+    const auto& world = *self->world_;
+    const auto& at = world.scene.store.transforms()[id.index];
+    const float x = rm::sim::fxToFloat(at.x), z = rm::sim::fxToFloat(at.z);
+    const auto move = rm::data::moveDefFor(rm::unitdef::MotionType::Amphibious);
+    const auto grid = rm::sim::buildPassability(world.field, world.scene.waterLevelElmos,
+        move.maxSlopeDegrees, move.maxWaterDepthElmos);
+    const auto reachable = [&](const rm::scenario::Marker& marker) {
+        return !rm::sim::findPath(grid, at.x, at.z, rm::sim::fxFromFloat(marker.position[0]),
+            rm::sim::fxFromFloat(marker.position[2])).empty();
+    };
+    const auto distanceSquared = [&](const rm::scenario::Marker& marker) {
+        const float dx = marker.position[0]-x, dz = marker.position[2]-z;
+        return dx*dx + dz*dz;
+    };
+    const auto pushSite = [&](const rm::scenario::Marker& marker) {
+        lua_newtable(lua);
+        lua_pushnumber(lua,marker.position[0]); lua_rawseti(lua,-2,1);
+        lua_pushnumber(lua,marker.position[2]); lua_rawseti(lua,-2,2);
+    };
+    // CommanderInitialBOAI (platoon.lua:4612–4635): preserve marker order and stop
+    // the entire mass survey when either list reaches four. Distances are squared
+    // ogrids in FAF; our markers and paths are elmos (8 elmos per ogrid).
+    constexpr float kSquaredElmosPerOgrid = 8.0f*8.0f;
+    lua_newtable(lua);
+    lua_newtable(lua); // close
+    lua_newtable(lua); // distant
+    lua_Integer closeCount = 0, distantCount = 0;
+    for (const auto& marker : world.markers) {
+        if (!marker.isType("Mass")) continue;
+        const float distance = distanceSquared(marker);
+        if (distance >= 484*kSquaredElmosPerOgrid || !reachable(marker)) continue;
+        pushSite(marker);
+        if (distance < 165*kSquaredElmosPerOgrid) lua_rawseti(lua,-3,++closeCount);
+        else lua_rawseti(lua,-2,++distantCount);
+        if (closeCount == 4 || distantCount == 4) break;
+    }
+    lua_setfield(lua,-3,"distant");
+    lua_setfield(lua,-2,"close");
+    const rm::scenario::Marker* hydro = nullptr;
+    float nearest = 65*65*kSquaredElmosPerOgrid;
+    for (const auto& marker : world.markers) {
+        if (marker.isType("Hydrocarbon") && distanceSquared(marker) <= nearest
+            && (!hydro || distanceSquared(marker) < nearest)) {
+            hydro = &marker;
+            nearest = distanceSquared(marker);
+        }
+    }
+    if (hydro && reachable(*hydro)) {
+        pushSite(*hydro);
+        lua_setfield(lua,-2,"hydro");
+    }
+    lua_pushboolean(lua,world.scene.hasWater
+        && world.field.heightAtWorld(x,z) < world.scene.waterLevelElmos);
+    lua_setfield(lua,-2,"inWater");
+    return 1;
+}
+
+int FafOpponent::scoutRouteBinding(lua_State* lua) {
+    const auto* self = static_cast<const FafOpponent*>(lua_touserdata(lua, lua_upvalueindex(1)));
+    const auto id = unpackHandle(luaL_checkinteger(lua, 1));
+    const auto x = rm::sim::fxFromFloat(static_cast<float>(luaL_checknumber(lua, 2)));
+    const auto z = rm::sim::fxFromFloat(static_cast<float>(luaL_checknumber(lua, 3)));
+    const float cellSize = static_cast<float>(luaL_checknumber(lua, 4));
+    const int rings = static_cast<int>(luaL_checkinteger(lua, 5));
+    lua_newtable(lua);
+    if (!self || !self->world_ || cellSize <= 0 || rings < 0) return 1;
+    const auto& world = *self->world_;
+    const auto& scene = world.scene;
+    if (!scene.store.alive(id)) return 1;
+    const auto* def = scene.catalog.def(scene.store.typeAt(id.index));
+    if (!def) return 1;
+    std::vector<std::array<rm::sim::Fx, 2>> route;
+    if (scene.store.motion()[id.index].canFly) {
+        route.push_back({x, z});
+    } else {
+        const auto move = rm::data::moveDefFor(*def);
+        auto grid = rm::sim::buildPassability(world.field, scene.waterLevelElmos,
+                                             move.maxSlopeDegrees, move.maxWaterDepthElmos);
+        std::map<std::pair<int, int>, float> threat;
+        // The Lua VM is shared by armies. Resolve allegiance from the scout rather
+        // than the opponent that most recently registered this closure.
+        const int army = scene.store.motion()[id.index].armyIndex;
+        if (army < 0 || static_cast<std::size_t>(army) >= scene.armies.size()) return 1;
+        const int alliance = scene.armies[static_cast<std::size_t>(army)].alliance;
+        const auto cell = [cellSize](rm::sim::Fx coordinate) {
+            return static_cast<int>(std::floor(rm::sim::fxToFloat(coordinate) / cellSize));
+        };
+        for (rm::UnitIndex slot = 0; slot < scene.store.slotCount(); ++slot) {
+            if (!scene.store.slotAlive(slot)) continue;
+            const int owner = scene.store.motion()[slot].armyIndex;
+            if (owner < 0 || static_cast<std::size_t>(owner) >= scene.armies.size()
+                || scene.armies[static_cast<std::size_t>(owner)].alliance == alliance) continue;
+            const auto& at = scene.store.transforms()[slot];
+            if (!scene.intel.sees(alliance, rm::sim::IntelKind::Vision, at.x, at.z)) continue;
+            const auto* enemy = scene.catalog.def(scene.store.typeAt(slot));
+            if (enemy) threat[{cell(at.x), cell(at.z)}] += enemy->surfaceThreat;
+        }
+        for (int gz = 0; gz < grid.cellsZ; ++gz) for (int gx = 0; gx < grid.cellsX; ++gx) {
+            const int tx = cell(grid.worldAtCellCentre(gx));
+            const int tz = cell(grid.worldAtCellCentre(gz));
+            float total = 0;
+            for (int dz = -rings; dz <= rings; ++dz) for (int dx = -rings; dx <= rings; ++dx) {
+                const auto found = threat.find({tx + dx, tz + dz});
+                if (found != threat.end()) total += found->second;
+            }
+            // ScoutingAI's authored AntiSurface threshold (platoon.lua:1216).
+            if (total > 400) grid.passable[static_cast<std::size_t>(gz * grid.cellsX + gx)] = 0;
+        }
+        const auto& at = scene.store.transforms()[id.index];
+        route = rm::sim::findPath(grid, at.x, at.z, x, z);
+    }
+    lua_Integer index = 1;
+    for (const auto& point : route) {
+        lua_newtable(lua);
+        lua_pushnumber(lua, rm::sim::fxToFloat(point[0]));
+        lua_rawseti(lua, -2, 1);
+        lua_pushnumber(lua, rm::sim::fxToFloat(point[1]));
+        lua_rawseti(lua, -2, 2);
+        lua_rawseti(lua, -2, index++);
+    }
+    return 1;
+}
+
+void FafOpponent::observe(const World& world, std::span<const rm::sim::Event> events) {
+    world_.emplace(world);
+    if (!booted_ || !sandbox_.ready()) return;
+    lua_State* lua = sandbox_.state();
+    for (const auto& event : events) {
+        if (event.kind != rm::sim::EventKind::UnitFinished || event.army != army_) continue;
+        // EngineerManager.UnitConstructionFinished / FactoryFinishBuilding inherit
+        // the founder's current manager, including upgrade replacement handles.
+        const int top = lua_gettop(lua);
+        lua_getglobal(lua,"__rm_faf");
+        lua_getfield(lua,-1,"brains");
+        lua_rawgeti(lua,-1,army_);
+        lua_getfield(lua,-1,"unitLocations");
+        lua_rawgeti(lua,-1,packHandle(event.builder));
+        if (lua_isnil(lua,-1)) {
+            lua_pop(lua,1);
+            lua_pushliteral(lua,"MAIN"); // initial army-pool units register at MAIN
+        }
+        lua_rawseti(lua,-2,packHandle(event.unit));
+        lua_settop(lua,top);
+    }
 }
 
 void FafOpponent::advance(rm::TickIndex tick) {
     decisions_.clear();
     plannedThisPass_.clear();
-    if (world_ == nullptr || !sandbox_.ready()) {
+    if (!world_ || !sandbox_.ready()) {
         return;
     }
     lua_State* lua = sandbox_.state();
     const rm::app::UnitScene& scene = world_->scene;
+    if (!placement_ || !placement_->matches(world_->field,scene.hasWater,scene.waterLevelElmos)) {
+        placement_.emplace(world_->field,scene.hasWater,scene.waterLevelElmos);
+    }
     const auto armyIndex = static_cast<std::size_t>(army_);
     if (armyIndex >= scene.armies.size() || armyIndex >= world_->starts.size()) {
         return;
+    }
+    // Queued foundations reserve space even before the native task starts. Another
+    // engineer's decision must not reuse the second site of an opening queue.
+    for (rm::UnitIndex slot=0; slot<scene.store.slotCount(); ++slot) {
+        if (!scene.store.health()[slot].alive()) continue;
+        for (const auto& order : scene.store.orders()[slot].entries()) {
+            if (order.kind()!=rm::sim::CommandKind::Build) continue;
+            const auto* product=scene.catalog.def(order.payload().buildType);
+            if (product && !product->isMobile()) plannedThisPass_.push_back({
+                .position={order.payload().targetX,{},order.payload().targetZ},
+                .radius=product->collisionRadiusElmos});
+        }
     }
     // This entry drives the VM through `state()` directly, so it refuels itself — without
     // this, the watchdog bills every pass against one budget and kills a legitimate pass
@@ -1246,11 +2204,6 @@ void FafOpponent::advance(rm::TickIndex tick) {
         lua_pushlightuserdata(lua, const_cast<rm::vfs::Vfs*>(&world_->content));
         lua_pushcclosure(lua, loadBlueprint, 1);
         lua_setglobal(lua, "__rm_faf_load_blueprint");
-        // Retail's Entity:BeenDestroyed over the live store, through the script-object seam.
-        // The opponent outlives the sandbox's use of it; `world_` is read at call time.
-        lua_pushlightuserdata(lua, this);
-        lua_pushcclosure(lua, beenDestroyedBinding, 1);
-        lua_setglobal(lua, "__rm_faf_beenDestroyed");
         // __rm_faf_boot(army, info)
         lua_getglobal(lua, "__rm_faf_boot");
         lua_pushinteger(lua, army_);
@@ -1268,6 +2221,9 @@ void FafOpponent::advance(rm::TickIndex tick) {
         lua_setfield(lua, -2, "sizeZ");
         lua_pushinteger(lua, static_cast<lua_Integer>(scene.armies.size()));
         lua_setfield(lua, -2, "armies");
+        // Authored coroutine waits are measured at FAF's fixed ten ticks/second.
+        lua_pushnumber(lua,static_cast<double>(rm::app::gAppTickRate.ticksPerSecond())/10.0);
+        lua_setfield(lua,-2,"fafTickScale");
         const std::array<rm::sim::Fx, 3> home{
             rm::sim::fxFromFloat(start.x), rm::sim::Fx{}, rm::sim::fxFromFloat(start.z)};
         bool hasNavalSite = false;
@@ -1276,18 +2232,63 @@ void FafOpponent::advance(rm::TickIndex tick) {
                                                 rm::unitdef::Role::Factory, 1,
                                                 navalCategory)) {
             if (const auto def = readBlueprint(*world_, yard->path())) {
-                hasNavalSite = nearestNavalSite(
-                                   *world_, home,
-                                   rm::sim::fxFromFloat(def->collisionRadiusElmos))
-                                   .has_value();
+                const auto site = nearestNavalSite(*world_, home,
+                    rm::sim::fxFromFloat(def->collisionRadiusElmos));
+                hasNavalSite = site.has_value();
+                if (site) {
+                    lua_pushnumber(lua, rm::sim::fxToFloat((*site)[0]));
+                    lua_setfield(lua, -2, "navalX");
+                    lua_pushnumber(lua, rm::sim::fxToFloat((*site)[2]));
+                    lua_setfield(lua, -2, "navalZ");
+                }
             }
         }
         lua_pushboolean(lua, hasNavalSite ? 1 : 0);
         lua_setfield(lua, -2, "hasNavalSite");
-        // 'NormalMain' is FAF's own default skirmish base; template CHOICE (per-map scoring
-        // via each template's FirstBaseFunction) is a later pass.
-        lua_pushstring(lua, "NormalMain");
+        if (baseTemplate_ == "adaptive" || baseTemplate_ == "random") {
+            // Vertex-sampled water coverage for FAF's naval strategy gate.
+            const auto& field = world_->field;
+            std::size_t wet = 0;
+            for (const auto raw : field.raw) {
+                if (field.baseHeight + field.heightScale * raw < scene.waterLevelElmos) ++wet;
+            }
+            lua_pushnumber(lua, field.raw.empty() ? 0.0
+                : static_cast<double>(wet) / static_cast<double>(field.raw.size()));
+            lua_setfield(lua, -2, "waterRatio");
+        }
+        // Named templates or per-army adaptive/random scoring in the Lua bootstrap.
+        lua_pushstring(lua, baseTemplate_.c_str());
         lua_setfield(lua, -2, "base");
+        lua_newtable(lua);
+        lua_Integer scoutSite=1;
+        int opponents=0;
+        for (std::size_t i=0; i<world_->starts.size(); ++i) {
+            const bool occupied=i<scene.armies.size();
+            if (occupied && scene.armies[i].alliance==scene.armies[armyIndex].alliance) continue;
+            if (!occupied) {
+                float enemyDistance = std::numeric_limits<float>::infinity();
+                float alliedDistance = std::numeric_limits<float>::infinity();
+                for (std::size_t j = 0; j < scene.armies.size() && j < world_->starts.size(); ++j) {
+                    const float dx = world_->starts[j].x - world_->starts[i].x;
+                    const float dz = world_->starts[j].z - world_->starts[i].z;
+                    float& distance = scene.armies[j].alliance == scene.armies[armyIndex].alliance
+                        ? alliedDistance : enemyDistance;
+                    distance = std::min(distance, dx * dx + dz * dz);
+                }
+                // base-ai.lua:1420 gives enemy territory a 100-ogrid squared-distance
+                // advantage, so near-equidistant vacant starts still receive scouts.
+                constexpr float enemyBias = 100.0f * 100.0f * 8.0f * 8.0f;
+                if (enemyDistance - enemyBias > alliedDistance) continue;
+            }
+            if (occupied) ++opponents;
+            lua_newtable(lua);
+            lua_pushnumber(lua,world_->starts[i].x); lua_setfield(lua,-2,"x");
+            lua_pushnumber(lua,world_->starts[i].z); lua_setfield(lua,-2,"z");
+            lua_pushboolean(lua,occupied); lua_setfield(lua,-2,"high");
+            lua_rawseti(lua,-2,scoutSite++);
+        }
+        lua_setfield(lua,-2,"scoutSites");
+        lua_pushinteger(lua,opponents); lua_setfield(lua,-2,"numOpponents");
         lua_newtable(lua);
         {
             lua_Integer next = 1;
@@ -1318,6 +2319,9 @@ void FafOpponent::advance(rm::TickIndex tick) {
         // gate has to know the categories of units that do not exist yet, and a read-only
         // parse per candidate at boot is what that costs.
         if (lua_istable(lua, -1)) {
+            lua_getfield(lua, -1, "baseTemplate");
+            std::printf("faf: army %d selected %s\n", army_, lua_tostring(lua, -1));
+            lua_pop(lua, 1);
             const auto count = static_cast<lua_Integer>(lua_rawlen(lua, -1));
             for (lua_Integer i = 1; i <= count; ++i) {
                 lua_rawgeti(lua, -1, i);
@@ -1345,6 +2349,21 @@ void FafOpponent::advance(rm::TickIndex tick) {
         booted_ = true;
     }
 
+    // Brains share a VM; each pass must bind queries to its current observation,
+    // not the World pointer retained by whichever opponent happened to boot last.
+    lua_pushlightuserdata(lua, this);
+    lua_pushcclosure(lua, beenDestroyedBinding, 1);
+    lua_setglobal(lua, "__rm_faf_beenDestroyed");
+    lua_pushlightuserdata(lua, this);
+    lua_pushcclosure(lua, scoutRouteBinding, 1);
+    lua_setglobal(lua, "__rm_faf_scout_route");
+    lua_pushlightuserdata(lua, this);
+    lua_pushcclosure(lua, enhancementSequenceBinding, 1);
+    lua_setglobal(lua, "__rm_faf_enhancement_sequence");
+    lua_pushlightuserdata(lua, this);
+    lua_pushcclosure(lua, openingSurveyBinding, 1);
+    lua_setglobal(lua, "__rm_faf_opening_survey");
+
     // --- The snapshot -------------------------------------------------------------------
     //
     // Arrays in slot order, nothing keyed by anything hashed: the pass must read the same
@@ -1363,7 +2382,8 @@ void FafOpponent::advance(rm::TickIndex tick) {
         lua_pushnumber(lua, world_->starts[i].z);
         lua_pushinteger(lua, fafFactionIndex(scene.armies[i].faction));
         lua_pushboolean(lua, scene.armies[i].defeated);
-        if (lua_pcall(lua, 5, 0, 0) != LUA_OK) {
+        lua_pushinteger(lua, scene.armies[i].alliance);
+        if (lua_pcall(lua, 6, 0, 0) != LUA_OK) {
             std::printf("faf-opponent: army snapshot failed: %s\n", lua_tostring(lua, -1));
             lua_pop(lua, 2);  // error and unfinished snapshot
             return;
@@ -1444,6 +2464,21 @@ void FafOpponent::advance(rm::TickIndex tick) {
         lua_newtable(lua);
         lua_pushstring(lua, def->name.c_str());
         lua_setfield(lua, -2, "bp");
+        lua_pushinteger(lua,packHandle(construction.builder));
+        lua_setfield(lua,-2,"builder");
+        if (scene.store.alive(construction.builder)) {
+            const auto* order=scene.store.orders()[construction.builder.index].active();
+            if (order && order->kind()==rm::sim::CommandKind::Build) {
+                lua_pushinteger(lua,order->payload().id);
+                lua_setfield(lua,-2,"command");
+                lua_pushinteger(lua,order->payload().remainingCount);
+                lua_setfield(lua,-2,"remaining");
+            }
+        }
+        lua_pushnumber(lua,rm::sim::fxToFloat(construction.position[0]));
+        lua_setfield(lua,-2,"x");
+        lua_pushnumber(lua,rm::sim::fxToFloat(construction.position[2]));
+        lua_setfield(lua,-2,"z");
         lua_getglobal(lua, "__rm_faf");
         lua_getfield(lua, -1, "cats");
         lua_getfield(lua, -1, def->name.c_str());
@@ -1464,6 +2499,14 @@ void FafOpponent::advance(rm::TickIndex tick) {
     lua_newtable(lua);  // snap.occupied (kept on the stack below units, set at the end)
     lua_Integer occupiedIndex = 1;
     lua_insert(lua, -2);  // [snap, occupied, units]
+
+    std::map<std::int64_t,int> guardCounts;
+    for (rm::UnitIndex slot=0; slot<scene.store.slotCount(); ++slot) {
+        if (!health[slot].alive()) continue;
+        const auto* head=scene.store.orders()[slot].current();
+        if (head && (head->kind()==rm::sim::CommandKind::Guard
+            || head->kind()==rm::sim::CommandKind::Assist)) ++guardCounts[packHandle(head->payload().target)];
+    }
 
     for (rm::UnitIndex slot = 0; slot < scene.store.slotCount(); ++slot) {
         if (!health[slot].alive()) {
@@ -1510,15 +2553,35 @@ void FafOpponent::advance(rm::TickIndex tick) {
                                     ? rm::sim::magToFloat(health[slot].current) / maximumHealth
                                     : 0.0F));
         lua_setfield(lua, -2, "healthPercent");
-        // Idle: not moving. Whether a builder is mid-construction is answered by the
-        // *Underway counts, because the sim does not associate a construction with its
-        // builder — stated in the driver where the counts gate decisions.
-        lua_pushboolean(lua, motion[slot].moving ? 0 : 1);
+        lua_newtable(lua);
+        for (const auto& [position, name] : scene.store.enhancements()[slot]) {
+            lua_pushboolean(lua, 1);
+            lua_setfield(lua, -2, name.c_str());
+        }
+        lua_setfield(lua, -2, "enhancements");
+        // A stationary enhancement still owns the commander. Construction and reclaim
+        // expose their own busy flags below for the same builder-pool reservation.
+        const auto* pending = scene.store.orders()[slot].current();
+        lua_pushinteger(lua,guardCounts[packHandle(id)]);
+        lua_setfield(lua,-2,"guardCount");
+        lua_pushboolean(lua, pending != nullptr);
+        lua_setfield(lua, -2, "queueBusy");
+        const bool enhancementQueued = pending && pending->kind() == rm::sim::CommandKind::Script
+            && pending->payload().scriptTask == "EnhanceTask";
+        const auto* active = scene.store.orders()[slot].active();
+        const bool enhancing = active && active->kind() == rm::sim::CommandKind::Script
+            && active->payload().scriptTask == "EnhanceTask";
+        lua_pushboolean(lua, enhancing);
+        lua_setfield(lua, -2, "enhancing");
+        lua_pushboolean(lua, !motion[slot].moving && !enhancementQueued);
         lua_setfield(lua, -2, "idle");
         // Reclaiming: standing at a wreck counts as idle above, so the reclaim builders read
         // this instead — retail's InstanceCount caps their platoons, and an engineer already
         // on one is not handed another every pass.
         const rm::sim::QueuedCommand* head = scene.store.orders()[slot].active();
+        lua_pushboolean(lua, head && head->kind()==rm::sim::CommandKind::Move);
+        lua_setfield(lua,-2,"scoutingBusy");
+        lua_pushnumber(lua,def->visionRadiusElmos); lua_setfield(lua,-2,"vision");
         const bool reclaiming = head != nullptr
             && (head->kind() == rm::sim::CommandKind::Reclaim
                 || head->kind() == rm::sim::CommandKind::ReclaimUnit);
@@ -1527,7 +2590,10 @@ void FafOpponent::advance(rm::TickIndex tick) {
         // Building: this unit owns an unfinished construction. A factory mid-product is
         // "idle" by the motion rule above, and a train sent to it is refused by the sim
         // every pass; the picker needs the truth to hand the order to a free factory.
-        bool constructing = false;
+        // An accepted Build may still be approaching its site, with no Construction
+        // entry yet. Keep its engineer reserved throughout that native command.
+        bool constructing = pending && (pending->kind() == rm::sim::CommandKind::Build
+            || pending->kind() == rm::sim::CommandKind::Repair);
         for (const rm::sim::Construction& work : scene.building) {
             if (!work.finished() && work.builder == id) {
                 constructing = true;
@@ -1536,7 +2602,7 @@ void FafOpponent::advance(rm::TickIndex tick) {
         }
         lua_pushboolean(lua, constructing ? 1 : 0);
         lua_setfield(lua, -2, "building");
-        if (std::find(upgrading.begin(), upgrading.end(), id) != upgrading.end()) {
+        if (enhancing || std::find(upgrading.begin(), upgrading.end(), id) != upgrading.end()) {
             lua_pushboolean(lua, 1);
             lua_setfield(lua, -2, "upgrading");
         }
@@ -1555,44 +2621,49 @@ void FafOpponent::advance(rm::TickIndex tick) {
     lua_setfield(lua, -3, "units");     // snap.units
     lua_setfield(lua, -2, "occupied");  // snap.occupied
 
-    // The enemies this army's ALLIANCE can currently see — position and blueprint id, which
-    // with the taught threat tables is everything GetThreatAtPosition needs. Intel-filtered
-    // here so fog hides threat exactly as it hides units; the AI reads the same grid the
-    // renderer's fog does.
-    lua_newtable(lua);  // snap.enemies
-    {
+    // Allied units are shared knowledge; enemy queries only see vision contacts.
+    // Publish category-bearing proxies so range/count queries share threat's intel filter.
+    for (const bool allied : {false, true}) {
+        lua_newtable(lua);
         const int alliance = scene.armies[armyIndex].alliance;
-        lua_Integer enemyIndex = 1;
+        lua_Integer next = 1;
         for (rm::UnitIndex slot = 0; slot < scene.store.slotCount(); ++slot) {
-            if (!health[slot].alive()) {
-                continue;
-            }
+            if (!health[slot].alive()) continue;
             const int owner = motion[slot].armyIndex;
             if (owner < 0 || static_cast<std::size_t>(owner) >= scene.armies.size()
-                || scene.armies[static_cast<std::size_t>(owner)].alliance == alliance) {
-                continue;
-            }
-            const rm::sim::Transform& transform = scene.store.transforms()[slot];
-            if (!scene.intel.sees(alliance, rm::sim::IntelKind::Vision, transform.x,
-                                  transform.z)) {
-                continue;
-            }
-            const rm::unitdef::UnitDef* def = scene.catalog.def(scene.store.typeAt(slot));
-            if (def == nullptr) {
-                continue;
-            }
+                || owner == army_) continue;
+            if ((scene.armies[static_cast<std::size_t>(owner)].alliance == alliance) != allied) continue;
+            const auto& at = scene.store.transforms()[slot];
+            if (!allied && !scene.intel.sees(alliance, rm::sim::IntelKind::Vision, at.x, at.z)) continue;
+            const auto* def = scene.catalog.def(scene.store.typeAt(slot));
+            if (!def) continue;
             teachType(lua, *def);
             lua_newtable(lua);
+            const int unitTable = lua_gettop(lua);
             lua_pushstring(lua, def->name.c_str());
-            lua_setfield(lua, -2, "bp");
-            lua_pushnumber(lua, static_cast<lua_Number>(rm::sim::fxToFloat(transform.x)));
-            lua_setfield(lua, -2, "x");
-            lua_pushnumber(lua, static_cast<lua_Number>(rm::sim::fxToFloat(transform.z)));
-            lua_setfield(lua, -2, "z");
-            lua_rawseti(lua, -2, enemyIndex++);
+            lua_setfield(lua, unitTable, "bp");
+            lua_pushinteger(lua, packHandle(scene.store.idAt(slot)));
+            lua_setfield(lua, unitTable, "h");
+            lua_pushnumber(lua, rm::sim::fxToFloat(at.x));
+            lua_setfield(lua, unitTable, "x");
+            lua_pushnumber(lua, rm::sim::fxToFloat(at.z));
+            lua_setfield(lua, unitTable, "z");
+            lua_getglobal(lua, "__rm_faf");
+            lua_getfield(lua, -1, "armyViews");
+            lua_rawgeti(lua, -1, owner);
+            lua_setfield(lua, unitTable, "__brain");
+            lua_pop(lua, 1);
+            lua_getfield(lua, -1, "cats");
+            lua_getfield(lua, -1, def->name.c_str());
+            lua_setfield(lua, unitTable, "__cats");
+            lua_pop(lua, 1);
+            lua_getfield(lua, -1, "unitMeta");
+            lua_setmetatable(lua, unitTable);
+            lua_pop(lua, 1);
+            lua_rawseti(lua, -2, next++);
         }
+        lua_setfield(lua, -2, allied ? "allies" : "enemies");
     }
-    lua_setfield(lua, -2, "enemies");
 
     // snap.reclaim — the wreck mass and energy left per retail reclaim-grid cell (Grid.lua:
     // sixteen cells a side, eight on a 256 map, CellSize = max(sizeX, sizeZ) / cells). The
@@ -1725,6 +2796,45 @@ void FafOpponent::convertDecision(lua_State* lua) {
 
     const std::string kind = field("kind");
 
+    if (kind=="move" || kind=="stop" || kind=="guard") {
+        const auto unit=handleAt(0);
+        if (!unit) return;
+        lua_getfield(lua,-1,"queued");
+        const bool queued=lua_toboolean(lua,-1);
+        lua_pop(lua,1);
+        if (kind=="stop") decisions_.push_back({.kind=Decision::Kind::Stop,.unit=*unit});
+        else if (kind=="guard") {
+            lua_getfield(lua,-1,"target");
+            const auto target=resolveHandle(lua_tointeger(lua,-1));
+            lua_pop(lua,1);
+            if (target) decisions_.push_back({.kind=Decision::Kind::Guard,
+                .unit=*unit,.target=*target,.queued=queued});
+        } else {
+            lua_getfield(lua,-1,"x");
+            lua_getfield(lua,-2,"z");
+            const float x=static_cast<float>(lua_tonumber(lua,-2));
+            const float z=static_cast<float>(lua_tonumber(lua,-1));
+            const bool valid=lua_isnumber(lua,-2) && lua_isnumber(lua,-1)
+                && std::isfinite(x) && std::isfinite(z) && x>=0 && z>=0
+                && x<=world_->field.squaresX*rm::kSquareSize && z<=world_->field.squaresZ*rm::kSquareSize;
+            lua_pop(lua,2);
+            if (valid) decisions_.push_back({.kind=Decision::Kind::Move,.unit=*unit,
+                .toX=rm::sim::fxFromFloat(x),.toZ=rm::sim::fxFromFloat(z),.queued=queued});
+        }
+        return;
+    }
+
+    if (kind == "enhance") {
+        if (const auto unit = handleAt(0)) {
+            lua_getfield(lua, -1, "queued");
+            const bool queued = lua_toboolean(lua, -1);
+            lua_pop(lua, 1);
+            decisions_.push_back({.kind=Decision::Kind::Enhance, .enhancement=field("enhancement"),
+                .unit=*unit, .queued=queued});
+        }
+        return;
+    }
+
     if (kind == "upgrade") {
         // The corpus picked WHICH unit upgrades (UnitUpgradeAI's platoon of one); the
         // blueprint says what it becomes. The sim pins the site to the unit itself.
@@ -1786,26 +2896,87 @@ void FafOpponent::convertDecision(lua_State* lua) {
             return;
         }
         const std::string path = blueprintPathFor(bp);
+        const auto product = kind=="build" ? readBlueprint(*world_,path)
+                                           : std::optional<rm::unitdef::UnitDef>{};
+        if (kind=="build" && !product) return;
+        const float radius=product ? product->collisionRadiusElmos : 0;
+        const auto terrain=scene.terrain(world_->field);
+        const auto placeable = [&](const std::array<rm::sim::Fx,3>& at) {
+            if (!product) return true;
+            if (at[0]<rm::sim::Fx{} || at[2]<rm::sim::Fx{}
+                || at[0]>rm::sim::Fx::fromInt(world_->field.squaresX*rm::kSquareSize)
+                || at[2]>rm::sim::Fx::fromInt(world_->field.squaresZ*rm::kSquareSize)) return false;
+            if (!terrain.resourceSitePlaceable(product->buildRestriction,at[0],at[2])) return false;
+            if (product->motion==rm::unitdef::MotionType::Air) return true;
+            auto move=rm::data::moveDefFor(*product);
+            if (!move.usesGroundGrid && !move.usesSurfaceWaterGrid) {
+                const auto* builderDef=scene.catalog.def(scene.store.typeAt(builder->index));
+                if (!builderDef) return false;
+                move=rm::data::moveDefFor(*builderDef);
+            }
+            // Same footprint/domain checks as native Build intake. The selected
+            // product may not be registered until the decision reaches Match.
+            const auto& grid=placement_->gridFor(move);
+            return product->isMobile()
+                ? rm::sim::sitePlaceable(grid,at[0],at[2],rm::sim::fxFromFloat(radius))
+                : rm::sim::buildSitePlaceable(grid,at[0],at[2],rm::sim::fxFromFloat(radius),
+                    scene.store,scene.catalog,scene.building);
+        };
 
         std::optional<std::array<rm::sim::Fx, 3>> site;
-        if (kind == "train") {
+        lua_getfield(lua, -1, "site");
+        const bool explicitSite = !lua_isnil(lua, -1);
+        if (explicitSite && lua_istable(lua, -1)) {
+            lua_rawgeti(lua, -1, 1);
+            lua_rawgeti(lua, -2, 2);
+            if (lua_isnumber(lua, -2) && lua_isnumber(lua, -1)) {
+                const float x = static_cast<float>(lua_tonumber(lua, -2));
+                const float z = static_cast<float>(lua_tonumber(lua, -1));
+                if (std::isfinite(x) && std::isfinite(z) && x >= 0 && z >= 0
+                    && x <= world_->field.squaresX*rm::kSquareSize
+                    && z <= world_->field.squaresZ*rm::kSquareSize) {
+                    site = std::array{rm::sim::fxFromFloat(x),rm::sim::Fx{},rm::sim::fxFromFloat(z)};
+                }
+            }
+            lua_pop(lua, 2);
+        }
+        lua_pop(lua, 1);
+        if (explicitSite) {
+            // Authored resource surveys choose a particular marker. Never silently
+            // replace it with the nearest marker; native intake checks its footprint.
+            if (!site) return;
+        } else if (kind == "train") {
             // Where the factory stands; the spawn path rolls the unit off it.
             const rm::sim::Transform& transform = scene.store.transforms()[builder->index];
             site = std::array<rm::sim::Fx, 3>{transform.x, rm::sim::Fx{}, transform.z};
         } else {
             const std::string structure = field("structure");
+            const bool wantsHydro = structure.find("HydroCarbon") != std::string::npos;
             const bool wantsDeposit = structure.find("Resource") != std::string::npos
-                                       || structure.find("MassExtraction") != std::string::npos;
+                                       || structure.find("MassExtraction") != std::string::npos || wantsHydro;
             const bool wantsSeaFactory = structure.find("SeaFactory") != std::string::npos;
             const rm::mapinfo::StartPosition& start =
                 world_->starts[static_cast<std::size_t>(army_)];
-            const std::array<rm::sim::Fx, 3> home{rm::sim::fxFromFloat(start.x), rm::sim::Fx{},
+            std::array<rm::sim::Fx, 3> home{rm::sim::fxFromFloat(start.x), rm::sim::Fx{},
                                                   rm::sim::fxFromFloat(start.z)};
-            const auto plannedNear = [this](const std::array<rm::sim::Fx, 3>& at) {
-                for (const std::array<rm::sim::Fx, 3>& planned : plannedThisPass_) {
-                    const float dx = rm::sim::fxToFloat(planned[0]) - rm::sim::fxToFloat(at[0]);
-                    const float dz = rm::sim::fxToFloat(planned[2]) - rm::sim::fxToFloat(at[2]);
-                    if (dx * dx + dz * dz < 8.0f * 8.0f) {
+            lua_getfield(lua,-1,"anchor");
+            if (lua_istable(lua,-1)) {
+                lua_rawgeti(lua,-1,1); lua_rawgeti(lua,-2,2);
+                const float x=static_cast<float>(lua_tonumber(lua,-2));
+                const float z=static_cast<float>(lua_tonumber(lua,-1));
+                const bool valid=lua_isnumber(lua,-2) && lua_isnumber(lua,-1)
+                    && std::isfinite(x) && std::isfinite(z) && x>=0 && z>=0
+                    && x<=world_->field.squaresX*rm::kSquareSize && z<=world_->field.squaresZ*rm::kSquareSize;
+                lua_pop(lua,3);
+                if (!valid) return;
+                home={rm::sim::fxFromFloat(x),rm::sim::Fx{},rm::sim::fxFromFloat(z)};
+            } else lua_pop(lua,1);
+            const auto plannedNear = [this,radius](const std::array<rm::sim::Fx, 3>& at) {
+                for (const auto& planned : plannedThisPass_) {
+                    const float dx = rm::sim::fxToFloat(planned.position[0]) - rm::sim::fxToFloat(at[0]);
+                    const float dz = rm::sim::fxToFloat(planned.position[2]) - rm::sim::fxToFloat(at[2]);
+                    const float separation=radius+planned.radius;
+                    if (dx * dx + dz * dz < separation*separation) {
                         return true;
                     }
                 }
@@ -1821,25 +2992,14 @@ void FafOpponent::convertDecision(lua_State* lua) {
                 // The nearest deposit free of BOTH the sim's claims and this pass's own
                 // plans — nearestFreeDeposit only knows the first kind, so the search runs
                 // here with both filters.
-                const rm::sim::Fx claimed = rm::sim::Fx::fromInt(8);
                 const rm::scenario::Marker* best = nullptr;
                 rm::sim::Fx bestDistance{};
                 for (const rm::scenario::Marker& marker : world_->markers) {
-                    if (!marker.isType("Mass")) {
+                    if (!marker.isType(wantsHydro ? "Hydrocarbon" : "Mass")) {
                         continue;
                     }
                     const std::array<rm::sim::Fx, 3> at = rm::app::fxPoint(marker.position);
-                    if (plannedNear(at)) {
-                        continue;
-                    }
-                    bool taken = false;
-                    for (const rm::sim::Construction& work : scene.building) {
-                        if (rm::sim::groundDistanceElmos(work.position, at) < claimed) {
-                            taken = true;
-                            break;
-                        }
-                    }
-                    if (taken) {
+                    if (plannedNear(at) || !placeable(at)) {
                         continue;
                     }
                     const rm::sim::Fx distance = rm::sim::groundDistanceElmos(home, at);
@@ -1857,55 +3017,30 @@ void FafOpponent::convertDecision(lua_State* lua) {
                 // honestly answered no — the base had left its own radius. Reusing freed
                 // slots keeps the base a base.
                 for (int slot = 0; slot < 96; ++slot) {
-                    const std::array<rm::sim::Fx, 3> candidate = rm::sim::structureSite(
+                    std::array<rm::sim::Fx, 3> candidate = rm::sim::structureSite(
                         home, world_->centreX, world_->centreZ, slot);
-                    bool taken = false;
-                    const auto near = [&](rm::sim::Fx ax, rm::sim::Fx az) {
-                        const float dx = rm::sim::fxToFloat(ax) - rm::sim::fxToFloat(candidate[0]);
-                        const float dz = rm::sim::fxToFloat(az) - rm::sim::fxToFloat(candidate[2]);
-                        return dx * dx + dz * dz < 6.0f * 6.0f;
-                    };
-                    for (rm::UnitIndex slotIndex = 0; slotIndex < scene.store.slotCount();
-                         ++slotIndex) {
-                        if (!scene.store.health()[slotIndex].alive()) {
-                            continue;
-                        }
-                        const rm::unitdef::UnitDef* standing =
-                            scene.catalog.def(scene.store.typeAt(slotIndex));
-                        if (standing != nullptr && !standing->isMobile()
-                            && near(scene.store.transforms()[slotIndex].x,
-                                    scene.store.transforms()[slotIndex].z)) {
-                            taken = true;
-                            break;
-                        }
-                    }
-                    if (!taken) {
-                        for (const rm::sim::Construction& work : scene.building) {
-                            if (!work.finished() && near(work.position[0], work.position[2])) {
-                                taken = true;
-                                break;
-                            }
-                        }
-                    }
-                    if (!taken && plannedNear(candidate)) {
-                        taken = true;
-                    }
-                    if (!taken) {
+                    const auto snapped=terrain.buildSite(*product,candidate[0],candidate[2]);
+                    candidate[0]=snapped[0]; candidate[2]=snapped[1];
+                    if (!plannedNear(candidate) && placeable(candidate)) {
                         site = candidate;
                         break;
                     }
                 }
             }
         }
-        if (!site) {
+        if (!site || !placeable(*site)) {
             return;
         }
-        plannedThisPass_.push_back(*site);
+        if (kind=="build") plannedThisPass_.push_back({.position=*site,.radius=radius});
+        lua_getfield(lua, -1, "queued");
+        const bool queued = lua_toboolean(lua, -1);
+        lua_pop(lua, 1);
         decisions_.push_back(Decision{
             .kind = Decision::Kind::StartConstruction,
             .blueprint = path,
             .site = *site,
             .builder = *builder,
+            .queued = queued,
         });
         if (rm::app::gFafLog) {
             std::printf("  [faf %d] %s '%s' -> %s\n", army_, kind.c_str(),
@@ -1914,6 +3049,26 @@ void FafOpponent::convertDecision(lua_State* lua) {
         return;
     }
 
+    if (kind == "scout") {
+        const auto unit = handleAt(0);
+        if (!unit || !scene.store.alive(*unit)) return;
+        lua_getfield(lua, -1, "route");
+        const auto count = static_cast<lua_Integer>(lua_rawlen(lua, -1));
+        for (lua_Integer i = 1; i <= count; ++i) {
+            lua_rawgeti(lua, -1, i);
+            lua_rawgeti(lua, -1, 1);
+            const auto x = rm::sim::fxFromFloat(static_cast<float>(lua_tonumber(lua, -1)));
+            lua_pop(lua, 1);
+            lua_rawgeti(lua, -1, 2);
+            const auto z = rm::sim::fxFromFloat(static_cast<float>(lua_tonumber(lua, -1)));
+            lua_pop(lua, 2);
+            decisions_.push_back(Decision{
+                .kind = Decision::Kind::Move, .unit = *unit, .toX = x, .toZ = z, .queued = i > 1,
+            });
+        }
+        lua_pop(lua, 1);
+        return;
+    }
     if (kind == "attack") {
         std::size_t sent = 0;
         // The corpus said when and who; aiming at the nearest enemy commander is the

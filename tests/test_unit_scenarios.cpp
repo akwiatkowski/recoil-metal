@@ -153,6 +153,92 @@ TEST_CASE("retail land factories upgrade through both tiers using build tray act
     }
 }
 
+TEST_CASE("retail naval factories upgrade in place and complete T2 and T3 surface ships",
+          "[corpus][upgrade-chain][naval-progression][headless-ui]") {
+    const auto root = corpusRoot();
+    if (!std::filesystem::is_directory(root)) SKIP("retail corpus unavailable");
+    for (const std::string prefix : {"UE", "UA", "UR", "XS"}) {
+        DYNAMIC_SECTION(prefix) {
+            Scenario job(flatField(), true, 32);
+            std::vector<rm::unitdef::UnitDef> defs;
+            std::vector<std::string> ids;
+            // The stock SeaPlatoonTemplates select S0202 cruisers and S0302 battleships.
+            for (const char* suffix : {"B0103", "B0203", "B0303", "S0202", "S0302"}) {
+                ids.push_back(prefix + suffix);
+                const auto def = rm::unitbp::loadFile(root / ids.back() / (ids.back() + "_unit.bp"));
+                REQUIRE(def);
+                defs.push_back(*def);
+            }
+            job.scene.roster = rm::data::Roster::build(defs, ids);
+            job.scene.armies[0].faction = *rm::data::factionOf(defs.front());
+            std::vector<rm::sim::UnitId> selection{job.spawn(defs.front(), 400, 400)};
+            std::vector<rm::UnitTypeIndex> types{job.scene.store.typeAt(selection.front().index)};
+            for (std::size_t i = 1; i < defs.size(); ++i) types.push_back(job.registerType(defs[i]));
+            auto runner = job.runner();
+            int tick = 0;
+            const auto advance = [&] {
+                // Fund ordinary construction without modifying authored costs or build rates.
+                job.scene.economies[0].stored = rm::app::kStartingStorage;
+                (void)rm::app::advanceMatch(runner, tick++, 0);
+                rm::app::followUpgradeSelection(job.scene, selection);
+            };
+            for (std::size_t tier = 1; tier <= 2; ++tier) {
+                for (const std::size_t target : {tier, tier + 2}) {
+                    const bool upgrading = target == tier;
+                    const auto previous = selection.front();
+                    const auto foundation = job.scene.store.transforms()[previous.index];
+                    std::vector<rm::ui::BuildOption> options;
+                    rm::app::BuildSelection who;
+                    rm::app::gatherBuildOptions(job.scene, previous, rm::ui::neutralTheme(), options, who);
+                    const auto option = std::ranges::find(options, ids[target], &rm::ui::BuildOption::id);
+                    REQUIRE(option != options.end());
+                    REQUIRE(option->upgrade == upgrading);
+                    REQUIRE(rm::app::submitBuildOption(job.scene, job.content, who.builder, 0,
+                        static_cast<rm::TickIndex>(tick), *option));
+                    advance();
+                    const auto construction = std::ranges::find_if(job.scene.building,
+                        [&](const auto& build) { return build.blueprintIndex == types[target]; });
+                    REQUIRE(construction != job.scene.building.end());
+                    CHECK(construction->builder == previous);
+                    CHECK(construction->cost.mass == defs[target].buildCostMass);
+                    CHECK(construction->cost.energy == defs[target].buildCostEnergy);
+                    CHECK(construction->totalBuildTime == defs[target].buildTime);
+                    REQUIRE(construction->cost.mass > rm::sim::Mag{});
+                    REQUIRE(construction->cost.energy > rm::sim::Mag{});
+                    CHECK(construction->upgradeOf == (upgrading ? previous : rm::sim::UnitId{}));
+                    if (upgrading) {
+                        CHECK(construction->position[0] == foundation.x);
+                        CHECK(construction->position[2] == foundation.z);
+                    }
+                    const auto completed = [&] {
+                        for (rm::UnitIndex slot = 0; slot < job.scene.store.slotCount(); ++slot)
+                            if (job.scene.store.slotAlive(slot) && job.scene.store.typeAt(slot) == types[target])
+                                return true;
+                        return false;
+                    };
+                    const int deadline = tick + static_cast<int>(
+                        rm::app::gAppTickRate.ticks(rm::sim::Seconds{1200}));
+                    while (!completed() && tick < deadline) advance();
+                    REQUIRE(completed());
+                    REQUIRE(job.scene.store.alive(selection.front()));
+                    CHECK(job.scene.store.typeAt(selection.front().index) == types[tier]);
+                    if (upgrading) {
+                        CHECK_FALSE(job.scene.store.alive(previous));
+                        CHECK(selection.front() != previous);
+                        if (selection.front().index == previous.index)
+                            CHECK(selection.front().generation != previous.generation);
+                        CHECK(job.scene.store.transforms()[selection.front().index].x == foundation.x);
+                        CHECK(job.scene.store.transforms()[selection.front().index].z == foundation.z);
+                    } else {
+                        CHECK(selection.front() == previous);
+                        CHECK(job.scene.store.liveCount() == tier + 1);
+                    }
+                }
+            }
+        }
+    }
+}
+
 TEST_CASE("retail engineers place naval yards in water and complete them",
           "[corpus][naval-placement][headless-ui]") {
     const auto root = corpusRoot();

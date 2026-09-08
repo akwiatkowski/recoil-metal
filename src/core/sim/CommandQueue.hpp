@@ -73,10 +73,9 @@ inline constexpr Fx kCancelDistance = Fx::fromInt(17);
 ///     is the right answer: stopping twice is not a request to un-stop.
 ///   - Positional movement orders match within `kCancelDistance`; targeted attacks match by
 ///     handle.
-///   - `Build` additionally requires the SAME BLUEPRINT. Recoil compares build footprints for
-///     overlap; comparing the type as well is stricter in the one direction that matters,
-///     since two different buildings queued on the same spot are a plan rather than a
-///     duplicate.
+///   - `Build` requires the SAME BLUEPRINT and exact site when no catalog is available.
+///     Native intake passes the catalog to `give`, which compares build footprints using
+///     Recoil's build-specific predicate, not the movement cancel radius.
 [[nodiscard]] bool sameOrder(const Command& a, const Command& b) noexcept;
 
 /// How many orders one unit may already be holding and still take another.
@@ -243,7 +242,7 @@ public:
     /// appending, because the two are alternatives: a shift-click on a waypoint is either
     /// adding it or taking it away.
     Result give(const Command& command, bool queued);
-    Result give(QueuedCommand command, bool queued);
+    Result give(QueuedCommand command, bool queued, const UnitCatalog* catalog = nullptr);
 
     /// Installs a synchronous read-only observer. Queue status is notification, not simulation
     /// state, so the callback itself is neither serialized nor hashed.

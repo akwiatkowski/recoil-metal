@@ -530,6 +530,33 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
     // the enhancement table rather than reading one field.
     if (const lua::Value* enhancements = parsed->path("Enhancements")) {
         for (const lua::Field& upgrade : enhancements->fields) {
+            if (upgrade.value.find("BuildTime")) {
+                const auto mass = upgrade.value.numberAt("BuildCostMass");
+                const auto energy = upgrade.value.numberAt("BuildCostEnergy");
+                const auto time = upgrade.value.numberAt("BuildTime");
+                const auto slot = upgrade.value.stringAt("Slot");
+                if (!mass || !energy || !time || !slot || slot->empty()
+                    || !std::isfinite(*mass) || !std::isfinite(*energy) || !std::isfinite(*time)
+                    || *mass < 0 || *energy < 0 || *time <= 0) {
+                    return std::unexpected(lua::ParseError{
+                        "invalid enhancement costs, work time or slot: " + upgrade.key, 0});
+                }
+                unitdef::EnhancementSpec spec{
+                    .name = upgrade.key,
+                    .slot = std::string(*slot),
+                    .prerequisite = std::string(upgrade.value.stringAt("Prerequisite").value_or("")),
+                    .buildCostMass = sim::magFromFloat(static_cast<float>(*mass)),
+                    .buildCostEnergy = sim::magFromFloat(static_cast<float>(*energy)),
+                    .buildTime = sim::fxFromFloat(static_cast<float>(*time)),
+                    .parameters = upgrade.value,
+                };
+                if (const auto* removals = upgrade.value.find("RemoveEnhancements")) {
+                    for (const auto& removal : removals->items) {
+                        if (const auto name = removal.asString()) spec.removes.emplace_back(*name);
+                    }
+                }
+                def.enhancements.push_back(std::move(spec));
+            }
             if (const lua::Value* adds = upgrade.value.find("BuildableCategoryAdds")) {
                 unitdef::CategoryTerm term = unitdef::parseCategoryTerm(adds->text);
                 if (!term.empty()) {

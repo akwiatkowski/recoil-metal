@@ -1,4 +1,5 @@
 #include "core/sim/UnitCatalog.hpp"
+#include "core/unit/BuildTree.hpp"
 
 #include "core/map/Scmap.hpp"
 
@@ -61,6 +62,26 @@ UnitTypeIndex UnitCatalog::add(const unitdef::UnitDef* def, TickRate rate) {
         derived.regenPerTick = rate.magPerTick(def->regenPerSecond);
     }
     rates_.push_back(derived);
+    auto& enhancements = enhancements_.emplace_back();
+    if (def != nullptr) {
+        for (const auto& spec : def->enhancements) {
+            EnhancementEffects effects;
+            if (const auto value = spec.parameters.numberAt("NewBuildRate")) {
+                effects.buildPerTick = rate.magPerTick(static_cast<float>(*value));
+            }
+            if (const auto value = spec.parameters.numberAt("NewHealth")) {
+                effects.healthAdd = magFromFloat(static_cast<float>(*value));
+            }
+            if (const auto value = spec.parameters.numberAt("NewRegenRate")) {
+                effects.regenPerTickAdd = rate.magPerTick(static_cast<float>(*value));
+            }
+            if (const auto adds = spec.parameters.stringAt("BuildableCategoryAdds")) {
+                effects.buildableAdds = unitdef::parseCategoryTerm(*adds);
+            }
+            enhancements.emplace(spec.name, std::move(effects));
+        }
+    }
+
 
     // Adjacency, out of the content's floats once (same boundary as everything above).
     // Mobile units and skirtless structures get the zero entry, which is also what keeps

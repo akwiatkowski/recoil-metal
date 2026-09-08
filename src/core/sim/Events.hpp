@@ -130,6 +130,11 @@ struct Event {
     /// `UnitDamaged`, the builder for `ConstructionStarted`. Unset when nothing did it.
     UnitId instigator{};
 
+    /// UnitFinished's construction founder. Separate from instigator, which carries
+    /// the replaced handle for upgrade selection handoff. AI manager inheritance
+    /// follows this builder's current owner, including ordinary factory production.
+    UnitId builder{};
+
     /// Whose it is. The owning army for the unit kinds, the defeated army for `TeamDefeated`,
     /// the winning alliance for `GameOver`.
     int army = kNoArmy;

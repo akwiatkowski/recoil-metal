@@ -253,6 +253,30 @@ TEST_CASE("two different buildings on the same spot are a plan, not a duplicate"
     CHECK(queue.give(first, true) == Result::CancelledCurrent);
 }
 
+TEST_CASE("queued structures use footprint cancellation instead of waypoint radius", "[construction][queue]") {
+    rm::unitdef::UnitDef def;
+    def.footprintSquaresX=2;
+    def.footprintSquaresZ=4;
+    rm::sim::UnitCatalog catalog;
+    const auto type=catalog.add(&def);
+    const auto entry = [type](int x,int z) {
+        return rm::sim::QueuedCommand{UnitId{0,1},
+            std::make_shared<const rm::sim::SharedCommand>(rm::sim::SharedCommand{
+                .kind=CommandKind::Build,.targetX=rm::sim::Fx::fromInt(x),
+                .targetZ=rm::sim::Fx::fromInt(z),.buildType=type})};
+    };
+    CommandQueue queue;
+    REQUIRE(queue.give(entry(100,100),false,&catalog)==Result::Replaced);
+    CHECK(queue.give(entry(116,100),true,&catalog)==Result::Appended);
+    CHECK(queue.size()==2);
+    // Same center, and either inclusive half-footprint boundary, remain duplicates.
+    CHECK(queue.give(entry(116,100),true,&catalog)==Result::Cancelled);
+    CHECK(queue.give(entry(108,116),true,&catalog)==Result::CancelledCurrent);
+    CHECK(queue.empty());
+    (void)queue.give(entry(100,100),false,&catalog);
+    CHECK(queue.give(entry(100,117),true,&catalog)==Result::Appended);
+}
+
 TEST_CASE("a stop never cancels another stop") {
     // Recoil's predicate needs one or three parameters and a stop has none, so it reaches this
     // answer structurally. It is also the right one: stopping twice is not a request to

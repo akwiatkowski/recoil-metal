@@ -442,6 +442,14 @@ StateHash hashMatch(const UnitStore& store, const Match& match) {
         feedMotion(h, motion[slot]);
         feedHealth(h, healths[slot]);
         feedOrders(h, orders[slot]);
+        if (!store.enhancements()[slot].empty()) {
+            feedText(h, "installed-enhancements");
+            feed(h, store.enhancements()[slot].size());
+            for (const auto& [position, name] : store.enhancements()[slot]) {
+                feedText(h, position);
+                feedText(h, name);
+            }
+        }
         // The type, and who is in the slot. The type stands in for the definition — a def is
         // content loaded from disk and identical across two runs of the same log by
         // construction, so hashing its contents would fingerprint the install rather than the
@@ -731,6 +739,24 @@ StateHash hashMatch(const UnitStore& store, const Match& match) {
             feed(h, static_cast<std::size_t>(ammo.elapsedTicks));
             feed(h, ammo.costPerTick);
             feed(h, ammo.delivered);
+        }
+    }
+
+    // Empty enhancement storage preserves hashes of matches without upgrade tasks.
+    if (match.enhancements != nullptr && !match.enhancements->empty()) {
+        feedText(h, "enhancement-work");
+        feed(h, match.enhancements->size());
+        for (const EnhancementWork& work : *match.enhancements) {
+            feed(h, static_cast<std::size_t>(work.owner.index));
+            feed(h, static_cast<std::size_t>(work.owner.generation));
+            feedText(h, work.name);
+            feed(h, work.cost);
+            feed(h, work.totalBuildTime);
+            feed(h, work.buildTimeRemaining);
+            feed(h, work.buildPerTick);
+            feed(h, work.allocated);
+            feed(h, work.fundedLastTick);
+            feed(h, work.paused);
         }
     }
 

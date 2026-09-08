@@ -15,6 +15,9 @@
 
 #include "core/map/Scmap.hpp"
 #include "core/sim/UnitCatalog.hpp"
+#include "core/sim/Enhancement.hpp"
+#include "core/sim/SaveState.hpp"
+#include "core/sim/UnitStore.hpp"
 #include "core/unit/BuildTree.hpp"
 #include "core/unit/UnitBlueprint.hpp"
 #include "core/unit/UnitDef.hpp"
@@ -61,6 +64,59 @@ using rm::unitdef::MotionType;
 }
 
 } // namespace
+
+TEST_CASE("retail commander enhancements retain named costs prerequisites and removal chains",
+          "[corpus][enhancement]") {
+    const auto root = unitRoot();
+    if (!std::filesystem::exists(root / "UEL0001/UEL0001_unit.bp")) {
+        SKIP("requires extracted retail unit blueprints");
+    }
+    for (const std::string faction : {"UEL", "UAL", "URL", "XSL"}) {
+        const auto name = faction + "0001";
+        CAPTURE(name);
+        const auto def = rm::unitbp::loadFile(root / name / (name + "_unit.bp"));
+        REQUIRE(def);
+        const auto* engineering = def->enhancement("AdvancedEngineering");
+        REQUIRE(engineering);
+        CHECK(engineering->slot == "LCH");
+        CHECK(engineering->prerequisite.empty());
+        CHECK(engineering->buildCostMass == rm::sim::magFromFloat(720));
+        CHECK(engineering->buildCostEnergy == rm::sim::magFromFloat(18000));
+        CHECK(engineering->buildTime == rm::sim::fxFromFloat(900));
+        REQUIRE(engineering->parameters.find("NewBuildRate"));
+        CHECK(engineering->parameters.find("NewBuildRate")->number == 30);
+        CHECK(def->enhancement("NotAnEnhancement") == nullptr);
+    }
+    const auto uef = rm::unitbp::loadFile(root / "UEL0001/UEL0001_unit.bp");
+    REQUIRE(uef);
+    const auto* right = uef->enhancement("RightPod");
+    REQUIRE(right);
+    CHECK(right->slot == "Back");
+    CHECK(right->prerequisite == "LeftPod");
+    const auto* remove = uef->enhancement("RightPodRemove");
+    REQUIRE(remove);
+    CHECK(remove->prerequisite == "RightPod");
+    CHECK(remove->buildTime == rm::sim::fxFromFloat(0.1f));
+    CHECK(std::find(remove->removes.begin(), remove->removes.end(), "LeftPod") != remove->removes.end());
+    CHECK(std::find(remove->removes.begin(), remove->removes.end(), "RightPod") != remove->removes.end());
+    const auto sequence = [](std::initializer_list<const char*> names) {
+        std::vector<std::string> result;
+        for (const char* name : names) result.emplace_back(name);
+        return result;
+    };
+    CHECK_FALSE(uef->validateEnhancements({}, sequence({"RightPod"})));
+    CHECK_FALSE(uef->validateEnhancements({}, sequence({"UnknownUpgrade"})));
+    CHECK(uef->validateEnhancements({}, sequence({"LeftPod", "RightPod", "AdvancedEngineering"})));
+    CHECK_FALSE(uef->validateEnhancements({{"Back", "RightPod"}}, sequence({"Shield"})));
+    CHECK(uef->validateEnhancements({{"Back", "RightPod"}}, sequence({"RightPodRemove", "Shield"})));
+    const auto seraphim = rm::unitbp::loadFile(root / "XSL0001/XSL0001_unit.bp");
+    REQUIRE(seraphim);
+    const std::map<std::string, std::string> gun{{"RCH", "RateOfFire"}};
+    CHECK_FALSE(seraphim->validateEnhancements(gun, sequence({"RegenAura", "AdvancedRegenAura"})));
+    CHECK(seraphim->validateEnhancements(gun,
+        sequence({"RateOfFireRemove", "RegenAura", "AdvancedRegenAura"})));
+    CHECK(gun.at("RCH") == "RateOfFire"); // Preflight never installs or removes anything.
+}
 
 TEST_CASE("every retail unit blueprint parses into a definition", "[corpus]") {
     const std::vector<std::filesystem::path> files = blueprints();
@@ -485,5 +541,67 @@ TEST_CASE("named units carry the intel their blueprints state", "[corpus]") {
         CHECK(def->waterVisionRadiusElmos == Catch::Approx(expected.waterVision));
         CHECK(def->radarRadiusElmos == Catch::Approx(expected.radar));
         CHECK(def->sonarRadiusElmos == Catch::Approx(expected.sonar));
+    }
+}
+
+TEST_CASE("installed engineering affects only its commander and composes with veterancy", "[enhancement][corpus]") {
+    using namespace rm::sim;
+    const auto root = unitRoot();
+    if (!std::filesystem::exists(root / "UEL0001/UEL0001_unit.bp")) SKIP("requires retail blueprints");
+    for (const std::string faction : {"UEL", "UAL", "URL", "XSL"}) {
+        CAPTURE(faction);
+        const auto name = faction + "0001";
+        const auto def = rm::unitbp::loadFile(root / name / (name + "_unit.bp"));
+        REQUIRE(def);
+        UnitCatalog catalog;
+        const auto type = catalog.add(&*def);
+        UnitStore store;
+        const auto commander = store.spawn({.type=type, .health={.current=Mag::fromInt(1000), .maximum=def->health}});
+        const auto other = store.spawn({.type=type, .health={.current=def->health, .maximum=def->health}});
+        const auto baseRate = effectiveBuildPerTick(store, catalog, commander.index);
+        const auto t1 = rm::unitbp::loadFile(root / (faction.substr(0,2)+"B1101") / (faction.substr(0,2)+"B1101_unit.bp"));
+        const auto t2 = rm::unitbp::loadFile(root / (faction.substr(0,2)+"B1201") / (faction.substr(0,2)+"B1201_unit.bp"));
+        const auto t3 = rm::unitbp::loadFile(root / (faction.substr(0,2)+"B1301") / (faction.substr(0,2)+"B1301_unit.bp"));
+        REQUIRE(t1); REQUIRE(t2); REQUIRE(t3);
+        CHECK(canBuild(store, catalog, commander.index, *t1));
+        CHECK_FALSE(canBuild(store, catalog, commander.index, *t2));
+
+        REQUIRE(installEnhancement(store, catalog, commander, "AdvancedEngineering"));
+        CHECK(store.enhancements()[commander.index].at("LCH") == "AdvancedEngineering");
+        CHECK(effectiveBuildPerTick(store, catalog, commander.index) == TickRate{}.magPerTick(30));
+        CHECK(effectiveBuildPerTick(store, catalog, other.index) == baseRate);
+        CHECK(canBuild(store, catalog, commander.index, *t1));
+        CHECK(canBuild(store, catalog, commander.index, *t2));
+        CHECK_FALSE(canBuild(store, catalog, commander.index, *t3));
+        CHECK_FALSE(canBuild(store, catalog, other.index, *t2));
+        CHECK(enhancementRegenPerTick(store, catalog, commander.index) == TickRate{}.magPerTick(20));
+
+        const auto bonus = Mag::fromInt(faction == "URL" ? 3500 : 3000);
+        CHECK(store.health()[commander.index].maximum == def->health + bonus);
+        CHECK(store.health()[commander.index].current == Mag::fromInt(1000) + bonus);
+        store.health()[commander.index].veterancy.kills = def->veterancyKills[0] - 1;
+        REQUIRE(creditKill(store, catalog, commander, nullptr));
+        CHECK(store.health()[commander.index].maximum == veterancyMaxHealth(def->health + bonus, 1));
+        CHECK_FALSE(installEnhancement(store, catalog, commander, "AdvancedEngineering"));
+        const SaveState saved{.units=store.snapshot()};
+        const auto decoded = SaveState::decode(SaveState::encode(saved));
+        REQUIRE(decoded);
+        UnitStore restored(decoded->units);
+        CHECK(restored.enhancements()[commander.index] == store.enhancements()[commander.index]);
+        REQUIRE(installEnhancement(store, catalog, commander, "T3Engineering"));
+        CHECK(effectiveBuildPerTick(store, catalog, commander.index) == TickRate{}.magPerTick(90));
+        CHECK(canBuild(store, catalog, commander.index, *t1));
+        CHECK(canBuild(store, catalog, commander.index, *t2));
+        CHECK(canBuild(store, catalog, commander.index, *t3));
+        REQUIRE(installEnhancement(store, catalog, commander, "T3EngineeringRemove"));
+        CHECK(store.enhancements()[commander.index].empty());
+        CHECK(effectiveBuildPerTick(store, catalog, commander.index) == baseRate);
+        CHECK_FALSE(canBuild(store, catalog, commander.index, *t2));
+        CHECK_FALSE(canBuild(store, catalog, commander.index, *t3));
+        CHECK(store.health()[commander.index].maximum == veterancyMaxHealth(def->health, 1));
+
+        store.kill(commander);
+        const auto recycled = store.spawn({.type=type});
+        CHECK(store.enhancements()[recycled.index].empty());
     }
 }

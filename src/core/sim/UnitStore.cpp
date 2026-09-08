@@ -14,6 +14,7 @@ UnitStore::UnitStore(const Snapshot& snapshot)
       motion_(snapshot.motion),
       health_(snapshot.health),
        types_(snapshot.types),
+       enhancements_(snapshot.enhancements),
        factoryRepeat_(snapshot.factoryRepeat),
        doNotTarget_(snapshot.doNotTarget),
        orders_(snapshot.transforms.size()),
@@ -43,6 +44,10 @@ UnitStore::UnitStore(const Snapshot& snapshot)
     for (const std::shared_ptr<SharedCommand>& command : mutableCommands) {
         (void)registerCommand(command);
     }
+    if (!enhancements_.empty() && enhancements_.size() != transforms_.size()) {
+        throw std::invalid_argument("enhancement snapshot does not match unit slots");
+    }
+    enhancements_.resize(transforms_.size());
     factoryRepeat_.resize(transforms_.size(), false);
     doNotTarget_.resize(transforms_.size(), false);
     attachmentOffsets_.resize(transforms_.size());
@@ -88,6 +93,7 @@ UnitStore::Snapshot UnitStore::snapshot() const {
     for (const CommandQueue& queue : orders_) {
         saved.orders.push_back(queue.snapshot(sharedCommands));
     }
+    saved.enhancements = enhancements_;
     return saved;
 }
 
@@ -103,6 +109,7 @@ UnitId UnitStore::spawn(const Spawn& request) {
         motion_.emplace_back();
         health_.emplace_back();
         types_.emplace_back();
+        enhancements_.emplace_back();
         factoryRepeat_.emplace_back(false);
         doNotTarget_.emplace_back(false);
         orders_.emplace_back();
@@ -118,6 +125,7 @@ UnitId UnitStore::spawn(const Spawn& request) {
     motion_[slot].attached = false;
     health_[slot] = request.health;
     types_[slot] = request.type;
+    enhancements_[slot].clear();
     factoryRepeat_[slot] = false;
     doNotTarget_[slot] = false;
     // CLEARED HERE rather than in `kill`, which is the tombstone rule applied to orders: a

@@ -30,10 +30,9 @@ namespace rm::unitdef {
 //
 // 105 of the 568 shipped units declare an expression. Measured, not estimated.
 //
-// WHAT IS DEFERRED, and the report says to record it: `BuildableCategoryAdds` on a commander's
-// upgrades — `'BUILTBYTIER2COMMANDER UEF'` unlocked by the Tech 2 Engineering Suite. Commander
-// upgrades are out of scope, so the ADDS are parsed and kept but not applied. When upgrades
-// land, applying them is a set union on an existing structure rather than a new one.
+// Commander BuildableCategoryAdds remain associated with named enhancements. The static
+// tree describes potential options; sim::canBuild applies each instance's installed
+// engineering restrictions when an order starts.
 
 // TWO FORMS, and the second is not in the report. `BuildableCategory` holds category
 // expressions as above — and it also holds bare BLUEPRINT IDS, in lower case:

@@ -14,6 +14,7 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <string>
 #include <vector>
 
 namespace rm::sim {
@@ -84,6 +85,7 @@ public:
         std::array<std::uint32_t, kInvalidCommandSource> nextCommandCounters{};
         std::vector<SharedCommand> sharedCommands;
         std::vector<CommandQueue::Snapshot> orders;
+        std::vector<std::map<std::string, std::string>> enhancements;
     };
 
     UnitStore() = default;
@@ -173,6 +175,10 @@ public:
     [[nodiscard]] std::span<Health> health() noexcept { return health_; }
     [[nodiscard]] std::span<const Health> health() const noexcept { return health_; }
     [[nodiscard]] std::span<const UnitTypeIndex> types() const noexcept { return types_; }
+
+    /// Completed enhancements by authored slot, independent for every unit instance.
+    [[nodiscard]] auto enhancements() noexcept { return std::span{enhancements_}; }
+    [[nodiscard]] auto enhancements() const noexcept { return std::span{enhancements_}; }
 
     /// The orders each unit still has to carry out (PLAN2.md §6.4, §7 P4.1).
     ///
@@ -272,6 +278,7 @@ private:
     std::vector<MoveState> motion_;
     std::vector<Health> health_;
     std::vector<UnitTypeIndex> types_;
+    std::vector<std::map<std::string, std::string>> enhancements_;
     std::vector<bool> factoryRepeat_;
     std::vector<bool> doNotTarget_;
     std::vector<CommandQueue> orders_;

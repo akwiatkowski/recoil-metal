@@ -1,4 +1,5 @@
 #include "core/sim/Veterancy.hpp"
+#include "core/sim/Enhancement.hpp"
 
 #include "core/sim/Combat.hpp"  // positionOf
 #include "core/sim/Events.hpp"
@@ -70,7 +71,7 @@ bool creditKill(UnitStore& store, const UnitCatalog& catalog, UnitId killer,
     // single most consequential detail in this feature.
     if (def != nullptr && def->health > Mag{}) {
         const Mag previousMaximum = health.maximum;
-        health.maximum = veterancyMaxHealth(def->health, earned);
+        health.maximum = veterancyMaxHealth(def->health + enhancementHealthAdd(store, catalog, slot), earned);
         if (health.maximum > previousMaximum) {
             // Retail heals by exactly the increase (`Buff.lua`'s `AdjustHealth(unit, val -
             // oldmax)`), so a unit promoted mid-fight is rewarded now rather than over the
@@ -112,7 +113,8 @@ void tickRegeneration(UnitStore& store, const UnitCatalog& catalog, TickRate rat
         const VeterancyRegen& ladder =
             def != nullptr ? def->veterancyRegenPerSecond : kVeterancyRegenPerSecond;
         const Mag perTick = catalog.rates(store.typeAt(slot)).regenPerTick
-                            + veteranRegenPerTick(rate, health.veterancy.level, ladder);
+                            + veteranRegenPerTick(rate, health.veterancy.level, ladder)
+                            + enhancementRegenPerTick(store, catalog, slot);
         if (perTick <= Mag{}) {
             continue;
         }

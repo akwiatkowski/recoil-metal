@@ -751,6 +751,7 @@ only appears under one cannot otherwise be captured, tested, or diffed.
 | `--vision-style <recoil\|fa>` | whether terrain blocks sight |
 | `--placement <grid\|free>` | snap structures to the 8-elmo build grid as Supreme Commander does (the default), or place them at the exact click |
 | `--ai-faf` | FAF's own AI plays every army, through the sandbox |
+| `--ai-personality <name>` | Select `easy` (default), `medium`, `tech`, `rushland`, `rushair`, `rushnaval`, `rushbalanced`, `turtle`, `adaptive` or `random`. Implies `--ai-faf`; applies to every army. Named choices select their main-base template; adaptive/random score FAF templates per army at startup. Selection is repeatable for the same map dimensions and army index. The startup log names each chosen template. Surface-naval upgrades and production reach T3; commander enhancements and proper scouting are still under development. |
 | `--ai-log` / `--ai-debug` / `--ai-sanity` | narrate the AI's decisions and the corpus's own `LOG` lines; the debug report; the closing census of what was built, which bindings were called, and which corpus functions ran |
 | `--log-level <trace\|debug\|info\|warn\|error\|off>` / `--log-file <f>` | filter timestamped operational diagnostics (default `info`) and optionally append the same records to a file; `debug` includes [order and construction lifecycle traces](docs/order-tracing.md) |
 | `--hash-log <f>` / `--check-hash-log <f>` | write a per-tick state hash, or replay against one and name the tick a divergence began at |

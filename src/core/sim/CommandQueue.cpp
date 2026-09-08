@@ -1,4 +1,5 @@
 #include "core/sim/CommandQueue.hpp"
+#include "core/sim/UnitCatalog.hpp"
 
 #include <algorithm>
 
@@ -22,7 +23,8 @@ template <typename Order>
 }
 
 template <typename Order>
-[[nodiscard]] bool sameOrderValue(const Order& a, const Order& b) noexcept {
+[[nodiscard]] bool sameOrderValue(const Order& a, const Order& b,
+                                 const UnitCatalog* catalog = nullptr) noexcept {
     if (a.kind != b.kind) {
         return false;
     }
@@ -41,8 +43,19 @@ template <typename Order>
             return a.target == b.target;
         }
         return withinCancelDistance(a, b);
-    case CommandKind::Build:
-        return a.buildType == b.buildType && withinCancelDistance(a, b);
+    case CommandKind::Build: {
+        if (a.buildType != b.buildType) return false;
+        // Recoil CommandAI.cpp:GetCancelQueued uses the building's footprint here.
+        // A fixed 17-elmo movement radius cancels distinct adjacent T1 generators.
+        // Intake has already snapped both sites onto the build grid. Without a
+        // catalog, only identical sites prove a duplicate; never guess a footprint.
+        const auto* def = catalog ? catalog->def(a.buildType) : nullptr;
+        if (!def) return a.targetX == b.targetX && a.targetZ == b.targetZ;
+        const Fx halfX = Fx::fromInt(std::max(1,def->footprintSquaresX)*kSquareSize/2);
+        const Fx halfZ = Fx::fromInt(std::max(1,def->footprintSquaresZ)*kSquareSize/2);
+        const Fx dx = a.targetX-b.targetX, dz = a.targetZ-b.targetZ;
+        return dx >= -halfX && dx <= halfX && dz >= -halfZ && dz <= halfZ;
+    }
     case CommandKind::Reclaim:
     case CommandKind::ReclaimUnit:
     case CommandKind::Overcharge:
@@ -117,7 +130,8 @@ CommandQueue::Result CommandQueue::give(const Command& command, bool queued) {
     return give(standaloneEntry(command), queued);
 }
 
-CommandQueue::Result CommandQueue::give(QueuedCommand command, bool queued) {
+CommandQueue::Result CommandQueue::give(QueuedCommand command, bool queued,
+                                       const UnitCatalog* catalog) {
     if (!queued) {
         // A plain order forgets everything. Recoil clears before appending
         // (`CommandAI.cpp:998-1011`); the cancel rules below then never fire, because there is
@@ -133,7 +147,7 @@ CommandQueue::Result CommandQueue::give(QueuedCommand command, bool queued) {
     // the one just added, not the identical one from earlier in a patrol route.
     for (std::size_t behind = queue_.size(); behind > 0; --behind) {
         const std::size_t at = behind - 1;
-        if (!sameOrderValue(command.payload(), queue_[at].payload())) {
+        if (!sameOrderValue(command.payload(), queue_[at].payload(), catalog)) {
             continue;
         }
         const bool wasCurrent = at == 0;

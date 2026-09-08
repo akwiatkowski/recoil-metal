@@ -13,6 +13,27 @@
 
 namespace rm::app {
 
+std::string parseFafBaseTemplate(int argc, const char* argv[]) {
+    constexpr auto choices = "easy, medium, tech, rushland, rushair, rushnaval, rushbalanced, turtle, adaptive, random";
+    for (int i = 1; i < argc; ++i) {
+        if (std::string_view{argv[i]} != "--ai-personality") continue;
+        if (i + 1 == argc) throw std::invalid_argument(std::string{"--ai-personality requires one of: "} + choices);
+        const std::string_view name = argv[i + 1];
+        if (name == "easy") return "NormalMain";
+        if (name == "tech") return "TechMain";
+        if (name == "medium") return "ChallengeMain";
+        if (name == "rushland") return "RushMainLand";
+        if (name == "rushair") return "RushMainAir";
+        if (name == "rushnaval") return "RushMainNaval";
+        if (name == "rushbalanced") return "RushMainBalanced";
+        if (name == "turtle") return "TurtleMain";
+        if (name == "adaptive" || name == "random") return std::string{name};
+        throw std::invalid_argument("unsupported --ai-personality: " + std::string{name}
+                                    + " (choose " + choices + ")");
+    }
+    return "NormalMain";
+}
+
 [[nodiscard]] LoggingOptions parseLogging(int argc, const char* argv[]) {
     LoggingOptions parsed;
     for (int i = 1; i < argc; ++i) {

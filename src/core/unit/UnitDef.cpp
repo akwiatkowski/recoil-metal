@@ -37,6 +37,37 @@ constexpr float kRecoilFramesPerSecond = 30.0f;
 
 namespace rm::unitdef {
 
+const EnhancementSpec* UnitDef::enhancement(std::string_view upgradeName) const noexcept {
+    const auto found = std::find_if(enhancements.begin(), enhancements.end(),
+        [upgradeName](const EnhancementSpec& spec) { return spec.name == upgradeName; });
+    return found == enhancements.end() ? nullptr : &*found;
+}
+
+std::expected<void, std::string> UnitDef::validateEnhancements(
+    std::map<std::string, std::string> slots, std::span<const std::string> sequence) const {
+    for (const auto& upgradeName : sequence) {
+        const auto* spec = enhancement(upgradeName);
+        if (!spec) return std::unexpected("unknown enhancement: " + upgradeName);
+        const auto occupied = slots.find(spec->slot);
+        // Retail Unit.lua:1992–2003: the prerequisite must occupy this exact slot.
+        if (!spec->prerequisite.empty()) {
+            if (occupied == slots.end() || occupied->second != spec->prerequisite) {
+                return std::unexpected(upgradeName + " requires " + spec->prerequisite);
+            }
+        } else if (occupied != slots.end()) {
+            return std::unexpected(upgradeName + " requires empty slot " + spec->slot);
+        }
+        slots[spec->slot] = upgradeName;
+        // CreateEnhancement first registers the new name, then applies removals.
+        // Remove actions name themselves too, leaving the slot empty (Unit.lua:2052–2056).
+        std::erase_if(slots, [spec](const auto& slot) {
+            return std::find(spec->removes.begin(), spec->removes.end(), slot.second)
+                != spec->removes.end();
+        });
+    }
+    return {};
+}
+
 bool UnitDef::hasCategory(std::string_view tag) const noexcept {
     return std::binary_search(categories.begin(), categories.end(), tag,
                               [](std::string_view a, std::string_view b) { return a < b; });

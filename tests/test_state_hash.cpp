@@ -885,3 +885,43 @@ TEST_CASE("winged-flight state changes the match hash") {
     fixture.motion()[0].airYawVelocity = rm::sim::kFxOne;
     CHECK(fixture.hash() != previous);
 }
+
+TEST_CASE("enhancement work contributes its identity and resource state to match hashes", "[enhancement][state-hash]") {
+    using namespace rm::sim;
+    Fixture fixture;
+    auto match = fixture.match();
+    const auto empty = hashMatch(fixture.store, match);
+    std::vector<EnhancementWork> work;
+    match.enhancements = &work;
+    CHECK(hashMatch(fixture.store, match) == empty);
+    work.push_back({.owner={.index=0,.generation=1}, .name="AdvancedEngineering",
+        .cost={Mag::fromInt(8),Mag::fromInt(80)}, .totalBuildTime=Mag::fromInt(8),
+        .buildTimeRemaining=Mag::fromInt(8), .buildPerTick=Mag::fromInt(1)});
+    const auto baseline = hashMatch(fixture.store, match);
+    CHECK(baseline != empty);
+    const auto original = work[0];
+    const auto changed = [&](auto mutate) {
+        work[0] = original;
+        mutate(work[0]);
+        CHECK(hashMatch(fixture.store, match) != baseline);
+    };
+    changed([](auto& w) { w.owner.generation += 1; });
+    changed([](auto& w) { w.name = "Shield"; });
+    changed([](auto& w) { w.cost.mass += Mag::fromInt(1); });
+    changed([](auto& w) { w.totalBuildTime += Mag::fromInt(1); });
+    changed([](auto& w) { w.buildTimeRemaining -= Mag::fromInt(1); });
+    changed([](auto& w) { w.buildPerTick += Mag::fromInt(1); });
+    changed([](auto& w) { w.allocated.energy += Mag::fromInt(1); });
+    changed([](auto& w) { w.fundedLastTick = Fx::fromRatio(1,2); });
+    changed([](auto& w) { w.paused = true; });
+}
+
+TEST_CASE("installed enhancement slots participate in match hashes", "[enhancement][state-hash]") {
+    Fixture fixture;
+    const auto before = fixture.hash();
+    fixture.store.enhancements()[0]["LCH"] = "AdvancedEngineering";
+    CHECK(fixture.hash() != before);
+    const auto engineering = fixture.hash();
+    fixture.store.enhancements()[0]["LCH"] = "T3Engineering";
+    CHECK(fixture.hash() != engineering);
+}

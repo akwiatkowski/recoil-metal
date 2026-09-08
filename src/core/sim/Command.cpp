@@ -1,5 +1,7 @@
 #include "core/sim/Command.hpp"
 
+#include "core/sim/Enhancement.hpp"
+
 #include "core/sim/Combat.hpp"
 #include "core/sim/Movement.hpp"
 #include "core/sim/Reclaim.hpp"
@@ -582,7 +584,7 @@ namespace {
 [[nodiscard]] bool guardCanWork(UnitIndex slot, const UnitStore& store,
     const UnitCatalog& catalog, std::string_view cap) {
     const auto* def = catalog.def(store.typeAt(slot));
-    return def != nullptr && catalog.rates(store.typeAt(slot)).buildPerTick > Mag{}
+    return def != nullptr && effectiveBuildPerTick(store, catalog, slot) > Mag{}
         && (!def->commandCapsDeclared || def->hasCommandCap(cap));
 }
 
@@ -881,7 +883,7 @@ void teardownMovement(MoveState& motion) {
             entry.setPatrolOrigin({store.transforms()[command.unit.index].x,
                                    store.transforms()[command.unit.index].z});
         }
-        const CommandQueue::Result result = orders.give(std::move(entry), true);
+        const CommandQueue::Result result = orders.give(std::move(entry), true, &catalog);
         if (command.kind == CommandKind::Patrol
             && (result == CommandQueue::Result::Cancelled
                 || result == CommandQueue::Result::CancelledCurrent)) {
@@ -1634,7 +1636,7 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
                                                            colleague->position);
                         if (gap <= reach) {
                             teardownMovement(mine);
-                            colleague->assistPerTick += catalog.rates(store.typeAt(slot)).buildPerTick;
+                            colleague->assistPerTick += effectiveBuildPerTick(store, catalog, slot);
                         } else if (!mine.moving) {
                             if (approachGrid != nullptr)
                                 (void)routeUnit(slot, colleague->position[0], colleague->position[2],
@@ -1717,7 +1719,7 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
                     }
                     const unitdef::UnitDef* product = catalog.def(candidate.buildType());
                     if (product == nullptr || !product->isMobile()
-                        || !unitdef::matchesExpression(guardDef->buildableCategory, *product)) {
+                        || !canBuild(store, catalog, slot, *product)) {
                         continue;
                     }
                     const auto productType = static_cast<std::size_t>(candidate.buildType());
@@ -1754,7 +1756,7 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
                     }
                     const unitdef::UnitDef* product = catalog.def(candidate.buildType());
                     if (product == nullptr || !product->isMobile()
-                        || !unitdef::matchesExpression(guardDef->buildableCategory, *product)) {
+                        || !canBuild(store, catalog, slot, *product)) {
                         continue;
                     }
                     const std::shared_ptr<SharedCommand> payload =
@@ -2442,7 +2444,7 @@ void updateAggressiveOrders(UnitStore& store, const UnitCatalog& catalog,
 namespace {
 
 bool startCommand(const Command& command, UnitStore& store, const UnitCatalog& catalog,
-                  const Terrain& terrain, const PassabilityGrid& grid, TickRate rate,
+                  const Terrain& terrain, const PassabilityGrid& grid, TickRate,
                   std::vector<Construction>* building, EventQueue* events,
                   const FeatureStore* features, const PassabilityGrid* approachGrid) {
     // By SLOT, not by handle: `advanceOrders` starts an order for a slot it has already found
@@ -2586,7 +2588,7 @@ bool startCommand(const Command& command, UnitStore& store, const UnitCatalog& c
         // `buildableBy` lists and the scripted opponent builds from a vetted opening — but
         // the FAF opponent asks for whatever its data names, and the rule belongs to the
         // sim, not to every caller's manners.
-        if (!unitdef::matchesExpression(builder->buildableCategory, *def)) {
+        if (!canBuild(store, catalog, command.unit.index, *def)) {
             return false;
         }
 
@@ -2655,7 +2657,7 @@ bool startCommand(const Command& command, UnitStore& store, const UnitCatalog& c
             .cost = {.mass = def->buildCostMass, .energy = def->buildCostEnergy},
             .buildTimeRemaining = def->buildTime,
             .totalBuildTime = def->buildTime,
-            .buildPerTick = rate.magPerTick(builder->buildRate),
+            .buildPerTick = effectiveBuildPerTick(store, catalog, command.unit.index),
             .blueprintIndex = command.buildType,
             .upgradeOf = upgrade ? command.unit : UnitId{},
             .builder = command.unit,

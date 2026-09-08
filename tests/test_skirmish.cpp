@@ -595,3 +595,33 @@ TEST_CASE("a dead redirector's record is reaped before projectiles fly") {
     (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, rm::sim::Terrain{field});
     CHECK(redirects.empty());
 }
+
+TEST_CASE("match funds enhancement work only from its living owner's army", "[enhancement][skirmish]") {
+    using namespace rm::sim;
+    const auto field = flatField();
+    Roster roster;
+    UnitDef def;
+    def.name = "enhancing_commander";
+    const auto owner = roster.add(roster.addType(def), 0, 0, 1, 500);
+    auto armies = twoSides();
+    std::vector<Economy> economies(2);
+    economies[0].stored = {Mag::fromInt(80), Mag::fromInt(800)};
+    economies[1].stored = economies[0].stored;
+    std::vector<EnhancementWork> work{{
+        .owner=owner, .name="AdvancedEngineering",
+        .cost={Mag::fromInt(8),Mag::fromInt(80)},
+        .totalBuildTime=Mag::fromInt(8), .buildTimeRemaining=Mag::fromInt(8),
+        .buildPerTick=Mag::fromInt(1),
+    }};
+    Match match{.armies=armies, .economies=economies, .enhancements=&work,
+                .baseStorage={Mag::fromInt(1000),Mag::fromInt(1000)}};
+    (void)tickSkirmish(roster.store, roster.catalog, match, Terrain{field});
+    CHECK(economies[0].stored.mass == Mag::fromInt(80));
+    CHECK(economies[1].stored.mass == Mag::fromInt(79));
+    CHECK(economies[1].stored.energy == Mag::fromInt(790));
+    CHECK(work[0].fundedLastTick == Fx::fromInt(1));
+    CHECK(work[0].buildTimeRemaining == Mag::fromInt(8)); // Dispatch owns progress.
+    work[0].owner.generation += 1; // Stale/recycled handles must never bill an army.
+    (void)tickSkirmish(roster.store, roster.catalog, match, Terrain{field});
+    CHECK(economies[1].stored.mass == Mag::fromInt(79));
+}

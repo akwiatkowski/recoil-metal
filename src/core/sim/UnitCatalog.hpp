@@ -69,6 +69,19 @@ public:
         Mag regenPerTick{};
     };
 
+    struct EnhancementEffects {
+        std::optional<Mag> buildPerTick;
+        Mag healthAdd{};
+        Mag regenPerTickAdd{};
+        std::vector<std::string> buildableAdds;
+    };
+    [[nodiscard]] const EnhancementEffects* enhancementEffects(
+        UnitTypeIndex type, std::string_view name) const noexcept {
+        if (type >= enhancements_.size()) return nullptr;
+        const auto found = enhancements_[type].find(name);
+        return found == enhancements_[type].end() ? nullptr : &found->second;
+    }
+
     /// How far one type sees, in elmos, in the type the sim can do arithmetic in.
     ///
     /// Converted here for the same reason the rates above are: `UnitDef` states floats
@@ -320,6 +333,7 @@ private:
     /// Parallel to `defs_`, index-locked by construction: all four only ever grow by one, in
     /// `add`.
     std::vector<Rates> rates_;
+    std::vector<std::map<std::string, EnhancementEffects, std::less<>>> enhancements_;
     std::vector<std::vector<WeaponRates>> weapons_;
     std::vector<ArmorClass> armor_;
     std::vector<IntelRadii> intel_;

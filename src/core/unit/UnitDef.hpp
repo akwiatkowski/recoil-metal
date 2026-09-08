@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <expected>
 #include <filesystem>
+#include <map>
 #include <optional>
 #include <span>
 #include <string>
@@ -64,6 +65,20 @@ enum class MotionType : std::uint8_t {
 enum class ShieldShape {
     Sphere,
     Box,
+};
+
+/// Named enhancement data must stay associated with its slot and prerequisite.
+/// Costs/time are authored work quantities, not an elapsed completion duration.
+struct EnhancementSpec {
+    std::string name;
+    std::string slot;
+    std::string prerequisite;
+    sim::Mag buildCostMass{};
+    sim::Mag buildCostEnergy{};
+    sim::Fx buildTime{};
+    std::vector<std::string> removes;
+    /// Faction handlers consume different fields; retain the source table losslessly.
+    lua::Value parameters;
 };
 
 /// One FA shield as authored by `Defense.Shield`. Ordinary bubbles use `ShieldSize` as a
@@ -511,10 +526,16 @@ struct UnitDef {
 
     /// Expressions a commander UPGRADE would add — `BuildableCategoryAdds`.
     ///
-    /// Parsed and kept, not applied. `07 §4.3` says commander upgrades are out of scope for
-    /// milestone 1 "but must be recorded as deferred", so this is that record: when upgrades
-    /// land, applying one is a set union on `BuildTree` rather than a new mechanism.
+    /// Flattened potential additions for static build-tree inspection. Native permissions
+    /// use the named enhancement and the individual unit's installed slots.
     std::vector<std::vector<std::string>> buildableCategoryAdds;
+
+    std::vector<EnhancementSpec> enhancements;
+    [[nodiscard]] const EnhancementSpec* enhancement(std::string_view name) const noexcept;
+    /// Preflight a whole ordered sequence without installing anything or charging resources.
+    /// Slot keys match retail (LCH/RCH/Back); values name their currently installed upgrade.
+    [[nodiscard]] std::expected<void, std::string> validateEnhancements(
+        std::map<std::string, std::string> slots, std::span<const std::string> sequence) const;
 
     /// The true entries in `General.CommandCaps`, sorted for lookup.
     ///

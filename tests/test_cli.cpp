@@ -59,6 +59,27 @@ private:
 
 } // namespace
 
+TEST_CASE("FAF personality selects a supported template and rejects typos", "[ai-personality]") {
+    Args defaults{{}};
+    CHECK(rm::app::parseFafBaseTemplate(defaults.argc(), defaults.argv()) == "NormalMain");
+    Args easy{{"--ai-personality", "easy"}};
+    CHECK(rm::app::parseFafBaseTemplate(easy.argc(), easy.argv()) == "NormalMain");
+    Args tech{{"--ai-personality", "tech"}};
+    CHECK(rm::app::parseFafBaseTemplate(tech.argc(), tech.argv()) == "TechMain");
+    for (const auto& [name, base] : std::vector<std::pair<std::string, std::string>>{
+             {"medium", "ChallengeMain"}, {"rushland", "RushMainLand"},
+             {"rushair", "RushMainAir"}, {"rushnaval", "RushMainNaval"},
+             {"rushbalanced", "RushMainBalanced"}, {"turtle", "TurtleMain"},
+             {"adaptive", "adaptive"}, {"random", "random"}}) {
+        Args args{{"--ai-personality", name}};
+        CHECK(rm::app::parseFafBaseTemplate(args.argc(), args.argv()) == base);
+    }
+    Args unknown{{"--ai-personality", "tehc"}};
+    CHECK_THROWS(rm::app::parseFafBaseTemplate(unknown.argc(), unknown.argv()));
+    Args missing{{"--ai-personality"}};
+    CHECK_THROWS(rm::app::parseFafBaseTemplate(missing.argc(), missing.argv()));
+}
+
 TEST_CASE("a flag is found wherever it is, and only when it is there") {
     Args none{{}};
     CHECK_FALSE(rm::app::hasFlag(none.argc(), none.argv(), "--skirmish"));

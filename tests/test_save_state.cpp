@@ -4,6 +4,7 @@
 #include "core/sim/RandomStream.hpp"
 #include "core/sim/PathService.hpp"
 #include "core/sim/SaveState.hpp"
+
 #include "core/sim/UnitStore.hpp"
 
 #include <array>
@@ -16,6 +17,31 @@
 using rm::sim::RandomStream;
 using rm::sim::SaveState;
 using rm::sim::UnitStore;
+
+TEST_CASE("enhancement resource credit and pending progress survive save load", "[enhancement][save]") {
+    using namespace rm::sim;
+    SaveState state;
+    state.enhancements = {{
+        .owner={.index=0,.generation=1}, .name="AdvancedEngineering",
+        .cost={Mag::fromInt(8),Mag::fromInt(80)},
+        .totalBuildTime=Mag::fromInt(8), .buildTimeRemaining=Mag::fromInt(4),
+        .buildPerTick=Mag::fromInt(1), .allocated={Mag{},Mag::fromInt(2)},
+        .fundedLastTick=Fx::fromRatio(1,2), .paused=false,
+    }};
+    const auto saved = SaveState::encode(state);
+    const auto restored = SaveState::decode(saved);
+    REQUIRE(restored);
+    REQUIRE(restored->enhancements.size() == 1);
+    auto resumed = restored->enhancements[0];
+    CHECK(resumed.owner == state.enhancements[0].owner);
+    CHECK(resumed.name == "AdvancedEngineering");
+    CHECK(resumed.allocated.energy == Mag::fromInt(2));
+    CHECK(resumed.fundedLastTick == Fx::fromRatio(1,2));
+    advanceEnhancement(resumed);
+    advanceEnhancement(state.enhancements[0]);
+    CHECK(resumed.buildTimeRemaining == state.enhancements[0].buildTimeRemaining);
+    CHECK(SaveState::encode(*restored) == saved);
+}
 
 namespace {
 
@@ -373,7 +399,8 @@ TEST_CASE("historic attachment saves derive offsets from their transforms", "[sa
     constexpr std::size_t kV15AbsentEconomyBytes = 1;
     constexpr std::size_t kV16ControllerBytes = sizeof(std::uint32_t) + kSlots * 107;
     constexpr std::size_t kV18SubmarineBytes = sizeof(std::uint32_t) + kSlots * 15;
-    v7.resize(v7.size() - kV18SubmarineBytes - kV16ControllerBytes - kV15AbsentEconomyBytes - kV14MotionBytes - kV10RedirectBytes - kV9SiloAmmoBytes
+    constexpr std::size_t kV19EmptyEnhancementsBytes = 2 * sizeof(std::uint32_t);
+    v7.resize(v7.size() - kV19EmptyEnhancementsBytes - kV18SubmarineBytes - kV16ControllerBytes - kV15AbsentEconomyBytes - kV14MotionBytes - kV10RedirectBytes - kV9SiloAmmoBytes
               - kV8CommandStateBytes);
     writeU32(v7, 4, 7);
     writeU32(v7, 16, static_cast<std::uint32_t>(v7.size() - 20));

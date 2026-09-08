@@ -41,7 +41,7 @@ std::string_view eventKindName(EventKind kind) noexcept {
 }
 
 bool operator==(const Event& a, const Event& b) noexcept {
-    return a.kind == b.kind && a.unit == b.unit && a.instigator == b.instigator
+    return a.kind == b.kind && a.unit == b.unit && a.instigator == b.instigator && a.builder == b.builder
            && a.army == b.army && a.amount == b.amount && a.at == b.at
            && a.impactType == b.impactType;
 }

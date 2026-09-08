@@ -145,7 +145,7 @@ void fuelHook(lua_State* lua, lua_Debug* ar) {
         // what follows; past kMaxOverruns the fuel stays spent and every hook raises, which
         // is what guarantees the chunk ends.
         if (++sandbox->overruns <= kMaxOverruns) {
-            refill(*sandbox);
+            sandbox->fuel = kInstructionBudget;
         }
         // No %lld: lua_pushfstring supports only %d %f %s %p %c %U %%, and passing %lld makes
         // Lua raise "invalid option '%l'" INSTEAD of this message — which is how this bug first
@@ -934,7 +934,9 @@ categories = setmetatable({}, {
 function __rm_catMatch(cat, set)
     if cat == nil or set == nil then return false end
     local op = cat.__cat
-    if op == 'tag' then return set[cat.a] == true end
+    -- ALLUNITS is the universal engine category, absent from authored BP tags.
+    -- e.g. victory.lua uses ALLUNITS - WALL for annihilation (C-210).
+    if op == 'tag' then return cat.a == 'ALLUNITS' or set[cat.a] == true end
     if op == 'and' then return __rm_catMatch(cat.a, set) and __rm_catMatch(cat.b, set) end
     if op == 'or'  then return __rm_catMatch(cat.a, set) or __rm_catMatch(cat.b, set) end
     if op == 'sub' then return __rm_catMatch(cat.a, set) and not __rm_catMatch(cat.b, set) end

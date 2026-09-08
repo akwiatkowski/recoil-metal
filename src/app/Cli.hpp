@@ -164,6 +164,9 @@ struct WindowOptions {
 /// rendering-adjacent flag should not stop a match starting.
 [[nodiscard]] rm::sim::VisionStyle parseVisionStyle(int argc, const char* argv[]);
 
+/// Named FAF base template or adaptive/random selection; rejects unsupported personalities.
+[[nodiscard]] std::string parseFafBaseTemplate(int argc, const char* argv[]);
+
 /// `--placement grid|free`: how structures are sited. Grid, the game's rule, is the default.
 [[nodiscard]] rm::sim::PlacementMode parsePlacementMode(int argc, const char* argv[]);
 

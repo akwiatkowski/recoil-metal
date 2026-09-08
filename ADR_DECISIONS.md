@@ -3589,3 +3589,474 @@ the accepted upgrade rather than canceling it. Regression coverage uses the real
 FAF upgrade and bomber builders for busy/free factories, economy changes, upgrades
 in flight and recycled unit slots. This does not change slow-upgrade thresholds,
 AI personality selection or the explicitly T1-only naval scope.
+
+## ADR-113 — Explicit FAF strategies and repeatable scored selection
+
+**Context.** The adapter hardcoded NormalMain, whose slow upgrades prevented
+evaluating other bundled strategies. TechMain selection demonstrated earlier T2
+land production, but also exposed unsupported advanced conditions.
+
+**Decision.** Expose all requested personalities through `--ai-personality`.
+Named strategies choose their corresponding main-base template; easy remains
+the default. Adaptive and random evaluate the corpus's `FirstBaseFunction`
+callbacks, following `aiarchetype-managerloader.lua:GetHighestBuilder`. Sort
+candidate names before scoring. During scoring only, provide map dimensions in
+FAF ogrids, vertex-sampled water coverage and a local xorshift32 stream seeded
+from map dimensions and army index. Restore gameplay globals even if a scorer
+fails; report the failure instead of selecting an unrelated fallback. Print the
+chosen base per army. Random uses the authored random scores and eligibility
+gates, not a uniform choice among all templates.
+
+**Alternatives.** Unordered traversal or wall-clock randomness would break fresh
+AI repeatability. Running the entire retail manager lifecycle would exceed the
+adapter's current supported surface. Per-player lobby configuration is separate.
+
+**Consequences.** Each army may choose a different adaptive/random strategy, but
+repeating a setup repeats its selection. This does not claim retail RNG parity
+or complete strategy execution. Map-name-specific selection (such as Seton's
+Clutch), advanced threat/enhancement APIs and higher-tier naval behavior remain
+outside this slice. Existing unsupported conditions continue to fail closed.
+
+## ADR-114 — FAF scout formations issue persistent exploration routes
+
+**Context.** The adapter dispatched `ScoutingAI` as an ordinary attack wave toward
+the enemy commander. Scouts repeatedly died on the combat route, obscuring whether
+their production ratios or their orders caused the high replacement count.
+
+**Decision.** Keep scout assignments in the existing Lua brain, keyed by the
+generation-bearing unit handle. Reserve the authored formation slot until the
+scout becomes idle or dies, including time spent waiting for a native Move path.
+Exclude scouts from generic combat formation. Follow the corpus's high/low target
+rotation and oldest-visit ordering (`platoon.lua:1190`, `base-ai.lua:1487`). Enemy
+starts are high priority; vacant starts use the enemy-biased territory test in
+`base-ai.lua:1411–1447`. Observed non-extractor structures promote interest areas.
+
+Ground routes use the unit's terrain grid and observed AntiSurface threat cells,
+with the authored 400 threshold and IMAP rings. As in `platoon.lua:1225–1228`, failed
+safe-route searches still issue the final destination through ordinary movement.
+Air scouts use their actual AIR category and vision radius for the authored flyby
+geometry. The flyby side is deterministic from the unit handle rather than retail
+RNG. Native route checks derive allegiance from the scout because armies share a
+Lua VM. Route points become ordinary queued Move decisions and use existing command
+recording and dispatch; no new simulation command or save format is introduced.
+
+**Alternatives and consequences.** Reducing scout production would conceal the
+wrong orders. Generic movement alone cannot avoid observed threat cells. Keeping
+the assignment in the adapter matches its other manager state, but does not add
+AI-brain save/resume support. Must-scout requests, unknown-threat interest queues
+and continuous air flybys still need integration before claiming complete FAF
+scouting behavior. Builder selection also rejects priority-zero entries, preserving
+the corpus's explicitly disabled plans instead of letting them occupy these slots.
+
+## ADR-115 — FAF construction availability follows the native builder owner
+
+**Context.** The scouting hour exposed repeated construction requests in a stalled
+UEF economy. The adapter subtracted the number of unfinished structures from its
+engineer pool and used that count as a pool offset. That cannot identify a free
+engineer: with the first engineer free and the later engineers busy, it chooses a
+busy engineer. It also disregarded Build commands still approaching their site.
+
+**Decision.** Publish active Build/Repair commands as builder work, alongside the
+existing unfinished-construction ownership check. Form the structure builder pool
+only from idle units with no building or reclaim work. Keep commanders last and
+apply the same availability rule to them. Each free pool member supplies one slot;
+the global structure count no longer selects a builder by position in the pool.
+
+**Alternatives and consequences.** Raising economy income or reducing build demand
+would hide command replacement. The native queue already owns the accepted work,
+so a second adapter reservation table is unnecessary. The regression covers a free
+engineer ahead of busy engineers/commander and the all-busy case. This does not yet
+change how the adapter advances authored multi-structure build sequences or chooses
+among engineers of different technology tiers.
+
+The subsequent mixed-tier regression showed that permissions also need recomputing
+after each assignment. A T1 engineer following a T3 engineer now uses its own build
+categories rather than receiving another T3 construction order.
+
+A further regression exposed selection starvation: taking the first free engineer
+before checking the requested platoon template hides a later eligible commander or
+higher-tier engineer. Selection now searches the remaining pool for the template's
+first squad requirement. GlobalSquads supply a category expression; FactionSquads can
+supply a blueprint ID, converted through the existing category parser. Only a successful
+assignment swaps the selected unit into the consumed prefix. Failed candidates preserve
+the pool, and choosing a later engineer leaves earlier free engineers available for other
+plans. The regression uses the real T1/T3 engineer and CommanderEnhance templates.
+
+
+## ADR-116 — Preserve named enhancement definitions and validate complete sequences
+
+**Context.** Commander enhancements previously retained only flattened build-category
+additions. That loses the name, price, prerequisite and slot association needed to
+execute an authored upgrade sequence. Some FAF builders offer a conflicting sequence
+before a valid remove-and-replace alternative.
+
+**Decision.** Retain named enhancement specifications in immutable unit definitions.
+Convert authored costs and work quantities to the existing fixed-point types; retain
+the source parameter table for faction-specific effect handlers. Validate required
+work data rather than silently omitting malformed enhancement entries. Keep slot
+preflight pure: copy the installed slot map, validate each prerequisite or empty-slot
+requirement, register the proposed name, then apply its removal list in source order
+(`Unit.lua:1992–2003`, `2032–2056`, installed retail `lua.scd`).
+
+**Alternatives and consequences.** Hardcoded per-faction prices would duplicate game
+data. Mutating shared unit definitions would enhance every unit of that type. Preflight
+does not install upgrades or charge resources; native paid task execution and effect
+application are still required before the AI may report an enhancement installed.
+Tests use all four retail commander definitions, UEF pod removal and Seraphim gun-to-aura
+replacement. The native execution layer must revalidate on activation because earlier
+queued prerequisites can be cancelled.
+
+
+## ADR-117 — Native paid enhancement tasks and per-unit engineering effects
+
+**Context.** Named enhancement definitions alone cannot execute an AI upgrade.
+Retail `lua/sim/tasks/EnhanceTask.lua` advances work by the previous beat's resource
+fraction, while `lua/sim/Unit.lua` manages slot prerequisites and active consumption.
+The four ACU scripts restrict advanced commander build categories at creation, even
+though those categories appear in their base blueprints.
+
+**Decision.** Use the existing Script command lifecycle for native EnhanceTask work.
+The command payload carries the enhancement name; the match owns continuous funded
+work and each unit owns installed slots. Activation validates the current prerequisite
+and supported effect handler. Command cancellation or death discards pending work
+without refunding spent resources. Completion installs the effect and stops consumption.
+Save format 19 carries pending work and installed slots, and deterministic hashes
+cover both. A scene-owned host survives replacement of the pre-run MatchRunner by the
+interactive runner; it is initialized once the scene has its final address.
+
+Engineering values are converted at catalog load. Native build, assist, repair and
+reclaim share an effective per-unit build rate. T2 and T3 engineering replace the
+engineering buff, add blueprint-authored health and regeneration, and unlock their
+build categories. T3 preserves T2 permissions through its prerequisite chain. Removal
+restores base rate and restrictions. Health bonuses compose before the veterancy
+multiplier, preserving absolute damage on an increase and clamping on a decrease
+(retail ACU CreateEnhancement handlers and `lua/sim/Buff.lua`).
+
+**Alternatives and consequences.** Changing a shared blueprint would upgrade every
+instance; charging everything upfront would bypass economy stalls. Unsupported effect
+handlers are rejected before charging. Engineering and its removal handlers are wired;
+pods, weapons, shields, stealth/cloak and aura effects, plus the AI's enhancement order
+adapter, remain required work. Tests cover all four real ACUs, paid command execution
+through the app, cancellation, and identical resumed hashes during active work. This
+save subsystem still does not claim a complete mid-combat application resume.
+
+
+The FAF adapter now publishes installed enhancement names and native Enhancing/Upgrading
+state, reserves commanders with pending enhancement commands, and converts validated
+EnhanceAI sequences into logged Script commands. Full-sequence validation happens before
+emission and each command revalidates at activation. The adapter skips names already
+installed, matching retail `platoon.lua:EnhanceAI`; that function queues all enhancements
+before its TimeBetweenEnhancements wait, so the setting does not delay individual commands.
+Enhanced commanders retain T1 construction and gain the unlocked T2/T3 commander categories.
+Unsupported effect handlers still reject the complete candidate sequence before charging;
+they remain implementation work, including the UEF pod prerequisites for its engineering plan.
+
+## ADR-118: Preserve authored construction queues and opening resource choices
+
+**Context.** The adaptive commander opening (`platoon.lua:CommanderInitialBOAI`)
+chooses reachable resource markers and queues several builds before waiting. The
+adapter previously replaced selected sites with its nearest-deposit search and
+dropped the queued flag at the application boundary. Native queue cancellation also
+used the movement radius for structures, cancelling adjacent 16-elmo building sites.
+
+**Decision.** Carry explicit finite, map-bounded sites and the queued flag through
+the existing Decision and logged command path. Native intake remains responsible
+for buildability, resource restrictions and footprint placement. Snapshot queueBusy
+includes pending commands, and pending Build/Repair commands reserve their builder.
+Bind native Lua queries to the current opponent observation on every pass because
+the VM is shared across brains.
+
+The opening survey uses native amphibious paths and the authored marker iteration
+order: close mass below 165 squared ogrids, distant mass below 484, ending the mass
+scan when either list reaches four; the nearest hydro within 65 ogrids is accepted
+only if reachable. Distances explicitly convert to elmos. Occupancy does not alter
+the survey's original marker counts; native construction still validates a chosen site.
+
+For queued structures, use the existing same-blueprint rule with Recoil's actual
+build-footprint predicate (`CommandAI.cpp:GetCancelQueued`), supplied with the native
+catalog. Movement keeps its 17-elmo cancellation radius. Catalog-free queue callers
+can prove a build duplicate only at the identical site. This corrects our Recoil
+adaptation; it is not new evidence of retail Forged Alliance cancellation parity.
+
+**Alternatives and consequences.** Serializing the authored opening into repeated
+single builds would conceal broken queue semantics. Guessing a universal structure
+radius would still cancel valid adjacent builds. No new command kind or save format
+is needed. Tests prove ordered completion, actual resource charges, identical replay
+hashes, footprint cancellation boundaries, resource distances and reachability, and
+observation rebinding. The adaptive opening's phase driver and hydro-assistance
+behavior still need to consume this contract; this change alone does not resolve
+the TechMain opening stall.
+
+## ADR-119: Run the adaptive commander opening as persistent decision phases
+
+**Context.** `CDR Initial Default` selects `CommanderInitialBOAI`, which has no
+`Construction.BuildStructures` list. The adapter skipped that plan. Correct platoon
+selection exposed the omission: commanders stopped borrowing engineer-only plans,
+and TechMain matches stalled after one air factory and one generator per army.
+
+**Decision.** Represent the authored opening's phases in the existing Lua decision
+driver (`platoon.lua:4549–5015`). Reserve the generation-bearing commander handle
+until its queue and construction finish, including movement and hydro assistance.
+Preserve the surveyed marker counts, the factory choice (water/naval, rushair/air,
+otherwise land), interleaved resource/power sequence, extra no-hydro power and
+factory, bounded hydro wait, guard polling, and post-hydro factory decisions.
+BuildOnce is consumed on assignment. Native construction still owns spending and
+completion; the phase driver never creates free buildings. Stop, move and guard
+decisions use the same logged intake as player orders. Native snapshots publish
+construction owner/site and guard counts. Authored waits convert from FAF ticks
+to the configured application tick rate and are observed on the decision cadence.
+
+Hydro builders now select hydro markers instead of generic building slots.
+`CanBuildOnHydroLessThanDistance`'s distance argument converts from authored ogrids
+to the elmo positions supplied to the corpus. Without that conversion the engineer
+search rejected a hydro the commander's own survey had accepted.
+
+Placement compares actual native collision radii at snapped build-grid sites,
+including living units, unfinished work, pending build queues, and decisions from
+this pass. The earlier fixed six-elmo clearance repeatedly chose positions inside
+large factories; ignoring pending commands also let another engineer occupy the
+second foundation of an opening queue.
+
+**Alternatives and consequences.** The ACU base template's building-type list is
+placement metadata, not a build order; replaying it as a fixed sequence would erase
+the authored decisions. Running a second independent economy or spawning completed
+structures would bypass native accounting. The existing command path avoids both.
+The phase logic is a port into the adapter, not execution of the full FAF platoon
+manager. Precise ACU/base-template adjacency and playable-area boundary placement
+still need fidelity work: generic slots remain the placement fallback. Native
+unfinished construction currently has no independent unit handle, so hydro guard
+targets its builder and completion is observed at the recorded hydro site; guarding
+the retail foundation itself remains a limitation. These limits and the remaining
+enhancement/scouting/late-tech gaps prevent a claim of complete advanced-AI support.
+
+## ADR-120: Preserve FAF's rolling economy history and report observed builder gates
+
+**Context.** The adapter published instantaneous economy values as
+`EconomyOverTimeCurrent`. FAF's `base-ai.lua:EconomyMonitor` instead maintains thirty
+initially zero samples, replacing one every ten FAF ticks. Engineer production and
+factory upgrades consult that history; `GreaterThanEconEfficiencyCombined` also
+checks instantaneous efficiency independently.
+
+**Decision.** Keep a thirty-slot rolling monitor per brain on the existing decision
+cadence. Preserve separate instantaneous queries and the authored efficiency cap.
+Record each evaluated builder's first failing condition, check tick, evaluation
+count and pass count in its existing condition cache. The offscreen AI sanity
+report prints these observations without executing extra conditions.
+
+**Alternatives and consequences.** Lowering upgrade thresholds would hide the
+incorrect input. An exponential average would change the authored window. The
+rolling history reproduces the source's startup ramp and delayed response to
+sustained changes. The AI trend stays per FAF tick: retail `0x005968b6–0x005968c2`
+subtracts usage from income without scaling (`C-071`). The earlier adapter
+incorrectly borrowed the separate UI statistic's factor of ten (`C-163`), making
+the T2 power builder's surplus threshold ten times too restrictive.
+Diagnostic counts exclude cached answers, and a last observed
+failure does not prove the same condition still fails at match end. This repair
+does not by itself prove T3 or experimental progression in a real match.
+
+## ADR-121: Count engineer-manager categories within their consumption group
+
+**Context.** Runtime builder diagnostics showed `EngineerCapCheck` failing even
+below TechMain's ten T2 engineers. The condition passes the category `TECH2` and the
+group name `Engineers`; the adapter ignored the group and counted T2 tanks,
+factories and generators against the engineer cap.
+
+**Decision.** Intersect the category with the named consumption group's membership
+from `EngineerManager.lua:37–45,416–421`. Engineers exclude engineer stations;
+the other authored groups retain their distinct membership, and unknown groups
+return zero. Reuse the existing per-snapshot category count cache.
+
+**Alternatives and consequences.** Raising the cap would conceal the wrong query
+and make production depend on unrelated army composition. Correct group filtering
+lets the original production limits and T3 engineer-count prerequisites interact
+as authored. Manager counts still share the adapter's whole-army base ownership;
+this fix does not implement separate expansion-base membership.
+
+## ADR-122: Let air and naval factories train mobile construction units
+
+**Context.** The corrected economy and engineer caps produced T3 air factories in
+the offscreen TechMain duel, but the adapter's domain filter rejected land engineers
+from them. All twelve shipped T3 factory blueprints include a tier/faction-qualified
+`MOBILE CONSTRUCTION` build category, independently of their combat domain.
+
+**Decision.** Permit mobile construction products across factory domains while
+retaining the product's factory-tier requirement. Combat products keep their domain
+filter. Native command intake still validates the complete blueprint build tree.
+
+**Alternatives and consequences.** Forcing the AI to upgrade land factories first
+would preserve the adapter defect and override the authored strategy. This allows
+the existing T3 engineer builder to use whichever suitable factory actually exists;
+it neither bypasses native costs nor gives lower-tier factories higher-tier units.
+
+## ADR-123: Select AI building sites with native placement checks
+
+**Context.** An Aeon T2 power order repeatedly targeted Seton's Clutch coordinates
+`(2644, 5124)` and reached dispatch with zero accepted recipients. Loading the actual
+map and UAL0208/UAB1201 blueprints reproduces `sitePlaceable == false`: the hover
+engineer's slope limit rejects the footprint. The adapter checked occupancy but
+not terrain. Its resource search also omitted completed structures.
+
+**Decision.** Reuse `sitePlaceable`, `buildSitePlaceable` and
+`Terrain::resourceSitePlaceable` when converting AI construction decisions. Match
+native product-versus-builder movement-domain selection; retain aircraft's native
+terrain exception and mobile products' placement rules. Generic candidates skip
+invalid sites; deposit candidates skip occupied or invalid deposits. Explicit
+authored sites are validated without silently moving their orders elsewhere.
+Queued sites still reserve space within the decision pass.
+
+Use the existing `PassabilitySet` for static terrain grids, cached per opponent and
+recreated when the observed heightfield or water configuration changes. This avoids
+rebuilding the map grid for each candidate and removes the adapter's duplicate
+floating-point occupancy implementation. The ordinary log now says `orders` when
+submitting a structure: successful intake is not proof of `ConstructionStarted`.
+
+**Consequences.** This aligns the AI with the current native placement contract,
+including its documented use of the builder grid for ordinary immobile products;
+it does not establish retail placement parity or implement authored adjacency.
+Native intake remains authoritative if occupancy changes before dispatch. Terrain
+deformation would require invalidating these static caches, just as it would for
+the existing native passability cache.
+
+## ADR-124 — Execute authored manager engineer assistance through native Guard
+
+**Context.** The selected commander/T2/T3 assist templates use
+`ManagerEngineerAssistAI`, but the adapter neither returned engineers wanting
+assistance nor executed that plan. Experimental builders therefore lacked their
+authored helpers. Default assistee queries also failed because the Lua category
+matcher treated `ALLUNITS` as a literal blueprint tag; real blueprints omit it.
+
+**Decision.** Adapt `platoon.lua`'s `EconAssistBody` and
+`ManagerEngineerAssistAI` to native Guard orders. Preserve ordered product
+categories, closest/fewest-guards selection, strict range, twenty-guard ceiling,
+`NumAssistees`, and builder `InstanceCount`. Reserve assigned helpers until the
+authored ten-tick startup plus timed wait, or poll completion every fifteen FAF
+ticks for `AssistUntilFinished`. Convert authored seconds separately from ticks.
+Treat `ALLUNITS` as universal in the shared category matcher, including subtraction
+and intersection, rather than patching each caller's default category.
+
+**Consequences.** Native assistance supplies paid work through the existing economy
+path. No second construction or resource accounting system is introduced. Native
+unfinished foundations have no unit handle: the adapter guards the actual builder
+and tracks blueprint, site, command identity and batch remainder to detect its
+work ending. This is an explicit limitation relative to directly guarding the
+foundation; retained work without an active Build command lacks that command
+identity. Manager ownership and structure queries retain the adapter's existing
+base/radius model. Focused tests cover target selection, limits, timing, work
+replacement, dead helpers and universal category algebra.
+
+**Parity review: incomplete.** Guarding the builder can transfer timed assistance
+to its next project, whereas FAF keeps guarding the original foundation. Even an
+until-finished helper can lend work to the next project before its next polling
+tick. Builder death also differs from destruction of the foundation. Closing this
+requires native work-bound targeting, not merely shortening the Lua wait. Likewise,
+Engineer/Factory candidates currently span the army; FAF reads the selected base's
+manager membership, which requires implementing that ownership model. These are
+remaining behavior gaps, not claims established by the passing adapter tests.
+
+**Late-game query cost.** The first 60-minute assistance run completed 1,800 builds
+and accepted 267 Guard orders, but hit the 20-million-instruction watchdog on 251
+decision calls. A 1,280-unit / 400-query regression reproduced the failure in
+`assistanceTargets`. Index active work by builder once per snapshot and cache
+category-filtered candidates for equivalent expressions. Preserve snapshot order;
+recheck guard reservations, assistance limits, range and desire on every query.
+The regression now fits the existing budget. This optimization does not resolve
+the work-target or manager-membership parity gaps above.
+
+## ADR-125 — Deliver completion provenance and register assistance ownership
+
+**Context.** FAF's initial pool joins MAIN; engineers and upgraded factories then
+inherit their producer's current manager (`aiarchetype-managerloader.lua:60`,
+`EngineerManager.lua:379–386,667`, `FactoryBuilderManager.lua:464–472`). Membership
+is not proximity. The native opponent port received events only during its paced
+decision, after `beginFrame` had already cleared the preceding completion events.
+A test completed two constructions while its opponent observed neither finish.
+
+**Decision.** Deliver the preceding complete event stream every tick, before Lua
+pumping and frame clearing; keep decisions on their existing staggered cadence.
+Add `Event.builder` for completion provenance while preserving the separate
+upgrade `instigator` consumed by selection handoff. The FAF opponent owns its
+`World` view so callbacks between decisions cannot dereference a caller's expired
+stack view. Referenced scene/content remain owned by the match.
+
+Register units by generation-qualified handle. Explicit `AddUnit`/`AddFactory`
+changes membership; `RemoveUnit` leaves an explicit unmanaged location. Completed
+children inherit their founder's current registration, including replacement
+factories. Retain dead-founder provenance while unfinished work still names it.
+Assistance filters Engineer/Factory targets by the requested manager, and recruits
+helpers from its builder's manager. Structure assistance retains the authored
+radius query. Movement alone never changes registration.
+
+**Verification and limits.** Tests cover two co-located members in different
+managers, explicit transfer/removal, helper ownership, orphan provenance,
+generation-safe completion inheritance, and receipt of both native completion
+events with unchanged replay hashes. This supplies registration and inheritance,
+not the complete FAF manager lifecycle. The adapter still synthesizes NAVAL,
+uses global counts in other manager queries, and lacks authored expansion,
+TransferAI, capture and task-disband reassignment handlers. Naval category alone
+must not imply naval ownership. Work-bound foundation assistance remains open.
+
+The preceding indexed-assistance 60-minute rerun completed with zero decision
+budget errors (previously 251), 1,789 completed builds, two Czars and one Galactic
+Colossus. That run predates the event/ownership changes in this decision.
+
+## ADR-126 — Scope manager counts and separate construction from assistance
+
+**Context.** Registered ownership did not yet affect factory or consumption-group
+counts. MAIN counted NAVAL engineers, factory category queries counted matching
+non-factories, and both manager types counted every matching construction in the
+army. Source `EngineerManager.lua:416–455` and
+`FactoryBuilderManager.lua:128–173` instead query their member lists and count
+matching producers, with distinct engineer/factory state rules.
+
+**Decision.** Count registered members per manager and restrict factory counts to
+structure factories. Cache counts by snapshot, membership and category; explicit
+registration invalidates the cache within a snapshot. Give factory managers their
+own construction query. Share the existing indexed producer/product lookup with
+assistance, but apply assistance willingness and helper limits only in assistance
+queries. Count a producer once, honor its requested category, and include factory
+upgrades while excluding upgrading engineers. Expose the corresponding factory
+assistance query through its manager.
+
+**Consequences.** Capacity and production conditions no longer borrow another
+base's units or confuse engineers with factories. Tests cover transfers, removal,
+duplicate work rows, producer categories, upgrade state and independence from
+assistance willingness. These query corrections expose rather than repair the
+remaining synthetic NAVAL lifecycle: real MAIN templates load
+`NavalExpansionBuilders`; an expansion transfers its founder and installs a
+`NormalNaval` base. Rebinding every sea group to MAIN would move spatial fleet
+conditions inland and is not a substitute for implementing that lifecycle.
+
+## ADR-127 — Preserve authored base radii at pool query boundaries
+
+**Context.** `HavePoolUnitComparisonAtLocation` and `SeaAttackCondition` pass the
+engineer manager's radius directly into pool count/threat queries. The radius is
+in ogrids, but the adapter's unit and base coordinates are in elmos. Comparing
+these directly made searches eight times too short. MAIN also used radius 200,
+where the shipped base/tech/adaptive/medium/rush/turtle brain setup passes 100.
+
+**Decision.** Convert the radius to elmos in both pool query methods and restore
+the authored MAIN default of 100 ogrids. Keep caller-specified radii and unbounded
+queries supported. The regression checks points inside, on and outside a radius,
+plus the actual sea-attack threshold function. This repairs query geometry; it
+does not supply missing naval expansion ownership or marker-selection behavior.
+
+## ADR-128 — Preserve units and brain identity in naval marker queries
+
+**Context.** `aiutilities.lua:GetAlliesThreat` excludes the querying brain by
+object identity, then queries structures within 30 ogrids of a marker. Our
+`ArmyBrains` contained a separate view of the querying brain, and the public
+area query compared its ogrid radius directly with elmo coordinates. This could
+reject an own site without another ally, or miss nearby allied structures.
+
+**Decision.** Publish the actual booted brain in `ArmyBrains`, preserving its
+alliance on refresh. Keep views for armies without an adapter brain. Convert
+public area-query radii once, inside `GetUnitsAroundPoint`; its count wrapper
+continues to delegate. Marker utility functions that compare coordinates
+directly still require elmo-valued search radii at their adapter call boundary.
+
+**Consequences.** Tests execute the authored naval marker finder against own
+structures, allied structures inside/outside 30 ogrids, and allied marker
+reservations. These queries now support the intended geometry and self
+exclusion. Dynamic expansion creation, founder transfer and template ownership
+remain separate requirements; the synthetic NAVAL base is not validated by
+these tests.
