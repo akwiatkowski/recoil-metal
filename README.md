@@ -709,6 +709,25 @@ list is the only thing this corpus was fetched to answer.
 
 ## Every flag
 
+For repeated offscreen AI experiments, the tracked runner keeps each run's logs,
+commands, hashes and final screenshot under `build/ai-matches/<name>/`:
+
+```sh
+mise exec -- python3 tools/ai_match.py run tech-hour --personality tech --seconds 3600 --timeout 1200
+mise exec -- python3 tools/ai_match.py status
+mise exec -- python3 tools/ai_match.py stop tech-hour
+mise exec -- python3 tools/ai_match.py stop tech-hour --force
+```
+
+`run` stays attached to its tool/terminal session and records the exit code; use
+another invocation for `status` or `stop`. `--seconds` is simulation time and
+`--timeout` is an optional wall-clock limit. Job names cannot be reused, preserving
+earlier evidence. Stop verifies the recorded PID's creation time and command before
+sending a signal. The runner always uses the local build, observer mode, mute and
+offscreen capture. A persistent approval for
+`mise exec -- python3 tools/ai_match.py` covers these operations without approving
+arbitrary shell commands or system-wide process termination.
+
 The walkthrough above uses about half of these. The rest exist for the same
 reason `--screenshot` does: **a headless run has no cursor**, and interface that
 only appears under one cannot otherwise be captured, tested, or diffed.

@@ -416,6 +416,8 @@ if(BUILD_TESTING)
              COMMAND mise exec -- python3 ${CMAKE_SOURCE_DIR}/tools/test_content_acceptance.py)
     add_test(NAME "native input acceptance requires complete workflow evidence"
              COMMAND mise exec -- python3 ${CMAKE_SOURCE_DIR}/tools/test_input_acceptance.py)
+    add_test(NAME "AI match runner only stops tracked processes"
+             COMMAND mise exec -- python3 ${CMAKE_SOURCE_DIR}/tools/test_ai_match.py)
 
     # --- Boundary checks --------------------------------------------------------
     #
