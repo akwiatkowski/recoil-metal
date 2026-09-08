@@ -125,6 +125,8 @@ enum class CommandKind : std::uint8_t {
     /// has one UNITCOMMAND_Reclaim for both; our numbering is already our own. Completes when
     /// the target is gone — fully reclaimed by this unit or destroyed by anything else.
     ReclaimUnit = 14,
+    /// Immediate vertical-layer control; preserves the horizontal order queue.
+    Dive = 15,
 };
 
 [[nodiscard]] constexpr bool isGuardCommand(CommandKind kind) noexcept {

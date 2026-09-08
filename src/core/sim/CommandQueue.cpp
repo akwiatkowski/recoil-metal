@@ -27,6 +27,7 @@ template <typename Order>
         return false;
     }
     switch (a.kind) {
+    case CommandKind::Dive:
     case CommandKind::Stop:
     case CommandKind::ToggleFactoryRepeat:
     case CommandKind::CancelFactoryBuild:

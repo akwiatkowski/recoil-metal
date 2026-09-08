@@ -36,6 +36,7 @@ constexpr std::uint32_t kVersion16 = 16;
 /// Version 17 admits the `ReclaimUnit` command kind. No payload layout changed: the kind byte
 /// was already written, only the range a reader accepts widened.
 constexpr std::uint32_t kVersion17 = 17;
+constexpr std::uint32_t kVersion18 = 18;
 // MT19937 serializes its 624 state words plus an index, all as unsigned decimal numbers separated
 // by one space. This rejects oversized malformed frames before they allocate their payload.
 constexpr std::size_t kMaxRandomStatePayload =
@@ -437,6 +438,39 @@ constexpr std::array kAirControllerFx{
     &MoveState::airElevationAdjustment,
     &MoveState::fuelDrainPerTick
 };
+
+void writeSubMotion(PayloadWriter& w, std::span<const MoveState> motion) {
+    w.count(motion.size());
+    for (const auto& state : motion) {
+        w.u8(state.submersible);
+        w.u8(state.submerged);
+        w.u8(state.diveTargetSubmerged);
+        w.i32(state.submarineOffset.raw());
+        w.i32(state.submarineElevation.raw());
+        w.i32(state.divePerTick.raw());
+    }
+}
+
+bool readSubMotion(PayloadReader& r, std::vector<MoveState>& motion) {
+    std::size_t count{};
+    if (!r.count(count, 15) || count != motion.size()) return false;
+    for (auto& state : motion) {
+        std::uint8_t enabled{}, submerged{}, target{};
+        std::int32_t offset{}, elevation{}, speed{};
+        if (!r.u8(enabled) || enabled > 1 || !r.u8(submerged) || submerged > 1
+            || !r.u8(target) || target > 1 || !r.i32(offset) || !r.i32(elevation)
+            || !r.i32(speed) || offset > 0 || elevation > 0 || speed < 0
+            || (enabled && !state.surfaceWater)
+            || (!enabled && (submerged || target || offset || elevation || speed))) return false;
+        state.submersible = enabled;
+        state.submerged = submerged;
+        state.diveTargetSubmerged = target;
+        state.submarineOffset = Fx::fromRaw(offset);
+        state.submarineElevation = Fx::fromRaw(elevation);
+        state.divePerTick = Fx::fromRaw(speed);
+    }
+    return true;
+}
 
 void writeAirController(PayloadWriter& w, std::span<const MoveState> motion) {
     w.count(motion.size());
@@ -854,6 +888,7 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
     }
     if (version >= kVersion15) writeEconomyArmies(payloadWriter, state.economyArmies);
     if (version >= kVersion16) writeAirController(payloadWriter, state.units.motion);
+    if (version >= kVersion18) writeSubMotion(payloadWriter, state.units.motion);
     const std::vector<std::byte> payload = payloadWriter.take();
     if (payload.size() > std::numeric_limits<std::uint32_t>::max()) {
         throw std::length_error("MT19937 state exceeds the v1 save-state payload limit");
@@ -888,7 +923,7 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
                && version != kVersion7 && version != kVersion8 && version != kVersion9
                && version != kVersion10 && version != kVersion11 && version != kVersion12
                && version != kVersion13 && version != kVersion14 && version != kVersion15
-               && version != kVersion16 && version != kVersion17)
+               && version != kVersion16 && version != kVersion17 && version != kVersion18)
         || (requiredVersion && version != *requiredVersion) || !readU64(bytes, offset, tick)
         || !readU32(bytes, offset, payloadSize) || bytes.size() - offset != payloadSize) {
         return std::nullopt;
@@ -930,6 +965,7 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
     std::optional<EconomyArmyState> economyArmies;
     if (version >= kVersion15 && !readEconomyArmies(reader, economyArmies)) return std::nullopt;
     if (version >= kVersion16 && !readAirController(reader, units.motion)) return std::nullopt;
+    if (version >= kVersion18 && !readSubMotion(reader, units.motion)) return std::nullopt;
     if (!reader.finished()) return std::nullopt;
     SaveState decoded{.tick = tick,
                       .random = std::move(random),
@@ -960,7 +996,7 @@ std::optional<SaveState> SaveState::decodeV2(std::span<const std::byte> bytes) {
 }
 
 std::vector<std::byte> SaveState::encode(const SaveState& state) {
-    return rm::sim::encode(state, kVersion17);
+    return rm::sim::encode(state, kVersion18);
 }
 
 std::optional<SaveState> SaveState::decode(std::span<const std::byte> bytes) {

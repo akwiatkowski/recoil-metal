@@ -378,6 +378,8 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
     // authored here — the sim converts once at spawn.
     // Both winged flight and RULEUMT_Hover use the authored height above the surface.
     def.elevationElmos = numberOr(*physics, "Elevation", 0.0f) * scmap::kElmosPerOgrid;
+    def.diveSurfaceSpeedElmosPerSecond =
+        numberOr(*physics, "DiveSurfaceSpeed", 1.0f) * scmap::kElmosPerOgrid;
     if (const lua::Value* airBlock = parsed->path("Air")) {
         def.airKMove = numberOr(*airBlock, "KMove", 0.0f);
         def.airKMoveDamping = numberOr(*airBlock, "KMoveDamping", 0.0f);

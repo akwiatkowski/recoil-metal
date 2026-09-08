@@ -390,6 +390,24 @@ void tick(std::span<Transform> transforms, std::span<MoveState> motion,
 
     for (std::size_t i = 0; i < count; ++i) {
         MoveState& state = motion[i];
+        if (state.submersible && terrain.hasWater() && !state.attached) {
+            // C-200, ART-E001 0x006c9ca0. The 0.25-ogrid seabed clearance is
+            // 2 elmos. Ease by sin(depth fraction * pi), with a 10% speed floor.
+            const auto& at = transforms[i];
+            const Fx depthOffset = std::max(state.submarineElevation,
+                std::min(Fx{}, terrain.heightAt(at.x, at.z) + Fx::fromInt(2) - terrain.waterLevel()));
+            const Fx target = state.diveTargetSubmerged ? depthOffset : Fx{};
+            const Fx fraction = depthOffset < Fx{}
+                ? std::clamp(state.submarineOffset / depthOffset, Fx{}, kFxOne) : Fx{};
+            const Brad angle = static_cast<Brad>(
+                std::int64_t{fraction.raw()} * (kBradFullTurn / 2) / kFxOne.raw());
+            const Fx step = std::max(state.divePerTick * Fx::fromRatio(1, 10),
+                                     fxSin(angle) * state.divePerTick);
+            const Fx delta = target - state.submarineOffset;
+            state.submarineOffset += std::clamp(delta, -step, step);
+            if (state.submarineOffset == target) state.submerged = state.diveTargetSubmerged;
+            transforms[i].y = terrain.waterLevel() + state.submarineOffset;
+        }
         // The vertical events run for every flyer, grounded ones included: a parked
         // aircraft recharges (`C-223`) and a fresh order commits it to takeoff, both
         // before the idle skip below would otherwise pass it over.
@@ -561,7 +579,7 @@ void tick(std::span<Transform> transforms, std::span<MoveState> motion,
         if (state.hovering) {
             unit.y = terrain.surfaceHeightAt(unit.x, unit.z) + state.hoverElevation;
         } else if (state.surfaceWater && terrain.hasWater()) {
-            unit.y = terrain.waterLevel();
+            unit.y = terrain.waterLevel() + state.submarineOffset;
         } else if (!state.airborne) {
             // Ground behavior stays exactly where it was: moving units update height here;
             // idle units retain their established Y and only refresh slope below.
@@ -668,7 +686,7 @@ void placeOnMotionLayer(Transform& transform, const MoveState& state,
         return;
     }
     if (state.surfaceWater && terrain.hasWater()) {
-        transform.y = terrain.waterLevel();
+        transform.y = terrain.waterLevel() + state.submarineOffset;
         transform.pitch = Brad{0};
         transform.roll = Brad{0};
         return;

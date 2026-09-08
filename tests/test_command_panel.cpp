@@ -39,7 +39,7 @@ TEST_CASE("the command rack keeps Forged Alliance's fixed 4x3 positions") {
     CHECK(rm::ui::kCommandDescriptors[3].kind == CommandKind::Patrol);
     CHECK(rm::ui::kCommandDescriptors[4].kind == CommandKind::Stop);
     CHECK(rm::ui::kCommandDescriptors[5].kind == CommandKind::Guard);
-    CHECK_FALSE(rm::ui::kCommandDescriptors[6].kind.has_value());
+    CHECK(rm::ui::kCommandDescriptors[6].kind == rm::sim::CommandKind::Dive);
     CHECK(rm::ui::kCommandDescriptors[7].kind == CommandKind::Overcharge);
     CHECK(rm::ui::kCommandDescriptors[8].kind == CommandKind::Repair);
     CHECK(rm::ui::kCommandDescriptors[9].kind == CommandKind::Assist);
@@ -269,7 +269,7 @@ TEST_CASE("command explanations distinguish unsupported actions and mixed select
     const auto disabled = rm::ui::commandCard(move, mixed);
     CHECK(disabled.rows[0].value == "SELECTION CANNOT DO THIS");
     CHECK(disabled.rows.back().value == "SELECT A UNIT WITH THIS COMMAND");
-    const auto unsupported = rm::ui::commandCard(rm::ui::kCommandDescriptors[6], mixed);
+    const auto unsupported = rm::ui::commandCard(rm::ui::CommandDescriptor{}, mixed);
     CHECK(unsupported.rows[0].value == "NOT IMPLEMENTED");
     CHECK(unsupported.rows.back().value == "NO UNIT CAN USE THIS YET");
 }

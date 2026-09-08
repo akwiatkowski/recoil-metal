@@ -47,6 +47,16 @@ rm::sim::MoveState motionFor(const rm::unitdef::UnitDef& def, int armyIndex) {
     motion.armyIndex = armyIndex;
     motion.airborne = def.motion == rm::unitdef::MotionType::Air;
     motion.surfaceWater = floatsOnWater(def);
+    motion.submersible = def.motion == rm::unitdef::MotionType::SurfacingSub;
+    if (motion.submersible) {
+        // Retail's default wet spawn prefers Sub except for EXPERIMENTAL units
+        // (ART-E001 0x006319c7). Explicit layer-bearing spawns remain outside this seam.
+        motion.submerged = !def.hasCategory("EXPERIMENTAL");
+        motion.diveTargetSubmerged = motion.submerged;
+        motion.submarineElevation = std::min(rm::sim::Fx{}, rm::sim::fxFromFloat(def.elevationElmos));
+        motion.submarineOffset = motion.submerged ? motion.submarineElevation : rm::sim::Fx{};
+        motion.divePerTick = gAppTickRate.perTick(def.diveSurfaceSpeedElmosPerSecond);
+    }
     motion.hovering = def.motion == rm::unitdef::MotionType::Hover;
     motion.hoverElevation = motion.hovering ? rm::sim::fxFromFloat(def.elevationElmos)
                                            : rm::sim::Fx{};

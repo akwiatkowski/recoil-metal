@@ -367,6 +367,8 @@ struct UnitDef {
     /// (`C-221`): cruise height above the terrain reference, and the height a slow flyer
     /// climbs half of before moving forward (`C-245`). Zero when unauthored.
     float elevationElmos = 0.0f;
+    /// C-218: retail constructor defaults DiveSurfaceSpeed to 1 ogrid/s.
+    float diveSurfaceSpeedElmosPerSecond = 8.0f;
     float airAutoLandTimeSec = 0.0f;
     float airFuelUseTimeSec = 0.0f;
     sim::Mag buildCostEnergy{};

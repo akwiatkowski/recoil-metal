@@ -815,12 +815,13 @@ constexpr std::size_t kUnidentifiedPriorityRow = 9999;
                                            const UnitStore& store,
                                            std::span<const Army> armies,
                                            const UnitCatalog& catalog,
-                                           const Intel* intel) noexcept {
+                                           const Intel* intel, std::optional<bool> sourceSubmerged) noexcept {
     if (!shootable(fromArmy, store, target.index, armies)) {
         return false;
     }
     const std::span<const MoveState> motion = store.motion();
-    if (target.index >= motion.size() || !weapon.canTarget(motion[target.index].airborne)) {
+    if (target.index >= motion.size() || !weapon.canTarget(motion[target.index].airborne,
+            motion[target.index].submersible && motion[target.index].submerged, sourceSubmerged)) {
         return false;
     }
     if (intel != nullptr) {
@@ -936,7 +937,8 @@ std::optional<UnitId> nearestTarget(std::array<Fx, 3> from, int fromArmy,
                                        const UnitCatalog* catalog, std::optional<Brad> heading,
                                        std::optional<UnitId> incumbent,
                                        const PlayableRect* playableRect,
-                                       std::span<const WorkClaim> claims) {
+                                       std::span<const WorkClaim> claims,
+                                       std::optional<bool> sourceSubmerged) {
     if (!weapon.fires() || weapon.targetsProjectiles || weapon.targetPriorities.empty()) {
         return std::nullopt;
     }
@@ -975,7 +977,8 @@ std::optional<UnitId> nearestTarget(std::array<Fx, 3> from, int fromArmy,
         if (store.doNotTarget(store.idAt(slot))) {
             return std::nullopt;
         }
-        if (slot >= motion.size() || !weapon.canTarget(motion[slot].airborne)) {
+        if (slot >= motion.size() || !weapon.canTarget(motion[slot].airborne,
+                motion[slot].submersible && motion[slot].submerged, sourceSubmerged)) {
             return std::nullopt;
         }
         const unitdef::UnitDef* def = catalog != nullptr ? catalog->def(store.typeAt(slot))
@@ -1130,6 +1133,9 @@ std::size_t aimAtTargets(UnitStore& store, const UnitCatalog& catalog,
         Fx targetDistance{};
         for (std::size_t w = 0; w < def->weapons.size(); ++w) {
             const unitdef::Weapon& weapon = def->weapons[w];
+            const auto& sourceMotion = store.motion()[slot];
+            const std::optional<bool> sourceSubmerged = sourceMotion.submersible
+                ? std::optional<bool>{sourceMotion.submerged} : std::nullopt;
             if ((!weapon.fires() && !weapon.firesAtProjectiles()) || weapon.turreted) {
                 continue;
             }
@@ -1147,7 +1153,7 @@ std::size_t aimAtTargets(UnitStore& store, const UnitCatalog& catalog,
                 if (hasExplicitAttack) {
                     candidateUnit = forced && canShootExplicitTarget(
                                                  *forced, from, motion[slot].armyIndex, weapon,
-                                                 store, armies, catalog, intel)
+                                                 store, armies, catalog, intel, sourceSubmerged)
                                         ? forced
                                         : std::nullopt;
                 } else {
@@ -1158,7 +1164,7 @@ std::size_t aimAtTargets(UnitStore& store, const UnitCatalog& catalog,
                     candidateUnit = nearestTarget(from, motion[slot].armyIndex, weapon, store,
                                                    armies, intel, &catalog,
                                                    transforms[slot].heading, incumbent, playableRect,
-                                                   claims);
+                                                   claims, sourceSubmerged);
                 }
                 if (candidateUnit) {
                     candidatePosition = !hasExplicitAttack && !weapon.beam
@@ -1244,6 +1250,9 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
 
         for (std::size_t w = 0; w < def->weapons.size(); ++w) {
             const unitdef::Weapon& weapon = def->weapons[w];
+            const auto& sourceMotion = store.motion()[slot];
+            const std::optional<bool> sourceSubmerged = sourceMotion.submersible
+                ? std::optional<bool>{sourceMotion.submerged} : std::nullopt;
             if (!weapon.fires() && !weapon.firesAtProjectiles()) {
                 // A MANUAL weapon's reload still counts down here, where every reload
                 // does — `fireOvercharge` only checks readiness, and a cooldown that
@@ -1325,12 +1334,12 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
 
             const std::optional<UnitId> target = hasExplicitAttack
                 ? (forced && canShootExplicitTarget(*forced, from, army, weapon, store, armies,
-                                                    catalog, intel)
+                                                    catalog, intel, sourceSubmerged)
                        ? forced
                        : std::nullopt)
                 : nearestTarget(from, army, weapon, store, armies, intel, &catalog,
                                  transforms[slot].heading, health.automaticTargets[w], playableRect,
-                                 claims);
+                                 claims, sourceSubmerged);
             if (!hasExplicitAttack) {
                 health.automaticTargets[w] = target.value_or(UnitId{});
             }
@@ -1493,10 +1502,15 @@ std::size_t fireOvercharge(UnitStore& store, const UnitCatalog& catalog,
 
         for (std::size_t w = 0; w < def->weapons.size(); ++w) {
             const unitdef::Weapon& weapon = def->weapons[w];
+            const auto& sourceMotion = store.motion()[slot];
+            const std::optional<bool> sourceSubmerged = sourceMotion.submersible
+                ? std::optional<bool>{sourceMotion.submerged} : std::nullopt;
             if (!weapon.manuallyFired()) {
                 continue;
             }
-            if (!weapon.canTarget(store.motion()[head->target().index].airborne)) {
+            if (!weapon.canTarget(store.motion()[head->target().index].airborne,
+                    store.motion()[head->target().index].submersible
+                        && store.motion()[head->target().index].submerged, sourceSubmerged)) {
                 continue;
             }
             healths[slot].reloadRemaining.resize(def->weapons.size(), 0);

@@ -161,10 +161,10 @@ excluded from the headline.
 | [`FA-LUA`](#fa-lua---gameplay-lua-and-mod-contract) | Gameplay Lua and mod contract | `WP-07`-`08` | 10% | 5% | 30% | Measure the exact Moho contract for the milestone-20 skirmish slice. |
 | [`FA-MATCH`](#fa-match---armies-setup-and-victory-rules) | Armies, setup, victory rules | `WP-10`-`11` | 60% | 25% | 85% | Recover the retail lobby/scenario victory-mode selector; do not wire a synthetic app setting. |
 | [`FA-CMD`](#fa-cmd---commands-controls-and-factories) | Commands, controls, factories | `WP-12`-`14` | 85% | 70% | 75% | Specify the refuel/staging rung of `C-183`; Guard is accepted on the retail map (`make test-guard-ui`). |
-| [`FA-ECON`](#fa-econ---economy-construction-and-engineering) | Economy, construction, engineering | `WP-15`-`19` | 75% | 55% | 90% | Name the capture increment at `Unit+0x690` and read `Sim::TransferUnit`'s copy/reset inventory, then specify the smallest capture slice. |
+| [`FA-ECON`](#fa-econ---economy-construction-and-engineering) | Economy, construction, engineering | `WP-15`-`19` | 75% | 55% | 90% | Implement the specified single-captor slice after finishing approach/admission evidence. |
 | [`FA-LAND`](#fa-land---land-navigation-formations-and-spatial-world) | Land navigation, formations, spatial world | `WP-20`, `21`, `26` | 85% | 30% | 95% | Add bounded formation rotation or category matching without changing path-service ordering. |
 | [`FA-AIR`](#fa-air---aircraft-flight-combat-and-staging) | Aircraft flight, combat, staging | `WP-22` | 65% | 55% | 95% | Full banking remains; the shared golden rebaseline is complete (`afe2867`), without establishing retail flight parity. |
-| [`FA-NAVY`](#fa-navy---surface-and-submerged-warfare) | Surface and submerged warfare | `WP-23`-`24` | 35% | 10% | 75% | Implement one complete `SurfacingSub` dive/surface slice. |
+| [`FA-NAVY`](#fa-navy---surface-and-submerged-warfare) | Surface and submerged warfare | `WP-23`-`24` | 35% | 10% | 75% | Extend the bounded dive/surface slice with underwater intel and depth-aware navigation. |
 | [`FA-TRANSPORT`](#fa-transport---attachments-cargo-and-ferries) | Attachments, cargo, ferries | `WP-25` | 35% | 5% | 95% | Add parent/self bone indices and authored rest-bone composition to generic attachments. |
 | [`FA-WEAPONS`](#fa-weapons---targeting-weapons-and-projectiles) | Targeting, weapons, projectiles | `WP-27`-`28` | 98% | 75% | 90% | Add the remaining death and manual-fire paths; `C-157`'s capture half waits on Capture. |
 | [`FA-MISSILES`](#fa-missiles---silos-missiles-and-interception) | Silos, missiles, interception | `WP-29` | 55% | 35% | 95% | Add interceptor guidance/lead and shooter caps, then the build queue and UI. |
@@ -310,13 +310,13 @@ before updating FA-CMD.
 
 ### FA-ECON - Economy, Construction, And Engineering
 
-**Largest gap:** explicit repair now has a tested semantic, replay, economy, and UI slice against
-`C-182`, and the capture contract is fully read: costs (`C-236`), callback order (`C-237`),
-replacement-unit transfer (`C-238`), the reclaim-idiom timing with its funding gate and
-multi-captor aggregation (`C-239`), and the native transfer inventory — transform copied,
-transports rebuilt, old entity destroyed (`C-240`). What still blocks an implementation slice:
-the progress-increment semantic at `Unit+0x690` and `Sim::TransferUnit`'s complete native
-copy/reset field inventory — all named, none guessed. Ordinary mobile construction now follows
+**Largest gap:** Capture is specified but not implemented. The
+[minimum retail Capture specification](capture-implementation-spec.md) corrects earlier
+readings: the captor supplies the cost method, attached target children add costs, and
+`Unit+0x690` counts active capture tasks. Native transfer preserves health and current layer
+as well as transform/name and two shared handles. The next evidence step is approach/admission;
+general transfer and concurrent-captor behavior remain outside the first slice.
+Ordinary mobile construction now follows
 `C-248`: the active Build order routes the engineer toward the site and creates no construction
 until centre distance minus the builder's smaller footprint and target's larger skirt is within
 `Economy.MaxBuildDistance`; factory production and upgrades retain their separate immediate paths.
@@ -328,11 +328,9 @@ experimentals, while unenhanced ACUs keep the T1 menu until enhancements are mod
 extractor upgrade chains can be cancelled per tier (`[engineer-tiers]`, `make test-upgrade-ui`).
 
 ```text
-/goal Advance FA-ECON by reading the capture progress increment at Unit+0x690 (C-239's open edge,
-used at 0x0060B7C9-0x0060B7D9) and the native copy/reset branches of Sim::TransferUnit
-(0x0074DC40-0x0074E4D6, C-240) with exact ART-E001 locators and counterevidence. Update WP-17,
-C-239/C-240, and FA-ECON, then define the smallest capture implementation slice the evidence
-supports. Do not derive heterogeneous-captor duration before Unit+0x690 is named.
+/goal Implement the minimum Capture specification after pinning approach/admission at
+0x0060B0D6–0x0060B3BB. Use one captor and an ordinary unattached completed enemy target;
+verify funding, replacement identity, cancellation, replay and save/load headlessly.
 ```
 
 ### FA-LAND - Land Navigation, Formations, And Spatial World
@@ -390,14 +388,21 @@ planar states, then choose the next evidenced controller gap and refresh FA-AIR.
 
 ### FA-NAVY - Surface And Submerged Warfare
 
-**Largest gap:** surface units work generically, but the sim has no current/target water layers,
-dive command, depth transition, water vision, or underwater targeting.
+**Current slice:** ordinary retail `SurfacingSub` units use the water grid and default to Sub.
+The logged Dive/Surface rack command keeps horizontal orders, chooses its destination from the
+committed layer, and changes that layer only at the depth endpoint. Depth follows `C-200`'s
+sinusoidal rate and seabed clamp; `DiveSurfaceSpeed` uses `C-218`'s authored/default value.
+Water/Sub weapon source rows remain distinct, including Tigershark's surface-only plasma gun.
+SaveState v18 and state hashes preserve the transition. See ADR-111.
+
+**Largest gap:** layer-specific depth footprints, underwater vision/sonar target acquisition,
+projectile collision/splash layer parity, attack-driven auto-surfacing, experimental default
+spawn-layer rules and underwater presentation remain outside this bounded slice.
 
 ```text
-/goal Advance FA-NAVY by implementing one end-to-end SurfacingSub dive/surface slice from C-200
-through C-205: current and target layer, Dive command, sinusoidal depth transition, and atomic
-final layer flip. Use a real blueprint and focused timing/targetability tests, run make test and
-make verify, then update WP-24 and FA-NAVY.
+/goal Extend the tested SurfacingSub slice with retail underwater intel and targetability.
+Read the relevant water-vision/sonar gates first; do not infer them from vertical position.
+Keep source-layer weapon tests and dive/save/replay checks green without headed tests.
 ```
 
 ### FA-TRANSPORT - Attachments, Cargo, And Ferries

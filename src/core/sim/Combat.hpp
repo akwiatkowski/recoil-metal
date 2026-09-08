@@ -238,7 +238,8 @@ struct WorkClaim {
                                                     std::optional<Brad> heading = std::nullopt,
                                                     std::optional<UnitId> incumbent = std::nullopt,
                                                     const PlayableRect* playableRect = nullptr,
-                                                    std::span<const WorkClaim> claims = {});
+                                                    std::span<const WorkClaim> claims = {},
+                                                    std::optional<bool> sourceSubmerged = std::nullopt);
 
 /// The bearing from `from` to `to`, in radians, measured the way a unit's yaw is.
 ///

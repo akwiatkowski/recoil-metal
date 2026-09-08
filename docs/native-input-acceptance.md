@@ -145,6 +145,21 @@ through AppKit**. At the user's request, their current verification is headless:
 It exercises both factory upgrades with retail definitions for all four factions,
 shore-to-water shipyard construction (immediate and queued), the shared AUTO MEX
 rack handler and three completed deposits, and the Kennel's authored assistance
-rate. These checks use fixture terrain/resources; they do not prove native event
-delivery, camera picking, retail-map siting, or rendered widget reachability.
+rate. The initial checks use fixture terrain/resources.
+
+On September 8, `[retail-workflows]` additionally loaded SCMP_009's real heightfield,
+waterline, start position and resource markers. All four retail T1 engineers reached
+and completed a shipyard, then the shared AUTO MEX control built three real deposits
+and toggled off (68 assertions). The site search checks both the yard footprint and
+the engineer's path: Aeon/Seraphim's nearest valid water footprint was unreachable on
+their stricter Hover grid. The native scenario's search now makes that same check.
+Storage is replenished each tick to isolate geography and command flow; this does not
+prove a sustainable opening economy. Logs: `build/retail-workflows.log`.
+
+`[submarine]` covers the real Tigershark's logged Dive/Surface control, committed-layer
+weapon eligibility, depth clamp, authority, Move/Stop independence, replay and vertical
+save continuation. `tests/fixtures/submarine-surface.commands` drives an offscreen
+SCMP_009 surfaced screenshot at `build/submarine-surfaced.png`; the visible rack exposes
+Dive/Surface. No AppKit input delivery, camera picking or headed acceptance is claimed
+for these new workflows.
 The earlier 24-case results apply to the earlier driver, not these new stages.

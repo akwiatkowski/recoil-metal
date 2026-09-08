@@ -1510,7 +1510,7 @@ int runWindowed(const Session& session) {
                            && rm::ui::kCommandDescriptors[*slot].kind) {
                     const rm::sim::CommandKind kind =
                         *rm::ui::kCommandDescriptors[*slot].kind;
-                    if (kind == rm::sim::CommandKind::Stop) {
+                    if (kind == rm::sim::CommandKind::Stop || kind == rm::sim::CommandKind::Dive) {
                         (void)submitCommand(units, rm::sim::CommandIssue{
                             .tick = static_cast<rm::TickIndex>(matchTicks),
                             .phase = rm::sim::CommandPhase::PreTick,
@@ -3337,6 +3337,7 @@ int runWindowed(const Session& session) {
                     const auto type = resolveBuildable(units, content, armedPath());
                     inputCheck(type.has_value(), "shipyard blueprint unavailable");
                     const auto& at = units.store.transforms()[inputEngineer.index];
+                    const auto& approachGrid = passability.gridFor(units, units.store.typeAt(inputEngineer.index));
                     float nearest = std::numeric_limits<float>::max();
                     // Search the map deterministically, then focus before clicking. The normal
                     // ghost validates snapped sites; no fixture teleports the engineer to water.
@@ -3347,6 +3348,8 @@ int runWindowed(const Session& session) {
                             const float dz = site[1] - rm::sim::fxToFloat(at.z);
                             const float distance = dx * dx + dz * dz;
                             if (distance >= nearest || !armedPlaceable(site)) continue;
+                            if (rm::sim::findPath(approachGrid, at.x, at.z,
+                                rm::sim::fxFromFloat(site[0]), rm::sim::fxFromFloat(site[1])).empty()) continue;
                             nearest = distance;
                             inputWaterSite = site;
                         }

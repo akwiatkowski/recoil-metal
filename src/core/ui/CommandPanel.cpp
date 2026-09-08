@@ -12,6 +12,7 @@ commandAvailability(std::span<const unitdef::UnitDef* const> selection) noexcept
     bool hasMove = false;
     bool hasPatrol = false;
     bool hasStop = false;
+    bool hasDive = false;
     bool hasOrdinaryWeapon = false;
     bool hasGuard = false;
     bool hasReclaimer = false;
@@ -32,6 +33,8 @@ commandAvailability(std::span<const unitdef::UnitDef* const> selection) noexcept
         hasMove = hasMove || (def->isMobile() && permits("RULEUCC_Move"));
         hasPatrol = hasPatrol || (def->isMobile() && permits("RULEUCC_Patrol"));
         hasStop = hasStop || permits("RULEUCC_Stop");
+        hasDive = hasDive || (def->motion == unitdef::MotionType::SurfacingSub
+                              && def->hasCommandCap("RULEUCC_Dive"));
         hasOrdinaryWeapon = hasOrdinaryWeapon
                          || (permits("RULEUCC_Attack")
                              && std::ranges::any_of(def->weapons, &unitdef::Weapon::fires));
@@ -74,6 +77,9 @@ commandAvailability(std::span<const unitdef::UnitDef* const> selection) noexcept
             break;
         case sim::CommandKind::Patrol:
             available[slot] = hasPatrol;
+            break;
+        case sim::CommandKind::Dive:
+            available[slot] = hasDive;
             break;
         case sim::CommandKind::Stop:
             available[slot] = hasSelection && hasStop;
@@ -226,6 +232,7 @@ InfoCard commandCard(const CommandDescriptor& command,
         + std::to_string(total) + " UNITS"});
     const auto target = [&]() -> std::string_view {
         switch (*command.kind) {
+        case sim::CommandKind::Dive:
         case sim::CommandKind::Stop: return "NO TARGET NEEDED";
         case sim::CommandKind::Assist: return "ALLIED BUILDER";
         case sim::CommandKind::Guard: return "ALLIED UNIT";

@@ -3526,3 +3526,41 @@ preserve both restrictions without adding serialized state or changing path-serv
 Immediate and queued shore-to-water construction are checked using all four retail engineer
 and shipyard definitions. This establishes the supported amphibious/hover engineer path;
 it does not add arbitrary shoreline reach searches for land-only builders.
+
+
+## ADR-111 — Bounded SurfacingSub transitions preserve horizontal orders
+
+**Date:** 2026-09-08
+
+**Context.** Retail `UES0203` authors `RULEUMT_SurfacingSub`, elevation −1.5 ogrids
+(−12 elmos), Dive capability and separate Sub/Water weapon rows. Its movement domain
+was previously rejected. ART-E001 `0x006101ED–0x0061023B` chooses a Dive endpoint from
+the current layer, while `0x006C9CA0` retains that layer until the depth endpoint.
+`C-200` and `C-218` recover the easing law and default DiveSurfaceSpeed of 1 ogrid/s.
+
+**Decision.** Use the existing water grid for this first slice. An immediate semantic
+Dive command changes only the vertical target; ordinary Move/Stop and repeated Dive
+orders preserve an ongoing transition. Current layer flips at the endpoint. The
+signed depth target is `max(Elevation, min(0, seabed + 2 elmos − waterline))`; each
+10 Hz beat advances by `speedPerTick × max(0.1, sin(depthFraction × pi))`, clamped to
+remaining distance. Fixed-point CORDIC preserves deterministic simulation arithmetic.
+Normal non-experimental wet spawns begin submerged (`0x006319C7`); explicit requested
+layers and general experimental spawn resolution are not implemented here.
+
+Preserve distinct Water/Sub source rows and submerged-target eligibility in weapon
+caps. Keep legacy Land/Water/Seabed aggregation elsewhere. SaveState v18 appends the
+six mover fields; semantic log v5 names Dive. Dive never enters the horizontal queue.
+Hash submarine fields conditionally so existing non-submarine matches keep their
+regression fingerprints.
+
+**Alternatives.** Queueing Dive would replace or delay horizontal orders, contrary to
+retail mover control. Switching the current layer at command intake would enable the
+surface gun before surfacing. Full layer-specific navigation/intel/projectile work
+would exceed this slice and needs separate retail evidence.
+
+**Consequences.** Real Tigershark tests cover transitions, repeated commands, authority,
+Move/Stop independence, layer-gated fire, shallow water, replay and save/load. This is
+not general submerged warfare parity: underwater intel, depth footprints, projectile
+collision/splash gates, attack-driven auto-surfacing and underwater visuals remain open.
+General saves with active path searches remain outside the existing SaveState boundary;
+transition continuation tests isolate the vertical controller from that unsupported state.

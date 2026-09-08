@@ -341,6 +341,7 @@ std::vector<CommandIssue> CommandBuffer::take(TickIndex tick, CommandPhase phase
 
 const char* commandKindName(CommandKind kind) noexcept {
     switch (kind) {
+    case CommandKind::Dive: return "dive";
     case CommandKind::Move:
         return "move";
     case CommandKind::AttackMove:
@@ -378,6 +379,7 @@ const char* commandKindName(CommandKind kind) noexcept {
 namespace {
 
 [[nodiscard]] std::optional<CommandKind> kindFromName(std::string_view name) noexcept {
+    if (name == "dive") return CommandKind::Dive;
     if (name == "guard") return CommandKind::Guard;
     if (name == "move") {
         return CommandKind::Move;
@@ -1146,6 +1148,20 @@ ApplyCommandResult applyCommand(const CommandIssue& issued, UnitStore& store,
             }
             (void)queue.removeExact(payload);
             for (const auto* dependent : dependents) (void)queue.removeExact(dependent);
+            result.accepted.push_back(unit);
+        }
+        return result;
+    }
+    if (issue.kind == CommandKind::Dive) {
+        for (const UnitId unit : canonical) {
+            if (!store.alive(unit)) continue;
+            const Player* player = playerFor(issue.player, players);
+            const auto* def = catalog.def(store.typeAt(unit.index));
+            auto& motion = store.motion()[unit.index];
+            if (!player || !authorised(*player, store, unit, armies) || !def
+                || !motion.submersible || !def->hasCommandCap("RULEUCC_Dive")) continue;
+            // C-198: choose from the committed layer, even while already transitioning.
+            motion.diveTargetSubmerged = !motion.submerged;
             result.accepted.push_back(unit);
         }
         return result;
@@ -2738,6 +2754,7 @@ bool startCommand(const Command& command, UnitStore& store, const UnitCatalog& c
         }
         return routeUnit(command.unit.index, theirs.x, theirs.z, store, terrain, grid);
     }
+    case CommandKind::Dive:
     case CommandKind::ToggleFactoryRepeat:
     case CommandKind::CancelFactoryBuild:
         return false;  // applied immediately by semantic issue intake; it never enters a queue
@@ -2755,9 +2772,9 @@ bool startCommand(const Command& command, UnitStore& store, const UnitCatalog& c
 namespace {
 
 inline constexpr std::string_view kCommandLogMagic = "recoil-metal semantic command log";
-/// Version 4 adds the `reclaim-unit` kind name; versions 2 and 3 are still read, since a
+/// Version 5 adds immediate `dive`; v4 added `reclaim-unit`. Versions 2–4 are still read, since a
 /// name their writers never produced cannot appear in them.
-inline constexpr std::uint32_t kCommandLogVersion = 4;
+inline constexpr std::uint32_t kCommandLogVersion = 5;
 
 [[nodiscard]] const char* phaseName(CommandPhase phase) noexcept {
     return phase == CommandPhase::PreTick ? "pre-tick" : "post-spawn";
@@ -2886,7 +2903,7 @@ std::optional<CommandLog> readCommandLog(const std::string& path,
         std::string label;
         std::string extra;
         if (!(fields >> label >> version) || label != "version"
-            || (version != 2 && version != 3 && version != kCommandLogVersion)
+            || (version != 2 && version != 3 && version != 4 && version != kCommandLogVersion)
             || fields >> extra) {
             return std::nullopt;
         }

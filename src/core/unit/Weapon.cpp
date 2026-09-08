@@ -139,12 +139,19 @@ std::vector<Weapon> weaponsFrom(const lua::Value& weaponArray, bool airborneSour
         if (const lua::Value* caps = entry.find("FireTargetLayerCapsTable");
             caps != nullptr && caps->isTable()) {
             std::uint8_t bits = 0;
+            weapon.targetsSubmerged = false;
+            weapon.submarineSourceCaps.emplace();
             for (const lua::Field& field : caps->fields) {
                 if ((field.key == "Air") != airborneSource) {
                     continue;
                 }
                 if (const std::optional<std::string_view> value = field.value.asString()) {
                     bits |= targetBits(*value);
+                    weapon.targetsSubmerged |= containsWord(*value, "Sub");
+                    if (field.key == "Water" || field.key == "Sub") {
+                        (*weapon.submarineSourceCaps)[field.key == "Sub" ? 1 : 0] = {
+                            static_cast<TargetLayerMask>(targetBits(*value)), containsWord(*value, "Sub")};
+                    }
                 }
             }
             weapon.targetLayers = static_cast<TargetLayerMask>(bits);

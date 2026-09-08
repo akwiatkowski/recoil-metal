@@ -47,16 +47,13 @@ MoveDef moveDefFor(unitdef::MotionType motion) noexcept {
                        .usesGroundGrid = false};
 
     case MotionType::Water:
+    case MotionType::SurfacingSub:
         // Surface ships use the inverse domain: every square under a path cell must be below
         // the waterline. They do not care about seabed slope because they float above it.
+        // ponytail: SurfacingSub shares this grid until layer-specific depth footprints exist.
         return MoveDef{.maxSlopeDegrees = 0.0f, .maxWaterDepthElmos = 0.0f,
                         .usesGroundGrid = false, .usesSurfaceWaterGrid = true};
 
-    case MotionType::SurfacingSub:
-        // A submarine needs depth, surfacing and sonar semantics. Refuse it rather than passing
-        // it through the surface-ship grid and hiding those missing rules.
-        return MoveDef{.maxSlopeDegrees = 0.0f, .maxWaterDepthElmos = 0.0f,
-                       .usesGroundGrid = false};
     }
 
     return MoveDef{.maxSlopeDegrees = 0.0f, .maxWaterDepthElmos = 0.0f,

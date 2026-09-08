@@ -89,9 +89,9 @@ TEST_CASE("each motion class crosses what its class crosses") {
     CHECK_FALSE(moveDefFor(MotionType::Water).usesGroundGrid);
     CHECK_FALSE(moveDefFor(MotionType::SurfacingSub).usesGroundGrid);
 
-    // Surface ships have their inverse domain now; submarines remain deliberately unsupported.
+    // The bounded SurfacingSub slice shares the water domain.
     CHECK(moveDefFor(MotionType::Water).usesSurfaceWaterGrid);
-    CHECK_FALSE(moveDefFor(MotionType::SurfacingSub).usesSurfaceWaterGrid);
+    CHECK(moveDefFor(MotionType::SurfacingSub).usesSurfaceWaterGrid);
 
     CHECK(moveDefFor(MotionType::Land).usesGroundGrid);
     CHECK(moveDefFor(MotionType::Amphibious).usesGroundGrid);

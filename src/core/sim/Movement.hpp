@@ -140,6 +140,14 @@ struct MoveState {
     /// This unit floats on the map's water plane. Mutually exclusive with `airborne`; surface
     /// ships route on the inverse water grid and do not inherit seabed height or slope.
     bool surfaceWater = false;
+    /// C-200: current layer commits only at the endpoint; Dive chooses its target
+    /// from the current layer, so repeated commands do not reverse a transition.
+    bool submersible = false;
+    bool submerged = false;
+    bool diveTargetSubmerged = false;
+    Fx submarineOffset{};  ///< signed elmos below water
+    Fx submarineElevation{};  ///< authored preferred depth (negative)
+    Fx divePerTick{};
 
     /// Hovercraft follow the higher of land and water, unlike ships restricted to water.
     bool hovering = false;

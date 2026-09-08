@@ -3,6 +3,8 @@
 #include "app/Interface.hpp"
 #include "app/SceneBuild.hpp"
 #include "core/data/MoveDef.hpp"
+#include "core/map/Scmap.hpp"
+#include "core/map/ScenarioSave.hpp"
 #include "core/sim/StateHash.hpp"
 #include "core/sim/SaveState.hpp"
 #include "core/unit/BuildTree.hpp"
@@ -18,6 +20,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdlib>
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -209,6 +212,296 @@ TEST_CASE("retail engineers place naval yards in water and complete them",
             }
             CHECK(completed);
         }
+    }
+}
+
+TEST_CASE("SCMP_009 engineers complete a shipyard and three AUTO MEX deposits headlessly",
+          "[corpus][retail-workflows][headless-ui]") {
+    const auto root = corpusRoot();
+    const char* configured = std::getenv("RM_FA_ROOT");
+    const auto install = configured ? std::filesystem::path{configured}
+        : std::filesystem::path{"/Volumes/Samsung_T5/faf/Supreme Commander Forged Alliance"};
+    const auto mapPath = install / "maps/SCMP_009/SCMP_009.scmap";
+    if (!std::filesystem::exists(mapPath) || !std::filesystem::is_directory(root))
+        SKIP("retail SCMP_009 and extracted unit corpus required");
+    const auto map = rm::scmap::loadFile(mapPath);
+    REQUIRE(map);
+    REQUIRE(map->hasWater);
+    const auto save = rm::scenario::findSaveBesideMap(mapPath);
+    REQUIRE(save);
+    const auto starts = rm::scenario::loadStartPositionsFile(*save);
+    REQUIRE(starts);
+    REQUIRE(starts->size() >= 2);
+    std::ifstream file(*save);
+    const std::string text{std::istreambuf_iterator<char>{file}, {}};
+    const auto markers = rm::scenario::loadMarkers(text);
+    REQUIRE(markers);
+    for (const std::string prefix : {"UE", "UA", "UR", "XS"}) {
+        DYNAMIC_SECTION(prefix) {
+            Scenario job(map->field, map->hasWater, map->waterElevation);
+            std::vector<rm::unitdef::UnitDef> defs;
+            std::vector<std::string> ids;
+            for (const char* suffix : {"L0105", "B0103", "B1103", "B1102"}) {
+                ids.push_back(prefix + suffix);
+                const auto def = rm::unitbp::loadFile(root / ids.back() / (ids.back() + "_unit.bp"));
+                REQUIRE(def);
+                defs.push_back(*def);
+            }
+            job.scene.armies[0].faction = *rm::data::factionOf(defs.front());
+            job.scene.roster = rm::data::Roster::build(defs, ids);
+            const auto engineer = job.spawn(defs[0], starts->front().x, starts->front().z);
+            const auto shipyard = job.registerType(defs[1]);
+            const auto mex = job.registerType(defs[2]);
+            const auto hydro = job.registerType(defs[3]);
+            for (const auto& marker : *markers) {
+                const auto kind = rm::app::depositKind(marker);
+                if (kind != rm::unitdef::BuildRestriction::None)
+                    job.scene.resourceDeposits.push_back({kind,
+                        rm::sim::fxFromFloat(marker.position[0]), rm::sim::fxFromFloat(marker.position[2])});
+            }
+            const auto& waterGrid = job.passability.gridForBuild(job.scene, shipyard,
+                job.scene.store.typeAt(engineer.index));
+            const auto& approachGrid = job.passability.gridFor(job.scene,
+                job.scene.store.typeAt(engineer.index));
+            std::optional<std::array<float, 2>> site;
+            float distance = std::numeric_limits<float>::max();
+            // Same deterministic nearest-water search as the native acceptance driver.
+            for (float z = 64; z < job.field.depthElmos() - 64; z += 32)
+                for (float x = 64; x < job.field.widthElmos() - 64; x += 32) {
+                    const auto candidate = rm::app::snapBuildSite(job.scene, shipyard, {x, z});
+                    const float dx = candidate[0] - starts->front().x;
+                    const float dz = candidate[1] - starts->front().z;
+                    const float squared = dx * dx + dz * dz;
+                    if (squared >= distance || !rm::sim::buildSitePlaceable(waterGrid,
+                        rm::sim::fxFromFloat(candidate[0]), rm::sim::fxFromFloat(candidate[1]),
+                        rm::sim::fxFromFloat(defs[1].collisionRadiusElmos), job.scene.store,
+                        job.scene.catalog, job.scene.building)) continue;
+                    if (rm::sim::findPath(approachGrid,
+                        rm::sim::fxFromFloat(starts->front().x), rm::sim::fxFromFloat(starts->front().z),
+                        rm::sim::fxFromFloat(candidate[0]), rm::sim::fxFromFloat(candidate[1])).empty()) continue;
+                    distance = squared;
+                    site = candidate;
+                }
+            REQUIRE(site);
+            auto runner = job.runner();
+            runner.markers = *markers;
+            runner.starts = *starts;
+            const auto count = [&](rm::UnitTypeIndex type) {
+                std::size_t total = 0;
+                for (rm::UnitIndex slot = 0; slot < job.scene.store.slotCount(); ++slot)
+                    if (job.scene.store.slotAlive(slot) && job.scene.armyOf(slot) == 0
+                        && job.scene.store.typeAt(slot) == type) ++total;
+                return total;
+            };
+            int tick = 0;
+            const auto step = [&] {
+                // Isolate geography and command flow; no blueprint costs or rates are changed.
+                job.scene.economies[0].stored = rm::app::kStartingStorage;
+                (void)rm::app::advanceMatch(runner, tick++, 0);
+            };
+            REQUIRE(rm::app::issueBuild(job.scene, engineer, 0, 0, shipyard,
+                rm::sim::fxFromFloat((*site)[0]), rm::sim::fxFromFloat((*site)[1])));
+            const int limit = static_cast<int>(rm::app::gAppTickRate.ticks(rm::sim::Seconds{1800}));
+            while (tick < limit && count(shipyard) == 0) step();
+            REQUIRE(count(shipyard) == 1);
+            const int builtAt = tick;
+            const auto frame = rm::ui::frameLayout(rm::ui::UiViewport::full(1280, 900));
+            const auto rack = rm::ui::commandRackLayout(frame, true);
+            const auto cell = rm::ui::commandCellOrigin(rack,
+                rm::ui::rackSlotFor(rm::ui::RackAction::AutoExpand));
+            const std::array selection{engineer};
+            const auto toggle = [&] {
+                return rm::app::submitAutoExpandControl(runner, selection, frame,
+                    cell[0] + rack.cellWidth / 2, cell[1] + rack.cellHeight / 2);
+            };
+            REQUIRE(toggle() == std::optional{true});
+            while (tick < builtAt + limit && count(mex) + count(hydro) < 3) step();
+            REQUIRE(count(mex) + count(hydro) >= 3);
+            REQUIRE(toggle() == std::optional{false});
+            CHECK_FALSE(rm::app::autoExpanding(runner, engineer));
+            std::printf("retail workflows: %s SCMP_009 shipyard at %.0f,%.0f completed tick %d; "
+                        "three deposits completed tick %d PASS\n", prefix.c_str(),
+                        static_cast<double>((*site)[0]), static_cast<double>((*site)[1]), builtAt, tick);
+        }
+    }
+}
+
+TEST_CASE("a retail Tigershark dives and surfaces through logged commands",
+          "[corpus][submarine][headless-ui]") {
+    const auto root = corpusRoot();
+    if (!std::filesystem::is_directory(root)) SKIP("retail corpus unavailable");
+    const auto sub = rm::unitbp::loadFile(root / "UES0203/UES0203_unit.bp");
+    REQUIRE(sub);
+    Scenario job(flatField(), true, 80);
+    const auto unit = job.spawn(*sub, 300, 300);
+    using rm::sim::Fx;
+    using rm::sim::CommandKind;
+    auto& motion = job.scene.store.motion()[unit.index];
+    REQUIRE(motion.surfaceWater);
+    REQUIRE(motion.submersible);
+    REQUIRE(motion.submerged);
+    CHECK(motion.submarineOffset == Fx::fromInt(-12));
+    CHECK(sub->diveSurfaceSpeedElmosPerSecond == 8.0f);
+    const std::array<const rm::unitdef::UnitDef*, 1> selected{&*sub};
+    CHECK(rm::ui::commandAvailability(selected)[6]);
+    const auto plasma = std::ranges::find(sub->weapons, "PlasmaGun", &rm::unitdef::Weapon::label);
+    const auto torpedo = std::ranges::find(sub->weapons, "Torpedo01", &rm::unitdef::Weapon::label);
+    REQUIRE(plasma != sub->weapons.end());
+    REQUIRE(torpedo != sub->weapons.end());
+    CHECK_FALSE(plasma->canTarget(false, false, true));
+    CHECK(plasma->canTarget(false, false, false));
+    CHECK_FALSE(plasma->canTarget(false, true, false));
+    CHECK(torpedo->canTarget(false, true, true));
+    CHECK(torpedo->canTarget(false, true, false));
+    auto runner = job.runner();
+    int tick = 0;
+    const auto step = [&] { (void)rm::app::advanceMatch(runner, tick++, 0); };
+    const auto issue = [&](CommandKind kind, rm::PlayerIndex player = 0) {
+        const auto submitted = rm::app::submitCommand(job.scene, rm::sim::CommandIssue{
+            .tick = static_cast<rm::TickIndex>(tick), .source = 0, .player = player, .kind = kind,
+            .units = {unit}, .targetX = Fx::fromInt(400), .targetZ = Fx::fromInt(400)});
+        CHECK(static_cast<bool>(submitted) == (player == 0));
+        step();
+    };
+    step();
+    CHECK(job.scene.store.transforms()[unit.index].y == Fx::fromInt(68));
+    issue(CommandKind::Dive, 1);  // another army cannot surface our submarine
+    CHECK(motion.diveTargetSubmerged);
+    issue(CommandKind::Dive);
+    CHECK_FALSE(motion.diveTargetSubmerged);
+    CHECK(motion.submerged);
+    CHECK(motion.submarineOffset > Fx::fromInt(-12));
+    issue(CommandKind::Dive);  // current Sub layer still chooses Water
+    CHECK_FALSE(motion.diveTargetSubmerged);
+    SECTION("surface then dive, committing weapons only at the endpoint") {
+        issue(CommandKind::Move);
+        CHECK_FALSE(motion.diveTargetSubmerged);
+        issue(CommandKind::Stop);
+        CHECK_FALSE(motion.diveTargetSubmerged);
+        for (int i = 0; i < 600 && motion.submerged; ++i) {
+            CHECK_FALSE(plasma->canTarget(false, false, motion.submerged));
+            step();
+        }
+        REQUIRE_FALSE(motion.submerged);
+        CHECK(job.scene.store.transforms()[unit.index].y == Fx::fromInt(80));
+        issue(CommandKind::Dive);
+        CHECK(motion.diveTargetSubmerged);
+        CHECK_FALSE(motion.submerged);
+        issue(CommandKind::Dive);
+        CHECK(motion.diveTargetSubmerged);
+        for (int i = 0; i < 600 && !motion.submerged; ++i) {
+            CHECK(plasma->canTarget(false, false, motion.submerged));
+            step();
+        }
+        REQUIRE(motion.submerged);
+        CHECK(job.scene.store.transforms()[unit.index].y == Fx::fromInt(68));
+    }
+    SECTION("save/load continues either transition with identical hashes") {
+        SECTION("surfacing") {}
+        SECTION("diving") {
+            for (int i = 0; i < 600 && motion.submerged; ++i) step();
+            REQUIRE_FALSE(motion.submerged);
+            issue(CommandKind::Dive);
+        }
+        const auto saved = rm::sim::SaveState::decode(rm::sim::SaveState::encode({
+            .tick = static_cast<rm::TickIndex>(tick), .random = runner.match.random.snapshot(),
+            .pathServiceBeats = runner.pathService.serviceBeats(),
+            .units = job.scene.store.snapshot(),
+            .economyArmies = rm::sim::EconomyArmyState::capture(runner.match)}));
+        REQUIRE(saved);
+        Scenario resumed(flatField(), true, 80);
+        (void)resumed.registerType(*sub);
+        resumed.scene.store = rm::sim::UnitStore{saved->units};
+        REQUIRE(rm::sim::hashMatch(job.scene.store, runner.match)
+            == rm::sim::hashMatch(resumed.scene.store, runner.match));
+        auto continued = resumed.runner();
+        saved->economyArmies->restore(continued.match, resumed.scene.economies, resumed.scene.commandersEver);
+        continued.match.random = rm::sim::RandomStream{saved->random};
+        continued.pathService.restoreServiceBeats(saved->pathServiceBeats);
+        continued.match.pathService = &continued.pathService;
+        for (int i = 0; i < 600; ++i) {
+            INFO("continuation tick " << tick << " step " << i);
+            REQUIRE(rm::sim::hashMatch(job.scene.store, runner.match)
+                == rm::sim::hashMatch(resumed.scene.store, continued.match));
+            (void)rm::app::advanceMatch(continued, tick, 0);
+            step();
+        }
+    }
+    const auto path = std::filesystem::temp_directory_path()
+        / ("rm-submarine-" + std::to_string(::getpid()) + ".commands");
+    REQUIRE(rm::sim::writeCommandLog(job.scene.commands, path.string()));
+    const auto log = rm::sim::readCommandLog(path.string());
+    REQUIRE(log);
+    CHECK(log->size() == job.scene.commands.size());
+    CHECK(std::ranges::any_of(log->all(), [](const auto& order) {
+        return order.kind == CommandKind::Dive;
+    }));
+    Scenario replayed(flatField(), true, 80);
+    (void)replayed.spawn(*sub, 300, 300);
+    auto playback = replayed.runner();
+    playback.replay = &*log;
+    for (int frame = 0; frame < tick; ++frame) {
+        (void)rm::app::advanceMatch(playback, frame, 0);
+    }
+    CHECK(rm::sim::hashMatch(job.scene.store, runner.match)
+        == rm::sim::hashMatch(replayed.scene.store, playback.match));
+    std::filesystem::remove(path);
+
+}
+
+TEST_CASE("Tigershark depth clamps above the seabed and its plasma waits for Water",
+          "[corpus][submarine]") {
+    const auto root = corpusRoot();
+    if (!std::filesystem::is_directory(root)) SKIP("retail corpus unavailable");
+    const auto sub = rm::unitbp::loadFile(root / "UES0203/UES0203_unit.bp");
+    const auto ship = rm::unitbp::loadFile(root / "UES0103/UES0103_unit.bp");
+    REQUIRE(sub);
+    REQUIRE(ship);
+    using rm::sim::Fx;
+    SECTION("shallow seabed limits authored depth") {
+        Scenario job(flatField(), true, 4);
+        const auto unit = job.spawn(*sub, 300, 300);
+        auto runner = job.runner();
+        for (int tick = 0; tick < 600; ++tick) (void)rm::app::advanceMatch(runner, tick, 0);
+        CHECK(job.scene.store.motion()[unit.index].submerged);
+        CHECK(job.scene.store.motion()[unit.index].submarineOffset == Fx::fromInt(-2));
+        CHECK(job.scene.store.transforms()[unit.index].y == Fx::fromInt(2));
+    }
+    SECTION("actual fire pass uses the source's committed layer") {
+        Scenario job(flatField(), true, 80);
+        const auto unit = job.spawn(*sub, 300, 300);
+        const auto target = job.spawn(*ship, 300, 350, 1);
+        const auto terrain = job.scene.terrain(job.field);
+        job.scene.store.reindex(Fx::fromInt(64));
+        rm::sim::placeOnMotionLayer(job.scene.store.transforms()[target.index],
+            job.scene.store.motion()[target.index], terrain);
+        auto& motion = job.scene.store.motion()[unit.index];
+        const auto firesPlasma = [&] {
+            job.scene.store.health()[unit.index].reloadRemaining.assign(sub->weapons.size(), 0);
+            rm::sim::EventQueue events;
+            std::vector<rm::sim::Projectile> shots;
+            (void)rm::sim::fireWeapons(job.scene.store, job.scene.catalog, job.scene.armies,
+                shots, rm::app::gAppTickRate, &events);
+            return std::ranges::any_of(events.all(), [&](const auto& event) {
+                return event.visualId == sub->name + ":PlasmaGun";
+            });
+        };
+        rm::sim::tick(job.scene.store.transforms(), job.scene.store.motion(), terrain);
+        CHECK_FALSE(firesPlasma());
+        motion.diveTargetSubmerged = false;
+        rm::sim::tick(job.scene.store.transforms(), job.scene.store.motion(), terrain);
+        CHECK_FALSE(firesPlasma());
+        for (int tick = 0; tick < 600 && motion.submerged; ++tick)
+            rm::sim::tick(job.scene.store.transforms(), job.scene.store.motion(), terrain);
+        REQUIRE_FALSE(motion.submerged);
+        CHECK(firesPlasma());
+        motion.diveTargetSubmerged = true;
+        rm::sim::tick(job.scene.store.transforms(), job.scene.store.motion(), terrain);
+        CHECK(firesPlasma());
+        for (int tick = 0; tick < 600 && !motion.submerged; ++tick)
+            rm::sim::tick(job.scene.store.transforms(), job.scene.store.motion(), terrain);
+        REQUIRE(motion.submerged);
+        CHECK_FALSE(firesPlasma());
     }
 }
 

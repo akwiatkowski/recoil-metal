@@ -167,10 +167,22 @@ struct Weapon {
     /// Unrestricted when content states no caps, preserving synthetic and Recoil weapons.
     TargetLayerMask targetLayers = TargetLayerMask::Both;
 
-    [[nodiscard]] bool canTarget(bool airborne) const noexcept {
-        const std::uint8_t wanted = static_cast<std::uint8_t>(
-            airborne ? TargetLayerMask::Air : TargetLayerMask::Surface);
-        return (static_cast<std::uint8_t>(targetLayers) & wanted) != 0;
+    /// Keep Water/Sub source rows distinct for the bounded SurfacingSub mover.
+    struct LayerCaps {
+        TargetLayerMask targets = TargetLayerMask::None;
+        bool submerged = false;
+    };
+    std::optional<std::array<LayerCaps, 2>> submarineSourceCaps;
+    bool targetsSubmerged = true;
+
+    [[nodiscard]] bool canTarget(bool airborne, bool submerged = false,
+                                 std::optional<bool> sourceSubmerged = std::nullopt) const noexcept {
+        const LayerCaps caps = sourceSubmerged && submarineSourceCaps
+            ? (*submarineSourceCaps)[*sourceSubmerged ? 1 : 0]
+            : LayerCaps{targetLayers, targetsSubmerged};
+        if (submerged) return caps.submerged;
+        const auto wanted = airborne ? TargetLayerMask::Air : TargetLayerMask::Surface;
+        return (static_cast<std::uint8_t>(caps.targets) & static_cast<std::uint8_t>(wanted)) != 0;
     }
 
     /// Damage a single shot does at the point of impact.

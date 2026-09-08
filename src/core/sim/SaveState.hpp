@@ -51,7 +51,7 @@ struct SaveState {
     /// The published v2 format includes path-service and route-revalidation phase state.
     [[nodiscard]] static std::vector<std::byte> encodeV2(const SaveState& state);
     [[nodiscard]] static std::optional<SaveState> decodeV2(std::span<const std::byte> bytes);
-    /// V16 adds complete aircraft controller state to v15's economy and army snapshot.
+    /// V18 adds submarine current/target layers, depth and authored dive rate.
     [[nodiscard]] static std::vector<std::byte> encode(const SaveState& state);
     /// Decodes all supported save versions, including v1 and the published v2 format.
     [[nodiscard]] static std::optional<SaveState> decode(std::span<const std::byte> bytes);

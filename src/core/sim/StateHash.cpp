@@ -128,6 +128,14 @@ void feedMotion(StateHash& h, const MoveState& motion) noexcept {
     if (motion.surfaceWater) {
         feed(h, motion.surfaceWater);
     }
+    if (motion.submersible) {
+        feed(h, motion.submersible);
+        feed(h, motion.submerged);
+        feed(h, motion.diveTargetSubmerged);
+        feed(h, motion.submarineOffset);
+        feed(h, motion.submarineElevation);
+        feed(h, motion.divePerTick);
+    }
     if (motion.hovering) {
         feed(h, motion.hovering);
         feed(h, motion.hoverElevation);
