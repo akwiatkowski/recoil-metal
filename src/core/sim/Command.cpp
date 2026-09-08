@@ -65,7 +65,8 @@ namespace {
                                 const UnitCatalog& catalog, const Terrain& terrain,
                                 const PassabilityGrid& grid, TickRate rate,
                                 std::vector<Construction>* building, EventQueue* events,
-                                 const FeatureStore* features);
+                                 const FeatureStore* features,
+                                 const PassabilityGrid* approachGrid = nullptr);
 
 /// Routes one unit according to its content movement layer. Aircraft fly directly over the
 /// map; supported ground classes retain A* and refuse an unreachable destination.
@@ -743,7 +744,8 @@ void teardownMovement(MoveState& motion) {
     const Terrain& terrain, const PassabilityGrid* grid, TickRate rate,
     std::vector<Construction>* building, EventQueue* events, const FeatureStore* features,
     PathService* pathService, std::string_view scriptTask,
-    std::span<const std::uint8_t> scriptData, ScriptTaskHost* scriptTasks) {
+    std::span<const std::uint8_t> scriptData, ScriptTaskHost* scriptTasks,
+    const PassabilityGrid* approachGrid) {
     // A stale handle first, before anything else looks at the slot. A player may click a unit
     // that died on the tick their order was issued, and a replay of an old log may name a unit
     // that no longer exists — in both cases the generation has moved on, so this must not
@@ -898,7 +900,7 @@ void teardownMovement(MoveState& motion) {
                     motion.pathIndex = 0;
                     if (const QueuedCommand* next = orders.current()) {
                         if (startCommand(next->asCommand(), store, catalog, terrain, movementGrid, rate,
-                                         building, events, features)) {
+                                         building, events, features, approachGrid)) {
                             orders.markCurrentActive();
                         }
                     }
@@ -919,7 +921,7 @@ void teardownMovement(MoveState& motion) {
             cancelActiveConstruction(building, command.unit);
             if (const QueuedCommand* next = orders.current()) {
                 if (startCommand(next->asCommand(), store, catalog, terrain, movementGrid, rate, building,
-                                 events, features)) {
+                                 events, features, approachGrid)) {
                     orders.markCurrentActive();
                 }
             }
@@ -979,7 +981,7 @@ void teardownMovement(MoveState& motion) {
         teardownMovement(motion);
     }
     if (!startCommand(command, store, catalog, terrain, movementGrid, rate, building, events,
-                      features)) {
+                      features, approachGrid)) {
         motion = previous;
         return false;
     }
@@ -1050,7 +1052,8 @@ ApplyCommandResult applyCommand(const CommandIssue& issued, UnitStore& store,
                                  const CommandGridForUnit& gridForUnit, TickRate rate,
                                  std::vector<Construction>* building, EventQueue* events,
                                  const FeatureStore* features, PathService* pathService,
-                                 ScriptTaskHost* scriptTasks) {
+                                 ScriptTaskHost* scriptTasks,
+                                 const CommandGridForUnit& approachGridForUnit) {
     const CommandIssue issue = onBuildGrid(issued, catalog, terrain);
     ApplyCommandResult result;
     if (!validCancellation(issue) || issue.source == kInvalidCommandSource || issue.id == kInvalidCommandId
@@ -1232,7 +1235,8 @@ ApplyCommandResult applyCommand(const CommandIssue& issued, UnitStore& store,
         if (applyCommandMember(member, issue.source, issue.id, issue.count, issue.targetX,
                                issue.targetZ, shared, store, catalog, players, armies, terrain,
                                grid, rate, building, events, features, pathService,
-                               issue.scriptTask, issue.scriptData, scriptTasks)) {
+                               issue.scriptTask, issue.scriptData, scriptTasks,
+                               approachGridForUnit ? approachGridForUnit(unit) : grid)) {
             result.accepted.push_back(unit);
         }
     }
@@ -1325,12 +1329,13 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
             orders[slot].bindScriptTaskHost(scriptTasks);
         }
 
+        const auto builderType = static_cast<std::size_t>(store.typeAt(slot));
+        const PassabilityGrid* approachGrid =
+            builderType < gridForType.size() ? gridForType[builderType] : nullptr;
         // Movement uses this unit's grid; construction uses the PRODUCT's. Commands retain type
         // ids but not derived grids, so the choice must be repeated when a deferred order starts.
         const auto gridFor = [&](const QueuedCommand& command) -> const PassabilityGrid* {
-            const auto builderType = static_cast<std::size_t>(store.typeAt(slot));
-            const PassabilityGrid* builderGrid =
-                builderType < gridForType.size() ? gridForType[builderType] : nullptr;
+            const PassabilityGrid* builderGrid = approachGrid;
             if (command.kind() != CommandKind::Build) {
                 return builderGrid;
             }
@@ -1395,7 +1400,7 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
                 }
                 const bool wasInstant = instantaneous(pending->kind());
                 if (startCommand(pending->asCommand(), store, catalog, terrain, *pendingGrid,
-                                 rate, building, events, features)) {
+                                 rate, building, events, features, approachGrid)) {
                     orders[slot].markCurrentActive();
                     ++started;
                     if (!wasInstant) {
@@ -1583,7 +1588,7 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
                     continue;
                 }
                 if (!startCommand(current->asCommand(), store, catalog, terrain, *buildGrid,
-                                  rate, building, events, features)) {
+                                  rate, building, events, features, approachGrid)) {
                     // Refused on the way in: the site changed under the order. Two cases.
                     //
                     // A COLLEAGUE got there first — an allied builder's construction of the
@@ -1615,8 +1620,9 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
                             teardownMovement(mine);
                             colleague->assistPerTick += catalog.rates(store.typeAt(slot)).buildPerTick;
                         } else if (!mine.moving) {
-                            (void)routeUnit(slot, colleague->position[0], colleague->position[2],
-                                            store, terrain, *buildGrid);
+                            if (approachGrid != nullptr)
+                                (void)routeUnit(slot, colleague->position[0], colleague->position[2],
+                                                store, terrain, *approachGrid);
                         }
                         continue;
                     }
@@ -2422,7 +2428,7 @@ namespace {
 bool startCommand(const Command& command, UnitStore& store, const UnitCatalog& catalog,
                   const Terrain& terrain, const PassabilityGrid& grid, TickRate rate,
                   std::vector<Construction>* building, EventQueue* events,
-                  const FeatureStore* features) {
+                  const FeatureStore* features, const PassabilityGrid* approachGrid) {
     // By SLOT, not by handle: `advanceOrders` starts an order for a slot it has already found
     // to be live, and a `Build` started for a unit that died this tick would charge a dead
     // army. The handle check belongs to `applyCommand`, where a stale handle is the ordinary
@@ -2609,8 +2615,11 @@ bool startCommand(const Command& command, UnitStore& store, const UnitCatalog& c
                 ? motion.moving && motion.destinationX == siteX && motion.destinationZ == siteZ
                 : motion.moving && !motion.path.empty() && motion.path.back()[0] == siteX
                       && motion.path.back()[1] == siteZ;
+            // A shipyard needs water under its footprint, but its engineer can approach
+            // across land. Never route the builder on the product's placement grid.
             return routedToSite
-                || routeUnit(command.unit.index, siteX, siteZ, store, terrain, grid);
+                || routeUnit(command.unit.index, siteX, siteZ, store, terrain,
+                             approachGrid != nullptr ? *approachGrid : grid);
         }
 
         // The cost and the time come from the DEFINITION, and the rate from the clock — the

@@ -21,6 +21,7 @@
 #include <cmath>
 #include <cstdio>
 #include <fstream>
+#include <limits>
 
 // Quits the process when the last window closes. Without a delegate the app
 // lingers windowless in the Dock, which is endlessly confusing in a terminal
@@ -1498,13 +1499,11 @@ int runWindowed(const Session& session) {
                     rm::ui::commandSlotAt(commandRack, hudPoint[0], hudPoint[1]);
                 if (button == rm::MouseButton::Right) {
                     armedCommand.reset();
-                } else if (slot && commandAvailable[*slot]
-                           && rm::ui::kCommandDescriptors[*slot].action
-                                  == rm::ui::RackAction::AutoExpand) {
+                } else if (const auto on = submitAutoExpandControl(
+                               runner, selected, frame, hudPoint[0], hudPoint[1])) {
                     // A STANDING ORDER, toggled: the selection's field builders go on (or
                     // come off) auto-expand at once; nothing to target.
-                    const bool on = toggleAutoExpand(runner, selected);
-                    std::printf("auto-expand %s for the selection\n", on ? "on" : "off");
+                    std::printf("auto-expand %s for the selection\n", *on ? "on" : "off");
                     std::fflush(stdout);
                     armedCommand.reset();
                 } else if (slot && commandAvailable[*slot]
@@ -2885,6 +2884,12 @@ int runWindowed(const Session& session) {
         rm::sim::UnitId inputAcu{};
         std::string inputAcuName;
         rm::sim::Transform acuMoveStarted{};
+        rm::sim::UnitId inputEngineer{};
+        std::string inputUpgrade, inputShipyard;
+        int inputUpgradeTier = 2;
+        std::array<float, 2> inputWaterSite{};
+        std::vector<rm::sim::UnitId> beforeWorkflow;
+        std::size_t expansionLogStart = 0;
         rm::sim::Transform moveStarted{};
         std::vector<rm::sim::UnitId> beforeProduct;
         std::vector<rm::sim::UnitId> beforeGenerator;
@@ -3000,7 +3005,8 @@ int runWindowed(const Session& session) {
         const auto nextInputStage = [&](int stage) {
             inputStage = stage;
             stageStarted = matchTicks;
-            acceptanceFastForward = stage == 2 || stage == 9;
+            acceptanceFastForward = stage == 2 || stage == 9 || stage == 34
+                || stage == 38 || stage == 40;
         };
         std::function<void(NSTimer*)> inputTick = [&](NSTimer* timer) {
             if (acceptanceFrames == observedFrame) return;
@@ -3009,7 +3015,9 @@ int runWindowed(const Session& session) {
                 // Stage 0 waits for AppKit to grant deactivation, which needs another app
                 // willing to take focus; on an unattended desktop that can never happen, and
                 // the report should say so rather than look like a Cybran-specific stall.
-                inputCheck(matchTicks - stageStarted < 12000 && acceptanceFrames < 12000,
+                // Long upgrades and shore approaches use ordinary income and authored rates.
+                const int stageLimit = inputStage >= 32 ? 60000 : 12000;
+                inputCheck(matchTicks - stageStarted < stageLimit && acceptanceFrames < 36000,
                            "timeout at input stage " + std::to_string(inputStage)
                                + (inputStage == 0 && app.isActive
                                       ? " (the app never became inactive: no other app took focus)"
@@ -3244,6 +3252,7 @@ int runWindowed(const Session& session) {
                     units.store.kill(inputAttackTarget);
                     nextInputStage(inputProducts[productIndex].ends_with("0105") ? 7 : 10);
                 } else if (inputStage == 7) {
+                    inputEngineer = inputProduct;
                     inputCheck(activeBuilder == inputProduct, "engineer selection did not expose construction tray");
                     if (!engineerPageProbe) {
                         engineerPageProbe = true;
@@ -3291,7 +3300,104 @@ int runWindowed(const Session& session) {
                                 inputProducts[productIndex].c_str());
                     if (++productIndex < inputProducts.size()) {
                         nextInputStage(12);
-                    } else nextInputStage(11);
+                    } else nextInputStage(32);
+                } else if (inputStage == 32) {
+                    if (!inputSelect(inputFactory)) return;
+                    const auto* def = units.catalog.def(units.store.typeAt(inputFactory.index));
+                    inputCheck(def != nullptr && !def->upgradesTo.empty(), "factory has no next upgrade tier");
+                    inputUpgrade = uppercase(def->upgradesTo);
+                    nextInputStage(33);
+                } else if (inputStage == 33) {
+                    const auto before = units.commandInput.size();
+                    if (!inputBuildClick(inputUpgrade)) return;
+                    inputCheck(units.commandInput.size() == before + 1, "upgrade cell submitted no Build");
+                    expectInputCommand(rm::sim::CommandKind::Build, inputFactory);
+                    nextInputStage(34);
+                } else if (inputStage == 34) {
+                    if (units.store.alive(inputFactory)) return;
+                    // The ordinary frame handler follows UnitFinished to the replacement handle.
+                    inputCheck(selected.size() == 1 && units.store.alive(selected.front()),
+                               "upgrade lost the selected factory");
+                    inputFactory = selected.front();
+                    const auto* def = units.catalog.def(units.store.typeAt(inputFactory.index));
+                    inputCheck(def != nullptr && uppercase(def->name) == inputUpgrade,
+                               "upgrade selection followed the wrong tier");
+                    std::printf("input acceptance: T%d factory native upgrade PASS\n", inputUpgradeTier);
+                    if (++inputUpgradeTier <= 3) nextInputStage(32);
+                    else nextInputStage(35);
+                } else if (inputStage == 35) {
+                    if (!inputSelect(inputEngineer)) return;
+                    const auto* def = units.catalog.def(units.store.typeAt(inputEngineer.index));
+                    inputCheck(def != nullptr, "engineer lost its definition");
+                    inputShipyard = uppercase(def->name).substr(0, 2) + "B0103";
+                    nextInputStage(36);
+                } else if (inputStage == 36) {
+                    if (!inputBuildClick(inputShipyard)) return;
+                    inputCheck(armedOption.has_value(), "shipyard cell did not arm placement");
+                    const auto type = resolveBuildable(units, content, armedPath());
+                    inputCheck(type.has_value(), "shipyard blueprint unavailable");
+                    const auto& at = units.store.transforms()[inputEngineer.index];
+                    float nearest = std::numeric_limits<float>::max();
+                    // Search the map deterministically, then focus before clicking. The normal
+                    // ghost validates snapped sites; no fixture teleports the engineer to water.
+                    for (float z = 64; z < map->field.depthElmos() - 64; z += 32) {
+                        for (float x = 64; x < map->field.widthElmos() - 64; x += 32) {
+                            const auto site = snapBuildSite(units, *type, {x, z});
+                            const float dx = site[0] - rm::sim::fxToFloat(at.x);
+                            const float dz = site[1] - rm::sim::fxToFloat(at.z);
+                            const float distance = dx * dx + dz * dz;
+                            if (distance >= nearest || !armedPlaceable(site)) continue;
+                            nearest = distance;
+                            inputWaterSite = site;
+                        }
+                    }
+                    inputCheck(nearest < std::numeric_limits<float>::max(), "map has no placeable shipyard site");
+                    window.focusOn({inputWaterSite[0], map->field.heightAtWorld(inputWaterSite[0], inputWaterSite[1]),
+                                    inputWaterSite[1]}, 420.0f);
+                    beforeWorkflow = inputLiveUnits();
+                    nextInputStage(37);
+                } else if (inputStage == 37) {
+                    const auto before = units.commandInput.size();
+                    inputWorldClick(rm::sim::fxFromFloat(inputWaterSite[0]),
+                                    rm::sim::fxFromFloat(inputWaterSite[1]), rm::MouseButton::Left);
+                    inputCheck(units.commandInput.size() == before + 1, "water click submitted no Build");
+                    expectInputCommand(rm::sim::CommandKind::Build, inputEngineer);
+                    nextInputStage(38);
+                } else if (inputStage == 38) {
+                    if (inputFindSpawn(inputShipyard, beforeWorkflow).generation == 0) return;
+                    inputCheck(writePng(session.window.inputAcceptancePath + ".shipyard.png", window.capture()),
+                               "shipyard capture write failed");
+                    std::printf("input acceptance: naval-yard native placement and completion PASS\n");
+                    nextInputStage(39);
+                } else if (inputStage == 39) {
+                    if (!inputSelect(inputEngineer)) return;
+                    beforeWorkflow = inputLiveUnits();
+                    expansionLogStart = units.commands.size();
+                    inputCommandClick(rm::ui::rackSlotFor(rm::ui::RackAction::AutoExpand));
+                    inputCheck(autoExpanding(runner, inputEngineer), "AUTO MEX click did not enable expansion");
+                    nextInputStage(40);
+                } else if (inputStage == 40) {
+                    std::size_t completed = 0;
+                    for (rm::UnitIndex slot = 0; slot < units.store.slotCount(); ++slot) {
+                        if (!units.store.slotAlive(slot) || units.armyOf(slot) != units.playerArmy
+                            || std::ranges::find(beforeWorkflow, units.store.idAt(slot)) != beforeWorkflow.end()) continue;
+                        const auto* def = units.catalog.def(units.store.typeAt(slot));
+                        if (def != nullptr && def->buildRestriction != rm::unitdef::BuildRestriction::None) ++completed;
+                    }
+                    if (completed < 3) return;
+                    std::size_t builds = 0;
+                    const auto log = units.commands.all();
+                    for (std::size_t i = expansionLogStart; i < log.size(); ++i)
+                        if (log[i].kind == rm::sim::CommandKind::Build
+                            && std::ranges::find(log[i].units, inputEngineer) != log[i].units.end()) ++builds;
+                    inputCheck(builds >= 3, "AUTO MEX completions have no engineer command evidence");
+                    nextInputStage(41);
+                } else if (inputStage == 41) {
+                    if (!inputSelect(inputEngineer)) return;
+                    inputCommandClick(rm::ui::rackSlotFor(rm::ui::RackAction::AutoExpand));
+                    inputCheck(!autoExpanding(runner, inputEngineer), "AUTO MEX click did not disable expansion");
+                    std::printf("input acceptance: AUTO MEX native toggle and three completed deposits PASS\n");
+                    nextInputStage(11);
                 } else if (inputStage == 12) {
                     if (inputSelect(inputFactory)) nextInputStage(productionProbeDone ? 1 : 13);
                 } else if (inputStage >= 13 && inputStage <= 18) {

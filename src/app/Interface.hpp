@@ -42,6 +42,12 @@ namespace rm::app {
     rm::PlayerIndex player, rm::TickIndex tick, const rm::ui::FrameLayout& frame,
     float x, float y, std::size_t page = 0);
 
+/// Shared AUTO MEX hit/dispatch path. No value means the point has no enabled action;
+/// false means the click turned the standing order off.
+[[nodiscard]] std::optional<bool> submitAutoExpandControl(MatchRunner& runner,
+    std::span<const rm::sim::UnitId> selection, const rm::ui::FrameLayout& frame,
+    float x, float y);
+
 /// The selected-unit outline for the active game presentation.
 void appendUnitSelection(std::vector<rm::DecalVertex>& out, const rm::HeightField& field,
                          std::array<float, 3> centre, float radius, rm::ui::GameProfile profile);

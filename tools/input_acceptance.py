@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run real AppKit mouse input through all 23 T1 land products and three HUD profiles."""
+"""Run native product, factory-upgrade, shipyard and AUTO MEX acceptance."""
 
 import argparse
 from pathlib import Path
@@ -28,7 +28,10 @@ def main():
     parser.add_argument("--profiles", nargs="+", choices=PROFILES, default=list(PROFILES))
     parser.add_argument("--factories", nargs="+", choices=FACTORIES, default=list(FACTORIES))
     parser.add_argument("--backings", nargs="+", choices=(1, 2), type=int, default=[1, 2])
+    parser.add_argument("--timeout", type=int, default=900, help="seconds per case, including authored upgrade/build times")
     args = parser.parse_args()
+    if args.timeout <= 0:
+        parser.error("--timeout must be positive")
     content_path = args.gamedata or args.data_dir
     content_flag = "--gamedata" if args.gamedata else "--data-dir"
     for path in (args.binary, args.map, content_path):
@@ -51,7 +54,7 @@ def main():
                 print(f"{profile} simulated {backing}x {factory}", flush=True)
                 with log.open("w") as output:
                     try:
-                        result = subprocess.run(command, stdout=output, stderr=subprocess.STDOUT, timeout=240)
+                        result = subprocess.run(command, stdout=output, stderr=subprocess.STDOUT, timeout=args.timeout)
                     except subprocess.TimeoutExpired:
                         raise SystemExit(f"FAIL timeout; see {log}") from None
                 text = log.read_text()
@@ -60,6 +63,14 @@ def main():
                     raise SystemExit(f"FAIL input acceptance; see {log}")
                 if text.count("selection and native right-click Move PASS") != 1:
                     raise SystemExit(f"FAIL missing ACU acceptance evidence; see {log}")
+                for evidence in (
+                    "T2 factory native upgrade PASS",
+                    "T3 factory native upgrade PASS",
+                    "naval-yard native placement and completion PASS",
+                    "AUTO MEX native toggle and three completed deposits PASS",
+                ):
+                    if text.count(evidence) != 1:
+                        raise SystemExit(f"FAIL missing workflow evidence: {evidence}; see {log}")
                 if text.count("production, selection, Move, Shift queue, Stop, input swallowing PASS") != expected:
                     raise SystemExit(f"FAIL incomplete per-product evidence; see {log}")
                 if "production pagination, pending/active cancellation, Clear Queue PASS" not in text:

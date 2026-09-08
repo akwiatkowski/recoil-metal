@@ -592,8 +592,10 @@ Mostly done and deliberately passive: maps, models, blueprints, and the
 per-family tick semantics stay green; the Spring Lua API is refused. One
 substrate, per-game sim personality.
 
-### UI and AI, parked honestly
+### UI and AI — original host-scope boundary
 
-140k of the corpus's 228k lines are UI and AI. Neither is hosted, possibly
-ever: the HUD is ours, the opponent is ours, and both can grow on the
-engine's own API. The mod-compatibility promise is about the sim.
+The original plan excluded hosting the corpus's UI and AI from the gameplay-mod
+promise. The HUD remains native, but the opponent has since grown into a FAF Lua
+sandbox with native bindings and managers. See the gameplay dashboard's FA-AI
+row for current evidence and remaining gaps. The general gameplay Lua lifecycle
+and mod-compatibility promise remain separate from that bounded AI integration.

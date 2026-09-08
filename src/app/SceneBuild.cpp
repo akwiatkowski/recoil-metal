@@ -948,7 +948,10 @@ std::vector<DispatchedCommand> dispatchCommands(UnitScene& scene,
         rm::sim::ApplyCommandResult result = rm::sim::applyCommand(
             issue, scene.store, scene.catalog, scene.players, scene.armies, terrain, gridForUnit,
             gAppTickRate, &scene.building, &scene.events, &scene.features, pathService,
-            scriptTasks);
+            scriptTasks, [&](rm::sim::UnitId unit) -> const rm::sim::PassabilityGrid* {
+                return scene.store.alive(unit)
+                    ? &passability.gridFor(scene, scene.store.typeAt(unit.index)) : nullptr;
+            });
         if (rm::log::enabled(rm::log::Level::Debug)) {
             for (const auto unit : issue.units) {
                 rm::log::writef(rm::log::Level::Debug, "order",

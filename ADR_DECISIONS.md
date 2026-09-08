@@ -3508,3 +3508,21 @@ but needs the world's markers inside the sim. Scoring with a soft enemy-distance
 dropped for the simple own-side/other-side split: it is explainable and the bisector already
 is "away from the enemy". The claim test is omniscient about enemy structures (the app knows
 the whole map); a fogged-in enemy extractor still stops the engineer, by the approach check.
+
+## ADR-110 — Build-site validation and builder approach use separate terrain domains
+
+**Context.** The four-faction headless naval-placement scenario exposed an accepted Build
+that disappeared before construction: a valid water site was also being used to choose the
+engineer's route grid, so an engineer standing on land could not start a water-only path.
+
+**Decision.** Keep the product grid for footprint validation and supply the builder's own
+movement grid for its approach. Command dispatch provides both; deferred and continuing
+orders derive both from the existing per-type grid table. The single-grid simulation API
+retains its existing default for callers whose builder and product share a domain.
+
+**Alternatives and consequences.** Moving the fixture into water would conceal a player
+workflow failure. Relaxing water placement would allow shipyards on land. Separate grids
+preserve both restrictions without adding serialized state or changing path-service order.
+Immediate and queued shore-to-water construction are checked using all four retail engineer
+and shipyard definitions. This establishes the supported amphibious/hover engineer path;
+it does not add arbitrary shoreline reach searches for land-only builders.

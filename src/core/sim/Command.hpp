@@ -342,13 +342,16 @@ using CommandGridForUnit = std::function<const PassabilityGrid*(UnitId)>;
 /// Each accepted unit receives one queue entry referring to the same immutable `SharedCommand`.
 /// Mutable pursuit and temporary-target state remains local to that entry. A serial is consumed
 /// once when the first member accepts the issue, not once per selected unit.
+/// `gridForUnit` validates the command's site. For Build, `approachGridForUnit`
+/// supplies the builder's movement domain; single-grid callers may omit it.
 [[nodiscard]] ApplyCommandResult applyCommand(
     const CommandIssue& issue, UnitStore& store, const UnitCatalog& catalog,
     std::span<const Player> players, std::span<const Army> armies, const Terrain& terrain,
     const CommandGridForUnit& gridForUnit, TickRate rate,
     std::vector<Construction>* building = nullptr, EventQueue* events = nullptr,
     const FeatureStore* features = nullptr, PathService* pathService = nullptr,
-    ScriptTaskHost* scriptTasks = nullptr);
+    ScriptTaskHost* scriptTasks = nullptr,
+    const CommandGridForUnit& approachGridForUnit = {});
 
 /// Publishes a finished asynchronous plain-move route through the command authority.
 ///

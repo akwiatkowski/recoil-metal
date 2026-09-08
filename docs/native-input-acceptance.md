@@ -52,6 +52,16 @@ pages to the final pending entry and cancels it. It verifies every surviving
 command ID, cancels the active entry, verifies the remaining IDs again and uses
 Clear Queue. A separate `OUTPUT.png.queue.png` capture shows the paged controls.
 
+After all T1 products, the driver upgrades the selected land factory through T2
+and T3 using its build tray, checking that selection follows each replacement
+handle. It then selects the produced engineer, arms its T1 shipyard, finds the
+nearest valid snapped water site, focuses the camera and clicks that site. The
+engineer must approach and complete the shipyard; `OUTPUT.png.shipyard.png` records
+the result. Finally, it clicks AUTO MEX, waits for three newly completed deposit
+structures backed by the engineer's logged Build commands, and clicks AUTO MEX
+off again. These stages require a map with navigable water and at least three
+available resource deposits. They retain ordinary income, costs and build rates.
+
 Selection waits for a rendered frame after focusing the camera. Build completion
 compares full generational handles, including units created in recycled slots.
 The final capture runs from a main-loop timer between renderer frames. A failed
@@ -69,6 +79,8 @@ mise exec -- python3 tools/input_acceptance.py \
 
 Use `--factories UEB0101 --profiles compact --backings 1` for a focused run.
 Choose a new dated output directory for each run to retain earlier evidence.
+The default per-case timeout is 900 seconds; `--timeout` changes it. Upgrades and
+long approaches account for the larger budget than the original product-only run.
 The runner requires the real map and content, retains each process's log, checks
 every product result and checks PNG pixel dimensions against logical window size
 times backing. Independent expected armed-product counts are 5 UEF, 5 Aeon,
@@ -122,3 +134,17 @@ twelve seconds during startup:
 
 This is a property of the deactivation handshake, not of Cybran or the wide
 profile; the earlier "incomplete" result most likely had the same cause.
+
+On 2026-09-07, the full 24-case matrix including the ACU opening passed (recorded
+in the KB handoff). The ACU extension was committed as `fc38762`; four Compact 1x
+retail-map faction cases passed again on September 8 before that commit.
+
+The subsequent factory-upgrade, shipyard and AUTO MEX stages have **not been run
+through AppKit**. At the user's request, their current verification is headless:
+`mise exec -- ./build/rm_tests '[upgrade-chain],[naval-placement],[auto-expand],[station]'`.
+It exercises both factory upgrades with retail definitions for all four factions,
+shore-to-water shipyard construction (immediate and queued), the shared AUTO MEX
+rack handler and three completed deposits, and the Kennel's authored assistance
+rate. These checks use fixture terrain/resources; they do not prove native event
+delivery, camera picking, retail-map siting, or rendered widget reachability.
+The earlier 24-case results apply to the earlier driver, not these new stages.

@@ -92,6 +92,126 @@ struct Scenario {
 
 } // namespace
 
+TEST_CASE("retail land factories upgrade through both tiers using build tray actions",
+          "[corpus][upgrade-chain][headless-ui]") {
+    const auto root = corpusRoot();
+    if (!std::filesystem::is_directory(root)) SKIP("retail corpus unavailable");
+    for (const std::string prefix : {"UEB", "UAB", "URB", "XSB"}) {
+        DYNAMIC_SECTION(prefix) {
+            Scenario job;
+            std::vector<rm::unitdef::UnitDef> defs;
+            std::vector<std::string> ids;
+            for (const char* suffix : {"0101", "0201", "0301"}) {
+                ids.push_back(prefix + suffix);
+                const auto def = rm::unitbp::loadFile(root / ids.back() / (ids.back() + "_unit.bp"));
+                REQUIRE(def);
+                defs.push_back(*def);
+            }
+            job.scene.roster = rm::data::Roster::build(defs, ids);
+            job.scene.armies[0].faction = *rm::data::factionOf(defs.front());
+            std::vector<rm::sim::UnitId> selection{job.spawn(defs[0], 300, 300)};
+            const std::array types{job.scene.store.typeAt(selection.front().index),
+                job.registerType(defs[1]), job.registerType(defs[2])};
+            auto runner = job.runner();
+            int tick = 0;
+            for (std::size_t tier = 1; tier < types.size(); ++tier) {
+                std::vector<rm::ui::BuildOption> options;
+                rm::app::BuildSelection who;
+                rm::app::gatherBuildOptions(job.scene, selection.front(), rm::ui::neutralTheme(), options, who);
+                const auto found = std::ranges::find(options, ids[tier], &rm::ui::BuildOption::id);
+                REQUIRE(found != options.end());
+                REQUIRE(found->upgrade);
+                CHECK(rm::ui::buildOptionAction(*found, who.role)
+                      == rm::ui::BuildOptionAction::SubmitAtBuilder);
+                const auto frame = rm::ui::frameLayout(rm::ui::UiViewport::full(1280, 720));
+                const auto panel = rm::ui::buildPanelLayout(frame, options.size());
+                const auto index = static_cast<std::size_t>(found - options.begin());
+                REQUIRE(index < panel.shown);
+                const auto origin = rm::ui::buildCellOrigin(panel, index);
+                const auto hit = rm::ui::buildOptionAt(panel, options.size(),
+                    origin[0] + panel.cellWidth / 2, origin[1] + panel.cellHeight / 2);
+                REQUIRE(hit);
+                const auto previous = selection.front();
+                REQUIRE(rm::app::submitBuildOption(job.scene, job.content, who.builder, 0,
+                    static_cast<rm::TickIndex>(tick), options[*hit]));
+                const int deadline = tick + static_cast<int>(rm::app::gAppTickRate.ticks(rm::sim::Seconds{600}));
+                while (job.scene.store.alive(previous) && tick < deadline) {
+                    // Supply the fixture, leaving authored rates/costs and ordinary ticks intact.
+                    job.scene.economies[0].stored = rm::app::kStartingStorage;
+                    (void)rm::app::advanceMatch(runner, tick++, 0);
+                    rm::app::followUpgradeSelection(job.scene, selection);
+                }
+                REQUIRE_FALSE(job.scene.store.alive(previous));
+                REQUIRE(job.scene.store.alive(selection.front()));
+                CHECK(job.scene.store.typeAt(selection.front().index) == types[tier]);
+                CHECK(job.scene.store.liveCount() == 1);
+            }
+        }
+    }
+}
+
+TEST_CASE("retail engineers place naval yards in water and complete them",
+          "[corpus][naval-placement][headless-ui]") {
+    const auto root = corpusRoot();
+    if (!std::filesystem::is_directory(root)) SKIP("retail corpus unavailable");
+    for (const std::string prefix : {"UE", "UA", "UR", "XS"}) {
+        DYNAMIC_SECTION(prefix) {
+            const std::string engineerId = prefix + "L0105", yardId = prefix + "B0103";
+            const auto engineer = rm::unitbp::loadFile(root / engineerId / (engineerId + "_unit.bp"));
+            const auto yard = rm::unitbp::loadFile(root / yardId / (yardId + "_unit.bp"));
+            REQUIRE(engineer);
+            REQUIRE(yard);
+            auto field = flatField();
+            // Land west of x=320, deep water east of x=448, with a traversable shore.
+            for (int z = 0; z < field.verticesZ(); ++z)
+                for (int x = 0; x < field.verticesX(); ++x)
+                    field.raw[static_cast<std::size_t>(z * field.verticesX() + x)] =
+                        static_cast<std::uint16_t>(std::clamp(56 - x, 0, 16) * 2);
+            Scenario job(std::move(field), true, 16);
+            job.scene.armies[0].faction = *rm::data::factionOf(*engineer);
+            job.scene.roster = rm::data::Roster::build(std::vector{*engineer, *yard},
+                                                    std::vector{engineerId, yardId});
+            const auto builder = job.spawn(*engineer, 280, 300);
+            const auto product = job.registerType(*yard);
+            std::vector<rm::ui::BuildOption> options;
+            rm::app::BuildSelection who;
+            rm::app::gatherBuildOptions(job.scene, builder, rm::ui::neutralTheme(), options, who);
+            const auto found = std::ranges::find(options, yardId, &rm::ui::BuildOption::id);
+            REQUIRE(found != options.end());
+            CHECK(rm::ui::buildOptionAction(*found, who.role) == rm::ui::BuildOptionAction::ArmPlacement);
+            const auto& grid = job.passability.gridForBuild(job.scene, product,
+                job.scene.store.typeAt(builder.index));
+            const auto fits = [&](int x) {
+                return rm::sim::buildSitePlaceable(grid, rm::sim::Fx::fromInt(x),
+                    rm::sim::Fx::fromInt(300), rm::sim::fxFromFloat(yard->collisionRadiusElmos),
+                    job.scene.store, job.scene.catalog, job.scene.building);
+            };
+            CHECK_FALSE(fits(200));
+            REQUIRE(fits(540));
+            auto runner = job.runner();
+            bool queued = false;
+            SECTION("place immediately from land") {}
+            SECTION("place after a queued move") {
+                queued = true;
+                REQUIRE(rm::app::issueMove(job.scene, builder, 0, 0,
+                    rm::sim::Fx::fromInt(300), rm::sim::Fx::fromInt(300)));
+            }
+            REQUIRE(rm::app::issueBuild(job.scene, builder, 0, 0, product,
+                rm::sim::Fx::fromInt(540), rm::sim::Fx::fromInt(300), queued));
+            bool completed = false;
+            const int deadline = static_cast<int>(rm::app::gAppTickRate.ticks(rm::sim::Seconds{600}));
+            for (int tick = 0; tick < deadline && !completed; ++tick) {
+                job.scene.economies[0].stored = rm::app::kStartingStorage;
+                (void)rm::app::advanceMatch(runner, tick, 0);
+                for (rm::UnitIndex slot = 0; slot < job.scene.store.slotCount(); ++slot)
+                    if (job.scene.store.slotAlive(slot) && job.scene.store.typeAt(slot) == product)
+                        completed = true;
+            }
+            CHECK(completed);
+        }
+    }
+}
+
 TEST_CASE("retail interceptor combat tuning reaches its spawned mover", "[corpus][air-combat]") {
     const auto root = corpusRoot();
     if (!std::filesystem::is_directory(root)) SKIP("no retail unit corpus");
@@ -1638,8 +1758,8 @@ TEST_CASE("auto-expand sends an idle engineer to the nearest free deposit on its
 // match without the standing order existing). The Kennel scenario beside them is item 61432:
 // the same station behaviour against the RETAIL blueprint rather than a synthetic one.
 
-TEST_CASE("auto-expand hands the engineer the next deposit once its mex is standing",
-          "[corpus][auto-expand]") {
+TEST_CASE("AUTO MEX rack clicks chain three completed deposits and toggle off",
+          "[corpus][auto-expand][headless-ui]") {
     const auto root = corpusRoot();
     if (!std::filesystem::is_directory(root)) SKIP("retail corpus unavailable");
     const auto engineer = rm::unitbp::loadFile(root / "UEL0105/UEL0105_unit.bp");
@@ -1653,6 +1773,7 @@ TEST_CASE("auto-expand hands the engineer the next deposit once its mex is stand
     const std::vector<rm::scenario::Marker> markers{
         {.name = "Mass 1", .type = "Mass", .position = {340.0f, 0.0f, 300.0f}},
         {.name = "Hydro 1", .type = "Hydrocarbon", .position = {300.0f, 0.0f, 360.0f}},
+        {.name = "Mass 2", .type = "Mass", .position = {420.0f, 0.0f, 400.0f}},
         {.name = "ARMY_1", .type = "Blank Marker", .position = {200.0f, 0.0f, 300.0f}},
     };
     const std::vector<rm::mapinfo::StartPosition> starts{{.team = 0, .x = 200.0f, .z = 300.0f},
@@ -1687,7 +1808,29 @@ TEST_CASE("auto-expand hands the engineer the next deposit once its mex is stand
     };
 
     const std::array<rm::sim::UnitId, 1> one{builder};
-    REQUIRE(rm::app::toggleAutoExpand(runner, one));
+    const auto click = [&](float width) {
+        const auto frame = rm::ui::frameLayout(rm::ui::UiViewport::full(width, 900));
+        const auto rack = rm::ui::commandRackLayout(frame, true);
+        const auto origin = rm::ui::commandCellOrigin(rack,
+            rm::ui::rackSlotFor(rm::ui::RackAction::AutoExpand));
+        return rm::app::submitAutoExpandControl(runner, one, frame,
+            origin[0] + rack.cellWidth / 2, origin[1] + rack.cellHeight / 2);
+    };
+    const auto frame = rm::ui::frameLayout(rm::ui::UiViewport::full(1280, 900));
+    CHECK_FALSE(rm::app::submitAutoExpandControl(runner, one, frame, -1, -1).has_value());
+    const auto rack = rm::ui::commandRackLayout(frame, true);
+    const auto origin = rm::ui::commandCellOrigin(rack,
+        rm::ui::rackSlotFor(rm::ui::RackAction::AutoExpand));
+    CHECK_FALSE(rm::app::submitAutoExpandControl(runner, {}, frame,
+        origin[0] + rack.cellWidth / 2, origin[1] + rack.cellHeight / 2).has_value());
+    CHECK_FALSE(rm::app::autoExpanding(runner, builder));
+    for (float width : {1280.0f, 1600.0f, 2240.0f}) {
+        REQUIRE(click(width) == std::optional{true});
+        REQUIRE(rm::app::autoExpanding(runner, builder));
+        REQUIRE(click(width) == std::optional{false});
+        REQUIRE_FALSE(rm::app::autoExpanding(runner, builder));
+    }
+    REQUIRE(click(1280) == std::optional{true});
 
     // Phase 1: the first deposit is ordered and BUILT — walked to, paid for, finished, and
     // standing on the map as a unit. Not merely ordered: the gap this closes is everything
@@ -1719,14 +1862,62 @@ TEST_CASE("auto-expand hands the engineer the next deposit once its mex is stand
     CHECK(next->buildType() == hydroType);
     CHECK(std::array{rm::sim::fxToFloat(next->targetX()), rm::sim::fxToFloat(next->targetZ())}
           == std::array<float, 2>{300.0f, 360.0f});
+    const int deadline = tick + static_cast<int>(rm::app::gAppTickRate.ticks(rm::sim::Seconds{600}));
+    while (tick < deadline && !standingAt(420, 400)) {
+        job.scene.economies[0].stored = rm::app::kStartingStorage;
+        (void)rm::app::advanceMatch(runner, tick++, 0);
+    }
+    REQUIRE(standingAt(340, 300));
+    REQUIRE(standingAt(300, 360));
+    REQUIRE(standingAt(420, 400));
+    CHECK(click(1280) == std::optional{false});
+    CHECK_FALSE(rm::app::autoExpanding(runner, builder));
+    const auto logSize = job.scene.commands.size();
+    for (int wait = 0; wait < 30; ++wait)
+        (void)rm::app::advanceMatch(runner, tick++, 0);
+    CHECK(job.scene.commands.size() == logSize);
 }
 
-// The Kennel-assist corpus test (KB item 61432) is POSTPONED. Three attempts to stand a live
-// Build next to a spawned XEB0104 in this harness all failed the same way: the Build order is
-// accepted at intake and then never materialises a construction row — no rows, no events, the
-// engineer's queue empty — across site distances 5..40 elmos, with a Mass deposit under the
-// site and the roster registered. Root cause not yet found; the synthetic-fixture coverage in
-// test_assist.cpp stands until it is.
+TEST_CASE("a retail Kennel lends its authored rate only to nearby allied construction",
+          "[corpus][station]") {
+    const auto root = corpusRoot();
+    if (!std::filesystem::is_directory(root)) SKIP("retail corpus unavailable");
+    const auto kennel = rm::unitbp::loadFile(root / "XEB0104/XEB0104_unit.bp");
+    const auto engineer = rm::unitbp::loadFile(root / "UEL0105/UEL0105_unit.bp");
+    const auto generator = rm::unitbp::loadFile(root / "UEB1101/UEB1101_unit.bp");
+    REQUIRE(kennel);
+    REQUIRE(engineer);
+    REQUIRE(generator);
+    Scenario job;
+    const auto builder = job.spawn(*engineer, 300, 300);
+    const auto product = job.registerType(*generator);
+    float stationX = 340;
+    int stationArmy = 0;
+    bool helps = true;
+    SECTION("idle allied station lends twenty build units per second") {}
+    SECTION("distant station contributes nothing") { stationX = 800; helps = false; }
+    SECTION("enemy station contributes nothing") { stationArmy = 1; helps = false; }
+    const auto station = job.spawn(*kennel, stationX, 340, stationArmy);
+    auto runner = job.runner();
+    REQUIRE(rm::app::issueBuild(job.scene, builder, 0, 0, product,
+        rm::sim::Fx::fromInt(340), rm::sim::Fx::fromInt(300)));
+    int tick = 0;
+    for (; tick < 300 && job.scene.building.empty(); ++tick) {
+        job.scene.economies[0].stored = rm::app::kStartingStorage;
+        (void)rm::app::advanceMatch(runner, tick, 0);
+    }
+    REQUIRE(job.scene.building.size() == 1);
+    const auto& rates = job.scene.catalog.rates(job.scene.store.typeAt(station.index));
+    CHECK(rates.buildPerTick == rm::app::gAppTickRate.magPerTick(20.0f));
+    // Assistance runs at dispatch, before this beat's newly founded row can receive it.
+    job.scene.economies[0].stored = rm::app::kStartingStorage;
+    const auto before = job.scene.building.front().buildTimeRemaining;
+    (void)rm::app::advanceMatch(runner, tick, 0);
+    const auto& work = job.scene.building.front();
+    CHECK(work.assistPerTick == (helps ? rates.buildPerTick : rm::sim::Mag{}));
+    CHECK(before - work.buildTimeRemaining == work.buildPerTick + work.assistPerTick);
+    CHECK(job.scene.store.orders()[station.index].empty());
+}
 
 TEST_CASE("a match with an engineering station standing over live work hashes identically"
           " across two runs",

@@ -9,7 +9,27 @@ Detailed retail evidence remains canonical in
 [`fa-exe-analysis-plan.md`](fa-exe-analysis-plan.md). This dashboard summarizes that ledger; it
 does not replace its claims, addresses, counterevidence, or confirmation gate.
 
-**Snapshot:** 2026-09-06, main through `bf0ef56`. This day lands the skirmish
+**Snapshot:** 2026-09-08, main through `fc38762`. The 2026-09-07 batch added
+default structure grid snapping, engineer/station support, AUTO MEX standing
+orders, the FAF engineer-cap fix, production queued on unfinished factories,
+and authored weapon-cue pitch, instance limits and distance cutoffs. The ACU
+native selection/right-click acceptance is committed. Its full 24-case matrix
+passed on September 7; four Compact 1x retail faction cases passed again on
+September 8. CTest: 1,502 passed, two optional skips out of 1,504.
+
+The golden baseline was re-recorded in `afe2867` after the intentional economy,
+grid and reclaim changes; its second 7,000-tick replay matched. The September 7
+handoff records another MATCH after `add7372`. Reblessing is no longer a blocker.
+The September 8 working-tree follow-up adds factory-upgrade, naval-placement and
+AUTO MEX native stages, plus headless tests for their shared UI/simulation paths.
+Those tests exposed and fixed naval construction routing an engineer on its
+product's water-only grid (ADR-110), and verify the retail Kennel's authored rate.
+The new native stages have not been run, at the user's request: retail-map
+click/picking acceptance remains open. Whole-WP parity remains a separate gate.
+Final headless verification of this follow-up: 1,506 passed and two optional
+skips out of 1,508 CTest entries; the unchanged 7,000-tick golden replay matches.
+
+**Historical snapshot:** 2026-09-06, main through `bf0ef56`. This day lands the skirmish
 economy correction, engineer construction tiers with per-tier upgrade cancellation
 (ADR-095), weapon visuals resolved from the original Lua declarations with authored
 emitters, muzzle/impact effects, live beam endpoints, ribbon trails and original
@@ -102,8 +122,8 @@ and the 70% equal-subsystem estimate answer different questions and are shown to
 headline honest.
 
 **Current implementation critical path:**
-Finish the selected batch's retail-content, retail-map and golden acceptance when
-the install is available. The remaining [`FA-CMD`](#fa-cmd---commands-controls-and-factories)
+Finish factory-upgrade and naval-placement player workflow acceptance. The retail
+install is available and the golden rebaseline has landed. The remaining [`FA-CMD`](#fa-cmd---commands-controls-and-factories)
 implementation gaps include the earlier refuel/staging rungs of `C-183`; explicit
 combat Guard now reuses the tested assistance ladder without granting builder powers.
 **Current EXE-analysis action:**
@@ -136,14 +156,14 @@ excluded from the headline.
 | ID | Subsystem | Source WPs | Implemented | Retail-validated | Retail-analyzed | Exact next task |
 |---|---|---|---:|---:|---:|---|
 | [`FA-FOUND`](#fa-found---retail-build-and-api-foundation) | Retail build and API foundation | `WP-00`-`02` | n/a | 75% | 85% | Bind an authoritative Steam depot/build manifest to `ART-E001`. |
-| [`FA-SIM`](#fa-sim---simulation-kernel-and-object-lifecycle) | Simulation kernel and object lifecycle | `WP-03`-`04` | 70% | 45% | 90% | Give the FAF unit proxies live position and health reads through the seam; then WP-04's RNG/checksum comparison. |
+| [`FA-SIM`](#fa-sim---simulation-kernel-and-object-lifecycle) | Simulation kernel and object lifecycle | `WP-03`-`04` | 70% | 45% | 90% | WP-04's RNG/checksum comparison; FAF proxies already use the script-object seam (`139d408`). |
 | [`FA-CONTENT`](#fa-content---vfs-blueprints-maps-and-bootstrap) | VFS, blueprints, maps, bootstrap | `WP-05`, `06`, `09` | 65% | 35% | 55% | Trace and test exact retail SCD mount/override precedence. |
 | [`FA-LUA`](#fa-lua---gameplay-lua-and-mod-contract) | Gameplay Lua and mod contract | `WP-07`-`08` | 10% | 5% | 30% | Measure the exact Moho contract for the milestone-20 skirmish slice. |
 | [`FA-MATCH`](#fa-match---armies-setup-and-victory-rules) | Armies, setup, victory rules | `WP-10`-`11` | 60% | 25% | 85% | Recover the retail lobby/scenario victory-mode selector; do not wire a synthetic app setting. |
 | [`FA-CMD`](#fa-cmd---commands-controls-and-factories) | Commands, controls, factories | `WP-12`-`14` | 85% | 70% | 75% | Specify the refuel/staging rung of `C-183`; Guard is accepted on the retail map (`make test-guard-ui`). |
 | [`FA-ECON`](#fa-econ---economy-construction-and-engineering) | Economy, construction, engineering | `WP-15`-`19` | 75% | 55% | 90% | Name the capture increment at `Unit+0x690` and read `Sim::TransferUnit`'s copy/reset inventory, then specify the smallest capture slice. |
 | [`FA-LAND`](#fa-land---land-navigation-formations-and-spatial-world) | Land navigation, formations, spatial world | `WP-20`, `21`, `26` | 85% | 30% | 95% | Add bounded formation rotation or category matching without changing path-service ordering. |
-| [`FA-AIR`](#fa-air---aircraft-flight-combat-and-staging) | Aircraft flight, combat, staging | `WP-22` | 65% | 55% | 95% | Golden acceptance of planar states 3-7 once the baseline is reblessed (retail-content half passed 2026-09-06); full banking remains. |
+| [`FA-AIR`](#fa-air---aircraft-flight-combat-and-staging) | Aircraft flight, combat, staging | `WP-22` | 65% | 55% | 95% | Full banking remains; the shared golden rebaseline is complete (`afe2867`), without establishing retail flight parity. |
 | [`FA-NAVY`](#fa-navy---surface-and-submerged-warfare) | Surface and submerged warfare | `WP-23`-`24` | 35% | 10% | 75% | Implement one complete `SurfacingSub` dive/surface slice. |
 | [`FA-TRANSPORT`](#fa-transport---attachments-cargo-and-ferries) | Attachments, cargo, ferries | `WP-25` | 35% | 5% | 95% | Add parent/self bone indices and authored rest-bone composition to generic attachments. |
 | [`FA-WEAPONS`](#fa-weapons---targeting-weapons-and-projectiles) | Targeting, weapons, projectiles | `WP-27`-`28` | 98% | 75% | 90% | Add the remaining death and manual-fire paths; `C-157`'s capture half waits on Capture. |
@@ -152,10 +172,10 @@ excluded from the headline.
 | [`FA-INTEL`](#fa-intel---vision-radar-sonar-and-counter-intel) | Vision, radar, sonar, counter-intel | `WP-33` | 75% | 45% | 90% | Apply radar-position error to automatic targeting without changing contact identity or ordering. |
 | [`FA-PROGRESS`](#fa-progress---enhancements-veterancy-and-special-units) | Enhancements, veterancy, special units | `WP-34`-`36` | 35% | 20% | 35% | Complete the enhancement lifecycle specification around `CUnitScriptTask`. |
 | [`FA-TERRAIN`](#fa-terrain---mutable-terrain-and-craters) | Mutable terrain and craters | `WP-37` | 0% | 0% | 25% | Trace one crater from damage through terrain, pathing, and rendering invalidation. |
-| [`FA-AI`](#fa-ai---retail-ai-and-native-manager-boundary) | Retail AI and native manager boundary | `WP-38` | 40% | 5% | 30% | Specify islandMarker from its callers; measure how reclaim decisions change the SCMP_009 duel's course. |
+| [`FA-AI`](#fa-ai---retail-ai-and-native-manager-boundary) | Retail AI and native manager boundary | `WP-38` | 40% | 5% | 30% | Measure a full FAF duel after the reclaim and engineer-cap fixes; optional islandMarker/Nickname handling landed in `388982e`. |
 | [`FA-UI`](#fa-ui---player-interface-and-advanced-controls) | Player interface and advanced controls | `WP-39`-`40` | 75% | 5% | 15% | Trace and implement the first retail data-driven command page from `WP-40`. |
 | [`FA-PRESENT`](#fa-present---animation-effects-and-audio) | Animation, effects, audio | `WP-41`-`42` | 75% | 5% | 45% | Script-driven manipulators on the authored weapon effects; then dynamic music. |
-| [`FA-PERSIST`](#fa-persist---replay-hashing-and-saveresume) | Replay, hashing, save/resume | `WP-43`-`44` | 70% | 20% | 90% | Golden acceptance of save continuation (now v17) once the baseline is reblessed (retail-content half passed 2026-09-06); general app saves remain absent. |
+| [`FA-PERSIST`](#fa-persist---replay-hashing-and-saveresume) | Replay, hashing, save/resume | `WP-43`-`44` | 70% | 20% | 90% | General app saves remain absent; the shared golden rebaseline is complete (`afe2867`), separate from save/resume scenario coverage. |
 
 ## Starting Work
 
@@ -528,8 +548,9 @@ their FAF consumers. Current-enemy lookup returns a stable brain proxy;
 blueprint lookup returns cached published tables. The 2026-09-05 local BAR-map
 runs completed 6,500 ticks with two/eight armies, built 16/64 units, and reported
 zero module failures, thread errors or instruction-budget overruns. They fired
-no shots and do not replace the retail-map combat run. Remaining observed fields
-are GridReclaim, Nickname and islandMarker; no dummy bindings were added.
+no shots and do not replace the retail-map combat run. At that point the missing
+fields were GridReclaim, Nickname and islandMarker. The former now has a native
+reclaim snapshot; optional Nickname/islandMarker handling landed in `388982e`.
 The 2026-09-06 retail SCMP_009 duel (1,800 s, two FAF armies) is now free of
 instruction-budget failures: the watchdog refills before raising with a bounded
 cap, first condition-cache expiries are staggered across passes, and unit counts
@@ -547,10 +568,9 @@ thread errors and 107 modules executed. See
 [skirmish acceptance](skirmish-economy-acceptance.md).
 
 ```text
-/goal Rerun the two/eight-army 650-second sanity matches with full retail content. Specify
-GridReclaim, Nickname and islandMarker from their actual callers and state ownership before
-implementing them. Keep missing conditions fail-closed and update WP-38 and FA-AI with measured
-construction/combat progression and remaining native-manager gaps.
+/goal Record a full retail SCMP_009 FAF duel after the reclaim and engineer-cap fixes.
+Measure construction, army composition, combat progression and whether it reaches victory.
+Keep missing conditions fail-closed and update WP-38 and FA-AI with observed native-manager gaps.
 ```
 
 ### FA-UI - Player Interface And Advanced Controls

@@ -414,6 +414,8 @@ if(BUILD_TESTING)
 
     add_test(NAME "strict content acceptance rejects skipped checks"
              COMMAND mise exec -- python3 ${CMAKE_SOURCE_DIR}/tools/test_content_acceptance.py)
+    add_test(NAME "native input acceptance requires complete workflow evidence"
+             COMMAND mise exec -- python3 ${CMAKE_SOURCE_DIR}/tools/test_input_acceptance.py)
 
     # --- Boundary checks --------------------------------------------------------
     #

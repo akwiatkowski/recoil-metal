@@ -5,6 +5,7 @@
 #include "core/model/Pose.hpp"
 #include "core/scene/BuildEffects.hpp"
 #include "core/ui/IconAtlas.hpp"
+#include "core/ui/CommandPanel.hpp"
 #include "core/unit/Role.hpp"
 
 #include <algorithm>
@@ -301,6 +302,22 @@ void appendViewFootprint(std::vector<std::array<float, 2>>& out, const rm::Orbit
 /// about stores, catalogs, rosters or deques. The two halves are tested separately for the
 /// same reason they are separate: `tests/test_build_panel.cpp` asks where a cell is,
 /// `tests/test_build_options.cpp` asks what belongs in it.
+std::optional<bool> submitAutoExpandControl(MatchRunner& runner,
+    std::span<const rm::sim::UnitId> selection, const rm::ui::FrameLayout& frame,
+    float x, float y) {
+    const auto rack = rm::ui::commandRackLayout(frame, !selection.empty());
+    const auto slot = rm::ui::commandSlotAt(rack, x, y);
+    if (!slot || rm::ui::kCommandDescriptors[*slot].action != rm::ui::RackAction::AutoExpand)
+        return std::nullopt;
+    std::vector<const rm::unitdef::UnitDef*> definitions;
+    for (const auto id : selection) {
+        if (runner.scene.store.alive(id))
+            definitions.push_back(runner.scene.catalog.def(runner.scene.store.typeAt(id.index)));
+    }
+    if (!rm::ui::commandAvailability(definitions)[*slot]) return std::nullopt;
+    return toggleAutoExpand(runner, selection);
+}
+
 bool submitBuildOption(UnitScene& scene, const rm::vfs::Vfs& content,
     rm::sim::UnitId builder, rm::PlayerIndex player, rm::TickIndex tick,
     const rm::ui::BuildOption& option, bool shift) {
