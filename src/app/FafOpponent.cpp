@@ -857,10 +857,47 @@ function __rm_faf_decide(army, snap)
         end)
     end
 
+    -- Reserve the upgrade slot before production. A factory's "idle" flag only means
+    -- stationary: let its current product finish, then upgrade before training again.
+    -- Keep the accepted intent across economy fluctuations, like an assigned upgrade
+    -- platoon, but discard it when the generation-bearing handle disappears or upgrades.
+    local upgrade = brain.pendingFactoryUpgrade
+    local upgradeUnit
+    if upgrade then
+        for _, u in ipairs(snap.units) do
+            if u.h == upgrade.builder and not u.upgrading then upgradeUnit = u; break end
+        end
+        if not upgradeUnit then upgrade = nil end
+    end
+    if not upgrade then
+        walkPriority(brain, 'PlatoonFormBuilder', function(item)
+            local template = PlatoonTemplates[item.spec.PlatoonTemplate]
+            local squads = template and template.GlobalSquads
+            if not squads or template.Plan ~= 'UnitUpgradeAI' then return false end
+            for _, u in ipairs(snap.units) do
+                if u.idle and not u.upgrading and EntityCategoryContains(squads[1][1], u) then
+                    upgradeUnit = u
+                    upgrade = { kind = 'upgrade', builder = u.h, name = item.spec.BuilderName }
+                    return true
+                end
+            end
+            return false
+        end)
+    end
+    brain.pendingFactoryUpgrade = nil
+    if upgrade then
+        if upgradeUnit.building
+            and EntityCategoryContains(categories.FACTORY, upgradeUnit) then
+            brain.pendingFactoryUpgrade = upgrade
+        else
+            table.insert(decisions, upgrade)
+        end
+    end
+
     -- Factories: the corpus picks the unit, one train per factory not already working.
     local factories = {}
     for _, u in ipairs(snap.units) do
-        if not u.upgrading
+        if u ~= upgradeUnit and not u.upgrading
             and not u.building
             and EntityCategoryContains(categories.STRUCTURE * categories.FACTORY, u) then
             table.insert(factories, u)
@@ -908,28 +945,6 @@ function __rm_faf_decide(army, snap)
             return free <= 0
         end)
     end
-
-    -- Platoon forming, in TWO slots per pass: one attack, one upgrade. They used to share
-    -- a slot and priority order starved the upgrades permanently — the scout-raid formers
-    -- (priority 700) pass nearly every pass, and the tech-up builders at 200 fired exactly
-    -- twice in a 25-minute match, both in the opening seconds before anything could raid.
-    -- FAF's real managers run every form builder concurrently; two slots is the serialized
-    -- stand-in's honest minimum.
-    walkPriority(brain, 'PlatoonFormBuilder', function(item)
-        local template = PlatoonTemplates[item.spec.PlatoonTemplate]
-        if not template or template.Plan ~= 'UnitUpgradeAI' then return false end
-        local squads = template.GlobalSquads
-        if not squads then return false end
-        for _, u in ipairs(snap.units) do
-            if u.idle and not u.upgrading and EntityCategoryContains(squads[1][1], u) then
-                table.insert(decisions, {
-                    kind = 'upgrade', builder = u.h, name = item.spec.BuilderName,
-                })
-                return true
-            end
-        end
-        return false
-    end)
 
     walkPriority(brain, 'PlatoonFormBuilder', function(item)
         local template = PlatoonTemplates[item.spec.PlatoonTemplate]

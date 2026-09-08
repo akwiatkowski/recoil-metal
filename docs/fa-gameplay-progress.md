@@ -172,7 +172,7 @@ excluded from the headline.
 | [`FA-INTEL`](#fa-intel---vision-radar-sonar-and-counter-intel) | Vision, radar, sonar, counter-intel | `WP-33` | 75% | 45% | 90% | Apply radar-position error to automatic targeting without changing contact identity or ordering. |
 | [`FA-PROGRESS`](#fa-progress---enhancements-veterancy-and-special-units) | Enhancements, veterancy, special units | `WP-34`-`36` | 35% | 20% | 35% | Complete the enhancement lifecycle specification around `CUnitScriptTask`. |
 | [`FA-TERRAIN`](#fa-terrain---mutable-terrain-and-craters) | Mutable terrain and craters | `WP-37` | 0% | 0% | 25% | Trace one crater from damage through terrain, pathing, and rendering invalidation. |
-| [`FA-AI`](#fa-ai---retail-ai-and-native-manager-boundary) | Retail AI and native manager boundary | `WP-38` | 40% | 5% | 30% | Measure a full FAF duel after the reclaim and engineer-cap fixes; optional islandMarker/Nickname handling landed in `388982e`. |
+| [`FA-AI`](#fa-ai---retail-ai-and-native-manager-boundary) | Retail AI and native manager boundary | `WP-38` | 40% | 5% | 30% | Fix reproducible late watchdog overruns and investigate nonlethal attack pressure; the 60-minute duel has no winner (2026-09-08 report). |
 | [`FA-UI`](#fa-ui---player-interface-and-advanced-controls) | Player interface and advanced controls | `WP-39`-`40` | 75% | 5% | 15% | Trace and implement the first retail data-driven command page from `WP-40`. |
 | [`FA-PRESENT`](#fa-present---animation-effects-and-audio) | Animation, effects, audio | `WP-41`-`42` | 75% | 5% | 45% | Script-driven manipulators on the authored weapon effects; then dynamic music. |
 | [`FA-PERSIST`](#fa-persist---replay-hashing-and-saveresume) | Replay, hashing, save/resume | `WP-43`-`44` | 70% | 20% | 90% | General app saves remain absent; the shared golden rebaseline is complete (`afe2867`), separate from save/resume scenario coverage. |
@@ -572,10 +572,18 @@ retail sanity runs on 2026-09-06 reported no instruction-budget overruns, zero
 thread errors and 107 modules executed. See
 [skirmish acceptance](skirmish-economy-acceptance.md).
 
+Latest measurement: [the September 8 one-hour duel](faf-duel-2026-09-08.md), at
+`fbeb940`, completes 1,581 constructions and destroys 1,170 units but produces no
+winner; both commanders finish at full current maximum health. An independent AI
+repeat matches all 36,000 hashes. Six late decision watchdog failures and four
+condition errors recur; 90 naval units contribute one shot and no kills. These
+results supersede any inference of long-match readiness from the short sanity runs.
+
 ```text
-/goal Record a full retail SCMP_009 FAF duel after the reclaim and engineer-cap fixes.
-Measure construction, army composition, combat progression and whether it reaches victory.
-Keep missing conditions fail-closed and update WP-38 and FA-AI with observed native-manager gaps.
+/goal Profile and fix the reproduced 46–59 minute FAF instruction-budget overruns.
+Then inspect attack targeting/grouping, naval participation and aircraft clustering;
+compare the same one-hour scenario and retain generation-safe build/economy/kill logs.
+Do not change balance or disable reclaim without a focused experiment.
 ```
 
 ### FA-UI - Player Interface And Advanced Controls

@@ -3564,3 +3564,28 @@ not general submerged warfare parity: underwater intel, depth footprints, projec
 collision/splash gates, attack-driven auto-surfacing and underwater visuals remain open.
 General saves with active path searches remain outside the existing SaveState boundary;
 transition continuation tests isolate the vertical controller from that unsupported state.
+
+## ADR-112 — Reserve eligible FAF factory upgrades before production
+
+**Context.** The hour duel requested a UEF T2 air factory three times while its
+bomber was unfinished. The adapter's stationary-unit `idle` flag did not indicate
+construction availability, and production also preceded upgrades in each pass.
+
+**Decision.** Select the existing upgrade slot before factory production. Reserve
+the chosen factory by its generation-bearing handle while its product finishes,
+then dispatch the upgrade and exclude that factory from this pass's training.
+Keep the reservation through changes in economy conditions; discard it if the
+unit disappears or is already upgrading. The reservation belongs to the existing
+Lua brain, like its builder-condition cache; it adds no simulation command or save
+format. Other factories continue normal production.
+
+**Alternatives.** Checking `building` alone loses brief upgrade opportunities.
+Changing shared command-queue semantics would broaden an adapter scheduling fix.
+Lowering economy thresholds does not resolve rejected commands.
+
+**Consequences.** At most one upgrade reservation occupies the brain's existing
+upgrade slot. Current production is preserved, and later economy changes can slow
+the accepted upgrade rather than canceling it. Regression coverage uses the real
+FAF upgrade and bomber builders for busy/free factories, economy changes, upgrades
+in flight and recycled unit slots. This does not change slow-upgrade thresholds,
+AI personality selection or the explicitly T1-only naval scope.

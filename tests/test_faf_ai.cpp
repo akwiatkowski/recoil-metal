@@ -615,6 +615,76 @@ TEST_CASE("the FAF driver boots a brain and the corpus's own builders decide", "
     REQUIRE(ok);
 }
 
+TEST_CASE("FAF factory upgrades reserve production until the current product finishes",
+          "[faf][ai][factory-upgrade]") {
+    const auto root = corpusRoot();
+    if (root.empty()) SKIP("no vendored corpus; run `make ai`");
+    FafAi ai(root);
+    REQUIRE(ai.ready());
+    REQUIRE(installFafDriver(ai));
+    importAiEntryPoints(ai);
+    const bool ok = ai.eval(R"(
+        __rm_faf_boot(0, { faction = 1, startX = 100, startZ = 100,
+            sizeX = 512, sizeZ = 512, armies = 2, base = 'NormalMain', markers = {} })
+        local brain = __rm_faf.brains[0]
+        -- Keep real FAF conditions/templates, isolating the two competing decisions.
+        local builders = {}
+        for _, item in ipairs(brain.builders) do
+            if item.spec.BuilderName == 'T1AirFactoryUpgrade Slow'
+                or item.spec.BuilderName == 'T1 Air Bomber' then
+                table.insert(builders, item)
+            end
+        end
+        assert(#builders == 2)
+        brain.builders = builders
+        __rm_faf_type('UEA0103', { 'MOBILE', 'AIR', 'BOMBER', 'BUILTBYTIER1FACTORY' })
+        local factory = setmetatable({ h = __rm_faf_handle(55, 1), bp = 'UEB0102',
+            x = 100, z = 100, idle = true, building = true,
+            __cats = { STRUCTURE = true, FACTORY = true, AIR = true, TECH1 = true } },
+            __rm_faf.unitMeta)
+        local land = setmetatable({ h = __rm_faf_handle(56, 1), bp = 'UEB0101',
+            x = 120, z = 100, idle = true,
+            __cats = { STRUCTURE = true, FACTORY = true, LAND = true, TECH1 = true } },
+            __rm_faf.unitMeta)
+        local snap = { units = { factory, land }, occupied = {}, underway = {},
+            mass = 970, energy = 10000, massStorage = 1000, energyStorage = 10000,
+            massIncome = 6, energyIncome = 42.5, massRequested = 1.2, energyRequested = 35,
+            massUsage = 1.2, energyUsage = 35, structuresUnderway = 0, mobileUnderway = 1 }
+        local function decide()
+            brain.condCache = {} -- Make changes visible without waiting for the cache TTL.
+            return __rm_faf_decide(0, snap)
+        end
+        assert(#decide() == 0, 'busy factory must finish its bomber before upgrading')
+        -- The brief economy opportunity disappears before the bomber completes.
+        snap.energyIncome = 30
+        factory.building = false
+        local decisions = decide()
+        assert(#decisions == 1 and decisions[1].kind == 'upgrade'
+            and decisions[1].builder == factory.h, 'retain the eligible upgrade across passes')
+        factory.upgrading = true
+        assert(#decide() == 0, 'do not duplicate an upgrade already in flight')
+
+        factory.upgrading = false
+        snap.energyIncome = 42.5
+        decisions = decide()
+        assert(#decisions == 1 and decisions[1].kind == 'upgrade',
+            'free factory must upgrade instead of training a bomber in the same pass')
+
+        factory.building = true
+        assert(#decide() == 0)
+        -- A recycled slot is a different unit: never inherit the dead factory's reservation.
+        factory.h = __rm_faf_handle(55, 2)
+        factory.building = false
+        snap.energyIncome = 30
+        snap.energyRequested = 20
+        decisions = decide()
+        assert(#decisions == 1 and decisions[1].kind == 'train',
+            'discard reservations for dead factories and resume ordinary production')
+    )");
+    INFO(ai.lastError());
+    REQUIRE(ok);
+}
+
 TEST_CASE("a viable water map exposes only the T1 surface-naval FAF slice", "[faf][ai]") {
     const std::filesystem::path root = corpusRoot();
     if (root.empty()) {
