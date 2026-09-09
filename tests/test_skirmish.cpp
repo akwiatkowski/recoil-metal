@@ -297,6 +297,100 @@ TEST_CASE("defeating the other alliance starts team-match winner confirmation") 
     CHECK(*match.pendingWinner == 0);
 }
 
+TEST_CASE("the victory selector names all four retail modes", "[victory]") {
+    // The lobby/scenario selector recovered as a pure mapping, not an app setting:
+    // scenario Options.Victory names a mode, anything absent or unrecognized stays
+    // Assassination, which is the lobby default. Case-insensitive like factions.
+    using rm::sim::VictoryMode;
+    CHECK(rm::sim::victoryModeFromName("assassination") == VictoryMode::Assassination);
+    CHECK(rm::sim::victoryModeFromName("supremacy") == VictoryMode::Supremacy);
+    CHECK(rm::sim::victoryModeFromName("annihilation") == VictoryMode::Annihilation);
+    CHECK(rm::sim::victoryModeFromName("sandbox") == VictoryMode::Sandbox);
+    CHECK(rm::sim::victoryModeFromName("Annihilation") == VictoryMode::Annihilation);
+    CHECK(rm::sim::victoryModeFromName("SANDBOX") == VictoryMode::Sandbox);
+    CHECK(rm::sim::victoryModeFromName("") == VictoryMode::Assassination);
+    CHECK(rm::sim::victoryModeFromName("demoralization") == VictoryMode::Assassination);
+}
+
+TEST_CASE("annihilation counts everything but walls", "[victory]") {
+    const rm::HeightField field = flatField();
+
+    Roster roster;
+    UnitDef tankDef;
+    tankDef.name = "test_tank";
+    const rm::UnitTypeIndex tank = roster.addType(tankDef);
+    UnitDef wallDef;
+    wallDef.name = "test_wall";
+    wallDef.categories = {"WALL"};
+    const rm::UnitTypeIndex wall = roster.addType(wallDef);
+    (void)roster.add(tank, 0.0f, 0.0f, 0, 500.0f);
+    // Army 1 holds nothing but a wall: counted by nothing, saved by nothing.
+    (void)roster.add(wall, 400.0f, 0.0f, 1, 500.0f);
+
+    std::vector<Army> armies = twoSides();
+    std::vector<Projectile> projectiles;
+    std::vector<Construction> building;
+    std::vector<Economy> economies(2);
+    const std::vector<int> commandersEver(2, 0);
+    Match match{.armies = armies,
+                .economies = economies,
+                .projectiles = &projectiles,
+                .building = &building,
+                .commandersEver = commandersEver,
+                .victoryMode = rm::sim::VictoryMode::Annihilation};
+
+    const rm::sim::TickRate rate{};
+    const rm::TickCount pollTicks = rate.ticks(rm::sim::seconds(3.0f));
+    TickReport report{};
+    for (rm::TickCount tick = 0; tick < pollTicks; ++tick) {
+        report = rm::sim::tickSkirmish(roster.store, roster.catalog, match,
+                                       rm::sim::Terrain{field}, rate);
+    }
+
+    CHECK(report.defeated == 1);
+    CHECK(armies[1].defeated);
+    CHECK_FALSE(armies[0].defeated);
+}
+
+TEST_CASE("sandbox never defeats and never ends", "[victory]") {
+    const rm::HeightField field = flatField();
+
+    Roster roster;
+    UnitDef commanderDef;
+    commanderDef.name = "UEL0001";
+    const rm::UnitTypeIndex commander = roster.addType(commanderDef);
+    (void)roster.add(commander, 0.0f, 0.0f, 0, 12000.0f);
+    const rm::sim::UnitId theirs = roster.add(commander, 400.0f, 0.0f, 1, 12000.0f);
+
+    std::vector<Army> armies = twoSides();
+    std::vector<Projectile> projectiles;
+    std::vector<Construction> building;
+    std::vector<Economy> economies(2);
+    const std::vector<int> commandersEver{1, 1};
+    Match match{.armies = armies,
+                .economies = economies,
+                .projectiles = &projectiles,
+                .building = &building,
+                .commandersEver = commandersEver,
+                .victoryMode = rm::sim::VictoryMode::Sandbox};
+
+    roster.health(theirs).current = rm::test::mag(0.0f);
+    const rm::sim::TickRate rate{};
+    TickReport report{};
+    // Past the defeat poll and past the fifteen-second winner confirmation:
+    // CheckVictory returns immediately, so the game never ends.
+    for (rm::TickCount tick = 0; tick < rate.ticks(rm::sim::seconds(20.0f)); ++tick) {
+        report = rm::sim::tickSkirmish(roster.store, roster.catalog, match,
+                                       rm::sim::Terrain{field}, rate);
+    }
+
+    CHECK(report.defeated == 0);
+    CHECK_FALSE(armies[1].defeated);
+    CHECK_FALSE(report.matchEnded);
+    CHECK_FALSE(match.over);
+    CHECK_FALSE(match.pendingWinner.has_value());
+}
+
 TEST_CASE("a crowd with no commanders is not a draw on the first tick") {
     // `--units` scatters a decorative crowd that never had a commander. Reading "no
     // commander alive" as "lost its commander" would declare a draw before anything

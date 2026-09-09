@@ -17,15 +17,26 @@
 #include <cstddef>
 #include <optional>
 #include <span>
+#include <string_view>
 #include <vector>
 
 namespace rm::sim {
 
-/// Implemented C-210 skirmish defeat predicates.
+/// Implemented C-210 skirmish defeat predicates. Four modes map to one category
+/// test each: Assassination counts commanders, Supremacy structures and engineers
+/// minus walls, Annihilation everything minus walls, and Sandbox never ends.
 enum class VictoryMode : std::uint8_t {
     Assassination,
     Supremacy,
+    Annihilation,
+    Sandbox,
 };
+
+/// The retail lobby/scenario victory selector, recovered as a pure mapping rather
+/// than an app setting: scenario `Options.Victory` (and the FAF lobby behind it)
+/// names one of the four modes, and anything absent or unrecognized stays
+/// Assassination, which is the lobby default. Case-insensitive, like faction names.
+[[nodiscard]] VictoryMode victoryModeFromName(std::string_view name) noexcept;
 
 // One tick of a whole match, in one place.
 //

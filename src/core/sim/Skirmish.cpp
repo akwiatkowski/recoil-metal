@@ -270,7 +270,54 @@ void recomputeIncome(const UnitStore& store, const UnitCatalog& catalog, Match& 
     return alive;
 }
 
+
 } // namespace
+VictoryMode victoryModeFromName(std::string_view name) noexcept {
+    // Case-insensitive, like faction names: the lobby writes lowercase and a
+    // scenario author has no reason to agree about case.
+    const auto equalsNoCase = [](std::string_view a, std::string_view b) {
+        return std::ranges::equal(a, b, [](char x, char y) {
+            const auto lower = [](char c) {
+                return (c >= 'A' && c <= 'Z') ? static_cast<char>(c + ('a' - 'A')) : c;
+            };
+            return lower(x) == lower(y);
+        });
+    };
+    if (equalsNoCase(name, "supremacy")) {
+        return VictoryMode::Supremacy;
+    }
+    if (equalsNoCase(name, "annihilation")) {
+        return VictoryMode::Annihilation;
+    }
+    if (equalsNoCase(name, "sandbox")) {
+        return VictoryMode::Sandbox;
+    }
+    return VictoryMode::Assassination;
+}
+
+/// C-210's Annihilation predicate: everything counts but walls.
+[[nodiscard]] std::vector<int> countAnnihilationUnits(const UnitStore& store,
+                                                      const UnitCatalog& catalog,
+                                                      std::size_t armyCount) {
+    std::vector<int> alive(armyCount, 0);
+    const std::span<const MoveState> motion = store.motion();
+    const std::span<const Health> healths = store.health();
+
+    for (UnitIndex slot = 0; slot < motion.size(); ++slot) {
+        const unitdef::UnitDef* def = catalog.def(store.typeAt(slot));
+        if (def == nullptr || def->hasCategory("WALL")) {
+            continue;
+        }
+        const int army = motion[slot].armyIndex;
+        if (army < 0 || static_cast<std::size_t>(army) >= alive.size()) {
+            continue;
+        }
+        if (slot < healths.size() && healths[slot].alive()) {
+            ++alive[static_cast<std::size_t>(army)];
+        }
+    }
+    return alive;
+}
 
 std::vector<int> countCommanders(const UnitStore& store, const UnitCatalog& catalog,
                                  std::size_t armyCount) {
@@ -509,20 +556,26 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
     ++match.defeatPollElapsedTicks;
     if (match.defeatPollElapsedTicks >= defeatPollTicks) {
         match.defeatPollElapsedTicks = 0;
-        const std::vector<int> alive = match.victoryMode == VictoryMode::Supremacy
-                                           ? countSupremacyUnits(store, catalog, match.armies.size())
-                                           : countCommanders(store, catalog, match.armies.size());
-        const std::vector<bool> defeatedBefore = [&match] {
-            std::vector<bool> before;
-            before.reserve(match.armies.size());
-            for (const Army& army : match.armies) {
-                before.push_back(army.defeated);
-            }
-            return before;
-        }();
-        report.defeated = applyDefeats(match.armies, alive, match.commandersEver,
-                                       match.victoryMode != VictoryMode::Supremacy);
-
+        // Sandbox never ends: CheckVictory returns immediately (C-210), so the
+        // poll counts nothing and defeats nothing — but the timer still resets,
+        // keeping the phase deterministic across tick rates.
+        if (match.victoryMode != VictoryMode::Sandbox) {
+            const std::vector<int> alive =
+                match.victoryMode == VictoryMode::Supremacy
+                    ? countSupremacyUnits(store, catalog, match.armies.size())
+                : match.victoryMode == VictoryMode::Annihilation
+                    ? countAnnihilationUnits(store, catalog, match.armies.size())
+                    : countCommanders(store, catalog, match.armies.size());
+            const std::vector<bool> defeatedBefore = [&match] {
+                std::vector<bool> before;
+                before.reserve(match.armies.size());
+                for (const Army& army : match.armies) {
+                    before.push_back(army.defeated);
+                }
+                return before;
+            }();
+            report.defeated = applyDefeats(match.armies, alive, match.commandersEver,
+                                           match.victoryMode == VictoryMode::Assassination);
         // WHICH armies fell, not just how many. `applyDefeats` returns a count, which is all the
         // report ever needed; an event has to name the army, so the flags are compared either side
         // of the call rather than by changing a function four tests assert the return value of.
@@ -537,6 +590,7 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
                 match.defeatCleanupRemainingTicks[i] = cleanupTicks;
             }
         }
+        }
     }
 
     if (!match.over) {
@@ -544,7 +598,9 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
         // A team wins when it is the only ALLIANCE left, even if several allied armies
         // survived. `survivorCount <= 1` left a successful 2v2 running forever. No
         // survivors is the other terminal state and remains an ordinary draw.
-        const bool terminal = winner || survivorCount(match.armies) == 0;
+        // Sandbox never ends, so no alliance can be terminal even alone.
+        const bool terminal = match.victoryMode != VictoryMode::Sandbox
+            && (winner || survivorCount(match.armies) == 0);
         if (!terminal) {
             match.winnerPending = false;
             match.pendingWinner.reset();

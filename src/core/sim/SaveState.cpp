@@ -259,7 +259,10 @@ bool readEconomyArmies(PayloadReader& r, std::optional<EconomyArmyState>& state)
     for (int& value : s.commandersEver) if (!r.i32(value) || value < 0) return false;
     std::uint8_t mode{};
     bool winner{};
-    if (!r.u8(mode) || mode > static_cast<int>(VictoryMode::Supremacy)
+    // No layout change for the new modes (v17's ReclaimUnit precedent): old writers
+    // never produced values above Supremacy, so widening the accepted range cannot
+    // misread an old file.
+    if (!r.u8(mode) || mode > static_cast<int>(VictoryMode::Sandbox)
         || !readResources(r, s.baseStorage) || !readFlag(r, s.over)
         || !readFlag(r, s.winnerPending) || !readFlag(r, winner)) return false;
     s.victoryMode = static_cast<VictoryMode>(mode);
