@@ -128,6 +128,7 @@ void tickAirState(MoveState& state) noexcept {
 // `0x00EA2BA0`) — the projectile's two constants, reused by the aircraft.
 constexpr Fx kAirDt = Fx::fromRatio(1, 10);
 constexpr Fx kTrapezoidHalfStep = Fx::fromRatio(1, 20);
+constexpr Fx kTau = Fx::fromRaw(102944); // 2*pi in Q18.14
 
 /// How far ahead a flyer looks for terrain, in seconds of cruise (`C-246`: `5.0` at
 /// `0x00E4D960`, times `MaxAirspeed` times the unit's speed multiplier, which is 1 here).
@@ -479,13 +480,13 @@ void tick(std::span<Transform> transforms, std::span<MoveState> motion,
         // Turn toward the destination, but no faster than the unit can. The bearing already
         // came out of `fxPolar` above, measured from +Z toward +X — the engine's convention,
         // which the function's argument order enforces rather than a comment.
+        const Brad headingBefore = unit.heading;
         const std::int32_t error = shortestTurn(unit.heading, toTarget.bearing);
         if (state.canFly && state.airCombatState != MoveState::AirCombatState::None) {
-            // ponytail: planar PD reduction of C-221/C-247; full quaternion pitch,
-            // bank and cargo inertia require the three-axis rigid-body solver.
+            // ponytail: planar PD reduction of C-221/C-247; full quaternion pitch
+            // and cargo inertia require the three-axis rigid-body solver.
             // The rate limits the desired angular velocity, not the gain: C-247
             // 0x006c4908 adds TightTurnMultiplier*(1-dot) to KTurn for state 3.
-            constexpr Fx kTau = Fx::fromRaw(102944); // 2*pi in Q18.14
             const Fx angularError = Fx::fromRatio(error, kBradFullTurn) * kTau;
             const bool hard = state.airCombatState == MoveState::AirCombatState::HardTurn;
             const Fx rate = hard ? state.airCombatTurnSpeed : state.airTurnSpeed;
@@ -513,6 +514,24 @@ void tick(std::span<Transform> transforms, std::span<MoveState> motion,
             unit.heading = static_cast<Brad>(static_cast<std::uint16_t>(unit.heading)
                                              + static_cast<std::uint16_t>(
                                                  std::clamp(error, -maxTurn, maxTurn)));
+        }
+        // Visual bank into the turn just applied. The demand is the bank factor times
+        // the applied turn, approached at `KRoll` radians per second — the planar
+        // reduction of `C-244`'s roll axis, which owns no roll-rate state for
+        // `KRollDamping` to damp. Untouched physics: lift and turn keep their laws,
+        // and the alignment pass still owns grounded attitude (airborne flyers skip
+        // it above). Zero `KRoll` freezes the roll where it is.
+        if (state.canFly && state.airborne && state.airKRoll > Fx{}) {
+            const Fx turned =
+                Fx::fromRatio(shortestTurn(headingBefore, unit.heading), kBradFullTurn)
+                * kTau;
+            const Fx demand = state.airBankFactor * turned;
+            const Fx rollNow =
+                Fx::fromRatio(static_cast<std::int32_t>(unit.roll), kBradFullTurn) * kTau;
+            const Fx step = state.airKRoll * kAirDt;
+            const Fx rolled = rollNow + std::clamp(demand - rollNow, -step, step);
+            unit.roll = static_cast<Brad>(static_cast<std::int32_t>(
+                std::int64_t{rolled.raw()} * kBradFullTurn / kTau.raw()));
         }
 
         // Forward speed falls off with how badly the unit is still pointed the

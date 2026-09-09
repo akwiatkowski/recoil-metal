@@ -55,6 +55,7 @@ struct SaveState {
     [[nodiscard]] static std::optional<SaveState> decodeV2(std::span<const std::byte> bytes);
     /// V19 adds continuous enhancement work and its carried resource allocation.
     /// V20 adds funded unit-capture tasks with their progress budgets.
+    /// V21 adds the bank tuning (`KRoll`, `BankFactor`) to the aircraft snapshot.
     [[nodiscard]] static std::vector<std::byte> encode(const SaveState& state);
     /// Decodes all supported save versions, including v1 and the published v2 format.
     [[nodiscard]] static std::optional<SaveState> decode(std::span<const std::byte> bytes);

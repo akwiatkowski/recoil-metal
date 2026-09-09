@@ -601,6 +601,8 @@ TEST_CASE("retail interceptor combat tuning reaches its spawned mover", "[corpus
     CHECK(motion.airCombatTurnSpeed == rm::sim::Fx::fromRatio(3, 2));
     CHECK(motion.airKTurn == rm::sim::kFxOne);
     CHECK(motion.airKTurnDamping == rm::sim::Fx::fromRatio(3, 2));
+    CHECK(motion.airKRoll == rm::sim::Fx::fromInt(2));
+    CHECK(motion.airBankFactor == rm::sim::Fx::fromInt(2));
     CHECK(motion.airBreakOffTrigger == rm::sim::Fx::fromInt(120));
     CHECK(motion.airBreakOffDistance == rm::sim::Fx::fromInt(40));
     CHECK(motion.airMinChangeTicks == 30);

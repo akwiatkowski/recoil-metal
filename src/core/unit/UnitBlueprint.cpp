@@ -392,6 +392,8 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
         def.airCombatTurnSpeed = std::max(0.0f, numberOr(*airBlock, "CombatTurnSpeed", 1.0f));
         def.airKTurn = std::max(0.0f, numberOr(*airBlock, "KTurn", 3.0f));
         def.airKTurnDamping = std::max(0.0f, numberOr(*airBlock, "KTurnDamping", 3.0f));
+        def.airKRoll = std::max(0.0f, numberOr(*airBlock, "KRoll", 0.0f));
+        def.airBankFactor = std::max(0.0f, numberOr(*airBlock, "BankFactor", 0.0f));
         def.airTightTurnMultiplier = std::max(0.0f, numberOr(*airBlock, "TightTurnMultiplier", 1.0f));
         def.airBreakOffTrigger = std::max(0.0f, numberOr(*airBlock, "BreakOffTrigger", 0.0f)) * scmap::kElmosPerOgrid;
         def.airBreakOffDistance = std::max(0.0f, numberOr(*airBlock, "BreakOffDistance", 0.0f)) * scmap::kElmosPerOgrid;

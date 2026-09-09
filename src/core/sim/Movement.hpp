@@ -222,7 +222,7 @@ struct MoveState {
     AirState airState = AirState::Bottom;
 
     /// C-224's eight tactical states. Motion uses a planar angular controller;
-    /// full quaternion banking and carried-mass corrections remain outside this model.
+    /// full quaternion pitch and carried-mass corrections remain outside this model.
     enum class AirCombatState : std::uint8_t { None, HeadOn, TailChase, HardTurn, Turn, FastTurn, BreakOff, Recovery };
     AirCombatState airCombatState = AirCombatState::None;
     TickIndex airCombatDeadline = 0;
@@ -234,6 +234,10 @@ struct MoveState {
     Fx airCombatTurnSpeed = kFxOne;
     Fx airKTurn = Fx::fromInt(3);
     Fx airKTurnDamping = Fx::fromInt(3);
+    /// Roll approach rate in radians per second and bank demand per radian turned.
+    /// Zero rate (unauthored) freezes the visual roll where it is.
+    Fx airKRoll{};
+    Fx airBankFactor{};
     Fx airTightTurnMultiplier = kFxOne;
     Fx airBreakOffTrigger{};
     Fx airBreakOffDistance{};

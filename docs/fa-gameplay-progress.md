@@ -381,15 +381,17 @@ sequence. Real UEA0102 turn/recovery checkpoints continue with matching per-tick
 hashes; the inspected app pursuit replay matches 900 ticks. See ADR-091 for the
 planar controller boundary and [unit evidence](unit-capability-matrix.md).
 
-**Largest gap:** full three-axis banking/orientation torque remains outside the planar model.
-Bomb-drop prediction for state 1, the cargo mass ratio, `Hover`,
+**Largest gap:** the three-axis solver stays out — quaternion pitch, `KRollDamping`'s
+roll-rate state and the cargo mass ratio. Visual banking is in (planar reduction of
+`C-244`'s roll axis: `BankFactor` demand, `KRoll` approach, save v21, tested).
+Bomb-drop prediction for state 1, `Hover`,
 `POD`-only random initialization of the otherwise-zero `CUnitMotion+0x9c` elevation adjustment,
 staging and carrier docking (`C-225`) also remain.
 
 ```text
 /goal Finish the current air slice's retail-map and golden acceptance. Attribute the first
 hash divergence before considering a new baseline; v16 now hashes the future RNG sequence.
-Keep full banking, cargo inertia and bomb prediction explicitly separate from the implemented
+Keep the three-axis solver, cargo inertia and bomb prediction explicitly separate from the implemented
 planar states, then choose the next evidenced controller gap and refresh FA-AIR.
 ```
 

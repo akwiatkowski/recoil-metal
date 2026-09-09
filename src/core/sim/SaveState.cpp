@@ -40,6 +40,9 @@ constexpr std::uint32_t kVersion18 = 18;
 constexpr std::uint32_t kVersion19 = 19;
 /// Version 20 admits the `Capture` command kind and adds funded unit-capture tasks.
 constexpr std::uint32_t kVersion20 = 20;
+/// Version 21 adds the bank tuning (`KRoll`, `BankFactor`) to the aircraft controller
+/// snapshot; older readers stop before those two words.
+constexpr std::uint32_t kVersion21 = 21;
 // MT19937 serializes its 624 state words plus an index, all as unsigned decimal numbers separated
 // by one space. This rejects oversized malformed frames before they allocate their payload.
 constexpr std::size_t kMaxRandomStatePayload =
@@ -584,7 +587,7 @@ bool readSubMotion(PayloadReader& r, std::vector<MoveState>& motion) {
     return true;
 }
 
-void writeAirController(PayloadWriter& w, std::span<const MoveState> motion) {
+void writeAirController(PayloadWriter& w, std::span<const MoveState> motion, bool bank) {
     w.count(motion.size());
     for (const auto& state : motion) {
         w.u64(state.airCombatDeadline);
@@ -597,12 +600,17 @@ void writeAirController(PayloadWriter& w, std::span<const MoveState> motion) {
         w.u8(state.airTransportation);
         w.u8(state.airBreakOffNearTarget);
         for (auto field : kAirControllerFx) w.i32((state.*field).raw());
+        if (bank) {
+            w.i32(state.airKRoll.raw());
+            w.i32(state.airBankFactor.raw());
+        }
     }
 }
 
-bool readAirController(PayloadReader& r, std::vector<MoveState>& motion) {
+bool readAirController(PayloadReader& r, std::vector<MoveState>& motion, bool bank) {
     std::size_t count{};
-    constexpr std::size_t kRecordBytes = 8 + 5 * 4 + 3 + kAirControllerFx.size() * 4;
+    const std::size_t kRecordBytes =
+        8 + 5 * 4 + 3 + kAirControllerFx.size() * 4 + (bank ? 2 * 4 : 0);
     if (!r.count(count, kRecordBytes) || count != motion.size()) return false;
     for (auto& state : motion) {
         std::uint8_t winged{}, transport{}, near{};
@@ -618,6 +626,12 @@ bool readAirController(PayloadReader& r, std::vector<MoveState>& motion) {
             std::int32_t value{};
             if (!r.i32(value)) return false;
             state.*field = Fx::fromRaw(value);
+        }
+        if (bank) {
+            std::int32_t roll{}, factor{};
+            if (!r.i32(roll) || !r.i32(factor)) return false;
+            state.airKRoll = Fx::fromRaw(roll);
+            state.airBankFactor = Fx::fromRaw(factor);
         }
     }
     return true;
@@ -999,7 +1013,8 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
                        version >= kVersion14);
     }
     if (version >= kVersion15) writeEconomyArmies(payloadWriter, state.economyArmies);
-    if (version >= kVersion16) writeAirController(payloadWriter, state.units.motion);
+    if (version >= kVersion16)
+        writeAirController(payloadWriter, state.units.motion, version >= kVersion21);
     if (version >= kVersion18) writeSubMotion(payloadWriter, state.units.motion);
     if (version >= kVersion19) {
         writeEnhancements(payloadWriter, state.enhancements);
@@ -1043,7 +1058,7 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
                && version != kVersion10 && version != kVersion11 && version != kVersion12
                && version != kVersion13 && version != kVersion14 && version != kVersion15
                && version != kVersion16 && version != kVersion17 && version != kVersion18
-               && version != kVersion19 && version != kVersion20)
+               && version != kVersion19 && version != kVersion20 && version != kVersion21)
         || (requiredVersion && version != *requiredVersion) || !readU64(bytes, offset, tick)
         || !readU32(bytes, offset, payloadSize) || bytes.size() - offset != payloadSize) {
         return std::nullopt;
@@ -1084,7 +1099,9 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
                           version >= kVersion14, version >= kVersion16)) return std::nullopt;
     std::optional<EconomyArmyState> economyArmies;
     if (version >= kVersion15 && !readEconomyArmies(reader, economyArmies)) return std::nullopt;
-    if (version >= kVersion16 && !readAirController(reader, units.motion)) return std::nullopt;
+    if (version >= kVersion16
+        && !readAirController(reader, units.motion, version >= kVersion21))
+        return std::nullopt;
     if (version >= kVersion18 && !readSubMotion(reader, units.motion)) return std::nullopt;
     std::vector<EnhancementWork> enhancements;
     if (version >= kVersion19 && (!readEnhancements(reader, enhancements)
@@ -1123,7 +1140,7 @@ std::optional<SaveState> SaveState::decodeV2(std::span<const std::byte> bytes) {
 }
 
 std::vector<std::byte> SaveState::encode(const SaveState& state) {
-    return rm::sim::encode(state, kVersion20);
+    return rm::sim::encode(state, kVersion21);
 }
 
 std::optional<SaveState> SaveState::decode(std::span<const std::byte> bytes) {

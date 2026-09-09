@@ -401,7 +401,9 @@ TEST_CASE("historic attachment saves derive offsets from their transforms", "[sa
     constexpr std::size_t kV18SubmarineBytes = sizeof(std::uint32_t) + kSlots * 15;
     constexpr std::size_t kV19EmptyEnhancementsBytes = 2 * sizeof(std::uint32_t);
     constexpr std::size_t kV20EmptyCapturesBytes = sizeof(std::uint32_t);
-    v7.resize(v7.size() - kV20EmptyCapturesBytes - kV19EmptyEnhancementsBytes - kV18SubmarineBytes - kV16ControllerBytes - kV15AbsentEconomyBytes - kV14MotionBytes - kV10RedirectBytes - kV9SiloAmmoBytes
+    // V21 extends the controller records in place (two bank words per motion slot).
+    constexpr std::size_t kV21BankBytes = kSlots * 2 * sizeof(std::uint32_t);
+    v7.resize(v7.size() - kV21BankBytes - kV20EmptyCapturesBytes - kV19EmptyEnhancementsBytes - kV18SubmarineBytes - kV16ControllerBytes - kV15AbsentEconomyBytes - kV14MotionBytes - kV10RedirectBytes - kV9SiloAmmoBytes
               - kV8CommandStateBytes);
     writeU32(v7, 4, 7);
     writeU32(v7, 16, static_cast<std::uint32_t>(v7.size() - 20));
@@ -651,6 +653,8 @@ TEST_CASE("a current save round-trips winged-flight state", "[save-state]") {
     motion.airKTurn = rm::sim::kFxOne;
     motion.airKMove = rm::sim::kFxOne;
     motion.airBreakOffDistance = rm::sim::Fx::fromInt(40);
+    motion.airKRoll = rm::sim::Fx::fromInt(2);
+    motion.airBankFactor = rm::sim::Fx::fromInt(3);
 
     RandomStream random{std::uint32_t{1}};
     const auto bytes =
@@ -673,5 +677,7 @@ TEST_CASE("a current save round-trips winged-flight state", "[save-state]") {
     CHECK(back.airKTurn == motion.airKTurn);
     CHECK(back.airKMove == motion.airKMove);
     CHECK(back.airBreakOffDistance == motion.airBreakOffDistance);
+    CHECK(back.airKRoll == motion.airKRoll);
+    CHECK(back.airBankFactor == motion.airBankFactor);
     CHECK(SaveState::encode(*restored) == bytes);
 }

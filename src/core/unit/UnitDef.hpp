@@ -379,6 +379,14 @@ struct UnitDef {
     float airCombatTurnSpeed = 1.0f;
     float airKTurn = 3.0f;
     float airKTurnDamping = 3.0f;
+    // `KRoll`/`BankFactor` (`C-244`'s roll axis, `Air+0x58`): the planar model banks
+    // the visual roll into the turn at `KRoll` radians per second toward a demand of
+    // `BankFactor` times the turn applied this tick. `KRollDamping` and `BankForward`
+    // are deliberately unread — the first damps a roll-rate state the planar reduction
+    // has no room for, the second pitches a channel it does not own (both need the
+    // three-axis solver `Movement.hpp` names). Zero `KRoll`/`BankFactor` means no bank.
+    float airKRoll = 0.0f;
+    float airBankFactor = 0.0f;
     float airTightTurnMultiplier = 1.0f;
     float airBreakOffTrigger = 0.0f;
     float airBreakOffDistance = 0.0f;
