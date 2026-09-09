@@ -1120,6 +1120,106 @@ TEST_CASE("radar contacts acquire by score until vision has identified them") {
           == farHigh);
 }
 
+TEST_CASE("vision and radar do not see a submerged submarine", "[intel][naval]") {
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    Roster roster;
+
+    UnitDef watcher = targetDef();
+    watcher.name = "watcher";
+    watcher.visionRadiusElmos = 150.0f;
+    watcher.radarRadiusElmos = 400.0f;
+    watcher.sonarRadiusElmos = 400.0f;
+    (void)roster.add(roster.addType(watcher), 0.0f, 0.0f, 0, 100.0f);
+
+    const UnitId submerged =
+        roster.add(roster.addType(targetDef()), 0.0f, 100.0f, 1, 100.0f);
+    roster.motion(submerged).submersible = true;
+    roster.motion(submerged).submerged = true;
+    const UnitId surfaced =
+        roster.add(roster.addType(targetDef()), 0.0f, 120.0f, 1, 100.0f);
+    roster.motion(surfaced).submersible = true;
+
+    rm::sim::Intel intel;
+    intel.configure(2, rm::sim::Fx::fromInt(512), rm::sim::Fx::fromInt(512),
+                    rm::sim::VisionStyle::ForgedAlliance);
+    intel.update(roster.store, roster.catalog, armies, nullptr);
+
+    // Both hulls stand inside vision and radar range; only sonar names the sunk one.
+    CHECK(rm::sim::contactKindForUnit(0, submerged.index, roster.store, roster.catalog,
+                                      armies, intel)
+          == rm::sim::ContactKind::Sonar);
+    CHECK(rm::sim::contactKindForUnit(0, surfaced.index, roster.store, roster.catalog,
+                                      armies, intel)
+          == rm::sim::ContactKind::Seen);
+}
+
+TEST_CASE("sonar hears only naval hulls", "[intel][naval]") {
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    Roster roster;
+
+    UnitDef watcher = targetDef();
+    watcher.name = "watcher";
+    watcher.visionRadiusElmos = 150.0f;
+    watcher.sonarRadiusElmos = 400.0f;
+    (void)roster.add(roster.addType(watcher), 0.0f, 0.0f, 0, 100.0f);
+
+    const UnitId tank = roster.add(roster.addType(targetDef()), 0.0f, 300.0f, 1, 100.0f);
+    const UnitId ship = roster.add(roster.addType(targetDef()), 0.0f, 320.0f, 1, 100.0f);
+    roster.motion(ship).surfaceWater = true;
+
+    rm::sim::Intel intel;
+    intel.configure(2, rm::sim::Fx::fromInt(512), rm::sim::Fx::fromInt(512),
+                    rm::sim::VisionStyle::ForgedAlliance);
+    intel.update(roster.store, roster.catalog, armies, nullptr);
+
+    CHECK_FALSE(rm::sim::contactKindForUnit(0, tank.index, roster.store, roster.catalog,
+                                            armies, intel)
+                    .has_value());
+    CHECK(rm::sim::contactKindForUnit(0, ship.index, roster.store, roster.catalog,
+                                      armies, intel)
+          == rm::sim::ContactKind::Sonar);
+}
+
+TEST_CASE("torpedoes acquire sonar contacts, surface guns do not", "[intel][naval]") {
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    Roster roster;
+
+    UnitDef watcher = targetDef();
+    watcher.name = "watcher";
+    watcher.sonarRadiusElmos = 400.0f;
+    (void)roster.add(roster.addType(watcher), 0.0f, 0.0f, 0, 100.0f);
+
+    UnitDef hull = targetDef();
+    hull.name = "hull";
+    hull.categories = {"NAVAL"};
+    const UnitId contact =
+        roster.add(roster.addType(hull), 0.0f, 300.0f, 1, 100.0f);
+    roster.motion(contact).submersible = true;
+    roster.motion(contact).submerged = true;
+
+    Weapon torpedo = directFire(10.0f, 500.0f);
+    torpedo.targetPriorities = {{"NAVAL"}};
+    torpedo.targetsSubmerged = true;
+    Weapon surfaceGun = directFire(10.0f, 500.0f);
+    surfaceGun.targetPriorities = {{"NAVAL"}};
+    surfaceGun.targetsSubmerged = false;
+
+    rm::sim::Intel intel;
+    intel.configure(2, rm::sim::Fx::fromInt(512), rm::sim::Fx::fromInt(512),
+                    rm::sim::VisionStyle::ForgedAlliance);
+    intel.update(roster.store, roster.catalog, armies, nullptr);
+    REQUIRE(rm::sim::contactKindForUnit(0, contact.index, roster.store, roster.catalog,
+                                        armies, intel)
+            == rm::sim::ContactKind::Sonar);
+
+    CHECK(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, torpedo, roster.store, armies,
+                                 &intel, &roster.catalog)
+          == contact);
+    CHECK_FALSE(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, surfaceGun, roster.store,
+                                       armies, &intel, &roster.catalog)
+                    .has_value());
+}
+
 TEST_CASE("automatic projectile fire aims at a live radar contact's deterministic blip") {
     const std::vector<Army> armies = rm::sim::freeForAll(2);
     Roster roster;

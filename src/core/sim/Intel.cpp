@@ -726,16 +726,22 @@ std::optional<ContactKind> contactKindForUnit(int alliance, UnitIndex target,
     }
 
     const UnitCatalog::IntelRadii& hiding = catalog.intel(store.typeAt(target));
+    // Depth gates the senses, never the geometry: a submerged submarine is invisible
+    // to vision and radar however close it stands, and sonar only ever hears naval
+    // hulls — surface ships and submarines, surfaced or not. Omni still sees all.
+    const MoveState& targetMotion = store.motion()[target];
+    const bool submerged = targetMotion.submersible && targetMotion.submerged;
+    const bool naval = targetMotion.surfaceWater || targetMotion.submersible;
     if (hiding.freeIntel || intel.sees(alliance, IntelKind::Omni, at.x, at.z)
-        || (!hiding.cloak && intel.sees(alliance, IntelKind::Vision, at.x, at.z))) {
+        || (!hiding.cloak && !submerged && intel.sees(alliance, IntelKind::Vision, at.x, at.z))) {
         return ContactKind::Seen;
     }
-    if (!hiding.radarStealth
+    if (!submerged && !hiding.radarStealth
         && !intel.hiddenBy(army->alliance, HiddenKind::RadarField, at.x, at.z)
         && intel.sees(alliance, IntelKind::Radar, at.x, at.z)) {
         return ContactKind::Radar;
     }
-    if (!hiding.sonarStealth
+    if (naval && !hiding.sonarStealth
         && !intel.hiddenBy(army->alliance, HiddenKind::SonarField, at.x, at.z)
         && intel.sees(alliance, IntelKind::Sonar, at.x, at.z)) {
         return ContactKind::Sonar;

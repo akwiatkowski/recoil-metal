@@ -1042,25 +1042,38 @@ std::optional<UnitId> nearestTarget(std::array<Fx, 3> from, int fromArmy,
                 return std::nullopt;
             }
             contact = contactKindForUnit(mine->alliance, slot, store, *catalog, armies, *intel);
-            if (!contact || (*contact != ContactKind::Seen && *contact != ContactKind::Radar)) {
+            if (!contact
+                || (*contact != ContactKind::Seen && *contact != ContactKind::Radar
+                    && *contact != ContactKind::Sonar)) {
                 return std::nullopt;
             }
-            // A beam damages its target directly, so it cannot represent radar-position error.
-            // Keep radar-only automatic acquisition to projectile weapons until beam endpoints
-            // have a coherent uncertain-hit model.
-            if (*contact == ContactKind::Radar && weapon.beam) {
+            // A beam damages its target directly, so it cannot represent blip-position
+            // error. Keep blip-only automatic acquisition to projectile weapons until
+            // beam endpoints have a coherent uncertain-hit model.
+            if ((*contact == ContactKind::Radar || *contact == ContactKind::Sonar)
+                && weapon.beam) {
+                return std::nullopt;
+            }
+            // A sonar contact is acquirable exactly where its target swims: a
+            // submerged hull needs a weapon that reaches underwater, while a
+            // surfaced one takes the ordinary layer checks above. Beams stay
+            // out — they cannot represent blip-position error.
+            if (*contact == ContactKind::Sonar
+                && motion[slot].submersible && motion[slot].submerged
+                && !weapon.canTarget(false, true, sourceSubmerged)) {
                 return std::nullopt;
             }
             prioritiesApply = *contact == ContactKind::Seen
                            || intel->hasSeenEver(mine->alliance, store.idAt(slot));
         }
 
-        // A radar-only contact competes at its deterministic blip, the same estimate the
-        // muzzle aims with — truth never enters the score, the rank, or the reach check.
-        // Identity is untouched: the candidate that wins is still this slot's UnitId.
+        // A blip-only contact competes at its deterministic blip, the same estimate
+        // the muzzle aims with — truth never enters the score, the rank, or the
+        // reach check. Identity is untouched: the candidate that wins is still
+        // this slot's UnitId.
         Fx candidateX = transforms[slot].x;
         Fx candidateZ = transforms[slot].z;
-        if (contact == ContactKind::Radar) {
+        if (contact == ContactKind::Radar || contact == ContactKind::Sonar) {
             const auto blip =
                 radarBlipPosition(store.idAt(slot), candidateX, candidateZ, tick, rate);
             candidateX = blip[0];
