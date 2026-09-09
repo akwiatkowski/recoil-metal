@@ -9,7 +9,16 @@ Detailed retail evidence remains canonical in
 [`fa-exe-analysis-plan.md`](fa-exe-analysis-plan.md). This dashboard summarizes that ledger; it
 does not replace its claims, addresses, counterevidence, or confirmation gate.
 
-**Snapshot:** 2026-09-08, main through `fc38762`. The 2026-09-07 batch added
+**Snapshot:** 2026-09-09, main through `da80f5c`. Selectable FAF personalities,
+persistent scouting routes, native enhancement tasks and builder management are
+committed. Fresh SCMP_009 duels are decisive with no AI errors: easy ends at
+14:08.8, turtle at 30:59.8 and tech at 31:23.8. The easy run independently matches
+all 36,000 state hashes. An event-logged tech run records two isolated allied
+aircraft losses from authored bomber death blasts among 910 deaths, not the prior
+55-loss clustering chain. CTest passes all 1,554 entries with two optional skips;
+the unchanged 7,000-tick golden replay matches.
+
+**Previous snapshot:** 2026-09-08, main through `fc38762`. The 2026-09-07 batch added
 default structure grid snapping, engineer/station support, AUTO MEX standing
 orders, the FAF engineer-cap fix, production queued on unfinished factories,
 and authored weapon-cue pitch, instance limits and distance cutoffs. The ACU
@@ -172,7 +181,7 @@ excluded from the headline.
 | [`FA-INTEL`](#fa-intel---vision-radar-sonar-and-counter-intel) | Vision, radar, sonar, counter-intel | `WP-33` | 75% | 45% | 90% | Apply radar-position error to automatic targeting without changing contact identity or ordering. |
 | [`FA-PROGRESS`](#fa-progress---enhancements-veterancy-and-special-units) | Enhancements, veterancy, special units | `WP-34`-`36` | 35% | 20% | 35% | Complete the enhancement lifecycle specification around `CUnitScriptTask`. |
 | [`FA-TERRAIN`](#fa-terrain---mutable-terrain-and-craters) | Mutable terrain and craters | `WP-37` | 0% | 0% | 25% | Trace one crater from damage through terrain, pathing, and rendering invalidation. |
-| [`FA-AI`](#fa-ai---retail-ai-and-native-manager-boundary) | Retail AI and native manager boundary | `WP-38` | 40% | 5% | 30% | Fix reproducible late watchdog overruns and investigate nonlethal attack pressure; the 60-minute duel has no winner (2026-09-08 report). |
+| [`FA-AI`](#fa-ai---retail-ai-and-native-manager-boundary) | Retail AI and native manager boundary | `WP-38` | 40% | 5% | 30% | Complete must-scout requests, unknown-threat interest queues and continuous air flybys; current easy, turtle and tech duels are decisive. |
 | [`FA-UI`](#fa-ui---player-interface-and-advanced-controls) | Player interface and advanced controls | `WP-39`-`40` | 75% | 5% | 15% | Trace and implement the first retail data-driven command page from `WP-40`. |
 | [`FA-PRESENT`](#fa-present---animation-effects-and-audio) | Animation, effects, audio | `WP-41`-`42` | 75% | 5% | 45% | Script-driven manipulators on the authored weapon effects; then dynamic music. |
 | [`FA-PERSIST`](#fa-persist---replay-hashing-and-saveresume) | Replay, hashing, save/resume | `WP-43`-`44` | 70% | 20% | 90% | General app saves remain absent; the shared golden rebaseline is complete (`afe2867`), separate from save/resume scenario coverage. |
@@ -577,13 +586,25 @@ Latest measurement: [the September 8 one-hour duel](faf-duel-2026-09-08.md), at
 winner; both commanders finish at full current maximum health. An independent AI
 repeat matches all 36,000 hashes. Six late decision watchdog failures and four
 condition errors recur; 90 naval units contribute one shot and no kills. These
-results supersede any inference of long-match readiness from the short sanity runs.
+results superseded the short sanity runs at that revision.
+
+The September 9 current-main rerun at `da80f5c` supersedes those operational
+symptoms. Easy, turtle and tech each kill a commander and declare a winner by
+14:08.8, 30:59.8 and 31:23.8 respectively, with no watchdog, condition or thread
+errors. Easy repeatedly forms 42-unit attacks and independently matches all 36,000
+state hashes. Event-backed easy and tech runs find zero and two bomber-attributed
+allied deaths respectively; the two tech losses are isolated rather than a
+death-blast chain. See the follow-up in
+[the duel report](faf-duel-2026-09-08.md). This closes the reproduced watchdog,
+nonlethal-pressure and aircraft-chain investigations without changing balance or
+authored `DamageFriendly` behavior. Deeper retail AI architecture and naval combat
+parity remain separate gaps.
 
 ```text
-/goal Profile and fix the reproduced 46–59 minute FAF instruction-budget overruns.
-Then inspect attack targeting/grouping, naval participation and aircraft clustering;
-compare the same one-hour scenario and retain generation-safe build/economy/kill logs.
-Do not change balance or disable reclaim without a focused experiment.
+/goal Complete the next bounded scouting fidelity slice: must-scout requests,
+unknown-threat interest queues and continuous air flybys. Preserve generation-safe
+assignments and the current decisive, watchdog-clean duel behavior; retain the
+current balance, reclaim policy and authored friendly death effects.
 ```
 
 ### FA-UI - Player Interface And Advanced Controls
