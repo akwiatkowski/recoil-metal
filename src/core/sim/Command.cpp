@@ -1829,6 +1829,22 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
             }
         }
 
+        // BINGO FUEL grounds an aircraft guard (`C-183`'s refuel rung). Below a
+        // quarter tank it holds station instead of pursuing or returning: idleness
+        // runs the auto-land timer, the ground refuels it (`C-222`, `C-223`), and
+        // the still-headed order takes off again when prey or the leash calls.
+        // The quarter is an adapter convention — no retail bingo fraction was
+        // recovered — chosen so a scout's typical 400-second tank keeps a
+        // hundred-second reserve. Staging-directed RTB stays open; the ground
+        // refuel closes the loop without it.
+        constexpr Fx kBingoFuelRatio = Fx::fromRatio(1, 4);
+        const MoveState& guardMotion = store.motion()[slot];
+        if (isGuardCommand(current->kind()) && guardMotion.canFly
+            && guardMotion.fuelRatio < kBingoFuelRatio) {
+            teardownMovement(store.motion()[slot]);
+            continue;
+        }
+
         // C-183's leash is measured from the guard to the guarded unit's current position
         // (or, in retail's richer task object, its resolved guarded/build position). The
         // guardee's full blueprint width is added to half GuardScanRadius. GuardReturnRadius

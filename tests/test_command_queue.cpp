@@ -2548,3 +2548,113 @@ TEST_CASE("a guarding commander ignores an enemy outside its scan radius") {
     REQUIRE(roster.store.orders()[guard.index].active() != nullptr);
     CHECK(roster.store.orders()[guard.index].active()->kind() == CommandKind::Assist);
 }
+
+TEST_CASE("a bingo-fuel air guard holds instead of pursuing", "[guard][fuel]") {
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    const rm::sim::PassabilityGrid grid =
+        rm::sim::buildPassability(field, 0.0f, 60.0f, 0.0f);
+    rm::test::Roster roster;
+    rm::unitdef::UnitDef guardDef;
+    guardDef.name = "gunship";
+    guardDef.speedElmosPerSecond = 20.0f;
+    rm::unitdef::Weapon gun;
+    gun.label = "gunship gun";
+    gun.role = rm::unitdef::WeaponRole::DirectFire;
+    gun.targetPriorities = {{"LAND"}};
+    gun.damage = rm::sim::magFromFloat(10.0f);
+    gun.maxRange = rm::sim::fxFromFloat(100.0f);
+    gun.rateOfFire = 1.0f;
+    guardDef.weapons.push_back(gun);
+    guardDef.guardScanRadiusElmos = rm::sim::fxFromFloat(240.0f);
+    const rm::UnitTypeIndex guardType = roster.addType(guardDef);
+    rm::unitdef::UnitDef factoryDef;
+    factoryDef.name = "factory";
+    factoryDef.buildRate = 10.0f;
+    const rm::UnitTypeIndex factoryType = roster.addType(factoryDef);
+    rm::unitdef::UnitDef enemyDef;
+    enemyDef.name = "enemy";
+    enemyDef.categories = {"LAND"};
+    const rm::UnitTypeIndex enemyType = roster.addType(enemyDef);
+    const UnitId guard = roster.add(guardType, 40.0f, 40.0f, 0, 100.0f);
+    roster.store.motion()[guard.index].canFly = true;
+    roster.store.motion()[guard.index].airborne = true;
+    roster.store.motion()[guard.index].fuelRatio = rm::sim::Fx::fromRatio(1, 10);
+    const UnitId guardee = roster.add(factoryType, 44.0f, 40.0f, 0, 100.0f);
+    // The enemy sits 150 elmos out: inside the 240-elmo scan, outside the 100-elmo
+    // gun. A fueled guard would pursue; at a tenth of a tank it holds station so
+    // idleness can land it and the ground can refuel it.
+    (void)roster.add(enemyType, 40.0f, 190.0f, 1, 100.0f);
+    const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(2);
+    const std::vector<rm::sim::Player> players{rm::sim::Player{.index = 0, .army = 0}};
+    const std::vector<const rm::sim::PassabilityGrid*> grids{&grid, &grid, &grid};
+    std::vector<rm::sim::Construction> building;
+    const auto apply = [&](const CommandIssue& issue) {
+        return rm::sim::applyCommand(issue, roster.store, roster.catalog, players, armies,
+                                     terrain, [&grid](UnitId) { return &grid; }, roster.rate,
+                                     &building);
+    };
+    const CommandIssue guardOrder{.source = 0, .id = rm::commandId(0, 103), .player = 0,
+                                  .kind = CommandKind::Guard, .units = {guard}, .target = guardee};
+    REQUIRE(apply(guardOrder));
+
+    (void)rm::sim::advanceOrders(roster.store, roster.catalog, terrain, grids, roster.rate,
+                                 &building, nullptr, nullptr, nullptr, nullptr, armies);
+
+    CHECK_FALSE(roster.store.motion()[guard.index].moving);
+    REQUIRE(roster.store.orders()[guard.index].active() != nullptr);
+    CHECK(roster.store.orders()[guard.index].active()->kind() == CommandKind::Guard);
+}
+
+TEST_CASE("a fueled air guard pursues like its land twin", "[guard][fuel]") {
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    const rm::sim::PassabilityGrid grid =
+        rm::sim::buildPassability(field, 0.0f, 60.0f, 0.0f);
+    rm::test::Roster roster;
+    rm::unitdef::UnitDef guardDef;
+    guardDef.name = "gunship";
+    guardDef.speedElmosPerSecond = 20.0f;
+    rm::unitdef::Weapon gun;
+    gun.label = "gunship gun";
+    gun.role = rm::unitdef::WeaponRole::DirectFire;
+    gun.targetPriorities = {{"LAND"}};
+    gun.damage = rm::sim::magFromFloat(10.0f);
+    gun.maxRange = rm::sim::fxFromFloat(100.0f);
+    gun.rateOfFire = 1.0f;
+    guardDef.weapons.push_back(gun);
+    guardDef.guardScanRadiusElmos = rm::sim::fxFromFloat(240.0f);
+    const rm::UnitTypeIndex guardType = roster.addType(guardDef);
+    rm::unitdef::UnitDef factoryDef;
+    factoryDef.name = "factory";
+    factoryDef.buildRate = 10.0f;
+    const rm::UnitTypeIndex factoryType = roster.addType(factoryDef);
+    rm::unitdef::UnitDef enemyDef;
+    enemyDef.name = "enemy";
+    enemyDef.categories = {"LAND"};
+    const rm::UnitTypeIndex enemyType = roster.addType(enemyDef);
+    const UnitId guard = roster.add(guardType, 40.0f, 40.0f, 0, 100.0f);
+    roster.store.motion()[guard.index].canFly = true;
+    roster.store.motion()[guard.index].airborne = true;
+    const UnitId guardee = roster.add(factoryType, 44.0f, 40.0f, 0, 100.0f);
+    (void)roster.add(enemyType, 40.0f, 190.0f, 1, 100.0f);
+    const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(2);
+    const std::vector<rm::sim::Player> players{rm::sim::Player{.index = 0, .army = 0}};
+    const std::vector<const rm::sim::PassabilityGrid*> grids{&grid, &grid, &grid};
+    std::vector<rm::sim::Construction> building;
+    const auto apply = [&](const CommandIssue& issue) {
+        return rm::sim::applyCommand(issue, roster.store, roster.catalog, players, armies,
+                                     terrain, [&grid](UnitId) { return &grid; }, roster.rate,
+                                     &building);
+    };
+    const CommandIssue guardOrder{.source = 0, .id = rm::commandId(0, 104), .player = 0,
+                                  .kind = CommandKind::Guard, .units = {guard}, .target = guardee};
+    REQUIRE(apply(guardOrder));
+
+    (void)rm::sim::advanceOrders(roster.store, roster.catalog, terrain, grids, roster.rate,
+                                 &building, nullptr, nullptr, nullptr, nullptr, armies);
+
+    CHECK(roster.store.motion()[guard.index].moving);
+    REQUIRE(roster.store.orders()[guard.index].active() != nullptr);
+    CHECK(roster.store.orders()[guard.index].active()->kind() == CommandKind::Guard);
+}
