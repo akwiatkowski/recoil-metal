@@ -400,7 +400,8 @@ TEST_CASE("historic attachment saves derive offsets from their transforms", "[sa
     constexpr std::size_t kV16ControllerBytes = sizeof(std::uint32_t) + kSlots * 107;
     constexpr std::size_t kV18SubmarineBytes = sizeof(std::uint32_t) + kSlots * 15;
     constexpr std::size_t kV19EmptyEnhancementsBytes = 2 * sizeof(std::uint32_t);
-    v7.resize(v7.size() - kV19EmptyEnhancementsBytes - kV18SubmarineBytes - kV16ControllerBytes - kV15AbsentEconomyBytes - kV14MotionBytes - kV10RedirectBytes - kV9SiloAmmoBytes
+    constexpr std::size_t kV20EmptyCapturesBytes = sizeof(std::uint32_t);
+    v7.resize(v7.size() - kV20EmptyCapturesBytes - kV19EmptyEnhancementsBytes - kV18SubmarineBytes - kV16ControllerBytes - kV15AbsentEconomyBytes - kV14MotionBytes - kV10RedirectBytes - kV9SiloAmmoBytes
               - kV8CommandStateBytes);
     writeU32(v7, 4, 7);
     writeU32(v7, 16, static_cast<std::uint32_t>(v7.size() - 20));

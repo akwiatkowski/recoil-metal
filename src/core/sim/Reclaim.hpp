@@ -123,4 +123,9 @@ std::size_t reclaimUnits(UnitStore& store, const UnitCatalog& catalog,
 /// Derived from the active ReclaimUnit queue heads after dispatch; never saved.
 [[nodiscard]] std::vector<WorkClaim> collectUnitWorkClaims(const UnitStore& store);
 
+/// `value * work / total`, for positive `Mag` values, without a lossy intermediate ratio and
+/// without overflowing the 64-bit raw representation. Shared with capture budgeting, which
+/// spreads a build-energy cost over a work-tick budget the same way.
+[[nodiscard]] Mag proportionalWork(Mag value, Mag work, Mag total) noexcept;
+
 } // namespace rm::sim

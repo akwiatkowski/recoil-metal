@@ -127,6 +127,13 @@ enum class CommandKind : std::uint8_t {
     ReclaimUnit = 14,
     /// Immediate vertical-layer control; preserves the horizontal order queue.
     Dive = 15,
+    /// Take a hostile unit intact: walk into build reach and convert it, funded by energy
+    /// per beat (`core/sim/Capture.hpp`). `target` names a unit, like `ReclaimUnit` — the
+    /// kind byte is what keeps the C-157 exemption pointed at capture rather than at
+    /// salvage. Retail has one UNITCOMMAND_Capture; our numbering is already our own.
+    /// Completes with a replacement-entity transfer to the captor's army; retires when
+    /// the target is gone however it went.
+    Capture = 16,
 };
 
 [[nodiscard]] constexpr bool isGuardCommand(CommandKind kind) noexcept {

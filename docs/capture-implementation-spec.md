@@ -1,9 +1,10 @@
 # Minimum retail Capture implementation
 
-Status: specification and source investigation, 2026-09-08. Capture is not implemented.
-The smallest proposed slice is one engineer capturing one completed, unattached
-ordinary enemy land unit, with funded progress and replacement-entity transfer.
-The progress increment is now identified. General transfer parity remains open.
+Status: minimum slice implemented 2026-09-09 (`core/sim/Capture.hpp`, `CommandKind::Capture`,
+`CaptureWork` with save v20). One engineer captures one completed, unattached ordinary
+enemy land unit or structure with funded progress and replacement-entity transfer, under
+the progress contract below. General transfer parity (attachments, enhancements, fuel,
+ammo, shields) remains open, as do concurrent-captor races beyond one bar each.
 
 ## Source identity and corrections
 

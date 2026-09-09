@@ -13,6 +13,9 @@
 #include <vector>
 
 namespace rm::sim {
+// Funded unit-capture tasks (`core/sim/Capture.hpp`). Forward-declared: the economy
+// pass only names the span; the award loop in Economy.cpp sees the full type.
+struct CaptureWork;
 
 // What an army can spend, and what it is spending it on.
 //
@@ -451,9 +454,8 @@ void advanceConstruction(Construction& work) noexcept;
 void tickEconomy(Economy& economy, std::span<Construction> building,
                   std::span<RepairWork> repairs = {}, std::span<SiloAmmo> siloAmmo = {},
                   bool deferOverflow = false, std::span<UnitResourceFlow> flows = {},
-                  int armyIndex = kNoArmy, std::span<EnhancementWork> enhancements = {});
-
-/// Hand each army's over-cap excess to its allies, retail's `C-163` progressive split.
+                  int armyIndex = kNoArmy, std::span<EnhancementWork> enhancements = {},
+                  std::span<CaptureWork> captures = {});
 ///
 /// Run AFTER every army has ticked, because an army's spare capacity is only known once it
 /// has spent. Not a flat `1/n`: retail walks the recipients dividing the *remaining* excess

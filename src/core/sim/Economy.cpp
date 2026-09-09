@@ -1,4 +1,5 @@
 #include "core/sim/Economy.hpp"
+#include "core/sim/Capture.hpp"
 
 #include <algorithm>
 
@@ -109,7 +110,7 @@ void advanceConstruction(Construction& work) noexcept {
 void tickEconomy(Economy& economy, std::span<Construction> building,
                   std::span<RepairWork> repairs, std::span<SiloAmmo> siloAmmo, bool deferOverflow,
                   std::span<UnitResourceFlow> flows, int armyIndex,
-                  std::span<EnhancementWork> enhancements) {
+                  std::span<EnhancementWork> enhancements, std::span<CaptureWork> captures) {
     // Clamp only what CARRIED IN. Reclaim currently credits `stored` directly before this
     // pass, so its over-cap excess is still lost rather than becoming a hidden reserve.
     economy.stored.mass = std::max(Mag{}, std::min(economy.stored.mass, economy.storage.mass));
@@ -169,6 +170,10 @@ void tickEconomy(Economy& economy, std::span<Construction> building,
     for (const RepairWork& repair : repairs) {
         wanted += repair.demand;
         bucket(repair.demand);
+    }
+    for (const CaptureWork& work : captures) {
+        wanted += work.demand;
+        bucket(work.demand);
     }
     for (const EnhancementWork& work : enhancements) {
         const Resources demand = drainPerTick(work);
@@ -314,6 +319,18 @@ void tickEconomy(Economy& economy, std::span<Construction> building,
         if (repair.builder < flows.size()) {
             recordCharge(flows[repair.builder].unit, {.mass = granted.mass - before.mass,
                                                      .energy = granted.energy - before.energy});
+        }
+    }
+    for (CaptureWork& work : captures) {
+        // Like repairs, captures carry no allocation forward: the award beat funds
+        // this beat's demand or nothing, and the apply pass advances only fully
+        // funded beats. `funded` is the ratio the next progress step reads.
+        Resources allocated;
+        const Resources before = granted;
+        work.funded = grantAndConsume(work.demand, allocated);
+        if (work.captor < flows.size()) {
+            recordCharge(flows[work.captor].unit, {.mass = granted.mass - before.mass,
+                                                  .energy = granted.energy - before.energy});
         }
     }
     for (SiloAmmo& ammo : siloAmmo) {

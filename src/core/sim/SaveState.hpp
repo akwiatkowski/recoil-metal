@@ -46,6 +46,7 @@ struct SaveState {
     std::vector<MissileRedirect> redirects;
     std::optional<EconomyArmyState> economyArmies;
     std::vector<EnhancementWork> enhancements;
+    std::vector<CaptureWork> captures;
 
     [[nodiscard]] static std::vector<std::byte> encodeV1(const SaveState& state);
     [[nodiscard]] static std::optional<SaveState> decodeV1(std::span<const std::byte> bytes);
@@ -53,6 +54,7 @@ struct SaveState {
     [[nodiscard]] static std::vector<std::byte> encodeV2(const SaveState& state);
     [[nodiscard]] static std::optional<SaveState> decodeV2(std::span<const std::byte> bytes);
     /// V19 adds continuous enhancement work and its carried resource allocation.
+    /// V20 adds funded unit-capture tasks with their progress budgets.
     [[nodiscard]] static std::vector<std::byte> encode(const SaveState& state);
     /// Decodes all supported save versions, including v1 and the published v2 format.
     [[nodiscard]] static std::optional<SaveState> decode(std::span<const std::byte> bytes);

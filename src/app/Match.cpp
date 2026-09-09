@@ -1030,6 +1030,7 @@ void runOpponents(UnitScene& scene, const rm::vfs::Vfs& content, const rm::Heigh
                 .economies = scene.economies,
                 .projectiles = &scene.projectiles,
                 .building = &scene.building,
+                .captures = &scene.captures,
                 .siloAmmo = &scene.siloAmmo,
                 .enhancements = &scene.enhancementWork,
                 .redirects = &scene.redirects,

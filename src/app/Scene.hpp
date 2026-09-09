@@ -340,6 +340,11 @@ struct UnitScene {
     /// the others rather than filed under its owner.
     std::vector<rm::sim::Construction> building;
 
+    /// Funded unit-capture tasks, all armies together — the same world-thing reasoning
+    /// as construction above. The sim reconciles, funds and applies them; the scene
+    /// owns the vector so it survives across ticks.
+    std::vector<rm::sim::CaptureWork> captures;
+
     /// `buildable` USED TO BE HERE, and its absence is the fix (`#3090`).
     ///
     /// It was a second registry of definitions, indexed 0..N in registration order and typed

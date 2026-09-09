@@ -444,9 +444,12 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
     //    the facing gate reads as a weapon that does not work.
     // What own-side engineers are taking apart this tick, so no gun of theirs shoots it
     // (C-157). Derived from the queue heads after dispatch, consumed by aim and fire only.
-    const std::vector<WorkClaim> claims = collectUnitWorkClaims(store);
-    (void)aimAtTargets(store, catalog, match.armies, match.intel, match.projectiles,
-                          playableRect, tickIndex, rate, claims);
+    // Capture claims join the reclaim ones: own guns spare what own engineers are taking,
+    // whichever order kind is doing the taking.
+    std::vector<WorkClaim> claims = collectUnitWorkClaims(store);
+    for (const WorkClaim& claim : collectCaptureClaims(store)) {
+        claims.push_back(claim);
+    }
 
     // 3. FIRE, fly, land.
     if (match.projectiles != nullptr) {
@@ -596,6 +599,13 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
                       match.building != nullptr ? std::span<const Construction>{*match.building}
                                                 : std::span<const Construction>{});
 
+    // Funded unit captures reconcile against this tick's active Capture heads before
+    // the per-army partition below, so new tasks enter with computed budgets and
+    // retired orders leave with their progress rather than lingering.
+    if (match.captures != nullptr) {
+        syncCaptureWork(store, catalog, match.armies, *match.captures, rate);
+    }
+
     // Components are keyed by a generational UnitId. Remove before partitioning so a dead silo
     // cannot pay, and a subsequently recycled slot cannot inherit its ammunition (`C-081`).
     if (match.siloAmmo != nullptr) {
@@ -619,7 +629,8 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
         });
     }
 
-    if (match.building != nullptr || match.siloAmmo != nullptr || match.enhancements != nullptr || !repairs.empty()) {
+    if (match.building != nullptr || match.siloAmmo != nullptr || match.enhancements != nullptr || !repairs.empty()
+        || (match.captures != nullptr && !match.captures->empty())) {
         for (std::size_t army = 0; army < match.economies.size(); ++army) {
             // Partitioned per army because `tickEconomy` is documented to be given one
             // army's work, and charging the wrong one is a caller's mistake to avoid.
@@ -639,6 +650,14 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
             for (const RepairWork& repair : repairs) {
                 if (repair.armyIndex == static_cast<int>(army)) {
                     repairMine.push_back(repair);
+                }
+            }
+            std::vector<CaptureWork> captureMine;
+            if (match.captures != nullptr) {
+                for (const CaptureWork& work : *match.captures) {
+                    if (work.armyIndex == static_cast<int>(army)) {
+                        captureMine.push_back(work);
+                    }
                 }
             }
             std::vector<SiloAmmo> siloMine;
@@ -663,7 +682,9 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
 
             tickEconomy(match.economies[army], mine, repairMine, siloMine, true,
                 match.resourceFlows ? std::span<UnitResourceFlow>{*match.resourceFlows}
-                                    : std::span<UnitResourceFlow>{}, static_cast<int>(army), enhancementMine);
+                                    : std::span<UnitResourceFlow>{}, static_cast<int>(army), enhancementMine,
+                match.captures != nullptr ? std::span<CaptureWork>{captureMine}
+                                          : std::span<CaptureWork>{});
 
             // Written back over this army's entries, in order — the two lists were built
             // by the same filter in the same pass, so the nth of `mine` is the nth of
@@ -697,6 +718,16 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
                     ++repairNext;
                 }
             }
+            if (match.captures != nullptr) {
+                std::size_t next = 0;
+                for (CaptureWork& work : *match.captures) {
+                    if (work.armyIndex != static_cast<int>(army) || next >= captureMine.size()) {
+                        continue;
+                    }
+                    work = captureMine[next];
+                    ++next;
+                }
+            }
             if (match.siloAmmo != nullptr) {
                 std::size_t next = 0;
                 for (SiloAmmo& ammo : *match.siloAmmo) {
@@ -713,6 +744,12 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
         // only known once it has spent, so a share offered mid-loop would be sized against a
         // headroom that the recipient's own tick was about to change.
         shareOverflow(match.economies, match.armies);
+    }
+    // Funded captures advance after the award above, like repair work: progress, and
+    // replacement-entity transfer on completion. The transfer spawns, so this runs
+    // after every span-holding pass has finished with the store.
+    if (match.captures != nullptr) {
+        (void)applyCaptureWork(store, *match.captures, match.events);
     }
     (void)applyRepairWork(store, catalog, repairs);
 

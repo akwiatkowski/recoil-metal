@@ -3,6 +3,7 @@
 #include "core/map/HeightField.hpp"
 #include "core/sim/Army.hpp"
 #include "core/sim/Combat.hpp"
+#include "core/sim/Capture.hpp"
 #include "core/sim/Command.hpp"
 #include "core/sim/Economy.hpp"
 #include "core/sim/Events.hpp"
@@ -71,6 +72,12 @@ struct Match {
     /// the tick, because `tickEconomy` is documented to be given one army's work and
     /// charging the wrong one is a caller's mistake to avoid.
     std::vector<Construction>* building = nullptr;
+
+    /// Funded unit-capture tasks, all armies together. Partitioned per army inside
+    /// the tick like construction: `tickEconomy` awards one army's demands, and the
+    /// apply pass advances progress and transfers finished targets. Caller-owned
+    /// storage, sim-side authorship — the same split as `building`.
+    std::vector<CaptureWork>* captures = nullptr;
 
     /// CAiSiloBuildImpl-shaped state, separate from UnitStore (`C-081`).
     std::vector<SiloAmmo>* siloAmmo = nullptr;

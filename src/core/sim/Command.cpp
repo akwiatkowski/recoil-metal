@@ -3,6 +3,7 @@
 #include "core/sim/Enhancement.hpp"
 
 #include "core/sim/Combat.hpp"
+#include "core/sim/Capture.hpp"
 #include "core/sim/Movement.hpp"
 #include "core/sim/Reclaim.hpp"
 #include "core/sim/ScriptTask.hpp"
@@ -360,6 +361,8 @@ const char* commandKindName(CommandKind kind) noexcept {
         return "reclaim";
     case CommandKind::ReclaimUnit:
         return "reclaim-unit";
+    case CommandKind::Capture:
+        return "capture";
     case CommandKind::Overcharge:
         return "overcharge";
     case CommandKind::Assist:
@@ -409,6 +412,9 @@ namespace {
     }
     if (name == "reclaim-unit") {
         return CommandKind::ReclaimUnit;
+    }
+    if (name == "capture") {
+        return CommandKind::Capture;
     }
     if (name == "overcharge") {
         return CommandKind::Overcharge;
@@ -476,6 +482,21 @@ namespace {
         return army.index == targetOwner;
     });
     if (mine == armies.end() || theirs == armies.end() || !allied(*mine, *theirs)) {
+        return false;
+    }
+    return true;
+}
+
+/// Issue-time gate for Capture: a live captor with the authored CAPTURE category and
+/// a live hostile completed target the admission predicate accepts. Own and allied
+/// units are refused, like unit reclaim; commanders, aircraft, the submerged and
+/// the attached never enter the queue at all.
+[[nodiscard]] bool validCapture(const Command& command, const UnitStore& store,
+                                const UnitCatalog& catalog,
+                                std::span<const Army> armies) noexcept {
+    if (!store.alive(command.unit) || !store.health()[command.unit.index].alive()
+        || !capturableTarget(command.unit.index, command.target, store, catalog, armies)
+        || effectiveBuildPerTick(store, catalog, command.unit.index) <= Mag{}) {
         return false;
     }
     return true;
@@ -778,6 +799,10 @@ void teardownMovement(MoveState& motion) {
     }
     if (command.kind == CommandKind::ReclaimUnit
         && !validReclaimUnit(command, store, catalog, armies)) {
+        return false;
+    }
+    if (command.kind == CommandKind::Capture
+        && !validCapture(command, store, catalog, armies)) {
         return false;
     }
 
@@ -2169,6 +2194,18 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
             startPending();
             continue;
         }
+        // A capture ends when its target is gone — transferred by this captor or
+        // destroyed by anything else. The transfer leaves a stale handle behind by
+        // design, and this is what retires it; the hold block above already refused
+        // to pursue the inadmissible.
+        if (const QueuedCommand* head = orders[slot].active();
+            head != nullptr && head->kind() == CommandKind::Capture) {
+            if (!store.alive(head->target()) || !store.health()[head->target().index].alive()) {
+                (void)orders[slot].finish();
+                startPending();
+                continue;
+            }
+        }
 
         // An aggressive order with a temporary target belongs to the post-intel pass, even
         // when it is currently holding still. A stale target is cleared there and the original
@@ -2206,6 +2243,37 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
                 }
             }
             // Gone, or unreachable: the order is done. Fall through.
+        }
+
+        // THE CAPTURE HOLD, the reclaim hold's twin: the target is a unit, so it can
+        // walk away. In reach, hold still while the funded capture task converts it;
+        // short of reach, follow with a fresh route every tick. The order completes
+        // when the target is gone — transferred by this unit or destroyed by
+        // anything else. A target that stops being capturable (loaded, allied)
+        // retires the order rather than holding a progress bar that can never fill.
+        if (const QueuedCommand* head = orders[slot].active();
+            head != nullptr && head->kind() == CommandKind::Capture) {
+            if (store.alive(head->target()) && store.health()[head->target().index].alive()
+                && capturableTarget(slot, head->target(), store, catalog, armies)) {
+                MoveState& mine = store.motion()[slot];
+                const Transform& there = store.transforms()[head->target().index];
+                const Fx gap = groundDistanceElmos(positionOf(store.transforms()[slot]),
+                                                   positionOf(there));
+                if (gap <= repairReach(catalog, store.typeAt(slot), mine,
+                                       store.motion()[head->target().index])) {
+                    mine.moving = false;
+                    mine.path.clear();
+                    mine.pathIndex = 0;
+                    continue;
+                }
+                if (mine.moving) {
+                    continue;
+                }
+                if (routeUnit(slot, there.x, there.z, store, terrain, *grid)) {
+                    continue;
+                }
+            }
+            // Gone, inadmissible, or unreachable: the order is done. Fall through.
         }
 
         // THE HARVEST HOLD, the reclaim twin of the chase above: a reclaim naming a wreck
@@ -2725,6 +2793,35 @@ bool startCommand(const Command& command, UnitStore& store, const UnitCatalog& c
         const unitdef::UnitDef* target = catalog.def(store.typeAt(command.target.index));
         if (reclaimer == nullptr || target == nullptr || !reclaimer->isBuilder()
             || std::max(target->buildCostMass, target->buildCostEnergy) <= Mag{}) {
+            return false;
+        }
+        const Transform& at = store.transforms()[command.unit.index];
+        const Transform& there = store.transforms()[command.target.index];
+        const Fx reach = repairReach(catalog, store.typeAt(command.unit.index), motion,
+                                     store.motion()[command.target.index]);
+        if (groundDistanceElmos(positionOf(at), positionOf(there)) <= reach) {
+            teardownMovement(motion);
+            return true;
+        }
+        return routeUnit(command.unit.index, there.x, there.z, store, terrain, grid);
+    }
+    case CommandKind::Capture: {
+        // The capture twin of ReclaimUnit: the captor walks into build reach and the
+        // funded task does the rest. Alliance was established at issue time, like
+        // reclaim; what dispatch re-checks is the world that changed since — the
+        // target's life, the captor's capability, and the capture domain.
+        if (!store.alive(command.target) || command.target.index == command.unit.index
+            || !store.health()[command.target.index].alive()) {
+            return false;
+        }
+        const unitdef::UnitDef* captor = catalog.def(store.typeAt(command.unit.index));
+        const unitdef::UnitDef* victim = catalog.def(store.typeAt(command.target.index));
+        const MoveState& targetMotion = store.motion()[command.target.index];
+        if (captor == nullptr || victim == nullptr || !captor->isBuilder()
+            || !captor->hasCategory("CAPTURE") || victim->hasCategory("COMMAND")
+            || targetMotion.airborne
+            || (targetMotion.submersible && targetMotion.submerged)
+            || targetMotion.attached || !store.childrenOf(command.target).empty()) {
             return false;
         }
         const Transform& at = store.transforms()[command.unit.index];

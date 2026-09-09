@@ -725,6 +725,25 @@ StateHash hashMatch(const UnitStore& store, const Match& match) {
         }
     }
 
+    feed(h, match.captures != nullptr);
+    if (match.captures != nullptr) {
+        feed(h, match.captures->size());
+        for (const CaptureWork& work : *match.captures) {
+            feed(h, work.armyIndex);
+            feed(h, static_cast<std::uint64_t>(work.captor));
+            feed(h, static_cast<std::uint64_t>(work.target.index));
+            feed(h, static_cast<std::uint64_t>(work.target.generation));
+            feed(h, static_cast<std::uint64_t>(work.workTicks));
+            feed(h, static_cast<std::uint64_t>(work.progress));
+            feed(h, work.demand);
+            // The per-tick award, like construction's cached ratio: live state the
+            // next progress step reads, so a divergence in the allocator would
+            // otherwise pass the fingerprint while changing capture speed.
+            feed(h, work.funded);
+            feed(h, work.inReach);
+        }
+    }
+
     feed(h, match.siloAmmo != nullptr);
     if (match.siloAmmo != nullptr) {
         feed(h, match.siloAmmo->size());

@@ -20,42 +20,6 @@ namespace {
     }
     return nullptr;
 }
-
-/// `value * work / total`, for positive `Mag` values, without a lossy intermediate ratio and
-/// without overflowing the 64-bit raw representation. `work` is clamped to `total`, so the
-/// result cannot exceed `value`; the long-division tail handles the remainder product one bit
-/// at a time instead of constructing a 128-bit temporary C++ does not portably provide.
-[[nodiscard]] Mag proportionalWork(Mag value, Mag work, Mag total) noexcept {
-    if (value <= Mag{} || work <= Mag{} || total <= Mag{}) {
-        return Mag{};
-    }
-
-    const std::uint64_t a = static_cast<std::uint64_t>(value.raw());
-    const std::uint64_t b = static_cast<std::uint64_t>(std::min(work, total).raw());
-    const std::uint64_t d = static_cast<std::uint64_t>(total.raw());
-    const std::uint64_t whole = (a / d) * b;
-    const std::uint64_t remainderValue = a % d;
-
-    std::uint64_t quotient = 0;
-    std::uint64_t remainder = 0;
-    for (int bit = 63; bit >= 0; --bit) {
-        quotient *= 2;
-        remainder *= 2;
-        if (remainder >= d) {
-            remainder -= d;
-            ++quotient;
-        }
-        if (((b >> static_cast<unsigned>(bit)) & 1u) != 0u) {
-            remainder += remainderValue;
-            if (remainder >= d) {
-                remainder -= d;
-                ++quotient;
-            }
-        }
-    }
-    return Mag::fromRaw(static_cast<MagRaw>(whole + quotient));
-}
-
 [[nodiscard]] Fx fractionOf(Mag part, Mag total) noexcept {
     if (part <= Mag{} || total <= Mag{}) {
         return Fx{};
@@ -177,6 +141,40 @@ Mag damageFeature(FeatureStore& features, FeatureId id, Mag damage) {
     wreck->reclaimWorkRemaining = wreck->reclaimWorkTotal * wreck->reclaimFraction;
     wreck->reclaimPerBuildRate = wreck->maximumReclaimPerBuildRate / wreck->damageRatio;
     return applied;
+}
+/// `value * work / total`, for positive `Mag` values, without a lossy intermediate ratio and
+/// without overflowing the 64-bit raw representation. `work` is clamped to `total`, so the
+/// result cannot exceed `value`; the long-division tail handles the remainder product one bit
+/// at a time instead of constructing a 128-bit temporary C++ does not portably provide.
+[[nodiscard]] Mag proportionalWork(Mag value, Mag work, Mag total) noexcept {
+    if (value <= Mag{} || work <= Mag{} || total <= Mag{}) {
+        return Mag{};
+    }
+
+    const std::uint64_t a = static_cast<std::uint64_t>(value.raw());
+    const std::uint64_t b = static_cast<std::uint64_t>(std::min(work, total).raw());
+    const std::uint64_t d = static_cast<std::uint64_t>(total.raw());
+    const std::uint64_t whole = (a / d) * b;
+    const std::uint64_t remainderValue = a % d;
+
+    std::uint64_t quotient = 0;
+    std::uint64_t remainder = 0;
+    for (int bit = 63; bit >= 0; --bit) {
+        quotient *= 2;
+        remainder *= 2;
+        if (remainder >= d) {
+            remainder -= d;
+            ++quotient;
+        }
+        if (((b >> static_cast<unsigned>(bit)) & 1u) != 0u) {
+            remainder += remainderValue;
+            if (remainder >= d) {
+                remainder -= d;
+                ++quotient;
+            }
+        }
+    }
+    return Mag::fromRaw(static_cast<MagRaw>(whole + quotient));
 }
 
 std::size_t harvestReclaim(UnitStore& store, const UnitCatalog& catalog,

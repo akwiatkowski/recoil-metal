@@ -107,6 +107,7 @@ commandAvailability(std::span<const unitdef::UnitDef* const> selection) noexcept
         case sim::CommandKind::CancelFactoryBuild:
         case sim::CommandKind::Script:
         case sim::CommandKind::ReclaimUnit:  // reached through Reclaim's descriptor, not its own
+        case sim::CommandKind::Capture:  // no rack cell yet; issued through its own order path
             break;  // None has a command-rack descriptor.
         }
     }
@@ -239,7 +240,8 @@ InfoCard commandCard(const CommandDescriptor& command,
         case sim::CommandKind::Repair: return "DAMAGED ALLY";
         case sim::CommandKind::Reclaim: return "WRECK";
         case sim::CommandKind::Attack:
-        case sim::CommandKind::Overcharge: return "ENEMY UNIT";
+        case sim::CommandKind::Overcharge:
+        case sim::CommandKind::Capture: return "ENEMY UNIT";
         default: return "GROUND POSITION";
         }
     }();

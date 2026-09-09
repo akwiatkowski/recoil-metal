@@ -58,6 +58,7 @@ template <typename Order>
     }
     case CommandKind::Reclaim:
     case CommandKind::ReclaimUnit:
+    case CommandKind::Capture:
     case CommandKind::Overcharge:
     case CommandKind::Assist:
     case CommandKind::Guard:
