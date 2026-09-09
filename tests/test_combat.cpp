@@ -11,6 +11,7 @@
 #include "support/TestRoster.hpp"
 
 #include <cstdint>
+#include <cmath>
 #include <numbers>
 #include <vector>
 
@@ -303,6 +304,88 @@ TEST_CASE("point defence fires an interceptor at the nearest hostile projectile"
     CHECK(shots.back().velocity[2] == rm::test::fx(10.0f));
 }
 
+TEST_CASE("an interceptor launch leads a crossing target", "[interception][lead]") {
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    Roster roster;
+    Weapon pointDefence = directFire(10.0f, 300.0f);
+    pointDefence.targetsProjectiles = true;
+    pointDefence.firingToleranceBrads = 32768; // the crossing lead leaves the bow
+    (void)roster.add(roster.addType(gunnerDef(pointDefence)), 0.0f, 0.0f, 0, 100.0f);
+
+    // Crossing at 20 elmos a tick through (0, 4, 50). A current-position solution
+    // would leave the muzzle dead along +z; the lead bends toward +x instead.
+    std::vector<Projectile> shots{{.position = rm::test::at(0, 4, 50),
+                                   .velocity = rm::test::at(20, 0, 0),
+                                   .firedByArmy = 1,
+                                   .ticksRemaining = 100}};
+    REQUIRE(rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots,
+                                  roster.rate)
+            == 1);
+    REQUIRE(shots.size() == 2);
+    const auto launched = shots.back().velocity;
+    CHECK(launched[0] > rm::sim::Fx{});
+    // Independent pursuit estimate in doubles: two iterations at 10 elmos a tick
+    // from a 4-elmo muzzle give (9.759, 0, 2.182). The test computes the contract;
+    // the sim computes it in fixed point.
+    CHECK(rm::test::asFloat(launched[0]) == Approx(9.759).margin(0.05));
+    CHECK(rm::test::asFloat(launched[1]) == Approx(0.0).margin(0.05));
+    CHECK(rm::test::asFloat(launched[2]) == Approx(2.182).margin(0.05));
+}
+
+TEST_CASE("a led interceptor passes close by a crossing missile", "[interception][lead]") {
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    Roster roster;
+    Weapon pointDefence = directFire(10.0f, 500.0f);
+    pointDefence.targetsProjectiles = true;
+    pointDefence.firingToleranceBrads = 32768;
+    pointDefence.muzzleVelocityElmosPerSecond = 400.0f;
+    (void)roster.add(roster.addType(gunnerDef(pointDefence)), 0.0f, 0.0f, 0, 100.0f);
+
+    // A tactical crossing at 16 elmos a tick, 460 out. The interceptor flies
+    // ballistically (no homing target), so its closest approach measures the launch
+    // solution alone. The control below computes what a current-position aim would
+    // do in doubles; the sim must beat it by an order of magnitude, in fixed point.
+    std::vector<Projectile> shots{{.position = rm::test::at(-300, 60, 350),
+                                   .velocity = rm::test::at(16, 0, 0),
+                                   .firedByArmy = 1,
+                                   .ticksRemaining = 300,
+                                   .maxHealth = rm::sim::magFromFloat(1.0f),
+                                   .health = rm::sim::magFromFloat(1.0f)}};
+    REQUIRE(rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots,
+                                  roster.rate)
+            == 1);
+    REQUIRE(shots.size() == 2);
+    double closest = 1.0e9;
+    for (int tick = 0; tick < 60 && shots.size() == 2; ++tick) {
+        const auto& hostile = shots[0];
+        const auto& interceptor = shots[1];
+        const double dx = rm::test::asFloat(interceptor.position[0])
+            - rm::test::asFloat(hostile.position[0]);
+        const double dy = rm::test::asFloat(interceptor.position[1])
+            - rm::test::asFloat(hostile.position[1]);
+        const double dz = rm::test::asFloat(interceptor.position[2])
+            - rm::test::asFloat(hostile.position[2]);
+        closest = std::min(closest, std::sqrt(dx * dx + dy * dy + dz * dz));
+        rm::sim::advanceProjectiles(shots, roster.store, armies,
+                                    rm::sim::Terrain{flatField()}, roster.rate, nullptr,
+                                    &roster.catalog);
+    }
+    // No-lead control: a 40-elmo straight flight at (-300, 60, 350) from (0, 4, 0)
+    // while the missile slides +x at 16 a tick misses by over a hundred elmos.
+    double aimX = -300.0, aimY = 60.0, aimZ = 350.0;
+    double length = std::sqrt(aimX * aimX + aimY * aimY + aimZ * aimZ);
+    const double vx = 40.0 * aimX / length, vy = 40.0 * aimY / length,
+                 vz = 40.0 * aimZ / length;
+    double uncontrolled = 1.0e9;
+    for (int tick = 0; tick < 60; ++tick) {
+        const double mx = -300.0 + 16.0 * tick, my = 60.0, mz = 350.0;
+        const double ix = vx * tick, iy = 4.0 + vy * tick, iz = vz * tick;
+        const double dx = ix - mx, dy = iy - my, dz = iz - mz;
+        uncontrolled = std::min(uncontrolled, std::sqrt(dx * dx + dy * dy + dz * dz));
+    }
+    CHECK(uncontrolled > 100.0);
+    CHECK(closest < 25.0);
+}
 TEST_CASE("a counted projectile launches before its guarded silo-ammo consume") {
     const std::vector<Army> armies = rm::sim::freeForAll(2);
     Roster roster;

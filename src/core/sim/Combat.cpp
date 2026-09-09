@@ -223,6 +223,50 @@ void divertToFlareOwner(Projectile& shot, const UnitStore& store, const UnitCata
     return nearest;
 }
 
+/// The cruise speed an interceptor plans around: a homing shot spends most of its
+/// flight at its authored maximum, so the lead uses that; anything else plans on
+/// its muzzle velocity. Zero or negative plans on the target itself (see below).
+[[nodiscard]] Fx interceptorCruiseSpeed(const unitdef::Weapon& weapon, Fx muzzlePerTick,
+                                        TickRate rate) noexcept {
+    if (weapon.projectileTraits.trackTarget
+        && weapon.projectileTraits.maxSpeedElmosPerSecond > 0.0f) {
+        return rate.perTick(weapon.projectileTraits.maxSpeedElmosPerSecond);
+    }
+    return muzzlePerTick;
+}
+
+/// Where to aim an interceptor so it meets a moving target: the target's position
+/// advanced by its own velocity over the flight time, twice iterated. A homing
+/// shot re-aims every tick anyway; the lead only buys it a first heading that does
+/// not start a turn it cannot finish. Fixed point throughout, like the launch
+/// below. A zero speed or a zero distance holds the current position rather than
+/// dividing, and a stationary target aims exactly where it is.
+[[nodiscard]] std::array<Fx, 3> interceptLead(std::array<Fx, 3> from,
+                                              const Projectile& target,
+                                              Fx interceptorSpeedPerTick) noexcept {
+    std::array<Fx, 3> aim = target.position;
+    for (int step = 0; step < 2; ++step) {
+        const Fx dx = aim[0] - from[0];
+        const Fx dy = aim[1] - from[1];
+        const Fx dz = aim[2] - from[2];
+        const Fx distance = fxHypot(fxHypot(dx, dz), dy);
+        if (distance <= Fx{} || interceptorSpeedPerTick <= Fx{}) {
+            return aim;
+        }
+        const Fx flightTicks = distance / interceptorSpeedPerTick;
+        aim = {target.position[0] + target.velocity[0] * flightTicks,
+               target.position[1] + target.velocity[1] * flightTicks,
+               target.position[2] + target.velocity[2] * flightTicks};
+    }
+    return aim;
+}
+
+/// Deliberately no per-missile shooter cap: every launcher independently engages
+/// its nearest threat, spending counted ammo per shot through the silo gate.
+/// No retail source was found for assignment caps, and FAF launchers observably
+/// overkill a lone nuke rather than holding fire — inventing a cap here would
+/// diverge from that rather than converge to it.
+
 /// The biggest collision radius in the store.
 ///
 /// Needed because two of the queries below have a PER-TARGET tolerance — a big unit is easier
@@ -1163,7 +1207,14 @@ std::size_t aimAtTargets(UnitStore& store, const UnitCatalog& catalog,
                 if (projectiles != nullptr) {
                     if (const Projectile* candidate = nearestProjectileTarget(
                             from, motion[slot].armyIndex, weapon, *projectiles, armies)) {
-                        candidatePosition = candidate->position;
+                        // The facing gate reads the same lead the muzzle will fire
+                        // with, so aim and fire cannot disagree about the bearing.
+                        candidatePosition = interceptLead(
+                            from, *candidate,
+                            interceptorCruiseSpeed(
+                                weapon,
+                                catalog.weaponRates(store.typeAt(slot), w).muzzlePerTick,
+                                rate));
                     }
                 }
             } else {
@@ -1303,14 +1354,20 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
                 if (target == nullptr) {
                     continue;
                 }
-                const std::array<Fx, 3> targetPosition = target->position;
+                const UnitCatalog::WeaponRates& rates =
+                    catalog.weaponRates(store.typeAt(slot), w);
+                // Acquisition holds the current position; the muzzle fires at the
+                // intercept lead, and the facing gate reads the lead too. A fast
+                // crossing shot met head-on beats a stern chase the turn budget
+                // cannot finish.
+                const std::array<Fx, 3> targetPosition = interceptLead(
+                    from, *target,
+                    interceptorCruiseSpeed(weapon, rates.muzzlePerTick, rate));
                 if (!canFireAt(weapon, transforms[slot].heading,
                                bearingTo(from, targetPosition))) {
                     continue;
                 }
 
-                const UnitCatalog::WeaponRates& rates =
-                    catalog.weaponRates(store.typeAt(slot), w);
                 // Empty silo holds the shot entirely (`C-085`'s gate, now read); the reload
                 // is NOT consumed by waiting, so the weapon fires the tick ammo arrives.
                 if (!siloGateOpen(store.idAt(slot), weapon, siloAmmo)) {
