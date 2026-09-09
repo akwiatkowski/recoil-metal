@@ -370,7 +370,8 @@ using CommandGridForUnit = std::function<const PassabilityGrid*(UnitId)>;
 /// C-183 eligibility shared by the construction prepass and guard dispatch.
 [[nodiscard]] bool guardAllowsBuildAssistance(UnitIndex slot, const UnitStore& store,
     const UnitCatalog& catalog, std::span<const Construction> building,
-    std::span<const Army> armies, const Intel* intel, const PlayableRect* playableRect);
+    std::span<const Army> armies, const Intel* intel, const PlayableRect* playableRect,
+    TickIndex tick = 0, TickRate rate = TickRate{});
 
 /// Starts the next order for every unit that has finished its current one.
 ///
@@ -421,7 +422,8 @@ void updateAggressiveOrders(UnitStore& store, const UnitCatalog& catalog,
                              std::span<const Army> armies, const Terrain& terrain,
                              std::span<const PassabilityGrid* const> gridForType, TickRate rate,
                              const Intel* intel = nullptr,
-                             const PlayableRect* playableRect = nullptr);
+                             const PlayableRect* playableRect = nullptr,
+                             TickIndex tick = 0);
 
 // --- The log --------------------------------------------------------------------------
 //

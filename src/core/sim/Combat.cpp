@@ -938,7 +938,8 @@ std::optional<UnitId> nearestTarget(std::array<Fx, 3> from, int fromArmy,
                                        std::optional<UnitId> incumbent,
                                        const PlayableRect* playableRect,
                                        std::span<const WorkClaim> claims,
-                                       std::optional<bool> sourceSubmerged) {
+                                       std::optional<bool> sourceSubmerged, TickIndex tick,
+                                       TickRate rate) {
     if (!weapon.fires() || weapon.targetsProjectiles || weapon.targetPriorities.empty()) {
         return std::nullopt;
     }
@@ -989,15 +990,14 @@ std::optional<UnitId> nearestTarget(std::array<Fx, 3> from, int fromArmy,
         if (def != nullptr && !passesTargetRestrictions(weapon, *def)) {
             return std::nullopt;
         }
-
         bool prioritiesApply = true;
+        std::optional<ContactKind> contact;
         if (intel != nullptr) {
             const Army* mine = armyFor(fromArmy, armies);
             if (mine == nullptr || catalog == nullptr) {
                 return std::nullopt;
             }
-            const std::optional<ContactKind> contact =
-                contactKindForUnit(mine->alliance, slot, store, *catalog, armies, *intel);
+            contact = contactKindForUnit(mine->alliance, slot, store, *catalog, armies, *intel);
             if (!contact || (*contact != ContactKind::Seen && *contact != ContactKind::Radar)) {
                 return std::nullopt;
             }
@@ -1011,13 +1011,25 @@ std::optional<UnitId> nearestTarget(std::array<Fx, 3> from, int fromArmy,
                            || intel->hasSeenEver(mine->alliance, store.idAt(slot));
         }
 
-        const Fx dx = transforms[slot].x - from[0];
-        const Fx dz = transforms[slot].z - from[2];
+        // A radar-only contact competes at its deterministic blip, the same estimate the
+        // muzzle aims with — truth never enters the score, the rank, or the reach check.
+        // Identity is untouched: the candidate that wins is still this slot's UnitId.
+        Fx candidateX = transforms[slot].x;
+        Fx candidateZ = transforms[slot].z;
+        if (contact == ContactKind::Radar) {
+            const auto blip =
+                radarBlipPosition(store.idAt(slot), candidateX, candidateZ, tick, rate);
+            candidateX = blip[0];
+            candidateZ = blip[1];
+        }
+        const Fx dx = candidateX - from[0];
+        const Fx dz = candidateZ - from[2];
         const Fx distance = fxHypot(dx, dz);
         const Fx dy = transforms[slot].y > from[1] ? transforms[slot].y - from[1]
                                                     : from[1] - transforms[slot].y;
+        const std::array<Fx, 3> aimAt{candidateX, transforms[slot].y, candidateZ};
         const ReachClass reach = classifyReach(weapon, distance, dy, heading,
-                                                bearingTo(from, positionOf(transforms[slot])));
+                                                bearingTo(from, aimAt));
         if (reach == ReachClass::CannotReach || reach == ReachClass::TooClose) {
             return std::nullopt;
         }
@@ -1047,11 +1059,16 @@ std::optional<UnitId> nearestTarget(std::array<Fx, 3> from, int fromArmy,
         best = classifyCandidate(incumbent->index);
     }
 
-    // THE GRID, rather than every slot in the store (§7 P5.2). The query radius is the weapon's
-    // own reach, so a scan that used to be over every unit in the match is now over the handful
-    // within range — and `minRange` is still applied below, because a dead zone is a hole in the
-    // middle of the disc and not a smaller disc.
-    for (const UnitIndex slot : store.space().within(from[0], from[2], weapon.maxRange)) {
+    // THE GRID, rather than every slot in the store (§7 P5.2). The query radius is the
+    // weapon's own reach, so a scan that used to be over every unit in the match is now
+    // over the handful within range — widened by the blip wander while intel is active,
+    // so a contact just outside the disc can still compete from inside it. The
+    // per-candidate reach check below still decides on blip coordinates; `minRange` is
+    // still applied there, because a dead zone is a hole in the middle of the disc and
+    // not a smaller disc.
+    const Fx queryRange = intel != nullptr ? weapon.maxRange + Fx::fromInt(kRadarErrorElmos)
+                                           : weapon.maxRange;
+    for (const UnitIndex slot : store.space().within(from[0], from[2], queryRange)) {
         const std::optional<Candidate> candidate = classifyCandidate(slot);
         if (!candidate) {
             continue;
@@ -1164,7 +1181,7 @@ std::size_t aimAtTargets(UnitStore& store, const UnitCatalog& catalog,
                     candidateUnit = nearestTarget(from, motion[slot].armyIndex, weapon, store,
                                                    armies, intel, &catalog,
                                                    transforms[slot].heading, incumbent, playableRect,
-                                                   claims, sourceSubmerged);
+                                                   claims, sourceSubmerged, tick, rate);
                 }
                 if (candidateUnit) {
                     candidatePosition = !hasExplicitAttack && !weapon.beam
@@ -1339,7 +1356,7 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
                        : std::nullopt)
                 : nearestTarget(from, army, weapon, store, armies, intel, &catalog,
                                  transforms[slot].heading, health.automaticTargets[w], playableRect,
-                                 claims, sourceSubmerged);
+                                 claims, sourceSubmerged, tick, rate);
             if (!hasExplicitAttack) {
                 health.automaticTargets[w] = target.value_or(UnitId{});
             }

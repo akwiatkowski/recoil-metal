@@ -229,6 +229,11 @@ struct WorkClaim {
     int workerArmy = kNoArmy;
 };
 
+/// A radar-only contact competes at its deterministic blip position (`radarBlipPosition`),
+/// not at truth: acquisition inherits the same uncertainty the muzzle already aims with.
+/// Identity and ordering are untouched — the winner is still a UnitId, rows still beat
+/// distance, and ties still keep the first minimum. `tick`/`rate` drive the blip's drift;
+/// callers without a clock get the tick-0 blip, which is deterministic but does not wander.
 [[nodiscard]] std::optional<UnitId> nearestTarget(std::array<Fx, 3> from, int fromArmy,
                                                   const unitdef::Weapon& weapon,
                                                    const UnitStore& store,
@@ -239,7 +244,9 @@ struct WorkClaim {
                                                     std::optional<UnitId> incumbent = std::nullopt,
                                                     const PlayableRect* playableRect = nullptr,
                                                     std::span<const WorkClaim> claims = {},
-                                                    std::optional<bool> sourceSubmerged = std::nullopt);
+                                                    std::optional<bool> sourceSubmerged = std::nullopt,
+                                                    TickIndex tick = 0,
+                                                    TickRate rate = TickRate{});
 
 /// The bearing from `from` to `to`, in radians, measured the way a unit's yaw is.
 ///

@@ -76,7 +76,8 @@ stationConstructionInReach(UnitIndex slot, const UnitStore& store, const UnitCat
 
 std::size_t applyAssistance(const UnitStore& store, const UnitCatalog& catalog,
                             std::vector<Construction>& building, std::span<const Army> armies,
-                            const Intel* intel, const PlayableRect* playableRect) {
+                            const Intel* intel, const PlayableRect* playableRect,
+                            TickIndex tick, TickRate rate) {
     // Cleared first, unconditionally: last tick's help is not this tick's fact.
     for (Construction& work : building) {
         work.assistPerTick = Mag{};
@@ -99,7 +100,7 @@ std::size_t applyAssistance(const UnitStore& store, const UnitCatalog& catalog,
             || !store.alive(head->target())) {
             continue;
         }
-        if (!guardAllowsBuildAssistance(slot, store, catalog, building, armies, intel, playableRect)) {
+        if (!guardAllowsBuildAssistance(slot, store, catalog, building, armies, intel, playableRect, tick, rate)) {
             continue;
         }
 
@@ -108,8 +109,8 @@ std::size_t applyAssistance(const UnitStore& store, const UnitCatalog& catalog,
             continue;  // factory guard mirrors queued production in command dispatch
         }
 
-        const Mag rate = effectiveBuildPerTick(store, catalog, slot);
-        if (rate <= Mag{}) {
+        const Mag buildRate = effectiveBuildPerTick(store, catalog, slot);
+        if (buildRate <= Mag{}) {
             continue;
         }
 
@@ -153,7 +154,7 @@ std::size_t applyAssistance(const UnitStore& store, const UnitCatalog& catalog,
             if (work.finished() || !(work.builder == founder)) {
                 continue;
             }
-            work.assistPerTick += rate;
+            work.assistPerTick += buildRate;
             ++helping;
             break;
         }

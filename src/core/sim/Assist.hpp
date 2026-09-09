@@ -63,6 +63,7 @@ stationConstructionInReach(UnitIndex slot, const UnitStore& store, const UnitCat
 std::size_t applyAssistance(const UnitStore& store, const UnitCatalog& catalog,
                             std::vector<Construction>& building,
                             std::span<const Army> armies = {}, const Intel* intel = nullptr,
-                            const PlayableRect* playableRect = nullptr);
+                            const PlayableRect* playableRect = nullptr,
+                            TickIndex tick = 0, TickRate rate = TickRate{});
 
 } // namespace rm::sim

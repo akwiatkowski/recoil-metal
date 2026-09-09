@@ -1078,6 +1078,56 @@ TEST_CASE("automatic projectile fire aims at a live radar contact's deterministi
     CHECK(shots.front().velocity == expected.velocity);
 }
 
+TEST_CASE("automatic targeting scores radar-only contacts at their blip, not truth",
+          "[intel][targeting]") {
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    Roster roster;
+
+    Weapon weapon = directFire(10.0f, 500.0f);
+    UnitDef gunner = gunnerDef(weapon);
+    gunner.radarRadiusElmos = 400.0f; // vision stays zero: every contact is radar-only
+    (void)roster.add(roster.addType(gunner), 0.0f, 0.0f, 0, 100.0f);
+    const UnitId near =
+        roster.add(roster.addType(targetDef()), 0.0f, 150.0f, 1, 100.0f);
+    const UnitId far =
+        roster.add(roster.addType(targetDef()), 0.0f, 170.0f, 1, 100.0f);
+
+    rm::sim::Intel intel;
+    intel.configure(2, rm::sim::Fx::fromInt(512), rm::sim::Fx::fromInt(512),
+                    rm::sim::VisionStyle::ForgedAlliance);
+    intel.update(roster.store, roster.catalog, armies, nullptr);
+    REQUIRE(rm::sim::contactKindForUnit(0, near.index, roster.store, roster.catalog,
+                                        armies, intel)
+            == rm::sim::ContactKind::Radar);
+    REQUIRE(rm::sim::contactKindForUnit(0, far.index, roster.store, roster.catalog,
+                                        armies, intel)
+            == rm::sim::ContactKind::Radar);
+
+    // Truth always ranks the nearer contact first. The blip wanders up to 96 elmos,
+    // so some tick ranks them the other way round — that tick proves the score reads
+    // the blip, because nothing else moves. The search is deterministic: the blip is
+    // a pure function of unit, tick and rate.
+    rm::TickIndex flipTick = 0;
+    bool flipped = false;
+    for (rm::TickIndex tick = 0; tick < 400 && !flipped; ++tick) {
+        const auto [nearX, nearZ] = rm::sim::radarBlipPosition(
+            near, roster.transform(near).x, roster.transform(near).z, tick, roster.rate);
+        const auto [farX, farZ] = rm::sim::radarBlipPosition(
+            far, roster.transform(far).x, roster.transform(far).z, tick, roster.rate);
+        if (farX * farX + farZ * farZ < nearX * nearX + nearZ * nearZ) {
+            flipTick = tick;
+            flipped = true;
+        }
+    }
+    REQUIRE(flipped);
+
+    const auto acquired = rm::sim::nearestTarget(
+        rm::test::at(0, 0, 0), 0, weapon, roster.store, armies, &intel, &roster.catalog,
+        std::nullopt, std::nullopt, nullptr, {}, std::nullopt, flipTick, roster.rate);
+    REQUIRE(acquired.has_value());
+    CHECK(*acquired == far); // truth-nearer loses: identity survives, rank follows the blip
+}
+
 TEST_CASE("automatic targeting does not acquire sonar-only contacts") {
     const std::vector<Army> armies = rm::sim::freeForAll(2);
     Roster roster;

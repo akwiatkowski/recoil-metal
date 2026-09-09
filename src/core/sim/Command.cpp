@@ -553,7 +553,8 @@ namespace {
 
 [[nodiscard]] std::optional<UnitId> guardAttackTarget(
     UnitIndex slot, const UnitStore& store, const UnitCatalog& catalog,
-    std::span<const Army> armies, const Intel* intel, const PlayableRect* playableRect) {
+    std::span<const Army> armies, const Intel* intel, const PlayableRect* playableRect,
+    TickIndex tick = 0, TickRate rate = TickRate{}) {
     const auto* guard = catalog.def(store.typeAt(slot));
     if (armies.empty() || guard == nullptr || !guard->isMobile()
         || guard->guardScanRadiusElmos <= Fx{}) return {};
@@ -568,7 +569,8 @@ namespace {
         const auto& cache = store.health()[slot].automaticTargets;
         const auto incumbent = w < cache.size() ? std::optional{cache[w]} : std::nullopt;
         const auto found = nearestTarget(positionOf(at), store.motion()[slot].armyIndex, ranged,
-            store, armies, intel, &catalog, at.heading, incumbent, playableRect);
+            store, armies, intel, &catalog, at.heading, incumbent, playableRect,
+            {}, std::nullopt, tick, rate);
         if (!found) continue;
         const Fx distance = groundDistanceElmos(positionOf(at),
             positionOf(store.transforms()[found->index]));
@@ -592,7 +594,8 @@ namespace {
 
 bool guardAllowsBuildAssistance(UnitIndex slot, const UnitStore& store,
     const UnitCatalog& catalog, std::span<const Construction> building,
-    std::span<const Army> armies, const Intel* intel, const PlayableRect* playableRect) {
+    std::span<const Army> armies, const Intel* intel, const PlayableRect* playableRect,
+    TickIndex tick, TickRate rate) {
     if (!store.slotAlive(slot)) return false;
     const auto* head = store.orders()[slot].active();
     if (head == nullptr || !isGuardCommand(head->kind()) || !store.alive(head->target())
@@ -601,7 +604,7 @@ bool guardAllowsBuildAssistance(UnitIndex slot, const UnitStore& store,
     // The economy prepass and dispatch use the same C-183 return/attack decisions. A helper
     // cannot lend build power before dispatch chooses a higher-priority activity for it.
     return !guardReturnPosition(slot, head->target(), store, catalog, building)
-        && !guardAttackTarget(slot, store, catalog, armies, intel, playableRect);
+        && !guardAttackTarget(slot, store, catalog, armies, intel, playableRect, tick, rate);
 }
 
 bool operator==(const Command& a, const Command& b) noexcept {
@@ -1832,7 +1835,7 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
             if (guardDef != nullptr && guardDef->isMobile()
                 && guardDef->guardScanRadiusElmos > Fx{}) {
                 const std::span<const Transform> sight = store.transforms();
-                const auto prey = guardAttackTarget(slot, store, catalog, armies, intel, playableRect);
+                const auto prey = guardAttackTarget(slot, store, catalog, armies, intel, playableRect, tick, rate);
                 if (prey.has_value()) {
                     Fx reach{};
                     const bool targetAirborne = store.motion()[prey->index].airborne;
@@ -2302,7 +2305,8 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
 void updateAggressiveOrders(UnitStore& store, const UnitCatalog& catalog,
                             std::span<const Army> armies, const Terrain& terrain,
                             std::span<const PassabilityGrid* const> gridForType, TickRate rate,
-                            const Intel* intel, const PlayableRect* playableRect) {
+                            const Intel* intel, const PlayableRect* playableRect,
+                            TickIndex tick) {
     const auto armyFor = [armies](int index) -> const Army* {
         for (const Army& army : armies) {
             if (army.index == index) {
@@ -2381,7 +2385,8 @@ void updateAggressiveOrders(UnitStore& store, const UnitCatalog& catalog,
                 }
                 const std::optional<UnitId> candidate =
                     nearestTarget(from, owner, weapon, store, armies, intel, &catalog,
-                                   store.transforms()[slot].heading, std::nullopt, playableRect);
+                                   store.transforms()[slot].heading, std::nullopt, playableRect,
+                                   {}, std::nullopt, tick, rate);
                 if (!candidate) {
                     continue;
                 }

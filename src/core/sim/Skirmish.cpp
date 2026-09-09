@@ -355,7 +355,7 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
     //     (`core/sim/Assist.hpp`).
     if (match.building != nullptr) {
         (void)applyAssistance(store, catalog, *match.building, match.armies, match.intel,
-            match.playableRect ? &*match.playableRect : nullptr);
+            match.playableRect ? &*match.playableRect : nullptr, tickIndex, rate);
     }
 
     // 0. THE ORDER QUEUES, before anything moves (§7 P4.1). A unit that finished its order last
@@ -437,7 +437,7 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
     // Attack-move and patrol acquire only from the post-movement, post-intel world. Their
     // temporary target then feeds the ordinary aiming and firing passes below.
     updateAggressiveOrders(store, catalog, match.armies, terrain, match.passability, rate,
-                            match.intel, playableRect);
+                            match.intel, playableRect, tickIndex);
 
     // 2. AIM, then fire. An unturreted weapon may only shoot along the hull, so a unit
     //    that has stopped facing the wrong way has to be brought round first; otherwise
