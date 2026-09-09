@@ -1899,9 +1899,15 @@ Mag damageTargets(std::array<Fx, 3> centre, Fx radiusElmos,
     /// overlapping shields stacking is a real Forged Alliance mechanic and the old `break`
     /// silently gave it away — a probe put 150 damage into two overlapping 100-point domes and
     /// drained one to zero while the other never fired.
-    const auto shieldedFractionOver = [&shields](std::array<Fx, 3> at) {
+    const auto shieldedFractionOver = [&shields](UnitIndex target, std::array<Fx, 3> at) {
         Fx absorbed{};
         for (BlastShield& bubble : shields) {
+            // A personal bubble shelters only its generator: nearby friendlies
+            // under the same blast take it unsheltered. The bubble itself still
+            // intercepts as a swept primitive and still charges when admitted.
+            if (bubble.geometry.personalBubble && bubble.slot != target) {
+                continue;
+            }
             if (!shieldContains(bubble.geometry, bubble.centre, at)) {
                 continue;
             }
@@ -2003,7 +2009,7 @@ Mag damageTargets(std::array<Fx, 3> centre, Fx radiusElmos,
         // WHAT THE BUBBLES OVER **THIS** TARGET TAKE OFF THE SHOT. Tested against the target's
         // own position, which is the whole of `C-110`: a unit is sheltered when it is under a
         // dome, not when the explosion happens to be.
-        const Fx shielded = shieldedFractionOver(positionOf(transforms[slot]));
+        const Fx shielded = shieldedFractionOver(slot, positionOf(transforms[slot]));
         if (shielded <= Fx{}) {
             return;   // fully covered: this target takes nothing at all
         }

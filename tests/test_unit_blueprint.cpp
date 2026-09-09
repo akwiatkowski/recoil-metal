@@ -646,6 +646,34 @@ TEST_CASE("a personal shield imports its retail box collision shape") {
     CHECK(def->shield.collisionCenterElmos[2] == rm::sim::Fx::fromInt(-2));
 }
 
+TEST_CASE("bubble coverage flags parse without dropping the shield") {
+    // Previously either flag discarded the whole Shield block. Both now parse
+    // with ordinary geometry and their flags recorded for the coverage rules.
+    const Blueprint bp{"SYN0301_unit.bp", R"(
+        UnitBlueprint {
+            Physics = { MotionType = 'RULEUMT_None' },
+            SizeX = 2, SizeZ = 2,
+            Defense = {
+                MaxHealth = 500,
+                Shield = {
+                    PersonalBubble = true,
+                    TransportShield = true,
+                    ShieldMaxHealth = 9000,
+                    ShieldSize = 26,
+                },
+            },
+        }
+    )"};
+
+    const auto def = rm::unitbp::loadFile(bp.path());
+    REQUIRE(def.has_value());
+    REQUIRE(def->shield.exists());
+    CHECK(def->shield.personalBubble);
+    CHECK(def->shield.transportShield);
+    CHECK(def->shield.maximum == rm::sim::Mag::fromInt(9000));
+    CHECK(def->shield.radiusElmos == rm::sim::Fx::fromInt(104));
+}
+
 TEST_CASE("a blueprint with no Physics table is refused, not read as a building") {
     // A building has a Physics table stating RULEUMT_None. A blueprint with none
     // at all is a file this reader has misunderstood, and defaulting it to

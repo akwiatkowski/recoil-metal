@@ -93,6 +93,18 @@ struct ShieldSpec {
     float regenPerSecond = 0.0f;
     sim::Seconds regenDelay{};
     sim::Seconds rechargeDelay{};
+    /// A personal bubble shelters only its owner, never nearby friendlies — the
+    /// literal reading of "personal", and the safe direction for a flag no
+    /// shipped blueprint sets (verified by corpus test): a personal bubble that
+    /// sheltered armies would be the surprising behavior. No retail source was
+    /// found (absent from every archive, including shield.lua), so this is
+    /// specified-from-name rather than retail-evidenced.
+    bool personalBubble = false;
+    /// Transport shields parse but behave as ordinary bubbles for now: whether
+    /// cargo rides inside or outside the coverage is undecidable without a
+    /// retail source, and attached children already sit inside the dome by
+    /// position. Recorded so the distinction survives parsing.
+    bool transportShield = false;
 
     [[nodiscard]] bool exists() const noexcept {
         const bool geometry = shape == ShieldShape::Sphere

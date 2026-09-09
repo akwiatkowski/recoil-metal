@@ -224,3 +224,26 @@ TEST_CASE("a retail engineer resolves its authored builder arm onto its model", 
               return flags != 0U;
           }) > 0);
 }
+
+TEST_CASE("no shipped blueprint sets PersonalBubble or TransportShield", "[corpus]") {
+    // The two shield-coverage flags are specified-from-name in `ShieldSpec` because
+    // no retail source was found — not in any archive's Lua or blueprints. This
+    // pins that reading across the whole unit corpus, so the first content that
+    // sets either flag fails loudly instead of silently taking fallback behavior.
+    const std::filesystem::path units = gamedata() / "units.scd";
+    if (!std::filesystem::exists(units)) {
+        SKIP("no retail install at " + gamedata().string());
+    }
+
+    rm::vfs::Vfs vfs;
+    REQUIRE(vfs.mountArchive(units));
+    const auto blueprints = vfs.list("/units", "_unit.bp");
+    REQUIRE(blueprints.size() == 568);
+    for (const std::string& path : blueprints) {
+        const auto source = vfs.read(path);
+        REQUIRE(source.has_value());
+        const std::string text{reinterpret_cast<const char*>(source->data()), source->size()};
+        CHECK(text.find("PersonalBubble") == std::string::npos);
+        CHECK(text.find("TransportShield") == std::string::npos);
+    }
+}

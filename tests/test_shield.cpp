@@ -162,6 +162,63 @@ TEST_CASE("overlapping bubbles both absorb, and their protection stacks") {
     CHECK(roster.health(second).shield.current == rm::sim::Mag{});
 }
 
+TEST_CASE("a personal bubble shelters its owner but not a bystander", "[shield]") {
+    // No shipped blueprint sets PersonalBubble (pinned by corpus test below), so
+    // this exercises the specified-from-name semantics on a synthetic carrier:
+    // "personal" means owner-only. The bystander stands inside the same dome as
+    // the generator and still takes the blast unsheltered.
+    rm::test::Roster roster;
+    rm::unitdef::UnitDef personal = shieldDef();
+    personal.name = "personal_bubble";
+    personal.shield.personalBubble = true;
+    const rm::UnitTypeIndex shieldType = roster.addType(personal);
+    const rm::UnitTypeIndex targetType = roster.addType(plainDef());
+    const rm::sim::UnitId generator = roster.add(shieldType, 0.0f, 0.0f, 1, 100.0f);
+    const rm::sim::UnitId bystander = roster.add(targetType, 20.0f, 0.0f, 1, 100.0f);
+    const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(2);
+    rm::sim::EventQueue events;
+
+    const rm::sim::Mag dealt = rm::sim::damageArea(
+        rm::test::at(20, 0, 0), rm::sim::Fx{}, rm::unitdef::flatDamage(rm::sim::Mag::fromInt(40)),
+        0, roster.store, armies, &roster.catalog, {}, &events);
+
+    // The bystander takes the blast unsheltered, and the bubble pays nothing:
+    // it covered no damaged target.
+    CHECK(rm::test::asFloat(dealt) == Approx(40.0f));
+    CHECK(rm::test::asFloat(roster.health(bystander).current) == Approx(60.0f));
+    CHECK(rm::test::asFloat(roster.health(generator).shield.current) == Approx(100.0f));
+
+    // The same blast at the owner is sheltered and charges the bubble.
+    const rm::sim::Mag sheltered = rm::sim::damageArea(
+        rm::test::at(0, 0, 0), rm::sim::Fx{}, rm::unitdef::flatDamage(rm::sim::Mag::fromInt(40)),
+        0, roster.store, armies, &roster.catalog, {}, &events);
+    // `dealt` counts absorption too: the 40 went into the bubble, none into hull.
+    CHECK(rm::test::asFloat(sheltered) == Approx(40.0f));
+    CHECK(rm::test::asFloat(roster.health(generator).shield.current) == Approx(60.0f));
+    CHECK(rm::test::asFloat(roster.health(bystander).current) == Approx(60.0f));
+}
+TEST_CASE("a transport shield parses and behaves as an ordinary bubble", "[shield]") {
+    // TransportShield has no retail source either; it parses (rather than dropping
+    // the shield as before) and covers by position like an ordinary bubble until
+    // cargo rules are evidenced. This pins the current behavior, not the final one.
+    rm::test::Roster roster;
+    rm::unitdef::UnitDef transport = shieldDef();
+    transport.name = "transport_shield";
+    transport.shield.transportShield = true;
+    const rm::UnitTypeIndex shieldType = roster.addType(transport);
+    const rm::UnitTypeIndex targetType = roster.addType(plainDef());
+    const rm::sim::UnitId generator = roster.add(shieldType, 0.0f, 0.0f, 1, 100.0f);
+    const rm::sim::UnitId protectedUnit = roster.add(targetType, 20.0f, 0.0f, 1, 100.0f);
+    const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(2);
+
+    (void)rm::sim::damageArea(
+        rm::test::at(20, 0, 0), rm::sim::Fx{}, rm::unitdef::flatDamage(rm::sim::Mag::fromInt(40)),
+        0, roster.store, armies, &roster.catalog, {});
+
+    CHECK(rm::test::asFloat(roster.health(generator).shield.current) == Approx(60.0f));
+    CHECK(rm::test::asFloat(roster.health(protectedUnit).current) == Approx(100.0f));
+}
+
 TEST_CASE("a personal shield contains by its box instead of its nominal sphere") {
     rm::test::Roster roster;
     const rm::UnitTypeIndex shieldType = roster.addType(personalShieldDef());

@@ -138,6 +138,8 @@ UnitTypeIndex UnitCatalog::add(const unitdef::UnitDef* def, TickRate rate) {
     if (def != nullptr && def->shield.exists()) {
         shield.maximum = def->shield.maximum;
         shield.shape = def->shield.shape;
+        shield.personalBubble = def->shield.personalBubble;
+        shield.transportShield = def->shield.transportShield;
         shield.radiusElmos = def->shield.radiusElmos;
         shield.verticalOffsetElmos = def->shield.verticalOffsetElmos;
         shield.boxHalfExtentsElmos = def->shield.boxHalfExtentsElmos;

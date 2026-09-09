@@ -138,6 +138,8 @@ public:
         Mag regenPerTick{};
         TickCount regenDelay = 0;
         TickCount recharge = 0;
+        bool personalBubble = false;
+        bool transportShield = false;
 
         [[nodiscard]] bool exists() const noexcept {
             return maximum > Mag{} && boundingRadiusElmos > Fx{};
