@@ -33,10 +33,12 @@ The September 8 working-tree follow-up adds factory-upgrade, naval-placement and
 AUTO MEX native stages, plus headless tests for their shared UI/simulation paths.
 Those tests exposed and fixed naval construction routing an engineer on its
 product's water-only grid (ADR-110), and verify the retail Kennel's authored rate.
-The new native stages have not been run, at the user's request: retail-map
-click/picking acceptance remains open. Whole-WP parity remains a separate gate.
-Final headless verification of this follow-up: 1,506 passed and two optional
-skips out of 1,508 CTest entries; the unchanged 7,000-tick golden replay matches.
+The stages have now run headed on SCMP_009 (UEF compact 1x, `300fae5`): T2 and T3
+factory upgrades, naval-yard placement and completion, and the AUTO MEX three-deposit
+toggle all PASS through real tray clicks and world picking. The run also fixed the
+driver re-selecting an already-selected upgrade replacement, which applyClick would
+otherwise toggle off. Whole-WP parity remains a separate gate. The full 24-case
+matrix (four factories, three profiles, two backings) remains open.
 
 **Historical snapshot:** 2026-09-06, main through `bf0ef56`. This day lands the skirmish
 economy correction, engineer construction tiers with per-tier upgrade cancellation
