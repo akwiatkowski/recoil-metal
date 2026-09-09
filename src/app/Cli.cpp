@@ -193,14 +193,29 @@ WindowOptions parseWindow(int argc, const char* argv[]) {
 
     return search;
 }
+[[nodiscard]] std::vector<std::filesystem::path>
+orderArchivesForMount(std::vector<std::filesystem::path> archives) {
+    // The iterator promises no order, and a mount is priority — so name order first.
+    std::ranges::sort(archives);
+    // Then retail's own overrides mount later (higher priority). `lua.scd` shadows
+    // `mohodata.scd`'s short Moho stubs — `lua/sim/Unit.lua` is 142,533 bytes of game
+    // against 3,757 bytes of stub — and alphabetical order mounts mohodata later,
+    // resolving the stubs. The game reads its own Lua through the winning layer.
+    const auto rank = [](const std::filesystem::path& archive) {
+        return archive.filename() == "lua.scd" ? 1 : 0;
+    };
+    std::ranges::stable_sort(archives, {}, rank);
+    return archives;
+}
+
 
 /// Mounts the game's content: `--gamedata <dir>` for a whole install, `--archive
 /// <scd>` for one archive, `--data-dir <dir>` for a loose directory.
 ///
 /// MOUNT ORDER IS PRIORITY, last wins (core/vfs/Vfs.hpp), and the command line's
 /// order is honoured verbatim so a mod can be layered over stock content by naming
-/// it second. `--gamedata` mounts every `.scd` it finds in name order, which is what
-/// the game does absent a mod list.
+/// it second. `--gamedata` mounts every `.scd` it finds through
+/// `orderArchivesForMount`: name order, with retail's own override layers last.
 ///
 /// This replaced extracting archives to a temporary directory. That worked, and it
 /// is not what a game does: it duplicated 2.4 GiB for the two big archives, went
@@ -221,8 +236,7 @@ WindowOptions parseWindow(int argc, const char* argv[]) {
                     found.push_back(item.path());
                 }
             }
-            std::ranges::sort(found);  // the iterator promises no order; a mount is priority
-            for (const std::filesystem::path& archive : found) {
+            for (const std::filesystem::path& archive : orderArchivesForMount(std::move(found))) {
                 if (content.mountArchive(archive)) {
                     ++archives;
                 } else {

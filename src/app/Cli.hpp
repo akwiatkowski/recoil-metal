@@ -26,6 +26,7 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include <filesystem>
 
 namespace rm::app {
 
@@ -115,7 +116,12 @@ struct WindowOptions {
 [[nodiscard]] ShotOptions parseShot(int argc, const char* argv[]);
 [[nodiscard]] std::vector<UnitOptions> parseUnits(int argc, const char* argv[]);
 [[nodiscard]] rm::vfs::AssetSearch parseAssetSearch(int argc, const char* argv[]);
-[[nodiscard]] rm::vfs::Vfs parseContent(int argc, const char* argv[]);
+/// Mount order for `--gamedata`'s archives: name order, except retail's own
+/// overrides mount later (higher priority). `lua.scd` shadows `mohodata.scd`'s
+/// short Moho stubs with the real game Lua — alphabetical order would mount
+/// mohodata later and resolve the stubs instead.
+[[nodiscard]] std::vector<std::filesystem::path>
+orderArchivesForMount(std::vector<std::filesystem::path> archives);
 [[nodiscard]] float parseAnimationTime(int argc, const char* argv[]);
 [[nodiscard]] MarchOptions parseMarch(int argc, const char* argv[]);
 

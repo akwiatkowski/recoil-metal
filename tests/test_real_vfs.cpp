@@ -8,6 +8,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "app/SceneBuild.hpp"
+#include "app/Cli.hpp"
 #include "core/model/Scm.hpp"
 #include "core/model/BuilderAim.hpp"
 #include "core/unit/UnitBlueprint.hpp"
@@ -82,13 +83,18 @@ TEST_CASE("mounting the whole gamedata directory gives one namespace", "[corpus]
     if (!std::filesystem::exists(gamedata())) {
         SKIP("no retail install at " + gamedata().string());
     }
-
     rm::vfs::Vfs vfs;
     std::size_t mounted = 0;
-    // Mounted in name order, which is what the game does absent a mod list, and
-    // what makes the count below reproducible.
+    // Retail mount order, not directory order: lua.scd shadows mohodata.scd, and
+    // the count below stays reproducible either way.
+    std::vector<std::filesystem::path> archives;
     for (const auto& item : std::filesystem::directory_iterator{gamedata()}) {
-        if (item.path().extension() == ".scd" && vfs.mountArchive(item.path())) {
+        if (item.path().extension() == ".scd") {
+            archives.push_back(item.path());
+        }
+    }
+    for (const auto& archive : rm::app::orderArchivesForMount(std::move(archives))) {
+        if (vfs.mountArchive(archive)) {
             ++mounted;
         }
     }
@@ -102,6 +108,17 @@ TEST_CASE("mounting the whole gamedata directory gives one namespace", "[corpus]
     CHECK(vfs.contains("/env/Evergreen/Props/Trees/Pine06_prop.bp"));  // env.scd
     CHECK(vfs.contains("/lua/sim/Unit.lua"));                      // lua.scd
     CHECK(vfs.contains("/effects/Emitters/beam_default_emit.bp"));  // effects.scd
+
+    // The one retail override pair in the install: lua.scd and mohodata.scd both
+    // carry lua/sim/Unit.lua, and the game reads lua.scd's 142,533-byte game file,
+    // not the 3,757-byte Moho stub. Alphabetical mounting would resolve the stub.
+    rm::vfs::Vfs luaOnly;
+    REQUIRE(luaOnly.mountArchive(gamedata() / "lua.scd"));
+    const auto layered = vfs.read("/lua/sim/Unit.lua");
+    const auto authoritative = luaOnly.read("/lua/sim/Unit.lua");
+    REQUIRE(layered.has_value());
+    REQUIRE(authoritative.has_value());
+    CHECK(*layered == *authoritative);
 
     // The prop blueprints the map reader already resolves, now without extracting
     // 135 MiB of layer textures to get at them. 334 under `/env`, which is where
