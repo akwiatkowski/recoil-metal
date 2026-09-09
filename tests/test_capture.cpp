@@ -10,6 +10,7 @@
 #include "core/sim/Capture.hpp"
 #include "core/sim/Command.hpp"
 #include "core/sim/SaveState.hpp"
+#include "core/sim/StateHash.hpp"
 #include "core/sim/Skirmish.hpp"
 #include "core/sim/UnitStore.hpp"
 
@@ -17,6 +18,7 @@
 #include "support/TestRoster.hpp"
 
 #include <filesystem>
+#include <optional>
 #include <vector>
 
 using rm::sim::Command;
@@ -253,6 +255,58 @@ TEST_CASE("a capture survives the log round trip", "[capture]") {
     REQUIRE(reread->size() == 1);
     CHECK(reread->all()[0] == log.all()[0]);
     CHECK(reread->all()[0].kind == CommandKind::Capture);
+}
+
+TEST_CASE("cancelling a capture drops its progress with no transfer", "[capture]") {
+    Fixture f;
+    const UnitId captor = f.roster.add(f.captorType, 200.0f, 200.0f, 0, 100.0f);
+    const UnitId target = f.roster.add(f.structureType, 206.0f, 200.0f, 1, 100.0f);
+    REQUIRE(f.capture(captor, target));
+    f.tick(10);
+    REQUIRE(f.captures.size() == 1);
+    REQUIRE(f.captures[0].progress == 10);
+    REQUIRE(rm::sim::applyCommand(Command{.kind = CommandKind::Stop, .unit = captor},
+                                  f.roster.store, f.roster.catalog, f.players, f.armies,
+                                  f.terrain, f.grid, f.roster.rate, &f.building));
+    f.tick(50);
+    // Nothing transferred and nothing lingers: the target stands under its own
+    // army, the task is gone, and the captor has no order.
+    CHECK(f.roster.store.alive(target));
+    CHECK(f.roster.store.motion()[target.index].armyIndex == 1);
+    CHECK(f.captures.empty());
+    CHECK(f.roster.store.orders()[captor.index].empty());
+}
+
+TEST_CASE("a capture runs deterministically across identical matches", "[capture]") {
+    // Twice-built, twice-ticked, one hash: funding, progress and the transfer
+    // itself must replay exactly, which is what the state hash exists to catch.
+    const auto run = [] {
+        Fixture f;
+        const UnitId captor = f.roster.add(f.captorType, 200.0f, 200.0f, 0, 100.0f);
+        const UnitId target = f.roster.add(f.structureType, 206.0f, 200.0f, 1, 100.0f);
+        if (!f.capture(captor, target)) {
+            return std::optional<rm::StateHash>{};
+        }
+        f.tick(60);
+        const std::vector<const rm::sim::PassabilityGrid*> grids(f.roster.catalog.size(),
+                                                                 &f.grid);
+        rm::sim::Match match{.armies = f.armies,
+                             .economies = f.economies,
+                             .projectiles = &f.shots,
+                             .building = &f.building,
+                             .captures = &f.captures,
+                             .events = &f.events,
+                             .passability = grids,
+                             .commandersEver = f.commandersEver,
+                             .baseStorage = {.mass = rm::sim::magFromFloat(1000.0f),
+                                             .energy = rm::sim::magFromFloat(1000.0f)}};
+        return std::optional<rm::StateHash>{hashMatch(f.roster.store, match)};
+    };
+    const auto first = run();
+    const auto second = run();
+    REQUIRE(first.has_value());
+    REQUIRE(second.has_value());
+    CHECK(*first == *second);
 }
 
 TEST_CASE("captures survive save load", "[capture][save]") {

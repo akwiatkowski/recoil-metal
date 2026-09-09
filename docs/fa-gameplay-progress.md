@@ -171,7 +171,7 @@ excluded from the headline.
 | [`FA-CONTENT`](#fa-content---vfs-blueprints-maps-and-bootstrap) | VFS, blueprints, maps, bootstrap | `WP-05`, `06`, `09` | 65% | 35% | 55% | Trace and test exact retail SCD mount/override precedence. |
 | [`FA-CMD`](#fa-cmd---commands-controls-and-factories) | Commands, controls, factories | `WP-12`-`14` | 90% | 75% | 75% | Bingo-fuel aircraft guards hold for auto-land refuel instead of pursuing (C-183 refuel rung); ferry and staging-directed RTB stay open. Guard is accepted on the retail map (`make test-guard-ui`). |
 | [`FA-MATCH`](#fa-match---armies-setup-and-victory-rules) | Armies, setup, victory rules | `WP-10`-`11` | 60% | 25% | 85% | Recover the retail lobby/scenario victory-mode selector; do not wire a synthetic app setting. |
-| [`FA-ECON`](#fa-econ---economy-construction-and-engineering) | Economy, construction, engineering | `WP-15`-`19` | 75% | 55% | 90% | Implement the specified single-captor slice after finishing approach/admission evidence. |
+| [`FA-ECON`](#fa-econ---economy-construction-and-engineering) | Economy, construction, engineering | `WP-15`-`19` | 80% | 60% | 90% | Single-captor Capture slice is in (funded progress, transfer identity, cancellation, replay, save/load); concurrent captors and general transfer parity stay open. |
 | [`FA-LAND`](#fa-land---land-navigation-formations-and-spatial-world) | Land navigation, formations, spatial world | `WP-20`, `21`, `26` | 85% | 30% | 95% | Add bounded formation rotation or category matching without changing path-service ordering. |
 | [`FA-AIR`](#fa-air---aircraft-flight-combat-and-staging) | Aircraft flight, combat, staging | `WP-22` | 65% | 55% | 95% | Full banking remains; the shared golden rebaseline is complete (`afe2867`), without establishing retail flight parity. |
 | [`FA-WEAPONS`](#fa-weapons---targeting-weapons-and-projectiles) | Targeting, weapons, projectiles | `WP-27`-`28` | 99% | 80% | 90% | Capture is in with headless cover and save v20 (`CaptureWork`, funded progress, replacement transfer, C-157 claims); next is manual missile-launch orders. |
@@ -319,12 +319,11 @@ before updating FA-CMD.
 
 ### FA-ECON - Economy, Construction, And Engineering
 
-**Largest gap:** Capture is specified but not implemented. The
-[minimum retail Capture specification](capture-implementation-spec.md) corrects earlier
-readings: the captor supplies the cost method, attached target children add costs, and
-`Unit+0x690` counts active capture tasks. Native transfer preserves health and current layer
-as well as transform/name and two shared handles. The next evidence step is approach/admission;
-general transfer and concurrent-captor behavior remain outside the first slice.
+**Largest gap:** the single-captor Capture slice is implemented (`core/sim/Capture.hpp`,
+`CommandKind::Capture`, save v20); concurrent captors and general transfer parity stay
+open. The [minimum retail Capture specification](capture-implementation-spec.md) corrects
+earlier readings: the captor supplies the cost method, attached target children add
+costs, and `Unit+0x690` counts active capture tasks.
 Ordinary mobile construction now follows
 `C-248`: the active Build order routes the engineer toward the site and creates no construction
 until centre distance minus the builder's smaller footprint and target's larger skirt is within
@@ -337,9 +336,9 @@ experimentals, while unenhanced ACUs keep the T1 menu until enhancements are mod
 extractor upgrade chains can be cancelled per tier (`[engineer-tiers]`, `make test-upgrade-ui`).
 
 ```text
-/goal Implement the minimum Capture specification after pinning approach/admission at
-0x0060B0D6–0x0060B3BB. Use one captor and an ordinary unattached completed enemy target;
-verify funding, replacement identity, cancellation, replay and save/load headlessly.
+/goal Extend Capture past the single-captor slice: concurrent-captor races and general
+transfer parity (attachments, enhancements, fuel, ammo, shields). The minimum slice is
+in with headless funding, identity, cancellation, replay and save/load cover.
 ```
 
 ### FA-LAND - Land Navigation, Formations, And Spatial World
