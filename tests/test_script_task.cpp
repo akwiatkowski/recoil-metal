@@ -299,3 +299,64 @@ TEST_CASE("native enhancement task installs only after funded work and cancels w
     CHECK(economies[0].stored.energy == Mag{});
     roster.store.orders()[unit.index].clear();
 }
+
+TEST_CASE("enhancement removal uninstalls and restores health", "[enhancement][script-task]") {
+    using namespace rm::sim;
+    const auto field = flatField();
+    const Terrain terrain{field};
+    const auto grid = buildPassability(field, 0, 60, 0);
+    rm::test::Roster roster;
+    rm::unitdef::UnitDef def;
+    def.name = "test_commander";
+    def.buildRate = 10;
+    def.health = Mag::fromInt(100);
+    const auto parameters = rm::lua::parseTable("{ NewBuildRate=30, NewHealth=20, NewRegenRate=2 }");
+    REQUIRE(parameters);
+    def.enhancements.push_back({.name="AdvancedEngineering", .slot="LCH",
+        .buildCostMass=Mag::fromInt(8), .buildCostEnergy=Mag::fromInt(80),
+        .buildTime=Fx::fromInt(8), .parameters=*parameters});
+    def.enhancements.push_back({.name="AdvancedEngineeringRemove", .slot="LCH",
+        .prerequisite="AdvancedEngineering",
+        .buildCostMass=Mag::fromInt(1), .buildCostEnergy=Mag::fromInt(1),
+        .buildTime=Fx::fromInt(1),
+        .removes={"AdvancedEngineering", "AdvancedEngineeringRemove"}});
+    const auto unit = roster.add(roster.addType(def), 40, 40, 0, 100);
+    auto armies = freeForAll(1);
+    std::vector<Player> players{{.index=0,.army=0}};
+    std::vector<Economy> economies(1);
+    std::vector<EnhancementWork> work;
+    EnhancementTasks tasks(roster.store, roster.catalog, work);
+    const std::vector<const PassabilityGrid*> grids{&grid};
+    Match match{.armies=armies, .economies=economies, .enhancements=&work,
+        .passability=grids, .scriptTasks=&tasks, .baseStorage={Mag::fromInt(100),Mag::fromInt(1000)}};
+    const auto issue = [&](std::string name) {
+        return applyCommand(CommandIssue{.source=0,.id=roster.store.allocateCommandId(0).value(),
+            .player=0,.kind=CommandKind::Script,.units={unit},.scriptTask="EnhanceTask",
+            .scriptData={name.begin(),name.end()}}, roster.store, roster.catalog, players, armies,
+            terrain, [&](UnitId) { return &grid; }, roster.rate, nullptr, nullptr, nullptr, nullptr, &tasks);
+    };
+    // Removing what was never installed is refused in-task, not at intake: the
+    // prerequisite must occupy the slot (Unit.lua:1992-2003). The order aborts
+    // on its first dispatch, creating no work and consuming a tick.
+    REQUIRE(issue("AdvancedEngineeringRemove"));
+    (void)tickSkirmish(roster.store, roster.catalog, match, terrain);
+    CHECK(work.empty());
+    CHECK(roster.store.orders()[unit.index].empty());
+
+    REQUIRE(issue("AdvancedEngineering"));
+    economies[0].stored = {Mag::fromInt(1000),Mag::fromInt(1000)};
+    for (int tick = 0; tick < 12; ++tick) {
+        (void)tickSkirmish(roster.store, roster.catalog, match, terrain);
+    }
+    REQUIRE(issue("AdvancedEngineeringRemove"));
+    economies[0].stored = {Mag::fromInt(1),Mag::fromInt(1)};
+    (void)tickSkirmish(roster.store, roster.catalog, match, terrain);
+    REQUIRE(issue("AdvancedEngineeringRemove"));
+    economies[0].stored = {Mag::fromInt(1000),Mag::fromInt(1000)};
+    for (int tick = 0; tick < 4; ++tick) {
+        (void)tickSkirmish(roster.store, roster.catalog, match, terrain);
+    }
+    CHECK(roster.store.health()[unit.index].maximum == Mag::fromInt(100));
+    CHECK(roster.store.health()[unit.index].current == Mag::fromInt(100));
+    CHECK(work.empty());
+}

@@ -178,7 +178,7 @@ excluded from the headline.
 | [`FA-TRANSPORT`](#fa-transport---attachments-cargo-and-ferries) | Attachments, cargo, ferries | `WP-25` | 35% | 5% | 95% | Add parent/self bone indices and authored rest-bone composition to generic attachments. |
 | [`FA-MISSILES`](#fa-missiles---silos-missiles-and-interception) | Silos, missiles, interception | `WP-29` | 60% | 40% | 95% | Interceptor launches lead crossing missiles (two-iteration pursuit, max-speed cruise for homing) with headless cover; per-missile shooter caps deliberately absent (no retail source, launchers overkill). Next is the missile build queue and UI. |
 | [`FA-DAMAGE`](#fa-damage---damage-death-and-shields) | Damage, death, shields | `WP-30`-`32` | 82% | 55% | 85% | PersonalBubble shelters owner-only (specified-from-name, corpus-pinned absent); TransportShield parses as ordinary pending cargo source. Next is transport cargo coverage. |
-| [`FA-PROGRESS`](#fa-progress---enhancements-veterancy-and-special-units) | Enhancements, veterancy, special units | `WP-34`-`36` | 35% | 20% | 35% | Complete the enhancement lifecycle specification around `CUnitScriptTask`. |
+| [`FA-PROGRESS`](#fa-progress---enhancements-veterancy-and-special-units) | Enhancements, veterancy, special units | `WP-34`-`36` | 45% | 30% | 40% | Enhancement removal uninstalls with health fallback (tested); next is the Lua-side contract (SetUpgradedTo, callbacks). |
 | [`FA-TERRAIN`](#fa-terrain---mutable-terrain-and-craters) | Mutable terrain and craters | `WP-37` | 0% | 0% | 25% | Trace one crater from damage through terrain, pathing, and rendering invalidation. |
 | [`FA-AI`](#fa-ai---retail-ai-and-native-manager-boundary) | Retail AI and native manager boundary | `WP-38` | 50% | 10% | 30% | Must-scout requests, unknown-threat queues and continuous air flybys are in with headless cover; next is High/LowPriority interest lists. Current easy, turtle and tech duels are decisive. |
 | [`FA-UI`](#fa-ui---player-interface-and-advanced-controls) | Player interface and advanced controls | `WP-39`-`40` | 75% | 5% | 15% | Trace and implement the first retail data-driven command page from `WP-40`. |
@@ -524,16 +524,16 @@ FA-INTEL.
 
 ### FA-PROGRESS - Enhancements, Veterancy, And Special Units
 
-**Largest gap:** veterancy is implemented, but the generic enhancement lifecycle and bespoke
-experimental script/native interactions are largely absent. The serializable native task host is
-now available; the missing work is the Lua adapter and EnhanceTask's actual gameplay contract.
+**Largest gap:** veterancy is implemented, and the enhancement lifecycle now covers
+install, funded work, cancellation without refund, removal with health fallback,
+and save/load (`[enhancement][script-task]`). What remains is the Lua adapter and
+EnhanceTask's gameplay contract beyond the native task machinery: `SetUpgradedTo`,
+`QueueNotifyUpgrade` linkage, and bespoke experimental script/native interactions.
 
 ```text
-/goal Advance FA-PROGRESS by completing the enhancement lifecycle specification around
-IssueScript 0x006FD240, CUnitScriptTask 0x00629380, EnhanceTask.lua, SetUpgradedTo, cancellation,
-and completion callbacks. Separate native task machinery from Lua-owned rules with exact evidence,
-update WP-34 and FA-PROGRESS, and define the first host-dependent implementation slice without
-faking it in C++.
+/goal Advance FA-PROGRESS with the Lua-side enhancement contract: SetUpgradedTo and
+QueueNotifyUpgrade linkage, completion callbacks, and one bespoke experimental
+interaction, evidenced against EnhanceTask.lua. Keep native task machinery untouched.
 ```
 
 ### FA-TERRAIN - Mutable Terrain And Craters
