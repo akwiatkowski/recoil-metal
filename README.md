@@ -19,8 +19,8 @@ gets reimplemented.**
 - **Deterministic.** The sim is fixed point, proved identical at every
   optimisation level by a test. `--hash-log` writes a per-tick state hash and
   `--check-hash-log` names the tick a divergence began at.
-- **Tested.** **1,508 registered tests: 1,506 passed, two optional skips**
-  (2026-09-08). Anything that does not touch the GPU gets a failing test first,
+- **Tested.** **1,556 registered tests: 1,554 passed, two optional skips**
+  (2026-09-09). Anything that does not touch the GPU gets a failing test first,
   and parsers are tested against the
   real retail corpus — all 2034 BAR `.s3o` models and 2552 `.dds` textures.
 - **It plays.** Economy, construction, weapons, shields, aircraft, fog of war,
@@ -30,11 +30,15 @@ gets reimplemented.**
   Supreme Commander `.scmap` maps with `.scm` models, in one scene if you like.
   The loader is picked by the file's own magic bytes.
 - **Foreign AI, unmodified.** Forged Alliance's own Lua builder data and
-  condition functions choose the opponent's opening through a native placement
-  adapter. The corpus is vendored at a pinned commit and **never patched**: 254
-  engine names are bound and 107 of 255 vendored files ran in the latest
-  650-second headless sanity match. Both the two-army run and all eight map seats complete
-  without an instruction-budget overrun; its manager stack is not hosted yet.
+  condition functions drive the opponents through a native placement
+  adapter, with nine named personalities (`easy` through `turtle`, plus
+  `adaptive`/`random`), persistent scouting routes, commander enhancements
+  and native builder management. The corpus is vendored at a pinned commit and
+  **never patched**: 254 engine names are bound, and fresh hour-long SCMP_009
+  duels are decisive with no AI errors — easy ends at 14:08.8, turtle at
+  30:59.8, tech at 31:23.8 — with the easy run's independent repeat matching
+  all 36,000 state hashes. Full evidence in
+  [`docs/faf-duel-2026-09-08.md`](docs/faf-duel-2026-09-08.md).
 - **No Xcode, no assets.** Apple clang from the Command Line Tools is enough;
   shaders compile from source at runtime. Two small vendored dependencies, both
   fetched. No game content is committed, ever.
@@ -53,12 +57,14 @@ FA="/path/to/Supreme Commander Forged Alliance"
 Without any game content at all, `./build/recoil-metal` still opens on
 procedurally generated terrain.
 
-**Where it stands.** Twenty milestones are done and the twentieth ends in that
-banner. Since then the window learned to fight in real time rather than being
-handed a finished scene. The long version — every milestone, and everything
-after the match — is in [`docs/milestones.md`](docs/milestones.md); the design
-decisions and their rejected alternatives are in
-[`ADR_DECISIONS.md`](ADR_DECISIONS.md).
+ **Where it stands.** Twenty milestones are done and the twentieth ends in that
+ banner. Since then the window learned to fight in real time rather than being
+ handed a finished scene, and Forged Alliance's own AI took over the opponents:
+ selectable personalities now play decisive hour-long duels on the retail map
+ with no AI errors. The long version — every milestone, and everything
+ after the match — is in [`docs/milestones.md`](docs/milestones.md); the design
+ decisions and their rejected alternatives are in
+ [`ADR_DECISIONS.md`](ADR_DECISIONS.md).
 
 **Deliberately still open:** the Lua host arc (a real VM, a coroutine scheduler
 on the 10 Hz tick, one unit's `Unit.lua` lifecycle diffed tick by tick against
@@ -175,9 +181,9 @@ mkdir -p third_party/miniz && curl -L \
 Then build and test. Catch2 is fetched by CMake at configure time:
 
 ```sh
-make build
-make test
-#   100% tests passed, 0 tests failed out of 1508 (two optional skips)
+ make build
+ make test
+ #   100% tests passed, 0 tests failed out of 1556 (two optional skips)
 ```
 
 Or without the Makefile:
@@ -869,9 +875,8 @@ recoil-metal/
 │   ├── render/         Metal renderer (Objective-C++ where bridging)
 │   ├── platform/       AppKit window + display link (pImpl hides ObjC)
 │   └── main.mm         thin entry point
-├── tests/              Catch2 unit and integration tests; 1,508 total CTest entries
+ ├── tests/              Catch2 unit and integration tests; 1,556 total CTest entries
 ├── third_party/        metal-cpp and miniz (fetched, gitignored)
-├── vendor/ai/          foreign AI corpora at pinned commits (fetched, gitignored,
 │                       NEVER modified — `make ai`, ADR-039)
 └── docs/               research notes, benchmark results, the golden hash log
 ```

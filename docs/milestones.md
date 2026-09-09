@@ -865,34 +865,26 @@ state hash and `--check-hash-log` names the tick a divergence began at;
 Our sim is the only authority on its own behaviour, so a recorded hash log *is* the
 oracle — which is the test that black-box parity projects do not get to have.
 
-**Forged Alliance's own AI plays the opponent** ([ADR-039](../ADR_DECISIONS.md),
-[ADR-043](../ADR_DECISIONS.md)), behind `--ai-faf`. The hard rule is that vendored AI
-source is **never modified** — a change that can only be made by patching the AI is a
-change to the adapter or to the engine, or it is not made — so it is fetched at
-pinned commits by `make ai` and gitignored, never committed, and there is no local
-copy in history for anyone to quietly edit. The split is FAF's data and code decide
-*what* (builder specs walked by priority, their conditions evaluated by the corpus's
-own `/lua/editor` functions) and the adapter decides *where*. 254 engine names are
-bound, each carrying a `known` / `guessed` confidence tag, and every brain method a
-condition wants and lacks fails closed and is **counted** — the sanity report is the
-ranked to-do list, not a debugging afterthought. `make ai-sanity` is the measurement:
-a 400-second headless match runs 102 of 255 vendored files with 0 failures and no
-dead threads, and the AI builds a real opening — two extractors, a power
-generator and a land factory a side, then 50 tanks off them, 58 of 60 builds
-complete.
+**Forged Alliance's own AI plays the opponents** ([ADR-039](../ADR_DECISIONS.md),
+ [ADR-043](../ADR_DECISIONS.md)), behind `--ai-faf` with nine named personalities
+ (`easy` through `turtle`, plus `adaptive`/`random` choosing per-army templates),
+ persistent scouting routes, commander enhancements and native builder management
+ (`--ai-personality`). The hard rule is that vendored AI
+ source is **never modified** — a change that can only be made by patching the AI is a
+ change to the adapter or to the engine, or it is not made — so it is fetched at
+ pinned commits by `make ai` and gitignored, never committed, and there is no local
+ copy in history for anyone to quietly edit. The split is FAF's data and code decide
+ *what* (builder specs walked by priority, their conditions evaluated by the corpus's
+ own `/lua/editor` functions) and the adapter decides *where*. 254 engine names are
+ bound, each carrying a `known` / `guessed` confidence tag, and every brain method a
+ condition wants and lacks fails closed and is **counted** — the sanity report is the
+ ranked to-do list, not a debugging afterthought. Fresh hour-long SCMP_009 duels are
+ decisive with no AI errors — easy ends at 14:08.8, turtle at 30:59.8, tech at
+ 31:23.8 — and the easy run's independent repeat matches all 36,000 state hashes
+ ([the duel report](faf-duel-2026-09-08.md)). Repeated offscreen experiments run
+ tracked under `build/ai-matches/<name>/` via `tools/ai_match.py`.
 
-    make ai-report    # the sandbox report alone, no map, no window
-    make ai-sanity    # a headless match, closed by what was built and what ran
-    make ai-play      # bots against bots, watched
-
-Honest about what that is not: the manager stack is stood in for by a serialized
-build queue, there is one base location, threat is headcount, and the attack target
-is the adapter's choice. Each is a named stand-in to be replaced by the real corpus
-mechanism as its bindings land. The hypothesis under test is that a game-agnostic
-port can serve a foreign AI without the AI or the sim being modified — not that the
-AI will play well.
-
-**1047 tests, all green**, over 98 test files. Anything that does not touch the GPU
+**1556 tests, all green** (two optional skips without retail content), over 100 test files. Anything that does not touch the GPU
 gets a failing test first, and parsers are tested against the real retail corpus.
 Some of them test the shape of the code rather than its output — that every order
 goes through `applyCommand`, that no caller hand-rolls the sim tick order, that the
