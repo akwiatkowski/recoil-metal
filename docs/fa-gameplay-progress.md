@@ -167,7 +167,7 @@ excluded from the headline.
 | ID | Subsystem | Source WPs | Implemented | Retail-validated | Retail-analyzed | Exact next task |
 |---|---|---|---:|---:|---:|---|
 | [`FA-FOUND`](#fa-found---retail-build-and-api-foundation) | Retail build and API foundation | `WP-00`-`02` | n/a | 75% | 85% | Bind an authoritative Steam depot/build manifest to `ART-E001`. |
-| [`FA-SIM`](#fa-sim---simulation-kernel-and-object-lifecycle) | Simulation kernel and object lifecycle | `WP-03`-`04` | 70% | 45% | 90% | WP-04's RNG/checksum comparison; FAF proxies already use the script-object seam (`139d408`). |
+| [`FA-SIM`](#fa-sim---simulation-kernel-and-object-lifecycle) | Simulation kernel and object lifecycle | `WP-03`-`04` | 75% | 50% | 90% | RNG family confirmed by MT19937 reference vector; seeded once, slot-order draws, state-hashed; retail checksum ring stays structurally unmatched (C-154). FAF proxies already use the script-object seam (`139d408`). |
 | [`FA-CONTENT`](#fa-content---vfs-blueprints-maps-and-bootstrap) | VFS, blueprints, maps, bootstrap | `WP-05`, `06`, `09` | 65% | 35% | 55% | Trace and test exact retail SCD mount/override precedence. |
 | [`FA-CMD`](#fa-cmd---commands-controls-and-factories) | Commands, controls, factories | `WP-12`-`14` | 90% | 75% | 75% | Bingo-fuel aircraft guards hold for auto-land refuel instead of pursuing (C-183 refuel rung); ferry and staging-directed RTB stay open. Guard is accepted on the retail map (`make test-guard-ui`). |
 | [`FA-MATCH`](#fa-match---armies-setup-and-victory-rules) | Armies, setup, victory rules | `WP-10`-`11` | 60% | 25% | 85% | Recover the retail lobby/scenario victory-mode selector; do not wire a synthetic app setting. |

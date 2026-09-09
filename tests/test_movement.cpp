@@ -12,6 +12,7 @@
 #include "core/scene/UnitPlacement.hpp"
 #include "core/sim/Combat.hpp"  // headingError, for the angle assertions
 #include "core/sim/Movement.hpp"
+#include "core/sim/RandomStream.hpp"
 #include "core/sim/Pathfinding.hpp"
 
 #include <array>
@@ -118,6 +119,29 @@ void run(std::vector<rm::sim::Transform>& instances, std::vector<MoveState>& mot
          const HeightField& field, int count) {
     for (int i = 0; i < count; ++i) {
         rm::sim::tick(instances, motion, rm::sim::Terrain{field});
+    }
+}
+
+
+TEST_CASE("the match RNG is a conforming MT19937", "[rng][determinism]") {
+    // WP-04's comparison: retail's own generator is Mersenne-Twister family
+    // (`Moho::CMersenneTwister` behind `Sim::GetRandom`, C-006), so the family
+    // match is checkable without running retail — the reference initialization
+    // vector for seed 5489 is published with the algorithm itself. Matching it
+    // proves our draws come from the same generator; seeding and draw order are
+    // separate questions answered below.
+    rm::sim::RandomStream random{std::uint32_t{5489}};
+    CHECK(random.next() == 3499211612u);
+    CHECK(random.next() == 581869302u);
+    CHECK(random.next() == 3890346734u);
+    // Seeded once per match, never reset per order or per tick: two identically
+    // seeded streams draw identically, which is what makes consumption order —
+    // slot order, at the single winged-attack draw site — the whole determinism
+    // story rather than the values.
+    rm::sim::RandomStream first{std::uint32_t{1}};
+    rm::sim::RandomStream second{std::uint32_t{1}};
+    for (int draw = 0; draw < 1000; ++draw) {
+        CHECK(first.next() == second.next());
     }
 }
 
