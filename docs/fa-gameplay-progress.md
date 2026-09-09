@@ -175,7 +175,7 @@ excluded from the headline.
 | [`FA-LAND`](#fa-land---land-navigation-formations-and-spatial-world) | Land navigation, formations, spatial world | `WP-20`, `21`, `26` | 90% | 35% | 95% | GrowthFormation fills front rows by retail category families (tested); rotation stays engine-native without a Lua source. |
 | [`FA-NAVY`](#fa-navy---surface-and-submerged-warfare) | Surface and submerged warfare | `WP-23`-`24` | 45% | 15% | 75% | Vision/radar skip submerged hulls, sonar hears naval only, torpedoes acquire sonar contacts at blips; depth-aware navigation stays open. |
 | [`FA-WEAPONS`](#fa-weapons---targeting-weapons-and-projectiles) | Targeting, weapons, projectiles | `WP-27`-`28` | 99% | 80% | 90% | Capture is in with headless cover and save v20 (`CaptureWork`, funded progress, replacement transfer, C-157 claims); next is manual missile-launch orders. |
-| [`FA-TRANSPORT`](#fa-transport---attachments-cargo-and-ferries) | Attachments, cargo, ferries | `WP-25` | 35% | 5% | 95% | Add parent/self bone indices and authored rest-bone composition to generic attachments. |
+| [`FA-TRANSPORT`](#fa-transport---attachments-cargo-and-ferries) | Attachments, cargo, ferries | `WP-25` | 45% | 5% | 95% | Parent/self bone indices with authored rest-bone composition in generic attachments (hashed, save v22, tested); capacity, load/unload, ferry stay open. |
 | [`FA-MISSILES`](#fa-missiles---silos-missiles-and-interception) | Silos, missiles, interception | `WP-29` | 60% | 40% | 95% | Interceptor launches lead crossing missiles (two-iteration pursuit, max-speed cruise for homing) with headless cover; per-missile shooter caps deliberately absent (no retail source, launchers overkill). Next is the missile build queue and UI. |
 | [`FA-DAMAGE`](#fa-damage---damage-death-and-shields) | Damage, death, shields | `WP-30`-`32` | 82% | 55% | 85% | PersonalBubble shelters owner-only (specified-from-name, corpus-pinned absent); TransportShield parses as ordinary pending cargo source. Next is transport cargo coverage. |
 | [`FA-PROGRESS`](#fa-progress---enhancements-veterancy-and-special-units) | Enhancements, veterancy, special units | `WP-34`-`36` | 45% | 30% | 40% | Enhancement removal uninstalls with health fallback (tested); next is the Lua-side contract (SetUpgradedTo, callbacks). |
@@ -418,10 +418,13 @@ Keep source-layer weapon tests and dive/save/replay checks green without headed 
 
 **Current slice:** generic attachments capture a deterministic local X/Y/Z offset, suspend child
 movement, propagate it parent-before-child after movement and collision, and persist it in
-SaveState v7 while v1-v6 derive the local height from saved transforms. Attached children remain
-in the collision grid, matching `C-196`. Parent death detaches surviving children and clears their
-local offsets. This is deliberately not transport loading: authored bone indices/composition,
-capacity, load/unload, storage, ferry, and carrier death are still absent.
+SaveState v7 while v1-v6 derive the local height from saved transforms. Attachments now also
+carry `C-195`'s parent/self bone indices with authored rest-bone composition (`C-196`): the
+parent bone rides the carrier's heading, the child bone hangs off the child's own heading, the
+stored offset is captured bone-relative, and the record is hashed and saved at v22 with gated
+old-version reads. Attached children remain in the collision grid. Parent death detaches
+surviving children and clears their offsets and bones. This is deliberately not transport
+loading: capacity, load/unload, storage, ferry, and carrier death are still absent.
 
 ```text
 /goal Advance FA-TRANSPORT by adding parent/self bone indices and authored rest-bone composition

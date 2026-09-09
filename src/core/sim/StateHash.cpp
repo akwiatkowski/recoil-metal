@@ -491,6 +491,13 @@ StateHash hashMatch(const UnitStore& store, const Match& match) {
                 feed(h, static_cast<std::size_t>(parent->generation));
                 feed(h, store.attachmentOffsetOf(unit));
                 feed(h, store.attachmentHeightOf(unit));
+                const UnitStore::AttachBones bones = store.attachmentBonesOf(unit);
+                feed(h, bones.parent);
+                feed(h, bones.self);
+                feed(h, bones.parentRest);
+                feed(h, bones.parentRestHeight);
+                feed(h, bones.selfRest);
+                feed(h, bones.selfRestHeight);
             }
             const std::vector<UnitId>& children = store.childrenOf(unit);
             feed(h, children.size());

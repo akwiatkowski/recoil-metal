@@ -22,6 +22,12 @@ UnitStore::UnitStore(const Snapshot& snapshot)
        children_(snapshot.children),
        attachmentOffsets_(snapshot.attachmentOffsets),
         attachmentHeights_(snapshot.attachmentHeights),
+        attachmentParentBones_(snapshot.attachmentParentBones),
+        attachmentSelfBones_(snapshot.attachmentSelfBones),
+        attachmentParentRest_(snapshot.attachmentParentRest),
+        attachmentParentRestHeights_(snapshot.attachmentParentRestHeights),
+        attachmentSelfRest_(snapshot.attachmentSelfRest),
+        attachmentSelfRestHeights_(snapshot.attachmentSelfRestHeights),
         nextCommandSerial_(snapshot.nextCommandSerial),
         nextCommandCounters_(snapshot.nextCommandCounters) {
     std::vector<std::shared_ptr<SharedCommand>> mutableCommands;
@@ -44,15 +50,20 @@ UnitStore::UnitStore(const Snapshot& snapshot)
     for (const std::shared_ptr<SharedCommand>& command : mutableCommands) {
         (void)registerCommand(command);
     }
-    if (!enhancements_.empty() && enhancements_.size() != transforms_.size()) {
-        throw std::invalid_argument("enhancement snapshot does not match unit slots");
-    }
-    enhancements_.resize(transforms_.size());
-    factoryRepeat_.resize(transforms_.size(), false);
-    doNotTarget_.resize(transforms_.size(), false);
     attachmentOffsets_.resize(transforms_.size());
     const bool deriveAttachmentHeights = attachmentHeights_.empty();
     attachmentHeights_.resize(transforms_.size());
+    // Bone records predate no version: older snapshots simply leave them empty, and
+    // the resize below recovers the boneless default for every slot.
+    attachmentParentBones_.resize(transforms_.size(), kNoBone);
+    attachmentSelfBones_.resize(transforms_.size(), kNoBone);
+    attachmentParentRest_.resize(transforms_.size());
+    attachmentParentRestHeights_.resize(transforms_.size());
+    attachmentSelfRest_.resize(transforms_.size());
+    attachmentSelfRestHeights_.resize(transforms_.size());
+    enhancements_.resize(transforms_.size());
+    factoryRepeat_.resize(transforms_.size(), false);
+    doNotTarget_.resize(transforms_.size(), false);
     for (std::size_t child = 0; child < transforms_.size(); ++child) {
         if (parents_[child]) {
             if (deriveAttachmentHeights) {
@@ -77,6 +88,12 @@ UnitStore::Snapshot UnitStore::snapshot() const {
                    .children = children_,
                    .attachmentOffsets = attachmentOffsets_,
                    .attachmentHeights = attachmentHeights_,
+                   .attachmentParentBones = attachmentParentBones_,
+                   .attachmentSelfBones = attachmentSelfBones_,
+                   .attachmentParentRest = attachmentParentRest_,
+                   .attachmentParentRestHeights = attachmentParentRestHeights_,
+                   .attachmentSelfRest = attachmentSelfRest_,
+                   .attachmentSelfRestHeights = attachmentSelfRestHeights_,
                    .nextCommandSerial = nextCommandSerial_,
                    .nextCommandCounters = nextCommandCounters_};
     std::map<const SharedCommand*, std::size_t> sharedCommands;
@@ -117,6 +134,12 @@ UnitId UnitStore::spawn(const Spawn& request) {
         children_.emplace_back();
         attachmentOffsets_.emplace_back();
         attachmentHeights_.emplace_back();
+        attachmentParentBones_.emplace_back(kNoBone);
+        attachmentSelfBones_.emplace_back(kNoBone);
+        attachmentParentRest_.emplace_back();
+        attachmentParentRestHeights_.emplace_back();
+        attachmentSelfRest_.emplace_back();
+        attachmentSelfRestHeights_.emplace_back();
         generations_.emplace_back();
     }
 
@@ -137,6 +160,12 @@ UnitId UnitStore::spawn(const Spawn& request) {
     children_[slot].clear();
     attachmentOffsets_[slot] = {};
     attachmentHeights_[slot] = {};
+    attachmentParentBones_[slot] = kNoBone;
+    attachmentSelfBones_[slot] = kNoBone;
+    attachmentParentRest_[slot] = {};
+    attachmentParentRestHeights_[slot] = {};
+    attachmentSelfRest_[slot] = {};
+    attachmentSelfRestHeights_[slot] = {};
     // And the same for who last hit the PREVIOUS occupant: `request.health` sets the fresh
     // unit's own, but a caller that leaves it unset would have the newcomer already remember
     // being shot by whoever killed its predecessor. Set from the request so an explicit value
@@ -148,7 +177,22 @@ UnitId UnitStore::spawn(const Spawn& request) {
 
 void UnitStore::reindex(Fx cellSize) { space_.rebuild(*this, cellSize); }
 
+namespace {
+// Rotates a carrier-local (x, z) offset into world axes by the carrier's heading.
+// Bearings run from +Z toward +X, so local forward (0, 1) lands on (sin h, cos h):
+// wx = lx*cos h + lz*sin h, wz = -lx*sin h + lz*cos h.
+[[nodiscard]] std::array<Fx, 2> rotateByHeading(Brad heading, std::array<Fx, 2> local) noexcept {
+    const Fx c = fxCos(heading);
+    const Fx s = fxSin(heading);
+    return {local[0] * c + local[1] * s, local[1] * c - local[0] * s};
+}
+} // namespace
+
 bool UnitStore::attach(UnitId parent, UnitId child) {
+    return attach(parent, child, AttachBones{});
+}
+
+bool UnitStore::attach(UnitId parent, UnitId child, AttachBones bones) {
     if (!alive(parent) || !alive(child) || parent == child || parents_[child.index].has_value()) {
         return false;
     }
@@ -165,9 +209,26 @@ bool UnitStore::attach(UnitId parent, UnitId child) {
     }
 
     parents_[child.index] = parent;
-    attachmentOffsets_[child.index] = {transforms_[child.index].x - transforms_[parent.index].x,
-                                        transforms_[child.index].z - transforms_[parent.index].z};
-    attachmentHeights_[child.index] = transforms_[child.index].y - transforms_[parent.index].y;
+    attachmentParentBones_[child.index] = bones.parent;
+    attachmentSelfBones_[child.index] = bones.self;
+    attachmentParentRest_[child.index] = bones.parentRest;
+    attachmentParentRestHeights_[child.index] = bones.parentRestHeight;
+    attachmentSelfRest_[child.index] = bones.selfRest;
+    attachmentSelfRestHeights_[child.index] = bones.selfRestHeight;
+    // The stored offset is what `C-196`'s composition adds AFTER the bones: with
+    // bones it is captured bone-relative, so the first propagation reproduces the
+    // placement exactly and later ones follow the carrier's swing. Without bones
+    // both rotations are zero and this is the historical world-axis capture.
+    const std::array<Fx, 2> parentBone =
+        rotateByHeading(transforms_[parent.index].heading, bones.parentRest);
+    const std::array<Fx, 2> selfBone =
+        rotateByHeading(transforms_[child.index].heading, bones.selfRest);
+    attachmentOffsets_[child.index] = {transforms_[child.index].x - transforms_[parent.index].x
+                                           - parentBone[0] + selfBone[0],
+                                       transforms_[child.index].z - transforms_[parent.index].z
+                                           - parentBone[1] + selfBone[1]};
+    attachmentHeights_[child.index] = transforms_[child.index].y - transforms_[parent.index].y
+                                      - bones.parentRestHeight + bones.selfRestHeight;
     motion_[child.index].moving = false;
     motion_[child.index].attached = true;
     children_[parent.index].push_back(child);
@@ -188,6 +249,12 @@ bool UnitStore::detach(UnitId child) {
     parents_[child.index].reset();
     attachmentOffsets_[child.index] = {};
     attachmentHeights_[child.index] = {};
+    attachmentParentBones_[child.index] = kNoBone;
+    attachmentSelfBones_[child.index] = kNoBone;
+    attachmentParentRest_[child.index] = {};
+    attachmentParentRestHeights_[child.index] = {};
+    attachmentSelfRest_[child.index] = {};
+    attachmentSelfRestHeights_[child.index] = {};
     motion_[child.index].attached = false;
     return true;
 }
@@ -212,15 +279,40 @@ Fx UnitStore::attachmentHeightOf(UnitId child) const noexcept {
     return alive(child) ? attachmentHeights_[child.index] : Fx{};
 }
 
+UnitStore::AttachBones UnitStore::attachmentBonesOf(UnitId child) const noexcept {
+    if (!alive(child)) {
+        return AttachBones{};
+    }
+    return AttachBones{.parent = attachmentParentBones_[child.index],
+                       .self = attachmentSelfBones_[child.index],
+                       .parentRest = attachmentParentRest_[child.index],
+                       .parentRestHeight = attachmentParentRestHeights_[child.index],
+                       .selfRest = attachmentSelfRest_[child.index],
+                       .selfRestHeight = attachmentSelfRestHeights_[child.index]};
+}
+
 void UnitStore::propagateAttachments() {
     std::function<void(UnitId)> updateChildren = [&](UnitId parent) {
         for (const UnitId child : children_[parent.index]) {
             if (!alive(child) || parents_[child.index] != parent) {
                 continue;
             }
-            transforms_[child.index].x = transforms_[parent.index].x + attachmentOffsets_[child.index][0];
-            transforms_[child.index].y = transforms_[parent.index].y + attachmentHeights_[child.index];
-            transforms_[child.index].z = transforms_[parent.index].z + attachmentOffsets_[child.index][1];
+            // `C-196`'s composition with authored REST bones: the parent bone rides
+            // the carrier's swing, the child bone hangs off the child's own heading,
+            // and the stored offset (captured bone-relative at attach) adds last.
+            // Boneless attachments rotate nothing and take the historical path.
+            const std::array<Fx, 2> parentBone = rotateByHeading(
+                transforms_[parent.index].heading, attachmentParentRest_[child.index]);
+            const std::array<Fx, 2> selfBone = rotateByHeading(
+                transforms_[child.index].heading, attachmentSelfRest_[child.index]);
+            transforms_[child.index].x = transforms_[parent.index].x + parentBone[0]
+                                         - selfBone[0] + attachmentOffsets_[child.index][0];
+            transforms_[child.index].y = transforms_[parent.index].y
+                                         + attachmentParentRestHeights_[child.index]
+                                         - attachmentSelfRestHeights_[child.index]
+                                         + attachmentHeights_[child.index];
+            transforms_[child.index].z = transforms_[parent.index].z + parentBone[1]
+                                         - selfBone[1] + attachmentOffsets_[child.index][1];
             // An attached unit rides its carrier: the movement tick skips it, so nothing else
             // ever refreshes its tilt, and a child left with the pitch and roll of the slope
             // it was picked up from would sit askew on a level deck. It takes the carrier's,
@@ -256,6 +348,12 @@ void UnitStore::kill(UnitId id) {
             parents_[child.index].reset();
             attachmentOffsets_[child.index] = {};
             attachmentHeights_[child.index] = {};
+            attachmentParentBones_[child.index] = kNoBone;
+            attachmentSelfBones_[child.index] = kNoBone;
+            attachmentParentRest_[child.index] = {};
+            attachmentParentRestHeights_[child.index] = {};
+            attachmentSelfRest_[child.index] = {};
+            attachmentSelfRestHeights_[child.index] = {};
             motion_[child.index].attached = false;
         }
     }

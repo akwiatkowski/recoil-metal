@@ -403,7 +403,10 @@ TEST_CASE("historic attachment saves derive offsets from their transforms", "[sa
     constexpr std::size_t kV20EmptyCapturesBytes = sizeof(std::uint32_t);
     // V21 extends the controller records in place (two bank words per motion slot).
     constexpr std::size_t kV21BankBytes = kSlots * 2 * sizeof(std::uint32_t);
-    v7.resize(v7.size() - kV21BankBytes - kV20EmptyCapturesBytes - kV19EmptyEnhancementsBytes - kV18SubmarineBytes - kV16ControllerBytes - kV15AbsentEconomyBytes - kV14MotionBytes - kV10RedirectBytes - kV9SiloAmmoBytes
+    // V22 trails the bone record after every earlier section (one count plus eight
+    // words per slot).
+    constexpr std::size_t kV22BoneBytes = sizeof(std::uint32_t) + kSlots * 8 * sizeof(std::uint32_t);
+    v7.resize(v7.size() - kV22BoneBytes - kV21BankBytes - kV20EmptyCapturesBytes - kV19EmptyEnhancementsBytes - kV18SubmarineBytes - kV16ControllerBytes - kV15AbsentEconomyBytes - kV14MotionBytes - kV10RedirectBytes - kV9SiloAmmoBytes
               - kV8CommandStateBytes);
     writeU32(v7, 4, 7);
     writeU32(v7, 16, static_cast<std::uint32_t>(v7.size() - 20));
@@ -679,5 +682,35 @@ TEST_CASE("a current save round-trips winged-flight state", "[save-state]") {
     CHECK(back.airBreakOffDistance == motion.airBreakOffDistance);
     CHECK(back.airKRoll == motion.airKRoll);
     CHECK(back.airBankFactor == motion.airBankFactor);
+    CHECK(SaveState::encode(*restored) == bytes);
+}
+
+TEST_CASE("a current save round-trips attachment bones", "[save-state]") {
+    rm::sim::UnitStore original;
+    const auto parent = original.spawn({});
+    const auto child = original.spawn({});
+    REQUIRE(original.attach(parent, child,
+                            {.parent = 3,
+                             .self = 5,
+                             .parentRest = {rm::sim::Fx::fromInt(10), rm::sim::Fx::fromInt(-2)},
+                             .parentRestHeight = rm::sim::Fx::fromInt(4),
+                             .selfRest = {rm::sim::Fx::fromInt(2), rm::sim::Fx::fromInt(1)},
+                             .selfRestHeight = rm::sim::Fx::fromInt(-1)}));
+
+    RandomStream random{std::uint32_t{1}};
+    const auto bytes =
+        SaveState::encode({.tick = 42, .random = random.snapshot(), .units = original.snapshot()});
+    const auto restored = SaveState::decode(bytes);
+    REQUIRE(restored.has_value());
+    const rm::sim::UnitStore back{restored->units};
+    const auto bones = back.attachmentBonesOf(child);
+    CHECK(bones.parent == 3);
+    CHECK(bones.self == 5);
+    CHECK(bones.parentRest[0] == rm::sim::Fx::fromInt(10));
+    CHECK(bones.parentRest[1] == rm::sim::Fx::fromInt(-2));
+    CHECK(bones.parentRestHeight == rm::sim::Fx::fromInt(4));
+    CHECK(bones.selfRest[0] == rm::sim::Fx::fromInt(2));
+    CHECK(bones.selfRest[1] == rm::sim::Fx::fromInt(1));
+    CHECK(bones.selfRestHeight == rm::sim::Fx::fromInt(-1));
     CHECK(SaveState::encode(*restored) == bytes);
 }

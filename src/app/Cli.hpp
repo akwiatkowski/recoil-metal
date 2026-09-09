@@ -116,6 +116,8 @@ struct WindowOptions {
 [[nodiscard]] ShotOptions parseShot(int argc, const char* argv[]);
 [[nodiscard]] std::vector<UnitOptions> parseUnits(int argc, const char* argv[]);
 [[nodiscard]] rm::vfs::AssetSearch parseAssetSearch(int argc, const char* argv[]);
+/// Mounts the game's content: `--gamedata <dir>`, `--archive <scd>`, `--data-dir <dir>`.
+[[nodiscard]] rm::vfs::Vfs parseContent(int argc, const char* argv[]);
 /// Mount order for `--gamedata`'s archives: name order, except retail's own
 /// overrides mount later (higher priority). `lua.scd` shadows `mohodata.scd`'s
 /// short Moho stubs with the real game Lua — alphabetical order would mount

@@ -18,6 +18,9 @@
 #include <vector>
 
 namespace rm::sim {
+/// No bone: an attachment sits at its carrier's origin. Namespace scope (rather
+/// than a class constant) so nested record initializers may name it.
+inline constexpr std::int32_t kNoBone = -1;
 
 // Every unit in a match, in one place.
 //
@@ -81,6 +84,12 @@ public:
         std::vector<std::vector<UnitId>> children;
         std::vector<std::array<Fx, 2>> attachmentOffsets;
         std::vector<Fx> attachmentHeights;
+        std::vector<std::int32_t> attachmentParentBones;
+        std::vector<std::int32_t> attachmentSelfBones;
+        std::vector<std::array<Fx, 2>> attachmentParentRest;
+        std::vector<Fx> attachmentParentRestHeights;
+        std::vector<std::array<Fx, 2>> attachmentSelfRest;
+        std::vector<Fx> attachmentSelfRestHeights;
         CommandSerial nextCommandSerial = 0;
         std::array<std::uint32_t, kInvalidCommandSource> nextCommandCounters{};
         std::vector<SharedCommand> sharedCommands;
@@ -132,9 +141,26 @@ public:
                         .state = living ? HandleState::Alive : HandleState::Destroyed};
     }
 
+    /// `C-195`'s per-child record: the bone index on the parent (`+0x08`) and on
+    /// the child (`+0x0C`), plus each bone's authored REST offset from its unit's
+    /// origin. Rest offsets are static model data resolved by the caller (the sim
+    /// owns no skeleton); the default rides the carrier's origin exactly
+    /// like the historical offset-only attachment.
+    struct AttachBones {
+        std::int32_t parent = kNoBone;
+        std::int32_t self = kNoBone;
+        std::array<Fx, 2> parentRest{};
+        Fx parentRestHeight{};
+        std::array<Fx, 2> selfRest{};
+        Fx selfRestHeight{};
+    };
+
     /// Attaches a live child to a live parent. A child has exactly one parent, and an
     /// attachment may not introduce a cycle.
     [[nodiscard]] bool attach(UnitId parent, UnitId child);
+    /// Bone-indexed form (`C-195`): rest offsets are static model data resolved by
+    /// the caller, since the sim owns no skeleton.
+    [[nodiscard]] bool attach(UnitId parent, UnitId child, AttachBones bones);
 
     /// Removes a live child's attachment, if it has one.
     [[nodiscard]] bool detach(UnitId child);
@@ -143,6 +169,7 @@ public:
     [[nodiscard]] const std::vector<UnitId>& childrenOf(UnitId parent) const noexcept;
     [[nodiscard]] std::array<Fx, 2> attachmentOffsetOf(UnitId child) const noexcept;
     [[nodiscard]] Fx attachmentHeightOf(UnitId child) const noexcept;
+    [[nodiscard]] AttachBones attachmentBonesOf(UnitId child) const noexcept;
 
     /// Updates attached children from their parents' current transforms. The hierarchy is
     /// traversed parent before child so an attached chain receives one coherent transform.
@@ -286,6 +313,12 @@ private:
     std::vector<std::vector<UnitId>> children_;
     std::vector<std::array<Fx, 2>> attachmentOffsets_;
     std::vector<Fx> attachmentHeights_;
+    std::vector<std::int32_t> attachmentParentBones_;
+    std::vector<std::int32_t> attachmentSelfBones_;
+    std::vector<std::array<Fx, 2>> attachmentParentRest_;
+    std::vector<Fx> attachmentParentRestHeights_;
+    std::vector<std::array<Fx, 2>> attachmentSelfRest_;
+    std::vector<Fx> attachmentSelfRestHeights_;
 
     CommandSerial nextCommandSerial_ = 0;
     std::array<std::uint32_t, kInvalidCommandSource> nextCommandCounters_{};

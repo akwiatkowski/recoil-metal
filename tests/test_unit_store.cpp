@@ -387,6 +387,81 @@ TEST_CASE("attached children follow captured offsets until detached") {
     CHECK(store.transforms()[child.index].z == rm::test::fx(45.0f));
 }
 
+TEST_CASE("a bone-mounted child composes rest offsets with its carrier", "[attachments]") {
+    // `C-195`/`C-196`: the record names a bone on each side plus each bone's
+    // authored rest offset. Propagation adds the parent bone (in carrier axes),
+    // subtracts the child bone (in the child's own heading), then the stored
+    // offset — captured bone-relative at attach, so the first propagation
+    // reproduces the placement exactly.
+    UnitStore store;
+    const UnitId parent = store.spawn(tankAt(10.0f, 20.0f, 0));
+    const UnitId child = store.spawn(tankAt(14.0f, 22.0f, 0));
+    const UnitStore::AttachBones bones{.parent = 3,
+                                       .self = 5,
+                                       .parentRest = {rm::sim::Fx::fromInt(10), rm::sim::Fx{}},
+                                       .parentRestHeight = rm::sim::Fx::fromInt(4),
+                                       .selfRest = {rm::sim::Fx::fromInt(2), rm::sim::Fx{}},
+                                       .selfRestHeight = rm::sim::Fx::fromInt(1)};
+    REQUIRE(store.attach(parent, child, bones));
+
+    const UnitStore::AttachBones kept = store.attachmentBonesOf(child);
+    CHECK(kept.parent == 3);
+    CHECK(kept.self == 5);
+    CHECK(kept.parentRest[0] == rm::sim::Fx::fromInt(10));
+    CHECK(kept.parentRestHeight == rm::sim::Fx::fromInt(4));
+    CHECK(kept.selfRest[0] == rm::sim::Fx::fromInt(2));
+    CHECK(kept.selfRestHeight == rm::sim::Fx::fromInt(1));
+
+    store.transforms()[parent.index].x = rm::test::fx(100.0f);
+    store.transforms()[parent.index].y = rm::test::fx(30.0f);
+    store.transforms()[parent.index].z = rm::test::fx(200.0f);
+    store.propagateAttachments();
+    // Stored offset captured bone-relative: (14-10-10+2, 22-20-0+0), height 0-0-4+1.
+    CHECK(store.transforms()[child.index].x == rm::test::fx(104.0f));
+    CHECK(store.transforms()[child.index].z == rm::test::fx(202.0f));
+    CHECK(store.transforms()[child.index].y == rm::test::fx(30.0f));
+}
+
+TEST_CASE("a bone-mounted child swings with its carrier's heading", "[attachments]") {
+    // The parent bone is rigid in the carrier: a quarter turn carries local +X to
+    // world -Z, and the child follows. The child bone stays in the child's own
+    // heading, which never turns here.
+    UnitStore store;
+    const UnitId parent = store.spawn(tankAt(10.0f, 20.0f, 0));
+    const UnitId child = store.spawn(tankAt(14.0f, 22.0f, 0));
+    const UnitStore::AttachBones bones{.parent = 3,
+                                       .self = 5,
+                                       .parentRest = {rm::sim::Fx::fromInt(10), rm::sim::Fx{}},
+                                       .parentRestHeight = rm::sim::Fx::fromInt(4),
+                                       .selfRest = {rm::sim::Fx::fromInt(2), rm::sim::Fx{}},
+                                       .selfRestHeight = rm::sim::Fx::fromInt(1)};
+    REQUIRE(store.attach(parent, child, bones));
+
+    store.transforms()[parent.index].x = rm::test::fx(100.0f);
+    store.transforms()[parent.index].y = rm::test::fx(30.0f);
+    store.transforms()[parent.index].z = rm::test::fx(200.0f);
+    store.transforms()[parent.index].heading = rm::sim::kBradQuarterTurn;
+    store.propagateAttachments();
+    CHECK(store.transforms()[child.index].x == rm::test::fx(94.0f));
+    CHECK(store.transforms()[child.index].z == rm::test::fx(192.0f));
+    CHECK(store.transforms()[child.index].y == rm::test::fx(30.0f));
+}
+
+TEST_CASE("detaching clears the bone record", "[attachments]") {
+    UnitStore store;
+    const UnitId parent = store.spawn(tankAt(10.0f, 20.0f, 0));
+    const UnitId child = store.spawn(tankAt(14.0f, 22.0f, 0));
+    REQUIRE(store.attach(parent, child,
+                         {.parent = 3,
+                          .self = 5,
+                          .parentRest = {rm::sim::Fx::fromInt(10), rm::sim::Fx{}}}));
+    REQUIRE(store.detach(child));
+    const UnitStore::AttachBones cleared = store.attachmentBonesOf(child);
+    CHECK(cleared.parent == rm::sim::kNoBone);
+    CHECK(cleared.self == rm::sim::kNoBone);
+    CHECK(cleared.parentRest[0] == rm::sim::Fx{});
+}
+
 TEST_CASE("attachments retain a full local transform and suspend child movement") {
     UnitStore store;
     UnitStore::Spawn parent = tankAt(10.0f, 20.0f, 0);
@@ -443,6 +518,30 @@ TEST_CASE("attachment offsets change the match hash") {
     REQUIRE(left.attach(leftParent, leftChild));
     REQUIRE(right.attach(rightParent, rightChild));
     right.transforms()[rightChild.index] = left.transforms()[leftChild.index];
+
+    std::vector<rm::sim::Army> armies(1);
+    std::vector<rm::sim::Economy> economies(1);
+    std::vector<int> commandersEver(1);
+    const rm::sim::Match match{.armies = armies,
+                                .economies = economies,
+                                .commandersEver = commandersEver};
+    CHECK(rm::sim::hashMatch(left, match) != rm::sim::hashMatch(right, match));
+}
+
+TEST_CASE("attachment bone indices change the match hash", "[attachments]") {
+    // Same placements, same rest offsets — only the named bones differ, so a
+    // hash difference here is the indices' own coverage, not the offsets'.
+    UnitStore left;
+    UnitStore right;
+    const UnitId leftParent = left.spawn(tankAt(1.0f, 1.0f, 0));
+    const UnitId leftChild = left.spawn(tankAt(2.0f, 2.0f, 0));
+    const UnitId rightParent = right.spawn(tankAt(1.0f, 1.0f, 0));
+    const UnitId rightChild = right.spawn(tankAt(2.0f, 2.0f, 0));
+    const UnitStore::AttachBones bones{.parentRest = {rm::sim::Fx::fromInt(1), rm::sim::Fx{}}};
+    REQUIRE(left.attach(leftParent, leftChild, bones));
+    UnitStore::AttachBones other = bones;
+    other.parent = 7;
+    REQUIRE(right.attach(rightParent, rightChild, other));
 
     std::vector<rm::sim::Army> armies(1);
     std::vector<rm::sim::Economy> economies(1);

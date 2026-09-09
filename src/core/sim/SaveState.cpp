@@ -43,6 +43,10 @@ constexpr std::uint32_t kVersion20 = 20;
 /// Version 21 adds the bank tuning (`KRoll`, `BankFactor`) to the aircraft controller
 /// snapshot; older readers stop before those two words.
 constexpr std::uint32_t kVersion21 = 21;
+/// Version 22 adds the attachment bone record (parent/self indices plus authored
+/// rest offsets) beside the historical offset sections; older readers keep the
+/// boneless default.
+constexpr std::uint32_t kVersion22 = 22;
 // MT19937 serializes its 624 state words plus an index, all as unsigned decimal numbers separated
 // by one space. This rejects oversized malformed frames before they allocate their payload.
 constexpr std::size_t kMaxRandomStatePayload =
@@ -496,6 +500,48 @@ void writeCaptures(PayloadWriter& w, std::span<const CaptureWork> work) {
         w.i32(value.funded.raw());
         w.u8(value.inReach ? 1 : 0);
     }
+}
+
+// V22 trails the payload, like every earlier addition: the bone record sits beside
+// the historical offset sections in the snapshot but serializes after them, so older
+// readers stop before it and older shapes need no interior edits.
+void writeBoneAttachments(PayloadWriter& w, const UnitStore::Snapshot& s) {
+    w.count(s.attachmentParentBones.size());
+    for (std::size_t i = 0; i < s.attachmentParentBones.size(); ++i) {
+        w.i32(s.attachmentParentBones[i]);
+        w.i32(s.attachmentSelfBones[i]);
+        w.i32(s.attachmentParentRest[i][0].raw());
+        w.i32(s.attachmentParentRest[i][1].raw());
+        w.i32(s.attachmentParentRestHeights[i].raw());
+        w.i32(s.attachmentSelfRest[i][0].raw());
+        w.i32(s.attachmentSelfRest[i][1].raw());
+        w.i32(s.attachmentSelfRestHeights[i].raw());
+    }
+}
+
+bool readBoneAttachments(PayloadReader& r, UnitStore::Snapshot& s) {
+    std::size_t count{};
+    if (!r.count(count, 32)) return false;
+    if (count != s.transforms.size()) return false;
+    s.attachmentParentBones.resize(count);
+    s.attachmentSelfBones.resize(count);
+    s.attachmentParentRest.resize(count);
+    s.attachmentParentRestHeights.resize(count);
+    s.attachmentSelfRest.resize(count);
+    s.attachmentSelfRestHeights.resize(count);
+    for (std::size_t i = 0; i < count; ++i) {
+        std::int32_t parentBone{}, selfBone{}, px{}, pz{}, py{}, sx{}, sz{}, sy{};
+        if (!r.i32(parentBone) || !r.i32(selfBone) || !r.i32(px) || !r.i32(pz)
+            || !r.i32(py) || !r.i32(sx) || !r.i32(sz) || !r.i32(sy))
+            return false;
+        s.attachmentParentBones[i] = parentBone;
+        s.attachmentSelfBones[i] = selfBone;
+        s.attachmentParentRest[i] = {Fx::fromRaw(px), Fx::fromRaw(pz)};
+        s.attachmentParentRestHeights[i] = Fx::fromRaw(py);
+        s.attachmentSelfRest[i] = {Fx::fromRaw(sx), Fx::fromRaw(sz)};
+        s.attachmentSelfRestHeights[i] = Fx::fromRaw(sy);
+    }
+    return true;
 }
 
 bool readCaptures(PayloadReader& r, std::vector<CaptureWork>& work) {
@@ -1023,6 +1069,9 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
     if (version >= kVersion20) {
         writeCaptures(payloadWriter, state.captures);
     }
+    if (version >= kVersion22) {
+        writeBoneAttachments(payloadWriter, state.units);
+    }
     const std::vector<std::byte> payload = payloadWriter.take();
     if (payload.size() > std::numeric_limits<std::uint32_t>::max()) {
         throw std::length_error("MT19937 state exceeds the v1 save-state payload limit");
@@ -1058,7 +1107,8 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
                && version != kVersion10 && version != kVersion11 && version != kVersion12
                && version != kVersion13 && version != kVersion14 && version != kVersion15
                && version != kVersion16 && version != kVersion17 && version != kVersion18
-               && version != kVersion19 && version != kVersion20 && version != kVersion21)
+               && version != kVersion19 && version != kVersion20 && version != kVersion21
+               && version != kVersion22)
         || (requiredVersion && version != *requiredVersion) || !readU64(bytes, offset, tick)
         || !readU32(bytes, offset, payloadSize) || bytes.size() - offset != payloadSize) {
         return std::nullopt;
@@ -1108,6 +1158,7 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
         || !readInstalledEnhancements(reader, units))) return std::nullopt;
     std::vector<CaptureWork> captures;
     if (version >= kVersion20 && !readCaptures(reader, captures)) return std::nullopt;
+    if (version >= kVersion22 && !readBoneAttachments(reader, units)) return std::nullopt;
     if (!reader.finished()) return std::nullopt;
     SaveState decoded{.tick = tick,
                       .random = std::move(random),
@@ -1140,7 +1191,7 @@ std::optional<SaveState> SaveState::decodeV2(std::span<const std::byte> bytes) {
 }
 
 std::vector<std::byte> SaveState::encode(const SaveState& state) {
-    return rm::sim::encode(state, kVersion21);
+    return rm::sim::encode(state, kVersion22);
 }
 
 std::optional<SaveState> SaveState::decode(std::span<const std::byte> bytes) {
