@@ -1673,6 +1673,20 @@ function __rm_faf_decide(army, snap)
     for h, assignment in pairs(brain.scoutAssignments) do
         local u = living[h]
         if not u or (u.idle and not u.scoutingBusy and (snap.tick or 0) > assignment.tick) then
+            -- Retail drops the reached area and frees a dead scout's tag, so the
+            -- next pass checks the area out again (platoon.lua AirScoutingAI).
+            if assignment.mustScout then
+                if u then
+                    for i, loc in ipairs(brain.InterestList.MustScout) do
+                        if loc == assignment.mustScout then
+                            table.remove(brain.InterestList.MustScout, i)
+                            break
+                        end
+                    end
+                else
+                    assignment.mustScout.TaggedBy = { Dead = true }
+                end
+            end
             brain.scoutAssignments[h] = nil
         end
     end
@@ -1718,6 +1732,27 @@ function __rm_faf_decide(army, snap)
                     if a.x ~= b.x then return a.x < b.x end
                     return a.z < b.z
                 end)
+                -- Platoon air loop, branches 1-2 (platoon.lua AirScoutingAI): a checked-out
+                -- must-scout area jumps the scoutSites queue and rides the same flyby
+                -- dispatch below; an unknown threat above 25 is recorded and flown at
+                -- once. Retail waits a beat between recording and checkout, but the
+                -- adapter runs every platoon builder each pass, so a recorded area
+                -- would be checked out later in this same pass anyway: the beat is
+                -- collapsed, not skipped.
+                if air then
+                    local area = brain:GetUntaggedMustScoutArea()
+                    if not area then
+                        local unknown = brain:GetThreatsAroundPosition({u.x, 0, u.z}, 16, true, 'Unknown')
+                        if #unknown > 0 and unknown[1][3] > 25 then
+                            brain:AddScoutArea({unknown[1][1], 0, unknown[1][2]})
+                            area = brain:GetUntaggedMustScoutArea()
+                        end
+                    end
+                    if area then
+                        area.TaggedBy = u
+                        sites = {{x=area.Position[1], z=area.Position[3], high=true, mustLoc=area}}
+                    end
+                end
                 for _, site in ipairs(sites) do
                     local x,z = site.x,site.z
                     if air then
@@ -1739,7 +1774,7 @@ function __rm_faf_decide(army, snap)
                         brain.scoutSerial = brain.scoutSerial + 1
                         site.visited = brain.scoutSerial
                         brain.scoutVisits[layer] = site.high and (brain.scoutVisits[layer]+1) or 0
-                        brain.scoutAssignments[u.h] = {site=site, name=item.spec.BuilderName, tick=snap.tick or 0}
+                        brain.scoutAssignments[u.h] = {site=site, name=item.spec.BuilderName, tick=snap.tick or 0, mustScout=site.mustLoc}
                         table.insert(decisions, {kind='scout',builder=u.h,x=x,z=z,route=route,name=item.spec.BuilderName})
                         return true
                     end

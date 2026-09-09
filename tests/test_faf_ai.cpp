@@ -1161,6 +1161,136 @@ TEST_CASE("native scout routes respect terrain and observed threat", "[faf][ai][
     }
 }
 
+TEST_CASE("FAF air scouts check out must-scout areas and clear them on arrival",
+          "[faf][ai][scouting]") {
+    const auto root = corpusRoot();
+    if (root.empty()) SKIP("no vendored corpus; run `make ai`");
+    FafAi ai(root);
+    REQUIRE(installFafDriver(ai));
+    importAiEntryPoints(ai);
+    const bool ok = ai.eval(R"(
+        __rm_faf_boot(0, { faction = 1, startX = 0, startZ = 0,
+            sizeX = 4096, sizeZ = 4096, armies = 2, base = 'NormalMain', markers = {},
+            scoutSites = {{x=2000, z=2000, high=false}} })
+        local brain = __rm_faf.brains[0]
+        local builders = {}
+        for _, item in ipairs(brain.builders) do
+            if item.spec.BuilderName:find('Scout') then table.insert(builders, item) end
+        end
+        assert(#builders >= 1)
+        brain.builders = builders
+        __rm_faf_type('AIRSCOUT', {'MOBILE', 'AIR', 'SCOUT', 'TECH1'})
+        __rm_faf_scout_route = function(h, x, z) return {{x, z}} end
+        local scout = {h=__rm_faf_handle(1, 1), bp='AIRSCOUT', x=0, z=0, idle=true,
+            __cats=__rm_faf.cats.AIRSCOUT, vision=100}
+        local snap = {tick=0, units={scout}, occupied={}, underway={}, enemies={},
+            mass=500, energy=5000, massStorage=500, energyStorage=5000,
+            massIncome=10, energyIncome=100, massRequested=1, energyRequested=1,
+            massUsage=1, energyUsage=1, structuresUnderway=0, mobileUnderway=0}
+        brain:AddScoutArea({1000, 0, 1000})
+        local orders = __rm_faf_decide(0, snap)
+        assert(#orders == 1 and orders[1].kind == 'scout',
+            'a must-scout area jumps the scoutSites queue')
+        local must = brain.InterestList.MustScout
+        assert(#must == 1 and must[1].TaggedBy.h == scout.h, 'checkout tags the area')
+        assert(orders[1].x >= 40 and orders[1].x <= 4056
+            and orders[1].z >= 40 and orders[1].z <= 4056, 'flyby stays on the map')
+        assert(orders[1].x ~= 1000 or orders[1].z ~= 1000,
+            'air scouts fly the vision-offset flyby, not the marker itself')
+        scout.idle = false; snap.tick = 10
+        assert(#__rm_faf_decide(0, snap) == 0, 'keep the route while moving')
+        scout.idle = true; snap.tick = 20
+        orders = __rm_faf_decide(0, snap)
+        assert(#brain.InterestList.MustScout == 0, 'arrival drops the reached area')
+        assert(#orders == 1, 'the freed scout returns to the rotation')
+    )");
+    INFO(ai.lastError());
+    REQUIRE(ok);
+}
+
+TEST_CASE("FAF dead scouts free their must-scout tag for the next scout",
+          "[faf][ai][scouting]") {
+    const auto root = corpusRoot();
+    if (root.empty()) SKIP("no vendored corpus; run `make ai`");
+    FafAi ai(root);
+    REQUIRE(installFafDriver(ai));
+    importAiEntryPoints(ai);
+    const bool ok = ai.eval(R"(
+        __rm_faf_boot(0, { faction = 1, startX = 0, startZ = 0,
+            sizeX = 4096, sizeZ = 4096, armies = 2, base = 'NormalMain', markers = {},
+            scoutSites = {{x=2000, z=2000, high=false}} })
+        local brain = __rm_faf.brains[0]
+        local builders = {}
+        for _, item in ipairs(brain.builders) do
+            if item.spec.BuilderName:find('Scout') then table.insert(builders, item) end
+        end
+        brain.builders = builders
+        __rm_faf_type('AIRSCOUT', {'MOBILE', 'AIR', 'SCOUT', 'TECH1'})
+        __rm_faf_scout_route = function(h, x, z) return {{x, z}} end
+        local scout = {h=__rm_faf_handle(1, 1), bp='AIRSCOUT', x=0, z=0, idle=true,
+            __cats=__rm_faf.cats.AIRSCOUT, vision=100}
+        local snap = {tick=0, units={scout}, occupied={}, underway={}, enemies={},
+            mass=500, energy=5000, massStorage=500, energyStorage=5000,
+            massIncome=10, energyIncome=100, massRequested=1, energyRequested=1,
+            massUsage=1, energyUsage=1, structuresUnderway=0, mobileUnderway=0}
+        brain:AddScoutArea({3000, 0, 3000})
+        assert(#__rm_faf_decide(0, snap) == 1)
+        assert(brain.InterestList.MustScout[1].TaggedBy.h == scout.h)
+        snap.units = {}; snap.tick = 10
+        assert(#__rm_faf_decide(0, snap) == 0)
+        local must = brain.InterestList.MustScout
+        assert(#must == 1 and must[1].TaggedBy.Dead == true,
+            'a dead scout frees its tag without losing the area')
+        local scout2 = {h=__rm_faf_handle(2, 1), bp='AIRSCOUT', x=0, z=0, idle=true,
+            __cats=__rm_faf.cats.AIRSCOUT, vision=100}
+        snap.units = {scout2}; snap.tick = 20
+        local orders = __rm_faf_decide(0, snap)
+        assert(#orders == 1 and must[1].TaggedBy.h == scout2.h,
+            'the next scout checks out the freed area')
+    )");
+    INFO(ai.lastError());
+    REQUIRE(ok);
+}
+
+TEST_CASE("FAF unknown threats above 25 fly as tagged must-scout areas",
+          "[faf][ai][scouting]") {
+    const auto root = corpusRoot();
+    if (root.empty()) SKIP("no vendored corpus; run `make ai`");
+    FafAi ai(root);
+    REQUIRE(installFafDriver(ai));
+    importAiEntryPoints(ai);
+    const bool ok = ai.eval(R"(
+        __rm_faf_boot(0, { faction = 1, startX = 0, startZ = 0,
+            sizeX = 4096, sizeZ = 4096, armies = 2, base = 'NormalMain', markers = {},
+            scoutSites = {{x=2000, z=2000, high=false}} })
+        local brain = __rm_faf.brains[0]
+        local builders = {}
+        for _, item in ipairs(brain.builders) do
+            if item.spec.BuilderName:find('Scout') then table.insert(builders, item) end
+        end
+        brain.builders = builders
+        __rm_faf_type('AIRSCOUT', {'MOBILE', 'AIR', 'SCOUT', 'TECH1'})
+        __rm_faf_type('EXP', {'LAND', 'MOBILE'}, {s=100})
+        __rm_faf_scout_route = function(h, x, z) return {{x, z}} end
+        local scout = {h=__rm_faf_handle(1, 1), bp='AIRSCOUT', x=0, z=0, idle=true,
+            __cats=__rm_faf.cats.AIRSCOUT, vision=100}
+        local snap = {tick=0, units={scout}, occupied={}, underway={},
+            enemies={{bp='EXP', x=50, z=0, __cats=__rm_faf.cats.EXP}},
+            mass=500, energy=5000, massStorage=500, energyStorage=5000,
+            massIncome=10, energyIncome=100, massRequested=1, energyRequested=1,
+            massUsage=1, energyUsage=1, structuresUnderway=0, mobileUnderway=0}
+        local orders = __rm_faf_decide(0, snap)
+        assert(#orders == 1 and orders[1].kind == 'scout',
+            'the unknown threat flies at once: the adapter runs every platoon '
+            .. 'builder each pass, so retail\'s record-then-wait beat collapses')
+        local must = brain.InterestList.MustScout
+        assert(#must == 1 and must[1].Position[1] == 50 and must[1].Position[3] == 0
+            and must[1].TaggedBy.h == scout.h, 'the flown threat is a tagged must-scout area')
+    )");
+    INFO(ai.lastError());
+    REQUIRE(ok);
+}
+
 TEST_CASE("all FAF strategies load and scored selection is repeatable", "[faf][ai-personality]") {
     const auto root = corpusRoot();
     if (root.empty()) SKIP("no vendored corpus; run `make ai`");
