@@ -306,6 +306,64 @@ TEST_CASE("a homogeneous grouped ground move uses GrowthFormation land-slot topo
     CHECK(fifthQueue.back().targetZ() != queuedIssue.targetZ);
 }
 
+TEST_CASE("a mixed grouped ground move fills front rows by category", "[formation]") {
+    Fixture fix;
+    const auto typed = [&](std::string name, std::vector<std::string> categories) {
+        rm::unitdef::UnitDef def;
+        def.name = std::move(name);
+        def.categories = std::move(categories);
+        return fix.roster.addType(def);
+    };
+    // Issued engineers-first: the block must still put direct fire up front, in
+    // tech order, with artillery and air defence behind it and engineers last.
+    const UnitId engineer =
+        fix.roster.add(typed("test_engineer", {"ENGINEER", "LAND", "MOBILE", "TECH1"}),
+                       200.0f, 300.0f, 0, 500.0f);
+    const UnitId aa =
+        fix.roster.add(typed("test_aa", {"ANTIAIR", "LAND", "MOBILE", "TECH1"}), 200.0f,
+                       400.0f, 0, 500.0f);
+    const UnitId artillery =
+        fix.roster.add(typed("test_artillery", {"ARTILLERY", "LAND", "MOBILE", "TECH1"}),
+                       200.0f, 500.0f, 0, 500.0f);
+    const UnitId tank1 =
+        fix.roster.add(typed("test_tank1", {"DIRECTFIRE", "LAND", "MOBILE", "TECH1"}),
+                       200.0f, 600.0f, 0, 500.0f);
+    const UnitId tank2 =
+        fix.roster.add(typed("test_tank2", {"DIRECTFIRE", "LAND", "MOBILE", "TECH2"}),
+                       200.0f, 700.0f, 0, 500.0f);
+    const rm::sim::Fx clickX = rm::test::fx(500.0f);
+    const rm::sim::Fx clickZ = rm::test::fx(200.0f);
+
+    const CommandIssue issue{.tick = 0,
+                             .source = 0,
+                             .id = rm::commandId(0, 0),
+                             .player = 0,
+                             .kind = CommandKind::Move,
+                             .units = {engineer, aa, artillery, tank1, tank2},
+                             .targetX = clickX,
+                             .targetZ = clickZ};
+    const rm::sim::ApplyCommandResult result = rm::sim::applyCommand(
+        issue, fix.roster.store, fix.roster.catalog, fix.players, fix.armies, fix.terrain,
+        [&fix](UnitId) { return &fix.grid; }, fix.roster.rate, &fix.building, nullptr, nullptr,
+        &fix.paths);
+    REQUIRE(result.accepted.size() == 5);
+
+    // Five units fill a four-wide first row: everyone but the engineer stands on
+    // the clicked line, and the T2 tank stands left of the T1 within direct fire.
+    const auto& engineerQueue = fix.roster.store.orders()[engineer.index].entries();
+    const auto& aaQueue = fix.roster.store.orders()[aa.index].entries();
+    const auto& artilleryQueue = fix.roster.store.orders()[artillery.index].entries();
+    const auto& tank1Queue = fix.roster.store.orders()[tank1.index].entries();
+    const auto& tank2Queue = fix.roster.store.orders()[tank2.index].entries();
+    REQUIRE(engineerQueue.size() == 1);
+    CHECK(tank2Queue.front().targetZ() == clickZ);
+    CHECK(tank1Queue.front().targetZ() == clickZ);
+    CHECK(artilleryQueue.front().targetZ() == clickZ);
+    CHECK(aaQueue.front().targetZ() == clickZ);
+    CHECK(engineerQueue.front().targetZ() != clickZ);
+    CHECK(tank2Queue.front().targetX() < tank1Queue.front().targetX());
+}
+
 TEST_CASE("a stopped move is removed before path service spends work on it") {
     Fixture fix;
 

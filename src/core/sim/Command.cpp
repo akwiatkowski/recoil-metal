@@ -683,8 +683,8 @@ bool buildSitePlaceable(const PassabilityGrid& grid, Fx x, Fx z, Fx radiusElmos,
 }
 
 /// ART-S007 `GrowthFormation` selects these repeating land-block widths by total unit count.
-/// The native formation instance owns category matching and rotation; this intake slice is
-/// deliberately limited to one homogeneous ground type, where canonical rank fills each slot.
+/// Members fill front rows first in category order (see the intake below); the widths are
+/// retail's ThreeWide through EightWide block thresholds.
 [[nodiscard]] std::size_t growthFormationWidth(std::size_t units) noexcept {
     if (units <= 3) {
         return 3;
@@ -1104,12 +1104,13 @@ ApplyCommandResult applyCommand(const CommandIssue& issued, UnitStore& store,
     std::vector<UnitId> canonical = issue.units;
     canonicalizeUnits(canonical);
 
-    // `GrowthFormation` is the travel formation for non-air groups (C-178). Its native slot
-    // matcher is not available here, so use its topology only for a homogeneous set of members
-    // that would reach the command boundary. Rejected handles must not consume a formation slot.
+    // `GrowthFormation` is the travel formation for non-air groups (C-178). Members
+    // fill front rows first in category order — experimentals, direct fire by tech,
+    // artillery, anti-air, shields, engineers, then the rest — which is retail
+    // `lua/formations.lua`'s DFFirst block order reduced to one rank per family.
+    // Rejected handles must not consume a formation slot.
     const Player* issuer = playerFor(issue.player, players);
     std::vector<UnitId> formationMembers;
-    std::optional<UnitTypeIndex> homogeneousType;
     bool useGrowthFormation = issue.kind == CommandKind::Move && canonical.size() > 1;
     for (const UnitId unit : canonical) {
         if (!useGrowthFormation) {
@@ -1120,15 +1121,43 @@ ApplyCommandResult applyCommand(const CommandIssue& issued, UnitStore& store,
             || gridForUnit(unit) == nullptr) {
             continue;
         }
-        const UnitTypeIndex type = store.typeAt(unit.index);
-        if (homogeneousType.has_value() && *homogeneousType != type) {
-            useGrowthFormation = false;
-            break;
-        }
-        homogeneousType = type;
         formationMembers.push_back(unit);
     }
     useGrowthFormation = useGrowthFormation && formationMembers.size() > 1;
+    const auto formationClass = [&](UnitId unit) {
+        const unitdef::UnitDef* def = catalog.def(store.typeAt(unit.index));
+        if (def == nullptr) {
+            return std::pair{7, 3};
+        }
+        const int tech = def->hasCategory("TECH3") ? 0
+                       : def->hasCategory("TECH2") ? 1
+                       : def->hasCategory("TECH1") ? 2
+                                                   : 3;
+        if (def->hasCategory("EXPERIMENTAL")) {
+            return std::pair{0, tech};
+        }
+        if ((def->hasCategory("DIRECTFIRE") || def->hasCategory("INDIRECTFIRE"))
+            && !def->hasCategory("CONSTRUCTION") && !def->hasCategory("ENGINEER")) {
+            return std::pair{1, tech};
+        }
+        if (def->hasCategory("ARTILLERY") || def->hasCategory("INDIRECTFIRE")) {
+            return std::pair{2, tech};
+        }
+        if (def->hasCategory("ANTIAIR")) {
+            return std::pair{3, tech};
+        }
+        if (def->hasCategory("SHIELD")) {
+            return std::pair{4, tech};
+        }
+        if (def->hasCategory("CONSTRUCTION") || def->hasCategory("ENGINEER")
+            || def->hasCategory("COMMAND")) {
+            return std::pair{5, tech};
+        }
+        return std::pair{6, tech};
+    };
+    // Stable: ties keep canonical order, so a homogeneous group fills exactly as
+    // before and selection order stays presentation-only.
+    std::ranges::stable_sort(formationMembers, {}, formationClass);
     const std::size_t formationWidth = growthFormationWidth(formationMembers.size());
 
     result.accepted.reserve(canonical.size());
