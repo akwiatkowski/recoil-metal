@@ -442,7 +442,7 @@ TEST_CASE("resource sites are marked and matching placement snaps to their centr
     std::vector<rm::ui::MinimapPip> pips;
     rm::app::appendMinimapPips(pips, fixture->scene);
     REQUIRE(pips.size() == 2);
-    CHECK(pips[0].worldX == 400);
+    CHECK(pips[0].worldX == 400.0F);
     CHECK(pips[0].colour != pips[1].colour);
     std::vector<rm::DecalVertex> decals;
     rm::app::appendResourceDeposits(decals, fixture->scene, fixture->field);

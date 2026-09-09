@@ -83,7 +83,7 @@ TEST_CASE("retail weapons resolve distinct textured bolts and beam strips", "[co
     REQUIRE(split.size() == emitted.size());
     CHECK(split[1].origin[0] == Catch::Approx(emitted[1].origin[0]));
     CHECK(emitter("/effects/emitters/microwave_laser_beam_01_emit.bp").width == Catch::Approx(8.8));
-    CHECK(emitter("/effects/emitters/electron_bolter_munition_02_emit.bp").startSize.sample(0.5f) == 0);
+    CHECK(emitter("/effects/emitters/electron_bolter_munition_02_emit.bp").startSize.sample(0.5f) == 0.0F);
     std::fprintf(stderr, "weapon visuals: %zu definitions, %zu materials, %zu unresolved\n",
         visuals.definitions.size(), visuals.materials.size(), visuals.unavailable.size());
     for (const auto& error : visuals.unavailable) INFO(error);
@@ -105,7 +105,7 @@ TEST_CASE("retail weapons resolve distinct textured bolts and beam strips", "[co
         for (const auto& strip : particles) {
             CHECK(strip.origin[0] + strip.length == Catch::Approx(104));
             CHECK(strip.material < visuals.materials.size());
-            CHECK(strip.size > 0);
+            CHECK(strip.size > 0.0F);
             CHECK(strip.axis[0] == Catch::Approx(1));
         }
         // A PolyTrail resolves as a ribbon with its authored TrailLength, and the gallery's
@@ -113,7 +113,7 @@ TEST_CASE("retail weapons resolve distinct textured bolts and beam strips", "[co
         const auto ribbon = std::ranges::find_if(visuals.find(key),
             [&](auto id) { return visuals.materials[id].ribbon; });
         if (ribbon != visuals.find(key).end()) {
-            CHECK(visuals.materials[*ribbon].length > 0);
+            CHECK(visuals.materials[*ribbon].length > 0.0F);
             std::vector<rm::Particle> preview;
             rm::appendWeaponVisual(preview, visuals, key, {100, 10, 0}, {108, 10, 0}, 1.0f);
             CHECK(std::ranges::any_of(preview, [&](const auto& p) { return p.material == *ribbon; }));
@@ -130,7 +130,7 @@ TEST_CASE("retail weapons resolve distinct textured bolts and beam strips", "[co
         const char* gauss = "/projectiles/TDFGauss01/TDFGauss01_proj.bp";
         REQUIRE(scene.projectileMeshes.contains(rm::foldedVisualKey(gauss)));
         const auto mesh = scene.projectileMeshes.at(rm::foldedVisualKey(gauss));
-        CHECK(mesh.scale > 0);
+        CHECK(mesh.scale > 0.0F);
         REQUIRE(mesh.batch < scene.batches.size());
         REQUIRE(scene.batches[mesh.batch].model != nullptr);
         CHECK_FALSE(scene.batches[mesh.batch].model->vertices.empty());
@@ -236,7 +236,7 @@ TEST_CASE("effect curves interpolate values and random ranges over their cycle",
     CHECK(curve.sample(0.5f, 1) == Catch::Approx(27.5f));
     CHECK(curve.sample(0.5f, 0) == Catch::Approx(22.5f));
     CHECK(curve.integral(1) == Catch::Approx(25));
-    CHECK(rm::EffectCurve{}.sample(0.5f) == 0);
+    CHECK(rm::EffectCurve{}.sample(0.5f) == 0.0F);
 }
 
 TEST_CASE("legacy Lua permits a numeric literal adjacent to then", "[weapon-visuals]") {
@@ -319,7 +319,7 @@ TEST_CASE("event emitters honour finite, unbounded and explicitly empty definiti
     std::vector<rm::Particle> particles;
     rm::emitCombatEffects(particles,std::array{event},&visuals,&state);
     REQUIRE(particles.size() == 1);
-    CHECK(particles.front().age == 0);
+    CHECK(particles.front().age == 0.0F);
     CHECK(particles.front().size == Catch::Approx(8));
     for (int i=0; i<3; ++i) rm::emitCombatEffects(particles,{},&visuals,&state);
     CHECK(state.bursts.empty());

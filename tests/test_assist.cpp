@@ -149,11 +149,11 @@ struct Fixture {
     [[nodiscard]] bool assist(UnitId who, UnitId target, bool queued = false) {
         const rm::sim::Transform& at = roster.store.transforms()[target.index];
         return apply(Command{.kind = CommandKind::Assist,
+                             .queued = queued,
                              .unit = who,
                              .targetX = at.x,
                              .targetZ = at.z,
-                             .target = target,
-                             .queued = queued});
+                             .target = target});
     }
 
     void tick(int times = 1) {
@@ -269,8 +269,8 @@ TEST_CASE("the final assisted tick requests every builder's full offered work") 
         rm::sim::Construction{
             .cost = {.mass = rm::sim::magFromFloat(100.0f),
                      .energy = rm::sim::magFromFloat(100.0f)},
-            .totalBuildTime = rm::sim::magFromFloat(100.0f),
             .buildTimeRemaining = rm::sim::magFromFloat(1.0f),
+            .totalBuildTime = rm::sim::magFromFloat(100.0f),
             .buildPerTick = rm::sim::magFromFloat(1.0f),
             .assistPerTick = rm::sim::magFromFloat(2.0f),
         },
@@ -300,8 +300,8 @@ TEST_CASE("final build progress scales the full request before clamping") {
         rm::sim::Construction{
             .cost = {.mass = rm::test::mag(100.0f),
                      .energy = rm::test::mag(100.0f)},
-            .totalBuildTime = rm::test::mag(100.0f),
             .buildTimeRemaining = rm::test::mag(1.0f),
+            .totalBuildTime = rm::test::mag(100.0f),
             .buildPerTick = rm::test::mag(1.0f),
             .assistPerTick = rm::test::mag(2.0f),
         },
@@ -481,8 +481,8 @@ TEST_CASE("a station lends nothing to an enemy's construction or wounds") {
                              .energy = rm::sim::magFromFloat(1000.0f)};
 
     // Issued by army 1's own player: a build order names who gave it.
-    REQUIRE(f.apply(Command{.kind = CommandKind::Build,
-                            .player = 1,
+    REQUIRE(f.apply(Command{.player = 1,
+                            .kind = CommandKind::Build,
                             .unit = enemy,
                             .targetX = rm::sim::fxFromFloat(215.0f),
                             .targetZ = rm::sim::fxFromFloat(200.0f),
@@ -588,9 +588,9 @@ TEST_CASE("a cyclic assist chain contributes no work") {
     REQUIRE(f.assist(first, second));
     REQUIRE(f.assist(second, first));
     f.building.push_back(rm::sim::Construction{
-        .builder = first,
-        .totalBuildTime = rm::sim::magFromFloat(100.0f),
         .buildTimeRemaining = rm::sim::magFromFloat(100.0f),
+        .totalBuildTime = rm::sim::magFromFloat(100.0f),
+        .builder = first,
     });
 
     CHECK(rm::sim::applyAssistance(f.roster.store, f.roster.catalog, f.building) == 0);

@@ -473,6 +473,50 @@ function methods:GetThreatAtPosition(position, rings, _, threatType)
     end
     return total
 end
+-- One {x, z, threat} row per visible enemy inside `radius`, threat-highest first.
+-- That is the shape platoon.lua's air-scout loop reads (`unknownThreats[1][3] > 25`,
+-- `AddScoutArea({unknownThreats[1][1], 0, unknownThreats[1][2]})`) and what
+-- ParseIntelThread iterates for StructuresNotMex: retail answers from its threat
+-- grid, this answers from the same observed-enemy snapshot GetThreatAtPosition sums.
+-- Public radii are ogrids; snapshot positions are elmos.
+function methods:GetThreatsAroundPosition(position, radius, _, threatType)
+    local reach = (radius or 0) * 8
+    local out = {}
+    for _, e in ipairs(self.snap.enemies or {}) do
+        local dx, dz = e.x - position[1], e.z - position[3]
+        if dx * dx + dz * dz <= reach * reach then
+            table.insert(out, { e.x, e.z, __rm_faf_threat(e, threatType) })
+        end
+    end
+    table.sort(out, function(a, b) return a[3] > b[3] end)
+    return out
+end
+-- Platoon-level air-scout loop surface (platoon.lua AirScoutingAI, medium-ai.lua:1216-1254):
+-- a must-scout list the brain owns, first-untagged checkout, and adds that dedupe
+-- within 20 ogrids. Retail iterates the list with Lua 5.0's bare-table for, which 5.4
+-- rejects, so this spells out ipairs. Retail compares in ogrids; observed positions
+-- here are elmos, so the 20-ogrid radius arrives as 160 elmos squared.
+function methods:GetUntaggedMustScoutArea()
+    if not self.InterestList or not self.InterestList.MustScout then
+        error('Scouting areas must be initialized before calling AIBrain:GetUntaggedMustScoutArea.', 2)
+    end
+    for idx, loc in ipairs(self.InterestList.MustScout) do
+        if not loc.TaggedBy or loc.TaggedBy.Dead then
+            return loc, idx
+        end
+    end
+end
+function methods:AddScoutArea(location)
+    if not self.InterestList or not self.InterestList.MustScout then
+        error('Scouting areas must be initialized before calling AIBrain:AddScoutArea.', 2)
+    end
+    for _, loc in ipairs(self.InterestList.MustScout) do
+        if VDist2Sq(loc.Position[1], loc.Position[3], location[1], location[3]) < 25600 then
+            return
+        end
+    end
+    table.insert(self.InterestList.MustScout, { Position = location, TaggedBy = false })
+end
 function methods:GetEngineerManagerUnitsBeingBuilt(category)
     return EntityCategoryCount(category, self.snap.underway or {})
 end
@@ -629,6 +673,11 @@ function __rm_faf_boot(army, info)
     brain.scoutAssignments = {}
     brain.scoutVisits = { land = 0, air = 0 }
     brain.scoutSerial = 0
+    -- Platoon air scouts checkout must-scout areas through GetUntaggedMustScoutArea,
+    -- which errors when this table is absent (medium-ai.lua:1240). Seeded empty at
+    -- boot like BuildScoutLocations seeds it; High/LowPriority stay unowned because
+    -- the adapter's own ScoutingAI plan serves exploration from scoutSites instead.
+    brain.InterestList = { MustScout = {} }
     brain.numOpponents = info.numOpponents or math.max(1, info.armies - 1)
     brain.mapSize = {info.sizeX, info.sizeZ}
 
@@ -2816,7 +2865,7 @@ void FafOpponent::convertDecision(lua_State* lua) {
             const float z=static_cast<float>(lua_tonumber(lua,-1));
             const bool valid=lua_isnumber(lua,-2) && lua_isnumber(lua,-1)
                 && std::isfinite(x) && std::isfinite(z) && x>=0 && z>=0
-                && x<=world_->field.squaresX*rm::kSquareSize && z<=world_->field.squaresZ*rm::kSquareSize;
+                && x<=static_cast<float>(world_->field.squaresX*rm::kSquareSize) && z<=static_cast<float>(world_->field.squaresZ*rm::kSquareSize);
             lua_pop(lua,2);
             if (valid) decisions_.push_back({.kind=Decision::Kind::Move,.unit=*unit,
                 .toX=rm::sim::fxFromFloat(x),.toZ=rm::sim::fxFromFloat(z),.queued=queued});
@@ -2933,8 +2982,8 @@ void FafOpponent::convertDecision(lua_State* lua) {
                 const float x = static_cast<float>(lua_tonumber(lua, -2));
                 const float z = static_cast<float>(lua_tonumber(lua, -1));
                 if (std::isfinite(x) && std::isfinite(z) && x >= 0 && z >= 0
-                    && x <= world_->field.squaresX*rm::kSquareSize
-                    && z <= world_->field.squaresZ*rm::kSquareSize) {
+                    && x <= static_cast<float>(world_->field.squaresX*rm::kSquareSize)
+                    && z <= static_cast<float>(world_->field.squaresZ*rm::kSquareSize)) {
                     site = std::array{rm::sim::fxFromFloat(x),rm::sim::Fx{},rm::sim::fxFromFloat(z)};
                 }
             }
@@ -2966,7 +3015,7 @@ void FafOpponent::convertDecision(lua_State* lua) {
                 const float z=static_cast<float>(lua_tonumber(lua,-1));
                 const bool valid=lua_isnumber(lua,-2) && lua_isnumber(lua,-1)
                     && std::isfinite(x) && std::isfinite(z) && x>=0 && z>=0
-                    && x<=world_->field.squaresX*rm::kSquareSize && z<=world_->field.squaresZ*rm::kSquareSize;
+                    && x<=static_cast<float>(world_->field.squaresX*rm::kSquareSize) && z<=static_cast<float>(world_->field.squaresZ*rm::kSquareSize);
                 lua_pop(lua,3);
                 if (!valid) return;
                 home={rm::sim::fxFromFloat(x),rm::sim::Fx{},rm::sim::fxFromFloat(z)};

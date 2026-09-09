@@ -165,7 +165,7 @@ Sandbox* sandboxOf(lua_State* lua) {
 }
 
 /// Every stub is this one function. Which name it is arrives as an upvalue holding the slot
-/// index, so 254 registrations share one piece of code and one counter array.
+/// index, so 256 registrations share one piece of code and one counter array.
 int countedStub(lua_State* lua) {
     Sandbox* sandbox = sandboxOf(lua);
     const auto slot = static_cast<std::size_t>(lua_tointeger(lua, lua_upvalueindex(1)));

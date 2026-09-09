@@ -10,7 +10,7 @@
 //
 // EVERY NAME IS BOUND, and that is the load-time guarantee worth having. A missing binding in
 // Lua is a nil-call forty minutes into a match; a bound stub is a counted, named no-op. So all
-// 254 names from `FafApi.inc` are installed before a line of AI Lua runs, each carrying a
+// 256 names from `FafApi.inc` are installed before a line of AI Lua runs, each carrying a
 // confidence tag:
 //
 //   Known    — implemented against this engine, believed correct.

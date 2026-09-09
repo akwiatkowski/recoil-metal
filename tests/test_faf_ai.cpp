@@ -842,6 +842,89 @@ TEST_CASE("FAF threat queries use authored map cells and separate air from anti-
     REQUIRE(ok);
 }
 
+TEST_CASE("FAF must-scout areas checkout untagged first and dedupe nearby adds",
+          "[faf][ai][scouting]") {
+    const auto root = corpusRoot();
+    if (root.empty()) SKIP("no vendored corpus; run `make ai`");
+    FafAi ai(root);
+    REQUIRE(installFafDriver(ai));
+    importAiEntryPoints(ai);
+    const bool ok = ai.eval(R"(
+        __rm_faf_boot(0, { faction = 1, startX = 0, startZ = 0,
+            sizeX = 4096, sizeZ = 4096, armies = 2, base = 'NormalMain', markers = {} })
+        local brain = __rm_faf.brains[0]
+        assert(brain.InterestList and #brain.InterestList.MustScout == 0,
+            'boot seeds an empty must-scout list')
+        assert(brain:GetUntaggedMustScoutArea() == nil, 'an empty list checks out nil')
+        brain:AddScoutArea({100, 0, 100})
+        assert(#brain.InterestList.MustScout == 1)
+        brain:AddScoutArea({200, 0, 100})
+        assert(#brain.InterestList.MustScout == 1,
+            'a re-add 100 elmos away dedupes inside the 20-ogrid radius')
+        brain:AddScoutArea({2000, 0, 2000})
+        assert(#brain.InterestList.MustScout == 2, 'a distant area is a second entry')
+        local area, idx = brain:GetUntaggedMustScoutArea()
+        assert(area and idx == 1 and area.Position[1] == 100,
+            'the first untagged area checks out first')
+        area.TaggedBy = { Dead = false }
+        local held = brain:GetUntaggedMustScoutArea()
+        assert(held and held.Position[1] == 2000, 'a live tag holds its area')
+        area.TaggedBy.Dead = true
+        assert(brain:GetUntaggedMustScoutArea() == area, 'a dead tag releases its area')
+        brain.InterestList = nil
+        local ok, err = pcall(brain.GetUntaggedMustScoutArea, brain)
+        assert(not ok and err:find('must be initialized'),
+            'a missing list errors like retail instead of nil-calling')
+        local ok2, err2 = pcall(brain.AddScoutArea, brain, {0, 0, 0})
+        assert(not ok2 and err2:find('must be initialized'),
+            'a missing list errors like retail instead of nil-calling')
+    )");
+    INFO(ai.lastError());
+    REQUIRE(ok);
+}
+
+TEST_CASE("FAF threats around position list visible enemies threat-highest first",
+          "[faf][ai][scouting]") {
+    const auto root = corpusRoot();
+    if (root.empty()) SKIP("no vendored corpus; run `make ai`");
+    FafAi ai(root);
+    REQUIRE(installFafDriver(ai));
+    importAiEntryPoints(ai);
+    const bool ok = ai.eval(R"(
+        __rm_faf_boot(0, { faction = 1, startX = 0, startZ = 0,
+            sizeX = 4096, sizeZ = 4096, armies = 2, base = 'NormalMain', markers = {} })
+        local brain = __rm_faf.brains[0]
+        __rm_faf_type('TANK', {'LAND', 'MOBILE'}, {s=20})
+        __rm_faf_type('AA', {'LAND', 'MOBILE'}, {s=2, a=10})
+        __rm_faf_type('EXP', {'LAND', 'MOBILE'}, {s=100})
+        brain.snap.enemies = {
+            {bp='TANK', x=100, z=0, __cats=__rm_faf.cats.TANK},
+            {bp='AA', x=120, z=0, __cats=__rm_faf.cats.AA},
+            {bp='TANK', x=8000, z=8000, __cats=__rm_faf.cats.TANK},
+        }
+        local rows = brain:GetThreatsAroundPosition({0, 0, 0}, 16, true, 'AntiSurface')
+        assert(#rows == 2, 'only enemies inside the 16-ogrid radius list')
+        assert(rows[1][1] == 100 and rows[1][2] == 0 and rows[1][3] == 20,
+            'a row reads x, z, threat, threat-highest first')
+        assert(rows[2][1] == 120 and rows[2][3] == 2)
+        assert(#brain:GetThreatsAroundPosition({0, 0, 0}, 1, true, 'AntiSurface') == 0,
+            'a 1-ogrid radius reaches nothing 100 elmos out')
+        -- The platoon loop's second branch: an unknown threat above 25 becomes
+        -- a must-scout area for the next pass.
+        brain.snap.enemies[1] = {bp='EXP', x=50, z=0, __cats=__rm_faf.cats.EXP}
+        local unknown = brain:GetThreatsAroundPosition({0, 0, 0}, 16, true, 'Unknown')
+        assert(#unknown == 2 and unknown[1][3] == 100, 'surface threat leads the table')
+        if unknown[1][3] > 25 then
+            brain:AddScoutArea({unknown[1][1], 0, unknown[1][2]})
+        end
+        assert(#brain.InterestList.MustScout == 1
+            and brain.InterestList.MustScout[1].Position[1] == 50,
+            'the unknown threat is queued for the next scout pass')
+    )");
+    INFO(ai.lastError());
+    REQUIRE(ok);
+}
+
 TEST_CASE("FAF construction selects a free engineer instead of counting global work",
           "[faf][ai][construction]") {
     const auto root = corpusRoot();
@@ -1890,7 +1973,7 @@ TEST_CASE("FAF structure selection skips terrain refused by its engineer", "[faf
     const auto mexType=scene.catalog.add(&scene.definitions.back());
     (void)scene.store.spawn({.type=mexType,
         .transform={.x=rm::sim::Fx::fromInt(320),.z=rm::sim::Fx::fromInt(320)},
-        .motion={.radiusElmos=rm::sim::fxFromFloat(mex->collisionRadiusElmos),.armyIndex=1},
+        .motion={.armyIndex=1,.radiusElmos=rm::sim::fxFromFloat(mex->collisionRadiusElmos)},
         .health={.current=mex->health,.maximum=mex->health}});
     const std::array<rm::scenario::Marker,2> markers{{
         {.name="occupied",.type="Mass",.position={320,200,320}},
@@ -1986,7 +2069,7 @@ TEST_CASE("FAF opening surveys native resources and preserves selected queued si
     const auto factoryType=scene.catalog.add(&scene.definitions.back());
     const auto factoryX=firstSite[0]+rm::sim::Fx::fromInt(8);
     (void)scene.store.spawn({.type=factoryType,.transform={.x=factoryX,.z=firstSite[2]},
-        .motion={.radiusElmos=rm::sim::fxFromFloat(factory->collisionRadiusElmos),.armyIndex=1},
+        .motion={.armyIndex=1,.radiusElmos=rm::sim::fxFromFloat(factory->collisionRadiusElmos)},
         .health={.current=factory->health,.maximum=factory->health}});
     REQUIRE(ai.eval(R"(
         __rm_faf_decide=function(army,snap)

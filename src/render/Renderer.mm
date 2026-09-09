@@ -980,6 +980,14 @@ void Renderer::encodeScene(MTL::CommandBuffer* commandBuffer, MTL::RenderPassDes
         .waterColourLerp = environment_.waterColourLerp,
         .waterSkyReflection = environment_.waterSkyReflection,
         .waterSunShininess = environment_.waterSunShininess,
+        // Far below any map by default, so nothing is clipped unless a pass
+        // asks for it.
+        .clipBelowY = override != nullptr ? override->clipBelowY : -1.0e9f,
+        .viewportSize = simd_make_float2(static_cast<float>(width), static_cast<float>(height)),
+        // Must agree with encodeReflectionPass's own guard: the water reads
+        // this to decide whether the reflection texture holds this frame's
+        // mirror or last frame's leftovers.
+        .hasReflection = reflectionsEnabled_ ? 1.0f : 0.0f,
         .waterRefractionScale = environment_.waterRefractionScale,
         .skyZenithTint = simd_make_float3(environment_.skyZenithTint[0],
                                           environment_.skyZenithTint[1],
@@ -991,23 +999,15 @@ void Renderer::encodeScene(MTL::CommandBuffer* commandBuffer, MTL::RenderPassDes
         .shadowFill = simd_make_float3(environment_.shadowFill[0], environment_.shadowFill[1],
                                        environment_.shadowFill[2]),
         .lightingMultiplier = environment_.lightingMultiplier,
+        .hasFog = hasFog_ ? 1.0f : 0.0f,
+        .fogWidthElmos = fogWidthElmos_,
+        .fogDepthElmos = fogDepthElmos_,
         .waveRepeats = simd_make_float4(environment_.waveRepeats[0],
                                         environment_.waveRepeats[1], 0.0f, 0.0f),
         .waveMovements = simd_make_float4(
             environment_.waveMovements[0], environment_.waveMovements[1],
             environment_.waveMovements[2], environment_.waveMovements[3]),
         .hasWaterWaves = waterWaves_ != nullptr ? 1.0f : 0.0f,
-        .hasFog = hasFog_ ? 1.0f : 0.0f,
-        .fogWidthElmos = fogWidthElmos_,
-        .fogDepthElmos = fogDepthElmos_,
-        // Far below any map by default, so nothing is clipped unless a pass
-        // asks for it.
-        .clipBelowY = override != nullptr ? override->clipBelowY : -1.0e9f,
-        .viewportSize = simd_make_float2(static_cast<float>(width), static_cast<float>(height)),
-        // Must agree with encodeReflectionPass's own guard: the water reads
-        // this to decide whether the reflection texture holds this frame's
-        // mirror or last frame's leftovers.
-        .hasReflection = reflectionsEnabled_ ? 1.0f : 0.0f,
     };
 
     // --- Sky ---------------------------------------------------------------

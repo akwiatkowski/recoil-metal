@@ -793,8 +793,8 @@ int runOffscreenBenchmark(const Session& session) {
             // benchmark size is the logical size and `--backing` scales the pixels, as for
             // a capture.
             const bool withHud = hasFlag(argc, argv, "--bench-hud");
-            const auto pixelsWide = static_cast<unsigned int>(std::lround(bench.width * shot.backing));
-            const auto pixelsHigh = static_cast<unsigned int>(std::lround(bench.height * shot.backing));
+            const auto pixelsWide = static_cast<unsigned int>(std::lround(static_cast<float>(bench.width) * shot.backing));
+            const auto pixelsHigh = static_cast<unsigned int>(std::lround(static_cast<float>(bench.height) * shot.backing));
             const rm::ui::UiViewport benchViewport = rm::ui::UiViewport::full(
                 static_cast<float>(bench.width), static_cast<float>(bench.height),
                 shot.backing, session.uiScale);
@@ -855,9 +855,9 @@ int runScreenshot(const Session& session) {
                 static_cast<float>(shot.width), static_cast<float>(shot.height), shot.backing,
                 session.uiScale);
             const auto pixelsWide =
-                static_cast<unsigned int>(std::lround(shot.width * shot.backing));
+                static_cast<unsigned int>(std::lround(static_cast<float>(shot.width) * shot.backing));
             const auto pixelsHigh =
-                static_cast<unsigned int>(std::lround(shot.height * shot.backing));
+                static_cast<unsigned int>(std::lround(static_cast<float>(shot.height) * shot.backing));
             std::printf("  capture: %ux%u points at backing %.2f -> %ux%u pixels, hud scale %.3f\n",
                         shot.width, shot.height, static_cast<double>(shot.backing), pixelsWide,
                         pixelsHigh, static_cast<double>(shotViewport.hudScale()));
@@ -2927,8 +2927,8 @@ int runWindowed(const Session& session) {
             const auto viewport = window.uiViewport();
             const auto hud = viewport.toHud(*point);
             const auto frame = rm::ui::frameLayout(viewport);
-            inputCheck((*point)[0] > 0 && (*point)[0] < window.width()
-                && (*point)[1] > 0 && (*point)[1] < window.height()
+            inputCheck((*point)[0] > 0 && (*point)[0] < static_cast<float>(window.width())
+                && (*point)[1] > 0 && (*point)[1] < static_cast<float>(window.height())
                 && !frame.commands.contains(hud[0], hud[1])
                 && !frame.build.contains(hud[0], hud[1]), "world target overlaps HUD or window edge");
             window.sendMouseClick((*point)[0], (*point)[1], button, shift);

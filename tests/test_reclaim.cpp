@@ -320,7 +320,7 @@ TEST_CASE("a Mantis Guard cannot borrow a reclaim capability from its guardee", 
     if (!std::filesystem::is_regular_file(path)) SKIP("no retail Mantis blueprint");
     const auto mantis = rm::unitbp::loadFile(path);
     REQUIRE(mantis);
-    REQUIRE(mantis->buildRate > 0);
+    REQUIRE(mantis->buildRate > 0.0F);
     REQUIRE(mantis->hasCommandCap("RULEUCC_Guard"));
     REQUIRE_FALSE(mantis->hasCommandCap("RULEUCC_Reclaim"));
     Fixture f;

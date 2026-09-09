@@ -991,8 +991,8 @@ TEST_CASE("factory panel clicks control the real production queue", "[corpus][ui
     CHECK(count == 2);
     CHECK(view->queue.front().id == "UEL0201");
     CHECK(view->building);
-    CHECK(view->progress > 0);
-    CHECK(view->progress < 1);
+    CHECK(view->progress > 0.0F);
+    CHECK(view->progress < 1.0F);
     REQUIRE(click(repeat, 0, 20));
     (void)rm::app::advanceMatch(runner, 20, 0);
     CHECK(rm::app::gatherProduction(scenario.scene, builder)->repeat);
@@ -1456,8 +1456,8 @@ TEST_CASE("real construction lifecycle is reflected by the active inspector", "[
     const auto started = rm::app::constructionCard(scene.scene, builder);
     REQUIRE(started);
     REQUIRE(started->progress);
-    CHECK(*started->progress > 0);
-    CHECK(*started->progress < 1);
+    CHECK(*started->progress > 0.0F);
+    CHECK(*started->progress < 1.0F);
     CHECK(started->rows.back().value == "ACTIVE");
 
     SECTION("stall then funding recovery and completion") {

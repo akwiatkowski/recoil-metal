@@ -181,7 +181,7 @@ excluded from the headline.
 | [`FA-INTEL`](#fa-intel---vision-radar-sonar-and-counter-intel) | Vision, radar, sonar, counter-intel | `WP-33` | 75% | 45% | 90% | Apply radar-position error to automatic targeting without changing contact identity or ordering. |
 | [`FA-PROGRESS`](#fa-progress---enhancements-veterancy-and-special-units) | Enhancements, veterancy, special units | `WP-34`-`36` | 35% | 20% | 35% | Complete the enhancement lifecycle specification around `CUnitScriptTask`. |
 | [`FA-TERRAIN`](#fa-terrain---mutable-terrain-and-craters) | Mutable terrain and craters | `WP-37` | 0% | 0% | 25% | Trace one crater from damage through terrain, pathing, and rendering invalidation. |
-| [`FA-AI`](#fa-ai---retail-ai-and-native-manager-boundary) | Retail AI and native manager boundary | `WP-38` | 40% | 5% | 30% | Complete must-scout requests, unknown-threat interest queues and continuous air flybys; current easy, turtle and tech duels are decisive. |
+| [`FA-AI`](#fa-ai---retail-ai-and-native-manager-boundary) | Retail AI and native manager boundary | `WP-38` | 45% | 5% | 30% | Must-scout requests and unknown-threat interest queues are in (`GetUntaggedMustScoutArea`, `AddScoutArea`, `GetThreatsAroundPosition` with headless cover); next is continuous air flybys. Current easy, turtle and tech duels are decisive. |
 | [`FA-UI`](#fa-ui---player-interface-and-advanced-controls) | Player interface and advanced controls | `WP-39`-`40` | 75% | 5% | 15% | Trace and implement the first retail data-driven command page from `WP-40`. |
 | [`FA-PRESENT`](#fa-present---animation-effects-and-audio) | Animation, effects, audio | `WP-41`-`42` | 75% | 5% | 45% | Script-driven manipulators on the authored weapon effects; then dynamic music. |
 | [`FA-PERSIST`](#fa-persist---replay-hashing-and-saveresume) | Replay, hashing, save/resume | `WP-43`-`44` | 70% | 20% | 90% | General app saves remain absent; the shared golden rebaseline is complete (`afe2867`), separate from save/resume scenario coverage. |
@@ -601,8 +601,8 @@ authored `DamageFriendly` behavior. Deeper retail AI architecture and naval comb
 parity remain separate gaps.
 
 ```text
-/goal Complete the next bounded scouting fidelity slice: must-scout requests,
-unknown-threat interest queues and continuous air flybys. Preserve generation-safe
+/goal Complete the continuous air-flyby remainder of the scouting slice: must-scout
+requests and unknown-threat interest queues are already in. Preserve generation-safe
 assignments and the current decisive, watchdog-clean duel behavior; retain the
 current balance, reclaim policy and authored friendly death effects.
 ```

@@ -101,9 +101,20 @@ def build() -> tuple[list[tuple[str, int]], list[tuple[str, int]], list[tuple[st
     globals_ = sorted(
         ((n, c) for n, c in call_globals.items() if n in ann_globals and n not in STDLIB),
         key=lambda p: (-p[1], p[0]))
+
+    # Brain surface platoon.lua's air-scout loop calls on the adapter's OWN brain table,
+    # which medium-ai.lua defines in Lua rather than on Moho: the annotated∩called
+    # intersection above can never emit them, and --check would delete a hand edit.
+    # Counts come from the corpus like every other entry, so the work-queue ordering
+    # stays honest.
+    EXTRA_METHODS = ("AddScoutArea", "GetUntaggedMustScoutArea")
     methods = sorted(
         ((n, c) for n, c in call_methods.items() if n in ann_methods),
         key=lambda p: (-p[1], p[0]))
+    for name in EXTRA_METHODS:
+        if name in call_methods and name not in ann_methods and all(n != name for n, _ in methods):
+            methods.append((name, call_methods[name]))
+            methods.sort(key=lambda p: (-p[1], p[0]))
     # Called as a method, never annotated, and not defined anywhere in the corpus either: the
     # leak into game Lua the adapter has to shim.
     defined = set(re.findall(r"^\s*(?:function\s+[A-Za-z0-9_.]*[:.]|)([A-Za-z0-9_]+)\s*=\s*function",

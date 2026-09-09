@@ -132,7 +132,7 @@ void Mixer::render(float* out, std::size_t frames) {
                 voice.cue = nullptr;
                 break;
             }
-            const float frac = static_cast<float>(voice.position - whole);
+            const float frac = static_cast<float>(voice.position - static_cast<double>(whole));
             const float sample = samples[whole] * (1.0f - frac) + samples[whole + 1] * frac;
             out[i * 2] += sample * voice.gainLeft * masterGain_;
             out[i * 2 + 1] += sample * voice.gainRight * masterGain_;

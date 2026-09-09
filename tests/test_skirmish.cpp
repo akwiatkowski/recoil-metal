@@ -582,8 +582,8 @@ TEST_CASE("a dead redirector's record is reaped before projectiles fly") {
                 .economies = economies,
                 .projectiles = &projectiles,
                 .building = &building,
-                .commandersEver = commandersEver,
                 .redirects = &redirects,
+                .commandersEver = commandersEver,
                 .baseStorage = {.mass = rm::test::mag(10000.0f),
                                 .energy = rm::test::mag(1000000.0f)}};
 

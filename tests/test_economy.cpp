@@ -398,8 +398,8 @@ TEST_CASE("a build with no rate never progresses and costs nothing") {
 
 TEST_CASE("a fully stalled build is billed but does not advertise visible progress") {
     Construction work{
-        .totalBuildTime = rm::test::mag(100.0f),
         .buildTimeRemaining = rm::test::mag(50.0f),
+        .totalBuildTime = rm::test::mag(100.0f),
         .buildPerTick = rm::test::mag(10.0f),
         .fundedLastTick = rm::sim::Fx{},
     };

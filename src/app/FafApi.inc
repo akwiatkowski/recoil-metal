@@ -8,7 +8,7 @@
 // Consumed as X-macros so one list serves registration, the stub table and the
 // instrumentation report without three copies drifting apart.
 
-// 83 globals, 139 methods, 32 shims — 254 names in total.
+// 83 globals, 141 methods, 32 shims — 256 names in total.
 
 #ifndef RM_FAF_GLOBAL
 #define RM_FAF_GLOBAL(name, calls)
@@ -228,6 +228,7 @@ RM_FAF_METHOD("SetArmyStat", 2)
 RM_FAF_METHOD("SetDoNotTarget", 2)
 RM_FAF_METHOD("ShowBone", 2)
 RM_FAF_METHOD("TestCommandCaps", 2)
+RM_FAF_METHOD("AddScoutArea", 1)
 RM_FAF_METHOD("CalculateWorldPositionFromRelative", 1)
 RM_FAF_METHOD("CreateResourceBuildingNearest", 1)
 RM_FAF_METHOD("CreateUnitNearSpot", 1)
@@ -240,6 +241,7 @@ RM_FAF_METHOD("GetHeading", 1)
 RM_FAF_METHOD("GetMaxHealth", 1)
 RM_FAF_METHOD("GetStatus", 1)
 RM_FAF_METHOD("GetThreatBetweenPositions", 1)
+RM_FAF_METHOD("GetUntaggedMustScoutArea", 1)
 RM_FAF_METHOD("GetWeaponCount", 1)
 RM_FAF_METHOD("GiveStorage", 1)
 RM_FAF_METHOD("IsCapturable", 1)

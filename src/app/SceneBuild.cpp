@@ -101,7 +101,7 @@ rm::sim::MoveState motionFor(const rm::unitdef::UnitDef& def, int armyIndex) {
             : rm::sim::kAirClearanceElmos;
         motion.idleLandThreshold = def.airAutoLandTimeSec > 0.0f
             ? static_cast<std::uint32_t>(def.airAutoLandTimeSec
-                                         * gAppTickRate.ticksPerSecond())
+                                         * static_cast<float>(gAppTickRate.ticksPerSecond()))
             : std::numeric_limits<std::uint32_t>::max();
         motion.fuelDrainPerTick = def.airFuelUseTimeSec > 0.0f
             ? rm::sim::fxFromFloat(1.0f / (def.airFuelUseTimeSec * 10.0f))

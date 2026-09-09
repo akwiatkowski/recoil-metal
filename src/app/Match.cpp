@@ -596,7 +596,7 @@ std::size_t runAutoExpansion(MatchRunner& runner, rm::TickIndex tick) {
             continue;  // busy with something, about to be, or told to wait
         }
         const int army = scene.armyOf(expander.unit.index);
-        const rm::TickIndex grace = tick + static_cast<rm::TickIndex>(kRefusalGraceSeconds * second);
+        const rm::TickIndex grace = tick + static_cast<rm::TickIndex>(kRefusalGraceSeconds * static_cast<float>(second));
         const auto refuse = [&](const std::array<rm::sim::Fx, 3>& site) {
             expander.refused.push_back(RefusedSite{.site = site, .until = grace});
         };
@@ -1033,8 +1033,8 @@ void runOpponents(UnitScene& scene, const rm::vfs::Vfs& content, const rm::Heigh
                 .siloAmmo = &scene.siloAmmo,
                 .enhancements = &scene.enhancementWork,
                 .redirects = &scene.redirects,
-                .events = &scene.events,
                 .features = &scene.features,
+                .events = &scene.events,
                 .scriptTasks = scene.enhancementTasks.get(),
                 .commandersEver = scene.commandersEver,
                 .baseStorage = kStartingStorage,

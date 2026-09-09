@@ -426,9 +426,9 @@ TEST_CASE("an interceptor damages a projectile's health rather than force-destro
         Roster roster;
         Projectile target{.position = at,
                           .firedByArmy = 1,
-                          .health = rm::test::mag(targetMaxHealth),
+                          .ticksRemaining = 10,
                           .maxHealth = rm::test::mag(targetMaxHealth),
-                          .ticksRemaining = 10};
+                          .health = rm::test::mag(targetMaxHealth)};
         Projectile interceptor{.position = rm::test::at(0, 4, 0),
                                .velocity = rm::test::at(0, 0, 20),
                                .damage = rm::unitdef::flatDamage(rm::test::mag(damage)),
@@ -480,15 +480,15 @@ TEST_CASE("point defence applies target restrictions to projectile acquisition")
                             std::vector<std::string>{"TACTICAL", "MISSILE"}))),
                          0.0f, 0.0f, 0, 100.0f);
         std::vector<Projectile> tacticalShot{{.position = rm::test::at(0, 4, 50),
-                                              .categories = tactical,
                                               .firedByArmy = 1,
-                                              .ticksRemaining = 10}};
+                                              .ticksRemaining = 10,
+                                              .categories = tactical}};
         CHECK(rm::sim::fireWeapons(roster.store, roster.catalog, armies, tacticalShot,
                                     roster.rate) == 1);
         std::vector<Projectile> strategicShot{{.position = rm::test::at(0, 4, 50),
-                                               .categories = strategic,
                                                .firedByArmy = 1,
-                                               .ticksRemaining = 10}};
+                                               .ticksRemaining = 10,
+                                               .categories = strategic}};
         CHECK(rm::sim::fireWeapons(roster.store, roster.catalog, armies, strategicShot,
                                     roster.rate) == 0);
         CHECK(strategicShot.size() == 1);
@@ -502,9 +502,9 @@ TEST_CASE("point defence applies target restrictions to projectile acquisition")
         // Sorted: MISSILE < TACTICAL < UNTARGETABLE.
         const std::vector<std::string> cloaked{"MISSILE", "TACTICAL", "UNTARGETABLE"};
         std::vector<Projectile> shots{{.position = rm::test::at(0, 4, 50),
-                                       .categories = cloaked,
                                        .firedByArmy = 1,
-                                       .ticksRemaining = 10}};
+                                       .ticksRemaining = 10,
+                                       .categories = cloaked}};
         CHECK(rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots,
                                     roster.rate) == 0);
         CHECK(shots.size() == 1);
@@ -529,15 +529,15 @@ TEST_CASE("point defence applies target restrictions to projectile acquisition")
                             std::vector<std::string>{"STRATEGIC", "MISSILE"}))),
                          0.0f, 0.0f, 0, 100.0f);
         std::vector<Projectile> strategicShot{{.position = rm::test::at(0, 4, 50),
-                                               .categories = strategic,
                                                .firedByArmy = 1,
-                                               .ticksRemaining = 10}};
+                                               .ticksRemaining = 10,
+                                               .categories = strategic}};
         CHECK(rm::sim::fireWeapons(roster.store, roster.catalog, armies, strategicShot,
                                     roster.rate) == 1);
         std::vector<Projectile> tacticalShot{{.position = rm::test::at(0, 4, 50),
-                                              .categories = tactical,
                                               .firedByArmy = 1,
-                                              .ticksRemaining = 10}};
+                                              .ticksRemaining = 10,
+                                              .categories = tactical}};
         CHECK(rm::sim::fireWeapons(roster.store, roster.catalog, armies, tacticalShot,
                                     roster.rate) == 0);
         CHECK(tacticalShot.size() == 1);
@@ -2745,9 +2745,9 @@ TEST_CASE("a flare diverts a matching hostile projectile onto its owner") {
     const auto incoming = [&](int x, int z, int vx) {
         Projectile shot{.position = rm::test::at(x, 4, z),
                         .velocity = rm::test::at(vx, 0, 0),
-                        .categories = missile,
                         .firedByArmy = 1,
-                        .ticksRemaining = 10};
+                        .ticksRemaining = 10,
+                        .categories = missile};
         return shot;
     };
     const auto flyOne = [&](Roster& roster, Projectile shot) {
@@ -2823,10 +2823,10 @@ TEST_CASE("a redirector turns an enemy missile back on its launcher") {
     const auto incoming = [&]() {
         Projectile shot{.position = rm::test::at(100, 4, 0),
                         .velocity = rm::test::at(-20, 0, 0),
-                        .categories = missile,
                         .firedBy = launcher,
                         .firedByArmy = 1,
-                        .ticksRemaining = 10};
+                        .ticksRemaining = 10,
+                        .categories = missile};
         return shot;
     };
 
