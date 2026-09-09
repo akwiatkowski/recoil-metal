@@ -2936,6 +2936,13 @@ int runWindowed(const Session& session) {
         std::optional<rm::sim::UnitId> pendingInputSelection;
         const auto inputSelect = [&](rm::sim::UnitId id) {
             inputCheck(units.store.alive(id), "selection target died");
+            // Already there: a redundant native click would TOGGLE the unit off under
+            // applyClick's membership rule, so establishing selection means no click.
+            // An upgrade leaves its replacement selected by following UnitFinished.
+            if (selected.size() == 1 && selected.front() == id) {
+                pendingInputSelection.reset();
+                return true;
+            }
             const auto& at = units.store.transforms()[id.index];
             if (pendingInputSelection != id) {
                 window.focusOn({rm::sim::fxToFloat(at.x), rm::sim::fxToFloat(at.y),

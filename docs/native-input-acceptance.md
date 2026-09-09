@@ -62,8 +62,11 @@ structures backed by the engineer's logged Build commands, and clicks AUTO MEX
 off again. These stages require a map with navigable water and at least three
 available resource deposits. They retain ordinary income, costs and build rates.
 
-Selection waits for a rendered frame after focusing the camera. Build completion
-compares full generational handles, including units created in recycled slots.
+Selection waits for a rendered frame after focusing the camera. Re-selecting an
+already-selected unit issues no click: a redundant native click would toggle it off
+under applyClick's membership rule, and an upgrade leaves its replacement selected
+by following UnitFinished. Build completion compares full generational handles,
+including units created in recycled slots.
 The final capture runs from a main-loop timer between renderer frames. A failed
 assertion or timeout saves a diagnostic capture and returns nonzero. A successful run prints one PASS line for
 every product, then a final summary and saves a PNG.
