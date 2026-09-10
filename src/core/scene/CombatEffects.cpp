@@ -112,14 +112,27 @@ void emitCombatEffects(std::vector<Particle>& into, std::span<const sim::Event> 
                 const int steps = std::max(2, static_cast<int>(length / kBeamSpacingElmos));
                 for (int i = 0; i <= steps; ++i) {
                     const float t = static_cast<float>(i) / static_cast<float>(steps);
+                    const std::array<float, 3> node{from[0] + dx * t, from[1] + dy * t,
+                                                    from[2] + dz * t};
                     into.push_back(Particle{
-                        .origin = {from[0] + dx * t, from[1] + dy * t, from[2] + dz * t},
+                        .origin = node,
                         .age = 0.0f,
                         .velocity = {0.0f, 0.0f, 0.0f},
                         .lifetime = kBeamLifetime,
                         // Hot blue-white, additive — a laser is light and nothing else.
                         .colour = {0.55f, 0.75f, 1.0f, 0.0f},
                         .size = kBeamSize,
+                    });
+                    // The halo: the same node two and a half times wider at a third
+                    // the brightness. A bare chain reads as beads at battle zoom;
+                    // the halo merges them into one bar of light.
+                    into.push_back(Particle{
+                        .origin = node,
+                        .age = 0.0f,
+                        .velocity = {0.0f, 0.0f, 0.0f},
+                        .lifetime = kBeamLifetime,
+                        .colour = {0.18f, 0.25f, 0.33f, 0.0f},
+                        .size = kBeamSize * 2.5f,
                     });
                 }
             }

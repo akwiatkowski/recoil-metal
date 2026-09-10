@@ -89,3 +89,26 @@ TEST_CASE("everything else earns nothing here", "[effects]") {
     rm::emitCombatEffects(out, {&built, 1});
     CHECK(out.empty());
 }
+
+TEST_CASE("a beam earns a hot core and a soft halo per node", "[effects]") {
+    std::vector<rm::Particle> out;
+    const Event beam{.kind = EventKind::BeamFired,
+                     .at = {rm::test::fx(8.0f), rm::test::fx(0.0f), rm::test::fx(0.0f)},
+                     .at2 = {rm::test::fx(0.0f), rm::test::fx(0.0f), rm::test::fx(0.0f)}};
+    rm::emitCombatEffects(out, {&beam, 1});
+
+    // Eight elmos at four-elmo spacing: three nodes, each a core plus a halo,
+    // then the strike spark where it lands.
+    REQUIRE(out.size() == 7);
+    for (std::size_t node = 0; node < 3; ++node) {
+        const rm::Particle& core = out[2 * node];
+        const rm::Particle& halo = out[2 * node + 1];
+        CHECK(core.colour == std::array{0.55f, 0.75f, 1.0f, 0.0f});
+        CHECK(halo.colour[3] == 0.0f);
+        CHECK(halo.size > core.size);
+        CHECK(halo.colour[0] < core.colour[0]);
+        CHECK(halo.origin == core.origin);
+        CHECK(halo.lifetime == core.lifetime);
+    }
+    CHECK(out[6].colour == std::array{0.7f, 0.85f, 1.0f, 0.0f});
+}
