@@ -101,12 +101,29 @@ void setAppTickRate(std::uint32_t ticksPerSecond) {
 ///
 /// Guarded on the count so a match that kills nothing this tick does no work. Cheap even when
 /// it does fire: a wreck is a handful of triangles and a long match leaves tens of them.
+namespace {
+/// One impact's scorch: a boot-print, not a crater — the wrecks own the drama and
+/// hundreds of these share the ground. Twelve segments keeps a full cap cheap.
+inline constexpr float kImpactMarkRadiusElmos = 2.5f;
+inline constexpr int kImpactMarkSegments = 12;
+} // namespace
+
+void noteImpactMark(UnitScene& scene, float x, float z) {
+    if (scene.impactMarks.size() >= UnitScene::kMaxImpactMarks) {
+        scene.impactMarks.erase(scene.impactMarks.begin(),
+                                scene.impactMarks.begin() + 64);
+    }
+    scene.impactMarks.push_back(UnitScene::ImpactMark{.x = x, .z = z});
+    ++scene.impactMarksRevision;
+}
+
 void refreshWreckDecals(UnitScene& scene, const rm::HeightField& field) {
     // The REVISION, not the count: reclaim removes wrecks now, and "one added, one
     // removed" leaves the count where it was while the ground has changed twice. Dead
     // slots are skipped for the same reason — a reclaimed wreck is clean ground, and
     // drawing it would advertise mass that is not there.
-    if (scene.features.revision() == scene.wreckDecalsFrom) {
+    if (scene.features.revision() == scene.wreckDecalsFrom
+        && scene.impactMarksRevision == scene.impactDecalsFrom) {
         return;
     }
     scene.wreckDecals.clear();
@@ -121,7 +138,15 @@ void refreshWreckDecals(UnitScene& scene, const rm::HeightField& field) {
                             rm::sim::fxToFloat(wreck.radiusElmos)
                                 * rm::kWreckMarkRadiusFactor);
     }
+    // Impact scorch beside the wrecks: small dark discs where shots hit ground that
+    // killed nothing. Twelve segments, not thirty-two — a bombardment leaves hundreds
+    // and nobody inspects one up close.
+    for (const UnitScene::ImpactMark& mark : scene.impactMarks) {
+        rm::appendWreckMark(scene.wreckDecals, field, {mark.x, 0.0f, mark.z},
+                            kImpactMarkRadiusElmos, kImpactMarkSegments);
+    }
     scene.wreckDecalsFrom = scene.features.revision();
+    scene.impactDecalsFrom = scene.impactMarksRevision;
 }
 
 /// The opening's step for a role, or a bare default when the plan names none.

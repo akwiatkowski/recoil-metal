@@ -1450,6 +1450,13 @@ rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) 
                 .tick = static_cast<unsigned long long>(tickIndex),
                 .x = static_cast<double>(rm::sim::fxToFloat(fell.x)),
                 .z = static_cast<double>(rm::sim::fxToFloat(fell.z))});
+        } else if (event.kind == rm::sim::EventKind::ProjectileImpact
+                   && (event.impactType == rm::sim::ImpactType::Terrain
+                       || event.impactType == rm::sim::ImpactType::Prop)) {
+            // Non-lethal ground hits scorch too: a battle that only marks its kills
+            // forgets most of what happened there. Water and shields leave no mark.
+            noteImpactMark(scene, rm::sim::fxToFloat(event.at[0]),
+                           rm::sim::fxToFloat(event.at[2]));
         }
     }
     refreshWreckDecals(scene, runner.field);

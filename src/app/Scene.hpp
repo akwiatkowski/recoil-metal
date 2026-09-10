@@ -466,6 +466,19 @@ struct UnitScene {
     /// there is something new to draw.
     std::uint64_t wreckDecalsFrom = 0;  ///< the FeatureStore revision the decals were built at
 
+    /// Where shots hit ground that killed nothing. Retail scorches terrain hits, and
+    /// a battle that only marks its kills forgets most of what happened there.
+    /// Capped: oldest drop out as new ones land, or a long bombardment grows this
+    /// without bound. Drawn by refreshWreckDecals beside the wreck scorch.
+    struct ImpactMark {
+        float x = 0.0f;
+        float z = 0.0f;
+    };
+    static constexpr std::size_t kMaxImpactMarks = 512;
+    std::vector<ImpactMark> impactMarks;
+    std::uint64_t impactMarksRevision = 0;
+    std::uint64_t impactDecalsFrom = 0;
+
     /// Death explosions set off, and the damage they dealt. BOTH, because they answer
     /// different questions: a blast that goes off and hurts nothing is the ordinary case when
     /// two commanders kill each other in the same tick, and reporting only the damage would
@@ -1145,6 +1158,10 @@ void setAppTickRate(std::uint32_t ticksPerSecond);
 
 /// Rebuilds the wreck decals from the features, if any have been added since the last time.
 void refreshWreckDecals(UnitScene& scene, const rm::HeightField& field);
+
+/// Records one non-lethal ground hit for the scorch projection. Drops the oldest
+/// sixty-four past the cap — amortised, so a bombardment tick does no per-hit shifting.
+void noteImpactMark(UnitScene& scene, float x, float z);
 
 [[nodiscard]] rm::data::OpeningStep stepForRole(const rm::data::Opening& opening,
                                                 rm::unitdef::Role role);

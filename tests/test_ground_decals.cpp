@@ -8,6 +8,8 @@
 
 #include "core/scene/GroundDecals.hpp"
 
+#include "app/Scene.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -452,4 +454,38 @@ TEST_CASE("square selection outlines follow the grid and terrain", "[selection-s
             || distance == Approx(20 + rm::kRingThicknessElmos / 2)));
         CHECK(p[1] == Approx(field.heightAtWorld(p[0], p[2]) + rm::kRingLiftElmos));
     }
+}
+
+TEST_CASE("impact marks draw scorch beside the wrecks", "[decals]") {
+    const HeightField field = flatAt(64, 0);
+    rm::app::UnitScene scene;
+    rm::app::noteImpactMark(scene, 10.0f, 20.0f);
+    rm::app::noteImpactMark(scene, 30.0f, 40.0f);
+    REQUIRE(scene.impactMarks.size() == 2);
+    rm::app::refreshWreckDecals(scene, field);
+    // Two small fans beside zero wreck marks: every triangle's first vertex is
+    // its own dark centre, at the impact point.
+    REQUIRE(scene.wreckDecals.size() == 2 * rm::wreckVertexCount(12));
+    CHECK(scene.wreckDecals[0].position[0] == Approx(10.0f));
+    CHECK(scene.wreckDecals[0].position[2] == Approx(20.0f));
+    CHECK(scene.wreckDecals[0].colour[3] > 0.0f);
+    const std::size_t second = rm::wreckVertexCount(12);
+    CHECK(scene.wreckDecals[second].position[0] == Approx(30.0f));
+    // A second refresh with nothing new draws nothing new: same vertices.
+    rm::app::refreshWreckDecals(scene, field);
+    CHECK(scene.wreckDecals.size() == 2 * rm::wreckVertexCount(12));
+}
+
+TEST_CASE("impact marks rotate past their cap", "[decals]") {
+    rm::app::UnitScene scene;
+    for (int i = 0; i < 600; ++i) {
+        rm::app::noteImpactMark(scene, static_cast<float>(i), 0.0f);
+    }
+    // Sawtooth between 512 - 64 and 512: the erase drops sixty-four past the cap.
+    CHECK(scene.impactMarks.size() <= rm::app::UnitScene::kMaxImpactMarks);
+    CHECK(scene.impactMarks.size() >= rm::app::UnitScene::kMaxImpactMarks - 64);
+    // No gaps, no reorder: the front is always (pushed - size).
+    CHECK(scene.impactMarks.front().x
+          == Approx(600.0f - static_cast<float>(scene.impactMarks.size())));
+    CHECK(scene.impactMarks.back().x == Approx(599.0f));
 }
