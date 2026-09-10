@@ -183,7 +183,7 @@ Then build and test. Catch2 is fetched by CMake at configure time:
 ```sh
  make build
  make test
- #   100% tests passed, 0 tests failed out of 1556 (two optional skips)
+ #   100% tests passed, 0 tests failed out of 1610
 ```
 
 Or without the Makefile:

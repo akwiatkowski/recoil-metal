@@ -884,7 +884,7 @@ oracle — which is the test that black-box parity projects do not get to have.
  ([the duel report](faf-duel-2026-09-08.md)). Repeated offscreen experiments run
  tracked under `build/ai-matches/<name>/` via `tools/ai_match.py`.
 
-**1556 tests, all green** (two optional skips without retail content), over 100 test files. Anything that does not touch the GPU
+**1610 tests, all green**, over 100 test files. Anything that does not touch the GPU
 gets a failing test first, and parsers are tested against the real retail corpus.
 Some of them test the shape of the code rather than its output — that every order
 goes through `applyCommand`, that no caller hand-rolls the sim tick order, that the

@@ -32,6 +32,17 @@ namespace {
     return {};
 }
 
+/// The shipped `data/opening.lua`, wherever CTest runs from. CWD covers the repo-root
+/// case; otherwise resolve against this file's own directory (tests/ → root).
+[[nodiscard]] std::filesystem::path openingFile() {
+    const std::filesystem::path fromCwd = "data/opening.lua";
+    if (std::filesystem::exists(fromCwd)) return fromCwd;
+    const std::filesystem::path fromSource =
+        std::filesystem::absolute(std::filesystem::path{__FILE__}).parent_path().parent_path()
+        / "data/opening.lua";
+    return fromSource;
+}
+
 [[nodiscard]] std::optional<Opening> parse(std::string_view source) {
     const auto table = rm::lua::parseTable(source);
     if (!table) {
@@ -101,9 +112,9 @@ TEST_CASE("the built-in opening and the shipped file say the same thing") {
     const Opening builtIn = rm::data::defaultOpening();
     REQUIRE(builtIn.valid());
 
-    const std::filesystem::path file = "data/opening.lua";
+    const std::filesystem::path file = openingFile();
     if (!std::filesystem::exists(file)) {
-        SKIP("not running from the repo root; no data/opening.lua");
+        SKIP("no data/opening.lua beside the repo or CWD");
     }
     const auto fromFile = rm::data::loadOpening(file);
     REQUIRE(fromFile.has_value());
@@ -134,9 +145,9 @@ TEST_CASE("one build order drives all four factions from data alone") {
     if (root.empty() || !std::filesystem::exists(root)) {
         SKIP("no extracted unit corpus at " + root.string());
     }
-    const std::filesystem::path file = "data/opening.lua";
+    const std::filesystem::path file = openingFile();
     if (!std::filesystem::exists(file)) {
-        SKIP("not running from the repo root; no data/opening.lua");
+        SKIP("no data/opening.lua beside the repo or CWD");
     }
 
     const auto opening = rm::data::loadOpening(file);
