@@ -285,6 +285,42 @@ bool issueCancelFactoryBuild(UnitScene& scene, rm::sim::UnitId factory,
     return alive;
 }
 
+/// A type as a reader recognises it: "T2 Point Defense", falling back to the blueprint
+/// path when the content states no description, so a row is never nameless.
+[[nodiscard]] std::string matrixTypeLabel(const MatrixTypeInfo& info) {
+    const std::string& name = info.description.empty() ? info.blueprint : info.description;
+    return info.tech > 0 ? "T" + std::to_string(info.tech) + " " + name : name;
+}
+
+/// What one army has STANDING, counted per type from the store — the roster table the
+/// progress block and the final card show. `matrixAliveForArmy` is this same walk's
+/// total; keeping the types is what lets a report say which units the count is made of.
+/// Buildings are in it: a store slot is a store slot, and a power farm is most of what
+/// an economy's mass is standing in.
+[[nodiscard]] std::vector<MatrixTypeRow>
+matrixStandingForArmy(const UnitScene& scene, int army, const MatrixTypeResolver& resolve) {
+    std::vector<std::pair<rm::UnitTypeIndex, std::size_t>> counts;
+    const std::span<const rm::sim::MoveState> motion = scene.store.motion();
+    for (rm::UnitIndex slot = 0; slot < scene.store.slotCount(); ++slot) {
+        if (!scene.store.slotAlive(slot) || motion[slot].armyIndex != army) {
+            continue;
+        }
+        const rm::UnitTypeIndex type = scene.store.typeAt(slot);
+        bool found = false;
+        for (auto& [known, count] : counts) {
+            if (known == type) {
+                ++count;
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            counts.emplace_back(type, 1);
+        }
+    }
+    return summarizeMatrixTypes(counts, resolve);
+}
+
 /// Enemy kills credited to one army so far — the count behind the progress line, without
 /// the worth tally the final report adds. Same enemy-only rule as `tallyMatrixKills`.
 [[nodiscard]] std::size_t matrixKillsForArmy(const MatchRunner& runner, int army) {
@@ -310,6 +346,9 @@ bool issueCancelFactoryBuild(UnitScene& scene, rm::sim::UnitId factory,
             .mass = static_cast<double>(rm::sim::magToFloat(def.buildCostMass)),
             .energy = static_cast<double>(rm::sim::magToFloat(def.buildCostEnergy)),
             .buildTime = static_cast<double>(rm::sim::magToFloat(def.buildTime)),
+            .description = def.description,
+            .mobile = def.isMobile(),
+            .commander = rm::sim::isCommanderId(def.name),
         };
     };
 }
@@ -323,9 +362,21 @@ printMatrixProgress(const UnitScene& scene, const MatchRunner& runner,
     std::vector<MatrixSnapshotArmy> rows;
     rows.reserve(scene.armies.size());
     const double ticksPerSecond = gAppTickRate.ticksPerSecond();
+    const MatrixTypeResolver resolve = matrixResolver(scene);
     for (std::size_t army = 0; army < scene.armies.size(); ++army) {
         const rm::sim::Economy& economy = scene.economies[army];
         const std::size_t alive = matrixAliveForArmy(scene, static_cast<int>(army));
+        // The roster the alive count is made of, one line per type. Machine-first field
+        // order (the console reads these back) with the name last, since it is the only
+        // field that can hold spaces — or be empty.
+        for (const MatrixTypeRow& row : matrixStandingForArmy(scene, static_cast<int>(army),
+                                                              resolve)) {
+            std::printf("matrix: standing [tick %llu] army %zu tech %d count %zu mass %.0f"
+                        " energy %.0f mobile %d commander %d bp %s name %s\n",
+                        tick, army, row.info.tech, row.count, row.info.mass, row.info.energy,
+                        row.info.mobile ? 1 : 0, row.info.commander ? 1 : 0,
+                        row.info.blueprint.c_str(), row.info.description.c_str());
+        }
         const std::size_t kills = matrixKillsForArmy(runner, static_cast<int>(army));
         const double incomeMass =
             static_cast<double>(rm::sim::magToFloat(economy.incomePerTick.mass)) * ticksPerSecond;
@@ -1389,9 +1440,16 @@ rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) 
                        == event.instigator.generation) {
                 killerArmy = scene.store.motion()[event.instigator.index].armyIndex;
             }
-            runner.matrixKills.push_back(MatrixKill{.victimType = victimType,
-                                                   .victimArmy = event.army,
-                                                   .killerArmy = killerArmy});
+            // The corpse's transform is still in its slot, for the same reason its type
+            // is: nothing recycles a slot before the finished-build loop below.
+            const rm::sim::Transform& fell = scene.store.transforms()[event.unit.index];
+            runner.matrixKills.push_back(MatrixKill{
+                .victimType = victimType,
+                .victimArmy = event.army,
+                .killerArmy = killerArmy,
+                .tick = static_cast<unsigned long long>(tickIndex),
+                .x = static_cast<double>(rm::sim::fxToFloat(fell.x)),
+                .z = static_cast<double>(rm::sim::fxToFloat(fell.z))});
         }
     }
     refreshWreckDecals(scene, runner.field);
@@ -2250,6 +2308,7 @@ void march(UnitScene& scene, const rm::HeightField& field, PassabilitySet& passa
                 static_cast<double>(rm::sim::magToFloat(economy.generatedLifetime.energy));
             outcome.alive = matrixAliveForArmy(scene, side);
             outcome.built = summarizeMatrixBuilt(runner.matrixBuilt, side, resolve);
+            outcome.standing = matrixStandingForArmy(scene, side, resolve);
             outcome.kills = tallyMatrixKills(runner.matrixKills, side, resolve);
             std::printf("  army %zu (%s/%s): %zu alive, generated %.0f mass / %.0f energy,"
                         " %zu enemy kills worth %.0f mass / %.0f energy / %.0f build-time\n",
@@ -2257,6 +2316,10 @@ void march(UnitScene& scene, const rm::HeightField& field, PassabilitySet& passa
                         outcome.alive, outcome.generatedMass, outcome.generatedEnergy,
                         outcome.kills.kills, outcome.kills.massWorth,
                         outcome.kills.energyWorth, outcome.kills.buildTimeWorth);
+            for (const MatrixTypeRow& row : outcome.standing) {
+                std::printf("    standing %6zu  %s\n", row.count,
+                            matrixTypeLabel(row.info).c_str());
+            }
             for (const MatrixTypeRow& row : outcome.built) {
                 std::printf("    built %6zu  T%d  %s\n", row.count, row.info.tech,
                             row.info.blueprint.c_str());
@@ -2264,6 +2327,7 @@ void march(UnitScene& scene, const rm::HeightField& field, PassabilitySet& passa
             doc.armies.push_back(std::move(outcome));
         }
         doc.snapshots = std::move(matrixSnapshots);
+        doc.deaths = summarizeMatrixDeaths(runner.matrixKills);
         std::printf("======================================================================\n");
         std::ofstream json(options.matrixOutPath);
         if (!json) {

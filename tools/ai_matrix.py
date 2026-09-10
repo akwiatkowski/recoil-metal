@@ -19,13 +19,21 @@ it appends one block per progress report.
 Each run's binary invocation mirrors the `ai-sanity` make target: --play is the
 sim TIME CAP (a victory ends the run early via --matrix-out), --timeout is the
 wall failsafe, and --screenshot is what lets the pre-run exit without opening
-a window — never drop it.
+a window — never drop it. That capture is the run's last frame, written at 4K
+by default (see --shot-size).
+
+`--action-shots N` then adds up to N pictures of the fighting. The sim is
+deterministic, so each one is a second run of the same match stopped at a tick
+where a lot of units died, with the camera pointed at where they died — no
+mid-match capture hook, at the cost of replaying the match once per picture.
 
 `--report <name>` re-renders the cards and grid of a finished job without
 playing anything.
 """
 import argparse
+import collections
 import datetime
+import math
 import itertools
 import json
 import os
@@ -47,6 +55,33 @@ DEFAULT_PERSONALITIES = ("easy", "turtle", "tech")
 # `rm::sim::kDefaultTicksPerSecond`: the JSON and the progress lines count ticks, the
 # console shows a sim clock.
 TICKS_PER_SECOND = 10
+# How an action frame is chosen.
+#
+# The window is what counts as one fight: fifteen sim seconds either side, because a
+# battle is a half-minute of trading, not a tick where four things happened at once, and
+# scoring the whole engagement is what puts the camera on the engagement. The cooldown is
+# what counts as a DIFFERENT fight, so five frames are five battles rather than five
+# views of the best one. The floor is what counts as a fight at all. The lag looks a
+# beat past the busiest tick, where the wrecks are down and the survivors are still
+# shooting — the frame wants both, so it sits in the middle of the dying rather than
+# after it.
+ACTION_WINDOW_TICKS = 150
+ACTION_COOLDOWN_MIN_TICKS = 300
+ACTION_MIN_DEATHS = 6
+ACTION_LAG_TICKS = 4
+# What the camera holds, in elmos — and this window is the whole reason an action frame
+# looks like a battle rather than a map. Units draw as strategic glyphs once a model
+# falls under `kIconThresholdPoints` (8 points, core/scene/UnitIcons.hpp), so a wide view
+# is a picture of icons. A tank is about 4 elmos of radius, and the view is 2160 points
+# tall, which keeps meshes readable out to roughly 540 elmos of radius. Below 350 the
+# frame is grass and trees with a fight somewhere off the edge.
+ACTION_RADIUS_MIN = 350.0
+ACTION_RADIUS_MAX = 540.0
+
+# Rows in each roster table. Ten covers what a player would name — the factories, the
+# artillery, the mass farm — and a full Forged Alliance roster runs to thirty types, most
+# of them a handful of engineers and walls.
+ROSTER_ROWS = 10
 
 # --- What the binary prints that the console keeps ----------------------------------------
 #
@@ -57,6 +92,17 @@ PROGRESS = re.compile(r"^matrix: \[tick (\d+), (\d+)s wall\] army (\d+) \((\w+)/
                       r"(\d+) alive, \+([\d.]+)/\+([\d.]+) per s, (\d+) kills")
 TEMPLATE = re.compile(r"^faf: army (\d+) selected (\S+)")
 ATTACK = re.compile(r"^\s*\[\s*([\d.]+)s\] army (\d+) ATTACKS with (\d+) of (\d+) (\w+)")
+# The roster lines that accompany each progress report, one per standing type. The name is
+# last because it is the only field that can hold spaces — or be empty, for content that
+# states no description.
+STANDING = re.compile(r"^matrix: standing \[tick (\d+)\] army (\d+) tech (\d+) count (\d+) "
+                      r"mass ([\d.]+) energy ([\d.]+) mobile ([01]) commander ([01]) "
+                      r"bp (\S+) name (.*)$")
+# Forged Alliance names a blueprint <faction><domain><role>: UEB2301 and URB2301 are the
+# UEF and Cybran versions of one turret. The role — domain letter plus number — is the only
+# thing the four factions agree on, since half of them rename the unit and a third of them
+# price it differently, so it is what a cross-faction row is keyed on.
+BLUEPRINT_ID = re.compile(r"^[A-Z]{3}\d{4}$")
 DECIDED = re.compile(r"^\s*\[\s*([\d.]+)s\] (?:team (\d+) WINS|a DRAW)")
 ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 
@@ -179,6 +225,140 @@ def front_line(paint, left, right, width, factions):
     return bar, share
 
 
+def type_name(row):
+    """What to call a type: its own description, else the blueprint's stem — a path is a
+    worse name than "Mass Extractor", but it beats a blank row."""
+    described = (row.get("description") or "").strip()
+    return described or blueprint_id(row) or "unknown"
+
+
+def blueprint_id(row):
+    """`/units/UEB2301/UEB2301_unit.bp` → `UEB2301`."""
+    stem = row.get("blueprint", "").rsplit("/", 1)[-1]
+    if stem.endswith("_unit.bp"):
+        stem = stem[: -len("_unit.bp")]
+    return stem.upper()
+
+
+def roster_key(row):
+    """What makes two sides' versions of one thing the same row.
+
+    The blueprint's ROLE — `B2301` out of `UEB2301` — so a turret is one row whichever
+    factions are playing. Content whose ids are not shaped that way (Beyond All Reason's,
+    or a test's) keys on its own id, which merges nothing and duplicates nothing."""
+    ident = blueprint_id(row)
+    return ident[2:] if BLUEPRINT_ID.fullmatch(ident) else ident
+
+
+def price(value):
+    """A cost, short enough to sit in a column: thousands stay readable, millions become
+    `5,000k` rather than eating the row."""
+    return f"{value / 1000:,.0f}k" if value >= 100_000 else f"{value:,.0f}"
+
+
+def price_span(low, high):
+    """One price, or the range the factions charge for the same role — 480–540 for a T2
+    turret. Never an average: nobody pays that."""
+    return price(high) if low == high else f"{price(low)}–{price(high)}"
+
+
+def roster_rows(per_army):
+    """Merge every side's standing types into rows, dearest per unit first.
+
+    `per_army` is one list of type rows per army — the shape both `result.json` and the
+    progress lines carry. Commanders are left out: there is exactly one, it outprices
+    everything, and holding it is not a decision the AI made. Price is per unit, since
+    "expensive" in this game is what ONE of them costs, and the sort takes the dearest
+    variant when the factions disagree. A row's name is the one most of its sides use."""
+    merged = {}
+    for seat, rows in enumerate(per_army):
+        for row in rows:
+            if row.get("commander"):
+                continue
+            key = roster_key(row)
+            entry = merged.get(key)
+            if entry is None:
+                entry = merged[key] = {
+                    "tech": row["tech"], "mobile": bool(row.get("mobile")),
+                    "names": [], "mass": (row["mass"], row["mass"]),
+                    "energy": (row["energy"], row["energy"]),
+                    "counts": [0] * len(per_army)}
+            entry["names"].append(type_name(row))
+            entry["tech"] = max(entry["tech"], row["tech"])
+            entry["mobile"] = entry["mobile"] or bool(row.get("mobile"))
+            for field in ("mass", "energy"):
+                low, high = entry[field]
+                entry[field] = (min(low, row[field]), max(high, row[field]))
+            entry["counts"][seat] += row["count"]
+    for entry in merged.values():
+        entry["name"] = collections.Counter(entry["names"]).most_common(1)[0][0]
+    return sorted(merged.values(),
+                  key=lambda e: (-e["mass"][1], -e["energy"][1], e["name"]))
+
+
+def seat_labels(armies):
+    """A column head per side: the faction, plus the seat when both sides share one, so a
+    mirror match still tells its columns apart."""
+    names = [FACTION_TITLE.get(str(name).lower(), str(name)) for name in armies]
+    if len(set(names)) == len(names):
+        return names
+    return [f"{name} {seat}" for seat, name in enumerate(names)]
+
+
+def roster_table(paint, rows, armies, width, title, limit=ROSTER_ROWS):
+    """One roster list as a table: dearest on top, a count column per side.
+
+    Zero reads as a dim dot rather than a 0 — an army that never built a type and one
+    whose last of them just died are different facts, and the eye should not have to
+    subtract to see which side owns the expensive things."""
+    labels = seat_labels(armies)
+    count_width = max(7, max((len(label) for label in labels), default=7) + 1)
+    mass_width, energy_width, tech_width = 13, 13, 3
+    # The names are the widest thing here and still only reach thirty characters, so the
+    # column is capped rather than stretched: numbers next to their labels beat numbers
+    # pushed to the far edge of a box.
+    name_width = max(12, min(30, width - tech_width - mass_width - energy_width
+                             - count_width * len(labels) - 2))
+    shown = rows[:limit]
+    out = [paint.rgb(pad(title, tech_width + name_width), Palette.CHROME, bold=True)
+           + paint.rgb(pad("mass", mass_width, ">"), Palette.MASS)
+           + paint.rgb(pad("energy", energy_width, ">"), Palette.ENERGY)
+           + "".join(paint.faction(armies[seat], pad(label, count_width, ">"), bold=True)
+                     for seat, label in enumerate(labels))]
+    for row in shown:
+        # Tech 0 is a prop or a wall section: no tier to print, and the padding keeps
+        # every name in one column anyway.
+        tier = f"T{row['tech']}" if row["tech"] > 0 else ""
+        name = row["name"]
+        if len(name) > name_width - 1:
+            name = name[: name_width - 2] + "…"
+        line = (paint.dim(pad(tier, tech_width)) + pad(name, name_width)
+                + paint.rgb(pad(price_span(*row["mass"]), mass_width, ">"), Palette.MASS)
+                + paint.rgb(pad(price_span(*row["energy"]), energy_width, ">"),
+                            Palette.ENERGY))
+        for seat, count in enumerate(row["counts"]):
+            cell = pad(f"x{count}" if count else "·", count_width, ">")
+            line += (paint.faction(armies[seat], cell, bold=True) if count
+                     else paint.dim(cell))
+        out.append(line)
+    if not shown:
+        out.append(paint.dim("  nothing standing"))
+    elif len(rows) > len(shown):
+        out.append(paint.dim(f"  … and {len(rows) - len(shown)} cheaper"))
+    return out
+
+
+def roster_sections(paint, per_army, armies, width):
+    """Both tables: what walks, and what was built into the ground. Two lists because
+    they answer different questions — the army, and the investment."""
+    rows = roster_rows(per_army)
+    out = roster_table(paint, [row for row in rows if row["mobile"]], armies, width, "units")
+    out.append("")
+    out.extend(roster_table(paint, [row for row in rows if not row["mobile"]], armies, width,
+                            "buildings"))
+    return out
+
+
 def sparkline(values):
     """Eight-level bars from a series; an empty series is an empty string."""
     blocks = "▁▂▃▄▅▆▇█"
@@ -213,15 +393,29 @@ class RunState:
         self.latest_attack = None
         self.decided = None
         self.reports = 0
+        # army -> {"tick", "rows"}: the roster lines of the report being read. Keyed by
+        # tick rather than by arrival order, so a report is never a mix of two.
+        self.roster = {}
 
     def feed(self, line):
         """Returns True when the line changed what the console should show."""
+        if match := STANDING.match(line):
+            (tick, army, tech, count, mass, energy, mobile, commander,
+             blueprint, name) = match.groups()
+            self.roster_for(int(army), int(tick)).append({
+                "blueprint": blueprint, "description": name, "tech": int(tech),
+                "count": int(count), "mass": float(mass), "energy": float(energy),
+                "mobile": mobile == "1", "commander": commander == "1"})
+            return False  # the army's own progress line closes the report
         if match := PROGRESS.match(line):
             tick, wall, army, faction, personality, alive, mass, energy, kills = match.groups()
             row = self.row(int(army), faction, personality)
             row.alive, row.mass, row.energy, row.kills = (int(alive), float(mass), float(energy),
                                                           int(kills))
             self.tick, self.wall = int(tick), int(wall)
+            # A wiped army sends no roster lines at all, so its list is emptied here
+            # rather than left showing units that died two reports ago.
+            self.roster_for(int(army), int(tick))
             self.reports += 1
             return int(army) == len(self.rows) - 1
         if match := TEMPLATE.match(line):
@@ -238,6 +432,18 @@ class RunState:
             self.decided = (float(seconds), None if winner is None else int(winner))
             return True
         return False
+
+    def roster_for(self, army, tick):
+        """This army's roster list for `tick`, emptied when the report is a new one."""
+        held = self.roster.get(army)
+        if held is None or held["tick"] != tick:
+            held = {"tick": tick, "rows": []}
+            self.roster[army] = held
+        return held["rows"]
+
+    def standing(self):
+        """One roster list per seat, in seat order."""
+        return [self.roster.get(seat, {}).get("rows", []) for seat in range(len(self.rows))]
 
     def row(self, army, faction, personality):
         while len(self.rows) <= army:
@@ -271,6 +477,11 @@ class RunState:
             bar, share = front_line(paint, self.rows[0].alive, self.rows[1].alive,
                                     max(20, width - 30), [row.faction for row in self.rows[:2]])
             lines.append("  " + bar + paint.dim(f"  front line {share:.0%} : {1 - share:.0%}"))
+        if self.reports:
+            lines.append("")
+            lines.extend(("  " + line) if line else "" for line in
+                         roster_sections(paint, self.standing(),
+                                         [row.faction for row in self.rows], width - 2))
         if self.decided is not None:
             seconds, winner = self.decided
             verdict = ("a DRAW — every commander fell" if winner is None
@@ -376,6 +587,7 @@ def run_pairs(personalities):
 
 
 def command(args, commit, run_dir, personalities, factions):
+    width, height = args.shot_size
     return [str(BINARY), str(args.fa_root / "maps" / args.map / f"{args.map}.scmap"),
             "--gamedata", str(args.fa_root / "gamedata"), "--skirmish", "--observer",
             "--armies", "2", "--factions", ",".join(factions),
@@ -384,7 +596,123 @@ def command(args, commit, run_dir, personalities, factions):
             "--matrix-out", str(run_dir / "result.json"),
             "--matrix-commit", commit,
             "--report-interval", str(args.interval),
-            "--screenshot", str(run_dir / "final.png"), "320", "180"]
+            "--screenshot", str(run_dir / "final.png"), str(width), str(height),
+            "--backing", str(args.shot_backing)]
+
+
+def action_command(args, run_dir, personalities, factions, moment, index):
+    """The same match, replayed to one moment, framed on it, captured once.
+
+    Deliberately NOT carrying --matrix-out or --report-interval: this run must not
+    overwrite the result of the one that measured the match, and its progress is the
+    driver's line, not fifty of the binary's."""
+    # Same pixels as the final frame, but asked for as points at backing 1: a unit's
+    # apparent size is measured in POINTS, so this is what keeps tanks as models rather
+    # than glyphs across a battle-wide view. The interface lays out smaller as a result,
+    # which suits a picture of a fight.
+    width, height = shot_pixels(args)
+    return [str(BINARY), str(args.fa_root / "maps" / args.map / f"{args.map}.scmap"),
+            "--gamedata", str(args.fa_root / "gamedata"), "--skirmish", "--observer",
+            "--armies", "2", "--factions", ",".join(factions),
+            "--ai-personalities", ",".join(personalities),
+            "--mute", "--play", f"{moment['seconds']:.1f}",
+            "--look", f"{moment['x']:.0f}", f"{moment['z']:.0f}",
+            f"{moment['radius']:.0f}",
+            "--screenshot", str(run_dir / f"action-{index}.png"), str(width), str(height),
+            "--backing", "1"]
+
+
+def action_cooldown(played, limit):
+    """How far apart two frames must be to be two battles.
+
+    Scaled to the match, because a fixed spacing does the wrong thing at both ends: three
+    sim minutes leaves a ten-minute rush with room for two frames, and gives an hour-long
+    turtle game five pictures of its first skirmish. Half the match divided by the frame
+    count spreads them across the fighting, with a thirty-second floor so no two frames
+    are the same brawl."""
+    return max(ACTION_COOLDOWN_MIN_TICKS, int(played) // max(1, 2 * limit))
+
+
+def action_moments(deaths, limit, played=0, window=ACTION_WINDOW_TICKS, cooldown=None,
+                   floor=ACTION_MIN_DEATHS):
+    """The `limit` busiest moments of dying, far enough apart to be different battles.
+
+    A moment scores as every death within `window` ticks of it, so a score is "how much
+    died at once" rather than "on this exact tick". Picking is greedy: take the highest,
+    blank out `cooldown` ticks either side of it so the next pick is another fight rather
+    than the same one two seconds later, repeat. Moments below `floor` deaths are not
+    battles — a lone scout being shot down is not a picture worth four megabytes."""
+    if cooldown is None:
+        cooldown = action_cooldown(played or (deaths[-1]["tick"] if deaths else 0), limit)
+    rows = sorted(deaths, key=lambda row: row["tick"])
+    scored = []
+    for centre in rows:
+        near = [row for row in rows if abs(row["tick"] - centre["tick"]) <= window]
+        toll = sum(row["deaths"] for row in near)
+        if toll < floor:
+            continue
+        # Where to point the camera: the victims' centre of mass over the window, and a
+        # radius that holds the whole brawl with room to see it.
+        weight = float(toll)
+        x = sum(row["x"] * row["deaths"] for row in near) / weight
+        z = sum(row["z"] * row["deaths"] for row in near) / weight
+        reach = max((math.dist((x, z), (row["x"], row["z"])) + row["spread"]
+                     for row in near), default=0.0)
+        scored.append({"tick": centre["tick"], "deaths": toll, "x": x, "z": z,
+                       "radius": min(ACTION_RADIUS_MAX,
+                                     max(ACTION_RADIUS_MIN, reach * 1.5))})
+    scored.sort(key=lambda moment: (-moment["deaths"], moment["tick"]))
+    taken = []
+    for moment in scored:
+        if all(abs(moment["tick"] - chosen["tick"]) > cooldown for chosen in taken):
+            taken.append(moment)
+        if len(taken) == limit:
+            break
+    for moment in taken:
+        # A few ticks past the peak: the wrecks are down and the explosions are still up.
+        moment["seconds"] = (moment["tick"] + ACTION_LAG_TICKS) / TICKS_PER_SECOND
+    return sorted(taken, key=lambda moment: moment["tick"])
+
+
+def capture_action(args, run_dir, personalities, factions, console, paint):
+    """Replay the run once per chosen moment and write the pictures beside its result."""
+    if args.action_shots <= 0:
+        return []
+    result_path = run_dir / "result.json"
+    if not result_path.is_file():
+        return []
+    doc = json.loads(result_path.read_text())
+    moments = action_moments(doc.get("deaths") or [], args.action_shots,
+                             played=doc.get("ticksPlayed", 0))
+    if not moments:
+        console.line(paint.dim("  no battle big enough to photograph"))
+        return []
+    width, height = shot_pixels(args)
+    console.line(paint.dim(f"  {len(moments)} action frame(s) at {width}x{height}, one match "
+                           f"replay each"))
+    taken = []
+    for index, moment in enumerate(moments, start=1):
+        argv = action_command(args, run_dir, personalities, factions, moment, index)
+        with (run_dir / f"action-{index}.log").open("w") as log:
+            code = subprocess.run(argv, cwd=ROOT, stdout=log, stderr=subprocess.STDOUT).returncode
+        image = run_dir / f"action-{index}.png"
+        if code != 0 or not image.is_file():
+            console.line(paint.rgb(f"  ✗ action {index} failed (exit {code})", Palette.ALERT))
+            continue
+        moment["file"] = image.name
+        taken.append(moment)
+        console.line("  " + paint.rgb("✦", Palette.GOLD, bold=True)
+                     + paint.dim(f" action {index} · {clock(moment['seconds'])} sim · ")
+                     + paint.bold(f"{moment['deaths']} deaths")
+                     + paint.dim(f" · {image.name}"))
+    (run_dir / "action.json").write_text(json.dumps(taken, indent=2) + "\n")
+    return taken
+
+
+def shot_pixels(args):
+    """The image the capture will actually write, in pixels."""
+    return (round(args.shot_size[0] * args.shot_backing),
+            round(args.shot_size[1] * args.shot_backing))
 
 
 def run_title(personalities, factions):
@@ -459,6 +787,7 @@ def play(args, commit, run_dir, personalities, factions, console, paint, width, 
         console.line("  " + paint.rgb(f"✗ FAILED (exit {code}) — no result.json",
                                       Palette.ALERT, bold=True))
         return False
+    capture_action(args, run_dir, personalities, factions, console, paint)
     return True
 
 
@@ -532,6 +861,11 @@ def card(paint, doc, width):
     else:
         box(paint.dim(pad("standing over time", label_width)
                       + "— no snapshots: the run ended before the first progress report"))
+    box()
+    box(paint.dim("standing at the end · dearest per unit · the commander left out"))
+    for line in roster_sections(paint, [army.get("standing") or [] for army in armies],
+                                [army["faction"] for army in armies], inner):
+        box(line)
     out.append(paint.dim("└" + "─" * (width - 2) + "┘"))
     return out
 
@@ -634,6 +968,18 @@ def main():
                         help="progress report cadence, in wall seconds (the sim runs ~100x "
                              "real time headless, so 5 s is roughly one report per 8 sim minutes)")
     parser.add_argument("--map", type=job_name, default="SCMP_009")
+    # The last frame is the only picture a finished run leaves, and 320x180 was a
+    # thumbnail. Size follows the binary's own contract: LOGICAL points plus a backing
+    # scale, so the interface lays out for a 1920x1080 screen and rasterises at 2x —
+    # 4K pixels that look like a screen rather than a screen with ant-sized chrome.
+    # 1920x1080 at 2 is 4K; 1280x720 at 2 is 1440p; 1350x760 at 2 is 2.7K.
+    parser.add_argument("--shot-size", type=positive, nargs=2, default=[1920, 1080],
+                        metavar=("W", "H"), help="capture size in logical points")
+    parser.add_argument("--shot-backing", type=float, default=2.0, metavar="S",
+                        help="display scale the capture stands in for, 1 to 4")
+    parser.add_argument("--action-shots", type=int, default=5, metavar="N",
+                        help="pictures of the fighting, each one a replay of the match "
+                             "stopped where units were dying (0 for none)")
     parser.add_argument("--fa-root", type=Path,
                         default=Path("/Volumes/Samsung_T5/faf/Supreme Commander Forged Alliance"))
     parser.add_argument("--no-build", action="store_true", help="skip the rebuild")
@@ -661,9 +1007,11 @@ def main():
         commit = commit_hash()
         if not args.no_build and not args.dry_run:
             build_binary()
+        shot_width, shot_height = shot_pixels(args)
         subtitle = (f"{len(pairs)} run(s) · {', '.join(args.personalities)} · "
                     f"{args.factions[0].upper()} vs {args.factions[1].upper()} · {args.map} · "
-                    f"cap {clock(args.seconds)} sim · commit {commit[:12]}")
+                    f"cap {clock(args.seconds)} sim · frame {shot_width}x{shot_height} · "
+                    f"{args.action_shots} action frame(s) · commit {commit[:12]}")
         for line in banner(paint, subtitle, width):
             console.line(line)
         console.line(paint.dim(f"  → {job}"))

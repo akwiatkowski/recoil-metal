@@ -19,6 +19,7 @@
 #include "core/Types.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <functional>
 #include <limits>
@@ -40,6 +41,21 @@ struct MatrixTypeInfo {
     double mass = 0.0;
     double energy = 0.0;
     double buildTime = 0.0;
+    /// What a player calls it — "Medium Tank", from the blueprint's own `Description`
+    /// (567 of Forged Alliance's 568 stated one). Empty for the blueprint that did not,
+    /// and for content whose family states no description; a reader falls back to the
+    /// path, which is why the path stays in the row.
+    std::string description;
+    /// Whether one of these WALKS. A report that mixes tanks and power farms into one
+    /// list is two different questions answered at once — what an army can attack with,
+    /// and what it has invested in the ground — so the flag travels with the type and
+    /// the tables split on it.
+    bool mobile = false;
+    /// The army's own commander. It is exactly one unit, it is worth more than anything
+    /// else on the field, and it is not a choice the AI made, so a roster sorted by
+    /// price puts it on top of every table and says nothing. Flagged here; the tables
+    /// leave it out.
+    bool commander = false;
 };
 
 /// One finished construction, recorded where `advanceMatch` spawns it. Upgrades count:
@@ -56,7 +72,56 @@ struct MatrixKill {
     UnitTypeIndex victimType = 0;
     int victimArmy = -1;
     int killerArmy = -1;
+    /// WHEN and WHERE it died. The tally does not need either, but a run that plays for
+    /// an hour and leaves one picture of the aftermath is a poor record of a battle, and
+    /// this is what lets a caller replay to the moment and point the camera at it.
+    unsigned long long tick = 0;
+    double x = 0.0;
+    double z = 0.0;
 };
+
+/// One tick's worth of dying, and roughly where: the mean of that tick's victims, with
+/// how far the furthest one stood from it. Deaths cluster into battles, so a handful of
+/// these rows is a map of where a match was actually fought.
+struct MatrixDeathTick {
+    unsigned long long tick = 0;
+    std::size_t deaths = 0;
+    double x = 0.0;
+    double z = 0.0;
+    double spread = 0.0;
+};
+
+/// Per-tick death rows, in tick order, from the raw kill ledger. Every death counts,
+/// including the ones nobody scored: an army losing units to decay was still losing
+/// them somewhere.
+[[nodiscard]] inline std::vector<MatrixDeathTick>
+summarizeMatrixDeaths(const std::vector<MatrixKill>& kills) {
+    std::vector<MatrixDeathTick> rows;
+    for (const MatrixKill& kill : kills) {
+        if (rows.empty() || rows.back().tick != kill.tick) {
+            rows.push_back(MatrixDeathTick{.tick = kill.tick});
+        }
+        MatrixDeathTick& row = rows.back();
+        // Running mean, so one pass over the ledger answers both fields.
+        const auto count = static_cast<double>(row.deaths + 1);
+        row.x += (kill.x - row.x) / count;
+        row.z += (kill.z - row.z) / count;
+        ++row.deaths;
+    }
+    // Spread needs the centre first, hence the second pass.
+    std::size_t at = 0;
+    for (MatrixDeathTick& row : rows) {
+        while (at < kills.size() && kills[at].tick < row.tick) {
+            ++at;
+        }
+        for (std::size_t i = at; i < kills.size() && kills[i].tick == row.tick; ++i) {
+            const double dx = kills[i].x - row.x;
+            const double dz = kills[i].z - row.z;
+            row.spread = std::max(row.spread, std::sqrt(dx * dx + dz * dz));
+        }
+    }
+    return rows;
+}
 
 /// Type index to report facts. Returning a default `MatrixTypeInfo` for an unknown type
 /// keeps one bad index from aborting a run's whole report; the blueprint stays empty so
@@ -213,6 +278,10 @@ inline void writeMatrixTypeRows(std::ostream& out, const std::vector<MatrixTypeR
         const MatrixTypeRow& row = rows[i];
         out << inner << "{\"blueprint\": ";
         writeMatrixJsonString(out, row.info.blueprint);
+        out << ", \"description\": ";
+        writeMatrixJsonString(out, row.info.description);
+        out << ", \"mobile\": " << (row.info.mobile ? "true" : "false")
+            << ", \"commander\": " << (row.info.commander ? "true" : "false");
         out << ", \"tech\": " << row.info.tech << ", \"count\": " << row.count
             << ", \"mass\": ";
         writeMatrixJsonNumber(out, row.info.mass);
@@ -253,6 +322,9 @@ struct MatrixArmyOutcome {
     double generatedEnergy = 0.0;
     std::size_t alive = 0;
     std::vector<MatrixTypeRow> built;
+    /// The roster behind `alive`: which types those units are, counted. `built` is the
+    /// whole match's production and never shrinks; this is what survived to the end.
+    std::vector<MatrixTypeRow> standing;
     MatrixArmyKills kills;
 };
 
@@ -272,6 +344,8 @@ struct MatrixDoc {
     int winner = 0;
     std::vector<MatrixArmyOutcome> armies;
     std::vector<MatrixSnapshot> snapshots;
+    /// When and where units died, per tick. The action a caller can replay to.
+    std::vector<MatrixDeathTick> deaths;
 };
 
 inline void writeMatrixJson(std::ostream& out, const MatrixDoc& doc) {
@@ -303,7 +377,9 @@ inline void writeMatrixJson(std::ostream& out, const MatrixDoc& doc) {
         writeMatrixJsonNumber(out, army.generatedMass);
         out << ", \"generatedEnergy\": ";
         writeMatrixJsonNumber(out, army.generatedEnergy);
-        out << ", \"alive\": " << army.alive << ",\n      \"built\": ";
+        out << ", \"alive\": " << army.alive << ",\n      \"standing\": ";
+        writeMatrixTypeRows(out, army.standing, 6);
+        out << ",\n      \"built\": ";
         writeMatrixTypeRows(out, army.built, 6);
         out << ",\n      \"kills\": " << army.kills.kills << ", \"killMassWorth\": ";
         writeMatrixJsonNumber(out, army.kills.massWorth);
@@ -338,6 +414,22 @@ inline void writeMatrixJson(std::ostream& out, const MatrixDoc& doc) {
         }
         out << "]}";
         if (i + 1 < doc.snapshots.size()) {
+            out << ",";
+        }
+        out << "\n";
+    }
+    out << "  ],\n  \"deaths\": [\n";
+    for (std::size_t i = 0; i < doc.deaths.size(); ++i) {
+        const MatrixDeathTick& row = doc.deaths[i];
+        out << "    {\"tick\": " << row.tick << ", \"deaths\": " << row.deaths
+            << ", \"x\": ";
+        writeMatrixJsonNumber(out, row.x);
+        out << ", \"z\": ";
+        writeMatrixJsonNumber(out, row.z);
+        out << ", \"spread\": ";
+        writeMatrixJsonNumber(out, row.spread);
+        out << "}";
+        if (i + 1 < doc.deaths.size()) {
             out << ",";
         }
         out << "\n";

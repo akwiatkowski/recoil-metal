@@ -9,6 +9,7 @@
 
 #include <sstream>
 #include <string>
+#include <vector>
 
 using rm::app::MatrixArmyKills;
 using rm::app::MatrixBuilt;
@@ -32,13 +33,18 @@ namespace {
     return [](UnitTypeIndex type) {
         switch (type) {
         case 1: return MatrixTypeInfo{.blueprint = "units/T1", .tech = 1,
-                                      .mass = 50.0, .energy = 500.0, .buildTime = 100.0};
+                                      .mass = 50.0, .energy = 500.0, .buildTime = 100.0,
+                                      .description = "Light Tank"};
         case 2: return MatrixTypeInfo{.blueprint = "units/T2", .tech = 2,
-                                      .mass = 200.0, .energy = 2000.0, .buildTime = 800.0};
+                                      .mass = 200.0, .energy = 2000.0, .buildTime = 800.0,
+                                      .description = "Mass Extractor", .mobile = false};
         case 3: return MatrixTypeInfo{.blueprint = "units/T3", .tech = 3,
-                                      .mass = 1000.0, .energy = 10000.0, .buildTime = 5000.0};
+                                      .mass = 1000.0, .energy = 10000.0, .buildTime = 5000.0,
+                                      .description = "Heavy Assault Bot", .mobile = true};
         case 4: return MatrixTypeInfo{.blueprint = "units/ACU", .tech = 0,
-                                      .mass = 0.0, .energy = 0.0, .buildTime = 0.0};
+                                      .mass = 0.0, .energy = 0.0, .buildTime = 0.0,
+                                      .description = "Armored Command Unit", .mobile = true,
+                                      .commander = true};
         default: return MatrixTypeInfo{};
         }
     };
@@ -124,6 +130,38 @@ TEST_CASE("matrix JSON carries config, outcome, rows, and snapshots", "[matrix]"
     CHECK(text.find("\"personality\": \"turtle\"") != std::string::npos);
     CHECK(text.find("\"kills\": 1") != std::string::npos);
     CHECK(text.find("\"tick\": 100") != std::string::npos);
+}
+
+TEST_CASE("standing rows carry the name a player reads, beside the built ledger",
+          "[matrix]") {
+    // The roster the console tables read: what an army has ON THE FIELD, per type, with
+    // the blueprint's own description — a path is a worse name than "Mass Extractor",
+    // and the console has no catalog of its own to look one up in.
+    const std::vector<std::pair<UnitTypeIndex, std::size_t>> census{{2, 6}, {4, 1}};
+    const auto standing = rm::app::summarizeMatrixTypes(census, resolve());
+    REQUIRE(standing.size() == 2);
+    CHECK(standing[0].info.description == "Mass Extractor");  // tech 2 outranks the ACU's 0
+    CHECK(standing[0].count == 6);
+    CHECK(standing[1].info.description == "Armored Command Unit");
+
+    MatrixDoc doc;
+    doc.armies.push_back(rm::app::MatrixArmyOutcome{
+        .army = 0, .personality = "tech", .faction = "uef", .alive = 7,
+        .built = summarizeMatrixBuilt({{MatrixBuilt{.type = 3, .army = 0}}}, 0, resolve()),
+        .standing = standing,
+    });
+    std::ostringstream json;
+    writeMatrixJson(json, doc);
+    const std::string text = json.str();
+    CHECK(text.find("\"standing\": [") != std::string::npos);
+    CHECK(text.find("\"description\": \"Mass Extractor\"") != std::string::npos);
+    CHECK(text.find("\"description\": \"Heavy Assault Bot\"") != std::string::npos);
+    // The two flags the tables split and filter on: a power farm is not an army, and the
+    // commander outprices everything without being a choice anyone made.
+    CHECK(text.find("\"mobile\": false, \"commander\": false") != std::string::npos);
+    CHECK(text.find("\"mobile\": true, \"commander\": true") != std::string::npos);
+    // The two lists are separate facts: production never shrinks, the roster does.
+    CHECK(text.find("\"standing\"") < text.find("\"built\""));
 }
 
 TEST_CASE("matrix JSON escapes hostile strings", "[matrix]") {

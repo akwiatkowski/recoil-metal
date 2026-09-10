@@ -376,7 +376,8 @@ ai-sanity: build check-fa check-ai
 # NOT a test — a manual harness for long-term comparison. Six runs by default (mirrors
 # plus one game per cross pair of easy/turtle/tech, all UEF-vs-UEF on SCMP_009), each up
 # to an hour of sim at headless speed. The console keeps a live scoreboard — sim clock,
-# both armies' standing units and income, the front line, the latest attack wave — and
+# both armies' standing units and income, the front line, the latest attack wave, and two
+# rosters (what walks, what was built) dearest unit first with a count per side — and
 # closes with one card per run and a results grid; the binary's full narration goes to
 # each run's `stdout.log` instead of the terminal. Knobs pass through:
 # `make ai-matrix PERSONALITIES=easy,tech MATRIX_FACTIONS=uef,cybran MATRIX_SECONDS=1800`.
@@ -388,10 +389,24 @@ MATRIX_SECONDS ?= 3600
 MATRIX_INTERVAL ?= 5
 # Name the job dir under build/ai-matrix; empty takes `matrix-<timestamp>`.
 MATRIX_NAME ?=
+# Each run's last frame, as LOGICAL points times a backing scale — the same contract a
+# Retina window gives the renderer, so the interface lays out for a 1920x1080 screen and
+# rasterises at 2x. The default is 4K (3840x2160). `MATRIX_SHOT=1280 720` is 1440p,
+# `MATRIX_SHOT=1350 760` is 2.7K, `MATRIX_SHOT_BACKING=1` turns the doubling off.
+# A 4K frame is a few megabytes, so a six-run job leaves tens of them under build/.
+MATRIX_SHOT ?= 1920 1080
+MATRIX_SHOT_BACKING ?= 2
+# Pictures of the fighting, on top of that last frame: the busiest moments of dying, each
+# one a REPLAY of the match stopped there with the camera on the battle. The sim is
+# deterministic, so a replay is the same match — but it is a whole extra match per
+# picture, so five frames make a job several times slower. `MATRIX_ACTION_SHOTS=0` off.
+MATRIX_ACTION_SHOTS ?= 5
 MATRIX_ARGS = --personalities $(PERSONALITIES) --factions $(MATRIX_FACTIONS)
 ai-matrix: build check-fa check-ai
 	mise exec -- python3 tools/ai_matrix.py $(MATRIX_ARGS) --seconds $(MATRIX_SECONDS) \
-	  --interval $(MATRIX_INTERVAL) $(if $(MATRIX_NAME),--name $(MATRIX_NAME),) $(MATRIX_EXTRA)
+	  --interval $(MATRIX_INTERVAL) --shot-size $(MATRIX_SHOT) \
+	  --shot-backing $(MATRIX_SHOT_BACKING) --action-shots $(MATRIX_ACTION_SHOTS) \
+	  $(if $(MATRIX_NAME),--name $(MATRIX_NAME),) $(MATRIX_EXTRA)
 
 # The cards and the grid of a job that already ran — no build, no map, no play. Pass the
 # job dir's name: `make ai-matrix-report MATRIX_REPORT=matrix-20260910-142724`. The
