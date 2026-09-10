@@ -463,7 +463,7 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
     //     shooter may only choose a target its side can see. Those two constraints are what
     //     fix this pass here rather than anywhere else in the order.
     if (match.intel != nullptr) {
-        match.intel->update(store, catalog, match.armies, &terrain);
+        match.intel->update(store, catalog, match.armies, &terrain, rate);
     }
 
     // Recovery precedes fire: a bubble whose timer reaches zero can intercept this tick,

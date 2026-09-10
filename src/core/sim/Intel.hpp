@@ -229,13 +229,21 @@ inline constexpr int kRadarMipLevel = 2;
 /// A radar source's last confirmed position for one viewing alliance.
 ///
 /// This belongs to Intel rather than the source unit: once the source dies, the viewer still
-/// has a blip but cannot know whether that blip is a wreck or a live unit. No expiry policy is
-/// defined yet, so entries remain until a future recon rule explicitly reaps them.
+/// has a blip but cannot know whether that blip is a wreck or a live unit. Dead entries
+/// linger briefly, then are reaped — a battlefield that tidied itself the same tick would
+/// lose information, and one that never tidies fills with phantom dots.
+///
+/// Ten seconds of linger: long enough to notice what died, short enough that a battle's
+/// aftermath clears while the next wave still matters. Authored in seconds (§5.1); the
+/// tick count is derived from the rate `update` runs at, counted in updates.
+inline constexpr float kRetainedBlipLingerSeconds = 10.0f;
 struct RetainedRadarContact {
     UnitId unit;
     Fx x{};
     Fx z{};
     bool maybeDead = false;
+    /// Updates since the source died (or 0 while it lives). Past the linger, reaped.
+    std::uint32_t deadTicks = 0;
 };
 
 // The pass: every unit's coverage, kept up to date as the match moves.
@@ -276,7 +284,8 @@ public:
     ///
     /// `terrain` may be null, which forces discs — see `intelSquares`.
     void update(const UnitStore& store, const UnitCatalog& catalog,
-                std::span<const Army> armies, const Terrain* terrain);
+                std::span<const Army> armies, const Terrain* terrain,
+                TickRate rate = TickRate{});
 
     /// Whether `alliance` covers this position with this sense.
     ///

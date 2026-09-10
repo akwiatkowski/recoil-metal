@@ -606,6 +606,7 @@ StateHash hashMatch(const UnitStore& store, const Match& match) {
                     feed(h, contact.x);
                     feed(h, contact.z);
                     feed(h, contact.maybeDead);
+                    feed(h, static_cast<std::size_t>(contact.deadTicks));
                 }
             }
         }

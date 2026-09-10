@@ -487,7 +487,7 @@ void Intel::withdraw(UnitIndex slot) {
 }
 
 void Intel::update(const UnitStore& store, const UnitCatalog& catalog,
-                   std::span<const Army> armies, const Terrain* terrain) {
+                   std::span<const Army> armies, const Terrain* terrain, TickRate rate) {
     if (!active()) {
         return;
     }
@@ -606,10 +606,9 @@ void Intel::update(const UnitStore& store, const UnitCatalog& catalog,
     }
 
     // A radar return is knowledge owned by its VIEWER, not by the observed unit. Refresh the
-    // last known position while radar sees a live source; leave it behind if that source dies.
-    // A later generation in the same slot is concrete contrary evidence: retaining both would
-    // project one stale blip alongside the replacement forever. This is deliberately not a
-    // time-based expiry or a general re-acquisition policy.
+    // last known position while radar sees a live source; leave it behind briefly if that
+    // source dies, then reap it. A later generation in the same slot is concrete contrary
+    // evidence: retaining both would project one stale blip alongside the replacement forever.
     for (std::vector<RetainedRadarContact>& contacts : retainedRadarContacts_) {
         std::erase_if(contacts, [&store, slots](const RetainedRadarContact& contact) {
             return contact.unit.index < slots && store.slotAlive(contact.unit.index)
@@ -621,7 +620,11 @@ void Intel::update(const UnitStore& store, const UnitCatalog& catalog,
                                   && store.idAt(contact.unit.index).generation
                                          == contact.unit.generation;
             contact.maybeDead = !sourceAlive;
+            contact.deadTicks = contact.maybeDead ? contact.deadTicks + 1 : 0;
         }
+        std::erase_if(contacts, [&rate](const RetainedRadarContact& contact) {
+            return contact.deadTicks > rate.ticks(Seconds{kRetainedBlipLingerSeconds});
+        });
     }
     for (int alliance = 0; alliance < static_cast<int>(alliances()); ++alliance) {
         std::vector<RetainedRadarContact>& contacts =
@@ -648,6 +651,7 @@ void Intel::update(const UnitStore& store, const UnitCatalog& catalog,
                 found->x = at.x;
                 found->z = at.z;
                 found->maybeDead = false;
+                found->deadTicks = 0;
             }
         }
     }

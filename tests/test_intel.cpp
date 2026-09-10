@@ -741,6 +741,45 @@ TEST_CASE("a radar blip remains after its source dies") {
     CHECK(blip->z == retainedZ);
 }
 
+TEST_CASE("a dead blip lingers briefly, then is reaped", "[intel]") {
+    rm::unitdef::UnitDef watcherDef = seer(0.0f, 400.0f);
+    rm::unitdef::UnitDef quietDef = seer(0.0f);
+    UnitCatalog catalog;
+    const rm::UnitTypeIndex watcher = catalog.add(&watcherDef);
+    const rm::UnitTypeIndex quiet = catalog.add(&quietDef);
+
+    Intel intel;
+    intel.configure(2, Fx::fromInt(1024), Fx::fromInt(1024),
+                    rm::sim::VisionStyle::ForgedAlliance);
+
+    UnitStore store;
+    (void)place(store, watcher, 0, 500.0f, 500.0f);
+    const rm::sim::UnitId enemy = place(store, quiet, 1, 600.0f, 500.0f);
+    const std::vector<Army> armies = twoArmies(false);
+
+    intel.update(store, catalog, armies, nullptr);
+    store.kill(enemy);
+    // A battlefield that tidied itself the same tick would lose information a
+    // player wants briefly; one that never tidies fills with phantom dots.
+    for (int i = 0; i < 50; ++i) {
+        intel.update(store, catalog, armies, nullptr);
+    }
+    std::vector<rm::sim::Contact> contacts;
+    rm::sim::contactsFor(0, store, catalog, armies, intel, 0, contacts);
+    const bool lingering = std::ranges::any_of(contacts, [&](const auto& contact) {
+        return contact.unit == enemy;
+    });
+    CHECK(lingering);
+    for (int i = 0; i < 200; ++i) {
+        intel.update(store, catalog, armies, nullptr);
+    }
+    contacts.clear();
+    rm::sim::contactsFor(0, store, catalog, armies, intel, 0, contacts);
+    CHECK(std::ranges::none_of(contacts, [&](const auto& contact) {
+        return contact.unit == enemy;
+    }));
+}
+
 TEST_CASE("radar reaping drops a dead contact when its slot is reused") {
     rm::unitdef::UnitDef watcherDef = seer(0.0f, 400.0f);  // radar only, no eyes
     rm::unitdef::UnitDef quietDef = seer(0.0f);
