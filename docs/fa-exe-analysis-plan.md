@@ -670,7 +670,7 @@ Do not change readiness merely because analysis began.
 
 | ID | Area | Readiness | Confidence before EXE | EXE evidence | Envelope | Priority | Current basis / main uncertainty |
 |---|---|---|---|---|---|---|---|
-| `WP-00` | Artifact provenance and version identity | Not ready | High | Anchored | n/a | P0 | Steam app `9420`; executable version `1.5.0.1`, complete `bin` set, and all SCDs are hashed. `C-025` proves the corpus is Forged Alliance. Original Steam depot/build manifest and transfer history remain unknown. |
+| `WP-00` | Artifact provenance and version identity | Not ready | High | Anchored | n/a | P0 | Steam app `9420`; executable version `1.5.0.1`, complete `bin` set, and all SCDs are hashed. `C-025` proves the corpus is Forged Alliance. Steam depot/build manifest bound 2026-09-10 (depots 9421–9425, build 2845, manifest IDs transcribed from SteamDB, UNCONFIRMED — no direct SteamDB/steamcmd access; single promoting check is comparing `ART-E001`'s hash against depot 9421's file list). Transfer history still unknown. |
 | `WP-01` | PE architecture, sections, imports, RTTI, symbols, global map | **Ready but not confirmed** | High | Analyzed | `PE-02` | P0 | `C-001`–`C-003`: statically linked, no engine DLL loaded, full RTTI recovered, Ghidra project analyzed. **Session 13 closed the address-ledger gap that kept this Not ready.** `C-117`: 4,049 vtables / 32,678 slots, validated 217/217 against exported `??_7` symbols, surfacing **4,514 function starts Ghidra never found**. `C-128`: 484 field offsets across 51 classes with the base pointer read from each receiver's type descriptor. `C-122`: 525 enum (name, value) pairs. `C-114`: 72 source paths (a measured ceiling, not a partial result). Globals remain unsurveyed — that is what stops it being Confirmed. |
 | `WP-02` | Moho/Lua native registration map | **Ready but not confirmed** | High | **Analyzed** | `PE-27` | P0 | `C-032`: the complete map is recovered — 1,182 Lua callables with name, signature, documentation and native wrapper address, cross-validated by `C-033` against shipped Lua and DLL exports. Regenerate with `tools/re/extract_moho_methods.py`. Readiness is "ready" in this package's own terms (the map is complete enough to drive downstream analysis) but not confirmed: no individual wrapper has yet been decompiled and checked against its signature. |
 | `WP-03` | Native object identity, ownership, lifecycle, destruction | Ready but not confirmed | High | **Analyzed** | `PE-02`, `PE-03` | P0 | **Seam implemented 2026-09-06** (ADR-104): `UnitStore::resolve` names `Alive`/`Destroyed`/`Stale`, `ScriptObject.hpp` maps the two resolver families with the retail error string; tested. **Answered** by `C-044`–`C-047`. Sim identity is a pooled integer id via `EntityDB`/`IdPool` with deferred destruction (`C-004`); the Lua boundary resolves its receiver fresh per call from `_c_object`, whose native pointer is nulled in `~CScriptObject` (`0x004cdeab`, 91 callers) and checked by 73 per-class resolvers — 54 raising `"Game object has been destroyed"`, 19 returning NULL for lifecycle queries. `Entity+0x1b9` flags queued destruction so scripts see death *before* the pointer dies. Readiness stays Not ready only because Recoil Metal has no equivalent script boundary to test. |
@@ -870,6 +870,57 @@ Record the acquisition date, disk label, install provenance, and whether Steam/G
 changed any binary. Never silently replace an artifact: add a new ID. Use `ART-E` for executables,
 `ART-D` for DLLs, `ART-S` for archives, and `ART-M` for manifests or configuration. Every file gets
 its own ID; never assign one ID to a group of DLLs or archives.
+
+## Steam depot/build binding for `ART-E001` (`WP-00`)
+
+Recorded 2026-09-10. Three evidence tiers: verified locally, reported by SteamDB
+(not re-verifiable from this network), and inferred layout mapping.
+
+### Verified: this install is Steam app `9420`
+
+| Fact | Evidence |
+|---|---|
+| Steam app identity | `ART-M001` (`steam_appid.txt` = `9420`); `ART-M002` names the app `9420` registry key |
+| Store identity | `store.steampowered.com/api/appdetails?appids=9420` returns "Supreme Commander: Forged Alliance", Windows-only, publishers Square Enix |
+| Exe integrity | SHA-256 recomputed 2026-09-10: `c6783580…960aa0`, matching `ART-E001`; MD5 `42e1f65f…350b`; 13,213,696 bytes |
+| Build identity | File/product version `1.5.0.1`; PE link timestamp `2011-08-29 23:48:30 +0200` (linker 8.0) |
+| Depot file layout present | `bin/` (exe + DLLs), `gamedata/`, `maps/`, `movies/`, `sounds/`, `fonts/`, `installscript.vdf` |
+
+### Reported: SteamDB depot/build manifest (UNCONFIRMED)
+
+SteamDB's [app 9420 depots page](https://steamdb.info/app/9420/depots/) reports build
+`2845` with one manifest per depot; per-depot histories and manifest lists are at
+[9421](https://steamdb.info/depot/9421/) (`/history`, `/manifests`, `/subs`),
+[9422](https://steamdb.info/depot/9422/manifests/), [9423](https://steamdb.info/depot/9423/),
+[9424](https://steamdb.info/depot/9424/), and [9421 history](https://steamdb.info/depot/9421/history/).
+SteamDB was not directly fetchable from this network (HTTP 403) and no `steamcmd` is
+installed, so these IDs are transcribed from SteamDB-indexed sources, NOT confirmed
+against Steam. Reproduce with an owning Steam account:
+`download_depot 9420 <depot> <manifest>`.
+
+| Depot | Contents | Manifest ID | Files dated |
+|---:|---|---|---|
+| 9421 | Main game files | `4147794321020030711` | 2012-05-28 |
+| 9422 | Maps | `1133455244675255160` | 2012-05-28 |
+| 9423 | Movies | `4676321208144095012` | 2012-05-28 |
+| 9424 | Sound | `6345214097578234380` | 2012-05-28 |
+| 9425 | English language | `6826209869392592842` | 2012-05-28 |
+
+### Inferred: install directories to depots (UNCONFIRMED)
+
+By name only: `bin/` (incl. `ART-E001`) and `gamedata/` → 9421; `maps/` → 9422;
+`movies/` → 9423; `sounds/` → 9424; `gamedata/loc_*.scd` → 9425. Confirm by
+downloading depot 9421's manifest and comparing `ART-E001`'s hash against its
+file list — the single check that would promote this whole section to verified.
+
+### Remaining provenance uncertainty
+
+- Whether build `2845`'s files equal file version `1.5.0.1` (the 2012 file dates and
+  the 2011 PE timestamp agree, but no manifest file list has been compared).
+- Transfer history: GPG (2007–2011) → Steam publication → Square Enix publisher of
+  record → THQ Nordic from 2016; no transfer changed the bytes in hand, but no
+  transfer log was consulted either.
+- `ART-E001`'s in-game version string (`3599`/`3603`-era) was not read out of the binary.
 
 ## Tool and project manifest
 

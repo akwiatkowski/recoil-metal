@@ -166,7 +166,7 @@ excluded from the headline.
 
 | ID | Subsystem | Source WPs | Implemented | Retail-validated | Retail-analyzed | Exact next task |
 |---|---|---|---:|---:|---:|---|
-| [`FA-FOUND`](#fa-found---retail-build-and-api-foundation) | Retail build and API foundation | `WP-00`-`02` | n/a | 75% | 85% | Bind an authoritative Steam depot/build manifest to `ART-E001`. |
+| [`FA-FOUND`](#fa-found---retail-build-and-api-foundation) | Retail build and API foundation | `WP-00`-`02` | n/a | 80% | 85% | Steam depot/build manifest bound to `ART-E001` (depots 9421–9425, build 2845, IDs SteamDB-transcribed, UNCONFIRMED); promoting check is hashing `ART-E001` against depot 9421's file list. |
 | [`FA-SIM`](#fa-sim---simulation-kernel-and-object-lifecycle) | Simulation kernel and object lifecycle | `WP-03`-`04` | 75% | 50% | 90% | RNG family confirmed by MT19937 reference vector; seeded once, slot-order draws, state-hashed; retail checksum ring stays structurally unmatched (C-154). FAF proxies already use the script-object seam (`139d408`). |
 | [`FA-CONTENT`](#fa-content---vfs-blueprints-maps-and-bootstrap) | VFS, blueprints, maps, bootstrap | `WP-05`, `06`, `09` | 70% | 40% | 60% | Retail SCD precedence traced: lua.scd shadows mohodata.scd (Unit.lua pair), mount order fixed and tested. |
 | [`FA-CMD`](#fa-cmd---commands-controls-and-factories) | Commands, controls, factories | `WP-12`-`14` | 90% | 75% | 75% | Bingo-fuel aircraft guards hold for auto-land refuel instead of pursuing (C-183 refuel rung); ferry and staging-directed RTB stay open. Guard is accepted on the retail map (`make test-guard-ui`). |
@@ -204,13 +204,21 @@ the detailed evidence ledger when retail knowledge changed.
 
 ### FA-FOUND - Retail Build And API Foundation
 
-**Largest gap:** the executable is hash-identified, but no authoritative Steam depot/build
-manifest proves exactly which final retail build it represents.
+**Current slice:** the install is proven Steam app `9420` (`steam_appid.txt`, store record,
+Windows-only, Square Enix publisher of record) and `ART-E001`'s SHA-256 was recomputed
+2026-09-10 against the local exe (match; file version `1.5.0.1`, PE `2011-08-29`). The Steam
+depot/build manifest is bound in the exe plan's new `WP-00` subsection: depots 9421–9425
+(game, maps, movies, sound, English) at build 2845 with transcribed manifest IDs, an
+install-directory to depot inference map, and reproduction via `download_depot`.
+
+**Largest gap:** the manifest IDs are SteamDB-transcribed, not confirmed against Steam
+(no direct access from here); the single promoting check is comparing `ART-E001`'s hash
+against depot 9421's file list. Transfer history (GPG → Steam → THQ Nordic) unconsulted.
 
 ```text
-/goal Advance FA-FOUND by obtaining and recording the authoritative Steam app 9420 depot/build
-manifest, matching it against ART-E001 and the preserved retail files, documenting any remaining
-provenance uncertainty, and updating WP-00 plus docs/fa-gameplay-progress.md with the evidence.
+/goal Advance FA-FOUND by confirming the transcribed manifest against Steam (download depot
+9421's manifest with an owning account, compare ART-E001's hash), then close WP-00's manifest
+half and refresh FA-FOUND.
 ```
 
 ### FA-SIM - Simulation Kernel And Object Lifecycle
