@@ -208,6 +208,11 @@ function GetArmyUnitCap() return 1000 end
 -- condition thresholds in the corpus (0.8 mass, 10 energy) only make sense at that scale.
 
 local function recordMissing(name)
+    -- Driver-owned lazy caches, not engine API: the first read of a cold cache is
+    -- the warm-up, and counting it would report the driver's own bookkeeping as a
+    -- missing native (assistSnapshot x202 in the 400-second sanity run). Genuine
+    -- engine gaps still land here, because nothing else shares these names.
+    if name == 'assistSnapshot' or name == 'managerCounts' then return end
     __rm_faf.missing[name] = (__rm_faf.missing[name] or 0) + 1
 end
 

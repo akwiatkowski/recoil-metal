@@ -135,6 +135,14 @@ TEST_CASE("FAF enemy and blueprint queries read the observed match and retail co
         assert(misc.IsIsland(brain, false), 'no Island marker is a valid negative result')
         assert(brain.islandMarker == nil)
         assert(__rm_faf.missing.islandMarker == nil, 'optional nil is not an unbound method')
+        -- Driver-owned lazy caches, forced cold: a cache warming up is not a missing
+        -- engine API, so neither read may pollute the miss ledger.
+        brain.assistSnapshot = nil
+        brain.managerCounts = nil
+        assert(brain.assistSnapshot == nil)
+        assert(brain.managerCounts == nil)
+        assert(__rm_faf.missing.assistSnapshot == nil, 'own cache is not a missing method')
+        assert(__rm_faf.missing.managerCounts == nil, 'own cache is not a missing method')
         assert(not misc.ReclaimAvailableInGrid(brain, 'MAIN', false),
             'unsupported reclaim grid fails closed without a formatting exception')
         local enemy = brain:GetCurrentEnemy()
