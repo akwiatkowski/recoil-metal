@@ -65,9 +65,11 @@ WindowOptions parseWindow(int argc, const char* argv[]) {
     WindowOptions options;
     options.fullscreen = hasFlag(argc, argv, "--fullscreen");
     for (int i = 1; i < argc; ++i) {
-        if (std::string_view{argv[i]} == "--input-acceptance") {
+        if (std::string_view{argv[i]} == "--input-acceptance"
+            || std::string_view{argv[i]} == "--build-preview-acceptance") {
+            options.buildPreviewAcceptance = std::string_view{argv[i]} == "--build-preview-acceptance";
             if (i + 1 >= argc || std::string_view{argv[i + 1]}.starts_with("--")) {
-                throw std::invalid_argument{"--input-acceptance requires an output PNG path"};
+                throw std::invalid_argument{std::string{argv[i]} + " requires an output PNG path"};
             }
             options.inputAcceptancePath = argv[++i];
             options.simulatedBacking = parseShot(argc, argv).backing;

@@ -236,14 +236,35 @@ void appendBuildPanel(Geometry& out, const text::Font& labelFont, const text::Fo
 /// the clamp, so the comment was the thing that was wrong.
 [[nodiscard]] Colour tierTint(const Theme& theme, int tier) noexcept;
 
-/// Cap on one drag's sites: a full-map swipe at minimum spacing would otherwise queue
-/// hundreds of dead orders, and repeating the gesture is cheap.
-inline constexpr std::size_t kArrayMaxSites = 32;
+/// Cap on one drag's sites: a full-map swipe at touching spacing would otherwise queue
+/// thousands of dead orders, and repeating the gesture is cheap. 128 covers a wall or a
+/// power-generator row across a whole 1024-elmo base at one 8-elmo square per site.
+inline constexpr std::size_t kArrayMaxSites = 128;
 
-/// Bounds on the wheel spacing scale, as multiples of the structure diameter. Below
-/// half the ghosts merge into one smear; above quadruple the "array" is dots.
-inline constexpr float kArraySpacingMinScale = 0.5f;
-inline constexpr float kArraySpacingMaxScale = 4.0f;
+/// The wheel spacing scale multiplies the structure's touching pitch, and touching is
+/// the floor: below it footprints overlap and the sim refuses every other site.
+inline constexpr float kArraySpacingMinScale = 1.0f;
+
+/// The ceiling is an absolute distance, not a multiple: a row of point-defence towers
+/// is spread to cover ground, and the ground a tower covers does not grow with its
+/// footprint. Forty build squares (320 elmos) is 80% of the T2 point defence's
+/// 50-ogrid `MaxRadius` (retail UEB2301), so towers at the widest spread still overlap
+/// their coverage; a wall (8 elmos) reaches it at 40x, a 5-square factory at 8x.
+inline constexpr float kArraySpacingMaxElmos = 320.0f;
+
+/// The widest scale a structure of the given touching pitch may spread to — never
+/// below the floor, so a structure wider than the ceiling still packs at touching.
+[[nodiscard]] constexpr float arraySpacingMaxScale(float touchingElmos) noexcept {
+    return touchingElmos > 0.0f
+               ? (kArraySpacingMaxElmos / touchingElmos > kArraySpacingMinScale
+                      ? kArraySpacingMaxElmos / touchingElmos
+                      : kArraySpacingMinScale)
+               : kArraySpacingMinScale;
+}
+
+/// The single-square structure's ceiling: the wheel's default bound when the caller has
+/// no structure in hand, and the widest any scale can reach.
+inline constexpr float kArraySpacingMaxScale = kArraySpacingMaxElmos / 8.0f;
 
 /// World-space points, so both the ghost row and the release submit read the same
 /// answer — a ghost that promises a site the order then refuses is the failure this
@@ -261,10 +282,12 @@ inline constexpr float kArraySpacingMaxScale = 4.0f;
 void arrayBuildCellsInto(std::array<float, 2> from, std::array<float, 2> to,
     float spacingElmos, std::size_t maxSites, std::vector<std::array<float, 2>>& out);
 
-/// The wheel step for array spacing, as a scale on the structure diameter. Scrolling
-/// up tightens toward half-diameter packing, scrolling down loosens toward quadruple —
-/// the same direction as the zoom the wheel otherwise drives, so one hand learns one
-/// gesture. A still wheel is the identity; the bounds clamp rather than saturate.
-[[nodiscard]] float arraySpacingScaleStep(float scale, float wheelPoints) noexcept;
+/// The wheel step for array spacing, as a scale on the structure's touching pitch.
+/// Scrolling up tightens toward touching buildings, scrolling down loosens toward
+/// `maxScale` (`arraySpacingMaxScale` of the armed structure) — the same direction as
+/// the zoom the wheel otherwise drives, so one hand learns one gesture. A still wheel
+/// is the identity; the bounds clamp rather than saturate.
+[[nodiscard]] float arraySpacingScaleStep(float scale, float wheelPoints,
+    float maxScale = kArraySpacingMaxScale) noexcept;
 
 } // namespace rm::ui

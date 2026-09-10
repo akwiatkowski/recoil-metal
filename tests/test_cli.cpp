@@ -131,6 +131,16 @@ TEST_CASE("window size is logical, bounded by the supported HUD floor, and fulls
     CHECK(floor.fullscreen);
 }
 
+TEST_CASE("build preview acceptance opts into native events and requires a capture path") {
+    Args preview{{"--build-preview-acceptance", "preview.png", "--backing", "2"}};
+    const auto options = rm::app::parseWindow(preview.argc(), preview.argv());
+    CHECK(options.buildPreviewAcceptance);
+    CHECK(options.inputAcceptancePath == "preview.png");
+    CHECK(options.simulatedBacking == 2.0f);
+    Args missing{{"--build-preview-acceptance"}};
+    CHECK_THROWS_AS(rm::app::parseWindow(missing.argc(), missing.argv()), std::invalid_argument);
+}
+
 TEST_CASE("a count is the value after its flag, and zero when there is none") {
     Args armies{{"--armies", "4"}};
     CHECK(rm::app::parseCount(armies.argc(), armies.argv(), "--armies") == 4);

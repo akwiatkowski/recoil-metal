@@ -2339,6 +2339,31 @@ TEST_CASE("array submit snaps, dedupes and refuses per site", "[build][array][he
     CHECK(deduped.refused == 0);
 }
 
+TEST_CASE("array previews pack building footprints and widen with spacing", "[build][array]") {
+    Scenario job;
+    rm::unitdef::UnitDef tower;
+    tower.name = "preview_tower";
+    tower.footprintSquaresX = 2;
+    tower.footprintSquaresZ = 4;
+    tower.collisionRadiusElmos = 4;
+    const auto type = job.registerType(tower);
+    std::vector<std::array<float, 2>> sites;
+    rm::app::arrayBuildSitesInto(job.scene, type, {300, 300}, {428, 300}, 1, sites);
+    REQUIRE(sites.size() > 2);
+    CHECK(sites[1][0] - sites[0][0] == 16.0f);
+    const auto packedCount = sites.size();
+    rm::app::arrayBuildSitesInto(job.scene, type, {300, 300}, {428, 300}, 2, sites);
+    CHECK(sites.size() < packedCount);
+    CHECK(sites[1][0] - sites[0][0] == 32.0f);
+    rm::app::arrayBuildSitesInto(job.scene, type, {300, 300}, {300, 428}, 1, sites);
+    CHECK(sites[1][1] - sites[0][1] == 32.0f);
+    rm::app::arrayBuildSitesInto(job.scene, type, {300, 300}, {428, 428}, 1, sites);
+    for (std::size_t i = 1; i < sites.size(); ++i) {
+        CHECK((std::abs(sites[i][0] - sites[i - 1][0]) >= 16
+            || std::abs(sites[i][1] - sites[i - 1][1]) >= 32));
+    }
+}
+
 TEST_CASE("a retail Kennel lends its authored rate only to nearby allied construction",
           "[corpus][station]") {
     const auto root = corpusRoot();
@@ -2622,4 +2647,55 @@ TEST_CASE("production queued on a factory under construction starts when it comp
     }
     CHECK(rm::sim::hashMatch(replay.scene.store, replayRunner.match)
           == rm::sim::hashMatch(live.scene.store, liveRunner.match));
+}
+
+TEST_CASE("a retail power generator row packs one footprint apart by default and the sim founds every site",
+          "[corpus][build][array]") {
+    // UEB1101 has a one-square footprint inside a two-square skirt. Packing by skirt left
+    // one empty square between generators; the default — an untouched wheel, scale 1 —
+    // must put them side by side, and the sim must accept every neighbour when the order
+    // is founded, not only in the preview. The widest wheel spread is the absolute
+    // ceiling: forty squares for a one-square structure.
+    const auto root = corpusRoot();
+    if (!std::filesystem::is_directory(root)) SKIP("retail corpus unavailable");
+    const auto engineer = rm::unitbp::loadFile(root / "UEL0105/UEL0105_unit.bp");
+    const auto generator = rm::unitbp::loadFile(root / "UEB1101/UEB1101_unit.bp");
+    REQUIRE(engineer);
+    REQUIRE(generator);
+    Scenario job;
+    const auto builder = job.spawn(*engineer, 300, 280);
+    const auto type = job.registerType(*generator);
+    const float square = rm::sim::fxToFloat(rm::sim::kBuildGridElmos);
+
+    std::vector<std::array<float, 2>> sites;
+    const float touching =
+        rm::app::arrayBuildSitesInto(job.scene, type, {300, 300}, {330, 300}, 1.0f, sites);
+    CHECK(touching == square);
+    REQUIRE(sites.size() == 5);
+    for (std::size_t i = 1; i < sites.size(); ++i) {
+        CHECK(sites[i][0] - sites[i - 1][0] == square);
+        CHECK(sites[i][1] == sites[0][1]);
+    }
+
+    std::vector<std::array<float, 2>> spread;
+    rm::app::arrayBuildSitesInto(job.scene, type, {300, 300}, {1000, 300}, 1000.0f, spread);
+    REQUIRE(spread.size() >= 3);
+    CHECK(spread[1][0] - spread[0][0] == rm::ui::kArraySpacingMaxElmos);
+
+    const auto result = rm::app::submitArrayBuilds(job.scene, job.field, job.passability,
+                                                   builder, type, sites, 0,
+                                                   static_cast<rm::TickIndex>(0));
+    CHECK(result.placed == sites.size());
+    CHECK(result.refused == 0);
+
+    auto runner = job.runner();
+    for (int tick = 0; tick < 6000 && job.scene.building.size() < sites.size(); ++tick) {
+        job.scene.economies[0].stored = rm::app::kStartingStorage;
+        (void)rm::app::advanceMatch(runner, tick, 0);
+    }
+    REQUIRE(job.scene.building.size() == sites.size());
+    for (std::size_t i = 0; i < sites.size(); ++i) {
+        CHECK(rm::sim::fxToFloat(job.scene.building[i].position[0]) == sites[i][0]);
+        CHECK(rm::sim::fxToFloat(job.scene.building[i].position[2]) == sites[i][1]);
+    }
 }

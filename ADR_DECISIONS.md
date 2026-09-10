@@ -4060,3 +4060,52 @@ reservations. These queries now support the intended geometry and self
 exclusion. Dynamic expansion creation, founder transfer and template ownership
 remain separate requirements; the synthetic NAVAL base is not validated by
 these tests.
+
+
+## ADR-129 — Preview complete building rows before release
+
+**Context.** Drag placement appended rings before the frame cleared its decal
+buffer, and the renderer could store only one model ghost. The queued row was
+visible only after release. Collision diameter alone also under-spaced buildings
+whose placement footprint or skirt was larger than their collision shape.
+
+**Decision.** Compose preview rings and model silhouettes after clearing decals.
+Preview and submission share snapped sites spaced by footprint/skirt dimensions
+and collision diameter. Wheel spacing starts and bottoms out at touching buildings.
+Store a ghost list and use Metal's small inline vertex-data copies per draw, avoiding
+an additional mutable GPU instance buffer. An eight-elmo grid is shaded on terrain
+and water while placement is armed, with derivative antialiasing and distance fade.
+
+**Alternatives.** Ring-only previews do not show the building shape. A large grid
+mesh adds geometry and terrain resampling when the shader already knows world
+position. Reusing one writable instance slot for all ghosts would alias GPU reads.
+
+**Consequences.** Placement is capped per drag (see ADR-130) and skips invalid sites on
+release; grid snapping can introduce extra gaps in diagonal rows. Pure array tests
+cover footprint packing, wheel bounds and Escape mapping. Escape cancels even a held
+row without issuing orders when the button is released. `make test-build-preview` exercises held
+silhouettes, native scrolling without zoom, exact release counts, and cancellation.
+
+## ADR-130 — Row spacing ceiling is a distance; site cap covers a whole base
+
+**Context.** The wheel spread a build row to at most four times the structure's
+touching pitch, and a drag queued at most 32 sites. Players spread point-defence rows
+by weapon range, not by footprint — a T2 tower (UEB2301) reaches 50 ogrids — so four
+squares was far too tight for a one-square tower, and 32 packed sites did not span a
+base at one square per site.
+
+**Decision.** The spacing ceiling is `kArraySpacingMaxElmos` = 320 elmos (40 squares,
+80% of the T2 tower's range) for every structure; the wheel's scale ceiling is that
+distance over the armed structure's touching pitch (`arraySpacingMaxScale`), which
+`arrayBuildSitesInto` reports each drag frame. The floor stays at touching footprints,
+which is also the default. `kArrayMaxSites` is 128.
+
+**Alternatives.** Raising the multiple to 40x spreads a factory row across the map and
+makes the wheel's travel depend on footprint. Keeping the scale as the wheel's only
+state and clamping the distance downstream lets the scale drift past the visible
+ceiling on wide structures, so scrolling back does nothing for several notches.
+
+**Consequences.** Run state gains the touching pitch beside the scale. 128 ghosts per
+frame at the widest drag; the cap still bounds a full-map swipe. Tests pin the
+ceiling per pitch, the collapsed clamp, the cap, and a retail power-generator row
+packing one footprint apart with every site founded by the sim.

@@ -230,8 +230,14 @@ public:
     /// The build ghost — the armed blueprint's silhouette at the cursor. See
     /// Renderer::setGhost; sticky until cleared, unlike the per-frame lists.
     void setGhost(std::size_t batch, const UnitInstance& instance,
-                  std::array<float, 4> tint) noexcept;
+                  std::array<float, 4> tint);
     void clearGhost() noexcept;
+    void setGhosts(std::span<const Renderer::GhostDraw> ghosts);
+    void setBuildGrid(bool enabled) noexcept;
+    /// Native events for held-preview acceptance, with a deterministic polled cursor.
+    void sendMouseDrag(float pointX, float pointY, bool release = false);
+    void sendScroll(float points);
+    void sendEscape();
 
     /// This frame's construction sites, and the clock their effects run on.
     /// See Renderer::setConstructions.

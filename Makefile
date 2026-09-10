@@ -161,6 +161,12 @@ test: build
 	mise exec -- ctest --test-dir $(BUILD) --output-on-failure
 
 .PHONY: test-upgrade-ui
+.PHONY: test-build-preview
+test-build-preview: build check-fa
+	mise exec -- ./$(BUILD)/rm_tests '[array]'
+	mise exec -- $(BIN) "$(FA_MAP)" $(FA_FLAGS) --skirmish --armies 2 --factions uef \
+	  --mute --build-preview-acceptance $(BUILD)/build-preview.png
+
 test-upgrade-ui: build check-fa
 	mise exec -- ./$(BUILD)/rm_tests '[headless-ui]'
 	FA_INSTALL="$(FA_ROOT)" CAPTURE_BINARY="$(BIN)" CAPTURE_SCENARIOS=upgrade \

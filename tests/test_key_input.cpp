@@ -26,7 +26,8 @@ TEST_CASE("a character becomes one semantic event without losing event state") {
 }
 
 TEST_CASE("the semantic vocabulary contains exactly the keys the game binds") {
-    constexpr std::array<std::pair<char, rm::Key>, 21> kBindings{{
+    constexpr std::array<std::pair<char, rm::Key>, 22> kBindings{{
+        {'\x1b', rm::Key::Escape},
         {'a', rm::Key::A},           {'d', rm::Key::D},           {'e', rm::Key::E},
         {'f', rm::Key::F},           {'n', rm::Key::N},           {'o', rm::Key::O},
         {'p', rm::Key::P},           {'r', rm::Key::R},           {'s', rm::Key::S},

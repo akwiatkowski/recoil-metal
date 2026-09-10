@@ -485,6 +485,7 @@ struct rm::Window::Impl {
     std::function<void(rm::KeyEvent)> keyCallback;
     std::function<bool(float)> scrollCallback;
     std::set<rm::Key> heldKeys;
+    std::optional<std::array<float, 2>> injectedCursor;
 
     Impl(int width, int height, const char* title, bool startFullscreen)
         : fullscreen{startFullscreen} {
@@ -527,10 +528,10 @@ struct rm::Window::Impl {
             (__bridge CA::MetalLayer*)metalLayer);
         view.renderer = renderer.get();
         [view rmSyncUiViewport];
+        view.clickCallback = &clickCallback;
         view.keyCallback = &keyCallback;
         view.scrollCallback = &scrollCallback;
         view.heldKeys = &heldKeys;
-
         delegate = [[RMDisplayLinkDelegate alloc] init];
         delegate.renderer = renderer.get();
         delegate.frameCallback = &frameCallback;
@@ -547,6 +548,7 @@ struct rm::Window::Impl {
         // destroyed with this object.
         [displayLink invalidate];
         view.renderer = nullptr;
+        view.clickCallback = nullptr;
         view.keyCallback = nullptr;
         view.scrollCallback = nullptr;
         view.heldKeys = nullptr;
@@ -643,6 +645,7 @@ void Window::onScroll(std::function<bool(float scrollingDeltaY)> callback) {
 bool Window::keyHeld(Key key) const { return impl_->heldKeys.contains(key); }
 
 std::array<float, 2> Window::cursor() const {
+    if (impl_->injectedCursor) return *impl_->injectedCursor;
     NSWindow* window = impl_->view.window;
     if (window == nil) {
         return {{-1.0f, -1.0f}};  // no window, no cursor: a point that misses every hit test
@@ -710,11 +713,17 @@ bool Window::shiftHeldNow() const {
 }
 
 void Window::setGhost(std::size_t batch, const UnitInstance& instance,
-                      std::array<float, 4> tint) noexcept {
+                      std::array<float, 4> tint) {
     impl_->renderer->setGhost(batch, instance, tint);
 }
 
 void Window::clearGhost() noexcept { impl_->renderer->clearGhost(); }
+
+void Window::setGhosts(std::span<const Renderer::GhostDraw> ghosts) {
+    impl_->renderer->setGhosts(ghosts);
+}
+
+void Window::setBuildGrid(bool enabled) noexcept { impl_->renderer->setBuildGrid(enabled); }
 
 void Window::setSelection(std::span<const SelectionEntry> selected) {
     impl_->renderer->setSelection(selected);
@@ -795,6 +804,7 @@ void Window::show(bool inputAcceptance) {
 }
 
 void Window::sendMouseClick(float pointX, float pointY, MouseButton button, bool shift) {
+    impl_->injectedCursor.reset();
     const NSPoint local = NSMakePoint(pointX, impl_->view.bounds.size.height - pointY);
     const NSPoint point = [impl_->view convertPoint:local toView:nil];
     const NSEventModifierFlags flags = shift ? NSEventModifierFlagShift : 0;
@@ -811,6 +821,44 @@ void Window::sendMouseClick(float pointX, float pointY, MouseButton button, bool
         [impl_->window sendEvent:event];
     }
     impl_->view.injectingMouseClick = NO;
+}
+
+void Window::sendMouseDrag(float pointX, float pointY, bool release) {
+    const bool held = leftMouseHeld();
+    const NSPoint point = [impl_->view convertPoint:
+        NSMakePoint(pointX, impl_->view.bounds.size.height - pointY) toView:nil];
+    NSEvent* event = [NSEvent mouseEventWithType:
+        release ? NSEventTypeLeftMouseUp : held ? NSEventTypeLeftMouseDragged : NSEventTypeLeftMouseDown
+        location:point modifierFlags:0 timestamp:NSProcessInfo.processInfo.systemUptime
+        windowNumber:impl_->window.windowNumber context:nil eventNumber:0 clickCount:1 pressure:1.0];
+    if (held && !release && impl_->injectedCursor) {
+        CGEventRef raw = CGEventCreateCopy(event.CGEvent);
+        CGEventSetDoubleValueField(raw, kCGMouseEventDeltaX, pointX - (*impl_->injectedCursor)[0]);
+        CGEventSetDoubleValueField(raw, kCGMouseEventDeltaY, pointY - (*impl_->injectedCursor)[1]);
+        event = [NSEvent eventWithCGEvent:raw];
+        CFRelease(raw);
+    }
+    impl_->injectedCursor = {{pointX, pointY}};
+    impl_->view.injectingMouseClick = YES;
+    [impl_->window sendEvent:event];
+    impl_->view.injectingMouseClick = NO;
+}
+
+void Window::sendScroll(float points) {
+    CGEventRef raw = CGEventCreateScrollWheelEvent(nullptr, kCGScrollEventUnitPixel, 1,
+                                                  static_cast<int32_t>(points));
+    [impl_->view scrollWheel:[NSEvent eventWithCGEvent:raw]];
+    CFRelease(raw);
+}
+
+void Window::sendEscape() {
+    for (const auto type : {NSEventTypeKeyDown, NSEventTypeKeyUp}) {
+        NSEvent* event = [NSEvent keyEventWithType:type location:NSZeroPoint modifierFlags:0
+            timestamp:NSProcessInfo.processInfo.systemUptime windowNumber:impl_->window.windowNumber
+            context:nil characters:@"\x1b" charactersIgnoringModifiers:@"\x1b"
+            isARepeat:NO keyCode:53];  // macOS Escape virtual key
+        [impl_->window sendEvent:event];
+    }
 }
 
 void Window::setSimulatedBacking(float scale) {

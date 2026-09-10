@@ -108,6 +108,7 @@ struct WindowOptions {
     bool fullscreen = false;
     /// Opt-in native-event acceptance run; saves its final frame and returns nonzero on failure.
     std::string inputAcceptancePath;
+    bool buildPreviewAcceptance = false;
     float simulatedBacking = 0.0f;
 };
 

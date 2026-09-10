@@ -430,12 +430,14 @@ std::vector<std::array<float, 2>> arrayBuildCells(std::array<float, 2> from,
     return sites;
 }
 
-float arraySpacingScaleStep(float scale, float wheelPoints) noexcept {
+float arraySpacingScaleStep(float scale, float wheelPoints, float maxScale) noexcept {
     // Same exponential feel as the zoom the wheel otherwise drives, so one hand's
-    // gesture keeps one meaning: up (positive, zoom-in) tightens, down loosens.
+    // gesture keeps one meaning: up (positive, zoom-in) tightens, down loosens. At
+    // 0.04 per point a plain wheel notch (ten points on macOS) is a 1.5x step, so the
+    // single-square ceiling of 40x is nine notches from touching.
     constexpr float kWheelPerPoint = 0.04f;
     return std::clamp(scale * std::exp(-wheelPoints * kWheelPerPoint),
-                      kArraySpacingMinScale, kArraySpacingMaxScale);
+                      kArraySpacingMinScale, std::max(kArraySpacingMinScale, maxScale));
 }
 
 } // namespace rm::ui

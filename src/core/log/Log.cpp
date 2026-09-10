@@ -9,6 +9,7 @@
 #include <memory>
 #include <mutex>
 #include <vector>
+#include <unistd.h>
 
 namespace rm::log {
 namespace {
@@ -136,7 +137,10 @@ void write(Level level, std::string_view category, std::string_view message) noe
         record += '\n';
 
         if (log.stderrEnabled) {
+            const bool red = level == Level::Error && ::isatty(::fileno(stderr));
+            if (red) std::fputs("\033[31m", stderr);
             std::fwrite(record.data(), 1, record.size(), stderr);
+            if (red) std::fputs("\033[0m", stderr);
             std::fflush(stderr);
         }
         if (log.file != nullptr) {

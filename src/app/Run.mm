@@ -678,7 +678,7 @@ void composeHeadlessInterface(rm::Renderer& renderer, const Session& session,
                         // windowed loop's growth check, done by hand.
                         renderer.setUnits(units.textures.all(), units.batches);
                         const auto typeIndex = static_cast<std::size_t>(*type);
-                        const auto snapped = snapResourceSite(units, *type, {gx, gz});
+                        const auto snapped = snapBuildSite(units, *type, {gx, gz});
                         gx = snapped[0];
                         gz = snapped[1];
                         const auto& grid = passability.gridForBuild(units, typeIndex,
@@ -689,6 +689,7 @@ void composeHeadlessInterface(rm::Renderer& renderer, const Session& session,
                             && rm::sim::buildSitePlaceable(grid, rm::sim::fxFromFloat(gx),
                                 rm::sim::fxFromFloat(gz), rm::sim::fxFromFloat(def->collisionRadiusElmos),
                                 units.store, units.catalog, units.building);
+                        renderer.setBuildGrid(true);
                         renderer.setGhost(
                             batch,
                             rm::UnitInstance{
@@ -1043,14 +1044,21 @@ int runWindowed(const Session& session) {
         // binding lives in one place; the runner arrives later because the window (and its
         // callbacks) must exist before the match it drives.
         MatchRunner* runnerForKeys = nullptr;
-        /// Array-drag spacing as a multiple of the armed structure's diameter, tuned by
-        /// the wheel mid-drag; whether the current frame is inside such a drag, for the
-        /// wheel handler. Beside the callbacks, because both poll them across frames.
+        /// Array-drag spacing as a multiple of the armed structure's touching pitch, tuned
+        /// by the wheel mid-drag; that pitch in elmos, as the last drag frame measured it,
+        /// so the wheel's ceiling is the absolute `kArraySpacingMaxElmos` rather than a
+        /// multiple; and whether the current frame is inside such a drag, for the wheel
+        /// handler. Beside the callbacks, because all three are polled across frames.
         float arraySpacingScale = 1.0f;
+        float arrayTouchingElmos = 0.0f;
         bool arrayDragging = false;
+        bool cancelledLeftGesture = false;
+        std::optional<std::size_t> armedOption;
+        std::optional<std::array<float, 2>> arrayDragAnchor;
 
         window.onKey([&window, &selected, &controlGroups, &units, &armedCommand, restPitch,
-                      restYaw, &runnerForKeys](rm::KeyEvent event) {
+                      restYaw, &runnerForKeys, &armedOption, &arrayDragging,
+                      &cancelledLeftGesture, &arrayDragAnchor](rm::KeyEvent event) {
             if (event.phase == rm::KeyPhase::Release) {
                 if (event.key == rm::Key::Space) {
                     // A held-space glance never costs the player their overhead bearings.
@@ -1061,7 +1069,15 @@ int runWindowed(const Session& session) {
                 return;
             }
 
-            if (event.key == rm::Key::R) {
+            if (event.key == rm::Key::Escape) {
+                cancelledLeftGesture = window.leftMouseHeld();
+                armedOption.reset();
+                armedCommand.reset();
+                arrayDragging = false;
+                arrayDragAnchor.reset();
+                window.clearGhost();
+                window.setBuildGrid(false);
+            } else if (event.key == rm::Key::R) {
                 const bool enabled = !window.reflectionsEnabled();
                 window.setReflections(enabled);
                 std::printf("reflections %s\n", enabled ? "on" : "off");
@@ -1115,12 +1131,13 @@ int runWindowed(const Session& session) {
         // The wheel spends itself on array spacing mid-drag and zooms otherwise. Reads
         // last frame's drag state: events land between frames, and 60 Hz staleness is
         // nothing next to a finger already on the wheel.
-        window.onScroll([&arrayDragging, &arraySpacingScale](float scrollingDeltaY) {
+        window.onScroll([&arrayDragging, &arraySpacingScale,
+                         &arrayTouchingElmos](float scrollingDeltaY) {
             if (!arrayDragging) {
                 return false;
             }
-            arraySpacingScale =
-                rm::ui::arraySpacingScaleStep(arraySpacingScale, scrollingDeltaY);
+            arraySpacingScale = rm::ui::arraySpacingScaleStep(arraySpacingScale,
+                scrollingDeltaY, rm::ui::arraySpacingMaxScale(arrayTouchingElmos));
             return true;
         });
 
@@ -1142,9 +1159,8 @@ int runWindowed(const Session& session) {
         // ARMED RATHER THAN IMMEDIATE, which is how both reference games do it and is not
         // merely convention: a structure needs a PLACE, and the panel cannot know one. So a
         // cell click arms, the next ground click places, and right-click or Escape disarms.
-        // Held here beside the options it indexes, and cleared whenever they change — an index
-        // into a list that has been rebuilt is a different building.
-        std::optional<std::size_t> armedOption;
+        // Declared above with the keyboard state so Escape can disarm it. Cleared when
+        // options change: an index into a rebuilt list can name a different building.
         rm::ui::PanelPages panelPages;
         std::size_t productionPage = 0;
         rm::ui::CommandAvailability commandAvailable{};
@@ -1342,6 +1358,7 @@ int runWindowed(const Session& session) {
 
         window.onClick([&](const rm::Ray& ray, rm::MouseButton button,
                            rm::MouseModifiers mods) {
+            if (cancelledLeftGesture && button == rm::MouseButton::Left) return;
             const rm::ui::UiViewport clickViewport = window.uiViewport();
             const std::array<float, 2> hudPoint =
                 clickViewport.toHud({mods.pointX, mods.pointY});
@@ -1612,7 +1629,8 @@ int runWindowed(const Session& session) {
                         std::fflush(stdout);
                     } else if (cell) {
                         armedOption = cell;
-                        arraySpacingScale = 1.0f;  // a new arming starts at touching diameter
+                        arraySpacingScale = 1.0f;  // a new arming starts at touching pitch
+                        arrayDragAnchor.reset();
                     }
                     return;
                 }
@@ -1676,6 +1694,7 @@ int runWindowed(const Session& session) {
             }
             if (armedOption && button == rm::MouseButton::Right) {
                 armedOption.reset();  // right-click cancels, as it cancels everything else
+                arrayDragAnchor.reset();
                 return;
             }
 
@@ -2069,8 +2088,8 @@ int runWindowed(const Session& session) {
 
         // Raw drag march and snapped ghost sites, kept across frames for the same
         // reason: an array drag paints every frame it is held.
-        std::vector<std::array<float, 2>> arrayRawScratch;
         std::vector<std::array<float, 2>> arraySitesScratch;
+        std::vector<rm::Renderer::GhostDraw> ghostScratch;
 
         // HOW MANY BATCHES THE RENDERER HAS BEEN GIVEN — held ACROSS frames, which is the
         // whole point. This was a local captured at the top of each frame and compared at the
@@ -2584,7 +2603,7 @@ int runWindowed(const Session& session) {
                 }
 
                 const bool worldBand = !onMinimap && !onPanel && !armedOption && !armedCommand
-                                    && traveled;
+                                    && traveled && !cancelledLeftGesture;
                 if (held && worldBand) {
                     // The box: a whisper of fill so the caught area reads, and a hairline
                     // in the lit edge so the bounds are exact. Interface, not effect — the
@@ -2640,12 +2659,12 @@ int runWindowed(const Session& session) {
                 // --- Array-build drag, while a cell is armed ------------------------
                 // The band's polled gesture pointed at construction: the press began on
                 // the world (not a panel) with a build armed, so the drag paints sites
-                // instead of selecting. Ghost rings while held, queued builds on
+                // instead of selecting. Model silhouettes while held, queued builds on
                 // release; the arming stays, exactly like a shift-click's. A press that
                 // never travels still falls through to the click below, which is why a
                 // plain click keeps placing exactly one.
                 arrayDragging = false;
-                if (armedOption && (held || (leftWasHeld && !held)) && traveled
+                if (armedOption && !cancelledLeftGesture && (held || (leftWasHeld && !held)) && traveled
                     && !onMinimap && !onPanel) {
                     const auto groundAt = [&](std::array<float, 2> logical) {
                         const rm::Ray ray = rm::screenRay(window.camera(), logical[0],
@@ -2655,37 +2674,26 @@ int runWindowed(const Session& session) {
                         if (!hit) return std::optional<std::array<float, 2>>{};
                         return std::optional<std::array<float, 2>>{{hit->x, hit->z}};
                     };
-                    if (const auto from = groundAt(logicalOrigin)) {
+                    std::optional<std::array<float, 2>> from = arrayDragAnchor;
+                    if (!from && held) {
+                        from = groundAt(logicalOrigin);
+                        if (from) {
+                            // Freeze the first world point when the drag begins. Camera
+                            // movement after this cannot move the first building.
+                            arrayDragAnchor = from;
+                        }
+                    }
+                    if (from) {
                         if (const auto to = groundAt(logicalCursor)) {
                             const std::string path = armedPath();
                             if (const auto type = path.empty() ? std::nullopt
                                     : resolveBuildable(units, content, path)) {
-                                const float diameter =
-                                    2.0f * armedRadius() * arraySpacingScale;
-                                rm::ui::arrayBuildCellsInto(*from, *to, diameter,
-                                    rm::ui::kArrayMaxSites, arrayRawScratch);
-                                arraySitesScratch.clear();
-                                for (const auto& point : arrayRawScratch) {
-                                    const auto snapped = snapBuildSite(units, *type, point);
-                                    if (arraySitesScratch.empty()
-                                        || arraySitesScratch.back() != snapped) {
-                                        arraySitesScratch.push_back(snapped);
-                                    }
-                                }
+                                arrayTouchingElmos = arrayBuildSitesInto(units, *type,
+                                    *from, *to, arraySpacingScale, arraySitesScratch);
                                 const std::vector<std::array<float, 2>>& sites =
                                     arraySitesScratch;
                                 arrayDragging = held && !sites.empty();
-                                if (held) {
-                                    for (const auto& site : sites) {
-                                        const bool ok = armedPlaceable(site);
-                                        rm::appendSelectionRing(decalVertices, map->field,
-                                            {site[0],
-                                             map->field.heightAtWorld(site[0], site[1]),
-                                             site[1]},
-                                            armedRadius() * kSelectionRingMargin,
-                                            ok ? kBuildGhostColour : kBuildGhostBlockedColour);
-                                    }
-                                } else if (!sites.empty()) {
+                                if (!held && !sites.empty()) {
                                     const auto result = submitArrayBuilds(units, map->field,
                                         passability, buildWho.builder, *type, sites,
                                         playerDriving(units, units.playerArmy),
@@ -2702,12 +2710,15 @@ int runWindowed(const Session& session) {
                                                     result.refused);
                                         std::fflush(stdout);
                                     }
+                                    arrayDragAnchor.reset();
                                 }
                             }
                         }
                     }
                 }
+                if (!held && leftWasHeld) arrayDragAnchor.reset();
                 leftWasHeld = held;
+                if (!held) cancelledLeftGesture = false;
             }
 
             window.setHud(hudScratch);
@@ -2791,47 +2802,42 @@ int runWindowed(const Session& session) {
                 }
             }
 
-            // ...and the BUILD GHOST, wherever the cursor is pointing while a cell is armed.
-            //
-            // A RING RATHER THAN A MODEL, and it is a real difference from what both reference
-            // games draw. A ghost mesh needs the blueprint's model resolved and uploaded for
-            // something that may never be built, and the question a player is actually asking
-            // is "may it go HERE" — which is a footprint and a yes or no, both of which a ring
-            // says. The model is the nicer answer and it is not the load-bearing one.
-            //
-            // The colour IS the answer: `sitePlaceable` over every cell the footprint touches,
-            // so the ring goes red against a cliff before the click rather than after. It is
-            // the same call the placement makes, which is what stops the ghost and the order
-            // disagreeing about the same spot.
+            // Build previews are composed after the decal buffer is cleared. Every
+            // silhouette reads the same snapped sites used by the release submission.
+            window.setBuildGrid(armedOption.has_value());
+            ghostScratch.clear();
             if (armedOption) {
-                const std::array<float, 2> cursor = window.cursor();
-                const rm::Ray under = rm::screenRay(
-                    window.camera(), cursor[0], viewport.logicalExtent.height - cursor[1],
-                    viewport.logicalExtent.width, viewport.logicalExtent.height);
-                std::optional<simd_float3> at = rm::pickGround(under, map->field);
-                if (at) {
-                    if (const auto type = resolveBuildable(units, content, armedPath())) {
-                        const auto snapped = snapBuildSite(units, *type, {at->x, at->z});
-                        at->x = snapped[0];
-                        at->z = snapped[1];
-                        at->y = map->field.heightAtWorld(at->x, at->z);
+                const std::string path = armedPath();
+                const auto ghostType = path.empty() ? std::nullopt
+                    : ensureDrawableType(units, content, path);
+                uploadNewBatches();
+                const std::size_t ghostBatch = ghostType ? units.batchOf(*ghostType)
+                                                        : UnitScene::kNoBatch;
+                std::array<std::array<float, 2>, 1> cursorSite{};
+                std::span<const std::array<float, 2>> previewSites;
+                if (arrayDragging) {
+                    previewSites = arraySitesScratch;
+                } else {
+                    const auto cursor = window.cursor();
+                    const auto under = rm::screenRay(window.camera(), cursor[0],
+                        viewport.logicalExtent.height - cursor[1],
+                        viewport.logicalExtent.width, viewport.logicalExtent.height);
+                    if (const auto hit = rm::pickGround(under, map->field)) {
+                        cursorSite[0] = ghostType
+                            ? snapBuildSite(units, *ghostType, {hit->x, hit->z})
+                            : std::array<float, 2>{hit->x, hit->z};
+                        previewSites = cursorSite;
                     }
-                    const bool ok = armedPlaceable({at->x, at->z});
-                    rm::appendSelectionRing(decalVertices, map->field, {at->x, at->y, at->z},
-                                            armedRadius() * kSelectionRingMargin,
-                                            ok ? kBuildGhostColour : kBuildGhostBlockedColour);
+                }
+                for (const auto& site : previewSites) {
+                    const simd_float3 at = simd_make_float3(site[0],
+                        map->field.heightAtWorld(site[0], site[1]), site[1]);
+                    const bool ok = armedPlaceable(site);
+                    const auto tint = ok ? kBuildGhostColour : kBuildGhostBlockedColour;
+                    rm::appendSelectionRing(decalVertices, map->field, {at.x, at.y, at.z},
+                        armedRadius() * kSelectionRingMargin, tint);
 
-                    // THE ADJACENCY PREVIEW: a link line from the ghost to every standing
-                    // structure whose skirt the armed one would touch here — the bonus
-                    // shown BEFORE the mass is spent, because a bonus the player cannot
-                    // see at placement time is a mechanic that does not exist
-                    // (`core/sim/Adjacency.hpp`). Drawn whenever the skirts would touch,
-                    // like the game's own preview, which links every touching structure
-                    // without asking whether a buff lands (`gamemain.lua:916-920`).
-                    if (const std::optional<rm::UnitTypeIndex> armedType =
-                            armedPath().empty()
-                                ? std::nullopt
-                                : resolveBuildable(units, content, armedPath())) {
+                    if (const auto armedType = ghostType) {
                         const rm::sim::UnitCatalog::AdjacencyInfo& mine =
                             units.catalog.adjacency(*armedType);
                         if (mine.participates()) {
@@ -2849,9 +2855,9 @@ int runWindowed(const Session& session) {
                                 const rm::sim::Transform& t =
                                     units.store.transforms()[slot];
                                 if (!rm::sim::skirtsShareEdge(
-                                        rm::sim::fxFromFloat(at->x)
+                                        rm::sim::fxFromFloat(at.x)
                                             + mine.skirtCentreOffsetXElmos,
-                                        rm::sim::fxFromFloat(at->z)
+                                        rm::sim::fxFromFloat(at.z)
                                             + mine.skirtCentreOffsetZElmos,
                                         mine.skirtHalfXElmos, mine.skirtHalfZElmos,
                                         t.x + theirs.skirtCentreOffsetXElmos,
@@ -2860,59 +2866,31 @@ int runWindowed(const Session& session) {
                                     continue;
                                 }
                                 rm::appendGroundSegment(
-                                    decalVertices, map->field, {at->x, at->z},
+                                    decalVertices, map->field, {at.x, at.z},
                                     {rm::sim::fxToFloat(t.x), rm::sim::fxToFloat(t.z)},
                                     kBuildGhostColour, 1.5f);
                             }
                         }
                     }
 
-                    // THE SILHOUETTE over the ring: the armed blueprint's own model at the
-                    // cursor, in the same two colours the ring speaks. The ring stays — it
-                    // is the sim's actual test (`sitePlaceable` checks a DISC of the
-                    // collision radius, so a rectangle would promise a precision the sim
-                    // does not check) — and the model says WHAT would stand here, which no
-                    // circle can.
-                    //
-                    // `ensureDrawableType` is a map lookup after the first call; the first
-                    // call loads the model and grows `units.batches`. THE UPLOAD HAPPENS
-                    // HERE, immediately after, rather than being left to a growth check that
-                    // has already run this frame and will see no growth on the next one —
-                    // which is why the silhouette used to draw nothing for any blueprint the
-                    // player had not already built.
-                    const std::string path = armedPath();
-                    const std::optional<rm::UnitTypeIndex> ghostType =
-                        path.empty() ? std::nullopt
-                                     : ensureDrawableType(units, content, path);
-                    uploadNewBatches();
-                    const std::size_t ghostBatch =
-                        ghostType ? units.batchOf(*ghostType) : UnitScene::kNoBatch;
                     if (ghostBatch != UnitScene::kNoBatch) {
                         const auto typeIndex = static_cast<std::size_t>(*ghostType);
-                        window.setGhost(
-                            ghostBatch,
-                            rm::UnitInstance{
-                                .position = {{at->x, at->y, at->z}},
-                                // The promise faces where the spawn will: the silhouette
-                                // asks the same authority the completion path does.
-                                .rotationY = rm::sim::radiansFromBrad(rm::app::structureFacing(
-                                    map->field, rm::sim::fxFromFloat(at->x),
-                                    rm::sim::fxFromFloat(at->z))),
+                        ghostScratch.push_back({
+                            .batch = ghostBatch,
+                            .instance = {
+                                .position = {{at.x, at.y, at.z}},
+                                .rotationY = rm::sim::radiansFromBrad(structureFacing(
+                                    map->field, rm::sim::fxFromFloat(at.x),
+                                    rm::sim::fxFromFloat(at.z))),
                                 .scale = typeIndex < units.typeScale.size()
-                                             ? units.typeScale[typeIndex]
-                                             : 1.0f,
+                                    ? units.typeScale[typeIndex] : 1.0f,
                             },
-                            ok ? kBuildGhostColour : kBuildGhostBlockedColour);
-                    } else {
-                        window.clearGhost();
+                            .tint = tint,
+                        });
                     }
                 }
-                if (!at) {
-                    window.clearGhost();  // the sky promises nothing
-                }
-            } else {
-                window.clearGhost();
             }
+            window.setGhosts(ghostScratch);
 
             // ...and a marker wherever an order was given recently. Aged by the
             // frame's own elapsed time rather than a wall clock, so a marker
@@ -2974,7 +2952,11 @@ int runWindowed(const Session& session) {
         // This driver lives at the application boundary because the assertion is specifically
         // that AppKit selection and the DRAWN widgets reach the match. Calling issueBuild here
         // would bypass exactly the integration this acceptance run must exercise.
-        int inputStage = -1;
+        int inputStage = session.window.buildPreviewAcceptance ? 100 : -1;
+        std::array<float, 2> previewFrom{}, previewTo{}, previewEndPixel{};
+        std::vector<std::array<float, 2>> expectedPreviewSites;
+        std::size_t packedPreviewCount = 0, previewLogStart = 0;
+        float previewCameraDistance = 0;
         int stageStarted = matchTicks;
         std::size_t observedFrame = 0;
         std::size_t productIndex = 0;
@@ -3142,7 +3124,118 @@ int runWindowed(const Session& session) {
                     inputCheck(accepted == 1, "native input did not dispatch exactly one accepted command");
                     expectedInputCommand.reset();
                 }
-                if (inputStage == -1) {
+                if (inputStage == 100) {
+                    for (rm::UnitIndex slot = 0; slot < units.store.slotCount(); ++slot) {
+                        if (!units.store.slotAlive(slot) || units.armyOf(slot) != units.playerArmy) continue;
+                        const auto* def = units.catalog.def(units.store.typeAt(slot));
+                        if (def && def->buildRate > 0 && def->speedElmosPerSecond > 0) {
+                            inputEngineer = units.store.idAt(slot);
+                            break;
+                        }
+                    }
+                    inputCheck(units.store.alive(inputEngineer), "preview acceptance needs a player builder");
+                    if (!inputSelect(inputEngineer)) return;
+                    nextInputStage(101);
+                } else if (inputStage == 101) {
+                    if (!inputBuildClick("UEB2101")) return;
+                    inputCheck(armedOption.has_value(), "point defence did not arm");
+                    const auto type = resolveBuildable(units, content, armedPath());
+                    inputCheck(type.has_value(), "point defence type missing");
+                    const auto& builder = units.store.transforms()[inputEngineer.index];
+                    bool found = false;
+                    for (float z = -96; z <= 96 && !found; z += 32) {
+                        previewFrom = {rm::sim::fxToFloat(builder.x) + 40,
+                                       rm::sim::fxToFloat(builder.z) + z};
+                        previewTo = {previewFrom[0] + 128, previewFrom[1]};
+                        arrayBuildSitesInto(units, *type, previewFrom, previewTo, 1,
+                                            expectedPreviewSites);
+                        found = expectedPreviewSites.size() >= 4
+                            && std::ranges::all_of(expectedPreviewSites, armedPlaceable);
+                    }
+                    inputCheck(found, "no clear defence row near the builder");
+                    window.focusOn({(previewFrom[0] + previewTo[0]) / 2,
+                        map->field.heightAtWorld(previewFrom[0], previewFrom[1]), previewFrom[1]}, 300);
+                    nextInputStage(102);
+                } else if (inputStage == 102) {
+                    const auto project = [&](std::array<float, 2> site) {
+                        return rm::worldToScreen(window.camera(), simd_make_float3(site[0],
+                            map->field.heightAtWorld(site[0], site[1]), site[1]),
+                            float(window.width()), float(window.height()));
+                    };
+                    const auto from = project(previewFrom), to = project(previewTo);
+                    inputCheck(from && to, "preview row is outside the camera");
+                    previewEndPixel = *to;
+                    previewLogStart = units.commands.size();
+                    window.sendMouseDrag((*from)[0], (*from)[1]);
+                    nextInputStage(103);
+                } else if (inputStage == 103) {
+                    window.sendMouseDrag(previewEndPixel[0], previewEndPixel[1]);
+                    nextInputStage(104);
+                } else if (inputStage == 104) {
+                    inputCheck(arrayDragging && ghostScratch.size() >= 4,
+                               "held drag did not show multiple silhouettes");
+                    inputCheck(ghostScratch.size() == arraySitesScratch.size(), "preview count differs from sites");
+                    inputCheck(units.commands.size() == previewLogStart && units.commandInput.size() == 0,
+                               "holding the drag queued buildings prematurely");
+                    packedPreviewCount = ghostScratch.size();
+                    previewCameraDistance = window.camera().distance;
+                    inputCheck(writePng(session.window.inputAcceptancePath + ".packed.png", window.capture()),
+                               "packed preview capture failed");
+                    window.sendScroll(-20);
+                    nextInputStage(105);
+                } else if (inputStage == 105) {
+                    inputCheck(arrayDragging && ghostScratch.size() >= 2
+                        && ghostScratch.size() < packedPreviewCount, "wheel did not widen the held row");
+                    inputCheck(window.camera().distance == previewCameraDistance, "wheel zoomed during placement");
+                    inputCheck(units.commands.size() == previewLogStart && units.commandInput.size() == 0,
+                               "scrolling queued buildings prematurely");
+                    expectedPreviewSites = arraySitesScratch;
+                    for (std::size_t i = 0; i < ghostScratch.size(); ++i) {
+                        inputCheck(ghostScratch[i].instance.position[0] == expectedPreviewSites[i][0]
+                            && ghostScratch[i].instance.position[2] == expectedPreviewSites[i][1],
+                            "silhouette position differs from the planned site");
+                    }
+                    inputCheck(writePng(session.window.inputAcceptancePath, window.capture()),
+                               "spaced preview capture failed");
+                    window.sendMouseDrag(previewEndPixel[0], previewEndPixel[1], true);
+                    nextInputStage(106);
+                } else if (inputStage == 106) {
+                    inputCheck(!arrayDragging, "release left the array dragging");
+                    inputCheck(arraySitesScratch == expectedPreviewSites, "release changed preview positions");
+                    inputCheck(units.commandInput.size() == expectedPreviewSites.size(),
+                               "release did not queue exactly the visible sites");
+                    window.sendEscape();
+                    nextInputStage(107);
+                } else if (inputStage == 107) {
+                    inputCheck(!armedOption && ghostScratch.empty(), "Escape left build previews armed");
+                    if (!inputBuildClick("UEB2101")) return;
+                    inputCheck(arraySpacingScale == 1.0f, "new arming retained a spacing gap");
+                    previewLogStart = units.commands.size();
+                    window.sendMouseDrag(previewEndPixel[0] - 120, previewEndPixel[1]);
+                    nextInputStage(108);
+                } else if (inputStage == 108) {
+                    window.sendMouseDrag(previewEndPixel[0], previewEndPixel[1]);
+                    nextInputStage(109);
+                } else if (inputStage == 109) {
+                    inputCheck(arrayDragging && !ghostScratch.empty(), "second row did not start");
+                    window.sendEscape();
+                    nextInputStage(110);
+                } else if (inputStage == 110) {
+                    inputCheck(!armedOption && !arrayDragging && ghostScratch.empty(),
+                               "Escape did not cancel the held row");
+                    window.sendMouseDrag(previewEndPixel[0], previewEndPixel[1], true);
+                    nextInputStage(111);
+                } else if (inputStage == 111) {
+                    inputCheck(units.commandInput.size() == 0 && units.commands.size() == previewLogStart,
+                               "releasing an Escape-cancelled drag issued an order");
+                    inputCheck(writePng(session.window.inputAcceptancePath + ".cancelled.png", window.capture()),
+                               "cancelled preview capture failed");
+                    std::printf("build preview acceptance: PASS %zu packed, %zu spaced silhouettes; native wheel, release and Escape cancellation\n",
+                                packedPreviewCount, expectedPreviewSites.size());
+                    acceptanceResult = 0;
+                    [timer invalidate];
+                    window.stop();
+                } else if (inputStage == -1) {
                     // Exercise the inactive-window path deliberately: switching to another
                     // app previously made AppKit silently discard the helper's left clicks.
                     [app deactivate];

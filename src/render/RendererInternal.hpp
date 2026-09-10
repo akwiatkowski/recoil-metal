@@ -124,7 +124,10 @@ struct TerrainUniforms {
     simd_float4 waveMovements;
     float hasWaterWaves;
     float hasUnitNormals;
+    float buildGridStep;  ///< zero when disarmed; otherwise the placement grid pitch in elmos
 };
+
+static_assert(offsetof(TerrainUniforms, buildGridStep) == 536);
 
 
 static_assert(offsetof(TerrainUniforms, clipBelowY) == 380, "clipBelowY packs into the tail");

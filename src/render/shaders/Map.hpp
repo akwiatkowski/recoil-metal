@@ -299,6 +299,7 @@ fragment float4 waterFragment(WaterOut in [[stage_in]], float4 behind [[color(0)
         surface *= mix(kUnseenGround, 1.0, seen);
     }
 
+    surface = buildGridColour(surface, in.world.xz, u.buildGridStep);
     return float4(surface, 1.0);
 }
 

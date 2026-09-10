@@ -67,6 +67,13 @@ struct ArrayBuildResult {
     std::size_t placed = 0;
     std::size_t refused = 0;
 };
+/// Snapped, non-overlapping footprint positions shared by the held preview and release.
+/// Answers the structure's touching pitch along this drag in elmos — what a spacing
+/// scale of 1 means here — so the wheel can bound its scale by
+/// `rm::ui::arraySpacingMaxScale`. Zero for an unknown type.
+float arrayBuildSitesInto(const UnitScene& scene, rm::UnitTypeIndex type,
+    std::array<float, 2> from, std::array<float, 2> to, float spacingScale,
+    std::vector<std::array<float, 2>>& sites);
 [[nodiscard]] ArrayBuildResult submitArrayBuilds(UnitScene& scene,
     const rm::HeightField& field, PassabilitySet& passability, rm::sim::UnitId builder,
     rm::UnitTypeIndex type, std::span<const std::array<float, 2>> sites,

@@ -439,16 +439,21 @@ std::size_t Renderer::drawnUnitInstances() const noexcept {
 }
 
 void Renderer::setGhost(std::size_t batch, const UnitInstance& instance,
-                        std::array<float, 4> tint) noexcept {
+                        std::array<float, 4> tint) {
     // The SOURCE index, as every caller-facing batch index here is. Mapped through
     // `batchForSourceIndex_` at encode time rather than now, because an upload between
     // frames renumbers the GPU batches and a mapped-and-stored index would be stale —
     // exactly the case the ghost hits, since arming a new blueprint is what grows the
     // batch list in the first place.
-    ghost_ = GhostDraw{.batch = batch, .instance = instance, .tint = tint};
+    const GhostDraw ghost{.batch = batch, .instance = instance, .tint = tint};
+    setGhosts(std::span{&ghost, 1});
 }
 
-void Renderer::clearGhost() noexcept { ghost_.reset(); }
+void Renderer::setGhosts(std::span<const GhostDraw> ghosts) {
+    ghosts_.assign(ghosts.begin(), ghosts.end());
+}
+
+void Renderer::clearGhost() noexcept { ghosts_.clear(); }
 
 void Renderer::setConstructions(std::span<const ConstructionDraw> sites) noexcept {
     // Assigned rather than appended: this replaces the previous frame outright, so a site that

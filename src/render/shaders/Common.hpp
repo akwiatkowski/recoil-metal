@@ -69,7 +69,20 @@ struct Uniforms {
     float4 waveMovements;
     float hasWaterWaves;
     float hasUnitNormals;
+    float buildGridStep;
 };
+
+// World-anchored placement grid. Derivatives keep lines a pixel wide and fade
+// cells that become too small to resolve, avoiding a bright moire at map zoom.
+static float3 buildGridColour(float3 colour, float2 worldXZ, float step) {
+    if (step <= 0.0) return colour;
+    const float2 cell = worldXZ / step;
+    const float2 pixel = max(fwidth(cell), float2(0.0001));
+    const float2 edge = abs(fract(cell - 0.5) - 0.5) / pixel;
+    const float line = 1.0 - smoothstep(0.35, 1.15, min(edge.x, edge.y));
+    const float fade = 1.0 - smoothstep(0.15, 0.5, max(pixel.x, pixel.y));
+    return mix(colour, float3(0.55, 0.8, 0.85), line * fade * 0.22);
+}
 
 // The sky, as Supreme Commander's own `effects/sky.fx` builds it: a lerp
 // between a horizon colour and a zenith colour, driven by elevation
@@ -453,6 +466,7 @@ fragment float4 terrainFragment(VertexOut in [[stage_in]],
         colour *= mix(kUnseenGround, 1.0, seen);
     }
 
+    colour = buildGridColour(colour, in.world.xz, u.buildGridStep);
     return float4(colour, 1.0);
 }
 

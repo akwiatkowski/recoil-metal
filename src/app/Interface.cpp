@@ -352,6 +352,43 @@ bool buildSitePlaceableFor(const UnitScene& scene, const rm::HeightField& field,
         scene.catalog, scene.building);
 }
 
+float arrayBuildSitesInto(const UnitScene& scene, rm::UnitTypeIndex type,
+    std::array<float, 2> from, std::array<float, 2> to, float spacingScale,
+    std::vector<std::array<float, 2>>& sites) {
+    sites.clear();
+    const auto* def = scene.catalog.def(type);
+    if (!def) return 0.0f;
+    from = snapBuildSite(scene, type, from);
+    to = snapBuildSite(scene, type, to);
+    const float diameter = std::max(8.0f, 2.0f * def->collisionRadiusElmos);
+    const float grid = rm::sim::fxToFloat(rm::sim::kBuildGridElmos);
+    // Skirts are navigation clearance and may be larger than the visible footprint.
+    // Packing by them leaves an unexplained one-tile gap between buildings.
+    const float width = std::max(grid * static_cast<float>(std::max(1, def->footprintSquaresX)), diameter);
+    const float depth = std::max(grid * static_cast<float>(std::max(1, def->footprintSquaresZ)), diameter);
+    const float dx = to[0] - from[0], dz = to[1] - from[1];
+    const float distance = std::hypot(dx, dz);
+    // Two axis-aligned footprints stop overlapping when either pair of edges separates.
+    const float alongX = std::abs(dx) > 0 ? width * distance / std::abs(dx) : INFINITY;
+    const float alongZ = std::abs(dz) > 0 ? depth * distance / std::abs(dz) : INFINITY;
+    const float touching = distance > 0 ? std::max(diameter, std::min(alongX, alongZ))
+                                        : diameter;
+    const float spacing = touching * std::clamp(spacingScale,
+        rm::ui::kArraySpacingMinScale, rm::ui::arraySpacingMaxScale(touching));
+    const auto raw = rm::ui::arrayBuildCells(from, to, spacing);
+    for (const auto& point : raw) {
+        const auto snapped = snapBuildSite(scene, type, point);
+        if (!sites.empty()) {
+            const float gapX = std::abs(snapped[0] - sites.back()[0]);
+            const float gapZ = std::abs(snapped[1] - sites.back()[1]);
+            // Grid/deposit snapping may collapse or pull neighbouring raw sites together.
+            if ((gapX < width && gapZ < depth) || std::hypot(gapX, gapZ) < diameter) continue;
+        }
+        sites.push_back(snapped);
+    }
+    return touching;
+}
+
 ArrayBuildResult submitArrayBuilds(UnitScene& scene, const rm::HeightField& field,
     PassabilitySet& passability, rm::sim::UnitId builder, rm::UnitTypeIndex type,
     std::span<const std::array<float, 2>> sites, rm::PlayerIndex player,

@@ -363,15 +363,19 @@ swings when you meant to select is the most disorienting thing an RTS camera can
 | `P`, then right click | patrol between the unit's starting point and the destination; repeat `P`, then shift-right-click to add a waypoint |
 | shift + any order | queue it behind the ones already given, drawn in the world as you go |
 | `ctrl`+`0`–`9` / `0`–`9` | set a control group / recall it, the dead pruned out on recall |
-| click a tray cell, then the ground | build: the ghost is cyan where the footprint fits and red where it does not. Right-click or a second cell click cancels |
-| click a tray cell, then drag on the ground | build an array: ghost rings march from the press point one diameter apart, all placed as queued builds on release (capped at 32, skips unplaceable ground). The cell stays armed for another row; right-click disarms |
-| mouse wheel mid-drag | array spacing: up packs toward half diameter for walls, down spreads toward quadruple for turret coverage. Zooms normally when not dragging |
+| click a tray cell, then the ground | build: a subtle terrain/water grid appears; the ghost is cyan where the footprint fits and red where it does not. Escape, right-click or a second cell click cancels |
+| click a tray cell, then drag on the ground | build a row: live model silhouettes show every snapped site, initially packed by footprint. Release queues those sites (capped at 128, skips unplaceable ground). The cell stays armed for another row; Escape or right-click disarms |
+| mouse wheel mid-drag | row spacing: up tightens to touching footprints, down spreads to 40 build squares (320 elmos, about 80% of a T2 point defence's range) whatever the footprint. Silhouettes update while held; the camera zoom stays fixed during the drag |
 | click a command cell, then right click | arm the command shown in the fixed 4×3 rack; Stop applies immediately and disabled positions stay put |
 | click **AUTO MEX** | a standing order for the selected field engineers: whenever one is idle it walks to the nearest free mass or hydrocarbon deposit on your side of the map and builds there, then the next. Lit while on; click again to lift it. A manual order takes precedence and the engineer resumes when idle |
 | `E` | same AUTO MEX toggle for the selected field engineers, without the click. Silent unless the selection holds one |
 | hold `space` + drag | swing the camera. Let go and it returns to the overhead view the app opened with, so a glance never costs you your bearings |
 | shift + drag | pan with the mouse |
 | scroll | zoom |
+
+`make test-build-preview` checks packed and spaced silhouettes through native mouse
+and wheel events, verifies that release queues the visible sites, and saves captures
+under `build/build-preview.png*` (including Escape cancelling a held row and hiding the grid).
 
 The map is framed whole on load (`OrbitCamera::frame`), so the opening view is the
 whole map rather than a corner of it.

@@ -279,17 +279,6 @@ Renderer::Renderer(CA::MetalLayer* layer)
         }
     }
 
-    // --- The build ghost -----------------------------------------------------
-    {
-        // One UnitInstance per frame in flight: the ghost is a single model, but it moves
-        // with the cursor, so each frame writes its own slot like every per-frame upload.
-        ghostInstanceBuffer_ = device_->newBuffer(sizeof(UnitInstance) * kMaxFramesInFlight,
-                                                  MTL::ResourceStorageModeShared);
-        if (ghostInstanceBuffer_ == nullptr) {
-            throw RendererError{"failed to allocate the ghost instance buffer"};
-        }
-    }
-
     // --- Construction sites --------------------------------------------------
     {
         // A ring of `kMaxConstructions` instances per frame in flight. Every site is drawn
@@ -458,7 +447,6 @@ Renderer::~Renderer() {
     collectRetiredBuffers(/*everything=*/true);
     unitPipeline_->release();
     if (ghostPipeline_ != nullptr) ghostPipeline_->release();
-    if (ghostInstanceBuffer_ != nullptr) ghostInstanceBuffer_->release();
     if (constructionPipeline_ != nullptr) constructionPipeline_->release();
     if (constructionInstanceBuffer_ != nullptr) constructionInstanceBuffer_->release();
     releaseSplat();
@@ -1008,6 +996,8 @@ void Renderer::encodeScene(MTL::CommandBuffer* commandBuffer, MTL::RenderPassDes
             environment_.waveMovements[0], environment_.waveMovements[1],
             environment_.waveMovements[2], environment_.waveMovements[3]),
         .hasWaterWaves = waterWaves_ != nullptr ? 1.0f : 0.0f,
+        // Same eight-elmo pitch as sim::snapToBuildGrid.
+        .buildGridStep = buildGrid_ && override == nullptr ? 8.0f : 0.0f,
     };
 
     // --- Sky ---------------------------------------------------------------
@@ -1452,25 +1442,22 @@ void Renderer::encodeScene(MTL::CommandBuffer* commandBuffer, MTL::RenderPassDes
         }
     }
 
-    if (ghost_ && ghostPipeline_ != nullptr && ghostInstanceBuffer_ != nullptr
-        && override == nullptr && ghost_->batch < batchForSourceIndex_.size()) {
-        const std::size_t target = batchForSourceIndex_[ghost_->batch];
+    for (const GhostDraw& ghost : ghosts_) {
+        if (ghostPipeline_ == nullptr || override != nullptr
+            || ghost.batch >= batchForSourceIndex_.size()) continue;
+        const std::size_t target = batchForSourceIndex_[ghost.batch];
         if (target != kNoBatch && target < unitBatches_.size()) {
             const GpuUnitBatch& batch = unitBatches_[target];
             if (batch.vertexBuffer != nullptr && batch.indexBuffer != nullptr
                 && batch.boneBuffer != nullptr) {
-                auto* slot = static_cast<UnitInstance*>(ghostInstanceBuffer_->contents())
-                             + instanceSlot_;
-                *slot = ghost_->instance;
-
                 encoder->setRenderPipelineState(ghostPipeline_);
                 encoder->setDepthStencilState(decalDepthState_);
                 encoder->setVertexBytes(&uniforms, sizeof(uniforms), kUniformBufferIndex);
                 encoder->setVertexBuffer(batch.vertexBuffer, 0, kVertexBufferIndex);
-                encoder->setVertexBuffer(
-                    ghostInstanceBuffer_,
-                    static_cast<NS::UInteger>(instanceSlot_ * sizeof(UnitInstance)),
-                    kInstanceBufferIndex);
+                // Metal copies this small instance into the command buffer. Each preview
+                // owns its bytes even while earlier frames are still on the GPU.
+                encoder->setVertexBytes(&ghost.instance, sizeof(ghost.instance),
+                                        kInstanceBufferIndex);
                 encoder->setVertexBuffer(batch.boneBuffer, 0, kBoneBufferIndex);
 
                 PoseUniforms pose;
@@ -1481,7 +1468,7 @@ void Renderer::encodeScene(MTL::CommandBuffer* commandBuffer, MTL::RenderPassDes
                 pose.time = 0.0f;  // a ghost stands at rest; nothing is built mid-stride
                 encoder->setVertexBytes(&pose, sizeof(pose), kPoseUniformBufferIndex);
 
-                encoder->setFragmentBytes(&ghost_->tint, sizeof(ghost_->tint),
+                encoder->setFragmentBytes(&ghost.tint, sizeof(ghost.tint),
                                           kUniformBufferIndex);
                 encoder->drawIndexedPrimitives(MTL::PrimitiveType::PrimitiveTypeTriangle,
                                                static_cast<NS::UInteger>(batch.indexCount),

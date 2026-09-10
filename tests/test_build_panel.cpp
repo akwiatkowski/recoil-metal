@@ -344,9 +344,28 @@ TEST_CASE("array drags cap sites and survive degenerate input", "[ui][build][arr
 
 TEST_CASE("array wheel steps spacing with the zoom's direction", "[ui][build][array]") {
     CHECK(rm::ui::arraySpacingScaleStep(1.0f, 0.0f) == 1.0f);
-    CHECK(rm::ui::arraySpacingScaleStep(1.0f, 10.0f) < 1.0f);
+    CHECK(rm::ui::arraySpacingScaleStep(1.0f, 10.0f) == 1.0f);
+    CHECK(rm::ui::arraySpacingScaleStep(2.0f, 10.0f) < 2.0f);
     CHECK(rm::ui::arraySpacingScaleStep(1.0f, -10.0f) > 1.0f);
     CHECK(rm::ui::arraySpacingScaleStep(1.0f, 10000.0f) == rm::ui::kArraySpacingMinScale);
     CHECK(rm::ui::arraySpacingScaleStep(1.0f, -10000.0f) == rm::ui::kArraySpacingMaxScale);
     CHECK(rm::ui::arraySpacingScaleStep(0.5f, 10000.0f) == rm::ui::kArraySpacingMinScale);
+}
+
+TEST_CASE("array spacing ceiling is a distance, not a multiple", "[ui][build][array]") {
+    // A single-square wall spreads to forty of its own pitches, a 40-elmo factory to
+    // eight, and a structure wider than the ceiling still packs at touching. The wheel
+    // stops at the structure's own ceiling; a ceiling below the floor collapses to the
+    // floor rather than inverting the clamp.
+    CHECK(rm::ui::arraySpacingMaxScale(8.0f) == rm::ui::kArraySpacingMaxScale);
+    CHECK(rm::ui::arraySpacingMaxScale(8.0f) * 8.0f == rm::ui::kArraySpacingMaxElmos);
+    CHECK(rm::ui::arraySpacingMaxScale(40.0f) * 40.0f == rm::ui::kArraySpacingMaxElmos);
+    CHECK(rm::ui::arraySpacingMaxScale(400.0f) == rm::ui::kArraySpacingMinScale);
+    CHECK(rm::ui::arraySpacingMaxScale(0.0f) == rm::ui::kArraySpacingMinScale);
+    CHECK(rm::ui::arraySpacingScaleStep(1.0f, -10000.0f, rm::ui::arraySpacingMaxScale(40.0f))
+          == 8.0f);
+    CHECK(rm::ui::arraySpacingScaleStep(3.0f, -10000.0f, 0.5f) == rm::ui::kArraySpacingMinScale);
+    // A whole-base row at touching pitch fits under the cap.
+    CHECK(rm::ui::kArrayMaxSites == 128);
+    CHECK(rm::ui::arrayBuildCells({0.0f, 0.0f}, {10000.0f, 0.0f}, 8.0f).size() == 128);
 }
