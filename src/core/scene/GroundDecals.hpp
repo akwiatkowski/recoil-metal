@@ -68,6 +68,16 @@ void appendSelectionSquare(std::vector<DecalVertex>& out, const HeightField& fie
                            std::array<float, 3> centre, float halfExtentElmos,
                            std::array<float, 4> colour);
 
+/// The square's corner-cut sibling: the official shape for a resource deposit. The chamfer
+/// is a fraction in (0, 1): the cut line sits where |dx| + |dz| reaches (2 - chamfer) times
+/// the half extent, so 0.4 cuts noticeably and 1.0 would cut the square back to a diamond.
+/// Thickness is a parameter here rather than the selection default because a deposit is a
+/// map mark, not interface: it draws thinner than a selection outline.
+void appendSelectionChamferedSquare(std::vector<DecalVertex>& out, const HeightField& field,
+                                    std::array<float, 3> centre, float halfExtentElmos,
+                                    std::array<float, 4> colour, float thicknessElmos,
+                                    float chamferFraction);
+
 // Appends one ring, as a triangle list, following the ground under it.
 //
 // Conforming rather than a flat disc tilted by the terrain normal, which is the

@@ -489,3 +489,35 @@ TEST_CASE("impact marks rotate past their cap", "[decals]") {
           == Approx(600.0f - static_cast<float>(scene.impactMarks.size())));
     CHECK(scene.impactMarks.back().x == Approx(599.0f));
 }
+
+TEST_CASE("a chamfered square cuts its corners at 45 degrees", "[selection-square]") {
+    const auto field = flatAt(64, 0);
+    std::vector<DecalVertex> vertices;
+    constexpr float half = 20.0f;
+    constexpr float thickness = 1.0f;
+    constexpr float chamfer = 0.4f;
+    rm::appendSelectionChamferedSquare(vertices, field, {100, 0, 100}, half, {0, 1, 0, 1},
+                                       thickness, chamfer);
+    REQUIRE(vertices.size() == rm::ringVertexCount(rm::kRingSegments));
+
+    // The outer rim is the band's widest reach, so the chamfer line lives at
+    // |dx| + |dz| == (2 - chamfer) * outer.
+    const float outer = half + thickness * 0.5f;
+    const float limit = (2.0f - chamfer) * outer;
+    constexpr float eps = 0.01f;
+    bool cutIsDrawn = false;
+    for (const auto& vertex : vertices) {
+        const float dx = std::abs(vertex.position[0] - 100.0f);
+        const float dz = std::abs(vertex.position[2] - 100.0f);
+        // Nothing survives in the corner wedge the chamfer removed...
+        CHECK(dx <= outer + eps);
+        CHECK(dz <= outer + eps);
+        CHECK(dx + dz <= limit + eps);
+        // ...and the cut itself is a real edge: vertices strictly inside the square's
+        // reach, sitting on the chamfer line.
+        if (dx < outer - eps && dz < outer - eps && dx + dz > limit - 0.1f) {
+            cutIsDrawn = true;
+        }
+    }
+    CHECK(cutIsDrawn);
+}

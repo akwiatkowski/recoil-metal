@@ -115,7 +115,8 @@ void appendWreckMark(std::vector<DecalVertex>& out, const HeightField& field,
 
 static void appendSelectionOutline(std::vector<DecalVertex>& out, const HeightField& field,
                          std::array<float, 3> centre, float radiusElmos,
-                         std::array<float, 4> colour, float thicknessElmos, int segments, bool square) {
+                         std::array<float, 4> colour, float thicknessElmos, int segments,
+                         bool square, float chamfer = 0.0f) {
     // A ring with no radius, no width or no segments is not a degenerate ring,
     // it is a caller mistake — and emitting a fan of zero-area triangles would
     // hide it behind something that renders as nothing anyway.
@@ -141,6 +142,18 @@ static void appendSelectionOutline(std::vector<DecalVertex>& out, const HeightFi
             const float edge = std::max(std::abs(dx), std::abs(dz));
             dx /= edge;
             dz /= edge;
+            if (chamfer > 0.0f) {
+                // Then cut each corner along the 45-degree line |dx| + |dz| == 2 - chamfer.
+                // Scaling the ray keeps the direction, so the angular samples spread along
+                // the cut instead of bunching at its midpoint.
+                const float limit = 2.0f - chamfer;
+                const float sum = std::abs(dx) + std::abs(dz);
+                if (sum > limit) {
+                    const float scale = limit / sum;
+                    dx *= scale;
+                    dz *= scale;
+                }
+            }
         }
         const float x = centre[0] + dx * radius;
         const float z = centre[2] + dz * radius;
@@ -327,6 +340,14 @@ void appendSelectionSquare(std::vector<DecalVertex>& out, const HeightField& fie
                            std::array<float, 4> colour) {
     appendSelectionOutline(out, field, centre, halfExtentElmos, colour,
                            kRingThicknessElmos, kRingSegments, true);
+}
+
+void appendSelectionChamferedSquare(std::vector<DecalVertex>& out, const HeightField& field,
+                                    std::array<float, 3> centre, float halfExtentElmos,
+                                    std::array<float, 4> colour, float thicknessElmos,
+                                    float chamferFraction) {
+    appendSelectionOutline(out, field, centre, halfExtentElmos, colour, thicknessElmos,
+                           kRingSegments, true, chamferFraction);
 }
 
 void appendOrderMarker(std::vector<DecalVertex>& out, const HeightField& field,

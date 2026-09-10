@@ -192,9 +192,15 @@ void appendResourceDeposits(std::vector<rm::DecalVertex>& out, const UnitScene& 
     for (const auto& deposit : scene.resourceDeposits) {
         const std::array<float, 3> at{rm::sim::fxToFloat(deposit.x), 0.0f,
                                      rm::sim::fxToFloat(deposit.z)};
-        // Two rings distinguish permanent deposits from a selected unit's single ring.
-        for (float radius : {8.0f, 12.0f}) {
-            rm::appendSelectionRing(out, field, at, radius, depositColour(deposit.kind), 1.5f);
+        // The official shape for a deposit is a square with its corners cut at 45 degrees,
+        // not a circle; two concentric outlines keep a deposit distinct from a selected
+        // unit's single outline. A 1-elmo stroke, thinner than a selection's, because a
+        // deposit is a mark on the map rather than interface asking to be read.
+        constexpr float kDepositChamferFraction = 0.4f;
+        for (float halfExtent : {8.0f, 12.0f}) {
+            rm::appendSelectionChamferedSquare(out, field, at, halfExtent,
+                                               depositColour(deposit.kind), 1.0f,
+                                               kDepositChamferFraction);
         }
     }
 }
