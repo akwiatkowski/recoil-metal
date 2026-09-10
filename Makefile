@@ -93,7 +93,7 @@ FA_FLAGS  = --gamedata "$(FA_ROOT)/gamedata"
 .DEFAULT_GOAL := help
 .PHONY: help build configure test verify golden play play-from watch run run-fa run-bar \
         skirmish battle match shot-fa shot-bar bench bench-fa bench-gl clean check-fa check-bar \
-        check-ai ai ai-play ai-report ai-sanity shot-ui shot-engineer
+        check-ai ai ai-play ai-report ai-sanity shot-ui shot-engineer demo
 
 help:
 	@echo 'recoil-metal — make targets'
@@ -111,6 +111,7 @@ help:
 	@echo '  watch           every side scripted, nothing selectable (and no fog)'
 	@echo '  ai-play         bots vs bots, with the FAF AI sandbox report on the console'
 	@echo '  ai-sanity       headless skirmish + the AI sanity report: built what, called what'
+	@echo '  demo            a live 4v4 of FAF tech brains, random factions, watched at real speed'
 	@echo
 	@echo '  run             procedural terrain, no content needed'
 	@echo '  run-fa          a Supreme Commander map, its own units, read from the archives'
@@ -306,6 +307,40 @@ ai-play: build check-fa check-ai
 	@echo
 	$(BIN) "$(FA_MAP)" $(FA_FLAGS) --ai-debug --ai-faf --ai-log \
 	  --skirmish --observer --armies $(ARMIES) $(ALLIANCE_FLAG) $(FACTION_FLAG)
+
+# --- The demo: a 4v4 of FAF brains, watched live -------------------------------
+#
+# Eight seats on the map (SCMP_009 declares eight), split into two alliances by seat parity —
+# `--alliances 2` assigns `index % 2`, so armies 0,2,4,6 face 1,3,5,7 — every seat a FAF brain
+# on one personality (`tech` by default), factions drawn at random for each run, and nobody
+# driving: observer mode shows no fog, so the camera is free to follow the fighting. Live from
+# tick zero at wall-clock speed — the headed loop paces the sim to real time — which is what
+# a screen recording should show. Record with macOS's recorder (Shift-Cmd-5) over the window;
+# `FULLSCREEN=1` takes the display's native size. The AI narration stays off the console so
+# the terminal is quiet beside the recording.
+#
+# Knobs: `make demo DEMO_PERSONALITY=adaptive`, `DEMO_ARMIES=4 DEMO_ALLIANCES=2` for a 2v2,
+# `DEMO_SEED=7` to repeat one faction draw, `FACTIONS=uef,cybran` to skip the draw entirely.
+DEMO_ARMIES      ?= 8
+DEMO_ALLIANCES   ?= 2
+DEMO_PERSONALITY ?= tech
+DEMO_SEED        ?=
+FULLSCREEN       ?=
+FULLSCREEN_FLAG   = $(if $(FULLSCREEN),--fullscreen,)
+# One faction name per seat, drawn uniformly from the four; a seed makes the draw repeatable.
+DEMO_FACTIONS     = $(if $(FACTIONS),$(FACTIONS),$$(mise exec -- python3 -c 'import random; \
+  random.seed($(if $(DEMO_SEED),$(DEMO_SEED),None)); \
+  print(",".join(random.choice(["uef", "aeon", "cybran", "seraphim"]) for _ in range($(DEMO_ARMIES))))'))
+
+demo: build check-fa check-ai
+	@factions="$(DEMO_FACTIONS)"; \
+	echo; \
+	echo "  Demo: $(DEMO_ARMIES) FAF '$(DEMO_PERSONALITY)' brains in $(DEMO_ALLIANCES) alliances on $$(basename "$(FA_MAP)")."; \
+	echo "  Factions by seat: $$factions (even seats vs odd seats). Observer camera: WASD pans, wheel zooms."; \
+	echo; \
+	$(BIN) "$(FA_MAP)" $(FA_FLAGS) --skirmish --observer --armies $(DEMO_ARMIES) \
+	  --alliances $(DEMO_ALLIANCES) --factions "$$factions" --ai-personality $(DEMO_PERSONALITY) \
+	  $(FULLSCREEN_FLAG) $(VISION_FLAG) $(UI_FLAG) $(LOG_FLAGS) $(DEMO_EXTRA)
 
 # The same report with no match afterwards, for a fast loop while fixing a binding. Runs the
 # test binary rather than the game because it needs no map, no drive and no window.

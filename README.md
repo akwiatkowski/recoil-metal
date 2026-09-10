@@ -210,6 +210,7 @@ version:
 make run      # procedural terrain — no game content needed at all
 make play     # a duel you drive: army 0 is yours, army 1 is scripted
 make watch    # every side scripted, nothing selectable, no fog
+make demo     # a live 4v4 of FAF tech brains, random factions, no fog, real speed
 make verify   # replay the golden match — prints "determinism: MATCH"
 ```
 
