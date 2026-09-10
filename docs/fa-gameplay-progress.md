@@ -183,7 +183,7 @@ excluded from the headline.
 | [`FA-AI`](#fa-ai---retail-ai-and-native-manager-boundary) | Retail AI and native manager boundary | `WP-38` | 50% | 10% | 30% | Must-scout requests, unknown-threat queues and continuous air flybys are in with headless cover; next is High/LowPriority interest lists. Current easy, turtle and tech duels are decisive. |
 | [`FA-UI`](#fa-ui---player-interface-and-advanced-controls) | Player interface and advanced controls | `WP-39`-`40` | 80% | 5% | 15% | ToggleCaps + OrderOverrides drive the rack page (retail slots, unanimous merge, headed toggle scenario); toggle sim behaviors stay open. |
 | [`FA-PRESENT`](#fa-present---animation-effects-and-audio) | Animation, effects, audio | `WP-41`-`42` | 75% | 10% | 45% | Manipulator specs parse with corpus cover (turrets, recoil, anims); posing deferred, then dynamic music. |
-| [`FA-PERSIST`](#fa-persist---replay-hashing-and-saveresume) | Replay, hashing, save/resume | `WP-43`-`44` | 70% | 20% | 90% | General app saves remain absent; the shared golden rebaseline is complete (`afe2867`), separate from save/resume scenario coverage. |
+| [`FA-PERSIST`](#fa-persist---replay-hashing-and-saveresume) | Replay, hashing, save/resume | `WP-43`-`44` | 75% | 25% | 90% | Wreck pool in save v23 with mid-reclaim continued-hash proof (tested); projectiles next, then intel/path. Golden rebaseline (`afe2867`) still predates SCD-mount/RNG drift. |
 
 ## Starting Work
 
@@ -767,22 +767,21 @@ slice. Write tests on the retail corpus, run make test, update WP-41 and FA-PRES
 
 ### FA-PERSIST - Replay, Hashing, And Save/Resume
 
-**Current slice:** SaveState v16 retains v1-v15 decoding and adds optional economy,
-construction identity/funding, army lifecycle and aircraft-controller state to
-the existing units, queues, tick and RNG envelope. Fresh-scene economy/army
-continuation matches 690 further tick hashes through construction, allied sharing,
-defeat cleanup and winner confirmation. Restore owns the arrays and rebinds match
-spans. Whole-match overflow sharing now runs before capacity clamping.
+**Current slice:** SaveState v23 retains all older readers and adds the wreck pool
+(allocator, generations, tombstones, revision) as a nullable trailing section, alongside
+the v16 economy/army envelope and the v17–v22 additions (commands, capture, bank tuning,
+bone records). A mid-reclaim save carries units, features and economies through the
+envelope and both sides hash — and harvest — identically for four further ticks (tested).
+Restore owns the arrays and rebinds match spans.
 
-**Largest gap:** this is not a general mid-combat app save. Projectile/feature
-pools, pending path searches, intel history, external input and the opponent VM
-remain outside the envelope. Replay is a separate compatibility boundary.
+**Largest gap:** this is not yet a general mid-combat app save. Projectile pools, pending
+path searches, intel history, external input and the opponent VM remain outside the
+envelope. Replay is a separate compatibility boundary.
 
 ```text
-/goal Finish full-content and golden verification of the v16 economy/army continuation slice.
-Before claiming general app save/load, inventory every omitted authoritative group and implement
-its continued-hash proof. Keep pending path searches and replay transport separate, preserve old
-readers, and update WP-44 and FA-PERSIST.
+/goal Continue the pool-by-pool envelope: projectiles next, each with its continued-hash
+proof. Keep pending path searches and replay transport separate, preserve old readers,
+and update WP-44 and FA-PERSIST.
 ```
 
 ## Maintenance Contract

@@ -11,6 +11,8 @@
 #include "core/sim/FeatureStore.hpp"
 #include "core/sim/Reclaim.hpp"
 #include "core/sim/Skirmish.hpp"
+#include "core/sim/SaveState.hpp"
+#include "core/sim/StateHash.hpp"
 #include "core/sim/UnitStore.hpp"
 #include "core/unit/UnitBlueprint.hpp"
 
@@ -57,6 +59,10 @@ struct Fixture {
     std::vector<rm::sim::Construction> building;
     std::vector<int> commandersEver{0, 0};
     FeatureStore features;
+    // Refreshed by liveMatch: the catalog grows when new types spawn, so a table built
+    // once would hole exactly where the new unit is. A member (not a liveMatch local)
+    // because Match only borrows it.
+    std::vector<const rm::sim::PassabilityGrid*> grids;
 
     rm::UnitTypeIndex engineerType{};
     rm::UnitTypeIndex guardType{};
@@ -156,17 +162,21 @@ struct Fixture {
                                      grid, roster.rate, &building, nullptr, &features);
     }
 
+    [[nodiscard]] rm::sim::Match liveMatch(float storageMass = 1000.0f) {
+        grids.assign(roster.catalog.size(), &grid);
+        return rm::sim::Match{.armies = armies,
+                              .economies = economies,
+                              .projectiles = &shots,
+                              .building = &building,
+                              .features = &features,
+                              .passability = grids,
+                              .commandersEver = commandersEver,
+                              .baseStorage = {.mass = rm::sim::magFromFloat(storageMass),
+                                              .energy = rm::sim::magFromFloat(1000.0f)}};
+    }
+
     void tick(int times = 1, float storageMass = 1000.0f) {
-        const std::vector<const rm::sim::PassabilityGrid*> grids(roster.catalog.size(), &grid);
-        rm::sim::Match match{.armies = armies,
-                             .economies = economies,
-                             .projectiles = &shots,
-                             .building = &building,
-                             .features = &features,
-                             .passability = grids,
-                             .commandersEver = commandersEver,
-                             .baseStorage = {.mass = rm::sim::magFromFloat(storageMass),
-                                             .energy = rm::sim::magFromFloat(1000.0f)}};
+        rm::sim::Match match = liveMatch(storageMass);
         for (int i = 0; i < times; ++i) {
             (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain,
                                         roster.rate);
@@ -196,6 +206,62 @@ TEST_CASE("an engineer empties a wreck into its army's store, and the wreck disa
     CHECK(f.features.find(wreck) == nullptr);
     f.tick(1);
     CHECK(f.roster.store.orders()[engineer.index].empty());
+}
+
+TEST_CASE("a mid-reclaim save resumes the same harvest", "[save-state][reclaim]") {
+    // The continued-hash proof for the wreck pool: save four ticks into a 90-mass
+    // reclaim, restore units, features and economies through the envelope, and both
+    // sides must hash — and harvest — identically for four more ticks.
+    Fixture f;
+    const UnitId engineer = f.roster.add(f.engineerType, 200.0f, 200.0f, 0, 100.0f);
+    const FeatureId wreck = f.wreckAt(210.0f, 200.0f);
+    REQUIRE(f.reclaim(engineer, wreck));
+    f.tick(4);
+    REQUIRE(rm::test::asFloat(f.features.find(wreck)->massRemaining) == 50.0f);
+
+    rm::sim::Match live = f.liveMatch();
+    rm::sim::SaveState saved;
+    saved.units = f.roster.store.snapshot();
+    saved.features = f.features.snapshot();
+    saved.economyArmies = rm::sim::EconomyArmyState::capture(live);
+    const auto bytes = rm::sim::SaveState::encode(saved);
+    const auto restored = rm::sim::SaveState::decode(bytes);
+    REQUIRE(restored.has_value());
+    REQUIRE(restored->features.has_value());
+    REQUIRE(restored->economyArmies.has_value());
+
+    // A twin with identical catalog numbering (same fixture, same order) running
+    // the restored rows.
+    Fixture g;
+    rm::sim::UnitStore store2{restored->units};
+    rm::sim::FeatureStore features2{*restored->features};
+    std::vector<rm::sim::Economy> economies2;
+    std::vector<int> commanders2;
+    std::vector<rm::sim::Projectile> shots2;
+    std::vector<rm::sim::Construction> building2;
+    const std::vector<const rm::sim::PassabilityGrid*> grids2(g.roster.catalog.size(),
+                                                              &g.grid);
+    rm::sim::Match resumed{.armies = g.armies,
+                           .projectiles = &shots2,
+                           .building = &building2,
+                           .features = &features2,
+                           .passability = grids2,
+                           .baseStorage = {.mass = rm::sim::magFromFloat(1000.0f),
+                                           .energy = rm::sim::magFromFloat(1000.0f)}};
+    restored->economyArmies->restore(resumed, economies2, commanders2);
+    CHECK(rm::sim::hashMatch(f.roster.store, live) == rm::sim::hashMatch(store2, resumed));
+
+    for (int i = 0; i < 4; ++i) {
+        (void)rm::sim::tickSkirmish(f.roster.store, f.roster.catalog, live, f.terrain,
+                                    f.roster.rate);
+        (void)rm::sim::tickSkirmish(store2, g.roster.catalog, resumed, g.terrain,
+                                    g.roster.rate);
+        CHECK(rm::sim::hashMatch(f.roster.store, live) == rm::sim::hashMatch(store2, resumed));
+    }
+    CHECK(rm::test::asFloat(f.features.find(wreck)->massRemaining) == 10.0f);
+    CHECK(rm::test::asFloat(features2.find(wreck)->massRemaining) == 10.0f);
+    CHECK(rm::test::asFloat(f.economies[0].stored.mass)
+          == rm::test::asFloat(economies2[0].stored.mass));
 }
 
 TEST_CASE("reclaiming over a full mass bar overflows and is lost, like any other income") {

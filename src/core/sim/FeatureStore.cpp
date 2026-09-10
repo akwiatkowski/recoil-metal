@@ -1,8 +1,26 @@
 #include "core/sim/FeatureStore.hpp"
 
+#include <stdexcept>
 #include <utility>
 
 namespace rm::sim {
+
+FeatureStore::FeatureStore(const Snapshot& snapshot)
+    : features_(snapshot.features),
+      ids_(snapshot.ids),
+      generations_(snapshot.generations),
+      revision_(snapshot.revision) {
+    if (generations_.size() != features_.size()) {
+        throw std::invalid_argument("feature snapshot generations do not match slots");
+    }
+}
+
+FeatureStore::Snapshot FeatureStore::snapshot() const {
+    return Snapshot{.ids = ids_.snapshot(),
+                    .generations = generations_,
+                    .features = features_,
+                    .revision = revision_};
+}
 
 FeatureId FeatureStore::add(const Feature& feature) {
     const FeatureId id = ids_.acquire();

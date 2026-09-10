@@ -106,6 +106,21 @@ struct Feature {
 /// that has nothing to leave behind.
 class FeatureStore {
 public:
+    /// State required to resume the feature slots: the allocator, the per-slot
+    /// generation mirror, every slot live or not (the hash walks tombstones too),
+    /// and the revision the wreck-decal rebuild watches.
+    struct Snapshot {
+        IdPool::Snapshot ids;
+        std::vector<Generation> generations;
+        std::vector<Feature> features;
+        std::uint64_t revision = 0;
+    };
+
+    FeatureStore() = default;
+    explicit FeatureStore(const Snapshot& snapshot);
+
+    [[nodiscard]] Snapshot snapshot() const;
+
     /// Adds a feature and returns its handle.
     [[nodiscard]] FeatureId add(const Feature& feature);
 

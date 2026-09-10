@@ -47,6 +47,8 @@ constexpr std::uint32_t kVersion21 = 21;
 /// rest offsets) beside the historical offset sections; older readers keep the
 /// boneless default.
 constexpr std::uint32_t kVersion22 = 22;
+/// Version 23 adds the wreck pool (nullable, trailing); older readers keep null features.
+constexpr std::uint32_t kVersion23 = 23;
 // MT19937 serializes its 624 state words plus an index, all as unsigned decimal numbers separated
 // by one space. This rejects oversized malformed frames before they allocate their payload.
 constexpr std::size_t kMaxRandomStatePayload =
@@ -517,6 +519,105 @@ void writeBoneAttachments(PayloadWriter& w, const UnitStore::Snapshot& s) {
         w.i32(s.attachmentSelfRest[i][1].raw());
         w.i32(s.attachmentSelfRestHeights[i].raw());
     }
+}
+
+// V23 trails the payload after the bone record: the wreck pool, allocator included,
+// so a restored scene reclaims the same mass from the same slots. Null scenes write
+// only the absent byte, preserving the match's null-vs-empty distinction.
+void writeFeatures(PayloadWriter& w, const std::optional<FeatureStore::Snapshot>& s) {
+    w.u8(s.has_value());
+    if (!s) {
+        return;
+    }
+    w.count(s->ids.generations.size());
+    for (Generation v : s->ids.generations) w.u32(v);
+    w.count(s->ids.free.size());
+    for (UnitIndex v : s->ids.free) w.u32(v);
+    w.u64(s->ids.live);
+    w.count(s->generations.size());
+    for (Generation v : s->generations) w.u32(v);
+    w.count(s->features.size());
+    for (const Feature& v : s->features) {
+        w.i32(v.at[0].raw());
+        w.i32(v.at[1].raw());
+        w.i32(v.at[2].raw());
+        w.i32(v.radiusElmos.raw());
+        w.u16(v.fromType);
+        w.i32(v.armyIndex);
+        w.i64(v.health.raw());
+        w.i64(v.maximumHealth.raw());
+        w.i64(v.maximumMassReclaim.raw());
+        w.i64(v.maximumEnergyReclaim.raw());
+        w.i64(v.massRemaining.raw());
+        w.i64(v.energyRemaining.raw());
+        w.i64(v.reclaimWorkRemaining.raw());
+        w.i64(v.reclaimWorkTotal.raw());
+        w.i32(v.reclaimFraction.raw());
+        w.i32(v.damageRatio.raw());
+        w.i32(v.maximumReclaimPerBuildRate.raw());
+        w.i32(v.reclaimPerBuildRate.raw());
+    }
+    w.u64(s->revision);
+}
+
+bool readFeatures(PayloadReader& r, std::optional<FeatureStore::Snapshot>& snapshot) {
+    bool present{};
+    if (!readFlag(r, present)) return false;
+    if (!present) {
+        snapshot.reset();
+        return true;
+    }
+    snapshot.emplace();
+    FeatureStore::Snapshot& s = *snapshot;
+    std::size_t count{};
+    if (!r.count(count, 4)) return false;
+    s.ids.generations.resize(count);
+    for (auto& v : s.ids.generations)
+        if (!r.u32(v)) return false;
+    if (!r.count(count, 4)) return false;
+    s.ids.free.resize(count);
+    for (auto& v : s.ids.free)
+        if (!r.u32(v)) return false;
+    std::uint64_t live{};
+    if (!r.u64(live) || live > std::numeric_limits<std::size_t>::max()) return false;
+    s.ids.live = static_cast<std::size_t>(live);
+    if (!r.count(count, 4)) return false;
+    s.generations.resize(count);
+    for (auto& v : s.generations)
+        if (!r.u32(v)) return false;
+    if (!r.count(count, 102)) return false;
+    s.features.resize(count);
+    for (auto& v : s.features) {
+        std::int32_t x{}, y{}, z{}, radius{}, army{}, fraction{}, damage{}, maxRate{}, rate{};
+        std::int64_t health{}, maxHealth{}, maxMass{}, maxEnergy{}, mass{}, energy{}, work{},
+            workTotal{};
+        if (!r.i32(x) || !r.i32(y) || !r.i32(z) || !r.i32(radius) || !r.u16(v.fromType)
+            || !r.i32(army) || !r.i64(health) || !r.i64(maxHealth) || !r.i64(maxMass)
+            || !r.i64(maxEnergy) || !r.i64(mass) || !r.i64(energy) || !r.i64(work)
+            || !r.i64(workTotal) || !r.i32(fraction) || !r.i32(damage) || !r.i32(maxRate)
+            || !r.i32(rate))
+            return false;
+        v.at = {Fx::fromRaw(x), Fx::fromRaw(y), Fx::fromRaw(z)};
+        v.radiusElmos = Fx::fromRaw(radius);
+        v.armyIndex = army;
+        v.health = Mag::fromRaw(health);
+        v.maximumHealth = Mag::fromRaw(maxHealth);
+        v.maximumMassReclaim = Mag::fromRaw(maxMass);
+        v.maximumEnergyReclaim = Mag::fromRaw(maxEnergy);
+        v.massRemaining = Mag::fromRaw(mass);
+        v.energyRemaining = Mag::fromRaw(energy);
+        v.reclaimWorkRemaining = Mag::fromRaw(work);
+        v.reclaimWorkTotal = Mag::fromRaw(workTotal);
+        v.reclaimFraction = Fx::fromRaw(fraction);
+        v.damageRatio = Fx::fromRaw(damage);
+        v.maximumReclaimPerBuildRate = Fx::fromRaw(maxRate);
+        v.reclaimPerBuildRate = Fx::fromRaw(rate);
+    }
+    if (!r.u64(s.revision)) return false;
+    const std::size_t slots = s.features.size();
+    if (s.generations.size() != slots || s.ids.live > slots || s.ids.free.size() > slots)
+        return false;
+    return true;
 }
 
 bool readBoneAttachments(PayloadReader& r, UnitStore::Snapshot& s) {
@@ -1072,6 +1173,9 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
     if (version >= kVersion22) {
         writeBoneAttachments(payloadWriter, state.units);
     }
+    if (version >= kVersion23) {
+        writeFeatures(payloadWriter, state.features);
+    }
     const std::vector<std::byte> payload = payloadWriter.take();
     if (payload.size() > std::numeric_limits<std::uint32_t>::max()) {
         throw std::length_error("MT19937 state exceeds the v1 save-state payload limit");
@@ -1108,7 +1212,7 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
                && version != kVersion13 && version != kVersion14 && version != kVersion15
                && version != kVersion16 && version != kVersion17 && version != kVersion18
                && version != kVersion19 && version != kVersion20 && version != kVersion21
-               && version != kVersion22)
+               && version != kVersion22 && version != kVersion23)
         || (requiredVersion && version != *requiredVersion) || !readU64(bytes, offset, tick)
         || !readU32(bytes, offset, payloadSize) || bytes.size() - offset != payloadSize) {
         return std::nullopt;
@@ -1159,14 +1263,15 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
     std::vector<CaptureWork> captures;
     if (version >= kVersion20 && !readCaptures(reader, captures)) return std::nullopt;
     if (version >= kVersion22 && !readBoneAttachments(reader, units)) return std::nullopt;
-    if (!reader.finished()) return std::nullopt;
+    std::optional<FeatureStore::Snapshot> features;
+    if (version >= kVersion23 && !readFeatures(reader, features)) return std::nullopt;
     SaveState decoded{.tick = tick,
                       .random = std::move(random),
                        .pathServiceBeats = pathServiceBeats,
                        .units = std::move(units), .siloAmmo = std::move(siloAmmo),
                        .redirects = std::move(redirects), .economyArmies = std::move(economyArmies),
                        .enhancements = std::move(enhancements),
-                       .captures = std::move(captures)};
+                       .captures = std::move(captures), .features = std::move(features)};
     // One binary representation per state rejects alternate encodings and trailing data.
     const std::vector<std::byte> canonical = encode(decoded, version);
     if (canonical.size() != bytes.size()
@@ -1191,7 +1296,7 @@ std::optional<SaveState> SaveState::decodeV2(std::span<const std::byte> bytes) {
 }
 
 std::vector<std::byte> SaveState::encode(const SaveState& state) {
-    return rm::sim::encode(state, kVersion22);
+    return rm::sim::encode(state, kVersion23);
 }
 
 std::optional<SaveState> SaveState::decode(std::span<const std::byte> bytes) {

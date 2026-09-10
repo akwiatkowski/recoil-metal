@@ -406,7 +406,9 @@ TEST_CASE("historic attachment saves derive offsets from their transforms", "[sa
     // V22 trails the bone record after every earlier section (one count plus eight
     // words per slot).
     constexpr std::size_t kV22BoneBytes = sizeof(std::uint32_t) + kSlots * 8 * sizeof(std::uint32_t);
-    v7.resize(v7.size() - kV22BoneBytes - kV21BankBytes - kV20EmptyCapturesBytes - kV19EmptyEnhancementsBytes - kV18SubmarineBytes - kV16ControllerBytes - kV15AbsentEconomyBytes - kV14MotionBytes - kV10RedirectBytes - kV9SiloAmmoBytes
+    // V23 trails one presence byte (this fixture leaves no wrecks, so the pool is null).
+    constexpr std::size_t kV23AbsentFeatureBytes = sizeof(std::uint8_t);
+    v7.resize(v7.size() - kV23AbsentFeatureBytes - kV22BoneBytes - kV21BankBytes - kV20EmptyCapturesBytes - kV19EmptyEnhancementsBytes - kV18SubmarineBytes - kV16ControllerBytes - kV15AbsentEconomyBytes - kV14MotionBytes - kV10RedirectBytes - kV9SiloAmmoBytes
               - kV8CommandStateBytes);
     writeU32(v7, 4, 7);
     writeU32(v7, 16, static_cast<std::uint32_t>(v7.size() - 20));
@@ -712,5 +714,70 @@ TEST_CASE("a current save round-trips attachment bones", "[save-state]") {
     CHECK(bones.selfRest[0] == rm::sim::Fx::fromInt(2));
     CHECK(bones.selfRest[1] == rm::sim::Fx::fromInt(1));
     CHECK(bones.selfRestHeight == rm::sim::Fx::fromInt(-1));
+    CHECK(SaveState::encode(*restored) == bytes);
+}
+
+TEST_CASE("a current save round-trips the wreck pool", "[save-state]") {
+    // One drained wreck, one removed (tombstone plus slot reuse), and the revision
+    // the decal rebuild watches — all three must survive, and the re-encode must
+    // match byte for byte.
+    rm::sim::FeatureStore original;
+    const auto first = original.add(rm::sim::Feature{
+        .at = {rm::sim::Fx::fromInt(10), rm::sim::Fx{}, rm::sim::Fx::fromInt(20)},
+        .radiusElmos = rm::sim::Fx::fromInt(4),
+        .fromType = 2,
+        .armyIndex = 1,
+        .health = rm::sim::Mag::fromInt(100),
+        .maximumHealth = rm::sim::Mag::fromInt(100),
+        .maximumMassReclaim = rm::sim::Mag::fromInt(90),
+        .maximumEnergyReclaim = rm::sim::Mag{},
+        .massRemaining = rm::sim::Mag::fromInt(50),
+        .energyRemaining = rm::sim::Mag{},
+        .reclaimWorkRemaining = rm::sim::Mag::fromInt(50),
+        .reclaimWorkTotal = rm::sim::Mag::fromInt(90),
+        .reclaimFraction = rm::sim::Fx::fromRatio(5, 9),
+        .maximumReclaimPerBuildRate = rm::sim::Fx::fromInt(10),
+        .reclaimPerBuildRate = rm::sim::Fx::fromInt(10)});
+    const auto second = original.add(rm::sim::Feature{.radiusElmos = rm::sim::Fx::fromInt(2)});
+    original.remove(second);
+    const auto third = original.add(rm::sim::Feature{.radiusElmos = rm::sim::Fx::fromInt(6)});
+    REQUIRE(third.index == second.index);
+    REQUIRE(original.revision() == 4);
+
+    RandomStream random{std::uint32_t{1}};
+    const auto bytes = SaveState::encode({.tick = 42,
+                                          .random = random.snapshot(),
+                                          .units = rm::sim::UnitStore{}.snapshot(),
+                                          .features = original.snapshot()});
+    const auto restored = SaveState::decode(bytes);
+    REQUIRE(restored.has_value());
+    REQUIRE(restored->features.has_value());
+    const rm::sim::FeatureStore back{*restored->features};
+    REQUIRE(back.slotAlive(first.index));
+    const rm::sim::Feature* wreck = back.find(first);
+    REQUIRE(wreck != nullptr);
+    CHECK(wreck->at[0] == rm::sim::Fx::fromInt(10));
+    CHECK(wreck->at[2] == rm::sim::Fx::fromInt(20));
+    CHECK(wreck->radiusElmos == rm::sim::Fx::fromInt(4));
+    CHECK(wreck->fromType == 2);
+    CHECK(wreck->armyIndex == 1);
+    CHECK(wreck->massRemaining == rm::sim::Mag::fromInt(50));
+    CHECK(wreck->reclaimWorkTotal == rm::sim::Mag::fromInt(90));
+    CHECK(wreck->reclaimFraction == rm::sim::Fx::fromRatio(5, 9));
+    CHECK(wreck->maximumReclaimPerBuildRate == rm::sim::Fx::fromInt(10));
+    CHECK(back.find(second) == nullptr);
+    REQUIRE(back.slotAlive(third.index));
+    CHECK(back.find(third)->radiusElmos == rm::sim::Fx::fromInt(6));
+    CHECK(back.revision() == 4);
+    CHECK(SaveState::encode(*restored) == bytes);
+}
+
+TEST_CASE("a save without wrecks keeps null features", "[save-state]") {
+    RandomStream random{std::uint32_t{1}};
+    const auto bytes = SaveState::encode(
+        {.tick = 42, .random = random.snapshot(), .units = rm::sim::UnitStore{}.snapshot()});
+    const auto restored = SaveState::decode(bytes);
+    REQUIRE(restored.has_value());
+    CHECK_FALSE(restored->features.has_value());
     CHECK(SaveState::encode(*restored) == bytes);
 }
