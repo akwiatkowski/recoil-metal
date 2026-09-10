@@ -2170,7 +2170,15 @@ int runWindowed(const Session& session) {
                 gatherVisibleEvents(visibleEvents, units);
                 units.updateCombatAttachments();
                 rm::emitCombatEffects(particles, visibleEvents, &units.weaponVisuals,
-                    &units.combatEffectState, gAppTickRate.secondsPerTick());
+                    &units.combatEffectState, gAppTickRate.secondsPerTick(),
+                    [&units](rm::sim::UnitId id) {
+                        if (id.index < units.store.slotCount()
+                            && units.store.idAt(id.index).generation == id.generation) {
+                            return rm::sim::fxToFloat(
+                                units.store.motion()[id.index].radiusElmos);
+                        }
+                        return 2.0f;
+                    });
 
                 // ...and as SOUND, from the same per-tick queue for the same reason. The
                 // listener rides the camera every tick, so panning follows the view.

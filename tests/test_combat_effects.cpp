@@ -3,6 +3,7 @@
 
 #include "core/scene/CombatEffects.hpp"
 
+#include <catch2/catch_approx.hpp>
 #include "core/sim/Combat.hpp"
 
 #include "support/FxMatchers.hpp"
@@ -48,11 +49,43 @@ TEST_CASE("shield absorption flashes blue at the intercepted impact", "[effects]
     CHECK(out[0].colour[3] == 0.0f);
 }
 
-TEST_CASE("everything else earns nothing here", "[effects]") {
+TEST_CASE("a death earns a flash, a fireball, smoke and sparks scaled by size", "[effects]") {
+    std::vector<rm::Particle> out;
+    const Event death{.kind = EventKind::UnitDestroyed,
+                      .at = {rm::test::fx(10.0f), rm::test::fx(0.0f), rm::test::fx(20.0f)}};
+    // A 10-elmo radius (an experimental): the caller reads it from the corpse's
+    // slot, which outlives the unit the same way the kill ledger's type does.
+    rm::emitCombatEffects(out, {&death, 1}, nullptr, nullptr, 0.0f,
+                          [](rm::sim::UnitId) { return 10.0f; });
+
+    REQUIRE(out.size() == 7);
+    // The flash is the brightest and briefest; the fireball shorter-lived than
+    // the smoke; the smoke is the only one that blends rather than adds.
+    CHECK(out[0].colour == std::array{1.0f, 0.95f, 0.8f, 0.0f});
+    CHECK(out[1].colour == std::array{1.0f, 0.55f, 0.2f, 0.0f});
+    CHECK(out[2].colour[3] > 0.0f);
+    CHECK(out[2].velocity[1] > 0.0f);
+    CHECK(out[0].lifetime < out[1].lifetime);
+    CHECK(out[1].lifetime < out[2].lifetime);
+    // Sizes follow the corpse: flash the widest, all far beyond infantry scale.
+    CHECK(out[0].size == Catch::Approx(30.0f));
+    CHECK(out[1].size == Catch::Approx(20.0f));
+    for (std::size_t i = 4; i < 7; ++i) {
+        CHECK(out[i].colour[3] == 0.0f);
+    }
+}
+
+TEST_CASE("a death of unknown size still earns a tank-scale burst", "[effects]") {
     std::vector<rm::Particle> out;
     const Event death{.kind = EventKind::UnitDestroyed};
-    const Event built{.kind = EventKind::ConstructionFinished};
     rm::emitCombatEffects(out, {&death, 1});
+    CHECK(out.size() == 7);
+    CHECK(out[0].size < 30.0f);
+}
+
+TEST_CASE("everything else earns nothing here", "[effects]") {
+    std::vector<rm::Particle> out;
+    const Event built{.kind = EventKind::ConstructionFinished};
     rm::emitCombatEffects(out, {&built, 1});
     CHECK(out.empty());
 }

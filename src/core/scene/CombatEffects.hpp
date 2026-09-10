@@ -17,6 +17,7 @@
 #include "core/scene/WeaponVisuals.hpp"
 #include "core/sim/Events.hpp"
 
+#include <functional>
 #include <span>
 #include <vector>
 
@@ -52,10 +53,16 @@ struct CombatEffectState {
     std::uint32_t seed = 1;
 };
 
-/// Appends the particles `events` earn. Kinds other than WeaponFired and ProjectileImpact
-/// earn nothing here — a death already has its wreck decal, and construction its ghost.
+/// Appends the particles `events` earn: muzzle flashes and beams, impact smoke and
+/// sparks, shield flashes, and death bursts scaled by the corpse's size. Kinds with
+/// no visual (construction and the rest) earn nothing.
+///
+/// `unitRadius` answers a corpse's collision radius in elmos for UnitDestroyed; the
+/// caller reads it from the dead slot, which outlives the unit. Absent, deaths fall
+/// back to tank scale rather than skipping the burst — a silent death reads as a bug.
 void emitCombatEffects(std::vector<Particle>& into, std::span<const sim::Event> events,
                        const WeaponVisuals* visuals = nullptr,
-                       CombatEffectState* state = nullptr, float seconds = 0.1f);
+                       CombatEffectState* state = nullptr, float seconds = 0.1f,
+                       std::function<float(sim::UnitId)> unitRadius = {});
 
 } // namespace rm

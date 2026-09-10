@@ -32,6 +32,16 @@ inline constexpr float kPuffSize = 5.0f;
 inline constexpr float kSparkLifetime = 0.12f;
 inline constexpr float kSparkSize = 4.0f;
 
+/// The death burst: a white flash, an orange fireball, two smoke puffs and three
+/// sparks, all scaled by the corpse's collision radius. A death with no other visual
+/// is the common case (most units have no authored death weapon), and silence there
+/// reads as a bug — every kill should bloom on screen the way retail's do.
+///
+/// Sizes in radii, clamped so a scout pops and an experimental does not fill the map.
+inline constexpr float kDeathFallbackRadius = 2.0f;
+inline constexpr float kDeathFlashLifetime = 0.15f;
+inline constexpr float kDeathFireLifetime = 0.45f;
+inline constexpr float kDeathSmokeLifetime = 2.5f;
 [[nodiscard]] std::array<float, 3> atOf(const sim::Event& event) {
     return {sim::fxToFloat(event.at[0]), sim::fxToFloat(event.at[1]),
             sim::fxToFloat(event.at[2])};
@@ -40,7 +50,8 @@ inline constexpr float kSparkSize = 4.0f;
 } // namespace
 
 void emitCombatEffects(std::vector<Particle>& into, std::span<const sim::Event> events,
-    const WeaponVisuals* visuals, CombatEffectState* state, float seconds) {
+    const WeaponVisuals* visuals, CombatEffectState* state, float seconds,
+    std::function<float(sim::UnitId)> unitRadius) {
     CombatEffectState immediate;
     if (visuals && !state) state = &immediate;
     const auto burst = [&](const std::string& key, std::array<float,3> position,
@@ -174,10 +185,60 @@ void emitCombatEffects(std::vector<Particle>& into, std::span<const sim::Event> 
             });
             break;
         }
+        case sim::EventKind::UnitDestroyed: {
+            const std::array<float, 3> at = atOf(event);
+            const float radius =
+                unitRadius ? std::max(0.5f, unitRadius(event.unit)) : kDeathFallbackRadius;
+            const float flash = std::clamp(3.0f * radius, 6.0f, 36.0f);
+            const float fire = std::clamp(2.0f * radius, 4.0f, 24.0f);
+            const float smoke = std::clamp(2.5f * radius, 5.0f, 30.0f);
+            into.push_back(Particle{
+                .origin = at,
+                .age = 0.0f,
+                .velocity = {0.0f, 0.0f, 0.0f},
+                .lifetime = kDeathFlashLifetime,
+                .colour = {1.0f, 0.95f, 0.8f, 0.0f},
+                .size = flash,
+            });
+            into.push_back(Particle{
+                .origin = at,
+                .age = 0.0f,
+                .velocity = {0.0f, 3.0f, 0.0f},
+                .lifetime = kDeathFireLifetime,
+                .colour = {1.0f, 0.55f, 0.2f, 0.0f},
+                .size = fire,
+            });
+            for (int i = 0; i < 2; ++i) {
+                into.push_back(Particle{
+                    .origin = {at[0], at[1] + fire * 0.25f * static_cast<float>(i), at[2]},
+                    .age = 0.0f,
+                    .velocity = {0.0f, 9.0f, 0.0f},
+                    .lifetime = kDeathSmokeLifetime,
+                    .colour = {0.22f, 0.20f, 0.18f, 0.55f},
+                    .size = smoke,
+                });
+            }
+            // Fixed fan of sparks: deterministic — no RNG state threads through here,
+            // and a death that rolled differently every replay would be a lie.
+            const std::array<std::array<float, 3>, 3> fan{{{6.0f, 8.0f, 0.0f},
+                                                           {-5.0f, 10.0f, 3.0f},
+                                                           {1.0f, 7.0f, -6.0f}}};
+            for (const auto& velocity : fan) {
+                into.push_back(Particle{
+                    .origin = at,
+                    .age = 0.0f,
+                    .velocity = velocity,
+                    .lifetime = kSparkLifetime,
+                    .colour = {1.0f, 0.6f, 0.3f, 0.0f},
+                    .size = kSparkSize,
+                });
+            }
+            break;
+        }
         default:
             break;
         }
-    }
+        }
     if (state && visuals) {
         for (auto& emitter : state->bursts) {
             const auto& material = visuals->materials[emitter.material];

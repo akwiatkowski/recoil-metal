@@ -1901,8 +1901,19 @@ void march(UnitScene& scene, const rm::HeightField& field, PassabilitySet& passa
         scene.updateCombatAttachments();
         std::vector<rm::sim::Event> visualEvents;
         for (const auto& event : scene.events.all()) visualEvents.push_back(scene.combatVisualEvent(event));
+        // The corpse's size for death bursts, read from its slot: motion persists
+        // past death the way the kill ledger's type does, trusted only while the
+        // slot still holds the corpse (generation match — a recycled slot belongs
+        // to someone else's unit now).
+        const auto corpseRadius = [&scene](rm::sim::UnitId id) {
+            if (id.index < scene.store.slotCount()
+                && scene.store.idAt(id.index).generation == id.generation) {
+                return rm::sim::fxToFloat(scene.store.motion()[id.index].radiusElmos);
+            }
+            return 2.0f;
+        };
         rm::emitCombatEffects(dust, visualEvents, &scene.weaponVisuals,
-            &scene.combatEffectState, kTickSeconds);
+            &scene.combatEffectState, kTickSeconds, corpseRadius);
         rm::emitProjectileTrails(dust, scene.projectiles, &scene.weaponVisuals, kTickSeconds);
         scene.projectileTrails.update(scene.projectiles, scene.weaponVisuals, kTickSeconds);
         rm::emitDust(dust, emitters, field, kTickSeconds, dustDebt, dustSeed);
