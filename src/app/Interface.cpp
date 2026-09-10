@@ -138,15 +138,16 @@ std::optional<rm::ui::InfoCard> constructionCard(const UnitScene& scene,
 /// per-batch instance arrays, and a minimap would have needed a second walk over game state that
 /// nothing owned.
 ///
-/// A radar contact's colour: deliberately not anybody's team colour. See below.
-constexpr rm::ui::Colour kBlipColour{0.85f, 0.85f, 0.55f, 0.75f};
+/// A radar contact's colour: enemy red. Every blip is hostile — allies and own
+/// units are Seen exactly, neutrals plot nothing — so red says nothing radar
+/// did not already say, and it reads instantly against any stratum.
+constexpr rm::ui::Colour kBlipColour{0.95f, 0.2f, 0.15f, 0.9f};
 
 /// The blips: what radar and sonar know and sight does not.
 ///
-/// A PIP OF ITS OWN COLOUR AND A SMALLER SIZE, not the owner's team colour — because a blip
-/// is a position without an identity, and painting it in the enemy's colour would be telling
-/// the player something radar did not say. Whose it is, and what it is, are exactly the two
-/// facts a contact withholds (`sim::Contact`).
+/// A RED DOT, not a team-coloured pip: the position is known hostile, the rest
+/// (whose, what) is withheld. Dots on the map and the minimap alike — the plus
+/// read as interface chrome rather than as an enemy.
 void appendMinimapBlips(std::vector<rm::ui::MinimapPip>& out, const UnitScene& scene) {
     const int viewer = scene.viewingAlliance();
     if (viewer == UnitScene::kNoAlliance) {
@@ -366,19 +367,18 @@ float arrayBuildSitesInto(const UnitScene& scene, rm::UnitTypeIndex type,
     if (!def) return 0.0f;
     from = snapBuildSite(scene, type, from);
     to = snapBuildSite(scene, type, to);
-    const float diameter = std::max(8.0f, 2.0f * def->collisionRadiusElmos);
     const float grid = rm::sim::fxToFloat(rm::sim::kBuildGridElmos);
     // Skirts are navigation clearance and may be larger than the visible footprint.
     // Packing by them leaves an unexplained one-tile gap between buildings.
-    const float width = std::max(grid * static_cast<float>(std::max(1, def->footprintSquaresX)), diameter);
-    const float depth = std::max(grid * static_cast<float>(std::max(1, def->footprintSquaresZ)), diameter);
+    const float width = grid * static_cast<float>(std::max(1, def->footprintSquaresX));
+    const float depth = grid * static_cast<float>(std::max(1, def->footprintSquaresZ));
     const float dx = to[0] - from[0], dz = to[1] - from[1];
     const float distance = std::hypot(dx, dz);
     // Two axis-aligned footprints stop overlapping when either pair of edges separates.
     const float alongX = std::abs(dx) > 0 ? width * distance / std::abs(dx) : INFINITY;
     const float alongZ = std::abs(dz) > 0 ? depth * distance / std::abs(dz) : INFINITY;
-    const float touching = distance > 0 ? std::max(diameter, std::min(alongX, alongZ))
-                                        : diameter;
+    const float touching = distance > 0 ? std::min(alongX, alongZ)
+                                        : std::min(width, depth);
     const float spacing = touching * std::clamp(spacingScale,
         rm::ui::kArraySpacingMinScale, rm::ui::arraySpacingMaxScale(touching));
     const auto raw = rm::ui::arrayBuildCells(from, to, spacing);
@@ -388,7 +388,7 @@ float arrayBuildSitesInto(const UnitScene& scene, rm::UnitTypeIndex type,
             const float gapX = std::abs(snapped[0] - sites.back()[0]);
             const float gapZ = std::abs(snapped[1] - sites.back()[1]);
             // Grid/deposit snapping may collapse or pull neighbouring raw sites together.
-            if ((gapX < width && gapZ < depth) || std::hypot(gapX, gapZ) < diameter) continue;
+            if (gapX < width && gapZ < depth) continue;
         }
         sites.push_back(snapped);
     }
@@ -1043,8 +1043,9 @@ void appendContactBlips(rm::ui::Geometry& out, const UnitScene& scene,
         return;
     }
     scene.refreshViewerContacts();
-    constexpr float kRun = 9.0f;
-    constexpr float kStroke = 1.5f;
+    // A filled dot, five points across: an enemy position, nothing more. The plus
+    // read as interface chrome; a red dot reads as an enemy.
+    constexpr float kDot = 5.0f;
     for (const rm::sim::Contact& contact : scene.contactScratch) {
         if (!contact.isBlip()) {
             continue;
@@ -1057,11 +1058,8 @@ void appendContactBlips(rm::ui::Geometry& out, const UnitScene& scene,
         if (!screen) {
             continue;
         }
-        // A plus, not a unit glyph: it says "a sensor return is near here" and nothing more.
-        rm::text::appendRect(out.worldOverlay.solid, font, (*screen)[0] - kRun * 0.5f,
-                             (*screen)[1] - kStroke * 0.5f, kRun, kStroke, kBlipColour);
-        rm::text::appendRect(out.worldOverlay.solid, font, (*screen)[0] - kStroke * 0.5f,
-                             (*screen)[1] - kRun * 0.5f, kStroke, kRun, kBlipColour);
+        rm::text::appendRect(out.worldOverlay.solid, font, (*screen)[0] - kDot * 0.5f,
+                             (*screen)[1] - kDot * 0.5f, kDot, kDot, kBlipColour);
     }
 }
 

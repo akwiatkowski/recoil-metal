@@ -162,11 +162,25 @@ struct RadarScene {
 
 } // namespace
 
-TEST_CASE("radar coverage plots the enemy commander as a blip", "[radar]") {
+TEST_CASE("radar coverage plots the enemy commander as a red blip", "[radar]") {
     RadarScene job = setup(/*withRadar=*/true, /*withArty=*/false);
     std::vector<rm::ui::MinimapPip> pips;
     rm::app::appendMinimapPips(pips, job.scene);
     CHECK(hasBlipNear(pips, 250.0f, 0.0f));
+    // Red, not khaki and not a team colour: every blip is hostile (allies are
+    // Seen exactly), so the dot says enemy and nothing else.
+    bool red = false;
+    for (const auto& pip : pips) {
+        const float dx = pip.worldX - 250.0f;
+        const float dz = pip.worldZ - 0.0f;
+        if (dx * dx + dz * dz < 100.0f * 100.0f && pip.size < 3.0f) {
+            CHECK(pip.colour[0] > 0.8f);
+            CHECK(pip.colour[1] < 0.4f);
+            CHECK(pip.colour[2] < 0.4f);
+            red = true;
+        }
+    }
+    CHECK(red);
 }
 
 TEST_CASE("without radar nothing plots the enemy commander", "[radar]") {
