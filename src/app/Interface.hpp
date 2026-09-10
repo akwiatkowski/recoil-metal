@@ -48,6 +48,11 @@ namespace rm::app {
     std::span<const rm::sim::UnitId> selection, const rm::ui::FrameLayout& frame,
     float x, float y);
 
+/// Key-driven AUTO MEX toggle for the hotkey: same availability gate and dispatch as
+/// the rack cell, without a hit point. No value means no selected field engineer.
+[[nodiscard]] std::optional<bool> submitAutoExpandKey(MatchRunner& runner,
+    std::span<const rm::sim::UnitId> selection);
+
 /// The selected-unit outline for the active game presentation.
 void appendUnitSelection(std::vector<rm::DecalVertex>& out, const rm::HeightField& field,
                          std::array<float, 3> centre, float radius, rm::ui::GameProfile profile);

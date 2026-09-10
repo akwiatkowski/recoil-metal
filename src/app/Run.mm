@@ -1039,8 +1039,13 @@ int runWindowed(const Session& session) {
         const float restPitch = window.camera().pitch;
         const float restYaw = window.camera().yaw;
 
+        // Set once the match runner exists below. Key handling is installed here so every
+        // binding lives in one place; the runner arrives later because the window (and its
+        // callbacks) must exist before the match it drives.
+        MatchRunner* runnerForKeys = nullptr;
+
         window.onKey([&window, &selected, &controlGroups, &units, &armedCommand, restPitch,
-                      restYaw](rm::KeyEvent event) {
+                      restYaw, &runnerForKeys](rm::KeyEvent event) {
             if (event.phase == rm::KeyPhase::Release) {
                 if (event.key == rm::Key::Space) {
                     // A held-space glance never costs the player their overhead bearings.
@@ -1077,6 +1082,15 @@ int runWindowed(const Session& session) {
             } else if (event.key == rm::Key::P) {
                 armedCommand = rm::sim::CommandKind::Patrol;
                 std::printf("patrol armed: right-click a destination\n");
+            } else if (event.key == rm::Key::E) {
+                // AUTO MEX standing order on the selected field engineers — the rack cell
+                // without the click. Silent unless something was eligible to toggle.
+                if (runnerForKeys != nullptr) {
+                    if (const auto on = submitAutoExpandKey(*runnerForKeys, selected)) {
+                        std::printf("auto-expand %s for the selection\n", *on ? "on" : "off");
+                        std::fflush(stdout);
+                    }
+                }
             } else if (const std::optional<std::size_t> digit = rm::digitForKey(event.key)) {
                 auto& group = controlGroups[*digit];
                 if (event.modifiers.control) {
@@ -1168,6 +1182,7 @@ int runWindowed(const Session& session) {
                                 .minZ = {},
                                 .maxZ = rm::sim::fxFromFloat(map->field.depthElmos()),
                             });
+        runnerForKeys = &runner;
         // Acceptance fixtures keep normal economy, construction, movement and roll-off ticks;
         // opponents are silent so an unrelated attack cannot destroy the controls under test.
         if (inputAcceptance) runner.scripts.clear();

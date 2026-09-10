@@ -11,6 +11,7 @@ namespace rm {
 enum class Key : std::uint8_t {
     A,
     D,
+    E,
     F,
     N,
     O,
@@ -51,6 +52,7 @@ struct KeyEvent {
     switch (character) {
         case 'a': return Key::A;
         case 'd': return Key::D;
+        case 'e': return Key::E;
         case 'f': return Key::F;
         case 'n': return Key::N;
         case 'o': return Key::O;

@@ -26,14 +26,14 @@ TEST_CASE("a character becomes one semantic event without losing event state") {
 }
 
 TEST_CASE("the semantic vocabulary contains exactly the keys the game binds") {
-    constexpr std::array<std::pair<char, rm::Key>, 20> kBindings{{
-        {'a', rm::Key::A},           {'d', rm::Key::D},           {'f', rm::Key::F},
-        {'n', rm::Key::N},           {'o', rm::Key::O},           {'p', rm::Key::P},
-        {'r', rm::Key::R},           {'s', rm::Key::S},           {'w', rm::Key::W},
-        {' ', rm::Key::Space},       {'0', rm::Key::Digit0},      {'1', rm::Key::Digit1},
-        {'2', rm::Key::Digit2},      {'3', rm::Key::Digit3},      {'4', rm::Key::Digit4},
-        {'5', rm::Key::Digit5},      {'6', rm::Key::Digit6},      {'7', rm::Key::Digit7},
-        {'8', rm::Key::Digit8},      {'9', rm::Key::Digit9},
+    constexpr std::array<std::pair<char, rm::Key>, 21> kBindings{{
+        {'a', rm::Key::A},           {'d', rm::Key::D},           {'e', rm::Key::E},
+        {'f', rm::Key::F},           {'n', rm::Key::N},           {'o', rm::Key::O},
+        {'p', rm::Key::P},           {'r', rm::Key::R},           {'s', rm::Key::S},
+        {'w', rm::Key::W},           {' ', rm::Key::Space},       {'0', rm::Key::Digit0},
+        {'1', rm::Key::Digit1},      {'2', rm::Key::Digit2},      {'3', rm::Key::Digit3},
+        {'4', rm::Key::Digit4},      {'5', rm::Key::Digit5},      {'6', rm::Key::Digit6},
+        {'7', rm::Key::Digit7},      {'8', rm::Key::Digit8},      {'9', rm::Key::Digit9},
     }};
     for (const auto& [character, key] : kBindings) {
         CHECK(rm::keyForCharacter(character) == key);

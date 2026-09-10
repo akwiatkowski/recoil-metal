@@ -318,6 +318,18 @@ std::optional<bool> submitAutoExpandControl(MatchRunner& runner,
     return toggleAutoExpand(runner, selection);
 }
 
+std::optional<bool> submitAutoExpandKey(MatchRunner& runner,
+    std::span<const rm::sim::UnitId> selection) {
+    constexpr std::size_t slot = rm::ui::rackSlotFor(rm::ui::RackAction::AutoExpand);
+    std::vector<const rm::unitdef::UnitDef*> definitions;
+    for (const auto id : selection) {
+        if (runner.scene.store.alive(id))
+            definitions.push_back(runner.scene.catalog.def(runner.scene.store.typeAt(id.index)));
+    }
+    if (!rm::ui::commandAvailability(definitions)[slot]) return std::nullopt;
+    return toggleAutoExpand(runner, selection);
+}
+
 bool submitBuildOption(UnitScene& scene, const rm::vfs::Vfs& content,
     rm::sim::UnitId builder, rm::PlayerIndex player, rm::TickIndex tick,
     const rm::ui::BuildOption& option, bool shift) {

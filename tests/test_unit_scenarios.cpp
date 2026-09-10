@@ -2259,6 +2259,35 @@ TEST_CASE("AUTO MEX rack clicks chain three completed deposits and toggle off",
     CHECK(job.scene.commands.size() == logSize);
 }
 
+TEST_CASE("the AUTO MEX hotkey toggles through the same availability gate",
+          "[auto-expand][headless-ui]") {
+    // Synthetic field engineer: no corpus needed, the gate only reads builder
+    // mobility and rack availability. Mirrors the rack-click contract exactly.
+    Scenario job;
+    rm::unitdef::UnitDef engineer;
+    engineer.name = "test_engineer";
+    engineer.buildRate = 10.0f;
+    engineer.speedElmosPerSecond = 20.0f;
+    engineer.health = rm::sim::Mag::fromInt(100);
+    const auto builder = job.spawn(engineer, 300, 300);
+    auto runner = job.runner();
+    const std::array<rm::sim::UnitId, 1> one{builder};
+
+    REQUIRE(rm::app::submitAutoExpandKey(runner, one) == std::optional{true});
+    CHECK(rm::app::autoExpanding(runner, builder));
+    REQUIRE(rm::app::submitAutoExpandKey(runner, one) == std::optional{false});
+    CHECK_FALSE(rm::app::autoExpanding(runner, builder));
+    CHECK_FALSE(rm::app::submitAutoExpandKey(runner, {}).has_value());
+
+    // An immobile structure is no field engineer: the key stays silent like the cell.
+    rm::unitdef::UnitDef structure;
+    structure.name = "test_structure";
+    structure.health = rm::sim::Mag::fromInt(100);
+    const auto house = job.spawn(structure, 400, 400);
+    const std::array<rm::sim::UnitId, 1> inert{house};
+    CHECK_FALSE(rm::app::submitAutoExpandKey(runner, inert).has_value());
+}
+
 TEST_CASE("a retail Kennel lends its authored rate only to nearby allied construction",
           "[corpus][station]") {
     const auto root = corpusRoot();
