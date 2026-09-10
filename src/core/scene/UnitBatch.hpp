@@ -53,6 +53,13 @@ struct UnitBatch {
     /// into the batch's bone buffer; yaw and pitch remain per UnitInstance.
     BuilderAimRig builderAim;
 
+    /// Optional primary-turret rig for this exact model, resolved from the first turreted
+    /// weapon's bones. Same shader path as the builder arm (one yaw/pitch pair per
+    /// instance), so a unit aims either its arm or its turret, never both at once.
+    BuilderAimRig turretAim;
+    /// Index into the type's weapons of the resolved turret, for reading its live target.
+    std::size_t turretWeapon = 0;
+
     // Whether the phase in each instance is the WHOLE answer, or an offset
     // added to a clock the renderer advances.
     //

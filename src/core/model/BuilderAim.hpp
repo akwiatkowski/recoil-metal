@@ -42,6 +42,31 @@ struct BuilderAimAngles {
     const Model& model, const unitdef::BuilderArmSpec& spec,
     std::span<const std::string> effectBones = {});
 
+/// What a weapon's turret needs, in RADIANS: the presentation layer converts once when
+/// it resolves, because the weapon already states speeds in radians while the firing
+/// arc arrives in degrees. Same two-axis shape as a builder arm — a yaw ring carrying
+/// a pitching barrel — so the resolved rig answers the same builderAimAt/step/apply
+/// calls and the unit shader needs no second aim path.
+struct TurretAimSpec {
+    unitdef::BoneRef yawBone;
+    unitdef::BoneRef pitchBone;
+    unitdef::BoneRef muzzleBone;
+    float yawMin = -3.14159265f;
+    float yawMax = 3.14159265f;
+    float yawSlew = 6.2831853f;
+    float pitchMin = -1.5707964f;
+    float pitchMax = 1.5707964f;
+    float pitchSlew = 6.2831853f;
+
+    [[nodiscard]] bool exists() const noexcept {
+        return yawBone.present() && pitchBone.present() && muzzleBone.present();
+    }
+};
+
+/// The turret twin of resolveBuilderAim: flags mark the ring and barrel subtrees, the
+/// aim point is the muzzle. An unresolvable bone yields a rig that does not exist.
+[[nodiscard]] BuilderAimRig resolveTurretAim(const Model& model, const TurretAimSpec& spec);
+
 /// The clamped two-axis pose that points the rig at a model-space target.
 [[nodiscard]] BuilderAimAngles builderAimAt(const BuilderAimRig& rig,
                                             const std::array<float, 3>& target) noexcept;

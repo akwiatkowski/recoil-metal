@@ -257,6 +257,10 @@ struct UnitScene {
     // rates and returns to rest when work ends, then is forgotten.
     std::unordered_map<rm::UnitIndex, std::array<float, 3>> builderTarget;
     std::unordered_map<rm::UnitIndex, rm::BuilderAimAngles> builderShownAim;
+    /// The drawn turret pose per slot, slewed at the weapon's rates toward its live
+    /// target and back to rest when the target dies. Same shape as the builder map:
+    /// presentation only, forgotten with the slot.
+    std::unordered_map<rm::UnitIndex, rm::BuilderAimAngles> turretShownAim;
 
     // The sides in the match, empty outside a skirmish. Held with the scene rather
     // than beside it because every question that needs an army — may I select this,
@@ -658,6 +662,9 @@ struct UnitScene {
         std::erase_if(builderShownAim, [this](const auto& kv) {
             return !store.alive(store.idAt(kv.first));
         });
+        std::erase_if(turretShownAim, [this](const auto& kv) {
+            return !store.alive(store.idAt(kv.first));
+        });
 
         for (const rm::DrawUnit& unit : drawUnits) {
             // FOG OF WAR (ADR-037). A unit the viewer's side cannot see is not drawn at all —
@@ -709,6 +716,10 @@ struct UnitScene {
                     rm::SelectionEntry{.batch = batch, .instance = drawScratch[batch].size()};
             }
             rm::UnitInstance instance = instanceFor(unit);
+            // The turret first: a builder at work overwrites the same two angles below,
+            // so an engineer building with its arm keeps the arm, and a tank with no
+            // arm keeps whatever the turret wrote.
+            applyTurretAim(instance, unit, batch, dtSeconds);
             applyBuilderArm(instance, unit, batch, dtSeconds);
             drawScratch[batch].push_back(instance);
             drawSlotOf[batch].push_back(unit.id.index);
@@ -861,6 +872,60 @@ struct UnitScene {
             return;
         }
         builderShownAim[slot] = shown;
+        instance.builderYaw = shown.yaw;
+        instance.builderPitch = shown.pitch;
+    }
+
+    /// Aims one drawn unit's primary turret at its live target and returns it to rest
+    /// when the target dies. Presentation only: reads the sim's per-weapon target,
+    /// writes per-instance shader input, never the store.
+    ///
+    /// Runs BEFORE applyBuilderArm at the call site, so a builder at work overwrites
+    /// the same two angles with its arm and a combat unit keeps its turret.
+    void applyTurretAim(rm::UnitInstance& instance, const rm::DrawUnit& unit,
+                        std::size_t batch, float dtSeconds) {
+        const rm::UnitIndex slot = unit.id.index;
+        if (batch >= batches.size() || !batches[batch].turretAim.exists()) {
+            return;
+        }
+        const rm::BuilderAimRig& rig = batches[batch].turretAim;
+        const std::size_t weapon = batches[batch].turretWeapon;
+
+        // The sim's own per-weapon target: what this turret is firing at, or trying to.
+        // A dead or unset target means rest — the turret slews home rather than freezing
+        // on a corpse.
+        std::optional<std::array<float, 3>> aimAt;
+        if (slot < store.health().size()) {
+            const std::vector<rm::sim::UnitId>& targets = store.health()[slot].automaticTargets;
+            if (weapon < targets.size() && store.alive(targets[weapon])
+                && targets[weapon].index < store.transforms().size()) {
+                const rm::sim::Transform& aim = store.transforms()[targets[weapon].index];
+                aimAt = std::array<float, 3>{rm::sim::fxToFloat(aim.x),
+                                             rm::sim::fxToFloat(aim.y),
+                                             rm::sim::fxToFloat(aim.z)};
+            }
+        }
+
+        rm::BuilderAimAngles goal;
+        if (aimAt) {
+            const rm::InstancePlacement placement{
+                .position = instance.position,
+                .rotationX = instance.rotationX,
+                .rotationY = instance.rotationY,
+                .rotationZ = instance.rotationZ,
+                .scale = instance.scale,
+            };
+            goal = rm::builderAimAt(rig, rm::builderTargetInModel(*aimAt, placement));
+        }
+        const auto shownIt = turretShownAim.find(slot);
+        rm::BuilderAimAngles shown =
+            shownIt != turretShownAim.end() ? shownIt->second : rm::BuilderAimAngles{};
+        shown = rm::stepBuilderAim(shown, goal, rig, dtSeconds);
+        if (!aimAt && shown.yaw == 0.0f && shown.pitch == 0.0f) {
+            turretShownAim.erase(slot);
+            return;
+        }
+        turretShownAim[slot] = shown;
         instance.builderYaw = shown.yaw;
         instance.builderPitch = shown.pitch;
     }

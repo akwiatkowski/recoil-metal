@@ -319,6 +319,8 @@ if(BUILD_TESTING)
         tests/test_real_scm.cpp
         tests/test_pose.cpp
         tests/test_builder_aim.cpp
+        tests/test_turret_aim.cpp
+        tests/test_turret_scene.cpp
         tests/test_real_sca.cpp
         tests/test_text_layout.cpp
         tests/test_ui_viewport.cpp

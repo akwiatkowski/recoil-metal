@@ -19,6 +19,7 @@
 #include <fstream>
 #include <map>
 #include <numbers>
+#include <optional>
 #include <stdexcept>
 #include <utility>
 
@@ -26,6 +27,60 @@ namespace rm::app {
 
 [[nodiscard]] bool floatsOnWater(const rm::unitdef::UnitDef& def) noexcept {
     return rm::data::moveDefFor(def).usesSurfaceWaterGrid;
+}
+
+/// The primary turret's aim spec from the first turreted weapon, or nothing when the
+/// type has no turret to pose. Yaw limits come from the firing arc (a half-angle either
+/// side of its centre); speeds arrive in radians already. The muzzle doubles as the
+/// aim point — it is what the barrel is pointing at the target with.
+[[nodiscard]] std::optional<std::pair<rm::TurretAimSpec, std::size_t>>
+turretSpecFor(const rm::unitdef::UnitDef& def) {
+    constexpr float kPi = std::numbers::pi_v<float>;
+    for (std::size_t w = 0; w < def.weapons.size(); ++w) {
+        const rm::unitdef::Weapon& weapon = def.weapons[w];
+        if (!weapon.turreted || weapon.turretYawBone.empty() || weapon.turretPitchBone.empty()
+            || weapon.muzzleBone.empty()) {
+            continue;
+        }
+        const float halfArc = weapon.arcRangeDegrees * kPi / 180.0f;
+        const float centre = weapon.arcCentreDegrees * kPi / 180.0f;
+        return std::make_pair(
+            rm::TurretAimSpec{
+                .yawBone = {.name = weapon.turretYawBone},
+                .pitchBone = {.name = weapon.turretPitchBone},
+                .muzzleBone = {.name = weapon.muzzleBone},
+                .yawMin = centre - halfArc,
+                .yawMax = centre + halfArc,
+                .yawSlew = weapon.turretYawSpeedRadPerSecond,
+                .pitchSlew = weapon.turretPitchSpeedRadPerSecond,
+            },
+            w);
+    }
+    return std::nullopt;
+}
+
+/// A batch's turret rig and the weapon whose live target it follows, resolved once
+/// per type. Empty rig when the type has no turreted weapon or its bones do not
+/// resolve — the per-frame applier then skips the unit outright.
+struct TurretRig {
+    rm::BuilderAimRig rig;
+    std::size_t weapon = 0;
+};
+
+[[nodiscard]] TurretRig resolveTurretRig(const rm::Model& model,
+                                         const rm::unitdef::UnitDef* def) {
+    if (def == nullptr) {
+        return {};
+    }
+    const auto spec = turretSpecFor(*def);
+    if (!spec) {
+        return {};
+    }
+    rm::BuilderAimRig rig = rm::resolveTurretAim(model, spec->first);
+    if (!rig.exists()) {
+        return {};
+    }
+    return {.rig = std::move(rig), .weapon = spec->second};
 }
 
 /// The movement state a unit of this definition is born with.
@@ -495,6 +550,7 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
             // govern building placement (P3.4, `core/data/MoveDef.hpp`).
             const rm::data::MoveDef move = rm::data::moveDefFor(unit->def);
 
+            const TurretRig turretRig = resolveTurretRig(scene.models.back(), &unit->def);
             scene.batches.push_back(rm::UnitBatch{
                 .model = &scene.models.back(),
                 .instances = {},
@@ -505,6 +561,8 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
                 .normals = scene.textures.resolve(content, unit->normalsPath, "normalsTS"),
                 .builderAim = rm::resolveBuilderAim(scene.models.back(), unit->def.builderArm,
                                                     unit->def.buildEffectBones),
+                .turretAim = std::move(turretRig.rig),
+                .turretWeapon = turretRig.weapon,
             });
             batchForFaction.emplace(army.faction, scene.batches.size() - 1);
             scaleForFaction.emplace(army.faction, unit->def.meshToElmos);
@@ -662,6 +720,7 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
         // guesses standing in for a fact the blueprint had all along: `RULEUMT_*` says what this
         // unit crosses (P3.4). ADR-027 said passability comes from motion class; now it does.
         const rm::data::MoveDef move = rm::data::moveDefFor(unit->def);
+        const TurretRig turretRig = resolveTurretRig(scene.models.back(), &unit->def);
         scene.batches.push_back(rm::UnitBatch{
             .model = &scene.models.back(),
             .instances = {},
@@ -672,6 +731,8 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
             .normals = scene.textures.resolve(content, unit->normalsPath, "normalsTS"),
             .builderAim = rm::resolveBuilderAim(scene.models.back(), unit->def.builderArm,
                                                 unit->def.buildEffectBones),
+            .turretAim = std::move(turretRig.rig),
+            .turretWeapon = turretRig.weapon,
         });
         scene.definitions.push_back(unit->def);
         resolveMuzzleBones(scene.definitions.back(), scene.models.back());
@@ -701,6 +762,8 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
                         const std::string shading = unit->def.lod1Spec.empty()
                                                         ? unit->shadingPath
                                                         : dir + unit->def.lod1Spec;
+                        const TurretRig turretLod =
+                            resolveTurretRig(scene.models.back(), &unit->def);
                         scene.batches.push_back(rm::UnitBatch{
                             .model = &scene.models.back(),
                             .instances = {},
@@ -716,6 +779,8 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
                             .builderAim = rm::resolveBuilderAim(
                                 scene.models.back(), unit->def.builderArm,
                                 unit->def.buildEffectBones),
+                            .turretAim = turretLod.rig,
+                            .turretWeapon = turretLod.weapon,
                         });
                         scene.lodOfType[type] = UnitScene::LodLevel{
                             .batch = scene.batches.size() - 1,
@@ -1390,6 +1455,8 @@ void orderFirstExtractors(UnitScene& scene, std::span<const rm::scenario::Marker
             });
         }
 
+        const TurretRig turretRig =
+            resolveTurretRig(scene.models.back(), def ? &*def : nullptr);
         scene.batches.push_back(rm::UnitBatch{
             .model = &scene.models.back(),
             .instances = {},
@@ -1399,6 +1466,8 @@ void orderFirstExtractors(UnitScene& scene, std::span<const rm::scenario::Marker
             .builderAim = def ? rm::resolveBuilderAim(scene.models.back(), def->builderArm,
                                                       def->buildEffectBones)
                               : rm::BuilderAimRig{},
+            .turretAim = std::move(turretRig.rig),
+            .turretWeapon = turretRig.weapon,
         });
         scene.setBatchForType(type, scene.batches.size() - 1);
     }

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cctype>
 #include <numbers>
 
 namespace {
@@ -150,6 +151,71 @@ BuilderAimRig resolveBuilderAim(const Model& model, const unitdef::BuilderArmSpe
     rig.pitchMin = radians(spec.pitchMinDegrees);
     rig.pitchMax = radians(spec.pitchMaxDegrees);
     rig.pitchSlew = radians(spec.pitchSlewDegreesPerSecond);
+    return rig;
+}
+BuilderAimRig resolveTurretAim(const Model& model, const TurretAimSpec& spec) {
+    // Exact first, then case-insensitive: the corpus's bone spelling is not reliable
+    // (see resolveMuzzleBones), and a turret lost to capitalisation would aim with
+    // its hull while reporting a rig that exists.
+    const auto turretResolve = [&model](const rm::unitdef::BoneRef& ref) {
+        const int exact = resolve(model, ref);
+        if (exact >= 0 || ref.name.empty()) {
+            return exact;
+        }
+        for (std::size_t bone = 0; bone < model.bones.size(); ++bone) {
+            const std::string& have = model.bones[bone].name;
+            if (have.size() == ref.name.size()
+                && std::equal(have.begin(), have.end(), ref.name.begin(),
+                              [](unsigned char a, unsigned char b) {
+                                  return std::tolower(a) == std::tolower(b);
+                              })) {
+                return static_cast<int>(bone);
+            }
+        }
+        return -1;
+    };
+    BuilderAimRig rig;
+    if (!spec.exists() || model.bones.empty()) {
+        return rig;
+    }
+    const int yaw = turretResolve(spec.yawBone);
+    const int pitch = turretResolve(spec.pitchBone);
+    const int muzzle = turretResolve(spec.muzzleBone);
+    if (yaw < 0 || pitch < 0 || muzzle < 0) {
+        return rig;
+    }
+    rig.boneFlags.resize(model.bones.size());
+    for (std::size_t bone = 0; bone < model.bones.size(); ++bone) {
+        if (descendsFrom(model, bone, yaw)) {
+            rig.boneFlags[bone] |= kBuilderYawBone;
+        }
+        if (descendsFrom(model, bone, pitch)) {
+            rig.boneFlags[bone] |= kBuilderPitchBone;
+        }
+    }
+    const ModelBone& yawBone = model.bones[static_cast<std::size_t>(yaw)];
+    const ModelBone& pitchBone = model.bones[static_cast<std::size_t>(pitch)];
+    const ModelBone& muzzleBone = model.bones[static_cast<std::size_t>(muzzle)];
+    rig.yawPivot = yawBone.globalOffset;
+    rig.yawAxis = normalise(rotateByQuaternion(yawBone.globalRotation, {{0.0f, 1.0f, 0.0f}}));
+    rig.pitchPivot = pitchBone.globalOffset;
+    rig.pitchAxis =
+        normalise(rotateByQuaternion(pitchBone.globalRotation, {{1.0f, 0.0f, 0.0f}}));
+    rig.aimPoint = muzzleBone.globalOffset;
+    // A muzzle coincident with its trunnion gives no forward reference — same fallback
+    // as the builder's missing aim marker, the pitch axis through the pivot.
+    if (dot(subtract(rig.aimPoint, rig.pitchPivot),
+            subtract(rig.aimPoint, rig.pitchPivot)) < 0.000001f) {
+        rig.aimPoint = add(rig.pitchPivot,
+                           rotateByQuaternion(muzzleBone.globalRotation, {{0.0f, 0.0f, 1.0f}}));
+    }
+    // Already radians: the weapon states speeds that way and the caller converts the arc.
+    rig.yawMin = spec.yawMin;
+    rig.yawMax = spec.yawMax;
+    rig.yawSlew = spec.yawSlew;
+    rig.pitchMin = spec.pitchMin;
+    rig.pitchMax = spec.pitchMax;
+    rig.pitchSlew = spec.pitchSlew;
     return rig;
 }
 
