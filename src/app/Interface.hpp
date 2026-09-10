@@ -135,6 +135,10 @@ void gatherBuilderCandidates(const UnitScene& scene,
 /// screen — the key exists to find the ones the player cannot see.
 [[nodiscard]] std::vector<rm::sim::UnitId> idleMobileCombatUnits(const UnitScene& scene);
 
+/// The player army's idle field engineers, for the `I` hotkey: alive, mobile builders with
+/// an empty order queue, in slot order — same whole-map rule as `idleMobileCombatUnits`.
+[[nodiscard]] std::vector<rm::sim::UnitId> idleFieldEngineers(const UnitScene& scene);
+
 /// Retains `current` while it remains a candidate; otherwise chooses the first candidate.
 ///
 /// Selection order is already deterministic, so the fallback is deterministic without sorting

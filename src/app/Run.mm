@@ -1112,15 +1112,17 @@ int runWindowed(const Session& session) {
                         std::fflush(stdout);
                     }
                 }
-            } else if (event.key == rm::Key::C && !event.repeat) {
-                // The idle combat selector, whole-map: C finds the player's combat units
-                // standing idle — the key exists for units the player cannot see, so there
-                // is no on-screen limit here the way there is for a double-click. Shift
-                // adds them to the current selection rather than replacing it, the same
-                // modifier rule the click and the box use.
-                std::vector<rm::sim::UnitId> idle = rm::app::idleMobileCombatUnits(units);
+            } else if ((event.key == rm::Key::I || event.key == rm::Key::C) && !event.repeat) {
+                // The idle selectors, whole-map: I finds the field engineers standing idle,
+                // C the combat units — the keys exist for units the player cannot see, so
+                // there is no on-screen limit here the way there is for a double-click.
+                // Shift adds them to the current selection rather than replacing it, the
+                // same modifier rule the click and the box use.
+                std::vector<rm::sim::UnitId> idle = event.key == rm::Key::I
+                    ? rm::app::idleFieldEngineers(units) : rm::app::idleMobileCombatUnits(units);
+                const char* kind = event.key == rm::Key::I ? "engineer" : "combat unit";
                 if (idle.empty()) {
-                    std::printf("no idle combat units\n");
+                    std::printf("no idle %ss\n", kind);
                 } else if (event.modifiers.shift) {
                     std::size_t added = 0;
                     for (const rm::sim::UnitId id : idle) {
@@ -1129,10 +1131,10 @@ int runWindowed(const Session& session) {
                             ++added;
                         }
                     }
-                    std::printf("idle: %zu combat unit(s) added to the selection\n", added);
+                    std::printf("idle: %zu %s(s) added to the selection\n", added, kind);
                 } else {
                     selected = std::move(idle);
-                    std::printf("idle: selected %zu combat unit(s)\n", selected.size());
+                    std::printf("idle: selected %zu %s(s)\n", selected.size(), kind);
                 }
                 std::fflush(stdout);
             } else if (const std::optional<std::size_t> digit = rm::digitForKey(event.key)) {

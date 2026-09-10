@@ -477,6 +477,14 @@ std::vector<rm::sim::UnitId> idleMobileCombatUnits(const UnitScene& scene) {
     return idleUnitsOfKind(scene, &rm::unitdef::isMobileCombat);
 }
 
+std::vector<rm::sim::UnitId> idleFieldEngineers(const UnitScene& scene) {
+    return idleUnitsOfKind(scene, [](const rm::unitdef::UnitDef& def) {
+        // A field engineer walks to the work: factories build too, but no hotkey needs to
+        // go and FIND one.
+        return def.isBuilder() && def.speedElmosPerSecond > 0.0f;
+    });
+}
+
 rm::sim::UnitId activeBuilderFor(std::span<const rm::sim::UnitId> candidates,
                                  rm::sim::UnitId current) noexcept {
     if (std::ranges::find(candidates, current) != candidates.end()) {

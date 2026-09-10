@@ -2746,5 +2746,14 @@ TEST_CASE("idle selection finds only the player's idle units of the asked kind",
     }
     REQUIRE(job.scene.store.orders()[busyTank.index].active() != nullptr);
     CHECK(rm::app::idleMobileCombatUnits(job.scene) == std::vector<rm::sim::UnitId>{idleTank});
-    (void)idleEngineer;
+
+    // The engineer query, same walk: only the idle engineer answers, and the walking one
+    // joins it when its order completes.
+    CHECK(rm::app::idleFieldEngineers(job.scene) == std::vector<rm::sim::UnitId>{idleEngineer});
+    const int deadline = tick + 6000;
+    while (tick < deadline && job.scene.store.orders()[busyEngineer.index].active() != nullptr) {
+        (void)rm::app::advanceMatch(runner, tick++, 0);
+    }
+    CHECK(rm::app::idleFieldEngineers(job.scene)
+          == std::vector<rm::sim::UnitId>{idleEngineer, busyEngineer});
 }
