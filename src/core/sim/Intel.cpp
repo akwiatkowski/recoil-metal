@@ -736,12 +736,15 @@ std::optional<ContactKind> contactKindForUnit(int alliance, UnitIndex target,
         || (!hiding.cloak && !submerged && intel.sees(alliance, IntelKind::Vision, at.x, at.z))) {
         return ContactKind::Seen;
     }
-    if (!submerged && !hiding.radarStealth
+    // Cloak defeats every non-omni sense: a cloaked unit under a T1 dish is absent,
+    // not a blip, and only omni (the T3 sensor sense) brings it back. RadarStealth
+    // and SonarStealth each defeat their own sense the same way.
+    if (!submerged && !hiding.cloak && !hiding.radarStealth
         && !intel.hiddenBy(army->alliance, HiddenKind::RadarField, at.x, at.z)
         && intel.sees(alliance, IntelKind::Radar, at.x, at.z)) {
         return ContactKind::Radar;
     }
-    if (naval && !hiding.sonarStealth
+    if (naval && !hiding.cloak && !hiding.sonarStealth
         && !intel.hiddenBy(army->alliance, HiddenKind::SonarField, at.x, at.z)
         && intel.sees(alliance, IntelKind::Sonar, at.x, at.z)) {
         return ContactKind::Sonar;

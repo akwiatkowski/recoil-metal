@@ -1005,6 +1005,30 @@ TEST_CASE("a cloaked unit is absent from sight") {
     CHECK(contacts.size() == 1);
 }
 
+TEST_CASE("a cloaked unit is absent from radar too, until omni looks", "[intel]") {
+    // Cloak defeats vision AND radar — only omni (the T3 sensor sense) counters
+    // it. A cloak that still blipped on every T1 dish would be camouflage paint.
+    UnitCatalog catalog;
+    static const rm::unitdef::UnitDef kEye = watcher(0.0f, 400.0f, 0.0f, 0.0f);
+    static const rm::unitdef::UnitDef kCloaked = hider(false, false, true);
+    const rm::UnitTypeIndex eye = catalog.add(&kEye);
+    const rm::UnitTypeIndex cloaked = catalog.add(&kCloaked);
+
+    Intel intel;
+    intel.configure(2, Fx::fromInt(512), Fx::fromInt(512), rm::sim::VisionStyle::ForgedAlliance);
+
+    UnitStore store;
+    (void)place(store, eye, 0, 100.0f, 100.0f);
+    (void)place(store, cloaked, 1, 140.0f, 100.0f);
+
+    const std::vector<Army> armies = twoArmies(false);
+    intel.update(store, catalog, armies, nullptr);
+
+    // Inside a 400-elmo radar and still nothing: not Seen, not a blip.
+    const auto contacts = seenBy(0, store, catalog, armies, intel);
+    CHECK(contacts.size() == 1);
+}
+
 TEST_CASE("omni sees a cloaked unit, and sees it as itself") {
     // THE WHOLE POINT OF OMNI BEING A SENSE RATHER THAN A BIG VISION RADIUS. It defeats every
     // flag, and what it returns is `Seen` — a position AND an identity — not a blip.
