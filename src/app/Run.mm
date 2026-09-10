@@ -1112,6 +1112,29 @@ int runWindowed(const Session& session) {
                         std::fflush(stdout);
                     }
                 }
+            } else if (event.key == rm::Key::C && !event.repeat) {
+                // The idle combat selector, whole-map: C finds the player's combat units
+                // standing idle — the key exists for units the player cannot see, so there
+                // is no on-screen limit here the way there is for a double-click. Shift
+                // adds them to the current selection rather than replacing it, the same
+                // modifier rule the click and the box use.
+                std::vector<rm::sim::UnitId> idle = rm::app::idleMobileCombatUnits(units);
+                if (idle.empty()) {
+                    std::printf("no idle combat units\n");
+                } else if (event.modifiers.shift) {
+                    std::size_t added = 0;
+                    for (const rm::sim::UnitId id : idle) {
+                        if (std::find(selected.begin(), selected.end(), id) == selected.end()) {
+                            selected.push_back(id);
+                            ++added;
+                        }
+                    }
+                    std::printf("idle: %zu combat unit(s) added to the selection\n", added);
+                } else {
+                    selected = std::move(idle);
+                    std::printf("idle: selected %zu combat unit(s)\n", selected.size());
+                }
+                std::fflush(stdout);
             } else if (const std::optional<std::size_t> digit = rm::digitForKey(event.key)) {
                 auto& group = controlGroups[*digit];
                 if (event.modifiers.control) {
@@ -1757,7 +1780,13 @@ int runWindowed(const Session& session) {
                 // the player cannot see. The first click of the pair selected the unit
                 // normally; this refines it, so a double-click on empty ground still means
                 // what a single click there meant.
-                if (pick && mods.clicks >= 2) {
+                //
+                // CONTROL-CLICK widens the same way but always ADDS — BAR's "select all of
+                // this type on screen, on top of what I have". `addToSet` is already true
+                // under control, so the band's additive rule does the appending, and a
+                // re-clicked type is NOT toggled out: a widening click aims at a type, not
+                // at a unit.
+                if (pick && (mods.clicks >= 2 || mods.control)) {
                     const rm::UnitTypeIndex wanted = units.store.typeAt(pick->index);
                     const float w = clickViewport.logicalExtent.width;
                     const float h = clickViewport.logicalExtent.height;

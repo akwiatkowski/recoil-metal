@@ -1,5 +1,6 @@
 #include "core/unit/Role.hpp"
 
+#include <algorithm>
 #include <array>
 #include <utility>
 
@@ -220,6 +221,12 @@ Role roleOf(const UnitDef& def) noexcept {
     }
 
     return Role::Unknown;
+}
+
+bool isMobileCombat(const UnitDef& def) noexcept {
+    return def.speedElmosPerSecond > 0.0f
+        && std::any_of(def.weapons.begin(), def.weapons.end(),
+                       [](const Weapon& weapon) { return weapon.automaticallyFires(); });
 }
 
 } // namespace rm::unitdef

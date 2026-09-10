@@ -342,3 +342,45 @@ TEST_CASE("the whole corpus classifies, and mostly not as unknown") {
     INFO("unknown: " << unknown << " of " << total);
     CHECK(unknown * 10 < total);
 }
+
+// --- The combat predicate, for box-select preference and the idle-combat hotkey ----------
+
+TEST_CASE("a mobile unit with an automatic weapon is mobile combat") {
+    UnitDef tank = withCategories({"DIRECTFIRE", "LAND", "MOBILE", "TECH1"});
+    tank.speedElmosPerSecond = 30.0f;
+    rm::unitdef::Weapon gun;
+    gun.maxRange = rm::sim::fxFromFloat(240.0f);
+    gun.rateOfFire = 1.0f;
+    gun.damage = rm::sim::Mag::fromInt(50);
+    tank.weapons = {gun};
+    CHECK(rm::unitdef::isMobileCombat(tank));
+}
+
+TEST_CASE("unarmed mobility and immobile guns are both not mobile combat") {
+    // The field engineer: moves, builds, holds no weapon — a box that caught it together
+    // with tanks prefers the tanks.
+    UnitDef engineer = withCategories({"CONSTRUCTION", "ENGINEER", "LAND", "MOBILE", "TECH1"});
+    engineer.speedElmosPerSecond = 20.0f;
+    engineer.buildRate = 10.0f;
+    CHECK_FALSE(rm::unitdef::isMobileCombat(engineer));
+
+    // Point defence: armed, and stays exactly where the box found it.
+    UnitDef pd = withCategories({"DEFENSE", "DIRECTFIRE", "STRUCTURE", "TECH1"});
+    rm::unitdef::Weapon gun;
+    gun.maxRange = rm::sim::fxFromFloat(400.0f);
+    gun.rateOfFire = 2.0f;
+    gun.damage = rm::sim::Mag::fromInt(100);
+    pd.weapons = {gun};
+    CHECK_FALSE(rm::unitdef::isMobileCombat(pd));
+
+    // A death weapon alone does not make a combat unit either.
+    UnitDef mine = withCategories({"LAND", "MOBILE", "TECH1"});
+    mine.speedElmosPerSecond = 20.0f;
+    rm::unitdef::Weapon death;
+    death.role = rm::unitdef::WeaponRole::Death;
+    death.maxRange = rm::sim::fxFromFloat(10.0f);
+    death.rateOfFire = 1.0f;
+    death.damage = rm::sim::Mag::fromInt(500);
+    mine.weapons = {death};
+    CHECK_FALSE(rm::unitdef::isMobileCombat(mine));
+}

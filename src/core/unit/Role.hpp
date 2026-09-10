@@ -109,4 +109,13 @@ enum class Role : std::uint8_t {
 /// where it is decided.
 [[nodiscard]] Role roleOf(const UnitDef& def) noexcept;
 
+/// Whether a unit both moves and fights without being told to: a speed and at least one
+/// weapon that acquires targets on its own.
+///
+/// This is the box-select class, not a role: BAR's drag-select prefers mobile combat units
+/// over the engineers and buildings caught in the same box, and the idle-combat hotkey (C)
+/// asks the same question. A point-defence turret is armed but never goes anywhere; a field
+/// engineer goes everywhere but holds no gun — neither answers yes.
+[[nodiscard]] bool isMobileCombat(const UnitDef& def) noexcept;
+
 } // namespace rm::unitdef

@@ -2699,3 +2699,52 @@ TEST_CASE("a retail power generator row packs one footprint apart by default and
         CHECK(rm::sim::fxToFloat(job.scene.building[i].position[2]) == sites[i][1]);
     }
 }
+TEST_CASE("idle selection finds only the player's idle units of the asked kind",
+          "[selection][idle]") {
+    Scenario job;
+    rm::unitdef::UnitDef engineer;
+    engineer.name = "test_engineer";
+    engineer.buildRate = 10.0f;
+    engineer.speedElmosPerSecond = 20.0f;
+    engineer.health = rm::sim::Mag::fromInt(100);
+    rm::unitdef::UnitDef tank;
+    tank.name = "test_tank";
+    tank.speedElmosPerSecond = 30.0f;
+    tank.health = rm::sim::Mag::fromInt(100);
+    rm::unitdef::Weapon gun;
+    gun.maxRange = rm::sim::fxFromFloat(240.0f);
+    gun.rateOfFire = 1.0f;
+    gun.damage = rm::sim::Mag::fromInt(50);
+    tank.weapons = {gun};
+
+    const auto idleEngineer = job.spawn(engineer, 300, 300);
+    const auto busyEngineer = job.spawn(engineer, 320, 300);
+    const auto idleTank = job.spawn(tank, 400, 300);
+    const auto enemyTank = job.spawn(tank, 500, 300, /*army=*/1);
+    (void)enemyTank;
+
+    // One engineer walks, so "idle" is a fact about the order queue and not about the type.
+    auto runner = job.runner();
+    int tick = 0;
+    REQUIRE(rm::app::issueMove(job.scene, busyEngineer, 0, static_cast<rm::TickIndex>(tick),
+                               rm::sim::fxFromFloat(600.0f), rm::sim::fxFromFloat(300.0f)));
+    (void)rm::app::advanceMatch(runner, tick++, 0);
+
+    CHECK(rm::app::idleMobileCombatUnits(job.scene) == std::vector<rm::sim::UnitId>{idleTank});
+
+    // And when the walking engineer... is an engineer, so it never joins THIS set — but the
+    // walking TANK pattern is what matters: a unit with an order is not idle. Give the busy
+    // engineer's walk a combat twin.
+    const auto busyTank = job.spawn(tank, 420, 300);
+    REQUIRE(rm::app::issueMove(job.scene, busyTank, 0, static_cast<rm::TickIndex>(tick),
+                               rm::sim::fxFromFloat(600.0f), rm::sim::fxFromFloat(300.0f)));
+    // The order is SUBMITTED, but the queue's head only goes active on a dispatch beat —
+    // give it a handful of ticks rather than assuming the count.
+    for (int wait = 0; wait < 30
+         && job.scene.store.orders()[busyTank.index].active() == nullptr; ++wait) {
+        (void)rm::app::advanceMatch(runner, tick++, 0);
+    }
+    REQUIRE(job.scene.store.orders()[busyTank.index].active() != nullptr);
+    CHECK(rm::app::idleMobileCombatUnits(job.scene) == std::vector<rm::sim::UnitId>{idleTank});
+    (void)idleEngineer;
+}

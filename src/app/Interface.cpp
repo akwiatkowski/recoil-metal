@@ -450,6 +450,33 @@ void gatherBuilderCandidates(const UnitScene& scene,
     }
 }
 
+namespace {
+
+/// The walk behind the idle hotkeys: the player army's alive units whose order queue is
+/// empty, filtered by the kind of unit the key asks for. Slot order, so two presses of the
+/// key select the same units in the same order.
+[[nodiscard]] std::vector<rm::sim::UnitId>
+idleUnitsOfKind(const UnitScene& scene, bool (*wanted)(const rm::unitdef::UnitDef&)) {
+    std::vector<rm::sim::UnitId> found;
+    for (rm::UnitIndex slot = 0; slot < scene.store.slotCount(); ++slot) {
+        if (!scene.store.slotAlive(slot) || scene.armyOf(slot) != scene.playerArmy
+            || scene.store.orders()[slot].active() != nullptr) {
+            continue;
+        }
+        const rm::unitdef::UnitDef* def = scene.catalog.def(scene.store.typeAt(slot));
+        if (def != nullptr && wanted(*def)) {
+            found.push_back(scene.store.idAt(slot));
+        }
+    }
+    return found;
+}
+
+} // namespace
+
+std::vector<rm::sim::UnitId> idleMobileCombatUnits(const UnitScene& scene) {
+    return idleUnitsOfKind(scene, &rm::unitdef::isMobileCombat);
+}
+
 rm::sim::UnitId activeBuilderFor(std::span<const rm::sim::UnitId> candidates,
                                  rm::sim::UnitId current) noexcept {
     if (std::ranges::find(candidates, current) != candidates.end()) {

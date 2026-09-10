@@ -345,6 +345,17 @@ static std::array<float, 2> viewPointIn(NSView* view, NSPoint windowPoint) {
 }
 
 - (void)rightMouseDown:(NSEvent*)event {
+    // macOS turns a Control-click into a RIGHT-button event before the app sees it
+    // (AppKit's secondary-click emulation). The game binds Control-click itself — add all
+    // of this type to the selection — so the emulation is undone here and the click goes
+    // down the ordinary left path, control flag still in its modifiers. A real right
+    // button reports buttonNumber 1 and keeps its meaning even with Control held; the
+    // emulated one keeps buttonNumber 0.
+    if (event.buttonNumber == 0
+        && (event.modifierFlags & NSEventModifierFlagControl) != 0) {
+        [self mouseDown:event];
+        return;
+    }
     _travelSincePress = 0.0;
     _rightModifiersAtPress = event.modifierFlags;
     _rightReportedOnDown =
@@ -355,6 +366,13 @@ static std::array<float, 2> viewPointIn(NSView* view, NSPoint windowPoint) {
 }
 
 - (void)rightMouseUp:(NSEvent*)event {
+    // The other half of the undo above: an emulated press went down the left path, so its
+    // release must too, or the left button reads as held forever.
+    if (event.buttonNumber == 0
+        && (event.modifierFlags & NSEventModifierFlagControl) != 0) {
+        [self mouseUp:event];
+        return;
+    }
     if (!_rightReportedOnDown && _travelSincePress <= kClickSlopPoints) {
         [self reportClick:event
                     button:rm::MouseButton::Right

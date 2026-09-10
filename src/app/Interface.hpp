@@ -130,6 +130,11 @@ void gatherBuilderCandidates(const UnitScene& scene,
                              std::span<const rm::sim::UnitId> selection,
                              std::vector<rm::sim::UnitId>& out);
 
+/// The player army's idle mobile combat units, for the `C` hotkey: alive units with an empty
+/// order queue, in slot order, filtered by `unitdef::isMobileCombat`. The whole map, not the
+/// screen — the key exists to find the ones the player cannot see.
+[[nodiscard]] std::vector<rm::sim::UnitId> idleMobileCombatUnits(const UnitScene& scene);
+
 /// Retains `current` while it remains a candidate; otherwise chooses the first candidate.
 ///
 /// Selection order is already deterministic, so the fallback is deterministic without sorting
