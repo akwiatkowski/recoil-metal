@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <numbers>
 
 namespace rm::unitdef {
 namespace {
@@ -245,6 +246,40 @@ std::vector<Weapon> weaponsFrom(const lua::Value& weaponArray, bool airborneSour
                         std::string{muzzles->items.front().asString().value_or("")};
                 }
             }
+        }
+        // Script-driven manipulator specs: turret bones and slew rates, the first
+        // rack's recoil/telescope bones and distances, and animation paths. Names for
+        // the app to resolve; distances as authored (mesh units — see the fields).
+        weapon.turretYawBone = std::string{entry.stringAt("TurretBoneYaw").value_or("")};
+        weapon.turretPitchBone = std::string{entry.stringAt("TurretBonePitch").value_or("")};
+        weapon.turretYawSpeedRadPerSecond =
+            std::max(0.0f, numberOr(entry, "TurretYawSpeed", 0.0f))
+            * (std::numbers::pi_v<float> / 180.0f);
+        weapon.turretPitchSpeedRadPerSecond =
+            std::max(0.0f, numberOr(entry, "TurretPitchSpeed", 0.0f))
+            * (std::numbers::pi_v<float> / 180.0f);
+        if (const lua::Value* racks = entry.find("RackBones");
+            racks != nullptr && !racks->items.empty()) {
+            const lua::Value& rack = racks->items.front();
+            weapon.recoilBone = std::string{rack.stringAt("RackBone").value_or("")};
+            weapon.telescopeBone = std::string{rack.stringAt("TelescopeBone").value_or("")};
+            weapon.telescopeDistanceMesh = numberOr(rack, "TelescopeRecoilDistance", 0.0f);
+        }
+        // Weapon-level like `RackBones`' sibling fields (`XSS0302`): the distance the
+        // current rack's bone travels and how fast it returns.
+        weapon.recoilDistanceMesh = numberOr(entry, "RackRecoilDistance", 0.0f);
+        weapon.recoilReturnSpeedMeshPerSecond =
+            std::max(0.0f, numberOr(entry, "RackRecoilReturnSpeed", 0.0f));
+        weapon.animationReload = std::string{entry.stringAt("AnimationReload").value_or("")};
+        weapon.animationCharge = std::string{entry.stringAt("AnimationCharge").value_or("")};
+        weapon.weaponUnpackAnimation =
+            std::string{entry.stringAt("WeaponUnpackAnimation").value_or("")};
+        weapon.weaponUnpackAnimationRate =
+            numberOr(entry, "WeaponUnpackAnimationRate", 1.0f);
+        if (const lua::Value* precedence = entry.find("WeaponUnpackAnimatorPrecedence");
+            precedence != nullptr) {
+            weapon.weaponUnpackAnimatorPrecedence =
+                static_cast<int>(precedence->asNumber().value_or(0.0));
         }
 
         // Beams: `BeamLifetime` above zero is a pulsed beam, `ContinuousBeam` a held one.

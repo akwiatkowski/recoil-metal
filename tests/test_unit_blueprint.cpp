@@ -972,3 +972,51 @@ UnitBlueprint {
     CHECK(def->toggleCaps.empty());
     CHECK(def->orderOverrides.empty());
 }
+
+TEST_CASE("weapon manipulator specs arrive as authored", "[unitbp][manipulators]") {
+    const Blueprint bp{"manipulator_unit.bp", R"(
+        UnitBlueprint {
+            Physics = { MotionType = 'RULEUMT_Land', MaxSpeed = 1 },
+            SizeX = 1, SizeZ = 1,
+            Weapon = {
+                {
+                    WeaponCategory = 'Direct Fire', Damage = 10, MaxRadius = 20, RateOfFire = 1,
+                    TurretBoneYaw = 'Turret', TurretBonePitch = 'Turret_Barrel',
+                    TurretYawSpeed = 100, TurretPitchSpeed = 60,
+                    RackBones = {
+                        {
+                            RackBone = 'Turret_Barrel',
+                            MuzzleBones = { 'Turret_Muzzle' },
+                            TelescopeBone = 'Turret_Barrel_Tele',
+                            TelescopeRecoilDistance = -6,
+                        },
+                    },
+                    RackRecoilDistance = -2,
+                    RackRecoilReturnSpeed = 10,
+                    AnimationReload = '/units/x/x_areload.sca',
+                    WeaponUnpackAnimation = '/units/x/x_Aopen.sca',
+                    WeaponUnpackAnimationRate = 0.4,
+                    WeaponUnpackAnimatorPrecedence = 3,
+                },
+            },
+        }
+    )"};
+    const auto def = rm::unitbp::loadFile(bp.path());
+    REQUIRE(def.has_value());
+    REQUIRE(def->weapons.size() == 1);
+    const rm::unitdef::Weapon& gun = def->weapons[0];
+    CHECK(gun.turretYawBone == "Turret");
+    CHECK(gun.turretPitchBone == "Turret_Barrel");
+    CHECK(gun.turretYawSpeedRadPerSecond == Catch::Approx(100.0f * std::numbers::pi_v<float> / 180.0f));
+    CHECK(gun.turretPitchSpeedRadPerSecond == Catch::Approx(60.0f * std::numbers::pi_v<float> / 180.0f));
+    CHECK(gun.recoilBone == "Turret_Barrel");
+    CHECK(gun.recoilDistanceMesh == Catch::Approx(-2.0f));
+    CHECK(gun.recoilReturnSpeedMeshPerSecond == Catch::Approx(10.0f));
+    CHECK(gun.telescopeBone == "Turret_Barrel_Tele");
+    CHECK(gun.telescopeDistanceMesh == Catch::Approx(-6.0f));
+    CHECK(gun.animationReload == "/units/x/x_areload.sca");
+    CHECK(gun.weaponUnpackAnimation == "/units/x/x_Aopen.sca");
+    CHECK(gun.weaponUnpackAnimationRate == Catch::Approx(0.4f));
+    CHECK(gun.weaponUnpackAnimatorPrecedence == 3);
+    CHECK(gun.animationCharge.empty());
+}

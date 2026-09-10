@@ -26,6 +26,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <map>
+#include <numbers>
 #include <string>
 #include <vector>
 
@@ -295,6 +296,57 @@ TEST_CASE("a UEF medium tank reads as the vehicle it is", "[corpus]") {
     CHECK(std::filesystem::exists(mesh));
 }
 
+TEST_CASE("retail weapons carry their manipulator specs", "[corpus][manipulators]") {
+    // The data `defaultweapons.lua` rack sequences consume: turret bones and slew
+    // rates, first-rack recoil/telescope bones and mesh-unit distances, animation
+    // paths. Nothing poses bones yet; this pins the specs for the effect host.
+    if (!std::filesystem::exists(unitRoot() / "UEL0201/UEL0201_unit.bp")) {
+        SKIP("no retail unit corpus at " + unitRoot().string());
+    }
+    const auto findWeapon = [](const rm::unitdef::UnitDef& def, std::string_view label) {
+        return std::ranges::find(def.weapons, label, &rm::unitdef::Weapon::label);
+    };
+    {
+        const auto def = rm::unitbp::loadFile(unitRoot() / "UEL0201/UEL0201_unit.bp");
+        REQUIRE(def.has_value());
+        const auto gun = findWeapon(*def, "MainGun");
+        REQUIRE(gun != def->weapons.end());
+        CHECK(gun->turretYawBone == "Turret");
+        CHECK(gun->turretPitchBone == "Turret_Barrel");
+        CHECK(gun->turretYawSpeedRadPerSecond
+              == Catch::Approx(100.0f * std::numbers::pi_v<float> / 180.0f));
+        CHECK(gun->turretPitchSpeedRadPerSecond
+              == Catch::Approx(60.0f * std::numbers::pi_v<float> / 180.0f));
+        CHECK(gun->recoilBone == "Turret_Barrel");
+        CHECK(gun->recoilDistanceMesh == Catch::Approx(-2.0f));
+        CHECK(gun->telescopeBone.empty());
+    }
+    {
+        const auto def = rm::unitbp::loadFile(unitRoot() / "XSL0111/XSL0111_unit.bp");
+        REQUIRE(def.has_value());
+        const auto rack = findWeapon(*def, "MissileRack");
+        REQUIRE(rack != def->weapons.end());
+        CHECK(rack->animationReload == "/units/xsl0111/xsl0111_areload.sca");
+    }
+    {
+        const auto def = rm::unitbp::loadFile(unitRoot() / "UAB4201/UAB4201_unit.bp");
+        REQUIRE(def.has_value());
+        const auto defence = findWeapon(*def, "AntiMissile");
+        REQUIRE(defence != def->weapons.end());
+        CHECK(defence->weaponUnpackAnimation == "/units/uab4201/uab4201_Aopen.sca");
+        CHECK(defence->weaponUnpackAnimationRate == Catch::Approx(10.0f));
+    }
+    {
+        const auto def = rm::unitbp::loadFile(unitRoot() / "UEB2302/UEB2302_unit.bp");
+        REQUIRE(def.has_value());
+        const auto gun = findWeapon(*def, "MainGun");
+        REQUIRE(gun != def->weapons.end());
+        CHECK(gun->recoilBone == "Turret_Barrel_B01");
+        CHECK(gun->recoilDistanceMesh == Catch::Approx(-15.0f));
+        CHECK(gun->telescopeBone == "Turret_Barrel_B02");
+        CHECK(gun->telescopeDistanceMesh == Catch::Approx(-20.0f));
+    }
+}
 TEST_CASE("retail T1 air factories expose scouts, interceptors and bombers", "[corpus]") {
     const auto read = [](std::string_view id) {
         const std::string name{id};

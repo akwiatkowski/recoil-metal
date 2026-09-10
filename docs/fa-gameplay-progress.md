@@ -182,7 +182,7 @@ excluded from the headline.
 | [`FA-TERRAIN`](#fa-terrain---mutable-terrain-and-craters) | Mutable terrain and craters | `WP-37` | 0% | 15% | 45% | Crater path traced: retail scorch is visual-only (splat/decal scale split, no height/type/pathing effect); next is non-lethal impact scorch records. |
 | [`FA-AI`](#fa-ai---retail-ai-and-native-manager-boundary) | Retail AI and native manager boundary | `WP-38` | 50% | 10% | 30% | Must-scout requests, unknown-threat queues and continuous air flybys are in with headless cover; next is High/LowPriority interest lists. Current easy, turtle and tech duels are decisive. |
 | [`FA-UI`](#fa-ui---player-interface-and-advanced-controls) | Player interface and advanced controls | `WP-39`-`40` | 80% | 5% | 15% | ToggleCaps + OrderOverrides drive the rack page (retail slots, unanimous merge, headed toggle scenario); toggle sim behaviors stay open. |
-| [`FA-PRESENT`](#fa-present---animation-effects-and-audio) | Animation, effects, audio | `WP-41`-`42` | 75% | 5% | 45% | Script-driven manipulators on the authored weapon effects; then dynamic music. |
+| [`FA-PRESENT`](#fa-present---animation-effects-and-audio) | Animation, effects, audio | `WP-41`-`42` | 75% | 10% | 45% | Manipulator specs parse with corpus cover (turrets, recoil, anims); posing deferred, then dynamic music. |
 | [`FA-PERSIST`](#fa-persist---replay-hashing-and-saveresume) | Replay, hashing, save/resume | `WP-43`-`44` | 70% | 20% | 90% | General app saves remain absent; the shared golden rebaseline is complete (`afe2867`), separate from save/resume scenario coverage. |
 
 ## Starting Work
@@ -745,16 +745,24 @@ per-category instance limits, and refused beyond the median world-scale silence 
 as the `LodCutoff`; volume bytes measured flat across the weapon banks, so takes play at
 the mixer's gain.
 
-**Largest gap:** script-driven manipulators do not run; weapon cues ignore the volume/filter
-range bytes, RPC curves beyond the cutoff median, and dynamic music. Mesh blueprints' LOD
-tables are honoured (100 retail projectile meshes load); only blueprints whose mesh
-blueprint is absent from the archives keep their strips. The gallery verifies this renderer,
-not pixel parity with retail.
+**Current slice:** weapon manipulator specs parse for the deferred effect host —
+turret yaw/pitch bones with slew rates, first-rack recoil/telescope bones with mesh-unit
+distances, reload/charge/unpack animation paths with unpack rate and precedence
+(`defaultweapons.lua` rack sequences; recoil law recovered: kick to `RackRecoilDistance`
+at speed -1, return after one tick at `RackRecoilReturnSpeed`). Batch poses bake at upload
+with no per-frame CPU path, so nothing poses bones yet. Corpus-pinned (Striker turret and
+recoil, XSL0111 reload anim, UAB4201 unpack, UEB2302 telescope).
+
+**Largest gap:** posing the specs (turret aim, recoil slides, charge/unpack anims) and the
+effect host; weapon cues ignore the volume/filter range bytes, RPC curves beyond the
+cutoff median, and dynamic music. Mesh blueprints' LOD tables are honoured (100 retail
+projectile meshes load); only blueprints whose mesh blueprint is absent from the archives
+keep their strips. The gallery verifies this renderer, not pixel parity with retail.
 
 ```text
-/goal Advance FA-PRESENT with script-driven manipulators on the weapon effects above, then
-dynamic music; leave broad effect hosting as an explicit later slice. Write tests on the
-retail corpus, run make test, update WP-42 and FA-PRESENT.
+/goal Advance FA-PRESENT by posing parsed manipulator specs (recoil slides first: 206
+weapons author them), then dynamic music; leave broad effect hosting as an explicit later
+slice. Write tests on the retail corpus, run make test, update WP-41 and FA-PRESENT.
 ```
 
 ### FA-PERSIST - Replay, Hashing, And Save/Resume

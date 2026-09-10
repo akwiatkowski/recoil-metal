@@ -287,6 +287,27 @@ struct Weapon {
     /// Presentation-only rest bone position in elmos; the simulation still uses muzzleHeight.
     std::optional<std::array<float,3>> visualMuzzleOffset;
 
+    /// Script-driven manipulator specs (`mohodata/lua/sim/defaultweapons.lua` rack
+    /// sequences). Parsed for the deferred effect host — nothing poses bones yet, since
+    /// batch poses bake at upload. Bone NAMES, resolved app-side like `muzzleBone`;
+    /// distances in MESH units like the slider goals that consume them (bone-local
+    /// coordinates, × mesh scale at resolve — a Striker barrel sliding -2 mesh units
+    /// is about an elmo, while -2 elmos would throw it across its own hull).
+    std::string turretYawBone;    ///< `TurretBoneYaw`
+    std::string turretPitchBone;  ///< `TurretBonePitch`
+    float turretYawSpeedRadPerSecond = 0.0f;    ///< authored degrees per second
+    float turretPitchSpeedRadPerSecond = 0.0f;  ///< authored degrees per second
+    std::string recoilBone;       ///< first rack's `RackBone`
+    float recoilDistanceMesh = 0.0f;  ///< as-authored `RackRecoilDistance` (negative = backward); 0 = no recoil
+    float recoilReturnSpeedMeshPerSecond = 0.0f;  ///< 0 = unauthored (only 6 weapons state one)
+    std::string telescopeBone;    ///< first rack's `TelescopeBone` (3 weapons)
+    float telescopeDistanceMesh = 0.0f;
+    std::string animationReload;  ///< `AnimationReload` .sca path (2 weapons)
+    std::string animationCharge;  ///< `AnimationCharge` .sca path (none shipped; the field exists)
+    std::string weaponUnpackAnimation;  ///< 17 weapons
+    float weaponUnpackAnimationRate = 1.0f;  ///< Lua's `or 1` default
+    int weaponUnpackAnimatorPrecedence = 0;
+
     /// A BEAM: damage arrives the instant the weapon fires, nothing flies. From
     /// `BeamLifetime` (a pulse that exists for a fraction of a second) or `ContinuousBeam`
     /// — either way the corpus's beam weapons never spawn a projectile, and modelling them
