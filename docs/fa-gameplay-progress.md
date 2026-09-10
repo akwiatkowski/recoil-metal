@@ -179,7 +179,7 @@ excluded from the headline.
 | [`FA-MISSILES`](#fa-missiles---silos-missiles-and-interception) | Silos, missiles, interception | `WP-29` | 60% | 40% | 95% | Interceptor launches lead crossing missiles (two-iteration pursuit, max-speed cruise for homing) with headless cover; per-missile shooter caps deliberately absent (no retail source, launchers overkill). Next is the missile build queue and UI. |
 | [`FA-DAMAGE`](#fa-damage---damage-death-and-shields) | Damage, death, shields | `WP-30`-`32` | 82% | 55% | 85% | PersonalBubble shelters owner-only (specified-from-name, corpus-pinned absent); TransportShield parses as ordinary pending cargo source. Next is transport cargo coverage. |
 | [`FA-PROGRESS`](#fa-progress---enhancements-veterancy-and-special-units) | Enhancements, veterancy, special units | `WP-34`-`36` | 45% | 30% | 40% | Enhancement removal uninstalls with health fallback (tested); next is the Lua-side contract (SetUpgradedTo, callbacks). |
-| [`FA-TERRAIN`](#fa-terrain---mutable-terrain-and-craters) | Mutable terrain and craters | `WP-37` | 0% | 0% | 25% | Trace one crater from damage through terrain, pathing, and rendering invalidation. |
+| [`FA-TERRAIN`](#fa-terrain---mutable-terrain-and-craters) | Mutable terrain and craters | `WP-37` | 0% | 15% | 45% | Crater path traced: retail scorch is visual-only (splat/decal scale split, no height/type/pathing effect); next is non-lethal impact scorch records. |
 | [`FA-AI`](#fa-ai---retail-ai-and-native-manager-boundary) | Retail AI and native manager boundary | `WP-38` | 50% | 10% | 30% | Must-scout requests, unknown-threat queues and continuous air flybys are in with headless cover; next is High/LowPriority interest lists. Current easy, turtle and tech duels are decisive. |
 | [`FA-UI`](#fa-ui---player-interface-and-advanced-controls) | Player interface and advanced controls | `WP-39`-`40` | 80% | 5% | 15% | ToggleCaps + OrderOverrides drive the rack page (retail slots, unanimous merge, headed toggle scenario); toggle sim behaviors stay open. |
 | [`FA-PRESENT`](#fa-present---animation-effects-and-audio) | Animation, effects, audio | `WP-41`-`42` | 75% | 5% | 45% | Script-driven manipulators on the authored weapon effects; then dynamic music. |
@@ -551,14 +551,29 @@ interaction, evidenced against EnhanceTask.lua. Keep native task machinery untou
 
 ### FA-TERRAIN - Mutable Terrain And Craters
 
-**Largest gap:** mutable map entry points are anchored, but the crater path and all implementation
-behavior are absent.
+**Current slice (traced 2026-09-10):** retail craters are visual-only, and the trace
+proves it end to end. `lua/defaultexplosions.lua` scorches every land explosion: scale
+above 1.2 → `CreateScorchMarkDecal` (scale × 3, `scorch_*_albedo` decal textures), else
+`CreateScorchMarkSplat` (scale × 4, `scorch_001`–`010_albedo`), random angle and texture
+off sim RNG, LOD 200–350, lifetime 300–600. Both fan into the engine's moho `<global>`
+`CreateSplat` (`0x00675720`) and `CreateDecal` (`0x006750a0`); non-lethal terrain and prop
+hits scorch too (`aeonprojectiles.lua` at scale 3, `proptree.lua` falling trees at 0.5).
+Counterevidence against height/type mutation on damage: the only `FlattenMapRect` caller
+in shipped Lua is `defaultunits.lua` `CreateTarmac` (construction), and its
+`SetTerrainTypeRect` is commented out in retail ("disabling this for now"). So damage
+touches neither height nor terrain type, pathing needs no invalidation, and the render
+delta is decal-buffer only. Our side already matches the structure: deaths leave
+`FeatureStore` scorch records projected as permanent discs (`appendWreckMark`, 2.2× radius).
+
+**Largest gap:** non-lethal impact scorch (retail scorches terrain hits that kill nothing),
+the splat/decal scale split with texture variety and lifetimes, and whether retail wrecks
+obstruct movement (features are non-obstacles here). Supported next task: emit scorch
+records for projectile ground impacts, reusing the death path.
 
 ```text
-/goal Advance FA-TERRAIN by tracing one retail crater/deformation path from damage through
-FlattenMapRect or SetTerrainTypeRect, heightfield mutation, path invalidation, and render
-invalidation. Record exact ART-E001 callers/downstream effects and counterevidence, update WP-37
-and FA-TERRAIN, and create only the implementation task the trace supports.
+/goal Advance FA-TERRAIN with scorch records for projectile ground impacts (non-lethal),
+keeping height and pathing untouched per the trace. Add a headless impact-marks test and a
+headed capture, then update FA-TERRAIN.
 ```
 
 ### FA-AI - Retail AI And Native Manager Boundary
