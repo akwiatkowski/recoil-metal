@@ -421,7 +421,15 @@ fragment float4 unitFragment(UnitOut in [[stage_in]],
         const float3 phongMultiplicative = 2.0 * kEnvironment * tex2.r;
         const float emissive = kSupComGlowMultiplier * tex2.b;
 
-        return float4(albedo * (emissive + light + phongMultiplicative) + phongAdditive, 1.0);
+        float3 blast = float3(0.0);
+        for (uint blastB = 0; blastB < 3; ++blastB) {
+            float blastDist = length(u.blastPos[blastB].xyz - in.world);
+            float blastAtten =
+                saturate(1.0 - blastDist / max(u.blastPos[blastB].w, 0.001));
+            blast += u.blastColour[blastB].rgb * u.blastColour[blastB].a
+                * blastAtten * blastAtten;
+        }
+        return float4(albedo * (emissive + light + phongMultiplicative) + phongAdditive + blast, 1.0);
     }
 
     // Recoil: tex1.a is the mask; tex2.r is self-illumination and tex2.g is
@@ -438,15 +446,17 @@ fragment float4 unitFragment(UnitOut in [[stage_in]],
                                               + 0.3 * pow(HdotN, 2.0 * 3.0),
                                           1.0);
     specular *= shininess * 4.0;
-
+    float3 blast = float3(0.0);
+    for (uint blastB = 0; blastB < 3; ++blastB) {
+        float blastDist = length(u.blastPos[blastB].xyz - in.world);
+        float blastAtten =
+            saturate(1.0 - blastDist / max(u.blastPos[blastB].w, 0.001));
+        blast += u.blastColour[blastB].rgb * u.blastColour[blastB].a
+            * blastAtten * blastAtten;
+    }
     light = mix(light, kEnvironment, shininess);  // reflection
     light += float3(selfIllum);                   // self-illum
-
-    // tex2.a is a one-bit mask the engine only *discards* on in its alpha pass,
-    // where alphaCtrl is set (ModelFragProgGL4.glsl:62-70,97). The default
-    // control always passes, so an opaque pass — which is all we have — must not
-    // discard, or every unit with a masked tex2 loses geometry it should keep.
-    return float4(albedo * light + specular, 1.0);
+    return float4(albedo * light + specular + blast, 1.0);
 }
 )MSL";
 

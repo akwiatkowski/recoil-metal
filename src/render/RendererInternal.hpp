@@ -125,6 +125,11 @@ struct TerrainUniforms {
     float hasWaterWaves;
     float hasUnitNormals;
     float buildGridStep;  ///< zero when disarmed; otherwise the placement grid pitch in elmos
+
+    /// Explosion lights, mirroring the MSL tail exactly: xyz position, w reach;
+    /// rgb colour, a intensity. Zero intensity is off.
+    simd_float4 blastPos[rm::kBlastLightCount];
+    simd_float4 blastColour[rm::kBlastLightCount];
 };
 
 static_assert(offsetof(TerrainUniforms, buildGridStep) == 536);
@@ -158,8 +163,11 @@ static_assert(offsetof(TerrainUniforms, fogWidthElmos) == 488, "and stays in the
 static_assert(offsetof(TerrainUniforms, fogDepthElmos) == 492, "filling it exactly");
 static_assert(offsetof(TerrainUniforms, waveRepeats) == 496,
               "the wave block starts on the fresh 16-byte slot after the fog block");
-static_assert(sizeof(TerrainUniforms) == 544,
-              "the wave block and its flags occupy three 16-byte slots");
+static_assert(sizeof(TerrainUniforms) == 640,
+              "the wave block and its flags occupy three 16-byte slots, then six "
+              "blast float4s take six more");
+static_assert(offsetof(TerrainUniforms, blastPos) == 544,
+              "blast lights start on the fresh slot after buildGridStep");
 static_assert(offsetof(TerrainUniforms, hasUnitNormals) == 532,
               "unit normal availability packs beside the water-wave flag");
 static_assert(offsetof(TerrainUniforms, fogColour) == 288, "the map block follows the matrices");

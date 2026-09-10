@@ -71,6 +71,27 @@ inline constexpr std::size_t kMaxParticles = 4096;
 /// depends on its neighbours and the alternative is a shuffle for no reason.
 void advanceParticles(std::vector<Particle>& particles, float seconds);
 
+/// One explosion's light, as the shaders take it: where, how far it reaches, what
+/// colour, and how strong right now. Intensity zero means no light — the slot is off.
+struct BlastLight {
+    std::array<float, 3> position{};
+    float radius = 0.0f;
+    std::array<float, 3> colour{};
+    float intensity = 0.0f;
+};
+
+/// How many simultaneous explosion lights the shaders carry. Three: a battle is
+/// rarely decided by more fireballs than that at once, and every light is
+/// per-pixel arithmetic on every unit and terrain fragment.
+inline constexpr std::size_t kBlastLightCount = 3;
+
+/// The brightest additive flashes, as lights. Dust and smoke (blended, alpha > 0)
+/// never qualify — only things that ADD light can cast it. Positions are current
+/// (origin + velocity × age, the same arithmetic the vertex shader does);
+/// intensity fades with age so a dying flash dims instead of popping out.
+[[nodiscard]] std::array<BlastLight, kBlastLightCount>
+selectBlastLights(std::span<const Particle> particles) noexcept;
+
 /// How fast a unit must be CAPABLE of moving before it kicks up dust, in elmos
 /// per second.
 ///

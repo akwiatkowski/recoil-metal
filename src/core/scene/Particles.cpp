@@ -60,6 +60,59 @@ void advanceParticles(std::vector<Particle>& particles, float seconds) {
     });
 }
 
+std::array<BlastLight, kBlastLightCount>
+selectBlastLights(std::span<const Particle> particles) noexcept {
+    // Score is size × brightness: a vast dim flash lights more ground than a tiny
+    // brilliant one, and a sparkler lights nothing either way. Blended particles
+    // (alpha > 0) never qualify no matter their size — smoke obscures light.
+    struct Candidate {
+        float score = 0.0f;
+        std::size_t index = 0;
+    };
+    std::array<Candidate, kBlastLightCount> best{};
+    for (std::size_t i = 0; i < particles.size(); ++i) {
+        const Particle& particle = particles[i];
+        if (particle.colour[3] != 0.0f || particle.lifetime <= 0.0f) {
+            continue;
+        }
+        const float brightness =
+            std::max({particle.colour[0], particle.colour[1], particle.colour[2]});
+        const float score = particle.size * brightness;
+        // Insertion into a sorted top three, shifting down: replacing in place
+        // would drop whatever sat below the insertion point.
+        for (std::size_t s = 0; s < kBlastLightCount; ++s) {
+            if (score > best[s].score) {
+                for (std::size_t t = kBlastLightCount - 1; t > s; --t) {
+                    best[t] = best[t - 1];
+                }
+                best[s] = Candidate{.score = score, .index = i};
+                break;
+            }
+        }
+    }
+    std::array<BlastLight, kBlastLightCount> lights{};
+    for (std::size_t s = 0; s < kBlastLightCount; ++s) {
+        if (best[s].score <= 0.0f) {
+            continue;
+        }
+        const Particle& particle = particles[best[s].index];
+        const float fade = particle.lifetime > particle.age
+            ? 1.0f - particle.age / particle.lifetime
+            : 0.0f;
+        lights[s] = BlastLight{
+            .position = {particle.origin[0] + particle.velocity[0] * particle.age,
+                         particle.origin[1] + particle.velocity[1] * particle.age,
+                         particle.origin[2] + particle.velocity[2] * particle.age},
+            .radius = particle.size * 4.0f,
+            .colour = {particle.colour[0], particle.colour[1], particle.colour[2]},
+            .intensity = std::max({particle.colour[0], particle.colour[1],
+                                   particle.colour[2]})
+                * fade,
+        };
+    }
+    return lights;
+}
+
 void emitDust(std::vector<Particle>& particles, std::span<const DustEmitter> emitters,
               const HeightField& field, float seconds, float& debt, std::uint32_t& seed) {
     if (seconds <= 0.0f || emitters.empty()) {

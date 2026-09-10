@@ -81,6 +81,10 @@ void Renderer::setWeaponMaterials(std::span<const WeaponMaterial> materials) {
 }
 
 void Renderer::setParticles(std::span<const Particle> particles) noexcept {
+    // Explosion lights follow the uploaded span, not the sorted buffer: the sort
+    // below reorders for blending, while lights only need the brightest flashes.
+    // An empty span switches every light off rather than freezing the last flash.
+    blastLights_ = selectBlastLights(particles);
     particleCount_ = 0;
     if (particleBuffer_ == nullptr || particles.empty()) {
         return;

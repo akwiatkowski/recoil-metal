@@ -277,3 +277,53 @@ TEST_CASE("a unit under way but too slow to throw grit raises nothing either") {
 
     CHECK(particles.empty());
 }
+
+namespace {
+
+[[nodiscard]] rm::Particle flashAt(std::array<float, 3> origin, float size, float brightness,
+                                   float age = 0.0f) {
+    return rm::Particle{.origin = origin,
+                        .age = age,
+                        .velocity = {2.0f, 0.0f, 0.0f},
+                        .lifetime = 1.0f,
+                        .colour = {brightness, brightness * 0.8f, brightness * 0.5f, 0.0f},
+                        .size = size};
+}
+
+} // namespace
+
+TEST_CASE("the brightest additive flashes become lights, dust never does", "[blast]") {
+    const std::vector<rm::Particle> particles{
+        flashAt({0.0f, 0.0f, 0.0f}, 30.0f, 1.0f),
+        flashAt({100.0f, 0.0f, 0.0f}, 20.0f, 1.0f),
+        flashAt({200.0f, 0.0f, 0.0f}, 10.0f, 1.0f),
+        flashAt({300.0f, 0.0f, 0.0f}, 5.0f, 1.0f),
+        // Blended smoke, however large: it obscures light, it does not cast it.
+        rm::Particle{.origin = {400.0f, 0.0f, 0.0f},
+                     .lifetime = 2.0f,
+                     .colour = {0.2f, 0.2f, 0.2f, 0.5f},
+                     .size = 100.0f},
+    };
+    const auto lights = rm::selectBlastLights(particles);
+    // Three slots: the three largest flashes, brightest first.
+    CHECK(lights[0].intensity > 0.0f);
+    CHECK(lights[0].position[0] == Approx(0.0f));
+    CHECK(lights[1].position[0] == Approx(100.0f));
+    CHECK(lights[2].position[0] == Approx(200.0f));
+    // Reach follows size; colour follows the flash.
+    CHECK(lights[0].radius > lights[2].radius);
+    CHECK(lights[0].colour[0] == Approx(1.0f));
+}
+
+TEST_CASE("lights ride their flash and fade as it dies", "[blast]") {
+    const std::vector<rm::Particle> particles{
+        flashAt({10.0f, 0.0f, 0.0f}, 20.0f, 1.0f, /*age=*/0.5f),
+    };
+    const auto lights = rm::selectBlastLights(particles);
+    // Same arithmetic the vertex shader does: origin + velocity × age.
+    CHECK(lights[0].position[0] == Approx(11.0f));
+    // Half the life gone: half the intensity.
+    CHECK(lights[0].intensity == Approx(0.5f));
+    CHECK(lights[1].intensity == 0.0f);
+    CHECK(lights[2].intensity == 0.0f);
+}

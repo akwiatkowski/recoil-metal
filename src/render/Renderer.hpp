@@ -790,6 +790,10 @@ private:
     MTL::DepthStencilState* particleDepthState_ = nullptr;  // owned
     MTL::Buffer* particleBuffer_ = nullptr;                 // owned
     std::size_t particleCount_ = 0;
+    /// The brightest live flashes as point lights, refreshed from the particle
+    /// span in setParticles and read when uniforms are filled. Zero intensity
+    /// is off, so a shot-free frame lights nothing.
+    std::array<BlastLight, kBlastLightCount> blastLights_{};
 
     /// Recomputes the light's orthographic frame around the loaded terrain.
     void updateLightMatrix() noexcept;

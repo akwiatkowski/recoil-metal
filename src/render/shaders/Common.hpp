@@ -70,6 +70,11 @@ struct Uniforms {
     float hasWaterWaves;
     float hasUnitNormals;
     float buildGridStep;
+    // Explosion lights: the brightest live flashes, as point lights. xyz the
+    // current position, w the reach in elmos; rgb the flash colour, a intensity.
+    // Appended at the end like every field here — the C++ twin must match exactly.
+    float4 blastPos[3];
+    float4 blastColour[3];
 };
 
 // World-anchored placement grid. Derivatives keep lines a pixel wide and fade
@@ -83,6 +88,11 @@ static float3 buildGridColour(float3 colour, float2 worldXZ, float step) {
     const float fade = 1.0 - smoothstep(0.15, 0.5, max(pixel.x, pixel.y));
     return mix(colour, float3(0.55, 0.8, 0.85), line * fade * 0.22);
 }
+
+// Explosion point lights: the brightest live flashes. Inlined at each use site
+// (unit + terrain fragments) rather than a helper: MSL rejects
+// address-space-qualified parameters on functions, so a helper cannot take the
+// uniforms struct. Inverse-linear falloff, added on top of the map light.
 
 // The sky, as Supreme Commander's own `effects/sky.fx` builds it: a lerp
 // between a horizon colour and a zenith colour, driven by elevation
@@ -467,9 +477,16 @@ fragment float4 terrainFragment(VertexOut in [[stage_in]],
     }
 
     colour = buildGridColour(colour, in.world.xz, u.buildGridStep);
+    // Explosions light the ground too: the same fire the hulls answer.
+    for (uint blastB = 0; blastB < 3; ++blastB) {
+        float blastDist = length(u.blastPos[blastB].xyz - in.world);
+        float blastAtten =
+            saturate(1.0 - blastDist / max(u.blastPos[blastB].w, 0.001));
+        colour += u.blastColour[blastB].rgb * u.blastColour[blastB].a
+            * blastAtten * blastAtten;
+    }
     return float4(colour, 1.0);
 }
-
 )MSL";
 
 } // namespace rm::shaders

@@ -1002,6 +1002,18 @@ void Renderer::encodeScene(MTL::CommandBuffer* commandBuffer, MTL::RenderPassDes
         // Same eight-elmo pitch as sim::snapToBuildGrid.
         .buildGridStep = buildGrid_ && override == nullptr ? 8.0f : 0.0f,
     };
+    // Explosion lights, refreshed per frame from the uploaded particles. Zero
+    // intensity is off, so every pass shares the same fill and a quiet frame
+    // lights nothing anywhere.
+    for (std::size_t b = 0; b < rm::kBlastLightCount; ++b) {
+        const rm::BlastLight& blast = blastLights_[b];
+        uniforms.blastPos[b] =
+            simd_make_float4(blast.position[0], blast.position[1], blast.position[2],
+                             blast.radius);
+        uniforms.blastColour[b] =
+            simd_make_float4(blast.colour[0], blast.colour[1], blast.colour[2],
+                             blast.intensity);
+    }
 
     // --- Sky ---------------------------------------------------------------
     // First, at the far plane, writing no depth. Everything else then draws
