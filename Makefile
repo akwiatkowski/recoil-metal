@@ -93,7 +93,8 @@ FA_FLAGS  = --gamedata "$(FA_ROOT)/gamedata"
 .DEFAULT_GOAL := help
 .PHONY: help build configure test verify golden play play-from watch run run-fa run-bar \
         skirmish battle match shot-fa shot-bar bench bench-fa bench-gl clean check-fa check-bar \
-        check-ai ai ai-play ai-report ai-sanity shot-ui shot-engineer demo
+        check-ai ai ai-play ai-report ai-sanity ai-matrix ai-matrix-report shot-ui \
+        shot-engineer demo
 
 help:
 	@echo 'recoil-metal — make targets'
@@ -111,6 +112,8 @@ help:
 	@echo '  watch           every side scripted, nothing selectable (and no fog)'
 	@echo '  ai-play         bots vs bots, with the FAF AI sandbox report on the console'
 	@echo '  ai-sanity       headless skirmish + the AI sanity report: built what, called what'
+	@echo '  ai-matrix       offline personality x faction 1v1s, live scoreboard + result cards'
+	@echo '  ai-matrix-report  re-render a finished job: MATRIX_REPORT=<job dir name>'
 	@echo '  demo            a live 4v4 of FAF tech brains, random factions, watched at real speed'
 	@echo
 	@echo '  run             procedural terrain, no content needed'
@@ -372,14 +375,31 @@ ai-sanity: build check-fa check-ai
 #
 # NOT a test — a manual harness for long-term comparison. Six runs by default (mirrors
 # plus one game per cross pair of easy/turtle/tech, all UEF-vs-UEF on SCMP_009), each up
-# to an hour of sim at headless speed with progress every 15 wall seconds. Knobs pass
-# through: `make ai-matrix PERSONALITIES=easy,tech FACTIONS=uef,cybran SECONDS=1800`.
+# to an hour of sim at headless speed. The console keeps a live scoreboard — sim clock,
+# both armies' standing units and income, the front line, the latest attack wave — and
+# closes with one card per run and a results grid; the binary's full narration goes to
+# each run's `stdout.log` instead of the terminal. Knobs pass through:
+# `make ai-matrix PERSONALITIES=easy,tech MATRIX_FACTIONS=uef,cybran MATRIX_SECONDS=1800`.
 PERSONALITIES ?= easy,turtle,tech
 MATRIX_FACTIONS ?= uef,uef
 MATRIX_SECONDS ?= 3600
+# Wall seconds between progress reports. Headless play runs roughly a hundred times real
+# time, so five wall seconds is about eight sim minutes a report.
+MATRIX_INTERVAL ?= 5
+# Name the job dir under build/ai-matrix; empty takes `matrix-<timestamp>`.
+MATRIX_NAME ?=
+MATRIX_ARGS = --personalities $(PERSONALITIES) --factions $(MATRIX_FACTIONS)
 ai-matrix: build check-fa check-ai
-	mise exec -- python3 tools/ai_matrix.py --personalities $(PERSONALITIES) \
-	  --factions $(MATRIX_FACTIONS) --seconds $(MATRIX_SECONDS)
+	mise exec -- python3 tools/ai_matrix.py $(MATRIX_ARGS) --seconds $(MATRIX_SECONDS) \
+	  --interval $(MATRIX_INTERVAL) $(if $(MATRIX_NAME),--name $(MATRIX_NAME),) $(MATRIX_EXTRA)
+
+# The cards and the grid of a job that already ran — no build, no map, no play. Pass the
+# job dir's name: `make ai-matrix-report MATRIX_REPORT=matrix-20260910-142724`. The
+# personality list must match the one that job played, since it names the grid's axes.
+ai-matrix-report:
+	@test -n "$(MATRIX_REPORT)" || { echo 'Pass MATRIX_REPORT=<job dir under build/ai-matrix>.'; \
+	  echo 'Jobs present:'; ls -1 $(BUILD)/ai-matrix 2>/dev/null | sed 's/^/  /' || true; exit 1; }
+	mise exec -- python3 tools/ai_matrix.py $(MATRIX_ARGS) --report $(MATRIX_REPORT)
 
 # The default playable duel: army 0 is the human, army 1 runs FAF's AI, and the responsive HUD
 # chooses its profile from the logical window size. Use `play` for other army counts and knobs.

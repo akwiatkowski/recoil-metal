@@ -422,6 +422,8 @@ if(BUILD_TESTING)
              COMMAND mise exec -- python3 ${CMAKE_SOURCE_DIR}/tools/test_input_acceptance.py)
     add_test(NAME "AI match runner only stops tracked processes"
              COMMAND mise exec -- python3 ${CMAKE_SOURCE_DIR}/tools/test_ai_match.py)
+    add_test(NAME "AI matrix console reads the binary's lines and keeps escapes off pipes"
+             COMMAND mise exec -- python3 ${CMAKE_SOURCE_DIR}/tools/test_ai_matrix.py)
 
     # --- Boundary checks --------------------------------------------------------
     #
