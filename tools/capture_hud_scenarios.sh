@@ -88,6 +88,24 @@ if [[ ${CAPTURE_SCENARIOS:-all} == toggle ]]; then
     echo "HUD toggle artifacts: $capture_dir"
     exit 0
 fi
+if [[ ${CAPTURE_SCENARIOS:-all} == vivid ]]; then
+    # The end-to-end skirmish climax, no orders needed: the scripted Aeon column
+    # reaches the UEF base around 560s and the commander bleeds out at 593.9s. At
+    # 588s the rack, build palette, commander card, melee, scorch and dust are all
+    # live. Two runs must agree to the pixel and the hash.
+    capture vivid 588 tests/fixtures/hud-vivid.commands \
+        'hud-state: selected=1 types=1 work=NONE' \
+        --select-type UEL0001 --look 5520 2772 300
+    for pass in first repeat; do
+        rg -q 'combat: [1-9][0-9]* shots fired, [1-9] in flight' \
+            "$capture_dir/vivid.$pass.log"
+        rg -q 'army 0 commander: [1-9][0-9]* of 12000 hp' "$capture_dir/vivid.$pass.log"
+        rg -q 'roster: 1 type\(s\) selected' "$capture_dir/vivid.$pass.log"
+        test -s "$capture_dir/vivid.$pass.png"
+    done
+    echo "HUD vivid artifacts: $capture_dir"
+    exit 0
+fi
 
 capture construction 12 tests/fixtures/hud-construction.commands \
     'hud-state: selected=1 types=1 work=BUILDING progress=[1-9][0-9] flow=ACTIVE queued=0' \
