@@ -14,9 +14,11 @@
 #include <algorithm>
 #include <cassert>
 #include <cctype>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
+#include <fstream>
 #include <map>
 #include <memory>
 #include <set>
@@ -28,6 +30,7 @@ namespace rm::app {
 bool gPrintEvents = false;
 bool gFafOpponents = false;
 std::string gFafBaseTemplate = "NormalMain";
+std::vector<std::string> gFafPersonalityNames;
 bool gFafLog = false;
 
 /// Sends one unit to a world position, routed around whatever is in the way.
@@ -253,6 +256,92 @@ bool issueCancelFactoryBuild(UnitScene& scene, rm::sim::UnitId factory,
     const rm::unitdef::UnitDef* def =
         scene.catalog.def(static_cast<rm::UnitTypeIndex>(blueprintIndex));
     return def != nullptr ? *def : kNone;
+}
+
+/// The display personality of one seat: the raw `--ai-personalities` name, cycled like
+/// `--factions`, or the shared template when only `--ai-personality` was given, or
+/// "scripted" when no FAF opponent plays the seat at all.
+[[nodiscard]] std::string matrixPersonalityFor(std::size_t army) {
+    if (!gFafPersonalityNames.empty()) {
+        return gFafPersonalityNames[army % gFafPersonalityNames.size()];
+    }
+    if (gFafOpponents) {
+        return gFafBaseTemplate;
+    }
+    return "scripted";
+}
+
+/// Alive units of one army, counted from the store: the per-faction "alive" behind the
+/// progress line and the final table. `liveCount` is match-wide, so per-army needs the
+/// walk; progress prints every dozen wall seconds, so the scan costs nothing.
+[[nodiscard]] std::size_t matrixAliveForArmy(const UnitScene& scene, int army) {
+    std::size_t alive = 0;
+    const std::span<const rm::sim::MoveState> motion = scene.store.motion();
+    for (rm::UnitIndex slot = 0; slot < scene.store.slotCount(); ++slot) {
+        if (scene.store.slotAlive(slot) && motion[slot].armyIndex == army) {
+            ++alive;
+        }
+    }
+    return alive;
+}
+
+/// Enemy kills credited to one army so far — the count behind the progress line, without
+/// the worth tally the final report adds. Same enemy-only rule as `tallyMatrixKills`.
+[[nodiscard]] std::size_t matrixKillsForArmy(const MatchRunner& runner, int army) {
+    std::size_t kills = 0;
+    for (const MatrixKill& kill : runner.matrixKills) {
+        if (kill.killerArmy == army && kill.victimArmy != army) {
+            ++kills;
+        }
+    }
+    return kills;
+}
+
+/// Catalog to report facts, the single fixed-point-to-decimal crossing: costs and the
+/// build-time work units as doubles, tech via `unitdef::techOf`, blueprint path for
+/// the rows. A type the catalog has never seen resolves empty rather than throwing —
+/// one bad index must not abort a run's whole report.
+[[nodiscard]] MatrixTypeResolver matrixResolver(const UnitScene& scene) {
+    return [&scene](rm::UnitTypeIndex type) {
+        const rm::unitdef::UnitDef& def = buildableDef(scene, static_cast<std::size_t>(type));
+        return MatrixTypeInfo{
+            .blueprint = std::string{scene.pathOf(type)},
+            .tech = rm::unitdef::techOf(def),
+            .mass = static_cast<double>(rm::sim::magToFloat(def.buildCostMass)),
+            .energy = static_cast<double>(rm::sim::magToFloat(def.buildCostEnergy)),
+            .buildTime = static_cast<double>(rm::sim::magToFloat(def.buildTime)),
+        };
+    };
+}
+
+/// One progress line per faction, on the caller's wall clock: sim tick, wall seconds,
+/// alive count, income per second, kills so far. Returns the snapshot rows so the
+/// matrix run can append them to the JSON without recomputing.
+[[nodiscard]] std::vector<MatrixSnapshotArmy>
+printMatrixProgress(const UnitScene& scene, const MatchRunner& runner,
+                     unsigned long long tick, double wallSeconds) {
+    std::vector<MatrixSnapshotArmy> rows;
+    rows.reserve(scene.armies.size());
+    const double ticksPerSecond = gAppTickRate.ticksPerSecond();
+    for (std::size_t army = 0; army < scene.armies.size(); ++army) {
+        const rm::sim::Economy& economy = scene.economies[army];
+        const std::size_t alive = matrixAliveForArmy(scene, static_cast<int>(army));
+        const std::size_t kills = matrixKillsForArmy(runner, static_cast<int>(army));
+        const double incomeMass =
+            static_cast<double>(rm::sim::magToFloat(economy.incomePerTick.mass)) * ticksPerSecond;
+        const double incomeEnergy =
+            static_cast<double>(rm::sim::magToFloat(economy.incomePerTick.energy)) * ticksPerSecond;
+        std::printf("matrix: [tick %llu, %.0fs wall] army %zu (%s/%s): %zu alive,"
+                    " +%.1f/+%.1f per s, %zu kills\n",
+                    tick, wallSeconds, army,
+                    std::string{rm::sim::factionName(scene.armies[army].faction)}.c_str(),
+                    matrixPersonalityFor(army).c_str(), alive, incomeMass, incomeEnergy, kills);
+        rows.push_back(MatrixSnapshotArmy{.alive = alive,
+                                          .incomeMassPerSecond = incomeMass,
+                                          .incomeEnergyPerSecond = incomeEnergy,
+                                          .kills = kills});
+    }
+    return rows;
 }
 
 // `playerDriving` moved to `SceneBuild.cpp`, beside `issueBuild`, which needs it too.
@@ -1076,12 +1165,23 @@ void runOpponents(UnitScene& scene, const rm::vfs::Vfs& content, const rm::Heigh
             rm::ai::importAiEntryPoints(*sandbox);
             if (driverUp) {
                 for (std::size_t army = 0; army < scene.armies.size(); ++army) {
+                    // Per-seat personalities cycle like `--factions`; without the flag every
+                    // seat keeps the single `--ai-personality` template. Names were validated
+                    // at startup, so the mapping cannot throw here.
+                    const std::string seated =
+                        gFafPersonalityNames.empty()
+                            ? gFafBaseTemplate
+                            : fafBaseTemplateFor(gFafPersonalityNames[army
+                                                                     % gFafPersonalityNames.size()]);
                     runner.scripts[army] = std::make_unique<rm::ai::FafOpponent>(
-                        *sandbox, static_cast<int>(army), gFafBaseTemplate);
+                        *sandbox, static_cast<int>(army), seated);
                 }
                 runner.fafSandbox = std::move(sandbox);
                 std::printf("faf: %zu armies seated with FAF opponents (%s)\n",
-                            scene.armies.size(), gFafBaseTemplate.c_str());
+                            scene.armies.size(),
+                            gFafPersonalityNames.empty()
+                                ? gFafBaseTemplate.c_str()
+                                : "per-army personalities");
             } else {
                 std::printf("faf: driver failed (%s) — scripted opponents play instead\n",
                             sandbox->lastError().c_str());
@@ -1277,6 +1377,21 @@ rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) 
     for (const rm::sim::Event& event : scene.events.all()) {
         if (event.kind == rm::sim::EventKind::UnitDestroyed) {
             ++runner.unitsDestroyed;
+            // The victim's type is still in its slot: `types_` is written only at spawn
+            // and a corpse's slot is recycled by a LATER spawn, all of which happen in
+            // the finished-build loop below or on later ticks — never before this loop.
+            const rm::UnitTypeIndex victimType = scene.store.typeAt(event.unit.index);
+            // holds the killer: a recycled slot (generation mismatch) means the killer
+            // is gone past identification, and the death stays a loss but nobody's kill.
+            int killerArmy = -1;
+            if (event.instigator.index < scene.store.slotCount()
+                && scene.store.idAt(event.instigator.index).generation
+                       == event.instigator.generation) {
+                killerArmy = scene.store.motion()[event.instigator.index].armyIndex;
+            }
+            runner.matrixKills.push_back(MatrixKill{.victimType = victimType,
+                                                   .victimArmy = event.army,
+                                                   .killerArmy = killerArmy});
         }
     }
     refreshWreckDecals(scene, runner.field);
@@ -1322,6 +1437,10 @@ rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) 
         // distinction matters to anything that treats a built unit differently from one placed
         // at match start. Both come from the caller, because both need the model to exist.
         if (spawned) {
+            // Only what materialised: a completion whose spawn failed built nothing.
+            runner.matrixBuilt.push_back(
+                MatrixBuilt{.type = static_cast<rm::UnitTypeIndex>(work.blueprintIndex),
+                            .army = work.armyIndex});
             for (const auto& entry : pending) {
                 auto state = entry.snapshot();
                 state.unit = *spawned;
@@ -1604,6 +1723,18 @@ void march(UnitScene& scene, const rm::HeightField& field, PassabilitySet& passa
             }
         }
     }
+    // --- Offline matrix state --------------------------------------------------
+    //
+    // Wall-clock progress and the early exit live here rather than in `advanceMatch`:
+    // they are a reporting cadence over the run, not part of a tick, and the windowed
+    // loop must never stop on victory or print progress lines.
+    const bool matrixOut = !options.matrixOutPath.empty();
+    const auto matrixWallStart = std::chrono::steady_clock::now();
+    double matrixLastProgressSeconds = 0.0;
+    std::vector<MatrixSnapshot> matrixSnapshots;
+    bool matrixFinished = false;
+    std::optional<int> matrixWinner;
+    unsigned long long matrixTicksPlayed = 0;
 
     for (int i = 0; i < ticks; ++i) {
         const float now = static_cast<float>(i) * kTickSeconds;
@@ -1643,6 +1774,33 @@ void march(UnitScene& scene, const rm::HeightField& field, PassabilitySet& passa
                                 static_cast<double>(now));
                 }
             }
+        }
+        // Matrix bookkeeping, after the announcements so the victory line still prints.
+        matrixTicksPlayed = static_cast<unsigned long long>(i) + 1;
+        if (report.matchEnded) {
+            matrixFinished = true;
+            matrixWinner = report.winner;
+        }
+        if (options.reportIntervalSeconds > 0.0) {
+            const double wallSeconds =
+                std::chrono::duration<double>(std::chrono::steady_clock::now()
+                                              - matrixWallStart)
+                    .count();
+            if (wallSeconds - matrixLastProgressSeconds >= options.reportIntervalSeconds) {
+                matrixLastProgressSeconds = wallSeconds;
+                std::vector<MatrixSnapshotArmy> rows = printMatrixProgress(
+                    scene, runner, matrixTicksPlayed, wallSeconds);
+                if (matrixOut) {
+                    matrixSnapshots.push_back(MatrixSnapshot{.tick = matrixTicksPlayed,
+                                                             .wallSeconds = wallSeconds,
+                                                             .armies = std::move(rows)});
+                }
+            }
+        }
+        // A matrix run ends on victory: `--play` is the time CAP, not the required length.
+        // Gated on the report flag so plain `--play` keeps simulating the full duration.
+        if (matrixOut && report.matchEnded) {
+            break;
         }
 
         // What finished this tick, narrated. The spawning itself is `advanceMatch`'s, so
@@ -2044,6 +2202,77 @@ void march(UnitScene& scene, const rm::HeightField& field, PassabilitySet& passa
                     static_cast<double>(rm::sim::magToFloat(first.upkeepPerTick.energy))
                         * gAppTickRate.ticksPerSecond(),
                     static_cast<double>(rm::sim::fxToFloat(first.fundedFraction)) * 100.0);
+    }
+
+    // --- Offline matrix report -------------------------------------------------
+    //
+    // One console table plus one JSON doc, printed and written only for `--matrix-out`.
+    // The ledgers behind it accumulated all run, so this block is pure reporting: no sim
+    // state is read except the lifetime counters and the alive counts.
+    if (matrixOut && !scene.armies.empty()) {
+        const double matrixWallSeconds =
+            std::chrono::duration<double>(std::chrono::steady_clock::now() - matrixWallStart)
+                .count();
+        const MatrixTypeResolver resolve = matrixResolver(scene);
+        MatrixDoc doc;
+        doc.commit = options.matrixCommit.empty() ? "unknown" : options.matrixCommit;
+        doc.map = options.matrixMap;
+        doc.tickCap = static_cast<unsigned long long>(ticks);
+        doc.ticksPlayed = matrixTicksPlayed;
+        doc.wallSeconds = matrixWallSeconds;
+        doc.finished = matrixFinished;
+        doc.hasWinner = matrixWinner.has_value();
+        doc.winner = matrixWinner.value_or(0);
+        std::printf("\n=== AI MATRIX ========================================================\n");
+        if (matrixFinished) {
+            if (matrixWinner) {
+                std::printf("  outcome: team %d wins at tick %llu (%.0fs wall)\n", *matrixWinner,
+                            matrixTicksPlayed, matrixWallSeconds);
+            } else {
+                std::printf("  outcome: DRAW at tick %llu (%.0fs wall)\n", matrixTicksPlayed,
+                            matrixWallSeconds);
+            }
+        } else {
+            std::printf("  outcome: tick cap (%d ticks) reached, no winner (%.0fs wall)\n", ticks,
+                        matrixWallSeconds);
+        }
+        for (std::size_t army = 0; army < scene.armies.size(); ++army) {
+            const int side = static_cast<int>(army);
+            const rm::sim::Economy& economy = scene.economies[army];
+            MatrixArmyOutcome outcome;
+            outcome.army = side;
+            outcome.personality = matrixPersonalityFor(army);
+            outcome.faction =
+                std::string{rm::sim::factionName(scene.armies[army].faction)};
+            outcome.generatedMass =
+                static_cast<double>(rm::sim::magToFloat(economy.generatedLifetime.mass));
+            outcome.generatedEnergy =
+                static_cast<double>(rm::sim::magToFloat(economy.generatedLifetime.energy));
+            outcome.alive = matrixAliveForArmy(scene, side);
+            outcome.built = summarizeMatrixBuilt(runner.matrixBuilt, side, resolve);
+            outcome.kills = tallyMatrixKills(runner.matrixKills, side, resolve);
+            std::printf("  army %zu (%s/%s): %zu alive, generated %.0f mass / %.0f energy,"
+                        " %zu enemy kills worth %.0f mass / %.0f energy / %.0f build-time\n",
+                        army, outcome.faction.c_str(), outcome.personality.c_str(),
+                        outcome.alive, outcome.generatedMass, outcome.generatedEnergy,
+                        outcome.kills.kills, outcome.kills.massWorth,
+                        outcome.kills.energyWorth, outcome.kills.buildTimeWorth);
+            for (const MatrixTypeRow& row : outcome.built) {
+                std::printf("    built %6zu  T%d  %s\n", row.count, row.info.tech,
+                            row.info.blueprint.c_str());
+            }
+            doc.armies.push_back(std::move(outcome));
+        }
+        doc.snapshots = std::move(matrixSnapshots);
+        std::printf("======================================================================\n");
+        std::ofstream json(options.matrixOutPath);
+        if (!json) {
+            std::printf("matrix: cannot write %s\n", options.matrixOutPath.c_str());
+        } else {
+            writeMatrixJson(json, doc);
+            std::printf("matrix: %llu tick(s) over %.0fs wall written to %s\n",
+                        matrixTicksPlayed, matrixWallSeconds, options.matrixOutPath.c_str());
+        }
     }
 }
 

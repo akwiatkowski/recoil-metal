@@ -121,6 +121,7 @@ void tickEconomy(Economy& economy, std::span<Construction> building,
     // does (`C-163`). A full bank can therefore pay one tick's bill from one tick's income
     // and remain full. NO MULTIPLY BY A TICK LENGTH: this is already a per-tick rate (§5.1).
     economy.stored += economy.incomePerTick;
+    economy.generatedLifetime += economy.incomePerTick;
     // What allies handed over last tick arrives with income, not as a deposit (`C-163`), so it
     // is spendable this tick and an army already at cap gains nothing from it.
     economy.stored += economy.sharedIn;

@@ -333,6 +333,19 @@ ai-sanity: build check-fa check-ai
 	  fi; \
 	  echo 'AI sanity: no instruction-budget overruns'
 
+# Offline AI matrix: slow headless personality x faction 1v1s, one JSON per run.
+#
+# NOT a test — a manual harness for long-term comparison. Six runs by default (mirrors
+# plus one game per cross pair of easy/turtle/tech, all UEF-vs-UEF on SCMP_009), each up
+# to an hour of sim at headless speed with progress every 15 wall seconds. Knobs pass
+# through: `make ai-matrix PERSONALITIES=easy,tech FACTIONS=uef,cybran SECONDS=1800`.
+PERSONALITIES ?= easy,turtle,tech
+MATRIX_FACTIONS ?= uef,uef
+MATRIX_SECONDS ?= 3600
+ai-matrix: build check-fa check-ai
+	mise exec -- python3 tools/ai_matrix.py --personalities $(PERSONALITIES) \
+	  --factions $(MATRIX_FACTIONS) --seconds $(MATRIX_SECONDS)
+
 # The default playable duel: army 0 is the human, army 1 runs FAF's AI, and the responsive HUD
 # chooses its profile from the logical window size. Use `play` for other army counts and knobs.
 skirmish: build check-fa check-ai

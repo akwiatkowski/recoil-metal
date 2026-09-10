@@ -188,6 +188,14 @@ struct Economy {
     /// this, a two-resource consumer re-asks for its full demand every tick and the bucket
     /// totals never settle.
     Resources upkeepAllocated;
+
+    /// Lifetime income credited by `tickEconomy`, the integral of `incomePerTick`.
+    ///
+    /// Reporting-only: `incomePerTick` is rebuilt from standing units every tick, so a rate
+    /// history cannot be recovered at game end, while this sum is exact. Deliberately outside
+    /// the state hash, the save format, and every allocation decision — both enumerate the
+    /// fields they cover explicitly, so this counter changes neither.
+    Resources generatedLifetime;
 };
 
 /// The base rate of income every army gets, per second, whatever it has built.

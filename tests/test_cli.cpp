@@ -439,3 +439,36 @@ TEST_CASE("archive mount order keeps name order with retail overrides last") {
     CHECK(ordered[2].filename() == "units.scd");
     CHECK(ordered[3].filename() == "lua.scd");
 }
+
+TEST_CASE("per-army personalities parse in seat order, singles fold in", "[ai-personality]") {
+    Args defaults{{}};
+    CHECK(rm::app::parseFafPersonalityNames(defaults.argc(), defaults.argv()).empty());
+    Args pair{{"--ai-personalities", "easy,turtle"}};
+    CHECK(rm::app::parseFafPersonalityNames(pair.argc(), pair.argv())
+          == std::vector<std::string>{"easy", "turtle"});
+    // A lone `--ai-personality` is a one-seat list, so seating reads one source.
+    Args single{{"--ai-personality", "tech"}};
+    CHECK(rm::app::parseFafPersonalityNames(single.argc(), single.argv())
+          == std::vector<std::string>{"tech"});
+    // The plural flag wins when both are given; empties are skipped, not seated.
+    Args both{{"--ai-personalities", "turtle,,tech", "--ai-personality", "easy"}};
+    CHECK(rm::app::parseFafPersonalityNames(both.argc(), both.argv())
+          == std::vector<std::string>{"turtle", "tech"});
+    Args unknown{{"--ai-personalities", "easy,tehc"}};
+    CHECK_THROWS(rm::app::parseFafPersonalityNames(unknown.argc(), unknown.argv()));
+}
+
+TEST_CASE("march parses the matrix report flags", "[matrix]") {
+    Args args{{"--play", "3600", "--matrix-out", "out/result.json",
+               "--matrix-commit", "abc123", "--report-interval", "15"}};
+    const rm::app::MarchOptions options = rm::app::parseMarch(args.argc(), args.argv());
+    CHECK(options.matrixOutPath == "out/result.json");
+    CHECK(options.matrixCommit == "abc123");
+    CHECK(options.reportIntervalSeconds == 15.0);
+    // The map is the positional argv[1], which the fixture sets to map.scmap.
+    CHECK(options.matrixMap == "map");
+    Args plain{{"--play", "60"}};
+    const rm::app::MarchOptions quiet = rm::app::parseMarch(plain.argc(), plain.argv());
+    CHECK(quiet.matrixOutPath.empty());
+    CHECK(quiet.reportIntervalSeconds == 0.0);
+}

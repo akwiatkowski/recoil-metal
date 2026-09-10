@@ -13,25 +13,68 @@
 
 namespace rm::app {
 
-std::string parseFafBaseTemplate(int argc, const char* argv[]) {
+std::string fafBaseTemplateFor(std::string_view name) {
     constexpr auto choices = "easy, medium, tech, rushland, rushair, rushnaval, rushbalanced, turtle, adaptive, random";
+    if (name == "easy") return "NormalMain";
+    if (name == "tech") return "TechMain";
+    if (name == "medium") return "ChallengeMain";
+    if (name == "rushland") return "RushMainLand";
+    if (name == "rushair") return "RushMainAir";
+    if (name == "rushnaval") return "RushMainNaval";
+    if (name == "rushbalanced") return "RushMainBalanced";
+    if (name == "turtle") return "TurtleMain";
+    if (name == "adaptive" || name == "random") return std::string{name};
+    throw std::invalid_argument("unsupported AI personality: " + std::string{name}
+                                + " (choose " + choices + ")");
+}
+
+std::string parseFafBaseTemplate(int argc, const char* argv[]) {
     for (int i = 1; i < argc; ++i) {
         if (std::string_view{argv[i]} != "--ai-personality") continue;
-        if (i + 1 == argc) throw std::invalid_argument(std::string{"--ai-personality requires one of: "} + choices);
-        const std::string_view name = argv[i + 1];
-        if (name == "easy") return "NormalMain";
-        if (name == "tech") return "TechMain";
-        if (name == "medium") return "ChallengeMain";
-        if (name == "rushland") return "RushMainLand";
-        if (name == "rushair") return "RushMainAir";
-        if (name == "rushnaval") return "RushMainNaval";
-        if (name == "rushbalanced") return "RushMainBalanced";
-        if (name == "turtle") return "TurtleMain";
-        if (name == "adaptive" || name == "random") return std::string{name};
-        throw std::invalid_argument("unsupported --ai-personality: " + std::string{name}
-                                    + " (choose " + choices + ")");
+        if (i + 1 == argc) {
+            throw std::invalid_argument(
+                std::string{"--ai-personality requires one of: "}
+                + "easy, medium, tech, rushland, rushair, rushnaval, rushbalanced, turtle, adaptive, random");
+        }
+        return fafBaseTemplateFor(argv[i + 1]);
     }
     return "NormalMain";
+}
+
+std::vector<std::string> parseFafPersonalityNames(int argc, const char* argv[]) {
+    // `--ai-personalities easy,turtle`: seat order, cycled over more armies — the same
+    // shape as `--factions`. Each name is mapped eagerly so an unknown personality fails
+    // at startup rather than seating a default halfway through a matrix run. A lone
+    // `--ai-personality` folds into the same list with one seat, so seating and reporting
+    // read one source instead of two parallel flags.
+    for (int i = 1; i + 1 < argc; ++i) {
+        if (std::string{argv[i]} != "--ai-personalities") {
+            continue;
+        }
+        std::vector<std::string> names;
+        const std::string value{argv[i + 1]};
+        std::size_t from = 0;
+        while (from <= value.size()) {
+            const std::size_t comma = std::min(value.find(',', from), value.size());
+            const std::string name = value.substr(from, comma - from);
+            if (!name.empty()) {
+                (void)fafBaseTemplateFor(name);
+                names.push_back(name);
+            }
+            from = comma + 1;
+        }
+        if (!names.empty()) {
+            return names;
+        }
+    }
+    for (int i = 1; i + 1 < argc; ++i) {
+        if (std::string_view{argv[i]} != "--ai-personality") {
+            continue;
+        }
+        (void)fafBaseTemplateFor(argv[i + 1]);
+        return {std::string{argv[i + 1]}};
+    }
+    return {};
 }
 
 [[nodiscard]] LoggingOptions parseLogging(int argc, const char* argv[]) {
@@ -397,6 +440,16 @@ rm::ui::EffectsPreference parseUiEffects(int argc, const char* argv[]) {
 
 [[nodiscard]] MarchOptions parseMarch(int argc, const char* argv[]) {
     MarchOptions options;
+    // The map is the first positional argument (`binary map.scmap --gamedata ...`); its
+    // stem is the run's identity in the matrix report. A non-map first argument (unit
+    // dumps and friends take none) leaves "unknown" rather than a wrong name.
+    options.matrixMap = "unknown";
+    if (argc > 1) {
+        const std::filesystem::path mapArg{argv[1]};
+        if (mapArg.extension() == ".scmap") {
+            options.matrixMap = mapArg.stem().string();
+        }
+    }
     // Before the mode branches: `--march` returns early, and the sanity flag composes with
     // either mode.
     for (int i = 1; i < argc; ++i) {
@@ -442,6 +495,12 @@ rm::ui::EffectsPreference parseUiEffects(int argc, const char* argv[]) {
             options.checkHashLogPath = argv[i + 1];
         } else if (flag == "--command-log") {
             options.commandLogPath = argv[i + 1];
+        } else if (flag == "--matrix-out") {
+            options.matrixOutPath = argv[i + 1];
+        } else if (flag == "--matrix-commit") {
+            options.matrixCommit = argv[i + 1];
+        } else if (flag == "--report-interval") {
+            options.reportIntervalSeconds = std::atof(argv[i + 1]);
         }
     }
     return options;

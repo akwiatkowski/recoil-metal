@@ -640,3 +640,22 @@ TEST_CASE("the per-unit consumed ratio is recovered from the demand shape") {
     CHECK(rm::test::asFloat(economy.consumedRatio(perTick(10.0f, 0.0f)))
           == Approx(rm::test::asFloat(economy.singleResourceFunded)));
 }
+
+TEST_CASE("lifetime counters integrate income but not allied gifts") {
+    // The matrix report's "generated" column: the integral of `incomePerTick`, exact
+    // because the rate itself is rebuilt from standing units every tick and no history
+    // survives otherwise. Gifts arrive through `sharedIn`, a separate channel that is
+    // spendable but not produced — counting them as generated would credit an army for
+    Economy economy = rich();
+    economy.incomePerTick = res(2.0f, 20.0f);
+    std::vector<Construction> none;
+    rm::test::tickBuild(economy, none);
+    rm::test::tickBuild(economy, none);
+    CHECK(rm::test::asFloat(economy.generatedLifetime.mass) == Approx(4.0f));
+    CHECK(rm::test::asFloat(economy.generatedLifetime.energy) == Approx(40.0f));
+
+    economy.sharedIn = res(100.0f, 100.0f);
+    rm::test::tickBuild(economy, none);
+    CHECK(rm::test::asFloat(economy.generatedLifetime.mass) == Approx(6.0f));
+    CHECK(rm::test::asFloat(economy.generatedLifetime.energy) == Approx(60.0f));
+}

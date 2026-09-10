@@ -95,6 +95,24 @@ struct MarchOptions {
     /// report — what got built, which engine bindings the AI called, and which of the corpus's
     /// own functions ran. The measuring half of "is the AI integrated".
     bool aiSanity = false;
+
+    /// `--matrix-out <path>`: close the run with the offline AI-matrix report — the
+    /// console table plus the single JSON doc at this path — and stop early on victory
+    /// instead of simulating the whole `--play` duration. Empty for no report.
+    std::string matrixOutPath;
+
+    /// `--matrix-commit <hash>`: the source revision the binary was built from, recorded
+    /// in the JSON so results stay comparable only by hash. The driver fills this from
+    /// `git rev-parse HEAD`; the binary cannot know it by itself.
+    std::string matrixCommit;
+
+    /// `--report-interval <seconds>`: print one progress line per faction every N wall
+    /// seconds during the pre-run. Zero (the default) stays silent.
+    double reportIntervalSeconds = 0.0;
+
+    /// The map's stem (`SCMP_009`), taken from the `.scmap` argument for the matrix
+    /// report. "unknown" when the invocation names no map file.
+    std::string matrixMap;
 };
 
 struct LoggingOptions {
@@ -175,6 +193,14 @@ orderArchivesForMount(std::vector<std::filesystem::path> archives);
 
 /// Named FAF base template or adaptive/random selection; rejects unsupported personalities.
 [[nodiscard]] std::string parseFafBaseTemplate(int argc, const char* argv[]);
+
+/// CLI personality name to the FAF base template it seats. Throws on unknown names.
+[[nodiscard]] std::string fafBaseTemplateFor(std::string_view name);
+
+/// `--ai-personalities easy,turtle,...`: raw personality names in seat order, cycled over
+/// more armies than names; a lone `--ai-personality` folds in as a one-seat list. Empty
+/// when neither flag is present; names are validated eagerly.
+[[nodiscard]] std::vector<std::string> parseFafPersonalityNames(int argc, const char* argv[]);
 
 /// `--placement grid|free`: how structures are sited. Grid, the game's rule, is the default.
 [[nodiscard]] rm::sim::PlacementMode parsePlacementMode(int argc, const char* argv[]);

@@ -16,6 +16,7 @@
 
 #include "app/Cli.hpp"
 #include "app/FafAi.hpp"
+#include "app/MatrixReport.hpp"
 #include "app/Opponent.hpp"
 #include "app/SceneBuild.hpp"
 
@@ -174,6 +175,12 @@ struct MatchRunner {
     /// because they are accumulated from the same reports as this. A total that only ever
     /// goes up cannot be undone by storage reusing a slot.
     std::size_t unitsDestroyed = 0;
+
+    /// Offline matrix ledgers: every finished build and every death, with type and
+    /// armies. Reporting-only — `app/MatrixReport.hpp` turns them into the end table
+    /// and the JSON doc, and they never reach the sim, the hash, or the save.
+    std::vector<MatrixBuilt> matrixBuilt;
+    std::vector<MatrixKill> matrixKills;
     bool matchOver = false;
 };
 
@@ -200,6 +207,10 @@ extern bool gPrintEvents;
 extern bool gFafOpponents;
 /// Explicit base template selected by --ai-personality, shared by all FAF armies.
 extern std::string gFafBaseTemplate;
+/// `--ai-personalities easy,turtle,...`: raw personality names in seat order, cycled over
+/// more armies than names. Non-empty it overrides `gFafBaseTemplate` per seat; empty keeps
+/// the single-template behaviour.
+extern std::vector<std::string> gFafPersonalityNames;
 
 /// `--ai-log`: narrate the FAF opponents — every decision with the corpus builder that
 /// fired it, and the corpus's own LOG/WARN lines (normally counted and discarded). The

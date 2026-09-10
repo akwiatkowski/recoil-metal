@@ -334,6 +334,7 @@ if(BUILD_TESTING)
         tests/test_build_options.cpp
         tests/test_minimap.cpp
         tests/test_cli.cpp
+        tests/test_matrix_report.cpp
         tests/test_scale.cpp
         tests/test_dds.cpp
         tests/test_unit_icons.cpp
