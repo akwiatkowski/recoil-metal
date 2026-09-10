@@ -343,7 +343,10 @@ Renderer::Renderer(CA::MetalLayer* layer)
     // wrap the far edge back onto the near one.
     samplerDescriptor->setSAddressMode(MTL::SamplerAddressMode::SamplerAddressModeClampToEdge);
     samplerDescriptor->setTAddressMode(MTL::SamplerAddressMode::SamplerAddressModeClampToEdge);
-    samplerDescriptor->setMaxAnisotropy(8);  // terrain is viewed at grazing angles
+    // SIXTEEN, the Metal maximum: free on modern GPUs, and the map is almost always
+    // seen at a grazing angle where 8x still shimmers on distant slopes. The splat
+    // sampler below reuses this descriptor, so both 3D samplers move together.
+    samplerDescriptor->setMaxAnisotropy(16);
     groundSampler_ = device_->newSamplerState(samplerDescriptor);
 
     // A second sampler that REPEATS, for the splat layers alone.
