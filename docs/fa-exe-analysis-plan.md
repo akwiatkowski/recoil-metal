@@ -324,6 +324,52 @@ and `tools/re/pe_reader.py`, which read the file directly and take no lock. All 
 tables (`moho.methods.tsv`, `callgraph.tsv`, the RTTI list) exist precisely so that parallel
 analysts never need the project at all.
 
+### Moho contract coverage: what the AI surface implements (measured 2026-09-10)
+
+Regenerate: `mise exec -- python3 tools/re/moho_contract_coverage.py`. Supply is
+`moho.methods.annotated.tsv` (1,182 registration rows, 1,168 distinct scope+name);
+demand is `src/app/FafApi.inc` (256 names: 83 globals, 141 methods, 32 shims, 5,597
+corpus sites); fidelity is `FafAi.cpp`'s `fidelityFor` (absent names are Stub, exactly
+like the lambda's default). Method names match any class scope and count everywhere
+they could bind, so ambiguous names appear in several subsystem rows.
+
+Name match: 189/256 demanded names exist in the recovery. Fidelity: 9 Known, 1 Guessed
+(`lazyimport`, eager where Moho defers), 246 Stub. Call-weighted: 561 of 4,652 matched
+sites are Known (12.1% of matched demand). The 67 unmatched names are Lua builtins
+(`import`), our own sim-command surface (`IssueMove` and friends, implemented through
+`CommandIssue`, not moho registrations), and our own shims — all expected absent.
+
+| Subsystem | Recovered | Demanded names | Known | Corpus sites |
+|---|---:|---:|---:|---:|
+| ai | 165 | 85 | 0 | 2402 |
+| ui | 247 | 19 | 0 | 830 |
+| misc | 113 | 16 | 3 | 768 |
+| lifecycle | 98 | 22 | 0 | 452 |
+| world | 22 | 7 | 0 | 427 |
+| blueprint | 29 | 7 | 0 | 325 |
+| session | 67 | 10 | 0 | 204 |
+| runtime | 24 | 5 | 3 | 197 |
+| fx | 49 | 6 | 0 | 184 |
+| combat | 101 | 11 | 1 | 167 |
+| animation | 50 | 3 | 0 | 113 |
+| intel | 21 | 5 | 0 | 86 |
+| movement | 32 | 4 | 0 | 65 |
+| orders | 22 | 4 | 0 | 53 |
+| build | 28 | 6 | 0 | 37 |
+| transport | 16 | 3 | 0 | 18 |
+| ordnance | 7 | 4 | 0 | 13 |
+| debug | 12 | 2 | 0 | 6 |
+| resources | 2 | 1 | 0 | 5 |
+| filesystem | 9 | 1 | 1 | 3 |
+| economy | 22 | 2 | 0 | 2 |
+| audio | 16 | 1 | 0 | 1 |
+
+Top stubbed demand by corpus sites (the work queue): `GetPosition` (240, Entity/UserUnit),
+`GetPlatoonUnits` (208), `GetArmyIndex` (205), `EntityCategoryContains` (185),
+`GetBrain` (146), `GetPlatoonPosition` (139), `PlatoonExists` (136), `VDist2Sq` (122),
+`GetThreatAtPosition` (122), `IsUnitState` (114). The `ai` subsystem holds 2,402 demanded
+sites at zero Known — platoon and brain accessors first.
+
 ### The hunting queue
 
 Ordered by (implementation impact) x (1 / measured frontier size). Each entry is a question with a
