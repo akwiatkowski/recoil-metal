@@ -16,6 +16,7 @@ namespace {
 constexpr SelectionEntry kA{0, 1};
 constexpr SelectionEntry kB{0, 2};
 constexpr SelectionEntry kC{1, 0};
+constexpr SelectionEntry kD{1, 1};
 
 } // namespace
 
@@ -115,4 +116,25 @@ TEST_CASE("a band replaces, extends without toggling, and an empty band mirrors 
     // An empty box rhymes with a missed click: clears bare, keeps under a modifier.
     CHECK(rm::applyBand<SelectionEntry>(current, {}, false).empty());
     CHECK(rm::applyBand<SelectionEntry>(current, {}, true).size() == 2);
+}
+
+TEST_CASE("a box prefers mobile combat units over the workers caught with them") {
+    // BAR's rule: a drag that caught any mobile combat unit drops the engineers and
+    // buildings in the same box; a box with no combat unit at all keeps everything it
+    // caught, or workers could never be boxed.
+    const std::vector<SelectionEntry> box{kA, kB, kC, kD};
+    const auto isCombat = [](SelectionEntry e) { return e == kB || e == kD; };
+
+    const auto preferred = rm::preferMobileCombat<SelectionEntry>(box, isCombat);
+    REQUIRE(preferred.size() == 2);
+    CHECK(preferred[0] == kB);  // box order survives the filter
+    CHECK(preferred[1] == kD);
+
+    // No combat unit caught: the box passes through untouched.
+    const auto noCombat = rm::preferMobileCombat<SelectionEntry>(
+        box, [](SelectionEntry) { return false; });
+    CHECK(noCombat == box);
+
+    // An empty box stays empty.
+    CHECK(rm::preferMobileCombat<SelectionEntry>({}, isCombat).empty());
 }

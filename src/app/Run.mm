@@ -2690,6 +2690,15 @@ int runWindowed(const Session& session) {
                             bandScratch.push_back(units.store.idAt(slot));
                         }
                     }
+                    // BAR's box rule, as the pure filter in core/scene/Selection.hpp: a box
+                    // that caught any mobile combat unit drops the engineers and buildings
+                    // caught with it; a box of nothing but workers keeps its workers.
+                    bandScratch = rm::preferMobileCombat<rm::sim::UnitId>(
+                        bandScratch, [&units](rm::sim::UnitId id) {
+                            const rm::unitdef::UnitDef* def =
+                                units.catalog.def(units.store.typeAt(id.index));
+                            return def != nullptr && rm::unitdef::isMobileCombat(*def);
+                        });
                     selected = rm::applyBand<rm::sim::UnitId>(selected, bandScratch,
                                                               window.shiftHeldNow());
                 }

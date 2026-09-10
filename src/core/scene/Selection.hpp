@@ -114,4 +114,29 @@ template <typename Id>
     return extended;
 }
 
+/// The box's own preference filter, applied to what the box CAUGHT before `applyBand`
+/// decides what the selection becomes.
+///
+/// BAR's rule: when the box caught at least one mobile combat unit, the engineers and
+/// buildings caught with it fall out — a drag across a fight means the fighters, and
+/// grabbing a worker out of it by accident is the common case the rule exists for. A box
+/// with no combat unit at all keeps everything it caught, or there would be no way to box
+/// the builders themselves. The predicate answers "is this one mobile combat" — what that
+/// means for a unit is the caller's (`unitdef::isMobileCombat`), because this header's rules
+/// are about identities, not about what a unit IS.
+///
+/// Order is the box's own, preserved, for the same reason `applyBand` keeps order.
+template <typename Id, typename Pred>
+[[nodiscard]] std::vector<Id>
+preferMobileCombat(std::span<const std::type_identity_t<Id>> inBox, Pred&& isCombat) {
+    if (!std::any_of(inBox.begin(), inBox.end(), isCombat)) {
+        return {inBox.begin(), inBox.end()};
+    }
+    std::vector<Id> fighters;
+    fighters.reserve(inBox.size());
+    std::copy_if(inBox.begin(), inBox.end(), std::back_inserter(fighters),
+                 std::forward<Pred>(isCombat));
+    return fighters;
+}
+
 } // namespace rm
