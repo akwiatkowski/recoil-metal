@@ -2288,6 +2288,57 @@ TEST_CASE("the AUTO MEX hotkey toggles through the same availability gate",
     CHECK_FALSE(rm::app::submitAutoExpandKey(runner, inert).has_value());
 }
 
+TEST_CASE("array submit snaps, dedupes and refuses per site", "[build][array][headless-ui]") {
+    // Synthetic builder and product on a flat field in Free mode, so sites stay
+    // exactly where the drag put them: three open sites queue three builds, a
+    // deposit-bound product on bare ground refuses them all, and a doubled site
+    // builds once. The release path calls exactly this. Geometry keeps every site
+    // inside the 40-elmo build reach and clear of every radius.
+    Scenario job;
+    job.scene.placementMode = rm::sim::PlacementMode::Free;
+    rm::unitdef::UnitDef engineer;
+    engineer.name = "test_engineer";
+    engineer.buildRate = 10.0f;
+    engineer.speedElmosPerSecond = 20.0f;
+    engineer.health = rm::sim::Mag::fromInt(100);
+    engineer.motion = rm::unitdef::MotionType::Land;
+    engineer.buildableCategory = {{{"TESTBUILDABLE"}}};
+    const auto builder = job.spawn(engineer, 322, 282);
+    rm::unitdef::UnitDef pgen;
+    pgen.name = "test_pgen";
+    pgen.health = rm::sim::Mag::fromInt(100);
+    pgen.collisionRadiusElmos = 4.0f;
+    pgen.motion = rm::unitdef::MotionType::None;
+    pgen.categories = {"TESTBUILDABLE"};
+    const auto pgenType = job.registerType(pgen);
+    rm::unitdef::UnitDef mex = pgen;
+    mex.name = "test_mex";
+    mex.buildRestriction = rm::unitdef::BuildRestriction::MassDeposit;
+    const auto mexType = job.registerType(mex);
+
+    const auto sites = rm::ui::arrayBuildCells({300.0f, 300.0f}, {324.0f, 300.0f}, 12.0f);
+    REQUIRE(sites.size() == 3);
+    const auto placed =
+        rm::app::submitArrayBuilds(job.scene, job.field, job.passability, builder, pgenType,
+                                   sites, 0, static_cast<rm::TickIndex>(0));
+    CHECK(job.scene.commandInput.size() == 3);
+    CHECK(placed.refused == 0);
+    CHECK(placed.placed == 3);
+
+    const auto refused =
+        rm::app::submitArrayBuilds(job.scene, job.field, job.passability, builder, mexType,
+                                   sites, 0, static_cast<rm::TickIndex>(0));
+    CHECK(refused.placed == 0);
+    CHECK(refused.refused == 3);
+
+    const std::vector<std::array<float, 2>> doubled{{344.0f, 300.0f}, {344.0f, 300.0f}};
+    const auto deduped =
+        rm::app::submitArrayBuilds(job.scene, job.field, job.passability, builder, pgenType,
+                                   doubled, 0, static_cast<rm::TickIndex>(0));
+    CHECK(deduped.placed == 1);
+    CHECK(deduped.refused == 0);
+}
+
 TEST_CASE("a retail Kennel lends its authored rate only to nearby allied construction",
           "[corpus][station]") {
     const auto root = corpusRoot();

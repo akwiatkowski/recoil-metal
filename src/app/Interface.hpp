@@ -53,6 +53,25 @@ namespace rm::app {
 [[nodiscard]] std::optional<bool> submitAutoExpandKey(MatchRunner& runner,
     std::span<const rm::sim::UnitId> selection);
 
+/// The shared placement question behind the ghost colour and the click: may `type`
+/// stand at `at` for `builder`. The frame code asks it per ghost; the release path
+/// asks it per array site; both must agree, so there is one of it.
+[[nodiscard]] bool buildSitePlaceableFor(const UnitScene& scene, const rm::HeightField& field,
+    PassabilitySet& passability, rm::sim::UnitId builder, rm::UnitTypeIndex type,
+    std::array<float, 2> at, float radiusElmos);
+
+/// Array submit: snap each raw site, drop grid-collapsed duplicates, and issue queued
+/// builds for the placeable ones. Counts both outcomes for the release report, so a
+/// half-blocked drag says what it did rather than going quiet.
+struct ArrayBuildResult {
+    std::size_t placed = 0;
+    std::size_t refused = 0;
+};
+[[nodiscard]] ArrayBuildResult submitArrayBuilds(UnitScene& scene,
+    const rm::HeightField& field, PassabilitySet& passability, rm::sim::UnitId builder,
+    rm::UnitTypeIndex type, std::span<const std::array<float, 2>> sites,
+    rm::PlayerIndex player, rm::TickIndex tick);
+
 /// The selected-unit outline for the active game presentation.
 void appendUnitSelection(std::vector<rm::DecalVertex>& out, const rm::HeightField& field,
                          std::array<float, 3> centre, float radius, rm::ui::GameProfile profile);

@@ -134,6 +134,11 @@ public:
     /// input moments. Characters remain layout-aware; this is not a physical-key mapping.
     void onKey(std::function<void(KeyEvent event)> callback);
 
+    /// Called for every wheel notch with its scrolling deltas, before the default zoom.
+    /// Returning true consumes the notch (an array drag spends it on spacing); anything
+    /// else, including no callback at all, keeps today's anchored zoom.
+    void onScroll(std::function<bool(float scrollingDeltaY)> callback);
+
     /// Whether the left button is down right now, and where its press began, in AppKit logical
     /// points. POLLED, like the cursor and for the same reason: a drag is a per-frame
     /// fact, and the interface is rebuilt per frame. The origin is only meaningful while

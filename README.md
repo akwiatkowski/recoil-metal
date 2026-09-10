@@ -364,6 +364,8 @@ swings when you meant to select is the most disorienting thing an RTS camera can
 | shift + any order | queue it behind the ones already given, drawn in the world as you go |
 | `ctrl`+`0`–`9` / `0`–`9` | set a control group / recall it, the dead pruned out on recall |
 | click a tray cell, then the ground | build: the ghost is cyan where the footprint fits and red where it does not. Right-click or a second cell click cancels |
+| click a tray cell, then drag on the ground | build an array: ghost rings march from the press point one diameter apart, all placed as queued builds on release (capped at 32, skips unplaceable ground). The cell stays armed for another row; right-click disarms |
+| mouse wheel mid-drag | array spacing: up packs toward half diameter for walls, down spreads toward quadruple for turret coverage. Zooms normally when not dragging |
 | click a command cell, then right click | arm the command shown in the fixed 4×3 rack; Stop applies immediately and disabled positions stay put |
 | click **AUTO MEX** | a standing order for the selected field engineers: whenever one is idle it walks to the nearest free mass or hydrocarbon deposit on your side of the map and builds there, then the next. Lit while on; click again to lift it. A manual order takes precedence and the engineer resumes when idle |
 | `E` | same AUTO MEX toggle for the selected field engineers, without the click. Silent unless the selection holds one |

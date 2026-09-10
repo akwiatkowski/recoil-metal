@@ -330,6 +330,54 @@ std::optional<bool> submitAutoExpandKey(MatchRunner& runner,
     return toggleAutoExpand(runner, selection);
 }
 
+bool buildSitePlaceableFor(const UnitScene& scene, const rm::HeightField& field,
+    PassabilitySet& passability, rm::sim::UnitId builder, rm::UnitTypeIndex type,
+    std::array<float, 2> at, float radiusElmos) {
+    if (!scene.store.alive(builder)) {
+        return false;
+    }
+    const rm::unitdef::UnitDef* target = scene.catalog.def(type);
+    if (target == nullptr) {
+        return false;
+    }
+    const auto builderType = static_cast<std::size_t>(scene.store.typeAt(builder.index));
+    const rm::sim::PassabilityGrid& grid =
+        passability.gridForBuild(scene, static_cast<std::size_t>(type), builderType);
+    if (!scene.terrain(field).resourceSitePlaceable(target->buildRestriction,
+            rm::sim::fxFromFloat(at[0]), rm::sim::fxFromFloat(at[1]))) {
+        return false;
+    }
+    return rm::sim::buildSitePlaceable(grid, rm::sim::fxFromFloat(at[0]),
+        rm::sim::fxFromFloat(at[1]), rm::sim::fxFromFloat(radiusElmos), scene.store,
+        scene.catalog, scene.building);
+}
+
+ArrayBuildResult submitArrayBuilds(UnitScene& scene, const rm::HeightField& field,
+    PassabilitySet& passability, rm::sim::UnitId builder, rm::UnitTypeIndex type,
+    std::span<const std::array<float, 2>> sites, rm::PlayerIndex player,
+    rm::TickIndex tick) {
+    ArrayBuildResult result;
+    const rm::unitdef::UnitDef* def = scene.catalog.def(type);
+    const float radius =
+        def != nullptr && def->collisionRadiusElmos > 0.0f ? def->collisionRadiusElmos : 4.0f;
+    std::optional<std::array<float, 2>> lastSnapped;
+    for (const std::array<float, 2>& raw : sites) {
+        const std::array<float, 2> snapped = snapBuildSite(scene, type, raw);
+        if (lastSnapped && *lastSnapped == snapped) {
+            continue;  // the grid collapsed two raw sites onto one cell
+        }
+        lastSnapped = snapped;
+        if (buildSitePlaceableFor(scene, field, passability, builder, type, snapped, radius)
+            && issueBuild(scene, builder, player, tick, type, rm::sim::fxFromFloat(snapped[0]),
+                          rm::sim::fxFromFloat(snapped[1]), true)) {
+            ++result.placed;
+        } else {
+            ++result.refused;
+        }
+    }
+    return result;
+}
+
 bool submitBuildOption(UnitScene& scene, const rm::vfs::Vfs& content,
     rm::sim::UnitId builder, rm::PlayerIndex player, rm::TickIndex tick,
     const rm::ui::BuildOption& option, bool shift) {

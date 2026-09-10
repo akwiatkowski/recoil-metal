@@ -87,6 +87,7 @@ namespace {
 @property(nonatomic, assign)
     const std::function<void(const rm::Ray&, rm::MouseButton, rm::MouseModifiers)>* clickCallback;
 @property(nonatomic, assign) const std::function<void(rm::KeyEvent)>* keyCallback;
+@property(nonatomic, assign) const std::function<bool(float)>* scrollCallback;
 @property(nonatomic, assign) std::set<rm::Key>* heldKeys;
 /// The player's requested multiplier on automatic size — `--ui-scale`. 1 is automatic.
 @property(nonatomic, assign) float userHudScale;
@@ -416,9 +417,13 @@ static std::array<float, 2> viewPointIn(NSView* view, NSPoint windowPoint) {
     camera.pan(static_cast<float>(-event.deltaX) * scale,
                static_cast<float>(event.deltaY) * scale);
 }
-
 - (void)scrollWheel:(NSEvent*)event {
     if (self.renderer == nullptr) {
+        return;
+    }
+    // An array drag spends the wheel on spacing; anything else keeps the zoom.
+    if (self.scrollCallback != nullptr && *self.scrollCallback
+        && (*self.scrollCallback)(static_cast<float>(event.scrollingDeltaY))) {
         return;
     }
     // Exponential zoom: each notch multiplies the distance, so the step feels
@@ -478,6 +483,7 @@ struct rm::Window::Impl {
     std::function<void(float)> frameCallback;
     std::function<void(const rm::Ray&, rm::MouseButton, rm::MouseModifiers)> clickCallback;
     std::function<void(rm::KeyEvent)> keyCallback;
+    std::function<bool(float)> scrollCallback;
     std::set<rm::Key> heldKeys;
 
     Impl(int width, int height, const char* title, bool startFullscreen)
@@ -521,8 +527,8 @@ struct rm::Window::Impl {
             (__bridge CA::MetalLayer*)metalLayer);
         view.renderer = renderer.get();
         [view rmSyncUiViewport];
-        view.clickCallback = &clickCallback;
         view.keyCallback = &keyCallback;
+        view.scrollCallback = &scrollCallback;
         view.heldKeys = &heldKeys;
 
         delegate = [[RMDisplayLinkDelegate alloc] init];
@@ -541,8 +547,8 @@ struct rm::Window::Impl {
         // destroyed with this object.
         [displayLink invalidate];
         view.renderer = nullptr;
-        view.clickCallback = nullptr;
         view.keyCallback = nullptr;
+        view.scrollCallback = nullptr;
         view.heldKeys = nullptr;
         delegate.frameCallback = nullptr;
         renderer.reset();
@@ -628,6 +634,10 @@ void Window::onClick(
 
 void Window::onKey(std::function<void(KeyEvent event)> callback) {
     impl_->keyCallback = std::move(callback);
+}
+
+void Window::onScroll(std::function<bool(float scrollingDeltaY)> callback) {
+    impl_->scrollCallback = std::move(callback);
 }
 
 bool Window::keyHeld(Key key) const { return impl_->heldKeys.contains(key); }

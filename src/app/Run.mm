@@ -1043,6 +1043,11 @@ int runWindowed(const Session& session) {
         // binding lives in one place; the runner arrives later because the window (and its
         // callbacks) must exist before the match it drives.
         MatchRunner* runnerForKeys = nullptr;
+        /// Array-drag spacing as a multiple of the armed structure's diameter, tuned by
+        /// the wheel mid-drag; whether the current frame is inside such a drag, for the
+        /// wheel handler. Beside the callbacks, because both poll them across frames.
+        float arraySpacingScale = 1.0f;
+        bool arrayDragging = false;
 
         window.onKey([&window, &selected, &controlGroups, &units, &armedCommand, restPitch,
                       restYaw, &runnerForKeys](rm::KeyEvent event) {
@@ -1105,6 +1110,18 @@ int runWindowed(const Session& session) {
                     }
                 }
             }
+        });
+
+        // The wheel spends itself on array spacing mid-drag and zooms otherwise. Reads
+        // last frame's drag state: events land between frames, and 60 Hz staleness is
+        // nothing next to a finger already on the wheel.
+        window.onScroll([&arrayDragging, &arraySpacingScale](float scrollingDeltaY) {
+            if (!arrayDragging) {
+                return false;
+            }
+            arraySpacingScale =
+                rm::ui::arraySpacingScaleStep(arraySpacingScale, scrollingDeltaY);
+            return true;
         });
 
         // THE BUILD PANEL (BAR-styled, `core/ui/BuildPanel.hpp`). Scratch kept outside the loop
@@ -1272,7 +1289,7 @@ int runWindowed(const Session& session) {
         /// Whether the armed build may stand at a world point — the ghost's colour, and the
         /// same question the click asks before it orders anything.
         const auto armedPlaceable = [&](std::array<float, 2> at) -> bool {
-            if (!armedOption || !units.store.alive(buildWho.builder)) {
+            if (!armedOption) {
                 return false;
             }
             const std::string path = armedPath();
@@ -1281,17 +1298,8 @@ int runWindowed(const Session& session) {
             if (!targetType) {
                 return false;
             }
-            const auto builderType =
-                static_cast<std::size_t>(units.store.typeAt(buildWho.builder.index));
-            const rm::sim::PassabilityGrid& grid = passability.gridForBuild(
-                units, static_cast<std::size_t>(*targetType), builderType);
-            if (!units.terrain(map->field).resourceSitePlaceable(
-                    units.catalog.def(*targetType)->buildRestriction,
-                    rm::sim::fxFromFloat(at[0]), rm::sim::fxFromFloat(at[1]))) return false;
-            return rm::sim::buildSitePlaceable(
-                grid, rm::sim::fxFromFloat(at[0]), rm::sim::fxFromFloat(at[1]),
-                rm::sim::fxFromFloat(armedRadius()), units.store, units.catalog,
-                units.building);
+            return buildSitePlaceableFor(units, map->field, passability, buildWho.builder,
+                                         *targetType, at, armedRadius());
         };
 
         /// Shift appends work and keeps placement armed for another site.
@@ -1604,6 +1612,7 @@ int runWindowed(const Session& session) {
                         std::fflush(stdout);
                     } else if (cell) {
                         armedOption = cell;
+                        arraySpacingScale = 1.0f;  // a new arming starts at touching diameter
                     }
                     return;
                 }
@@ -2057,6 +2066,11 @@ int runWindowed(const Session& session) {
         // release is detected by polling, the same way the drag itself is.
         bool leftWasHeld = false;
         std::vector<rm::sim::UnitId> bandScratch;
+
+        // Raw drag march and snapped ghost sites, kept across frames for the same
+        // reason: an array drag paints every frame it is held.
+        std::vector<std::array<float, 2>> arrayRawScratch;
+        std::vector<std::array<float, 2>> arraySitesScratch;
 
         // HOW MANY BATCHES THE RENDERER HAS BEEN GIVEN — held ACROSS frames, which is the
         // whole point. This was a local captured at the top of each frame and compared at the
@@ -2622,6 +2636,76 @@ int runWindowed(const Session& session) {
                     }
                     selected = rm::applyBand<rm::sim::UnitId>(selected, bandScratch,
                                                               window.shiftHeldNow());
+                }
+                // --- Array-build drag, while a cell is armed ------------------------
+                // The band's polled gesture pointed at construction: the press began on
+                // the world (not a panel) with a build armed, so the drag paints sites
+                // instead of selecting. Ghost rings while held, queued builds on
+                // release; the arming stays, exactly like a shift-click's. A press that
+                // never travels still falls through to the click below, which is why a
+                // plain click keeps placing exactly one.
+                arrayDragging = false;
+                if (armedOption && (held || (leftWasHeld && !held)) && traveled
+                    && !onMinimap && !onPanel) {
+                    const auto groundAt = [&](std::array<float, 2> logical) {
+                        const rm::Ray ray = rm::screenRay(window.camera(), logical[0],
+                            viewport.logicalExtent.height - logical[1],
+                            viewport.logicalExtent.width, viewport.logicalExtent.height);
+                        const std::optional<simd_float3> hit = rm::pickGround(ray, map->field);
+                        if (!hit) return std::optional<std::array<float, 2>>{};
+                        return std::optional<std::array<float, 2>>{{hit->x, hit->z}};
+                    };
+                    if (const auto from = groundAt(logicalOrigin)) {
+                        if (const auto to = groundAt(logicalCursor)) {
+                            const std::string path = armedPath();
+                            if (const auto type = path.empty() ? std::nullopt
+                                    : resolveBuildable(units, content, path)) {
+                                const float diameter =
+                                    2.0f * armedRadius() * arraySpacingScale;
+                                rm::ui::arrayBuildCellsInto(*from, *to, diameter,
+                                    rm::ui::kArrayMaxSites, arrayRawScratch);
+                                arraySitesScratch.clear();
+                                for (const auto& point : arrayRawScratch) {
+                                    const auto snapped = snapBuildSite(units, *type, point);
+                                    if (arraySitesScratch.empty()
+                                        || arraySitesScratch.back() != snapped) {
+                                        arraySitesScratch.push_back(snapped);
+                                    }
+                                }
+                                const std::vector<std::array<float, 2>>& sites =
+                                    arraySitesScratch;
+                                arrayDragging = held && !sites.empty();
+                                if (held) {
+                                    for (const auto& site : sites) {
+                                        const bool ok = armedPlaceable(site);
+                                        rm::appendSelectionRing(decalVertices, map->field,
+                                            {site[0],
+                                             map->field.heightAtWorld(site[0], site[1]),
+                                             site[1]},
+                                            armedRadius() * kSelectionRingMargin,
+                                            ok ? kBuildGhostColour : kBuildGhostBlockedColour);
+                                    }
+                                } else if (!sites.empty()) {
+                                    const auto result = submitArrayBuilds(units, map->field,
+                                        passability, buildWho.builder, *type, sites,
+                                        playerDriving(units, units.playerArmy),
+                                        static_cast<rm::TickIndex>(matchTicks));
+                                    if (result.placed > 0 || result.refused > 0) {
+                                        const std::string& id =
+                                            buildOptions[*armedOption].id;
+                                        const std::string& what =
+                                            buildOptions[*armedOption].name.empty()
+                                                ? id
+                                                : buildOptions[*armedOption].name;
+                                        std::printf("build: %zu x %s array (%zu refused)\n",
+                                                    result.placed, what.c_str(),
+                                                    result.refused);
+                                        std::fflush(stdout);
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
                 leftWasHeld = held;
             }

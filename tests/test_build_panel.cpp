@@ -3,6 +3,7 @@
 // These two are the whole of this panel's correctness, for the same reason the minimap's
 // round-trip is the whole of its own: a cell drawn in one place and clicked in another looks
 // perfectly fine in a screenshot and is wrong every time a player uses it.
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 #include "core/ui/BuildPanel.hpp"
@@ -305,4 +306,47 @@ TEST_CASE("an absent panel swallows nothing", "[ui][build]") {
     const auto layout = buildPanelLayout(aFrame(), 0);
     REQUIRE(layout.empty());
     CHECK_FALSE(rm::ui::insideBuildPanel(layout, 0.0f, 0.0f));
+}
+
+TEST_CASE("array drags march sites from the press point", "[ui][build][array]") {
+    // The press point always builds: a short drag degrades to the single click it
+    // nearly was, and the direction follows the drag, not the axes.
+    const auto sites = rm::ui::arrayBuildCells({0.0f, 0.0f}, {100.0f, 0.0f}, 50.0f);
+    REQUIRE(sites.size() == 3);
+    CHECK(sites[0] == std::array<float, 2>{0.0f, 0.0f});
+    CHECK(sites[1] == std::array<float, 2>{50.0f, 0.0f});
+    CHECK(sites[2] == std::array<float, 2>{100.0f, 0.0f});
+
+    const auto diagonal = rm::ui::arrayBuildCells({0.0f, 0.0f}, {30.0f, 40.0f}, 50.0f);
+    REQUIRE(diagonal.size() == 2);
+    CHECK(diagonal[0] == std::array<float, 2>{0.0f, 0.0f});
+    CHECK(diagonal[1][0] == Catch::Approx(30.0f));
+    CHECK(diagonal[1][1] == Catch::Approx(40.0f));
+    // A partial last step is dropped, not stretched: sites stay on the spacing grid
+    // the ghosts were drawn from.
+    const auto partial = rm::ui::arrayBuildCells({0.0f, 0.0f}, {70.0f, 0.0f}, 50.0f);
+    REQUIRE(partial.size() == 2);
+    CHECK(partial[1] == std::array<float, 2>{50.0f, 0.0f});
+}
+
+TEST_CASE("array drags cap sites and survive degenerate input", "[ui][build][array]") {
+    const auto capped = rm::ui::arrayBuildCells({0.0f, 0.0f}, {1000.0f, 0.0f}, 10.0f, 5);
+    REQUIRE(capped.size() == 5);
+    CHECK(capped.back() == std::array<float, 2>{40.0f, 0.0f});
+
+    const auto still = rm::ui::arrayBuildCells({7.0f, 9.0f}, {7.0f, 9.0f}, 50.0f);
+    REQUIRE(still.size() == 1);
+    CHECK(still.front() == std::array<float, 2>{7.0f, 9.0f});
+
+    CHECK(rm::ui::arrayBuildCells({0.0f, 0.0f}, {100.0f, 0.0f}, 0.0f).empty());
+    CHECK(rm::ui::arrayBuildCells({0.0f, 0.0f}, {100.0f, 0.0f}, 50.0f, 0).empty());
+}
+
+TEST_CASE("array wheel steps spacing with the zoom's direction", "[ui][build][array]") {
+    CHECK(rm::ui::arraySpacingScaleStep(1.0f, 0.0f) == 1.0f);
+    CHECK(rm::ui::arraySpacingScaleStep(1.0f, 10.0f) < 1.0f);
+    CHECK(rm::ui::arraySpacingScaleStep(1.0f, -10.0f) > 1.0f);
+    CHECK(rm::ui::arraySpacingScaleStep(1.0f, 10000.0f) == rm::ui::kArraySpacingMinScale);
+    CHECK(rm::ui::arraySpacingScaleStep(1.0f, -10000.0f) == rm::ui::kArraySpacingMaxScale);
+    CHECK(rm::ui::arraySpacingScaleStep(0.5f, 10000.0f) == rm::ui::kArraySpacingMinScale);
 }

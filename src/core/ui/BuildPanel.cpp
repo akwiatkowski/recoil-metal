@@ -403,4 +403,39 @@ void appendBuildPanel(Geometry& out, const text::Font& labelFont, const text::Fo
     }
 }
 
+void arrayBuildCellsInto(std::array<float, 2> from, std::array<float, 2> to,
+    float spacingElmos, std::size_t maxSites, std::vector<std::array<float, 2>>& out) {
+    out.clear();
+    if (maxSites == 0 || spacingElmos <= 0.0f) {
+        return;
+    }
+    const float dx = to[0] - from[0];
+    const float dz = to[1] - from[1];
+    const float distance = std::sqrt(dx * dx + dz * dz);
+    const std::size_t count =
+        std::min(static_cast<std::size_t>(distance / spacingElmos) + 1, maxSites);
+    out.reserve(count);
+    const float stepX = distance > 0.0f ? dx / distance : 0.0f;
+    const float stepZ = distance > 0.0f ? dz / distance : 0.0f;
+    for (std::size_t i = 0; i < count; ++i) {
+        const float along = static_cast<float>(i) * spacingElmos;
+        out.push_back({from[0] + stepX * along, from[1] + stepZ * along});
+    }
+}
+
+std::vector<std::array<float, 2>> arrayBuildCells(std::array<float, 2> from,
+    std::array<float, 2> to, float spacingElmos, std::size_t maxSites) {
+    std::vector<std::array<float, 2>> sites;
+    arrayBuildCellsInto(from, to, spacingElmos, maxSites, sites);
+    return sites;
+}
+
+float arraySpacingScaleStep(float scale, float wheelPoints) noexcept {
+    // Same exponential feel as the zoom the wheel otherwise drives, so one hand's
+    // gesture keeps one meaning: up (positive, zoom-in) tightens, down loosens.
+    constexpr float kWheelPerPoint = 0.04f;
+    return std::clamp(scale * std::exp(-wheelPoints * kWheelPerPoint),
+                      kArraySpacingMinScale, kArraySpacingMaxScale);
+}
+
 } // namespace rm::ui

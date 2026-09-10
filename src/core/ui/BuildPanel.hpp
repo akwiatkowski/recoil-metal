@@ -8,6 +8,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <vector>
 
 namespace rm::ui {
 
@@ -234,5 +235,36 @@ void appendBuildPanel(Geometry& out, const text::Font& labelFont, const text::Fo
 /// An earlier draft of this line claimed the opposite of what the code does; the test asserts
 /// the clamp, so the comment was the thing that was wrong.
 [[nodiscard]] Colour tierTint(const Theme& theme, int tier) noexcept;
+
+/// Cap on one drag's sites: a full-map swipe at minimum spacing would otherwise queue
+/// hundreds of dead orders, and repeating the gesture is cheap.
+inline constexpr std::size_t kArrayMaxSites = 32;
+
+/// Bounds on the wheel spacing scale, as multiples of the structure diameter. Below
+/// half the ghosts merge into one smear; above quadruple the "array" is dots.
+inline constexpr float kArraySpacingMinScale = 0.5f;
+inline constexpr float kArraySpacingMaxScale = 4.0f;
+
+/// World-space points, so both the ghost row and the release submit read the same
+/// answer — a ghost that promises a site the order then refuses is the failure this
+/// file's tests exist to catch. Pure arithmetic over the two ground points, like
+/// everything else here: snapping, validation and issuing all happen downstream.
+///
+/// Sites march from `from` toward `to` one `spacingElmos` apart, so the press point
+/// always builds and a short drag degrades to the single click it nearly was.
+/// Non-positive spacing or a zero cap answers no sites rather than dividing by zero.
+[[nodiscard]] std::vector<std::array<float, 2>> arrayBuildCells(std::array<float, 2> from,
+    std::array<float, 2> to, float spacingElmos, std::size_t maxSites = kArrayMaxSites);
+
+/// The same march written into a caller-kept buffer: the per-frame ghost row reuses
+/// its scratch instead of allocating sixty small vectors a second mid-drag.
+void arrayBuildCellsInto(std::array<float, 2> from, std::array<float, 2> to,
+    float spacingElmos, std::size_t maxSites, std::vector<std::array<float, 2>>& out);
+
+/// The wheel step for array spacing, as a scale on the structure diameter. Scrolling
+/// up tightens toward half-diameter packing, scrolling down loosens toward quadruple —
+/// the same direction as the zoom the wheel otherwise drives, so one hand learns one
+/// gesture. A still wheel is the identity; the bounds clamp rather than saturate.
+[[nodiscard]] float arraySpacingScaleStep(float scale, float wheelPoints) noexcept;
 
 } // namespace rm::ui
