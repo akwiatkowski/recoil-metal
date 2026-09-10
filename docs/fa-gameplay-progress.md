@@ -181,7 +181,7 @@ excluded from the headline.
 | [`FA-PROGRESS`](#fa-progress---enhancements-veterancy-and-special-units) | Enhancements, veterancy, special units | `WP-34`-`36` | 45% | 30% | 40% | Enhancement removal uninstalls with health fallback (tested); next is the Lua-side contract (SetUpgradedTo, callbacks). |
 | [`FA-TERRAIN`](#fa-terrain---mutable-terrain-and-craters) | Mutable terrain and craters | `WP-37` | 0% | 0% | 25% | Trace one crater from damage through terrain, pathing, and rendering invalidation. |
 | [`FA-AI`](#fa-ai---retail-ai-and-native-manager-boundary) | Retail AI and native manager boundary | `WP-38` | 50% | 10% | 30% | Must-scout requests, unknown-threat queues and continuous air flybys are in with headless cover; next is High/LowPriority interest lists. Current easy, turtle and tech duels are decisive. |
-| [`FA-UI`](#fa-ui---player-interface-and-advanced-controls) | Player interface and advanced controls | `WP-39`-`40` | 75% | 5% | 15% | Trace and implement the first retail data-driven command page from `WP-40`. |
+| [`FA-UI`](#fa-ui---player-interface-and-advanced-controls) | Player interface and advanced controls | `WP-39`-`40` | 80% | 5% | 15% | ToggleCaps + OrderOverrides drive the rack page (retail slots, unanimous merge, headed toggle scenario); toggle sim behaviors stay open. |
 | [`FA-PRESENT`](#fa-present---animation-effects-and-audio) | Animation, effects, audio | `WP-41`-`42` | 75% | 5% | 45% | Script-driven manipulators on the authored weapon effects; then dynamic music. |
 | [`FA-PERSIST`](#fa-persist---replay-hashing-and-saveresume) | Replay, hashing, save/resume | `WP-43`-`44` | 70% | 20% | 90% | General app saves remain absent; the shared golden rebaseline is complete (`afe2867`), separate from save/resume scenario coverage. |
 
@@ -677,12 +677,21 @@ Both offscreen benchmark modes now run that same composition; world-only clears 
 and minimap after composition, keeping particles, construction effects, world overlays, and
 strategic-icon fallback decisions identical.
 
-**Largest gap:** the first retail command page is data-driven, but toggle caps/order overrides,
+The toggle page follows the same boundary: `General.ToggleCaps` parse into the definition,
+presence by authored `true` (no capability fallback), and toggles fill dead order slots at
+retail's preferred positions (Shield/Weapon 7, Jamming/Intel 8, Production/Stealth 9, Generic
+10, Special/Cloak 11) with orders winning ties. `General.OrderOverrides` merge unanimously
+across the selection and relabel cells (UEB4301's dome bitmap/help, tested headless and through
+the corpus). Every toggle renders visibly disabled — no simulation state backs any of them —
+with a NOT IMPLEMENTED hover card; toggle cells swallow clicks by construction (no order kind).
+A headed `toggle` capture scenario pins the extractor's Production cell pixel- and hash-stable.
+
+**Largest gap:** toggle simulation behaviors (production pause, shield/weapon/intel switching),
 idle selectors, overlays, key contexts, and split views remain absent (`WP-40`).
 
 ```text
-/goal Advance FA-UI with the next WP-40 retail boundary: ToggleCaps plus OrderOverrides, keeping
-unsupported toggle actions visibly disabled until their simulation state exists. Add focused tests,
+/goal Advance FA-UI with toggle simulation behaviors behind the data-driven toggle page,
+starting with production pause, keeping the headed toggle scenario green. Add focused tests,
 run the full suite and golden replay, and update FA-UI.
 ```
 

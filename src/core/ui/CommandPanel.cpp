@@ -114,6 +114,144 @@ commandAvailability(std::span<const unitdef::UnitDef* const> selection) noexcept
     return available;
 }
 
+ToggleAvailability
+toggleAvailability(std::span<const unitdef::UnitDef* const> selection) noexcept {
+    ToggleAvailability present{};
+    for (const unitdef::UnitDef* def : selection) {
+        // Undeclared tables vote nothing: unlike orders, toggles have no
+        // capability fallback to infer them from.
+        if (def == nullptr || !def->toggleCapsDeclared) {
+            continue;
+        }
+        for (std::size_t i = 0; i < kToggleDescriptors.size(); ++i) {
+            if (def->hasToggleCap(kToggleDescriptors[i].cap)) {
+                present[i] = true;
+            }
+        }
+    }
+    return present;
+}
+
+namespace {
+
+/// Retail's unanimous rule for one key (`orders.lua`, `-- apply overrides`): the
+/// first unit stating it sets it, a disagreeing unit drops it, and units without
+/// the key do not vote. The winner borrows from its definition.
+[[nodiscard]] const unitdef::UnitDef::OrderOverride*
+agreedOverride(std::span<const unitdef::UnitDef* const> selection, std::string_view key) {
+    const unitdef::UnitDef::OrderOverride* agreed = nullptr;
+    for (const unitdef::UnitDef* def : selection) {
+        if (def == nullptr) {
+            continue;
+        }
+        const auto stated = def->orderOverrides.find(key);
+        if (stated == def->orderOverrides.end()) {
+            continue;
+        }
+        if (agreed == nullptr) {
+            agreed = &stated->second;
+        } else if (agreed->bitmapId != stated->second.bitmapId
+                   || agreed->helpText != stated->second.helpText) {
+            return nullptr;
+        }
+    }
+    return agreed;
+}
+
+} // namespace
+
+std::map<std::string, unitdef::UnitDef::OrderOverride, std::less<>>
+orderOverrides(std::span<const unitdef::UnitDef* const> selection) {
+    std::map<std::string, unitdef::UnitDef::OrderOverride, std::less<>> merged;
+    for (const unitdef::UnitDef* def : selection) {
+        if (def == nullptr) {
+            continue;
+        }
+        for (const auto& [key, _] : def->orderOverrides) {
+            if (merged.contains(key)) {
+                continue;
+            }
+            if (const auto* agreed = agreedOverride(selection, key)) {
+                merged.emplace(key, *agreed);
+            }
+        }
+    }
+    return merged;
+}
+namespace {
+
+/// The `RULEUCC_*` key an override states for a rack order. Attack-move and Assist
+/// have none: retail folds both into other orders, so no override can name them.
+[[nodiscard]] std::optional<std::string_view>
+orderKeyFor(sim::CommandKind kind) noexcept {
+    switch (kind) {
+    case sim::CommandKind::Move: return "RULEUCC_Move";
+    case sim::CommandKind::Attack: return "RULEUCC_Attack";
+    case sim::CommandKind::Patrol: return "RULEUCC_Patrol";
+    case sim::CommandKind::Stop: return "RULEUCC_Stop";
+    case sim::CommandKind::Guard: return "RULEUCC_Guard";
+    case sim::CommandKind::Dive: return "RULEUCC_Dive";
+    case sim::CommandKind::Overcharge: return "RULEUCC_Overcharge";
+    case sim::CommandKind::Repair: return "RULEUCC_Repair";
+    case sim::CommandKind::Reclaim: return "RULEUCC_Reclaim";
+    default: return std::nullopt;
+    }
+}
+
+} // namespace
+
+CommandPage commandPage(std::span<const unitdef::UnitDef* const> selection) noexcept {
+    const CommandAvailability available = commandAvailability(selection);
+    const ToggleAvailability toggles = toggleAvailability(selection);
+    const auto presentation = [&](std::string_view key, std::string_view name,
+                                  std::string_view icon) {
+        // Views borrow from the selection's definitions (never the merged copy,
+        // which dies with this call); the page must not outlive them.
+        const unitdef::UnitDef::OrderOverride* stated = agreedOverride(selection, key);
+        if (stated == nullptr) {
+            return std::pair{name, icon};
+        }
+        // Retail swaps the bitmap and help text; an empty half keeps the default.
+        // Help keys show raw — no LOC table resolves them out here.
+        const std::string_view bitmap =
+            stated->bitmapId.empty() ? icon : std::string_view{stated->bitmapId};
+        const std::string_view help =
+            stated->helpText.empty() ? name : std::string_view{stated->helpText};
+        return std::pair{help, bitmap};
+    };
+    CommandPage page{};
+    for (std::size_t slot = 0; slot < kCommandSlots; ++slot) {
+        const CommandDescriptor& descriptor = kCommandDescriptors[slot];
+        const std::optional<std::string_view> key =
+            descriptor.kind ? orderKeyFor(*descriptor.kind) : std::nullopt;
+        if (available[slot]) {
+            const auto [name, icon] = key ? presentation(*key, descriptor.name, descriptor.icon)
+                                         : std::pair{descriptor.name, descriptor.icon};
+            page[slot] = {name, icon, true, std::nullopt};
+            continue;
+        }
+        // Orders first: a toggle only fills its preferred slot when the order there
+        // is dead. First table entry wins a shared slot; no shipped unit authors
+        // both toggles of any pair, so the order is a formality.
+        std::optional<std::size_t> toggle;
+        for (std::size_t i = 0; i < kToggleDescriptors.size(); ++i) {
+            if (toggles[i] && kToggleDescriptors[i].slot == slot) {
+                toggle = i;
+                break;
+            }
+        }
+        if (!toggle) {
+            page[slot] = {descriptor.name, descriptor.icon, available[slot], std::nullopt};
+            continue;
+        }
+        const ToggleDescriptor& rule = kToggleDescriptors[*toggle];
+        const auto [name, icon] = presentation(rule.cap, rule.label, rule.icon);
+        // Present but never enabled: no simulation state backs any toggle yet.
+        page[slot] = {name, icon, false, toggle};
+    }
+    return page;
+}
+
 namespace {
 
 constexpr float kRackPadding = 8.0f;
@@ -174,6 +312,29 @@ std::optional<std::size_t> commandSlotAt(const CommandRackLayout& layout, float 
     }
     return static_cast<std::size_t>(row) * kCommandColumns
          + static_cast<std::size_t>(column);
+}
+
+InfoCard toggleCard(const ToggleDescriptor& toggle,
+    std::span<const unitdef::UnitDef* const> selection) {
+    InfoCard card;
+    card.title = std::string{toggle.label} + " TOGGLE";
+    std::size_t total = 0, eligible = 0;
+    for (const auto* def : selection) {
+        if (!def) continue;
+        ++total;
+        if (def->toggleCapsDeclared && def->hasToggleCap(toggle.cap)) ++eligible;
+    }
+    if (total == 0) {
+        card.rows.push_back({"STATE", "SELECT A UNIT", kLoss});
+        return card;
+    }
+    // Present but never enabled: no simulation state backs any toggle yet, so the
+    // count reads as the audience the toggle will serve once it exists.
+    card.rows.push_back({"STATE", "NOT IMPLEMENTED", kLoss});
+    card.rows.push_back({"APPLIES TO", std::to_string(eligible) + " OF "
+        + std::to_string(total) + " UNITS"});
+    card.rows.push_back({"", "NO SIMULATION STATE YET"});
+    return card;
 }
 
 InfoCard commandCard(const CommandDescriptor& command,
@@ -249,10 +410,19 @@ InfoCard commandCard(const CommandDescriptor& command,
     return card;
 }
 
+InfoCard commandInspector(const CommandPage& page, std::size_t slot,
+    std::span<const unitdef::UnitDef* const> selection, bool armed) {
+    const std::optional<std::size_t> toggle = page[slot].toggle;
+    if (toggle) {
+        return toggleCard(kToggleDescriptors[*toggle], selection);
+    }
+    return commandCard(kCommandDescriptors[slot], selection, armed);
+}
+
 void appendCommandRack(Geometry& out, const text::Font& labelFont,
                        const text::Font& readoutFont, const Theme& theme,
                        const CommandRackLayout& layout,
-                       const CommandAvailability& available,
+                       const CommandPage& page,
                        std::optional<std::size_t> hovered,
                        std::optional<sim::CommandKind> armed,
                        const CommandAvailability& engaged) {
@@ -272,8 +442,12 @@ void appendCommandRack(Geometry& out, const text::Font& labelFont,
 
     for (std::size_t slot = 0; slot < kCommandSlots; ++slot) {
         const CommandDescriptor& command = kCommandDescriptors[slot];
-        const bool enabled = command.implemented() && available[slot];
-        const bool active = (command.kind && armed == command.kind) || engaged[slot];
+        const CommandPageCell& cell = page[slot];
+        const bool enabled = cell.enabled;
+        // A toggle borrows a dead order's cell: it must not light as the order
+        // the descriptor underneath names, whatever is armed.
+        const bool active =
+            (!cell.toggle && command.kind && armed == command.kind) || engaged[slot];
         const auto origin = commandCellOrigin(layout, slot);
         const Colour well = fade(theme.well, enabled ? 1.0f : 0.42f);
         text::appendRectV(out.chrome, labelFont, origin[0], origin[1], layout.cellWidth,
@@ -296,7 +470,7 @@ void appendCommandRack(Geometry& out, const text::Font& labelFont,
                              layout.cellHeight, lit);
         }
 
-        const std::string label = command.name.empty() ? "--" : std::string{command.name};
+        const std::string label = cell.name.empty() ? "--" : std::string{cell.name};
         const std::vector<std::string> lines =
             wrapToWidth(labelFont.glyphs, label, layout.cellWidth - 6.0f, 2, 0.72f);
         const float lineHeight = std::max(9.0f, labelFont.lineHeight * 0.72f);

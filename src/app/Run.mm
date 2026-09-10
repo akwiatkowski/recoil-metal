@@ -468,8 +468,8 @@ void composeHeadlessInterface(rm::Renderer& renderer, const Session& session,
                         units.catalog.def(units.store.typeAt(id.index)));
                 }
             }
-            const rm::ui::CommandAvailability shotCommandAvailable =
-                rm::ui::commandAvailability(shotCommandSelection);
+            const rm::ui::CommandPage shotCommandPage =
+                rm::ui::commandPage(shotCommandSelection);
             const std::size_t hoverAt = parseCount(argc, argv, "--hover");
             const std::optional<std::size_t> shotHovered =
                 hoverAt > 0 && hoverAt <= shotOptions.size()
@@ -720,7 +720,7 @@ void composeHeadlessInterface(rm::Renderer& renderer, const Session& session,
                     shotHovered && *shotHovered < shotOptions.size()
                         ? rm::ui::buildOptionCard(shotOptions[*shotHovered], session.uiProfile)
                         : shotHoveredCommand
-                            ? rm::ui::commandCard(rm::ui::kCommandDescriptors[*shotHoveredCommand],
+                            ? rm::ui::commandInspector(shotCommandPage, *shotHoveredCommand,
                                 shotCommandSelection)
                             : selectedUnitCard(units, shotRoster.front(), activeBuilderFor(shotBuilders));
                 if (shotHoveredCommand) {
@@ -736,7 +736,7 @@ void composeHeadlessInterface(rm::Renderer& renderer, const Session& session,
             rm::ui::appendCommandRack(
                 hud, renderer.labelFont(), renderer.readoutFont(), shotTheme,
                 rm::ui::commandRackLayout(shotFrame, !capturedSelection.empty()),
-                shotCommandAvailable, shotHoveredCommand);
+                shotCommandPage, shotHoveredCommand);
 
             if (shotProduction) {
                 rm::ui::appendProductionPanel(hud, renderer.labelFont(), renderer.readoutFont(),
@@ -1117,6 +1117,7 @@ int runWindowed(const Session& session) {
         rm::ui::PanelPages panelPages;
         std::size_t productionPage = 0;
         rm::ui::CommandAvailability commandAvailable{};
+        rm::ui::CommandPage commandPage{};
         /// Standing orders that are ON for the whole selection, lit on the rack.
         rm::ui::CommandAvailability commandEngaged{};
         std::vector<const rm::unitdef::UnitDef*> commandSelection;
@@ -2337,6 +2338,7 @@ int runWindowed(const Session& session) {
                 }
             }
             commandAvailable = rm::ui::commandAvailability(commandSelection);
+            commandPage = rm::ui::commandPage(commandSelection);
             // Auto-expand is lit when every field builder in the selection is on it.
             commandEngaged = {};
             {
@@ -2441,7 +2443,7 @@ int runWindowed(const Session& session) {
             const std::optional<std::size_t> overCommand =
                 rm::ui::commandSlotAt(commandRack, hudCursor[0], hudCursor[1]);
             rm::ui::appendCommandRack(hudScratch, window.labelFont(), window.readoutFont(),
-                                      theme, commandRack, commandAvailable, overCommand,
+                                      theme, commandRack, commandPage, overCommand,
                                       armedCommand, commandEngaged);
 
             const auto production = gatherProduction(units, activeBuilder);
@@ -2478,8 +2480,7 @@ int runWindowed(const Session& session) {
                 } else if (overCommand && *overCommand < rm::ui::kCommandSlots) {
                     // For a standing order the flag reads ON/OFF; a targeted command is not
                     // being aimed while merely hovered, and `commandEngaged` is false for it.
-                    inspector = rm::ui::commandCard(
-                        rm::ui::kCommandDescriptors[*overCommand],
+                    inspector = rm::ui::commandInspector(commandPage, *overCommand,
                         commandSelection, commandEngaged[*overCommand]);
                 } else if (overTile && *overTile < rosterTiles.size()) {
                     inspector = selectedUnitCard(units, rosterTiles[*overTile], activeBuilder);

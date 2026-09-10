@@ -8,6 +8,8 @@
 #include <cstddef>
 #include <optional>
 #include <span>
+#include <map>
+#include <string>
 #include <string_view>
 
 namespace rm::ui {
@@ -74,6 +76,42 @@ inline constexpr CommandDescriptors kCommandDescriptors{{
     {{sim::CommandKind::Reclaim}, "RECLAIM", "reclaim"},
 }};
 
+/// One retail unit-toggle rule (`lua/ui/game/orders.lua`, `# Unit toggle rules`).
+/// Slots are 0-based here like the order table above (retail states them 1-based):
+/// Shield/Weapon share Dive's slot, Jamming/Intel Overcharge's, Production/Stealth
+/// Repair's, Generic Assist's, Special/Cloak the app action's. No shipped unit
+/// authors both toggles of any shared slot, so the pair never collides in practice.
+struct ToggleDescriptor {
+    std::string_view cap;   ///< `RULEUTC_*` key, matching `UnitDef::toggleCaps`
+    std::string_view label; ///< English cell label for the retail help key
+    std::string_view icon;  ///< retail bitmapId; the atlas falls back when absent
+    std::size_t slot;       ///< 0-based into `kCommandDescriptors`
+};
+inline constexpr std::array<ToggleDescriptor, 9> kToggleDescriptors{{
+    {"RULEUTC_ShieldToggle", "SHIELD", "shield", 6},
+    {"RULEUTC_WeaponToggle", "WEAPON", "toggle-weapon", 6},
+    {"RULEUTC_JammingToggle", "JAMMING", "jamming", 7},
+    {"RULEUTC_IntelToggle", "INTEL", "intel", 7},
+    {"RULEUTC_ProductionToggle", "PRODUCTION", "production", 8},
+    {"RULEUTC_StealthToggle", "STEALTH", "stealth", 8},
+    {"RULEUTC_GenericToggle", "GENERIC", "production", 9},
+    {"RULEUTC_SpecialToggle", "SPECIAL", "activate-weapon", 10},
+    {"RULEUTC_CloakToggle", "CLOAK", "intel-counter", 10},
+}};
+using ToggleAvailability = std::array<bool, 9>;
+
+/// One resolved rack cell: an order, a toggle filling its dead order slot, or the
+/// dead order itself. Name/icon views borrow from the descriptor tables and the
+/// selection's override records, so a page must not outlive either.
+struct CommandPageCell {
+    std::string_view name;
+    std::string_view icon;
+    bool enabled = false;
+    /// `kToggleDescriptors` index when this cell is a toggle; otherwise an order.
+    std::optional<std::size_t> toggle;
+};
+using CommandPage = std::array<CommandPageCell, kCommandSlots>;
+
 /// The rack slot an app action sits in.
 [[nodiscard]] constexpr std::size_t rackSlotFor(RackAction action) noexcept {
     for (std::size_t slot = 0; slot < kCommandDescriptors.size(); ++slot) {
@@ -89,6 +127,37 @@ inline constexpr CommandDescriptors kCommandDescriptors{{
 /// Null definitions are ignored; an empty or wholly unknown selection disables every slot.
 [[nodiscard]] CommandAvailability
 commandAvailability(std::span<const unitdef::UnitDef* const> selection) noexcept;
+
+/// Toggle presence parallel to `kToggleDescriptors`: true when at least one selected
+/// unit authors the cap true. Presence is data-driven; nothing enables a toggle yet,
+/// because no simulation state backs any of them — the page renders present toggles
+/// visibly disabled. Undeclared tables mean no toggles, never all of them.
+[[nodiscard]] ToggleAvailability
+toggleAvailability(std::span<const unitdef::UnitDef* const> selection) noexcept;
+
+/// Retail's override merge over a selection: an order key survives only when every
+/// unit stating it agrees on bitmap and help; any conflict drops the key, and units
+/// without the key do not vote. Views borrow from the selection's definitions.
+[[nodiscard]] std::map<std::string, unitdef::UnitDef::OrderOverride, std::less<>>
+orderOverrides(std::span<const unitdef::UnitDef* const> selection);
+
+/// The resolved page for one selection: order cells where their command is available,
+/// toggles filling dead order slots at their retail preferred slot (first table entry
+/// wins a shared slot), overrides applied to both. A page must not outlive the
+/// selection's definitions.
+[[nodiscard]] CommandPage
+commandPage(std::span<const unitdef::UnitDef* const> selection) noexcept;
+
+/// The hover card for a toggle cell: present-but-unsupported, with the count it would
+/// apply to once its simulation state exists.
+[[nodiscard]] InfoCard toggleCard(const ToggleDescriptor& toggle,
+                                  std::span<const unitdef::UnitDef* const> selection);
+
+/// The hover inspector for a rack slot: the toggle card on toggle cells, the order
+/// card elsewhere. Slot must be a live rack position.
+[[nodiscard]] InfoCard commandInspector(const CommandPage& page, std::size_t slot,
+                                        std::span<const unitdef::UnitDef* const> selection,
+                                        bool armed = false);
 
 [[nodiscard]] CommandRackLayout commandRackLayout(const FrameLayout& frame,
                                                    bool hasSelection) noexcept;
@@ -108,11 +177,12 @@ commandAvailability(std::span<const unitdef::UnitDef* const> selection) noexcept
                                    bool armed = false);
 
 /// `engaged` lights the cells whose standing order is ON for the whole selection, the way
-/// `armed` lights the command being targeted.
+/// `armed` lights the command being targeted. Cells come from `commandPage`: orders where
+/// available, toggles filling dead slots, overrides applied.
 void appendCommandRack(Geometry& out, const text::Font& labelFont,
                        const text::Font& readoutFont, const Theme& theme,
                        const CommandRackLayout& layout,
-                       const CommandAvailability& available,
+                       const CommandPage& page,
                        std::optional<std::size_t> hovered = std::nullopt,
                        std::optional<sim::CommandKind> armed = std::nullopt,
                        const CommandAvailability& engaged = CommandAvailability{});

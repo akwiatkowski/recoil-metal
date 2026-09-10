@@ -74,6 +74,20 @@ if [[ ${CAPTURE_SCENARIOS:-all} == upgrade ]]; then
     echo "HUD upgrade artifacts: $capture_dir"
     exit 0
 fi
+if [[ ${CAPTURE_SCENARIOS:-all} == toggle ]]; then
+    # The extractor's authored Production toggle fills its dead Repair slot at the
+    # retail preferred position, rendered visibly disabled: the hovered inspector
+    # reads NOT IMPLEMENTED rather than an order card. Two runs must agree to the
+    # pixel and the hash.
+    capture toggle 10 tests/fixtures/hud-toggle.commands \
+        'hud-state: selected=1 types=1 work=NONE' \
+        --select-type UEB1103 --hover-command 9 --look 5410 2772 450
+    for pass in first repeat; do
+        rg -q 'command inspector: NOT IMPLEMENTED' "$capture_dir/toggle.$pass.log"
+    done
+    echo "HUD toggle artifacts: $capture_dir"
+    exit 0
+fi
 
 capture construction 12 tests/fixtures/hud-construction.commands \
     'hud-state: selected=1 types=1 work=BUILDING progress=[1-9][0-9] flow=ACTIVE queued=0' \

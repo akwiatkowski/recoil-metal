@@ -1,9 +1,12 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "core/ui/CommandPanel.hpp"
+#include "core/unit/UnitBlueprint.hpp"
 
 #include <algorithm>
 #include <array>
+#include <cstdlib>
+#include <filesystem>
 
 using rm::sim::CommandKind;
 
@@ -272,4 +275,120 @@ TEST_CASE("command explanations distinguish unsupported actions and mixed select
     const auto unsupported = rm::ui::commandCard(rm::ui::CommandDescriptor{}, mixed);
     CHECK(unsupported.rows[0].value == "NOT IMPLEMENTED");
     CHECK(unsupported.rows.back().value == "NO UNIT CAN USE THIS YET");
+}
+
+TEST_CASE("toggle availability follows authored toggle caps", "[ui][toggles]") {
+    rm::unitdef::UnitDef shield;
+    shield.toggleCapsDeclared = true;
+    shield.toggleCaps = {"RULEUTC_IntelToggle", "RULEUTC_ShieldToggle"};
+    rm::unitdef::UnitDef plain;
+    const std::array<const rm::unitdef::UnitDef*, 3> mixed{&shield, nullptr, &plain};
+    const rm::ui::ToggleAvailability present = rm::ui::toggleAvailability(mixed);
+    // Undeclared tables vote nothing: the plain structure contributes no toggles.
+    CHECK(present[0]);
+    CHECK(present[3]);
+    CHECK(std::ranges::count(present, true) == 2);
+    CHECK(std::ranges::none_of(rm::ui::toggleAvailability({}), std::identity{}));
+}
+
+TEST_CASE("order overrides merge unanimously across the selection", "[ui][toggles]") {
+    rm::unitdef::UnitDef first;
+    first.orderOverrides["RULEUTC_ShieldToggle"] = {"shield-dome", "toggle_shield_dome"};
+    rm::unitdef::UnitDef second = first;
+    rm::unitdef::UnitDef silent;
+    const std::array<const rm::unitdef::UnitDef*, 3> unanimous{&first, &second, &silent};
+    const auto merged = rm::ui::orderOverrides(unanimous);
+    REQUIRE(merged.size() == 1);
+    CHECK(merged.at("RULEUTC_ShieldToggle").bitmapId == "shield-dome");
+    CHECK(merged.at("RULEUTC_ShieldToggle").helpText == "toggle_shield_dome");
+
+    // One disagreeing help text drops the key; units without it do not vote.
+    second.orderOverrides["RULEUTC_ShieldToggle"].helpText = "toggle_other";
+    CHECK(rm::ui::orderOverrides(unanimous).empty());
+}
+
+TEST_CASE("the command page fills dead order slots with toggles", "[ui][toggles]") {
+    // An immobile unarmed structure: only Stop lives, so Dive's slot takes the
+    // retail Shield toggle at its preferred position — present but disabled.
+    rm::unitdef::UnitDef shield;
+    shield.toggleCapsDeclared = true;
+    shield.toggleCaps = {"RULEUTC_ShieldToggle"};
+    const std::array<const rm::unitdef::UnitDef*, 1> selection{&shield};
+    const rm::ui::CommandPage page = rm::ui::commandPage(selection);
+    REQUIRE(page[6].toggle.has_value());
+    CHECK(page[6].toggle == 0);
+    CHECK(page[6].name == "SHIELD");
+    CHECK(page[6].icon == "shield");
+    CHECK_FALSE(page[6].enabled);
+    CHECK(page[4].name == "STOP");
+    CHECK(page[4].enabled);
+    CHECK_FALSE(page[4].toggle.has_value());
+}
+
+TEST_CASE("orders keep their slots when a toggle wants them too", "[ui][toggles]") {
+    // A field builder: Auto-expand lives on slot 10, so the Special toggle that
+    // shares retail's eleventh slot stays out of the page. Intel takes the dead
+    // Overcharge slot beside it.
+    rm::unitdef::UnitDef builder;
+    builder.speedElmosPerSecond = 10.0f;
+    builder.buildRate = 5.0f;
+    builder.toggleCapsDeclared = true;
+    builder.toggleCaps = {"RULEUTC_IntelToggle", "RULEUTC_SpecialToggle"};
+    const std::array<const rm::unitdef::UnitDef*, 1> selection{&builder};
+    const rm::ui::CommandPage page = rm::ui::commandPage(selection);
+    CHECK(page[10].name == "AUTO MEX");
+    CHECK(page[10].enabled);
+    CHECK_FALSE(page[10].toggle.has_value());
+    REQUIRE(page[7].toggle.has_value());
+    CHECK(page[7].name == "INTEL");
+    CHECK_FALSE(page[7].enabled);
+}
+
+TEST_CASE("overrides relabel the cells they agree on", "[ui][toggles]") {
+    rm::unitdef::UnitDef shield;
+    shield.toggleCapsDeclared = true;
+    shield.toggleCaps = {"RULEUTC_ShieldToggle"};
+    shield.orderOverrides["RULEUTC_ShieldToggle"] = {"shield-dome", "toggle_shield_dome"};
+    const std::array<const rm::unitdef::UnitDef*, 1> selection{&shield};
+    const rm::ui::CommandPage page = rm::ui::commandPage(selection);
+    REQUIRE(page[6].toggle.has_value());
+    CHECK(page[6].name == "toggle_shield_dome");
+    CHECK(page[6].icon == "shield-dome");
+}
+
+TEST_CASE("toggle cards report present-but-unsupported actions", "[ui][toggles]") {
+    rm::unitdef::UnitDef shield;
+    shield.toggleCapsDeclared = true;
+    shield.toggleCaps = {"RULEUTC_ShieldToggle"};
+    const std::array<const rm::unitdef::UnitDef*, 1> selection{&shield};
+    const rm::ui::InfoCard card = rm::ui::toggleCard(rm::ui::kToggleDescriptors[0], selection);
+    CHECK(card.title == "SHIELD TOGGLE");
+    REQUIRE(card.rows.size() == 3);
+    CHECK(card.rows[0].value == "NOT IMPLEMENTED");
+    CHECK(card.rows[1].value == "1 OF 1 UNITS");
+
+    const rm::ui::CommandPage page = rm::ui::commandPage(selection);
+    const rm::ui::InfoCard routed = rm::ui::commandInspector(page, 6, selection);
+    CHECK(routed.title == "SHIELD TOGGLE");
+    const rm::ui::InfoCard order = rm::ui::commandInspector(page, 4, selection);
+    CHECK(order.title == "STOP");
+}
+
+TEST_CASE("the retail shield's authored toggle reaches its rack cell", "[ui][toggles][corpus]") {
+    // End to end through the real blueprint: UEB4301 authors ShieldToggle plus an
+    // override for it, so its rack shows the dome bitmap and help key — disabled.
+    const char* home = std::getenv("HOME");
+    const std::filesystem::path root =
+        home ? std::filesystem::path{home} / "projects/llm/input/faf/units" : std::filesystem::path{};
+    if (!std::filesystem::is_directory(root)) SKIP("no retail unit corpus");
+    const auto def = rm::unitbp::loadFile(root / "UEB4301/UEB4301_unit.bp");
+    REQUIRE(def);
+    CHECK(def->toggleCapsDeclared);
+    CHECK(def->hasToggleCap("RULEUTC_ShieldToggle"));
+    const std::array<const rm::unitdef::UnitDef*, 1> selection{&*def};
+    const rm::ui::CommandPage page = rm::ui::commandPage(selection);
+    REQUIRE(page[6].toggle.has_value());
+    CHECK(page[6].name == "toggle_shield_dome");
+    CHECK(page[6].icon == "shield-dome");
+    CHECK_FALSE(page[6].enabled);
 }

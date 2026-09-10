@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <expected>
 #include <filesystem>
+#include <functional>
 #include <map>
 #include <optional>
 #include <span>
@@ -570,6 +571,28 @@ struct UnitDef {
     [[nodiscard]] bool hasCommandCap(std::string_view cap) const noexcept {
         return std::binary_search(commandCaps.begin(), commandCaps.end(), cap);
     }
+
+    /// The true entries in `General.ToggleCaps`, sorted for lookup — the same
+    /// declared/absent pattern as the command caps above. Presence drives the
+    /// toggle page; nothing enables a toggle yet, because no simulation state
+    /// backs any of them (the rack renders present toggles visibly disabled).
+    std::vector<std::string> toggleCaps;
+    bool toggleCapsDeclared = false;
+
+    [[nodiscard]] bool hasToggleCap(std::string_view cap) const noexcept {
+        return std::binary_search(toggleCaps.begin(), toggleCaps.end(), cap);
+    }
+
+    /// One `General.OrderOverrides` entry: presentation swaps for an order key
+    /// (`RULEUCC_*`/`RULEUTC_*`). Retail merges these across the selection —
+    /// unanimous bitmap/help wins, any conflict drops the key — and applies them
+    /// to the standard table's bitmap and help text.
+    struct OrderOverride {
+        std::string bitmapId;
+        std::string helpText;
+    };
+    /// Keyed by the overridden order key.
+    std::map<std::string, OrderOverride, std::less<>> orderOverrides;
 
     /// Whether this unit declares a tag. Case-sensitive: the corpus is consistently upper
     /// case, and a case-insensitive compare would hide a typo in a data file rather than

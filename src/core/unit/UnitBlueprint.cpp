@@ -220,6 +220,36 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
             const auto duplicate = std::ranges::unique(def.commandCaps);
             def.commandCaps.erase(duplicate.begin(), duplicate.end());
         }
+        if (const lua::Value* toggles = general->find("ToggleCaps");
+            toggles != nullptr && toggles->isTable()) {
+            def.toggleCapsDeclared = true;
+            for (const lua::Field& field : toggles->fields) {
+                if (field.value.asBoolean().value_or(false)) {
+                    def.toggleCaps.push_back(field.key);
+                }
+            }
+            std::ranges::sort(def.toggleCaps);
+            const auto duplicate = std::ranges::unique(def.toggleCaps);
+            def.toggleCaps.erase(duplicate.begin(), duplicate.end());
+        }
+        if (const lua::Value* overrides = general->find("OrderOverrides");
+            overrides != nullptr && overrides->isTable()) {
+            for (const lua::Field& field : overrides->fields) {
+                if (!field.value.isTable()) {
+                    continue;
+                }
+                unitdef::UnitDef::OrderOverride override;
+                if (const std::optional<std::string_view> bitmap = field.value.stringAt("bitmapId")) {
+                    override.bitmapId = std::string{*bitmap};
+                }
+                if (const std::optional<std::string_view> help = field.value.stringAt("helpText")) {
+                    override.helpText = std::string{*help};
+                }
+                if (!override.bitmapId.empty() || !override.helpText.empty()) {
+                    def.orderOverrides[field.key] = std::move(override);
+                }
+            }
+        }
     }
 
     // --- physics -----------------------------------------------------------

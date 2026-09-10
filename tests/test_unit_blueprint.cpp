@@ -934,3 +934,41 @@ UnitBlueprint {
     REQUIRE(def.has_value());
     CHECK(def->airMinSpeedElmosPerSecond == Approx(96.0f));
 }
+
+TEST_CASE("toggle caps and order overrides arrive as authored", "[unitbp][toggles]") {
+    const Blueprint named{"XEB0011_unit.bp", R"(
+UnitBlueprint {
+    Physics = { MotionType = 'RULEUMT_None' },
+    General = {
+        ToggleCaps = { RULEUTC_ShieldToggle = true, RULEUTC_IntelToggle = false },
+        OrderOverrides = {
+            RULEUTC_ShieldToggle = { bitmapId = 'shield-dome', helpText = 'toggle_shield_dome' },
+            RULEUCC_Transport = { bitmapId = 'deploy' },
+            Broken = 3,
+        },
+    },
+})"};
+    const auto def = rm::unitbp::loadFile(named.path());
+    REQUIRE(def.has_value());
+    CHECK(def->toggleCapsDeclared);
+    CHECK(def->toggleCaps == std::vector<std::string>{"RULEUTC_ShieldToggle"});
+    CHECK(def->hasToggleCap("RULEUTC_ShieldToggle"));
+    CHECK_FALSE(def->hasToggleCap("RULEUTC_IntelToggle"));
+    REQUIRE(def->orderOverrides.size() == 2);
+    CHECK(def->orderOverrides.at("RULEUTC_ShieldToggle").bitmapId == "shield-dome");
+    CHECK(def->orderOverrides.at("RULEUTC_ShieldToggle").helpText == "toggle_shield_dome");
+    CHECK(def->orderOverrides.at("RULEUCC_Transport").bitmapId == "deploy");
+    CHECK(def->orderOverrides.at("RULEUCC_Transport").helpText.empty());
+}
+
+TEST_CASE("an absent general table declares no toggles and no overrides", "[unitbp][toggles]") {
+    const Blueprint named{"XEB0012_unit.bp", R"(
+UnitBlueprint {
+    Physics = { MotionType = 'RULEUMT_None' },
+})"};
+    const auto def = rm::unitbp::loadFile(named.path());
+    REQUIRE(def.has_value());
+    CHECK_FALSE(def->toggleCapsDeclared);
+    CHECK(def->toggleCaps.empty());
+    CHECK(def->orderOverrides.empty());
+}
