@@ -1925,6 +1925,23 @@ int runWindowed(const Session& session) {
             const std::optional<rm::sim::UnitId> hit = pickAnyBatch(ray, units);
             const bool isAttack = hit && units.playerArmy != rm::sim::kNoArmy
                                 && hostileTo(units, units.playerArmy, *hit);
+            // An ALLIED hit needs the click ON the unit, not near it. The pick above
+            // uses selection's 40-elmo grace, which turns a move order beside a builder
+            // into an assist — a follow that reads as a guard. Hostiles keep the grace:
+            // a generous attack click is standard, and missing one must stay hard.
+            std::optional<rm::sim::UnitId> allyHit = hit;
+            if (allyHit && !isAttack && units.playerArmy != rm::sim::kNoArmy
+                && units.store.alive(*allyHit)) {
+                const rm::sim::Transform& mat = units.store.transforms()[allyHit->index];
+                const float body = rm::sim::fxToFloat(
+                    units.store.motion()[allyHit->index].radiusElmos);
+                if (!orderHitConfirmed(ray,
+                                       {rm::sim::fxToFloat(mat.x), rm::sim::fxToFloat(mat.y),
+                                        rm::sim::fxToFloat(mat.z)},
+                                       body)) {
+                    allyHit = std::nullopt;
+                }
+            }
 
             if (isAttack) {
                 const rm::sim::Transform& at = units.store.transforms()[hit->index];
@@ -1989,41 +2006,41 @@ int runWindowed(const Session& session) {
             // tanks, or an extractor mid-upgrade, is what a player right-clicks an engineer onto
             // to make it go faster; repair stays a click away on the rack. The link is the one
             // the production panel and the assist scan both use: the construction's builder.
-            const bool hitIsBuilding = hit && units.store.alive(*hit)
+            const bool hitIsBuilding = allyHit && units.store.alive(*allyHit)
                 && std::ranges::any_of(units.building, [&](const rm::sim::Construction& work) {
-                       return work.builder == *hit && !work.finished();
+                       return work.builder == *allyHit && !work.finished();
                    });
             if (armedCommand == rm::sim::CommandKind::Guard) {
-                if (!hit || !units.store.alive(*hit)
-                    || !alliedTo(units, units.playerArmy, *hit)) {
+                if (!allyHit || !units.store.alive(*allyHit)
+                    || !alliedTo(units, units.playerArmy, *allyHit)) {
                     rm::log::write(rm::log::Level::Info, "orders", "guard needs a living allied unit");
                     return;
                 }
                 std::vector<rm::sim::UnitId> guards;
                 for (const auto id : selected) {
-                    if (!units.store.alive(id) || id == *hit) continue;
+                    if (!units.store.alive(id) || id == *allyHit) continue;
                     const rm::unitdef::UnitDef* def = units.catalog.def(units.store.typeAt(id.index));
                     const std::array<const rm::unitdef::UnitDef*, 1> one{def};
                     if (rm::ui::commandAvailability(one)[5]) guards.push_back(id);
                 }
                 if (!guards.empty()) {
                     (void)issueGuard(units, guards, playerDriving(units, units.playerArmy),
-                                     static_cast<rm::TickIndex>(matchTicks), *hit, mods.shift);
+                                     static_cast<rm::TickIndex>(matchTicks), *allyHit, mods.shift);
                     armedCommand.reset();
                 }
                 return;
             }
             const bool explicitRepair = armedCommand == rm::sim::CommandKind::Repair;
-            if (!isAttack && (!armedCommand || explicitRepair) && hit
+            if (!isAttack && (!armedCommand || explicitRepair) && allyHit
                 && units.playerArmy != rm::sim::kNoArmy
-                && alliedTo(units, units.playerArmy, *hit)
+                && alliedTo(units, units.playerArmy, *allyHit)
                 && (explicitRepair || (!hitIsBuilding
-                                       && units.store.health()[hit->index].current
-                                              < units.store.health()[hit->index].maximum))) {
+                                       && units.store.health()[allyHit->index].current
+                                              < units.store.health()[allyHit->index].maximum))) {
                 std::vector<rm::sim::UnitId> builders;
                 std::vector<rm::sim::UnitId> movers;
                 for (const rm::sim::UnitId sel : selected) {
-                    if (!units.store.alive(sel) || sel == *hit) {
+                    if (!units.store.alive(sel) || sel == *allyHit) {
                         continue;
                     }
                     const rm::unitdef::UnitDef* def =
@@ -2032,9 +2049,9 @@ int runWindowed(const Session& session) {
                 }
                 const rm::PlayerIndex player = playerDriving(units, units.playerArmy);
                 const rm::TickIndex tick = static_cast<rm::TickIndex>(matchTicks);
-                const rm::sim::Transform& at = units.store.transforms()[hit->index];
+                const rm::sim::Transform& at = units.store.transforms()[allyHit->index];
                 const bool repairing = builders.empty()
-                    || issueRepair(units, builders, player, tick, *hit, mods.shift);
+                    || issueRepair(units, builders, player, tick, *allyHit, mods.shift);
                 (void)(movers.empty()
                            || issueMove(units, movers, player, tick, at.x, at.z, mods.shift));
                 if (repairing && !builders.empty()) {
@@ -2051,16 +2068,16 @@ int runWindowed(const Session& session) {
             // just walks over. Beaten by an enemy under the click (that is an attack) and
             // beating a wreck and plain ground.
             const bool explicitAssist = armedCommand == rm::sim::CommandKind::Assist;
-            if (!isAttack && (!armedCommand || explicitAssist) && hit
+            if (!isAttack && (!armedCommand || explicitAssist) && allyHit
                 && units.playerArmy != rm::sim::kNoArmy
-                && units.armyOf(hit->index) == units.playerArmy) {
+                && units.armyOf(allyHit->index) == units.playerArmy) {
                 const rm::unitdef::UnitDef* targetDef =
-                    units.catalog.def(units.store.typeAt(hit->index));
+                    units.catalog.def(units.store.typeAt(allyHit->index));
                 if (targetDef != nullptr && targetDef->isBuilder()) {
                     std::vector<rm::sim::UnitId> builders;
                     std::vector<rm::sim::UnitId> movers;
                     for (const rm::sim::UnitId sel : selected) {
-                        if (!units.store.alive(sel) || sel == *hit) {
+                        if (!units.store.alive(sel) || sel == *allyHit) {
                             continue;  // a unit cannot assist itself
                         }
                         const rm::unitdef::UnitDef* def =
@@ -2069,9 +2086,9 @@ int runWindowed(const Session& session) {
                     }
                     const rm::PlayerIndex player = playerDriving(units, units.playerArmy);
                     const rm::TickIndex tick = static_cast<rm::TickIndex>(matchTicks);
-                    const rm::sim::Transform& at = units.store.transforms()[hit->index];
+                    const rm::sim::Transform& at = units.store.transforms()[allyHit->index];
                     const bool assisting = builders.empty()
-                        || issueAssist(units, builders, player, tick, *hit, mods.shift);
+                        || issueAssist(units, builders, player, tick, *allyHit, mods.shift);
                     (void)(movers.empty()
                                || issueMove(units, movers, player, tick, at.x, at.z, mods.shift));
                     if (assisting && !builders.empty()) {
@@ -2082,6 +2099,45 @@ int runWindowed(const Session& session) {
                         armedCommand.reset();
                     }
                     return;
+                }
+            }
+            // A RIGHT-CLICK ON RISING SCAFFOLD IS AN ASSIST — the structure does not
+            // exist as a unit until its work completes, so there is no hit to retarget
+            // and the click reads as plain ground. Builders in the selection lend rate
+            // through the site's founder (the link the assist scan already resolves);
+            // everyone else walks there. A dead founder leaves plain ground — assistance
+            // keys off the living builder, and that rule lives in the sim, not here.
+            if (!isAttack && !allyHit && (!armedCommand || explicitAssist)
+                && units.playerArmy != rm::sim::kNoArmy && ground) {
+                if (const auto founder = siteAssistFounder(
+                        units, (*ground).x, (*ground).z, units.playerArmy)) {
+                    std::vector<rm::sim::UnitId> builders;
+                    std::vector<rm::sim::UnitId> movers;
+                    for (const rm::sim::UnitId sel : selected) {
+                        if (!units.store.alive(sel) || sel == *founder) {
+                            continue;
+                        }
+                        const rm::unitdef::UnitDef* def =
+                            units.catalog.def(units.store.typeAt(sel.index));
+                        (def != nullptr && def->isBuilder() ? builders : movers).push_back(sel);
+                    }
+                    if (!builders.empty()) {
+                        const rm::PlayerIndex player = playerDriving(units, units.playerArmy);
+                        const rm::TickIndex tick = static_cast<rm::TickIndex>(matchTicks);
+                        if (issueAssist(units, builders, player, tick, *founder,
+                                        mods.shift)) {
+                            std::printf("assist: %zu builder(s) joined the site\n",
+                                        builders.size());
+                        }
+                        (void)(movers.empty()
+                                   || issueMove(units, movers, player, tick,
+                                                rm::sim::fxFromFloat((*ground).x),
+                                                rm::sim::fxFromFloat((*ground).z), mods.shift));
+                        if (explicitAssist) {
+                            armedCommand.reset();
+                        }
+                        return;
+                    }
                 }
             }
             if (explicitAssist) {
@@ -2887,6 +2943,31 @@ int runWindowed(const Session& session) {
             decalVertices.clear();
             appendVisibleWreckDecals(decalVertices, units);
             appendResourceDeposits(decalVertices, units, map->field);
+            // One unit's order queue as ground decals, shared by the selection pass
+            // and the shift-held army pass below — one hand so the two cannot drift.
+            const auto drawOrderQueue = [&](std::vector<rm::DecalVertex>& out,
+                                            const rm::HeightField& field,
+                                            const UnitScene& scene, rm::UnitIndex slot,
+                                            std::array<float, 3> at) {
+                const std::deque<rm::sim::QueuedCommand>& queue =
+                    scene.store.orders()[slot].entries();
+                std::array<float, 2> from{at[0], at[2]};
+                for (const rm::sim::QueuedCommand& order : queue) {
+                    if (order.kind() == rm::sim::CommandKind::Stop) {
+                        continue;  // a stop has no destination to draw a line to
+                    }
+                    const std::array<float, 2> to{rm::sim::fxToFloat(order.targetX()),
+                                                  rm::sim::fxToFloat(order.targetZ())};
+                    appendGroundSegment(out, field, from, to, kQueueLineColour,
+                                        kQueueLineWidthElmos);
+                    appendGroundNode(out, field, to,
+                                     order.kind() == rm::sim::CommandKind::Build
+                                         ? kBuildGhostColour
+                                         : kQueueNodeColour,
+                                     kQueueNodeHalfElmos);
+                    from = to;
+                }
+            };
             // Dead selections draw nothing rather than being pruned here: a frame is not
             // where a selection changes, and a ring under a wreck is the bug this avoids.
             for (const rm::sim::UnitId sel : selected) {
@@ -2929,30 +3010,31 @@ int runWindowed(const Session& session) {
                 // THE ORDER QUEUE, drawn in the world for a selected unit: a line from the
                 // unit through every queued destination, a diamond at each node — and the
                 // build orders' nodes in the ghost's cyan, because that node will become a
-                // building and its colour should say so before the fact. Only while
-                // selected: forty queues at once is a map of spaghetti, and the question
-                // "where is THIS unit going" is asked of a selection.
-                {
-                    const std::deque<rm::sim::QueuedCommand>& queue =
-                        units.store.orders()[sel.index].entries();
-                    std::array<float, 2> from{ground[0], ground[2]};
-                    for (const rm::sim::QueuedCommand& order : queue) {
-                        if (order.kind() == rm::sim::CommandKind::Stop) {
-                            continue;  // a stop has no destination to draw a line to
-                        }
-                        const std::array<float, 2> to{rm::sim::fxToFloat(order.targetX()),
-                                                      rm::sim::fxToFloat(order.targetZ())};
-                        appendGroundSegment(decalVertices, map->field, from, to,
-                                            kQueueLineColour, kQueueLineWidthElmos);
-                        appendGroundNode(decalVertices, map->field, to,
-                                         order.kind() == rm::sim::CommandKind::Build
-                                             ? kBuildGhostColour
-                                             : kQueueNodeColour,
-                                         kQueueNodeHalfElmos);
-                        from = to;
-                    }
-                }
+                // building and its colour should say so before the fact.
+                drawOrderQueue(decalVertices, map->field, units, sel.index, ground);
             }
+            // SHIFT HOLDS EVERY QUEUE UP, not just the selection's. Queuing is aimed at
+            // the whole army — a shift-click appends to any unit's orders — so the
+            // modifier that writes queues also reads them. Selection keeps its rings;
+            // everyone else lends only their queue, drawn by the same hand.
+            if (window.shiftHeldNow() && units.playerArmy != rm::sim::kNoArmy) {
+                const std::size_t slots = units.store.slotCount();
+                for (std::size_t slot = 0; slot < slots; ++slot) {
+                    const rm::UnitIndex at = static_cast<rm::UnitIndex>(slot);
+                    const rm::sim::UnitId id = units.store.idAt(at);
+                    if (!units.store.alive(id)
+                        || units.armyOf(at) != units.playerArmy) {
+                        continue;
+                    }
+                    if (std::find(selected.begin(), selected.end(), id) != selected.end()) {
+                        continue;  // already drawn above, with its rings
+                    }
+                    const rm::sim::Transform& mat = units.store.transforms()[at];
+                    drawOrderQueue(decalVertices, map->field, units, at,
+                                   {rm::sim::fxToFloat(mat.x), rm::sim::fxToFloat(mat.y),
+                                    rm::sim::fxToFloat(mat.z)});
+                }
+                }
 
             // Build previews are composed after the decal buffer is cleared. Every
             // silhouette reads the same snapped sites used by the release submission.

@@ -1087,6 +1087,52 @@ TEST_CASE("the rally line draws only for a set rally point", "[corpus][rally]") 
     CHECK_FALSE(out.empty());
 }
 
+TEST_CASE("an order click needs the unit's body, not its neighbourhood", "[orders]") {
+    // A ray straight down at the origin: the 40-elmo selection grace would call
+    // anything in the room a hit. Orders keep only what the click touches.
+    const rm::Ray ray{simd_make_float3(0.0f, 10.0f, 0.0f),
+                       simd_make_float3(0.0f, -1.0f, 0.0f)};
+    CHECK(rm::app::orderHitConfirmed(ray, {0.0f, 0.0f, 0.0f}, 2.0f));
+    // Near but outside the body and the floor: a move, not an assist.
+    CHECK_FALSE(rm::app::orderHitConfirmed(ray, {20.0f, 0.0f, 0.0f}, 2.0f));
+    // The floor forgives small units a finger's width.
+    CHECK(rm::app::orderHitConfirmed(ray, {5.0f, 0.0f, 0.0f}, 2.0f));
+    // A big body keeps its full reach: the click is on the factory.
+    CHECK(rm::app::orderHitConfirmed(ray, {5.0f, 0.0f, 0.0f}, 10.0f));
+    CHECK_FALSE(rm::app::orderHitConfirmed(ray, {15.0f, 0.0f, 0.0f}, 10.0f));
+}
+
+TEST_CASE("a scaffold click resolves to the site's living founder", "[corpus][orders]") {
+    const auto root = corpusRoot();
+    if (!std::filesystem::is_directory(root)) SKIP("no retail unit corpus");
+    const auto factory = rm::unitbp::loadFile(root / "UEB0101/UEB0101_unit.bp");
+    const auto tank = rm::unitbp::loadFile(root / "UEL0201/UEL0201_unit.bp");
+    REQUIRE(factory);
+    REQUIRE(tank);
+    Scenario scenario;
+    const auto founder = scenario.spawn(*factory, 200, 200);
+    const auto type = scenario.registerType(*tank);
+    rm::sim::Construction work;
+    work.builder = founder;
+    work.armyIndex = 0;
+    work.position = {rm::sim::fxFromFloat(240.0f), {}, rm::sim::fxFromFloat(200.0f)};
+    work.buildTimeRemaining = rm::sim::Mag::fromInt(100);
+    work.totalBuildTime = rm::sim::Mag::fromInt(100);
+    work.blueprintIndex = static_cast<std::size_t>(type);
+    scenario.scene.building.push_back(work);
+    // On the scaffold: the founder, through whom assist resolves.
+    const auto found = rm::app::siteAssistFounder(scenario.scene, 240.0f, 200.0f, 0);
+    REQUIRE(found.has_value());
+    CHECK(*found == founder);
+    // Across the map: plain ground, a move.
+    CHECK_FALSE(rm::app::siteAssistFounder(scenario.scene, 600.0f, 600.0f, 0).has_value());
+    // Another army's site is not ours to join.
+    CHECK_FALSE(rm::app::siteAssistFounder(scenario.scene, 240.0f, 200.0f, 1).has_value());
+    // A finished site is a building, not a scaffold.
+    scenario.scene.building[0].buildTimeRemaining = rm::sim::Mag{};
+    CHECK_FALSE(rm::app::siteAssistFounder(scenario.scene, 240.0f, 200.0f, 0).has_value());
+}
+
 TEST_CASE("factory cancellation removes only the named entry and replays", "[corpus][factory-cancel]") {
     const auto root = corpusRoot();
     if (!std::filesystem::is_directory(root)) SKIP("no retail unit corpus");

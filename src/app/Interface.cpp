@@ -1263,6 +1263,38 @@ void appendHealthBars(rm::ui::Geometry& out, const UnitScene& scene,
     return best;
 }
 
+[[nodiscard]] bool orderHitConfirmed(const rm::Ray& ray, std::array<float, 3> at,
+                                     float radiusElmos) noexcept {
+    const float gap = rm::distanceToRay(ray, simd_make_float3(at[0], at[1], at[2]));
+    return gap <= std::max(kOrderPickFloorElmos, radiusElmos);
+}
+
+[[nodiscard]] std::optional<rm::sim::UnitId> siteAssistFounder(const UnitScene& scene, float x,
+                                                               float z, int army) noexcept {
+    std::optional<rm::sim::UnitId> best;
+    float bestGap = std::numeric_limits<float>::max();
+    for (const rm::sim::Construction& work : scene.building) {
+        if (work.finished() || work.armyIndex != army
+            || !scene.store.alive(work.builder)) {
+            continue;
+        }
+        // The scaffold's own size: the rising structure's footprint, with a floor
+        // for small buildings so a mine is still clickable.
+        const rm::unitdef::UnitDef* def =
+            scene.catalog.def(static_cast<rm::UnitTypeIndex>(work.blueprintIndex));
+        const float radius =
+            std::max(12.0f, def != nullptr ? def->collisionRadiusElmos : 0.0f);
+        const float dx = x - rm::sim::fxToFloat(work.position[0]);
+        const float dz = z - rm::sim::fxToFloat(work.position[2]);
+        const float gap = std::sqrt(dx * dx + dz * dz);
+        if (gap <= radius && gap < bestGap) {
+            best = work.builder;
+            bestGap = gap;
+        }
+    }
+    return best;
+}
+
 /// Whether `army` may shoot what `entry` points at.
 [[nodiscard]] bool hostileTo(const UnitScene& scene, int army, rm::sim::UnitId id) {
     const int theirs = scene.armyOf(id.index);

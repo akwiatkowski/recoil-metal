@@ -357,6 +357,25 @@ std::size_t appendConstructionBars(rm::ui::Geometry& out, const UnitScene& scene
 [[nodiscard]] std::optional<rm::sim::UnitId> pickAnyBatch(const rm::Ray& ray,
                                                           const UnitScene& scene);
 
+/// Floor for order-target picking, in elmos. Selection stays forgiving (the 40-elmo
+/// grace); an ORDER needs the click on the unit's own body, or this floor for small
+/// units. 8 elmos is ~2mm at a working zoom — 40 elmos is about a centimetre there
+/// (Picking.hpp) — finger forgiveness without hijacking the neighbour's move order.
+inline constexpr float kOrderPickFloorElmos = 8.0f;
+
+/// Whether a generous selection pick still counts as a unit click for order purposes:
+/// the ray must pass within the unit's own body radius (or the floor above).
+[[nodiscard]] bool orderHitConfirmed(const rm::Ray& ray, std::array<float, 3> at,
+                                     float radiusElmos) noexcept;
+
+/// The founder to assist when a right-click lands on rising scaffold: the nearest
+/// unfinished construction of `army` whose site covers (`x`, `z`), through its living
+/// builder. The structure does not exist as a unit until its work completes, so there
+/// is no hit to retarget — this is what turns "help that building" into an order.
+/// Nothing when no site covers the point or the founder is gone.
+[[nodiscard]] std::optional<rm::sim::UnitId> siteAssistFounder(const UnitScene& scene, float x,
+                                                               float z, int army) noexcept;
+
 [[nodiscard]] bool hostileTo(const UnitScene& scene, int army, rm::sim::UnitId id);
 [[nodiscard]] bool alliedTo(const UnitScene& scene, int army, rm::sim::UnitId id);
 
