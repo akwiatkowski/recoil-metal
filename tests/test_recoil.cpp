@@ -166,3 +166,62 @@ TEST_CASE("a fired gun draws its barrel back, then runs it home", "[recoil]") {
     }
     CHECK(kicked);
 }
+
+TEST_CASE("a built unit plays its unfold once from completion", "[recoil]") {
+    // The deploy path end to end with a hand-made fold: two frames over two
+    // seconds, batch flagged one-shot, deployed ten ticks ago. Gather must
+    // stamp half a cycle — and a unit built later starts later, not over.
+    rm::HeightField field;
+    field.squaresX = 128;
+    field.squaresZ = 128;
+    field.baseHeight = 0.0f;
+    field.heightScale = 1.0f;
+    field.raw.assign(field.sampleCount(), std::uint16_t{0});
+    rm::app::UnitScene scene;
+    scene.armies = rm::sim::freeForAll(2);
+    scene.players = rm::sim::onePlayerPerArmy(2, 0);
+    scene.economies.assign(2, rm::sim::Economy{});
+
+    rm::unitdef::UnitDef hut;
+    hut.name = "test_hut";
+    hut.motion = rm::unitdef::MotionType::Land;
+    hut.health = rm::sim::Mag::fromInt(100);
+    hut.categories = {"LAND"};
+    scene.definitions.push_back(hut);
+    const rm::UnitTypeIndex type =
+        scene.catalog.add(&scene.definitions.back(), rm::app::gAppTickRate);
+    scene.setTypeTraits(type, rm::data::moveDefFor(hut), 1.0f);
+
+    rm::Model model;
+    model.family = rm::Family::SupremeCommander;
+    model.bones = {rm::ModelBone{.name = "Root", .parent = -1}};
+    scene.models.push_back(std::move(model));
+    scene.animations.push_back(rm::sca::Animation{
+        .name = "test_unfold",
+        .duration = 2.0f,
+        .boneNames = {"Root"},
+        .boneParents = {-1},
+        .frames = {rm::sca::Frame{.time = 0.0f, .bones = {rm::sca::Key{}}},
+                   rm::sca::Frame{.time = 2.0f, .bones = {rm::sca::Key{}}}},
+    });
+    scene.batches.push_back(rm::UnitBatch{
+        .model = &scene.models.back(),
+        .unpackAnimation = &scene.animations.back(),
+        .unpackOneshot = true,
+    });
+    scene.setBatchForType(type, 0);
+
+    const rm::sim::UnitId first = scene.store.spawn(rm::sim::UnitStore::Spawn{
+        .type = type,
+        .transform = {.x = rm::sim::fxFromFloat(0.0f), .z = rm::sim::fxFromFloat(0.0f)},
+        .motion = rm::app::motionFor(hut, 0),
+        .health = rm::sim::initialHealth(rm::sim::Mag::fromInt(100)),
+    });
+    scene.deployedTick[first.index] = 100;
+    scene.publish(110);
+    scene.publish(110);
+    scene.gatherForDrawing(1.0f, nullptr, {}, 0.0f);
+    REQUIRE(scene.batches[0].instances.size() == 1);
+    // Ten ticks at ten hertz into a two-second fold: half unfolded.
+    CHECK(scene.batches[0].instances[0].animationPhase == Approx(0.5f));
+}

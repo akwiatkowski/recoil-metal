@@ -67,6 +67,12 @@ struct UnitBatch {
     float recoilDistanceElmos = 0.0f;
     float recoilReturnPerTick = 0.0f;
 
+    /// A deploy animation (a fold/unfold/open .sca) played once when the unit is
+    /// built, then held. Used only when the batch has no looping request
+    /// animation — statics do not walk, so there is nothing to displace.
+    const sca::Animation* unpackAnimation = nullptr;
+    bool unpackOneshot = false;
+
     // Whether the phase in each instance is the WHOLE answer, or an offset
     // added to a clock the renderer advances.
     //

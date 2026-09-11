@@ -88,4 +88,17 @@ struct InstancePlacement {
 [[nodiscard]] std::array<float, 3> boneWorldPosition(const BoneTransform& bone,
                                                      const InstancePlacement& instance) noexcept;
 
+/// A one-shot animation's clock, in cycles: how far past its start the frame is.
+/// The shader clamps past the end (holds deployed) and floors before the start,
+/// so a unit built later simply starts later — no per-instance start time beyond
+/// the tick it deployed, which the caller already knows. Zero duration or a now
+/// before deployed means the beginning, never a division by zero or a rewind.
+[[nodiscard]] inline float unpackPhase(std::uint64_t deployedTick, std::uint64_t nowTick,
+                                       float tickSeconds, float durationSeconds) noexcept {
+    if (durationSeconds <= 0.0f || nowTick <= deployedTick) {
+        return 0.0f;
+    }
+    return static_cast<float>(nowTick - deployedTick) * tickSeconds / durationSeconds;
+}
+
 } // namespace rm

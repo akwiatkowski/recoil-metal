@@ -48,10 +48,10 @@ struct PoseUniforms {
     uint poseCount;   // 1 when the batch does not animate
     uint boneCount;   // stride, in bones, between consecutive poses
     float duration;   // seconds; 0 when the batch does not animate
-    float time;       // the batch clock, in seconds
     uint builderAim;
     float recoilDistance;   // full slide travel, elmos; 0 when the type has no rack
-    packed_uint2 padding;
+    uint unpackOneshot;     // play once and hold the last frame, for deploy anims
+    uint padding;
     float4 yawPivot;    // xyz pivot; w unused
     float4 yawAxis;     // xyz unit axis; w unused
     float4 pitchPivot;  // xyz pivot; w unused
@@ -160,6 +160,12 @@ constant float kSupComGlowMultiplier = 2.0;                   // glowMultiplier
 static uint poseIndexFor(PoseUniforms p, float animationPhase) {
     if (p.poseCount <= 1 || p.duration <= 0.0) {
         return 0;
+    }
+    // One-shot deploy: the phase IS the whole answer (cycles since the unit
+    // deployed), clamped to hold the last frame. No fract — looping a fold
+    // would refold the building forever.
+    if (p.unpackOneshot != 0) {
+        return min(uint(saturate(animationPhase) * float(p.poseCount)), p.poseCount - 1);
     }
     const float phase = fract(p.time / p.duration + animationPhase);
     return min(uint(phase * float(p.poseCount)), p.poseCount - 1);

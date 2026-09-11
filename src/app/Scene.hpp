@@ -265,7 +265,10 @@ struct UnitScene {
     /// by WeaponFired in advanceMatch, decayed there every tick at the batch's
     /// return rate — presentation only, forgotten with the slot.
     std::unordered_map<rm::UnitIndex, float> recoilShown;
-    // The sides in the match, empty outside a skirmish. Held with the scene rather
+    /// The tick each slot's unit deployed (construction finished), for one-shot
+    /// deploy animations. Absent means match start — pre-placed units unfold as
+    /// the match opens. Erased with the slot, like every other per-slot map.
+    std::unordered_map<rm::UnitIndex, rm::TickIndex> deployedTick;
     // than beside it because every question that needs an army — may I select this,
     // may I shoot that, who banks the mass — starts from a unit.
     std::vector<rm::sim::Army> armies;
@@ -684,6 +687,9 @@ struct UnitScene {
         std::erase_if(recoilShown, [this](const auto& kv) {
             return !store.alive(store.idAt(kv.first));
         });
+        std::erase_if(deployedTick, [this](const auto& kv) {
+            return !store.alive(store.idAt(kv.first));
+        });
 
         for (const rm::DrawUnit& unit : drawUnits) {
             // FOG OF WAR (ADR-037). A unit the viewer's side cannot see is not drawn at all —
@@ -741,6 +747,18 @@ struct UnitScene {
             applyTurretAim(instance, unit, batch, dtSeconds);
             applyBuilderArm(instance, unit, batch, dtSeconds);
             applyRecoil(instance, unit, batch);
+            // One-shot deploy: the phase carries cycles since the unit deployed,
+            // and the shader clamps past the end to hold the last frame. Absent
+            // means match start — pre-placed units unfold as the match opens.
+            if (batch < batches.size() && batches[batch].unpackOneshot
+                && batches[batch].unpackAnimation != nullptr) {
+                const auto deployed = deployedTick.find(unit.id.index);
+                const rm::TickIndex since =
+                    deployed != deployedTick.end() ? deployed->second : 0;
+                instance.animationPhase = rm::unpackPhase(
+                    since, snapshotCurrent.tick, gAppTickRate.secondsPerTick(),
+                    batches[batch].unpackAnimation->duration);
+            }
             drawScratch[batch].push_back(instance);
             drawSlotOf[batch].push_back(unit.id.index);
         }

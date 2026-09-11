@@ -253,3 +253,14 @@ TEST_CASE("a bone's world position follows the shader's roll, pitch, yaw, scale,
         CHECK(w[2] == Approx(1.0f));
     }
 }
+
+TEST_CASE("a one-shot clock counts cycles since deploy, never backwards", "[pose]") {
+    // Ten ticks at ten hertz into a two-second fold: half unfolded.
+    CHECK(rm::unpackPhase(100, 110, 0.1f, 2.0f) == Approx(0.5f));
+    // Before deploy, or with no duration: the beginning, not garbage.
+    CHECK(rm::unpackPhase(110, 100, 0.1f, 2.0f) == 0.0f);
+    CHECK(rm::unpackPhase(100, 100, 0.1f, 2.0f) == 0.0f);
+    CHECK(rm::unpackPhase(100, 110, 0.1f, 0.0f) == 0.0f);
+    // Past the end the shader clamps; the clock itself keeps counting.
+    CHECK(rm::unpackPhase(100, 200, 0.1f, 2.0f) == Approx(5.0f));
+}

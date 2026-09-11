@@ -1428,6 +1428,8 @@ rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) 
     for (const rm::sim::Event& event : scene.events.all()) {
         if (event.kind == rm::sim::EventKind::UnitDestroyed) {
             ++runner.unitsDestroyed;
+            // A recycled slot must not inherit its predecessor's deploy time.
+            scene.deployedTick.erase(event.unit.index);
             // The victim's type is still in its slot: `types_` is written only at spawn
             // and a corpse's slot is recycled by a LATER spawn, all of which happen in
             // the finished-build loop below or on later ticks — never before this loop.
@@ -1532,6 +1534,16 @@ rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) 
             runner.matrixBuilt.push_back(
                 MatrixBuilt{.type = static_cast<rm::UnitTypeIndex>(work.blueprintIndex),
                             .army = work.armyIndex});
+            // Deploy animations start now: one-shot folds play from completion.
+            // Recorded only for types whose batch holds one — ordinary units
+            // would only grow the map.
+            const std::size_t batch =
+                scene.batchOf(static_cast<rm::UnitTypeIndex>(work.blueprintIndex));
+            if (batch != rm::app::UnitScene::kNoBatch && batch < scene.batches.size()
+                && scene.batches[batch].unpackOneshot) {
+                scene.deployedTick[spawned->index] =
+                    static_cast<rm::TickIndex>(tickIndex);
+            }
             for (const auto& entry : pending) {
                 auto state = entry.snapshot();
                 state.unit = *spawned;

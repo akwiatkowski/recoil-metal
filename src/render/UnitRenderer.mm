@@ -294,21 +294,28 @@ void Renderer::setUnits(std::span<const dds::Texture> textures,
         std::size_t poseCount = 1;
         float duration = 0.0f;
 
-        if (batch.animation != nullptr && !batch.animation->empty()) {
-            const std::vector<int> boneMap = mapBonesToAnimation(model, *batch.animation);
+        // A deploy animation stands in for a missing loop: statics do not walk,
+        // so there is nothing to displace, and the one-shot flag (below) keeps
+        // the fold from looping once it has played.
+        const sca::Animation* animation =
+            batch.animation != nullptr ? batch.animation : batch.unpackAnimation;
+        const bool unpackOneshot =
+            animation != nullptr && animation == batch.unpackAnimation && batch.unpackOneshot;
+        if (animation != nullptr && !animation->empty()) {
+            const std::vector<int> boneMap = mapBonesToAnimation(model, *animation);
             const bool drivesAnything =
                 std::any_of(boneMap.begin(), boneMap.end(), [](int i) { return i >= 0; });
 
             if (drivesAnything) {
                 poses.clear();
-                poses.reserve(model.bones.size() * batch.animation->frames.size());
-                for (const sca::Frame& frame : batch.animation->frames) {
+                poses.reserve(model.bones.size() * animation->frames.size());
+                for (const sca::Frame& frame : animation->frames) {
                     const std::vector<BoneTransform> pose =
-                        poseAt(model, *batch.animation, boneMap, frame.time);
+                        poseAt(model, *animation, boneMap, frame.time);
                     poses.insert(poses.end(), pose.begin(), pose.end());
                 }
-                poseCount = batch.animation->frames.size();
-                duration = batch.animation->duration;
+                poseCount = animation->frames.size();
+                duration = animation->duration;
             }
         }
 
@@ -334,14 +341,14 @@ void Renderer::setUnits(std::span<const dds::Texture> textures,
         GpuUnitBatch uploaded;
         uploaded.textures = batch.textures;
         uploaded.normals = batch.normals;
-        uploaded.supremeCommanderShading = model.family == Family::SupremeCommander;
+        uploaded.animationDrivenByInstance = batch.animationDrivenByInstance;
+        uploaded.unpackOneshot = unpackOneshot;
         uploaded.poseCount = poseCount;
         uploaded.boneStrideBytes = model.bones.size() * sizeof(BoneTransform);
         uploaded.duration = duration;
         uploaded.builderAim = batch.builderAim;
         uploaded.recoilFlags = batch.recoilFlags;
         uploaded.recoilDistance = batch.recoilDistanceElmos;
-        uploaded.animationDrivenByInstance = batch.animationDrivenByInstance;
         uploaded.vertexBuffer =
             device_->newBuffer(model.vertices.data(), model.vertices.size() * sizeof(ModelVertex),
                                MTL::ResourceStorageModeShared);

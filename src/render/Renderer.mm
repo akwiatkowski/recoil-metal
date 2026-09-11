@@ -1150,6 +1150,7 @@ void Renderer::encodeScene(MTL::CommandBuffer* commandBuffer, MTL::RenderPassDes
             pose.time = batch.animationDrivenByInstance ? 0.0f : animationTime_;
             setBuilderAimUniforms(pose, batch.builderAim);
             pose.recoilDistance = batch.recoilDistance;
+            pose.unpackOneshot = batch.unpackOneshot ? 1u : 0u;
             encoder->setVertexBytes(&pose, sizeof(pose), kPoseUniformBufferIndex);
 
             encoder->drawIndexedPrimitives(MTL::PrimitiveType::PrimitiveTypeTriangle,
@@ -1252,6 +1253,7 @@ void Renderer::encodeScene(MTL::CommandBuffer* commandBuffer, MTL::RenderPassDes
             // Zero hands the whole decision to the instances — see UnitBatch.
             setBuilderAimUniforms(pose, batch.builderAim);
             pose.recoilDistance = batch.recoilDistance;
+            pose.unpackOneshot = batch.unpackOneshot ? 1u : 0u;
             encoder->setVertexBytes(&pose, sizeof(pose), kPoseUniformBufferIndex);
 
             // One call for every instance — the whole point of the instance

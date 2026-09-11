@@ -841,8 +841,13 @@ private:
         /// Recoil slide for the primary weapon: subtree flags OR'd into the bone
         /// buffer at upload, travel distance for PoseUniforms. The return rate
         /// stays scene-side (UnitBatch), where the per-tick decay runs.
-        std::vector<std::uint32_t> recoilFlags;
         float recoilDistance = 0.0f;
+        /// Subtree flags for the slide, OR'd into the bone buffer at upload.
+        std::vector<std::uint32_t> recoilFlags;
+
+        /// Play the baked animation once and hold the last frame (deploy folds).
+        /// The per-instance phase then carries the whole answer — see UnitBatch.
+        bool unpackOneshot = false;
 
         /// When set, the renderer's clock contributes nothing and each
         /// instance's phase is the whole answer — see UnitBatch.

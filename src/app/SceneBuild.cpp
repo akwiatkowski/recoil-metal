@@ -100,6 +100,36 @@ struct TurretRig {
     return turret;
 }
 
+/// A type's deploy animation: the first weapon's WeaponUnpackAnimation, loaded
+/// into the scene's store. Only 17 blueprints name one, so the scan is free and
+/// the VFS read happens only then. Null when nothing names one or the file is
+/// missing — a gun without authored deploy simply appears deployed.
+[[nodiscard]] const rm::sca::Animation*
+loadUnpackAnimation(UnitScene& scene, const rm::vfs::Vfs& content,
+                    const rm::unitdef::UnitDef& def) {
+    for (const rm::unitdef::Weapon& weapon : def.weapons) {
+        if (weapon.weaponUnpackAnimation.empty()) {
+            continue;
+        }
+        const auto bytes = content.read(weapon.weaponUnpackAnimation);
+        if (!bytes) {
+            rm::log::writef(rm::log::Level::Warn, "animation", "no unpack animation (%s)",
+                            weapon.weaponUnpackAnimation.c_str());
+            return nullptr;
+        }
+        auto loaded = rm::sca::load(std::span<const std::byte>{bytes->data(), bytes->size()});
+        if (!loaded) {
+            rm::log::writef(rm::log::Level::Warn, "animation", "bad unpack animation (%s): %s",
+                            weapon.weaponUnpackAnimation.c_str(),
+                            loaded.error().message.c_str());
+            return nullptr;
+        }
+        scene.animations.push_back(std::move(*loaded));
+        return &scene.animations.back();
+    }
+    return nullptr;
+}
+
 /// The movement state a unit of this definition is born with.
 ///
 /// ONE DERIVATION, because there are two spawn paths and they drifted. `spawnUnit` built this by
@@ -568,6 +598,7 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
             const rm::data::MoveDef move = rm::data::moveDefFor(unit->def);
 
             const TurretRig turretRig = resolveTurretRig(scene.models.back(), &unit->def);
+            const rm::sca::Animation* unpack = loadUnpackAnimation(scene, content, unit->def);
             scene.batches.push_back(rm::UnitBatch{
                 .model = &scene.models.back(),
                 .instances = {},
@@ -583,6 +614,8 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
                 .recoilFlags = std::move(turretRig.recoilFlags),
                 .recoilDistanceElmos = turretRig.recoilDistanceElmos,
                 .recoilReturnPerTick = turretRig.recoilReturnPerTick,
+                .unpackAnimation = unpack,
+                .unpackOneshot = unpack != nullptr,
             });
             batchForFaction.emplace(army.faction, scene.batches.size() - 1);
             scaleForFaction.emplace(army.faction, unit->def.meshToElmos);
@@ -741,6 +774,7 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
         // unit crosses (P3.4). ADR-027 said passability comes from motion class; now it does.
         const rm::data::MoveDef move = rm::data::moveDefFor(unit->def);
         const TurretRig turretRig = resolveTurretRig(scene.models.back(), &unit->def);
+        const rm::sca::Animation* unpack = loadUnpackAnimation(scene, content, unit->def);
         scene.batches.push_back(rm::UnitBatch{
             .model = &scene.models.back(),
             .instances = {},
@@ -756,6 +790,8 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
             .recoilFlags = std::move(turretRig.recoilFlags),
             .recoilDistanceElmos = turretRig.recoilDistanceElmos,
             .recoilReturnPerTick = turretRig.recoilReturnPerTick,
+            .unpackAnimation = unpack,
+            .unpackOneshot = unpack != nullptr,
         });
         scene.definitions.push_back(unit->def);
         resolveMuzzleBones(scene.definitions.back(), scene.models.back());
@@ -1483,6 +1519,8 @@ void orderFirstExtractors(UnitScene& scene, std::span<const rm::scenario::Marker
 
         const TurretRig turretRig =
             resolveTurretRig(scene.models.back(), def ? &*def : nullptr);
+        const rm::sca::Animation* unpack =
+            def ? loadUnpackAnimation(scene, content, *def) : nullptr;
         scene.batches.push_back(rm::UnitBatch{
             .model = &scene.models.back(),
             .instances = {},
@@ -1497,6 +1535,8 @@ void orderFirstExtractors(UnitScene& scene, std::span<const rm::scenario::Marker
             .recoilFlags = std::move(turretRig.recoilFlags),
             .recoilDistanceElmos = turretRig.recoilDistanceElmos,
             .recoilReturnPerTick = turretRig.recoilReturnPerTick,
+            .unpackAnimation = unpack,
+            .unpackOneshot = unpack != nullptr,
         });
         scene.setBatchForType(type, scene.batches.size() - 1);
     }

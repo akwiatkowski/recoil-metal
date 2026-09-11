@@ -187,3 +187,27 @@ TEST_CASE("a buffer that is not a .sca is refused by its magic") {
     REQUIRE_FALSE(animation.has_value());
     REQUIRE(animation.error().code == rm::MapError::Code::NotScmap);
 }
+
+TEST_CASE("a real unfold animation resolves against its building", "[deploy]") {
+    // The deploy path needs no synthetic skeleton: XSB2108 ships an _aopen
+    // beside its model, and the batch resolver must drive bones with it.
+    const char* home = std::getenv("HOME");
+    if (home == nullptr) {
+        SKIP("no HOME");
+    }
+    const std::filesystem::path dir =
+        std::filesystem::path{home} / "projects/llm/input/faf/units/XSB2108";
+    std::error_code ec;
+    if (!std::filesystem::is_directory(dir, ec)) {
+        SKIP("Supreme Commander animations not extracted");
+    }
+    const auto model = rm::scm::loadFile(dir / "XSB2108_lod0.scm");
+    const auto animation = rm::sca::loadFile(dir / "XSB2108_aopen.sca");
+    REQUIRE(model.has_value());
+    REQUIRE(animation.has_value());
+    REQUIRE(animation->duration > 0.0f);
+    const auto map = rm::mapBonesToAnimation(*model, *animation);
+    const auto driven = static_cast<std::size_t>(
+        std::count_if(map.begin(), map.end(), [](int i) { return i >= 0; }));
+    CHECK(driven > 0);
+}
