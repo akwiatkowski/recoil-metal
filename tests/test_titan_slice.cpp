@@ -182,7 +182,7 @@ TEST_CASE("the Titan aims, kicks and strides in a live tick", "[slice][behavior]
     });
     const rm::sim::UnitId tgt = scene.store.spawn(rm::sim::UnitStore::Spawn{
         .type = type,
-        .transform = {.x = rm::sim::fxFromFloat(210.0f), .z = rm::sim::fxFromFloat(200.0f)},
+        .transform = {.x = rm::sim::fxFromFloat(300.0f), .z = rm::sim::fxFromFloat(200.0f)},
         .motion = rm::app::motionFor(*def, 1),
         .health = rm::sim::initialHealth(def->health),
     });
@@ -194,7 +194,6 @@ TEST_CASE("the Titan aims, kicks and strides in a live tick", "[slice][behavior]
     runner.scripts.clear();
     // Sample the slide every tick: it springs home between shots, so a single
     // end-of-run read races the decay. Any nonzero sample proves the kick.
-    bool aimed = false;
     bool kicked = false;
     for (int tick = 0; tick < 30; ++tick) {
         (void)rm::app::advanceMatch(runner, tick, 0.0f);
@@ -205,24 +204,58 @@ TEST_CASE("the Titan aims, kicks and strides in a live tick", "[slice][behavior]
     CHECK(scene.store.health()[shooter.index].automaticTargets.size() == 1);
     INFO("target hp: " << rm::sim::magToFloat(scene.store.health()[tgt.index].current));
     CHECK(scene.store.health()[tgt.index].current < rm::sim::Mag::fromInt(1200));
-    scene.publish(29);
-    scene.publish(29);
-    scene.gatherForDrawing(1.0f, nullptr, {}, 0.0f);
-    REQUIRE(scene.batches[0].instances.size() == 2);
-    for (const rm::UnitInstance& instance : scene.batches[0].instances) {
-        aimed = aimed || std::abs(instance.builderYaw) > 0.05f;
-    }
-    CHECK(aimed);
-    CHECK(kicked);
-
-    // March orders: ground covered becomes walk phase.
-    REQUIRE(rm::app::issueMove(scene, shooter, 0, 30, rm::sim::fxFromFloat(400.0f),
-                               rm::sim::fxFromFloat(200.0f)));
-    for (int tick = 30; tick < 60; ++tick) {
+    // The shooter's own yaw, by instance: drawSlotOf maps instances to slots.
+    // The shooter's own aim state, by instance: drawSlotOf maps instances to slots.
+    // Values hoisted out — INFO inside the lambda dies with its scope.
+    float gotYaw = 0.0f;
+    float gotPitch = 0.0f;
+    float gotX = 0.0f;
+    float gotZ = 0.0f;
+    float gotRotY = 0.0f;
+    const auto shooterAim = [&]() {
+        scene.publish(29);
+        scene.publish(29);
+        scene.gatherForDrawing(1.0f, nullptr, {}, 0.0f);
+        REQUIRE(scene.batches[0].instances.size() == 2);
+        for (std::size_t i = 0; i < scene.batches[0].instances.size(); ++i) {
+            if (scene.unitDrawnAt(0, i) == shooter) {
+                const auto& in = scene.batches[0].instances[i];
+                gotYaw = in.builderYaw;
+                gotPitch = in.builderPitch;
+                gotX = in.position[0];
+                gotZ = in.position[2];
+                gotRotY = in.rotationY;
+                return;
+            }
+        }
+        FAIL("shooter has no drawn instance");
+    };
+    // Facing +Z with the target 100 elmos up +X: the turret shows ~+90 degrees,
+    // minus the barrel's few degrees of rest skew. At this range the pivots'
+    // model-space offsets are sub-degree geometry, so mirrored bearings give
+    // mirrored yaws — the convention-free proof of direction.
+    shooterAim();
+    const float yawEast = gotYaw;
+    CHECK(std::abs(yawEast) == Catch::Approx(1.5708f).margin(0.2f));
+    // The same target stepped across to -X.
+    scene.store.transforms()[tgt.index].x = rm::sim::fxFromFloat(100.0f);
+    for (int tick = 30; tick < 35; ++tick) {
         (void)rm::app::advanceMatch(runner, tick, 0.0f);
     }
-    scene.publish(59);
-    scene.publish(59);
+    shooterAim();
+    const float yawWest = gotYaw;
+    INFO("aim state yaw " << gotYaw << " pitch " << gotPitch << " at (" << gotX << ","
+                          << gotZ << ") rotY " << gotRotY);
+    CHECK((yawEast - yawWest) == Catch::Approx(3.14159f).margin(0.05f));
+
+    // March orders: ground covered becomes walk phase.
+    REQUIRE(rm::app::issueMove(scene, shooter, 0, 35, rm::sim::fxFromFloat(400.0f),
+                               rm::sim::fxFromFloat(200.0f)));
+    for (int tick = 35; tick < 65; ++tick) {
+        (void)rm::app::advanceMatch(runner, tick, 0.0f);
+    }
+    scene.publish(64);
+    scene.publish(64);
     scene.gatherForDrawing(1.0f, nullptr, {}, 0.0f);
     bool striding = false;
     for (const rm::UnitInstance& instance : scene.batches[0].instances) {
