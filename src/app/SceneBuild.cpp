@@ -1008,9 +1008,8 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
 
 /// A unit trial: the named blueprint for the first army at the middle of the
 /// starts, and a crowd of enemy T1 scouts and engineers a gap away facing it.
-/// Commanders stay where the map seated them (the corners); the trial happens
-/// in the middle. Scouts outnumber engineers two to one — the scouts find the
-/// trial unit fast, the engineers stand around being shot at.
+/// in the middle. Engineers are the bulk of the crowd with a couple of scouts
+/// that find the trial unit fast; the engineers stand around being shot at.
 void stageTrial(UnitScene& scene, const rm::HeightField& field,
                 std::span<const rm::mapinfo::StartPosition> starts,
                 const rm::vfs::Vfs& content, std::string_view unitId, std::size_t count,
@@ -1064,12 +1063,15 @@ void stageTrial(UnitScene& scene, const rm::HeightField& field,
         "/units/" + prefix + "0101/" + prefix + "0101_unit.bp";
     const std::string engineerPath =
         "/units/" + prefix + "0105/" + prefix + "0105_unit.bp";
-    const std::size_t scouts = foes - foes / 3;
+    // Engineers are the bulk: a crowd to chew through, spread wide enough that
+    // one shot rarely catches two. A couple of scouts still find the trial
+    // unit fast.
+    const std::size_t scouts = std::max<std::size_t>(2, foes / 4);
     std::size_t crowded = 0;
-    for (std::size_t i = 0; i < foes; ++i) {
+    for (std::size_t i = 0; i < scouts + foes; ++i) {
         const std::string& path = i < scouts ? scoutPath : engineerPath;
-        const float lane = static_cast<float>(i % 3) * 18.0f;
-        const float rank = static_cast<float>(i / 3) * 18.0f;
+        const float lane = static_cast<float>(i % 4) * 26.0f;
+        const float rank = static_cast<float>(i / 4) * 26.0f;
         if (spawnUnit(scene, content, field, path,
                       {middleX + gapElmos + lane, 0.0f, middleZ + rank}, *away,
                       faceHome)) {
