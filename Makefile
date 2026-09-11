@@ -509,6 +509,16 @@ trial: build check-fa
 	  --trial-count $(TRIAL_N) --trial-foes $(TRIAL_FOES) --trial-gap $(TRIAL_GAP) \
 	  --select-type $(TRIAL) --look $(TRIAL_LOOK)
 
+# The same stage as a capture: plays SECONDS scripted, then screenshots. For
+# checking a unit hands-off, or when the interactive window misbehaves.
+#
+#   make trial-shot TRIAL=UEL0303 SECONDS=20 SHOT=/tmp/trial.png
+trial-shot: build check-fa
+	$(BIN) "$(FA_MAP)" $(FA_FLAGS) --skirmish --armies 2 --trial $(TRIAL) \
+	  --trial-count $(TRIAL_N) --trial-foes $(TRIAL_FOES) --trial-gap $(TRIAL_GAP) \
+	  --play $(SECONDS) --select-type $(TRIAL) --look $(TRIAL_LOOK) --screenshot $(SHOT) $(SHOT_SIZE)
+	@echo "  wrote $(SHOT)"
+
 # Moments of ONE battle, captured. The match is deterministic, so re-running to a later
 # second is scrubbing the same fight forward — which is what makes this retry-friendly by
 # construction: tweak the AI, run the same command, compare the same moments. LOOK aims the
