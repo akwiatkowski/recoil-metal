@@ -40,7 +40,9 @@
 #include <memory>
 #include <array>
 #include <cmath>
+#include <cctype>
 #include <cstdint>
+#include <algorithm>
 #include <deque>
 #include <map>
 #include <set>
@@ -100,11 +102,75 @@ struct UnitScene {
         if (!store.alive(id)) return std::nullopt;
         const auto* def = catalog.def(store.typeAt(id.index));
         if (!def) return std::nullopt;
-        for (const auto& weapon : def->weapons) {
+        for (std::size_t wi = 0; wi < def->weapons.size(); ++wi) {
+            const auto& weapon = def->weapons[wi];
             if (def->name+":"+weapon.label != key || !weapon.visualMuzzleOffset) continue;
+            std::array<float,3> local = *weapon.visualMuzzleOffset;
+            // The LIVE turret pose, not the rest one: a traversed ring carries
+            // its muzzle with it, and a flash or trail origin that ignores the
+            // slew draws where the barrel was, not where it is. Same
+            // pitch-then-yaw hierarchy the shader applies, through the same
+            // pivots — fixed guns skip this and keep the heading below.
+            const std::size_t batch = batchOf(store.typeAt(id.index));
+            if (batch < batches.size()) {
+                const UnitBatch& drawn = batches[batch];
+                if (drawn.turretAim.exists() && drawn.turretWeapon == wi
+                    && drawn.model != nullptr) {
+                    std::uint32_t flags =
+                        rm::kBuilderYawBone | rm::kBuilderPitchBone;
+                    if (!weapon.muzzleBone.empty()) {
+                        for (std::size_t bone = 0; bone < drawn.model->bones.size();
+                             ++bone) {
+                            const std::string& have = drawn.model->bones[bone].name;
+                            if (have.size() == weapon.muzzleBone.size()
+                                && std::equal(have.begin(), have.end(),
+                                              weapon.muzzleBone.begin(), [](unsigned char a,
+                                                                             unsigned char b) {
+                                      return std::tolower(a) == std::tolower(b);
+                                  })) {
+                                if (bone < drawn.turretAim.boneFlags.size()) {
+                                    flags = drawn.turretAim.boneFlags[bone];
+                                }
+                                break;
+                            }
+                        }
+                    }
+                    rm::BuilderAimAngles angles{};
+                    if (const auto shown = turretShownAim.find(id.index);
+                        shown != turretShownAim.end()) {
+                        angles = shown->second;
+                    }
+                    std::array<float,3> posed =
+                        rm::applyBuilderAim(local, flags, drawn.turretAim, angles);
+                    // The slide, along the aimed barrel: the trunnion posed
+                    // identically, so their difference is the barrel.
+                    float kick = 0.0f;
+                    if (const auto slid = recoilShown.find(id.index);
+                        slid != recoilShown.end()) {
+                        kick = slid->second;
+                    }
+                    if (kick > 0.0f && drawn.recoilDistanceElmos > 0.0f) {
+                        const std::array<float,3> tru = rm::applyBuilderAim(
+                            drawn.turretAim.pitchPivot, flags, drawn.turretAim, angles);
+                        const float dx = posed[0] - tru[0];
+                        const float dy = posed[1] - tru[1];
+                        const float dz = posed[2] - tru[2];
+                        const float len =
+                            std::sqrt(dx * dx + dy * dy + dz * dz);
+                        if (len > 1e-6f) {
+                            const float slide =
+                                kick * drawn.recoilDistanceElmos / len;
+                            posed[0] -= dx * slide;
+                            posed[1] -= dy * slide;
+                            posed[2] -= dz * slide;
+                        }
+                    }
+                    local = posed;
+                }
+            }
             const auto& transform = store.transforms()[id.index];
             constexpr float radiansPerBrad = 6.283185307179586f / 65536;
-            return rm::boneWorldPosition({.translation=*weapon.visualMuzzleOffset}, {
+            return rm::boneWorldPosition({.translation=local}, {
                 .position={rm::sim::fxToFloat(transform.x),rm::sim::fxToFloat(transform.y),rm::sim::fxToFloat(transform.z)},
                 .rotationX=static_cast<float>(transform.pitch)*radiansPerBrad,
                 .rotationY=static_cast<float>(transform.heading)*radiansPerBrad,
@@ -119,6 +185,24 @@ struct UnitScene {
                 for (std::size_t axis=0; axis<3; ++axis) event.at2[axis] = rm::sim::fxFromFloat((*position)[axis]);
         }
         return event;
+    }
+
+    /// The posed barrel tip a new ribbon trail reaches back to, by projectile.
+    /// Resolves the shooter's weapon from the projectile it loosed and answers
+    /// through weaponMuzzle — turret slew included. Null when the shooter is
+    /// gone, the weapon is unknown, or no muzzle resolved: the trail keeps the
+    /// sim's own visual origin then.
+    [[nodiscard]] std::optional<std::array<float,3>> trailOrigin(
+        rm::sim::UnitId id, std::string_view projectileKey) const {
+        if (!store.alive(id)) return std::nullopt;
+        const auto* def = catalog.def(store.typeAt(id.index));
+        if (!def) return std::nullopt;
+        for (const auto& weapon : def->weapons) {
+            if (weapon.projectileId == projectileKey && weapon.visualMuzzleOffset) {
+                return weaponMuzzle(id, def->name + ":" + weapon.label);
+            }
+        }
+        return std::nullopt;
     }
 
     void updateCombatAttachments() {

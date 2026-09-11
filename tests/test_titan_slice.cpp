@@ -172,6 +172,21 @@ TEST_CASE("the Titan aims, kicks and strides in a live tick", "[slice][behavior]
         .animationDrivenByInstance = true,
     });
     scene.setBatchForType(type, 0);
+    // Mirror resolveMuzzleBones: the Muzzle_R rest offset in elmos, on the
+    // catalog copy the scene actually reads.
+    {
+        auto& live = scene.definitions.back();
+        const auto& gun = live.weapons[rig.weapon];
+        for (const auto& bone : model->bones) {
+            if (bone.name == gun.muzzleBone) {
+                live.weapons[rig.weapon].visualMuzzleOffset = std::array<float, 3>{
+                    bone.globalOffset[0] * def->meshToElmos,
+                    bone.globalOffset[1] * def->meshToElmos,
+                    bone.globalOffset[2] * def->meshToElmos};
+            }
+        }
+        REQUIRE(live.weapons[rig.weapon].visualMuzzleOffset.has_value());
+    }
 
     // Inside the cannon's 20-elmo reach, so the sim fires from the first beats.
     const rm::sim::UnitId shooter = scene.store.spawn(rm::sim::UnitStore::Spawn{
@@ -231,9 +246,6 @@ TEST_CASE("the Titan aims, kicks and strides in a live tick", "[slice][behavior]
         FAIL("shooter has no drawn instance");
     };
     // Facing +Z with the target 100 elmos up +X: the turret shows ~+90 degrees,
-    // minus the barrel's few degrees of rest skew. At this range the pivots'
-    // model-space offsets are sub-degree geometry, so mirrored bearings give
-    // mirrored yaws — the convention-free proof of direction.
     shooterAim();
     const float yawEast = gotYaw;
     CHECK(std::abs(yawEast) == Catch::Approx(1.5708f).margin(0.2f));
@@ -247,6 +259,23 @@ TEST_CASE("the Titan aims, kicks and strides in a live tick", "[slice][behavior]
     INFO("aim state yaw " << gotYaw << " pitch " << gotPitch << " at (" << gotX << ","
                           << gotZ << ") rotY " << gotRotY);
     CHECK((yawEast - yawWest) == Catch::Approx(3.14159f).margin(0.05f));
+
+    // The barrel tip follows the traverse: aimed west, the muzzle rides out
+    // -X on the target's line instead of sitting at the heading-rotated rest
+    // pose forward of the hull.
+    const std::string key = def->name + ":" + def->weapons[rig.weapon].label;
+    const auto muzzle = scene.weaponMuzzle(shooter, key);
+    REQUIRE(muzzle.has_value());
+    INFO("muzzle at (" << (*muzzle)[0] << "," << (*muzzle)[1] << "," << (*muzzle)[2]
+                       << ")");
+    CHECK((*muzzle)[0] < 198.0f);
+    CHECK(std::abs((*muzzle)[2] - 200.0f) < 3.0f);
+    // Same answer through the trail lookup, by projectile.
+    const auto trail =
+        scene.trailOrigin(shooter, def->weapons[rig.weapon].projectileId);
+    REQUIRE(trail.has_value());
+    CHECK((*trail)[0] == Catch::Approx((*muzzle)[0]));
+    CHECK((*trail)[2] == Catch::Approx((*muzzle)[2]));
 
     // March orders: ground covered becomes walk phase.
     REQUIRE(rm::app::issueMove(scene, shooter, 0, 35, rm::sim::fxFromFloat(400.0f),

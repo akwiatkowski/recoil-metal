@@ -23,9 +23,10 @@
 #include <array>
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <span>
 #include <string>
-#include <vector>
+#include <string_view>
 
 namespace rm {
 
@@ -47,7 +48,13 @@ class ProjectileTrails {
 public:
     /// Records this tick's positions. Shots whose visuals include a ribbon material receive
     /// a serial on first sight; shots that disappeared keep draining until nothing is left.
-    void update(std::span<sim::Projectile> shots, const WeaponVisuals& visuals, float seconds);
+    /// `originFor` names the posed muzzle a new trail reaches back to — the
+    /// shooter's barrel tip, not the hull centre the sim fires from. Null keeps
+    /// the sim's own visual origin.
+    using OriginFor = std::function<std::optional<std::array<float, 3>>(
+        sim::UnitId, std::string_view)>;
+    void update(std::span<sim::Projectile> shots, const WeaponVisuals& visuals, float seconds,
+                const OriginFor& originFor = {});
 
     /// Says whether a world position is visible to the viewer; a trail whose head is not is
     /// skipped entirely, so a shot in the fog does not draw its history.

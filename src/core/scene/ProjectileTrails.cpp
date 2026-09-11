@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <optional>
 
 namespace rm {
 namespace {
@@ -52,7 +53,7 @@ void trim(ProjectileTrail& trail) {
 } // namespace
 
 void ProjectileTrails::update(std::span<sim::Projectile> shots, const WeaponVisuals& visuals,
-                              float seconds) {
+                              float seconds, const OriginFor& originFor) {
     std::vector<bool> seen(trails_.size(), false);
     for (sim::Projectile& shot : shots) {
         const Ribbons ribbons = ribbonsOf(visuals, shot.visualId);
@@ -69,9 +70,16 @@ void ProjectileTrails::update(std::span<sim::Projectile> shots, const WeaponVisu
             ProjectileTrail trail{.serial = shot.visualSerial, .key = shot.visualId,
                                   .velocity = velocity, .speed = speed, .length = ribbons.length};
             // The muzzle first, so the ribbon reaches back to where the shot came from
-            // rather than starting one tick downrange.
-            const std::array<float, 3> origin = toFloat(shot.visualOrigin);
-            if (distance(origin, at) > 0) trail.points.push_back(origin);
+            // rather than starting one tick downrange. The posed barrel tip when a
+            // resolver names one, else the sim's own visual origin.
+            std::optional<std::array<float, 3>> origin;
+            if (originFor) {
+                origin = originFor(shot.firedBy, shot.visualId);
+            }
+            if (!origin) {
+                origin = toFloat(shot.visualOrigin);
+            }
+            if (distance(*origin, at) > 0) trail.points.push_back(*origin);
             trail.points.push_back(at);
             trails_.push_back(std::move(trail));
             seen.push_back(true);

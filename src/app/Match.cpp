@@ -2009,7 +2009,8 @@ void march(UnitScene& scene, const rm::HeightField& field, PassabilitySet& passa
         rm::emitCombatEffects(dust, visualEvents, &scene.weaponVisuals,
             &scene.combatEffectState, kTickSeconds, corpseRadius);
         rm::emitProjectileTrails(dust, scene.projectiles, &scene.weaponVisuals, kTickSeconds);
-        scene.projectileTrails.update(scene.projectiles, scene.weaponVisuals, kTickSeconds);
+        scene.projectileTrails.update(scene.projectiles, scene.weaponVisuals, kTickSeconds,
+            [&](rm::sim::UnitId id, std::string_view key) { return scene.trailOrigin(id, key); });
         rm::emitDust(dust, emitters, field, kTickSeconds, dustDebt, dustSeed);
         rm::emitAmbient(dust, ambient, kTickSeconds, ambientDebt, dustSeed);
     }

@@ -2389,7 +2389,10 @@ int runWindowed(const Session& session) {
                 // ...and the ribbons' path record, over ALL shots: visibility is applied when
                 // they are drawn, so a shot that leaves the fog brings its history with it.
                 units.projectileTrails.update(units.projectiles, units.weaponVisuals,
-                    gAppTickRate.secondsPerTick());
+                    gAppTickRate.secondsPerTick(),
+                    [&](rm::sim::UnitId id, std::string_view key) {
+                        return units.trailOrigin(id, key);
+                    });
 
                 // The match, announced once. The frame loop draws the fight rather than
                 // narrating it, so this is the one thing worth saying out loud — and only
