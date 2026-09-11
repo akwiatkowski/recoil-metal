@@ -188,6 +188,27 @@ void appendUnitSelection(std::vector<rm::DecalVertex>& out, const rm::HeightFiel
     }
 }
 
+void appendIntelRings(std::vector<rm::DecalVertex>& out, const rm::HeightField& field,
+                      const UnitScene& scene, rm::UnitIndex slot) {
+    if (slot >= scene.store.slotCount()) {
+        return;
+    }
+    const rm::sim::UnitCatalog::IntelRadii radii =
+        scene.catalog.intel(scene.store.typeAt(slot));
+    const rm::sim::Transform& at = scene.store.transforms()[slot];
+    const std::array<float, 3> centre{rm::sim::fxToFloat(at.x), rm::sim::fxToFloat(at.y),
+                                      rm::sim::fxToFloat(at.z)};
+    // One ring per live sense; a jammer's deception radius reads the same way.
+    const std::array<rm::sim::Fx, 4> reach{radii.radar, radii.sonar, radii.omni,
+                                           radii.jamRadius};
+    for (const rm::sim::Fx radius : reach) {
+        if (radius > rm::sim::Fx{}) {
+            rm::appendSelectionRing(out, field, centre, rm::sim::fxToFloat(radius),
+                                    kIntelRingColour, kRangeRingThicknessElmos);
+        }
+    }
+}
+
 void appendResourceDeposits(std::vector<rm::DecalVertex>& out, const UnitScene& scene,
                             const rm::HeightField& field) {
     for (const auto& deposit : scene.resourceDeposits) {

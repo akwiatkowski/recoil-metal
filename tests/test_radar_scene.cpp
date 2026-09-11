@@ -15,6 +15,8 @@
 
 #include "support/FxMatchers.hpp"
 
+#include <cmath>
+
 using Catch::Approx;
 
 namespace {
@@ -307,4 +309,62 @@ TEST_CASE("deaths raise minimap alarms for the owning alliance", "[alerts]") {
     REQUIRE(older.has_value());
     CHECK(newest->tick >= older->tick);
     CHECK_FALSE(scene.alertNewest(2).has_value());
+}
+
+TEST_CASE("a selected sensor draws its coverage rings", "[rings]") {
+    rm::HeightField field = flatField();
+    rm::app::UnitScene scene;
+    scene.armies = rm::sim::freeForAll(2);
+
+    rm::unitdef::UnitDef tower;
+    tower.name = "test_radar";
+    tower.motion = rm::unitdef::MotionType::Land;
+    tower.visionRadiusElmos = 0.0f;
+    tower.radarRadiusElmos = 400.0f;
+    tower.sonarRadiusElmos = 200.0f;
+    tower.categories = {"LAND", "STRUCTURE"};
+    tower.health = rm::sim::Mag::fromInt(500);
+    tower.collisionRadiusElmos = 2.0f;
+    scene.definitions.push_back(tower);
+    const rm::UnitTypeIndex type =
+        scene.catalog.add(&scene.definitions.back(), rm::app::gAppTickRate);
+    scene.setTypeTraits(type, rm::data::moveDefFor(tower), 1.0f);
+
+    const rm::sim::UnitId id = scene.store.spawn(rm::sim::UnitStore::Spawn{
+        .type = type,
+        .transform = {.x = rm::sim::fxFromFloat(100.0f), .z = rm::sim::fxFromFloat(100.0f)},
+        .motion = rm::app::motionFor(tower, 0),
+        .health = rm::sim::initialHealth(tower.health),
+    });
+
+    std::vector<rm::DecalVertex> out;
+    rm::app::appendIntelRings(out, field, scene, id.index);
+    // Two senses, two rings: radar at 400, sonar at 200. Rings are bands
+    // (two triangles per segment), not filled fans.
+    REQUIRE(out.size() == 2 * rm::ringVertexCount(rm::kRingSegments));
+    float farthest = 0.0f;
+    for (const auto& vertex : out) {
+        const float dx = vertex.position[0] - 100.0f;
+        const float dz = vertex.position[2] - 100.0f;
+        farthest = std::max(farthest, std::sqrt(dx * dx + dz * dz));
+    }
+    CHECK(farthest == Approx(400.0f).margin(5.0f));
+
+    // A blind unit draws nothing.
+    rm::unitdef::UnitDef blind = tower;
+    blind.name = "test_blind";
+    blind.radarRadiusElmos = 0.0f;
+    blind.sonarRadiusElmos = 0.0f;
+    scene.definitions.push_back(blind);
+    const rm::UnitTypeIndex blindType =
+        scene.catalog.add(&scene.definitions.back(), rm::app::gAppTickRate);
+    const rm::sim::UnitId plain = scene.store.spawn(rm::sim::UnitStore::Spawn{
+        .type = blindType,
+        .transform = {.x = rm::sim::fxFromFloat(300.0f), .z = rm::sim::fxFromFloat(300.0f)},
+        .motion = rm::app::motionFor(blind, 0),
+        .health = rm::sim::initialHealth(blind.health),
+    });
+    out.clear();
+    rm::app::appendIntelRings(out, field, scene, plain.index);
+    CHECK(out.empty());
 }

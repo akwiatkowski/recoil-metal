@@ -83,6 +83,11 @@ float arrayBuildSitesInto(const UnitScene& scene, rm::UnitTypeIndex type,
 void appendUnitSelection(std::vector<rm::DecalVertex>& out, const rm::HeightField& field,
                          std::array<float, 3> centre, float radius, rm::ui::GameProfile profile);
 
+/// A selected sensor's coverage rings: radar, sonar, omni and jammer reach in
+/// sensor cyan. Only senses with a radius draw — most units draw nothing.
+void appendIntelRings(std::vector<rm::DecalVertex>& out, const rm::HeightField& field,
+                      const UnitScene& scene, rm::UnitIndex slot);
+
 /// Public map resources: green mass rings and amber hydrocarbon rings.
 void appendResourceDeposits(std::vector<rm::DecalVertex>& out, const UnitScene& scene,
                             const rm::HeightField& field);

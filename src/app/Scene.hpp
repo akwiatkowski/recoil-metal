@@ -1188,6 +1188,11 @@ inline constexpr float kSelectionRingMargin = 1.35f;
 inline constexpr std::array<float, 4> kRangeRingColour{{0.95f, 0.45f, 0.35f, 0.28f}};
 inline constexpr float kRangeRingThicknessElmos = 1.2f;
 
+/// Intel coverage rings: a selected sensor's radar, sonar, omni and jammer reach,
+/// in sensor cyan. Cyan because coverage is information, not threat (red) or
+/// selection (green) — three hues that must never meet on one unit.
+inline constexpr std::array<float, 4> kIntelRingColour{{0.3f, 0.8f, 0.9f, 0.3f}};
+
 /// The drawn order queue: the line quieter than its nodes, because the nodes are the
 /// decisions and the line only connects them. In the order marker's own hue — a queue is
 /// orders, and this is what orders already look like on this ground.
