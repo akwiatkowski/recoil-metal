@@ -48,6 +48,7 @@ struct PoseUniforms {
     uint poseCount;   // 1 when the batch does not animate
     uint boneCount;   // stride, in bones, between consecutive poses
     float duration;   // seconds; 0 when the batch does not animate
+    float time;       // the batch clock, in seconds
     uint builderAim;
     float recoilDistance;   // full slide travel, elmos; 0 when the type has no rack
     uint unpackOneshot;     // play once and hold the last frame, for deploy anims
