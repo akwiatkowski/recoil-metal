@@ -123,6 +123,44 @@ loadUnpackAnimation(UnitScene& scene, const rm::vfs::Vfs& content,
     return nullptr;
 }
 
+/// A type's walk cycle: the first `*walk*.sca` beside its mesh, loaded into the
+/// scene's store. Blueprints name no walk clip — locomotion is script-driven in
+/// retail — so convention is the lookup: the mesh's own directory, case-folded.
+/// Null when nothing walks there, which is every structure. Sorted by the VFS,
+/// so two runs pick the same clip for units that ship several.
+[[nodiscard]] const rm::sca::Animation* loadWalkAnimation(UnitScene& scene,
+                                                          const rm::vfs::Vfs& content,
+                                                          std::string_view meshPath) {
+    const std::size_t slash = meshPath.rfind('/');
+    if (slash == std::string_view::npos) {
+        return nullptr;
+    }
+    const std::string dir{meshPath.substr(0, slash)};
+    for (const std::string& candidate : content.list(dir, ".sca")) {
+        std::string folded = candidate;
+        for (char& c : folded) {
+            c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        }
+        if (folded.find("walk") == std::string::npos) {
+            continue;
+        }
+        const auto bytes = content.read(candidate);
+        if (!bytes) {
+            continue;
+        }
+        auto loaded =
+            rm::sca::load(std::span<const std::byte>{bytes->data(), bytes->size()});
+        if (!loaded) {
+            rm::log::writef(rm::log::Level::Warn, "animation", "bad walk animation (%s): %s",
+                            candidate.c_str(), loaded.error().message.c_str());
+            return nullptr;
+        }
+        scene.animations.push_back(std::move(*loaded));
+        return &scene.animations.back();
+    }
+    return nullptr;
+}
+
 /// The movement state a unit of this definition is born with.
 ///
 /// ONE DERIVATION, because there are two spawn paths and they drifted. `spawnUnit` built this by
@@ -592,6 +630,11 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
 
             const TurretRig turretRig = resolveTurretRig(scene.models.back(), &unit->def);
             const rm::sca::Animation* unpack = loadUnpackAnimation(scene, content, unit->def);
+            const rm::sca::Animation* walk = unit->def.isMobile()
+                ? loadWalkAnimation(
+                      scene, content,
+                      rm::unitbp::resolveMeshInVfs(unit->def, path, content))
+                : nullptr;
             scene.batches.push_back(rm::UnitBatch{
                 .model = &scene.models.back(),
                 .instances = {},
@@ -599,9 +642,10 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
                     .diffuse = scene.textures.resolve(content, unit->albedoPath, "albedo"),
                     .shading = scene.textures.resolve(content, unit->shadingPath, "specTeam"),
                 },
-                .normals = scene.textures.resolve(content, unit->normalsPath, "normalsTS"),
-                .builderAim = rm::resolveBuilderAim(scene.models.back(), unit->def.builderArm,
-                                                    unit->def.buildEffectBones),
+            .normals = scene.textures.resolve(content, unit->normalsPath, "normalsTS"),
+            .animation = walk,
+            .builderAim = rm::resolveBuilderAim(scene.models.back(), unit->def.builderArm,
+                                                unit->def.buildEffectBones),
                 .turretAim = std::move(turretRig.rig),
                 .turretWeapon = turretRig.weapon,
                 .recoilFlags = std::move(turretRig.recoilFlags),
@@ -609,6 +653,7 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
                 .recoilReturnPerTick = turretRig.recoilReturnPerTick,
                 .unpackAnimation = unpack,
                 .unpackOneshot = unpack != nullptr,
+                .animationDrivenByInstance = walk != nullptr,
             });
             batchForFaction.emplace(army.faction, scene.batches.size() - 1);
             scaleForFaction.emplace(army.faction, unit->def.meshToElmos);
@@ -768,6 +813,15 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
         const rm::data::MoveDef move = rm::data::moveDefFor(unit->def);
         const TurretRig turretRig = resolveTurretRig(scene.models.back(), &unit->def);
         const rm::sca::Animation* unpack = loadUnpackAnimation(scene, content, unit->def);
+        // The walk cycle beside the mesh, if one walks there. Only mobile types
+        // look: a structure's directory holds no walk clip, and the list call
+        // that proves it costs a scan per type.
+        const rm::sca::Animation* walk = nullptr;
+        if (unit->def.isMobile()) {
+            walk = loadWalkAnimation(
+                scene, content,
+                rm::unitbp::resolveMeshInVfs(unit->def, blueprintPath, content));
+        }
         scene.batches.push_back(rm::UnitBatch{
             .model = &scene.models.back(),
             .instances = {},
@@ -776,6 +830,7 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
                 .shading = scene.textures.resolve(content, unit->shadingPath, "specTeam"),
             },
             .normals = scene.textures.resolve(content, unit->normalsPath, "normalsTS"),
+            .animation = walk,
             .builderAim = rm::resolveBuilderAim(scene.models.back(), unit->def.builderArm,
                                                 unit->def.buildEffectBones),
             .turretAim = std::move(turretRig.rig),
@@ -785,6 +840,7 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
             .recoilReturnPerTick = turretRig.recoilReturnPerTick,
             .unpackAnimation = unpack,
             .unpackOneshot = unpack != nullptr,
+            .animationDrivenByInstance = walk != nullptr,
         });
         scene.definitions.push_back(unit->def);
         resolveMuzzleBones(scene.definitions.back(), scene.models.back());

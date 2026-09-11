@@ -30,6 +30,12 @@
 #include <utility>
 #include <vector>
 
+namespace rm {
+namespace sca {
+struct Animation;
+} // namespace sca
+} // namespace rm
+
 namespace rm::app {
 
 /// Spawns one commander per start position: a skirmish's opening position.
@@ -87,7 +93,13 @@ struct TurretRig {
 [[nodiscard]] std::optional<std::pair<rm::TurretAimSpec, std::size_t>> turretSpecFor(
     const rm::unitdef::UnitDef& def);
 
-/// The turret rig and recoil slide for a loaded model + definition pair.
+[[nodiscard]] TurretRig resolveTurretRig(const rm::Model& model,
+                                         const rm::unitdef::UnitDef* def);
+
+/// A type's walk cycle from beside its mesh, or null. See the definition.
+[[nodiscard]] const rm::sca::Animation* loadWalkAnimation(UnitScene& scene,
+                                                          const rm::vfs::Vfs& content,
+                                                          std::string_view meshPath);
 [[nodiscard]] TurretRig resolveTurretRig(const rm::Model& model,
                                          const rm::unitdef::UnitDef* def);
 

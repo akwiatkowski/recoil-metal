@@ -16,6 +16,8 @@
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
+#include <string>
+#include <vector>
 
 using Catch::Approx;
 
@@ -105,4 +107,23 @@ TEST_CASE("the Titan's walk clip drives its legs", "[slice][walk]") {
         travel = std::max(travel, std::sqrt(dx * dx + dy * dy + dz * dz));
     }
     CHECK(travel > 0.0f);
+}
+
+TEST_CASE("walk discovery finds the Titan's cycle by mesh convention", "[slice][walk]") {
+    const char* home = std::getenv("HOME");
+    const std::filesystem::path root =
+        home ? std::filesystem::path{home} / "projects/llm/input/faf" : std::filesystem::path{};
+    if (!std::filesystem::is_directory(root / "units/UEL0303")) SKIP("retail corpus unavailable");
+    rm::vfs::Vfs content;
+    content.mountDirectory(root);
+    rm::app::UnitScene scene;
+    scene.armies = rm::sim::freeForAll(2);
+    const rm::sca::Animation* walk = rm::app::loadWalkAnimation(
+        scene, content, "/units/UEL0303/UEL0303_lod0.scm");
+    REQUIRE(walk != nullptr);
+    CHECK(walk->duration > 0.0f);
+    // A factory's directory holds an upgrade clip but no walk: statics keep
+    // the rest pose, and discovery must say so rather than animating one.
+    CHECK(rm::app::loadWalkAnimation(scene, content, "/units/UEB0101/UEB0101_LOD0.scm")
+          == nullptr);
 }
