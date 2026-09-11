@@ -112,3 +112,26 @@ TEST_CASE("a beam earns a hot core and a soft halo per node", "[effects]") {
     }
     CHECK(out[6].colour == std::array{0.7f, 0.85f, 1.0f, 0.0f});
 }
+
+TEST_CASE("a death leaves a smoke plume that outlives the flash", "[effects]") {
+    std::vector<rm::Particle> out;
+    const Event death{.kind = EventKind::UnitDestroyed,
+                      .at = {rm::test::fx(10.0f), rm::test::fx(0.0f), rm::test::fx(20.0f)}};
+    rm::CombatEffectState state;
+    rm::emitCombatEffects(out, {&death, 1}, nullptr, &state, 0.1f,
+                          [](rm::sim::UnitId) { return 10.0f; });
+    const std::size_t burst = out.size();
+    // Seven instant particles plus the column's first puff, exhaled the same tick.
+    REQUIRE(burst == 8);
+    // Two seconds of ticks: the column keeps building after the flash is gone.
+    for (int i = 0; i < 20; ++i) {
+        rm::emitCombatEffects(out, {}, nullptr, &state, 0.1f);
+    }
+    CHECK(out.size() > burst + 10);
+    // And then it stops: two more seconds add nothing, the sky clears.
+    const std::size_t settled = out.size();
+    for (int i = 0; i < 20; ++i) {
+        rm::emitCombatEffects(out, {}, nullptr, &state, 0.1f);
+    }
+    CHECK(out.size() == settled);
+}

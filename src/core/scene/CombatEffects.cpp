@@ -246,6 +246,15 @@ void emitCombatEffects(std::vector<Particle>& into, std::span<const sim::Event> 
                     .size = kSparkSize,
                 });
             }
+            // The column: this death keeps exhaling smoke for two seconds. Capped —
+            // without state there is nowhere to keep it, and with sixteen slots a
+            // hundred-kill battle keeps the youngest columns.
+            if (state != nullptr) {
+                if (state->plumes.size() >= kMaxPlumes) {
+                    state->plumes.erase(state->plumes.begin());
+                }
+                state->plumes.push_back(DeathPlume{.at = at, .radius = radius});
+            }
             break;
         }
         default:
@@ -291,6 +300,37 @@ void emitCombatEffects(std::vector<Particle>& into, std::span<const sim::Event> 
         // from floating-point residue.
         std::erase_if(state->beams, [&](const CombatBeam& beam) {
             return beam.remaining < seconds * 0.5f;
+        });
+    }
+
+    // Death columns, independent of authored visuals: a column is procedural
+    // smoke whether or not the unit had a death weapon. Each living plume
+    // exhales one puff a call, rising as it ages so the column builds upward;
+    // the seed fans successive puffs so they do not stack into a pole.
+    if (state != nullptr) {
+        for (DeathPlume& plume : state->plumes) {
+            plume.age += seconds;
+            if (plume.age >= kPlumeDurationSeconds) {
+                continue;
+            }
+            const std::uint32_t seed = ++state->seed;
+            const float fan = static_cast<float>(seed * 2654435761u % 1000) / 1000.0f - 0.5f;
+            const float rise = plume.age * 9.0f;
+            const float size = std::clamp(2.5f * plume.radius * (0.6f + plume.age * 0.4f),
+                                          5.0f, 30.0f);
+            into.push_back(Particle{
+                .origin = {plume.at[0] + fan * plume.radius,
+                           plume.at[1] + rise,
+                           plume.at[2] - fan * plume.radius},
+                .age = 0.0f,
+                .velocity = {0.0f, 9.0f, 0.0f},
+                .lifetime = kDeathSmokeLifetime,
+                .colour = {0.22f, 0.20f, 0.18f, 0.55f},
+                .size = size,
+            });
+        }
+        std::erase_if(state->plumes, [](const DeathPlume& plume) {
+            return plume.age >= kPlumeDurationSeconds;
         });
     }
 }

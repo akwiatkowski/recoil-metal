@@ -47,9 +47,22 @@ struct CombatBeam {
     float age = 0;               ///< seconds since the shot
     float remaining = 0;         ///< seconds still to draw
 };
+
+/// A death still smoking: position, corpse size, and age. Ticks exhale one puff
+/// each until the duration runs out, so a kill builds a column instead of a
+/// single puff that was already gone. Capped — a hundred-kill battle keeps the
+/// youngest sixteen columns and lets the oldest go.
+struct DeathPlume {
+    std::array<float,3> at{};
+    float radius = 2.0f;
+    float age = 0.0f;
+};
+inline constexpr float kPlumeDurationSeconds = 2.0f;
+inline constexpr std::size_t kMaxPlumes = 16;
 struct CombatEffectState {
     std::vector<CombatEffectBurst> bursts;
     std::vector<CombatBeam> beams;
+    std::vector<DeathPlume> plumes;
     std::uint32_t seed = 1;
 };
 
