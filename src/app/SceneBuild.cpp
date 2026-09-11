@@ -1006,6 +1006,81 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
     return id;
 }
 
+/// A unit trial: the named blueprint for the first army at the middle of the
+/// starts, and a crowd of enemy T1 scouts and engineers a gap away facing it.
+/// Commanders stay where the map seated them (the corners); the trial happens
+/// in the middle. Scouts outnumber engineers two to one — the scouts find the
+/// trial unit fast, the engineers stand around being shot at.
+void stageTrial(UnitScene& scene, const rm::HeightField& field,
+                std::span<const rm::mapinfo::StartPosition> starts,
+                const rm::vfs::Vfs& content, std::string_view unitId, std::size_t count,
+                std::size_t foes, float gapElmos) {
+    if (starts.empty() || scene.armies.size() < 2 || count == 0) {
+        rm::log::write(rm::log::Level::Warn, "trial",
+                        "needs starts and two armies; ignored");
+        return;
+    }
+    const rm::sim::Army& home = scene.armies.front();
+    const rm::sim::Army* away = nullptr;
+    for (const rm::sim::Army& army : scene.armies) {
+        if (army.alliance != home.alliance) {
+            away = &army;
+            break;
+        }
+    }
+    if (away == nullptr) {
+        away = &scene.armies[1];
+    }
+    float middleX = 0.0f;
+    float middleZ = 0.0f;
+    for (const rm::mapinfo::StartPosition& start : starts) {
+        middleX += start.x;
+        middleZ += start.z;
+    }
+    middleX /= static_cast<float>(starts.size());
+    middleZ /= static_cast<float>(starts.size());
+    // Brads from radians: the full turn is the identity by unsigned wraparound.
+    constexpr float kTurn = static_cast<float>(rm::sim::kBradFullTurn)
+                          / (2.0f * std::numbers::pi_v<float>);
+    const rm::Brad faceAway =
+        static_cast<rm::Brad>(std::atan2(gapElmos, 0.0f) * kTurn);
+    const rm::Brad faceHome =
+        static_cast<rm::Brad>(std::atan2(-gapElmos, 0.0f) * kTurn);
+    const std::string trialPath =
+        "/units/" + std::string{unitId} + "/" + std::string{unitId} + "_unit.bp";
+    std::size_t stood = 0;
+    for (std::size_t i = 0; i < count; ++i) {
+        if (spawnUnit(scene, content, field, trialPath,
+                      {middleX + static_cast<float>(i) * 25.0f, 0.0f, middleZ}, home,
+                      faceAway)) {
+            ++stood;
+        }
+    }
+    // The foe prefix from its commander's id: UEL0001 fields UEL scouts.
+    const std::string foeCommander = rm::sim::commanderBlueprintId(away->faction);
+    const std::string prefix =
+        foeCommander.size() >= 3 ? foeCommander.substr(0, 3) : "UEL";
+    const std::string scoutPath =
+        "/units/" + prefix + "0101/" + prefix + "0101_unit.bp";
+    const std::string engineerPath =
+        "/units/" + prefix + "0105/" + prefix + "0105_unit.bp";
+    const std::size_t scouts = foes - foes / 3;
+    std::size_t crowded = 0;
+    for (std::size_t i = 0; i < foes; ++i) {
+        const std::string& path = i < scouts ? scoutPath : engineerPath;
+        const float lane = static_cast<float>(i % 3) * 18.0f;
+        const float rank = static_cast<float>(i / 3) * 18.0f;
+        if (spawnUnit(scene, content, field, path,
+                      {middleX + gapElmos + lane, 0.0f, middleZ + rank}, *away,
+                      faceHome)) {
+            ++crowded;
+        }
+    }
+    std::printf("trial: %zu %s for army %d, %zu foes for army %d at (%.0f, %.0f)\n", stood,
+                std::string{unitId}.c_str(), home.index, crowded, away->index,
+                static_cast<double>(middleX), static_cast<double>(middleZ));
+}
+
 /// Finds (or loads and registers) the buildable entry for `blueprintPath`, so every
 /// Construction of the same blueprint shares one definition and one index.
 /// Registers a blueprint as buildable and returns its TYPE INDEX.

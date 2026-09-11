@@ -220,6 +220,11 @@ orderArchivesForMount(std::vector<std::filesystem::path> archives);
 /// `--select-type <blueprint id>`: select the first matching unit in a headless capture.
 [[nodiscard]] std::string_view parseSelectType(int argc, const char* argv[]);
 
+/// `--trial <blueprint id>`: stage a unit trial after skirmish setup — the named unit
+/// for the seated player at the middle, enemy T1 scouts and engineers nearby.
+/// Empty when the flag is absent.
+[[nodiscard]] std::string_view parseTrial(int argc, const char* argv[]);
+
 /// Whether `flag` appears at all.
 [[nodiscard]] bool hasFlag(int argc, const char* argv[], std::string_view flag);
 

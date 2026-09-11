@@ -492,6 +492,23 @@ shot-engineer: build check-fa
 	  --play $(SECONDS) --select-type UEL0105 --look $(MARCH) 400 --screenshot $(SHOT) $(SHOT_SIZE)
 	@echo "  wrote $(SHOT)"
 
+# A unit trial: the named blueprint for you at the middle, a crowd of enemy T1
+# scouts and engineers a gap away, commanders untouched in their corners. The
+# trial unit comes preselected and the camera starts on the middle — the binary
+# prints the exact middle it used, so point TRIAL_LOOK there on other maps.
+#
+#   make trial TRIAL=UEL0303 TRIAL_N=2 TRIAL_FOES=6 TRIAL_GAP=120 SECONDS=60
+TRIAL ?= UEL0303
+TRIAL_N ?= 2
+TRIAL_FOES ?= 6
+TRIAL_GAP ?= 120
+TRIAL_LOOK ?= 4096 4096 300
+trial: build check-fa
+	$(BIN) "$(FA_MAP)" $(FA_FLAGS) --skirmish --armies 2 --trial $(TRIAL) \
+	  --trial-count $(TRIAL_N) --trial-foes $(TRIAL_FOES) --trial-gap $(TRIAL_GAP) \
+	  --play $(SECONDS) --select-type $(TRIAL) --look $(TRIAL_LOOK) --screenshot $(SHOT) $(SHOT_SIZE)
+	@echo "  wrote $(SHOT)"
+
 # Moments of ONE battle, captured. The match is deterministic, so re-running to a later
 # second is scrubbing the same fight forward — which is what makes this retry-friendly by
 # construction: tweak the AI, run the same command, compare the same moments. LOOK aims the

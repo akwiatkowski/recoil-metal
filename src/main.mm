@@ -247,6 +247,17 @@ int main(int argc, const char* argv[]) {
                 std::printf("skirmish: %zu ownerless unit(s) adopted by army %d\n", adopted,
                             units.playerArmy);
             }
+            // A unit trial stages after adoption so the middle is computed over the
+            // map's own starts: the named unit for the seated army, enemy T1 scouts
+            // and engineers a gap away, commanders untouched in their corners.
+            if (const std::string_view trial = parseTrial(argc, argv); !trial.empty()) {
+                const std::size_t count = parseCount(argc, argv, "--trial-count");
+                const std::size_t foes = parseCount(argc, argv, "--trial-foes");
+                const std::size_t gap = parseCount(argc, argv, "--trial-gap");
+                stageTrial(units, map->field, starts, content, trial,
+                           count > 0 ? count : 1, foes > 0 ? foes : 6,
+                           gap > 0 ? static_cast<float>(gap) : 120.0f);
+            }
             orderFirstExtractors(units, map->markers, content, map->field, passability);
         }
 
