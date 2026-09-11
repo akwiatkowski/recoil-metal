@@ -285,4 +285,40 @@ std::array<float, 3> builderTargetInModel(const std::array<float, 3>& world,
     return instance.scale != 0.0f ? scale(point, 1.0f / instance.scale) : Vec3{};
 }
 
+std::vector<std::uint32_t> resolveRecoilFlags(const Model& model,
+                                              std::string_view boneName) {
+    if (boneName.empty() || model.bones.empty()) {
+        return {};
+    }
+    rm::unitdef::BoneRef ref{.name = std::string{boneName}};
+    int root = resolve(model, ref);
+    if (root < 0) {
+        for (std::size_t bone = 0; bone < model.bones.size(); ++bone) {
+            const std::string& have = model.bones[bone].name;
+            if (have.size() == boneName.size()
+                && std::equal(have.begin(), have.end(), boneName.begin(),
+                              [](unsigned char a, unsigned char b) {
+                                  return std::tolower(a) == std::tolower(b);
+                              })) {
+                root = static_cast<int>(bone);
+                break;
+            }
+        }
+    }
+    if (root < 0) {
+        return {};
+    }
+    std::vector<std::uint32_t> flags(model.bones.size(), 0U);
+    for (std::size_t bone = 0; bone < model.bones.size(); ++bone) {
+        if (descendsFrom(model, bone, root)) {
+            flags[bone] |= kBuilderRecoilBone;
+        }
+    }
+    return flags;
+}
+
+float stepRecoil(float amount, float returnPerStep) noexcept {
+    return amount <= returnPerStep ? 0.0f : amount - returnPerStep;
+}
+
 } // namespace rm

@@ -320,6 +320,7 @@ if(BUILD_TESTING)
         tests/test_pose.cpp
         tests/test_builder_aim.cpp
         tests/test_turret_aim.cpp
+        tests/test_recoil.cpp
         tests/test_turret_scene.cpp
         tests/test_radar_scene.cpp
         tests/test_real_sca.cpp

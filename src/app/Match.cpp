@@ -1457,6 +1457,32 @@ rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) 
             // forgets most of what happened there. Water and shields leave no mark.
             noteImpactMark(scene, rm::sim::fxToFloat(event.at[0]),
                            rm::sim::fxToFloat(event.at[2]));
+        } else if (event.kind == rm::sim::EventKind::WeaponFired) {
+            // The kick: a full slide the tick the shot leaves. Only types with an
+            // authored rack keep one — the batch resolved that at upload.
+            const rm::UnitTypeIndex shooterType = scene.store.typeAt(event.unit.index);
+            const std::size_t batch = scene.batchOf(shooterType);
+            if (batch != rm::app::UnitScene::kNoBatch && batch < scene.batches.size()
+                && !scene.batches[batch].recoilFlags.empty()) {
+                scene.recoilShown[event.unit.index] = 1.0f;
+            }
+        }
+    }
+    // The run home, one slept step per tick at the batch's return rate — fixed
+    // ticks, so a headless capture sees the same slide every run. Entries that
+    // arrive at rest leave, rather than riding the map as zeroes.
+    for (auto it = scene.recoilShown.begin(); it != scene.recoilShown.end();) {
+        const rm::UnitTypeIndex type = scene.store.typeAt(it->first);
+        const std::size_t batch = scene.batchOf(type);
+        const float perTick = batch != rm::app::UnitScene::kNoBatch
+                && batch < scene.batches.size()
+            ? scene.batches[batch].recoilReturnPerTick
+            : 1.0f;
+        it->second = rm::stepRecoil(it->second, perTick);
+        if (it->second <= 0.0f) {
+            it = scene.recoilShown.erase(it);
+        } else {
+            ++it;
         }
     }
     refreshWreckDecals(scene, runner.field);

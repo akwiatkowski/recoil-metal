@@ -65,6 +65,9 @@ turretSpecFor(const rm::unitdef::UnitDef& def) {
 struct TurretRig {
     rm::BuilderAimRig rig;
     std::size_t weapon = 0;
+    std::vector<std::uint32_t> recoilFlags;
+    float recoilDistanceElmos = 0.0f;
+    float recoilReturnPerTick = 0.0f;
 };
 
 [[nodiscard]] TurretRig resolveTurretRig(const rm::Model& model,
@@ -80,7 +83,21 @@ struct TurretRig {
     if (!rig.exists()) {
         return {};
     }
-    return {.rig = std::move(rig), .weapon = spec->second};
+    TurretRig turret{.rig = std::move(rig), .weapon = spec->second};
+    // The same weapon's recoil slide: rack subtree, travel converted to elmos,
+    // return as travel fraction per tick. No rack, no kick.
+    const rm::unitdef::Weapon& weapon = def->weapons[spec->second];
+    turret.recoilFlags = rm::resolveRecoilFlags(model, weapon.recoilBone);
+    if (!turret.recoilFlags.empty() && weapon.recoilDistanceMesh > 0.0f) {
+        turret.recoilDistanceElmos = weapon.recoilDistanceMesh * def->meshToElmos;
+        const float perSecond =
+            weapon.recoilReturnSpeedMeshPerSecond * def->meshToElmos
+            / weapon.recoilDistanceMesh;
+        turret.recoilReturnPerTick = perSecond > 0.0f
+            ? perSecond / static_cast<float>(rm::app::gAppTickRate.ticksPerSecond())
+            : 1.0f;
+    }
+    return turret;
 }
 
 /// The movement state a unit of this definition is born with.
@@ -563,6 +580,9 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
                                                     unit->def.buildEffectBones),
                 .turretAim = std::move(turretRig.rig),
                 .turretWeapon = turretRig.weapon,
+                .recoilFlags = std::move(turretRig.recoilFlags),
+                .recoilDistanceElmos = turretRig.recoilDistanceElmos,
+                .recoilReturnPerTick = turretRig.recoilReturnPerTick,
             });
             batchForFaction.emplace(army.faction, scene.batches.size() - 1);
             scaleForFaction.emplace(army.faction, unit->def.meshToElmos);
@@ -733,6 +753,9 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
                                                 unit->def.buildEffectBones),
             .turretAim = std::move(turretRig.rig),
             .turretWeapon = turretRig.weapon,
+            .recoilFlags = std::move(turretRig.recoilFlags),
+            .recoilDistanceElmos = turretRig.recoilDistanceElmos,
+            .recoilReturnPerTick = turretRig.recoilReturnPerTick,
         });
         scene.definitions.push_back(unit->def);
         resolveMuzzleBones(scene.definitions.back(), scene.models.back());
@@ -781,6 +804,9 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
                                 unit->def.buildEffectBones),
                             .turretAim = turretLod.rig,
                             .turretWeapon = turretLod.weapon,
+                            .recoilFlags = std::move(turretLod.recoilFlags),
+                            .recoilDistanceElmos = turretLod.recoilDistanceElmos,
+                            .recoilReturnPerTick = turretLod.recoilReturnPerTick,
                         });
                         scene.lodOfType[type] = UnitScene::LodLevel{
                             .batch = scene.batches.size() - 1,
@@ -1468,6 +1494,9 @@ void orderFirstExtractors(UnitScene& scene, std::span<const rm::scenario::Marker
                               : rm::BuilderAimRig{},
             .turretAim = std::move(turretRig.rig),
             .turretWeapon = turretRig.weapon,
+            .recoilFlags = std::move(turretRig.recoilFlags),
+            .recoilDistanceElmos = turretRig.recoilDistanceElmos,
+            .recoilReturnPerTick = turretRig.recoilReturnPerTick,
         });
         scene.setBatchForType(type, scene.batches.size() - 1);
     }

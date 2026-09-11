@@ -261,7 +261,10 @@ struct UnitScene {
     /// target and back to rest when the target dies. Same shape as the builder map:
     /// presentation only, forgotten with the slot.
     std::unordered_map<rm::UnitIndex, rm::BuilderAimAngles> turretShownAim;
-
+    /// The drawn recoil slide per slot, 0 at rest to 1 fully kicked. Kicked to 1
+    /// by WeaponFired in advanceMatch, decayed there every tick at the batch's
+    /// return rate — presentation only, forgotten with the slot.
+    std::unordered_map<rm::UnitIndex, float> recoilShown;
     // The sides in the match, empty outside a skirmish. Held with the scene rather
     // than beside it because every question that needs an army — may I select this,
     // may I shoot that, who banks the mass — starts from a unit.
@@ -678,6 +681,9 @@ struct UnitScene {
         std::erase_if(turretShownAim, [this](const auto& kv) {
             return !store.alive(store.idAt(kv.first));
         });
+        std::erase_if(recoilShown, [this](const auto& kv) {
+            return !store.alive(store.idAt(kv.first));
+        });
 
         for (const rm::DrawUnit& unit : drawUnits) {
             // FOG OF WAR (ADR-037). A unit the viewer's side cannot see is not drawn at all —
@@ -734,6 +740,7 @@ struct UnitScene {
             // arm keeps whatever the turret wrote.
             applyTurretAim(instance, unit, batch, dtSeconds);
             applyBuilderArm(instance, unit, batch, dtSeconds);
+            applyRecoil(instance, unit, batch);
             drawScratch[batch].push_back(instance);
             drawSlotOf[batch].push_back(unit.id.index);
         }
@@ -941,6 +948,18 @@ struct UnitScene {
         turretShownAim[slot] = shown;
         instance.builderYaw = shown.yaw;
         instance.builderPitch = shown.pitch;
+    }
+
+    /// Copies the drawn recoil slide onto the instance. The amount lives in
+    /// `recoilShown`, kicked and decayed in advanceMatch — gather only reads,
+    /// the way the turret applier only reads its own map after slewing it.
+    void applyRecoil(rm::UnitInstance& instance, const rm::DrawUnit& unit,
+                     std::size_t batch) {
+        if (batch >= batches.size() || batches[batch].recoilFlags.empty()) {
+            return;
+        }
+        const auto shownIt = recoilShown.find(unit.id.index);
+        instance.recoil = shownIt != recoilShown.end() ? shownIt->second : 0.0f;
     }
 
     /// The unit behind a drawn instance, or nothing when the pair names nothing drawn.

@@ -38,6 +38,7 @@ struct UnitInstanceIn {
     float rotationZ;        // roll, radians about +Z
     float builderYaw;       // authored BuilderArmManipulator yaw, per instance
     float builderPitch;     // authored BuilderArmManipulator pitch, per instance
+    float recoil;           // 0 at rest to 1 fully kicked, times recoilDistance
 };
 
 // Everything the vertex shader needs to find one instance's pose inside the
@@ -49,7 +50,8 @@ struct PoseUniforms {
     float duration;   // seconds; 0 when the batch does not animate
     float time;       // the batch clock, in seconds
     uint builderAim;
-    packed_uint3 padding;
+    float recoilDistance;   // full slide travel, elmos; 0 when the type has no rack
+    packed_uint2 padding;
     float4 yawPivot;    // xyz pivot; w unused
     float4 yawAxis;     // xyz unit axis; w unused
     float4 pitchPivot;  // xyz pivot; w unused
@@ -84,8 +86,17 @@ static float3 applyBuilderAim(float3 point, BoneTransformIn bone, UnitInstanceIn
         const float3 pivot = p.yawPivot.xyz;
         point = pivot + rotateBuilderAxis(point - pivot, p.yawAxis.xyz, inst.builderYaw);
     }
+    // The recoil slide, AFTER the aim rotations: the barrel travels back along
+    // where it is pointing, not where it rested. inst.recoil is 0..1 of the
+    // batch's travel; the direction rebuilds the aimed +Z from the same angles.
+    if ((bone.builderFlags & 4u) != 0u && inst.recoil > 0.0) {
+        const float3 barrel =
+            rotateBuilderAxis(rotateBuilderAxis(float3(0.0, 0.0, 1.0), p.pitchAxis.xyz,
+                                                inst.builderPitch),
+                              p.yawAxis.xyz, inst.builderYaw);
+        point -= barrel * (inst.recoil * p.recoilDistance);
+    }
     return point;
-}
 
 static float3 applyBuilderAimNormal(float3 normal, BoneTransformIn bone, UnitInstanceIn inst,
                                     PoseUniforms p) {

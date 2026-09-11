@@ -50,11 +50,15 @@ struct UnitInstance {
     /// pitch axes. Zero leaves every bone in its ordinary animation pose.
     float builderYaw = 0.0f;
     float builderPitch = 0.0f;
+
+    /// Per-instance recoil slide, 0 at rest to 1 fully kicked. Multiplied by the
+    /// batch's travel distance in the vertex shader; zero leaves every bone put.
+    float recoil = 0.0f;
 };
 
-static_assert(sizeof(UnitInstance) == 56,
+static_assert(sizeof(UnitInstance) == 60,
               "UnitInstance must stay tightly packed — the shader reads it as a "
-              "packed_float3, two floats, a packed_float4 and five floats");
+              "packed_float3, two floats, a packed_float4 and six floats");
 
 // Scatters instances across the map's land, sitting on the terrain.
 //

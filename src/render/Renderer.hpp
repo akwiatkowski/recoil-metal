@@ -838,6 +838,12 @@ private:
         /// retained CPU-side only to populate PoseUniforms; flags themselves live in boneBuffer.
         BuilderAimRig builderAim;
 
+        /// Recoil slide for the primary weapon: subtree flags OR'd into the bone
+        /// buffer at upload, travel distance for PoseUniforms. The return rate
+        /// stays scene-side (UnitBatch), where the per-tick decay runs.
+        std::vector<std::uint32_t> recoilFlags;
+        float recoilDistance = 0.0f;
+
         /// When set, the renderer's clock contributes nothing and each
         /// instance's phase is the whole answer — see UnitBatch.
         bool animationDrivenByInstance = false;

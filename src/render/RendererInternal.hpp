@@ -251,7 +251,9 @@ struct PoseUniforms {
     float duration = 0.0f;
     float time = 0.0f;
     std::uint32_t builderAim = 0;
-    std::array<std::uint32_t, 3> padding{};
+    /// Full recoil travel in elmos for this batch. Zero when the type has no rack.
+    float recoilDistance = 0.0f;
+    std::array<std::uint32_t, 2> padding{};
     std::array<float, 4> yawPivot{};
     std::array<float, 4> yawAxis{};
     std::array<float, 4> pitchPivot{};

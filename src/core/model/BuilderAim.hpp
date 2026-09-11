@@ -7,12 +7,16 @@
 #include <cstdint>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace rm {
 
 inline constexpr std::uint32_t kBuilderYawBone = 1U << 0U;
 inline constexpr std::uint32_t kBuilderPitchBone = 1U << 1U;
+/// A recoiling bone and everything bolted to it. A third bit, because a barrel
+/// both aims (yaw/pitch bits from its turret rig) and slides (this bit).
+inline constexpr std::uint32_t kBuilderRecoilBone = 1U << 2U;
 
 /// A `BuilderArmManipulator` resolved from blueprint bone references onto one model.
 struct BuilderAimRig {
@@ -66,6 +70,15 @@ struct TurretAimSpec {
 /// The turret twin of resolveBuilderAim: flags mark the ring and barrel subtrees, the
 /// aim point is the muzzle. An unresolvable bone yields a rig that does not exist.
 [[nodiscard]] BuilderAimRig resolveTurretAim(const Model& model, const TurretAimSpec& spec);
+
+/// The recoil subtree for one bone name: the bone and everything descending from
+/// it, flagged for the slide. Empty when the name resolves to nothing — a gun
+/// with no authored rack simply does not kick. Case-insensitive like the turret.
+[[nodiscard]] std::vector<std::uint32_t> resolveRecoilFlags(const Model& model,
+                                                            std::string_view boneName);
+
+/// One decay step toward rest: linear, clamped at zero, in fractions of full travel.
+[[nodiscard]] float stepRecoil(float amount, float returnPerStep) noexcept;
 
 /// The clamped two-axis pose that points the rig at a model-space target.
 [[nodiscard]] BuilderAimAngles builderAimAt(const BuilderAimRig& rig,

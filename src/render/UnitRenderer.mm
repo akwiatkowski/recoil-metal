@@ -320,6 +320,16 @@ void Renderer::setUnits(std::span<const dds::Texture> textures,
                 }
             }
         }
+        // The recoil bit ORs in beside the aim bits: a barrel both aims and slides.
+        // Sized like the aim flags (empty when the type has no rack); a short flag
+        // vector against a longer bone list leaves the tail unflagged, never crashing.
+        for (std::size_t pose = 0; pose < poseCount; ++pose) {
+            for (std::size_t bone = 0;
+                 bone < batch.recoilFlags.size() && bone < model.bones.size(); ++bone) {
+                poses[pose * model.bones.size() + bone].builderFlags |=
+                    batch.recoilFlags[bone];
+            }
+        }
 
         GpuUnitBatch uploaded;
         uploaded.textures = batch.textures;
@@ -329,6 +339,8 @@ void Renderer::setUnits(std::span<const dds::Texture> textures,
         uploaded.boneStrideBytes = model.bones.size() * sizeof(BoneTransform);
         uploaded.duration = duration;
         uploaded.builderAim = batch.builderAim;
+        uploaded.recoilFlags = batch.recoilFlags;
+        uploaded.recoilDistance = batch.recoilDistanceElmos;
         uploaded.animationDrivenByInstance = batch.animationDrivenByInstance;
         uploaded.vertexBuffer =
             device_->newBuffer(model.vertices.data(), model.vertices.size() * sizeof(ModelVertex),

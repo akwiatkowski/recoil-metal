@@ -60,6 +60,13 @@ struct UnitBatch {
     /// Index into the type's weapons of the resolved turret, for reading its live target.
     std::size_t turretWeapon = 0;
 
+    /// Recoil slide for the primary weapon: subtree flags OR'd into the bone
+    /// buffer, travel in elmos, and the fraction of travel recovered per tick.
+    /// Empty flags mean no authored rack — the gun does not kick.
+    std::vector<std::uint32_t> recoilFlags;
+    float recoilDistanceElmos = 0.0f;
+    float recoilReturnPerTick = 0.0f;
+
     // Whether the phase in each instance is the WHOLE answer, or an offset
     // added to a clock the renderer advances.
     //
