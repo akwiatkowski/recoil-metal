@@ -59,17 +59,6 @@ turretSpecFor(const rm::unitdef::UnitDef& def) {
     return std::nullopt;
 }
 
-/// A batch's turret rig and the weapon whose live target it follows, resolved once
-/// per type. Empty rig when the type has no turreted weapon or its bones do not
-/// resolve — the per-frame applier then skips the unit outright.
-struct TurretRig {
-    rm::BuilderAimRig rig;
-    std::size_t weapon = 0;
-    std::vector<std::uint32_t> recoilFlags;
-    float recoilDistanceElmos = 0.0f;
-    float recoilReturnPerTick = 0.0f;
-};
-
 [[nodiscard]] TurretRig resolveTurretRig(const rm::Model& model,
                                          const rm::unitdef::UnitDef* def) {
     if (def == nullptr) {
@@ -84,15 +73,19 @@ struct TurretRig {
         return {};
     }
     TurretRig turret{.rig = std::move(rig), .weapon = spec->second};
-    // The same weapon's recoil slide: rack subtree, travel converted to elmos,
-    // return as travel fraction per tick. No rack, no kick.
     const rm::unitdef::Weapon& weapon = def->weapons[spec->second];
     turret.recoilFlags = rm::resolveRecoilFlags(model, weapon.recoilBone);
-    if (!turret.recoilFlags.empty() && weapon.recoilDistanceMesh > 0.0f) {
-        turret.recoilDistanceElmos = weapon.recoilDistanceMesh * def->meshToElmos;
+    // The same weapon's recoil slide: rack subtree, travel converted to elmos,
+    // return as travel fraction per tick. No rack, no kick. The authored distance
+    // is SIGNED — negative is backwards along the rack, which is the only way the
+    // slide goes (the shader subtracts along the barrel) — so the magnitude is
+    // what travels. A `> 0` check here deleted every retail rack at once, because
+    // the corpus signs backwards travel negative (the Titan's is -0.2).
+    const float travelMesh = std::abs(weapon.recoilDistanceMesh);
+    if (!turret.recoilFlags.empty() && travelMesh > 0.0f) {
+        turret.recoilDistanceElmos = travelMesh * def->meshToElmos;
         const float perSecond =
-            weapon.recoilReturnSpeedMeshPerSecond * def->meshToElmos
-            / weapon.recoilDistanceMesh;
+            weapon.recoilReturnSpeedMeshPerSecond * def->meshToElmos / travelMesh;
         turret.recoilReturnPerTick = perSecond > 0.0f
             ? perSecond / static_cast<float>(rm::app::gAppTickRate.ticksPerSecond())
             : 1.0f;

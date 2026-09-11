@@ -27,6 +27,8 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
+#include <vector>
 
 namespace rm::app {
 
@@ -67,6 +69,27 @@ struct VfsUnit {
 };
 
 // --- What the build layer does ------------------------------------------------------------
+
+/// A batch's turret rig and the weapon whose live target it follows, resolved once
+/// per type. Empty rig when the type has no turreted weapon or its bones do not
+/// resolve — the per-frame applier then skips the unit outright.
+struct TurretRig {
+    rm::BuilderAimRig rig;
+    std::size_t weapon = 0;
+    std::vector<std::uint32_t> recoilFlags;
+    float recoilDistanceElmos = 0.0f;
+    float recoilReturnPerTick = 0.0f;
+};
+
+/// The primary turret's aim spec from the first turreted weapon, or nothing when the
+/// type has no turret to pose. Yaw limits from the firing arc; the muzzle doubles as
+/// the aim point.
+[[nodiscard]] std::optional<std::pair<rm::TurretAimSpec, std::size_t>> turretSpecFor(
+    const rm::unitdef::UnitDef& def);
+
+/// The turret rig and recoil slide for a loaded model + definition pair.
+[[nodiscard]] TurretRig resolveTurretRig(const rm::Model& model,
+                                         const rm::unitdef::UnitDef* def);
 
 [[nodiscard]] std::optional<rm::unitdef::UnitDef> resolveUnitDef(
     const std::filesystem::path& path, const rm::vfs::AssetSearch& search,
