@@ -390,3 +390,103 @@ TEST_CASE("the Titan aims, kicks and strides in a live tick", "[slice][behavior]
     }
     CHECK(striding);
 }
+
+TEST_CASE("the Titan's turret tracks a moving enemy", "[slice][tracking]") {
+    // Hold-fire by HP: the target is unkillable, so nothing dies, nothing
+    // stops firing solutions from existing — the only thing observed is the
+    // ring following the march. Yaw deltas must match bearing deltas; the
+    // barrel's rest skew cancels out of every difference.
+    const auto dir = titanDir();
+    if (!std::filesystem::is_directory(dir)) SKIP("retail corpus unavailable");
+    const auto def = rm::unitbp::loadFile(dir / "UEL0303_unit.bp");
+    REQUIRE(def);
+    const auto model = rm::scm::loadFile(dir / "UEL0303_lod0.scm");
+    REQUIRE(model.has_value());
+
+    rm::HeightField field;
+    field.squaresX = 128;
+    field.squaresZ = 128;
+    field.baseHeight = 0.0f;
+    field.heightScale = 1.0f;
+    field.raw.assign(field.sampleCount(), std::uint16_t{0});
+    rm::app::UnitScene scene;
+    scene.armies = rm::sim::freeForAll(2);
+    scene.players = rm::sim::onePlayerPerArmy(2, 0);
+    scene.economies.assign(2, rm::sim::Economy{});
+    scene.economies[0].stored = {.mass = rm::sim::Mag::fromInt(100000),
+                                 .energy = rm::sim::Mag::fromInt(100000)};
+    scene.definitions.push_back(*def);
+    const rm::UnitTypeIndex type =
+        scene.catalog.add(&scene.definitions.back(), rm::app::gAppTickRate);
+    scene.setTypeTraits(type, rm::data::moveDefFor(*def), def->meshToElmos);
+    scene.models.push_back(*model);
+    const rm::app::TurretRig rig = rm::app::resolveTurretRig(scene.models.back(), &*def);
+    REQUIRE(rig.rig.exists());
+    scene.batches.push_back(rm::UnitBatch{
+        .model = &scene.models.back(),
+        .turretAim = rig.rig,
+        .turretWeapon = rig.weapon,
+        .recoilFlags = rig.recoilFlags,
+        .recoilDistanceElmos = rig.recoilDistanceElmos,
+        .recoilReturnPerTick = rig.recoilReturnPerTick,
+    });
+    scene.setBatchForType(type, 0);
+
+    const rm::sim::UnitId watcher = scene.store.spawn(rm::sim::UnitStore::Spawn{
+        .type = type,
+        .transform = {.x = rm::sim::fxFromFloat(200.0f), .z = rm::sim::fxFromFloat(200.0f)},
+        .motion = rm::app::motionFor(*def, 0),
+        .health = rm::sim::initialHealth(def->health),
+    });
+    const rm::sim::UnitId marcher = scene.store.spawn(rm::sim::UnitStore::Spawn{
+        .type = type,
+        .transform = {.x = rm::sim::fxFromFloat(300.0f), .z = rm::sim::fxFromFloat(100.0f)},
+        .motion = rm::app::motionFor(*def, 1),
+        .health = rm::sim::initialHealth(def->health),
+    });
+    // Unkillable and well funded, so the walk is the only story.
+    scene.store.health()[marcher.index].current = rm::sim::Mag::fromInt(1000000);
+    scene.store.health()[marcher.index].maximum = rm::sim::Mag::fromInt(1000000);
+    scene.economies[1].stored = {.mass = rm::sim::Mag::fromInt(100000),
+                                 .energy = rm::sim::Mag::fromInt(100000)};
+    // North past the watcher, inside the cannon's reach the whole way.
+    REQUIRE(rm::app::issueMove(scene, marcher, 1, 0, rm::sim::fxFromFloat(300.0f),
+                               rm::sim::fxFromFloat(300.0f)));
+    rm::app::PassabilitySet passability{field, false, 0.0f};
+    rm::vfs::Vfs content;
+    rm::app::MatchRunner runner =
+        rm::app::makeMatchRunner(scene, field, passability, content, {}, {});
+    runner.scripts.clear();
+
+    float lastYaw = 0.0f;
+    float lastBearing = 0.0f;
+    bool first = true;
+    for (int tick = 0; tick < 40; tick += 10) {
+        for (int t = tick; t < tick + 10; ++t) {
+            (void)rm::app::advanceMatch(runner, t, 0.0f);
+        }
+        scene.publish(static_cast<rm::TickIndex>(tick + 10));
+        scene.publish(static_cast<rm::TickIndex>(tick + 10));
+        scene.gatherForDrawing(1.0f, nullptr, {}, 0.0f);
+        float yaw = 0.0f;
+        bool found = false;
+        for (std::size_t i = 0; i < scene.batches[0].instances.size(); ++i) {
+            if (scene.unitDrawnAt(0, i) == watcher) {
+                yaw = scene.batches[0].instances[i].builderYaw;
+                found = true;
+            }
+        }
+        REQUIRE(found);
+        const auto& wt = scene.store.transforms()[watcher.index];
+        const auto& mt = scene.store.transforms()[marcher.index];
+        const float bearing = std::atan2(rm::sim::fxToFloat(mt.x) - rm::sim::fxToFloat(wt.x),
+                                         rm::sim::fxToFloat(mt.z) - rm::sim::fxToFloat(wt.z));
+        if (!first) {
+            INFO("tick " << tick + 10 << " yaw " << yaw << " bearing " << bearing);
+            CHECK((yaw - lastYaw) == Catch::Approx(bearing - lastBearing).margin(0.2f));
+        }
+        first = false;
+        lastYaw = yaw;
+        lastBearing = bearing;
+    }
+}
