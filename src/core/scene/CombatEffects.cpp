@@ -196,6 +196,21 @@ void emitCombatEffects(std::vector<Particle>& into, std::span<const sim::Event> 
                 .colour = {0.25f, 0.75f, 1.0f, 0.0f},
                 .size = kFlashSize,
             });
+            // The ripple: six sparks on a horizontal hexagon, all leaving the
+            // impact at the same speed — an expanding ring on the bubble wall.
+            // Fixed angles, so every replay draws the same ring.
+            const std::array<float, 3> at = atOf(event);
+            for (int i = 0; i < 6; ++i) {
+                const float angle = static_cast<float>(i) * 1.0471976f;
+                into.push_back(Particle{
+                    .origin = at,
+                    .age = 0.0f,
+                    .velocity = {12.0f * std::cos(angle), 0.0f, 12.0f * std::sin(angle)},
+                    .lifetime = kBeamLifetime,
+                    .colour = {0.25f, 0.75f, 1.0f, 0.0f},
+                    .size = kSparkSize,
+                });
+            }
             break;
         }
         case sim::EventKind::UnitDestroyed: {

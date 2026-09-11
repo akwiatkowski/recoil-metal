@@ -37,16 +37,29 @@ TEST_CASE("an impact earns smoke that drifts and a spark that adds", "[effects]"
     CHECK(out[1].lifetime < out[0].lifetime);
 }
 
-TEST_CASE("shield absorption flashes blue at the intercepted impact", "[effects]") {
+TEST_CASE("shield absorption flashes blue and ripples outward", "[effects]") {
     std::vector<rm::Particle> out;
     const Event absorbed{.kind = EventKind::ShieldDamaged,
                          .at = {rm::test::fx(64.0f), rm::test::fx(20.0f), rm::test::fx(96.0f)}};
     rm::emitCombatEffects(out, {&absorbed, 1});
 
-    REQUIRE(out.size() == 1);
+    REQUIRE(out.size() == 7);
     CHECK(out[0].origin == std::array{64.0f, 20.0f, 96.0f});
     CHECK(out[0].colour[2] > out[0].colour[0]);
     CHECK(out[0].colour[3] == 0.0f);
+    // The ripple: six sparks in a horizontal hexagon, all additive blue, all
+    // leaving the impact point — an expanding ring, deterministic by construction.
+    float vx = 0.0f;
+    float vz = 0.0f;
+    for (std::size_t i = 1; i < 7; ++i) {
+        CHECK(out[i].colour == out[0].colour);
+        CHECK(out[i].velocity[1] == 0.0f);
+        CHECK(out[i].origin == out[0].origin);
+        vx += out[i].velocity[0];
+        vz += out[i].velocity[2];
+    }
+    CHECK(std::abs(vx) < 0.01f);
+    CHECK(std::abs(vz) < 0.01f);
 }
 
 TEST_CASE("a death earns a flash, a fireball, smoke and sparks scaled by size", "[effects]") {
