@@ -363,6 +363,10 @@ constexpr double kSkyG = 0.12;
 constexpr double kSkyB = 0.18;
 
 constexpr MTL::PixelFormat kColorFormat = MTL::PixelFormat::PixelFormatBGRA8Unorm;
+/// Linear HDR for the world target (and everything that renders into it or its
+/// siblings: reflection, refraction copy, blur pair). The composite tone-maps
+/// to the drawable; pipelines declare which side they are on.
+constexpr MTL::PixelFormat kHdrFormat = MTL::PixelFormat::PixelFormatRGBA16Float;
 constexpr MTL::PixelFormat kDepthFormat = MTL::PixelFormat::PixelFormatDepth32Float;
 
 /// The shadow map's format and size. 2048 across the whole map is ~16 elmos per
@@ -492,7 +496,8 @@ static_assert(sourceAlphaBlendFactor(BlendMode::PremultipliedAlpha)
 [[nodiscard]] inline MTL::RenderPipelineState* makePipeline(MTL::Device* device, MTL::Library* library,
                                                       const char* vertexName,
                                                       const char* fragmentName, BlendMode blend,
-                                                      MTL::PixelFormat depthFormat = kDepthFormat) {
+                                                      MTL::PixelFormat depthFormat = kDepthFormat,
+                                                      MTL::PixelFormat colorFormat = kColorFormat) {
     MTL::Function* vertexFn =
         library->newFunction(NS::String::string(vertexName, NS::UTF8StringEncoding));
     MTL::Function* fragmentFn =
@@ -504,7 +509,7 @@ static_assert(sourceAlphaBlendFactor(BlendMode::PremultipliedAlpha)
 
     MTL::RenderPipelineColorAttachmentDescriptor* color0 =
         descriptor->colorAttachments()->object(0);
-    color0->setPixelFormat(kColorFormat);
+    color0->setPixelFormat(colorFormat);
     if (blend != BlendMode::Opaque) {
         color0->setBlendingEnabled(true);
         color0->setSourceRGBBlendFactor(sourceRgbBlendFactor(blend));

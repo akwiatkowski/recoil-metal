@@ -97,6 +97,7 @@ static float3 applyBuilderAim(float3 point, BoneTransformIn bone, UnitInstanceIn
         point -= barrel * (inst.recoil * p.recoilDistance);
     }
     return point;
+}
 
 static float3 applyBuilderAimNormal(float3 normal, BoneTransformIn bone, UnitInstanceIn inst,
                                     PoseUniforms p) {

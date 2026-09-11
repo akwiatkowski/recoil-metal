@@ -89,26 +89,26 @@ Renderer::Renderer(CA::MetalLayer* layer)
     propShadowPipeline_ =
         makeDepthOnlyPipeline(device_, library, "propShadowVertex", "propShadowFragment");
     terrainPipeline_ = makePipeline(device_, library, "terrainVertex", "terrainFragment",
-                                    BlendMode::Opaque);
+                                    BlendMode::Opaque, kDepthFormat, kHdrFormat);
     skyPipeline_ =
-        makePipeline(device_, library, "skyVertex", "skyFragment", BlendMode::Opaque);
+        makePipeline(device_, library, "skyVertex", "skyFragment", BlendMode::Opaque,
+                     kDepthFormat, kHdrFormat);
     // No hardware blending: the water shader reads the framebuffer itself and
     // composites, which is what lets it absorb by depth rather than by a single
-    // alpha. Leaving blending on would mix the result a second time.
     waterPipeline_ = makePipeline(device_, library, "waterVertex", "waterFragment",
-                                  BlendMode::Opaque);
+                                  BlendMode::Opaque, kDepthFormat, kHdrFormat);
     unitPipeline_ = makePipeline(device_, library, "unitVertex", "unitFragment",
-                                 BlendMode::Opaque);
+                                 BlendMode::Opaque, kDepthFormat, kHdrFormat);
     // The build ghost: the same vertex stage — it IS a unit, geometrically — with a flat
     // luminous fragment and blending, because a silhouette that occluded the ground it is
     // about to claim would hide the one thing the player is judging.
     ghostPipeline_ = makePipeline(device_, library, "unitVertex", "unitGhostFragment",
-                                  BlendMode::StraightAlpha);
+                                  BlendMode::StraightAlpha, kDepthFormat, kHdrFormat);
     // A construction site: the same vertex stage again, and blended because Aeon's unbuilt
     // half is translucent light. The other three factions discard rather than blend, so the
     // blend state costs them nothing.
     constructionPipeline_ = makePipeline(device_, library, "unitVertex", "unitBuildFragment",
-                                         BlendMode::StraightAlpha);
+                                         BlendMode::StraightAlpha, kDepthFormat, kHdrFormat);
     // Blended, and drawn last of all: the HUD sits over the world rather than in it.
     textPipeline_ = makePipeline(device_, library, "textVertex", "textFragment",
                                   BlendMode::PremultipliedAlpha);
@@ -121,8 +121,8 @@ Renderer::Renderer(CA::MetalLayer* layer)
     minimapFogPipeline_ = makePipeline(device_, library, "textVertex", "minimapFogFragment",
                                        BlendMode::PremultipliedAlpha);
     downsamplePipeline_ = makePipeline(device_, library, "screenVertex", "screenFragment",
-                                       BlendMode::Opaque, MTL::PixelFormatInvalid);
-    composePipeline_ = makePipeline(device_, library, "screenVertex", "screenFragment",
+                                       BlendMode::Opaque, MTL::PixelFormatInvalid, kHdrFormat);
+    composePipeline_ = makePipeline(device_, library, "screenVertex", "compositeFragment",
                                     BlendMode::Opaque);
     glassPipeline_ = makePipeline(device_, library, "textVertex", "glassFragment",
                                   BlendMode::PremultipliedAlpha);
@@ -130,13 +130,13 @@ Renderer::Renderer(CA::MetalLayer* layer)
     // A selection ring is interface laid over the ground, and a solid band would hide the
     // terrain it marks.
     decalPipeline_ = makePipeline(device_, library, "decalVertex", "decalFragment",
-                                  BlendMode::StraightAlpha);
+                                  BlendMode::StraightAlpha, kDepthFormat, kHdrFormat);
     // The selection outline. Front faces culled and no depth write: what shows is the
     // shell's far side, and only where it survives the depth test against the unit
     // that has already been drawn — which is exactly the silhouette.
     {
         outlinePipeline_ = makePipeline(device_, library, "outlineVertex", "outlineFragment",
-                                        BlendMode::Opaque);
+                                        BlendMode::Opaque, kDepthFormat, kHdrFormat);
 
         const std::size_t bytes = kMaxOutlinedUnits * sizeof(UnitInstance) * kMaxFramesInFlight;
         outlineBuffer_ = device_->newBuffer(bytes, MTL::ResourceStorageModeShared);
@@ -148,11 +148,13 @@ Renderer::Renderer(CA::MetalLayer* layer)
     // Particle colours are authored premultiplied so the same pipeline can draw translucent
     // dust and additive sparks. The explicit mode keeps that contract beside every other one.
     particlePipeline_ = makePipeline(device_, library, "particleVertex", "particleFragment",
-                                     BlendMode::PremultipliedAlpha);
+                                     BlendMode::PremultipliedAlpha, kDepthFormat, kHdrFormat);
     modulatedParticlePipelines_[0] = makePipeline(device_, library, "particleVertex", "particleFragment",
-                                                 BlendMode::ModulateInverse);
+                                                 BlendMode::ModulateInverse, kDepthFormat,
+                                                 kHdrFormat);
     modulatedParticlePipelines_[1] = makePipeline(device_, library, "particleVertex", "particleFragment",
-                                                 BlendMode::Modulate2xInverse);
+                                                 BlendMode::Modulate2xInverse, kDepthFormat,
+                                                 kHdrFormat);
     library->release();
 
     // Two immutable kernels, one selected per frame. Only one is ever encoded, and both work
@@ -214,7 +216,7 @@ Renderer::Renderer(CA::MetalLayer* layer)
     {
         auto* descriptor = MTL::TextureDescriptor::alloc()->init();
         descriptor->setTextureType(MTL::TextureType::TextureType2D);
-        descriptor->setPixelFormat(kColorFormat);
+        descriptor->setPixelFormat(kHdrFormat);
         descriptor->setWidth(kReflectionWidth);
         descriptor->setHeight(kReflectionHeight);
         descriptor->setUsage(MTL::TextureUsageRenderTarget | MTL::TextureUsageShaderRead);
@@ -787,9 +789,9 @@ void Renderer::ensureSceneColour(unsigned int width, unsigned int height) noexce
     }
 
     MTL::TextureDescriptor* descriptor = MTL::TextureDescriptor::texture2DDescriptor(
-        kColorFormat, width, height, /*mipmapped=*/false);
+        kHdrFormat, width, height, /*mipmapped=*/false);
     // ShaderRead to sample it, and RenderTarget because a blit destination that
-    // shares the drawable's format wants the same usage set — Metal validates the
+    // shares the WORLD's format wants the same usage set — Metal validates the
     // pair rather than inferring it.
     descriptor->setUsage(MTL::TextureUsageShaderRead | MTL::TextureUsageRenderTarget);
     descriptor->setStorageMode(MTL::StorageModePrivate);
@@ -817,8 +819,11 @@ void Renderer::ensureBackdropTextures(unsigned int width, unsigned int height) n
     blurA_ = nullptr;
     worldColour_ = nullptr;
 
+    // Half float: the world renders linear HDR, and the composite tone-maps it
+    // for display. LDR here would clip every fireball to white before the curve
+    // ever saw it. The blur pair inherits the format — blur wants linear too.
     MTL::TextureDescriptor* descriptor = MTL::TextureDescriptor::texture2DDescriptor(
-        kColorFormat, width, height, /*mipmapped=*/false);
+        MTL::PixelFormatRGBA16Float, width, height, /*mipmapped=*/false);
     descriptor->setUsage(MTL::TextureUsageRenderTarget | MTL::TextureUsageShaderRead);
     descriptor->setStorageMode(MTL::StorageModePrivate);
     worldColour_ = device_->newTexture(descriptor);
@@ -833,18 +838,14 @@ void Renderer::ensureBackdropTextures(unsigned int width, unsigned int height) n
 
 void Renderer::encodeFrame(MTL::CommandBuffer* commandBuffer, MTL::RenderPassDescriptor* pass,
                            unsigned int width, unsigned int height) noexcept {
-    if (uiEffects_ == ui::EffectsLevel::Off || !uiHasGlassPanels_) {
-        encodeScene(commandBuffer, pass, width, height);
-        return;
-    }
-
+    // Every frame goes through the HDR world target and the tone-mapping
+    // composite — there is no direct-to-drawable path, because the world
+    // pipelines declare the HDR format and a drawable-bound pass would reject
+    // them. The glass blur still only runs when panels need it.
     ensureBackdropTextures(width, height);
-    if (worldColour_ == nullptr || blurA_ == nullptr || blurB_ == nullptr
-        || fullBlur_ == nullptr || reducedBlur_ == nullptr) {
-        encodeScene(commandBuffer, pass, width, height);
-        return;
+    if (worldColour_ == nullptr) {
+        return;  // allocation failure: a black frame, honestly arrived at
     }
-
     // World first, into a shader-readable target. The water's pre-water refraction copy stays
     // separate (`sceneColour_`); this texture is the complete post-water world the HUD sees.
     MTL::RenderPassDescriptor* worldPass = MTL::RenderPassDescriptor::alloc()->init();
@@ -860,22 +861,31 @@ void Renderer::encodeFrame(MTL::CommandBuffer* commandBuffer, MTL::RenderPassDes
     worldDepth->setClearDepth(1.0);
     encodeScene(commandBuffer, worldPass, width, height, nullptr, false);
 
-    // One cheap raster downsample followed by exactly one MPS blur over the quarter-size pair.
-    MTL::RenderPassDescriptor* downsamplePass = MTL::RenderPassDescriptor::alloc()->init();
-    auto* downsampleColor = downsamplePass->colorAttachments()->object(0);
-    downsampleColor->setTexture(blurA_);
-    downsampleColor->setLoadAction(MTL::LoadAction::LoadActionDontCare);
-    downsampleColor->setStoreAction(MTL::StoreAction::StoreActionStore);
-    MTL::RenderCommandEncoder* downsample = commandBuffer->renderCommandEncoder(downsamplePass);
-    downsample->setRenderPipelineState(downsamplePipeline_);
-    downsample->setFragmentTexture(worldColour_, NS::UInteger{0});
-    downsample->setFragmentSamplerState(fontSampler_, NS::UInteger{0});
-    downsample->drawPrimitives(MTL::PrimitiveType::PrimitiveTypeTriangle, NS::UInteger{0},
-                               NS::UInteger{3});
-    downsample->endEncoding();
+    // The glass blur only runs when panels need it; the composite below runs
+    // always. PanelSurface samples the shared blur, so without glass the
+    // quarter-size pair simply holds last frame's leftovers, sampled by nothing.
+    if (uiEffects_ != ui::EffectsLevel::Off && uiHasGlassPanels_ && blurA_ != nullptr
+        && blurB_ != nullptr && fullBlur_ != nullptr && reducedBlur_ != nullptr) {
+        // One cheap raster downsample followed by exactly one MPS blur over the
+        // quarter-size pair.
+        MTL::RenderPassDescriptor* downsamplePass = MTL::RenderPassDescriptor::alloc()->init();
+        auto* downsampleColor = downsamplePass->colorAttachments()->object(0);
+        downsampleColor->setTexture(blurA_);
+        downsampleColor->setLoadAction(MTL::LoadAction::LoadActionDontCare);
+        downsampleColor->setStoreAction(MTL::StoreAction::StoreActionStore);
+        MTL::RenderCommandEncoder* downsample =
+            commandBuffer->renderCommandEncoder(downsamplePass);
+        downsample->setRenderPipelineState(downsamplePipeline_);
+        downsample->setFragmentTexture(worldColour_, NS::UInteger{0});
+        downsample->setFragmentSamplerState(fontSampler_, NS::UInteger{0});
+        downsample->drawPrimitives(MTL::PrimitiveType::PrimitiveTypeTriangle, NS::UInteger{0},
+                                   NS::UInteger{3});
+        downsample->endEncoding();
+        downsamplePass->release();
 
-    mps::encodeGaussianBlur(uiEffects_ == ui::EffectsLevel::Reduced ? reducedBlur_ : fullBlur_,
-                            commandBuffer, blurA_, blurB_);
+        mps::encodeGaussianBlur(uiEffects_ == ui::EffectsLevel::Reduced ? reducedBlur_ : fullBlur_,
+                                commandBuffer, blurA_, blurB_);
+    }
 
     // Restore the sharp world, then put semantic HUD layers over it. Only PanelSurface samples
     // the shared blur; every icon, label, edge and readout remains crisp.
@@ -888,7 +898,6 @@ void Renderer::encodeFrame(MTL::CommandBuffer* commandBuffer, MTL::RenderPassDes
     encodeUi(composite, width, height, true);
     composite->endEncoding();
 
-    downsamplePass->release();
     worldPass->release();
 }
 
