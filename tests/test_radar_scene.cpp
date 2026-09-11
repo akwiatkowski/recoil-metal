@@ -213,3 +213,98 @@ TEST_CASE("a radar contact resolves to the live enemy for the muzzle", "[radar]"
                                   &job.scene.intel, &job.scene.catalog)
           == job.enemy);
 }
+
+TEST_CASE("deaths raise minimap alarms for the owning alliance", "[alerts]") {
+    rm::HeightField field = flatField();
+    rm::app::UnitScene scene;
+    scene.armies = rm::sim::freeForAll(2);
+    scene.players = rm::sim::onePlayerPerArmy(2, 0);
+    scene.playerArmy = 0;
+    scene.economies.assign(2, rm::sim::Economy{});
+    scene.intel.configure(2, rm::sim::fxFromFloat(field.widthElmos()),
+                          rm::sim::fxFromFloat(field.depthElmos()),
+                          rm::sim::VisionStyle::ForgedAlliance);
+
+    rm::unitdef::UnitDef scout;
+    scout.name = "test_scout";
+    scout.motion = rm::unitdef::MotionType::Land;
+    scout.health = rm::sim::Mag::fromInt(100);
+    scout.categories = {"LAND"};
+    scout.collisionRadiusElmos = 2.0f;
+    rm::unitdef::UnitDef brute = scout;
+    brute.name = "test_brute";
+    brute.collisionRadiusElmos = 8.0f;
+    scene.definitions.push_back(scout);
+    const rm::UnitTypeIndex scoutType =
+        scene.catalog.add(&scene.definitions.back(), rm::app::gAppTickRate);
+    scene.definitions.push_back(brute);
+    const rm::UnitTypeIndex bruteType =
+        scene.catalog.add(&scene.definitions.back(), rm::app::gAppTickRate);
+    scene.setTypeTraits(scoutType, rm::data::moveDefFor(scout), 1.0f);
+    scene.setTypeTraits(bruteType, rm::data::moveDefFor(brute), 1.0f);
+
+    auto spawn = [&](rm::UnitTypeIndex type, const rm::unitdef::UnitDef& def, int army,
+                     float x) {
+        return scene.store.spawn(rm::sim::UnitStore::Spawn{
+            .type = type,
+            .transform = {.x = rm::sim::fxFromFloat(x), .z = rm::sim::fxFromFloat(0.0f)},
+            .motion = rm::app::motionFor(def, army),
+            .health = rm::sim::initialHealth(def.health),
+        });
+    };
+    const rm::sim::UnitId own = spawn(scoutType, scout, 0, 0.0f);
+    const rm::sim::UnitId big = spawn(bruteType, brute, 1, 250.0f);
+
+    rm::app::PassabilitySet passability{field, false, 0.0f};
+    rm::vfs::Vfs content;
+    rm::app::MatchRunner runner =
+        rm::app::makeMatchRunner(scene, field, passability, content, {}, {});
+    runner.scripts.clear();
+    // Zeroed hulls, not freed ids: retireDead reports what damage killed, and
+    // kill() alone leaves health up (the id pool is not the corpse).
+    scene.store.health()[own.index].current = rm::sim::Mag{};
+    scene.store.health()[big.index].current = rm::sim::Mag{};
+    (void)rm::app::advanceMatch(runner, 0, 0.0f);
+
+    // Own death alarms; the big enemy's death alarms whoever watches.
+    REQUIRE(scene.alerts.size() == 2);
+    bool underAttack = false;
+    bool explosion = false;
+    for (const auto& alert : scene.alerts) {
+        CHECK(alert.viewer == 0);
+        if (alert.kind == rm::app::UnitScene::AlertKind::UnderAttack) {
+            CHECK(alert.x == Approx(0.0f));
+            underAttack = true;
+        } else {
+            CHECK(alert.x == Approx(250.0f));
+            explosion = true;
+        }
+    }
+    CHECK(underAttack);
+    CHECK(explosion);
+
+    // Both plot on the minimap as yellow alarm pips.
+    scene.publish(0);
+    scene.publish(0);
+    std::vector<rm::ui::MinimapPip> pips;
+    rm::app::appendMinimapPips(pips, scene);
+    auto alarmNear = [&](float x) {
+        for (const auto& pip : pips) {
+            const float dx = pip.worldX - x;
+            if (dx * dx + pip.worldZ * pip.worldZ < 100.0f * 100.0f && pip.size > 2.5f) {
+                return true;
+            }
+        }
+        return false;
+    };
+    CHECK(alarmNear(0.0f));
+    CHECK(alarmNear(250.0f));
+
+    // Cycling reaches both, newest first.
+    const auto newest = scene.alertNewest(0);
+    REQUIRE(newest.has_value());
+    const auto older = scene.alertNewest(1);
+    REQUIRE(older.has_value());
+    CHECK(newest->tick >= older->tick);
+    CHECK_FALSE(scene.alertNewest(2).has_value());
+}

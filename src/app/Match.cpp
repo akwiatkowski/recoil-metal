@@ -1260,6 +1260,10 @@ void printEvents(const rm::sim::EventQueue& events, float now) {
     }
 }
 
+/// A corpse this wide going up is news whatever side it was on: experimentals
+/// and their kin, not tanks. Smaller deaths alarm only their own alliance.
+inline constexpr float kBigExplosionRadiusElmos = 6.0f;
+
 rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) {
     UnitScene& scene = runner.scene;
     // Deliver the previous tick's complete event stream before Lua tasks can transfer
@@ -1452,6 +1456,39 @@ rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) 
                 .tick = static_cast<unsigned long long>(tickIndex),
                 .x = static_cast<double>(rm::sim::fxToFloat(fell.x)),
                 .z = static_cast<double>(rm::sim::fxToFloat(fell.z))});
+            // Alarms for the player: own-alliance deaths, and anything big going
+            // up regardless of side.
+            const int viewer = scene.viewingAlliance();
+            const int victimAlliance = event.army >= 0
+                    && static_cast<std::size_t>(event.army) < scene.armies.size()
+                ? scene.armies[static_cast<std::size_t>(event.army)].alliance
+                : UnitScene::kNoAlliance;
+            // From the DEFINITION, not the corpse's slot: retireDead zeroes the
+            // motion radius on retirement ("stops shoving the living"), so by
+            // the time events are read every corpse measures zero.
+            const float corpseRadius =
+                buildableDef(scene, static_cast<std::size_t>(victimType)).collisionRadiusElmos;
+            UnitScene::AlertKind kind = UnitScene::AlertKind::UnderAttack;
+            bool alarm = false;
+            if (viewer != UnitScene::kNoAlliance && victimAlliance == viewer) {
+                kind = UnitScene::AlertKind::UnderAttack;
+                alarm = true;
+            } else if (corpseRadius > kBigExplosionRadiusElmos) {
+                kind = UnitScene::AlertKind::BigExplosion;
+                alarm = true;
+            }
+            if (alarm) {
+                if (scene.alerts.size() >= UnitScene::kMaxAlerts) {
+                    scene.alerts.erase(scene.alerts.begin());
+                }
+                scene.alerts.push_back(UnitScene::Alert{
+                    .tick = static_cast<TickIndex>(tickIndex),
+                    .x = rm::sim::fxToFloat(fell.x),
+                    .z = rm::sim::fxToFloat(fell.z),
+                    .kind = kind,
+                    .viewer = viewer,
+                });
+            }
         } else if (event.kind == rm::sim::EventKind::ProjectileImpact
                    && (event.impactType == rm::sim::ImpactType::Terrain
                        || event.impactType == rm::sim::ImpactType::Prop)) {

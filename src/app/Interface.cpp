@@ -273,6 +273,28 @@ void appendMinimapPips(std::vector<rm::ui::MinimapPip>& out, const UnitScene& sc
     }
 
     appendMinimapBlips(out, scene);
+
+    // Alarms younger than the lifetime, newest brightest. White-yellow, bigger
+    // than a blip: an alarm is an order to look, not a contact to interpret.
+    const int viewer = scene.viewingAlliance();
+    for (auto it = scene.alerts.rbegin(); it != scene.alerts.rend(); ++it) {
+        if (it->viewer != viewer && viewer != UnitScene::kNoAlliance) {
+            continue;
+        }
+        const std::uint64_t age =
+            scene.snapshotCurrent.tick >= it->tick ? scene.snapshotCurrent.tick - it->tick : 0;
+        const std::uint64_t budget = static_cast<std::uint64_t>(
+            gAppTickRate.ticks(rm::sim::Seconds{UnitScene::kAlertLifetimeSeconds}));
+        if (age > budget) {
+            break;  // older still: the ring is newest-last, so everything past is older
+        }
+        out.push_back(rm::ui::MinimapPip{
+            .worldX = it->x,
+            .worldZ = it->z,
+            .colour = rm::ui::Colour{1.0f, 0.9f, 0.45f, 0.95f},
+            .size = 3.0f,
+        });
+    }
 }
 
 

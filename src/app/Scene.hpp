@@ -269,6 +269,45 @@ struct UnitScene {
     /// deploy animations. Absent means match start — pre-placed units unfold as
     /// the match opens. Erased with the slot, like every other per-slot map.
     std::unordered_map<rm::UnitIndex, rm::TickIndex> deployedTick;
+
+    /// What happened that the player should look at: own units dying under fire,
+    /// big things exploding. Recorded per tick from the sim's events, drawn on
+    /// the minimap, jumped to by hotkey — presentation only, never the sim.
+    enum class AlertKind : std::uint8_t { UnderAttack, BigExplosion };
+    struct Alert {
+        TickIndex tick = 0;
+        float x = 0.0f;
+        float z = 0.0f;
+        AlertKind kind = AlertKind::UnderAttack;
+        /// Whose view this was recorded for (kNoAlliance sees all). An observer
+        /// flipping seats must not inherit another side's alarms.
+        int viewer = kNoAlliance;
+    };
+    /// Capped ring: the newest thirty-two alarms, oldest dropped. A battle that
+    /// stopped being news stops taking space.
+    static constexpr std::size_t kMaxAlerts = 32;
+    std::vector<Alert> alerts;
+
+    /// How long an alarm stays on the minimap, in seconds. Authored, not ticked
+    /// (§5.1): the caller derives ticks from the run rate.
+    static constexpr float kAlertLifetimeSeconds = 30.0f;
+
+    /// The back-th newest alarm for this viewer (0 is the latest), or nothing.
+    /// An observer sees every side's alarms; a player only their own.
+    [[nodiscard]] std::optional<Alert> alertNewest(std::size_t back) const {
+        const int viewer = viewingAlliance();
+        std::size_t seen = 0;
+        for (auto it = alerts.rbegin(); it != alerts.rend(); ++it) {
+            if (it->viewer != viewer && viewer != kNoAlliance) {
+                continue;
+            }
+            if (seen == back) {
+                return *it;
+            }
+            ++seen;
+        }
+        return std::nullopt;
+    }
     // than beside it because every question that needs an army — may I select this,
     // may I shoot that, who banks the mass — starts from a unit.
     std::vector<rm::sim::Army> armies;
