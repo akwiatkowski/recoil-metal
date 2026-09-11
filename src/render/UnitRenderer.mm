@@ -345,6 +345,7 @@ void Renderer::setUnits(std::span<const dds::Texture> textures, std::span<const 
         GpuUnitBatch uploaded;
         uploaded.textures = batch.textures;
         uploaded.normals = batch.normals;
+        uploaded.supremeCommanderShading = model.family == Family::SupremeCommander;
         uploaded.animationDrivenByInstance = batch.animationDrivenByInstance;
         uploaded.unpackOneshot = unpackOneshot;
         uploaded.poseCount = poseCount;

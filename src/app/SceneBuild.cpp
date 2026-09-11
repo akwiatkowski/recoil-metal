@@ -1041,10 +1041,14 @@ void stageTrial(UnitScene& scene, const rm::HeightField& field,
     // Brads from radians: the full turn is the identity by unsigned wraparound.
     constexpr float kTurn = static_cast<float>(rm::sim::kBradFullTurn)
                           / (2.0f * std::numbers::pi_v<float>);
+    // The crowd sits off the trial unit's nose, not dead ahead: a turret that
+    // never leaves rest is indistinguishable from a frozen one, and the point
+    // of the stage is watching it track.
+    constexpr float kLateral = 0.6f;
     const rm::Brad faceAway =
-        static_cast<rm::Brad>(std::atan2(gapElmos, 0.0f) * kTurn);
+        static_cast<rm::Brad>(std::atan2(gapElmos, gapElmos * kLateral) * kTurn);
     const rm::Brad faceHome =
-        static_cast<rm::Brad>(std::atan2(-gapElmos, 0.0f) * kTurn);
+        static_cast<rm::Brad>(std::atan2(-gapElmos, -gapElmos * kLateral) * kTurn);
     const std::string trialPath =
         "/units/" + std::string{unitId} + "/" + std::string{unitId} + "_unit.bp";
     std::size_t stood = 0;
@@ -1073,8 +1077,9 @@ void stageTrial(UnitScene& scene, const rm::HeightField& field,
         const float lane = static_cast<float>(i % 4) * 26.0f;
         const float rank = static_cast<float>(i / 4) * 26.0f;
         if (spawnUnit(scene, content, field, path,
-                      {middleX + gapElmos + lane, 0.0f, middleZ + rank}, *away,
-                      faceHome)) {
+                      {middleX + gapElmos + lane, 0.0f,
+                       middleZ + gapElmos * kLateral + rank},
+                      *away, faceHome)) {
             ++crowded;
         }
     }
