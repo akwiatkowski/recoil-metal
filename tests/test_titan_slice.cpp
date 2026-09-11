@@ -7,6 +7,9 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "app/SceneBuild.hpp"
+#include "app/Match.hpp"
+#include "core/data/MoveDef.hpp"
+#include "core/map/HeightField.hpp"
 #include "core/model/BuilderAim.hpp"
 #include "core/model/Pose.hpp"
 #include "core/model/Sca.hpp"
@@ -126,4 +129,104 @@ TEST_CASE("walk discovery finds the Titan's cycle by mesh convention", "[slice][
     // the rest pose, and discovery must say so rather than animating one.
     CHECK(rm::app::loadWalkAnimation(scene, content, "/units/UEB0101/UEB0101_LOD0.scm")
           == nullptr);
+}
+
+TEST_CASE("the Titan aims, kicks and strides in a live tick", "[slice][behavior]") {
+    const auto dir = titanDir();
+    if (!std::filesystem::is_directory(dir)) SKIP("retail corpus unavailable");
+    const auto def = rm::unitbp::loadFile(dir / "UEL0303_unit.bp");
+    REQUIRE(def);
+    const auto model = rm::scm::loadFile(dir / "UEL0303_lod0.scm");
+    REQUIRE(model.has_value());
+    const auto walk = rm::sca::loadFile(dir / "UEL0303_Awalk.sca");
+    REQUIRE(walk.has_value());
+
+    rm::HeightField field;
+    field.squaresX = 128;
+    field.squaresZ = 128;
+    field.baseHeight = 0.0f;
+    field.heightScale = 1.0f;
+    field.raw.assign(field.sampleCount(), std::uint16_t{0});
+    rm::app::UnitScene scene;
+    scene.armies = rm::sim::freeForAll(2);
+    scene.players = rm::sim::onePlayerPerArmy(2, 0);
+    scene.economies.assign(2, rm::sim::Economy{});
+    scene.economies[0].stored = {.mass = rm::sim::Mag::fromInt(100000),
+                                 .energy = rm::sim::Mag::fromInt(100000)};
+    scene.definitions.push_back(*def);
+    const rm::UnitTypeIndex type =
+        scene.catalog.add(&scene.definitions.back(), rm::app::gAppTickRate);
+    scene.setTypeTraits(type, rm::data::moveDefFor(*def), def->meshToElmos);
+    scene.models.push_back(*model);
+    scene.animations.push_back(*walk);
+    const rm::app::TurretRig rig = rm::app::resolveTurretRig(scene.models.back(), &*def);
+    REQUIRE(rig.rig.exists());
+    scene.batches.push_back(rm::UnitBatch{
+        .model = &scene.models.back(),
+        .animation = &scene.animations.back(),
+        .turretAim = rig.rig,
+        .turretWeapon = rig.weapon,
+        .recoilFlags = rig.recoilFlags,
+        .recoilDistanceElmos = rig.recoilDistanceElmos,
+        .recoilReturnPerTick = rig.recoilReturnPerTick,
+        .animationDrivenByInstance = true,
+    });
+    scene.setBatchForType(type, 0);
+
+    // Inside the cannon's 20-elmo reach, so the sim fires from the first beats.
+    const rm::sim::UnitId shooter = scene.store.spawn(rm::sim::UnitStore::Spawn{
+        .type = type,
+        .transform = {.x = rm::sim::fxFromFloat(200.0f), .z = rm::sim::fxFromFloat(200.0f)},
+        .motion = rm::app::motionFor(*def, 0),
+        .health = rm::sim::initialHealth(def->health),
+    });
+    const rm::sim::UnitId tgt = scene.store.spawn(rm::sim::UnitStore::Spawn{
+        .type = type,
+        .transform = {.x = rm::sim::fxFromFloat(210.0f), .z = rm::sim::fxFromFloat(200.0f)},
+        .motion = rm::app::motionFor(*def, 1),
+        .health = rm::sim::initialHealth(def->health),
+    });
+    (void)tgt;
+    rm::app::PassabilitySet passability{field, false, 0.0f};
+    rm::vfs::Vfs content;
+    rm::app::MatchRunner runner =
+        rm::app::makeMatchRunner(scene, field, passability, content, {}, {});
+    runner.scripts.clear();
+    // Sample the slide every tick: it springs home between shots, so a single
+    // end-of-run read races the decay. Any nonzero sample proves the kick.
+    bool aimed = false;
+    bool kicked = false;
+    for (int tick = 0; tick < 30; ++tick) {
+        (void)rm::app::advanceMatch(runner, tick, 0.0f);
+        const auto shown = scene.recoilShown.find(shooter.index);
+        kicked = kicked || (shown != scene.recoilShown.end() && shown->second > 0.0f);
+    }
+    // The gun acquired its target: recoil is presentation of a sim fact.
+    CHECK(scene.store.health()[shooter.index].automaticTargets.size() == 1);
+    INFO("target hp: " << rm::sim::magToFloat(scene.store.health()[tgt.index].current));
+    CHECK(scene.store.health()[tgt.index].current < rm::sim::Mag::fromInt(1200));
+    scene.publish(29);
+    scene.publish(29);
+    scene.gatherForDrawing(1.0f, nullptr, {}, 0.0f);
+    REQUIRE(scene.batches[0].instances.size() == 2);
+    for (const rm::UnitInstance& instance : scene.batches[0].instances) {
+        aimed = aimed || std::abs(instance.builderYaw) > 0.05f;
+    }
+    CHECK(aimed);
+    CHECK(kicked);
+
+    // March orders: ground covered becomes walk phase.
+    REQUIRE(rm::app::issueMove(scene, shooter, 0, 30, rm::sim::fxFromFloat(400.0f),
+                               rm::sim::fxFromFloat(200.0f)));
+    for (int tick = 30; tick < 60; ++tick) {
+        (void)rm::app::advanceMatch(runner, tick, 0.0f);
+    }
+    scene.publish(59);
+    scene.publish(59);
+    scene.gatherForDrawing(1.0f, nullptr, {}, 0.0f);
+    bool striding = false;
+    for (const rm::UnitInstance& instance : scene.batches[0].instances) {
+        striding = striding || std::abs(instance.animationPhase) > 1e-6f;
+    }
+    CHECK(striding);
 }

@@ -622,9 +622,9 @@ void Window::setWater(bool enabled, float levelElmos) {
     impl_->renderer->setWater(enabled, levelElmos);
 }
 
-void Window::setProps(std::span<const dds::Texture> textures,
+void Window::setProps(std::span<const dds::Texture> textures, std::span<const char> srgb,
                       std::span<const PropBatch> batches) {
-    impl_->renderer->setProps(textures, batches);
+    impl_->renderer->setProps(textures, srgb, batches);
 }
 
 void Window::setFog(std::span<const std::uint16_t> counts, int squaresX, int squaresZ,
@@ -634,9 +634,9 @@ void Window::setFog(std::span<const std::uint16_t> counts, int squaresX, int squ
 
 void Window::clearFog() noexcept { impl_->renderer->clearFog(); }
 
-void Window::setUnits(std::span<const dds::Texture> textures,
+void Window::setUnits(std::span<const dds::Texture> textures, std::span<const char> srgb,
                       std::span<const UnitBatch> batches) {
-    impl_->renderer->setUnits(textures, batches);
+    impl_->renderer->setUnits(textures, srgb, batches);
 }
 
 void Window::setInstances(std::size_t batchIndex, std::span<const UnitInstance> instances) {

@@ -536,7 +536,7 @@ void composeHeadlessInterface(rm::Renderer& renderer, const Session& session,
             std::vector<rm::Renderer::ConstructionDraw> shotSites;
             rm::app::gatherConstructions(units, content, map->field, shotSites);
             if (!shotSites.empty()) {
-                renderer.setUnits(units.textures.all(), units.batches);
+                renderer.setUnits(units.textures.all(), units.textures.srgbFlags(), units.batches);
                 renderer.setConstructions(shotSites);
                 renderer.setConstructionTime(marchOptions.seconds);
                 rm::app::appendConstructionEffects(vertices, shotParticles, units, map->field,
@@ -696,7 +696,7 @@ void composeHeadlessInterface(rm::Renderer& renderer, const Session& session,
                     if (batch != UnitScene::kNoBatch) {
                         // The batch grew after the upload above, so upload again — the
                         // windowed loop's growth check, done by hand.
-                        renderer.setUnits(units.textures.all(), units.batches);
+                        renderer.setUnits(units.textures.all(), units.textures.srgbFlags(), units.batches);
                         const auto typeIndex = static_cast<std::size_t>(*type);
                         const auto snapped = snapBuildSite(units, *type, {gx, gz});
                         gx = snapped[0];
@@ -789,9 +789,9 @@ int runOffscreenBenchmark(const Session& session) {
             renderer.setUiEffects(session.uiEffects.level);
             renderer.setTerrain(mesh);
             applyGround(renderer, *map);
-            renderer.setUnits(units.textures.all(), units.batches);
+            renderer.setUnits(units.textures.all(), units.textures.srgbFlags(), units.batches);
             units.applyFog(renderer);
-            renderer.setProps(props.textures.all(), props.batches);
+            renderer.setProps(props.textures.all(), props.textures.srgbFlags(), props.batches);
             renderer.setAnimationTime(animationTime);
             renderer.setReflections(settings.reflections);
             renderer.setStratumNormals(settings.stratumNormals);
@@ -853,9 +853,9 @@ int runScreenshot(const Session& session) {
             renderer.setUiEffects(session.uiEffects.level);
             renderer.setTerrain(mesh);
             applyGround(renderer, *map);
-            renderer.setUnits(units.textures.all(), units.batches);
+            renderer.setUnits(units.textures.all(), units.textures.srgbFlags(), units.batches);
             units.applyFog(renderer);
-            renderer.setProps(props.textures.all(), props.batches);
+            renderer.setProps(props.textures.all(), props.textures.srgbFlags(), props.batches);
             renderer.setAnimationTime(animationTime);
             renderer.setReflections(settings.reflections);
             renderer.setStratumNormals(settings.stratumNormals);
@@ -994,7 +994,7 @@ int runWindowed(const Session& session) {
         }
         window.setTerrain(mesh);
         applyGround(window, *map);
-        window.setProps(props.textures.all(), props.batches);
+        window.setProps(props.textures.all(), props.textures.srgbFlags(), props.batches);
 
         // Only the windowed path steps the sim, so only it can pace a walk
         // cycle by distance. The headless paths — screenshots and benchmarks —
@@ -1003,7 +1003,7 @@ int runWindowed(const Session& session) {
         for (rm::UnitBatch& batch : units.batches) {
             batch.animationDrivenByInstance = true;
         }
-        window.setUnits(units.textures.all(), units.batches);
+        window.setUnits(units.textures.all(), units.textures.srgbFlags(), units.batches);
         if (focus > 0.0f) {
             focusOnFirstUnit(window, units, focus);
         }
@@ -2299,7 +2299,7 @@ int runWindowed(const Session& session) {
             for (std::size_t b = uploadedBatches; b < units.batches.size(); ++b) {
                 units.batches[b].animationDrivenByInstance = true;
             }
-            window.setUnits(units.textures.all(), units.batches);
+            window.setUnits(units.textures.all(), units.textures.srgbFlags(), units.batches);
             uploadedBatches = units.batches.size();
         };
 

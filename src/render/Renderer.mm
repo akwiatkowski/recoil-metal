@@ -508,16 +508,29 @@ void Renderer::beginFrame() noexcept {
     decalVertexCount_ = 0;
 }
 
-MTL::Texture* Renderer::uploadTexture(const dds::Texture& texture, const char* what) {
+MTL::Texture* Renderer::uploadTexture(const dds::Texture& texture, const char* what, bool srgb) {
     // DXT1/3/5 map one-to-one onto BC1/BC2/BC3, and BGRA8 onto BGRA8Unorm — all
     // natively sampleable here, so the payload goes up untouched exactly like
-    // the terrain atlas.
+    // the terrain atlas. The sRGB variants decode to linear on sample, which is
+    // what authored albedo wants under a gamma-encoding composite.
     MTL::PixelFormat format = MTL::PixelFormat::PixelFormatBC1_RGBA;
     switch (texture.format) {
-        case dds::Format::Bc1: format = MTL::PixelFormat::PixelFormatBC1_RGBA; break;
-        case dds::Format::Bc2: format = MTL::PixelFormat::PixelFormatBC2_RGBA; break;
-        case dds::Format::Bc3: format = MTL::PixelFormat::PixelFormatBC3_RGBA; break;
-        case dds::Format::Bgra8: format = MTL::PixelFormat::PixelFormatBGRA8Unorm; break;
+        case dds::Format::Bc1:
+            format = srgb ? MTL::PixelFormat::PixelFormatBC1_RGBA_sRGB
+                          : MTL::PixelFormat::PixelFormatBC1_RGBA;
+            break;
+        case dds::Format::Bc2:
+            format = srgb ? MTL::PixelFormat::PixelFormatBC2_RGBA_sRGB
+                          : MTL::PixelFormat::PixelFormatBC2_RGBA;
+            break;
+        case dds::Format::Bc3:
+            format = srgb ? MTL::PixelFormat::PixelFormatBC3_RGBA_sRGB
+                          : MTL::PixelFormat::PixelFormatBC3_RGBA;
+            break;
+        case dds::Format::Bgra8:
+            format = srgb ? MTL::PixelFormat::PixelFormatBGRA8Unorm_sRGB
+                          : MTL::PixelFormat::PixelFormatBGRA8Unorm;
+            break;
     }
 
     MTL::TextureDescriptor* descriptor = MTL::TextureDescriptor::texture2DDescriptor(

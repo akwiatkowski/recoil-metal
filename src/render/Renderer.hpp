@@ -437,7 +437,8 @@ public:
     // each, flat grey and flat-lit respectively.
     //
     // Replaces any previously set units. An empty batch list clears them.
-    void setUnits(std::span<const dds::Texture> textures, std::span<const UnitBatch> batches);
+    void setUnits(std::span<const dds::Texture> textures, std::span<const char> srgb,
+                  std::span<const UnitBatch> batches);
 
     // Uploads the map's scenery: trees, rocks and wrecks, one instanced draw per
     // distinct mesh. Static — a prop never moves, so this is called once and
@@ -453,8 +454,8 @@ public:
     // in an alpha channel somewhere, so this distinction is the difference
     // between a palm tree and a solid green card in the player's colour.
     //
-    // Replaces any previously set props. An empty batch list clears them.
-    void setProps(std::span<const dds::Texture> textures, std::span<const PropBatch> batches);
+    void setProps(std::span<const dds::Texture> textures, std::span<const char> srgb,
+                  std::span<const PropBatch> batches);
 
     // Opens a frame that is going to push new instance data, blocking until the
     // GPU has finished with the ring slot about to be overwritten.
@@ -585,8 +586,13 @@ private:
     void releasePropBuffers() noexcept;
 
     /// Uploads a decoded DDS as a Metal texture, mips and all. Returns a +1
-    /// object the caller owns. Throws if the allocation fails.
-    [[nodiscard]] MTL::Texture* uploadTexture(const dds::Texture& texture, const char* what);
+    /// object the caller owns. Throws if the allocation fails. `srgb` picks the
+    /// sRGB formats, so authored colour decodes to linear on sample — the final
+    /// composite re-encodes, which is what keeps a beige beach beige instead of
+    /// white. Data textures (masks, normals, waves, shading) stay linear: only
+    /// albedo/diffuse colour passes true.
+    [[nodiscard]] MTL::Texture* uploadTexture(const dds::Texture& texture, const char* what,
+                                              bool srgb = false);
 
 
     // What a scene pass should do differently from the ordinary one.

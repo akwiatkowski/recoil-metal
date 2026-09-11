@@ -47,6 +47,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace rm::app {
@@ -220,6 +221,7 @@ public:
 
         const auto index = static_cast<int>(textures_.size());
         textures_.push_back(std::move(*texture));
+        srgb_.push_back(std::string_view{slot}.find("albedo") != std::string_view::npos);
         indexByPath_.emplace(key, index);
         return index;
     }
@@ -263,15 +265,20 @@ public:
 
         const auto index = static_cast<int>(textures_.size());
         textures_.push_back(std::move(*texture));
+        srgb_.push_back(std::string_view{slot}.find("albedo") != std::string_view::npos);
         indexByPath_.emplace(vfsPath, index);
         return index;
     }
 
     [[nodiscard]] std::span<const rm::dds::Texture> all() const noexcept { return textures_; }
     [[nodiscard]] std::size_t size() const noexcept { return textures_.size(); }
+    /// Per texture, whether it is authored colour (sRGB) rather than data. Index-aligned
+    /// with `all()`: the slot said so at resolve time ("albedo", "prop albedo").
+    [[nodiscard]] std::span<const char> srgbFlags() const noexcept { return srgb_; }
 
 private:
     std::vector<rm::dds::Texture> textures_;
+    std::vector<char> srgb_;
     std::map<std::string, int> indexByPath_;
 };
 

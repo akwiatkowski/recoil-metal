@@ -99,10 +99,12 @@ public:
                   const dds::Texture& maskB);
 
     // Units to draw on the terrain. See Renderer::setUnits.
-    void setUnits(std::span<const dds::Texture> textures, std::span<const UnitBatch> batches);
+    void setUnits(std::span<const dds::Texture> textures, std::span<const char> srgb,
+                  std::span<const UnitBatch> batches);
 
     // The map's scenery. See Renderer::setProps.
-    void setProps(std::span<const dds::Texture> textures, std::span<const PropBatch> batches);
+    void setProps(std::span<const dds::Texture> textures, std::span<const char> srgb,
+                  std::span<const PropBatch> batches);
 
     /// Replaces one batch's instances for this frame. See Renderer::setInstances.
     /// Only meaningful from inside an onFrame callback, which is the only point

@@ -273,7 +273,7 @@ void Renderer::setSplat(std::span<const SplatLayer> layers, const dds::Texture& 
         // and the shader references all nine unconditionally. Unused slots get
         // the same 4x4 fallback the ground texture uses, and are weighted to
         // zero by `present` so what they hold never reaches the image.
-        splatLayers_[i] = have ? uploadTexture(layers[i].texture, "splat layer") : nullptr;
+        splatLayers_[i] = have ? uploadTexture(layers[i].texture, "splat layer", true) : nullptr;
         splatPresent_[i] = have ? 1.0f : 0.0f;
 
         // Never zero, even for an absent layer: the shader divides by this to

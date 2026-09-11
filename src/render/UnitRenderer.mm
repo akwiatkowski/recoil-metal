@@ -94,7 +94,7 @@ void Renderer::releasePropBuffers() noexcept {
     propTextures_.clear();
 }
 
-void Renderer::setProps(std::span<const dds::Texture> textures,
+void Renderer::setProps(std::span<const dds::Texture> textures, std::span<const char> srgb,
                         std::span<const PropBatch> batches) {
     releasePropBuffers();
 
@@ -103,11 +103,13 @@ void Renderer::setProps(std::span<const dds::Texture> textures,
     }
 
     propTextures_.reserve(textures.size());
-    for (const dds::Texture& texture : textures) {
+    for (std::size_t i = 0; i < textures.size(); ++i) {
+        const dds::Texture& texture = textures[i];
         // A null slot rather than renumbering, exactly as the units do: the
         // indices in the batches were decided by the caller.
+        const bool colour = i < srgb.size() && srgb[i] != 0;
         propTextures_.push_back(texture.data.empty() ? nullptr
-                                                     : uploadTexture(texture, "prop"));
+                                                     : uploadTexture(texture, "prop", colour));
     }
 
     // No reordering by texture. Units are sorted so each texture pair binds once
@@ -237,7 +239,7 @@ void Renderer::cullProps() noexcept {
     }
 }
 
-void Renderer::setUnits(std::span<const dds::Texture> textures,
+void Renderer::setUnits(std::span<const dds::Texture> textures, std::span<const char> srgb,
                         std::span<const UnitBatch> batches) {
     releaseUnitBuffers();
 
@@ -252,12 +254,14 @@ void Renderer::setUnits(std::span<const dds::Texture> textures,
     // Textures first: a failed upload here should leave nothing half-built, and
     // the batches below reference these by index.
     unitTextures_.reserve(textures.size());
-    for (const dds::Texture& texture : textures) {
+    for (std::size_t i = 0; i < textures.size(); ++i) {
+        const dds::Texture& texture = textures[i];
         // A texture that failed to load is kept as a null slot rather than
         // renumbering everything after it — the indices in the batches were
         // decided by the caller and must keep meaning what they meant.
+        const bool colour = i < srgb.size() && srgb[i] != 0;
         unitTextures_.push_back(texture.data.empty() ? nullptr
-                                                     : uploadTexture(texture, "unit"));
+                                                     : uploadTexture(texture, "unit", colour));
     }
 
     // Upload in the order the draws will run, so encodeScene is a plain walk.
