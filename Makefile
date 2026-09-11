@@ -499,6 +499,7 @@ shot-engineer: build check-fa
 # prints the exact middle it used, so point TRIAL_LOOK there on other maps.
 #
 #   make trial TRIAL=UEL0303 TRIAL_N=2 TRIAL_FOES=6 TRIAL_GAP=120
+# Negative gaps stage the crowd the other way (west), for mirror checks.
 TRIAL ?= UEL0303
 TRIAL_N ?= 2
 TRIAL_FOES ?= 6

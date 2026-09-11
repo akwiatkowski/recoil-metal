@@ -217,6 +217,9 @@ orderArchivesForMount(std::vector<std::filesystem::path> archives);
 /// The value after `flag`, as a count, or zero when the flag is absent.
 [[nodiscard]] std::size_t parseCount(int argc, const char* argv[], std::string_view flag);
 
+/// The signed number after `flag`, or zero when absent or unparsable.
+[[nodiscard]] double parseDouble(int argc, const char* argv[], std::string_view flag);
+
 /// `--select-type <blueprint id>`: select the first matching unit in a headless capture.
 [[nodiscard]] std::string_view parseSelectType(int argc, const char* argv[]);
 

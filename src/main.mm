@@ -253,10 +253,10 @@ int main(int argc, const char* argv[]) {
             if (const std::string_view trial = parseTrial(argc, argv); !trial.empty()) {
                 const std::size_t count = parseCount(argc, argv, "--trial-count");
                 const std::size_t foes = parseCount(argc, argv, "--trial-foes");
-                const std::size_t gap = parseCount(argc, argv, "--trial-gap");
+                const double gapSigned = parseDouble(argc, argv, "--trial-gap");
                 stageTrial(units, map->field, starts, content, trial,
                            count > 0 ? count : 1, foes > 0 ? foes : 6,
-                           gap > 0 ? static_cast<float>(gap) : 120.0f);
+                           gapSigned != 0.0 ? static_cast<float>(gapSigned) : 120.0f);
             }
             orderFirstExtractors(units, map->markers, content, map->field, passability);
         }

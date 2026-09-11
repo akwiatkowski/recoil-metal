@@ -522,6 +522,23 @@ rm::ui::EffectsPreference parseUiEffects(int argc, const char* argv[]) {
     return 0;
 }
 
+/// The signed number following a flag, or 0 when absent or unparsable. Exists
+/// because parseCount's strtoul wraps negatives into huge positives — which
+/// once staged an entire trial crowd 1.8e19 elmos off the map with no error.
+[[nodiscard]] double parseDouble(int argc, const char* argv[], std::string_view flag) {
+    for (int i = 1; i + 1 < argc; ++i) {
+        if (argv[i] != flag) {
+            continue;
+        }
+        char* end = nullptr;
+        const double value = std::strtod(argv[i + 1], &end);
+        if (end != argv[i + 1] && *end == '\0') {
+            return value;
+        }
+    }
+    return 0.0;
+}
+
 [[nodiscard]] std::string_view parseSelectType(int argc, const char* argv[]) {
     for (int i = 1; i + 1 < argc; ++i) {
         if (std::string_view{argv[i]} == "--select-type"
