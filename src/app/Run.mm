@@ -329,6 +329,8 @@ void composeHeadlessInterface(rm::Renderer& renderer, const Session& session,
                                                         kRangeRingThicknessElmos);
                             }
                         }
+                        appendIntelRings(vertices, map->field, units, slot);
+                        appendRallyLine(vertices, map->field, units, slot);
                         captured.push_back(rm::SelectionEntry{batch, i});
                         capturedSelection.push_back(units.store.idAt(slot));
                         // Where the ringed unit stands, so a script can place a ghost or aim a
@@ -402,6 +404,24 @@ void composeHeadlessInterface(rm::Renderer& renderer, const Session& session,
             std::vector<rm::ui::MinimapPip> pips;
             std::vector<std::array<float, 2>> view;
             appendMinimapPips(pips, units);
+            // TEMP DEBUG: pip census for the radar investigation; remove after.
+            units.refreshViewerContacts();
+            int seen = 0, radarB = 0, sonarB = 0;
+            for (const auto& c : units.contactScratch) {
+                if (c.kind == rm::sim::ContactKind::Seen) ++seen;
+                else if (c.kind == rm::sim::ContactKind::Radar) ++radarB;
+                else if (c.kind == rm::sim::ContactKind::Sonar) ++sonarB;
+            }
+            int alive0 = 0, alive1 = 0;
+            for (rm::UnitIndex s = 0; s < units.store.slotCount(); ++s) {
+                if (!units.store.slotAlive(s)) continue;
+                const int a = units.store.motion()[s].armyIndex;
+                if (a == 0) ++alive0; else if (a == 1) ++alive1;
+            }
+            std::printf("DEBUG pips=%zu deposits=%zu snapshot=%zu seen=%d radar=%d sonar=%d "
+                        "alive0=%d alive1=%d viewer=%d\n",
+                        pips.size(), units.resourceDeposits.size(), units.snapshotCurrent.size(),
+                        seen, radarB, sonarB, alive0, alive1, units.viewingAlliance());
             appendViewFootprint(view, renderer.camera(), map->field, shotViewport);
             const rm::ui::MinimapLayout shotMinimap = rm::ui::minimapLayout(shotFrame);
             const rm::ui::MinimapProjection shotMinimapProjection =
@@ -1052,13 +1072,16 @@ int runWindowed(const Session& session) {
         float arraySpacingScale = 1.0f;
         float arrayTouchingElmos = 0.0f;
         bool arrayDragging = false;
+        // Jump-to-alarm cursor: counts back from the newest alarm, wrapping.
+        // Beside the callbacks because presses arrive across frames.
+        std::size_t alertCursor = 0;
         bool cancelledLeftGesture = false;
         std::optional<std::size_t> armedOption;
         std::optional<std::array<float, 2>> arrayDragAnchor;
-
         window.onKey([&window, &selected, &controlGroups, &units, &armedCommand, restPitch,
                       restYaw, &runnerForKeys, &armedOption, &arrayDragging,
-                      &cancelledLeftGesture, &arrayDragAnchor](rm::KeyEvent event) {
+                      &cancelledLeftGesture, &arrayDragAnchor, &alertCursor,
+                      &map](rm::KeyEvent event) {
             if (event.phase == rm::KeyPhase::Release) {
                 if (event.key == rm::Key::Space) {
                     // A held-space glance never costs the player their overhead bearings.
@@ -1137,6 +1160,62 @@ int runWindowed(const Session& session) {
                     std::printf("idle: selected %zu %s(s)\n", selected.size(), kind);
                 }
                 std::fflush(stdout);
+            } else if (event.key == rm::Key::G && !event.repeat) {
+                // Jump to alarms, newest first, wrapping past the oldest: each
+                // press counts one further back, and running out restarts at
+                // the newest. The camera keeps its height and angle — only the
+                // ground under it changes.
+                std::optional<rm::app::UnitScene::Alert> alarm =
+                    units.alertNewest(alertCursor);
+                if (!alarm) {
+                    alertCursor = 0;
+                    alarm = units.alertNewest(alertCursor);
+                }
+                if (!alarm) {
+                    std::printf("no alarms\n");
+                } else {
+                    rm::OrbitCamera& camera = window.camera();
+                    camera.target = simd_make_float3(
+                        alarm->x, map->field.heightAtWorld(alarm->x, alarm->z), alarm->z);
+                    std::printf("alarm %zu/%zu: %s at (%.0f, %.0f)\n", alertCursor + 1,
+                                units.alerts.size(),
+                                alarm->kind == rm::app::UnitScene::AlertKind::UnderAttack
+                                    ? "under attack"
+                                    : "big explosion",
+                                static_cast<double>(alarm->x), static_cast<double>(alarm->z));
+                    ++alertCursor;
+                }
+                std::fflush(stdout);
+            } else if (event.key == rm::Key::L && !event.repeat) {
+                // REPEAT loops every selected factory's queue, rebuilding each
+                // product as it finishes. Submitted as an order, not poked into
+                // the store — the sim gates it to factories and logs it for
+                // replay, the same command the production panel's toggle sends.
+                // Stamped with the runner's own tick: this handler has the runner
+                // but no frame scope.
+                if (runnerForKeys != nullptr) {
+                    std::size_t factories = 0;
+                    for (const rm::sim::UnitId id : selected) {
+                        const rm::unitdef::UnitDef* def =
+                            units.store.alive(id)
+                                ? units.catalog.def(units.store.typeAt(id.index))
+                                : nullptr;
+                        if (def != nullptr && def->hasCategory("FACTORY")) ++factories;
+                    }
+                    (void)submitCommand(units, rm::sim::CommandIssue{
+                        .tick = runnerForKeys->tick,
+                        .phase = rm::sim::CommandPhase::PreTick,
+                        .source = static_cast<rm::CommandSource>(
+                            playerDriving(units, units.playerArmy)),
+                        .player = playerDriving(units, units.playerArmy),
+                        .kind = rm::sim::CommandKind::ToggleFactoryRepeat,
+                        .units = selected,
+                    });
+                    if (factories > 0) {
+                        std::printf("repeat: toggled on %zu factorie(s)\n", factories);
+                    }
+                    std::fflush(stdout);
+                }
             } else if (const std::optional<std::size_t> digit = rm::digitForKey(event.key)) {
                 auto& group = controlGroups[*digit];
                 if (event.modifiers.control) {
@@ -1543,10 +1622,16 @@ int runWindowed(const Session& session) {
                         if (*step < 0) --productionPage;
                         else ++productionPage;
                     } else {
-                        (void)submitProductionControl(units, activeBuilder,
-                            playerDriving(units, units.playerArmy),
-                            static_cast<rm::TickIndex>(matchTicks), frame, hudPoint[0], hudPoint[1],
-                            productionPage);
+                        // SHIFT QUEUES FIVE (§7 P4.1): the same modifier that appends
+                        // to an order queue multiplies a tray click — five separate
+                        // build orders, so each is its own queue entry to cancel.
+                        const int times = mods.shift ? 5 : 1;
+                        for (int i = 0; i < times; ++i) {
+                            (void)submitProductionControl(units, activeBuilder,
+                                playerDriving(units, units.playerArmy),
+                                static_cast<rm::TickIndex>(matchTicks), frame,
+                                hudPoint[0], hudPoint[1], productionPage);
+                        }
                     }
                 }
                 armedCommand.reset();
@@ -2086,6 +2171,23 @@ int runWindowed(const Session& session) {
                 return;
             }
 
+            // A lone factory takes no move orders — its right click is a RALLY
+            // POINT, where its products walk on completion. Retail behaviour:
+            // the order mark still lands (the click did), the rally line redraws.
+            if (!isAttack && !armedCommand && selected.size() == 1
+                && units.store.alive(selected[0])) {
+                const rm::unitdef::UnitDef* selDef = units.catalog.def(
+                    units.store.typeAt(selected[0].index));
+                if (selDef != nullptr && selDef->hasCategory("FACTORY")) {
+                    units.rallyPoints[selected[0].index] = {(*ground).x, (*ground).z};
+                    orderMarks.push_back(OrderMark{
+                        .position = {(*ground).x, (*ground).y, (*ground).z},
+                        .age = 0.0f,
+                    });
+                    armedCommand.reset();
+                    return;
+                }
+            }
             // Marked before the routing is attempted (inside orderSelectionTo), and
             // deliberately: the mark answers "did that click land, and where", which is
             // true even if every unit then reports no route. SHIFT QUEUES IT (§7 P4.1) —
@@ -2821,6 +2923,8 @@ int runWindowed(const Session& session) {
                                                 kRangeRingThicknessElmos);
                     }
                 }
+                appendIntelRings(decalVertices, map->field, units, sel.index);
+                appendRallyLine(decalVertices, map->field, units, sel.index);
 
                 // THE ORDER QUEUE, drawn in the world for a selected unit: a line from the
                 // unit through every queued destination, a diamond at each node — and the

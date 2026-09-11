@@ -1266,6 +1266,7 @@ inline constexpr float kBigExplosionRadiusElmos = 6.0f;
 
 rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) {
     UnitScene& scene = runner.scene;
+    runner.tick = static_cast<rm::TickIndex>(tickIndex);
     // Deliver the previous tick's complete event stream before Lua tasks can transfer
     // a builder to another manager and before beginFrame clears the notifications.
     if (runner.replay == nullptr && !runner.scripts.empty()) {
@@ -1432,8 +1433,10 @@ rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) 
     for (const rm::sim::Event& event : scene.events.all()) {
         if (event.kind == rm::sim::EventKind::UnitDestroyed) {
             ++runner.unitsDestroyed;
-            // A recycled slot must not inherit its predecessor's deploy time.
+            // A recycled slot must not inherit its predecessor's deploy time or
+            // rally point.
             scene.deployedTick.erase(event.unit.index);
+            scene.rallyPoints.erase(event.unit.index);
             // The victim's type is still in its slot: `types_` is written only at spawn
             // and a corpse's slot is recycled by a LATER spawn, all of which happen in
             // the finished-build loop below or on later ticks — never before this loop.
@@ -1649,13 +1652,21 @@ rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) 
                                     ? nearestEnemyCommander(scene, work.armyIndex,
                                                             work.position)
                                     : std::nullopt;
+            // The player's rally point outranks the default roll-off and the
+            // attack wave alike: an explicit order beats both. Stored in world
+            // elmos as floats; fixed point only where the sim computes.
+            const auto rally = scene.rallyPoints.find(work.builder.index);
             std::array<rm::sim::Fx, 2> to =
-                target ? std::array<rm::sim::Fx, 2>{(*target)[0], (*target)[2]}
-                       : rm::sim::rolloffPoint(
-                             work.position,
-                             rm::sim::Fx::fromInt(runner.field.squaresX * rm::kSquareSize / 2),
-                             rm::sim::Fx::fromInt(runner.field.squaresZ * rm::kSquareSize
-                                                  / 2));
+                rally != scene.rallyPoints.end()
+                    ? std::array<rm::sim::Fx, 2>{rm::sim::fxFromFloat(rally->second[0]),
+                                                rm::sim::fxFromFloat(rally->second[1])}
+                    : target ? std::array<rm::sim::Fx, 2>{(*target)[0], (*target)[2]}
+                             : rm::sim::rolloffPoint(
+                                   work.position,
+                                   rm::sim::Fx::fromInt(runner.field.squaresX *
+                                                       rm::kSquareSize / 2),
+                                   rm::sim::Fx::fromInt(runner.field.squaresZ *
+                                                       rm::kSquareSize / 2));
             if (scene.store.motion()[spawned->index].surfaceWater) {
                 const auto type = static_cast<std::size_t>(scene.store.typeAt(spawned->index));
                 const rm::sim::PassabilityGrid& grid = runner.passability.gridFor(scene, type);

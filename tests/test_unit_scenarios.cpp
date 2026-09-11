@@ -1016,6 +1016,77 @@ TEST_CASE("factory panel clicks control the real production queue", "[corpus][ui
     CHECK_FALSE(rm::app::gatherProduction(scenario.scene, builder));
 }
 
+TEST_CASE("a factory's products walk to its rally point, not the roll-off", "[corpus][rally]") {
+    const auto root = corpusRoot();
+    if (!std::filesystem::is_directory(root)) SKIP("no retail unit corpus");
+    const auto factory = rm::unitbp::loadFile(root / "UEB0101/UEB0101_unit.bp");
+    const auto tank = rm::unitbp::loadFile(root / "UEL0201/UEL0201_unit.bp");
+    REQUIRE(factory);
+    REQUIRE(tank);
+    Scenario scenario;
+    const auto builder = scenario.spawn(*factory, 200, 200);
+    const auto type = scenario.registerType(*tank);
+    auto& bank = scenario.scene.economies[0];
+    bank.storage = bank.stored = {rm::sim::Mag::fromInt(10000), rm::sim::Mag::fromInt(100000)};
+    // Right-click-the-map state, set the way the windowed handler sets it.
+    scenario.scene.rallyPoints[builder.index] = {400.0f, 300.0f};
+    REQUIRE(rm::app::issueBuild(scenario.scene, builder, 0, 0, type,
+        rm::sim::Fx::fromInt(240), rm::sim::Fx::fromInt(200), true));
+    auto runner = scenario.runner();
+    const auto before = scenario.scene.store.slotCount();
+    int tick = 0;
+    for (; tick < 3000 && scenario.scene.store.slotCount() == before; ++tick) {
+        (void)rm::app::advanceMatch(runner, tick, 0);
+    }
+    REQUIRE(scenario.scene.store.slotCount() > before);
+    const auto product = static_cast<rm::UnitIndex>(before);
+    REQUIRE(scenario.scene.store.alive(scenario.scene.store.idAt(product)));
+    // The PostSpawn move dispatches a few ticks after the spawn tick: queued,
+    // then routed, then walking. Read once it walks — long before it arrives.
+    for (int settle = 0; settle < 10; ++settle) {
+        (void)rm::app::advanceMatch(runner, tick + settle, 0);
+    }
+    // The PostSpawn move carries the rally point, not the factory roll-off.
+    // `destination` tracks the current waypoint, so read the path's end: that
+    // is where the order is actually taking it.
+    const auto& path = scenario.scene.store.motion()[product].path;
+    REQUIRE_FALSE(path.empty());
+    CHECK(rm::sim::fxToFloat(path.back()[0]) == Catch::Approx(400.0f));
+    CHECK(rm::sim::fxToFloat(path.back()[1]) == Catch::Approx(300.0f));
+}
+
+TEST_CASE("a dead factory's rally point dies with it", "[corpus][rally]") {
+    const auto root = corpusRoot();
+    if (!std::filesystem::is_directory(root)) SKIP("no retail unit corpus");
+    const auto factory = rm::unitbp::loadFile(root / "UEB0101/UEB0101_unit.bp");
+    REQUIRE(factory);
+    Scenario scenario;
+    const auto builder = scenario.spawn(*factory, 200, 200);
+    scenario.scene.rallyPoints[builder.index] = {400.0f, 300.0f};
+    // Damage, not removal: only a real death retires through the event loop
+    // that forgets the rally point.
+    scenario.scene.store.health()[builder.index].current = rm::sim::Mag{};
+    auto runner = scenario.runner();
+    (void)rm::app::advanceMatch(runner, 0, 0);
+    (void)rm::app::advanceMatch(runner, 1, 0);
+    CHECK_FALSE(scenario.scene.rallyPoints.contains(builder.index));
+}
+
+TEST_CASE("the rally line draws only for a set rally point", "[corpus][rally]") {
+    const auto root = corpusRoot();
+    if (!std::filesystem::is_directory(root)) SKIP("no retail unit corpus");
+    const auto factory = rm::unitbp::loadFile(root / "UEB0101/UEB0101_unit.bp");
+    REQUIRE(factory);
+    Scenario scenario;
+    const auto builder = scenario.spawn(*factory, 200, 200);
+    std::vector<rm::DecalVertex> out;
+    rm::app::appendRallyLine(out, scenario.field, scenario.scene, builder.index);
+    CHECK(out.empty());
+    scenario.scene.rallyPoints[builder.index] = {400.0f, 300.0f};
+    rm::app::appendRallyLine(out, scenario.field, scenario.scene, builder.index);
+    CHECK_FALSE(out.empty());
+}
+
 TEST_CASE("factory cancellation removes only the named entry and replays", "[corpus][factory-cancel]") {
     const auto root = corpusRoot();
     if (!std::filesystem::is_directory(root)) SKIP("no retail unit corpus");
@@ -2364,6 +2435,21 @@ TEST_CASE("array previews pack building footprints and widen with spacing", "[bu
     }
 }
 
+TEST_CASE("array packing does not add a collision-radius tile to a one-square footprint",
+          "[build][array]") {
+    Scenario job;
+    rm::unitdef::UnitDef tower;
+    tower.name = "wide_collision_tower";
+    tower.footprintSquaresX = 1;
+    tower.footprintSquaresZ = 1;
+    tower.collisionRadiusElmos = 6.0f; // larger than half the eight-elmo footprint
+    const auto type = job.registerType(tower);
+    std::vector<std::array<float, 2>> sites;
+    rm::app::arrayBuildSitesInto(job.scene, type, {300, 300}, {340, 300}, 1, sites);
+    REQUIRE(sites.size() >= 3);
+    CHECK(sites[1][0] - sites[0][0] == 8.0f);
+}
+
 TEST_CASE("a retail Kennel lends its authored rate only to nearby allied construction",
           "[corpus][station]") {
     const auto root = corpusRoot();
@@ -2699,6 +2785,7 @@ TEST_CASE("a retail power generator row packs one footprint apart by default and
         CHECK(rm::sim::fxToFloat(job.scene.building[i].position[2]) == sites[i][1]);
     }
 }
+
 TEST_CASE("idle selection finds only the player's idle units of the asked kind",
           "[selection][idle]") {
     Scenario job;

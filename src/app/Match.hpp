@@ -149,6 +149,10 @@ struct MatchRunner {
     /// decided on one tick and stays decided.
     rm::sim::Match match;
 
+    /// The tick most recently advanced: the runner knows its own time, so a key
+    /// handler with the runner but no frame scope can still stamp an order.
+    rm::TickIndex tick = 0;
+
     /// Match-owned path work persists across ticks. Requests accepted on one beat become
     /// eligible only after that beat, so this cannot be a dispatch-local temporary.
     rm::sim::PathService pathService;

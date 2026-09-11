@@ -34,6 +34,7 @@ enum class Key : std::uint8_t {
     Digit7,
     Digit8,
     Digit9,
+    L,
 };
 
 enum class KeyPhase : std::uint8_t { Press, Release };
@@ -63,6 +64,7 @@ struct KeyEvent {
         case 'n': return Key::N;
         case 'o': return Key::O;
         case 'g': return Key::G;
+        case 'l': return Key::L;
         case 'p': return Key::P;
         case 'r': return Key::R;
         case 's': return Key::S;

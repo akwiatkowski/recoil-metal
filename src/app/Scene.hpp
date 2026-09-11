@@ -288,6 +288,11 @@ struct UnitScene {
     static constexpr std::size_t kMaxAlerts = 32;
     std::vector<Alert> alerts;
 
+    /// Factory rally points, by builder slot: where a factory's products walk on
+    /// completion instead of the default roll-off. Set by right-clicking the map
+    /// with exactly one factory selected; forgotten with the slot.
+    std::unordered_map<rm::UnitIndex, std::array<float, 2>> rallyPoints;
+
     /// How long an alarm stays on the minimap, in seconds. Authored, not ticked
     /// (§5.1): the caller derives ticks from the run rate.
     static constexpr float kAlertLifetimeSeconds = 30.0f;
@@ -1192,6 +1197,10 @@ inline constexpr float kRangeRingThicknessElmos = 1.2f;
 /// in sensor cyan. Cyan because coverage is information, not threat (red) or
 /// selection (green) — three hues that must never meet on one unit.
 inline constexpr std::array<float, 4> kIntelRingColour{{0.3f, 0.8f, 0.9f, 0.3f}};
+
+/// A factory's rally line: where its products walk to on completion. White,
+/// brighter than a queue line — a standing order, not a queued one.
+inline constexpr std::array<float, 4> kRallyLineColour{{1.0f, 1.0f, 1.0f, 0.55f}};
 
 /// The drawn order queue: the line quieter than its nodes, because the nodes are the
 /// decisions and the line only connects them. In the order marker's own hue — a queue is

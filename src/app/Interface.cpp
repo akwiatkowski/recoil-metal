@@ -209,6 +209,19 @@ void appendIntelRings(std::vector<rm::DecalVertex>& out, const rm::HeightField& 
     }
 }
 
+void appendRallyLine(std::vector<rm::DecalVertex>& out, const rm::HeightField& field,
+ const UnitScene& scene, rm::UnitIndex slot) {
+    const auto rally = scene.rallyPoints.find(slot);
+    if (rally == scene.rallyPoints.end() || slot >= scene.store.slotCount()) {
+        return;
+    }
+    const rm::sim::Transform& at = scene.store.transforms()[slot];
+    rm::appendGroundSegment(out, field,
+                            {rm::sim::fxToFloat(at.x), rm::sim::fxToFloat(at.z)},
+                            {rally->second[0], rally->second[1]}, kRallyLineColour,
+                            kRangeRingThicknessElmos);
+}
+
 void appendResourceDeposits(std::vector<rm::DecalVertex>& out, const UnitScene& scene,
                             const rm::HeightField& field) {
     for (const auto& deposit : scene.resourceDeposits) {

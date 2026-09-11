@@ -86,7 +86,13 @@ void appendUnitSelection(std::vector<rm::DecalVertex>& out, const rm::HeightFiel
 /// A selected sensor's coverage rings: radar, sonar, omni and jammer reach in
 /// sensor cyan. Only senses with a radius draw — most units draw nothing.
 void appendIntelRings(std::vector<rm::DecalVertex>& out, const rm::HeightField& field,
-                      const UnitScene& scene, rm::UnitIndex slot);
+ const UnitScene& scene, rm::UnitIndex slot);
+
+/// A selected factory's rally line: from its floor to its products' destination.
+/// White, brighter than a queue — a standing order, not a queued one. Draws
+/// nothing without a rally point set.
+void appendRallyLine(std::vector<rm::DecalVertex>& out, const rm::HeightField& field,
+ const UnitScene& scene, rm::UnitIndex slot);
 
 /// Public map resources: green mass rings and amber hydrocarbon rings.
 void appendResourceDeposits(std::vector<rm::DecalVertex>& out, const UnitScene& scene,
