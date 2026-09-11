@@ -145,6 +145,7 @@ BuilderAimRig resolveBuilderAim(const Model& model, const unitdef::BuilderArmSpe
         rig.aimPoint = add(rig.pitchPivot,
                            rotateByQuaternion(aimBone.globalRotation, {{0.0f, 0.0f, 1.0f}}));
     }
+    rig.aimDir = subtract(rig.aimPoint, rig.pitchPivot);
     rig.yawMin = radians(spec.yawMinDegrees);
     rig.yawMax = radians(spec.yawMaxDegrees);
     rig.yawSlew = radians(spec.yawSlewDegreesPerSecond);
@@ -207,6 +208,7 @@ BuilderAimRig resolveTurretAim(const Model& model, const TurretAimSpec& spec) {
         // fall back to the fine offset.
         rig.aimPoint = add(rig.pitchPivot,
                            rotateByQuaternion(pitchBone.globalRotation, {{0.0f, 0.0f, 1.0f}}));
+        rig.aimDir = subtract(rig.aimPoint, rig.pitchPivot);
     } else {
         rig.hasMuzzle = true;
         const ModelBone& muzzleBone = model.bones[static_cast<std::size_t>(muzzle)];
@@ -220,13 +222,14 @@ BuilderAimRig resolveTurretAim(const Model& model, const TurretAimSpec& spec) {
                 subtract(muzzleBone.globalOffset, rig.pitchPivot)) < 0.000001f) {
             // A muzzle coincident with its trunnion gives no forward reference —
             // same fallback as the builder's missing aim marker, the muzzle's
-            // own forward through the pivot.
             rig.aimPoint = add(rig.pitchPivot,
                                rotateByQuaternion(muzzleBone.globalRotation,
                                                   {{0.0f, 0.0f, 1.0f}}));
+            rig.aimDir = subtract(rig.aimPoint, rig.pitchPivot);
         } else {
             rig.aimPoint = add(rig.yawPivot,
                                normalise(subtract(muzzleBone.globalOffset, rig.pitchPivot)));
+            rig.aimDir = subtract(muzzleBone.globalOffset, rig.pitchPivot);
         }
     }
     // Already radians: the weapon states speeds that way and the caller converts the arc.
@@ -252,7 +255,7 @@ BuilderAimAngles builderAimAt(const BuilderAimRig& rig, const std::array<float, 
     // in the shader is the exact inverse sequence.
     const Vec3 targetBeforeYaw =
         rotateAround(target, rig.yawPivot, rig.yawAxis, -answer.yaw);
-    answer.pitch = std::clamp(signedAngle(subtract(rig.aimPoint, rig.pitchPivot),
+    answer.pitch = std::clamp(signedAngle(rig.aimDir,
                                           subtract(targetBeforeYaw, rig.pitchPivot),
                                           rig.pitchAxis),
                               rig.pitchMin, rig.pitchMax);

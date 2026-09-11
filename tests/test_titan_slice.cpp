@@ -349,14 +349,38 @@ TEST_CASE("the Titan aims, kicks and strides in a live tick", "[slice][behavior]
                 (edir[0] * ebolt[0] + edir[1] * ebolt[1]) / edirLen / eboltLen;
             ealigned = ealigned || cosAngle > 0.995f;
         }
+        CHECK(ealigned);
+        // And the barrel aims at the thing being shot, not just along the
+        // bolts: angle between the barrel axis (3D this time — pitch aims the
+        // muzzle at the target's feet, which is what the transform names) and
+        // the muzzle-to-target line.
+        const auto& etgt = scene.store.transforms()[tgt.index];
+        const std::array<float, 3> toTarget{
+            rm::sim::fxToFloat(etgt.x) - (*emuzzle)[0],
+            rm::sim::fxToFloat(etgt.y) - (*emuzzle)[1],
+            rm::sim::fxToFloat(etgt.z) - (*emuzzle)[2]};
+        const std::array<float, 3> axis{
+            (*emuzzle)[0] - truWorld[0], (*emuzzle)[1] - truWorld[1],
+            (*emuzzle)[2] - truWorld[2]};
+        const float axisLen = std::sqrt(axis[0] * axis[0] + axis[1] * axis[1]
+                                        + axis[2] * axis[2]);
+        const float tgtLen =
+            std::sqrt(toTarget[0] * toTarget[0] + toTarget[1] * toTarget[1]
+                      + toTarget[2] * toTarget[2]);
+        REQUIRE(axisLen > 0.0f);
+        REQUIRE(tgtLen > 0.0f);
+        const float cosTarget =
+            (axis[0] * toTarget[0] + axis[1] * toTarget[1] + axis[2] * toTarget[2])
+            / axisLen / tgtLen;
+        CHECK(cosTarget > 0.995f);
     }
+    // The same target stepped across to -X.
     scene.store.transforms()[tgt.index].x = rm::sim::fxFromFloat(100.0f);
     for (int tick = 30; tick < 35; ++tick) {
         (void)rm::app::advanceMatch(runner, tick, 0.0f);
     }
     shooterAim();
     const float yawWest = gotYaw;
-    WARN("aim state yaw " << gotYaw << " pitch " << gotPitch);
     CHECK((yawEast - yawWest) == Catch::Approx(3.14159f).margin(0.05f));
 
     // The barrel tip follows the traverse: aimed west, the muzzle rides out

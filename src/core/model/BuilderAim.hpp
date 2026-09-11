@@ -30,6 +30,12 @@ struct BuilderAimRig {
     /// so an LOD rig aims without one (by barrel direction) while its flashes
     /// fall back to the fine muzzle offset the definition keeps.
     bool hasMuzzle = false;
+    /// The barrel's rest direction for the pitch solve. The yaw solve reads
+    /// (aimPoint - yawPivot); pitch needs its own reference because the two
+    /// pivots do not coincide — reusing the yaw reference skews elevation by
+    /// the pivot offset (13 degrees on the Titan). Arms store (aimPoint -
+    /// pitchPivot), which reproduces their historical math bit for bit.
+    std::array<float, 3> aimDir{{0.0f, 0.0f, 1.0f}};
     float yawMin = 0.0f;
     float yawMax = 0.0f;
     float yawSlew = 0.0f;
