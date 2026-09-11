@@ -2,6 +2,8 @@
 
 #include "core/sim/UnitStore.hpp"
 
+#include <cstring>
+
 namespace rm::sim {
 
 void snapshotInto(const UnitStore& store, TickIndex tick, Snapshot& out) {
@@ -17,18 +19,24 @@ void snapshotInto(const UnitStore& store, TickIndex tick, Snapshot& out) {
         if (!store.slotAlive(slot)) {
             continue;  // a tombstone: the renderer draws what exists
         }
-        out.units.push_back(UnitView{
-            .id = store.idAt(slot),
-            .type = store.typeAt(slot),
-            .armyIndex = slot < motion.size() ? motion[slot].armyIndex : kNoArmy,
-            .transform = transforms[slot],
-            .distanceTravelledElmos =
-                slot < motion.size() ? motion[slot].distanceTravelledElmos : Fx{},
-            .speedPerTick = slot < motion.size() ? motion[slot].speedPerTick : Fx{},
-            .health = slot < health.size() ? health[slot].current : Mag{},
-            .maxHealth = slot < health.size() ? health[slot].maximum : Mag{},
-            .shieldActive = slot < health.size() && health[slot].shield.active(),
-        });
+        // Value-initialized, not designated: padding bytes are compared by
+        // `identical`, so they must be zeroes rather than stack garbage, or
+        // two snapshots of one store differ by allocator mood. memset, because
+        // value-initialization leaves padding unspecified — only a full-object
+        // clear makes the bytes canonical.
+        UnitView view{};
+        std::memset(&view, 0, sizeof(view));
+        view.id = store.idAt(slot);
+        view.type = store.typeAt(slot);
+        view.armyIndex = slot < motion.size() ? motion[slot].armyIndex : kNoArmy;
+        view.transform = transforms[slot];
+        view.distanceTravelledElmos =
+            slot < motion.size() ? motion[slot].distanceTravelledElmos : Fx{};
+        view.speedPerTick = slot < motion.size() ? motion[slot].speedPerTick : Fx{};
+        view.health = slot < health.size() ? health[slot].current : Mag{};
+        view.maxHealth = slot < health.size() ? health[slot].maximum : Mag{};
+        view.shieldActive = slot < health.size() && health[slot].shield.active();
+        out.units.push_back(view);
     }
 }
 

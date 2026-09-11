@@ -106,6 +106,14 @@ struct UnitScene {
             const auto& weapon = def->weapons[wi];
             if (def->name+":"+weapon.label != key || !weapon.visualMuzzleOffset) continue;
             std::array<float,3> local = *weapon.visualMuzzleOffset;
+            // Units: the offset arrives in elmos, the rig lives in mesh units.
+            // Pose in mesh space (pivots, slide travel) and convert back, or a
+            // unit 5.6x off pivots its barrels around a point near its boots.
+            const auto type = store.typeAt(id.index);
+            const float scale = static_cast<std::size_t>(type) < typeScale.size()
+                                    ? typeScale[static_cast<std::size_t>(type)]
+                                    : 1.0f;
+            const float inv = scale != 0.0f ? 1.0f / scale : 1.0f;
             // The LIVE turret pose, not the rest one: a traversed ring carries
             // its muzzle with it, and a flash or trail origin that ignores the
             // slew draws where the barrel was, not where it is. Same
@@ -140,8 +148,10 @@ struct UnitScene {
                         shown != turretShownAim.end()) {
                         angles = shown->second;
                     }
+                    std::array<float,3> mesh{local[0] * inv, local[1] * inv,
+                                             local[2] * inv};
                     std::array<float,3> posed =
-                        rm::applyBuilderAim(local, flags, drawn.turretAim, angles);
+                        rm::applyBuilderAim(mesh, flags, drawn.turretAim, angles);
                     // The slide, along the aimed barrel: the trunnion posed
                     // identically, so their difference is the barrel.
                     float kick = 0.0f;
@@ -158,14 +168,14 @@ struct UnitScene {
                         const float len =
                             std::sqrt(dx * dx + dy * dy + dz * dz);
                         if (len > 1e-6f) {
-                            const float slide =
-                                kick * drawn.recoilDistanceElmos / len;
+                            const float slide = kick * drawn.recoilDistanceElmos * inv
+                                                / len;
                             posed[0] -= dx * slide;
                             posed[1] -= dy * slide;
                             posed[2] -= dz * slide;
                         }
                     }
-                    local = posed;
+                    local = {posed[0] * scale, posed[1] * scale, posed[2] * scale};
                 }
             }
             const auto& transform = store.transforms()[id.index];

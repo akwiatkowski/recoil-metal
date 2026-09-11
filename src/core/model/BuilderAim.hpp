@@ -26,6 +26,10 @@ struct BuilderAimRig {
     std::array<float, 3> pitchPivot{};
     std::array<float, 3> pitchAxis{{1.0f, 0.0f, 0.0f}};
     std::array<float, 3> aimPoint{{0.0f, 0.0f, 1.0f}};
+    /// Whether the muzzle bone resolved. Coarse meshes merge small bones away,
+    /// so an LOD rig aims without one (by barrel direction) while its flashes
+    /// fall back to the fine muzzle offset the definition keeps.
+    bool hasMuzzle = false;
     float yawMin = 0.0f;
     float yawMax = 0.0f;
     float yawSlew = 0.0f;

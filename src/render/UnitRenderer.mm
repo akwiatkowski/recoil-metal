@@ -331,6 +331,17 @@ void Renderer::setUnits(std::span<const dds::Texture> textures, std::span<const 
                 }
             }
         }
+        // The turret ring and barrel next: without these bits the shader never
+        // rotates the bones and a traversing turret draws frozen at rest while
+        // its slew state — and its muzzle flashes — move on without it.
+        for (std::size_t pose = 0; pose < poseCount; ++pose) {
+            for (std::size_t bone = 0;
+                 bone < batch.turretAim.boneFlags.size() && bone < model.bones.size();
+                 ++bone) {
+                poses[pose * model.bones.size() + bone].builderFlags |=
+                    batch.turretAim.boneFlags[bone];
+            }
+        }
         // The recoil bit ORs in beside the aim bits: a barrel both aims and slides.
         // Sized like the aim flags (empty when the type has no rack); a short flag
         // vector against a longer bone list leaves the tail unflagged, never crashing.

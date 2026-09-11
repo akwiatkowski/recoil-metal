@@ -70,6 +70,14 @@ turretSpecFor(const rm::unitdef::UnitDef& def) {
     }
     rm::BuilderAimRig rig = rm::resolveTurretAim(model, spec->first);
     if (!rig.exists()) {
+        // Silent otherwise: the applier skips the unit outright, which reads
+        // as "the turret never moves" with no error anywhere.
+        const rm::unitdef::Weapon& gun = def->weapons[spec->second];
+        rm::log::writef(rm::log::Level::Warn, "animation",
+                        "no turret bones on %s (%s) yaw '%s' pitch '%s' muzzle '%s'",
+                        def->name.c_str(), gun.label.c_str(),
+                        gun.turretYawBone.c_str(), gun.turretPitchBone.c_str(),
+                        gun.muzzleBone.c_str());
         return {};
     }
     TurretRig turret{.rig = std::move(rig), .weapon = spec->second};
@@ -262,6 +270,7 @@ void resolveMuzzleBones(rm::unitdef::UnitDef& def, const rm::Model& model) {
         if (weapon.muzzleBone.empty()) {
             continue;
         }
+        bool resolved = false;
         for (const rm::ModelBone& bone : model.bones) {
             if (sameName(bone.name, weapon.muzzleBone)) {
                 weapon.visualMuzzleOffset = std::array<float,3>{bone.globalOffset[0]*def.meshToElmos,
@@ -270,8 +279,17 @@ void resolveMuzzleBones(rm::unitdef::UnitDef& def, const rm::Model& model) {
                 if (heightElmos > 0.05f) {
                     weapon.muzzleHeight = rm::sim::fxFromFloat(heightElmos);
                 }
+                resolved = true;
                 break;
             }
+        }
+        // Silent otherwise: flashes and trails fall back to the hull centre,
+        // which reads as "shots come from the middle" with no error anywhere.
+        if (!resolved) {
+            rm::log::writef(rm::log::Level::Warn, "animation",
+                            "no muzzle bone '%s' on %s (%s) — flashes use hull centre",
+                            weapon.muzzleBone.c_str(), def.name.c_str(),
+                            weapon.label.c_str());
         }
     }
 }

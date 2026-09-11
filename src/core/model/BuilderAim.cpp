@@ -181,7 +181,7 @@ BuilderAimRig resolveTurretAim(const Model& model, const TurretAimSpec& spec) {
     const int yaw = turretResolve(spec.yawBone);
     const int pitch = turretResolve(spec.pitchBone);
     const int muzzle = turretResolve(spec.muzzleBone);
-    if (yaw < 0 || pitch < 0 || muzzle < 0) {
+    if (yaw < 0 || pitch < 0) {
         return rig;
     }
     rig.boneFlags.resize(model.bones.size());
@@ -195,28 +195,39 @@ BuilderAimRig resolveTurretAim(const Model& model, const TurretAimSpec& spec) {
     }
     const ModelBone& yawBone = model.bones[static_cast<std::size_t>(yaw)];
     const ModelBone& pitchBone = model.bones[static_cast<std::size_t>(pitch)];
-    const ModelBone& muzzleBone = model.bones[static_cast<std::size_t>(muzzle)];
     rig.yawPivot = yawBone.globalOffset;
     rig.yawAxis = normalise(rotateByQuaternion(yawBone.globalRotation, {{0.0f, 1.0f, 0.0f}}));
     rig.pitchPivot = pitchBone.globalOffset;
     rig.pitchAxis =
         normalise(rotateByQuaternion(pitchBone.globalRotation, {{1.0f, 0.0f, 0.0f}}));
-    // The aim reference is the barrel's DIRECTION, hung on the yaw pivot — not
-    // the muzzle position. A centred barrel makes the two identical, which is
-    // why the position reference ever worked; a side-mounted one sits elmos
-    // off the ring's axis, and aiming its position stops the traverse short
-    // (the Titan's torso halts ~28 degrees off its target). The trunnion to
-    // muzzle line is the barrel.
-    if (dot(subtract(muzzleBone.globalOffset, rig.pitchPivot),
-            subtract(muzzleBone.globalOffset, rig.pitchPivot)) < 0.000001f) {
-        // A muzzle coincident with its trunnion gives no forward reference —
-        // same fallback as the builder's missing aim marker, the muzzle's own
-        // forward through the pivot.
+    if (muzzle < 0) {
+        // No muzzle bone — the coarse-mesh case. Aim by the barrel's own
+        // forward through the trunnion: direction without position, which is
+        // all traverse needs. hasMuzzle stays false so callers know flashes
+        // fall back to the fine offset.
         rig.aimPoint = add(rig.pitchPivot,
-                           rotateByQuaternion(muzzleBone.globalRotation, {{0.0f, 0.0f, 1.0f}}));
+                           rotateByQuaternion(pitchBone.globalRotation, {{0.0f, 0.0f, 1.0f}}));
     } else {
-        rig.aimPoint =
-            add(rig.yawPivot, normalise(subtract(muzzleBone.globalOffset, rig.pitchPivot)));
+        rig.hasMuzzle = true;
+        const ModelBone& muzzleBone = model.bones[static_cast<std::size_t>(muzzle)];
+        // The aim reference is the barrel's DIRECTION, hung on the yaw pivot —
+        // not the muzzle position. A centred barrel makes the two identical,
+        // which is why the position reference ever worked; a side-mounted one
+        // sits elmos off the ring's axis, and aiming its position stops the
+        // traverse short (the Titan's torso halts ~28 degrees off its target).
+        // The trunnion to muzzle line is the barrel.
+        if (dot(subtract(muzzleBone.globalOffset, rig.pitchPivot),
+                subtract(muzzleBone.globalOffset, rig.pitchPivot)) < 0.000001f) {
+            // A muzzle coincident with its trunnion gives no forward reference —
+            // same fallback as the builder's missing aim marker, the muzzle's
+            // own forward through the pivot.
+            rig.aimPoint = add(rig.pitchPivot,
+                               rotateByQuaternion(muzzleBone.globalRotation,
+                                                  {{0.0f, 0.0f, 1.0f}}));
+        } else {
+            rig.aimPoint = add(rig.yawPivot,
+                               normalise(subtract(muzzleBone.globalOffset, rig.pitchPivot)));
+        }
     }
     // Already radians: the weapon states speeds that way and the caller converts the arc.
     rig.yawMin = spec.yawMin;
