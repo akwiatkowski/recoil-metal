@@ -97,15 +97,29 @@ struct UnitScene {
     rm::CombatEffectState combatEffectState;
     rm::ProjectileTrails projectileTrails;
 
+    /// Trial-only diagnostics, consumed once by the next draw gather. These
+    /// compare launch velocity to the next frame's rig pose, not GPU pixels.
+    bool trialAlignmentDebug = false;
+    std::vector<rm::sim::Event> trialAlignmentShots;
+    void logTrialAlignment();
+
+    /// The posed tip of one weapon's muzzle — `muzzleIndex` 1 names the dual
+    /// manipulator's barrel, anything else the primary. The pose is the SIM's:
+    /// `MoveState::turretYaw`/`turretPitch` converted here, the same two scalars
+    /// the instance buffer carries, so a flash and the shot it marks sit on one
+    /// point by construction.
     [[nodiscard]] std::optional<std::array<float,3>> weaponMuzzle(rm::sim::UnitId id,
-                                                                std::string_view key) const {
+                                                                std::string_view key,
+                                                                int muzzleIndex = 0) const {
         if (!store.alive(id)) return std::nullopt;
         const auto* def = catalog.def(store.typeAt(id.index));
         if (!def) return std::nullopt;
         for (std::size_t wi = 0; wi < def->weapons.size(); ++wi) {
             const auto& weapon = def->weapons[wi];
             if (def->name+":"+weapon.label != key || !weapon.visualMuzzleOffset) continue;
-            std::array<float,3> local = *weapon.visualMuzzleOffset;
+            const bool second = muzzleIndex == 1 && weapon.visualMuzzle2Offset.has_value();
+            std::array<float,3> local =
+                second ? *weapon.visualMuzzle2Offset : *weapon.visualMuzzleOffset;
             // Units: the offset arrives in elmos, the rig lives in mesh units.
             // Pose in mesh space (pivots, slide travel) and convert back, or a
             // unit 5.6x off pivots its barrels around a point near its boots.
@@ -124,15 +138,20 @@ struct UnitScene {
                 const UnitBatch& drawn = batches[batch];
                 if (drawn.turretAim.exists() && drawn.turretWeapon == wi
                     && drawn.model != nullptr) {
+                    const std::string& boneName =
+                        second && !weapon.turretDualMuzzleBone.empty()
+                            ? weapon.turretDualMuzzleBone
+                            : weapon.muzzleBone;
                     std::uint32_t flags =
-                        rm::kBuilderYawBone | rm::kBuilderPitchBone;
-                    if (!weapon.muzzleBone.empty()) {
+                        second ? rm::kTurretYawBone | rm::kTurretPitch2Bone
+                               : rm::kTurretYawBone | rm::kTurretPitchBone;
+                    if (!boneName.empty()) {
                         for (std::size_t bone = 0; bone < drawn.model->bones.size();
                              ++bone) {
                             const std::string& have = drawn.model->bones[bone].name;
-                            if (have.size() == weapon.muzzleBone.size()
+                            if (have.size() == boneName.size()
                                 && std::equal(have.begin(), have.end(),
-                                              weapon.muzzleBone.begin(), [](unsigned char a,
+                                              boneName.begin(), [](unsigned char a,
                                                                              unsigned char b) {
                                       return std::tolower(a) == std::tolower(b);
                                   })) {
@@ -143,10 +162,18 @@ struct UnitScene {
                             }
                         }
                     }
+                    // The SIM's slew, read straight out of the store — no
+                    // presentation-side map, no second integrator to drift.
                     rm::BuilderAimAngles angles{};
-                    if (const auto shown = turretShownAim.find(id.index);
-                        shown != turretShownAim.end()) {
-                        angles = shown->second;
+                    const std::span<const rm::sim::MoveState> motion = store.motion();
+                    if (id.index < motion.size()) {
+                        angles.yaw = rm::sim::radiansFromBrad(motion[id.index].turretYaw);
+                        angles.pitch =
+                            rm::sim::radiansFromBrad(motion[id.index].turretPitch);
+                        angles.yaw2 =
+                            rm::sim::radiansFromBrad(motion[id.index].turretYaw2);
+                        angles.pitch2 =
+                            rm::sim::radiansFromBrad(motion[id.index].turretPitch2);
                     }
                     std::array<float,3> mesh{local[0] * inv, local[1] * inv,
                                              local[2] * inv};
@@ -161,7 +188,9 @@ struct UnitScene {
                     }
                     if (kick > 0.0f && drawn.recoilDistanceElmos > 0.0f) {
                         const std::array<float,3> tru = rm::applyBuilderAim(
-                            drawn.turretAim.pitchPivot, flags, drawn.turretAim, angles);
+                            second ? drawn.turretAim.pitch2Pivot
+                                   : drawn.turretAim.pitchPivot,
+                            flags, drawn.turretAim, angles);
                         const float dx = posed[0] - tru[0];
                         const float dy = posed[1] - tru[1];
                         const float dz = posed[2] - tru[2];
@@ -190,9 +219,33 @@ struct UnitScene {
     }
 
     [[nodiscard]] rm::sim::Event combatVisualEvent(rm::sim::Event event) const {
-        if (event.kind == rm::sim::EventKind::WeaponFired || event.kind == rm::sim::EventKind::BeamFired) {
-            if (const auto position = weaponMuzzle(event.unit,event.visualId))
-                for (std::size_t axis=0; axis<3; ++axis) event.at2[axis] = rm::sim::fxFromFloat((*position)[axis]);
+        if (event.kind != rm::sim::EventKind::WeaponFired
+            && event.kind != rm::sim::EventKind::BeamFired) {
+            return event;
+        }
+        if (!store.alive(event.unit)) {
+            return event;
+        }
+        const auto type = store.typeAt(event.unit.index);
+        const auto* def = catalog.def(type);
+        const auto& mount = catalog.turretMount(type);
+        if (def == nullptr) {
+            return event;
+        }
+        for (std::size_t wi = 0; wi < def->weapons.size(); ++wi) {
+            if (def->name + ":" + def->weapons[wi].label != event.visualId) {
+                continue;
+            }
+            // The mounted weapon's launch already wrote the POSED muzzle into
+            // `at2` — the exact fixed-point point the shot left from, barrel
+            // and all. Re-posing here would only approximate it back. A fixed
+            // weapon's `at2` is still the hull, so pose its offset the old way.
+            if (!(mount.present && mount.weapon == wi)) {
+                if (const auto position = weaponMuzzle(event.unit, event.visualId))
+                    for (std::size_t axis=0; axis<3; ++axis)
+                        event.at2[axis] = rm::sim::fxFromFloat((*position)[axis]);
+            }
+            break;
         }
         return event;
     }
@@ -207,8 +260,17 @@ struct UnitScene {
         if (!store.alive(id)) return std::nullopt;
         const auto* def = catalog.def(store.typeAt(id.index));
         if (!def) return std::nullopt;
-        for (const auto& weapon : def->weapons) {
+        const auto& mount = catalog.turretMount(store.typeAt(id.index));
+        for (std::size_t wi = 0; wi < def->weapons.size(); ++wi) {
+            const auto& weapon = def->weapons[wi];
             if (weapon.projectileId == projectileKey && weapon.visualMuzzleOffset) {
+                // A mounted weapon's shot already carries its launch point as
+                // `visualOrigin` — the EXACT posed muzzle, dual barrel and all,
+                // which no re-pose here could improve on. Deferring lets the
+                // trail start there rather than guessing which barrel fired.
+                if (mount.present && mount.weapon == wi) {
+                    return std::nullopt;
+                }
                 return weaponMuzzle(id, def->name + ":" + weapon.label);
             }
         }
@@ -216,11 +278,23 @@ struct UnitScene {
     }
 
     void updateCombatAttachments() {
+        // Which barrel a flash or beam hangs from: the phase bit names the NEXT
+        // one, so the last-fired barrel for a dual manipulator is the other.
+        const auto firedMuzzle = [&](rm::sim::UnitId owner) {
+            if (!store.alive(owner)
+                || owner.index >= store.motion().size()) return 0;
+            const auto& mount = catalog.turretMount(store.typeAt(owner.index));
+            return mount.present && mount.dual
+                       ? static_cast<int>(store.motion()[owner.index].turretMuzzlePhase ^ 1)
+                       : 0;
+        };
         std::erase_if(combatEffectState.bursts, [&](const auto& emitter) {
             return emitter.owner.generation != 0 && !store.alive(emitter.owner);
         });
         for (auto& emitter : combatEffectState.bursts)
-            if (const auto position = weaponMuzzle(emitter.owner,emitter.weapon)) emitter.position = *position;
+            if (const auto position = weaponMuzzle(emitter.owner, emitter.weapon,
+                                                   firedMuzzle(emitter.owner)))
+                emitter.position = *position;
         // A live beam follows its shooter's muzzle and its target; it dies with the shooter,
         // and a target that dies leaves the beam pointing where it last stood.
         std::erase_if(combatEffectState.beams, [&](const rm::CombatBeam& beam) {
@@ -351,10 +425,9 @@ struct UnitScene {
     // rates and returns to rest when work ends, then is forgotten.
     std::unordered_map<rm::UnitIndex, std::array<float, 3>> builderTarget;
     std::unordered_map<rm::UnitIndex, rm::BuilderAimAngles> builderShownAim;
-    /// The drawn turret pose per slot, slewed at the weapon's rates toward its live
-    /// target and back to rest when the target dies. Same shape as the builder map:
-    /// presentation only, forgotten with the slot.
-    std::unordered_map<rm::UnitIndex, rm::BuilderAimAngles> turretShownAim;
+    /// The turret pose lives in `MoveState` now — the sim slews it, the snapshot
+    /// carries it, and this layer keeps no second map for it. The build arm
+    /// remains presentation-only and keeps `builderShownAim` above.
     /// The drawn recoil slide per slot, 0 at rest to 1 fully kicked. Kicked to 1
     /// by WeaponFired in advanceMatch, decayed there every tick at the batch's
     /// return rate — presentation only, forgotten with the slot.
@@ -819,9 +892,6 @@ struct UnitScene {
         std::erase_if(builderShownAim, [this](const auto& kv) {
             return !store.alive(store.idAt(kv.first));
         });
-        std::erase_if(turretShownAim, [this](const auto& kv) {
-            return !store.alive(store.idAt(kv.first));
-        });
         std::erase_if(recoilShown, [this](const auto& kv) {
             return !store.alive(store.idAt(kv.first));
         });
@@ -878,11 +948,9 @@ struct UnitScene {
                 drawIndexOf[slot] =
                     rm::SelectionEntry{.batch = batch, .instance = drawScratch[batch].size()};
             }
-            rm::UnitInstance instance = instanceFor(unit);
-            // The turret first: a builder at work overwrites the same two angles below,
-            // so an engineer building with its arm keeps the arm, and a tank with no
-            // arm keeps whatever the turret wrote.
-            applyTurretAim(instance, unit, batch, dtSeconds);
+            rm::UnitInstance instance = instanceFor(unit, batch);
+            // The turret pose arrived on the DrawUnit — the sim's own scalars,
+            // interpolated. The builder arm below is still presentation-side.
             applyBuilderArm(instance, unit, batch, dtSeconds);
             applyRecoil(instance, unit, batch);
             // One-shot deploy: the phase carries cycles since the unit deployed,
@@ -909,6 +977,7 @@ struct UnitScene {
         for (std::size_t batch = 0; batch < batches.size(); ++batch) {
             batches[batch].instances = drawScratch[batch];
         }
+        if (!trialAlignmentShots.empty()) logTrialAlignment();
     }
 
     /// One original projectile mesh: the batch that draws it and its blueprint scale.
@@ -965,12 +1034,19 @@ struct UnitScene {
     /// angles arrive already interpolated and already float; what is left here is the part that
     /// comes from the TYPE and the ARMY rather than from the tick — the scale, the colour, and
     /// the animation clip the stride is measured against.
-    [[nodiscard]] rm::UnitInstance instanceFor(const rm::DrawUnit& unit) const {
+    [[nodiscard]] rm::UnitInstance instanceFor(const rm::DrawUnit& unit,
+                                               std::size_t batch) const {
         rm::UnitInstance instance{};
         instance.position = unit.position;
         instance.rotationY = unit.rotationY;
         instance.rotationX = unit.rotationX;
         instance.rotationZ = unit.rotationZ;
+        // The turret's scalars ride the snapshot like the hull's: the sim
+        // owns the slew, this only projects it.
+        instance.turretYaw = unit.turretYaw;
+        instance.turretPitch = unit.turretPitch;
+        instance.turretYaw2 = unit.turretYaw2;
+        instance.turretPitch2 = unit.turretPitch2;
 
         const auto type = static_cast<std::size_t>(unit.type);
         instance.scale = type < typeScale.size() ? typeScale[type] : 1.0f;
@@ -992,9 +1068,11 @@ struct UnitScene {
         // The walk cycle, paced by ground covered rather than by wall time — a unit pivoting
         // on the spot or standing still must not keep striding. Zero for a type with no
         // animation, which is every structure. The distance is INTERPOLATED, so a leg no longer
-        // steps at the tick rate either.
-        const float duration = type < batches.size() && batches[type].animation != nullptr
-                                   ? batches[type].animation->duration
+        // steps at the tick rate either. The RESOLVED batch — an LOD substitution has the
+        // coarse clip's duration, and `batches[type]` was only right while type == batch
+        // (`#3090` ended that).
+        const float duration = batch < batches.size() && batches[batch].animation != nullptr
+                                   ? batches[batch].animation->duration
                                    : 0.0f;
         const float speed =
             unit.speedPerTick * static_cast<float>(gAppTickRate.ticksPerSecond());
@@ -1052,59 +1130,12 @@ struct UnitScene {
         instance.builderPitch = shown.pitch;
     }
 
-    /// Aims one drawn unit's primary turret at its live target and returns it to rest
-    /// when the target dies. Presentation only: reads the sim's per-weapon target,
-    /// writes per-instance shader input, never the store.
-    ///
-    /// Runs BEFORE applyBuilderArm at the call site, so a builder at work overwrites
-    /// the same two angles with its arm and a combat unit keeps its turret.
-    void applyTurretAim(rm::UnitInstance& instance, const rm::DrawUnit& unit,
-                        std::size_t batch, float dtSeconds) {
-        const rm::UnitIndex slot = unit.id.index;
-        if (batch >= batches.size() || !batches[batch].turretAim.exists()) {
-            return;
-        }
-        const rm::BuilderAimRig& rig = batches[batch].turretAim;
-        const std::size_t weapon = batches[batch].turretWeapon;
-
-        // The sim's own per-weapon target: what this turret is firing at, or trying to.
-        // A dead or unset target means rest — the turret slews home rather than freezing
-        // on a corpse.
-        std::optional<std::array<float, 3>> aimAt;
-        if (slot < store.health().size()) {
-            const std::vector<rm::sim::UnitId>& targets = store.health()[slot].automaticTargets;
-            if (weapon < targets.size() && store.alive(targets[weapon])
-                && targets[weapon].index < store.transforms().size()) {
-                const rm::sim::Transform& aim = store.transforms()[targets[weapon].index];
-                aimAt = std::array<float, 3>{rm::sim::fxToFloat(aim.x),
-                                             rm::sim::fxToFloat(aim.y),
-                                             rm::sim::fxToFloat(aim.z)};
-            }
-        }
-
-        rm::BuilderAimAngles goal;
-        if (aimAt) {
-            const rm::InstancePlacement placement{
-                .position = instance.position,
-                .rotationX = instance.rotationX,
-                .rotationY = instance.rotationY,
-                .rotationZ = instance.rotationZ,
-                .scale = instance.scale,
-            };
-            goal = rm::builderAimAt(rig, rm::builderTargetInModel(*aimAt, placement));
-        }
-        const auto shownIt = turretShownAim.find(slot);
-        rm::BuilderAimAngles shown =
-            shownIt != turretShownAim.end() ? shownIt->second : rm::BuilderAimAngles{};
-        shown = rm::stepBuilderAim(shown, goal, rig, dtSeconds);
-        if (!aimAt && shown.yaw == 0.0f && shown.pitch == 0.0f) {
-            turretShownAim.erase(slot);
-            return;
-        }
-        turretShownAim[slot] = shown;
-        instance.builderYaw = shown.yaw;
-        instance.builderPitch = shown.pitch;
-    }
+    /// The turret pose used to live here, slewed presentation-side per frame — a
+    /// second integrator that could disagree with the sim about where the barrel
+    /// pointed and therefore where a shot left from. The sim slews
+    /// `MoveState::turretYaw`/`turretPitch` now; `instanceFor` projects them like
+    /// every other angle, and the shader reads its own instance fields.
+    /// applyBuilderArm keeps its map: the build arm is still presentation-only.
 
     /// Copies the drawn recoil slide onto the instance. The amount lives in
     /// `recoilShown`, kicked and decayed in advanceMatch — gather only reads,

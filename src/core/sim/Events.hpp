@@ -158,6 +158,9 @@ struct Event {
     std::string visualId;
     Fx visualDuration{};
     std::array<Fx,3> visualDirection{};
+    /// WeaponFired diagnostic: actual initial velocity in elmos/tick, before
+    /// gravity or guidance. Kept separate from the authored effect direction.
+    std::array<Fx,3> launchVelocity{};
 };
 
 [[nodiscard]] bool operator==(const Event& a, const Event& b) noexcept;

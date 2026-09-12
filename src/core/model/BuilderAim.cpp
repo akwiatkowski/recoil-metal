@@ -186,12 +186,17 @@ BuilderAimRig resolveTurretAim(const Model& model, const TurretAimSpec& spec) {
         return rig;
     }
     rig.boneFlags.resize(model.bones.size());
+    const int pitch2 = turretResolve(spec.pitch2Bone);
+    const int muzzle2 = turretResolve(spec.muzzle2Bone);
     for (std::size_t bone = 0; bone < model.bones.size(); ++bone) {
         if (descendsFrom(model, bone, yaw)) {
-            rig.boneFlags[bone] |= kBuilderYawBone;
+            rig.boneFlags[bone] |= kTurretYawBone;
         }
         if (descendsFrom(model, bone, pitch)) {
-            rig.boneFlags[bone] |= kBuilderPitchBone;
+            rig.boneFlags[bone] |= kTurretPitchBone;
+        }
+        if (pitch2 >= 0 && descendsFrom(model, bone, pitch2)) {
+            rig.boneFlags[bone] |= kTurretPitch2Bone | kTurretYaw2Bone;
         }
     }
     const ModelBone& yawBone = model.bones[static_cast<std::size_t>(yaw)];
@@ -230,6 +235,24 @@ BuilderAimRig resolveTurretAim(const Model& model, const TurretAimSpec& spec) {
             rig.aimPoint = add(rig.yawPivot,
                                normalise(subtract(muzzleBone.globalOffset, rig.pitchPivot)));
             rig.aimDir = subtract(muzzleBone.globalOffset, rig.pitchPivot);
+        }
+    }
+    if (pitch2 >= 0) {
+        const ModelBone& pitch2Bone = model.bones[static_cast<std::size_t>(pitch2)];
+        rig.pitch2Pivot = pitch2Bone.globalOffset;
+        rig.pitch2Axis =
+            normalise(rotateByQuaternion(pitch2Bone.globalRotation, {{1.0f, 0.0f, 0.0f}}));
+        rig.hasPitch2 = true;
+        // One scalar elevates BOTH arms. A mirrored bone's axis turns its own
+        // barrel the other way, so flip the axis until the two barrels' rest
+        // directions move together under the same rotation.
+        if (muzzle2 >= 0) {
+            const Vec3 dir1 = rig.aimDir;
+            const Vec3 dir2 = subtract(
+                model.bones[static_cast<std::size_t>(muzzle2)].globalOffset, rig.pitch2Pivot);
+            if (dot(cross(rig.pitch2Axis, dir2), cross(rig.pitchAxis, dir1)) < 0.0f) {
+                rig.pitch2Axis = scale(rig.pitch2Axis, -1.0f);
+            }
         }
     }
     // Already radians: the weapon states speeds that way and the caller converts the arc.
@@ -276,10 +299,21 @@ std::array<float, 3> applyBuilderAim(const std::array<float, 3>& point,
                                      std::uint32_t boneFlags, const BuilderAimRig& rig,
                                      BuilderAimAngles angles) noexcept {
     Vec3 aimed = point;
-    if ((boneFlags & kBuilderPitchBone) != 0U) {
+    // Pitch before yaw — the hierarchy the shader applies — and the dual arm's
+    // trunnion takes its OWN two scalars: pitch2 about its axis, yaw2 about the
+    // ring's axis at its pivot, both before the ring's yaw. Both bit families
+    // map to the one rig passed in: whichever of builder/turret the bone
+    // descends from is the rig the caller resolved.
+    if ((boneFlags & kTurretPitch2Bone) != 0U) {
+        aimed = rotateAround(aimed, rig.pitch2Pivot, rig.pitch2Axis, angles.pitch2);
+    }
+    if ((boneFlags & kTurretYaw2Bone) != 0U) {
+        aimed = rotateAround(aimed, rig.pitch2Pivot, rig.yawAxis, angles.yaw2);
+    }
+    if ((boneFlags & (kBuilderPitchBone | kTurretPitchBone)) != 0U) {
         aimed = rotateAround(aimed, rig.pitchPivot, rig.pitchAxis, angles.pitch);
     }
-    if ((boneFlags & kBuilderYawBone) != 0U) {
+    if ((boneFlags & (kBuilderYawBone | kTurretYawBone)) != 0U) {
         aimed = rotateAround(aimed, rig.yawPivot, rig.yawAxis, angles.yaw);
     }
     return aimed;

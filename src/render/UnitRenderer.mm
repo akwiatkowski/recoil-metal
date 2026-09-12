@@ -363,6 +363,7 @@ void Renderer::setUnits(std::span<const dds::Texture> textures, std::span<const 
         uploaded.boneStrideBytes = model.bones.size() * sizeof(BoneTransform);
         uploaded.duration = duration;
         uploaded.builderAim = batch.builderAim;
+        uploaded.turretAim = batch.turretAim;
         uploaded.recoilFlags = batch.recoilFlags;
         uploaded.recoilDistance = batch.recoilDistanceElmos;
         uploaded.vertexBuffer =

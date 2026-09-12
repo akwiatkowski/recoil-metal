@@ -38,12 +38,22 @@ struct UnitInstanceIn {
     float rotationZ;        // roll, radians about +Z
     float builderYaw;       // authored BuilderArmManipulator yaw, per instance
     float builderPitch;     // authored BuilderArmManipulator pitch, per instance
+    float turretYaw;        // sim's MoveState::turretYaw in radians, per instance
+    float turretPitch;      // sim's MoveState::turretPitch in radians, per instance
+    float turretYaw2;       // dual manipulator's own yaw — MoveState::turretYaw2
+    float turretPitch2;     // dual manipulator's own pitch — MoveState::turretPitch2
     float recoil;           // 0 at rest to 1 fully kicked, times recoilDistance
 };
 
 // Everything the vertex shader needs to find one instance's pose inside the
 // batch's baked keyframe buffer. Per batch and under 4 KB, so it rides in the
 // command buffer via setVertexBytes rather than needing a buffer of its own.
+//
+// TWO RIGS, because a unit can carry both an arm and a ring: the builder's
+// pivots aim bits 0-2 of a bone's flags against inst.builderYaw/Pitch, and the
+// turret's own block aims bits 3-5 against inst.turretYaw/Pitch. The dual
+// manipulator's trunnion is the last pair — a second pivot rotated by the SAME
+// pitch scalar, its axis already sign-fixed at resolve.
 struct PoseUniforms {
     uint poseCount;   // 1 when the batch does not animate
     uint boneCount;   // stride, in bones, between consecutive poses
@@ -52,11 +62,17 @@ struct PoseUniforms {
     uint builderAim;
     float recoilDistance;   // full slide travel, elmos; 0 when the type has no rack
     uint unpackOneshot;     // play once and hold the last frame, for deploy anims
-    uint padding;
+    uint turretAim;
     float4 yawPivot;    // xyz pivot; w unused
     float4 yawAxis;     // xyz unit axis; w unused
     float4 pitchPivot;  // xyz pivot; w unused
     float4 pitchAxis;   // xyz unit axis; w unused
+    float4 turretYawPivot;
+    float4 turretYawAxis;
+    float4 turretPitchPivot;
+    float4 turretPitchAxis;
+    float4 turretPitch2Pivot;   // the dual arm's trunnion; unused without one
+    float4 turretPitch2Axis;
 };
 
 // One bone's contribution: a rotation and a translation, no scale. Matches the
@@ -74,27 +90,72 @@ static float3 rotateBuilderAxis(float3 vector, float3 axis, float angle) {
     return vector * c + cross(axis, vector) * s + axis * dot(axis, vector) * (1.0 - c);
 }
 
+// The aim hierarchy, ONE shared shape for two rigs: pitch subtrees first, then
+// each arm's own yaw, then the yaw ring that carries them — applied in the
+// reverse of the hierarchy, so every pivot reads model space. The dual arm's
+// subtree is disjoint from the primary's, so their order cannot matter.
+// Builder flags are bits 0-2, turret bits 3-6 — a bone can hold both families
+// and each reads its own instance angles.
 static float3 applyBuilderAim(float3 point, BoneTransformIn bone, UnitInstanceIn inst,
                               PoseUniforms p) {
-    if (p.builderAim == 0) {
-        return point;
+    const uint f = bone.builderFlags;
+    if (p.turretAim != 0) {
+        if ((f & 32u) != 0u) {
+            point = p.turretPitch2Pivot.xyz
+                + rotateBuilderAxis(point - p.turretPitch2Pivot.xyz, p.turretPitch2Axis.xyz,
+                                    inst.turretPitch2);
+        }
+        // Bit 64: the dual arm's OWN yaw, about the shared vertical axis at its
+        // own trunnion — retail's per-manipulator aim, which is how two splayed
+        // barrels both reach the target where one shared angle cannot.
+        if ((f & 64u) != 0u) {
+            point = p.turretPitch2Pivot.xyz
+                + rotateBuilderAxis(point - p.turretPitch2Pivot.xyz, p.turretYawAxis.xyz,
+                                    inst.turretYaw2);
+        }
+        if ((f & 16u) != 0u) {
+            point = p.turretPitchPivot.xyz
+                + rotateBuilderAxis(point - p.turretPitchPivot.xyz, p.turretPitchAxis.xyz,
+                                    inst.turretPitch);
+        }
+        if ((f & 8u) != 0u) {
+            point = p.turretYawPivot.xyz
+                + rotateBuilderAxis(point - p.turretYawPivot.xyz, p.turretYawAxis.xyz,
+                                    inst.turretYaw);
+        }
     }
-    if ((bone.builderFlags & 2u) != 0u) {
-        const float3 pivot = p.pitchPivot.xyz;
-        point = pivot + rotateBuilderAxis(point - pivot, p.pitchAxis.xyz, inst.builderPitch);
-    }
-    if ((bone.builderFlags & 1u) != 0u) {
-        const float3 pivot = p.yawPivot.xyz;
-        point = pivot + rotateBuilderAxis(point - pivot, p.yawAxis.xyz, inst.builderYaw);
+    if (p.builderAim != 0) {
+        if ((f & 2u) != 0u) {
+            const float3 pivot = p.pitchPivot.xyz;
+            point = pivot + rotateBuilderAxis(point - pivot, p.pitchAxis.xyz, inst.builderPitch);
+        }
+        if ((f & 1u) != 0u) {
+            const float3 pivot = p.yawPivot.xyz;
+            point = pivot + rotateBuilderAxis(point - pivot, p.yawAxis.xyz, inst.builderYaw);
+        }
     }
     // The recoil slide, AFTER the aim rotations: the barrel travels back along
     // where it is pointing, not where it rested. inst.recoil is 0..1 of the
-    // batch's travel; the direction rebuilds the aimed +Z from the same angles.
-    if ((bone.builderFlags & 4u) != 0u && inst.recoil > 0.0) {
+    // batch's travel; the direction rebuilds the aimed +Z from the same angles —
+    // the TURRET's when this bone rides the ring, the arm's when it does not.
+    if ((f & 4u) != 0u && inst.recoil > 0.0) {
+        const bool turreted = p.turretAim != 0 && (f & (8u | 16u | 32u | 64u)) != 0u;
+        // A rack bone on the SECOND arm rides that arm's own angles — the dual
+        // manipulator's trunnion carries bit 32's pitch and bit 64's yaw.
+        const bool secondArm = (f & 32u) != 0u;
+        const float3 pitchAxis = turreted
+            ? (secondArm ? p.turretPitch2Axis.xyz : p.turretPitchAxis.xyz)
+            : p.pitchAxis.xyz;
+        const float3 yawAxis = turreted ? p.turretYawAxis.xyz : p.yawAxis.xyz;
+        const float pitch = turreted
+            ? (secondArm ? inst.turretPitch2 : inst.turretPitch)
+            : inst.builderPitch;
+        const float yaw = turreted
+            ? (secondArm ? inst.turretYaw + inst.turretYaw2 : inst.turretYaw)
+            : inst.builderYaw;
         const float3 barrel =
-            rotateBuilderAxis(rotateBuilderAxis(float3(0.0, 0.0, 1.0), p.pitchAxis.xyz,
-                                                inst.builderPitch),
-                              p.yawAxis.xyz, inst.builderYaw);
+            rotateBuilderAxis(rotateBuilderAxis(float3(0.0, 0.0, 1.0), pitchAxis, pitch),
+                              yawAxis, yaw);
         point -= barrel * (inst.recoil * p.recoilDistance);
     }
     return point;
@@ -102,14 +163,28 @@ static float3 applyBuilderAim(float3 point, BoneTransformIn bone, UnitInstanceIn
 
 static float3 applyBuilderAimNormal(float3 normal, BoneTransformIn bone, UnitInstanceIn inst,
                                     PoseUniforms p) {
-    if (p.builderAim == 0) {
-        return normal;
+    const uint f = bone.builderFlags;
+    if (p.turretAim != 0) {
+        if ((f & 32u) != 0u) {
+            normal = rotateBuilderAxis(normal, p.turretPitch2Axis.xyz, inst.turretPitch2);
+        }
+        if ((f & 64u) != 0u) {
+            normal = rotateBuilderAxis(normal, p.turretYawAxis.xyz, inst.turretYaw2);
+        }
+        if ((f & 16u) != 0u) {
+            normal = rotateBuilderAxis(normal, p.turretPitchAxis.xyz, inst.turretPitch);
+        }
+        if ((f & 8u) != 0u) {
+            normal = rotateBuilderAxis(normal, p.turretYawAxis.xyz, inst.turretYaw);
+        }
     }
-    if ((bone.builderFlags & 2u) != 0u) {
-        normal = rotateBuilderAxis(normal, p.pitchAxis.xyz, inst.builderPitch);
-    }
-    if ((bone.builderFlags & 1u) != 0u) {
-        normal = rotateBuilderAxis(normal, p.yawAxis.xyz, inst.builderYaw);
+    if (p.builderAim != 0) {
+        if ((f & 2u) != 0u) {
+            normal = rotateBuilderAxis(normal, p.pitchAxis.xyz, inst.builderPitch);
+        }
+        if ((f & 1u) != 0u) {
+            normal = rotateBuilderAxis(normal, p.yawAxis.xyz, inst.builderYaw);
+        }
     }
     return normal;
 }

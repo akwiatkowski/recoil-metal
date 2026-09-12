@@ -255,7 +255,7 @@ void Renderer::encodeShadowPass(MTL::CommandBuffer* commandBuffer) noexcept {
             static_cast<std::uint32_t>(batch.boneStrideBytes / sizeof(BoneTransform));
         pose.duration = batch.duration;
         pose.time = batch.animationDrivenByInstance ? 0.0f : animationTime_;
-        setBuilderAimUniforms(pose, batch.builderAim);
+        setAimUniforms(pose, batch.builderAim, batch.turretAim);
         encoder->setVertexBytes(&pose, sizeof(pose), kPoseUniformBufferIndex);
 
         encoder->drawIndexedPrimitives(MTL::PrimitiveType::PrimitiveTypeTriangle,

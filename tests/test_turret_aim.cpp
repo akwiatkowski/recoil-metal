@@ -5,11 +5,13 @@
 // exactly that: Hull → Turret → Barrel → Muzzle. The rig must mark the yaw/pitch
 // subtrees, pivot on the ring and trunnion, and aim the muzzle at a target.
 #include "core/model/BuilderAim.hpp"
+#include "core/scene/UnitPlacement.hpp"
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 #include <numbers>
+#include <limits>
 
 using Catch::Approx;
 
@@ -50,9 +52,9 @@ TEST_CASE("a turret rig marks only the ring and barrel subtrees", "[turret]") {
     REQUIRE(rig.exists());
     REQUIRE(rig.boneFlags.size() == 4);
     CHECK(rig.boneFlags[0] == 0U);
-    CHECK(rig.boneFlags[1] == rm::kBuilderYawBone);
-    CHECK(rig.boneFlags[2] == (rm::kBuilderYawBone | rm::kBuilderPitchBone));
-    CHECK(rig.boneFlags[3] == (rm::kBuilderYawBone | rm::kBuilderPitchBone));
+    CHECK(rig.boneFlags[1] == rm::kTurretYawBone);
+    CHECK(rig.boneFlags[2] == (rm::kTurretYawBone | rm::kTurretPitchBone));
+    CHECK(rig.boneFlags[3] == (rm::kTurretYawBone | rm::kTurretPitchBone));
     CHECK(rig.yawSlew == Approx(2.0f));
     CHECK(rig.pitchSlew == Approx(1.5f));
 }
@@ -92,4 +94,47 @@ TEST_CASE("turret bone names match case-insensitively", "[turret]") {
     model.bones[2].name = "BARREL";
     model.bones[3].name = "Muzzle";
     CHECK(rm::resolveTurretAim(model, turretSpec()).exists());
+}
+
+TEST_CASE("a drawn unit measures barrel alignment in world degrees", "[turret][alignment]") {
+    const auto rig = rm::resolveTurretAim(tankModel(), turretSpec());
+    rm::UnitInstance unit{.position = {100.0f, 20.0f, -50.0f}, .scale = 2.0f};
+    // Independently chosen points on the synthetic barrel, not the aim solver's output.
+    const std::array<float, 3> base{0.0f, 1.0f, 0.0f};
+    const std::array<float, 3> tip{0.0f, 1.0f, 3.0f};
+    const auto error = [&](std::array<float, 3> direction) {
+        const auto measured = unit.barrelAlignmentErrorDegrees(rig, 2, base, tip, direction);
+        REQUIRE(measured.has_value());
+        return *measured;
+    };
+    CHECK(error({0, 0, 100}) == Approx(0).margin(0.001));
+    CHECK(error({1, 0, 0}) == Approx(90));
+    CHECK(error({0, 0, -1}) == Approx(180));
+    unit.turretYaw = std::numbers::pi_v<float> / 2;
+    CHECK(error({1, 0, 0}) == Approx(0).margin(0.001));
+    CHECK(error({0, 0, 1}) == Approx(90));
+    // Reversing yaw must be distinguishable from a correct quarter turn.
+    unit.turretYaw *= -1;
+    CHECK(error({1, 0, 0}) == Approx(180));
+    unit.turretYaw = 0;
+    unit.turretPitch = -std::numbers::pi_v<float> / 4;
+    unit.rotationY = std::numbers::pi_v<float> / 2;
+    CHECK(error({1, 1, 0}) == Approx(0).margin(0.001));
+    unit.turretPitch = 0;
+    unit.rotationX = -std::numbers::pi_v<float> / 2;
+    CHECK(error({0, 1, 0}) == Approx(0).margin(0.001));
+    unit.rotationX = 0;
+    unit.turretYaw = std::numbers::pi_v<float> / 2;
+    unit.rotationY = 0;
+    unit.rotationZ = std::numbers::pi_v<float> / 2;
+    CHECK(error({0, 1, 0}) == Approx(0).margin(0.001));
+
+    CHECK_FALSE(unit.barrelAlignmentErrorDegrees(rig, 2, base, tip, {0, 0, 0}));
+    CHECK_FALSE(unit.barrelAlignmentErrorDegrees(rig, 2, base, base, {1, 0, 0}));
+    CHECK_FALSE(unit.barrelAlignmentErrorDegrees(rig, 99, base, tip, {1, 0, 0}));
+    CHECK_FALSE(unit.barrelAlignmentErrorDegrees({}, 2, base, tip, {1, 0, 0}));
+    CHECK_FALSE(unit.barrelAlignmentErrorDegrees(rig, 2, base, tip,
+        {std::numeric_limits<float>::quiet_NaN(), 0, 0}));
+    unit.scale = 0;
+    CHECK_FALSE(unit.barrelAlignmentErrorDegrees(rig, 2, base, tip, {1, 0, 0}));
 }

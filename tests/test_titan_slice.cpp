@@ -19,6 +19,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
+#include <numbers>
 #include <string>
 #include <vector>
 
@@ -215,7 +216,8 @@ TEST_CASE("the Titan aims, kicks and strides in a live tick", "[slice][behavior]
     });
     scene.setBatchForType(type, 0);
     // Mirror resolveMuzzleBones: the Muzzle_R rest offset in elmos, on the
-    // catalog copy the scene actually reads.
+    // catalog copy the scene actually reads — and the dual arm's Muzzle_L too,
+    // or the mount publishes without its second barrel.
     {
         auto& live = scene.definitions.back();
         const auto& gun = live.weapons[rig.weapon];
@@ -226,9 +228,19 @@ TEST_CASE("the Titan aims, kicks and strides in a live tick", "[slice][behavior]
                     bone.globalOffset[1] * def->meshToElmos,
                     bone.globalOffset[2] * def->meshToElmos};
             }
+            if (bone.name == gun.turretDualMuzzleBone) {
+                live.weapons[rig.weapon].visualMuzzle2Offset = std::array<float, 3>{
+                    bone.globalOffset[0] * def->meshToElmos,
+                    bone.globalOffset[1] * def->meshToElmos,
+                    bone.globalOffset[2] * def->meshToElmos};
+            }
         }
         REQUIRE(live.weapons[rig.weapon].visualMuzzleOffset.has_value());
     }
+    // The sim's mount: no publish, no slew — the pose below is authored by
+    // `fireWeapons` now, not by a presentation-side applier.
+    rm::app::publishTurretMount(scene, type, def->meshToElmos);
+    REQUIRE(scene.catalog.turretMount(type).present);
 
     // Inside the cannon's 20-elmo reach, so the sim fires from the first beats.
     const rm::sim::UnitId shooter = scene.store.spawn(rm::sim::UnitStore::Spawn{
@@ -291,8 +303,8 @@ TEST_CASE("the Titan aims, kicks and strides in a live tick", "[slice][behavior]
         for (std::size_t i = 0; i < scene.batches[0].instances.size(); ++i) {
             if (scene.unitDrawnAt(0, i) == shooter) {
                 const auto& in = scene.batches[0].instances[i];
-                gotYaw = in.builderYaw;
-                gotPitch = in.builderPitch;
+                gotYaw = in.turretYaw;
+                gotPitch = in.turretPitch;
                 gotX = in.position[0];
                 gotZ = in.position[2];
                 gotRotY = in.rotationY;
@@ -315,12 +327,15 @@ TEST_CASE("the Titan aims, kicks and strides in a live tick", "[slice][behavior]
         REQUIRE(emuzzle.has_value());
         // The barrel axis, not tip-minus-centre: the arm's lateral offset is
         // not aim, and at Titan scale it skews the direction by ~18 degrees.
-        // Posed trunnion through the same public hierarchy the muzzle uses.
-        const auto shown = scene.turretShownAim.find(shooter.index);
-        REQUIRE(shown != scene.turretShownAim.end());
+        // Posed trunnion through the same public hierarchy the muzzle uses —
+        // with the SIM's own slew angles, which are what weaponMuzzle reads.
+        const auto& ownMotion = scene.store.motion()[shooter.index];
+        const rm::BuilderAimAngles simAim{
+            .yaw = rm::sim::radiansFromBrad(ownMotion.turretYaw),
+            .pitch = rm::sim::radiansFromBrad(ownMotion.turretPitch)};
         const std::array<float, 3> truModel = rm::applyBuilderAim(
             rig.rig.pitchPivot,
-            rm::kBuilderYawBone | rm::kBuilderPitchBone, rig.rig, shown->second);
+            rm::kTurretYawBone | rm::kTurretPitchBone, rig.rig, simAim);
         const auto& ehull = scene.store.transforms()[shooter.index];
         constexpr float radiansPerBrad = 6.283185307179586f / 65536;
         const rm::InstancePlacement at{
@@ -373,15 +388,48 @@ TEST_CASE("the Titan aims, kicks and strides in a live tick", "[slice][behavior]
             (axis[0] * toTarget[0] + axis[1] * toTarget[1] + axis[2] * toTarget[2])
             / axisLen / tgtLen;
         CHECK(cosTarget > 0.995f);
+        // And the shots in flight were launched FROM a posed muzzle — the
+        // sim's `visualOrigin` is a barrel tip, not hull centre. Two manip-
+        // ulators alternate, so either muzzle answers.
+        const auto emuzzle2 = scene.weaponMuzzle(shooter, ekey, 1);
+        REQUIRE(emuzzle2.has_value());
+        bool sawEastShot = false;
+        for (const rm::sim::Projectile& shot : scene.projectiles) {
+            if (shot.firedBy != shooter) continue;
+            sawEastShot = true;
+            // The origin is the muzzle AT FIRE TIME: the gate lets a shot go
+            // once the ring is within a slew step of the target, so a shot can
+            // ride up to ~2 elmos of approach arc behind the converged tip.
+            const auto matches = [&](const std::array<float, 3>& m) {
+                return std::abs(rm::sim::fxToFloat(shot.visualOrigin[0]) - m[0])
+                               < 3.0f
+                       && std::abs(rm::sim::fxToFloat(shot.visualOrigin[2]) - m[2])
+                               < 3.0f;
+            };
+            const bool fromAPosedMuzzle =
+                matches(*emuzzle) || matches(*emuzzle2);
+            CHECK(fromAPosedMuzzle);
+        }
+        CHECK(sawEastShot);
     }
-    // The same target stepped across to -X.
+    // The same target stepped across to -X, made unkillable first so the
+    // traverse is the only story — and given its ticks: the ring slews at the
+    // authored 150 degrees a second, so 180 degrees is ~12 ticks of sim, not
+    // the frame-rate snap the old presentation applier delivered.
+    scene.store.health()[tgt.index].current = rm::sim::Mag::fromInt(1000000);
+    scene.store.health()[tgt.index].maximum = rm::sim::Mag::fromInt(1000000);
     scene.store.transforms()[tgt.index].x = rm::sim::fxFromFloat(100.0f);
-    for (int tick = 30; tick < 35; ++tick) {
+    for (int tick = 30; tick < 55; ++tick) {
         (void)rm::app::advanceMatch(runner, tick, 0.0f);
     }
     shooterAim();
     const float yawWest = gotYaw;
-    CHECK((yawEast - yawWest) == Catch::Approx(3.14159f).margin(0.05f));
+    // A brad is circular: aimed at -X the yaw reads back as +270 degrees, so
+    // compare the wrapped delta — a half turn traversed, either direction.
+    const float traversed =
+        std::abs(std::remainder(yawEast - yawWest,
+                                2.0f * std::numbers::pi_v<float>));
+    CHECK(traversed == Catch::Approx(3.14159f).margin(0.1f));
 
     // The barrel tip follows the traverse: aimed west, the muzzle rides out
     // -X on the target's line instead of sitting at the heading-rotated rest
@@ -393,16 +441,32 @@ TEST_CASE("the Titan aims, kicks and strides in a live tick", "[slice][behavior]
                        << ")");
     CHECK((*muzzle)[0] < 198.0f);
     CHECK(std::abs((*muzzle)[2] - 200.0f) < 5.0f);
-    // Same answer through the trail lookup, by projectile.
+    // The trail resolver defers to the shot's recorded launch point for a
+    // mounted weapon — `visualOrigin` IS the posed muzzle, so the stronger
+    // check is that the sim and the presentation landed on the same point.
     const auto trail =
         scene.trailOrigin(shooter, def->weapons[rig.weapon].projectileId);
-    REQUIRE(trail.has_value());
-    CHECK((*trail)[0] == Catch::Approx((*muzzle)[0]));
-    CHECK((*trail)[2] == Catch::Approx((*muzzle)[2]));
+    CHECK_FALSE(trail.has_value());
+    const auto muzzle2 = scene.weaponMuzzle(shooter, key, 1);
+    REQUIRE(muzzle2.has_value());
+    bool sawMuzzleShot = false;
+    for (const rm::sim::Projectile& shot : scene.projectiles) {
+        if (shot.firedBy != shooter) continue;
+        sawMuzzleShot = true;
+        // Same approach-arc margin as the east block: the origin is the muzzle
+        // at fire time, up to a gate-tolerance slew behind the converged tip.
+        const auto matches = [&](const std::array<float, 3>& m) {
+            return std::abs(rm::sim::fxToFloat(shot.visualOrigin[0]) - m[0]) < 3.0f
+                   && std::abs(rm::sim::fxToFloat(shot.visualOrigin[2]) - m[2]) < 3.0f;
+        };
+        const bool fromAPosedMuzzle = matches(*muzzle) || matches(*muzzle2);
+        CHECK(fromAPosedMuzzle);
+    }
+    CHECK(sawMuzzleShot);
     // March orders: ground covered becomes walk phase.
-    REQUIRE(rm::app::issueMove(scene, shooter, 0, 35, rm::sim::fxFromFloat(400.0f),
+    REQUIRE(rm::app::issueMove(scene, shooter, 0, 55, rm::sim::fxFromFloat(400.0f),
                                rm::sim::fxFromFloat(200.0f)));
-    for (int tick = 35; tick < 65; ++tick) {
+    for (int tick = 55; tick < 85; ++tick) {
         (void)rm::app::advanceMatch(runner, tick, 0.0f);
     }
     scene.publish(64);
@@ -455,6 +519,27 @@ TEST_CASE("the Titan's turret tracks a moving enemy", "[slice][tracking]") {
         .recoilReturnPerTick = rig.recoilReturnPerTick,
     });
     scene.setBatchForType(type, 0);
+    {
+        auto& live = scene.definitions.back();
+        const auto& gun = live.weapons[rig.weapon];
+        for (const auto& bone : model->bones) {
+            if (bone.name == gun.muzzleBone) {
+                live.weapons[rig.weapon].visualMuzzleOffset = std::array<float, 3>{
+                    bone.globalOffset[0] * def->meshToElmos,
+                    bone.globalOffset[1] * def->meshToElmos,
+                    bone.globalOffset[2] * def->meshToElmos};
+            }
+            if (bone.name == gun.turretDualMuzzleBone) {
+                live.weapons[rig.weapon].visualMuzzle2Offset = std::array<float, 3>{
+                    bone.globalOffset[0] * def->meshToElmos,
+                    bone.globalOffset[1] * def->meshToElmos,
+                    bone.globalOffset[2] * def->meshToElmos};
+            }
+        }
+        REQUIRE(live.weapons[rig.weapon].visualMuzzleOffset.has_value());
+    }
+    rm::app::publishTurretMount(scene, type, def->meshToElmos);
+    REQUIRE(scene.catalog.turretMount(type).present);
 
     const rm::sim::UnitId watcher = scene.store.spawn(rm::sim::UnitStore::Spawn{
         .type = type,
@@ -496,7 +581,7 @@ TEST_CASE("the Titan's turret tracks a moving enemy", "[slice][tracking]") {
         bool found = false;
         for (std::size_t i = 0; i < scene.batches[0].instances.size(); ++i) {
             if (scene.unitDrawnAt(0, i) == watcher) {
-                yaw = scene.batches[0].instances[i].builderYaw;
+                yaw = scene.batches[0].instances[i].turretYaw;
                 found = true;
             }
         }

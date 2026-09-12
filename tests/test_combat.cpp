@@ -304,6 +304,26 @@ TEST_CASE("point defence fires an interceptor at the nearest hostile projectile"
     CHECK(shots.back().velocity[2] == rm::test::fx(10.0f));
 }
 
+TEST_CASE("firing diagnostics retain actual launch velocity", "[alignment]") {
+    const auto armies = rm::sim::freeForAll(2);
+    Roster roster;
+    (void)roster.add(roster.addType(gunnerDef(directFire(10, 300))), 0, 0, 0, 100);
+    (void)roster.add(roster.addType(targetDef()), 0, 50, 1, 100);
+    std::vector<Projectile> shots;
+    rm::sim::EventQueue events;
+    REQUIRE(rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots,
+                                roster.rate, &events) == 1);
+    REQUIRE(shots.size() == 1);
+    bool recorded = false;
+    for (const auto& event : events.all()) {
+        if (event.kind != rm::sim::EventKind::WeaponFired) continue;
+        recorded = true;
+        CHECK(event.launchVelocity == shots.front().velocity);
+        CHECK(event.launchVelocity != event.visualDirection);
+    }
+    REQUIRE(recorded);
+}
+
 TEST_CASE("an interceptor launch leads a crossing target", "[interception][lead]") {
     const std::vector<Army> armies = rm::sim::freeForAll(2);
     Roster roster;
@@ -2640,6 +2660,163 @@ TEST_CASE("a turreted weapon fires whatever the hull is doing") {
 
     CHECK(rm::sim::canFireAt(turret, 0, 0));
     CHECK(rm::sim::canFireAt(turret, 0, rm::sim::kBradHalfTurn));  // directly behind
+}
+
+TEST_CASE("a mounted turret slews at its authored rate and fires only once aimed") {
+    // The ring's own gate: the hull never turns, the mount does — and a shot
+    // may not leave until the barrel is on the target.
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+
+    Weapon gun = directFire(10.0f, 300.0f);
+    gun.turreted = true;
+    // Half a radian a second at ten ticks a second: the quarter turn to the
+    // target is ~31 ticks of traverse, not an instant snap.
+    gun.turretYawSpeedRadPerSecond = 0.5f;
+    gun.turretPitchSpeedRadPerSecond = 0.5f;
+    // One degree — the gate floors at a slew step, so this still fires a hair
+    // short of the goal, not at the corpus's ten-degree default.
+    gun.firingToleranceBrads = rm::unitdef::firingToleranceBradsFromDegrees(1.0f);
+
+    Roster roster;
+    const rm::UnitTypeIndex type = roster.addType(gunnerDef(gun));
+    const UnitId gunner = roster.add(type, 0.0f, 0.0f, 0, 100.0f);
+    // Due +X — a quarter turn from the barrel's +Z rest.
+    (void)roster.add(roster.addType(targetDef()), 100.0f, 0.0f, 1, 100.0f);
+
+    // The mount the app would have published: ring and trunnion at (0,1,0),
+    // muzzle three elmos forward of them.
+    rm::sim::UnitCatalog::TurretMountSpec mount;
+    mount.weapon = 0;
+    mount.muzzle = {0.0f, 1.0f, 3.0f};
+    mount.yawPivot = {0.0f, 1.0f, 0.0f};
+    mount.pitchPivot = {0.0f, 1.0f, 0.0f};
+    mount.restDir = {0.0f, 0.0f, 3.0f};
+    roster.catalog.setTurretMount(type, mount);
+    REQUIRE(roster.catalog.turretMount(type).present);
+
+    std::vector<Projectile> shots;
+    for (int tick = 0; tick < 10; ++tick) {
+        (void)rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots,
+                                   roster.rate, nullptr, nullptr, nullptr, static_cast<rm::TickIndex>(tick));
+    }
+    // Half a radian in ten ticks — underway, not arrived, and nothing may
+    // leave while the barrel is still crossing.
+    const rm::Brad midYaw = roster.motion(gunner).turretYaw;
+    CHECK(midYaw > 0);
+    CHECK(rm::sim::headingError(midYaw, rm::sim::kBradQuarterTurn)
+          > rm::sim::kBradQuarterTurn / 4);
+    CHECK(shots.empty());
+
+    for (int tick = 10; tick < 40; ++tick) {
+        (void)rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots,
+                                   roster.rate, nullptr, nullptr, nullptr, static_cast<rm::TickIndex>(tick));
+    }
+    REQUIRE(shots.size() == 1);  // aimed around tick 32, reload ten, so exactly one
+    // The goal is the MUZZLE-aware bearing, a few brads off the geometric
+    // quarter turn — bound it, don't equate it.
+    CHECK(rm::sim::headingError(roster.motion(gunner).turretYaw,
+                                rm::sim::kBradQuarterTurn) < 40);
+    // And it left the barrel — the muzzle three elmos out, swung to +X — not
+    // the hull's middle. The gate's slew-step floor keeps a hair of approach
+    // arc in it, which is the looser Z margin.
+    CHECK(rm::sim::fxToFloat(shots[0].visualOrigin[0]) == Approx(3.0f).margin(0.05f));
+    CHECK(rm::sim::fxToFloat(shots[0].visualOrigin[1]) == Approx(1.0f).margin(0.05f));
+    CHECK(rm::sim::fxToFloat(shots[0].visualOrigin[2]) == Approx(0.0f).margin(0.2f));
+}
+
+TEST_CASE("a dual manipulator alternates its two posed muzzles", "[turret]") {
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+
+    Weapon gun = directFire(10.0f, 300.0f);
+    gun.turreted = true;
+    gun.turretYawSpeedRadPerSecond = 0.5f;
+    gun.turretPitchSpeedRadPerSecond = 0.5f;
+    // One degree, so the gate waits for the converged pose — the origins below
+    // then sit on the posed tips to within a slew step.
+    gun.firingToleranceBrads = rm::unitdef::firingToleranceBradsFromDegrees(1.0f);
+
+    Roster roster;
+    const rm::UnitTypeIndex type = roster.addType(gunnerDef(gun));
+    const UnitId gunner = roster.add(type, 0.0f, 0.0f, 0, 100.0f);
+    (void)roster.add(roster.addType(targetDef()), 100.0f, 0.0f, 1, 100.0f);
+
+    rm::sim::UnitCatalog::TurretMountSpec mount;
+    mount.weapon = 0;
+    mount.muzzle = {0.0f, 1.0f, 3.0f};
+    mount.yawPivot = {0.0f, 1.0f, 0.0f};
+    mount.pitchPivot = {0.0f, 1.0f, 0.0f};
+    mount.restDir = {0.0f, 0.0f, 3.0f};
+    // The second arm: its own trunnion one elmo left of the ring axis and a
+    // rest direction splayed ~9.5 degrees outward — the Titan's geometry, where
+    // one shared solve can never aim both barrels at one target. Retail's
+    // answer is a second aim controller ('Left') with its own yaw and pitch,
+    // which is what `turretYaw2`/`turretPitch2` carry here.
+    mount.dual = true;
+    mount.muzzle2 = {-0.5f, 1.0f, 3.0f};
+    mount.pitchPivot2 = {-1.0f, 1.0f, 0.0f};
+    roster.catalog.setTurretMount(type, mount);
+    REQUIRE(roster.catalog.turretMount(type).dual);
+
+    std::vector<Projectile> shots;
+    for (int tick = 0; tick < 65; ++tick) {
+        (void)rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots,
+                                   roster.rate, nullptr, nullptr, nullptr, static_cast<rm::TickIndex>(tick));
+    }
+    // Aimed around tick 31, a shot every ten after — and the phase bit walks
+    // between the two barrels with each one.
+    REQUIRE(shots.size() >= 2);
+    const auto x = [](const Projectile& shot) {
+        return rm::sim::fxToFloat(shot.visualOrigin[0]);
+    };
+    // +90 degrees of yaw swings the rest +Z muzzle onto +X, 3 elmos out.
+    CHECK(x(shots[0]) == Approx(3.0f).margin(0.05f));
+    CHECK(x(shots[1]) == Approx(3.0f).margin(0.1f));
+    if (shots.size() >= 3) {
+        CHECK(x(shots[2]) == Approx(3.0f).margin(0.05f));
+    }
+    CHECK(roster.motion(gunner).turretMuzzlePhase == shots.size() % 2);
+
+    // The arm's OWN yaw closed the splay: ~-9.5 degrees about the shared +Y
+    // axis, the negative of the rest direction's outward lean.
+    const auto yaw2 =
+        static_cast<std::int16_t>(roster.motion(gunner).turretYaw2);
+    CHECK(yaw2 < -1400);
+    CHECK(yaw2 > -2100);
+
+    // And the fired barrel really is ON the shot: each shot's velocity runs
+    // muzzle → target, and the posed trunnion → muzzle line must agree with it
+    // to within the one-step gate tolerance. The trunnion rides only the ring
+    // yaw (its own pivots hold it still), so pose it by the same +90 degrees:
+    // (x, y, z) -> (z, y, -x) maps (-1, 1, 0) to (0, 1, 1).
+    const auto angleDegrees = [](const Projectile& shot,
+                                 std::array<float, 3> pivot) {
+        const auto axis = [&](std::size_t i) {
+            return rm::sim::fxToFloat(shot.visualOrigin[i]) - pivot[i];
+        };
+        const std::array<float, 3> barrel{axis(0), axis(1), axis(2)};
+        const std::array<float, 3> launch{rm::sim::fxToFloat(shot.velocity[0]),
+                                          rm::sim::fxToFloat(shot.velocity[1]),
+                                          rm::sim::fxToFloat(shot.velocity[2])};
+        const auto dot = barrel[0] * launch[0] + barrel[1] * launch[1]
+                         + barrel[2] * launch[2];
+        const auto len = [](const std::array<float, 3>& v) {
+            return std::sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+        };
+        // Clamp: acos(NaN) on a 1.0000001 ratio would read as a failure on a
+        // perfect alignment.
+        const float cosine = std::clamp(dot / (len(barrel) * len(launch)),
+                                        -1.0f, 1.0f);
+        return std::acos(cosine) * 180.0f / std::numbers::pi_v<float>;
+    };
+    // The first shot may leave one slew step short — the gate floors the firing
+    // tolerance at the per-tick rate (2.86 degrees here). Once the ring has
+    // converged, though, BOTH barrels must sit on their shots to sub-degree:
+    // that is the property the splayed second arm used to break by ~17 degrees.
+    CHECK(angleDegrees(shots[0], {0.0f, 1.0f, 0.0f}) < 3.0f);
+    CHECK(angleDegrees(shots[1], {0.0f, 1.0f, 1.0f}) < 0.5f);
+    if (shots.size() >= 3) {
+        CHECK(angleDegrees(shots[2], {0.0f, 1.0f, 0.0f}) < 0.5f);
+    }
 }
 
 TEST_CASE("an unturreted weapon must be pointed at what it shoots") {

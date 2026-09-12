@@ -4,6 +4,7 @@
 #include "core/map/Scmap.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <optional>
 #include <string_view>
@@ -158,6 +159,7 @@ UnitTypeIndex UnitCatalog::add(const unitdef::UnitDef* def, TickRate rate) {
         largestShieldRadius_ = std::max(largestShieldRadius_, shield.boundingRadiusElmos);
     }
     shields_.push_back(shield);
+    turrets_.push_back(TurretMount{});
 
     std::vector<WeaponRates> weapons;
     if (def != nullptr) {
@@ -170,6 +172,8 @@ UnitTypeIndex UnitCatalog::add(const unitdef::UnitDef* def, TickRate rate) {
             // sentinel — puts a branch in the inner loop to mean "actually use the other one".
             weapons.push_back(WeaponRates{
                 .muzzlePerTick = rate.perTick(weapon.muzzleVelocityElmosPerSecond),
+                .turretYawPerTick = rate.bradPerTick(weapon.turretYawSpeedRadPerSecond),
+                .turretPitchPerTick = rate.bradPerTick(weapon.turretPitchSpeedRadPerSecond),
                 .reloadTicks = reload,
                 .burstDelayTicks =
                     weapon.bursts() ? rate.ticks(weapon.burstDelay) : reload,
@@ -222,6 +226,44 @@ void UnitCatalog::setArmor(unitdef::ArmorRegistry registry,
                            std::vector<unitdef::ArmorMultiplier> matrix) {
     armor_names_ = std::move(registry);
     armor_matrix_ = std::move(matrix);
+}
+
+void UnitCatalog::setTurretMount(UnitTypeIndex type, const TurretMountSpec& spec) {
+    if (static_cast<std::size_t>(type) >= turrets_.size()) {
+        return;
+    }
+    const auto fx3 = [](const std::array<float, 3>& v) {
+        return std::array<Fx, 3>{fxFromFloat(v[0]), fxFromFloat(v[1]), fxFromFloat(v[2])};
+    };
+    // Radians → brads at this one boundary, like every other authored angle.
+    const auto brads = [](float radians) {
+        return static_cast<std::int32_t>(
+            std::lround(static_cast<double>(radians) * (65536.0 / 6.283185307179586)));
+    };
+    TurretMount mount;
+    mount.present = true;
+    mount.weapon = spec.weapon;
+    mount.muzzle = fx3(spec.muzzle);
+    mount.yawPivot = fx3(spec.yawPivot);
+    mount.pitchPivot = fx3(spec.pitchPivot);
+    mount.yawAxis = fx3(spec.yawAxis);
+    mount.pitchAxis = fx3(spec.pitchAxis);
+    mount.dual = spec.dual;
+    mount.muzzle2 = fx3(spec.muzzle2);
+    mount.pitchPivot2 = fx3(spec.pitchPivot2);
+    mount.pitchAxis2 = fx3(spec.pitchAxis2);
+    mount.yawMinBrads = std::clamp(brads(spec.yawMinRadians), -32768, 32767);
+    mount.yawMaxBrads = std::clamp(brads(spec.yawMaxRadians), -32768, 32767);
+    mount.pitchMinBrads = std::clamp(brads(spec.pitchMinRadians), -32768, 32767);
+    mount.pitchMaxBrads = std::clamp(brads(spec.pitchMaxRadians), -32768, 32767);
+    const Fx dx = fxFromFloat(spec.restDir[0]);
+    const Fx dy = fxFromFloat(spec.restDir[1]);
+    const Fx dz = fxFromFloat(spec.restDir[2]);
+    mount.restYaw = fxBearing(dx, dz);
+    const Fx flat = fxHypot(dx, dz);
+    const Fx len = fxHypot(flat, dy);
+    mount.restPitch = len > Fx{} ? fxAsin(dy / len) : Brad{0};
+    turrets_[static_cast<std::size_t>(type)] = std::move(mount);
 }
 
 } // namespace rm::sim

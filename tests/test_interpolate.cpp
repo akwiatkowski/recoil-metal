@@ -114,6 +114,29 @@ TEST_CASE("a turn through north takes the short way round") {
     CHECK(nearZero);
 }
 
+TEST_CASE("the turret pose interpolates the short way round, like the hull") {
+    // The ring's yaw is a `Brad` too: a barrel crossing north lerps through
+    // zero, not around the back. Same wrap fix as the heading, same channel.
+    const UnitId id{0, 1};
+    const float nearlyFull = 2.0f * std::numbers::pi_v<float> - 0.1f;
+    UnitView before = unitAt(id, 0.0f, 0.0f);
+    UnitView after = unitAt(id, 0.0f, 0.0f);
+    before.turretYaw = rm::sim::bradFromRadians(nearlyFull);
+    after.turretYaw = rm::sim::bradFromRadians(0.1f);
+
+    std::vector<DrawUnit> out;
+    rm::interpolate(made(10, {before}), made(11, {after}), 0.5f, out);
+    REQUIRE(out.size() == 1);
+    const float halfway = out[0].turretYaw;
+    const bool nearZero = halfway < 0.05f
+                          || halfway > 2.0f * std::numbers::pi_v<float> - 0.05f;
+    CHECK(nearZero);
+    // And the endpoints stay exact — the pose the sim wrote, unsmoothed.
+    rm::interpolate(made(10, {before}), made(11, {after}), 1.0f, out);
+    CHECK(out[0].turretYaw
+          == Approx(rm::sim::radiansFromBrad(after.turretYaw)).margin(1e-6f));
+}
+
 TEST_CASE("a unit that spawned since the last tick is drawn where it is") {
     // Not blended in from wherever the previous occupant of its slot was standing. This is the
     // whole reason the merge matches by id: slot 0's tank dies, slot 0's engineer spawns, and

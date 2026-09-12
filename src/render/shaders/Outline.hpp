@@ -46,9 +46,14 @@ vertex float4 outlineVertex(uint vid [[vertex_id]],
     const uint poseIndex = poseIndexFor(p, inst.animationPhase);
     const BoneTransformIn bone = bones[poseIndex * p.boneCount + v.boneIndex];
     const float4 boneRotation = float4(bone.rotation);
-    const float3 local = rotateBy(boneRotation, float3(v.position)) + float3(bone.translation);
+    // The aim pose too: a silhouette traced around the REST pose would outline a
+    // barrel that is not where it is drawn.
+    const float3 local = applyBuilderAim(
+        rotateBy(boneRotation, float3(v.position)) + float3(bone.translation), bone, inst, p);
     const float3 world = unitOrient(local, inst) * inst.scale + float3(inst.position);
-    const float3 worldNormal = unitOrient(rotateBy(boneRotation, float3(v.normal)), inst);
+    const float3 worldNormal =
+        unitOrient(applyBuilderAimNormal(rotateBy(boneRotation, float3(v.normal)), bone, inst, p),
+                   inst);
 
     float4 clip = u.viewProjection * float4(world, 1.0);
 

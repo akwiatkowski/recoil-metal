@@ -33,6 +33,10 @@ void snapshotInto(const UnitStore& store, TickIndex tick, Snapshot& out) {
         view.distanceTravelledElmos =
             slot < motion.size() ? motion[slot].distanceTravelledElmos : Fx{};
         view.speedPerTick = slot < motion.size() ? motion[slot].speedPerTick : Fx{};
+        view.turretYaw = slot < motion.size() ? motion[slot].turretYaw : Brad{0};
+        view.turretPitch = slot < motion.size() ? motion[slot].turretPitch : Brad{0};
+        view.turretYaw2 = slot < motion.size() ? motion[slot].turretYaw2 : Brad{0};
+        view.turretPitch2 = slot < motion.size() ? motion[slot].turretPitch2 : Brad{0};
         view.health = slot < health.size() ? health[slot].current : Mag{};
         view.maxHealth = slot < health.size() ? health[slot].maximum : Mag{};
         view.shieldActive = slot < health.size() && health[slot].shield.active();

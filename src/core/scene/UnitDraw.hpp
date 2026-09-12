@@ -47,6 +47,17 @@ struct DrawUnit {
     float rotationY = 0.0f;
     float rotationZ = 0.0f;
 
+    /// The mounted turret's pose in radians — the sim's `MoveState::turretYaw`/
+    /// `turretPitch` converted once here, then interpolated like the hull angles.
+    /// Presentation slews nothing of its own; this is why the drawn barrel, the
+    /// muzzle flash and the launch origin all agree.
+    float turretYaw = 0.0f;
+    float turretPitch = 0.0f;
+    /// The dual manipulator's own aim — `turretYaw2`/`turretPitch2`, its arm's
+    /// yaw and pitch about its own trunnion on top of the ring's.
+    float turretYaw2 = 0.0f;
+    float turretPitch2 = 0.0f;
+
     /// Ground covered, for the walk cycle. Interpolated like everything else — a leg that
     /// stepped at 10 Hz would slide as badly as a body that did.
     float distanceTravelledElmos = 0.0f;

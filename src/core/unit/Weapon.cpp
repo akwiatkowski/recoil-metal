@@ -258,6 +258,20 @@ std::vector<Weapon> weaponsFrom(const lua::Value& weaponArray, bool airborneSour
         weapon.turretPitchSpeedRadPerSecond =
             std::max(0.0f, numberOr(entry, "TurretPitchSpeed", 0.0f))
             * (std::numbers::pi_v<float> / 180.0f);
+        // The traverse's own centre and half-range, NOT the heading arc — see the fields.
+        weapon.turretYawDegrees = numberOr(entry, "TurretYaw", 0.0f);
+        weapon.turretYawRangeDegrees =
+            std::max(0.0f, numberOr(entry, "TurretYawRange", 0.0f));
+        weapon.turretPitchDegrees = numberOr(entry, "TurretPitch", 0.0f);
+        weapon.turretPitchRangeDegrees =
+            std::max(0.0f, numberOr(entry, "TurretPitchRange", 0.0f));
+        weapon.turretDualManipulators =
+            entry.find("TurretDualManipulators") != nullptr
+            && entry.find("TurretDualManipulators")->asBoolean().value_or(false);
+        weapon.turretDualPitchBone =
+            std::string{entry.stringAt("TurretBoneDualPitch").value_or("")};
+        weapon.turretDualMuzzleBone =
+            std::string{entry.stringAt("TurretBoneDualMuzzle").value_or("")};
         if (const lua::Value* racks = entry.find("RackBones");
             racks != nullptr && !racks->items.empty()) {
             const lua::Value& rack = racks->items.front();

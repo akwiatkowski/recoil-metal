@@ -70,6 +70,17 @@ struct UnitView {
     /// the snapshot exists to stop it reaching for.
     Fx speedPerTick{};
 
+    /// The mounted turret's pose, straight out of `MoveState` — the sim slews
+    /// these, the renderer draws them, and interpolating between two ticks is
+    /// what keeps a traversing ring smooth at 120 Hz. Binary radians like every
+    /// angle on this side of the seam.
+    Brad turretYaw = 0;
+    Brad turretPitch = 0;
+    /// The dual manipulator's own angles — `MoveState::turretYaw2`/`turretPitch2`,
+    /// the second arm's independent aim. Zero on everything without one.
+    Brad turretYaw2 = 0;
+    Brad turretPitch2 = 0;
+
     /// What it can still take, for the health bars and the strategic-icon tint.
     Mag health{};
     Mag maxHealth{};

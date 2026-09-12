@@ -30,31 +30,49 @@ namespace rm::app {
 }
 
 /// The primary turret's aim spec from the first turreted weapon, or nothing when the
-/// type has no turret to pose. Yaw limits come from the firing arc (a half-angle either
-/// side of its centre); speeds arrive in radians already. The muzzle doubles as the
+/// type has no turret to pose. The traverse is the turret's OWN authored one —
+/// `TurretYaw`/`TurretPitch` are the rest angles and the ranges are degrees either
+/// side of them (02 §9.4) — while the firing arc the spec used to derive them from
+/// is the hull's. A blueprint that states no range keeps the arc's limits, the
+/// historical answer. Speeds arrive in radians already. The muzzle doubles as the
 /// aim point — it is what the barrel is pointing at the target with.
 [[nodiscard]] std::optional<std::pair<rm::TurretAimSpec, std::size_t>>
 turretSpecFor(const rm::unitdef::UnitDef& def) {
-    constexpr float kPi = std::numbers::pi_v<float>;
+    constexpr float kDegToRad = std::numbers::pi_v<float> / 180.0f;
     for (std::size_t w = 0; w < def.weapons.size(); ++w) {
         const rm::unitdef::Weapon& weapon = def.weapons[w];
         if (!weapon.turreted || weapon.turretYawBone.empty() || weapon.turretPitchBone.empty()
             || weapon.muzzleBone.empty()) {
             continue;
         }
-        const float halfArc = weapon.arcRangeDegrees * kPi / 180.0f;
-        const float centre = weapon.arcCentreDegrees * kPi / 180.0f;
-        return std::make_pair(
-            rm::TurretAimSpec{
-                .yawBone = {.name = weapon.turretYawBone},
-                .pitchBone = {.name = weapon.turretPitchBone},
-                .muzzleBone = {.name = weapon.muzzleBone},
-                .yawMin = centre - halfArc,
-                .yawMax = centre + halfArc,
-                .yawSlew = weapon.turretYawSpeedRadPerSecond,
-                .pitchSlew = weapon.turretPitchSpeedRadPerSecond,
-            },
-            w);
+        rm::TurretAimSpec spec{
+            .yawBone = {.name = weapon.turretYawBone},
+            .pitchBone = {.name = weapon.turretPitchBone},
+            .muzzleBone = {.name = weapon.muzzleBone},
+            .yawSlew = weapon.turretYawSpeedRadPerSecond,
+            .pitchSlew = weapon.turretPitchSpeedRadPerSecond,
+        };
+        spec.yawMin = (weapon.turretYawRangeDegrees > 0.0f
+                           ? weapon.turretYawDegrees - weapon.turretYawRangeDegrees
+                           : weapon.arcCentreDegrees - weapon.arcRangeDegrees)
+                      * kDegToRad;
+        spec.yawMax = (weapon.turretYawRangeDegrees > 0.0f
+                           ? weapon.turretYawDegrees + weapon.turretYawRangeDegrees
+                           : weapon.arcCentreDegrees + weapon.arcRangeDegrees)
+                      * kDegToRad;
+        if (weapon.turretPitchRangeDegrees > 0.0f) {
+            spec.pitchMin =
+                (weapon.turretPitchDegrees - weapon.turretPitchRangeDegrees) * kDegToRad;
+            spec.pitchMax =
+                (weapon.turretPitchDegrees + weapon.turretPitchRangeDegrees) * kDegToRad;
+        }
+        // `TurretDualManipulators`: the second arm's trunnion and muzzle ride the
+        // same ring under the same two angles — only their bones are their own.
+        if (weapon.turretDualManipulators) {
+            spec.pitch2Bone = {.name = weapon.turretDualPitchBone};
+            spec.muzzle2Bone = {.name = weapon.turretDualMuzzleBone};
+        }
+        return std::make_pair(std::move(spec), w);
     }
     return std::nullopt;
 }
@@ -129,6 +147,53 @@ loadUnpackAnimation(UnitScene& scene, const rm::vfs::Vfs& content,
         return &scene.animations.back();
     }
     return nullptr;
+}
+
+/// The sim's copy of the resolved ring, for the type whose batch was just
+/// pushed: pivots and muzzle for slew, gating and the fire origin, converted
+/// once here so the tick runs no float math. Fine mesh only — the coarse
+/// batch reuses this mount, and a second call would overwrite it with
+/// merged-bone approximations.
+void publishTurretMount(UnitScene& scene, rm::UnitTypeIndex type, float meshToElmos) {
+    const rm::UnitBatch& batch = scene.batches.back();
+    const rm::unitdef::UnitDef& resolved = scene.definitions.back();
+    if (!batch.turretAim.exists() || batch.turretWeapon >= resolved.weapons.size()
+        || !resolved.weapons[batch.turretWeapon].visualMuzzleOffset) {
+        return;
+    }
+    const auto& gun = resolved.weapons[batch.turretWeapon];
+    const auto& rig = batch.turretAim;
+    // Rest barrel direction in mesh units (ratios only — scale cancels), for
+    // the sim's rest angles. Same trunnion-to-muzzle line the aim solver uses.
+    const auto& pivot = rig.pitchPivot;
+    rm::sim::UnitCatalog::TurretMountSpec spec;
+    spec.weapon = batch.turretWeapon;
+    spec.muzzle = {(*gun.visualMuzzleOffset)[0], (*gun.visualMuzzleOffset)[1],
+                   (*gun.visualMuzzleOffset)[2]};
+    spec.yawPivot = {rig.yawPivot[0] * meshToElmos, rig.yawPivot[1] * meshToElmos,
+                     rig.yawPivot[2] * meshToElmos};
+    spec.pitchPivot = {rig.pitchPivot[0] * meshToElmos, rig.pitchPivot[1] * meshToElmos,
+                       rig.pitchPivot[2] * meshToElmos};
+    spec.yawAxis = {rig.yawAxis[0], rig.yawAxis[1], rig.yawAxis[2]};
+    spec.pitchAxis = {rig.pitchAxis[0], rig.pitchAxis[1], rig.pitchAxis[2]};
+    spec.restDir = {(*gun.visualMuzzleOffset)[0] / meshToElmos - pivot[0],
+                    (*gun.visualMuzzleOffset)[1] / meshToElmos - pivot[1],
+                    (*gun.visualMuzzleOffset)[2] / meshToElmos - pivot[2]};
+    spec.yawMinRadians = rig.yawMin;
+    spec.yawMaxRadians = rig.yawMax;
+    spec.pitchMinRadians = rig.pitchMin;
+    spec.pitchMaxRadians = rig.pitchMax;
+    // The second arm comes along only with BOTH ends resolved: a pivot with no
+    // muzzle poses nothing the sim can fire from.
+    if (rig.hasPitch2 && gun.visualMuzzle2Offset) {
+        spec.dual = true;
+        spec.muzzle2 = *gun.visualMuzzle2Offset;
+        spec.pitchPivot2 = {rig.pitch2Pivot[0] * meshToElmos,
+                            rig.pitch2Pivot[1] * meshToElmos,
+                            rig.pitch2Pivot[2] * meshToElmos};
+        spec.pitchAxis2 = {rig.pitch2Axis[0], rig.pitch2Axis[1], rig.pitch2Axis[2]};
+    }
+    scene.catalog.setTurretMount(type, spec);
 }
 
 /// A type's walk cycle: the first `*walk*.sca` beside its mesh, loaded into the
@@ -280,7 +345,15 @@ void resolveMuzzleBones(rm::unitdef::UnitDef& def, const rm::Model& model) {
                     weapon.muzzleHeight = rm::sim::fxFromFloat(heightElmos);
                 }
                 resolved = true;
-                break;
+            }
+            if (weapon.turretDualManipulators && !weapon.turretDualMuzzleBone.empty()
+                && sameName(bone.name, weapon.turretDualMuzzleBone)) {
+                // The second arm's tip, for the dual-manipulator mount — same
+                // bone lookup, its own slot so the primary's offset survives.
+                weapon.visualMuzzle2Offset =
+                    std::array<float,3>{bone.globalOffset[0]*def.meshToElmos,
+                                        bone.globalOffset[1]*def.meshToElmos,
+                                        bone.globalOffset[2]*def.meshToElmos};
             }
         }
         // Silent otherwise: flashes and trails fall back to the hull centre,
@@ -685,6 +758,7 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
             scene.setBatchForType(type, scene.batches.size() - 1);
             scene.setPathForType(type, path);
             scene.setTypeTraits(type, move, unit->def.meshToElmos);
+            publishTurretMount(scene, type, unit->def.meshToElmos);
 
             const auto armed = static_cast<std::size_t>(std::ranges::count_if(
                 unit->def.weapons, [](const rm::unitdef::Weapon& w) { return w.fires(); }));
@@ -867,6 +941,10 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
         scene.setBatchForType(type, scene.batches.size() - 1);
         scene.setPathForType(type, blueprintPath);
         scene.setTypeTraits(type, move, unit->def.meshToElmos);
+        // The sim's copy of the ring (see publishTurretMount): fine mesh only.
+        // The coarse batch reuses this mount; resolving it again would
+        // overwrite it with merged-bone approximations.
+        publishTurretMount(scene, type, unit->def.meshToElmos);
 
         // The coarse mesh, when the blueprint declares one: its own batch, drawn instead
         // of the fine one past the cutoff (Scene::lodOfType; the gather routes). Found by
@@ -1032,6 +1110,7 @@ void stageTrial(UnitScene& scene, const rm::HeightField& field,
                 std::span<const rm::mapinfo::StartPosition> starts,
                 const rm::vfs::Vfs& content, std::string_view unitId, std::size_t count,
                 std::size_t foes, float gapElmos) {
+    scene.trialAlignmentDebug = true;
     if (starts.empty() || scene.armies.size() < 2 || count == 0) {
         rm::log::write(rm::log::Level::Warn, "trial",
                         "needs starts and two armies; ignored");

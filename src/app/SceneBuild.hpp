@@ -96,6 +96,11 @@ struct TurretRig {
 [[nodiscard]] TurretRig resolveTurretRig(const rm::Model& model,
                                          const rm::unitdef::UnitDef* def);
 
+/// The sim's copy of the resolved ring — `UnitCatalog::setTurretMount` for the
+/// type whose batch was just pushed. Without it the mount is absent and the sim
+/// slews nothing: the turret tests must call this, not just set `turretAim`.
+void publishTurretMount(UnitScene& scene, rm::UnitTypeIndex type, float meshToElmos);
+
 /// A unit trial: the named blueprint for the first army at the middle of the
 /// starts, enemy T1 scouts and engineers a gap away. See the definition.
 void stageTrial(UnitScene& scene, const rm::HeightField& field,

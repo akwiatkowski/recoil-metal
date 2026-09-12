@@ -324,6 +324,32 @@ struct MoveState {
     /// Fuel ratio spent per tick while climbing, cruising or descending
     /// (`1 / (FuelUseTime × 10)`, `C-223`), converted once at spawn.
     Fx fuelDrainPerTick{};
+
+    /// The primary turret's live pose, relative to the hull, in binary radians.
+    /// OWNED BY THE SIM, not presentation: firing gates on these (a turreted
+    /// gun holds fire until aimed), so they are gameplay state and must be
+    /// deterministic — floats would smear replays. Presentation reads them for
+    /// drawing rather than slewing its own copy, which is what keeps bolts and
+    /// barrels on one line. Zero is straight ahead; only units with a turret
+    /// mount resolved ever move them.
+    Brad turretYaw = 0;
+    Brad turretPitch = 0;
+
+    /// The SECOND manipulator's own angles — `TurretDualManipulators` gives each
+    /// arm an aim controller of its own (`weapon.lua`'s 'Right'/'Left' pair, the
+    /// arm bone yawed AND pitched, its arc a twelfth of the ring's). A shared
+    /// solve cannot converge both barrels: the Titan's arms splay ~8 degrees
+    /// apart in the mesh, which only a per-arm yaw corrects. Zero without a dual
+    /// mount, and meaningless to one.
+    Brad turretYaw2 = 0;
+    Brad turretPitch2 = 0;
+
+    /// Which barrel of a `TurretDualManipulators` mount fires next: 0 the
+    /// primary muzzle, 1 the second. Toggled per shot, so a twin-barrelled
+    /// turret alternates the way the corpus's racks do. State rather than
+    /// derived-from-anything because which muzzle a shot leaves is a sim fact —
+    /// the fired position is hashed through the projectile list either way.
+    std::uint8_t turretMuzzlePhase = 0;
 };
 
 /// C-224 state/deadline transitions, owning the aircraft's next steering destination.

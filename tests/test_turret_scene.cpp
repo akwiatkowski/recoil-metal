@@ -3,17 +3,21 @@
 //
 // Fully synthetic — no content, no models on disk. The batch carries a rig resolved
 // from a four-bone model, the sim supplies the per-weapon target, and gather reads
-// the same path the frame loop does. dtSeconds is zero, so the slew snaps and the
-// assertion sees the goal exactly.
+// the same path the frame loop does. Nonzero frame time exercises visible slew;
+// independently specified barrel points measure alignment after settling.
 #include "app/Match.hpp"
 
 #include "core/data/MoveDef.hpp"
 #include "core/map/HeightField.hpp"
+#include "core/log/Log.hpp"
 #include <catch2/catch_test_macros.hpp>
 
 #include "support/FxMatchers.hpp"
 
 #include <numbers>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 
 using Catch::Approx;
 
@@ -98,6 +102,12 @@ TEST_CASE("a turreted unit aims its drawn turret at its live target", "[turret]"
     });
     REQUIRE(scene.batches.back().turretAim.exists());
     scene.setBatchForType(type, 0);
+    // The sim's own mount: slew, gate and launch origin all read the catalog,
+    // not the drawn rig. The muzzle offset is what resolveMuzzleBones would
+    // write — the Muzzle bone's rest position in elmos.
+    scene.definitions.back().weapons[0].visualMuzzleOffset = {0.0f, 1.0f, 3.0f};
+    rm::app::publishTurretMount(scene, type, 1.0f);
+    REQUIRE(scene.catalog.turretMount(type).present);
 
     // Shooter faces +Z; the target stands off to +X, so an aiming turret shows yaw.
     const rm::sim::UnitId shooter = scene.store.spawn(rm::sim::UnitStore::Spawn{
@@ -124,18 +134,52 @@ TEST_CASE("a turreted unit aims its drawn turret at its live target", "[turret]"
     // The sim acquired the target for the turreted weapon.
     REQUIRE(scene.store.health()[shooter.index].automaticTargets.size() == 1);
     CHECK(scene.store.health()[shooter.index].automaticTargets[0] == target);
+    // The SIM slews the ring now: 2 rad/s at ten ticks a second lands the
+    // quarter turn in ~8 ticks, and the fire gate holds shots until it does.
+    for (int tick = 5; tick < 20; ++tick) {
+        (void)rm::app::advanceMatch(runner, tick, 0.0f);
+    }
 
-    scene.publish(4);
-    scene.publish(4);
+    scene.publish(19);
+    scene.publish(19);
     scene.gatherForDrawing(1.0f, nullptr, {}, 0.0f);
     REQUIRE(scene.batches[0].instances.size() == 2);
-    // One instance aims ~90 degrees to the side; the other (the target, whose own
-    // turret aims back) is equally deflected. Both are far from rest.
-    bool aimed = false;
     for (const rm::UnitInstance& instance : scene.batches[0].instances) {
-        if (std::abs(instance.builderYaw) > 1.0f) {
-            aimed = true;
-        }
+        // Both shooters have a barrel pivot one unit above ground. Their enemies
+        // are 50 units away, at ground level: this expectation never calls aimAt.
+        const float dx = instance.position[0] < 25.0f ? 50.0f : -50.0f;
+        const auto error = instance.barrelAlignmentErrorDegrees(
+            scene.batches[0].turretAim, 2, {0, 1, 0}, {0, 1, 3}, {dx, -1, 0});
+        REQUIRE(error.has_value());
+        INFO("barrel alignment error (degrees): " << *error);
+        // Sub-degree, not zero: the solve aims the MUZZLE at the target while
+        // this measures the pitch bone's own axis — a bone base an elmo off the
+        // muzzle keeps ~0.2 degrees of parallax no solve can remove.
+        CHECK(*error < 0.5f);
     }
-    CHECK(aimed);
+
+    const auto logPath = std::filesystem::temp_directory_path() / "rm-trial-alignment.log";
+    std::filesystem::remove(logPath);
+    REQUIRE(rm::log::configure({.filePath = logPath.string(), .stderrEnabled = false}));
+    struct RestoreLogging {
+        ~RestoreLogging() { (void)rm::log::configure({}); }
+    } restoreLogging;
+    scene.trialAlignmentShots.push_back(rm::sim::Event{
+        .kind = rm::sim::EventKind::WeaponFired, .unit = shooter,
+        .visualId = "test_turret_tank:test turret gun",
+        .launchVelocity = {rm::sim::Fx{}, rm::sim::Fx{}, rm::sim::Fx::fromInt(1)}});
+    scene.gatherForDrawing(1.0f, nullptr, {}, 1.0f / 60.0f);
+    CHECK(scene.trialAlignmentShots.empty());
+    // A deliberately sideways launch must print 90, not a success flag.
+    std::ifstream logInput(logPath);
+    const std::string logged{std::istreambuf_iterator<char>{logInput}, {}};
+    CHECK(logged.find("[trial-aim]") != std::string::npos);
+    // The barrel aims at the LIVE target, not exactly ±X, so the sideways
+    // launch lands a few degrees off the literal 90 — parse, don't grep.
+    const auto degreePos = logged.find("error_deg=");
+    REQUIRE(degreePos != std::string::npos);
+    CHECK(std::strtof(logged.c_str() + degreePos + 10, nullptr) > 45.0f);
+    CHECK(logged.find("weapon=test_turret_tank:test turret gun") != std::string::npos);
+    CHECK(logged.find('\033') == std::string::npos);
+    std::filesystem::remove(logPath);
 }

@@ -114,11 +114,10 @@ TEST_CASE("a save preserves economy carry and pending army lifecycle", "[save-st
                         std::invalid_argument);
     }
     SECTION("corrupt section counts cannot allocate from an unbounded payload") {
-        const auto absent = SaveState::encode({.random = random.snapshot()});
         auto corrupt = bytes;
-        // The empty v16 aircraft trailer follows v15's presence byte. The first
-        // economy army count replaces that position in the populated snapshot.
-        writeU32(corrupt, absent.size() - sizeof(std::uint32_t),
+        // This save has no motion slots, so the last word is the v25 dual-pose
+        // section's count. A bogus count there must be rejected, not trusted.
+        writeU32(corrupt, corrupt.size() - sizeof(std::uint32_t),
                  std::numeric_limits<std::uint32_t>::max());
         CHECK_FALSE(SaveState::decode(corrupt));
     }
@@ -366,6 +365,31 @@ TEST_CASE("the current save state restores shared queued commands and their allo
     CHECK(restored.allocateCommandId(source) == rm::commandId(source, 1));
 }
 
+TEST_CASE("the turret pose survives a save round-trip", "[save-state]") {
+    using namespace rm::sim;
+    UnitStore original;
+    const auto unit = original.spawn({});
+    original.motion()[unit.index].turretYaw = static_cast<rm::Brad>(40000);
+    original.motion()[unit.index].turretPitch = static_cast<rm::Brad>(12345);
+    original.motion()[unit.index].turretYaw2 = static_cast<rm::Brad>(50000);
+    original.motion()[unit.index].turretPitch2 = static_cast<rm::Brad>(54321);
+    original.motion()[unit.index].turretMuzzlePhase = 1;
+
+    RandomStream random{std::uint32_t{7}};
+    const SaveState state{.tick = 9, .random = random.snapshot(),
+                          .units = original.snapshot()};
+    const auto bytes = SaveState::encode(state);
+    const auto restored = SaveState::decode(bytes);
+    REQUIRE(restored);
+    REQUIRE(restored->units.motion.size() == 1);
+    CHECK(restored->units.motion[0].turretYaw == static_cast<rm::Brad>(40000));
+    CHECK(restored->units.motion[0].turretPitch == static_cast<rm::Brad>(12345));
+    CHECK(restored->units.motion[0].turretYaw2 == static_cast<rm::Brad>(50000));
+    CHECK(restored->units.motion[0].turretPitch2 == static_cast<rm::Brad>(54321));
+    CHECK(restored->units.motion[0].turretMuzzlePhase == 1);
+    CHECK(SaveState::encode(*restored) == bytes);
+}
+
 TEST_CASE("historic attachment saves derive offsets from their transforms", "[save-state]") {
     UnitStore original;
     const auto parent = original.spawn({.transform = {.x = rm::sim::Fx::fromInt(10),
@@ -408,7 +432,12 @@ TEST_CASE("historic attachment saves derive offsets from their transforms", "[sa
     constexpr std::size_t kV22BoneBytes = sizeof(std::uint32_t) + kSlots * 8 * sizeof(std::uint32_t);
     // V23 trails one presence byte (this fixture leaves no wrecks, so the pool is null).
     constexpr std::size_t kV23AbsentFeatureBytes = sizeof(std::uint8_t);
-    v7.resize(v7.size() - kV23AbsentFeatureBytes - kV22BoneBytes - kV21BankBytes - kV20EmptyCapturesBytes - kV19EmptyEnhancementsBytes - kV18SubmarineBytes - kV16ControllerBytes - kV15AbsentEconomyBytes - kV14MotionBytes - kV10RedirectBytes - kV9SiloAmmoBytes
+    // V24 trails the turret pose: one count word plus yaw, pitch and the
+    // dual-muzzle phase byte per motion slot.
+    constexpr std::size_t kV24TurretPoseBytes = sizeof(std::uint32_t) + kSlots * 9;
+    // V25 trails the dual manipulator's own angles: count plus two words per slot.
+    constexpr std::size_t kV25DualPoseBytes = sizeof(std::uint32_t) + kSlots * 8;
+    v7.resize(v7.size() - kV25DualPoseBytes - kV24TurretPoseBytes - kV23AbsentFeatureBytes - kV22BoneBytes - kV21BankBytes - kV20EmptyCapturesBytes - kV19EmptyEnhancementsBytes - kV18SubmarineBytes - kV16ControllerBytes - kV15AbsentEconomyBytes - kV14MotionBytes - kV10RedirectBytes - kV9SiloAmmoBytes
               - kV8CommandStateBytes);
     writeU32(v7, 4, 7);
     writeU32(v7, 16, static_cast<std::uint32_t>(v7.size() - 20));

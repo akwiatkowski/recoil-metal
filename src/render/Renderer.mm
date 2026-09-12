@@ -1161,7 +1161,7 @@ void Renderer::encodeScene(MTL::CommandBuffer* commandBuffer, MTL::RenderPassDes
                 static_cast<std::uint32_t>(batch.boneStrideBytes / sizeof(BoneTransform));
             pose.duration = batch.duration;
             pose.time = batch.animationDrivenByInstance ? 0.0f : animationTime_;
-            setBuilderAimUniforms(pose, batch.builderAim);
+            setAimUniforms(pose, batch.builderAim, batch.turretAim);
             pose.recoilDistance = batch.recoilDistance;
             pose.unpackOneshot = batch.unpackOneshot ? 1u : 0u;
             encoder->setVertexBytes(&pose, sizeof(pose), kPoseUniformBufferIndex);
@@ -1264,7 +1264,7 @@ void Renderer::encodeScene(MTL::CommandBuffer* commandBuffer, MTL::RenderPassDes
                 batch.boneStrideBytes / sizeof(BoneTransform));
             pose.duration = batch.duration;
             // Zero hands the whole decision to the instances — see UnitBatch.
-            setBuilderAimUniforms(pose, batch.builderAim);
+            setAimUniforms(pose, batch.builderAim, batch.turretAim);
             pose.recoilDistance = batch.recoilDistance;
             pose.unpackOneshot = batch.unpackOneshot ? 1u : 0u;
             encoder->setVertexBytes(&pose, sizeof(pose), kPoseUniformBufferIndex);

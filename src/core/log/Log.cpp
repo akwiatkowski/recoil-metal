@@ -137,7 +137,8 @@ void write(Level level, std::string_view category, std::string_view message) noe
         record += '\n';
 
         if (log.stderrEnabled) {
-            const bool red = level == Level::Error && ::isatty(::fileno(stderr));
+            const bool red = (level == Level::Error || category == "trial-aim")
+                             && ::isatty(::fileno(stderr));
             if (red) std::fputs("\033[31m", stderr);
             std::fwrite(record.data(), 1, record.size(), stderr);
             if (red) std::fputs("\033[0m", stderr);

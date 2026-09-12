@@ -296,9 +296,10 @@ std::size_t aimAtTargets(UnitStore& store, const UnitCatalog& catalog,
 /// without reaching into the projectile list.
 ///
 /// Firing IS gated on facing now, but only for the weapons that need it — see `canFireAt`.
-/// A turreted weapon fires whatever the hull is doing, because it aims independently and
-/// this engine does not animate turrets; an unturreted one has to be pointed at its target,
-/// which is what stops a tank firing out of its side armour.
+/// A mounted turret slews its own `MoveState::turretYaw`/`turretPitch` toward the target at
+/// the authored rates and holds fire until the ring is on it; a turreted weapon with no
+/// resolved mount keeps the old answer — the hull needn't face — and an unturreted one has
+/// to be pointed at its target, which is what stops a tank firing out of its side armour.
 /// The rate is passed rather than read from a constant, because the shot it creates carries
 /// a lifetime in ticks and that number is only meaningful against a rate (§5.1).
 std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
@@ -360,11 +361,16 @@ void advanceProjectiles(std::vector<Projectile>& projectiles, UnitStore& store,
 /// `damage` is the weapon's resolved table. Passed in rather than read from `weapon.damage`
 /// for the same reason `muzzlePerTick` is: the authored figure becomes a usable one only once
 /// the match's armour classes are known, and that resolution belongs to `UnitCatalog`.
+/// `muzzleWorld` is the resolved turret muzzle when the mount provided one: the
+/// shot leaves that exact point rather than `from` lifted by a generic height.
+/// Absent — the unturreted or unresolved case — the legacy `muzzleHeight` lift
+/// applies, which is the contract the fire sites without a mount still use.
 [[nodiscard]] Projectile launch(std::array<Fx, 3> from, std::array<Fx, 3> to,
                                  const unitdef::Weapon& weapon, int byArmy, TickRate rate,
                                  Fx muzzlePerTick, const unitdef::DamageProfile& damage,
                                  UnitId firedBy = {}, bool interceptor = false,
-                                 UnitId target = {});
+                                 UnitId target = {},
+                                 std::optional<std::array<Fx, 3>> muzzleWorld = std::nullopt);
 
 /// Spreads `damage` over everything within `radiusElmos` of `centre`, and returns how
 /// much was dealt in total.

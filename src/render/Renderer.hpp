@@ -844,6 +844,11 @@ private:
         /// retained CPU-side only to populate PoseUniforms; flags themselves live in boneBuffer.
         BuilderAimRig builderAim;
 
+        /// The turret rig, SAME shape as the arm's but feeding the turret block of
+        /// PoseUniforms and bits 3-5 of the bone flags. Kept beside builderAim so a
+        /// batch can carry both (the ACU does); empty when the weapon never resolved.
+        BuilderAimRig turretAim;
+
         /// Recoil slide for the primary weapon: subtree flags OR'd into the bone
         /// buffer at upload, travel distance for PoseUniforms. The return rate
         /// stays scene-side (UnitBatch), where the per-tick decay runs.

@@ -151,6 +151,19 @@ void feedMotion(StateHash& h, const MoveState& motion) noexcept {
         feed(h, waypoint);
     }
     feed(h, motion.pathIndex);
+    // The live turret pose. Fed always: a traversing ring is gameplay state
+    // (fire gates on it), and zeros for the unturreted keep their digests
+    // moving exactly as before only until the first traverse — after which a
+    // changed digest is the truth, not churn.
+    feed(h, static_cast<std::uint64_t>(motion.turretYaw));
+    feed(h, static_cast<std::uint64_t>(motion.turretPitch));
+    // The dual manipulator's own angles — the second arm's pose is gameplay
+    // state the same way: its muzzle is where half the shots leave.
+    feed(h, static_cast<std::uint64_t>(motion.turretYaw2));
+    feed(h, static_cast<std::uint64_t>(motion.turretPitch2));
+    // The dual manipulator's barrel-on-trigger bit — gameplay state: which
+    // muzzle the next shot leaves depends on it.
+    feed(h, static_cast<std::uint64_t>(motion.turretMuzzlePhase));
     if (motion.pathPhaseCellsX != 0) {
         feed(h, motion.pathPhaseStartX);
         feed(h, motion.pathPhaseStartZ);

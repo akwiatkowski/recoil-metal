@@ -1449,6 +1449,9 @@ rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) 
         }
     }
     for (const rm::sim::Event& event : scene.events.all()) {
+        if (scene.trialAlignmentDebug && event.kind == rm::sim::EventKind::WeaponFired) {
+            scene.trialAlignmentShots.push_back(event);
+        }
         if (event.kind == rm::sim::EventKind::UnitDestroyed) {
             ++runner.unitsDestroyed;
             // A recycled slot must not inherit its predecessor's deploy time or

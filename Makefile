@@ -500,6 +500,8 @@ shot-engineer: build check-fa
 #
 #   make trial TRIAL=UEL0303 TRIAL_N=2 TRIAL_FOES=6 TRIAL_GAP=120
 # Negative gaps stage the crowd the other way (west), for mirror checks.
+# Each firing event logs rig-vs-launch angular error in degrees (red on a terminal).
+# SECONDS applies to trial-shot; interactive trial stays open until you close it.
 TRIAL ?= UEL0303
 TRIAL_N ?= 2
 TRIAL_FOES ?= 6

@@ -198,6 +198,14 @@ public:
         /// tick so nothing divides by zero.
         Fx muzzlePerTick{};
 
+        /// Binary radians per tick the ring and trunnion travel. Zero for fixed
+        /// guns (and for blueprints that omit the speeds), which never slew —
+        /// and therefore never gate, since a zero rate reaches any goal never.
+        /// Converted here for the same reason as everything else in this
+        /// struct: the tick runs no float math.
+        std::int32_t turretYawPerTick = 0;
+        std::int32_t turretPitchPerTick = 0;
+
         /// Ticks between shots, never less than one.
         TickCount reloadTicks = 1;
 
@@ -224,6 +232,76 @@ public:
         /// `flatDamage(weapon.damage)`, which is exactly the scalar the sim used before P10.1.
         /// That equivalence is what lets the whole corpus of existing tests stay untouched.
         unitdef::DamageProfile damage{};
+    };
+
+    /// The primary turret's mount, in model-space elmos at rest: where the shots
+    /// leave and what they pivot about. Set once per type by whoever resolved
+    /// the model (the app's batch build); absent until then, and the sim fires
+    /// from hull centre exactly as before. Bone names never enter the sim —
+    /// only these numbers cross the seam, so a renamed bone breaks resolution
+    /// (loudly, at resolve time) rather than aim.
+    struct TurretMount {
+        bool present = false;
+        /// Which weapon this ring carries, into the type's weapon list.
+        std::size_t weapon = 0;
+        /// The muzzle tip at rest, for the fire origin.
+        std::array<Fx, 3> muzzle{};
+        /// The ring and trunnion centres, for posing the tip.
+        std::array<Fx, 3> yawPivot{};
+        std::array<Fx, 3> pitchPivot{};
+        /// Unit ring/trunnion axes. Almost always +Y/+X; stored, not assumed,
+        /// because a hunched torso tilts its ring and the sim must pose what
+        /// the mesh states.
+        std::array<Fx, 3> yawAxis{Fx{}, Fx::fromInt(1), Fx{}};
+        std::array<Fx, 3> pitchAxis{Fx::fromInt(1), Fx{}, Fx{}};
+        /// The barrel's rest direction as yaw/pitch, derived once at set time
+        /// by the same CORDIC the tick uses — never libm, so two platforms
+        /// resolving one archive slew identically.
+        Brad restYaw = 0;
+        Brad restPitch = 0;
+
+        /// The authored traverse, in signed binary radians either side of rest.
+        /// The aim solve clamps to them before the slew steps, so a turret
+        /// never chases a target its ring cannot reach — it parks at the edge
+        /// and fires there, which is retail's "aimed at the arc limit".
+        std::int32_t yawMinBrads = -32768;
+        std::int32_t yawMaxBrads = 32767;
+        std::int32_t pitchMinBrads = -16384;
+        std::int32_t pitchMaxBrads = 16384;
+
+        /// `TurretDualManipulators`: the second arm's muzzle tip and trunnion,
+        /// posed by its OWN slew scalars (`MoveState::turretYaw2/Pitch2`) — the
+        /// retail 'Left' aim controller, needed because the two arms' rest
+        /// directions splay and one solve cannot aim both. `pitchAxis2` is
+        /// already sign-normalised at resolve so a positive pitch elevates.
+        bool dual = false;
+        std::array<Fx, 3> muzzle2{};
+        std::array<Fx, 3> pitchPivot2{};
+        std::array<Fx, 3> pitchAxis2{Fx::fromInt(1), Fx{}, Fx{}};
+    };
+
+    /// What `setTurretMount` takes, in model-space FLOATS: the content boundary
+    /// speaks floats, the mount speaks fixed point. Traverse limits arrive in
+    /// RADIANS — the resolved rig already carries them that way — and convert to
+    /// brads here, once.
+    struct TurretMountSpec {
+        std::size_t weapon = 0;
+        std::array<float, 3> muzzle{};
+        std::array<float, 3> yawPivot{};
+        std::array<float, 3> pitchPivot{};
+        std::array<float, 3> yawAxis{0.0f, 1.0f, 0.0f};
+        std::array<float, 3> pitchAxis{1.0f, 0.0f, 0.0f};
+        /// The barrel's rest direction (muzzle minus trunnion is the usual value),
+        /// for the derived rest angles.
+        std::array<float, 3> restDir{0.0f, 0.0f, 1.0f};
+        std::array<float, 3> muzzle2{};
+        std::array<float, 3> pitchPivot2{};
+        std::array<float, 3> pitchAxis2{1.0f, 0.0f, 0.0f};
+        bool dual = false;
+        float yawMinRadians = -3.14159265f;
+        float yawMaxRadians = 3.14159265f;
+        float pitchMinRadians = -1.5707964f;
+        float pitchMaxRadians = 1.5707964f;
     };
 
     // --- Armour (PLAN2.md §7 P10.1, `ADR-033`, D12) ---------------------------------
@@ -316,6 +394,21 @@ public:
         return weapons_[type][weapon];
     }
 
+    /// The primary turret's mount, or an absent record when nobody resolved
+    /// one (tests that never load a model, types with no turret). Absent
+    /// means legacy behaviour: slew stays at rest and fire is ungated.
+    [[nodiscard]] const TurretMount& turretMount(UnitTypeIndex type) const noexcept {
+        static constexpr TurretMount kNone{};
+        return type < turrets_.size() ? turrets_[type] : kNone;
+    }
+
+    /// Records the resolved mount from a `TurretMountSpec`. Converts with
+    /// fxFromFloat (exact) and derives rest angles by the same CORDIC the tick
+    /// uses — never libm, so two platforms resolving one archive slew
+    /// identically. Idempotent per type in practice (one batch per type); a
+    /// second call overwrites, so coarse meshes must not.
+    void setTurretMount(UnitTypeIndex type, const TurretMountSpec& spec);
+
     /// The definition for a type, or null — for an unregistered index as well as for a type
     /// registered without one. A pass that reads this must handle null either way, so
     /// bounds-checking to the same answer costs nothing and removes a crash.
@@ -341,6 +434,7 @@ private:
     std::vector<IntelRadii> intel_;
     std::vector<AdjacencyInfo> adjacency_;
     std::vector<ShieldInfo> shields_;
+    std::vector<TurretMount> turrets_;
     Fx largestShieldRadius_{};
 
     /// The content's armour classes and Supreme Commander's multiplier table. Both empty of

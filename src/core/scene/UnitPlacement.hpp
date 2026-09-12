@@ -5,11 +5,15 @@
 #include "core/scene/TeamColours.hpp"
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <vector>
 
 namespace rm {
+
+struct BuilderAimRig;
 
 // One drawn instance of a model. Uploaded straight to the GPU as per-instance
 // data, so the layout is fixed and asserted below.
@@ -51,14 +55,42 @@ struct UnitInstance {
     float builderYaw = 0.0f;
     float builderPitch = 0.0f;
 
+    /// Per-instance TURRET pose, radians around the batch's resolved ring and
+    /// trunnion axes — separate fields from the builder's because a unit can carry
+    /// both (the ACU does), and the subtrees are disjoint flag bits in the bone
+    /// buffer. The SIM's `MoveState::turretYaw`/`turretPitch` projected to float:
+    /// presentation slews nothing of its own, which is what keeps the drawn
+    /// barrel, the muzzle flash and the shot's launch on one line.
+    float turretYaw = 0.0f;
+    float turretPitch = 0.0f;
+
+    /// The dual manipulator's own aim — `MoveState::turretYaw2`/`turretPitch2`:
+    /// the second arm yaws AND pitches about its own trunnion on top of the ring,
+    /// which is the only way two splayed barrels both reach the target.
+    float turretYaw2 = 0.0f;
+    float turretPitch2 = 0.0f;
+
     /// Per-instance recoil slide, 0 at rest to 1 fully kicked. Multiplied by the
     /// batch's travel distance in the vertex shader; zero leaves every bone put.
     float recoil = 0.0f;
+
+    /// CPU measurement of the current drawn barrel versus a world-space direction
+    /// (e.g. initial projectile velocity): 0 degrees aligned, 180 reversed.
+    /// Supply independently identified base/tip points on the SAME barrel bone,
+    /// in model space AFTER animation but BEFORE turret and instance transforms.
+    /// Does not call the aim solver or sample animation/GPU output. Shared recoil
+    /// translation cancels from the axis. Call on the instance gathered for the
+    /// frame being tested, and REQUIRE a value before asserting a tolerance.
+    /// Returns nullopt for missing bones, degenerate or non-finite geometry.
+    [[nodiscard]] std::optional<float> barrelAlignmentErrorDegrees(
+        const BuilderAimRig& rig, std::size_t barrelBone,
+        const std::array<float, 3>& barrelBase, const std::array<float, 3>& barrelTip,
+        const std::array<float, 3>& worldDirection) const noexcept;
 };
 
-static_assert(sizeof(UnitInstance) == 60,
+static_assert(sizeof(UnitInstance) == 76,
               "UnitInstance must stay tightly packed — the shader reads it as a "
-              "packed_float3, two floats, a packed_float4 and six floats");
+              "packed_float3, two floats, a packed_float4 and ten floats");
 
 // Scatters instances across the map's land, sitting on the terrain.
 //

@@ -255,25 +255,49 @@ struct PoseUniforms {
     float recoilDistance = 0.0f;
     /// Nonzero when the batch animation plays once and holds its last frame.
     std::uint32_t unpackOneshot = 0;
-    std::array<std::uint32_t, 1> padding{};
+    /// Nonzero when the batch carries a resolved TURRET rig — the second pivot
+    /// set below is then live and the shader aims bits 3-5 of each bone's flags.
+    std::uint32_t turretAim = 0;
     std::array<float, 4> yawPivot{};
     std::array<float, 4> yawAxis{};
     std::array<float, 4> pitchPivot{};
     std::array<float, 4> pitchAxis{};
+    std::array<float, 4> turretYawPivot{};
+    std::array<float, 4> turretYawAxis{};
+    std::array<float, 4> turretPitchPivot{};
+    std::array<float, 4> turretPitchAxis{};
+    std::array<float, 4> turretPitch2Pivot{};
+    std::array<float, 4> turretPitch2Axis{};
 };
-static_assert(sizeof(PoseUniforms) == 96, "PoseUniforms must match the MSL layout");
+static_assert(sizeof(PoseUniforms) == 192, "PoseUniforms must match the MSL layout");
 static_assert(offsetof(PoseUniforms, yawPivot) == 32, "builder vectors start on float4 alignment");
+static_assert(offsetof(PoseUniforms, turretYawPivot) == 96,
+              "turret vectors start on float4 alignment");
 
-inline void setBuilderAimUniforms(PoseUniforms& pose, const BuilderAimRig& rig) noexcept {
-    if (!rig.exists()) {
-        return;
+// One batch, TWO aim rigs: the builder arm owns bits 0-2 and instance angles
+// builderYaw/Pitch, the turret owns bits 3-5 and turretYaw/Pitch. A unit like
+// the ACU carries both, and their bone subtrees never overlap.
+inline void setAimUniforms(PoseUniforms& pose, const BuilderAimRig& rig,
+                           const BuilderAimRig& turretRig) noexcept {
+    if (rig.exists()) {
+        pose.builderAim = 1;
+        for (std::size_t i = 0; i < 3; ++i) {
+            pose.yawPivot[i] = rig.yawPivot[i];
+            pose.yawAxis[i] = rig.yawAxis[i];
+            pose.pitchPivot[i] = rig.pitchPivot[i];
+            pose.pitchAxis[i] = rig.pitchAxis[i];
+        }
     }
-    pose.builderAim = 1;
-    for (std::size_t i = 0; i < 3; ++i) {
-        pose.yawPivot[i] = rig.yawPivot[i];
-        pose.yawAxis[i] = rig.yawAxis[i];
-        pose.pitchPivot[i] = rig.pitchPivot[i];
-        pose.pitchAxis[i] = rig.pitchAxis[i];
+    if (turretRig.exists()) {
+        pose.turretAim = 1;
+        for (std::size_t i = 0; i < 3; ++i) {
+            pose.turretYawPivot[i] = turretRig.yawPivot[i];
+            pose.turretYawAxis[i] = turretRig.yawAxis[i];
+            pose.turretPitchPivot[i] = turretRig.pitchPivot[i];
+            pose.turretPitchAxis[i] = turretRig.pitchAxis[i];
+            pose.turretPitch2Pivot[i] = turretRig.pitch2Pivot[i];
+            pose.turretPitch2Axis[i] = turretRig.pitch2Axis[i];
+        }
     }
 }
 // The splat's own constant buffer, kept separate from the shared Uniforms

@@ -233,8 +233,11 @@ vertex float4 unitShadowVertex(uint vid [[vertex_id]],
 
     const uint poseIndex = poseIndexFor(p, inst.animationPhase);
     const BoneTransformIn bone = bones[poseIndex * p.boneCount + v.boneIndex];
-    const float3 local =
-        rotateBy(float4(bone.rotation), float3(v.position)) + float3(bone.translation);
+    // The aim pose too: a barrel slewed onto a target should cast the shadow of
+    // where it IS, not where it rested.
+    const float3 local = applyBuilderAim(
+        rotateBy(float4(bone.rotation), float3(v.position)) + float3(bone.translation),
+        bone, inst, p);
 
     const float3 world = unitOrient(local, inst) * inst.scale + float3(inst.position);
     return u.lightViewProjection * float4(world, 1.0);

@@ -49,6 +49,12 @@ constexpr std::uint32_t kVersion21 = 21;
 constexpr std::uint32_t kVersion22 = 22;
 /// Version 23 adds the wreck pool (nullable, trailing); older readers keep null features.
 constexpr std::uint32_t kVersion23 = 23;
+/// Version 24 adds the mounted turret's live pose (yaw, pitch, dual-muzzle phase);
+/// older readers restore turrets at rest.
+constexpr std::uint32_t kVersion24 = 24;
+/// V25 adds the dual manipulator's own angles (`turretYaw2`/`turretPitch2`) —
+/// the second arm's independent aim state — as another trailing section.
+constexpr std::uint32_t kVersion25 = 25;
 // MT19937 serializes its 624 state words plus an index, all as unsigned decimal numbers separated
 // by one space. This rejects oversized malformed frames before they allocate their payload.
 constexpr std::size_t kMaxRandomStatePayload =
@@ -713,6 +719,53 @@ void writeSubMotion(PayloadWriter& w, std::span<const MoveState> motion) {
     }
 }
 
+void writeTurretPose(PayloadWriter& w, std::span<const MoveState> motion) {
+    w.count(motion.size());
+    for (const auto& state : motion) {
+        // Signed, matching the reader's range check: a `Brad` past half a turn
+        // is the negative of the same angle, and the cast below wraps it back.
+        w.i32(static_cast<std::int16_t>(state.turretYaw));
+        w.i32(static_cast<std::int16_t>(state.turretPitch));
+        w.u8(state.turretMuzzlePhase);
+    }
+}
+
+bool readTurretPose(PayloadReader& r, std::vector<MoveState>& motion) {
+    std::size_t count{};
+    if (!r.count(count, 9) || count != motion.size()) return false;
+    for (auto& state : motion) {
+        std::int32_t yaw{}, pitch{};
+        std::uint8_t phase{};
+        if (!r.i32(yaw) || !r.i32(pitch) || !r.u8(phase) || phase > 1
+            || yaw < -32768 || yaw > 32767 || pitch < -32768 || pitch > 32767) return false;
+        state.turretYaw = static_cast<Brad>(yaw);
+        state.turretPitch = static_cast<Brad>(pitch);
+        state.turretMuzzlePhase = phase;
+    }
+    return true;
+}
+
+void writeTurretPoseDual(PayloadWriter& w, std::span<const MoveState> motion) {
+    w.count(motion.size());
+    for (const auto& state : motion) {
+        w.i32(static_cast<std::int16_t>(state.turretYaw2));
+        w.i32(static_cast<std::int16_t>(state.turretPitch2));
+    }
+}
+
+bool readTurretPoseDual(PayloadReader& r, std::vector<MoveState>& motion) {
+    std::size_t count{};
+    if (!r.count(count, 8) || count != motion.size()) return false;
+    for (auto& state : motion) {
+        std::int32_t yaw{}, pitch{};
+        if (!r.i32(yaw) || !r.i32(pitch)
+            || yaw < -32768 || yaw > 32767 || pitch < -32768 || pitch > 32767) return false;
+        state.turretYaw2 = static_cast<Brad>(yaw);
+        state.turretPitch2 = static_cast<Brad>(pitch);
+    }
+    return true;
+}
+
 bool readSubMotion(PayloadReader& r, std::vector<MoveState>& motion) {
     std::size_t count{};
     if (!r.count(count, 15) || count != motion.size()) return false;
@@ -1176,6 +1229,8 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
     if (version >= kVersion23) {
         writeFeatures(payloadWriter, state.features);
     }
+    if (version >= kVersion24) writeTurretPose(payloadWriter, state.units.motion);
+    if (version >= kVersion25) writeTurretPoseDual(payloadWriter, state.units.motion);
     const std::vector<std::byte> payload = payloadWriter.take();
     if (payload.size() > std::numeric_limits<std::uint32_t>::max()) {
         throw std::length_error("MT19937 state exceeds the v1 save-state payload limit");
@@ -1212,7 +1267,8 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
                && version != kVersion13 && version != kVersion14 && version != kVersion15
                && version != kVersion16 && version != kVersion17 && version != kVersion18
                && version != kVersion19 && version != kVersion20 && version != kVersion21
-               && version != kVersion22 && version != kVersion23)
+               && version != kVersion22 && version != kVersion23 && version != kVersion24
+               && version != kVersion25)
         || (requiredVersion && version != *requiredVersion) || !readU64(bytes, offset, tick)
         || !readU32(bytes, offset, payloadSize) || bytes.size() - offset != payloadSize) {
         return std::nullopt;
@@ -1265,6 +1321,8 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
     if (version >= kVersion22 && !readBoneAttachments(reader, units)) return std::nullopt;
     std::optional<FeatureStore::Snapshot> features;
     if (version >= kVersion23 && !readFeatures(reader, features)) return std::nullopt;
+    if (version >= kVersion24 && !readTurretPose(reader, units.motion)) return std::nullopt;
+    if (version >= kVersion25 && !readTurretPoseDual(reader, units.motion)) return std::nullopt;
     SaveState decoded{.tick = tick,
                       .random = std::move(random),
                        .pathServiceBeats = pathServiceBeats,
@@ -1296,7 +1354,7 @@ std::optional<SaveState> SaveState::decodeV2(std::span<const std::byte> bytes) {
 }
 
 std::vector<std::byte> SaveState::encode(const SaveState& state) {
-    return rm::sim::encode(state, kVersion23);
+    return rm::sim::encode(state, kVersion25);
 }
 
 std::optional<SaveState> SaveState::decode(std::span<const std::byte> bytes) {

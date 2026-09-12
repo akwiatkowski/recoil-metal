@@ -1,6 +1,7 @@
 #include "app/Scene.hpp"
 
 #include "core/unit/UnitBlueprint.hpp"
+#include "core/log/Log.hpp"
 
 #include <algorithm>
 #include <cstdio>
@@ -10,6 +11,84 @@ namespace rm::app {
 // Defined here, declared `extern` in the header — see the note there.
 rm::sim::TickRate gAppTickRate{rm::sim::kDefaultTicksPerSecond};
 bool gInterpolate = true;
+
+void UnitScene::logTrialAlignment() {
+    for (const auto& shot : trialAlignmentShots) {
+        std::optional<float> error;
+        // Use the exact gathered instance (including hull slope and visible slew).
+        // The authored pitch-bone +Z supplies an axis independently of aimDir.
+        if (store.alive(shot.unit)) {
+            const auto* def = catalog.def(store.typeAt(shot.unit.index));
+            for (std::size_t bi = 0; def && bi < drawSlotOf.size(); ++bi) {
+                const auto slot = std::ranges::find(drawSlotOf[bi], shot.unit.index);
+                if (slot == drawSlotOf[bi].end()) continue;
+                const auto& batch = batches[bi];
+                if (!batch.model || !batch.turretAim.exists()
+                    || batch.turretWeapon >= def->weapons.size()) continue;
+                const auto& weapon = def->weapons[batch.turretWeapon];
+                if (def->name + ":" + weapon.label != shot.visualId) continue;
+                // Which barrel fired? `at2` is the exact muzzle the shot left —
+                // the sim wrote it at fire time. A dual manipulator's barrels
+                // sit elmos apart, so the nearer posed muzzle names the arm;
+                // measuring the WRONG one reads its splay as an aim error.
+                std::size_t arm = 0;
+                if (weapon.turretDualManipulators
+                    && !weapon.turretDualMuzzleBone.empty()) {
+                    const auto muzzle0 = weaponMuzzle(shot.unit, shot.visualId, 0);
+                    const auto muzzle1 = weaponMuzzle(shot.unit, shot.visualId, 1);
+                    if (muzzle0 && muzzle1) {
+                        const auto distance2 = [&shot](const std::array<float,3>& p) {
+                            float d = 0.0f;
+                            for (std::size_t axis = 0; axis < 3; ++axis) {
+                                const float delta =
+                                    p[axis] - rm::sim::fxToFloat(shot.at2[axis]);
+                                d += delta * delta;
+                            }
+                            return d;
+                        };
+                        if (distance2(*muzzle1) < distance2(*muzzle0)) {
+                            arm = 1;
+                        }
+                    }
+                }
+                // Measure the bore line — trunnion to muzzle — not the pitch
+                // bone's rest +Z. The solver aims the MUZZLE, and on a splayed
+                // arm the muzzle sits degrees off the bone's own axis: the
+                // bone axis then reads the compensation as an aim error that
+                // does not exist (the Titan reads ~7 degrees per arm).
+                const std::string& muzzleBoneName =
+                    arm == 1 ? weapon.turretDualMuzzleBone : weapon.muzzleBone;
+                const std::array<float, 3> pivot =
+                    arm == 1 ? batch.turretAim.pitch2Pivot
+                             : batch.turretAim.pitchPivot;
+                for (std::size_t bone = 0; bone < batch.model->bones.size(); ++bone) {
+                    const auto& muzzleBone = batch.model->bones[bone];
+                    if (rm::foldedVisualKey(muzzleBone.name)
+                        != rm::foldedVisualKey(muzzleBoneName)) continue;
+                    const auto index = static_cast<std::size_t>(slot - drawSlotOf[bi].begin());
+                    error = batch.instances[index].barrelAlignmentErrorDegrees(
+                        batch.turretAim, bone, pivot, muzzleBone.globalOffset,
+                        {rm::sim::fxToFloat(shot.launchVelocity[0]),
+                         rm::sim::fxToFloat(shot.launchVelocity[1]),
+                         rm::sim::fxToFloat(shot.launchVelocity[2])});
+                    break;
+                }
+                break;
+            }
+        }
+        if (error) {
+            rm::log::writef(rm::log::Level::Info, "trial-aim",
+                "unit=%u:%u weapon=%s metric=rig_vs_launch error_deg=%.3f draw_tick=%llu",
+                shot.unit.index, shot.unit.generation, shot.visualId.c_str(),
+                static_cast<double>(*error), static_cast<unsigned long long>(snapshotCurrent.tick));
+        } else {
+            rm::log::writef(rm::log::Level::Info, "trial-aim",
+                "unit=%u:%u weapon=%s error_deg=unavailable (no drawn primary barrel or invalid direction)",
+                shot.unit.index, shot.unit.generation, shot.visualId.c_str());
+        }
+    }
+    trialAlignmentShots.clear();
+}
 
 /// Builds the roster from the whole blueprint corpus.
 ///

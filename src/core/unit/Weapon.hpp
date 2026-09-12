@@ -297,6 +297,30 @@ struct Weapon {
     std::string turretPitchBone;  ///< `TurretBonePitch`
     float turretYawSpeedRadPerSecond = 0.0f;    ///< authored degrees per second
     float turretPitchSpeedRadPerSecond = 0.0f;  ///< authored degrees per second
+
+    /// The traverse limits the aim manipulator enforces — `TurretYaw` ±
+    /// `TurretYawRange`, `TurretPitch` ± `TurretPitchRange`, in degrees. These are
+    /// the TURRET's own fields, distinct from `HeadingArcCenter`/`Range` (the hull
+    /// arc a turreted weapon does not need). Zero range means unstated, which the
+    /// mount resolver reads as "fall back to the firing arc" for yaw and ±90 for
+    /// pitch rather than as a turret that cannot turn.
+    float turretYawDegrees = 0.0f;
+    float turretYawRangeDegrees = 0.0f;
+    float turretPitchDegrees = 0.0f;
+    float turretPitchRangeDegrees = 0.0f;
+
+    /// `TurretDualManipulators`: a second barrel that elevates WITH the first —
+    /// the Titan's paired arms (`ArmL`/`ArmR`). `TurretBoneDualPitch` is its
+    /// trunnion, `TurretBoneDualMuzzle` its muzzle; both are posed by the same
+    /// slew scalar as the primary arm.
+    bool turretDualManipulators = false;
+    std::string turretDualPitchBone;
+    std::string turretDualMuzzleBone;
+
+    /// Presentation-only rest bone position of the dual muzzle in elmos, resolved
+    /// app-side beside `visualMuzzleOffset`. The sim reads the posed position from
+    /// the turret mount it is published into.
+    std::optional<std::array<float,3>> visualMuzzle2Offset;
     std::string recoilBone;       ///< first rack's `RackBone`
     float recoilDistanceMesh = 0.0f;  ///< as-authored `RackRecoilDistance` (negative = backward); 0 = no recoil
     float recoilReturnSpeedMeshPerSecond = 0.0f;  ///< 0 = unauthored (only 6 weapons state one)

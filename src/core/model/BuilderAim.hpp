@@ -18,6 +18,21 @@ inline constexpr std::uint32_t kBuilderPitchBone = 1U << 1U;
 /// both aims (yaw/pitch bits from its turret rig) and slides (this bit).
 inline constexpr std::uint32_t kBuilderRecoilBone = 1U << 2U;
 
+/// The turret rig's bits, deliberately DISJOINT from the builder's three: a unit
+/// can carry both an arm and a ring (the ACU does), and one bone buffer has to
+/// say which pivots and which per-instance angles each subtree takes. The shader
+/// reads bits 3..5 against `inst.turretYaw`/`turretPitch` and the turret uniform
+/// block; bits 0..2 keep meaning the builder's.
+inline constexpr std::uint32_t kTurretYawBone = 1U << 3U;
+inline constexpr std::uint32_t kTurretPitchBone = 1U << 4U;
+/// The second arm of a `TurretDualManipulators` weapon: its own trunnion pivot,
+/// its own pitch scalar (`turretPitch2`).
+inline constexpr std::uint32_t kTurretPitch2Bone = 1U << 5U;
+/// ...and its own YAW about that same trunnion (`turretYaw2`) — retail's
+/// per-manipulator aim controller, needed because the two arms' rest
+/// directions splay and no shared angle converges both.
+inline constexpr std::uint32_t kTurretYaw2Bone = 1U << 6U;
+
 /// A `BuilderArmManipulator` resolved from blueprint bone references onto one model.
 struct BuilderAimRig {
     std::vector<std::uint32_t> boneFlags;
@@ -43,12 +58,24 @@ struct BuilderAimRig {
     float pitchMax = 0.0f;
     float pitchSlew = 0.0f;
 
+    /// The dual manipulator's trunnion, mesh units. `pitch2Axis` is normalised at
+    /// resolve so the SAME pitch scalar elevates both arms — a mirrored mesh
+    /// otherwise pitches the left barrel down while the right one comes up.
+    std::array<float, 3> pitch2Pivot{};
+    std::array<float, 3> pitch2Axis{{1.0f, 0.0f, 0.0f}};
+    bool hasPitch2 = false;
+
     [[nodiscard]] bool exists() const noexcept { return !boneFlags.empty(); }
 };
 
 struct BuilderAimAngles {
     float yaw = 0.0f;
     float pitch = 0.0f;
+    /// The dual manipulator's own angles — used only by bones carrying
+    /// `kTurretPitch2Bone`/`kTurretYaw2Bone`, so builders and single guns
+    /// never read them.
+    float yaw2 = 0.0f;
+    float pitch2 = 0.0f;
 };
 
 /// Resolves names/indices, pivots, axes, limits and subtree membership once per model.
@@ -65,6 +92,12 @@ struct TurretAimSpec {
     unitdef::BoneRef yawBone;
     unitdef::BoneRef pitchBone;
     unitdef::BoneRef muzzleBone;
+    /// `TurretBoneDualPitch`/`TurretBoneDualMuzzle`, present only when the weapon
+    /// states `TurretDualManipulators`. The second arm shares the yaw ring but
+    /// gets a yaw and pitch of its own about its trunnion — the retail 'Left'
+    /// aim controller.
+    unitdef::BoneRef pitch2Bone;
+    unitdef::BoneRef muzzle2Bone;
     float yawMin = -3.14159265f;
     float yawMax = 3.14159265f;
     float yawSlew = 6.2831853f;

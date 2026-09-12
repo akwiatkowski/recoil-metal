@@ -62,6 +62,8 @@ struct SaveState {
     /// V21 adds the bank tuning (`KRoll`, `BankFactor`) to the aircraft snapshot.
     /// V22 adds the attachment bone record beside the historical offset sections.
     /// V23 adds the wreck pool (nullable, trailing).
+    /// V24 adds the turret pose: ring yaw, trunnion pitch and the dual-muzzle phase.
+    /// V25 adds the dual manipulator's own angles (the second arm's aim).
     [[nodiscard]] static std::vector<std::byte> encode(const SaveState& state);
     /// Decodes all supported save versions, including v1 and the published v2 format.
     [[nodiscard]] static std::optional<SaveState> decode(std::span<const std::byte> bytes);
