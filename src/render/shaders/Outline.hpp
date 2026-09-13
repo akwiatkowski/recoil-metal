@@ -425,6 +425,11 @@ fragment float4 unitFragment(UnitOut in [[stage_in]],
         const float3 phongAdditive = kSupComPhongCoeff * pow(phongAmount, 2.0) * tex2.g;
         const float3 phongMultiplicative = 2.0 * kEnvironment * tex2.r;
         const float emissive = kSupComGlowMultiplier * tex2.b;
+        // Fresnel rim — our addition, not retail's: at grazing incidence the hull
+        // picks up the environment, which is what separates an edge from whatever
+        // is behind it. The specular channel masks it so matte panels stay matte.
+        const float3 rim = kSupComPhongCoeff * tex2.g
+                           * pow(1.0 - saturate(dot(N, V)), 3.0) * 0.6;
 
         float3 blast = float3(0.0);
         for (uint blastB = 0; blastB < 3; ++blastB) {
@@ -434,7 +439,8 @@ fragment float4 unitFragment(UnitOut in [[stage_in]],
             blast += u.blastColour[blastB].rgb * u.blastColour[blastB].a
                 * blastAtten * blastAtten;
         }
-        return float4(albedo * (emissive + light + phongMultiplicative) + phongAdditive + blast, 1.0);
+        return float4(albedo * (emissive + light + phongMultiplicative)
+                          + phongAdditive + rim + blast, 1.0);
     }
 
     // Recoil: tex1.a is the mask; tex2.r is self-illumination and tex2.g is
@@ -451,6 +457,9 @@ fragment float4 unitFragment(UnitOut in [[stage_in]],
                                               + 0.3 * pow(HdotN, 2.0 * 3.0),
                                           1.0);
     specular *= shininess * 4.0;
+    // Fresnel rim on the same mask: the reflectivity channel decides how much
+    // sky an edge catches, so matte surfaces do not glow.
+    specular += kUnitSpecular * shininess * pow(1.0 - saturate(dot(N, V)), 3.0) * 0.5;
     float3 blast = float3(0.0);
     for (uint blastB = 0; blastB < 3; ++blastB) {
         float blastDist = length(u.blastPos[blastB].xyz - in.world);
