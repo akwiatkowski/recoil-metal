@@ -289,6 +289,9 @@ namespace rm::app {
     environment.sunAmbience = map->lighting.sunAmbience;
     environment.shadowFill = map->lighting.shadowFill;
     environment.lightingMultiplier = map->lighting.multiplier;
+    // The bloom gain the map's own lighting block asks for — parsed since the block
+    // was first read and dropped until now. See Renderer::Environment::bloom.
+    environment.bloom = map->lighting.bloom;
     // The wave layers: the block stores four, big swell to fine ripple; the mid and fine
     // ones (1 and 2) are the pair the refraction wants — see the water shader's note on
     // wavelength versus viewing depth.

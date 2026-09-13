@@ -122,6 +122,10 @@ Renderer::Renderer(CA::MetalLayer* layer)
                                        BlendMode::PremultipliedAlpha);
     downsamplePipeline_ = makePipeline(device_, library, "screenVertex", "screenFragment",
                                        BlendMode::Opaque, MTL::PixelFormatInvalid, kHdrFormat);
+    // The bloom bright pass — same screen triangle, but keeps only the super-white
+    // excess the tone map would clip.
+    thresholdPipeline_ = makePipeline(device_, library, "screenVertex", "thresholdFragment",
+                                      BlendMode::Opaque, MTL::PixelFormatInvalid, kHdrFormat);
     composePipeline_ = makePipeline(device_, library, "screenVertex", "compositeFragment",
                                     BlendMode::Opaque);
     glassPipeline_ = makePipeline(device_, library, "textVertex", "glassFragment",
@@ -429,6 +433,7 @@ Renderer::~Renderer() {
     if (minimapFogPipeline_ != nullptr) minimapFogPipeline_->release();
     if (glassPipeline_ != nullptr) glassPipeline_->release();
     if (composePipeline_ != nullptr) composePipeline_->release();
+    if (thresholdPipeline_ != nullptr) thresholdPipeline_->release();
     if (downsamplePipeline_ != nullptr) downsamplePipeline_->release();
     if (minimapTexture_ != nullptr) minimapTexture_->release();
     if (iconAtlas_ != nullptr) iconAtlas_->release();
@@ -438,6 +443,8 @@ Renderer::~Renderer() {
     if (uiBuffer_ != nullptr) uiBuffer_->release();
     if (decalPipeline_ != nullptr) decalPipeline_->release();
     if (sceneColour_ != nullptr) sceneColour_->release();
+    if (bloomB_ != nullptr) bloomB_->release();
+    if (bloomA_ != nullptr) bloomA_->release();
     if (blurB_ != nullptr) blurB_->release();
     if (blurA_ != nullptr) blurA_->release();
     if (worldColour_ != nullptr) worldColour_->release();
@@ -821,13 +828,17 @@ void Renderer::ensureBackdropTextures(unsigned int width, unsigned int height) n
     if (worldColour_ != nullptr && worldColour_->width() == width
         && worldColour_->height() == height && blurA_ != nullptr
         && blurA_->width() == blurWidth && blurA_->height() == blurHeight
-        && blurB_ != nullptr) {
+        && blurB_ != nullptr && bloomA_ != nullptr && bloomB_ != nullptr) {
         return;
     }
 
+    if (bloomB_ != nullptr) bloomB_->release();
+    if (bloomA_ != nullptr) bloomA_->release();
     if (blurB_ != nullptr) blurB_->release();
     if (blurA_ != nullptr) blurA_->release();
     if (worldColour_ != nullptr) worldColour_->release();
+    bloomB_ = nullptr;
+    bloomA_ = nullptr;
     blurB_ = nullptr;
     blurA_ = nullptr;
     worldColour_ = nullptr;
@@ -847,6 +858,10 @@ void Renderer::ensureBackdropTextures(unsigned int width, unsigned int height) n
                          | MTL::TextureUsageShaderWrite);
     blurA_ = device_->newTexture(descriptor);
     blurB_ = device_->newTexture(descriptor);
+    // The bloom pair lives at the same quarter scale — close enough to a glow
+    // radius, and the MPS blur reuses the glass kernel unchanged.
+    bloomA_ = device_->newTexture(descriptor);
+    bloomB_ = device_->newTexture(descriptor);
 }
 
 void Renderer::encodeFrame(MTL::CommandBuffer* commandBuffer, MTL::RenderPassDescriptor* pass,
@@ -900,11 +915,38 @@ void Renderer::encodeFrame(MTL::CommandBuffer* commandBuffer, MTL::RenderPassDes
                                 commandBuffer, blurA_, blurB_);
     }
 
+    // The map's own bloom, when its lighting block asks for any: bright-pass the
+    // world at quarter res, blur it, and let the composite fold it back under the
+    // tone curve. Reuses the glass kernel — a blur is a blur — but keeps its own
+    // pair so the two never share a texture inside one frame.
+    if (environment_.bloom > 0.0f && bloomA_ != nullptr && bloomB_ != nullptr
+        && fullBlur_ != nullptr) {
+        MTL::RenderPassDescriptor* thresholdPass =
+            MTL::RenderPassDescriptor::alloc()->init();
+        auto* thresholdColor = thresholdPass->colorAttachments()->object(0);
+        thresholdColor->setTexture(bloomA_);
+        thresholdColor->setLoadAction(MTL::LoadAction::LoadActionDontCare);
+        thresholdColor->setStoreAction(MTL::StoreAction::StoreActionStore);
+        MTL::RenderCommandEncoder* threshold =
+            commandBuffer->renderCommandEncoder(thresholdPass);
+        threshold->setRenderPipelineState(thresholdPipeline_);
+        threshold->setFragmentTexture(worldColour_, NS::UInteger{0});
+        threshold->setFragmentSamplerState(fontSampler_, NS::UInteger{0});
+        threshold->drawPrimitives(MTL::PrimitiveType::PrimitiveTypeTriangle,
+                                  NS::UInteger{0}, NS::UInteger{3});
+        threshold->endEncoding();
+        thresholdPass->release();
+
+        mps::encodeGaussianBlur(fullBlur_, commandBuffer, bloomA_, bloomB_);
+    }
+
     // Restore the sharp world, then put semantic HUD layers over it. Only PanelSurface samples
     // the shared blur; every icon, label, edge and readout remains crisp.
     MTL::RenderCommandEncoder* composite = commandBuffer->renderCommandEncoder(pass);
     composite->setRenderPipelineState(composePipeline_);
     composite->setFragmentTexture(worldColour_, NS::UInteger{0});
+    composite->setFragmentTexture(bloomB_, NS::UInteger{1});
+    composite->setFragmentBytes(&environment_.bloom, sizeof(float), NS::UInteger{0});
     composite->setFragmentSamplerState(fontSampler_, NS::UInteger{0});
     composite->drawPrimitives(MTL::PrimitiveType::PrimitiveTypeTriangle, NS::UInteger{0},
                               NS::UInteger{3});

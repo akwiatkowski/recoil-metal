@@ -126,15 +126,35 @@ fragment float4 screenFragment(ScreenOut in [[stage_in]],
     return image.sample(imageSampler, in.uv);
 }
 
+// The bloom bright pass, into its own quarter-res target — NOT the glass pair, which
+// the panel blur owns and the bloom pass must not fight mid-frame. The knee sits at
+// 0.8, just under the tone curve's shoulder: pixels still inside the curve keep
+// nothing, and what has started rolling toward white — fire, additive glows, sun
+// glints — keeps its excess. A 1.0 knee would extract nothing at all: the authored
+// sprites cap near it rather than past it.
+fragment float4 thresholdFragment(ScreenOut in [[stage_in]],
+                                  texture2d<float> image [[texture(0)]],
+                                  sampler imageSampler [[sampler(0)]]) {
+    const float3 colour = image.sample(imageSampler, in.uv).rgb;
+    return float4(max(colour - float3(0.8), float3(0.0)), 1.0);
+}
+
 // The final composite: linear HDR world to display. ACES-approximated filmic
 // curve (Narkowicz) so fire rolls off instead of clipping, then sRGB encode.
 // Exposure is 1.0 — the maps' authored light already balances the frame, and a
 // knob arrives when a map proves it needs one. Only the composite uses this;
 // the downsample keeps screenFragment so the blur works in linear.
+//
+// The blurred bright pass folds back in BEFORE the curve, scaled by the map's own
+// `bloom` gain — adding it after tone-mapping would halo already-gamma-encoded
+// colour and double-encode it.
 fragment float4 compositeFragment(ScreenOut in [[stage_in]],
                                   texture2d<float> image [[texture(0)]],
-                                  sampler imageSampler [[sampler(0)]]) {
-    float3 colour = image.sample(imageSampler, in.uv).rgb;
+                                  texture2d<float> bloom [[texture(1)]],
+                                  sampler imageSampler [[sampler(0)]],
+                                  constant float& bloomGain [[buffer(0)]]) {
+    float3 colour = image.sample(imageSampler, in.uv).rgb
+                  + bloom.sample(imageSampler, in.uv).rgb * bloomGain;
     const float3 x = colour;
     colour = x * (2.51 * x + 0.03) / (x * (2.43 * x + 0.59) + 0.14);
     return float4(pow(saturate(colour), float3(1.0 / 2.2)), 1.0);

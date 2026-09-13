@@ -587,6 +587,8 @@ TEST_CASE("every retail map's lighting and water settings read as sane values") 
     std::size_t withWater = 0;
     std::size_t distinctFog = 0;
     std::array<float, 3> lastFog{{-1.0f, -1.0f, -1.0f}};
+    float minBloom = 1e30f;
+    float maxBloom = 0.0f;
 
     for (const std::filesystem::path& path : maps) {
         const auto map = rm::scmap::loadFile(path);
@@ -607,6 +609,12 @@ TEST_CASE("every retail map's lighting and water settings read as sane values") 
         }
 
         REQUIRE(map->lighting.fogEnd >= map->lighting.fogStart);
+
+        // The post-process gain the map asks its own frame for. Zero is
+        // legitimate; a value past single digits is a parse landing on a
+        // colour or an elevation.
+        REQUIRE(map->lighting.bloom >= 0.0f);
+        REQUIRE(map->lighting.bloom < 10.0f);
 
         // The sun direction is a direction.
         const float sunLength = std::sqrt(map->lighting.sunDirection[0] * map->lighting.sunDirection[0]
@@ -637,9 +645,12 @@ TEST_CASE("every retail map's lighting and water settings read as sane values") 
             ++distinctFog;
             lastFog = map->lighting.fogColour;
         }
+        minBloom = std::min(minBloom, map->lighting.bloom);
+        maxBloom = std::max(maxBloom, map->lighting.bloom);
     }
 
-    INFO(withWater << " maps with water, " << distinctFog << " distinct fog colours");
+    INFO(withWater << " maps with water, " << distinctFog << " distinct fog colours, bloom "
+                   << minBloom << ".." << maxBloom);
     CHECK(withWater > 30);
     // The point of reading these at all: maps genuinely differ. If every map
     // came back with the same fog the parse is landing on a constant.

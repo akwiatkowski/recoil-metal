@@ -174,6 +174,12 @@ public:
         /// it for more than brightness — `terrain.fx:373-375` decides a map is
         /// "high-fidelity" by testing `LightingMultiplier > 2.1`.
         float lightingMultiplier = 1.0f;
+
+        /// The post-process bloom gain the map asks for — the `bloom` float in the
+        /// `.scmap` lighting block. Stock maps carry 0..0.12, so this is a gentle
+        /// halo on super-white pixels, not a glare. 0 = no bloom at all, which is
+        /// what a map with no lighting block (every `.smf`) gets.
+        float bloom = 0.0f;
     };
 
     void setEnvironment(const Environment& environment) noexcept;
@@ -640,7 +646,12 @@ private:
     MTL::Texture* worldColour_ = nullptr;  // owned, full resolution
     MTL::Texture* blurA_ = nullptr;        // owned, quarter resolution
     MTL::Texture* blurB_ = nullptr;        // owned, quarter resolution
+    // The bloom bright-pass pair — quarter-res like the glass pair but separate,
+    // because both run in the same frame and would overwrite each other.
+    MTL::Texture* bloomA_ = nullptr;       // owned, quarter resolution
+    MTL::Texture* bloomB_ = nullptr;       // owned, quarter resolution
     MTL::RenderPipelineState* downsamplePipeline_ = nullptr; // owned, no depth attachment
+    MTL::RenderPipelineState* thresholdPipeline_ = nullptr;  // owned, no depth attachment
     MTL::RenderPipelineState* composePipeline_ = nullptr;    // owned, with depth attachment
     MTL::RenderPipelineState* glassPipeline_ = nullptr;      // owned
     void* fullBlur_ = nullptr;                               // retained MPSImageGaussianBlur
