@@ -2021,6 +2021,126 @@ std::size_t fireOvercharge(UnitStore& store, const UnitCatalog& catalog,
     return fired;
 }
 
+std::size_t fireMissiles(UnitStore& store, const UnitCatalog& catalog,
+                         std::span<const Army> armies,
+                         std::vector<Projectile>& projectiles,
+                         std::span<SiloAmmo> siloAmmo, const Terrain& terrain, TickRate rate,
+                         EventQueue* events) {
+    std::size_t fired = 0;
+
+    const std::span<const Transform> transforms = store.transforms();
+    const std::span<Health> healths = store.health();
+    const std::span<CommandQueue> orders = store.orders();
+
+    for (UnitIndex slot = 0; slot < orders.size(); ++slot) {
+        if (!store.slotAlive(slot) || slot >= healths.size() || !healths[slot].alive()) {
+            continue;
+        }
+        QueuedCommand* head = orders[slot].activeMutable();
+        if (head == nullptr || head->kind() != CommandKind::MissileLaunch
+            || head->target() == store.idAt(slot)) {
+            continue;  // no order, or a spent one advanceOrders will retire
+        }
+
+        const unitdef::UnitDef* def = catalog.def(store.typeAt(slot));
+        if (def == nullptr) {
+            continue;
+        }
+
+        const int army = armyAt(store, slot);
+        const std::array<Fx, 3> from = positionOf(transforms[slot]);
+
+        // The aim: a named unit's real position, or the clicked ground zero lifted to the
+        // terrain — `launch` aims foot-to-foot otherwise, and ground zero has no feet.
+        std::array<Fx, 3> to{head->targetX(), terrain.heightAt(head->targetX(), head->targetZ()),
+                             head->targetZ()};
+        UnitId aimTarget{};
+        if (head->target().generation != 0) {
+            if (!store.alive(head->target())) {
+                continue;  // advanceOrders retires the order; do not fire at the grave
+            }
+            const int theirArmy = armyAt(store, head->target().index);
+            const Army* mine = armyFor(army, armies);
+            const Army* theirs = armyFor(theirArmy, armies);
+            if (mine == nullptr || theirs == nullptr || !hostile(*mine, *theirs)) {
+                // A target that stopped being shootable retires the order the same way a
+                // fired one does — overcharge's rule, in the self-marker's shape.
+                head->setTarget(store.idAt(slot));
+                continue;
+            }
+            to = positionOf(transforms[head->target().index]);
+            aimTarget = head->target();
+        }
+
+        const auto& sourceMotion = store.motion()[slot];
+        const std::optional<bool> sourceSubmerged = sourceMotion.submersible
+            ? std::optional<bool>{sourceMotion.submerged} : std::nullopt;
+        for (std::size_t w = 0; w < def->weapons.size(); ++w) {
+            const unitdef::Weapon& weapon = def->weapons[w];
+            if (!weapon.siloLaunched()) {
+                continue;
+            }
+            if (aimTarget.generation != 0
+                && !weapon.canTarget(store.motion()[aimTarget.index].airborne,
+                    store.motion()[aimTarget.index].submersible
+                        && store.motion()[aimTarget.index].submerged, sourceSubmerged)) {
+                continue;
+            }
+            healths[slot].reloadRemaining.resize(def->weapons.size(), 0);
+            if (healths[slot].reloadRemaining[w] > 0) {
+                continue;  // still cooling; `fireWeapons` ticks it
+            }
+
+            const Fx gap = groundDistanceElmos(from, to);
+            if (gap > weapon.maxRange || gap <= weapon.minRange) {
+                continue;  // outside the envelope — the pursuit closes, the dead zone stays
+            }
+            // THE TUBE. An empty silo holds the order rather than refusing it: the
+            // stockpile build may still be running, which is what a queued retail launch
+            // waits on.
+            if (!siloGateOpen(store.idAt(slot), weapon, siloAmmo)) {
+                continue;
+            }
+
+            const UnitCatalog::WeaponRates& rates = catalog.weaponRates(store.typeAt(slot), w);
+            const UnitCatalog::TurretMount& mount = catalog.turretMount(store.typeAt(slot));
+            const std::span<const MoveState> motions = store.motion();
+            const bool muzzled =
+                mount.present && mount.weapon == w && slot < motions.size();
+            projectiles.push_back(
+                launch(from, to, weapon, army, rate, rates.muzzlePerTick,
+                       rates.damage, store.idAt(slot), false, aimTarget,
+                       muzzled
+                           ? std::optional{mountMuzzleWorld(mount, transforms[slot],
+                                                            motions[slot], false)}
+                           : std::nullopt));
+            consumeSiloAmmo(store.idAt(slot), weapon, siloAmmo);
+            healths[slot].reloadRemaining[w] = static_cast<int>(rates.reloadTicks);
+            emit(events, Event{
+                             .kind = EventKind::WeaponFired,
+                             .unit = store.idAt(slot),
+                             .instigator = aimTarget,
+                             .army = army,
+                             .amount = weapon.damage,
+                             .at = from,
+                             .at2 = projectiles.back().position,
+                             .visualId = def->name + ":" + weapon.label,
+                             .visualDirection = {to[0]-from[0], to[1]-from[1], to[2]-from[2]},
+                             .launchVelocity = projectiles.back().velocity,
+                         });
+            ++fired;
+
+            // ONE SHOT PER ORDER: the spent marker is the LAUNCHER itself — a position
+            // order has no target to forget, so the self-aim is the overcharge trick in a
+            // shape ground zero can carry.
+            head->setTarget(store.idAt(slot));
+            break;
+        }
+    }
+
+    return fired;
+}
+
 void tickShields(UnitStore& store, const UnitCatalog& catalog, EventQueue* events) {
     const std::span<Health> health = store.health();
     for (UnitIndex slot = 0; slot < health.size(); ++slot) {

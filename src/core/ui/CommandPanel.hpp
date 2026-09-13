@@ -109,6 +109,9 @@ struct CommandPageCell {
     bool enabled = false;
     /// `kToggleDescriptors` index when this cell is a toggle; otherwise an order.
     std::optional<std::size_t> toggle;
+    /// The command this cell issues when it is NOT the descriptor's — a silo's launch
+    /// button borrowing Reclaim's dead slot. Nullopt means the descriptor's kind.
+    std::optional<sim::CommandKind> order;
 };
 using CommandPage = std::array<CommandPageCell, kCommandSlots>;
 

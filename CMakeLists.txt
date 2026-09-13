@@ -355,6 +355,7 @@ if(BUILD_TESTING)
         tests/test_reclaim.cpp
         tests/test_capture.cpp
         tests/test_overcharge.cpp
+        tests/test_missile_launch.cpp
         tests/test_adjacency.cpp
         tests/test_shield.cpp
         tests/test_assist.cpp

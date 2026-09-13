@@ -1605,6 +1605,19 @@ void gatherRoster(const UnitScene& scene, std::span<const rm::sim::UnitId> selec
         rates[0].drainPerSecond += rm::sim::magToFloat(flow.usageLastTick.mass) * hz;
         rates[1].drainPerSecond += rm::sim::magToFloat(flow.usageLastTick.energy) * hz;
     }
+
+    // Silo stockpiles, summed per type: `SiloAmmo` is match-owned, so the tile gathers
+    // it through the owner's blueprint id. An unselected silo simply finds no tile.
+    for (const rm::sim::SiloAmmo& silo : scene.siloAmmo) {
+        if (!scene.store.alive(silo.owner)) continue;
+        const auto* def = scene.catalog.def(scene.store.typeAt(silo.owner.index));
+        if (def == nullptr) continue;
+        auto tile = std::ranges::find(out, def->name, &rm::ui::RosterTile::id);
+        if (tile == out.end()) continue;
+        if (!tile->siloStock) tile->siloStock.emplace(0, 0);
+        tile->siloStock->first += silo.stored;
+        tile->siloStock->second += silo.capacity;
+    }
 }
 
 rm::ui::InfoCard selectedUnitCard(const UnitScene& scene, const rm::ui::RosterTile& tile,

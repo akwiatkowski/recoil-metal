@@ -327,6 +327,24 @@ std::size_t fireOvercharge(UnitStore& store, const UnitCatalog& catalog,
                            std::span<Economy> economies, TickRate rate,
                            EventQueue* events = nullptr);
 
+/// Fires every held MISSILE LAUNCH whose moment has come: a live hostile target or a
+/// clicked ground zero, inside the silo weapon's `[minRange, maxRange]` envelope, reload
+/// ready, and a round in the tube — the same `C-085` `HasSiloAmmo` gate the automatic
+/// path applies, with `consumeSiloAmmo` after the shot leaves.
+///
+/// An EMPTY silo HOLDS rather than fails: the order stands while the stockpile build
+/// catches up, which is what a queued retail launch does. One shot retires the order by
+/// aiming it at the LAUNCHER ITSELF — a target no click can produce — which
+/// `advanceOrders` then completes like any arrival. That self-marker is what a
+/// position-target launch needs: a ground zero has no target to forget, so the overcharge
+/// trick cannot work there. Returns shots fired.
+/// No facing gate: the corpus's launchers are unturreted racks that fire straight up.
+std::size_t fireMissiles(UnitStore& store, const UnitCatalog& catalog,
+                         std::span<const Army> armies,
+                         std::vector<Projectile>& projectiles,
+                         std::span<SiloAmmo> siloAmmo, const Terrain& terrain, TickRate rate,
+                         EventQueue* events = nullptr);
+
 /// Advances partial regeneration and damage-collapse recovery for ordinary bubbles.
 void tickShields(UnitStore& store, const UnitCatalog& catalog,
                  EventQueue* events = nullptr);

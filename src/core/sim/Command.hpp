@@ -134,6 +134,14 @@ enum class CommandKind : std::uint8_t {
     /// Completes with a replacement-entity transfer to the captor's army; retires when
     /// the target is gone however it went.
     Capture = 16,
+    /// Fire one counted MANUAL projectile — a silo's tactical or strategic missile — at
+    /// `target` or at the `targetX`/`targetZ` ground zero. The pursuit is the attack's
+    /// when a unit is named; a position aims where it was clicked. The differences from
+    /// Overcharge are the gate (a round in the tube, not an energy bill — an empty silo
+    /// HOLDS the order while the build catches up) and the completion: `fireMissiles`
+    /// spends one `SiloAmmo` the tick the shot leaves and marks the order spent on the
+    /// launcher itself, which no click can produce.
+    MissileLaunch = 17,
 };
 
 [[nodiscard]] constexpr bool isGuardCommand(CommandKind kind) noexcept {

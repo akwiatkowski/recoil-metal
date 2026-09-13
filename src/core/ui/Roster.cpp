@@ -148,6 +148,15 @@ InfoCard rosterTileCard(const RosterTile& tile) {
             .value = formatAmount(tile.health) + " / " + formatAmount(tile.maxHealth),
             .tint = fill > 0.6f ? kGain : (fill > 0.3f ? kWarn : kLoss)});
     }
+    if (tile.siloStock) {
+        // The one number a launch order cares about; empty reads as a warning because
+        // the order will sit and wait on it.
+        card.rows.push_back(InfoRow{
+            .label = "MISSILES",
+            .value = std::to_string(tile.siloStock->first) + " / "
+                     + std::to_string(tile.siloStock->second),
+            .tint = tile.siloStock->first > 0 ? kGain : kWarn});
+    }
     return card;
 }
 

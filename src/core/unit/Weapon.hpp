@@ -480,6 +480,15 @@ struct Weapon {
             && maxRange > sim::Fx{} && damage > sim::Mag{};
     }
 
+    /// Whether this weapon is a silo's round: a counted projectile an explicit order
+    /// launches — `CommandKind::MissileLaunch`. The tactical and strategic silos are the
+    /// corpus's shape (`RULEUCC_Tactical`/`RULEUCC_Nuke`); an interceptor is counted too
+    /// but fires AT missiles on its own acquisition, so `targetsProjectiles` keeps it out
+    /// of the launch order's reach.
+    [[nodiscard]] bool siloLaunched() const noexcept {
+        return manuallyFired() && countedProjectile && !targetsProjectiles;
+    }
+
     /// Ticks between shots at a given rate, never less than one.
     ///
     /// The rate is a PARAMETER. `rateOfFire` is authored in shots per second, which is a fact

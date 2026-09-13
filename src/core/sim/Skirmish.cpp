@@ -511,6 +511,14 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
         // pass reads the store.
         report.shotsFired += fireOvercharge(store, catalog, match.armies, *match.projectiles,
                                             match.economies, rate, match.events);
+        // The silo's round, same slot in the beat: a launch authorised this tick flies
+        // this tick, and the round it burned leaves the stockpile before the economy
+        // pass reads it.
+        report.shotsFired += fireMissiles(store, catalog, match.armies, *match.projectiles,
+                                          match.siloAmmo != nullptr
+                                              ? std::span<SiloAmmo>{*match.siloAmmo}
+                                              : std::span<SiloAmmo>{},
+                                          terrain, rate, match.events);
         advanceProjectiles(*match.projectiles, store, match.armies, terrain, rate,
                            match.events, &catalog,
                            match.redirects != nullptr ? std::span<MissileRedirect>{*match.redirects}

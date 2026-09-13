@@ -249,6 +249,14 @@ extern bool gFafLog;
                                     rm::sim::UnitId target, rm::sim::Fx toX, rm::sim::Fx toZ,
                                     bool queued = false);
 
+/// issueOvercharge's silo sibling: one counted missile leaves the tube — at `target` when
+/// it names a unit, at (toX, toZ) as ground zero otherwise. Refused for a unit carrying no
+/// counted manual weapon, and an empty silo HOLDS the order rather than refusing it.
+[[nodiscard]] bool issueMissileLaunch(UnitScene& scene, std::span<const rm::sim::UnitId> units,
+                                      rm::PlayerIndex player, rm::TickIndex tick,
+                                      rm::sim::UnitId target, rm::sim::Fx toX, rm::sim::Fx toZ,
+                                      bool queued = false);
+
 /// The guard order: a field builder lends BuildRate to the target's work; an immobile factory
 /// mirrors compatible factory production. Refused unless both units are distinct compatible
 /// builders in the same army, exactly as the sim refuses it.

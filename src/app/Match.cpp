@@ -119,6 +119,27 @@ bool gFafLog = false;
     }).has_value();
 }
 
+[[nodiscard]] bool issueMissileLaunch(UnitScene& scene, std::span<const rm::sim::UnitId> units,
+                                      rm::PlayerIndex player, rm::TickIndex tick,
+                                      rm::sim::UnitId target, rm::sim::Fx toX, rm::sim::Fx toZ,
+                                      bool queued) {
+    // issueOvercharge's shape with the silo's kind: an invalid target handle reads as a
+    // position launch — the ground zero rides in toX/toZ.
+    return submitCommand(scene, rm::sim::CommandIssue{
+        .tick = tick,
+        .phase = rm::sim::CommandPhase::PreTick,
+        .source = static_cast<rm::CommandSource>(player),
+        .player = player,
+        .kind = rm::sim::CommandKind::MissileLaunch,
+        .queued = queued,
+        .units = {units.begin(), units.end()},
+        .targetX = toX,
+        .targetZ = toZ,
+        .target = target,
+        .buildType = 0,
+    }).has_value();
+}
+
 [[nodiscard]] bool issueAssist(UnitScene& scene, std::span<const rm::sim::UnitId> units,
                                 rm::PlayerIndex player, rm::TickIndex tick,
                                 rm::sim::UnitId target, bool queued) {

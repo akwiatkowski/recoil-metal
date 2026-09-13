@@ -1657,10 +1657,15 @@ int runWindowed(const Session& session) {
                     std::printf("auto-expand %s for the selection\n", *on ? "on" : "off");
                     std::fflush(stdout);
                     armedCommand.reset();
-                } else if (slot && commandAvailable[*slot]
-                           && rm::ui::kCommandDescriptors[*slot].kind) {
+                } else if (slot && commandPage[*slot].enabled
+                           && !commandPage[*slot].toggle
+                           && (commandPage[*slot].order
+                               || rm::ui::kCommandDescriptors[*slot].kind)) {
+                    // The page's cell decides, not the descriptor under it: a substituted
+                    // cell — the silo's LAUNCH on Reclaim's dead slot — issues its own kind.
                     const rm::sim::CommandKind kind =
-                        *rm::ui::kCommandDescriptors[*slot].kind;
+                        commandPage[*slot].order.value_or(
+                            *rm::ui::kCommandDescriptors[*slot].kind);
                     if (kind == rm::sim::CommandKind::Stop || kind == rm::sim::CommandKind::Dive) {
                         (void)submitCommand(units, rm::sim::CommandIssue{
                             .tick = static_cast<rm::TickIndex>(matchTicks),
@@ -1994,6 +1999,56 @@ int runWindowed(const Session& session) {
                 } else {
                     (void)issueAttack(units, selected, player, tick, *hit, at.x, at.z,
                                       mods.shift);
+                }
+                armedCommand.reset();
+                return;
+            }
+
+            // A SILO'S ARMED CLICK: a hostile unit is aimed at, anything else is ground
+            // zero — the one order that takes both, because a nuke at a position is the
+            // ordinary case and a nuke at a unit is just a better-informed one.
+            if (armedCommand == rm::sim::CommandKind::MissileLaunch) {
+                std::vector<rm::sim::UnitId> launchers;
+                for (const rm::sim::UnitId id : selected) {
+                    if (!units.store.alive(id)) {
+                        continue;
+                    }
+                    const rm::unitdef::UnitDef* def =
+                        units.catalog.def(units.store.typeAt(id.index));
+                    if (def != nullptr
+                        && std::ranges::any_of(
+                            def->weapons, [](const rm::unitdef::Weapon& weapon) {
+                                return weapon.siloLaunched();
+                            })) {
+                        launchers.push_back(id);
+                    }
+                }
+                // A hostile unit under the cursor is aimed at and pursued; anything
+                // else is ground zero. A non-hostile hit with no ground under it is no
+                // order at all — do not let an ally's centre become a missile's target.
+                const bool aimedAtUnit = isAttack && hit.has_value();
+                if (!aimedAtUnit && !ground) {
+                    rm::log::write(rm::log::Level::Info, "orders",
+                                   "missile launch needs a hostile unit or ground");
+                    return;
+                }
+                const rm::sim::UnitId aim = aimedAtUnit ? *hit : rm::sim::UnitId{};
+                const rm::sim::Fx aimX =
+                    aimedAtUnit ? units.store.transforms()[hit->index].x
+                                : rm::sim::fxFromFloat(ground->x);
+                const rm::sim::Fx aimZ =
+                    aimedAtUnit ? units.store.transforms()[hit->index].z
+                                : rm::sim::fxFromFloat(ground->z);
+                if (!launchers.empty()
+                    && issueMissileLaunch(units, launchers,
+                                          playerDriving(units, units.playerArmy),
+                                          static_cast<rm::TickIndex>(matchTicks), aim,
+                                          aimX, aimZ, mods.shift)) {
+                    std::printf("missile launch: %zu silo(s) ordered at (%.0f, %.0f)\n",
+                                launchers.size(),
+                                static_cast<double>(rm::sim::fxToFloat(aimX)),
+                                static_cast<double>(rm::sim::fxToFloat(aimZ)));
+                    std::fflush(stdout);
                 }
                 armedCommand.reset();
                 return;
@@ -2714,12 +2769,23 @@ int runWindowed(const Session& session) {
                     inspector =
                         rm::ui::buildOptionCard(buildOptions[*armedOption], session.uiProfile);
                 } else if (armedCommand) {
-                    const auto found = std::ranges::find_if(
-                        rm::ui::kCommandDescriptors,
-                        [&](const rm::ui::CommandDescriptor& descriptor) {
-                            return descriptor.kind == armedCommand;
+                    // A substituted cell carries its own kind — the silo's LAUNCH lives
+                    // on Reclaim's dead slot — so the page is consulted before the
+                    // descriptor table, which has no MissileLaunch row.
+                    const auto substituted = std::ranges::find_if(
+                        commandPage, [&](const rm::ui::CommandPageCell& cell) {
+                            return cell.order == armedCommand;
                         });
-                    if (found != rm::ui::kCommandDescriptors.end()) {
+                    if (substituted != commandPage.end()) {
+                        inspector = rm::ui::commandInspector(commandPage,
+                            static_cast<std::size_t>(substituted - commandPage.begin()),
+                            commandSelection, true);
+                    } else if (const auto found = std::ranges::find_if(
+                                   rm::ui::kCommandDescriptors,
+                                   [&](const rm::ui::CommandDescriptor& descriptor) {
+                                       return descriptor.kind == armedCommand;
+                                   });
+                               found != rm::ui::kCommandDescriptors.end()) {
                         inspector = rm::ui::commandCard(*found, commandSelection, true);
                     }
                 } else if (overBuild && *overBuild < buildOptions.size()) {

@@ -377,6 +377,8 @@ const char* commandKindName(CommandKind kind) noexcept {
         return "script";
     case CommandKind::CancelFactoryBuild:
         return "cancel-factory-build";
+    case CommandKind::MissileLaunch:
+        return "missile-launch";
     }
     return "stop";
 }
@@ -428,6 +430,9 @@ namespace {
     }
     if (name == "script") {
         return CommandKind::Script;
+    }
+    if (name == "missile-launch") {
+        return CommandKind::MissileLaunch;
     }
     return std::nullopt;
 }
@@ -529,6 +534,20 @@ namespace {
         return army.index == targetOwner;
     });
     return mine != armies.end() && theirs != armies.end() && !allied(*mine, *theirs);
+}
+
+/// Issue-time gate for MissileLaunch: a unit carrying a counted manual weapon — the silo's
+/// round — and, when a unit is named, one that is alive enough to aim at. Ammunition is
+/// deliberately NOT checked: the stockpile may fill while the order sits, so an empty silo
+/// holds the order rather than refusing the click (`fireMissiles` gates the trigger).
+[[nodiscard]] bool validMissileLaunch(const Command& command, const UnitStore& store,
+                                      const UnitCatalog& catalog) noexcept {
+    if (command.target.generation != 0 && !store.alive(command.target)) {
+        return false;
+    }
+    const unitdef::UnitDef* def = catalog.def(store.typeAt(command.unit.index));
+    return def != nullptr
+           && std::ranges::any_of(def->weapons, &unitdef::Weapon::siloLaunched);
 }
 
 [[nodiscard]] bool repairStillAllied(UnitIndex builder, UnitId target, const UnitStore& store,
@@ -803,6 +822,10 @@ void teardownMovement(MoveState& motion) {
     }
     if (command.kind == CommandKind::Capture
         && !validCapture(command, store, catalog, armies)) {
+        return false;
+    }
+    if (command.kind == CommandKind::MissileLaunch
+        && !validMissileLaunch(command, store, catalog)) {
         return false;
     }
 
@@ -2082,6 +2105,18 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
             }
         }
 
+        // A FIRED missile order names its own launcher — `fireMissiles` marks the spent
+        // order by aiming it at the silo itself, a target no click can produce. It retires
+        // like any arrival, and it must retire HERE: below, the chase would read the
+        // self-target as one more living thing to follow and hold the order forever.
+        if (const QueuedCommand* head = orders[slot].active();
+            head != nullptr && head->kind() == CommandKind::MissileLaunch
+            && head->target() == store.idAt(slot)) {
+            (void)orders[slot].finish();
+            startPending();
+            continue;
+        }
+
         // THE CHASE. An attack naming a LIVING target never completes by arrival — it
         // completes when the target dies — so it is handled here, before the finish logic,
         // and the slot moves on. Three sub-cases, in priority order:
@@ -2099,16 +2134,19 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
         if (const QueuedCommand* head = orders[slot].active();
             head != nullptr
             && (head->kind() == CommandKind::Attack || head->kind() == CommandKind::Overcharge
+                || head->kind() == CommandKind::MissileLaunch
                 || isGuardCommand(head->kind()))
             && store.alive(head->target())) {
             // An overcharge pursues exactly as an attack does; the reach is the MANUAL
             // weapon's, because that is the gun this order will fire. A fired overcharge
             // forgets its target (`fireOvercharge`), so a spent order falls out of this
-            // block and retires below like any arrival. An ASSIST pursues with the BUILD
-            // reach — follow the working engineer, hold beside the factory — and, being a
-            // standing order, completes only when the target dies, which is exactly this
-            // block's rule.
-            const bool manual = head->kind() == CommandKind::Overcharge;
+            // block and retires below like any arrival. A MISSILE launch pursues with the
+            // silo weapon's reach; its spent marker is the self-target above, which never
+            // reaches this block. An ASSIST pursues with the BUILD reach — follow the
+            // working engineer, hold beside the factory — and, being a standing order,
+            // completes only when the target dies, which is exactly this block's rule.
+            const bool missile = head->kind() == CommandKind::MissileLaunch;
+            const bool manual = missile || head->kind() == CommandKind::Overcharge;
             const unitdef::UnitDef* def = catalog.def(store.typeAt(slot));
             Fx reach{};
             if (isGuardCommand(head->kind())) {
@@ -2118,7 +2156,8 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
             } else if (def != nullptr) {
                 const bool targetAirborne = store.motion()[head->target().index].airborne;
                 for (const unitdef::Weapon& weapon : def->weapons) {
-                    if ((manual ? weapon.manuallyFired() : weapon.fires())
+                    if ((missile ? weapon.siloLaunched()
+                                 : manual ? weapon.manuallyFired() : weapon.fires())
                         && weapon.canTarget(targetAirborne)
                         && weapon.maxRange > reach) {
                         reach = weapon.maxRange;
@@ -2174,8 +2213,12 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
 
         // An entity attack ends on target death, not when its now-stale route happens to arrive.
         // It is an ordinary completion, so dispatch may start the follower in this same beat.
+        // A missile launch's target gets the same rule: the warhead is not fired at a grave.
         if (const QueuedCommand* head = orders[slot].active();
-            head != nullptr && head->kind() == CommandKind::Attack
+            head != nullptr
+            && (head->kind() == CommandKind::Attack
+                || head->kind() == CommandKind::MissileLaunch)
+            && head->target() != store.idAt(slot)
             && head->target().generation != 0 && !store.alive(head->target())) {
             MoveState& staleRoute = store.motion()[slot];
             staleRoute.moving = false;
@@ -2183,6 +2226,38 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
             staleRoute.pathIndex = 0;
             (void)orders[slot].finish();
             startPending();
+            continue;
+        }
+
+        // THE MISSILE HOLD, the position half. A ground zero cannot walk into range, so the
+        // order never completes by arrival: in the envelope it stands for `fireMissiles`,
+        // short of it a mobile launcher walks the rest of the way, and a silo out of reach
+        // simply waits — the shot it cannot take yet is the order, not a reason to drop it.
+        // Retirement is the fire pass's spent marker or a dead unit target, both handled
+        // above; nothing below must read the hold as an arrival.
+        if (const QueuedCommand* head = orders[slot].active();
+            head != nullptr && head->kind() == CommandKind::MissileLaunch
+            && head->target().generation == 0) {
+            const unitdef::UnitDef* def = catalog.def(store.typeAt(slot));
+            Fx reach{};
+            if (def != nullptr) {
+                for (const unitdef::Weapon& weapon : def->weapons) {
+                    if (weapon.siloLaunched() && weapon.maxRange > reach) {
+                        reach = weapon.maxRange;
+                    }
+                }
+            }
+            MoveState& hold = store.motion()[slot];
+            const Transform& at = store.transforms()[slot];
+            const Fx gap = groundDistanceElmos({at.x, Fx{}, at.z},
+                                               {head->targetX(), Fx{}, head->targetZ()});
+            if (gap <= reach) {
+                hold.moving = false;
+                hold.path.clear();
+                hold.pathIndex = 0;
+            } else if (!hold.moving && def != nullptr && def->isMobile()) {
+                (void)routeUnit(slot, head->targetX(), head->targetZ(), store, terrain, *grid);
+            }
             continue;
         }
 
@@ -2619,6 +2694,51 @@ bool startCommand(const Command& command, UnitStore& store, const UnitCatalog& c
         // adding another targeted command between the cases silently redirected overcharge into
         // that command's validation; spelling the shared routing out keeps the kinds independent.
         return routeUnit(command.unit.index, theirs.x, theirs.z, store, terrain, grid);
+    }
+    case CommandKind::MissileLaunch: {
+        // The silo's order: a unit target pursues like an attack, a position aims where it
+        // was clicked. What makes the order MEAN anything — a counted manual weapon — was
+        // checked at the door (`validMissileLaunch`); the reach is that weapon's envelope.
+        const unitdef::UnitDef* def = catalog.def(store.typeAt(command.unit.index));
+        Fx reach{};
+        if (def != nullptr) {
+            for (const unitdef::Weapon& weapon : def->weapons) {
+                if (weapon.siloLaunched() && weapon.maxRange > reach) {
+                    reach = weapon.maxRange;
+                }
+            }
+        }
+        if (reach <= Fx{}) {
+            return false;  // queued orders skip the door; a promise without a tube is refused
+        }
+        Fx aimX = command.targetX;
+        Fx aimZ = command.targetZ;
+        if (command.target.generation != 0) {
+            if (!store.alive(command.target)) {
+                return false;
+            }
+            const Transform& theirs = store.transforms()[command.target.index];
+            aimX = theirs.x;
+            aimZ = theirs.z;
+        }
+        const Transform& at = store.transforms()[command.unit.index];
+        if (groundDistanceElmos(positionOf(at), {aimX, Fx{}, aimZ}) <= reach) {
+            // In the envelope already: hold here and let `fireMissiles` do the rest — the
+            // same coarse-cell trap as the overcharge start.
+            motion.moving = false;
+            motion.path.clear();
+            motion.pathIndex = 0;
+            return true;
+        }
+        // Out of reach: a mobile launcher walks to it; a silo HOLDS — a unit target can
+        // still walk into the envelope, and a position simply waits to be cancelled.
+        if (def != nullptr && def->isMobile()) {
+            return routeUnit(command.unit.index, aimX, aimZ, store, terrain, grid);
+        }
+        motion.moving = false;
+        motion.path.clear();
+        motion.pathIndex = 0;
+        return true;
     }
     case CommandKind::Guard:
     case CommandKind::Assist: {

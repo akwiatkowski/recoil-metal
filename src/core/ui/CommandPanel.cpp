@@ -108,6 +108,7 @@ commandAvailability(std::span<const unitdef::UnitDef* const> selection) noexcept
         case sim::CommandKind::Script:
         case sim::CommandKind::ReclaimUnit:  // reached through Reclaim's descriptor, not its own
         case sim::CommandKind::Capture:  // no rack cell yet; issued through its own order path
+        case sim::CommandKind::MissileLaunch:  // fills Reclaim's dead cell on a silo, below
             break;  // None has a command-rack descriptor.
         }
     }
@@ -203,6 +204,12 @@ orderKeyFor(sim::CommandKind kind) noexcept {
 CommandPage commandPage(std::span<const unitdef::UnitDef* const> selection) noexcept {
     const CommandAvailability available = commandAvailability(selection);
     const ToggleAvailability toggles = toggleAvailability(selection);
+    // A launcher anywhere in the selection earns the silo's launch button — the same ANY
+    // semantics `commandAvailability` applies to the rack's own orders.
+    const bool hasLauncher = std::ranges::any_of(selection, [](const unitdef::UnitDef* def) {
+        return def != nullptr
+               && std::ranges::any_of(def->weapons, &unitdef::Weapon::siloLaunched);
+    });
     const auto presentation = [&](std::string_view key, std::string_view name,
                                   std::string_view icon) {
         // Views borrow from the selection's definitions (never the merged copy,
@@ -227,7 +234,7 @@ CommandPage commandPage(std::span<const unitdef::UnitDef* const> selection) noex
         if (available[slot]) {
             const auto [name, icon] = key ? presentation(*key, descriptor.name, descriptor.icon)
                                          : std::pair{descriptor.name, descriptor.icon};
-            page[slot] = {name, icon, true, std::nullopt};
+            page[slot] = {name, icon, true, std::nullopt, std::nullopt};
             continue;
         }
         // Orders first: a toggle only fills its preferred slot when the order there
@@ -241,13 +248,28 @@ CommandPage commandPage(std::span<const unitdef::UnitDef* const> selection) noex
             }
         }
         if (!toggle) {
-            page[slot] = {descriptor.name, descriptor.icon, available[slot], std::nullopt};
+            // A silo's launch button borrows the last unit-specific cell the way a toggle
+            // borrows a dead order's: Reclaim never lights on a launcher, and no toggle
+            // claims the slot. The override keys are the retail command caps — a nuke
+            // silo states Nuke, a tactical one Tactical; whichever the unit authored wins.
+            if (slot == 11 && hasLauncher) {
+                auto [name, icon] = presentation("RULEUCC_Nuke", "LAUNCH", "nuke");
+                if (name == "LAUNCH" && icon == "nuke") {
+                    const auto tactical = presentation("RULEUCC_Tactical", "LAUNCH", "nuke");
+                    name = tactical.first;
+                    icon = tactical.second;
+                }
+                page[slot] = {name, icon, true, std::nullopt, sim::CommandKind::MissileLaunch};
+                continue;
+            }
+            page[slot] = {descriptor.name, descriptor.icon, available[slot], std::nullopt,
+                          std::nullopt};
             continue;
         }
         const ToggleDescriptor& rule = kToggleDescriptors[*toggle];
         const auto [name, icon] = presentation(rule.cap, rule.label, rule.icon);
         // Present but never enabled: no simulation state backs any toggle yet.
-        page[slot] = {name, icon, false, toggle};
+        page[slot] = {name, icon, false, toggle, std::nullopt};
     }
     return page;
 }
@@ -416,6 +438,35 @@ InfoCard commandInspector(const CommandPage& page, std::size_t slot,
     if (toggle) {
         return toggleCard(kToggleDescriptors[*toggle], selection);
     }
+    if (page[slot].order == sim::CommandKind::MissileLaunch) {
+        // A substituted cell inspects as the order it issues — the table under it
+        // (Reclaim) cannot answer for a silo, and `commandCard`'s eligibility count
+        // keys on descriptor slots MissileLaunch has no row in.
+        InfoCard card;
+        card.title = std::string{page[slot].name};
+        std::size_t total = 0, eligible = 0;
+        for (const auto* def : selection) {
+            if (!def) continue;
+            ++total;
+            if (std::ranges::any_of(def->weapons, [](const unitdef::Weapon& weapon) {
+                    return weapon.siloLaunched();
+                })) ++eligible;
+        }
+        if (total == 0) {
+            card.rows.push_back({"STATE", "SELECT A UNIT", kLoss});
+            return card;
+        }
+        if (eligible == 0) {
+            card.rows.push_back({"STATE", "SELECTION CANNOT DO THIS", kLoss});
+            card.rows.push_back({"", "SELECT A MISSILE SILO"});
+            return card;
+        }
+        card.rows.push_back({"STATE", armed ? "TARGETING" : "READY", kGain});
+        card.rows.push_back({"APPLIES TO", std::to_string(eligible) + " OF "
+            + std::to_string(total) + " UNITS"});
+        card.rows.push_back({"TARGET", "UNIT OR GROUND"});
+        return card;
+    }
     return commandCard(kCommandDescriptors[slot], selection, armed);
 }
 
@@ -445,9 +496,12 @@ void appendCommandRack(Geometry& out, const text::Font& labelFont,
         const CommandPageCell& cell = page[slot];
         const bool enabled = cell.enabled;
         // A toggle borrows a dead order's cell: it must not light as the order
-        // the descriptor underneath names, whatever is armed.
+        // the descriptor underneath names, whatever is armed. A substituted cell
+        // (the silo's LAUNCH) lights as its own kind instead of the descriptor's.
+        const std::optional<sim::CommandKind> cellKind =
+            cell.order ? cell.order : command.kind;
         const bool active =
-            (!cell.toggle && command.kind && armed == command.kind) || engaged[slot];
+            (!cell.toggle && cellKind && armed == cellKind) || engaged[slot];
         const auto origin = commandCellOrigin(layout, slot);
         const Colour well = fade(theme.well, enabled ? 1.0f : 0.42f);
         text::appendRectV(out.chrome, labelFont, origin[0], origin[1], layout.cellWidth,

@@ -39,6 +39,7 @@ template <typename Order>
     case CommandKind::Patrol:
         return withinCancelDistance(a, b);
     case CommandKind::Attack:
+    case CommandKind::MissileLaunch:
         if (a.target.generation != 0 || b.target.generation != 0) {
             return a.target == b.target;
         }
