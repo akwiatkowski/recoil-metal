@@ -1143,13 +1143,18 @@ int runWindowed(const Session& session) {
         // Jump-to-alarm cursor: counts back from the newest alarm, wrapping.
         // Beside the callbacks because presses arrive across frames.
         std::size_t alertCursor = 0;
+        // CAMERA TRACKING (T): the snapshot of the selection the camera follows each
+        // frame — and, while one is in flight, the slow shot a tracked shooter fired
+        // (a nuke's arc, a TML missile, an artillery shell). Empty is off; any manual
+        // camera move takes the view back.
+        std::vector<rm::sim::UnitId> tracking;
         bool cancelledLeftGesture = false;
         std::optional<std::size_t> armedOption;
         std::optional<std::array<float, 2>> arrayDragAnchor;
         window.onKey([&window, &selected, &controlGroups, &units, &armedCommand, restPitch,
                       restYaw, &runnerForKeys, &armedOption, &arrayDragging,
                       &cancelledLeftGesture, &arrayDragAnchor, &alertCursor,
-                      &map](rm::KeyEvent event) {
+                      &tracking, &map](rm::KeyEvent event) {
             if (event.phase == rm::KeyPhase::Release) {
                 if (event.key == rm::Key::Space) {
                     // A held-space glance never costs the player their overhead bearings.
@@ -1162,6 +1167,7 @@ int runWindowed(const Session& session) {
 
             if (event.key == rm::Key::Escape) {
                 cancelledLeftGesture = window.leftMouseHeld();
+                tracking.clear();
                 armedOption.reset();
                 armedCommand.reset();
                 arrayDragging = false;
@@ -1191,6 +1197,23 @@ int runWindowed(const Session& session) {
             } else if (event.key == rm::Key::A && event.modifiers.shift) {
                 armedCommand = rm::sim::CommandKind::AttackMove;
                 std::printf("attack-move armed: right-click a destination\n");
+            } else if (event.key == rm::Key::T && !event.repeat) {
+                // TRACK. With a selection the camera rides it; with tracking already
+                // on — or nothing selected — the same key gives the camera back.
+                if (!tracking.empty() || selected.empty()) {
+                    tracking.clear();
+                    std::printf("tracking off\n");
+                } else {
+                    tracking.clear();
+                    for (const rm::sim::UnitId id : selected) {
+                        if (units.store.alive(id)) {
+                            tracking.push_back(id);
+                        }
+                    }
+                    std::printf("tracking %zu unit(s) — any camera move releases\n",
+                                tracking.size());
+                }
+                std::fflush(stdout);
             } else if (event.key == rm::Key::P) {
                 armedCommand = rm::sim::CommandKind::Patrol;
                 std::printf("patrol armed: right-click a destination\n");
@@ -1242,6 +1265,7 @@ int runWindowed(const Session& session) {
                 if (!alarm) {
                     std::printf("no alarms\n");
                 } else {
+                    tracking.clear();
                     rm::OrbitCamera& camera = window.camera();
                     camera.target = simd_make_float3(
                         alarm->x, map->field.heightAtWorld(alarm->x, alarm->z), alarm->z);
@@ -1705,6 +1729,7 @@ int runWindowed(const Session& session) {
                 // Left: jump, keeping the camera's distance and angles — a minimap click
                 // moves where you are looking, not how. Height sampled from the terrain so
                 // the target sits on the ground rather than at y = 0.
+                tracking.clear();
                 window.camera().target = ground;
                 return;
             }
@@ -2506,7 +2531,57 @@ int runWindowed(const Session& session) {
                 if (window.keyHeld(rm::Key::W)) { forward += step; }
                 if (window.keyHeld(rm::Key::S)) { forward -= step; }
                 if (right != 0.0f || forward != 0.0f) {
+                    // Tracking holds the camera only until the player steers it.
+                    tracking.clear();
                     window.camera().pan(right, forward);
+                }
+            }
+
+            // T's FOLLOW, applied where the pan just was: the tracked group's
+            // centroid — or the slow shot one of them has in the air, which is the
+            // nuke-on-the-way view the key exists for. Dead members drop out of the
+            // snapshot; the last one dying lets the camera rest where it fell.
+            if (!tracking.empty()) {
+                std::erase_if(tracking, [&](rm::sim::UnitId id) {
+                    return !units.store.alive(id);
+                });
+                if (!tracking.empty()) {
+                    const auto tracked = [&](rm::sim::UnitId id) {
+                        return std::find(tracking.begin(), tracking.end(), id)
+                               != tracking.end();
+                    };
+                    const rm::sim::Projectile* shot = nullptr;
+                    for (const rm::sim::Projectile& p : units.projectiles) {
+                        if (!tracked(p.firedBy)) {
+                            continue;
+                        }
+                        // Slow enough to be worth watching: a missile, or an arced
+                        // shell. Direct fire is over before the eye arrives.
+                        const bool slow = p.arc != rm::unitdef::BallisticArc::None
+                            || std::find(p.categories.begin(), p.categories.end(),
+                                         "MISSILE") != p.categories.end();
+                        if (slow) {
+                            shot = &p;  // appended at launch — the last match is newest
+                        }
+                    }
+                    if (shot != nullptr) {
+                        window.camera().target = simd_make_float3(
+                            rm::sim::fxToFloat(shot->position[0]),
+                            rm::sim::fxToFloat(shot->position[1]),
+                            rm::sim::fxToFloat(shot->position[2]));
+                    } else {
+                        float cx = 0.0f, cz = 0.0f;
+                        for (const rm::sim::UnitId id : tracking) {
+                            const rm::sim::Transform& at =
+                                units.store.transforms()[id.index];
+                            cx += rm::sim::fxToFloat(at.x);
+                            cz += rm::sim::fxToFloat(at.z);
+                        }
+                        cx /= static_cast<float>(tracking.size());
+                        cz /= static_cast<float>(tracking.size());
+                        window.camera().target = simd_make_float3(
+                            cx, map->field.heightAtWorld(cx, cz), cz);
+                    }
                 }
             }
 
@@ -3041,6 +3116,7 @@ int runWindowed(const Session& session) {
                         minimap, map->field.widthElmos(), map->field.depthElmos(), at[0],
                         at[1]);
                     if (where) {
+                        tracking.clear();
                         window.camera().target = simd_make_float3(
                             (*where)[0], map->field.heightAtWorld((*where)[0], (*where)[1]),
                             (*where)[1]);

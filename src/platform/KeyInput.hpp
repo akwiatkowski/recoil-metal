@@ -21,6 +21,7 @@ enum class Key : std::uint8_t {
     P,
     R,
     S,
+    T,
     W,
     Space,
     Escape,
@@ -68,6 +69,7 @@ struct KeyEvent {
         case 'p': return Key::P;
         case 'r': return Key::R;
         case 's': return Key::S;
+        case 't': return Key::T;
         case 'w': return Key::W;
         case ' ': return Key::Space;
         case '\x1b': return Key::Escape;
