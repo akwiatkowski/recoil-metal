@@ -408,6 +408,12 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
     if (const lua::Value* ai = parsed->path("AI")) {
         def.guardScanRadiusElmos =
             sim::fxFromFloat(numberOr(*ai, "GuardScanRadius", 0.0f) * scmap::kElmosPerOgrid);
+        // The air-staging pair (`C-183` refuel rung, `C-223` rate): the pad's reach
+        // and the multiple of the mover's drain rate a docked aircraft refuels at.
+        def.stagingScanRadiusElmos =
+            sim::fxFromFloat(numberOr(*ai, "StagingPlatformScanRadius", 0.0f)
+                             * scmap::kElmosPerOgrid);
+        def.refuelingMultiplier = numberOr(*ai, "RefuelingMultiplier", 0.0f);
     }
 
     // --- winged flight -------------------------------------------------------
@@ -658,6 +664,7 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
         def.transport.class3AttachSize = integer("Class3AttachSize");
         def.transport.class4AttachSize = integer("Class4AttachSize");
         def.transport.classGenericUpTo = integer("ClassGenericUpTo");
+        def.transport.dockingSlots = integer("DockingSlots");
         const auto flag = [transport](std::string_view key) {
             const lua::Value* value = transport->find(key);
             return value != nullptr && value->asBoolean().value_or(false);

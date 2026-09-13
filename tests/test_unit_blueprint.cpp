@@ -1071,3 +1071,43 @@ TEST_CASE("weapon manipulator specs arrive as authored", "[unitbp][manipulators]
     CHECK(gun.weaponUnpackAnimatorPrecedence == 3);
     CHECK(gun.animationCharge.empty());
 }
+
+TEST_CASE("an air staging pad reads its refuel terms from the blueprint", "[unitbp][airstaging]") {
+    // UEB5202's authored block: the multiplier C-223 says the pad applies to the
+    // mover's drain rate, the radius that bounds its reach, and the authored
+    // slot count (DockingSlots — dead in the retail executable per C-225, but
+    // the only capacity the file states, and it matches the pad's attach bones).
+    const Blueprint bp{"UEB5202_unit.bp", R"(
+        UnitBlueprint {
+            AI = {
+                RefuelingMultiplier = 50,
+                StagingPlatformScanRadius = 300,
+            },
+            Categories = { 'AIRSTAGINGPLATFORM', 'STRUCTURE' },
+            Physics = { MotionType = 'RULEUMT_None' },
+            Transport = {
+                DockingSlots = 4,
+                RepairRate = 0.1,
+            },
+        }
+    )"};
+    const auto def = rm::unitbp::loadFile(bp.path());
+    REQUIRE(def.has_value());
+    CHECK(def->isAirStagingPad());
+    CHECK(def->refuelingMultiplier == Catch::Approx(50.0f));
+    CHECK(rm::sim::fxToFloat(def->stagingScanRadiusElmos) == Catch::Approx(2400.0f));
+    CHECK(def->transport.dockingSlots == 4);
+}
+
+TEST_CASE("a unit with no staging block is not a pad", "[unitbp][airstaging]") {
+    const Blueprint bp{"UEL0303_unit.bp", R"(
+        UnitBlueprint {
+            Categories = { 'MOBILE', 'LAND' },
+            Physics = { MotionType = 'RULEUMT_Land' },
+        }
+    )"};
+    const auto def = rm::unitbp::loadFile(bp.path());
+    REQUIRE(def.has_value());
+    CHECK_FALSE(def->isAirStagingPad());
+    CHECK(def->refuelingMultiplier == 0.0f);
+}

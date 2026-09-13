@@ -727,6 +727,11 @@ struct UnitDef {
         int class3AttachSize = 0;
         int class4AttachSize = 0;
         int classGenericUpTo = 0;
+        /// `DockingSlots` — the authored pad count on an `AIRSTAGINGPLATFORM`.
+        /// C-225 calls it dead code in the retail executable (nothing reads it);
+        /// it is used here anyway because it is the only capacity the file
+        /// states, and on every shipped pad it equals the attach-bone count.
+        int dockingSlots = 0;
         /// `AirClass` — the carrier flies, so loading means coming down to the deck.
         bool airClass = false;
         /// `CanFireFromTransport` — parsed; firing while attached is outside the
@@ -769,6 +774,23 @@ struct UnitDef {
     [[nodiscard]] int transportCargoClass() const noexcept {
         return transport.transportClass > 0 ? transport.transportClass : 1;
     }
+
+    /// An `AIRSTAGINGPLATFORM` — the structure a bingo-fuel aircraft diverts to
+    /// (`C-183`'s refuel rung, `C-225`'s bone-keyed docking). Four shipped
+    /// blueprints carry the category: UAB5202, UEB5202, URB5202, XSB5202.
+    [[nodiscard]] bool isAirStagingPad() const noexcept {
+        return hasCategory("AIRSTAGINGPLATFORM");
+    }
+
+    /// `AI.RefuelingMultiplier` — how much faster than the bare drain rate a
+    /// docked aircraft refuels on this pad (`C-223`: the ratio climbs by
+    /// `multiplier / FuelUseTime × 0.1` a beat; UEB5202 states 50).
+    float refuelingMultiplier = 0.0f;
+
+    /// `AI.StagingPlatformScanRadius` in elmos — how far this pad reaches for
+    /// thirsty aircraft (UEB5202: 300 ogrids). The radius lives on the PAD, not
+    /// on the aircraft looking for one.
+    sim::Fx stagingScanRadiusElmos{};
 
     /// Whether a transport may pick this unit up: mobile, not itself a carrier,
     /// and declaring the `RULEUCC_CallTransport` command cap — the authored flag

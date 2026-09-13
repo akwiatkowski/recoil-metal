@@ -1759,6 +1759,10 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
         if (orders[slot].active() == nullptr) {
             startPending();
             serviceBuilds();
+            std::fprintf(stderr, "DBG startPending slot=%u active=%d kind=%d\n", slot,
+                         orders[slot].active() != nullptr ? 1 : 0,
+                         orders[slot].active() != nullptr
+                             ? static_cast<int>(orders[slot].active()->kind()) : -1);
             if (orders[slot].active() == nullptr && store.motion()[slot].canFly) {
                 store.motion()[slot].airCombatState = MoveState::AirCombatState::None;
                 store.motion()[slot].airCombatDeadline = 0;
@@ -2015,19 +2019,95 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
             }
         }
 
-        // BINGO FUEL grounds an aircraft guard (`C-183`'s refuel rung). Below a
-        // quarter tank it holds station instead of pursuing or returning: idleness
-        // runs the auto-land timer, the ground refuels it (`C-222`, `C-223`), and
-        // the still-headed order takes off again when prey or the leash calls.
-        // The quarter is an adapter convention — no retail bingo fraction was
-        // recovered — chosen so a scout's typical 400-second tank keeps a
-        // hundred-second reserve. Staging-directed RTB stays open; the ground
-        // refuel closes the loop without it.
+        // BINGO FUEL and the pad — `C-183`'s refuel/staging rung, first on the
+        // ladder. A docked aircraft refuels at the pad's `AI.RefuelingMultiplier`
+        // times its own drain rate (`C-223`: the ratio climbs by
+        // `multiplier / FuelUseTime × 0.1` a beat) and relaunches at a full tank.
+        // A bingo one finds the nearest allied `AIRSTAGINGPLATFORM` whose own
+        // `AI.StagingPlatformScanRadius` reaches it — the radius lives on the
+        // PAD — with a `DockingSlots` berth free, and flies there; docking is the
+        // same attach transport cargo gets (`C-225`). With no pad in reach it
+        // holds station as before: idleness runs the auto-land timer, the ground
+        // refuels it (`C-222`, `C-223`), and the still-headed order takes off
+        // again when prey or the leash calls. The quarter is an adapter
+        // convention — no retail bingo fraction was recovered — chosen so a
+        // scout's typical 400-second tank keeps a hundred-second reserve.
         constexpr Fx kBingoFuelRatio = Fx::fromRatio(1, 4);
         const MoveState& guardMotion = store.motion()[slot];
         if (isGuardCommand(current->kind()) && guardMotion.canFly
-            && guardMotion.fuelRatio < kBingoFuelRatio) {
-            teardownMovement(store.motion()[slot]);
+            && (guardMotion.fuelRatio < kBingoFuelRatio || guardMotion.attached)) {
+            const UnitId self = store.idAt(slot);
+            if (!guardMotion.attached) {
+                const Transform& at = store.transforms()[slot];
+                UnitId pad{};
+                const unitdef::UnitDef* padDef = nullptr;
+                Fx nearest{};
+                for (UnitIndex other = 0; other < store.slotCount(); ++other) {
+                    if (other == slot || !store.slotAlive(other)
+                        || !alliedBuilder(store.idAt(other), slot, store, armies)) {
+                        continue;
+                    }
+                    const unitdef::UnitDef* def = catalog.def(store.typeAt(other));
+                    if (def == nullptr || !def->isAirStagingPad()
+                        || static_cast<std::size_t>(def->transport.dockingSlots)
+                               <= store.childrenOf(store.idAt(other)).size()) {
+                        continue;
+                    }
+                    // A length, not a square: Fx distance² saturates past
+                    // ~360 elmos and would admit every pad on the map.
+                    const Fx dist = fxPolar(store.transforms()[other].x - at.x,
+                                            store.transforms()[other].z - at.z)
+                                        .length;
+                    if (dist > def->stagingScanRadiusElmos
+                        || (padDef != nullptr && dist >= nearest)) {
+                        continue;
+                    }
+                    pad = store.idAt(other);
+                    padDef = def;
+                    nearest = dist;
+                }
+                if (padDef == nullptr) {
+                    teardownMovement(store.motion()[slot]);
+                    continue;
+                }
+                const Transform& padAt = store.transforms()[pad.index];
+                // Both radii plus a pad — the same reach a transport load uses.
+                const Fx reach = store.motion()[pad.index].radiusElmos
+                                 + guardMotion.radiusElmos + Fx::fromInt(2);
+                if (fxPolar(padAt.x - at.x, padAt.z - at.z).length > reach) {
+                    orderTo(store.motion()[slot], terrain, padAt.x, padAt.z);
+                    continue;
+                }
+                // Dock on a deterministic berth — a two-column grid at half the
+                // pad's radius — so the attach can capture the offset.
+                const std::size_t berth = store.childrenOf(pad).size();
+                const Fx half = store.motion()[pad.index].radiusElmos * Fx::fromRatio(1, 2);
+                Transform& place = store.transforms()[slot];
+                place.x = padAt.x + Fx::fromInt(static_cast<int>(berth % 2) * 2 - 1) * half;
+                place.z = padAt.z + Fx::fromInt(static_cast<int>((berth / 2) % 2) * 2 - 1) * half;
+                place.y = padAt.y + fxFromFloat(padDef->sizeYElmos);
+                teardownMovement(store.motion()[slot]);
+                (void)store.attach(pad, self);
+            }
+            // Docked on a pad: refuel, and relaunch when the tank reads full.
+            const std::optional<UnitId> parent = store.parentOf(self);
+            const unitdef::UnitDef* padDef =
+                parent && store.alive(*parent) ? catalog.def(store.typeAt(parent->index))
+                                               : nullptr;
+            if (padDef != nullptr && padDef->isAirStagingPad()) {
+                MoveState& docked = store.motion()[slot];
+                docked.fuelRatio =
+                    std::min(Fx::fromInt(1),
+                             docked.fuelRatio
+                                 + docked.fuelDrainPerTick
+                                       * fxFromFloat(padDef->refuelingMultiplier));
+                if (docked.fuelRatio >= Fx::fromInt(1)) {
+                    // It lifts off the deck it parked on: Bottom plus the guard
+                    // order still at the head, and the ordinary rungs fly it.
+                    docked.airState = MoveState::AirState::Bottom;
+                    (void)store.detach(self);
+                }
+            }
             continue;
         }
 

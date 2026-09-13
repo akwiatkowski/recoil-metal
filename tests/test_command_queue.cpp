@@ -2661,6 +2661,170 @@ TEST_CASE("a fueled air guard pursues like its land twin", "[guard][fuel]") {
     CHECK(roster.store.orders()[guard.index].active()->kind() == CommandKind::Guard);
 }
 
+namespace {
+
+// A bingo-fuel guard, its guardee, and a pad: the staging-rung fixture shared by
+// the tests below. The pad is a 24-elmo-radius slab of concrete offering
+// `dockingSlots` attach points inside `stagingScanRadiusElmos` of itself.
+struct StagingScene {
+    rm::test::Roster roster;
+    rm::sim::PassabilityGrid grid;
+    rm::sim::Terrain terrain;
+    std::vector<rm::sim::Army> armies = rm::sim::freeForAll(2);
+    std::vector<rm::sim::Player> players{rm::sim::Player{.index = 0, .army = 0}};
+    std::vector<const rm::sim::PassabilityGrid*> grids;
+    std::vector<rm::sim::Construction> building;
+    rm::UnitTypeIndex guardType{};
+    rm::UnitTypeIndex padType{};
+    rm::UnitTypeIndex guardeeType{};
+
+    explicit StagingScene(rm::HeightField field)
+        : grid(rm::sim::buildPassability(field, 0.0f, 60.0f, 0.0f)), terrain{field},
+          grids{&grid, &grid, &grid, &grid} {
+        rm::unitdef::UnitDef guardDef;
+        guardDef.name = "gunship";
+        guardDef.speedElmosPerSecond = 20.0f;
+        guardDef.guardScanRadiusElmos = rm::sim::fxFromFloat(240.0f);
+        guardType = roster.addType(guardDef);
+        rm::unitdef::UnitDef padDef;
+        padDef.name = "pad";
+        padDef.categories = {"AIRSTAGINGPLATFORM", "STRUCTURE"};
+        padDef.collisionRadiusElmos = 24.0f;
+        padDef.refuelingMultiplier = 10.0f;
+        padDef.stagingScanRadiusElmos = rm::sim::fxFromFloat(400.0f);
+        padDef.transport.dockingSlots = 1;
+        padType = roster.addType(padDef);
+        rm::unitdef::UnitDef factoryDef;
+        factoryDef.name = "factory";
+        factoryDef.buildRate = 10.0f;
+        guardeeType = roster.addType(factoryDef);
+    }
+
+    UnitId addGuard(float x, float z) {
+        const UnitId guard = roster.add(guardType, x, z, 0, 100.0f);
+        roster.store.motion()[guard.index].canFly = true;
+        roster.store.motion()[guard.index].airborne = true;
+        roster.store.motion()[guard.index].fuelRatio = rm::sim::Fx::fromRatio(1, 10);
+        roster.store.motion()[guard.index].fuelDrainPerTick = rm::sim::Fx::fromRatio(1, 100);
+        return guard;
+    }
+
+    rm::sim::ApplyCommandResult apply(const CommandIssue& issue) {
+        rm::sim::PassabilityGrid& g = grid;
+        return rm::sim::applyCommand(issue, roster.store, roster.catalog, players, armies,
+                                     terrain, [&g](UnitId) { return &g; }, roster.rate,
+                                     &building);
+    }
+
+    void tick() {
+        (void)rm::sim::advanceOrders(roster.store, roster.catalog, terrain, grids,
+                                     roster.rate, &building, nullptr, nullptr, nullptr,
+                                     nullptr, armies);
+    }
+};
+
+} // namespace
+
+TEST_CASE("a bingo air guard runs to an allied staging pad in reach", "[guard][airstaging]") {
+    StagingScene scene{flatField()};
+    const UnitId guard = scene.addGuard(40.0f, 40.0f);
+    const UnitId guardee = scene.roster.add(scene.guardeeType, 44.0f, 40.0f, 0, 100.0f);
+    const UnitId pad = scene.roster.add(scene.padType, 200.0f, 40.0f, 0, 500.0f);
+    REQUIRE(scene.apply(CommandIssue{.source = 0, .id = rm::commandId(0, 1), .player = 0,
+                                     .kind = CommandKind::Guard, .units = {guard},
+                                     .target = guardee}));
+
+    scene.tick();
+
+    // The C-183 refuel rung outranks the crude hold: the aircraft is MOVING,
+    // and the place it is moving to is the pad.
+    CHECK(scene.roster.store.motion()[guard.index].moving);
+    CHECK(scene.roster.store.motion()[guard.index].destinationX
+          == scene.roster.store.transforms()[pad.index].x);
+}
+
+TEST_CASE("a bingo air guard holds when every pad is out of reach", "[guard][airstaging]") {
+    StagingScene scene{flatField()};
+    const UnitId guard = scene.addGuard(40.0f, 40.0f);
+    const UnitId guardee = scene.roster.add(scene.guardeeType, 44.0f, 40.0f, 0, 100.0f);
+    // 600 elmos out — the pad's own scan radius only reaches 400.
+    (void)scene.roster.add(scene.padType, 640.0f, 40.0f, 0, 500.0f);
+    REQUIRE(scene.apply(CommandIssue{.source = 0, .id = rm::commandId(0, 2), .player = 0,
+                                     .kind = CommandKind::Guard, .units = {guard},
+                                     .target = guardee}));
+
+    scene.tick();
+
+    CHECK_FALSE(scene.roster.store.motion()[guard.index].moving);
+}
+
+TEST_CASE("a hostile staging pad is not a place to land", "[guard][airstaging]") {
+    StagingScene scene{flatField()};
+    const UnitId guard = scene.addGuard(40.0f, 40.0f);
+    const UnitId guardee = scene.roster.add(scene.guardeeType, 44.0f, 40.0f, 0, 100.0f);
+    // Army 1's pad, well inside reach — and useless to army 0.
+    (void)scene.roster.add(scene.padType, 60.0f, 40.0f, 1, 500.0f);
+    REQUIRE(scene.apply(CommandIssue{.source = 0, .id = rm::commandId(0, 3), .player = 0,
+                                     .kind = CommandKind::Guard, .units = {guard},
+                                     .target = guardee}));
+
+    scene.tick();
+
+    CHECK_FALSE(scene.roster.store.motion()[guard.index].moving);
+}
+
+TEST_CASE("a bingo air guard docks on the pad, refuels at its rate, and relaunches",
+          "[guard][airstaging]") {
+    StagingScene scene{flatField()};
+    // Already hovering over the pad: inside its 24-elmo radius plus the dock reach.
+    const UnitId guard = scene.addGuard(48.0f, 40.0f);
+    const UnitId guardee = scene.roster.add(scene.guardeeType, 44.0f, 140.0f, 0, 100.0f);
+    const UnitId pad = scene.roster.add(scene.padType, 40.0f, 40.0f, 0, 500.0f);
+    REQUIRE(scene.apply(CommandIssue{.source = 0, .id = rm::commandId(0, 4), .player = 0,
+                                     .kind = CommandKind::Guard, .units = {guard},
+                                     .target = guardee}));
+
+    scene.tick();
+
+    // Docked: attached to the pad, inert, and refuelling at TEN TIMES the drain
+    // rate — the pad's AI.RefuelingMultiplier (C-223).
+    const rm::sim::UnitStore& store = scene.roster.store;
+    REQUIRE(store.parentOf(guard).has_value());
+    CHECK(*store.parentOf(guard) == pad);
+    const rm::sim::Fx first = store.motion()[guard.index].fuelRatio;
+    CHECK(first > rm::sim::Fx::fromRatio(1, 10));
+
+    scene.tick();
+    CHECK(store.motion()[guard.index].fuelRatio - first
+          == rm::sim::Fx::fromRatio(1, 100) * rm::sim::fxFromFloat(10.0f));
+    // The pad's 10x multiplier on the mover's own 1/100 drain.
+
+    // Full tank: relaunch — detached, and the guard order still heads the queue.
+    scene.roster.store.motion()[guard.index].fuelRatio = rm::sim::Fx::fromRatio(9, 10);
+    scene.tick();
+    CHECK_FALSE(store.parentOf(guard).has_value());
+    REQUIRE(store.orders()[guard.index].active() != nullptr);
+    CHECK(store.orders()[guard.index].active()->kind() == CommandKind::Guard);
+}
+
+TEST_CASE("a pad with no free slot leaves the bingo guard holding", "[guard][airstaging]") {
+    StagingScene scene{flatField()};
+    // One slot, already promised to nobody — but a squatting passenger fills it.
+    const UnitId squatter = scene.roster.add(scene.guardeeType, 40.0f, 40.0f, 0, 100.0f);
+    const UnitId pad = scene.roster.add(scene.padType, 40.0f, 40.0f, 0, 500.0f);
+    REQUIRE(scene.roster.store.attach(pad, squatter));
+    const UnitId guard = scene.addGuard(100.0f, 40.0f);
+    const UnitId guardee = scene.roster.add(scene.guardeeType, 104.0f, 40.0f, 0, 100.0f);
+    REQUIRE(scene.apply(CommandIssue{.source = 0, .id = rm::commandId(0, 5), .player = 0,
+                                     .kind = CommandKind::Guard, .units = {guard},
+                                     .target = guardee}));
+
+    scene.tick();
+
+    CHECK_FALSE(scene.roster.store.motion()[guard.index].moving);
+    CHECK_FALSE(scene.roster.store.parentOf(guard).has_value());
+}
+
 // --- Predicted times -------------------------------------------------------------
 //
 // The labels a shift-held queue wears over its nodes: pure arithmetic over the same
