@@ -117,10 +117,13 @@ void syncCaptureWork(const UnitStore& store, const UnitCatalog& catalog,
         const bool inReach =
             gap <= repairReach(catalog, store.typeAt(captor), motion[captor],
                                motion[target.index]);
+        // A production-paused captor asks for nothing, like one out of reach: the
+        // task and its progress survive, but no funded beat accumulates under it.
+        const bool funded = inReach && !store.productionPaused(store.idAt(captor));
         if (found != captures.end() && found->target == target) {
             found->armyIndex = motion[captor].armyIndex;
             found->inReach = inReach;
-            found->demand = inReach && targetDef != nullptr
+            found->demand = funded && targetDef != nullptr
                 ? captureDemand(targetDef->buildCostEnergy, found->workTicks)
                 : Resources{};
             continue;
@@ -135,7 +138,7 @@ void syncCaptureWork(const UnitStore& store, const UnitCatalog& catalog,
         const int budget = targetDef != nullptr
             ? captureWorkTicks(targetDef->buildTime, ratePerTick, ticksPerSecond)
             : 1;
-        const Resources demand = inReach && targetDef != nullptr
+        const Resources demand = funded && targetDef != nullptr
             ? captureDemand(targetDef->buildCostEnergy, budget)
             : Resources{};
         captures.push_back(CaptureWork{.armyIndex = motion[captor].armyIndex,

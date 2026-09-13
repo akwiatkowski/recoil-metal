@@ -79,6 +79,7 @@ public:
         std::vector<Health> health;
         std::vector<UnitTypeIndex> types;
         std::vector<bool> factoryRepeat;
+        std::vector<bool> productionPaused;
         std::vector<bool> doNotTarget;
         std::vector<std::optional<UnitId>> parents;
         std::vector<std::vector<UnitId>> children;
@@ -243,6 +244,13 @@ public:
     [[nodiscard]] bool setFactoryRepeat(UnitId unit, bool enabled) noexcept;
     [[nodiscard]] bool factoryRepeat(UnitId unit) const noexcept;
 
+    /// Per-live-unit production pause. The ONE authoritative flag: every economy consumer —
+    /// construction, silo ammunition, enhancements, repair, capture, reclaim, assistance
+    /// and the unit's own income — reads it (directly or through a per-tick mirror on the
+    /// work record). Semantic command intake owns the choice to change it.
+    [[nodiscard]] bool setProductionPaused(UnitId unit, bool paused) noexcept;
+    [[nodiscard]] bool productionPaused(UnitId unit) const noexcept;
+
     /// Controls automatic acquisition only; explicit target orders remain authoritative.
     [[nodiscard]] bool setDoNotTarget(UnitId unit, bool enabled) noexcept;
     [[nodiscard]] bool doNotTarget(UnitId unit) const noexcept;
@@ -307,6 +315,7 @@ private:
     std::vector<UnitTypeIndex> types_;
     std::vector<std::map<std::string, std::string>> enhancements_;
     std::vector<bool> factoryRepeat_;
+    std::vector<bool> productionPaused_;
     std::vector<bool> doNotTarget_;
     std::vector<CommandQueue> orders_;
     std::vector<std::optional<UnitId>> parents_;

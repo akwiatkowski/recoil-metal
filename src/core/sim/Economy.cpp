@@ -22,6 +22,9 @@ void advanceEnhancement(EnhancementWork& work) noexcept {
 }
 
 Resources drainPerTick(const Construction& work) noexcept {
+    if (work.paused) {
+        return {};
+    }
     // The EFFECTIVE rate — founder plus assisters — throughout: help makes the work drain
     // faster as well as finish sooner, which is what `BuildRate` means and why piling
     // engineers onto one build is a decision about the bank, not just the clock.
@@ -90,7 +93,11 @@ MissileRedirect makeMissileRedirect(UnitId owner, Fx radiusElmos,
 }
 
 void advanceConstruction(Construction& work) noexcept {
-    if (work.finished()) {
+    if (work.paused || work.finished()) {
+        // A paused build stamps nothing: it was not worked this beat, and billing for it
+        // would charge a stall the player ordered. The `fundedLastTick` reset happens in
+        // `tickEconomy`'s paused branch so an unpause does not spend last beat's ratio.
+        work.workedThisTick = false;
         return;
     }
     // Progress on LAST beat's funded fraction (`C-162`). Retail writes the ratio onto the
@@ -189,7 +196,7 @@ void tickEconomy(Economy& economy, std::span<Construction> building,
                                                       && other.building(); });
     };
     for (const SiloAmmo& ammo : siloAmmo) {
-        if (autoBuilding(ammo)) {
+        if (!ammo.paused && autoBuilding(ammo)) {
             wanted += ammo.costPerTick;
             bucket(outstanding(ammo.costPerTick, ammo.delivered));
         }
@@ -286,6 +293,13 @@ void tickEconomy(Economy& economy, std::span<Construction> building,
     }
 
     for (Construction& work : building) {
+        if (work.paused) {
+            // Held, not cancelled: the queue and the residue survive, but the stale funding
+            // ratio must not — an unpause would otherwise spend a full beat's grant the
+            // pause never earned.
+            work.fundedLastTick = Fx{};
+            continue;
+        }
         if (!stillBilled(work)) {
             continue;
         }
@@ -335,7 +349,7 @@ void tickEconomy(Economy& economy, std::span<Construction> building,
         }
     }
     for (SiloAmmo& ammo : siloAmmo) {
-        if (!autoBuilding(ammo)) {
+        if (ammo.paused || !autoBuilding(ammo)) {
             continue;
         }
         // C-084: this is an event delivery accumulator, not Construction's lagged ratio.

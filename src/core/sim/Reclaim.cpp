@@ -190,7 +190,8 @@ std::size_t harvestReclaim(UnitStore& store, const UnitCatalog& catalog,
             continue;
         }
         const QueuedCommand* head = orders[slot].active();
-        if (head == nullptr || head->kind() != CommandKind::Reclaim) {
+        if (head == nullptr || head->kind() != CommandKind::Reclaim
+            || store.productionPaused(store.idAt(slot))) {
             continue;
         }
         Feature* wreck = features.findMutable(head->target());
@@ -224,7 +225,8 @@ std::size_t reclaimUnits(UnitStore& store, const UnitCatalog& catalog,
             continue;
         }
         const QueuedCommand* head = orders[slot].active();
-        if (head == nullptr || head->kind() != CommandKind::ReclaimUnit) {
+        if (head == nullptr || head->kind() != CommandKind::ReclaimUnit
+            || store.productionPaused(store.idAt(slot))) {
             continue;
         }
         const UnitId target = head->target();
@@ -324,7 +326,8 @@ std::size_t applyGuardReclaim(UnitStore& store, const UnitCatalog& catalog,
     std::size_t serviced = 0;
     for (const GuardWork& item : work) {
         if (item.kind != GuardWorkKind::Reclaim || !store.slotAlive(item.builder)
-            || !store.health()[item.builder].alive()) {
+            || !store.health()[item.builder].alive()
+            || store.productionPaused(store.idAt(item.builder))) {
             continue;
         }
         Feature* wreck = features.findMutable(item.target);
@@ -345,7 +348,8 @@ void collectRepairWork(const UnitStore& store, const UnitCatalog& catalog,
                        std::span<const Construction> building) {
     out.clear();
     for (UnitIndex builder = 0; builder < store.orders().size(); ++builder) {
-        if (!store.slotAlive(builder) || !store.health()[builder].alive()) {
+        if (!store.slotAlive(builder) || !store.health()[builder].alive()
+            || store.productionPaused(store.idAt(builder))) {
             continue;
         }
         const QueuedCommand* order = store.orders()[builder].active();
@@ -382,7 +386,8 @@ void collectRepairWork(const UnitStore& store, const UnitCatalog& catalog,
     }
     for (const GuardWork& item : guardWork) {
         if (item.kind != GuardWorkKind::Repair || !store.slotAlive(item.builder)
-            || !store.alive(item.target) || !store.health()[item.builder].alive()) continue;
+            || !store.alive(item.target) || !store.health()[item.builder].alive()
+            || store.productionPaused(store.idAt(item.builder))) continue;
         const UnitIndex target = item.target.index;
         const MoveState& builderMotion = store.motion()[item.builder];
         const Army* owner = armyFor(builderMotion.armyIndex, armies);
@@ -406,6 +411,7 @@ void collectRepairWork(const UnitStore& store, const UnitCatalog& catalog,
     // station can reach is healed, nearest first and lowest index on a tie.
     for (UnitIndex station = 0; station < store.orders().size(); ++station) {
         if (!idleEngineeringStation(station, store, catalog)
+            || store.productionPaused(store.idAt(station))
             || stationConstructionInReach(station, store, catalog, building, armies)) {
             continue;
         }

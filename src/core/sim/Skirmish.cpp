@@ -218,11 +218,17 @@ void recomputeIncome(const UnitStore& store, const UnitCatalog& catalog, Match& 
             economy.incomePerTick.energy += trickle.energy;
         } else {
             // Production and upkeep through this unit's adjacency multipliers — one for
-            // the unbuffed, which is everything that stands alone.
+            // the unbuffed, which is everything that stands alone. A production-paused
+            // unit does neither: the fab stops fabricating AND stops drawing power, the
+            // generator stops generating. Storage it offers still counts — capacity is
+            // not production.
             const AdjacencyEffects& beside = adjacency[slot];
-            economy.incomePerTick.mass += rates.massPerTick * beside.massProduction;
-            economy.incomePerTick.energy += rates.energyPerTick * beside.energyProduction;
-            economy.upkeepPerTick.energy += rates.upkeepEnergyPerTick * beside.energyUpkeep;
+            if (!store.productionPaused(store.idAt(slot))) {
+                economy.incomePerTick.mass += rates.massPerTick * beside.massProduction;
+                economy.incomePerTick.energy += rates.energyPerTick * beside.energyProduction;
+                economy.upkeepPerTick.energy +=
+                    rates.upkeepEnergyPerTick * beside.energyUpkeep;
+            }
             // TRUNCATED PER STRUCTURE, and this is the only place the economy rounds
             // (`C-069`, `C-104`(e), `C-160`). Retail keeps its capacity as a `uint64` and
             // adds each contribution through `CEconStorage::Apply`, whose `__ftol2`
@@ -390,6 +396,22 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
     if (match.building != nullptr) {
         for (Construction& work : *match.building) {
             work.advancedLastTick = false;
+        }
+    }
+
+    // THE PRODUCTION PAUSE, mirrored once a tick. `UnitStore::productionPaused` is the one
+    // authoritative flag; the work records carry a copy because the economy pass and the
+    // script-task host never see the store. Enhancements and silo builds take theirs here;
+    // constructions take it again at their advance sites in `advanceOrders`, so a pause
+    // ordered mid-tick is honoured the same beat.
+    if (match.enhancements != nullptr) {
+        for (EnhancementWork& work : *match.enhancements) {
+            work.paused = store.productionPaused(work.owner);
+        }
+    }
+    if (match.siloAmmo != nullptr) {
+        for (SiloAmmo& ammo : *match.siloAmmo) {
+            ammo.paused = store.productionPaused(ammo.owner);
         }
     }
 

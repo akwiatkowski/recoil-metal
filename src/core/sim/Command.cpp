@@ -136,6 +136,16 @@ Fx constructionReach(const UnitCatalog& catalog, UnitTypeIndex builder,
          + catalog.rates(product).buildSkirtElmos;
 }
 
+bool canPauseProduction(const unitdef::UnitDef& def) noexcept {
+    if (def.isBuilder() || def.hasCategory("FACTORY")
+        || def.hasToggleCap("RULEUTC_ProductionToggle") || def.producesMassPerSecond > 0.0f
+        || def.producesEnergyPerSecond > 0.0f || def.upkeepEnergyPerSecond > 0.0f) {
+        return true;
+    }
+    return std::ranges::any_of(
+        def.weapons, [](const unitdef::Weapon& weapon) { return weapon.countedProjectile; });
+}
+
 namespace {
 
 /// Whether the active queue entry already owns a completed row. Finished constructions remain
@@ -371,6 +381,8 @@ const char* commandKindName(CommandKind kind) noexcept {
         return "guard";
     case CommandKind::ToggleFactoryRepeat:
         return "toggle-factory-repeat";
+    case CommandKind::ToggleProduction:
+        return "toggle-production";
     case CommandKind::Repair:
         return "repair";
     case CommandKind::Script:
@@ -423,6 +435,9 @@ namespace {
     }
     if (name == "toggle-factory-repeat") {
         return CommandKind::ToggleFactoryRepeat;
+    }
+    if (name == "toggle-production") {
+        return CommandKind::ToggleProduction;
     }
     if (name == "cancel-factory-build") return CommandKind::CancelFactoryBuild;
     if (name == "repair") {
@@ -1264,6 +1279,22 @@ ApplyCommandResult applyCommand(const CommandIssue& issued, UnitStore& store,
         }
         return result;
     }
+    if (issue.kind == CommandKind::ToggleProduction) {
+        for (const UnitId unit : canonical) {
+            if (!store.alive(unit)) {
+                continue;
+            }
+            const Player* player = playerFor(issue.player, players);
+            const unitdef::UnitDef* definition = catalog.def(store.typeAt(unit.index));
+            if (player == nullptr || !authorised(*player, store, unit, armies)
+                || definition == nullptr || !canPauseProduction(*definition)) {
+                continue;
+            }
+            (void)store.setProductionPaused(unit, !store.productionPaused(unit));
+            result.accepted.push_back(unit);
+        }
+        return result;
+    }
     std::shared_ptr<SharedCommand> shared;
     for (std::size_t rank = 0; rank < canonical.size(); ++rank) {
         const UnitId unit = canonical[rank];
@@ -1563,6 +1594,10 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
             }
             bool completedUpgrade = false;
             if (Construction* work = activeConstruction(*building, store.idAt(slot))) {
+                // The store flag is authoritative; the record mirrors it so callers that
+                // never run `tickSkirmish` — tests driving the queue directly — see the
+                // pause in the same tick it was ordered.
+                work->paused = store.productionPaused(work->builder);
                 advanceConstruction(*work);
                 if (!work->finished()) {
                     return false;  // still rising; the order stays at the head
@@ -1747,6 +1782,7 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
             if (guardDef != nullptr && guardDef->hasCategory("FACTORY")
                 && !guardDef->isMobile() && guardDef->isBuilder()) {
                 if (Construction* work = activeConstruction(*building, store.idAt(slot))) {
+                    work->paused = store.productionPaused(work->builder);
                     advanceConstruction(*work);
                     if (!work->finished()) {
                         continue;
@@ -2899,6 +2935,9 @@ bool startCommand(const Command& command, UnitStore& store, const UnitCatalog& c
             .blueprintIndex = command.buildType,
             .upgradeOf = upgrade ? command.unit : UnitId{},
             .builder = command.unit,
+            // Born paused when its founder is: the store flag is the authority, and a work
+            // started under a hold must not bill its first beat as if unpaused.
+            .paused = store.productionPaused(command.unit),
         });
         emit(events, Event{
                          .kind = EventKind::ConstructionStarted,
@@ -3025,6 +3064,7 @@ bool startCommand(const Command& command, UnitStore& store, const UnitCatalog& c
     }
     case CommandKind::Dive:
     case CommandKind::ToggleFactoryRepeat:
+    case CommandKind::ToggleProduction:
     case CommandKind::CancelFactoryBuild:
         return false;  // applied immediately by semantic issue intake; it never enters a queue
     case CommandKind::Script:

@@ -92,8 +92,8 @@ std::size_t applyAssistance(const UnitStore& store, const UnitCatalog& catalog,
     const std::span<const MoveState> motion = store.motion();
 
     for (UnitIndex slot = 0; slot < orders.size(); ++slot) {
-        if (!store.slotAlive(slot)) {
-            continue;
+        if (!store.slotAlive(slot) || store.productionPaused(store.idAt(slot))) {
+            continue;  // a paused helper lends no build power
         }
         const QueuedCommand* head = orders[slot].active();
         if (head == nullptr || !isGuardCommand(head->kind())

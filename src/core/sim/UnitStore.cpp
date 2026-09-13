@@ -16,6 +16,7 @@ UnitStore::UnitStore(const Snapshot& snapshot)
        types_(snapshot.types),
        enhancements_(snapshot.enhancements),
        factoryRepeat_(snapshot.factoryRepeat),
+       productionPaused_(snapshot.productionPaused),
        doNotTarget_(snapshot.doNotTarget),
        orders_(snapshot.transforms.size()),
        parents_(snapshot.parents),
@@ -63,6 +64,7 @@ UnitStore::UnitStore(const Snapshot& snapshot)
     attachmentSelfRestHeights_.resize(transforms_.size());
     enhancements_.resize(transforms_.size());
     factoryRepeat_.resize(transforms_.size(), false);
+    productionPaused_.resize(transforms_.size(), false);
     doNotTarget_.resize(transforms_.size(), false);
     for (std::size_t child = 0; child < transforms_.size(); ++child) {
         if (parents_[child]) {
@@ -83,6 +85,7 @@ UnitStore::Snapshot UnitStore::snapshot() const {
                    .health = health_,
                    .types = types_,
                    .factoryRepeat = factoryRepeat_,
+                   .productionPaused = productionPaused_,
                    .doNotTarget = doNotTarget_,
                    .parents = parents_,
                    .children = children_,
@@ -128,6 +131,7 @@ UnitId UnitStore::spawn(const Spawn& request) {
         types_.emplace_back();
         enhancements_.emplace_back();
         factoryRepeat_.emplace_back(false);
+        productionPaused_.emplace_back(false);
         doNotTarget_.emplace_back(false);
         orders_.emplace_back();
         parents_.emplace_back();
@@ -150,6 +154,7 @@ UnitId UnitStore::spawn(const Spawn& request) {
     types_[slot] = request.type;
     enhancements_[slot].clear();
     factoryRepeat_[slot] = false;
+    productionPaused_[slot] = false;
     doNotTarget_[slot] = false;
     // CLEARED HERE rather than in `kill`, which is the tombstone rule applied to orders: a
     // corpse keeps its arrays so the death blast can read them, and a slot is only wiped when
@@ -341,6 +346,7 @@ void UnitStore::kill(UnitId id) {
     orders_[id.index].clear();
     orders_[id.index].clearObserver();
     factoryRepeat_[id.index] = false;
+    productionPaused_[id.index] = false;
     doNotTarget_[id.index] = false;
     (void)detach(id);
     for (const UnitId child : children_[id.index]) {
@@ -451,6 +457,18 @@ bool UnitStore::setFactoryRepeat(UnitId unit, bool enabled) noexcept {
 
 bool UnitStore::factoryRepeat(UnitId unit) const noexcept {
     return alive(unit) && factoryRepeat_[unit.index];
+}
+
+bool UnitStore::setProductionPaused(UnitId unit, bool paused) noexcept {
+    if (!alive(unit)) {
+        return false;
+    }
+    productionPaused_[unit.index] = paused;
+    return true;
+}
+
+bool UnitStore::productionPaused(UnitId unit) const noexcept {
+    return alive(unit) && productionPaused_[unit.index];
 }
 
 bool UnitStore::setDoNotTarget(UnitId unit, bool enabled) noexcept {

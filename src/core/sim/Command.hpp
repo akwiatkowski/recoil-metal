@@ -142,11 +142,25 @@ enum class CommandKind : std::uint8_t {
     /// spends one `SiloAmmo` the tick the shot leaves and marks the order spent on the
     /// launcher itself, which no click can produce.
     MissileLaunch = 17,
+    /// Pause or resume a unit's production: its construction, its silo ammunition,
+    /// its enhancement work, its repair and reclaim and capture tasks, its build-power
+    /// assistance, and its own income all hold while the flag is set. An authoritative
+    /// action like `ToggleFactoryRepeat`, not presentation state — it changes what the
+    /// economy charges for and what the command stage advances.
+    ToggleProduction = 18,
 };
 
 [[nodiscard]] constexpr bool isGuardCommand(CommandKind kind) noexcept {
     return kind == CommandKind::Assist || kind == CommandKind::Guard;
 }
+
+/// Whether a unit has any production to pause: builds, fabricates, holds a counted
+/// silo, or declares the retail `RULEUTC_ProductionToggle` cap. The cap alone is not
+/// the gate — only two dozen retail units declare it (fabricators, generators,
+/// engineering stations), while FAF offers pause to everything that produces, which
+/// is what "pausable production everywhere" means. Def-level only so the command
+/// panel can answer the same question without a catalog.
+[[nodiscard]] bool canPauseProduction(const unitdef::UnitDef& def) noexcept;
 
 /// One order, from one player, on one tick.
 ///

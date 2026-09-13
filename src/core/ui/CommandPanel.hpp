@@ -151,16 +151,20 @@ orderOverrides(std::span<const unitdef::UnitDef* const> selection);
 [[nodiscard]] CommandPage
 commandPage(std::span<const unitdef::UnitDef* const> selection) noexcept;
 
-/// The hover card for a toggle cell: present-but-unsupported, with the count it would
-/// apply to once its simulation state exists.
+/// The hover card for a toggle cell. The production toggle is backed by
+/// `UnitStore::productionPaused` — `paused` aligns with `selection` and reports how
+/// many eligible units are held; the rest stay present-but-unsupported, with the
+/// count they would apply to once a simulation state exists.
 [[nodiscard]] InfoCard toggleCard(const ToggleDescriptor& toggle,
-                                  std::span<const unitdef::UnitDef* const> selection);
+                                  std::span<const unitdef::UnitDef* const> selection,
+                                  std::span<const std::uint8_t> paused = {});
 
 /// The hover inspector for a rack slot: the toggle card on toggle cells, the order
 /// card elsewhere. Slot must be a live rack position.
 [[nodiscard]] InfoCard commandInspector(const CommandPage& page, std::size_t slot,
                                         std::span<const unitdef::UnitDef* const> selection,
-                                        bool armed = false);
+                                        bool armed = false,
+                                        std::span<const std::uint8_t> paused = {});
 
 [[nodiscard]] CommandRackLayout commandRackLayout(const FrameLayout& frame,
                                                    bool hasSelection) noexcept;

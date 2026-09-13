@@ -314,6 +314,12 @@ struct Construction {
     /// boundary; transient like `workedThisTick`, so it is neither saved nor hashed.
     bool advancedLastTick = false;
 
+    /// Production hold on the work's builder — `UnitStore::productionPaused` mirrored onto
+    /// the record each tick, the same split `EnhancementWork::paused` already uses: the
+    /// store owns the player's choice, the work carries it to the economy pass that never
+    /// sees the store.
+    bool paused = false;
+
     /// The rate the work actually advances at: the founder's plus everyone helping.
     [[nodiscard]] Mag effectiveBuildPerTick() const noexcept {
         return buildPerTick + assistPerTick;
@@ -385,6 +391,10 @@ struct SiloAmmo {
     TickCount elapsedTicks = 0;
     Resources costPerTick;
     Resources delivered;
+
+    /// The owner's production pause, mirrored from `UnitStore::productionPaused` each tick.
+    /// Derived, not authored: serialising it would make the same fact live in two places.
+    bool paused = false;
 
     [[nodiscard]] bool building() const noexcept {
         return stored < capacity && totalTicks > 0 && costPerTick.mass >= Mag{}

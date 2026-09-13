@@ -32,6 +32,7 @@ template <typename Order>
     case CommandKind::Dive:
     case CommandKind::Stop:
     case CommandKind::ToggleFactoryRepeat:
+    case CommandKind::ToggleProduction:
     case CommandKind::CancelFactoryBuild:
         return false;
     case CommandKind::Move:

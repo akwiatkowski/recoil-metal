@@ -474,6 +474,12 @@ StateHash hashMatch(const UnitStore& store, const Match& match) {
         if (store.factoryRepeat(store.idAt(slot))) {
             feed(h, true);
         }
+        // A production hold is authoritative like repeat: it changes what the economy
+        // charges and what the command stage advances, so a paused unit must hash
+        // differently from a running one.
+        if (store.productionPaused(store.idAt(slot))) {
+            feed(h, std::uint8_t{3});
+        }
         if (store.doNotTarget(store.idAt(slot))) {
             feed(h, std::uint8_t{2});
         }

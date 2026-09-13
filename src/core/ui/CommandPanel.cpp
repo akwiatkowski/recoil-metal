@@ -104,6 +104,7 @@ commandAvailability(std::span<const unitdef::UnitDef* const> selection) noexcept
             break;
         case sim::CommandKind::Build:
         case sim::CommandKind::ToggleFactoryRepeat:
+        case sim::CommandKind::ToggleProduction:
         case sim::CommandKind::CancelFactoryBuild:
         case sim::CommandKind::Script:
         case sim::CommandKind::ReclaimUnit:  // reached through Reclaim's descriptor, not its own
@@ -119,13 +120,17 @@ ToggleAvailability
 toggleAvailability(std::span<const unitdef::UnitDef* const> selection) noexcept {
     ToggleAvailability present{};
     for (const unitdef::UnitDef* def : selection) {
-        // Undeclared tables vote nothing: unlike orders, toggles have no
-        // capability fallback to infer them from.
-        if (def == nullptr || !def->toggleCapsDeclared) {
+        if (def == nullptr) {
             continue;
         }
         for (std::size_t i = 0; i < kToggleDescriptors.size(); ++i) {
-            if (def->hasToggleCap(kToggleDescriptors[i].cap)) {
+            // Undeclared tables vote nothing: unlike orders, toggles have no capability
+            // fallback to infer them from — except production, whose pause is a
+            // capability rather than a cap: only two dozen retail units declare it,
+            // while FAF offers it to everything that produces.
+            const std::string_view cap = kToggleDescriptors[i].cap;
+            if ((def->toggleCapsDeclared && def->hasToggleCap(cap))
+                || (cap == "RULEUTC_ProductionToggle" && sim::canPauseProduction(*def))) {
                 present[i] = true;
             }
         }
@@ -268,8 +273,11 @@ CommandPage commandPage(std::span<const unitdef::UnitDef* const> selection) noex
         }
         const ToggleDescriptor& rule = kToggleDescriptors[*toggle];
         const auto [name, icon] = presentation(rule.cap, rule.label, rule.icon);
-        // Present but never enabled: no simulation state backs any toggle yet.
-        page[slot] = {name, icon, false, toggle, std::nullopt};
+        // The production pause is the one backed toggle: `UnitStore::productionPaused`
+        // and `CommandKind::ToggleProduction` implement it. The rest remain
+        // present-but-disabled until a simulation state backs them.
+        const bool implemented = rule.cap == "RULEUTC_ProductionToggle";
+        page[slot] = {name, icon, implemented, toggle, std::nullopt};
     }
     return page;
 }
@@ -337,25 +345,43 @@ std::optional<std::size_t> commandSlotAt(const CommandRackLayout& layout, float 
 }
 
 InfoCard toggleCard(const ToggleDescriptor& toggle,
-    std::span<const unitdef::UnitDef* const> selection) {
+    std::span<const unitdef::UnitDef* const> selection,
+    std::span<const std::uint8_t> paused) {
     InfoCard card;
     card.title = std::string{toggle.label} + " TOGGLE";
-    std::size_t total = 0, eligible = 0;
-    for (const auto* def : selection) {
+    const bool production = toggle.cap == "RULEUTC_ProductionToggle";
+    std::size_t total = 0, eligible = 0, held = 0;
+    for (std::size_t i = 0; i < selection.size(); ++i) {
+        const auto* def = selection[i];
         if (!def) continue;
         ++total;
-        if (def->toggleCapsDeclared && def->hasToggleCap(toggle.cap)) ++eligible;
+        const bool applies = production
+            ? sim::canPauseProduction(*def)
+            : (def->toggleCapsDeclared && def->hasToggleCap(toggle.cap));
+        if (!applies) continue;
+        ++eligible;
+        if (i < paused.size() && paused[i] != 0) ++held;
     }
     if (total == 0) {
         card.rows.push_back({"STATE", "SELECT A UNIT", kLoss});
         return card;
     }
-    // Present but never enabled: no simulation state backs any toggle yet, so the
-    // count reads as the audience the toggle will serve once it exists.
-    card.rows.push_back({"STATE", "NOT IMPLEMENTED", kLoss});
+    if (!production) {
+        // Present but never enabled: no simulation state backs the other toggles yet,
+        // so the count reads as the audience the toggle will serve once it exists.
+        card.rows.push_back({"STATE", "NOT IMPLEMENTED", kLoss});
+        card.rows.push_back({"APPLIES TO", std::to_string(eligible) + " OF "
+            + std::to_string(total) + " UNITS"});
+        card.rows.push_back({"", "NO SIMULATION STATE YET"});
+        return card;
+    }
+    card.rows.push_back({"STATE", held > 0 && held == eligible ? "PAUSED"
+                            : held > 0 ? "PARTIALLY PAUSED" : "RUNNING",
+                         held > 0 ? kLoss : kGain});
     card.rows.push_back({"APPLIES TO", std::to_string(eligible) + " OF "
         + std::to_string(total) + " UNITS"});
-    card.rows.push_back({"", "NO SIMULATION STATE YET"});
+    card.rows.push_back({"", "HOLDS BUILDS, SILOS, UPGRADES,"});
+    card.rows.push_back({"", "REPAIRS AND INCOME"});
     return card;
 }
 
@@ -433,10 +459,11 @@ InfoCard commandCard(const CommandDescriptor& command,
 }
 
 InfoCard commandInspector(const CommandPage& page, std::size_t slot,
-    std::span<const unitdef::UnitDef* const> selection, bool armed) {
+    std::span<const unitdef::UnitDef* const> selection, bool armed,
+    std::span<const std::uint8_t> paused) {
     const std::optional<std::size_t> toggle = page[slot].toggle;
     if (toggle) {
-        return toggleCard(kToggleDescriptors[*toggle], selection);
+        return toggleCard(kToggleDescriptors[*toggle], selection, paused);
     }
     if (page[slot].order == sim::CommandKind::MissileLaunch) {
         // A substituted cell inspects as the order it issues — the table under it

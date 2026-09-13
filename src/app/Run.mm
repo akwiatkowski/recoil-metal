@@ -1272,6 +1272,9 @@ int runWindowed(const Session& session) {
         /// Standing orders that are ON for the whole selection, lit on the rack.
         rm::ui::CommandAvailability commandEngaged{};
         std::vector<const rm::unitdef::UnitDef*> commandSelection;
+        // Pause flags aligned with `commandSelection` — the production toggle's cell
+        // lighting and inspector card read them; rebuilt each frame beside it.
+        std::vector<std::uint8_t> productionPaused;
 
         // WHOSE MENU THE ICON ATLAS WAS PACKED FOR. Keyed on the builder rather than on the
         // option list, because the list is rebuilt every frame and compares equal every frame —
@@ -1656,6 +1659,21 @@ int runWindowed(const Session& session) {
                     // come off) auto-expand at once; nothing to target.
                     std::printf("auto-expand %s for the selection\n", *on ? "on" : "off");
                     std::fflush(stdout);
+                    armedCommand.reset();
+                } else if (slot && commandPage[*slot].enabled && commandPage[*slot].toggle
+                           && rm::ui::kToggleDescriptors[*commandPage[*slot].toggle].cap
+                                  == "RULEUTC_ProductionToggle") {
+                    // The one backed toggle: pause/resume production on the selection's
+                    // producers, through the same semantic issue the log replays.
+                    (void)submitCommand(units, rm::sim::CommandIssue{
+                        .tick = static_cast<rm::TickIndex>(matchTicks),
+                        .phase = rm::sim::CommandPhase::PreTick,
+                        .source = static_cast<rm::CommandSource>(
+                            playerDriving(units, units.playerArmy)),
+                        .player = playerDriving(units, units.playerArmy),
+                        .kind = rm::sim::CommandKind::ToggleProduction,
+                        .units = selected,
+                    });
                     armedCommand.reset();
                 } else if (slot && commandPage[*slot].enabled
                            && !commandPage[*slot].toggle
@@ -2645,6 +2663,13 @@ int runWindowed(const Session& session) {
             }
             commandAvailable = rm::ui::commandAvailability(commandSelection);
             commandPage = rm::ui::commandPage(commandSelection);
+            // Per-selection pause flags, aligned with `commandSelection`: the production
+            // toggle's lit cell and its inspector card both read them.
+            productionPaused.clear();
+            for (const rm::sim::UnitId id : selected) {
+                productionPaused.push_back(static_cast<std::uint8_t>(
+                    units.store.alive(id) && units.store.productionPaused(id)));
+            }
             // Auto-expand is lit when every field builder in the selection is on it.
             commandEngaged = {};
             {
@@ -2658,6 +2683,24 @@ int runWindowed(const Session& session) {
                 }
                 commandEngaged[rm::ui::rackSlotFor(rm::ui::RackAction::AutoExpand)] =
                     fieldBuilders > 0 && expanding == fieldBuilders;
+            }
+            // The production toggle is lit when every producer in the selection is held —
+            // the all-paused state, matching how auto-expand lights only on full agreement.
+            for (std::size_t rackSlot = 0; rackSlot < commandPage.size(); ++rackSlot) {
+                const auto& cell = commandPage[rackSlot];
+                if (!cell.toggle
+                    || rm::ui::kToggleDescriptors[*cell.toggle].cap
+                           != "RULEUTC_ProductionToggle") {
+                    continue;
+                }
+                std::size_t producers = 0, held = 0;
+                for (std::size_t i = 0; i < commandSelection.size(); ++i) {
+                    const rm::unitdef::UnitDef* def = commandSelection[i];
+                    if (def == nullptr || !rm::sim::canPauseProduction(*def)) continue;
+                    ++producers;
+                    if (i < productionPaused.size() && productionPaused[i]) ++held;
+                }
+                commandEngaged[rackSlot] = producers > 0 && held == producers;
             }
             // Advance page ownership with the tiles, not with input. A control-group key can
             // change `selected` between display callbacks; until this rebuild, clicks must keep
@@ -2798,7 +2841,8 @@ int runWindowed(const Session& session) {
                     // For a standing order the flag reads ON/OFF; a targeted command is not
                     // being aimed while merely hovered, and `commandEngaged` is false for it.
                     inspector = rm::ui::commandInspector(commandPage, *overCommand,
-                        commandSelection, commandEngaged[*overCommand]);
+                        commandSelection, commandEngaged[*overCommand],
+                        productionPaused);
                 } else if (overTile && *overTile < rosterTiles.size()) {
                     inspector = selectedUnitCard(units, rosterTiles[*overTile], activeBuilder);
                 } else {

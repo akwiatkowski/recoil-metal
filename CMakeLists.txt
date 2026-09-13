@@ -367,6 +367,7 @@ if(BUILD_TESTING)
         tests/test_intel.cpp
         tests/test_player_fog.cpp
         tests/test_economy.cpp
+        tests/test_production_pause.cpp
         tests/test_movement.cpp
         tests/test_picking.cpp
         tests/test_selection.cpp
