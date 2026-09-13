@@ -153,6 +153,10 @@ enum class CommandKind : std::uint8_t {
     /// whatever the tier above left, so the tier changes what a stalled tick pays for.
     /// Never queued — it acts on intake, the same beat it was issued.
     CycleBuildPriority = 19,
+    /// Cycle a mobile unit's retreat threshold Off → Low → Medium → High. Same
+    /// authoritative-but-unqueued shape as `ToggleProduction`: the setting itself
+    /// is sim state, and `updateRetreats` is the pass that acts on it.
+    CycleRetreatThreshold = 20,
 };
 
 [[nodiscard]] constexpr bool isGuardCommand(CommandKind kind) noexcept {

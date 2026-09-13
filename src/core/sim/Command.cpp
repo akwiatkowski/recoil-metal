@@ -385,6 +385,8 @@ const char* commandKindName(CommandKind kind) noexcept {
         return "toggle-production";
     case CommandKind::CycleBuildPriority:
         return "cycle-build-priority";
+    case CommandKind::CycleRetreatThreshold:
+        return "cycle-retreat-threshold";
     case CommandKind::Repair:
         return "repair";
     case CommandKind::Script:
@@ -443,6 +445,9 @@ namespace {
     }
     if (name == "cycle-build-priority") {
         return CommandKind::CycleBuildPriority;
+    }
+    if (name == "cycle-retreat-threshold") {
+        return CommandKind::CycleRetreatThreshold;
     }
     if (name == "cancel-factory-build") return CommandKind::CancelFactoryBuild;
     if (name == "repair") {
@@ -1316,6 +1321,25 @@ ApplyCommandResult applyCommand(const CommandIssue& issued, UnitStore& store,
             }
             (void)store.setBuildPriority(
                 unit, nextBuildPriority(store.buildPriority(unit)));
+            result.accepted.push_back(unit);
+        }
+        return result;
+    }
+    if (issue.kind == CommandKind::CycleRetreatThreshold) {
+        for (const UnitId unit : canonical) {
+            if (!store.alive(unit)) {
+                continue;
+            }
+            const Player* player = playerFor(issue.player, players);
+            const unitdef::UnitDef* definition = catalog.def(store.typeAt(unit.index));
+            // Mobile only: a threshold on a building is a flag nothing can act on,
+            // the same reason a combat unit refuses the production pause.
+            if (player == nullptr || !authorised(*player, store, unit, armies)
+                || definition == nullptr || !definition->isMobile()) {
+                continue;
+            }
+            (void)store.setRetreatThreshold(
+                unit, nextRetreatThreshold(store.retreatThreshold(unit)));
             result.accepted.push_back(unit);
         }
         return result;
@@ -3091,6 +3115,7 @@ bool startCommand(const Command& command, UnitStore& store, const UnitCatalog& c
     case CommandKind::ToggleFactoryRepeat:
     case CommandKind::ToggleProduction:
     case CommandKind::CycleBuildPriority:
+    case CommandKind::CycleRetreatThreshold:
     case CommandKind::CancelFactoryBuild:
         return false;  // applied immediately by semantic issue intake; it never enters a queue
     case CommandKind::Script:

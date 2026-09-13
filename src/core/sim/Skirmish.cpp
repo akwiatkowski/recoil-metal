@@ -3,6 +3,7 @@
 #include "core/sim/Adjacency.hpp"
 #include "core/sim/Assist.hpp"
 #include "core/sim/Reclaim.hpp"
+#include "core/sim/Retreat.hpp"
 #include "core/sim/Veterancy.hpp"
 
 namespace rm::sim {
@@ -507,6 +508,10 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
     // temporary target then feeds the ordinary aiming and firing passes below.
     updateAggressiveOrders(store, catalog, match.armies, terrain, match.passability, rate,
                             match.intel, playableRect, tickIndex);
+
+    // Same class of per-unit automation: a hull under its retreat threshold abandons
+    // its queue for the nearest mechanic before the aim pass picks its next target.
+    updateRetreats(store, catalog, match.armies);
 
     // 2. AIM, then fire. An unturreted weapon may only shoot along the hull, so a unit
     //    that has stopped facing the wrong way has to be brought round first; otherwise

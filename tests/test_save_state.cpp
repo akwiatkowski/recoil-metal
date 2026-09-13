@@ -439,10 +439,13 @@ TEST_CASE("historic attachment saves derive offsets from their transforms", "[sa
     constexpr std::size_t kV25DualPoseBytes = sizeof(std::uint32_t) + kSlots * 8;
     // V26's production-pause flags trail doNotTarget: one count plus one byte
     // per slot, and V27's build-priority bytes trail those in the same shape.
-    // Removing the trailers above leaves them at the tail, so both come off.
+    // V28 trails the retreat state: a counted threshold byte per slot, then a
+    // counted record per slot — an active byte plus four fixed-point words.
+    // Removing the trailers above leaves them at the tail, so all three come off.
     constexpr std::size_t kV26ProductionPausedBytes = sizeof(std::uint32_t) + kSlots;
     constexpr std::size_t kV27PriorityBytes = sizeof(std::uint32_t) + kSlots;
-    v7.resize(v7.size() - kV27PriorityBytes - kV26ProductionPausedBytes - kV25DualPoseBytes - kV24TurretPoseBytes - kV23AbsentFeatureBytes - kV22BoneBytes - kV21BankBytes - kV20EmptyCapturesBytes - kV19EmptyEnhancementsBytes - kV18SubmarineBytes - kV16ControllerBytes - kV15AbsentEconomyBytes - kV14MotionBytes - kV10RedirectBytes - kV9SiloAmmoBytes
+    constexpr std::size_t kV28RetreatBytes = 2 * sizeof(std::uint32_t) + kSlots + kSlots * 17;
+    v7.resize(v7.size() - kV28RetreatBytes - kV27PriorityBytes - kV26ProductionPausedBytes - kV25DualPoseBytes - kV24TurretPoseBytes - kV23AbsentFeatureBytes - kV22BoneBytes - kV21BankBytes - kV20EmptyCapturesBytes - kV19EmptyEnhancementsBytes - kV18SubmarineBytes - kV16ControllerBytes - kV15AbsentEconomyBytes - kV14MotionBytes - kV10RedirectBytes - kV9SiloAmmoBytes
               - kV8CommandStateBytes);
     writeU32(v7, 4, 7);
     writeU32(v7, 16, static_cast<std::uint32_t>(v7.size() - 20));

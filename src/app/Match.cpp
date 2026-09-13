@@ -231,6 +231,21 @@ bool issueGuard(UnitScene& scene, std::span<const rm::sim::UnitId> units,
     }).has_value();
 }
 
+[[nodiscard]] bool cycleRetreatThreshold(UnitScene& scene,
+                                         std::span<const rm::sim::UnitId> units,
+                                         rm::PlayerIndex player, rm::TickIndex tick) {
+    // Same immediate-action shape as the build-priority toggle — the intake walks
+    // Off → Low → Medium → High, refusing anything that cannot walk home.
+    return submitCommand(scene, rm::sim::CommandIssue{
+        .tick = tick,
+        .phase = rm::sim::CommandPhase::PreTick,
+        .source = static_cast<rm::CommandSource>(player),
+        .player = player,
+        .kind = rm::sim::CommandKind::CycleRetreatThreshold,
+        .units = {units.begin(), units.end()},
+    }).has_value();
+}
+
 bool issueCancelFactoryBuild(UnitScene& scene, rm::sim::UnitId factory,
     rm::PlayerIndex player, rm::TickIndex tick, rm::CommandId commandId) {
     if (commandId == rm::kInvalidCommandId) return false;

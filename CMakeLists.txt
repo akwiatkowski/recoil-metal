@@ -179,6 +179,7 @@ add_library(rm_core STATIC
     src/core/sim/FeatureStore.cpp
     src/core/sim/Assist.cpp
     src/core/sim/Reclaim.cpp
+    src/core/sim/Retreat.cpp
     src/core/sim/Capture.cpp
     src/core/sim/CommandQueue.cpp
     src/core/sim/Combat.cpp
@@ -371,6 +372,7 @@ if(BUILD_TESTING)
         tests/test_economy.cpp
         tests/test_production_pause.cpp
         tests/test_build_priority.cpp
+        tests/test_retreat.cpp
         tests/test_movement.cpp
         tests/test_picking.cpp
         tests/test_selection.cpp

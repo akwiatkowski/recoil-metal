@@ -207,4 +207,38 @@ enum class BuildPriority : std::uint8_t { Low = 0, Normal = 1, High = 2 };
                                          : BuildPriority::Normal;
 }
 
+/// How readily a unit abandons the fight for repairs — Zero-K's retreat
+/// automation, which retail Supreme Commander never had. The setting is the hull
+/// fraction the unit breaks off BELOW; `High` means the first scratch sends it
+/// home, `Off` means it dies where it stands.
+enum class RetreatThreshold : std::uint8_t {
+    Off = 0,
+    Low = 1,     ///< below 30% hull
+    Medium = 2,  ///< below 65%
+    High = 3,    ///< below 99% — any damage
+};
+
+/// The hull fraction each tier watches, in percent. Kept integral so the tick's
+/// comparison stays in `Mag` without a fixed-point multiply.
+[[nodiscard]] constexpr int retreatThresholdPercent(RetreatThreshold threshold) noexcept {
+    switch (threshold) {
+    case RetreatThreshold::Low: return 30;
+    case RetreatThreshold::Medium: return 65;
+    case RetreatThreshold::High: return 99;
+    case RetreatThreshold::Off: return 0;
+    }
+    return 0;
+}
+
+/// Off → Low → Medium → High → Off, the order a single cycle key walks.
+[[nodiscard]] constexpr RetreatThreshold nextRetreatThreshold(RetreatThreshold threshold) noexcept {
+    switch (threshold) {
+    case RetreatThreshold::Off: return RetreatThreshold::Low;
+    case RetreatThreshold::Low: return RetreatThreshold::Medium;
+    case RetreatThreshold::Medium: return RetreatThreshold::High;
+    case RetreatThreshold::High: return RetreatThreshold::Off;
+    }
+    return RetreatThreshold::Off;
+}
+
 } // namespace rm

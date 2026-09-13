@@ -488,6 +488,22 @@ StateHash hashMatch(const UnitStore& store, const Match& match) {
             feed(h, std::uint8_t{4});
             feed(h, static_cast<std::uint8_t>(tier));
         }
+        // The retreat threshold decides whether a hurt unit abandons the fight, and
+        // an in-flight retreat is owed a return — both change what the next tick does,
+        // so both hash. Off and not-retreating stay silent, keeping the pre-retreat
+        // stream intact for matches that never arm it.
+        if (const RetreatThreshold threshold = store.retreatThreshold(store.idAt(slot));
+            threshold != RetreatThreshold::Off) {
+            feed(h, std::uint8_t{5});
+            feed(h, static_cast<std::uint8_t>(threshold));
+        }
+        if (const RetreatState& retreat = store.retreats()[slot]; retreat.active) {
+            feed(h, std::uint8_t{6});
+            feed(h, retreat.returnX.raw());
+            feed(h, retreat.returnZ.raw());
+            feed(h, retreat.toX.raw());
+            feed(h, retreat.toZ.raw());
+        }
         if (store.doNotTarget(store.idAt(slot))) {
             feed(h, std::uint8_t{2});
         }

@@ -34,6 +34,7 @@ template <typename Order>
     case CommandKind::ToggleFactoryRepeat:
     case CommandKind::ToggleProduction:
     case CommandKind::CycleBuildPriority:
+    case CommandKind::CycleRetreatThreshold:
     case CommandKind::CancelFactoryBuild:
         return false;
     case CommandKind::Move:

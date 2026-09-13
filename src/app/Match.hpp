@@ -282,6 +282,13 @@ inline constexpr float kSpreadMoveFactor = 3.0f;
                                       std::span<const rm::sim::UnitId> units,
                                       rm::PlayerIndex player, rm::TickIndex tick);
 
+/// Cycle the retreat-at-HP threshold (Off → Low → Medium → High) on the mobile units in
+/// `units`; buildings are refused by intake, as is any unit the player does not drive.
+/// Authoritative and immediate — never queued.
+[[nodiscard]] bool cycleRetreatThreshold(UnitScene& scene,
+                                         std::span<const rm::sim::UnitId> units,
+                                         rm::PlayerIndex player, rm::TickIndex tick);
+
 /// The guard order: a field builder lends BuildRate to the target's work; an immobile factory
 /// mirrors compatible factory production. Refused unless both units are distinct compatible
 /// builders in the same army, exactly as the sim refuses it.

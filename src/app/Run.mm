@@ -1330,6 +1330,29 @@ int runWindowed(const Session& session) {
                     }
                     std::fflush(stdout);
                 }
+            } else if (event.key == rm::Key::V && !event.repeat && !selected.empty()) {
+                // RETREAT AT HP — Off → Low → Medium → High on the mobile units in the
+                // selection. Below the mark a hull abandons its queue for the nearest
+                // friendly mechanic and walks back when whole. Silent unless something
+                // eligible took it.
+                if (runnerForKeys != nullptr
+                    && cycleRetreatThreshold(units, selected,
+                                             playerDriving(units, units.playerArmy),
+                                             runnerForKeys->tick)) {
+                    for (const rm::sim::UnitId id : selected) {
+                        const rm::unitdef::UnitDef* def = units.store.alive(id)
+                            ? units.catalog.def(units.store.typeAt(id.index)) : nullptr;
+                        if (def != nullptr && def->isMobile()) {
+                            constexpr std::array<const char*, 4> names{
+                                "off", "low", "medium", "high"};
+                            std::printf("retreat: %s\n",
+                                names[static_cast<std::size_t>(
+                                    units.store.retreatThreshold(id))]);
+                            break;
+                        }
+                    }
+                    std::fflush(stdout);
+                }
             } else if (const std::optional<std::size_t> digit = rm::digitForKey(event.key)) {
                 auto& group = controlGroups[*digit];
                 if (event.modifiers.control) {

@@ -22,6 +22,15 @@ namespace rm::sim {
 /// than a class constant) so nested record initializers may name it.
 inline constexpr std::int32_t kNoBone = -1;
 
+/// A retreating unit's live bookkeeping: where it broke off, and which builder it
+/// ran to. `active` is what separates "owes the front a return trip" from a slot
+/// that never flinched.
+struct RetreatState {
+    bool active = false;
+    Fx returnX{}, returnZ{};
+    Fx toX{}, toZ{};
+};
+
 // Every unit in a match, in one place.
 //
 // WHY THIS EXISTS. Unit state is currently three parallel deques of per-batch vectors in an
@@ -81,6 +90,8 @@ public:
         std::vector<bool> factoryRepeat;
         std::vector<bool> productionPaused;
         std::vector<BuildPriority> buildPriority;
+        std::vector<RetreatThreshold> retreatThreshold;
+        std::vector<RetreatState> retreats;
         std::vector<bool> doNotTarget;
         std::vector<std::optional<UnitId>> parents;
         std::vector<std::vector<UnitId>> children;
@@ -261,6 +272,14 @@ public:
     [[nodiscard]] std::span<const BuildPriority> buildPriorities() const noexcept {
         return buildPriority_;
     }
+    [[nodiscard]] bool setRetreatThreshold(UnitId unit, RetreatThreshold threshold) noexcept;
+    [[nodiscard]] RetreatThreshold retreatThreshold(UnitId unit) const noexcept;
+    [[nodiscard]] std::span<const RetreatThreshold> retreatThresholds() const noexcept {
+        return retreatThresholds_;
+    }
+    /// The live bookkeeping — mutable because the retreat automation pass writes it.
+    [[nodiscard]] std::span<RetreatState> retreats() noexcept { return retreats_; }
+    [[nodiscard]] std::span<const RetreatState> retreats() const noexcept { return retreats_; }
 
     /// Controls automatic acquisition only; explicit target orders remain authoritative.
     [[nodiscard]] bool setDoNotTarget(UnitId unit, bool enabled) noexcept;
@@ -328,6 +347,8 @@ private:
     std::vector<bool> factoryRepeat_;
     std::vector<bool> productionPaused_;
     std::vector<BuildPriority> buildPriority_;
+    std::vector<RetreatThreshold> retreatThresholds_;
+    std::vector<RetreatState> retreats_;
     std::vector<bool> doNotTarget_;
     std::vector<CommandQueue> orders_;
     std::vector<std::optional<UnitId>> parents_;
